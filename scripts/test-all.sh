@@ -19,8 +19,14 @@ set -euo pipefail
 #      3 is a TOP-LEVEL contract only: a nested runner returning 3 into run_suite classifies
 #      as a plain FAIL, because rc=3 is not signal-shaped. Do not adopt 3 in a nested runner
 #      without revisiting this.
+#      NOT 1 either: the UNMEASURABLE class. A boundary dimension was captured at one end of the
+#      run and not the other, so its delta is meaningless — neither clean nor dirty. It is printed,
+#      counted into the breakdown, and changes no exit code, because a run that could not measure
+#      something must not report a verdict about it.
 #   2  usage error — TEST_GROUP took an unsupported value (predates the above), OR the
-#      relevance-predicate data file is missing. Both are "this runner cannot run", not a
+#      relevance-predicate data file is missing, OR scripts/lib/repo-write-boundary.sh is missing
+#      or stale (added #7652 — a gate whose boundary is undefined refuses rather than running at
+#      reduced meaning). Both are "this runner cannot run", not a
 #      verdict about any suite; ADR-181 declined a separate code because every consumer is
 #      binary and a second usage-shaped code buys nothing.
 #   4  REFUSED before anything ran. TWO producers, both overridden by SOLEUR_ALLOW_FULL_GATE=1:
@@ -346,6 +352,10 @@ if [[ ! -f "$_RWB_LIB" ]]; then
   echo "ERROR: missing $_RWB_LIB — the repo-write boundary is undefined." >&2
   echo "Refusing to run: without it this runner cannot tell whether a suite wrote to your" >&2
   echo "repository, and a silent clean claim is worse than no claim." >&2
+  echo "" >&2
+  echo "  Restore it:  git checkout -- scripts/lib/repo-write-boundary.sh" >&2
+  echo "  This runner also runs from lefthook's pre-commit hook. To commit before restoring:" >&2
+  echo "    git commit --no-verify     (or)    LEFTHOOK=0 git commit" >&2
   exit 2
 fi
 # shellcheck source=scripts/lib/repo-write-boundary.sh
@@ -360,6 +370,9 @@ if [[ -n "$_RWB_MISSING" ]]; then
   echo "ERROR: $_RWB_LIB is present but STALE — missing:$_RWB_MISSING" >&2
   echo "Refusing to run: a narrower check beneath a full-width claim is the exact defect the" >&2
   echo "boundary exists to prevent." >&2
+  echo "" >&2
+  echo "  Restore it:  git checkout -- scripts/lib/repo-write-boundary.sh" >&2
+  echo "  To commit before restoring:  git commit --no-verify   (or)   LEFTHOOK=0 git commit" >&2
   exit 2
 fi
 unset _rwb_fn
@@ -962,7 +975,8 @@ _repo_last_suite="(none started)"
 # below owns the verdict.
 _repo_boundary_reported=0
 
-# A run that ends before the end boundary emits nothing today — the runner arms no EXIT trap —
+# Before #7652 a run that ended before the end boundary emitted nothing — the runner armed no EXIT
+# trap —
 # and the escape most likely to end a run early is exactly the one that would suppress the
 # verdict. So "no FATAL line" is indistinguishable from "clean", which is the reading that ships.
 # This trap makes that absence speak for the signals bash can trap.
@@ -1906,32 +1920,52 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 # is this run CHANGING it. Reported before the summary block so the marker stays the last
 # `=== ` line (#6750), and counted into `failed` so the exit code carries it: a run that
 # corrupted the repository is not a pass, whatever the suites said.
-_repo_wrote=0
 # Counted into the BREAKDOWN line alongside `skipped`, per ADR-181's decision that a new outcome
 # class of this runner is "a counted verdict, not an absence". REPORT still changes no exit code —
 # ADR-181's `skipped` is the precedent for exactly that shape — but an outcome visible only as
 # stderr prose above a several-thousand-line log reads as silence, which is the polarity that ADR
 # already rejected once.
 _repo_observations=0
+_repo_unmeasured_dims=0
 if [[ "$_repo_guard_ok" == 1 ]]; then
   if _repo_state_after="$(_repo_state)"; then
     # Classified per dimension rather than as one boolean. A sibling worktree's branch advancing
     # and this worktree's HEAD moving under it are not the same event, and collapsing them makes
     # the FATAL line cry wolf on the common case until nobody reads it.
     _repo_verdict="$(repo_boundary_classify "$_repo_state_before" "$_repo_state_after" || true)"
+
+    # A dimension that failed to capture at BOTH boundaries produces no UNMEASURABLE (the manifests
+    # agree) and no body delta — so the verdict is empty and, before this, the entire block
+    # including NOT INSPECTED was skipped. Silence is this runner's "clean" signal, so that read as
+    # a clean bill of health over a check that never looked. Narrowed coverage must speak even when
+    # there is no delta to report.
+    _repo_narrowed=""
+    while IFS=$'\t' read -r _d _st; do
+      [[ -n "$_d" ]] || continue
+      [[ "$_st" == "measured" ]] || _repo_narrowed="$_repo_narrowed $_d"
+    done <<<"$(repo_boundary_manifest "$_repo_state_after"; repo_boundary_manifest "$_repo_state_before")"
+    if [[ -z "$_repo_verdict" && -n "$_repo_narrowed" ]]; then
+      echo "" >&2
+      echo "NOTE: no repo-write delta was detected, but this run did NOT measure every dimension." >&2
+      echo "      A clean boundary is not evidence about the ones it could not read:" >&2
+      repo_boundary_render_not_inspected "$_repo_state_before" "$_repo_state_after" >&2
+      _repo_unmeasured_dims=$(printf '%s' "$_repo_narrowed" | wc -w | tr -d ' ')
+    fi
+
     if [[ -n "$_repo_verdict" ]]; then
       _repo_fatal="$(printf '%s\n' "$_repo_verdict" | { grep '^FATAL' || true; })"
       _repo_report="$(printf '%s\n' "$_repo_verdict" | { grep '^REPORT' || true; })"
       _repo_unmeasurable="$(printf '%s\n' "$_repo_verdict" | { grep '^UNMEASURABLE' || true; })"
 
       if [[ -n "$_repo_fatal" ]]; then
-        _repo_wrote=1
         failed=$((failed + 1))
         echo "" >&2
         echo "[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY. This runner is read-only here." >&2
         echo "        Last suite started: ${_repo_last_suite}" >&2
-        echo "        (not necessarily THAT suite's write — it is where the run had reached;" >&2
-        echo "         every suite before it completed without changing the tree.)" >&2
+        echo "        (the boundary is sampled exactly TWICE — once at the first suite and once" >&2
+        echo "         here — so this names where the run had REACHED, not which suite wrote. No" >&2
+        echo "         per-suite snapshot is taken, so the run has no evidence about any other" >&2
+        echo "         individual suite.)" >&2
         echo "" >&2
         echo "        WHAT CHANGED:" >&2
         printf '%s\n' "$_repo_fatal" | while IFS=$'\t' read -r _sev _dim _detail; do
@@ -1939,6 +1973,13 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
           echo "                 next: $(repo_boundary_next_action "$_dim")" >&2
         done
         echo "" >&2
+        _rb_head_before="$(printf '%s\n' "$_repo_state_before" | sed -n 's/^head\t//p')"
+        _rb_head_after="$(printf '%s\n' "$_repo_state_after"  | sed -n 's/^head\t//p')"
+        if [[ -n "$_rb_head_before" && "$_rb_head_before" != "$_rb_head_after" ]]; then
+          echo "        HEAD before: ${_rb_head_before}" >&2
+          echo "        HEAD after : ${_rb_head_after}" >&2
+          echo "        (good-sha is the BEFORE value; bad-sha is the AFTER value.)" >&2
+        fi
         echo "        Committed work survives; UNCOMMITTED work may not. Recover in this order:" >&2
         echo "          1. git push origin <good-sha>:refs/heads/<branch>   # durability BEFORE local surgery" >&2
         echo "          2. git update-ref refs/heads/<branch> <good-sha> <bad-sha>   # compare-and-swap" >&2
@@ -1949,10 +1990,10 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
 
       if [[ -n "$_repo_report" ]]; then
         echo "" >&2
-        echo "[REPORT] A ref moved that belongs to a branch checked out in ANOTHER worktree." >&2
-        echo "         This is very likely a sibling session doing its own work. It increments" >&2
-        echo "         nothing and changes no exit code; it is printed so it is not mistaken for" >&2
-        echo "         silence." >&2
+        echo "[REPORT] A SHARED store changed in a way a sibling worktree routinely produces." >&2
+        echo "         The per-line details below say which store and which member. This class" >&2
+        echo "         increments nothing and changes no exit code; it is printed, and counted in" >&2
+        echo "         the breakdown, so it is not mistaken for silence." >&2
         printf '%s\n' "$_repo_report" | while IFS=$'\t' read -r _sev _dim _detail; do
           echo "           [$_dim] $_detail" >&2
         done
@@ -1960,16 +2001,24 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
         # `Last suite started` is deliberately NOT repeated here. The whole premise of this class
         # is that a suite of THIS run probably was not the cause, so naming one would point the
         # reader at an innocent label — the precise AP-021 shape this boundary exists to refuse.
-        echo "         Attribution: see the [contention] preamble at the top of this run; it" >&2
-        echo "         lists the sibling worktrees that were live when this run started." >&2
+        #
+        # And attribution points at the set this run MEASURED, not at the [contention] preamble.
+        # That preamble counts processes running test-all.sh — not sibling worktrees doing ordinary
+        # git work, which is the population that produces this class — and the runner refuses with
+        # rc=4 when it is non-zero, so at this point in the run it reads 0 on essentially every
+        # invocation. A number that is zero exactly when it would matter is not attribution.
+        echo "         Attribution: the branches this run measured as checked out elsewhere are" >&2
+        echo "         listed below; \`git worktree list\` shows the current set." >&2
+        printf '%s\n' "$_repo_state_before" | sed -n 's/^wt\t/           checked out elsewhere: /p' >&2
       fi
 
       if [[ -n "$_repo_unmeasurable" ]]; then
         echo "" >&2
         echo "[UNMEASURABLE] A dimension was captured at one boundary and not the other, so its" >&2
         echo "               delta is meaningless. This is neither clean nor dirty: the run is" >&2
-        echo "               simply not evidence about it. (git status refreshes the index and" >&2
-        echo "               fails under index.lock contention, which parallel worktrees produce.)" >&2
+        echo "               simply not evidence about it. Each line below names its own cause;" >&2
+        echo "               the common one is [worktree], where git status refreshes the index" >&2
+        echo "               and fails under index.lock contention that parallel worktrees produce." >&2
         printf '%s\n' "$_repo_unmeasurable" | while IFS=$'\t' read -r _sev _dim _detail; do
           echo "               [$_dim] $_detail" >&2
         done
@@ -1989,7 +2038,6 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
       echo "        hook, and every other entry point are NOT inspected here. The per-site" >&2
       echo "        guards inside the suites are the protection; this is defence in depth over" >&2
       echo "        gate runs, and a clean run here is not evidence about those other paths." >&2
-      _repo_reported=1
     fi
   else
     echo "" >&2
@@ -2021,13 +2069,16 @@ _repo_boundary_reported=1
 # from the numerator: with skips in the denominator but not in `failed`, the numerator would
 # report a gated suite as PASSED — a green that is not evidence, produced by the very change
 # that added the gate.
-if (( killed > 0 || skipped > 0 )); then
+if (( killed > 0 || skipped > 0 || ${_repo_observations:-0} > 0 || ${_repo_unmeasured_dims:-0} > 0 )); then
   # `_repo_observations` is APPENDED, never interleaved: every existing field keeps its position
   # so anchored readers of this line stay valid. Shown only when non-zero — a field that is 0 on
   # essentially every run carries no information, whereas `skipped` is routinely non-zero.
   _repo_obs_field=""
   if [[ "${_repo_observations:-0}" -gt 0 ]]; then
     _repo_obs_field=", ${_repo_observations} repo observation(s) (REPORT — not a verdict, exit code unchanged)"
+  fi
+  if [[ "${_repo_unmeasured_dims:-0}" -gt 0 ]]; then
+    _repo_obs_field="${_repo_obs_field}, ${_repo_unmeasured_dims} boundary dimension(s) NOT MEASURED (this run is not evidence about them)"
   fi
   echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff)${_repo_obs_field} ==="
 fi

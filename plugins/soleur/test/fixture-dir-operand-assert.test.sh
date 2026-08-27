@@ -85,7 +85,34 @@ if [[ "${FILES_SCANNED:-0}" -le 100 ]]; then
     "${FILES_SCANNED:-unset}" >&2
   exit 1
 fi
-echo "  (corpus: ${FILES_SCANNED} tracked *.sh files scanned)"
+
+# A POSITIVE floor on SITES, and a NAMED file's exact count.
+#
+# `FILES` counts what main() enumerated, not what scan_operand walked — so blinding the walk
+# printed `FILES=901` over ONE scanned file and every arm stayed green. And the baseline ratchet is
+# shrink-PERMISSIVE by construction, so it can only ever detect growth: narrowing the corpus back
+# to `*.test.sh` (dropping 525 files), or cutting the verb list to the five the fixtures exercise,
+# were both fully green. This battery was armed against deletion and neutering and unarmed against
+# SHRINKAGE, which is the direction a future edit actually takes.
+SITES_LIVE=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null | sed -n 's/^SITES=//p')
+if [[ "${SITES_LIVE:-0}" -lt 120 ]]; then
+  printf '[FATAL] live corpus reports only %s sites (floor 120). The baseline is shrink-only, so a\n' "${SITES_LIVE:-unset}" >&2
+  printf '        narrowed scanner is INVISIBLE to it — this floor is what makes narrowing loud.\n' >&2
+  printf '        If a real remediation dropped the count, lower this floor in the SAME commit.\n' >&2
+  exit 1
+fi
+# A named member, at its exact count: a floor over a total cannot see one file going to zero while
+# another grows. `context-reviewed-gate.test.sh` is one of the six this issue remediated.
+NAMED_FILE=".claude/hooks/context-reviewed-gate.test.sh"
+NAMED_WANT=12
+NAMED_GOT=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null \
+  | grep -E "^${NAMED_FILE}:[0-9]+:" | wc -l | tr -d ' ')
+if [[ "$NAMED_GOT" != "$NAMED_WANT" ]]; then
+  printf '[FATAL] %s reports %s sites, expected %s — the scanner narrowed or the file changed.\n' \
+    "$NAMED_FILE" "$NAMED_GOT" "$NAMED_WANT" >&2
+  exit 1
+fi
+echo "  (corpus: ${FILES_SCANNED} files, ${SITES_LIVE} sites; ${NAMED_FILE} = ${NAMED_GOT})"
 
 ck
 live="$TMP_ROOT/live.txt"; base="$TMP_ROOT/base.txt"
@@ -114,7 +141,9 @@ fi
 # this row the baseline is a comment.
 ck
 sandbox_base="$TMP_ROOT/shrunk.txt"
-awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print; next} NR>0 && $1>1 && !done {print $1-1, $2; done=1; next} {print}' "$base" > "$sandbox_base"
+# EVERY row decremented, not just the first with count>1. Decrementing one row made this arm a
+# 1-of-33 sample whose apparent power was threshold luck, and coupled it to that file's real count.
+awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print; next} {print ($1>1 ? $1-1 : $1), $2}' "$base" > "$sandbox_base"
 shrunk_violation=""
 while IFS=$'\t' read -r n f; do
   [[ -n "$f" ]] || continue
@@ -252,6 +281,41 @@ SYNTHEOF
 )
 if [[ "$n" == "1" ]]; then pass "git -C \"\" init is a write verb (it reinitialises the caller's repo)"
 else fail "init not treated as a write verb, got ${n:-none}"; fi
+
+# --- E2. THE VERB LIST IS ENUMERATED, NOT SAMPLED --------------------------------------------
+# The synthetic ROW fixtures exercise five verbs. Cutting `OPERAND_WRITE` down to exactly those
+# five was GREEN while dropping 18 live sites — the guarded set shrank and nothing could see it,
+# because a shrink-only baseline detects growth only. One fixture per verb closes that axis.
+# Verb PHRASES, not bare verbs: the verbs carrying read subcommands are scoped to their mutating
+# ones (`worktree list` and `stash list` are reads), so the fixture must spell a real mutating
+# invocation or it tests the scoping rather than the membership.
+_VERB_PHRASES=(
+  "commit --allow-empty -m x" "push origin HEAD" "add -A" "update-ref refs/heads/x HEAD"
+  "checkout -b x" "switch -c x" "restore --staged ." "reset --hard HEAD" "merge origin/main"
+  "branch -D x" "tag v1" "clone /tmp/src ." "fetch origin" "apply patch.diff"
+  "gc --prune=now" "prune" "symbolic-ref HEAD refs/heads/x" "config a.b c" "init" "rm -r x"
+  "mv a b" "worktree add /tmp/w" "remote add origin /tmp/r" "notes add -m x"
+  "reflog expire --all" "submodule add /tmp/s" "sparse-checkout set x" "subtree add --prefix p /tmp/r m"
+  "stash push" "clean -fd" "update-index --skip-worktree x" "hash-object -w --stdin"
+  "commit-tree HEAD^{tree}" "replace --graft HEAD" "repack -a" "pack-refs --all"
+)
+for _phrase in "${_VERB_PHRASES[@]}"; do
+  ck
+  _vlabel="$(printf '%s' "$_phrase" | awk '{print $1}')"
+  _vslug="$(printf '%s' "$_phrase" | tr -c 'a-zA-Z0-9' '-' | cut -c1-40)"
+  n=$(synth "verb-${_vslug}" <<SYNTHEOF
+h() {
+  local dir="\$1"
+  git -C "\$dir" ${_phrase}
+}
+SYNTHEOF
+)
+  if [[ "${n:-0}" -ge 1 ]]; then
+    pass "write verb \`${_vlabel}\` (as \`${_phrase}\`) is in the operand rule's verb list"
+  else
+    fail "write verb \`${_vlabel}\` (as \`${_phrase}\`) is NOT matched — the verb list narrowed"
+  fi
+done
 
 # --- F. Must-PASS. None of these is the canonical shape, and each would be a false positive. --------
 ck
@@ -394,7 +458,9 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-MIN_ASSERTIONS=17
+# Exact, derived from a green run: 43 arms execute today. The previous 17 against 21 arms left
+# four must-trip arms deletable behind the slack (measured). Raise in lockstep; never lower.
+MIN_ASSERTIONS=57
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS}" >&2
   exit 1

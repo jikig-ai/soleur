@@ -63,7 +63,11 @@ new_probe() { # new_probe <name> -> prints an absolute path
 # is the very defect class this branch exists to close.
 state() { # state <dir> [extra env assignments...]
   local dir="${1:?dir required}"; shift
-  STATE_OUT=$(cd "$dir" && env REPO_BOUNDARY_SALT=fixed-test-salt "$@" \
+  # GLOBAL/SYSTEM config pinned empty. Without this, "the config dimension reads --local" was
+  # killed only by this machine happening to have a populated ~/.gitconfig — on a bare CI image
+  # dropping `--local` would have survived, and the arm would have been measuring the environment.
+  STATE_OUT=$(cd "$dir" && env REPO_BOUNDARY_SALT=fixed-test-salt \
+    GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null "$@" \
     bash -c 'source "'"$LIB"'"; _repo_state' 2>"$TMP_ROOT/err")
   STATE_RC=$?
 }
@@ -87,8 +91,11 @@ else fail "lib is missing:$missing"; fi
 ck
 p=$(new_probe manifest) || { echo "FATAL: probe setup failed" >&2; exit 2; }
 man=$(cd "$p" && bash -c 'source "'"$LIB"'"; _repo_state >/dev/null; repo_boundary_manifest')
-if [[ "$(printf '%s\n' "$man" | awk '{print $1}' | sort | tr '\n' ' ')" == "config head refs worktree " ]]; then
-  pass "manifest enumerates head, worktree, config, refs"
+# `wt` is the fifth dimension: the branches-checked-out-elsewhere set is a classification INPUT
+# (it decides refs FATAL vs REPORT), and a classification input outside the manifest is the exact
+# thing this design exists to prevent.
+if [[ "$(printf '%s\n' "$man" | awk '{print $1}' | sort | tr '\n' ' ')" == "config head refs worktree wt " ]]; then
+  pass "manifest enumerates head, worktree, config, refs, wt"
 else
   fail "manifest dimensions wrong: $(printf '%s' "$man" | tr '\n' '|')"
 fi
@@ -578,6 +585,85 @@ else
   fail "manifest pairing wrong: verdict='$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)' inspected='$(printf '%s' "$inspected" | tr '\n' '|')'"
 fi
 
+# --- 34. FIXTURE DIRECTION: the worktree dimension must SEE its own write class ----------------
+# Every existing worktree arm dirties the tree BEFORE the first snapshot, i.e. asserts must-NOT-
+# fire. So the dimension could be replaced by a constant and the suite stayed 33/33 green. A suite
+# whose fixtures all point one way cannot see the other way.
+ck
+p=$(new_probe wtdirection) || exit 2
+state "$p"; before="$STATE_OUT"
+echo "written between the snapshots" > "$p/new-file.txt"
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c 'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+worktree' <<<"$verdict"; then
+  pass "a working-tree write BETWEEN the snapshots is FATAL (the dimension is not a constant)"
+else
+  fail "worktree dimension blind to its own write class: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)'"
+fi
+
+# --- 35. FIXTURE SHAPE: a branch registered MID-WINDOW must not launder itself ------------------
+# The anti-laundering rule reads `elsewhere` from the BEFORE snapshot. Every existing arm registers
+# the sibling worktree before BOTH snapshots, so both sides carry it and reading from `$after`
+# instead was fully green. The escape the lib's own comment names is `git -C "" worktree add -b
+# probe` DURING the window.
+ck
+p=$(new_probe midwindow) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" worktree add -q "$TMP_ROOT/midwindow-co" -b probe-mid 2>/dev/null
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c 'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+refs.*probe-mid' <<<"$verdict"; then
+  pass "a branch whose worktree appeared MID-WINDOW cannot launder itself into REPORT"
+else
+  fail "mid-window laundering not caught: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 36. POPULATION: the tags half of the refs dimension is live -------------------------------
+# No arm created or moved a tag, so `--tags` was deletable at 33/33 green and the classifier's
+# `refs/tags/*` branch was unreachable from the suite. `git -C "" tag -f v1.0` retargets a release
+# tag, and `tag` is in the sibling scanner's own write-verb list.
+ck
+p=$(new_probe tagdim) || exit 2
+state "$p"; before="$STATE_OUT"
+# `-c tag.gpgSign=false` and an explicit precondition check: the operator's GLOBAL gitconfig forces
+# signed/annotated tags here, so a bare `git tag` fails with "no tag message?" and the arm would be
+# measuring a broken fixture rather than the dimension. A fixture that cannot CONTAIN the thing the
+# arm looks for is not a test — so its failure is made a loud FIXTURE error, not a phantom SUT one.
+git -C "$p" -c tag.gpgSign=false -c tag.forceSignAnnotated=false tag probe-tag 2>/dev/null
+if ! git -C "$p" show-ref --tags --quiet -- refs/tags/probe-tag; then
+  printf '[FATAL] fixture setup failed: could not create refs/tags/probe-tag in the probe repo.\n' >&2
+  printf '        This arm cannot measure the tags dimension without it.\n' >&2
+  exit 1
+fi
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+  GIT_CONFIG_SYSTEM=/dev/null bash -c 'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -q 'probe-tag' <<<"$verdict"; then
+  pass "a tag write is seen by the refs dimension (--tags is load-bearing)"
+else
+  fail "tag write invisible: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)'"
+fi
+
+# --- 37. EXTRACTOR UNIQUENESS: the next-action MAPPING, per dimension ---------------------------
+# Arm 25 concatenates all four next-actions into one blob and greps substrings, so the MAPPING is
+# unasserted — permuting the four strings across the four dimensions was fully green. The defect
+# this function exists to fix is precisely a wrong mapping (the old text offered `git reflog` for
+# every outcome).
+ck
+map_bad=""
+declare -A _want=( [head]='reflog' [worktree]='status' [config]='--unset' [refs]='show-ref' )
+for d in head worktree config refs; do
+  got=$(bash -c 'source "'"$LIB"'"; repo_boundary_next_action "$1"' _ "$d")
+  grep -qF -- "${_want[$d]}" <<<"$got" || map_bad="$map_bad [$d wanted '${_want[$d]}' got '${got:0:40}']"
+done
+if [[ -z "$map_bad" ]]; then
+  pass "each dimension's next action names ITS OWN remedy (the mapping, not just the strings)"
+else
+  fail "next-action mapping wrong:$map_bad"
+fi
+
 # --- Accounting. Emitted DIRECTLY, never through pass()/fail(): a conservation check routed
 # through the verdict helper it exists to police cannot report the fault that corrupted it.
 if [[ $((passes + fails)) -ne $asserted ]]; then
@@ -590,9 +676,9 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-# Derived from a green run, then ratcheted upward: 33 arms execute today, so a deleted or
+# Derived from a green run, then ratcheted upward: 37 arms execute today, so a deleted or
 # neutered arm cannot hide behind slack. Raise it in lockstep when adding arms; never lower it.
-MIN_ASSERTIONS=33
+MIN_ASSERTIONS=37
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

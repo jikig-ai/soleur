@@ -111,9 +111,25 @@ def tracked_shell_files(repo_root, pattern="*.sh"):
     libraries such as `plugins/soleur/test/test-helpers.sh`, and standalone gate scripts. A corpus
     that excludes the files where the helpers actually live is a declaration site.
     """
-    r = subprocess.run(["git", "-C", repo_root, "ls-files", pattern],
+    # `-z`, and the exit status is CHECKED. Without either: a path containing a space was split
+    # into two nonexistent paths and silently dropped by the caller's `except OSError`, and any git
+    # failure produced an empty corpus that reads byte-identically to a clean tree.
+    r = subprocess.run(["git", "-C", repo_root, "ls-files", "-z", pattern],
                        capture_output=True, text=True)
-    return [os.path.join(repo_root, p) for p in r.stdout.split()]
+    if r.returncode != 0:
+        raise SystemExit(f"fixture-scan: `git ls-files` failed in {repo_root!r} "
+                         f"(rc={r.returncode}): {r.stderr.strip()[:200]}")
+    out = []
+    for rel in r.stdout.split("\0"):
+        if not rel:
+            continue
+        full = os.path.join(repo_root, rel)
+        # A tracked symlink would be followed by open() — outside the repo, and potentially at an
+        # unbounded target. There are zero tracked *.sh symlinks today; this keeps it that way.
+        if os.path.islink(full):
+            continue
+        out.append(full)
+    return out
 
 
 # --- rule 1: a failed `cd` redirects a git write --------------------------------------------------
@@ -163,9 +179,28 @@ def scan_cd(paths):
 OPERAND_WRITE = re.compile(
     r'\bgit\s+-C\s+"\$\{?(?P<var>[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}?"\s+'
     r'(?:-c\s+\S+\s+)*'
-    r'(?P<verb>commit|push|add\b|update-ref|checkout|reset|branch|worktree\s+add|worktree\s+remove'
-    r'|rm\b|mv\b|config|init|clone|tag|fetch|apply|stash|gc|prune|symbolic-ref)\b'
+    r'(?P<verb>commit|push|add\b|update-ref|checkout|switch|restore|reset|branch|merge|pull|rebase'
+    r'|revert|cherry-pick|am|stage|clean|update-index|read-tree|write-tree|hash-object|commit-tree'
+    r'|mktree|mktag|pack-refs|repack|prune-packed|replace|rerere|filter-branch|fast-import'
+    r'|worktree\s+(?:add|remove|move|prune|repair|lock|unlock)'
+    r'|remote\s+(?:add|remove|rm|set-url|set-head|rename|prune)'
+    r'|notes\s+(?:add|append|copy|edit|remove|prune)'
+    r'|reflog\s+(?:expire|delete)'
+    r'|submodule\s+(?:add|update|deinit|sync|set-url|set-branch)'
+    r'|sparse-checkout\s+(?:set|add|init|disable|reapply)'
+    r'|subtree\s+(?:add|pull|push|merge|split)'
+    r'|stash\s+(?:push|pop|apply|drop|clear|create|store|save)'
+    r'|rm\b|mv\b|config|init|clone|tag|fetch|apply|gc|prune|symbolic-ref)\b'
 )
+# Verbs with READ subcommands are scoped to their mutating ones. `git worktree list`,
+# `remote -v`, `notes show`, `reflog show`, `stash list` and `submodule status` are reads, and a
+# guard that flags a read is a false positive — which is how a guard stops being read at all.
+# `switch`, `restore` and `merge` were the load-bearing omissions: the first two are the modern
+# spellings of `checkout`/`reset`, and there is a live instance of the third —
+# `.claude/hooks/pre-merge-rebase.sh` runs `git -C "$WORK_DIR" merge origin/main` where WORK_DIR
+# derives from model-controlled JSON stdin. It was invisible on TWO axes at once: the verb was
+# absent AND the binding is an alias (`WORK_DIR="$HOOK_CWD"`), which `_binding_of` treats as a
+# terminator. The alias axis is P1b-adjacent and tracked; the verb axis is closed here.
 
 # Bindings that can carry an empty value. A literal (`d="/tmp/x"`) cannot, and is not a candidate.
 #
@@ -191,15 +226,37 @@ def _bind_res(var):
     )
 
 
-# A guard that makes an EMPTY operand impossible. `${v:?...}` is sufficient FOR P1a specifically —
-# it refuses empty and unset — even though it does not reject a relative path, which is P1b and is
-# tracked separately rather than silently folded in here.
-GUARD = re.compile(
-    r'assert_fixture_dir'
-    r'|\$\{[A-Za-z_][A-Za-z0-9_]*:\?'
-    r'|\|\|\s*(exit|return)'
-    r'|^\s*case\s+"\$\{?[A-Za-z_][A-Za-z0-9_]*'
-    r'|^\s*\[\[\s+-[dn]\s')
+# A guard that makes an EMPTY operand impossible, CORRELATED WITH THE OPERAND.
+#
+# The first version was variable-agnostic and matched anywhere in the window, which made it
+# defeatable four ways — all four proven with fixtures that scanned clean:
+#   (a) `# assert_fixture_dir "$dir"   <- removed, TODO restore`   (a COMMENT; the guard window
+#       did not skip comment lines, though the write-match loop did)
+#   (b) `case "$MODE" in fast) : ;; esac`            (an unrelated case)
+#   (c) `[[ -n "$SOMETHING_ELSE" ]] || true`         (an unrelated test)
+#   (d) `mkdir -p /tmp/x || return 1`                (an unrelated || return)
+# Consequence: each of the six helpers this issue remediated has exactly ONE assertion call, so
+# deleting it and leaving a comment that merely NAMES it kept the ratchet green — i.e. the fix
+# could be reverted invisibly. That is the `cdx()` name-token gap this scanner exists to replace,
+# reproduced inside the replacement.
+#
+# `${v:?...}` remains sufficient FOR P1a specifically: it refuses empty and unset. It does not
+# reject a relative path, which is P1b and tracked separately rather than silently folded in.
+def _guard_res(var):
+    v = re.escape(var)
+    return (
+        # the assertion, applied to THIS operand
+        re.compile(r'assert_fixture_dir\s+"?\$\{?' + v + r'\}?"?'),
+        # ${var:?...} / ${var:?} at the binding
+        re.compile(r'\$\{' + v + r':\?'),
+        # `... || exit` / `|| return` on a line that MENTIONS this operand — either by reference
+        # (`"$d" || return`) or as the ASSIGNMENT being guarded (`d=$(mktemp -d) || return 1`,
+        # which is the dominant real shape and mentions `d=`, never `$d`).
+        re.compile(r'(?:\$\{?' + v + r'\}?|(?:^|;|\s)(?:local\s+|declare\s+)?' + v + r'=)'
+                   r'.*\|\|\s*(?:exit|return)'),
+        # a case/test whose SUBJECT is this operand
+        re.compile(r'(?:case|\[\[)\s+.*"\$\{?' + v + r'\}?"'),
+    )
 
 
 def _binding_of(lines, use_idx, var, skip):
@@ -251,7 +308,9 @@ def scan_operand(paths):
                 continue
             bind_idx, form = b
             # A guard anywhere between the binding and the use — inclusive of the binding line,
-            # which is where `|| return 1` and `${1:?}` live.
+            # which is where `|| return 1` and `${1:?}` live. COMMENT LINES ARE SKIPPED: the
+            # write-match loop skipped them from the start and this one did not, so a commented-out
+            # assertion read as a live one.
             #
             # For the positional-at-use form the binding IS the use line, which would leave a
             # one-line window and mark `assert_fixture_dir "$1"` on the PRECEDING line as absent.
@@ -265,10 +324,11 @@ def scan_operand(paths):
                         break
                     bind_idx = k
             guarded = False
+            guards = _guard_res(var)
             for k in range(bind_idx, i + 1):
-                if k in skip:
+                if k in skip or lines[k].lstrip().startswith("#"):
                     continue
-                if GUARD.search(lines[k]):
+                if any(g.search(lines[k]) for g in guards):
                     guarded = True
                     break
             if guarded:
@@ -307,6 +367,9 @@ def main(argv):
         # Measured before widening: `scan_cd` over `*.sh` returns the same 0 hits as over
         # `*.test.sh`, so this costs nothing today and closes the gap for every file added later.
         files = tracked_shell_files(repo, "*.sh")
+
+    if rule not in ("operand", "cd"):
+        raise SystemExit(f"fixture-scan: unknown --rule {rule!r} (want 'operand' or 'cd')")
 
     if rule == "operand":
         hits = scan_operand(files)

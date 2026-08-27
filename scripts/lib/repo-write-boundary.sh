@@ -44,6 +44,38 @@ _REPO_BOUNDARY_LIB_LOADED=1
 # Populated by _repo_state. One line per dimension: `<dim>\t<measured|not-measured>`.
 _REPO_BOUNDARY_MANIFEST=""
 
+# Operator-facing text is scrubbed before it is printed. Git accepts ESC, CR, BEL, DEL and U+2028
+# inside a config subsection name — all verified — and every one of them round-trips into the FATAL
+# block. A CR-bearing key OVERWRITES the preceding terminal line, which includes the
+# "A SUITE WROTE TO THE LIVE REPOSITORY" header itself. The repo already ships the right primitive
+# and it was simply not wired in.
+_RWB_STRIP_LIB="$(dirname "${BASH_SOURCE[0]}")/strip-log-injection.sh"
+if [[ -r "$_RWB_STRIP_LIB" ]]; then
+  # shellcheck source=scripts/lib/strip-log-injection.sh
+  source "$_RWB_STRIP_LIB"
+fi
+
+# Redact userinfo before a config KEY reaches the operator. `url.<url>.insteadOf`,
+# `http.<url>.extraheader` and `credential.<url>.*` parameterise the KEY by URL, and git accepts
+# `https://user:token@host` there — so naming keys (which the FATAL detail must do, or the
+# remediation is unactionable) opens a disclosure path the raw projection never had. Redacting at
+# PRINT time, not at projection time: the projection needs the exact bytes for equality.
+_repo_boundary_safe_key() {
+  local k="${1-}"
+  k="$(printf '%s' "$k" | sed -E 's,://[^/@[:space:]]*@,://<redacted>@,g')"
+  # PIPED, never `strip_log_injection "$k"`. It is a STDIN FILTER (`tr | sed`), so calling it with
+  # an argument gives it no stdin — and every call site here is inside a `while IFS= read` loop, so
+  # it inherited the LOOP's herestring and consumed the entire remaining config list. Measured: the
+  # first key printed as the whole projection with newlines stripped. That is this branch's own
+  # subject — a helper silently eating its caller's stdin — reproduced inside the redactor written
+  # to make the output safe.
+  if declare -F strip_log_injection >/dev/null 2>&1; then
+    printf '%s' "$k" | strip_log_injection
+  else
+    printf '%s' "${k//[$'\r\n\f\v\e\177']/?}"
+  fi
+}
+
 repo_boundary_dimensions() {
   printf 'head\nworktree\nconfig\nrefs\n'
 }
@@ -69,8 +101,31 @@ repo_boundary_manifest() { # repo_boundary_manifest [snapshot]
   fi
 }
 
+# Bash string comparison, never `awk -v`: awk processes escape sequences in a `-v` assignment, so
+# `url.C:\repos\x.insteadOf` (a documented Windows shape) compares unequal to ITSELF. Measured —
+# that key reported ADDED **and** DELETED on every run with nothing changed between snapshots, a
+# permanent false FATAL on the shared config, i.e. on every worktree on the machine.
+#
+# Returns non-zero when the key is ABSENT, so presence is explicit rather than inferred from an
+# empty digest (a distinction that mattered: an empty digest used to mean "absent").
+_repo_boundary_lookup() { # _repo_boundary_lookup <key> <lines>   (lines are `key\tvalue`)
+  local want="${1-}" line k
+  while IFS= read -r line; do
+    k="${line%%$'\t'*}"
+    if [[ "$k" == "$want" ]]; then printf '%s' "${line#*$'\t'}"; return 0; fi
+  done <<<"${2-}"
+  return 1
+}
+
 _repo_boundary_digest() { # _repo_boundary_digest <value>
-  printf '%s\0%s' "$REPO_BOUNDARY_SALT" "${1-}" | sha256sum | cut -c1-16
+  # The status must be sha256sum's, not `cut`'s. The original form ended in `| cut -c1-16`, and a
+  # pipeline reports its LAST command's status — so a failing or missing `sha256sum` returned 0
+  # with empty output, and the up-front probe that exists to catch exactly that was itself vacuous.
+  # (This lib is SOURCED, so it cannot set `pipefail` without imposing it on its caller.)
+  local out
+  out="$(printf '%s\0%s' "$REPO_BOUNDARY_SALT" "${1-}" | sha256sum)" || return 1
+  [[ -n "$out" ]] || return 1
+  printf '%s' "${out:0:16}"
 }
 
 # --- the four dimensions ---------------------------------------------------------------------
@@ -114,6 +169,11 @@ _repo_boundary_dim_config() {
   # holds.
   local kv key val
   git rev-parse --git-dir >/dev/null 2>&1 || return 1
+  # The digest tool is probed ONCE, up front. Without this, a missing `sha256sum` made every value
+  # digest the empty string while the manifest still said `measured` — and because classify infers
+  # "key absent" from an empty digest, the run reported every key in the shared config as DELETED.
+  # A capture failure must degrade the DIMENSION, never manufacture a verdict.
+  _repo_boundary_digest probe >/dev/null 2>&1 || return 1
   while IFS= read -r -d '' kv; do
     if [[ "$kv" == *$'\n'* ]]; then
       key="${kv%%$'\n'*}"
@@ -124,10 +184,20 @@ _repo_boundary_dim_config() {
       val=$'\1valueless'
     fi
     case "$key" in
-      *.vscode-merge-base) continue ;;
+      # `branch.*.vscode-merge-base`, NOT `*.vscode-merge-base`. The looser pattern dropped any key
+      # in any section ending in that suffix, while the comment above and the operator-facing
+      # not-inspected list both say `branch.*`. Claim/check drift of the shape this lib polices.
+      branch.*.vscode-merge-base) continue ;;
     esac
+    # A TAB or CR inside a subsection name — both accepted by git — would break this framing and
+    # silently truncate the key, so the emitted remediation would name a key that does not exist.
+    # Encoded rather than dropped: the key must stay distinguishable for the equality compare.
+    key="${key//$'\t'/%09}"; key="${key//$'\r'/%0D}"
     printf '%s\t%s\n' "$key" "$(_repo_boundary_digest "$val")"
   done < <(git config --local --list -z 2>/dev/null) | LC_ALL=C sort
+  # NOTE: the pipeline's status is `sort`'s. That is deliberate here — the repo liveness probe
+  # above already established the config file is readable, and `git config --list` exits 1 on a
+  # legitimately EMPTY config, which must not read as a capture failure.
 }
 
 _repo_boundary_dim_refs() {
@@ -148,7 +218,7 @@ _repo_boundary_dim_refs() {
 # --- the snapshot ------------------------------------------------------------------------------
 
 _repo_state() {
-  local head worktree config refs manifest="" body=""
+  local head worktree config refs manifest="" body="" wt_list=""
   # HEAD is the liveness probe for the whole function. If it cannot be read there is no repository
   # to have a boundary around, and the caller must degrade to an honest NOTE.
   head="$(_repo_boundary_dim_head)" || { _REPO_BOUNDARY_MANIFEST=""; return 1; }
@@ -189,11 +259,28 @@ _repo_state() {
   # FATAL into the softer REPORT class — `worktree add` is in the sibling scanner's own write-verb
   # list, so it is a contemplated shape, not a hypothetical. A harm classification's reference set
   # has to be part of the measurement.
-  local wt
-  while IFS= read -r wt; do
-    [[ -n "$wt" ]] || continue
-    body+="wt"$'\t'"$wt"$'\n'
-  done <<<"$(_repo_boundary_branches_elsewhere)"
+  # `wt` is a MANIFEST dimension, not a bare body family. It is a classification INPUT — it decides
+  # FATAL vs REPORT for refs — and a classification input outside the manifest is precisely what
+  # this design exists to prevent.
+  #
+  # The `<none>` sentinel is load-bearing: without it, "measured, and there are no sibling
+  # worktrees" is byte-identical to "not carried in this snapshot", and the classifier's fallback
+  # then re-derives the set AFTER the window closes. On any single-worktree checkout — i.e. every
+  # CI runner — that made the fallback the DEFAULT path, so an escape running
+  # `git -C "" worktree add -b probe` registered its own branch and laundered itself from FATAL to
+  # REPORT, which changes no exit code. Three reviewers found that independently.
+  local wt wt_n=0
+  if wt_list="$(_repo_boundary_branches_elsewhere)"; then
+    manifest+=$'manifest\twt\tmeasured\n'
+    while IFS= read -r wt; do
+      [[ -n "$wt" ]] || continue
+      body+="wt"$'\t'"$wt"$'\n'
+      wt_n=$((wt_n + 1))
+    done <<<"$wt_list"
+    (( wt_n == 0 )) && body+="wt"$'\t'"<none>"$'\n'
+  else
+    manifest+=$'manifest\twt\tnot-measured\n'
+  fi
 
   _REPO_BOUNDARY_MANIFEST="$manifest"
   # The manifest is emitted INSIDE the snapshot as well as kept in the global: a before/after pair
@@ -289,8 +376,11 @@ repo_boundary_classify() {
   # Branches checked out elsewhere are read from the BEFORE snapshot when it carries them, so a
   # `git -C "" worktree add -b probe` cannot register its own branch mid-run and thereby launder
   # itself into the softer class.
-  elsewhere="$({ grep "^wt"$'\t' <<<"$before" || true; } | sed 's/^wt\t//')"
-  [[ -n "$elsewhere" ]] || elsewhere="$(_repo_boundary_branches_elsewhere)"
+  # No `|| re-derive` fallback. An empty measured set is a legitimate result and must not be
+  # confused with an uncarried one — that conflation is what reopened the laundering hole. A
+  # snapshot predating the `wt` family (only possible across a lib swap) has no `wt` manifest row,
+  # which the pairing check above already reports as UNMEASURABLE.
+  elsewhere="$({ grep "^wt"$'\t' <<<"$before" || true; } | sed 's/^wt\t//' | grep -v '^<none>$' || true)"
   own_branch="$(git symbolic-ref --quiet HEAD 2>/dev/null)" || own_branch=""
   own_short="${own_branch#refs/heads/}"
 
@@ -305,15 +395,19 @@ repo_boundary_classify() {
 
   # --- config: per key, by harm ----------------------------------------------------------------
   if [[ " $unmeasurable " != *" config "* ]]; then
-    local bcfg acfg key bdig adig brname
+    local bcfg acfg key bdig adig brname _rwb_present
     bcfg="$({ grep "^config"$'\t' <<<"$before" || true; } | sed 's/^config\t//')"
     acfg="$({ grep "^config"$'\t' <<<"$after"  || true; } | sed 's/^config\t//')"
     # Added or modified.
     while IFS=$'\t' read -r key adig; do
       [[ -n "$key" ]] || continue
-      bdig="$(printf '%s\n' "$bcfg" | awk -F'\t' -v k="$key" '$1==k {print $2}')"
-      [[ "$bdig" == "$adig" ]] && continue
-      if [[ -z "$bdig" ]]; then
+      if bdig="$(_repo_boundary_lookup "$key" "$bcfg")"; then
+        [[ "$bdig" == "$adig" ]] && continue
+        _rwb_present=1
+      else
+        _rwb_present=0
+      fi
+      if [[ "$_rwb_present" == 0 ]]; then
         # ADDED. The only benign shape is a tracking-config pair for a branch that is not this
         # worktree's — precisely what `git push -u` / `checkout -b --track` leave behind. Our OWN
         # branch gaining tracking config mid-run stays FATAL: fail closed on the ambiguous case.
@@ -321,22 +415,36 @@ repo_boundary_classify() {
           branch.*.remote|branch.*.merge)
             brname="${key#branch.}"; brname="${brname%.*}"
             if [[ -n "$own_short" && "$brname" == "$own_short" ]]; then
-              printf 'FATAL\tconfig\t%s was ADDED — tracking config for THIS worktree'"'"'s own branch\n' "$key"
+              printf 'FATAL\tconfig\t%s was ADDED — tracking config for THIS worktree'"'"'s own branch\n' "$(_repo_boundary_safe_key "$key")"
             else
-              printf 'REPORT\tconfig\t%s was ADDED — the shape `git push -u` / `checkout -b --track` leaves for branch %s\n' "$key" "$brname"
+              printf 'REPORT\tconfig\t%s was ADDED — the shape `git push -u` / `checkout -b --track` leaves for branch %s\n' "$(_repo_boundary_safe_key "$key")" "$(_repo_boundary_safe_key "$brname")"
             fi ;;
           *)
-            printf 'FATAL\tconfig\t%s was ADDED\n' "$key" ;;
+            printf 'FATAL\tconfig\t%s was ADDED\n' "$(_repo_boundary_safe_key "$key")" ;;
         esac
       else
-        printf 'FATAL\tconfig\t%s CHANGED VALUE\n' "$key"
+        printf 'FATAL\tconfig\t%s CHANGED VALUE\n' "$(_repo_boundary_safe_key "$key")"
       fi
     done <<<"$acfg"
-    # Deleted: unconditionally FATAL. Nothing routine removes a shared config key.
+    # Deletions. An earlier revision of this comment said "nothing routine removes a shared config
+    # key" — measured FALSE: `worktree-manager.sh` runs `git branch -D`, and `cleanup-merged` runs
+    # at EVERY session start across this machine's worktrees, which removes the deleted branch's
+    # `branch.<n>.remote` and `.merge` alongside its head. So the DELETE side takes the same harm
+    # partition as the ADD side, or a routine session start reds every concurrent gate run.
     while IFS=$'\t' read -r key bdig; do
       [[ -n "$key" ]] || continue
-      adig="$(printf '%s\n' "$acfg" | awk -F'\t' -v k="$key" '$1==k {print $2}')"
-      [[ -z "$adig" ]] && printf 'FATAL\tconfig\t%s was DELETED\n' "$key"
+      _repo_boundary_lookup "$key" "$acfg" >/dev/null && continue
+      case "$key" in
+        branch.*.remote|branch.*.merge)
+          brname="${key#branch.}"; brname="${brname%.*}"
+          if [[ -n "$own_short" && "$brname" == "$own_short" ]]; then
+            printf 'FATAL\tconfig\t%s was DELETED — tracking config for THIS worktree'"'"'s own branch\n' "$(_repo_boundary_safe_key "$key")"
+          else
+            printf 'REPORT\tconfig\t%s was DELETED — the shape `git branch -d` / cleanup-merged leaves for branch %s\n' "$(_repo_boundary_safe_key "$key")" "$(_repo_boundary_safe_key "$brname")"
+          fi ;;
+        *)
+          printf 'FATAL\tconfig\t%s was DELETED\n' "$(_repo_boundary_safe_key "$key")" ;;
+      esac
     done <<<"$bcfg"
   fi
 
@@ -414,6 +522,12 @@ repo_boundary_render_inspected() { # repo_boundary_render_inspected [before [aft
 
 repo_boundary_render_not_inspected() { # repo_boundary_render_not_inspected [before [after]]
   local dim status other
+  # MEASURED, so a reader does not go hunting: of the five dimensions, only `worktree` can
+  # realistically report not-measured. git parses packed-refs and config eagerly, so every ref-store
+  # or config corruption takes `git rev-parse HEAD` down first and the WHOLE snapshot degrades.
+  # `git status --porcelain` refreshing the index under `index.lock` contention is the one live
+  # per-dimension case.
+  #
   # A dimension not measured at EITHER boundary is named HERE rather than silently dropped, so a
   # partial reading is never presented as whole coverage. This is the union of the two
   # not-measured sets, mirroring the intersection the inspected list renders.
@@ -439,6 +553,20 @@ repo_boundary_render_not_inspected() { # repo_boundary_render_not_inspected [bef
           - reflogs
           - the relative order of a multivalued config key (the projection sorts, so a
             reordering of repeated http.* or remote.*.fetch entries is invisible)
+          - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+            fixture overwriting .env, .env.local or .claude/settings.local.json is invisible here
+          - the working tree of any OTHER worktree on this machine; only THIS checkout's tree and
+            index are read, and the 2026-08-20 escape class can reach a sibling checkout
+          - refs outside refs/heads and refs/tags: refs/notes/**, refs/replace/**, refs/stash,
+            refs/bisect/** (a `git replace` silently changes what every later `git log` shows)
+          - loose or packed objects written with no ref change (hash-object -w, commit-tree, mktree)
+          - reflogs — which is also the recovery path the [head] next action prescribes
+          - index bits: --skip-worktree, --assume-unchanged, sparse-checkout
+          - a HEAD that changed SYMBOLICALLY at a constant sha (`checkout --detach`); the head
+            dimension is `rev-parse HEAD`, a sha, so this is invisible AND it empties the
+            own-branch comparison that drives two FATAL escalations
+          - any A -> B -> A pair inside the window (a `git stash push` followed by `pop`)
+          - anything a suite's descendants do AFTER the end snapshot
           - any entry point other than runs of this runner
           - any suite this runner did not start
 EOF
