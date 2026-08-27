@@ -1,4 +1,4 @@
-23  # Supabase Management API call sites this guard can still SEE.
+25  # Supabase Management API call sites this guard can still SEE.
     #
     # THIS IS A COVERAGE FLOOR, NOT AN OFFENDER CEILING, AND THE DIRECTION IS INVERTED
     # RELATIVE TO THIS REPO'S OTHER .highwater FILES. lint-diagnosis-claims.highwater and
@@ -33,6 +33,19 @@
     #   - apps/web-platform/infra/cron-egress-allowlist.txt:66, the bare hostname
     #     `api.supabase.com` with no scheme and no path -- in neither assembly by construction.
     #
-    # The three `advisors/security` sites inside this 23 are WAIVED, not absent. The waiver
+    # PROVENANCE, 23 -> 25 (same PR, 2026-08-27). Measured, not estimated: the Phase 3
+    # workstream landed `scripts/supabase-logs-query.sh` and `scripts/lib/supabase-logs-verdict.sh`
+    # on this branch, adding two Management API call sites. That is legitimate GROWTH, and the
+    # guard asked for the raise in a note. Recording the widening here rather than silently
+    # editing the digit is the discipline lint-diagnosis-claims.highwater established: a number
+    # that moves without a reason attached stops being evidence of anything.
+    #
+    # THE LEAD MUST RE-MEASURE BEFORE MERGE. This branch is collecting three workstreams. 25 is
+    # the census as of this commit; any further caller added by integration raises it again.
+    # Re-run `scripts/lint-supabase-deprecated-endpoints.sh --census` and set this to what it
+    # prints. Leaving it low is not "safe" -- slack on a coverage floor is exactly the silent
+    # slack this ratchet replaced.
+    #
+    # The three `advisors/security` sites inside this census are WAIVED, not absent. The waiver
     # lives in the script's DENY array with its date and justification; removing it is what
     # turns this population red, and that is the guard's live non-vacuity proof.

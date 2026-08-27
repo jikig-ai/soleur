@@ -175,9 +175,14 @@ used_host_vars() {
 }
 
 # Every RHS assigned to $2 in file $1, trailing comment and one layer of quoting removed.
+# Reads CODE LINES only. A commented-out assignment is not an assignment, and documenting the
+# exfil shape you are defending against ("# never write API=\"${SUPABASE_API_HOST:-...}\"") is a
+# thing this repo does constantly -- a raw grep here would red the very comment explaining the
+# rule, which is the bare-token-over-prose defect (cq-assert-anchor-not-bare-token) reappearing
+# on the resolution side rather than the detection side.
 var_rhs() {
   local f="$1" v="$2" pre='^[[:space:]]*(export[[:space:]]+|local[[:space:]]+|readonly[[:space:]]+)?'
-  grep -hE "${pre}${v}=" -- "$f" 2>/dev/null \
+  code_lines "$f" | sed -E 's/^[0-9]+://' | grep -hE "${pre}${v}=" 2>/dev/null \
     | sed -E "s#${pre}${v}=##" \
     | sed -E 's/[[:space:]]+#.*$//' \
     | sed -E 's/^"(.*)"$/\1/' \
