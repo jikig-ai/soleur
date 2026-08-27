@@ -33,6 +33,36 @@ All four inspected dimensions — HEAD, this worktree's tree and index, local (s
 local heads and tags — unchanged across the run. No `[FATAL]`, no `[REPORT]`, and no not-measured
 NOTE appeared in the run.
 
+## The harm partition, validated in production conditions (2026-08-27)
+
+The final `scripts`-shard run produced the exact event the partition was written for, unprompted.
+Four sibling worktrees moved their branches while it ran:
+
+```
+=== 342 suites: 340 passed, 0 failed, 0 killed, 2 skipped (declined),
+    4 repo observation(s) (REPORT — not a verdict, exit code unchanged) ===
+
+[REPORT] A SHARED store changed in a way a sibling worktree routinely produces.
+           [refs] refs/heads/feat-one-shot-7624-legal-corpus-third-country-transfer ...
+           [refs] refs/heads/fix-7650-phase1-destroy-guard ...
+           [refs] refs/heads/feat-one-shot-supabase-analytics-logs-endpoint-migration ...
+           [refs] refs/heads/feat-one-shot-7395-release-esm-build-failure ...
+```
+
+`rc=0`, zero FATAL, zero UNMEASURABLE. **Before the harm partition each of those four would have
+been `[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY` with `failed` incremented — the gate would have
+gone red four times on a completely healthy run.** That is no longer a projection from a probe; it
+is what the shipped code did on a real gate run, on a 22-worktree machine, without being staged.
+
+### This qualifies the AC11 claim above
+
+The earlier AC11 run reported all dimensions byte-identical. This one did **not**, and the honest
+statement is that the boundary is measured over a SHARED store: on a machine with concurrent
+worktrees, the refs dimension legitimately differs across a multi-minute run and the correct
+outcome is REPORT, not equality. AC11's original phrasing — "all four inspected dimensions
+unchanged" — holds only on a quiet machine. What the acceptance criterion should assert, and what
+both runs satisfy, is: **no FATAL, and every delta classified into a class that names its cause.**
+
 ## Mutation matrices — what was EXECUTED, and what was not
 
 Stated per axis rather than as a row count, because a row count is the number that flatters.
