@@ -45,10 +45,18 @@
 #       -- . ':(exclude)*.md' ':(exclude)*.mdx' ':(exclude)knowledge-base/**'
 #
 # `tests/` AND `*.test.sh` ARE DELIBERATELY IN SCOPE, and the decision is load-bearing.
-# `tests/scripts/test-supabase-advisor-scan.sh:321` is a REAL `curl` to the live deprecated
-# endpoint with a real `$REF` — a third genuine `advisors/security` call site. A pathspec that
-# hid it would buy the tidy "RED on two call sites" headline by making the guard blind to a
-# live call, which is the fail-open shape this file exists to prevent. Excluding `*.test.sh`
+# `tests/scripts/test-supabase-advisor-scan.sh:321` is a fully-formed `curl` to the deprecated
+# endpoint, at rest in a tracked file — a third `advisors/security` CALL CONSTRUCT. Stated
+# precisely, because the distinction matters and the looser claim was wrong: that line is a
+# mutation stub, and the suite executes it under `PATH="$STUB_DIR:$PATH"`, so it resolves to a
+# synthetic `curl` and never reaches the network. It is not a live call.
+#
+# It is still counted, deliberately. This census measures DEPRECATED-PATH LITERALS THE
+# EXTRACTOR CAN SEE, not production traffic: when a deprecated endpoint is withdrawn, a
+# hard-coded path in a test breaks the test exactly as a path in a script breaks the script,
+# and a guard that can see one but not the other is the fail-open shape this file exists to
+# prevent. A pathspec that hid it would also buy the tidy "RED on two call sites" headline by
+# narrowing what the guard can see, which is the same move one level up. Excluding `*.test.sh`
 # would additionally drop `supabase-advisor/scan-workflow.test.sh` and
 # `postgrest-reload-schema.test.sh` — the very per-invocation snapshots this layer sits above.
 # The assertion-string false positives that motivated an exclusion are handled by the CALL
@@ -107,8 +115,9 @@ PATHSEG_CH="[^[:space:]\"${SQ}${BT}]"       # URL path characters
 #   analytics/endpoints/logs.all  Supabase announced REMOVAL on 2026-09-23. No waiver: a call
 #                                 site here is a dated outage, not a style question.
 #   advisors/security             Deprecated with NO announced removal date. WAIVED-2026-08-26
-#                                 because the three live call sites are the advisor scan and
-#                                 its RLS-apply siblings, there is no replacement endpoint yet,
+#                                 because the three call sites are the advisor scan, its
+#                                 RLS-apply sibling and a test's mutation stub (two of the
+#                                 three run in production), there is no replacement endpoint yet,
 #                                 and nothing breaks on a known date. Re-examine when the spec
 #                                 gains a sunset field (see phase-0-endpoint-evidence.md).
 #

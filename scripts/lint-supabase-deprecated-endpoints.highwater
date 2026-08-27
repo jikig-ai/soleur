@@ -17,7 +17,7 @@
     # Growth is legitimate. A new Management API caller RAISES it; the guard prints a note
     # asking you to. Raising is free, lowering needs a reason.
     #
-    # WHAT THE 23 COUNTS, EXACTLY. Non-comment lines, in the union of the two assemblies, that
+    # WHAT THIS NUMBER COUNTS, EXACTLY. Non-comment lines, in the union of the two assemblies, that
     # match a Management API CALL CONSTRUCT: a host token (the literal `https://api.supabase.com`
     # or a `$VAR`/`${VAR}` used as the host) immediately followed by `/v1/projects/`. It is a
     # CENSUS OF THE SCANNED SCOPE, NOT OF THE REPO -- it counts only what the pathspec recorded
