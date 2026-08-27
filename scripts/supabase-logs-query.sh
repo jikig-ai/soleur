@@ -563,7 +563,7 @@ if (( TRUNCATED == 1 )); then
       c_start=$c_end
     done
     fail_now TRUNCATION_UNRESOLVED \
-      "The window truncates and would need ${n_slices} slices (> ${MAX_SLICES}) to cover at the measured ${cap_h}h cap, so it was not auto-narrowed. Re-run these exact slices and sum them: ${slice_cmds}"
+      "The window truncates and would need ${n_slices} slices (more than the ${MAX_SLICES} this helper will issue unattended) to cover at the measured ${cap_h}h cap, so it was not auto-narrowed. Re-run these exact slices and sum them: ${slice_cmds}"
   fi
 
   SLICE_AGG='[]'

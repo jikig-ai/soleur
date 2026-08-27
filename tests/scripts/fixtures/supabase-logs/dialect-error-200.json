@@ -22,7 +22,7 @@
       "reason": "DIALECT_ERROR",
       "require": [
         "rows=UNAVAILABLE",
-        "do NOT hand-write",
+        "Do NOT hand-write a replacement query",
         "File an issue"
       ],
       "calls": [
