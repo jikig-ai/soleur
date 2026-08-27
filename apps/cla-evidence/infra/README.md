@@ -1,7 +1,7 @@
 # cla-evidence — Terraform root
 
 Provisions the off-site evidence archive for the CLA signature flow:
-`soleur-cla-evidence` R2 bucket (EU region, Cloudflare R2 Lock Rules with
+`soleur-cla-evidence` R2 bucket (Cloudflare Inc, US — see Region below; Cloudflare R2 Lock Rules with
 a 10-year age-based retention floor providing write-once-read-many
 (WORM) semantics) plus the two scoped Cloudflare API tokens used by the
 sidecar workflow and by Terraform itself.
@@ -10,8 +10,8 @@ sidecar workflow and by Terraform itself.
 **Issue:** #3209
 **Plan:** `knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md`
 **Runbook:** `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`
-**Retention:** 10 years (`maxAgeSeconds = 315360000`) from object creation, enforced by an R2 native Lock Rule.
-**Region:** `weur` (Western Europe, best-effort per Cloudflare R2 placement).
+**Retention:** indefinite. The Lock Rule sets a 10-year **floor** (`maxAgeSeconds = 315360000`) from object creation — a minimum period during which an object cannot be deleted, not a ceiling. Nothing removes an object when that period expires (Art. 30 PA-7 §(f)).
+**Region:** `weur` (Western Europe, best-effort per Cloudflare R2 placement). This is a **location hint, not a jurisdiction** -- the bucket sits on Cloudflare's `default` (standard, non-EU-tier) jurisdiction, as the `…<account>_default_<bucket>` token resource-strings in `iam.tf` record. Do not cite it as a data-residency or transfer safeguard: custody by Cloudflare, Inc. (US) is a Chapter V transfer regardless (Art. 30 PA-7 §(e)).
 
 ## Change-control gate
 

@@ -6,7 +6,7 @@ date: 2026-05-16
 
 # CLA Signature Evidence Retrieval
 
-Operations runbook for the off-site CLA evidence archive (`soleur-cla-evidence` R2 bucket, region `weur`, R2 Lock Rules age-based retention with a 10-year floor providing write-once-read-many (WORM) semantics). Covers IP-dispute response, DMCA notice handling, GDPR Article 17 erasure requests, and contributor-revocation flows.
+Operations runbook for the off-site CLA evidence archive (`soleur-cla-evidence` R2 bucket, R2 Lock Rules age-based retention with a 10-year floor providing write-once-read-many (WORM) semantics). The bucket carries a `WEUR` location hint, which is a placement preference and **not** a jurisdictional restriction -- the bucket sits on Cloudflare's default, non-EU-tier jurisdiction, and custody by Cloudflare, Inc. (US) is a third-country transfer under Chapter V safeguarded by DPF + SCCs + CBPR (Art. 30 PA-7 §(e)). Covers IP-dispute response, DMCA notice handling, GDPR Article 17 erasure requests, and contributor-revocation flows.
 
 **Cross-references:**
 - Architecture: `apps/cla-evidence/infra/` (Terraform) + `apps/cla-evidence/scripts/` (helpers) + `.github/workflows/cla-evidence.yml` (sidecar) + `.github/workflows/cla-evidence-timestamp.yml` (monthly RFC 3161).
