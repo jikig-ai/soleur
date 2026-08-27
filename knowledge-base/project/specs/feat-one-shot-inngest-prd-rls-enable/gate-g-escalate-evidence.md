@@ -131,7 +131,7 @@ source that never emits adds nothing. See the evidence file, §Confirmed from th
 **Sibling records carrying the same addendum:**
 
 - `knowledge-base/legal/audits/2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md`
-- `knowledge-base/project/learnings/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
+- `knowledge-base/engineering/operations/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
 
 An advisory guard, `scripts/lint-supabase-deprecated-endpoints.sh`, censuses references to the
 retired endpoint. It is advisory only — not merge-blocking — so a red result is a finding to

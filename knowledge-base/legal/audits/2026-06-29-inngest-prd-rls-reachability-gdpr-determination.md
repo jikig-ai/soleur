@@ -96,6 +96,6 @@ untouched. The follow-up stays open.
 **Sibling records carrying the same addendum:**
 
 - `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
-- `knowledge-base/project/learnings/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
+- `knowledge-base/engineering/operations/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
 
 <!-- ADDENDUM-2026-08-26 END -->
