@@ -283,7 +283,6 @@ def main(argv):
     rule = "cd"
     repo = None
     files = []
-    it = iter(range(len(argv)))
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -296,8 +295,18 @@ def main(argv):
         i += 1
 
     if repo:
-        pattern = "*.sh" if rule == "operand" else "*.test.sh"
-        files = tracked_shell_files(repo, pattern)
+        # ONE corpus for both rules: `*.sh`.
+        #
+        # The cd rule used to walk only `*.test.sh` while the operand rule walked `*.sh`, which
+        # meant this module's own docstring argument — "a corpus that excludes the files where the
+        # helpers actually live is a declaration site" — was made for one rule and denied to the
+        # other. That mattered more than it looks: once CWD isolation was measured out of the plan
+        # (see the Phase 0 addendum), `scan_cd` became one of only two remaining covers for the
+        # lost-`cd` class (#7553), and it was covering 376 of 901 tracked shell files.
+        #
+        # Measured before widening: `scan_cd` over `*.sh` returns the same 0 hits as over
+        # `*.test.sh`, so this costs nothing today and closes the gap for every file added later.
+        files = tracked_shell_files(repo, "*.sh")
 
     if rule == "operand":
         hits = scan_operand(files)

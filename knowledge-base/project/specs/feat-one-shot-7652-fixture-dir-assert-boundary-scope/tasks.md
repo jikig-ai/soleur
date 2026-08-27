@@ -25,7 +25,18 @@ preamble before reordering anything.
       CI-shaped checkout **and** locally. Confirm a zero delta across every dimension. This gates
       whether the boundary half can ship before the sites are fixed.
 
-## Phase 1 — CWD isolation at `run_suite` (primary mechanism)
+## Phase 1 — CWD isolation at `run_suite` — SUPERSEDED 2026-08-26, NOT SHIPPED
+
+> **Superseded.** Phase 0's pre-committed decision rule (≤40 suites AND each break a
+> path-resolution fix) was measured and fired AGAINST this mechanism: 170 of 177 `run_suite` call
+> sites pass relative script paths, and **64 suites read the live repository on purpose** via bare
+> `git ls-files`/`grep`/`rev-parse` — including `fixture-cd-containment.test.sh`, the guard shipped
+> by this issue's first half. Their "fix" would be `-C "$REPO_ROOT"` on every git call across 64
+> fixture suites, which is both past the threshold and an en-masse edit of fixture suites — the
+> exact activity the boundary detector exists to watch. Phase 3 is the primary mechanism instead.
+> Full measurement in the plan's `### Phase 0 measurement — Addendum 2026-08-26`.
+>
+> The tasks below are retained unstruck as the record of what was planned; none of them shipped.
 
 - [ ] 1.1 `run_suite()` starts each suite in a per-run throwaway directory outside any git
       repository, with `GIT_CEILING_DIRECTORIES` set.

@@ -19,6 +19,9 @@
 #   (d) the manifest is the single source of truth for the rendered claim, so a narrowed check
 #       narrows the claim with it.
 set -uo pipefail
+# repo-write-boundary-sandbox: tests-refusal arms 23/24 deliberately build sandboxes WITHOUT the
+# lib (and with a stale one) to prove the runner refuses. This file must never be read as a
+# relocator that forgot to copy it.
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,7 +66,6 @@ state() { # state <dir> [extra env assignments...]
   STATE_OUT=$(cd "$dir" && env REPO_BOUNDARY_SALT=fixed-test-salt "$@" \
     bash -c 'source "'"$LIB"'"; _repo_state' 2>"$TMP_ROOT/err")
   STATE_RC=$?
-  STATE_ERR=$(cat "$TMP_ROOT/err")
 }
 
 echo "repo-write-boundary.test.sh"
@@ -254,12 +256,14 @@ else fail "_repo_state returned 0 outside a repository — a clean claim with no
 # Drop a dimension from the manifest and the inspected list must shrink with it.
 ck
 p=$(new_probe manifestrender) || exit 2
-full=$(cd "$p" && bash -c 'source "'"$LIB"'"; _repo_state >/dev/null; repo_boundary_render_inspected')
+# Driven through a real SNAPSHOT rather than by stubbing repo_boundary_manifest, because that is
+# how the runner calls it: `before="$(_repo_state)"` is a command substitution, so a stubbed
+# global would not survive to the render anyway. Stripping the config manifest row is what a
+# STALE lib measuring three dimensions actually produces.
+full=$(cd "$p" && bash -c 'source "'"$LIB"'"; s="$(_repo_state)"; repo_boundary_render_inspected "$s"')
 narrowed=$(cd "$p" && bash -c 'source "'"$LIB"'"
-  _repo_state >/dev/null
-  # Simulate a stale lib whose manifest no longer carries the config dimension.
-  repo_boundary_manifest() { printf "head\tmeasured\nworktree\tmeasured\nrefs\tmeasured\n"; }
-  repo_boundary_render_inspected')
+  s="$(_repo_state | grep -v "^manifest	config	")"
+  repo_boundary_render_inspected "$s"')
 if grep -qi 'config' <<<"$full" && ! grep -qi 'config' <<<"$narrowed"; then
   pass "the inspected list renders from the manifest and shrinks with it"
 else
@@ -268,7 +272,7 @@ fi
 
 # --- 18. The not-inspected list names the classes a reader will otherwise assume covered ---------
 ck
-ni=$(cd "$p" && bash -c 'source "'"$LIB"'"; _repo_state >/dev/null; repo_boundary_render_not_inspected')
+ni=$(cd "$p" && bash -c 'source "'"$LIB"'"; s="$(_repo_state)"; repo_boundary_render_not_inspected "$s"')
 miss=""
 for anchor in 'push to a remote' 'objects' 'hooks' 'vscode-merge-base' 'remote-tracking' 'reflog' 'did not start'; do
   grep -qi -- "$anchor" <<<"$ni" || miss="$miss [$anchor]"
@@ -350,12 +354,19 @@ cp "$RUNNER" "$sb/test-all.sh"
 cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$sb/lib/" 2>/dev/null
 cp "$REPO_ROOT/scripts/lib/test-contention.sh" "$sb/lib/" 2>/dev/null
 # deliberately do NOT copy repo-write-boundary.sh
-nolib_out=$(cd "$REPO_ROOT" && timeout 60 bash "$sb/test-all.sh" 2>&1 </dev/null | head -20)
+# rc captured from the RUNNER, not from a `| head` pipeline (which is what `$?` after a pipe
+# reports, and which is always 0). TC_LOCK_TIMEOUT is pinned low: if the above-tc_acquire
+# placement invariant ever regresses, this sandbox reaches the lock the PARENT run holds and
+# burns the full timeout, turning a precise red into a slow one.
+nolib_raw="$TMP_ROOT/nolib.out"
+( cd "$REPO_ROOT" && TC_LOCK_TIMEOUT=5 timeout 60 bash "$sb/test-all.sh" >"$nolib_raw" 2>&1 </dev/null )
 nolib_rc=$?
-if grep -q 'repo-write-boundary' <<<"$nolib_out" && ! grep -qi 'git unavailable' <<<"$nolib_out"; then
-  pass "a missing boundary lib is named and refused, without blaming git"
+nolib_out=$(head -20 "$nolib_raw")
+if [[ "$nolib_rc" -eq 2 ]] && grep -q 'repo-write-boundary' <<<"$nolib_out" \
+   && ! grep -qi 'git unavailable' <<<"$nolib_out"; then
+  pass "a missing boundary lib exits 2, names the lib, and does not blame git"
 else
-  fail "missing-lib contract wrong: '$(printf '%s' "$nolib_out" | tr '\n' '|' | cut -c1-220)'"
+  fail "missing-lib contract wrong (rc=$nolib_rc): '$(printf '%s' "$nolib_out" | tr '\n' '|' | cut -c1-220)'"
 fi
 
 # --- 24. ROW 14 — a STALE lib narrows the CLAIM, not just the check -----------------------------
@@ -367,9 +378,12 @@ stale="$TMP_ROOT/stalelib"; mkdir -p "$stale/lib"
 cp "$RUNNER" "$stale/test-all.sh"
 for f in test-relevance-paths.sh test-contention.sh; do cp "$REPO_ROOT/scripts/lib/$f" "$stale/lib/" 2>/dev/null; done
 printf '%s\n' '#!/usr/bin/env bash' '_repo_state() { git rev-parse HEAD; }' > "$stale/lib/repo-write-boundary.sh"
-stale_out=$(cd "$REPO_ROOT" && timeout 60 bash "$stale/test-all.sh" 2>&1 </dev/null | head -20)
-if grep -qiE 'repo_boundary_(manifest|classify|dimensions|render)' <<<"$stale_out"; then
-  pass "a stale lib is named by the missing-function check rather than silently narrowing the gate"
+stale_raw="$TMP_ROOT/stale.out"
+( cd "$REPO_ROOT" && TC_LOCK_TIMEOUT=5 timeout 60 bash "$stale/test-all.sh" >"$stale_raw" 2>&1 </dev/null )
+stale_rc=$?
+stale_out=$(head -20 "$stale_raw")
+if [[ "$stale_rc" -eq 2 ]] && grep -qiE 'repo_boundary_(manifest|classify|dimensions|render)' <<<"$stale_out"; then
+  pass "a stale lib exits 2 and is NAMED by the missing-function check, not silently narrowed"
 else
   fail "stale-lib contract wrong: '$(printf '%s' "$stale_out" | tr '\n' '|' | cut -c1-220)'"
 fi
@@ -386,7 +400,7 @@ render=$(cd "$REPO_ROOT" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c '
 missing_anchor=""
 for a in 'HEAD' 'tree and index' 'local (shared) config' 'harm class' \
          'push to a remote' 'did not start' \
-         'git reflog' 'git config --local --list' 'git show-ref'; do
+         'git reflog' 'git config --local --unset' 'git show-ref'; do
   grep -qF -- "$a" <<<"$render" || missing_anchor="$missing_anchor [$a]"
 done
 if [[ -z "$missing_anchor" ]]; then
@@ -435,8 +449,13 @@ relocators=""; unlisted=""
 while IFS= read -r f; do
   grep -qE '^[[:space:]]*cp\b.*test-all\.sh|cp "\$TARGET"|cp "\$MAIN_TARGET"|cp "\$RUNNER"' "$f" || continue
   relocators="$relocators $f"
-  grep -q 'repo-write-boundary' "$f" && continue                      # copies the lib
+  # Anchored on the COPY, never on the lib's name. The previous form was `grep -q
+  # 'repo-write-boundary'`, which any file mentioning the lib satisfies — including THIS file,
+  # which names it eight times and was therefore counted as compliant while deliberately building
+  # sandboxes without it. A guard satisfied by prose about the guard is this branch's own subject.
+  grep -qE 'cp .*repo-write-boundary\.sh' "$f" && continue           # actually copies the lib
   grep -q 'repo-write-boundary-sandbox: not-needed' "$f" && continue  # declared early-exit-only
+  grep -q 'repo-write-boundary-sandbox: tests-refusal' "$f" && continue # declared refusal-tester
   unlisted="$unlisted
     $(realpath --relative-to="$REPO_ROOT" "$f")"
 done < <(git -C "$REPO_ROOT" ls-files '*.sh' | sed "s#^#$REPO_ROOT/#" | xargs grep -l 'test-all\.sh' 2>/dev/null)
@@ -479,6 +498,86 @@ else
   fail "boundary window ordering wrong: acquire=$acq start=$start_snap last_run_suite=$last_suite end=$end_snap"
 fi
 
+# --- 30. THE CONFIG HARM PARTITION — a sibling `git push -u` must NOT red the gate ------------
+# The refs partition exists because "a sibling worktree's branch advancing" and "this run corrupted
+# the repo" are not the same event. `--local` in a linked worktree reads the SHARED config, so the
+# config dimension carries the SAME sibling side effect via branch.<n>.remote/.merge — and before
+# this arm existed it was unconditionally FATAL. Measured on this repo: 22 worktrees, branch.*
+# entries moving 46 -> 48 within one session. That is a false RED on the ordinary workflow.
+ck
+p=$(new_probe cfgpartition) || exit 2
+git -C "$p" branch sibling-br
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local branch.sibling-br.remote origin
+git -C "$p" config --local branch.sibling-br.merge refs/heads/sibling-br
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -q '^REPORT' <<<"$verdict" && ! grep -q '^FATAL' <<<"$verdict" \
+   && grep -q 'branch.sibling-br.remote' <<<"$verdict"; then
+  pass "a \`git push -u\`-shaped config add is REPORT, not FATAL, and NAMES the key"
+else
+  fail "config partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 31. ... and the INCIDENT key must stay FATAL, and be named --------------------------------
+# The property that must not regress under the partition above. This is the exact key from
+# 2026-08-20, and the whole reason the config dimension exists.
+ck
+p=$(new_probe cfgincident) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local commit.gpgsign false
+state "$p"; after="$STATE_OUT"
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+if grep -q '^FATAL' <<<"$verdict" && grep -q 'commit.gpgsign' <<<"$verdict"; then
+  pass "the 2026-08-20 incident key stays FATAL and is NAMED in the detail"
+else
+  fail "incident key not FATAL/named: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-200)'"
+fi
+
+# --- 32. A key DELETION, and a tracking add on OUR OWN branch, both stay FATAL -----------------
+# The two fail-closed edges of the partition. Nothing routine deletes a shared key; and our own
+# branch gaining tracking config mid-run is ambiguous, so it takes the harsher class.
+ck
+p=$(new_probe cfgedges) || exit 2
+git -C "$p" config --local core.somekey somevalue
+state "$p"; before="$STATE_OUT"
+git -C "$p" config --local --unset core.somekey
+state "$p"; after="$STATE_OUT"
+v1=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after")
+own=$(git -C "$p" symbolic-ref --short HEAD)
+state "$p"; before2="$STATE_OUT"
+git -C "$p" config --local "branch.${own}.remote" origin
+state "$p"; after2="$STATE_OUT"
+v2=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before2" "$after2")
+if grep -q 'DELETED' <<<"$v1" && grep -q '^FATAL' <<<"$v1" && grep -q '^FATAL' <<<"$v2"; then
+  pass "a config DELETION and an own-branch tracking add both stay FATAL (fail closed)"
+else
+  fail "edges wrong: del='$(printf '%s' "$v1" | tr '\n' '|')' own='$(printf '%s' "$v2" | tr '\n' '|')'"
+fi
+
+# --- 33. MANIFEST PAIRING — a dimension measured at one boundary only is UNMEASURABLE ----------
+# Reachable, not theoretical: `git status --porcelain` refreshes the index and fails under
+# index.lock contention, which parallel worktrees produce routinely. Without pairing, the body
+# diff sees a delta and emits FATAL naming a dimension the INSPECTED list does not claim.
+ck
+p=$(new_probe pairing) || exit 2
+state "$p"; before="$STATE_OUT"
+# A stale/narrower lib: the worktree dimension vanishes from the after snapshot entirely.
+after_narrow=$(printf '%s' "$STATE_OUT" | grep -v '^manifest	worktree	' | grep -v '^worktree	')
+verdict=$(cd "$p" && env REPO_BOUNDARY_SALT=fixed-test-salt bash -c \
+  'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$before" "$after_narrow")
+inspected=$(cd "$p" && bash -c 'source "'"$LIB"'"; repo_boundary_render_inspected "$1" "$2"' _ "$before" "$after_narrow")
+if grep -q '^UNMEASURABLE' <<<"$verdict" && ! grep -qE '^FATAL[[:space:]]+worktree' <<<"$verdict" \
+   && ! grep -qi 'tree and index' <<<"$inspected"; then
+  pass "a dimension measured at one boundary only is UNMEASURABLE, and drops out of INSPECTED"
+else
+  fail "manifest pairing wrong: verdict='$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-160)' inspected='$(printf '%s' "$inspected" | tr '\n' '|')'"
+fi
+
 # --- Accounting. Emitted DIRECTLY, never through pass()/fail(): a conservation check routed
 # through the verdict helper it exists to police cannot report the fault that corrupted it.
 if [[ $((passes + fails)) -ne $asserted ]]; then
@@ -491,7 +590,9 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-MIN_ASSERTIONS=29
+# Derived from a green run, then ratcheted upward: 33 arms execute today, so a deleted or
+# neutered arm cannot hide behind slack. Raise it in lockstep when adding arms; never lower it.
+MIN_ASSERTIONS=33
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

@@ -21,8 +21,9 @@ set -uo pipefail
 # outcome available in this corpus. Tests the LEADING `/` only, never a `realpath` comparison,
 # which breaks on a symlinked /tmp.
 #
-# The body below is the CANONICAL copy, asserted byte-for-byte against every other copy by
-# plugins/soleur/test/fixture-dir-operand-assert.test.sh. Do not reword it in one file only. #7652
+# The body below is a COPY. The canonical definition lives in
+# plugins/soleur/test/test-helpers.sh; plugins/soleur/test/fixture-dir-operand-assert.test.sh
+# asserts this copy is byte-equal to it. Do not reword it in one file only. #7652
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;

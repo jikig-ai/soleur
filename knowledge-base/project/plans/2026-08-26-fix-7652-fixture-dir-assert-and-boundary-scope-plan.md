@@ -49,7 +49,8 @@ invocation of a `.test.sh` exists anywhere in the shipped subtree. Shipped `SKIL
 than structural** — it is one edit away from being false.
 
 **Key improvements over v1**, all traceable in `## Review Disposition`: the primary mechanism moved
-from a per-call-site assertion sweep to CWD isolation at one chokepoint; the property split into
+from a per-call-site assertion sweep to CWD isolation at one chokepoint (**itself superseded — see
+the Phase 0 measurement addendum; the assertion sweep is the primary mechanism after all**); the property split into
 P1a (empty operand, measured to affect only `git -C`) and P1b (relative operand, deferred with a
 tracking issue); the `${CI:-}` tier, the `.git/hooks/` dimension and a new ADR were cut; redaction
 became "digest every value" so no allowlist can be incomplete; and the config↔refs **composition
@@ -135,8 +136,8 @@ and printed with the probe that produced it (`cq-cite-content-anchor-not-line-nu
 
 | Mechanism | Property | Disposition |
 |---|---|---|
-| Per-call-site operand assertion at every binding | P1a | **DEMOTED to residual.** CWD isolation buys P1a at one chokepoint for every suite the runner starts. The assertion remains only where isolation does not reach (Phase 3) |
-| CWD isolation at `run_suite` | P1a + the lost-`cd` class | **PRIMARY** |
+| Per-call-site operand assertion at every binding | P1a | **SUPERSEDED 2026-08-26 — see the Phase 0 measurement addendum: this is now the PRIMARY mechanism.** Original ruling: *DEMOTED to residual.* CWD isolation buys P1a at one chokepoint for every suite the runner starts. The assertion remains only where isolation does not reach (Phase 3) |
+| CWD isolation at `run_suite` | P1a + the lost-`cd` class | **SUPERSEDED 2026-08-26 — NOT SHIPPED.** The Phase 0 decision rule measured 64 suites that read the live repo on purpose (threshold: 40) and selected against it; see the addendum. Original ruling: *PRIMARY.* |
 | A `git -C`-only static scanner | P2 | **KEPT**, scoped to P1a |
 | A four-family scanner (`rm -rf`, `mv`/`cp -r`, redirections) | P1b | **CUT.** Measured: `rm -rf ""` is a silent rc=0 no-op, `mv a ""` is rc=1, `cp -r s ""` is a no-op, `> ""/f` is rc=1. None widens on empty. Their hazard is P1b, a different property, deferred with a tracking issue rather than silently exempted |
 | `.git/hooks/` snapshot dimension | P3 | **CUT.** `git rev-parse --git-path hooks` ignores `core.hooksPath` (which is set here) and resolves to the *shared* common dir, so it is neither the executing directory nor sibling-immune. The weaponisation — repointing `core.hooksPath` — is a config write already caught. Named in the not-inspected list |
@@ -297,7 +298,8 @@ ordinal, so none of v1's ordinal-collision ceremony applies.
 - **External human actors:** none added. Exercised by `founder` and, on the CI path, `contributor`;
   both modelled. `contributor`'s description already records that *"other operator-side execution of
   a checked-out PR head (running its tests, its scripts, its hooks) is covered by NEITHER boundary"*
-  — still true, and CWD isolation narrows it without changing the model.
+  — still true. **[SUPERSEDED 2026-08-26 — CWD isolation was measured out; see the Phase 0 addendum.]** CWD isolation did not ship, so this is
+  narrowed by the Phase 3 assertion sweep and the scanner instead.
 - **External systems / vendors:** none.
 - **Containers / data stores:** none read or written.
 - **Actor↔surface access relationships:** unchanged.
@@ -483,7 +485,8 @@ at every site the scanner can see, and the boundary reports any escape that gets
 
 ### Phase 3 — the residual assertion, and the guard that keeps it
 
-1. Add the assertion where CWD isolation does not reach, in the house shape, as a **named function**
+1. Add the assertion. (Originally scoped as "where CWD isolation does not reach"; **[SUPERSEDED 2026-08-26 — CWD isolation was measured out; see the Phase 0 addendum.]** 
+   isolation reaches nowhere, so this is the primary sweep.) In the house shape, as a **named function**
    `assert_fixture_dir` with one canonical body — not a pasted idiom. The scanner then recognises a
    **name token** rather than three reformattable free-text spellings. Delivery is two-way, because a
    single sourced lib is not viable across the six trees (`plugins/soleur/` ships standalone and
@@ -575,7 +578,7 @@ vendored-content refresh.
 
 | Path | Change |
 |---|---|
-| `scripts/test-all.sh` | CWD isolation in `run_suite`; source the new lib and place every new symbol above `tc_acquire`; call `_repo_state()` at both boundaries; rewrite the message (inspected / not-inspected / per-dimension next action / attribution); re-emit in the breakdown area; EXIT-trap NOTE. |
+| `scripts/test-all.sh` | ~~CWD isolation in `run_suite`~~ ([SUPERSEDED 2026-08-26 — CWD isolation was measured out; see the Phase 0 addendum.]); source the new lib and place every new symbol above `tc_acquire`; call `_repo_state()` at both boundaries; rewrite the message (inspected / not-inspected / per-dimension next action / attribution); re-emit in the breakdown area; EXIT-trap NOTE. |
 | `scripts/test-all-killed-classification.test.sh` | Copy the new lib into the sandbox; assert the boundary symbols survive the deleted window. |
 | `scripts/test-all-infra-coverage-notice.test.sh` | Copy the new lib into the sandbox. |
 | `plugins/soleur/test/fixture-cd-containment.test.sh` | Import the shared module; add `config` to `WRITE`; correct the `git -C` exemption comment and the "Prefer the last" prose. |
@@ -803,7 +806,7 @@ operand pushes the live repository to its remote. *Correction carried from revie
 "leaves no local artifact" is **false** for the `-u` form, which writes `branch.<n>.remote` and
 `branch.<n>.merge` — the very keys a blanket `branch.*` cut would have discarded, which is why that
 cut is now narrowed to `vscode-merge-base`. What genuinely escapes inspection is the *content*
-delivered to the remote. *Mitigation:* closed at source by CWD isolation, and stated precisely in
+delivered to the remote. *Mitigation:* **[SUPERSEDED 2026-08-26 — CWD isolation was measured out; see the Phase 0 addendum.]** NOT closed at source — CWD isolation did not ship. The residual is stated precisely in
 the not-inspected list rather than as a blanket "no local artifact".
 
 **R8 — a spurious `exit 2` from an assertion is correctly classified.** Verified at

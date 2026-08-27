@@ -962,10 +962,15 @@ _repo_last_suite="(none started)"
 # below owns the verdict.
 _repo_boundary_reported=0
 
-# A run KILLED before the end boundary emits nothing today — the runner arms no EXIT trap — and
-# the escape most likely to kill a run is exactly the one that would suppress the verdict. So
-# "no FATAL line" is currently indistinguishable from "clean", which is the reading that ships.
-# This trap makes the absence speak.
+# A run that ends before the end boundary emits nothing today — the runner arms no EXIT trap —
+# and the escape most likely to end a run early is exactly the one that would suppress the
+# verdict. So "no FATAL line" is indistinguishable from "clean", which is the reading that ships.
+# This trap makes that absence speak for the signals bash can trap.
+#
+# STATED BECAUSE IT WOULD OTHERWISE BE OVER-READ: bash cannot trap SIGKILL, so an OOM-killed or
+# `kill -9`'d run still emits nothing and still reads as silence. This closes the ordinary
+# early-exit and timeout cases, not the whole class. Claiming otherwise here would be the same
+# AP-021 defect the boundary exists to remove.
 _repo_boundary_exit_note() {
   [[ "$_repo_boundary_reported" == 1 ]] && return 0
   [[ "$_repo_guard_ok" == 1 ]] || return 0
@@ -1902,7 +1907,12 @@ tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 # `=== ` line (#6750), and counted into `failed` so the exit code carries it: a run that
 # corrupted the repository is not a pass, whatever the suites said.
 _repo_wrote=0
-_repo_reported=0
+# Counted into the BREAKDOWN line alongside `skipped`, per ADR-181's decision that a new outcome
+# class of this runner is "a counted verdict, not an absence". REPORT still changes no exit code —
+# ADR-181's `skipped` is the precedent for exactly that shape — but an outcome visible only as
+# stderr prose above a several-thousand-line log reads as silence, which is the polarity that ADR
+# already rejected once.
+_repo_observations=0
 if [[ "$_repo_guard_ok" == 1 ]]; then
   if _repo_state_after="$(_repo_state)"; then
     # Classified per dimension rather than as one boolean. A sibling worktree's branch advancing
@@ -1912,6 +1922,7 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
     if [[ -n "$_repo_verdict" ]]; then
       _repo_fatal="$(printf '%s\n' "$_repo_verdict" | { grep '^FATAL' || true; })"
       _repo_report="$(printf '%s\n' "$_repo_verdict" | { grep '^REPORT' || true; })"
+      _repo_unmeasurable="$(printf '%s\n' "$_repo_verdict" | { grep '^UNMEASURABLE' || true; })"
 
       if [[ -n "$_repo_fatal" ]]; then
         _repo_wrote=1
@@ -1945,6 +1956,7 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
         printf '%s\n' "$_repo_report" | while IFS=$'\t' read -r _sev _dim _detail; do
           echo "           [$_dim] $_detail" >&2
         done
+        _repo_observations=$(printf '%s\n' "$_repo_report" | grep -c '^REPORT' || true)
         # `Last suite started` is deliberately NOT repeated here. The whole premise of this class
         # is that a suite of THIS run probably was not the cause, so naming one would point the
         # reader at an innocent label — the precise AP-021 shape this boundary exists to refuse.
@@ -1952,14 +1964,25 @@ if [[ "$_repo_guard_ok" == 1 ]]; then
         echo "         lists the sibling worktrees that were live when this run started." >&2
       fi
 
+      if [[ -n "$_repo_unmeasurable" ]]; then
+        echo "" >&2
+        echo "[UNMEASURABLE] A dimension was captured at one boundary and not the other, so its" >&2
+        echo "               delta is meaningless. This is neither clean nor dirty: the run is" >&2
+        echo "               simply not evidence about it. (git status refreshes the index and" >&2
+        echo "               fails under index.lock contention, which parallel worktrees produce.)" >&2
+        printf '%s\n' "$_repo_unmeasurable" | while IFS=$'\t' read -r _sev _dim _detail; do
+          echo "               [$_dim] $_detail" >&2
+        done
+      fi
+
       # Rendered FROM THE MANIFEST carried inside the snapshot — never from a literal list here.
       # If the lib narrows, this narrows with it, which is what stops a full-width claim from
       # sitting on top of a partial check.
       echo "" >&2
       echo "        INSPECTED (this is the whole of what was measured):" >&2
-      repo_boundary_render_inspected "$_repo_state_after" >&2
+      repo_boundary_render_inspected "$_repo_state_before" "$_repo_state_after" >&2
       echo "        NOT INSPECTED (a clean boundary is not evidence about these):" >&2
-      repo_boundary_render_not_inspected "$_repo_state_after" >&2
+      repo_boundary_render_not_inspected "$_repo_state_before" "$_repo_state_after" >&2
       echo "" >&2
       echo "        SCOPE, stated so it is not over-read: this covers runs of THIS runner only." >&2
       echo "        A suite invoked directly (bash path/to/x.test.sh), lefthook's pre-commit" >&2
@@ -1999,7 +2022,14 @@ _repo_boundary_reported=1
 # report a gated suite as PASSED — a green that is not evidence, produced by the very change
 # that added the gate.
 if (( killed > 0 || skipped > 0 )); then
-  echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff) ==="
+  # `_repo_observations` is APPENDED, never interleaved: every existing field keeps its position
+  # so anchored readers of this line stay valid. Shown only when non-zero — a field that is 0 on
+  # essentially every run carries no information, whereas `skipped` is routinely non-zero.
+  _repo_obs_field=""
+  if [[ "${_repo_observations:-0}" -gt 0 ]]; then
+    _repo_obs_field=", ${_repo_observations} repo observation(s) (REPORT — not a verdict, exit code unchanged)"
+  fi
+  echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff)${_repo_obs_field} ==="
 fi
 # THE LEVER, PRINTED ONCE, ONLY WHEN IT CAN ACTUALLY HELP. SOLEUR_TEST_FORCE_ALL appeared exactly
 # once in this runner -- inside _diff_touches's early return -- and was printed nowhere, while the

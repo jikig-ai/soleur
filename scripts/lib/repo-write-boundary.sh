@@ -183,6 +183,18 @@ _repo_state() {
     manifest+=$'manifest\trefs\tnot-measured\n'
   fi
 
+  # The set of branches checked out in OTHER worktrees, carried in the snapshot rather than
+  # re-derived at classify time. Re-deriving it after the window closes lets an escape running
+  # `git -C "" worktree add -b probe` register its own branch and thereby launder itself from
+  # FATAL into the softer REPORT class — `worktree add` is in the sibling scanner's own write-verb
+  # list, so it is a contemplated shape, not a hypothetical. A harm classification's reference set
+  # has to be part of the measurement.
+  local wt
+  while IFS= read -r wt; do
+    [[ -n "$wt" ]] || continue
+    body+="wt"$'\t'"$wt"$'\n'
+  done <<<"$(_repo_boundary_branches_elsewhere)"
+
   _REPO_BOUNDARY_MANIFEST="$manifest"
   # The manifest is emitted INSIDE the snapshot as well as kept in the global: a before/after pair
   # taken across a lib swap must show the dimension set itself changing, not silently compare a
@@ -220,64 +232,153 @@ _repo_boundary_branches_elsewhere() {
 
 # repo_boundary_classify <before> <after>
 # Prints zero or more `<SEVERITY>\t<dimension>\t<detail>` lines. Silent when there is no delta.
+#
+# Three severities, because two were not enough:
+#   FATAL        this run changed something it had no business changing.
+#   REPORT       a SHARED store changed in a way a sibling worktree routinely produces. Printed,
+#                counted, but not a verdict — see below.
+#   UNMEASURABLE a dimension was captured at one boundary and not the other, so the delta is
+#                meaningless. Neither clean nor dirty: the run is simply not evidence about it.
+#
+# WHY `config` NEEDS A HARM PARTITION AND NOT JUST `refs`.
+#
+# `git config --local` in a linked worktree reads the SHARED config file — that is the entire
+# point of measuring it, since the 2026-08-20 incident wrote `commit.gpgsign=false` there. But it
+# means the dimension is not private to this worktree: `git push -u` and `git checkout -b --track`
+# write `branch.<n>.remote` and `branch.<n>.merge` into that same shared file, so ANY of this
+# machine's sibling worktrees doing ordinary work during a multi-minute gate run mutates it.
+#
+# Measured on this repo while writing this: 22 worktrees, and the `branch.*` entry count moved
+# 46 -> 48 inside a single session. Before this partition existed, that produced
+# `[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY` — byte-identical to the output for the real
+# incident key. That is the cry-wolf failure the refs partition was introduced to prevent,
+# re-collapsed on the config axis, and it is also an AP-021 violation of exactly the shape this
+# lib exists to fix: the run measured "a shared key changed", never "a suite of THIS run did it",
+# and for a shared store it structurally cannot.
+#
+# So config is classified PER KEY, and the keys are NAMED in the detail. Naming them is not a
+# nicety either: the operator-facing next action said "unset the key named above" while no key was
+# ever printed, which is the same claim-outruns-content defect one line further down.
 repo_boundary_classify() {
-  # Herestrings and process substitutions throughout, never tempfiles: same ADR-129 reasoning as
-  # the config dimension above — a sourced lib cannot own an EXIT trap without clobbering its
-  # caller's.
+  # Herestrings and process substitutions throughout, never tempfiles: a sourced lib cannot own an
+  # EXIT trap without clobbering its caller's (ADR-129).
   local before="${1-}" after="${2-}"
 
-  local default_branch elsewhere
-  default_branch="$(_repo_boundary_default_branch)"
-  elsewhere="$(_repo_boundary_branches_elsewhere)"
-  local own_branch; own_branch="$(git symbolic-ref --quiet HEAD 2>/dev/null)" || own_branch=""
+  # --- manifest pairing, FIRST ---------------------------------------------------------------
+  # A dimension measured at one boundary and not the other cannot be diffed: the body lines are
+  # simply absent on one side, so a plain diff reports a delta and would emit a FATAL naming a
+  # dimension the INSPECTED list (rendered from the after-manifest) does not even claim to have
+  # inspected. That is reachable, not theoretical — `git status --porcelain` refreshes the index
+  # and fails under `index.lock` contention, which parallel worktrees produce routinely.
+  local bman aman dim bstat astat
+  bman="$(repo_boundary_manifest "$before")"
+  aman="$(repo_boundary_manifest "$after")"
+  local unmeasurable=""
+  while IFS=$'\t' read -r dim bstat; do
+    [[ -n "$dim" ]] || continue
+    astat="$(printf '%s\n' "$aman" | awk -F'\t' -v d="$dim" '$1==d {print $2}')"
+    if [[ "$bstat" != "$astat" ]]; then
+      unmeasurable="$unmeasurable $dim"
+      printf 'UNMEASURABLE\t%s\tcaptured at one boundary (%s) and not the other (%s); this run is not evidence about it\n' \
+        "$dim" "${bstat:-absent}" "${astat:-absent}"
+    fi
+  done <<<"$bman"
 
-  local dim
-  for dim in head worktree config; do
+  local default_branch elsewhere own_branch own_short
+  default_branch="$(_repo_boundary_default_branch)"
+  # Branches checked out elsewhere are read from the BEFORE snapshot when it carries them, so a
+  # `git -C "" worktree add -b probe` cannot register its own branch mid-run and thereby launder
+  # itself into the softer class.
+  elsewhere="$({ grep "^wt"$'\t' <<<"$before" || true; } | sed 's/^wt\t//')"
+  [[ -n "$elsewhere" ]] || elsewhere="$(_repo_boundary_branches_elsewhere)"
+  own_branch="$(git symbolic-ref --quiet HEAD 2>/dev/null)" || own_branch=""
+  own_short="${own_branch#refs/heads/}"
+
+  # --- head / worktree: private to this worktree, so any delta is ours -------------------------
+  for dim in head worktree; do
+    [[ " $unmeasurable " == *" $dim "* ]] && continue
     if ! diff -q <({ grep "^${dim}"$'\t' <<<"$before" || true; }) \
                  <({ grep "^${dim}"$'\t' <<<"$after"  || true; }) >/dev/null; then
       printf 'FATAL\t%s\tthis dimension changed between the first suite and the end of the run\n' "$dim"
     fi
   done
 
-  # Refs are classified per ref, by harm, so a sibling worktree's branch advancing does not carry
-  # the same severity as this worktree's own branch moving under it.
-  local brefs arefs
-  brefs="$({ grep "^refs"$'\t' <<<"$before" || true; } | sed 's/^refs\t//')"
-  arefs="$({ grep "^refs"$'\t' <<<"$after"  || true; } | sed 's/^refs\t//')"
-  if [[ "$brefs" != "$arefs" ]]; then
-    local ref name bsha asha
-    # Deletions first: FATAL unconditionally, including the all-refs-gone case that makes
-    # `show-ref` exit 1.
-    while IFS= read -r ref; do
-      [[ -n "$ref" ]] || continue
-      name="${ref#* }"
-      if ! grep -qF -- " $name" <<<"$arefs"; then
-        printf 'FATAL\trefs\t%s was DELETED\n' "$name"
+  # --- config: per key, by harm ----------------------------------------------------------------
+  if [[ " $unmeasurable " != *" config "* ]]; then
+    local bcfg acfg key bdig adig brname
+    bcfg="$({ grep "^config"$'\t' <<<"$before" || true; } | sed 's/^config\t//')"
+    acfg="$({ grep "^config"$'\t' <<<"$after"  || true; } | sed 's/^config\t//')"
+    # Added or modified.
+    while IFS=$'\t' read -r key adig; do
+      [[ -n "$key" ]] || continue
+      bdig="$(printf '%s\n' "$bcfg" | awk -F'\t' -v k="$key" '$1==k {print $2}')"
+      [[ "$bdig" == "$adig" ]] && continue
+      if [[ -z "$bdig" ]]; then
+        # ADDED. The only benign shape is a tracking-config pair for a branch that is not this
+        # worktree's — precisely what `git push -u` / `checkout -b --track` leave behind. Our OWN
+        # branch gaining tracking config mid-run stays FATAL: fail closed on the ambiguous case.
+        case "$key" in
+          branch.*.remote|branch.*.merge)
+            brname="${key#branch.}"; brname="${brname%.*}"
+            if [[ -n "$own_short" && "$brname" == "$own_short" ]]; then
+              printf 'FATAL\tconfig\t%s was ADDED — tracking config for THIS worktree'"'"'s own branch\n' "$key"
+            else
+              printf 'REPORT\tconfig\t%s was ADDED — the shape `git push -u` / `checkout -b --track` leaves for branch %s\n' "$key" "$brname"
+            fi ;;
+          *)
+            printf 'FATAL\tconfig\t%s was ADDED\n' "$key" ;;
+        esac
+      else
+        printf 'FATAL\tconfig\t%s CHANGED VALUE\n' "$key"
       fi
-    done <<<"$brefs"
-    while IFS= read -r ref; do
-      [[ -n "$ref" ]] || continue
-      name="${ref#* }"; asha="${ref%% *}"
-      bsha="$(grep -F -- " $name" <<<"$brefs" | head -n1 | cut -d' ' -f1)"
-      [[ "$bsha" == "$asha" ]] && continue
-      case "$name" in
-        refs/tags/*)
-          printf 'FATAL\trefs\t%s (tag) was created or moved\n' "$name" ;;
-        "$own_branch")
-          printf 'FATAL\trefs\t%s is this worktree'"'"'s checked-out branch and it moved\n' "$name" ;;
-        "refs/heads/$default_branch")
-          printf 'FATAL\trefs\t%s is the default branch and it moved\n' "$name" ;;
-        *)
-          if [[ -n "$elsewhere" ]] && grep -qxF -- "$name" <<<"$elsewhere"; then
-            printf 'REPORT\trefs\t%s is checked out in another worktree; created or moved\n' "$name"
-          else
-            # Fail closed: a local head this run had no business touching.
-            printf 'FATAL\trefs\t%s was created or moved\n' "$name"
-          fi ;;
-      esac
-    done <<<"$arefs"
+    done <<<"$acfg"
+    # Deleted: unconditionally FATAL. Nothing routine removes a shared config key.
+    while IFS=$'\t' read -r key bdig; do
+      [[ -n "$key" ]] || continue
+      adig="$(printf '%s\n' "$acfg" | awk -F'\t' -v k="$key" '$1==k {print $2}')"
+      [[ -z "$adig" ]] && printf 'FATAL\tconfig\t%s was DELETED\n' "$key"
+    done <<<"$bcfg"
   fi
 
+  # --- refs: per ref, by harm -------------------------------------------------------------------
+  if [[ " $unmeasurable " != *" refs "* ]]; then
+    local brefs arefs ref name bsha asha
+    brefs="$({ grep "^refs"$'\t' <<<"$before" || true; } | sed 's/^refs\t//')"
+    arefs="$({ grep "^refs"$'\t' <<<"$after"  || true; } | sed 's/^refs\t//')"
+    if [[ "$brefs" != "$arefs" ]]; then
+      # Field-exact throughout. A substring compare on " $name" matches ` refs/heads/foo` inside
+      # ` refs/heads/foo/bar`; git's D/F rule makes that pair impossible among heads today, but a
+      # prefix-matched DELETION fails OPEN, on the one path this dimension must fail closed.
+      while IFS= read -r ref; do
+        [[ -n "$ref" ]] || continue
+        name="${ref#* }"
+        if [[ -z "$(printf '%s\n' "$arefs" | awk -v n="$name" '$2==n {print $1}')" ]]; then
+          printf 'FATAL\trefs\t%s was DELETED\n' "$name"
+        fi
+      done <<<"$brefs"
+      while IFS= read -r ref; do
+        [[ -n "$ref" ]] || continue
+        name="${ref#* }"; asha="${ref%% *}"
+        bsha="$(printf '%s\n' "$brefs" | awk -v n="$name" '$2==n {print $1}')"
+        [[ "$bsha" == "$asha" ]] && continue
+        case "$name" in
+          refs/tags/*)
+            printf 'FATAL\trefs\t%s (tag) was created or moved\n' "$name" ;;
+          "$own_branch")
+            printf 'FATAL\trefs\t%s is this worktree'"'"'s checked-out branch and it moved\n' "$name" ;;
+          "refs/heads/$default_branch")
+            printf 'FATAL\trefs\t%s is the default branch and it moved\n' "$name" ;;
+          *)
+            if [[ -n "$elsewhere" ]] && grep -qxF -- "$name" <<<"$elsewhere"; then
+              printf 'REPORT\trefs\t%s is checked out in another worktree; created or moved\n' "$name"
+            else
+              # Fail closed: a local head this run had no business touching.
+              printf 'FATAL\trefs\t%s was created or moved\n' "$name"
+            fi ;;
+        esac
+      done <<<"$arefs"
+    fi
+  fi
 }
 
 # --- the rendered claim --------------------------------------------------------------------------
@@ -294,30 +395,46 @@ _repo_boundary_dim_prose() {
 
 # The operator-facing "inspected:" list, rendered FROM THE MANIFEST. This is the whole point of the
 # manifest: the claim cannot outrun the check, because it is generated by it.
-repo_boundary_render_inspected() { # repo_boundary_render_inspected [snapshot]
-  local dim status
+# With ONE snapshot, renders what that snapshot measured. With TWO, renders the INTERSECTION —
+# a dimension is only "inspected" for the run as a whole if it was captured at BOTH boundaries.
+# Rendering from the after-manifest alone would print a full-width claim for a run whose start
+# snapshot was narrower, which is the claim/check drift this lib exists to remove.
+repo_boundary_render_inspected() { # repo_boundary_render_inspected [before [after]]
+  local dim status other
   while IFS=$'\t' read -r dim status; do
     [[ -n "$dim" ]] || continue
     [[ "$status" == "measured" ]] || continue
+    if [[ $# -ge 2 ]]; then
+      other="$(repo_boundary_manifest "$2" | awk -F'\t' -v d="$dim" '$1==d {print $2}')"
+      [[ "$other" == "measured" ]] || continue
+    fi
     printf '          - %s\n' "$(_repo_boundary_dim_prose "$dim")"
-  done <<<"$(repo_boundary_manifest "$@")"
+  done <<<"$(repo_boundary_manifest "${1-}")"
 }
 
-repo_boundary_render_not_inspected() { # repo_boundary_render_not_inspected [snapshot]
-  local dim status
-  # A dimension the manifest marks not-measured is named HERE rather than silently dropped, so a
-  # partial reading is never presented as whole coverage.
+repo_boundary_render_not_inspected() { # repo_boundary_render_not_inspected [before [after]]
+  local dim status other
+  # A dimension not measured at EITHER boundary is named HERE rather than silently dropped, so a
+  # partial reading is never presented as whole coverage. This is the union of the two
+  # not-measured sets, mirroring the intersection the inspected list renders.
   while IFS=$'\t' read -r dim status; do
     [[ -n "$dim" ]] || continue
-    [[ "$status" == "not-measured" ]] || continue
-    printf '          - %s (COULD NOT BE MEASURED on this run)\n' "$(_repo_boundary_dim_prose "$dim")"
-  done <<<"$(repo_boundary_manifest "$@")"
+    other="measured"
+    [[ $# -ge 2 ]] && other="$(repo_boundary_manifest "$2" | awk -F'\t' -v d="$dim" '$1==d {print $2}')"
+    if [[ "$status" == "not-measured" || "$other" == "not-measured" ]]; then
+      printf '          - %s (COULD NOT BE MEASURED on this run)\n' "$(_repo_boundary_dim_prose "$dim")"
+    fi
+  done <<<"$(repo_boundary_manifest "${1-}")"
   cat <<'EOF'
           - the content of a push to a remote (though `push -u` leaves a local
             branch.*.remote/.merge artifact, which IS inspected)
           - loose or packed objects with no ref change
           - the contents of .git/hooks (so `lefthook install` does not fire here)
           - branch.*.vscode-merge-base
+          - config in --worktree scope (.git/worktrees/<n>/config.worktree, under
+            extensions.worktreeConfig), --global, and --system. Only --local is read, and on this
+            repo that IS the shared file — but a fixture calling `git config --global ...` with no
+            -C writes somewhere this boundary never looks
           - remote-tracking refs (refs/remotes/**)
           - reflogs
           - the relative order of a multivalued config key (the projection sorts, so a
@@ -333,7 +450,7 @@ repo_boundary_next_action() {
   case "$1" in
     head)     printf 'git reflog -25   # the commit that moved HEAD is reachable there' ;;
     worktree) printf 'git status && git diff   # UNCOMMITTED work is what is at risk' ;;
-    config)   printf 'git config --local --list   # then unset the key named above; it is the SHARED file every worktree inherits' ;;
+    config)   printf 'git config --local --unset <the key named in the [config] line above>   # --local IS the SHARED file every worktree on this machine inherits' ;;
     refs)     printf 'git show-ref --heads --tags   # compare against git reflog <ref>; a DELETED ref is recoverable from the reflog until gc' ;;
     *)        printf 'git status' ;;
   esac
