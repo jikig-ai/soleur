@@ -1,3 +1,16 @@
+---
+category: observability
+tags: [supabase, logs, clickhouse, management-api, coverage-verdict, dsar, gdpr]
+date: 2026-08-26
+# Deliberately EMPTY, not omitted. incident/SKILL.md Phase 3 routes by symptom over this key;
+# this runbook documents a TOOL rather than an incident procedure, so it should never be
+# offered as a symptom match. The investigation runbook that USES this tool
+# (breach-access-log-investigation.md) carries the real triggers. An absent block and an
+# empty one look the same to a reader and different to a reviewer asking "was this
+# considered?" -- hence the empty list plus this note.
+triggers: []
+---
+
 # Runbook: Querying Supabase platform logs (postgres / auth / postgrest / supavisor)
 
 **TL;DR:** Use [`scripts/supabase-logs-query.sh`](../../../../scripts/supabase-logs-query.sh) under
@@ -5,13 +18,23 @@
 endpoint in **ClickHouse** SQL and always prints a coverage verdict alongside the row count.
 
 ```bash
-# Last 24h of Postgres logs on prd:
+# --ref IS REQUIRED. There is no default, deliberately: the ONE failure no other check in
+# this tool catches is a format-valid ref pointing at the wrong project, which returns real
+# rows and a clean verdict over data that was never in scope. Naming it is the assertion.
+#
+#   ifsccnjhymdmidffkzhl   soleur-web-platform   the APPLICATION project — user data, DSAR,
+#                                          PostgREST/auth access questions
+#   pigsfuxruiopinouvjwy   soleur-inngest-prd    the Inngest backing project — subject of the
+#                                          2026-06-29 RLS determination
+
+# Last 24h of Postgres logs on the application project:
 doppler run -p soleur -c prd -- \
-  scripts/supabase-logs-query.sh --source postgres_logs --since 24h
+  scripts/supabase-logs-query.sh --ref ifsccnjhymdmidffkzhl --source postgres_logs --since 24h
 
 # Two sources, machine-readable (one JSON object, never a bare array):
 doppler run -p soleur -c prd -- \
-  scripts/supabase-logs-query.sh --source auth_logs --source postgrest_logs --since 6h --json
+  scripts/supabase-logs-query.sh --ref ifsccnjhymdmidffkzhl \
+    --source auth_logs --source postgrest_logs --since 6h --json
 ```
 
 `--since` / `--until` / `--limit` deliberately match
@@ -27,8 +50,12 @@ is usually an agent transcribing a figure into a determination or an incident re
 emits the same block as a single object for exactly that reason: a machine path that dropped the
 verdict would make "no bare zero" true only for a human reader.
 
-`INCONCLUSIVE` is the single top-line verdict token. `UNINSTRUMENTED` is a *reason* attached to
-it, never a second token to scan for.
+There are exactly **two** top-line verdict tokens: `COVERED` and `INCONCLUSIVE`. Everything
+else — `UNINSTRUMENTED`, `PARTIAL_COVERAGE`, `ZERO_SOURCE_COVERAGE_UNESTABLISHED`,
+`WINDOW_PREDATES_RETENTION` — is a *reason* attached to one of them, never a third token to
+scan for. The token is derived from the reason and never set independently, because two
+independently-set fields drift and the drift that matters (reason says UNINSTRUMENTED, token
+says COVERED) is the exact false all-clear.
 
 ## Exit codes
 
@@ -36,8 +63,9 @@ it, never a second token to scan for.
 |---|---|---|---|
 | `0` | `COVERED` | The requested window was fully covered and every named source is instrumented. The count is usable. | Use the number. |
 | `1` | transient | A 5xx that survived a re-issue at half width, or a network failure. | Retry. |
-| `2` | auth / config | Creds absent, unknown `--source`, malformed `--ref`. | Fix the invocation — see below. |
-| `3` | `INCONCLUSIVE` | The window was not fully covered, or a named source produced no rows *and* is uninstrumented over the pinned instrumentation span. | **Do not report the count as an absence.** Read the reason line. |
+| `2` | auth / config | Creds absent, malformed or missing `--ref`, a dialect error, an unparseable response. | Fix the invocation — see below. |
+| `3` | `INCONCLUSIVE` | The window was not fully covered; **or** an unknown `--source` (it matched nothing and would otherwise have returned a clean zero); **or** a named source is uninstrumented over the pinned span; **or** a named source returned no row in the window, so nothing establishes it was recording during it. | **Do not report the count as an absence.** Read the reason line. |
+| `64` | usage | An unknown flag. No evidence block is emitted on this path. | Fix the invocation. |
 
 Exit **3** is the load-bearing one: an `INCONCLUSIVE` that exited 0 would read as success to
 `if helper; then …`, to `set -e`, and to any agent reading `$?` — the false all-clear this whole

@@ -64,7 +64,7 @@ have to exist client-side.
 | Path | In-repo non-doc callers |
 |---|---|
 | `GET /v1/projects/{ref}/analytics/endpoints/logs.all` | 0 — removal announced 2026-09-23 |
-| `GET /v1/projects/{ref}/advisors/security` | **2** — `apply-inngest-rls.yml`, `scripts/supabase-advisor-scan.sh` |
+| `GET /v1/projects/{ref}/advisors/security` | **2 live callers** — `apply-inngest-rls.yml`, `scripts/supabase-advisor-scan.sh`. The guard's census counts **3** call sites: it also enumerates a mutation stub in `tests/scripts/test-supabase-advisor-scan.sh` that runs under a stubbed `curl` and never reaches the network. Both figures are correct for what they count — live callers vs. deprecated-path literals the extractor can see — and they are reconciled here because two documents in one PR asserting 2 and 3 for the same population is the drift this file exists to prevent. |
 | `GET /v1/projects/{ref}/advisors/performance` | 0 |
 | `GET /v1/projects/{ref}/database/context` | 0 |
 | `POST /v1/projects/{ref}/functions` | 0 |

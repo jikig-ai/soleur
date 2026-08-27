@@ -14,9 +14,17 @@ related_runbooks:
 
 ## Status
 
-`accepted`. The invariant is true the moment this ADR merges; the first two enforcing
-implementations (`scripts/lib/betterstack-absence.sh` under ADR-192, and
-`scripts/supabase-logs-query.sh` under this change) already exist.
+`accepted`. The invariant is true the moment this ADR merges. **One** implementation enforces
+the full contract — `scripts/supabase-logs-query.sh`, under this change.
+
+`scripts/lib/betterstack-absence.sh` (ADR-192) satisfies **D-2 only** — its verdict reaches
+`$?`. It does **not** satisfy D-1: `bs_absence_classify` emits a bare token
+(`TRANSPORT_FAIL` / `LIVE` / `INGEST_DARK`) with no row count, no requested-vs-covered window
+and no per-source instrumentation status, so it is ADR-192's three-state classifier rather
+than an atomic evidence block. An earlier revision of this line counted it as one of "the
+first two enforcing implementations"; that was an assertion about a file nobody re-read, and
+recording the gap is worth more than the tidier sentence — it is what a later change has to
+close.
 
 ## The invariant
 
@@ -163,7 +171,7 @@ exists to prevent.
 | Scope the decision to Supabase (an endpoint-migration ADR) | It would leave the Better Stack instance as an unrelated coincidence and guarantee a third surface relearns the class from scratch. The altitude is the deliverable. |
 | Rely on the vendor's documented range validation | Measured not enforced (proof 3). Delegating the assertion to a sentence is the failure mode, not a mitigation of it. |
 | Detect truncation by comparing two window widths and trusting the larger | Defeated by proof 2: the measured curve is non-monotone in both directions, so two samples can land anywhere on it. Useful as a probe, never as the coverage assertion. |
-| Report the row count and let the caller decide about coverage | This is the status quo ante and is exactly what produced the 2026-06-29 hand-reasoned `INCONCLUSIVE` and the two-month life of #6288. The consumer is often an agent, and the separable count is the thing that travels. |
+| Report the row count and let the caller decide about coverage | This is the status quo ante and is exactly what produced the 2026-06-29 hand-reasoned `INCONCLUSIVE` and the 8-day life of #6288 (created 2026-07-09, closed 2026-07-17 — measured, not estimated; an earlier revision of this line said 'two-month' and was wrong). The consumer is often an agent, and the separable count is the thing that travels. |
 | Make the deprecated-endpoint guard merge-blocking in this change | Requires four other pieces of work (see above), one of which — the auto-fabrication guard on `required-checks.txt` — would otherwise cause a fabricated green. Filed rather than faked. |
 
 ## Related

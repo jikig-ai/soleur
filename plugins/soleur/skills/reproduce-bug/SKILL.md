@@ -27,7 +27,7 @@ Think about the places it could go wrong looking at the codebase. Look for loggi
 
 2. **Better Stack** logs (the app's pino stream, historical) via the repo-root [betterstack-query.sh](../../../../scripts/betterstack-query.sh) helper (ClickHouse SQL over the Telemetry warehouse). Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`. The failing fetch's error (with the HOSTNAME) lives here.
 
-3. **Supabase platform logs** (postgres / auth / postgrest / supavisor — the database side of the failure, not the app's own pino stream) via `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --source <src> --since <window>`. Runbook: `knowledge-base/engineering/operations/runbooks/supabase-log-query.md`. The helper never reports a zero row count without a coverage verdict, so an empty answer tells you whether the source is quiet or simply uninstrumented.
+3. **Supabase platform logs** (postgres / auth / postgrest / supavisor — the database side of the failure, not the app's own pino stream) via `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref <project-ref> --source <src> --since <window>`. Runbook: `knowledge-base/engineering/operations/runbooks/supabase-log-query.md`. The helper never reports a zero row count without a coverage verdict, so an empty answer tells you whether the source is quiet or simply uninstrumented.
 
 4. Check recent commits related to the affected area, then inspect the relevant code paths — now anchored on the real error, not a guess.
 

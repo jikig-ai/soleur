@@ -54,8 +54,10 @@ their export did not complete.
 
    For the database side of the same window — a Postgres error or a PostgREST
    rejection that never reached Sentry — run `doppler run -p soleur -c prd --
-   scripts/supabase-logs-query.sh --source postgres_logs --since <window>`; it answers
-   with a coverage verdict rather than a bare zero. Runbook:
+   scripts/supabase-logs-query.sh --ref ifsccnjhymdmidffkzhl --source postgres_logs --since <window>`;
+   it answers with a coverage verdict rather than a bare zero. **The ref is required and it
+   is the APPLICATION project (`soleur-web-platform`)** — a DSAR is about the subject's data,
+   which does not live in the Inngest backing project. Runbook:
    `knowledge-base/engineering/operations/runbooks/supabase-log-query.md`.
 
 3. **Classify by `failure_reason`:**

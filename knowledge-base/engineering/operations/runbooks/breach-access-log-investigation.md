@@ -56,7 +56,8 @@ Run the helper over the candidate window and read the **verdict**, not the count
 
 ```bash
 doppler run -p soleur -c prd -- \
-  scripts/supabase-logs-query.sh --source postgres_logs --since <candidate-window> --json
+  scripts/supabase-logs-query.sh --ref <project-ref> --source postgres_logs \
+    --since <candidate-window> --json
 ```
 
 - Exit `0` / `COVERED` — the window is genuinely covered. This is your horizon so far; widen
@@ -87,7 +88,8 @@ first-public-table-served date from the provisioning config — not from a table
 
 ```bash
 doppler run -p soleur -c prd -- \
-  scripts/supabase-logs-query.sh --source postgrest_logs --source auth_logs \
+  scripts/supabase-logs-query.sh --ref <project-ref> \
+    --source postgrest_logs --source auth_logs \
     --since <exposure-start> --until <remediation-date> --json
 ```
 
