@@ -1,0 +1,130 @@
+{
+  "_scenario": "per-source-tail",
+  "_synthesized": "EVERY ROW BODY IN THIS FILE IS SYNTHESIZED. Only the ENVELOPE and the field names are taken from the live API. This repository is PUBLIC and the real rows are production log lines from the exposure window of an active GDPR determination (event payloads, step I/O, tenant identifiers, event_user, worker_ip). Committing them would be a disclosure and git makes it permanent, and NO existing gate catches it: the synthesized-fixtures enforcement regex in .github/workflows/secret-scan.yml covers apps/web-platform/test/(fixtures|__synthesized__|__goldens__)/, **/__goldens__/, *.snap and learnings/*.md -- tests/scripts/fixtures/** is OUT OF SCOPE. 'PAT-free by construction' is not the relevant test. Counts, timestamps, ids and messages below are invented and deliberately do NOT restate the measured numbers, which live only in knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md.",
+  "_note": "Two --source flags and --limit 4. The reported count is the UNLIMITED aggregate over both sources (246 + 18 = 264), not the 4 lines the tail returned. If coverage or the count were computed from the limited row set, --limit would silently change which window the answer describes. The tail itself must arrive oldest-first, which only the nested subquery form produces.",
+  "_call_keys": [
+    "identity",
+    "instrumentation",
+    "window",
+    "rows"
+  ],
+  "_expect": [
+    {
+      "argv": [
+        "--source",
+        "postgres_logs",
+        "--source",
+        "postgrest_logs",
+        "--since",
+        "2026-08-25T00:00:00",
+        "--until",
+        "2026-08-26T00:00:00",
+        "--limit",
+        "4"
+      ],
+      "exit": 0,
+      "verdict": "COVERED",
+      "reason": "FULLY_COVERED",
+      "require": [
+        "rows=264",
+        "sources_requested=postgres_logs postgrest_logs"
+      ],
+      "calls": [
+        "identity",
+        "instrumentation",
+        "window",
+        "rows"
+      ],
+      "stdout_lines": 4,
+      "stdout_ascending": true
+    }
+  ],
+  "identity": {
+    "code": 200,
+    "body": {
+      "id": "pigsfuxruiopinouvjwy",
+      "name": "soleur-synthetic-prd",
+      "region": "eu-central-1",
+      "status": "ACTIVE_HEALTHY",
+      "created_at": "2026-01-05T09:14:02Z"
+    }
+  },
+  "instrumentation": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "source": "supavisor_logs",
+          "instrumentation_c": 9111
+        },
+        {
+          "source": "postgres_logs",
+          "instrumentation_c": 2044
+        },
+        {
+          "source": "postgrest_logs",
+          "instrumentation_c": 133
+        },
+        {
+          "source": "auth_logs",
+          "instrumentation_c": 37
+        }
+      ],
+      "error": null
+    }
+  },
+  "window": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "source": "supavisor_logs",
+          "window_source_c": 812,
+          "window_lo": "2026-08-25T00:00:41.100000",
+          "window_hi": "2026-08-25T23:59:12.480000"
+        },
+        {
+          "source": "postgres_logs",
+          "window_source_c": 246,
+          "window_lo": "2026-08-25T00:03:18.220000",
+          "window_hi": "2026-08-25T23:57:44.910000"
+        },
+        {
+          "source": "postgrest_logs",
+          "window_source_c": 18,
+          "window_lo": "2026-08-25T06:41:00.510000",
+          "window_hi": "2026-08-25T19:02:57.330000"
+        }
+      ],
+      "error": null
+    }
+  },
+  "rows": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "row_ts": "2026-08-25T06:41:00.510000",
+          "id": "00000000-0000-4000-8000-000000000011",
+          "event_message": "GET /rest/v1/synthetic_table 200"
+        },
+        {
+          "row_ts": "2026-08-25T19:02:57.330000",
+          "id": "00000000-0000-4000-8000-000000000012",
+          "event_message": "GET /rest/v1/synthetic_other 200"
+        },
+        {
+          "row_ts": "2026-08-25T22:31:48.771000",
+          "id": "00000000-0000-4000-8000-000000000013",
+          "event_message": "automatic analyze of table \"public.synthetic_table\""
+        },
+        {
+          "row_ts": "2026-08-25T23:57:44.910000",
+          "id": "00000000-0000-4000-8000-000000000014",
+          "event_message": "checkpoint complete: wrote 42 buffers"
+        }
+      ],
+      "error": null
+    }
+  }
+}

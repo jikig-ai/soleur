@@ -1,0 +1,119 @@
+{
+  "_scenario": "success",
+  "_synthesized": "EVERY ROW BODY IN THIS FILE IS SYNTHESIZED. Only the ENVELOPE and the field names are taken from the live API. This repository is PUBLIC and the real rows are production log lines from the exposure window of an active GDPR determination (event payloads, step I/O, tenant identifiers, event_user, worker_ip). Committing them would be a disclosure and git makes it permanent, and NO existing gate catches it: the synthesized-fixtures enforcement regex in .github/workflows/secret-scan.yml covers apps/web-platform/test/(fixtures|__synthesized__|__goldens__)/, **/__goldens__/, *.snap and learnings/*.md -- tests/scripts/fixtures/** is OUT OF SCOPE. 'PAT-free by construction' is not the relevant test. Counts, timestamps, ids and messages below are invented and deliberately do NOT restate the measured numbers, which live only in knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md.",
+  "_note": "The canonical covered answer. Pins that a count is only ever rendered together with the resolved project identity and a covered_window that is a subset of the requested window, and that a 1-day window does not fire the monotonicity probe (there is no strictly narrower sub-window to compare).",
+  "_call_keys": [
+    "identity",
+    "instrumentation",
+    "window",
+    "rows"
+  ],
+  "_expect": [
+    {
+      "argv": [
+        "--source",
+        "postgres_logs",
+        "--since",
+        "2026-08-25T00:00:00",
+        "--until",
+        "2026-08-26T00:00:00",
+        "--limit",
+        "3"
+      ],
+      "exit": 0,
+      "verdict": "COVERED",
+      "reason": "FULLY_COVERED",
+      "require": [
+        "rows=246",
+        "project=soleur-synthetic-prd",
+        "covered_window=2026-08-25T00:03:18.220000..2026-08-25T23:57:44.910000",
+        "not fired (window <= 7d"
+      ],
+      "calls": [
+        "identity",
+        "instrumentation",
+        "window",
+        "rows"
+      ],
+      "stdout_lines": 3,
+      "stdout_ascending": true
+    }
+  ],
+  "identity": {
+    "code": 200,
+    "body": {
+      "id": "pigsfuxruiopinouvjwy",
+      "name": "soleur-synthetic-prd",
+      "region": "eu-central-1",
+      "status": "ACTIVE_HEALTHY",
+      "created_at": "2026-01-05T09:14:02Z"
+    }
+  },
+  "instrumentation": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "source": "supavisor_logs",
+          "instrumentation_c": 9111
+        },
+        {
+          "source": "postgres_logs",
+          "instrumentation_c": 2044
+        },
+        {
+          "source": "postgrest_logs",
+          "instrumentation_c": 133
+        },
+        {
+          "source": "auth_logs",
+          "instrumentation_c": 37
+        }
+      ],
+      "error": null
+    }
+  },
+  "window": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "source": "supavisor_logs",
+          "window_source_c": 812,
+          "window_lo": "2026-08-25T00:00:41.100000",
+          "window_hi": "2026-08-25T23:59:12.480000"
+        },
+        {
+          "source": "postgres_logs",
+          "window_source_c": 246,
+          "window_lo": "2026-08-25T00:03:18.220000",
+          "window_hi": "2026-08-25T23:57:44.910000"
+        }
+      ],
+      "error": null
+    }
+  },
+  "rows": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "row_ts": "2026-08-25T21:02:11.004000",
+          "id": "00000000-0000-4000-8000-000000000001",
+          "event_message": "checkpoint starting: time"
+        },
+        {
+          "row_ts": "2026-08-25T22:31:48.771000",
+          "id": "00000000-0000-4000-8000-000000000002",
+          "event_message": "automatic vacuum of table \"public.synthetic_table\": index scans: 0"
+        },
+        {
+          "row_ts": "2026-08-25T23:57:44.910000",
+          "id": "00000000-0000-4000-8000-000000000003",
+          "event_message": "checkpoint complete: wrote 42 buffers"
+        }
+      ],
+      "error": null
+    }
+  }
+}

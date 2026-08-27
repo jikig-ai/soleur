@@ -1,0 +1,97 @@
+{
+  "_scenario": "zero-rows-partial-coverage",
+  "_synthesized": "EVERY ROW BODY IN THIS FILE IS SYNTHESIZED. Only the ENVELOPE and the field names are taken from the live API. This repository is PUBLIC and the real rows are production log lines from the exposure window of an active GDPR determination (event payloads, step I/O, tenant identifiers, event_user, worker_ip). Committing them would be a disclosure and git makes it permanent, and NO existing gate catches it: the synthesized-fixtures enforcement regex in .github/workflows/secret-scan.yml covers apps/web-platform/test/(fixtures|__synthesized__|__goldens__)/, **/__goldens__/, *.snap and learnings/*.md -- tests/scripts/fixtures/** is OUT OF SCOPE. 'PAT-free by construction' is not the relevant test. Counts, timestamps, ids and messages below are invented and deliberately do NOT restate the measured numbers, which live only in knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md.",
+  "_note": "The same zero, over an 11-day window whose first three days no source covers. Structurally identical to the fixture above at the count level -- rows=0, source instrumented, HTTP 200, error null -- and it must reach the OPPOSITE verdict, naming the uncovered head. This is the pair that makes the coverage clause do work.",
+  "_call_keys": [
+    "identity",
+    "instrumentation",
+    "window",
+    "probe"
+  ],
+  "_expect": [
+    {
+      "argv": [
+        "--source",
+        "auth_logs",
+        "--since",
+        "2026-08-15T00:00:00",
+        "--until",
+        "2026-08-26T00:00:00"
+      ],
+      "exit": 3,
+      "verdict": "INCONCLUSIVE",
+      "reason": "PARTIAL_COVERAGE",
+      "require": [
+        "rows=0",
+        "UNCOVERED: head 2026-08-15T00:00:00..2026-08-18T04:22:10.000000",
+        "treat the uncovered part as unknown"
+      ],
+      "calls": [
+        "identity",
+        "instrumentation",
+        "window",
+        "probe"
+      ],
+      "stdout_lines": 0
+    }
+  ],
+  "identity": {
+    "code": 200,
+    "body": {
+      "id": "pigsfuxruiopinouvjwy",
+      "name": "soleur-synthetic-prd",
+      "region": "eu-central-1",
+      "status": "ACTIVE_HEALTHY",
+      "created_at": "2026-01-05T09:14:02Z"
+    }
+  },
+  "instrumentation": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "source": "supavisor_logs",
+          "instrumentation_c": 9111
+        },
+        {
+          "source": "postgres_logs",
+          "instrumentation_c": 2044
+        },
+        {
+          "source": "postgrest_logs",
+          "instrumentation_c": 133
+        },
+        {
+          "source": "auth_logs",
+          "instrumentation_c": 37
+        }
+      ],
+      "error": null
+    }
+  },
+  "window": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "source": "supavisor_logs",
+          "window_source_c": 520,
+          "window_lo": "2026-08-18T04:22:10.000000",
+          "window_hi": "2026-08-25T23:58:02.000000"
+        }
+      ],
+      "error": null
+    }
+  },
+  "probe": {
+    "code": 200,
+    "body": {
+      "result": [
+        {
+          "probe_c": 0
+        }
+      ],
+      "error": null
+    }
+  }
+}
