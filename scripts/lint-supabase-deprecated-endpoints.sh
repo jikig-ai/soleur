@@ -10,11 +10,12 @@
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────
 # WHY ARM 1 IS FILE-SCOPED AND NOT LINE-SCOPED. A line-scoped implementation of arm 1 is
-# fail-open and would ship green. The single live `advisors/security` call in
-# `.github/workflows/apply-inngest-rls.yml:238` sits 131 lines BELOW its
-# `API="https://api.supabase.com"` at `:107`; the same split holds in
-# `apply-inngest-rls-dev.yml` (`:113` vs `:134,157,171`), `anon-probe.sh` (`:30` vs
-# `:55,66`) and `supabase-advisor-scan.sh` (`:58` vs `:122,137,159`). Line-scoped, this
+# fail-open and would ship green. BOTH live `advisors/security` calls sit far below the
+# assignment that resolves their host: `.github/workflows/apply-inngest-rls.yml:238` is 131
+# lines BELOW its `API="https://api.supabase.com"` at `:107`, and
+# `scripts/supabase-advisor-scan.sh:159` is 101 lines below its `API=` at `:58`. The same
+# split holds in `apply-inngest-rls-dev.yml` (`:113` vs `:134,157,171`) and
+# `apps/web-platform/infra/inngest-rls/anon-probe.sh` (`:30` vs `:55,66`). Line-scoped, this
 # guard finds ZERO deprecated paths and the ratchet reports green — the exact class closed by
 # `924994b2f fix(gates): close four fail-open gates that reported success while doing
 # nothing`. So `$API` / `${REF}` / `$PROJECT_REF` are resolved WITHIN the file first.
@@ -141,6 +142,8 @@ ALLOWLIST=(
   '.github/workflows/scheduled-followthrough-sweeper.yml|2026-08-26|env plumbing only; the calls live in scripts/followthroughs/*.sh, all three pinned'
   '.github/workflows/scheduled-supabase-advisor-scan.yml|2026-08-26|env plumbing plus remediation prose naming the secret; the call lives in scripts/supabase-advisor-scan.sh, which is pinned'
   'apps/web-platform/infra/cutover-inngest-workflow.test.sh|2026-08-26|snapshot assertion on the string secrets.SUPABASE_ACCESS_TOKEN in the workflow; makes no HTTP call'
+  'apps/web-platform/infra/inngest.tf|2026-08-27|env plumbing only: a github_actions_secret resource whose secret_name is the literal SUPABASE_ACCESS_TOKEN, writing var.supabase_access_token to GitHub via the github provider. There is no supabase provider, no data "http" and no curl in the file, so Terraform makes no Management API call; the one host literal is a # comment recording a live pgbouncer-drift check. Same category as the three env-plumbing workflows above. Surfaced 2026-08-27 when the host pin stopped counting comment text as a pin'
+  'scripts/lint-supabase-deprecated-endpoints.highwater|2026-08-27|this guard'"'"'s own baseline. Its only non-comment line is the integer; every /v1/projects and the one host literal sit in the # provenance header that documents what the census counts. A data file cannot make an HTTP call. The guard-of-the-guard shape, one level down — and NOT excluded from the pathspec, because narrowing what the guard can see is the move this header exists to refuse'
   'apps/web-platform/infra/inngest-rls/0002_dev_inngest_tables_lockdown.sql|2026-08-26|SQL comment describing the workflow identity check (GET /v1/projects/<ref>); SQL cannot call an HTTP API'
   'apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh|2026-08-26|python assertion strings checking that /v1/projects/ appears in a captured run log; makes no HTTP call'
   'apps/web-platform/scripts/run-migrations.sh|2026-08-26|comment about a missing SUPABASE_PAT never failing the run; delegates to postgrest-reload-schema.sh, which is pinned'
@@ -160,8 +163,9 @@ assembly_hostpin() {
 
 # Comment markers are per-language. `--` is a comment ONLY in .sql: in shell and YAML a huge
 # share of the real call sites are curl continuation lines that START with `--url`
-# (apply-inngest-rls.yml:155,178 and anon-probe.sh:55 among them), so a global `--` rule would
-# silently drop the majority of the corpus and the ratchet would report the loss as green.
+# (apply-inngest-rls.yml:155,178 and inngest-rls/anon-probe.sh:55 among them), so a global `--`
+# rule would silently drop the majority of the corpus and the ratchet would report the loss
+# as green.
 comment_re_for() {
   case "$1" in
     *.sql)                       printf '%s' '^[0-9]+:[[:space:]]*(--|/\*)' ;;
@@ -175,11 +179,19 @@ code_lines() {
   grep -nE '^' -- "$1" 2>/dev/null | grep -vE "$(comment_re_for "$1")" || true
 }
 
-# Variable names used as the HOST TOKEN immediately before /v1/projects/ in this file.
+# Variable names used as the HOST TOKEN immediately before /v1/projects in this file.
+#
+# THE TRAILING SLASH IS NOT PART OF THE ANCHOR, and requiring it was a hole. A caller that
+# builds its base in one step and appends the path in the next --
+#   BASE="${API}/v1/projects";  curl "$BASE/$REF/analytics/endpoints/logs.all"
+# -- has NO `/v1/projects/` anywhere: the segment ends at a closing quote. Anchored on the
+# slash, this file yielded zero host vars, zero census sites, and a clean bill of health for a
+# PAT-bearing call to a no-waiver deprecated path. `/v1/projects` alone is the anchor; what
+# follows it (a slash, a quote, end of line) is the caller's business, not the guard's.
 used_host_vars() {
   code_lines "$1" \
-    | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/v1/projects/' \
-    | sed -E 's#^\$\{?##; s#\}?/v1/projects/$##' \
+    | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*\}?/v1/projects' \
+    | sed -E 's#^\$\{?##; s#\}?/v1/projects$##' \
     | sort -u || true
 }
 
@@ -189,13 +201,24 @@ used_host_vars() {
 # thing this repo does constantly -- a raw grep here would red the very comment explaining the
 # rule, which is the bare-token-over-prose defect (cq-assert-anchor-not-bare-token) reappearing
 # on the resolution side rather than the detection side.
+#
+# ASSIGNMENT SYNTAX IS NOT SHELL-ONLY. Recognising only the shell's space-free `V=` made this
+# resolver FAIL-CLOSED on every TypeScript caller: `const API = "https://api.supabase.com"`
+# is an assignment the guard could not see, so a correctly-pinned .ts file reported
+# UNRESOLVABLE-HOST. Fail-closed is the right direction to be wrong in, but a guard that reds
+# on the compliant shape gets switched off, so `const|let|var NAME =` (with the spaces, the
+# trailing `;`/`,` and backtick template literals that come with it) is recognised too.
 var_rhs() {
-  local f="$1" v="$2" pre='^[[:space:]]*(export[[:space:]]+|local[[:space:]]+|readonly[[:space:]]+)?'
-  code_lines "$f" | sed -E 's/^[0-9]+://' | grep -hE "${pre}${v}=" 2>/dev/null \
-    | sed -E "s#${pre}${v}=##" \
-    | sed -E 's/[[:space:]]+#.*$//' \
+  local f="$1" v="$2"
+  local pre='^[[:space:]]*((export|local|readonly|const|let|var)[[:space:]]+)?'
+  local eq='[[:space:]]*=[[:space:]]*'
+  code_lines "$f" | sed -E 's/^[0-9]+://' | grep -hE "${pre}${v}${eq}" 2>/dev/null \
+    | sed -E "s#${pre}${v}${eq}##" \
+    | sed -E 's/[[:space:]]+(#|\/\/).*$//' \
+    | sed -E 's/[[:space:]]*[;,]+[[:space:]]*$//' \
     | sed -E 's/^"(.*)"$/\1/' \
-    | sed -E "s/^'(.*)'$/\1/" || true
+    | sed -E "s/^'(.*)'\$/\1/" \
+    | sed -E "s/^${BT}(.*)${BT}\$/\1/" || true
 }
 
 # Scheme through authority, nothing after the first /v1. This is the ONLY span arm 2 asserts.
@@ -244,11 +267,13 @@ while IFS= read -r rel; do
   done <<< "$vars"
 
   # ── Census: Management API call sites on non-comment lines. Counted over the UNION, so it
-  # moves when any caller is added or deleted. `/v1/projects/` (not `/v1/`) is the anchor:
+  # moves when any caller is added or deleted. `/v1/projects` (not `/v1/`) is the anchor:
   # scripts/cutover-inngest.sh also calls https://api.hetzner.cloud/v1/servers/… and
   # /v1/actions/…, and a bare `/v1/` anchor would drag Hetzner into a Supabase host-pin rule
-  # and red three correct lines.
-  site_re="(https?://${AUTHORITY_CH}+|\\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?)/v1/projects/"
+  # and red three correct lines. The anchor stops at `projects` and does NOT require the
+  # trailing slash — see used_host_vars: a base built in one statement and used in the next
+  # ends the segment on a quote, and demanding the slash made that whole caller invisible.
+  site_re="(https?://${AUTHORITY_CH}+|\\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?)/v1/projects"
   file_sites=0
   if [[ -n "$code" ]]; then
     file_sites="$(printf '%s\n' "$code" | grep -cE "$site_re" || true)"
@@ -279,10 +304,24 @@ while IFS= read -r rel; do
   done
 
   # ── ARM 2: host pin ───────────────────────────────────────────────────────────────────
+  # NO `grep -q` MID-PIPE. Under `pipefail` a matching `grep -q` exits early, the `printf`
+  # producer takes SIGPIPE (141), and the PIPELINE reports 141 even though grep MATCHED — so
+  # `... | grep -qxF "$rel" && in_pin=1` silently skips arm 2 for exactly the files it matched.
+  # Latent at 30 paths (well under the 64 KB pipe buffer) and load-bearing the moment it is not.
+  # A herestring has no producer process and cannot take the signal.
   in_pin=0
-  printf '%s\n' "$pin_files" | grep -qxF -- "$rel" && in_pin=1
+  grep -qxF -- "$rel" <<< "$pin_files" && in_pin=1
   if [[ "$in_pin" -eq 1 ]]; then
-    has_literal="$(grep -cF -- "$HOST_LITERAL" "$abs" || true)"
+    # MEMBERSHIP IS MEASURED OVER CODE LINES, never the raw file. Arm 1 and the census both
+    # read `$code`; if arm 2 read the raw bytes, a file could satisfy the host pin on COMMENT
+    # TEXT alone — one `# see https://api.supabase.com` and an env-redirected PAT-bearing call
+    # below it reports clean. That was live: apps/web-platform/infra/inngest.tf carries
+    # SUPABASE_ACCESS_TOKEN and its ONLY host literal is a `#` comment, so it passed the host
+    # pin on prose. A comment is not a pin.
+    has_literal=0
+    if [[ -n "$code" ]]; then
+      has_literal="$(printf '%s\n' "$code" | grep -cF -- "$HOST_LITERAL" || true)"
+    fi
     [[ "$has_literal" =~ ^[0-9]+$ ]] || has_literal=0
 
     allow_reason=""
@@ -290,14 +329,21 @@ while IFS= read -r rel; do
       [[ "${a%%|*}" == "$rel" ]] && { allow_reason="$a"; break; }
     done
 
-    if [[ "$has_literal" -eq 0 ]]; then
-      if [[ -z "$allow_reason" ]]; then
-        # MEMBERSHIP IS THE ASSERTION. This branch is the exfil detector: a caller whose host
-        # was redirected away from the literal shows up here as a missing member.
-        FINDINGS+=("$rel:0: UNPINNED-HOST — carries a Management API path or PAT variable but does not contain the literal $HOST_LITERAL, and is not on the dated non-caller allowlist")
-      elif [[ "$file_sites" -gt 0 ]]; then
-        FINDINGS+=("$rel:0: ALLOWLIST-STALE — allowlisted as a non-caller but now makes $file_sites Management API call(s); re-triage or pin it")
-      fi
+    if [[ "$has_literal" -eq 0 && -z "$allow_reason" ]]; then
+      # MEMBERSHIP IS THE ASSERTION. This branch is the exfil detector: a caller whose host
+      # was redirected away from the literal shows up here as a missing member.
+      FINDINGS+=("$rel:0: UNPINNED-HOST — carries a Management API path or PAT variable but does not contain the literal $HOST_LITERAL on a non-comment line, and is not on the dated non-caller allowlist")
+    fi
+
+    # ALLOWLIST STALENESS IS INDEPENDENT OF THE PIN, and nesting it under `has_literal -eq 0`
+    # made it unreachable in its main case. The allowlist's claim is "this file is NOT A
+    # CALLER" — so it goes stale the moment the file grows a call, whether that call is
+    # correctly pinned or not. Nested, an allowlisted file that added a properly-pinned
+    # PAT-bearing curl scored has_literal>0, skipped the branch entirely, and reported clean:
+    # the header's promise that "if one of these ever grows a real call, the allowlist stops
+    # covering it and this guard reds" was false for the likeliest way it happens.
+    if [[ -n "$allow_reason" && "$file_sites" -gt 0 ]]; then
+      FINDINGS+=("$rel:0: ALLOWLIST-STALE — allowlisted as a non-caller but now makes $file_sites Management API call(s); re-triage or pin it")
     fi
 
     # Host span via a resolved variable.
@@ -321,10 +367,10 @@ while IFS= read -r rel; do
     if [[ -n "$code" ]]; then
       while IFS= read -r span_hit; do
         [[ -n "$span_hit" ]] || continue
-        span="${span_hit%/v1/projects/}"
+        span="${span_hit%/v1/projects}"
         [[ "$span" == "$HOST_LITERAL" ]] && continue
         FINDINGS+=("$rel:0: HOST-SPAN-NOT-PINNED — inline URL host span '$span', expected $HOST_LITERAL")
-      done < <(printf '%s\n' "$code" | grep -oE "[A-Za-z][A-Za-z0-9+.-]*://${AUTHORITY_CH}+/v1/projects/" | sort -u || true)
+      done < <(printf '%s\n' "$code" | grep -oE "[A-Za-z][A-Za-z0-9+.-]*://${AUTHORITY_CH}+/v1/projects" | sort -u || true)
     fi
   fi
 done <<< "$union"
