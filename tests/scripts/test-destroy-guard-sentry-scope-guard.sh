@@ -69,7 +69,7 @@ SENTRY_TF_DIR="${SENTRY_TF_DIR:-$REPO_ROOT/apps/web-platform/infra/sentry}"
 
 # Types covered by destroy-guard-filter-sentry.jq. Adding a type here without a
 # matching filter clause re-opens the nested-block bypass.
-COVERED_TYPES='sentry_cron_monitor|sentry_uptime_monitor|sentry_issue_alert'
+COVERED_TYPES='sentry_cron_monitor|sentry_uptime_monitor|sentry_issue_alert|sentry_alert'
 
 if [[ ! -d "$SENTRY_TF_DIR" ]]; then
   echo "[FAIL] SENTRY_TF_DIR does not exist: $SENTRY_TF_DIR" >&2
