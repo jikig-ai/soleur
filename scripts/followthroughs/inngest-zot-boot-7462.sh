@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 # #7462 / #7228 — post-delivery readback for the dedicated inngest host's zot-primary boot.
 #
-# TRACKERS: **#7462** (the restore) and **#7228** (the dispatch incident). Both are OPEN and both
-# stay open until this reads PASS. scripts/sweep-followthroughs.sh lists `--state open`, so hosting
+# RETIRED 2026-08-25 (#7674). This probe's contract is SATISFIED and its directive has been
+# REMOVED from both trackers. It is kept on disk for its reasoning, not because it runs.
+#
+# TRACKERS (historical): **#7462** (the restore) and **#7228** (the dispatch incident). This header
+# used to say "Both are OPEN and both stay open until this reads PASS" — as of 2026-08-20 both are
+# CLOSED (#7462 at 18:30:56Z, #7228 at 18:31:02Z, by the sweeper on this probe's own PASS). The
+# succession is exactly the no-op this header warns about, arriving from the other direction: the
+# probe passed, the sweeper closed the issues, and #7462's SIX-step body had only step 1 measured.
+# The restoration work now lives on #7674 with a successor probe that asserts SERVING, not booting. scripts/sweep-followthroughs.sh lists `--state open`, so hosting
 # a probe on a closed issue is a permanent silent no-op — do not re-point this at #6500, which is
 # an AUTHORIZATION act (ADR-096 Phase 5.3-5.5) whose own probe is zot-soak-6122.sh.
 #
