@@ -108,22 +108,22 @@
       "result": [
         {
           "row_ts": "2026-08-25T06:41:00.510000",
-          "id": "00000000-0000-4000-8000-000000000011",
+          "id": "synthetic-row-11",
           "event_message": "GET /rest/v1/synthetic_table 200"
         },
         {
           "row_ts": "2026-08-25T19:02:57.330000",
-          "id": "00000000-0000-4000-8000-000000000012",
+          "id": "synthetic-row-12",
           "event_message": "GET /rest/v1/synthetic_other 200"
         },
         {
           "row_ts": "2026-08-25T22:31:48.771000",
-          "id": "00000000-0000-4000-8000-000000000013",
+          "id": "synthetic-row-13",
           "event_message": "automatic analyze of table \"public.synthetic_table\""
         },
         {
           "row_ts": "2026-08-25T23:57:44.910000",
-          "id": "00000000-0000-4000-8000-000000000014",
+          "id": "synthetic-row-14",
           "event_message": "checkpoint complete: wrote 42 buffers"
         }
       ],

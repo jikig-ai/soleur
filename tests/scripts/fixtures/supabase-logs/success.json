@@ -102,17 +102,17 @@
       "result": [
         {
           "row_ts": "2026-08-25T21:02:11.004000",
-          "id": "00000000-0000-4000-8000-000000000001",
+          "id": "synthetic-row-01",
           "event_message": "checkpoint starting: time"
         },
         {
           "row_ts": "2026-08-25T22:31:48.771000",
-          "id": "00000000-0000-4000-8000-000000000002",
+          "id": "synthetic-row-02",
           "event_message": "automatic vacuum of table \"public.synthetic_table\": index scans: 0"
         },
         {
           "row_ts": "2026-08-25T23:57:44.910000",
-          "id": "00000000-0000-4000-8000-000000000003",
+          "id": "synthetic-row-03",
           "event_message": "checkpoint complete: wrote 42 buffers"
         }
       ],
