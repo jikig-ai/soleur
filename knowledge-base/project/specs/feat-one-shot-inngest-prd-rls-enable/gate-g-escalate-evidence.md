@@ -1,5 +1,11 @@
 # GATE G-ESCALATE — actual-access investigation (Phase 0, blocking)
 
+<!-- MARKER-2026-08-26 START -->
+> **RECORD STATUS: annotated 2026-08-26, not corrected.** Everything below was true as of the investigation date, **2026-06-29**, and nothing in it is retracted. One instrument it names has since been retired: `/analytics/endpoints/logs.all` (used in Steps 2 and 3) is deprecated, vendor removal announced 2026-09-23.
+> **Do not copy any endpoint, query, or figure from this record into a live investigation.** Read "Addendum — 2026-08-26" at the end of this file first, and follow `knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`.
+> The Verdict, Steps 4–5 and the Art. 30 record are unchanged.
+<!-- MARKER-2026-08-26 END -->
+
 **Project:** soleur-inngest-prd (`pigsfuxruiopinouvjwy`, eu-west-1)
 **Finding:** `rls_disabled_in_public` (14 tables), advisor-dated 2026-06-22
 **Investigated:** 2026-06-29 (read-only, via Supabase Management API; PAT from Doppler `soleur/prd_terraform`)
@@ -32,6 +38,11 @@ likewise unexposed → no rotation required, though rotation remains available a
 
 ## Step 2 — Log-retention horizon
 
+<!-- MARKER-2026-08-26 START -->
+> **RETIRED INSTRUMENT — `/analytics/endpoints/logs.all` is deprecated; vendor removal announced 2026-09-23. Do not copy it forward.** See "Addendum — 2026-08-26" at the end of this file.
+> This section stands as recorded: the endpoint was functional on 2026-06-29, and the retention horizon stated below was the figure measured that day. Both the instrument and that measurement have since changed; the addendum states how, and why the verdict is unaffected. Query logs through `scripts/supabase-logs-query.sh` (runbook: `knowledge-base/engineering/operations/runbooks/supabase-log-query.md`), never by hand from this record.
+<!-- MARKER-2026-08-26 END -->
+
 - Log endpoint (`/analytics/endpoints/logs.all`) confirmed **functional**: `postgres_logs` returns recent rows
   (e.g. `relation "realtime.subscription" does not exist` at ~2026-06-28).
 - **Retained window ≈ last 1–2 days** — far shorter than the ~12-day exposure window. The 2026-06-17 → ~2026-06-27
@@ -39,6 +50,11 @@ likewise unexposed → no rotation required, though rotation remains available a
   not evidence-of-absence.
 
 ## Step 3 — Access-log analysis (anon REST + GraphQL)
+
+<!-- MARKER-2026-08-26 START -->
+> **RETIRED INSTRUMENT — this step ran against `/analytics/endpoints/logs.all`, deprecated with vendor removal announced 2026-09-23. Do not copy its query shape forward.** See "Addendum — 2026-08-26" at the end of this file: the replacement takes a different SQL dialect and different mandatory parameters, and a query copied forward unchanged fails in a way that reads as an empty result.
+> The 2026-06-29 findings recorded below are unretracted; the addendum records what is now known about this source's instrumentation.
+<!-- MARKER-2026-08-26 END -->
 
 - `edge_logs` (every HTTP request to PostgREST/`/rest/v1/*` + pg_graphql `/graphql/v1`): **0 rows** over the full
   query window AND over the last 24h (raw, unaggregated). The anon HTTP surface shows **zero traffic** in the
