@@ -49,6 +49,33 @@ lint-infra-no-human-steps.py, lint-orphan-test-suites.sh; live Supabase Manageme
 probes via Doppler, gh, git.
 
 ## Work Phase
-- Scope: PR-B (tasks 1-8) per plan §Delivery Split.
-- PR-A (legal lane, Art. 30 register) and PR-C (recurrence poller) are separate lanes.
-- Status: starting
+- Scope: PR-B (tasks 1-8) per plan §Delivery Split. PR-A (legal lane) and PR-C
+  (recurrence poller) remain separate lanes.
+- Status: complete. Three Tier-B workstreams (guard / helper / docs), all three of
+  which died mid-flight on API errors and were RESUMED rather than respawned, so
+  no transcript or committed work was lost.
+
+### Phase 2 exit gate
+- Three new suites run directly, all green: guard 33/33, helper suite, verdict lib.
+- `scripts/test-all-*.test.sh` (4 suites, because this diff edits test-all.sh) green.
+- `lint-orphan-test-suites.sh` green -- independently confirms the registration is
+  complete rather than my asserting it.
+- Full `test-all.sh` returned **rc=4 (REFUSED, nothing ran)** -- the measured
+  sibling-in-flight case (#7553); a sibling worktree was 1511s into its own gate.
+  Not a pass and not a red. Deliberately NOT overridden with
+  SOLEUR_ALLOW_FULL_GATE=1: concurrent runs inflate timings and produce exactly
+  the phantom red the refusal exists to prevent. The full battery runs at /ship
+  Phase 4 per ADR-183.
+- actionlint: 1 finding on both main and branch (pre-existing SC2034 at what is
+  now :1078), zero findings in the edited region. The change adds none.
+
+### GDPR gate
+- SKIPPED per its own trigger contract: zero files in the diff match the canonical
+  regulated-path regex (no migrations, no auth, no API routes, no .sql).
+- The actual regulated-data risk is outside that regex, so it was verified directly
+  instead: all nine fixtures are synthesized (`public.synthetic_table`, sequential
+  synthetic UUIDs, generic checkpoint/autovacuum messages), no IPs, emails, token
+  shapes or real identifiers. Each fixture carries a header stating the synthesis
+  and why `tests/scripts/fixtures/**` is covered by no existing gate.
+- The three evidence addenda are mechanically append-only: zero deletions, each
+  starting two lines past the file's original end.
