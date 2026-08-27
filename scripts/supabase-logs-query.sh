@@ -52,6 +52,13 @@
 # in an agent session stdout lands in a transcript, so the BOUNDED LIMIT — not
 # "stdout only" — is the real control. The absence of write sites here is
 # mechanically checked by the suite's write-boundary sweep.
+# shellcheck disable=SC2034
+# SC2034 is disabled file-wide on purpose. The V_* globals below are the
+# renderer's INPUT PROTOCOL: they are read by emit_evidence_block /
+# emit_evidence_json in scripts/lib/supabase-logs-verdict.sh, which
+# ShellCheck cannot see from this file alone. Suppressing per-assignment
+# would need a dozen inline directives and would make a genuinely dead V_*
+# indistinguishable from a live one; the lib's own suite covers that side.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -524,6 +531,11 @@ fi
 if (( TRUNCATED == 1 )); then
   lo_h=$(( MONOTONICITY_TRIGGER_DAYS * 24 ))
   hi_h=$(( WIDTH_SEC / 3600 ))
+  # Captured BEFORE the bisection, which mutates hi_h. Slicing off the post-loop
+  # hi_h would cover only the bisection's final probe width, silently answering
+  # a 60-day question with a few days of slices — the truncated short answer
+  # this whole arm exists to replace.
+  width_h=$hi_h
   step=0
   # Heuristic, and honestly so: the curve is non-monotone, so this locates *a*
   # width that still returns at least the known-good count, not necessarily the
@@ -538,7 +550,7 @@ if (( TRUNCATED == 1 )); then
     step=$(( step + 1 ))
   done
   cap_h=$lo_h
-  n_slices=$(( (hi_h + cap_h - 1) / cap_h ))
+  n_slices=$(( (width_h + cap_h - 1) / cap_h ))
   (( n_slices < 1 )) && n_slices=1
 
   if (( n_slices > MAX_SLICES )); then
