@@ -1,36 +1,39 @@
 {
-  "_scenario": "dialect-error-200",
+  "_scenario": "window-size-failure",
   "_synthesized": "EVERY ROW BODY IN THIS FILE IS SYNTHESIZED. Only the ENVELOPE and the field names are taken from the live API. This repository is PUBLIC and the real rows are production log lines from the exposure window of an active GDPR determination (event payloads, step I/O, tenant identifiers, event_user, worker_ip). Committing them would be a disclosure and git makes it permanent, and NO existing gate catches it: the synthesized-fixtures enforcement regex in .github/workflows/secret-scan.yml covers apps/web-platform/test/(fixtures|__synthesized__|__goldens__)/, **/__goldens__/, *.snap and learnings/*.md -- tests/scripts/fixtures/** is OUT OF SCOPE. 'PAT-free by construction' is not the relevant test. Counts, timestamps, ids and messages below are invented and deliberately do NOT restate the measured numbers, which live only in knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md.",
-  "_ref": "pigsfuxruiopinouvjwy",
-  "_note": "Mode A. HTTP 200 with a non-null .error and result:null. The helper must fail CLOSED here -- an .error check deleted turns this into a clean zero -- and the next action must forbid hand-writing a replacement query, because the helper builds the SQL, so a dialect error means the HELPER is stale.",
+  "_ref": "ifsccnjhymdmidffkzhl",
+  "_note": "The WINDOW_SIZE_FAILURE branch, which had no fixture and could therefore be rewritten to FULLY_COVERED with the suite green -- an INCONCLUSIVE verdict exiting 0, this PR's headline failure class. The window query 500s at full width and SUCCEEDS at half (window_retry), which is what tells a WIDTH failure apart from a transient one: retrying the identical request would fail forever, so the helper must name the halves instead of advising a retry. Contrast http-500.json, where the half-width re-issue ALSO fails and the verdict is TRANSIENT_5XX / exit 1. Uses the soleur-web-platform ref so the stub's per-fixture _ref check is exercised against more than one project.",
   "_call_keys": [
     "identity",
     "instrumentation",
-    "window"
+    "window",
+    "window_retry"
   ],
   "_expect": [
     {
       "argv": [
         "--ref",
-        "pigsfuxruiopinouvjwy",
+        "ifsccnjhymdmidffkzhl",
         "--source",
         "postgres_logs",
         "--since",
-        "2026-08-25T00:00:00",
+        "2026-08-05T00:00:00",
         "--until",
         "2026-08-26T00:00:00"
       ],
-      "exit": 2,
+      "exit": 3,
       "verdict": "INCONCLUSIVE",
-      "reason": "DIALECT_ERROR",
+      "reason": "WINDOW_SIZE_FAILURE",
       "require": [
         "rows=UNAVAILABLE",
-        "Do NOT hand-write a replacement query",
-        "File an issue"
+        "SUCCEEDED at half that width",
+        "this is a width failure, not a transient one",
+        "half-width retry of 'window' CLEARED"
       ],
       "calls": [
         "identity",
         "instrumentation",
+        "window",
         "window"
       ],
       "stdout_lines": 1
@@ -39,11 +42,10 @@
   "identity": {
     "code": 200,
     "body": {
-      "id": "pigsfuxruiopinouvjwy",
-      "name": "soleur-synthetic-prd",
+      "id": "ifsccnjhymdmidffkzhl",
+      "name": "soleur-synthetic-app",
       "region": "eu-central-1",
-      "status": "ACTIVE_HEALTHY",
-      "created_at": "2026-01-05T09:14:02Z"
+      "status": "ACTIVE_HEALTHY"
     }
   },
   "instrumentation": {
@@ -51,30 +53,35 @@
     "body": {
       "result": [
         {
-          "source": "supavisor_logs",
-          "instrumentation_c": 9111
-        },
-        {
           "source": "postgres_logs",
           "instrumentation_c": 2044
         },
         {
           "source": "postgrest_logs",
           "instrumentation_c": 133
-        },
-        {
-          "source": "auth_logs",
-          "instrumentation_c": 37
         }
       ],
       "error": null
     }
   },
   "window": {
+    "code": 500,
+    "body": {
+      "message": "Internal Server Error"
+    }
+  },
+  "window_retry": {
     "code": 200,
     "body": {
-      "result": null,
-      "error": "Code: 47. DB::Exception: Unknown expression identifier 'window_lo' in scope SELECT source, count(*) AS window_source_c. (UNKNOWN_IDENTIFIER)"
+      "result": [
+        {
+          "source": "postgres_logs",
+          "window_source_c": 310,
+          "window_lo": "2026-08-15T12:00:00.000000",
+          "window_hi": "2026-08-25T23:00:00.000000"
+        }
+      ],
+      "error": null
     }
   }
 }

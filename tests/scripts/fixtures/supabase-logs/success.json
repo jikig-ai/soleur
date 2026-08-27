@@ -1,6 +1,7 @@
 {
   "_scenario": "success",
   "_synthesized": "EVERY ROW BODY IN THIS FILE IS SYNTHESIZED. Only the ENVELOPE and the field names are taken from the live API. This repository is PUBLIC and the real rows are production log lines from the exposure window of an active GDPR determination (event payloads, step I/O, tenant identifiers, event_user, worker_ip). Committing them would be a disclosure and git makes it permanent, and NO existing gate catches it: the synthesized-fixtures enforcement regex in .github/workflows/secret-scan.yml covers apps/web-platform/test/(fixtures|__synthesized__|__goldens__)/, **/__goldens__/, *.snap and learnings/*.md -- tests/scripts/fixtures/** is OUT OF SCOPE. 'PAT-free by construction' is not the relevant test. Counts, timestamps, ids and messages below are invented and deliberately do NOT restate the measured numbers, which live only in knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md.",
+  "_ref": "pigsfuxruiopinouvjwy",
   "_note": "The canonical covered answer. Pins that a count is only ever rendered together with the resolved project identity and a covered_window that is a subset of the requested window, and that a 1-day window does not fire the monotonicity probe (there is no strictly narrower sub-window to compare).",
   "_call_keys": [
     "identity",
@@ -11,6 +12,8 @@
   "_expect": [
     {
       "argv": [
+        "--ref",
+        "pigsfuxruiopinouvjwy",
         "--source",
         "postgres_logs",
         "--since",
@@ -35,7 +38,7 @@
         "window",
         "rows"
       ],
-      "stdout_lines": 3,
+      "stdout_lines": 4,
       "stdout_ascending": true
     }
   ],

@@ -52,12 +52,12 @@ _SUPABASE_LOGS_VERDICT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # rational) rather than 0 — an unknown reason must never read as success.
 verdict_exit_code() {
   case "${1:-}" in
-    FULLY_COVERED|ZERO_WITH_FULL_COVERAGE|TRUNCATED_AUTONARROWED) printf '0' ;;
+    FULLY_COVERED|TRUNCATED_AUTONARROWED)                         printf '0' ;;
     TRANSIENT_5XX)                                                printf '1' ;;
     CONFIG_ERROR|AUTH_ERROR|DIALECT_ERROR|MALFORMED_RESULT)       printf '2' ;;
     UNKNOWN_SOURCE|UNINSTRUMENTED|PARTIAL_COVERAGE| \
     WINDOW_PREDATES_RETENTION|WINDOW_SIZE_FAILURE| \
-    TRUNCATION_UNRESOLVED)                                        printf '3' ;;
+    TRUNCATION_UNRESOLVED|ZERO_SOURCE_COVERAGE_UNESTABLISHED)     printf '3' ;;
     *)                                                            printf '2' ;;
   esac
 }
@@ -103,7 +103,9 @@ coverage_classify() {
 # is precisely the separation this contract forbids.
 #
 # Human mode writes the block to STDERR so STDOUT stays pipeable (the log rows
-# are the stdout payload). --json writes ONE OBJECT to stdout instead.
+# are the stdout payload), plus ONE `verdict=... reason=...` line on stdout so a
+# caller that redirects stdout to a file does not end up with an empty file and
+# exit 0. --json writes ONE OBJECT to stdout instead.
 # ---------------------------------------------------------------------------
 
 # rows= is never a bare number for a FAILED query. A query that did not return
@@ -153,6 +155,19 @@ next_action=$(_field "${V_NEXT:-}")
 === end evidence block (exit ${code}) ===
 BLOCK
   } | scrub_pat >&2
+  # ONE verdict line on STDOUT as well, and the block still owns stderr.
+  #
+  # Human mode routes the whole block to stderr so stdout stays pipeable, which
+  # meant `helper --source X > f` produced an EMPTY f and exit 0 whenever the
+  # source was quiet — a reader of f sees a file with nothing wrong in it. The
+  # redirect is the common shape (an agent capturing output to read later), and
+  # it silently discarded the entire caveat. The line is deliberately the two
+  # fields that cannot be misread apart: the top-line token and the reason.
+  #
+  # Not the whole block: duplicating rows= onto stdout would put a second,
+  # quotable copy of the count somewhere the block does not enclose, which is the
+  # separation this lib exists to prevent. rows stays stderr-only.
+  printf 'verdict=%s reason=%s\n' "$verdict" "$reason" | scrub_pat
 }
 
 emit_evidence_json() {

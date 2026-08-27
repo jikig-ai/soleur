@@ -1,6 +1,7 @@
 {
   "_scenario": "typo-source-zero",
   "_synthesized": "EVERY ROW BODY IN THIS FILE IS SYNTHESIZED. Only the ENVELOPE and the field names are taken from the live API. This repository is PUBLIC and the real rows are production log lines from the exposure window of an active GDPR determination (event payloads, step I/O, tenant identifiers, event_user, worker_ip). Committing them would be a disclosure and git makes it permanent, and NO existing gate catches it: the synthesized-fixtures enforcement regex in .github/workflows/secret-scan.yml covers apps/web-platform/test/(fixtures|__synthesized__|__goldens__)/, **/__goldens__/, *.snap and learnings/*.md -- tests/scripts/fixtures/** is OUT OF SCOPE. 'PAT-free by construction' is not the relevant test. Counts, timestamps, ids and messages below are invented and deliberately do NOT restate the measured numbers, which live only in knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md.",
+  "_ref": "pigsfuxruiopinouvjwy",
   "_note": "TWO runs against one envelope set, because finding B and finding E are the two ways a source name yields a clean zero and they have DIFFERENT next actions. Run 1: a typo'd source matches nothing. Run 2: edge_logs is a real, documented source that is absent from the pinned-span enumeration -- its zero is evidence about INSTRUMENTATION, not traffic -- and the helper must also ROUTE, naming the sources that do carry rows over this window. Neither run may report a row count.",
   "_call_keys": [
     "identity",
@@ -10,6 +11,8 @@
   "_expect": [
     {
       "argv": [
+        "--ref",
+        "pigsfuxruiopinouvjwy",
         "--source",
         "postgres_logsss",
         "--since",
@@ -30,10 +33,12 @@
         "instrumentation",
         "window"
       ],
-      "stdout_lines": 0
+      "stdout_lines": 1
     },
     {
       "argv": [
+        "--ref",
+        "pigsfuxruiopinouvjwy",
         "--source",
         "edge_logs",
         "--since",
@@ -55,7 +60,7 @@
         "instrumentation",
         "window"
       ],
-      "stdout_lines": 0
+      "stdout_lines": 1
     }
   ],
   "identity": {

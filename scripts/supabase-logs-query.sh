@@ -22,7 +22,10 @@
 #
 # USAGE
 #   doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh \
-#       --source postgres_logs --since 24h
+#       --ref ifsccnjhymdmidffkzhl --source postgres_logs --since 24h
+#
+# --ref is REQUIRED and has no default (see below). ifsccnjhymdmidffkzhl is
+# soleur-web-platform, the application project that holds user data.
 #
 # See --help for flags and the exit-code table.
 #
@@ -33,6 +36,15 @@
 # by the deprecation-assembly guard. Testability comes from stubbing the curl
 # BINARY on PATH (see tests/scripts/test-supabase-logs-query.sh), which costs
 # production nothing. Same reasoning, same shape as scripts/supabase-advisor-scan.sh.
+#
+# A pinned URL is NOT on its own enough to pin the DESTINATION: curl honours
+# https_proxy / HTTPS_PROXY / ALL_PROXY / all_proxy from the environment and
+# reads ~/.curlrc before it reads argv, so either could route this PAT-bearing
+# request through a host of someone else's choosing without touching a line of
+# this script. Both curl invocations below therefore pass `--disable` (skip
+# .curlrc; it must be the FIRST argument to take effect) and `--noproxy '*'`
+# (ignore every proxy env var). Without those two flags the paragraph above
+# would be describing a pin the process does not actually have.
 #
 # CLICKHOUSE DIALECT — DO NOT INVENT THE IDIOMS
 # =============================================
@@ -69,10 +81,31 @@ API="https://api.supabase.com" # pinned — NO env override (see header)
 
 # Finding F: a format-valid WRONG ref passes every other check in this script
 # and prints COVERED over another project's data — the one failure nothing else
-# catches. Defaulting to the pinned prd literal makes the common case a
-# guard-covered constant, and the resolved ref + project NAME are echoed on
-# every output path so a wrong ref is visible in the evidence itself.
-DEFAULT_REF="pigsfuxruiopinouvjwy"
+# catches.
+#
+# THERE IS DELIBERATELY NO DEFAULT REF, AND THERE USED TO BE.
+# ==========================================================
+# This block previously defaulted --ref to pigsfuxruiopinouvjwy and called that
+# the mitigation for finding F. It was the defect. That ref is
+# soleur-inngest-prd, the Inngest BACKING project; the application project that
+# holds user data is ifsccnjhymdmidffkzhl (soleur-web-platform). Every caller
+# that invoked with no --ref — the DSAR runbooks and the breach runbook among
+# them — therefore asked "what data do you have on this person" of a project
+# that never held the data, and got a clean rows=0 with verdict=COVERED. That is
+# finding F's exact failure, produced BY the thing named as its mitigation.
+#
+# A default is a silent assumption sitting in the one place this whole tool
+# exists to make assumptions explicit, so the fix removes machinery rather than
+# adding it: --ref is REQUIRED, the known refs are named in the error, and the
+# caller picks deliberately. The resolved ref + project NAME are still echoed on
+# every output path, so a wrong ref that IS passed stays visible in the evidence.
+#
+# Named here (and in --help) rather than defaulted-to, so that choosing between
+# them is an act:
+#   ifsccnjhymdmidffkzhl  soleur-web-platform  — the APPLICATION project: user
+#                         data, DSAR/access questions, PostgREST and auth logs
+#   pigsfuxruiopinouvjwy  soleur-inngest-prd   — the Inngest BACKING project;
+#                         the subject of the 2026-06-29 RLS determination
 
 # Pinned instrumentation span. MUST stay pinned and cited: an unbounded "full
 # retained span" enumeration is exactly the wide window that returns 0 for every
@@ -94,6 +127,14 @@ BISECT_MAX_STEPS=5
 MAX_SLICES=32
 DEFAULT_LIMIT=100
 
+# The bounded --limit is the DATA-MINIMISATION control (see the header), so it
+# needs a ceiling or it is not a bound at all: `--limit 500000` would dump half a
+# million production log lines into an agent transcript while the header claims
+# the limit is what keeps that from happening. The tail is a SAMPLE for reading;
+# a question that needs more rows than this wants a narrower window, not a bigger
+# limit, and the count (which is never --limit-bound) already answers "how many".
+MAX_LIMIT=1000
+
 # The vendor's documented `source` enumeration. Used ONLY to tell a TYPO
 # (finding B — `postgres_logsss`) apart from a real source that is
 # UNINSTRUMENTED on this project (finding E — `edge_logs`), because those two
@@ -113,16 +154,29 @@ usage() {
   cat <<'HELP'
 supabase-logs-query.sh — Supabase project logs with an inseparable coverage verdict.
 
-  scripts/supabase-logs-query.sh [--ref REF] [--source NAME]... [--since W]
+  scripts/supabase-logs-query.sh --ref REF [--source NAME]... [--since W]
                                  [--until W] [--limit N] [--json] [--help]
 
-  --ref REF       project ref, 20 lowercase alnum chars (default: pinned prd ref)
+  --ref REF       REQUIRED. project ref, 20 lowercase alnum chars. No default —
+                  see KNOWN PROJECT REFS below.
   --source NAME   log source, repeatable; omit for all sources
   --since W       Nm|Nh|Nd relative, or an ISO timestamp (default 24h)
   --until W       Nm|Nh|Nd relative, or an ISO timestamp (default now)
-  --limit N       max log lines returned; 0 to skip the tail (default 100)
+  --limit N       max log lines returned; 0 to skip the tail (default 100, max 1000)
   --json          emit ONE JSON object on stdout instead of the human block
   --help          this text
+
+KNOWN PROJECT REFS — pick deliberately; --ref has NO DEFAULT on purpose
+  ifsccnjhymdmidffkzhl  soleur-web-platform  the APPLICATION project. User data
+                        lives here, so DSAR / "what do you hold on me" / access
+                        questions and PostgREST+auth logs are THIS ref.
+  pigsfuxruiopinouvjwy  soleur-inngest-prd   the Inngest BACKING project; the
+                        subject of the 2026-06-29 RLS determination.
+
+  A default used to exist and pointed at the SECOND one, so every DSAR that
+  invoked without --ref queried a project that never held the data and came back
+  rows=0 / COVERED. Asking the wrong project is indistinguishable from a real
+  zero, which is why the choice is now yours to make out loud.
 
 EXIT CODES — the verdict is bound to $?, not merely printed
   0  COVERED                    window covered, count trustworthy
@@ -139,7 +193,10 @@ EXIT CODES — the verdict is bound to $?, not merely printed
   a config problem and go hunting in Doppler.
 
 OUTPUT
-  Human mode: log lines on stdout (pipeable), the evidence block on stderr.
+  Human mode: log lines on stdout (pipeable), then ONE `verdict=... reason=...`
+              line on stdout; the full evidence block on stderr. The stdout
+              verdict line exists so `helper --source X > f` cannot leave f
+              empty with exit 0 — the count itself stays inside the block.
   --json:     ONE object {verdict, reason, ref, project, coverage, sources,
               rows, next_action, exit_code, sample} on stdout. Never a bare
               array — the machine path carries the verdict or "no bare zero"
@@ -161,11 +218,17 @@ while [[ $# -gt 0 ]]; do
     --limit)  LIMIT="${2:-}"; shift 2 ;;
     --json)   JSON_MODE=1; shift ;;
     --help|-h) usage; exit 0 ;;
-    *) printf 'supabase-logs-query.sh: unknown flag: %s\n' "$1" >&2; usage >&2; exit 64 ;;
+    # scrub_pat, not a bare printf. This is the ONE print site in the helper
+    # that predates emit_and_exit (the flags are not parsed yet, so there is no
+    # verdict to render) and it echoes an ATTACKER-CHOSEN argv word back out. A
+    # mistyped `doppler run ... -- script "$SUPABASE_ACCESS_TOKEN"` lands the
+    # cloud-admin PAT here verbatim; strip_log_injection additionally stops the
+    # same word forging a `verdict=COVERED` line of its own.
+    *) printf 'supabase-logs-query.sh: unknown flag: %s' "$1" | strip_log_injection | scrub_pat >&2
+       printf '\n' >&2; usage >&2; exit 64 ;;
   esac
 done
 
-REF="${REF:-$DEFAULT_REF}"
 V_REF="$REF"
 V_PROJECT="(unresolved)"
 if (( ${#SOURCES[@]} > 0 )); then
@@ -176,11 +239,20 @@ fi
 
 fail_now() { V_REASON="$1"; V_NEXT="$2"; emit_and_exit; }
 
+# --ref is REQUIRED. See the DEFAULT-REF block near the top for why there is no
+# fallback: the fallback WAS the wrong-project bug it claimed to prevent.
+if [[ -z "$REF" ]]; then
+  fail_now CONFIG_ERROR \
+    "--ref is REQUIRED and has no default. Naming the project is the point: a format-valid ref for the WRONG project returns a clean rows=0 with verdict=COVERED, and nothing downstream can tell that from a real zero. Pick deliberately — ifsccnjhymdmidffkzhl = soleur-web-platform, the APPLICATION project (user data; DSAR / 'what do you hold on me' / PostgREST + auth access questions go here); pigsfuxruiopinouvjwy = soleur-inngest-prd, the Inngest BACKING project (the 2026-06-29 RLS determination's subject). A default used to exist and pointed at the Inngest project, which is why callers that omitted --ref were answering data-subject questions from a project that never held the data."
+fi
+
 [[ "$REF" =~ ^[a-z0-9]{20}$ ]] || fail_now CONFIG_ERROR \
   "--ref '${REF}' is not a project ref (expected 20 lowercase alphanumerics). A malformed ref cannot be resolved to a project name, and an UNVERIFIED ref is how a COVERED verdict gets printed over the wrong project's data."
 
 [[ "$LIMIT" =~ ^[0-9]+$ ]] || fail_now CONFIG_ERROR \
   "--limit '${LIMIT}' is not a non-negative integer."
+(( 10#$LIMIT <= MAX_LIMIT )) || fail_now CONFIG_ERROR \
+  "--limit '${LIMIT}' exceeds the ${MAX_LIMIT}-line ceiling. The tail is a SAMPLE, and the bounded limit is this helper's only real data-minimisation control (stdout lands in an agent transcript), so an unbounded limit would dump production log lines — GDPR-relevant ones — into it wholesale. The count is never --limit-bound, so it already answers 'how many'; if you need to READ more than ${MAX_LIMIT} lines, narrow --since/--until and run the window in parts."
 
 for s in ${SOURCES[@]+"${SOURCES[@]}"}; do
   [[ "$s" =~ ^[a-z0-9_]+$ ]] || fail_now CONFIG_ERROR \
@@ -217,7 +289,10 @@ to_epoch() {
   local w="$1"
   if [[ "$w" =~ ^([0-9]+)([mhd])$ ]]; then
     local n="${BASH_REMATCH[1]}" u="${BASH_REMATCH[2]}" secs
-    case "$u" in m) secs=$((n * 60)) ;; h) secs=$((n * 3600)) ;; d) secs=$((n * 86400)) ;; esac
+    # 10# forces base-10. Without it `--since 08h`/`09m` are parsed as OCTAL by
+    # $(( )), fail with "value too great for base", leave secs unset, and the
+    # caller misreads a working syntax as a bad one.
+    case "$u" in m) secs=$((10#$n * 60)) ;; h) secs=$((10#$n * 3600)) ;; d) secs=$((10#$n * 86400)) ;; esac
     printf '%s' "$(( NOW_EPOCH - secs ))"
     return 0
   fi
@@ -245,7 +320,7 @@ WIDTH_SEC=$(( END_EPOCH - START_EPOCH ))
 # ---------------------------------------------------------------------------
 api_get() {
   printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" |
-    curl --silent --show-error --max-time 30 \
+    curl --disable --noproxy '*' --silent --show-error --max-time 30 \
       --header @- \
       --write-out $'\n%{http_code}' --url "$1" 2>/dev/null
 }
@@ -259,13 +334,19 @@ api_get() {
 # divergence is from the VENDOR'S OWN SPEC, not merely from our plan — which is
 # why a reader who checks the docs and concludes the bounds are optional will be
 # wrong. Never construct a request without both. (Evidence file, finding G.)
+#
+# THE ASSERTION FOR THIS LIVES IN run_query, NOT HERE, AND IT USED TO LIVE HERE.
+# api_logs is only ever invoked as `raw="$(api_logs ...)"`. A `fail_now` inside a
+# command substitution renders the evidence block into the SUBSHELL'S STDOUT and
+# exits only the subshell, so the caller carried on with raw="" — or, in --json
+# mode, with the evidence OBJECT captured into $raw and then parsed as an HTTP
+# body. The guard therefore has to sit where it can actually terminate the
+# process, which is any caller not running inside a substitution. See
+# assert_iso_bounds below; emit_and_exit stays the sole exit path either way.
 api_logs() {
   local sql="$1" start_iso="$2" end_iso="$3"
-  if [[ -z "$start_iso" || -z "$end_iso" ]]; then
-    fail_now CONFIG_ERROR "internal: a logs request was constructed without both iso bounds — see finding G in the evidence file; the replacement endpoint answers that with a deterministic 200 Backend error."
-  fi
   printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" |
-    curl --silent --show-error --max-time 60 --get \
+    curl --disable --noproxy '*' --silent --show-error --max-time 60 --get \
       --header @- \
       --data-urlencode "sql=${sql}" \
       --data-urlencode "iso_timestamp_start=${start_iso}" \
@@ -298,17 +379,41 @@ source_predicate() {
 #   clears on narrowing -> a WIDTH failure, named as such, slices offered (exit 3)
 # Sets Q_RESULT (the parsed `.result` array) on success.
 # ---------------------------------------------------------------------------
+
+# Finding G's guard, hoisted OUT of api_logs. Called only from run_query, which
+# is never itself run inside a command substitution, so fail_now here reaches
+# emit_and_exit in THIS process and the exit code lands in the caller's $?.
+assert_iso_bounds() {
+  local label="$1" start_iso="$2" end_iso="$3"
+  if [[ -z "$start_iso" || -z "$end_iso" ]]; then
+    fail_now CONFIG_ERROR "internal: the '${label}' logs request was constructed without both iso bounds (start='${start_iso}' end='${end_iso}') — see finding G in the evidence file; the replacement endpoint answers that with a deterministic 200 Backend error, which would then be misread as a dialect failure."
+  fi
+}
+
 Q_RESULT=""
 run_query() {
   local label="$1" sql="$2" s_iso="$3" e_iso="$4" s_epoch="$5" e_epoch="$6"
   local raw code body err result
+  assert_iso_bounds "$label" "$s_iso" "$e_iso"
   raw="$(api_logs "$sql" "$s_iso" "$e_iso")"
   code="$(http_code "$raw")"; body="$(http_body "$raw")"
+
+  # curl writes %{http_code}=000 when it never got an HTTP response at all: DNS
+  # failure, TLS failure, connect refused, --max-time exceeded. `000` does not
+  # match ^5, so before this branch existed it fell through to the CONFIG_ERROR
+  # arm below and was reported as exit 2 — "retry is NOT rational" — for the one
+  # class where retry is the whole remedy, and where the exit-code table already
+  # promises exit 1 covers network failure. Not narrowed first: halving the
+  # window does not fix a name that will not resolve.
+  if [[ "$code" == "000" ]]; then
+    fail_now TRANSIENT_5XX       "The '${label}' query never received an HTTP response (curl reported 000: DNS, TLS, connection or the 60s timeout). This is a NETWORK failure, not an answer about the logs and not a bad ref — nothing about coverage can be concluded from it. Retry the identical invocation; if it persists, check egress from this host before touching the query."
+  fi
 
   if [[ "$code" =~ ^5 ]] || printf '%s' "$body" | grep -qF 'Backend error!'; then
     local half_start half_start_iso raw2 code2 body2
     half_start=$(( e_epoch - (e_epoch - s_epoch) / 2 ))
     half_start_iso="$(to_iso "$half_start")"
+    assert_iso_bounds "${label} (half-width re-issue)" "$half_start_iso" "$e_iso"
     raw2="$(api_logs "$sql" "$half_start_iso" "$e_iso")"
     code2="$(http_code "$raw2")"; body2="$(http_body "$raw2")"
     if [[ "$code2" == "200" ]] && ! printf '%s' "$body2" | grep -qF 'Backend error!'; then
@@ -410,6 +515,12 @@ sources_json_array() {
 # ---------------------------------------------------------------------------
 ID_RAW="$(api_get "${API}/v1/projects/${REF}")"
 ID_CODE="$(http_code "$ID_RAW")"; ID_BODY="$(http_body "$ID_RAW")"
+# Same 000 class as in run_query: no HTTP response at all is a transient network
+# failure (exit 1), not the "ref does not resolve" CONFIG_ERROR the fall-through
+# below would have called it.
+if [[ "$ID_CODE" == "000" ]]; then
+  fail_now TRANSIENT_5XX "Resolving ref ${REF} never received an HTTP response (curl reported 000: DNS, TLS, connection or the 30s timeout). The ref was never checked, so this says NOTHING about whether it is right. Retry the identical invocation; if it persists, check egress from this host."
+fi
 if [[ "$ID_CODE" == "401" || "$ID_CODE" == "403" ]]; then
   fail_now AUTH_ERROR "The PAT was rejected (HTTP ${ID_CODE}) resolving ref ${REF}. Re-run wrapped in \`doppler run -p soleur -c prd --\`; if it already was, rotate the PAT. This says NOTHING about the logs."
 fi
@@ -454,6 +565,34 @@ recompute() {
   V_WINDOW_LINE="$(printf '%s' "$WINDOW_AGG" | jq -r 'if length == 0 then "(no rows for ANY source in this window)" else ([ .[] | "\(.source)=\(.c)" ] | join(" ")) end')"
 }
 recompute
+
+# THE PER-SOURCE TABLE, COMPUTED AT RUNG 3 AND NOT AT RUNG 6.
+#
+# This used to be computed at Rung 6 only, which meant every failure that fires
+# BEFORE Rung 6 — UNINSTRUMENTED and UNKNOWN_SOURCE at Rung 4, i.e. the two
+# verdicts whose entire content is "which source should you have asked instead"
+# — emitted `sources: []` on the --json path. That is the exact path the breach
+# runbook prescribes --json for, so the machine consumer got an empty array
+# precisely where the human block got its most useful line. Both inputs
+# (INSTR_AGG from Rung 2, WINDOW_AGG from Rung 3) are populated by here, so
+# there was never a reason to wait.
+#
+# Called again after the auto-narrow arm, which REPLACES WINDOW_AGG with the
+# unioned slices: the table must describe the counts the verdict was actually
+# computed from.
+compute_sources_json() {
+  V_SOURCES_JSON="$(printf '%s\n%s\n%s' "$INSTR_AGG" "$WINDOW_AGG" "$WANT_JSON" | jq -sc '
+    . as [$instr, $win, $want] |
+    ([ $instr[].source ] + [ $win[].source ] + $want | unique) |
+    [ .[] as $s |
+      { source: $s,
+        instrumentation_count: (([ $instr[] | select(.source == $s) | .c ] | add) // 0),
+        window_count: (([ $win[] | select(.source == $s) | .c ] | add) // 0),
+        status: (if (([ $instr[] | select(.source == $s) | .c ] | add) // 0) > 0
+                 then "INSTRUMENTED" else "UNINSTRUMENTED" end),
+        requested: (($want | length) == 0 or ($want | index($s)) != null) } ]')"
+}
+compute_sources_json
 
 # ---------------------------------------------------------------------------
 # Rung 4 — source validation, now that both the pinned-span set and the
@@ -594,16 +733,8 @@ all_lo_epoch=""; all_hi_epoch=""
 V_COV_CLASS="$(coverage_classify "$all_lo_epoch" "$all_hi_epoch" "$START_EPOCH" "$END_EPOCH" "$COVERAGE_EDGE_TOLERANCE_SEC")"
 V_COV_START="${REQ_LO_ISO:-$ALL_LO_ISO}"; V_COV_END="${REQ_HI_ISO:-$ALL_HI_ISO}"
 
-V_SOURCES_JSON="$(printf '%s\n%s\n%s' "$INSTR_AGG" "$WINDOW_AGG" "$WANT_JSON" | jq -sc '
-  . as [$instr, $win, $want] |
-  ([ $instr[].source ] + [ $win[].source ] + $want | unique) |
-  [ .[] as $s |
-    { source: $s,
-      instrumentation_count: (([ $instr[] | select(.source == $s) | .c ] | add) // 0),
-      window_count: (([ $win[] | select(.source == $s) | .c ] | add) // 0),
-      status: (if (([ $instr[] | select(.source == $s) | .c ] | add) // 0) > 0
-               then "INSTRUMENTED" else "UNINSTRUMENTED" end),
-      requested: (($want | length) == 0 or ($want | index($s)) != null) } ]')"
+# Recomputed here because the auto-narrow arm may have REPLACED WINDOW_AGG.
+compute_sources_json
 
 case "$V_COV_CLASS" in
   NONE)
@@ -647,8 +778,29 @@ if (( TRUNCATED == 1 )); then
   V_REASON="TRUNCATED_AUTONARROWED"
   V_NEXT="The single-shot query over this window was TRUNCATED by the endpoint's undocumented width cap; the count above is the UNION of the slices listed in slices=, which is the trustworthy one. The vendor's documented 24h validation error does not fire (see the evidence file), so nothing server-side would have told you. No row tail is returned on this path — re-run one slice to read lines."
 elif (( REQ_COUNT == 0 )); then
-  V_REASON="ZERO_WITH_FULL_COVERAGE"
-  V_NEXT="This is a REAL zero: the requested source is instrumented (see instrumentation=) and the project has rows spanning the whole window (see covered_window=), so the absence is the absence of events, not of records. Safe to quote — quote it WITH this block."
+  # A ZERO FOR A REQUESTED SOURCE IS NEVER SELF-CERTIFYING, AND THIS BRANCH USED TO SAY IT WAS.
+  #
+  # It previously read ZERO_WITH_FULL_COVERAGE -> exit 0 -> "Safe to quote", on the strength of
+  # two facts that do not add up to the conclusion:
+  #   - the project has rows spanning the window (V_COV_CLASS=FULL). That is computed from the
+  #     PROJECT-WIDE span across every source, so it establishes that the WINDOW is retained. It
+  #     says nothing about the requested source.
+  #   - the requested source is instrumented (Rung 4). That is measured over a TRAILING
+  #     INSTRUMENTATION_SPAN_DAYS window ending NOW, not over the requested window, so a source
+  #     switched on last week satisfies it for a window last quarter.
+  #
+  # So a query for one quiet source, on a project where a NOISY sibling spans the window,
+  # returned COVERED/exit 0 and told the reader the absence was the absence of events. That is
+  # the 2026-06-29 fact pattern exactly -- edge_logs read as "no access" when it was simply not
+  # recording -- i.e. the false all-clear this whole helper exists to make impossible,
+  # re-entering through the helper's own success path.
+  #
+  # There is no cheap repair, because the missing evidence genuinely was never collected: to
+  # certify a per-source zero you need proof the source was recording DURING the window, and a
+  # source that emitted nothing in the window has by construction supplied none. Rather than
+  # infer it from a sibling's rows, say so and name what would establish it. Exit 3.
+  V_REASON="ZERO_SOURCE_COVERAGE_UNESTABLISHED"
+  V_NEXT="The requested source returned NO row in this window, so nothing here establishes it was recording during it. The window itself IS retained (other sources on ${V_PROJECT} carry rows across it, see covered_window=), and the source is instrumented over the trailing ${INSTRUMENTATION_SPAN_DAYS}d (see instrumentation=) — but neither fact is about this source during THIS window, so the zero cannot be quoted as an absence of events. To establish it: widen --since/--until until this source returns its nearest rows on both sides of the window (rows bracketing it prove it was live across it), or put the question to a source that DOES carry rows here (see in_window_by_source=). If neither is possible, the honest answer is that this surface cannot answer it."
 else
   V_REASON="FULLY_COVERED"
   V_NEXT="Count and window agree; the requested source is instrumented and the window is inside the retained span. Quote the count WITH this block, never on its own."

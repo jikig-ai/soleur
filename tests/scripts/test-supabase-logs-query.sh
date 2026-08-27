@@ -33,7 +33,14 @@
 #   - exits 99 on an unrecognized URL or SQL shape, rather than falling through
 #     to some other fixture's well-formed 200;
 #   - exits 66 on a key the fixture does not define, so the fixture set pins the
-#     CALL SEQUENCE and not merely the answers.
+#     CALL SEQUENCE and not merely the answers;
+#   - exits 67 if the `rows` SQL is not the NESTED newest-N subquery. Flattening
+#     that subquery silently changes which rows --limit selects, and a stub that
+#     answers any SQL identically would replay the same fixture rows either way;
+#   - exits 68 if the project ref in the URL is not the fixture's own `_ref`.
+#     Without this the fake answers for ANY project, so the helper could query
+#     the wrong ref -- finding F, the failure this tool exists for -- and every
+#     assertion above would still pass.
 #
 # SUITE CONSTRAINTS -- documented repo defect classes, all load-bearing:
 #   - TMPDIR defaults to /var/tmp; /tmp here is a shared 4 GiB tmpfs.
@@ -57,8 +64,9 @@ FIXDIR="$REPO_ROOT/tests/scripts/fixtures/supabase-logs"
 FAKE_PAT='sbp_synthetic000000000000000000000000000000'
 
 fails=0
-pass() { printf '  ok   %s\n' "$1"; }
-fail() { printf '  FAIL %s\n       %s\n' "$1" "${2:-}"; fails=$((fails + 1)); }
+passes=0
+pass() { printf '  ok   %s\n' "${1:-}"; passes=$((passes + 1)); }
+fail() { printf '  FAIL %s\n       %s\n' "${1:-}" "${2:-}"; fails=$((fails + 1)); }
 setup() { "$@" || { printf 'SETUP FAILED (exit %d): %s\n' "$?" "$*" >&2; exit 2; }; }
 
 for f in "$SCRIPT" "$LIB"; do
@@ -133,6 +141,30 @@ case "$url" in
   *"/v1/projects/"*) key=identity ;;
   *) printf 'STUB: unrecognized url: %s\n' "$url" >&2; exit 99 ;;
 esac
+
+# The tail SQL must be the nested newest-N-presented-oldest-first subquery. An
+# INNER `order by ... desc limit n` picks WHICH rows survive; the outer select
+# only reorders them for reading. Flattened, --limit starts describing a
+# different window -- and a stub keyed on the alias alone cannot tell.
+if [[ "$key" == "rows" ]]; then
+  case "$sql" in
+    *"from (select "*"order by "*" desc limit "*) ;;
+    *) printf 'STUB: rows sql is not the nested newest-N subquery: %s\n' "$sql" >&2; exit 67 ;;
+  esac
+fi
+
+# The URL's project ref must be the one this fixture speaks for. Checked AFTER
+# the finding-G bounds check so a bounds-less request still reports 64.
+url_ref="${url#*/v1/projects/}"; url_ref="${url_ref%%/*}"
+want_ref="$(jq -r '._ref // ""' "$FIXTURE" 2>/dev/null)"
+if [[ -z "$want_ref" ]]; then
+  printf 'STUB: fixture %s declares no _ref, so the project it answers for is unpinned\n' "$FIXTURE" >&2
+  exit 68
+fi
+if [[ "$url_ref" != "$want_ref" ]]; then
+  printf 'STUB: request targets project %s but this fixture answers for %s\n' "$url_ref" "$want_ref" >&2
+  exit 68
+fi
 
 # Per-key call counter. A second call with the same key is the half-width
 # re-issue; a fixture that wants a DIFFERENT answer there defines <key>_retry.
@@ -265,7 +297,10 @@ check_fixture_run() {
   fi
   if [[ "$(jq -r '.stdout_ascending // false' <<<"$run")" == "true" ]]; then
     local ts sorted
-    ts="$(jq -r '.row_ts' "$WORK/stdout" 2>/dev/null)"
+    # Only the JSON row lines. Human mode also prints a trailing
+    # `verdict=... reason=...` line on stdout (so a redirect cannot yield an
+    # empty file), which is not JSON and would abort jq mid-stream.
+    ts="$(grep -E '^\{' "$WORK/stdout" | jq -r '.row_ts' 2>/dev/null)"
     sorted="$(printf '%s\n' "$ts" | sort)"
     if [[ "$ts" != "$sorted" ]]; then
       fail "$label tail ordering" "rows are not oldest-first; the nested newest-N subquery is what produces that"
@@ -350,8 +385,11 @@ sweep_dir() {
 
 echo "== Fixture sweep (quantified over the directory) =="
 sweep_dir "$FIXDIR"
-if (( SWEPT < 9 )); then
-  fail "fixture count" "expected at least 9 fixtures, found $SWEPT — the missing ones are uncovered paths"
+# The floor is the CURRENT population, not a round number: a floor left trailing
+# what it guards lets the newest fixture be deleted unnoticed. `<`, never `!=`,
+# so ADDING a fixture stays free.
+if (( SWEPT < 11 )); then
+  fail "fixture count" "expected at least 11 fixtures, found $SWEPT — the missing ones are uncovered paths"
 else
   pass "swept $SWEPT fixtures"
 fi
@@ -371,13 +409,15 @@ setup tee "$WORK/extra/row11-noncanonical-success.json" >/dev/null <<'FX11'
 {
   "_scenario": "row11-noncanonical-success",
   "_synthesized": "Synthesized. Matrix row 11: the must-PASS non-canonical control.",
+  "_ref": "pigsfuxruiopinouvjwy",
   "_expect": [
-    { "argv": ["--source", "postgres_logs", "--since", "2026-08-25T00:00:00",
+    { "argv": ["--ref", "pigsfuxruiopinouvjwy", "--source", "postgres_logs",
+               "--since", "2026-08-25T00:00:00",
                "--until", "2026-08-26T00:00:00", "--limit", "2"],
       "exit": 0, "verdict": "COVERED", "reason": "FULLY_COVERED",
       "require": ["rows=77"],
       "calls": ["identity", "instrumentation", "window", "rows"],
-      "stdout_lines": 2, "stdout_ascending": true }
+      "stdout_lines": 3, "stdout_ascending": true }
   ],
   "identity": { "code": 200,
     "body": { "id": "pigsfuxruiopinouvjwy", "name": "soleur-synthetic-prd",
@@ -404,13 +444,15 @@ setup tee "$WORK/extra/row12-narrow-but-old.json" >/dev/null <<'FX12'
 {
   "_scenario": "row12-narrow-but-old",
   "_synthesized": "Synthesized. Matrix row 12: the monotonicity false-POSITIVE control.",
+  "_ref": "pigsfuxruiopinouvjwy",
   "_expect": [
-    { "argv": ["--source", "postgres_logs", "--since", "2026-07-01T00:00:00",
+    { "argv": ["--ref", "pigsfuxruiopinouvjwy", "--source", "postgres_logs",
+               "--since", "2026-07-01T00:00:00",
                "--until", "2026-07-13T00:00:00", "--limit", "1"],
       "exit": 0, "verdict": "COVERED", "reason": "FULLY_COVERED",
       "require": ["rows=900", "probe fired and PASSED", "window=900 >= last-7d sub-window=120"],
       "calls": ["identity", "instrumentation", "window", "probe", "rows"],
-      "stdout_lines": 1 }
+      "stdout_lines": 2 }
   ],
   "identity": { "code": 200,
     "body": { "id": "pigsfuxruiopinouvjwy", "name": "soleur-synthetic-prd" } },
@@ -440,10 +482,17 @@ fi
 # ---------------------------------------------------------------------------
 echo "== Seam self-checks =="
 
+# ONE literal for the logs URL, reused by every self-check below. Kept as a
+# single occurrence deliberately: this file is inside the deprecation-assembly
+# guard's census (a host token immediately followed by /v1/projects/), so a
+# second inline copy would silently move that highwater number.
+STUB_LOGS_URL='https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/analytics/endpoints/logs'
+STUB_ID_URL="${STUB_LOGS_URL%/analytics/endpoints/logs}"
+
 STUB_STATE="$WORK/state" STUB_LOG="$WORK/calls.log" FIXTURE="$FIXDIR/success.json" \
   "$WORK/bin/curl" --silent --show-error --max-time 60 --get --header @- \
   --data-urlencode 'sql=select source, count(*) as window_source_c from logs group by source' \
-  --write-out x --url 'https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/analytics/endpoints/logs' \
+  --write-out x --url "$STUB_LOGS_URL" \
   >/dev/null 2>&1 </dev/null
 if [[ "$?" -eq 64 ]]; then
   pass "the fake REJECTS a logs request with no iso bounds (finding G is mechanically pinned)"
@@ -460,6 +509,84 @@ if [[ "$?" -eq 65 ]]; then
   pass "the fake REJECTS a PAT passed in argv (the /proc/<pid>/cmdline exposure)"
 else
   fail "argv PAT seam" "the fake accepted an argv-borne PAT"
+fi
+
+# The fake must discriminate on the SQL SHAPE, not just the alias. A flattened
+# tail query keeps `row_ts` and would otherwise be answered with the same fixture
+# rows, so flattening build_rows_sql -- which changes WHICH rows --limit keeps --
+# would ship green.
+STUB_STATE="$WORK/state" STUB_LOG="$WORK/calls.log" FIXTURE="$FIXDIR/success.json" \
+  "$WORK/bin/curl" --silent --show-error --max-time 60 --get --header @- \
+  --data-urlencode 'sql=select timestamp as row_ts, id, event_message from logs order by row_ts desc limit 5' \
+  --data-urlencode 'iso_timestamp_start=2026-08-25T00:00:00' \
+  --data-urlencode 'iso_timestamp_end=2026-08-26T00:00:00' \
+  --write-out x --url "$STUB_LOGS_URL" \
+  >/dev/null 2>&1 </dev/null
+if [[ "$?" -eq 67 ]]; then
+  pass "the fake REJECTS a FLATTENED tail query (the nested newest-N subquery is pinned, not just its alias)"
+else
+  fail "nested-subquery seam" "the fake answered a flattened rows query, so build_rows_sql could be flattened undetected"
+fi
+
+# ...and on the PROJECT REF. Without this the fake answers for any project, so
+# finding F -- a format-valid ref pointed at the wrong project -- is invisible to
+# every assertion in this file.
+STUB_STATE="$WORK/state" STUB_LOG="$WORK/calls.log" FIXTURE="$FIXDIR/success.json" \
+  "$WORK/bin/curl" --silent --show-error --max-time 30 --header @- \
+  --write-out x --url "${STUB_ID_URL%/*}/aaaaaaaaaaaaaaaaaaaa" \
+  >/dev/null 2>&1 </dev/null
+if [[ "$?" -eq 68 ]]; then
+  pass "the fake REJECTS a request for a project the fixture does not speak for (finding F is mechanically pinned)"
+else
+  fail "wrong-project seam" "the fake answered for a ref other than the fixture's _ref, so a wrong-project query would pass"
+fi
+
+# ---------------------------------------------------------------------------
+# Argument-handling paths that never reach the API, and so never reach a
+# fixture: they exit before the first curl call.
+# ---------------------------------------------------------------------------
+echo "== Pre-flight argument handling =="
+
+# --ref has NO DEFAULT. It used to default to the Inngest BACKING project, so a
+# DSAR ("what data do you hold on me") invoked with no --ref queried a project
+# that never held the data and answered rows=0 / COVERED.
+run_helper "$FIXDIR/success.json" --source postgres_logs --since 24h
+if [[ "$RC" -eq 2 ]] && has "$WORK/stderr" "--ref is REQUIRED" \
+   && has "$WORK/stderr" "ifsccnjhymdmidffkzhl" && has "$WORK/stderr" "pigsfuxruiopinouvjwy"; then
+  pass "a missing --ref is a CONFIG_ERROR naming both known project refs, not a silent default"
+else
+  fail "required --ref" "want exit 2 naming both refs, got exit $RC: $(tail -2 "$WORK/stderr" | tr '\n' ' ')"
+fi
+if [[ "$(grep -c '' "$WORK/calls.log")" == "0" ]]; then
+  pass "a missing --ref issues NO request at all (nothing is asked of an unnamed project)"
+else
+  fail "required --ref call count" "the helper called the API before knowing which project it meant"
+fi
+
+# --limit needs a CEILING, not just an integer check. The bounded limit is this
+# helper's only real data-minimisation control (stdout lands in an agent
+# transcript), so `--limit 500000` would defeat it while passing ^[0-9]+$.
+run_helper "$FIXDIR/success.json" --ref pigsfuxruiopinouvjwy --source postgres_logs --limit 500000
+if [[ "$RC" -eq 2 ]] && has "$WORK/stderr" "exceeds the 1000-line ceiling"; then
+  pass "--limit is bounded above, so the data-minimisation claim is a bound and not a hope"
+else
+  fail "limit ceiling" "want exit 2 rejecting an oversized --limit, got exit $RC"
+fi
+
+# The unknown-flag path is the one print site that predates emit_and_exit, so it
+# is the one that can bypass scrub_pat. A mistyped
+# `doppler run -- script "$SUPABASE_ACCESS_TOKEN"` lands a live cloud-admin PAT
+# in argv, and this used to echo it back verbatim.
+run_helper "$FIXDIR/success.json" "$FAKE_PAT"
+if [[ "$RC" -eq 64 ]]; then
+  pass "an unknown flag is a usage error (exit 64)"
+else
+  fail "unknown flag exit" "want exit 64 got $RC"
+fi
+if grep -qF -- "$FAKE_PAT" "$WORK/stderr" "$WORK/stdout"; then
+  fail "unknown flag PAT scrub" "the argv word was echoed back UNREDACTED; a PAT mistyped as a flag leaks to the transcript"
+else
+  pass "an unknown flag is echoed back SCRUBBED (a PAT in argv cannot survive the usage error)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -499,6 +626,74 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# NO fail_now REACHABLE FROM INSIDE A COMMAND SUBSTITUTION.
+#
+# fail_now -> emit_and_exit is the helper's sole exit path, and `exit` inside
+# `x="$(f ...)"` kills only the SUBSHELL. The caller then carries on with x="" --
+# and in --json mode with the EVIDENCE OBJECT captured into x and parsed as an
+# HTTP body. api_logs held exactly that shape: it asserted finding G's both-bounds
+# rule, and every call site was `raw="$(api_logs ...)"`, so the assertion could
+# never terminate anything.
+#
+# Structural, and quantified over the file rather than naming api_logs: any
+# function whose output is CAPTURED anywhere must not contain fail_now. A guard
+# spelled as "api_logs specifically" would be silent the next time the shape
+# reappears in a different function, which is how it got here the first time.
+# ---------------------------------------------------------------------------
+echo "== fail_now is never swallowed by a subshell =="
+
+# Sets SUBSHELL_FAILNOW to the offending function names (empty when clean).
+scan_substituted_fail_now() {
+  local src="$1" fn
+  SUBSHELL_FAILNOW=""
+  while IFS= read -r fn; do
+    [[ -n "$fn" ]] || continue
+    grep -qE "^${fn}\(\) \{" "$src" || continue
+    # A one-line definition (`f() { ...; }`) closes on its own line; a multi-line
+    # one closes on a bare `}`. Conflating them would run the extraction past the
+    # end of a one-liner and attribute the NEXT function's body to it.
+    awk -v f="$fn" '
+      !inf && $0 ~ "^"f"\\(\\) \\{" {
+        print; inf = 1
+        if ($0 ~ /\}[[:space:]]*$/) exit
+        next
+      }
+      inf { print }
+      inf && /^\}$/ { exit }
+    ' "$src" > "$WORK/fnbody"
+    [[ "$(grep -cF 'fail_now' "$WORK/fnbody")" == "0" ]] ||
+      SUBSHELL_FAILNOW="${SUBSHELL_FAILNOW}${SUBSHELL_FAILNOW:+ }${fn}"
+  done < <(grep -oE '\$\([a-z_][a-z0-9_]*' "$src" | sed 's/^\$(//' | sort -u)
+}
+
+scan_substituted_fail_now "$SCRIPT"
+if [[ -z "$SUBSHELL_FAILNOW" ]]; then
+  pass "no command-substituted function calls fail_now (its exit would die with the subshell)"
+else
+  fail "fail_now in a subshell" "these functions are captured with \$( ) yet call fail_now, so their exit is discarded and the caller continues with an empty/garbage value: $SUBSHELL_FAILNOW"
+fi
+
+# Non-vacuity. A scanner that matches nothing would certify this property forever.
+setup tee "$WORK/subprobe.sh" >/dev/null <<'SUBPROBE'
+api_logs() {
+  local a="$1"
+  fail_now CONFIG_ERROR "this exit dies with the subshell"
+  printf '%s' "$a"
+}
+clean_helper() {
+  printf 'no exit here'
+}
+raw="$(api_logs x)"
+name="$(clean_helper)"
+SUBPROBE
+scan_substituted_fail_now "$WORK/subprobe.sh"
+if [[ "$SUBSHELL_FAILNOW" == "api_logs" ]]; then
+  pass "the scanner DOES catch a captured function that calls fail_now, and does NOT flag the clean one"
+else
+  fail "subshell scan non-vacuity" "expected exactly 'api_logs', got '$SUBSHELL_FAILNOW'; the clean result above means nothing"
+fi
+
+# ---------------------------------------------------------------------------
 # Host pin and default ref: both are members of a sibling guard's assembly.
 # ---------------------------------------------------------------------------
 echo "== Pinned constants =="
@@ -516,7 +711,40 @@ else
   fail "deprecated endpoint" "a non-comment line still references analytics/endpoints/logs.all"
 fi
 
+# ---------------------------------------------------------------------------
+# HARNESS SELF-CHECK.
+#
+# Every assertion above dispatches through fail(), and the final `fails -gt 0`
+# gate reads a counter fail() maintains. `fail() { :; }` therefore turns this
+# whole file into "all checks passed", exit 0 -- including the fixture-count
+# floor, which is disarmed by the very edit it exists to catch because it too
+# calls fail(). Prove the reporters still move their own counters, then subtract
+# the probes. Dispatched by a BARE echo+exit, never through fail(), or the check
+# would be neutered by the same edit.
+# ---------------------------------------------------------------------------
+_p0=$passes; _f0=$fails
+pass "__self-check (expected; not a real check)"
+fail "__self-check (expected; not a real failure)" "harness self-check probe"
+if [[ $((passes - _p0)) -ne 1 || $((fails - _f0)) -ne 1 ]]; then
+  echo "FAIL: pass()/fail() are not discriminating (+$((passes - _p0))/+$((fails - _f0)); expected +1/+1). A neutered reporter reports every assertion above as green." >&2
+  exit 1
+fi
+passes=$_p0; fails=$_f0
+
 echo ""
+printf 'supabase-logs-query: %d passed, %d failed\n' "$passes" "$fails"
+
+# MINIMUM CARDINALITY. Neutering the reporters yields "0 passed, 0 failed" and a
+# clean exit, and a runner reads only the exit code. Set to the FULL count of a
+# green run, not a slack value: a floor trailing its population lets the newest
+# assertion be deleted unnoticed. `-lt` (a floor, never `-eq`) so ADDING
+# assertions stays free; only deletion reds.
+MIN_ASSERTIONS=31
+if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
+  echo "FAIL: only $((passes + fails)) assertions ran, expected >= ${MIN_ASSERTIONS}. An empty fixture directory or a short-circuited sweep must not exit 0 with zero coverage." >&2
+  exit 1
+fi
+
 if [[ "$fails" -gt 0 ]]; then
   printf '%d check(s) FAILED\n' "$fails"
   exit 1
