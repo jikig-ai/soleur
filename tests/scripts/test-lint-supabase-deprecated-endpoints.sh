@@ -55,7 +55,7 @@ cp "$GUARD" "$PRISTINE" || setup_die "cp guard -> pristine failed"
 # path. There is deliberately no non-git fallback in the guard: a second listing path would be
 # the one this suite never exercises.
 new_tree() {
-  local name="$1" d="$WORK/tree-$1"
+  local d="$WORK/tree-$1"
   mkdir -p "$d" || setup_die "mkdir $d failed"
   git -C "$d" init -q || setup_die "git init failed in $d"
   printf '%s' "$d"
