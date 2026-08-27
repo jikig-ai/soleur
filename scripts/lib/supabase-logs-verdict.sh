@@ -110,10 +110,21 @@ coverage_classify() {
 # is reported as UNAVAILABLE, never as 0 — "0 rows" and "we could not look" are
 # the two answers this whole helper exists to keep apart.
 _rows_field() {
-  if [[ -z "${V_ROWS:-}" ]]; then printf 'UNAVAILABLE'; else printf '%s' "$V_ROWS"; fi
+  if [[ -z "${V_ROWS:-}" ]]; then printf 'UNAVAILABLE'; else printf '%s' "$V_ROWS" | strip_log_injection; fi
 }
 
-_field() { printf '%s' "${1:-(unknown)}"; }
+# Sanitise ONE FIELD VALUE, not the block. strip_log_injection deletes \r and
+# \n by design (it exists to stop a crafted upstream string forging a log line),
+# so piping the whole multi-line block through it would collapse the block into
+# a single line — which is exactly the "count separated from its verdict"
+# failure, arrived at from the opposite direction. Per-field is the only correct
+# placement: an API-derived project name or error string cannot then forge a
+# `verdict=COVERED` line of its own.
+_field() {
+  local v="${1:-}"
+  [[ -z "$v" ]] && v="(unknown)"
+  printf '%s' "$v" | strip_log_injection | scrub_pat
+}
 
 emit_evidence_block() {
   local reason verdict code
@@ -141,7 +152,7 @@ slices=$(_field "${V_SLICES:-none}")
 next_action=$(_field "${V_NEXT:-}")
 === end evidence block (exit ${code}) ===
 BLOCK
-  } | strip_log_injection | scrub_pat >&2
+  } | scrub_pat >&2
 }
 
 emit_evidence_json() {
@@ -154,19 +165,29 @@ emit_evidence_json() {
   # true only where a human was reading.
   local rows_json="null"
   [[ -n "${V_ROWS:-}" ]] && rows_json="${V_ROWS}"
+  # jq -c escapes control bytes inside strings, so the object cannot carry a raw
+  # ESC/CR into a terminal; free-text fields are additionally run through
+  # strip_log_injection so a crafted project name or vendor error cannot smuggle
+  # a newline into a consumer that splits on them.
+  local j_ref j_project j_mono j_slices j_next
+  j_ref="$(printf '%s' "${V_REF:-}" | strip_log_injection)"
+  j_project="$(printf '%s' "${V_PROJECT:-}" | strip_log_injection)"
+  j_mono="$(printf '%s' "${V_MONO:-}" | strip_log_injection)"
+  j_slices="$(printf '%s' "${V_SLICES:-none}" | strip_log_injection)"
+  j_next="$(printf '%s' "${V_NEXT:-}" | strip_log_injection)"
   jq -nc \
     --arg verdict "$verdict" \
     --arg reason "$reason" \
-    --arg ref "${V_REF:-}" \
-    --arg project "${V_PROJECT:-}" \
+    --arg ref "$j_ref" \
+    --arg project "$j_project" \
     --arg req_start "${V_REQ_START:-}" \
     --arg req_end "${V_REQ_END:-}" \
     --arg cov_start "${V_COV_START:-}" \
     --arg cov_end "${V_COV_END:-}" \
     --arg cov_class "${V_COV_CLASS:-NONE}" \
-    --arg mono "${V_MONO:-}" \
-    --arg slices "${V_SLICES:-none}" \
-    --arg next "${V_NEXT:-}" \
+    --arg mono "$j_mono" \
+    --arg slices "$j_slices" \
+    --arg next "$j_next" \
     --argjson span "${V_SPAN_DAYS:-0}" \
     --argjson rows "$rows_json" \
     --argjson exit_code "$code" \
@@ -192,7 +213,7 @@ emit_evidence_json() {
        next_action: $next,
        exit_code: $exit_code,
        sample: $sample
-     }' | strip_log_injection | scrub_pat
+     }' | scrub_pat
 }
 
 # The ONLY exit path. Renders the block in the requested mode and exits with the
