@@ -68,3 +68,73 @@ clean. Remediated 2026-06-29 by enabling RLS (no policies) + revoking anon/authe
 recurrence-causing default privileges. CLO to confirm whether the inconclusive residual window, given the
 never-published key, warrants any further notification action or is a "reachability-only, remediated, no notifiable
 breach" record.
+
+<!-- ADDENDUM-2026-08-26 START -->
+
+## Addendum — 2026-08-26: the endpoint used above is being retired
+
+**This is an annotation, not a correction.** Everything above is a true record of what was
+run on 2026-06-29 and what it returned. The verdict, reasoning, coverage branch and Art. 30
+record are unchanged and are not reopened by this note.
+
+**What changed.** `GET /v1/projects/{ref}/analytics/endpoints/logs.all` — the endpoint named
+in Step 2 and used for Steps 2 and 3 — is deprecated, with vendor-announced removal on
+**2026-09-23**. The replacement is the unified
+`GET /v1/projects/{ref}/analytics/endpoints/logs`, which exposes one stream with a `source`
+column instead of one endpoint per log table.
+
+**The dialect changed too.** The replacement takes **ClickHouse** SQL, not BigQuery. A query
+copied forward unchanged returns HTTP 200 with `result: null` and a `Backend error!` string —
+which reads as an empty result to any caller checking status and row count. The working form
+is a filter on the `source` column:
+
+```sql
+select count(*) as c from logs where source = 'postgres_logs'
+```
+
+**Both timestamp bounds are mandatory on the replacement.** `iso_timestamp_start` **and**
+`iso_timestamp_end` must be sent on every request. Omitting them returns a deterministic
+HTTP 200 `Backend error!` — reproduced minutes apart, so it is not the transient variant.
+This is worth stating flatly because **the endpoint's own OpenAPI description promises the
+opposite**: it says that if both are omitted, only the last minute of logs is queried. The
+deprecated endpoint honours that sentence; the replacement does not. An agent copying the SQL
+above without the bounds will hit the error and misread it as a dialect problem.
+
+**Do not hand-write this query.** Use the helper, which sends both bounds, validates the
+source against what the project actually emits, and returns a coverage verdict rather than a
+bare row count:
+
+```bash
+doppler run -p soleur -c prd -- \
+  scripts/supabase-logs-query.sh --source postgres_logs --since <window>
+```
+
+- Tool runbook: `knowledge-base/engineering/operations/runbooks/supabase-log-query.md`
+- The procedure this record documents now has a durable home:
+  `knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`
+  (promoted from the `GATE G-ESCALATE` blockquote in the 2026-06-29 lockdown plan; it
+  reproduces the five steps above, with Steps 2 and 3 executing the helper).
+- Measured behaviour of both endpoints — dialect, the mandatory bounds, the unenforced
+  documented 24-hour cap, the non-monotonic window truncation, and the `edge_logs`
+  instrumentation gap — is recorded in
+  `knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md`.
+  Cite that file; do not restate its figures.
+
+**Retention posture.** The "~1–2 days" horizon in Step 2 was the measurement of 2026-06-29.
+Re-measured 2026-08-26, the aggregate retained span is materially longer. This does **not**
+recover the 2026-06 window and does **not** disturb the INCONCLUSIVE verdict: `edge_logs` —
+the source Step 3 rests on — produced **zero rows across the entire 30-day live period**, so
+its zero is an instrumentation gap, not evidence of no traffic. A longer retained span over a
+source that never emits adds nothing. See the evidence file, §Confirmed from the plan
+(finding E).
+
+**Sibling records carrying the same addendum:**
+
+- `knowledge-base/legal/audits/2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md`
+- `knowledge-base/project/learnings/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
+
+An advisory guard, `scripts/lint-supabase-deprecated-endpoints.sh`, censuses references to the
+retired endpoint. It is advisory only — not merge-blocking — so a red result is a finding to
+read, never a gate that will stop a merge.
+
+<!-- ADDENDUM-2026-08-26 END -->
