@@ -973,6 +973,24 @@ if want_scripts; then
   run_suite "scripts/lint-agents-enforcement-tags-live" python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
   run_suite "scripts/lint-agents-enforcement-tags-unit" bash scripts/lint-agents-enforcement-tags.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
+  # Supabase Management API deprecation + host-pin assembly guard, and the
+  # retained-log helper. Registered EXPLICITLY because neither directory is in
+  # SUITE_GLOBS: `--print-suite-globs` lists `scripts/lib/*.test.sh` but not
+  # `scripts/*.test.sh`, and `tests/scripts/` is absent entirely (its files are
+  # also named `test-*.sh`, which a `*.test.sh` glob cannot match either way).
+  # An unregistered suite there runs in zero runners and reads as passing (#7718).
+  #
+  # UNIT ONLY, AND THAT IS DELIBERATE. There is no `-live` line here, unlike the
+  # sibling linters above. This shard runs inside the required `test` context, so
+  # a `-live` run_suite would make the guard merge-blocking — which is exactly the
+  # promotion this PR declined to make (see the guard header, ADR-197 and #7716).
+  # Worth recording for whoever does promote it: this single line IS a promotion
+  # path, and it bypasses the #6049 auto-fabrication trap that makes the
+  # required-checks.txt route four coupled steps, because it adds no new
+  # content-scoped gate NAME. The live run is advisory in `lint-bot-statuses`.
+  run_suite "scripts/lint-supabase-deprecated-endpoints-unit" bash tests/scripts/test-lint-supabase-deprecated-endpoints.sh
+  run_suite "tests/scripts/supabase-logs-query" bash tests/scripts/test-supabase-logs-query.sh
+
   run_suite "scripts/lint-credential-path-literals" bash scripts/lint-credential-path-literals.test.sh
   # #7136: a `run:` step reading a variable declared only on ANOTHER step. Part B of this
   # suite EXECUTES the shipped release-failure email body under both deploy branches — the
