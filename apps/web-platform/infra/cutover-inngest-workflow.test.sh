@@ -435,6 +435,11 @@ assert "case arm: arm)" "grep -qE '^[[:space:]]+arm\\)' '$WF'"
 ARM_FILE="$(mktemp)"; ROLLBACK_FILE="$(mktemp)"; SCRATCH+=("$ARM_FILE" "$ROLLBACK_FILE")
 awk '/^            arm\)$/,/^              ;;$/' "$WF" > "$ARM_FILE"
 awk '/^            rollback\)$/,/^              ;;$/' "$WF" > "$ROLLBACK_FILE"
+RESUME_FILE="$(mktemp)"; SCRATCH+=("$RESUME_FILE")
+awk '/^            resume\)$/,/^              ;;$/' "$WF" > "$RESUME_FILE"
+RESUME_N=$(wc -l < "$RESUME_FILE" | tr -d '[:space:]')
+assert "#7674 resume) awk range is a real block (non-vacuity for the G3 rows below, got $RESUME_N)" \
+  "[[ '$RESUME_N' -gt 10 ]]"
 ARM_N=$(wc -l < "$ARM_FILE"); ROLLBACK_N=$(wc -l < "$ROLLBACK_FILE")
 # F6 non-vacuity: the arm) awk range must be a real block before any range grep is trusted.
 assert "arm) case body is non-empty (>20 lines — F6 non-vacuity)" "[[ '$ARM_N' -gt 20 ]]"
@@ -522,7 +527,10 @@ assert "confirm keys on the emitter FLAG field (\"flag\":\"done\" + exit_code:0 
 assert "confirm does NOT key on \"reason\":\"done\" (the field-mismatch bug the review caught)" "! grep -qF '\"reason\":\"done\"' '$CONFIRM_FILE'"
 assert "confirm detects the aborted terminal flag (fail-loud path)" "grep -qF '\"flag\":\"aborted\"' '$CONFIRM_FILE'"
 assert "confirm detects the rolled-back terminal flag" "grep -qF '\"flag\":\"rolled-back\"' '$CONFIRM_FILE'"
-assert "confirm reads via betterstack-query.sh (no-SSH), never a deploy-status poll" "grep -qE 'betterstack-query.sh --since' '$CONFIRM_FILE' && ! grep -qE 'deploy-status' '$CONFIRM_FILE'"
+# #7674: the query itself moved into the shared _flip_query_rows helper (one reader, two
+# callers). The no-SSH / no-deploy-status invariant is asserted on the HELPER below; what is
+# assertable HERE is that confirm still routes through it rather than growing a second reader.
+assert "confirm reads through the shared _flip_query_rows helper (no second reader)" "grep -qE '_flip_query_rows ' '$CONFIRM_FILE' && ! grep -qE 'deploy-status' '$CONFIRM_FILE'"
 assert "confirm never dumps a raw Better Stack row (no 'jq .')" "! grep -qE 'jq \\.($|[^a-zA-Z_])' '$CONFIRM_FILE'"
 assert "confirm distinguishes a query-path failure from FSM-not-terminal (::warning:: CONFIRM PATH)" "grep -qE 'CONFIRM PATH' '$CONFIRM_FILE'"
 # Emitter parity: the on-host emitter MUST actually stamp the flag states the confirm greps for.
@@ -724,24 +732,44 @@ assert "#7462 flush_latch_decide extraction is non-vacuous (>3 lines, got $FL_FN
 . "$FL_FN"
 assert "flush_latch_decide() is defined after sourcing" "declare -F flush_latch_decide >/dev/null"
 FL_EVALS=0
-fl_case() { # $1 desc, $2 input, $3 expected outcome
-  local got; got="$(flush_latch_decide "$2")"
+fl_case() { # $1 desc, $2 L (latch count), $3 H (liveness count), $4 expected outcome
+  local got; got="$(flush_latch_decide "$2" "$3")"
   FL_EVALS=$((FL_EVALS + 1))
-  assert "flush_latch_decide: $1 -> $3" "[[ '$got' == '$3' ]]"
+  assert "flush_latch_decide: $1 (L=$2,H=$3) -> $4" "[[ '$got' == '$4' ]]"
 }
-fl_case "zero rows is clear — a genuine first arm proceeds" "0"              "clear"
-fl_case "one row is LATCHED — must refuse"                  "1"              "latched"
-fl_case "many rows is LATCHED"                              "12"             "latched"
-fl_case "an unreadable read fails closed"                   "__UNREADABLE__" "unreadable"
-fl_case "an empty read fails closed"                        ""               "unreadable"
-fl_case "a non-numeric count fails closed"                  "n/a"            "unreadable"
-fl_case "a negative count fails closed"                     "-1"             "unreadable"
-fl_case "a count with whitespace fails closed"              " 1"             "unreadable"
-assert "flush_latch_decide scenarios actually dispatched (>=8)" "[[ '$FL_EVALS' -ge 8 ]]"
+# THE TWO-SIGNAL TABLE (#7674). L alone cannot distinguish "no flush has happened" from
+# "I cannot tell": measured 2026-08-25, G3.7's query returns 0 rows at 7d, 30d AND 365d while
+# the host emits ~1.4 flip rows/min, so L=0 was reporting coverage the gate did not have.
+# H — any inngest-cutover-flip row from THIS host inside a short window — is the host's own
+# liveness witness, and (L=0,H=0) is now `silent`: absence proves nothing when the witness is
+# also absent. Both non-decimal arms route to `unreadable`, never `silent`, because a
+# non-decimal count is produced ONLY by a query failure and `silent` prints the host-dark
+# remediation — the mis-remediation the outcome split exists to prevent.
+fl_case "no latch + host reporting is clear — a genuine first arm proceeds" "0"  "20"  "clear"
+fl_case "no latch + host SILENT refuses — absence proves nothing"           "0"  "0"   "silent"
+fl_case "one latch row is LATCHED — must refuse"                            "1"  "20"  "latched"
+fl_case "many latch rows is LATCHED"                                        "12" "20"  "latched"
+fl_case "LATCHED even when the host is silent (L dominates)"                "1"  "0"   "latched"
+# L's VALUE is decisive BEFORE H is consulted. Without this row the "L dominates H" claim was only
+# tested against H=0, and (L>=1, H unreadable) printed the CREDENTIAL remediation for a state where
+# a latch had actually been detected.
+fl_case "LATCHED even when H is UNREADABLE (L dominates, not just over silence)" "1" "__UNREADABLE__" "latched"
+fl_case "LATCHED even when H is non-numeric"                               "12" "n/a" "latched"
+fl_case "an unreadable latch read fails closed"           "__UNREADABLE__"  "20"  "unreadable"
+fl_case "an empty latch count fails closed"               ""                "20"  "unreadable"
+fl_case "a non-numeric latch count fails closed"          "n/a"             "20"  "unreadable"
+fl_case "a negative latch count fails closed"             "-1"              "20"  "unreadable"
+fl_case "a latch count with whitespace fails closed"      " 1"              "20"  "unreadable"
+fl_case "an unreadable LIVENESS read is unreadable, NOT silent" "0" "__UNREADABLE__" "unreadable"
+fl_case "an empty liveness count is unreadable, NOT silent"     "0" ""               "unreadable"
+fl_case "a non-numeric liveness count is unreadable, NOT silent" "0" "n/a"           "unreadable"
+fl_case "a negative liveness count is unreadable, NOT silent"    "0" "-1"            "unreadable"
+fl_case "a non-decimal L wins over a non-decimal H (both unreadable)" "x" "y"        "unreadable"
+assert "flush_latch_decide scenarios actually dispatched (>=15)" "[[ '$FL_EVALS' -ge 15 ]]"
 # HARNESS CANARY, mirroring g3_case's. A fl_case whose body stopped comparing against the real
 # function would report every row above as a PASS; prove it can FAIL, then subtract.
 _FL_P=$PASS; _FL_F=$FAIL
-fl_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "0" "latched"
+fl_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "0" "20" "latched"
 if [[ "$FAIL" -ne $((_FL_F + 1)) || "$PASS" -ne "$_FL_P" ]]; then
   echo "  FATAL: fl_case does not compare against flush_latch_decide — every G3.7 decision row is void."
   exit 2
@@ -823,6 +851,158 @@ assert "#7462 reader extracts a COUNT only (no .raw, no jq over row bodies)" \
 assert "#7462 FLUSH_LATCH_SINCE is env-overridable with a default" \
   "grep -qE '^FLUSH_LATCH_SINCE=\"\\\$\\{FLUSH_LATCH_SINCE:-[0-9]+[a-z]\\}\"' '$BODY_SH'"
 
+# --- (b2) THE LIVENESS READER (#7674), EXECUTED. ---------------------------------------------
+# H is the signal that turns G3.7's `clear` from "no evidence" into "no evidence, from a host we
+# can hear". Three ways it could be silently defeated, each asserted below:
+#   1. counting on an enumerated `reason` set instead of the TAG — the catch-all arm emits
+#      `noop-unset`, and that is the arm that fires in the very state G3.7 gates, so an
+#      enumeration would read H=0 on a healthy host and refuse every legitimate first arm;
+#   2. no host isolation — vector.toml: ALL hosts multiplex into ONE Logs source with host_name
+#      the sole discriminator, so web-1's rows would count as the dedicated host's liveness;
+#   3. matching the host on the OUTER row — `raw` is DOUBLE-ENCODED, so a literal
+#      `"host_name":"..."` grep against the outer line matches NOTHING, EVER, which would pin
+#      H at 0 and refuse every arm. The reader must decode before it matches.
+FLV_FN="$(mktemp)"; SCRATCH+=("$FLV_FN")
+awk '/^_flip_liveness_count\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLV_FN"
+FLV_FN_N=$(wc -l < "$FLV_FN" | tr -d '[:space:]')
+assert "#7674 _flip_liveness_count extraction is non-vacuous (>5 lines, got $FLV_FN_N)" "[[ '$FLV_FN_N' -gt 5 ]]"
+
+FLQ_FN="$(mktemp)"; SCRATCH+=("$FLQ_FN")
+awk '/^_flip_query_rows\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLQ_FN"
+FLQ_FN_N=$(wc -l < "$FLQ_FN" | tr -d '[:space:]')
+assert "#7674 _flip_query_rows extraction is non-vacuous (>3 lines, got $FLQ_FN_N)" "[[ '$FLQ_FN_N' -gt 3 ]]"
+# The no-SSH invariant, migrated here from confirm_flip_state when the reader was extracted.
+assert "#7674 the shared reader queries via betterstack-query.sh (no SSH, no new transport)" \
+  "grep -qE 'betterstack-query.sh' '$FLQ_FN' && ! grep -qE 'deploy-status' '$FLQ_FN'"
+assert "#7674 the shared reader queries via prd_terraform (the betterstack-query cred config)" \
+  "grep -qF -- '-c prd_terraform' '$FLQ_FN'"
+
+FLV_ARGV="$(mktemp)"; SCRATCH+=("$FLV_ARGV")
+FLV_OUT=""; FLV_RC=0
+call_flip_liveness_count() { # $1 = rows | foreign | empty | fail
+  local mode="$1"
+  set +e
+  FLV_OUT=$(
+    eval "$(cat "$FLQ_FN")"
+    eval "$(cat "$FLV_FN")"
+    # shellcheck disable=SC2317  # invoked indirectly, by the eval'd reader above
+    doppler() {
+      printf '%s\n' "$*" > "$FLV_ARGV"
+      case "$mode" in
+        rows)
+          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host\":\"soleur-inngest\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"x\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host\":\"soleur-inngest\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"y\"}"}'
+          return 0 ;;
+        foreign)
+          # web-1 rows in the SAME multiplexed source — must NOT count as dedicated-host liveness.
+          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-web-platform\",\"message\":\"x\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-web-platform\",\"message\":\"y\"}"}'
+          return 0 ;;
+        spoofed)
+          # THE #6616 COLLISION, FIXTURED: a WEB host self-labelling with the dedicated node's
+          # sed-rendered host_name literal (#6616 is OPEN precisely because this was observed).
+          # host_name ALONE counts these as our liveness -> H>0 -> `clear` -> the exact fail-open
+          # this gate exists to close. The `host` conjunct is what excludes them, so this fixture
+          # is what makes the dual-field filter load-bearing rather than decorative.
+          printf '%s\n' '{"dt":"2026-08-25 10:20:51.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"x\"}"}'
+          printf '%s\n' '{"dt":"2026-08-25 10:20:52.000000","raw":"{\"host\":\"soleur-web-platform\",\"host_name\":\"soleur-inngest-prd\",\"message\":\"y\"}"}'
+          return 0 ;;
+        empty) return 0 ;;
+        *)     return 7 ;;
+      esac
+    }
+    # DO NOT export FLIP_LIVENESS_SINCE here (#7674 review). Exporting it made the `--since 15m`
+    # argv assertion measure the TEST'S OWN value, so widening the SUT to 365d — the fail-open
+    # direction the SUT comment warns about — survived with the suite green. Source the real
+    # assignment line from the script instead, so the argv assertion measures what ships.
+    eval "$(grep -E '^FLIP_LIVENESS_SINCE=' "$BODY_SH")"
+    export FLIP_LIVENESS_SINCE
+    # Both live at script scope, outside the extracted functions, so the eval'd harness must
+    # supply them. INNGEST_HOST_NAME empty would make the host filter match nothing and pin the
+    # reader at 0 — the exact fail-shape the isolation assertions below exist to catch.
+    export INNGEST_HOST="soleur-inngest"
+    export INNGEST_HOST_NAME="soleur-inngest-prd"
+    _flip_liveness_count 2>/dev/null
+  )
+  FLV_RC=$?
+  set -e
+}
+
+call_flip_liveness_count rows
+assert "#7674 liveness reader counts THIS host's rows (2 -> '2', got '$FLV_OUT')" "[[ '$FLV_OUT' == '2' ]]"
+assert "#7674 liveness reader always returns 0 so the DECISION owns the verdict (rc=$FLV_RC)" "[[ '$FLV_RC' -eq 0 ]]"
+call_flip_liveness_count foreign
+assert "#7674 HOST ISOLATION: another host's rows count 0, not as our liveness (got '$FLV_OUT')" "[[ '$FLV_OUT' == '0' ]]"
+call_flip_liveness_count empty
+assert "#7674 an empty liveness result is '0' (-> silent), not an error" "[[ '$FLV_OUT' == '0' ]]"
+call_flip_liveness_count fail
+assert "#7674 a FAILED liveness query yields __UNREADABLE__, never 0 (fail-closed)" "[[ '$FLV_OUT' == '__UNREADABLE__' ]]"
+call_flip_liveness_count spoofed
+assert "#6616 a web host SPOOFING our host_name counts 0, NOT as our liveness (got '$FLV_OUT')" \
+  "[[ '$FLV_OUT' == '0' ]]"
+
+# shellcheck disable=SC2034  # read inside the eval'd assert conditions below
+FLV_ARGV_SEEN="$(cat "$FLV_ARGV")"
+assert "#7674 liveness reader bounds the window with --since \$FLIP_LIVENESS_SINCE" \
+  "grep -qF -- '--since 15m' <<<\"\$FLV_ARGV_SEEN\""
+assert "#7674 liveness reader requests a full page (--limit 1 would cap H and break confirm)" \
+  "grep -qF -- '--limit 50' <<<\"\$FLV_ARGV_SEEN\""
+assert "#7674 liveness reader keys on the TAG, not an enumerated reason set" \
+  "grep -qF -- '--grep inngest-cutover-flip' <<<\"\$FLV_ARGV_SEEN\""
+assert "#7674 liveness reader does NOT enumerate noop-* reasons (would read H=0 on a healthy host)" \
+  "! grep -qE 'noop-' <<<\"\$FLV_ARGV_SEEN\""
+# The host filter must NOT ride --grep: betterstack-query.sh OR-combines --grep terms, so a host
+# term there WIDENS the query instead of narrowing it — a fail-open wearing a filter's clothes.
+assert "#7674 host isolation is NOT attempted via --grep (which is OR-combined, so it would widen)" \
+  "! grep -qE '\\-\\-grep[= ]*[\"'\'']?host_name' <<<\"\$FLV_ARGV_SEEN\""
+assert "#7674 the liveness reader decodes .raw before matching the host (raw is double-encoded)" \
+  "grep -qE '\\.raw' '$FLV_FN'"
+# DELIBERATELY A LITERAL, not env-overridable (#7674 review): it is not mapped into
+# cutover-inngest.yml's step env, so an override would be an unperformable remediation (the
+# #6617 dead-remediation class), and widening this window is the FAIL-OPEN direction.
+assert "#7674 FLIP_LIVENESS_SINCE is the literal 15m (shape alone let 365d pass — fail-open)" \
+  "grep -qE '^FLIP_LIVENESS_SINCE=\"15m\"$' '$BODY_SH'"
+assert "#7674 FLIP_LIVENESS_SINCE is NOT plumbed into the workflow env (would be a dead knob)" \
+  "! grep -qF 'FLIP_LIVENESS_SINCE' '$WF_YAML'"
+
+# --- (b3) op=resume's G3 HOST-AUDIBILITY GATE (#7674, CTO ruling) -----------------------------
+# `flushed` is acted on ONLY by the on-host 30s timer. Writing it to a dark host recovers nothing
+# and parks the flag where resume's own G1 rejects it as IN-FLIGHT while op=arm is refused by
+# G3.7 — stranding the only dispatchable re-entry. A DELIVERABILITY gate, not an evidence one.
+RSL_FN="$(mktemp)"; SCRATCH+=("$RSL_FN")
+awk '/^resume_liveness_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$RSL_FN"
+RSL_N=$(wc -l < "$RSL_FN" | tr -d '[:space:]')
+assert "#7674 resume_liveness_decide extraction is non-vacuous (>3 lines, got $RSL_N)" "[[ '$RSL_N' -gt 3 ]]"
+# shellcheck disable=SC1090
+. "$RSL_FN"
+RSL_EVALS=0
+rsl_case() { local got; got="$(resume_liveness_decide "$2")"; RSL_EVALS=$((RSL_EVALS + 1))
+  assert "resume_liveness_decide: $1 (H=$2) -> $3" "[[ '$got' == '$3' ]]"; }
+rsl_case "an audible host proceeds"                 "20"             "audible"
+rsl_case "a SILENT host refuses (would strand the re-entry)" "0"     "silent"
+rsl_case "an unreadable read fails closed"          "__UNREADABLE__" "unreadable"
+rsl_case "an empty count fails closed"              ""               "unreadable"
+rsl_case "a non-numeric count fails closed"         "n/a"            "unreadable"
+rsl_case "a negative count fails closed"            "-1"             "unreadable"
+assert "#7674 resume_liveness_decide scenarios dispatched (>=6)" "[[ '$RSL_EVALS' -ge 6 ]]"
+# DELIBERATELY NOT flush_latch_decide: L's polarity INVERTS between the verbs (L>=1 REFUSES at
+# arm, SATISFIES the precondition at resume), so sharing the function would leave `latched`
+# meaning opposite things at its two call sites.
+assert "#7674 resume does NOT reuse flush_latch_decide (L's polarity inverts between the verbs)" \
+  "! grep -qF 'flush_latch_decide' '$RESUME_FILE'"
+# A refusal that does not abort is just a logger: the gate must be read BEFORE the prod write.
+# Pin the CALL, not the assignment: `RS_LIVE_N="20"` satisfies a bare `RS_LIVE_N=` grep and
+# severs the gate from its signal entirely (mutation-verified — this exact edit survived until
+# this row existed). The gate must be fed by the real reader.
+assert "#7674 resume) feeds G3 from _flip_liveness_count, not a literal (severing it must red)" \
+  "grep -qF 'RS_LIVE_N=\"\$(_flip_liveness_count)\"' '$RESUME_FILE'"
+RSL_RD=$(grep -nF 'RS_LIVE_N="$(_flip_liveness_count)"' "$RESUME_FILE" | head -1 | cut -d: -f1) || true
+RSL_WR=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$RESUME_FILE" | head -1 | cut -d: -f1) || true
+assert "#7674 resume) reads liveness BEFORE writing flushed (got read=$RSL_RD write=$RSL_WR)" \
+  "[[ -n '$RSL_RD' && -n '$RSL_WR' && '$RSL_RD' -lt '$RSL_WR' ]]"
+assert "#7674 resume) routes through resume_liveness_decide exactly once" \
+  "[[ \$(grep -cF 'resume_liveness_decide \"\$RS_LIVE_N\"' '$RESUME_FILE') -eq 1 ]]"
+
 # --- (c) EMITTER PARITY (cross-file), in the SUBSET direction. -------------------------------
 # The two reasons this gate keys on are a vocabulary owned by inngest-cutover-flip.sh. If either
 # is renamed there, the grep silently matches nothing and the gate reports CLEAR forever — a
@@ -849,8 +1029,27 @@ assert "arm) reads the latch via _flush_latch_count exactly once" \
 # a future outcome token then fails CLOSED by construction instead of falling through.
 assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by construction)" \
   "[[ \$(grep -cF 'if [[ \"\$FL_OUTCOME\" != \"clear\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
+# `silent` is in this alternation deliberately (#7674): the assertion was blind to a NEW arm,
+# so without it the no-per-arm-exit contract would be unenforced for exactly the arm being added.
+# SINGLE-CHOKEPOINT + ORDERING (#7674, AC3/AC4). The shared reader must have exactly the two
+# callers it was extracted for — a third would be the duplicated reader the extraction exists to
+# prevent, and drift between them is how the confirm path and the gate path stop asking the same
+# question. The liveness read must also be INVOKED BEFORE the decide: a decider handed a stale or
+# unset H is the fail-open this gate was built to close.
+FLQ_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_flip_query_rows ' "$BODY_SH") || true
+assert "#7674 the shared reader has exactly 2 call sites (confirm + liveness), got $FLQ_SITES" \
+  "[[ '$FLQ_SITES' -eq 2 ]]"
+FLV_SITES=$(grep -cE '^[[:space:]]+FLIP_LIVENESS_N="?\$\(_flip_liveness_count' "$ARM_FILE") || true
+assert "arm) reads liveness via _flip_liveness_count exactly once, got $FLV_SITES" \
+  "[[ '$FLV_SITES' -eq 1 ]]"
+FLV_LN=$(grep -nE '^[[:space:]]+FLIP_LIVENESS_N=' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+FLD_LN=$(grep -nE '^[[:space:]]+FL_OUTCOME=' "$ARM_FILE" | head -1 | cut -d: -f1) || true
+assert "arm) the liveness reader is invoked BEFORE flush_latch_decide (H is never stale/unset)" \
+  "[[ -n '$FLV_LN' && -n '$FLD_LN' && '$FLV_LN' -lt '$FLD_LN' ]]"
+assert "arm) flush_latch_decide is called with BOTH signals (a one-arg call is the old fail-open)" \
+  "grep -qE 'flush_latch_decide \"\\\$FLUSH_LATCH_N\" \"\\\$FLIP_LIVENESS_N\"' '$ARM_FILE'"
 assert "arm) no G3.7 outcome arm carries its own exit (the gate decides)" \
-  "! grep -qE '^[[:space:]]+(clear|latched|unreadable)\\)[^#]*exit 1' '$ARM_FILE'"
+  "! grep -qE '^[[:space:]]+(clear|latched|unreadable|silent)\\)[^#]*exit 1' '$ARM_FILE'"
 # shellcheck disable=SC2016  # literal search pattern, not an expansion (G3ABORT_LN precedent)
 FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | head -1 | cut -d: -f1) || true
 FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1) || true
@@ -1088,6 +1287,25 @@ for _op in arm rollback resume; do
 done
 assert "#7228 the gate still resolves to the inngest-cutover environment" \
   "printf '%s' \"\$ENV_EXPR\" | grep -qF \"'inngest-cutover'\""
+# THE OP SET IS DUPLICATED IN TWO EXPRESSIONS AND NOTHING TIED THEM TOGETHER (#7674 review).
+# `environment:` decides WHO MUST APPROVE; the DOPPLER_TOKEN_INNGEST_ARM expression decides WHO
+# GETS THE PROD-WRITE TOKEN. Adding an op to the token expression but not the environment one
+# hands that op an arm-capable credential with NO required reviewer — and every pre-existing
+# assertion here passed, because they check the two expressions independently. Pin the SETS equal.
+ENV_OPS=$(printf '%s' "$ENV_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
+TOK_EXPR=$(grep -E 'DOPPLER_TOKEN_INNGEST_ARM:' "$WF" | head -1) || true
+TOK_OPS=$(printf '%s' "$TOK_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
+assert "#7674 the token expression was located (else the parity row below is vacuous)" \
+  "[[ -n '$TOK_EXPR' ]]"
+assert "#7674 the reviewer-gated op set is non-empty (anti-vacuity for the parity row)" \
+  "[[ -n '$ENV_OPS' ]]"
+assert "#7674 environment: and DOPPLER_TOKEN_INNGEST_ARM gate the SAME op set (no ungated arm token)" \
+  "[[ '$ENV_OPS' == '$TOK_OPS' ]]"
+# A single `continue-on-error: true` on the one run: step turns EVERY guard's exit 1 into a green
+# job — the whole gate sequence tolerated at once. Nothing forbade it.
+assert "#7674 no step tolerates failure (a continue-on-error would green-light every refused gate)" \
+  "! grep -qE '^[[:space:]]*continue-on-error:' '$WF_YAML'"
+
 assert "#6617 neither probe op appears in the environment: expression" "! grep -E '^[[:space:]]+environment:' '$WF' | grep -qE 'registry-probe|doublefire-probe'"
 
 # --- Scope caveat carried verbatim from op=verify 2.6 (B-AC7) ---
@@ -1558,6 +1776,12 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 # prod-write region assertion left the suite green. This floor is the full count at the time of
 # writing; raise it in lockstep when adding assertions, never lower it to make a removal pass.
 #
+# 476 -> 496 (+20) at #7674 review: dual-field host isolation + #6616 spoof fixture, the resume G3
+#   audibility gate, op-set parity between environment: and the arm token, and the L-dominates-H
+#   rows. FLOOR IS NOW THE EXACT DISPATCHED COUNT — slack is attack budget, and the 1 assertion of
+#   slack the previous floor carried absorbed exactly the row a mutation had proven load-bearing.
+# 471 -> 475 (+4) when the AC3/AC4 chokepoint+ordering assertions landed (#7674).
+# 449 -> 471 (+22) when G3.7 gained its second (liveness) signal and the `silent` outcome (#7674).
 # 408 -> 449 (+41) when the G3.7 pre-flush-latch gate landed. Stated as a DELTA on purpose: the
 # absolute number is only meaningful against the run that produced it, and re-deriving it after a
 # rebase is the point at which a silently-dropped sibling assertion would otherwise be papered
@@ -1569,13 +1793,13 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 # printed a clean total and exited 0. A floor enforced through the suspect cannot witness the
 # suspect. Caught by scripts/guard-vacuity-floor.test.sh ARM 2b, whose deferred-scope ratchet is
 # 0 — this suite was the one member of the deferred population that still had the defect.
-if [[ "$PASS" -lt 449 ]]; then
-  printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is 449 — an assertion was removed or skipped.\n' "$PASS" >&2
+if [[ "$PASS" -lt 497 ]]; then
+  printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is 497 — an assertion was removed or skipped.\n' "$PASS" >&2
   echo ""
   echo "=== Results: $PASS passed, $FAIL failed ==="
   exit 1
 fi
-echo "  PASS: anti-deletion floor ($PASS >= 449 assertions dispatched)"
+echo "  PASS: anti-deletion floor ($PASS >= 497 assertions dispatched)"
 
 echo ""
 echo "=== Results: $PASS passed, $FAIL failed ==="

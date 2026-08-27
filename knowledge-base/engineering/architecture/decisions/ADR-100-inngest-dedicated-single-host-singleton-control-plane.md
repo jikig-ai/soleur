@@ -808,3 +808,79 @@ world. Correcting the comment RECONCILES the two documents; it does not obsolete
 budget re-derivation follows. Recorded as a negative result rather than dropped silently: a future
 reader hitting the same sentence should be able to find that the question was asked and settled,
 rather than re-run the arithmetic.
+
+## Addendum — 2026-08-25 (#7674) — code delivery to this host is replace-only, and "host dark" is not "query finds nothing"
+
+Three records, all from measurement rather than reasoning. None amends a Decision; they name
+standing properties that were being rediscovered incident by incident.
+
+### 1. Code delivery to the dedicated host is REPLACE-ONLY (a standing constraint)
+
+Every on-host asset — `inngest-server-probe.sh`, `cat-inngest-cutover-state.sh`, `vector.toml`,
+`inngest-cutover-flip.sh`, the flip guard — is baked into the OCI bootstrap image and pulled by a
+**digest literal pinned inside `apps/web-platform/infra/cloud-init-inngest.yml`**. That literal
+lives in `user_data`, which is ForceNew on `hcloud_server.inngest` with **no `ignore_changes`**.
+
+`deploy-inngest-image.yml` does **not** reach this host: it POSTs to the *web* host's
+`deploy.soleur.ai/hooks/deploy`, and `ci-deploy.sh`'s inngest arm says so in two places.
+
+**Therefore there is no no-SSH code-delivery path to 10.0.1.40 that does not force-replace the
+fleet's sole scheduler** — and, because the trigger is the rendered bytes of `user_data`, that
+includes a **comment-only edit** to the cloud-init file.
+
+The consequence is architectural, not procedural: any capability that requires *new code on the
+host* cannot ship incrementally. It is replace-coupled, and a PR that proposes one must either
+carry a replace window or defer. Repo-side deliverables (gates, readers, workflow arms) are the
+only ones that land independently. This was rediscovered during #7674 while scoping a webhook that
+turned out to be undeliverable for exactly this reason (see 3).
+
+### 2. "The host is dark" and "the query finds nothing" are DIFFERENT failures, and were conflated
+
+The 2026-07 G6 confirm timeout was attributed to "the host ships nothing". That attribution does
+**not** generalise, and treating it as general is what let a fail-open stand for a month.
+
+Measured 2026-08-25: the host ships **~2,040 rows/day** (`inngest-cutover-flip`, ~1.4/min sustained
+— 170 rows in a 2h window, verified arriving), while G3.7's query — over that same live channel — returns **0 rows at 7d, 30d
+and 365d**. Both statements are true simultaneously. A reader that cannot separate them reports
+`clear` (full coverage) on a question it has no evidence for, which is precisely what G3.7 did.
+
+The general form: **absence of matching rows is a statement about the QUERY, never about the host,
+unless the host's liveness has been independently established.** Any future no-SSH gate that
+refuses-or-proceeds on a row count needs a second signal answering "is this host audible at all?",
+or it is fail-open by construction. An empty result and a dead channel are indistinguishable at the
+call site, and the empty result is the reassuring one.
+
+### 3. G3.7's two-signal design, and the webhook alternative RE-REJECTED
+
+G3.7 now derives two independent signals — `L` (latch evidence) and `H` (this host's liveness
+inside a 15-minute window) — and carries a fourth outcome, `silent`, for `(L=0, H=0)`. `silent` is
+kept distinct from `unreadable` because the remediations are disjoint: `unreadable` points at
+`BETTERSTACK_QUERY_*` credentials, `silent` points at the host having gone dark. A non-decimal `H`
+therefore routes to `unreadable` and never to `silent`.
+
+`clear` remains a **WEAK** verdict and is documented as such at the gate: Better Stack retention
+against a 365d window is UNMEASURED (a `--limit`-bound query cannot measure a retention floor when
+the channel saturates the window), so `clear` means "the host is reporting and no flush evidence is
+visible", not "no flush has happened". The on-host monotonic latch remains the authority; this gate
+can only ever ADD a refusal.
+
+**The webhook alternative was raised again and rejected again.** #7674's brief proposed exposing
+`cat-inngest-cutover-state.sh` behind a webhook id to read the `/mnt/data` latch on demand. That is
+the alternative this ADR already rejected by name — *"a dedicated-host webhook reached via web-host
+fan-out … a new inbound control plane on the deny-all-public singleton enlarges its attack surface
+(SEC-H2)"* — and Decision 6a's "no `adnanh/webhook` / `hooks.json`" stands unamended. It is also
+undeliverable under (1) above without a host replace. The operator was given both the substitution
+and the build-it-anyway option on 2026-08-25 and chose the substitution: the intent is met over the
+transport this ADR already adopted (on-host Vector → Better Stack journald), at the cost of losing
+an on-demand read of the latch record's verbatim contents.
+
+### What remains open
+
+There is still **no `apply_target` that recuts `/mnt/data`**. A host replace re-attaches the same
+volume (measured: volume `106261946`, created 2026-07-07, attached to a host created 2026-08-20,
+latch intact), and `op=verify-wiped-volume` wipes `/var/lib/inngest`. So a standing flush latch has
+no in-repo remediation today. The `inngest-volume-recut` design — five guard layers including a
+"host is dark" pre-flight refusal absent from the `workspaces-luks-recut` template it is modelled
+on, behind the existing `inngest-cutover` required-reviewer environment — is complete and tracked
+for the PR that opens the cutover window. It is deliberately not built inert: its guards can only
+be graded against synthesized fixtures until a real dispatch exists.
