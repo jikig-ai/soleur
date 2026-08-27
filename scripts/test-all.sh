@@ -361,7 +361,7 @@ fi
 # shellcheck source=scripts/lib/repo-write-boundary.sh
 source "$_RWB_LIB"
 _RWB_MISSING=""
-for _rwb_fn in _repo_state repo_boundary_dimensions repo_boundary_manifest \
+for _rwb_fn in _repo_state repo_boundary_manifest \
                repo_boundary_render_inspected repo_boundary_render_not_inspected \
                repo_boundary_classify repo_boundary_next_action; do
   declare -F "$_rwb_fn" >/dev/null || _RWB_MISSING="$_RWB_MISSING $_rwb_fn"

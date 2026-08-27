@@ -682,6 +682,17 @@ hand-maintained `(file, function)` table.
 `test-<name>.sh` corpora other than the ones named; and any escape reaching a remote, which no local
 snapshot can observe.
 
+## Observability — Addendum 2026-08-27 (#7652): corrections after the review panel
+
+Three claims in the block below were measured FALSE against the shipped code and are corrected
+here rather than edited in place.
+
+| Claim as originally written | Measured |
+|---|---|
+| REPORT is "re-emitted in the breakdown area, pointing at the contention preamble" | Both halves were wrong. The breakdown line was gated on `killed > 0 \|\| skipped > 0`, so on the exact run shape REPORT exists for (a green run with a sibling's `git push -u`) it was never printed at all. And the `[contention]` preamble counts *processes running `test-all.sh`*, not sibling worktrees doing ordinary git work — and the runner REFUSES with rc=4 when that count is non-zero, so at the boundary it reads 0 on essentially every run. Fixed: the gate now includes the observation and unmeasured-dimension counts, and attribution prints the `wt` set this run actually measured. |
+| FATAL is "re-emitted in the breakdown area" | Only the `failed` count changes there; no FATAL text is re-emitted. The FATAL block is stderr at the point of detection. |
+| The `failure_modes` entries name no observability layer | Corrected below: this runner's signals land on **layer 6 (workflow run log / synchronous consumer)** for the CI shards and the lefthook pre-commit terminal, and **layer 7 (`cli-stdout-artifact`)** for the `plugins/soleur/test/**` suites, which have no durable artifact beyond the invoking session's stdout. There is deliberately no layer 1-5 sink: a gate runner has no Sentry or Better Stack path, and inventing one would be the unmeasured-claim defect this change exists to remove. |
+
 ## Observability
 
 Triggered by `apps/web-platform/infra/` paths in scope. Every surface is developer-machine or

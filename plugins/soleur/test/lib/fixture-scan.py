@@ -86,7 +86,7 @@ def scope_has_set_e(lines, idx):
             continue
         if s == ")":
             depth += 1
-        elif s == "(" or s.endswith("("):
+        elif s.endswith("("):   # `s == "("` is subsumed: "(".endswith("(") is True
             if depth == 0:
                 for k in range(j + 1, idx):
                     if SET_E.match(lines[k]) and not lines[k].lstrip().startswith("#"):

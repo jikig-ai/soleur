@@ -76,9 +76,6 @@ _repo_boundary_safe_key() {
   fi
 }
 
-repo_boundary_dimensions() {
-  printf 'head\nworktree\nconfig\nrefs\n'
-}
 
 # Emits `<dim>\t<status>`, read FROM A SNAPSHOT when one is passed.
 #

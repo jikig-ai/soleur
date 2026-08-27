@@ -71,6 +71,17 @@ SCANNER="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fixture-scan.py"
 
 echo "A1: no tracked *.test.sh redirects a git write through an unguarded cd"
 SCAN_OUT="$(python3 "$SCANNER" --rule cd --repo "$REPO_ROOT" 2>&1)"
+# A corpus floor, which this suite lacked while its sibling had one. `FILES=0 SITES=0` is
+# byte-identical to a clean tree, so any condition that empties `git ls-files` (a corrupt index,
+# $GIT_DIR repointed, git off PATH) produced a confident PASS. Reported directly, never through
+# pass()/fail(): an anti-vacuity check routed through the machinery it polices cannot fire when
+# that machinery is what broke.
+_CD_FILES="$(printf '%s' "$SCAN_OUT" | sed -n 's/^FILES=//p')"
+if [[ "${_CD_FILES:-0}" -le 100 ]]; then
+  printf '[FATAL] cd-rule corpus is empty or tiny (FILES=%s) — SITES=0 over no files is not a clean tree.\n' \
+    "${_CD_FILES:-unset}" >&2
+  exit 1
+fi
 SITES="$(sed -n 's/^SITES=//p' <<<"$SCAN_OUT")"
 if [[ "$SITES" == "0" ]]; then
   pass "no unguarded cd-then-write sites"
@@ -174,12 +185,37 @@ n2="$(python3 "$SCANNER" --rule cd "$TMP/bad.test.sh" 2>&1 | sed -n 's/^SITES=//
   || fail "heredoc skipping disabled real detection ($n2)"
 echo ""
 
+echo "A6: every cd-rule write verb is matched (the verb set is enumerated, not sampled)"
+# One fixture per verb. Before this the must-trip set was a SINGLE fixture whose only write is
+# `commit`, referenced twice — so cutting CD_WRITE down to `commit` alone was fully green,
+# including dropping `config`, the verb of the 2026-08-20 incident this file's header narrates.
+for _cdverb in "commit --allow-empty -m x" "push origin HEAD" "add -A" "update-ref refs/heads/x HEAD" \
+               "checkout -b x" "reset --hard HEAD" "branch -D x" "worktree add /tmp/w" \
+               "worktree remove /tmp/w" "rm -r x" "mv a b" "config a.b c"; do
+  _slug="$(printf '%s' "$_cdverb" | tr -c 'a-zA-Z0-9' '-' | cut -c1-30)"
+  cat > "$TMP/cdverb-$_slug.test.sh" <<CDEOF
+#!/usr/bin/env bash
+set -uo pipefail
+( cd "\$FIXTURE"
+  git ${_cdverb}
+)
+CDEOF
+  _n="$(python3 "$SCANNER" --rule cd "$TMP/cdverb-$_slug.test.sh" 2>&1 | sed -n 's/^SITES=//p')"
+  if [[ "${_n:-0}" -ge 1 ]]; then
+    pass "cd rule matches write verb \`$(printf '%s' "$_cdverb" | awk '{print $1}')\`"
+  else
+    fail "cd rule does NOT match write verb \`$_cdverb\` — the verb set narrowed"
+  fi
+done
+echo ""
+
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"
-# Floor: 8 assertions. A refactor that drops arms must not read as a pass.
-if (( PASS + FAIL < 8 )); then
-  echo "ANTI-VACUITY FLOOR TRIPPED: only $((PASS + FAIL)) assertions ran, expected 8." >&2
+# Floor: 20 assertions (8 original + 12 verb-enumeration arms). Exact, derived from a green run —
+# slack is where a deleted arm hides.
+if (( PASS + FAIL < 20 )); then
+  echo "ANTI-VACUITY FLOOR TRIPPED: only $((PASS + FAIL)) assertions ran, expected 20." >&2
   exit 1
 fi
 if (( FAIL > 0 )); then echo "SOME TESTS FAILED"; exit 1; fi

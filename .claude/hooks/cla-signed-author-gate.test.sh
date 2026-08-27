@@ -11,9 +11,15 @@ set -euo pipefail
 # operates on the current directory, which under TEST_GROUP=scripts is the developer's live
 # worktree, whose `.git/config` is the SHARED file every worktree on the machine inherits.
 #
-# Rejects bare `/` as well as empty: a `/*` case arm accepts `/`, and `rm -rf "/"/*` is the worst
-# outcome available in this corpus. Tests the LEADING `/` only, never a `realpath` comparison,
-# which breaks on a symlinked /tmp.
+# Rejects, beyond empty: bare `/` AND its aliases `//` and `/.` (a `/*` arm accepts all three, and
+# `rm -rf "/"/*` is the worst outcome in this corpus — a one-character bypass of a stated
+# rejection); any path containing `..`, which can resolve back inside the real repo; and
+# /proc, /sys, /dev, because `/proc/self/cwd` is absolute, passes every other arm, and resolves
+# to precisely "whatever repository the caller happens to be standing in".
+#
+# Still no `realpath`: it breaks on a symlinked /tmp, which this corpus uses. So a symlink to
+# $HOME is ACCEPTED — stated here rather than left implied, because the arms above make this
+# look like a containment check and it is not.
 #
 # The body below is a COPY. The canonical definition lives in
 # plugins/soleur/test/test-helpers.sh; plugins/soleur/test/fixture-dir-operand-assert.test.sh
@@ -21,7 +27,9 @@ set -euo pipefail
 assert_fixture_dir() {
   case "${1-}" in
     "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
-    /)  printf 'FATAL: fixture dir is bare /; refusing\n' >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
     /*) : ;;
     *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
   esac

@@ -53,3 +53,26 @@ run gating the boundary half before any fixture is edited.
 
 What it avoids is a second full review → QA → ship cycle, which the operator pays for in API
 credit and which buys no additional safety given the local-window analysis above.
+
+
+## UC-2 — the plugin-local-runner scope-out rests on the wrong precondition
+
+**Recorded 2026-08-27, after the review panel.**
+
+`plugins/soleur/test/fanout-suite-scope.test.sh` is a SHIPPED file that now does
+`cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh"` — an UNSHIPPED path. That was scope-outed on
+the stated ground that *"no shipped path executes them (there is no plugin-local runner)."*
+
+**That precondition is false, and it was verified false rather than argued.**
+`plugins/soleur/scripts/grok-pre-push-gate.sh` IS shipped and DOES `cd "$REPO_ROOT"` then
+`bash scripts/test-all.sh`. What actually protects the delivered plugin is that its `REPO_ROOT`
+resolves to the marketplace cache root, which contains no `scripts/` directory — so the invocation
+fails to find the runner at all. That is a **path-resolution accident**, not the absence of a
+runner, and it is a materially weaker precondition than the one recorded.
+
+**Disposition: the scope-out stands, the reason is corrected.** The failure mode is unchanged and
+fails CLOSED (`cp … || return 1` → `exit 2`), and the identical unshipped-dependency shape already
+existed for `test-relevance-paths.sh` and `test-contention.sh`, so this adds no new class. What
+changes is that the recorded justification now names the real protection, so a future reader who
+relocates `grok-pre-push-gate.sh` or adds a `scripts/` directory to the shipped tree can see that
+this assumption is what they are breaking.

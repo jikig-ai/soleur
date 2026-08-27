@@ -79,7 +79,7 @@ echo "repo-write-boundary.test.sh"
 # caller will call. A STALE lib must be named, not silently narrow the gate.
 ck
 missing=""
-for fn in _repo_state repo_boundary_dimensions repo_boundary_manifest \
+for fn in _repo_state repo_boundary_manifest \
           repo_boundary_render_inspected repo_boundary_render_not_inspected \
           repo_boundary_classify; do
   bash -c 'source "'"$LIB"'"; declare -F '"$fn"' >/dev/null' || missing="$missing $fn"
@@ -208,7 +208,6 @@ else fail "ref move invisible"; fi
 # most destructive outcome the dimension has.
 ck
 p=$(new_probe refdel) || exit 2
-state "$p"; before="$STATE_OUT"
 git -C "$p" branch doomed
 state "$p"; mid="$STATE_OUT"
 git -C "$p" branch -D doomed -q 2>/dev/null
@@ -334,7 +333,11 @@ RUNNER="$REPO_ROOT/scripts/test-all.sh"
 # or a boundary variable below the anchor is deleted in those sandboxes, and the failure surfaces
 # as two unrelated red suites rather than as this one.
 ck
-src_ln=$(grep -n 'repo-write-boundary\.sh' "$RUNNER" | head -n1 | cut -d: -f1)
+# Anchored on the SOURCE STATEMENT, not the lib's filename. The filename first matches the
+# `_RWB_LIB=` assignment — so moving `source` below tc_acquire while leaving the assignment in
+# place kept this green, which is the exact failure the arm exists to prevent. Its second match is
+# a `# shellcheck source=` COMMENT.
+src_ln=$(grep -nE '^[[:space:]]*source "\$_RWB_LIB"' "$RUNNER" | head -n1 | cut -d: -f1)
 acq_ln=$(grep -n '^tc_acquire "test-all"' "$RUNNER" | head -n1 | cut -d: -f1)
 if [[ -n "$src_ln" && -n "$acq_ln" ]] && (( src_ln < acq_ln )); then
   pass "the boundary lib is sourced above tc_acquire (line $src_ln < $acq_ln)"
@@ -370,7 +373,7 @@ nolib_raw="$TMP_ROOT/nolib.out"
 nolib_rc=$?
 nolib_out=$(head -20 "$nolib_raw")
 if [[ "$nolib_rc" -eq 2 ]] && grep -q 'repo-write-boundary' <<<"$nolib_out" \
-   && ! grep -qi 'git unavailable' <<<"$nolib_out"; then
+   && ! grep -qi 'boundary was not measured' <<<"$nolib_out"; then
   pass "a missing boundary lib exits 2, names the lib, and does not blame git"
 else
   fail "missing-lib contract wrong (rc=$nolib_rc): '$(printf '%s' "$nolib_out" | tr '\n' '|' | cut -c1-220)'"
@@ -454,15 +457,24 @@ fi
 ck
 relocators=""; unlisted=""
 while IFS= read -r f; do
-  grep -qE '^[[:space:]]*cp\b.*test-all\.sh|cp "\$TARGET"|cp "\$MAIN_TARGET"|cp "\$RUNNER"' "$f" || continue
+  # `git show <ref>:scripts/test-all.sh > "$dst"` is a LIVE relocation form in this tree
+  # (test-all-killed-classification.test.sh builds its origin/main baseline that way) and carries
+  # no `cp` token — it was enumerated only incidentally, because that file also does `cp "$TARGET"`.
+  # `install`/`rsync`/`cat >`/`tar` are added for the same reason: the detector must not be a list
+  # of the spellings that happen to be in the tree today.
+  grep -qE '^[[:space:]]*(cp|install|rsync)\b.*test-all\.sh|^[[:space:]]*cp "\$(TARGET|MAIN_TARGET|RUNNER)"|^[[:space:]]*git .*show [^|]*:scripts/test-all\.sh[[:space:]]*>|^[[:space:]]*cat[[:space:]]+[^|]*test-all\.sh[[:space:]]*>' "$f" || continue
   relocators="$relocators $f"
   # Anchored on the COPY, never on the lib's name. The previous form was `grep -q
   # 'repo-write-boundary'`, which any file mentioning the lib satisfies — including THIS file,
   # which names it eight times and was therefore counted as compliant while deliberately building
   # sandboxes without it. A guard satisfied by prose about the guard is this branch's own subject.
-  grep -qE 'cp .*repo-write-boundary\.sh' "$f" && continue           # actually copies the lib
-  grep -q 'repo-write-boundary-sandbox: not-needed' "$f" && continue  # declared early-exit-only
-  grep -q 'repo-write-boundary-sandbox: tests-refusal' "$f" && continue # declared refusal-tester
+  # Anchored at line start so a COMMENT cannot satisfy it. `grep -qE 'cp .*repo-write-boundary'`
+  # was cleared by prose like `# we do not cp repo-write-boundary.sh here` — the same
+  # satisfied-by-prose defect one token over from the one this arm was written to fix.
+  grep -qE '^[[:space:]]*cp\b.*repo-write-boundary\.sh' "$f" && continue
+  # Markers anchored to a COMMENT at line start, so the arm's own regex literals (which appear in
+  # this file) cannot self-exempt it.
+  grep -qE '^#[[:space:]]*repo-write-boundary-sandbox: (not-needed|tests-refusal)' "$f" && continue
   unlisted="$unlisted
     $(realpath --relative-to="$REPO_ROOT" "$f")"
 done < <(git -C "$REPO_ROOT" ls-files '*.sh' | sed "s#^#$REPO_ROOT/#" | xargs grep -l 'test-all\.sh' 2>/dev/null)
@@ -498,11 +510,13 @@ start_snap=$(grep -nE '^[[:space:]]*if _repo_state_before="\$\(_repo_state\)"' "
 end_snap=$(grep -nE '^[[:space:]]*if _repo_state_after="\$\(_repo_state\)"' "$RUNNER" \
   | grep -v ':[[:space:]]*#' | head -n1 | cut -d: -f1)
 last_suite=$(grep -n '^\s*run_suite ' "$RUNNER" | tail -n1 | cut -d: -f1)
+first_suite=$(grep -n '^\s*run_suite ' "$RUNNER" | head -n1 | cut -d: -f1)
 if [[ -n "$acq" && -n "$start_snap" && -n "$end_snap" && -n "$last_suite" ]] \
-   && (( start_snap > acq )) && (( end_snap > last_suite )); then
-  pass "the boundary window spans the suite list: tc_acquire($acq) < start($start_snap), last run_suite($last_suite) < end($end_snap)"
+   && [[ -n "$first_suite" ]] \
+   && (( start_snap > acq )) && (( start_snap < first_suite )) && (( end_snap > last_suite )); then
+  pass "the window spans the suite list: acquire($acq) < start($start_snap) < first suite($first_suite), last suite($last_suite) < end($end_snap)"
 else
-  fail "boundary window ordering wrong: acquire=$acq start=$start_snap last_run_suite=$last_suite end=$end_snap"
+  fail "window ordering wrong: acquire=$acq start=$start_snap first_suite=${first_suite:-?} last_suite=$last_suite end=$end_snap"
 fi
 
 # --- 30. THE CONFIG HARM PARTITION — a sibling `git push -u` must NOT red the gate ------------
@@ -664,6 +678,42 @@ else
   fail "next-action mapping wrong:$map_bad"
 fi
 
+# --- 38. The runner's declared function contract equals what it actually CALLS ----------------
+# This set lived in three places in three different spellings: seven names in the runner's
+# `declare -F` loop, six in this suite's arm 1, and a four-alternative regex in arm 24. Deleting a
+# function the runner calls but arm 1 omits left arm 1 green while the gate exited 2 with no arm
+# naming why. Derived from the runner's own call sites so there is one source of truth.
+ck
+# `\b_?repo_boundary_…` so a PRIVATE `_repo_boundary_exit_note` is not counted by matching the
+# public-looking suffix of its own name, and LC_ALL=C so `sort` and `comm` agree on byte order
+# (they disagreed on the leading underscore under the ambient locale, which reported `_repo_state`
+# as present in BOTH "declared only" and "called only" at once).
+# TOKENISED first, then matched WHOLE-LINE. A `grep -oE` with surrounding-character groups
+# consumes the delimiter, so in `_repo_state repo_boundary_manifest` the second name loses its
+# leading boundary and is skipped — the extraction silently reported half the list. `-x` also makes
+# `_repo_state` immune to matching inside `_repo_state_before`, and the `-v` drops private
+# `_repo_boundary_*` helpers, which would otherwise be counted via their public-looking suffix.
+_rwb_names() { tr -cs 'A-Za-z0-9_' '\n' < "$1" \
+  | grep -xE '_repo_boundary_[a-z_]+|repo_boundary_[a-z_]+|_repo_state' \
+  | grep -vE '^_repo_boundary_' | LC_ALL=C sort -u; }
+declared=$(sed -n '/^for _rwb_fn in/,/^done$/p' "$RUNNER" > "$TMP_ROOT/decl.txt"; _rwb_names "$TMP_ROOT/decl.txt")
+# Call sites, from the whole file MINUS the declaration loop itself (otherwise the loop's own list
+# is counted as calls and the comparison is a tautology). `$(_repo_state)` puts a CLOSING paren
+# after the name, so an `[("]` lookahead misses the runner's only two invocations of its most
+# public function — the first version of this arm did exactly that.
+called=$(sed '/^for _rwb_fn in/,/^done$/d' "$RUNNER" > "$TMP_ROOT/called.txt"; _rwb_names "$TMP_ROOT/called.txt")
+# `repo_boundary_manifest` is called by the lib internally and by this suite, not by the runner —
+# it is legitimately declared-but-not-called, so it is excluded from the comparison rather than
+# silently tolerated.
+called="$(printf '%s\nrepo_boundary_manifest\n' "$called" | grep -v '^$' | LC_ALL=C sort -u)"
+if [[ "$declared" == "$called" ]]; then
+  pass "the runner's declare -F contract equals the functions it calls ($(printf '%s' "$declared" | wc -l | tr -d ' ') names)"
+else
+  fail "declared-vs-called drift:
+    declared only: $(LC_ALL=C comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$called") | tr '\n' ' ')
+    called only:   $(LC_ALL=C comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$called") | tr '\n' ' ')"
+fi
+
 # --- Accounting. Emitted DIRECTLY, never through pass()/fail(): a conservation check routed
 # through the verdict helper it exists to police cannot report the fault that corrupted it.
 if [[ $((passes + fails)) -ne $asserted ]]; then
@@ -676,9 +726,9 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-# Derived from a green run, then ratcheted upward: 37 arms execute today, so a deleted or
+# Derived from a green run, then ratcheted upward: 38 arms execute today, so a deleted or
 # neutered arm cannot hide behind slack. Raise it in lockstep when adding arms; never lower it.
-MIN_ASSERTIONS=37
+MIN_ASSERTIONS=38
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

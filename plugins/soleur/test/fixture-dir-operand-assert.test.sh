@@ -162,7 +162,7 @@ fi
 # Bodies are compared with comments and blank lines stripped: a copy is allowed to carry different
 # surrounding prose, never different behaviour.
 extract_body() { # extract_body <file>
-  awk '/^assert_fixture_dir\(\) \{/,/^\}/' "$1" \
+  awk '/^[[:space:]]*(function[[:space:]]+)?assert_fixture_dir[[:space:]]*(\(\))?[[:space:]]*\{/,/^\}/' "$1" \
     | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
 }
 ck
@@ -181,7 +181,17 @@ while IFS= read -r f; do
   b="$(extract_body "$f")"
   [[ "$b" == "$canon" ]] || drift="$drift
     $(realpath --relative-to="$REPO_ROOT" "$f")"
-done < <(grep -rl '^assert_fixture_dir() {' "$REPO_ROOT" --include='*.sh' 2>/dev/null)
+# Discovery matches every spelling that DEFINES the function — `function assert_fixture_dir {`, a
+# leading indent, and a space before the parens all escaped `^assert_fixture_dir() {` while still
+# satisfying the scanner's name token, so a copy in any of them was exempt from drift entirely.
+# Corpus is `git ls-files`, the same one the scanner walks: two corpora for two halves of one guard
+# is how they drift apart.
+done < <(git -C "$REPO_ROOT" ls-files -z '*.sh' \
+  | while IFS= read -r -d '' _rel; do
+      _abs="$REPO_ROOT/$_rel"
+      grep -qE '^[[:space:]]*(function[[:space:]]+)?assert_fixture_dir[[:space:]]*(\(\))?[[:space:]]*\{' "$_abs" 2>/dev/null \
+        && printf '%s\n' "$_abs"
+    done)
 # Same reasoning as the corpus floor above: zero inline copies makes the drift comparison
 # vacuous, so it is reported directly rather than through the helper it would be policing.
 if [[ $copies -lt 1 ]]; then
@@ -192,6 +202,24 @@ if [[ -z "$drift" ]]; then
   pass "all $copies inline definition(s) are byte-equal to the canonical body"
 else
   fail "inline definition drift:$drift"
+fi
+
+# --- C2. A byte-equal body in a file that SHADOWS `exit` does not actually refuse --------------
+# Guard 1 proves the token is present and the bytes match; Guard 3 proves the canonical bytes
+# refuse in a clean shell. Neither sees a copy whose own file redefines a builtin the body depends
+# on: `exit() { return 0; }` above the definition leaves `extract_body` returning exactly canon
+# while `assert_fixture_dir ""` RETURNS and the write on the next line proceeds.
+ck
+shadowed=""
+while IFS= read -r f; do
+  grep -qE '^[[:space:]]*(function[[:space:]]+)?(exit|printf|return)[[:space:]]*\(\)[[:space:]]*\{' "$f" \
+    && shadowed="$shadowed
+    $(realpath --relative-to="$REPO_ROOT" "$f")"
+done < <(printf '%s\n' "$HELPERS"; grep -rlE '^[[:space:]]*(function[[:space:]]+)?assert_fixture_dir' "$REPO_ROOT/.claude/hooks" --include='*.sh' 2>/dev/null)
+if [[ -z "$shadowed" ]]; then
+  pass "no file carrying the assertion redefines a builtin its body depends on (exit/printf/return)"
+else
+  fail "the assertion's refusal is defeated by a shadowed builtin in:$shadowed"
 fi
 
 # --- D. ROW 5 — a WEAKENED inline body is caught by the equality rule --------------------------------
@@ -316,6 +344,63 @@ SYNTHEOF
     fail "write verb \`${_vlabel}\` (as \`${_phrase}\`) is NOT matched — the verb list narrowed"
   fi
 done
+
+# --- E3. THE FOUR LAUNDERING PATHS — a guard must not be silenceable by nearby text ------------
+# Each of these was proven to scan CLEAN before the guard window learned to skip comments and the
+# guards became per-operand. They matter because each of the six helpers this issue remediated has
+# exactly ONE assertion call: deleting it and leaving a comment that merely NAMES it kept the
+# ratchet green, i.e. the fix could be reverted invisibly. That is the `cdx()` name-token gap this
+# scanner exists to replace.
+#
+# Added AFTER the scanner fix, because the fix was initially shipped unpinned — re-narrowing the
+# window to ignore comments left this suite fully green until these arms existed.
+ck
+n=$(synth launder-comment <<'SYNTHEOF'
+h() {
+  local dir="$1"
+  # assert_fixture_dir "$dir"   <- removed, TODO restore
+  git -C "$dir" config commit.gpgsign false
+}
+SYNTHEOF
+)
+if [[ "$n" == "1" ]]; then pass "a COMMENTED-OUT assertion does not clear a site"
+else fail "laundering via comment: expected 1 site, got ${n:-none}"; fi
+
+ck
+n=$(synth launder-case <<'SYNTHEOF'
+h() {
+  local dir="$1"
+  case "$MODE" in fast) : ;; esac
+  git -C "$dir" config commit.gpgsign false
+}
+SYNTHEOF
+)
+if [[ "$n" == "1" ]]; then pass "an UNRELATED \`case\` does not clear a site"
+else fail "laundering via unrelated case: expected 1 site, got ${n:-none}"; fi
+
+ck
+n=$(synth launder-test <<'SYNTHEOF'
+h() {
+  local dir="$1"
+  [[ -n "$SOMETHING_ELSE" ]] || true
+  git -C "$dir" config commit.gpgsign false
+}
+SYNTHEOF
+)
+if [[ "$n" == "1" ]]; then pass "an UNRELATED \`[[ -n ]] || true\` does not clear a site"
+else fail "laundering via unrelated test: expected 1 site, got ${n:-none}"; fi
+
+ck
+n=$(synth launder-return <<'SYNTHEOF'
+h() {
+  local dir="$1"
+  mkdir -p /tmp/x || return 1
+  git -C "$dir" config commit.gpgsign false
+}
+SYNTHEOF
+)
+if [[ "$n" == "1" ]]; then pass "an UNRELATED \`|| return\` on another operand does not clear a site"
+else fail "laundering via unrelated || return: expected 1 site, got ${n:-none}"; fi
 
 # --- F. Must-PASS. None of these is the canonical shape, and each would be a false positive. --------
 ck
@@ -458,9 +543,9 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-# Exact, derived from a green run: 43 arms execute today. The previous 17 against 21 arms left
+# Exact, derived from a green run: 62 arms execute today. The previous 17 against 21 arms left
 # four must-trip arms deletable behind the slack (measured). Raise in lockstep; never lower.
-MIN_ASSERTIONS=57
+MIN_ASSERTIONS=62
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS}" >&2
   exit 1
