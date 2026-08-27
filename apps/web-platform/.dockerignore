@@ -104,6 +104,21 @@ scripts/
 *.md
 
 test/
+# ...but vitest.config.ts is NOT excluded, it sits at the context root, and
+# `next build` type-checks it. Since #7666 it imports ./test/repo-wide-suites,
+# so pruning the whole directory left a build-INCLUDED file importing a
+# build-EXCLUDED module: `Cannot find module './test/repo-wide-suites'`.
+#
+# Local `tsc` and the CI `test` job both see a complete tree and pass; only the
+# image build sees the pruned one. That asymmetry is why this cleared every
+# pre-merge gate and still failed 8 consecutive releases (2026-08-20 -> 08-26),
+# leaving prod on a stale build for six days.
+#
+# Same shape and same remedy as !scripts/sandbox-canary.mjs above (#5890).
+# The file is an 84-line pure-data manifest with zero imports, so re-including
+# it cannot cascade. test/docker-context-import-containment.test.ts asserts this
+# re-include stays in step with what vitest.config.ts actually imports.
+!test/repo-wide-suites.ts
 
 # Migrations/templates not needed at runtime
 supabase/
