@@ -3,7 +3,7 @@ title: "Your brand context now auto-loads in the web AI agent, not just the CLI"
 type: feature-launch
 publish_date: 2026-08-27
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#6057"
 issue_reference: "#6046"
 ---
