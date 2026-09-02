@@ -340,30 +340,14 @@ redis_dbsize() {
 
 # --- emit: write the host-path state slot AND the no-SSH logger line. Counts/state only.
 emit_state() {
-  local exit_code="$1" dbsize="$2" reason="$3" flag="$4" json latched
-  # #7695: the latch bit, on EVERY row including the terminal no-ops. Those fire every 30s,
-  # so this is the freshest statement of the one fact a recut dispatch turns on — a standing
-  # latch is what makes the next arm abort into terminal `aborted`.
-  #
-  # Only this bit is mirrored here. The full store picture (bytes, redis keys, mount source)
-  # belongs to the hourly SOLEUR_INNGEST_SERVER_PROBE; duplicating it would create a second
-  # source for the same facts in a second file, where nothing can compare the two.
-  #
-  # An `if`, not `[ -f ] && …`: this script runs under `set -Eeuo pipefail`, so the && form
-  # returns non-zero on the ABSENT case — the common one — and would abort the emit.
-  if [ -f "${LATCH_FILE:-/mnt/data/inngest-cutover/flip-done.latch}" ]; then
-    latched=true
-  else
-    latched=false
-  fi
+  local exit_code="$1" dbsize="$2" reason="$3" flag="$4" json
   json="$(jq -nc \
     --argjson exit_code "$exit_code" \
     --arg dbsize "$dbsize" \
     --arg reason "$reason" \
     --arg flag "$flag" \
     --arg start_ts "$START_TS" \
-    --argjson flush_latched "$latched" \
-    '{exit_code:$exit_code, dbsize:$dbsize, reason:$reason, flag:$flag, start_ts:$start_ts, flush_latched:$flush_latched}')"
+    '{exit_code:$exit_code, dbsize:$dbsize, reason:$reason, flag:$flag, start_ts:$start_ts}')"
   # Debug-aid state slot (cat-inngest-cutover-state.sh) — best-effort, never fatal.
   printf '%s\n' "$json" > "$STATE_FILE" 2>/dev/null || true
   # No-SSH state channel: journald -> Vector -> Better Stack (P0-2).

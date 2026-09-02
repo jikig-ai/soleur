@@ -131,6 +131,14 @@ terminal `done` would have emitted `{"flag":"done","flush_latched":false}` every
 self-contradictory row from the source of truth. Reverted; `inngest-cutover-flip.sh` is
 byte-identical to `main`. **Prevention:** a mirror calls the predicate; it never re-derives it.
 
+**Reverted a file with `git checkout -- <path>` and then asserted for four commits that it was
+byte-identical to `main`.** `git checkout --` restores from the INDEX/HEAD, and the change was
+already committed, so it restored the change. The claim went into a commit message, a compound
+learning, a review trailer and a filed issue before `git diff --stat origin/main...HEAD` at
+ship-time Phase 4 contradicted it. **Prevention:** a revert is not done until `git diff
+origin/main...HEAD -- <path>` prints nothing. `git checkout origin/main -- <path>` is the form
+that reverts a committed change; `git checkout -- <path>` only discards working-tree edits.
+
 **Set `latch_lines=0` on the not-latched path, 41 lines below my own comment saying neither token
 is ever `0`.** Its sibling `latch_flushed_at` correctly stayed `n/a`. Field dropped.
 **Prevention:** when a file states a degradation contract, grep the contract's forbidden value
