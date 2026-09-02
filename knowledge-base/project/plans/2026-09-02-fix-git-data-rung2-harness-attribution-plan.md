@@ -140,7 +140,11 @@ cannot silently reach for the platform-specific one.
   The two-dispatch cap ("cap two per fix attempt") is prose discipline with no code enforcement.
 - `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` — arms `T1`–`T5`, `D1`, `R1`–`R4`,
   `S1`. Terminal line today is
-  `git-data-runcmd-rehearsal: 44 passed, 0 failed, Skipped: 2 (46 assertions)`. Skip ceiling is 2.
+  `git-data-runcmd-rehearsal: 69 passed, 0 failed, Skipped: 0 (69 assertions)` — **measured this
+  session**, and the suite hard-exits below an assertion floor of 69. `_SKIP_CEILING` is **7**, not
+  2; the "skip ceiling at 2" line is a stale comment inside D1's own block, which Phase 1.3
+  replaces. (The `44/0/2 (46)` triple that first appeared here is the *fixture* literal from
+  `t5-skip-persistence-bound-7510.test.sh`, not a live reading — see §0.1.)
   Run via `apps/web-platform/infra/run-registered-suites.sh` and `infra-validation.yml`, **not**
   directly from `scripts/test-all.sh`.
 - `tests/scripts/test-git-data-birth-readiness-gate.sh` — arms `A1`–`A11`; `A4`/`A5`/`A7`/`A8`
@@ -582,6 +586,25 @@ returns HTTP 400 `{"detail": "start and end are both required"}`), which is what
 issue body's literal prescription. Re-validate the equivalent parameter on the events endpoint at
 Phase 0, since the two endpoints need not share it.
 
+Against the real 2026-07-31 rehearsal host the full shape returns HTTP 200 and exactly the two
+fatals, with the two `info` rows and the `warning` row correctly excluded:
+
+```
+GET https://sentry.io/api/0/organizations/jikigai-eu/issues/
+      ?query=host_name%3Asoleur-git-data-rehearsal-30649892865+level%3Afatal
+      &start=2026-07-31T00:00:00&end=2026-08-01T00:00:00
+      &project=4511404943671376&limit=5
+  -> HTTP 200, 2 rows:
+     WEB-PLATFORM-6B  fatal  "git-data LUKS stage FAILED"
+     WEB-PLATFORM-65  fatal  "git-data cloud-init FAILED"
+```
+
+One incidental confirmation of §4.4 from composing that probe: appending `curl`'s `--write-out`
+text to the response body makes the whole payload unparseable
+(`json.decoder.JSONDecodeError: Extra data`). The status **must** be captured with
+`-o <file> -w '%{http_code}'` into a separate stream, never interleaved with the body a parser
+will read.
+
 #### 4.2 — the liveness anchor, with a window that is not the verdict window
 
 The anchor answers *"is this source answering at all"*. Two ways to get it wrong, both found at
@@ -781,89 +804,6 @@ An arm drives the window helper with two different apply timestamps and asserts 
 differ; replacing the helper's body with `printf ''` must redden. The previous suite stayed 43/0
 green under exactly that stub. A second arm asserts a `start=`-without-`end=` form is never emitted
 (the first draft promised this in an AC and built it in no phase).
-
-4.1 **The query.** One helper builds a single space-separated AND query — no `OR`, per the
-2026-04-06 learning:
-`host_name:<HOST_NAME> level:fatal`, with `project=4511404943671376` and an ISO
-`start=`/`end=` **pair** derived from the apply timestamp (defect 5; `start=` alone is HTTP 400,
-measured). `SENTRY_ORG` is **pinned to a literal `jikigai-eu`, not read from the environment**
-— the `doppler run -c prd_terraform` wrapper exports every secret in that config, and an
-env-sourced org is the defect. Closes defects 1, 5, 6.
-
-**The complete shape was executed end-to-end at plan time, not merely composed on paper**
-(`verified: 2026-09-02`). Against the real 2026-07-31 rehearsal host it returns HTTP 200 and
-exactly the two fatals, with the two `info` rows and the `warning` row correctly excluded:
-
-```
-GET https://sentry.io/api/0/organizations/jikigai-eu/issues/
-      ?query=host_name%3Asoleur-git-data-rehearsal-30649892865+level%3Afatal
-      &start=2026-07-31T00:00:00&end=2026-08-01T00:00:00
-      &project=4511404943671376&limit=5
-  -> HTTP 200, 2 rows:
-     WEB-PLATFORM-6B  fatal  "git-data LUKS stage FAILED"
-     WEB-PLATFORM-65  fatal  "git-data cloud-init FAILED"
-```
-
-One incidental confirmation of Phase 4.4 from composing that probe: appending `curl`'s
-`--write-out` text to the response body makes the whole payload unparseable
-(`json.decoder.JSONDecodeError: Extra data`). The status **must** be captured with
-`-o <file> -w '%{http_code}'` into a separate stream, never interleaved with the body a parser
-will read — which is the concrete form of "validate shape before counting".
-
-4.2 **The liveness anchor** (defect 2), mirroring `ANCHOR_SQL`'s existing role and its
-exclude-own-host design: a second query with **no** `host_name` term over the same window,
-asserting the source answers with ≥1 row. Its justification is the measured
-*unknown-tag-key → 200 `[]`* case, which is the only shape that silently reads clean; org and
-project drift both return 403 and are handled by 4.3.
-
-4.3 **Four distinguished causes** (defect 4). Capture the HTTP status with `--write-out` and
-keep `curl` stderr. Distinct messages, each returning TRANSIENT with `exit 2`:
-`401` (credential absent or rejected — measured), `403` (org or project not accessible, i.e. the
-drift case — measured), `429` (rate limited), and a transport/timeout rc with the stderr tail.
-None of these is a verdict.
-
-4.4 **Shape validation before counting** (defect 3), per the 2026-07-23 learning: parse with
-`jq -e 'if type=="array" then . else error("not-an-array") end'` **before** any length is taken.
-A 200 whose body is HTML or an object yields TRANSIENT, never clean. `jq -e` on `null | length`
-returns 0 and exits 0 — the count must never be the first thing trusted.
-
-4.5 **Placement at every call site** (test requirement). The Sentry consult is invoked from
-**all** paths that today return TRANSIENT without a second opinion: both Better Stack credential
-preflight `exit 2` sites, the anchor-zero-row path, and the `boot_complete`-missing path.
-Reverting any single one of these to a bare `exit 2` must redden the suite — this is the
-mutation row the previous attempt lacked, and it is why placement is asserted per site rather
-than once.
-
-4.6 **Redaction** — add `SENTRY_ISSUE_RO_TOKEN` to the workflow's redaction tuple (anchor: the
-`for var in ("BETTERSTACK_QUERY_HOST",` line). The arm prints Sentry `title` and `culprit` into
-a 7-day artifact on a public repo. Add an arm asserting the tuple contains the token name, so a
-future arm that reads a new secret without widening the tuple reddens.
-
-4.7 **Remove the stale eyeball instructions.** `.github/workflows/git-data-rung2-rehearsal.yml`
-(anchor: `Confirm against Sentry first`) and
-`knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md` (anchor:
-`If the poll expires without a terminal answer, check **Sentry** before concluding anything`)
-both direct a human to a dashboard. Once the script consults Sentry itself these are false, and
-they are `hr-no-dashboard-eyeball-pull-data-yourself` violations relocated one layer up. Replace
-with a statement of what the script now consults and what its verdicts mean.
-
-4.8 **Fixtures model the production artifact** (test requirement, and constraint 2's citation).
-At least one arm feeds the **real** `level:info` beacon body — `WEB-PLATFORM-63`,
-`git-data boot stage`, `stage:bootcmd_start` — so an arm can actually observe the row that
-breaks an unfiltered query. At least one feeds the real fatal shape (`git-data LUKS stage
-FAILED`, `stage:luks_open`). Synthesized to the measured schema per
-`cq-test-fixtures-synthesized-only`; no live token in a fixture.
-
-4.9 **Anti-vacuity.** Assert the `RUNG2_CAPTURE_VERDICT=` sentinel on **every** new arm (the
-repo's own learning records sentinel deletion as a surviving mutation), raise the suite's
-34-assertion floor by the number of assertions added, and add a config assertion that anchors on
-the **Sentry paragraph** — the old `grep -qF 'prd_terraform' "$SUT"` was satisfied by a
-pre-existing Better Stack error string, so deleting the whole Sentry block left it green.
-
-4.10 **The window derivation must be exercised.** Add an arm that drives the helper with two
-different apply timestamps and asserts the emitted `start=`/`end=` differ accordingly — replacing
-the helper's body with `printf ''` must redden. The previous suite stayed 43/0 green under
-exactly that stub.
 
 ### Phase 5 — #7460: bake the Better Stack ingest token (the single cloud-init edit)
 
@@ -1152,7 +1092,7 @@ liveness_signal:
   configured_in: ".github/workflows/git-data-rung2-rehearsal.yml (capture step, anchor: RUNG2_CAPTURE_VERDICT) and scripts/followthroughs/git-data-rung2-evidence-capture.sh (anchor: trap 'printf \"RUNG2_CAPTURE_VERDICT=%s\\n\" \"$?\"' EXIT)"
 
 error_reporting:
-  destination: "Sentry org jikigai-eu, project web-platform (id 4511404943671376), via the baked DSN in cloud-init-git-data.yml; Better Stack Logs source 2457081 for the post-Doppler stages and, after Phase 5, all nine"
+  destination: "Sentry org jikigai-eu, project web-platform (id 4511404943671376), via the baked DSN in cloud-init-git-data.yml; Better Stack Logs source 2457081 for the post-Doppler stages and, after Phase 5, eight of the nine (the pre-`write_files` bootcmd beacon stays Sentry-only by construction — §5.0e)"
   fail_loud: "a non-zero RUNG2_CAPTURE_VERDICT in the run log; a FAIL line naming the stage; and — new in Phase 4.3 — a distinct TRANSIENT message per HTTP cause (401 / 403 / 429 / transport) so 'could not consult' names which channel and why"
 
 failure_modes:
@@ -1230,6 +1170,15 @@ in_transit:
     does_not_defend: "a leaked SENTRY_ISSUE_RO_TOKEN — event:read and org:read across the org; this is why Phase 4.6 widens the artifact redaction tuple"
     disclosed_as: "not-publicly-claimed"
 exception:
+  # MEASURED AT DEEPEN TIME — this exception has NO mechanical enforcer, and saying so is the
+  # honest form. `hcloud_server` is a member of `non_store_types` in
+  # scripts/encryption-posture-ledger.json, so `lint-encryption-posture.py --repo-sweep` cannot
+  # raise `FAIL: unledgered store` for git-data's user_data and the `expires_on` below will never
+  # fire on its own. Two options at /work, and the plan must pick one rather than leave an expiry
+  # date that nothing reads: (a) enrol a follow-through probe on #7460 that reddens after the
+  # date, or (b) restate the expiry as advisory and name what actually reopens the decision.
+  # Option (a) is preferred — an unenforced expiry is the same shape as the unenforced
+  # two-dispatch cap this plan spends a phase preserving.
   justification: "user_data is stored in cleartext by Hetzner by construction; the marginal access cost of the baked ingest token is near zero because user_data already carries doppler_token, from which the same value is derivable — but the equivalence is point-in-time, and ADR-198 records both directions"
   tracking_issue: "#7460"
   reevaluate_when: "a Better Stack ingest-token rotation is required, or the git-data host is born and user_data becomes ForceNew-expensive to change (ADR-149, ADR-152)"
@@ -1312,7 +1261,7 @@ suite 43/0 green. Placement is therefore asserted **per site**.
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | remove `level:fatal` from the query so the `level:info` bootcmd beacon matches | RED — this is the false-FAIL that would burn a paid dispatch on every healthy boot |
-| 2 | replace `_sentry_stats_period` (the window helper) body with `printf ''` | RED — the previous suite stayed 43/0 green under exactly this stub |
+| 2 | replace the **window helper** body with `printf ''` (name it for the ISO `start`/`end` pair it now builds — **not** `_sentry_stats_period`; §4.1 abandoned `statsPeriod`) | RED — the previous suite stayed 43/0 green under exactly this stub |
 | 3 | revert the consult at **one** of the four call sites to a bare `exit 2`, leaving three compliant | RED (per-site placement; the check must not stop at the first) |
 | 4 | delete the `RUNG2_CAPTURE_VERDICT=` sentinel assertion from one arm | RED via the assertion-count floor — sentinel deletion is a recorded surviving mutation |
 | 5 | return HTTP 200 with an HTML body from a stub | RED unless the arm reports TRANSIENT (never clean) |
@@ -1551,6 +1500,55 @@ old ordinal in the same edit.
 | **#7460: defer until after a clean rehearsal** | Costs an extra paid dispatch (see R1) and leaves stages 1–5 dark for the rehearsal that is supposed to prove the template. |
 | **#7460: read the ingest token from a baked file rather than the templatefile map** | Another `write_files` entry costs more `user_data` bytes than one map argument and adds a read-ordering dependency in the emitter, which runs from `bootcmd` before `write_files` on the earliest stage. |
 
+## Deepen-Plan Gate Resolutions
+
+All `/deepen-plan` halt gates were run mechanically against this file. Results, so a reviewer does
+not re-derive them:
+
+| Gate | Verdict | Evidence |
+|---|---|---|
+| **4.6 User-Brand Impact** | PASS | section present, threshold `single-user incident`, three role-enumerated vectors, none placeholder |
+| **4.7 Observability** | PASS | all five fields present with children; `discoverability_test.command` starts with `bash` (allowlisted probe verb) and contains no `ssh `; no `credentials_required` claimed, with the substitute argued |
+| **4.10 Encryption Posture** | PASS | section present; four `does_not_defend` entries, none empty or `none`; the one `plaintext-exception` carries `tracking_issue` **and** `expires_on` |
+| **4.11 Guard Contract** | PASS | `python3 scripts/lint-guard-contract.py <plan>` → `1 with a Guard Contract, 4 guard entries`, rc 0 |
+| **4.8 PAT-shaped variable** | PASS | no `var.*_token` / `TF_VAR_GITHUB_*` / literal `ghp_`/`github_pat_` match |
+| **4.9 UI wireframe** | SKIP | zero UI-surface files in Files-to-Edit/Create — gate does not fire |
+| **4.5 Network-outage** | SKIP | the plan's `timeout` occurrences are curl/poll deadlines, not connectivity symptoms; and the **resource-shape trigger does not fire** — `grep -nE 'provisioner "(file\|remote-exec)"\|connection \{'` over `git-data.tf` and `rung2-rehearsal/rehearsal.tf` returns **zero**, so there is no implicit SSH apply-time dependency |
+| **4.55 Downtime & Cutover** | **TRIGGERED BY SHAPE, RESOLVES TO ZERO DOWNTIME** | see below |
+
+### 4.55 — why the downtime gate fires and then finds nothing to protect
+
+The trigger fires on file shape: the plan edits `*.tf` and `cloud-init-*.yml`, and `user_data` is
+ForceNew. Recorded rather than silently skipped, because the trigger firing and the gate finding
+nothing are different facts.
+
+**There is no serving surface to take offline.** Live Hetzner, queried this session under
+`prd_terraform`, holds `['soleur-web-platform', 'soleur-web-2', 'soleur-registry',
+'soleur-inngest']` — **no `soleur-git-data`**, and no git-data volume of either kind. The host has
+never been born; the LUKS apparatus exists only in code. A ForceNew `user_data` change on a
+resource with no instance is a no-op against a running system.
+
+This is also the strongest form of §R1's argument and it is worth stating as availability rather
+than as cost: the zero-downtime cutover for this template *is* "edit it before the host exists".
+Every later edit is a destructive replace of the store holding every connected user's source code.
+The gate's default — evaluate a zero-downtime path and prefer it — is satisfied by construction,
+once, and only now.
+
+### Citation verification (deepen-plan quality checks)
+
+- **AGENTS rule IDs.** All 8 cited IDs resolve to active `[id: …]` entries in `AGENTS.md`. No
+  fabricated or retired citations.
+- **Issue and PR states**, all re-verified live: `#7570` `#7534` `#7544` `#7481` `#7460` OPEN (the
+  five targets); `#7507` MERGED (the `detail`-field fix, correctly scoped out); `#7116` **CLOSED**
+  (which is what makes §4.7b's stale prohibition a real trap); `#6588` OPEN (the threshold's
+  strongest justification); `#7025` OPEN (the gate-release successor); `#7535` OPEN (the Dockerfile
+  owner, which is why §Design Call 2 does not build one); `#7098` OPEN (the one overlap).
+- **ADR ordinal, re-derived after a fresh `git fetch origin main`.** Highest on `origin/main` is
+  **ADR-196**; highest across all 65 `origin/*` refs is **ADR-197**. **ADR-198 remains free and
+  provisional** — re-derive again immediately before merge, and if it moves, sweep the plan,
+  `tasks.md` and the ACs in the same edit.
+- **Knowledge-base citations.** Every `knowledge-base/**.md` path in this plan resolves on disk.
+
 ## Plan Review Revisions (R1–R24)
 
 A seven-agent panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow, CTO, CPO)
@@ -1747,7 +1745,7 @@ Phase 2.12's own finding that a plan whose deliverable is guards must test the g
 | 11 | rename the token `R1-PIN` greps for | `R1-PIN` `≥ 6` floor |
 | 12 | bump to a different valid tag+list-digest pair | `R1-PIN` must **PASS** |
 | 13 | drop `level:fatal` from the Sentry query | evidence-capture suite (false-FAIL arm, real beacon fixture) |
-| 14 | `_sentry_stats_period` body → `printf ''` | window-derivation arm |
+| 14 | the window helper's body → `printf ''` | window-derivation arm |
 | 15 | revert the consult at one of four call sites | per-site placement arm |
 | 16 | Sentry stub returns HTTP 200 + HTML | shape-validation arm (must report TRANSIENT) |
 | 17 | env-source `SENTRY_ORG` and set it to `jikigai` | org-pinning arm (403 must be a named TRANSIENT) |
