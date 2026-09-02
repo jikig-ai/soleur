@@ -518,15 +518,6 @@ cat > "$PROBE_SCRIPT" <<'PROBESCRIPTEOF'
 # one-sided change is a silent no-op.
 LOG_TAG="inngest-server-probe"
 
-# #7695. stderr is discarded and NEVER shipped: redis-cli carries the password on its argv,
-# so its own error text is a route from the credential to Better Stack — the same reasoning
-# the doppler capture below already documents. PROBE_REDIS_CLI_CMD is the fixture seam,
-# mirroring CUTOVER_REDIS_CLI_CMD in inngest-cutover-flip.sh.
-probe_redis_keyspace() {
-  [ -n "${PROBE_REDIS_CLI_CMD:-}" ] && { eval "$PROBE_REDIS_CLI_CMD INFO keyspace" 2>/dev/null; return $?; }
-  redis-cli -a "${INNGEST_REDIS_PASSWORD:-}" INFO keyspace 2>/dev/null
-}
-
 # --- gather (never branch on the results before the emit below) ---
 # `|| true` on every capture: this probe must ALWAYS reach its logger call. A non-zero curl
 # under a future `set -e`, or a missing systemctl, must degrade a FIELD, never the event.
@@ -595,72 +586,73 @@ cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 [ -n "$cutover_flag" ] || cutover_flag=unknown
 
 # --- #7695: the /mnt/data store facts the recut gate decides on ---
-# Guard 2 clears a DESTRUCTIVE volume recut only on a MEASURED-EMPTY store, so every field
-# here is read by something that can authorize a destroy. That inverts the usual degradation
-# rule: `0` IS the clearance condition, so a field degrading to `0` would authorize the
-# destroy it was meant to withhold. Two distinct not-a-measurement tokens instead —
-# `n/a` (the question does not apply on this host) and `__UNREADABLE__` (it applied and could
-# not be answered) — and neither is ever `0`.
+# Guard 2 clears a DESTRUCTIVE volume recut only on a MEASURED-EMPTY store, so `0` IS the
+# clearance condition and a field degrading to `0` would authorize the destroy it was meant
+# to withhold. Hence `n/a` (does not apply on this host) and `__UNREADABLE__` (applied, could
+# not be answered) — neither is ever `0`.
 #
-# NO `if` HERE, deliberately: ADR-117 forbids branching BEFORE the unconditional emit below
-# (the `if` further down is legal only because it sits AFTER it). `case` and `[ ] &&` are the
-# constructs the existing gather already uses, so this block stays inside that contract.
+# THE ROLE TEST IS THE DOPPLER PROJECT, NOT THE MOUNT. An earlier revision gated on "is
+# /mnt/data a mountpoint" and asserted in this comment that the web host has no /mnt/data.
+# That is FALSE: cloud-init.yml mounts the WORKSPACES volume there, so the mountpoint test is
+# true on BOTH hosts and does not discriminate. On web-1 it would have walked every user's
+# repository tree hourly and shipped the aggregate byte count off-box. DOPPLER_PROJECT is this
+# codebase's canonical dedicated-vs-web discriminator (`soleur-inngest` vs `soleur`; the
+# dedicated-only arms above gate on the same value), and the units receive it via
+# EnvironmentFile=/etc/default/inngest-server.
 #
-# inngest-bootstrap.sh is the SHARED renderer for the dedicated host AND the co-located web
-# host, and the web host has no /mnt/data. The discriminator is therefore a RUNTIME property
-# — is /mnt/data a mountpoint? — not a render-time flag: this heredoc is quoted, so nothing
-# interpolates into it, and a web-host row emitting `0` would let the wrong host satisfy the
-# dedicated host's clearance condition.
+# NO `if` HERE: ADR-117 forbids branching before the unconditional emit below.
+#
+# EVERY CALL IS BOUNDED. This probe is the hourly positive liveness control, and a stall
+# before the emit loses the whole row — including vector_active and the Vector-down fallback.
+# `du` on a sick block device blocks in D-state and `redis-cli` has no default deadline, so an
+# unbounded call here goes dark exactly when the disk is the thing being measured.
 probe_schema=2
 data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
 latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
 
-# `findmnt` answers non-zero when the path is not a mountpoint — the web host, and equally a
-# dedicated host whose volume failed to attach. Both are honestly `n/a`: the store this gate
-# reasons about is not present either way.
-data_mount_src="$(findmnt -no SOURCE "$data_mount" 2>/dev/null | head -1 || true)"
-[ -n "$data_mount_src" ] || data_mount_src=n/a
+host_role=web
+[ "${DOPPLER_PROJECT:-}" = soleur-inngest ] && host_role=dedicated
 
-store=absent
-[ "$data_mount_src" != n/a ] && store=present
-
+data_mount_src=n/a
 data_bytes=n/a
 flush_latched=n/a
-latch_lines=n/a
-latch_flushed_at=n/a
-redis_keys=n/a
 
-case "$store" in
-present)
-  data_bytes="$(du -sb "$data_mount" 2>/dev/null | awk 'NR==1{print $1}' || true)"
-  case "$data_bytes" in '' | *[!0-9]*) data_bytes=__UNREADABLE__ ;; esac
+case "$host_role" in
+dedicated)
+  # A non-mountpoint is NOT "an empty store" — it is an unanswered question, and the gate must
+  # never read it as clearance.
+  data_mount_src="$(timeout 5 findmnt -no SOURCE "$data_mount" 2>/dev/null | head -1 || true)"
+  [ -n "$data_mount_src" ] || data_mount_src=__UNREADABLE__
 
-  # The latch is what makes an arm abort into terminal `aborted`, so its presence is the
-  # single most consequential bit in this row.
-  latch_file="${latch_dir}/flip-done.latch"
-  flush_latched=false
-  latch_lines=0
-  [ -f "$latch_file" ] && {
-    flush_latched=true
-    latch_lines="$(wc -l < "$latch_file" 2>/dev/null | tr -d '[:space:]' || true)"
-    case "$latch_lines" in '' | *[!0-9]*) latch_lines=__UNREADABLE__ ;; esac
-    latch_flushed_at="$(date -u -r "$latch_file" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
-    [ -n "$latch_flushed_at" ] || latch_flushed_at=__UNREADABLE__
-  }
+  case "$data_mount_src" in
+  __UNREADABLE__)
+    data_bytes=__UNREADABLE__
+    flush_latched=__UNREADABLE__
+    ;;
+  *)
+    data_bytes="$(timeout 15 du -sb "$data_mount" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+    case "$data_bytes" in '' | *[!0-9]*) data_bytes=__UNREADABLE__ ;; esac
 
-  # INFO keyspace, summed across EVERY db. NOT DBSIZE: that reports db0 only, so a store
-  # populated on db1+ reads smaller than it is — under-reporting in exactly the direction
-  # that wrongly clears a destroy.
-  redis_info="$(probe_redis_keyspace)" || redis_info=""
-  redis_keys=__UNREADABLE__
-  printf '%s\n' "$redis_info" | grep -q '^# Keyspace' && \
-    redis_keys="$(printf '%s\n' "$redis_info" | awk -F'keys=' '/^db[0-9]+:/ {split($2,a,","); s+=a[1]} END {print s+0}')"
-  case "$redis_keys" in '' | *[!0-9]*) redis_keys=__UNREADABLE__ ;; esac
+    # flush_latched INHERITS data_bytes' unreadability instead of being tested independently.
+    # `[ -f ]` cannot report failure: it returns false for "no latch" AND for "cannot read the
+    # directory", so on a volume detached while still mounted — findmnt still shows the mount,
+    # every read gives EIO — a bare test would emit `false`, a positive claim about a store it
+    # never read. `du` DOES report failure, so keying off it collapses the two into the one
+    # sanctioned token. Only when the walk succeeded is the absence of a latch a measurement.
+    case "$data_bytes" in
+    __UNREADABLE__) flush_latched=__UNREADABLE__ ;;
+    *)
+      flush_latched=false
+      [ -f "${latch_dir}/flip-done.latch" ] && flush_latched=true
+      ;;
+    esac
+    ;;
+  esac
   ;;
 esac
 
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema flush_latched=$flush_latched latch_flushed_at=$latch_flushed_at latch_lines=$latch_lines redis_keys=$redis_keys data_mount_src=$data_mount_src data_bytes=$data_bytes"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched data_mount_src=$data_mount_src data_bytes=$data_bytes"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -677,7 +669,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema flush_latched=$flush_latched latch_flushed_at=$latch_flushed_at latch_lines=$latch_lines redis_keys=$redis_keys data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
 fi
 exit 0
 PROBESCRIPTEOF
@@ -693,10 +685,13 @@ Type=oneshot
 # ZERO vector.toml sources and the marker never leaves the host — the #6536 defect exactly.
 # Source 4 (vector.toml host_scripts_journald) carries the matching exact-value entry.
 SyslogIdentifier=inngest-server-probe
-# Type=oneshot disables the start timeout by default; the probe now makes two bounded network
-# calls before its unconditional emit, so bound the unit too — a hung probe holds the unit
-# `activating`, and OnUnitActiveSec cannot re-fire while it is, silently ending the hourly marker.
-TimeoutStartSec=60
+# Type=oneshot disables the start timeout by default; the probe makes bounded calls before its
+# unconditional emit, so bound the unit too — a hung probe holds the unit `activating`, and
+# OnUnitActiveSec cannot re-fire while it is, silently ending the hourly marker.
+# Budget (#7695): curl 5 + curl 3 + inngest 10 + doppler 10 + findmnt 5 + du 15 = 48s of
+# bounded work, so 60 no longer leaves headroom. Raised to 120 rather than trimming a bound:
+# a bound that fires degrades ONE field, the unit timeout loses the WHOLE row.
+TimeoutStartSec=120
 # #7228: the cutover_flag field reads Doppler, which needs DOPPLER_TOKEN + DOPPLER_CONFIG_DIR
 # and — per the #6122 boot fix — HOME, all of which live here.
 #
@@ -707,6 +702,20 @@ TimeoutStartSec=60
 # observability would delete it on one of the two hosts. With it, the web host simply reports
 # cutover_flag=unknown, which is honest: that host has no cutover flag.
 EnvironmentFile=-/etc/default/inngest-doppler
+# #7695. /etc/default/inngest-server carries DOPPLER_PROJECT, which is the probe's
+# dedicated-vs-web role discriminator. Without it DOPPLER_PROJECT is unset, host_role is `web`
+# on BOTH hosts, and the store fields ship dead. `-` prefixed: the web host's copy is written
+# later in this same script, and a probe that refuses to start is worse than one reporting
+# `web` for a boot or two.
+#
+# NOT WRAPPED IN `doppler run`, unlike inngest-cutover-flip.service. Two reasons, both
+# decisive. (1) `/usr/bin/doppler` is a symlink created ONLY by cloud-init-inngest.yml; the web
+# host installs to /usr/local/bin and has no such symlink, so this SHARED unit would fail
+# 203/EXEC there and silently end the hourly liveness marker on the host that actually serves.
+# (2) `doppler run` injects every secret in the config as an env var, which would make the
+# fixture seams below settable by anyone with Doppler write access. The probe therefore reads
+# no secret and needs none.
+EnvironmentFile=-/etc/default/inngest-server
 ExecStart=/usr/local/bin/inngest-server-probe.sh
 PROBEUNITEOF
 

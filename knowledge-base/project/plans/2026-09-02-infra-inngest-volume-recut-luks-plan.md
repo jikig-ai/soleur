@@ -1369,3 +1369,81 @@ body and file as an `action-required` issue. They are **not** applied silently.
   freshly-fetched refs before merge and sweep this plan, `tasks.md`, and AC14 in the same edit.
 - Guard fixtures must be **synthesized** plan JSON. A captured production plan would embed real
   volume ids and drift silently (`cq-test-fixtures-synthesized-only`).
+
+## Addendum — 2026-09-02 (#7695, Merge A as delivered)
+
+Appended, not edited: everything above is the plan as approved, and the rows below are what the
+review panel changed about its delivery. Three findings were verified at source and each one
+narrows what Merge A ships. Merge B must read this section before implementing Guard 2.
+
+### D1 — the dedicated/web discriminator is `DOPPLER_PROJECT`, not the mountpoint
+
+The implementation first gated the store fields on "is `/mnt/data` a mountpoint", on the stated
+premise that the co-located web host has no `/mnt/data`. **That premise is false.**
+`cloud-init.yml` (`mkdir -p /mnt/data` / the `scsi-0HC_Volume_${workspaces_volume_id}` fstab line
+/ `mount /mnt/data`) mounts the **workspaces** volume there. On web-1 the test is true, so the
+probe would have walked every user's repository tree hourly and shipped the aggregate byte count
+off-box — and a web-host row could have carried a store measurement into Guard 2's clearance
+condition.
+
+Delivered instead: `host_role` derived from `DOPPLER_PROJECT` (`soleur-inngest` = dedicated,
+anything else = web), this codebase's canonical discriminator, reaching the unit through
+`EnvironmentFile=-/etc/default/inngest-server`. `host_role` is now an **emitted field**, so Guard 2
+can refuse any row that does not positively identify itself as the dedicated host rather than
+inferring it from `instance_id` or `data_mount_src`.
+
+### D2 — `redis_keys` is NOT delivered. Guard 2 condition 5 has no input.
+
+**This is the one item Merge B must act on.** Guard 2 condition 5 (`redis_keys == 0`, from
+`INFO keyspace` across all dbs) has no field to read, because the probe no longer emits one.
+Three independent reasons, any one sufficient:
+
+1. **It cannot be authenticated.** `inngest-redis.service` starts redis with `--requirepass`, and
+   the probe unit's only env source is `/etc/default/inngest-doppler` (`HOME`, `DOPPLER_TOKEN`,
+   `DOPPLER_CONFIG_DIR`, `DOPPLER_ENABLE_VERSION_CHECK` — no redis password). In production the
+   field would have read `__UNREADABLE__` on every fire, forever, while the tests exercised only
+   the fixture seam. The plan's "add the Redis credential" task is what would have fixed it.
+2. **The fix is not available to this merge.** Supplying the credential means wrapping the probe's
+   `ExecStart` in `doppler run`, as `inngest-cutover-flip.service` does. But that unit is rendered
+   by `inngest-bootstrap.sh`, which is **shared with the web host**, and `/usr/bin/doppler` is a
+   symlink created only by `cloud-init-inngest.yml`; the web host installs to `/usr/local/bin` and
+   has no such symlink. The shared unit would fail `203/EXEC` on web-1 and silently end the hourly
+   liveness marker on the host that actually serves. `doppler run` also injects every secret in the
+   config as an env var, which would make the probe's fixture seam settable by anyone with Doppler
+   write access.
+3. **It measures the wrong object anyway.** R2 above already says so: `redis_keys` is a claim about
+   a Redis *process*, not about the block device being destroyed. The plan's own preserve list —
+   mount-source pinning, `data_bytes`, the host-identity conjunction, the `__UNREADABLE__`
+   sentinels — does not include it.
+
+**Merge B must therefore either** drop condition 5 and rest the emptiness claim on `data_bytes` +
+`data_mount_src` + `host_role` (the recommended reading of R2), **or** first solve (1) and (2) —
+a probe-specific env file carrying only `INNGEST_REDIS_PASSWORD`, or a host-role-conditional
+`ExecStart` — and re-add the field at `probe_schema=3`. It must not silently treat a missing
+`redis_keys` as satisfied; the plan's own case 12 ("absence must not parse to `0`") is the rule.
+
+### D3 — `latch_flushed_at` and `latch_lines` are not delivered; task 1.8 is not delivered
+
+`latch_flushed_at` and `latch_lines` had no consumer in any Guard 2 condition and no arm in which
+either could be a measurement rather than a constant; `latch_lines` additionally degraded to `0`
+on the not-latched path, which is the one value the whole degradation vocabulary exists to
+prevent. Both were dropped. `flush_latched` alone carries the latch question.
+
+Task 1.8 (mirror the new fields from `inngest-cutover-flip.sh`'s terminal no-op arms) is **not
+delivered**. The implementation shipped a `flush_latched` mirror there and review rejected it on
+four counts: the bit was computed by a *different* predicate than the FSM's own
+`flush_already_performed` (`-f` vs `-e`, no mount gate, and missing the documented
+"completed before this change shipped" arm), so a host in terminal `done` would have emitted
+`{"flag":"done","flush_latched":false}` twice a minute — a self-contradictory row from the source
+of truth — and the same field name would have meant two different things in the two files that
+emit it. `inngest-cutover-flip.sh` is therefore byte-identical to `main` in Merge A. If Merge B
+wants the mirror, it must call `flush_already_performed` itself rather than re-deriving the bit.
+
+### D4 — probe field list as actually shipped (`probe_schema=2`)
+
+`probe_schema`, `host_role`, `flush_latched`, `data_mount_src`, `data_bytes` — at **both** emit
+sites, pinned byte-for-byte against each other. Degradation vocabulary unchanged: `n/a` (does not
+apply on this host) and `__UNREADABLE__` (applied, unanswerable), never `0`. `flush_latched`
+inherits `data_bytes`' unreadability rather than being tested independently, because `[ -f ]`
+cannot distinguish "no latch" from "cannot read the directory" — on a volume detached while still
+mounted it would emit `false`, a positive claim about a store never read.

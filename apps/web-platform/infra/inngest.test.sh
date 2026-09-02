@@ -41,6 +41,25 @@ assert() {
   fi
 }
 
+# INSTRUMENT SELF-TEST. `assert` is the single point through which every claim in this file is
+# dispatched. A mutation audit (#7695) neutered it — `if eval "$condition"` -> `if true` — and
+# all 250 assertions passed vacuously with a summary line byte-identical to the green one. No
+# assertion can catch that, because every assertion is downstream of it. So prove the
+# dispatcher discriminates in BOTH directions before trusting anything it reports, then reset.
+# Reported directly with printf + exit (ADR-193): a check routed through the helper it
+# backstops dies with the same edit that disarms the helper. Output suppressed so the
+# deliberate FAIL row cannot be misread as a real one.
+assert "instrument self-test: a true condition must pass" "true" >/dev/null
+assert "instrument self-test: a false condition must fail" "false" >/dev/null
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 || "$TOTAL" -ne 2 ]]; then
+  printf 'FATAL: assertion dispatcher is broken (PASS=%s FAIL=%s TOTAL=%s, expected 1/1/2).\n' \
+    "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 1
+fi
+PASS=0
+FAIL=0
+TOTAL=0
+
 echo "=== inngest.tf tests ==="
 echo ""
 
@@ -840,31 +859,77 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
   "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
 
 # --- #7695: the /mnt/data store facts Guard 2 decides on ---------------------------------
-# Guard 2 (the recut dispatch gate) clears a DESTRUCTIVE apply only on a measured-empty
-# store. Every field below is one it reads, and each carries two distinct not-a-measurement
-# tokens: `n/a` = the question does not apply on this host, `__UNREADABLE__` = it applied and
-# could not be answered. Neither may ever degrade to `0`, because `0` IS the clearance
-# condition — a degradation that renders as `0` would authorize the destroy it was meant to
-# withhold. That asymmetry is the whole reason these tokens exist.
+# Guard 2 (the recut dispatch gate) clears a DESTRUCTIVE apply only on a measured-empty store.
+# Every field below is one it reads, and each carries two distinct not-a-measurement tokens:
+# `n/a` = the question does not apply on this host, `__UNREADABLE__` = it applied and could not
+# be answered. Neither may ever degrade to `0`, because `0` IS the clearance condition — a
+# degradation that renders as `0` would authorize the destroy it was meant to withhold.
+#
+# THE ASSERTIONS BELOW ARE WRITTEN AS NEGATIVE SPACE, not as positive expectations. A mutation
+# audit flipped `__UNREADABLE__` to `0` in three fields and the suite stayed green at 250/250,
+# because every assertion asked "is it the token I expect?" and none asked "is it the one value
+# that must never appear?". The claim this change exists to make is `never 0`, so that is what
+# is asserted, in EVERY arm, over EVERY field — including the arms where the expected token is
+# also pinned positively.
+PROBE_7695_FIELDS="probe_schema host_role flush_latched data_mount_src data_bytes"
+
 assert "#7695 probe declares probe_schema=2 (Guard 2 refuses a stale_schema row)" \
   "grep -qE 'probe_schema=2( |\$)' '$PROBE_LOG'"
-for _f7695 in flush_latched latch_flushed_at latch_lines redis_keys data_mount_src data_bytes; do
+for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
 done
 
-# The WEB-HOST shape. inngest-bootstrap.sh is the SHARED renderer for both hosts and this
-# sandbox has no /mnt/data mount, so this run IS the web-host case. `n/a` is the honest
-# answer; a `0` here would let a web-host row satisfy the dedicated host's measured-empty
-# clearance — the wrong host authorizing the destroy.
-for _f7695 in flush_latched redis_keys data_mount_src data_bytes; do
-  assert "#7695 with no /mnt/data mount, $_f7695 is n/a — never 0" \
-    "grep -qE '$_f7695=n/a( |\$)' '$PROBE_LOG'"
-done
+# --- ARM 1: the WEB-HOST shape, with EVERYTHING a dedicated host would measure present -----
+# inngest-bootstrap.sh is the SHARED renderer for both hosts, so this arm is what stops a
+# web-host row from satisfying the dedicated host's clearance condition.
+#
+# THE EARLIER VERSION OF THIS ARM PROVED NOTHING. It asserted `n/a` from a bare run and
+# labelled that "the web-host case" on the premise that the web host has no /mnt/data. Review
+# falsified the premise: cloud-init.yml mounts the WORKSPACES volume at /mnt/data, so the
+# mountpoint test is true on web-1 too. The old arm was measuring the CI sandbox's own empty
+# filesystem — it would have passed against a probe that walked every user's repository tree
+# hourly. So this arm now stubs the mount INTO existence, stubs a plausible byte count, and
+# even plants a latch file: every input that makes the dedicated arm report a measurement is
+# present, and the ONLY difference is DOPPLER_PROJECT. If the discriminator ever stops
+# discriminating, this arm is the one that goes red.
+PROBE_W_BIN="$PING_TMP/probe-bin-web"
+mkdir -p "$PROBE_W_BIN"
+cp "$PROBE_BIN/logger" "$PROBE_W_BIN/logger"
+cp "$PROBE_BIN/curl" "$PROBE_W_BIN/curl"
+cp "$PROBE_BIN/systemctl" "$PROBE_W_BIN/systemctl"
+cat > "$PROBE_W_BIN/findmnt" <<'WFINDMNTEOF'
+#!/bin/sh
+echo "/dev/sdb"
+WFINDMNTEOF
+cat > "$PROBE_W_BIN/du" <<'WDUEOF'
+#!/bin/sh
+echo "884736000	/mnt/data"
+WDUEOF
+chmod +x "$PROBE_W_BIN/findmnt" "$PROBE_W_BIN/du"
+PROBE_W_LATCH="$PING_TMP/mnt-data-web"
+mkdir -p "$PROBE_W_LATCH/inngest-cutover"
+printf 'flip-done\n' > "$PROBE_W_LATCH/inngest-cutover/flip-done.latch"
+PROBE_W_LOG="$PING_TMP/logger-probe-web.txt"
+: > "$PROBE_W_LOG"
+PATH="$PROBE_W_BIN:$PATH" LOGGER_OUT="$PROBE_W_LOG" \
+  PROBE_LATCH_DIR="$PROBE_W_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
 
-# The DEDICATED-host shape, driven by stubbing the mount into existence. Without this arm the
-# suite only ever exercises the n/a branch, so every field could be hardcoded `n/a` and stay
-# green — the fixture-cardinality trap: one member sampled is a sample, not a proof.
+assert "#7695 web host declares host_role=web (the row carries its own role, not just an id)" \
+  "grep -qE 'host_role=web( |\$)' '$PROBE_W_LOG'"
+for _f7695 in flush_latched data_mount_src data_bytes; do
+  assert "#7695 web host with /mnt/data MOUNTED and a latch present, $_f7695 is n/a" \
+    "grep -qE '$_f7695=n/a( |\$)' '$PROBE_W_LOG'"
+done
+# The store the web host actually has is the workspaces volume. Its byte count leaving the box
+# hourly is both a privacy leak and a number Guard 2 could mistake for the inngest store.
+assert "#7695 web host never ships the measured workspaces byte count" \
+  "! grep -qE 'data_bytes=884736000( |\$)' '$PROBE_W_LOG'"
+
+# --- ARM 2: the DEDICATED-host shape, latch PRESENT ----------------------------------------
 PROBE_D_BIN="$PING_TMP/probe-bin-dedicated"
 mkdir -p "$PROBE_D_BIN"
 cp "$PROBE_BIN/logger" "$PROBE_D_BIN/logger"
@@ -886,46 +951,138 @@ DUEOF
 chmod +x "$PROBE_D_BIN/findmnt" "$PROBE_D_BIN/du"
 PROBE_D_LOG="$PING_TMP/logger-probe-dedicated.txt"
 : > "$PROBE_D_LOG"
-# INFO keyspace across ALL dbs — the probe must never use DBSIZE, which reports db0 only.
 PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_D_LOG" \
   PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
   PROBE_DATA_MOUNT="/mnt/data" \
-  PROBE_REDIS_CLI_CMD="printf '# Keyspace\ndb0:keys=3,expires=0\ndb1:keys=4,expires=0\n'" \
+  DOPPLER_PROJECT="soleur-inngest" \
   sh "$PROBE_BODY" >/dev/null 2>&1 || true
 
+assert "#7695 dedicated shape: host_role=dedicated (same fixture as ARM 1 but for the project)" \
+  "grep -qE 'host_role=dedicated( |\$)' '$PROBE_D_LOG'"
 assert "#7695 dedicated shape: data_mount_src is the measured source, not n/a" \
   "grep -qE 'data_mount_src=/dev/sdb( |\$)' '$PROBE_D_LOG'"
 assert "#7695 dedicated shape: data_bytes is the measured byte count" \
   "grep -qE 'data_bytes=4096( |\$)' '$PROBE_D_LOG'"
 assert "#7695 dedicated shape: a present latch reads flush_latched=true" \
   "grep -qE 'flush_latched=true( |\$)' '$PROBE_D_LOG'"
-# 3+4 across two dbs. A DBSIZE implementation reports 3 and reads as a smaller store than
-# exists — the direction that wrongly clears a destroy.
-assert "#7695 dedicated shape: redis_keys SUMS every db (INFO keyspace, never DBSIZE)" \
-  "grep -qE 'redis_keys=7( |\$)' '$PROBE_D_LOG'"
 
-# Degradation direction. A redis that answers non-zero, or omits the `# Keyspace` header,
-# is unreadable — NOT empty.
+# --- ARM 3: DEDICATED, latch ABSENT — the steady state, and the only honest `false` ---------
+# Never fixtured before this change: every dedicated run planted a latch, so `flush_latched`
+# had no arm in which `false` was the correct answer and the field could have been hardcoded
+# `true`. The `du` stub also reports a DIFFERENT byte count from ARM 2, which is what makes
+# `data_bytes` a measurement rather than a constant: a hardcoded `4096` now fails here.
+PROBE_N_BIN="$PING_TMP/probe-bin-nolatch"
+mkdir -p "$PROBE_N_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/curl" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/findmnt" "$PROBE_N_BIN/"
+cat > "$PROBE_N_BIN/du" <<'NDUEOF'
+#!/bin/sh
+echo "8192	/mnt/data"
+NDUEOF
+chmod +x "$PROBE_N_BIN/du"
+PROBE_N_LATCH="$PING_TMP/mnt-data-nolatch"
+mkdir -p "$PROBE_N_LATCH/inngest-cutover"
+PROBE_N_LOG="$PING_TMP/logger-probe-nolatch.txt"
+: > "$PROBE_N_LOG"
+PATH="$PROBE_N_BIN:$PATH" LOGGER_OUT="$PROBE_N_LOG" \
+  PROBE_LATCH_DIR="$PROBE_N_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+assert "#7695 dedicated, latch absent: flush_latched=false (the one arm where false is honest)" \
+  "grep -qE 'flush_latched=false( |\$)' '$PROBE_N_LOG'"
+assert "#7695 dedicated, latch absent: data_bytes tracks du (8192 here, 4096 in ARM 2)" \
+  "grep -qE 'data_bytes=8192( |\$)' '$PROBE_N_LOG'"
+
+# --- ARM 4: DEDICATED, mounted but UNREADABLE — a volume detached while still mounted -------
+# findmnt reads /proc/self/mountinfo, not the device, so a detached Hetzner volume leaves the
+# mount entry standing and every read returns EIO. `du` reports that failure; `[ -f ]` cannot —
+# it returns false for "no latch" and for "cannot read the directory" alike. So flush_latched
+# INHERITS data_bytes' unreadability rather than being tested independently. Without that, this
+# arm emits `flush_latched=false`: a positive claim about a store the probe never read.
+PROBE_U_BIN="$PING_TMP/probe-bin-unreadable"
+mkdir -p "$PROBE_U_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/curl" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/findmnt" "$PROBE_U_BIN/"
+cat > "$PROBE_U_BIN/du" <<'UDUEOF'
+#!/bin/sh
+echo "du: cannot read directory '/mnt/data': Input/output error" >&2
+exit 1
+UDUEOF
+chmod +x "$PROBE_U_BIN/du"
 PROBE_U_LOG="$PING_TMP/logger-probe-unreadable.txt"
 : > "$PROBE_U_LOG"
-PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_U_LOG" \
+PATH="$PROBE_U_BIN:$PATH" LOGGER_OUT="$PROBE_U_LOG" \
+  PROBE_LATCH_DIR="$PROBE_N_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+assert "#7695 unreadable store: data_bytes is __UNREADABLE__, never 0" \
+  "grep -qE 'data_bytes=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
+assert "#7695 unreadable store: flush_latched inherits __UNREADABLE__, never a bare false" \
+  "grep -qE 'flush_latched=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
+
+# --- ARM 5: DEDICATED, no mount at all -----------------------------------------------------
+PROBE_M_BIN="$PING_TMP/probe-bin-nomount"
+mkdir -p "$PROBE_M_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/curl" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/du" "$PROBE_M_BIN/"
+cat > "$PROBE_M_BIN/findmnt" <<'MFINDMNTEOF'
+#!/bin/sh
+exit 1
+MFINDMNTEOF
+chmod +x "$PROBE_M_BIN/findmnt"
+PROBE_M_LOG="$PING_TMP/logger-probe-nomount.txt"
+: > "$PROBE_M_LOG"
+PATH="$PROBE_M_BIN:$PATH" LOGGER_OUT="$PROBE_M_LOG" \
   PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
   PROBE_DATA_MOUNT="/mnt/data" \
-  PROBE_REDIS_CLI_CMD="false" \
+  DOPPLER_PROJECT="soleur-inngest" \
   sh "$PROBE_BODY" >/dev/null 2>&1 || true
-assert "#7695 a failing redis-cli degrades redis_keys to __UNREADABLE__, never 0" \
-  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
 
-# Site parity. The field list appears TWICE in inngest-bootstrap.sh — the unconditional
-# `logger` emit and the Vector-down phone-home argument — and they drift independently. The
-# fallback is the channel that carries a row when Vector is down, i.e. exactly when the row
-# is the only evidence that exists, so a field missing THERE is missing when it matters most.
-PROBE_FIELDS_LOGGER="$(grep -F 'logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE' "$BOOTSTRAP_SH" | grep -oE '[a-z_]+=\$[a-z_]+' | cut -d= -f1 | sort | tr '\n' ' ')"
-PROBE_FIELDS_PHONE="$(grep -F 'inngest-server-probe-vector-down' "$BOOTSTRAP_SH" | grep -oE '[a-z_]+=\$[a-z_]+' | cut -d= -f1 | sort | tr '\n' ' ')"
-assert "#7695 the field list is non-empty (parity check cannot pass vacuously on two blanks)" \
-  "[[ -n '$PROBE_FIELDS_LOGGER' ]]"
-assert "#7695 both emit sites carry an IDENTICAL field list" \
-  "[[ '$PROBE_FIELDS_LOGGER' == '$PROBE_FIELDS_PHONE' ]]"
+for _f7695 in data_mount_src data_bytes flush_latched; do
+  assert "#7695 dedicated with no mount: $_f7695 is __UNREADABLE__ (the question applied)" \
+    "grep -qE '$_f7695=__UNREADABLE__( |\$)' '$PROBE_M_LOG'"
+done
+
+# --- THE NEVER-ZERO INVARIANT, over every arm and every field ------------------------------
+# The single claim this whole change rests on. Asserted as negative space over the union of
+# arms, so no degradation path — present or future, in any arm — can render as the value that
+# clears a destroy.
+for _l7695 in "$PROBE_LOG" "$PROBE_W_LOG" "$PROBE_D_LOG" "$PROBE_N_LOG" "$PROBE_U_LOG" "$PROBE_M_LOG"; do
+  for _f7695 in $PROBE_7695_FIELDS; do
+    assert "#7695 never-zero: $_f7695 is not 0 in $(basename "$_l7695")" \
+      "! grep -qE '$_f7695=0( |\$)' '$_l7695'"
+  done
+done
+# Cardinality guard on the loop above: a typo in either list makes the body run zero times and
+# this block reports success having asserted nothing.
+assert "#7695 never-zero invariant covered 6 logs x 5 fields" \
+  "[[ \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) -eq 5 ]]"
+
+# --- Site parity ---------------------------------------------------------------------------
+# The field list appears TWICE in inngest-bootstrap.sh — the unconditional `logger` emit and
+# the Vector-down phone-home argument — and they drift independently. The fallback is the
+# channel that carries a row when Vector is down, i.e. exactly when the row is the only
+# evidence that exists, so a field missing THERE is missing when it matters most.
+#
+# COMPARES THE WHOLE PAYLOAD, BYTE FOR BYTE. The earlier check extracted `[a-z_]+=\$[a-z_]+`
+# and kept only the NAMES. A mutation audit walked straight through it twice: appending a
+# literal-valued `host_role=dedicated` to the logger site alone (no `$`, so not extracted), and
+# binding the same field names to SWAPPED variables on the phone-home site (`cut -d= -f1`
+# discarded the values). Names are not the payload; the payload is.
+PROBE_PAYLOAD_LOGGER="$(grep -F 'logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE' "$BOOTSTRAP_SH" \
+  | sed -e 's/.*SOLEUR_INNGEST_SERVER_PROBE //' -e 's/"$//' || true)"
+PROBE_PAYLOAD_PHONE="$(grep -F 'inngest-server-probe-vector-down' "$BOOTSTRAP_SH" \
+  | sed -e 's/.*inngest-server-probe-vector-down "//' -e 's/" || true$//' || true)"
+assert "#7695 the extracted payload is non-empty (parity cannot pass vacuously on two blanks)" \
+  "[[ -n '$PROBE_PAYLOAD_LOGGER' ]]"
+# A payload of pure literals would compare equal while carrying no measurement at all.
+assert "#7695 the extracted payload binds variables, not literals" \
+  "printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q '\\\$'"
+assert "#7695 both emit sites carry a BYTE-IDENTICAL payload (names AND bindings)" \
+  "[[ '$PROBE_PAYLOAD_LOGGER' == '$PROBE_PAYLOAD_PHONE' ]]"
+assert "#7695 each of the 5 store fields appears in the shared payload" \
+  "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q \"\$f=\\\$\$f\" || exit 1; done"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
 # Stack, which is the same ambiguity a missing row creates.
 # #7228 adds instance_id, cli_version and cutover_flag. The three answer questions the existing
@@ -1574,4 +1731,18 @@ assert "ack list holds exactly 1 entry (a silent second ack cannot open a hole)"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
+
+# ASSERTION-COUNT FLOOR. A mutation audit deleted the entire #7695 block from this file and the
+# suite reported `232/232 passed, 0 failed`, exit 0 — a silent green that no assertion in the
+# file could see, because the assertions were the thing deleted. Reported DIRECTLY with printf
+# + exit (ADR-193), never through `assert`/`fail`: a floor that dispatches through the helper
+# it backstops dies with the same edit that disarms the helper. Raise in lockstep when adding
+# assertions; the value is the exact count from a green run, with no slack.
+INNGEST_MIN_ASSERTIONS=289
+if [[ "$TOTAL" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
+  printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
+    "$TOTAL" "$INNGEST_MIN_ASSERTIONS" >&2
+  exit 1
+fi
+
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

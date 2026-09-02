@@ -333,32 +333,8 @@ assert_eq "unprovable mount => state reason is latch-unrecordable" \
   "latch-unrecordable" "$(jq -r '.reason' "$STATE")"
 teardown_case
 
-# --- #7695 task 1.8: the terminal no-op arms carry the latch bit ---------------------------
-# These arms fire every 30s, so they are the FRESHEST statement of the one fact that decides
-# whether an arm can proceed at all. The hourly SOLEUR_INNGEST_SERVER_PROBE carries the full
-# store picture (bytes, redis keys, mount source); duplicating all of it here would create a
-# second source for the same facts in a second file, where no test can compare the two — the
-# drift the probe's own site-parity assertion exists to prevent. So only the latch bit is
-# mirrored, and only because its freshness is what a dispatch decision turns on.
-echo "TEST: #7695 terminal no-op arms report the latch state"
-setup_case
-run_flip rolled-back >/dev/null
-assert_eq "(#7695) latch ABSENT => the terminal no-op row says flush_latched=false" \
-  "false" "$(jq -r '.flush_latched' "$STATE" 2>/dev/null)"
-# A present latch is the state that makes a subsequent arm abort into terminal `aborted`.
-mkdir -p "$(dirname "$LATCH")"
-printf 'flip-done\n' > "$LATCH"
-run_flip rolled-back >/dev/null
-assert_eq "(#7695) latch PRESENT => the terminal no-op row says flush_latched=true" \
-  "true" "$(jq -r '.flush_latched' "$STATE" 2>/dev/null)"
-# Never absent: a reader that cannot distinguish "no latch" from "field missing" is back to
-# the ambiguity this whole channel exists to remove.
-assert_eq "(#7695) the field is always present, never null" \
-  "no" "$(jq -e 'has("flush_latched")|not' "$STATE" >/dev/null 2>&1 && echo yes || echo no)"
-teardown_case
-
 # --- assertion-count FLOOR ------------------------------------------------------------------
-LATCH_MIN_ASSERTIONS=48  # derived from a green run; raise in lockstep when adding assertions
+LATCH_MIN_ASSERTIONS=45  # derived from a green run; raise in lockstep when adding assertions
 if [[ "$PASS" -lt "$LATCH_MIN_ASSERTIONS" ]]; then
   fail "assertion-count floor: only $PASS assertions ran, expected >= $LATCH_MIN_ASSERTIONS — a block was skipped or emptied"
 fi
