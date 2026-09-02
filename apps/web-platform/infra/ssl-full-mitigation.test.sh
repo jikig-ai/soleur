@@ -347,9 +347,27 @@ fi
 # stage branches are padded to the same count). Bump deliberately when adding a case; do
 # not derive it from anything this file computes, which would make it a tautology.
 printf '\n'
+# Two comparisons rather than one `-ne`, and the threshold assignment sits IMMEDIATELY
+# above the `if` with nothing between them. Both are load-bearing for
+# `scripts/guard-vacuity-floor.test.sh`, which promotes this file:
+#
+#   - it recognises a floor by the `-lt`/`-le`/`-ge` shape, so an `-ne` or `-eq` bound is
+#     invisible to it — it can neither mutation-test such a floor nor count it as firing;
+#   - it builds its mutant by walking BACKWARDS from the floor line collecting simple
+#     assignments to bind the threshold, and stops at the first line that is not one. A
+#     comment between `EXPECTED_CASES=` and the `if` leaves the mutant unbound, which that
+#     guard reports as a construction failure for an otherwise compliant floor.
+#
+# Keeping both halves preserves exact cardinality: `-lt` catches a deleted or skipped case,
+# `-gt` catches one added without review.
 EXPECTED_CASES=10
-if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
-  printf '[FATAL] vacuity floor: %d assertion cases executed, expected exactly %d — a case was deleted, skipped, or added without updating EXPECTED_CASES\n' \
+if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
+  printf '[FATAL] vacuity floor: only %d assertion cases executed, expected %d — a case was deleted or skipped\n' \
+    "$CASES" "$EXPECTED_CASES" >&2
+  exit 1
+fi
+if [[ "$CASES" -gt "$EXPECTED_CASES" ]]; then
+  printf '[FATAL] vacuity floor: %d assertion cases executed, expected %d — a case was added without updating EXPECTED_CASES\n' \
     "$CASES" "$EXPECTED_CASES" >&2
   exit 1
 fi

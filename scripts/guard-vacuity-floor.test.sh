@@ -241,7 +241,15 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # Its floor (`ASSERT_FLOOR`, a literal bound adjacent to the test) is mutant-CONSTRUCTIBLE and
 # measured FIRES under neutered assertion machinery, so this is a promotion that buys real
 # mutation coverage rather than an exemption that moves a number.
-PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh)$'
+# `ssl-full-mitigation.test.sh` added by #7749 — the guard on the Cloudflare config rule
+# holding the apex off HTTP 526 while the GitHub Pages origin cert sits expired. Its floor is
+# an exact cardinality split into `-lt` and `-gt` halves (no slack), reported via a direct
+# `printf >&2` + `exit 1`, never through the suite's own `fail()`, so neutering the assertion
+# machinery cannot disarm it — and the suite additionally carries a positive control that
+# drives `pass()`/`fail()` once and requires both counters to move, which is what catches a
+# neutered `fail()` that an exact-count floor alone cannot see. Promotion, not exemption: it
+# is mutation-tested like any covered suite and SHRINKS the ledger 48 -> 47.
+PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
