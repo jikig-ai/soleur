@@ -98,7 +98,8 @@ def scope_has_set_e(lines, idx):
 
 def read_lines(path):
     try:
-        return open(path, encoding="utf-8", errors="replace").read().split("\n")
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read().split("\n")
     except OSError:
         return None
 
