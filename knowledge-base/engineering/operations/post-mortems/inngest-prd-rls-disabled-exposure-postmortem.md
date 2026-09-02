@@ -140,3 +140,48 @@ Every action item and follow-up so this incident cannot recur. The core recurren
 | Issue | Action | Status |
 |---|---|---|
 | #5697 | Raise `soleur-inngest-prd` log retention (or ship logs to a durable sink) so a future exposure window can be analyzed end-to-end — turns a future INCONCLUSIVE access-log determination into a conclusive one. | open |
+
+<!-- ADDENDUM-2026-08-26 START -->
+
+## Addendum — 2026-08-26 (annotation only; nothing above is corrected)
+
+Everything above is a true record of the 2026-06-29 incident and response. This note is
+appended rather than merged in, because the figures it qualifies were accurate when written.
+
+**The "~1–2 days" retention figure appears twice** — in the timeline row for the GATE
+G-ESCALATE run, and in "Where we got lucky". Both are left as recorded: they are what was
+measured on 2026-06-29. Re-measured on 2026-08-26, the aggregate retained span on this project
+is materially longer.
+
+**That longer span does not make the access-log dimension conclusive, and #5697 stays open.**
+The determination's evidentiary claim rests on `edge_logs`, which produced **zero rows across
+the entire 30-day live period** — it is uninstrumented on this project, so its zero is an
+instrumentation gap, not evidence of no traffic. Retaining more of a signal that is never
+emitted recovers nothing. The INCONCLUSIVE treatment is reinforced, not overturned.
+
+#5697 asks to raise retention **or** ship logs to a durable sink. Revocable vendor-side
+retrievability satisfies neither limb, and the durable-sink limb is untouched, so the item
+remains open and the "residual is investigability" framing above still holds.
+
+**Tooling migration.** The Management API log endpoint used for the access-log analysis is
+deprecated, with removal announced for 2026-09-23, and replaced by a unified log stream taking
+ClickHouse SQL. Access-log queries now go through `scripts/supabase-logs-query.sh`, which
+returns a coverage verdict with every result — so the specific trap this incident's
+investigation had to reason around by hand (a zero that means "not retained" or "not
+instrumented" rather than "no traffic") is now answered by the tool.
+
+**The GATE G-ESCALATE discipline praised in "What went well" now has a durable home.** It
+existed only as a blockquote in the source plan; it is now
+`knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`, with
+`triggers:` frontmatter so the incident skill can route to it by symptom. Tool runbook:
+`knowledge-base/engineering/operations/runbooks/supabase-log-query.md`.
+
+**Measurement source.** `knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`
+(§Confirmed from the plan, finding E). Cite it rather than restating its figures.
+
+**Sibling records carrying the same addendum:**
+
+- `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
+- `knowledge-base/legal/audits/2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md`
+
+<!-- ADDENDUM-2026-08-26 END -->
