@@ -825,7 +825,30 @@ else
   fail "tag laundered by sibling presence: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
 fi
 
-MIN_ASSERTIONS=43
+# --- 44. THE SOFTENING IS GATED ON A MEASUREMENT, AND WITHHELD WITHOUT ONE --------------------
+# Arms 39-41 soften a class based on `wt`. A softening keyed on a measurement must fail CLOSED when
+# that measurement is absent, or a snapshot pair that simply failed to capture `wt` -- an older lib
+# across a swap, or `git worktree list` erroring -- silently buys the soft class for every ref. That
+# is the shape three reviewers independently found in the ORIGINAL `elsewhere` fallback, one design
+# iteration earlier; this arm is what stops it coming back through the new gate.
+ck
+p=$(sibling_probe wtwithheld) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" branch withheld-br
+state "$p"; after="$STATE_OUT"
+# Same delta, twice: once as measured, once with the `wt` family stripped and its manifest row
+# demoted on BOTH sides (so the pairing check sees no mismatch and refs is still classified).
+strip_wt() { printf '%s' "$1" | grep -v $'^wt\t' | sed 's/^manifest\twt\tmeasured$/manifest\twt\tnot-measured/'; }
+v_measured=$(classify_in "$p" "$before" "$after")
+v_blind=$(classify_in "$p" "$(strip_wt "$before")" "$(strip_wt "$after")")
+if grep -qE '^REPORT[[:space:]]+refs.*withheld-br' <<<"$v_measured" \
+   && grep -qE '^FATAL[[:space:]]+refs.*withheld-br' <<<"$v_blind"; then
+  pass "the refs softening is WITHHELD when sibling presence was not measured (fails closed)"
+else
+  fail "softening not gated on the measurement: measured='$(printf '%s' "$v_measured" | grep withheld-br | tr '\n' '|')' blind='$(printf '%s' "$v_blind" | grep withheld-br | tr '\n' '|')'"
+fi
+
+MIN_ASSERTIONS=44
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1
