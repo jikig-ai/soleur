@@ -11,15 +11,65 @@ the subject, so each is independently revertible.
 
 ---
 
+
+## STATUS — PR A (this branch), 2026-09-02
+
+Phases 0–4 are implemented and committed. **Phase 5 (#7460) is NOT in this PR** — it was split
+into a follow-on PR B by operator decision; see the SCOPE SPLIT note in the plan and UC-1
+RESOLUTION in `decision-challenges.md`. `apps/web-platform/infra/cloud-init-git-data.yml` is
+UNTOUCHED here, so the rung-2 evidence hash is unaffected by PR A.
+
+**Measured, not asserted.** Every suite below was run against the as-written tree:
+
+| Suite | Result | Floor |
+|---|---|---|
+| `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` | 75 passed, 0 failed, Skipped: 0 | 69 → 72 (#7570) → 75 (#7544) |
+| `tests/scripts/test-git-data-birth-readiness-gate.sh` | 77 passed, 0 failed | 69 → 77 (#7534) |
+| `tests/scripts/test-git-data-rung2-evidence-capture.sh` | 48 passed, 0 failed | 34 → 48 (#7481) |
+| `scripts/sentry-issue.test.sh` | 17 passed, 0 failed | unchanged |
+| `scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh` | 9 passed, 0 failed | unchanged |
+
+**Mutation-proved, with the baseline green and the SUT restored byte-identical after each:**
+
+- #7570 — the pre-fix predicate reddens D1-MUT with `CAPTURE: unbound variable`, the defect verbatim.
+- #7544 — reverting one spin site reads `bare=1 spins=5`; two rungs redden.
+- #7481 — a bare `exit 2` at one site reddens 2 arms; dropping one redaction name reddens 1;
+  neutering the consult so it never upgrades reddens 2.
+- #7544 monitor — under Actions' real shell, a stale digest yields `drift=ubuntu-base` naming
+  both digests with PROBLEMS empty; a missing `UBUNTU_BASE` yields PROBLEMS (detector failure).
+
+**Three plan premises did not survive measurement and were corrected in place** (each is
+argued at its call site rather than only here):
+
+1. #7534's `templatefile(` check pins the FORM, not the canonical FILENAME. The filename pin
+   ABORTed 25 arms in the gate's own suite (every synthesized tree binds `ci.yml`), and a moved
+   template that keeps the form still hashes correctly — only indirection breaks the binding.
+2. #7481's endpoint. `/projects/<org>/<proj>/events/` returns 403 to the least-privilege token
+   and, with the broader one, ignores the search entirely (100 rows unfiltered, 0 for the host).
+   `/organizations/<org>/events/` with explicit `field=` projections is event-level, honours the
+   query, and works on the RO token — so the residual the plan documented never arises.
+3. #7481's "extract from `fresh-host-boot-trail.sh`". That reader uses a different token against
+   a different endpoint; extracting it would have meant either widening this route's token or
+   changing a production script out of scope. The modes were added to `scripts/sentry-issue.sh`,
+   which already owns the RO-token ladder and the 401/403 wording — so there is still no third
+   Sentry reader in the repo, which is what that instruction was protecting.
+
+**Two defects found in my own work by measuring rather than reading**, both fixed:
+
+- A `shift 2` with only the flag left FAILS and leaves `$#` unchanged — an infinite loop. It
+  was introduced in the new reader and already existed in the capture script's parser.
+- ARM 16's first eyeball regex was case-sensitive and backtick-blind, reported a clean sweep,
+  and TWO real sites survived it. Widened to anchor on the claim; both sites then fixed.
+
 ## Phase 0 — Preconditions (measure; do not inherit)
 
-- [ ] 0.1 Run the runcmd suite and record its real terminal line. Expected today:
+- [x] 0.1 Run the runcmd suite and record its real terminal line. Expected today:
       `git-data-runcmd-rehearsal: 69 passed, 0 failed, Skipped: 0 (69 assertions)`.
       **Do not quote the `t5-skip-persistence-bound-7510.test.sh` fixture** (`44/0/2 (46)`) — it is
       a fixture, the suite hard-exits below 69, and `_SKIP_CEILING=7`.
-- [ ] 0.2 Record all **four** anti-vacuity floors and their raise-itemisation conventions:
+- [x] 0.2 Record all **four** anti-vacuity floors and their raise-itemisation conventions:
       evidence-capture (34), birth-readiness gate (69), runcmd (`-lt 69`), rung-2 rehearsal (71).
-- [ ] 0.3 Migrate the hand-rolled floors to `tests/scripts/lib/gate-suite-harness.sh`
+- [x] 0.3 Migrate the hand-rolled floors to `tests/scripts/lib/gate-suite-harness.sh`
       (`gate_assert_ran <observed> <floor>`) **in its own commit**, before raising them — 3 literals
       per floor becomes 1, across four floors.
       **This is an established convention, verified: 12 `tests/scripts/test-*.sh` suites already
@@ -28,115 +78,115 @@ the subject, so each is independently revertible.
       two gates closest to this work. A narrower `gate_assert_ran`-only grep undercounts, because
       suites source the harness rather than naming that symbol; use the sourcing grep as the
       instrument.
-- [ ] 0.4 Re-derive the free ADR ordinal across all `origin/*` refs with
+- [x] 0.4 Re-derive the free ADR ordinal across all `origin/*` refs with
       `git for-each-ref refs/remotes/origin` (**not** `git ls-remote`, which counts tags).
       ADR-198 was free at plan time.
-- [ ] 0.5 Re-resolve the `ubuntu:24.04` **manifest-list** digest immediately before writing it:
+- [x] 0.5 Re-resolve the `ubuntu:24.04` **manifest-list** digest immediately before writing it:
       `docker buildx imagetools inspect ubuntu:24.04 | grep '^Digest:'`. Do **not** use
       `docker manifest inspect`, which returns the platform-specific digest.
-- [ ] 0.6 Re-validate the Sentry window parameter on the **events** endpoint (the issues endpoint's
+- [x] 0.6 Re-validate the Sentry window parameter on the **events** endpoint (the issues endpoint's
       mandatory `start=`/`end=` pair need not carry over).
-- [ ] 0.7 Reconcile which Doppler config holds `SENTRY_ISSUE_RO_TOKEN` — the capture script's
+- [x] 0.7 Reconcile which Doppler config holds `SENTRY_ISSUE_RO_TOKEN` — the capture script's
       comment says `soleur/prd`, the token resolves under `prd_terraform`, and the capture step runs
       under `prd_terraform`.
 
 ## Phase 1 — #7570: D1 attributes its own failure
 
-- [ ] 1.1 Change the D1 read to `[ -s "${CAPTURE:-}" ]`. The `:-` is the mechanism; the
+- [x] 1.1 Change the D1 read to `[ -s "${CAPTURE:-}" ]`. The `:-` is the mechanism; the
       `CAPTURE=""` init is optional.
-- [ ] 1.2 **Decide the `||` disjunct** — option (a) point `CAPTURE` at the real path before D1
+- [x] 1.2 **Decide the `||` disjunct** — option (a) point `CAPTURE` at the real path before D1
       (preferred), or (b) delete the disjunct and say why. Do not leave it silently dead.
-- [ ] 1.3 Replace the `PRE-EXISTING HAZARD, TRACKED IN #7570` comment block; also correct the stale
+- [x] 1.3 Replace the `PRE-EXISTING HAZARD, TRACKED IN #7570` comment block; also correct the stale
       "skip ceiling at 2" line inside it.
-- [ ] 1.4 Add the `D1-MUT` mutation arm: a mutated emitter that dies at the `shift` (`_d_rc == 2`)
+- [x] 1.4 Add the `D1-MUT` mutation arm: a mutated emitter that dies at the `shift` (`_d_rc == 2`)
       producing no capture output must make D1 print **its own** message, not `unbound variable`.
-- [ ] 1.5 Raise the runcmd suite's `-lt 69` floor by the arms added, itemised.
+- [x] 1.5 Raise the runcmd suite's `-lt 69` floor by the arms added, itemised.
 
 ## Phase 2 — #7534: canonical module-shape assertion (Guard 1)
 
-- [ ] 2.1 Add the two-part assertion before the payload loop, reusing the extractor's
+- [x] 2.1 Add the two-part assertion before the payload loop, reusing the extractor's
       comment-strip so the two cannot disagree about what a comment is.
-- [ ] 2.2 **Carry the `(^|[^A-Za-z])` word boundary** into the occurrence count — without it
+- [x] 2.2 **Carry the `(^|[^A-Za-z])` word boundary** into the occurrence count — without it
       `templatefile(` is counted and the gate aborts on the shipped tree (10 vs 9, measured).
-- [ ] 2.3 Use `grep -o … | wc -l` for the exactly-one `templatefile(` check, not `grep -c`.
-- [ ] 2.4 Update the `THE HONEST BOUND` comment: the four forms are now *inadmissible*, not
+- [x] 2.3 Use `grep -o … | wc -l` for the exactly-one `templatefile(` check, not `grep -c`.
+- [x] 2.4 Update the `THE HONEST BOUND` comment: the four forms are now *inadmissible*, not
       *invisible*. Add the fourth, undocumented form. State that the existing `-lt 9` floor is
       **not** redundant with this check — it fires only downward.
-- [ ] 2.5 Arms A12–A15, one per binding form, on synthesized trees; each must ABORT naming the
+- [x] 2.5 Arms A12–A15, one per binding form, on synthesized trees; each must ABORT naming the
       occurrence.
-- [ ] 2.6 Arm A16 (must-PASS): a **new** tenth payload file — not a second binding to an existing
+- [x] 2.6 Arm A16 (must-PASS): a **new** tenth payload file — not a second binding to an existing
       one, which the post-`sort -u` resolved count would false-ABORT. Digest must move on its
       content change.
-- [ ] 2.7 Arm: a **value-form** map entry (`foo = var.foo`) must NOT trip the gate — the row that
+- [x] 2.7 Arm: a **value-form** map entry (`foo = var.foo`) must NOT trip the gate — the row that
       stops Phase 5 from tripping Phase 2.
-- [ ] 2.8 Raise the birth-readiness floor (69), itemised.
+- [x] 2.8 Raise the birth-readiness floor (69), itemised.
 
 ## Phase 3 — #7544: digest-pin the base image (Guard 2)
 
-- [ ] 3.1 Add the `UBUNTU_BASE` literal with the manifest-list digest, the producing command, and
+- [x] 3.1 Add the `UBUNTU_BASE` literal with the manifest-list digest, the producing command, and
       the observed media type recorded in its comment.
-- [ ] 3.2 Replace all **six** live spin sites with `"$UBUNTU_BASE"`. Account for all **three**
+- [x] 3.2 Replace all **six** live spin sites with `"$UBUNTU_BASE"`. Account for all **three**
       prose references, not two.
-- [ ] 3.3 Add the pinned digest and its measured `mke2fs` version to R1's failure detail so drift
+- [x] 3.3 Add the pinned digest and its measured `mke2fs` version to R1's failure detail so drift
       reads as a base-image change, not a template regression.
-- [ ] 3.4 `R1-PIN` arm using **the file's own published derivation**:
+- [x] 3.4 `R1-PIN` arm using **the file's own published derivation**:
       `grep -cE '^[[:space:]]*docker run --rm'` = 6 (floor), plus zero bare `ubuntu:24.04` outside
       the literal and comments. **Not** `grep -c 'docker run'` (13, includes prose) and **not**
       `docker run.*@sha256:` (0 — the image is on a continuation line and then a variable).
-- [ ] 3.5 Justify in-file why a text-check over the suite's own source is right here, since that
+- [x] 3.5 Justify in-file why a text-check over the suite's own source is right here, since that
       file explicitly rejects the antipattern elsewhere (ADR-188 residual stanza).
-- [ ] 3.6 Add the `ubuntu:24.04` case to `rule-audit.yml`'s existing `Detect zot pin staleness`
+- [x] 3.6 Add the `ubuntu:24.04` case to `rule-audit.yml`'s existing `Detect zot pin staleness`
       step, sourcing the pin from `UBUNTU_BASE`. **Do not create a follow-through probe** — the
       sweeper closes a tracker on exit 0.
 
 ## Phase 4 — #7481: the Sentry second channel (Guard 3)
 
-- [ ] 4.0 **Reuse, do not rebuild.** Extract the shared reader from
+- [x] 4.0 **Reuse, do not rebuild.** Extract the shared reader from
       `apps/web-platform/infra/scripts/fresh-host-boot-trail.sh`, which already implements shape
       validation, the non-verdict failure message, event-level `level == "fatal"` filtering and a
       run anchor — on the `/projects/{org}/{proj}/events/` endpoint, which returns individual
       events and therefore has no issue-group residual. If extraction proves infeasible, record why
       in the PR body. **Do not create a third Sentry reader.**
-- [ ] 4.1 Build the query: event-level host + `level == "fatal"`, pinned org and project literals
+- [x] 4.1 Build the query: event-level host + `level == "fatal"`, pinned org and project literals
       with the project id's source and measurement date in a comment, `end` tracking *now*.
-- [ ] 4.2 Liveness anchor on a **wide** window (not the run window), excluding the rehearsal host,
+- [x] 4.2 Liveness anchor on a **wide** window (not the run window), excluding the rehearsal host,
       projecting **counts or ids only** — never `title`/`culprit` into the public artifact.
-- [ ] 4.3 Split causes: 401 and 403 **deterministic and terminal** (do not retry — they burn the
+- [x] 4.3 Split causes: 401 and 403 **deterministic and terminal** (do not retry — they burn the
       16-minute poll on a paid host); everything else one catch-all carrying `HTTP <code>` and
       `.detail`. Include the measured **400**. Add a token-presence preflight and a `command -v jq`
       check. Every cause carries a `**Next:**` clause stating that re-dispatch is not warranted.
-- [ ] 4.4 `jq -e 'type == "array"'` **before** any length is taken.
-- [ ] 4.5 Route every TRANSIENT exit through a single `transient()` helper; assert placement by
+- [x] 4.4 `jq -e 'type == "array"'` **before** any length is taken.
+- [x] 4.5 Route every TRANSIENT exit through a single `transient()` helper; assert placement by
       **deriving** over `exit 2` sites with a floor, excluding the derivation fault by name.
       **Six sites, not four** — including the two transport-failure sites the first draft missed.
-- [ ] 4.5b Define the three undefined verdicts: a Sentry-derived FAIL is `exit 1` with its own
+- [x] 4.5b Define the three undefined verdicts: a Sentry-derived FAIL is `exit 1` with its own
       summary variant; silent-both is TRANSIENT (must-PASS arm); the **PASS path gains a Sentry
       cross-check** (this also discharges §5.0's finding).
-- [ ] 4.6 **MERGE BLOCKER — widen the redaction tuple to ten names**, not one:
+- [x] 4.6 **MERGE BLOCKER — widen the redaction tuple to ten names**, not one:
       `SENTRY_ISSUE_RO_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `DOPPLER_TOKEN`,
       `HCLOUD_TOKEN`, `BETTERSTACK_LOGS_TOKEN`, `GIT_DATA_LUKS_KEY` + the three incumbents. The
       workflow writes both AWS keys into `$GITHUB_ENV`, so they are in the capture step's
       environment, `tee`'d verbatim into a 7-day artifact on a **public** repo. Arm per name.
       File the allowlist-inversion separately (length floor ≥12, non-secret name exclusions, and
       the structural fix: stop writing R2 creds to `$GITHUB_ENV` at all).
-- [ ] 4.6a Arm: the Sentry `curl` carries no `-v`/`--trace*` and no token in a URL.
-- [ ] 4.6b Arm: no `set -x` in the workflow; no `set -x`/`printenv`/`env |` in the capture script.
-- [ ] 4.6c **Project `tags.detail` + `tags.rc` on the Sentry verdict print** (§4.5a). Without it the
+- [x] 4.6a Arm: the Sentry `curl` carries no `-v`/`--trace*` and no token in a URL.
+- [x] 4.6b Arm: no `set -x` in the workflow; no `set -x`/`printenv`/`env |` in the capture script.
+- [x] 4.6c **Project `tags.detail` + `tags.rc` on the Sentry verdict print** (§4.5a). Without it the
       new FAIL path reproduces the plan's own baseline — a stage and an rc, no cause, on a host
       that no longer exists. Arm: an empty `detail` reports "FAIL, cause unavailable".
-- [ ] 4.7 Remove the eyeball instructions — **assert the class with a grep-with-floor, do not
+- [x] 4.7 Remove the eyeball instructions — **assert the class with a grep-with-floor, do not
       enumerate**. The site count went 2 → 3 → 7 across three passes of this plan; §4.5 already
       proved enumerated sets rot. Verb set: `Confirm against Sentry`, `Check Sentry`,
       `Check the Better Stack`, `check the .* secret`, across workflow + runbook + capture script — and **preserve** the artifact
       pointer, `DO NOT simply re-dispatch`, the **two-dispatch cap**, and the #7025 banner. Rewrite
       the now-stale #7116 sentence. Extend the runbook's outcome table with the new sub-causes.
-- [ ] 4.7b Update the capture script header's `WHAT THIS DOES NOT CLAIM` block — it currently says
+- [x] 4.7b Update the capture script header's `WHAT THIS DOES NOT CLAIM` block — it currently says
       `#7116 owns that work; do not do it here` about a **closed** issue.
-- [ ] 4.8 Fixtures reproduce the measured production artifacts: the `level:info` beacon
+- [x] 4.8 Fixtures reproduce the measured production artifacts: the `level:info` beacon
       (`git-data boot stage`, `stage:bootcmd_start`) and the real fatal (`stage:luks_open`).
-- [ ] 4.9 Sentinel on every arm; raise the floor; anchor the config assertion on the **Sentry
+- [x] 4.9 Sentinel on every arm; raise the floor; anchor the config assertion on the **Sentry
       paragraph**.
-- [ ] 4.10 Window-derivation arm (stubbing the helper must redden) + an arm asserting a
+- [x] 4.10 Window-derivation arm (stubbing the helper must redden) + an arm asserting a
       `start=`-only form is never emitted.
 
 ## Phase 5 — #7460: bake the ingest token (the single cloud-init edit)
