@@ -60,7 +60,21 @@ new_tree() {
   git -C "$d" init -q || setup_die "git init failed in $d"
   printf '%s' "$d"
 }
-seal() { git -C "$1" add -A || setup_die "git add -A failed in $1"; }
+# P1a fixture-dir operand rule (#7652). `seal` takes its tree as a POSITIONAL, and
+# `git -C "" add -A` would stage the CALLER's real repository. The body below is the
+# CANONICAL copy from plugins/soleur/test/test-helpers.sh, asserted byte-for-byte by
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh — do not reword it here.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+seal() { assert_fixture_dir "$1"; git -C "$1" add -A || setup_die "git add -A failed in $1"; }
 
 OUT="$WORK/out.txt"
 RC=0
