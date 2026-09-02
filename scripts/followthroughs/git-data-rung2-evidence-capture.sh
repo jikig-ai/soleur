@@ -244,6 +244,10 @@ _sentry_consult() {
   # STRUCTURAL PREFLIGHTS FIRST, so an absent tool or token is a cheap named refusal rather
   # than a 401 discovered mid-poll or an rc=127 that reads most naturally as "not an array".
   if ! command -v jq >/dev/null 2>&1; then
+    # MEASURED-BY: the `command -v jq` test on the line directly above. The message names a
+    # cause, and that cause is the branch condition itself — but lint-diagnosis-claims cannot
+    # see a basis that lives in the enclosing `if`, and its baseline ratchets DOWN only, so
+    # the annotation is the sanctioned fix rather than a baseline bump (ADR-166).
     echo "  second channel: SKIPPED — jq is not installed, so a Sentry result could not be parsed."
     echo "  **Next:** install jq on the runner. Re-dispatching will not change this."
     return 0
