@@ -125,8 +125,20 @@ out=$(run s1 "$CI2" Bash)
 rc=1; denied "$out" || rc=0
 verdict "$rc" 'a Bash call carrying the same text is ignored'
 
+# --- 13. THE PRIMARY FLOW MUST NOT BE BLOCKED ---------------------------------
+# ship Phase 7 polls merge, then release workflows, then CI. If this hook denied
+# any leg of that, it would break the flow it exists to help. The three legs carry
+# different signatures (pr / workflow / workflow), so they must all be ALLOWED.
+# Verified against the commands in ship/SKILL.md Phase 7 rather than invented.
+fresh 13
+run s1 '{"command":"while true; do gh pr view 7753 --json state,mergeStateStatus; sleep 30; done","description":"merge wait","timeout_ms":1800000}' >/dev/null
+run s1 '{"command":"while true; do gh run list --workflow web-platform-release.yml --branch main; sleep 30; done","description":"release wait","timeout_ms":1800000}' >/dev/null
+out=$(run s1 '{"command":"gh run list --workflow ci.yml --branch main","description":"ci wait","timeout_ms":1800000}')
+rc=1; denied "$out" || rc=0
+verdict "$rc" "ship Phase 7's merge->release->ci sequence is ALLOWED end to end (different targets never collide)"
+
 printf '\n'
-EXPECTED_CASES=12
+EXPECTED_CASES=13
 if [ "$CASES" -ne "$EXPECTED_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected exactly %d\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
