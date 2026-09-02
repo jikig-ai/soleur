@@ -45,3 +45,57 @@ dimension is INCONCLUSIVE (not certified clean) for 2026-06-17 → ~2026-06-27; 
 the never-published key. Retention-extension follow-up tracked separately.
 Determined by: Soleur v1 CLO-attestation authority, 2026-06-29.
 ```
+
+<!-- ADDENDUM-2026-08-26 START -->
+
+## Addendum — 2026-08-26 (annotation only; the determination is unchanged)
+
+This addendum is appended for accuracy of the record. It amends **nothing** above: the
+Verdict, the Reasoning, the Conditions / residual actions, the Art. 33(5) record and the
+2026-06-29 sign-off all stand exactly as determined and signed.
+
+**1. Tooling migration.** The Management API log endpoint used to gather the underlying
+evidence has been deprecated by the vendor, with removal announced for 2026-09-23, and
+replaced by a unified log stream taking ClickHouse SQL. Access-log queries are now issued
+through `scripts/supabase-logs-query.sh` (runbook
+`knowledge-base/engineering/operations/runbooks/supabase-log-query.md`), which returns a
+coverage verdict with every result. This is a change of instrument, not of finding.
+
+**2. Retention posture.** The "~1–2 days" retained window recorded in the Conditions above was
+the horizon measured on 2026-06-29. Re-measured on 2026-08-26, the aggregate retained span on
+this project is materially longer.
+
+**3. This does NOT alter the access-log determination, and the INCONCLUSIVE treatment is
+reinforced rather than overturned.** The determination's evidentiary claim rests on
+`edge_logs`. Re-measurement establishes that `edge_logs` produced **zero rows across the
+entire 30-day live period** — it is uninstrumented on this project, so its zero is an
+instrumentation gap and never was evidence of no traffic. A longer retained span over a source
+that does not emit recovers nothing. Concretely:
+
+- The 2026-06-17 → ~2026-06-27 portion of the window remains **INCONCLUSIVE, not clean**.
+- Reasoning §3 ("retained-log evidence is corroborating, not dispositive") is *strengthened*:
+  the corroborating value of that evidence is now known to be lower than assumed in 2026-06,
+  not higher.
+- The determination rests, as it always did, primarily on the absent exploitation
+  precondition — the never-published key — which is untouched by any of this.
+
+No re-opening. No change to the Art. 33 or Art. 34 conclusions. The Art. 33(5) record above is
+not amended.
+
+**Measurement source.** `edge_logs` instrumentation, the retained span, and the endpoint
+behaviour are recorded in
+`knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`
+(§Confirmed from the plan, finding E). Cite that file rather than restating its figures.
+
+**Note on the FOLLOW-UP condition.** The retention-policy gap recorded in Conditions asks for
+retention to be extended *or* logs shipped to durable storage. A longer vendor-side retained
+span satisfies neither limb: it is revocable, vendor-controlled retrievability through an
+instrument now shown to be untrustworthy for this source, and the durable-sink limb is
+untouched. The follow-up stays open.
+
+**Sibling records carrying the same addendum:**
+
+- `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
+- `knowledge-base/engineering/operations/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
+
+<!-- ADDENDUM-2026-08-26 END -->

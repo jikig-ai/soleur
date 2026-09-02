@@ -74,6 +74,12 @@ convention in the Article 30 register's Cross-Cutting TOMs).
    risk-to-rights to decide between "notify CNIL", "notify CNIL + data
    subjects (Art. 34)", or "document why no notification is required
    (Art. 33(1) unlikely-risk carve-out)".
+   Where the report is an *exposure* whose actual use is unknown — a leaked key,
+   an RLS gap, an over-broad grant — run
+   `knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`
+   before remediating: it establishes the log-retention horizon first and returns
+   one of three verdicts (breach / clean / inconclusive). Reachability alone does
+   not start the Art. 33 clock, and a partial log pull is never a clean result.
 5. CNIL notification template is held by the CLO role (see Article 30 register
    — Incident response TOM).
 6. Acknowledge the inbox item only once the above steps are owned — the T-7d /
