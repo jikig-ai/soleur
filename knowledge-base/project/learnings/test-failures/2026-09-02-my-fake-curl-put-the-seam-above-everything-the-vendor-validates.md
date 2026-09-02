@@ -219,6 +219,38 @@ violating the contract it now enforces.
   moves the artifact two compliance gates resolve by path; a run that archives mid-pipeline must
   re-point the PR body, or the gates downgrade to SKIP and report silence as success.
 
+- **The helper reported UNINSTRUMENTED on every jq < 1.8 host, and the local battery could not
+  see it.** jq 1.7 rejects a top-level `//` in an object VALUE — `{ c: (X | tonumber?) // 0 }`
+  is a syntax error, `{ c: ((X | tonumber?) // 0) }` compiles; jq 1.8 accepts both. Ubuntu
+  24.04, the CI runner, ships 1.7. So `normalize_agg`'s program did not COMPILE there, and its
+  `2>/dev/null` turned a compile error into an empty aggregate — which reads downstream as "this
+  source emitted no row over the pinned 30d span". The helper answered UNINSTRUMENTED, exit 3,
+  for a source carrying 88 rows: this tool's own headline failure mode, produced by the tool.
+  Identical fixtures scored 31/0 here and 21/10 on the runner. — Recovery: reproduced in
+  `docker run ubuntu:24.04` (jq 1.7, GNU coreutils 9.4) in about two minutes, which turned an
+  unreadable CI log into a local REPL. — **Prevention:** this host runs jq 1.8 and *uutils*
+  `date`, not GNU — the dev box is not a smaller CI box, it is a DIFFERENT one, and "green
+  locally" is a claim about one point in a version matrix. When a suite passes locally and fails
+  in CI, reproduce in the runner's own image FIRST; the delta is almost never the code.
+- **`2>/dev/null` on an analysis step is the same defect as a bare zero.** It converts "this
+  computation failed" into "this computation returned nothing", and nothing is indistinguishable
+  from a real empty result. It is the exact substitution this PR's helper exists to refuse, one
+  layer down. — **Prevention:** a redirect to `/dev/null` on a step whose EMPTY output is
+  meaningful is never harmless; return the rc and let the caller raise a verdict.
+- **My first regression guard was vacuous, and the mutation run is the only thing that caught
+  it.** It matched `tonumber? //` — a string that appears in NEITHER the broken nor the fixed
+  spelling, since both contain `tonumber?) //` and differ only by an outer paren no local
+  pattern can see. Its positive control tested my *idea* of the bug rather than the bug, so it
+  passed the reverting mutant on this host. — **Prevention:** a positive control must be the
+  literal artifact that failed, lifted verbatim from the failing run — never a hand-typed
+  reconstruction of it.
+- **My second guard reused `strip_noise`, whose own sed DELETES `2>/dev/null`** — so a check
+  asserting "normalize_agg must not swallow jq's stderr" was reading text with the swallow
+  already normalized away, and passed a mutant that re-added it. — **Prevention:** the review
+  skill's rule ("ask what a gate normalises away before trusting it as coverage") applies to
+  helpers you REUSE inside a new assertion, not only to gates you inherit; check the normaliser
+  against the dimension you are asserting on.
+
 ## Related
 
 - `knowledge-base/project/learnings/2026-08-11-my-fixture-shared-the-bug-so-the-test-could-not-see-it.md`
