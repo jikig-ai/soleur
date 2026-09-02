@@ -193,6 +193,15 @@
         ]
       },
       {
+        "matcher": "Monitor|TaskStop",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/monitor-supersede-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit",
         "hooks": [
           {
