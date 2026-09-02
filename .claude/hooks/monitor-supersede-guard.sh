@@ -89,6 +89,13 @@ case "$TIMEOUT_MS" in ''|*[!0-9]*) TIMEOUT_MS=300000 ;; esac
 [ "$PERSISTENT" = "true" ] && TIMEOUT_MS=3600000
 WINDOW_S=$(( TIMEOUT_MS / 1000 ))
 
+# Percentage of a prior arm's window during which it is treated as "still live" for
+# supersede purposes. Not 100: a hook cannot see a monitor finish, so late in a window
+# the ledger's "live" is mostly stale. 50 keeps the fast-layering catch (the incident
+# was <10% elapsed) and drops the late-re-arm false positive.
+LIVE_FRACTION="${SOLEUR_MONITOR_LIVE_PCT:-50}"
+case "$LIVE_FRACTION" in ''|*[!0-9]*) LIVE_FRACTION=50 ;; esac
+
 # Override hatch.
 case "$CMD" in
   *"gate-override: monitor-supersede"*) exit 0 ;;
@@ -121,11 +128,11 @@ fi
 # ---- is a prior arm on this signature still live? ---------------------------
 PRIOR=""
 if [ -r "$LEDGER" ]; then
-  PRIOR=$(jq -rs --arg s "$SESSION" --arg sig "$SIG" --argjson now "$NOW" '
+  PRIOR=$(jq -rs --arg s "$SESSION" --arg sig "$SIG" --argjson now "$NOW" --argjson frac "$LIVE_FRACTION" '
     ( [ .[] | select(.event == "stop" and .session == $s) | .ts ] | max // 0 ) as $laststop
     | [ .[]
         | select(.event == "arm" and .session == $s and .sig == $sig)
-        | select(.ts + (.window // 300) > $now)
+        | select(.ts + ((.window // 300) * $frac / 100) > $now)
         | select(.ts > $laststop)
       ] | last // empty
     | "\(.ts)\t\(.desc)"

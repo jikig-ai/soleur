@@ -137,8 +137,28 @@ out=$(run s1 '{"command":"gh run list --workflow ci.yml --branch main","descript
 rc=1; denied "$out" || rc=0
 verdict "$rc" "ship Phase 7's merge->release->ci sequence is ALLOWED end to end (different targets never collide)"
 
+# --- 14. A LATE re-arm is allowed; an EARLY one is not ------------------------
+# The distinguishing observation, measured 2026-09-03: real layering happens FAST
+# (the incident's three monitors were minutes apart on 45-55 minute windows, i.e.
+# single-digit percent elapsed), whereas a re-arm LATE in a window is almost always
+# replacing a watcher that has already finished — which a hook cannot observe. So
+# "still live" is scoped to the early fraction of the prior window, not all of it.
+# Without this the author's own next re-arm would have been denied.
+fresh 14
+run s1 '{"command":"gh pr checks 7753","description":"early prior","timeout_ms":4000}' >/dev/null
+out=$(run s1 '{"command":"gh pr checks 7753 --json state","description":"immediate re-arm","timeout_ms":4000}')
+rc=1; denied "$out" && rc=0
+verdict "$rc" 'an IMMEDIATE re-arm (the layering shape) is still DENIED'
+
+fresh 15
+run s1 '{"command":"gh pr checks 7753","description":"aging prior","timeout_ms":4000}' >/dev/null
+sleep 3   # >50% of the 4s window
+out=$(run s1 '{"command":"gh pr checks 7753 --json state","description":"late re-arm","timeout_ms":4000}')
+rc=1; denied "$out" || rc=0
+verdict "$rc" 'a re-arm LATE in the prior window is ALLOWED (the watcher has almost certainly finished)'
+
 printf '\n'
-EXPECTED_CASES=13
+EXPECTED_CASES=15
 if [ "$CASES" -ne "$EXPECTED_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected exactly %d\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
