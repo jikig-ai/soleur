@@ -325,7 +325,7 @@ jobs:
               bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
                 --host-name "$REHEARSAL_HOST" \
                 --evidence-url "$url" \
-                --since "$RUNG2_SENTRY_SINCE" \
+                --since "${RUNG2_SENTRY_SINCE:-}" \
                 --divergence "$REHEARSAL_DIVERGENCE" \
                 --out /tmp/rung2/git-data-rung2-boot-evidence.env 2>&1 | tee /tmp/rung2/capture.log
             rc=${PIPESTATUS[0]}

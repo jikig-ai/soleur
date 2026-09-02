@@ -209,6 +209,14 @@ _sentry_window_args() {
     printf '%s\n' "--start" "$SENTRY_SINCE" "--end" "$(date -u +%Y-%m-%dT%H:%M:%S)"
     return 0
   fi
+  # THE DEGRADE IS DELIBERATE AND MUST STAY VISIBLE. --since is optional because the workflow
+  # passes "${RUNG2_SENTRY_SINCE:-}": on a path where the apply step did not run there is no
+  # apply timestamp, and the caller MUST NOT die at an unset expansion — measured, requiring it
+  # made every capture invocation exit 3 (WRAPPER FAILURE) and reddened 8 arms in
+  # git-data-rung2-rehearsal.test.sh, i.e. the read never happened and the harness blamed the
+  # doppler wrapper. Falling back to the --window period is correct but WIDER, so the consult
+  # prints which shape it used rather than letting a run-pinned read and a 30-day read look
+  # identical in the log.
   local n unit
   n="${WINDOW%% *}"; unit="${WINDOW##* }"
   case "$unit" in
@@ -248,6 +256,13 @@ _sentry_consult() {
 
   local _w=() _out _rc
   mapfile -t _w < <(_sentry_window_args)
+  if [[ -n "$SENTRY_SINCE" ]]; then
+    echo "  second channel: querying Sentry, window pinned to this run (since ${SENTRY_SINCE})."
+  else
+    echo "  second channel: querying Sentry over the --window period (${WINDOW}) — NOT pinned to"
+    echo "  this run, because no --since was supplied. A re-run ATTEMPT of the same run id can"
+    echo "  therefore surface an earlier attempt's fatal; weigh the timestamps below."
+  fi
   _out="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" "${_w[@]}" 2>&1)"; _rc=$?
 
   case "$_rc" in
@@ -324,6 +339,13 @@ transient() {
   echo "declines to read silence as a dark boot."
   exit 2
 }
+
+# --since is OPTIONAL, but a malformed one is refused rather than silently widening the read:
+# it is interpolated into the Sentry window, and which rows the query returns is the verdict.
+if [[ -n "$SENTRY_SINCE" && ! "$SENTRY_SINCE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+  echo "refusing: --since must be YYYY-MM-DDTHH:MM:SS (UTC, no zone suffix). Got: ${SENTRY_SINCE}" >&2
+  exit 64
+fi
 
 # THE PREFLIGHT IS WHAT SEPARATES "I QUERIED AND SAW NOTHING" FROM "I NEVER QUERIED". Without
 # it, a missing credential produces silence that is indistinguishable from a dark boot.
