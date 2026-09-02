@@ -1,0 +1,53 @@
+# Shrink-only grandfather list for the P1a fixture-dir operand rule (#7652).
+#
+# Each row is <count><TAB><path>: how many unasserted git -C write sites that file carried
+# when the guard landed. A file may only ever go DOWN, and a file not listed here may not
+# appear at all. Regenerate with:
+#     bash plugins/soleur/test/fixture-dir-operand-assert.test.sh --write-baseline
+# and commit the shrink together with the remediation that earned it — a reduced count with
+# no matching fix is a ratchet violation, not a cleanup.
+#
+# 2026-08-27 REGENERATED UPWARD, 160 -> 167. A shrink-only baseline is normally regenerated only
+# downward, and an upward move is exactly what this file exists to forbid — so the reason is
+# recorded here rather than left to a commit message. The growth is NOT new offending code: the
+# SCANNER was widened in the same commit (its guard window now skips comments, its guards are
+# correlated with the operand under test rather than matching any `|| return` in the window, and
+# its write-verb list gained the mutating verbs it was missing, `merge`/`switch`/`restore` among
+# them). Every newly-counted site pre-existed and was invisible. Verify by re-running the scanner
+# at the previous commit: the delta is in the detector, not the tree.
+#
+# Counts, not line numbers: line numbers churn on every unrelated edit above them, and a
+# baseline that reds for a comment insertion gets regenerated reflexively, which is how a
+# ratchet stops being one.
+12	.claude/hooks/context-reviewed-gate.test.sh
+10	.claude/hooks/pencil-collapse-guard.test.sh
+1	.claude/hooks/post-dispatch-watch-gate.test.sh
+6	.claude/hooks/pre-merge-auto-close-scan.test.sh
+7	.claude/hooks/pre-merge-rebase.test.sh
+2	.claude/hooks/ship-soak-followthrough-gate.test.sh
+19	.claude/hooks/ship-unpushed-commits-gate.test.sh
+5	.claude/hooks/skill-context-queries.test.sh
+8	.github/scripts/test/test-infra-suite-registration-mutations.sh
+1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
+2	apps/web-platform/infra/workspaces-luks-loopback.test.sh
+1	apps/web-platform/scripts/lint-migration-fk-preconditions.sh
+1	plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh
+2	plugins/soleur/skills/constraint-scaffold/test/generator.test.sh
+2	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
+1	plugins/soleur/skills/review/test/emit-review-trailer.test.sh
+2	plugins/soleur/test/fixture-dir-operand-assert.test.sh
+12	plugins/soleur/test/harvest-debt.test.sh
+1	plugins/soleur/test/ralph-loop.test.sh
+12	plugins/soleur/test/resolve-git-root.test.sh
+1	plugins/soleur/test/token-drift-workflow-causes.test.sh
+18	plugins/soleur/test/worktree-manager-atomic-config.test.sh
+1	plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh
+4	plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh
+7	scripts/context-reviewed-gate-discoverability.sh
+1	scripts/followthroughs/anthropic-admin-key-6297.test.sh
+2	scripts/lib/legal-base-ref.test.sh
+11	scripts/lint-dual-lockfile.test.sh
+2	scripts/lint-legal-mirror-drift-baseline.test.sh
+2	scripts/lint-legal-scope-block-placement.test.sh
+7	scripts/lint-workflow-install-sites.test.sh
+4	tests/hooks/test_hook_emissions.sh
