@@ -43,13 +43,33 @@
 # origin is actually serving 200. With it, the monitor only succeeds if the
 # full chain apex -> 301 -> www -> 200 returns 200.
 #
-# verify_ssl = true: belt-and-suspenders against the exact failure class this
-# whole PR exists to alert on. If the apex cert expires, the probe fails
-# BOTH on status (because the TLS handshake doesn't complete) AND on the
-# ssl_expiration warning (BetterStack alerts 7 days before expiry by default
-# when set — we omit the field; default is "alert on expiry-day", which is
-# acceptable since Sentry + this monitor's regular failure would already be
-# firing by then; setting it would be defense-in-depth but adds tuning surface).
+# verify_ssl = true: this probe terminates TLS at the CLOUDFLARE EDGE, because
+# `url` is https://soleur.ai/ and the apex is proxied. So it validates
+# Cloudflare's certificate, which Cloudflare auto-renews.
+#
+# ssl_expiration IS DELIBERATELY OMITTED, and the reason changed at #7749 — the
+# justification that used to sit here is stale and was corrected there.
+#
+# It read: origin-cert expiry would be caught by "Sentry + this monitor's
+# regular failure" anyway. That leaned on the daily `cron-gh-pages-cert-state`
+# poll, which ADR-194 has since disarmed. But the conclusion still holds, for a
+# stronger reason: THERE IS NO LONGER AN EXPIRY TO WARN ABOUT.
+#
+# The GitHub Pages origin certificate expired 2026-08-16 13:53:34Z and is
+# intentionally never renewed (ADR-194 abandons it at the cutover; it cannot
+# renew while proxied). The site serves 200 regardless, because the `ssl =
+# "full"` rule in seo-config-rules.tf tells Cloudflare not to validate it.
+#
+# So setting ssl_expiration here would watch the edge certificate — a cert that
+# is never at risk — and stay green forever. It would look like coverage of the
+# origin cert and provide none, which is worse than omitting it. If you want to
+# observe the origin cert, probe a Pages anycast IP with SNI directly:
+#
+#   echo | openssl s_client -servername soleur.ai -connect 185.199.108.153:443
+#
+# What these monitors DO detect is the HTTP 526 that appears within one check
+# interval if the `ssl = "full"` rule is removed while the origin cert is
+# expired. That rule is guarded by infra/ssl-full-mitigation.test.sh.
 resource "betteruptime_monitor" "soleur_apex" {
   monitor_type       = "status"
   url                = "https://soleur.ai/"

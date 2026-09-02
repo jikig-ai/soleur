@@ -6,8 +6,10 @@
 //   - the Sentry cron monitor `scheduled-gh-pages-cert-state`
 //     (infra/sentry/cron-monitors.tf) will now miss its check-in window, since
 //     the heartbeat below only fires on a manual run;
-//   - ROUTINE_METADATA's `scheduleLabel` for this fn still reads
-//     "Daily 03:00 UTC" (server/inngest/routine-metadata.ts).
+//   - ROUTINE_METADATA's `scheduleLabel` for this fn was updated in the same
+//     change and reads "Disarmed pending ADR-194 cutover (event-only)"
+//     (server/inngest/routine-metadata.ts). It is NOT stale; this note used to
+//     claim it was, and that claim was corrected in #7749.
 //
 // Migrated from .github/workflows/scheduled-gh-pages-cert-state.yml (deleted
 // in the same PR per TR9 I-13 hygiene). Pure TS port — no agent spawn,
