@@ -1,5 +1,19 @@
 # Phase 0 — Replacement contract, re-measured live
 
+> **DO NOT ARCHIVE THIS FILE WITHOUT REPOINTING ITS CITATIONS.** It sits under
+> `specs/feat-*/`, which is by convention ephemeral and archived at feature close — but 20
+> files cite it as the canonical contract, including two PRODUCTION scripts
+> (`scripts/supabase-logs-query.sh`, `scripts/lint-supabase-deprecated-endpoints.sh`), the
+> 2026-06-29 GDPR determination's addendum, ADR-197, both Supabase log runbooks, and ten test
+> fixtures. Its siblings in this directory were archived at feature close; this one was
+> deliberately left, because moving it breaks all 20.
+>
+> A production script citing an ephemeral spec path is a latent breakage, so the durable fix is
+> to promote this file to an engineering reference path and repoint every citation in one
+> commit — tracked, not done here, because a 20-file sweep late in an already-large PR is the
+> blanket-rewrite hazard this repo has been bitten by before.
+
+
 Measured 2026-08-26 against prd ref `pigsfuxruiopinouvjwy` via the Management API with
 `SUPABASE_ACCESS_TOKEN` from Doppler `soleur/prd`. This file is the single source for the
 contract; do not restate these numbers elsewhere — cite this file.
