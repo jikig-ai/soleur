@@ -3,10 +3,15 @@
 Covers the ADR-194 migration of the marketing/docs site off GitHub Pages, the
 rollback path, and content rollback after the deploy mechanism changed.
 
-Every step here happens by **merging a pull request**. The applies are performed
-by `apply-web-platform-infra.yml` on merge to `main`; the docs deploy is
-performed by `deploy-docs.yml`. There is no console step and no shell step in
-this runbook.
+Every state CHANGE here happens by **merging a pull request** — the applies are
+performed by `apply-web-platform-infra.yml` on merge to `main`, and the docs
+deploy by `deploy-docs.yml`. There is no console step and nothing to configure
+by hand.
+
+The **verification** steps are read-only probe commands you run from a checkout
+of this repo (`bash apps/web-platform/infra/...`). They change nothing and are
+safe to re-run. Where a step says "run", that is what it means; where it says
+"merge", the automation does the rest.
 
 ## Sequence
 
@@ -16,6 +21,27 @@ this runbook.
 | PR2 | `deploy-docs.yml` swap to wrangler | deploy-docs | the deploy path |
 | PR3 | `cloudflare_pages_domain.apex` + `.www` | apply-web-platform-infra | the custom-domain attachment |
 | PR4 | the `dns.tf` record swap | apply-web-platform-infra | the DNS record |
+
+## Dual-publish: both origins are live
+
+From PR2 until PR5, **every docs merge publishes to both origins** — GitHub Pages
+and the `soleur-docs` Cloudflare Pages project — from the same `_site`.
+
+That is deliberate, and the GitHub Pages leg is not vestigial: **it is the
+rollback target, and it is kept current precisely so the rollback below lands on
+today's site rather than on whatever was published the day PR2 merged.**
+
+Consequences worth knowing before you read the rollback:
+
+- `https://soleur.ai/version.txt` and `https://soleur.ai/CNAME` are publicly
+  served static files. Neither is a leak — the first is a commit SHA in a public
+  repo, the second is a public hostname.
+- The job is a **conjunction**: if either origin fails to publish, or either
+  build-identity probe fails, the whole run is red. No leg aborts the others.
+- **Between the PR4 apply and the PR5 merge, a red GitHub-Pages leg is EXPECTED
+  and benign.** Once the apex `A` records are gone, GitHub's custom-domain DNS
+  check fails and that leg cannot succeed. The remedy is to merge PR5, which
+  removes the leg — not to debug it, and not to revert PR4.
 
 ## State after PR2 (this PR)
 
@@ -30,12 +56,20 @@ discovered:
   `soleur-docs.pages.dev`, because the apex it will eventually assert about is
   not yet served by this project. PR4 repoints it at `https://soleur.ai/version.txt`
   and removes `continue-on-error`.
-- `_site/CNAME` and `_site/.nojekyll` are now **publicly served static files**
-  (`https://soleur-docs.pages.dev/CNAME`). GitHub Pages consumed them; Pages
-  does not. This is not a leak — `CNAME` contains the public hostname. It is
-  recorded here so a later reader does not mistake it for one. `CNAME` stays in
-  the build because it is part of the GitHub Pages configuration retained for
-  rollback.
+- `_site/CNAME` is **expected** to become a publicly served static file
+  (`https://soleur-docs.pages.dev/CNAME`). GitHub Pages consumed it; wrangler's
+  upload ignore-list does not mention it, so it should upload like any other
+  asset. Confirm after the first deploy rather than assuming — at the time of
+  writing the project has no deployment to check against:
+
+  ```bash
+  curl -sI https://soleur-docs.pages.dev/CNAME
+  ```
+
+  Either way it is not a leak: the file contains `soleur.ai`, a public hostname.
+  It is recorded here so a later reader does not mistake it for one. `CNAME`
+  stays in the build because it is part of the GitHub Pages configuration
+  retained for rollback. `.nojekyll` is a 0-byte marker and carries nothing.
 
 ## Rollback
 
@@ -61,14 +95,41 @@ the line anchor.
    `bash apps/web-platform/infra/apex-origin-probe.sh`
    It reports `SERVING-FROM-GITHUB-PAGES`, `SERVING-FROM-CLOUDFLARE-PAGES`, or
    an explicit `UNREACHABLE` — it never reports an origin it did not observe.
-3. If it still reports `SERVING-FROM-CLOUDFLARE-PAGES`, merge the revert of
-   **PR3** as well. Custom-domain attachment, not only the DNS record, can
-   establish edge routing for a hostname.
+3. Branch on what step 2 actually reported:
+   - `SERVING-FROM-GITHUB-PAGES` — the rollback is complete. Stop here.
+   - `SERVING-FROM-CLOUDFLARE-PAGES` — merge the revert of **PR3** as well.
+     Custom-domain attachment, not only the DNS record, can establish edge
+     routing for a hostname. **That revert destroys two `cloudflare_pages_domain`
+     resources, so it needs `[ack-destroy]` in its squash body exactly as step 1
+     does.** The probe's contract is that it never reports an origin it did not
+     observe, so do not infer this branch from a failure to reach the site.
+   - `UNREACHABLE (...)` — you have **not** rolled back; you have lost the site.
+     The most likely cause is that the apex is now pointed at a GitHub Pages
+     origin whose certificate is expired (`bad_authz`), which surfaces as a 526.
+     Confirm `ssl = "full"` is still present in `seo-config-rules.tf` — it is
+     what masks that expiry — and if it is, go to step 4.
 
-Step 3 is why the cutover is four PRs rather than three. Each PR introduces
-exactly one origin-selecting mechanism, so **whichever one is actually
-selecting the origin, reverting the PR that introduced it removes it.** The
-procedure is correct without knowing in advance which of the two it is.
+4. If step 3 did not restore a working origin, the remaining lever is to put the
+   apex back on Cloudflare Pages deliberately rather than to keep reverting:
+   re-merge PR3 and PR4 and treat the incident as forward-fix. Reverting further
+   does not help — PR2's revert removes the *publisher*, leaving the apex on
+   Pages with nothing deploying to it.
+
+   This is the case PF7 would have measured. The four-PR split makes the
+   *procedure* correct without that measurement (steps 1-3), but it does not
+   answer whether detaching a custom domain promptly clears edge routing. If you
+   reach this step, record what you observe — that is the measurement.
+
+Step 3 is why the cutover is four PRs rather than three. PR3 and PR4 each
+introduce exactly one **apex**-origin-selecting mechanism, so whichever of the
+two is actually selecting the origin, reverting the PR that introduced it
+removes it — the procedure is correct without knowing in advance which.
+
+Scope that precisely: it is a claim about the apex, not about every hostname.
+PR1 introduced an origin-affecting mechanism of its own — the account-level
+`www_canonical` Bulk Redirect answers `www.soleur.ai` ahead of any origin, and
+survives every revert in this table. If `www` misbehaves, this procedure is not
+the one you want; `seo-bulk-redirects.tf` is.
 
 > **PF7 is retired, and this is why.** An earlier revision of the plan
 > scheduled a scratch-custom-domain attach/detach probe in PR2 (D3 open item
@@ -98,10 +159,19 @@ migration is verified live removes the rollback target as well.
 
 ## Content rollback — how to un-ship a bad docs build
 
-Re-running a previous green workflow run is **no longer the mechanism**. The
-previous mechanism was GitHub Pages redeploying a stored artifact; wrangler
-uploads from the runner's `_site`, so a re-run rebuilds from whatever the
-workflow checks out.
+**Re-running a previous green workflow run still works, and is the fastest
+path.** An earlier revision of this runbook claimed it did not; that was wrong.
+`deploy-docs.yml`'s checkout step pins no `ref:`, so re-running run *N* checks
+out run *N*'s commit, rebuilds those bytes, and deploys them to the production
+branch. `version.txt` is re-stamped with that older SHA, so the build-identity
+probe compares like with like and reports MATCH.
+
+What genuinely changed is the *mechanism underneath*: GitHub Pages redeployed a
+stored artifact, whereas this rebuilds from source. A re-run therefore reproduces
+the old commit's **inputs**, not its exact bytes — if the build reads anything
+live (it does: `_data/github.js` and `_data/communityStats.js` fetch at build
+time), the output can differ. For an availability rollback that is fine. For a
+byte-exact restore it is not, and the forward path below is the honest option.
 
 Measured at the pinned version (`wrangler 4.124.0`,
 `wrangler pages deployment --help`), the available subcommands are:

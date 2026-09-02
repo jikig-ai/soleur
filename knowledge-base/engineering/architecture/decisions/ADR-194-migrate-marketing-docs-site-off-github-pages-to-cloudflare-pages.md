@@ -11,6 +11,39 @@ brand_survival_threshold: single-user incident
 
 # Migrate the marketing/docs site off GitHub Pages to Cloudflare Pages
 
+
+> **Amended 2026-09-02 (PR2) — the publish verb is not swapped; both origins
+> publish through the cutover window, and the sequence grows a fifth PR.**
+>
+> This ADR's PR2 originally deleted the GitHub Pages publish leg and replaced it
+> with `wrangler pages deploy`. That reversal was ruled against during PR2's
+> review, on a ground the original decision record does not consider: the plan
+> retains the whole GitHub Pages configuration DNS-detached *so that the revert
+> works*, and deleting the publish leg converts that standby from warm to cold.
+> Measured at ~1 docs merge/day (14 docs-touching commits in the 14 days to
+> 2026-09-02), the revert target would be days stale by the time PR4 lands —
+> the stale-build outcome this work's own User-Brand Impact section classifies
+> as brand-fatal. A rollback that lands in a brand-fatal state is not a rollback.
+>
+> So PR2 adds the wrangler leg **alongside** the retained GitHub Pages leg, as a
+> conjunction: every leg and both build-identity probes must be green or the run
+> is red. PR5 retires the GitHub Pages leg after CUT0-CUT9 hold.
+>
+> Two consequences worth recording because they are not obvious:
+>
+> - **The apex becomes a legitimate hard gate at PR2** (probe B), which the swap
+>   could not have offered until PR4 — the apex only carries `version.txt` while
+>   something still publishes there.
+> - **The expired GitHub Pages origin certificate argues FOR this, not against.**
+>   `ssl = "full"` masks a `bad_authz` origin and nothing currently observes
+>   whether that origin is still healthy; under dual-publish every docs deploy
+>   becomes a liveness assertion against it. The cost is that dependence on the
+>   masking rule extends by two PRs, which bounds PR3→PR4 to days, not weeks.
+>
+> PF7 / D3 item 3(b) is **retired by construction** and was not measured; see the
+> plan's D3 supersession note.
+
+
 ## Status
 
 **ACCEPTED** — 2026-08-20. Written to support a decision; the operator took it on

@@ -51,7 +51,10 @@ resource "cloudflare_pages_project" "docs" {
 # one: whichever of attachment or the DNS record actually selects the origin,
 # reverting the PR that introduced it removes it. See "## Delivery Sequencing".
 #
-# Z itself is measured in PR2 against a scratch hostname whose topology is
+# Z itself is NOT measured (superseded 2026-09-02, PR2): the four-PR split
+# retires the question by construction — see D3's supersession note in the
+# plan. The original wording, kept for the record, was that Z is measured
+# against a scratch hostname whose topology is
 # identical to the apex (proxied A record at a GitHub Pages IP + a Pages custom
 # domain on the same account and zone), so no production name is touched.
 

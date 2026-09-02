@@ -1085,6 +1085,12 @@ jobs:
       - name: Run www-apex-canonicalizer mutation battery (#7640)
         run: bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
 
+      # The build-identity probe is the detector for a deploy that lands on a
+      # preview alias while the served origin keeps the previous build. Case M2
+      # is ADR-194 AC19's "run where the expected SHA is deliberately wrong".
+      - name: Run pages build-identity probe test (#7640)
+        run: bash apps/web-platform/infra/pages-build-identity-probe.test.sh
+
       - name: Run cloud-init inngest-bootstrap pin drift-guard
         run: bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 

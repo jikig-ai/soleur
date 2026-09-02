@@ -13,17 +13,30 @@ on:
       - 'plugins/soleur/skills/**'
       - 'plugins/soleur/commands/**'
       - 'eleventy.config.js'
+      # A change to the publish path must PUBLISH. Without this, merging ADR-194
+      # PR2 fires no deploy, the Pages project keeps zero deployments, and PR3's
+      # precondition — attaching the apex to a project that has at least one —
+      # is never established. Measured 2026-09-02: soleur-docs.pages.dev
+      # returned 522, which is what a zero-deployment project looks like.
+      # Deliberately this file only, not '.github/workflows/**': an unrelated
+      # workflow edit should not run a Playwright docs deploy. PR4 is dns.tf
+      # only and so still does not fire this workflow, which is required — a
+      # publish racing the DNS apply would have the apex probe measuring
+      # mid-propagation and reporting a false MISMATCH on the cutover PR.
+      - '.github/workflows/deploy-docs.yml'
   workflow_run:
     workflows: ["Version Bump and Release"]
     types: [completed]
   workflow_dispatch:
 
 permissions:
-  # `pages: write` + `id-token: write` existed only for actions/deploy-pages,
-  # which minted an OIDC token for the GitHub Pages deployment API. wrangler
-  # authenticates with an API token from secrets instead, so both are dropped
-  # rather than left as standing privileges this job cannot use (ADR-194, PR2).
   contents: read
+  # RETAINED, and in active use: actions/deploy-pages mints its OIDC token from
+  # these, and the GitHub Pages leg still publishes every run (ADR-194 dual-
+  # publish, PR2). They are NOT standing privileges this job cannot use.
+  # Removed in PR5 together with that leg — AC33.
+  pages: write
+  id-token: write
 
 concurrency:
   group: "pages"
@@ -32,6 +45,11 @@ concurrency:
 jobs:
   deploy:
     if: github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run'
+    # RETAINED through PR4: the GitHub Pages leg still deploys here, so `url`
+    # still resolves from a live step id. Removed in PR5 (AC33).
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     # Runs inside the official Playwright container so the screenshot-gate step
     # (below) has Chromium + OS deps pre-installed at the matching Playwright
@@ -73,7 +91,10 @@ jobs:
           # built — the detector for a deploy that lands on a preview alias
           # while the custom domain keeps serving the previous build, which is
           # this migration's highest-ranked risk (ADR-194 D4). printf, not
-          # echo: a trailing newline would have to be stripped on both sides.
+          # echo: version.txt is a PUBLIC artifact that humans and byte-exact
+          # consumers (diff, grep -x, a length check) read directly. The probe
+          # itself would not care — command substitution strips the trailing
+          # newline either way — so the reason is the file's other readers.
           printf '%s' "$GITHUB_SHA" > _site/version.txt
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -265,25 +286,71 @@ jobs:
             echo "Paused soleur-ai-www detector ${id}."
           fi
 
+      # DUAL-PUBLISH THROUGH THE CUTOVER WINDOW (ADR-194 amendment, PR2).
+      #
+      # Both origins are published every run. An earlier revision of this PR
+      # deleted the GitHub Pages leg here; that was reversed, because it would
+      # have converted GitHub Pages from a WARM standby into a COLD one. The
+      # plan's rollback doctrine ("rolling back is the default action on
+      # ambiguity") retains the whole GitHub Pages configuration DNS-detached
+      # precisely so the revert works — but at ~1 docs merge/day (measured: 14
+      # in 14 days) the revert target would be days stale by the time PR4 lands,
+      # which is the "stale build" outcome the plan's own User-Brand Impact
+      # section classifies as brand-fatal. A rollback that lands in a
+      # brand-fatal state is not a rollback.
+      #
+      # The GitHub Pages leg is retired in PR5 (AC33), after CUT0-CUT9 hold.
+      #
+      # No leg aborts the others: each publish step is continue-on-error with an
+      # id, and the verdict step at the end ANDs their outcomes. `outcome`, not
+      # `conclusion` — continue-on-error rewrites `conclusion` to `success`, so
+      # a verdict reading it would pass vacuously.
+      - name: Setup Pages
+        id: setup_pages
+        continue-on-error: true
+        uses: actions/configure-pages@1f0c5cde4bc74cd7e1254d0cb4de8d49e9068c7d # v4.0.0
+
+      - name: Upload artifact
+        id: upload_pages
+        continue-on-error: true
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        with:
+          path: '_site'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        continue-on-error: true
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+
       # Exact version, no floating tag — same discipline as the
-      # `playwright@1.60.0 http-server@14` install ~130 lines above, and for a
-      # sharper reason here: this step holds a token that can replace every byte
+      # `playwright@1.60.0` install above (its `http-server@14` companion is
+      # itself a floating major — the pin that matters here is exact), and for a
+      # sharper reason: this step holds a token that can replace every byte
       # of soleur.ai. A floating major tag would re-resolve from npm on every
-      # deploy, outside the lockfile and invisible to dependency review.
+      # deploy. (Both forms are --no-save, so neither is in the lockfile; the
+      # pin removes top-level drift only, which is the part that decides which
+      # code holds the token.)
       # (AC17 greps for the floating forms, so this note states the hazard
       # without spelling one — the explanation must not trip its own check.)
-      # 4.124.0 is the version whose `pages deploy` flag set was captured for
-      # ADR-194; bump it deliberately, never incidentally.
       - name: Install wrangler (exact version, no floating tag)
-        run: npm install --no-save wrangler@4.124.0
+        if: always()
+        # --ignore-scripts: this install is immediately followed by a step
+        # holding a token that can replace every byte of soleur.ai. wrangler
+        # runs from JS; its transitive postinstall scripts (esbuild, workerd)
+        # fetch platform binaries over the network and are not needed here.
+        run: npm install --no-save --ignore-scripts wrangler@4.124.0
 
-      # --branch=main targets the project's PRODUCTION branch. Any other value
-      # produces a PREVIEW deployment on a *.pages.dev alias, which is green in
-      # the log while the custom domain keeps serving the previous build. The
-      # probe below is what turns that silent case into a failure.
-      # --commit-dirty=false: the tree is a clean CI checkout; saying so keeps
-      # wrangler from stamping the deployment as dirty.
+      # --branch=main targets the project's PRODUCTION branch, which is a
+      # property of apps/web-platform/infra/cf-pages.tf's `production_branch`,
+      # not of the flag. Any other value produces a PREVIEW deployment on a
+      # *.pages.dev alias, which is green in the log while the custom domain
+      # keeps serving the previous build. The probes below turn that silent
+      # case into a failure. www-apex-canonicalizer.test.sh asserts the two
+      # stay equal across the file boundary.
       - name: Deploy to Cloudflare Pages
+        id: wrangler_deploy
+        if: always()
+        continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PAGES }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PAGES }}
@@ -296,52 +363,91 @@ jobs:
             echo "::error::would fail on auth with a less specific message. Failing here instead."
             exit 1
           fi
-          npx wrangler pages deploy _site \
+          # ./node_modules/.bin/wrangler, NOT npx: on any local-resolution
+          # miss npx silently fetches the LATEST wrangler from the registry —
+          # inside the step that holds the token — defeating the pin above.
+          # This form fails closed instead.
+          ./node_modules/.bin/wrangler pages deploy _site \
             --project-name=soleur-docs \
             --branch=main \
             --commit-hash="${GITHUB_SHA}" \
             --commit-dirty=false
 
-      # Read the build-identity stamp back over HTTP and require it to equal the
-      # SHA this run built. This is the detector for the migration's
-      # highest-ranked risk: a deploy that succeeds onto a preview alias while
-      # the served origin keeps the previous build. "wrangler exited 0" does not
-      # answer "are those bytes now being served"; only fetching them does.
+      # Probe A — the Cloudflare Pages production-branch alias.
       #
-      # REPORTING-ONLY UNTIL THE CUTOVER. The apex is still GitHub Pages until
-      # ADR-194 PR4 swaps the DNS record, so the authoritative target does not
-      # exist yet and this step probes the project's own *.pages.dev hostname.
-      # It is deliberately NOT a hard gate here: a red X on a docs push would be
-      # reporting a condition the repository has not yet created. PR4 flips
-      # PROBE_URL to https://soleur.ai/version.txt and drops `continue-on-error`,
-      # at which point a mismatch fails the job. AC19 exercises the failing arm.
-      - name: Post-deploy build-identity probe (reporting-only until PR4)
+      # "wrangler exited 0" does not answer "are those bytes now served"; only
+      # fetching the stamp does. The logic lives in a committed script because
+      # AC19 requires the failing arm to be exercised by a run with a
+      # deliberately wrong SHA, and inline YAML gives nothing to invoke.
+      # See apps/web-platform/infra/pages-build-identity-probe.test.sh case M2.
+      - name: Build-identity probe A (Cloudflare Pages alias)
+        id: probe_pages_dev
+        if: always()
         continue-on-error: true
         env:
           PROBE_URL: https://soleur-docs.pages.dev/version.txt
+          EXPECTED_SHA: ${{ github.sha }}
+        run: bash apps/web-platform/infra/pages-build-identity-probe.sh
+
+      # Probe B — the live apex.
+      #
+      # This is a hard gate at PR2 ONLY because the GitHub Pages leg above still
+      # publishes there; under the rejected swap it could not have been one
+      # until PR4. Post-PR4 it keeps asserting the apex serves the current
+      # build, so it survives PR5 (AC33) rather than being cutover scaffolding.
+      #
+      # The cache-buster is load-bearing, not decoration: the apex measured
+      # `cache-control: max-age=600`, `age: 279`, `x-cache: HIT`, `via: 1.1
+      # varnish` on 2026-09-02. An un-busted probe would read a cached body and
+      # report MISMATCH on a healthy deploy. The longer window absorbs GitHub
+      # Pages/Fastly propagation, which is slower than the Pages alias.
+      - name: Build-identity probe B (live apex)
+        id: probe_apex
+        if: always()
+        continue-on-error: true
+        env:
+          PROBE_URL: https://soleur.ai/version.txt?cb=${{ github.sha }}
+          EXPECTED_SHA: ${{ github.sha }}
+          PROBE_ATTEMPTS: '10'
+          PROBE_SLEEP_SECONDS: '15'
+        run: bash apps/web-platform/infra/pages-build-identity-probe.sh
+
+      # The conjunction. Every leg must be green; no leg may abort another.
+      # Reads `outcome` because continue-on-error pins `conclusion` to success.
+      - name: Publish verdict
+        if: always()
+        env:
+          GH_PAGES: ${{ steps.deployment.outcome }}
+          CF_PAGES: ${{ steps.wrangler_deploy.outcome }}
+          PROBE_A: ${{ steps.probe_pages_dev.outcome }}
+          PROBE_B: ${{ steps.probe_apex.outcome }}
         run: |
           set -uo pipefail
-          # Pages puts a newly-uploaded deployment behind its edge within a few
-          # seconds; three spaced attempts absorb that without masking a real
-          # mismatch, because a WRONG sha fails all three just as fast as one.
-          served=""
-          for attempt in 1 2 3; do
-            served="$(curl -fsS --max-time 20 "$PROBE_URL" 2>/dev/null || true)"
-            [ "$served" = "${GITHUB_SHA}" ] && break
-            [ "$attempt" -lt 3 ] && sleep 10
+          rc=0
+          {
+            echo "| leg | outcome |"
+            echo "|---|---|"
+            echo "| GitHub Pages deploy | ${GH_PAGES} |"
+            echo "| Cloudflare Pages deploy | ${CF_PAGES} |"
+            echo "| build-identity probe A (pages.dev) | ${PROBE_A} |"
+            echo "| build-identity probe B (apex) | ${PROBE_B} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for leg in "GitHub-Pages-deploy:${GH_PAGES}" "Cloudflare-Pages-deploy:${CF_PAGES}" \
+                     "probe-A:${PROBE_A}" "probe-B:${PROBE_B}"; do
+            name="${leg%%:*}"; state="${leg#*:}"
+            if [ "$state" != "success" ]; then
+              echo "::error::${name} reported '${state}'."
+              rc=1
+            fi
           done
-          if [ -z "$served" ]; then
-            echo "::warning::UNREACHABLE — ${PROBE_URL} returned nothing after 3 attempts."
-            echo "::warning::This is 'could not check', NOT 'the deploy is correct'."
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Dual-publish is a conjunction: every leg must be green."
+            echo "::error::Between the PR4 apply and the PR5 merge a red GitHub-Pages leg is"
+            echo "::error::EXPECTED and benign (GitHub's custom-domain DNS check fails once the"
+            echo "::error::apex A records are gone). The remedy then is to merge PR5, not to debug."
             exit 1
           fi
-          if [ "$served" != "${GITHUB_SHA}" ]; then
-            echo "::warning::MISMATCH — ${PROBE_URL} serves ${served}, this run built ${GITHUB_SHA}."
-            echo "::warning::A preview-alias deploy looks exactly like this. Check the wrangler"
-            echo "::warning::output above for the deployment URL and the --branch value."
-            exit 1
-          fi
-          echo "MATCH — ${PROBE_URL} serves ${GITHUB_SHA}."
+          echo "All publish legs green."
 
       # Resume the soleur_www monitor paused above. `if: always()` so a failed
       # deploy/probe still re-enables it (never strand the monitor paused). The
