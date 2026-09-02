@@ -252,6 +252,15 @@ jobs:
             exit 0
           fi
 
+          # Which pin(s) does this run actually implicate? The issue is shared and idempotent,
+          # so the body must say which, rather than assuming the zot one.
+          ZOT_IMPLICATED=""
+          case "$DRIFT" in *stale*|*behind*|*swapped*) ZOT_IMPLICATED=1 ;; esac
+          [ -n "$PROBLEMS" ] && case "$PROBLEMS" in *zot*) ZOT_IMPLICATED=1 ;; esac
+          UBUNTU_IMPLICATED=""
+          case "$DRIFT" in *ubuntu-base*) UBUNTU_IMPLICATED=1 ;; esac
+          [ -n "$PROBLEMS" ] && case "$PROBLEMS" in *ubuntu*) UBUNTU_IMPLICATED=1 ;; esac
+
           # --- file/update ONE idempotent issue ----------------------------------------
           # `action-required` is load-bearing, not decoration: it is the ONLY label the weekly
           # operator digest reads. Without it "we are 18 releases behind" lands in a label
@@ -260,40 +269,77 @@ jobs:
             --description "a committed image pin is stale, behind upstream, or unverifiable — zot (#7282) or the git-data rehearsal's ubuntu base (#7544)" \
             --force >/dev/null 2>&1 || true
           {
-            echo "The pinned zot registry image needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            # THE BODY IS PER-PIN NOW. This issue carries two unrelated pins since #7544, and
+            # every actionable line below was zot-shaped: an ubuntu-only drift produced a title
+            # saying "zot registry image", a table of zot versions, "zot is the sole pull path",
+            # and a remediation pointing at the zot provenance sidecar. An operator following it
+            # would bump zot and never touch UBUNTU_BASE — the drift would stay open while the
+            # instruction to fix it read as complete.
+            if [ -n "$ZOT_IMPLICATED" ]; then
+              echo "The pinned zot registry image needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            else
+              echo "A committed image pin needs attention (condition: \`${DRIFT:-probe-failure}\`). **The zot pin is NOT implicated in this run** — see the pin-specific section below."
+            fi
             echo
-            echo "| | |"
-            echo "|---|---|"
-            echo "| Pinned | \`$PINNED\` |"
-            echo "| Upstream latest | \`$LATEST\` |"
-            echo
+            if [ -n "$ZOT_IMPLICATED" ]; then
+              echo "| zot | |"
+              echo "|---|---|"
+              echo "| Pinned | \`$PINNED\` |"
+              echo "| Upstream latest | \`$LATEST\` |"
+              echo
+            fi
             if [ -n "$PROBLEMS" ]; then echo "$PROBLEMS"; echo; fi
             if [ -n "$NOTES" ]; then echo "$NOTES"; echo; fi
-            echo "zot is the **sole pull path** (ADR-096) with no fallback, so this is a"
-            echo "supply-chain and reliability item, not cosmetic."
-            echo
+            if [ -n "$ZOT_IMPLICATED" ]; then
+              echo "zot is the **sole pull path** (ADR-096) with no fallback, so this is a"
+              echo "supply-chain and reliability item, not cosmetic."
+              echo
+            fi
+            if [ -n "$UBUNTU_IMPLICATED" ]; then
+              echo "### ubuntu:24.04 — the git-data rung-1 rehearsal base image"
+              echo
+              echo "Pin literal: \`UBUNTU_BASE\` in \`apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh\`."
+              echo
+              echo "**Do NOT refresh the R1 fixture to make it pass.** R1 classifies the birth"
+              echo "filesystem's ext4 features against an allowlist built for a specific e2fsprogs,"
+              echo "and that classification is the point — the diff is not. Re-measure \`mke2fs -V\`"
+              echo "inside the NEW image, reclassify any feature the allowlist does not carry, then"
+              echo "move the pin. The digest must be the MANIFEST-LIST one:"
+              echo
+              echo '```'
+              echo "docker buildx imagetools inspect ubuntu:24.04 | grep '^Digest:'"
+              echo '```'
+              echo
+            fi
             echo "Offline gate output:"
             echo
             echo '```'
             echo "$OUT"
             echo '```'
             echo
-            echo "Remediation — follow \`## Bump procedure\` in"
+            if [ -n "$ZOT_IMPLICATED" ]; then
+            echo "Remediation (zot) — follow \`## Bump procedure\` in"
             echo "\`apps/web-platform/infra/zot-image.provenance.md\`. Agent entry point:"
             echo
             echo '```'
             echo "/soleur:one-shot \"refresh the zot pin provenance sidecar per apps/web-platform/infra/zot-image.provenance.md section 'Bump procedure'\""
             echo '```'
             echo
-            echo "_Filed automatically by rule-audit.yml zot-pin drift detection (#7282)._"
+            fi
+            echo "_Filed automatically by rule-audit.yml image-pin drift detection (#7282 zot, #7544 ubuntu base)._"
           } > "$RUNNER_TEMP/zot-pin-drift-body.md"
+          if [ -n "$ZOT_IMPLICATED" ]; then
+            _ISSUE_TITLE="zot-pin-drift: registry image pin needs attention"
+          else
+            _ISSUE_TITLE="image-pin-drift: the git-data rehearsal base image pin needs attention"
+          fi
           EXISTING="$(gh issue list --label zot-pin-drift --state open --json number --jq '.[0].number // empty')"
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
             echo "Updated existing zot-pin-drift issue #$EXISTING."
           else
             gh issue create --label zot-pin-drift --label action-required \
-              --title "zot-pin-drift: registry image pin needs attention" \
+              --title "${_ISSUE_TITLE}" \
               --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
           fi
 
