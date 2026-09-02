@@ -287,6 +287,35 @@ jobs:
           rc=2
           # Consecutive wrapper (doppler) failures — see the fast-fail below the sentinel.
           wrapper_fails=0
+          # ::add-mask:: EVERY TUPLE VALUE BEFORE THE FIRST LINE IS TEE'D.
+          #
+          # The redaction step below protects the ARTIFACT. It does nothing for the JOB LOG,
+          # and this repository is PUBLIC (`isPrivate: false`), so the job log is readable
+          # WITHOUT authentication — a strictly wider audience than the artifact's "any
+          # authenticated GitHub user". Only three values were masked before this
+          # (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and the R2 token further down), while
+          # the capture step's stdout AND stderr stream through `tee` into that log carrying
+          # the whole `prd_terraform` environment.
+          #
+          # Masking is the right tool HERE and the wrong one for the artifact: ::add-mask::
+          # scrubs the stream Actions renders, which is exactly the job-log surface, and does
+          # not touch bytes `tee` already wrote to disk — which is why the file still needs
+          # its own redaction pass. The two controls cover different surfaces; neither
+          # substitutes for the other.
+          #
+          # The >= 12 floor is deliberately tighter than the artifact redactor's >= 4: a short
+          # value masked here would carpet the RENDERED log for every reader, and the two
+          # non-secrets nearest the line (`soleur` 6, `jikigai-eu` 10) sit below it.
+          doppler run -p soleur -c prd_terraform -- bash -c '
+            for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD \
+                     SENTRY_ISSUE_RO_TOKEN SENTRY_ISSUE_RW_TOKEN \
+                     AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+                     DOPPLER_TOKEN HCLOUD_TOKEN BETTERSTACK_LOGS_TOKEN GIT_DATA_LUKS_KEY; do
+              val="${!v:-}"
+              [ "${#val}" -ge 12 ] && printf "::add-mask::%s\n" "$val"
+            done
+          ' || echo "::warning::could not pre-mask the capture environment; the job log for this step is UNMASKED beyond the three values masked at extract time. Treat it as sensitive."
+
           # DEADLINE, NOT AN ATTEMPT COUNT. Each attempt is up to 2 x `curl --max-time 60`
           # plus a 30 s sleep = 150 s, so 20 attempts is up to ~50 min against a 30-minute job
           # ceiling -- and the worst case is the DARK BOOT, i.e. exactly the failure this route
