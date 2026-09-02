@@ -41,7 +41,16 @@ SANDBOX=$(mktemp -d -t t5probe.XXXXXXXX) || {
   printf 'FAIL: could not create sandbox\n' >&2; exit 2; }
 trap 'rm -rf "$SANDBOX"' EXIT
 
-TERMINAL_LINE='git-data-runcmd-rehearsal: 44 passed, 0 failed, Skipped: 2 (46 assertions)'
+# A FIXTURE, NOT A LIVE EXPECTATION — the probe itself matches only the bare
+# `git-data-runcmd-rehearsal:` prefix, so this line's counts are never compared against a real
+# run and a suite-count change cannot break these arms. It is refreshed anyway, because a
+# fixture modelling an ARITHMETICALLY IMPOSSIBLE run is a trap for the next reader: the
+# 44/46/2 triple this replaces was quoted as the live baseline by a later plan, which then
+# reasoned from it. That suite hard-exits below 75 assertions, so a 46-assertion run cannot
+# occur. Skipped stays NON-ZERO on purpose — this probe is about skip persistence, and a
+# fixture with `Skipped: 0` would let the arms pass without exercising the property.
+# Re-derived 2026-09-02 against the as-written suite: 75 assertions total (#7570 +3, #7544 +3).
+TERMINAL_LINE='git-data-runcmd-rehearsal: 73 passed, 0 failed, Skipped: 2 (75 assertions)'
 
 # Builds a fixture CWD with a fake `gh` on PATH.
 #   $1 = case name

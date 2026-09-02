@@ -32,6 +32,64 @@ pass() { passes=$((passes + 1)); }
 FAILURES=()
 fail() { fails=$((fails + 1)); FAILURES+=("$1"); echo "FAIL: $1" >&2; [ -n "${2:-}" ] && echo "      $2" >&2; }
 
+# ── UBUNTU_BASE — the pinned base image (#7544) ─────────────────────────────────────
+#
+# THE MANIFEST-LIST DIGEST, not a platform-specific one. Per
+# knowledge-base/project/learnings/2026-03-19-docker-base-image-digest-pinning.md, Docker
+# ignores the tag when a digest is present, so a platform digest would pin this harness to one
+# architecture and break on the other. Produced by:
+#
+#   docker buildx imagetools inspect ubuntu:24.04 | grep '^Digest:'
+#
+# resolved 2026-09-02, reported by that command as
+# `MediaType: application/vnd.oci.image.index.v1+json` — the index media type is what makes it
+# the manifest list rather than a platform manifest. The tag is kept alongside the digest
+# because Docker still reports it and a bare digest reads as unattributed.
+#
+# WHY THIS IS NOT COSMETIC. R1 fingerprints the birth filesystem's ext4 features and classifies
+# each against an allowlist, and that classification is version-sensitive: mke2fs measures
+# 1.47.0 inside this image and 1.47.2 on the authoring host. On a floating tag an upstream
+# e2fsprogs bump silently changes what R1 measures, and R1's own comment forbids the reflex
+# repair ("Do NOT 'refresh' the fixture wholesale — the point is the classification, not the
+# diff"). Pinned, an e2fsprogs change becomes a NAMED, dated drift that rule-audit.yml reports,
+# instead of an unattributable R1 failure blaming the template.
+UBUNTU_BASE='ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517'
+
+# ── R1-PIN — every spin in this file runs the PINNED image ──────────────────────────
+#
+# A TEXT CHECK OVER THIS FILE'S OWN SOURCE, which needs justifying because this suite's whole
+# thesis is that runtime beats static reading. It is right HERE for one reason: the property is
+# a property of the SOURCE, not of a run. A spin site that reverted to the floating tag would
+# still pass every runtime arm — the image resolves, the container boots, the assertions hold —
+# so no behavioural arm can see it. And enumerating the six sites in an assertion would rot the
+# way the derivation comment below records three separate counts rotting, so this greps the
+# CLASS with a floor rather than naming members.
+_SELF="${BASH_SOURCE[0]}"
+if printf '%s' "$UBUNTU_BASE" | grep -qE '^ubuntu:24\.04@sha256:[0-9a-f]{64}$'; then pass; else
+  fail "R1-PIN: UBUNTU_BASE is not a tag@sha256:<64-hex> pin" "$UBUNTU_BASE"; fi
+# THE FLOOR IS WHAT KEEPS THIS NON-VACUOUS: a grep that found zero spins would otherwise report
+# a clean bill. 6 is the site count the derivation comment below publishes with its own command.
+_r1p_spins=$(grep -cE '^[[:space:]]*"\$UBUNTU_BASE"[[:space:]]' "$_SELF")
+if [ "$_r1p_spins" -ge 6 ]; then pass; else
+  fail "R1-PIN: only ${_r1p_spins} pinned spin site(s) found, expected >= 6 — a site reverted to the floating tag, or the anchor drifted"; fi
+# And no runnable reference to the floating tag survives. Comment LINES are stripped first so
+# prose that legitimately names the tag does not false-FAIL. Two bounds, stated rather than
+# discovered later:
+#   - SELF-EXCLUDING BY DESIGN, not by accident. This arm's own predicate necessarily contains
+#     the very literal it forbids, so it excludes its own lines by the `_r1p_`/`UBUNTU_BASE`
+#     tokens rather than relying on each of them incidentally also carrying `@sha256:` — which
+#     was true when this was written and is not a property anyone maintaining it would preserve
+#     on purpose. A reverted spin site (`    <tag> bash -c '`) carries neither token, so the
+#     exclusion cannot swallow the regression it exists to catch. Mutation-proved: reverting
+#     one site to the floating tag reddens this arm.
+#   - A TRAILING comment on a code line is not stripped, which would false-FAIL rather than
+#     false-PASS — the safe direction for a fail-closed pin.
+_r1p_scan() { sed 's/^[[:space:]]*#.*$//' "$_SELF" | grep -nE 'ubuntu:24\.04' | grep -vE '@sha256:|_r1p_|UBUNTU_BASE'; }
+_r1p_bare=$(_r1p_scan | grep -c .)
+if [ "$_r1p_bare" -eq 0 ]; then pass; else
+  fail "R1-PIN: ${_r1p_bare} unpinned base-image reference(s) remain on non-comment lines" \
+       "$(_r1p_scan | head -3)"; fi
+
 # SKIPPED_ASSERTIONS is denominated in ASSERTION COST, not in arms: a declaring arm increments by
 # the number of assertions it would have made, so `passes + fails + SKIPPED_ASSERTIONS` is invariant
 # across environments and the floor below can stay absolute. Precedent — counter, denomination,
@@ -858,7 +916,7 @@ run_case() {
     -v "$TMP/capture.py:/work/capture.py:ro" \
     -v "$TMP/drive.sh:/work/drive.sh:ro" \
     -v "$TMP/out:/out" \
-    ubuntu:24.04 bash -c '
+    "$UBUNTU_BASE" bash -c '
       set -e
       cp /work/git-data-emit-src /work/git-data-emit
       # TWO STATEMENTS, NOT `a && b`. `set -e` does not fire on a failing NON-FINAL member of an
@@ -894,20 +952,60 @@ run_case() {
 # bare multi-`pass` here. dash ships /bin/sh on Ubuntu and is an essential package, so its absence
 # is a provisioning defect in the same class as docker/terraform/python3 — which means `_skip`,
 # not a counterweight and not `arm_skip` (nobody-owns-it is false for an essential package).
-# Hoisting it up there also keeps the skip ceiling at 2: this arm never becomes skip-eligible.
+# Hoisting it up there also keeps this arm out of the skip ceiling: it never becomes
+# skip-eligible. (An earlier revision of this line asserted "keeps the skip ceiling at 2".
+# The ceiling is _SKIP_CEILING=7, itemised in its own stanza below; the 2 was stale. #7570.)
 if dash -n "$TMP/git-data-emit" 2>/dev/null; then pass; else fail "D1: emitter is not valid dash"; fi
 # A 3-arg call is what the usage line invites. Under a bare `shift 4` dash exits 2 having
 # emitted nothing — silently, on a host whose only diagnostic is this emitter.
 ( cd "$TMP" && dash ./git-data-emit "m" "s" info >/dev/null 2>&1 )
 _d_rc=$?
-# PRE-EXISTING HAZARD, TRACKED IN #7570 — deliberately not fixed here (#7565 pins run_case
-# unmodified). CAPTURE is first assigned inside run_case, whose first call is T5 BELOW this
-# arm, so under this file's `set -u` the expansion below is of an unset variable. `[`
-# short-circuits on `||`, so it is reachable ONLY when _d_rc == 2 — precisely D1's failing
-# direction. A real emitter regression would therefore abort with "CAPTURE: unbound
-# variable" instead of D1's own message. Do not read the green here as coverage of it.
-if [ "$_d_rc" -ne 2 ] || [ -s "$CAPTURE" ]; then pass; else
+# D1's verdict as ONE definition, shared by the live arm and D1-MUT below. Re-inlining the
+# predicate at the mutation site is the vacuity shape this file rejects: a mutation arm that
+# re-declares the good form asserts only that a known-good snippet is known-good, and is
+# structurally blind to the regression it exists to catch.
+_d1_holds() { [ "$1" -ne 2 ]; }
+# #7570 FIXED HERE. The predicate read `[ "$_d_rc" -ne 2 ] || [ -s "$CAPTURE" ]`. CAPTURE is
+# first assigned inside run_case, whose first call is T5 BELOW this arm, so under this file's
+# `set -u` that expansion was of an UNSET variable — and because `[` short-circuits on `||`
+# it was reachable ONLY when _d_rc == 2, precisely D1's failing direction. A real emitter
+# regression therefore aborted with "CAPTURE: unbound variable" instead of D1's own message.
+#
+# THE DISJUNCT IS DELETED, NOT GUARDED — the plan's option (b), chosen over its preferred (a)
+# on a measurement the plan did not have. The emitter has exactly TWO exit-2 paths over its
+# whole body: `command -v curl >/dev/null 2>&1 || exit 2`, and dash's special-builtin `shift`
+# death. Both emit nothing BY CONSTRUCTION, so a disjunct on "exited 2 but emitted anyway" is
+# UNSATISFIABLE here, not merely unobservable — option (a) would preserve semantics that
+# cannot hold. Worse, the only file this arm could point such a disjunct at is its own
+# stdout/stderr: it runs the emitter on the HOST, where no capture server exists. On the real
+# defect dash writes "shift: can't shift that many" to exactly that stream (measured), so the
+# disjunct would be TRUE on the regression D1 exists to catch, making the arm vacuous. A
+# silently-dead disjunct is the same defect class as the unattributed abort #7570 names, so
+# it is removed rather than left reading as a live boundary.
+if _d1_holds "$_d_rc"; then pass; else
   fail "D1: a 3-arg call died at the shift (dash rc=2) instead of emitting"; fi
+
+# ── D1-MUT — D1 must attribute the REAL defect to ITSELF, not abort unattributed ───
+# Mutation-proves #7570's fix rather than the fix's own restatement. Reverting the emitter's
+# arg guard to the pre-#6982 bare `shift 4` reproduces the defect D1 names (measured: dash
+# rc=2, nothing on stdout, execution never reaches the next line). Rung 3 is the one that was
+# RED before this PR: with the old predicate the evaluating shell died at the unset expansion
+# and printed a message naming neither D1 nor the emitter.
+cp "$TMP/git-data-emit" "$TMP/git-data-emit.d1mut"
+sed -i 's/^if \[ "$#" -ge 4 \]; then shift 4; else shift "$#"; fi$/shift 4/' "$TMP/git-data-emit.d1mut"
+# A mutation that did not LAND reports the BASELINE, which is indistinguishable from a pass.
+if ! cmp -s "$TMP/git-data-emit" "$TMP/git-data-emit.d1mut"; then pass; else
+  fail "D1-MUT: the mutation did not land — the emitter's arg-guard anchor has drifted"; fi
+( cd "$TMP" && dash ./git-data-emit.d1mut "m" "s" info >/dev/null 2>&1 )
+_d1m_rc=$?
+if [ "$_d1m_rc" -eq 2 ]; then pass; else
+  fail "D1-MUT: the mutant did not reproduce the defect (rc=$_d1m_rc, expected 2)"; fi
+# `unset CAPTURE` is not a no-op-in-disguise: it is what keeps this arm valid if D1-MUT is
+# ever moved BELOW T5, where run_case has assigned CAPTURE and an unguarded read would stop
+# aborting for an accidental reason. Re-adding any `$CAPTURE` read to _d1_holds reddens here.
+_d1m_out=$( { set -u; unset CAPTURE; if _d1_holds "$_d1m_rc"; then echo HELD; else echo REJECTED; fi; } 2>&1 )
+if [ "$_d1m_out" = "REJECTED" ]; then pass; else
+  fail "D1-MUT: D1's verdict did not reject the mutant under set -u with CAPTURE unset" "$_d1m_out"; fi
 
 # ── T5 — a WRONG checksum must ABORT before tar/chmod ──────────────────────────────
 # This is the supply-chain half of issue item 3. Before #6982 there was no `set -e`, so a
@@ -1085,7 +1183,7 @@ else
     -v "$TMP/capture.py:/work/capture.py:ro" \
     -v "$TMP/drive.noerrexit.sh:/work/drive.sh:ro" \
     -v "$TMP/out:/out" \
-    ubuntu:24.04 bash -c '
+    "$UBUNTU_BASE" bash -c '
       set -e
       cp /work/git-data-emit-src /work/git-data-emit
       # TWO STATEMENTS, NOT `a && b`. `set -e` does not fire on a failing NON-FINAL member of an
@@ -1258,7 +1356,7 @@ docker run --rm \
   -v "$TMP/capture.py:/work/capture.py:ro" \
   -v "$TMP/drive.noguard.sh:/work/drive.sh:ro" \
   -v "$TMP/out:/out" \
-  ubuntu:24.04 bash -c '
+  "$UBUNTU_BASE" bash -c '
     set -e
     cp /work/git-data-emit-src /work/git-data-emit
     apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq curl python3 >/dev/null 2>&1
@@ -1382,7 +1480,7 @@ S1DRV
       -v "$TMP/01-hardening.conf:/work/01-hardening.conf:ro" \
       -v "$TMP/sshd-drive.sh:/work/sshd-drive.sh:ro" \
       -v "$TMP/s1out:/out" \
-      ubuntu:24.04 bash /work/sshd-drive.sh >"$TMP/s1out/stdout" 2>&1
+      "$UBUNTU_BASE" bash /work/sshd-drive.sh >"$TMP/s1out/stdout" 2>&1
     S1_DOCKER_RC=$?
     S1_RC="$(sed -n 's/^STAGE_RC=//p' "$TMP/s1out/stdout" | tail -1)"
     S1_CAP="$TMP/s1out/sshd-capture.log"
@@ -1725,7 +1823,7 @@ PY
     cat > "$TMP/r1-drive.sh" <<'R1DRV'
 set -e
 # NO apt HERE, DELIBERATELY (#7535). ubuntu:24.04 already ships e2fsprogs at
-# Priority: required — `docker run --rm ubuntu:24.04 dpkg -s e2fsprogs` reports
+# Priority: required — `docker run --rm "$UBUNTU_BASE" dpkg -s e2fsprogs` reports
 # 1.47.0-2.4~exp1ubuntu4.1 — so the `apt-get update && apt-get install e2fsprogs`
 # this replaced installed a package that was already present, at the cost of a full
 # apt cycle against an external mirror. Do not restore it.
@@ -1772,7 +1870,7 @@ R1DRV
       -v "$TMP/r1-arm-unclass.txt:/work/r1-arm-unclass.txt:ro" \
       -v "$TMP/r1-drive.sh:/work/r1-drive.sh:ro" \
       -v "$TMP/r1out:/out" \
-      ubuntu:24.04 bash /work/r1-drive.sh >"$TMP/r1out/stdout" 2>&1 || true
+      "$UBUNTU_BASE" bash /work/r1-drive.sh >"$TMP/r1out/stdout" 2>&1 || true
 
     # Classify every arm against the committed allowlist. Three assertions with three
     # DISTINCT messages (D1): unclassified-feature, module-dep-present, non-vacuity.
@@ -1818,7 +1916,7 @@ PY
       *NOFEATURES*|"") fail "R1(a): the shipped arm produced no filesystem — R1 makes NO claim about the template here (is mke2fs present in the image?)" \
                "$(tail -5 "$TMP/r1out/stdout" 2>/dev/null)" ;;
       *) fail "R1(a): the birth filesystem carries feature(s) absent from the allowlist: ${_r1_ship#*unclassified=}" \
-              "Classify each in $_r1_fix with its mount-time class before shipping. Do NOT 'refresh' the fixture wholesale — the point is the classification, not the diff. (mke2fs measured 1.47.0 in ubuntu:24.04 / 1.47.2 on the authoring host.)" ;;
+              "Classify each in $_r1_fix with its mount-time class before shipping. Do NOT 'refresh' the fixture wholesale — the point is the classification, not the diff. (Measured inside the PINNED image ${UBUNTU_BASE}: mke2fs 1.47.0, e2fsprogs 1.47.0-2.4~exp1ubuntu4.1; 1.47.2 on the authoring host. If this arm reddens after a pin bump, the allowlist was built against the PREVIOUS e2fsprogs and the drift is the image's, not the template's.)" ;;
     esac
     # (b) THE invariant, stated directly.
     case "$_r1_ship" in
@@ -2418,7 +2516,7 @@ docker run --rm \
   -v "$TMP/capture.py:/work/capture.py:ro" \
   -v "$TMP/r4-drive.sh:/work/r4-drive.sh:ro" \
   -v "$TMP/r4out:/out" \
-  ubuntu:24.04 bash /work/r4-drive.sh >"$TMP/r4out/stdout" 2>&1 || _r4_rc=$?
+  "$UBUNTU_BASE" bash /work/r4-drive.sh >"$TMP/r4out/stdout" 2>&1 || _r4_rc=$?
 
 _r4_a=$(grep -c 'No such process' "$TMP/r4out/capture-a.log" 2>/dev/null || true)
 _r4_b=$(grep -c 'No such process' "$TMP/r4out/capture-b.log" 2>/dev/null || true)
@@ -3059,8 +3157,22 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #   ----
 #    10
 # Re-derived from a measured run against the as-written file, not incremented by memory.
-if [ "$total" -lt 69 ]; then
-  echo "FAIL: ran only ${total} assertions (floor 69) — harness did not execute fully" >&2
+# RAISED 69 -> 72 (#7570), ITEMISED — the D1-MUT arm, three counted assertions, all pure
+# host-local work over $TMP, so they are made on every route the suite reaches this far on:
+#     1  D1-MUT: the mutation landed (cmp against the unmutated emitter)
+#     1  D1-MUT: the mutant reproduces the defect (dash rc=2)
+#     1  D1-MUT: D1's own verdict rejects it under `set -u` with CAPTURE unset
+#   ----
+#     3
+# RAISED 72 -> 75 (#7544), ITEMISED — the R1-PIN arm, three counted assertions, pure text over
+# this file's own source, so they are made on every route the suite reaches at all:
+#     1  R1-PIN: UBUNTU_BASE is a tag@sha256:<64-hex> manifest-list pin
+#     1  R1-PIN: >= 6 pinned spin sites (the anti-vacuity floor on the grep)
+#     1  R1-PIN: zero unpinned `ubuntu:24.04` on non-comment lines
+#   ----
+#     3
+if [ "$total" -lt 75 ]; then
+  echo "FAIL: ran only ${total} assertions (floor 75) — harness did not execute fully" >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"
