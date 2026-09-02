@@ -838,6 +838,94 @@ assert "A4 probe emits the marker under the resolved inngest-server-probe tag (l
 # still be a VALUE (000), not an empty field that reads as missing data.
 assert "A4 a failed curl degrades http_code to the literal 000, not to an empty field" \
   "grep -qE 'http_code=000( |\$)' '$PROBE_LOG'"
+
+# --- #7695: the /mnt/data store facts Guard 2 decides on ---------------------------------
+# Guard 2 (the recut dispatch gate) clears a DESTRUCTIVE apply only on a measured-empty
+# store. Every field below is one it reads, and each carries two distinct not-a-measurement
+# tokens: `n/a` = the question does not apply on this host, `__UNREADABLE__` = it applied and
+# could not be answered. Neither may ever degrade to `0`, because `0` IS the clearance
+# condition — a degradation that renders as `0` would authorize the destroy it was meant to
+# withhold. That asymmetry is the whole reason these tokens exist.
+assert "#7695 probe declares probe_schema=2 (Guard 2 refuses a stale_schema row)" \
+  "grep -qE 'probe_schema=2( |\$)' '$PROBE_LOG'"
+for _f7695 in flush_latched latch_flushed_at latch_lines redis_keys data_mount_src data_bytes; do
+  assert "#7695 probe emits a non-empty $_f7695" \
+    "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
+done
+
+# The WEB-HOST shape. inngest-bootstrap.sh is the SHARED renderer for both hosts and this
+# sandbox has no /mnt/data mount, so this run IS the web-host case. `n/a` is the honest
+# answer; a `0` here would let a web-host row satisfy the dedicated host's measured-empty
+# clearance — the wrong host authorizing the destroy.
+for _f7695 in flush_latched redis_keys data_mount_src data_bytes; do
+  assert "#7695 with no /mnt/data mount, $_f7695 is n/a — never 0" \
+    "grep -qE '$_f7695=n/a( |\$)' '$PROBE_LOG'"
+done
+
+# The DEDICATED-host shape, driven by stubbing the mount into existence. Without this arm the
+# suite only ever exercises the n/a branch, so every field could be hardcoded `n/a` and stay
+# green — the fixture-cardinality trap: one member sampled is a sample, not a proof.
+PROBE_D_BIN="$PING_TMP/probe-bin-dedicated"
+mkdir -p "$PROBE_D_BIN"
+cp "$PROBE_BIN/logger" "$PROBE_D_BIN/logger"
+cp "$PROBE_BIN/curl" "$PROBE_D_BIN/curl"
+cp "$PROBE_BIN/systemctl" "$PROBE_D_BIN/systemctl"
+PROBE_D_LATCH="$PING_TMP/mnt-data"
+mkdir -p "$PROBE_D_LATCH/inngest-cutover"
+printf 'flip-done\n' > "$PROBE_D_LATCH/inngest-cutover/flip-done.latch"
+cat > "$PROBE_D_BIN/findmnt" <<'FINDMNTEOF'
+#!/bin/sh
+# Only answers for /mnt/data, exactly as the real one would on the dedicated host.
+for a in "$@"; do [ "$a" = "/mnt/data" ] && { echo "/dev/sdb"; exit 0; }; done
+exit 1
+FINDMNTEOF
+cat > "$PROBE_D_BIN/du" <<'DUEOF'
+#!/bin/sh
+echo "4096	/mnt/data"
+DUEOF
+chmod +x "$PROBE_D_BIN/findmnt" "$PROBE_D_BIN/du"
+PROBE_D_LOG="$PING_TMP/logger-probe-dedicated.txt"
+: > "$PROBE_D_LOG"
+# INFO keyspace across ALL dbs — the probe must never use DBSIZE, which reports db0 only.
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_D_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  PROBE_REDIS_CLI_CMD="printf '# Keyspace\ndb0:keys=3,expires=0\ndb1:keys=4,expires=0\n'" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+assert "#7695 dedicated shape: data_mount_src is the measured source, not n/a" \
+  "grep -qE 'data_mount_src=/dev/sdb( |\$)' '$PROBE_D_LOG'"
+assert "#7695 dedicated shape: data_bytes is the measured byte count" \
+  "grep -qE 'data_bytes=4096( |\$)' '$PROBE_D_LOG'"
+assert "#7695 dedicated shape: a present latch reads flush_latched=true" \
+  "grep -qE 'flush_latched=true( |\$)' '$PROBE_D_LOG'"
+# 3+4 across two dbs. A DBSIZE implementation reports 3 and reads as a smaller store than
+# exists — the direction that wrongly clears a destroy.
+assert "#7695 dedicated shape: redis_keys SUMS every db (INFO keyspace, never DBSIZE)" \
+  "grep -qE 'redis_keys=7( |\$)' '$PROBE_D_LOG'"
+
+# Degradation direction. A redis that answers non-zero, or omits the `# Keyspace` header,
+# is unreadable — NOT empty.
+PROBE_U_LOG="$PING_TMP/logger-probe-unreadable.txt"
+: > "$PROBE_U_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_U_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  PROBE_REDIS_CLI_CMD="false" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#7695 a failing redis-cli degrades redis_keys to __UNREADABLE__, never 0" \
+  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
+
+# Site parity. The field list appears TWICE in inngest-bootstrap.sh — the unconditional
+# `logger` emit and the Vector-down phone-home argument — and they drift independently. The
+# fallback is the channel that carries a row when Vector is down, i.e. exactly when the row
+# is the only evidence that exists, so a field missing THERE is missing when it matters most.
+PROBE_FIELDS_LOGGER="$(grep -F 'logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE' "$BOOTSTRAP_SH" | grep -oE '[a-z_]+=\$[a-z_]+' | cut -d= -f1 | sort | tr '\n' ' ')"
+PROBE_FIELDS_PHONE="$(grep -F 'inngest-server-probe-vector-down' "$BOOTSTRAP_SH" | grep -oE '[a-z_]+=\$[a-z_]+' | cut -d= -f1 | sort | tr '\n' ' ')"
+assert "#7695 the field list is non-empty (parity check cannot pass vacuously on two blanks)" \
+  "[[ -n '$PROBE_FIELDS_LOGGER' ]]"
+assert "#7695 both emit sites carry an IDENTICAL field list" \
+  "[[ '$PROBE_FIELDS_LOGGER' == '$PROBE_FIELDS_PHONE' ]]"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
 # Stack, which is the same ambiguity a missing row creates.
 # #7228 adds instance_id, cli_version and cutover_flag. The three answer questions the existing

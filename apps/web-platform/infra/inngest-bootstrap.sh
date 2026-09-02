@@ -518,6 +518,15 @@ cat > "$PROBE_SCRIPT" <<'PROBESCRIPTEOF'
 # one-sided change is a silent no-op.
 LOG_TAG="inngest-server-probe"
 
+# #7695. stderr is discarded and NEVER shipped: redis-cli carries the password on its argv,
+# so its own error text is a route from the credential to Better Stack — the same reasoning
+# the doppler capture below already documents. PROBE_REDIS_CLI_CMD is the fixture seam,
+# mirroring CUTOVER_REDIS_CLI_CMD in inngest-cutover-flip.sh.
+probe_redis_keyspace() {
+  [ -n "${PROBE_REDIS_CLI_CMD:-}" ] && { eval "$PROBE_REDIS_CLI_CMD INFO keyspace" 2>/dev/null; return $?; }
+  redis-cli -a "${INNGEST_REDIS_PASSWORD:-}" INFO keyspace 2>/dev/null
+}
+
 # --- gather (never branch on the results before the emit below) ---
 # `|| true` on every capture: this probe must ALWAYS reach its logger call. A non-zero curl
 # under a future `set -e`, or a missing systemctl, must degrade a FIELD, never the event.
@@ -585,8 +594,73 @@ cutover_flag="$(timeout 10 doppler secrets get INNGEST_CUTOVER_FLIP --project so
 cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 [ -n "$cutover_flag" ] || cutover_flag=unknown
 
+# --- #7695: the /mnt/data store facts the recut gate decides on ---
+# Guard 2 clears a DESTRUCTIVE volume recut only on a MEASURED-EMPTY store, so every field
+# here is read by something that can authorize a destroy. That inverts the usual degradation
+# rule: `0` IS the clearance condition, so a field degrading to `0` would authorize the
+# destroy it was meant to withhold. Two distinct not-a-measurement tokens instead —
+# `n/a` (the question does not apply on this host) and `__UNREADABLE__` (it applied and could
+# not be answered) — and neither is ever `0`.
+#
+# NO `if` HERE, deliberately: ADR-117 forbids branching BEFORE the unconditional emit below
+# (the `if` further down is legal only because it sits AFTER it). `case` and `[ ] &&` are the
+# constructs the existing gather already uses, so this block stays inside that contract.
+#
+# inngest-bootstrap.sh is the SHARED renderer for the dedicated host AND the co-located web
+# host, and the web host has no /mnt/data. The discriminator is therefore a RUNTIME property
+# — is /mnt/data a mountpoint? — not a render-time flag: this heredoc is quoted, so nothing
+# interpolates into it, and a web-host row emitting `0` would let the wrong host satisfy the
+# dedicated host's clearance condition.
+probe_schema=2
+data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
+latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
+
+# `findmnt` answers non-zero when the path is not a mountpoint — the web host, and equally a
+# dedicated host whose volume failed to attach. Both are honestly `n/a`: the store this gate
+# reasons about is not present either way.
+data_mount_src="$(findmnt -no SOURCE "$data_mount" 2>/dev/null | head -1 || true)"
+[ -n "$data_mount_src" ] || data_mount_src=n/a
+
+store=absent
+[ "$data_mount_src" != n/a ] && store=present
+
+data_bytes=n/a
+flush_latched=n/a
+latch_lines=n/a
+latch_flushed_at=n/a
+redis_keys=n/a
+
+case "$store" in
+present)
+  data_bytes="$(du -sb "$data_mount" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+  case "$data_bytes" in '' | *[!0-9]*) data_bytes=__UNREADABLE__ ;; esac
+
+  # The latch is what makes an arm abort into terminal `aborted`, so its presence is the
+  # single most consequential bit in this row.
+  latch_file="${latch_dir}/flip-done.latch"
+  flush_latched=false
+  latch_lines=0
+  [ -f "$latch_file" ] && {
+    flush_latched=true
+    latch_lines="$(wc -l < "$latch_file" 2>/dev/null | tr -d '[:space:]' || true)"
+    case "$latch_lines" in '' | *[!0-9]*) latch_lines=__UNREADABLE__ ;; esac
+    latch_flushed_at="$(date -u -r "$latch_file" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+    [ -n "$latch_flushed_at" ] || latch_flushed_at=__UNREADABLE__
+  }
+
+  # INFO keyspace, summed across EVERY db. NOT DBSIZE: that reports db0 only, so a store
+  # populated on db1+ reads smaller than it is — under-reporting in exactly the direction
+  # that wrongly clears a destroy.
+  redis_info="$(probe_redis_keyspace)" || redis_info=""
+  redis_keys=__UNREADABLE__
+  printf '%s\n' "$redis_info" | grep -q '^# Keyspace' && \
+    redis_keys="$(printf '%s\n' "$redis_info" | awk -F'keys=' '/^db[0-9]+:/ {split($2,a,","); s+=a[1]} END {print s+0}')"
+  case "$redis_keys" in '' | *[!0-9]*) redis_keys=__UNREADABLE__ ;; esac
+  ;;
+esac
+
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema flush_latched=$flush_latched latch_flushed_at=$latch_flushed_at latch_lines=$latch_lines redis_keys=$redis_keys data_mount_src=$data_mount_src data_bytes=$data_bytes"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -603,7 +677,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema flush_latched=$flush_latched latch_flushed_at=$latch_flushed_at latch_lines=$latch_lines redis_keys=$redis_keys data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
 fi
 exit 0
 PROBESCRIPTEOF
