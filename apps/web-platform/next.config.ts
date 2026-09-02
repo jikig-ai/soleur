@@ -10,6 +10,18 @@ const securityHeaders = buildSecurityHeaders();
 const devPort = process.env.PORT || "3000";
 
 const nextConfig: NextConfig = {
+  // Next 16 takes a lock at `<distDir>/lock` to stop two dev servers sharing one
+  // dist directory (`experimental.lockDistDir`, default true). Our Playwright
+  // harness starts two dev servers on purpose -- a public origin and an
+  // authenticated one -- so without separate dist directories the second exits
+  // with "Another next dev server is already running" and the whole e2e job
+  // fails at webServer startup. The lock is keyed on distDir, NOT on the port,
+  // so distinct ports are not enough (next/dist/build/lockfile.js).
+  //
+  // Separating the directories rather than setting `lockDistDir: false` keeps the
+  // guard armed for ordinary development, where two servers in one directory is
+  // a real mistake. Values stay under `.next/` because `.gitignore` covers it.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // Restrict the image optimizer to the ONE first-party asset that uses next/image
   // (app/(public)/invite/[token]/page.tsx renders /icons/soleur-logo-mark.png).
   //
@@ -84,11 +96,11 @@ const nextConfig: NextConfig = {
             ]
           : ["app.soleur.ai"],
     },
-    // Next.js clones the request body when middleware modifies headers.
+    // Next.js clones the request body when the proxy layer modifies headers.
     // Default limit is 10 MB — bodies exceeding it are silently truncated,
     // causing "Failed to parse body as FormData" for uploads >10 MB.
     // Set to 25 MB (route handler caps at 20 MB; headroom for multipart overhead).
-    middlewareClientMaxBodySize: 25 * 1024 * 1024,
+    proxyClientMaxBodySize: 25 * 1024 * 1024,
     // ADR-067 amendment (2026-07-09): the RSC-shell half of instant dashboard
     // tab-switching. Next.js 15 defaults `staleTimes.dynamic` to 0, so the
     // App Router client Router Cache discards a dynamic route's RSC payload the

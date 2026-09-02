@@ -95,9 +95,9 @@ w = pkgs(web)
 w["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
 w["node_modules/b/node_modules/brace-expansion"] = {"version": "2.999.999"}
 w["node_modules/c/node_modules/brace-expansion"] = {"version": "5.999.999"}
-# The two DEFERRED rows assert these exact paths still exist.
-w["node_modules/next/node_modules/postcss"] = {"version": "8.999.999"}
-w["node_modules/next/node_modules/sharp"] = {"version": "0.999.999"}
+# The two RESOLVED_ABSENT rows assert these paths are GONE (next 16 stopped vendoring
+# them, #7591), so the control fixture must NOT synthesise them. The re-vendor arm below
+# adds one back and requires a RED.
 if extra:
     w.update(json.loads(extra))
 
@@ -312,15 +312,36 @@ sys.stdout.write(re.sub(r"^ *\(" + Q + r"web-platform" + Q + r", " + Q + r"brace
                         "", s, count=1, flags=re.M))
 '
 
-# Same shape for the DEFERRED presence loop: the deferral of the postcss/sharp advisories
-# rests on them being next-pinned nested copies, so the loop asserting those paths still
-# exist is load-bearing. Repointing one at a path the tree lacks must be caught by it.
-mutate "a DEFERRED path that no longer exists REDs" "is gone" '
+# Same shape for the RESOLVED_ABSENT loop, inverted with the discharge (#7591). The
+# postcss/sharp advisories were discharged because next 16 stopped vendoring those nested
+# copies; the loop asserting they stay gone is what keeps that discharge honest. Repointing
+# a row at a path the tree DOES carry must be caught by it -- otherwise the loop would be
+# satisfied by any absent path, including a typo, and would ratchet nothing.
+mutate "a RESOLVED_ABSENT row pointed at a path that exists REDs" "is back at" '
 import sys
 s = sys.stdin.read()
 sys.stdout.write(s.replace("node_modules/next/node_modules/postcss",
-                           "node_modules/next/node_modules/postcss-GONE", 1))
+                           "node_modules/a/node_modules/js-yaml", 1))
 '
+
+# The tree-side companion, in the harness's own build_fixture idiom: the guard must RED
+# when next RE-VENDORS a discharged copy. The arm above mutates the GUARD; this one mutates
+# the TREE and leaves the guard alone, which is the direction that actually matters in
+# production -- a future next minor re-adding the nested copy is exactly how this discharge
+# would silently go stale.
+asserted=$((asserted + 1))
+if build_fixture '{"node_modules/next/node_modules/postcss": {"version": "8.4.31"}}'; then
+  if run_mutant "$SANDBOX/pristine.py"; then
+    fail "a re-vendored nested postcss@8.4.31 exited 0 — the discharge ratchet is not armed"
+  elif grep -qF "is back at" "$SANDBOX/last.out"; then
+    pass "a re-vendored nested postcss@8.4.31 is seen and flagged"
+  else
+    fail "reddened, but without naming the re-vendored path"
+  fi
+else
+  fail "could not rebuild the fixture with a re-vendored nested postcss"
+fi
+build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
 
 # --- Fixture-side arm: npm aliasing. Not a mutation of the guard at all -- a mutation of
 # the TREE, which is the axis every arm above leaves untouched. This lockfile shape is
