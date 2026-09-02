@@ -97,6 +97,56 @@ this failure mode, and the plan should not imply that it can.
   `new_high_priority_issue` / `existing_high_priority_issue` types it carries.
 - The `auth-*` four are now blocked twice over: by #7634's write shape and by this.
 
+## Can the 13 be RESTRUCTURED instead of blocked? No.
+
+The obvious workaround is to move frequency from the trigger to an action filter, which the
+provider *does* support (`action_filters[].conditions[].event_frequency_count`) and the API
+permits (`OrganizationWorkflow_ActionFilter_Condition_EventFrequencyCount`). It does not
+work, for a structural reason rather than a fiddly one.
+
+A workflow evaluates as: **detector produces an issue event → trigger decides whether the
+workflow runs → action filters gate whether the action fires.** So an action filter can only
+narrow something a trigger already started.
+
+The provider's entire trigger vocabulary is four types — `first_seen_event`,
+`issue_resolved_trigger`, `reappeared_event`, `regression_event`. **None of them means
+"every event".** So there is no trigger to pair a frequency filter with that reproduces
+"fire whenever this issue exceeds N in `interval`". Any available trigger narrows evaluation
+to a lifecycle moment, which is a different rule: `zot-mirror-fallback-rate` would stop
+firing on a sustained fallback rate on an *existing* issue and only fire if the threshold
+happened to be crossed at first-seen.
+
+That is a semantic change to live paging, which is precisely what Phase 0 existed to
+prevent. Restructuring is therefore rejected, not deferred.
+
+## Where the actual fix is
+
+The API is not the constraint. `OrganizationWorkflow_Trigger_Condition.comparison` is
+declared `oneOf: [boolean, object]` in the provider's own vendored `api.yaml` — carrying
+`{"value": 3, "interval": "5m"}` on a trigger is already legal, and the generated client
+can hold it. The loss happens one layer up, in the resource model: `trigger_conditions`
+exposes only the four lifecycle types, so everything else is funnelled into the
+string-only `legacy_trigger_conditions`.
+
+The unblock is provider-side: `trigger_conditions` variants for `event_frequency_count`,
+`event_unique_user_frequency_count`, and `event_frequency_percent` that carry the comparison
+object. Upstream appears aware the shape is unsettled — the vendored spec annotates that
+`oneOf` with `# TODO: Legacy?`.
+
+## Recommendation: do not migrate the 16 now
+
+Migrating the 16 lifecycle rules is possible but **buys nothing operationally and costs
+risk.** `apply-sentry-infra.yml` plans the FULL ROOT, so all 13 remaining
+`sentry_issue_alert` resources still refresh through the deprecated endpoint on every run.
+The gate would keep wedging on exactly the same brownout, and the retry would stay
+load-bearing. Meanwhile the change would be `state rm` + `import` against 16 live paging
+rules, and would split one concern across two resource types for an unknown wait.
+
+So Phase 2 is parked until the provider can express a frequency trigger. What is already
+shipped — the scoped retry, the frequency meter, the destroy guard — is what carries the
+operational load in the meantime, and the meter FAILs if the brownout ever outgrows the
+retry budget.
+
 ## Reproduce
 
 ```sh
