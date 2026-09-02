@@ -712,6 +712,32 @@ is found. Then:
 This is the same design Guard 2 states for `docker run` (*"greps the file's own text … rather than
 enumerating the six. Members drift"*). Enumerated member sets rot, and this plan is the proof.
 
+#### 4.5a — WHAT the reader prints, not only WHO reads (the gap no phase addressed)
+
+**Found at deepen review, and it is the plan's originating incident reproduced.** Phase 4 fixes
+*who* consults Sentry. It never specifies *what the consult prints* — §4.2 and §4.6 name `title`
+and `culprit`, and `detail` appears nowhere on the new path.
+
+Run the worked example through the finished plan. For the 2026-07-31 fatal, `title` is
+`"git-data LUKS stage FAILED"` and the tags are `stage:luks_open`, `rc=32`. That is **verbatim the
+non-readable output this plan opens by citing as its baseline**. An identical dispatch after all
+five phases would correctly report FAIL instead of TRANSIENT — a real improvement — and still not
+say *why* LUKS failed, on a host that no longer exists, against a budget of two paid dispatches.
+
+§Research Reconciliation closed the `detail` question as *"already on `main`, zero work"*. That
+verified `detail` is **selected by `HOST_SQL`** — the Better Stack path. It says nothing about the
+**Sentry** path Phase 4 adds, which is a different reader with its own projection.
+
+So: **the host-scoped verdict print must project `tags.detail` and `tags.rc` alongside `stage`.**
+§4.0's events endpoint already carries them per event, which is one more reason it is the right
+endpoint. `detail` is `_clean`-scrubbed at the producer (the emitter builds it from `dmesg | tail
+-20` plus stage stderr and truncates to 180 bytes), so this is a projection decision, not a new
+leak — but it interacts with §4.6, so the redaction tuple lands first.
+
+Add an arm asserting that a Sentry-derived FAIL whose `detail` is **empty** reports
+*"FAIL, cause unavailable"* rather than a cause-bearing verdict — the `DETAIL=[]` regression class
+#7204 records. A verdict that silently omits its cause is worse than one that says it has none.
+
 #### 4.5b — the verdicts the flow did not define
 
 Three states the first draft left undefined, all found by flow analysis:
@@ -735,10 +761,34 @@ Three states the first draft left undefined, all found by flow analysis:
 Add `SENTRY_ISSUE_RO_TOKEN` to the workflow's redaction tuple (anchor: the
 `for var in ("BETTERSTACK_QUERY_HOST",` line), and an arm asserting the tuple contains it.
 
-**The wider finding, recorded rather than fixed here.** That tuple is a **name-based allowlist of
-three values over an environment `doppler run -c prd_terraform` populates with the whole config** —
-including `AWS_SECRET_ACCESS_KEY`, which this plan's own Encryption Posture names as granting full
-Terraform state read — feeding a 7-day artifact on a **public** repo. The capture step pipes `2>&1`,
+**Two more names go in the tuple in THIS PR — this is a merge blocker, and it is two strings.**
+Security review measured what the first draft had only gestured at: the workflow writes **both** R2
+credentials into `$GITHUB_ENV` (anchors: `printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"`
+and the `AWS_SECRET_ACCESS_KEY` line below it), which places them in the environment of **every
+later step — including the capture step**, whose stdout *and stderr* are `tee`'d verbatim to
+`capture.log` (`… 2>&1 | tee /tmp/rung2/capture.log`). The redact step's own comment states the
+governing fact: *"`::add-mask::` scrubs the LOG STREAM, not bytes on disk — `tee` writes the raw
+stream before Actions sees it."* And this plan's `## Encryption Posture` names that pair as granting
+**full Terraform state read** — state that holds `doppler_token`, the LUKS passphrase and three SSH
+private keys. It is the only credential in that environment whose leak reaches every user's source
+code at rest, which is precisely the declared threshold.
+
+Tuple for this PR: the three `BETTERSTACK_QUERY_*` names, plus `SENTRY_ISSUE_RO_TOKEN`,
+`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `DOPPLER_TOKEN`, `HCLOUD_TOKEN`,
+`BETTERSTACK_LOGS_TOKEN`, `GIT_DATA_LUKS_KEY`.
+
+**The wider finding stays deferred, with sharper content.** The tuple is a **name-based allowlist
+over an environment populated with the whole config**, and a blind value-denylist is *not* the fix:
+`prd_terraform` also holds non-secret values (org slugs, region names, booleans), so a naive
+inversion would carpet-redact the diagnostic — including the `jikigai-eu` literal AC 15 asserts.
+The deferred issue's real content is (a) a length floor (≥12, not the current ≥4), (b) an explicit
+non-secret **name** exclusion set, and (c) the better structural fix: **stop writing the R2
+credentials to `$GITHUB_ENV`** and pass them per-step via `env:` on the terraform steps only, which
+removes them from the capture step's environment rather than redacting them after the fact.
+
+Note the incremental curl-stderr change is **not** what makes this urgent — curl's stderr echoes
+scheme and host, not headers. Add an arm asserting the Sentry curl carries no `-v`/`--trace*`
+(those *do* dump `Authorization` verbatim) and that no token is interpolated into a URL. The capture step pipes `2>&1`,
 and Phase 4.3 is the first change to route *unbounded third-party content* (curl stderr) into that
 stream. There is no `set -x` and no env dump today, so this is a fail-open **shape**, not an active
 leak — but converting fail-opens to fail-closeds is this plan's whole thesis. **Name it in
@@ -748,8 +798,23 @@ something to improvise inside a harness PR.
 
 #### 4.7 — remove the eyeball instructions WITHOUT deleting the guidance around them
 
-There are **three** sites, not two. The first draft named two and its AC asserted only absence,
-which as specified permits landing Phase 4.7 as a pure deletion.
+There are **at least seven** sites. The first draft named two, the review corrected it to three, and
+deepen review found four more — which is the tell that **enumerating them is the wrong method**.
+§4.5 says so in its own voice: *"The fix is structural, not a longer list … Enumerated member sets
+rot, and this plan is the proof."* §4.7 then hand-enumerated, twice. Apply §4.5's discipline here
+too: **assert the class with a grep-with-floor** over the eyeball verb set
+(`Confirm against Sentry`, `Check Sentry`, `Check the Better Stack`, `check the .* secret`) across
+the three files, so an eighth site added next year reddens instead of being missed a third time.
+
+The four additional sites, measured: the capture script's **anchor-zero-rows** branch
+(*"Check the Better Stack source and credentials."* — same file as site 3, different branch); the
+workflow's **rc=3 `::error::`** and its **rc=3 step summary** (both *"check the DOPPLER_TOKEN secret
+and its access to project 'soleur', config 'prd_terraform'"*); and the runbook's **WRAPPER FAILURE
+(3)** bullet carrying the same instruction. Sites 5–7 are the sharpest: WRAPPER FAILURE is the state
+where the harness produced **no verdict at all** and the reader is handed no command — while the
+workflow already holds that credential and already proved it at the `Extract R2 backend
+credentials` step. A one-line self-probe (`doppler secrets --only-names -p soleur -c prd_terraform`)
+printed into the run log converts that whole class from eyeball to layer 6.
 
 1. `.github/workflows/git-data-rung2-rehearsal.yml` — the TRANSIENT summary. The `Confirm against
    Sentry first` clause is **one of five** things that paragraph carries. The other four must
@@ -887,9 +952,48 @@ readers**, and the plan never considered them. Measured:
 | Better Stack ingest token (as Phase 5.2 would place it) | baked into `/usr/local/bin/git-data-emit` | **`0755` root:root — world-readable** |
 
 The host carries a `git` account (`users: - name: git`) whose forced-command wrappers serve every
-connected user's push and transport. That account **cannot** read `doppler_token`. Under Phase 5.2
-as first drafted it **could** read the ingest token. That is a new exposure class, not a marginal
-one, and "the marginal access cost is near zero" is simply false for it.
+connected user's push and transport. Under Phase 5.2 as first drafted it could read the ingest
+token from that `0755` file, while `doppler_token` sits at `0600`. So "the marginal access cost is
+near zero" is false **for a file-read primitive**, and the `0600` remedy is right.
+
+**But security review falsified three things the first draft asserted around it, and ADR-198 must
+not repeat them:**
+
+- **It is not a NEW exposure class — it is the SECOND instance.** `sentry_dsn` is *already* baked
+  inside that same `0755` `git-data-emit` (anchor: `DSN='${sentry_dsn}'`), and the secret half of a
+  Sentry DSN is a write-only ingest key with the *same* blast radius this plan assigns the Better
+  Stack token. It is readable by the `git` account today. The honest framing: the ingest token would
+  be the second instance, and the `0600` remedy makes it **better than the incumbent** rather than
+  merely not-worse. `## Encryption Posture`'s third store must ledger `sentry_dsn` too — AC 33's
+  `0 unledgered` baseline is currently asserted against a list omitting both.
+- **"That account cannot read `doppler_token`" is false under code execution.**
+  `hcloud_firewall.git_data` declares **zero rules** (verified), and Hetzner semantics make that
+  inbound-denied / **egress fully open** — the template says so itself. Any code execution as `git`
+  can `curl http://169.254.169.254/hetzner/v1/userdata` and read the *entire* `user_data`:
+  `doppler_token`, `sentry_dsn` and the new token alike. The `0600`/`0755` distinction defends
+  against a *file-read-only* primitive (say, path traversal in the transport wrapper), not against
+  RCE. Keep the remedy; drop the categorical claim. The closure that would restore the category for
+  all three credentials at once is an egress rule blocking the metadata IP for non-root UIDs —
+  land it or file it with a re-eval trigger of *"before the git-data host is born"*.
+- **The `0600` file does not stop an argv read.** The emitter passes the token as a `curl` argv
+  element (`-H "Authorization: Bearer $${BETTERSTACK_LOGS_TOKEN}"`), and `/proc/<pid>/cmdline` is
+  world-readable on stock Ubuntu 24.04 with no `hidepid` anywhere in the template. Any local
+  account can read it by polling during an emit. Fix is free and covers the incumbent DSN too:
+  `printf 'header = "Authorization: Bearer %s"\n' "$TOK" | curl -K - …`.
+
+Two further security findings that change Phase 5's shape rather than only its prose:
+
+- **Use `write_files` with `permissions: '0600'`, not `printf > file; chmod 600`.** The existing
+  `git-data-doppler` idiom creates the file under the ambient `022` umask and is `0644` *between*
+  the two `runcmd` entries — that file already carries a comment recording this exact bug once. Fix
+  the incumbent in the same pass, since Phase 5 is the one sanctioned cloud-init edit.
+- **Extend `_devalue` to the ingest token.** The emitter value-redacts `GIT_DATA_LUKS_KEY` because
+  it is high-entropy and matches no pattern. After Phase 5 the ingest token is in the emitter's env
+  on *every* emit, and Phase 5.3 adds an emit **whose entire subject is the failing Better Stack
+  POST** — the detail most likely to contain it. `_clean`'s `Bearer <tok>` rule does not catch a
+  bare token. Add it alongside the LUKS key, require the mirror to carry a token *source label*
+  (`baked`/`env`) and never the value, and assert in `git-data-emit.test.sh` that the value never
+  appears in an emitted body.
 
 Three consequences, all in scope:
 
@@ -909,6 +1013,14 @@ Three consequences, all in scope:
 
 #### 5.0d(ii) — two further gaps in the security argument, both of which change ADR-198
 
+- **A per-source Better Stack token would delete the coupling entirely — and this is a real
+  alternative the first draft never considered.** Better Stack issues ingest tokens *per source*;
+  a dedicated git-data source shrinks forged-row blast radius to git-data's own stream and stays
+  fully compatible with §5.6 (both roots would read the same new variable, so prod and rehearsal
+  still ship to the same sink). Under a `single-user incident` threshold, baking the **lowest-trust
+  host's** copy of a credential shared with three others is the wrong direction — the host serving
+  untrusted user pushes is the last one that should hold the shared value. Take it, or reject it in
+  §Alternatives Considered with a reason.
 - **The token is one shared value across four hosts.** `variables.tf`'s
   `betterstack_logs_token` fans out to the Inngest host's bake and its Doppler project, the zot
   registry's Doppler secret, git-data's Doppler secret, and the web host's Vector sink. The first
@@ -921,9 +1033,20 @@ Three consequences, all in scope:
   `GIT_DATA_LUKS_KEY`, which lives in the same `prd_git_data` config — and which the repo
   deliberately keeps out (`cloud-init-git-data.yml`: *"The LUKS key is NEVER baked into this
   user_data"*). Applied consistently, the first draft's argument licenses baking the passphrase.
-  ADR-198 must state the distinguishing principle as a **rule** — *derivable through a revocable
-  indirection is not equivalent to directly readable and durable* — and say explicitly that it does
-  **not** extend to `GIT_DATA_LUKS_KEY`. Otherwise ADR-198 becomes the precedent for the next bake.
+  **The first draft's proposed rule does not actually do this job**, and security review said so:
+  *"derivable through a revocable indirection is not equivalent to directly readable and durable"*
+  is an axis about **derivation**, but once baked the LUKS key is *also* directly readable and
+  durable — it lands in the same bucket. The rule labels the outcome; it does not sort the
+  candidates, so applied literally it still licenses the next bake.
+
+  State ADR-198's rule on the **capability** axis instead, as a three-part test a candidate must
+  pass: (1) **capability ceiling** — write-only append to a telemetry sink (forged rows, quota
+  burn) versus decrypt-every-user's-source-at-rest; this is the distinction that actually holds;
+  (2) **does it defend a control the product publicly claims?** The privacy policy claims LUKS
+  encryption-at-rest (#6588), and a credential defeating a published claim is never bakeable
+  whatever its derivability; (3) **is it single-purpose to this host?** (see the per-source option
+  below). Written that way it is a rule the next author can apply; written the first way it is a
+  rationalization of a decision already made.
 
 #### 5.0e — the eight-stage correction
 
@@ -1021,7 +1144,7 @@ rotation, which (ForceNew, no `ignore_changes` — ADR-149 and ADR-152, **not** 
 privilege is confirmed: `BETTERSTACK_LOGS_TOKEN` is ingest-only; management is
 `BETTERSTACK_API_TOKEN` and reads use `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` — blast radius
 of a leak is forged rows and quota burn, not log read. Coverage widens from ~1 row per successful
-boot to nine; Better Stack's processor DPA is recorded PENDING at
+boot to **eight** (not nine — the `bootcmd` beacon predates `write_files`, §5.0e); Better Stack's processor DPA is recorded PENDING at
 `knowledge-base/legal/compliance-posture.md` — **link, do not duplicate**. Chapter V is not
 engaged; both sinks are EU-resident.
 
@@ -1067,7 +1190,7 @@ mechanism that keeps the rehearsal's render vars from diverging from production'
 Better Stack Logs ingest against shared source `2457081` — an existing source, already in use by
 the rehearsal's scratch config. No tier gate is engaged: `betterstack_paid_tier` guards
 `betteruptime_policy`/`monitor` resources, none of which this plan touches. Coverage widens from
-~1 row per successful boot to nine, which is a quota consideration recorded in ADR-198, not a
+~1 row per successful boot to **eight** (§5.0e), which is a quota consideration recorded in ADR-198, not a
 tier gate.
 
 ## Observability
@@ -1109,11 +1232,17 @@ failure_modes:
     detection: "the liveness anchor query (Phase 4.2) — zero anchor rows means dead source, not silent host"
     alert_route: "capture step, layer 6"
   - mode: "after a Better Stack rotation, stages 1-5 ship on the stale baked token and go dark"
-    detection: "Phase 5.3 — the ingest failure is mirrored to Sentry at level:warning, stage:betterstack_ingest, tagged with which token source was used; Sentry does not depend on the failing sink"
-    alert_route: "Sentry web-platform, the same channel the boot fatals use"
+    detection: "Phase 5.3 mirrors the ingest failure to Sentry at level:warning, stage:betterstack_ingest, tagged with the token source. NOTE the consult in §4.1 is pinned to level == 'fatal', so nothing reads a warning by default: on a REHEARSAL the consult must additionally query stage:betterstack_ingest for the host under test and print it (layer 6)."
+    alert_route: "layer 6 for the rehearsal. For the BORN production host there is no layer 6 at all — no workflow run, no capture script — so this mode needs a named Sentry issue-alert rule on stage:betterstack_ingest, or it is UNDETECTED in production. Naming that rule is in scope for Phase 5.3."
   - mode: "an upstream e2fsprogs bump moves R1's mount-class fingerprint"
-    detection: "the image is digest-pinned, so CI cannot move under the suite; the follow-through freshness probe (Phase 3.5) reports the divergence with both digests named"
-    alert_route: "scheduled follow-through sweeper output"
+    detection: "layer 6 — rule-audit.yml's `Detect zot pin staleness` step reads UBUNTU_BASE from git-data-runcmd-rehearsal.test.sh, resolves the live manifest-list digest, and prints both on divergence. (The digest pin itself is PREVENTION, not detection — stating it as detection was the first draft's error.)"
+    alert_route: "layer 6 — the rule-audit.yml run log and step summary, plus that step's existing idempotent action-required GitHub issue as the durable artifact. NOT the follow-through sweeper: Phase 3.5 explicitly creates no follow-through enrollment."
+  - mode: "a fatal names its stage and rc but not its CAUSE, and the throwaway host is destroyed before anyone can ask — the plan's originating incident (run 30649892865: stage:luks_open, rc=32, cause unreadable)"
+    detection: "layer 6 — §4.5a requires the Sentry-derived verdict print to project tags.detail and tags.rc, and an arm asserts an empty detail is reported as 'FAIL, cause unavailable' rather than as a cause-bearing verdict"
+    alert_route: "the capture step's terminal verdict line in the workflow-run log and step summary"
+  - mode: "the rehearsal host is reclaimed mid-verdict (job timeout or cancel; teardown runs if: always(), so capture_rc is unset and the host is gone)"
+    detection: "layer 6 — an empty capture_rc must produce its own summary and annotation, never TRANSIENT's 'this says nothing about the rehearsal host' text, which would misattribute a reclaimed surface as an unread one"
+    alert_route: "workflow-run log and step summary"
   - mode: "a test arm regresses and aborts on an unbound variable instead of printing its message"
     detection: "the D1-MUT mutation arm (Phase 1.2) fails if the predicate reaches an unset CAPTURE"
     alert_route: "infra-validation.yml / run-registered-suites.sh run log, layer 6"
@@ -1214,6 +1343,7 @@ strips could disagree about what a comment is, which would reopen the class.
 | 6 | **must-PASS, non-canonical-but-permitted:** add a tenth `path.module` payload binding | GREEN, and the digest must **move** when that payload's bytes change |
 | 7 | **harness row:** delete arm `A13` from the suite's arm registry | RED via the assertion-count floor — a suite that silently runs fewer arms must not report green |
 | 8 | **must-PASS, value-form:** add a **value-form** map entry (`foo = var.foo`) — the exact shape Phase 5.1 adds | GREEN — the gate quantifies over `file*(` occurrences and `templatefile(` count, not over map arity. This row is what stops Phase 5 from tripping Phase 2, and what stops a future maintainer from "fixing" it by loosening the file-form rule. |
+| 9 | **REORDER row (found at review — nothing else in the matrix covers it):** move the canonical-shape assertion from *before* the payload loop to *after* it, still ahead of the digest emit | RED. The Assembly's *"must run **before** the payload loop, so a non-canonical form aborts before any input is accumulated"* is currently **prose with no assertion behind it** — under that mutant rows 1/4/5 still abort, row 2 still reds, and row 6's digest still moves, so the whole matrix is **green on a mutant that violates the stated property**. This is the `#7587` class the plan skill names: a property about ORDER needs a reorder row, because a delete row reds any suite that reads the artifact at all. Assert the abort happens with **zero payloads accumulated** (a counter, or an abort that names the occurrence with no partial-input trace). |
 
 ### Guard 2 — base-image digest pin (#7544)
 
@@ -1240,7 +1370,9 @@ survives outside the `UBUNTU_BASE` literal and comments.
 | 2 | make the guard's own grep match nothing (rename the sought token) so it reports zero spins checked | RED via the `≥ 6` floor — a guard reporting "0 checked" and exiting 0 is vacuous |
 | 3 | add a **seventh** `docker run` using a bare tag, after six compliant ones | RED (the check must not stop at the first spin) |
 | 4 | pin using the **platform-specific** digest (`sha256:1e0a86e5…`) instead of the manifest list | RED — but **offline**, a digest literal is opaque: the suite cannot tell an index digest from a platform one without a registry call. The offline arm therefore asserts (a) the known-wrong `sha256:1e0a86e5…` is absent and (b) the `UBUNTU_BASE` comment records `image.index` as the observed media type. The *live* index-vs-platform check lives in the freshness probe (Phase 3.5), which is the component that legitimately has network. Stating this bound is the point — an arm that claimed to verify the media type offline would be asserting something it cannot see. |
-| 5 | **must-PASS, not the canonical value:** bump `UBUNTU_BASE` to a different valid tag+manifest-list-digest pair | GREEN — the guard binds the *shape*, not one literal |
+| 5 | **must-PASS, value axis:** bump `UBUNTU_BASE` to a different valid tag+manifest-list-digest pair | GREEN — the guard binds the *shape*, not one literal |
+| 6 | **must-PASS, cardinality axis:** add a **seventh, compliant** `docker run --rm "$UBUNTU_BASE"` | GREEN — this is the row that catches the `= 6` / `≥ 6` contradiction. Under the first draft's `= 6` it goes RED, which is the tell that the AC was pinning a growing set. |
+| 7 | **harness row:** neuter the `R1-PIN` arm's own `pass`/`fail` dispatch (or delete the arm) | RED via the runcmd suite's assertion floor. Guard 2 was the only guard with **no** harness row — row 2 mutates the guard's grep, which here *is* the system under test, not the suite. This matters more here than elsewhere: that suite's floor sums `passes + fails + SKIPPED_ASSERTIONS`, and its own header documents that a bucket swap disarms every assertion while the floor still sees the same total. Deleting the whole arm body drops `passes`, which the floor **does** see — so this specific mutation is observable, and that is exactly why it is the row to write. |
 
 ### Guard 3 — Sentry second-channel verdict arms (#7481)
 
@@ -1262,7 +1394,7 @@ suite 43/0 green. Placement is therefore asserted **per site**.
 |---|---|---|
 | 1 | remove `level:fatal` from the query so the `level:info` bootcmd beacon matches | RED — this is the false-FAIL that would burn a paid dispatch on every healthy boot |
 | 2 | replace the **window helper** body with `printf ''` (name it for the ISO `start`/`end` pair it now builds — **not** `_sentry_stats_period`; §4.1 abandoned `statsPeriod`) | RED — the previous suite stayed 43/0 green under exactly this stub |
-| 3 | revert the consult at **one** of the four call sites to a bare `exit 2`, leaving three compliant | RED (per-site placement; the check must not stop at the first) |
+| 3 | revert the consult at **one** of the six call sites to a bare `exit 2`, leaving five compliant | RED (per-site placement; the check must not stop at the first) |
 | 4 | delete the `RUNG2_CAPTURE_VERDICT=` sentinel assertion from one arm | RED via the assertion-count floor — sentinel deletion is a recorded surviving mutation |
 | 5 | return HTTP 200 with an HTML body from a stub | RED unless the arm reports TRANSIENT (never clean) |
 | 6 | source `SENTRY_ORG` from the environment instead of the pinned literal, and set it to `jikigai` in the stub env | RED — measured to produce 403, which must be a named TRANSIENT cause, not a verdict |
@@ -1316,8 +1448,15 @@ message reachable at all.
 
 8. Every spin is pinned, asserted with **the file's own published derivation**, not a new count:
    `grep -cE '^[[:space:]]*docker run --rm' apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`
-   = **6** (the site count the file already documents), and `grep -c 'ubuntu:24\.04'` outside the
+   **≥ 6** (the site count the file already documents), and `grep -c 'ubuntu:24\.04'` outside the
    `UBUNTU_BASE` literal's own line and outside comments = **0**.
+   **`≥`, not `=` — the first correction of this AC used `= 6` and that was a second defect.**
+   Two reasons. (a) `-eq` on a set that legitimately grows turns every future compliant spin site
+   into a spurious failure. (b) Worse, it makes Guard 2 row 3 pass **for the wrong reason**: adding
+   a seventh spin with a bare tag would red because the *count changed*, not because the tag is
+   bare — so the bare-tag detection the row exists to exercise never evaluates. Bound the set;
+   do not pin it. This also realigns the AC with Guard 2's own text, which says `≥ 6` in three
+   places.
    **The first draft's form was arithmetically unsatisfiable** and was caught by four reviewers:
    every spin is written `docker run --rm \` with the image on a *continuation* line, so
    `grep -c 'docker run.*@sha256:'` returns 0 by construction; and after Phase 3.2 the image is
@@ -1361,12 +1500,35 @@ message reachable at all.
     script has the hazard" (the #6039 self-reference class).
 16. The Sentry query carries `project=4511404943671376`, a `level:fatal` term, and an ISO
     `start=`/`end=` **pair**; an arm asserts a `start=`-only form is never emitted.
-17. `grep -c 'SENTRY_ISSUE_RO_TOKEN' .github/workflows/git-data-rung2-rehearsal.yml` ≥ 1 inside
-    the redaction tuple, and an arm asserts the tuple contains it.
-18. Neither `.github/workflows/git-data-rung2-rehearsal.yml` nor
-    `knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md` contains
-    `Confirm against Sentry first`; the runbook passage at the `check **Sentry** before
-    concluding anything` anchor is replaced with a statement of what the script now consults.
+17. The redaction tuple contains **all** of `SENTRY_ISSUE_RO_TOKEN`, `AWS_ACCESS_KEY_ID`,
+    `AWS_SECRET_ACCESS_KEY`, `DOPPLER_TOKEN`, `HCLOUD_TOKEN`, `BETTERSTACK_LOGS_TOKEN` and
+    `GIT_DATA_LUKS_KEY` alongside the three incumbent `BETTERSTACK_QUERY_*` names, and an arm
+    asserts membership for each. **The AWS pair is a merge blocker** (§4.6): the workflow writes
+    both into `$GITHUB_ENV`, so they sit in the capture step's environment, which is `tee`'d
+    verbatim into a 7-day artifact on a public repo — and this plan's own Encryption Posture names
+    that pair as granting full Terraform state read.
+17a. An arm asserts the Sentry `curl` carries no `-v` / `--trace*` flag (those dump the
+    `Authorization` header verbatim) and that no token is interpolated into a URL.
+17b. An arm asserts the properties the allowlist depends on: no `set -x` in the workflow, and no
+    `set -x` / `printenv` / `env |` in the capture script. Both hold today (measured) — unguarded,
+    they are the only thing between "fail-open shape" and "leak".
+18. The eyeball class is asserted **structurally, not by name**: a grep-with-floor over the verb set
+    (`Confirm against Sentry`, `Check Sentry`, `Check the Better Stack`, `check the .* secret`)
+    across the workflow, the runbook and the capture script returns **0**, with the grep itself
+    asserted to have scanned all three files (so a renamed file cannot pass it vacuously). A
+    name-by-name absence AC is explicitly **not** sufficient — the site count went 2 → 3 → 7 across
+    three passes of this plan.
+18a. The guidance that shares those paragraphs **survives**: `grep -c 'cap two per fix attempt'`,
+    `grep -c 'DO NOT simply re-dispatch'` and `grep -c '#7025'` on the workflow are each ≥ 1 after
+    the edit. Deleting the two-dispatch cap while removing an eyeball instruction is the specific
+    regression Phase 4.7 exists to avoid, and the cap has no other statement in the repo.
+18b. Every terminal verdict emits an `::error::` carrying stage + rc + cause — not a step summary
+    alone. Today only rc=3 does, against the rationale the workflow states in its own rc=3 comment
+    (*"`gh run view --log-failed` does not render step summaries … a remediation that exists solely
+    in the summary reaches the human and not the automation"*). FAIL, TRANSIENT and UNEXPECTED EXIT
+    are summary-only, and TRANSIENT carries the sole statement of the dispatch cap.
+18c. The Sentry-derived verdict print projects `tags.detail` and `tags.rc` (§4.5a), and an arm
+    asserts an empty `detail` yields *"FAIL, cause unavailable"*.
 19. At least one arm's fixture body reproduces the measured production beacon
     (`git-data boot stage`, `level:info`, `stage:bootcmd_start`) and at least one the measured
     fatal (`git-data LUKS stage FAILED`, `stage:luks_open`).
@@ -1498,7 +1660,8 @@ old ordinal in the same edit.
 | **#7481: read Sentry only on the `boot_complete`-missing path** | This is what the reverted attempt effectively did, and it left the suite 43/0 green with the arm removed from both transport-failure sites. Placement at all four sites is the property. |
 | **#7481: keep the `statsPeriod` rolling window** | `host_name` embeds the run id, which is stable across GitHub re-run **attempts**, so attempt 2 of a fixed host would see attempt 1's fatal. Run-pinned `start=`/`end=` is required — and must be a pair, measured. |
 | **#7460: defer until after a clean rehearsal** | Costs an extra paid dispatch (see R1) and leaves stages 1–5 dark for the rehearsal that is supposed to prove the template. |
-| **#7460: read the ingest token from a baked file rather than the templatefile map** | Another `write_files` entry costs more `user_data` bytes than one map argument and adds a read-ordering dependency in the emitter, which runs from `bootcmd` before `write_files` on the earliest stage. |
+| **#7460: read the ingest token from a baked file rather than the templatefile map** | **REVERSED at deepen review — this is now the PREFERRED shape (§5.0d).** The first draft rejected it on ~40–80 bytes and "a read-ordering dependency in the emitter, which runs from `bootcmd` before `write_files`". §5.0e falsifies that rationale: the `bootcmd` beacon is an **inline bare curl** and the emitter does not exist at `bootcmd` time, so a `write_files` entry at `permissions: '0600'` is written in the same pass as `git-data-emit` itself and every call site sees it. There is no ordering obstacle, and with 20,180 B of headroom bytes were never the deciding axis — **mode is**. Carrying a falsified objection against the remedy the plan now prefers would have been the defect. |
+| **#7460: a per-source Better Stack ingest token for git-data** | Not rejected — **open, and recommended for evaluation at `/work`** (§5.0d(ii)). It deletes the four-host rotation coupling outright. Costs one Better Stack source and one new variable. |
 
 ## Deepen-Plan Gate Resolutions
 
@@ -1584,6 +1747,31 @@ research was strong; its *instruments* were not, and three of them could not hav
 | R22 | **Three verdicts were undefined**: a Sentry-derived FAIL's exit code, silent-both, and Better-Stack-PASS + Sentry-FATAL (which writes PASS today). | §4.5b |
 | R23 | **Coverage is eight stages, not nine** — the `bootcmd` beacon predates `write_files`, so it cannot reach Better Stack with any token. | §5.0e, UC-3 |
 | R24 | **#6588 is the strongest threshold justification** and was absent; the exposure list was by surface, not by role. | §User-Brand Impact |
+
+### Deepen-Plan Revisions (D1–D14) — four further agents
+
+`security-sentinel`, `observability-coverage-reviewer`, `test-design-reviewer` and a
+verify-the-negative/self-audit sweep. All verified against the tree before applying.
+
+| # | Finding | Corrected in |
+|---|---|---|
+| **D1** | **MERGE BLOCKER.** `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are written to `$GITHUB_ENV`, so they sit in the capture step's environment, which is `tee`'d verbatim into a 7-day artifact on a **public** repo — and neither is in the redaction tuple. The plan's own Encryption Posture calls that pair full Terraform state read. Two strings. | §4.6, AC 17 |
+| **D2** | **Phase 4 fixes WHO reads Sentry, never WHAT the reader prints.** The new path projects `title`/`culprit` and never `detail`/`rc`, so the 2026-07-31 example would report `"git-data LUKS stage FAILED"` — verbatim the non-readable baseline this plan opens by citing. §Research Reconciliation closed `detail` on the **Better Stack** reader, which is a different reader. | new §4.5a, AC 18c, new failure mode |
+| **D3** | *"A new exposure class"* is wrong — `sentry_dsn` is **already** baked in the same `0755` emitter, same blast-radius class. The ingest token is the *second* instance and the `0600` remedy makes it better than the incumbent. The ledger omits both. | §5.0d |
+| **D4** | *"That account cannot read `doppler_token`"* is false under code execution: `hcloud_firewall.git_data` has **zero rules** → egress fully open → the Hetzner metadata endpoint serves the whole `user_data`. The mode distinction defends a file-read primitive, not RCE. | §5.0d |
+| **D5** | The `0600` file does not stop an **argv** read — the token is a `curl` argv element and `/proc/<pid>/cmdline` is world-readable with no `hidepid` in the template. `curl -K -` fixes it, and covers the incumbent DSN too. | §5.0d |
+| **D6** | The distinguishing rule (derivability) **does not exclude `GIT_DATA_LUKS_KEY`** — once baked it is equally direct and durable. Restated on the **capability** axis as a three-part test. | §5.0d(ii) |
+| **D7** | §Alternatives rejected the `0600`-file shape on a read-ordering rationale **§5.0e falsifies**. It is now the preferred shape. A **per-source** Better Stack token — which would delete the four-host coupling outright — was never considered. | §Alternatives, §5.0d(ii) |
+| **D8** | `_devalue` must value-redact the ingest token; Phase 5.3's mirror is the emit most likely to contain it, and `_clean`'s `Bearer <tok>` rule misses a bare token. Use `write_files … permissions: '0600'`, not `printf > file; chmod 600` (0644 for a window — a bug that file already recorded once). | §5.0d |
+| **D9** | **AC 8's `= 6` was a second defect** in my own first correction: `-eq` on a growing set makes Guard 2 row 3 pass **for the wrong reason** (the count changes, so bare-tag detection never evaluates). | AC 8, Guard 2 |
+| **D10** | **Two REORDER gaps, and no reorder row existed anywhere.** Guard 1's *"must run before the payload loop"* is prose with no assertion — moving it after the loop leaves the whole matrix green. Guard 3's PASS-path cross-check has the same shape. The `#7587` class the plan skill names. | Guard 1 row 9, §4.5a/4.5b |
+| **D11** | **Guard 2 had no harness row** (row 2 mutates the guard, which here *is* the SUT) and no cardinality must-PASS. | Guard 2 rows 6, 7 |
+| **D12** | Two `failure_modes` had **no layer citation**, and both had wrong content: the e2fsprogs `alert_route` named the follow-through sweeper that §3.5 explicitly does not create, and stated *prevention* as detection; the stale-token mode's detection is a `level:warning` event that **nothing reads** (§4.1 pins the consult to `fatal`), and on the *born* host there is no layer 6 at all. | `failure_modes` |
+| **D13** | §4.7's eyeball sites went **2 → 3 → 7** across three passes — proof that enumeration is the wrong method, in the one section that ignored §4.5's own "enumerated member sets rot" finding. Replaced with a grep-with-floor. Only rc=3 emits `::error::`; FAIL and TRANSIENT are summary-only, and TRANSIENT carries the sole statement of the dispatch cap. | §4.7, ACs 18/18a/18b |
+| **D14** | Self-audit caught two stale clusters the review pass missed: Guard 3's Assembly, its row 3, Files-to-Edit and Test Scenario 15 all still said *"four call sites"* after §4.5 corrected it to six; and two *"coverage widens … to nine"* sentences survived the eight-stage correction. | swept |
+
+Sweep A (verify-the-negative) ran ten of this plan's load-bearing negative claims against the tree.
+**All ten confirm; none contradicts.**
 
 ### Carried into `/deepen-plan` and `/work`, not yet folded
 
@@ -1694,7 +1882,7 @@ host birth.
 | `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` | 7570, 7544 | `CAPTURE=""` init + `${CAPTURE:-}` read + `D1-MUT` arm; `UBUNTU_BASE` literal + 6 spin sites + `R1-PIN` arm + R1 detail |
 | `tests/scripts/lib/git-data-birth-readiness-gate.sh` | 7534 | canonical-shape assertion before the payload loop; comment block updated with the fourth form |
 | `tests/scripts/test-git-data-birth-readiness-gate.sh` | 7534 | arms `A12`–`A16`; assertion floor raised |
-| `scripts/followthroughs/git-data-rung2-evidence-capture.sh` | 7481 | Sentry consult helper; per-site placement at four call sites; shape validation; four distinguished causes |
+| `scripts/followthroughs/git-data-rung2-evidence-capture.sh` | 7481 | Sentry consult helper; placement derived over six `exit 2` sites; shape validation; four distinguished causes |
 | `tests/scripts/test-git-data-rung2-evidence-capture.sh` | 7481 | new arms + production-artifact fixtures; anti-vacuity floor raised from 34 |
 | `.github/workflows/git-data-rung2-rehearsal.yml` | 7481 | redaction tuple + remove the "Confirm against Sentry first" instruction |
 | `knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md` | 7481 | replace the dashboard-eyeball passage with what the script consults |
@@ -1746,7 +1934,7 @@ Phase 2.12's own finding that a plan whose deliverable is guards must test the g
 | 12 | bump to a different valid tag+list-digest pair | `R1-PIN` must **PASS** |
 | 13 | drop `level:fatal` from the Sentry query | evidence-capture suite (false-FAIL arm, real beacon fixture) |
 | 14 | the window helper's body → `printf ''` | window-derivation arm |
-| 15 | revert the consult at one of four call sites | per-site placement arm |
+| 15 | revert the consult at one of six call sites | per-site placement arm |
 | 16 | Sentry stub returns HTTP 200 + HTML | shape-validation arm (must report TRANSIENT) |
 | 17 | env-source `SENTRY_ORG` and set it to `jikigai` | org-pinning arm (403 must be a named TRANSIENT) |
 | 18 | delete the whole Sentry block | Sentry-paragraph-anchored config arm |

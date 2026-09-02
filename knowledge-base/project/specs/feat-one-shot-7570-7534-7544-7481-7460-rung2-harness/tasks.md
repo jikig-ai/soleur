@@ -112,9 +112,22 @@ the subject, so each is independently revertible.
 - [ ] 4.5b Define the three undefined verdicts: a Sentry-derived FAIL is `exit 1` with its own
       summary variant; silent-both is TRANSIENT (must-PASS arm); the **PASS path gains a Sentry
       cross-check** (this also discharges §5.0's finding).
-- [ ] 4.6 Add `SENTRY_ISSUE_RO_TOKEN` to the redaction tuple + an arm asserting membership. File
-      the allowlist-inversion as its own issue (do not improvise the mechanism here).
-- [ ] 4.7 Remove the eyeball instructions from **three** sites — and **preserve** the artifact
+- [ ] 4.6 **MERGE BLOCKER — widen the redaction tuple to ten names**, not one:
+      `SENTRY_ISSUE_RO_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `DOPPLER_TOKEN`,
+      `HCLOUD_TOKEN`, `BETTERSTACK_LOGS_TOKEN`, `GIT_DATA_LUKS_KEY` + the three incumbents. The
+      workflow writes both AWS keys into `$GITHUB_ENV`, so they are in the capture step's
+      environment, `tee`'d verbatim into a 7-day artifact on a **public** repo. Arm per name.
+      File the allowlist-inversion separately (length floor ≥12, non-secret name exclusions, and
+      the structural fix: stop writing R2 creds to `$GITHUB_ENV` at all).
+- [ ] 4.6a Arm: the Sentry `curl` carries no `-v`/`--trace*` and no token in a URL.
+- [ ] 4.6b Arm: no `set -x` in the workflow; no `set -x`/`printenv`/`env |` in the capture script.
+- [ ] 4.6c **Project `tags.detail` + `tags.rc` on the Sentry verdict print** (§4.5a). Without it the
+      new FAIL path reproduces the plan's own baseline — a stage and an rc, no cause, on a host
+      that no longer exists. Arm: an empty `detail` reports "FAIL, cause unavailable".
+- [ ] 4.7 Remove the eyeball instructions — **assert the class with a grep-with-floor, do not
+      enumerate**. The site count went 2 → 3 → 7 across three passes of this plan; §4.5 already
+      proved enumerated sets rot. Verb set: `Confirm against Sentry`, `Check Sentry`,
+      `Check the Better Stack`, `check the .* secret`, across workflow + runbook + capture script — and **preserve** the artifact
       pointer, `DO NOT simply re-dispatch`, the **two-dispatch cap**, and the #7025 banner. Rewrite
       the now-stale #7116 sentence. Extend the runbook's outcome table with the new sub-causes.
 - [ ] 4.7b Update the capture script header's `WHAT THIS DOES NOT CLAIM` block — it currently says
@@ -135,7 +148,14 @@ the subject, so each is independently revertible.
       which is a digest input, so a stale comment ships inside the attested byte set.
 - [ ] 5.1 Module variable + one brace-free single-line map entry + both call sites. **`0600` vs
       `0755` is the open design point** — see 5.2.
-- [ ] 5.2 **Decide the token's on-host mode.** Baking into the `0755` `git-data-emit` makes it
+- [ ] 5.1a Evaluate a **per-source** Better Stack ingest token for git-data — it deletes the
+      four-host rotation coupling outright and stays compatible with §5.6. Take it or reject it
+      in §Alternatives with a reason.
+- [ ] 5.2 **Decide the token's on-host mode.** Prefer `write_files` + `permissions: '0600'` (NOT
+      `printf > file; chmod 600`, which is 0644 for a window). Pass the token via `curl -K -`, not
+      an argv `-H` — `/proc/<pid>/cmdline` is world-readable. Extend `_devalue` to the token.
+      Note the `0600` file defeats a file read, **not** RCE: the git-data firewall has zero rules,
+      so egress is open and the Hetzner metadata endpoint serves all of `user_data` regardless. Baking into the `0755` `git-data-emit` makes it
       readable by the `git` account that serves users' pushes, while `doppler_token` is `0600`.
       Prefer a `0600` root env file the emitter sources, unless a measured read-ordering obstacle
       rules it out. `${betterstack_logs_token}` must not start a line
