@@ -259,6 +259,13 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # RECORDED BEFORE THE APPLY, and this is what makes the Sentry read run-pinned
+          # (#7481 defect 5). `host_name` embeds ${GITHUB_RUN_ID}, but a run id is STABLE
+          # across GitHub re-run ATTEMPTS -- so an unwindowed Sentry read lets attempt 2 of a
+          # FIXED template report attempt 1's fatal, and the operator burns a paid host
+          # chasing a failure that is already repaired. Taken before the apply so no event
+          # this rehearsal produces can fall outside the window.
+          echo "RUNG2_SENTRY_SINCE=$(date -u +%Y-%m-%dT%H:%M:%S)" >> "$GITHUB_ENV"
           doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -auto-approve -input=false tfplan
           echo "host=${REHEARSAL_PREFIX}${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
@@ -318,6 +325,7 @@ jobs:
               bash scripts/followthroughs/git-data-rung2-evidence-capture.sh \
                 --host-name "$REHEARSAL_HOST" \
                 --evidence-url "$url" \
+                --since "$RUNG2_SENTRY_SINCE" \
                 --divergence "$REHEARSAL_DIVERGENCE" \
                 --out /tmp/rung2/git-data-rung2-boot-evidence.env 2>&1 | tee /tmp/rung2/capture.log
             rc=${PIPESTATUS[0]}
@@ -342,7 +350,20 @@ jobs:
                 # check. `gh run view --log-failed` does not render step summaries, so an
                 # agent triaging from the CLI sees annotations only -- a remediation that
                 # exists solely in the summary reaches the human and not the automation.
-                echo "::error::doppler run failed twice with no capture verdict — check the DOPPLER_TOKEN secret and its access to project 'soleur', config 'prd_terraform'. This says NOTHING about the rehearsal host; it never got to speak."
+                # SELF-PROBE, NOT AN INSTRUCTION TO GO AND LOOK. This branch is the state where the
+                # harness produced NO verdict at all, and it used to hand the reader "check the
+                # DOPPLER_TOKEN secret and its access to project soleur, config prd_terraform" — a
+                # request to eyeball a dashboard, which hr-no-dashboard-eyeball-pull-data-yourself
+                # forbids, on the one path where the operator has been handed nothing to act on. The
+                # workflow already holds that credential and already proved it at the R2-extract step,
+                # so it can answer the question itself. --only-names never prints a VALUE.
+                probe_rc=0
+                probe_out="$(doppler secrets --only-names -p soleur -c prd_terraform 2>&1)" || probe_rc=$?
+                if [[ "$probe_rc" -eq 0 ]]; then
+                  echo "::error::doppler run failed twice with no capture verdict, but DOPPLER_TOKEN CAN read soleur/prd_terraform (self-probed: $(printf '%s' "$probe_out" | grep -c .) secret names listed). So this is NOT a token-scope fault — read the capture-log artifact for what the wrapper actually did."
+                else
+                  echo "::error::doppler run failed twice with no capture verdict, and DOPPLER_TOKEN CANNOT read soleur/prd_terraform (self-probed, rc=${probe_rc}): $(printf '%s' "$probe_out" | head -1). That is the fault — rotate or re-scope the DOPPLER_TOKEN repo secret. This says NOTHING about the rehearsal host."
+                fi
                 rc=3
                 break
               fi
@@ -402,7 +423,7 @@ jobs:
             echo "### Rung-2 rehearsal: TRANSIENT (no verdict)" >> "$GITHUB_STEP_SUMMARY"
             echo "The poll expired without a terminal answer (last rc=\`${rc}\`). This is NOT evidence the host booted dark — read the capture output above to see whether the log source itself was answering." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and check whether the Better Stack source-liveness anchor answered. If it did, the host booted but never emitted \`stage:boot_complete\`; if it did not, the query path is the suspect. **DO NOT simply re-dispatch.** #7116 mis-reports TRANSIENT for exactly the early-boot fatals it could read from Sentry directly — attempt 1 of run 30649892865 was that mis-report, one attempt before the real FAIL. Confirm against Sentry first (\`host_name:soleur-git-data-rehearsal-<run-id>\`, org \`jikigai-eu\`, project \`web-platform\`); a \`level:fatal\` row means treat this as FAIL and STOP. Each dispatch spends a paid cpx22 — cap two per fix attempt. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and check whether the Better Stack source-liveness anchor answered. If it did, the host booted but never emitted \`stage:boot_complete\`; if it did not, the query path is the suspect. **DO NOT simply re-dispatch.** #7116 mis-reports TRANSIENT for exactly the early-boot fatals it could read from Sentry directly — attempt 1 of run 30649892865 was that mis-report, one attempt before the real FAIL. The capture step already consulted Sentry (see capture.log) (\`host_name:soleur-git-data-rehearsal-<run-id>\`, org \`jikigai-eu\`, project \`web-platform\`); a \`level:fatal\` row means treat this as FAIL and STOP. Each dispatch spends a paid cpx22 — cap two per fix attempt. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$rc"
 
@@ -447,7 +468,33 @@ jobs:
           import os
           src, dst = "/tmp/rung2/capture.log", "/tmp/rung2/capture.redacted.log"
           text = open(src, encoding="utf-8", errors="replace").read()
-          for var in ("BETTERSTACK_QUERY_HOST", "BETTERSTACK_QUERY_USERNAME", "BETTERSTACK_QUERY_PASSWORD"):
+          # TEN NAMES, NOT THREE (#7481). The three BETTERSTACK_QUERY_* names were the whole
+          # tuple, and the environment this step redacts is far wider than that. Two steps
+          # above, this workflow writes BOTH R2 credentials into $GITHUB_ENV
+          # (`printf 'AWS_ACCESS_KEY_ID=%s\n' ...`), which places them in the environment of
+          # EVERY later step -- including the capture step, whose stdout AND stderr are tee'd
+          # verbatim into a 7-day artifact on a PUBLIC repo. `::add-mask::` does not help: it
+          # scrubs the LOG STREAM, and `tee` writes the raw bytes to disk before Actions sees
+          # them. That pair grants full Terraform state read, and that state holds
+          # doppler_token, the LUKS passphrase and three SSH private keys -- the one credential
+          # class in this environment whose leak reaches every user's source code at rest.
+          #
+          # THIS IS A NAME ALLOWLIST OVER AN ENVIRONMENT POPULATED WITH A WHOLE DOPPLER CONFIG,
+          # which is a fail-open shape, and widening the list does not change that. The
+          # structural fix is to stop writing the R2 credentials to $GITHUB_ENV at all and pass
+          # them per-step via `env:` on the terraform steps only, which removes them from this
+          # step's environment instead of scrubbing them afterwards. A blind value-denylist is
+          # NOT the fix: prd_terraform also holds non-secret values (org slugs, region names,
+          # booleans), so inverting naively would carpet-redact the diagnostic -- including the
+          # `jikigai-eu` literal this route's own assertions read. Deferred deliberately, with
+          # that content, because the mechanism is a security-review call and not something to
+          # improvise inside a harness PR.
+          #
+          # The >= 4 floor stays as-is here; raising it to >= 12 belongs with the inversion
+          # above, since it is the same decision about what this list is for.
+          for var in ("BETTERSTACK_QUERY_HOST", "BETTERSTACK_QUERY_USERNAME", "BETTERSTACK_QUERY_PASSWORD",
+                      "SENTRY_ISSUE_RO_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+                      "DOPPLER_TOKEN", "HCLOUD_TOKEN", "BETTERSTACK_LOGS_TOKEN", "GIT_DATA_LUKS_KEY"):
               val = os.environ.get(var, "")
               if len(val) >= 4:                      # a 1-3 char value would carpet the file
                   text = text.replace(val, "<redacted:%s>" % var)

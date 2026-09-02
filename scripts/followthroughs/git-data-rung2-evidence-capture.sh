@@ -52,8 +52,15 @@
 #     (mis-reporting TRANSIENT for early-boot fatals it could read from Sentry directly) must
 #     be planned against what is actually possible, and a false constraint in this header
 #     would have planned it against a wall that does not exist
-#     (hr-verify-repo-capability-claim-before-assert). #7116 owns that work; do not do it here.
-#     The fatal channel is proven at RUNG 1
+#     (hr-verify-repo-capability-claim-before-assert).
+#
+#     SUPERSEDED 2026-09-02 (#7481). This block used to end "#7116 owns that work; do not do
+#     it here." #7116 is CLOSED — with the work REVERTED, which is why #7481 re-specifies it —
+#     so an agent opening this file to implement the second channel was reading a prohibition
+#     on its own task, citing an issue that no longer owns anything. The read is now
+#     IMPLEMENTED here, via scripts/sentry-issue.sh --host-events, and the paragraph above
+#     stands as the measurement that made it possible rather than as a reason not to.
+#     The fatal channel is additionally proven at RUNG 1
 #     by git-data-runcmd-rehearsal.test.sh, which shows the trap firing and emitting `fatal`;
 #     rung 2's job is the real-host facts rung 1 structurally cannot reach — TLS egress from a
 #     real Hetzner host, a real `doppler run`, and a real `cryptsetup luksOpen`.
@@ -88,16 +95,22 @@ EVIDENCE_URL=""
 CLOUD_INIT="${REPO_ROOT}/apps/web-platform/infra/cloud-init-git-data.yml"
 OUT=""
 WINDOW="30 DAY"
+SENTRY_SINCE=""
 VERIFY_ONLY=0
 DIVERGENCE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --host-name)    HOST_NAME="${2:-}"; shift 2 ;;
-    --evidence-url) EVIDENCE_URL="${2:-}"; shift 2 ;;
+    # `shift 2 || shift` — a bare `shift 2` with only the flag left FAILS and leaves $#
+    # unchanged, so the parse loop never terminates. Measured in the sibling reader this
+    # session: the process hung until its caller's timeout killed it, which on this route
+    # would burn the poll budget against a paid host with no verdict and no message.
+    --host-name)    HOST_NAME="${2:-}"; shift 2 || shift ;;
+    --evidence-url) EVIDENCE_URL="${2:-}"; shift 2 || shift ;;
+    --since)        SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
     --cloud-init)   CLOUD_INIT="${2:-}"; shift 2 ;;
     --out)          OUT="${2:-}"; shift 2 ;;
-    --window)       WINDOW="${2:-}"; shift 2 ;;
+    --window)       WINDOW="${2:-}"; shift 2 || shift ;;
     --divergence)   DIVERGENCE="${2:?--divergence needs a value}"; shift 2 ;;
     --verify-only)  VERIFY_ONLY=1; shift ;;
     --) shift ;;
@@ -160,15 +173,167 @@ if [[ ! "$WINDOW" =~ ^[0-9]+[[:space:]]+(MINUTE|HOUR|DAY|WEEK|MONTH)$ ]]; then
   exit 64
 fi
 
+# ── THE SECOND CHANNEL (#7481) ──────────────────────────────────────────────────────
+#
+# WHY IT EXISTS. Everything before `doppler run` reaches SENTRY ONLY: the emitter's Better
+# Stack block is gated on BETTERSTACK_LOGS_TOKEN, which is present only under `doppler run`.
+# So a host that dies at luks_open — which is exactly what the 2026-07-31 rehearsal did — is
+# INVISIBLE to the Better Stack channel, and every Better-Stack-silent condition below would
+# report TRANSIENT for a failure Sentry could name. The workflow then retries rc=2 twenty
+# times over ~16 minutes against a paid cpx22 before saying "do not simply re-dispatch".
+#
+# ONE HELPER, NOT SIX PLACEMENTS. The first design enumerated the call sites and got the list
+# wrong twice — it named the two credential-preflight sites where its own justification named
+# the two TRANSPORT-failure sites, which are a different pair. Enumerated member sets rot.
+# Every no-verdict path funnels through transient(), so: one consult implementation; the
+# mutation "revert one site to a bare `exit 2`" is caught by ONE arm grepping for a bare
+# `exit 2` outside this helper with the derivation-fault site excluded by name and a floor on
+# the count; and a seventh no-verdict path added next year is covered by construction.
+# A TEST SEAM, and it is named so it reads as one. The arms in
+# tests/scripts/test-git-data-rung2-evidence-capture.sh must drive the consult through every
+# verdict it can produce — a fatal WITH a cause, a fatal with an EMPTY cause, clean, and each
+# terminal refusal — and none of those are reachable against the live API from a suite that
+# must run offline and hermetically. The override is deliberately NOT a general "point this
+# anywhere" knob in production: nothing sets SOLEUR_SENTRY_READER outside the suite, and the
+# default is the committed reader.
+SENTRY_READER="${SOLEUR_SENTRY_READER:-${REPO_ROOT}/scripts/sentry-issue.sh}"
+
+# Sentry's window, derived from the SAME --window this script already validates, so the two
+# channels cannot disagree about what period a verdict covers. --since (ISO, passed by the
+# workflow from the timestamp it recorded before applying) pins the read to THIS run instead,
+# which is what actually closes #7481 defect 5: host_name embeds the run id, but a run id is
+# STABLE across GitHub re-run ATTEMPTS, so an unpinned read lets attempt 2 of a fixed host
+# report attempt 1's fatal. Without --since the residual is real and is stated, not hidden.
+_sentry_window_args() {
+  if [[ -n "$SENTRY_SINCE" ]]; then
+    printf '%s\n' "--start" "$SENTRY_SINCE" "--end" "$(date -u +%Y-%m-%dT%H:%M:%S)"
+    return 0
+  fi
+  local n unit
+  n="${WINDOW%% *}"; unit="${WINDOW##* }"
+  case "$unit" in
+    MINUTE) printf '%s\n' "--stats-period" "${n}m" ;;
+    HOUR)   printf '%s\n' "--stats-period" "${n}h" ;;
+    DAY)    printf '%s\n' "--stats-period" "${n}d" ;;
+    WEEK)   printf '%s\n' "--stats-period" "${n}w" ;;
+    # Sentry has no month unit; 30 days is the conservative (wider) reading.
+    MONTH)  printf '%s\n' "--stats-period" "$(( n * 30 ))d" ;;
+    *)      printf '%s\n' "--stats-period" "30d" ;;
+  esac
+}
+
+# Prints the consult's verdict lines. Sets _SENTRY_VERDICT to FATAL | CLEAN | UNAVAILABLE.
+_sentry_consult() {
+  _SENTRY_VERDICT="UNAVAILABLE"
+  # STRUCTURAL PREFLIGHTS FIRST, so an absent tool or token is a cheap named refusal rather
+  # than a 401 discovered mid-poll or an rc=127 that reads most naturally as "not an array".
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "  second channel: SKIPPED — jq is not installed, so a Sentry result could not be parsed."
+    echo "  **Next:** install jq on the runner. Re-dispatching will not change this."
+    return 0
+  fi
+  if [[ -z "${SENTRY_ISSUE_RO_TOKEN:-}" ]]; then
+    echo "  second channel: SKIPPED — SENTRY_ISSUE_RO_TOKEN is unset, so the Sentry-only stages"
+    echo "  (everything before \`doppler run\`) could not be read. This is NOT evidence the host"
+    echo "  emitted nothing there."
+    echo "  **Next:** add SENTRY_ISSUE_RO_TOKEN to the config this step runs under. Re-dispatching"
+    echo "  will not change this."
+    return 0
+  fi
+  if [[ ! -r "$SENTRY_READER" ]]; then
+    echo "  second channel: SKIPPED — ${SENTRY_READER} not found."
+    echo "  **Next:** this is a repo defect, not a host condition. Re-dispatching will not change it."
+    return 0
+  fi
+
+  local _w=() _out _rc
+  mapfile -t _w < <(_sentry_window_args)
+  _out="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" "${_w[@]}" 2>&1)"; _rc=$?
+
+  case "$_rc" in
+    0) : ;;
+    77|78)
+      # DETERMINISTIC AND TERMINAL. A 401/403 is repo/credential-side and identical on every
+      # attempt; retrying it spends the whole poll budget to report the least actionable
+      # verdict, against a paid host.
+      echo "  second channel: UNAVAILABLE — Sentry refused the read (rc=${_rc}; 77=401 scope/membership, 78=403 wrong token)."
+      printf '%s\n' "$_out" | head -3 | sed 's/^/    /'
+      echo "  **Next:** fix SENTRY_ISSUE_RO_TOKEN's scope. This is DETERMINISTIC — re-dispatching"
+      echo "  will reproduce it exactly and burn another paid host."
+      return 0 ;;
+    *)
+      echo "  second channel: UNAVAILABLE — the Sentry read failed (rc=${_rc}). The read did NOT run;"
+      echo "  this is NOT a 'the host emitted nothing to Sentry' result."
+      printf '%s\n' "$_out" | head -3 | sed 's/^/    /'
+      echo "  **Next:** read the lines above. If they name a transport fault, one re-dispatch is"
+      echo "  reasonable; if they name a query or scope fault, it is not."
+      return 0 ;;
+  esac
+
+  # SHAPE BEFORE COUNT (the reader validates it too; this is the consumer's own guard, because
+  # `jq -e` on `null | length` returns 0 AND exits 0 — a count is never the first thing trusted).
+  if ! printf '%s' "$_out" | jq -e 'type == "object" and ((.data | type) == "array")' >/dev/null 2>&1; then
+    echo "  second channel: UNAVAILABLE — Sentry returned a body this route cannot parse."
+    echo "  **Next:** treat as instrument failure, not as a host verdict."
+    return 0
+  fi
+
+  local _n
+  _n="$(printf '%s' "$_out" | jq -r '.data | length')"
+  if [[ "$_n" -eq 0 ]]; then
+    _SENTRY_VERDICT="CLEAN"
+    echo "  second channel: Sentry has NO level:fatal event for ${HOST_NAME} in this window."
+    return 0
+  fi
+
+  _SENTRY_VERDICT="FATAL"
+  echo "  second channel: Sentry reports ${_n} level:fatal event(s) for ${HOST_NAME}:"
+  # WHAT THE READER PRINTS, not only who reads. A verdict that names the stage and withholds
+  # the cause is this route's ORIGINATING incident: on 2026-07-31 the artifact carried
+  # `stage:luks_open level:fatal` and no `detail`, and the cause (`mount(2) ... ESRCH` from an
+  # ext4 quota feature) had to be re-queried by hand. An EMPTY detail is reported AS empty —
+  # "FAIL, cause unavailable" is honest; a cause-shaped blank is not.
+  printf '%s' "$_out" | jq -r '.data[] |
+      "    stage=\(.stage // "-") rc=\(.rc // "-") at \(.timestamp // "-")\n      detail: " +
+      (if ((.detail // "") | tostring | length) == 0
+         then "(EMPTY — Sentry carries this fatal but no cause text; the emitter had no detail to send)"
+         else (.detail | tostring) end)' 2>/dev/null | head -20
+  return 0
+}
+
+# transient() — THE ONLY no-verdict exit in this script, and the point at which a
+# Better-Stack-silent condition gets a second opinion before it is called "nothing is known".
+transient() {
+  printf '%s\n' "$@"
+  echo
+  _sentry_consult
+  if [[ "$_SENTRY_VERDICT" == "FATAL" ]]; then
+    echo
+    echo "FAIL (Sentry-derived): ${HOST_NAME} reported a fatal that the Better Stack channel could"
+    echo "not see. This is the failure class #7481 names — the boot died before \`doppler run\`, so"
+    echo "the only channel carrying it is Sentry, and reporting TRANSIENT here would have sent the"
+    echo "operator to re-dispatch a host that failed for a knowable reason."
+    echo
+    echo "NO EVIDENCE FILE WRITTEN."
+    echo "**Next:** fix the cause named above, then re-run the rehearsal against the corrected"
+    echo "template. Do NOT simply re-dispatch — each dispatch spends a paid cpx22."
+    exit 1
+  fi
+  echo
+  echo "TRANSIENT: no verdict. Both channels are silent or unavailable (see above), so this run"
+  echo "declines to read silence as a dark boot."
+  exit 2
+}
+
 # THE PREFLIGHT IS WHAT SEPARATES "I QUERIED AND SAW NOTHING" FROM "I NEVER QUERIED". Without
 # it, a missing credential produces silence that is indistinguishable from a dark boot.
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
   if [[ -z "${!v:-}" ]]; then
-    echo "TRANSIENT: ${v} is unset — cannot query Better Stack Logs, so this run has no verdict to offer (it is NOT evidence that the host booted dark). Re-run wrapped in: doppler run -p soleur -c prd_terraform -- ..."
-    exit 2
+    transient "TRANSIENT: ${v} is unset — cannot query Better Stack Logs, so this run has no verdict to offer (it is NOT evidence that the host booted dark). Re-run wrapped in: doppler run -p soleur -c prd_terraform -- ..."
   fi
 done
-[[ -x "$QUERY" || -r "$QUERY" ]] || { echo "TRANSIENT: ${QUERY} not found"; exit 2; }
+
+[[ -x "$QUERY" || -r "$QUERY" ]] || transient "TRANSIENT: ${QUERY} not found"
 
 # The archive arm is REQUIRED, not belt-and-braces: remote() alone is the ~40-minute hot
 # window (measured 2026-07-15 for the #6982 probe), and a once-per-boot marker falls out of it
@@ -250,9 +415,8 @@ _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
 # ── ARTIFACT 1: the source-liveness anchor ────────────────────────────────────────
 anchor_out="$(_run_query "$ANCHOR_SQL")"; anchor_rc=$?
 if [[ "$anchor_rc" -ne 0 ]]; then
-  echo "TRANSIENT: the Better Stack query transport exited ${anchor_rc} (unreachable or unauthorised). No verdict — this says nothing about the rehearsal host."
-  printf '%s\n' "$anchor_out" | tail -5
-  exit 2
+  transient "TRANSIENT: the Better Stack query transport exited ${anchor_rc} (unreachable or unauthorised). No verdict — this says nothing about the rehearsal host." \
+            "$(printf '%s\n' "$anchor_out" | tail -5)"
 fi
 # DELIBERATELY EXCLUDES THIS HOST'S OWN ROWS (see the SQL). If the anchor could be satisfied
 # by the rehearsal host, then "this host emitted nothing" would make the anchor dead too — and
@@ -269,19 +433,17 @@ fi
 # column aliased `host`, so the field shape is available and strictly tighter — and this is
 # the one predicate the whole live-vs-silent distinction rests on.
 if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
-  echo "TRANSIENT: the source-liveness anchor returned ZERO rows from ANY other host in the last ${WINDOW}."
-  echo "That is a statement about the INSTRUMENT, not about ${HOST_NAME}: a live source with a"
-  echo "silent host and a dead source look identical from this host's rows alone, so this run"
-  echo "declines to read silence as a dark boot. Check the Better Stack source and credentials."
-  exit 2
+  transient "TRANSIENT: the source-liveness anchor returned ZERO rows from ANY other host in the last ${WINDOW}." \
+            "That is a statement about the INSTRUMENT, not about ${HOST_NAME}: a live source with a" \
+            "silent host and a dead source look identical from this host's rows alone, so this run" \
+            "declines to read silence as a dark boot."
 fi
 
 # ── ARTIFACT 2: everything this host reported ─────────────────────────────────────
 host_out="$(_run_query "$HOST_SQL")"; host_rc=$?
 if [[ "$host_rc" -ne 0 ]]; then
-  echo "TRANSIENT: the host-rows query exited ${host_rc} after the anchor succeeded. No verdict."
-  printf '%s\n' "$host_out" | tail -5
-  exit 2
+  transient "TRANSIENT: the host-rows query exited ${host_rc} after the anchor succeeded. No verdict." \
+            "$(printf '%s\n' "$host_out" | tail -5)"
 fi
 
 # ── ARTIFACT 3: the FAIL arms ─────────────────────────────────────────────────────
@@ -304,13 +466,16 @@ if grep -q '"level":"fatal"' <<<"$host_out"; then
 fi
 
 if ! grep -q 'boot_complete' <<<"$host_out"; then
-  echo "TRANSIENT: the source is live (the anchor answered) but ${HOST_NAME} has not reported"
-  echo "stage:boot_complete within ${WINDOW}, and reported no fatal either. Either the boot is"
-  echo "still in progress, or it died before reaching a stage that can emit to Better Stack at"
-  echo "all — everything before \`doppler run\` reaches SENTRY ONLY, because the emitter's"
-  echo "Better Stack block is gated on BETTERSTACK_LOGS_TOKEN being in the environment."
-  echo "Check Sentry for this host_name before concluding anything."
-  exit 2
+  # THE EYEBALL INSTRUCTION IS GONE, NOT MOVED. This branch used to end by telling the reader
+  # to go and inspect Sentry for this host_name before concluding anything — an instruction to
+  # a human to go and look, which
+  # hr-no-dashboard-eyeball-pull-data-yourself forbids and which nobody could act on from a
+  # 7-day artifact anyway. transient() performs that consult itself and prints what it found.
+  transient "TRANSIENT: the source is live (the anchor answered) but ${HOST_NAME} has not reported" \
+            "stage:boot_complete within ${WINDOW}, and reported no fatal either. Either the boot is" \
+            "still in progress, or it died before reaching a stage that can emit to Better Stack at" \
+            "all — everything before \`doppler run\` reaches SENTRY ONLY, because the emitter's" \
+            "Better Stack block is gated on BETTERSTACK_LOGS_TOKEN being in the environment."
 fi
 
 _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
@@ -319,6 +484,40 @@ if grep -qE '"(luks_mounted|repo_root|hooks_path|provision)":"no"' <<<"$_bc_rows
   printf '%s\n' "$_bc_rows" | head -5
   echo
   echo "NO EVIDENCE FILE WRITTEN."
+  exit 1
+fi
+
+# ── THE PASS PATH CONSULTS SENTRY TOO (#7481 §4.5b) ────────────────────────────────
+#
+# THE GAP THIS CLOSES IS THE WORST ONE IN THE ROUTE, and it is not a TRANSIENT-path gap.
+# Every no-verdict branch above funnels through transient(), which consults Sentry. This
+# branch does not reach transient() at all: Better Stack said boot_complete with no fatal and
+# no false assertion, so without a cross-check the route WRITES gate-releasing evidence.
+#
+# A host can satisfy that and still have emitted a fatal. Everything before `doppler run`
+# reaches Sentry ONLY, so a host that died at an early stage, was retried by cloud-init, and
+# later reached boot_complete produces exactly this shape: a clean Better Stack record and a
+# fatal only Sentry holds. The artifact would read RUNG2_BOOT_REHEARSAL=PASS — the file whose
+# presence releases the binding mechanical hold on the birth of the host that will store every
+# connected user's source code.
+#
+# PRECEDENCE IS EXPLICIT: a fatal on EITHER channel beats a clean read on the other. An
+# UNAVAILABLE second channel does NOT block the PASS — it is reported and the Better Stack
+# verdict stands, because refusing to pass on an unreadable second channel would make a Sentry
+# scope problem cost a paid host for no safety gain. That asymmetry is deliberate and is the
+# one place this route prefers the weaker guarantee; it is stated rather than left implicit.
+echo "Cross-checking the second channel before writing evidence (a fatal on either channel beats a clean read on the other):"
+_sentry_consult
+if [[ "$_SENTRY_VERDICT" == "FATAL" ]]; then
+  echo
+  echo "FAIL (Sentry-derived, on an otherwise-PASSing Better Stack read): ${HOST_NAME} reached"
+  echo "stage:boot_complete with no Better Stack fatal, but Sentry holds a level:fatal for this"
+  echo "host in the same window. Everything before \`doppler run\` reaches Sentry only, so this is"
+  echo "a real early-boot failure that the Better Stack channel structurally cannot see."
+  echo
+  echo "NO EVIDENCE FILE WRITTEN — deliberately. Writing PASS here would release the git-data"
+  echo "birth hold on a boot that failed."
+  echo "**Next:** fix the cause named above, then re-run the rehearsal."
   exit 1
 fi
 

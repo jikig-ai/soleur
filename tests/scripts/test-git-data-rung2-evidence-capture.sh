@@ -470,6 +470,21 @@ fi
 # not redden the suite and train the next person to bump it unread. Counts passes+fails, so a
 # genuine failure still reports as a failure rather than as an empty suite.
 #
+# RAISED 34 -> 48 (#7481), ITEMISED — ARMS 13-23, the second channel:
+#     2  13, 13b  placement as a CLASS, plus the floor that keeps it non-vacuous
+#     1  14       the redaction tuple names all ten credentials (merge blocker)
+#     2  15, 15b  no header-dumping curl flags; no token-in-URL and no env dump
+#     1  16       zero eyeball instructions, with a file-count floor
+#     2  17       a Sentry fatal upgrades TRANSIENT to FAIL, and writes no evidence
+#     1  18       ... and prints stage, rc AND the cause
+#     1  19       an EMPTY cause is reported as empty (#7204's DETAIL=[] class)
+#     1  20       silent-both stays TRANSIENT
+#     1  21       401/403 reported as DETERMINISTIC
+#     1  22       the call shape carries --host-events and a window (defect 5)
+#     1  23       an absent token is a named skip, not a clean bill
+#   ----
+#    14   (re-derived from a measured run against the as-written file: 34 + 14 = 48)
+#
 # RAISED 33 -> 34 (#7485): ARM 12, the executing derivation-fault arm.
 #
 # RAISED 30 -> 33 WITH THE ARMS THAT MADE IT NECESSARY (#7227 item 4). ARM 6b constrains
@@ -479,12 +494,230 @@ fi
 # break the only real call site), and a rehearsal-prefixed name carrying a quote must STILL
 # be refused (the SQL-interpolation property must survive the narrowing, not be traded for
 # it). 30 + 3 = 33. Measured: 33 passed, 0 failed.
-_ran=$((passes + fails))
-if [[ "$_ran" -lt 34 ]]; then
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 34. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+# ── ARMS 13–23 — the SECOND CHANNEL (#7481) ────────────────────────────────────────
+#
+# The route's originating incident is a verdict with no cause. These arms cover BOTH halves:
+# who consults Sentry (13, 17–21) and WHAT the consult prints (18, 19) — because fixing only
+# the first reproduces the incident with a better exit code.
+
+WF="${ROOT}/.github/workflows/git-data-rung2-rehearsal.yml"
+RUNBOOK="${ROOT}/knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md"
+READER="${ROOT}/scripts/sentry-issue.sh"
+
+# ARM 13 — PLACEMENT, asserted as a CLASS. The previous design enumerated the no-verdict call
+# sites and got the list wrong twice, so the guard here is not "these six sites call
+# transient()" but "no bare `exit 2` survives outside transient() and the derivation-fault
+# site". A seventh no-verdict path added next year is covered without editing this arm.
+# The derivation fault is excluded BY NAME because it is genuinely deterministic — it is not a
+# channel failure and consulting Sentry about it would be nonsense.
+_bare_exit2_lines() {
+  awk '
+    /^transient\(\) \{/      { in_t = 1 }
+    in_t && /^\}/            { in_t = 0; next }
+    /DERIVATION FAULT/       { df = NR }
+    /^[[:space:]]*exit 2[[:space:]]*$/ {
+      if (!in_t && !(df && NR - df < 6)) print NR ": " $0
+    }
+  ' "$SUT"
+}
+_n_bare=$(_bare_exit2_lines | grep -c . || true)
+if [[ "$_n_bare" -eq 0 ]]; then
+  pass "no bare 'exit 2' outside transient() and the derivation-fault site"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 34)\n' "$_ran"
+  fail "no bare 'exit 2' outside transient() and the derivation-fault site" "$_n_bare" "$(_bare_exit2_lines | head -3)"
+fi
+
+# ARM 13b — THE FLOOR THAT KEEPS ARM 13 NON-VACUOUS. Arm 13 passes trivially against a file
+# that routes nothing through transient() — deleting every call site satisfies "no bare exit 2"
+# perfectly. Six is the measured no-verdict site count.
+_n_transient=$(grep -cE '(^|\|\| )[[:space:]]*transient ' "$SUT" || true)
+if [[ "$_n_transient" -ge 6 ]]; then
+  pass "transient() is reached from >= 6 no-verdict sites (found ${_n_transient})"
+else
+  fail "transient() is reached from >= 6 no-verdict sites" "$_n_transient" "a no-verdict path was un-routed or the anchor drifted"
+fi
+
+# ARM 14 — THE REDACTION TUPLE (merge blocker). The workflow writes BOTH R2 credentials into
+# $GITHUB_ENV, so they are in the capture step's environment, and that step tee's stdout AND
+# stderr verbatim into a 7-day artifact on a PUBLIC repo. `::add-mask::` does not help: it
+# scrubs the log STREAM and tee writes bytes to disk first. Asserted per NAME so a partial
+# widening cannot pass.
+_tuple_missing=""
+for _n in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD \
+          SENTRY_ISSUE_RO_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+          DOPPLER_TOKEN HCLOUD_TOKEN BETTERSTACK_LOGS_TOKEN GIT_DATA_LUKS_KEY; do
+  grep -qF "\"${_n}\"" "$WF" || _tuple_missing="${_tuple_missing} ${_n}"
+done
+if [[ -z "$_tuple_missing" ]]; then
+  pass "the capture-log redaction tuple names all ten credentials in the step's environment"
+else
+  fail "the capture-log redaction tuple names all ten credentials in the step's environment" "" "missing:${_tuple_missing}"
+fi
+
+# ARM 15 — NO HEADER-DUMPING CURL FLAGS. curl's ordinary stderr echoes scheme and host only and
+# is kept for diagnosis, but -v and --trace* dump the Authorization header VERBATIM — and this
+# route pipes stderr into the public artifact. Scoped to the reader, which is the only file
+# that builds an authenticated request.
+if grep -nE 'curl[^|]*(-v[[:space:]]|--verbose|--trace)' "$READER" >/dev/null 2>&1; then
+  fail "the Sentry curl carries no -v/--trace* (they dump Authorization verbatim)" "" "$(grep -nE 'curl[^|]*(-v[[:space:]]|--verbose|--trace)' "$READER" | head -2)"
+else
+  pass "the Sentry curl carries no -v/--trace* (they dump Authorization verbatim)"
+fi
+
+# ARM 15b — NO TOKEN IN A URL, and no whole-environment dump. A token in a query string lands
+# in the artifact, in curl's stderr, and in any proxy log between here and Sentry.
+_leaky=$(grep -nE 'https://[^"]*(TOKEN|token)=' "$READER" "$SUT" 2>/dev/null | grep -c . || true)
+_dumpy=$(grep -nE '^[[:space:]]*(set[[:space:]]+-[a-z]*x([[:space:]]|$)|printenv|env[[:space:]]*\|)' "$READER" "$SUT" 2>/dev/null | grep -c . || true)
+if [[ "$_leaky" -eq 0 && "$_dumpy" -eq 0 ]]; then
+  pass "no token interpolated into a URL, and no set -x / printenv / env| in either script"
+else
+  fail "no token interpolated into a URL, and no set -x / printenv / env| in either script" "" "url=${_leaky} dump=${_dumpy}"
+fi
+
+# ARM 16 — THE EYEBALL CLASS, greped rather than enumerated. Three earlier passes at this
+# hand-listed the sites and found two, then three, then seven; the tell that enumeration was
+# the wrong method. hr-no-dashboard-eyeball-pull-data-yourself is the rule being enforced.
+# CASE-INSENSITIVE AND BACKTICK-TOLERANT, because the first version of this arm was not and
+# reported a FALSE CLEAN. It read `check the DOPPLER_TOKEN secret` literally; the runbook's
+# copy is "Check the \`DOPPLER_TOKEN\` secret" — capitalised, with the identifier in backticks
+# — so the arm passed while a real eyeball instruction survived in one of the three files it
+# was written to sweep. Anchor on the CLAIM (an imperative to go and inspect a named channel),
+# not on one file's spelling of it; cq-assert-anchor-not-bare-token, one level up.
+_EYEBALL_RE='[Cc]onfirm against .{0,2}Sentry|[Cc]heck .{0,4}(Sentry|Better Stack|DOPPLER_TOKEN)'
+_eyeball_hits=0
+_eyeball_files=0
+for _f in "$WF" "$RUNBOOK" "$SUT"; do
+  if [[ -r "$_f" ]]; then
+    _eyeball_files=$((_eyeball_files + 1))
+    _eyeball_hits=$(( _eyeball_hits + $(grep -cE "$_EYEBALL_RE" "$_f" || true) ))
+  fi
+done
+# THE FILE-COUNT FLOOR IS THE ANTI-VACUITY HALF: a renamed or moved file would make the hit
+# count 0 for the best possible reason and the worst possible one, indistinguishably.
+if [[ "$_eyeball_files" -eq 3 && "$_eyeball_hits" -eq 0 ]]; then
+  pass "zero eyeball instructions across the workflow, the runbook and the capture script"
+else
+  fail "zero eyeball instructions across the workflow, the runbook and the capture script" "" \
+       "files_read=${_eyeball_files}/3 hits=${_eyeball_hits}"
+fi
+
+# ── the consult, driven end to end through the real transient() ─────────────────────
+#
+# A STUB, because these verdicts are not reachable against the live API from a suite that must
+# run offline. It records its argv so the CALL SHAPE is assertable too: a stub that answered
+# identically regardless of arguments could not detect the caller dropping the window, which is
+# defect 5. Fixtures model the measured production schema (cq-test-fixtures-synthesized-only);
+# no live token appears in any of them.
+SENTRY_STUB="$TMP/sentry-stub.sh"
+SENTRY_ARGV="$TMP/sentry-argv.txt"
+cat > "$SENTRY_STUB" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SENTRY_ARGV_FILE"
+[[ -n "${STUB_RC:-}" && "${STUB_RC}" != "0" ]] && { echo "stubbed refusal"; exit "$STUB_RC"; }
+printf '%s\n' "${STUB_BODY:-{\"data\":[]\}}"
+exit 0
+STUBEOF
+chmod +x "$SENTRY_STUB"
+
+run_sut_sentry() {  # $1 = STUB_RC, $2 = STUB_BODY, rest appended to the SUT
+  local rc="$1" body="$2"; shift 2
+  SOLEUR_SENTRY_READER="$SENTRY_STUB" SENTRY_ARGV_FILE="$SENTRY_ARGV" \
+  SENTRY_ISSUE_RO_TOKEN='stub-token-not-a-real-credential' \
+  STUB_RC="$rc" STUB_BODY="$body" \
+    run_sut "$@"
+}
+
+# The measured production shape: stage, rc and detail per EVENT.
+_FATAL_WITH_CAUSE='{"data":[{"timestamp":"2026-07-31T17:11:22+00:00","level":"fatal","host_name":"H","stage":"luks_open","rc":"32","detail":"mount: /mnt/git-data-luks: mount(2) system call failed: No such process."}]}'
+_FATAL_NO_CAUSE='{"data":[{"timestamp":"2026-07-31T17:11:22+00:00","level":"fatal","host_name":"H","stage":"luks_open","rc":"32","detail":""}]}'
+_NO_FATAL='{"data":[]}'
+
+# ARM 17 — A SENTRY FATAL UPGRADES A BETTER-STACK-SILENT TRANSIENT TO A NAMED FAIL. This is
+# #7481's whole thesis: the 2026-07-31 rehearsal died at luks_open, which is BEFORE
+# `doppler run`, so Better Stack never saw it and the route reported TRANSIENT — sending the
+# operator to re-dispatch a paid host over a knowable failure.
+: > "$SENTRY_ARGV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_EMPTY"
+out="$(run_sut_sentry 0 "$_FATAL_WITH_CAUSE" --out "$TMP/ev-17.env")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then pass "a Sentry fatal turns a Better-Stack-silent TRANSIENT into FAIL (rc 1)"; else
+  fail "a Sentry fatal turns a Better-Stack-silent TRANSIENT into FAIL (rc 1)" "$rc" "$out"; fi
+if [[ ! -f "$TMP/ev-17.env" ]]; then pass "a Sentry-derived FAIL writes NO evidence file"; else
+  fail "a Sentry-derived FAIL writes NO evidence file" "$rc" "evidence was written on a FAIL"; fi
+
+# ARM 18 — AND IT PRINTS THE CAUSE, not only the verdict. THE ORIGINATING INCIDENT IS EXACTLY
+# THIS: the 2026-07-31 artifact carried `stage:luks_open level:fatal` and no detail, and the
+# real cause had to be re-queried by hand afterwards. A verdict without a cause is the defect.
+if [[ "$out" == *"luks_open"* && "$out" == *"32"* && "$out" == *"mount(2) system call failed"* ]]; then
+  pass "the Sentry-derived FAIL prints stage, rc AND the cause text"
+else
+  fail "the Sentry-derived FAIL prints stage, rc AND the cause text" "$rc" "$out"
+fi
+
+# ARM 19 — AN EMPTY CAUSE IS REPORTED AS EMPTY. #7204's DETAIL=[] regression class: a verdict
+# that silently omits its cause is worse than one that says it has none, because the reader
+# cannot tell "no cause was sent" from "the reader dropped it".
+: > "$SENTRY_ARGV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_EMPTY"
+out="$(run_sut_sentry 0 "$_FATAL_NO_CAUSE" --out "$TMP/ev-19.env")"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"EMPTY"* ]]; then
+  pass "a Sentry fatal with no detail reports the cause as EMPTY rather than blank"
+else
+  fail "a Sentry fatal with no detail reports the cause as EMPTY rather than blank" "$rc" "$out"
+fi
+
+# ARM 20 — SILENT-BOTH IS TRANSIENT, NEVER PASS. Better Stack silent AND Sentry clean must
+# still decline: nothing is known. This holds by construction today (PASS requires
+# boot_complete) but nothing asserted it, and "by construction" is what stops being true.
+: > "$SENTRY_ARGV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_EMPTY"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/ev-20.env")"; rc=$?
+if [[ "$rc" -eq 2 && ! -f "$TMP/ev-20.env" ]]; then
+  pass "both channels silent => TRANSIENT (rc 2) and no evidence file"
+else
+  fail "both channels silent => TRANSIENT (rc 2) and no evidence file" "$rc" "$out"
+fi
+
+# ARM 21 — A TERMINAL REFUSAL SAYS SO. 401/403 are repo/credential-side and identical on every
+# attempt; the workflow retries rc=2 twenty times over ~16 minutes against a paid cpx22, so a
+# message that does not say "do not retry" costs a host to learn nothing.
+: > "$SENTRY_ARGV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_EMPTY"
+out="$(run_sut_sentry 78 "" --out "$TMP/ev-21.env")"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"DETERMINISTIC"* ]]; then
+  pass "a 403 from Sentry is reported as DETERMINISTIC and does not become a host verdict"
+else
+  fail "a 403 from Sentry is reported as DETERMINISTIC and does not become a host verdict" "$rc" "$out"
+fi
+
+# ARM 22 — THE CALL SHAPE. A stub that answers regardless of argv cannot detect the caller
+# dropping the window, and an unwindowed read is defect 5: host_name embeds the run id, which
+# is STABLE across GitHub re-run attempts, so attempt 2 of a fixed host would read attempt 1's
+# fatal. Assert the window reached the reader, and that the host was passed.
+if grep -qE -- '--host-events ' "$SENTRY_ARGV" && grep -qE -- '(--stats-period |--start )' "$SENTRY_ARGV"; then
+  pass "the consult passes --host-events AND a window to the reader"
+else
+  fail "the consult passes --host-events AND a window to the reader" "" "$(cat "$SENTRY_ARGV" 2>/dev/null | head -2)"
+fi
+
+# ARM 23 — AN ABSENT TOKEN IS A NAMED SKIP, NOT A CLEAN BILL. Without this the consult would
+# silently contribute nothing and the route would report plain TRANSIENT, which reads as "we
+# looked and Sentry was quiet" — the strongest form of the silence-is-health defect.
+: > "$SENTRY_ARGV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_EMPTY"
+out="$(SOLEUR_SENTRY_READER="$SENTRY_STUB" SENTRY_ARGV_FILE="$SENTRY_ARGV" \
+        SENTRY_ISSUE_RO_TOKEN='' run_sut --out "$TMP/ev-23.env")"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"SENTRY_ISSUE_RO_TOKEN is unset"* ]]; then
+  pass "an absent SENTRY_ISSUE_RO_TOKEN is reported as a named skip, not read as silence"
+else
+  fail "an absent SENTRY_ISSUE_RO_TOKEN is reported as a named skip, not read as silence" "$rc" "$out"
+fi
+
+_ran=$((passes + fails))
+if [[ "$_ran" -lt 48 ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 48. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+else
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 48)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"

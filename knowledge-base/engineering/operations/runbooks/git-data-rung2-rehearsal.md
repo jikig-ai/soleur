@@ -44,13 +44,33 @@ States 3 and >3 are synthesized by the workflow, because they describe failures 
   merging that PR is what releases the birth interlock.
 - **FAIL (1)** — a fatal, or a false assertion. This is the failure class the whole route
   exists to find: it would have looked green from the `terraform apply`. No evidence written.
-- **TRANSIENT (2)** — no verdict. **Not** evidence the host booted dark. Read the step output
-  to see whether the anchor answered.
+  Since #7481 a FAIL has **two** provenances, and the output says which:
+  - *Better Stack-derived* — the host reported `level:fatal`, or `boot_complete` with a false
+    assertion.
+  - *Sentry-derived* — the host reported a fatal that Better Stack structurally could not see.
+    Everything before `doppler run` reaches Sentry only, because the emitter's Better Stack
+    block is gated on `BETTERSTACK_LOGS_TOKEN`, which exists only under `doppler run`. This is
+    the 2026-07-31 shape: the rehearsal died at `luks_open` and the route reported TRANSIENT.
+    The verdict now names `stage`, `rc` and the `detail` text, so the cause is in the artifact
+    rather than something to re-query by hand. A Sentry-derived FAIL can also arrive on an
+    otherwise-PASSing Better Stack read — a fatal on either channel beats a clean read on the
+    other, and no evidence is written.
+- **TRANSIENT (2)** — no verdict, from **either** channel. **Not** evidence the host booted
+  dark. The step output carries the Better Stack condition and then a `second channel:` line
+  saying what Sentry contributed. Sub-causes, all printed rather than inferred:
+  - `second channel: Sentry has NO level:fatal event` — both channels genuinely quiet.
+  - `second channel: UNAVAILABLE — Sentry refused the read (rc=77|78)` — a 401/403. This is
+    **deterministic**: a re-dispatch reproduces it exactly and burns another paid host. Fix
+    `SENTRY_ISSUE_RO_TOKEN`'s scope instead.
+  - `second channel: SKIPPED` — `jq` or the token is absent. Also not a host verdict.
 - **WRAPPER FAILURE (3)** — `doppler run` exited 1 **twice** without the capture script ever
   producing its `RUNG2_CAPTURE_VERDICT=` sentinel. This says nothing about the host; it never
-  got to speak. Check the `DOPPLER_TOKEN` secret and its access to `soleur`/`prd_terraform`.
-  The poll stops here rather than retrying, because a bad credential is not transient and
-  retrying it spends ~16 minutes on a paid host to report the least actionable verdict.
+  got to speak. **You are not asked to go and look at anything here:** since #7481 the workflow
+  self-probes that credential (`doppler secrets --only-names -p soleur -c prd_terraform`,
+  which never prints a value) and its `::error::` states whether the token can read the config.
+  If it can, the fault is not token scope — read the capture-log artifact. The poll stops here
+  rather than retrying, because a bad credential is not transient and retrying it spends
+  ~16 minutes on a paid host to report the least actionable verdict.
 
 - **UNEXPECTED EXIT (>3)** — the wrapper exited a code that is not a verdict at all: `64`
   is the capture script's own usage error, `126`/`127` mean `doppler` or the script was not
@@ -62,9 +82,23 @@ username are replaced with `<redacted:VAR>` placeholders, because this repo is p
 Actions artifact is downloadable by any authenticated GitHub user. If the redaction step
 itself fails there is no artifact rather than a raw one.
 
-If the poll expires without a terminal answer, check **Sentry** before concluding anything:
-everything before `doppler run` reaches Sentry only, because the emitter's Better Stack block
-is gated on `BETTERSTACK_LOGS_TOKEN`, which exists only inside `doppler run`.
+Since #7481 you are **not** asked to go and consult Sentry yourself. Everything before
+`doppler run` reaches Sentry only — the emitter's Better Stack block is gated on
+`BETTERSTACK_LOGS_TOKEN`, which exists only inside `doppler run` — so a host that dies early
+is invisible to the Better Stack channel. The capture script now performs that read itself on
+every no-verdict path and prints a `second channel:` line saying what it found, including the
+failing `stage`, its `rc`, and the `detail` text. A fatal there is reported as a **FAIL**, not
+as TRANSIENT.
+
+That matters because the reverse is what happened on 2026-07-31: the rehearsal died at
+`luks_open`, Better Stack never saw it, the route reported TRANSIENT, and the cause had to be
+re-queried by hand afterwards from a host that no longer existed. If the capture log's
+`second channel:` line says `UNAVAILABLE` or `SKIPPED`, that is a statement about the
+instrument — read what it names and fix that; it is not evidence about the host.
+
+The redaction step's tuple covers every credential in the capture step's environment, not only
+the Better Stack pair — including both R2 keys, which this workflow writes into `$GITHUB_ENV`
+and which grant Terraform state read.
 
 ## After a PASS
 
