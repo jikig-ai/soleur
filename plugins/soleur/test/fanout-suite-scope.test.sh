@@ -67,6 +67,11 @@ build_sandbox() {
   # copy every arm below would measure that guard firing instead of the refusal under test.
   mkdir -p "$(dirname "$out")/lib" || return 1
   cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" || return 1
+  # The repo-write boundary lib (#7652). test-all.sh sources it FAIL-CLOSED — a boundary that
+  # silently degrades to "not measured" is worse than one that refuses — so a sandbox without it
+  # exits 2 before any arm runs, and every case below would measure that refusal instead of its
+  # own subject. Same reasoning as the relevance-predicate copy above.
+  cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$(dirname "$out")/lib/" || return 1
   # test-contention.sh must be relocated too. Without it test-all.sh finds no lib, installs its
   # no-op stubs (tc_preamble() { :; }), and TC_SIBLING_RUN_COUNT is never exported — so the
   # sibling refusal (#7553) could not fire and every arm asserting it would measure the stub

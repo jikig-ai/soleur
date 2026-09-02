@@ -37,6 +37,13 @@ pre-commit:
       priority: 4
       glob:
         - "apps/web-platform/test/fixtures/**"
+        # tests/scripts/fixtures/** was covered by NEITHER this glob nor the CI
+        # selector until 2026-08-27. The nine supabase-logs fixtures added there model
+        # a PRODUCTION log endpoint on a project under an active GDPR determination, in
+        # a PUBLIC repo, and were clean by hand only -- the tenth, added by anyone, got
+        # nothing. Dual-glob for the same gobwas double-star reason as above.
+        - "tests/scripts/fixtures/**"
+        - "tests/scripts/fixtures/*"
         - "apps/web-platform/test/__synthesized__/**"
         - "apps/web-platform/test/__goldens__/**"
         - "**/__goldens__/**"
