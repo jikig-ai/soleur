@@ -50,6 +50,15 @@ is a token-scope/membership signal, **not** proof the org is unowned (ADR-031 gl
 rewrites `-eu`-suffixed slugs → 302/401 cascade) and NOT `de.sentry.io` (ingest-only;
 404s on `/api/`). See ADR-031 `Cluster / Host Glossary`.
 
+> **Corrected 2026-09-03 (#7481).** The "`de.sentry.io` is ingest-only / 404s on `/api/`"
+> reason stated above is FALSE as written: measured, `de.sentry.io` returns HTTP **200** on
+> `/api/0/organizations/jikigai-eu/events/` and on `/projects/`, and
+> `apps/web-platform/infra/scripts/fresh-host-boot-trail.sh` reads that host in production.
+> The RECOMMENDATION is unaffected and still stands — it rests on the `-eu` slug-rewrite
+> finding, which this correction does not touch. Only the parenthetical justification was
+> wrong. Appended rather than edited in place: this is a dated record.
+
+
 ## Re-minting the read-only token (if lost/rotated)
 
 The Sentry provider exposes **no Terraform token resource**, so the read-only token is

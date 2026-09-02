@@ -223,13 +223,19 @@ jobs:
             PROBLEMS="${PROBLEMS}- could not parse \`UBUNTU_BASE\` from \`$UB_FILE\` (anchored on the assignment); this run cannot tell whether the git-data rehearsal's base image has drifted."$'\n'
           else
             set +e
-            UB_T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull" 2>/dev/null | jq -r '.token // empty')"
+            UB_TOK_RC=0
+            UB_T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull" 2>/dev/null | jq -r '.token // empty')" || UB_TOK_RC=$?
             UB_HDR="$(curl -sS --max-time 20 -o /dev/null -D - -H "Authorization: Bearer ${UB_T}" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04" 2>/dev/null)"
             UB_RC=$?
             set -e
             UB_LIVE="$(printf '%s' "$UB_HDR" | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}')"
             UB_CT="$(printf '%s' "$UB_HDR" | grep -i '^content-type:' | tr -d '\r' | awk '{print $2}')"
-            if [ "$UB_RC" -ne 0 ] || [ -z "$UB_LIVE" ]; then
+            # BOTH rcs, token one FIRST. UB_RC covers only the manifest curl: a failed token
+            # fetch leaves UB_T empty, the manifest request then 401s and still exits 0, so
+            # the message reported rc=0 — the reassuring reading of an unmeasured channel.
+            if [ "$UB_TOK_RC" -ne 0 ] || [ -z "$UB_T" ]; then
+              PROBLEMS="${PROBLEMS}- could not obtain a Docker Hub anonymous pull token (rc=$UB_TOK_RC); the \`ubuntu:24.04\` digest was NOT compared this run."$'\n'
+            elif [ "$UB_RC" -ne 0 ] || [ -z "$UB_LIVE" ]; then
               PROBLEMS="${PROBLEMS}- could not resolve the live \`ubuntu:24.04\` manifest-list digest (rc=$UB_RC); this run cannot rule out base-image drift under the git-data rehearsal."$'\n'
             elif ! printf '%s' "$UB_CT" | grep -qE 'image\.index\.v1\+json|manifest\.list\.v2\+json'; then
               PROBLEMS="${PROBLEMS}- the registry served \`$UB_CT\` for \`ubuntu:24.04\`, which is not an index/manifest-list media type; a platform-specific digest would pin the git-data rehearsal to ONE architecture. Treat the comparison below as unverified."$'\n'

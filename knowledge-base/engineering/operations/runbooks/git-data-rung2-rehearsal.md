@@ -96,9 +96,16 @@ re-queried by hand afterwards from a host that no longer existed. If the capture
 `second channel:` line says `UNAVAILABLE` or `SKIPPED`, that is a statement about the
 instrument — read what it names and fix that; it is not evidence about the host.
 
-The redaction step's tuple covers every credential in the capture step's environment, not only
-the Better Stack pair — including both R2 keys, which this workflow writes into `$GITHUB_ENV`
-and which grant Terraform state read.
+The redaction step's tuple was widened from three names to eleven — including both R2 keys,
+which this workflow writes into `$GITHUB_ENV` and which grant Terraform state read.
+
+**It does NOT cover every credential in that step's environment, and you should not treat the
+artifact as safe on that basis.** The step runs under `doppler run -c prd_terraform`, which
+exports the whole config: measured 2026-09-03, 160 names, roughly 70 of them credential-shaped
+and outside the allowlist. The tuple is a name-allowlist over an environment holding a whole
+Doppler config — a fail-open shape that widening does not change. The fix that changes the
+shape is narrowing the config this step runs under; it is tracked, not done. Treat the
+artifact as sensitive.
 
 ## After a PASS
 

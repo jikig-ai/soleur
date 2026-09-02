@@ -396,8 +396,30 @@ git_data_rung2_user_data_sha256() {
   # reintroduce exactly the class #7534 closes — a binding one side sees and the other does
   # not. The sed BLANKS comment lines rather than deleting them, so line numbers in the
   # abort messages below are the real ones in "$module_tf".
-  local _stripped
+  local _stripped _shape_src _f
   _stripped=$(sed 's/^[[:space:]]*#.*$//' "$module_tf")
+
+  # THE SHAPE ASSERTION QUANTIFIES OVER THE WHOLE MODULE DIRECTORY, not over main.tf.
+  #
+  # Scoping it to main.tf was a measured FAIL-OPEN, and it is the #7534 defect class
+  # reproduced one file over: Terraform loads every `.tf`/`.tf.json` in the module dir, so
+  # `locals { x = file("${path.root}/../../evil.sh") }` in outputs.tf RENDERS INTO user_data
+  # while main.tf stays canonical — the gate produced a digest with no abort, and editing
+  # evil.sh afterwards did not move it. The sibling FILES are hashed (the input set globs
+  # them), but the PAYLOADS they bind were never in the set, which is precisely the
+  # "attests a byte set that is not what ships" failure this gate exists to refuse.
+  #
+  # `_shape_src` is the comment-stripped concatenation of every loaded file; `_stripped`
+  # stays main.tf-only because the PAYLOAD EXTRACTOR must keep resolving `${path.module}`
+  # against the module dir exactly as before. The two are deliberately different scopes: the
+  # extractor answers "which payloads does the canonical binding site name", the shape
+  # assertion answers "can anything ANYWHERE in this module bind outside that form".
+  _shape_src=""
+  for _f in "$module_dir"/*.tf "$module_dir"/*.tf.json; do
+    [[ -e "$_f" || -L "$_f" ]] || continue          # unexpanded glob literal (no nullglob)
+    [[ -r "$_f" ]] || continue
+    _shape_src+="$(sed 's/^[[:space:]]*#.*$//' "$_f")"$'\n'
+  done
 
   _payload_refs() {
     printf '%s\n' "$_stripped" \
@@ -408,10 +430,18 @@ git_data_rung2_user_data_sha256() {
   # Every `file`-family occurrence NOT in the strict single-line `"${path.module}/…"` form.
   # Line-scoped so the abort can name a location; a line carrying both a strict and a
   # non-strict call is reported, which is the safe direction for a fail-closed gate.
+  # THE WHOLE `file`-PREFIXED FAMILY, not an enumerated alternation. `filesha1(`,
+  # `filebase64sha256(`, `filebase64sha512(`, `fileset(` and `fileexists(` all sat OUTSIDE
+  # `(base64|sha256|sha512|md5)?` on BOTH sides of the count comparison, so each was silent
+  # in both operands and the gate could not see it — an enumerated member set rotting exactly
+  # the way this file's own comments say enumerated member sets rot. `templatefile(` is
+  # excluded explicitly because it is checked separately above (and the previous
+  # `(^|[^A-Za-z])` boundary excluded it only incidentally).
   _nonstrict_file_sites() {
-    printf '%s\n' "$_stripped" \
-      | grep -nE '(^|[^A-Za-z])file(base64|sha256|sha512|md5)?\(' \
-      | grep -vE '(^|[^A-Za-z])file(base64|sha256|sha512|md5)?\("\$\{path\.module\}/[^"]+"'
+    printf '%s\n' "$_shape_src" \
+      | grep -nE '(^|[^A-Za-z])file[a-z0-9]*\(' \
+      | grep -vE 'templatefile\(' \
+      | grep -vE '(^|[^A-Za-z])file[a-z0-9]*\("\$\{path\.module\}/[^"]+"'
   }
   #
   # THE SECOND CONDITIONAL CHOKEPOINT, and the one the deleted arithmetic below used to police
@@ -433,7 +463,7 @@ git_data_rung2_user_data_sha256() {
   #     OCCURRENCES; `grep -c` counts LINES, so two calls on one physical line would read as
   #     one and a second template would slip through the check written to catch it.
   local _n_tf
-  _n_tf=$(printf '%s\n' "$_stripped" | grep -oE 'templatefile\(' | wc -l | tr -d '[:space:]')
+  _n_tf=$(printf '%s\n' "$_shape_src" | grep -oE 'templatefile\(' | wc -l | tr -d '[:space:]')
   if [[ "$_n_tf" != "1" ]]; then
     echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf} contains ${_n_tf} \`templatefile(\` occurrence(s); the canonical shape has exactly 1. A second template renders into user_data and is invisible to the payload extractor, so the evidence digest would attest a byte set that is not what ships. Restore the canonical single-template shape, or extend this gate deliberately. Fail-closed."
     return 1
@@ -446,13 +476,17 @@ git_data_rung2_user_data_sha256() {
   #     "${path.module}/../../cloud-init-git-data.yml" literal; measured, that is both wrong
   #     and unusable. Unusable: every synthesized module tree in this gate's own suite binds
   #     "${path.module}/../../ci.yml" (per cq-test-fixtures-synthesized-only), so the filename
-  #     pin ABORTed 25 arms — including the must-PASS rows #7534 adds. Wrong: a MOVED template
+  #     pin ABORTs 31 arms on this branch (measured 2026-09-03 by re-adding it on a sandbox
+  #     copy: 46 passed, 31 failed). An earlier revision said "25 arms — including the
+  #     must-PASS rows #7534 adds"; 25 is the figure on origin/main, so it EXCLUDES those
+  #     rows rather than including them. The conclusion is unchanged and stronger at 31.
+  #     Wrong on the merits too: a MOVED template
   #     that keeps this form still hashes correctly, because the digest binds the file at the
   #     resolved path. Only INDIRECTION (`templatefile(local.t)`, a multi-line call, a
   #     non-`path.module` prefix) breaks the binding, and that is exactly what this form check
   #     catches. A filename pin would assert a different property — identity, not
   #     admissibility — and would buy the digest nothing.
-  if ! printf '%s\n' "$_stripped" | grep -qE 'templatefile\("\$\{path\.module\}/[^"]+"'; then
+  if ! printf '%s\n' "$_shape_src" | grep -qE 'templatefile\("\$\{path\.module\}/[^"]+"'; then
     echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf}'s sole \`templatefile(\` argument is not a single-line \"\${path.module}/…\" literal. An indirected or multi-line template reference is not statically resolvable, so the evidence digest cannot bind the bytes that render into user_data. Fail-closed."
     return 1
   fi
@@ -469,8 +503,11 @@ git_data_rung2_user_data_sha256() {
   #     which is a shape this rule has no business rejecting. The floor below is the one that
   #     is deliberately post-dedup, because it counts distinct payload FILES.
   local _n_occ _n_strict
-  _n_occ=$(printf '%s\n' "$_stripped" | grep -oE '(^|[^A-Za-z])file(base64|sha256|sha512|md5)?\(' | wc -l | tr -d '[:space:]')
-  _n_strict=$(_payload_refs | wc -l | tr -d '[:space:]')
+  _n_occ=$(printf '%s\n' "$_shape_src" | grep -oE '(^|[^A-Za-z])file[a-z0-9]*\(' | grep -vcE 'templatefile\(' || true)
+  # Counted over the SHAPE source, so both operands quantify over the same text. The
+  # extractor (_payload_refs) stays main.tf-scoped for RESOLUTION; this is a count of
+  # strict-form occurrences anywhere in the module.
+  _n_strict=$(printf '%s\n' "$_shape_src" | grep -oE '(^|[^A-Za-z])file[a-z0-9]*\("\$\{path\.module\}/[^"]+"' | grep -vc 'templatefile(' || true)
   if [[ "$_n_occ" != "$_n_strict" ]]; then
     echo "git_data_rung2_user_data_sha256: ABORT — ${module_tf} has ${_n_occ} \`file\`-family occurrence(s) but only ${_n_strict} in the strict single-line \"\${path.module}/…\" form. The remainder render into user_data while the extractor cannot see them, so the evidence digest would not move when they change. Offending site(s), as line:content in ${module_tf}:"
     _nonstrict_file_sites | sed 's/^/  /'

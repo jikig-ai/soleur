@@ -69,7 +69,14 @@ argued at its call site rather than only here):
       a fixture, the suite hard-exits below 69, and `_SKIP_CEILING=7`.
 - [x] 0.2 Record all **four** anti-vacuity floors and their raise-itemisation conventions:
       evidence-capture (34), birth-readiness gate (69), runcmd (`-lt 69`), rung-2 rehearsal (71).
-- [x] 0.3 Migrate the hand-rolled floors to `tests/scripts/lib/gate-suite-harness.sh`
+- [ ] 0.3 Migrate the hand-rolled floors to `tests/scripts/lib/gate-suite-harness.sh`
+      **NOT DONE — unticked 2026-09-03 at review.** This was ticked by a bulk toggle over
+      Phases 0-4, which is the anti-pattern the work skill names explicitly: a checkbox is a
+      CLAIM, and a bulk replace marks every task verified with zero verification performed.
+      All four floors are still hand-rolled with 2-3 duplicated literals each, and the stale
+      `floor is 69` message the review found is exactly the drift this migration prevents.
+      Left open deliberately rather than done here: it is a cross-suite refactor whose own
+      commit should precede a floor raise, not ride along with four of them.
       (`gate_assert_ran <observed> <floor>`) **in its own commit**, before raising them — 3 literals
       per floor becomes 1, across four floors.
       **This is an established convention, verified: 12 `tests/scripts/test-*.sh` suites already

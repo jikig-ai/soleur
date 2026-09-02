@@ -20,7 +20,13 @@
 # script's default because it is the repo's convention, not because de. 404s.
 #
 # HOST-SCOPED DISCOVER READS (#7481). Two additional modes, so the git-data rung-2
-# capture route gains a SECOND channel without a THIRD Sentry reader in this repo:
+# capture route gains a SECOND channel without standing up another reader OF THIS
+# ENDPOINT FAMILY. Scoped deliberately: the repo holds ~23 direct Sentry Web API call
+# sites overall (a runtime TS reader in server/inngest, two inline workflow readers, and
+# several agent-executed skill paths), so a flat "no third Sentry reader in this repo"
+# would be false by about twenty. What this avoids is a second implementation of the
+# issue/event READ that this file already owns, with its own token ladder and its own
+# 401/403 wording to drift.
 #   scripts/sentry-issue.sh --host-events <host_name> [--start ISO --end ISO | --stats-period 90d]
 #   scripts/sentry-issue.sh --liveness <host_name_to_EXCLUDE> [--stats-period 90d]
 #
@@ -29,9 +35,12 @@
 #   - SENTRY_ISSUE_RO_TOKEN ([event:read, org:read]) gets HTTP 403 there. Only the
 #     broader SENTRY_AUTH_TOKEN reads it, and this route prints into a PUBLIC Actions
 #     artifact, so reaching for the wider token is the wrong direction.
-#   - With SENTRY_AUTH_TOKEN it returns 200 and IGNORES the search: 100 rows
-#     unfiltered, 0 rows for `host_name:<H>`. It is a latest-events endpoint, not a
-#     search one.
+#   - With SENTRY_AUTH_TOKEN it returns 200 but does not parse TAG syntax: it applies
+#     `query` as a free-text match over the event title, so `Error` returns 100 rows and
+#     `host_name:<H>` / `environment:production` return 0 even though the tag is on every
+#     row. It is a latest-events endpoint, not a search one. (An earlier draft of this note
+#     said it "IGNORES the search", which the 100-vs-0 split actually refutes — an endpoint
+#     ignoring `query` would return 100 both times.)
 # /api/0/organizations/<org>/events/ with explicit `field=` projections answers both:
 # HTTP 200 on the RO token, and it honours the query. It is also EVENT-level, which is
 # what the plan wanted the project endpoint for — so the issue-group residual (a group
@@ -66,6 +75,14 @@ ORG="${SENTRY_ORG:-jikigai-eu}"
 # inherit a bare magic number.
 PINNED_ORG='jikigai-eu'
 PINNED_PROJECT_ID='4511404943671376'
+# AND THE HOST. Pinning the org and project and leaving `HOST` env-sourced was defect 2
+# followed through on two operands of three — and the third is the worst one: redirecting
+# ORG misdirects a READ, redirecting HOST sends the `Authorization: Bearer` header to an
+# attacker-chosen origin. Measured 2026-09-03: SENTRY_API_HOST IS present in
+# `prd_terraform` (value `jikigai-eu.sentry.io`, benign today), so `${SENTRY_API_HOST:-…}`
+# is not a theoretical injection surface for a caller running under `doppler run -c
+# prd_terraform` — it is a live one that happens to hold the right value.
+PINNED_HOST='jikigai-eu.sentry.io'
 
 
 REDACT=0
@@ -87,7 +104,7 @@ while [[ $# -gt 0 ]]; do
     --start) WIN_START="${2:-}"; shift 2 || shift ;;
     --end) WIN_END="${2:-}"; shift 2 || shift ;;
     --stats-period) STATS_PERIOD="${2:-}"; shift 2 || shift ;;
-    --redact) REDACT=1; shift ;;
+    --redact) REDACT=1; shift ;;   # honoured in every mode; see the discover 200-branch
     --) shift ;;
     -*) echo "unknown flag: $1" >&2; exit 64 ;;
     *) ISSUE_ID="$1"; shift ;;
@@ -104,6 +121,13 @@ if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
   # the verdict the caller computes. A space or a quote would let the caller rewrite the
   # query and silently change what was measured while still producing a verdict. The hosts
   # this reads are `soleur-git-data-rehearsal-<run-id>`, so the charset is narrow on purpose.
+  #
+  # THE CHARSET IS NOT WHAT KEEPS THIS OFF THE PRODUCTION HOST. `soleur-git-data` satisfies
+  # it perfectly. What binds this to rehearsal hosts is the CALLER's prefix assertion in
+  # scripts/followthroughs/git-data-rung2-evidence-capture.sh, which refuses any --host-name
+  # outside `^soleur-git-data-rehearsal-`. This file is a general repo tool and will read
+  # whatever host it is given; a future caller that projects `detail` into a public artifact
+  # must carry its own prefix guard.
   if [[ ! "$EVENT_HOST" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "invalid host name '$EVENT_HOST' (allowed: [A-Za-z0-9._-]); refusing to build a query" >&2
     exit 64
@@ -166,7 +190,11 @@ case "$MODE" in
   latest-event)       PATH_PART="/api/0/organizations/${ORG}/issues/${ISSUE_ID}/events/latest/" ;;
   host-events|liveness) PATH_PART="/api/0/organizations/${PINNED_ORG}/events/" ;;
 esac
-URL="https://${HOST}${PATH_PART}"
+if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
+  URL="https://${PINNED_HOST}${PATH_PART}"
+else
+  URL="https://${HOST}${PATH_PART}"
+fi
 
 # ── the discover modes (#7481) ──────────────────────────────────────────────────
 if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
@@ -234,13 +262,23 @@ if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
         printf '%s\n' "$BODY" | head -c 400 >&2; echo >&2
         exit 1
       fi
-      printf '%s\n' "$BODY"
+      # --redact IS HONOURED HERE. It was parsed and then consumed only in the issue/
+      # latest-event branch, so `--host-events --redact` produced UNREDACTED output with no
+      # warning — on the only modes whose stdout is written into a public Actions artifact.
+      # A flag that silently does nothing is worse than one that refuses.
+      if (( REDACT )); then
+        printf '%s\n' "$BODY" | sed -E \
+          -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[redacted-email]/g' \
+          -e 's/(Bearer|Authorization|token)[" :=]+[A-Za-z0-9._-]{8,}/\1 [redacted]/gI'
+      else
+        printf '%s\n' "$BODY"
+      fi
       exit 0 ;;
     401)
       echo "ERROR: 401 from Sentry (discover). A 401 is a token-SCOPE / membership signal, not proof the org is unowned (ADR-031 glossary). DETERMINISTIC: identical on every attempt — do NOT retry. Verify SENTRY_ISSUE_RO_TOKEN's org-membership scope for '${PINNED_ORG}'." >&2
       exit 77 ;;
     403)
-      echo "ERROR: 403 from Sentry (discover) — the token lacks the scope for /organizations/${PINNED_ORG}/events/. SENTRY_API_TOKEN/SENTRY_AUTH_TOKEN carry Discover/ingest scope; this route needs SENTRY_ISSUE_RO_TOKEN ([event:read, org:read]). DETERMINISTIC: identical on every attempt — do NOT retry." >&2
+      echo "ERROR: 403 from Sentry (discover) — the token lacks the scope for /organizations/${PINNED_ORG}/events/. Use SENTRY_ISSUE_RO_TOKEN ([event:read, org:read]). NOTE: SENTRY_AUTH_TOKEN also reads this endpoint (measured 200, 2026-09-03) — RO is required here for artifact-hygiene reasons, not capability ones, so a 403 means the token lacks org membership or the scope, not that you picked the wrong one of two working tokens. DETERMINISTIC: identical on every attempt — do NOT retry." >&2
       exit 78 ;;
     *)
       echo "ERROR: Sentry GET ${PATH_PART} returned HTTP ${CODE}." >&2

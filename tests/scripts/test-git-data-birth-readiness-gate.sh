@@ -43,7 +43,16 @@ trap 'rm -rf "$TMP"' EXIT
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
+# THE VERDICT READS AN APPEND-ONLY LEDGER, NOT A COUNTER (#7481 review, V1/V2).
+# Measured: swapping one token in fail() — `fails=$((fails+1))` -> `passes=$((passes+1))` —
+# left this suite reporting all-green with real defects injected, and the assertion floor
+# CANNOT see it because the floor sums both buckets. The runcmd suite already carried this
+# hardening; it was never propagated here, which is the single-instance-not-the-class miss.
+# The ledger length is asserted against the counter too: deleting just the append leaves an
+# accurate FAIL line printed and rc=0 (measured on the sibling suite).
+FAILURES=()
 fail() {
+  FAILURES+=("$1")
   fails=$((fails + 1))
   printf '  FAIL %s\n' "$1"; printf '       rc=%s\n' "${2:-?}"; printf '       out=%s\n' "${3:-}"
 }
@@ -929,6 +938,21 @@ _a_inject_binding "$_a15/modules/git-data-userdata/main.tf" \
 _a_abort "A15: a non-\${path.module} single-line literal aborts, naming the site" \
          "in the strict single-line" "$_a15/ci.yml"
 
+# A12b/A13b/A15b — THE "NAMING THE SITE" HALF, which was unpinned. All three arms above are
+# named "…aborts, naming the site", but their needle is the count-mismatch HEADER; replacing
+# the `_nonstrict_file_sites | sed` listing with `true` left the suite 77/0 green. That
+# reduces the gate to exactly what the lib's own comment says the deleted arithmetic could
+# only do — "report that two integers disagreed, never WHICH binding".
+for _sp in "a12:$_a12:a12_multi" "a13:$_a13:a13_indirect" "a15:$_a15:path.root"; do
+  _nm="${_sp%%:*}"; _rest="${_sp#*:}"; _tree="${_rest%%:*}"; _needle="${_rest##*:}"
+  _out="$(git_data_rung2_user_data_sha256 "$_tree/ci.yml" 2>&1)"
+  if [[ "$_out" == *"$_needle"* ]]; then
+    pass "${_nm^^}b: the abort LISTS the offending binding (${_needle}), not just the counts"
+  else
+    fail "${_nm^^}b: the abort LISTS the offending binding (${_needle}), not just the counts" "" "$_out"
+  fi
+done
+
 # A16 — MUST-PASS, and the digest must MOVE. A NEW tenth payload FILE, not a second binding to
 # an existing one: the payload floor counts distinct files post-`sort -u`, so a duplicate
 # binding would test the dedup rather than the growth. Two rungs, because "still produces a
@@ -978,18 +1002,29 @@ _a_hash "A17: a value-form map entry does not trip the canonical-shape gate" "$_
 #     1  A17   a value-form map entry does NOT trip the gate (Phase 5's shape, proved here)
 #   ----
 #     8
+#
+# RAISED 77 -> 80 (#7481 review, V9), ITEMISED — A12b/A13b/A15b pin the site-LISTING half
+# of A12/A13/A15, which was asserted by their names and by nothing else.
+#     3
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 77 ]]; then
+if [[ "$_ran" -lt 80 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 69. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 80. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 77)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 80)\n' "$_ran"
 fi
 
+# LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is
+# visible to the pass/fail totals or to the floor.
+if [[ "${#FAILURES[@]}" -ne "$fails" ]]; then
+  printf '  FAIL LEDGER: %s failures counted but %s recorded — fail() was tampered with.\n' \
+    "$fails" "${#FAILURES[@]}"
+  exit 1
+fi
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
 # THE VERDICT IS AN `exit`, NOT A TRAILING TEST EXPRESSION. A bare `[[ "$fails" -eq 0 ]]` as the
 # final statement makes the exit status a property of which line happens to be LAST: measured,
 # appending any single command after it (a printf, a stray echo) permanently greens the suite
 # while it goes on printing accurate failure text, and run_suite() classifies on the exit code
 # alone. Deleting the line has the same effect. An explicit exit cannot be defeated by an append.
-exit $(( fails > 0 ))
+exit $(( ${#FAILURES[@]} > 0 ))

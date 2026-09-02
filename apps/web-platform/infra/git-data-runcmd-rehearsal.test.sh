@@ -69,9 +69,15 @@ if printf '%s' "$UBUNTU_BASE" | grep -qE '^ubuntu:24\.04@sha256:[0-9a-f]{64}$'; 
   fail "R1-PIN: UBUNTU_BASE is not a tag@sha256:<64-hex> pin" "$UBUNTU_BASE"; fi
 # THE FLOOR IS WHAT KEEPS THIS NON-VACUOUS: a grep that found zero spins would otherwise report
 # a clean bill. 6 is the site count the derivation comment below publishes with its own command.
+# AN EXACT COUNT, NOT A FLOOR. `-ge 6` detects CONVERSION of an existing site and is
+# structurally blind to ADDITION: a seventh spin carrying a hardcoded platform-specific
+# digest keeps spins at 6 and bare at 0 (the `@sha256:` exclusion swallows it), so every
+# rung stays green while the harness runs an architecture-pinned image nothing tracks.
+# Measured. A floor cannot express "these six and no others"; an equality can, and a
+# legitimate seventh spin is then a one-line diff that says so.
 _r1p_spins=$(grep -cE '^[[:space:]]*"\$UBUNTU_BASE"[[:space:]]' "$_SELF")
-if [ "$_r1p_spins" -ge 6 ]; then pass; else
-  fail "R1-PIN: only ${_r1p_spins} pinned spin site(s) found, expected >= 6 — a site reverted to the floating tag, or the anchor drifted"; fi
+if [ "$_r1p_spins" -eq 6 ]; then pass; else
+  fail "R1-PIN: ${_r1p_spins} pinned spin site(s), expected exactly 6 — a site was added, removed, or reverted to the floating tag. If a seventh spin is legitimate, raise this literal in the same commit."; fi
 # And no runnable reference to the floating tag survives. Comment LINES are stripped first so
 # prose that legitimately names the tag does not false-FAIL. Two bounds, stated rather than
 # discovered later:
@@ -971,12 +977,19 @@ _d1_holds() { [ "$1" -ne 2 ]; }
 # it was reachable ONLY when _d_rc == 2, precisely D1's failing direction. A real emitter
 # regression therefore aborted with "CAPTURE: unbound variable" instead of D1's own message.
 #
-# THE DISJUNCT IS DELETED, NOT GUARDED — the plan's option (b), chosen over its preferred (a)
-# on a measurement the plan did not have. The emitter has exactly TWO exit-2 paths over its
-# whole body: `command -v curl >/dev/null 2>&1 || exit 2`, and dash's special-builtin `shift`
-# death. Both emit nothing BY CONSTRUCTION, so a disjunct on "exited 2 but emitted anyway" is
-# UNSATISFIABLE here, not merely unobservable — option (a) would preserve semantics that
-# cannot hold. Worse, the only file this arm could point such a disjunct at is its own
+# THE DISJUNCT IS DELETED, NOT GUARDED — the plan's option (b) over its preferred (a).
+#
+# CORRECTED AT REVIEW (2026-09-03). An earlier version of this comment said the emitter has
+# "exactly TWO exit-2 paths" and that a disjunct on "exited 2 but emitted anyway" is therefore
+# UNSATISFIABLE. There are THREE — the emitter's own header names the third: `EXIT: 0
+# delivered / 1 transient / 2 STRUCTURAL (no curl / no DSN)`, and `[ -n "$${DSN}" ] || RC=2`
+# reaches the terminal `exit $${RC}`. It also EMITS: the Better Stack block is gated on
+# BETTERSTACK_LOGS_TOKEN, not on DSN, so an empty DSN can POST successfully and still exit 2.
+# So the disjunct is SATISFIABLE in the emitter, and the honest statement is the weaker one
+# the first draft rejected: it is unreachable IN THIS SUITE, because every spin here bakes a
+# non-empty DSN.
+#
+# The choice is unchanged and the reasoning that carries it is the second half, not the first: Worse, the only file this arm could point such a disjunct at is its own
 # stdout/stderr: it runs the emitter on the HOST, where no capture server exists. On the real
 # defect dash writes "shift: can't shift that many" to exactly that stream (measured), so the
 # disjunct would be TRUE on the regression D1 exists to catch, making the arm vacuous. A
@@ -984,6 +997,20 @@ _d1_holds() { [ "$1" -ne 2 ]; }
 # it is removed rather than left reading as a live boundary.
 if _d1_holds "$_d_rc"; then pass; else
   fail "D1: a 3-arg call died at the shift (dash rc=2) instead of emitting"; fi
+# THE LIVE SITE IS BOUND TO THE HELPER, and that binding is what D1-MUT actually rests on.
+# D1-MUT drives `_d1_holds` directly, so re-inlining the old predicate at the live call site
+# — `if [ "$_d_rc" -ne 2 ] || [ -s "${CAPTURE:-/dev/null}" ]` — leaves all three D1-MUT rungs
+# green while #7570's defect class returns in softened form. Asserted on this file's own
+# text because the property IS textual: which predicate the live arm evaluates.
+# Two conjuncts, both structural: the live arm DELEGATES, and the helper it delegates to
+# reads no CAPTURE. A count of CAPTURE mentions would be the "a count is not the property"
+# shape this PR spent its review budget removing.
+_d1_defline=$(grep -n '^_d1_holds()' "$_SELF" | head -1 | cut -d: -f1)
+if grep -qE '^if _d1_holds "\$_d_rc"; then pass; else$' "$_SELF" \
+   && [ -n "$_d1_defline" ] \
+   && ! sed -n "${_d1_defline}p" "$_SELF" | grep -q 'CAPTURE'; then pass; else
+  fail "D1: the live arm no longer delegates to _d1_holds, or _d1_holds reads CAPTURE again" \
+       "def line ${_d1_defline:-none}: $(sed -n "${_d1_defline:-1}p" "$_SELF")"; fi
 
 # ── D1-MUT — D1 must attribute the REAL defect to ITSELF, not abort unattributed ───
 # Mutation-proves #7570's fix rather than the fix's own restatement. Reverting the emitter's
@@ -1823,7 +1850,7 @@ PY
     cat > "$TMP/r1-drive.sh" <<'R1DRV'
 set -e
 # NO apt HERE, DELIBERATELY (#7535). ubuntu:24.04 already ships e2fsprogs at
-# Priority: required — `docker run --rm "$UBUNTU_BASE" dpkg -s e2fsprogs` reports
+# Priority: required — `docker run --rm ubuntu:24.04 dpkg -s e2fsprogs` reports
 # 1.47.0-2.4~exp1ubuntu4.1 — so the `apt-get update && apt-get install e2fsprogs`
 # this replaced installed a package that was already present, at the cost of a full
 # apt cycle against an external mirror. Do not restore it.
@@ -3171,8 +3198,19 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 #     1  R1-PIN: zero unpinned `ubuntu:24.04` on non-comment lines
 #   ----
 #     3
-if [ "$total" -lt 75 ]; then
-  echo "FAIL: ran only ${total} assertions (floor 75) — harness did not execute fully" >&2
+# RAISED 75 -> 76 (#7481 review), ITEMISED — one assertion binding the LIVE D1 arm to
+# _d1_holds. D1-MUT proved the HELPER rejects the mutant and nothing proved the arm calls it.
+#     1
+if [ "$total" -lt 76 ]; then
+  echo "FAIL: ran only ${total} assertions (floor 76) — harness did not execute fully" >&2
+  exit 1
+fi
+# LEDGER RECONCILIATION (#7481 review, V2). FAILURES is append-only and the verdict reads it,
+# but nothing asserted its LENGTH matches the counter — so deleting just the append left an
+# accurate `FAIL:` line printed and rc=0 (measured: 74 passed, 1 failed, EXIT=0). The ledger
+# hardening was defeated by a fragment deletion inside the hardening itself.
+if [ "${#FAILURES[@]}" -ne "$fails" ]; then
+  echo "FAIL LEDGER: ${fails} failure(s) counted but ${#FAILURES[@]} recorded — fail() was tampered with." >&2
   exit 1
 fi
 echo "git-data-runcmd-rehearsal: ${passes} passed, ${fails} failed, Skipped: ${SKIPPED_ASSERTIONS} (${total} assertions)"

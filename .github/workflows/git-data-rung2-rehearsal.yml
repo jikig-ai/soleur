@@ -351,8 +351,8 @@ jobs:
                 # agent triaging from the CLI sees annotations only -- a remediation that
                 # exists solely in the summary reaches the human and not the automation.
                 # SELF-PROBE, NOT AN INSTRUCTION TO GO AND LOOK. This branch is the state where the
-                # harness produced NO verdict at all, and it used to hand the reader "check the
-                # DOPPLER_TOKEN secret and its access to project soleur, config prd_terraform" — a
+                # harness produced NO verdict at all, and it used to hand the reader a bare
+                # token-scope instruction naming project soleur and config prd_terraform — a
                 # request to eyeball a dashboard, which hr-no-dashboard-eyeball-pull-data-yourself
                 # forbids, on the one path where the operator has been handed nothing to act on. The
                 # workflow already holds that credential and already proved it at the R2-extract step,
@@ -407,7 +407,7 @@ jobs:
             echo "### Rung-2 rehearsal: WRAPPER FAILURE (doppler auth/config)" >> "$GITHUB_STEP_SUMMARY"
             echo "\`doppler run\` exited 1 twice without the capture script ever producing a verdict, so the poll stopped early rather than burning ~16 minutes on a paid host. **This says nothing about the rehearsal host** — it never got to speak." >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "**Next:** check the \`DOPPLER_TOKEN\` secret and its access to \`soleur\`/\`prd_terraform\` — not the host. Then re-dispatch. See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** read the \`::error::\` annotation on the capture step — this run SELF-PROBED that credential, so the annotation already answers the question this line used to ask you to go and answer. Re-dispatch only if it reports the token can read the config. See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           elif [[ "$rc" -gt 3 ]]; then
             # THE CAPTURE SCRIPT CAN EXIT 64 (its own usage/argument error), and doppler can
             # exit 126/127. Those are neither transient nor a host verdict, but they used to
@@ -482,8 +482,18 @@ jobs:
           # THIS IS A NAME ALLOWLIST OVER AN ENVIRONMENT POPULATED WITH A WHOLE DOPPLER CONFIG,
           # which is a fail-open shape, and widening the list does not change that. The
           # structural fix is to stop writing the R2 credentials to $GITHUB_ENV at all and pass
-          # them per-step via `env:` on the terraform steps only, which removes them from this
-          # step's environment instead of scrubbing them afterwards. A blind value-denylist is
+          # them per-step via `env:` on the terraform steps only.
+          #
+          # THAT FIX IS NECESSARY AND NOT SUFFICIENT. Measured 2026-09-03, prd_terraform holds
+          # 160 names, ~70 credential-shaped and outside this allowlist. The env: change removes
+          # TWO; the other ~70 arrive via `doppler run` on the capture step itself. The fix that
+          # changes the SHAPE is narrowing the config that step runs under — a scoped read-only
+          # config, the way prd_git_data_rehearsal_<run_id> already narrows the host's. Recorded
+          # so the deferred issue is scoped to the fix that works, not the one removing 2 names.
+          #
+          # The objection to a value-denylist is also weaker than it reads: every tupled value
+          # measures >= 24 chars, while the non-secrets the objection names (jikigai-eu 10,
+          # soleur 6) sit far below any workable floor. A blind value-denylist is
           # NOT the fix: prd_terraform also holds non-secret values (org slugs, region names,
           # booleans), so inverting naively would carpet-redact the diagnostic -- including the
           # `jikigai-eu` literal this route's own assertions read. Deferred deliberately, with
@@ -492,8 +502,21 @@ jobs:
           #
           # The >= 4 floor stays as-is here; raising it to >= 12 belongs with the inversion
           # above, since it is the same decision about what this list is for.
+          # SENTRY_ISSUE_RW_TOKEN IS IN THIS LIST BECAUSE THE READER SELECTS IT.
+          # scripts/sentry-issue.sh prefers SENTRY_ISSUE_RO_TOKEN and FALLS BACK to
+          # SENTRY_ISSUE_RW_TOKEN with a warning, so tupling the RO token and not the RW
+          # one left unredacted exactly the credential the new code path may carry
+          # (measured 2026-09-03: len 64, present in prd_terraform).
+          #
+          # GIT_DATA_LUKS_KEY IS DEFENCE-IN-DEPTH, NOT A LIVE CONTROL. Measured 2026-09-03
+          # it is length 0 in prd_terraform: the production copy lives in prd_git_data and
+          # the rehearsal copy in the per-run prd_git_data_rehearsal_<run_id> config, and
+          # this step runs under neither. os.environ.get returns "" and the >= 4 floor
+          # skips it every run. Eleven names, ten controls — said plainly so the next
+          # reader does not count this entry as cover for the passphrase.
           for var in ("BETTERSTACK_QUERY_HOST", "BETTERSTACK_QUERY_USERNAME", "BETTERSTACK_QUERY_PASSWORD",
-                      "SENTRY_ISSUE_RO_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+                      "SENTRY_ISSUE_RO_TOKEN", "SENTRY_ISSUE_RW_TOKEN",
+                      "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
                       "DOPPLER_TOKEN", "HCLOUD_TOKEN", "BETTERSTACK_LOGS_TOKEN", "GIT_DATA_LUKS_KEY"):
               val = os.environ.get(var, "")
               if len(val) >= 4:                      # a 1-3 char value would carpet the file

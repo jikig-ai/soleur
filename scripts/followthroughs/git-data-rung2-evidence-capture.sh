@@ -108,10 +108,10 @@ while [[ $# -gt 0 ]]; do
     --host-name)    HOST_NAME="${2:-}"; shift 2 || shift ;;
     --evidence-url) EVIDENCE_URL="${2:-}"; shift 2 || shift ;;
     --since)        SENTRY_SINCE="${2:-}"; shift 2 || shift ;;
-    --cloud-init)   CLOUD_INIT="${2:-}"; shift 2 ;;
-    --out)          OUT="${2:-}"; shift 2 ;;
+    --cloud-init)   CLOUD_INIT="${2:-}"; shift 2 || shift ;;
+    --out)          OUT="${2:-}"; shift 2 || shift ;;
     --window)       WINDOW="${2:-}"; shift 2 || shift ;;
-    --divergence)   DIVERGENCE="${2:?--divergence needs a value}"; shift 2 ;;
+    --divergence)   DIVERGENCE="${2:?--divergence needs a value}"; shift 2 || shift ;;
     --verify-only)  VERIFY_ONLY=1; shift ;;
     --) shift ;;
     *) echo "unknown argument: $1" >&2; exit 64 ;;
@@ -196,7 +196,15 @@ fi
 # must run offline and hermetically. The override is deliberately NOT a general "point this
 # anywhere" knob in production: nothing sets SOLEUR_SENTRY_READER outside the suite, and the
 # default is the committed reader.
-SENTRY_READER="${SOLEUR_SENTRY_READER:-${REPO_ROOT}/scripts/sentry-issue.sh}"
+# GATED ON A TEST MARKER, not on the override alone. This script runs under
+# `doppler run -c prd_terraform`, which exports EVERY name in that config (160 of them), so
+# a bare `${SOLEUR_SENTRY_READER:-…}` is an arbitrary-command sink one config entry away —
+# the same env-injection class this PR pinned PINNED_ORG/PINNED_PROJECT_ID against, which
+# would have been reintroduced by the seam added to test the fix.
+SENTRY_READER="${REPO_ROOT}/scripts/sentry-issue.sh"
+if [[ -n "${SOLEUR_TEST_MODE:-}" && -n "${SOLEUR_SENTRY_READER:-}" ]]; then
+  SENTRY_READER="$SOLEUR_SENTRY_READER"
+fi
 
 # Sentry's window, derived from the SAME --window this script already validates, so the two
 # channels cannot disagree about what period a verdict covers. --since (ISO, passed by the
@@ -263,7 +271,14 @@ _sentry_consult() {
     echo "  this run, because no --since was supplied. A re-run ATTEMPT of the same run id can"
     echo "  therefore surface an earlier attempt's fatal; weigh the timestamps below."
   fi
-  _out="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" "${_w[@]}" 2>&1)"; _rc=$?
+  # STDERR TO ITS OWN STREAM. Merging it into the parsed body meant any stderr byte on an
+  # HTTP-200 read failed the shape guard below and degraded a genuine FATAL to UNAVAILABLE —
+  # which, on the PASS path where UNAVAILABLE deliberately does not block, is a FAIL-OPEN on
+  # the branch that writes gate-releasing evidence. This is the same "status into a separate
+  # stream" discipline the reader itself applies, violated in its consumer.
+  local _errf; _errf="$(mktemp -t rung2-sentry.XXXXXXXX.err)"
+  _out="$(bash "$SENTRY_READER" --host-events "$HOST_NAME" "${_w[@]}" 2>"$_errf")"; _rc=$?
+  local _err; _err="$(cat "$_errf" 2>/dev/null || echo '')"; rm -f "$_errf"
 
   case "$_rc" in
     0) : ;;
@@ -272,14 +287,14 @@ _sentry_consult() {
       # attempt; retrying it spends the whole poll budget to report the least actionable
       # verdict, against a paid host.
       echo "  second channel: UNAVAILABLE — Sentry refused the read (rc=${_rc}; 77=401 scope/membership, 78=403 wrong token)."
-      printf '%s\n' "$_out" | head -3 | sed 's/^/    /'
+      printf '%s\n' "$_err" | head -3 | sed 's/^/    /'
       echo "  **Next:** fix SENTRY_ISSUE_RO_TOKEN's scope. This is DETERMINISTIC — re-dispatching"
       echo "  will reproduce it exactly and burn another paid host."
       return 0 ;;
     *)
       echo "  second channel: UNAVAILABLE — the Sentry read failed (rc=${_rc}). The read did NOT run;"
       echo "  this is NOT a 'the host emitted nothing to Sentry' result."
-      printf '%s\n' "$_out" | head -3 | sed 's/^/    /'
+      printf '%s\n' "$_err" | head -3 | sed 's/^/    /'
       echo "  **Next:** read the lines above. If they name a transport fault, one re-dispatch is"
       echo "  reasonable; if they name a query or scope fault, it is not."
       return 0 ;;
@@ -296,8 +311,35 @@ _sentry_consult() {
   local _n
   _n="$(printf '%s' "$_out" | jq -r '.data | length')"
   if [[ "$_n" -eq 0 ]]; then
+    # ZERO ROWS IS TWO STATES, and only one of them is good news. "Sentry holds no fatal for
+    # this host" and "this read reached nothing at all" are byte-identical here — a stale
+    # PINNED_PROJECT_ID, a recreated project, a dark ingest, or an org the token lost
+    # membership in ALL return HTTP 200 with an empty .data. On the PASS path that reads as
+    # "cross-check passed" and releases the birth hold, so the zero is corroborated rather
+    # than trusted. This is what --liveness is for; without this call it was dead code.
+    #
+    # The anchor EXCLUDES this host by design: its own unconditional level:info bootcmd
+    # beacon would otherwise satisfy it, making it vacuous exactly when it matters.
+    local _lw=() _lout _lrc _lerrf _lcount
+    mapfile -t _lw < <(_sentry_window_args)
+    _lerrf="$(mktemp -t rung2-live.XXXXXXXX.err)"
+    _lout="$(bash "$SENTRY_READER" --liveness "$HOST_NAME" "${_lw[@]}" 2>"$_lerrf")"; _lrc=$?
+    rm -f "$_lerrf"
+    _lcount=""
+    if [[ "$_lrc" -eq 0 ]]; then
+      _lcount="$(printf '%s' "$_lout" | jq -r '.data[0]["count()"] // empty' 2>/dev/null || echo '')"
+    fi
+    if [[ -z "$_lcount" || ! "$_lcount" =~ ^[0-9]+$ || "$_lcount" -eq 0 ]]; then
+      echo "  second channel: UNAVAILABLE — the fatal read returned zero rows AND the liveness"
+      echo "  anchor could not confirm the source is answering (rc=${_lrc}, count=${_lcount:-none})."
+      echo "  A zero-row read from a dark or misaddressed source is not a clean bill."
+      echo "  **Next:** verify SENTRY_ISSUE_RO_TOKEN's org membership and that the pinned project"
+      echo "  id still resolves. Re-dispatching will not change either."
+      return 0
+    fi
     _SENTRY_VERDICT="CLEAN"
-    echo "  second channel: Sentry has NO level:fatal event for ${HOST_NAME} in this window."
+    echo "  second channel: Sentry has NO level:fatal event for ${HOST_NAME} in this window,"
+    echo "  and the source is answering (${_lcount} event(s) from other hosts)."
     return 0
   fi
 
@@ -310,8 +352,8 @@ _sentry_consult() {
   # "FAIL, cause unavailable" is honest; a cause-shaped blank is not.
   printf '%s' "$_out" | jq -r '.data[] |
       "    stage=\(.stage // "-") rc=\(.rc // "-") at \(.timestamp // "-")\n      detail: " +
-      (if ((.detail // "") | tostring | length) == 0
-         then "(EMPTY — Sentry carries this fatal but no cause text; the emitter had no detail to send)"
+      (if ((.detail // "") | tostring | ltrimstr("[") | rtrimstr("]") | gsub("\\s";"") | length) == 0
+         then "(EMPTY — Sentry carries this fatal but no cause text. An empty JSON array counts as empty here too: that is the DETAIL=[] shape #7204 records.)"
          else (.detail | tostring) end)' 2>/dev/null | head -20
   return 0
 }
@@ -619,6 +661,24 @@ fi
   printf '# arms, both read from this one result set.\n'
   printf '# QUERY:%s\n' "$(printf '%s' "$HOST_SQL" | tr '\n' ' ' | tr -s ' ')"
   printf '#\n'
+  # THE SECOND CHANNEL'S VERDICT IS PART OF THE EVIDENCE, not just of the log.
+  #
+  # Without this line a PASS cross-checked CLEAN and a PASS whose cross-check was SKIPPED or
+  # UNAVAILABLE are BYTE-IDENTICAL in the file that releases the birth hold — which is the
+  # defect class this whole route exists to remove, one level up. It is worse than it sounds:
+  # the capture-log artifact is uploaded only when `capture_rc != '0'`, so on a PASS the
+  # `second channel:` line is discarded exactly where it is the sole record that the
+  # cross-check ran at all. The human at the second gate merges THIS file, so the verdict
+  # has to survive into it.
+  #
+  # Recorded, not enforced: an UNAVAILABLE second channel still passes (see the precedence
+  # note above). This puts the degrade in front of the reviewer who is the actual control.
+  printf '# ARTIFACT 4 — the Sentry cross-check, run before this file was written.\n'
+  printf '# CLEAN = a fatal read returned zero rows AND the liveness anchor confirmed the\n'
+  printf '# source is answering. UNAVAILABLE = the read did not happen or could not be\n'
+  printf '# trusted; the PASS below rests on Better Stack alone.\n'
+  printf '# QUERY: sentry-issue.sh --host-events %s %s\n' "$HOST_NAME" "$(_sentry_window_args | tr '\n' ' ')"
+  printf 'RUNG2_SENTRY_CROSSCHECK=%s\n' "${_SENTRY_VERDICT:-NOT_RUN}"
   printf 'RUNG2_BOOT_REHEARSAL=PASS\n'
   printf 'RUNG2_EVIDENCE_URL=%s\n' "$EVIDENCE_URL"
   printf 'RUNG2_TEMPLATE_SHA256=%s\n' "$TEMPLATE_SHA"
@@ -630,7 +690,7 @@ fi
 # literals, so the `"…":"no"` arm can never fire against real telemetry. The real
 # predicate is the one below. The overstatement mattered because it landed in the file a
 # human reads at the second of the two intentional gates — the compensating control.
-echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal. NOTE: boot_complete's four booleans are hardcoded literals in git-data-bootstrap.sh, so this attests that the final stage was REACHED and that nothing reported a fatal — not that four invariants were independently measured."
+echo "PASS: ${HOST_NAME} reported stage:boot_complete and no level:fatal (Better Stack), with the Sentry cross-check reporting ${_SENTRY_VERDICT:-NOT_RUN}. NOTE: boot_complete's four booleans are hardcoded literals in git-data-bootstrap.sh, so this attests that the final stage was REACHED and that nothing reported a fatal — not that four invariants were independently measured."
 echo "Evidence written to ${OUT} (user_data sha256 ${TEMPLATE_SHA})."
 echo
 echo "This file is NOT committed by this script and must NOT be committed by a workflow."

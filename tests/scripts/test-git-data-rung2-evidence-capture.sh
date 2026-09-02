@@ -27,7 +27,16 @@ trap 'rm -rf "$TMP"' EXIT
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
+# THE VERDICT READS AN APPEND-ONLY LEDGER, NOT A COUNTER (#7481 review, V1/V2).
+# Measured: swapping one token in fail() — `fails=$((fails+1))` -> `passes=$((passes+1))` —
+# left this suite reporting all-green with real defects injected, and the assertion floor
+# CANNOT see it because the floor sums both buckets. The runcmd suite already carried this
+# hardening; it was never propagated here, which is the single-instance-not-the-class miss.
+# The ledger length is asserted against the counter too: deleting just the append leaves an
+# accurate FAIL line printed and rc=0 (measured on the sibling suite).
+FAILURES=()
 fail() {
+  FAILURES+=("$1")
   fails=$((fails + 1))
   printf '  FAIL %s\n' "$1"
   [[ -n "${2:-}" ]] && printf '       rc=%s\n' "$2"
@@ -485,6 +494,15 @@ fi
 #   ----
 #    14   (re-derived from a measured run against the as-written file: 34 + 14 = 48)
 #
+# RAISED 48 -> 54 (#7481 review), ITEMISED — the branch review found untested:
+#     2  ARM 24  a Sentry fatal on an otherwise-PASSing read => FAIL, and no evidence written
+#     1  ARM 25  a PASS records RUNG2_SENTRY_CROSSCHECK durably
+#     2  ARM 26  --since reaches the reader as --start/--end, and says so
+#     1  ARM 27  a malformed --since is refused, not widened
+#     1  ARM 23b the uploaded artifact is the REDACTED file, not the raw capture log
+#   ----
+#     7
+#
 # RAISED 33 -> 34 (#7485): ARM 12, the executing derivation-fault arm.
 #
 # RAISED 30 -> 33 WITH THE ARMS THAT MADE IT NECESSARY (#7227 item 4). ARM 6b constrains
@@ -515,7 +533,10 @@ _bare_exit2_lines() {
     /^transient\(\) \{/      { in_t = 1 }
     in_t && /^\}/            { in_t = 0; next }
     /DERIVATION FAULT/       { df = NR }
-    /^[[:space:]]*exit 2[[:space:]]*$/ {
+    # WIDENED (#7481 review, V10). `^[[:space:]]*exit 2[[:space:]]*$` was blind to the class
+    # it claims to cover: a seventh no-verdict path written `exit 2  # nothing known`, or
+    # `exit 2;`, or `exit "$rc"`, all evaded it while ARM 13b still counted 6.
+    /^[[:space:]]*exit[[:space:]]+["$]?2\b/ {
       if (!in_t && !(df && NR - df < 6)) print NR ": " $0
     }
   ' "$SUT"
@@ -530,7 +551,11 @@ fi
 # ARM 13b — THE FLOOR THAT KEEPS ARM 13 NON-VACUOUS. Arm 13 passes trivially against a file
 # that routes nothing through transient() — deleting every call site satisfies "no bare exit 2"
 # perfectly. Six is the measured no-verdict site count.
-_n_transient=$(grep -cE '(^|\|\| )[[:space:]]*transient ' "$SUT" || true)
+# COMMENT LINES STRIPPED FIRST. The `|| ` alternative matches anywhere on a line, so a
+# future comment documenting the idiom (`# every no-verdict path is \`… || transient "…"\``)
+# inflates the count and satisfies this floor without a call site existing — the same
+# self-match class R1-PIN and ARM 16 already carry treatments for.
+_n_transient=$(sed 's/^[[:space:]]*#.*$//' "$SUT" | grep -cE '(^|\|\| )[[:space:]]*transient ' || true)
 if [[ "$_n_transient" -ge 6 ]]; then
   pass "transient() is reached from >= 6 no-verdict sites (found ${_n_transient})"
 else
@@ -542,16 +567,33 @@ fi
 # stderr verbatim into a 7-day artifact on a PUBLIC repo. `::add-mask::` does not help: it
 # scrubs the log STREAM and tee writes bytes to disk first. Asserted per NAME so a partial
 # widening cannot pass.
+# SCOPED TO THE TUPLE, NOT THE FILE. `grep -qF '"NAME"' "$WF"` asserted only that a
+# credential name appears double-quoted SOMEWHERE in a 500-line YAML — a comment, an echo,
+# or a Python string elsewhere satisfies it, and the 20-line rationale block this PR added
+# sits directly above the list discussing those exact names. The failure direction is a
+# GREEN arm over a partially-deleted tuple, on the assertion carrying the merge-blocking
+# property. Extract the `for var in (...)` block first (cq-assert-anchor-not-bare-token).
+_tuple_block="$(sed -n '/^ *for var in (/,/):$/p' "$WF")"
 _tuple_missing=""
+_tuple_n=0
 for _n in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD \
-          SENTRY_ISSUE_RO_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
+          SENTRY_ISSUE_RO_TOKEN SENTRY_ISSUE_RW_TOKEN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
           DOPPLER_TOKEN HCLOUD_TOKEN BETTERSTACK_LOGS_TOKEN GIT_DATA_LUKS_KEY; do
-  grep -qF "\"${_n}\"" "$WF" || _tuple_missing="${_tuple_missing} ${_n}"
+  if printf '%s\n' "$_tuple_block" | grep -qF "\"${_n}\""; then
+    _tuple_n=$((_tuple_n + 1))
+  else
+    _tuple_missing="${_tuple_missing} ${_n}"
+  fi
 done
+# A FLOOR, because a name-by-name check is one-directional: it cannot see the block being
+# emptied and rebuilt with fewer members, and every sibling guard in this PR carries one.
+if [[ "$_tuple_n" -lt 11 ]]; then
+  _tuple_missing="${_tuple_missing} (only ${_tuple_n} of 11 names found in the extracted tuple block — did the block anchor drift?)"
+fi
 if [[ -z "$_tuple_missing" ]]; then
-  pass "the capture-log redaction tuple names all ten credentials in the step's environment"
+  pass "the capture-log redaction tuple names all eleven credentials, inside the tuple block itself"
 else
-  fail "the capture-log redaction tuple names all ten credentials in the step's environment" "" "missing:${_tuple_missing}"
+  fail "the capture-log redaction tuple names all eleven credentials, inside the tuple block itself" "" "missing:${_tuple_missing}"
 fi
 
 # ARM 15 — NO HEADER-DUMPING CURL FLAGS. curl's ordinary stderr echoes scheme and host only and
@@ -583,13 +625,26 @@ fi
 # — so the arm passed while a real eyeball instruction survived in one of the three files it
 # was written to sweep. Anchor on the CLAIM (an imperative to go and inspect a named channel),
 # not on one file's spelling of it; cq-assert-anchor-not-bare-token, one level up.
-_EYEBALL_RE='[Cc]onfirm against .{0,2}Sentry|[Cc]heck .{0,4}(Sentry|Better Stack|DOPPLER_TOKEN)'
+# THE BOUND IS 8, AND BOTH DIRECTIONS ARE MEASURED. At 4 this arm reported a CLEAN sweep
+# while `git-data-rung2-rehearsal.yml` still carried "check the \`DOPPLER_TOKEN\` secret" — the
+# gap there is `the \`` = 6 characters, because the YAML-escaped backtick is two bytes. That
+# was the THIRD false clean from this arm (case-sensitivity, then backticks, then width), so
+# the bound is now measured rather than guessed.
+#
+# It is NOT widened further, and that is also measured: at 12 it starts matching
+# "download the capture-log artifact and check whether the Better Stack anchor answered" —
+# an instruction to read THIS RUN'S OWN OUTPUT, which is the sanctioned behaviour
+# hr-no-dashboard-eyeball-pull-data-yourself prescribes, not the behaviour it forbids. A
+# guard that reddens on the remedy is worse than one that misses a site.
+_EYEBALL_RE='[Cc]onfirm against .{0,4}(Sentry|Better Stack)|[Cc]heck .{0,8}(Sentry|Better Stack|DOPPLER_TOKEN)'
 _eyeball_hits=0
 _eyeball_files=0
 for _f in "$WF" "$RUNBOOK" "$SUT"; do
   if [[ -r "$_f" ]]; then
     _eyeball_files=$((_eyeball_files + 1))
-    _eyeball_hits=$(( _eyeball_hits + $(grep -cE "$_EYEBALL_RE" "$_f" || true) ))
+    # SELF-EXCLUDING, for the same reason R1-PIN is: an arm that forbids a phrase must
+    # quote that phrase to explain itself, and the SUT is one of the files it sweeps.
+    _eyeball_hits=$(( _eyeball_hits + $(grep -E "$_EYEBALL_RE" "$_f" | grep -vc '_EYEBALL_RE\|used to hand the reader\|used to end by telling' || true) ))
   fi
 done
 # THE FILE-COUNT FLOOR IS THE ANTI-VACUITY HALF: a renamed or moved file would make the hit
@@ -621,6 +676,12 @@ chmod +x "$SENTRY_STUB"
 
 run_sut_sentry() {  # $1 = STUB_RC, $2 = STUB_BODY, rest appended to the SUT
   local rc="$1" body="$2"; shift 2
+  # SOLEUR_TEST_MODE IS REQUIRED, and that it is required is the point: the SUT honours
+  # SOLEUR_SENTRY_READER only under this marker, because the script runs under
+  # `doppler run -c prd_terraform` where a bare env override would be an arbitrary-command
+  # sink one config entry away (CWE-427). These arms are what prove the gate is load-bearing:
+  # drop SOLEUR_TEST_MODE and all four Sentry arms redden, measured.
+  SOLEUR_TEST_MODE=1 \
   SOLEUR_SENTRY_READER="$SENTRY_STUB" SENTRY_ARGV_FILE="$SENTRY_ARGV" \
   SENTRY_ISSUE_RO_TOKEN='stub-token-not-a-real-credential' \
   STUB_RC="$rc" STUB_BODY="$body" \
@@ -689,11 +750,89 @@ else
   fail "a 403 from Sentry is reported as DETERMINISTIC and does not become a host verdict" "$rc" "$out"
 fi
 
+# ARM 23b — THE UPLOADED FILE IS THE REDACTED ONE. The whole redaction tuple protects
+# `/tmp/rung2/capture.redacted.log`; nothing asserted that is what `upload-artifact` takes.
+# Repointing it at `capture.log` publishes every value the redactor would have scrubbed into
+# a 7-day artifact on a PUBLIC repo, with the tuple arm still green. Measured: zero hits for
+# "redacted" anywhere in this suite before this arm.
+if grep -qF 'path: /tmp/rung2/capture.redacted.log' "$WF" \
+   && ! grep -qE '^\s*path:\s*/tmp/rung2/capture\.log\s*$' "$WF"; then
+  pass "the capture-log artifact uploads the REDACTED file, never the raw one"
+else
+  fail "the capture-log artifact uploads the REDACTED file, never the raw one" "" \
+       "$(grep -nE '^\s*path:\s*/tmp/rung2/' "$WF" | head -3)"
+fi
+
+# ARM 24 — THE PASS PATH CROSS-CHECK. THE BLOCKER, and the branch that had no coverage at
+# all: every other Sentry arm sets up HOSTROWS_EMPTY, i.e. the Better-Stack-SILENT path, so
+# fourteen arms covered the route that already had a verdict and ZERO covered the one that
+# writes the artifact releasing the git-data birth hold. A host that died early, was retried
+# by cloud-init, and later reached boot_complete produces exactly this shape.
+: > "$SENTRY_ARGV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"          # a full, all-positive boot_complete
+out="$(run_sut_sentry 0 "$_FATAL_WITH_CAUSE" --out "$TMP/ev-24.env")"; rc=$?
+if [[ "$rc" -eq 1 ]]; then
+  pass "a Sentry fatal on an otherwise-PASSing Better Stack read => FAIL (rc 1)"
+else
+  fail "a Sentry fatal on an otherwise-PASSing Better Stack read => FAIL (rc 1)" "$rc" "$out"
+fi
+if [[ ! -f "$TMP/ev-24.env" ]]; then
+  pass "that FAIL writes NO evidence — the birth hold is not released"
+else
+  fail "that FAIL writes NO evidence — the birth hold is not released" "$rc" "evidence was written over a Sentry fatal"
+fi
+
+# ARM 25 — a PASS records the cross-check verdict DURABLY. Without this the evidence file is
+# byte-identical whether the cross-check ran CLEAN or was skipped, and the capture log that
+# would have said so is not even uploaded on a PASS.
+: > "$SENTRY_ARGV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --out "$TMP/ev-25.env")"; rc=$?
+if [[ "$rc" -eq 0 ]] && grep -q '^RUNG2_SENTRY_CROSSCHECK=' "$TMP/ev-25.env" 2>/dev/null; then
+  pass "a PASS records RUNG2_SENTRY_CROSSCHECK in the evidence file"
+else
+  fail "a PASS records RUNG2_SENTRY_CROSSCHECK in the evidence file" "$rc" "$(cat "$TMP/ev-25.env" 2>/dev/null | head -3)"
+fi
+
+# ARM 26 — THE RUN-PINNED WINDOW REACHES THE READER. Defect 5's fix had no coverage at all:
+# `--since` appeared nowhere in this suite, so the --start/--end branch never executed and
+# ARM 22's disjunction was satisfied by --stats-period in every single arm — it proved the
+# DEGRADED path while its comment described the pinned one.
+: > "$SENTRY_ARGV"
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_EMPTY"
+out="$(run_sut_sentry 0 "$_NO_FATAL" --since 2026-09-02T10:00:00 --out "$TMP/ev-26.env")"; rc=$?
+if grep -qE -- '--start 2026-09-02T10:00:00' "$SENTRY_ARGV" && grep -qE -- '--end [0-9]{4}-' "$SENTRY_ARGV"; then
+  pass "--since produces a run-pinned --start/--end pair at the reader"
+else
+  fail "--since produces a run-pinned --start/--end pair at the reader" "$rc" "$(cat "$SENTRY_ARGV" 2>/dev/null | head -2)"
+fi
+if [[ "$out" == *"pinned to this run"* ]]; then
+  pass "--since says so in the log, so a pinned read is distinguishable from a widened one"
+else
+  fail "--since says so in the log, so a pinned read is distinguishable from a widened one" "$rc" "$out"
+fi
+
+# ARM 27 — a malformed --since is REFUSED, not silently widened. The value is interpolated
+# into the Sentry window, and which rows the query returns is the verdict.
+out="$(run_sut_sentry 0 "$_NO_FATAL" --since 'yesterday' --out "$TMP/ev-27.env" 2>&1)"; rc=$?
+if [[ "$rc" -eq 64 && ! -f "$TMP/ev-27.env" ]]; then
+  pass "a malformed --since is refused (rc 64), never widened to the fallback window"
+else
+  fail "a malformed --since is refused (rc 64), never widened to the fallback window" "$rc" "$out"
+fi
+
 # ARM 22 — THE CALL SHAPE. A stub that answers regardless of argv cannot detect the caller
 # dropping the window, and an unwindowed read is defect 5: host_name embeds the run id, which
 # is STABLE across GitHub re-run attempts, so attempt 2 of a fixed host would read attempt 1's
 # fatal. Assert the window reached the reader, and that the host was passed.
-if grep -qE -- '--host-events ' "$SENTRY_ARGV" && grep -qE -- '(--stats-period |--start )' "$SENTRY_ARGV"; then
+# The disjunct stays (this arm runs on a fallback-window case), but ARM 26 is what pins
+# the RUN-PINNED shape — this one only proves a window of SOME kind reached the reader.
+# THE HOST IS PINNED, NOT JUST THE FLAG. `grep -- '--host-events '` matched the flag name,
+# so repointing the consult at `soleur-git-data` — the PRODUCTION store holding every
+# connected user's source code — left this arm green. ARM 6b spends three assertions
+# refusing that host on the Better Stack channel because the SUT projects `detail` into a
+# public log; the second channel projects it the same way and had no such guard.
+if grep -qF -- "--host-events ${HOST}" "$SENTRY_ARGV" && grep -qE -- '(--stats-period |--start )' "$SENTRY_ARGV"; then
   pass "the consult passes --host-events AND a window to the reader"
 else
   fail "the consult passes --host-events AND a window to the reader" "" "$(cat "$SENTRY_ARGV" 2>/dev/null | head -2)"
@@ -704,7 +843,7 @@ fi
 # looked and Sentry was quiet" — the strongest form of the silence-is-health defect.
 : > "$SENTRY_ARGV"
 make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_EMPTY"
-out="$(SOLEUR_SENTRY_READER="$SENTRY_STUB" SENTRY_ARGV_FILE="$SENTRY_ARGV" \
+out="$(SOLEUR_TEST_MODE=1 SOLEUR_SENTRY_READER="$SENTRY_STUB" SENTRY_ARGV_FILE="$SENTRY_ARGV" \
         SENTRY_ISSUE_RO_TOKEN='' run_sut --out "$TMP/ev-23.env")"; rc=$?
 if [[ "$rc" -eq 2 && "$out" == *"SENTRY_ISSUE_RO_TOKEN is unset"* ]]; then
   pass "an absent SENTRY_ISSUE_RO_TOKEN is reported as a named skip, not read as silence"
@@ -713,17 +852,24 @@ else
 fi
 
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 48 ]]; then
+if [[ "$_ran" -lt 55 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 48. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 48)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
 fi
 
+# LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is
+# visible to the pass/fail totals or to the floor.
+if [[ "${#FAILURES[@]}" -ne "$fails" ]]; then
+  printf '  FAIL LEDGER: %s failures counted but %s recorded — fail() was tampered with.\n' \
+    "$fails" "${#FAILURES[@]}"
+  exit 1
+fi
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
 # THE VERDICT IS AN `exit`, NOT A TRAILING TEST EXPRESSION. A bare `[[ "$fails" -eq 0 ]]` as the
 # final statement makes the exit status a property of which line happens to be LAST: measured,
 # appending any single command after it (a printf, a stray echo) permanently greens the suite
 # while it goes on printing accurate failure text, and run_suite() classifies on the exit code
 # alone. Deleting the line has the same effect. An explicit exit cannot be defeated by an append.
-exit $(( fails > 0 ))
+exit $(( ${#FAILURES[@]} > 0 ))
