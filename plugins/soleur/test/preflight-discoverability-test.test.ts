@@ -2190,7 +2190,18 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // (`scripts/followthroughs/inngest-host-not-serving-7674.sh`) asserts a property of the live
   // host's Better Stack telemetry, for which no unauthenticated substitute reads that source. So
   // it is a real declaration to be baselined, not a template leftover to be deleted.
-  const BASELINE_DECLARED_PROBES = 6;
+  // 6 -> 7 (#7695). The seventh is
+  // `plans/2026-09-02-infra-inngest-volume-recut-luks-plan.md`. Its declaration was ALREADY in
+  // that plan before this change — but written as a folded `>-` scalar, and Check 10 reads this
+  // sub-field with a flat awk that takes only the key line. The runtime therefore saw the value
+  // as the bare block indicator `>-`, which it correctly classifies as "declares nothing", so
+  // the waiver silently did not apply and the corpus count did not include it. Inlining the
+  // value is what made the existing declaration visible to both the runtime and this baseline.
+  // Checked against this assertion's own instruction before the number moved: the declaration
+  // sits INSIDE that plan's `discoverability_test:` sub-block, and it is genuine — Better Stack
+  // is the only source for the marker rows the probe reads, and it has no unauthenticated read
+  // surface, so no unauthenticated probe verifies the same property.
+  const BASELINE_DECLARED_PROBES = 7;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
