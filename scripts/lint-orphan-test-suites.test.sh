@@ -35,6 +35,7 @@
 # kill against an unmutated file. That failure — a battery that stops mutating and keeps
 # reporting kills — is the same class as the one the battery guards.
 set -uo pipefail
+# repo-write-boundary-sandbox: not-needed this sandbox only ever drives `--print-suite-globs`, which exits above the lib source (#7652)
 
 # git exports these when this runs as a lefthook hook, and they would repoint every sandbox
 # `git` call at the parent repo — the sandbox would then enumerate 13,630 files and every row
