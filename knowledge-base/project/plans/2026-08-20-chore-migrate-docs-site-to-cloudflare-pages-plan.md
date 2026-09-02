@@ -553,6 +553,19 @@ Rollback is a revert of the **PR3** commit — one hunk, one file — merged wit
    custom domain on the same project, before the cutover** — it is the one item that could
    otherwise require re-derivation under pressure.
 
+> **Superseded 2026-09-02 (PR2, #7640) — item 3(b) is retired by construction, and PF7
+> was not run.** The body above is left intact as the record of what was believed when it
+> was written. The four-PR amendment in *Delivery Sequencing* moved the custom-domain
+> attachment into PR3 and the record swap into PR4, so each origin-selecting mechanism now
+> lives in its own revert. The rollback procedure is therefore correct without knowing in
+> advance which of the two selects the origin: revert PR4, run
+> `apps/web-platform/infra/apex-origin-probe.sh`, and revert PR3 as well if it still
+> reports `SERVING-FROM-CLOUDFLARE-PAGES`. Measuring 3(b) would have meant attaching and
+> detaching a hostname on the live production zone to answer a question the sequencing had
+> already made moot, so the probe was deliberately skipped rather than silently dropped.
+> The procedure that replaces it is written into
+> `knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md`.
+
 **Rollback content freezes.** GitHub Pages will serve the last pre-cutover build. A rollback
 three weeks later serves three-week-old docs. Acceptable for an availability rollback;
 stated so nobody is surprised.
