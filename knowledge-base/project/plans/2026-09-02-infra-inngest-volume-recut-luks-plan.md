@@ -831,9 +831,11 @@ discoverability_test:
   expected_output: >-
     one JSON row per boot stage with rc=0 through stage=fstab, and a subsequent
     SOLEUR_INNGEST_SERVER_PROBE row reporting redis_active=active
-  credentials_required: >-
-    BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} from Doppler prd_terraform — the log warehouse has
-    no unauthenticated read surface, so no unauthenticated probe verifies this property
+  # INLINE, not a folded scalar. preflight Check 10 reads this sub-field with a flat awk that
+  # takes only the key line, so a `>-` header made the runtime see the value as `>-` — a bare
+  # block indicator, which it correctly treats as "declares nothing" — and the waiver silently
+  # did not apply. The declaration itself is unchanged; only its YAML shape is.
+  credentials_required: BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} from Doppler prd_terraform — the log warehouse has no unauthenticated read surface, so no unauthenticated probe verifies this property
 ```
 
 **Vector allowlist coupling is load-bearing.** `vector.toml` Source 4 matches
