@@ -274,19 +274,17 @@ jobs:
       # it is the correct way to wait — and its exit codes are what stop the loop: 0 PASS and
       # 1 FAIL are both terminal, only 2 is worth retrying. A fixed sleep would either waste
       # wall clock or truncate a slow boot.
-      - name: Capture rung-2 evidence (bounded poll)
-        id: capture
+      # ITS OWN STEP, DELIBERATELY. This ran inside the capture step and consumed one of the
+      # harness's queued `doppler` responses, shifting the poll's attempt accounting and
+      # turning a single-blip fixture into a two-attempt abort (measured: rung2-rehearsal
+      # 71/0 -> 70/1). Masking is not part of the capture contract and does not belong in
+      # the step whose invocation sequence that contract is asserted on.
+      - name: Pre-mask the capture environment
         if: ${{ !inputs.teardown_only && !inputs.dry_run }}
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          REHEARSAL_HOST: ${{ steps.apply.outputs.host }}
         run: |
-          set -euo pipefail
-          mkdir -p /tmp/rung2
-          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          rc=2
-          # Consecutive wrapper (doppler) failures — see the fast-fail below the sentinel.
-          wrapper_fails=0
+          set -uo pipefail
           # ::add-mask:: EVERY TUPLE VALUE BEFORE THE FIRST LINE IS TEE'D.
           #
           # The redaction step below protects the ARTIFACT. It does nothing for the JOB LOG,
@@ -316,6 +314,19 @@ jobs:
             done
           ' || echo "::warning::could not pre-mask the capture environment; the job log for this step is UNMASKED beyond the three values masked at extract time. Treat it as sensitive."
 
+      - name: Capture rung-2 evidence (bounded poll)
+        id: capture
+        if: ${{ !inputs.teardown_only && !inputs.dry_run }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          REHEARSAL_HOST: ${{ steps.apply.outputs.host }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/rung2
+          url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          rc=2
+          # Consecutive wrapper (doppler) failures — see the fast-fail below the sentinel.
+          wrapper_fails=0
           # DEADLINE, NOT AN ATTEMPT COUNT. Each attempt is up to 2 x `curl --max-time 60`
           # plus a 30 s sleep = 150 s, so 20 attempts is up to ~50 min against a 30-minute job
           # ceiling -- and the worst case is the DARK BOOT, i.e. exactly the failure this route
