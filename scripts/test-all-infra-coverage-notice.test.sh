@@ -62,6 +62,11 @@ build_sandbox() {
   # than the gate it guards.
   mkdir -p "$(dirname "$out")/lib" || return 1
   cp "$REPO_ROOT/scripts/lib/test-relevance-paths.sh" "$(dirname "$out")/lib/" || return 1
+  # Same reasoning as the relevance-predicate copy above, for the repo-write boundary lib
+  # (#7652): the runner sources it FAIL-CLOSED, because a boundary that silently degrades to
+  # "not measured" is worse than one that refuses. A sandbox without it therefore exits 2 before
+  # any arm runs, and every case below would measure that refusal instead of its own subject.
+  cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$(dirname "$out")/lib/" || return 1
   # Recorder. Appended AFTER the original definition so it wins, and before any invocation.
   python3 - "$out" "$in_diff" <<'PY'
 import sys, re
