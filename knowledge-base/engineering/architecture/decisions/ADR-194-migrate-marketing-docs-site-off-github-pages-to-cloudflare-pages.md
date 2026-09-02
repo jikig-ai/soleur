@@ -466,8 +466,13 @@ Four consequences, none of which were written down before:
    `cron-gh-pages-cert-state` and its Sentry monitor was correct: the property they measured has
    decoupled from user impact. Re-arming the daily poll would be actively harmful — the cert is
    already expired, so it trips on its first run and every run after, filing a daily countdown
-   issue whose remediation instruction fires a routine that de-proxies live www one-way. That
-   reconstructs the #6691 unread-countdown pathology with the escalation path permanently hot.
+   issue whose remediation instruction fires the reissue routine. That reconstructs the #6691
+   unread-countdown pathology — whose issue body is a literal "Days until expiry" counter — with
+   the escalation path permanently hot. (The de-proxy step in that routine is *not* one-way today:
+   `cron-gh-pages-cert-reissue.ts` restores the proxied state in an unconditional final step plus
+   an `onFailure` handler, and post-cutover its `precondition_blocked` outcome refuses to run at
+   all. An earlier draft of this amendment overstated that hazard. The argument against re-arming
+   stands on the simpler ground: it trips on every run, forever.)
 3. **The removal condition was unsatisfiable and has been replaced.** It previously said to delete
    the rule once the Pages API reported a valid `https_certificate`, which this ADR guarantees will
    never happen. The two exits are now: the cutover landed (apex and www no longer resolve to
@@ -481,7 +486,26 @@ Four consequences, none of which were written down before:
    and why the interval should not be extended indefinitely.
 
 What detects a regression here is unchanged and already sufficient: removing the rule produces
-HTTP 526 within one check interval, caught by `sentry_uptime_monitor.soleur_apex`,
-`sentry_uptime_monitor.soleur_www` and `betteruptime_monitor.soleur_apex` (180s cadence, two
-independent vendors). The gap was never detection of the *outage* — it was that nothing guarded the
-*config* those probes depend on. That is what #7749 added.
+HTTP 526, caught by three probes across two independent vendors. Their real timings, read from the
+resources rather than assumed:
+
+| Probe | Cadence | Threshold | Time to page |
+|---|---|---|---|
+| `sentry_uptime_monitor.soleur_apex` | 300s | `downtime_threshold = 3` | ~15 min |
+| `sentry_uptime_monitor.soleur_www` | 300s | `downtime_threshold = 3` | ~15 min |
+| `betteruptime_monitor.soleur_apex` | 180s | `confirmation_period = 60` | ~4 min |
+
+An earlier draft of this amendment said "within one check interval … 180s cadence" for all three.
+That was wrong twice over — only BetterStack runs at 180s, and no probe *alerts* within one
+interval, because each carries a confirmation threshold. The 526 is *observed* within one interval;
+paging takes 4-15 minutes depending on the vendor.
+
+The gap was never detection of the *outage* — it was that nothing guarded the *config* those probes
+depend on. That is what #7749 added.
+
+One caveat that belongs in the record: the zone-level SSL mode this rule overrides is **not pinned
+in Terraform**. `cloudflare_zone_settings_override.soleur_ai` manages `security_header` and
+`always_use_https` only, so the default is dashboard-managed and unverifiable from the repo — it is
+inferred from the 526 having actually occurred. The new guard protects the override; nothing
+protects the default it overrides. If the zone were flipped to `flexible`, apex would serve
+cleartext to origin and every assertion added by #7749 would still pass.

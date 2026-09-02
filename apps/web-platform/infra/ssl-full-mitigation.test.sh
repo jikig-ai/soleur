@@ -7,7 +7,7 @@
 # The GitHub Pages origin certificate for soleur.ai EXPIRED at 2026-08-16 13:53:34Z
 # and is intentionally never renewed — it cannot be renewed while the records are
 # proxied, and ADR-194 abandons it at the Cloudflare Pages cutover rather than
-# renewing it. Measured, from outside the proxy:
+# renewing it. Measured 2026-09-02, from outside the proxy (identical on .109/.110/.111):
 #
 #   $ echo | openssl s_client -servername soleur.ai -connect 185.199.108.153:443 \
 #       | openssl x509 -noout -dates
@@ -15,10 +15,18 @@
 #
 # The site nevertheless serves 200/301 today. What holds it up is ONE rule: the
 # `set_config` block in `cloudflare_ruleset.seo_config_settings` setting
-# `ssl = "full"` for the apex and www. The zone default is Full (STRICT), which
-# VALIDATES the origin certificate and therefore refuses the expired one — that is
-# what produced the 8h15m HTTP 526 outage on 2026-08-16. `full` (non-strict) still
-# encrypts the CF→origin leg but does not validate the certificate.
+# `ssl = "full"` for the apex and www. `full` (non-strict) encrypts the CF→origin
+# leg but does not validate the certificate; the zone default validates it and
+# therefore refuses the expired one, which is what produced the 8h15m HTTP 526
+# outage on 2026-08-16.
+#
+# CAVEAT, stated because this guard cannot check it: the zone-level SSL mode is
+# NOT pinned in Terraform. `cloudflare_zone_settings_override.soleur_ai` manages
+# `security_header` and `always_use_https` only, so the default this rule overrides
+# is dashboard-managed and unverifiable from the repo. It is inferred from the 526
+# actually having happened. That is a real gap one level up from this guard: if the
+# zone default were flipped to `flexible`, apex would serve cleartext to origin and
+# every assertion here would still pass.
 #
 # So this is not a stopgap that buys time against an approaching expiry. The expiry
 # already happened. This rule retired the failure class for the whole pre-cutover
@@ -41,8 +49,12 @@
 # The requirement is conditional on the substrate, so the guard resolves the stage
 # from `dns.tf` rather than being deleted at cutover:
 #
-#   PRE-CUTOVER  (apex still on GitHub Pages IPs, proxied) → the rule is MANDATORY.
-#   POST-CUTOVER (apex no longer on GitHub Pages)          → the rule may be removed.
+#   PRE-CUTOVER  (apex still on GitHub Pages IPs, OR www still CNAME'd there)
+#                                                          → the rule is MANDATORY.
+#   POST-CUTOVER (neither record points at GitHub Pages)   → the rule may be removed.
+#
+# The disjunction is deliberate and fails safe: either record still pointing at Pages
+# keeps the expired origin in the serving path for that host.
 #
 # That is the first removal exit, and it is checked rather than remembered. The
 # second exit — the Pages certificate becomes valid again, i.e. an ADR-194 rollback
@@ -130,8 +142,13 @@ printf 'stage: %s (github-pages apex IPs found: %d, www→jikig-ai.github.io: %s
 # ---------------------------------------------------------------------------------------
 # EXTRACT the seo_config_settings ruleset's `rules {}` blocks, IN DECLARATION ORDER
 # ---------------------------------------------------------------------------------------
-# Declaration order is load-bearing: config rules evaluate in order, so a rule setting
-# `ssl` for the same hosts ABOVE the mitigation would decide the value instead of it.
+# Declaration order is load-bearing. `set_config` is NON-TERMINATING, and Cloudflare
+# documents that for those the LAST matching rule in a phase wins — so a second `ssl`
+# rule for these hosts declared BELOW the mitigation overwrites it. (The redirect
+# ruleset in seo-bulk-redirects.tf is the opposite: redirects terminate, so first match
+# wins there. The two files reason in opposite directions and both are correct.)
+# The assertion below is position-agnostic — exactly one such rule — which catches a
+# second rule on either side without depending on getting the direction right.
 # awk tracks brace depth so a nested `action_parameters {}` cannot end a rules block.
 RULES="$WORK/rules.txt"
 awk '
@@ -197,10 +214,13 @@ if [[ "$STAGE" == "pre-cutover" ]]; then
     rc=1; printf '%s' "$m_expr" | grep -qF 'www.soleur.ai' && rc=0
     verdict "$rc" "the mitigation expression covers www.soleur.ai"
 
-    # --- 5. NOT SHADOWED by an earlier ssl rule on the same hosts --------------------
-    # First-match-wins on the `ssl` key: an ssl rule declared above this one whose
-    # expression also matches apex/www decides the value instead. Today the only other
-    # ssl rule is scoped to app.soleur.ai, which cannot match.
+    # --- 5. EXACTLY ONE ssl rule targets these hosts ---------------------------------
+    # `set_config` is non-terminating, so the LAST matching rule in the phase wins: a
+    # second `ssl` rule for apex/www declared below this one silently overwrites it.
+    # Asserting cardinality rather than position catches it from either side, and does
+    # not depend on the reader remembering which direction applies to which rule type.
+    # Today the only other ssl rule is scoped to app.soleur.ai, which cannot match —
+    # the host anchors below are quote-delimited so that subdomain is not miscounted.
     ssl_rules=$(awk -F'\t' '
       $4 != "ssl=-" && ($5 ~ /\\"soleur\.ai\\"/ || $5 ~ /\\"www\.soleur\.ai\\"/) { n++ } END { print n + 0 }
     ' "$RULES")

@@ -11,7 +11,8 @@
 # vacuity — so the rows below deliberately attack three different axes rather than N
 # variations of one:
 #
-#   SUT      — the substrate the guard reads (the rule's fields, its ordering, its absence)
+#   SUT      — the substrate the guard reads (the rule's fields, its ordering on BOTH
+#              sides of the mitigation, its absence)
 #   FIXTURE  — the stage (a post-cutover dns.tf must be ACCEPTED, not merely not-crashed)
 #   DISPATCH — the guard's own verdict helpers and floor
 #
@@ -125,27 +126,46 @@ def m4_delete_block(root):
     assert m, "mitigation block not found"
     wr(p, s[:m.start()] + "\n" + s[m.end():])
 
-def m5_shadow(root):
-    """Insert a broader ssl rule ABOVE the mitigation, in the same ruleset.
+SHADOW = (
+    '\n  rules {\n'
+    '    action      = "set_config"\n'
+    '    description = "tighten TLS posture"\n'
+    '    enabled     = true\n'
+    '    expression  = "(http.host in {\\"soleur.ai\\" \\"www.soleur.ai\\"})"\n'
+    '    action_parameters {\n'
+    '      ssl = "strict"\n'
+    '    }\n'
+    '  }\n'
+)
 
-    First-match-wins on the ssl key, so this decides the value instead — the rule is
-    still present and still says "full", and the site is still broken."""
+def m5_shadow_below(root):
+    """Insert a competing ssl rule BELOW the mitigation — the DANGEROUS position.
+
+    `set_config` is non-terminating, so Cloudflare applies the LAST matching rule in
+    the phase: this overwrites the mitigation while the mitigation block is still
+    present and still reads "full". The site is down and the file looks correct.
+
+    An earlier revision of this row inserted ABOVE and described that as the dangerous
+    case. That was backwards — caught in review against Cloudflare's ruleset-engine
+    docs. M5b covers the above position separately."""
     p = "%s/%s" % (root, CONF)
     s = rd(p)
     m = BLOCK_RE.search(s)
     assert m, "mitigation block not found"
-    shadow = (
-        '\n  rules {\n'
-        '    action      = "set_config"\n'
-        '    description = "tighten TLS posture"\n'
-        '    enabled     = true\n'
-        '    expression  = "(http.host in {\\"soleur.ai\\" \\"www.soleur.ai\\"})"\n'
-        '    action_parameters {\n'
-        '      ssl = "strict"\n'
-        '    }\n'
-        '  }\n'
-    )
-    wr(p, s[:m.start()] + shadow + m.group(0) + s[m.end():])
+    wr(p, s[:m.start()] + m.group(0) + SHADOW + s[m.end():])
+
+def m5b_shadow_above(root):
+    """Insert a competing ssl rule ABOVE the mitigation.
+
+    Harmless for the EFFECTIVE value (the mitigation below overwrites it), but the
+    guard must still refuse it: two rules setting ssl for these hosts means the
+    outcome depends on declaration order, so a later reorder silently breaks the site.
+    Asserting cardinality rather than position is what makes both directions fail."""
+    p = "%s/%s" % (root, CONF)
+    s = rd(p)
+    m = BLOCK_RE.search(s)
+    assert m, "mitigation block not found"
+    wr(p, s[:m.start()] + SHADOW + m.group(0) + s[m.end():])
 
 def g_postcutover(root):
     """Post-cutover substrate: dns.tf loses the Pages origin, mitigation removed.
@@ -190,7 +210,7 @@ def h3_drop_a_case(root):
 
 ROWS = {
     "M1": m1_disabled, "M2": m2_strict, "M2b": m2b_flexible, "M3": m3_drop_www,
-    "M4": m4_delete_block, "M5": m5_shadow,
+    "M4": m4_delete_block, "M5": m5_shadow_below, "M5b": m5b_shadow_above,
     "G-post": g_postcutover, "G-reflow": g_comment_reflow,
     "H1": h1_neuter_fail, "H2": h2_neuter_both, "H3": h3_drop_a_case,
 }
@@ -285,6 +305,7 @@ case_row M2b kill "ssl = full"              ""
 case_row M3  kill "covers www.soleur.ai"    ""
 case_row M4  kill "is present"              ""
 case_row M5  kill "exactly one rule"       ""
+case_row M5b kill "exactly one rule"       ""
 
 # --- DISPATCH axis: the guard's own accounting. Unreachable from any SUT mutation.
 case_row H1  kill "verdict helpers are not counting" ""

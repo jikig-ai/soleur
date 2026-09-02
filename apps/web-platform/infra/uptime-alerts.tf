@@ -37,11 +37,15 @@
 # because four probes at 5min == one probe at 75s mean across the four; the
 # combined cadence is already dense.
 #
-# follow_redirects = true: apex 301s to www post-PR #3974 (Rule 10 of
-# cloudflare_ruleset.seo_page_redirects). Without follow_redirects, this
-# monitor would falsely succeed on the 301 alone without verifying the www
-# origin is actually serving 200. With it, the monitor only succeeds if the
-# full chain apex -> 301 -> www -> 200 returns 200.
+# follow_redirects = true. NOTE the direction, which this comment had backwards
+# until #7749: the APEX is canonical and serves 200; WWW 301s to the apex. Measured
+# 2026-09-02 — `curl -o /dev/null -w '%{http_code} %{redirect_url}'` gives
+# `200` for https://soleur.ai/ and `301 https://soleur.ai/` for www. The
+# www→apex direction is the one seo-bulk-redirects.tf implements and the one
+# sentry/uptime-monitors.tf asserts. (It has been inverted here since #4577.)
+#
+# follow_redirects still earns its keep: it means this monitor succeeds only on a
+# terminal 200, so it cannot be satisfied by a redirect into a broken target.
 #
 # verify_ssl = true: this probe terminates TLS at the CLOUDFLARE EDGE, because
 # `url` is https://soleur.ai/ and the apex is proxied. So it validates
