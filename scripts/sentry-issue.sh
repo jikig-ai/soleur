@@ -12,7 +12,41 @@
 # knowledge-base/engineering/operations/runbooks/sentry-issue-read.md.
 #
 # Host: the EU org-subdomain jikigai-eu.sentry.io (NOT eu.sentry.io — it rewrites
-# `-eu` slugs; NOT de.sentry.io — ingest-only, 404s on /api/). See ADR-031 glossary.
+# `-eu` slugs). See ADR-031 glossary. An earlier revision of this line also said
+# "NOT de.sentry.io — ingest-only, 404s on /api/"; that is not what the API does
+# today. Measured 2026-09-02: de.sentry.io returned HTTP 200 on
+# /api/0/organizations/jikigai-eu/events/, and apps/web-platform/infra/scripts/
+# fresh-host-boot-trail.sh reads it in production. The org subdomain remains this
+# script's default because it is the repo's convention, not because de. 404s.
+#
+# HOST-SCOPED DISCOVER READS (#7481). Two additional modes, so the git-data rung-2
+# capture route gains a SECOND channel without a THIRD Sentry reader in this repo:
+#   scripts/sentry-issue.sh --host-events <host_name> [--start ISO --end ISO | --stats-period 90d]
+#   scripts/sentry-issue.sh --liveness <host_name_to_EXCLUDE> [--stats-period 90d]
+#
+# WHY DISCOVER AND NOT /projects/<org>/<proj>/events/. The plan specified the project
+# events endpoint. Measured 2026-09-02, it is wrong twice over:
+#   - SENTRY_ISSUE_RO_TOKEN ([event:read, org:read]) gets HTTP 403 there. Only the
+#     broader SENTRY_AUTH_TOKEN reads it, and this route prints into a PUBLIC Actions
+#     artifact, so reaching for the wider token is the wrong direction.
+#   - With SENTRY_AUTH_TOKEN it returns 200 and IGNORES the search: 100 rows
+#     unfiltered, 0 rows for `host_name:<H>`. It is a latest-events endpoint, not a
+#     search one.
+# /api/0/organizations/<org>/events/ with explicit `field=` projections answers both:
+# HTTP 200 on the RO token, and it honours the query. It is also EVENT-level, which is
+# what the plan wanted the project endpoint for — so the issue-group residual (a group
+# whose level is fatal need not carry a fatal event from THIS host) never arises, and
+# no ADR-147 level-homogeneity argument is needed to paper over it.
+#
+# ORG AND PROJECT ARE PINNED LITERALS IN THESE MODES, never read from the environment.
+# That is #7481 defect 2: callers run under `doppler run -c prd_terraform`, which
+# exports every secret in that config, so a SENTRY_ORG present there would silently
+# beat a `${SENTRY_ORG:-default}` and redirect the read.
+#
+# EXIT CONTRACT. 0 on success. A 401 exits 77 and a 403 exits 78 — DISTINCT and
+# TERMINAL, because they are repo/credential-side and identical on every attempt: a
+# caller that retries them burns its whole poll budget to report the least actionable
+# verdict. Every other failure exits 1.
 #
 # Usage (under doppler so the token is injected from soleur/prd):
 #   doppler run -p soleur -c prd -- scripts/sentry-issue.sh <issue-id>
@@ -26,12 +60,33 @@ set -uo pipefail   # never `set -x` — would trace the Bearer header to stderr.
 HOST="${SENTRY_API_HOST:-jikigai-eu.sentry.io}"
 ORG="${SENTRY_ORG:-jikigai-eu}"
 
+# PINNED, NOT ENV-SOURCED (#7481 defect 2) — see the pinning note in the header. The
+# numeric project id is what /api/0/organizations/jikigai-eu/projects/ reports for the
+# `web-platform` project, read 2026-09-02; recorded here so the next reader does not
+# inherit a bare magic number.
+PINNED_ORG='jikigai-eu'
+PINNED_PROJECT_ID='4511404943671376'
+
+
 REDACT=0
 MODE="issue"
 ISSUE_ID=""
+EVENT_HOST=""
+WIN_START=""
+WIN_END=""
+STATS_PERIOD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --latest-event) MODE="latest-event"; shift ;;
+    # `shift 2 || shift` IS LOAD-BEARING, not defensive noise. A bare `shift 2` with only
+    # the flag left FAILS and leaves $# unchanged, so the while loop never terminates —
+    # measured: `--host-events` with no value hung until the caller's timeout killed it,
+    # which is the worst shape for a flag whose whole job is to be validated and refused.
+    --host-events) MODE="host-events"; EVENT_HOST="${2:-}"; shift 2 || shift ;;
+    --liveness) MODE="liveness"; EVENT_HOST="${2:-}"; shift 2 || shift ;;
+    --start) WIN_START="${2:-}"; shift 2 || shift ;;
+    --end) WIN_END="${2:-}"; shift 2 || shift ;;
+    --stats-period) STATS_PERIOD="${2:-}"; shift 2 || shift ;;
     --redact) REDACT=1; shift ;;
     --) shift ;;
     -*) echo "unknown flag: $1" >&2; exit 64 ;;
@@ -39,7 +94,47 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$ISSUE_ID" ]]; then
+if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
+  if [[ -z "$EVENT_HOST" ]]; then
+    echo "usage: sentry-issue.sh --host-events <host_name> | --liveness <host_name_to_exclude> [--start ISO --end ISO | --stats-period 90d]" >&2
+    exit 64
+  fi
+  # SAME DISCIPLINE AS THE ISSUE-ID CHECK BELOW, for the same reason one level over: this
+  # value is interpolated into a Sentry SEARCH QUERY, and which rows the query returns IS
+  # the verdict the caller computes. A space or a quote would let the caller rewrite the
+  # query and silently change what was measured while still producing a verdict. The hosts
+  # this reads are `soleur-git-data-rehearsal-<run-id>`, so the charset is narrow on purpose.
+  if [[ ! "$EVENT_HOST" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "invalid host name '$EVENT_HOST' (allowed: [A-Za-z0-9._-]); refusing to build a query" >&2
+    exit 64
+  fi
+  # A WINDOW IS MANDATORY, and the two shapes are mutually exclusive. An unwindowed read is
+  # #7481 defect 5: `host_name` embeds the run id, but a run id is STABLE across GitHub
+  # re-run ATTEMPTS, so attempt 2 of a fixed host would read attempt 1's fatal and report a
+  # failure that has already been fixed.
+  if [[ -n "$WIN_START" || -n "$WIN_END" ]]; then
+    if [[ -z "$WIN_START" || -z "$WIN_END" ]]; then
+      echo "--start and --end must be given together (Sentry rejects one without the other)" >&2
+      exit 64
+    fi
+    if [[ -n "$STATS_PERIOD" ]]; then
+      echo "--stats-period cannot be combined with --start/--end" >&2
+      exit 64
+    fi
+    for _w in "$WIN_START" "$WIN_END"; do
+      if [[ ! "$_w" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}$ ]]; then
+        echo "invalid window bound '$_w' (want YYYY-MM-DDTHH:MM:SS)" >&2
+        exit 64
+      fi
+    done
+  else
+    STATS_PERIOD="${STATS_PERIOD:-90d}"
+    if [[ ! "$STATS_PERIOD" =~ ^[0-9]+[mhdw]$ ]]; then
+      echo "invalid --stats-period '$STATS_PERIOD' (want <n>m|h|d|w)" >&2
+      exit 64
+    fi
+  fi
+elif [[ -z "$ISSUE_ID" ]]; then
   echo "usage: sentry-issue.sh [--latest-event] [--redact] <issue-id>" >&2
   exit 64
 fi
@@ -47,7 +142,7 @@ fi
 # Issue-id charset validation BEFORE any URL interpolation. Closes path/endpoint
 # injection (load-bearing given the EU slug-rewrite trap): a `/`, `?`, or `..`
 # would rewrite the request path and could escape the read endpoint allowlist.
-if [[ ! "$ISSUE_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
+if [[ -n "$ISSUE_ID" && ! "$ISSUE_ID" =~ ^[A-Za-z0-9_-]+$ ]]; then
   echo "invalid issue-id '$ISSUE_ID' (allowed: [A-Za-z0-9_-]); refusing to build a URL" >&2
   exit 64
 fi
@@ -64,13 +159,96 @@ else
   exit 1
 fi
 
-# URL allowlist — exactly two read endpoints, both event:read, built from the
-# fixed method GET with no request body.
+# URL allowlist — read endpoints only, both event:read, built from the fixed method
+# GET with no request body. The discover modes use the PINNED org, never $ORG.
 case "$MODE" in
-  issue)        PATH_PART="/api/0/organizations/${ORG}/issues/${ISSUE_ID}/" ;;
-  latest-event) PATH_PART="/api/0/organizations/${ORG}/issues/${ISSUE_ID}/events/latest/" ;;
+  issue)              PATH_PART="/api/0/organizations/${ORG}/issues/${ISSUE_ID}/" ;;
+  latest-event)       PATH_PART="/api/0/organizations/${ORG}/issues/${ISSUE_ID}/events/latest/" ;;
+  host-events|liveness) PATH_PART="/api/0/organizations/${PINNED_ORG}/events/" ;;
 esac
 URL="https://${HOST}${PATH_PART}"
+
+# ── the discover modes (#7481) ──────────────────────────────────────────────────
+if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
+  QARGS=(--data-urlencode "project=${PINNED_PROJECT_ID}")
+  if [[ -n "$WIN_START" ]]; then
+    QARGS+=(--data-urlencode "start=${WIN_START}" --data-urlencode "end=${WIN_END}")
+  else
+    QARGS+=(--data-urlencode "statsPeriod=${STATS_PERIOD}")
+  fi
+  if [[ "$MODE" == "host-events" ]]; then
+    # `level:fatal` at the EVENT level closes #7481 defect 1. cloud-init emits an
+    # UNCONDITIONAL level:info bootcmd beacon tagged with host_name on every boot, so a
+    # query of host_name alone matches a PERFECTLY HEALTHY host and every rehearsal would
+    # false-FAIL. Measured against the 2026-07-31 rehearsal host: 5 rows unfiltered
+    # (2 fatal, 1 warning, 2 info), 2 rows with this filter.
+    #
+    # `detail` and `rc` ARE PROJECTED, and that is #7481's §4.5a. Fixing WHO reads Sentry
+    # while leaving WHAT it prints unspecified reproduces this route's originating
+    # incident: the 2026-07-31 capture reported the verdict and not the cause, because
+    # HOST_SQL did not SELECT detail. `stage` says which stage died; `detail` and `rc` say
+    # why. All three are `_clean`-scrubbed at the producer (the emitter truncates to 180
+    # bytes after its redaction passes), so this is a projection choice, not a new leak.
+    QARGS+=(--data-urlencode "field=timestamp" --data-urlencode "field=level"
+            --data-urlencode "field=host_name" --data-urlencode "field=stage"
+            --data-urlencode "field=rc" --data-urlencode "field=detail"
+            --data-urlencode "sort=-timestamp"
+            --data-urlencode "query=host_name:${EVENT_HOST} level:fatal")
+  else
+    # LIVENESS: "is this source answering at all", and it must be independent of the host
+    # it anchors for. Excluding that host is not a detail — its own unconditional info
+    # beacon would otherwise satisfy the anchor, making it vacuous exactly when it matters.
+    #
+    # COUNT ONLY, never title/culprit/detail. The caller prints into a PUBLIC Actions
+    # artifact, and an anchor needs one bit — is anything arriving — so projecting event
+    # content here would export production boot telemetry to answer a yes/no question.
+    QARGS+=(--data-urlencode "field=count()"
+            --data-urlencode "query=!host_name:${EVENT_HOST}")
+  fi
+
+  # STATUS INTO A SEPARATE STREAM, never appended to the body. Measured while composing
+  # this: `--write-out` text appended to the response makes the whole payload unparseable
+  # (`json.decoder.JSONDecodeError: Extra data`), and a parser that then reports "not an
+  # array" would blame the endpoint for the reader's own framing bug.
+  #
+  # NO -v AND NO --trace*: those dump the Authorization header verbatim, and this output is
+  # piped into a public artifact by the rung-2 capture route. curl's ordinary stderr echoes
+  # scheme and host only, so it is kept for diagnosis.
+  _body_f="$(mktemp -t sentry-disc.XXXXXXXX.json)"
+  _err_f="$(mktemp -t sentry-disc.XXXXXXXX.err)"
+  CODE="$(curl -sS --max-time 30 -G -o "$_body_f" -w '%{http_code}' \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H 'Accept: application/json' \
+    "${QARGS[@]}" "$URL" 2>"$_err_f")" || CODE="000"
+  BODY="$(cat "$_body_f" 2>/dev/null || echo '')"
+  ERRTXT="$(cat "$_err_f" 2>/dev/null || echo '')"
+  rm -f "$_body_f" "$_err_f"
+
+  case "$CODE" in
+    200)
+      # SHAPE BEFORE COUNT. `jq -e` on `null | length` returns 0 AND exits 0, so a count is
+      # never the first thing trusted: a 200 whose body is HTML (a CDN or captive-portal
+      # interstitial) or an error object must read as unusable, not as "zero events".
+      if ! printf '%s' "$BODY" | jq -e 'type == "object" and ((.data | type) == "array")' >/dev/null 2>&1; then
+        echo "ERROR: Sentry returned HTTP 200 for ${PATH_PART} but the body is not a discover result object with a .data array. The read did NOT run; this is NOT an 'emitted nothing' result." >&2
+        printf '%s\n' "$BODY" | head -c 400 >&2; echo >&2
+        exit 1
+      fi
+      printf '%s\n' "$BODY"
+      exit 0 ;;
+    401)
+      echo "ERROR: 401 from Sentry (discover). A 401 is a token-SCOPE / membership signal, not proof the org is unowned (ADR-031 glossary). DETERMINISTIC: identical on every attempt — do NOT retry. Verify SENTRY_ISSUE_RO_TOKEN's org-membership scope for '${PINNED_ORG}'." >&2
+      exit 77 ;;
+    403)
+      echo "ERROR: 403 from Sentry (discover) — the token lacks the scope for /organizations/${PINNED_ORG}/events/. SENTRY_API_TOKEN/SENTRY_AUTH_TOKEN carry Discover/ingest scope; this route needs SENTRY_ISSUE_RO_TOKEN ([event:read, org:read]). DETERMINISTIC: identical on every attempt — do NOT retry." >&2
+      exit 78 ;;
+    *)
+      echo "ERROR: Sentry GET ${PATH_PART} returned HTTP ${CODE}." >&2
+      [[ -n "$ERRTXT" ]] && printf '%s\n' "$ERRTXT" >&2
+      printf '%s\n' "$BODY" | head -c 400 >&2; echo >&2
+      exit 1 ;;
+  esac
+fi
 
 # Operator-hygiene caveat (NOT a transfer control — PII is in the stdout body the
 # agent consumes). Sentry's ingest scrub is key-name only; message/breadcrumb/tag
@@ -97,11 +275,11 @@ case "$CODE" in
     fi
     ;;
   401)
-    echo "ERROR: 401 from Sentry. A 401 is a token-SCOPE / membership signal, not proof the org is unowned (ADR-031 glossary). Verify the token's org-membership scope for '${ORG}'." >&2
-    exit 1 ;;
+    echo "ERROR: 401 from Sentry. A 401 is a token-SCOPE / membership signal, not proof the org is unowned (ADR-031 glossary). DETERMINISTIC — do NOT retry. Verify the token's org-membership scope for '${ORG}'." >&2
+    exit 77 ;;
   403)
-    echo "ERROR: 403 from Sentry — the token lacks event:read on /issues/<id>/ (SENTRY_API_TOKEN/SENTRY_AUTH_TOKEN carry Discover/ingest scope only). Use SENTRY_ISSUE_RO_TOKEN ([event:read, org:read])." >&2
-    exit 1 ;;
+    echo "ERROR: 403 from Sentry — the token lacks event:read on /issues/<id>/ (SENTRY_API_TOKEN/SENTRY_AUTH_TOKEN carry Discover/ingest scope only). DETERMINISTIC — do NOT retry. Use SENTRY_ISSUE_RO_TOKEN ([event:read, org:read])." >&2
+    exit 78 ;;
   *)
     echo "ERROR: Sentry GET ${PATH_PART} returned HTTP ${CODE}." >&2
     printf '%s\n' "$BODY" >&2
