@@ -1005,7 +1005,11 @@ if _d1_holds "$_d_rc"; then pass; else
 # Two conjuncts, both structural: the live arm DELEGATES, and the helper it delegates to
 # reads no CAPTURE. A count of CAPTURE mentions would be the "a count is not the property"
 # shape this PR spent its review budget removing.
-_d1_defline=$(grep -n '^_d1_holds()' "$_SELF" | head -1 | cut -d: -f1)
+# `|| true`: a no-match here is a NORMAL answer (the helper was renamed or removed), and the
+# empty-string case is handled by the `-n` conjunct below. Without it the capture's non-zero
+# exit is an undeclared outcome — lint-shell-capture-exit calls this out precisely because a
+# reader cannot tell an expected empty from a swallowed failure.
+_d1_defline=$(grep -n '^_d1_holds()' "$_SELF" | head -1 | cut -d: -f1 || true)
 if grep -qE '^if _d1_holds "\$_d_rc"; then pass; else$' "$_SELF" \
    && [ -n "$_d1_defline" ] \
    && ! sed -n "${_d1_defline}p" "$_SELF" | grep -q 'CAPTURE'; then pass; else

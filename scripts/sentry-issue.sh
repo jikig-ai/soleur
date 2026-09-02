@@ -242,8 +242,12 @@ if [[ "$MODE" == "host-events" || "$MODE" == "liveness" ]]; then
   # NO -v AND NO --trace*: those dump the Authorization header verbatim, and this output is
   # piped into a public artifact by the rung-2 capture route. curl's ordinary stderr echoes
   # scheme and host only, so it is kept for diagnosis.
+  # AN OWNING TRAP, not just the rm below. The explicit `rm -f` covers the normal path; a
+  # signal between mktemp and it leaves both files behind, and one of them holds a Sentry
+  # response body. lint-trap-tempfile-ownership rule (c) is what named this.
   _body_f="$(mktemp -t sentry-disc.XXXXXXXX.json)"
   _err_f="$(mktemp -t sentry-disc.XXXXXXXX.err)"
+  trap 'rm -f "${_body_f:-}" "${_err_f:-}" 2>/dev/null || true' EXIT INT TERM HUP
   CODE="$(curl -sS --max-time 30 -G -o "$_body_f" -w '%{http_code}' \
     -H "Authorization: Bearer ${TOKEN}" \
     -H 'Accept: application/json' \

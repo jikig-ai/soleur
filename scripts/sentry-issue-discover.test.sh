@@ -162,15 +162,21 @@ else
 fi
 
 # ── anti-vacuity ──────────────────────────────────────────────────────────────────
+# THE FLOOR EXITS DIRECTLY — it does NOT route through fail() or the FAILURES ledger.
+# Caught by scripts/guard-vacuity-floor, which exists for exactly this: a floor pushed onto
+# the same ledger the verdict reads is disarmed by the one edit that disarms every assertion
+# it was written to backstop, so it exits 0 under a neutered assertion machinery. This suite
+# was written to close a vacuity and shipped carrying one.
 _ran=$((passes + fails))
 if [[ "$_ran" -lt 23 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 23.\n' "$_ran"
-  FAILURES+=("anti-vacuity floor")
-else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 23)\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 23.\n' "$_ran" >&2
+  exit 1
 fi
-if [[ "${#FAILURES[@]}" -ne "$fails" ]] && [[ "$_ran" -ge 23 ]]; then
-  printf '  FAIL LEDGER: %s counted but %s recorded — fail() was tampered with.\n' "$fails" "${#FAILURES[@]}"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 23)\n' "$_ran"
+# Same discipline: the reconciliation exits directly rather than recording a failure through
+# the mechanism whose tampering it is detecting.
+if [[ "${#FAILURES[@]}" -ne "$fails" ]]; then
+  printf '  FAIL LEDGER: %s counted but %s recorded — fail() was tampered with.\n' "$fails" "${#FAILURES[@]}" >&2
   exit 1
 fi
 printf '\nsentry-issue-discover: %d passed, %d failed\n\n' "$passes" "$fails"
