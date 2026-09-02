@@ -656,9 +656,11 @@ jobs:
 
       # Its mutation battery. A config-file assertion is exactly the class that rots
       # into vacuity, so the guard's falsifiability is itself committed rather than
-      # left as a claim: 12 rows across three axes — 10 kill rows (the rule's fields,
-      # a competing ssl rule on EITHER side of it, its absence, and the guard's own
-      # verdict helpers) plus 2 GREEN rows proving it is not simply always-red.
+      # left as a claim: 20 rows across three axes — 16 kill rows (the rule's fields;
+      # a competing ssl rule above, below, or matching the apex WITHOUT naming it;
+      # count/for_each and lifecycle on the resource; phase; the rule's absence; and
+      # the guard's own verdict helpers) plus 4 GREEN rows, two of which pin the
+      # stage against ordinary refactors that used to retire the guard silently.
       - name: ssl=full apex mitigation mutation battery (#7749)
         run: bash apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
 

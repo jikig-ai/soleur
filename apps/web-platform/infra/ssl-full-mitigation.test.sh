@@ -124,20 +124,49 @@ printf '  (verdict helpers verified: both counters move)\n\n'
 # Pre-cutover iff the apex still carries GitHub Pages anycast A-records. Those four
 # IPs are GitHub's published Pages range; their presence is the substrate that makes
 # the expired origin cert reachable at all.
+# Three independent signals, ORed. Any one of them means the expired GitHub Pages
+# origin is still in the serving path for at least one host, so the rule stays
+# mandatory. Scanning every .tf in this directory rather than dns.tf alone is what
+# makes a `git mv` of the record blocks non-fatal.
+#
+# Signal 3 (the resource block) is the one the sibling www-apex-canonicalizer.test.sh
+# uses. It survives parameterization and record-type changes that defeat the literals,
+# and aligning on it removes a divergence where two guards in this directory resolved
+# the same stage from different predicates and disagreed under ordinary refactors.
+TF_STRIPPED="$WORK/all-tf.stripped"
+: > "$TF_STRIPPED"
+tf_count=0
+for f in "$SCRIPT_DIR"/*.tf; do
+  [[ -e "$f" ]] || continue
+  sed 's/#.*$//' "$f" >> "$TF_STRIPPED"
+  tf_count=$((tf_count + 1))
+done
+if [[ "$tf_count" -lt 1 ]]; then
+  printf '[FATAL] no .tf files found in %s — stage resolution would be meaningless\n' "$SCRIPT_DIR" >&2
+  exit 1
+fi
+
 PAGES_IPS=0
 for ip in 185.199.108.153 185.199.109.153 185.199.110.153 185.199.111.153; do
-  grep -qF "\"$ip\"" "$DNS_STRIPPED" && PAGES_IPS=$((PAGES_IPS + 1))
+  grep -qF "\"$ip\"" "$TF_STRIPPED" && PAGES_IPS=$((PAGES_IPS + 1))
 done
-WWW_PAGES=1
-grep -qE '"jikig-ai\.github\.io"' "$DNS_STRIPPED" || WWW_PAGES=0
+WWW_PAGES=0
+grep -qF 'jikig-ai.github.io' "$TF_STRIPPED" && WWW_PAGES=1
+# Scoped to the GitHub-Pages-specific record only. A `www` record SURVIVES the
+# cutover (re-pointed at the Pages project), so matching it would keep the guard
+# armed forever and defeat the self-retirement the removal condition depends on.
+GH_BLOCK=0
+grep -qE '^resource "cloudflare_record" "github_pages"' "$TF_STRIPPED" && GH_BLOCK=1
 
-if [[ "$PAGES_IPS" -gt 0 || "$WWW_PAGES" -eq 1 ]]; then
+if [[ "$PAGES_IPS" -gt 0 || "$WWW_PAGES" -eq 1 || "$GH_BLOCK" -eq 1 ]]; then
   STAGE="pre-cutover"
 else
   STAGE="post-cutover"
 fi
-printf 'stage: %s (github-pages apex IPs found: %d, www→jikig-ai.github.io: %s)\n\n' \
-  "$STAGE" "$PAGES_IPS" "$([[ "$WWW_PAGES" -eq 1 ]] && echo yes || echo no)"
+printf 'stage: %s (across %d .tf file(s) — pages IPs: %d, github.io target: %s, record block: %s)\n\n' \
+  "$STAGE" "$tf_count" "$PAGES_IPS" \
+  "$([[ "$WWW_PAGES" -eq 1 ]] && echo yes || echo no)" \
+  "$([[ "$GH_BLOCK" -eq 1 ]] && echo yes || echo no)"
 
 # ---------------------------------------------------------------------------------------
 # EXTRACT the seo_config_settings ruleset's `rules {}` blocks, IN DECLARATION ORDER
@@ -151,27 +180,38 @@ printf 'stage: %s (github-pages apex IPs found: %d, www→jikig-ai.github.io: %s
 # second rule on either side without depending on getting the direction right.
 # awk tracks brace depth so a nested `action_parameters {}` cannot end a rules block.
 RULES="$WORK/rules.txt"
+RESMETA="$WORK/resource-meta.txt"
 awk '
+  function rhs(line,   i) { i = index(line, "="); return substr(line, i + 1) }
   /^resource "cloudflare_ruleset" "seo_config_settings"/ { inres = 1; depth = 0 }
   inres {
     n = gsub(/\{/, "{"); depth += n
     m = gsub(/\}/, "}"); depth -= m
+    if (!inrule) {
+      if ($0 ~ /^[[:space:]]*phase[[:space:]]*=/)     { print "phase=" rhs($0) > META }
+      if ($0 ~ /^[[:space:]]*kind[[:space:]]*=/)      { print "kind=" rhs($0)  > META }
+      if ($0 ~ /^[[:space:]]*count[[:space:]]*=/)     { print "count=present"  > META }
+      if ($0 ~ /^[[:space:]]*for_each[[:space:]]*=/)  { print "for_each=present" > META }
+      if ($0 ~ /^[[:space:]]*lifecycle[[:space:]]*\{/) { print "lifecycle=present" > META }
+    }
     if (inrule) {
-      if ($0 ~ /action[[:space:]]*=/)          { a = $0; sub(/.*=[[:space:]]*/, "", a); act = a }
-      if ($0 ~ /enabled[[:space:]]*=/)         { a = $0; sub(/.*=[[:space:]]*/, "", a); en = a }
-      if ($0 ~ /expression[[:space:]]*=/)      { a = $0; sub(/.*=[[:space:]]*/, "", a); ex = a }
-      if ($0 ~ /[[:space:]]ssl[[:space:]]*=/)  { a = $0; sub(/.*=[[:space:]]*/, "", a); ssl = a }
+      if ($0 ~ /^[[:space:]]*action[[:space:]]*=/)         { act = rhs($0) }
+      if ($0 ~ /^[[:space:]]*enabled[[:space:]]*=/)        { en  = rhs($0) }
+      if ($0 ~ /^[[:space:]]*expression[[:space:]]*=/)     { ex  = rhs($0) }
+      if ($0 ~ /^[[:space:]]*ssl[[:space:]]*=/)            { ssl = rhs($0) }
       if (depth <= ruledepth) {
         idx++
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", act); gsub(/^[[:space:]]+|[[:space:]]+$/, "", en)
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", ex);  gsub(/^[[:space:]]+|[[:space:]]+$/, "", ssl)
         printf "%d\taction=%s\tenabled=%s\tssl=%s\texpr=%s\n", idx, act, en, (ssl==""?"-":ssl), ex
         inrule = 0; act=""; en=""; ex=""; ssl=""
       }
       next
     }
     if ($0 ~ /^[[:space:]]*rules[[:space:]]*\{/) { inrule = 1; ruledepth = depth - 1; next }
-    if (depth == 0 && NR > 1 && inres) { inres = 0 }
   }
-' "$STRIPPED" > "$RULES"
+' META="$RESMETA" "$STRIPPED" > "$RULES"
+touch "$RESMETA"
 
 RULE_COUNT=$(wc -l < "$RULES" | tr -d ' ')
 
@@ -185,7 +225,15 @@ fi
 printf 'extracted %d rules block(s) from cloudflare_ruleset.seo_config_settings\n\n' "$RULE_COUNT"
 
 # The mitigation rule: the one whose action_parameters set ssl, scoped to apex+www.
-MITIGATION=$(awk -F'\t' '$4 != "ssl=-" && $5 ~ /\\"soleur\.ai\\"/ && $5 ~ /\\"www\.soleur\.ai\\"/ { print; exit }' "$RULES")
+# Anchored on the ssl key ONLY. Selecting on the hosts too would make the two host
+# assertions below unfalsifiable — they could not run unless the hosts were already
+# present. The app.soleur.ai rule also sets ssl, so prefer a rule naming the apex when
+# one exists and fall back to the first ssl rule, which is what makes a mis-scoped
+# mitigation visible rather than silently unselected.
+MITIGATION=$(awk -F'\t' '$4 != "ssl=-" && $5 ~ /\\"soleur\.ai\\"/ { print; exit }' "$RULES")
+[[ -n "$MITIGATION" ]] || MITIGATION=$(awk -F'\t' '
+  $4 != "ssl=-" && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\")\"" { print; exit }
+' "$RULES")
 
 if [[ "$STAGE" == "pre-cutover" ]]; then
   # --- 1. the rule exists at all -------------------------------------------------------
@@ -221,11 +269,37 @@ if [[ "$STAGE" == "pre-cutover" ]]; then
     # not depend on the reader remembering which direction applies to which rule type.
     # Today the only other ssl rule is scoped to app.soleur.ai, which cannot match —
     # the host anchors below are quote-delimited so that subdomain is not miscounted.
+    # Counts by the PRESENCE of an ssl key, not by what the expression spells. An
+    # expression need not name a host to match it — `(http.host ne "app.soleur.ai")`
+    # and `(true)` both match the apex — so any host-literal predicate is bypassable
+    # by a rule that is still perfectly able to overwrite this one.
     ssl_rules=$(awk -F'\t' '
-      $4 != "ssl=-" && ($5 ~ /\\"soleur\.ai\\"/ || $5 ~ /\\"www\.soleur\.ai\\"/) { n++ } END { print n + 0 }
+      $4 != "ssl=-" && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\")\"" { n++ } END { print n + 0 }
     ' "$RULES")
     rc=1; [[ "$ssl_rules" == "1" ]] && rc=0
-    verdict "$rc" "exactly one rule in this ruleset sets ssl for the apex or www (more than one means declaration order decides the effective value, silently; found: ${ssl_rules})"
+    verdict "$rc" "exactly one rule in this ruleset sets ssl outside the app.soleur.ai scope (a second one overwrites this via last-match-wins, whatever its expression spells; found: ${ssl_rules})"
+    # --- 6. the RESOURCE cannot be conditionally destroyed --------------------------
+    # `count = 0` or a `for_each` over an empty set removes the whole ruleset — all
+    # three rules, including this mitigation — while every assertion above still reads
+    # a perfectly correct rule block in the file.
+    rc=0
+    grep -qE '^(count|for_each)=present' "$RESMETA" && rc=1
+    verdict "$rc" "the ruleset resource carries no count/for_each (either can destroy every rule in it while the block still reads correctly)"
+
+    # --- 7. Terraform still reconciles the rules -------------------------------------
+    # `lifecycle { ignore_changes = [rules] }` means a dashboard deletion is never
+    # corrected, so the file and production diverge silently and permanently.
+    rc=0
+    grep -qE '^lifecycle=present' "$RESMETA" && rc=1
+    verdict "$rc" "the ruleset resource declares no lifecycle block (ignore_changes would stop Terraform reconciling an out-of-band deletion)"
+
+    # --- 8/9. the ruleset governs these requests at all -----------------------------
+    m_phase=$(grep -m1 '^phase=' "$RESMETA" | sed 's/^phase=//' | tr -d '\" ' | tr -d '\t')
+    rc=1; [[ "$m_phase" == "http_config_settings" ]] && rc=0
+    verdict "$rc" "the ruleset phase is http_config_settings (found: ${m_phase:-<absent>})"
+    m_kind=$(grep -m1 '^kind=' "$RESMETA" | sed 's/^kind=//' | tr -d '\" ' | tr -d '\t')
+    rc=1; [[ "$m_kind" == "zone" ]] && rc=0
+    verdict "$rc" "the ruleset kind is zone (found: ${m_kind:-<absent>})"
   else
     # Keep the case count stage-stable so the floor below stays an exact cardinality.
     for missing in \
@@ -233,7 +307,11 @@ if [[ "$STAGE" == "pre-cutover" ]]; then
       'the mitigation sets ssl = full, not strict or flexible' \
       'the mitigation expression covers the apex soleur.ai' \
       'the mitigation expression covers www.soleur.ai' \
-      'no earlier rule in this ruleset sets ssl for the apex or www'; do
+      'exactly one rule in this ruleset sets ssl' \
+      'the ruleset resource carries no count/for_each' \
+      'the ruleset resource declares no lifecycle block' \
+      'the ruleset phase is http_config_settings' \
+      'the ruleset kind is zone'; do
       verdict 1 "$missing (unreachable: the mitigation rule itself is absent)"
     done
   fi
@@ -249,7 +327,11 @@ else
     'ssl value unconstrained post-cutover' \
     'apex host scope unconstrained post-cutover' \
     'www host scope unconstrained post-cutover' \
-    'shadowing unconstrained post-cutover'; do
+    'shadowing unconstrained post-cutover' \
+    'count/for_each unconstrained post-cutover' \
+    'lifecycle unconstrained post-cutover' \
+    'phase unconstrained post-cutover' \
+    'kind unconstrained post-cutover'; do
     verdict 0 "$retired"
   done
 fi
@@ -265,7 +347,7 @@ fi
 # stage branches are padded to the same count). Bump deliberately when adding a case; do
 # not derive it from anything this file computes, which would make it a tautology.
 printf '\n'
-EXPECTED_CASES=6
+EXPECTED_CASES=10
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[FATAL] vacuity floor: %d assertion cases executed, expected exactly %d — a case was deleted, skipped, or added without updating EXPECTED_CASES\n' \
     "$CASES" "$EXPECTED_CASES" >&2

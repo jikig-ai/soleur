@@ -54,7 +54,7 @@ chmod +x "$SANDBOX/$GUARD_REL" || die "could not make the sandboxed guard execut
 
 MUT="$WORK/mutators.py"
 cat > "$MUT" <<'PYEOF'
-import re, sys, pathlib
+import re, sys, pathlib, shutil
 
 def rd(p):
     return pathlib.Path(p).read_text()
@@ -177,6 +177,11 @@ def g_postcutover(root):
     for ip in ("185.199.108.153", "185.199.109.153", "185.199.110.153", "185.199.111.153"):
         s = s.replace('"%s"' % ip, '"192.0.2.1"')
     s = s.replace('"jikig-ai.github.io"', '"soleur-ai.pages.dev"')
+    # A real cutover also retires the GitHub-Pages-specific record resource; the apex
+    # becomes a Pages custom domain. Leaving the block named `github_pages` behind is
+    # not a post-cutover tree, and the guard is right to keep requiring the rule then.
+    s = s.replace('resource "cloudflare_record" "github_pages"',
+                  'resource "cloudflare_record" "pages_apex"')
     wr(p, s)
     m4_delete_block(root)
 
@@ -208,11 +213,86 @@ def h3_drop_a_case(root):
     verdict "$rc" "the mitigation expression covers www.soleur.ai\"""",
              "")
 
+def _insert_below(root, block):
+    p = "%s/%s" % (root, CONF)
+    s = rd(p)
+    m = BLOCK_RE.search(s)
+    assert m, "mitigation block not found"
+    wr(p, s[:m.start()] + m.group(0) + block + s[m.end():])
+
+def _rule(expr, ssl='"strict"'):
+    return ('\n  rules {\n'
+            '    action      = "set_config"\n'
+            '    description = "tighten TLS posture"\n'
+            '    enabled     = true\n'
+            '    expression  = "%s"\n'
+            '    action_parameters {\n'
+            '      ssl = %s\n'
+            '    }\n'
+            '  }\n' % (expr, ssl))
+
+def m6_shadow_negated_host(root):
+    """A rule that MATCHES the apex without naming it.
+
+    `(http.host ne \"app.soleur.ai\")` matches soleur.ai and www.soleur.ai. A count
+    keyed on host literals does not see it; it still overwrites the mitigation."""
+    _insert_below(root, _rule('(http.host ne \\"app.soleur.ai\\")'))
+
+def m7_shadow_tautology(root):
+    """`(true)` matches everything, including the apex."""
+    _insert_below(root, _rule('(true)'))
+
+def m8_shadow_with_equals(root):
+    """A shadow whose expression contains '=' — defeats a greedy RHS split.
+
+    The extractor used to capture from the LAST '=' on the line, truncating this
+    expression to garbage so the rule was not counted."""
+    _insert_below(root, _rule(
+        '(http.host in {\\"soleur.ai\\" \\"www.soleur.ai\\"} and http.request.uri.query ne \\"debug=1\\")'))
+
+def m9_resource_count(root):
+    """`count = 0` destroys every rule in the ruleset, mitigation included."""
+    sub_once("%s/%s" % (root, CONF),
+             'resource "cloudflare_ruleset" "seo_config_settings" {',
+             'resource "cloudflare_ruleset" "seo_config_settings" {\n  count = var.enable_seo_config ? 1 : 0')
+
+def m10_lifecycle_ignore(root):
+    """`ignore_changes = [rules]` stops Terraform reconciling a dashboard deletion."""
+    sub_once("%s/%s" % (root, CONF),
+             'resource "cloudflare_ruleset" "seo_config_settings" {',
+             'resource "cloudflare_ruleset" "seo_config_settings" {\n  lifecycle {\n    ignore_changes = [rules]\n  }')
+
+def m11_phase(root):
+    """A different phase means the ruleset does not govern these requests."""
+    sub_once("%s/%s" % (root, CONF), 'phase       = "http_config_settings"', 'phase       = "http_request_late_transform"')
+
+def s1_records_moved(root):
+    """Records moved to a sibling .tf. MUST stay pre-cutover.
+
+    Reading dns.tf alone made this a silent self-retirement of the guard."""
+    import shutil
+    src = "%s/%s" % (root, DNS)
+    dst = "%s/apps/web-platform/infra/dns-records.tf" % root
+    shutil.move(src, dst)
+    pathlib.Path(src).write_text('# records relocated to dns-records.tf\n')
+
+def s2_ips_parameterized(root):
+    """IP literals replaced by a variable. MUST stay pre-cutover (record block remains)."""
+    p = "%s/%s" % (root, DNS)
+    s = rd(p)
+    for ip in ("185.199.108.153", "185.199.109.153", "185.199.110.153", "185.199.111.153"):
+        s = s.replace('"%s"' % ip, "var.pages_ip")
+    s = s.replace('"jikig-ai.github.io"', "var.pages_cname")
+    wr(p, s)
+
 ROWS = {
     "M1": m1_disabled, "M2": m2_strict, "M2b": m2b_flexible, "M3": m3_drop_www,
     "M4": m4_delete_block, "M5": m5_shadow_below, "M5b": m5b_shadow_above,
     "G-post": g_postcutover, "G-reflow": g_comment_reflow,
     "H1": h1_neuter_fail, "H2": h2_neuter_both, "H3": h3_drop_a_case,
+    "M6": m6_shadow_negated_host, "M7": m7_shadow_tautology, "M8": m8_shadow_with_equals,
+    "M9": m9_resource_count, "M10": m10_lifecycle_ignore, "M11": m11_phase,
+    "S1": s1_records_moved, "S2": s2_ips_parameterized,
 }
 
 row, root = sys.argv[1], sys.argv[2]
@@ -306,6 +386,27 @@ case_row M3  kill "covers www.soleur.ai"    ""
 case_row M4  kill "is present"              ""
 case_row M5  kill "exactly one rule"       ""
 case_row M5b kill "exactly one rule"       ""
+
+# --- Shadow rules that MATCH the apex without SPELLING it, and one that defeats a
+#     greedy RHS split. Each was a measured survivor before the count was re-keyed on
+#     the presence of an ssl key rather than on host literals.
+case_row M6  kill "exactly one rule"       ""
+case_row M7  kill "exactly one rule"       ""
+case_row M8  kill "exactly one rule"       ""
+
+# --- RESOURCE-level destruction paths. None of these touch the rule block, so no
+#     mutation of the rule could ever have surfaced them.
+case_row M9  kill "count/for_each"         ""
+case_row M10 kill "lifecycle block"        ""
+case_row M11 kill "phase is http_config_settings" ""
+
+# --- STAGE fail-open. Both are ordinary refactors with no intent to touch SSL, and
+#     both silently retired the guard when it read dns.tf alone. They must remain
+#     pre-cutover, i.e. the guard must still REQUIRE the rule; the rule is present in
+#     these sandboxes, so the expected outcome is GREEN, and the row proves the stage
+#     did not flip by also deleting nothing.
+case_row S1  green "" "records moved to a sibling .tf still resolve as pre-cutover"
+case_row S2  green "" "parameterized IP/CNAME literals still resolve as pre-cutover"
 
 # --- DISPATCH axis: the guard's own accounting. Unreachable from any SUT mutation.
 case_row H1  kill "verdict helpers are not counting" ""
