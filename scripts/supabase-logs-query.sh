@@ -503,10 +503,32 @@ build_rows_sql() {
 # Normalisation: every per-source aggregate becomes [{source, c, lo, hi}] so the
 # window response and the unioned slice responses are computed identically.
 # ---------------------------------------------------------------------------
+# THE PARENTHESES AROUND `c:` ARE LOAD-BEARING, and so is the absence of `2>/dev/null`.
+#
+# jq 1.7 REJECTS `tonumber? // 0` as a syntax error when it appears as an object
+# value (`unexpected //, expecting '}'`); jq 1.8 accepts it. Ubuntu 24.04 — the CI
+# runner — ships jq 1.7, so on every jq < 1.8 host this program failed to COMPILE.
+# `2>/dev/null` then turned that compile error into an empty aggregate, and an
+# empty aggregate reads downstream as "this source emitted no row over the pinned
+# span" — i.e. a confident UNINSTRUMENTED verdict for a source carrying 88 rows.
+# That is precisely the false verdict this helper exists to prevent, produced by
+# the helper itself. Measured: identical fixtures, 31/0 on jq 1.8, 21/10 on jq 1.7.
+#
+# A jq failure here is a defect in THIS FILE (or a body that is not an array),
+# never a fact about the log surface, so it must be loud. The rc is returned to
+# the CALLER rather than raised here: normalize_agg is always invoked inside a
+# command substitution, and `fail_now` in a subshell exits only the subshell —
+# the suite scans for exactly that mistake.
 normalize_agg() {
-  printf '%s' "$1" | jq -c --arg c "$2" --arg lo "$3" --arg hi "$4" \
-    '[ .[] | { source: (.source // "(unknown)"), c: ((.[$c] // 0) | tonumber?) // 0,
-               lo: (.[$lo] // null), hi: (.[$hi] // null) } ]' 2>/dev/null
+  local out rc
+  out="$(printf '%s' "$1" | jq -c --arg c "$2" --arg lo "$3" --arg hi "$4" \
+    '[ .[] | { source: (.source // "(unknown)"), c: (((.[$c] // 0) | tonumber?) // 0),
+               lo: (.[$lo] // null), hi: (.[$hi] // null) } ]' 2>&1)"; rc=$?
+  if (( rc != 0 )); then
+    printf 'normalize_agg: jq exited %d: %s\n' "$rc" "$out" >&2
+    return "$rc"
+  fi
+  printf '%s' "$out"
 }
 merge_agg() {
   printf '%s\n%s' "$1" "$2" | jq -sc \
@@ -556,7 +578,8 @@ V_PROJECT="$(printf '%s' "$ID_BODY" | jq -r '.name // ""' 2>/dev/null)"
 INSTR_START_EPOCH=$(( NOW_EPOCH - INSTRUMENTATION_SPAN_DAYS * 86400 ))
 run_query "instrumentation" "$(build_instrumentation_sql)" \
   "$(to_iso "$INSTR_START_EPOCH")" "$(to_iso "$NOW_EPOCH")" "$INSTR_START_EPOCH" "$NOW_EPOCH"
-INSTR_AGG="$(normalize_agg "$Q_RESULT" instrumentation_c _none_ _none_)"
+INSTR_AGG="$(normalize_agg "$Q_RESULT" instrumentation_c _none_ _none_)" \
+  || fail_now AGGREGATION_FAILED "the per-source aggregation could not be computed (jq exited non-zero; see stderr above). This is a defect in the helper or an unparseable response body, NOT a fact about the log surface: an empty aggregate here would render as UNINSTRUMENTED and a zero would be an artifact of this failure. Do not quote any count from this run."
 V_INSTR_LINE="$(printf '%s' "$INSTR_AGG" | jq -r 'if length == 0 then "(no source returned any row over the pinned span)" else ([ .[] | "\(.source)=\(.c)=INSTRUMENTED" ] | join(" ")) end')"
 OBSERVED="$(printf '%s' "$INSTR_AGG" | jq -r '[ .[] | .source ] | join(" ")')"
 
@@ -570,7 +593,8 @@ OBSERVED="$(printf '%s' "$INSTR_AGG" | jq -r '[ .[] | .source ] | join(" ")')"
 #     can be concluded — as opposed to the requested source simply being quiet.
 # ---------------------------------------------------------------------------
 run_query "window" "$(build_window_agg_sql)" "$START_ISO" "$END_ISO" "$START_EPOCH" "$END_EPOCH"
-WINDOW_AGG="$(normalize_agg "$Q_RESULT" window_source_c window_lo window_hi)"
+WINDOW_AGG="$(normalize_agg "$Q_RESULT" window_source_c window_lo window_hi)" \
+  || fail_now AGGREGATION_FAILED "the per-source aggregation could not be computed (jq exited non-zero; see stderr above). This is a defect in the helper or an unparseable response body, NOT a fact about the log surface: an empty aggregate here would render as UNINSTRUMENTED and a zero would be an artifact of this failure. Do not quote any count from this run."
 
 WANT_JSON="$(sources_json_array)"
 
@@ -668,7 +692,7 @@ TRUNCATED=0
 if (( WIDTH_SEC > MONOTONICITY_TRIGGER_DAYS * 86400 )); then
   SUB_START_EPOCH=$(( END_EPOCH - MONOTONICITY_TRIGGER_DAYS * 86400 ))
   run_query "probe" "$(build_probe_sql)" "$(to_iso "$SUB_START_EPOCH")" "$END_ISO" "$SUB_START_EPOCH" "$END_EPOCH"
-  PROBE_COUNT="$(printf '%s' "$Q_RESULT" | jq -r '(.[0].probe_c // 0) | tonumber? // 0')"
+  PROBE_COUNT="$(printf '%s' "$Q_RESULT" | jq -r '((.[0].probe_c // 0) | tonumber?) // 0')"
   if (( REQ_COUNT < PROBE_COUNT )); then
     TRUNCATED=1
     V_MONO="TRUNCATION DETECTED: the ${WIDTH_SEC}s window returned ${REQ_COUNT} rows but its own last-${MONOTONICITY_TRIGGER_DAYS}d sub-window returned ${PROBE_COUNT}; auto-narrowing"
@@ -701,7 +725,7 @@ if (( TRUNCATED == 1 )); then
     mid_h=$(( (lo_h + hi_h) / 2 ))
     mid_start=$(( END_EPOCH - mid_h * 3600 ))
     run_query "bisect" "$(build_bisect_sql)" "$(to_iso "$mid_start")" "$END_ISO" "$mid_start" "$END_EPOCH"
-    mid_c="$(printf '%s' "$Q_RESULT" | jq -r '(.[0].bisect_c // 0) | tonumber? // 0')"
+    mid_c="$(printf '%s' "$Q_RESULT" | jq -r '((.[0].bisect_c // 0) | tonumber?) // 0')"
     if (( mid_c >= PROBE_COUNT )); then lo_h=$mid_h; else hi_h=$mid_h; fi
     step=$(( step + 1 ))
   done
@@ -727,7 +751,9 @@ if (( TRUNCATED == 1 )); then
   while (( c_start < END_EPOCH )); do
     c_end=$(( c_start + cap_h * 3600 )); (( c_end > END_EPOCH )) && c_end=$END_EPOCH
     run_query "slice" "$(build_slice_sql)" "$(to_iso "$c_start")" "$(to_iso "$c_end")" "$c_start" "$c_end"
-    SLICE_AGG="$(merge_agg "$SLICE_AGG" "$(normalize_agg "$Q_RESULT" slice_c slice_lo slice_hi)")"
+    slice_norm="$(normalize_agg "$Q_RESULT" slice_c slice_lo slice_hi)" \
+      || fail_now AGGREGATION_FAILED "the per-source aggregation could not be computed (jq exited non-zero; see stderr above). This is a defect in the helper or an unparseable response body, NOT a fact about the log surface: an empty aggregate here would render as UNINSTRUMENTED and a zero would be an artifact of this failure. Do not quote any count from this run."
+    SLICE_AGG="$(merge_agg "$SLICE_AGG" "$slice_norm")"
     slice_desc="${slice_desc}${slice_desc:+ + }$(to_iso "$c_start")..$(to_iso "$c_end")"
     c_start=$c_end
   done

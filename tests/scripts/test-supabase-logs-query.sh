@@ -725,6 +725,56 @@ else
   fail "deprecated endpoint" "a non-comment line still references analytics/endpoints/logs.all"
 fi
 
+# JQ GRAMMAR FLOOR. In jq 1.7 an object VALUE may not carry a top-level `//`:
+# `{ c: (X | tonumber?) // 0 }` is a SYNTAX error (`unexpected //, expecting '}'`),
+# while `{ c: ((X | tonumber?) // 0) }` compiles. jq 1.8 accepts both. Ubuntu
+# 24.04 -- the CI runner -- ships jq 1.7, so the unwrapped spelling did not
+# COMPILE there, and `2>/dev/null` rendered the compile failure as an empty
+# aggregate: a confident UNINSTRUMENTED verdict for a source carrying 88 rows.
+# Identical fixtures scored 31/0 on jq 1.8 and 21/10 on jq 1.7.
+#
+# THIS HOST CANNOT DETECT THE CLASS BY COMPILING -- its jq parses both spellings.
+# And it cannot be caught by a regex on `tonumber?` either: BOTH spellings
+# contain `tonumber?) //`, differing only in an outer paren a local pattern
+# cannot see. (The first version of this guard matched `tonumber? //`, a string
+# that appears in NEITHER spelling; it passed the mutant and proved nothing.
+# The mutation run is what caught it -- a positive control that tests your idea
+# of the bug instead of the bug is the vacuity this whole suite exists to hunt.)
+#
+# So the guard PINS THE SPELLING, and says so. It is narrow by construction: it
+# does not derive the grammar rule, it asserts the one line that carries it.
+echo "== jq grammar floor (jq 1.7 rejects a top-level // in an object value) =="
+_JQ_FIXED='c: (((.[$c] // 0) | tonumber?) // 0),'
+_JQ_BROKEN='c: ((.[$c] // 0) | tonumber?) // 0,'
+if grep -qF "$_JQ_FIXED" "$SCRIPT"; then
+  pass "normalize_agg's object value is fully parenthesized (compiles on jq 1.7)"
+else
+  fail "jq grammar floor" "normalize_agg no longer carries the parenthesized spelling ${_JQ_FIXED}. jq 1.7 rejects a top-level // in an object value, and 2>/dev/null would render the compile error as an empty aggregate -- i.e. a false UNINSTRUMENTED. Wrap the whole value in parens."
+fi
+if grep -qF "$_JQ_BROKEN" "$SCRIPT"; then
+  fail "jq grammar floor" "the helper carries the UNWRAPPED spelling ${_JQ_BROKEN}, which jq 1.7 cannot compile"
+else
+  pass "the helper does not carry the unwrapped spelling that broke CI"
+fi
+# Non-vacuity: the two pins must actually discriminate between the spellings.
+if grep -qF "$_JQ_BROKEN" <<< "$_JQ_FIXED"; then
+  fail "jq grammar floor vacuity" "the broken-spelling pin also matches the FIXED spelling, so it can never fire"
+else
+  pass "the broken-spelling pin does not match the fixed spelling (the pins discriminate)"
+fi
+
+# normalize_agg must not swallow jq's stderr: the swallow is what turned a
+# compile error into a silent empty aggregate in the first place.
+# NOT strip_noise: its second sed expression DELETES `2>/dev/null` outright, so
+# a guard built on it could never see the token it is asserting about -- it
+# passed a mutant that re-added the swallow. Strip comments ONLY. (Same class as
+# the finding above: ask what a normaliser removes before trusting it as coverage.)
+if sed 's/#.*//' "$SCRIPT" | grep -A6 'normalize_agg()' | grep -qF '2>/dev/null'; then
+  fail "normalize_agg silence" "normalize_agg redirects jq stderr to /dev/null again; a jq failure would once more read downstream as 'this source emitted nothing'"
+else
+  pass "normalize_agg does not swallow jq's stderr (a jq failure stays loud)"
+fi
+
 # ---------------------------------------------------------------------------
 # HARNESS SELF-CHECK.
 #

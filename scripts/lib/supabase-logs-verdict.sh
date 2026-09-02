@@ -54,7 +54,8 @@ verdict_exit_code() {
   case "${1:-}" in
     FULLY_COVERED|TRUNCATED_AUTONARROWED)                         printf '0' ;;
     TRANSIENT_5XX)                                                printf '1' ;;
-    CONFIG_ERROR|AUTH_ERROR|DIALECT_ERROR|MALFORMED_RESULT)       printf '2' ;;
+    CONFIG_ERROR|AUTH_ERROR|DIALECT_ERROR|MALFORMED_RESULT| \
+    AGGREGATION_FAILED)                                           printf '2' ;;
     UNKNOWN_SOURCE|UNINSTRUMENTED|PARTIAL_COVERAGE| \
     WINDOW_PREDATES_RETENTION|WINDOW_SIZE_FAILURE| \
     TRUNCATION_UNRESOLVED|ZERO_SOURCE_COVERAGE_UNESTABLISHED)     printf '3' ;;

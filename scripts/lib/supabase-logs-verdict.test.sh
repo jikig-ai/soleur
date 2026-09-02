@@ -30,7 +30,7 @@ for r in FULLY_COVERED TRUNCATED_AUTONARROWED; do
   eq "$r exits 0" 0 "$(verdict_exit_code "$r")"
 done
 eq "TRANSIENT_5XX exits 1" 1 "$(verdict_exit_code TRANSIENT_5XX)"
-for r in CONFIG_ERROR AUTH_ERROR DIALECT_ERROR MALFORMED_RESULT; do
+for r in CONFIG_ERROR AUTH_ERROR DIALECT_ERROR MALFORMED_RESULT AGGREGATION_FAILED; do
   eq "$r exits 2" 2 "$(verdict_exit_code "$r")"
 done
 # The headline binding: an INCONCLUSIVE/UNINSTRUMENTED answer exiting 0 is the
