@@ -175,3 +175,29 @@ one prevention. Nothing from the inventory is dropped.*
     structurally blind to the sites still carrying the old.
 15. **`gh issue create` denied for a missing `--milestone`** (hook). — **Prevention:** already
     hook-enforced; no change needed.
+16. **I built the harm partition for `config` and never swept it to `refs`, its sibling dimension
+    in the same function.** The ship-gate battery then passed all 342 suites and still exited 1:
+    six sibling ref moves — a `git push -u`, a `cleanup-merged` deletion, a `git fetch` advancing
+    `main` — were each unconditionally FATAL. The proof was sitting in my own log, one screen
+    apart: `[config] branch.feat-next16-7591.merge was ADDED` classified REPORT, and
+    `[refs] refs/heads/feat-next16-7591 was created or moved` classified FATAL — **the same event,
+    two dimensions, opposite verdicts.** I had even written the rationale into arm 30's comment
+    ("the config dimension carries the SAME sibling side effect") without asking which other
+    dimension carried it too. — **Prevention:** when a fix introduces a CLASS distinction (harm
+    partition, severity tier, attribution rule), enumerate every dimension the enclosing function
+    already iterates and state the verdict for each, including "unchanged, because X". A partition
+    added to one member of an enumerable set is a sweep, not a local edit — the same shape as
+    `hr-write-boundary-sentinel-sweep-all-write-sites`, one level up from write SITES to verdict
+    CLASSES. The tell that it was a sweep was visible at authoring time: the function's own
+    `for dim in head worktree` loop names the set.
+17. **A false RED is the same defect as a false GREEN, and I nearly shipped one into the gate whose
+    subject is not over-claiming.** The refs dimension asserted an attribution — "a suite wrote to
+    the live repository" — that the run could not support, because non-own refs live in the SHARED
+    bare repo that 21 sibling worktrees write to concurrently. That is AP-021/ADR-166 (never name a
+    cause the run measured) pointed at severity instead of at prose. — **Prevention:** for any
+    dimension read from a store this process does not exclusively own, ask "who else can write
+    here, and can this run tell them apart?" before choosing FATAL. Where attribution is impossible
+    the honest class is the reported-but-not-counted one; where it is possible (single-worktree
+    checkout — every CI runner) the strong class stays. Gate the softening on the measured
+    condition, never on a blanket widening: arms 42-43 exist so that sibling presence can never
+    launder HEAD, our own branch, or a tag.

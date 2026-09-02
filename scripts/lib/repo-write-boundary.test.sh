@@ -728,7 +728,104 @@ fi
 
 # Derived from a green run, then ratcheted upward: 38 arms execute today, so a deleted or
 # neutered arm cannot hide behind slack. Raise it in lockstep when adding arms; never lower it.
-MIN_ASSERTIONS=38
+# --- 39-43. THE REFS HARM PARTITION ------------------------------------------------------------
+# Arms 39-41 are the false-RED fix; 42-43 are the non-vacuity guards that make it safe. Measured
+# 2026-09-02: a 73-minute `scripts` shard passed all 342 suites and still exited 1, because SIX
+# sibling ref moves (a `git push -u`, a `cleanup-merged` deletion, a `git fetch` on main) were each
+# unconditionally FATAL. The config dimension classified the SAME sibling `git push -u` as REPORT,
+# so the two dimensions contradicted each other about one event.
+#
+# The partition keys on ATTRIBUTION: refs other than our own live in the SHARED bare repo, so when
+# sibling worktrees exist there is no attributable author. Sibling presence is read from the BEFORE
+# snapshot, so 35's mid-window escape still cannot manufacture its own softener -- and 42/43 pin
+# the property that sibling presence must never disarm the incident class itself.
+sibling_probe() { # sibling_probe <name> [branch-to-checkout] -> prints path, with a sibling worktree
+  local n="${1:?}"; local co="${2-}"
+  local d; d=$(new_probe "$n") || return 1
+  [[ -n "$co" ]] && { git -C "$d" checkout -q -b "$co" || return 1; }
+  git -C "$d" worktree add -q "$TMP_ROOT/$n-sib" -b "$n-sibbr" 2>/dev/null || return 1
+  printf '%s' "$d"
+}
+classify_in() { # classify_in <dir> <before> <after>
+  (cd "$1" && env REPO_BOUNDARY_SALT=fixed-test-salt GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_SYSTEM=/dev/null bash -c 'source "'"$LIB"'"; repo_boundary_classify "$1" "$2"' _ "$2" "$3")
+}
+
+# --- 39. a branch CREATED by a sibling is REPORT when sibling worktrees exist -------------------
+ck
+p=$(sibling_probe refscreate) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" branch newbr
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^REPORT[[:space:]]+refs.*newbr' <<<"$verdict" && ! grep -qE '^FATAL[[:space:]]+refs' <<<"$verdict"; then
+  pass "with siblings present, a branch CREATE is REPORT and is NAMED"
+else
+  fail "refs create partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 40. a branch DELETION (the cleanup-merged shape) is REPORT when siblings exist -------------
+ck
+p=$(sibling_probe refsdelete) || exit 2
+git -C "$p" branch doomed
+state "$p"; before="$STATE_OUT"
+git -C "$p" branch -D doomed >/dev/null
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^REPORT[[:space:]]+refs.*doomed.*DELETED' <<<"$verdict" && ! grep -qE '^FATAL[[:space:]]+refs' <<<"$verdict"; then
+  pass "with siblings present, a branch DELETION is REPORT and is NAMED"
+else
+  fail "refs delete partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 41. the DEFAULT branch moving (the `git pull` shape) is REPORT when siblings exist ---------
+ck
+p=$(sibling_probe refsdefault feat-x) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" commit -q --allow-empty -m advance
+git -C "$p" update-ref refs/heads/main "$(git -C "$p" rev-parse HEAD)"
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^REPORT[[:space:]]+refs.*refs/heads/main.*default branch' <<<"$verdict"; then
+  pass "with siblings present, the DEFAULT branch moving is REPORT (the \`git pull\` shape)"
+else
+  fail "default-branch partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 42. NON-VACUITY: sibling presence must NOT launder OUR OWN branch ---------------------------
+# The property the whole partition rests on. If sibling worktrees existing softened our own branch
+# too, the partition would disarm the exact incident it was filed for (#7553/#7652) on precisely
+# the machine where that incident happened. This arm fails if 39-41's softening is over-broad.
+ck
+p=$(sibling_probe refsown feat-own) || exit 2
+state "$p"; before="$STATE_OUT"
+git -C "$p" commit -q --allow-empty -m ours
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+refs.*feat-own.*checked-out branch' <<<"$verdict"; then
+  pass "sibling presence does NOT launder OUR OWN branch: still FATAL (incident class intact)"
+else
+  fail "own branch laundered by sibling presence: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+# --- 43. NON-VACUITY: sibling presence must NOT launder a TAG ------------------------------------
+# `git -C "" tag -f v1.0` retargets a release tag and is in the sibling scanner's write-verb list.
+# Sibling worktrees do not routinely move tags, so tags stay attributable and stay FATAL.
+ck
+p=$(sibling_probe refstag) || exit 2
+git -C "$p" -c tag.gpgSign=false tag probe-tag
+state "$p"; before="$STATE_OUT"
+git -C "$p" commit -q --allow-empty -m retarget
+git -C "$p" -c tag.gpgSign=false tag -f probe-tag >/dev/null 2>&1
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^FATAL[[:space:]]+refs.*probe-tag.*tag' <<<"$verdict"; then
+  pass "sibling presence does NOT launder a TAG move: still FATAL"
+else
+  fail "tag laundered by sibling presence: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+MIN_ASSERTIONS=43
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1

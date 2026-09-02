@@ -896,3 +896,35 @@ carrying `Closes`).
 - **`plugins/soleur/**` is delivered to every installed user.** Nothing shipped executes these
   suites today, which is the only reason the blast radius is one operator — a contingent fact, not a
   structural one, and it is the first thing to re-check if a plugin-local runner is ever added.
+
+## Addendum — 2026-09-02 (#7652, ship-gate battery)
+
+Two of this plan's decisions were refuted by running the gate it specified. Recorded here rather
+than edited above: the reasoning below was sound given what was known, and the way it failed is the
+useful part.
+
+**1. "The FATAL set is environment-independent, so the `${CI:-}` tier serves nothing" (line 145) is
+superseded.** It is environment-*dependent*, and the plan's own evidence for independence pointed
+the other way. The cited `exit 4` sibling refusal closes the sibling-**runner** class — a second
+`test-all.sh` — but the boundary's refs dimension is contaminated by sibling **worktree activity**,
+which is ordinary git work in other sessions and takes no lock: `git push -u`, `worktree add -b`,
+`cleanup-merged` deleting a merged head, `git fetch` advancing `main`. Measured: a 73-minute
+`scripts` shard passed all 342 suites and still exited 1 on six such moves, while the config
+dimension classified the *same* sibling `git push -u` as REPORT.
+
+The cut tier was therefore the right instinct with the wrong key. It is reintroduced keyed on the
+**measured** discriminator — did any sibling worktree exist in the BEFORE snapshot — rather than on
+`${CI:-}`, which is a claim about the environment instead of an observation of it. On a
+single-worktree checkout (every CI runner, every probe fixture) refs keeps full strength.
+
+**2. Scenario 3 ("a fixture deletes every local ref", line 640) survives, and was checked rather
+than assumed.** Deleting every ref necessarily deletes this worktree's own branch and its tags,
+both of which stay FATAL unconditionally in the deletion path. The softening reaches only refs that
+are neither ours nor tags, on a store siblings demonstrably share.
+
+**What the partition gives up, stated plainly:** on a machine with sibling worktrees, a suite that
+moves some *other* worktree's branch is REPORT, not FATAL. That is the price of being unable to
+attribute it — the delta is still printed, named and counted, never silent. The incident class this
+guard was filed for (#7553/#7652 — a fixture whose `cd` fails, running git in the caller's CWD)
+lands on HEAD, the working tree and our own branch, all of which remain FATAL. Arms 42-43 of
+`repo-write-boundary.test.sh` pin that property; both were mutation-killed.

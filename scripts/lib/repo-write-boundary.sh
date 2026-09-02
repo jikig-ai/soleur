@@ -447,18 +447,54 @@ repo_boundary_classify() {
 
   # --- refs: per ref, by harm -------------------------------------------------------------------
   if [[ " $unmeasurable " != *" refs "* ]]; then
-    local brefs arefs ref name bsha asha
+    local brefs arefs ref name bsha asha shared_store=""
+    # ATTRIBUTION, not severity, is what the class turns on here. Every ref except our own lives in
+    # the SHARED bare repo that all linked worktrees write to, so when sibling worktrees exist a
+    # non-own ref delta has no attributable author: `git fetch` in any sibling moves
+    # refs/heads/main, `worktree add -b` creates a head, and `worktree-manager.sh cleanup-merged`
+    # (which /work Phase 0 runs at the START of every session) deletes one. All routine, none this
+    # run's doing. Measured 2026-09-02: one 73-minute `scripts` shard observed SIX sibling ref
+    # moves and reddened the gate with all 342 suites passing, while the config dimension
+    # independently classified the SAME sibling `git push -u` as REPORT -- the two dimensions
+    # disagreed about one event. A gate that cannot pass on the ordinary workflow gets ignored,
+    # and it is the operator's machine, not CI, that this boundary exists to protect.
+    #
+    # The softer class is gated on whether ANY sibling worktree existed, read from the BEFORE
+    # snapshot for exactly the anti-laundering reason the `wt` dimension was added: a mid-run
+    # `git -C "" worktree add -b probe` cannot retroactively manufacture the siblings that would
+    # soften its own class. On a single-worktree checkout -- every CI runner, and every probe
+    # fixture in the suite next door -- `elsewhere` is empty, so refs keeps FULL strength exactly
+    # where attribution is possible. HEAD, the tree and our own branch stay FATAL unconditionally
+    # (private to this worktree); tags too, since sibling traffic does not routinely move them.
+    #
+    # What this gives up, stated plainly: on a machine with siblings, a suite that moves some OTHER
+    # worktree's branch is REPORT rather than FATAL. That is the price of not being able to
+    # attribute it, and the delta is still printed, named and counted -- never silence. The
+    # incident class this guard was filed for (#7553/#7652: a fixture whose `cd` fails running git
+    # in the caller's CWD) lands on HEAD, the tree and our own branch, all of which stay FATAL.
+    [[ -n "$elsewhere" ]] && shared_store=1
     brefs="$({ grep "^refs"$'\t' <<<"$before" || true; } | sed 's/^refs\t//')"
     arefs="$({ grep "^refs"$'\t' <<<"$after"  || true; } | sed 's/^refs\t//')"
     if [[ "$brefs" != "$arefs" ]]; then
       # Field-exact throughout. A substring compare on " $name" matches ` refs/heads/foo` inside
       # ` refs/heads/foo/bar`; git's D/F rule makes that pair impossible among heads today, but a
-      # prefix-matched DELETION fails OPEN, on the one path this dimension must fail closed.
+      # prefix match would drop the deletion from the report ENTIRELY -- not soften its class, but
+      # lose the line. That fails OPEN in both regimes: silently on a shared store, and on the
+      # fail-closed no-sibling path (CI) where a deletion is still FATAL.
       while IFS= read -r ref; do
         [[ -n "$ref" ]] || continue
         name="${ref#* }"
         if [[ -z "$(printf '%s\n' "$arefs" | awk -v n="$name" '$2==n {print $1}')" ]]; then
-          printf 'FATAL\trefs\t%s was DELETED\n' "$name"
+          case "$name" in
+            refs/tags/*|"$own_branch")
+              printf 'FATAL\trefs\t%s was DELETED\n' "$name" ;;
+            *)
+              if [[ -n "$shared_store" ]]; then
+                printf 'REPORT\trefs\t%s was DELETED; sibling worktrees share this ref store (the `cleanup-merged` shape)\n' "$name"
+              else
+                printf 'FATAL\trefs\t%s was DELETED\n' "$name"
+              fi ;;
+          esac
         fi
       done <<<"$brefs"
       while IFS= read -r ref; do
@@ -472,13 +508,19 @@ repo_boundary_classify() {
           "$own_branch")
             printf 'FATAL\trefs\t%s is this worktree'"'"'s checked-out branch and it moved\n' "$name" ;;
           "refs/heads/$default_branch")
-            printf 'FATAL\trefs\t%s is the default branch and it moved\n' "$name" ;;
+            if [[ -n "$shared_store" ]]; then
+              printf 'REPORT\trefs\t%s is the default branch and it moved (the sibling `git pull` shape)\n' "$name"
+            else
+              printf 'FATAL\trefs\t%s is the default branch and it moved\n' "$name"
+            fi ;;
           *)
-            if [[ -n "$elsewhere" ]] && grep -qxF -- "$name" <<<"$elsewhere"; then
+            if [[ -z "$shared_store" ]]; then
+              # Fail closed: no sibling worktree existed, so this run is the only candidate author.
+              printf 'FATAL\trefs\t%s was created or moved\n' "$name"
+            elif grep -qxF -- "$name" <<<"$elsewhere"; then
               printf 'REPORT\trefs\t%s is checked out in another worktree; created or moved\n' "$name"
             else
-              # Fail closed: a local head this run had no business touching.
-              printf 'FATAL\trefs\t%s was created or moved\n' "$name"
+              printf 'REPORT\trefs\t%s was created or moved; sibling worktrees share this ref store\n' "$name"
             fi ;;
         esac
       done <<<"$arefs"
