@@ -19,9 +19,15 @@ the subject, so each is independently revertible.
       a fixture, the suite hard-exits below 69, and `_SKIP_CEILING=7`.
 - [ ] 0.2 Record all **four** anti-vacuity floors and their raise-itemisation conventions:
       evidence-capture (34), birth-readiness gate (69), runcmd (`-lt 69`), rung-2 rehearsal (71).
-- [ ] 0.3 Migrate the two hand-rolled floors to `tests/scripts/lib/gate-suite-harness.sh`
-      (`gate_assert_ran <observed> <floor>`, already used by 14 suites) **in its own commit**,
-      before raising them — 3 literals per floor becomes 1.
+- [ ] 0.3 Migrate the hand-rolled floors to `tests/scripts/lib/gate-suite-harness.sh`
+      (`gate_assert_ran <observed> <floor>`) **in its own commit**, before raising them — 3 literals
+      per floor becomes 1, across four floors.
+      **This is an established convention, verified: 12 `tests/scripts/test-*.sh` suites already
+      source the harness** (`git grep -ln 'gate-suite-harness' -- 'tests/scripts/test-*.sh'`),
+      including `test-git-data-host-birth-gate.sh` and `test-git-data-host-replace-gate.sh` — the
+      two gates closest to this work. A narrower `gate_assert_ran`-only grep undercounts, because
+      suites source the harness rather than naming that symbol; use the sourcing grep as the
+      instrument.
 - [ ] 0.4 Re-derive the free ADR ordinal across all `origin/*` refs with
       `git for-each-ref refs/remotes/origin` (**not** `git ls-remote`, which counts tags).
       ADR-198 was free at plan time.
