@@ -1,4 +1,5 @@
-import { Server as HTTPServer } from "http";
+import { Server as HTTPServer, IncomingMessage } from "http";
+import type { Duplex } from "stream";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import { randomUUID } from "crypto";
@@ -2807,7 +2808,16 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 // Public entry point — called from server/index.ts
 // ---------------------------------------------------------------------------
 
-export function setupWebSocket(server: HTTPServer) {
+/**
+ * @param nextUpgrade Next's own upgrade handler (`app.getUpgradeHandler()`).
+ *   Required in dev, where Next serves its HMR socket over an upgrade on
+ *   `/_next/*`. Optional so production callers, which have no HMR socket, can
+ *   omit it and keep the deny-by-default behaviour below.
+ */
+export function setupWebSocket(
+  server: HTTPServer,
+  nextUpgrade?: (req: IncomingMessage, socket: Duplex, head: Buffer) => void | Promise<void>,
+) {
   const wss = new WebSocketServer({ noServer: true });
 
   // Handle HTTP -> WebSocket upgrade on /ws path
@@ -2815,6 +2825,22 @@ export function setupWebSocket(server: HTTPServer) {
     const { pathname } = parse(req.url || "", true);
 
     if (pathname !== "/ws") {
+      // Next serves its dev HMR socket as an upgrade under `/_next/` (in next 16,
+      // `/_next/hmr`). Node dispatches "upgrade" to EVERY listener, so destroying
+      // the socket here kills Next's handshake no matter what Next does with it --
+      // the browser reports "Connection closed before receiving a handshake
+      // response" and next 16's dev client, which waits on that handshake, never
+      // finishes bringing the page to life. The page renders server-side and then
+      // sits inert: a checkbox toggles in the DOM but no React handler runs.
+      //
+      // That is #7591's whole failure surface -- 72 e2e failures, byte-identical
+      // under Turbopack and webpack, which is why the bundler was a red herring.
+      // Delegate `/_next/` upgrades to Next and keep destroying everything else,
+      // so this stays deny-by-default for any path neither we nor Next own.
+      if (nextUpgrade && pathname?.startsWith("/_next/")) {
+        void nextUpgrade(req, socket, head);
+        return;
+      }
       socket.destroy();
       return;
     }
