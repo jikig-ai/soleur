@@ -304,8 +304,8 @@ data (event payloads, step I/O, tenant identifiers, `event_user`, `worker_ip`). 
 vectors: a redirected host exfiltrating the PAT; rows landing in a CI log or transcript;
 and **rows committed as test fixtures into a public repository** (Phase 3.1).
 
-**Brand-survival threshold:** `single-user incident`. `requires_cpo_signoff: true`;
-`user-impact-reviewer` runs at review time.
+- **Brand-survival threshold:** `single-user incident`. `requires_cpo_signoff: true`;
+  `user-impact-reviewer` runs at review time.
 
 ## Implementation Phases
 
@@ -950,7 +950,10 @@ logs:
 discoverability_test:
   command: bash tests/scripts/test-supabase-logs-query.sh
   expected_output: "Results: <N> passed, 0 failed" with exit 0, offline
-  credentials_required: none — replays synthesized fixtures through a PATH-shimmed fake curl
+  # No credentials are needed: the probe replays synthesized fixtures through a
+  # PATH-shimmed fake curl and runs fully offline. The waiver field is deliberately
+  # ABSENT rather than set to "none" — any non-placeholder value there makes preflight
+  # Check 10 return SKIP-DECLARED and never execute this command.
 ```
 
 ### Observability-layer citation (`hr-observability-layer-citation`)
