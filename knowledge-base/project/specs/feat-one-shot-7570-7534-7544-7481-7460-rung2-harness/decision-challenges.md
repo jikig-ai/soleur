@@ -87,3 +87,30 @@ regardless of a baked token. Coverage widens to **eight** stages, not nine.
 
 The plan has been corrected throughout. The issue title and ADR-198's text should be corrected too,
 which is why this is surfaced rather than applied silently — it edits an issue the operator filed.
+
+### UC-1 RESOLUTION — operator decision, 2026-09-02
+
+**Chosen: split #7460 out only.** PR A (this branch) = Phases 0-4, closes #7570, #7534, #7544,
+#7481. PR B (follow-on) = Phase 5, closes #7460.
+
+Not the panel's four-way split, and not the status quo. The operator was shown that the "one PR"
+framing originated in the one-shot invocation args written by the assistant, NOT in their own
+instruction ("fix the harness defects first"), so no stated operator direction was being overridden
+— there was none to override on PR shape.
+
+**Why the minimal split answers both objections.** Both reviewer arguments are about #7460
+specifically:
+
+- DHH + CTO refuted R1: deferring #7460 costs an extra paid dispatch only if a dispatch happens
+  between the two merges, and AC 36 commits to no dispatch in this run. Splitting costs zero extra
+  dispatches.
+- R3 requires #7481 to be built and tested against the world it was specified for (stages 1-5
+  Sentry-only) before #7460 widens it. Ordered commits inside one PR deliver the ordering but not
+  the verifiability: a reviewer sees only the merged end state. With #7460 in its own PR, PR A's
+  diff IS the pre-#7460 world, so the property R3 calls load-bearing is directly checkable.
+
+Splitting #7534 and #7544 out as well (the panel's PRs A/B) would have bought reviewability the
+operator did not ask for at the price of two further review cycles, which they pay for.
+
+**Cost accepted:** one extra review cycle. **Constraint 1 preserved:** `cloud-init-git-data.yml`
+is touched exactly once, in PR B.

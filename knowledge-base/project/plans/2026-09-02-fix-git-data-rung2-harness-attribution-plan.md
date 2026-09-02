@@ -5,13 +5,27 @@ date: 2026-09-02
 slug: fix-git-data-rung2-harness-attribution
 branch: feat-one-shot-7570-7534-7544-7481-7460-rung2-harness
 issue: 7570
-closes: [7570, 7534, 7544, 7481, 7460]
+closes: [7570, 7534, 7544, 7481]
 priority: p2-medium
 domain: engineering
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 lane: cross-domain
 ---
+
+> **SCOPE SPLIT — operator decision, 2026-09-02 (resolves UC-1).** This plan is delivered as
+> **two PRs**, not one. **PR A (this branch)** implements Phases 0-4 and closes #7570, #7534,
+> #7544 and #7481. **PR B (follow-on branch)** implements Phase 5 alone and closes #7460.
+>
+> The operator chose the minimal split rather than the panel's four-way split. Both reviewer
+> objections were specifically about #7460 being bundled, and both are answered by moving only
+> it: R1's cost argument for keeping it in-PR was refuted (AC 36 commits to no dispatch in this
+> run, so no rehearsal falls between the two merges and the split costs zero extra dispatches),
+> and R3's requirement that #7481 be verified against the pre-#7460 world (stages 1-5
+> Sentry-only) is now visible in PR A's own diff instead of being hidden in a merged end state.
+>
+> `cloud-init-git-data.yml` is still touched exactly ONCE, in PR B, so hard constraint 1 holds.
+> Phase 5's content below is unchanged and carries over to PR B verbatim; no rework.
 
 # fix(git-data): make the rung-2 rehearsal harness attribute its own verdict
 
