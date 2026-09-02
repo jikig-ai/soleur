@@ -454,6 +454,21 @@ Two ledger-hygiene items carried from the legal review:
 
 ## Guard Contract
 
+**Five layers, two code guards — the mapping, so "five promised, two delivered" is not a finding.**
+
+| Layer | Mechanism | Where its contract lives |
+|---|---|---|
+| 1 | `environment: inngest-cutover` required-reviewer gate — **the sole authorization** | Not a code guard. Verified non-empty at Phase 0.3 and asserted by AC13. |
+| 2 | Typed `confirm=RECUT-INNGEST-VOLUME` — a **typo-guard**, not authorization | AC6c (literal distinctness). |
+| 3 | `expected_inngest_volume_id` pinned against the live attachment — typo-guard | Folded into **Guard 1** as the ID-PIN counter, and into **Guard 2** condition 6. |
+| 4 | Terraform plan destroy-guard | **Guard 1** below. |
+| 5 | Pre-flight "host is dark" refusal — the layer absent from the template | **Guard 2** below. |
+
+Layers 1-3 are configuration and inputs; they have acceptance criteria but no mutation matrix
+because there is no decision function to drive red. Layers 4-5 are executable decision logic and
+carry the full contract. Stating this explicitly is itself a guard: a plan that claimed five
+mutation matrices and shipped two would be the vacuity class this section exists to prevent.
+
 ### Guard 1 — `inngest_volume_recut_gate` (terraform plan destroy-guard)
 
 **Property.** No `terraform apply` reachable from `apply_target=inngest-volume-recut` destroys,
