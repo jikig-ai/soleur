@@ -74,6 +74,9 @@ export default defineConfig({
         // and refuses a second server that shares it, keyed on the directory and
         // not the port. Nested under `.next/` so .gitignore still covers it.
         NEXT_DIST_DIR: ".next/e2e-public",
+        // EXPERIMENT (not a fix): force the webpack dev bundler to test whether the
+        // 72 e2e failures are caused by Turbopack-by-default. Reverted either way.
+        TURBOPACK: "",
         NEXT_PUBLIC_SUPABASE_URL: "https://test.supabase.co",
         NEXT_PUBLIC_SUPABASE_ANON_KEY: "test-anon-key",
         SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
@@ -88,6 +91,7 @@ export default defineConfig({
       env: {
         PORT: String(AUTH_PORT),
         NEXT_DIST_DIR: ".next/e2e-auth",
+        TURBOPACK: "",
         NEXT_PUBLIC_SUPABASE_URL: MOCK_SUPABASE_URL,
         NEXT_PUBLIC_SUPABASE_ANON_KEY: "test-anon-key",
         SUPABASE_URL: MOCK_SUPABASE_URL,
