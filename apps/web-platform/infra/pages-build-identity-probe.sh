@@ -44,14 +44,19 @@ SLEEP_S="${PROBE_SLEEP_SECONDS:-10}"
 # truncated and backtick-stripped instead.
 sanitize() { printf '%s' "${1//\`/}" | head -c 200 | tr -d '\n'; }
 
+# One owning tempfile with a trap, allocated before the loop (#6734 rule (c)):
+# a per-iteration mktemp both leaks on an early death and allocates N files for
+# one answer.
+BODY_FILE="$(mktemp)"
+trap 'rm -f "$BODY_FILE"' EXIT
+
 code=""; body=""
 for attempt in $(seq 1 "$ATTEMPTS"); do
   # A separate status write keeps the sentinel a literal 000 on transport
   # failure rather than an empty field (the contract inngest.test.sh asserts).
-  tmp="$(mktemp)"
-  code="$(curl -sS --max-time 20 -o "$tmp" -w '%{http_code}' "$URL" 2>/dev/null)" || code="000"
+  code="$(curl -sS --max-time 20 -o "$BODY_FILE" -w '%{http_code}' "$URL" 2>/dev/null)" || code="000"
   [ -z "$code" ] && code="000"
-  body="$(cat "$tmp")"; rm -f "$tmp"
+  body="$(cat "$BODY_FILE")"
   if [ "$code" = "200" ] && [ "$body" = "$EXPECTED" ]; then break; fi
   if [ "$attempt" -lt "$ATTEMPTS" ]; then sleep "$SLEEP_S"; fi
 done
