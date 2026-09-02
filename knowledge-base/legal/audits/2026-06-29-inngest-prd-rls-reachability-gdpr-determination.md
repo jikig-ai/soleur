@@ -84,7 +84,7 @@ not amended.
 
 **Measurement source.** `edge_logs` instrumentation, the retained span, and the endpoint
 behaviour are recorded in
-`knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md`
+`knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`
 (§Confirmed from the plan, finding E). Cite that file rather than restating its figures.
 
 **Note on the FOLLOW-UP condition.** The retention-policy gap recorded in Conditions asks for

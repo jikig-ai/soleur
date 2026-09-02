@@ -96,7 +96,7 @@ replaced: the old per-source endpoint answered a timestamp-less query with a cle
 HTTP 200 with a wrong or truncated answer. The measured behaviour of both endpoints — the source
 enumeration, the non-monotonic window cap, the mandatory timestamp bounds, and the
 `edge_logs` instrumentation gap — is recorded in
-[`phase-0-endpoint-evidence.md`](../../../project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md);
+[`supabase-management-api-log-contract.md`](../../../project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/supabase-management-api-log-contract.md);
 cite that file rather than re-measuring or restating its numbers here.
 
 ## When a source comes back uninstrumented

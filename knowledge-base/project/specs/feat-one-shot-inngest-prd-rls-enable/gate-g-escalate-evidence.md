@@ -133,7 +133,7 @@ doppler run -p soleur -c prd -- \
 - Measured behaviour of both endpoints — dialect, the mandatory bounds, the unenforced
   documented 24-hour cap, the non-monotonic window truncation, and the `edge_logs`
   instrumentation gap — is recorded in
-  `knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md`.
+  `knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`.
   Cite that file; do not restate its figures.
 
 **Retention posture.** The "~1–2 days" horizon in Step 2 was the measurement of 2026-06-29.

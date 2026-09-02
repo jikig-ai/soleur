@@ -74,7 +74,7 @@ Two rules that follow from measurement, not from the vendor's documentation:
    be read backwards. The coverage verdict is the instrument; the count is not.
 
 Measurements behind both rules:
-[`phase-0-endpoint-evidence.md`](../../../project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md)
+[`supabase-management-api-log-contract.md`](../../../project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/supabase-management-api-log-contract.md)
 §Confirmed from the plan.
 
 ## Step 3 — Access-log analysis over the exposure window

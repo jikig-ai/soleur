@@ -29,7 +29,7 @@ answer about a *different* time window, and had no way to tell.
 ## The measurement
 
 The Supabase side is measured in
-`knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md`
+`knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`
 — finding C (the non-monotonic cap), finding E (`edge_logs` uninstrumented across a full
 30-day live period), finding G (mandatory timestamp bounds), and §The documented 24-hour cap
 is NOT enforced. Cite that file; it is the single source for the figures.

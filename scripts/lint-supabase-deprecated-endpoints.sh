@@ -79,7 +79,7 @@
 # carries a sunset date in the spec — so a spec diff can detect deprecation but cannot detect
 # an announced removal, which is why the removal date below is carried by hand. The three
 # unlisted paths have zero in-repo non-doc callers. Measurement, counts and method:
-# knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md
+# knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md
 # §"Five paths are deprecated, not two".
 #
 # ENFORCEMENT LEVEL: ADVISORY at the CI wiring layer. This guard lands in the
@@ -120,7 +120,7 @@ PATHSEG_CH="[^[:space:]\"${SQ}${BT}]"       # URL path characters
 #                                 RLS-apply sibling and a test's mutation stub (two of the
 #                                 three run in production), there is no replacement endpoint yet,
 #                                 and nothing breaks on a known date. Re-examine when the spec
-#                                 gains a sunset field (see phase-0-endpoint-evidence.md).
+#                                 gains a sunset field (see supabase-management-api-log-contract.md).
 #
 # advisors/performance is DELIBERATELY NOT LISTED. It is deprecated in the spec but has ZERO
 # non-doc callers — its only occurrences are two SQL migration comments citing what an advisor

@@ -8,7 +8,7 @@
 # replacing the deprecated `analytics/endpoints/logs.all` (removal announced for
 # 2026-09-23). Contract measured live; every number, quirk and refuted claim
 # cited below lives in ONE place — do not restate it here:
-#   knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md
+#   knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md
 #
 # WHY THIS SCRIPT EXISTS
 # ======================

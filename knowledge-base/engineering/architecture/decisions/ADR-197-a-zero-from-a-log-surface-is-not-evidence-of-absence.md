@@ -52,7 +52,7 @@ minutes of rows is not an error and does not look like one — it kept #6288 ope
 **2. The window truncates non-monotonically (Supabase).** On the replacement analytics
 endpoint, a *wider* window can return *fewer* rows, with HTTP 200 and a null error field
 throughout. The empirical cap is undocumented, sits well beyond the documented one, and can
-move. Measurements: `knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md`
+move. Measurements: `knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`
 §Confirmed from the plan (finding C). Note what this defeats: comparing two window widths and
 trusting the larger is a natural client-side check, and on a non-monotone curve it can be read
 backwards.
@@ -180,5 +180,5 @@ exists to prevent.
 - ADR-193 — a suite's anti-vacuity floor reports directly (the guard-vacuity discipline the
   host-pin arm's ratchet follows).
 - ADR-096 — the Better Stack log-content alarm pattern (the consumers this invariant binds).
-- `knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md`
+- `knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`
   — every measurement cited above; cite it rather than restating its figures.

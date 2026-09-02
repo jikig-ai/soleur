@@ -169,7 +169,22 @@ violating the contract it now enforces.
   times against a file that never contained the string. — **Prevention:** pass two files, or
   `grep -H`, whenever the output will be used to decide WHICH file to edit.
 
-- **I filed a `deferred-scope-out` issue (#7752) BEFORE invoking the CONCUR gate.** The gate
+- **My scope-out was wrong on its own definition, and a prose guard I wrote was read by nobody.**
+  I claimed `cross-cutting-refactor` (≥3 files *materially unrelated to the PR's core change*)
+  for repointing 22 citations. Measured: **all 22 citing files were in this PR's diff and this
+  PR authored every citation line** — zero unrelated. I had counted topical diversity (scripts /
+  legal / ADR / runbooks / fixtures), which the criterion does not ask for. Worse, the
+  re-evaluation trigger I proposed ("before anything archives that spec directory") had no
+  detector: `archive-kb.sh` appends the whole `specs/feat-<slug>` directory and `git mv`s it,
+  with **zero** guard-string matches in its 174 lines — so the in-file `DO NOT ARCHIVE` block I
+  had just written was defensive prose nothing reads. — Recovery: closed the issue, did the
+  `git mv` + repoint inline (26 occurrences, 22 files, zero residual, all gates green).
+  — **Prevention:** count the criterion's OWN quantity, not a proxy for it; and before writing a
+  guard, `grep` the thing that would have to honour it. A guard that no consumer reads is a
+  comment with a threatening tone. Corollary the gate also caught: a citation inside an
+  append-only block that THIS PR added is still your own working diff, so the "it's a signed
+  record" hesitation dissolves pre-merge and hardens post-merge — which argues for fixing now.
+- **I filed that `deferred-scope-out` issue (#7752) BEFORE invoking the CONCUR gate.** The gate
   exists for the DISSENT case, so filing first leaves a publicly-visible issue to retract if the
   second reviewer disagrees — the repo documents this exact ordering as a protocol violation
   "even when the agent eventually returns CONCUR". — Recovery: ran the gate immediately after,

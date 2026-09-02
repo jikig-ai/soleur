@@ -176,7 +176,7 @@ existed only as a blockquote in the source plan; it is now
 `triggers:` frontmatter so the incident skill can route to it by symptom. Tool runbook:
 `knowledge-base/engineering/operations/runbooks/supabase-log-query.md`.
 
-**Measurement source.** `knowledge-base/project/specs/feat-one-shot-supabase-analytics-logs-endpoint-migration/phase-0-endpoint-evidence.md`
+**Measurement source.** `knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`
 (§Confirmed from the plan, finding E). Cite it rather than restating its figures.
 
 **Sibling records carrying the same addendum:**
