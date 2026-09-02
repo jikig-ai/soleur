@@ -4,7 +4,17 @@ Measured 2026-08-26 against **live** Sentry (org `jikigai-eu`), read-only, using
 `SENTRY_IAC_AUTH_TOKEN` from Doppler `soleur/prd`. No object was created, mutated, or
 deleted; every call below is a GET.
 
-## Verdict: PASS, and the plan's translation mapping was wrong
+> **SCOPE RETRACTED 2026-09-02.** The PASS below holds for the 16 **lifecycle-triggered**
+> rules and NOT for the 13 frequency-triggered ones. This file measured how Sentry's **API**
+> represents our rules; it never checked whether the **provider** can express that
+> representation, and it cannot. A frequency trigger round-trips through
+> `legacy_trigger_conditions` (a List of String) which discards the `comparison` payload,
+> and the write path reconstructs it as the boolean `true` — destroying the threshold and
+> interval on a live paging rule. The mapping "correction" below is also wrong for the
+> provider, whose frequency conditions live under `action_filters[].conditions`.
+> See `phase2-provider-cannot-express-frequency-triggers.md`.
+
+## Verdict: PASS for lifecycle rules only, and the plan's translation mapping was wrong
 
 Phase 0 asked whether a **pure-frequency** rule (`event_frequency`, no lifecycle trigger)
 fires faithfully once bound to a default monitor, since binding one to an issue-stream
@@ -90,8 +100,11 @@ shells.
 
 ## Consequences for the migration
 
-- **Phase 0 passes.** All 25 non-`auth-*` rules, including the 9 pure-frequency ones, are
-  faithfully expressible. No rule needs to stay on `sentry_issue_alert` for fidelity.
+- ~~**Phase 0 passes.** All 25 non-`auth-*` rules, including the 9 pure-frequency ones, are
+  faithfully expressible. No rule needs to stay on `sentry_issue_alert` for fidelity.~~
+  **RETRACTED 2026-09-02:** true for the 16 lifecycle rules, false for the 9 pure-frequency
+  ones. Measuring the API's representation is not the same as measuring the provider's, and
+  only the first was done here.
 - **The work is closer to an import than a re-creation.** The target objects already
   exist server-side with correct semantics; the task is getting Terraform to manage them,
   not to author them. That is materially lower risk than the plan assumed.

@@ -116,15 +116,35 @@ ADR-031's sharp edge: the filter counts nested-block shrink per-type with no `wa
 new type has its shrink counted as **0** and slips the guard silently. This must land before,
 not with, the migration.
 
-## Phase 2 — translate and import (25 resources)
+## Phase 2 — translate and import (16 resources, NOT 25)
+
+> **Re-scoped 2026-09-02.** The provider cannot express a frequency TRIGGER. Importing one
+> routes it through `legacy_trigger_conditions` (List of String), which discards the
+> `comparison`, and the next apply rewrites it as the boolean `true` — destroying the
+> threshold and interval on a live paging rule. Measured in the provider source at v0.15.5;
+> see `knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-provider-cannot-express-frequency-triggers.md`.
+>
+> **No guard can catch this, including Phase 1's.** The destroyed value lives only
+> server-side and never appears in the `.tf`, so `terraform plan` shows no diff to count.
+> Invisible to the destroy gate by construction.
+>
+> In scope: the **16 lifecycle-triggered** rules (`first_seen_event` / `reappeared_event` /
+> `regression_event`), whose trigger comparisons are already `true` and round-trip
+> losslessly. Out of scope until the provider gains frequency-trigger support: the 13
+> frequency-triggered rules, which stay on `sentry_issue_alert`. Never import Sentry's own
+> default workflow.
 
 - [ ] **2.1** Translate, per the mapping MEASURED in Phase 0 (this corrects the mapping
       originally written here, which sent frequency conditions to `action_filters` — a
       place Sentry never puts them):
       - lifecycle conditions (`first_seen_event` / `reappeared_event` / `regression_event`)
         -> `trigger_conditions`, `logic_type = any-short`
-      - **frequency conditions -> `trigger_conditions` as `event_frequency_count` /
-        `event_unique_user_frequency_count`, `logic_type = all`** (NOT action filters)
+      - **frequency conditions: NOT MIGRATABLE at v0.15.5.** The API carries them as
+        triggers; the provider models them only under `action_filters[].conditions` and
+        cannot represent a frequency *trigger* at all. An earlier revision of this line
+        sent them to `trigger_conditions`, which is wrong for the provider — corrected
+        twice now, so state the source: provider docs + `resource_alert_impl.go` at the
+        pinned tag, not the API shape and not this plan's prose.
       - `tagged_event` / `level` filters -> `action_filters[].conditions` — measured to be
         the only condition type Sentry puts there
       - `filter_match` -> `action_filters[].logic_type`
