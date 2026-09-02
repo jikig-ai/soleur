@@ -193,6 +193,32 @@ violating the contract it now enforces.
   skipping it is strongest exactly when every signal seems to align, which is the rationalization
   it was built to catch.
 
+- **My plan wrote `credentials_required: none — replays synthesized fixtures ...`, and that
+  GRANTED the credentials waiver.** Preflight Check 10 treats any non-placeholder value in that
+  field as "this probe cannot run unauthenticated", returns SKIP-DECLARED, and never executes the
+  command. Its anchored placeholder regex is `^(todo|tbd|n/a|na|none|...)$` — anchored, so the
+  bare word `none` would have been caught, but `none — <explanation>` sails through. A field
+  whose value says *no waiver is needed* was silently granting the waiver, on the most natural
+  misreading of its own name. Same family as this document's primary finding: an instrument that
+  returns a confident answer while measuring nothing. — Recovery: removed the field (absence is
+  what makes Check 10 run), left a comment saying why it is absent, and verified by EXECUTING
+  the gate — the probe ran inside bwrap, rc=0, `31 passed, 0 failed`. It would also have pushed
+  the `check10-test-manifest` G1 corpus baseline 6 → 7; mutation-proven by re-adding the line and
+  watching G1 go red. — **Prevention:** a schema field that can DISABLE a gate must be read as
+  "does this value disable it?", never as "is this value informative?" — and the placeholder
+  guard on such a field belongs on the first token, not the whole string, because every
+  well-meaning author appends a justification.
+- **The same plan's `## User-Brand Impact` answered Check 6 in full and still failed it**, because
+  the threshold was prose rather than the canonical `- **Brand-survival threshold:**` bullet the
+  anchored extractor requires. — **Prevention:** when a gate reads a document by anchored regex,
+  the document is a machine input; run the gate's own extractor against the artifact rather than
+  reading it and judging that the answer is present.
+- **Neither gate would have run at all**: the PR body linked no plan file, so Check 6 fell back to
+  the body alone and Check 10 returned SKIP at row 1. `/compound` had archived the plan to
+  `plans/archive/`, and nothing re-pointed the PR body at it. — **Prevention:** archiving a plan
+  moves the artifact two compliance gates resolve by path; a run that archives mid-pipeline must
+  re-point the PR body, or the gates downgrade to SKIP and report silence as success.
+
 ## Related
 
 - `knowledge-base/project/learnings/2026-08-11-my-fixture-shared-the-bug-so-the-test-could-not-see-it.md`
