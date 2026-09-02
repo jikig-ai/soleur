@@ -855,6 +855,111 @@ else
        "$_a10_rc" "mirror=${_a10_mirror} lib=${_a10_lib}"
 fi
 
+# ── A12–A17 — the canonical module-shape gate (#7534) ──────────────────────────────────
+#
+# Before #7534 each of the four forms below rendered into user_data while the nine literal
+# payloads still resolved and every floor still passed — so the evidence digest attested a
+# byte set that was not what shipped. The gate now refuses them. A16 and A17 are the
+# must-PASS rows constraint 2 requires: a matrix of only-RED rows cannot detect a guard that
+# rejects everything, and this gate's whole risk is over-firing on a legitimate module.
+
+# Injects a line INTO the templatefile map, before its `  })` close, so the deviant binding
+# sits where a real one would rather than trailing the file.
+_a_inject_binding() {  # $1 = main.tf path, $2 = line(s) to inject
+  local mt="$1" line="$2"
+  awk -v ins="$line" '/^  \}\)$/ && !d { print ins; d=1 } { print }' "$mt" > "$mt.new" \
+    || _a_setup_fail "could not inject a binding into $mt"
+  mv "$mt.new" "$mt" || _a_setup_fail "could not replace $mt"
+  grep -qF "$(printf '%s' "$line" | head -1)" "$mt" \
+    || _a_setup_fail "the injected binding did not land in $mt — the map-close anchor has drifted"
+}
+
+# A12 — a MULTI-LINE `file(\n "…"\n)`. The occurrence is counted; the strict single-line rule
+# cannot resolve it, so the two counts disagree and the gate must name the site.
+_a_tree a12; _a12="$_A_TREE"
+_a_inject_binding "$_a12/modules/git-data-userdata/main.tf" \
+'    a12_multi = replace(file(
+      "${path.module}/../../git-data-gc.sh"
+    ), local.git_data_rationale_strip, "")'
+_a_abort "A12: a multi-line file() binding aborts, naming the site" \
+         "in the strict single-line" "$_a12/ci.yml"
+
+# A13 — an INDIRECTED `file(local.p)`. Not statically resolvable at all; this is the form full
+# HCL parsing could not have reached either, which is why the gate narrows the shape instead.
+_a_tree a13; _a13="$_A_TREE"
+_a_inject_binding "$_a13/modules/git-data-userdata/main.tf" \
+'    a13_indirect = file(local.a13_path)'
+_a_abort "A13: an indirected file(local.p) binding aborts, naming the site" \
+         "in the strict single-line" "$_a13/ci.yml"
+
+# A14 — a SECOND `templatefile(`. A second template renders into user_data and is invisible to
+# the payload extractor. Note it does NOT move the file-family count: `templatefile(` is
+# preceded by `e`, so the extractor's own `(^|[^A-Za-z])` boundary excludes it — which is
+# exactly why this needs its own check rather than falling out of the count comparison.
+_a_tree a14; _a14="$_A_TREE"
+_a_inject_binding "$_a14/modules/git-data-userdata/main.tf" \
+'    a14_second = templatefile("${path.module}/../../ci.yml", {})'
+_a_abort "A14: a second templatefile() aborts" \
+         "templatefile(\` occurrence(s); the canonical shape has exactly 1" "$_a14/ci.yml"
+
+# A14b — TWO `templatefile(` ON ONE PHYSICAL LINE. This is the arm that pins `grep -o | wc -l`
+# against `grep -c`: the latter counts LINES, reports 1, and lets a second template through the
+# check written to catch it. Measured — swapping the gate to `grep -c` leaves A14 green and
+# only this arm reddens. The fixture is deliberately a nested call, the shape a real map value
+# would take.
+_a_tree a14b; _a14b="$_A_TREE"
+python3 - "$_a14b/modules/git-data-userdata/main.tf" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = 'rendered = templatefile("${path.module}/../../ci.yml", {\n'
+new = 'rendered = templatefile("${path.module}/../../ci.yml", { inner = templatefile("${path.module}/../../ci.yml", {}),\n'
+assert old in s, "A14b: the templatefile anchor has drifted"
+open(p, "w").write(s.replace(old, new, 1))
+PY
+[[ $? -eq 0 ]] || _a_setup_fail "A14b: could not build the one-line two-templatefile fixture"
+_a_abort "A14b: two templatefile() on ONE line abort — occurrences, not lines" \
+         "templatefile(\` occurrence(s); the canonical shape has exactly 1" "$_a14b/ci.yml"
+
+# A15 — a single-line literal whose prefix is NOT `${path.module}/`. The fourth form, and the
+# one undocumented until #7534: it resolves in Terraform and renders, but the extractor's
+# `${path.module}` anchor cannot see it.
+_a_tree a15; _a15="$_A_TREE"
+_a_inject_binding "$_a15/modules/git-data-userdata/main.tf" \
+'    a15_root = replace(file("${path.root}/../../git-data-gc.sh"), local.git_data_rationale_strip, "")'
+_a_abort "A15: a non-\${path.module} single-line literal aborts, naming the site" \
+         "in the strict single-line" "$_a15/ci.yml"
+
+# A16 — MUST-PASS, and the digest must MOVE. A NEW tenth payload FILE, not a second binding to
+# an existing one: the payload floor counts distinct files post-`sort -u`, so a duplicate
+# binding would test the dedup rather than the growth. Two rungs, because "still produces a
+# digest" alone cannot distinguish a gate that hashes the tenth payload from one that ignores
+# it — which is the whole failure #7534 names.
+_a_tree a16; _a16="$_A_TREE"
+printf '#!/usr/bin/env bash\n# a16 extra payload\ntrue\n' > "$_a16/git-data-a16-extra.sh" \
+  || _a_setup_fail "could not write the A16 tenth payload"
+_r2_write_module "$_a16" "${_r2_payloads[@]}" git-data-a16-extra.sh
+_a_hash "A16: a canonical module with a TENTH payload still produces a digest" "$_a16/ci.yml"
+_a16_before="$(git_data_rung2_user_data_sha256 "$_a16/ci.yml" 2>&1)"
+printf '# a16 edit\n' >> "$_a16/git-data-a16-extra.sh" \
+  || _a_setup_fail "could not edit the A16 tenth payload"
+_a16_after="$(git_data_rung2_user_data_sha256 "$_a16/ci.yml" 2>&1)"
+if [[ -n "$_a16_before" && "$_a16_before" =~ ^[0-9a-f]{64}$ && "$_a16_before" != "$_a16_after" ]]; then
+  pass "A16: editing the tenth payload MOVES the digest — it is bound, not merely tolerated"
+else
+  fail "A16: editing the tenth payload MOVES the digest — it is bound, not merely tolerated" \
+       "before=${_a16_before} after=${_a16_after}"
+fi
+
+# A17 — MUST-PASS, VALUE-FORM. The templatefile map holds two classes of entry, and the gate
+# quantifies over one of them. A value-form entry (`host_name = var.host_name`, and Phase 5's
+# `betterstack_logs_token = var.betterstack_logs_token`) is not a `file*(` occurrence, so it
+# must not trip this gate — by construction, not by exemption. This row is what proves that
+# claim now, rather than discovering the interaction when Phase 5's map entry lands.
+_a_tree a17; _a17="$_A_TREE"
+_a_inject_binding "$_a17/modules/git-data-userdata/main.tf" \
+'    a17_value = var.betterstack_logs_token'
+_a_hash "A17: a value-form map entry does not trip the canonical-shape gate" "$_a17/ci.yml"
+
 # MINIMUM-CARDINALITY FLOOR. This suite had none, and it now covers TWO gates: an early
 # `exit`, a helper that silently stopped being called, or a fixture-setup failure would
 # otherwise report "0 failed" — the vacuous green every guard in this file exists to reject.
@@ -863,12 +968,22 @@ fi
 # passes+fails, so a genuine failure still counts as HAVING RUN and reports as a failure
 # rather than masquerading as an empty suite.
 # RAISED 58 -> 69 WITH THE ARMS THAT MADE IT NECESSARY (#7485): A1–A11 above (A11 pins the payload floor at its near boundary).
+# RAISED 69 -> 77 (#7534), ITEMISED — the canonical module-shape arms:
+#     1  A12   multi-line file()                       -> ABORT
+#     1  A13   indirected file(local.p)                -> ABORT
+#     1  A14   a second templatefile()                 -> ABORT
+#     1  A14b  two templatefile() on ONE line          -> ABORT (pins grep -o over grep -c)
+#     1  A15   non-${path.module} single-line literal  -> ABORT
+#     2  A16   a tenth payload: still hashes, AND the digest moves when it changes
+#     1  A17   a value-form map entry does NOT trip the gate (Phase 5's shape, proved here)
+#   ----
+#     8
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 69 ]]; then
+if [[ "$_ran" -lt 77 ]]; then
   fails=$((fails + 1))
   printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 69. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 69)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 77)\n' "$_ran"
 fi
 
 printf '\n=== %d passed, %d failed ===\n\n' "$passes" "$fails"
