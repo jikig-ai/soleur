@@ -23,6 +23,29 @@ LUKS rather than plaintext ext4 in the same change.
 No spec.md exists for this branch — spec lacks valid `lane:`, defaulted to `cross-domain` (TR2
 fail-closed).
 
+## Deepen-Plan Revisions (2026-09-02)
+
+A two-agent adversarial review found **six defects that made the first draft non-executable**. Each
+was verified against source before being accepted; the plan below is the corrected version. Recorded
+here because the corrections change the plan's *shape*, not just its detail.
+
+| # | Defect | Verified by | Correction |
+|---|---|---|---|
+| R1 | **Phase 1 could not be delivered by its own vehicle.** `tests/scripts/lib/inngest-host-replace-gate.sh` allows exactly `hcloud_server.inngest`, `hcloud_server_network.inngest`, `hcloud_volume_attachment.inngest_redis`; `hcloud_volume.inngest_redis` is *"DELIBERATELY ABSENT"* with a `redis_volume_destroyed` backstop, and PASS requires `oos==0 && rdel==0 && replaced==1`. Removing `format` puts a volume replace in that plan (`-target` prunes dependents, not dependencies), so Dispatch A **aborts**. | Read the gate | Split into **two merges**; keep `format` behind `ignore_changes` (R6). **Never widen that gate** — it has no reviewer gate, no confirm, no id-pin, so widening it creates an unguarded second recut path. |
+| R2 | **Guard 2 measured the wrong thing.** `redis_keys == 0` is a claim about a Redis *process*, not about the *block device*. The current mount is `mount … \|\| true` + `nofail`, so a failed mount leaves `/mnt/data` on the ephemeral root disk — Redis then reports an empty store while the volume holds a populated AOF. The gate would pass and the destruction would be unsafe. | Read `cloud-init-inngest.yml`; the FSM already carries a `latch-unrecordable detail=not-a-mountpoint` abort for this exact case | Added mount-source, `data_bytes`, and `unknown`-on-error conditions. |
+| R3 | **The recut cannot achieve P2 today, and would make things worse.** `record_flush_latch` runs at `inngest-cutover-flip.sh:492` — **before** `verify_or_abort` at `:502`. `verify_or_abort` needs `/health` 200 plus a non-empty function registry. The host cannot bind (`http_code=000`) *even though* `INNGEST_DIAGNOSTIC_BOOT=1` already bypasses the flag allowlist — so the flag is not what keeps it dark. The first post-recut `arm` would write a **fresh** latch, fail verify, and land in terminal `aborted`: latch re-armed, flag worse than `rolled-back`, destructive one-shot spent. | Read the FSM ordering | **#7674 PASS is now a hard precondition of the recut, not a follow-on.** |
+| R4 | **No concurrency mutex; a real TOCTOU.** Guard 2 reads rows up to 90 min old; `cutover-inngest.yml op=arm` writes the Doppler flag from a *different* workflow and the on-host timer acts within 30s. Terraform could destroy the volume mid-`FLUSHALL`. `workspaces_luks_recut` carries a `web-1-swap` group; this target had none. | Read both workflows | Added a shared `inngest-cutover` concurrency group and a synchronous pre-apply flag re-read. |
+| R5 | **The `crypto_LUKS` reopen is not idempotent across boots.** `cloud-init-inngest.yml` states `runcmd` runs *"on FIRST BOOT ONLY"* and `/run` is tmpfs. On boot 2 nothing calls `luksOpen`, the mapper is absent, the `nofail` fstab line skips, and Redis writes plaintext to the root disk. `workspaces-luks.tf` has the identical unsolved gap (deferred to #6931), so there is **no working precedent to copy**. | Read both files | A boot-reopen systemd unit is now a **deliverable**, not an assumption. |
+| R6 | **Removing `format` disables `apply_target=inngest-host` for the whole window.** That target carries an additive-only guard (*"a net-new host provisioning must create, never destroy"*), so a queued volume replace makes it **permanently abort** — disabling the recovery dispatch for a host that is already not serving, indefinitely if Guard 2 refuses. | Read the guard | `lifecycle { ignore_changes = [format] }` until the recut branch drops it. |
+
+Two further corrections of my own reasoning: the stated rationale for removing `format`
+("`ext4` makes a fresh volume byte-indistinguishable from a populated one") was **wrong** —
+`git-data-luks.tf` keeps `format = "ext4"` and `luksFormat`s straight over it. The correct
+precedent is zot/registry's Option B, chosen *because the registry has a volume-preserving
+host-replace dispatch*, which inngest also has. And `L = 0` is a **property of today**, not a
+standing one: after a successful post-recut flip, `record_flush_latch` emits fresh rows and G3.7
+will refuse the next `op=arm` within retention.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6) — every cited reading re-measured 2026-09-02
@@ -141,7 +164,12 @@ reduces to one unreadable file — which is exactly what Phase 1 makes readable.
 ### Property List (Phase 0.6b)
 
 - **P1** A standing `/mnt/data` flush latch can be cleared by an in-repo mechanism.
-- **P2** The cutover FSM can leave terminal `rolled-back` without aborting into `aborted`.
+- **P2** The cutover FSM *becomes able* to leave terminal `rolled-back` without aborting into
+  `aborted`. This plan removes the latch blocker and builds the gated capability; it does **not**
+  leave the state — arming is a separate operator decision at the window. And removing the latch is
+  necessary but **not sufficient**: `record_flush_latch` runs before `verify_or_abort`, so until
+  #7674 is fixed the first `arm` would re-write the latch and land in `aborted` anyway. #7674 PASS
+  is therefore a precondition of the recut, enforced by Guard 2 condition 10.
 - **P3** The AOF volume holding user prompts/agent output is encrypted at rest, flipping the
   ledger row from `plaintext-exception` before its `expires_on: 2026-10-22`.
 - **P4** The destructive capability cannot fire without human authorization, and cannot fire by
@@ -153,7 +181,7 @@ reduces to one unreadable file — which is exactly what Phase 1 makes readable.
 | Mechanism | Property it would buy | Why cut |
 |---|---|---|
 | `cron-encryption-posture-reconcile.ts` registration | posture reconciled against live state | File does not exist; ADR-141 defers Layer B deliberately. Grepped the authority (`git ls-files`), not a consumer. |
-| R2 header-escrow bucket (copy of `workspaces-luks-header.tf`) | LUKS header survives header-region corruption | ADR-142 rejects it for this store by name, on confidentiality grounds. Pending CTO ruling; see Decision Challenges. |
+| R2 header-escrow bucket (copy of `workspaces-luks-header.tf`) | LUKS header survives header-region corruption | **Cut — decided, not pending.** ADR-142 rejects it for this store by name on confidentiality grounds, and the CTO ruling confirmed it categorically. See §Escrow and Decision Challenge 1. |
 | Webhook latch readback (`cat-inngest-cutover-state.sh` behind a webhook id) | latch readable off-host | ADR-100 Decision 6a stands unamended; declined 2026-08-25 in favour of the Vector→Better Stack substitution. **Also moot:** a recut clears the latch unconditionally, so its prior state stops being a question you must answer. |
 | New reviewer-gated environment | human authorization | Already exists — `github_repository_environment.inngest_cutover`, reviewer set verified non-empty. Reuse. |
 
@@ -395,6 +423,45 @@ not when someone dispatches it.
 
 ## Encryption Posture
 
+**The row is STAGED, and this is load-bearing.** The volume is plaintext ext4 from merge until
+Dispatch B succeeds. A PR that flips the ledger to `luks` at merge would publish a false at-rest
+claim about user prompts and agent output for an unbounded window — and if Guard 2 refuses
+(`redis_keys > 0`), a **permanent** one. That is precisely the #6588 class ADR-140 exists to
+prevent, and it would contradict this plan's own line that a lapsed exception is evidentially worse
+than an honest extension. So Phase 5 splits: **at merge the row keeps its exception**, re-dated
+with the recut as justification and with only the bare-line-number citation fixed; the flip to
+`luks` lands in a follow-up commit gated on the post-recut verification.
+
+### Merge-time row (what ships in this PR)
+
+```yaml
+at_rest:
+  - store: hcloud_volume.inngest_redis
+    mechanism: plaintext-exception
+    evidence: >-
+      apps/web-platform/infra/inngest-host.tf (resource "hcloud_volume" "inngest_redis" — no LUKS
+      apparatus until the gated recut lands). CONTENT ANCHOR, not a line number: the existing row
+      cites `inngest-host.tf:288`, which violates cq-cite-content-anchor-not-line-number and is
+      corrected in this PR.
+    defends_against: nothing at the volume layer
+    does_not_defend: >-
+      a seized/snapshot disk exposes the Inngest queue + run-state AOF, i.e. in-flight job payloads
+      (user prompts and agent output)
+    disclosed_as: not-publicly-claimed
+    live_verification: >-
+      unavailable:the Hetzner API is blind to guest-side LUKS and no inngest-host posture probe
+      exists; tracked #6894
+    exception:
+      justification: >-
+        the LUKS apparatus ships inert in this PR; the cutover is a gated dispatch whose
+        empty-store precondition may route the work to ADR-142's byte-copy instead
+      tracking_issue: "#6894"
+      reevaluate_when: the gated inngest-volume-recut dispatch completes and Dispatch C verifies
+      expires_on: "2026-10-22"
+```
+
+### Post-cutover row (follow-up commit, gated on verification)
+
 ```yaml
 at_rest:
   - store: hcloud_volume.inngest_redis
@@ -443,10 +510,11 @@ Two ledger-hygiene items carried from the legal review:
 - The **existing** row's evidence string cites `apps/web-platform/infra/inngest-host.tf:288` — a
   bare line number, which violates `cq-cite-content-anchor-not-line-number`. The rewrite replaces
   it with a content anchor, matching the `hcloud_volume.git_data_luks` row's style.
-- The row's `exception` block (`tracking_issue: #6894`, `expires_on: 2026-10-22`) is **removed**,
-  not edited, and #6894 closes when the recut is verified. If the recut slips past 2026-10-22,
-  re-date the exception with a fresh justification rather than letting it lapse silently — a
-  lapsed exception is evidentially worse than an honest extension.
+- The row's `exception` block is **retained and re-dated at merge**, and removed only in the
+  post-cutover follow-up commit; #6894 closes when the recut is verified. If the recut slips past
+  2026-10-22, re-date the exception again with a fresh justification rather than letting it lapse
+  silently — a lapsed exception is evidentially worse than an honest extension. This is the whole
+  reason the row is staged.
 - **No retained plaintext backstop row is needed.** The destructive recut leaves no second volume;
   had this followed ADR-142's additive path, the retained plaintext volume would have required its
   own ledger row with its own exception and expiry, exactly like `hcloud_volume.workspaces` and
@@ -504,6 +572,7 @@ guard):
 | 7 | A second inngest-adjacent resource is added to the plan after a compliant first (`hcloud_volume_attachment.git_data` created) | A check that stops at the first member is itself the defect class. The quantifier must reach member two. |
 | 8 | Plan JSON is truncated / unparseable | `plan_gate_assert_readable` — "I could not check" must not read as "it is fine". |
 | 9 | A counter evaluates to the empty string | `plan_gate_assert_numeric` — `[[ "" -gt 0 ]]` is FALSE under bash coercion, silently satisfying every threshold. |
+| 10 | Plan shows the inngest volume with `["delete","create"]` while `expected_id` is **empty** | `id_pin_absent`. The template takes `expected_id="${2:-}"`, so an omitted pin would silently disable the ID-PIN on a genuine destroy. The pin is **required** whenever `before != null`; it is a no-op only for the bare-create recovery shape. |
 
 **Harness rows** (mutate the SUITE, not the guard):
 
@@ -529,6 +598,12 @@ silent), read through `scripts/betterstack-query.sh` — the same no-SSH transpo
 class is introduced. **All six conditions, and all field reads from the SAME row — never joined
 across rows:**
 
+0. **`probe_schema=2` on the chosen row.** Phase 2's emitter stamps this; the pre-Phase-2 host
+   does not. A row without it yields verdict `stale_schema` ⇒ REFUSE. This is what makes the
+   Phase 2 → Phase 4 ordering a **mechanical precondition** rather than operator discipline: before
+   the new emitter is live there is no schema-2 row, so the recut is unreachable by construction.
+   Do not rely on "the missing field parses to empty" — a lenient extractor makes absence satisfy
+   everything, which is the fail-open this condition replaces.
 1. Row count in the window **≥ 1**. Zero rows ⇒ verdict `silent` ⇒ REFUSE — distinct from
    `unreadable`, and never `dark`.
 2. Counts validated by an explicit `^[0-9]+$` predicate. A non-decimal or unparsed count ⇒
@@ -544,6 +619,54 @@ across rows:**
    is db-0 only while `FLUSHALL` spans every db. The shipped post-flush assert already carries that
    asymmetry; it must not be inherited into a gate that authorizes destruction.
 6. The live Hetzner attachment's volume id equals the id the dispatch pinned.
+7. **Host identity — `host=soleur-inngest` AND `host_name=soleur-inngest-prd` on the row.**
+   `inngest-bootstrap.sh` is the **SHARED** renderer for both hosts, so the co-located web host
+   emits this probe too. Without the full conjunction a web-host row reporting its own (irrelevant)
+   state could satisfy the gate. Reuse `scripts/inngest-dedicated-host-classify.sh`, which already
+   measures exactly this conjunction and whose suite carries an `R_SPOOF` fixture
+   (`host=soleur-web-platform` with `host_name=soleur-inngest-prd`) for the near-miss case. Emit the
+   new fields **only** on the dedicated host, or as `n/a` elsewhere — never a defaulted `0`.
+8. **`data_mount_src` equals the pinned device.** The probe emits `findmnt -no SOURCE /mnt/data`;
+   it must equal `/dev/disk/by-id/scsi-0HC_Volume_<pinned-id>` pre-recut (or
+   `/dev/mapper/inngest-redis` post-recut). **This is the condition that makes the whole gate mean
+   what it claims.** `redis_keys` is a statement about a Redis *process*; the recut destroys a
+   *block device*. Today's mount is `mount … || true` with `nofail`, so a failed mount leaves
+   `/mnt/data` on the ephemeral root disk and Redis reports an empty store **while the volume holds
+   a populated AOF** — gate passes, destruction unsafe. The FSM already carries a
+   `latch-unrecordable detail=not-a-mountpoint` abort for precisely this shape, so the repo has been
+   bitten by it before. Empty or mismatched ⇒ `mount_mismatch` ⇒ REFUSE.
+9. **`data_bytes` is reported** (`du -sb /mnt/data`) and lands in the row. Not a pass/fail threshold
+   — an **audit** field. An empty Redis on a volume holding megabytes is a state a human should see
+   before it is erased.
+10. **`#7674` reads PASS** — `scripts/followthroughs/inngest-host-not-serving-7674.sh`. See the
+    precondition box in §Apply path: without this the recut is strictly counterproductive.
+11. **`INNGEST_DIAGNOSTIC_BOOT` is unset or `0`** on the same row. If it is still set, the flip
+    reaches `done` against a SQLite-only non-durable scheduler — #7228's defect reproduced one layer
+    over, now with the latch burned.
+12. **The Doppler flag is re-read synchronously immediately before apply** and must be
+    `rolled-back` or `aborted`. Guard 2's Better Stack row is a ≤90-minute-old snapshot; the flag is
+    readable in real time and is the thing that actually authorizes a concurrent `FLUSHALL`.
+
+**Concurrency is part of the contract, not an afterthought.** Guard 1 quantifies over a plan
+document and Guard 2 over log rows; **neither quantifies over a concurrent dispatch**. A
+`cutover-inngest op=arm` between the two flips the Doppler flag, the 30s on-host timer fires
+`run_preflush_flip`, and terraform can destroy the volume mid-`FLUSHALL`. The new job therefore
+carries `concurrency: {group: inngest-cutover, cancel-in-progress: false}` — and so must
+`inngest_host`, `inngest_host_replace`, **and** the `cutover-inngest` arm/resume workflow. A mutex
+on one side of a race is not a mutex.
+
+13. **`redis_active=active` on that same row.** Without this the gate authorizes destruction on an
+   ambiguity: a host where Redis failed to start emits a `redis_keys` derived from a failed
+   `INFO keyspace`, and "Redis is down" becomes indistinguishable from "the store is empty". That
+   is the same fail-open shape as mutation row 5 — silence is not evidence — applied to the field
+   the whole decision rests on. **At the emit site, a failed `INFO keyspace` MUST emit
+   `redis_keys=__UNREADABLE__`, never an empty string and never `0`.**
+
+**Every consumed field is validated for PRESENCE, not just format.** Conditions 3, 4 and 6 read
+fields whose *absence* would otherwise satisfy them — an absent `http_code` is trivially "non-200",
+and an absent `boot_id` compared against an absent `boot_id` is trivially equal. Each field goes
+through a readable/classifiable assert before any comparison, exactly as Guard 1's
+`plan_gate_assert_numeric` does for its counters.
 
 Independently, `function.finished` rows carrying `host_name=soleur-inngest` must be **zero**.
 
@@ -580,6 +703,11 @@ abort. A gate that cannot see the host must never conclude the host is dark.
 | 8 | `redis_keys` sourced from `DBSIZE` instead of `INFO keyspace`, with keys present only in db-1 | `DBSIZE` reads db-0 only and would report 0 on a populated store — a false `dark`. |
 | 9 | The row satisfying conditions 3+5 carries a `boot_id` differing from the newest row's | Reading a pre-replace host. "Dark" about a host that no longer exists. |
 | 10 | Conditions 3 and 5 satisfied but on **two different rows** | Fields must come from one row, or the gate authorizes on a state that never simultaneously existed. |
+| 11 | `redis_active=inactive` with `redis_keys=0` | Redis being down is not the store being empty. Must verdict `unreadable`, never `dark`. |
+| 12 | `redis_keys` absent from the row entirely | Absence must not parse to `0`. Verdict `unreadable`. |
+| 13 | A row lacking `probe_schema` (the pre-Phase-2 emitter) | Verdict `stale_schema` — this is the interlock that stops a recut dispatched before the read channel exists. |
+| 14 | `http_code` absent from the row | Absence must not read as "non-200". Verdict `unreadable`. |
+| 15 | `boot_id` absent from **both** the chosen and the newest row | `"" == ""` must not satisfy the pin. Verdict `unreadable`. |
 
 **Harness rows:**
 
@@ -595,6 +723,55 @@ this recut safe (host dark, scheduler elsewhere) are facts about the world at di
 plan that assumes them without checking is a plan that was correct on 2026-09-02 and silently wrong
 afterwards. Encoding the premise as a gate is what stops this plan's own reasoning from rotting —
 the failure mode this feature's history is a case study in.
+
+## Downtime & Cutover
+
+**The gate fires.** This plan replaces `hcloud_server.inngest` (user_data is ForceNew with no
+`ignore_changes`, so the cloud-init edit forces it) and `-replace`s `hcloud_volume.inngest_redis`
+plus its attachment. Both are the infra reboot/replace class.
+
+**The offline-inducing operation and the surface it affects.** Dispatch A and Dispatch C each
+destroy and recreate the dedicated Inngest host; Dispatch B destroys and recreates its AOF volume.
+The affected surface is the **dedicated Inngest scheduler host** — and it is measured **not
+serving**: `server_active=inactive`, `http_code=000`, `cutover_flag=rolled-back`, with 18 of 18
+`function.finished` rows over 2h attributed to `soleur-web-platform`. The live scheduler is web-1,
+a different host with a different volume, untouched by every dispatch here and protected by Guard
+1's `web1_server_touched` counter.
+
+**User-visible downtime: zero minutes.** Not "brief" or "acceptable" — zero, because the surface
+being taken offline is already offline and serves no traffic. This is the one case where the
+downtime question has a trivial answer, and the plan states the measurement rather than asserting
+the conclusion.
+
+**Zero-downtime path evaluated, and it is the branch we keep.** The zero-downtime alternative for
+the *volume* is ADR-142's additive blue-green: provision a second raw LUKS volume, quiesce intake,
+freeze, byte-copy, canary on reminder-count, mount-swap, retain the plaintext volume as a rollback
+backstop. It is **not rejected** — it remains **mandatory** whenever the store is non-empty, and
+Guard 2's `redis_keys == 0` condition is precisely the switch between the two paths. The
+destructive path is taken only in the world where blue-green would copy zero bytes and then
+`FLUSHALL` them, i.e. where "zero-downtime" and "destructive" have identical outcomes and the
+blue-green machinery buys only its own three FATAL footguns (wrong device, torn AOF, mid-window
+reboot re-mounting plaintext).
+
+**Why the surface cannot be drained instead.** Inngest cannot be drained to empty by waiting:
+armed reminders sit at arbitrary future fire-times, so "wait for the queue to empty" is unbounded.
+That is exactly why ADR-142 chose byte-copy over drain, and why this plan measures occupancy rather
+than waiting for it to reach zero.
+
+**Per-stage verification and rollback.**
+
+| Stage | Verification before proceeding | Rollback |
+|---|---|---|
+| Dispatch A (host replace, probe delivery) | Probe rows resume on the hourly cadence carrying the four new fields; `blkid` arm reports `ext4` and mounts as-is; no data touched | Re-dispatch `inngest-host-replace` on the prior image; the volume is untouched throughout |
+| Observation window | ≥1 probe row with `flush_latched`, `latch_flushed_at`, `latch_dbsize`, `redis_keys` on the current `boot_id` | N/A — read-only |
+| Dispatch B (volume recut) | Guard 1 (plan shape + ID-PIN, `hcloud_server.inngest` zero actions) and Guard 2 (six conditions, one row) both PASS | **None — this stage is irreversible.** That is why it sits behind five layers and a measured empty-store precondition, and why the pre-destruction probe row is the audit record |
+| Dispatch C (host replace onto raw volume) | `SOLEUR_INNGEST_LUKS_STAGE` rc=0 through `stage=fstab`; `/mnt/data` is a genuine mountpoint on `/dev/mapper/inngest-redis`; probe reports `redis_active=active` | Re-dispatch; the volume is already LUKS and the `crypto_LUKS` arm is idempotent |
+
+**Bounded window.** Each dispatch is a single Hetzner replace on a non-serving host; the
+maintenance window is bounded by provider replace time plus cloud-init, not by any drain. The
+reviewer-gated environment can hold a run `waiting` for hours while holding the workflow-level
+concurrency group (`cancel-in-progress: false`), which blocks *sibling applies* — that cost is
+inherited from `workspaces_luks_recut` and is stated here rather than discovered during the window.
 
 ## Observability
 
@@ -636,6 +813,17 @@ failure_modes:
       coupling the legal review surfaced: the latch's re-arm path depends on /mnt/data being a
       genuine mountpoint on the NEW volume.
     alert_route: Better Stack; the FSM drives the flag to terminal `aborted`, halting the poll
+logs:
+  where: >-
+    on-host journald → Vector (Source 4, SYSLOG_IDENTIFIER exact-value allowlist) → Better Stack
+    Logs, source soleur-inngest-vector-prd, table t520508_soleur_inngest_vector_prd_3_logs. The
+    cloud-init boot-stage emitter POSTs directly to the same Better Stack ingest, so a failure that
+    precedes Vector is still recorded. No SSH path exists or is required.
+  retention: >-
+    ~20 days, MEASURED this session rather than assumed — whole-table probe returned
+    oldest=2026-08-13 15:14:14, newest=2026-09-02 20:15:16 over 2,855,466 rows. This is the number
+    that makes G3.7's 365d L-window structurally blind to the 2026-07-23/24 flip, and it is
+    recorded in the new ADR so the next reader does not re-derive it.
 discoverability_test:
   command: >-
     doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 6h
@@ -754,7 +942,7 @@ backstop would have been a new recurring cost requiring a ledger entry before PR
 | File | Change |
 |---|---|
 | `apps/web-platform/infra/inngest-redis-luks.tf` **(new)** | `random_password.inngest_redis_luks` (length 40, `special = false`, **no** `ignore_changes`) and `doppler_secret.inngest_redis_luks_key` → `INNGEST_REDIS_LUKS_KEY` on the **existing isolated** `soleur-inngest/prd`, `visibility = "masked"`. Co-located in one file because `lint-encryption-posture.py` requires the `random_password` + `doppler_secret` pair be co-located to resolve the citation. |
-| `apps/web-platform/infra/inngest-host.tf` | Remove `format = "ext4"` from `hcloud_volume.inngest_redis` so a recut yields a **raw** device and `blkid -o value -s TYPE` becomes a sound discriminator. |
+| `apps/web-platform/infra/inngest-host.tf` | Add `lifecycle { ignore_changes = [format] }` to `hcloud_volume.inngest_redis`. The `format = "ext4"` line is dropped **only on the recut branch**, so the recut yields a raw device and `blkid` becomes a sound discriminator — while `apply_target=inngest-host` keeps producing a zero-delete plan in the meantime. |
 | `apps/web-platform/infra/cloud-init-inngest.yml` | Replace the plaintext mount block with a three-arm LUKS stage (below). **ForceNew on `hcloud_server.inngest`.** |
 
 No new provider, no new version pin, no new no-default variable — the passphrase is a
@@ -762,53 +950,112 @@ No new provider, no new version pin, no new no-default variable — the passphra
 and it lands in the existing isolated project read by the existing read/write boot token. No new
 Doppler project, no new GitHub Actions secret, no new branch config.
 
-**`format` removal is the highest-risk single line in the diff.** `format` is ForceNew on
-`hcloud_volume`; removing it from config while state carries `"ext4"` may queue a **replace** on the
-next plan. The inngest volume is **not** in the per-merge `-target=` allowlist, so no merge-apply
-can act on it — but a queued replace that some broader dispatch picks up would destroy the volume
-outside the gate. **Phase 0 must measure this**, not assume it: run `terraform plan` and read
-whether the removal queues a replace. If it does, pin it behind `lifecycle { ignore_changes =
-[format] }` until the recut dispatch, and record the reading in the plan.
+**`format` is the highest-risk single line in the diff, and the first draft got its consequence
+wrong.** `format` is ForceNew, so config-null against state-`"ext4"` plans a **replace**. The first
+draft called this "an unexpected replace nobody expected" and deferred the design to a measurement.
+The real consequence is sharper: `apply_target=inngest-host` carries an **additive-only** destroy
+guard (*"a net-new host provisioning must create, never destroy. Any delete → abort BEFORE
+apply"*), so a queued replace does not destroy anything there — it makes that dispatch
+**permanently abort**. That is the provisioning and recovery path for a host which is already not
+serving, and if Guard 2 refuses the recut the outage of that path is **indefinite**.
+
+So the design is committed now rather than deferred: **`lifecycle { ignore_changes = [format] }`
+lands in Merge B**, and the `format` line is dropped only on the recut branch. The mitigation the
+first draft offered — "the volume is outside every merge-apply `-target=` list" — is true and
+irrelevant: the exposure was never the merge-apply, it was the dispatch paths and the operator's
+full untargeted apply, which `inngest-host.tf`'s own header names as a real apply path.
+
+Phase 0 still measures, but the measurement is now an **AC**, not a fork: `apply_target=inngest-host`
+must still produce a zero-delete plan after the change.
 
 ### Apply path
 
-**(b) cloud-init + gated dispatch** — never a merge-apply, and **three** dispatches, not two.
+**(b) TWO MERGES, then gated dispatches** — never a merge-apply, and never in one merge.
 
-1. **Merge is inert.** Every touched resource is excluded from the per-PR CI `-target=` list; the
-   workflow's own error text already routes `hcloud_server.inngest` to `-f apply_target=inngest-host`.
-   Zero live mutation on merge.
-2. **Dispatch A — `apply_target=inngest-host-replace`** (existing target, non-destructive to
-   `/mnt/data`). Delivers the extended probe and the new three-arm cloud-init. The volume is still
-   plaintext ext4, and the `ext4` arm mounts it as-is — so this step changes **no data**. Its whole
-   purpose is to make the latch and the store's key count **readable**.
-3. **Observe.** At least one probe row carrying `flush_latched`, `latch_flushed_at`, `latch_dbsize`
-   and `redis_keys` must land in Better Stack. That row is both Guard 2's input **and** the only
-   surviving audit record of what the recut destroys.
-4. **Dispatch B — `apply_target=inngest-volume-recut`** (new), only if Guard 2's conditions hold.
-   Replaces **the volume and its attachment ONLY**. `hcloud_server.inngest` shows **zero actions**.
-5. **Dispatch C — `apply_target=inngest-host-replace`** again. The new host boots, the `blkid` arm
-   sees a **raw** device, and luksFormats it.
+The first draft put everything in one PR and delivered it through `apply_target=inngest-host-replace`.
+That is not executable: `inngest_host_replace_gate` refuses any plan touching
+`hcloud_volume.inngest_redis`, and both of the `.tf` edits put the volume into that plan. The fix is
+a split, and **not** widening that gate — it has no reviewer gate, no typed confirm and no id-pin,
+so widening it would create a completely unguarded second recut path in the same PR that builds
+five guard layers.
 
-**Why three and not two — a correction driven by the pre-written design.** The first draft of this
-plan folded the host replace into the recut dispatch, on the reasoning that a fresh raw volume needs
-the new cloud-init to format it. But the #7674 design's fourth guard layer asserts from the saved
-plan that *"`hcloud_server.inngest` and every unrelated resource show **zero** actions"* — and
-widening the most destructive target in the inngest surface to also permit a server replace would
-destroy exactly that assertion. Splitting keeps each guard tight and **reuses `inngest-host-replace`,
-which already has its own guard**, rather than growing a second host-replace path inside a
-volume-recut target. Between dispatches B and C the running host holds a stale mount of a
-now-destroyed volume; that is harmless precisely because the host is dark, and dispatch C resolves
-it. Narrow guards plus one extra dispatch beats a wide guard.
+**Merge A — the read channel only.** `inngest-bootstrap.sh` probe extension. **No `.tf` change, no
+cloud-init LUKS block**, so `inngest_host_replace_gate`'s three-address allow-set is satisfied
+unchanged. Delivered by `apply_target=inngest-host-replace`. Zero data touched; its whole purpose is
+to make the latch, the mount source, and the store's occupancy **readable**.
 
-Blast radius: the dedicated host and its AOF volume only. Both are excluded from every automatic
-apply path. The host serves nothing (measured), so the outage window is zero user-visible minutes —
-the co-located web-1 scheduler is unaffected because it is a different host with a different volume.
+**Merge B — the apparatus and the gated target.** `inngest-redis-luks.tf`, the cloud-init LUKS
+stage, the boot-reopen unit, the new `inngest-volume-recut` target and its guards.
 
-`hcloud_firewall_attachment.inngest` is **deliberately not `-target`ed**: `server_ids` is
-update-in-place, not ForceNew, and `inngest-host.tf` explicitly instructs *"Do NOT add it to the
-replace allow-set — an in-place update is not a replace."* The new host boots with no hcloud
-firewall attached until the next drift apply reconciles it; blast radius is low because that
-firewall is a zero-rule deny-all and the real control is host-local nftables.
+**Merge B is NOT fully inert, and treating it as inert is the defect.** The LUKS passphrase must
+exist in Doppler *before* any host boots that reads it, or the boot FATALs on an empty key. So
+`random_password.inngest_redis_luks` and `doppler_secret.inngest_redis_luks_key` go **into the
+per-merge `-target=` allowlist** — the precedent is already there for
+`random_password.inngest_redis_password_prd` / `doppler_secret.inngest_redis_password_prd`. Everything
+else in Merge B stays out of every automatic apply path.
+
+**Dispatch order, and the precondition that gates all of it.**
+
+> **#7674 must read PASS before the recut is dispatched.** This is a hard precondition, not a
+> follow-on check. `record_flush_latch` runs at `inngest-cutover-flip.sh:492`, **before**
+> `verify_or_abort` at `:502`, and `verify_or_abort` requires `/health` 200 plus a non-empty
+> function registry. The host cannot bind today — `http_code=000` — and `INNGEST_DIAGNOSTIC_BOOT=1`
+> is **already** bypassing the flag allowlist, which proves the flag is not what keeps it dark. So
+> a recut dispatched now buys nothing and costs everything: the first `arm` writes a **fresh**
+> latch, fails verify, and lands in terminal `aborted`. Latch re-armed, flag worse than
+> `rolled-back`, and the one-shot destructive capability spent on an undiagnosed bind failure.
+
+1. **Merge A.** Inert except the probe.
+2. **Dispatch A — `apply_target=inngest-host-replace`.** Volume untouched; gate passes unchanged.
+3. **Observe**, with a bounded watch (below). Requires a `probe_schema=2` row.
+4. **Merge B.** Passphrase lands via the `-target=` allowlist; everything else inert.
+5. **#7674 reaches PASS.** Until then, stop. Guard 2 enforces it.
+6. **Clear `INNGEST_DIAGNOSTIC_BOOT`** — it is baked into the unit at boot, so clearing the Doppler
+   value alone leaves the installed unit in diagnostic form and `inngest-server-flip-guard.sh`
+   refuses that disagreement. Clearing it **before** Dispatch B means Dispatch C's boot re-bakes it,
+   and no fourth replace is needed.
+7. **Dispatch B — `apply_target=inngest-volume-recut`.** Volume + attachment only;
+   `hcloud_server.inngest` shows **zero actions**.
+8. **Dispatch C — `apply_target=inngest-host-replace`.** New host boots, sees a raw device,
+   luksFormats it.
+9. **FSM re-entry is a separate operator decision at the window** — not this PR's work. For the
+   record, it is: set `INNGEST_CUTOVER_FLIP=armed` (`unset` will not do it — `unset` is itself one
+   of the terminal no-ops), then the FSM runs `armed → flipping → FLUSHALL → assert DBSIZE==0 →
+   flushed → start → verify → done`, and `record_flush_latch` writes a **new** latch on the new
+   LUKS mount, re-arming the guard.
+
+**Bounded watch after each dispatch** (`hr-dispatch-async-must-arm-watch`). The probe is hourly, so
+arm a **2h** watch on `SOLEUR_INNGEST_SERVER_PROBE` for a `probe_schema=2` row on the new `boot_id`.
+On timeout, do not conclude anything from silence — query the `inngest-boot-phone-home` markers
+first, which are a **different channel** that survives a Vector failure. The three causes of silence
+(boot failed / Vector down / tag not allowlisted) need three different actions and are
+distinguishable only that way.
+
+**Every refusal has a stated next action.** A gate that dead-ends is a gate that gets bypassed.
+
+| Verdict | Meaning | Next action |
+|---|---|---|
+| `stale_schema` | Row predates Merge A's emitter | Complete Dispatch A; re-observe |
+| `silent` | Zero rows in the window | Query `inngest-boot-phone-home` markers; if those are also absent the host failed to boot — re-dispatch A on the prior image |
+| `unreadable` | Query rc≠0, or a consumed field absent/non-numeric | Verify `BETTERSTACK_QUERY_*` in `prd_terraform`; if creds are fine, the emitter shipped an incomplete row — fix the emitter, do not relax the gate |
+| `not_dark` | `server_active=active` or `http_code=200` | The host is serving. **Stop.** Nothing about this plan applies to a serving host |
+| `redis_keys > 0` | Store is populated | Destructive path refused. Route to ADR-142 byte-copy under #6894 — **but see the circularity note below** |
+| `mount_mismatch` | `/mnt/data` is not on the pinned device | The mount failed open and Redis is on the root disk. Do **not** recut; the volume's real contents are unmeasured |
+| `id_pin_absent` / `luks_id_mismatch` | Pin missing, or address resolves elsewhere | Re-read the live Hetzner attachment id and re-dispatch. If the volume was stranded, use the bare-create recovery shape |
+| Guard 1 `out_of_scope` / `resource_deletes` | Drift is in the plan | Do **not** widen the gate. Reconcile drift under its own dispatch first |
+| LUKS boot fails after Dispatch B | Volume already destroyed | **No rollback exists.** The store was empty by precondition, so recovery is re-provision: functions re-sync from Postgres and the SDK re-registers |
+
+**The `redis_keys > 0` branch is circular, and that is named rather than hidden.** Routing to
+ADR-142's byte-copy requires enumerating reminders, but `inngest-enumerate-reminders.sh` queries
+`127.0.0.1:8288`, which is not bound on a dark host; binding requires leaving `rolled-back`; leaving
+it requires clearing the latch — the thing being gated. So on that branch the **append-only
+authorized latch clear** (Alternative 2) is the stated fallback, filed as its own issue in-PR per
+`wg-when-deferring-a-capability-create-a`. Without that, the branch has no path to P1/P2 and the
+plan would have shipped a destructive capability that can never legitimately fire.
+
+Blast radius: the dedicated host and its AOF volume only. The live scheduler is web-1 — a different
+host with a different volume, untouched by every dispatch and protected by Guard 1's
+`web1_server_touched` counter.
 
 ### Distinctness / drift safeguards
 
@@ -829,83 +1076,75 @@ Doppler secrets, and Better Stack log ingest are all existing, in-plan capabilit
 
 ## Implementation Phases
 
+**Two merges.** The split is not stylistic — Merge A's delivery vehicle (`inngest-host-replace`)
+aborts on Merge B's `.tf` edits, so combining them makes Merge A undeliverable.
+
 ### Phase 0 — Preconditions (measure, do not assume)
 
-0.1 Re-run every Premise Validation reading; the plan's own history is a case study in a stale
-    reading repeated as current. Confirm `cutover_flag=rolled-back`, host dark, `L`/`H`, and the
-    Hetzner volume's `format` and id.
-0.2 `terraform plan` and read whether removing `format = "ext4"` queues a replace of
-    `hcloud_volume.inngest_redis`. Record the verbatim plan line. Decide `ignore_changes` on the
-    measurement, not on expectation.
-0.3 Confirm the `inngest-cutover` environment still has a **non-empty** reviewer set via
-    `gh api repos/:owner/:repo/environments/inngest-cutover`. A zero-reviewer environment
-    auto-approves silently.
+0.1 Re-run every Premise Validation reading. This plan's own history is a case study in a stale
+    reading repeated as current.
+0.2 `terraform plan` and record the verbatim line proving `apply_target=inngest-host` still yields
+    a **zero-delete** plan under `ignore_changes = [format]`. This is now an AC (B4), not a fork.
+0.3 Confirm the `inngest-cutover` reviewer set is still non-empty.
 0.4 Read all three `.c4` files and complete the enumeration the ADR/C4 gate requires.
-0.5 Verify `--history-retention` on the inngest-server unit against the unit file.
+0.5 Verify `--history-retention` against the unit file.
+0.6 Confirm `RECUT-INNGEST-VOLUME` collides with no existing confirm literal, and that the
+    `workflow_dispatch` input count is at 7 before adding the 8th.
 
-### Phase 1 — The read channel (M0) — prerequisite for everything else
+### Phase 1 — MERGE A: the read channel, and nothing else
 
-Extend the **existing** unconditional hourly `SOLEUR_INNGEST_SERVER_PROBE` emitter in
-`inngest-bootstrap.sh` with `flush_latched`, `latch_flushed_at`, `latch_dbsize` (parsed from the
-**last** line of the append-only record, matching `cat-inngest-cutover-state.sh`'s `tail -n 1`), and
-`redis_keys` (from `INFO keyspace`, **all** dbs). Emit them from the `rolled-back` / `done` /
-`aborted` no-op arms too — those currently ship an empty string.
+Extend `SOLEUR_INNGEST_SERVER_PROBE` at **both** emit sites with `probe_schema=2`, `flush_latched`,
+`latch_flushed_at`, `latch_lines`, `redis_keys` (`INFO keyspace`, all dbs, `__UNREADABLE__` on any
+error), `data_mount_src` (`findmnt -no SOURCE /mnt/data`), and `data_bytes` (`du -sb /mnt/data`).
+Emit from the terminal no-op arms too. Scope the new fields to the dedicated host — this bootstrap
+is the **shared** renderer for both hosts. Give the probe unit its Redis credential without shipping
+raw stderr.
 
-This is **not** the webhook readback ADR-100 Decision 6a rejected and the operator declined. It adds
-no inbound control plane and no new transport: it extends an emitter that already runs, already
-reads Doppler, and already ships over the on-host Vector → Better Stack journald channel — which is
-precisely the substitution ADR-100 records the operator choosing on 2026-08-25. Decision 6a stands
-unamended.
+**No `.tf` change and no cloud-init LUKS block in this merge.** That is what keeps
+`inngest_host_replace_gate`'s three-address allow-set satisfied and makes Dispatch A possible.
 
-### Phase 2 — LUKS apparatus (inert on merge)
+This is **not** the webhook readback ADR-100 Decision 6a rejected. It adds no inbound control plane
+and no new transport — it extends an emitter that already runs, over the transport ADR-100 records
+the operator choosing on 2026-08-25. Decision 6a stands unamended.
 
-`inngest-redis-luks.tf`; remove `format`; three-arm cloud-init LUKS stage:
+### Phase 2 — MERGE B: LUKS apparatus
 
-| `blkid` TYPE | Arm | Rationale |
-|---|---|---|
-| `ext4` | mount as ext4, emit a `plaintext-awaiting-recut` marker | The pre-recut state. Must not format. |
-| *(empty)* | `luksFormat` → `luksOpen` → `mkfs.ext4` → mount | The only formattable state. |
-| `crypto_LUKS` | `luksOpen` → mount | Idempotent on every later boot. |
-| anything else | **FATAL, halt** | Refuse to write to a device whose contents are unknown. |
+2.1 `inngest-redis-luks.tf` — `random_password.inngest_redis_luks` (length 40, `special = false`,
+    no `ignore_changes`) + `doppler_secret.inngest_redis_luks_key` → `INNGEST_REDIS_LUKS_KEY` on
+    `soleur-inngest/prd`, masked. **One file** — the posture linter requires co-location. Both go
+    into the per-merge `-target=` allowlist so the passphrase exists before any host reads it.
+2.2 `lifecycle { ignore_changes = [format] }` on `hcloud_volume.inngest_redis`; the `format` line
+    drops only on the recut branch.
+2.3 The five-arm cloud-init LUKS stage with the bounded device-presence wait, the `expect_luks`
+    flag threading, and git-data's hardening (exec'd child, ERR trap, `blkid` rc 0-or-2 with any
+    other rc fatal, damaged-header detection, per-operation rc checks).
+2.4 `inngest-luks-open.service` — the boot-reopen unit. `runcmd` runs first boot only, so without
+    this the mapper is absent on boot 2.
+2.5 The two-state `ExecStartPre` `findmnt` gate on the Redis unit.
+2.6 `SOLEUR_INNGEST_LUKS_STAGE` in `vector.toml` Source 4 **and** its drift fixture, same commit.
+2.7 `inngest-redis-luks.test.sh`, registered in `infra-validation.yml`.
 
-Copy `cloud-init-git-data.yml`'s hardening verbatim in shape: run under an exec'd child with
-`set -euo pipefail` and an ERR trap; accept `blkid` rc 0 **or** 2 and treat any other rc as fatal;
-treat "status probe rc=1 but `blkid` still reports `crypto_LUKS`" as a **damaged header**, not a
-blank volume; rc-check `luksFormat`, `luksOpen`, `mkfs`, and `mount` individually. **No `|| true`
-on any step that could leave `/mnt/data` on the root disk**, and no `nofail` semantics that let a
-failed open degrade silently — the current block's `mount … || true` plus `nofail` is exactly the
-hazard the FSM's own mountpoint gate warns about.
+### Phase 3 — MERGE B: the gated apply_target
 
-Add an `ExecStartPre` `findmnt` re-assertion to the Redis unit so it refuses to serve off an
-unmounted path. Encrypting the volume is necessary but not sufficient; a consumer that starts on the
-empty fallback path degrades silently behind an otherwise-green liveness signal.
+3.1 **Write both mutation matrices BEFORE the guards.** A matrix derived from finished code tests
+    the code that exists; one derived from the design tests the property.
+3.2 `inngest-volume-recut-gate.sh` + its suite.
+3.3 `inngest-host-dark-gate.sh` + its suite, including the drop-one battery.
+3.4 The workflow job: `environment: inngest-cutover`, typed confirm, `expected_inngest_volume_id`,
+    the shared `concurrency` group, no `[ack-destroy]` bypass, never auto-executed, never chained.
+3.5 All six registration sites, including the `confirm` input description.
+3.6 The mechanically-runnable mutation harness (B10).
 
-Register the new `SOLEUR_INNGEST_LUKS_STAGE` tag in `vector.toml` Source 4 **and** its drift fixture
-in the same commit.
+### Phase 4 — MERGE B: records
 
-### Phase 3 — The gated apply_target
-
-`apply_target=inngest-volume-recut` with all five guard layers: environment reviewer gate, typed
-`confirm=RECUT-INNGEST-VOLUME`, plan destroy-guard with ID-PIN, the host-dark/store-empty gate
-(Guard 2), and the named-live backstop counters. Write the **mutation matrices before the guards**.
-
-Register in **all five** sites: workflow `options:` + job (bound, so the option cannot exist
-without its guarded job), `terraform-target-parity.test.ts`, `stock-preflight-coverage.test.ts`,
-`test-all.sh`, and **`infra-validation.yml`** — the orphan-suite site an infra `*.test.sh` silently
-never gates without. Add the job-level `concurrency` mutex and the `expected_inngest_volume_id`
-input (slot 8 of 10; do not add a second input).
-
-### Phase 4 — Records
-
-ADR-142 addendum; new ADR (provisionally ADR-198); ledger row rewrite (5 fields, content-anchored
-evidence, exception block removed); Art. 30 PA-13(e) substrate correction; `compliance/` issue for
-PA-13(f); destruction record template under `knowledge-base/legal/audits/`.
+ADR-142 addendum; the new ADR; ledger row **keeping its exception** with the citation fixed;
+Article 30 PA-13(e); the `compliance/` issue for PA-13(f); the append-only-latch-clear fallback
+issue; the destruction-record template.
 
 ### Phase 5 — Verification
 
-`bash scripts/test-all.sh` in full — the full-suite exit gate, not the touched-file loop, is what
-catches a missed registration site. Plus `python3 scripts/lint-encryption-posture.py --repo-sweep`,
-`terraform validate`, and `actionlint` on the workflow.
+`bash scripts/test-all.sh` in full; `lint-encryption-posture.py --repo-sweep`; `terraform validate`;
+`actionlint`; the guard harness with independent re-mutation.
 
 ## Files to Create
 
@@ -919,6 +1158,7 @@ catches a missed registration site. Plus `python3 scripts/lint-encryption-postur
 | `apps/web-platform/infra/inngest-redis-luks.test.sh` | LUKS apparatus guard: no `format` on the volume, key on `soleur-inngest` not `soleur`, blkid discriminator present, three-arm coverage |
 | `knowledge-base/engineering/architecture/decisions/ADR-198-*.md` | New decision (ordinal provisional — re-derive before merge) |
 | `knowledge-base/legal/audits/inngest-aof-destruction-record.md` | Art. 5(2) destruction record template |
+| `apps/web-platform/infra/inngest-luks-open.service` (or its `write_files` stanza) | Boot-reopen unit — `runcmd` runs first boot only, so the mapper is otherwise absent on boot 2 |
 
 ## Files to Edit
 
@@ -926,10 +1166,11 @@ catches a missed registration site. Plus `python3 scripts/lint-encryption-postur
 |---|---|
 | `apps/web-platform/infra/inngest-host.tf` | Remove `format = "ext4"` from `hcloud_volume.inngest_redis` |
 | `apps/web-platform/infra/cloud-init-inngest.yml` | Three-arm LUKS stage replacing the plaintext mount; `ExecStartPre` findmnt re-assertion |
-| `apps/web-platform/infra/inngest-bootstrap.sh` | Extend `SOLEUR_INNGEST_SERVER_PROBE` with `flush_latched`, `latch_flushed_at`, `latch_dbsize`, `redis_keys`; emit from the terminal no-op arms |
+| `apps/web-platform/infra/inngest-bootstrap.sh` | **Merge A.** Extend `SOLEUR_INNGEST_SERVER_PROBE` at **both** emit sites (the `logger -t` line and the `inngest-boot-phone-home.sh` Vector-down fallback) with `probe_schema`, `flush_latched`, `latch_flushed_at`, `latch_lines`, `redis_keys`, `data_mount_src`, `data_bytes`; scope to the dedicated host; add the Redis credential |
 | `apps/web-platform/infra/vector.toml` | Add `SOLEUR_INNGEST_LUKS_STAGE` to Source 4 `include_matches.SYSLOG_IDENTIFIER` |
 | `apps/web-platform/test/infra/vector-pii-scrub.test.sh` | Drift fixture for the new tag — same commit as the allowlist |
-| `.github/workflows/apply-web-platform-infra.yml` | `inngest-volume-recut` in `options:` + the gated job |
+| `.github/workflows/apply-web-platform-infra.yml` | `inngest-volume-recut` in `options:` + the bound gated job; `expected_inngest_volume_id` input; the `confirm` input **description** (it enumerates which targets carry an `environment:` gate); the passphrase pair added to the per-merge `-target=` allowlist; `concurrency` groups on the recut, `inngest_host` and `inngest_host_replace` jobs |
+| `.github/workflows/cutover-inngest.yml` | The shared `inngest-cutover` concurrency group on the arm/resume path — a mutex on one side of a race is not a mutex |
 | `plugins/soleur/test/terraform-target-parity.test.ts` | Register the new apply_target |
 | `plugins/soleur/test/stock-preflight-coverage.test.ts` | `EXCLUSION_ALLOWLIST` entry |
 | `scripts/test-all.sh` | `run_suite` lines for both new gate suites |
@@ -940,67 +1181,105 @@ catches a missed registration site. Plus `python3 scripts/lint-encryption-postur
 
 ## Acceptance Criteria
 
-### Pre-merge (PR)
+Rewritten after review: the first draft had 12 of 22 criteria that were ceremony, unverifiable,
+evadable, or would have passed on a broken implementation — including one that would have passed on
+an actively false compliance claim. Every criterion below names a command or a checkable
+post-condition.
 
-1. `bash scripts/test-all.sh` exits 0 — the **full** suite, not the touched-file loop, because an
-   unregistered apply_target is only visible there.
-2. `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 with the
-   `hcloud_volume.inngest_redis` row resolving as `mechanism: luks`.
-3. `grep -c 'inngest-host.tf:[0-9]' scripts/encryption-posture-ledger.json` returns `0` — no bare
-   line-number citation survives (`cq-cite-content-anchor-not-line-number`).
-4. `terraform validate` passes in `apps/web-platform/infra/`.
-5. `actionlint .github/workflows/apply-web-platform-infra.yml` reports no new findings, and the
-   job's `run:` body parses under `bash -n` when extracted.
-6. `inngest-volume-recut` appears in **all five** registration sites, and
-   `inngest-redis-luks.test.sh` is named in `.github/workflows/infra-validation.yml`. Verified by
-   one command per site, each asserting a content anchor rather than a bare token
-   (`cq-assert-anchor-not-bare-token`).
-6b. The enum option and its guarded job are **bound**: a check fails if `inngest-volume-recut`
-   appears in `options:` with no corresponding job, and vice versa.
-6c. `RECUT-INNGEST-VOLUME` is distinct from every existing confirm literal —
-   `grep -c 'RECUT-INNGEST-VOLUME' .github/workflows/apply-web-platform-infra.yml` returns ≥ 1 and
-   no other target accepts it.
-6d. The recut job declares a `concurrency` mutex and adds exactly **one** dispatch input
-   (`expected_inngest_volume_id`), keeping the workflow at 8 of its 10-input cap.
-7. Guard 1: every mutation row 1-9 and harness rows H1-H3 drive the suite RED (or PASS for H3),
-   demonstrated by an **independent** re-mutation, not a self-graded battery.
-8. Guard 2: every mutation row 1-10 and harness rows H1-H3 likewise.
-9. Guard 2's decision function returns `dark` for **no** input other than the full six-condition
-   satisfaction; `silent` and `unreadable` are distinct tokens and both abort.
-10. `grep -c 'DBSIZE' tests/scripts/lib/inngest-host-dark-gate.sh` returns `0` — the gate reads
-    `INFO keyspace`, never `DBSIZE`.
-11. The cloud-init LUKS stage contains no `|| true` on any of `luksFormat`, `luksOpen`, `mkfs`,
-    `mount`, and contains a `blkid` arm for each of the four TYPE cases including the fatal default.
-12. `SOLEUR_INNGEST_LUKS_STAGE` appears in **both** `vector.toml` Source 4 and
-    `vector-pii-scrub.test.sh`, asserted in the same commit.
-13. The `inngest-cutover` environment reviewer set is asserted **non-empty** by a check that fails
-    when it is emptied — not by a comment claiming it is non-empty.
-14. ADR-142 carries the addendum; ADR-198 (or its re-derived ordinal) exists and every plan/tasks
-    reference names the same ordinal. `grep -rn 'ADR-198' knowledge-base/project/{plans,specs}/`
-    and the ADR filename agree.
-15. Article 30 PA-13 limb (e) no longer says "SQLite"; a `compliance/` issue exists for limb (f).
-16. PR body uses `Tracks #7695`, `Tracks #7674`, `Tracks #6894` — **never `Closes`**. The
-    remediation executes post-merge at a dispatch, so `Closes` would auto-close a still-open state.
+### Merge A (read channel)
 
-### Post-merge (gated dispatch — a separate operator decision at the window)
+A1. `SOLEUR_INNGEST_SERVER_PROBE` emits `probe_schema=2`, `flush_latched`, `latch_flushed_at`,
+    `latch_lines`, `redis_keys`, `data_mount_src`, `data_bytes` — from **both** emit sites (the
+    unconditional `logger -t` line and the `inngest-boot-phone-home.sh` Vector-down fallback).
+A2. A test asserts the two emit sites' field lists are **identical**, mirroring the
+    two-halves-must-not-drift pattern `inngest-server-flip-guard.test.sh` already uses.
+A3. A failed `INFO keyspace` (bad auth, Redis down, missing `# Keyspace` header) emits
+    `redis_keys=__UNREADABLE__` — never an empty string and never `0`. Pinned by a test that feeds
+    an error string through the extractor.
+A4. The probe unit has the Redis credential it needs, and its stderr is not shipped raw — the same
+    discipline the file already applies to credentialed CLI output, so a token's own error text
+    cannot reach Better Stack.
+A5. On the co-located web host the new fields emit as `n/a`, never `0`. Pinned by a fixture.
+A6. `bash tests/scripts/test-inngest-host-replace-gate.sh` still passes — Merge A must not perturb
+    that gate's three-address allow-set.
 
-17. `apply_target=inngest-host-replace` dispatched; the new host boots and the probe emits
-    `flush_latched`, `latch_flushed_at`, `latch_dbsize`, `redis_keys` on the hourly cadence.
-    Verified by the discoverability command, not by a dashboard.
-18. At least one probe row carrying the **verbatim latch record** has landed in Better Stack before
-    any destructive dispatch. That row is the sole surviving audit record of what the recut
-    destroys, and Guard 2's input. Absence of rows ⇒ REFUSE.
-19. **Decision point.** If `redis_keys == 0`, the flag is outside `{armed, flipping, flushed,
-    done}`, and the host is dark on that same row, the recut is authorized. If `redis_keys > 0`,
-    the destructive path is refused outright and the work routes to ADR-142's byte-copy under #6894.
-19b. Dispatch B's saved plan shows `hcloud_server.inngest` with **zero actions** — the recut
-    replaces the volume and its attachment only. Dispatch C (`inngest-host-replace`) performs the
-    host replace under its own guard.
-20. Post-recut: `SOLEUR_INNGEST_LUKS_STAGE` shows rc=0 through `stage=fstab`; a subsequent probe
-    row shows `redis_active=active` and `/mnt/data` as a genuine mountpoint on
-    `/dev/mapper/inngest-redis`.
-21. `scripts/followthroughs/inngest-host-not-serving-7674.sh` reads PASS before #7674 closes.
-22. The Art. 5(2) destruction record is completed with what was observed on the volume.
+### Merge B (apparatus + gated target) — pre-merge
+
+B1. `bash scripts/test-all.sh` exits 0 — the **full** suite. An unregistered apply_target is only
+    visible there.
+B2. `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 **with the row still carrying
+    its `exception` block** (`tracking_issue: #6894`, a future `expires_on`). A row asserting
+    `mechanism: luks` at merge would be a false at-rest claim about user prompts and agent output
+    for an unbounded — possibly permanent — window.
+B3. `grep -c 'inngest-host\.tf:[0-9]' scripts/encryption-posture-ledger.json` returns `0`.
+B4. `terraform plan` for `apply_target=inngest-host` shows **zero deletes** after the
+    `ignore_changes = [format]` change. Record the verbatim plan line.
+B5. `random_password.inngest_redis_luks` and `doppler_secret.inngest_redis_luks_key` appear in the
+    per-merge `-target=` allowlist — the passphrase must exist before any host boots that reads it.
+B6. `inngest-volume-recut` appears in all **six** registration sites: the workflow `options:`, its
+    bound job, `terraform-target-parity.test.ts`, `stock-preflight-coverage.test.ts`,
+    `test-all.sh`, and `.github/workflows/infra-validation.yml` (with `run-registered-suites.sh` as
+    the local runner). The workflow's `confirm` input **description** — which enumerates which
+    targets carry an `environment:` gate — is amended too, or the workflow's own documentation
+    asserts something false.
+B7. The enum option and its guarded job are **bound**: a check fails if either exists without the
+    other.
+B8. `RECUT-INNGEST-VOLUME` is distinct from every existing confirm literal, and
+    `expected_inngest_volume_id` is declared as a dispatch input (slot 8 of 10; no second input).
+B9. The recut job, `inngest_host`, `inngest_host_replace`, and the `cutover-inngest` arm/resume
+    workflow all declare `concurrency: {group: inngest-cutover, cancel-in-progress: false}`.
+B10. **Guard batteries are mechanically runnable, not asserted.** A committed harness applies each
+    mutation as a patch to a pristine copy, runs the guard, and asserts the **reason token** — not
+    merely a non-zero rc. Invoked from `test-all.sh`. This replaces the first draft's
+    "demonstrated by an independent re-mutation", which was an unfalsifiable claim.
+B11. Guard 2 has a **drop-one battery**: one case per condition, each dropping exactly that
+    condition and asserting a distinct reason token. This replaces the first draft's
+    "returns `dark` for no input other than full satisfaction", which is an unverifiable universal.
+B12. A test feeds a **real emitter line** through the Guard 2 parser and asserts every field name
+    resolves — the emit/read contract, which nothing in the first draft pinned.
+B13. `grep -c 'DBSIZE' tests/scripts/lib/inngest-host-dark-gate.sh` is `0`, and a mutation row
+    asserts the gate never reads `latch_dbsize` (a historical db-0-only reading that sits one field
+    away from `redis_keys`).
+B14. The cloud-init LUKS stage contains no `|| true`, no `|| :`, and no `set +e` on any step that
+    could leave `/mnt/data` on the root disk; the fstab line **retains** `nofail` (loud failure
+    belongs in `ExecStartPre`, not in a boot-wedging fstab on a no-SSH host).
+B15. `inngest-redis-luks.test.sh` covers all five `blkid` arms, and carries the case pinning that
+    the **`ext4` arm still permits Redis to start** pre-recut — the regression test for the
+    `ExecStartPre` deadlock.
+B16. The boot-reopen unit is exercised against a **second simulated boot** via the loop-file
+    harness; the mapper is present and `/mnt/data` is on it.
+B17. `SOLEUR_INNGEST_LUKS_STAGE` appears in **both** `vector.toml` Source 4 and
+    `vector-pii-scrub.test.sh`, in the same commit.
+B18. The `inngest-cutover` environment reviewer set is asserted non-empty by a check that **fails
+    when it is emptied** — named file, with environment-API read access.
+B19. ADR-142 carries the addendum; the new ADR exists; `grep -rn 'ADR-<n>'` across the plan, tasks,
+    and the ADR filename agree on one ordinal.
+B20. Article 30 PA-13 limb (e) no longer says "SQLite"; a `compliance/` issue exists for limb (f).
+B21. An issue exists for the append-only authorized latch clear — the stated fallback for the
+    `redis_keys > 0` branch (`wg-when-deferring-a-capability-create-a`).
+B22. PR bodies use `Tracks #7695`, `Tracks #7674`, `Tracks #6894` — **never `Closes`**.
+
+### Post-merge (gated dispatches — separate operator decisions at the window)
+
+P1. Dispatch A completes; a `probe_schema=2` row lands on the new `boot_id` within the 2h watch.
+P2. **`scripts/followthroughs/inngest-host-not-serving-7674.sh` reads PASS.** This gates everything
+    below it. Dispatching the recut before this is strictly counterproductive: the first `arm` would
+    write a fresh latch, fail `verify_or_abort`, and land in terminal `aborted`.
+P3. `INNGEST_DIAGNOSTIC_BOOT` is cleared **before** Dispatch B, so Dispatch C's boot re-bakes the
+    unit and no fourth replace is needed.
+P4. A probe row carrying the latch record and `data_bytes` has landed **before** any destructive
+    dispatch — it is Guard 2's input and the only surviving audit record of what is destroyed.
+P5. **Decision point.** All Guard 2 conditions hold ⇒ recut authorized. `redis_keys > 0` or
+    `mount_mismatch` ⇒ refused; route per the verdict table.
+P6. Dispatch B's saved plan shows `hcloud_server.inngest` with **zero actions**.
+P7. Post-recut: `SOLEUR_INNGEST_LUKS_STAGE` rc=0 through `stage=fstab`; `/mnt/data` is a genuine
+    mountpoint on `/dev/mapper/inngest-redis`; `redis_active=active`.
+P8. A reboot of the recut host leaves `/mnt/data` still on the mapper — the boot-reopen unit
+    working in production, not just in the harness.
+P9. The ledger row flips to `luks` and the `exception` block is removed **only now**, in the
+    follow-up commit, gated on P7.
+P10. The Art. 5(2) destruction record is completed with the observed `redis_keys`, `data_bytes`,
+    and latch state from P4's row.
 
 ## Risks & Mitigations
 
@@ -1016,6 +1295,12 @@ catches a missed registration site. Plus `python3 scripts/lint-encryption-postur
 | **A `-replace` strands the volume out of state** between destroy and create (no `create_before_destroy`). | Guard 1 accepts the recovery bare-create shape (`["create"]`, `before == null`), so a re-dispatch converges instead of looping. Harness row H3 pins it. |
 | **Passphrase `-replace` mints a new key without rekeying the header**, stranding the store. | No `ignore_changes`; Guard 1 mutation row 4 reddens on any update/delete/forget. Rotation is `cryptsetup luksChangeKey`, documented in the ADR. |
 | **The new host boots with its private NIC down** after replace. | Known class; converge is verified via Better Stack rows, never hand-verification. `hcloud_firewall_attachment` is deliberately not `-target`ed. |
+| **The recut is dispatched before #7674 is fixed**, so the first `arm` re-writes the latch, fails `verify_or_abort`, and lands in terminal `aborted` — one-shot spent, strictly worse than today. | Guard 2 condition 10 requires `inngest-host-not-serving-7674.sh` to read PASS, and condition 11 requires `INNGEST_DIAGNOSTIC_BOOT` clear. This is the single most consequential precondition in the plan. |
+| **A concurrent `op=arm` races the apply**, destroying the volume mid-`FLUSHALL`. | Shared `inngest-cutover` concurrency group across the recut, `inngest_host`, `inngest_host_replace` and the cutover workflow, plus a synchronous Doppler flag re-read immediately before apply. |
+| **Redis reports an empty store while the volume holds a populated AOF** (mount failed open onto the root disk). | Guard 2 condition 8 pins `data_mount_src` to the expected device; condition 9 reports `data_bytes` as an audit field. `redis_keys` alone was never a statement about the block device. |
+| **The mapper is absent on the second boot**, so Redis writes plaintext to the root disk while the ledger claims LUKS. | `inngest-luks-open.service` is a deliverable, exercised against a simulated second boot. The `ExecStartPre` gate turns the residual case into a loud refusal rather than silent plaintext. |
+| **Widening `inngest_host_replace_gate` to unblock Merge A** would create an unguarded second recut path — that target has no reviewer gate, no confirm and no id-pin. | Merge A carries no `.tf` change, so the gate passes unchanged. The split exists precisely so nobody reaches for the widening. |
+| **The ledger claims LUKS while the volume is plaintext.** | The row is staged: the exception is retained and re-dated at merge, and flipped only in a follow-up gated on post-recut verification. |
 | **This plan's own measurements rot.** | Phase 0.1 re-runs every reading. Guard 2 encodes the premise as a dispatch-time check, so the plan cannot be correct on 2026-09-02 and silently wrong later. |
 
 ## Alternative Approaches Considered

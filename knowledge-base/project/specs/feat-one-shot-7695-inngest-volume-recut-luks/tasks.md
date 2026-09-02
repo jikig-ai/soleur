@@ -9,121 +9,144 @@ brand_survival_threshold: single-user incident
 
 # Tasks
 
-Derived from `knowledge-base/project/plans/2026-09-02-infra-inngest-volume-recut-luks-plan.md`.
-Phase order is load-bearing: Phase 2 changes a contract (the probe's field set) that Phase 4
-consumes, and Phase 3's cloud-init must tolerate the pre-recut state before any recut exists.
+Derived from the plan **after** its deepen-plan revision (see §Deepen-Plan Revisions). Two merges:
+Merge A's delivery vehicle aborts on Merge B's `.tf` edits, so combining them makes Merge A
+undeliverable. Phase order is load-bearing throughout.
 
-## Phase 1 — Preconditions (measure, do not assume)
+## Phase 0 — Preconditions
 
-- [ ] 1.1 Re-run every Premise Validation reading in the plan. Confirm `cutover_flag`, host-dark
-      probe fields, G3.7's `L`/`H`, and the Hetzner volume's `format` + id. Record verbatim.
-- [ ] 1.2 `terraform plan` in `apps/web-platform/infra/` and read whether removing
-      `format = "ext4"` from `hcloud_volume.inngest_redis` queues a **replace**. Record the
-      verbatim plan line. Decide `lifecycle { ignore_changes = [format] }` on that measurement.
-- [ ] 1.3 `gh api repos/:owner/:repo/environments/inngest-cutover` — confirm the reviewer set is
-      still **non-empty**. A zero-reviewer environment auto-approves silently.
-- [ ] 1.4 Read all three `.c4` files in full and complete the external-actor / external-system /
-      container / access-relationship enumeration the ADR-C4 gate requires. Record what was checked.
-- [ ] 1.5 Verify `--history-retention` is actually set on the inngest-server unit (unit file, not
-      prose) — PA-13(f) publishes a 30-day envelope that must be evidenced.
-- [ ] 1.6 Confirm `RECUT-INNGEST-VOLUME` collides with no existing confirm literal.
+- [ ] 0.1 Re-run every Premise Validation reading in the plan; record verbatim.
+- [ ] 0.2 `terraform plan` — record the verbatim line proving `apply_target=inngest-host` yields a
+      **zero-delete** plan under `ignore_changes = [format]`.
+- [ ] 0.3 `gh api repos/:owner/:repo/environments/inngest-cutover` — reviewer set non-empty.
+- [ ] 0.4 Read all three `.c4` files; complete the external-actor / external-system / container /
+      access-relationship enumeration and record what was checked.
+- [ ] 0.5 Verify `--history-retention` against the inngest-server unit file.
+- [ ] 0.6 Confirm `RECUT-INNGEST-VOLUME` is a unique confirm literal and the workflow is at 7 of 10
+      dispatch inputs before adding the 8th.
 
-## Phase 2 — The read channel (M0)
+## Phase 1 — MERGE A: the read channel (and nothing else)
 
-- [ ] 2.1 Extend `SOLEUR_INNGEST_SERVER_PROBE` in `apps/web-platform/infra/inngest-bootstrap.sh`
-      with `flush_latched`, `latch_flushed_at`, `latch_dbsize` (parsed from the **last** line of the
-      append-only latch record) and `redis_keys`.
-- [ ] 2.2 `redis_keys` MUST come from `INFO keyspace` across **all** databases — never `DBSIZE`,
-      which is db-0 only while `FLUSHALL` spans every db.
-- [ ] 2.3 Emit the new fields from the `rolled-back` / `done` / `aborted` terminal no-op arms too;
-      they currently ship an empty string.
-- [ ] 2.4 Confirm no new inbound control plane is introduced — this extends an existing emitter over
-      the already-adopted Vector → Better Stack transport. ADR-100 Decision 6a stays unamended.
+- [ ] 1.1 Extend `SOLEUR_INNGEST_SERVER_PROBE` with `probe_schema=2`, `flush_latched`,
+      `latch_flushed_at`, `latch_lines`, `redis_keys`, `data_mount_src`, `data_bytes`.
+- [ ] 1.2 Apply the change at **BOTH** emit sites — the unconditional `logger -t` line **and** the
+      `inngest-boot-phone-home.sh` Vector-down fallback. The fallback is the channel that carries a
+      row when Vector is down, i.e. exactly when `silent` would otherwise fire.
+- [ ] 1.3 Add a test asserting the two emit sites' field lists are **identical**.
+- [ ] 1.4 `redis_keys` from `INFO keyspace` across **all** dbs — never `DBSIZE`. On any non-zero rc,
+      or a missing `# Keyspace` header, emit `__UNREADABLE__` — never an empty string, never `0`.
+- [ ] 1.5 `data_mount_src` from `findmnt -no SOURCE /mnt/data`; `data_bytes` from `du -sb /mnt/data`.
+- [ ] 1.6 Give the probe unit its Redis credential. Do **not** ship raw stderr from a credentialed
+      CLI — the file already warns that would route the token's own error text to Better Stack.
+- [ ] 1.7 Scope the new fields to the dedicated host (`inngest-bootstrap.sh` is the **shared**
+      renderer for both hosts). On the web host emit `n/a`, never `0`. Pin with a fixture.
+- [ ] 1.8 Emit the new fields from the `rolled-back` / `done` / `aborted` terminal no-op arms.
+- [ ] 1.9 **Verify no `.tf` or cloud-init LUKS change is in this merge** — that is what keeps
+      `inngest_host_replace_gate`'s three-address allow-set satisfied. Run
+      `bash tests/scripts/test-inngest-host-replace-gate.sh`.
 
-## Phase 3 — LUKS apparatus (inert on merge)
+## Phase 2 — MERGE B: LUKS apparatus (inert except the passphrase)
 
-- [ ] 3.1 Create `apps/web-platform/infra/inngest-redis-luks.tf` with
-      `random_password.inngest_redis_luks` (length 40, `special = false`, **no** `ignore_changes`)
-      and `doppler_secret.inngest_redis_luks_key` → `INNGEST_REDIS_LUKS_KEY` on
-      `soleur-inngest/prd`, masked. Both in **one file** — the posture linter requires co-location.
-- [ ] 3.2 Remove `format = "ext4"` from `hcloud_volume.inngest_redis` (gated on task 1.2).
-- [ ] 3.3 Write the three-arm LUKS stage in `cloud-init-inngest.yml`: `ext4` → mount as-is and emit
-      a `plaintext-awaiting-recut` marker; empty → `luksFormat`/`luksOpen`/`mkfs.ext4`/mount;
-      `crypto_LUKS` → open and mount; anything else → FATAL halt.
-- [ ] 3.4 Copy `cloud-init-git-data.yml`'s hardening in shape: exec'd child with `set -euo pipefail`
-      + ERR trap; accept `blkid` rc 0 or 2 and treat any other rc as fatal; treat "status rc=1 but
-      blkid still says crypto_LUKS" as a damaged header, not a blank volume.
-- [ ] 3.5 Remove `|| true` from every step that could leave `/mnt/data` on the root disk, and drop
-      the `nofail`-style silent-degrade semantics for the LUKS path.
-- [ ] 3.6 Add an `ExecStartPre` `findmnt` re-assertion to the Redis unit so it refuses to serve off
-      an unmounted path.
-- [ ] 3.7 Register `SOLEUR_INNGEST_LUKS_STAGE` in `vector.toml` Source 4
-      `include_matches.SYSLOG_IDENTIFIER` **and** in `vector-pii-scrub.test.sh` — same commit.
-- [ ] 3.8 Write `apps/web-platform/infra/inngest-redis-luks.test.sh` (no `format` on the volume; key
-      on `soleur-inngest` not `soleur`; blkid discriminator present; all four arms covered).
+- [ ] 2.1 `inngest-redis-luks.tf`: `random_password.inngest_redis_luks` (len 40, `special = false`,
+      no `ignore_changes`) + `doppler_secret.inngest_redis_luks_key` → `INNGEST_REDIS_LUKS_KEY` on
+      `soleur-inngest/prd`, masked. **One file** — the posture linter requires co-location.
+- [ ] 2.2 Add **both** to the per-merge `-target=` allowlist. The passphrase must exist before any
+      host boots that reads it; "merge is inert" is the defect here, not the safety property.
+- [ ] 2.3 `lifecycle { ignore_changes = [format] }` on `hcloud_volume.inngest_redis`. Do **not**
+      remove the `format` line at merge — that would make `apply_target=inngest-host` permanently
+      abort under its additive-only guard.
+- [ ] 2.4 Five-arm cloud-init discriminator: device-absent-after-wait → FATAL; `ext4` → mount as-is
+      pre-recut / **FATAL** post-recut (via the `expect_luks` flag); empty → luksFormat/luksOpen/
+      mkfs/mount; `crypto_LUKS` → open + mount; anything else → FATAL.
+- [ ] 2.5 Bounded device-presence wait (~30s, `[ -b "$DEV" ]` + non-zero `blockdev --getsize64`)
+      **before** the discriminator. `blkid` on an absent path returns rc 2, which the accept-0-or-2
+      policy would otherwise route into the luksFormat arm.
+- [ ] 2.6 Thread `expect_luks` through `templatefile()` the way `inngest_volume_id` already is.
+- [ ] 2.7 git-data hardening: exec'd child with `set -euo pipefail` + ERR trap; `blkid` rc 0 or 2
+      accepted and any other rc fatal; "status rc=1 but blkid says crypto_LUKS" = damaged header;
+      per-operation rc checks on luksFormat/luksOpen/mkfs/mount.
+- [ ] 2.8 No `|| true`, no `|| :`, no `set +e` on any step that could leave `/mnt/data` on the root
+      disk. **Keep `nofail` in fstab** — a strict fstab on a no-SSH host turns a slow attach into an
+      unrecoverable boot wedge.
+- [ ] 2.9 `inngest-luks-open.service`: `Type=oneshot`, `RemainAfterExit=yes`,
+      `DefaultDependencies=no`, `Before=inngest-redis.service`; passphrase via
+      `/etc/default/inngest-doppler`. `runcmd` runs **first boot only**, so without this the mapper
+      is absent on boot 2 and Redis writes plaintext to the root disk.
+- [ ] 2.10 Two-state `ExecStartPre` `findmnt` gate: always assert `/mnt/data` is a mountpoint;
+      assert the source is `/dev/mapper/inngest-redis` **only when** `blkid` reported `crypto_LUKS`.
+      A one-state gate deadlocks the plan by blocking Redis on the pre-recut host.
+- [ ] 2.11 `SOLEUR_INNGEST_LUKS_STAGE` in `vector.toml` Source 4 **and** `vector-pii-scrub.test.sh`,
+      same commit.
+- [ ] 2.12 `inngest-redis-luks.test.sh` covering all five arms + the ext4-still-starts-Redis case +
+      a second-simulated-boot case for the reopen unit (loop-file harness precedent).
 
-## Phase 4 — The gated apply_target
+## Phase 3 — MERGE B: the gated apply_target
 
-- [ ] 4.1 **Write both mutation matrices BEFORE the guards.** A matrix derived from finished code
-      tests the code that exists; a matrix derived from the design tests the property.
-- [ ] 4.2 `tests/scripts/lib/inngest-volume-recut-gate.sh` — sourced by both the workflow step and
-      its test. Allow-set is exactly the volume + its attachment; `hcloud_server.inngest` is
-      named-live and must show zero actions. Include the fail-closed preamble, the ID-PIN against
-      `.change.before.id`, and the recovery bare-create arm (`["create"]` with `before == null`).
-- [ ] 4.3 `tests/scripts/test-inngest-volume-recut-gate.sh` — mutation rows 1-9 (incl. 5b) plus
-      harness rows H1-H3. Fixtures **synthesized**, never captured production plans.
-- [ ] 4.4 `tests/scripts/lib/inngest-host-dark-gate.sh` — positive allowlist returning only `dark`;
-      `silent` and `unreadable` are distinct tokens and both abort. All six conditions from one row.
-- [ ] 4.5 `tests/scripts/test-inngest-host-dark-gate.sh` — mutation rows 1-10 plus H1-H3, including
-      the busy-fleet must-PASS row and the two-different-rows row.
-- [ ] 4.6 Add the `inngest-volume-recut` job to `apply-web-platform-infra.yml`:
-      `environment: inngest-cutover`, typed `confirm=RECUT-INNGEST-VOLUME`,
-      `expected_inngest_volume_id` (`^[0-9]+$`, slot 8 of 10 — add no second input), job-level
-      `concurrency` mutex, **no `[ack-destroy]` bypass**, never auto-executed, never chained.
-- [ ] 4.7 Register in all **five** sites: workflow `options:` + bound job,
-      `terraform-target-parity.test.ts`, `stock-preflight-coverage.test.ts`, `test-all.sh`, and
-      `.github/workflows/infra-validation.yml`.
-- [ ] 4.8 Add the enum↔job binding check so the option cannot exist without its guarded job.
+- [ ] 3.1 **Write both mutation matrices BEFORE the guards.**
+- [ ] 3.2 `tests/scripts/lib/inngest-volume-recut-gate.sh` — allow-set is the volume + its
+      attachment only; `hcloud_server.inngest` is named-live and must show zero actions. Fail-closed
+      preamble, ID-PIN on `.change.before.id`, `id_pin_absent` when the pin is empty on a genuine
+      destroy, recovery bare-create arm.
+- [ ] 3.3 `tests/scripts/test-inngest-volume-recut-gate.sh` — mutation rows 1-10 + harness H1-H3.
+      Fixtures **synthesized**, never captured production plans.
+- [ ] 3.4 `tests/scripts/lib/inngest-host-dark-gate.sh` — all 13 conditions from ONE row, positive
+      allowlist returning only `dark`; `silent`, `unreadable`, `stale_schema`, `mount_mismatch`,
+      `not_dark` are distinct tokens and all abort.
+- [ ] 3.5 `tests/scripts/test-inngest-host-dark-gate.sh` — mutation rows 1-15, harness H1-H3, and
+      the **drop-one battery** (one case per condition, each asserting a distinct reason token).
+- [ ] 3.6 A test feeding a **real emitter line** through the Guard 2 parser, asserting every field
+      name resolves — the emit/read contract.
+- [ ] 3.7 Workflow job: `environment: inngest-cutover`, typed `confirm=RECUT-INNGEST-VOLUME`,
+      `expected_inngest_volume_id` (`^[0-9]+$`, slot 8 of 10 — no second input), no `[ack-destroy]`
+      bypass, never auto-executed, never chained.
+- [ ] 3.8 `concurrency: {group: inngest-cutover, cancel-in-progress: false}` on the recut job,
+      `inngest_host`, `inngest_host_replace`, **and** `cutover-inngest.yml`'s arm/resume path.
+- [ ] 3.9 Synchronous Doppler flag re-read immediately before apply; refuse on anything but
+      `rolled-back` / `aborted`.
+- [ ] 3.10 Register in all **six** sites: workflow `options:`, the bound job,
+      `terraform-target-parity.test.ts`, `stock-preflight-coverage.test.ts`, `test-all.sh`,
+      `infra-validation.yml`. Amend the `confirm` input **description** too — it enumerates which
+      targets carry an `environment:` gate.
+- [ ] 3.11 Enum↔job binding check.
+- [ ] 3.12 Mechanically-runnable mutation harness: applies each mutation as a patch to a pristine
+      copy, runs the guard, asserts the **reason token** (not just rc). Invoked from `test-all.sh`.
 
-## Phase 5 — Records
+## Phase 4 — MERGE B: records
 
-- [ ] 5.1 Addendum-in-place to ADR-142 recording measured fact (host not serving across the
-      observable window; occupancy unmeasured; ~20d retention makes the historical question
-      unanswerable). Do **not** touch its `## Decision`.
-- [ ] 5.2 New ADR (provisionally **ADR-198** — re-derive the ordinal against freshly-fetched refs
-      before merge): destructive clearance authorized only on a measured-empty store; ADR-142's
-      byte-copy mandatory otherwise. Record the ~20d retention floor and `L`'s polarity inversion
-      between `op=arm` and `op=resume`.
-- [ ] 5.3 Rewrite the `hcloud_volume.inngest_redis` ledger row: `mechanism` → `luks`, exception
-      block **removed**, evidence rewritten with a **content anchor** (no bare line number),
-      `does_not_defend` and `live_verification` updated.
-- [ ] 5.4 Correct Article 30 PA-13 limb (e) — the substrate is a host-local Redis AOF on a block
-      volume on a **dedicated** host, not "SQLite on the same Hetzner host".
-- [ ] 5.5 File a `compliance/` issue for PA-13 limb (f): the cross-PA determination of whether the
-      Inngest store is personal-data-bearing. Do not attempt it inline.
-- [ ] 5.6 Add the Art. 5(2) destruction-record template under `knowledge-base/legal/audits/`.
-- [ ] 5.7 Update `.c4` if task 1.4 found this store's encryption state annotated; re-run
+- [ ] 4.1 ADR-142 **addendum-in-place** recording measured fact. Do not touch its `## Decision`.
+- [ ] 4.2 New ADR (ordinal provisional — re-derive against freshly-fetched refs before merge):
+      destructive clearance authorized only on a measured-empty store and a serving-capable host;
+      ADR-142's byte-copy mandatory otherwise. Record the ~20d retention floor and `L`'s polarity
+      inversion between `op=arm` and `op=resume`.
+- [ ] 4.3 Ledger row: **keep the `exception`**, re-dated, with the bare-line-number citation
+      replaced by a content anchor. Do **not** flip `mechanism` to `luks` in this merge.
+- [ ] 4.4 Article 30 PA-13 limb (e) — substrate is a host-local Redis AOF on a block volume on a
+      dedicated host, not "SQLite on the same Hetzner host".
+- [ ] 4.5 File a `compliance/` issue for PA-13 limb (f).
+- [ ] 4.6 File an issue for the **append-only authorized latch clear** — the stated fallback for the
+      `redis_keys > 0` branch, which is otherwise circular.
+- [ ] 4.7 Art. 5(2) destruction-record template under `knowledge-base/legal/audits/`.
+- [ ] 4.8 Update `.c4` if 0.4 found this store's encryption state annotated; re-run
       `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
-## Phase 6 — Verification
+## Phase 5 — Verification
 
-- [ ] 6.1 `bash scripts/test-all.sh` in full — the full-suite exit gate, not the touched-file loop,
-      is what catches a missed registration site.
-- [ ] 6.2 `python3 scripts/lint-encryption-posture.py --repo-sweep` exits 0 with the row resolving
-      as `mechanism: luks`.
-- [ ] 6.3 `terraform validate` in `apps/web-platform/infra/`.
-- [ ] 6.4 `actionlint` on `apply-web-platform-infra.yml`; `bash -n` on the extracted `run:` body.
-- [ ] 6.5 Independently re-mutate every guard row and confirm RED (or PASS for the must-PASS rows).
-      A self-graded battery is not proof.
-- [ ] 6.6 PR body uses `Tracks #7695`, `Tracks #7674`, `Tracks #6894` — **never `Closes`**.
+- [ ] 5.1 `bash scripts/test-all.sh` in full.
+- [ ] 5.2 `python3 scripts/lint-encryption-posture.py --repo-sweep` — exits 0 **with the exception
+      block still present**.
+- [ ] 5.3 `terraform validate`.
+- [ ] 5.4 `actionlint` on both workflows; `bash -n` on extracted `run:` bodies.
+- [ ] 5.5 Independently re-mutate every guard row and confirm RED (or PASS for must-PASS rows).
+- [ ] 5.6 PR bodies use `Tracks`, never `Closes`.
 
 ## Out of scope
 
-- **#7698** (app dispatch failing) — separate issue, separate PR.
 - Dispatching any state-changing `cutover-inngest.yml` op (`arm`, `execute`, `quiesce-web`,
-  `rollback`, `rearm`). This work BUILDS the capability; opening the cutover window is a separate
-  decision made at the window.
+  `rollback`, `rearm`). This work BUILDS the capability.
 - Running the recut, `terraform apply`, or mutating `INNGEST_CUTOVER_FLIP` /
   `INNGEST_DIAGNOSTIC_BOOT`.
+- **Fixing #7674's bind failure.** It is a hard *precondition* of the recut dispatch, enforced by
+  Guard 2, but diagnosing it is separate work.
+- **#7698** (app dispatch failing) — separate issue, separate PR.
 - The webhook latch readback (ADR-100 Decision 6a stands unamended).
-- R2 header escrow (rejected for this store by ADR-142).
+- R2 header escrow (rejected for this store by ADR-142, confirmed by the CTO ruling).

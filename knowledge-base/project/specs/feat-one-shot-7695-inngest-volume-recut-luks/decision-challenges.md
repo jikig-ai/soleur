@@ -86,3 +86,63 @@ migration would render unnecessary.
   the intent by extending an emitter that already runs over the already-adopted Vector → Better
   Stack transport — which is precisely the substitution ADR-100 records the operator choosing on
   2026-08-25. No inbound control plane is added to the deny-all-public singleton.
+
+---
+
+## 5. The recut is now gated behind #7674, which the brief treats as downstream
+
+**Brief said:** #7695 is "the unblocker for #7674 steps 4b-6" — i.e. the recut comes first and
+unblocks #7674.
+
+**Plan does:** the reverse. `scripts/followthroughs/inngest-host-not-serving-7674.sh` must read
+**PASS before** the recut is dispatched (Guard 2 condition 10).
+
+**Why — verified against source, not inferred.** `inngest-cutover-flip.sh` calls
+`record_flush_latch` at `:492`, **before** `verify_or_abort` at `:502`. `verify_or_abort` requires
+`/health` 200 plus a non-empty function registry, and drives the flag to terminal `aborted` on
+failure. The host cannot bind today (`http_code=000`) **even though** `INNGEST_DIAGNOSTIC_BOOT=1` is
+already engaged — and that flag, per `inngest-server-flip-guard.sh`, exists precisely to let the
+host bind against a non-durable backend. So the bind failure is not the latch, and it is not the
+flag allowlist.
+
+Consequence: a recut dispatched before #7674 is fixed would have the first `arm` write a **fresh**
+latch, fail verify, and land in terminal `aborted` — latch re-armed, flag *worse* than
+`rolled-back`, and the one-shot destructive capability spent on an undiagnosed bind failure. The
+dependency runs the other way from how the brief frames it.
+
+**Decision needed:** accept that #7695 does not unblock #7674 on its own, and that #7674's bind
+failure must be diagnosed first — or direct otherwise, understanding the above.
+
+---
+
+## 6. Delivery is now two merges, not one
+
+**Brief implied** a single PR building the capability.
+
+**Plan does:** Merge A (probe/read channel only) then Merge B (apparatus + gated target).
+
+**Why:** `tests/scripts/lib/inngest-host-replace-gate.sh` allows exactly three addresses and
+records that `hcloud_volume.inngest_redis` is *"DELIBERATELY ABSENT"*, with PASS requiring
+`oos==0 && rdel==0 && replaced==1`. Both of Merge B's `.tf` edits put the volume into that plan
+(`-target` prunes dependents, not dependencies), so a combined PR makes its own delivery vehicle
+abort. The tempting fix — widening that gate — would be actively dangerous: `inngest-host-replace`
+has no reviewer gate, no typed confirm and no id-pin, so widening it creates an unguarded second
+recut path in the very PR that builds five guard layers.
+
+**Decision needed:** accept the split, or direct a single PR with a different delivery vehicle.
+
+---
+
+## 7. Two deliverables the brief did not scope, both mandatory
+
+- **A boot-reopen systemd unit.** `cloud-init-inngest.yml` runs `runcmd` on **first boot only**, so
+  nothing reopens the LUKS mapper on boot 2 — Redis would write plaintext to the root disk while the
+  ledger claims `luks`. `workspaces-luks.tf` has the identical unsolved gap (deferred to #6931), so
+  there is no precedent to copy and it must be built here.
+- **The ledger row is staged, not flipped.** Flipping `mechanism` to `luks` at merge would publish a
+  false at-rest claim about user prompts and agent output for an unbounded — possibly permanent —
+  window. The exception is retained and re-dated at merge; the flip lands in a follow-up gated on
+  post-recut verification.
+
+**Decision needed:** none, unless the added scope is unacceptable — in which case the recut itself
+should be reconsidered, since neither is optional.
