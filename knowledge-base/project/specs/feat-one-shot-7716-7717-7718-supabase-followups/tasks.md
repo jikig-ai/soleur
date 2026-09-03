@@ -15,8 +15,9 @@ plan and not repeated.
 
 **Scope (DC-1 resolved: split).** This branch ships **W6 only** — the statutory workstream for
 #7717. Phases 2–6 (W7/W1/W3/W4/W5, for #7716 + #7718 + #6489) are carried to a follow-on PR
-against the same plan; their task list is recoverable verbatim from `git show f8d4cd787:<this
-file>`. See the plan's §Scope table for phase ownership. Do **not** implement Phases 2–6 here.
+against the same plan; their task list is preserved verbatim in
+**§Deferred to the follow-on PR** at the end of this file — not behind a branch SHA, because
+`ship` squash-merges and no per-commit SHA survives in `main`. See the plan's §Scope table for phase ownership. Do **not** implement Phases 2–6 here.
 
 ## Phase 0 — Preconditions (verify, never assume)
 
@@ -61,3 +62,69 @@ preconditions for W1/W7/W3 and move to the follow-on with their phases.
 - [ ] 8.3 Full battery `bash scripts/test-all.sh` at the `/ship` Phase 4 checkpoint.
 - [x] 8.4 Re-derive the ADR ordinal against a fresh fetch immediately before merge; sweep plan, tasks and ACs if it moved.
 - [x] 8.5 **Split-specific.** Confirm the merged diff touches no W1/W7/W3/W4/W5 file — `git diff origin/main...HEAD --name-only` must not list `scripts/lint-orphan-test-suites.sh`, `scripts/lint-supabase-deprecated-endpoints.sh`, `scripts/test-all.sh` W7/W1 rows, `.github/workflows/ci.yml`, the C4 model, or `plugins/soleur/skills/incident/**`.
+
+---
+
+## Deferred to the follow-on PR (#7716 + #7718 + #6489)
+
+**Not in scope for this PR.** Preserved here verbatim from the pre-split task list so the
+follow-on is self-serve: the plan document these derive from merges with this PR and remains the
+single source for their design (see its §Scope table for phase ownership). Do not implement
+these on this branch — Phase 8.5 asserts the diff touches none of their files.
+
+The engineering preconditions from Phase 0 travel with them: 0.1 (re-derive the ADR-139
+intersection), 0.2 (`lint-supabase-deprecated-endpoints.sh` + `--check-highwater` both exit 0),
+0.4 (re-run the four orphan probes), 0.7 (`SUPABASE_ACCESS_TOKEN` present and scoped in **both**
+Doppler configs), 0.9 (probe the guard's ALLOWLIST for entries matching no file).
+
+Two items this PR discovered that the follow-on must carry:
+
+- **`gate-g-escalate-evidence.md` asserts the deprecated-endpoint guard "is advisory only — not
+  merge-blocking".** True while W6 ships alone; FALSE the moment W1 lands. Grep
+  `git grep -n 'advisory only' -- knowledge-base/` before closing W1.
+- **ADR-139's amendment is W1's, not W6's.** ADR-200 shipped here and deliberately does not
+  carry the aggregator-union invariant; that belongs with the promotion route.
+
+## Phase 2 — W7, orphan-suite linter (RED first; already merge-blocking)
+
+- [ ] 2.1 Write the failing rows in `scripts/lint-orphan-test-suites.test.sh` from Guard 3's matrix, before touching the linter.
+- [ ] 2.2 Clone the `tests/commands/` loop twice — `tests/scripts/test-*.sh` and `tests/hooks/test_*.sh` — non-recursive globs, `git ls-files`-sourced.
+- [ ] 2.3 Give each loop the existing cardinality floor.
+- [ ] 2.4 Fix the three self-contradictions: the trailing `MIN_SUITES` claim, the stale `45` (actual 53), the "fails on any SIXTH" comment.
+- [ ] 2.5 Register the four orphans — read each first; a red one is fixed or excluded with a citing issue, never left unregistered.
+- [ ] 2.6 Add the three new live gates to `REQUIRED_RUNNERS` and bump its floor.
+- [ ] 2.7 Remove the duplicate advisory `lint-orphan-test-suites` step from `ci.yml`, and re-scope the comment above it to the tempfile steps only.
+
+## Phase 3 — W1, the promotion
+
+- [ ] 3.1 Add one `-live` `run_suite` line; rewrite the comment block that explains why there was none.
+- [ ] 3.2 Remove the two Supabase steps from `lint-bot-statuses`; correct the job's comments.
+- [ ] 3.3 Rewrite the guard's `ENFORCEMENT LEVEL: ADVISORY` header to state the blocking level, name the context it rides, and carry the ADR-139 derivation.
+- [ ] 3.4 Add Test 9 to `plugins/soleur/test/required-checks-canonical-parity.test.sh` — the union intersection, read through a new `--print-pathspec` accessor, never parsed.
+- [ ] 3.6 Amend ADR-197's promotion paragraph: it names four requirements, of which this plan performs the fourth; supersede three and retain that one explicitly.
+
+## Phase 4 — W3, credential unification
+
+- [ ] 4.1 Migrate `postgrest-reload-schema.sh` and its `.test.sh` to `SUPABASE_ACCESS_TOKEN`; update `run-migrations.sh` and `migration-rollback.md`.
+- [ ] 4.2 Keep `SUPABASE_PAT` in the guard's arm-2 regex.
+- [ ] 4.3 Preserve `run-migrations.sh`'s assembly membership via the renamed comment; update its ALLOWLIST reason string.
+- [ ] 4.4 Re-run `--census` (expect 26) and the 30-file union. A move takes the highwater with it, in the same commit, with the reason.
+- [ ] 4.5 No-op — the Doppler deletion is post-merge, at AC36.
+
+## Phase 5 — W4, the C4 element
+
+- [ ] 5.1 Add `supabaseMgmtApi` as a top-level `#external` `system`, distinct from the in-boundary `platform.infra.supabase` data plane.
+- [ ] 5.2 Add the edges for the CI and Inngest callers.
+- [ ] 5.3 Add it to the include lists of the two views it renders in; confirm both endpoints of every edge are in the same list.
+- [ ] 5.4 Keep numbers out of the edge descriptions.
+- [ ] 5.5 `bash scripts/regenerate-c4-model.sh`; commit `model.likec4.json`; refresh `c4-model.md` if it changes.
+
+## Phase 6 — W5, the `triggers:` shape and three defect fixes
+
+- [ ] 6.1 Pin all four emitted shapes, or fix `templates/pir.md` + `scripts/dry-run.sh` to always emit `triggers: []` and pin two. Either way both emitter files are edited.
+- [ ] 6.2 Correct the PIR claim against the measured 102 of 113.
+- [ ] 6.3 Widen Phase 3's scan to `knowledge-base/legal/runbooks/`, add a curated `triggers:` block to the one runbook there, and widen `dry-run.sh`'s hard-coded directory.
+- [ ] 6.4 Define the no-scoring-match branch, the index-`0` offer, and top-3 with fewer than three matches.
+- [ ] 6.5 Reconcile the three `triggers` vocabularies so the secret-leak preamble is reachable from Phase-3 routing.
+- [ ] 6.6 Point `/soleur:incident` at `breach-register.md` for the `art_33_triggered: true` case.
+- [ ] 6.7 Update the census figures.
