@@ -36,6 +36,30 @@ requires_cpo_signoff: true
 
 ## Enhancement Summary
 
+**Deepened:** 2026-09-03 (PR4/PR5 pass) — the ordering mechanism was **redesigned**, not
+annotated. Four reviewers (a strong-model advisor consult, architecture-strategist,
+spec-flow-analyzer, kieran-rails-reviewer) plus the deepen-plan halt gates. Three findings
+falsified load-bearing choices made earlier in the same pass:
+
+1. **Hypothesis Z is FALSE (measured).** Attachment does not move the origin; the record does.
+   The swap is a genuine cutover and the residual-downtime path is the plan of record.
+2. **The two-pass merge-path pre-pass is dead.** `git revert` of the cutover PR deletes the
+   pre-pass steps along with the DNS hunk (`on: push` runs the workflow from the merged ref),
+   so the rollback would have run unordered against an already-failing apex. Its shape gate
+   also refused both the completion *and* the rollback of a half-converged state. Replaced by
+   collapsing the transition onto **one resource address**, where Terraform core supplies the
+   ordering — four artifacts and an eleven-row mutation battery dissolved.
+3. **`git revert` is forbidden for the flip (measured).** It drops the `moved` block that
+   supplies the atomicity, yielding two unrelated addresses and reproducing `81053` in reverse.
+   The rollback is a **generated** reverse-`moved` PR.
+
+Also corrected in this pass: **CUT0 was unsatisfiable** (`deploy-docs.yml` deliberately does not
+fire on `dns.tf`, so `version.txt` never holds the merge SHA — it would have forced a false
+rollback at T+20); AC23 is red-by-construction until PR5 and is satisfied by the per-leg table;
+`apex-origin-probe.sh` lacks a cache-buster while being the rollback's branch selector; AC38
+named a nine-row range against an eleven-row matrix; and a second `discoverability_test:` block
+would have been silently ignored by the preflight parser.
+
 **Deepened:** 2026-08-20. Eight review agents (terraform-architect, architecture-strategist,
 spec-flow-analyzer, code-simplicity-reviewer, kieran, CTO, a strong-model advisor consult) plus
 the deepen-plan halt gates. The plan was **restructured**, not annotated — four findings
@@ -817,6 +841,26 @@ directory and hand-written state, `terraform plan -refresh=false`:
 | The plan grades as a 1-destroy through the REAL guard | **CONFIRMED** — `terraform show -json` piped through `tests/scripts/lib/destroy-guard-filter-web-platform.jq` gives `resource_deletes: 1, nested_deletes: 0, reboot_updates: 0, host_creates: 0`. |
 | A died-mid-replace apply is recoverable with **zero** bespoke machinery | **CONFIRMED** — a bare create of `cloudflare_record.pages_apex` scores `resource_deletes 0`; the jq's five `nested_deletes` clauses cover `cloudflare_ruleset` / `_tunnel_cloudflared_config` / `_zone_settings_override` / `_notification_policy` / `_access_policy` and **not** `cloudflare_record`; `reboot_updates` and `host_creates` are both `select(.type == "hcloud_server")`; and the pre-apply entrypoint gate's own header states that of every `cloudflare_*` class in this root exactly one is IN scope — `cloudflare_ruleset`. So `destroy_count = 0`, no ack, the apply proceeds. **Re-running the failed job IS the recovery.** |
 
+### Precedent diff — `moved` in this repo (deepen-plan Phase 4.4)
+
+The `moved`-block pattern is **not novel here**, and the precedent is in this same Terraform
+root: `apps/web-platform/infra/placement-group.tf:22-40` carries four `moved` blocks doing the
+singleton ↔ `for_each`-key re-address, with the discipline stated in its own comment —
+*"`moved` blocks re-address the EXISTING state … WITHOUT destroy/recreate … `terraform plan`
+MUST show `0 to destroy` before apply. Keys are IMMUTABLE post-migration (never rename
+`for_each` keys)."*
+
+| | `placement-group.tf` precedent | This plan (PR4b) |
+|---|---|---|
+| Direction | singleton → `for_each["web-1"]` | `for_each["185.199.108.153"]` → singleton |
+| Expected destroys | **0** — a pure re-address | **1** — the re-address is paired with a ForceNew `type` change, so the plan is a genuine replace |
+| Key discipline | keys immutable post-migration | the `from` index is pinned to PR4a's surviving key and asserted (AC68), because a mismatch **no-ops silently** |
+
+The divergence is deliberate and is the whole point: the precedent uses `moved` to avoid a
+replace, and this plan uses it to **collapse a replace onto one address** so core will order it.
+Same primitive, opposite intent — recorded so a reviewer reading the precedent does not flag the
+non-zero destroy count as a violation of it.
+
 ### The targeting gotcha — and what it does to AC46
 
 **MEASURED:** with only `-target=cloudflare_record.pages_apex`, Terraform **hard-errors**:
@@ -1537,8 +1581,10 @@ mutation battery dissolved when the transition became one resource address.
 `.github/workflows/apply-web-platform-infra.yml`, `.github/workflows/infra-validation.yml`,
 `.github/workflows/deploy-docs.yml`, `scripts/test-all.sh`, `tests/scripts/lib/`,
 `tests/scripts/fixtures/`, `apps/web-platform/infra/apex-origin-probe.sh`, the cutover runbook,
-`ADR-194-…​.md` and `model.c4` were each read or listed during this pass. The six
-Files-to-Create paths do not exist.
+`ADR-194-…​.md` and `model.c4` were each read or listed during this pass, and `placement-group.tf`
+was read for the `moved` precedent. Every Files-to-Create path was checked and **none exists**:
+`apex-single-node-replace.test.sh`, `cutover-verify.sh`, `cutover-mx-txt-baseline.txt`,
+`generate-apex-rollback-pr.sh` and its `.test.sh`.
 
 **Not edited, deliberately:** `eleventy.config.js` and `views.c4`. Both were in an earlier
 draft; the `_headers`/`_redirects` cut and the C4 container cut removed the need. Their absence
