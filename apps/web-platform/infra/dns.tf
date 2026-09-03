@@ -294,7 +294,8 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 #   (via: 1.1 varnish, x-fastly-request-id, x-github-request-id).
 #
 #   The managed substrate that makes this work is exactly two facts below:
-#     - `cloudflare_record.github_pages` — apex A-records → GitHub Pages IPs, proxied.
+#     - `cloudflare_record.github_pages` — the apex A-record → a GitHub Pages IP,
+#       proxied. Was four records until #7640 PR4a shrank the `for_each` to one.
 #     - `cloudflare_record.www`          — www CNAME → jikig-ai.github.io, proxied.
 #   Flip `docs/CNAME` to www, or repoint either record off GitHub Pages, and the
 #   canonical direction inverts/breaks. Pure TF resource-drift sees the records
@@ -302,11 +303,22 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 #   `www-apex-canonicalizer.test.sh` asserts all three together at CI time.
 #   Runtime drift of the 301 is guarded by sentry_uptime_monitor.soleur_www.
 resource "cloudflare_record" "github_pages" {
+  # PR4a of the ADR-194 cutover (#7640) shrank this from all four GitHub Pages
+  # anycast IPs to ONE. The point is not the record count -- it is that the apex
+  # transition must end up on a SINGLE Terraform resource address, so core's
+  # replace semantics serialise Delete->Create when PR4b flips it to a CNAME.
+  # Cloudflare rejects an A and a CNAME coexisting at one name with error 81053,
+  # and four deletes racing one create is exactly that collision.
+  #
+  # This key is a two-merge CONTRACT: PR4b's `moved` block must name it
+  # byte-identically. A mismatch does not error -- Terraform no-ops the move and
+  # the hazard returns silently. `apex-single-node-replace.test.sh` M3 is the only
+  # detection there is.
+  #
+  # Losing the other three costs Cloudflare's origin-level failover across them
+  # for the pre-flip window only; 185.199.108.153 is itself anycast.
   for_each = toset([
     "185.199.108.153",
-    "185.199.109.153",
-    "185.199.110.153",
-    "185.199.111.153",
   ])
 
   zone_id = var.cf_zone_id

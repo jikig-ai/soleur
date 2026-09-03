@@ -791,7 +791,13 @@ _diff_touches() {
 _relevance_declined=0
 
 _infra_in_diff=0
-if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
+# Two prefixes, not one. The infra guards assert against
+# `.github/workflows/apply-web-platform-infra.yml` as well as against the `.tf`
+# files -- `apex-single-node-replace.test.sh` reads its `-target=` allow-list --
+# so a PR editing ONLY that workflow could drop an allow-list entry while this
+# runner declined the whole infra suite as not-in-diff (#7640).
+if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names" \
+  || grep -qF '.github/workflows/apply-web-platform-infra.yml' <<<"$_diff_names"; then
   _infra_in_diff=1
 fi
 
