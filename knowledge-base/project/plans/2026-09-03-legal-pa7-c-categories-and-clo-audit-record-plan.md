@@ -34,7 +34,7 @@ follow-up consult, and two mechanical deepen sweeps.
 | 7 | **Phase 1's measurement was cut and moved into the PR B issue.** It bought no property in the Property List, the advisory forbids this PR to answer the only question it decides, and it put a live production-credential read inside a documentation-only PR. Its prescribed command was *also* structurally incapable of answering its own question — `by-contributor` filters on `.actor.login`, and an over-captured record has a different login | code-simplicity + Kieran P1 + spec-flow GAP-C2 |
 | 8 | **Eleven acceptance criteria were cut and five defective ones rewritten**, including one vacuous by construction after a rename in the same phase, one whose anchor could not match the text the plan itself prescribes, and one asserting a process no command can falsify | code-simplicity, architecture-strategist, spec-flow |
 | 9 | **Phases were reordered twice into dependency order.** The filings phase now runs before the amendment (two cells cite an issue number it mints) and before the sweep (a `compliance-posture.md` row needs the same). The same read-before-write inversion was found twice in one plan | architecture-strategist + spec-flow |
-| 10 | **Eight factual corrections to this plan's own research**, recorded in place rather than quietly rewritten — including `:658` being PA-33 rather than PA-35, which had propagated into five load-bearing places including two of the CLO's own rulings | the review panel |
+| 10 | **Nine factual corrections to this plan's own research**, recorded in place rather than quietly rewritten — including `:658` being PA-33 rather than PA-35, which had propagated into five load-bearing places including two of the CLO's own rulings | the review panel |
 
 ### The pattern behind this plan's own errors, worth carrying forward
 
@@ -43,6 +43,24 @@ the record's shape, the receipt comment for the notice mechanism, line `:242` fo
 for PA-33, `2026-08-counsel-review-7440.md` for a frontmatter contract it does not carry. The mirror
 is always adjacent, always nearly right, and always cheaper to consult than the source. That belongs
 in `knowledge-base/project/learnings/` after this ships.
+
+### Deepen-plan verify-the-negative sweep
+
+Every negative claim in the plan body was swept mechanically against the tree — 168 candidate lines,
+of which the checkable ones were run as commands. **Twenty-seven confirmed; one contradicted.**
+
+The contradiction was this plan's own grep count for `hereby sign` (corrected in Phase 2 item 2, and
+the ninth self-correction in the table above). The twenty-seven that held include every load-bearing
+negative the plan's argument rests on: no workflow has a `paths:` filter for `knowledge-base/legal/**`;
+nothing in CI validates the register's table integrity, PA numbering or cells; no frontmatter schema
+exists for `audits/`; `generate-article-30-register.sh` cannot run and writes elsewhere;
+`.markdownlintignore` does not cover the register; `lint-infra-no-human-steps.py` walks only
+`legal/runbooks/`; `validate-vector-config.yml` does not fire; all five `docs/legal/**` gates hardcode
+the canonical dir; `legal-doc-consistency.test.ts` touches the register only at a PA-15(c) RCS anchor;
+PA-7 has no `(h)` cell and the file has exactly 8; `check-pa-22.sh` is wired into zero workflows;
+`EvidenceRecordSchema` is non-strict so an undeclared field is silently stripped; `list_keys()`
+swallows every `aws` failure; `by-contributor` filters on `.actor.login` and cannot detect
+over-capture; and AUP §4.7 is scoped by its own heading to the hosted chat surface.
 
 ### Deepen-plan gate results
 
@@ -627,9 +645,20 @@ adding one. It was in an earlier draft of this list and is removed.
 sign-phrase gate was specified and never built:
 `knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md:151` step 3(c)
 reads *"On `issue_comment.created` with sign-phrase + accepted by action: continue."* The
-implementation shipped only the second conjunct — verified: `grep -rn "hereby sign" apps/ .github/`
-returns three hits, all in `.github/workflows/cla.yml`, and nothing under `apps/` compares a body to
-the phrase. The design decided this in May 2026; the code drifted from it. A ticket that reopens it as
+implementation shipped only the second conjunct.
+
+**Verified — and the first draft of this sentence miscounted its own grep.** It claimed
+`grep -rn "hereby sign" apps/ .github/` returns three hits all in `.github/workflows/cla.yml`. The
+command actually returns **eight**: three in `cla.yml` (`:4` a comment, `:66` the instruction body,
+`:69` the `custom-pr-sign-comment` value) and **five test fixtures** under
+`apps/web-platform/test/cla-evidence/{backfill,comment-fetch,schema,hash}.test.ts`. The draft had
+filtered `\.test\.` out of the output and then described the result as though unfiltered — the ninth
+instance in this plan of paraphrasing a derived view as if it were the source.
+
+The substantive claim survives and is **stronger** stated correctly:
+`grep -rn "hereby sign" apps/ | grep -v '\.test\.'` returns **zero**. The phrase exists in the repo
+only as upstream configuration and as test data. **No production code path compares a comment body to
+it.** The design decided this in May 2026; the code drifted from it. A ticket that reopens it as
 a design question invites a re-litigation that already concluded.
 
 Scope, per the CTO advisory, with the traps that make it a day rather than a one-liner:
