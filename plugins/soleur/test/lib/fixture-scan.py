@@ -245,9 +245,18 @@ def _bind_res(var):
 # reject a relative path, which is P1b and tracked separately rather than silently folded in.
 #
 # NOT recognised, deliberately: `|| true` and `|| <fallback>`. Both are the OPPOSITE of a guard —
-# they permit the failure — and eleven live sites sit next to one. Measured while sizing the
-# custom-handler class (#7709): of 167 sites, exactly 8 carried a real unrecognised abort (the
-# brace group below) and 12 carried a fallback that must keep counting.
+# they permit the failure. Twelve live sites sit next to one. Counts and the full rationale live
+# in fixture-dir-operand-assert.baseline.txt's 2026-09-03 entry, which is the artifact whose
+# number moved; restating them here is how the two copies drift.
+#
+# ALSO not recognised: `|| { …; exit N; }`, a brace-group abort. That IS a real abort and the
+# eight sites it guards in .github/scripts/test/test-infra-suite-registration-mutations.sh are
+# acknowledged in the baseline rather than detected. A pattern for it was written and REVERTED —
+# see the baseline's 2026-09-03 entry for the five shapes that satisfied it while aborting
+# nothing. Recognising a brace group correctly needs shell semantics (quoting, statement
+# boundaries, subshell scope, function scope) that a line-oriented regex cannot supply, and a
+# widening that silences a genuinely unguarded site is strictly worse than the false positives
+# it removes.
 def _guard_res(var):
     v = re.escape(var)
     return (
@@ -260,13 +269,6 @@ def _guard_res(var):
         # which is the dominant real shape and mentions `d=`, never `$d`).
         re.compile(r'(?:\$\{?' + v + r'\}?|(?:^|;|\s)(?:local\s+|declare\s+)?' + v + r'=)'
                    r'.*\|\|\s*(?:exit|return)'),
-        # the same abort with a diagnostic attached: `... || { echo "..." >&2; exit 2; }`.
-        # `exit`/`return` must sit at a STATEMENT boundary — immediately after the `{`, or after a
-        # `;`/`&&`/`||` inside it. Matching the bare word would accept `|| { echo "will exit"; }`,
-        # which aborts nothing, and silencing a genuinely unguarded site is the one direction this
-        # widening must not fail in. `[^}]` keeps the scan inside the brace group.
-        re.compile(r'(?:\$\{?' + v + r'\}?|(?:^|;|\s)(?:local\s+|declare\s+)?' + v + r'=)'
-                   r'.*\|\|\s*\{\s*(?:[^}]*?(?:;|&&|\|\|)\s*)?(?:exit|return)\b'),
         # a case/test whose SUBJECT is this operand
         re.compile(r'(?:case|\[\[)\s+.*"\$\{?' + v + r'\}?"'),
     )
