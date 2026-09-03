@@ -1,17 +1,47 @@
 ---
-title: "drain three deferred follow-ups: an Art. 33(5) breach register, a guard that can block, and a linter that can see tests/"
+title: "an Art. 33(5) breach register — the statutory half of three deferred follow-ups"
 type: feat
 date: 2026-09-03
 slug: chore-supabase-followups-art30-register-orphan-linter
 branch: feat-one-shot-7716-7717-7718-supabase-followups
 issue: 7717
-closes: [7717, 7716, 7718, 6489]
+closes: [7717]
 priority: p1-high
 domain: [legal, engineering]
 brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 lane: cross-domain
+scope: w6-statutory-only
+carries_design_for: [7716, 7718, 6489]
 ---
+
+## Scope — this PR ships W6 only (DC-1 resolved: split)
+
+**This plan was written for all three follow-ups. It is now executed in two PRs.** The operator
+resolved [DC-1](../specs/feat-one-shot-7716-7717-7718-supabase-followups/decision-challenges.md)
+in favour of the split that two independent reviewers recommended, after the second reviewer
+falsified the mitigation offered for bundling: `ship` queues `gh pr merge --squash`, so all
+phases collapse into one commit on `main` and there is **no independently revertable statutory
+commit**. Reverting a red orphan-linter promotion would have silently retracted an Art. 33(5)
+record, in a register whose amendment contract makes a revert itself a recorded event. #7670 is
+concurrently editing `article-30-register.md`, which the split also clears.
+
+The design below is **not** re-scoped and **not** duplicated — it is the single source for both
+PRs (restating it is what drifts). Ownership is by phase:
+
+| Workstream | Phases | Acceptance criteria | Ships in |
+|---|---|---|---|
+| **W6** — Art. 33(5) breach register (#7717) | 0 (legal preconditions 0.5, 0.6, 0.8), 1, 7.1/7.1a/7.1b, the W6 slice of 7.2–7.4, 8 | §Pre-merge — W6 (statutory) | **This PR** |
+| W1 / W7 / W3 / W4 / W5 (#7716, #7718, #6489) | 0 (engineering preconditions 0.1–0.4, 0.7, 0.9), 2, 3, 4, 5, 6, the engineering slice of 7.2–7.4, 8 | §Pre-merge — W1 / W7 / W3 / W4 / W5 (engineering) | Follow-on PR |
+
+**For `/work` on this branch: implement the "This PR" row only.** Phases 2–6 are out of scope
+here; `tasks.md` on this branch carries the in-scope list. The follow-on branch points back at
+this same plan rather than copying it.
+
+Two items in the Phase 7 straddle are assigned deliberately: **ADR-200** (the register's
+maintaining surface) ships here because it documents W6's own gate, while the **ADR-139
+amendment** (aggregator-union invariant, compensating control) ships with the follow-on because
+it documents W1's promotion route. `#7529`'s `action-required` label is legal and ships here.
 
 ## Enhancement Summary
 

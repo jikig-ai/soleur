@@ -55,6 +55,21 @@ and carry #7716 + #7718 to a follow-on PR (this plan's engineering design is com
 transfer intact). **Two independent reviewers reached the same recommendation**, and the second
 one falsified the mitigation the first had been offered.
 
+**RESOLVED 2026-09-03 — operator chose the split.** Asked directly, before `/work` spent any
+implementation budget, the operator selected *"Split #7717 into its own PR"*: this branch
+re-scopes to W6 alone and ships first (it is the overdue P1), and #7716 + #7718 + #6489 follow in
+a second PR built from this same plan, whose engineering design transfers intact.
+
+Both reviewers are therefore upheld. The unmitigated coupling in reason 2 is dissolved rather
+than accepted: the statutory record and the CI-guard promotion no longer share a squash commit,
+so a revert of either cannot retract the other. Reason 3's concurrent-editor race with #7670 on
+`article-30-register.md` narrows to one PR touching the register, and Phase 0.10 was added to
+re-read it against #7670's head before editing. Reason 4's schedule inheritance disappears with
+the bundle.
+
+Scope ownership is recorded in the plan's §Scope table; this branch's `tasks.md` carries the
+in-scope list only, and Phases 2–6 remain recoverable verbatim from `git show f8d4cd787`.
+
 ---
 
 ## DC-2 — CTO reframes what the ADR is actually about
