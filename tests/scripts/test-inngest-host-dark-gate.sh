@@ -659,8 +659,12 @@ _bind "G20's diagnostic-boot value" '\-\-diagnostic-boot[[:space:]]+"\$\{?DBOOT'
 # argument that must NOT come from a variable, and must be the value the argument assumes.
 # COUNTED, NOT MERELY PRESENT. There are TWO queries behind this gate — the probe rows and the
 # `function.finished` rows — and a `grep -q` is satisfied while the other one has been widened.
-_since90="$(grep -cE '\-\-since[[:space:]]+90m' "$WF")"
-_sinceany="$(grep -cE 'betterstack-query\.sh.*\-\-since|\-\-since[[:space:]]+[0-9]+[mhd].*SOLEUR_INNGEST_SERVER_PROBE|\-\-since[[:space:]]+[0-9]+[mhd].*function\.finished' "$WF")"
+_since90="$(grep -cE 'betterstack-query\.sh.*\-\-since[[:space:]]+90m|\-\-since[[:space:]]+90m[[:space:]]+\-\-grep' "$WF")"
+# The bare `grep -c '--since 90m'` this replaced counted LINES ANYWHERE, including comments and
+# `::error::` prose — so widening the probe query to `30d` and adding a comment mentioning the old
+# value kept the count at 2 and the arm green, leaving the monotonicity premise unbacked. It now
+# matches only a `--since 90m` attached to an actual query invocation. `_sinceany` was assigned
+# here and never read; the check it was written for is the anchored form above.
 if [[ "$_since90" -eq 2 ]]; then pass; else fail "Row 7: expected exactly 2 '--since 90m' windows (the probe query and the function.finished query), found ${_since90} — the <=90-minute premise of the monotonicity argument is unbacked for at least one of them"; fi
 # G17 must not be handed the operator's own pin as BOTH operands.
 if grep -qE '\-\-live-attachment-id[[:space:]]+"?\$\{?EXPECTED_INNGEST_VOLUME_ID' "$WF"; then
@@ -684,7 +688,11 @@ fi
 #     in cloud-init runcmd, which is FIRST-BOOT-ONLY, and Guard 1 requires hcloud_server.inngest
 #     to show ZERO actions — so this dispatch cannot reboot or replace the host by construction.
 #     A plain reboot runs inngest-luks-open.sh, which OPENS and never formats.
-if grep -qF "Do NOT re-dispatch inngest-volume-recut" "$WF"; then pass; else fail "Row 7b(a): the recut failure path does not warn against the re-dispatch that its own Guard 2 refuses"; fi
+# ANCHORED ON THE EMITTER, NOT THE PROSE. All five of these were whole-file `grep -qF` over a
+# 6000-line workflow that is more than half comments and `description:` strings — so turning the
+# operator-facing line into a `#` comment left every arm green while the operator saw nothing.
+# Row 6a was fixed this way and Row 7b was not. `echo "::error::` is what a comment cannot be.
+if grep -qF 'echo "::error::  WHY NOT inngest-host' "$WF"; then pass; else fail "Row 7b(a): the recut failure path does not EMIT the warning against the dead route"; fi
 # THE ROUTE CHANGED BECAUSE THE FIRST REPLACEMENT WAS ALSO UNREACHABLE. `inngest-host` cannot
 # recover: hcloud_server.inngest carries the volume id in its user_data with no ignore_changes,
 # so an absent volume makes that id unknown at plan time, user_data is ForceNew, the server is
@@ -693,7 +701,11 @@ if grep -qF "Do NOT re-dispatch inngest-volume-recut" "$WF"; then pass; else fai
 # for create-only. This arm pins the route that was actually driven green.
 if grep -qE "RECOVERY: dispatch '-f apply_target=inngest-host-replace'" "$WF"; then pass; else fail "Row 7b(a2): the recut failure path does not name inngest-host-replace, the only route measured to work"; fi
 # ...and it must warn off BOTH dead routes, not just the one it used to name.
-if grep -qF "do NOT dispatch inngest-host" "$WF"; then pass; else fail "Row 7b(a3): the failure path does not warn that inngest-host also aborts"; fi
+# `do NOT dispatch inngest-host` is a PREFIX of `do NOT dispatch inngest-host-replace`, so the
+# previous anchor was satisfied by advice FORBIDDING the one route measured to work — which would
+# have left the workflow both prescribing and forbidding it, with both arms green. Anchor past
+# the token boundary.
+if grep -qF "do NOT dispatch inngest-host —" "$WF"; then pass; else fail "Row 7b(a3): the failure path does not warn that inngest-host (not -replace) also aborts"; fi
 if grep -qF "THE CUTOVER IS NOT COMPLETE" "$WF"; then pass; else fail "Row 7b(b): the recut success path does not say that a host replace is still required"; fi
 if grep -qF "FIRST-BOOT-ONLY" "$WF"; then pass; else fail "Row 7b(b2): the recut success path does not say WHY a reboot is not enough (runcmd is first-boot-only)"; fi
 # ...and it must not still claim the old thing anywhere. Grep the OLD wording, never the new.

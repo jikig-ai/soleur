@@ -155,6 +155,25 @@
 #     --diagnostic-boot <value>
 #   # echoes exactly one verdict token; rc 0 ONLY for `dark`.
 
+# THE PROBE-ROW SELECTOR, DEFINED ONCE. This identity conjunction and marker filter were
+# replicated verbatim across four jq programs — `_ihdg_rows`, `_ihdg_row_count`,
+# `_ihdg_newest_dt` and `_ihdg_tied_newest`. Review measured the cost: neutering the copy inside
+# `_ihdg_newest_dt` — the SOLE input to G3's wall-clock staleness bound — left the suite at
+# 112 passed, 0 failed, because no fixture exercised that copy. A stale dedicated-host row beside
+# a fresh row from the co-located WEB host would then take its `dt` from the foreign row and clear
+# the recency bound the predicate exists to enforce.
+#
+# Two earlier hardenings had already had to be hand-applied to each site (`contains(...)` ->
+# `test("^SOLEUR_INNGEST_SERVER_PROBE ")`), which is exactly the drift this removes. One
+# definition means a future tightening cannot land on some readers and not others, and one
+# mutation of it reddens every consumer at once instead of only the ones with fixtures.
+_IHDG_SELECT='
+        | . as $outer
+        | ((.raw? // empty) | fromjson?) as $d
+        | select(($d | type) == "object")
+        | select($d.host == $h and $d.host_name == $hn)
+        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))'
+
 # _ihdg_field <message> <field-name>
 #
 # Returns 0 and prints the value when the field is PRESENT, 1 when it is ABSENT. The distinction is
@@ -221,11 +240,7 @@ _ihdg_rows() {
       [ inputs
         | fromjson?
         | select(type == "object")
-        | . as $outer
-        | ((.raw? // empty) | fromjson?) as $d
-        | select(($d | type) == "object")
-        | select($d.host == $h and $d.host_name == $hn)
-        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))
+'"$_IHDG_SELECT"'
         | [ ($outer.dt // ""), ($d.message // "") ]
       ]
       | sort_by(.[0])
@@ -245,11 +260,7 @@ _ihdg_newest_dt() {
       [ inputs
         | fromjson?
         | select(type == "object")
-        | . as $outer
-        | ((.raw? // empty) | fromjson?) as $d
-        | select(($d | type) == "object")
-        | select($d.host == $h and $d.host_name == $hn)
-        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))
+'"$_IHDG_SELECT"'
         | ($outer.dt // "")
       ]
       | sort
@@ -288,11 +299,7 @@ _ihdg_tied_newest() {
       [ inputs
         | fromjson?
         | select(type == "object")
-        | . as $outer
-        | ((.raw? // empty) | fromjson?) as $d
-        | select(($d | type) == "object")
-        | select($d.host == $h and $d.host_name == $hn)
-        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))
+'"$_IHDG_SELECT"'
         | { dt: ($outer.dt // ""), m: ($d.message // "") }
       ] as $rows
       | ($rows | map(.dt) | max) as $newest
