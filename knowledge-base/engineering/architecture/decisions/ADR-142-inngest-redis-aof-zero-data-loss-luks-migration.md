@@ -178,3 +178,65 @@ second volume + LUKS + copy only materialize when the operator runs the reviewer
    pattern), rather than folding into #6897's plaintext-backstop sweep. Operator may re-home.
 2. **Canary abort mode.** Defaulted to **hard-abort** on any reminder-count/`DBSIZE` mismatch
    (recommended). Operator may relax to warn-and-continue (not recommended).
+
+## Addendum — 2026-09-03 (#7695): the premise this decision rests on is now MEASURABLE, and when it reads empty the decision is VACUOUS rather than amended
+
+Appended, not edited. Nothing above changes — `## Decision` in particular is untouched, and it
+remains binding for every state of the world it was written about. What this addendum records is
+that one of its **premises** has become a measured quantity rather than an assumption, and that the
+premise can be FALSE.
+
+### The premise
+
+§Context asserts, as the reason the #6895 registry pattern is FORBIDDEN here, that the inngest AOF
+is **sole-copy non-disposable state**, and that a `-replace` therefore means "every in-flight job
+lost". That is an unconditional claim about the volume, and at the time it was the only reading
+available: nothing in the repo could measure how much state the volume actually held.
+
+### What changed
+
+`SOLEUR_INNGEST_SERVER_PROBE` now emits, at `probe_schema=3`, a `redis_keys` count summed from
+`INFO keyspace` across every database, alongside `data_mount_src` (the `findmnt` source of
+`/mnt/data`), `data_bytes`, `host_role` and `redis_active`. So the sentence "the volume holds
+sole-copy state" is now a proposition with a truth value, on a specific row, from a specific boot.
+
+### The bounded reading
+
+**When `redis_keys` reads 0 on a mount-pinned, identity-pinned, newest-row basis, ADR-142's
+sole-copy premise is VACUOUS for that reading — there is no state to preserve, so a
+preserve-and-copy migration preserves nothing.** All three qualifiers are load-bearing and none may
+be dropped:
+
+- **mount-pinned** — `data_mount_src` must equal the by-id path of the physical volume being
+  destroyed (or the mapper, post-recut). `redis_keys` is a statement about a Redis *process*; the
+  recut destroys a *block device*. Today's mount is `mount … || true` with `nofail`, so a failed
+  mount leaves `/mnt/data` on the ephemeral root disk and Redis reports an empty store **while the
+  volume holds a populated AOF**. Without this pin the emptiness claim is about the wrong object.
+- **identity-pinned** — `inngest-bootstrap.sh` is the SHARED renderer for the dedicated host and
+  the co-located web host, so an unpinned read can be a fact about a machine that is not this one.
+- **newest-row** — a `boot_id` equal to the newest row's, or "dark and empty" can be a fact about a
+  host that no longer exists.
+
+### Why this BOUNDS the decision rather than amending it
+
+The two decisions govern **disjoint worlds**, and the gate decides which world you are in at
+dispatch time rather than at authoring time:
+
+- `redis_keys > 0` (or any unreadable/unpinned reading) ⇒ ADR-142 governs, unamended. The
+  destructive path is REFUSED OUTRIGHT — and note that enumeration is then unavailable too, because
+  `inngest-enumerate-reminders.sh` queries `127.0.0.1:8288`, which is not bound on a dark host.
+  Non-empty AND non-enumerable means preserve-and-copy is the only lawful route.
+- `redis_keys == 0` under all three pins ⇒ there is nothing for the byte-copy to carry, and the
+  cheaper destructive recut is available. ADR-199 governs that world and cites this addendum as its
+  precondition.
+
+An amendment would have widened ADR-142's own decision to sometimes permit a destroy, which would
+have made the sole-copy protection conditional on a reader's judgement. Bounding it instead leaves
+ADR-142 categorical and puts the conditionality in a gate that must MEASURE before it may proceed.
+
+### Recorded BEFORE the arm can open, deliberately
+
+This addendum lands in the same merge as the apparatus and the gates — before any dispatch exists
+that could act on the reading. A record written after a destructive action would be a
+justification; written before, it is a precondition that the gate's twenty predicates enforce.
+`tests/scripts/lib/inngest-host-dark-gate.sh` is where those pins are executable.

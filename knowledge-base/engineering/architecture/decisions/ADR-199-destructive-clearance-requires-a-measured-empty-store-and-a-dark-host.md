@@ -1,0 +1,156 @@
+---
+title: "ADR-199 — destroying a state volume is authorized by a MEASURED empty store on a dark host, never by an intent to destroy it"
+status: accepted
+date: 2026-09-03
+tags: [infrastructure, encryption-at-rest, destructive-apply, gates, observability, inngest]
+related_adrs: [ADR-142, ADR-140, ADR-119, ADR-100, ADR-096, ADR-193]
+related_runbooks:
+  - knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
+---
+
+# ADR-199 — destructive clearance is a measurement, not an intent
+
+## Status
+
+`accepted`. The invariant is true the moment this ADR merges: `apply_target=inngest-volume-recut`
+exists in `.github/workflows/apply-web-platform-infra.yml` and cannot reach `terraform plan`
+without `inngest_host_dark_gate` returning the literal `dark`.
+
+Bounds — does not amend — [ADR-142](./ADR-142-inngest-redis-aof-zero-data-loss-luks-migration.md).
+See its `## Addendum — 2026-09-03 (#7695)`: the two decisions govern disjoint worlds and this gate
+decides which world you are in at dispatch time.
+
+## Context
+
+`hcloud_volume.inngest_redis` is a plaintext ext4 volume holding the Inngest Redis AOF — in-flight
+job payloads, i.e. user prompts and agent output. It is the encryption-posture ledger's
+highest-sensitivity plaintext row (`tracking_issue: #6894`).
+
+Two migration shapes exist in this repo and they have opposite risk profiles:
+
+- **Preserve-and-copy** (ADR-142): provision a second volume, quiesce, copy bytes, swap the mount.
+  Safe for a populated store. Expensive, multi-step, and it preserves nothing when there is nothing
+  there.
+- **Destroy-and-recut** (the #6895 registry pattern): `-replace` the volume so it is born raw, and
+  let cloud-init `luksFormat` it. Cheap and single-step. Catastrophic against a populated store.
+
+ADR-142 forbade the second shape here on a premise stated unconditionally: the AOF is *sole-copy
+non-disposable state*. At the time that was the only reading available — nothing in the repo could
+measure how much state the volume held. `probe_schema=3` changed that.
+
+**The failure mode this ADR exists to prevent is not a wrong choice between the two shapes. It is
+choosing the destructive one on a REMEMBERED fact.** Every other authorization layer on this
+dispatch — a reviewer approving an environment, a confirm literal being typed, a volume id being
+pinned, a plan document matching a shape — is satisfiable in full while the host is serving live
+traffic and the store holds armed reminders. All four authorize by INTENT. None of them looks.
+
+## Decision
+
+**A dispatch that destroys a state volume must prove, from telemetry, that the state is not there —
+and a gate that cannot see the host must never conclude the host is dark.**
+
+Concretely, three commitments:
+
+### 1. The clearance condition is a conjunction over ONE row, not a disjunction over a window
+
+Twenty predicates (`tests/scripts/lib/inngest-host-dark-gate.sh`, G1..G20), all read from a single
+`SOLEUR_INNGEST_SERVER_PROBE` row on the current `boot_id`, plus four re-reads taken synchronously
+at dispatch time. Fields from two different rows may never be assembled into a verdict: that would
+authorize on a state that never simultaneously existed.
+
+The emptiness claim rests on `redis_keys == 0` **conjoined with** `data_mount_src` pinned to the
+physical device. `redis_keys` alone is a statement about a Redis *process*; the recut destroys a
+*block device*. Today's mount is `mount … || true` with `nofail`, so a failed mount leaves
+`/mnt/data` on the ephemeral root disk and Redis reports an empty store while the volume holds a
+populated AOF. The mount pin is what bridges process to device, and without it every other
+predicate is measuring the wrong object.
+
+### 2. The decision function is a POSITIVE ALLOWLIST
+
+It proceeds only on the literal `dark`. Every other token aborts — `unreadable` included.
+
+This deliberately inverts the posture of a monitoring pre-filter, and the inversion is the point.
+A pre-filter may only ADD a refusal, so a read failure there degrades safely. Here the gate is
+authorizing an irreversible destroy, so an unreadable signal must abort.
+
+**Measured, not argued.** On 2026-09-03 the Better Stack ClickHouse read path returned HTTP 503
+(`{"exception":"This source is currently under maintenance."}`) for an entire working session.
+`scripts/followthroughs/inngest-host-not-serving-7674.sh` returned `TRANSIENT reason=query_failed
+rc=22` throughout and refused to convert a broken read into a host verdict. That refusal is the
+correct behaviour and it is this ADR's evidence: a gate written the other way would have read the
+outage as "no rows, therefore quiet, therefore dark" and cleared a destroy on a host nobody could
+see. The failure is not hypothetical and this ADR does not argue it hypothetically.
+
+### 3. Verdict tokens stay DISTINCT when their remedies differ
+
+`scripts/inngest-dedicated-host-classify.sh` collapses `silent`, `unreadable` and a pre-schema row
+into one `probe-unavailable` verdict. That is right for a pager — all three mean "go look". It is
+wrong for a gate, because the three have different remedies and only one of them is a wait. This
+gate therefore reuses that script's host-conjunction query filter and its `R_SPOOF` fixture shape,
+and NOT its function.
+
+The distinction that matters most in practice is `stale_schema`: it is the EXPECTED verdict for
+every dispatch until the host is replaced, because the running host's `boot_id` has been unchanged
+for weeks and it emits no `probe_schema` at all. Collapsed into `unreadable` it would tell the
+operator to retry forever against a host that can never satisfy the gate. Kept distinct it says
+"replace the host first", which is actionable. It is also the mechanical interlock that makes the
+apparatus-then-recut ordering a CONSTRAINT rather than operator discipline: before the new emitter
+is live the recut is unreachable by construction.
+
+### The soundness of a ≤90-minute-old emptiness claim
+
+The probe fires hourly, so the chosen row can be up to ~90 minutes old. The argument that this
+still authorizes an apply is a MONOTONICITY argument and it lives in the gate source, not only
+here: `inngest-server` is the only writer to this Redis; G8∧G9 prove it was neither running nor
+answering on the newest row; G19 re-reads `INNGEST_CUTOVER_FLIP` synchronously and refuses anything
+but `rolled-back`/`aborted`, so no concurrent `FLUSHALL` can be authorized; and armed reminders
+firing only CONSUME keys. The count therefore cannot increase between the row and the apply.
+
+## Consequences
+
+- **The common path is a refusal, and that is correct.** Until the host is replaced, every dispatch
+  verdicts `stale_schema`. A gate whose expected outcome is "no" is not a broken gate.
+- **`redis_keys > 0` routes to ADR-142, with no override.** There is no `[ack-destroy]` bypass and
+  no operator flag that skips Guard 2. Enumeration is also unavailable on a dark host
+  (`inngest-enumerate-reminders.sh` queries `127.0.0.1:8288`), so non-empty and non-enumerable
+  together mean preserve-and-copy is the only lawful route.
+- **A second id-pin exists, against a second source.** Guard 1 pins the plan's
+  `.change.before.id`; Guard 2 pins the LIVE Hetzner attachment. They can disagree — a plan is a
+  projection of state, and state can be wrong about the world — and it is the world that gets
+  destroyed.
+- **The ledger row keeps its exception at this merge.** The apparatus ships INERT: the device
+  becomes `crypto_LUKS` only when the gated dispatch runs. Flipping `mechanism` to `luks` now would
+  be a false at-rest claim about user prompts and agent output for an unbounded window.
+- **A drop-one battery is keyed on PREDICATES, not verdict tokens.** Several predicates share a
+  token (three map to `wrong_host`, two to `host_serving`, four to `unreadable`), so a token-keyed
+  battery needs about half the cases and cannot tell that one was deleted. This is a general
+  property of any gate whose verdict vocabulary is smaller than its predicate set.
+- **`G12` and `G13` may not be merged.** `[[ "__UNREADABLE__" -eq 0 ]]` is TRUE under bash
+  arithmetic coercion, so a single "is the count zero" check reads the emitter's own
+  cannot-measure sentinel as the clearing value.
+- **Cost.** Twenty predicates plus two batteries is more machinery than the four intent layers put
+  together. That asymmetry is the decision: the layers that authorize are cheap because they encode
+  a human's belief, and the layer that measures is expensive because it has to be right about the
+  world at a moment nobody is watching.
+
+## Alternatives considered
+
+- **Trust the four intent layers.** Rejected: all four are satisfiable while the host serves.
+  A reviewer approving an environment is approving a plan, not a measurement.
+- **Reuse `inngest-dedicated-host-classify.sh` as the decision function.** Rejected: its
+  `probe-unavailable` verdict collapses three states whose remedies are disjoint, and one of them
+  (`stale_schema`) is the common path here.
+- **Rest the emptiness claim on `data_bytes` alone and drop `redis_keys`.** This was the shipped
+  reading for one merge, on a stated premise — that crediting the probe required wrapping its
+  `ExecStart` in `doppler run`, which would `203/EXEC` on the co-located web host. **The premise was
+  false**: the unit already carried two tolerant `EnvironmentFile=` lines and a plain script
+  `ExecStart`, so a third single-variable env file was shape-identical to what was there. Recorded
+  as a rejected alternative rather than omitted, because the reasoning that produced it — arguing
+  from "the unit needs a secret" to "the unit must run under `doppler run`" without reading the unit
+  — is the failure this ADR's whole posture is against.
+- **A size ceiling on `data_bytes`.** Rejected: any ceiling would be an invented number. The honest
+  guard is that the figure was measured at all, since it is the only surviving audit record of what
+  is about to be destroyed.
+- **Amend ADR-142 to permit a destroy when the store looks empty.** Rejected: that makes the
+  sole-copy protection conditional on a reader's judgement. Bounding it instead leaves ADR-142
+  categorical and puts the conditionality in a gate that must measure before it may proceed.
