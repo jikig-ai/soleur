@@ -129,6 +129,27 @@ Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
       is as a shrink-only RATCHET over the 17 acknowledged rows, not as a remediation. Per PR 1's
       finding that a widening which silences is worse than the false positives it removes, do NOT
       teach the rule to chase call graphs to retire these; acknowledge them with the measured reason.
+- [x] 2.1a-DONE Resolution implemented and measured. Handles every mktemp form, one-line AND
+      multi-line same-file wrappers, and wrappers reached through a sourced helper (118 of the 232
+      source directives resolve). Two bugs were caught by controls, BOTH of which had been making
+      sites look safe:
+      (i) a ONE-LINE function body was never read — the body range was `(i, i)` and the scan ran
+          `range(hi, lo, -1)`, which is empty. Same hazard class as PR 1's fifth finding.
+      (ii) `mktemp -d "$TMPROOT/case.XXXXXX"` was classified absolute. A path-bearing TEMPLATE
+          inherits its prefix exactly as `-p` does. Fixing it pushed residue UP, the honest
+          direction: rm -rf 136 -> 205, redirection 809 -> 866, mv/cp 20 -> 26.
+      Excluded as not-a-fixture-dir: 31 redirection sites targeting CI plumbing
+      (`$GITHUB_OUTPUT`, `$GITHUB_STEP_SUMMARY`, `$GITHUB_ENV`, `$GITHUB_PATH`).
+      FINAL RESIDUE (unguarded AND not provably absolute), against 921 tracked `*.sh`:
+        family        candidates  residue  files   2.2 verdict
+        git -C               199       17      3   fix inline
+        rm -rf              1136      205     50   grandfather + file issue
+        redirection         3865      866    190   grandfather + file issue
+        mv / cp -r            90       26     19   grandfather + file issue
+- [x] 2.2-DECIDED Threshold applied to the measured residue, not the projected one. `git -C` is the
+      only family under 100 lines / 4 files, so it is remediated inline; the other three are
+      grandfathered behind shrink-only baselines. ONE burn-down issue covers all three families
+      (not three issues): they are one class, and 1 close + 1 file keeps net-issue-flow at 0.
 - [ ] 2.2 Apply the repo's existing fix-inline-versus-file threshold — the cost-of-filing auto-flip at
       100 lines and 4 files — to the re-measured residue. If 2.1a proves large, ship the loud-failure
       family alone (3 sites) and file the other two with the measured numbers attached.
