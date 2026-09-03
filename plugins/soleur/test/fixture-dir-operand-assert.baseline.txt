@@ -43,7 +43,6 @@
 6	.claude/hooks/pre-merge-auto-close-scan.test.sh
 7	.claude/hooks/pre-merge-rebase.test.sh
 2	.claude/hooks/ship-soak-followthrough-gate.test.sh
-19	.claude/hooks/ship-unpushed-commits-gate.test.sh
 5	.claude/hooks/skill-context-queries.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 2	apps/web-platform/infra/workspaces-luks-loopback.test.sh
