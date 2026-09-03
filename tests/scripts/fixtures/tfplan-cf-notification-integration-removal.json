@@ -16,7 +16,7 @@
           "alert_type": "access_custom_certificate_expiration_type",
           "enabled": true,
           "email_integration": [
-            {"id": "ops@jikigai.com", "name": "ops@jikigai.com"}
+            {"id": "ops@example.com", "name": "ops@example.com"}
           ]
         },
         "after": {
