@@ -62,8 +62,11 @@ readonly TMP_ROOT
 trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
 
 passes=0; fails=0; asserted=0
-pass() { echo "  PASS: $1"; passes=$((passes + 1)); }
-fail() { echo "  FAIL: $1"; fails=$((fails + 1)); }
+# VERDICT_LOG is append-only and is what the accounting below reconciles against. The counters
+# are numbers a mutation can move; the printed lines are evidence it has to delete instead.
+VERDICT_LOG="$TMP_ROOT/verdicts.txt"; : > "$VERDICT_LOG"
+pass() { echo "  PASS: $1"; echo "PASS" >> "$VERDICT_LOG"; passes=$((passes + 1)); }
+fail() { echo "  FAIL: $1"; echo "FAIL" >> "$VERDICT_LOG"; fails=$((fails + 1)); }
 # Incremented at the CALL SITE. A counter living inside the helper it polices cannot detect that
 # helper being neutered, which is the whole point of the conservation check at the bottom (ADR-193).
 ck() { asserted=$((asserted + 1)); }
@@ -574,13 +577,35 @@ else fail "GUARD 3: an absolute operand was refused (rc=$G3_RC)"; fi
 # Not a mutation of the SUT: a suite whose only gate is a failure counter exits 0 having asserted
 # nothing, and that is invisible to every row above.
 ck
-if [[ "$(type -t fail)" == "function" ]] && declare -f fail | grep -q 'fails=\$((fails + 1))'; then
-  pass "fail() still moves its counter (the conservation check below can therefore fire)"
+# Driven, not read. Both counters are checked: a fail() that credits `passes` keeps every
+# literal a grep could look for while making the suite structurally unable to report a defect.
+_h_p=$passes; _h_f=$fails
+fail "ROW 8 self-test — this FAIL is expected and is immediately reconciled" >/dev/null
+if [[ $fails -eq $((_h_f + 1)) && $passes -eq $_h_p ]]; then
+  # Undo the self-test so it does not pollute the verdict ledger or the counters.
+  fails=$_h_f
+  sed -i '$d' "$VERDICT_LOG"
+  pass "fail() moves fails and ONLY fails (driven, not grepped)"
 else
-  fail "fail() no longer increments — every verdict above is unreportable"
+  fails=$_h_f
+  sed -i '$d' "$VERDICT_LOG"
+  fail "fail() does not move fails, or moves passes too — every verdict above is unreportable"
 fi
 
 # --- Accounting. Emitted DIRECTLY, never through pass()/fail(). ---------------------------------------
+# DIRECTION-AWARE. The sum below conserves the total, so it cannot see a verdict moved from the
+# `fails` bucket to the `passes` bucket — measured, that mutation reported `64 passed, 0 failed`
+# exit 0 with a genuine regression printing FAIL on screen. The ledger is the independent
+# observable: silencing it means deleting evidence rather than decrementing a number.
+_ledger_fail=$(grep -c '^FAIL$' "$VERDICT_LOG" || true)
+_ledger_pass=$(grep -c '^PASS$' "$VERDICT_LOG" || true)
+if [[ "${_ledger_fail:-0}" -ne "$fails" || "${_ledger_pass:-0}" -ne "$passes" ]]; then
+  printf '\n[FATAL] accounting: ledger (%s pass / %s fail) disagrees with counters (%d pass / %d fail).\n' \
+    "${_ledger_pass:-0}" "${_ledger_fail:-0}" "$passes" "$fails" >&2
+  printf '  A verdict was recorded in one bucket and counted in the other — that is what a fail()\n' >&2
+  printf '  crediting passes looks like, and the sum check below cannot see it.\n' >&2
+  exit 1
+fi
 if [[ $((passes + fails)) -ne $asserted ]]; then
   printf '\n[FATAL] accounting: passes+fails (%d) != asserted (%d).\n' "$((passes + fails))" "$asserted" >&2
   if [[ $((passes + fails)) -lt $asserted ]]; then
