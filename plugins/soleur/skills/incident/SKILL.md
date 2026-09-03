@@ -133,6 +133,21 @@ Compute three values:
 - `art_34_triggered` — true if `risk_to_subjects == high`. (Art. 34 covers high-risk breaches requiring direct subject notification.)
 - `art_33_deadline` — `date -u -d "${detected_at} +72 hours" +%Y-%m-%dT%H:%M:%SZ`. CNIL hard 72h deadline.
 
+**Where an Art. 33 determination is RECORDED (ADR-200).** When `art_33_triggered` is true, the
+PIR is the per-incident documentation Art. 33(5) requires, and it also needs a row in the
+**Art. 33(5) breach register** at `knowledge-base/legal/breach-register.md` — an index with
+stable canonical pointers, not a transcription, so add a summary row pointing at the PIR and copy
+nothing out of it. Columns and the inclusion predicate are fixed by
+[ADR-200](../../../../knowledge-base/engineering/architecture/decisions/ADR-200-art-33-5-documentation-is-a-distinct-register-discharged-by-an-index.md);
+record Art. 33 and Art. 34 as **separate** columns, and where this PIR makes a finding on one and
+is silent on the other, record the silence rather than inferring it.
+
+**Do NOT add a row when `art_33_triggered` is false.** That is a *screening output*, not a
+determination, and the register's predicate excludes it expressly: 102 post-mortems generated
+from `templates/pir.md` carry the field, and indexing them would bury the determinations under
+routine negatives. The row belongs to the CLO, who adds it in the same PR that lands the PIR;
+`scripts/lint-legal-registers.sh` asserts nothing determination-shaped is dropped silently.
+
 **Block Phase 3+ if EITHER trigger fires.** If only Art. 33 fires, prompt one ack:
 
 ```

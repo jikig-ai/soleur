@@ -27,13 +27,32 @@ AVOID full file paths in PROSE when those paths are not in this PR's diff:
 If a file-path reference is genuinely necessary for clarity, wrap it in inline
 backticks — `` `server/cc-dispatcher.ts:889` `` — which the `pr-body-vs-diff`
 gate exempts (see [`#3882`](https://github.com/jikig-ai/soleur/pull/3882) and
-[`check-pr-body-vs-diff.sh`](../../../../.github/scripts/check-pr-body-vs-diff.sh)
+[`check-pr-body-vs-diff.sh`](../../../../../.github/scripts/check-pr-body-vs-diff.sh)
 inline-`code`-span strip).
+
+## Which register — there is more than one
+
+Three register files live under `knowledge-base/legal/`, and a register-update PR is routed to
+the wrong one if only the first is known:
+
+| Register | File | What belongs in it |
+|---|---|---|
+| Art. 30(1) — processing activities | `knowledge-base/legal/article-30-register.md` | Processing Activities, kept in **controller** capacity |
+| Art. 30(2) — processor records | `knowledge-base/legal/article-30-2-register.md` | Processing carried out on behalf of a controller, kept in **processor** capacity |
+| Art. 33(5) — breach documentation | `knowledge-base/legal/breach-register.md` | Personal-data breach **determinations**, as an index with canonical pointers |
+
+**Art. 33(5) determinations do not go in the Art. 30 register.** Art. 30(1)'s limbs are a closed
+list and breach documentation is not among them; see
+[ADR-200](../../../../../knowledge-base/engineering/architecture/decisions/ADR-200-art-33-5-documentation-is-a-distinct-register-discharged-by-an-index.md),
+which also fixes the breach register's inclusion predicate and its column set. The `clo` agent is
+the custodian and adds the row in the **same PR** that lands the determination;
+`scripts/lint-legal-registers.sh` asserts that nothing determination-shaped under
+`knowledge-base/legal/audits/` is dropped without a committed, issue-citing reason.
 
 ## The register file itself is implementation-cited
 
 The Article 30 register
-([`knowledge-base/legal/article-30-register.md`](../../../../knowledge-base/legal/article-30-register.md))
+([`knowledge-base/legal/article-30-register.md`](../../../../../knowledge-base/legal/article-30-register.md))
 follows the PA10/PA11 convention of citing exact file paths + line numbers
 inline in the TOM cells — that's the load-bearing accountability evidence
 under GDPR Art. 5(2). This guidance applies to the **PR BODY only**, not to
