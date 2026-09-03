@@ -12,6 +12,54 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-03
+
+Reviewed by a CTO ruling, a SpecFlow pass and its re-validation, a scoped strong-model consult, and
+a seven-agent plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist,
+spec-flow-analyzer, CTO on a devex lens, CPO for the brand-survival sign-off). The deepen pass then
+ran the mandatory halt gates and targeted verification rather than a fresh research fan-out — the
+plan had already absorbed four P0s and the marginal value was in checking claims, not gathering more.
+
+### Key improvements
+
+1. **The sentinel-file marker became an argv check.** The largest single simplification: unforgeable
+   by any environment writer rather than merely a non-root one, no filesystem work in the window
+   before the ERR trap, and it keeps the gate's own input out of the tripwire's derivation prefix.
+2. **`PATH` shadowing was cut in full.** It would have inverted a documented safety property — that
+   the cutover suite reaches no real Redis and runs no real `FLUSHALL` — on the suite that drives
+   the destructive arm, on a runner with a real `systemctl`.
+3. **`ReadWritePaths` was corrected before it could brick the host.** Naming directories that do not
+   exist would have failed the unit on every fire after the replace; `-`-prefixing would have made
+   the script's own `mkdir` hit a read-only filesystem instead.
+4. **`--only-secrets` lists are authored, never derived.** Two independent exhaustive derivations
+   disagreed on the same two scripts, and under the fail-open flag both misses are silent — one of
+   them disabling a LUKS-passphrase redactor.
+5. **The four sibling units split into a follow-up**, because the rollout delivers none of them.
+6. **The rollout probe became a committed deliverable**, since a production host replace whose
+   verification cannot be re-run is unauditable.
+
+### New considerations discovered
+
+- The host is **live and the timer fires every 30 seconds** — this is armed, not latent.
+- The largest hole is not any of the fifteen seams: `BASH_ENV`, `PATH`, `LD_PRELOAD` and `IFS` are
+  honoured by bash without the script naming them, and no in-script guard can reach them.
+- A plain fail-closed `--only-secrets` list would have stopped the poll on a pre-arm host.
+- `INNGEST_POSTGRES_URI` has carried the **prod** DSN since 2026-07-23, so the leak is present-tense
+  rather than gated on the cutover.
+- The deepen halts surfaced two genuinely missing sections: `## Downtime & Cutover` (the plan does a
+  production host destroy-and-recreate and had never evaluated a zero-downtime path) and
+  `## Encryption Posture`.
+
+### Verification run in this pass
+
+Every cited AGENTS rule ID resolves to an active rule; no retired or fabricated IDs. Every cited
+ADR exists. Every cited issue number resolves with the state the plan claims. The negative claims
+were re-probed against the code — no `.tf` declares `INNGEST_CUTOVER_FLIP` (only comments mention
+it) while `INNGEST_REDIS_PASSWORD` is declared at `inngest-host.tf:164`; the script takes no
+top-level positional arguments; no production setter exists for any seam. Both plan lints pass.
+
 ## Overview
 
 `inngest-cutover-flip.sh` reads several test-fixture command seams out of its process
@@ -509,6 +557,90 @@ stale local fallback file cannot re-supply withheld names.
 
 Not applicable. No vendor resource is created; `--only-secrets` is a flag on the already-installed
 Doppler CLI (v3.75.3).
+
+## Downtime & Cutover
+
+The rollout replaces `hcloud_server.inngest` — a destroy-then-create — so this gate applies and the
+zero-downtime path is evaluated first rather than assumed away.
+
+**The offline-inducing operation and the surface it affects.** `apply_target=inngest-host` destroys
+and recreates the dedicated scheduler host. Two things are interrupted, and they are worth separating
+because only one of them is downtime in the sense that matters:
+
+- **Served traffic: none.** `INNGEST_CUTOVER_FLIP` reads `rolled-back`, so `inngest-server.service`
+  is held stopped by the flip guard's brake. The host answers nothing today; the app's schedulers
+  still run co-located. There is no request to drop and no queue consumer to stall.
+- **The flip FSM's control channel: dark for the replace window.** The 30-second timer stops when
+  the host does, so the marker stream pauses. That is the real, bounded cost.
+
+**Zero-downtime paths evaluated, and why the replace is the right one anyway.**
+
+| Path | Verdict |
+|---|---|
+| **Blue-green** — provision a second inngest host, cut over, retire the old | **Rejected, and not merely on cost.** ADR-100 makes this a *singleton* control plane by construction. Two hosts running the flip FSM concurrently is the double-fire hazard the entire cutover architecture exists to prevent, and `/mnt/data` is a single-attach volume, so the second host could not carry the latch that prevents a second `FLUSHALL` |
+| **Deliver in place, no replace** — route the assets through the infra-config pull bundle | **Rejected, and enforced against.** `cutover-inngest-workflow.test.sh:265-285` asserts each flip asset is present on an OCI/cloud-init surface and absent from every webhook surface. Routing them through the config channel reds CI by design, and ADR-100's 2026-08-25 addendum records replace-only delivery as a standing constraint |
+| **`terraform state mv` / state-only re-address** | **Not applicable.** This is a content change to image-baked assets, not a resource re-address |
+| **Drain, then act** | **Already satisfied.** The host is drained by construction — the brake is what `rolled-back` means |
+
+**Conclusion: the replace *is* the zero-downtime path here**, because the surface it takes offline is
+already offline. The residual is a bounded pause in the FSM marker stream on a host serving nothing.
+That is also why the window closes: after the cutover flips, this same replace would take the
+durable queue offline and put the flush latch through a re-attach with live jobs behind it, while
+#7695 — *nothing clears a standing flush latch* — is still open.
+
+**Per-stage verification and rollback.**
+
+| Stage | Verification | Rollback |
+|---|---|---|
+| Image build | The tagged build completes green before any pin moves | Do not bump the pins; nothing on the host has changed |
+| Digest pins | Both literals reference the same digest (AC23) | Revert the pin commit; no host has been touched |
+| Replace | The apply completes green | The create is the risk: a failed create leaves no host. Mitigated by the fact that the host carries no traffic, and by pinning to an image whose build already passed |
+| Post-replace | The committed probe asserts `rolled-back` still reads, two fresh `noop-rolled-back` markers, and the latch intact | Re-dispatch the replace against the previous digest pins |
+
+**Stock risk is a real precondition, not a formality.** Sibling hosts in this fleet have had a
+destroy-then-create blocked by datacenter stock — the registry host was repinned `cx23 → cpx22` in
+#7309 for exactly that reason, after availability changed direction twice in twelve days. A failed
+create here strands a host with no rollback, so confirm the pinned server type is orderable in the
+target location immediately before dispatching, not at plan time.
+
+## Encryption Posture
+
+This change introduces **no new persistent store and no new cross-component connection**. The gate
+fires on the mechanical trigger because `cloud-init-inngest.yml` appears in Files to Edit, but the
+edit there is two image digest literals. The posture below is therefore a declaration for the
+surfaces this unit already touches, recorded so the claim is on the record rather than assumed.
+
+```yaml
+at_rest:
+  - store: "Inngest Redis AOF on the /mnt/data volume (hcloud_volume.inngest_redis)"
+    mechanism: plaintext-exception
+    evidence: "inngest-host.tf declares the volume `format = \"ext4\"` with no LUKS apparatus; recorded in encryption-posture-ledger.json and described at model.c4:200-202"
+    defends_against: "nothing at rest — the AOF is readable from a seized or snapshotted disk"
+    does_not_defend: "disk seizure, volume snapshot, or provider-side image capture exposes the queue and run-state AOF, i.e. in-flight job payloads including inbound-email triage content (Article 30 PA-27)"
+    disclosed_as: "a ledgered exception, tracking #6894, pending its own guest-side LUKS cutover"
+    live_verification: "unchanged by this plan; the volume re-attaches across the Phase 8 replace rather than being recut, so its posture is neither improved nor degraded here"
+    exception:
+      justification: "Pre-existing and out of scope. This plan narrows who can reach the host; it does not change what the disk holds or how it is encrypted. Folding a LUKS cutover into a security fix on the same host would couple two irreversible operations in one replace"
+      tracking_issue: 6894
+      reevaluate_when: "the #6894 guest-side LUKS cutover is scheduled, or the cutover flips and the queue carries live production jobs"
+      expires_on: "2026-12-31"
+
+in_transit:
+  - connection: "flip unit -> Doppler API (secret fetch at each 30s fire)"
+    tls: "yes, HTTPS via the Doppler CLI"
+    cert_verification: "on — the CLI's --no-verify-tls is not set, and this plan does not set it"
+    does_not_defend: "a party who already holds write access to the Doppler config; that is precisely the threat this plan addresses, and it is an authorization boundary rather than a transport one"
+    disclosed_as: "Doppler is a recorded sub-processor in compliance-posture.md"
+  - connection: "flip unit -> loopback Redis (127.0.0.1:6379) and loopback inngest health/GQL (127.0.0.1:8288)"
+    tls: "no — loopback only, never leaving the host's network namespace"
+    cert_verification: "n/a"
+    does_not_defend: "an attacker with code execution on the host, who can read the loopback traffic and the password used to authenticate it. This plan reduces the routes to that code execution rather than encrypting the loopback"
+    disclosed_as: "not separately disclosed; intra-host loopback, no data leaves the machine"
+```
+
+**What this change does to the posture:** it strictly narrows it. Withholding
+`INNGEST_POSTGRES_URI` and every other unlisted secret from the flip unit's environment removes a
+live production database DSN from a process that never read it.
 
 ## User-Brand Impact
 
