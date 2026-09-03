@@ -79,7 +79,8 @@ while [[ $# -gt 0 ]]; do
     # knowledge-base/legal/**, so its scope was DESIGNED rather than measured. One cycle
     # advisory measures it; promotion is then deleting this flag at the `run_suite` call site
     # in scripts/test-all.sh, with evidence behind it. PROMOTION TRIGGER: one green merge cycle
-    # with no unexplained finding. Tracked so it is a follow-up with a trigger, not a hope.
+    # with no unexplained finding. Tracked at #7787 with its checklist -- a follow-up with a
+    # trigger, not a hope.
     --advisory) ADVISORY=1; shift ;;
     -h|--help)  echo "usage: lint-legal-registers.sh [--advisory]"; exit 0 ;;
     *)          echo "::error::lint-legal-registers: unknown option: $1" >&2; exit 2 ;;

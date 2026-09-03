@@ -555,7 +555,7 @@ Every plan MUST include a `## User-Brand Impact` section. This is the framing-ti
 
 **Step 2 — Brainstorm carry-forward.** If the brainstorm document loaded in Phase 0.5 contains a `## User-Brand Impact` framing (which it should when brainstorm Phase 0.1 set `USER_BRAND_CRITICAL=true`), import the threshold and the artifact/vector declarations directly rather than re-authoring. Carry-forward is preferred — re-authoring at plan time risks drift from the brainstormed framing.
 
-**Step 3 — Threshold-driven sign-off requirement.** If the threshold resolves to `single-user incident`:
+**Step 3 — Threshold-driven sign-off requirement.** If the threshold resolves to `single-user incident` **or `aggregate pattern`** (see the correction below — the narrower value is the floor, not an exact match):
 
 1. Add `requires_cpo_signoff: true` to the plan's YAML frontmatter.
 2. Display: "CPO sign-off required at plan time before `/work` begins. Invoke CPO domain leader if not already covered by Phase 2.5 carry-forward, or confirm CPO has reviewed the brainstorm."
@@ -572,7 +572,11 @@ The set of mandatory leaders changes by lifecycle phase, and that is by design �
 
 This tiered model is intentional — re-asking CPO/CLO/CTO at every phase would dilute the framing into ceremony. The framing question is asked once (brainstorm), the answer is locked in (plan), the diff is checked against the answer (review), the gate verifies the answer was given (ship).
 
-If the threshold resolves to `aggregate pattern`, no per-PR sign-off is added but the section must still be present.
+If the threshold resolves to `aggregate pattern`, the **same** sign-off requirements as `single-user incident` apply: `requires_cpo_signoff: true`, and `user-impact-reviewer` at review time.
+
+**[2026-09-03 CORRECTION (#7717) — this branch previously inverted the tiers.]** It read "no per-PR sign-off is added but the section must still be present", which made the **broader** harm class procure **less** scrutiny than the narrower one: `single-user incident` is one user's data, workflow or money, while `aggregate pattern` is a systemic failure reaching many. `user-impact-reviewer` compounded it by hard-exiting on the value (its Step 1 exits when the threshold "says `none` or `aggregate pattern`"), so the tier naming a wider blast radius was the one with no reviewer at all.
+
+The ordering is now monotonic: `none` < `single-user incident` <= `aggregate pattern`. Read `single-user incident` as the **floor** at which per-PR sign-off attaches, not as a distinct category that happens to attract it. A threshold cannot be escaped by widening it.
 
 If the threshold resolves to `none` AND the diff touches a sensitive path (canonical regex defined in `plugins/soleur/skills/preflight/SKILL.md` Check 6 Step 6.1), the section MUST contain a `threshold: none, reason: <one-sentence non-empty reason>` scope-out bullet. Without it, preflight will FAIL at ship time.
 

@@ -121,7 +121,7 @@ which is the property a register's maintenance actually needs.
 `knowledge-base/legal/**` — nothing structurally lints that tree today — so its scope was
 designed rather than measured. A first-of-its-kind gate does not go straight onto the one required
 context that cannot be un-required. Promotion is deleting a flag at the call site once a cycle
-has measured the scope. The advisory path deliberately does **not** downgrade a fail-closed
+has measured the scope, and is tracked with its checklist at **#7787**. The advisory path deliberately does **not** downgrade a fail-closed
 refusal: a finding becomes a warning, an "I cannot decide" stays a hard failure.
 
 **The token scan is scoped to the register files, not the corpus.** `audits/` is a

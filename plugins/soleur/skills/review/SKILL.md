@@ -301,15 +301,16 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `semgrep-sast`: Known vulnerability signatures (CWE patterns), hardcoded secrets, insecure function calls, taint analysis. Complements security-sentinel's LLM-based architectural review with deterministic rule-based scanning.
 
-**If the plan declares Brand-survival threshold as `single-user incident`:**
+**If the plan declares Brand-survival threshold as `single-user incident` or `aggregate pattern`:**
 
 15. Task user-impact-reviewer(PR content + plan path) - Enumerate every user-facing failure mode implied by the diff and verify the plan's `## User-Brand Impact` section mitigates or scope-outs each
 
 **When to run user-impact-reviewer:**
 
-- The plan file referenced from the PR body contains literal text `Brand-survival threshold: single-user incident`
-- The PR body itself contains a `## User-Brand Impact` section with that threshold label
+- The plan file referenced from the PR body contains literal text `Brand-survival threshold: single-user incident` **or** `Brand-survival threshold: aggregate pattern`
+- The PR body itself contains a `## User-Brand Impact` section with either threshold label
 - Either signal alone is sufficient to fire the agent — both signals fire it once (no duplicate invocation)
+- **[2026-09-03 CORRECTION (#7717):** this gate matched only the `single-user incident` literal, so the tier naming the WIDER blast radius fired no reviewer at all. `aggregate pattern` is a systemic failure reaching many users; `single-user incident` is one user's data, workflow or money. Treat the narrower value as the **floor** at which this agent attaches: `none` < `single-user incident` <= `aggregate pattern`. The matching inversions in `plugins/soleur/skills/plan/SKILL.md` §2.6 Step 3 and `plugins/soleur/agents/engineering/review/user-impact-reviewer.md` (both its `description:` and its Step 1 exit) are corrected in the same change — **fixing any one of those sites alone leaves the behaviour unchanged, because this literal match is what actually invokes the agent.**]
 
 **What this agent checks:**
 
@@ -397,8 +398,8 @@ If agent spawning is unavailable or unauthorized:
 3. Pass the coverage to the evidence trailer (Step 6): `--agents-ran 0 --agents-expected
    <N> --mode inline-fallback`. A degraded review that emits a full-strength trailer is
    worse than no trailer, because `/ship` reads that boolean and merges on it.
-4. Do NOT mark the PR ready on a `single-user incident` brand-survival threshold with zero
-   agents. Surface the choice to the operator: degraded review is adequate evidence for a
+4. Do NOT mark the PR ready on a `single-user incident` **or `aggregate pattern`** brand-survival
+   threshold with zero agents. Surface the choice to the operator: degraded review is adequate evidence for a
    docs PR and is not adequate for an irreversible-blast-radius surface.
 5. **Emit the trailer even though nothing else is committed, and do not write a `/ship` handoff.**
    Step 6's "commit local artifacts" branch does not fire on a degraded pass (there are usually

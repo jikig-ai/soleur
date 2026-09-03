@@ -1291,8 +1291,9 @@ if want_scripts; then
   # findings as warnings and exits 0; it does NOT downgrade a fail-closed refusal (rc=2), which
   # is what keeps "I could not decide" distinguishable from "nothing to report".
   # PROMOTION: delete the --advisory flag on the next line. Trigger: one green merge cycle with
-  # no unexplained finding. The unit arm above is blocking from the start -- a guard's own tests
-  # have no reason to be advisory.
+  # no unexplained finding. Tracked at #7787, which carries the full promotion checklist. The
+  # unit arm above is blocking from the start -- a guard's own tests have no reason to be
+  # advisory.
   run_suite "scripts/lint-legal-registers-live" bash scripts/lint-legal-registers.sh --advisory
   # WIRED HERE, NOT IN .github/ (#7717). check-pa-22.sh was written to guard the PA-22 register
   # entry and then ran in ZERO runners -- one of the five documented instances in
