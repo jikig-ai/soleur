@@ -357,11 +357,32 @@ if [[ "$STAGE" == "github-pages" ]]; then
   www_shape_want='CNAME at jikig-ai.github.io'
   if [[ "$WWW_TYPE" == "CNAME" && "$WWW_CONTENT" == "jikig-ai.github.io" ]]; then www_shape_rc=0; fi
 else
-  # Post-cutover the Bulk Redirect answers at the edge in front of this record, so www needs
-  # a proxied address record and nothing behind it. An A is the sanctioned shape; a surviving
-  # CNAME at jikig-ai.github.io means the cutover left www pointed at the retired origin.
-  www_shape_want='proxied A (black-hole behind the Bulk Redirect)'
-  if [[ "$WWW_TYPE" == "A" ]]; then www_shape_rc=0; fi
+  # ADR-194 / plan D1 deliberately DIVERGE from Cloudflare's own www-redirect recipe: www
+  # stays a proxied CNAME ATTACHED TO THE PAGES PROJECT, with the Bulk Redirect in front of
+  # it ("In case of duplicates, Bulk Redirects will run in front of your Pages project").
+  # The divergence buys the FAILURE MODE: if the redirect ever stops firing, www serves the
+  # site (duplicate content for one monitor interval) instead of a Cloudflare 522 on an
+  # HSTS-preloaded host. sentry_uptime_monitor.soleur_www asserts `equals 301` and pages on
+  # EITHER outcome, so detection is a wash and only the user-visible cost differs.
+  #
+  # This arm previously accepted ONLY type A ("proxied A, black-hole behind the Bulk
+  # Redirect") — residue of the recipe D1 rejected, contradicting ADR-194, D1, R6 and PF9
+  # in the same corpus. Corrected 2026-09-03.
+  #
+  # Two rejections, both load-bearing:
+  #   - a surviving CNAME at jikig-ai.github.io means the cutover left www on the retired
+  #     origin;
+  #   - ANY `A` record, 192.0.2.1 included, means www left the project. That silently
+  #     deletes the property D1 chose, AND makes the PR4 swap a ForceNew replace — a CNAME
+  #     and an A cannot coexist at one name, so create_before_destroy cannot rescue it and
+  #     the record is NXDOMAIN mid-apply, where the edge redirect cannot help because no
+  #     request reaches the edge at all.
+  # Accept branches mirror the apex arm above: the pages.dev literal OR the project reference.
+  www_shape_want="proxied CNAME at the Pages project (${PROJ_NAME}.pages.dev / cloudflare_pages_project.docs) — NOT an A record, black-hole or otherwise"
+  if [[ "$WWW_TYPE" == "CNAME" ]]; then
+    if grep -Fq "${PROJ_NAME}.pages.dev" <<<"$WWW_CONTENT"; then www_shape_rc=0; fi
+    if grep -Fq 'cloudflare_pages_project.docs' <<<"$WWW_CONTENT"; then www_shape_rc=0; fi
+  fi
 fi
 verdict "$www_shape_rc" "www record matches the ${STAGE} stage (${www_shape_want}); found type ${WWW_TYPE:-<none>} content ${WWW_CONTENT:-<none>}"
 

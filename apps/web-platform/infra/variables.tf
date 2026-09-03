@@ -444,13 +444,17 @@ variable "cf_api_token_r2" {
 # THREE STORAGE LOCATIONS, ONE ROTATION: Doppler prd_terraform, terraform.tfstate on R2,
 #   and GitHub Actions secrets. Rotating means replacing the Doppler value and re-applying
 #   this root; see the rotation-policy comment in cf-pages.tf.
-# CONSUMERS TODAY (greppable now): main.tf provider alias cloudflare.pages; cf-pages.tf
-#   (cloudflare_pages_project.docs, github_actions_secret.cloudflare_api_token_pages).
-# CONSUMERS NOT YET PRESENT — do not grep for these and conclude drift. This is PR1 of
-#   four: .github/workflows/deploy-docs.yml gains the wrangler publish step in PR2 (that
-#   file exists today and references this token ZERO times), and cloudflare_pages_domain
-#   .apex/.www land in PR3. Listing them as current consumers is what this comment said
-#   before, and it was false in the direction a reader cannot detect.
+# CONSUMERS (all present as of PR3): main.tf provider alias cloudflare.pages; cf-pages.tf
+#   (cloudflare_pages_project.docs, cloudflare_pages_domain.apex, cloudflare_pages_domain.www,
+#   github_actions_secret.cloudflare_api_token_pages); and .github/workflows/deploy-docs.yml,
+#   which reads CLOUDFLARE_API_TOKEN_PAGES in the wrangler publish step.
+# This block used to carry a NOT-YET-PRESENT list naming deploy-docs.yml and the two
+#   pages_domain resources, against a sequence it called "PR1 of four". Both consumers have
+#   since landed and the sequence is five PRs, so the block became false in the OPPOSITE
+#   direction from the one it warned about — understating the blast radius rather than
+#   overstating it. Nothing catches this: no test reads a variable description. Prefer
+#   naming the EVENT ("the apex cutover") over a PR ordinal, which is why
+#   principles-register.md's AP-019 note survived two resequencings unscathed.
 # FORK-PR EXPOSURE: none. deploy-docs.yml has no pull_request trigger (verified 2026-08-20
 #   — zero occurrences in the file), so the secret is never exposed to a fork build.
 # NO DEFAULT (hr-tf-variable-no-operator-mint-default). Terraform resolves every root

@@ -86,6 +86,7 @@ every `cloudflare_*` class in that list is adjudicated here):
 | `cloudflare_zero_trust_tunnel_cloudflared` | TF-generated ID | No | OUT |
 | `cloudflare_record` | name+type | No — errors/duplicates, never silent whole-replace | OUT |
 | `cloudflare_pages_project` | `(account_id, name)` — natural | No — there is no whole-list surface to replace: `build_config` / `deployment_configs` / `source` are all MaxItems:1 and `domains` is read-only computed (attachment is a separate `cloudflare_pages_domain`) | OUT |
+| `cloudflare_pages_domain` | `(account_id, project_name, domain)` — natural | No — the resource has **no block types at all**: it is a pure attachment record whose only non-computed fields are the three key parts, so there is no child collection for a whole-list PUT to clobber | OUT |
 
 The gate covers exactly `cloudflare_ruleset`. This is NOT a speculative
 "extensible whole-list class registry" (exactly one class exists); it is a
@@ -111,9 +112,11 @@ terraform providers schema -json \
 
 Every block is MaxItems:1 and `domains` is read-only computed, so the #6746 hazard
 has nothing to bite on. Domain ATTACHMENT is a different class
-(`cloudflare_pages_domain`) and is deliberately not adjudicated here — when it is
-introduced the parity test will FAIL until someone adjudicates it, which is the
-forcing function working as designed, not a regression to route around.
+(`cloudflare_pages_domain`). PR1 left it unadjudicated on purpose and predicted
+that introducing it would FAIL the parity test until someone classified it.
+**That is exactly what happened at PR3** — the gate fired on
+`cloudflare_pages_domain`, the row above was added, and the forcing function is
+recorded here as having worked rather than described as something that would.
 
 **Tunnel-config caveat + its forcing function.** `cloudflare_zero_trust_tunnel_cloudflared_config`
 is adjudicated OUT *only while its tunnel is TF-born in the same apply* — the day
