@@ -36,6 +36,7 @@ SUBSTANTIVE_RESPONSE="I have completed the refactoring of the authentication mod
 setup_test() {
   local test_dir
   test_dir=$(mktemp -d)
+  assert_fixture_dir "$test_dir"
   git -C "$test_dir" init -q
   mkdir -p "$test_dir/.claude"
   echo "$test_dir"

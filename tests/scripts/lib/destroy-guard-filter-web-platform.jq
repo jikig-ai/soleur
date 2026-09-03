@@ -144,6 +144,14 @@ def destroyed_at($addr):
   | length;
 
 {
+  # IS THIS PLAN GRADEABLE AT ALL? Every clause below reads `.resource_changes[]?`,
+  # whose `?` swallows a missing or non-array value — so a structurally empty plan
+  # ({}, a null, an error document) yields 0 for EVERY counter, and the consumer's
+  # `^[0-9]+$` validation accepts all of them. A plan nobody could grade would pass
+  # every gate in the step and the apply would proceed against the saved binary
+  # tfplan. This flag is the difference between "no destructive changes" and
+  # "nothing was read".
+  plan_ok: (.resource_changes | type == "array"),
   resource_deletes: ([.resource_changes[]? | select(.change.actions? | index("delete"))] | length),
   nested_deletes: (
     [
@@ -291,7 +299,53 @@ def destroyed_at($addr):
     | length
   ),
 
-  # 8th surface (#7695): a LUKS PASSPHRASE ROTATION on the per-PR apply path.
+  # 8th surface (#7640 PR4b, plan AC72): the apex transition must never plan TWO
+  # addresses at once.
+  #
+  # THE ONLY CLAUSE HERE THAT IS ABOUT STATE RATHER THAN TEXT. Cloudflare rejects
+  # an A and a CNAME coexisting at one name (81053), so the cutover collapses the
+  # transition onto ONE Terraform address and lets core serialise Delete->Create.
+  # That holds only while the plan really is one address.
+  #
+  # THE PROPERTY IS "NOT TWO ADDRESSES", NOT "THE MOVE RESOLVED". An earlier
+  # revision counted a `pages_apex` create whose `previous_address` was absent or
+  # wrong. That is a PROXY for the hazard, and it is wrong in both directions:
+  #
+  #   - It MISSED a PR4a that merged without converging. State then holds four
+  #     `github_pages` instances; the `moved` resolves the pinned one correctly
+  #     (so `previous_address` is right and the proxy is satisfied) while the
+  #     other three plan as separate deletes — four apex addresses in flight.
+  #
+  #   - It FIRED on the mid-replace recovery, which is the one moment the apex is
+  #     already dark. A replace that dies between Delete and Create leaves state
+  #     holding NEITHER address, so the re-run's `moved` no-ops and `pages_apex`
+  #     plans as a bare create with no `previous_address`. There is no surviving
+  #     A record to collide with — it is the correct, safe recovery — and the
+  #     HALT blocked it with no `[ack-destroy]` bypass, while its own remediation
+  #     text told the operator not to delete the `moved` block. Measured by the
+  #     review panel against this filter: the recovery plan scored 1.
+  #
+  # Counting the CO-OCCURRENCE instead is both stricter and correct: it catches
+  # the unconverged case the proxy missed, and admits the recovery the proxy
+  # blocked. `[ack-destroy]` still cannot discriminate any of this — `destroy_count`
+  # is 1 in the healthy plan and 1 in the orphaned one — which is why the consumer
+  # HALTs on this counter ABOVE the ack rather than behind it.
+  #
+  # Permanently 0 once converged: a plan that does not birth `pages_apex` scores 0
+  # whatever else it contains, so a one-time transition cannot block later applies.
+  apex_move_orphans: (
+    ([ .resource_changes[]?
+       | select(.type == "cloudflare_record")
+       | select(.name == "pages_apex")
+       | select(.change.actions? | index("create")) ] | length) as $apex_create
+    | ([ .resource_changes[]?
+         | select(.type == "cloudflare_record")
+         | select(.name == "github_pages")
+         | select(.change.actions? | index("delete")) ] | length) as $sibling_delete
+    | if $apex_create > 0 and $sibling_delete > 0 then $sibling_delete else 0 end
+  ),
+
+  # 9th surface (#7695): a LUKS PASSPHRASE ROTATION on the per-PR apply path.
   #
   # `random_password.inngest_redis_luks` and `doppler_secret.inngest_redis_luks_key` are BOTH in
   # the per-merge `-target=` allow-list, so a routine merge apply reaches them. A delete/replace

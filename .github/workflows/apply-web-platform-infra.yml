@@ -535,6 +535,17 @@ jobs:
         # `apps/web-platform/infra/.terraform.lock.hcl`.
         run: terraform init -input=false -lockfile=readonly
 
+      # The pages_apex record address in the list below is PRE-ADDED AT PR3
+      # and is INERT until PR4 declares that resource — a -target for an address not in
+      # configuration is a no-op. It costs nothing now and closes the worst failure this
+      # migration has: if PR4 lands dns.tf WITHOUT it, the targeted apply plans the four
+      # cloudflare_record.github_pages deletes and never plans the CNAME create — a
+      # permanent NXDOMAIN on an HSTS-preloaded apex, the top row of the plan's own risk
+      # table. Nothing mechanically forces it at PR4 (per R9 neither the target-parity
+      # suite nor the destroy-guard counter can see these addresses), so it is added by
+      # the PR that had no reason to forget it. Do NOT put comments inside the
+      # backslash-continued -target list: a `#` line there makes the next line a command
+      # name (shellcheck SC2215).
       - name: Terraform plan (allow-list, non-SSH resources only)
         id: plan
         working-directory: ${{ env.INFRA_DIR }}
@@ -629,6 +640,9 @@ jobs:
               -target=cloudflare_record.www \
               -target=cloudflare_record.github_pages_challenge \
               -target=cloudflare_pages_project.docs \
+              -target=cloudflare_pages_domain.apex \
+              -target=cloudflare_pages_domain.www \
+              -target=cloudflare_record.pages_apex \
               -target=github_actions_secret.cloudflare_api_token_pages \
               -target=github_actions_secret.cloudflare_account_id_pages \
               -target=cloudflare_record.buttondown_ns1 \
@@ -756,11 +770,30 @@ jobs:
           # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
           host_creates=$(echo "$counts" | jq -r '.host_creates')
           luks_rotations=$(echo "$counts" | jq -r '.luks_passphrase_rotations')
+          # apex_move_orphans (#7640 PR4b, plan AC72): a `moved` block that no-opped
+          # against absent state. The ONLY counter here that is about STATE rather
+          # than about the text of dns.tf. Source of truth:
+          # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+          apex_move_orphans=$(echo "$counts" | jq -r '.apex_move_orphans')
+          # plan_ok: false means the plan JSON carried no resource_changes ARRAY,
+          # so every counter above is 0 because nothing was read — not because
+          # there is nothing to do. Without this, an empty or error plan document
+          # passes every gate in this step.
+          plan_ok=$(echo "$counts" | jq -r '.plan_ok')
+          if [[ "$plan_ok" != "true" ]]; then
+            echo "::error::the terraform plan JSON has no resource_changes array (plan_ok=${plan_ok}) — every destroy-guard counter would read 0 because nothing was parsed, not because the plan is empty. Refusing to grade it."
+            exit 1
+          fi
           # Validate counters parsed correctly — empty values from a jq
           # failure would silently evaluate false in the `-gt 0` test and
           # let destructive plans slip past the guard.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]] || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}', luks_passphrase_rotations='${luks_rotations}')."
+          #
+          # BOTH new counters are listed. This `if` is the one place two concurrent branches each
+          # added a counter, and a merge that keeps only one side's list leaves the other counter
+          # unvalidated — it would then read empty on a jq failure and evaluate false in its own
+          # `-gt 0` HALT, which is precisely the fail-open this validation exists to prevent.
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]] || [[ ! "$apex_move_orphans" =~ ^[0-9]+$ ]] || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}', apex_move_orphans='${apex_move_orphans}', luks_passphrase_rotations='${luks_rotations}')."
             exit 1
           fi
           # HALT on a LUKS passphrase rotation (#7695). Evaluated OUTSIDE the destroy_count sum
@@ -808,6 +841,34 @@ jobs:
             grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
+          # HALT on an orphaned apex move (#7640 PR4b, plan AC72). Evaluated
+          # OUTSIDE the destroy_count sum below and BEFORE it, for the same reason
+          # as the host_creates HALT above: `[ack-destroy]` CANNOT discriminate
+          # this failure. The correct PR4b plan and the broken one both carry
+          # destroy_count == 1, so an ack-gated arm here would be no gate at all.
+          #
+          # What it catches: `cloudflare_record.pages_apex` is being created, but
+          # the plan does not say it came FROM the survivor PR4a left in state.
+          # Terraform does not error on a `moved` whose source is absent — it
+          # no-ops, and the apex then plans as a bare create plus an unrelated
+          # delete: two addresses dispatched concurrently against a live,
+          # HSTS-preloaded apex, which is the Cloudflare 81053 collision the
+          # single-address design exists to prevent.
+          #
+          # A TRIPWIRE, not a routine gate: it is 0 on every plan that does not
+          # birth the apex record, and permanently 0 once the move has converged.
+          if [[ "$apex_move_orphans" -gt 0 ]]; then
+            echo "::error::terraform plan would CREATE cloudflare_record.pages_apex WITHOUT re-addressing it from the record PR4a left in state (apex_move_orphans=${apex_move_orphans})."
+            echo "::error::This is the ADR-194 cutover's silent-failure mode. Terraform does NOT error on a 'moved' block whose source is absent from state — it no-ops. The apex then plans as a bare create while the surviving A record plans as a SEPARATE delete: two unrelated addresses, dispatched concurrently, on a live HSTS-preloaded apex. Cloudflare rejects an A and a CNAME coexisting at one name (error 81053), so one of the two dispatches fails and the apex can be left with no address at all."
+            echo "::error::[ack-destroy] deliberately does NOT reach this HALT, and could not help if it did: destroy_count is 1 in the CORRECT plan and 1 in this one. The counts are identical; only the plan's previous_address distinguishes them."
+            echo "::error::DIAGNOSE — the two shapes that produce this, both of which pass the static guard apex-single-node-replace.test.sh 11/11:"
+            echo "::error::  • The repo and STATE disagree on the survivor key. A consistent rename of dns.tf's moved.from AND the for_each key is invisible to a static text guard. Compare: terraform state list | grep cloudflare_record.github_pages"
+            echo "::error::  • PR4a merged but never CONVERGED ('[skip-web-platform-apply]', or a failed apply), so state still holds all four GitHub Pages instances while the repo says one. Same command; expect exactly one instance, keyed 185.199.108.153."
+            echo "::error::REMEDY: make dns.tf's 'moved { from = ... }' name the address that is actually in state, byte-identically. Do NOT 'fix' this by deleting the moved block — that IS the two-address hazard, not a workaround for it."
+            echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply; it does not perform it."
+            grep -E 'will be created|must be replaced|moved from|Plan:' tfplan.txt | head -20 >&2
+            exit 1
+          fi
           destroy_count=$((resource_deletes + nested_deletes + reboot_updates))
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
@@ -853,6 +914,27 @@ jobs:
             fi
             grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
             exit 1
+          fi
+
+          # THE ACKED PATH NEEDS THE LIST TOO (#7640).
+          #
+          # Everything above lives inside `destroy_count > 0 && ack != true`, so
+          # the enumeration of what is about to be destroyed printed ONLY on the
+          # path where the apply was REFUSED. Once you acked, you never saw it
+          # again — and `tfplan.txt` is written to the runner filesystem, which
+          # this job neither echoes nor uploads. So a successful apply that
+          # deleted records from the live public apex left no record in the run
+          # log of WHAT it deleted, and post-incident reconstruction meant going
+          # to Cloudflare's audit log.
+          #
+          # The irony is in the gate's own text three lines up: it tells the
+          # reader to "read the 'will be destroyed' list below and confirm it is
+          # the WHOLE intended change before acking" — a list that, by
+          # construction, is absent from every run where they did.
+          if [[ "$destroy_count" -gt 0 ]]; then
+            echo "::group::Acked destroy — what this apply is about to remove"
+            grep -E 'will be destroyed|will be replaced|Plan:' tfplan.txt | head -40
+            echo "::endgroup::"
           fi
 
       # --- #6767: fail-closed PRE-APPLY ENTRYPOINT GATE ---------------------------
@@ -941,6 +1023,40 @@ jobs:
       # times from one runner colo samples ONE sticky binding N times, not a
       # distribution. (b) asserts an INVARIANT (the route serves), which is
       # colo-independent and needs no control arm.
+      # HYPOTHESIS Z, MEASURED RATHER THAN ASSERTED (ADR-194 PR3).
+      #
+      # cf-pages.tf said the branch of Z "is measured AFTER this applies, by
+      # apex-origin-probe.sh". Nothing invoked it: the probe was wired to no
+      # workflow, and deploy-docs.yml's build-identity probes do not fire on an
+      # infra-only merge (their paths do not match). So under Z-true with
+      # content-identical origins, the apex origin could move and NOTHING would
+      # observe it — the project's first datum on Z depended on a human
+      # remembering to type a command. This step is that measurement.
+      #
+      # REPORTING-ONLY, deliberately. Both verdicts are legitimate at this stage:
+      # SERVING-FROM-GITHUB-PAGES means Z is false and the record swap (PR4) is
+      # what moves the origin; SERVING-FROM-CLOUDFLARE-PAGES means Z holds and
+      # attachment already moved it. Neither is a failure — the failure mode this
+      # step exists to end is having no record at all. UNREACHABLE is the one
+      # result worth alarming on, and it exits non-zero into the summary.
+      #
+      # `if: always()` so a failed apply still records where the apex is pointing,
+      # which is exactly when you most want to know.
+      - name: Measure the apex origin (ADR-194 Hypothesis Z)
+        if: always()
+        run: |
+          set -uo pipefail
+          rc=0
+          out="$(bash apps/web-platform/infra/apex-origin-probe.sh 2>&1)" || rc=$?
+          printf '%s\n' "$out"
+          case "$rc" in
+            0) echo "- apex origin after this apply: \`${out}\`" >> "$GITHUB_STEP_SUMMARY" ;;
+            2) echo "::warning::apex origin probe could not reach the site: ${out}"
+               echo "- apex origin after this apply: **UNREACHABLE** — could not check" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::warning::apex origin probe returned an unmapped status ${rc}"
+               echo "- apex origin after this apply: **UNMAPPED rc=${rc}**" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+
       - name: Verify tunnel ingress origins are live and origin-relative
         if: success()
         working-directory: ${{ env.INFRA_DIR }}

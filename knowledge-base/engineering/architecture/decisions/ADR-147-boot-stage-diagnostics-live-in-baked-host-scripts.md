@@ -281,6 +281,23 @@ printable-ASCII pass this ADR already pins.
 
 ### Channel split without a flag
 
+> **Superseded in part 2026-09-03 (#7460, ADR-198):** the Better Stack ingest token is now BAKED
+> into git-data's `user_data` at `0600 root:root`, so the split no longer falls where this section
+> describes it. **Eight** of the nine boot stages now reach Better Stack; only the `bootcmd`
+> beacon remains Sentry-only, and that one is structural — it fires before `write_files`, so the
+> shared emitter does not exist yet and no token changes it.
+>
+> **The invariant this section actually protects is preserved and strengthened**, which is why
+> this is a partial supersession and not a reversal: *a fatal never depends on Doppler to be
+> reported.* Sentry remains unconditional from the baked DSN, and Better Stack gained coverage it
+> did not have. The channel split was a CONSEQUENCE of the pre-Doppler constraint, not a goal —
+> and this ADR's own alternatives table has no "bake the ingest token" row (A4 is the different
+> journald→Vector path), so #7460 is not a previously-rejected mechanism resurfacing.
+>
+> The message literals this ADR freezes are unchanged. #7460 adds a NEW emit
+> (`stage:betterstack_ingest`) and new tags; it renames nothing.
+
+
 Sentry is unconditional from the **baked** DSN. Better Stack fires only when
 `BETTERSTACK_LOGS_TOKEN` is present in the environment — true **only** under `doppler run`.
 So *"early stages and fatals are Sentry-only; boot-completion and gc faults are both"* falls

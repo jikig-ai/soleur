@@ -326,6 +326,16 @@ report=$(jq -n \
         # match. Without this the orphan gate exits 5 and, on the post-write
         # path, short-circuits before jsonl rotation.
         | map(select(startswith("grep-rewrite-") | not))
+        # monitor-supersede is .claude/hooks/monitor-supersede-guard.sh telemetry
+        # (PR #7760). Same tier-gate rationale as grep-rewrite-* above: the rule
+        # body lives in the hook header and governs a TOOL LIFETIME rather than a
+        # workflow step, so the id has no core AGENTS.md tag to match. Without
+        # this the orphan gate exits 5 the first time the hook reports and, on
+        # the post-write path, short-circuits before jsonl rotation, so one hook
+        # disarms rotation of the shared telemetry sink.
+        # NOTE: no apostrophes in this block. It is inside a single-quoted jq
+        # program; one of them ends the program and bash parses the rest as shell.
+        | map(select(startswith("monitor-supersede") | not))
         # hook-input-* reserved for .claude/hooks/lib/hook-input.sh self-fault
         # telemetry (issue #7164, ADR-156/ADR-157). Same tier-gate rationale as
         # context-reviewed-*: the rule body lives in the helper header + the

@@ -46,6 +46,16 @@ let usersSelectResult: { data: unknown; error: unknown } = {
 };
 let cumulativeCostCents = 0;
 let auditSelectError: unknown = null;
+// Layer-2 window (#7774). This fake returns rows regardless of predicates, so it
+// CANNOT simulate the `.gt("created_at", …)` filter — asserting on the returned
+// sum would certify nothing. Capture the predicate instead and assert the query
+// carries it: that is the part the fake can actually witness.
+interface RangeFilter {
+  table: string;
+  col: string;
+  val: unknown;
+}
+let gtFilters: RangeFilter[] = [];
 
 function buildSupabaseClient() {
   let currentTable = "";
@@ -79,6 +89,10 @@ function buildSupabaseClient() {
       }
       return chain;
     },
+    gt(col: string, val: unknown) {
+      gtFilters.push({ table: currentTable, col, val });
+      return chain;
+    },
     maybeSingle() {
       if (currentTable === "workspaces") {
         return Promise.resolve(workspaceInstallResult);
@@ -88,6 +102,14 @@ function buildSupabaseClient() {
       }
       if (currentTable === "users") {
         return Promise.resolve(usersSelectResult);
+      }
+      return Promise.resolve({ data: null, error: null });
+    },
+    // The Layer-2 window anchor read (`action_sends.created_at`) terminates in
+    // `.single()`, unlike the sibling reads above which use `.maybeSingle()`.
+    single() {
+      if (currentTable === "action_sends") {
+        return Promise.resolve(actionSendsSelectResult);
       }
       return Promise.resolve({ data: null, error: null });
     },
@@ -336,7 +358,12 @@ beforeEach(() => {
     error: null,
   };
   actionSendsSelectResult = {
-    data: { cancellation_requested_at: null },
+    // created_at is the Layer-2 window anchor (#7774); cancellation_requested_at
+    // is read by the same table's cancel-check step.
+    data: {
+      cancellation_requested_at: null,
+      created_at: "2026-09-03T10:00:00.000Z",
+    },
     error: null,
   };
   usersSelectResult = {
@@ -346,6 +373,7 @@ beforeEach(() => {
   notifyCalls.length = 0;
   cumulativeCostCents = 0;
   auditSelectError = null;
+  gtFilters = [];
   octokitResponses = {
     "POST /repos/{owner}/{repo}/issues/{issue_number}/comments": {
       data: { id: 42, html_url: "https://github.com/acme/repo/pull/7#c-42" },
@@ -504,6 +532,57 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
     expect(failureUpdates.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("#7774 Layer 2 is scoped to THIS spawn — the sum excludes rows predating the action send", async () => {
+    // `leaderId` is `agent.spawn.requested:${actionClass}` — an action CLASS,
+    // constant across every spawn — so the two `.eq` filters alone summed the
+    // founder's LIFETIME spend for that class. Once it crossed 260¢ every later
+    // spawn of the class failed at turn 1, permanently, and audit_byok_use is
+    // WORM so the balance could not be trimmed.
+    //
+    // This fake returns rows regardless of predicates, so it cannot simulate
+    // the filter; asserting on the returned sum would certify nothing. Assert
+    // the query CARRIES the predicate, with the anchor read from the DB.
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await agentOnSpawnRequestedHandler({
+      event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+      step: makeStep(),
+      logger,
+    });
+
+    const window = gtFilters.filter((f) => f.table === "audit_byok_use");
+    expect(
+      window.length,
+      "the ceiling query must be window-bounded on every turn",
+    ).toBeGreaterThan(0);
+    for (const f of window) {
+      expect(f.col).toBe("created_at");
+      // The DB value, not a wall-clock `new Date()` — an Inngest replay
+      // re-executes the body, and a wall-clock anchor would re-derive a
+      // different window on every retry.
+      expect(f.val).toBe("2026-09-03T10:00:00.000Z");
+    }
+  });
+
+  it("#7774 the window anchor read fails CLOSED — a missing action_sends row halts the spawn", async () => {
+    // Without this, a failed anchor read would widen the window back to all of
+    // history, silently restoring the defect the window exists to close.
+    actionSendsSelectResult = { data: null, error: { message: "no row" } };
+    const { agentOnSpawnRequestedHandler } = await import(
+      "@/server/inngest/functions/agent-on-spawn-requested"
+    );
+    await expect(
+      agentOnSpawnRequestedHandler({
+        event: makeEvent({ sourceRef: "pr-acme:repo:7" }),
+        step: makeStep(),
+        logger,
+      }),
+    ).rejects.toThrow(/could not read action_sends\.created_at/);
+    // Fail-closed means no model spend on an unverifiable window.
+    expect(anthropicCreateSpy).not.toHaveBeenCalled();
+  });
+
   it("AC10 cost_ceiling_exceeded: cumulative ≥ $2.60 → persist failure, no Anthropic call", async () => {
     cumulativeCostCents = 300; // > PER_SPAWN_COST_CEILING_CENTS (260)
     const { agentOnSpawnRequestedHandler } = await import(
@@ -527,7 +606,13 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
 
   it("AC10 cancelled_by_operator: cancellation_requested_at NOT NULL → short-circuit", async () => {
     actionSendsSelectResult = {
-      data: { cancellation_requested_at: "2026-05-25T12:00:00Z" },
+      // created_at is present on every real action_sends row and is the
+      // Layer-2 window anchor (#7774); a fixture omitting it models a row
+      // the producer cannot emit.
+      data: {
+        cancellation_requested_at: "2026-05-25T12:00:00Z",
+        created_at: "2026-09-03T10:00:00.000Z",
+      },
       error: null,
     };
     const { agentOnSpawnRequestedHandler } = await import(
@@ -659,7 +744,13 @@ describe("agent-on-spawn-requested — Anthropic leader loop (PR-B)", () => {
 
   it("AC3 notify: cancelled_by_operator NEVER notifies (operator-initiated stops are not surprises)", async () => {
     actionSendsSelectResult = {
-      data: { cancellation_requested_at: "2026-05-25T12:00:00Z" },
+      // created_at is present on every real action_sends row and is the
+      // Layer-2 window anchor (#7774); a fixture omitting it models a row
+      // the producer cannot emit.
+      data: {
+        cancellation_requested_at: "2026-05-25T12:00:00Z",
+        created_at: "2026-09-03T10:00:00.000Z",
+      },
       error: null,
     };
     const { agentOnSpawnRequestedHandler } = await import(

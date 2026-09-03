@@ -88,6 +88,29 @@ for rel in "${NEEDED[@]}"; do
 done
 chmod +x "$SANDBOX/$GUARD_REL" || die "could not make the sandboxed guard executable"
 
+# THE SANDBOX'S dns.tf IS THE FROZEN PRE-CUTOVER BASELINE, NOT THE LIVE FILE (#7640 PR4b).
+#
+# Every row here mutates FROM the GitHub-Pages shape, and `cutover()` synthesizes the
+# post-cutover shape by replacing the `github_pages` + `www` span. Sourcing that from the
+# live `dns.tf` worked until the apex actually flipped: PR4b removes the `github_pages`
+# resource, so `res_span()` finds no anchor and the harness aborts with
+# "case G-stage: the mutator failed to apply — this case tested NOTHING".
+#
+# It aborted LOUDLY rather than scoring a tree it could not build, which is the property
+# this harness was written to have. The fix is to stop deriving a fixture from a file whose
+# stage moves underneath it. The guard itself still runs against the LIVE root in CI
+# (unseamed), so nothing is lost: this battery scores the GUARD, the guard validates the repo.
+#
+# Asserted pre-cutover below, because a baseline that had drifted post-cutover would make
+# every pre-cutover row vacuous while all of them still reported PASS.
+PRE_CUTOVER_BASELINE="$REPO_ROOT/$INFRA_REL/fixtures/dns.tf.pr4a-baseline"
+[[ -r "$PRE_CUTOVER_BASELINE" ]] || die "pre-cutover dns.tf baseline missing: $PRE_CUTOVER_BASELINE"
+grep -qE '^resource "cloudflare_record" "github_pages" \{' "$PRE_CUTOVER_BASELINE" \
+  || die "baseline fixture is not PRE-cutover (no github_pages resource) — every row would be vacuous"
+grep -qE '^resource "cloudflare_record" "pages_apex" \{' "$PRE_CUTOVER_BASELINE" \
+  && die "baseline fixture is POST-cutover (declares pages_apex) — it is meant to be the pre-flip shape"
+cp -a "$PRE_CUTOVER_BASELINE" "$SANDBOX/$DNS_REL" || die "could not install the pre-cutover baseline into the sandbox"
+
 # ---------------------------------------------------------------------------------------
 # THE MUTATORS
 #
@@ -143,11 +166,15 @@ PAGES_APEX = '''resource "cloudflare_record" "pages_apex" {
   ttl     = 1
 }
 
+# www stays a proxied CNAME ATTACHED TO THE PAGES PROJECT (ADR-194 / plan D1), not parked
+# on Cloudflare's 192.0.2.1 black hole. Deliberately written as the REFERENCE form while the
+# apex above keeps the "soleur-docs.pages.dev" literal, so this green row exercises BOTH of
+# the guard's accept branches — one per record — instead of only the literal one.
 resource "cloudflare_record" "www" {
   zone_id = var.cf_zone_id
   name    = "www"
-  content = "192.0.2.1"
-  type    = "A"
+  content = cloudflare_pages_project.docs.subdomain
+  type    = "CNAME"
   proxied = true
   ttl     = 1
 }
@@ -293,9 +320,34 @@ def h2():
     assert old in t, "dns.tf contract comment anchor not found"
     wr(DNS, t.replace(old, "#\n#   GitHub Pages -- docs site\n#   (soleur.ai apex + the www redirect)\n#"))
 
+# --- M9: park www on the black-hole A — Cloudflare's recipe, which D1 REJECTED -----------
+#     The row that pins the D1 divergence itself. This is the exact mutation the guard's
+#     first draft BLESSED: it silently converts the chosen failure mode (www serves the
+#     site) into the rejected one (CF 522 on an HSTS-preloaded host), and turns the PR4
+#     record swap into a ForceNew replace with an NXDOMAIN window mid-apply.
+def m9():
+    cutover()
+    t = rd(DNS)
+    old = '  content = cloudflare_pages_project.docs.subdomain\n  type    = "CNAME"'
+    new = '  content = "192.0.2.1"\n  type    = "A"'
+    assert old in t, "cutover www content/type pair not found"
+    wr(DNS, t.replace(old, new))
+
+
+# --- M10: leave www on the RETIRED origin — the guard's own stated rationale -------------
+#     Fails through the content branch, not the type branch, so it is a distinct path from
+#     M9 and protects the corrected accept arm from regressing into a bare type check.
+def m10():
+    cutover()
+    t = rd(DNS)
+    old = "content = cloudflare_pages_project.docs.subdomain"
+    assert old in t, "cutover www content anchor not found"
+    wr(DNS, t.replace(old, 'content = "jikig-ai.github.io"'))
+
+
 ROWS = {
     "M1": m1, "M2": m2, "M3": m3, "M4": m4, "M4b": m4b, "M5a": m5a, "M5b": m5b,
-    "M6": m6, "M7a": m7a, "M7b": m7b, "M8": m8, "H1": h1,
+    "M6": m6, "M7a": m7a, "M7b": m7b, "M8": m8, "M9": m9, "M10": m10, "H1": h1,
     "G-stage": g_stage, "G-pinned": g_pinned, "G-unpinned": g_unpinned, "H2": h2,
 }
 
@@ -413,6 +465,16 @@ case_row M5b kill "www record is proxied" ""
 case_row M7a kill "--branch equals cf-pages.tf production_branch" ""
 case_row M7b kill "--project-name equals" ""
 
+# --- D1's deliberate divergence: www stays a proxied CNAME AT THE PAGES PROJECT, not parked
+#     on Cloudflare's 192.0.2.1 black hole. M9 is the mutation the guard's first draft
+#     BLESSED — it deletes the chosen failure mode (www serves the site if the Bulk Redirect
+#     stops firing) in favour of the rejected one (CF 522 on an HSTS-preloaded host), and
+#     turns the PR4 record swap into a ForceNew replace with an NXDOMAIN window mid-apply.
+#     M10 fails through the CONTENT branch rather than the TYPE branch, so the corrected
+#     accept arm cannot regress into a bare type check.
+case_row M9  kill "www record matches the cf-pages stage" ""
+case_row M10 kill "www record matches the cf-pages stage" ""
+
 # --- The guard's own dispatch: M8 empties the assertion list, H1 deletes one case.
 case_row M8  kill "vacuity floor" ""
 case_row H1  kill "vacuity floor" ""
@@ -423,7 +485,7 @@ case_row H1  kill "vacuity floor" ""
 # which is the vacuity class this file exists to close, one level up. Bump it deliberately
 # when you add a row.
 # ---------------------------------------------------------------------------------------
-EXPECTED_ROWS=16
+EXPECTED_ROWS=18
 if [[ "$TOTAL" -ne "$EXPECTED_ROWS" ]]; then
   printf '[FATAL] battery cardinality: %d rows executed, expected exactly %d — a row was deleted, skipped, or added without updating EXPECTED_ROWS\n' \
     "$TOTAL" "$EXPECTED_ROWS" >&2

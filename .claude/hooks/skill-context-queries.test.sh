@@ -32,6 +32,7 @@ fail() { printf 'FAIL: %s\n' "$1" >&2; fails=$((fails + 1)); }
 # Build a throwaway git fixture repo with committed skills + kb artifacts.
 # ---------------------------------------------------------------------------
 FIX="$(mktemp -d)"
+: "${FIX:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$FIX/plugins/soleur/skills" "$FIX/knowledge-base/marketing" "$FIX/knowledge-base/deep"
 
 # small within-"budget" artifact + a globbable set

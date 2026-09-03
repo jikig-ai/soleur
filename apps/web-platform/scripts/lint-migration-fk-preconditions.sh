@@ -52,6 +52,29 @@ MIGRATIONS_DIR="$SCRIPT_DIR/../supabase/migrations"
 # relative paths) work regardless of caller CWD (`working-directory:
 # apps/web-platform` in CI, or running from repo root locally).
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || pwd)"
+# The `|| pwd` fallback cannot yield an EMPTY value — measured in all three reachable states,
+# including a deleted CWD, where bash's pwd builtin still prints $PWD with rc=0. So an emptiness
+# guard here could never fire, and a guard that cannot fire reads as protection while asserting
+# nothing. The reachable hazard is a WRONG value, which is worse: `git -C "" rev-parse
+# --show-toplevel` returns rc=0 printing the CALLER's repo root (measured), and a
+# dubious-ownership refusal or a missing git both fall through to `pwd` — whatever repository the
+# caller happens to be standing in. `git -C "$REPO_ROOT" fetch` below is a WRITE: it updates
+# refs/remotes/origin/main, appends to its reflog, and writes FETCH_HEAD into that repository.
+#
+# So assert IDENTITY, not non-emptiness. Failing closed also removes a silent false green: against
+# a wrongly-resolved root the diff below matches nothing and the lint exits 0 reporting "no
+# migration changes in PR diff", having examined none.
+#
+# Written as `<check> || exit` on one line deliberately: that is a shape the P1a fixture-operand
+# scanner recognises, so the assertion is covered by the ratchet instead of being an acknowledged
+# blind spot.
+_assert_repo_root() {
+  [[ -d "$1/apps/web-platform/supabase/migrations" ]] && return 0
+  echo "lint-migration-fk-preconditions: FATAL: repo root resolved to '$1', which does not" >&2
+  echo "  contain apps/web-platform/supabase/migrations. Refusing to fetch or diff against it." >&2
+  return 1
+}
+_assert_repo_root "$REPO_ROOT" || exit 2
 
 usage() {
   cat <<'USAGE'
