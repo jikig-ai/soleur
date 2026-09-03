@@ -33,9 +33,18 @@ Body carries `Closes #7709` and nothing else.
       (which is stale: it says 23 for `ship-unpushed-commits-gate.test.sh`, live is 19, and it omits
       `context-reviewed-gate.test.sh` at 12 and `pencil-collapse-guard.test.sh` at 10).
 - [ ] 1.3 Sequence the two largest holders first and review them separately.
-- [ ] 1.4 Per site, choose the remedy by binding form, which the scanner already reports. Prefer
-      `assert_fixture_dir "$X"`; use `|| return 1` / `|| exit` or `${X:?}` only where it does not fit,
-      and record per site why.
+- [ ] 1.4 Choose the remedy by AVAILABILITY first, then binding form. Measured: only 4 holders carry an
+      inline `assert_fixture_dir`, 5 source or reference it, and 23 cannot reach it at all — so the
+      control-flow remedies are the default for most sites, not the fallback. Order: (a) helper already
+      available -> `assert_fixture_dir "$X"`; (b) a test file that can reasonably source the helper ->
+      source it, never copy it (each inline copy widens the byte-equality drift arm, and there are
+      already 4); (c) a plugin script under `plugins/soleur/` -> read ADR-178 on where shared bash
+      primitives live before adding any dependency, and prefer `${X:?}` if it does not fit; (d)
+      anything else -> `${X:?}` at the binding or `|| return 1` / `|| exit` on a capture.
+      Three of the 23 are not tests at all and must not gain a test-helper dependency:
+      `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`,
+      `scripts/context-reviewed-gate-discoverability.sh`,
+      `apps/web-platform/scripts/lint-migration-fk-preconditions.sh`.
 - [ ] 1.5 For each holder, run that file's own suite green before moving to the next. Do not sweep and
       run once at the end.
 - [ ] 1.6 For each `.claude/hooks/*` and gate-test holder, capture a before-and-after transcript: the
@@ -97,10 +106,16 @@ Body carries `Closes #7710` and nothing else.
 - [ ] 3.6 Re-run the comparison. On zero drift, bump `last-verified` with the per-file output in the
       commit message. On drift, withhold only the bump, ship the rest, and file the re-vendor
       separately per the Phase 3.3 branch in the plan.
-- [ ] 3.7 Append the retrospective row to `knowledge-base/legal/compliance-posture.md` for the
-      2026-05-10 to 2026-09-03 window: that the §8 chain did not run, why, and the resolution.
+- [ ] 3.7 Append the retrospective row to the `## Active Compliance Items` table in
+      `knowledge-base/legal/compliance-posture.md` for the 2026-05-10 to 2026-09-03 window: that the §8
+      chain did not run, why, and the resolution. Follow that section's documented row schema.
+- [ ] 3.7a Correct the `## Vendored Code Provenance` row in the same file: `Lifted Files` reads 5,
+      should read 8; `Last Verified` reads 2026-05-10 and moves with the NOTICE bump. Confirm all three
+      artifacts — NOTICE frontmatter, NOTICE body table, provenance row — agree on count and date.
 - [ ] 3.8 Add an unconditional stdout line to `gdpr-gate.sh` stating that the path scan ran and what it
-      examined and matched.
+      examined and matched. The line must NOT contain the substring `days stale`: `gdpr-gate.test.ts`
+      asserts stdout does not match `/days stale/` on a fresh NOTICE, so a phrasing like "scan
+      complete; rules N days stale" would red the suite for an unrelated reason. Stdout, not stderr.
 - [ ] 3.9 Assert the new line in both the matched and unmatched cases, in
       `gdpr-gate-self-test.test.sh` and `gdpr-gate.test.ts`.
 - [ ] 3.10 Confirm the gate still exits 0 on every path and the 30-day and 90-day thresholds are
@@ -120,8 +135,11 @@ Body carries `Closes #7759` and nothing else.
       loop that never touches `FILED`, `EXEMPT` or `NET`. The existing loop runs
       `FILED=$((FILED + 1))` once per row before reading any verdict, so a shared stream would raise
       `NET` per finding and block the pull request.
-- [ ] 4.4 Isolate the jq expression as well as the output, so a malformed new predicate cannot take
-      down or corrupt the FILED extraction, whose failure response is to fail open.
+- [ ] 4.4 Keep a SINGLE jq pass — do not add a second invocation. The existing pass costs about a
+      second over a ~2 MB payload, the gate runs in the several-second range, and it sits behind a hook
+      timeout this gate already has a post-mortem about. Emit a structured result (sibling keys, or
+      rows tagged by set) and route to different loops on the bash side. Add the new predicate as a
+      sibling filter over the same array, not as a stage inside the FILED pipeline.
 - [ ] 4.5 Name the set in the always-emitted block with its issue numbers enumerated.
 - [ ] 4.6 Emit telemetry under a rule id distinct from the existing ones, and give any new failure
       branch its own `_fail_open` rule id.

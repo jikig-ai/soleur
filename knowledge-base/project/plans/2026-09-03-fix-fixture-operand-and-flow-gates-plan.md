@@ -34,6 +34,53 @@ passes silently.
 *Note: no `spec.md` exists for this branch, so `lane:` defaults to `cross-domain` fail-closed rather
 than being carried forward.*
 
+## Enhancement Summary
+
+**Deepened:** 2026-09-03. **Reviewers:** engineering and legal domain leads; DHH, code-simplicity,
+architecture-strategist and spec-flow panels. The strict-convention reviewer did not return before
+this pass closed — its lens was factual-claim verification and acceptance-criteria failure classes,
+both of which the architecture and spec-flow passes independently covered, and every factual claim it
+would have checked was verified by at least two other readers.
+
+### What review and deepening changed
+
+1. **Four pull requests, not two.** #7708 carried no site count, and measuring it (roughly 3,700
+   candidate lines across 400 files, against P1a's 167 across 32) showed it hides a second burn-down.
+   Splitting #7710 from #7759 followed separately: they share a property, not a file, a call graph or
+   a reviewer.
+2. **The order inverted.** The two scanner issues were expected to contend over a shared baseline.
+   They do not share one; the coupling runs the other way, so burning P1a down first makes P1b's
+   starting baseline smaller.
+3. **A new CI gate was designed, then deleted.** `vendor-pin-verify.yml` already runs on the NOTICE
+   path and already invokes the check being strengthened, so the enforcement follows from fixing that
+   check rather than from new machinery.
+4. **The conservation check became report-only** — closed issue numbers are cited routinely for
+   unrelated reasons, and making an unmeasured heuristic the second blocking signal in a script whose
+   every other failure path is fail-open risks wedging ordinary merges.
+5. **A near-miss caught by review:** emitting conservation rows into the existing row stream would
+   have silently made that report-only check blocking, because the consumer increments the blocking
+   count once per row before reading any verdict. Every reporting and telemetry assertion would have
+   passed over it.
+6. **A near-miss caught by deepening:** isolating the new predicate in its own jq pass — the obvious
+   way to get that isolation — would roughly double the runtime of a gate that has a timeout
+   post-mortem. The isolation belongs in the consumer, not in a second pass.
+
+### What measurement changed about the issues themselves
+
+- #7709's live count is 167, not the 160 in its body; the difference is a detector widening, not new
+  offending code.
+- #7710's core claim is false: the gate does not refuse before scanning. It scans and exits 0. The
+  real defect is that a clean scan emits only staleness banners, so success and failure are the same
+  bytes.
+- #7710's corpus is not stale. All eight lifted files are byte-identical to their pins; only the
+  attestation is old.
+- Three vendored files were never pinned in the canonical record, so the integrity guard covers five
+  of eight — and the same wrong count is mirrored in `compliance-posture.md`.
+- The mandated-filing exemption this plan initially claimed does not apply: the corpus contains one
+  rule id, and it is not the deferral rule.
+- 23 of the 32 burn-down holders cannot reach `assert_fixture_dir`, so the behaviour-changing remedies
+  are the default rather than the fallback — the inverse of the plan's first draft.
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -301,6 +348,30 @@ Any site that genuinely cannot take an assertion — for instance a test whose s
 so a guard would defeat the test — gets an explicit acknowledged entry recording the file, the reason,
 and the re-evaluation trigger. It never gets a silent count adjustment.
 
+**Phase 1.2ᐧ0 — Availability decides the remedy far more often than binding form does.**
+Measured across the 32 holders: **4** carry an inline copy of `assert_fixture_dir`, **5** source or
+already reference it, and **23 cannot reach it at all**. So the guidance to prefer the additive remedy
+"wherever the binding form allows" describes a minority of the work. For roughly seven sites in ten the
+real question is availability, and the honest answer is that the two control-flow remedies — the ones
+that change behaviour — are the default rather than the fallback. This is the single largest cost and
+risk driver in the burn-down and it is worth knowing before the first commit rather than at the tenth.
+
+Three of those 23 are not test files at all: `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`,
+`scripts/context-reviewed-gate-discoverability.sh` and
+`apps/web-platform/scripts/lint-migration-fk-preconditions.sh`. Several more are infra and hook
+scripts. Giving a customer-shipping plugin script a dependency on a test helper is the wrong direction,
+so "just source the helper everywhere" is not available as a blanket answer.
+
+Decide per file, in this order:
+
+- Already has the helper, inline or sourced (9 files) — use `assert_fixture_dir`.
+- A test file that can reasonably source the helper — source it rather than copying it. Every inline
+  copy widens the byte-equality drift arm's surface, and there are already four.
+- A plugin script under `plugins/soleur/` — a shared bash primitive belongs in the plugin payload per
+  ADR-178. Read that ADR before adding a dependency, and prefer `${X:?}` if it does not fit.
+- Anything else — `${X:?}` at the binding, or `|| return 1` / `|| exit` on a capture, with the
+  behaviour-change controls below applied in full.
+
 **Phase 1.2a — Treat the remedies as behaviour changes, because two of them are.**
 Only `assert_fixture_dir "$X"` is purely additive. `${X:?}` and `|| return 1` / `|| exit` both change
 **control flow**: if any site can legitimately reach the guarded line with `$X` transiently empty on a
@@ -478,13 +549,24 @@ Word nothing in this change as resolving #7255. That issue asks for a freshness 
 session does not control, and a CI-enforced comparison is a strong candidate to *become* that signal but
 is not yet wired as one. Leave #7255 open, and note the candidacy there.
 
-**Phase 3.4 — Record the posture gap that was never recorded.**
+**Phase 3.4 — Record the posture gap, and fix the third copy of the count.**
 The `POSTURE_FAIL` operator chain in `content-vendoring.md` §8 was never run across the 116-day window,
-because nothing forces it — the gate is advisory and exits 0. Append a row to
-`knowledge-base/legal/compliance-posture.md` recording the window, the fact that the chain did not run,
-the reason, and the resolution. A late row is materially better than a silent gap for anyone auditing
-this later. That §8 has no mechanical enforcement is a real finding but a separate one; it is filed,
-not fixed here.
+because nothing forces it — the gate is advisory and exits 0. Append a row to the
+`## Active Compliance Items` table in `knowledge-base/legal/compliance-posture.md` recording the
+window, that the chain did not run, why, and the resolution. Follow the row schema documented in that
+section's own comment; note it states the gate never writes there directly, so this is an
+acknowledged write, not an automated one. A late row is materially better than a silent gap for
+anyone auditing this later.
+
+**The same file carries the incomplete count, in a second place nobody has been looking.** Its
+`## Vendored Code Provenance` table has a row reading `Lifted Files: 5 (gdpr-gate references/)` and
+`Last Verified: 2026-05-10`. So the five-of-eight discrepancy is not confined to the NOTICE — it is
+mirrored in the compliance document that an auditor would read first, and it is the artifact furthest
+from the code. Correct that row to eight in the same change as the frontmatter reconciliation, and
+move its `Last Verified` in lockstep with the NOTICE bump. Three artifacts carry this state — the
+NOTICE frontmatter, the NOTICE body table, and this row — and only the body table is currently right.
+
+That §8 has no mechanical enforcement is a real finding but a separate one; it is filed, not fixed here.
 
 **Phase 3.5 — Make the gdpr-gate scan self-reporting.**
 Emit a line, unconditionally and on stdout, stating that the path scan ran and how many paths it
@@ -494,6 +576,15 @@ the staleness banners, so "scanned, matched nothing" and "did not scan" are the 
 Leave the 30d and 90d thresholds untouched, keep the `exit 0` advisory contract, and do not
 relevance-gate the staleness banners — they report persistent gate state and are correctly
 unconditional. Extend the self-test to assert the new line in both the matched and unmatched cases.
+
+**Two constraints on the line's wording and destination, both measured rather than assumed.**
+`gdpr-gate.test.ts` carries three negative assertions, and an unconditional new line runs into two of
+them: it asserts `stdout` does **not** match `/days stale/` on a fresh NOTICE, and that `stderr` does
+not either. So the new line must not contain the substring `days stale` — a natural phrasing like
+"scan complete; rules N days stale" would turn a passing suite red for a reason that has nothing to do
+with the change. And it must go to **stdout**, which the constitution requires of operator-protection
+signals anyway because agent runtimes swallow stderr, and which the third negative assertion
+independently pins.
 
 ### PR 4 — the net-issue-flow FILED blind spot (#7759)
 
@@ -516,11 +607,28 @@ findings into that stream would therefore raise `NET` by one per finding and blo
 silently converting the report-only design into a blocking one, which is the precise opposite of the
 decision taken above and defended at length.
 
-So the conservation set is emitted on a structurally separate channel — a distinct jq output consumed
-by its own loop that never touches `FILED`, `EXEMPT` or `NET`. Isolate the jq expression too, rather
-than only the output: a malformed predicate sharing a pipeline stage with the FILED extraction can
-take down or corrupt that extraction, and the script's response to a jq failure is to fail open. A
-report-only feature must not be able to disable the blocking one.
+So the conservation set is emitted on a structurally separate channel — a distinct output consumed by
+its own loop that never touches `FILED`, `EXEMPT` or `NET`.
+
+**Separate channel, but not a second jq pass**, and the distinction is load-bearing in the other
+direction. The obvious way to isolate a predicate is to run it in its own `jq` invocation, and that
+would be wrong here: the existing pass is documented as costing roughly a second over a ~2 MB payload,
+the gate already runs in the several-second range, and it sits behind a hook timeout whose expiry this
+gate has a post-mortem about — a silent pass at `rc=124`. Doubling the jq work to gain isolation would
+buy a correctness property with an availability regression, in the one gate whose failure history is
+precisely that.
+
+Keep the single pass and emit a structured result instead — the two sets as sibling keys, or rows
+tagged with which set they belong to — and route them to different loops on the bash side. The
+arithmetic isolation, which is the actual hazard, lives in the consumer: the conservation rows must
+never reach the loop that increments `FILED`. The residual shared-failure-domain risk is that a
+malformed new predicate takes down the whole pass; that is bounded by adding the predicate as a
+sibling filter over the same array rather than as a stage inside the FILED pipeline, and by the test
+cases below.
+
+Note the perf comment's actual claim before optimising against it: it warns off a *per-issue subprocess
+loop*, measured at 1.7 seconds of fork overhead, not off a second invocation. One extra fork is not
+what it prohibits — the runtime of a second full pass over the payload is the reason to avoid it.
 
 An acceptance criterion pins the arithmetic directly: a pull request reproducing the measured #7702
 shape must produce an identical `NET` before and after this phase lands. Reporting and telemetry
@@ -593,7 +701,9 @@ to the FILED query, and this adds a sibling query in the same pass.
   assertions for the new line in both matched and unmatched cases.
 - `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts` — a comment only, naming
   the strengthened shell check as its twin so the two cannot drift apart unnoticed.
-- `knowledge-base/legal/compliance-posture.md` — the retrospective posture row.
+- `knowledge-base/legal/compliance-posture.md` — the retrospective row in `## Active Compliance Items`,
+  **and** the `## Vendored Code Provenance` row, whose `Lifted Files` reads 5 and whose `Last Verified`
+  reads 2026-05-10. Both move with the NOTICE.
 
 **PR 4 (#7759)**
 
@@ -848,8 +958,12 @@ discoverability_test:
 19. The strengthened check is confirmed to pass on the shape of an automated re-vendor pull request —
     one where the pins are being moved to current upstream in the same diff — so that hardening this
     gate does not silently start failing the pipeline that `content-vendoring.md` §6 makes canonical.
-20. `knowledge-base/legal/compliance-posture.md` carries a row for the 2026-05-10 to 2026-09-03 window
-    recording that the §8 chain did not run, why, and how it was resolved.
+20. `knowledge-base/legal/compliance-posture.md` carries a row in `## Active Compliance Items` for the
+    2026-05-10 to 2026-09-03 window recording that the §8 chain did not run, why, and how it was
+    resolved, following that section's documented row schema.
+20a. The same file's `## Vendored Code Provenance` row reads eight lifted files, not five, and its
+    `Last Verified` matches the NOTICE. Verified by grepping that all three artifacts — NOTICE
+    frontmatter, NOTICE body table, provenance row — agree on both the count and the date.
 21. Running the gate against a path set that matches nothing produces a line stating the scan ran —
     so its output is no longer a subset of the output produced when it does not run.
 22. The gate still exits 0 on every path, and the 30-day and 90-day thresholds are unchanged.
