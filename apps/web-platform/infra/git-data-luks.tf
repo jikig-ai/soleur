@@ -129,7 +129,7 @@ resource "doppler_secret" "git_data_betterstack_logs_token" {
   project    = doppler_config.git_data_prd.project
   config     = doppler_config.git_data_prd.name
   name       = "BETTERSTACK_LOGS_TOKEN"
-  value      = var.betterstack_logs_token
+  value      = var.git_data_betterstack_logs_token
   visibility = "masked"
 
   lifecycle {
