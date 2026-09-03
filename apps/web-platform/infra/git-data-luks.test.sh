@@ -1021,9 +1021,13 @@ assert_mutation "A28b key-never-on-argv (bootstrap)" p_key_never_on_argv \
 #
 # `/bin/sh` is DASH, where `.` is a POSIX SPECIAL BUILTIN: a failed source kills the shell
 # outright. Both gc units used to open with `set -a; . /etc/default/git-data-doppler; set +a`,
-# and that env file is mode 0600 written in runcmd AFTER stages that can abort — so on a host
+# and that env file WAS mode 0600 written in runcmd, after stages that can abort — so on a host
 # whose Doppler stage failed, the FAILURE REPORTER died at its own first line, before either
-# arm of its `||` fallback. The one component whose job is reporting failures was guaranteed
+# arm of its `||` fallback. (#7460 moved that file into `write_files`, so it now exists before
+# runcmd runs at all; the historical defect and this arm's property are unchanged, only the
+# premise's tense moved. The emitter itself no longer sources ANY env file — it parses, for the
+# same dash reason plus an unquoted template value that would otherwise execute as root.)
+# The one component whose job is reporting failures was guaranteed
 # silent on its most likely failure.
 #
 # This had NO regression guard until now. Measured: reverting either unit to the sourcing form

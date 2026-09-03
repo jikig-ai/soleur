@@ -181,10 +181,13 @@ fi
 
 # ── THE SECOND CHANNEL (#7481) ──────────────────────────────────────────────────────
 #
-# WHY IT EXISTS. Everything before `doppler run` reaches SENTRY ONLY: the emitter's Better
-# Stack block is gated on BETTERSTACK_LOGS_TOKEN, which is present only under `doppler run`.
-# So a host that dies at luks_open — which is exactly what the 2026-07-31 rehearsal did — is
-# INVISIBLE to the Better Stack channel, and every Better-Stack-silent condition below would
+# WHY IT EXISTS. It USED to be that everything before `doppler run` reached SENTRY ONLY, because
+# the emitter's Better Stack block was gated on BETTERSTACK_LOGS_TOKEN and that token arrived
+# only under `doppler run`. #7460 (ADR-198) bakes the token at 0600, so eight of the nine stages
+# now reach Better Stack and only `bootcmd_start` is Sentry-only. The consult still earns its
+# place: the bootcmd beacon, a token that failed to load, and any Better Stack ingest outage all
+# leave Sentry as the only witness. A host that dies at luks_open — which is what the 2026-07-31
+# rehearsal did — is no longer invisible to Better Stack, but every Better-Stack-silent condition
 # report TRANSIENT for a failure Sentry could name. The workflow then retries rc=2 twenty
 # times over ~16 minutes against a paid cpx22 before saying "do not simply re-dispatch".
 #
@@ -607,8 +610,10 @@ if ! grep -q 'boot_complete' <<<"$host_out"; then
   transient "TRANSIENT: the source is live (the anchor answered) but ${HOST_NAME} has not reported" \
             "stage:boot_complete within ${WINDOW}, and reported no fatal either. Either the boot is" \
             "still in progress, or it died before reaching a stage that can emit to Better Stack at" \
-            "all — everything before \`doppler run\` reaches SENTRY ONLY, because the emitter's" \
-            "Better Stack block is gated on BETTERSTACK_LOGS_TOKEN being in the environment."
+            "all. Since #7460 only \`stage:bootcmd_start\` is Sentry-only by construction; the other" \
+            "eight stages post to Better Stack from a baked token, so silence here means the host" \
+            "died before runcmd, the baked token did not load, or the ingest POST failed — check" \
+            "Sentry for \`stage:betterstack_ingest\`, which reports exactly that."
 fi
 
 _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"
@@ -645,8 +650,10 @@ if [[ "$_SENTRY_VERDICT" == "FATAL" ]]; then
   echo
   echo "FAIL (Sentry-derived, on an otherwise-PASSing Better Stack read): ${HOST_NAME} reached"
   echo "stage:boot_complete with no Better Stack fatal, but Sentry holds a level:fatal for this"
-  echo "host in the same window. Everything before \`doppler run\` reaches Sentry only, so this is"
-  echo "a real early-boot failure that the Better Stack channel structurally cannot see."
+  echo "host in the same window. Since #7460 the early stages DO reach Better Stack, so a Sentry"
+  echo "fatal with no Better Stack fatal means one of: the bootcmd beacon (Sentry-only by"
+  echo "construction), a baked token that did not load, or an ingest POST that failed — the last"
+  echo "two are themselves reported at \`stage:betterstack_ingest\`."
   echo
   echo "NO EVIDENCE FILE WRITTEN — deliberately. Writing PASS here would release the git-data"
   echo "birth hold on a boot that failed."
