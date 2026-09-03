@@ -124,9 +124,20 @@ mechanism and the cutover.
 | PR | Contents | Fires | Gate before the next PR |
 |---|---|---|---|
 | **PR1 — substrate** | `cf-pages.tf` (project, apex domain, two `github_actions_secret`), `main.tf` alias, `variables.tf`, the www Bulk Redirect (`seo-bulk-redirects.tf`), the cert-reissue disarmament, `-target=` allow-list, guard rewrite, ADR/C4/docs. **No `dns.tf`, no `deploy-docs.yml`.** | apply-infra | PF1-PF4 |
-| **PR2 — deploy path** | `deploy-docs.yml` only (terminal-step swap, build-identity stamp, post-deploy custom-domain probe, workflow rename, `environment:` removal) | deploy-docs | PF5-PF8 |
+| **PR2 — deploy path** | `deploy-docs.yml` only — wrangler leg added **alongside the retained GitHub Pages leg** (dual-publish), build-identity stamp, two probes, publish-verdict step, workflow self-trigger, rename. **`environment:` and `permissions:` RETAINED.** | deploy-docs | PF5, PF6, PF8 (PF7 retired) |
 | **PR3 — attach** | `cloudflare_pages_domain.apex` + `.www` **alone** | apply-infra | PF9 (R8 probe + origin headers matching the branch PF-Z established) |
 | **PR4 — record swap** | the `dns.tf` hunk **alone** + Z-probe teardown, merged with `[ack-destroy]` | apply-infra | CUT0-CUT9 |
+| **PR5 — retire GH Pages leg** | `deploy-docs.yml` only: delete the three Pages actions, `environment:`, `pages:`/`id-token:` write, and the verdict step's GH-Pages arm. **Probe B survives.** | deploy-docs | AC33, AC34 |
+
+**Amended 2026-09-02 (PR2) — the sequence is FIVE PRs, and PR2 dual-publishes.**
+PR2 originally swapped the publish verb, deleting the GitHub Pages leg. That would
+have converted GitHub Pages from a warm standby into a cold one: at ~1 docs
+merge/day (measured 14 in 14 days) the revert target this plan retains
+DNS-detached would be days stale by PR4, which is the stale-build outcome
+`## User-Brand Impact` calls brand-fatal. Both origins now publish every run; the
+GitHub Pages leg retires in PR5, after CUT0-CUT9 hold. This also makes the apex a
+legitimate hard gate at PR2 (Probe B), which the swap could not do until PR4.
+**PF7 is retired by construction** — see D3's supersession note.
 
 **Amended 2026-08-20 (#7640) — the cutover is SPLIT, and the rollback property is
 completed rather than weakened.** PR1 originally attached both custom domains. Under
@@ -553,6 +564,19 @@ Rollback is a revert of the **PR3** commit — one hunk, one file — merged wit
    custom domain on the same project, before the cutover** — it is the one item that could
    otherwise require re-derivation under pressure.
 
+> **Superseded 2026-09-02 (PR2, #7640) — item 3(b) is retired by construction, and PF7
+> was not run.** The body above is left intact as the record of what was believed when it
+> was written. The four-PR amendment in *Delivery Sequencing* moved the custom-domain
+> attachment into PR3 and the record swap into PR4, so each origin-selecting mechanism now
+> lives in its own revert. The rollback procedure is therefore correct without knowing in
+> advance which of the two selects the origin: revert PR4, run
+> `apps/web-platform/infra/apex-origin-probe.sh`, and revert PR3 as well if it still
+> reports `SERVING-FROM-CLOUDFLARE-PAGES`. Measuring 3(b) would have meant attaching and
+> detaching a hostname on the live production zone to answer a question the sequencing had
+> already made moot, so the probe was deliberately skipped rather than silently dropped.
+> The procedure that replaces it is written into
+> `knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md`.
+
 **Rollback content freezes.** GitHub Pages will serve the last pre-cutover build. A rollback
 three weeks later serves three-week-old docs. Acceptable for an availability rollback;
 stated so nobody is surprised.
@@ -868,7 +892,8 @@ time bomb that reds every docs deploy.
    deploy, `curl https://soleur.ai/version.txt` and fail the job unless it equals
    `${GITHUB_SHA}`. This is the detector for the plan's highest-ranked risk — a deploy that
    lands on a preview alias leaves the custom domain serving the previous build while the
-   workflow is green. Before PR3, this step runs in a reporting-only mode against
+   workflow is green. (Superseded 2026-09-02: under dual-publish both probes are hard
+   gates from PR2; the reporting-only mode described here was never shipped.) Against
    `https://soleur-docs.pages.dev/version.txt`, since the apex is still GitHub Pages.
 4. **Leftovers**: rename the workflow (it is `Deploy Documentation to GitHub Pages`); remove
    the `environment: { name: github-pages, url: ${{ steps.deployment.outputs.page_url }} }`
@@ -897,7 +922,12 @@ time bomb that reds every docs deploy.
 | PF7 | **D3(b) probe**: attach a scratch custom domain to the project, then detach it, and observe whether edge routing for that hostname persists. This decides whether a DNS-only revert is sufficient or whether the rollback must also destroy `cloudflare_pages_domain.apex`. The runbook is written to match the measured answer |
 | PF8 | The revert PR for PR3 is open, green and mergeable, with `[ack-destroy]` positioned to land in the squash message |
 
-### Phase 3 — PR3: the DNS cutover
+### Phase 3 — PR3/PR4: attach, then the DNS cutover
+
+> **Superseded 2026-09-02 (PR2).** This section predates the four-PR amendment in
+> *Delivery Sequencing* and its five-PR extension. PR3 attaches the custom domains;
+> PR4 swaps the DNS record; PR5 retires the GitHub Pages publish leg. Read the
+> sequencing table, not this heading, for what lands where.
 
 **Pre-flight: PF1-PF8 all hold, plus:**
 
@@ -1039,13 +1069,25 @@ uses `$(grep -c … || true)` compared with `[ "$n" = "0" ]`, or `! grep -q`.
 
 ### PR2
 
-- **AC15** — `deploy-docs.yml` no longer **uses** the three GitHub Pages actions: `grep -cE '^\s*uses: actions/(configure-pages|upload-pages-artifact|deploy-pages)@' .github/workflows/deploy-docs.yml || true` equals `0`. Anchored on `uses: actions/`, not the bare names: the file also mentions all three in a container-config comment (*"Pages-deploy actions … work inside container jobs"*), so a bare-name grep returns `2` on a correct implementation. That comment is itself stale after the migration and is rewritten in the same step.
-- **AC16** — the five build gates other than build-verification are byte-unchanged, and the build-verification step changes only by added `test -f` lines. Asserted mechanically: the diff hunks for `deploy-docs.yml` fall only within the terminal-steps range, the `permissions:` block, the `environment:` block, the workflow `name:`, and additive lines in build-verification. (An earlier draft claimed "the six gates are byte-unchanged" while also changing one of them — self-contradictory.)
+- **AC15** — `deploy-docs.yml` publishes the same `_site` to **both** origins. The three GitHub Pages actions are **retained byte-identical to `main`**: `grep -cE '^\s*uses: actions/(configure-pages|upload-pages-artifact|deploy-pages)@' .github/workflows/deploy-docs.yml` equals `3`, and `git diff origin/main -- .github/workflows/deploy-docs.yml` contains no `-` line matching `uses: actions/.*pages`. The wrangler leg is added alongside: `grep -c 'wrangler pages deploy' .github/workflows/deploy-docs.yml` equals `1`. **Superseded 2026-09-02 (PR2).** The original AC15 required those three to reach `0`. Deleting the GitHub Pages leg before the apex moves would freeze the public apex at the last GitHub Pages build for the whole PR2→PR4 interval (measured: 14 docs-touching commits in 14 days, ~1/day), degrading this plan's own rollback target to a stale build — the outcome `## User-Brand Impact` classifies as brand-fatal. A rollback that lands in a brand-fatal state is not a rollback. The zero-assertion moves to AC33 and is owned by PR5.
+- **AC16** — the five build gates other than build-verification are byte-unchanged, asserted by diffing each gate's step block against `origin/main`. The `permissions:` and `environment:` blocks are likewise **byte-unchanged** — they are retained (AC18). Permitted hunks in `deploy-docs.yml` are exactly: the workflow `name:`; one added line in `on.push.paths` (AC36); the container comment; the build step (build-identity stamp); one additive `test -f` line in build-verification; and the terminal-steps range, where the wrangler install/deploy steps, both build-identity probes and the publish-verdict step are **inserted around** the retained GitHub Pages trio. **Superseded 2026-09-02 (PR2):** the original enumeration was wrong in both directions — it omitted two hunks this plan's own Phase 2 items 2 and 4 mandate (the build stamp, the container-comment rewrite), and it named the `permissions:`/`environment:` blocks as edit sites when they are now retention sites.
 - **AC17** — wrangler is pinned exactly: `grep -c 'wrangler@4\.124\.0' .github/workflows/deploy-docs.yml` equals `1`, and `grep -c 'wrangler@latest\|npx --yes wrangler' … || true` equals `0`.
-- **AC18** — the `environment:` block is gone: `! grep -q 'github-pages' .github/workflows/deploy-docs.yml`.
-- **AC19** — the post-deploy custom-domain probe step exists and fails the job on a SHA mismatch, exercised by a run where the expected SHA is deliberately wrong.
+- **AC18** — the `environment:` block is **retained and functional** through PR4: `grep -c 'name: github-pages' .github/workflows/deploy-docs.yml` equals `1`, and its `url:` still resolves from a live step id — `grep -c 'id: deployment' .github/workflows/deploy-docs.yml` equals `1`. `permissions:` retains `pages: write` and `id-token: write`, each carrying a comment naming PR5/AC33 as its removal point so neither reads as a leftover standing privilege. **Superseded 2026-09-02 (PR2)** — the original required `github-pages` to be absent. The removal assertion is AC33.
+- **AC19** — **two** post-deploy build-identity probes exist and **both fail the job on a SHA mismatch**, each exercised by a run where the expected SHA is deliberately wrong (`apps/web-platform/infra/pages-build-identity-probe.test.sh`, case M2). Arms per AP-021, in `pages-build-identity-probe.sh`: `200 + match` → rc 0; `200 + mismatch` → rc 1; non-2xx → rc 3 (ABSENT); no HTTP response → rc 2 (UNREACHABLE, the only tolerated arm). **Probe A** targets `https://soleur-docs.pages.dev/version.txt` — measured 2026-09-02 this returned `522`, which is what a zero-deployment Pages project looks like and is the ABSENT arm firing correctly. **Probe B** targets `https://soleur.ai/version.txt?cb=${GITHUB_SHA}` with a 10×15s window. The cache-buster is load-bearing: the apex measured `cache-control: max-age=600`, `age: 279`, `x-cache: HIT`, `via: 1.1 varnish`, so an un-busted probe would read a cached body and report MISMATCH on a healthy deploy.
 - **AC20** — `https://soleur-docs.pages.dev/version.txt` equals the merge SHA (PF5).
-- **AC21** — the cutover runbook exists, states that `workflow_dispatch` cannot perform the rollback, records the PF7 detach measurement, and carries the content-rollback procedure.
+- **AC21** — the cutover runbook exists, states that `workflow_dispatch` cannot perform the rollback, carries the content-rollback procedure, and **records the PF7 disposition** — namely that the detach measurement was deliberately NOT taken because the four-PR split retires D3 item 3(b) by construction, together with what to do if the rollback reaches the case PF7 would have measured. **Superseded 2026-09-02 (PR2):** the original required the runbook to record "the PF7 detach measurement", a deliverable that by this plan's own amendment no longer exists.
+
+- **AC31 (PR2)** — the bimodal failure is resolved by **conjunction**, never by abort-on-first. Each publish step carries `continue-on-error: true` and a step `id:`; the wrangler leg and both probes carry `if: always()`; a terminal publish-verdict step reads `steps.<id>.outcome` for all four legs and exits 1 unless every one is `success`, printing a per-leg table to `$GITHUB_STEP_SUMMARY`. **`outcome`, not `conclusion`** — `continue-on-error` rewrites `conclusion` to `success`, so a verdict reading it would pass vacuously.
+
+- **AC32 (PR2)** — the runbook carries a **dual-publish** section stating: both origins publish every run; the GitHub Pages leg is the rollback target and is kept current for that reason; `https://soleur.ai/version.txt` and `/CNAME` are publicly served static files and are not leaks; and that a `deploy-docs.yml` run occurring **between the PR4 apply and the PR5 merge** may go red on the GitHub-Pages leg alone (GitHub's custom-domain DNS check fails once the apex `A` records are gone) — expected and benign, remedied by merging PR5, not by debugging.
+
+- **AC33 (PR5)** — the GitHub Pages publish path is retired: the three-action grep equals `0`; `! grep -q 'github-pages'`; `! grep -qE '^\s*(pages|id-token): write'`; the verdict step's GitHub-Pages arm is removed. **Probe B survives** — post-PR4 it asserts the apex serves the current build through Cloudflare Pages, i.e. CUT0 made permanent.
+
+- **AC34 (PR5)** — PR5 merges **after CUT0-CUT9 all hold**, in the same session as PR4, and its own merge run of `deploy-docs.yml` is green with Probe B MATCH.
+
+- **AC35 (PR2)** — `https://soleur.ai/version.txt` equals the PR2 merge SHA (the apex sibling of AC20), sampled with the cache-busting query string.
+
+- **AC36 (PR2)** — the workflow self-trigger exists: `grep -cF '.github/workflows/deploy-docs.yml' .github/workflows/deploy-docs.yml` returns `1` from inside `on.push.paths`, and `gh run list --workflow=deploy-docs.yml --json headSha` contains PR2's merge SHA. Asserted on an actual run, not on the YAML alone.
 
 ### PR3 (cutover)
 
