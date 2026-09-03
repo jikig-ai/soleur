@@ -37,26 +37,52 @@ resource "cloudflare_pages_project" "docs" {
   production_branch = "main"
 }
 
-# ‼️ THE CUSTOM DOMAINS ARE NOT IN THIS PR — they land in PR3.
+# ---------------------------------------------------------------------------
+# Custom domains (PR3)
+# ---------------------------------------------------------------------------
 #
-# Attaching soleur.ai to a Pages project with ZERO deployments would, if
-# Hypothesis Z holds ("the apex begins serving from Pages at the moment of
-# attachment"), move the apex origin to an empty project and serve Cloudflare's
-# error page on an HSTS-preloaded hostname. `apply-web-platform-infra.yml` runs
-# ON MERGE, so no gate can catch that first — the measurement would be a
-# post-hoc observation of a production mutation, not a gate.
+# PR1 deliberately withheld these. Its reasoning, kept because it is the reason
+# the sequence has the shape it does:
 #
-# The sequence is therefore substrate (here) -> deploy path -> attach -> record
-# swap, which is correct under BOTH branches of Z rather than only the preferred
-# one: whichever of attachment or the DNS record actually selects the origin,
-# reverting the PR that introduced it removes it. See "## Delivery Sequencing".
+#   Attaching soleur.ai to a Pages project with ZERO deployments would, if
+#   Hypothesis Z holds ("the apex begins serving from Pages at the moment of
+#   attachment"), move the apex origin to an EMPTY project and serve
+#   Cloudflare's error page on an HSTS-preloaded hostname.
+#   apply-web-platform-infra.yml runs ON MERGE, so no gate could catch that
+#   first — the measurement would be a post-hoc observation of a production
+#   mutation, not a gate.
 #
-# Z itself is NOT measured (superseded 2026-09-02, PR2): the four-PR split
-# retires the question by construction — see D3's supersession note in the
-# plan. The original wording, kept for the record, was that Z is measured
-# against a scratch hostname whose topology is
-# identical to the apex (proxied A record at a GitHub Pages IP + a Pages custom
-# domain on the same account and zone), so no production name is touched.
+# THAT PRECONDITION IS NOW FALSE, which is what makes this PR safe rather than
+# merely sequenced later. PR2 put the project into service: every docs merge
+# publishes to it, and its production alias serves the current build (verified
+# at PR2's merge — both origins returned the same SHA). So under EITHER branch
+# of Z this attach is benign:
+#
+#   Z holds     -> the apex begins serving from a project carrying the CURRENT
+#                  docs build. Same content, different origin.
+#   Z is false  -> nothing observable changes until PR4 swaps the record.
+#
+# Which branch actually obtains is measured AFTER this applies, by
+# apex-origin-probe.sh. It is not guessed at here, and nothing in this file
+# depends on the answer.
+#
+# STILL NOT THE CUTOVER. dns.tf is untouched by this PR: the apex A records
+# still point at GitHub Pages. Reverting this PR removes exactly these two
+# resources and nothing else.
+
+resource "cloudflare_pages_domain" "apex" {
+  provider     = cloudflare.pages
+  account_id   = var.cf_account_id
+  project_name = cloudflare_pages_project.docs.name
+  domain       = "soleur.ai"
+}
+
+resource "cloudflare_pages_domain" "www" {
+  provider     = cloudflare.pages
+  account_id   = var.cf_account_id
+  project_name = cloudflare_pages_project.docs.name
+  domain       = "www.soleur.ai"
+}
 
 # ---------------------------------------------------------------------------
 # Publication to GitHub Actions
