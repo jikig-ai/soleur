@@ -19,9 +19,21 @@
 # gap is a MONOTONICITY argument, and it lives here rather than in the plan because a reader of the
 # gate is exactly the person who needs it:
 #
-#   1. inngest-server is the ONLY writer to this Redis. It is bound to 127.0.0.1 by
-#      inngest-redis.service and reachable from nothing else on the box; no other unit, cron, or
-#      container holds the credential.
+#   1. inngest-server is the only writer that can INCREASE the key count. It is not the only
+#      writer full stop — an earlier revision of this comment said it was, and that was false and
+#      is corrected here rather than quietly reworded. Measured: `redis-cli` has THREE in-repo
+#      callers against this instance. `inngest-cutover-flip.sh` issues `FLUSHALL` (a writer, and
+#      the one condition 3 below exists to exclude); `inngest-bootstrap.sh`'s probe issues
+#      `INFO keyspace` (a reader); the third is a test. The mechanism is also not the one that
+#      sentence named: the loopback bind comes from `inngest-redis.conf` (`bind 127.0.0.1 -::1`,
+#      `protected-mode yes`), not from the unit, and the unit contributes `--requirepass`. So
+#      Redis is unreachable OFF the box and credential-gated ON it — which is a different and
+#      weaker statement than "reachable from nothing else", and the argument below only needs the
+#      weaker one.
+#
+#      The corrected form is a MONOTONICITY claim over all three callers, and it is strictly
+#      stronger than the false one: the only non-server writer decreases the count, and the reader
+#      does not write at all.
 #   2. G8 ∧ G9 prove inngest-server was NOT BOUND on the newest row — `server_active=inactive` AND
 #      a non-200 loopback `http_code`. A process that is not running and not answering cannot have
 #      written a key since that row was emitted.
@@ -32,6 +44,9 @@
 #      actually authorizes a write, and it is readable in real time.
 #   4. Armed reminders, if any survived, only CONSUME keys when they fire — a `BRPOP`-shaped
 #      dequeue removes, it does not add.
+#   5. The only other writer, the flip FSM's `FLUSHALL`, sets the count to 0. Even if G19's
+#      synchronous flag read were somehow raced, the raced write is the one write that cannot
+#      make a zero reading stale.
 #
 # So between the chosen row and the apply the key count cannot INCREASE. A count of 0 at t-90min
 # under (1)-(4) is a count of 0 at t. The claim being made is bounded and checkable, which is the

@@ -101,10 +101,21 @@ is live the recut is unreachable by construction.
 
 The probe fires hourly, so the chosen row can be up to ~90 minutes old. The argument that this
 still authorizes an apply is a MONOTONICITY argument and it lives in the gate source, not only
-here: `inngest-server` is the only writer to this Redis; G8∧G9 prove it was neither running nor
-answering on the newest row; G19 re-reads `INNGEST_CUTOVER_FLIP` synchronously and refuses anything
-but `rolled-back`/`aborted`, so no concurrent `FLUSHALL` can be authorized; and armed reminders
-firing only CONSUME keys. The count therefore cannot increase between the row and the apply.
+here: `inngest-server` is the only writer that can INCREASE the key count; G8∧G9 prove it was
+neither running nor answering on the newest row; G19 re-reads `INNGEST_CUTOVER_FLIP` synchronously
+and refuses anything but `rolled-back`/`aborted`, so no concurrent `FLUSHALL` can be authorized;
+and armed reminders firing only CONSUME keys. The count therefore cannot increase between the row
+and the apply.
+
+**"Only writer that can increase" is the measured form, and it is not what a first draft of this
+paragraph said.** That draft claimed `inngest-server` was the only writer at all, and that Redis was
+"reachable from nothing else on the box". Both are false. `redis-cli` has three in-repo callers
+against this instance — the flip FSM's `FLUSHALL` (a writer), the probe's `INFO keyspace` (a
+reader), and a test — and the loopback bind comes from `inngest-redis.conf`, not from the unit,
+with `--requirepass` as the on-box control. The corrected claim is a monotonicity property over all
+three callers rather than an exclusivity claim over one, and it is strictly stronger: the only
+non-server writer sets the count to zero. Recorded rather than silently reworded, because shipping
+a guard whose stated justification is false is the defect class this ADR exists to name.
 
 ## Consequences
 
