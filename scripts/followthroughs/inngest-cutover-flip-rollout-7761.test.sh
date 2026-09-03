@@ -59,18 +59,16 @@ failing_stub() {
 }
 
 # run_probe <stub> [EXTRA_ENV...] -> echoes the exit code; the probe's combined output lands in
-# the file named by PROBE_OUT_FILE, and callers read it with probe_out.
+# $WORK/probe-out, and callers read it with probe_out.
 #
 # The output MUST travel through a file rather than a variable. Callers invoke this as
 # `rc="$(run_probe ...)"`, and command substitution runs the function in a SUBSHELL — so any
 # variable this function assigns is discarded the moment it returns, and every message assertion
 # would silently compare against an empty string while the exit-code assertions kept passing.
 # That is not hypothetical: it is how this suite first behaved.
-PROBE_OUT_FILE=""
 run_probe() {
   local stub="$1"; shift
   local rc=0
-  PROBE_OUT_FILE="$WORK/probe-out"
   # PATH is left alone; `doppler` may or may not exist in the caller's environment and the probe
   # treats it as corroboration either way, so both cases are legitimate here. The credential vars
   # are supplied so the run reaches the marker logic rather than stopping at the credential arm.

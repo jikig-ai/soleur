@@ -50,6 +50,21 @@ WORK=""
 LATCH=""
 TRACE="" STATE="" LOGTRACE=""
 SYSCTL="" REDIS="" FLAGSET="" LOGGER=""
+# (#7761) A SINGLE OWNING TRAP (ADR-129). setup_case/teardown_case are per-case cleanup and only
+# run on the happy path — a suite that dies mid-case leaves its scratch root behind in $TMPDIR,
+# which on this repo's shared 4 GiB tmpfs is a real leak rather than a tidiness nit. One EXIT trap
+# owns every root this file allocates, including the alternate root the argv-authorisation case
+# needs (it must be differently-named to prove the gate does not key on a path prefix, so it
+# cannot live under $WORK).
+ALT_ROOT=""
+cleanup_all() {
+  [[ -n "${WORK:-}" ]] && rm -rf "$WORK"
+  [[ -n "${ALT_ROOT:-}" ]] && rm -rf "$ALT_ROOT"
+  # Explicit: the last [[ ]] above is false whenever ALT_ROOT is unset, and this trap runs on the
+  # EXIT path where that status would become the script's own.
+  return 0
+}
+trap cleanup_all EXIT
 
 # (#7761) The HOST-DEFAULT state slot. A refusal case runs with INNGEST_CUTOVER_STATE unset by the
 # gate, so emit_state falls back to this path — a best-effort `>` write that is `|| true`-guarded
