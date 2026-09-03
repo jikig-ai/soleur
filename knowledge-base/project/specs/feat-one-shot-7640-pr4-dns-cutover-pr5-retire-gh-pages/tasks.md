@@ -2,7 +2,9 @@
 
 Plan: `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`
 Issue: #7640 (OPEN — closed by **PR4b**, not earlier)
-Branch: `feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages`
+Branch: `feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages` (PR4a; reaped by
+`cleanup-merged` once PR4a squash-merged) -> `feat-one-shot-7640-pr4b-apex-cname-flip` (PR4b).
+This spec dir stays put: it is the canonical PR4+PR5 task list and PR5 still runs from it.
 Lane: `cross-domain` (spec.md absent → fail-closed default, TR2)
 
 **The cutover ships as TWO merges** (plan §D5). Terraform core supplies the ordering; there is
@@ -11,35 +13,40 @@ rejected alternatives are in the Cut List with the measurement that killed each.
 
 ## Phase 0 — Pre-flight (blocking, before any `.tf` edit)
 
-- [ ] 0.1 Re-run `bash apps/web-platform/infra/apex-origin-probe.sh` (PF-Z2). Expect
+- [x] 0.1 Re-run `bash apps/web-platform/infra/apex-origin-probe.sh` (PF-Z2). Expect
       `SERVING-FROM-GITHUB-PAGES`, rc 0. `UNREACHABLE` blocks; a Cloudflare verdict means STOP.
-- [ ] 0.2 Re-run R8 (PF-R8b): apex = 4 proxied `A` + MX/TXT, **no** `CNAME`; `www` = 1 proxied
+- [x] 0.2 Re-run R8 (PF-R8b): apex = 4 proxied `A` + MX/TXT, **no** `CNAME`; `www` = 1 proxied
       `CNAME` at `jikig-ai.github.io`.
-- [ ] 0.3 PF-SYM: on a scratch zone name, create a `CNAME`, attempt an `A`, record the error
+- [x] 0.3 PF-SYM: on a scratch zone name, create a `CNAME`, attempt an `A`, record the error
       code, delete. Measure `81053` in the direction a mistaken revert would hit.
-- [ ] 0.4 PF-TARGET: confirm **both** `-target=cloudflare_record.github_pages` and
+- [x] 0.4 PF-TARGET: confirm **both** `-target=cloudflare_record.github_pages` and
       `-target=cloudflare_record.pages_apex` are in `apply-web-platform-infra.yml`'s allow-list,
       line-anchored. A `moved` block with one endpoint untargeted **hard-errors** the apply.
 - [ ] 0.5 PF-DEFER: `gh issue view <N>` the deferred-cleanup issue, or file it (AC52).
-- [ ] 0.6 PF-SSL: `seo-config-rules.tf` carries exactly one `ssl = "full"`. **Do not touch it**;
+      **STILL OPEN — re-checked 2026-09-03, the issue does not exist.** PR4a did not
+      resolve this. PR4b must FILE it and wire the number into the plan's
+      `## Encryption Posture` `tracking_issue:` field, which today holds only a prose
+      description. AC52 blocks marking PR4b ready, so this is PR4b work, not Phase 0
+      history.
+- [x] 0.6 PF-SSL: `seo-config-rules.tf` carries exactly one `ssl = "full"`. **Do not touch it**;
       PR #7753 owns its guard.
 
 ## Phase 1 — PR4a: shrink the apex to one `A` record
 
-- [ ] 1.1 Write Guard 2 `apps/web-platform/infra/apex-single-node-replace.test.sh` **from the
+- [x] 1.1 Write Guard 2 `apps/web-platform/infra/apex-single-node-replace.test.sh` **from the
       mutation matrix first** (plan §Guard Contract → Guard 2). Rows M1-M9, harness H1-H3.
-- [ ] 1.2 Register it in `.github/workflows/infra-validation.yml` beside the
+- [x] 1.2 Register it in `.github/workflows/infra-validation.yml` beside the
       `www-apex-canonicalizer` invocations. Anchor the AC on the **invocation** line (AC65).
-- [ ] 1.3 Verify H3: the guard is green on the PR4a shape, or it blocks its own PR and every
+- [x] 1.3 Verify H3: the guard is green on the PR4a shape, or it blocks its own PR and every
       unrelated infra PR in the two-merge window.
-- [ ] 1.4 `dns.tf`: `cloudflare_record.github_pages`'s `for_each` → `toset(["185.199.108.153"])`.
+- [x] 1.4 `dns.tf`: `cloudflare_record.github_pages`'s `for_each` → `toset(["185.199.108.153"])`.
       Leave `www` and `github_pages_challenge` byte-unchanged (AC63).
-- [ ] 1.5 Extend the cutover runbook with the two-merge procedure **and the `git revert`
+- [x] 1.5 Extend the cutover runbook with the two-merge procedure **and the `git revert`
       prohibition** — before the first destructive merge, not after.
-- [ ] 1.6 PF9a: plan shows 3 deletes, 0 creates, `destroy_count = 3`, nothing else touched.
-- [ ] 1.7 Merge with `[ack-destroy]` on its own line. Then AC60: verify it landed in the squash
+- [x] 1.6 PF9a: plan shows 3 deletes, 0 creates, `destroy_count = 3`, nothing else touched.
+- [x] 1.7 Merge with `[ack-destroy]` on its own line. Then AC60: verify it landed in the squash
       body (`git log -1 --format=%B`).
-- [ ] 1.8 PF-APEX: apex still resolves and serves 200 across 3 samples.
+- [x] 1.8 PF-APEX: apex still resolves and serves 200 across 3 samples.
 
 ## Phase 2 — PR4b: flip the survivor to a `CNAME`
 
@@ -113,7 +120,7 @@ rejected alternatives are in the Cut List with the measurement that killed each.
   `infra-validation.yml`, or `guard-vacuity-floor.test.sh`. Resolving that
   conflict with "keep PR4b's `dns.tf`" lands a tree with the flip in place and
   the guard plus its registration silently deleted.
-- **PF9b must be mechanized in PR4b, not read by eye (AC-new).** The guard is
+- **PF9b must be mechanized in PR4b, not read by eye (AC72).** The guard is
   static, so it cannot see repo-vs-STATE drift: a consistent rename of the pin
   and the `dns.tf` key passes 11/11 while state still holds the old key, and a
   PR4a that merges without converging (`[skip-web-platform-apply]`, or a failed

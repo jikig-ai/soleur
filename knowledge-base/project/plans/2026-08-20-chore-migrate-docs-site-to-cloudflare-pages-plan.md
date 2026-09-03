@@ -2,8 +2,8 @@
 title: "Migrate the marketing/docs site off GitHub Pages to Cloudflare Pages (ADR-194)"
 date: 2026-08-20
 slug: chore-migrate-docs-site-to-cloudflare-pages
-branch: feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages
-prior_branches: [feat-one-shot-7640-cloudflare-pages-migration]
+branch: feat-one-shot-7640-pr4b-apex-cname-flip
+prior_branches: [feat-one-shot-7640-cloudflare-pages-migration, feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages]
 issue: 7640
 closes: 7640
 lane: cross-domain
@@ -1761,6 +1761,18 @@ eleven-row matrix — is recorded in `## Sharp Edges` rather than lost with it.
   annotation; plus the in-place `www` update. Through the real filter
   (`tests/scripts/lib/destroy-guard-filter-web-platform.jq`):
   `resource_deletes: 1, nested_deletes: 0, reboot_updates: 0, host_creates: 0` (PF9b).
+- **AC72 (PF9b is mechanized, not read by eye)** — the apply job's plan-JSON pass through
+  `tests/scripts/lib/destroy-guard-filter-web-platform.jq` carries a clause asserting that the
+  `cloudflare_record.pages_apex` change's `previous_address` equals
+  `cloudflare_record.github_pages["185.199.108.153"]`. **It is the only check in the system that
+  is about STATE rather than about text.** Guard 2 is static, so it cannot see repo-vs-STATE
+  drift, and two drift shapes defeat AC68/AC69 silently: a *consistent* rename of the `moved`
+  pin and the `dns.tf` key passes 11/11 while state still holds the old key, and a PR4a that
+  merged without converging (`[skip-web-platform-apply]`, or a failed apply) leaves state
+  holding four instances while the repo says one. In both cases PR4b's `moved` no-ops and the
+  hazard returns with **no signal** — and `[ack-destroy]` cannot discriminate, because
+  `destroy_count` is 1 in the correct plan and 1 in the broken one. AC69 reads the plan's
+  *shape*; this AC reads what the plan is moving *from*.
 - **AC46 (upgraded rationale, unchanged command)** — **both** endpoint targets are present,
   line-anchored:
   `grep -cE '^[[:space:]]+-target=cloudflare_record\.github_pages \\$' .github/workflows/apply-web-platform-infra.yml`
