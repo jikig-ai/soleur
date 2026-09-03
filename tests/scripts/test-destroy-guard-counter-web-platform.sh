@@ -1037,6 +1037,29 @@ t_luks_rotations_parse_failure_fails_closed() {
 # degraded shapes (`"actions": null`, no `.change` key) make jq exit non-zero, so they are loud;
 # this one was not. `["no-op"]` and `["create"]` must still score 0 — no-op is the routine merge
 # reading and a first create is the volume's initial LUKS cut — so the arm pins BOTH directions.
+# T60i — the HALT's operator-facing text must name the verbs the counter actually counts. It said
+# "DELETE or FORGET" while the counter had already been widened to include `update` (a Doppler-side
+# value change plans as a bare ["update"]) and then to include an unreadable action list. An
+# operator reading that message during an incident would look for a delete that is not there and
+# conclude the HALT misfired. The message is the only thing they see; the jq is not.
+t_luks_halt_message_names_the_counted_verbs() {
+  local wf="$WORKFLOW_YML" line ok=1 missing=''
+  line="$(grep -F 'inngest LUKS passphrase resource(s)' "$wf" | head -1 || true)"
+  if [[ -z "$line" ]]; then
+    _report "T60i the LUKS HALT message names the verbs the counter counts" fail "the HALT message line is gone"
+    return
+  fi
+  local v
+  for v in UPDATE DELETE FORGET 'could not be read'; do
+    grep -qF "$v" <<<"$line" || { ok=0; missing="${missing} ${v}"; }
+  done
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T60i the LUKS HALT message names every verb the counter counts (update/delete/forget/undecidable)" ok
+  else
+    _report "T60i the LUKS HALT message names every verb the counter counts" fail "message omits:${missing}"
+  fi
+}
+
 t_luks_counter_undecidable_actions_fails_closed() {
   local addr='doppler_secret.inngest_redis_luks_key' got want ok=1 detail=''
   local shape tmp; tmp="$(mktemp)"
@@ -1153,6 +1176,7 @@ t_luks_passphrase_forget_halts
 t_luks_passphrase_first_create_passes
 t_luks_rotations_baseline_zero
 t_luks_rotations_parse_failure_fails_closed
+t_luks_halt_message_names_the_counted_verbs
 t_luks_counter_undecidable_actions_fails_closed
 t_apply_job_luks_halt_job_scoped
 
@@ -1173,11 +1197,11 @@ t_apply_job_luks_halt_job_scoped
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((pass + fail))
-if [[ "$_ran" -lt 57 ]]; then
+if [[ "$_ran" -lt 58 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 57. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 58. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 57)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 58)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

@@ -771,7 +771,7 @@ jobs:
           # header is still cut from the old one. The store then cannot be opened, on a host with
           # no SSH and no console, and what it holds is user prompts and agent output.
           if [[ "$luks_rotations" -gt 0 ]]; then
-            echo "::error::terraform plan would DELETE or FORGET ${luks_rotations} inngest LUKS passphrase resource(s) (random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key) on the per-PR apply path."
+            echo "::error::terraform plan would UPDATE, DELETE or FORGET ${luks_rotations} inngest LUKS passphrase resource(s) (random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key) on the per-PR apply path, or emitted a change there whose action list could not be read."
             echo "::error::A rotation mints a new passphrase while the LUKS header on the live volume is still cut from the OLD one. The store becomes unopenable and the AOF is unrecoverable — there is no second copy of the header key, and the host has no SSH and no console."
             echo "::error::[ack-destroy] deliberately does NOT reach this HALT: a replace also trips resource_deletes, so acking an unrelated destructive change in the same merge would ack this one through with it."
             echo "::error::Remediation depends on what you intended:"
