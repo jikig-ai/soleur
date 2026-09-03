@@ -527,6 +527,11 @@ through `scripts/lint-rule-bodies.py --emit-mandating-ids`, and that corpus curr
 one id — `wg-block-pr-ready-on-undeferred-operator-steps`. The deferral rule is not in it, so no
 exemption applies to any filing in this batch.
 
+So the filing carries **no** `Mandated-By:` line. Emitting one would not merely fail to help — the
+gate's own jq pass rejects a claim naming an untagged rule and reports it as such, so the issue body
+would assert an exemption the gate visibly refuses. Shipping that is the same "reads as healthy, is
+actually wrong" shape PR 4 exists to repair.
+
 The gate passes anyway, on arithmetic rather than on exemption, and each pull request's budget is
 therefore fixed:
 
@@ -983,6 +988,11 @@ discoverability_test:
    the same commit. Verified per commit by walking `git rev-list` and inspecting each commit's own diff
    — not with `git log -- <pathA> <pathB>`, which is a union filter and would pass on exactly the
    asymmetric commit this criterion exists to catch.
+
+   Note the residual gap rather than overclaiming: this correlates "a baseline row moved" with "some
+   `.sh` file changed" in the same commit, not with *the* file whose row moved. A commit shrinking
+   file A's count while editing only file B would pass. Closing that needs the reviewer, and the
+   Observability section records it as a review step for exactly this reason.
 4. The full test battery is green, not only the suites for edited files.
 5. For each holder under `.claude/hooks/` and each gate-test holder, a **before-and-after transcript**
    is recorded: that holder's own existing RED fixtures re-run, plus a synthetic pass and a synthetic
@@ -1017,8 +1027,12 @@ discoverability_test:
 
 ### PR 3 — #7710
 
-15. The NOTICE frontmatter lists all eight vendored files. Verified by comparing the frontmatter entry
-    count against the vendored rows of the body table and finding them equal.
+15. The NOTICE frontmatter lists all eight vendored files, verified by comparing the `path:` **values**
+    against the body table's vendored rows — not by comparing counts. A count check passes at 8 == 8
+    even when one of the three added entries carries a typo'd path or duplicates an existing one while
+    still omitting the real gap. Assert specifically that `references/layers/auth-sessions.md`,
+    `references/layers/frontend.md` and `references/layers/testing-seeding.md` are present, each with
+    its `upstream-path` and `upstream-blob-sha` copied verbatim from the body table.
 16. `vendor-pin-integrity.sh --verify-upstream` reports a per-file `SAME` or `DRIFTED` verdict and a
     total for all eight, and covers eight files where it previously covered five.
 17. The strengthened check is demonstrated to fail on a deliberately falsified pin, not merely to pass
@@ -1035,13 +1049,16 @@ discoverability_test:
     `Last Verified` matches the NOTICE. Verified by grepping that all three artifacts — NOTICE
     frontmatter, NOTICE body table, provenance row — agree on both the count and the date.
 21. Running the gate against a path set that matches nothing produces a line stating the scan ran —
-    so its output is no longer a subset of the output produced when it does not run.
+    so its output is no longer a subset of the output produced when it does not run. Asserted in
+    **both** `gdpr-gate-self-test.test.sh` and `gdpr-gate.test.ts`: Guard 2's assembly names both as
+    members, and an assertion added to only one leaves the other free to drift.
 22. The gate still exits 0 on every path, and the 30-day and 90-day thresholds are unchanged.
 
 ### PR 4 — #7759
 
 23. `bash plugins/soleur/test/net-issue-flow.test.sh` passes with new cases covering: the measured
-    PR #7702 shape; a second unattributed issue after an attributed first; an unrelated citation that
+    PR #7702 shape **as a synthesized fixture**, never a live query against the real pull request,
+    whose state drifts and which `cq-test-fixtures-synthesized-only` forbids relying on; a second unattributed issue after an attributed first; an unrelated citation that
     must not be reported; and a citation without a machine-filing marker that must not be reported.
 24. **`NET` is numerically unchanged by the presence of conservation findings.** Verified by running
     the gate against the #7702 fixture shape and comparing the reported `Filing:` and `Net:` values
@@ -1052,9 +1069,13 @@ discoverability_test:
     cycle, and the report naming them appears in the always-emitted block.
 26. An issue exists for promoting the conservation check to blocking, carrying a re-evaluation trigger
     stated in terms of measured fire rate.
-27. No commit message and no pull request body in this batch describes any change as resolving #7255.
-    Scoped to commit messages and pull request bodies only — the plan file itself contains that phrase
-    inside the sentence prohibiting it, so a grep over tracked content would trip on its own rule.
+27. No commit message and no pull request body in this batch describes any change as **resolving**
+    #7255. Verify with a closing-verb predicate adjacent to the number —
+    `grep -iE '\b(closes?|fixes?|resolves?)[- ]?#7255\b'` returning nothing — never with bare-token
+    absence. An undecorated `#7255` reference is not merely tolerated but wanted: Phase 3.3 instructs
+    noting the candidacy there, so a `grep -c '#7255' == 0` check would fail the plan for doing the
+    right thing. Scoped to commit messages and pull request bodies; the plan file itself contains the
+    phrase inside the sentence prohibiting it.
 
 ## Domain Review
 

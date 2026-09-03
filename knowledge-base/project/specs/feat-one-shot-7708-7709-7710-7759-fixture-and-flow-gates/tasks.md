@@ -101,13 +101,16 @@ Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
       baseline is byte-identical to the state PR 1 left it in.
 - [ ] 2.12 Execute every row of Guard 1's mutation matrix and record the observed result.
 - [ ] 2.13 If grandfathering, file the burn-down issue with the measured count, per-family split and
-      largest holders.
+      largest holders. Do NOT add a `Mandated-By:` line: the exemption corpus holds only
+      `wg-block-pr-ready-on-undeferred-operator-steps`, and the gate's jq pass explicitly rejects a
+      claim naming an untagged rule. The 1:1 close/file offset already keeps the gate green.
 
 ## Phase 3 — PR 3: the gdpr-gate freshness instrument (#7710)
 
 Body carries `Closes #7710` and nothing else.
 
-- [ ] 3.1 Add frontmatter `lifted-files` entries for `references/layers/auth-sessions.md`,
+- [ ] 3.1 Verify by comparing `path:` VALUES against the body table, not counts — a count check passes
+      at 8 == 8 even with a typo'd or duplicated path. Add frontmatter `lifted-files` entries for `references/layers/auth-sessions.md`,
       `references/layers/frontend.md` and `references/layers/testing-seeding.md`, each with its
       `upstream-path`, the `upstream-blob-sha` already in the body table, a `local-blob-sha` from
       `git hash-object --no-filters`, and a `status`. Precondition to any attestation.
@@ -132,8 +135,9 @@ Body carries `Closes #7710` and nothing else.
       examined and matched. The line must NOT contain the substring `days stale`: `gdpr-gate.test.ts`
       asserts stdout does not match `/days stale/` on a fresh NOTICE, so a phrasing like "scan
       complete; rules N days stale" would red the suite for an unrelated reason. Stdout, not stderr.
-- [ ] 3.9 Assert the new line in both the matched and unmatched cases, in
-      `gdpr-gate-self-test.test.sh` and `gdpr-gate.test.ts`.
+- [ ] 3.9 Assert the new line in both the matched and unmatched cases, in BOTH
+      `gdpr-gate-self-test.test.sh` AND `gdpr-gate.test.ts` — Guard 2's assembly names both as members,
+      and asserting in only one leaves the other free to drift.
 - [ ] 3.10 Confirm the gate still exits 0 on every path and the 30-day and 90-day thresholds are
       unchanged. Do not relevance-gate the staleness banners.
 - [ ] 3.11 Execute Guard 2's mutation matrix and record the observed result.
@@ -160,7 +164,8 @@ Body carries `Closes #7759` and nothing else.
 - [ ] 4.6 Emit telemetry under a rule id distinct from the existing ones, and give any new failure
       branch its own `_fail_open` rule id.
 - [ ] 4.7 Report without blocking in this cycle.
-- [ ] 4.8 Add test cases: the measured PR #7702 shape; a second unattributed issue after an attributed
+- [ ] 4.8 Add test cases, all as synthesized fixtures (never a live query against the real pull
+      request, per `cq-test-fixtures-synthesized-only`): the measured PR #7702 shape; a second unattributed issue after an attributed
       first; an unrelated citation that must not be reported; a citation without a machine-filing
       marker that must not be reported.
 - [ ] 4.9 Add the arithmetic-isolation case — `NET` numerically unchanged on the #7702 fixture before
