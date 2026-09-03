@@ -123,16 +123,33 @@ exit code, and it distinguishes three outcomes rather than two:
 # never published, fails all three samples, and drives a FALSE rollback — the
 # exact failure CUT0' exists to remove. The run CONCLUSION is also the wrong
 # field here: after the cutover the GitHub Pages leg is red by construction
-# until PR5, so the run is red while the Pages leg is green. Read the job.
+# until PR5, so the run is red while the Pages leg is green.
+#
+# READ THE STEP, NOT THE JOB. `deploy-docs.yml` declares exactly ONE job, named
+# `deploy`; "Cloudflare Pages" is a STEP name inside it (`Deploy to Cloudflare
+# Pages`). An earlier form of this block filtered `.jobs[] | select(.name |
+# test("Cloudflare Pages"))`, which matches NOTHING at the job level — so
+# PF_SHA came back empty on every run, the guard below fired, and the operator
+# was told "do NOT proceed" while under the T+20 clock. Measured 2026-09-03:
+# job-level filter -> empty; step-level filter -> 223da596f. A derivation that
+# cannot produce a value is not a conservative default; it is a blocked
+# recovery. If `deploy-docs.yml` is ever split into per-leg jobs, this filter
+# moves back up a level — check `gh run view <id> --json jobs --jq
+# '.jobs[].name'` before assuming either shape.
+# Fail LOUD on a step rename rather than silently empty — silent-empty is the
+# defect this block just fixed, and a rename would reintroduce it identically.
+grep -q '^      - name: Deploy to Cloudflare Pages$' .github/workflows/deploy-docs.yml \
+  || echo "WARNING: deploy-docs.yml no longer declares a step named 'Deploy to Cloudflare Pages'. PF_SHA will come back EMPTY and the guard below will read as 'no successful build'. Fix the filter before proceeding."
+
 PF_SHA=$(gh run list --workflow=deploy-docs.yml --branch main --limit 20 \
            --json databaseId,headSha --jq '.[] | "\(.databaseId) \(.headSha)"' \
   | while read -r id sha; do
       if gh run view "$id" --json jobs \
-           --jq '[.jobs[] | select(.name | test("Cloudflare Pages"))
-                          | select(.conclusion == "success")] | length' \
+           --jq '[.jobs[].steps[] | select(.name == "Deploy to Cloudflare Pages")
+                                  | select(.conclusion == "success")] | length' \
          | grep -qv '^0$'; then printf '%s\n' "$sha"; break; fi
     done)
-[ -n "$PF_SHA" ] || { echo "no deploy-docs run with a successful Pages leg in the last 20 — do NOT proceed"; }
+[ -n "$PF_SHA" ] || { echo "no deploy-docs run with a successful Cloudflare Pages STEP in the last 20 — do NOT proceed"; }
 
 # CUTOVER_SINCE scopes CUT8 to checks taken AFTER the apply. Without it the
 # monitors' rolling window still contains the cutover's own propagation failures
