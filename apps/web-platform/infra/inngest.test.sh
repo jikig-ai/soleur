@@ -1573,6 +1573,8 @@ assert "no ExecStart --project remains in inngest-bootstrap.sh units (#6555)" \
 # exactly this reason; this sibling assertion had to move with it. The positive half is anchored on
 # the ExecStart line rather than the whole file, because the unit's comments legitimately discuss
 # the flag (a whole-file grep -qF is satisfied by that prose alone — measured).
+# shellcheck disable=SC2034  # consumed inside the single-quoted predicate `assert` evals below,
+# which shellcheck cannot follow. Kept as a variable rather than inlined so the join runs once.
 CUTOVER_FLIP_EXEC="$(sed -n '/^ExecStart=/,/[^\\]$/p' "$CUTOVER_FLIP_SERVICE" | sed 's/\\$//' | tr -d '\n')"
 assert "inngest-cutover-flip.service ExecStart has NO --project, continuations joined (#6555/#7761)" \
   "grep -qF 'doppler run --config prd' <<<\"\$CUTOVER_FLIP_EXEC\" && ! grep -qE 'ExecStart=.*--project' <<<\"\$CUTOVER_FLIP_EXEC\""
