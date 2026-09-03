@@ -249,12 +249,26 @@ gate_harness_selftest() {
   gate_check "SELFTEST (expected to fail)" _ghs_never_aborts 1 "reason=impossible" >/dev/null 2>&1 || _rc=$?
   [[ "${fails:-${fail_count:-0}}" -eq $((_f + 1)) ]] || _ok=0
 
+  local _ok_check="$_ok"
+
+  # gate_mutate_layered: hand it a sed expression that matches NOTHING. Its own byte-identical-copy
+  # arm must fire, which means recording a FAILURE. This drives the wrapper without needing a real
+  # mutation, and it exercises the `cmp -s` guard that every layered row depends on.
+  _ok=1
+  gate_mutate_layered "SELFTEST (expected to fail)" 's|__GHS_MATCHES_NOTHING_XYZZY__|:|' \
+    "__ghs_own__" "__ghs_fallback__" _ghs_never_aborts >/dev/null 2>&1 || true
+  [[ "${fails:-${fail_count:-0}}" -eq $((_f + 2)) ]] || _ok=0
+
   passes="$_p"; fails="$_f"; pass_count="$_p"; fail_count="$_f"
   unset -f _ghs_never_aborts
-  if [[ "$_ok" -ne 1 ]]; then
+  if [[ "$_ok_check" -ne 1 ]]; then
     printf '  FAIL INSTRUMENT: gate_check() did not record a failure on a must-fail arm — every gate_check assertion in this suite is decorative.\n' >&2
     return 1
   fi
-  printf '  ok   instrument: gate_check() discriminates\n'
+  if [[ "$_ok" -ne 1 ]]; then
+    printf '  FAIL INSTRUMENT: gate_mutate_layered() did not record a failure on a mutation that cannot land — every layered assertion in this suite is decorative.\n' >&2
+    return 1
+  fi
+  printf '  ok   instrument: gate_check() and gate_mutate_layered() both discriminate\n'
   return 0
 }
