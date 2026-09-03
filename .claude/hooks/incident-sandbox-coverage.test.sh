@@ -36,28 +36,35 @@ if [ $((PASS-_p)) -ne 1 ] || [ $((FAIL-_f)) -ne 1 ]; then
 fi
 PASS=$_p; FAIL=$_f
 
-# --- 1. every emitting suite sources the sandbox -----------------------------
+# --- 1. EVERY hook suite sources the sandbox --------------------------------
+# No filename pairing. An earlier revision derived the population as
+# `*.test.sh` whose sibling `*.sh` emits — and `security_reminder_hook` is a
+# `.py`, so it fell outside the population, kept writing the real ledger, AND
+# was invisible to this guard, which used the same enumeration. A population
+# derived by naming convention silently excludes whatever does not follow it.
+# Requiring it of every suite costs nothing (the helper is inert for a suite
+# that never emits) and has no such blind spot.
 missing=""; population=0
 for t in "$HERE"/*.test.sh; do
-  h="${t%.test.sh}.sh"
-  [ -f "$h" ] || continue
-  grep -qE 'emit_incident|incidents\.sh' "$h" 2>/dev/null || continue
+  [ "$(basename "$t")" = "incident-sandbox-coverage.test.sh" ] && continue
   population=$((population+1))
   grep -q 'test-incident-sandbox\.sh' "$t" 2>/dev/null || missing="${missing} $(basename "$t")"
 done
 rc=1; [ -z "$missing" ] && rc=0
-verdict "$rc" "every incident-emitting hook suite sources the sandbox helper${missing:+ (missing:$missing)}"
+verdict "$rc" "every hook suite sources the sandbox helper${missing:+ (missing:$missing)}"
 
 # --- 2. the population is non-empty ------------------------------------------
 # Without this, deleting the enumeration above leaves case 1 vacuously green.
-rc=1; [ "$population" -ge 20 ] && rc=0
-verdict "$rc" "the enumeration found a real population ($population emitting suites, floor 20)"
+rc=1; [ "$population" -ge 40 ] && rc=0
+verdict "$rc" "the enumeration found a real population ($population suites, floor 40)"
 
 # --- 3. the helper actually redirects ----------------------------------------
 REAL="$HERE/../.rule-incidents.jsonl"
 [ -f "$REAL" ] || : > "$REAL" 2>/dev/null || true
 before=$(wc -l < "$REAL" 2>/dev/null || echo 0)
-( . "$HERE/lib/test-incident-sandbox.sh"
+( # shellcheck source=/dev/null
+  . "$HERE/lib/test-incident-sandbox.sh"
+  # shellcheck source=/dev/null
   . "$HERE/lib/incidents.sh" 2>/dev/null || exit 0
   emit_incident sandbox-probe warn "probe" "cmd" ) >/dev/null 2>&1
 after=$(wc -l < "$REAL" 2>/dev/null || echo 0)
@@ -70,6 +77,7 @@ verdict "$rc" "an emit under the helper leaves the real ledger untouched ($befor
 SB=$(mktemp -d -t sbctl-XXXXXX)
 mkdir -p "$SB/.claude"
 ( INCIDENTS_REPO_ROOT="$SB" ; export INCIDENTS_REPO_ROOT
+  # shellcheck source=/dev/null
   . "$HERE/lib/incidents.sh" 2>/dev/null || exit 0
   emit_incident sandbox-probe warn "probe" "cmd" ) >/dev/null 2>&1
 n=$(wc -l < "$SB/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)
