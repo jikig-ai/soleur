@@ -385,6 +385,16 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
+# THE FLOOR IS PROJECTED, NOT MEASURED, and that is stated because it matters on the first run.
+# This suite needs root (losetup/cryptsetup/mkfs) and has never executed on the authoring machine,
+# so the number below was derived statically: 28 inline assertions + 6 `run_arm` calls + 7
+# `guard_case` calls x 2 (the case plus its render check) = 48, of which at most 4 sit in
+# mutually-exclusive branches (the BOOT2 mount block). 44 leaves that headroom.
+#
+# If the FIRST CI run reds here and nowhere else, that is a calibration miss in this projection,
+# not a defect in the arms — read the printed count, confirm no arm reported FAIL, and set the
+# floor to the measured value. Do NOT lower it to whatever ran without checking that: a floor
+# lowered to match a suite that silently lost arms is the failure this line exists to catch.
 if [ "$executed" -lt 44 ]; then
   fail=$((fail + 1))
   printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 44. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
