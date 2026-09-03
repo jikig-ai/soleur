@@ -420,8 +420,21 @@ expect "[M4d] http_code= (present, empty) => unreadable"     unreadable   "$TMP/
 # answers `host_serving` — a different verdict, read off the filesystem.
 mkdir -p "$TMP/globcwd" && : > "$TMP/globcwd/server_active=active"
 mk_rows "$TMP/rows-m5.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg -server_active image_ref='*')")"
-( cd "$TMP/globcwd" && expect "[M5] an absent field is NOT supplied by globbing the CWD" unreadable "$TMP/rows-m5.json" "$FIN" ) \
-  && pass || fail "[M5] an absent field is NOT supplied by globbing the CWD" 0 ""
+# RUN THE GATE IN THE SUBSHELL, ASSERT IN THE PARENT. The previous form was
+#   ( cd … && expect … ) && pass || fail …
+# which could not fail: `expect`'s counter increments died with the subshell, and `fail()` ends in
+# `return 0`, so the subshell exited 0 whichever way the comparison went and `&& pass` always ran.
+# One unconditional pass, credited against the anti-vacuity floor — the exact class this file's
+# own wrapper self-test exists to catch, in the one arm that routed around the wrapper.
+_m5_out="$( cd "$TMP/globcwd" && inngest_host_dark_gate \
+  --rows-file "$TMP/rows-m5.json" --query-rc 0 --finished-file "$FIN" --finished-rc 0 \
+  --expected-volume-id "$VOLID" --live-attachment-id "$VOLID" --followthrough-rc 0 \
+  --cutover-flag rolled-back --diagnostic-boot unset --now-epoch "$NOW" 2>&1 )" && _m5_rc=0 || _m5_rc=$?
+if [[ "$(printf '%s\n' "$_m5_out" | tail -1)" == "unreadable" && "${_m5_rc:-0}" -ne 0 ]]; then
+  pass
+else
+  fail "[M5] an absent field is NOT supplied by globbing the CWD" "${_m5_rc:-0}" "$_m5_out"
+fi
 
 # M6 — a dt TIE between two DISAGREEING rows. The verdict was a function of the caller's row
 # order: bad-then-good gave `dark`, good-then-bad gave `host_serving`. Both orders must refuse.

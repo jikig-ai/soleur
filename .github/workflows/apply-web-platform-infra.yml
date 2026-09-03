@@ -2323,7 +2323,7 @@ jobs:
             echo "**Pinned volume id:** ${EXPECTED_INNGEST_VOLUME_ID:-n/a}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            echo "Guard 2 (host dark + store measured empty, 20 predicates) ran BEFORE the plan; Guard 1 graded the plan; both id-pins were checked against independent sources (the live Hetzner volume resolved by NAME and asserted attached to the inngest server, and the plan's before.id)."
+            echo "Guard 2 (host dark + store measured empty, 20 predicates) ran BEFORE the plan; Guard 1 graded the plan; both id-pins were checked against independent sources (the live Hetzner volume resolved by NAME (an id lookup only; what the host actually mounted is G14's data_mount_src), and the plan's before.id)."
             echo ""
             echo "The replacement volume is RAW. **This dispatch does not encrypt anything by itself, and it does not finish the cutover.**"
             echo ""

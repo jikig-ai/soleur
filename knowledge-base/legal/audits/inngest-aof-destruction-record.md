@@ -45,7 +45,7 @@ doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
 | **Date/time of destruction (UTC)** | _(fill: the `terraform apply` step's completion time)_ | the dispatch run's own log |
 | **Dispatch run URL** | _(fill)_ | GitHub Actions run |
 | **Authorizing reviewer** | _(fill: the GitHub user who approved the `inngest-cutover` environment)_ | the environment approval record — this is the SOLE authorization (DP-11 F8) |
-| **Physical volume id destroyed** | _(fill)_ | `expected_inngest_volume_id` dispatch input, pinned by Guard 1 against `.change.before.id` AND by Guard 2 against the live Hetzner volume resolved by NAME (and asserted attached to the inngest server) |
+| **Physical volume id destroyed** | _(fill)_ | `expected_inngest_volume_id` dispatch input, pinned by Guard 1 against `.change.before.id` AND by Guard 2 against the live Hetzner volume resolved by NAME (an id lookup only — the attachment property is carried by G14's `data_mount_src`, not by this read) |
 | **`redis_keys` on the authorizing row** | _(fill — MUST be `0`)_ | the probe row. Any other value means the dispatch was not authorized and this record should not exist |
 | **`data_bytes` on the authorizing row** | _(fill)_ | the probe row. **The audit field.** An empty keyspace on a volume holding megabytes is a state a human should have seen before it was erased — record it whatever it says |
 | **`data_mount_src` on the authorizing row** | _(fill)_ | the probe row. Proves the emptiness measured was about the DEVICE destroyed, not about a Redis process whose `dir` had silently landed on the root disk |
