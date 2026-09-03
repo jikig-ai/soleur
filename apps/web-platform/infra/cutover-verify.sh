@@ -217,9 +217,21 @@ printf '\ncutover-verify (ADR-194 apex cutover) — apex=%s expected_sha=%s\n\n'
 # Fetch headers+body once per URL. `HTTPCODE=` is emitted by -w so an empty
 # response is distinguishable from a 200 with no body.
 NONCE="$(date -u +%s)-$$-${RANDOM}"
+
+# ONE owning trap for every tempfile this script allocates (ADR-129). `fetch` is
+# called ~20 times and removes its own body file on both paths, but a SIGINT
+# between allocation and removal would leak one per interrupted run — and this
+# script is run repeatedly, under time pressure, during a cutover window.
+# TMPDIR defaults to /var/tmp so a direct invocation does not land in the
+# machine-global /tmp tmpfs that parallel worktrees share.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+CUTOVER_TMPDIR="$(mktemp -d -t cutover-verify.XXXXXXXX)" || {
+  printf '[FATAL] could not create a scratch directory\n' >&2; exit 2; }
+trap 'rm -rf "$CUTOVER_TMPDIR"' EXIT INT TERM HUP
+
 fetch() { # <url> -> "code<TAB>headers<TAB>body" via globals; rc 1 on transport failure
   local url="$1" sep
-  sep="$(mktemp)" || return 1
+  sep="$(mktemp -p "$CUTOVER_TMPDIR")" || return 1
   if ! FETCH_HEADERS="$(curl -sS -D - -o "$sep" --max-time "$CURL_MAX_TIME" \
         -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
         -w 'HTTPCODE=%{http_code}\n' "$url" 2>/dev/null)"; then
@@ -273,8 +285,11 @@ if fetch "https://${APEX}/?cb=${NONCE}"; then
   fi
 else
   row CUT1 UNREACHABLE "transport failure fetching the apex root"
-  row CUT2 UNREACHABLE "not evaluated — the apex root was unreachable"
-  row CUT6 UNREACHABLE "not evaluated — the apex root was unreachable"
+  # MEASURED-BY: the `fetch` above returned non-zero, i.e. curl did not complete
+  # the request. These two rows read that response, so they were not evaluated —
+  # this states what the run observed, not why the apex was unreachable.
+  row CUT2 UNREACHABLE "not evaluated — the apex root fetch did not complete"
+  row CUT6 UNREACHABLE "not evaluated — the apex root fetch did not complete"
 fi
 
 # --- CUT3 / CUT4: www canonicalization, WITHOUT following the redirect ------------------
@@ -382,7 +397,11 @@ while IFS=$'\t' read -r mname mstate; do
       [[ -r "$MONITOR_BASELINE" ]] && base_state="$(grep -F "$mname"$'\t' "$MONITOR_BASELINE" 2>/dev/null | head -1 | cut -f2)"
       if [[ "$base_state" == "unhealthy" ]]; then
         preexisting=$((preexisting + 1))
-        printf '           pre-existing: %s was ALREADY unhealthy at baseline — not caused by this cutover\n' "$mname"
+        # MEASURED-BY: this monitor's row in $MONITOR_BASELINE, captured before
+        # the cutover, records `unhealthy`. That is evidence the failure PREDATES
+        # the cutover; it is not evidence about what caused it, and this message
+        # deliberately does not claim one.
+        printf '           pre-existing: %s was already unhealthy in the pre-cutover baseline (%s)\n' "$mname" "$MONITOR_BASELINE"
       else
         regressions=$((regressions + 1))
         printf '           REGRESSION: %s is unhealthy (baseline: %s)\n' "$mname" "${base_state:-<no baseline>}"

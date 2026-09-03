@@ -157,7 +157,11 @@ case "$MODE" in
     validate_inputs
     command -v gh >/dev/null || die "gh is not available"
     BRANCH="rollback-apex-cutover-$(date -u +%Y%m%d-%H%M%S)"
-    MSG_FILE="$(mktemp)" || die "mktemp failed"
+    # Owning trap (ADR-129): this path pushes and opens a PR, so any of the
+    # `die`s below can exit between allocation and the `rm -f` at the end.
+    export TMPDIR="${TMPDIR:-/var/tmp}"
+    MSG_FILE="$(mktemp -t apex-rollback-msg.XXXXXXXX)" || die "mktemp failed"
+    trap 'rm -f "$MSG_FILE"' EXIT INT TERM HUP
     git -C "$REPO_ROOT" checkout -b "$BRANCH" || die "could not create $BRANCH"
     emit_tf "$DNS_TF" yes
     emit_commit_msg "$MSG_FILE"
