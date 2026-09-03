@@ -122,14 +122,15 @@ describe("model-tiers registry — #5106", () => {
   // the committed rates with their source; a genuine price change must update
   // it deliberately rather than drifting in unnoticed.
   //
-  // "committed" not "published": the sonnet row intentionally holds the
-  // POST-INTRO rate while introductory pricing runs through 2026-08-31 (#6942),
-  // so for sonnet this pins the deliberate choice, not today's billed price.
+  // The sonnet row previously held the scheduled POST-INTRO rate ($3/$15) on
+  // purpose (#6942), so it would become correct on 2026-09-01 with no second
+  // edit. Anthropic then CANCELLED that increase: $2/$10 is now the standard
+  // price and the Sep-1 rise will not occur. Committed and published rates
+  // therefore agree again — this pins today's billed price.
   //
-  // Source: https://platform.claude.com/docs/en/about-claude/pricing.md (2026-07-24)
+  // Source: https://platform.claude.com/docs/en/about-claude/pricing.md (2026-09-03)
   //   Haiku 4.5   $1 / $5    cache-read $0.10  5m cache-write $1.25
-  //   Sonnet 5    $3 / $15   cache-read $0.30  5m cache-write $3.75  (post-intro;
-  //               introductory $2/$10 applies through 2026-08-31)
+  //   Sonnet 5    $2 / $10   cache-read $0.20  5m cache-write $2.50
   it("MODEL_PRICING values match the committed per-MTok rates", () => {
     const M = 1_000_000;
     expect(MODEL_PRICING[HAIKU_MODEL]).toEqual({
@@ -139,10 +140,10 @@ describe("model-tiers registry — #5106", () => {
       cacheCreatePerToken: 1.25 / M,
     });
     expect(MODEL_PRICING[SONNET_MODEL]).toEqual({
-      inputPerToken: 3 / M,
-      outputPerToken: 15 / M,
-      cacheReadPerToken: 0.3 / M,
-      cacheCreatePerToken: 3.75 / M,
+      inputPerToken: 2 / M,
+      outputPerToken: 10 / M,
+      cacheReadPerToken: 0.2 / M,
+      cacheCreatePerToken: 2.5 / M,
     });
   });
 

@@ -1151,6 +1151,18 @@ After emitting the marker, the calling skill's continuation gate takes over — 
    genuinely the constraint, say so and continue anyway; `/clear` is the
    operator's choice to make, never a precondition you impose on finishing.
 
+   **"CI is running" is NOT a handoff, and it is the shape this step actually
+   fails as.** The deferral does not announce itself as one — it reads as a
+   status report with a clean summary, so nothing feels skipped. But a pending
+   check is not a turn boundary: the trailer (step 3), `/compound` and `/ship`
+   all run while CI runs, and ship has its own gate for the result. If the turn
+   ends with findings fixed, a pushed branch and prose about what CI will say,
+   the pipeline stopped — emit the trailer and continue in the same turn.
+   **Why:** #7774 — a review round fixed 8 findings, pushed, reported "CI is
+   running", and ended; the trailer (explicitly "ALWAYS — not conditional on
+   step 2", and the boolean `/ship` reads) was never emitted, and the operator
+   had to ask "why did you stop?".
+
    The only sanctioned pause is an irreversible production effect
    (`hr-menu-option-ack-not-prod-write-auth`) — surface the exact command and
    stop. A pending merge is not that.
