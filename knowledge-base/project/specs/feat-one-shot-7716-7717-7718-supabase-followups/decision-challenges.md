@@ -68,7 +68,7 @@ re-read it against #7670's head before editing. Reason 4's schedule inheritance 
 the bundle.
 
 Scope ownership is recorded in the plan's §Scope table; this branch's `tasks.md` carries the
-in-scope list only, and Phases 2–6 remain recoverable verbatim from `git show f8d4cd787`.
+in-scope list only, and Phases 2–6 are preserved verbatim in that file's §Deferred to the follow-on PR section.
 
 ---
 

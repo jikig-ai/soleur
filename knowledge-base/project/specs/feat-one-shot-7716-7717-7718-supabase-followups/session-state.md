@@ -58,7 +58,8 @@
 
 - Status: Phase 0, 1 and the W6 slice of Phase 7 complete. Phase 8 sweep run.
 - Scope: W6 only (#7717) per the operator's DC-1 resolution. #7716 + #7718 + #6489 carry to a
-  follow-on PR against the same plan; Phases 2-6 recoverable from `git show f8d4cd787`.
+  follow-on PR against the same plan; Phases 2-6 preserved in tasks.md §Deferred to the
+  follow-on PR (not behind a branch SHA — ship squash-merges, so none survives in main).
 
 ### Acceptance criteria — W6 block
 AC1-AC13 verified by running each criterion's LITERAL command (not a normalized variant).
