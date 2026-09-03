@@ -118,6 +118,36 @@ drop-one floor counted CALLS, so twenty `predicate G1` lines would have satisfie
 Whatever mechanism proves the arms ran, drive it in the direction that must FAIL and roll the
 counters back.
 
+**A SUITE THAT HAS NEVER EXECUTED IS NOT EVIDENCE, AND ITS FIRST RUN IS A MEASUREMENT.** The
+loopback tier needs root, which the authoring machine does not have, so it shipped read-but-never-
+run. Its first CI execution found a PRODUCTION defect that no amount of reading had caught: the
+LUKS stage arms `trap luks_err EXIT`, deliberately never disarms it (correctly — disarming would
+make the rc guard unreachable), and the handler ended in an unconditional `exit 1`. Every
+successful stage therefore re-entered the handler, phoned home `inngest-luks-FAILED`, and exited 1
+— on every healthy boot, on a host with no SSH and no console. The three mount arms each did their
+work correctly and each returned rc 1, which is exactly the signature that only execution produces.
+Corollary: the same run also proved the suite could not have passed as written (arm labels with
+spaces used as directory names), so "it is registered and will run in CI" was two separate
+untested claims.
+
+**A CLOCK IN A PREDICATE IS A CLOCK IN EVERY FIXTURE.** Adding a wall-clock recency bound to the
+gate turned every fixture dated at a fixed hour into a time bomb: arms passed in the morning and
+failed in the afternoon with no edit between. The visible casualty was one assertion. The
+dangerous one was the mutation harness, where the CONTROL ran through the pinned helper and the
+MUTATED run called the gate directly: the mutated verdict drifted to `stale_row`, which differs
+from the expected token — precisely what the harness treats as "the mutation changed the verdict".
+Every row was passing on the clock rather than on the neutered check. When a predicate gains a
+dependency on ambient state, pin it at EVERY call site and add an arm that asserts none was
+missed; a helper that pins it is not enough, because the calls that bypass the helper are exactly
+the ones written to bypass its defaults.
+
+**"REGISTERED" CAN MEAN TWO LISTS.** A new suite needed an entry in the registration gate's
+EXCLUSIONS *and* in a separate enumerated ratchet in a different file. The first says "this may be
+registered in a form the deriver cannot read"; the second says "and here is the exact set in that
+state". Satisfying one says nothing about the other, and the local gate for the first passed while
+CI reddened on the second. Grep for a SIBLING already in the state you are creating and check
+every file that names it — the sibling's entries are the map of what registration actually means.
+
 **A drop-one battery is structurally blind to the too-aggressive direction.** All twenty cases
 assert a refusal, so a gate hardened into "refuse everything" passes all of them — and a gate that
 passes its tests while refusing the operator is still broken. Twelve guard mutations survived both
