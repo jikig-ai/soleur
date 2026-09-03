@@ -516,10 +516,20 @@ LATCH_REQUIRE_MOUNT="${INNGEST_CUTOVER_LATCH_MOUNT-/mnt/data}"
 #
 # Fails CLOSED: a `stat` that cannot answer returns 1 (not a mount), so an unreadable path aborts
 # `latch-unrecordable` rather than authorizing a flush.
+# `-L` (dereference) is NOT optional, and it is the one place this predicate could have silently
+# CHANGED behaviour rather than preserved it. GNU `stat` lstat()s by default, so without `-L` a
+# symlinked mount point reads the DEVICE OF THE LINK INODE — the root filesystem — while `$p/..`
+# resolves through the link to the real parent, also root. Equal devices, so the predicate would
+# answer "not a mount" for a volume that IS mounted, and the FSM would abort `latch-unrecordable`
+# on every fire forever. `mountpoint(1)`, which this replaces, dereferences; `-L` is what keeps
+# the swap behaviour-preserving instead of trading one silent failure for another.
+# Not reachable on today's host — cloud-init-inngest.yml does `mkdir -p /mnt/data` and mounts the
+# Hetzner volume AT that path, so it is a real directory — but the seam is settable and the cost
+# is one flag.
 is_real_mount() {
   local p="$1" d pd
-  d="$(stat -c %d "$p" 2>/dev/null)" || return 1
-  pd="$(stat -c %d "$p/.." 2>/dev/null)" || return 1
+  d="$(stat -L -c %d "$p" 2>/dev/null)" || return 1
+  pd="$(stat -L -c %d "$p/.." 2>/dev/null)" || return 1
   [[ -n "$d" && -n "$pd" && "$d" != "$pd" ]]
 }
 

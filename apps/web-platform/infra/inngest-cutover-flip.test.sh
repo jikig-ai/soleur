@@ -999,15 +999,141 @@ UNIT_EXEC="$(sed -n '/^ExecStart=/,/[^\\]$/p' "$UNIT_SRC" | sed 's/\\$//' | tr -
 assert_absent "the SHIPPED unit does not pass --fixture-seams (that would disable the gate)" \
   "$UNIT_EXEC" "--fixture-seams"
 
+# --- #7761 REVIEW ROUND 2: what the sandboxing block can still break at runtime ---------------
+#
+# Three of these come from a pre-ship completeness consult that read the diff cold. Each names a
+# way the unit dies on EVERY 30-second fire on a fresh host while every existing assertion,
+# `systemd-analyze verify` and the whole guard suite stay green — the class this unit's own
+# comment calls "wrong twice", one level up.
+
+# (1) EVERY DEFAULT WRITE TARGET MUST LIE INSIDE THE UNIT'S WRITABLE SET. `ProtectSystem=strict`
+# makes the whole tree read-only except what the unit names, and the script's three absolute
+# defaults are spread across ~330 lines of an 730-line file, so the coupling is invisible at the
+# edit site. Getting it wrong is not a failed write: two of the three are written before the ERR
+# trap is installed, so the script exits silently with no marker.
+#
+# DERIVED ON BOTH SIDES — the targets from the script by shape, the writable set from the unit —
+# so adding a fourth write target, or dropping a ReadWritePaths entry, reds this without anyone
+# remembering to update a list.
+echo "TEST: #7761 every default write target lies inside the unit's writable set"
+WRITABLE_SET="$(grep -E '^ReadWritePaths=' "$UNIT_SRC" | sed 's/^ReadWritePaths=//' | tr ' ' '\n' | sed 's/^-//' | grep -v '^$' || true)"
+# StateDirectory=NAME is systemd's own /var/lib/NAME, created and rw-mounted by systemd itself.
+STATE_DIR_NAME="$(grep -E '^StateDirectory=' "$UNIT_SRC" | sed 's/^StateDirectory=//' || true)"
+if [[ -n "$STATE_DIR_NAME" ]]; then
+  WRITABLE_SET="$(printf '%s\n/var/lib/%s\n' "$WRITABLE_SET" "$STATE_DIR_NAME")"
+fi
+# Comment-stripped: this file and the script both DISCUSS these paths in prose, and an extractor
+# that reads raw source is satisfiable by a comment (this PR shipped that defect twice already).
+WRITE_TARGETS="$(grep -vE '^[[:space:]]*#' "$TARGET" \
+  | grep -oE '^[A-Z_]+="\$\{[A-Z_]+:?-/[^}"]+\}"' \
+  | grep -oE '/[^}"]+' || true)"
+# LATCH_REQUIRE_MOUNT is a mount to TEST, not a path to write; drop it by exact value.
+WRITE_TARGETS="$(printf '%s\n' "$WRITE_TARGETS" | grep -vxF '/mnt/data' | grep -v '^$' || true)"
+WT_COUNT="$(printf '%s\n' "$WRITE_TARGETS" | grep -c '^/' || true)"
+# A FLOOR on the extraction itself. Without it a regex that matches nothing passes the loop below
+# vacuously — the exact shape review found in this PR's other two extractors.
+if [[ "$WT_COUNT" -ge 3 ]]; then
+  pass "extracted ${WT_COUNT} absolute write-target defaults from the script (>=3)"
+else
+  fail "extracted only ${WT_COUNT} write-target defaults — the extractor is broken, not the script"
+fi
+while IFS= read -r _wt; do
+  [[ -n "$_wt" ]] || continue
+  _covered=no
+  while IFS= read -r _w; do
+    [[ -n "$_w" ]] || continue
+    case "$_wt" in "$_w"/*) _covered=yes ;; esac
+  done <<< "$WRITABLE_SET"
+  if [[ "$_covered" == yes ]]; then
+    pass "write target ${_wt} is inside the unit's writable set"
+  else
+    fail "write target ${_wt} is NOT under ReadWritePaths= or StateDirectory= — ProtectSystem=strict makes it read-only"
+  fi
+done <<< "$WRITE_TARGETS"
+unset _wt _w _covered
+
+# (2) THE UNIT MUST NOT SET A SEAM IN Environment=. The gate unsets all fifteen seam names when
+# argv lacks --fixture-seams, and it cannot tell an attacker-supplied value from an operator's.
+# So an `Environment=INNGEST_CUTOVER_LATCH_MOUNT=/mnt/data` on the unit would be silently
+# discarded, the script would fall back to its default, and the unit would log SEAM_REFUSED every
+# 30 seconds — a configuration channel that looks wired and is not. The seam list is read from
+# the SCRIPT's gate (the contract), never re-transcribed here.
+echo "TEST: #7761 the unit does not set any gated seam in Environment="
+# The LAST name in the list carries no trailing backslash, so a regex that requires one silently
+# drops it — and the dropped name is whichever seam happens to sort last. Match the continuation
+# as OPTIONAL and floor the count at the full fifteen.
+GATE_SEAMS="$(sed -n '/^  for _seam in/,/^  do$/p' "$TARGET" | grep -oE '^[[:space:]]+[A-Z_]+[[:space:]]*\\?$' | tr -d ' \\' | grep -v '^$' || true)"
+GS_COUNT="$(printf '%s\n' "$GATE_SEAMS" | grep -c '^[A-Z]' || true)"
+if [[ "$GS_COUNT" -ge 15 ]]; then
+  pass "read ${GS_COUNT} seam names out of the gate itself (>=15)"
+else
+  fail "read only ${GS_COUNT} of 15 seam names out of the gate — the extractor is broken"
+fi
+UNIT_ENV="$(grep -E '^Environment=' "$UNIT_SRC" || true)"
+_env_seam_hits=0
+while IFS= read -r _s; do
+  [[ -n "$_s" ]] || continue
+  if printf '%s\n' "$UNIT_ENV" | grep -qE "^Environment=${_s}="; then
+    _env_seam_hits=$((_env_seam_hits + 1))
+    echo "    unit sets gated seam: ${_s}"
+  fi
+done <<< "$GATE_SEAMS"
+if [[ "$_env_seam_hits" -eq 0 ]]; then
+  pass "no Environment= line names a gated seam (it would be silently unset every fire)"
+else
+  fail "${_env_seam_hits} Environment= line(s) name a gated seam — the gate will discard them"
+fi
+unset _s _env_seam_hits
+
+# (3) THE PINNED DOPPLER CLI MUST SUPPORT THE FLAGS THE UNIT PASSES. `--only-secrets` is the
+# PRIMARY control for #7761, and an older CLI rejects an unknown flag outright — so a downgrade of
+# DOPPLER_VERSION in cloud-init would not weaken the bound, it would stop the unit dead on every
+# fire, on the one host with no inbound channel. Nothing else couples the two files.
+#
+# The floor is stated for what it IS: the version this was MEASURED against on 2026-09-03
+# (`doppler run --help` on 3.75.3 lists both flags), not the release the flags first shipped in —
+# that is unmeasured here and is not claimed.
+echo "TEST: #7761 the pinned Doppler CLI supports the flags the unit passes"
+CI_INNGEST="$SCRIPT_DIR/cloud-init-inngest.yml"
+PINNED_DOPPLER="$(grep -oE 'DOPPLER_VERSION="[0-9]+\.[0-9]+\.[0-9]+"' "$CI_INNGEST" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+DOPPLER_FLOOR="3.75.3"
+if [[ -n "$PINNED_DOPPLER" ]]; then
+  pass "cloud-init-inngest.yml pins a Doppler CLI version (${PINNED_DOPPLER})"
+else
+  fail "could not read DOPPLER_VERSION out of cloud-init-inngest.yml — the coupling is unasserted"
+fi
+if [[ -n "$PINNED_DOPPLER" ]] \
+   && [[ "$(printf '%s\n%s\n' "$DOPPLER_FLOOR" "$PINNED_DOPPLER" | sort -V | head -1)" == "$DOPPLER_FLOOR" ]]; then
+  pass "pinned Doppler ${PINNED_DOPPLER} >= ${DOPPLER_FLOOR}, the version --only-secrets was measured on"
+else
+  fail "pinned Doppler ${PINNED_DOPPLER:-<none>} is below ${DOPPLER_FLOOR} — the unit's --only-secrets bound may not parse"
+fi
+
+# (4) is_real_mount MUST DEREFERENCE. GNU stat lstat()s by default, so on a symlinked mount point
+# the predicate would read the link inode's device (root fs) against a parent that also resolves
+# to root, answer "not a mount", and abort latch-unrecordable forever. `mountpoint(1)`, which this
+# replaced, dereferences — without -L the swap is a silent behaviour change, not a fix.
+echo "TEST: #7761 is_real_mount dereferences symlinks"
+IRM_BODY="$(sed -n '/^is_real_mount() {/,/^}/p' "$TARGET")"
+IRM_STATS="$(printf '%s\n' "$IRM_BODY" | grep -c 'stat -L -c %d' || true)"
+if [[ "$IRM_STATS" -eq 2 ]]; then
+  pass "both stat calls in is_real_mount pass -L (parity with the mountpoint(1) it replaced)"
+else
+  fail "is_real_mount has ${IRM_STATS} dereferencing stat calls, expected 2"
+fi
+
 # --- S8: an assertion-count FLOOR ----------------------------------------------------------
 # Every suite here gates only on FAIL. Deleting a whole test block drops the PASS count and
 # still exits 0, so "all assertions passed" and "fewer assertions ran" are the same signal.
 # A FLOOR, never -eq: adding tests must not red the suite.
 # 102 -> 138: +24 for the #7761 seam-gate block (tripwire, companion assertion, position/predicate/
 # pre-trap-window shape, the four behavioural refusal + must-PASS cases), then +12 for the
-# unit sandboxing-shape block review found pinned by nothing. Derived from a green run, never
-# guessed; raise in lockstep when adding tests.
-MIN_ASSERTIONS=138
+# unit sandboxing-shape block review found pinned by nothing.
+# 138 -> 147: +9 for the review-round-2 block — write-target containment (1 extractor floor + one
+# per target), Environment=/seam disjointness (1 extractor floor + 1), the pinned-Doppler-CLI
+# coupling (2), and the is_real_mount dereference (1). Derived from a green run, never guessed;
+# raise in lockstep when adding tests.
+MIN_ASSERTIONS=147
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
