@@ -1286,8 +1286,10 @@ if want_scripts; then
   run_suite "scripts/tenant-dpa-register-guard-unit" bash scripts/tenant-dpa-register-guard.test.sh
   run_suite "scripts/tenant-dpa-register-guard-live" bash scripts/tenant-dpa-register-guard.sh count-signed
   run_suite "scripts/lint-legal-registers-unit" bash scripts/lint-legal-registers.test.sh
-  # ADVISORY FOR ONE MERGE CYCLE (#7717). The live arm is the first corpus-level lint over
-  # knowledge-base/legal/**, so its scope was DESIGNED rather than measured. --advisory reports
+  # ADVISORY FOR ONE MERGE CYCLE (#7717). The live arm is the first lint over the legal
+  # REGISTER FILES (not over knowledge-base/legal/** -- lint-infra-no-human-steps.py already
+  # scans legal/runbooks; no lint covered the registers). Its scope was DESIGNED rather than
+  # measured. --advisory reports
   # findings as warnings and exits 0; it does NOT downgrade a fail-closed refusal (rc=2), which
   # is what keeps "I could not decide" distinguishable from "nothing to report".
   # PROMOTION: delete the --advisory flag on the next line. Trigger: one green merge cycle with

@@ -72,9 +72,12 @@ rather than rhetorical.
 **Expressly excluded — screening outputs.** A post-incident review generated from
 `plugins/soleur/skills/incident/templates/pir.md` carries `art_33_triggered:` frontmatter.
 Where that field reads `false` on an availability-only or credential-only incident, it is a
-**screening output, not a determination**, and is not indexed. Measured 2026-09-03: 115 files
-repo-wide carry `art_33_triggered` frontmatter, 102 of them post-mortems generated from that
-template. Indexing screening outputs would bury four determinations in a hundred routine
+**screening output, not a determination**, and is not indexed. Measured 2026-09-03 on `main`:
+**102** post-mortems under `knowledge-base/engineering/operations/post-mortems/` carry
+`art_33_triggered`, unchanged at this PR's HEAD. (A repo-wide total is deliberately not quoted:
+it counts plans, specs, this ADR and the guard's own source, so any PR discussing the field moves
+it — including this one, which took it from 115 to 119. The post-mortem count is the figure the
+predicate turns on, and it is stable.) Indexing screening outputs would bury four determinations in a hundred routine
 negatives.
 
 **Expressly excluded — prospective clearances.** A review concluding that a *planned change*

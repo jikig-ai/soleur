@@ -11,7 +11,8 @@
 # THREE ASSERTIONS.
 #
 #   (a) TOKEN CLASS, scoped to the REGISTER FILES -- not the whole corpus.
-#       `knowledge-base/legal/audits/` is a WORKING-DOCUMENT tree: 41 counsel reviews that
+#       `knowledge-base/legal/audits/` is a WORKING-DOCUMENT tree: 41 counsel reviews on `main`
+#       at 2026-09-03 (42 at this PR's HEAD, which adds one) that
 #       legitimately use an unresolved marker for an open counsel question. A corpus-wide gate
 #       would red the required context on every future counsel review, and would contradict
 #       assertion (c) below, which deliberately scopes its own producer to `audits/**`. One
@@ -75,8 +76,11 @@ readonly REPO_ROOT
 ADVISORY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    # ADVISORY FOR ONE MERGE CYCLE (#7717). This is the first corpus-level lint over
-    # knowledge-base/legal/**, so its scope was DESIGNED rather than measured. One cycle
+    # ADVISORY FOR ONE MERGE CYCLE (#7717). This is the first lint over the legal REGISTER
+    # FILES -- narrower than "the first lint over knowledge-base/legal/**", which this comment
+    # claimed until self-review falsified it: `scripts/lint-infra-no-human-steps.py` already
+    # scans `knowledge-base/legal/runbooks` via its SCAN_DIRS. No lint covered the registers.
+    # Its scope was DESIGNED rather than measured. One cycle
     # advisory measures it; promotion is then deleting this flag at the `run_suite` call site
     # in scripts/test-all.sh, with evidence behind it. PROMOTION TRIGGER: one green merge cycle
     # with no unexplained finding. Tracked at #7787 with its checklist -- a follow-up with a
@@ -115,7 +119,10 @@ REGISTER_FILES=(
 )
 
 # Determination-shaped pattern for (c). Pinned literally: its cardinality decides the gate's
-# character. At this pattern the producer matched 6 of 41 audits/ files on 2026-09-03.
+# character. At this pattern the producer matched 6 of 41 audits/ files on `main` at 2026-09-03,
+# and 7 of 42 at this PR's HEAD -- the extra is this PR's own implementation record, which quotes
+# the article numbers and is therefore waived rather than indexed. Both figures are stated
+# because a lone post-PR count reads as though it were the pre-existing corpus.
 DETERMINATION_PATTERN='4\(12\)|33\(5\)|Art\. 33'
 
 # NOT_TRANSCRIBED waivers, in the repo's existing `path | reason citing #NNNN` shape -- the same

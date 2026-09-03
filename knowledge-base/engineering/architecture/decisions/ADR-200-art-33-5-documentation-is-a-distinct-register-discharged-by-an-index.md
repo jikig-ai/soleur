@@ -76,7 +76,10 @@ Two exclusions follow, and both are load-bearing.
 
 **Screening outputs are not determinations.** Post-incident reviews generated from
 `plugins/soleur/skills/incident/templates/pir.md` carry `art_33_triggered:` frontmatter. Measured
-2026-09-03: 115 files repo-wide carry that field, 102 of them such post-mortems. A `false` on an
+2026-09-03 on `main`: **102** post-mortems under
+`knowledge-base/engineering/operations/post-mortems/` carry that field, unchanged at this PR's
+HEAD. A repo-wide total is not quoted — it counts plans, specs, this ADR and the guard's source,
+so any PR that merely discusses the field moves it (this one took it 115 → 119). A `false` on an
 availability-only or credential-only incident is a screening output. Indexing them would bury
 four determinations under a hundred routine negatives, destroying the register's verification
 value in the name of completeness.
@@ -117,9 +120,12 @@ judgement. So the gate asserts integrity of the *declared* set instead. It canno
 determination was missed; it can tell you that nothing was dropped without a recorded reason,
 which is the property a register's maintenance actually needs.
 
-**It lands advisory for one merge cycle.** It is the first corpus-level lint over
-`knowledge-base/legal/**` — nothing structurally lints that tree today — so its scope was
-designed rather than measured. A first-of-its-kind gate does not go straight onto the one required
+**It lands advisory for one merge cycle.** It is the first lint over the legal **register
+files** — narrower than "the first lint over `knowledge-base/legal/**`", which this ADR
+claimed until self-review falsified it: `scripts/lint-infra-no-human-steps.py` already scans
+`knowledge-base/legal/runbooks` through its `SCAN_DIRS`. What was true, and is the load-bearing
+point, is that **no lint covered the registers themselves.** Its scope was designed rather than
+measured. A first-of-its-kind gate does not go straight onto the one required
 context that cannot be un-required. Promotion is deleting a flag at the call site once a cycle
 has measured the scope, and is tracked with its checklist at **#7787**. The advisory path deliberately does **not** downgrade a fail-closed
 refusal: a finding becomes a warning, an "I cannot decide" stays a hard failure.
