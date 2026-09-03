@@ -56,6 +56,8 @@ mkcorpus() {
     > "$d/knowledge-base/legal/audits/2099-01-02-syn-determination-b.md" || return 2
   printf -- '---\ntitle: "synthetic non-determination"\n---\n\nMentions Art. 33 only to check a catalog.\n' \
     > "$d/knowledge-base/legal/audits/2099-01-03-syn-excluded.md" || return 2
+  printf -- '---\ntitle: "synthetic non-determination B"\n---\n\nCites Art. 4(12) about a planned change.\n' \
+    > "$d/knowledge-base/legal/audits/2099-01-04-syn-excluded-b.md" || return 2
 
   # The three other register files the token scan requires.
   for f in article-30-register article-30-2-register compliance-posture; do
@@ -81,6 +83,7 @@ controller: "Synthetic SARL"
 | File | Reason |
 |---|---|
 | `knowledge-base/legal/audits/2099-01-03-syn-excluded.md` | synthetic exclusion (#7717) |
+| `knowledge-base/legal/audits/2099-01-04-syn-excluded-b.md` | synthetic exclusion B (#7717) |
 BR
 
   # Point the guard at the synthetic corpus: swap the waiver list and the out-of-scope row.
@@ -88,7 +91,7 @@ BR
 import io, re, sys
 p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
 s = re.sub(r'NOT_TRANSCRIBED=\(\n(?:.*\n)*?\)',
-           'NOT_TRANSCRIBED=(\n  "knowledge-base/legal/audits/2099-01-03-syn-excluded.md | synthetic exclusion reason (#7717)"\n)',
+           'NOT_TRANSCRIBED=(\n  "knowledge-base/legal/audits/2099-01-03-syn-excluded.md | synthetic exclusion reason (#7717)"\n  "knowledge-base/legal/audits/2099-01-04-syn-excluded-b.md | synthetic exclusion reason B (#7717)"\n)',
            s, count=1)
 s = re.sub(r'OUT_OF_SCOPE_ROW="[^"]*"',
            'OUT_OF_SCOPE_ROW="knowledge-base/legal/audits/2099-01-01-syn-determination-a.md"',
@@ -178,6 +181,32 @@ D="$(mkcorpus)" || exit 2
 sed -i "s|DETERMINATION_PATTERN='[^']*'|DETERMINATION_PATTERN='ZZZ_NO_MATCH_ZZZ'|" "$D/scripts/lint-legal-registers.sh" || exit 2
 expect "(c) a producer that reaches nothing refuses rather than reporting a clean sweep" 2 "$D"
 
+# --- (d) the two waiver copies agree ------------------------------------------------------
+# The waiver set exists twice by design (machine-readable array + regulator-facing table), so
+# the risk is silent divergence. Both directions are fixtured: without the opposite-direction
+# row, a matcher that only ever checks one side would pass.
+D="$(mkcorpus)" || exit 2
+python3 - "$D/knowledge-base/legal/breach-register.md" <<'PY2' || exit 2
+import io, re, sys
+p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
+s2 = re.sub(r'(?m)^\| `knowledge-base/legal/audits/2099-01-03-syn-excluded\.md`.*\n', '', s)
+assert s2 != s, "anchor"
+io.open(p, "w", encoding="utf-8").write(s2)
+PY2
+expect "(d) a waiver dropped from the REGISTER only is caught" 1 "$D"
+
+D="$(mkcorpus)" || exit 2
+sed -i '/2099-01-03-syn-excluded.md | synthetic exclusion reason/d' "$D/scripts/lint-legal-registers.sh" || exit 2
+expect "(d) a waiver dropped from the SCRIPT only is caught (opposite direction)" 1 "$D"
+
+D="$(mkcorpus)" || exit 2
+python3 - "$D/knowledge-base/legal/breach-register.md" <<'PY3' || exit 2
+import io, re, sys
+p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
+io.open(p, "w", encoding="utf-8").write(re.sub(r'(?m)^\| `knowledge-base/legal/audits/.*\n', '', s))
+PY3
+expect "(d) an EMPTY §Excluded records table REFUSES rather than comparing equal to an empty array" 2 "$D"
+
 # --- the guard's own operands -------------------------------------------------------------
 D="$(mkcorpus)" || exit 2
 sed -i 's|^REPO_ROOT="\$(cd .*|REPO_ROOT=""|' "$D/scripts/lint-legal-registers.sh" || exit 2
@@ -216,7 +245,7 @@ else fail "live corpus does not pass the guard (rc=$r)"; fi
 echo
 echo "passed: $((checks - fails)) failed: $fails total: $checks"
 
-MIN_ASSERTIONS=22
+MIN_ASSERTIONS=25
 if [[ $checks -lt $MIN_ASSERTIONS ]]; then
   printf '::error::lint-legal-registers.test.sh: only %d assertion(s) ran, expected >= %d\n' \
     "$checks" "$MIN_ASSERTIONS" >&2

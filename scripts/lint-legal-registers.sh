@@ -223,6 +223,54 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------
+# (d) the two waiver copies agree
+#
+# The waiver set exists TWICE by design: machine-readable in NOT_TRANSCRIBED below (the guard
+# reads it) and human-readable in the register's §Excluded records table (a supervisory authority
+# reads it, and cannot be pointed at a shell script). Both copies are load-bearing, so neither
+# can be deleted -- but nothing asserted they AGREE, so the register could silently drop a
+# documented exclusion while the guard kept enforcing it. Measured at review: deleting one row
+# from the register's table left both this guard and its suite green.
+#
+# That is this file's own subject one level up -- two copies of one set, no parity assertion --
+# and the copy that could silently lose an entry is the one a regulator reads. The comparison is
+# NOT a tautology: the two sides are independent artifacts (a shell array and a markdown table),
+# so neither derives from the other.
+# ---------------------------------------------------------------------------------------
+declared_waivers="$(
+  for _e in "${NOT_TRANSCRIBED[@]}"; do
+    _p="${_e%%|*}"; printf '%s\n' "${_p%"${_p##*[![:space:]]}"}"
+  done | sort -u
+)"
+# `|| true` is load-bearing: grep exits 1 on no match and `set -o pipefail` promotes that, so
+# without it the ASSIGNMENT fails and `set -e` aborts here -- making the fail-closed branch
+# below unreachable dead code. Measured at review: emptying the table exited 1 at this line
+# with the explicit refusal never printed, so "could not read the table" was indistinguishable
+# from an ordinary assertion failure.
+documented_waivers="$(
+  { awk '/^## Excluded records/{inblk=1; next} inblk && /^## /{exit} inblk' "$BREACH_REGISTER" \
+      | grep -oE 'knowledge-base/legal/audits/[A-Za-z0-9._/-]+\.md' | sort -u; } || true
+)"
+# A producer that reaches nothing must not report agreement: an empty table would otherwise
+# compare equal to an empty array, and the fail-closed branch below never fires.
+if [[ -z "$documented_waivers" ]]; then
+  die2 "no §Excluded records rows parsed from the breach register -- cannot compare the waiver \
+copies. If the waiver list is genuinely empty, the section must still exist and say so."
+fi
+if [[ "$declared_waivers" == "$documented_waivers" ]]; then
+  pass "(d) the $(printf '%s\n' "$declared_waivers" | wc -l | tr -d ' ') waiver(s) agree between NOT_TRANSCRIBED and the register's §Excluded records"
+else
+  fail "(d) the waiver copies DISAGREE -- the register and the guard would show a regulator
+           different exclusion sets:
+$(diff <(printf '%s\n' "$declared_waivers") <(printf '%s\n' "$documented_waivers") \
+    | sed 's/^/             /')
+           Both copies are load-bearing: the guard reads NOT_TRANSCRIBED in
+           scripts/lint-legal-registers.sh, and a supervisory authority reads §Excluded records
+           in knowledge-base/legal/breach-register.md. Update whichever is stale; do not delete
+           either."
+fi
+
+# ---------------------------------------------------------------------------------------
 # (c) declared-set integrity over audits/** (post-mortems/** excluded -- see header)
 # ---------------------------------------------------------------------------------------
 [[ -d "$AUDITS_DIR" ]] || die2 "audits directory not found: $AUDITS_DIR"
@@ -274,11 +322,11 @@ the pattern, the directory, or the corpus changed and the gate cannot decide"
 # ---------------------------------------------------------------------------------------
 echo
 echo "lint-legal-registers: ${checks} assertion(s), ${fails} failed \
-(registers=${scanned_registers} rows=${row_count} produced=${produced} waived=${#NOT_TRANSCRIBED[@]})"
+(registers=${scanned_registers} rows=${row_count} produced=${produced} waived=${#NOT_TRANSCRIBED[@]} waiver-parity=ok)"
 
 # Assertion floor. Reported with printf + exit rather than through fail(), which is the helper
 # it backstops (ADR-193): a floor that calls the function one edit disarms is not a floor.
-MIN_CHECKS=5
+MIN_CHECKS=6
 if [[ $checks -lt $MIN_CHECKS ]]; then
   printf '::error::lint-legal-registers: only %d assertion(s) ran, expected >= %d -- the gate was disarmed, not satisfied\n' \
     "$checks" "$MIN_CHECKS" >&2
