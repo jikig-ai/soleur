@@ -99,7 +99,19 @@ sql="\$1"
 if printf '%s' "\$sql" | grep -q '__ANCHOR__'; then
   cat "$2"
 elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
-  cat "$_fatal"
+  # SEMANTIC DISPATCH, not marker dispatch. Keying only on the marker comment left EVERY clause
+  # of FATAL_SQL unreachable by any fixture: the query could be reverted to be semantically
+  # identical to HOST_SQL -- level filter dropped, ORDER BY DESC, LIMIT 50 -- and ARM 24 still
+  # passed, i.e. the whole §5.0 fix was silently revertible. The marker was one I added myself,
+  # so the arm was asserting the presence of my own comment. Measured, five separate ways.
+  if printf '%s' "\$sql" | grep -q "level') = 'fatal'" \
+     && printf '%s' "\$sql" | grep -q "host_name') = '" \
+     && printf '%s' "\$sql" | grep -qE 'LIMIT (1000|[0-9]{4,})'; then
+    cat "$_fatal"
+  else
+    echo "STUB: the FATAL query lost a load-bearing clause (level filter / host filter / LIMIT >= 1000)" >&2
+    exit 4
+  fi
 elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
   cat "$3"
 else
@@ -368,7 +380,11 @@ fi
 
 # THE TAUTOLOGY IS GONE. The script used to write GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST back out,
 # so the gate compared the allowlist against itself and R6 could only refuse a hand-edited file.
-_allow_csv="${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST// /,}"
+# `:-` GUARD. Under `set -u` an unset allowlist aborted the whole suite here, so a run that
+# had ALREADY produced a real FAIL above died before printing its verdict line -- the failure
+# was reported as "no output" rather than as the finding it was. Surfaced while mutation-testing
+# the FATAL query: four genuine reddenings all looked like crashes.
+_allow_csv="${GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST:-}"; _allow_csv="${_allow_csv// /,}"
 if [[ "$_div" != "$_allow_csv" ]]; then
   pass "the evidence does NOT echo the gate's whole allowlist back (tautology closed)"
 else
@@ -864,7 +880,10 @@ else
   fail "an absent SENTRY_ISSUE_RO_TOKEN is reported as a named skip, not read as silence" "$rc" "$out"
 fi
 
-# ARM 24 (#7460 §5.0) — A CHATTY BOOT MUST NOT BURY ITS OWN FATAL.
+# ARM 28 (#7460 §5.0) — A CHATTY BOOT MUST NOT BURY ITS OWN FATAL.
+# (Numbered 28, not 24: ARM 24 was already taken by PR A's PASS-path cross-check and 25-27
+# exist too. Two arms sharing a label makes "which arm bought the floor raise" unanswerable
+# by grep, which is how the floor bookkeeping is audited.)
 #
 # HOST_SQL ends `ORDER BY dt DESC LIMIT 50`. That bound was safe only while the channel split
 # held: ADR-149 recorded that "on a successful boot the only Better Stack row a git-data host

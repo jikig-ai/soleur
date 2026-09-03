@@ -465,6 +465,25 @@ ANCHOR_SQL="
 # structurally empty, so "all four are blank" carries no information about how far the boot
 # got — the `stage` tag is the only positional fact in a FAIL row. #7204's source brief made
 # exactly that over-read.
+# ONE SCOPE, BOTH QUERIES. The §5.0 argument -- "the fatal question must be unbounded by row
+# chatter" -- only holds if the two queries cover the SAME period. Two copies of the window
+# clause could drift apart silently and the verdict would then read a different period than the
+# evidence claims.
+#
+# ATTEMPT-PINNED whenever --since is supplied. HOST_NAME embeds GITHUB_RUN_ID, which is STABLE
+# across re-runs (#7481 defect 5), and WINDOW defaults to 30 DAY. So on attempt 2 of a run whose
+# template was FIXED, an ORDER BY dt ASC scan surfaces attempt 1's fatal and the rehearsal FAILs
+# forever. The old ORDER BY dt DESC LIMIT 50 hid that by accident; #7460 removed the accident
+# without replacing the isolation. The Sentry consult was already bounded this way (see the
+# --start/--end block below); this is the same bound on the Better Stack side.
+if [[ -n "$SENTRY_SINCE" ]]; then
+  _BS_WHEN="dt > parseDateTimeBestEffort('${SENTRY_SINCE}')"
+else
+  _BS_WHEN="dt > now() - INTERVAL ${WINDOW}"
+fi
+_BS_SCOPE="${_BS_WHEN}
+    AND JSONExtractString(raw,'host_name') = '${HOST_NAME}'"
+
 HOST_SQL="
   SELECT /* __HOSTROWS__ every stage this rehearsal host reported */
          dt,
@@ -478,8 +497,7 @@ HOST_SQL="
          JSONExtractString(raw,'hooks_path')    AS hooks_path,
          JSONExtractString(raw,'provision')     AS provision
   FROM ${_bs_source}
-  WHERE dt > now() - INTERVAL ${WINDOW}
-    AND JSONExtractString(raw,'host_name') = '${HOST_NAME}'
+  WHERE ${_BS_SCOPE}
   ORDER BY dt DESC LIMIT 50 FORMAT JSONEachRow"
 
 # THE FATAL ARM MUST NOT BE ROW-WINDOW-BOUNDED (#7460 §5.0).
@@ -505,8 +523,7 @@ FATAL_SQL="
          JSONExtractString(raw,'detail') AS detail,
          JSONExtractString(raw,'rc')     AS rc
   FROM ${_bs_source}
-  WHERE dt > now() - INTERVAL ${WINDOW}
-    AND JSONExtractString(raw,'host_name') = '${HOST_NAME}'
+  WHERE ${_BS_SCOPE}
     AND JSONExtractString(raw,'level') = 'fatal'
   ORDER BY dt ASC LIMIT 1000 FORMAT JSONEachRow"
 
