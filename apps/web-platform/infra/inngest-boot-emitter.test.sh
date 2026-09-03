@@ -230,13 +230,21 @@ else
   # Measured: #7695 added `inngest_expect_luks` to the inngest-host.tf call site and this map was
   # not updated, so all three AC5 assertions went red on `main` with a stderr blob about console
   # input. Deriving the expected set from the .tf and DIFFING it names the missing key instead.
+  # `[a-z0-9_]+`, NOT `[a-z_]+`. Both sides used the same digit-blind class, so `comm` compared
+  # two lists produced by the SAME broken lexer and reported parity over the subset both could
+  # see: the call site carries 16 keys and each side saw 13, with `inngest_cli_sha256`,
+  # `vector_sha256` and `doppler_sha256` invisible to both. The drift class this arm was written
+  # for (an all-lowercase key) was caught; a drift in any `*_sha256` key was not — and those three
+  # are the ones that pin the binaries the host installs.
   TF_KEYS="$(awk '/templatefile\("\$\{path\.module\}\/cloud-init-inngest\.yml", \{/,/^  \}\)\)$/' \
-    "$SCRIPT_DIR/inngest-host.tf" | grep -oE '^    [a-z_]+ +=' | tr -d ' =' | sort -u)"
+    "$SCRIPT_DIR/inngest-host.tf" | grep -oE '^    [a-z0-9_]+ +=' | tr -d ' =' | sort -u)"
   MAP_KEYS="$(grep -oE '\{ inngest_volume_id=.*\}' "${BASH_SOURCE[0]}" | head -1 \
-    | grep -oE '[a-z_]+=' | tr -d '=' | sort -u)"
-  # Non-vacuity: an extraction that found nothing must not report parity.
+    | grep -oE '[a-z0-9_]+=' | tr -d '=' | sort -u)"
+  # Non-vacuity: an extraction that found nothing must not report parity. The floor is the ACTUAL
+  # key count, not a round number safely below it — a `-ge 10` passed at 13 while three keys were
+  # missing from both sides, which is precisely the state it was supposed to make visible.
   assert "AC5 key-set parity: the .tf call site's keys were extracted" \
-    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 10 ]]"
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 16 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \

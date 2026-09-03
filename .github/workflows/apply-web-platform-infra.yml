@@ -656,6 +656,7 @@ jobs:
               -target=github_repository_environment.workspaces_luks_cutover \
               -target=github_repository_environment.web_platform_infra_apply \
               -target=github_repository_environment_deployment_policy.web_platform_infra_apply_main \
+              -target=github_repository_environment_deployment_policy.inngest_cutover_main \
               -target=cloudflare_r2_bucket.workspaces_luks_header \
               -target=doppler_secret.workspaces_luks_header_bucket \
               -target=doppler_secret.workspaces_luks_header_r2_endpoint \
@@ -754,11 +755,31 @@ jobs:
           # hcloud_server.firewall_ids). Source of truth:
           # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
           host_creates=$(echo "$counts" | jq -r '.host_creates')
+          luks_rotations=$(echo "$counts" | jq -r '.luks_passphrase_rotations')
           # Validate counters parsed correctly — empty values from a jq
           # failure would silently evaluate false in the `-gt 0` test and
           # let destructive plans slip past the guard.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}')."
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]] || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}', luks_passphrase_rotations='${luks_rotations}')."
+            exit 1
+          fi
+          # HALT on a LUKS passphrase rotation (#7695). Evaluated OUTSIDE the destroy_count sum
+          # and BEFORE it, so `[ack-destroy]` cannot bypass this one — the same treatment
+          # host_creates gets, for a stronger reason: a reborn host is recoverable, a rotated
+          # header key is not. Both the passphrase and its Doppler mirror are `-target`-reachable
+          # from THIS path, and a rotation here mints a new value while the live volume's LUKS
+          # header is still cut from the old one. The store then cannot be opened, on a host with
+          # no SSH and no console, and what it holds is user prompts and agent output.
+          if [[ "$luks_rotations" -gt 0 ]]; then
+            echo "::error::terraform plan would DELETE or FORGET ${luks_rotations} inngest LUKS passphrase resource(s) (random_password.inngest_redis_luks / doppler_secret.inngest_redis_luks_key) on the per-PR apply path."
+            echo "::error::A rotation mints a new passphrase while the LUKS header on the live volume is still cut from the OLD one. The store becomes unopenable and the AOF is unrecoverable — there is no second copy of the header key, and the host has no SSH and no console."
+            echo "::error::[ack-destroy] deliberately does NOT reach this HALT: a replace also trips resource_deletes, so acking an unrelated destructive change in the same merge would ack this one through with it."
+            echo "::error::Remediation depends on what you intended:"
+            echo "::error::  • You did NOT intend to touch the passphrase → something upstream forced a replace (a changed keeper, length, or the Doppler project/config reference). Revert that change; a passphrase must never be a side effect."
+            echo "::error::  • You DID intend to rotate it → the store must be re-cut from empty in the same operation, which is the 'inngest-volume-recut' dispatch, not this path. Rotating the value without re-cutting the header strands the volume."
+            echo "::error::  • The volume is already absent/empty and you are re-establishing the pair → dispatch '-f apply_target=inngest-volume-recut -f confirm=RECUT-INNGEST-VOLUME', which grades the plan against both guards (a passphrase FIRST CREATE is legal there; a rotation is not)."
+            echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply, it does not perform it."
+            grep -E 'inngest_redis_luks|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
           # HALT on a host create — evaluated OUTSIDE the destroy_count sum below

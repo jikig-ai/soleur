@@ -62,7 +62,7 @@
 #
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
-#          host_creates: int}.
+#          host_creates: int, luks_passphrase_rotations: int}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
 # so the manual-rerun consumer that reads only them keeps working. host_creates
 # has TWO workflow readers: the `apply` job (#6416) and apply-deploy-pipeline-fix.yml
@@ -288,6 +288,34 @@ def destroyed_at($addr):
     [ .resource_changes[]?
       | select(.type == "hcloud_server")
       | select(.change.actions? | index("create")) ]
+    | length
+  ),
+
+  # 8th surface (#7695): a LUKS PASSPHRASE ROTATION on the per-PR apply path.
+  #
+  # `random_password.inngest_redis_luks` and `doppler_secret.inngest_redis_luks_key` are BOTH in
+  # the per-merge `-target=` allow-list, so a routine merge apply reaches them. A delete/replace
+  # there mints a new passphrase while the LUKS header on the live volume is still cut from the
+  # OLD one — the store is then unopenable, on a host with no SSH and no console, and the AOF it
+  # holds is user prompts and agent output. There is no recovery: the header key is the only copy.
+  #
+  # WHY IT NEEDS ITS OWN COUNTER RATHER THAN resource_deletes. A replace trips resource_deletes,
+  # and the destroy gate then prints "Add [ack-destroy] to acknowledge" — so an author acking a
+  # legitimate sibling change in the same merge acks the passphrase rotation through with it. That
+  # is exactly the reasoning host_creates records for host REBIRTH, and it applies here with a
+  # worse outcome: a reborn host is recoverable, a rotated header is not. Read OUTSIDE the
+  # destroy_count sum, so `[ack-destroy]` cannot reach it.
+  #
+  # `index("delete")` OR `index("forget")`, and NOT `create`. A first CREATE is legal and expected
+  # — this volume is being cut to LUKS for the first time, and inngest_volume_recut_gate makes the
+  # same three-verb exclusion for the same reason. `forget` IS counted: a Terraform 1.7+ state-drop
+  # of the passphrase leaves the header cut from a value nothing records any more, which is the
+  # stranding hazard wearing a different hat (the same note the retire counters carry at T49).
+  luks_passphrase_rotations: (
+    [ .resource_changes[]?
+      | select(.address == "random_password.inngest_redis_luks"
+            or .address == "doppler_secret.inngest_redis_luks_key")
+      | select(.change.actions? | any(. == "delete" or . == "forget")) ]
     | length
   ),
 
