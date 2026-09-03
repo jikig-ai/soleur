@@ -283,6 +283,13 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 **Reading its output:** a map showing any path outside the guard's window is a P1 regardless of whether an instance was demonstrated — an uncovered path is the defect, and the demonstration is a formality. If N agents in the same round each report a different instance of one gap, that is the signal this seat was mis-allocated, not that the panel worked.
 
+**Two shapes to check by construction on every guard-shaped diff, before reading its findings.** Both were shipped by the author of the guard on PR #7785 — the PR whose whole subject was "this guard's window was narrower than its name" — so authorial awareness of the class demonstrably does not prevent them:
+
+1. **A literal set inside a guard IS a window.** `const BUILD_INCLUDED_DIRS = ["app","components","hooks","lib","server"]` omitted `e2e/` (16 files, no ignore line, type-checked) and two root files; one import added to an e2e file would have reproduced the incident past a green guard. Ask of every array, enum or alternation in a guard: *what predicate does the SYSTEM use to decide membership, and can the guard call it instead of restating it?* Derive from the system's own matcher so a new member joins the guarded set by existing. A longer list is not the fix.
+2. **An emptiness assertion is satisfied perfectly by machinery that checks nothing.** `expect(offenders).toEqual([])` passed while a resolver missing `index.tsx` returned `null` for 18 real edges, each silently `continue`d. An unresolvable input is an UNCHECKED input, and the green is identical either way. Every `toEqual([])` / `length === 0` needs a companion **totality** assertion — every input resolved, every file classified — or it pins nothing. Likewise, a flat anti-vacuity floor (`> 200` against ~820 real files) tolerates a 4x collapse: replace it with a CONSERVATION check against an INDEPENDENT enumerator, since agreement between two different code paths is evidence and a magic constant is not. (A per-bucket floor is not the fix either — it false-fails on legitimately empty buckets.)
+
+Both survived the author's own first mutation battery and were closed only after a second one enumerated the AXES (`the resolver`, `the population`) rather than mutating one shape N times.
+
 **If PR modifies source code files, semgrep-sast is a mandatory gate:**
 
 14. Task semgrep-sast(PR content) - Deterministic SAST scanning for known vulnerability patterns
