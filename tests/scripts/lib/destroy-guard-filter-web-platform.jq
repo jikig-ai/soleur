@@ -326,7 +326,24 @@ def destroyed_at($addr):
     [ .resource_changes[]?
       | select(.address == "random_password.inngest_redis_luks"
             or .address == "doppler_secret.inngest_redis_luks_key")
-      | select(.change.actions? | any(. == "update" or . == "delete" or . == "forget")) ]
+      | select(
+          # DECIDABILITY FIRST, then the verb set. `any(...)` over an empty array is `false`, so an
+          # entry present at one of these two addresses with `"actions": []` — `before` populated,
+          # `after` null, i.e. the shape of a destroy — scored ZERO here AND zero on
+          # resource_deletes, and the apply never reached either gate. Measured on this filter
+          # before the fix: {"luks_passphrase_rotations":0,"resource_deletes":0}. It is the only
+          # degraded shape that stays silent; `"actions": null` and a missing `.change` both make
+          # jq exit non-zero, which the apply surfaces. This is the same class #6997 closed for the
+          # gate scripts via plan-gate-preamble.sh, which does not run on this workflow path.
+          #
+          # An entry AT THESE ADDRESSES whose verb set cannot be read is not evidence of safety, so
+          # it counts. `["no-op"]` and `["create"]` are decidable and legitimately score 0 — no-op
+          # is the routine merge reading, and a first create is this volume being cut to LUKS for
+          # the first time.
+          ((.change.actions | type) != "array")
+          or ((.change.actions | length) == 0)
+          or (.change.actions | any(. == "update" or . == "delete" or . == "forget"))
+        ) ]
     | length
   ),
 

@@ -95,7 +95,7 @@
 #   Row selection
 #     G1  the probe query returned rc 0 AND the row count parses as ^[0-9]+$   -> unreadable
 #     G2  the row count is >= 1                                                -> silent
-#     G3  the chosen row's boot_id equals the NEWEST row's boot_id             -> stale_row
+#     G3  the chosen row IS the newest, and its age is within --max-row-age     -> stale_row
 #     G4  probe_schema == "3", EXACT equality (not >=)                         -> stale_schema
 #   Identity  (inngest-bootstrap.sh is the SHARED renderer for both hosts)
 #     G5  envelope host      == soleur-inngest                                 -> wrong_host

@@ -155,6 +155,29 @@ check "N1c: a create with NO after key => ABORT new_volume_formatted" 1 "reason=
 write_plan "$(rc_obj_nullid 'hcloud_volume.inngest_redis' '"delete","create"'),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
 check "N2: a destroy whose before.id is null => ABORT id_pin_unverifiable" 1 "reason=id_pin_unverifiable" "$TMP/plan.json" "$PINNED_ID"
 
+# N2b/N2c — THE WIDER SHAPE N2 DID NOT COVER, and the reason its counter read 0. `id_pin_unverifiable`
+# was written as `before != null AND before.id == null`, which closes only the `before` OBJECT with a
+# null id — the one shape `rc_obj_nullid` happens to build. A destroy with NO `before` key at all
+# (what `rc_obj` emits, and what a state-drop or a hand-edited plan produces) leaves `.change.before`
+# null, so the `!= null` guard was FALSE and all three pins scored 0. MEASURED before the fix:
+#     redis_volume_provisioned=1 … luks_id_mismatch=0 id_pin_absent=0 id_pin_unverifiable=0
+#     inngest_volume_recut_gate: PASS — … replaced-volume id is readable and matches the operator pin
+# on a plan destroying the volume that holds the sole copy of the AOF. The PASS text was false in
+# both halves. `rc_obj` is the builder that produces it; `rc_obj_nullid` structurally cannot.
+write_plan "$(rc_obj 'hcloud_volume.inngest_redis' '"delete","create"'),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N2b: a destroy with NO before key at all => ABORT id_pin_unverifiable" 1 "reason=id_pin_unverifiable" "$TMP/plan.json" "$PINNED_ID"
+
+write_plan "$(printf '{"address":"hcloud_volume.inngest_redis","change":{"actions":["delete","create"],"before":null,"after":{}}}'),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N2c: a destroy whose before is explicitly null => ABORT id_pin_unverifiable" 1 "reason=id_pin_unverifiable" "$TMP/plan.json" "$PINNED_ID"
+
+# THE OTHER DIRECTION, and the reason the widened selector is scoped to delete/forget rather than to
+# the address: the RECOVERY bare create has `before: null` too, and it must still PASS. Widening the
+# pin without this arm would have swapped a fail-open for a fail-shut on the one path that exists to
+# rebuild the volume after a failed recut — the recovery route being reachable is itself a property
+# two earlier fixes in this branch got wrong.
+write_plan "$(rc_obj 'hcloud_volume.inngest_redis' '"create"'),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N2d: the RECOVERY bare create (before null, no destroy) still PASSES" 0 "inngest_volume_recut_gate: PASS" "$TMP/plan.json" "$PINNED_ID"
+
 # ── N3: A NUMERIC before.id ───────────────────────────────────────────────────────
 # The gate coerces with `| tostring`; dropping that left the suite green because every fixture
 # emitted a STRING id. Both directions: the matching numeric id must PASS, a different one ABORT.
@@ -293,6 +316,12 @@ PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${_PG_DIR}/lib/gate-suite-harness.sh"
 
+# The wrappers this suite does NOT define. `check()`'s self-test above covers the local one; these
+# two come from the harness and no suite that sources it drove either. Placed immediately after the
+# source and before the first gate_check — a self-test that runs before its subject is defined
+# reports "command not found", which is loud here only because the `if !` credits it as a failure.
+if ! gate_harness_selftest; then fails=$((fails + 1)); fi
+
 mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces[\"web-1\"]' 'hcloud_volume')]"
 mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces[\"web-1\"]' 'hcloud_volume')]"
 
@@ -367,13 +396,13 @@ check "OPERAND: a DIRECTORY as the plan path => fail-closed" 1 "ABORT" "$TMP" "$
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the suite on
 # every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 50 ]]; then
+if [[ "$_ran" -lt 53 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 50. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 53. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
   printf 'inngest-volume-recut-gate: %s passed, %s failed\n' "$passes" "$fails"
   exit 1
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 50)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 53)\n' "$_ran"
 fi
 
 echo ""

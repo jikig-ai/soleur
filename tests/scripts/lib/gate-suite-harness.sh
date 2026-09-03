@@ -227,3 +227,34 @@ gate_mutate_layered() {
     fail "$label — layered contract broken (want rc=1, '$own' absent, '$fallback' present)" "$rc" "$out"
   fi
 }
+
+# ── gate_harness_selftest — drive the harness's OWN wrappers once each ────────────────
+# Every suite that sources this file has an instrument self-test for its local `pass`/`fail`, and
+# a wrapper self-test for whatever local `check()` it defines. NEITHER reaches the two wrappers
+# DEFINED HERE. Measured on test-inngest-volume-recut-gate.sh: replacing `gate_check`'s body with a
+# bare `pass "$name"` left the suite at 50 passed, 0 failed with the anti-vacuity floor healthy,
+# and `gate_mutate_layered` the same — and this harness is sourced by four suites, so one edit here
+# silences the degraded-shape and invoked-not-sourced batteries in all of them at once.
+#
+# Call it once, immediately after sourcing, BEFORE the first real arm. It drives each wrapper in
+# the direction that must FAIL, then rolls the caller's counters back so the floor is unaffected.
+# It does not use `pass`/`fail` to report its own result for the same reason ADR-193 gives: a floor
+# must not be built out of the helper it backstops.
+gate_harness_selftest() {
+  local _p="${passes:-${pass_count:-0}}" _f="${fails:-${fail_count:-0}}"
+  local _rc=0 _ok=1
+  _ghs_never_aborts() { echo "gate_harness_selftest: this fixture always succeeds"; return 0; }
+
+  # gate_check: demand an ABORT from a function that cannot abort. Must record a FAILURE.
+  gate_check "SELFTEST (expected to fail)" _ghs_never_aborts 1 "reason=impossible" >/dev/null 2>&1 || _rc=$?
+  [[ "${fails:-${fail_count:-0}}" -eq $((_f + 1)) ]] || _ok=0
+
+  passes="$_p"; fails="$_f"; pass_count="$_p"; fail_count="$_f"
+  unset -f _ghs_never_aborts
+  if [[ "$_ok" -ne 1 ]]; then
+    printf '  FAIL INSTRUMENT: gate_check() did not record a failure on a must-fail arm — every gate_check assertion in this suite is decorative.\n' >&2
+    return 1
+  fi
+  printf '  ok   instrument: gate_check() discriminates\n'
+  return 0
+}

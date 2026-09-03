@@ -155,12 +155,28 @@ if [ "$_fstab_bad" -eq 0 ]; then ok "T1.8b NO /mnt/data fstab line anywhere in t
 # ExecStartPre deadlock: a ONE-state gate demanding /dev/mapper/inngest-redis unconditionally
 # would refuse to start Redis on the PRE-recut host — whose volume is plaintext ext4 today — and
 # deadlock the very cutover this apparatus exists to enable.
-if grep -qF 'ExecStartPre=/usr/local/bin/inngest-redis-mount-guard.sh' "$REDIS_UNIT"; then ok "T1.9a the Redis unit carries the mount guard"; else no "T1.9a inngest-redis.service has no ExecStartPre mount guard"; fi
-if grep -qF 'if [ -e "$MAPPER" ]; then' "$REDIS_BOOTSTRAP"; then ok "T1.9b the guard is TWO-state (mapper-conditional), not a bare mapper demand"; else no "T1.9b the mount guard is not mapper-conditional — it would refuse to start Redis on the pre-recut ext4 host"; fi
+# COMMENT-STRIPPED VIEWS. T1.9a-c grepped these two files raw, and T1.9c's needle was a phrase that
+# lives only in a COMMENT — so commenting out the guard's entire host-identity refusal (a P0 of
+# this delta: absent allows / unreadable refuses / no DOPPLER_PROJECT refuses) left the suite at
+# `23 passed, 0 failed`. MEASURED by prefixing every DOPPLER_PROJECT line with `#`. A systemd
+# directive and a shell statement are both `#`-commentable, so presence in the file is not
+# evidence the machine ever reads them. `cq-assert-anchor-not-bare-token`.
+_UNIT_CODE="$(grep -vE '^[[:space:]]*#' "$REDIS_UNIT" || true)"
+_BOOT_CODE="$(grep -vE '^[[:space:]]*#' "$REDIS_BOOTSTRAP" || true)"
+
+if printf '%s\n' "$_UNIT_CODE" | grep -qF 'ExecStartPre=/usr/local/bin/inngest-redis-mount-guard.sh'; then ok "T1.9a the Redis unit carries the mount guard (live directive, not a commented one)"; else no "T1.9a inngest-redis.service has no live ExecStartPre mount guard"; fi
+if printf '%s\n' "$_BOOT_CODE" | grep -qF 'if [ -e "$MAPPER" ]; then'; then ok "T1.9b the guard is TWO-state (mapper-conditional), not a bare mapper demand"; else no "T1.9b the mount guard is not mapper-conditional — it would refuse to start Redis on the pre-recut ext4 host"; fi
 # T1.9c The identity read FAILS CLOSED. `proj=""` used to fall through to the `|| exit 0` written
 # for the web host, so a dedicated host whose env file failed to write — the exact host this guard
 # exists for — was waved through. Anchored on the refusal, which is the thing that can be deleted.
-if grep -qF 'carries no DOPPLER_PROJECT' "$REDIS_BOOTSTRAP"; then ok "T1.9c an unreadable host identity REFUSES rather than exiting 0"; else no "T1.9c the guard exits 0 when DOPPLER_PROJECT is unreadable — it fails open on the host it gates"; fi
+_id_ok=1
+printf '%s\n' "$_BOOT_CODE" | grep -qF 'DOPPLER_PROJECT:-' || _id_ok=0            # it actually reads the identity
+printf '%s\n' "$_BOOT_CODE" | grep -qF 'if [ -z "$proj" ]; then' || _id_ok=0      # empty identity is a branch
+printf '%s\n' "$_BOOT_CODE" | grep -qF '[ ! -r "$ENVFILE" ]' || _id_ok=0          # unreadable is its own branch
+# The two refusals must EXIT NON-ZERO. `exit 0` on either is the fail-open this arm exists to catch,
+# and it is one character away from the correct code.
+[ "$(printf '%s\n' "$_BOOT_CODE" | grep -cE '^[[:space:]]*exit 1[[:space:]]*$')" -ge 3 ] || _id_ok=0
+if [ "$_id_ok" -eq 1 ]; then ok "T1.9c an absent/unreadable host identity REFUSES (three live branches, each exiting non-zero)"; else no "T1.9c the guard's fail-closed identity read is not live in the executable text — it fails open on the host it gates"; fi
 
 # T1.10 expect_luks is threaded into BOTH device readers, or the post-recut refusal is armed in
 # only one of them and an ext4 signature after a recut mounts plaintext from the other.

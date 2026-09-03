@@ -226,7 +226,19 @@ inngest_volume_recut_gate() {
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.inngest_redis")
               | select(.change.actions? | any(. == "delete" or . == "forget"))
-              | select((.change.before != null) and (.change.before.id == null)) ]
+              # `(.change.before.id // null) == null`, NOT `before != null and before.id == null`.
+              # The narrower form closed only the shape I happened to fixture — a `before` OBJECT
+              # carrying a null id — and left the wider one open: a destroy with NO `before` key at
+              # all, where `.change.before` is null, so the `!= null` guard was false and this
+              # counter scored 0 alongside the other two. MEASURED on a `["delete","create"]` at
+              # this address with `before` omitted: every pin read 0 and the gate printed
+              # `PASS — … replaced-volume id is readable and matches the operator-supplied pin`,
+              # which was false in both halves. Absent, null, and null-id are one case: the volume
+              # is being destroyed and the plan cannot name which volume.
+              #
+              # Scoped to delete/forget, so the RECOVERY bare create (`before: null`, actions
+              # `["create"]`) is untouched — there is nothing to pin when nothing is destroyed.
+              | select((.change.before.id // null) == null) ]
             | length
           ),
           inngest_server_touched: (

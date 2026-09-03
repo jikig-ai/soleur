@@ -439,7 +439,14 @@ expect "[M4d] http_code= (present, empty) => unreadable"     unreadable   "$TMP/
 # `unreadable` (the field is absent). Under the globbing variant the CWD supplies it and the gate
 # answers `host_serving` — a different verdict, read off the filesystem.
 mkdir -p "$TMP/globcwd" && : > "$TMP/globcwd/server_active=active"
-mk_rows "$TMP/rows-m5.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg -server_active image_ref='*')")"
+#
+# A BARE `*`, NOT `image_ref='*'`. The first cut used the latter and did not discriminate: under
+# `toks=($msg)` the token `image_ref=*` globs against the CWD, matches nothing (no file begins
+# `image_ref=`), and bash leaves an unmatched pattern as its literal self — so the mutant produced
+# the identical verdict. MEASURED: with `read -ra` replaced by `toks=($msg)`, the suite stayed at
+# 115 passed, 0 failed. A bare `*` matches every filename in the directory, so the injected token
+# IS `server_active=active` and the two implementations finally disagree.
+mk_rows "$TMP/rows-m5.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg -server_active) *")"
 # RUN THE GATE IN THE SUBSHELL, ASSERT IN THE PARENT. The previous form was
 #   ( cd … && expect … ) && pass || fail …
 # which could not fail: `expect`'s counter increments died with the subshell, and `fail()` ends in

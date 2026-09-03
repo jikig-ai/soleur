@@ -1030,6 +1030,31 @@ t_luks_rotations_parse_failure_fails_closed() {
 
 # The HALT must live in the APPLY job and OUTSIDE the destroy_count sum. A counter the workflow
 # computes and never compares is the silent-and-green failure this whole file exists to catch.
+# T60h — the one degraded shape that stayed SILENT. `any(...)` over `[]` is false, so an entry at
+# a LUKS address with `"actions": []`, `before` populated and `after` null — the shape of a destroy
+# — scored 0 on luks_passphrase_rotations AND 0 on resource_deletes, and the apply reached neither
+# gate. No source edit required: this is a plan-document shape, not a code change. The two sibling
+# degraded shapes (`"actions": null`, no `.change` key) make jq exit non-zero, so they are loud;
+# this one was not. `["no-op"]` and `["create"]` must still score 0 — no-op is the routine merge
+# reading and a first create is the volume's initial LUKS cut — so the arm pins BOTH directions.
+t_luks_counter_undecidable_actions_fails_closed() {
+  local addr='doppler_secret.inngest_redis_luks_key' got want ok=1 detail=''
+  local shape tmp; tmp="$(mktemp)"
+  for shape in '[]:1' '["delete"]:1' '["update"]:1' '["forget"]:1' '["no-op"]:0' '["create"]:0'; do
+    want="${shape##*:}"
+    printf '{"resource_changes":[{"address":"%s","type":"doppler_secret","change":{"actions":%s,"before":{"id":"x"},"after":null}}]}' \
+      "$addr" "${shape%:*}" > "$tmp"
+    got="$(jq -f "$FILTER" "$tmp" | jq -r '.luks_passphrase_rotations')"
+    [[ "$got" == "$want" ]] || { ok=0; detail="${detail} actions=${shape%:*} got=${got} want=${want}"; }
+  done
+  rm -f "$tmp"
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T60h luks_passphrase_rotations fails CLOSED on an undecidable verb set, open on no-op/create" ok
+  else
+    _report "T60h luks_passphrase_rotations fails closed on an undecidable verb set" fail "$detail"
+  fi
+}
+
 t_apply_job_luks_halt_job_scoped() {
   # The name promised job-scoping; the body did neither job-scoping nor comment-stripping, and
   # every token it grepped for ALSO appears in the prose that documents the HALT. Measured: the
@@ -1128,6 +1153,7 @@ t_luks_passphrase_forget_halts
 t_luks_passphrase_first_create_passes
 t_luks_rotations_baseline_zero
 t_luks_rotations_parse_failure_fails_closed
+t_luks_counter_undecidable_actions_fails_closed
 t_apply_job_luks_halt_job_scoped
 
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
@@ -1147,11 +1173,11 @@ t_apply_job_luks_halt_job_scoped
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((pass + fail))
-if [[ "$_ran" -lt 56 ]]; then
+if [[ "$_ran" -lt 57 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 56. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 57. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 56)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 57)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="
