@@ -32,6 +32,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLOUD_INIT="$SCRIPT_DIR/cloud-init-inngest.yml"
+VARIABLES_TF="$SCRIPT_DIR/variables.tf"
 REDIS_UNIT="$SCRIPT_DIR/inngest-redis.service"
 REDIS_BOOTSTRAP="$SCRIPT_DIR/inngest-redis-bootstrap.sh"
 
@@ -169,14 +170,33 @@ else
   no "T1.10 could not locate the runcmd LUKS stage in $CLOUD_INIT — the per-window split is vacuous"
 fi
 
+# T1.11 THE SEQUENCING INSTRUCTION. `inngest_expect_luks` and `format` act at different moments —
+# `format` governs what a CREATE produces (once, on the recut apply); expect_luks governs what
+# every BOOT refuses. Flipping expect_luks in the same change that drops `format` makes ARM 1
+# refuse the still-ext4 volume at the very next host replace, so /mnt/data never mounts and the
+# dedicated host comes up with no store. The variable comment said to do exactly that. Pinned
+# here because the instruction is what the next author will follow, and it is not executable.
+if grep -qF 'MUST NOT FLIP IN THE SAME CHANGE' "$VARIABLES_TF"; then ok "T1.11a the expect_luks comment warns against the flip that empties /mnt/data"; else no "T1.11a the expect_luks sequencing warning is gone — the next author will flip it with format and take the store out"; fi
+# Grep the SUPERSEDED wording, not the new one: a residual count over the new text is blind to a
+# partial revert that restores the old instruction alongside it.
+#
+# ANCHORED ON THE INSTRUCTION'S OPENING LINE, not on the bare phrase. The correction above QUOTES
+# the phrase it retracts — that is the append-only convention working — so a `grep -qF` for the
+# fragment matches the retraction itself and reports a violation that does not exist. It fired
+# that way on the first run. `cq-assert-anchor-not-bare-token`, in the one file in this branch
+# whose whole subject is that class.
+if grep -qE '^# This flips on the recut branch' "$VARIABLES_TF"; then no "T1.11b the superseded one-decision instruction is back as a live directive in variables.tf"; else ok "T1.11b the superseded one-decision instruction is not present as a directive"; fi
+# And the default must still be false at merge — the whole ordering rests on it.
+if grep -A4 'variable "inngest_expect_luks"' "$VARIABLES_TF" | grep -qE '^\s*default\s*=\s*false\s*$'; then ok "T1.11c inngest_expect_luks still defaults to false at merge"; else no "T1.11c inngest_expect_luks no longer defaults to false — the next host replace would refuse the ext4 mount"; fi
+
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 17 ]; then
+if [ "$executed" -lt 20 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 17. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 20. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 17)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 20)\n' "$executed"
 fi
 
 echo ""
