@@ -212,6 +212,25 @@ D="$(mkcorpus)" || exit 2
 sed -i '/2099-01-03-syn-excluded.md | synthetic exclusion reason/d' "$D/scripts/lint-legal-registers.sh" || exit 2
 expect "(d) a waiver dropped from the SCRIPT only is caught (opposite direction)" 1 "$D"
 
+# (d) must read the FILE COLUMN, not the section. A section-wide grep also reads the free-text
+# reason cells, so deleting a row while any surviving reason cross-references its path left (d)
+# green -- measured, and not contrived: a live reason cell already cross-references "the row
+# above".
+D="$(mkcorpus)" || exit 2
+python3 - "$D/knowledge-base/legal/breach-register.md" <<'PY6' || exit 2
+import io, re, sys
+p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
+tgt = "2099-01-04-syn-excluded-b.md"
+s2 = re.sub(r'(?m)^\| `knowledge-base/legal/audits/' + re.escape(tgt) + r'`.*\n', '', s)
+assert s2 != s, "row delete did not land"
+a = "| `knowledge-base/legal/audits/2099-01-03-syn-excluded.md` |"
+i = s2.index(a); e = s2.index("\n", i); row = s2[i:e]
+s3 = s2[:i] + row.rstrip(" |") + " ; see also `knowledge-base/legal/audits/" + tgt + "` |" + s2[e:]
+assert s3 != s2, "prose insert did not land"
+io.open(p, "w", encoding="utf-8").write(s3)
+PY6
+expect "(d) a path in a REASON cell cannot stand in for a deleted File-column row" 1 "$D"
+
 D="$(mkcorpus)" || exit 2
 python3 - "$D/knowledge-base/legal/breach-register.md" <<'PY3' || exit 2
 import io, re, sys
@@ -322,7 +341,7 @@ else fail "live corpus does not pass the guard (rc=$r)"; fi
 echo
 echo "passed: $((checks - fails)) failed: $fails total: $checks"
 
-MIN_ASSERTIONS=33
+MIN_ASSERTIONS=34
 if [[ $checks -lt $MIN_ASSERTIONS ]]; then
   printf '::error::lint-legal-registers.test.sh: only %d assertion(s) ran, expected >= %d\n' \
     "$checks" "$MIN_ASSERTIONS" >&2

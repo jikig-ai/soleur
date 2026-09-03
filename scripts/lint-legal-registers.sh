@@ -1,24 +1,31 @@
 #!/usr/bin/env bash
 # lint-legal-registers.sh -- integrity predicate over the legal registers.
 #
-# WHY THIS EXISTS (#7717). Nothing structurally lints `knowledge-base/legal/**` today. Every
-# wired legal lint targets `docs/legal/` and its Eleventy mirror; the only KB-legal reach is a
-# six-site explicit list in `apps/web-platform/test/legal-doc-consistency.test.ts` plus the
-# single-file `tenant-dpa-register-guard.sh`. This is the first corpus-level gate over that
-# tree, which is exactly why it lands ADVISORY (see --advisory below) rather than straight onto
-# the one required context that cannot be un-required.
+# WHY THIS EXISTS (#7717). No lint covered the legal REGISTER FILES. Every other wired legal lint
+# targets `docs/legal/` and its Eleventy mirror; the KB-legal reach is a 3-site list in
+# `apps/web-platform/test/legal-doc-consistency.test.ts` plus the single-file
+# `tenant-dpa-register-guard.sh`, and `scripts/lint-infra-no-human-steps.py` reaches
+# `knowledge-base/legal/runbooks` through its SCAN_DIRS.
+#
+# This header claimed "nothing structurally lints knowledge-base/legal/** ... the first
+# corpus-level gate over that tree" until review falsified both halves -- the runbooks ARE
+# scanned, and the six-site figure measured 3. The narrower claim is the true one and is the
+# load-bearing one. Being first over the registers is why it lands ADVISORY (see --advisory
+# below) rather than straight onto the one required context that cannot be un-required.
 #
 # THREE ASSERTIONS.
 #
 #   (a) TOKEN CLASS, scoped to the REGISTER FILES -- not the whole corpus.
-#       `knowledge-base/legal/audits/` is a WORKING-DOCUMENT tree: 41 counsel reviews on `main`
+#       `knowledge-base/legal/audits/` is a WORKING-DOCUMENT tree: 41 files on `main` (24 of them
+#       named `*counsel-review*`; "41 counsel reviews" was the wrong noun for the right number)
 #       at 2026-09-03 (42 at this PR's HEAD, which adds one) that
 #       legitimately use an unresolved marker for an open counsel question. A corpus-wide gate
 #       would red the required context on every future counsel review, and would contradict
 #       assertion (c) below, which deliberately scopes its own producer to `audits/**`. One
 #       script taking opposite scoping decisions in its two halves is the defect; narrowing (a)
 #       to the registers resolves both.
-#       Measured 2026-09-03 on the untouched tree: 8 hits across 4 files. Three are outside the
+#       Measured 2026-09-03 on `main`: 8 hits across 4 files (a review seat reported 6; re-measured
+#       against `origin/main` it is 8, so the original figure stood). Three are outside the
 #       register scope by construction and are NOT waived, because they are not in scope to
 #       begin with -- two live in a signed, dated counsel-review instrument (one of them a
 #       backticked meta-reference reading "`#<TBD>` correctly resolved to #7500", which cannot
@@ -123,8 +130,10 @@ REGISTER_FILES=(
 # not descend, so `mkdir audits/archive/` and filing the next determination there removed coverage
 # with no signal at all -- `produced` simply stopped growing while the floor stayed satisfied by
 # the top-level files. The repo already runs an `archive/` convention in other knowledge-base
-# trees, so that was the plausible next move rather than a contrived one. At this pattern the producer matched 6 of 41 audits/ files on `main` at 2026-09-03,
-# and 7 of 42 at this PR's HEAD -- the extra is this PR's own implementation record, which quotes
+# trees, so that was the plausible next move rather than a contrived one. At this pattern the producer matched 8 of 41 audits/ files on `main` at 2026-09-03,
+# and 9 of 42 at this PR's HEAD (the guard's own summary prints `produced=`, which is the
+# figure to trust; both numbers here were stated before the pattern was widened and were not
+# recomputed after it) -- the extra is this PR's own implementation record, which quotes
 # the article numbers and is therefore waived rather than indexed. Both figures are stated
 # because a lone post-PR count reads as though it were the pre-existing corpus.
 # WIDENED at review (#7782). The original `Art\. 33` missed the FORMAL spelling the corpus also
@@ -301,9 +310,24 @@ declared_waivers="$(
 # below unreachable dead code. Measured at review: emptying the table exited 1 at this line
 # with the explicit refusal never printed, so "could not read the table" was indistinguishable
 # from an ordinary assertion failure.
+# ANCHORED ON THE FILE COLUMN, not on a path appearing anywhere in the section. A section-wide
+# grep also read the free-text REASON cells, so deleting a waiver ROW while any surviving reason
+# cross-referenced its path left (d) green -- measured, and not contrived: a live reason cell
+# already cross-references "the row above". This was the last assertion in the file still
+# anchored on a bare token, after (b) and (c) were hardened off whole-file greps citing
+# cq-assert-anchor-not-bare-token.
 documented_waivers="$(
-  { awk '/^## Excluded records/{inblk=1; next} inblk && /^## /{exit} inblk' "$BREACH_REGISTER" \
-      | grep -oE 'knowledge-base/legal/audits/[A-Za-z0-9._/-]+\.md' | sort -u; } || true
+  { awk -F'|' '
+      function trim(s) { gsub(/^[ \t`]+|[ \t`]+$/, "", s); return s }
+      /^## Excluded records/ { inblk = 1; next }
+      inblk && /^## /        { exit }
+      inblk && /^\|/ {
+        if ($0 ~ /^\|[ \t]*:?-+/) next
+        c = trim($2)
+        if (c == "File") next
+        if (c ~ /^knowledge-base\//) print c
+      }
+    ' "$BREACH_REGISTER" | sort -u; } || true
 )"
 # A producer that reaches nothing must not report agreement: an empty table would otherwise
 # compare equal to an empty array, and the fail-closed branch below never fires.
@@ -389,8 +413,12 @@ the pattern, the directory, or the corpus changed and the gate cannot decide"
 
 # ---------------------------------------------------------------------------------------
 echo
+# `waiver-parity` is DERIVED. It was a literal reading `ok` unconditionally, so a run with (d)
+# failing printed `1 failed (... waiver-parity=ok)` -- and every sibling field in that parenthesis
+# is a real variable, which is what made the literal read as measured.
+if [[ "$declared_waivers" == "$documented_waivers" ]]; then _parity=ok; else _parity=DISAGREE; fi
 echo "lint-legal-registers: ${checks} assertion(s), ${fails} failed \
-(registers=${scanned_registers} rows=${row_count} produced=${produced} waived=${#NOT_TRANSCRIBED[@]} waiver-parity=ok)"
+(registers=${scanned_registers} rows=${row_count} produced=${produced} waived=${#NOT_TRANSCRIBED[@]} waiver-parity=${_parity})"
 
 # Assertion floor. Reported with printf + exit rather than through fail(), which is the helper
 # it backstops (ADR-193): a floor that calls the function one edit disarms is not a floor.
