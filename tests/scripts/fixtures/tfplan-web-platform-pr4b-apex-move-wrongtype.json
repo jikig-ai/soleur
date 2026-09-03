@@ -1,0 +1,57 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "cloudflare_pages_domain.pages_apex",
+      "mode": "managed",
+      "type": "cloudflare_pages_domain",
+      "name": "pages_apex",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {},
+        "after_unknown": {},
+        "before_sensitive": {
+          "data": [],
+          "metadata": [],
+          "tags": []
+        },
+        "after_sensitive": {
+          "data": [],
+          "metadata": [],
+          "tags": []
+        }
+      }
+    },
+    {
+      "address": "cloudflare_record.github_pages[\"185.199.108.153\"]",
+      "mode": "managed",
+      "type": "cloudflare_record",
+      "name": "github_pages",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "delete"
+        ],
+        "before": null,
+        "after": {},
+        "after_unknown": {},
+        "before_sensitive": {
+          "data": [],
+          "metadata": [],
+          "tags": []
+        },
+        "after_sensitive": {
+          "data": [],
+          "metadata": [],
+          "tags": []
+        }
+      },
+      "index": "185.199.108.153"
+    }
+  ]
+}

@@ -733,6 +733,15 @@ jobs:
           # than about the text of dns.tf. Source of truth:
           # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
           apex_move_orphans=$(echo "$counts" | jq -r '.apex_move_orphans')
+          # plan_ok: false means the plan JSON carried no resource_changes ARRAY,
+          # so every counter above is 0 because nothing was read — not because
+          # there is nothing to do. Without this, an empty or error plan document
+          # passes every gate in this step.
+          plan_ok=$(echo "$counts" | jq -r '.plan_ok')
+          if [[ "$plan_ok" != "true" ]]; then
+            echo "::error::the terraform plan JSON has no resource_changes array (plan_ok=${plan_ok}) — every destroy-guard counter would read 0 because nothing was parsed, not because the plan is empty. Refusing to grade it."
+            exit 1
+          fi
           # Validate counters parsed correctly — empty values from a jq
           # failure would silently evaluate false in the `-gt 0` test and
           # let destructive plans slip past the guard.

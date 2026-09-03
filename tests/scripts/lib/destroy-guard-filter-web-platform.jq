@@ -144,6 +144,14 @@ def destroyed_at($addr):
   | length;
 
 {
+  # IS THIS PLAN GRADEABLE AT ALL? Every clause below reads `.resource_changes[]?`,
+  # whose `?` swallows a missing or non-array value — so a structurally empty plan
+  # ({}, a null, an error document) yields 0 for EVERY counter, and the consumer's
+  # `^[0-9]+$` validation accepts all of them. A plan nobody could grade would pass
+  # every gate in the step and the apply would proceed against the saved binary
+  # tfplan. This flag is the difference between "no destructive changes" and
+  # "nothing was read".
+  plan_ok: (.resource_changes | type == "array"),
   resource_deletes: ([.resource_changes[]? | select(.change.actions? | index("delete"))] | length),
   nested_deletes: (
     [
@@ -291,44 +299,50 @@ def destroyed_at($addr):
     | length
   ),
 
-  # 8th surface (#7640 PR4b, plan AC72): the apex `moved` must have actually
-  # re-addressed the survivor PR4a left in STATE.
+  # 8th surface (#7640 PR4b, plan AC72): the apex transition must never plan TWO
+  # addresses at once.
   #
-  # THE ONLY CLAUSE HERE THAT IS ABOUT STATE RATHER THAN TEXT. PR4b flips the
-  # apex A record to a CNAME at ONE resource address so core serialises
-  # Delete->Create; Cloudflare rejects an A and a CNAME coexisting at one name
-  # (81053), so the ordering is the entire safety case. It holds only if the
-  # `moved` block's `from` names a key that is really in state.
+  # THE ONLY CLAUSE HERE THAT IS ABOUT STATE RATHER THAN TEXT. Cloudflare rejects
+  # an A and a CNAME coexisting at one name (81053), so the cutover collapses the
+  # transition onto ONE Terraform address and lets core serialise Delete->Create.
+  # That holds only while the plan really is one address.
   #
-  # Terraform does NOT error on a `moved` whose source is absent from state — it
-  # NO-OPS. `pages_apex` then plans as a bare create while the real survivor
-  # plans as a separate delete: two unrelated addresses, dispatched
-  # concurrently, hazard restored, and no error anywhere.
+  # THE PROPERTY IS "NOT TWO ADDRESSES", NOT "THE MOVE RESOLVED". An earlier
+  # revision counted a `pages_apex` create whose `previous_address` was absent or
+  # wrong. That is a PROXY for the hazard, and it is wrong in both directions:
   #
-  # Nothing else in the system can see it. `apex-single-node-replace.test.sh` is
-  # static text, so a CONSISTENT rename of the pin and the `dns.tf` key passes it
-  # 11/11 while state holds the old key; and a PR4a that merged without
-  # converging leaves state with four instances while the repo says one.
-  # `[ack-destroy]` cannot discriminate either — `destroy_count` is 1 in the
-  # correct plan and 1 in the broken one, which is why the consumer HALTs on this
-  # counter ABOVE the ack rather than gating it behind one.
+  #   - It MISSED a PR4a that merged without converging. State then holds four
+  #     `github_pages` instances; the `moved` resolves the pinned one correctly
+  #     (so `previous_address` is right and the proxy is satisfied) while the
+  #     other three plan as separate deletes — four apex addresses in flight.
   #
-  # Scoped to plans that BIRTH pages_apex (`index("create")` catches both the
-  # bare create and the ["delete","create"] replace). Once the move has
-  # converged, later plans carry no create for this address and the counter is
-  # permanently 0 — a one-time transition must not block every subsequent apply.
+  #   - It FIRED on the mid-replace recovery, which is the one moment the apex is
+  #     already dark. A replace that dies between Delete and Create leaves state
+  #     holding NEITHER address, so the re-run's `moved` no-ops and `pages_apex`
+  #     plans as a bare create with no `previous_address`. There is no surviving
+  #     A record to collide with — it is the correct, safe recovery — and the
+  #     HALT blocked it with no `[ack-destroy]` bypass, while its own remediation
+  #     text told the operator not to delete the `moved` block. Measured by the
+  #     review panel against this filter: the recovery plan scored 1.
   #
-  # The literal is pinned in three places that must agree (this filter, dns.tf's
-  # `moved.from`, and the guard's SURVIVING_APEX_KEY); their parity is asserted
-  # by test-destroy-guard-counter-web-platform.sh, because a rename touching two
-  # of the three is exactly the co-mutation the static guard is blind to.
+  # Counting the CO-OCCURRENCE instead is both stricter and correct: it catches
+  # the unconverged case the proxy missed, and admits the recovery the proxy
+  # blocked. `[ack-destroy]` still cannot discriminate any of this — `destroy_count`
+  # is 1 in the healthy plan and 1 in the orphaned one — which is why the consumer
+  # HALTs on this counter ABOVE the ack rather than behind it.
+  #
+  # Permanently 0 once converged: a plan that does not birth `pages_apex` scores 0
+  # whatever else it contains, so a one-time transition cannot block later applies.
   apex_move_orphans: (
-    [ .resource_changes[]?
-      | select(.type == "cloudflare_record")
-      | select(.name == "pages_apex")
-      | select(.change.actions? | index("create"))
-      | select((.previous_address // "") != "cloudflare_record.github_pages[\"185.199.108.153\"]") ]
-    | length
+    ([ .resource_changes[]?
+       | select(.type == "cloudflare_record")
+       | select(.name == "pages_apex")
+       | select(.change.actions? | index("create")) ] | length) as $apex_create
+    | ([ .resource_changes[]?
+         | select(.type == "cloudflare_record")
+         | select(.name == "github_pages")
+         | select(.change.actions? | index("delete")) ] | length) as $sibling_delete
+    | if $apex_create > 0 and $sibling_delete > 0 then $sibling_delete else 0 end
   ),
 
   # --- web-2 RETIRE counters (#6538) -------------------------------------
