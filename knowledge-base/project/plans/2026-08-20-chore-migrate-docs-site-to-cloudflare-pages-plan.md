@@ -1,21 +1,3 @@
-5. `## Decision` — record that **Hypothesis Z was measured FALSE on 2026-09-03**: with both
-   custom domains attached, `apex-origin-probe.sh` returned `SERVING-FROM-GITHUB-PAGES`.
-   Attachment does not select the origin; the DNS record does. The record swap **is** the
-   cutover, and the residual-downtime path is the plan of record rather than a fallback.
-6. `## Decision` — record the ordering mechanism as a **single-address replace ordered by
-   Terraform core**, delivered as two merges (shrink the apex `for_each` to one key, then a
-   `moved` block plus the `A`→`CNAME` flip on that one address). **Not** a two-pass targeted
-   apply — that earlier formulation is superseded here, with its measured reasons. Record that
-   `type` is ForceNew at provider 4.52.7 (measured), so the flip is a genuine single-node
-   replace that core serialises Delete→Create.
-7. `## Alternatives Considered` — add, each with the one fact that disqualifies it: the
-   merge-path two-pass pre-pass (revert deletes it; its gate blocks its own recovery;
-   `-target` transitivity aborts unrelated merges); the `apply_target=` dispatch job (destroys
-   the same-lever rollback); `depends_on` (cannot reference a resource that has left the
-   configuration); `create_before_destroy` (inverts the hazard); a lower TTL (the window is
-   negative-cached against the SOA minimum, not the record TTL); and **`git revert` as the
-   rollback** (measured: reproduces `81053` in reverse).
-
 ---
 title: "Migrate the marketing/docs site off GitHub Pages to Cloudflare Pages (ADR-194)"
 date: 2026-08-20
@@ -2449,16 +2431,19 @@ which is the collision surface this repo has been bitten by three times.
    custom domains attached, `apex-origin-probe.sh` returned `SERVING-FROM-GITHUB-PAGES`.
    Attachment does not select the origin; the DNS record does. The record swap **is** the
    cutover, and the residual-downtime path is the plan of record rather than a fallback.
-6. `## Decision` — record the **two-pass ordered apply on the merge path**: a plan-derived
-   pre-pass in `apply-web-platform-infra.yml`'s `apply` job, a destroy pass, a between-assert
-   over both the Terraform state and the live Cloudflare zone, then the create pass. Record
-   that the hazard is **symmetric**, so the rollback runs through the same ordering by
-   construction — which is what makes D3's "rollback is one merge" true rather than aspirational.
-7. `## Alternatives Considered` — add the merge-path-vs-dispatch fork with the measured reason
-   the dispatch shape was rejected (it buys the ordering property but destroys the
-   same-lever-as-the-cutover rollback property, and `github.event.head_commit` is absent on a
-   dispatch run so `[ack-destroy]` cannot be evaluated), plus `depends_on`,
-   `create_before_destroy`, and a lower TTL — each with the one fact that disqualifies it.
+6. `## Decision` — record the ordering mechanism as a **single-address replace ordered by
+   Terraform core**, delivered as two merges (shrink the apex `for_each` to one key, then a
+   `moved` block plus the `A`→`CNAME` flip on that one address). **Not** a two-pass targeted
+   apply — that earlier formulation is superseded here, with its measured reasons. Record that
+   `type` is ForceNew at provider 4.52.7 (measured), so the flip is a genuine single-node
+   replace that core serialises Delete→Create.
+7. `## Alternatives Considered` — add, each with the one fact that disqualifies it: the
+   merge-path two-pass pre-pass (revert deletes it; its gate blocks its own recovery;
+   `-target` transitivity aborts unrelated merges); the `apply_target=` dispatch job (destroys
+   the same-lever rollback); `depends_on` (cannot reference a resource that has left the
+   configuration); `create_before_destroy` (inverts the hazard); a lower TTL (the window is
+   negative-cached against the SOA minimum, not the record TTL); and **`git revert` as the
+   rollback** (measured: reproduces `81053` in reverse).
 
 ### C4 views
 
