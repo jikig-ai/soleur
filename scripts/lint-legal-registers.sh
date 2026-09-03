@@ -49,7 +49,7 @@
 #       what it protects.
 #
 #   (c) DECLARED-SET INTEGRITY, not discovered-set coverage.
-#       Asserting coverage of a DISCOVERED set is not implementable here: 102 post-mortems
+#       Asserting coverage of a DISCOVERED set is not implementable here: 104 post-mortems
 #       carry `art_33_triggered: false` from `templates/pir.md` as a SCREENING OUTPUT, and six
 #       `audits/` files carry prose determinations with no such frontmatter. Any keyword
 #       producer either captures the 102 or misses the prose -- the discriminator is semantic
@@ -58,7 +58,7 @@
 #       by the register or carries a committed NOT_TRANSCRIBED waiver with a reason and an
 #       issue citation.
 #       PRODUCER SCOPED TO `audits/**`, WITH `post-mortems/**` EXCLUDED -- and the reason is
-#       committed here rather than left to inference: 102 post-mortems carry the screening
+#       committed here rather than left to inference: 104 post-mortems carry the screening
 #       frontmatter, so a producer that reaches them reds on all 102. The register legitimately
 #       indexes ONE post-mortem; that is why membership is asserted by the waiver list rather
 #       than by the producer's reach.
