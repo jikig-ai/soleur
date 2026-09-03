@@ -831,7 +831,7 @@ fi
 # gate's own input inside the tripwire's derivation prefix, reddening it on its first green run.
 assert_contains "the gate's predicate reads positional argv, not the environment" \
   "$(flip_src_nocomments | grep -F -- '--fixture-seams' | head -1 || true)" '${1:-}'
-# The gate runs ~460 lines BEFORE `trap on_unexpected_exit ERR` is installed, so under
+# The gate runs ~550 lines BEFORE `trap on_unexpected_exit ERR` is installed, so under
 # `set -Eeuo pipefail` any stray non-zero there is a SILENT death: no marker, no transition — the
 # one failure shape this FSM exists never to have. Pin the two constructs that would cause it.
 # Same anchoring discipline as GATE_LN above: start at the predicate construct, not at the first
@@ -888,7 +888,9 @@ teardown_case
 
 echo "TEST: #7761 the must-PASS control — with --fixture-seams the same seam IS honoured"
 # Without this control the matrix cannot distinguish a correct gate from one that refuses
-# everything, which would pass every absence assertion above while breaking all 147 existing cases.
+# everything, which would pass every absence assertion above while breaking every pre-existing
+# case in this suite (102 assertions on main — the figure was previously written as 147, which
+# was the sum of two MIN_ASSERTIONS floors rather than a count of anything).
 setup_case
 CANARY="$WORK/canary"
 CANARY_STUB="$WORK/canary.sh"

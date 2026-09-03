@@ -53,6 +53,14 @@
 # transitions), CUTOVER_SYSTEMCTL_CMD (start/stop), CUTOVER_REDIS_CLI_CMD (the FLUSHALL
 # "flush seam"), CUTOVER_LOGGER_CMD (the logger sink), INNGEST_CUTOVER_STATE (state slot
 # path). Real sources: the env-delivered flag, `systemctl`, `redis-cli`, `doppler`.
+#
+# EVERY ONE OF THOSE IS INERT UNLESS THE SCRIPT IS INVOKED WITH `--fixture-seams` (#7761). The
+# gate below unsets all FIFTEEN seam names — the seven listed above plus CUTOVER_CURL_CMD,
+# CUTOVER_DONE_OWNER_MARKER, CUTOVER_GQL_URL, CUTOVER_HEALTH_URL, CUTOVER_VERIFY_INTERVAL_S,
+# CUTOVER_VERIFY_WINDOW_S, INNGEST_CUTOVER_LATCH and INNGEST_CUTOVER_LATCH_MOUNT — when the flag
+# is absent, which is how production always runs. This list is prose and the gate's list is the
+# contract: the suite derives the seam set from this file by shape and asserts it equals the
+# gate's, so if the two disagree the gate wins and the suite reds.
 # -E (errtrace): the ERR trap in run_flip must be inherited by the shared flip functions
 # so an unhandled failure inside them still fails LOUD (marker + aborted), never silent.
 set -Eeuo pipefail
@@ -93,7 +101,7 @@ readonly SERVER_UNIT="inngest-server.service"
 # actually enforce it.
 #
 # PRE-TRAP WINDOW — LOAD-BEARING. `trap on_unexpected_exit ERR` is not installed until run_flip,
-# ~460 lines below. Under `set -Eeuo pipefail` a stray non-zero HERE exits the script silently: no
+# ~550 lines below. Under `set -Eeuo pipefail` a stray non-zero HERE exits the script silently: no
 # marker, no transition, no state slot — precisely the #5934 failure shape this FSM exists to never
 # have. Hence: a `[[ ]]` test that cannot fail and touches no filesystem, `n=$((n+1))` rather than
 # `(( n++ ))` (which returns 1 when incrementing 0 to 1), no loop body ending in a `[[ … ]] && …`

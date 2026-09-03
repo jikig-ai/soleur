@@ -940,10 +940,21 @@ missing secret, and that rides journald to Better Stack.
 
 ### 3. The invariant's stated limit
 
-`--only-secrets` **cannot** bound a unit whose secret *name* is per-host. A tracked unit cannot name
-a secret that only exists as `<NAME>_WEB_1`, and because the flag is fail-closed on a listed-but-
-absent name, the same unit shipped to a second web host would break — on the multi-host path the
-fleet is actively opening.
+`--only-secrets` **cannot** bound a unit whose secret *name* is per-host. A tracked unit holds a
+*variable* name (`${!WEB_ZOT_CONSUMER_URL_KEY}`), never the secret's name, so there is nothing to
+enumerate — that alone is the limit, and it is sufficient.
+
+An earlier revision of this addendum also argued "the flag is fail-closed on a listed-but-absent
+name, so the same unit shipped to a second web host would break." **That is refuted two paragraphs
+above**, where this same decision ships `--no-exit-on-missing-only-secrets` and thereby makes the
+flag fail-OPEN. It is recorded here as removed rather than silently deleted, because it is the
+rationale a future author would route around using the very flag this ADR adopts.
+
+Measured correction to the exemption's scope: only **two** of the four probe units are per-host
+today (`server.tf` builds `WEB_NIC_GUARD_URL_KEY` and `WEB_ZOT_CONSUMER_URL_KEY` as
+`<NAME>_${upper(...)}`); the inngest and git-data keys are identity mappings, because there is one
+of each host. The exemption holds for all four on the never-named-in-the-unit ground, and the other
+two become per-host on the multi-host path the fleet is opening.
 
 The four indirect-name probe units are therefore a **recorded exemption class**, not a false
 positive to be predicated away: `web-zot-consumer-probe.service`, `inngest-consumer-probe.service`,
@@ -962,8 +973,18 @@ because this change's delivery path (`apply_target=inngest-host`) reaches none o
 would have merged them green and left them undeployed, reproducing the exact failure mode the
 rollout phase exists to prevent.
 
-`git-data-gc.service` is the largest single narrowing available in that set and should be sequenced
-first. `prd_git_data` declares only two secrets of its own but is a **branch config under the `prd`
-environment**, and a branch config inherits the entire root set (a verified, still-open finding
-audited under #6167) — so it injects roughly 129 secrets, including `SUPABASE_SERVICE_ROLE_KEY`,
-into a script running on the host that holds every connected user's source code.
+**Sequencing, corrected against the live estate.** An earlier revision of this addendum said
+`git-data-gc.service` was "the largest single narrowing available" and should be sequenced first,
+on the ground that it injects "roughly 129 secrets … into a script running on the host that holds
+every connected user's source code". That figure was uncited and the present tense is wrong.
+Measured 2026-09-03: `doppler configs -p soleur` returns 13 configs and **`prd_git_data` is not
+among them** (a direct read fails `Could not find requested config`), and `knowledge-base/operations/expenses.md`
+records the git-data host as PHANTOM — "this host has NEVER existed … re-verified absent from
+Terraform state 2026-07-27" — with no birth route at all (#6977). So that unit injects nothing
+today, because neither its host nor its config exists.
+
+The branch-config inheritance finding itself stands (`knowledge-base/project/learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md`,
+audited under #6167): a branch config under `prd` resolves the whole root, which today carries
+**130** names (measured). It is the right reason to bound `git-data-gc` **before** the host is ever
+born — cheaper then than after — but it is a pre-birth hardening item, not a live exposure, and it
+must not be described as one. The **live** members of this set are the three web-host units.

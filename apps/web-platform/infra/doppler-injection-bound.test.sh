@@ -49,10 +49,14 @@
 #      contains — `export WEB_ZOT_CONSUMER_URL="${!WEB_ZOT_CONSUMER_URL_KEY}"` — where the key
 #      expands to e.g. WEB_ZOT_CONSUMER_URL_WEB_1 (server.tf:683,734; :820 and :871 are identity
 #      mappings today — see ACK_REASONS for the measured correction). A literal
-#      `--only-secrets` list in a TRACKED unit cannot name a per-host secret, and the flag is
-#      fail-closed on a listed-but-absent name, so the same unit on a second web host would break
-#      — on the multi-host path the fleet is actively opening. That is a real limit of the
-#      invariant, not a false positive to predicate away, so it is an ACK with a reason.
+#      `--only-secrets` list in a TRACKED unit cannot name a per-host secret — the unit contains a
+#      VARIABLE name, never the secret's name, so there is nothing to enumerate. That alone is the
+#      limit, and it is sufficient. An earlier revision also argued "the flag is fail-closed on a
+#      listed-but-absent name, so the same unit on a second web host would break"; that is refuted
+#      by this very PR, which ships --no-exit-on-missing-only-secrets on the flip unit and thereby
+#      makes the flag fail-OPEN. Do not restore it: a future author would route around the stated
+#      rationale using the exact flag this repo already uses. It is a real limit of the invariant,
+#      not a false positive to predicate away, so it is an ACK with a reason.
 #
 # THE LISTS ARE AUTHORED AND COMMENTED, NEVER DERIVED. Two independent exhaustive derivations over
 # the same two sibling scripts produced DIFFERENT answers in both directions, and both misses are
@@ -214,7 +218,7 @@ ACK_REASONS = {
     # These four resolve their own secret as ${!<NAME>_KEY}: the tracked unit never contains the
     # secret's NAME at all, only the name of a variable holding it, which Terraform writes into
     # /etc/default/<unit> per host. A literal `--only-secrets` list in a TRACKED unit therefore
-    # cannot name the secret, and the flag is fail-closed on a listed-but-absent name.
+    # cannot name the secret: the unit holds a VARIABLE name, so there is nothing to enumerate.
     #
     # MEASURED, and it corrects the plan: only TWO of the four keys are per-host TODAY.
     # server.tf:683 and :734 build the key as `<NAME>_${upper(replace("web-1","-","_"))}`, i.e.
