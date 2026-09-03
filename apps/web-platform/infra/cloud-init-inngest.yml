@@ -82,6 +82,85 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # --- #7695: LUKS boot-reopen unit ---------------------------------------------------
+  # THE REASON THIS UNIT EXISTS: cloud-init `runcmd:` runs on FIRST BOOT ONLY. The LUKS stage
+  # in runcmd therefore opens the mapper exactly once, in the life of the host. On boot 2 the
+  # mapper is absent, the `nofail` fstab line for /dev/mapper/inngest-redis skips silently, and
+  # Redis writes its AOF to the ephemeral root disk while every artifact — the ledger, the ADR,
+  # this file — claims LUKS at rest. That is not a degraded state; it is a false encryption
+  # claim about user prompts and agent output, and it is silent by construction.
+  #
+  # `DefaultDependencies=no` + `Before=inngest-redis.service` + `RequiresMountsFor` on the Redis
+  # side is the ordering: the mapper must exist before anything tries to mount or write it.
+  # The passphrase comes from the same 0600 root env file the other units read; there is no
+  # second credential path to keep in sync.
+  #
+  # IDEMPOTENT: if the mapper is already open (first boot, where runcmd just opened it) this is
+  # a no-op. It is NOT a substitute for the runcmd stage — that stage owns the format/mkfs
+  # decision, which this unit must never make. If the device is not already crypto_LUKS, this
+  # unit FAILS rather than formatting: a boot-time unit that can create a filesystem is a boot
+  # -time unit that can destroy one.
+  - path: /etc/systemd/system/inngest-luks-open.service
+    content: |
+      [Unit]
+      Description=Open the LUKS mapper for /mnt/data before Redis starts (#7695)
+      DefaultDependencies=no
+      After=cryptsetup-pre.target systemd-udev-settle.service
+      Before=inngest-redis.service local-fs.target
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      SyslogIdentifier=inngest-luks-stage
+      EnvironmentFile=/etc/default/inngest-doppler
+      ExecStart=/usr/local/bin/inngest-luks-open.sh
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  - path: /usr/local/bin/inngest-luks-open.sh
+    content: |
+      #!/usr/bin/env bash
+      # Boot-reopen for the /mnt/data LUKS mapper. Opens ONLY; never formats, never mkfs.
+      set -euo pipefail
+      DEV="/dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id}"
+      MAPPER=/dev/mapper/inngest-redis
+      emit() { logger -t inngest-luks-stage "SOLEUR_INNGEST_LUKS_STAGE stage=$$1 rc=$$2 blkid_type=$${3:-n/a} expect_luks=${inngest_expect_luks} detail=$${4:-none}" || true; }
+      fail() { emit "$$1" "$$2" "$${3:-n/a}" "$$4"; exit 1; }
+
+      # Already open (first boot, or a re-run) — nothing to do.
+      [ -e "$$MAPPER" ] && { emit reopen_noop 0 crypto_LUKS already-open; exit 0; }
+
+      # Bounded attach wait, same reason as the runcmd stage: blkid on an absent path returns 2,
+      # and "not attached yet" must never be read as "no header".
+      _i=0
+      while [ "$$_i" -lt 30 ]; do
+        [ -b "$$DEV" ] && [ "$$(/usr/sbin/blockdev --getsize64 "$$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
+        sleep 1; _i=$$((_i+1))
+      done
+      [ -b "$$DEV" ] || fail reopen_device_wait 1 n/a "device absent after 30s"
+
+      _blk_rc=0
+      BLK_TYPE="$$(/usr/sbin/blkid -o value -s TYPE "$$DEV" 2>/dev/null)" || _blk_rc=$$?
+      { [ "$$_blk_rc" -eq 0 ] || [ "$$_blk_rc" -eq 2 ]; } || fail reopen_blkid "$$_blk_rc" n/a "blkid could not read the device"
+
+      # NOT crypto_LUKS. On a pre-recut (ext4) host this unit has nothing to do and must not
+      # interfere with the plaintext mount the runcmd stage made; on a post-recut host an ext4
+      # signature is a hard error the runcmd stage already refuses. Either way: never format.
+      if [ "$$BLK_TYPE" != "crypto_LUKS" ]; then
+        if [ "${inngest_expect_luks}" = "true" ]; then
+          fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "expect_luks=true but the device is not crypto_LUKS"
+        fi
+        emit reopen_skip_plaintext 0 "$${BLK_TYPE:-empty}" "pre-recut host; nothing to reopen"
+        exit 0
+      fi
+
+      [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || fail reopen_key_missing 1 crypto_LUKS "INNGEST_REDIS_LUKS_KEY empty"
+      printf '%s' "$$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$$DEV" inngest-redis
+      emit reopen_ok 0 crypto_LUKS
+    owner: root:root
+    permissions: '0755'
+
   - path: /etc/systemd/system/inngest-nftables.service
     content: |
       [Unit]

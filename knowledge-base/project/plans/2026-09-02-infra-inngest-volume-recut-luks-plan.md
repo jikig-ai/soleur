@@ -1449,3 +1449,67 @@ apply on this host) and `__UNREADABLE__` (applied, unanswerable), never `0`. `fl
 inherits `data_bytes`' unreadability rather than being tested independently, because `[ -f ]`
 cannot distinguish "no latch" from "cannot read the directory" — on a volume detached while still
 mounted it would emit `false`, a positive claim about a store never read.
+
+## Addendum — 2026-09-03 (#7695, Merge B): §D2 reason 2 was FALSE, and the CTO reversed it
+
+Appended, not edited. §D2 above stands as the record of what Merge A shipped and why I believed
+it at the time. This section records that one of its three reasons does not survive contact with
+the source, and that the decision it drove has been reversed for Merge B.
+
+### The false claim
+
+§D2 reason 2 says supplying the probe's Redis credential "means wrapping the probe's `ExecStart`
+in `doppler run`", and that doing so would fail `203/EXEC` on the co-located web host because
+`/usr/bin/doppler` is symlinked only by `cloud-init-inngest.yml`.
+
+**The premise is false.** The probe unit as rendered by `inngest-bootstrap.sh` already carries two
+tolerant environment files and a plain script `ExecStart`:
+
+```
+EnvironmentFile=-/etc/default/inngest-doppler
+EnvironmentFile=-/etc/default/inngest-server
+ExecStart=/usr/local/bin/inngest-server-probe.sh
+```
+
+A third `EnvironmentFile=-/etc/default/inngest-probe` is shape-identical to what is already there.
+`ExecStart` is not touched, so there is no `/usr/bin/doppler` dependency and no `203/EXEC` on
+web-1 — that host simply has no such file, the `-` prefix tolerates the absence, and
+`INNGEST_REDIS_PASSWORD` stays unset, which is the honest state for a host with no inngest Redis.
+
+The second sub-objection (that `doppler run` would inject every secret and make the fixture seam
+settable by anyone with Doppler write access) dissolves with it: a one-variable env file injects
+one variable.
+
+The pattern is not even new. `web-probe-envwrite.sh` already writes a single-purpose
+`/etc/default/inngest-consumer-probe` under `umask 0137` + `chmod 600`, consumed by
+`EnvironmentFile=` in `inngest-consumer-probe.service`.
+
+### How it got shipped, and where it propagated
+
+I reasoned from "the unit needs a secret" to "the unit must run under `doppler run`" without
+reading the unit I had edited in the same PR. The claim then went into this plan's §D2, into the
+compound learning, into PR #7754's body, and into its commit message — four sites, two of them
+now on `main` and one immutable — before anything tested it. Grepping the OLD claim is what
+found them; a residual count over the corrected text would have been blind to every one.
+
+That is the same defect class §D1 records one level up: §D1 was a false premise about a *host*,
+this is a false premise about a *unit*, and both were written into a comment as settled fact.
+
+### What Merge B does instead (CTO ruling, 2026-09-03)
+
+Option (d): re-add `redis_keys` at `probe_schema=3`, credentialed by a probe-specific
+single-secret env file, and rest Guard 2's emptiness claim on `redis_keys == 0` **conjoined with**
+`data_mount_src` pinning. Rejected alternatives, with the reasoning, are recorded in the new ADR
+rather than restated here.
+
+Two consequences worth stating at this file's level:
+
+- **§D2 reason 3 was overstated.** R2's remedy was to ADD mount-source pinning, not to retire
+  `redis_keys`. With `data_mount_src` pinned to the physical volume and `redis_active=active` on
+  the same row, the Redis process's `dir` provably sits on the block device being destroyed, and
+  `INFO keyspace = 0` becomes a statement about that device. The conjunction is what bridges
+  process to device — which was always R2's design.
+- **Plan condition 11 has no input either, and §D2 did not catch it.** `INNGEST_DIAGNOSTIC_BOOT`
+  is not an emitted field; the probe emits `cutover_flag` (a read of `INNGEST_CUTOVER_FLIP`) and
+  nothing about diagnostic boot. It moves to a dispatch-time synchronous Doppler read, which is
+  strictly better than a ≤90-minute-old snapshot.
