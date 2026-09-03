@@ -312,7 +312,9 @@ describe("POST /api/kb/upload", () => {
   // 4b. Size validation — 11 MB file succeeds (within 20 MB route limit)
   // Regression: uploads >10 MB were rejected because Next.js middleware
   // truncated the body at the default 10 MB cloneableBody limit, causing
-  // "Failed to parse body as FormData". Fix: experimental.middlewareClientMaxBodySize.
+  // "Failed to parse body as FormData". Fix: experimental.proxyClientMaxBodySize
+  // (renamed from experimental.middlewareClientMaxBodySize in next 16, #7591 — setting
+  // both is a hard error, so the old name is not a fallback).
   test("returns 201 for 11MB file (within 20MB limit)", async () => {
     setupFullMocks();
 

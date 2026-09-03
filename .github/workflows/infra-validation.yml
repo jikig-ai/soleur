@@ -1104,6 +1104,39 @@ jobs:
       - name: Run www-apex-canonicalizer mutation battery (#7640)
         run: bash apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
 
+      # (#7640, ADR-194 plan D5) The apex cutover is expressed as ONE Terraform resource
+      # address so core's replace semantics supply the Delete->Create ordering Cloudflare
+      # requires (81053 rejects an A and a CNAME coexisting at one name). This guard keeps
+      # it that way. It ships one merge BEFORE the flip and is stage-aware, so it is green
+      # on main in the window between PR4a and PR4b rather than blocking every unrelated
+      # infra PR until the flip lands.
+      - name: Run apex-single-node-replace drift-guard (#7640)
+        run: bash apps/web-platform/infra/apex-single-node-replace.test.sh
+
+      # Its falsifiability evidence. The thing that would see a real moved-index
+      # mismatch in dns.tf is the GUARD above; this battery is what proves the guard's
+      # cases can actually go RED -- including M3, the mismatch Terraform does NOT error
+      # on (it no-ops the move and the apex plans as two concurrent addresses again).
+      #
+      # Rows name the FAIL string they expect: `rc != 0` is a symptom several assertions
+      # share, so scoring on the exit code alone credits a row for an unrelated failure.
+      - name: Run apex-single-node-replace mutation battery (#7640)
+        run: bash apps/web-platform/infra/apex-single-node-replace-mutation.test.sh
+
+      # The rollback generator (#7640 PR4b, AC70). `git revert` of the cutover is
+      # FORBIDDEN -- measured, it plans two unrelated addresses concurrently and
+      # reproduces Cloudflare 81053 in the reverse direction, on an apex that is
+      # already failing. This script is what stands in for it, so its own tests are
+      # part of the cutover's safety case rather than an accessory to it.
+      #
+      # Its strongest row asserts the generated dns.tf returns BYTE-IDENTICALLY to the
+      # shape PR4a left (modulo the reverse `moved` block, which PR4a's file does not
+      # carry and the rollback cannot work without). The refusal rows matter as much:
+      # a generator that emits against the wrong tree produces something that LOOKS
+      # like a correct rollback and gets applied during an incident.
+      - name: Run apex rollback-PR generator unit tests (#7640)
+        run: bash apps/web-platform/infra/generate-apex-rollback-pr.test.sh
+
       # The build-identity probe is the detector for a deploy that lands on a
       # preview alias while the served origin keeps the previous build. Case M2
       # is ADR-194 AC19's "run where the expected SHA is deliberately wrong".
@@ -1514,6 +1547,14 @@ jobs:
       # terraform, cloud-init, docker, network, or root, so this job's environment already suffices.
       - name: Run credential-persist-to-home guard (#6633 — ProtectHome=read-only cred-write class)
         run: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
+
+      # Registered explicitly for the same reason as the guard above. Guard 2 of #7761: every
+      # `doppler run` unit whose target script takes an environment value in command position
+      # bounds its injected secret set with `--only-secrets`, or carries a reasoned ack whose
+      # cardinality is pinned. Same environment needs: pure bash + python3, no terraform,
+      # cloud-init, docker, network or root.
+      - name: Run doppler-injection bound guard (#7761 — --only-secrets on every doppler run unit)
+        run: bash apps/web-platform/infra/doppler-injection-bound.test.sh
 
       # Registered here and NOWHERE ELSE (#7587). `run-registered-suites.sh` DERIVES its list by
       # grepping this file for step commands that invoke a `.test.sh` in the infra directory. That

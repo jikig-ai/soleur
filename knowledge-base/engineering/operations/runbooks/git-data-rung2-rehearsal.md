@@ -48,9 +48,13 @@ States 3 and >3 are synthesized by the workflow, because they describe failures 
   - *Better Stack-derived* — the host reported `level:fatal`, or `boot_complete` with a false
     assertion.
   - *Sentry-derived* — the host reported a fatal that Better Stack structurally could not see.
-    Everything before `doppler run` reaches Sentry only, because the emitter's Better Stack
-    block is gated on `BETTERSTACK_LOGS_TOKEN`, which exists only under `doppler run`. This is
+    **Narrowed by #7460:** the ingest token is now baked at `0600`, so EIGHT of the nine stages
+    reach Better Stack. Only the `bootcmd` beacon is Sentry-only, and structurally so — it
+    fires before `write_files`, so the shared emitter does not exist yet. This is
     the 2026-07-31 shape: the rehearsal died at `luks_open` and the route reported TRANSIENT.
+    That stage now reaches BOTH channels, which is the point of #7460 — but the Sentry-derived
+    arm is retained, because it is what still covers the beacon and any run whose baked token
+    has been rotated out from under it.
     The verdict now names `stage`, `rc` and the `detail` text, so the cause is in the artifact
     rather than something to re-query by hand. A Sentry-derived FAIL can also arrive on an
     otherwise-PASSing Better Stack read — a fatal on either channel beats a clean read on the
@@ -82,10 +86,14 @@ username are replaced with `<redacted:VAR>` placeholders, because this repo is p
 Actions artifact is downloadable by any authenticated GitHub user. If the redaction step
 itself fails there is no artifact rather than a raw one.
 
-Since #7481 you are **not** asked to go and consult Sentry yourself. Everything before
-`doppler run` reaches Sentry only — the emitter's Better Stack block is gated on
-`BETTERSTACK_LOGS_TOKEN`, which exists only inside `doppler run` — so a host that dies early
-is invisible to the Better Stack channel. The capture script now performs that read itself on
+Since #7481 you are **not** asked to go and consult Sentry yourself. Before #7460 everything
+prior to `doppler run` reached Sentry only, so a host that died early was invisible to the
+Better Stack channel; the ingest token is now baked at `0600` and eight of the nine stages
+reach both. The one remaining Sentry-only emit is the `bootcmd` beacon, and a
+Better-Stack-side token rotation can silently return the pre-`doppler run` stages to
+Sentry-only until the host is replaced — which the emitter now reports at
+`stage:betterstack_ingest`, `level:warning`, rather than swallowing.
+The capture script performs that read itself on
 every no-verdict path and prints a `second channel:` line saying what it found, including the
 failing `stage`, its `rc`, and the `detail` text. A fatal there is reported as a **FAIL**, not
 as TRANSIENT.

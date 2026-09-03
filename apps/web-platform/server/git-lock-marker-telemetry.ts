@@ -9,7 +9,9 @@
 //   - SOLEUR_GIT_LOCK_IDENTITY_WEDGED — ensure_worktree_identity's set-from-global write could
 //                                       not be applied (reason=native-eexist|common-dir-unresolved)
 //   - SOLEUR_GIT_LOCK_IDENTITY_DIAG   — benign precondition: the set-from-global branch was taken
-//                                       (local identity absent → drift); NOT a wedge
+//                                       (local identity absent → drift), or the operand was
+//                                       degenerate and the function refused BEFORE any read or
+//                                       write (reason=degenerate-worktree-path); NOT a wedge
 //   - SOLEUR_GIT_BARE_POISON          — ensure_bare_config's shared-config normalization ran
 //                                       (branch=healed broke the worktree-wedging config pair;
 //                                       branch=clean found nothing to do). Benign either way —

@@ -88,6 +88,29 @@ for rel in "${NEEDED[@]}"; do
 done
 chmod +x "$SANDBOX/$GUARD_REL" || die "could not make the sandboxed guard executable"
 
+# THE SANDBOX'S dns.tf IS THE FROZEN PRE-CUTOVER BASELINE, NOT THE LIVE FILE (#7640 PR4b).
+#
+# Every row here mutates FROM the GitHub-Pages shape, and `cutover()` synthesizes the
+# post-cutover shape by replacing the `github_pages` + `www` span. Sourcing that from the
+# live `dns.tf` worked until the apex actually flipped: PR4b removes the `github_pages`
+# resource, so `res_span()` finds no anchor and the harness aborts with
+# "case G-stage: the mutator failed to apply — this case tested NOTHING".
+#
+# It aborted LOUDLY rather than scoring a tree it could not build, which is the property
+# this harness was written to have. The fix is to stop deriving a fixture from a file whose
+# stage moves underneath it. The guard itself still runs against the LIVE root in CI
+# (unseamed), so nothing is lost: this battery scores the GUARD, the guard validates the repo.
+#
+# Asserted pre-cutover below, because a baseline that had drifted post-cutover would make
+# every pre-cutover row vacuous while all of them still reported PASS.
+PRE_CUTOVER_BASELINE="$REPO_ROOT/$INFRA_REL/fixtures/dns.tf.pr4a-baseline"
+[[ -r "$PRE_CUTOVER_BASELINE" ]] || die "pre-cutover dns.tf baseline missing: $PRE_CUTOVER_BASELINE"
+grep -qE '^resource "cloudflare_record" "github_pages" \{' "$PRE_CUTOVER_BASELINE" \
+  || die "baseline fixture is not PRE-cutover (no github_pages resource) — every row would be vacuous"
+grep -qE '^resource "cloudflare_record" "pages_apex" \{' "$PRE_CUTOVER_BASELINE" \
+  && die "baseline fixture is POST-cutover (declares pages_apex) — it is meant to be the pre-flip shape"
+cp -a "$PRE_CUTOVER_BASELINE" "$SANDBOX/$DNS_REL" || die "could not install the pre-cutover baseline into the sandbox"
+
 # ---------------------------------------------------------------------------------------
 # THE MUTATORS
 #

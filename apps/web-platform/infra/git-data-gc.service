@@ -19,10 +19,13 @@ OnFailure=git-data-gc-failure.service
 
 [Service]
 Type=oneshot
-# Under `doppler run`, exactly like the OnFailure sibling. Without it
-# BETTERSTACK_LOGS_TOKEN is absent from the environment, so git-data-gc.sh's emits are
-# Sentry-only — while the plan's steady-state channel and the runbook's query both read
-# SOLEUR_GIT_DATA_GC from BETTER STACK, which would have returned zero rows forever.
+# Under `doppler run`, exactly like the OnFailure sibling. The ORIGINAL reason was that
+# without it BETTERSTACK_LOGS_TOKEN was absent from the environment, so git-data-gc.sh's
+# emits were Sentry-only while the runbook's query read SOLEUR_GIT_DATA_GC from BETTER
+# STACK. Since #7460 (ADR-198) the emitter falls back to the baked 0600 file, so the wrapper
+# is no longer what makes this unit's emits reachable — it stays because `doppler run` is
+# also how this unit gets the REST of its environment, and because the Doppler copy is the
+# one a Better Stack rotation refreshes without a host replace.
 #
 # That gap was worst in the case it matters: every repo failing to repack exits 0 by
 # design (per-repo failures are reported, not fatal), so OnFailure never fires either —

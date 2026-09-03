@@ -62,8 +62,11 @@ readonly TMP_ROOT
 trap 'rm -rf -- "$TMP_ROOT"' EXIT INT TERM
 
 passes=0; fails=0; asserted=0
-pass() { echo "  PASS: $1"; passes=$((passes + 1)); }
-fail() { echo "  FAIL: $1"; fails=$((fails + 1)); }
+# VERDICT_LOG is append-only and is what the accounting below reconciles against. The counters
+# are numbers a mutation can move; the printed lines are evidence it has to delete instead.
+VERDICT_LOG="$TMP_ROOT/verdicts.txt"; : > "$VERDICT_LOG"
+pass() { echo "  PASS: $1"; echo "PASS" >> "$VERDICT_LOG"; passes=$((passes + 1)); }
+fail() { echo "  FAIL: $1"; echo "FAIL" >> "$VERDICT_LOG"; fails=$((fails + 1)); }
 # Incremented at the CALL SITE. A counter living inside the helper it polices cannot detect that
 # helper being neutered, which is the whole point of the conservation check at the bottom (ADR-193).
 ck() { asserted=$((asserted + 1)); }
@@ -80,9 +83,18 @@ echo "fixture-dir-operand-assert.test.sh"
 # this one through fail() made the whole suite exit 0 under `guard-vacuity-floor.test.sh`'s neutered
 # -helper mutant, which is the same defect one level up (ADR-193).
 FILES_SCANNED=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null | sed -n 's/^FILES=//p')
-if [[ "${FILES_SCANNED:-0}" -le 100 ]]; then
-  printf '[FATAL] corpus is empty or tiny (FILES=%s) — SITES=0 over no files is not a clean tree.\n' \
-    "${FILES_SCANNED:-unset}" >&2
+# 850, derived from a measured 914 with headroom for legitimate deletions — NOT a round number
+# chosen for comfort. The previous floor of 100 was ~11% of the real corpus, so it tolerated
+# losing 814 files: measured, narrowing the scanner's glob to `apps/web-platform/*.sh` gives
+# FILES=232 and leaves this floor, the SITES equality and the named-file pin ALL green while 682
+# files go unscanned. The retired `SITES >= 120` floor was what used to catch that, so replacing
+# it with an exact equality moved the anti-narrowing burden onto a number that could not carry it.
+# Raise this in lockstep if the corpus grows; a drop of >7% is a defect, not a rounding error.
+if [[ "${FILES_SCANNED:-0}" -lt 850 ]]; then
+  printf '[FATAL] corpus is %s files, below the floor of 850 (measured: 914).\n' "${FILES_SCANNED:-unset}" >&2
+  printf '        A narrowed corpus reports SITES=0 over the files it stopped reading, which is\n' >&2
+  printf '        byte-identical to a clean tree. If files were legitimately deleted, lower this\n' >&2
+  printf '        floor in the SAME commit as the deletion.\n' >&2
   exit 1
 fi
 
@@ -95,16 +107,30 @@ fi
 # were both fully green. This battery was armed against deletion and neutering and unarmed against
 # SHRINKAGE, which is the direction a future edit actually takes.
 SITES_LIVE=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null | sed -n 's/^SITES=//p')
-if [[ "${SITES_LIVE:-0}" -lt 120 ]]; then
-  printf '[FATAL] live corpus reports only %s sites (floor 120). The baseline is shrink-only, so a\n' "${SITES_LIVE:-unset}" >&2
-  printf '        narrowed scanner is INVISIBLE to it — this floor is what makes narrowing loud.\n' >&2
-  printf '        If a real remediation dropped the count, lower this floor in the SAME commit.\n' >&2
+# EXACT, not a floor. The `>= 120` form was the right instrument while 167 sites were
+# grandfathered: it made a narrowed scanner loud, because the shrink-only baseline can only ever
+# detect GROWTH. The burn-down (#7709) took the population to 1, and a floor over a population of
+# 1 is worthless — it cannot tell a narrowed scanner from a clean tree, which is this whole
+# family's failure mode.
+#
+# Equality is strictly stronger in both directions at this size, and it is now the arm that
+# enforces plan task 1.11: the live count must equal the ACKNOWLEDGED row total, so a site can
+# only survive by being written down with a reason. Growth is still caught per-file by the ratchet
+# below; narrowing is caught here AND by the synthetic must-FAIL fixtures in section E, which feed
+# the scanner known-bad shapes and are the real anti-narrowing burden now that the corpus is clean.
+ACK_TOTAL=$(grep -vE '^#|^[[:space:]]*$' "$BASELINE" | awk -F'\t' '{s+=$1} END {print s+0}')
+if [[ "${SITES_LIVE:-unset}" != "$ACK_TOTAL" ]]; then
+  printf '[FATAL] live corpus reports %s sites; the baseline acknowledges %s.\n' \
+    "${SITES_LIVE:-unset}" "$ACK_TOTAL" >&2
+  printf '        HIGHER: a new unasserted site appeared — fix it, do not regenerate.\n' >&2
+  printf '        LOWER:  either a real remediation (drop the row in the SAME commit) or the\n' >&2
+  printf '                scanner narrowed, which is the failure this arm exists to catch.\n' >&2
   exit 1
 fi
-# A named member, at its exact count: a floor over a total cannot see one file going to zero while
-# another grows. `context-reviewed-gate.test.sh` is one of the six this issue remediated.
-NAMED_FILE=".claude/hooks/context-reviewed-gate.test.sh"
-NAMED_WANT=12
+# A named member, at its exact count. A total cannot see one file going to zero while another
+# grows, so the surviving acknowledged file is pinned by name as well as by the sum above.
+NAMED_FILE=".github/scripts/test/test-infra-suite-registration-mutations.sh"
+NAMED_WANT=8
 NAMED_GOT=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null \
   | grep -E "^${NAMED_FILE}:[0-9]+:" | wc -l | tr -d ' ')
 if [[ "$NAMED_GOT" != "$NAMED_WANT" ]]; then
@@ -143,7 +169,13 @@ ck
 sandbox_base="$TMP_ROOT/shrunk.txt"
 # EVERY row decremented, not just the first with count>1. Decrementing one row made this arm a
 # 1-of-33 sample whose apparent power was threshold luck, and coupled it to that file's real count.
-awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print; next} {print ($1>1 ? $1-1 : $1), $2}' "$base" > "$sandbox_base"
+#
+# Unconditionally, including rows at 1. The `$1>1 ? $1-1 : $1` form silently became a NO-OP when
+# the burn-down (#7709) took the corpus to a single acknowledged row of count 1: nothing was
+# shrunk, so nothing was detected, and this arm reported the ratchet decorative while the ratchet
+# was fine. A row shrunk 1 -> 0 is exactly the "this file may not appear at all" case, which is
+# the strongest form of the claim, so there was never a reason to exempt it.
+awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print; next} {print ($1-1), $2}' "$base" > "$sandbox_base"
 shrunk_violation=""
 while IFS=$'\t' read -r n f; do
   [[ -n "$f" ]] || continue
@@ -415,6 +447,26 @@ SYNTHEOF
 if [[ "$n" == "0" ]]; then pass "must-PASS: \`d=\$(mktemp -d) || return 1\` is guarded"
 else fail "must-PASS regression: guarded mktemp flagged (${n})"; fi
 
+
+ck
+n=$(synth wrongfunc <<'SYNTHEOF'
+new_repo() {
+  local d
+  d=$(mktemp -d)
+  : "${1:?fixture dir is empty}"
+  printf '%s\n' "$d"
+}
+commit_all() { git -C "$1" add -A && git -C "$1" commit -q -m "$2"; }
+SYNTHEOF
+)
+# A ONE-LINE function definition is its own FUNC_HEAD. The positional-at-use walk used to start
+# at `i - 1`, stepping over that head and running on to the PREVIOUS function's head — so a
+# guard on a same-named positional in an UNRELATED body cleared the site. Measured at 0 before
+# the fix. This is the exact placement the #7709 burn-down had to correct by hand in two
+# legal-lint suites, and the detector could not tell the two apart.
+if [[ "${n:-0}" -ge 1 ]]; then pass "a guard in a DIFFERENT (one-line) function does not clear the site"
+else fail "a \${1:?} in an unrelated function silenced a one-line function's write (${n:-none})"; fi
+
 ck
 n=$(synth reads <<'SYNTHEOF'
 h() {
@@ -499,6 +551,7 @@ canon_raw="$(awk '/^assert_fixture_dir\(\) \{/,/^\}/' "$HELPERS")"
 for case_name in empty relative bareslash; do
   ck
   r=$(probe_repo "$case_name")
+  : "${r:?fixture dir is empty; git -C <empty> would retarget this write}"
   case "$case_name" in
     empty)     op="" ;;
     relative)  op="relative/path" ;;
@@ -526,13 +579,35 @@ else fail "GUARD 3: an absolute operand was refused (rc=$G3_RC)"; fi
 # Not a mutation of the SUT: a suite whose only gate is a failure counter exits 0 having asserted
 # nothing, and that is invisible to every row above.
 ck
-if [[ "$(type -t fail)" == "function" ]] && declare -f fail | grep -q 'fails=\$((fails + 1))'; then
-  pass "fail() still moves its counter (the conservation check below can therefore fire)"
+# Driven, not read. Both counters are checked: a fail() that credits `passes` keeps every
+# literal a grep could look for while making the suite structurally unable to report a defect.
+_h_p=$passes; _h_f=$fails
+fail "ROW 8 self-test — this FAIL is expected and is immediately reconciled" >/dev/null
+if [[ $fails -eq $((_h_f + 1)) && $passes -eq $_h_p ]]; then
+  # Undo the self-test so it does not pollute the verdict ledger or the counters.
+  fails=$_h_f
+  sed -i '$d' "$VERDICT_LOG"
+  pass "fail() moves fails and ONLY fails (driven, not grepped)"
 else
-  fail "fail() no longer increments — every verdict above is unreportable"
+  fails=$_h_f
+  sed -i '$d' "$VERDICT_LOG"
+  fail "fail() does not move fails, or moves passes too — every verdict above is unreportable"
 fi
 
 # --- Accounting. Emitted DIRECTLY, never through pass()/fail(). ---------------------------------------
+# DIRECTION-AWARE. The sum below conserves the total, so it cannot see a verdict moved from the
+# `fails` bucket to the `passes` bucket — measured, that mutation reported `64 passed, 0 failed`
+# exit 0 with a genuine regression printing FAIL on screen. The ledger is the independent
+# observable: silencing it means deleting evidence rather than decrementing a number.
+_ledger_fail=$(grep -c '^FAIL$' "$VERDICT_LOG" || true)
+_ledger_pass=$(grep -c '^PASS$' "$VERDICT_LOG" || true)
+if [[ "${_ledger_fail:-0}" -ne "$fails" || "${_ledger_pass:-0}" -ne "$passes" ]]; then
+  printf '\n[FATAL] accounting: ledger (%s pass / %s fail) disagrees with counters (%d pass / %d fail).\n' \
+    "${_ledger_pass:-0}" "${_ledger_fail:-0}" "$passes" "$fails" >&2
+  printf '  A verdict was recorded in one bucket and counted in the other — that is what a fail()\n' >&2
+  printf '  crediting passes looks like, and the sum check below cannot see it.\n' >&2
+  exit 1
+fi
 if [[ $((passes + fails)) -ne $asserted ]]; then
   printf '\n[FATAL] accounting: passes+fails (%d) != asserted (%d).\n' "$((passes + fails))" "$asserted" >&2
   if [[ $((passes + fails)) -lt $asserted ]]; then
@@ -545,7 +620,7 @@ fi
 
 # Exact, derived from a green run: 62 arms execute today. The previous 17 against 21 arms left
 # four must-trip arms deletable behind the slack (measured). Raise in lockstep; never lower.
-MIN_ASSERTIONS=62
+MIN_ASSERTIONS=63
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS}" >&2
   exit 1

@@ -347,9 +347,14 @@ in the runbook: the fatal channel is proven at **rung 1** by `git-data-runcmd-re
 
 Related, and it changed the capture design: `stage:bootcmd_start` reaches **Sentry only**. It is
 a bare `curl` in `bootcmd`, which runs before `write_files`, so `/usr/local/bin/git-data-emit`
-does not exist yet — and the emitter's Better Stack block is gated on `BETTERSTACK_LOGS_TOKEN`,
-present only under `doppler run`. On a successful boot the **only** Better Stack row a git-data
-host produces is `boot_complete` itself. The plan specified anchoring the empty-query discipline
+does not exist yet. That half still holds.
+
+> **Superseded in part by #7460 (ADR-198).** The sentence that followed — "the emitter's Better
+> Stack block is gated on `BETTERSTACK_LOGS_TOKEN`, present only under `doppler run`. On a
+> successful boot the **only** Better Stack row a git-data host produces is `boot_complete`
+> itself" — is the exact claim ADR-198 quotes as its problem statement. The token is now baked
+> at `0600` in `user_data`; eight of the nine stages reach Better Stack. Only `bootcmd_start`
+> remains Sentry-only, and that is by construction, not by token availability. The plan specified anchoring the empty-query discipline
 on `bootcmd_start`; that anchor is a strict prerequisite of the thing it anchors and would have
 returned zero rows on a perfect rehearsal, forever, reading as a dark boot. The capture script
 anchors on **source liveness** instead (any row from any *other* host), which separates "the

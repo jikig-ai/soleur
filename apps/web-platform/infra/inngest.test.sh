@@ -1567,8 +1567,17 @@ assert "bootstrap augments a preserved env-file with DOPPLER_PROJECT (in-place r
 # name `run --project …` (e.g. the failure-log unit's do-NOT-wrap rationale).
 assert "no ExecStart --project remains in inngest-bootstrap.sh units (#6555)" \
   "! grep -qE '^ExecStart=.*--project' '$BOOTSTRAP_SH' && ! grep -qE 'FLIP_GUARD_LINE=.*--project' '$BOOTSTRAP_SH'"
-assert "inngest-cutover-flip.service ExecStart has NO --project (#6555)" \
-  "grep -qF 'doppler run --config prd' '$CUTOVER_FLIP_SERVICE' && ! grep -qE '^ExecStart=.*--project' '$CUTOVER_FLIP_SERVICE'"
+# CONTINUATION-JOINED (#7761). The flip unit's ExecStart became a five-line backslash-continued
+# directive, and `^ExecStart=.*--project` sees only the FIRST physical line — so `--project` on any
+# continuation line would pass this guard silently. Guard 2's own scanner joins continuations for
+# exactly this reason; this sibling assertion had to move with it. The positive half is anchored on
+# the ExecStart line rather than the whole file, because the unit's comments legitimately discuss
+# the flag (a whole-file grep -qF is satisfied by that prose alone — measured).
+# shellcheck disable=SC2034  # consumed inside the single-quoted predicate `assert` evals below,
+# which shellcheck cannot follow. Kept as a variable rather than inlined so the join runs once.
+CUTOVER_FLIP_EXEC="$(sed -n '/^ExecStart=/,/[^\\]$/p' "$CUTOVER_FLIP_SERVICE" | sed 's/\\$//' | tr -d '\n')"
+assert "inngest-cutover-flip.service ExecStart has NO --project, continuations joined (#6555/#7761)" \
+  "grep -qF 'doppler run --config prd' <<<\"\$CUTOVER_FLIP_EXEC\" && ! grep -qE 'ExecStart=.*--project' <<<\"\$CUTOVER_FLIP_EXEC\""
 assert "deploy-inngest-bootstrap.sudoers env_keep drops DOPPLER_PROJECT (#6555)" \
   "! grep -qE '^Defaults!INNGEST_BOOTSTRAP env_keep.*DOPPLER_PROJECT' '$SUDOERS_SRC'"
 assert "cloud-init.yml inline sudoers env_keep drops DOPPLER_PROJECT (#6555)" \

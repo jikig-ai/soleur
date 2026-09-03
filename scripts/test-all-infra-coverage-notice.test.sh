@@ -94,13 +94,34 @@ s = s.replace(old, (
 # 1b. Neuter the re-derivation that follows the initialisation. `run_arm` does not set
 #     SANDBOX_DIFF_NAMES, so `$_diff_names` still holds the REAL diff — and a real diff that
 #     touches apps/web-platform/infra/ sets _infra_in_diff back to 1, defeating step 1.
-old1b = """if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
-  _infra_in_diff=1
-fi"""
-assert s.count(old1b) == 1, f"expected exactly one infra re-derivation, found {s.count(old1b)}"
-s = s.replace(old1b, """if [[ -z "${_SANDBOX_FORCED_DIFF:-}" ]] && grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
-  _infra_in_diff=1
-fi""")
+#     ANCHORED ON THE BLOCK'S SHAPE, NOT ON ITS CONDITION. This used to pin the
+#     re-derivation's exact single-line text, which coupled this suite to every
+#     future edit of that condition -- #7640 added a second prefix
+#     (.github/workflows/apply-web-platform-infra.yml, so an allow-list-only PR
+#     still runs the infra guards) and the literal stopped matching, turning this
+#     suite RED for a reason that had nothing to do with what it tests. The regex
+#     below matches any condition that re-derives _infra_in_diff, so the neuter
+#     survives the condition growing again.
+#     LOCATED FROM THE ASSIGNMENT BACKWARDS, not by matching the condition. An
+#     earlier revision pinned the re-derivation's exact single-line text, which
+#     coupled this suite to every future edit of that condition -- #7640 added a
+#     second prefix (.github/workflows/apply-web-platform-infra.yml, so an
+#     allow-list-only PR still runs the infra guards) and the literal stopped
+#     matching, turning this suite RED for a reason unrelated to what it tests.
+#     A regex over the condition is the wrong repair: `^if ... then` with a
+#     non-greedy body starts at the FIRST `if` in the file and swallows
+#     everything up to the target. So: find the assignment, walk back to the
+#     `if` that owns it, and wrap exactly that condition.
+_marker = 'then\n  _infra_in_diff=1\nfi'
+_mi = s.find(_marker)
+assert _mi != -1, "could not locate the infra re-derivation assignment"
+_if = s.rfind('\nif ', 0, _mi)
+assert _if != -1, "could not locate the `if` owning the infra re-derivation"
+_cond = s[_if + len('\nif '):_mi].rstrip()
+assert _cond.endswith(';'), f"unexpected condition shape: {_cond!r}"
+s = (s[:_if]
+     + '\nif [[ -z "${_SANDBOX_FORCED_DIFF:-}" ]] && { ' + _cond[:-1] + '; }; '
+     + s[_mi:])
 
 # 2. Neuter the detection block so it cannot overwrite the forced value. SANDBOX_DETECT_OK can
 #    still force it back to 0 for the fail-SAFE arm.

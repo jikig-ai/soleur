@@ -728,11 +728,25 @@ jobs:
           # hcloud_server.firewall_ids). Source of truth:
           # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
           host_creates=$(echo "$counts" | jq -r '.host_creates')
+          # apex_move_orphans (#7640 PR4b, plan AC72): a `moved` block that no-opped
+          # against absent state. The ONLY counter here that is about STATE rather
+          # than about the text of dns.tf. Source of truth:
+          # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
+          apex_move_orphans=$(echo "$counts" | jq -r '.apex_move_orphans')
+          # plan_ok: false means the plan JSON carried no resource_changes ARRAY,
+          # so every counter above is 0 because nothing was read — not because
+          # there is nothing to do. Without this, an empty or error plan document
+          # passes every gate in this step.
+          plan_ok=$(echo "$counts" | jq -r '.plan_ok')
+          if [[ "$plan_ok" != "true" ]]; then
+            echo "::error::the terraform plan JSON has no resource_changes array (plan_ok=${plan_ok}) — every destroy-guard counter would read 0 because nothing was parsed, not because the plan is empty. Refusing to grade it."
+            exit 1
+          fi
           # Validate counters parsed correctly — empty values from a jq
           # failure would silently evaluate false in the `-gt 0` test and
           # let destructive plans slip past the guard.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}')."
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]] || [[ ! "$apex_move_orphans" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}', apex_move_orphans='${apex_move_orphans}')."
             exit 1
           fi
           # HALT on a host create — evaluated OUTSIDE the destroy_count sum below
@@ -759,6 +773,34 @@ jobs:
             echo "::error::    hcloud_server.web carries lifecycle ignore_changes = [user_data, ssh_keys, image, placement_group_id] (server.tf). Two consequences: the pin is honoured ONLY at create, and a later routine merge apply passing ':latest' will NOT drift it back; conversely, editing user_data or image is INERT for an already-running host, so this chain matters only on the create path."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. That is the only bypass — [ack-destroy] deliberately does NOT reach this HALT. Use it to unblock merges while the correct dispatch/apply above is arranged; it skips the apply, it does not perform it."
             grep -E 'will be created|Plan:' tfplan.txt | head -20 >&2
+            exit 1
+          fi
+          # HALT on an orphaned apex move (#7640 PR4b, plan AC72). Evaluated
+          # OUTSIDE the destroy_count sum below and BEFORE it, for the same reason
+          # as the host_creates HALT above: `[ack-destroy]` CANNOT discriminate
+          # this failure. The correct PR4b plan and the broken one both carry
+          # destroy_count == 1, so an ack-gated arm here would be no gate at all.
+          #
+          # What it catches: `cloudflare_record.pages_apex` is being created, but
+          # the plan does not say it came FROM the survivor PR4a left in state.
+          # Terraform does not error on a `moved` whose source is absent — it
+          # no-ops, and the apex then plans as a bare create plus an unrelated
+          # delete: two addresses dispatched concurrently against a live,
+          # HSTS-preloaded apex, which is the Cloudflare 81053 collision the
+          # single-address design exists to prevent.
+          #
+          # A TRIPWIRE, not a routine gate: it is 0 on every plan that does not
+          # birth the apex record, and permanently 0 once the move has converged.
+          if [[ "$apex_move_orphans" -gt 0 ]]; then
+            echo "::error::terraform plan would CREATE cloudflare_record.pages_apex WITHOUT re-addressing it from the record PR4a left in state (apex_move_orphans=${apex_move_orphans})."
+            echo "::error::This is the ADR-194 cutover's silent-failure mode. Terraform does NOT error on a 'moved' block whose source is absent from state — it no-ops. The apex then plans as a bare create while the surviving A record plans as a SEPARATE delete: two unrelated addresses, dispatched concurrently, on a live HSTS-preloaded apex. Cloudflare rejects an A and a CNAME coexisting at one name (error 81053), so one of the two dispatches fails and the apex can be left with no address at all."
+            echo "::error::[ack-destroy] deliberately does NOT reach this HALT, and could not help if it did: destroy_count is 1 in the CORRECT plan and 1 in this one. The counts are identical; only the plan's previous_address distinguishes them."
+            echo "::error::DIAGNOSE — the two shapes that produce this, both of which pass the static guard apex-single-node-replace.test.sh 11/11:"
+            echo "::error::  • The repo and STATE disagree on the survivor key. A consistent rename of dns.tf's moved.from AND the for_each key is invisible to a static text guard. Compare: terraform state list | grep cloudflare_record.github_pages"
+            echo "::error::  • PR4a merged but never CONVERGED ('[skip-web-platform-apply]', or a failed apply), so state still holds all four GitHub Pages instances while the repo says one. Same command; expect exactly one instance, keyed 185.199.108.153."
+            echo "::error::REMEDY: make dns.tf's 'moved { from = ... }' name the address that is actually in state, byte-identically. Do NOT 'fix' this by deleting the moved block — that IS the two-address hazard, not a workaround for it."
+            echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply; it does not perform it."
+            grep -E 'will be created|must be replaced|moved from|Plan:' tfplan.txt | head -20 >&2
             exit 1
           fi
           destroy_count=$((resource_deletes + nested_deletes + reboot_updates))
@@ -806,6 +848,27 @@ jobs:
             fi
             grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
             exit 1
+          fi
+
+          # THE ACKED PATH NEEDS THE LIST TOO (#7640).
+          #
+          # Everything above lives inside `destroy_count > 0 && ack != true`, so
+          # the enumeration of what is about to be destroyed printed ONLY on the
+          # path where the apply was REFUSED. Once you acked, you never saw it
+          # again — and `tfplan.txt` is written to the runner filesystem, which
+          # this job neither echoes nor uploads. So a successful apply that
+          # deleted records from the live public apex left no record in the run
+          # log of WHAT it deleted, and post-incident reconstruction meant going
+          # to Cloudflare's audit log.
+          #
+          # The irony is in the gate's own text three lines up: it tells the
+          # reader to "read the 'will be destroyed' list below and confirm it is
+          # the WHOLE intended change before acking" — a list that, by
+          # construction, is absent from every run where they did.
+          if [[ "$destroy_count" -gt 0 ]]; then
+            echo "::group::Acked destroy — what this apply is about to remove"
+            grep -E 'will be destroyed|will be replaced|Plan:' tfplan.txt | head -40
+            echo "::endgroup::"
           fi
 
       # --- #6767: fail-closed PRE-APPLY ENTRYPOINT GATE ---------------------------

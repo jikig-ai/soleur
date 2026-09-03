@@ -49,6 +49,7 @@ AUTOFIX_PAIRS=(
   "claude-opus-4-6=claude-opus-5"
   "claude-sonnet-4-6=claude-sonnet-5"
   "claude-sonnet-4-5=claude-sonnet-5"
+  "claude-fable-5=claude-fable-5-1"
 )
 
 # SINGLE-HOP INVARIANT (fail-fast). A convergent map rewrites every stale id
@@ -78,6 +79,32 @@ autofix_from_re() {
   for p in "${AUTOFIX_PAIRS[@]}"; do out="${out:+$out|}${p%%=*}"; done
   printf '%s' "$out"
 }
+
+# RIGHT-BOUNDARY of a model id: the next char must not extend the id. Model ids
+# are [0-9A-Za-z-], so a bare alternation would match a PREFIX of a longer id.
+#
+# The `--fix` sed has been anchored since the script was created; SELECTION was
+# not. That asymmetry was ALREADY producing a permanently-red drift cron before
+# Fable 5.1 existed — measured on origin/main, a config file carrying the DATED
+# variant `claude-opus-4-7-20260101` reports `--detect` rc=10, `--fix` prints
+# "fixed" while changing nothing (the sed's boundary correctly declines), and
+# `--detect` re-flags it forever. Same input on this version: rc=0.
+#
+# So the general invariant is the one stated at the bottom of this comment
+# (selection and rewriting must share one boundary), and dated ids were its
+# standing violation. `claude-fable-5` is what made it unavoidable rather than
+# what created it: it is the first pair whose stale id is a strict PREFIX of its
+# own target, so the mismatch fires on the id that is CURRENT rather than only
+# on a longer variant nobody had written yet. `assert_single_hop` does NOT catch
+# either shape ('claude-fable-5-1' is not itself a source id).
+#
+# Selection and rewriting MUST use this one boundary, or they can disagree
+# again: the sed cannot fix what only the grep considers stale.
+ID_BOUNDARY='([^0-9A-Za-z-]|$)'
+
+# Anchored matcher — the ONLY pattern that may decide "this file is stale".
+autofix_match_re() { printf '%s%s' "($(autofix_from_re))" "$ID_BOUNDARY"; }
+
 FLAG_ONLY_STALE_RE='claude-3[._-]|claude-(opus|sonnet|haiku)-[0-9.]+-20250[0-9]+'
 
 DELETION_GUARD=20   # abort --fix if any file would lose more than this many lines
@@ -100,13 +127,32 @@ EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive
 # the failure mode #5100 exists to prevent.
 collect_config_hits() {
   local re out rc
-  re="$(autofix_from_re)"
-  out="$(grep -rEl "$re" "$ROOT" \
+  re="$(autofix_match_re)"
+  # -I (skip binary) is a CORRECTNESS flag, not an optimisation. Without it a
+  # compiled artifact under $ROOT is selectable: measured, a blob containing
+  # `claude-opus-4-7` between NULs was reported as a stale config file, the
+  # `[1]` re-scan could not read it back (`grep -o` on binary prints
+  # "binary file matches" to stderr and yields no stdout), and `--fix` would
+  # then `sed -i` the binary in place — a byte-patched artifact reported as
+  # `fixed:`. That path is now reachable by following this skill's own SKILL.md,
+  # which tells the operator to unpack `claude-code-linux-x64` and grep it.
+  # The auto-fix surface is config-class TEXT by definition, so a binary is
+  # never a legitimate hit and excluding it closes selection, display and
+  # rewrite in one place.
+  # `if out=$(cmd); then` rather than a bare capture: the exit code here is
+  # load-bearing (rc 1 = no match, rc >= 2 = the scan itself failed), so the
+  # `|| true` form lint-shell-capture-exit also accepts would flatten rc to 0
+  # and re-open the #5100 conflation this function exists to prevent. This form
+  # satisfies the lint AND keeps the discrimination.
+  if out="$(grep -rIEl "$re" "$ROOT" \
     --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.next \
     --exclude-dir=test --exclude-dir=__tests__ --exclude-dir=spike --exclude-dir=archive \
     --exclude-dir=community \
-    --exclude='*.test.*' --exclude='*.spec.*' 2>/dev/null)"
-  rc=$?
+    --exclude='*.test.*' --exclude='*.spec.*' 2>/dev/null)"; then
+    rc=0
+  else
+    rc=$?
+  fi
   if (( rc >= 2 )); then
     echo "audit-models: scan FAILED (grep rc=$rc) under '$ROOT' — refusing to report clean." >&2
     return 2
@@ -155,9 +201,11 @@ if [[ "$MODE" == "fix" ]]; then
     cp "$f" "$tmp"
     for pair in "${AUTOFIX_PAIRS[@]}"; do
       from="${pair%%=*}"; to="${pair#*=}"
-      # anchored: preserve the trailing char so a longer/dated variant
-      # (e.g. claude-opus-4-7-20260101) is NOT corrupted by a prefix swap.
-      sed -i -E "s/${from}([^0-9A-Za-z-]|\$)/${to}\1/g" "$f"
+      # anchored on the SAME boundary as selection (ID_BOUNDARY): preserve the
+      # trailing char so a longer/dated variant (claude-opus-4-7-20260101) or a
+      # successor that extends the stale id (claude-fable-5-1) is NOT corrupted
+      # by a prefix swap.
+      sed -i -E "s/${from}${ID_BOUNDARY}/${to}\1/g" "$f"
     done
     after=$(wc -l < "$f")
     # deletion guard: a 1-for-1 ID swap must not change line count materially.
@@ -183,7 +231,26 @@ load_hits "  model-ID inventory"
 if [[ ${#hits[@]} -gt 0 ]]; then
   echo "  stale config model IDs found (mechanical same-tier swap):"
   for f in "${hits[@]}"; do
-    ids="$(grep -oE "$(autofix_from_re)" "$f" | sort -u | tr '\n' ' ')"
+    # Same anchored matcher as selection, then drop the boundary char the
+    # pattern had to capture (an end-of-line match captures nothing to drop),
+    # so the report names the id and not `claude-fable-5"`.
+    # `set -o pipefail` is in force, so a no-match here kills the script with no
+    # message. That silence is the wrong failure: the file is in `hits` BECAUSE
+    # the selector matched it, so an empty re-scan means selection and display
+    # have diverged — the exact class ID_BOUNDARY exists to prevent — and it
+    # must be named rather than mistaken for an ordinary abort.
+    # Trigger on EMPTINESS, not just on a non-zero rc. `grep -o` on a file it
+    # considers binary prints "binary file matches" to stderr, yields no stdout
+    # and exits 0 — so an rc-only guard stayed silent on the one realistic
+    # divergence and the report printed a bare `[]` while the audit exited 0
+    # (measured). Selection now skips binaries (-I), so this is a true internal
+    # invariant; keep both conditions so neither half can go quiet alone.
+    ids="$(grep -oE "$(autofix_match_re)" "$f" 2>/dev/null | sed -E 's/[^0-9A-Za-z-]+$//' | sort -u | tr '\n' ' ')" || true
+    if [[ -z "${ids// /}" ]]; then
+      echo "audit-models: INTERNAL — selector matched $(rel "$f") but the display re-scan found no id." >&2
+      echo "  selection and display disagree; they must share autofix_match_re." >&2
+      exit 70
+    fi
     echo "    - $(rel "$f")  [${ids}]"
   done
   echo "  → run with --fix (each stale id → its current same-tier id), then open a CI-gated PR."
@@ -244,23 +311,78 @@ echo "[2b] pinned claude-code CLI knows the tier models (FLAG-ONLY)"
 # --model. This is invisible to the model-ID sweep, to tsc, and to the suite —
 # the argv is well-formed and the run succeeds. Grep the installed bundle when
 # present; absence of node_modules is UNKNOWN, never a pass.
-_cli_dir="$ROOT/apps/web-platform/node_modules/@anthropic-ai"
+#
+# WHAT IS MEASURED: the INSTALLED tree, which is not necessarily the PIN. The
+# model table ships in the platform binary (@anthropic-ai/claude-code-linux-x64),
+# fetched by the stub's postinstall — the npm tarball for @anthropic-ai/claude-code
+# is a ~23 kB launcher that contains no model ids at all, so only an installed
+# (or separately unpacked platform) tree can answer this question.
+#
+# A stale node_modules therefore reports DRIFT against ids the PIN actually
+# knows. Observed 2026-09-03: node_modules held 2.1.142 while package.json
+# pinned 2.1.219, and this check reported `claude-opus-5` and `claude-sonnet-5`
+# ABSENT — both are present in 2.1.219. A false DRIFT here costs a needless
+# dependency bump; the same skew in the other direction (node_modules NEWER
+# than the pin) would report a false PASS, which is worse. So state the two
+# versions and refuse to call a mismatch a measurement of the pin.
+# SCOPE IS LOAD-BEARING: probe the PLATFORM BINARY, never the @anthropic-ai
+# scope. Measured 2026-09-03 in this repo: `claude-agent-sdk` and
+# `claude-agent-sdk-linux-x64` BOTH contain `claude-sonnet-5`, so a scope-wide
+# grep answers "ok present in the pinned CLI bundle" from the AGENT SDK while
+# claude-code lacks the id entirely — a false PASS on the exact #6934
+# degradation this check exists to catch. Read the version from the same
+# package we grep, or the printed version labels a measurement of a different
+# package (the stub carries no model ids, so its version is not the subject).
+_cli_pkg="$ROOT/apps/web-platform/node_modules/@anthropic-ai/claude-code-linux-x64"
+_cli_dir="$_cli_pkg"
+_cli_pinned="$(grep -oE '"@anthropic-ai/claude-code"[[:space:]]*:[[:space:]]*"[^"]+"' \
+  "$ROOT/apps/web-platform/package.json" 2>/dev/null | grep -oE '[0-9][^"]*' | head -1 || true)"
+_cli_installed="$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' \
+  "$_cli_pkg/package.json" 2>/dev/null \
+  | head -1 | grep -oE '[0-9][^"]*' || true)"
+# Every arm names what it measured. The `elif` MUST require _cli_installed:
+# guarding on _cli_pinned alone printed "matches the package.json pin" on a
+# tree with no install at all (reproduced on a root carrying only
+# package.json), immediately above the UNKNOWN line that contradicts it — a
+# pass-shaped claim over a channel that was never read, which is the
+# absent-vs-could-not-look conflation collect_config_hits exists to prevent.
+if [[ -n "$_cli_pinned" && -n "$_cli_installed" && "$_cli_pinned" != "$_cli_installed" ]]; then
+  echo "    NOTE: measuring INSTALLED ${_cli_installed}, but package.json pins ${_cli_pinned}."
+  echo "          Findings below describe the installed tree, NOT the pin — reinstall before trusting them."
+elif [[ -n "$_cli_pinned" && -n "$_cli_installed" ]]; then
+  echo "    measuring installed tree @ ${_cli_installed} (matches the package.json pin)."
+elif [[ -n "$_cli_pinned" ]]; then
+  echo "    pin: ${_cli_pinned} / installed: (none) — comparison UNKNOWN, not a match."
+else
+  echo "    pin: UNKNOWN (could not read @anthropic-ai/claude-code from apps/web-platform/package.json)."
+fi
 if [[ -d "$_cli_dir" ]]; then
-  for _m in $(grep -ohE '"claude-(opus|sonnet|haiku)-[0-9a-z-]+"' \
+  # `fable` included: the alternation must cover every tier that can appear in
+  # the scanned registries, or the one model whose id the pin lacks is the one
+  # model never checked. (Fable reaches Soleur as the harness `model: fable`
+  # ALIAS today, so no fable literal is in these files yet — this closes the
+  # gap for the launch where one lands.)
+  for _m in $(grep -ohE '"claude-(opus|sonnet|haiku|fable)-[0-9a-z-]+"' \
                 "$ROOT/apps/web-platform/server/inngest/model-tiers.ts" \
                 "$ROOT/apps/web-platform/server/inngest/leader-prompts/constants.ts" 2>/dev/null \
               | tr -d '"' | sort -u); do
     # -a: the linux-x64 CLI is a compiled binary; a text-mode grep silently
     # reports zero hits for EVERY id, including known-good ones (a null result
     # that reads exactly like a real one).
-    if grep -raqF "$_m" "$_cli_dir" 2>/dev/null; then
+    # Anchored on the SAME boundary as everything else: a fixed-string probe is
+    # unanchored on both sides, so a bundle carrying only `claude-opus-5-20260101`
+    # answered "ok present" for `claude-opus-5` AND for the bare tier
+    # `claude-opus` (measured). That is this PR's own prefix-shadowing class in
+    # the PRESENCE direction — a tier whose id the pin genuinely lacks reports
+    # green whenever any longer id sharing its prefix is in the blob.
+    if grep -raqE "${_m}${ID_BOUNDARY}" "$_cli_dir" 2>/dev/null; then
       echo "    ok      $_m present in the pinned CLI bundle"
     else
-      echo "    DRIFT   $_m ABSENT from the pinned CLI bundle — bump @anthropic-ai/claude-code"
+      echo "    DRIFT   $_m ABSENT from ${_cli_pkg##*/} @ ${_cli_installed:-unknown} — bump @anthropic-ai/claude-code"
     fi
   done
 else
-  echo "    UNKNOWN (apps/web-platform/node_modules absent) — NOT a pass; run after install."
+  echo "    UNKNOWN (${_cli_pkg#"$ROOT"/} absent) — NOT a pass; run after install."
 fi
 echo
 

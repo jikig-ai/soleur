@@ -6,7 +6,7 @@ description: "This skill should be used when auditing the recurring per-Anthropi
 # Model-launch review
 
 `model-launch-review` runs the recurring per-Anthropic-model-release checklist. Each release
-(Opus 4.6 → 4.7 → 4.8 → Fable 5) recurs the same five-item audit. This skill **audits** all
+(Opus 4.6 → 4.7 → 4.8 → Fable 5 → Fable 5.1) recurs the same five-item audit. This skill **audits** all
 five, **auto-fixes** the one mechanical-bulk item (stale model-ID swaps) into a **CI-gated PR**
 under operator identity, and **flags** the rest for human sign-off. ADR-053 names this skill as
 the per-release re-pin trigger.
@@ -14,6 +14,9 @@ the per-release re-pin trigger.
 ## When to invoke
 
 - After a new Anthropic model ships (Opus/Sonnet/Haiku/Fable family bump).
+- When a dormant deferral's **date trigger** fires (e.g. #6942's 2026-09-01 pricing re-eval). The
+  `[3]` dormant-work query exists to surface these; a trigger firing is not the same as the
+  deferral's stated assumption holding — re-read the live source before acting on either.
 - When the `model-drift` issue filed by `rule-audit.yml`'s detection step appears.
 - Before relying on a model ID or pricing assumption that may have drifted.
 
@@ -67,6 +70,33 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
    — the linux-x64 CLI is a compiled binary and a text-mode grep reports zero hits for
    EVERY id, a null result that reads exactly like a real one.
 
+   **`[2b]` measures `node_modules`, which is NOT the pin.** The check greps the installed
+   tree because the model table ships in the platform binary
+   (`@anthropic-ai/claude-code-linux-x64`) — the `@anthropic-ai/claude-code` npm tarball is a
+   ~23 kB launcher stub with no model ids in it, so packing that tarball to "check the pin"
+   returns ABSENT for *every* id including known-good ones. A stale `node_modules` therefore
+   reports DRIFT against ids the pin knows perfectly well (2026-09-03: node_modules held
+   2.1.142 while package.json pinned 2.1.219, and `[2b]` reported `claude-opus-5` and
+   `claude-sonnet-5` ABSENT — both are present in 2.1.219). The script now prints both
+   versions and refuses to describe a mismatch as a measurement of the pin; to actually test
+   a candidate version, unpack `@anthropic-ai/claude-code-linux-x64@<version>` and grep that
+   — **outside the repo**, e.g. in `$(mktemp -d)`. `npm pack` extracts to `./package/`, which no
+   exclusion covers; unpacking under `$ROOT` puts a compiled blob full of model ids inside the
+   auto-fix surface. Selection now skips binaries (`grep -I`), so `--fix` will not byte-patch it,
+   but the tarball still has no business in the tree.
+
+   Probe the PLATFORM package, never the `@anthropic-ai` scope: `claude-agent-sdk` and
+   `claude-agent-sdk-linux-x64` both carry `claude-sonnet-5`, so a scope-wide grep answers
+   "present" from the agent SDK while `claude-code` lacks the id entirely.
+
+   **The 3-day release-age floor can make the required bump un-shippable.** If the only
+   versions carrying the new id are <3 days old, `apps/web-platform/.npmrc`'s
+   `min-release-age=3` (#1174) rejects them with `ETARGET … with a date before <date>`, and
+   `--min-release-age=0` does not rescue it: CI's `lockfile-sync` job re-runs
+   `npm install --package-lock-only` *without* the override, so the PR is red no matter what
+   the local regen produced. Either wait for the version to age past the floor, or land the
+   bump in its own PR — do not weaken the floor to get a launch sweep green.
+
 3. **Auto-fix** model-ID swaps (mechanical; allowlist + deletion guard; never `git add -A`):
 
    ```bash
@@ -113,6 +143,24 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
 
 - Resolve every model ID / pin SHA / release tag via `gh api` or official docs in-pass — never
   from memory (2026-04-18 / 2026-02-22 learnings; SHA-from-memory errors recur).
+- **Selection and rewriting must share ONE boundary — and the asymmetry was already live before
+  anyone noticed it.** The `--fix` sed has been boundary-anchored since the script was created;
+  selection was a bare alternation. Measured on `origin/main`: a config file carrying the DATED
+  variant `claude-opus-4-7-20260101` reports `--detect` rc=10, `--fix` prints `fixed:` while
+  changing nothing (the sed's boundary correctly declines), and `--detect` re-flags it forever —
+  a permanently-red drift cron auto-filing issues it cannot fix, with no fable involved. So the
+  invariant is the general one, and dated ids were its standing violation.
+  `claude-fable-5` → `claude-fable-5-1` is what made it *unavoidable*: it is the first pair whose
+  stale id is a strict PREFIX of its own target, so the mismatch fires on the id that is CURRENT
+  rather than only on a longer variant nobody had written yet. `assert_single_hop` catches
+  neither shape (the target is not itself a source id). Both halves now derive from `ID_BOUNDARY`
+  in `audit-models.sh`; a bare alternation in either re-opens it. Pinned by
+  `model-launch-review.test.ts` — one test derives the case from the live pair table, a second
+  synthesizes a prefix pair so the coverage survives a launch where the live table has none.
+- **A dormant deferral's stated assumption can expire along with its trigger.** #6942 pinned
+  the sonnet pricing row to the *scheduled* post-intro $3/$15 so it would become correct on
+  2026-09-01 with no second edit; Anthropic then cancelled that increase. Re-read the live
+  source when the trigger fires — the deferral records what was true when it was written.
 - Inventory by independent grep, not by a checklist's file list (inventories undercount).
 - **When the launch migration bumps the Anthropic SDK toolchain in
   `apps/web-platform/package.json` (`@anthropic-ai/claude-code`,
@@ -133,3 +181,17 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
   deferred to #5106 (do not fabricate it).
 - When #5106 lands its `model-tiers.ts` registry, the model-ID grep target collapses to that
   registry — narrow `audit-models.sh`'s scan accordingly.
+- **Run the repo's deterministic lints after each guard-shaped commit, BEFORE any agent panel —
+  and audit a mutation battery's AXES, not its count.** Their yields are disjoint and the lints
+  are orders of magnitude cheaper. Measured on #7774: `lint-shell-capture-exit` (a baseline-gated
+  lint outside the panel) found a real defect in code written an hour earlier and was also the
+  cause of the `test-scripts` CI failure, while a self-run battery that mutated ONE axis
+  (selection anchoring) reported the new test load-bearing and missed **nine survivors across
+  five axes it never touched** — fixture direction (dropping `|$` from `ID_BOUNDARY` made
+  `--detect` report `model-drift: none`, exit 0, on real drift), the `--fix` sed's anchoring
+  (three mutants each corrupting real source), dispatch (no assertion floor), fixture
+  cardinality, and the whole `[2b]` block. N mutations of one shape is one mutation. Beware the
+  lint's own remediation menu too: `lint-shell-capture-exit` accepts `x=$(cmd) || true`, which in
+  `collect_config_hits` would flatten a load-bearing rc and re-open the #5100
+  scan-failed-vs-clean conflation — use `if out=$(cmd); then … else rc=$?; fi`. See
+  [2026-09-03-every-check-i-shipped-was-narrower-than-the-name-it-carried.md](../../../../knowledge-base/project/learnings/2026-09-03-every-check-i-shipped-was-narrower-than-the-name-it-carried.md).

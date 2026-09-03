@@ -1,0 +1,13 @@
+# CUT8 monitor-health baseline — captured BEFORE the apex cutover (#7640 PR4b).
+#
+# CUT8 compares against this rather than demanding absolute green, because a
+# monitor that was ALREADY red cannot be evidence that the cutover broke
+# anything — and the T+20 rule turns any CUT8 failure into a rollback.
+#
+# Regenerate: bash cutover-verify.sh --capture-monitor-baseline cutover-monitor-baseline.txt
+# Captured 2026-09-03T15:31:58Z
+soleur-ai-apex	healthy
+soleur-ai-www	unhealthy
+soleur-ai-changelog-deep	healthy
+soleur-ai-acme-carveout-probe	healthy
+soleur dot ai apex	healthy

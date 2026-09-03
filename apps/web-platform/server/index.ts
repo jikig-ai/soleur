@@ -126,7 +126,7 @@ app.prepare().then(() => {
     handle(req, res, parsedUrl);
   });
 
-  const wss = setupWebSocket(server);
+  const wss = setupWebSocket(server, dev);
 
   // #5274 Phase 3 Sub-PR 3.D (ADR-068 b2) — the OWNER host's private-net TLS
   // proxy listener. A session that lands on a non-owning web host is relayed
