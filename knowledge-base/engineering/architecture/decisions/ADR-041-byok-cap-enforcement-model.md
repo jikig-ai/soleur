@@ -25,10 +25,10 @@ PR-B introduces the first autonomous-AI runtime in `apps/web-platform/server/`. 
 
 1. **BYOK per-founder rolling cap** (existing infra, mig 053 + `record_byok_use_and_check_cap` at `mig 061:81-148`). Enforced via SQL RPC with `FOR UPDATE` lock on `public.users`.
    - **Reconciliation note (feat-l5-runaway-guard / #5767, P2-9):** the *shipped* RPC enforces a single **rolling 1-hour cumulative-spend cap per founder** — it `SUM`s `audit_byok_use` over `now() - interval '1 hour'` and compares against `users.runtime_cost_cap_cents`. The earlier prose in this ADR ("daily soft $20 / hard $50 / monthly hard $500") described an aspirational tiered model that was **never implemented in the RPC**; the daily/monthly tiers are deferred (rolling-24h founder budget is tracked as a follow-up, #5903). Treat the rolling-1-hour `runtime_cost_cap_cents` cap as the authoritative Layer-1 mechanism.
-2. **Per-spawn cost ceiling** (PR-B-new, $2.00 USD). Bounds worst-case operator-side spend on a single Today-card click. Independent of (1).
+2. **Per-spawn cost ceiling** (PR-B-new, $2.60 USD — raised from $2.00 by #5849). Bounds worst-case operator-side spend on a single Today-card click. Independent of (1).
 3. **Max-turns ceiling** (PR-B-new, flat 8 turns × 4096 max_tokens). Physical upper bound on loop runtime.
 
-The PR-B brainstorm Key Decisions table locks: per-spawn $2.00 ceiling is the **primary gate**; max-turns is the **secondary backstop**; BYOK daily/monthly is the existing layer. This ADR pins the **enforcement model** — i.e., when, how, and where the checks fire — so all three layers compose correctly and fail-closed.
+The PR-B brainstorm Key Decisions table locks: per-spawn ceiling is the **primary gate** (locked at $2.00; raised to $2.60 by #5849); max-turns is the **secondary backstop**; BYOK daily/monthly is the existing layer. This ADR pins the **enforcement model** — i.e., when, how, and where the checks fire — so all three layers compose correctly and fail-closed.
 
 **Brand-survival threshold: single-user incident.** A runaway leader-loop draining the operator's BYOK balance during dogfood is brand-survival-relevant. The operator IS the brand at this stage.
 
@@ -78,7 +78,7 @@ it("throws on RPC error rather than returning killTripped=false", async () => {
 
 ### Layer 2 — Pre-call per-spawn cost ceiling
 
-After the cap check passes, `step.run("turn-${n}-precheck-cost-ceiling", …)` reads the **cumulative cost of THIS spawn** by joining `audit_byok_use` rows on the time window `[action_sends.created_at, now()]` with `agent_role = "agent.spawn.requested:${actionClass}"` and `founder_id = $founderId`. If `SUM(unit_cost_cents) >= PER_SPAWN_COST_CEILING_CENTS` (200 = $2.00), the loop short-circuits with `failure_reason = "cost_ceiling_exceeded"`.
+After the cap check passes, `step.run("turn-${n}-precheck-cost-ceiling", …)` reads the **cumulative cost of THIS spawn** by joining `audit_byok_use` rows on the time window `[action_sends.created_at, now()]` with `agent_role = "agent.spawn.requested:${actionClass}"` and `founder_id = $founderId`. If `SUM(unit_cost_cents) >= PER_SPAWN_COST_CEILING_CENTS` (260 = $2.60 since #5849), the loop short-circuits with `failure_reason = "cost_ceiling_exceeded"`.
 
 `PER_SPAWN_COST_CEILING_CENTS` is a **single-source-of-truth constant** (per learning `2026-05-06-cap-coupling-between-adjacent-prs.md`) declared once in `apps/web-platform/server/inngest/leader-prompts/index.ts`. Drift-guard test forbids hand-rolled literals (`expect(src).not.toMatch(/\b2\.00\b|\b200\b/)` scoped to leader-prompts/ paths and the Inngest function file).
 
@@ -86,7 +86,7 @@ After the cap check passes, `step.run("turn-${n}-precheck-cost-ceiling", …)` r
 
 ### Layer 3 — Post-call max-turns backstop
 
-Inside the loop body, if turn `n === maxTurns` (8) and the model did NOT emit `stop_reason === "end_turn"`, the loop short-circuits with `failure_reason = "leader_max_turns_exceeded"`. This is the secondary backstop — by physical token-budget arithmetic, 8 turns × 4096 max_tokens × Sonnet pricing ≈ $0.50 worst-case, well under the $2.00 layer-2 ceiling. Layer 3 fires when Layer 2 does NOT (e.g., on Haiku-routed classes where cost stays below ceiling but the model never converges).
+Inside the loop body, if turn `n === maxTurns` (8) and the model did NOT emit `stop_reason === "end_turn"`, the loop short-circuits with `failure_reason = "leader_max_turns_exceeded"`. This is the secondary backstop — by physical token-budget arithmetic, 8 turns × 4096 max_tokens × Sonnet pricing ≈ $0.33 worst-case at the corrected $2/$10 rates (#7774; was ≈$0.50 when this row assumed $3/$15), ~8x under the $2.60 layer-2 ceiling. Layer 3 fires when Layer 2 does NOT (e.g., on Haiku-routed classes where cost stays below ceiling but the model never converges).
 
 ### Composition
 
@@ -130,7 +130,7 @@ Cap/loop halts were previously silent (Sentry-only). PR-A wires `notifyOfflineUs
 
 - **Composable, predictable failure modes**: three layers, three failure_reasons, no overlap.
 - **Operator wallet-safe**: BYOK daily/monthly cap is the outermost gate; runaway can't drain it past hard cap.
-- **Per-spawn-safe**: $2.00 ceiling bounds worst-case single-click spend, even on a misbehaving Haiku-routed class that doesn't converge.
+- **Per-spawn-safe**: the $2.60 ceiling bounds worst-case single-click spend, even on a misbehaving Haiku-routed class that doesn't converge.
 - **Audit-correct**: every Anthropic call is preceded by a fail-closed pre-call gate; every Anthropic call result is followed by an awaited `persistTurnCost` (ADR-042 I5).
 - **Reversibility**: ADR-041 is the cap-policy ADR. Future "raise to $5" or "switch to post-call" amendments touch this file only.
 
@@ -138,7 +138,7 @@ Cap/loop halts were previously silent (Sentry-only). PR-A wires `notifyOfflineUs
 
 - **Three caps overlap**. Per code-simplicity review (2026-05-25), the three layers are arguably redundant: BYOK daily cap alone bounds operator spend. We retain all three because:
   - Layer 1 (BYOK daily/monthly): cap is operator's daily/monthly TOTAL across all uses — not per-spawn.
-  - Layer 2 (per-spawn $2.00): per-spawn shape gives the operator a single-click guarantee — "no single click will cost more than $2.00."
+  - Layer 2 (per-spawn $2.60): per-spawn shape gives the operator a single-click guarantee — "no single click will cost more than $2.60." That guarantee is denominated in REAL dollars, which is what makes Layer 2 irreducible to Layer 3 (see the 2026-09-03 amendment).
   - Layer 3 (max-turns): physical loop bound; covers the case where layer-2 cost arithmetic is below ceiling but the model never converges (Haiku classes especially).
   - Removing Layer 2 was explicitly rejected in the brainstorm Key Decisions table.
 - **One extra `step.run` per turn for the cap-check**. Adds ~30ms per turn. Acceptable: per-turn budget is ~60s; cap-check is ~0.05% of the budget.
@@ -152,7 +152,7 @@ Cap/loop halts were previously silent (Sentry-only). PR-A wires `notifyOfflineUs
 | BYOK cap RPC wrapper | `test/server/byok-cap-rpc.test.ts` | Layer 1 — fail-closed throw on RPC error; N2 invariant; service-role only |
 | Per-spawn cost ceiling | `test/server/inngest/agent-on-spawn-requested-leader-loop.test.ts` | Layer 2 — turn-3 trip with partial artifacts preserved |
 | Max-turns backstop | same file | Layer 3 — 8-turn convergence-failure path |
-| SSOT constant drift-guard | `test/server/inngest/leader-prompts/constants-ssot.test.ts` | `PER_SPAWN_COST_CEILING_CENTS` is the only $2/200 literal in scoped paths |
+| SSOT constant drift-guard | `test/server/inngest/leader-prompts/prompt-version-stability.test.ts` | `PER_SPAWN_COST_CEILING_CENTS` equals 260 ($2.60). NOTE: a value PIN, not a literal drift-guard — earlier text here cited a `constants-ssot.test.ts` that has never existed, and nothing forbids hand-rolled `260`/`$2.60` literals |
 | Failure-reason exhaustiveness | `test/components/dashboard/failure-reason-copy.test.ts` | every taxonomy value has copy + Retry-eligibility flag |
 | BYOK audit writer sweep | `test/server/byok-audit-writer-sweep.test.ts` (existing) | New lease site at `agent-on-spawn-requested.ts` carries a real `persistTurnCost` call (no `out-of-scope` marker) |
 
@@ -179,3 +179,57 @@ Cap/loop halts were previously silent (Sentry-only). PR-A wires `notifyOfflineUs
   - `2026-05-06-cap-coupling-between-adjacent-prs.md` (Layer 2 SSOT constant)
   - `2026-05-12-stub-handlers-as-silent-undercount-vectors.md` (cache token persistence)
   - `2026-05-24-token-cache-margin-vs-consumer-budget-envelope.md` (BYOK lease envelope inequality referenced from ADR-042 I2)
+
+## Amendment — 2026-09-03 (#7774): Layer 2 is real-dollar, and the ledger has an undated regime boundary
+
+Anthropic cancelled the Sonnet 5 increase scheduled for 2026-09-01, so `MODEL_PRICING[SONNET_MODEL]`
+was corrected from $3/$15 to $2/$10 per MTok. That raised the question of whether
+`PER_SPAWN_COST_CEILING_CENTS` must move with it.
+
+**Ruling: it does not. 260 stands.**
+
+`PER_SPAWN_COST_CEILING_CENTS` is a ceiling on **real cents of the founder's own Anthropic spend**,
+not a work budget denominated in cents. Three things establish that, none of them the constant's name:
+
+1. This ADR's own Consequences section justifies Layer 2's existence — against a code-simplicity
+   argument to delete it — as "a single-click guarantee", i.e. a dollar promise.
+2. The number is rendered back to the founder as money. `costBreakerCopy`
+   (`server/notifications.ts`) emits "You spent $X of your $2.60 per-run spending limit — your own
+   Anthropic credits." Under the old row that sentence was materially false: the founder's Anthropic
+   account was debited ~$1.73 at the trip point.
+3. Work is bounded by **Layer 3**, not Layer 2 — `LEADER_MAX_TURNS × LEADER_MAX_TOKENS`, ≈$0.33
+   worst-case, ~8x below the ceiling. Layer 2 has never been the binding constraint on well-behaved
+   work.
+
+The symmetric-looking alternative — scale 260 → 173 to preserve the work-per-spawn budget — was
+rejected. #5849's 200 → 260 bump moved from one *true* state to another: the tokenizer made
+equivalent work genuinely cost ~30% more real dollars, and the dollar promise was consciously re-set.
+This correction fixes a state that was **never** true — a $1.73 ceiling wearing a $2.60 label.
+Scaling to 173 would preserve the defect's effect, ratify a number nobody chose, and hard-code a
+retired price ratio into a user-visible dollar figure. A genuinely tighter per-click promise is a
+separate decision that amends this ADR on its own merits.
+
+**Accepted trade-off:** real worst-case per-click exposure rises from ~$1.73 to $2.60 (+50%). That is
+the figure #5849 chose and this ADR sanctions, outer-bounded by Layer 1's rolling-hour cap.
+
+**Layer 1 is repaired, not loosened.** `runtime_cost_cap_cents` is a budget the user typed in their
+own dollars. Tripping at ~$33 real when the user set $50 was silent under-delivery, and
+unreconcilable — Soleur said $50 while Anthropic's invoice said $33, with no surface exposing the gap.
+
+### The WORM boundary is undated in the data
+
+`audit_byok_use` carries no model or rate column, and migration 037 makes rows permanent, so a row
+written at $3/$15 is indistinguishable from one written at $2/$10. **The only partition key is
+`created_at` against 2026-09-03.**
+
+A rate column was considered and rejected: it is a DDL change on a WORM table serving two live cap
+layers, it would be NULL for exactly the rows needing disambiguation, and it widens WAL on a
+per-turn write path for no retrospective value. The rate change is global-in-time, so the date is a
+complete partition key and a column would add nothing.
+
+Both cap layers self-heal across the boundary (Layer 1's window is one rolling hour, Layer 2's is a
+single spawn, and straddling rows are the over-attributed ones, so a trip can only be early).
+**Reporting does not.** Every lifetime aggregate spanning the boundary — `workspace_cost_aggregate`,
+the Today cost route, the audit page — permanently blends a 50%-over-attributed Sonnet segment with
+a correct one, with error bounded by a third of pre-boundary Sonnet cents. Those totals must not be
+presented as reconcilable against the founder's Anthropic invoice.

@@ -101,23 +101,32 @@ function uuidv5(name: string, namespace: string): string {
 // wrong going forward: every row already written is permanently
 // uncorrectable, and both BYOK cap layers sum that column.
 //
-// SONNET IS TIME-VARYING, and we deliberately do NOT model the window: Claude
-// Sonnet 5 bills $2/$10 under introductory pricing through 2026-08-31, then
-// $3/$15 from 2026-09-01. The values below are the POST-INTRO rates, so Sonnet
-// is over-attributed by 50% until then (#6942 tracks the expiry).
+// SONNET IS NO LONGER TIME-VARYING. $2/$10 shipped as an "introductory" rate
+// through 2026-08-31 with a rise to $3/$15 scheduled for 2026-09-01; Anthropic
+// cancelled that increase and $2/$10 is now the standard price. #6942 held this
+// row at the scheduled $3/$15 so it would become correct on Sep 1 without a
+// second edit — it is discharged by the cancellation, not by the date passing.
 //
-// The real justification is NOT "a constant can't express a window" — it
-// trivially could (`Date.now() < Date.parse(...)`). It is that
-// PER_SPAWN_COST_CEILING_CENTS was itself calibrated in $3/$15 space (see its
-// docstring in leader-prompts/constants.ts), so ceiling and attribution share
-// one assumed rate and Layer-2 enforcement stays internally self-consistent;
-// modelling the window would desynchronize them and add a cliff.
+// PER_SPAWN_COST_CEILING_CENTS does NOT track this row, and an earlier version
+// of this comment was wrong to say it did. It claimed the ceiling was
+// "calibrated in $3/$15 space" so ceiling and attribution shared one assumed
+// rate. The ceiling is a real-dollar promise rendered to the founder by
+// costBreakerCopy, and Layer 3 (8 turns × 4096 max_tokens, ≈$0.33 worst-case) is
+// what bounds work — so correcting this row makes the ceiling finally mean its
+// own label rather than desynchronizing anything. It stays at 260; see its
+// docstring in leader-prompts/constants.ts.
 //
-// Be precise about what that buys: over-attribution is conservative for the
-// CAP, but these same cents are written to the WORM `audit_byok_use` ledger
-// and rendered on user-visible cost surfaces (workspace_cost_aggregate, the
-// Today cost route, the audit page) — so the operator sees a permanently
-// inflated Sonnet figure. Safe for enforcement is not the same as correct.
+// THE REGIME BOUNDARY IS UNDATED IN THE DATA. `audit_byok_use` carries no model
+// or rate column, so a row written at $3/$15 is indistinguishable from one
+// written at $2/$10, and migration 037 makes both permanent. The only partition
+// key is `created_at` against this row's change date — 2026-09-03, #7774. Both
+// cap layers self-heal across it (Layer 1's window is 1 rolling hour, Layer 2's
+// is a single spawn, and straddling rows are the over-attributed ones, so a trip
+// can only be early). Reporting does not: every lifetime aggregate spanning the
+// boundary — workspace_cost_aggregate, the Today cost route, the audit page —
+// permanently blends a 50%-over-attributed Sonnet segment with a correct one,
+// error bounded by a third of pre-boundary Sonnet cents. Do not present those
+// totals as reconcilable against the founder's Anthropic invoice.
 //
 // Values are pinned by model-tiers.test.ts so a drift must be deliberate.
 interface ModelPricing {

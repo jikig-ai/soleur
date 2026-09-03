@@ -79,7 +79,15 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
    2.1.142 while package.json pinned 2.1.219, and `[2b]` reported `claude-opus-5` and
    `claude-sonnet-5` ABSENT — both are present in 2.1.219). The script now prints both
    versions and refuses to describe a mismatch as a measurement of the pin; to actually test
-   a candidate version, unpack `@anthropic-ai/claude-code-linux-x64@<version>` and grep that.
+   a candidate version, unpack `@anthropic-ai/claude-code-linux-x64@<version>` and grep that
+   — **outside the repo**, e.g. in `$(mktemp -d)`. `npm pack` extracts to `./package/`, which no
+   exclusion covers; unpacking under `$ROOT` puts a compiled blob full of model ids inside the
+   auto-fix surface. Selection now skips binaries (`grep -I`), so `--fix` will not byte-patch it,
+   but the tarball still has no business in the tree.
+
+   Probe the PLATFORM package, never the `@anthropic-ai` scope: `claude-agent-sdk` and
+   `claude-agent-sdk-linux-x64` both carry `claude-sonnet-5`, so a scope-wide grep answers
+   "present" from the agent SDK while `claude-code` lacks the id entirely.
 
    **The 3-day release-age floor can make the required bump un-shippable.** If the only
    versions carrying the new id are <3 days old, `apps/web-platform/.npmrc`'s
@@ -135,16 +143,20 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
 
 - Resolve every model ID / pin SHA / release tag via `gh api` or official docs in-pass — never
   from memory (2026-04-18 / 2026-02-22 learnings; SHA-from-memory errors recur).
-- **A stale id that is a PREFIX of its successor needs a boundary, not just a single hop.**
-  `claude-fable-5` → `claude-fable-5-1` is the first such pair (`opus-4-8`→`opus-5` and
-  `sonnet-4-6`→`sonnet-5` share no prefix). `assert_single_hop` does **not** catch it — the
-  target is not itself a source id — so it passes while a file already on the CURRENT id gets
-  selected as stale, `--fix` prints "fixed" having changed nothing, and `--detect` re-flags it
-  every run: the same permanently-red drift cron the single-hop invariant exists to prevent,
-  reached by prefix-shadowing. Selection and rewriting must share one right-boundary
-  (`ID_BOUNDARY` in `audit-models.sh`); a bare alternation in either half re-opens it.
-  Pinned by `model-launch-review.test.ts` ("a stale id that is a PREFIX of its successor…"),
-  which derives the case from the pair table rather than hardcoding fable.
+- **Selection and rewriting must share ONE boundary — and the asymmetry was already live before
+  anyone noticed it.** The `--fix` sed has been boundary-anchored since the script was created;
+  selection was a bare alternation. Measured on `origin/main`: a config file carrying the DATED
+  variant `claude-opus-4-7-20260101` reports `--detect` rc=10, `--fix` prints `fixed:` while
+  changing nothing (the sed's boundary correctly declines), and `--detect` re-flags it forever —
+  a permanently-red drift cron auto-filing issues it cannot fix, with no fable involved. So the
+  invariant is the general one, and dated ids were its standing violation.
+  `claude-fable-5` → `claude-fable-5-1` is what made it *unavoidable*: it is the first pair whose
+  stale id is a strict PREFIX of its own target, so the mismatch fires on the id that is CURRENT
+  rather than only on a longer variant nobody had written yet. `assert_single_hop` catches
+  neither shape (the target is not itself a source id). Both halves now derive from `ID_BOUNDARY`
+  in `audit-models.sh`; a bare alternation in either re-opens it. Pinned by
+  `model-launch-review.test.ts` — one test derives the case from the live pair table, a second
+  synthesizes a prefix pair so the coverage survives a launch where the live table has none.
 - **A dormant deferral's stated assumption can expire along with its trigger.** #6942 pinned
   the sonnet pricing row to the *scheduled* post-intro $3/$15 so it would become correct on
   2026-09-01 with no second edit; Anthropic then cancelled that increase. Re-read the live
