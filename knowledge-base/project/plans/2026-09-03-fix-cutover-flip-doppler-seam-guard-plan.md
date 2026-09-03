@@ -1199,14 +1199,21 @@ discoverability_test:
 16. Unit shape: an `ExecStartPre=` doppler unit with no bound is rejected.
 17. Unit shape: a `runcmd` doppler invocation is **not** flagged.
 18. Guard 2 reports a scanned count at or above its floor on every one of the four surfaces.
-19. `systemd-analyze verify` passes on the hardened unit, and a fixture unit whose `ReadWritePaths`
-    names a missing directory without the `-` prefix fails it.
+19. `systemd-analyze verify` passes on the hardened unit. **The second half of this scenario was
+    FALSIFIED at QA and is retracted:** it claimed a fixture unit whose `ReadWritePaths` names a
+    missing directory without the `-` prefix would fail verify. Measured — `systemd-analyze verify`
+    on exactly that unit returns **rc=0 with empty output**; it validates directive syntax, not
+    path existence. That negative control does not exist and never did. Verify is still worth
+    running (it catches malformed directives), but the missing-directory hazard is guarded by the
+    DESIGN — `StateDirectory=` for the path systemd must create, `ReadWritePaths=` naming the
+    MOUNTS rather than the subdirectories the script creates inside them — and by the unit-shape
+    assertions added to `inngest-cutover-flip.test.sh` at review time, which pin exactly that.
 
 ## Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| `ReadWritePaths` names a directory that does not exist, so the unit fails namespace setup on every fire after the replace | The `-` prefix on both lazily-created paths, plus AC10's `systemd-analyze verify` and scenario 19's negative fixture |
+| `ReadWritePaths` names a directory that does not exist, so the unit fails namespace setup on every fire after the replace | `StateDirectory=inngest-cutover` for the path systemd must create, and `ReadWritePaths=` naming the MOUNTS (`/var/lock /mnt/data`) rather than the lazily-created subdirectories — pinned by unit-shape assertions in `inngest-cutover-flip.test.sh`. NOT the `-` prefix, which this plan's own Phase 5 explains would leave those paths read-only and abort `latch-unrecordable` on every fire; and NOT `systemd-analyze verify`, measured at QA to return rc=0 on exactly that fixture (scenario 19) |
 | `PrivateTmp` defeats the Doppler fallback cache on a 30-second cadence, given `DOPPLER_CONFIG_DIR=/tmp/.doppler` | Phase 0 step 4 measures it before adoption; the argv gate does not depend on it, so it can be dropped without weakening the fix |
 | The unit's list omits a secret its script needs, and `--no-exit-on-missing-only-secrets` makes that silent | Guard 2 row 3 compares the list against the derived read-set at CI time; the list is derived, not hand-written, and cross-checked against the boot allowlist |
 | The gate returns non-zero in the window before the ERR trap at `:523` | The argv predicate cannot fail and touches no filesystem; Phase 2 additionally pins the unset loop's constructs |
