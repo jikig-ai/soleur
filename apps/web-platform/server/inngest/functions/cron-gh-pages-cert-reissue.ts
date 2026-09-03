@@ -696,6 +696,39 @@ export function checkReissuePreconditions(inputs: PreconditionInputs): {
         addressTypes.length > 0 && addressTypes.every((t) => t === "A")
       );
     })(),
+
+    // ‼️ A *TYPE* CHECK CANNOT PROTECT AGAINST A *COUNT* CHANGE (#7640 PR4a).
+    //
+    // The mirror of the warning above `EXPECTED_TOGGLE_RECORDS`. That one says a
+    // count cannot see a record TYPE that was never in dns.tf; this says the
+    // converse, and the converse is the one that shipped.
+    //
+    // `apexTopologyIsA` is type-shaped: it asks whether every apex ADDRESS
+    // record is an `A`. ADR-194's PR4a shrinks the apex `for_each` from four
+    // keys to one WITHOUT changing the type, so post-PR4a the live topology is
+    // 1 apex `A` + 1 www `CNAME` — `apexTopologyIsA` is still TRUE, every other
+    // precondition still holds, and the routine proceeds. `setRecordsProxied(…,
+    // false)` then runs unconditionally, and `restoreStateInner` reads
+    // 2 < EXPECTED_TOGGLE_RECORDS and refuses to restore a subset.
+    //
+    // The de-proxying is therefore ONE-WAY, one merge EARLIER than the header
+    // above says it can be — and the consequence is worse than the post-cutover
+    // case that header analyses. Unproxied, the apex resolves straight to
+    // 185.199.108.153, whose GitHub Pages origin certificate expired 2026-08-16
+    // and is never renewed. The `ssl = "full"` Configuration Rule that holds the
+    // site up acts at the Cloudflare EDGE, which de-proxying bypasses — so on an
+    // HSTS-preloaded apex every visitor gets a hard TLS failure with no edge
+    // left to rescue them.
+    //
+    // Asserting the SET SIZE up front converts that silent one-way flip into a
+    // loud refusal before any mutation runs. `+ 1` is the www CNAME, the one
+    // member of the toggle set that is not an apex address record.
+    toggleSetIsComplete: (() => {
+      const apexAddressCount = inputs.apexRecordTypes
+        .map((t) => t.toUpperCase())
+        .filter((t) => APEX_ADDRESS_RECORD_TYPES.has(t)).length;
+      return apexAddressCount + 1 === EXPECTED_TOGGLE_RECORDS;
+    })(),
   };
   const failed = Object.entries(results)
     .filter(([, ok]) => !ok)
