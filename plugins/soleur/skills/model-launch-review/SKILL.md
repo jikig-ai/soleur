@@ -181,3 +181,17 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
   deferred to #5106 (do not fabricate it).
 - When #5106 lands its `model-tiers.ts` registry, the model-ID grep target collapses to that
   registry — narrow `audit-models.sh`'s scan accordingly.
+- **Run the repo's deterministic lints after each guard-shaped commit, BEFORE any agent panel —
+  and audit a mutation battery's AXES, not its count.** Their yields are disjoint and the lints
+  are orders of magnitude cheaper. Measured on #7774: `lint-shell-capture-exit` (a baseline-gated
+  lint outside the panel) found a real defect in code written an hour earlier and was also the
+  cause of the `test-scripts` CI failure, while a self-run battery that mutated ONE axis
+  (selection anchoring) reported the new test load-bearing and missed **nine survivors across
+  five axes it never touched** — fixture direction (dropping `|$` from `ID_BOUNDARY` made
+  `--detect` report `model-drift: none`, exit 0, on real drift), the `--fix` sed's anchoring
+  (three mutants each corrupting real source), dispatch (no assertion floor), fixture
+  cardinality, and the whole `[2b]` block. N mutations of one shape is one mutation. Beware the
+  lint's own remediation menu too: `lint-shell-capture-exit` accepts `x=$(cmd) || true`, which in
+  `collect_config_hits` would flatten a load-bearing rc and re-open the #5100
+  scan-failed-vs-clean conflation — use `if out=$(cmd); then … else rc=$?; fi`. See
+  [2026-09-03-every-check-i-shipped-was-narrower-than-the-name-it-carried.md](../../../../knowledge-base/project/learnings/2026-09-03-every-check-i-shipped-was-narrower-than-the-name-it-carried.md).
