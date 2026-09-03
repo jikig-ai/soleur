@@ -185,6 +185,26 @@ else
   fail "INSTRUMENT: expect() did not fail on a must-fail arm — every assertion in this file is decorative" 0 ""
 fi
 
+# ══ 0c. THE OTHER THREE WRAPPERS ═════════════════════════════════════════════════
+# `expect()` has a self-test above. It has three siblings, and neutering ANY ONE of them left the
+# suite at 112 passed, 0 failed with both floors printing `ok` — 40 of 112 assertions, including
+# BOTH batteries this file's header calls its strongest:
+#
+#   predicate() -> pass          silences all 20 drop-one cases (AC B11)
+#   mutate()    -> pass; return  silences all 16 guard-mutation rows (AC B10)
+#   _bind()     -> pass          silences all 4 argument-binding arms (Row 7)
+#
+# `predicate()` is the sharpest: it increments `predicate_cases` and appends to
+# `_seen_predicates` INSIDE ITSELF, so the drop-one floor still prints "20 distinct predicates
+# covered" while all twenty assertions are a bare `pass`. A floor cannot see a wrapper that keeps
+# counting; only driving the wrapper in the must-FAIL direction can.
+_w_p="$passes" _w_f="$fails"
+predicate SELFTEST "wrapper self-test (expected to fail)" dark "$TMP/rows-selftest.json" "$FIN" 2>/dev/null
+_w_ok=0; [[ "$fails" -eq $((_w_f + 1)) ]] && _w_ok=1
+passes="$_w_p"; fails="$_w_f"
+_seen_predicates="${_seen_predicates/ SELFTEST/}"; predicate_cases=$((predicate_cases - 1))
+if [[ "$_w_ok" -eq 1 ]]; then pass; else fail "INSTRUMENT: predicate() did not fail on a must-fail arm — the entire drop-one battery is decorative"; fi
+
 # ══ BASELINE (must-PASS) ═════════════════════════════════════════════════════════
 # The positive allowlist admits ONLY the literal `dark`. Without this arm every RED case below is
 # satisfiable by a gate that refuses everything, and the twenty drop-one cases would prove nothing.
@@ -651,6 +671,15 @@ fi
 _bind() {  # _bind <label> <extended-regex>
   if grep -qE "$2" "$WF"; then pass; else fail "Row 7: $1 — the workflow does not pass this from a variable (a literal here makes the predicate tautological)"; fi
 }
+# SELF-TEST FIRST — placed here rather than with the others because a wrapper cannot be driven
+# before it is defined (an earlier cut called it near the top and got "command not found", which
+# moves no counter and reads exactly like a pass).
+_w_p="$passes" _w_f="$fails"
+_bind "SELFTEST (expected to fail)" 'THIS-PATTERN-CANNOT-MATCH-ANYTHING-IN-THE-WORKFLOW-XYZZY' 2>/dev/null
+_w_ok=0; [[ "$fails" -eq $((_w_f + 1)) ]] && _w_ok=1
+passes="$_w_p"; fails="$_w_f"
+if [[ "$_w_ok" -eq 1 ]]; then pass; else fail "INSTRUMENT: _bind() did not fail on an unmatchable pattern — Row 7 argument binding is decorative"; fi
+
 _bind "G17's live volume id"    '\-\-live-attachment-id[[:space:]]+"\$\{?LIVE_'
 _bind "G18's followthrough rc"      '\-\-followthrough-rc[[:space:]]+"\$\{?FT_'
 _bind "G19's cutover flag"          '\-\-cutover-flag[[:space:]]+"\$\{?FLAG'
@@ -659,7 +688,12 @@ _bind "G20's diagnostic-boot value" '\-\-diagnostic-boot[[:space:]]+"\$\{?DBOOT'
 # argument that must NOT come from a variable, and must be the value the argument assumes.
 # COUNTED, NOT MERELY PRESENT. There are TWO queries behind this gate — the probe rows and the
 # `function.finished` rows — and a `grep -q` is satisfied while the other one has been widened.
-_since90="$(grep -cE 'betterstack-query\.sh.*\-\-since[[:space:]]+90m|\-\-since[[:space:]]+90m[[:space:]]+\-\-grep' "$WF")"
+# COMMENT-STRIPPED. The previous cut grepped "$WF" raw, and its SECOND alternative
+# (`--since 90m --grep`) is matched by a shell comment inside a `run:` block — the exact
+# `cq-assert-anchor-not-bare-token` class this arm's own predecessor was rewritten to escape,
+# reintroduced by the rewrite. Executable lines only, so the count means what it says.
+WF_CODE="$(grep -vE '^[[:space:]]*#' "$WF" | sed 's/[[:space:]]#[[:space:]].*$//' || true)"
+_since90="$(grep -cE 'betterstack-query\.sh.*\-\-since[[:space:]]+90m|\-\-since[[:space:]]+90m[[:space:]]+\-\-grep' <<<"$WF_CODE")"
 # The bare `grep -c '--since 90m'` this replaced counted LINES ANYWHERE, including comments and
 # `::error::` prose — so widening the probe query to `30d` and adding a comment mentioning the old
 # value kept the count at 2 and the arm green, leaving the monotonicity premise unbacked. It now
@@ -691,23 +725,26 @@ fi
 # ANCHORED ON THE EMITTER, NOT THE PROSE. All five of these were whole-file `grep -qF` over a
 # 6000-line workflow that is more than half comments and `description:` strings — so turning the
 # operator-facing line into a `#` comment left every arm green while the operator saw nothing.
-# Row 6a was fixed this way and Row 7b was not. `echo "::error::` is what a comment cannot be.
-if grep -qF 'echo "::error::  WHY NOT inngest-host' "$WF"; then pass; else fail "Row 7b(a): the recut failure path does not EMIT the warning against the dead route"; fi
+# Row 6a was fixed this way and Row 7b was not. `echo "::error::` is what a comment cannot be —
+# but only over COMMENT-STRIPPED text. Measured: commenting out each of these five lines left all
+# five arms green, because the commented line still carries its own `echo "::error::`. The emission
+# anchor and the strip are each necessary and neither is sufficient; all five use $WF_CODE.
+if grep -qF 'echo "::error::  WHY NOT inngest-host' <<<"$WF_CODE"; then pass; else fail "Row 7b(a): the recut failure path does not EMIT the warning against the dead route"; fi
 # THE ROUTE CHANGED BECAUSE THE FIRST REPLACEMENT WAS ALSO UNREACHABLE. `inngest-host` cannot
 # recover: hcloud_server.inngest carries the volume id in its user_data with no ignore_changes,
 # so an absent volume makes that id unknown at plan time, user_data is ForceNew, the server is
 # planned for replace, and the additive-only guard refuses the delete. Measured, and measured
 # again on inngest-host-replace, whose gate aborted on out_of_scope until the volume was admitted
 # for create-only. This arm pins the route that was actually driven green.
-if grep -qE "RECOVERY: dispatch '-f apply_target=inngest-host-replace'" "$WF"; then pass; else fail "Row 7b(a2): the recut failure path does not name inngest-host-replace, the only route measured to work"; fi
+if grep -qE 'echo "::error::.*RECOVERY: dispatch .-f apply_target=inngest-host-replace' <<<"$WF_CODE"; then pass; else fail "Row 7b(a2): the recut failure path does not name inngest-host-replace, the only route measured to work"; fi
 # ...and it must warn off BOTH dead routes, not just the one it used to name.
 # `do NOT dispatch inngest-host` is a PREFIX of `do NOT dispatch inngest-host-replace`, so the
 # previous anchor was satisfied by advice FORBIDDING the one route measured to work — which would
 # have left the workflow both prescribing and forbidding it, with both arms green. Anchor past
 # the token boundary.
-if grep -qF "do NOT dispatch inngest-host —" "$WF"; then pass; else fail "Row 7b(a3): the failure path does not warn that inngest-host (not -replace) also aborts"; fi
-if grep -qF "THE CUTOVER IS NOT COMPLETE" "$WF"; then pass; else fail "Row 7b(b): the recut success path does not say that a host replace is still required"; fi
-if grep -qF "FIRST-BOOT-ONLY" "$WF"; then pass; else fail "Row 7b(b2): the recut success path does not say WHY a reboot is not enough (runcmd is first-boot-only)"; fi
+if grep -qF 'echo "::error::' <<<"$(grep -F "do NOT dispatch inngest-host —" <<<"$WF_CODE")"; then pass; else fail "Row 7b(a3): the failure path does not warn that inngest-host (not -replace) also aborts"; fi
+if grep -qF 'echo "::warning::' <<<"$(grep -F "THE CUTOVER IS NOT COMPLETE" <<<"$WF_CODE")"; then pass; else fail "Row 7b(b): the recut success path does not say that a host replace is still required"; fi
+if grep -qF 'echo "' <<<"$(grep -F "FIRST-BOOT-ONLY" <<<"$WF_CODE")"; then pass; else fail "Row 7b(b2): the recut success path does not say WHY a reboot is not enough (runcmd is first-boot-only)"; fi
 # ...and it must not still claim the old thing anywhere. Grep the OLD wording, never the new.
 if grep -qF "the LUKS cut happens on the next boot" "$WF"; then fail "Row 7b(c): the superseded 'next boot' claim survives somewhere in the workflow"; else pass; fi
 
@@ -745,7 +782,11 @@ if [[ "$(printf '%s\n' "$_out" | tail -1)" == "stale_row" ]]; then pass; else fa
 # different vacuity.
 _unpinned=0
 while IFS= read -r _n; do
-  _chunk="$(sed -n "${_n},$((_n + 8))p" "${BASH_SOURCE[0]}" | tr '\n' ' ')"
+  # Strip comments from the chunk BEFORE classifying. The nine-line window routinely runs into
+  # the prose documenting the next arm, and both `--now-epoch` and the Row 8 fixture names appear
+  # in that prose — so an unpinned call sitting above an explanation of pinning was read as pinned.
+  _chunk="$(sed -n "${_n},$((_n + 8))p" "${BASH_SOURCE[0]}" \
+            | grep -vE '^[[:space:]]*#' | sed 's/[[:space:]]#[[:space:]].*$//' | tr '\n' ' ')"
   case "$_chunk" in
     *'--now-epoch'*)                 : ;;
     *rows-now.json*|*rows-old.json*) : ;;   # Row 8: deliberately the real clock
@@ -806,6 +847,15 @@ mutate() {
     fail "B10[$gn]: neutering the check did NOT change the verdict (still '$tok'); the line may be dead code shadowed by another check." "$rc" "$out"
   fi
 }
+
+# mutate()'s SELF-TEST. Neutering it to `pass; return 0` silenced all sixteen B10 rows at
+# 112 passed, 0 failed. Drive it with a mutation that cannot land (an anchor matching nothing):
+# the harness must report the byte-identical-copy failure, not a silent pass.
+_w_p="$passes" _w_f="$fails"
+mutate SELFTEST 's|THIS-ANCHOR-MATCHES-NOTHING-XYZZY|:|' "$ROWS" dark 2>/dev/null
+_w_ok=0; [[ "$fails" -eq $((_w_f + 1)) ]] && _w_ok=1
+passes="$_w_p"; fails="$_w_f"
+if [[ "$_w_ok" -eq 1 ]]; then pass; else fail "INSTRUMENT: mutate() did not fail on a mutation that cannot land — the whole B10 harness is decorative"; fi
 
 mutate G4  's|^  \[\[ "\$schema" == "\$expected_schema" \]\].*|  :|'                 "$TMP/rows-g4.json"  stale_schema
 mutate G7  's|^  \[\[ "\$host_role" == "dedicated" \]\].*|  :|'                      "$TMP/rows-g7.json"  wrong_host
@@ -869,7 +919,7 @@ fi
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=112
+_FLOOR=115
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

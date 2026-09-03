@@ -1031,26 +1031,38 @@ t_luks_rotations_parse_failure_fails_closed() {
 # The HALT must live in the APPLY job and OUTSIDE the destroy_count sum. A counter the workflow
 # computes and never compares is the silent-and-green failure this whole file exists to catch.
 t_apply_job_luks_halt_job_scoped() {
-  local wf="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
+  # The name promised job-scoping; the body did neither job-scoping nor comment-stripping, and
+  # every token it grepped for ALSO appears in the prose that documents the HALT. Measured: the
+  # whole HALT block plus its parse line commented out (14 lines) left this suite at 56 passed,
+  # 0 failed, exit 0 — the arm was reading the workflow's own explanation of the code it deleted.
+  # Same defect T54's header already warned about, in the arm added right below it.
+  local block code halt_off sum_off
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  if [[ -z "$block" ]]; then
+    _report "T60g apply block extracts non-empty" fail "empty block — extractor broken"
+    return
+  fi
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+
   local ok=1
-  grep -qF 'luks_rotations=$(echo "$counts" | jq -r '"'"'.luks_passphrase_rotations'"'"')' "$wf" || ok=0
-  grep -qF '[[ "$luks_rotations" -gt 0 ]]' "$wf" || ok=0
-  # It must be compared BEFORE destroy_count is even summed, or [ack-destroy] reaches it.
+  grep -qF 'luks_rotations=$(echo "$counts" | jq -r '"'"'.luks_passphrase_rotations'"'"')' <<<"$code" || ok=0
+  grep -qF '[[ "$luks_rotations" -gt 0 ]]' <<<"$code" || ok=0
+  # Offsets are WITHIN the stripped apply block, so the ordering claim is about executable lines in
+  # the job that runs them — not about two file positions that may sit in different jobs entirely.
   #
-  # `|| true` ON BOTH, and it is load-bearing rather than defensive noise: this suite runs under
-  # `set -euo pipefail`, so a `grep` that matches nothing makes the whole pipeline rc=1 and kills
-  # the function — in the EXACT case this arm exists to report. Measured before the fix: the
-  # mutant (`-gt 999`) produced no verdict line and no suite summary at all, and the run "failed"
-  # with rc=1 for the wrong reason. A failing assertion must fail loudly as itself.
-  local halt_line sum_line
-  halt_line="$(grep -n '\[\[ "\$luks_rotations" -gt 0 \]\]' "$wf" | head -1 | cut -d: -f1 || true)"
-  sum_line="$(grep -n 'destroy_count=\$((resource_deletes' "$wf" | head -1 | cut -d: -f1 || true)"
-  [[ -n "$halt_line" && -n "$sum_line" && "$halt_line" -lt "$sum_line" ]] || ok=0
+  # `|| true` on both is load-bearing, not defensive noise: this suite runs under `set -euo
+  # pipefail`, so a `grep` matching nothing kills the function in the EXACT case this arm exists to
+  # report. Measured before that fix: the `-gt 999` mutant produced no verdict line and no suite
+  # summary, and the run "failed" rc=1 for the wrong reason.
+  halt_off="$(grep -n '\[\[ "\$luks_rotations" -gt 0 \]\]' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  sum_off="$(grep -n 'destroy_count=\$((resource_deletes' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  [[ -n "$halt_off" && -n "$sum_off" && "$halt_off" -lt "$sum_off" ]] || ok=0
+
   if [[ "$ok" -eq 1 ]]; then
-    _report "T60g the apply job HALTs on luks_passphrase_rotations, before the destroy_count sum" ok
+    _report "T60g the apply job HALTs on luks_passphrase_rotations, before the destroy_count sum (job-scoped, comments stripped)" ok
   else
     _report "T60g the apply job HALTs on luks_passphrase_rotations, before the destroy_count sum" fail \
-      "halt_line=${halt_line:-none} sum_line=${sum_line:-none}"
+      "halt_off=${halt_off:-none} sum_off=${sum_off:-none} (offsets are within the stripped apply block)"
   fi
 }
 
