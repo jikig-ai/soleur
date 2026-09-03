@@ -16,6 +16,50 @@ requires_cpo_signoff: true
 > No `spec.md` exists for this branch, so `lane:` could not be carried forward and defaults to
 > `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened:** 2026-09-03. **Prior passes:** a plan-time CLO consult, a seven-agent plan review, a CLO
+follow-up consult, and two mechanical deepen sweeps.
+
+### What the review passes actually changed
+
+| # | Change | Found by |
+|---|---|---|
+| 1 | **A false statement was caught before it shipped.** Ruling 3's replacement cell asserted that CLA §0 cross-references the DPD. It does not — §0 names Privacy Policy §§4.5/5.11/10 and GDPR Policy §§3.4/6. The false clause was landing in the one cell whose original defect was that it named no mechanism | Kieran + architecture-strategist, corrected by the CLO in addendum A1 |
+| 2 | **The PR was split.** The transparency consequence of the capture predicate requires a `docs/legal/**` edit — a five-gate change class — so it became PR B rather than riding along. Its scope then grew twice: `privacy-policy.md` §5.11 (a false bot-only enumeration) and §8.1 (the section that actually confers a rights route, with carve-outs for three other accountless populations and none for this one) | CLO Ruling 5(B); scope additions from architecture-strategist and spec-flow, endorsed in A6 |
+| 3 | **PA-7 gained an `(h) DSAR` cell.** The change mints an involuntary data-subject population; PA-32 and PA-33 carry `(h)` cells for exactly that reason and PA-7 had none. PA-7's answer is materially *better* than theirs — `inspect-evidence.sh by-contributor` filters on `.actor.login` and so reaches a non-signer — which is why it had to be written down rather than inferred | spec-flow GAP-A1, ruled in A4 |
+| 4 | **A `CORPUS DIVERGENCE` block was added**, and an AC that would have forbidden it was corrected. Without it the register-vs-corpus divergence is not merely unrecorded but *undetectable*, because #7669 — the sentinel that would catch it — is deliberately not built here | architecture-strategist H2, ruled in A3 |
+| 5 | **Active Items rows went from one to four**, with zero DPIA rows and the reason recorded so the count is not re-litigated. An AC asserting "exactly one" would have blocked the correct outcome | architecture-strategist H1, ruled in A5 |
+| 6 | **A commit-time blocker was found.** The register carries ten pre-existing markdownlint errors, all outside PA-7, and lefthook runs markdownlint on staged `*.md`. Staging the register blocks the commit, and the natural escape is `--no-verify` — the exact bypass the AC's own rationale warns about | Kieran P0 |
+| 7 | **Phase 1's measurement was cut and moved into the PR B issue.** It bought no property in the Property List, the advisory forbids this PR to answer the only question it decides, and it put a live production-credential read inside a documentation-only PR. Its prescribed command was *also* structurally incapable of answering its own question — `by-contributor` filters on `.actor.login`, and an over-captured record has a different login | code-simplicity + Kieran P1 + spec-flow GAP-C2 |
+| 8 | **Eleven acceptance criteria were cut and five defective ones rewritten**, including one vacuous by construction after a rename in the same phase, one whose anchor could not match the text the plan itself prescribes, and one asserting a process no command can falsify | code-simplicity, architecture-strategist, spec-flow |
+| 9 | **Phases were reordered twice into dependency order.** The filings phase now runs before the amendment (two cells cite an issue number it mints) and before the sweep (a `compliance-posture.md` row needs the same). The same read-before-write inversion was found twice in one plan | architecture-strategist + spec-flow |
+| 10 | **Eight factual corrections to this plan's own research**, recorded in place rather than quietly rewritten — including `:658` being PA-33 rather than PA-35, which had propagated into five load-bearing places including two of the CLO's own rulings | the review panel |
+
+### The pattern behind this plan's own errors, worth carrying forward
+
+Every one came from **paraphrasing a plausible mirror instead of reading the thing**: `SignerRow` for
+the record's shape, the receipt comment for the notice mechanism, line `:242` for a PA-7 block, PA-35
+for PA-33, `2026-08-counsel-review-7440.md` for a frontmatter contract it does not carry. The mirror
+is always adjacent, always nearly right, and always cheaper to consult than the source. That belongs
+in `knowledge-base/project/learnings/` after this ships.
+
+### Deepen-plan gate results
+
+| Gate | Verdict |
+|---|---|
+| **4.5 Network-Outage** | **Does not fire.** One `firewall` hit at the plan's own enumeration of the IaC gate's detection strings — a description of a gate, not a network symptom this plan addresses. No SSH, handshake, reset or 5xx trigger in the Overview, Problem Statement or Hypotheses |
+| **4.55 Downtime & Cutover** | **Does not fire.** No infra reboot/replace, no lock-taking DDL, no deploy/router change. The diff is three Markdown files |
+| **4.6 User-Brand Impact** | **PASS.** Section present, four named populations, concrete artifact and exposure vector, threshold `single-user incident`. Files-to-Edit match no sensitive path |
+| **4.7 Observability** | **SKIP (pure-docs).** Every Files-to-Edit path matches `^knowledge-base/` |
+| **4.8 PAT-shaped variable** | **PASS.** The four-pattern sweep returns no matches |
+| **4.9 UI wireframe** | **SKIP.** No UI-surface path in either Files list |
+| **4.10 Encryption Posture** | **SKIP.** No `.tf`, migration, cloud-init or compose file, and the plan introduces no store and no cross-component connection. The R2 bucket it *describes* is pre-existing with its posture already at PA-7 §(g) |
+| **4.11 Guard Contract** | **SKIP.** No guard, gate, lint or drift-check in the deliverable — and cutting the one that would have belonged here, in favour of #7669, is what keeps this true |
+| **ADR ordinal** | **Not applicable.** No ADR created; `grep -c 'ADR-[0-9]'` returns 0 |
+| **Cited rule IDs** | **PASS.** All five (`cq-assert-anchor-not-bare-token`, `cq-cite-content-anchor-not-line-number`, `hr-gdpr-gate-on-regulated-data-surfaces`, `wg-when-an-audit-identifies-pre-existing`, `wg-when-deferring-a-capability-create-a`) resolve to active `[id: …]` entries in `AGENTS.md` and none appears in `scripts/retired-rule-ids.txt` |
+| **Cited PR/issue numbers** | **PASS.** All twelve resolve live and match the state the plan claims — #7622 and #7597 are merged **PRs**, #7601/#7624/#7100 closed, #7625/#7668/#7669/#7670/#7671/#7126/#7119 open |
+
 ## Overview
 
 Two knowledge-base legal-register artefacts, one PR. Neither touches `docs/legal/**`, so the five
@@ -405,6 +449,15 @@ reader has to notice.
 
 ## Implementation Phases
 
+> **Two things called "Phase 4" appear below and they are unrelated.** This plan's **Phase 4** writes
+> the #7622 CLO review record. **`Phase 4: Validate + Scale`** in backticks is the GitHub *milestone*
+> (number 4) that two of the Phase 2 filings are assigned to. Likewise `Phase 5.5` and `Phase 2.5` in
+> running text refer to the `/ship` and `/soleur:plan` skills' own phases, never to this list.
+>
+> **The order below is dependency order, not narrative order.** The filings phase runs second because
+> two register cells and a `compliance-posture.md` row all cite issue numbers it mints. An earlier
+> draft had it fifth; the same read-before-write inversion was caught twice in one review pass.
+
 ### Phase 0 — Transcribe the binding advisory, before touching the register
 
 The CLO advisory in `## CLO Advisory — Binding Rulings` below is the governing text for every §(c),
@@ -538,6 +591,19 @@ operative one:
   (the data is in R2, not a Supabase table), is not addressed by §4.5 (signature-framed), and never
   sees CLA §0. Draft the carve-out on the community-digest precedent.
 
+**All three claims were verified verbatim at plan review, not paraphrased:**
+
+- `docs/legal/privacy-policy.md:383` (§5.11): *"allowlisted **bot accounts** (`dependabot[bot]`,
+  `renovate[bot]`, `claude[bot]`) are also recorded; the upstream CLA action filters
+  `github-actions[bot]` (DB-id 41898282) before any record is written"*.
+- `docs/legal/data-protection-disclosure.md:172` (§2.3(n)): the same enumeration, *"recorded once per
+  principal per quarter"*.
+- Both omit `deruelle` — a natural person — and `soleur-ai[bot]`, against the six principals at
+  `.github/workflows/cla.yml:58`.
+- `docs/legal/privacy-policy.md` §8.1 carries carve-outs for **community digests**, **departed
+  workspace members** and **LinkedIn-published content**, and mentions the CLA **zero times**
+  (`grep -ci "CLA\b"` over the §8.1 body returns `0`).
+
 Plus the three Eleventy mirrors under `plugins/soleur/docs/pages/legal/` and a `legal-doc-shas.ts`
 re-pin. **`EXPECTED_COUNT` does not move** — `apps/web-platform/scripts/check-tc-document-sha.sh:47`
 sets it to the number of canonical documents (9), and PR B edits three existing documents without
@@ -607,12 +673,36 @@ and its Special-categories cell reads a bare `None identified.` **Verified at pl
 on this issue number, and `/ship` Phase 5.5's gdpr-gate acknowledgment gate verifies every
 PR-referenced `compliance/critical` issue has a row there before merge.
 
+**3b. The six remaining bare `**Special categories**` row labels** — PA-3, PA-4, PA-5, PA-6, PA-8 and
+PA-9, which alone in the register lack the `(Art. 9 / 10)` suffix that the other 24 rows carry.
+Measured at plan review: 31 rows total, 24 suffixed, 7 bare, and PA-7 is the seventh. Sweeping them
+here would breach Phase 3's "only PA-7's rows" constraint and fail AC9, so they are filed as one
+mechanical pass. Milestone `Post-MVP / Later`; labels `domain/legal`, `chore`. **Note for #7669:**
+until this lands the register has two spellings and any sentinel must accept both.
+
 **4. The two C4 gaps** enumerated in `## Architecture Decision (ADR/C4)` — FreeTSA has no element and
 the `soleur-cla-evidence` R2 edge has no relationship. One issue covering both; they are the same
 class. Milestone `Post-MVP / Later`; labels `domain/engineering`, `chore`. Filed under
 `wg-when-an-audit-identifies-pre-existing`, and deliberately **not** gated by AC29 — a reviewer called
 this one audit-generates-audit-work, and that is a fair charge against gating a merge on it, though
 not against recording it.
+
+**5. The four `compliance/critical` findings**, one issue per Active Items row in the addendum's A5
+table: (i) the non-signer capture has no available Art. 6 basis; (ii) `comment_body` Art. 9 ingress
+with neither a technical nor an organisational control; (iii) the published corpus does not disclose
+the non-signer population and offers it no Art. 21(1) route; (iv) the tombstone `override_reason`
+free-text Art. 9 surface. Labels `compliance/critical` + `domain/legal`. **Phase 5's
+`compliance-posture.md` rows key on these four numbers**, and `/ship` Phase 5.5's gdpr-gate
+acknowledgment gate verifies every PR-referenced `compliance/critical` issue has a row — so these must
+exist before Phase 5 runs. Issue (iii) may be the same issue as item 1 (PR B) if the authority's row
+and the PR B tracking reference are the same thing; decide once and use one number consistently in
+both the row and the `CORPUS DIVERGENCE` block.
+
+**6. The register's ten pre-existing markdownlint errors** — `MD034` at `:26`, `:274`, `:278`,
+`:294`, `:686`, `:707`; `MD050` at `:179` (×2); `MD038` at `:432`; `MD055` at `:660`. All outside
+PA-7, all pre-existing, and collectively the reason the register cannot be staged through lefthook
+without a decision. Milestone `Post-MVP / Later`; labels `chore`, `documentation`. See the note under
+AC14.
 
 None of these blocks this PR. **PR A records today's position today.** But note the ordering the
 reviewers converged on and which the first draft of this plan had backwards: **PR B outranks PR A in
@@ -823,8 +913,14 @@ No Art. 10 data
 ```
 
 plus `printf '%s' "$R" | grep -cF 'None. |'` returns **0**, and
-`pa7 | grep -cE '^\| \*\*Special categories\*\* \|'` returns **0** (the un-suffixed label is gone,
-matching PA-15/27/32/35).
+`pa7 | grep -cE '^\| \*\*Special categories\*\* \|'` returns **0** (the un-suffixed label is gone).
+
+**The harmonisation moves PA-7 from the minority form into the majority one, measured:** of the
+register's 31 Special-categories rows, **24 carry the `(Art. 9 / 10)` suffix and 7 carry the bare
+label** — the seven being PA-3 through PA-9 consecutively, which reads as an early-drafting artefact
+rather than a distinction. A reviewer noted that harmonising one of seven leaves two spellings for
+issue #7669 to learn. That is true, and it is why the remaining six are filed in Phase 2 rather than
+swept here, where they would breach the "only PA-7's rows" constraint and fail AC9.
 
 **Absence alone is a proxy here and the first draft relied on it.** Its anchor required the
 *un-suffixed* row label — which the label harmonisation in the same phase removes — so after the
@@ -1046,7 +1142,8 @@ question went back to the reviewing authority, which answered **four**. Had the 
 assertion survived, it would have blocked the correct outcome — an AC frozen on an unverified count
 gating against the right answer.
 
-*Filed and dated*: the Phase 2 issues exist and are referenced by number in the PR body, and for each
+*Filed and dated*: **every Phase 2 issue — items 1, 2, 3, 3b, 4, the four at item 5, and item 6 —**
+exists and is referenced by number in the PR body, and for each
 number `gh issue view N --json labels,milestone` returns a non-empty label set drawn from the verified
 allowlist. **Phase 2 items 1 and 2 additionally carry the `Phase 4: Validate + Scale` milestone** — a merge
 gate on that, not merely on the labels, because an issue in `Post-MVP / Later` is where a split
@@ -1102,7 +1199,8 @@ implying full coverage is the same standard this plan applies to the register.
 
 | Risk | Mitigation |
 |---|---|
-| **Nothing in CI validates this file.** No gate checks table integrity, PA numbering, or required cells; no gate validates `audits/` frontmatter. A malformed row or a missing frontmatter key ships silently | AC1/AC2 assert the table shape with an anti-vacuity floor; AC10 asserts the frontmatter contract by hand. The systemic fix is **#7669**, deliberately not built here |
+| **Nothing in CI validates this file.** No gate checks table integrity, PA numbering, or required cells; no gate validates `audits/` frontmatter. A malformed row or a missing frontmatter key ships silently | AC1/AC2 assert the table shape with an anti-vacuity floor; AC10 asserts the frontmatter contract by hand. The systemic fix is **#7669**, deliberately not built here. **Verified, and it is stronger than "no gate":** `.markdownlint.json` sets `"MD056": false`, so even the linter that *does* run on staged Markdown has table-column-count checking switched off repo-wide — AC2 is the only table guard in existence for this file, not merely the most convenient one |
+| **The register cannot be staged through lefthook.** Ten pre-existing markdownlint errors, all outside PA-7, and `.markdownlintignore` covers only `distribution-content/` and `INDEX.md` | AC14 scopes markdownlint to the files this PR authors and records the baseline; Phase 2 item 6 files the ten errors; the commit decision (ignore-file first, or `--no-verify` with the baseline in the PR body) is made deliberately rather than discovered at commit time |
 | The §(c) rewrite drifts into deciding the *processing* rather than the *record* — e.g. concluding the capture path should filter | Phase 1's second arm routes that to a separate issue explicitly, matching how #7668 handles retention. The advisory's Ruling 5 sets the boundary and governs |
 | The Art. 9 answer moves and a downstream Art. 9 claim is left stale — the §0 DPO non-designation at `:28`, or `compliance-posture.md:20,44` | Ruling 6 enumerates exactly which must move. Phase 4 step 2 applies only that list |
 | An absence-grep AC false-fails because the audit record legitimately quotes the string being removed | AC6 is scoped to the PA-7 block, not the repo. This is the specific trap the plan's own AC set was checked against |

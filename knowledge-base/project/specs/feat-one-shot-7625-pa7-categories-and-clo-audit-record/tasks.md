@@ -14,6 +14,12 @@ Derived from the plan after a seven-agent review pass. **The plan's
 and the advisory disagree, the advisory wins.** Phase order is dependency order, not narrative order —
 the filings phase runs before the amendment because two cells cite an issue number it mints.
 
+> **Numbering note.** This file counts phases from 1; the plan counts from 0. The mapping is
+> `tasks N` = `plan N-1` throughout: tasks Phase 1 = plan Phase 0 (transcribe the advisory), tasks
+> Phase 3 = plan Phase 2 (filings), tasks Phase 4 = plan Phase 3 (amend PA-7), and so on. A "Phase N"
+> reference *inside* this file always means this file's numbering. Separately, `Phase 4: Validate +
+> Scale` in backticks is a GitHub **milestone**, not a phase in either list.
+
 ## Phase 1 — Transcribe the binding advisory
 
 - [ ] 1.1 Read `## CLO Advisory — Binding Rulings` and `## CLO Advisory — Addendum after plan review`
@@ -58,10 +64,16 @@ the filings phase runs before the amendment because two cells cite an issue numb
 - [ ] 3.4 File the four `compliance/critical` issues, one per Active Items row (A5 table).
 - [ ] 3.5 File the AUP §4.7 over-broad citation issue — **two cells, `:313` (PA-17) and `:658`
       (PA-33)**, not PA-35.
-- [ ] 3.6 File the C4 gaps issue (FreeTSA element, `soleur-cla-evidence` R2 edge). Post-MVP.
-- [ ] 3.7 File the register's ten pre-existing markdownlint errors. Post-MVP.
-- [ ] 3.8 Fold the signer-only retrieval runbook into the `(h)` issue — do not edit it here; it is
+- [ ] 3.6 File the six remaining bare `**Special categories**` labels (PA-3/4/5/6/8/9) as one
+      mechanical pass. Measured: 31 rows, 24 suffixed, 7 bare. Post-MVP.
+- [ ] 3.7 File the C4 gaps issue (FreeTSA element, `soleur-cla-evidence` R2 edge). Post-MVP.
+- [ ] 3.8 File the register's ten pre-existing markdownlint errors — `MD034` ×6, `MD050` ×2, `MD038`,
+      `MD055`, all outside PA-7. Post-MVP.
+- [ ] 3.9 Fold the signer-only retrieval runbook into the `(h)` issue — do not edit it here; it is
       inside `lint-infra-no-human-steps.py`'s scan dirs.
+- [ ] 3.10 Every issue gets a milestone. Items for PR B and the capture-predicate gap →
+      `Phase 4: Validate + Scale`; the rest → `Post-MVP / Later`. A split whose other half lands
+      undated is a deferral wearing a split's clothes.
 
 ## Phase 4 — Amend PA-7 (five cells)
 
@@ -105,5 +117,9 @@ the filings phase runs before the amendment because two cells cite an issue numb
 - [ ] 7.3 `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`
 - [ ] 7.4 `npx --yes markdownlint-cli` on the two new audit files and the plan — **not** the register.
 - [ ] 7.5 Handle the register's markdownlint blocker deliberately: `.markdownlintignore` in a separate
-      PR, or `--no-verify` with the ten-error baseline recorded in the PR body.
-- [ ] 7.6 Walk AC1-AC19.
+      PR, or `--no-verify` with the ten-error baseline recorded in the PR body. Do not discover this
+      at commit time — `lefthook.yml:18-22` runs markdownlint on staged `*.md` and the register fails
+      on ten pre-existing errors.
+- [ ] 7.6 Re-read every cross-reference in the five amended cells against its target document. The
+      review pass caught one false cross-reference the advisory itself had introduced.
+- [ ] 7.7 Walk AC1-AC19.
