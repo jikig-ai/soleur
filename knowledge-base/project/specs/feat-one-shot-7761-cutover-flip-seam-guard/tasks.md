@@ -30,7 +30,7 @@ that are not obvious from the code.
 ## Phase 1 — Failing tests first
 
 - [x] 1.1 Write Guard 1's eight mutation rows and two harness rows as executable cases.
-- [ ] 1.2 Write Guard 2's seven mutation rows and three harness rows, including the `\n`-escaped
+- [x] 1.2 Write Guard 2's seven mutation rows and three harness rows, including the `\n`-escaped
       `.tf`-heredoc must-RED fixture.
 - [x] 1.3 Confirm every row is RED before any implementation lands.
 
@@ -63,10 +63,10 @@ that are not obvious from the code.
       `--no-exit-on-missing-only-secrets`, all **after** `--config prd` and before the `--`.
 - [x] 4.2 Comment the `--no-exit-on-missing-only-secrets` line naming `noop-unset` as its reason.
 - [x] 4.3 Do **not** add `--no-fallback`.
-- [ ] 4.4 Build Guard 2, lifting `enumerate_units()` and helpers from
+- [x] 4.4 Build Guard 2, lifting `enumerate_units()` and helpers from
       `credential-persist-home-guard.test.sh:571-605` (copy, do not source — ADR-177 §A3), with the
       ack-list/floor discipline from `inngest.test.sh:1617-1730`.
-- [ ] 4.5 Register the new suite in `.github/workflows/infra-validation.yml`.
+- [x] 4.5 Register the new suite in `.github/workflows/infra-validation.yml`.
 
 ## Phase 5 — Systemd sandboxing
 
