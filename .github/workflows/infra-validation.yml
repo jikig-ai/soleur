@@ -1113,6 +1113,13 @@ jobs:
       - name: Run apex-single-node-replace drift-guard (#7640)
         run: bash apps/web-platform/infra/apex-single-node-replace.test.sh
 
+      # Registered in the SAME commit that adds the suite. An unregistered
+      # infra suite never gates: infra-validation.yml runs explicit steps, not a
+      # glob, and run-registered-suites.sh derives its list from THIS file — so
+      # an unregistered suite is uncovered locally too, silently and green.
+      - name: Run PR5 anchor-integrity guard (#7640)
+        run: bash apps/web-platform/infra/pr5-anchor-integrity.test.sh
+
       # Its falsifiability evidence. The thing that would see a real moved-index
       # mismatch in dns.tf is the GUARD above; this battery is what proves the guard's
       # cases can actually go RED -- including M3, the mismatch Terraform does NOT error

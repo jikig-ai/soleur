@@ -38,12 +38,34 @@ permissions:
   # job they would be standing privileges nothing uses.
 
 concurrency:
+  # RETAINED DELIBERATELY, and the name is now historical. This is an arbitrary
+  # serialization key — it is not the retired Pages deployment environment,
+  # nothing in
+  # actions/* reads it, and it is unique across every workflow in this repo, so
+  # it collides with nothing. PR5 did NOT rename it: renaming splits the
+  # serialization domain for the duration of one in-flight run, and this job
+  # holds a token that can replace every byte of the apex, so two concurrent
+  # runs are exactly what must not happen. If it is ever renamed, do it in a PR
+  # that touches nothing else so the one-run split window is isolated.
   group: "pages"
   cancel-in-progress: false
 
 jobs:
   deploy:
-    if: github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run'
+    # `github.ref` IS LOAD-BEARING, and it replaces a real gate this migration removed.
+    # PR5 deleted this job's `environment:` block, and that deployment
+    # environment carried a branch policy. MEASURED 2026-09-03 against the live
+    # repo (the exact `gh api .../deployment-branch-policies` command is recorded
+    # in the cutover runbook, which has no literal-absence constraint on it):
+    # exactly one policy, `{"name":"main","type":"branch"}`. Without this conjunct a
+    # `workflow_dispatch` from ANY ref would check that ref out, stamp its SHA into
+    # version.txt, `wrangler pages deploy --branch=main` it to the PRODUCTION project,
+    # and BOTH build-identity probes would report MATCH — because they compare the apex
+    # against that same ref's SHA. Three green legs, arbitrary branch content on the
+    # public apex. `workflow_dispatch` carries no ref restriction of its own.
+    if: >-
+      (github.event.workflow_run.conclusion == 'success' || github.event_name != 'workflow_run')
+      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     # Runs inside the official Playwright container so the screenshot-gate step
     # (below) has Chromium + OS deps pre-installed at the matching Playwright
@@ -99,8 +121,11 @@ jobs:
       - name: Canonical-host gate (no www leaks)
         # Catches stray https://www.soleur.ai/... (www) interpolations leaking
         # into rendered HTML/XML. Canonical host is https://soleur.ai (the bare
-        # apex); www 301s → apex at the edge (GitHub Pages enforces the CNAME
-        # apex). Any rendered www reference points at a host that redirects,
+        # apex); www 301s → apex at the edge. That 301 is owned by the
+        # ACCOUNT-LEVEL `cloudflare_list.www_canonical` Bulk Redirect
+        # (seo-bulk-redirects.tf, since PR1) — NOT, as this comment previously
+        # said, by GitHub Pages enforcing the CNAME apex. Any rendered www
+        # reference points at a host that redirects,
         # which is the GSC `Page with redirect` cluster cause this gate guards
         # against. Regex covers EVERY non-host-continuation suffix: `/`, `?`,
         # `#`, `"`, `'`, `<`, ` `, EOL, etc. Negative class `[^a-zA-Z0-9.-]`
@@ -213,8 +238,10 @@ jobs:
           # (no sudo, unlike apply-sentry-infra.yml's VM runner) is correct.
           # Also warn-and-exit-0, so the step-header claim above holds on EVERY path rather
           # than only on the four guarded assignments. An apt failure here would otherwise
-          # kill the step and skip Setup Pages / Upload / Deploy — blocking the docs deploy
+          # kill the step and skip every publish step below — blocking the docs deploy
           # on a monitor-pause helper, which is the opposite of best-effort.
+          # (This named "Setup Pages / Upload / Deploy" until PR5 deleted those
+          # three steps; the hazard is unchanged, the step names are not.)
           if ! which jq >/dev/null 2>&1; then
             if ! { apt-get update && apt-get install -y jq; }; then
               echo "::warning::could not install jq; skipping the monitor pause (deploy continues)."
@@ -293,10 +320,23 @@ jobs:
       # WHAT THIS COSTS, STATED SO NOBODY REDISCOVERS IT MID-INCIDENT: the
       # GitHub Pages content now FREEZES at the last PR4-era build. Restoring
       # that origin is no longer one act (revert DNS) but THREE — re-add this
-      # publish leg, redeploy it, then revert DNS. See the "Rollback content
-      # freeze" and "PR5 narrows the rollback" sections of
+      # publish leg, redeploy it, then revert DNS — or FOUR, because
+      # `### Procedure` step 3 makes the PR3 revert conditional: if
+      # apex-origin-probe.sh still reports SERVING-FROM-CLOUDFLARE-PAGES after
+      # the DNS revert, the custom-domain ATTACHMENT is also routing and must be
+      # reverted too. Do not quote "three" without that conditional.
+      #
+      # The canonical, ordered list is the `READ THIS BEFORE ### Procedure`
+      # block at the top of `## Rollback` in
       # knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md
-      # and the removal conditions on #7799.
+      # (rationale under `### PR5 NARROWED THE ROLLBACK`), plus the removal
+      # conditions on #7799.
+      #
+      # Both anchors are asserted by pr5-anchor-integrity.test.sh. This comment
+      # has now cited a non-existent heading TWICE in one PR — first a
+      # `Rollback content freeze` section the same commit deleted, then a
+      # heading renamed two edits later — so the anchor is pinned by a test
+      # rather than by care (cq-cite-content-anchor-not-line-number).
       #
       # No leg aborts the others: each publish step is continue-on-error with an
       # id, and the verdict step at the end ANDs their outcomes. `outcome`, not
@@ -312,8 +352,19 @@ jobs:
       # code holds the token.)
       # (AC17 greps for the floating forms, so this note states the hazard
       # without spelling one — the explanation must not trip its own check.)
+      # NO `if: always()` ON THIS STEP OR THE DEPLOY BELOW. Every content gate
+      # above (Validate SEO, Canonical-host, Validate CSP, Verify build output,
+      # critical-CSS, screenshot gate) runs without continue-on-error, so a
+      # failure there SKIPS what follows — which is the intended behaviour and
+      # what `if: always()` was overriding. Until PR5 the blast radius was
+      # absorbed by the GitHub Pages leg, which carried continue-on-error
+      # WITHOUT `if: always()` and so was correctly skipped on a failed gate;
+      # PR5 removed that leg, making this the last publish path and therefore
+      # the one that must respect the gates. `continue-on-error: true` on the
+      # deploy still delivers the "no leg aborts the others" property the
+      # verdict block promises; the probes keep `if: always()` because a
+      # `skipped` probe outcome is already failed-closed by the verdict.
       - name: Install wrangler (exact version, no floating tag)
-        if: always()
         # --ignore-scripts: this install is immediately followed by a step
         # holding a token that can replace every byte of soleur.ai. wrangler
         # runs from JS; its transitive postinstall scripts (esbuild, workerd)
@@ -329,7 +380,6 @@ jobs:
       # stay equal across the file boundary.
       - name: Deploy to Cloudflare Pages
         id: wrangler_deploy
-        if: always()
         continue-on-error: true
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PAGES }}
@@ -397,8 +447,18 @@ jobs:
       #
       # The GitHub-Pages arm was removed in PR5 (#7640, AC33) along with the leg
       # itself. PROBE B IS THE ONE THAT MATTERS NOW: post-cutover it asserts the
-      # live apex serves THIS build through Cloudflare Pages, which is CUT0' made
-      # permanent — a per-deploy version of the cutover check, not a leftover.
+      # live apex serves THIS BUILD — CUT0' made permanent, a per-deploy version
+      # of the cutover check rather than a leftover.
+      #
+      # IT DOES NOT ASSERT WHICH ORIGIN SERVED IT, and an earlier revision of
+      # this comment said it did. Probe B captures only `%{http_code}` and the
+      # body; it inspects no headers and carries no origin signal. Provenance is
+      # CUT2, which matches APEX_GH_ORIGIN_MARKERS (apex-origin-markers.sh) and
+      # runs only in cutover-verify.sh. The distinction is not academic: during
+      # the documented rollback, once GitHub Pages holds a CURRENT build and DNS
+      # is reverted, Probe B fetches the apex, finds a body equal to github.sha
+      # and reports MATCH — green, while GitHub Pages is serving. A SHA match
+      # proves WHICH BYTES, never WHICH ORIGIN.
       - name: Publish verdict
         if: always()
         env:
@@ -425,9 +485,14 @@ jobs:
           done
           if [ "$rc" -ne 0 ]; then
             echo "::error::Publishing is a conjunction: every leg must be green."
-            echo "::error::A red probe B means the live apex is NOT serving this build. Check"
-            echo "::error::the Cloudflare Pages deployment first; the apex is a proxied CNAME to"
-            echo "::error::the Pages project, so a failed wrangler deploy shows up there too."
+            echo "::error::A red probe B means the live apex is NOT serving this build."
+            echo "::error::IF A DOCUMENTED ROLLBACK IS IN PROGRESS this is EXPECTED: acts 1-2 of"
+            echo "::error::the three-act rollback run while the apex is deliberately not serving"
+            echo "::error::this build. Do NOT debug forward on a live apex (#7640 task 3.3) --"
+            echo "::error::read '### PR5 NARROWED THE ROLLBACK' in the cutover runbook first."
+            echo "::error::Otherwise: check the Cloudflare Pages deployment; the apex is a"
+            echo "::error::proxied CNAME to the Pages project, so a failed wrangler deploy"
+            echo "::error::surfaces here too."
             exit 1
           fi
           echo "All publish legs green."

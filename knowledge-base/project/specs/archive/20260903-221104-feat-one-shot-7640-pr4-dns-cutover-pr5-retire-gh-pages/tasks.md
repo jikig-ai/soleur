@@ -1,6 +1,6 @@
 # Tasks — ADR-194 Cloudflare Pages migration, PR4 (DNS cutover) + PR5 (retire GitHub Pages)
 
-Plan: `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`
 Issue: #7640 (OPEN — closed by **PR4b**, not earlier)
 Branch: `feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages` (PR4a; reaped by
 `cleanup-merged` once PR4a squash-merged) -> `feat-one-shot-7640-pr4b-apex-cname-flip` (PR4b).
@@ -90,7 +90,16 @@ rejected alternatives are in the Cut List with the measurement that killed each.
       (`deploy-docs.yml` deliberately does not fire on `dns.tf`).
 - [x] 3.3 Decision point at T+20: on any failure merge the generated rollback PR; then re-probe
       and revert PR3 **only if** still `SERVING-FROM-CLOUDFLARE-PAGES`. Never debug forward.
-- [x] 3.4 AC23: dispatch `deploy-docs.yml`; satisfied by the **per-leg table**, not the run
+- [ ] 3.4 AC23: dispatch `deploy-docs.yml`; satisfied by the **per-leg table**, not the run
+      **UN-TICKED 2026-09-03 by PR5's review — the tick was not supported.** AC23 requires
+      "an explicitly dispatched run, not … an unrelated future commit"
+      (`cq-ac-must-not-depend-on-concurrent-sessions`). Measured: `gh run list
+      --workflow=deploy-docs.yml --limit 100` shows exactly ONE `workflow_dispatch`, on
+      2026-08-19, two weeks BEFORE the cutover. Both post-cutover runs were `push` /
+      `workflow_run` — precisely the unrelated-future-commit shape the AC forbids. The
+      per-leg table WAS green on those runs, so the underlying property holds; what is
+      missing is the dispatch AC23 names. Discharge post-PR5-merge with an explicit
+      `gh workflow run deploy-docs.yml` and record the run id here.
       conclusion — the GitHub Pages leg is red by construction until PR5.
 - [x] 3.5 #7640 closes via `Closes #7640` in PR4b's body.
 
@@ -133,7 +142,16 @@ rejected alternatives are in the Cut List with the measurement that killed each.
   published a newer docs build), and CUT8 read UNREACHABLE because
   `soleur-ai-changelog-deep` runs at `interval_seconds = 600` and the first sample
   ran 52 s before any post-`CUTOVER_SINCE` check could exist.
-- **Phase 4** is this PR. 4.4-4.6 are ticked as they land.
+- **Phase 4** is this PR. 4.4-4.5 complete at PR-body-write and merge; 4.6 landed here.
+- **A prediction in this plan was FALSIFIED, and PR5's review caught it.** Task 3.4
+  and the plan both said the GitHub Pages leg would be "red by construction" after the
+  PR4b apply, because GitHub's custom-domain DNS check fails once the apex `A` records
+  are gone. Measured: every post-apply `deploy-docs.yml` run reported `Deploy to GitHub
+  Pages: success` — `gh api repos/{owner}/{repo}/pages` returns `build_type: workflow`,
+  and a workflow-source deployment does not gate on that check. The correction is
+  load-bearing rather than cosmetic: because `deploy-pages` succeeds while DNS points at
+  Cloudflare, act 2 of the three-act rollback is executable BEFORE act 3, which is what
+  makes the documented ordering valid at all.
 
 ## Standing constraints
 

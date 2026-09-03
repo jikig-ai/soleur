@@ -124,7 +124,7 @@ The migration ships as three sequenced PRs; the table stays accurate until the t
 |---|---|---|
 | `soleur.ai` | ONE proxied `A` record on GitHub Pages anycast (`185.199.108.153`) since #7640 PR4a shrank it from four | one proxied `CNAME` to the Cloudflare Pages project, flattened at the apex; the `MX` and `TXT` records at the apex are unaffected — CNAME flattening is what makes that legal |
 | `www.soleur.ai` | proxied `CNAME` to `jikig-ai.github.io`; the `www -> apex` **301 is GitHub-Pages-owned** | proxied `CNAME` to the same Pages project, with the 301 rebuilt as a **Cloudflare Bulk Redirect** (account-level, `http_request_redirect` phase — *not* a rule in `seo_page_redirects`) running in front of the project |
-| `_github-pages-challenge-jikig-ai.soleur.ai` | `TXT`, unproxied, domain verification | retained; GitHub Pages configuration is left in place but DNS-detached, because that is what makes the rollback a DNS-only revert |
+| `_github-pages-challenge-jikig-ai.soleur.ai` | `TXT`, unproxied, domain verification | retained; GitHub Pages configuration is left in place but DNS-detached, because it is the ROLLBACK TARGET. **Corrected 2026-09-03 (#7640 PR5):** this row said that is "what makes the rollback a DNS-only revert". PR5 retired the GitHub Pages publish leg, so the retained content is frozen and the rollback is three acts, or four — see `### PR5 NARROWED THE ROLLBACK` in the cutover runbook. The record still must be retained; only the stated reason narrowed. |
 
 `apps/web-platform/infra/dns.tf` remains the source of truth for all of it.
 

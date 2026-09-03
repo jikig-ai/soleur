@@ -17,6 +17,7 @@ Plan: **ARCHIVED 2026-09-03** to
 > | PR1 | `a05ae1f77` | Cloudflare Pages substrate (#7649) |
 > | PR2 | `3244be4f5` | dual-publish through the cutover window (#7751) |
 > | PR3 | `2a589e9f4` | attach the custom domains (#7771) |
+> | (guard) | `171338cd7` | guard the `ssl = "full"` rule holding the apex up (#7753) |
 > | PR4a | `428e1ec78` | shrink the apex to one address (#7780) |
 > | PR4b | `99eeebfef` | flip the apex to a CNAME (#7793) |
 > | PR5 | this PR | retire the GitHub Pages publish leg |
@@ -26,7 +27,9 @@ Plan: **ARCHIVED 2026-09-03** to
 >
 > PR4/PR5 were tracked in a SEPARATE spec dir
 > (`feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages`), archived alongside
-> this one, whose checkboxes were maintained.
+> this one. **Precisely:** that dir's Phases 1-2 were maintained as the work went;
+> 2.11 and all of Phases 3-4 were still unticked on `origin/main` and were ticked
+> retroactively by PR5 against verified evidence. "Maintained" overstated it.
 
 Delivery is **three sequenced PRs, IaC first** (plan §Delivery Sequencing). A single merge
 cannot produce the verification order the plan asserts.

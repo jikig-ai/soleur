@@ -224,7 +224,7 @@ run at all.
 
 **Deletion is deferred, deliberately.** The subsystem, `cf-cert-reissue-token.tf`, the
 `CF_API_TOKEN_DNS_EDIT` secret, `gh-pages-cert-renewal.md` and this ADR all survive the migration,
-because a DNS-only revert to GitHub Pages is ADR-194's rollback and it needs them. Disarmament and
+because a revert to GitHub Pages is ADR-194's rollback and it needs them. (**Corrected 2026-09-03, #7640 PR5:** this read "a DNS-only revert". Since PR5 retired the publish leg that revert is three acts, or four — the records are still required, the one-act framing is not.) Disarmament and
 deletion have different deadlines: the hazard is created by the cutover, so it is closed by the
 cutover's own work. See ADR-194 `## Addendum — 2026-08-20 (#7640)` §2 and `## Design Decision D2`
 of `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.
