@@ -88,7 +88,7 @@ fi
 inngest_volume_recut_gate() {
   local plan_json="$1"
   local expected_id="${2:-}"
-  local counts vp ac idmm ipa ist ovt oat wst lpt rd oos reason
+  local counts vp ac nvf idmm ipa ipu ist ovt oat wst lpt rd oos reason
 
   # THE ASSERTS LIVE INSIDE THE FUNCTION, AS ITS FIRST STATEMENTS, because they consume
   # $plan_json — a FUNCTION PARAMETER that does not exist at file scope.
@@ -106,9 +106,20 @@ inngest_volume_recut_gate() {
         "hcloud_volume.inngest_redis",
         "hcloud_volume_attachment.inngest_redis"
       ];
-      # NAMED-LIVE: each address below is guarded by its OWN named clause, so out_of_scope
-      # EXCLUDES them and each named clause is independently load-bearing. An address that is
-      # in NEITHER list still aborts via out_of_scope / resource_deletes — the closure property.
+      # NAMED-LIVE: every address below also has its OWN counter, and this list is what keeps
+      # out_of_scope from ALSO firing on it — so `reason=` names the specific property that
+      # caught the plan instead of the generic catch-all. An address in NEITHER list still aborts
+      # via out_of_scope / resource_deletes: that is the closure property, and it is what makes
+      # the gate safe against a resource nobody enumerated.
+      #
+      # SAID PRECISELY, because an earlier revision of this comment claimed each membership was
+      # "independently load-bearing" and it is not: dropping any of the four server/volume
+      # addresses from this list changes no verdict and no reason, since their own counters are
+      # checked FIRST in the reason order below. Membership is defence in depth and a
+      # diagnostic-quality choice, not a second gate. The two that ARE load-bearing here are
+      # random_password.inngest_redis_luks and doppler_secret.inngest_redis_luks_key, whose own
+      # counter deliberately omits `create` — without this list a first create of the passphrase
+      # would abort as out_of_scope, which is the legal shape on the first cut to LUKS.
       def named_live: [
         "hcloud_server.inngest",
         "hcloud_volume.workspaces[\"web-1\"]",
@@ -167,6 +178,41 @@ inngest_volume_recut_gate() {
                 | select(.change.before != null) ]
               | length
             end
+          ),
+          new_volume_formatted: (
+            # THE REPLACEMENT VOLUME MUST BE BORN RAW. This is the counter that grades the PLAN
+            # rather than trusting the config, and it exists because the config was wrong and
+            # argued for at length: `format = "ext4"` sat on this resource under a
+            # `lifecycle { ignore_changes = [format] }` that was believed to neutralise it.
+            # `ignore_changes` suppresses DIFFS, never CREATES. Measured 2026-09-03 on the real
+            # recut plan (`-replace=hcloud_volume.inngest_redis`):
+            #
+            #     with    format = "ext4":  after.format=ext4
+            #     without format = "ext4":  after.format=null
+            #
+            # An ext4 replacement is mounted plaintext by cloud-init ARM 1 and spends the one-shot
+            # empty-store window producing an UNENCRYPTED volume, while the workflow prints "The
+            # new volume is RAW" twice. Counted on the CREATE side only: `before.format` is ext4
+            # today and that is the volume being destroyed.
+            [ $plan.resource_changes[]?
+              | select(.address == "hcloud_volume.inngest_redis")
+              | select(.change.actions? | index("create"))
+              | select(.change.after.format != null) ]
+            | length
+          ),
+          id_pin_unverifiable: (
+            # THE THIRD PIN, and the one that closes the gap between the other two. A plan whose
+            # `before` is non-null but whose `before.id` is NULL passes both: luks_id_mismatch
+            # selects on `before.id != null`, and id_pin_absent only fires when $expected is
+            # empty. So a genuine destroy of a volume the plan cannot name sailed through the
+            # ID-PIN entirely: the one shape where the operator pin cannot be checked was the one
+            # shape where nothing checked it. No fixture covered it either, because the fixture
+            # builder always emitted an id.
+            [ $plan.resource_changes[]?
+              | select(.address == "hcloud_volume.inngest_redis")
+              | select(.change.actions? | any(. == "delete" or . == "forget"))
+              | select((.change.before != null) and (.change.before.id == null)) ]
+            | length
           ),
           inngest_server_touched: (
             # THE THREE-DISPATCH SPLIT, pinned. The recut must not replace the host — that is
@@ -237,6 +283,8 @@ inngest_volume_recut_gate() {
   ac=$(echo "$counts"   | jq -r '.redis_attachment_created')
   idmm=$(echo "$counts" | jq -r '.luks_id_mismatch')
   ipa=$(echo "$counts"  | jq -r '.id_pin_absent')
+  ipu=$(echo "$counts"  | jq -r '.id_pin_unverifiable')
+  nvf=$(echo "$counts"  | jq -r '.new_volume_formatted')
   ist=$(echo "$counts"  | jq -r '.inngest_server_touched')
   ovt=$(echo "$counts"  | jq -r '.old_volume_touched')
   oat=$(echo "$counts"  | jq -r '.old_attachment_touched')
@@ -250,14 +298,14 @@ inngest_volume_recut_gate() {
   # uncomputed counter silently satisfies every threshold. This is mutation row 9.
   plan_gate_assert_numeric "inngest_volume_recut_gate" \
     "redis_volume_provisioned=${vp}" "redis_attachment_created=${ac}" "luks_id_mismatch=${idmm}" \
-    "id_pin_absent=${ipa}" "inngest_server_touched=${ist}" "old_volume_touched=${ovt}" \
+    "id_pin_absent=${ipa}" "id_pin_unverifiable=${ipu}" "new_volume_formatted=${nvf}" "inngest_server_touched=${ist}" "old_volume_touched=${ovt}" \
     "old_attachment_touched=${oat}" "web1_server_touched=${wst}" "luks_passphrase_touched=${lpt}" \
     "resource_deletes=${rd}" "out_of_scope=${oos}" || return 1
 
-  echo "redis_volume_provisioned=${vp} redis_attachment_created=${ac} luks_id_mismatch=${idmm} id_pin_absent=${ipa} inngest_server_touched=${ist} old_volume_touched=${ovt} old_attachment_touched=${oat} web1_server_touched=${wst} luks_passphrase_touched=${lpt} resource_deletes=${rd} out_of_scope=${oos}"
+  echo "redis_volume_provisioned=${vp} redis_attachment_created=${ac} new_volume_formatted=${nvf} luks_id_mismatch=${idmm} id_pin_absent=${ipa} id_pin_unverifiable=${ipu} inngest_server_touched=${ist} old_volume_touched=${ovt} old_attachment_touched=${oat} web1_server_touched=${wst} luks_passphrase_touched=${lpt} resource_deletes=${rd} out_of_scope=${oos}"
 
-  if [[ "$vp" -ge 1 && "$ac" -ge 1 && "$idmm" -eq 0 && "$ipa" -eq 0 && "$ist" -eq 0 && "$ovt" -eq 0 && "$oat" -eq 0 && "$wst" -eq 0 && "$lpt" -eq 0 && "$rd" -eq 0 && "$oos" -eq 0 ]]; then
-    echo "inngest_volume_recut_gate: PASS — scoped inngest-redis volume recut permitted (volume REPLACED [or recovery-created] + attachment re-created; replaced-volume id matches the operator-supplied pin; hcloud_server.inngest, the live /workspaces volume/attachment and the web-1 server all untouched; passphrase not rotated; no out-of-scope delete or action)"
+  if [[ "$vp" -ge 1 && "$ac" -ge 1 && "$nvf" -eq 0 && "$idmm" -eq 0 && "$ipa" -eq 0 && "$ipu" -eq 0 && "$ist" -eq 0 && "$ovt" -eq 0 && "$oat" -eq 0 && "$wst" -eq 0 && "$lpt" -eq 0 && "$rd" -eq 0 && "$oos" -eq 0 ]]; then
+    echo "inngest_volume_recut_gate: PASS — scoped inngest-redis volume recut permitted (volume REPLACED [or recovery-created] and born RAW + attachment re-created; replaced-volume id is readable and matches the operator-supplied pin; hcloud_server.inngest, the live /workspaces volume/attachment and the web-1 server all untouched; passphrase not rotated; no out-of-scope delete or action)"
     return 0
   fi
 
@@ -273,11 +321,13 @@ inngest_volume_recut_gate() {
   elif [[ "$lpt"  -ne 0 ]]; then reason=luks_passphrase_touched
   elif [[ "$idmm" -ne 0 ]]; then reason=luks_id_mismatch
   elif [[ "$ipa"  -ne 0 ]]; then reason=id_pin_absent
+  elif [[ "$ipu"  -ne 0 ]]; then reason=id_pin_unverifiable
+  elif [[ "$nvf"  -ne 0 ]]; then reason=new_volume_formatted
   elif [[ "$rd"   -ne 0 ]]; then reason=resource_deletes
   elif [[ "$oos"  -ne 0 ]]; then reason=out_of_scope
   elif [[ "$vp"   -lt 1 ]]; then reason=volume_not_provisioned
   elif [[ "$ac"   -lt 1 ]]; then reason=attachment_not_created
   fi
-  echo "inngest_volume_recut_gate: ABORT reason=${reason} — plan is NOT the exact scoped inngest-redis volume recut (the volume must show a genuine replace [delete AND create] or a recovery bare create [before null] + the attachment a create; a physical-id pin is REQUIRED whenever a volume is actually being destroyed and must match; a touch on hcloud_server.inngest, the live /workspaces volume/attachment or the web-1 server, a passphrase rotation, an out-of-scope delete, or an out-of-scope positive action all ABORT)"
+  echo "inngest_volume_recut_gate: ABORT reason=${reason} — plan is NOT the exact scoped inngest-redis volume recut (the volume must show a genuine replace [delete AND create] or a recovery bare create [before null] + the attachment a create; the replacement volume must carry NO format [an ext4 create spends the one-shot empty window on an unencrypted store]; a physical-id pin is REQUIRED whenever a volume is actually being destroyed, must be readable in the plan, and must match; a touch on hcloud_server.inngest, the live /workspaces volume/attachment or the web-1 server, a passphrase rotation, an out-of-scope delete, or an out-of-scope positive action all ABORT)"
   return 1
 }

@@ -112,9 +112,27 @@ fi
 # (plaintext ext4), and the only thing to assert is that /mnt/data is a real mount rather than a
 # directory on the root disk. Scoped by POSITIVE identity (DOPPLER_PROJECT), never by the absence
 # of something: the co-located web host runs this same unit and has its own /mnt/data.
-proj=""
-if [ -r /etc/default/inngest-server ]; then
-  proj="$( . /etc/default/inngest-server 2>/dev/null; printf '%s' "${DOPPLER_PROJECT:-}" )"
+# AN UNREADABLE IDENTITY IS NOT A LICENCE. The first cut of this read collapsed three cases into
+# one `exit 0`: the web host (correct), a dedicated host whose env file failed to write, and a
+# dedicated host whose file exists but lost DOPPLER_PROJECT. The last two are exactly the broken
+# hosts this guard exists for, and it waved them through — the file is written by cloud-init and
+# augmented in place by inngest-bootstrap.sh, so "present but empty" is a real failure mode, not a
+# hypothetical. Note the unit declares `EnvironmentFile=/etc/default/inngest-server` WITHOUT the
+# leading `-`, so systemd has already refused to start us if the file is absent; the absent arm
+# below is kept explicit rather than assumed.
+ENVFILE=/etc/default/inngest-server
+if [ ! -e "$ENVFILE" ]; then
+  # Nothing here claims to be any host. Nothing to assert.
+  exit 0
+fi
+if [ ! -r "$ENVFILE" ]; then
+  echo "FATAL: $ENVFILE exists but is unreadable — refusing to start Redis; this guard cannot tell which host it is on, and the pre-recut arm it would skip is the one that keeps the AOF off the root disk" >&2
+  exit 1
+fi
+proj="$( . "$ENVFILE" 2>/dev/null; printf '%s' "${DOPPLER_PROJECT:-}" )"
+if [ -z "$proj" ]; then
+  echo "FATAL: $ENVFILE carries no DOPPLER_PROJECT — refusing to start Redis; host identity is unreadable and this guard will not infer it from an absence" >&2
+  exit 1
 fi
 [ "$proj" = "soleur-inngest" ] || exit 0
 

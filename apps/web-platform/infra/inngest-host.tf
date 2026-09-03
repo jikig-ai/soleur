@@ -428,33 +428,48 @@ resource "hcloud_volume" "inngest_redis" {
   name     = "soleur-inngest-redis-store"
   size     = var.inngest_redis_volume_size
   location = var.location
-  format   = "ext4"
 
   labels = {
     app = "soleur-web-platform"
   }
 
-  # #7695. `format` IS STILL DECLARED, AND KEEPING IT IS THE POINT.
+  # #7695. `format` IS NOT DECLARED, AND THAT IS THE POINT — the LUKS precedents
+  # (hcloud_volume.workspaces_luks, hcloud_volume.registry_store) omit it so the
+  # device is born RAW and `blkid -o value -s TYPE` is a sound discriminator.
   #
-  # The LUKS precedents (hcloud_volume.workspaces_luks, hcloud_volume.registry_store)
-  # omit `format` so the device is born raw and `blkid -o value -s TYPE` is a sound
-  # discriminator. Copying that here would be wrong in a way `terraform validate`
-  # cannot see: `format` is ForceNew, so REMOVING the line queues a volume replace.
-  # `apply_target=inngest-host` carries an additive-only destroy guard ("a net-new
-  # host provisioning must create, never destroy"), so a queued replace makes that
-  # target abort PERMANENTLY — disabling the recovery dispatch for a host that is
-  # already not serving, for as long as the guard refuses. That is the opposite of
-  # what this work is for.
+  # AN EARLIER REVISION OF THIS BLOCK KEPT `format = "ext4"` AND ARGUED FOR IT AT
+  # LENGTH. The argument was that `format` is ForceNew, so removing the line would
+  # queue a volume replace, and `apply_target=inngest-host`'s additive-only destroy
+  # guard would then abort PERMANENTLY. Every word of that is plausible and the
+  # conclusion is false, because it reasons about ForceNew while ignoring the
+  # `ignore_changes` directly beneath it. MEASURED 2026-09-03, `terraform plan`
+  # against live state with the line removed and the lifecycle block kept:
   #
-  # `ignore_changes = [format]` keeps the attribute declared and the plan empty. The
-  # `format` line drops only on the recut branch itself, where the replace is the
-  # intended act rather than a side effect of it. The recut therefore does not rely
-  # on this attribute at all — it pins the physical volume id and lets the cloud-init
-  # discriminator read the DEVICE, which is the only source that cannot drift from
-  # what is actually on the disk.
+  #     hcloud_volume.inngest_redis  actions=["no-op"]  after.format=ext4
   #
-  # AC B4: `terraform plan` for apply_target=inngest-host must show ZERO deletes with
-  # this block in place. Record the verbatim plan line when re-deriving it.
+  # No replace is queued; `ignore_changes = [format]` suppresses the diff exactly as
+  # it is designed to. The lifecycle block is RETAINED for that reason — it is what
+  # keeps the existing ext4 volume's plan empty now that the config no longer names
+  # a format.
+  #
+  # And the cost of having believed it, measured the same way on the recut plan
+  # (`-replace=hcloud_volume.inngest_redis`):
+  #
+  #     with    format = "ext4":  actions=["delete","create"]  after.format=ext4
+  #     without format = "ext4":  actions=["delete","create"]  after.format=null
+  #
+  # `ignore_changes` suppresses DIFFS, never CREATES. So with the line present the
+  # replacement volume is created ext4, cloud-init's ARM 1 mounts it plaintext, and
+  # the one-shot empty-store window — the whole reason this apparatus exists — is
+  # spent producing an unencrypted volume while the workflow prints "The new volume
+  # is RAW" twice. inngest_volume_recut_gate reads `.change.after.format` from the
+  # plan and refuses unless it is null, so this is enforced against the PLAN rather
+  # than against this file staying the way it is.
+  #
+  # AC B4: `terraform plan` for apply_target=inngest-host must show ZERO deletes of
+  # this volume with this block in place. Re-measured 2026-09-03: no-op. Record the
+  # verbatim plan line when re-deriving it.
+
   lifecycle {
     ignore_changes = [format]
   }

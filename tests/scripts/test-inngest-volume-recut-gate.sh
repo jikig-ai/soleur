@@ -66,6 +66,14 @@ rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
 # A resource_change object carrying a `before.id` (the physical volume being acted on).
 rc_obj_id() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":"%s"}}}' "$1" "$2" "$3"; }
 write_plan() { printf '{"format_version":"1.2","resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
+# A resource_change whose `after` carries a format — the shape a `format = "ext4"` config emits on
+# the CREATE side of a replace. Measured on the real plan, not invented.
+rc_obj_fmt() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":"%s"},"after":{"format":"ext4"}}}' "$1" "$2" "$3"; }
+# A `before` that EXISTS but carries no id. Terraform emits this when the prior state entry is
+# present but its id was never recorded or was nulled; `rc_obj_id` can never produce it.
+rc_obj_nullid() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":null}}}' "$1" "$2"; }
+# A NUMERIC before.id. The gate coerces with `| tostring`; nothing measured that it does.
+rc_obj_numid() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":%s}}}' "$1" "$2" "$3"; }
 
 # The scoped recut: the volume shows a REPLACE carrying the pinned id; its attachment replaces too.
 VOL_REPLACE="$(rc_obj_id 'hcloud_volume.inngest_redis' '"delete","create"' "$PINNED_ID")"
@@ -96,6 +104,21 @@ check() {
   fi
 }
 
+# ── THE WRAPPER SELF-TEST ─────────────────────────────────────────────────────────
+# The instrument self-test above drives pass()/fail() DIRECTLY. Every arm below goes through
+# check(), which it never exercises — so replacing check()'s body with a bare `pass` produced
+# `38 passed, 0 failed`, rc 0, with the anti-vacuity floor reporting healthy. Drive the wrapper in
+# the direction that must FAIL, then roll the counters back.
+write_plan "${PASS_SET}"
+_st_p=$passes; _st_f=$fails
+check "SELF-TEST (expected to fail): a PASS plan is not an abort" 1 "reason=old_volume_touched" "$TMP/plan.json" "$PINNED_ID" 2>/dev/null
+if [[ "$fails" -eq $((_st_f + 1)) && "$passes" -eq "$_st_p" ]]; then
+  passes=$_st_p; fails=$_st_f; pass
+else
+  passes=$_st_p; fails=$_st_f
+  fail "INSTRUMENT: check() did not fail on a must-fail arm — every assertion in this file is decorative"
+fi
+
 # ── Canonical PASS ────────────────────────────────────────────────────────────────
 write_plan "${PASS_SET}"
 check "PASS: exact scoped recut, id-pinned" 0 "inngest_volume_recut_gate: PASS" "$TMP/plan.json" "$PINNED_ID"
@@ -103,6 +126,55 @@ check "PASS: exact scoped recut, id-pinned" 0 "inngest_volume_recut_gate: PASS" 
 # create_before_destroy ordering must not change the verdict.
 write_plan "$(rc_obj_id 'hcloud_volume.inngest_redis' '"create","delete"' "$PINNED_ID"),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
 check "PASS: create-before-destroy replace ordering" 0 "inngest_volume_recut_gate: PASS" "$TMP/plan.json" "$PINNED_ID"
+
+# ── N1: THE REPLACEMENT VOLUME IS BORN FORMATTED ──────────────────────────────────
+# The P0 this counter exists for. `format = "ext4"` sat on the resource under a
+# `lifecycle { ignore_changes = [format] }` believed to neutralise it; ignore_changes suppresses
+# DIFFS, never CREATES. Measured on the real recut plan: with the line, after.format=ext4.
+write_plan "$(rc_obj_fmt 'hcloud_volume.inngest_redis' '"delete","create"' "$PINNED_ID"),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N1: the new volume is created ext4 => ABORT new_volume_formatted" 1 "reason=new_volume_formatted" "$TMP/plan.json" "$PINNED_ID"
+
+# ── N2: A DESTROY THE PLAN CANNOT NAME ────────────────────────────────────────────
+# `before` non-null, `before.id` null. luks_id_mismatch selects on `before.id != null` and
+# id_pin_absent only fires when the pin is EMPTY, so this shape defeated both — the one case where
+# the operator pin cannot be verified was the one case nothing verified.
+write_plan "$(rc_obj_nullid 'hcloud_volume.inngest_redis' '"delete","create"'),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N2: a destroy whose before.id is null => ABORT id_pin_unverifiable" 1 "reason=id_pin_unverifiable" "$TMP/plan.json" "$PINNED_ID"
+
+# ── N3: A NUMERIC before.id ───────────────────────────────────────────────────────
+# The gate coerces with `| tostring`; dropping that left the suite green because every fixture
+# emitted a STRING id. Both directions: the matching numeric id must PASS, a different one ABORT.
+write_plan "$(rc_obj_numid 'hcloud_volume.inngest_redis' '"delete","create"' "$PINNED_ID"),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N3a: a NUMERIC before.id equal to the pin => PASS" 0 "inngest_volume_recut_gate: PASS" "$TMP/plan.json" "$PINNED_ID"
+write_plan "$(rc_obj_numid 'hcloud_volume.inngest_redis' '"delete","create"' "$OTHER_ID"),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N3b: a NUMERIC before.id that differs => ABORT luks_id_mismatch" 1 "reason=luks_id_mismatch" "$TMP/plan.json" "$PINNED_ID"
+
+# ── N4: A `read` ACTION MUST NOT ABORT ────────────────────────────────────────────
+# THE TOO-AGGRESSIVE DIRECTION, which no arm covered. `positive` deliberately excludes BOTH
+# `no-op` AND `read`, and the gate header says so — but widening it to include `read` left the
+# suite at 38/0 while the real dispatch would abort `out_of_scope` against any plan carrying a
+# data-source read. A gate that passes its tests and refuses the operator is still broken.
+write_plan "${PASS_SET},$(rc_obj 'data.hcloud_image.ubuntu' '"read"')"
+check "N4: a data-source read is not a positive action => PASS" 0 "inngest_volume_recut_gate: PASS" "$TMP/plan.json" "$PINNED_ID"
+
+# ── N5: EVERY named-live member is independently load-bearing ─────────────────────
+# Four of the six only ever appeared as `no-op`, so removing any of them from named_live changed
+# nothing measurable. Each must ABORT under its OWN counter when acted on.
+write_plan "${VOL_REPLACE},${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},$(rc_obj 'hcloud_server.web[\"web-1\"]' '"update"'),${PW_NOOP},${SECRET_NOOP}"
+check "N5a: web-1 server updated => ABORT web1_server_touched" 1 "reason=web1_server_touched" "$TMP/plan.json" "$PINNED_ID"
+write_plan "${VOL_REPLACE},${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},$(rc_obj 'hcloud_volume_attachment.workspaces[\"web-1\"]' '"delete"'),${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N5b: the live /workspaces attachment detached => ABORT old_attachment_touched" 1 "reason=old_attachment_touched" "$TMP/plan.json" "$PINNED_ID"
+
+# ── N6: THE PASSPHRASE PAIR IS THE LOAD-BEARING named_live MEMBERSHIP ──────────────
+# Their own counter omits `create` on purpose (this volume is cut to LUKS for the FIRST time, so a
+# first create of the passphrase is legal). That makes named_live the only thing standing between
+# a legal first create and an out_of_scope abort — the one membership in the list whose removal
+# changes a verdict, and the direction that must PASS.
+write_plan "${VOL_REPLACE},${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},$(rc_obj 'random_password.inngest_redis_luks' '"create"'),$(rc_obj 'doppler_secret.inngest_redis_luks_key' '"create"')"
+check "N6a: a FIRST create of the passphrase pair is legal => PASS" 0 "inngest_volume_recut_gate: PASS" "$TMP/plan.json" "$PINNED_ID"
+# ...and the rotation directions still abort, so N6a is not simply a hole.
+write_plan "${VOL_REPLACE},${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},$(rc_obj 'random_password.inngest_redis_luks' '"delete","create"'),${SECRET_NOOP}"
+check "N6b: a passphrase REPLACE rotates the key => ABORT luks_passphrase_touched" 1 "reason=luks_passphrase_touched" "$TMP/plan.json" "$PINNED_ID"
 
 # ── Row 1: the LIVE sole-copy /workspaces volume is touched ───────────────────────
 write_plan "${VOL_REPLACE},${ATT_REPLACE},${SRV_NOOP},$(rc_obj 'hcloud_volume.workspaces[\"web-1\"]' '"delete","create"'),${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
@@ -277,13 +349,13 @@ check "OPERAND: a DIRECTORY as the plan path => fail-closed" 1 "ABORT" "$TMP" "$
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the suite on
 # every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 34 ]]; then
+if [[ "$_ran" -lt 48 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 34. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 48. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
   printf 'inngest-volume-recut-gate: %s passed, %s failed\n' "$passes" "$fails"
   exit 1
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 34)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 48)\n' "$_ran"
 fi
 
 echo ""

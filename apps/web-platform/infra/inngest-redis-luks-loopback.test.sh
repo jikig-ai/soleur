@@ -75,7 +75,10 @@ if [ "$(id -u)" -ne 0 ]; then
   fi
   unavailable "not running as root and passwordless sudo is unavailable"
 fi
-for b in losetup cryptsetup mkfs.ext4 mount umount findmnt mountpoint truncate; do
+# mkswap is in this list because `new_loop swap` calls it (the ARM4 unhandled-signature
+# fixture); it was absent, so a host without it produced `unavailable` from the middle of the run
+# instead of from the preflight, where an infra gap belongs.
+for b in losetup cryptsetup mkfs.ext4 mkswap mount umount findmnt mountpoint truncate; do
   command -v "$b" >/dev/null 2>&1 || unavailable "required binary '$b' not found on PATH"
 done
 for b in /usr/sbin/blkid /usr/sbin/blockdev; do
@@ -168,7 +171,18 @@ new_loop() {
 # it from `doppler run`). Sets ARM_MNT / ARM_RC / ARM_DETAIL for the caller's assertions.
 run_arm() {
   local name="$1" expect="$2" loop="$3" want="$4" wb="${5:-30}"
-  local d="$TMPROOT/arm-$name"
+  # THE LABEL IS NOT A PATH. Every arm name here is a human sentence — spaces, and in one case a
+  # slash ("ARM1 ext4/expect_luks=false mounts as-is"). That directory becomes ARM_MNT, which
+  # render_stage substitutes into the SUT for the UNQUOTED literal `/mnt/data`, so the rendered
+  # stage died at word-splitting with rc 127 before its trap was even armed — all six arms, and
+  # three negative arms ("nothing was mounted", "the device was left untouched") reporting green
+  # because the stage never ran. Take the leading tag only, and refuse if it is still not a safe
+  # path component rather than discovering it as six rc-127s.
+  local tag="${name%% *}"
+  case "$tag" in
+    ''|*[!A-Za-z0-9_-]*) unavailable "arm tag '$tag' is not a safe path component (derived from '$name')" ;;
+  esac
+  local d="$TMPROOT/arm-$tag"
   mkdir -p "$d/mnt" || unavailable "mkdir failed for $name"
   ARM_MNT="$d/mnt"; ARM_DETAIL="$d/detail.log"; ARM_FSTAB="$d/fstab"
   : > "$ARM_FSTAB" || unavailable "fstab seed failed for $name"
@@ -233,7 +247,15 @@ fi
 # loud, then with it present to prove the reopen works.
 R_RC=0
 env -u INNGEST_REDIS_LUKS_KEY bash "$REOPEN" > "$TMPROOT/reopen-nokey.log" 2>&1 || R_RC=$?
-if [ "$R_RC" -ne 0 ]; then ok "BOOT2 reopen with NO passphrase fails LOUDLY (never silently plaintext)"; else no "BOOT2 reopen with no passphrase exited 0 — a closed mapper would go unreported"; fi
+# `-ne 0` alone is satisfied by the WRONG refusal: if the device were never luksFormatted the
+# reopen exits `reopen_not_luks` first, and the arm would report the credential path healthy while
+# measuring a different failure entirely. The logger stub records the token; require it.
+if [ "$R_RC" -ne 0 ] && grep -qF 'reopen_key_missing' "$TMPROOT/reopen-nokey.log"; then
+  ok "BOOT2 reopen with NO passphrase fails LOUDLY, naming reopen_key_missing"
+else
+  no "BOOT2 no-passphrase reopen: rc=$R_RC, reopen_key_missing not logged (a different refusal, or none)"
+  sed -n '1,15p' "$TMPROOT/reopen-nokey.log" >&2
+fi
 
 R_RC=0
 INNGEST_REDIS_LUKS_KEY="$KEY" bash "$REOPEN" > "$TMPROOT/reopen.log" 2>&1 || R_RC=$?
@@ -274,29 +296,100 @@ if [ ! -e "$TMPROOT/not-a-device" ]; then ok "ARM0 nothing was created at the ab
 # ── The mount guard's two states, behaviourally ─────────────────────────────────
 # Extracted from inngest-redis-bootstrap.sh and driven directly. A guard that only ever runs on a
 # host is a guard nothing can falsify.
-GUARD="$TMPROOT/mount-guard.sh"
-awk "/^install -m 0755 \/dev\/stdin \/usr\/local\/bin\/inngest-redis-mount-guard.sh <<'GUARDEOF'\$/{f=1;next} /^GUARDEOF\$/{f=0} f" "$REDIS_BOOTSTRAP" > "$GUARD"
-if [ -s "$GUARD" ]; then ok "GUARD extracts from inngest-redis-bootstrap.sh"; else no "GUARD could not be extracted — the two cases below would be vacuous"; fi
-# State 1, pre-recut identity: mapper absent, DOPPLER_PROJECT is the dedicated project, /mnt/data
-# is NOT a mountpoint => refuse. (The guard reads the real /etc/default/inngest-server, which does
-# not exist here, so `proj` is empty and it exits 0 — that is the WEB-host arm, asserted next.)
-G_RC=0; bash "$GUARD" >/dev/null 2>&1 || G_RC=$?
-if [ "$G_RC" -eq 0 ]; then ok "GUARD is INERT off the dedicated host (no identity, no mapper)"; else no "GUARD refused on a host it should not gate (rc=$G_RC)"; fi
-# State 2: the mapper EXISTS and /mnt/data is not mounted from it => refuse, WITHOUT any identity
-# read. This is the arm that cannot be disarmed by an unreadable env file.
-printf '%s' "$KEY" | cryptsetup luksOpen --key-file - "$L_RAW" inngest-redis >/dev/null 2>&1 || unavailable "could not reopen the mapper for the guard case"
-G_RC=0; bash "$GUARD" >/dev/null 2>&1 || G_RC=$?
-if [ "$G_RC" -ne 0 ]; then ok "GUARD refuses when the mapper is open but /mnt/data is not on it"; else no "GUARD allowed a start with the mapper open and /mnt/data elsewhere — the AOF would land on the root disk"; fi
+GUARD_SRC="$TMPROOT/mount-guard.src.sh"
+awk "/^install -m 0755 \/dev\/stdin \/usr\/local\/bin\/inngest-redis-mount-guard.sh <<'GUARDEOF'\$/{f=1;next} /^GUARDEOF\$/{f=0} f" "$REDIS_BOOTSTRAP" > "$GUARD_SRC"
+if [ -s "$GUARD_SRC" ]; then ok "GUARD extracts from inngest-redis-bootstrap.sh"; else no "GUARD could not be extracted — the cases below would be vacuous"; fi
+# A POSITIVE CONTROL ON THE EXTRACTION, the same shape as G10's in the dark gate: a range that ran
+# to EOF or stopped early is still non-empty, and every negative arm below would pass on it.
+if [ "$(grep -cE '^[[:space:]]*(exit 1|exit 0)' "$GUARD_SRC")" -ge 5 ]; then ok "GUARD extraction captured the whole guard (>=5 exit arms)"; else no "GUARD extraction looks truncated — $(grep -cE '^[[:space:]]*exit' "$GUARD_SRC") exit arms"; fi
+
+# render_guard <mapper> <mount> <envfile> <out>
+# The guard hardcodes three absolute paths, so driving it as-is can only ever reach the two states
+# this host happens to be in. Rebinding them is what makes the other three reachable — including
+# BOTH must-ALLOW directions, whose absence let a guard mutated to "refuse whenever the mapper
+# exists" pass every arm that existed.
+render_guard() {
+  sed -e "s|^MAPPER=/dev/mapper/inngest-redis\$|MAPPER=$1|" \
+      -e "s|^MOUNT=/mnt/data\$|MOUNT=$2|" \
+      -e "s|^ENVFILE=/etc/default/inngest-server\$|ENVFILE=$3|" \
+      "$GUARD_SRC" > "$4"
+  # Assert the rebinding TOOK. A sed that matched nothing leaves the guard pointed at the real
+  # host paths, where every case below reads whatever this machine happens to be.
+  if grep -qF "MAPPER=$1" "$4" && grep -qF "MOUNT=$2" "$4" && grep -qF "ENVFILE=$3" "$4"; then
+    ok "GUARD render rebound all three paths"
+  else
+    no "GUARD render did not rebind — the guard still points at the real host paths"
+  fi
+}
+
+G_MNT="$TMPROOT/g-mnt";   mkdir -p "$G_MNT"
+G_ENV="$TMPROOT/g-env"
+G_MAPPER_ABSENT="$TMPROOT/g-no-such-mapper"
+
+guard_case() {  # guard_case <label> <want-rc> <mapper> <mount> <envfile>
+  local label="$1" want="$2"; shift 2
+  local g="$TMPROOT/guard-$$-${RANDOM}.sh"
+  render_guard "$1" "$2" "$3" "$g"
+  local rc=0; bash "$g" >"$g.log" 2>&1 || rc=$?
+  if [ "$rc" -eq "$want" ]; then ok "$label (rc=$rc as designed)"; else no "$label expected rc=$want, got rc=$rc"; sed -n '1,5p' "$g.log" >&2; fi
+}
+
+# STATE A — no mapper, identity is the WEB project => inert. The positive-identity scoping, driven
+# with the file PRESENT and carrying a real other-project value, rather than by its absence.
+printf 'DOPPLER_PROJECT=soleur-web-platform\n' > "$G_ENV"
+guard_case "GUARD is inert on the web host (positive other-project identity)" 0 "$G_MAPPER_ABSENT" "$G_MNT" "$G_ENV"
+
+# STATE B — no mapper, DEDICATED identity, /mnt/data NOT a mountpoint => refuse. The pre-recut
+# failure the guard exists for: cloud-init's mount never happened and the AOF would land on root.
+printf 'DOPPLER_PROJECT=soleur-inngest\n' > "$G_ENV"
+guard_case "GUARD refuses on the dedicated host when /mnt/data is not a mountpoint" 1 "$G_MAPPER_ABSENT" "$G_MNT" "$G_ENV"
+
+# STATE C — no mapper, DEDICATED identity, /mnt/data IS mounted => ALLOW. THE PRE-RECUT STEADY
+# STATE, and a must-PASS direction that had no arm at all: a guard hardened into "always refuse
+# without a mapper" would deadlock the very cutover this apparatus exists to enable, and would
+# have passed every case that existed.
+L_PRE="$(new_loop pre ext4)"
+mount "$L_PRE" "$G_MNT" >/dev/null 2>&1 || unavailable "could not mount the pre-recut fixture"
+CLEAN_MOUNTS+=("$G_MNT")
+guard_case "GUARD ALLOWS the pre-recut steady state (plaintext ext4, mounted)" 0 "$G_MAPPER_ABSENT" "$G_MNT" "$G_ENV"
+umount "$G_MNT" >/dev/null 2>&1
+
+# STATE D — an env file that EXISTS but carries no DOPPLER_PROJECT => refuse. This arm exited 0
+# before review: `proj=""` fell through to the `|| exit 0` that was written for the web host, so a
+# dedicated host whose env file failed to write was waved through by the guard meant to catch it.
+: > "$G_ENV"
+guard_case "GUARD refuses an env file with no DOPPLER_PROJECT (identity unreadable is not a licence)" 1 "$G_MAPPER_ABSENT" "$G_MNT" "$G_ENV"
+printf 'DOPPLER_PROJECT=soleur-inngest\n' > "$G_ENV"
+
+# STATE E — mapper open, /mnt/data mounted FROM IT => ALLOW. The post-recut steady state; the
+# second must-PASS direction, and the one that makes the two mapper refusals below meaningful
+# rather than "this guard refuses whenever a mapper exists".
+printf '%s' "$KEY" | cryptsetup luksOpen --key-file - "$L_RAW" inngest-redis >/dev/null 2>&1 || unavailable "could not reopen the mapper for the guard cases"
+mount /dev/mapper/inngest-redis "$G_MNT" >/dev/null 2>&1 || unavailable "could not mount the mapper for the guard cases"
+CLEAN_MOUNTS+=("$G_MNT")
+guard_case "GUARD ALLOWS the post-recut steady state (mounted from the mapper)" 0 /dev/mapper/inngest-redis "$G_MNT" "$G_ENV"
+umount "$G_MNT" >/dev/null 2>&1
+
+# STATE F — mapper open, /mnt/data not a mountpoint => refuse, WITHOUT any identity read. The arm
+# that cannot be disarmed by an unreadable env file: point ENVFILE at a path that does not exist
+# and it must still refuse.
+guard_case "GUARD refuses with the mapper open and /mnt/data unmounted, with NO readable identity" 1 /dev/mapper/inngest-redis "$G_MNT" "$TMPROOT/g-env-absent"
+
+# STATE G — mapper open, /mnt/data mounted from something ELSE => refuse.
+mount "$L_PRE" "$G_MNT" >/dev/null 2>&1 || unavailable "could not mount the wrong-source fixture"
+CLEAN_MOUNTS+=("$G_MNT")
+guard_case "GUARD refuses when /mnt/data is mounted from the WRONG device" 1 /dev/mapper/inngest-redis "$G_MNT" "$G_ENV"
+umount "$G_MNT" >/dev/null 2>&1
 cryptsetup close inngest-redis >/dev/null 2>&1
 
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 26 ]; then
+if [ "$executed" -lt 44 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 26. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 44. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 26)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 44)\n' "$executed"
 fi
 
 echo ""
