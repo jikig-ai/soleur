@@ -75,6 +75,9 @@ verdict "$rc" "an emit under the helper leaves the real ledger untouched ($befor
 # Case 3 alone would pass if emit_incident were simply broken. This proves the
 # probe can write, so case 3 is measuring redirection and not silence.
 SB=$(mktemp -d -t sbctl-XXXXXX)
+# Owning trap (ADR-129 / #6734): the inline `rm -rf` below only runs if we reach
+# it, so nothing would clean this up if the script died in between.
+trap 'rm -rf "$SB"' EXIT
 mkdir -p "$SB/.claude"
 ( INCIDENTS_REPO_ROOT="$SB" ; export INCIDENTS_REPO_ROOT
   # shellcheck source=/dev/null
