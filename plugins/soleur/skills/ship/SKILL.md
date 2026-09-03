@@ -1075,7 +1075,7 @@ Enforces the operator's standing rule — **every detected incident gets a post-
    fi
    ```
 
-   The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing before matching, and matches only PAST-TENSE outage vocabulary (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
+   The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing before matching, and matches only PAST-TENSE outage vocabulary — and the hypothetical strip is PARAGRAPH-scoped, not line-scoped (#7801): the label opens a window running to the next blank line, heading, or list item, so a plan that merely CITES a past closed incident as design precedent inside that paragraph no longer reads as an outage report. An actuality idiom ("already happened") re-opens the window, because once a paragraph says the event HAPPENED the rest of it is a report (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
 
 **If triggered — require a PIR on the branch:**
 
@@ -1114,6 +1114,23 @@ git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/o
 
      If `bad` is non-empty: halt and require each unbacked item to be filed as a GitHub issue (cross-referencing the source PR) and its `#NNNN` recorded in the table, OR collapsed into the permitted no-item sentence when genuinely resolved. This applies in BOTH headless and interactive modes — file the issues, do not defer.
 - **No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/operations/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
+
+  **Meta-case — the PR's subject IS this gate.** Available in **both** modes. When
+  `git diff --name-only origin/main...HEAD` includes `scripts/ship-incident-pir-gate.sh` **and** the
+  PR body carries a line `INCIDENT-PIR: meta-case — <one sentence naming why no production event
+  occurred>`, record that line and proceed **without** a PIR.
+
+  **Why both conjuncts — verified against git history, not asserted.** A diff-only predicate is
+  unsafe, and this repo contains the counter-example. Issue #7242 ("Web Platform Release blocked at
+  the zot mirror … prod is 3 releases behind") was a real production delivery outage; the PR that
+  fixed it, #7244 (commit `d31d8a2c7`), **edited `scripts/ship-incident-pir-gate.sh`** — adding the
+  `releases? behind` alternation — *and* shipped a post-mortem in the same commit. A diff-only
+  meta-case arm would have waved that PIR through. The declaration is the conjunct that separates
+  the two cases: a PR editing the gate *because of* a production event omits the line and gets the
+  normal requirement. A false declaration is a deliberate, recorded act — the same trust model as
+  every `[ack]` in this repo. Without this arm a PR fixing this gate has no legal exit, and under
+  `/soleur:one-shot` step 7 ship runs with no `--headless`, so the interactive prompt above would
+  fire inside an unattended loop whose continuation gate forbids handing off to the operator.
 
 **The merged `## Action Items & Follow-ups` table is the single home for residual work** (the former split `## Follow-ups` + `## Action Items` sections were consolidated so a concern cannot hide as a bare bullet in one while the issue-bearing list lives in the other). Each row's issue is filed BEFORE the row is written — a PIR whose follow-ups never become issues is shelf-ware.
 
