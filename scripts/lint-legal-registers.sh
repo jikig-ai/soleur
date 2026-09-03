@@ -123,7 +123,13 @@ REGISTER_FILES=(
 # and 7 of 42 at this PR's HEAD -- the extra is this PR's own implementation record, which quotes
 # the article numbers and is therefore waived rather than indexed. Both figures are stated
 # because a lone post-PR count reads as though it were the pre-existing corpus.
-DETERMINATION_PATTERN='4\(12\)|33\(5\)|Art\. 33'
+# WIDENED at review (#7782). The original `Art\. 33` missed the FORMAL spelling the corpus also
+# uses -- `audits/sentry-migration-audit-2026-05-15.md:61` records "No personal data left the EEA.
+# Article 33 (72-hour breach notification) does not trigger", an express notifiability
+# determination INSIDE the scanned directory that the producer could not see, so the guard
+# printed "all 7 determination-shaped files are indexed or waived" over it. Tolerates the
+# abbreviation with or without the period, the spelled-out form, and internal spacing.
+DETERMINATION_PATTERN='4[[:space:]]*\(12\)|33[[:space:]]*\(5\)|Art\.?[[:space:]]*33|Article[[:space:]]+33|Article[[:space:]]+4[[:space:]]*\(12\)'
 
 # NOT_TRANSCRIBED waivers, in the repo's existing `path | reason citing #NNNN` shape -- the same
 # shape as EXCLUSIONS, DENY and ALLOWLIST elsewhere, not a tenth novel one, so adding an entry
@@ -133,6 +139,8 @@ NOT_TRANSCRIBED=(
   "knowledge-base/legal/audits/2026-05-12-gdpr-gate-plan-phase-2-7-outcome.md | No Art. 4(12) assessment: never cites Art. 4(12), matched solely on one Art. 33 occurrence, and its non-notifiable statement is expressly attributed to the operator's framing rather than recorded as a controller determination (#7717)"
   "knowledge-base/legal/audits/2026-06-counsel-review-5103.md | No event and no determination: the sole Art. 33 occurrence verifies the accuracy of a statutory-deadline catalog entry, not a fact pattern (#7717)"
   "knowledge-base/legal/audits/2026-08-counsel-review-7440.md | Express Art. 4(12) assessment, but of a prospective PA-8 amendment with no fact pattern; a row would dilute the register with routine change approvals (#7717)"
+  "knowledge-base/legal/audits/sentry-migration-audit-2026-05-15.md | Art. 33 notifiability determination on a data-residency fact pattern (\"No personal data left the EEA. Article 33 ... does not trigger\"), surfaced only when the pattern was widened at review. NOT indexed pending the CLO ruling requested at #7791: it reaches a notifiability conclusion but cites no Art. 4(12) assessment, so whether it satisfies the inclusion predicate's second limb is a legal call, not mine (#7717)"
+  "knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md | Matches only on \"CNIL Art 33 filing posture per brainstorm Decision #10\" -- a reference to filing posture, not a fact pattern assessed against Art. 4(12). Same review pass as the row above; confirm with it at #7791 (#7717)"
   "knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md | Not a determination: an implementation record ABOUT this register, which necessarily quotes the article numbers and so matches the producer pattern. It assesses no fact pattern and records no controller determination (#7717)"
 )
 
@@ -196,14 +204,22 @@ row_count="$(bash "$REPO_ROOT/scripts/tenant-dpa-register-guard.sh" \
   --register "$BREACH_REGISTER" \
   --section 'Index of determinations' \
   --anchor-column 'Canonical source' \
+  --placeholder '__no_placeholder_row_in_this_register__' \
   count-data-rows)" || die2 "row counting refused on the breach register (delegated guard exited non-zero)"
 case "$row_count" in ''|*[!0-9]*) die2 "unparseable row count '$row_count'" ;; esac
 pass "(b) breach-register index is decidable: $row_count determination row(s)"
 
 # Every cited canonical source resolves. The walk does NOT stop at the first bad row.
+# SECTION-SCOPED, and the column is taken POSITIONALLY. Two honest limits, stated because an
+# earlier comment here claimed this was "anchored on the canonical-source column" -- it is not;
+# the DELEGATE resolves that column by name, this awk takes the last cell. They agree only while
+# that column is last, which the reconciliation below turns into a loud failure rather than a
+# silent one. Scoping to the index section stops a dated row elsewhere in the file (a reformatted
+# §Excluded records table, say) from being read as an indexed determination.
 cited_paths="$(awk -F'|' '
   function trim(s) { gsub(/^[ \t`]+|[ \t`]+$/, "", s); return s }
-  /^\|[ \t]*20[0-9][0-9]-/ { print trim($(NF-1)) }
+  /^##[ \t]/ { inblk = ($0 ~ /^##[ \t]+Index of determinations[ \t]*$/) }
+  inblk && /^\|[ \t]*20[0-9][0-9]-/ { print trim($(NF-1)) }
 ' "$BREACH_REGISTER")"
 [[ -n "$cited_paths" ]] || die2 "no determination rows parsed from the breach register index"
 
@@ -221,7 +237,12 @@ done <<< "$cited_paths"
   || die2 "parsed $((resolved + broken)) canonical-source cells but the delegated guard counted $row_count rows"
 [[ $broken -eq 0 ]] && pass "(b) all $resolved canonical-source pointer(s) resolve on disk"
 
-if grep -qF "$OUT_OF_SCOPE_ROW" "$BREACH_REGISTER"; then
+# ANCHORED ON THE PARSED INDEX COLUMN, not on the path appearing anywhere in the file. A
+# whole-file grep was satisfied by the register's own `related:` frontmatter, which lists this
+# same path -- so deleting the determination ROW left this assertion green and the guard reported
+# 6 assertions, 0 failed over a register missing the one row (c)'s producer cannot see. That is
+# cq-assert-anchor-not-bare-token, five lines below where this file cites it. Measured at review.
+if printf '%s' "$cited_paths" | grep -qxF "$OUT_OF_SCOPE_ROW"; then
   pass "(b) the out-of-producer-scope determination row is present"
 else
   fail "(b) the out-of-producer-scope determination row is missing: $OUT_OF_SCOPE_ROW
@@ -308,10 +329,6 @@ while IFS= read -r f; do
     continue
   fi
   if printf '%s' "$waived_paths" | grep -qxF "$rel"; then
-    if printf '%s' "$cited_paths" | grep -qxF "$rel"; then
-      fail "(c) $rel is BOTH indexed and waived -- the two sets are disjoint by construction;
-           a file is either a determination in the register or an explained exclusion, never both."
-    fi
     continue
   fi
   uncovered=$((uncovered + 1))
@@ -320,6 +337,23 @@ while IFS= read -r f; do
            NOT_TRANSCRIBED entry to scripts/lint-legal-registers.sh with a reason and a
            citing issue. A silent omission is the one option the gate removes."
 done < <(grep -lE "$DETERMINATION_PATTERN" "$AUDITS_DIR"/*.md 2>/dev/null || true)
+
+# DISJOINTNESS, computed outside the producer loop. It lived INSIDE the loop as the negation of
+# a branch that had already `continue`d on the same predicate, so it was unreachable: a file both
+# indexed and waived passed clean, and the suite case named for it reddened only because the
+# DONOR row it moved left a different file uncovered. Measured at review -- adding an index row
+# citing an already-waived file scored 6 assertions, 0 failed. Computed here, over both sets, it
+# is reachable and independent of the producer's reach.
+both="$(comm -12 <(printf '%s' "$cited_paths" | grep -v '^$' | sort -u) \
+                 <(printf '%s' "$waived_paths" | grep -v '^$' | sort -u) || true)"
+if [[ -n "$both" ]]; then
+  fail "(c) the indexed and waived sets OVERLAP -- they are disjoint by construction, and a
+           regulator would be shown two contradictory answers about the same file:
+$(printf '%s\n' "$both" | sed 's/^/             /')
+           A file is either a determination in the register or an explained exclusion, never both."
+else
+  pass "(c) the indexed and waived sets are disjoint"
+fi
 
 # A producer that reaches nothing must not report a clean sweep.
 [[ $produced -ge 1 ]] || die2 "(c) producer matched 0 files under audits/ -- expected at least 1; \
@@ -333,7 +367,7 @@ echo "lint-legal-registers: ${checks} assertion(s), ${fails} failed \
 
 # Assertion floor. Reported with printf + exit rather than through fail(), which is the helper
 # it backstops (ADR-193): a floor that calls the function one edit disarms is not a floor.
-MIN_CHECKS=6
+MIN_CHECKS=7
 if [[ $checks -lt $MIN_CHECKS ]]; then
   printf '::error::lint-legal-registers: only %d assertion(s) ran, expected >= %d -- the gate was disarmed, not satisfied\n' \
     "$checks" "$MIN_CHECKS" >&2
