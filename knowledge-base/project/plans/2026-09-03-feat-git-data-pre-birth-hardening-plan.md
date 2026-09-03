@@ -40,14 +40,204 @@ if it lands after the next rehearsal. So the template-touching items land togeth
 
 This plan lands four items in one PR: a dedicated Better Stack Logs source for git-data so a metadata leak
 no longer forces a rotation that darkens the web host and registry; a host-local nftables drop of the
-Hetzner metadata endpoint for non-root UIDs; a low-severity Sentry route for the two warning stages that
-today reach no rule; and two stale-prose corrections in birth-route artifacts.
+Hetzner metadata endpoint for non-root UIDs; a low-severity Sentry route for the warning stages that today
+reach no rule; and two stale-prose corrections in birth-route artifacts.
+
+**Which of the four the hash argument actually covers — stated honestly, because the first draft
+over-claimed.** The evidence hash binds the template and its nine `file()`-bound payloads; the gate's own
+comment records that *"it does NOT bind the templatefile ARGUMENTS"*. So only **Item B** touches the hashed
+set. Item A rides on a *semantic* pre-rehearsal argument — a rehearsal that fires before it attests the old
+shared sink (D1) — not on the hash. Items C and D have no pre-rehearsal constraint at all: C lands in a
+separate Terraform root behind a separate workflow, and D is four comment lines. They ride along because
+they are cheap, because the mirror matters most on the first boot when nobody is watching, and because
+#7772 tracks them together. See `specs/<branch>/decision-challenges.md` DC-1, which records the reviewer's
+recommendation to split them and why the operator's one-PR direction was kept.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-09-03 — six parallel review agents (architecture, security, terraform/IaC,
+simplicity, user-impact, plus a mechanical claim-verification sweep over 26 assertions), followed by
+first-party empirical verification of the riskiest mechanics.
+
+**What the round changed — two of these would have broken the implementation:**
+
+1. **P0 — the rehearsal would have kept shipping to the OLD source.** The rehearsal root resolves its
+   variables by Doppler *name transformation*, so re-pointing only the prod root leaves it on the shared
+   token, silently, with nothing able to detect it (the value is a secret the suite must never read). D1 now
+   renames the rehearsal root's variable, edits `rung2-rehearsal/rehearsal.tf` and the workflow's
+   Doppler-name preflight, and adds a same-variable-name parity arm.
+2. **P0 — the inline `write_files` route would have red CI.** `INLINE_ALLOWLIST` is a closed set; both new
+   paths must join it. D2 had claimed that file was untouched.
+3. **A paging hole in Item C's own design.** `STAGE=` names are trap-reachable at `fatal`, so a single
+   stage on a `NoOne` rule meant a boot-aborting failure paging nobody — the exact defect Item C exists to
+   close. Split into `gitdata_nftables_metadata` (fatal, on the fatal rule) and
+   `gitdata_nftables_metadata_warn` (warning, on the new rule), following the repo's existing
+   `sshd_config` / `sshd_config_warn` convention.
+4. **Measured false: `nft -f` merges, it does not replace** (V1b). Two loads left two duplicate rules; the
+   `table` / `delete table` / `table` idiom left one. The false claim was inherited from the inngest
+   precedent and is corrected there in the same pass.
+5. **D5 — the ingest URL became a `local`, not a second no-default variable.** It is a public hostname, not
+   a credential; making it a variable doubled exposure to this plan's top risk and made arm 7's rewrite
+   larger. One variable, one Doppler write, a smaller arm-7 edit.
+6. **`enable --now`, not bare `enable`** — on a host that never reboots, an enabled-but-unstarted unit is
+   inert for the host's life with every assertion green.
+7. **My own AC14 was vacuous** — `grep -c 'STATIC local'` returns 0 on unfixed `main` because the phrase
+   wraps across two comment lines. Re-anchored on a normalized read, with the non-vacuity measured.
+8. **Three credential-hygiene gaps closed:** the write-scoped API token on argv, unfiltered `GET /sources`
+   bodies (which carry every source's token), and an unsilenced Doppler write that prints the whole config.
+9. **Scope cut:** Guard 3 deleted (all four of its mutation rows were already covered by existing arms),
+   Guard 1 shrunk to the ~83-line sibling shape, six acceptance criteria removed as CI-redundant.
+
+**Empirically verified rather than reasoned about:** the nftables rule parses and loads on nftables 1.0.9
+(git-data's exact image); root reaches the endpoint while non-root is dropped **and an un-ruled control
+address still reaches**, which is what makes the result mean anything; the replace idiom is idempotent and
+the bare form is not; the discoverability probe returns 0 today, so it is non-vacuous.
 
 **The single most consequential finding is that Item A is not blocked at all.** The issue and ADR-198 both
 record it as needing "an operator mint that `hr-all-infrastructure-provisioning-servers` forbids doing ad
 hoc." Measured this session: `BETTERSTACK_API_TOKEN` in Doppler `soleur/prd_terraform` is already
 **write-scoped** and creates sources over plain REST. No Playwright, no operator mint, no token-mint
 recursion. See Research Reconciliation R1.
+
+---
+
+## Deepen-Plan Verification (2026-09-03)
+
+The plan's riskiest technical claims were **measured**, not reasoned about. Every result below came from
+running the thing, on the same OS image git-data boots (`ubuntu-24.04`).
+
+### V1 — The nftables rule is valid AND behaves as designed (three-way control)
+
+Loaded the exact rule shape into a throwaway `ubuntu:24.04` container with `--cap-add=NET_ADMIN`
+(`nftables v1.0.9`, the version Ubuntu 24.04 ships):
+
+```
+--- CHECK MODE ---   nft -c -f  ->  SYNTAX OK
+--- LOAD + LIST ---
+table inet soleur_git_data {
+	chain output {
+		type filter hook output priority filter - 10; policy accept;
+		meta skuid != 0 ip daddr 169.254.169.254 drop
+		meta skuid != 0 ip6 daddr fe80::a9fe:a9fe drop
+	}
+}
+```
+
+Both the IPv4 and IPv6 rules coexist in one `inet` table — the `ip6 daddr` line does **not** fail the
+table load, which was the open risk (an invalid line would have taken the IPv4 drop down with it).
+
+Then the behavioural test, with a **control** so the result cannot be confused with general breakage
+(rule re-pointed at a reachable address purely to make the UID discrimination observable):
+
+| Actor | Destination | Result |
+|---|---|---|
+| root | in-rule address | **301 — reached** (root is exempt, as designed) |
+| non-root | in-rule address | **BLOCKED**, `curl rc=28` |
+| non-root | control address, not in the rule | **301 — reached** (nothing else is affected) |
+
+The control arm is the load-bearing one: without it, "non-root was blocked" is equally consistent with
+the container having no egress at all.
+
+**Two facts this surfaced that the plan must carry:**
+
+- **`drop` hangs; it does not fail fast.** `rc=28` is a curl *timeout*. A non-root process attempting an
+  IMDS read will block until its own timeout rather than getting a refusal. Since git-data makes no IMDS
+  calls (R-verified, 0 hits across the template and all nine payloads), this costs a legitimate process
+  nothing and costs an attacker a stall — which is the preferable direction. Using `reject` instead would
+  fail fast and leak the fact that a rule exists; `drop` is the right choice and this is why.
+- **Every *soleur-authored* process on git-data runs as root** — `git-data-gc.service` declares no `User=`,
+  `runcmd` is root, the emitter runs from both, and a repo-wide grep for `runuser|sudo -u|su -|User=|Group=`
+  across the template, the nine payloads and the units returns **zero** hits. The template's `users:` block
+  creates exactly one non-root account: `git`, with `shell: /usr/bin/git-shell`.
+
+  **CORRECTION — do not state this as "no legitimate process is on the wrong side of `skuid != 0`".** That
+  conclusion is about the *host*, and the grep only covers files this repo wrote. Stock Ubuntu 24.04 puts
+  several non-root egress actors on the box: `_apt` (apt's `APT::Sandbox::User`, so the downloads from
+  `packages:` and from `git-data-bootstrap.sh` are emitted non-root), `systemd-resolve` (every upstream DNS
+  lookup for every `curl`, `doppler` and `apt` on the host), `systemd-timesync`, and `systemd-network`.
+  None would ever appear in a soleur file.
+
+  **The rule is safe anyway, and the reason matters:** it is safe because it is **destination-scoped** to
+  `169.254.169.254`, not because non-root egress is empty. `policy accept` plus one `daddr` match leaves
+  apt, DNS, NTP and DHCP untouched. `skuid != 0` then narrows it *further*, to exclude cloud-init's own root
+  datasource. Recording the false reason would invite a later "just drop all non-root egress" widening on a
+  host with deny-all public ingress, no console, and no reboot primitive — which would take out DNS and apt
+  with no recovery short of a destructive replace.
+
+### V1b — MEASURED FALSE: `nft -f` on a bare table declaration MERGES, it does not replace
+
+The inngest precedent this plan copies states: *"`nft -f` table declarations replace our table atomically →
+idempotent."* **That is empirically wrong**, and the first draft of this plan propagated it to a second
+host. Measured by applying the identical file twice in the container:
+
+| Form | Drop rules present after two loads |
+|---|---|
+| bare `table inet soleur_git_data { … }` | **2** — appended, not replaced |
+| `table … ` + `delete table … ` + `table … { … }` | **1** — genuinely idempotent |
+
+So the script **must** use the three-line replace idiom:
+
+```
+table inet soleur_git_data
+delete table inet soleur_git_data
+table inet soleur_git_data { … }
+```
+
+(The bare `table` line first is what makes `delete table` safe on a host where the table does not yet
+exist.) Duplicate `drop` rules are harmless *today*, which is why the false claim survived in the inngest
+comment. The cost lands on the first rule **change**: a re-assert leaves the superseded rule resident
+alongside the new one, and neither Guard 2 nor any AC can see it, because both read the render rather than
+the kernel. **Correct the inngest comment in the same pass** — leaving a measured-false claim in the file
+this plan cites as its precedent is how the next author inherits it.
+
+### V2 — Correction: the Sentry condition must NOT be `first_seen_event`
+
+The plan's first draft copied `conditions_v2 = [{ first_seen_event = {} }]` from `byok_cap_exceeded`
+(the `NoOne`-fallthrough precedent). **That is wrong here**, and the sibling rule says why in its own
+comment: `first_seen_event` fires once per issue group, ever. The mirror's message is a single constant
+string (`"git-data Better Stack ingest unavailable"`), so every future ingest failure folds into the same
+group and would raise nothing — the rule would go inert after its first firing, on a host whose gc timer
+can re-trigger the condition daily.
+
+Use the shape `git_data_boot_fatal` already uses, and for the reason its comment gives (a fresh group):
+
+```hcl
+conditions_v2 = [
+  {
+    event_frequency = {
+      comparison_type = "count"
+      value           = 0   # STRICT `>`, so `> 0` fires on the first event AND on every recurrence
+      interval        = "1h"
+    }
+  },
+]
+```
+
+This is the `value = 1` trap the sibling comment documents, arrived at from the other direction — copying
+the *condition type* from the wrong sibling is as inert as copying the wrong threshold.
+
+### V3 — Sentry schema details confirmed against the pinned provider
+
+- `match = "IS_IN"` is proven in this file (8 uses; `EQUAL` 50 uses), so D4's comma-separated two-stage
+  filter needs no new provider capability.
+- Frequencies in use: `5, 10-27, 30, 60-63`. Free and safe against POST-time dedup: **6-9, 28-29, 31-59,
+  64+**. The plan's guidance was correct.
+
+### V4 — Baselines captured (so `/work` can tell a regression from a pre-existing failure)
+
+```
+git-data-render-strip-parity: 15 passed, 0 failed   (anti-vacuity floor 15)
+git-data-rung2-rehearsal:     75 passed, 0 failed   (anti-vacuity floor 75)
+```
+
+Both match the floors the plan asserts. D2 predicts the first stays at 15/15 untouched; Phase 3 must keep
+the second at ≥ 75.
+
+### V5 — Item C's premise re-confirmed at the source
+
+`cloud-init-git-data.yml:343` emits the mirror with `"level":"warning"` and
+`"stage":"betterstack_ingest"`, and the capture script's `_sentry_consult` deals in `level:fatal`. So the
+stage genuinely reaches no reader today, and a stage-only filter is sufficient to route it (R8).
 
 ---
 
@@ -205,7 +395,7 @@ after the edit, never predicted.
   `+resource "sentry_issue_alert" "<name>"` line is in the diff under `apps/web-platform/infra/sentry/*.tf`.
   `test-destroy-guard-sentry-scope-guard.sh` is **type**-keyed and already covers `sentry_issue_alert`.
 - **Provider pin is `jianyuan/sentry 0.15.5`** (`sentry/versions.tf:49`), though several comments still say
-  0.15.4. Frequencies taken: 5, 10-27, 30, 60-63. Free: 6-9, 28-29, 31+.
+  0.15.4. Frequencies taken: 5, 10-27, 30, 60-63. Free: 6-9, 28-29, 31-59, 64+.
 - **git-data makes zero IMDS calls.** `grep -c '169\.254\.169\.254'` returns **0** across
   `cloud-init-git-data.yml` and all nine payloads; so do `169.254` and `fe80::a9fe`. The three `metadata`
   hits are prose comments, one of which (`cloud-init-git-data.yml:112`) is this change's own justification:
@@ -246,7 +436,7 @@ change until it is fixed).
 
 **If this leaks, the user's source code is exposed via:** the Hetzner metadata endpoint. Today any code
 execution as the unprivileged `git` account — the account whose forced-command wrappers serve every
-connected user's push — can `curl http://169.254.169.254/hetzner/v1/metadata` and read the entire
+connected user's push — can `curl http://169.254.169.254/hetzner/v1/userdata` and read the entire
 `user_data`, which bakes `doppler_token` (scoped to `prd_git_data`, which holds `GIT_DATA_LUKS_KEY`, the
 passphrase decrypting every user's source at rest), `sentry_dsn`, and the Better Stack ingest token. ADR-198
 concedes `0600` defends only a file-read primitive. This plan closes that path for non-root UIDs. A second,
@@ -290,46 +480,146 @@ the pin itself.
 source — a handful of lines per dispatch, distinguishable by `host_name`, against 90-day retention. This is
 materially cheaper than either alternative.
 
-**Consequent edits, each real rather than a formality:** arm 7 must extract prod's URL from git-data's own
-source of truth instead of `zot-registry.tf` by name; arm 72's `value = var.…` regex; arms 74/75's variable
-names; arm 5.6a's premise wording; and the capture script's table.
+**THE REHEARSAL ROOT'S OWN VARIABLE MUST BE RENAMED — this is the failure mode that would have made D1 a
+lie.** `.github/workflows/git-data-rung2-rehearsal.yml` feeds the rehearsal root through
+`doppler run -p soleur -c prd_terraform --name-transformer tf-var`, so
+`rung2-rehearsal`'s `variable "betterstack_logs_token"` resolves **automatically, by name**, from the
+Doppler secret `BETTERSTACK_LOGS_TOKEN` — the *shared* source-2457081 token. Re-pointing only the prod root
+therefore yields exactly the state D1 exists to prevent: prod on the new source, the rehearsal on 2457081,
+and **nothing detects it**, because the value is a secret the suite must never read. The rehearsal root's
+variable must be renamed to `git_data_betterstack_logs_token` too, so the same name transformer resolves it
+from the new secret.
+
+Because the value is unreadable by the suite, the only statically checkable proxy for "same sink" is
+**both roots binding the same variable NAME**. Phase 3 adds that arm; it is what makes D1 verifiable rather
+than merely intended.
+
+**Consequent edits, each real rather than a formality:** arm 7's prod-side extraction (see D5 — it stays a
+literal-to-literal compare); arm 72's `value = var.…` regex; arms 74/75's variable names in **both** roots;
+`rung2-rehearsal/rehearsal.tf`'s module binding; arm 5.6a's premise wording; and the capture script's table.
 
 ### D2 — Item B ships INLINE, not as a 10th `file()` payload
 
 **Decision.** The nft script and its systemd unit are inline `write_files:` entries in
 `cloud-init-git-data.yml`, modelled on `cloud-init-inngest.yml:55-101`.
 
-**Why.** The closest precedent *is* inline — `inngest-nftables.sh` does not exist on disk. Going inline
-avoids editing six independent gate/mirror sites that all hard-code the payload count 9, any one of which
-wedges the birth route if missed. It also keeps `git-data-userdata-budget.sh`'s hand-mirrored map byte-equal
-to `main.tf` with no edit, so `git-data-render-strip-parity.test.sh` stays untouched. At ~3 KB against
-19,636 B of headroom, byte cost is not the deciding axis; blast radius is.
+**Why — restated correctly after review; the first draft's reason was wrong.** The draft said a 10th payload
+"wedges the birth route" at six sites. It does not: of the six, only
+`git-data-render-strip-parity.test.sh` (`if [[ "$n_entries" -eq 9 ]]`) is an exact pin. The others are
+**floors that tolerate growth** — `-lt 9` in the readiness gate, `len(bindings) < 9` in the template-strip
+suite, `< MIN_PAYLOADS` twice in the runcmd-rehearsal suite. A 10th payload would not fail them; it would
+**silently weaken** them, which the readiness gate's own comment already predicts: *"when a tenth payload
+lands — it will not abort, it will tolerate losing one."* Silent floor decay across four suites is the real
+argument, and it is stronger than the one the draft made.
+
+**This is a TRADE, not a free win — recorded rather than elided.** `INLINE_ALLOWLIST` in
+`git-data-runcmd-rehearsal.test.sh` exists because its inline members are *"inline BY DESIGN, not by
+omission: each is a single template-interpolated assignment, so a repo-source file would hold a placeholder
+that never matches the rendered bytes and would defeat the byte-identity check this allowlist exists to
+protect."* The git-data nft script is a **static literal with no interpolation**, so by that criterion it
+belongs in the file-backed set, and going inline means no byte-identity comparison against a reviewable repo
+source (Guard 2 checks presence-and-scoping, not byte-identity). Inline still wins on the ForceNew axis —
+four silently-decaying floors is worse than one un-byte-compared 25-line script whose content Guard 2
+asserts semantically — but the claim is "better on balance", not "strictly better on every axis".
+
+**Consequence the draft missed:** the two new inline paths MUST be added to `INLINE_ALLOWLIST`, or B1
+hard-fails them as *"neither a known file-backed source nor on the inline allowlist"*. That file is in
+`## Files to Edit`.
 
 ### D3 — A failed nftables load WARNS, it does not abort the boot
 
-**Decision.** The unit is enabled after the main boot sequence with `rc` capture and a `warning`-level emit
-at a new `stage:nftables_metadata`, following the `gc_timer` idiom (`cloud-init-git-data.yml:887-898`) —
-**not** inside the `set -e` region armed at line 619.
+**Decision.** The unit is enabled in a new `runcmd` item after the `gc_timer` block — **inside the `set -e`
+region**, made non-aborting by *guarded rc-capture*, not by placement — and a failure emits at
+`warning` level.
 
-**Why.** A host that boots correctly but without the metadata drop is degraded-but-serving, and that
-degradation is exactly the status quo this plan improves on. A host that refuses to boot over a hardening
-control is unrecoverable: `runcmd` is once-per-instance, ADR-115 bars git-data from the reboot primitive,
-and the store holds every connected user's source. Inverting that risk to gain strictness on a deterministic
-`nft -f` load is the wrong trade. The failure that actually needs catching is "we shipped the rule wrong",
-which a render-time guard catches before any host exists (Guard 2).
+**The first draft stated this mechanism wrongly and must not be implemented as written.** It said "not
+inside the `set -e` region armed at line 619", which contradicts its own Phase 4.4 ("after the `gc_timer`
+block"). Both cannot hold: cloud-init concatenates `runcmd` into ONE script (the template says so in its own
+header — *"this trap and `set -e` cover every item below"*), `set -e` is armed mid-file, and the `gc_timer`
+block sits ~270 lines below it. `gc_timer` survives **because it is guarded**, not because of where it is:
+
+```sh
+_gc_rc=0
+_gc_err="$(systemctl enable --now git-data-gc.timer 2>&1)" || _gc_rc=$?
+if [ "$_gc_rc" -ne 0 ]; then …emit warning… fi
+```
+
+Copy that shape exactly. The substitution-plus-`if` form is load-bearing and the template explains why: the
+`cmd 2>>file || { … }` shape it replaced made a failed *redirect* indistinguishable from a failed command
+(AP-021, diagnostic honesty). An unguarded command placed there trips `on_err` and aborts the boot.
+
+**`systemctl enable --now`, never bare `enable`.** git-data never reboots (ADR-115 bars it from the reboot
+primitive), so a unit that is enabled but not started is **inert for the entire life of the host** — the
+metadata drop would never load, every assertion in this plan would stay green, and P2 would be silently
+unmet. Both precedents use `--now` (`inngest-nftables.service`, `git-data-gc.timer`). Guard 2 carries a
+mutation row for dropping it.
+
+**Why fail-open at all.** A host that boots correctly but without the metadata drop is degraded-but-serving,
+and that degradation is exactly the status quo this plan improves on. A host that refuses to boot over a
+hardening control is unrecoverable: `runcmd` is once-per-instance and the store holds every connected user's
+source. Inverting that risk to gain strictness on a deterministic `nft -f` load is the wrong trade. The
+failure that actually needs catching is "we shipped the rule wrong", which Guard 2 catches at render time,
+before any host exists.
 
 ### D4 — The new low-severity Sentry rule covers BOTH new warning stages
 
-**Decision.** One `sentry_issue_alert` with
-`tagged_event { key = "stage", match = "IS_IN", value = "betterstack_ingest,nftables_metadata" }` and
+**Decision — corrected after review; the first draft had a paging hole.** Item B introduces **two** stage
+names, following the repo's existing `_warn` convention, and they route to **different** rules:
+
+| Stage | Emitted at | Reachable how | Routes to |
+|---|---|---|---|
+| `gitdata_nftables_metadata` | `fatal` | the `on_err` trap, if any later unguarded command fails while this is the current `STAGE=` | **`git_data_boot_fatal`** (paging) — a new filter value |
+| `gitdata_nftables_metadata_warn` | `warning` | D3's guarded rc-capture branch | the **new** low-severity rule (non-paging) |
+
+The new low-severity rule is therefore
+`tagged_event { key = "stage", match = "IS_IN", value = "betterstack_ingest,gitdata_nftables_metadata_warn" }` with
 `fallthrough_type = "NoOne"`.
 
-**Why.** D3 introduces `stage:nftables_metadata`, and `issue-alerts.tf` records repeatedly that a stage
-matching no rule is a write-only event — *"`stage=pull` matched NO rule in this file, so the dead host paged
-nobody"* (`:1681-1682`). Shipping a new stage with no route would reintroduce, in miniature, the exact
-defect Item C exists to close. `IS_IN` with a comma-separated value is the established shape
-(`byok_cap_exceeded`'s `op` filter). This is a deliberate extension of the issue's option 1, not a
-substitution for it.
+**Why the first draft was wrong.** It put a single `gitdata_nftables_metadata` on the low-severity rule only. But
+`STAGE=` names are **trap-reachable**: `on_err` emits `"git-data $STAGE FAILED" "$STAGE" fatal` and
+`STAGE` is whatever was last assigned when the trap fires. Since R8 established that these rules carry **no
+level filter**, a boot-aborting *fatal* at `gitdata_nftables_metadata` would have matched only the `NoOne` rule —
+paging nobody for a dead host. That is precisely the write-only defect Item C exists to close,
+reintroduced by Item C's own design.
+
+**Why the split is the right fix rather than widening the fatal rule to cover the warning.** With no level
+filter available, putting one stage on the fatal rule makes the *warning* page too, which would defeat D3's
+fail-open entirely. Two stage names is how this repo already solves it: `sshd_config` (fatal, on the rule)
+versus `sshd_config_warn` (warning, verified absent from the rule — `grep -c 'sshd_config_warn'` over
+`issue-alerts.tf` returns **0**). Adding the fatal-side name to `git_data_boot_fatal` is not a
+paging-policy change of the kind the issue warns against — it is the same treatment `gc_timer` already
+gets, and for the identical stated reason.
+
+`IS_IN` with a comma-separated value is the established shape (`byok_cap_exceeded`'s `op` filter; 8 uses
+repo-wide). This remains a deliberate extension of the issue's option 1.
+
+### D5 — The ingest URL is a `local`, NOT a second no-default variable (added at deepen-plan)
+
+**Decision.** Only the **token** becomes a no-default root variable. The ingest **URL** becomes
+`local.git_data_betterstack_ingest_url` in `git-data.tf`, a plain string literal mirroring
+`zot-registry.tf:125`.
+
+**Why the first draft was wrong.** It proposed a no-default `git_data_betterstack_ingest_url` variable plus
+a `GIT_DATA_BETTERSTACK_INGEST_URL` Doppler secret, for a value that is a **public hostname, not a
+credential**. That doubled exposure to this plan's own top-ranked risk — a no-default variable
+unprovisioned at merge fails the *whole* `apps/web-platform/infra` apply and wedges unrelated changes —
+and bought nothing the incumbent pattern does not already provide. The established shape for exactly this
+value is one line away: `zot-registry.tf:125` is a bare literal in a `locals` block feeding four consumers,
+with no variable and no Doppler round-trip.
+
+**Three consequences, all simplifications:**
+
+- One no-default variable instead of two, so AC16 shrinks and the merge-wedge surface halves.
+- One Doppler write in Phase 1 instead of two.
+- **Arm 7's rewrite gets smaller, not larger.** It currently extracts prod's URL from a `locals` literal in
+  `zot-registry.tf` by name; after D5 it extracts a `locals` literal from `git-data.tf` by name — the same
+  shape, a different file. The first draft's "extract by shape from the new source of truth" was a bigger
+  edit for a worse result. This also dissolves the draft's own complaint that the URL becomes "a third
+  hard-coded copy": it stays the same two-copy shape (prod local + rehearsal default) that arm 7 already
+  guards.
+
+`hr-tf-variable-no-operator-mint-default` is not weakened: it governs credentials, and the token — the only
+credential here — keeps its no-default variable.
 
 ### ADR-198's fourth item — triaged OUT, as a correction rather than a deferral
 
@@ -386,9 +676,26 @@ and a new ordinal would split one argument across two documents. Four amendments
    doing ad hoc." The provider half is true and re-confirmed at v0.21.14; the operator-mint half is false
    (R1). Leg (3) of the ADR's three-part capability test — "single-purpose to this host", its stated open
    residual — is now satisfied.
-2. **The "0600 does not defend against code execution" concession gains its closure.** ADR-198 says the
-   closure "is tracked, not claimed"; record that it shipped as host-local nftables, and why a Hetzner Cloud
-   Firewall could not be it (R4, with the three vendor-documented reasons).
+2. **The "0600 does not defend against code execution" concession gains a PARTIAL closure — scope it
+   precisely, because the issue's own wording over-claims.** #7772 says the egress rule *"is the closure
+   that would restore the category for **all three credentials at once**"*. That is **false for one of the
+   three**: `sentry_dsn` is interpolated into `/usr/local/bin/git-data-emit`, which is `0755` — ADR-198's
+   own mode table already records it as *"world-readable"*. The `git` account reads it with `cat`; no
+   metadata path is involved and no egress rule touches it. So the amendment must say: the metadata closure
+   restores the category for the **two `0600` credentials** (`doppler_token`, the ingest token), and
+   `sentry_dsn`-at-`0755` remains an **open residual with its own tracker**, filed before #7772 closes.
+   Recording "the concession gains its closure" unqualified would ship a false security claim into the ADR
+   corpus. Also record why a Hetzner Cloud Firewall could not be the mechanism (R4, three vendor-documented
+   reasons).
+
+   **State the control's boundary honestly in the same amendment.** `meta skuid` is stamped on the socket at
+   creation from the creator's fsuid, so it is bypassed by anything that reaches UID 0 *at socket-open
+   time* — including a setuid-root helper invoked by the `git` account, short of full escalation
+   (reproduced: a setuid binary run by a UID-1001 account read the endpoint successfully while the same
+   account's direct `curl` was dropped). The practical set on this image is thin (`git` is in no sudo group
+   and has `shell: /usr/bin/git-shell`, `lock_passwd: true`), and an attacker who fully escalates deletes
+   the table with one command. The control is a defence against code execution as `git`, not against a
+   root-capable adversary, and the ADR should not be readable as claiming otherwise.
 3. **"Considered: refresh the baked file from Doppler at boot" is retired**, with the once-per-instance
    finding (R5) as the reason — the mechanism could not deliver its own benefit.
 4. **Cross-host blast radius is re-measured.** The section states one Logs source exists and the token fans
@@ -433,12 +740,12 @@ so no `status: adopting` note is needed.
 
 | File | Change |
 |---|---|
-| `apps/web-platform/infra/variables.tf` | Add `git_data_betterstack_logs_token` (string, sensitive, **no default**) and `git_data_betterstack_ingest_url` (string, no default). Mirror the `betterstack_logs_token` description shape exactly: capability ceiling, where minted, which Doppler config supplies it, and the literal phrase `No default (hr-tf-variable-no-operator-mint-default)`. |
-| `apps/web-platform/infra/git-data.tf` | `betterstack_ingest_url` and `betterstack_logs_token` in the `module "git_data_userdata"` block (`:303-304`) move off `local.betterstack_logs_ingest_url` / `var.betterstack_logs_token` onto the new variables. |
+| `apps/web-platform/infra/variables.tf` | Add `git_data_betterstack_logs_token` (string, sensitive, **no default**) — the token only. Mirror the `betterstack_logs_token` description shape exactly: capability ceiling, where minted, which Doppler config supplies it, and the literal phrase `No default (hr-tf-variable-no-operator-mint-default)`. |
+| `apps/web-platform/infra/git-data.tf` | Add `local.git_data_betterstack_ingest_url = "https://<ingesting_host>/"` — a plain literal in a `locals` block, mirroring `zot-registry.tf:125` exactly (**D5**). Then `:303-304` move onto that local and onto `var.git_data_betterstack_logs_token`. |
 | `apps/web-platform/infra/git-data-luks.tf` | `doppler_secret.git_data_betterstack_logs_token.value` (`:132`) moves to `var.git_data_betterstack_logs_token`. Address unchanged, so no fan-out change. `lifecycle { ignore_changes = [value] }` stays. |
-| `apps/web-platform/infra/cloud-init-git-data.yml` | Item B: inline `write_files:` for the nft script (0755) and its systemd unit (0644); `nftables` added to `packages:`; a `runcmd` item enabling the unit with rc capture and a `stage:nftables_metadata` warning emit. **This is the ForceNew change and the hash-invalidating change.** |
+| `apps/web-platform/infra/cloud-init-git-data.yml` | Item B: inline `write_files:` for the nft script (0755) and its systemd unit (0644); `nftables` added to `packages:`; a `runcmd` item enabling the unit with rc capture and a `stage:gitdata_nftables_metadata` warning emit. **This is the ForceNew change and the hash-invalidating change.** |
 | `apps/web-platform/infra/rung2-rehearsal/variables.tf` | `betterstack_ingest_url`'s default re-points to the new source (D1). Its comment must be rewritten — the current one justifies the default by pointing at `zot-registry.tf`'s literal, which is no longer git-data's source of truth. |
-| `apps/web-platform/infra/sentry/issue-alerts.tf` | Item C: new `sentry_issue_alert` per D4 — `fallthrough_type = "NoOne"`, `filter_match = "all"`, one `tagged_event` with `IS_IN`, an unused `frequency` (6-9/28-29/31+), `conditions_v2 = [{ first_seen_event = {} }]`, `lifecycle { ignore_changes = [environment] }`. |
+| `apps/web-platform/infra/sentry/issue-alerts.tf` | **Two edits** (D4): (a) add `gitdata_nftables_metadata` to `git_data_boot_fatal`'s `filters_v2` — it is trap-reachable at fatal, and without it a boot-aborting failure there pages nobody; (b) the new low-severity rule — `fallthrough_type = "NoOne"`, `filter_match = "all"`, one `tagged_event` with `IS_IN "betterstack_ingest,gitdata_nftables_metadata_warn"`, `conditions_v2 = [{ event_frequency = { comparison_type = "count", value = 0, interval = "1h" } }]` (**V2** — never `first_seen_event`, which fires once per group ever), `lifecycle { ignore_changes = [environment] }`, and an unused `frequency` (6-9, 28-29, 31-59, 64+; not 15, which would collide with `byok_cap_exceeded`'s otherwise-identical dedup shape). |
 | `apps/web-platform/infra/zot-registry.tf` | **Untouched.** `local.betterstack_logs_ingest_url` keeps serving the web hosts and the registry on 2457081. |
 
 The four non-git-data consumers (`inngest-betterstack-token.tf`, `zot-registry.tf`'s Doppler secret,
@@ -447,8 +754,9 @@ The four non-git-data consumers (`inngest-betterstack-token.tf`, `zot-registry.t
 Required providers are unchanged: `hetznercloud/hcloud`, `DopplerHQ/doppler` in the main root;
 `jianyuan/sentry 0.15.5` in the sentry root. Sensitive variables and their sources:
 `TF_VAR_git_data_betterstack_logs_token` ← Doppler `soleur/prd_terraform` `GIT_DATA_BETTERSTACK_LOGS_TOKEN`;
-`TF_VAR_git_data_betterstack_ingest_url` ← `GIT_DATA_BETTERSTACK_INGEST_URL` (non-secret, co-located so both
-roots resolve identically).
+**and nothing else** — the ingest URL is a repo-side `locals` literal in `git-data.tf` (D5), never a
+variable and never a Doppler secret, so this change adds exactly **one** no-default variable to the
+auto-applied root.
 
 ### Apply path
 
@@ -508,42 +816,69 @@ subscription, not a new vendor, so `wg-record-recurring-vendor-expense-before-re
 
 ### Phase 1 — Item A: create the source and provision Doppler (MUST precede any `.tf` merge)
 
-1. **Idempotent find-or-create.** `GET /api/v2/sources`, filter by name `soleur-git-data-prd`. If present,
-   reuse; if absent, `POST /api/v2/sources` with
+0. **CREDENTIAL HYGIENE FOR EVERY BETTER STACK API CALL IN THIS PHASE — including the Phase 0 probe.**
+   Two rules, both of which the first draft violated:
+
+   - **The API token goes on stdin, never argv.** `/proc/<pid>/cmdline` is world-readable (mode 444) on
+     stock Ubuntu and on the runner; `environ` is 400. Use
+     `printf 'header = "Authorization: Bearer %s"\n' "$BS_API" | curl … -K -`, which is the doctrine the
+     template itself states for its own POSTs and which commit `223da596f` shipped to *close the argv hole
+     the previous draft reopened*. `scripts/registry-heartbeat-poll.sh` still uses the `-H "… Bearer $TOK"`
+     argv form, so the wrong pattern is the one nearest to hand. This token is **write-scoped — it can
+     create and delete Logs sources** — so it is strictly more powerful than the ingest token the plan
+     guards carefully.
+   - **No unfiltered API body ever reaches stdout.** `GET /sources` returns **every source's ingest token**,
+     including the shared 2457081 credential four production consumers depend on. Every read pipes through
+     `jq` selecting only the fields needed (`.id`, `.attributes.name`, `.attributes.ingesting_host`,
+     `.attributes.table_name`), never a bare `curl`. Bash tool output *is* the transcript, so this is the
+     mechanism that makes the plan's "never let it reach the transcript" claim real rather than aspirational.
+   - **The Doppler write must be silenced.** The Doppler CLI's set verb prints **all remaining secrets in
+     the config** to stdout on success. `prd_terraform` holds ~160 names, roughly 70 credential-shaped —
+     so an unsilenced write dumps the entire production Terraform credential set into the transcript and,
+     in CI, into a public job log. Use the `--silent` form (the same one `inngest.tf` records for the
+     2026-05-21 mint) **and** redirect stdout to `/dev/null`, then verify separately with
+     `doppler secrets --only-names`. This hazard is caught by a repo PreToolUse guard, which is how it was
+     found — the first draft of this plan specified stdin-piping and said nothing about stdout.
+
+1. **Idempotent find-or-create.** `GET /api/v2/sources` piped straight into
+   `jq -r '.data[] | select(.attributes.name=="soleur-git-data-prd") | .id'`. If it returns an id, reuse it;
+   if empty, `POST /api/v2/sources` with
    `{"name":"soleur-git-data-prd","platform":"http","data_region":"eu-central-1a","logs_retention":90}`.
    Platform `http` is semantically right — the emitter is a raw `curl` POST, not a Vector agent; the
    incumbent's `vector` platform is cosmetic for ingest.
 2. **Capture without transcript exposure.** Extract `token` and `ingesting_host` from the create response
    with `jq` **inside the same shell** and pipe the token to the Doppler CLI over **stdin**. Never `cat`,
    never echo, never `--plain` to stdout. The repository is public and job logs are an exposure surface.
-   Target `GIT_DATA_BETTERSTACK_LOGS_TOKEN` in `soleur/prd_terraform` (no `TF_VAR_` prefix —
-   `--name-transformer tf-var` adds it), and `GIT_DATA_BETTERSTACK_INGEST_URL` =
-   `https://<ingesting_host>/`.
-3. **Verify without reading the value back.** Assert both names exist via `doppler secrets --only-names`,
+   Target `GIT_DATA_BETTERSTACK_LOGS_TOKEN` in `soleur/prd_terraform` — no `TF_VAR_` prefix, since
+   `--name-transformer tf-var` adds it. **The token is the only Doppler write** (D5); `ingesting_host`
+   becomes a `locals` literal in `git-data.tf`, so record its value for Phase 2 rather than storing it.
+3. **Verify without reading the value back.** Assert the name exists via `doppler secrets --only-names`,
    and prove the credential works with `scripts/betterstack-ingest-probe.sh` against the new URL (exit 0 =
    accepting). Record the new `table_name` for Phase 3.
-4. Confirm the token length satisfies the module's `> 20` validation before any apply.
-5. **Fallback, only if the REST create regresses:** Playwright MCP against the Better Stack dashboard,
-   capturing via `browser_evaluate(filename: "<worktree>/.playwright-mcp/bs-git-data.json")` — an absolute
-   path under the worktree, because MCP tools resolve from the repo root
-   (`hr-mcp-tools-playwright-etc-resolve-paths`) and the measured allowed roots are the repo root and
-   `.playwright-mcp/`. The evaluate must be find-or-create, because the function runs before the filename
-   write is validated. Reconnect the MCP server first (`/mcp`); it is configured and installed correctly
-   (R14).
+4. Confirm the token length satisfies the module's `> 20` validation before any apply. Do not hard-code the
+   observed length anywhere — the module's validation is the authority.
+5. If the REST create ever regresses, the Playwright dashboard route remains available and is documented in
+   the ADR-198 amendment; it is not expected to be taken (R1) and is not specified here.
 
 ### Phase 2 — Item A wiring (contract before consumers)
 
-1. Add both variables to `variables.tf` (no defaults, mirroring the sibling description convention).
-2. Re-point `git-data-luks.tf:132` to `var.git_data_betterstack_logs_token`.
-3. Re-point `git-data.tf:303-304` to the new variables.
-4. Re-point `rung2-rehearsal/variables.tf`'s `betterstack_ingest_url` default and rewrite its comment.
-5. Update the ingest-URL stub in `git-data-userdata-budget.sh` for accuracy.
-6. `terraform validate` both roots.
+1. Add `git_data_betterstack_logs_token` to `variables.tf` (sensitive, no default, mirroring the sibling
+   description convention). **The URL is not a variable** (D5).
+2. Add `local.git_data_betterstack_ingest_url` to `git-data.tf`'s `locals` block as a plain literal,
+   mirroring `zot-registry.tf:125` including its comment shape (region/cluster binding, what reuses it,
+   what must stay in sync).
+3. Re-point `git-data-luks.tf:132` to `var.git_data_betterstack_logs_token`.
+4. Re-point `git-data.tf:303-304` to the new local and the new variable.
+5. Re-point `rung2-rehearsal/variables.tf`'s `betterstack_ingest_url` default and rewrite its comment — it
+   currently justifies the default by pointing at `zot-registry.tf`; after D5 the pointer is `git-data.tf`.
+6. Update the ingest-URL stub in `git-data-userdata-budget.sh` for accuracy.
+7. `terraform validate` both roots.
 
 ### Phase 3 — Item A gate and harness updates (D1)
 
-1. Arm 7: extract prod's URL from git-data's new source of truth **by shape**, not from `zot-registry.tf`
-   by name.
+1. Arm 7: change the prod-side extraction from `zot-registry.tf`'s `betterstack_logs_ingest_url` local to
+   `git-data.tf`'s `git_data_betterstack_ingest_url` local — **the same `locals`-literal shape, a different
+   file** (D5). Keep by-shape extraction on both sides; a hardcoded expectation would pass while prod moved.
 2. Arm 72: the `value = var.…` regex.
 3. Arms 74/75: variable names in both roots' module blocks; the no-default assertions stay.
 4. Arm 5.6a: reword the premise label from *"prod and rehearsal share one sink"* to state that both ship to
@@ -557,10 +892,12 @@ subscription, not a new vendor, so `wg-record-recurring-vendor-expense-before-re
 
 1. Add `nftables` to `packages:`.
 2. Inline `write_files:` the nft script at `0755 root:root`, modelled on `cloud-init-inngest.yml:55-101`:
-   a `command -v nft` preflight, then a quoted heredoc (`nft -f - <<'NFTEOF'`) declaring its **own** table
-   so `nft -f` replaces it atomically and the script is idempotent:
+   a `command -v nft` preflight, then a quoted heredoc (`nft -f - <<'NFTEOF'`) declaring its **own** table.
+   Use the **three-line replace idiom** — a bare declaration merges rather than replaces (**V1b**, measured):
 
    ```
+   table inet soleur_git_data
+   delete table inet soleur_git_data
    table inet soleur_git_data {
      chain output {
        type filter hook output priority -10; policy accept;
@@ -581,21 +918,49 @@ subscription, not a new vendor, so `wg-record-recurring-vendor-expense-before-re
    `After=`/`Wants=network-online.target`, `WantedBy=multi-user.target`, and a `SyslogIdentifier` without
    the `.sh` suffix (the `#6617c` lesson from the inngest unit, where the basename-derived tag matched no
    Vector source and the failure never left the host).
-4. A `runcmd` item after the `gc_timer` block enabling the unit with rc capture and a
-   `stage:nftables_metadata` **warning** emit on failure (D3) — never a bare `|| true`, which would make
-   the failure unobservable.
-5. Re-run `git-data-userdata-budget.sh`. If headroom is insufficient, stop and re-shape before committing.
-6. Record the **new** template sha256 in the PR body, so the evidence-invalidation is explicit.
+4. **Add both inline paths to `INLINE_ALLOWLIST`** in `git-data-runcmd-rehearsal.test.sh` (~`:504`), with a
+   rationale comment. Without this, arm B1 hard-fails them as *"neither a known file-backed source nor on
+   the inline allowlist"*. Note the existing members are inline because they are template-interpolated;
+   these two are not, so the comment must say they are inline to avoid silent floor decay across four
+   payload-count suites (D2), not because interpolation forces it.
+5. A `runcmd` item after the `gc_timer` block, `STAGE=gitdata_nftables_metadata`, enabling the unit with
+   **`systemctl enable --now`** inside a guarded rc-capture in the exact `gc_timer` substitution-plus-`if`
+   shape, emitting `stage:gitdata_nftables_metadata_warn` at **warning** on failure (D3, D4). Never a bare
+   `|| true` — that makes the failure unobservable — and never a bare `enable`, which leaves the control
+   inert for the host's life.
+6. **Add a positive runtime signal.** `git-data-bootstrap.sh` already ships four booleans on
+   `stage:boot_complete` (`luks_mounted=yes repo_root=yes hooks_path=yes provision=yes`), and its own
+   comment says they exist so *"a weakened assert shows up as a false rather than a missing event."* Add a
+   fifth — `nft_metadata_drop=yes|no`, read from `nft list chain inet soleur_git_data output` (the
+   inngest boot diagnostic already folds an equivalent `nft list chain` into its phone-home). This is
+   near-free and it covers the one case D3's warning-emit structurally cannot: the ruleset **disappearing
+   after** a successful load. Without it, the control's only signal is the absence of a warning that
+   notifies nobody.
+7. **Guard against the package's own flush.** Installing `nftables` (step 1) also installs
+   `nftables.service`, whose `ExecStop` runs `nft flush ruleset`, and ships `/etc/nftables.conf` whose
+   third line is `flush ruleset`. It is disabled by default, so this is latent rather than live — but
+   `RemainAfterExit=yes` means systemd would keep reporting our oneshot "active" over an emptied ruleset
+   indefinitely, and git-data never reboots to re-assert. Do not enable `nftables.service`; the step-6
+   boolean is what would surface it if something else did.
+8. Re-run `git-data-userdata-budget.sh`. If headroom is insufficient, stop and re-shape before committing.
+9. Record the **new** template sha256 in the PR body, so the evidence-invalidation is explicit.
 
 ### Phase 5 — Item C: route the warning stages
 
-1. New `sentry_issue_alert` per D4, with an unused `frequency`.
-2. Ship the **first** git-data stage-reconciliation guard (R12), modelled on
-   `nic-wait-gate.test.sh:506-527`: for each of `betterstack_ingest` and `nftables_metadata`, assert the
-   stage is a live `tagged_event` value in `issue-alerts.tf` — anchored on the HCL attribute construct, not
-   a bare token, since both names also appear in prose in both files
-   (`cq-assert-anchor-not-bare-token`) — **and** that the emitter actually emits it. Lockstep in both
-   directions.
+1. Add `gitdata_nftables_metadata` (the fatal-side name) to `sentry_issue_alert.git_data_boot_fatal`'s
+   `filters_v2`, alongside the existing nine — additive, `filter_match = "any"`, same treatment `gc_timer`
+   already gets (D4).
+2. Add the new low-severity `sentry_issue_alert` per D4: `IS_IN "betterstack_ingest,gitdata_nftables_metadata_warn"`,
+   `fallthrough_type = "NoOne"`, `conditions_v2 = [{ event_frequency = { comparison_type = "count",
+   value = 0, interval = "1h" } }]` (**V2** — not `first_seen_event`, which fires once per group ever and
+   would go inert after the first failure), `lifecycle { ignore_changes = [environment] }`, and an unused
+   `frequency` (free: 6-9, 28-29, 31-59, 64+).
+3. Ship the git-data stage-route guard, in the **sibling shape** — `sentry-web-terminal-boot-fatal-op-contract.test.ts`
+   is the model at ~83 lines: a literal stage list plus a loop, two `readFileSync` calls, assertions in both
+   directions. Do **not** build a general extraction engine; that would be scope-creeping R12's
+   nine-fatal-stage reconciliation (a pre-existing gap this PR does not touch — file it separately).
+   Anchor on the HCL attribute construct, not a bare token, since these names also appear in prose in both
+   files (`cq-assert-anchor-not-bare-token`).
 
 ### Phase 6 — Item D: the two stale-prose corrections
 
@@ -605,11 +970,17 @@ subscription, not a new vendor, so `wg-record-recurring-vendor-expense-before-re
    `value = hcloud_server_network.git_data.ip`, which is what ADR-149's DC-5 **reversal** mandates. Correct
    the comment to match code and ADR, including its now-backwards final sentence. Sweep the sibling instance
    in the `OPERATOR_APPLIED_EXCLUSIONS` comment, which repeats the same false "static local" claim.
-2. `tests/scripts/lib/git-data-host-birth-gate.sh:411`: the ABORT text says "each of the four entailed
-   members" and "All four are entailed" while the loop at `:402-405` deliberately carries **three**;
-   `hcloud_firewall_attachment.git_data` is handled by the separate outcome assertion at `:469-501`, as
-   `:399-401` already says. Make the message match the loop **without changing the loop**. Sweep the same
-   stale four at `:30` and `:52`. The PASS line at `:503` is already correct and is the model.
+2. `tests/scripts/lib/git-data-host-birth-gate.sh`: the ABORT text says "each of the four entailed members"
+   and "All four are entailed" while the loop deliberately carries **three**;
+   `hcloud_firewall_attachment.git_data` is handled by the separate outcome assertion, as the comment
+   immediately above the loop already says. Make the message match the loop **without changing the loop**.
+   **Sweep FOUR stale sites, not two** — the header (`the four ENTAILED members each create exactly once`),
+   the mid-file restatement (`The four entailed members each reference ...`), the ABORT string itself, and
+   the line **directly above the loop** (`Exactly these four reference hcloud_server.git_data.id`), which
+   the draft missed and which AC15's original grep could not match. The PASS line (`its 3 entailed members
+   ... all 15 presence members`) is already correct and is the model. Cite by content anchor, not line
+   number — Phase 6.1's edits shift numbering in the sibling file
+   (`cq-cite-content-anchor-not-line-number`).
 
 ### Phase 7 — Records
 
@@ -644,9 +1015,10 @@ BEHIND rather than hand-merging: `main` lands commits faster than a CI cycle and
 4. `git_data_rung2_user_data_sha256()` resolves exactly **9** payloads — unchanged, proving Item B added no
    `file()` binding. Sourcing `tests/scripts/lib/git-data-birth-readiness-gate.sh` and invoking it against
    the template returns rc 0 and a 64-hex digest.
-5. The birth fan-out is unchanged at **20**: `grep -c "^\s*-target='"` over the `git_data_host_create` job
-   returns 20, and `plugins/soleur/test/terraform-target-parity.test.ts` passes, including its
-   partition-equation test with `entailed.length === 3`.
+5. The birth fan-out is unchanged at **20**: `plugins/soleur/test/terraform-target-parity.test.ts` passes,
+   including its set-equality assertion and its partition-equation test with `entailed.length === 3`. (No
+   hand-rolled `grep -c` beside it — that would be a second, weaker copy of an assertion the test already
+   owns, free to drift from it.)
 6. `bash apps/web-platform/infra/git-data-rung2-rehearsal.test.sh` passes with **≥ 75** cases and 0 failures,
    including the reworded arm 5.6a and the re-pointed arm 7.
 7. `GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST` still contains exactly the 8 original members and contains neither
@@ -657,20 +1029,35 @@ BEHIND rather than hand-merging: `main` lands commits faster than a CI cycle and
    `table inet soleur_git_data` with `policy accept` — asserted against the render, not the source.
 10. `grep -c '169\.254\.169\.254'` over the nine payload files returns 0, so git-data still makes no IMDS
     call of its own and the drop breaks nothing at boot.
-11. Both `stage` values `betterstack_ingest` and `nftables_metadata` appear as live `tagged_event` filter
+11. Both `stage` values `betterstack_ingest` and `gitdata_nftables_metadata` appear as live `tagged_event` filter
     values in `sentry/issue-alerts.tf` **and** are emitted by the cloud-init emitter — asserted in both
     directions by the new reconciliation guard.
 12. The new `sentry_issue_alert` uses `fallthrough_type = "NoOne"` and a `frequency` not already present in
     `issue-alerts.tf`.
-13. `bash tests/scripts/test-destroy-guard-sentry-scope-guard.sh` and
-    `bash tests/scripts/test-sentry-full-root-apply.sh` both pass (no `-target=` introduced).
-14. `git grep -c 'STATIC local' plugins/soleur/test/terraform-target-parity.test.ts` returns 0, and the
-    `doppler_secret.git_data_ssh_host` comment names `hcloud_server_network.git_data.ip`.
-15. `grep -c 'four entailed\|All four are entailed' tests/scripts/lib/git-data-host-birth-gate.sh` returns 0,
-    while the entailed loop still carries exactly 3 members.
+13. `nft -c -f <rendered-user_data-extract>` exits 0 in CI. **New, and it closes the likeliest failure
+    mode:** nothing in the repo validates nftables syntax (`git grep 'nft -c'` -> no hits), so a typo would
+    pass every render-level grep in AC9 and Guard 2, then fail at boot — where D3 converts it into a
+    warning, leaving the host serving *without* the control while every signal stays green. GitHub runners
+    are root, so this is one step in `infra-validation`. Verified locally that `nft -c -f` accepts the exact
+    rule shape (V1).
+14. **(Rewritten — the draft's version was vacuous.)** `grep -c 'STATIC local'` on
+    `terraform-target-parity.test.ts` returns **0 on unfixed `main` today**, because the phrase wraps across
+    two comment lines (`… from a STATIC` / `// local, never from …`), so the draft's AC would have passed
+    without the fix. Assert instead, on a comment-marker-stripped, whitespace-collapsed read of the file:
+    (a) a case-insensitive `from a static local` count of **0** — measured **1** today, so the check is
+    non-vacuous — and (b) the positive property, that the `doppler_secret.git_data_ssh_host` comment block
+    names `hcloud_server_network.git_data.ip` as the source. Apply the same normalized probe to
+    `git-data.tf`, which carries the sibling stale claim (measured **1** today).
+15. On `git-data-host-birth-gate.sh`, a whitespace-collapsed case-insensitive count of `four entailed`,
+    `All four are entailed`, and **`Exactly these four`** returns 0, while the entailed loop still carries
+    exactly 3 members. The third pattern is the site directly above the loop that the draft's grep could not
+    match.
 16. `doppler secrets --project soleur --config prd_terraform --only-names` lists
-    `GIT_DATA_BETTERSTACK_LOGS_TOKEN` and `GIT_DATA_BETTERSTACK_INGEST_URL` — **names only, never values**.
-    This is the ADR-065 merge-time gate: without it the merge-triggered apply fails wholesale.
+    `GIT_DATA_BETTERSTACK_LOGS_TOKEN` — **names only, never values**, and **one** secret rather than two
+    (D5 makes the URL a `local`). This is the ADR-065 merge-time gate: without it the merge-triggered apply
+    fails wholesale. The mechanical enforcer is `infra-validation.yml`'s `plan` job, which is
+    `pull_request`-only and runs a **full-root** `terraform plan` against real `prd_terraform` — so an
+    unprovisioned variable reds the PR before merge rather than wedging `main` after it.
 17. `terraform validate` exits 0 in both `apps/web-platform/infra` and
     `apps/web-platform/infra/rung2-rehearsal`.
 18. No credential value appears in the diff, the PR body, or any job log. Asserted structurally rather than
@@ -680,16 +1067,20 @@ BEHIND rather than hand-merging: `main` lands commits faster than a CI cycle and
 19. `apps/web-platform/test/c4-code-syntax.test.ts` and `c4-render.test.ts` pass; the `betterstack` element
     description no longer asserts a single Logs source.
 20. ADR-198 carries all four amendments and no longer lists the per-source token as rejected.
-21. `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0 over the full changed
-    set — the gate's own invocation, not a hand-enumerated path list.
-22. `bash scripts/test-all.sh` (TEST_GROUP=all) is green, or the run is reported skipped-for-contention with
+21. `bash scripts/test-all.sh` (TEST_GROUP=all) is green, or the run is reported skipped-for-contention with
     rc=4 rather than forced.
 
 ### Post-merge
 
-23. #7772 carries three recorded dispositions: Item E re-stated against the unchanged allowlist, the ADR-198
+22. #7772 carries three recorded dispositions: Item E re-stated against the unchanged allowlist, the ADR-198
     fourth-item triage-out with its re-evaluation trigger, and the corrected Item A reasoning. Closed by
     this PR via `Closes #7772` in the body.
+23. The `apply-sentry-infra.yml` run triggered by this merge **succeeded**, and the new
+    `sentry_issue_alert` plus the new `gitdata_nftables_metadata` filter value are live. `versions.tf`
+    records that Sentry serves the legacy issue-alert read endpoint under **scheduled brownouts** and
+    that a measured run took 410 on 29 of 29 alert reads and failed `terraform plan`. If the merge
+    lands in a brownout window Item C never ships, the two warning stages stay write-only, and every
+    pre-merge AC is still green. On a 410, re-run — do not assume.
 24. No rehearsal dispatch is fired by this PR. The rung-2 rehearsal runs **after** this merges and its
     evidence lands in its own follow-up PR — a PR merges atomically, so evidence committed alongside the
     harness would attest a rehearsal that never ran.
@@ -700,17 +1091,17 @@ BEHIND rather than hand-merging: `main` lands commits faster than a CI cycle and
 
 ```yaml
 liveness_signal:
-  what: "stage:nftables_metadata absent on a healthy boot; stage:boot_complete present with its four booleans positive"
+  what: "stage:gitdata_nftables_metadata absent on a healthy boot; stage:boot_complete present with its four booleans positive"
   cadence: "once per host birth (runcmd is once-per-instance); gc faults daily via git-data-gc.timer"
   alert_target: "sentry_issue_alert.git_data_boot_fatal (paging, nine fatal stages); the new low-severity rule (NoOne fallthrough) for the two warning stages"
   configured_in: "apps/web-platform/infra/sentry/issue-alerts.tf; apps/web-platform/infra/cloud-init-git-data.yml"
 error_reporting:
   destination: "Sentry (baked DSN, no Doppler dependency) for fatals and the two warning stages; Better Stack Logs (new git-data source) for eight of the nine boot stages"
-  fail_loud: "yes — a failed nftables load emits stage:nftables_metadata at warning and is routed by the new rule; a failed Better Stack POST already emits stage:betterstack_ingest, which this plan routes for the first time"
+  fail_loud: "yes — a failed nftables load emits stage:gitdata_nftables_metadata at warning and is routed by the new rule; a failed Better Stack POST already emits stage:betterstack_ingest, which this plan routes for the first time"
 failure_modes:
   - mode: "nft rule fails to load (binary absent, kernel module missing)"
-    detection: "in-host: the unit's ExecStart exits non-zero -> runcmd rc capture -> stage:nftables_metadata warning emit carrying the rc"
-    alert_route: "the new low-severity sentry_issue_alert (IS_IN betterstack_ingest,nftables_metadata)"
+    detection: "in-host: the unit's ExecStart exits non-zero -> runcmd rc capture -> stage:gitdata_nftables_metadata warning emit carrying the rc"
+    alert_route: "the new low-severity sentry_issue_alert (IS_IN betterstack_ingest,gitdata_nftables_metadata)"
   - mode: "the rule ships mis-scoped (drops for root, or matches nothing)"
     detection: "render-time: the Guard 2 mutation matrix reddens before any host exists"
     alert_route: "CI (infra-validation), not a runtime alert — this is the likely failure and it is caught pre-birth"
@@ -724,9 +1115,13 @@ logs:
   where: "Better Stack Logs, new git-data source (team 520508), via scripts/betterstack-query.sh --table t520508_<new_table_name>_logs; Sentry issues for fatals and the two warning stages"
   retention: "90 days (matching source 2457081); Sentry 90 days rolling"
 discoverability_test:
-  command: "bash apps/web-platform/infra/git-data-userdata-budget.sh && grep -c 'meta skuid != 0' apps/web-platform/infra/cloud-init-git-data.yml"
-  expected_output: "the budget line reporting stored < 32768, then '2' — the IPv4 and IPv6 drop rules"
-  credentials_required: "none — both halves are local file reads. The live Better Stack read needs BETTERSTACK_QUERY_* from Doppler prd_terraform and has no unauthenticated substitute, so it is deliberately not the discoverability probe."
+  # Probes the RENDER, not the source YAML. Guard 2 mutation row 3 establishes that a source grep
+  # cannot distinguish an active rule from a commented-out one (the template strip deletes comment
+  # lines at render), so a source-level probe would be strictly weaker than the guard it advertises.
+  # The budget script emits the rendered document; --json keeps the parse stable.
+  command: "bash apps/web-platform/infra/git-data-userdata-budget.sh --json /tmp/gd-render.txt && grep -c 'meta skuid != 0' /tmp/gd-render.txt"
+  expected_output: "a JSON budget line with stored < 32768, then a count >= 1 — at least the IPv4 metadata drop is present in the RENDERED user_data"
+  credentials_required: "none — both halves are local. The live Better Stack read needs BETTERSTACK_QUERY_* from Doppler prd_terraform and has no unauthenticated substitute, so it is deliberately not the discoverability probe."
 ```
 
 ### Soak follow-through enrollment
@@ -742,8 +1137,13 @@ rung-2 rehearsal, a separate dispatch with its own evidence PR (AC24).
 ```yaml
 at_rest:
   - store: "Better Stack Logs — new git-data source (vendor-managed ClickHouse warehouse, eu-central-1a)"
-    mechanism: "vendor-managed encryption at rest, EU-resident; no customer-managed key"
-    evidence: "data_region=eu-central-1a confirmed via GET /api/v2/sources/<id>; identical posture to incumbent source 2457081"
+    mechanism: "vendor-attested encryption at rest (Better Stack security programme), EU-resident (eu-central-1a); no customer-managed key"
+    # A NAMED attestation with a URL and a retrieval date, mirroring the incumbent betterstack.logs
+    # ledger row. "vendor-managed / encrypted by default" with no named attestation is a Phase 4.10
+    # reject, and the first draft of this row was exactly that.
+    attestation_url: "https://betterstack.com/security"
+    attestation_retrieved_on: "<date the /work phase reads it>"
+    evidence: "data_region=eu-central-1a and the new source id confirmed via GET /api/v2/sources/<id>; same vendor, region and attestation as incumbent source 2457081"
     defends_against: "vendor-side disk theft or decommissioned-media recovery"
     does_not_defend: "anyone holding the ClickHouse read credential (BETTERSTACK_QUERY_*) reads every row; the ingest token itself cannot read anything back"
     disclosed_as: "operational telemetry, docs/legal/data-protection-disclosure.md (m); no new processing activity — content, vendor and region are unchanged, only the source partition"
@@ -769,6 +1169,27 @@ in_transit:
 exception: none
 ```
 
+### The ledger must move with the plan (`scripts/encryption-posture-ledger.json`)
+
+Two edits, both mandatory — the second because this PR carries `Closes #7772`:
+
+1. **Add a row for the new store.** `stores[]` currently has one `betterstack.logs` entry whose `evidence`
+   names source 2457081. After this there are two sources with distinct tables and distinct tokens; a
+   second Logs source at 90-day retention is a new persistent store and needs its own row, carrying
+   `attestation_url` + `retrieved_on` like its sibling.
+2. **Correct `git_data.baked_credentials_on_host`.** Its `does_not_defend` reads *"hcloud_firewall.git_data
+   declares zero rules … so the whole user_data is readable from the metadata endpoint … Tracked: #7772"*
+   and its `tracking_issue` is `#7772`. Item B closes exactly that for non-root UIDs, so on merge that row
+   becomes a **live falsehood with a dangling tracker**. Narrow it to the residual that genuinely remains:
+   code execution **as root**, plus the `0755` `sentry_dsn` copy, plus the rotation cost below.
+
+**The rotation cost P1 does not capture, and the ADR amendment must.** Property P1 says a git-data leak no
+longer forces rotating a credential three others depend on — true. But `hcloud_server.git_data`'s lifecycle
+carries only `ignore_changes = [ssh_keys]`, and the template records a `user_data` change as *"the intended
+replace-to-reprovision path"*. So rotating git-data's own ingest token still re-bakes `user_data` and
+therefore still proposes a **destroy-and-recreate of the host holding every connected user's source**, with
+no reboot primitive available. Item A shrinks the blast radius of a rotation; it does not make one cheap.
+
 The change **improves** posture on the axis that matters: today one ingest credential is baked into the
 lowest-trust host in the fleet and shared with three others; after this, git-data's copy authorizes appends
 to git-data's own stream alone.
@@ -777,85 +1198,77 @@ to git-data's own stream alone.
 
 ## Guard Contract
 
-### Guard 1 — Stage⇔route reconciliation (the first for git-data)
+### Guard 1 — Every `STAGE=` name has a route, and the right one
 
-**Property.** Every `stage` value the git-data emitter can emit is either matched by a `tagged_event` filter
-in `sentry/issue-alerts.tf` or is deliberately and namedly exempt — and every stage a filter names is
-actually emitted.
+**Property.** Stated at the strength the system actually needs, which is stronger than the draft's version:
+**every `STAGE=` name assignable in `runcmd` appears in `git_data_boot_fatal`'s filter values**, because
+`on_err` emits `"$STAGE" fatal` and `STAGE` is whatever was last assigned when the trap fires — so any
+`STAGE=` name absent from that rule is a *boot-aborting fatal that pages nobody*. Separately, every
+`_warn`-suffixed stage the emitter can raise appears on the low-severity rule. The draft's weaker phrasing
+("every emitted stage matches *some* rule") would have passed on exactly the D4 defect this PR fixes.
 
-**Assembly.** Not the list of current stages, which drifts. The chokepoints are (a) every
-`git-data-emit … <stage> …` call site **plus** the two inline `curl` mirrors in `cloud-init-git-data.yml`
-(the `bootcmd` beacon and `_bs_mirror`), which do **not** route through the emitter binary and are exactly
-the sites a call-site-only sweep misses; and (b) every `value = "<stage>"` attribute inside a `filters_v2`
-block in `sentry/issue-alerts.tf`. The guard quantifies over both directions of that pair. There is more
-than one emit chokepoint, and a guard scoped to only the emitter binary would be the defect.
+**Assembly.** Two producer chokepoints and one consumer, quantified over as sets rather than as today's
+members: (a) every `STAGE=` assignment in `cloud-init-git-data.yml`'s `runcmd` — the trap-reachable set;
+(b) every `git-data-emit … <stage> …` call site **plus** the two inline `curl` mirrors (the `bootcmd`
+beacon and `_bs_mirror`), which do not route through the emitter binary and are the sites a call-site-only
+sweep misses; and (c) every `value = "<stage>"` inside a `filters_v2` block in `sentry/issue-alerts.tf`,
+partitioned by which rule owns it.
 
-**Mutation matrix.**
-
-| # | Mutation | Must go RED because |
-|---|---|---|
-| 1 | Delete the `betterstack_ingest` filter value from `issue-alerts.tf` | An emitted stage matching no rule is the write-only class the guard exists to end |
-| 2 | Add a new emit at a stage with no filter, **after** a compliant one | A guard that stops at the first stage cannot see the second — the recurring defect class |
-| 3 | Rename `nftables_metadata` in the cloud-init but not in `issue-alerts.tf` | Lockstep must break in both directions, not only on deletion |
-| 4 | Make the guard's own loop iterate zero stages (empty the extracted set) | A guard reporting "0 checked" and exiting 0 is vacuous; the anti-vacuity floor must fire |
-| 5 | Replace a `filters_v2` `value = "betterstack_ingest"` line with the same token in a **prose comment** | Asserting on a bare token rather than the HCL attribute construct is `cq-assert-anchor-not-bare-token`; prose must not satisfy the guard |
-
-**Harness rows.** (a) Stub the extraction so it returns the canonical set regardless of file content — the
-suite must red, proving it reads the real files rather than a constant. (b) A must-PASS input that is **not**
-the canonical: an `issue-alerts.tf` carrying an additional unrelated alert with its own stage filter must
-still pass, since the contract permits extra rules and forbids only unrouted emits.
-
-### Guard 2 — The metadata drop is present, UID-scoped, and in the render
-
-**Property.** The `user_data` Hetzner actually receives contains a drop of traffic to the metadata endpoint
-that applies to non-root UIDs and does not apply to root.
-
-**Assembly.** The **rendered** template (`templatefile` + the template strip), not the source YAML — the
-strip expression removes comment lines, so a rule sitting inside a comment passes a source grep and ships
-nothing. The chokepoint is the render produced by `git-data-userdata-budget.sh`'s pipeline, or the
-equivalent `terraform console` render the parity suite already drives.
+**Shape — the sibling, not an engine.** `sentry-web-terminal-boot-fatal-op-contract.test.ts` is the model
+at ~83 lines: two `readFileSync` calls, a literal stage list, a loop asserting both directions. Build that.
+A general bidirectional extraction engine would be scope-creeping R12's nine-fatal-stage reconciliation —
+a real pre-existing gap, filed separately, that this PR does not touch.
 
 **Mutation matrix.**
 
 | # | Mutation | Must go RED because |
 |---|---|---|
-| 1 | Drop the `meta skuid != 0` qualifier, leaving a blanket drop | Root must stay exempt — cloud-init queries the metadata server as root every boot to configure networking; a blanket drop breaks the datasource |
-| 2 | Change `policy accept` to `policy drop` | The table must not become a default-deny egress firewall; that is the brittle CDN-allowlist shape this design explicitly rejects |
+| 1 | Delete the `betterstack_ingest` value from the low-severity rule | An emitted stage matching no rule is the write-only class the guard exists to end |
+| 2 | Put `gitdata_nftables_metadata` on the low-severity rule **only** (the draft's design) | A trap-fatal at that stage would page nobody — the D4 defect, and the row that proves the strengthened property is load-bearing |
+| 3 | Add a new `STAGE=` name in `runcmd` with no filter anywhere, **after** a compliant one | A guard that stops at the first stage cannot see the second |
+| 4 | Rename `gitdata_nftables_metadata_warn` in the cloud-init but not in `issue-alerts.tf` | Lockstep must break in both directions, not only on deletion |
+| 5 | Replace a `filters_v2` `value = "…"` line with the same token in a **prose comment** | Anchoring on a bare token rather than the HCL attribute construct is `cq-assert-anchor-not-bare-token`; prose must not satisfy the guard |
+| 6 | Empty the extracted stage set | A guard reporting "0 checked" and exiting 0 is vacuous — the anti-vacuity floor must fire, reporting via `printf >&2` + `exit 1` and counting at the call site, never inside `$( )` (AP-023) |
+
+**Harness rows.** (a) Stub the extraction to return the canonical set regardless of file content — the suite
+must red, proving it reads the real files rather than a constant. (b) A must-PASS non-canonical: an
+`issue-alerts.tf` carrying an additional unrelated alert with its own stage filter must still pass, since
+the contract permits extra rules and forbids only unrouted stages.
+
+### Guard 2 — The metadata drop is present, UID-scoped, syntactically valid, and actually loaded
+
+**Property.** The `user_data` Hetzner receives contains a drop of traffic to the metadata endpoint that
+applies to non-root UIDs and not to root; the ruleset it belongs to parses; and the unit that installs it is
+started, not merely enabled.
+
+**Assembly.** The **rendered** template (`templatefile` + template strip), not the source YAML — the strip
+deletes comment lines, so a rule inside a comment passes a source grep and ships nothing. The chokepoint is
+the render `git-data-userdata-budget.sh --json <out>` already produces. The syntax arm additionally feeds
+that render's extracted ruleset to `nft -c -f`.
+
+**Mutation matrix.**
+
+| # | Mutation | Must go RED because |
+|---|---|---|
+| 1 | Drop the `meta skuid != 0` qualifier, leaving a blanket drop | Root must stay exempt — cloud-init queries the metadata server as root every boot to configure networking |
+| 2 | Change `policy accept` to `policy drop` | The table must not become a default-deny egress firewall; that is the brittle allow-list shape this design rejects, and it would sever apt, DNS and NTP |
 | 3 | Move the rule from an active line into a `#` comment line | The template strip deletes comments, so this is the mutation a source-level grep cannot see — the discriminating case |
-| 4 | Rename the table to collide with `soleur_inngest` or the shared `filter` table | `nft -f` replaces a table atomically; colliding would flush a table this host does not own |
-| 5 | Remove `nftables` from `packages:` | The script's `command -v nft` preflight fails every boot, silently reducing the control to a warning emit |
+| 4 | Drop `--now` from `systemctl enable` | git-data never reboots, so an enabled-but-unstarted unit leaves the control inert for the host's entire life while every other assertion stays green (P1-6) |
+| 5 | Remove the `delete table` line, reverting to a bare declaration | `nft -f` merges rather than replaces (V1b, measured), so a re-assert accumulates superseded rules the render cannot see |
+| 6 | Introduce a syntax error in the ruleset | `nft -c -f` must reject it. Without this arm a typo passes every render grep and degrades to a boot-time warning on a host serving without the control |
+| 7 | Remove `nftables` from `packages:` | The `command -v nft` preflight fails every boot, silently reducing the control to a warning emit |
 
 **Harness rows.** (a) Point the guard at a fixture render containing the rule but assert against an empty
 string — it must red, proving the assertion is not vacuously true. (b) A must-PASS non-canonical: a render
 expressing the rule with different whitespace plus an unrelated accept rule in the same chain must still
 pass, since the contract is presence-and-scoping, not byte-equality.
 
-### Guard 3 — The per-source split did not weaken the rung-2 evidence
-
-**Property.** After the split the rehearsal still binds the same render inputs it bound before: the
-divergence allowlist is unchanged at 8 identity-shaped members, both roots declare the token with no
-default, and the two roots resolve the **same** ingest URL.
-
-**Assembly.** The four enforcing arms in `git-data-rung2-rehearsal.test.sh` (5.6a allowlist-absence, 7 URL
-value-equality, 72 Doppler residency, 74/75 both-roots parity) plus
-`GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST` in `git-data-birth-readiness-gate.sh` — read as a *set* across every
-assignment, not the first match, because shell assignment is last-wins and a `+=` append would evade a
-first-line read.
-
-**Mutation matrix.**
-
-| # | Mutation | Must go RED because |
-|---|---|---|
-| 1 | Append `betterstack_logs_token` to the allowlist via `+=` rather than reassignment | D1's whole claim is that no widening is needed, and the `+=` form is the one arm 5.6a was specifically hardened against |
-| 2 | Give either root a `default` for the token | A default is a silent fallback to a different sink, producing hash-valid evidence for a boot prod would not get |
-| 3 | Point the rehearsal root at 2457081 while prod uses the new source | The rehearsal would attest a channel prod does not use — the accepted-limitation arm D1 rejects |
-| 4 | Re-point arm 7 back to `zot-registry.tf` | It would compare the *registry's* URL against the rehearsal default: a green arm silently comparing the wrong pair |
-
-**Harness rows.** (a) Lower the suite's anti-vacuity floor below the real case count — the suite must red on
-its own floor. (b) A must-PASS non-canonical: reordering the allowlist's 8 members must still pass, since
-the contract is set membership, not string equality.
-
----
+**One live arm, in the rehearsal — the only place enforcement is cheap to measure.** Every row above is
+render-level: a rule that loads cleanly but enforces nothing emits nothing. The rung-2 rehearsal already
+boots a real host, so add one arm there: as a non-root UID, `curl -m 5 http://169.254.169.254/hetzner/v1/userdata`
+must fail, and the same call as root must succeed. Two lines, and it converts the control from asserted to
+measured — the lesson `scripts/betterstack-ingest-probe.sh` already records, where a healthy-looking read
+path masked a refused write path for 49 hours.
 
 ## Domain Review
 
@@ -906,11 +1319,14 @@ processing activity and does not change the processor. Recorded so the omission 
 | The nftables rule breaks something at boot that the grep did not predict | Low | Critical (unrepairable host) | Three independent checks: `grep -c` returns 0 across the template and all nine payloads; the only known IMDS consumer is cloud-init's own datasource, which runs as **root** and is exempt by `meta skuid != 0`; and D3 places the unit outside the `set -e` region so a failure warns rather than aborting `runcmd`. |
 | The template edit lands after a rehearsal PASS, invalidating the evidence | Low | Medium (a second paid host + approval) | This is the entire reason for one PR. AC3 asserts the evidence file is absent; AC2 records the new digest so the invalidation is explicit; AC24 forbids firing a dispatch from this PR. |
 | A credential value reaches a job log, artifact, or the public diff | Low | Critical | stdin-only piping; status-codes-only probes; `GET /sources` bodies never printed (they contain every source's token); AC18 asserts the structural property. The rung-2 runbook already warns its artifact redaction is a name-allowlist over a whole Doppler config and should be treated as sensitive. |
-| Arm 7 silently compares the wrong pair after the split | Medium | Medium | Guard 3 mutation row 4 makes exactly this mutation red. |
+| Arm 7 silently compares the wrong pair after the split | Medium | Medium | D5 keeps it a literal-to-literal compare (a `locals` literal in `git-data.tf` instead of one in `zot-registry.tf`), so the arm stays meaningful; Test Scenario 4 is the must-RED case. |
 | Better Stack quota exhaustion (the 2026-08-14 402 outage) worsens with a second source | Low | Medium | git-data's volume is ~9 lines per boot plus gc faults. Retention pinned to 90 days, matching the incumbent. `betterstack-ingest-probe.sh` is the live accepting/refused check; the vendor exposes no usage endpoint. |
 | The new Sentry rule collides with Sentry's create-time dedup | Low | Low | An unused `frequency` (AC12), per the 2026-05-17 learning. |
 | ADR ordinal collision | None | — | No new ADR is created; ADR-198 is amended. The highest ordinal across all 66 `origin/*` refs is **ADR-200**, recorded in case a reviewer requests a split — in which case re-derive immediately before merge, never from this number. |
-| Sibling worktrees contend on `TEST_GROUP=all` (`/var/tmp`, rc=4) | Medium | Low | Report skipped-for-contention rather than forcing an untrustworthy run (AC22). |
+| **A green rehearsal that attests the WRONG sink** — the rehearsal root keeps resolving the shared token by name transformation | Was Medium, now closed | **Critical** | The highest-expected-cost failure in the plan: a paid host, an approval, and false confidence in the one artifact whose purpose is preventing a dark birth. Closed by renaming the rehearsal root's variable (D1) plus the same-variable-name parity arm; the workflow's Doppler-name preflight moves with it. |
+| **A metadata drop that never activates** — `enable` without `--now` on a host that never reboots | Low | **Critical** | Every assertion stays green while `user_data` remains readable by the `git` account. Closed by mandating `enable --now` (D3), the Guard 2 mutation row for dropping it, and the `nft_metadata_drop` boolean on `boot_complete`. |
+| Duplicate/superseded nft rules accumulating on re-assert (`nft -f` merges, it does not replace) | Was certain, now closed | Low today, Medium on the first rule change | Measured (V1b). Closed by the `table`/`delete table`/`table` idiom; the false claim in the inngest precedent is corrected in the same pass. |
+| Sibling worktrees contend on `TEST_GROUP=all` (`/var/tmp`, rc=4) | Medium | Low | Report skipped-for-contention rather than forcing an untrustworthy run (AC21). |
 
 ---
 
@@ -931,27 +1347,36 @@ processing activity and does not change the processor. Recorded so the omission 
 ## Test Scenarios
 
 Every scenario is `mutation -> guard reddens`, not `command -> terminal output`, because the deliverable
-includes guards.
+includes guards. Scenarios that merely restate an already-green CI gate this PR does not modify were cut.
 
 1. Append `betterstack_logs_token` to `GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST` with `+=` → arm 5.6a fails.
-2. Give `rung2-rehearsal/variables.tf` a `default` for `betterstack_logs_token` → arm 75 fails.
-3. Point the rehearsal root's ingest URL at 2457081 while prod uses the new source → arm 7 fails.
-4. Re-point arm 7's prod extraction at `zot-registry.tf` → against a fixture where the two URLs differ, the
-   arm must fail rather than silently compare the wrong pair.
+2. Give either root a `default` for the token variable → arm 75 fails.
+3. Rename the **prod** root's token variable but not the **rehearsal** root's → the new same-variable-name
+   parity arm fails. This is the P0 that would otherwise ship a rehearsal attesting the wrong sink, and it
+   is invisible to every value-level check because the value is a secret the suite must never read.
+4. Re-point arm 7's prod extraction back at `zot-registry.tf` → against a fixture where the two URLs differ,
+   the arm must fail rather than silently compare the wrong pair.
 5. Remove `meta skuid != 0` from the nft rule → Guard 2 row 1 fails.
 6. Move the nft rule into a `#` comment line → Guard 2 row 3 fails against the **render**, while a naive
-   source grep would still pass. This is the discriminating case.
+   source grep still passes. The discriminating case.
 7. Change the nft chain policy to `drop` → Guard 2 row 2 fails.
-8. Remove `nftables` from `packages:` → Guard 2 row 5 fails.
-9. Delete the `betterstack_ingest` filter value from `issue-alerts.tf` → Guard 1 row 1 fails.
-10. Add an emit at a brand-new stage with no filter, after a compliant one → Guard 1 row 2 fails.
-11. Empty Guard 1's extracted stage set → its anti-vacuity floor fails.
-12. Add a `file()` payload to `modules/git-data-userdata/main.tf` → the payload count moves to 10 and AC4
+8. Drop `--now` from the `systemctl enable` → Guard 2 row 4 fails.
+9. Remove the `delete table` line → Guard 2 row 5 fails (a re-assert would otherwise accumulate duplicates).
+10. Introduce a syntax error in the ruleset → `nft -c -f` rejects it (Guard 2 row 6). Without this the typo
+    reaches boot, where D3 downgrades it to a warning on a host serving without the control.
+11. Remove `nftables` from `packages:` → Guard 2 row 7 fails.
+12. Put `gitdata_nftables_metadata` on the low-severity rule only → Guard 1 row 2 fails. This is the D4
+    paging hole, and it is the scenario that proves Guard 1's strengthened property is load-bearing.
+13. Delete the `betterstack_ingest` filter value → Guard 1 row 1 fails.
+14. Add a new `STAGE=` name with no filter, after a compliant one → Guard 1 row 3 fails.
+15. Empty Guard 1's extracted stage set → its anti-vacuity floor fails.
+16. Add a `file()` payload to `modules/git-data-userdata/main.tf` → the payload count moves to 10 and AC4
     fails, proving the count assertion is live rather than decorative.
-13. Add a 21st `-target=` to `git_data_host_create` without touching the gate → `terraform-target-parity`
-    fails on both the set-equality and the partition-equation tests.
-14. Reorder the allowlist's 8 members → Guard 3 must-PASS row: the suite still passes.
-15. Add an unrelated `sentry_issue_alert` with its own stage filter → Guard 1 must-PASS row: still passes.
+17. Add an unrelated `sentry_issue_alert` with its own stage filter → Guard 1 must-PASS row: still passes.
+18. **Live, in the rehearsal:** as a non-root UID on the throwaway host, a `curl` to the metadata endpoint
+    must fail while the same call as root succeeds. The only arm that measures enforcement rather than
+    presence.
+
 
 ---
 
@@ -961,13 +1386,28 @@ includes guards.
 - `apps/web-platform/infra/git-data.tf`
 - `apps/web-platform/infra/git-data-luks.tf`
 - `apps/web-platform/infra/cloud-init-git-data.yml`
-- `apps/web-platform/infra/git-data-userdata-budget.sh`
+- `apps/web-platform/infra/git-data-userdata-budget.sh` — the ingest-URL **stub value** only. This cannot
+  break `git-data-render-strip-parity.test.sh`, which compares the two strip *expressions*, not stub values
+  (so D2's "hand-mirrored map stays byte-equal with no edit" and this edit are not in tension).
 - `apps/web-platform/infra/git-data-rung2-rehearsal.test.sh`
-- `apps/web-platform/infra/rung2-rehearsal/variables.tf`
-- `apps/web-platform/infra/sentry/issue-alerts.tf`
+- `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh` — **`INLINE_ALLOWLIST`** must gain the two new
+  inline paths or arm B1 hard-fails them (P0-1). D2's first draft wrongly claimed this file was untouched.
+- `apps/web-platform/infra/rung2-rehearsal/variables.tf` — the ingest-URL default **and** the token variable
+  rename (D1).
+- `apps/web-platform/infra/rung2-rehearsal/rehearsal.tf` — the module block's
+  `betterstack_logs_token = var.…` binding. Without this the rehearsal keeps resolving the shared token
+  (P0-2); arm 5.6b pins this line on both sides with an anchored regex.
+- `.github/workflows/git-data-rung2-rehearsal.yml` — the pre-dispatch Doppler-name preflight asserts
+  `BETTERSTACK_LOGS_TOKEN` is present in `prd_terraform`. After the rename it must assert
+  `GIT_DATA_BETTERSTACK_LOGS_TOKEN`, or it goes vacuous in exactly the direction of the bug. **This is a
+  preflight-name edit only — it does NOT dispatch the rehearsal** (see the hard constraint in AC24).
+- `apps/web-platform/infra/sentry/issue-alerts.tf` — both the new low-severity rule and the new
+  `gitdata_nftables_metadata` filter value on `git_data_boot_fatal` (D4).
 - `tests/scripts/lib/git-data-host-birth-gate.sh`
 - `plugins/soleur/test/terraform-target-parity.test.ts`
 - `scripts/followthroughs/git-data-rung2-evidence-capture.sh`
+- `scripts/encryption-posture-ledger.json` — a row for the new store, and the correction to
+  `git_data.baked_credentials_on_host` whose `does_not_defend` this PR falsifies.
 - `knowledge-base/engineering/architecture/decisions/ADR-198-baking-the-better-stack-ingest-token-into-git-data-user-data.md`
 - `knowledge-base/engineering/architecture/diagrams/model.c4`
 - `knowledge-base/project/learnings/workflow-patterns/2026-07-18-playwright-evaluate-filename-allowed-roots-and-token-transcript-fallback.md`
@@ -1001,7 +1441,7 @@ choice recorded above (D1, D2, R6), not an oversight.
   `local.betterstack_logs_ingest_url` would move the web hosts and the registry onto git-data's source and
   break `fresh-boot-ready.test.sh` S9.
 - `git-data-emit`'s stage vocabulary is a closed set that two independent files must agree on. Adding
-  `nftables_metadata` without the matching filter re-creates the write-only class in miniature — which is
+  `gitdata_nftables_metadata` without the matching filter re-creates the write-only class in miniature — which is
   what Guard 1 exists to prevent, and why D4 folds it into the same rule.
 - The rehearsal suite's arm 7 reaches into `zot-registry.tf` **by filename**. After D1 that file is no
   longer git-data's source of truth, and an arm left pointing at it stays green while comparing the wrong
