@@ -506,7 +506,11 @@ sed 's|^  _ihdg_verdict "dark"$|  _ihdg_verdict "dark"|; s|_ihdg_verdict "store_
 if cmp -s "$_always_dark" "$GATE"; then
   fail "H2: the always-dark mutation matched NOTHING; the verdict shape drifted"
 else
-  _rc=0; _out="$(bash -c "source '$_always_dark'; inngest_host_dark_gate --rows-file '$TMP/rows-g13.json' --query-rc 0 --finished-file '$FIN' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '$VOLID' --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot 0" 2>&1)" || _rc=$?
+  # `--now-epoch "$NOW"`, like every other arm. This call bypasses gate() and so bypassed the
+  # pinned clock: its fixture is dated 10:00 UTC, so the arm passed while the wall clock was near
+  # 10:00 and began returning `stale_row` instead of `dark` a couple of hours later. Measured — it
+  # was green in the morning and red in the afternoon with no edit in between.
+  _rc=0; _out="$(bash -c "source '$_always_dark'; inngest_host_dark_gate --rows-file '$TMP/rows-g13.json' --query-rc 0 --finished-file '$FIN' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '$VOLID' --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot 0 --now-epoch '$NOW'" 2>&1)" || _rc=$?
   if [[ "$_rc" -eq 0 && "$(printf '%s\n' "$_out" | tail -1)" == "dark" ]]; then
     pass   # the mutation is detectable: the G13 arm above asserts `store_populated` and would redden
   else
@@ -654,6 +658,35 @@ _out="$(inngest_host_dark_gate --rows-file "$TMP/rows-old.json" --query-rc 0 \
   --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot unset 2>&1)" && _rc=0 || _rc=$?
 if [[ "$(printf '%s\n' "$_out" | tail -1)" == "stale_row" ]]; then pass; else fail "Row 8b: a 2h-old row cleared under the real clock (got '$_out')"; fi
 
+# ══ Row 9 — NO INVOCATION MAY FLOAT ON THE WALL CLOCK ═══════════════════════════
+# G3 bounds the newest row's age against a clock, and every fixture in this file is dated
+# 2026-09-03 ~10:00 UTC. So any invocation that does not pin `--now-epoch` passes in the morning
+# and fails in the afternoon, with no edit in between — measured twice today, once on H2 and once
+# on the mutation harness's MUTATED run, where the drift was worse than a flaky arm: the mutated
+# verdict became `stale_row`, which differs from the expected token, so every B10 row reported the
+# mutation load-bearing while measuring the clock.
+#
+# `gate()` pins it for the arms that go through it. This asserts the ones that do NOT: every
+# direct `inngest_host_dark_gate --rows-file` call must either pin the clock or be one of the two
+# deliberate real-clock arms in Row 8, which stamp their fixtures at `date -u` precisely to
+# exercise the default branch.
+# Scans real CALL SITES: a non-comment line that invokes the gate, joined with the next three
+# lines so a backslash-continued invocation is judged whole (8, because `gate()` itself spans 7). An earlier cut of this check globbed
+# the file for the call text and matched its own explanatory comment plus the truncated head of
+# each continued call — `cq-assert-anchor-not-bare-token` again, in the arm written to prevent a
+# different vacuity.
+_unpinned=0
+while IFS= read -r _n; do
+  _chunk="$(sed -n "${_n},$((_n + 8))p" "${BASH_SOURCE[0]}" | tr '\n' ' ')"
+  case "$_chunk" in
+    *'--now-epoch'*)                 : ;;
+    *rows-now.json*|*rows-old.json*) : ;;   # Row 8: deliberately the real clock
+    *)  _unpinned=$((_unpinned + 1)); printf '    unpinned at line %s: %s\n' "$_n" "${_chunk:0:100}" >&2 ;;
+  esac
+done < <(grep -n 'inngest_host_dark_gate ' "${BASH_SOURCE[0]}" \
+         | grep -v '^[0-9]*: *#' | grep -v 'grep -n' | grep -vE '^[0-9]*:[^#]*grep' | cut -d: -f1)
+if [[ "$_unpinned" -eq 0 ]]; then pass; else fail "Row 9: ${_unpinned} direct gate invocation(s) do not pin --now-epoch — they will pass or fail depending on the time of day"; fi
+
 # ══ 4. THE GUARD-MUTATION HARNESS (AC B10) ══════════════════════════════════════
 # Mechanically runnable: each row patches a PRISTINE COPY of the gate, neutering ONE predicate's
 # check, and asserts the verdict for that predicate's bad input CHANGES. Input batteries can all
@@ -691,7 +724,13 @@ mutate() {
     fail "B10[$gn]: the UNMUTATED gate did not return '$tok' for this fixture (got '$base'); the row does not exercise the check."
     return
   fi
-  out="$(bash -c "source '$mutated'; inngest_host_dark_gate --rows-file '$rows' --query-rc 0 --finished-file '${FIN2:-$FIN}' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '${LIVEID:-$VOLID}' --followthrough-rc '${FTRC:-0}' --cutover-flag '${FLAGV:-rolled-back}' --diagnostic-boot '${DBOOT:-0}'" 2>&1)" || rc=$?
+  # THE MUTATED RUN MUST USE THE SAME CLOCK AS THE CONTROL. The control goes through `gate()`,
+  # which pins `--now-epoch "$NOW"`; this call did not, so it ran against the REAL clock. With
+  # every fixture dated 10:00 UTC that made the mutated run `stale_row` from mid-morning onward —
+  # a verdict that differs from the expected token, which is exactly what this row treats as
+  # "the mutation changed the verdict". Every B10 row was therefore passing on the clock rather
+  # than on the neutered check, and would have kept doing so.
+  out="$(bash -c "source '$mutated'; inngest_host_dark_gate --rows-file '$rows' --query-rc 0 --finished-file '${FIN2:-$FIN}' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '${LIVEID:-$VOLID}' --followthrough-rc '${FTRC:-0}' --cutover-flag '${FLAGV:-rolled-back}' --diagnostic-boot '${DBOOT:-0}' --now-epoch '${NOWV:-$NOW}'" 2>&1)" || rc=$?
   got="$(printf '%s\n' "$out" | tail -1)"
   if [[ "$got" != "$tok" ]]; then
     pass
@@ -713,7 +752,7 @@ mutate G15 's|^  \[\[ "\$data_bytes" =~ \^\[0-9\]+\$ \]\].*|  :|'               
 mutate G14 's|^  if \[\[ "\$data_mount_src" != "\$expected_dev".*|  if false; then|' "$TMP/rows-g14.json" mount_mismatch
 
 # G3's pin and G2's silence arm.
-mutate G3  's|^  \[\[ "\$row_age" -le "\$max_row_age" \]\].*|  :|'                   "$TMP/rows-g3.json"  stale_row --now-epoch 1788440400
+NOWV=1788440400   mutate G3  's|^  \[\[ "\$row_age" -le "\$max_row_age" \]\].*|  :|'      "$TMP/rows-g3.json"  stale_row --now-epoch 1788440400
 mutate G2  's|^    _ihdg_verdict "silent"; return \$?|    :|'                        "$TMP/rows-empty.json" silent
 
 # The dispatch-time predicates: same contract, driven through the extra gate args.
@@ -762,7 +801,7 @@ fi
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=107
+_FLOOR=108
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

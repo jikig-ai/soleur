@@ -200,14 +200,43 @@ if grep -qE '^# This flips on the recut branch' "$VARIABLES_TF"; then no "T1.11b
 # And the default must still be false at merge — the whole ordering rests on it.
 if grep -A4 'variable "inngest_expect_luks"' "$VARIABLES_TF" | grep -qE '^\s*default\s*=\s*false\s*$'; then ok "T1.11c inngest_expect_luks still defaults to false at merge"; else no "T1.11c inngest_expect_luks no longer defaults to false — the next host replace would refuse the ext4 mount"; fi
 
+# T1.12 THE EXIT TRAP MUST NOT TREAT SUCCESS AS FAILURE. Driven, not grepped — the trap machinery
+# is extracted verbatim and run both ways, which needs no root and so belongs in THIS tier rather
+# than the loopback one. It exists because the shipped handler ended in an unconditional `exit 1`
+# while the stage deliberately never disarms the trap: every successful LUKS boot re-entered the
+# handler, phoned home `inngest-luks-FAILED`, and exited 1, so cloud-init recorded a healthy stage
+# as a failed runcmd item and the only off-box signal said the opposite of the truth. Found by the
+# loopback suite's first real execution, where all three mount arms did their work correctly
+# (device mounted, header written, canary intact) and still returned rc 1.
+_T12="$(mktemp -d)"; trap 'rm -rf "$_T12"' EXIT
+{
+  printf 'set -euo pipefail
+STAGE=luks_open
+INNGEST_LUKS_DETAIL=/dev/null
+EXPECT_LUKS=false
+'
+  printf 'luks_emit() { echo "EMIT stage=$1 rc=$2"; }
+'
+  awk '/^    luks_err\(\) \{/,/^    trap luks_err EXIT$/' "$CLOUD_INIT" \
+    | sed -e 's/^    //' -e 's/\$\${/${/g' -e 's|/usr/local/bin/inngest-boot-phone-home.sh|echo PHONE|'
+} > "$_T12/trap.sh"
+# Non-vacuity: the extraction must have captured the handler AND the arming line.
+if grep -q '^luks_err() {' "$_T12/trap.sh" && grep -q '^trap luks_err EXIT$' "$_T12/trap.sh"; then ok "T1.12a the EXIT-trap machinery extracts (handler + arming line)"; else no "T1.12a could not extract the EXIT trap — T1.12b/c would be vacuous"; fi
+cp "$_T12/trap.sh" "$_T12/ok.sh"; printf 'exit 0\n' >> "$_T12/ok.sh"
+_rc=0; _out="$(bash "$_T12/ok.sh" 2>&1)" || _rc=$?
+if [ "$_rc" -eq 0 ] && ! printf '%s' "$_out" | grep -q 'inngest-luks-FAILED'; then ok "T1.12b a SUCCESSFUL stage exits 0 and does not phone home a failure"; else no "T1.12b a successful stage exited rc=${_rc} / phoned home a failure — every healthy boot would report itself failed (out: ${_out})"; fi
+cp "$_T12/trap.sh" "$_T12/bad.sh"; printf 'false\n' >> "$_T12/bad.sh"
+_rc=0; _out="$(bash "$_T12/bad.sh" 2>&1)" || _rc=$?
+if [ "$_rc" -ne 0 ] && printf '%s' "$_out" | grep -q 'inngest-luks-FAILED'; then ok "T1.12c a FAILED stage still exits non-zero and phones home"; else no "T1.12c the rc guard is disarmed — a failed stage exited rc=${_rc} without phoning home (out: ${_out})"; fi
+
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 20 ]; then
+if [ "$executed" -lt 23 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 20. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 23. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 20)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 23)\n' "$executed"
 fi
 
 echo ""

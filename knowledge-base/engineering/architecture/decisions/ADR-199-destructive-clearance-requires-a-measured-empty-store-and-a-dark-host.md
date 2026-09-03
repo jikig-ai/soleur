@@ -232,15 +232,19 @@ FIRST-BOOT-ONLY. What runs on boot 2+ is `inngest-luks-open.service`, whose scri
 formats: against a raw device it takes `reopen_skip_plaintext` or fails `reopen_not_luks`, so
 nothing is formatted, `/mnt/data` never mounts, and `inngest-redis.service`'s mount guard refuses
 the start. Guard 1 requires `hcloud_server.inngest` to show ZERO actions, so this dispatch cannot
-reboot or replace the host **by construction** — that is the three-dispatch split working, but it
-makes the ordering the operator's to own:
+reboot or replace the host **by construction** — that is the three-dispatch split working, and it
+means the cutover completes as a SEQUENCE OF FOUR `workflow_dispatch` RUNS rather than as one. No
+step below is performed by hand; each is an `apply_target` on apply-web-platform-infra.yml, gated
+and logged like any other, and the sequencing is a property of the gates rather than a checklist:
 
-    1. merge  ->  2. inngest-host-replace  (new cloud-init live; emits probe_schema=3;
-                                            ARM 1 mounts the existing ext4 volume plaintext)
-    3. inngest-volume-recut                (Guard 2 can now read schema-3 rows; volume born raw)
-    4. inngest-host-replace                (fresh FIRST boot; ARM 3 luksFormats the raw device)
+    1. merge                     `format` gone; expect_luks still false
+    2. apply_target=inngest-host-replace   new cloud-init goes live; the boot emits probe_schema=3;
+                                           ARM 1 mounts the existing ext4 volume plaintext
+    3. apply_target=inngest-volume-recut   Guard 2 can now read schema-3 rows; the volume is
+                                           replaced and born raw
+    4. apply_target=inngest-host-replace   a fresh FIRST boot; ARM 3 luksFormats the raw device
 
-Step 4 is not optional and was not stated anywhere. Both the success and the failure paths now name
+Run 4 is not optional and was named nowhere. Both the success and the failure paths now name
 it, with the reason, and the suite greps the superseded wording so a partial revert reddens.
 
 **5. The documented recovery aborted.** The failure path prescribed re-dispatching

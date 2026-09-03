@@ -250,11 +250,18 @@ env -u INNGEST_REDIS_LUKS_KEY bash "$REOPEN" > "$TMPROOT/reopen-nokey.log" 2>&1 
 # `-ne 0` alone is satisfied by the WRONG refusal: if the device were never luksFormatted the
 # reopen exits `reopen_not_luks` first, and the arm would report the credential path healthy while
 # measuring a different failure entirely. The logger stub records the token; require it.
-if [ "$R_RC" -ne 0 ] && grep -qF 'reopen_key_missing' "$TMPROOT/reopen-nokey.log"; then
+# THE TOKEN GOES TO `logger`, NOT TO STDOUT. The reopen script's `emit()` is
+# `logger -t inngest-luks-stage "SOLEUR_INNGEST_LUKS_STAGE stage=$1 ..."`, and this suite stubs
+# `logger` as a RECORDER on PATH — so the marker lands in logger.log, and the script's own stdout
+# carries nothing. Grepping the stdout capture asserted the token was absent from a stream it was
+# never written to; measured on the suite's first real run, where the arm failed while the script
+# behaved exactly as designed.
+if [ "$R_RC" -ne 0 ] && grep -qF 'reopen_key_missing' "$TMPROOT/logger.log"; then
   ok "BOOT2 reopen with NO passphrase fails LOUDLY, naming reopen_key_missing"
 else
-  no "BOOT2 no-passphrase reopen: rc=$R_RC, reopen_key_missing not logged (a different refusal, or none)"
+  no "BOOT2 no-passphrase reopen: rc=$R_RC, reopen_key_missing not in the logger recorder (a different refusal, or none)"
   sed -n '1,15p' "$TMPROOT/reopen-nokey.log" >&2
+  tail -5 "$TMPROOT/logger.log" 2>/dev/null >&2 || true
 fi
 
 R_RC=0
@@ -385,21 +392,31 @@ cryptsetup close inngest-redis >/dev/null 2>&1
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-# THE FLOOR IS PROJECTED, NOT MEASURED, and that is stated because it matters on the first run.
-# This suite needs root (losetup/cryptsetup/mkfs) and has never executed on the authoring machine,
-# so the number below was derived statically: 28 inline assertions + 6 `run_arm` calls + 7
-# `guard_case` calls x 2 (the case plus its render check) = 48, of which at most 4 sit in
-# mutually-exclusive branches (the BOOT2 mount block). 44 leaves that headroom.
+# THE FLOOR IS NOW MEASURED, not projected. The first CI run (the first time this suite ever
+# executed — it needs root, which the authoring machine does not have) reported 42 assertions
+# against a projected 48. The projection over-counted: it treated a few if/else assertion pairs as
+# two sites and assumed every branch of the BOOT2 mount block runs.
 #
-# If the FIRST CI run reds here and nowhere else, that is a calibration miss in this projection,
-# not a defect in the arms — read the printed count, confirm no arm reported FAIL, and set the
-# floor to the measured value. Do NOT lower it to whatever ran without checking that: a floor
-# lowered to match a suite that silently lost arms is the failure this line exists to catch.
-if [ "$executed" -lt 44 ]; then
+# 42 is taken as the floor only because the discrepancy is fully accounted for. Four arms DID fail
+# on that run, and the rule this comment previously stated — do not lower a floor to match a suite
+# that may have lost arms — is why that matters. Each failure was diagnosed and fixed, and none of
+# the four fixes adds or removes an assertion:
+#
+#   ARM1 / ARM2 / ARM3 returned rc 1 while doing their work correctly (device mounted, LUKS header
+#     written, canary intact). Cause: the stage's `trap luks_err EXIT` ended in an unconditional
+#     `exit 1`, so a SUCCESSFUL stage re-entered the handler and reported itself failed. That is a
+#     production defect in cloud-init-inngest.yml, not a test defect, and it is fixed there.
+#   BOOT2's no-passphrase arm grepped the script's STDOUT for `reopen_key_missing`. The token is
+#     written by `logger`, which this suite stubs as a recorder — so the assertion looked for it in
+#     a stream it was never written to. Fixed here.
+#
+# So the arm COUNT was never in question; four of the 42 were reporting failures. If a later run
+# reds on this floor, apply the same discipline: account for the difference before touching it.
+if [ "$executed" -lt 42 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 44. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 42. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 44)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 42)\n' "$executed"
 fi
 
 echo ""

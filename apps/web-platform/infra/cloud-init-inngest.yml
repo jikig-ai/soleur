@@ -517,6 +517,20 @@ runcmd:
     }
     luks_err() {
       rc=$?
+      # SUCCESS IS NOT A FAILURE, and this trap said it was. The stage deliberately does not
+      # `trap - EXIT` on success (see the note at the end of the block), so this handler runs on
+      # EVERY exit — and it ended in an unconditional `exit 1`. A completely successful LUKS stage
+      # therefore emitted stage=verify rc=0, then re-entered here, phoned home
+      # `inngest-luks-FAILED`, and exited 1: cloud-init recorded the runcmd item as failed, the
+      # off-box signal said the LUKS stage had failed, and it did so on every healthy boot.
+      # Caught by the loopback suite's FIRST real execution — every mount arm did its work
+      # correctly (device mounted, header written, canary intact) and still returned rc 1.
+      #
+      # Branch here rather than disarming: keeping the trap armed is what makes the rc guard
+      # reachable and testable, which is the property the end-of-block note is protecting.
+      if [ "$rc" -eq 0 ]; then
+        exit 0
+      fi
       _d="$(tail -c 400 "$INNGEST_LUKS_DETAIL" 2>/dev/null || true)"
       # The terminal fallback is a self-describing LITERAL, never a path: a path would be
       # shipped verbatim and impersonate a diagnostic (#7204).
@@ -626,6 +640,9 @@ runcmd:
     mountpoint -q /mnt/data || { echo "FATAL: /mnt/data is not a mountpoint after the stage completed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     luks_emit verify 0 "$${BLK_TYPE:-empty}"
     # NO `trap - EXIT`: disarming on success would make the rc guard unreachable and untested.
+    # That is why `luks_err` branches on rc instead — see its own note. Keeping the trap armed
+    # while the handler treated rc=0 as a failure is what made every successful boot report
+    # `inngest-luks-FAILED` and exit 1.
     LUKSEOF
 
   # Arm the boot-reopen unit. `--now` on purpose: the mapper is already open at this point (the
