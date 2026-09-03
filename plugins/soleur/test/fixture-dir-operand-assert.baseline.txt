@@ -16,38 +16,73 @@
 # them). Every newly-counted site pre-existed and was invisible. Verify by re-running the scanner
 # at the previous commit: the delta is in the detector, not the tree.
 #
-# Counts, not line numbers: line numbers churn on every unrelated edit above them, and a
-# baseline that reds for a comment insertion gets regenerated reflexively, which is how a
-# ratchet stops being one.
-12	.claude/hooks/context-reviewed-gate.test.sh
-10	.claude/hooks/pencil-collapse-guard.test.sh
-1	.claude/hooks/post-dispatch-watch-gate.test.sh
-6	.claude/hooks/pre-merge-auto-close-scan.test.sh
-7	.claude/hooks/pre-merge-rebase.test.sh
-2	.claude/hooks/ship-soak-followthrough-gate.test.sh
-19	.claude/hooks/ship-unpushed-commits-gate.test.sh
-5	.claude/hooks/skill-context-queries.test.sh
+# 2026-09-03 BURNED DOWN, 167 -> 8 (#7709). The grandfather list is spent. Every remaining site
+# is in ONE file and every one of them is GENUINELY GUARDED — they are acknowledged because the
+# detector cannot see the shape of the guard, not because the work was skipped.
+#
+#   .github/scripts/test/test-infra-suite-registration-mutations.sh  (8 sites)
+#     SB=$(mktemp -d -t infra-reg-mut.XXXXXXXX) || { echo "SETUP: mktemp failed" >&2; exit 2; }
+#     The script exits 2 before reaching any of the eight writes. `_guard_res` matches an abort
+#     only as the bare words `|| exit` / `|| return`, so it cannot see past the `{`.
+#
+# A brace-group pattern for exactly this WAS written, and was REVERTED before merge. It is worth
+# recording why, because the next reader will have the same idea:
+#
+#   Five shapes satisfied it while aborting nothing, all measured against the live scanner —
+#     (a) `|| { echo "step 1; exit code unknown" >&2; }`   a `;` INSIDE a quoted string reads as
+#         a statement boundary. The must-FAIL fixture used a COMMA, so one character separated
+#         the covered case from the uncovered one.
+#     (b) `|| { [[ -n "$V" ]] && exit 1; }`                a CONDITIONAL abort.
+#     (c) `d=$( … || { echo err >&2; exit 2; } )`          `exit` in a command substitution exits
+#         the SUBSHELL; the parent continues with d="". Reproduced live.
+#     (d) `d=$(mktemp -d); command -v jq >/dev/null || { echo SKIP; exit 0; }`   an UNRELATED
+#         abort on the same physical line, credited to the operand by an unbounded `.*`.
+#     (e) `|| { echo "…" >&2; return 1; }` at top level    `return` outside a function does not
+#         abort. Reproduced live: it created a .git in the probe's CWD.
+#
+#   Recognising a brace group correctly requires quoting, statement-boundary, subshell-scope and
+#   function-scope analysis — shell semantics a line-oriented regex cannot supply. Since a
+#   widening that silences a genuinely unguarded site is strictly worse than the false positives
+#   it removes, the eight are acknowledged here instead. An additional 54 command-substitution
+#   bindings in the corpus use the MULTI-LINE brace spelling, which no single-line pattern reaches
+#   at all.
+#
+#   apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh  (1 site)
+#     LATEST_TAG=$(git -C "$SCRIPT_DIR" tag --list 'vinngest-v*' ...)
+#     `tag` is unscoped in OPERAND_WRITE, so `tag --list` -- a READ -- is counted as a write. The
+#     A guard was added here during the burn-down and REMOVED on review: it guarded a read.
+#     Scoping `tag`/`branch`/`config` to their mutating spellings is a detector narrowing and
+#     belongs with the P1b scanner work, not here.
+#
+#     Deliberately NOT claimed: that `$(cd ... && pwd)` under `set -e` is provably non-empty.
+#     That reasoning was used earlier in this branch and is FALSE as a universal — measured, a
+#     shell STARTED in a since-deleted directory has a null cwd cache, so `pwd` errors and the
+#     substitution is empty. The row stands on the read/write misclassification alone.
+#
+# THE TEST FOR "VACUOUS", so the rule above is not applied lexically: a guard is vacuous when the
+# binding CANNOT reach the use site holding an empty value. `set -euo pipefail` with no toggles is
+# evidence, not proof — a producer ending in `printf '%s' "$d"` returns 0 while printing nothing,
+# so its consumer can still observe empty under errexit. Roughly twenty of the guards this
+# burn-down added are of that shape and are defensible defense-in-depth. Do not delete a guard
+# because its file lacks `set +e`; delete it only when you have traced that no path reaches the
+# use with an empty value, as was done here and for lint-migration-fk-preconditions.sh.
+#
+# Also retired here: apps/web-platform/scripts/lint-migration-fk-preconditions.sh, which an
+# earlier revision of this entry acknowledged as a measured false positive on the grounds that its
+# `|| pwd` fallback cannot produce an empty value. That is true and it is the wrong test. The
+# reachable hazard there is a WRONG root, not an empty one — `git -C "" rev-parse --show-toplevel`
+# returns rc=0 printing the CALLER's repo root — and the flagged verb is `fetch`, a write. It now
+# asserts identity (the resolved root must contain the migrations directory) and fails closed,
+# which also removes a silent false green where the lint exited 0 having examined nothing.
+#
+# NOT recognised, and this is the load-bearing half: `|| true` and `|| <fallback>`. Twelve live
+# sites sit next to one. They are the OPPOSITE of a guard — they permit the failure — and the
+# planning estimate that ~140 sites carried an unrecognised custom guard was measured false: of
+# 167, exactly 8 did, and they are the eight below.
+#
+# The suite asserts SITES == this file's acknowledged total EXACTLY, in both directions, and pins
+# a corpus floor of 850 files separately. Equality alone cannot carry the anti-narrowing burden:
+# a scanner narrowed to a subdirectory keeps finding these eight and passes.
+#
 8	.github/scripts/test/test-infra-suite-registration-mutations.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
-2	apps/web-platform/infra/workspaces-luks-loopback.test.sh
-1	apps/web-platform/scripts/lint-migration-fk-preconditions.sh
-1	plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh
-2	plugins/soleur/skills/constraint-scaffold/test/generator.test.sh
-2	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
-1	plugins/soleur/skills/review/test/emit-review-trailer.test.sh
-2	plugins/soleur/test/fixture-dir-operand-assert.test.sh
-12	plugins/soleur/test/harvest-debt.test.sh
-1	plugins/soleur/test/ralph-loop.test.sh
-12	plugins/soleur/test/resolve-git-root.test.sh
-1	plugins/soleur/test/token-drift-workflow-causes.test.sh
-18	plugins/soleur/test/worktree-manager-atomic-config.test.sh
-1	plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh
-4	plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh
-7	scripts/context-reviewed-gate-discoverability.sh
-1	scripts/followthroughs/anthropic-admin-key-6297.test.sh
-2	scripts/lib/legal-base-ref.test.sh
-11	scripts/lint-dual-lockfile.test.sh
-2	scripts/lint-legal-mirror-drift-baseline.test.sh
-2	scripts/lint-legal-scope-block-placement.test.sh
-7	scripts/lint-workflow-install-sites.test.sh
-4	tests/hooks/test_hook_emissions.sh

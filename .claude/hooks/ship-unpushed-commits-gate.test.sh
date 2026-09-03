@@ -143,6 +143,7 @@ run_hook() {
 t1_unpushed_commits_deny() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-unpushed")
+  assert_fixture_dir "$work"
   # Add a local commit AFTER the initial push; do not push.
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
@@ -160,6 +161,7 @@ t1_unpushed_commits_deny() {
 t2_clean_state_pass() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-clean")
+  assert_fixture_dir "$work"
   # No local commits ahead of origin/<branch>.
 
   local payload out exit_code=0
@@ -234,6 +236,7 @@ t5_no_upstream_pass() {
 t6_non_merge_command_pass() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-status")
+  assert_fixture_dir "$work"
   echo "x" > "$work/x.txt"
   git -C "$work" add x.txt
   git -C "$work" commit -q -m "local only"
@@ -250,6 +253,7 @@ t6_non_merge_command_pass() {
 t7_chained_command_deny() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-chained")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "the fix"
@@ -266,6 +270,7 @@ t7_chained_command_deny() {
 t8_substring_false_positive_pass() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-echoes")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local commit"
@@ -286,6 +291,7 @@ t8_substring_false_positive_pass() {
 t9_fetch_failure_deny() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-no-net")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local commit"
@@ -364,6 +370,7 @@ t11_hook_ordering() {
 t12_emit_incident_prefix_length() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-prefix")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local"
@@ -394,6 +401,7 @@ t12_emit_incident_prefix_length() {
 t13_incidents_redirect() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-redirect")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local"
@@ -416,6 +424,7 @@ t13_incidents_redirect() {
 t14_stdout_json_clean() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-clean-stdout")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "local"
@@ -443,6 +452,7 @@ t14_stdout_json_clean() {
 t15_commit_body_fp_pass() {
   local tmp; tmp=$(mktemp -d)
   read -r work origin incidents < <(make_synced_branch "$tmp" "feat-fp")
+  assert_fixture_dir "$work"
   echo "fix" > "$work/fix.txt"
   git -C "$work" add fix.txt
   git -C "$work" commit -q -m "the actual fix"
