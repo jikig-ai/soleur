@@ -19,10 +19,16 @@ brand_survival_threshold: single-user incident
 >   (`CAPACITY_CONTENDED reason=sibling_runs`), and a run queued behind it measures nothing useful.
 > - **5.4** (`actionlint`) — run and clean; `scripts/lint-workflows.sh` reports its pre-existing
 >   census findings (tracked #7042) and none of them name the new job.
-> - **5.5** — done for both guards (Guard 1: 34 assertions; Guard 2: 61, including a 20-case
->   per-PREDICATE drop-one battery and a guard-mutation harness that requires each mutation to
->   change exactly one line). Also done for all 13 structural arms of the LUKS suite.
-> - **4.4 / 4.5** — DONE. The CLO ruled, and widened it: the propagation set is THIRTEEN files, not
+> - **5.5** — done for both guards. **Counts corrected 2026-09-03 after review:** the figures here
+>   read "Guard 1: 34; Guard 2: 61" and were the FLOORS, not the assertion counts — 38 and 69 ran
+>   at the time of writing. After the review fixes they are **Guard 1: 48, Guard 2: 108**, and the
+>   structural LUKS suite is **17 arms, not 13**. Both suites now also self-test the `expect()` /
+>   `check()` WRAPPER, not only `pass()`/`fail()`: replacing either wrapper body with a bare `pass`
+>   produced a full green run with every anti-vacuity floor reporting healthy. Guard 2's floor also
+>   compared against 55 while printing 71 — 22 assertions of slack — and its drop-one floor counted
+>   CALLS, so twenty `predicate G1` lines would have satisfied a floor of 20; it counts distinct
+>   predicates now.
+> - **4.4 / 4.5** — DONE. The CLO ruled, and widened it: the propagation set is TWELVE files, not
 >   one limb. PA-13 (e), (f) and (g)/TOM-11 are corrected in place with the CLO's drafted wording;
 >   the published data-protection disclosure and privacy policy are corrected canonical + mirror
 >   with the SHAs re-pinned; ADR-030's `Bound to 127.0.0.1 only` Decision clause is STRUCK (it is
@@ -46,9 +52,17 @@ undeliverable. Phase order is load-bearing throughout.
 - [ ] 0.1 Re-run every Premise Validation reading in the plan; record verbatim.
 - [x] 0.2 `terraform plan` — record the verbatim line proving `apply_target=inngest-host` yields a
       **zero-delete** plan under `ignore_changes = [format]`.
+      **CORRECTED 2026-09-03:** this was ticked against the same measurement AC B4 records as
+      FALSIFIED AS WRITTEN, which is not a completion. Re-measured, and the result is the opposite
+      of what the task assumed: with `format` REMOVED and the lifecycle block kept,
+      `hcloud_volume.inngest_redis` plans as `actions=["no-op"]` — no replace is queued, so the
+      argument for keeping the line was false. The zero-delete property holds; the reason recorded
+      for it did not. See the ADR-199 addendum.
 - [ ] 0.3 `gh api repos/:owner/:repo/environments/inngest-cutover` — reviewer set non-empty.
-- [x] 0.4 Read all three `.c4` files; complete the external-actor / external-system / container /
+- [ ] 0.4 Read all three `.c4` files; complete the external-actor / external-system / container /
       access-relationship enumeration and record what was checked.
+      **UNTICKED 2026-09-03:** the enumeration record this task requires does not exist anywhere in
+      the branch. The tick asserted a deliverable that was never written.
 - [x] 0.5 Verify `--history-retention` against the inngest-server unit file.
 - [ ] 0.6 Confirm `RECUT-INNGEST-VOLUME` is a unique confirm literal and the workflow is at 7 of 10
       dispatch inputs before adding the 8th.
@@ -110,7 +124,10 @@ undeliverable. Phase order is load-bearing throughout.
 
 ## Phase 3 — MERGE B: the gated apply_target
 
-- [x] 3.1 **Write both mutation matrices BEFORE the guards.**
+- [ ] 3.1 **Write both mutation matrices BEFORE the guards.**
+      **UNTICKED 2026-09-03:** nothing in the branch supports the ordering claim, and the review
+      found twelve guard mutations that survived both batteries — which is the outcome a
+      matrix-first discipline exists to prevent. Fixtures for all twelve were added after the fact.
 - [x] 3.2 `tests/scripts/lib/inngest-volume-recut-gate.sh` — allow-set is the volume + its
       attachment only; `hcloud_server.inngest` is named-live and must show zero actions. Fail-closed
       preamble, ID-PIN on `.change.before.id`, `id_pin_absent` when the pin is empty on a genuine
@@ -131,7 +148,9 @@ undeliverable. Phase order is load-bearing throughout.
       `inngest_host`, `inngest_host_replace`, **and** `cutover-inngest.yml`'s arm/resume path.
 - [x] 3.9 Synchronous Doppler flag re-read immediately before apply; refuse on anything but
       `rolled-back` / `aborted`.
-- [x] 3.10 Register in all **six** sites: workflow `options:`, the bound job,
+- [x] 3.10 Register in all **six** sites (**5-of-6 when first ticked, 2026-09-03**: the
+      `confirm` input DESCRIPTION was the missing one, which is the site that tells the operator
+      which targets carry an `environment:` gate). Workflow `options:`, the bound job,
       `terraform-target-parity.test.ts`, `stock-preflight-coverage.test.ts`, `test-all.sh`,
       `infra-validation.yml`. Amend the `confirm` input **description** too — it enumerates which
       targets carry an `environment:` gate.

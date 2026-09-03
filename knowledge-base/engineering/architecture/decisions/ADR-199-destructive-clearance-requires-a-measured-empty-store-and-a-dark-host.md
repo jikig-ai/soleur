@@ -165,3 +165,87 @@ a guard whose stated justification is false is the defect class this ADR exists 
 - **Amend ADR-142 to permit a destroy when the store looks empty.** Rejected: that makes the
   sole-copy protection conditional on a reader's judgement. Bounding it instead leaves ADR-142
   categorical and puts the conditionality in a gate that must measure before it may proceed.
+
+## Addendum — 2026-09-03 (review of this ADR's own delivery)
+
+Appended, not merged into the text above, because three of the claims that text makes were
+falsified by measuring them and the superseded wording is the useful part of the record.
+
+**1. The recency bound was never a recency bound.** Commitment 1 says the twenty predicates read
+"a single `SOLEUR_INNGEST_SERVER_PROBE` row on the current `boot_id`", and the gate implemented
+that as: choose the newest row CARRYING `probe_schema=`, then compare its `boot_id` against the
+newest row's. `boot_id` is CONSTANT across every row of one boot, so a row from ninety minutes ago
+and a row from ten seconds ago compared equal — the check that reads like a staleness bound was
+not one, and this ADR cited it as though it were.
+
+The field order made it maximally adverse: the emitter writes `http_code` and `server_active`
+BEFORE `probe_schema`, so a newest row truncated in between carries the live proof that the host is
+SERVING, satisfies the boot pin, and is then discarded in favour of an older row that says the
+opposite. Constructed and executed during review: a newest row reading `http_code=200
+server_active=active` with no `probe_schema=` returned **`dark`, rc 0**.
+
+Two changes. The chosen row must now BE the newest row — a newest row that cannot be graded is
+`unreadable`, never a licence to reach further back. And G3 is now the wall-clock bound this ADR's
+own "≤90-minute-old" heading always assumed and never enforced: the newest row must be no older
+than `--max-row-age` (5400s), with a row dated in the FUTURE refused separately, since that is the
+sign shape a `-le` bound on a signed difference waves through.
+
+**2. The monotonicity argument's treatment of the raced `FLUSHALL` was wrong.** The paragraph above
+says no concurrent `FLUSHALL` can be authorized and treats the raced write as the one write that
+cannot make a zero reading stale. `run_preflush_flip` in `inngest-cutover-flip.sh` runs
+stop → FLUSHALL → assert → record_flush_latch → **start_server**, and the `flushed` resume arm
+calls `start_server` with no flush at all. The raced transition's LAST act starts the only writer
+that can increase the count. Its trigger is also outside GitHub's reach: `inngest-cutover-flip.timer`
+is `OnBootSec=30s` / `OnUnitActiveSec=30s` and polls a Doppler flag, so the
+`deploy-inngest-restart` concurrency group — which serialises workflow JOBS — cannot serialise it.
+G19 therefore SAMPLES the flag; it does not hold it. The residual window between G19's read and the
+apply is real and is now recorded in the gate source rather than argued away.
+
+**3. Clearance is not encryption, and the gate could have cleared a plan that produced neither.**
+`hcloud_volume.inngest_redis` declared `format = "ext4"` under a `lifecycle { ignore_changes =
+[format] }`, with a long comment arguing the line had to stay because removing it is ForceNew and
+would queue a replace that makes `apply_target=inngest-host` abort permanently. Measured against
+live state rather than argued:
+
+    line removed, lifecycle kept:   hcloud_volume.inngest_redis  actions=["no-op"]
+
+and on the recut plan itself (`-replace=hcloud_volume.inngest_redis`):
+
+    with    format = "ext4":  after.format=ext4
+    without format = "ext4":  after.format=null
+
+`ignore_changes` suppresses DIFFS, never CREATES. So every predicate in this ADR could have held,
+the destroy could have been correctly authorized, and the replacement volume would have been
+created ext4 — mounted plaintext by cloud-init ARM 1, spending the one-shot empty-store window on
+an unencrypted store while the workflow printed "The new volume is RAW" twice. The line is gone,
+and Guard 1 now reads `.change.after.format` from the plan and refuses unless it is null: the
+property is enforced against the plan, not against the config staying as it is.
+
+This is the sharpest form of the distinction this ADR is built on. Clearance answers "may this be
+destroyed"; it says nothing about what replaces it. A gate that measures the destroy and not the
+create is a gate that can be entirely correct and still leave the fleet in the state it exists to
+prevent.
+
+**4. The recut does not finish the cutover, and nothing said so.** The dispatch's success text read
+"the LUKS cut happens on the next boot". The cut lives in cloud-init `runcmd`, which is
+FIRST-BOOT-ONLY. What runs on boot 2+ is `inngest-luks-open.service`, whose script OPENS and never
+formats: against a raw device it takes `reopen_skip_plaintext` or fails `reopen_not_luks`, so
+nothing is formatted, `/mnt/data` never mounts, and `inngest-redis.service`'s mount guard refuses
+the start. Guard 1 requires `hcloud_server.inngest` to show ZERO actions, so this dispatch cannot
+reboot or replace the host **by construction** — that is the three-dispatch split working, but it
+makes the ordering the operator's to own:
+
+    1. merge  ->  2. inngest-host-replace  (new cloud-init live; emits probe_schema=3;
+                                            ARM 1 mounts the existing ext4 volume plaintext)
+    3. inngest-volume-recut                (Guard 2 can now read schema-3 rows; volume born raw)
+    4. inngest-host-replace                (fresh FIRST boot; ARM 3 luksFormats the raw device)
+
+Step 4 is not optional and was not stated anywhere. Both the success and the failure paths now name
+it, with the reason, and the suite greps the superseded wording so a partial revert reddens.
+
+**5. The documented recovery aborted.** The failure path prescribed re-dispatching
+`inngest-volume-recut`, on the reasoning that Guard 1's recovery bare-create arm would accept it.
+That arm is real, but the dispatch never reaches Guard 1: Guard 2 runs BEFORE the plan and grades
+the LIVE host, so after a partial apply it returns `id_pin_mismatch`, `mount_mismatch` and
+`redis_down` in turn. The reachable route is `apply_target=inngest-host`, whose additive-only guard
+admits a bare create of an absent volume — and which, with `format` gone, creates it raw.
