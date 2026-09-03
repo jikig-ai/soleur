@@ -67,6 +67,23 @@ assert_absent() {
   else fail "$desc (unexpected '$needle' in '$haystack')"; fi
 }
 
+# INSTRUMENT SELF-TEST (#7695 mutation audit). Every claim in this file is dispatched through
+# pass()/fail(), and the LATCH_MIN_ASSERTIONS floor at the bottom dispatches through fail()
+# too. One edit — `fail() { echo ...; }` stops incrementing FAIL — makes all 45 assertions AND
+# the floor that backstops them report green together. No assertion can catch that, because
+# every assertion is downstream of it. So prove both counters move before trusting anything,
+# then reset. Reported directly with printf + exit (ADR-193): a check routed through the
+# helper it backstops dies with the same edit that disarms the helper. Output suppressed so
+# the deliberate FAIL row cannot be misread as a real one.
+pass "instrument self-test" >/dev/null
+fail "instrument self-test" >/dev/null
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then
+  printf 'FATAL: assertion counters are broken (PASS=%s FAIL=%s, expected 1/1).\n' "$PASS" "$FAIL" >&2
+  exit 1
+fi
+PASS=0
+FAIL=0
+
 WORK="" TRACE="" STATE="" LOGTRACE="" LATCH="" MOUNTDIR=""
 SYSCTL="" REDIS="" FLAGSET="" LOGGER=""
 
@@ -336,7 +353,11 @@ teardown_case
 # --- assertion-count FLOOR ------------------------------------------------------------------
 LATCH_MIN_ASSERTIONS=45  # derived from a green run; raise in lockstep when adding assertions
 if [[ "$PASS" -lt "$LATCH_MIN_ASSERTIONS" ]]; then
-  fail "assertion-count floor: only $PASS assertions ran, expected >= $LATCH_MIN_ASSERTIONS — a block was skipped or emptied"
+  # printf + exit, NOT fail() (ADR-193, and #7695's mutation audit): routing the floor through
+  # the counter it exists to protect means one edit disarms both.
+  printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
+    "$PASS" "$LATCH_MIN_ASSERTIONS" >&2
+  exit 1
 fi
 
 echo

@@ -123,7 +123,7 @@ jobs:
         run: |
           set -uo pipefail
           TF=apps/web-platform/infra/zot-registry.tf
-          DRIFT=""; PROBLEMS=""
+          DRIFT=""; PROBLEMS=""; NOTES=""
 
           # --- (1) offline age + coherence -------------------------------------------
           # Assignment-then-$? would ABORT here: a GitHub `run:` block defaults to
@@ -200,52 +200,146 @@ jobs:
             fi
           done
 
-          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ]; then
-            echo "zot pin is current ($PINNED), digests resolve in their own repositories, and the analysis is fresh."
+          # --- (5) the git-data rehearsal's ubuntu base pin (#7544) --------------------
+          # WHY HERE AND NOT A FOLLOW-THROUGH PROBE. The follow-through substrate is a one-shot
+          # CLOSE-CRITERIA tracker: exit 0 means "close the issue". On the first sweep after the
+          # pin merges, pinned == live by construction, so a probe would close #7544 and then
+          # leave the reopen window (CLOSED_LOOKBACK_DAYS=14) forever. `ubuntu:24.04` does not
+          # move on a 14-day schedule, so the mechanism would terminate precisely BECAUSE drift
+          # was absent. This step is already the right shape: cron-driven, unbounded, polls
+          # upstream against a committed pin, files ONE idempotent action-required issue.
+          #
+          # THE MEDIA-TYPE CHECK LIVES HERE, not in the offline suite, because it needs network.
+          # A platform-specific digest would pin the rehearsal to one architecture; the registry
+          # reports which kind it served, and only an index/manifest-list media type is valid.
+          UB_FILE=apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh
+          # ANCHORED ON THE ASSIGNMENT, exactly as (2) is, and for the same measured reason: an
+          # unanchored grep is satisfied by a comment, and this file's UBUNTU_BASE stanza
+          # discusses the digest in prose directly above the literal.
+          set +e
+          UB_PINNED="$(grep -oE "^UBUNTU_BASE='ubuntu:24\.04@sha256:[0-9a-f]{64}'" "$UB_FILE" | grep -oE 'sha256:[0-9a-f]{64}')"
+          set -e
+          if [ -z "$UB_PINNED" ]; then
+            PROBLEMS="${PROBLEMS}- could not parse \`UBUNTU_BASE\` from \`$UB_FILE\` (anchored on the assignment); this run cannot tell whether the git-data rehearsal's base image has drifted."$'\n'
+          else
+            set +e
+            UB_TOK_RC=0
+            UB_T="$(curl -sS --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/ubuntu:pull" 2>/dev/null | jq -r '.token // empty')" || UB_TOK_RC=$?
+            UB_HDR="$(curl -sS --max-time 20 -o /dev/null -D - -H "Authorization: Bearer ${UB_T}" -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json' "https://registry-1.docker.io/v2/library/ubuntu/manifests/24.04" 2>/dev/null)"
+            UB_RC=$?
+            set -e
+            UB_LIVE="$(printf '%s' "$UB_HDR" | grep -i '^docker-content-digest:' | tr -d '\r' | awk '{print $2}')"
+            UB_CT="$(printf '%s' "$UB_HDR" | grep -i '^content-type:' | tr -d '\r' | awk '{print $2}')"
+            # BOTH rcs, token one FIRST. UB_RC covers only the manifest curl: a failed token
+            # fetch leaves UB_T empty, the manifest request then 401s and still exits 0, so
+            # the message reported rc=0 — the reassuring reading of an unmeasured channel.
+            if [ "$UB_TOK_RC" -ne 0 ] || [ -z "$UB_T" ]; then
+              PROBLEMS="${PROBLEMS}- could not obtain a Docker Hub anonymous pull token (rc=$UB_TOK_RC); the \`ubuntu:24.04\` digest was NOT compared this run."$'\n'
+            elif [ "$UB_RC" -ne 0 ] || [ -z "$UB_LIVE" ]; then
+              PROBLEMS="${PROBLEMS}- could not resolve the live \`ubuntu:24.04\` manifest-list digest (rc=$UB_RC); this run cannot rule out base-image drift under the git-data rehearsal."$'\n'
+            elif ! printf '%s' "$UB_CT" | grep -qE 'image\.index\.v1\+json|manifest\.list\.v2\+json'; then
+              PROBLEMS="${PROBLEMS}- the registry served \`$UB_CT\` for \`ubuntu:24.04\`, which is not an index/manifest-list media type; a platform-specific digest would pin the git-data rehearsal to ONE architecture. Treat the comparison below as unverified."$'\n'
+            elif [ "$UB_PINNED" != "$UB_LIVE" ]; then
+              # DRIFT, not a PROBLEM: upstream moving is the condition this exists to report,
+              # and it must not fire the ops-email exit the way a broken probe does.
+              DRIFT="${DRIFT:+$DRIFT+}ubuntu-base"
+              NOTES="${NOTES}- **\`ubuntu:24.04\` has moved under the git-data rung-1 rehearsal.** Pinned \`$UB_PINNED\`, live \`$UB_LIVE\`. R1 classifies ext4 features against an allowlist built for a specific e2fsprogs, so bumping the pin is a DELIBERATE act: re-measure \`mke2fs -V\` inside the new image and reclassify, do not refresh the R1 fixture wholesale. Pin literal: \`UBUNTU_BASE\` in \`$UB_FILE\`."$'\n'
+            fi
+          fi
+
+          if [ -z "$DRIFT" ] && [ -z "$PROBLEMS" ] && [ -z "$NOTES" ]; then
+            echo "zot pin is current ($PINNED), digests resolve in their own repositories, the git-data rehearsal's ubuntu base pin matches the live manifest list, and the analysis is fresh."
             exit 0
           fi
+
+          # Which pin(s) does this run actually implicate? The issue is shared and idempotent,
+          # so the body must say which, rather than assuming the zot one.
+          ZOT_IMPLICATED=""
+          case "$DRIFT" in *stale*|*behind*|*swapped*) ZOT_IMPLICATED=1 ;; esac
+          [ -n "$PROBLEMS" ] && case "$PROBLEMS" in *zot*) ZOT_IMPLICATED=1 ;; esac
+          UBUNTU_IMPLICATED=""
+          case "$DRIFT" in *ubuntu-base*) UBUNTU_IMPLICATED=1 ;; esac
+          [ -n "$PROBLEMS" ] && case "$PROBLEMS" in *ubuntu*) UBUNTU_IMPLICATED=1 ;; esac
 
           # --- file/update ONE idempotent issue ----------------------------------------
           # `action-required` is load-bearing, not decoration: it is the ONLY label the weekly
           # operator digest reads. Without it "we are 18 releases behind" lands in a label
           # nobody queries -- reconstructing this issue's own root cause in a new channel.
           gh label create zot-pin-drift --color FBCA04 \
-            --description "zot registry image pin is stale, behind upstream, or unverifiable (#7282)" \
+            --description "a committed image pin is stale, behind upstream, or unverifiable — zot (#7282) or the git-data rehearsal's ubuntu base (#7544)" \
             --force >/dev/null 2>&1 || true
           {
-            echo "The pinned zot registry image needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            # THE BODY IS PER-PIN NOW. This issue carries two unrelated pins since #7544, and
+            # every actionable line below was zot-shaped: an ubuntu-only drift produced a title
+            # saying "zot registry image", a table of zot versions, "zot is the sole pull path",
+            # and a remediation pointing at the zot provenance sidecar. An operator following it
+            # would bump zot and never touch UBUNTU_BASE — the drift would stay open while the
+            # instruction to fix it read as complete.
+            if [ -n "$ZOT_IMPLICATED" ]; then
+              echo "The pinned zot registry image needs attention (condition: \`${DRIFT:-probe-failure}\`)."
+            else
+              echo "A committed image pin needs attention (condition: \`${DRIFT:-probe-failure}\`). **The zot pin is NOT implicated in this run** — see the pin-specific section below."
+            fi
             echo
-            echo "| | |"
-            echo "|---|---|"
-            echo "| Pinned | \`$PINNED\` |"
-            echo "| Upstream latest | \`$LATEST\` |"
-            echo
+            if [ -n "$ZOT_IMPLICATED" ]; then
+              echo "| zot | |"
+              echo "|---|---|"
+              echo "| Pinned | \`$PINNED\` |"
+              echo "| Upstream latest | \`$LATEST\` |"
+              echo
+            fi
             if [ -n "$PROBLEMS" ]; then echo "$PROBLEMS"; echo; fi
-            echo "zot is the **sole pull path** (ADR-096) with no fallback, so this is a"
-            echo "supply-chain and reliability item, not cosmetic."
-            echo
+            if [ -n "$NOTES" ]; then echo "$NOTES"; echo; fi
+            if [ -n "$ZOT_IMPLICATED" ]; then
+              echo "zot is the **sole pull path** (ADR-096) with no fallback, so this is a"
+              echo "supply-chain and reliability item, not cosmetic."
+              echo
+            fi
+            if [ -n "$UBUNTU_IMPLICATED" ]; then
+              echo "### ubuntu:24.04 — the git-data rung-1 rehearsal base image"
+              echo
+              echo "Pin literal: \`UBUNTU_BASE\` in \`apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh\`."
+              echo
+              echo "**Do NOT refresh the R1 fixture to make it pass.** R1 classifies the birth"
+              echo "filesystem's ext4 features against an allowlist built for a specific e2fsprogs,"
+              echo "and that classification is the point — the diff is not. Re-measure \`mke2fs -V\`"
+              echo "inside the NEW image, reclassify any feature the allowlist does not carry, then"
+              echo "move the pin. The digest must be the MANIFEST-LIST one:"
+              echo
+              echo '```'
+              echo "docker buildx imagetools inspect ubuntu:24.04 | grep '^Digest:'"
+              echo '```'
+              echo
+            fi
             echo "Offline gate output:"
             echo
             echo '```'
             echo "$OUT"
             echo '```'
             echo
-            echo "Remediation — follow \`## Bump procedure\` in"
+            if [ -n "$ZOT_IMPLICATED" ]; then
+            echo "Remediation (zot) — follow \`## Bump procedure\` in"
             echo "\`apps/web-platform/infra/zot-image.provenance.md\`. Agent entry point:"
             echo
             echo '```'
             echo "/soleur:one-shot \"refresh the zot pin provenance sidecar per apps/web-platform/infra/zot-image.provenance.md section 'Bump procedure'\""
             echo '```'
             echo
-            echo "_Filed automatically by rule-audit.yml zot-pin drift detection (#7282)._"
+            fi
+            echo "_Filed automatically by rule-audit.yml image-pin drift detection (#7282 zot, #7544 ubuntu base)._"
           } > "$RUNNER_TEMP/zot-pin-drift-body.md"
+          if [ -n "$ZOT_IMPLICATED" ]; then
+            _ISSUE_TITLE="zot-pin-drift: registry image pin needs attention"
+          else
+            _ISSUE_TITLE="image-pin-drift: the git-data rehearsal base image pin needs attention"
+          fi
           EXISTING="$(gh issue list --label zot-pin-drift --state open --json number --jq '.[0].number // empty')"
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
             echo "Updated existing zot-pin-drift issue #$EXISTING."
           else
             gh issue create --label zot-pin-drift --label action-required \
-              --title "zot-pin-drift: registry image pin needs attention" \
+              --title "${_ISSUE_TITLE}" \
               --body-file "$RUNNER_TEMP/zot-pin-drift-body.md"
           fi
 

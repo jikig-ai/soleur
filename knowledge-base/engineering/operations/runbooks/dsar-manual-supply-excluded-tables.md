@@ -53,6 +53,14 @@ WHERE actor_id = :uid OR delegating_principal = :uid
 ORDER BY created_at;
 ```
 
+A table returning zero rows becomes a statement in a statutory response, so confirm the
+query actually reached prd before reporting it as "no data": `doppler run -p soleur -c prd --
+scripts/supabase-logs-query.sh --ref ifsccnjhymdmidffkzhl --source postgres_logs --since <window>` shows
+the read in the platform logs and answers with a coverage verdict rather than a bare zero.
+**The ref is required and it is the APPLICATION project (`soleur-web-platform`)** — the
+subject's data does not live in the Inngest backing project. Runbook:
+`knowledge-base/engineering/operations/runbooks/supabase-log-query.md`.
+
 ## Art. 15(4) check before sending
 
 `workspace_activity` and `kb_files` are **shared-workspace** tables: rows the subject

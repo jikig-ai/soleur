@@ -65,7 +65,7 @@ jobs:
       # No fallback default — `eu.sentry.io` would silently 401 for slugs
       # ending in `-eu` per the slug-rewrite finding (learning
       # 2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md),
-      # and `de.sentry.io` is ingest-only (no /api/0/ surface).
+      # and `de.sentry.io` is ingest-only (no /api/0/ surface). (CORRECTED 2026-09-03 #7481: de.sentry.io is NOT ingest-only — it returns 200 on /api/0/; the org-subdomain is required for the -eu SLUG-REWRITE reason, which is unaffected.)
       SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
       SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
       SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}

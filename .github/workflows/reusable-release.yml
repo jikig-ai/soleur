@@ -421,7 +421,7 @@ jobs:
       # 2026-05-15 baseline artifact remains what it was; only the claim that
       # it pins a default is retracted. Set the `SENTRY_API_HOST` repo secret
       # to the ORG-SUBDOMAIN and let the fail-loud path below catch an empty
-      # one; `de.sentry.io` is ingest-only and serves no `/api/0/`.
+      # one; `de.sentry.io` is ingest-only and serves no `/api/0/`. (CORRECTED 2026-09-03 #7481: de.sentry.io is NOT ingest-only — it returns 200 on /api/0/; the org-subdomain is required for the -eu SLUG-REWRITE reason, which is unaffected.)
       #
       # Skips silently when SENTRY_AUTH_TOKEN is unavailable (e.g. component
       # release where the secret isn't required).
@@ -433,7 +433,7 @@ jobs:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
           # Branch-C correction (2026-05-17): default is now the org-subdomain,
-          # NOT `de.sentry.io` (ingest-only, no `/api/0/`) or `eu.sentry.io`
+          # NOT `de.sentry.io` (ingest-only, no `/api/0/`) or `eu.sentry.io` (CORRECTED 2026-09-03 #7481: de.sentry.io is NOT ingest-only — it returns 200 on /api/0/; the org-subdomain is required for the -eu SLUG-REWRITE reason, which is unaffected.)
           # (silently rewrites slugs ending in `-eu` per learning
           # `2026-05-17-sentry-eu-region-host-rewrites-slugs-with-eu-suffix.md`).
           # Fail-loud if SENTRY_API_HOST secret is not set — the audit script

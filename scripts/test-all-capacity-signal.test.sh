@@ -55,6 +55,7 @@
 # fake `df`, fake worktree dirs, and nothing written outside TESTROOT.
 
 set -euo pipefail
+# repo-write-boundary-sandbox: not-needed this sandbox only ever drives `--capacity`, which exits above the lib source (#7652)
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LIB="$REPO_ROOT/scripts/lib/test-contention.sh"

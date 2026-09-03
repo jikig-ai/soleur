@@ -72,11 +72,13 @@ jobs:
             exit 0
           fi
           # Path anchors mirror .github/workflows/deploy-docs.yml's on.push.paths
-          # (docs/skills/agents/commands/eleventy.config.js). The ci|deploy-docs
-          # workflow self-trigger is an intentional addition NOT in deploy-docs:
-          # edits to the gate workflow itself must run the gate to prevent
-          # silent gate-bypass on gate-logic changes. Keep this list in sync
-          # with deploy-docs.yml's paths: when adding new docs source trees.
+          # (docs/skills/agents/commands/eleventy.config.js). Since ADR-194 PR2
+          # that list ALSO includes deploy-docs.yml's own path — a change to the
+          # publish path must publish, or the cutover's precondition (the Pages
+          # project holding >=1 deployment) is never established by merging it.
+          # ci.yml additionally self-triggers on ci.yml, which deploy-docs.yml
+          # does not: edits to the gate workflow must run the gate. Keep this
+          # list in sync with deploy-docs.yml's paths: when adding docs trees.
           CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
           if printf '%s\n' "$CHANGED" | grep -qE '^(plugins/soleur/(docs|skills|agents|commands)/|eleventy\.config\.js$|\.github/workflows/(ci|deploy-docs)\.yml$)'; then
             printf 'docs=true\n' >> "$GITHUB_OUTPUT"
@@ -176,6 +178,38 @@ jobs:
         run: python3 scripts/lint-trap-tempfile-ownership.py --check-highwater
       - name: Lint orphan test suites (every tracked *.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
+      # Supabase Management API deprecation + host-pin assembly guard.
+      #
+      # ENFORCEMENT LEVEL IS ADVISORY, NOT BLOCKING, exactly as stated for every other
+      # step in this job: `lint-bot-statuses` is absent from BOTH
+      # scripts/required-checks.txt and the ruleset, so a PR can merge with this red.
+      # That is said here, in the script header, in ADR-197 and in #7716 rather than
+      # left implied -- landing a gate that CLAIMS to block three commits after
+      # 924994b2f ("close four fail-open gates that reported success while doing
+      # nothing") is the specific failure this wording exists to avoid.
+      #
+      # Two arms. The deprecation arm resolves $API/${REF} WITHIN each file before
+      # matching, because the live advisors/security call sits ~130 lines below its
+      # host assignment and a line-scoped extractor finds zero and reports green. The
+      # host-pin arm INVERTS the quantifier -- the assembly is files carrying a PAT var
+      # or a projects-scoped Management API path, and containing the pinned literal is
+      # the ASSERTION --
+      # because a caller whose host has been redirected does not contain the literal and
+      # a literal-keyed assembly would never enumerate the exfil shape it exists to catch.
+      #
+      # This comment deliberately does not spell the path prefix out. The assembly greps
+      # whole files, so a bare path literal in PROSE joins it -- the guard reddened this
+      # very file on the first draft of this comment. Documented rather than allowlisted:
+      # growing the non-caller allowlist to accommodate documentation would erode the one
+      # thing the allowlist is supposed to mean.
+      - name: Lint deprecated Supabase Management API endpoints + host pin (advisory)
+        run: bash scripts/lint-supabase-deprecated-endpoints.sh
+      # Coverage floor, NOT an offender ceiling -- the direction is inverted relative to
+      # this repo's other .highwater files. A DROP is the failure: it means either a call
+      # site was deleted (lower it in that same commit) or the extractor went blind, and
+      # a blind extractor prints "0 violations" and looks exactly like a clean repo.
+      - name: Ratchet Supabase Management API call-site coverage (advisory)
+        run: bash scripts/lint-supabase-deprecated-endpoints.sh --check-highwater
       # #7002 actionlint hang guard. Asserts ONLY that the linter TERMINATES.
       #
       # actionlint pipes every `run:` body into shellcheck over a pipe. When a body exceeds

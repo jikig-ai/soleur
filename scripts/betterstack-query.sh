@@ -72,6 +72,20 @@ Do NOT conclude "no access / can't verify" from this message — the correct nex
 step is the doppler-wrapped re-run above. (Creds provisioning: see
 knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
 EOF
+  # EXIT 3 HERE MEANS "NOTHING WAS QUERIED" -- and a sibling helper uses 3 for the opposite.
+  #
+  # scripts/supabase-logs-query.sh exits 3 for INCONCLUSIVE/UNINSTRUMENTED: it DID query, and
+  # the coverage verdict is that the answer cannot be trusted. Here, 3 means the query never
+  # ran at all because creds were not injected.
+  #
+  # The dangerous direction is an agent that learns 3 == INCONCLUSIVE from that helper and
+  # then reads this one's 3 as "we looked, and coverage was inconclusive" -- laundering a
+  # never-executed query into a coverage verdict, which is precisely what ADR-197 exists to
+  # prevent. Both helpers are now cited in the same incident/SKILL.md Phase 0 sentence, so
+  # the collision is one screen apart in the document an agent reads mid-incident.
+  #
+  # Read the MESSAGE above, not the number: it names the re-invocation. Do not treat this
+  # exit as evidence about log coverage.
   exit 3
 fi
 
