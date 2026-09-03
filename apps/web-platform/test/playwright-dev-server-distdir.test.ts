@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, normalize } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
@@ -9,23 +9,39 @@ import { describe, expect, it } from "vitest";
  * next 16 acquires a lock at `<distDir>/lock` when `experimental.lockDistDir` is set, and
  * that flag DEFAULTS TO TRUE (next/dist/server/config-shared.js). The second server to
  * start exits with "Another next dev server is already running" and Playwright then fails
- * the whole run at `config.webServer` startup — which is exactly how the next 15 -> 16 bump
- * first presented (#7591): three red checks whose root cause was one lock.
+ * the whole run at `config.webServer` startup — the outermost of two causes behind
+ * #7591's red `e2e` check.
  *
- * The lock is keyed on the DIST DIRECTORY, not the port
- * (next/dist/server/lib/router-utils/setup-dev-bundler.js joins `opts.dir` with
- * `nextConfig.distDir`), so running the two servers on different ports is NOT sufficient
- * and looks like it should be. That is the trap this guard exists to hold shut.
+ * The lock is keyed on the DIST DIRECTORY, not the port: setupDevBundler() joins
+ * `opts.dir` with `nextConfig.distDir` before acquiring. Distinct ports are therefore not
+ * sufficient, which is exactly why this looks like it should already work.
  *
- * Asserted against the config SOURCE rather than by importing it: playwright.config.ts
- * pulls in the Playwright runtime, which is not what a vitest unit suite should boot.
+ * COMMENTS ARE STRIPPED BEFORE MATCHING, and that is load-bearing rather than tidy. These
+ * assertions read the config as TEXT, and this PR adds prose to both files that mentions
+ * `NEXT_DIST_DIR` and `distDir`. Measured against the un-stripped version: replacing a live
+ * `NEXT_DIST_DIR:` line with a commented-out copy left all four assertions green while the
+ * two servers shared one lock — the regression this file exists to prevent, satisfied by
+ * the comment explaining it (cq-assert-anchor-not-bare-token).
  */
+
+/** Remove `//` line comments and block comments so prose cannot satisfy an assertion. */
+const stripComments = (src: string): string =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+const read = (name: string) => stripComments(readFileSync(join(__dirname, "..", name), "utf-8"));
+
 describe("playwright dev servers use distinct dist directories", () => {
-  const source = readFileSync(join(__dirname, "..", "playwright.config.ts"), "utf-8");
-  const distDirs = [...source.matchAll(/NEXT_DIST_DIR:\s*"([^"]+)"/g)].map((m) => m[1]);
+  const playwright = read("playwright.config.ts");
+  const distDirs = [...playwright.matchAll(/NEXT_DIST_DIR:\s*"([^"]+)"/g)].map((m) => m[1]);
+  // Counted by `port:`, not by the command string. Playwright requires exactly one of
+  // `port`/`url` per webServer entry, so this counts ENTRIES. Counting occurrences of
+  // "command: `npm run dev`" instead would answer "how many entries use that one command"
+  // — measured: a third entry spelled `npm run dev:mock` was invisible to it, and its
+  // undercount exactly cancelled the missing declaration, leaving the suite green.
+  const webServerBlock = playwright.slice(playwright.indexOf("webServer:"));
+  const webServers = (webServerBlock.match(/^\s*port:\s/gm) ?? []).length;
 
   it("declares one NEXT_DIST_DIR per webServer entry", () => {
-    const webServers = (source.match(/command:\s*`npm run dev`/g) ?? []).length;
     expect(webServers, "expected the two-dev-server harness").toBe(2);
     expect(
       distDirs.length,
@@ -33,10 +49,15 @@ describe("playwright dev servers use distinct dist directories", () => {
     ).toBe(webServers);
   });
 
-  it("gives each server a different directory", () => {
-    expect(new Set(distDirs).size, `NEXT_DIST_DIR values collide: ${distDirs.join(", ")}`).toBe(
-      distDirs.length,
-    );
+  it("gives each server a genuinely different directory", () => {
+    // Compared as NORMALISED PATHS, not strings: `.next/e2e-public` and
+    // `.next/e2e-public/` are two strings and one directory, so a string-inequality check
+    // accepts a pair that shares a single `<distDir>/lock`.
+    const normalised = distDirs.map((d) => normalize(d));
+    expect(
+      new Set(normalised).size,
+      `dist dirs resolve to the same directory: ${distDirs.join(", ")}`,
+    ).toBe(normalised.length);
   });
 
   it("keeps them under .next/ so .gitignore still covers them", () => {
@@ -46,9 +67,24 @@ describe("playwright dev servers use distinct dist directories", () => {
   });
 
   it("next.config.ts honours NEXT_DIST_DIR", () => {
-    const cfg = readFileSync(join(__dirname, "..", "next.config.ts"), "utf-8");
+    const cfg = read("next.config.ts");
     expect(cfg, "next.config.ts must read NEXT_DIST_DIR or the env var is inert").toMatch(
-      /distDir:\s*process\.env\.NEXT_DIST_DIR/,
+      /^\s*distDir:\s*process\.env\.NEXT_DIST_DIR/m,
     );
+  });
+
+  it("declares every dist dir in tsconfig's include, so next does not rewrite it", () => {
+    // next writes `<distDir>/types/**/*.ts` + `<distDir>/dev/types/**/*.ts` into the
+    // TRACKED tsconfig.json on startup (writeConfigurationDefaults). Undeclared, every CI
+    // e2e run dirties a tracked file; declared, next finds them present and leaves it
+    // alone (measured: both dist dirs, no rewrite).
+    const tsconfig = JSON.parse(readFileSync(join(__dirname, "..", "tsconfig.json"), "utf-8"));
+    for (const d of distDirs) {
+      for (const suffix of ["types/**/*.ts", "dev/types/**/*.ts"]) {
+        expect(tsconfig.include, `tsconfig.include is missing ${d}/${suffix}`).toContain(
+          `${d}/${suffix}`,
+        );
+      }
+    }
   });
 });

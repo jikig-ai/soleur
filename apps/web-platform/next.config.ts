@@ -16,7 +16,8 @@ const nextConfig: NextConfig = {
   // authenticated one -- so without separate dist directories the second exits
   // with "Another next dev server is already running" and the whole e2e job
   // fails at webServer startup. The lock is keyed on distDir, NOT on the port,
-  // so distinct ports are not enough (next/dist/build/lockfile.js).
+  // so distinct ports are not enough (setupDevBundler() joins opts.dir with
+  // nextConfig.distDir before Lockfile.tryAcquire() ever sees a path).
   //
   // Separating the directories rather than setting `lockDistDir: false` keeps the
   // guard armed for ordinary development, where two servers in one directory is
@@ -28,12 +29,21 @@ const nextConfig: NextConfig = {
   // This is a security control, not a preference. Declaring NO `images` key does not
   // restrict local URLs — it permits every one of them: `imageConfigDefault.localPatterns`
   // is `undefined`, and Next's `hasLocalMatch(undefined, path)` returns TRUE for any path
-  // (measured against the installed next@15.5.22). The optimizer's local branch is checked
+  // (measured against the installed next@16.3.1). The optimizer's local branch is checked
   // against `localPatterns` only, never `remotePatterns`.
   //
-  // Without this, `/_next/image?url=/api/shared/<token>` reached the next-PINNED nested
-  // sharp — which is the copy Dependabot advisory 144 covers, and which `next` holds at
-  // 0.34.5 while our top-level copy is patched at 0.35.3. `middleware.ts` excludes
+  // Without this, `/_next/image?url=/api/shared/<token>` reached the optimizer's decoder.
+  //
+  // SUPERSEDED 2026-09-03 (#7591), the decoder limb only. This used to read "reached the
+  // next-PINNED nested sharp — which is the copy Dependabot advisory 144 covers, and which
+  // `next` holds at 0.34.5 while our top-level copy is patched at 0.35.3". next 16 stopped
+  // vendoring that nested copy, so there is no 0.34.5 left to reach: the only sharp in the
+  // tree is the top-level 0.35.3, and advisory 144 is discharged (see MUST_STAY_ABSENT in
+  // scripts/assert-dependabot-drain.py). The restriction below is unchanged and still
+  // load-bearing — a patched decoder is still a decoder, and what keeps attacker-supplied
+  // bytes away from it is `localPatterns`, not which sharp is installed.
+  //
+  // `middleware.ts` excludes
   // `_next/image` from auth and `/api/shared` is in PUBLIC_PATHS, so that path was
   // unauthenticated, and KB binaries are stored and served RAW with an extension-derived
   // content type (server/kb-binary-response.ts) — no decode, no re-encode. An uploaded

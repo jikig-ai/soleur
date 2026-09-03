@@ -1,5 +1,4 @@
-import { Server as HTTPServer, IncomingMessage } from "http";
-import type { Duplex } from "stream";
+import { Server as HTTPServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import { randomUUID } from "crypto";
@@ -2809,15 +2808,19 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 // ---------------------------------------------------------------------------
 
 /**
- * @param nextUpgrade Next's own upgrade handler (`app.getUpgradeHandler()`).
- *   Required in dev, where Next serves its HMR socket over an upgrade on
- *   `/_next/*`. Optional so production callers, which have no HMR socket, can
- *   omit it and keep the deny-by-default behaviour below.
+ * @param allowNextUpgrades dev only. next registers its OWN `upgrade` listener on this
+ *   server (NextCustomServer.setupWebSocketHandler -> `customServer.on('upgrade', ...)`,
+ *   next/dist/server/next.js), so all this flag does is decline to destroy the socket
+ *   first and let that listener run. We do NOT forward to `getUpgradeHandler()`: that
+ *   resolves to NextServer.handleUpgrade, an empty async method whose own comment says
+ *   "The web server does not support web sockets, it's only used for HMR in development"
+ *   (next-server.js). Calling it is inert -- measured: replacing it with `() => {}` still
+ *   yields 101 on /_next/hmr.
  */
-export function setupWebSocket(
-  server: HTTPServer,
-  nextUpgrade?: (req: IncomingMessage, socket: Duplex, head: Buffer) => void | Promise<void>,
-) {
+/** The single upgrade path next serves in dev (router-server.js). */
+const NEXT_HMR_PATH = "/_next/hmr";
+
+export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
   const wss = new WebSocketServer({ noServer: true });
 
   // Handle HTTP -> WebSocket upgrade on /ws path
@@ -2825,20 +2828,31 @@ export function setupWebSocket(
     const { pathname } = parse(req.url || "", true);
 
     if (pathname !== "/ws") {
-      // Next serves its dev HMR socket as an upgrade under `/_next/` (in next 16,
-      // `/_next/hmr`). Node dispatches "upgrade" to EVERY listener, so destroying
-      // the socket here kills Next's handshake no matter what Next does with it --
-      // the browser reports "Connection closed before receiving a handshake
-      // response" and next 16's dev client, which waits on that handshake, never
-      // finishes bringing the page to life. The page renders server-side and then
-      // sits inert: a checkbox toggles in the DOM but no React handler runs.
+      // next serves its dev HMR socket as an upgrade under `/_next/` (in next 16,
+      // `/_next/hmr`). Node dispatches "upgrade" to EVERY listener, so destroying the
+      // socket here kills next's handshake before its own listener can answer -- the
+      // browser reports "Connection closed before receiving a handshake response" and
+      // next 16's dev client, which waits on that handshake, never finishes bringing the
+      // page to life. The page renders server-side and then sits inert: a checkbox
+      // toggles in the DOM but no React handler runs. That was #7591's whole e2e failure
+      // surface, byte-identical under Turbopack and webpack, which is why the bundler was
+      // a red herring.
       //
-      // That is #7591's whole failure surface -- 72 e2e failures, byte-identical
-      // under Turbopack and webpack, which is why the bundler was a red herring.
-      // Delegate `/_next/` upgrades to Next and keep destroying everything else,
-      // so this stays deny-by-default for any path neither we nor Next own.
-      if (nextUpgrade && pathname?.startsWith("/_next/")) {
-        void nextUpgrade(req, socket, head);
+      // Matched EXACTLY, not by `/_next/` prefix. next's own test is
+      // `req.url.startsWith(\`${hmrPrefix}/_next/hmr\`)` (router-server.js), so the prefix
+      // form declined a whole family of paths next will not serve anyway -- and
+      // `url.parse` does NOT normalise dot segments, so `/_next/../ws` and
+      // `/_next/hmr/../../ws` both satisfy a prefix test. Exact-matching the one path next
+      // actually answers keeps the declined set equal to the served set. (No `basePath` is
+      // configured; if one is ever added this constant must gain that prefix.)
+      //
+      // DEV ONLY, and the gate is load-bearing rather than tidy. In production next's
+      // upgrade path reaches "If there's no matched output, we don't handle the request
+      // as user's custom WS server may be listening on the same path" (router-server.js)
+      // and returns WITHOUT closing the socket. Ungated, an unauthenticated client could
+      // hold a file descriptor open per request on any `/_next/` path, bypassing both
+      // rate limiters below -- which sit after this return.
+      if (allowNextUpgrades && pathname === NEXT_HMR_PATH) {
         return;
       }
       socket.destroy();

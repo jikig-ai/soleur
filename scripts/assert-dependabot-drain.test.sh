@@ -95,9 +95,12 @@ w = pkgs(web)
 w["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
 w["node_modules/b/node_modules/brace-expansion"] = {"version": "2.999.999"}
 w["node_modules/c/node_modules/brace-expansion"] = {"version": "5.999.999"}
-# The two RESOLVED_ABSENT rows assert these paths are GONE (next 16 stopped vendoring
-# them, #7591), so the control fixture must NOT synthesise them. The re-vendor arm below
-# adds one back and requires a RED.
+# The two MUST_STAY_ABSENT rows assert these paths are GONE (next 16 stopped vendoring
+# them, #7591), so the control fixture must NOT synthesise them. The re-vendor arms below
+# add one back and require a RED.
+# `next` ITSELF must be present though: ABSENT_PATH_ANCHOR asserts the parent the absent
+# paths hang off is installed, so that a typo in the literal cannot be permanently green.
+w["node_modules/next"] = {"version": "16.3.1"}
 if extra:
     w.update(json.loads(extra))
 
@@ -312,12 +315,12 @@ sys.stdout.write(re.sub(r"^ *\(" + Q + r"web-platform" + Q + r", " + Q + r"brace
                         "", s, count=1, flags=re.M))
 '
 
-# Same shape for the RESOLVED_ABSENT loop, inverted with the discharge (#7591). The
+# Same shape for the MUST_STAY_ABSENT loop, inverted with the discharge (#7591). The
 # postcss/sharp advisories were discharged because next 16 stopped vendoring those nested
 # copies; the loop asserting they stay gone is what keeps that discharge honest. Repointing
 # a row at a path the tree DOES carry must be caught by it -- otherwise the loop would be
 # satisfied by any absent path, including a typo, and would ratchet nothing.
-mutate "a RESOLVED_ABSENT row pointed at a path that exists REDs" "is back at" '
+mutate "a MUST_STAY_ABSENT row pointed at a path that exists REDs" "is back at" '
 import sys
 s = sys.stdin.read()
 sys.stdout.write(s.replace("node_modules/next/node_modules/postcss",
@@ -333,15 +336,55 @@ asserted=$((asserted + 1))
 if build_fixture '{"node_modules/next/node_modules/postcss": {"version": "8.4.31"}}'; then
   if run_mutant "$SANDBOX/pristine.py"; then
     fail "a re-vendored nested postcss@8.4.31 exited 0 — the discharge ratchet is not armed"
-  elif grep -qF "is back at" "$SANDBOX/last.out"; then
-    pass "a re-vendored nested postcss@8.4.31 is seen and flagged"
+  elif ! grep -qF "is back at 8.4.31" "$SANDBOX/last.out"; then
+    # Anchored on the VERSION, not just the phrase. The message interpolates
+    # packages[manifest][path], which is the metadata DICT -- rendering it whole prints
+    # "is back at {'version': '8.4.31', ...}", which a bare phrase grep accepts. Pinning
+    # the version is what makes this arm able to see that.
+    fail "reddened, but did not name the re-vendored VERSION (dict rendered instead?)"
   else
-    fail "reddened, but without naming the re-vendored path"
+    pass "a re-vendored nested postcss@8.4.31 is seen and flagged with its version"
   fi
 else
   fail "could not rebuild the fixture with a re-vendored nested postcss"
 fi
 build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
+
+# The SHARP half of the discharge, which had no arm at all. Both behavioural arms above
+# exercise postcss only, and the fixture carried no sharp path in either direction -- so
+# deleting the sharp row from MUST_STAY_ABSENT was byte-identical green, and sharp is half
+# of what this ratchet exists for.
+asserted=$((asserted + 1))
+if build_fixture '{"node_modules/next/node_modules/sharp": {"version": "0.34.5"}}'; then
+  if run_mutant "$SANDBOX/pristine.py"; then
+    fail "a re-vendored nested sharp@0.34.5 exited 0 — the sharp ratchet is not armed"
+  elif ! grep -qF "is back at 0.34.5" "$SANDBOX/last.out"; then
+    fail "reddened, but did not name the re-vendored sharp VERSION"
+  else
+    pass "a re-vendored nested sharp@0.34.5 is seen and flagged with its version"
+  fi
+else
+  fail "could not rebuild the fixture with a re-vendored nested sharp"
+fi
+build_fixture || { echo "FATAL: could not restore the fixture tree" >&2; exit 2; }
+
+# Deleting a row must RED. Without this the list is unfloored from the battery's side:
+# nothing greps its members, so a row can be dropped and every other arm stays green.
+mutate "deleting a MUST_STAY_ABSENT row REDs" "below the floor" '
+import re, sys
+s = sys.stdin.read()
+sys.stdout.write(re.sub(r"^ *\(\"web-platform\", \"sharp\", \"node_modules/next/node_modules/sharp\"\)\]",
+                        "]", s, count=1, flags=re.M))
+'
+
+# The path anchor keeps the absence literals live. Repointing it at a package that is not
+# installed must RED, otherwise a typo in the `next/` segment is permanently, silently green.
+mutate "a dead MUST_STAY_ABSENT path anchor REDs" "asserts nothing" '
+import sys
+s = sys.stdin.read()
+sys.stdout.write(s.replace("(\"web-platform\", \"node_modules/next\")",
+                           "(\"web-platform\", \"node_modules/next-does-not-exist\")", 1))
+'
 
 # --- Fixture-side arm: npm aliasing. Not a mutation of the guard at all -- a mutation of
 # the TREE, which is the axis every arm above leaves untouched. This lockfile shape is
@@ -374,7 +417,11 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-MIN_ASSERTIONS=20
+# Set to the CURRENT arm count, not below it, and ratcheted in the same commit that adds
+# an arm. At 20 against a population of 21 the floor carried one arm of slack, so deleting
+# any single arm -- including this PR's own newly-added re-vendor arm -- exited 0. Slack in
+# an anti-vacuity floor is attack budget, not padding.
+MIN_ASSERTIONS=24
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1
