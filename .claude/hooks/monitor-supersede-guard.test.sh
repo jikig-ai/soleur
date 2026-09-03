@@ -238,8 +238,26 @@ for probe in "$CI2" \
 done
 verdict "$rc" 'no input shape produces a permissionDecision — the hook cannot block'
 
+# --- 21. THE ws:// SIGNATURE ---------------------------------------------------
+# The header advertises `ws://` as one of four signature forms and no case
+# exercised it — an advertised capability with no test is a claim, not a feature.
+# It takes a different extraction path from the command-based forms (`.ws.url`,
+# not `.command`), so the command cases say nothing about it.
+fresh 21
+WS='{"ws":{"url":"wss://events.example.com/stream"},"description":"deploy events","timeout_ms":600000}'
+run s1 "$WS" >/dev/null
+out=$(run s1 "$WS")
+rc=1; warned "$out" && rc=0
+verdict "$rc" 'a second monitor on the same ws:// url is REPORTED'
+
+fresh 22
+run s1 '{"ws":{"url":"wss://a.example.com/x"},"description":"a","timeout_ms":600000}' >/dev/null
+out=$(run s1 '{"ws":{"url":"wss://b.example.com/y"},"description":"b","timeout_ms":600000}')
+rc=1; warned "$out" || rc=0
+verdict "$rc" 'two DIFFERENT ws:// urls do not collide'
+
 printf '\n'
-EXPECTED_CASES=20
+EXPECTED_CASES=22
 if [ "$CASES" -ne "$EXPECTED_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected exactly %d\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1

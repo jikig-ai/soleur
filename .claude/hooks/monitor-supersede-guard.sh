@@ -171,8 +171,9 @@ if [ -n "$PRIOR" ]; then
       { systemMessage: (
           "monitor-supersede: this session armed a monitor on " + $sig + " " + $age +
           "s ago — \"" + $d + "\" — and never stopped it.\n" +
-          "If it is still running, two watchers are now polling one target: " +
-          "duplicate API calls every interval and two reports of the same result. " +
+          "If it is still running, two watchers are now on one target — for a poll " +
+          "loop that is duplicate requests every interval, for a ws:// stream a " +
+          "second subscription — and two reports of the same result. " +
           "TaskStop the prior one unless it has already returned.\n" +
           "(This hook cannot see a monitor finish, so it reports the arm, not a fault.)"
         ) }' 2>/dev/null || true
