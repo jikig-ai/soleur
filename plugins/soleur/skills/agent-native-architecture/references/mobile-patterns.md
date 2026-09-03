@@ -463,7 +463,7 @@ Use the cheapest model that achieves the outcome:
 ```swift
 enum ModelTier {
     case fast      // claude-haiku-4-5: ~$1/1M input, $5/1M output
-    case balanced  // claude-sonnet-5: ~$3/1M input, $15/1M output
+    case balanced  // claude-sonnet-5: ~$2/1M input, $10/1M output
     case powerful  // claude-opus-5: ~$5/1M input, $25/1M output
 
     var modelId: String {
