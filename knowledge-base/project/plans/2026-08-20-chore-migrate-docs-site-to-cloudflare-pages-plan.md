@@ -1799,6 +1799,26 @@ eleven-row matrix — is recorded in `## Sharp Edges` rather than lost with it.
   strongest assertion holds: the generated `dns.tf` is **byte-identical to `dns.tf` as PR4a left
   it**. The reverse block's `from`/`to` are swapped, `type` returns to `"A"`, `content` returns
   to the surviving IP literal.
+
+  > **Clarified 2026-09-03 (PR4b), because the two halves above cannot both hold literally.**
+  > PR4a's `dns.tf` carries **no `moved` block**, so a generated file that is byte-identical to
+  > it cannot also contain the reverse block — and the reverse block is not optional. Without it
+  > the generator emits precisely the plan `git revert` produces: `github_pages` created and
+  > `pages_apex` destroyed as two unrelated addresses, dispatched concurrently, which is
+  > Cloudflare `81053` in the reverse direction on an apex that is already failing. That is the
+  > measured hazard AC71 forbids, so an AC satisfied by omitting the block would be satisfied by
+  > the defect.
+  >
+  > The contract is therefore **byte-identity MODULO the reverse `moved` block**, and it is
+  > mechanized rather than left to reading: the generator exposes `--emit-tf-stripped`, whose
+  > output is compared with `cmp -s` against the committed
+  > `apps/web-platform/infra/fixtures/dns.tf.pr4a-baseline`, plus a separate row asserting the
+  > full output differs from that baseline by **additions only** — so a generator that quietly
+  > mutated a record while emitting cannot pass the stripped comparison alone.
+  >
+  > The baseline is a **committed fixture**, never `git show main:dns.tf`. `main`'s `dns.tf`
+  > BECOMES the post-flip file the moment PR4b merges, so a baseline resolved that way would
+  > invert the moment it mattered and the suite would go red on `main` for the next contributor.
 - **AC71 (`git revert` is forbidden, in the imperative, at the step)** — the runbook's rollback
   **step itself** — not a notes section — states that `git revert` is the WRONG lever for PR4b,
   and why: measured, it produces

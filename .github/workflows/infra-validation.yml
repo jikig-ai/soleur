@@ -1123,6 +1123,20 @@ jobs:
       - name: Run apex-single-node-replace mutation battery (#7640)
         run: bash apps/web-platform/infra/apex-single-node-replace-mutation.test.sh
 
+      # The rollback generator (#7640 PR4b, AC70). `git revert` of the cutover is
+      # FORBIDDEN -- measured, it plans two unrelated addresses concurrently and
+      # reproduces Cloudflare 81053 in the reverse direction, on an apex that is
+      # already failing. This script is what stands in for it, so its own tests are
+      # part of the cutover's safety case rather than an accessory to it.
+      #
+      # Its strongest row asserts the generated dns.tf returns BYTE-IDENTICALLY to the
+      # shape PR4a left (modulo the reverse `moved` block, which PR4a's file does not
+      # carry and the rollback cannot work without). The refusal rows matter as much:
+      # a generator that emits against the wrong tree produces something that LOOKS
+      # like a correct rollback and gets applied during an incident.
+      - name: Run apex rollback-PR generator unit tests (#7640)
+        run: bash apps/web-platform/infra/generate-apex-rollback-pr.test.sh
+
       # The build-identity probe is the detector for a deploy that lands on a
       # preview alias while the served origin keeps the previous build. Case M2
       # is ADR-194 AC19's "run where the expected SHA is deliberately wrong".
