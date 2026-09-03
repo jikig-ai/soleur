@@ -101,6 +101,25 @@ _report() {
   fi
 }
 
+# INSTRUMENT SELF-TEST (ADR-193). Drive BOTH arms once each and refuse to
+# continue unless both counters moved.
+#
+# The anti-vacuity floor below counts `pass + fail`, i.e. this helper's own
+# counters — so it backstops DELETION and is blind to DISARMING. Measured by the
+# review panel: rewriting `_report`'s body to `pass=$((pass + 1)); echo "[ok] …"`
+# left this suite reporting `56 passed, 0 failed` with every verdict routed to
+# the PASS arm and the floor satisfied. A mis-routing helper cannot move both
+# counters, which is what this catches and the floor cannot.
+_p0=$pass; _f0=$fail
+_report "instrument self-test: the PASS arm records" ok
+_report "instrument self-test: the FAIL arm records (EXPECTED — subtracted)" FAIL
+if [[ "$pass" -ne $((_p0 + 1)) || "$fail" -ne $((_f0 + 1)) ]]; then
+  printf '[FATAL] instrument self-test: _report did not route both arms (pass %d->%d, fail %d->%d)\n' \
+    "$_p0" "$pass" "$_f0" "$fail" >&2
+  exit 2
+fi
+pass=$((pass - 1)); fail=$((fail - 1))
+
 # Mirror the workflow's bash pipeline exactly. Returns
 # "rdel:ndel:rupd:dcount:rc". Byte-identical to apply-web-platform-infra.yml's
 # regex.
@@ -978,6 +997,187 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 
 
 
+# ---------------------------------------------------------------------------------------
+# AC72 — PF9b MECHANIZED: the apex `moved` actually re-addressed the survivor (#7640 PR4b)
+# ---------------------------------------------------------------------------------------
+# THE HAZARD THIS EXISTS FOR, AND WHY NOTHING ELSE CATCHES IT.
+#
+# PR4b flips the apex A record to a CNAME at ONE Terraform address, so core
+# serialises Delete->Create and the Cloudflare 81053 collision (an A and a CNAME
+# coexisting at one name) cannot occur. That property depends ENTIRELY on the
+# `moved` block's `from` naming the key that is actually in STATE.
+#
+# Terraform does not error on a `moved` whose source is absent from state. It
+# no-ops. `pages_apex` then plans as a BARE CREATE while the real survivor plans
+# as a SEPARATE delete: two unrelated addresses, dispatched concurrently, hazard
+# fully restored, no error anywhere.
+#
+# Two drift shapes produce exactly that, and both defeat every other gate:
+#   - a CONSISTENT repo-side rename of the pin and the `dns.tf` key, which passes
+#     `apex-single-node-replace.test.sh` 11/11 because that guard is static text;
+#   - a PR4a that merged without CONVERGING ([skip-web-platform-apply], or a
+#     failed apply), leaving state with four instances while the repo says one.
+#
+# `[ack-destroy]` cannot discriminate either, because `destroy_count` is 1 in the
+# CORRECT plan and 1 in the BROKEN one. This clause is the only check in the
+# system that reads what the plan is moving FROM rather than what the text says.
+APEX_MOVE_SURVIVOR='cloudflare_record.github_pages["185.199.108.153"]'
+
+_apex_orphans() { # <fixture> -> the counter, or "ERROR"
+  local out
+  out=$(jq -f "$FILTER" < "$1" 2>/dev/null | jq -r '.apex_move_orphans') || { echo "ERROR"; return; }
+  [[ "$out" =~ ^[0-9]+$ ]] || { echo "ERROR"; return; }
+  echo "$out"
+}
+
+# Both directions, each fixtured ALONE. A suite whose fixtures all trip cannot
+# see a clause that became too aggressive, and one whose fixtures all pass cannot
+# see one that stopped firing.
+# THE TRUTH TABLE. The property is "no pages_apex create alongside ANY
+# github_pages delete" — i.e. NOT TWO ADDRESSES — not "the move resolved".
+# Every conjunct is made load-bearing by at least one fixture that isolates it,
+# because a fixture set that moves only one axis leaves the others satisfied
+# vacuously: the review panel proved that deleting the `.type`, `.name` and
+# `index("create")` conjuncts each left the previous four-row set fully green.
+#
+# fixture      | shape                                              | expect
+# correct      | replace carrying previous_address, no sibling      | 0
+# orphaned     | bare create + a separate github_pages delete       | 1
+# wrongkey     | replace from a DIFFERENT key, no sibling delete    | 0
+# converged    | no pages_apex create at all                        | 0
+# midreplace   | bare create, NO sibling delete (the recovery)      | 0
+# unconverged  | correct previous_address + 3 sibling deletes       | 3
+# otherrecord  | an unrelated create + a github_pages delete        | 0
+# wrongtype    | a non-cloudflare_record labelled pages_apex        | 0
+_ac72_row() { # <fixture> <expected> <description>
+  local got; got="$(_apex_orphans "$FIXTURES/tfplan-web-platform-pr4b-apex-move-$1.json")"
+  [[ "$got" == "$2" ]] \
+    && _report "AC72 [$1]: $3" ok \
+    || _report "AC72 [$1]: $3" FAIL "expected $2, got '$got'"
+}
+
+_ac72_row correct 0 "a correct single-address replace reads 0"
+_ac72_row orphaned 1 "a no-opped move (bare create + a separate github_pages delete) is caught"
+
+# wrongkey reads 0 DELIBERATELY under this property, and the change is a
+# correction rather than a weakening. A replace moved from a different key is
+# still ONE address in flight, so there is no collision to prevent; if state also
+# held the survivor, that survivor would appear as a sibling delete and the
+# `unconverged` row is what catches it. Repo-side byte-identity of the pin
+# remains covered by apex-single-node-replace.test.sh M3, which is where a text
+# assertion belongs.
+_ac72_row wrongkey 0 "a single-address replace from another key is not a two-address hazard"
+_ac72_row converged 0 "once converged (no pages_apex create) the tripwire stays silent"
+
+# THE RECOVERY THE PREVIOUS CLAUSE BLOCKED. A replace that dies between Delete
+# and Create leaves state holding neither address, so the re-run's moved no-ops
+# for a legitimate reason and pages_apex plans as a bare create. There is no
+# surviving A record to collide with. The old clause scored this 1 and HALTed it
+# above the ack — with no bypass — in the single worst state of the migration:
+# apex recordless, NXDOMAIN negative-cached for 1800 s against the zone SOA.
+_ac72_row midreplace 0 "the died-mid-replace recovery is NOT blocked (no sibling delete = no second address)"
+
+# THE CASE THE PREVIOUS CLAUSE MISSED. previous_address is CORRECT here, so a
+# previous_address-only check reads clean, while three orphan siblings plan as
+# separate concurrent deletes. destroy_count is 4, and PR4b's merge commit
+# already carries [ack-destroy] for the healthy destroy_count of 1 — so the ack
+# authorising the intended replace would have authorised these too.
+_ac72_row unconverged 3 "an unconverged PR4a (correct previous_address + 3 orphan siblings) IS caught"
+
+# Conjunct isolation: without `.name`/`.type` these score 1 and HALT a routine
+# apply with an error about the apex.
+_ac72_row otherrecord 0 "an unrelated record's create alongside a github_pages delete is not counted"
+_ac72_row wrongtype 0 "a non-cloudflare_record labelled pages_apex is not counted"
+
+# NON-VACUITY OF THE COUNTER ITSELF. Every clause reads `.resource_changes[]?`,
+# so a structurally empty plan yields 0 for every counter and the workflow's
+# `^[0-9]+$` validation accepts it — a plan JSON that is empty or not an array
+# would pass every gate in the step. Assert the filter refuses to grade one.
+_pv="$(printf '{"format_version":"1.2"}' | jq -f "$FILTER" 2>/dev/null | jq -r '.plan_ok' 2>/dev/null || true)"
+[[ "$_pv" == "false" ]] \
+  && _report "AC72: a plan with no resource_changes array is flagged ungradeable (plan_ok=false)" ok \
+  || _report "AC72: a plan with no resource_changes array is flagged ungradeable" FAIL "plan_ok='$_pv'"
+_pv="$(jq -f "$FILTER" < "$FIXTURES/tfplan-web-platform-pr4b-apex-move-correct.json" | jq -r '.plan_ok')"
+[[ "$_pv" == "true" ]] \
+  && _report "AC72: a real plan is gradeable (plan_ok=true) — the flag is not stuck false" ok \
+  || _report "AC72: a real plan is gradeable (plan_ok=true)" FAIL "plan_ok='$_pv'"
+
+# DRIFT PARITY, over the literals that are actually pinned.
+#
+# The filter no longer carries the survivor IP at all: counting the CO-OCCURRENCE
+# of a pages_apex create with a github_pages delete expresses the hazard ("not two
+# addresses") without needing to know which address survived. That removed one of
+# the three copies rather than guarding it — the best outcome available.
+#
+# Two literals remain, and each is asserted across the files that share it:
+#   - the survivor IP: dns.tf's moved.from  <->  the static guard's SURVIVING_APEX_KEY
+#   - the resource NAME: dns.tf's moved.to  <->  the filter's `.name ==` selector
+# A rename touching one side of either pair is the co-mutation class AC72 exists
+# to catch, one level down.
+_guard_key=$(grep -oE '^SURVIVING_APEX_KEY="[^"]+"' \
+  "$REPO_ROOT/apps/web-platform/infra/apex-single-node-replace.test.sh" | sed 's/.*="//; s/"$//' || true)
+_dns_key=$(grep -oE 'from = cloudflare_record\.github_pages\["[0-9.]+"\]' \
+  "$REPO_ROOT/apps/web-platform/infra/dns.tf" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
+if [[ -n "$_guard_key" && "$_guard_key" == "$_dns_key" ]]; then
+  _report "AC72: the survivor IP agrees between dns.tf's moved.from and the static guard ($_guard_key)" ok
+else
+  _report "AC72: the survivor IP agrees between dns.tf's moved.from and the static guard" FAIL \
+    "guard='$_guard_key' dns.tf='$_dns_key'"
+fi
+
+_jq_name=$(grep -oE 'select\(\.name == "pages_apex"\)' "$FILTER" | head -1 | grep -oE '"pages_apex"' | tr -d '"' || true)
+_dns_name=$(grep -oE '^  to   = cloudflare_record\.[a-z_0-9]+' \
+  "$REPO_ROOT/apps/web-platform/infra/dns.tf" | sed 's/.*cloudflare_record\.//' || true)
+if [[ -n "$_jq_name" && "$_jq_name" == "$_dns_name" ]]; then
+  _report "AC72: the pages_apex resource NAME agrees between the filter and dns.tf's moved.to ($_jq_name)" ok
+else
+  _report "AC72: the pages_apex resource NAME agrees between the filter and dns.tf's moved.to" FAIL \
+    "filter='$_jq_name' dns.tf='$_dns_name'"
+fi
+
+# THE TRIPWIRE IS NOT ACK-BYPASSABLE. `[ack-destroy]` authorizes a destroy; it
+# cannot authorize a plan whose ordering property is absent, and the counts are
+# identical in both cases — so an ack-gated arm here would be no gate at all.
+# Mirrors the host_creates HALT, which sits above the ack for the same reason.
+_wf="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
+_halt_line=$(grep -n 'apex_move_orphans" -gt 0\|apex_move_orphans" -ne 0' "$_wf" | head -1 | cut -d: -f1 || true)
+# One pattern, scoped to the line that READS the ack. The previous primary
+# pattern matched zero lines in the workflow (inside single quotes grep saw a BRE
+# with a literal backslash), so it was dead code that read as protective while a
+# fallback silently did all the work.
+_ack_line=$(grep -n 'HEAD_MSG.*ack-destroy' "$_wf" | head -1 | cut -d: -f1 || true)
+if [[ -n "$_halt_line" && -n "$_ack_line" && "$_halt_line" -lt "$_ack_line" ]]; then
+  _report "AC72: the apex-move HALT precedes the [ack-destroy] gate (line $_halt_line < $_ack_line)" ok
+else
+  _report "AC72: the apex-move HALT precedes the [ack-destroy] gate" FAIL \
+    "halt='$_halt_line' ack='$_ack_line'"
+fi
+
+# MUTATION PROOF, not a read-through. Strip the clause from a sandbox copy of the
+# filter and confirm the orphaned fixture stops being detected — an assertion
+# that cannot be driven the other way is not evidence the clause is load-bearing.
+_sbx=$(mktemp -d -t apex-ac72.XXXXXXXX) || { echo "[FATAL] mktemp failed" >&2; exit 2; }
+# bash does NOT stack EXIT handlers — this replaced the suite's earlier
+# `trap 'rm -rf "$TMP"' EXIT`, leaking $TMP on every run. One handler owns both.
+trap 'rm -rf "$TMP" "$_sbx"' EXIT INT TERM HUP
+sed '/apex_move_orphans: (/,/^  ),$/d' "$FILTER" > "$_sbx/mutant.jq"
+if cmp -s "$_sbx/mutant.jq" "$FILTER"; then
+  _report "AC72 mutation: the clause was actually removed from the sandbox copy" FAIL "sed matched nothing — this row scored the baseline"
+else
+  _mut=$(jq -f "$_sbx/mutant.jq" < "$FIXTURES/tfplan-web-platform-pr4b-apex-move-orphaned.json" 2>/dev/null | jq -r '.apex_move_orphans' || true)
+  # A SIBLING KEY MUST STILL EVALUATE. `_mut` is empty whenever jq FAILS, which a
+  # syntactically destroyed filter also does — so an empty result alone credits
+  # "I broke the file" as "the clause is load-bearing". Requiring an untouched
+  # counter to still return its expected value separates the two.
+  _sib=$(jq -f "$_sbx/mutant.jq" < "$FIXTURES/tfplan-web-platform-pr4b-apex-move-orphaned.json" 2>/dev/null | jq -r '.resource_deletes' || true)
+  [[ "$_sib" == "1" ]] \
+    && _report "AC72 mutation: the mutant filter still parses (sibling counter intact) — the next row is not measuring a broken file" ok \
+    || _report "AC72 mutation: the mutant filter still parses" FAIL "resource_deletes='$_sib', expected 1"
+  [[ "$_mut" == "null" || -z "$_mut" ]] \
+    && _report "AC72 mutation: removing the clause makes the orphaned plan undetectable (the clause is what detects it)" ok \
+    || _report "AC72 mutation: removing the clause makes the orphaned plan undetectable" FAIL "mutant still reported '$_mut'"
+fi
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -995,11 +1195,15 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((pass + fail))
-if [[ "$_ran" -lt 46 ]]; then
+# Measured on the as-written suite: 49 pre-PR4b + the AC72 arm. Set to the full
+# current count rather than leaving slack — the review panel showed 3 assertions
+# of headroom absorbed a deleted arm silently, and slack in an anti-vacuity floor
+# is attack budget, not padding. Re-derive with a green run when adding rows.
+if [[ "$_ran" -lt 64 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 46. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 64. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 46)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 64)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

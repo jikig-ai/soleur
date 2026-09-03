@@ -2,8 +2,8 @@
 title: "Migrate the marketing/docs site off GitHub Pages to Cloudflare Pages (ADR-194)"
 date: 2026-08-20
 slug: chore-migrate-docs-site-to-cloudflare-pages
-branch: feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages
-prior_branches: [feat-one-shot-7640-cloudflare-pages-migration]
+branch: feat-one-shot-7640-pr4b-apex-cname-flip
+prior_branches: [feat-one-shot-7640-cloudflare-pages-migration, feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages]
 issue: 7640
 closes: 7640
 lane: cross-domain
@@ -512,7 +512,13 @@ ordering is a blocker rather than a refinement.
 
 **A second, quieter blast radius:** the apex also carries the company's Protonmail `MX` and
 four `TXT` records. The A→CNAME transition touches that name. A silent mail break would be
-invisible to every uptime monitor. P8/CUT9 exist for this.
+invisible to every uptime monitor. P8/CUT9 exist for this — **but scoped
+precisely: CUT9 compares the APEX `MX` and `TXT` sets only.** The DKIM CNAMEs,
+`_dmarc`, and the SES `send.`/`inbound.` MX records are subdomains and are
+outside it. They are also outside this cutover's reach (Terraform touches only
+`pages_apex` and `www`), so that is a legitimate scope-out — but it is a
+scope-out, not coverage, and an earlier phrasing of this line implied CUT9
+covered "mail" generally.
 
 **If this leaks, the user's workflow is exposed via:** a Cloudflare API token scoped to
 `Account → Cloudflare Pages → Edit` reaching CI. That token is a **site-content replacement
@@ -1761,6 +1767,18 @@ eleven-row matrix — is recorded in `## Sharp Edges` rather than lost with it.
   annotation; plus the in-place `www` update. Through the real filter
   (`tests/scripts/lib/destroy-guard-filter-web-platform.jq`):
   `resource_deletes: 1, nested_deletes: 0, reboot_updates: 0, host_creates: 0` (PF9b).
+- **AC72 (PF9b is mechanized, not read by eye)** — the apply job's plan-JSON pass through
+  `tests/scripts/lib/destroy-guard-filter-web-platform.jq` carries a clause asserting that the
+  `cloudflare_record.pages_apex` change's `previous_address` equals
+  `cloudflare_record.github_pages["185.199.108.153"]`. **It is the only check in the system that
+  is about STATE rather than about text.** Guard 2 is static, so it cannot see repo-vs-STATE
+  drift, and two drift shapes defeat AC68/AC69 silently: a *consistent* rename of the `moved`
+  pin and the `dns.tf` key passes 11/11 while state still holds the old key, and a PR4a that
+  merged without converging (`[skip-web-platform-apply]`, or a failed apply) leaves state
+  holding four instances while the repo says one. In both cases PR4b's `moved` no-ops and the
+  hazard returns with **no signal** — and `[ack-destroy]` cannot discriminate, because
+  `destroy_count` is 1 in the correct plan and 1 in the broken one. AC69 reads the plan's
+  *shape*; this AC reads what the plan is moving *from*.
 - **AC46 (upgraded rationale, unchanged command)** — **both** endpoint targets are present,
   line-anchored:
   `grep -cE '^[[:space:]]+-target=cloudflare_record\.github_pages \\$' .github/workflows/apply-web-platform-infra.yml`
@@ -1787,6 +1805,26 @@ eleven-row matrix — is recorded in `## Sharp Edges` rather than lost with it.
   strongest assertion holds: the generated `dns.tf` is **byte-identical to `dns.tf` as PR4a left
   it**. The reverse block's `from`/`to` are swapped, `type` returns to `"A"`, `content` returns
   to the surviving IP literal.
+
+  > **Clarified 2026-09-03 (PR4b), because the two halves above cannot both hold literally.**
+  > PR4a's `dns.tf` carries **no `moved` block**, so a generated file that is byte-identical to
+  > it cannot also contain the reverse block — and the reverse block is not optional. Without it
+  > the generator emits precisely the plan `git revert` produces: `github_pages` created and
+  > `pages_apex` destroyed as two unrelated addresses, dispatched concurrently, which is
+  > Cloudflare `81053` in the reverse direction on an apex that is already failing. That is the
+  > measured hazard AC71 forbids, so an AC satisfied by omitting the block would be satisfied by
+  > the defect.
+  >
+  > The contract is therefore **byte-identity MODULO the reverse `moved` block**, and it is
+  > mechanized rather than left to reading: the generator exposes `--emit-tf-stripped`, whose
+  > output is compared with `cmp -s` against the committed
+  > `apps/web-platform/infra/fixtures/dns.tf.pr4a-baseline`, plus a separate row asserting the
+  > full output differs from that baseline by **additions only** — so a generator that quietly
+  > mutated a record while emitting cannot pass the stripped comparison alone.
+  >
+  > The baseline is a **committed fixture**, never `git show main:dns.tf`. `main`'s `dns.tf`
+  > BECOMES the post-flip file the moment PR4b merges, so a baseline resolved that way would
+  > invert the moment it mattered and the suite would go red on `main` for the next contributor.
 - **AC71 (`git revert` is forbidden, in the imperative, at the step)** — the runbook's rollback
   **step itself** — not a notes section — states that `git revert` is the WRONG lever for PR4b,
   and why: measured, it produces
@@ -2113,7 +2151,7 @@ logs:
 
 discoverability_test:
   command: bash apps/web-platform/infra/apex-origin-probe.sh
-  expected_output: "SERVING-FROM-GITHUB-PAGES"
+  expected_output: "SERVING-FROM-CLOUDFLARE-PAGES"
 ```
 
 **Amended 2026-08-25.** The command was inline and preflight Check 10 could not run it, in
@@ -2124,10 +2162,19 @@ ad-hoc. Semantically its `expected_output` asserted the POST-cutover origin, so 
 migration every run before the cutover reported a mismatch: the check could only ever fail
 until the last PR landed.
 
-`expected_output` therefore tracks the CURRENT stage and is `SERVING-FROM-GITHUB-PAGES` through
-PR1-PR3. **PR4 flips it to `SERVING-FROM-CLOUDFLARE-PAGES` as part of the cutover hunk** — that
-flip is the cutover's own assertion, and until it happens an unexpected Cloudflare verdict means
-the origin moved without the record swap, which is exactly what we want to hear about.
+`expected_output` therefore tracks the CURRENT stage. It was `SERVING-FROM-GITHUB-PAGES`
+through PR1-PR3; **PR4b flips it to `SERVING-FROM-CLOUDFLARE-PAGES` in the cutover hunk itself**
+(AC59, done 2026-09-03), because that flip IS the cutover's own assertion. Before the flip, an
+unexpected Cloudflare verdict meant the origin had moved without the record swap; after it, a
+GitHub-Pages verdict means the swap did not take, and both are exactly what we want to hear
+about.
+
+**The probe gained a cache-buster in the same hunk (AC61).** Measured 2026-09-02 the apex
+answers `cache-control: max-age=600`, `age: 279`, `x-cache: HIT`, and the
+`SERVING-FROM-CLOUDFLARE-PAGES` arm is RESIDUAL — "200, and no GitHub marker" — so a cached
+pre-cutover response reads as Cloudflare. Since this probe is the rollback's branch selector at
+T+20, that false reading is what would route a session into reverting PR3, a SECOND destroy.
+The three verdicts and both AP-021 `UNREACHABLE` arms are unchanged.
 
 The plan previously recorded that an earlier ad-hoc version of this probe "failed open, printing
 the success verdict for an unreachable site" and had been "hardened and verified across all four
@@ -2295,10 +2342,10 @@ exception:
       origin that only serves because of this rule. Removing it is part of the deferred
       cleanup. That it becomes inert for these hosts post-cutover (no origin leg remains) is a
       claim to MEASURE during that cleanup, not to assert here.
-    tracking_issue: the deferred-cleanup issue filed in PR1 — UNVERIFIED as of 2026-09-03; a
-      `gh issue list` search did not surface it, so AC52 (PF-DEFER) requires PR4 to verify it
-      by number with `gh issue view` and file it if absent. A tracking_issue named only as a
-      description is not a tracking issue.
+    tracking_issue: "#7799"   # filed 2026-09-03 by PR4b, discharging AC52 (PF-DEFER).
+      # It did NOT exist: two sessions recorded it as unfindable and PR4a did not resolve it,
+      # so it is now cited by NUMBER rather than as a description — the plan's own rule is that
+      # a tracking_issue named only as a description is not a tracking issue.
     reevaluate_when: the site is verified serving from Cloudflare Pages across a full
       certificate cycle AND the rollback window is formally closed
     expires_on: 2026-11-20
