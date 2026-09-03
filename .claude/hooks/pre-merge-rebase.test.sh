@@ -70,6 +70,7 @@ init_git_repo() {
 # Call AFTER the initial commit (there must be something to push).
 attach_origin() {
   local work="$1" origin="$2"
+  assert_fixture_dir "$work"
   git init -q --bare -b main "$origin"
   git -C "$work" remote add origin "$origin"
   git -C "$work" push -q origin HEAD:main
@@ -85,6 +86,7 @@ attach_origin() {
 # BEFORE forking, via seed_review_evidence_on_main.
 seed_review_evidence() {
   local work="$1"
+  assert_fixture_dir "$work"
   mkdir -p "$work/todos"
   echo "code-review" > "$work/todos/sample.md"
   git -C "$work" add todos/sample.md
@@ -97,6 +99,7 @@ seed_review_evidence() {
 # reviewed.
 seed_review_evidence_on_main() {
   local work="$1"
+  assert_fixture_dir "$work"
   mkdir -p "$work/todos"
   echo "code-review" > "$work/todos/legacy-finding.md"
   git -C "$work" add todos/legacy-finding.md

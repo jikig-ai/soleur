@@ -64,6 +64,7 @@ OPT_REASON=""     # newline-separated substrings the deny reason must ALL contai
 make_work_dir() {
   local body="$1" pr_body="$2" tmp
   tmp="$(mktemp -d)"
+  : "${tmp:?fixture dir is empty; git -C <empty> would retarget this write}"
   git -C "$tmp" init -q -b feat-x
   git -C "$tmp" config user.email t@t; git -C "$tmp" config user.name t
   git -C "$tmp" commit -q --allow-empty -m "base"

@@ -130,6 +130,7 @@ poison_pair() {
 
 # add_worktree <root> <name> — raw `git worktree add`, NO worktree-manager involvement.
 add_worktree() {
+  assert_fixture_dir "${1}"
   git -C "$1" worktree add -q "$1/.worktrees/$2" -b "$2" main >/dev/null 2>&1
 }
 
