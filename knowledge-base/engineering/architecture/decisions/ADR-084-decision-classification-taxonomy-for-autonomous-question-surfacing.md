@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-07-04
 - **Issue:** #5984 (Wave 1 of the gstack-capability-adoption epic #5983)
-- **Relationship to ADR-083:** **consumes** ADR-083's scoped `fable`→`opus` consult as one of two signals at the two **decision** gates (`plan` Step 4.5, `ship` Phase 5.5). ADR-083 gained a third gate on 2026-09-03 (`review` §5 Step 1, findings-synthesis); that one is deliberately outside this taxonomy — it does not classify a decision for surfacing. It does not extend the consult mechanism. For the "one-shot inherits, not edited" rationale it **references** ADR-083 §Decision-2/§Alternatives ("Edit one-shot too → Rejected", CONTINUATION-GATE) rather than re-deciding it.
+- **Relationship to ADR-083:** **consumes** ADR-083's scoped `fable`→`opus` consult as one of two signals at the two gates where it already fires (`plan` Step 4.5, `ship` Phase 5.5). It does not extend the consult mechanism. For the "one-shot inherits, not edited" rationale it **references** ADR-083 §Decision-2/§Alternatives ("Edit one-shot too → Rejected", CONTINUATION-GATE) rather than re-deciding it.
 - **Relationship to ADR-053:** stays inside the all-Claude model policy — "both signals" is the session Claude model + the ADR-053-compliant `fable`/`opus` consult. No external vendor.
 
 ## Context
