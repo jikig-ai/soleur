@@ -41,9 +41,39 @@ trap 'rm -rf "$WORK"' EXIT
 HOST="soleur-inngest"
 HOST_NAME="soleur-inngest-prd"
 TAG="inngest-cutover-flip"
-BOUNDARY="2026-09-03T12:00:00Z"
+# BOUNDARY AND EVERY FIXTURE TIMESTAMP ARE RELATIVE TO NOW, and that is load-bearing rather than
+# tidy. The probe grades silence by AGE: past FLIP_ROLLOUT_STALE_AFTER_S (default 3600s) a quiet
+# host stops being "not yet" and becomes a FAIL. An ABSOLUTE boundary therefore makes this suite's
+# verdicts a function of when it runs — the literal `2026-09-03T12:00:00Z` that lived here was
+# green for exactly one hour after it was written, then flipped five TRANSIENT cases to FAIL and
+# would have redded every run from then on. It reached CI. Anchor to now and the arms stay
+# deterministic on any day.
+#
+# OLD_BOUNDARY stays absolute ON PURPOSE: it is the deliberately-stale arm, and a fixed date in
+# the past only gets staler, so it cannot rot in the direction that matters.
+_ts() { date -u -d "$1" +%Y-%m-%dT%H:%M:%SZ; }   # GNU date; CI and the dev host both have it
+BOUNDARY="$(_ts '-5 minutes')"        # fresh: well inside STALE_AFTER_S, so silence is TRANSIENT
+POST_A="$(_ts '-4 minutes')"          # first post-boundary marker
+POST_B="$(_ts '-210 seconds')"        # second — two are what proves the 30s timer is cycling
+POST_C="$(_ts '-3 minutes')"          # a third row (a flush transition / an armed flag)
+PRE_A="$(_ts '-65 minutes')"          # pre-boundary: the REPLACED host's evidence
+PRE_B="$(_ts '-35 minutes')"
 OLD_BOUNDARY="2020-01-01T00:00:00Z"
 GUARD="7761"
+
+# FRESHNESS SELF-CHECK. If someone reinstates an absolute BOUNDARY, this says so by name instead
+# of letting five unrelated assertions flip verdict for a reason none of them mentions.
+_b_epoch="$(date -u -d "$BOUNDARY" +%s 2>/dev/null || echo 0)"
+_now_epoch="$(date -u +%s)"
+_b_age=$(( _now_epoch - _b_epoch ))
+_stale_after="${FLIP_ROLLOUT_STALE_AFTER_S:-3600}"
+if [[ "$_b_epoch" -le 0 || "$_b_age" -ge "$_stale_after" ]]; then
+  printf 'SETUP FAIL: BOUNDARY is %ss old, at or past the probe STALE_AFTER_S of %ss.\n' \
+    "$_b_age" "$_stale_after" >&2
+  printf '            The TRANSIENT arms below grade silence by AGE and would all read FAIL.\n' >&2
+  printf '            BOUNDARY must be computed relative to now, never written as a literal.\n' >&2
+  exit 2
+fi
 
 # One warehouse row in the DOUBLE-ENCODED shape the real source returns: the outer object carries
 # `raw` as a JSON *string*, which decodes to {host, host_name, SYSLOG_IDENTIFIER, message}, and
@@ -163,8 +193,8 @@ out="$(env FLIP_ROLLOUT_QUERY_BIN="$(make_stub "$f")" \
 # --- 3. the happy path ---------------------------------------------------------------------
 echo "TEST: two post-boundary guard-stamped rolled-back markers => PASS"
 f="$WORK/rows-good"
-{ row rolled-back noop-rolled-back "2026-09-03T12:05:00Z"
-  row rolled-back noop-rolled-back "2026-09-03T12:05:30Z"; } > "$f"
+{ row rolled-back noop-rolled-back "$POST_A"
+  row rolled-back noop-rolled-back "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "0" ]] && pass "exit 0 with two post-boundary markers" || fail "expected 0, got $rc: $(probe_out)"
 [[ "$(probe_out)" == *"PASS: #7761 delivered"* ]] && pass "reports the delivery in its own words" || fail "no PASS line"
@@ -194,7 +224,7 @@ fi
 # --- 4. ONE marker is not enough: booted-once is not cycling --------------------------------
 echo "TEST: a single post-boundary marker is TRANSIENT (booted once != timer cycling)"
 f="$WORK/rows-one"
-row rolled-back noop-rolled-back "2026-09-03T12:05:00Z" > "$f"
+row rolled-back noop-rolled-back "$POST_A" > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "2" ]] && pass "exit 2 on a single marker" || fail "expected 2, got $rc: $(probe_out)"
 [[ "$(probe_out)" == *"insufficient_post_replace_markers"* ]] && pass "names the insufficient-marker reason" || fail "reason not named"
@@ -202,8 +232,8 @@ rc="$(run_probe "$(make_stub "$f")")"
 # --- 5. PRE-boundary markers must not satisfy the probe -------------------------------------
 echo "TEST: pre-boundary markers do NOT satisfy the probe (the replaced host's evidence)"
 f="$WORK/rows-old"
-{ row rolled-back noop-rolled-back "2026-09-03T11:00:00Z"
-  row rolled-back noop-rolled-back "2026-09-03T11:30:00Z"; } > "$f"
+{ row rolled-back noop-rolled-back "$PRE_A"
+  row rolled-back noop-rolled-back "$PRE_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "2" ]] && pass "exit 2 when every marker predates the boundary" || fail "expected 2, got $rc: $(probe_out)"
 
@@ -213,8 +243,8 @@ rc="$(run_probe "$(make_stub "$f")")"
 # nothing — every other observable it checks is emitted by the old script too.
 echo "TEST: #7761 post-boundary markers WITHOUT the guard stamp are a stale image, not a pass"
 f="$WORK/rows-oldrev"
-{ row rolled-back noop-rolled-back "2026-09-03T12:05:00Z" ""
-  row rolled-back noop-rolled-back "2026-09-03T12:05:30Z" ""; } > "$f"
+{ row rolled-back noop-rolled-back "$POST_A" ""
+  row rolled-back noop-rolled-back "$POST_B" ""; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "1" ]] && pass "exit 1 when post-boundary rows carry no guard stamp" || fail "expected 1, got $rc: $(probe_out)"
 [[ "$(probe_out)" == *"stale_image"* ]] && pass "names stale_image rather than silence" || fail "reason not named"
@@ -222,9 +252,9 @@ rc="$(run_probe "$(make_stub "$f")")"
 # --- 6. a flush-path transition is a hard FAIL ----------------------------------------------
 echo "TEST: a post-boundary flush-path transition FAILs (the latch guarantee is broken)"
 f="$WORK/rows-flush"
-{ row rolled-back noop-rolled-back "2026-09-03T12:05:00Z"
-  row rolled-back noop-rolled-back "2026-09-03T12:05:30Z"
-  row flushed flip-flushed "2026-09-03T12:06:00Z"; } > "$f"
+{ row rolled-back noop-rolled-back "$POST_A"
+  row rolled-back noop-rolled-back "$POST_B"
+  row flushed flip-flushed "$POST_C"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "1" ]] && pass "exit 1 on a post-boundary flush-path transition" || fail "expected 1, got $rc: $(probe_out)"
 [[ "$(probe_out)" == *"latch guarantee is broken"* ]] && pass "names the latch guarantee" || fail "message not named"
@@ -232,9 +262,9 @@ rc="$(run_probe "$(make_stub "$f")")"
 # --- 7. `armed` must FAIL, not pass -----------------------------------------------------------
 echo "TEST: a post-boundary flag=armed FAILs (a cutover is queued, not a quiet host)"
 f="$WORK/rows-armed"
-{ row rolled-back noop-rolled-back "2026-09-03T12:05:00Z"
-  row rolled-back noop-rolled-back "2026-09-03T12:05:30Z"
-  row armed noop-armed "2026-09-03T12:06:00Z"; } > "$f"
+{ row rolled-back noop-rolled-back "$POST_A"
+  row rolled-back noop-rolled-back "$POST_B"
+  row armed noop-armed "$POST_C"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "1" ]] && pass "exit 1 on a post-boundary flag=armed" || fail "expected 1, got $rc: $(probe_out)"
 [[ "$(probe_out)" == *"cutover is QUEUED"* ]] && pass "names the queued cutover explicitly" || fail "message not named"
@@ -253,16 +283,16 @@ rc="$(run_probe "$(make_stub "$f")")"
 # --- 8. host isolation, on BOTH identity fields ---------------------------------------------
 echo "TEST: rows from another host do not satisfy the probe (both identity fields required)"
 f="$WORK/rows-otherhost"
-{ row rolled-back noop-rolled-back "2026-09-03T12:05:00Z" "$GUARD" "web-1" "web-1-prd"
-  row rolled-back noop-rolled-back "2026-09-03T12:05:30Z" "$GUARD" "web-1" "web-1-prd"; } > "$f"
+{ row rolled-back noop-rolled-back "$POST_A" "$GUARD" "web-1" "web-1-prd"
+  row rolled-back noop-rolled-back "$POST_B" "$GUARD" "web-1" "web-1-prd"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "2" ]] && pass "exit 2 when the only rows belong to another host" || fail "expected 2, got $rc: $(probe_out)"
 [[ "$(probe_out)" == *"channel_dark"* ]] && pass "reports channel_dark rather than inventing a pass" || fail "reason not named"
 
 echo "TEST: a row matching host_name but NOT host is rejected (#6616 — host_name can lie)"
 f="$WORK/rows-spoof"
-{ row rolled-back noop-rolled-back "2026-09-03T12:05:00Z" "$GUARD" "web-1" "$HOST_NAME"
-  row rolled-back noop-rolled-back "2026-09-03T12:05:30Z" "$GUARD" "web-1" "$HOST_NAME"; } > "$f"
+{ row rolled-back noop-rolled-back "$POST_A" "$GUARD" "web-1" "$HOST_NAME"
+  row rolled-back noop-rolled-back "$POST_B" "$GUARD" "web-1" "$HOST_NAME"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "2" ]] && pass "exit 2 when host_name matches but host does not" || fail "expected 2, got $rc: $(probe_out)"
 
@@ -276,8 +306,8 @@ rc="$(run_probe "$(failing_stub)")"
 echo "TEST: one malformed row does not discard the valid rows after it"
 f="$WORK/rows-malformed"
 { printf '{"raw":"{trunca\n'
-  row rolled-back noop-rolled-back "2026-09-03T12:05:00Z"
-  row rolled-back noop-rolled-back "2026-09-03T12:05:30Z"; } > "$f"
+  row rolled-back noop-rolled-back "$POST_A"
+  row rolled-back noop-rolled-back "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "0" ]] && pass "exit 0 — the malformed line was skipped, not fatal" || fail "expected 0, got $rc: $(probe_out)"
 
@@ -292,15 +322,15 @@ rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$OLD_BOUNDARY")"
 
 echo "TEST: #7761 too-few markers past the deadline FAILs too"
 f="$WORK/rows-one2"
-row rolled-back noop-rolled-back "2026-09-03T12:05:00Z" > "$f"
+row rolled-back noop-rolled-back "$POST_A" > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$OLD_BOUNDARY")"
 [[ "$rc" == "1" ]] && pass "exit 1 on insufficient markers past the deadline" || fail "expected 1, got $rc: $(probe_out)"
 
 # --- 12. a seam refusal on the live host is the #7761 condition occurring --------------------
 echo "TEST: #7761 a seam refusal on the live host FAILs (a Doppler name collided with a seam)"
 f="$WORK/rows-refusal"
-{ row rolled-back noop-rolled-back "2026-09-03T12:05:00Z"
-  row rolled-back noop-rolled-back "2026-09-03T12:05:30Z"
+{ row rolled-back noop-rolled-back "$POST_A"
+  row rolled-back noop-rolled-back "$POST_B"
   refusal_row; } > "$f"
 rc="$(run_probe "$(make_stub "$f")")"
 [[ "$rc" == "1" ]] && pass "exit 1 when a seam refusal appears on the live host" || fail "expected 1, got $rc: $(probe_out)"
@@ -312,8 +342,8 @@ rc="$(run_probe "$(make_stub "$f")")"
 # only exit 1 independent of marker rows — had zero intentional coverage.
 echo "TEST: #7761 a Doppler flag that disagrees FAILs fast"
 f="$WORK/rows-good2"
-{ row rolled-back noop-rolled-back "2026-09-03T12:05:00Z"
-  row rolled-back noop-rolled-back "2026-09-03T12:05:30Z"; } > "$f"
+{ row rolled-back noop-rolled-back "$POST_A"
+  row rolled-back noop-rolled-back "$POST_B"; } > "$f"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_DOPPLER_BIN="$(doppler_stub armed)")"
 [[ "$rc" == "1" ]] && pass "exit 1 when Doppler reads a different flag" || fail "expected 1, got $rc: $(probe_out)"
 [[ "$(probe_out)" == *"armed"* ]] && pass "names the disagreeing value" || fail "value not named"
