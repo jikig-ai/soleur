@@ -39,14 +39,32 @@ if [ "$header_count" -ne 1 ]; then
 fi
 
 # (ii) Anthropic Vendor Mapping row references PA-22 + autonomous activity.
-if ! grep -E "Anthropic.*PA-22.*autonomous" "$REG" >/dev/null; then
+#
+# SCOPED TO THE VENDOR MAPPING SECTION (#7717 review). This was a file-wide grep matching exactly
+# one line -- the Anthropic PBC row -- so it read as precise and was not: deleting that row and
+# planting one narrative sentence 170 lines away ("Anthropic is discussed at PA-22 as an
+# autonomous runtime dependency") satisfied it, and the script reported PA-22 substrate checks
+# passed. Measured at review. Bounded on the next heading of any kind, same idiom as (iv).
+if ! awk '/^## Vendor \/ Sub-Processor Mapping/{inblk=1; next} inblk && /^## /{exit} inblk' "$REG" \
+     | grep -E "Anthropic.*PA-22.*autonomous" >/dev/null; then
   echo "Anthropic Vendor Mapping row does not reference PA-22 + autonomous activity" >&2
+  echo "  (checked INSIDE '## Vendor / Sub-Processor Mapping' only -- prose elsewhere does not satisfy this)" >&2
   exit 1
 fi
 
 # (iii) PA-22 (f) records Zero-Retention status.
-if ! grep -E "Zero-Retention.*(signed|unsigned|amendment)" "$REG" >/dev/null; then
+#
+# SCOPED TO THE PA-22 BLOCK (#7717 review), and this was strictly worse than the (iv) defect
+# below. File-wide the pattern matches EIGHT lines and only ONE (PA-22 §(f)) is the subject;
+# the other seven belong to PA-27, PA-31, PA-33, PA-34 and the Vendor Mapping. So the assertion
+# sampled 1-of-8 while its fixture renamed all eight at once -- "empty the table", which cannot
+# be told apart from "drop the row". Scrubbing Zero-Retention inside the PA-22 block ALONE left
+# the script reporting success. Unlike (iv)'s over-span, this contamination was LIVE, not latent.
+if ! awk '/^## Processing Activity 22/{inblk=1; next} inblk && /^## /{exit} inblk' "$REG" \
+     | grep -E "Zero-Retention.*(signed|unsigned|amendment)" >/dev/null; then
   echo "PA-22 (f) does not record Anthropic Zero-Retention status" >&2
+  echo "  (checked INSIDE the PA-22 block only -- a Zero-Retention line under another Processing" >&2
+  echo "   Activity does not satisfy this)" >&2
   exit 1
 fi
 
