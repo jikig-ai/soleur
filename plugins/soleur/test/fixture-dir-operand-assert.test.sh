@@ -415,6 +415,33 @@ SYNTHEOF
 if [[ "$n" == "0" ]]; then pass "must-PASS: \`d=\$(mktemp -d) || return 1\` is guarded"
 else fail "must-PASS regression: guarded mktemp flagged (${n})"; fi
 
+# A BRACE-GROUP abort is the same guard with a diagnostic attached, and it is the dominant real
+# spelling: `|| { echo "SETUP: ..." >&2; exit 2; }`. The bare `|| exit` pattern cannot see past the
+# `{`, so eight live sites in one file read as unguarded while the script provably exits 2 before
+# reaching any of them. Recognising it is a DETECTOR correction, not a remediation — the two are
+# distinguished in the baseline header, because a count that drops for either reason looks the same.
+ck
+n=$(synth bracegroup <<'SYNTHEOF'
+SB=$(mktemp -d -t probe.XXXXXXXX) || { echo "SETUP: mktemp failed" >&2; exit 2; }
+git -C "$SB" commit --allow-empty -m x
+SYNTHEOF
+)
+if [[ "$n" == "0" ]]; then pass "must-PASS: \`|| { echo ...; exit 2; }\` aborts, so the operand is guarded"
+else fail "must-PASS regression: brace-group abort flagged as unguarded (${n})"; fi
+
+# The tightening that keeps the widening honest. `exit` as a WORD inside a diagnostic string does
+# not abort anything, so the brace group must be recognised only when `exit`/`return` sits at a
+# statement boundary. Without this the widening degenerates into "any brace group mentioning exit",
+# which would silence a genuinely unguarded site whose error message happens to say "exit".
+ck
+n=$(synth bracegroup_prose <<'SYNTHEOF'
+SB=$(mktemp -d -t probe.XXXXXXXX) || { echo "setup failed, will exit soon" >&2; }
+git -C "$SB" commit --allow-empty -m x
+SYNTHEOF
+)
+if [[ "${n:-0}" -ge 1 ]]; then pass "must-FAIL: \`exit\` inside a diagnostic STRING is not an abort"
+else fail "the word \`exit\` in prose silenced a genuinely unguarded site (${n:-none})"; fi
+
 ck
 n=$(synth reads <<'SYNTHEOF'
 h() {
@@ -545,7 +572,7 @@ fi
 
 # Exact, derived from a green run: 62 arms execute today. The previous 17 against 21 arms left
 # four must-trip arms deletable behind the slack (measured). Raise in lockstep; never lower.
-MIN_ASSERTIONS=62
+MIN_ASSERTIONS=64
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS}" >&2
   exit 1

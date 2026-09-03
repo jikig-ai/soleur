@@ -243,6 +243,11 @@ def _bind_res(var):
 #
 # `${v:?...}` remains sufficient FOR P1a specifically: it refuses empty and unset. It does not
 # reject a relative path, which is P1b and tracked separately rather than silently folded in.
+#
+# NOT recognised, deliberately: `|| true` and `|| <fallback>`. Both are the OPPOSITE of a guard —
+# they permit the failure — and eleven live sites sit next to one. Measured while sizing the
+# custom-handler class (#7709): of 167 sites, exactly 8 carried a real unrecognised abort (the
+# brace group below) and 12 carried a fallback that must keep counting.
 def _guard_res(var):
     v = re.escape(var)
     return (
@@ -255,6 +260,13 @@ def _guard_res(var):
         # which is the dominant real shape and mentions `d=`, never `$d`).
         re.compile(r'(?:\$\{?' + v + r'\}?|(?:^|;|\s)(?:local\s+|declare\s+)?' + v + r'=)'
                    r'.*\|\|\s*(?:exit|return)'),
+        # the same abort with a diagnostic attached: `... || { echo "..." >&2; exit 2; }`.
+        # `exit`/`return` must sit at a STATEMENT boundary — immediately after the `{`, or after a
+        # `;`/`&&`/`||` inside it. Matching the bare word would accept `|| { echo "will exit"; }`,
+        # which aborts nothing, and silencing a genuinely unguarded site is the one direction this
+        # widening must not fail in. `[^}]` keeps the scan inside the brace group.
+        re.compile(r'(?:\$\{?' + v + r'\}?|(?:^|;|\s)(?:local\s+|declare\s+)?' + v + r'=)'
+                   r'.*\|\|\s*\{\s*(?:[^}]*?(?:;|&&|\|\|)\s*)?(?:exit|return)\b'),
         # a case/test whose SUBJECT is this operand
         re.compile(r'(?:case|\[\[)\s+.*"\$\{?' + v + r'\}?"'),
     )

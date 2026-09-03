@@ -16,6 +16,24 @@
 # them). Every newly-counted site pre-existed and was invisible. Verify by re-running the scanner
 # at the previous commit: the delta is in the detector, not the tree.
 #
+# 2026-09-03 REGENERATED DOWNWARD, 167 -> 159, and this one is a DETECTOR correction too — in the
+# opposite direction, which is the direction this file's own rule is written to be suspicious of.
+# Eight sites in `.github/scripts/test/test-infra-suite-registration-mutations.sh` were never
+# unguarded: the file binds `SB=$(mktemp -d ...) || { echo "SETUP: mktemp failed" >&2; exit 2; }`,
+# so the script exits 2 long before any of the eight writes. `_guard_res` matched `|| exit` and
+# `|| return` only as bare words, so it could not see past the `{`, and the brace group is the
+# dominant real spelling because it is the one that carries a diagnostic.
+#
+# The recognition is anchored: `exit`/`return` must sit at a statement boundary inside the group.
+# `|| { echo "will exit soon"; }` aborts nothing and still counts, and there is a must-FAIL fixture
+# pinning that, because a widening that silences a genuinely unguarded site is strictly worse than
+# the eight false positives it set out to remove.
+#
+# NOT recognised, and this is the load-bearing half: `|| true` and `|| <fallback>`. Twelve live
+# sites sit next to one. They are the OPPOSITE of a guard — they permit the failure — and the
+# planning estimate that ~140 sites carried an unrecognised custom guard was measured false here:
+# of 167, exactly 8 carried a real abort the detector missed.
+#
 # Counts, not line numbers: line numbers churn on every unrelated edit above them, and a
 # baseline that reds for a comment insertion gets regenerated reflexively, which is how a
 # ratchet stops being one.
@@ -27,7 +45,6 @@
 2	.claude/hooks/ship-soak-followthrough-gate.test.sh
 19	.claude/hooks/ship-unpushed-commits-gate.test.sh
 5	.claude/hooks/skill-context-queries.test.sh
-8	.github/scripts/test/test-infra-suite-registration-mutations.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 2	apps/web-platform/infra/workspaces-luks-loopback.test.sh
 1	apps/web-platform/scripts/lint-migration-fk-preconditions.sh
