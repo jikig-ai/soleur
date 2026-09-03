@@ -242,7 +242,7 @@ Pages, retire the certificate-remediation subsystem, and return the zone to
 > are all explicitly out of scope for the migration. Rationale and the rejected options are
 > in **Alternatives Considered — the `www -> apex` 301 mechanism** below; the implementing
 > decision is `## Design Decision D1` of
-> `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.
+> `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.
 
 ### Sequencing
 
@@ -339,7 +339,7 @@ false.
 ## Addendum — 2026-08-20 (#7640): what the implementation plan changed about this ADR's reasoning
 
 The decision is unchanged and the status stays **ACCEPTED**. Implementation planning
-(`knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`)
+(`knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`)
 falsified one premise and split one deliverable, and both are recorded here rather than
 silently absorbed into the plan.
 

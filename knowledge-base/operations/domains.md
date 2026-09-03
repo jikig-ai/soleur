@@ -92,7 +92,7 @@ not say is that `ssl = "full"` is a **mitigation, not the resolution**.
 **The resolution is architectural: the docs site moves off GitHub Pages onto Cloudflare Pages**
 ([ADR-194](../engineering/architecture/decisions/ADR-194-migrate-marketing-docs-site-off-github-pages-to-cloudflare-pages.md),
 accepted 2026-08-20; implemented under #7640, plan at
-`knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`).
+`knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`).
 Cloudflare serves the site, so **there is no origin leg and no origin certificate**. The conflict
 this page records does not get managed better — it stops existing. The two requirements that were
 in direct conflict are both satisfied afterwards: apex and www stay `proxied = true` for the HSTS

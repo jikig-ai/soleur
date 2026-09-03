@@ -103,9 +103,18 @@ rejected alternatives are in the Cut List with the measurement that killed each.
       cutover"* and *"From the cutover…"*. **Leave the `cloudflare` element's "from
       #7640/ADR-194"**; it is a provenance citation, not tense (AC55).
 - [x] 4.3 Runbook + deferred-cleanup issue: PR5 **narrows the rollback** to three acts (AC56).
-- [ ] 4.4 `Ref #7640` in the body, not `Closes` (AC57).
-- [ ] 4.5 Merge only after CUT0′-CUT9 hold, same session as PR4b (AC34).
-- [ ] 4.6 Archive the plan with `archive-kb.sh` — **PR5 only** (AC58).
+- [ ] 4.4 `Ref #7640` in the body, not `Closes` (AC57). — completes when the PR body is written.
+- [ ] 4.5 Merge only after CUT0′-CUT9 hold, same session as PR4b (AC34). — the PRECONDITION
+      is satisfied (CUT held 19:26-19:28Z, same session); the tick completes at merge, and
+      AC34's second clause — PR5's own `deploy-docs.yml` merge run green with Probe B MATCH
+      — is verifiable only from that run.
+- [x] 4.6 Archive the plan with `archive-kb.sh` — **PR5 only** (AC58). Done: the plan and
+      BOTH #7640 spec dirs are archived, and the six live citations of the old plan path
+      (gh-pages-cert-renewal, principles-register AP-019, ADR-125, ADR-194 x2, domains.md)
+      were repointed in the same edit cycle. The cutover runbook now cites the archived
+      path, per AC58's second clause. `archive-kb.sh` needed TWO invocations with two
+      slugs: it globs plans by `*<slug>*` and specs by `feat-<slug>`, and this plan's
+      filename is topic-based, so no branch-derived slug reaches it.
 
 
 ## Completion record (2026-09-03)

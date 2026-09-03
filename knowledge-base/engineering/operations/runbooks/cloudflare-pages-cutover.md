@@ -15,6 +15,17 @@ safe to re-run. Where a step says "run", that is what it means; where it says
 
 ## Sequence
 
+> **Plan (ARCHIVED 2026-09-03 by PR5, AC58).** The migration plan this runbook
+> implements now lives at
+> `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`,
+> and its two spec dirs at
+> `knowledge-base/project/specs/archive/20260903-221104-feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages`
+> and
+> `knowledge-base/project/specs/archive/20260903-221155-feat-one-shot-7640-cloudflare-pages-migration`.
+> **This runbook is the live artifact** — the plan is history, kept for the
+> measurements and rejected alternatives behind each decision here.
+
+
 | PR | Contents | Applied by | Reverting it removes |
 |---|---|---|---|
 | PR1 | Pages project, Actions secrets, www Bulk Redirect, cert-reissue disarmament | apply-web-platform-infra | the substrate |
