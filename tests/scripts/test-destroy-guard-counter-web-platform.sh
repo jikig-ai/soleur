@@ -978,6 +978,118 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 
 
 
+# ---------------------------------------------------------------------------------------
+# AC72 — PF9b MECHANIZED: the apex `moved` actually re-addressed the survivor (#7640 PR4b)
+# ---------------------------------------------------------------------------------------
+# THE HAZARD THIS EXISTS FOR, AND WHY NOTHING ELSE CATCHES IT.
+#
+# PR4b flips the apex A record to a CNAME at ONE Terraform address, so core
+# serialises Delete->Create and the Cloudflare 81053 collision (an A and a CNAME
+# coexisting at one name) cannot occur. That property depends ENTIRELY on the
+# `moved` block's `from` naming the key that is actually in STATE.
+#
+# Terraform does not error on a `moved` whose source is absent from state. It
+# no-ops. `pages_apex` then plans as a BARE CREATE while the real survivor plans
+# as a SEPARATE delete: two unrelated addresses, dispatched concurrently, hazard
+# fully restored, no error anywhere.
+#
+# Two drift shapes produce exactly that, and both defeat every other gate:
+#   - a CONSISTENT repo-side rename of the pin and the `dns.tf` key, which passes
+#     `apex-single-node-replace.test.sh` 11/11 because that guard is static text;
+#   - a PR4a that merged without CONVERGING ([skip-web-platform-apply], or a
+#     failed apply), leaving state with four instances while the repo says one.
+#
+# `[ack-destroy]` cannot discriminate either, because `destroy_count` is 1 in the
+# CORRECT plan and 1 in the BROKEN one. This clause is the only check in the
+# system that reads what the plan is moving FROM rather than what the text says.
+APEX_MOVE_SURVIVOR='cloudflare_record.github_pages["185.199.108.153"]'
+
+_apex_orphans() { # <fixture> -> the counter, or "ERROR"
+  local out
+  out=$(jq -f "$FILTER" < "$1" 2>/dev/null | jq -r '.apex_move_orphans') || { echo "ERROR"; return; }
+  [[ "$out" =~ ^[0-9]+$ ]] || { echo "ERROR"; return; }
+  echo "$out"
+}
+
+# Both directions, each fixtured ALONE. A suite whose fixtures all trip cannot
+# see a clause that became too aggressive, and one whose fixtures all pass cannot
+# see one that stopped firing.
+_n=$(_apex_orphans "$FIXTURES/tfplan-web-platform-pr4b-apex-move-correct.json")
+[[ "$_n" == "0" ]] \
+  && _report "AC72: a correct PR4b plan (replace carrying previous_address) reads 0 orphans" ok \
+  || _report "AC72: a correct PR4b plan (replace carrying previous_address) reads 0 orphans" FAIL "got '$_n'"
+
+_n=$(_apex_orphans "$FIXTURES/tfplan-web-platform-pr4b-apex-move-orphaned.json")
+[[ "$_n" == "1" ]] \
+  && _report "AC72: a no-opped move (bare create + separate delete) is caught" ok \
+  || _report "AC72: a no-opped move (bare create + separate delete) is caught" FAIL "got '$_n'"
+
+# The row a PRESENCE-only check would pass. `previous_address` IS set here — it
+# just names the wrong key — so asserting only that the field exists is not the
+# same assertion and this fixture is what separates them.
+_n=$(_apex_orphans "$FIXTURES/tfplan-web-platform-pr4b-apex-move-wrongkey.json")
+[[ "$_n" == "1" ]] \
+  && _report "AC72: a move from an address that is NOT the survivor is caught" ok \
+  || _report "AC72: a move from an address that is NOT the survivor is caught" FAIL "got '$_n'"
+
+# Post-convergence the tripwire must go quiet permanently, or every later apply
+# on this root is blocked by a one-time transition.
+_n=$(_apex_orphans "$FIXTURES/tfplan-web-platform-pr4b-apex-move-converged.json")
+[[ "$_n" == "0" ]] \
+  && _report "AC72: once converged (no pages_apex create) the tripwire stays silent" ok \
+  || _report "AC72: once converged (no pages_apex create) the tripwire stays silent" FAIL "got '$_n'"
+
+# DRIFT PARITY. The survivor literal is pinned in three places that must agree:
+# this filter, `dns.tf`'s `moved.from`, and the static guard's
+# SURVIVING_APEX_KEY. A rename that updates two of the three is precisely the
+# co-mutation the static guard is blind to, so the parity is asserted here
+# rather than trusted.
+# `|| true` INSIDE each substitution: grep exits 1 on no match and `pipefail`
+# promotes it, so under this file's `set -e` an absent literal would abort the
+# suite at this line — before `_report` ever prints — which reads as a crash
+# rather than as the failing assertion it actually is.
+_guard_key=$(grep -oE '^SURVIVING_APEX_KEY="[^"]+"' \
+  "$REPO_ROOT/apps/web-platform/infra/apex-single-node-replace.test.sh" | sed 's/.*="//; s/"$//' || true)
+_jq_key=$(grep -oE 'cloudflare_record\.github_pages\[\\"[0-9.]+\\"\]' "$FILTER" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
+_dns_key=$(grep -oE 'from = cloudflare_record\.github_pages\["[0-9.]+"\]' \
+  "$REPO_ROOT/apps/web-platform/infra/dns.tf" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
+if [[ -n "$_guard_key" && "$_guard_key" == "$_jq_key" && "$_guard_key" == "$_dns_key" ]]; then
+  _report "AC72: the survivor key agrees across the filter, dns.tf and the static guard ($_guard_key)" ok
+else
+  _report "AC72: the survivor key agrees across the filter, dns.tf and the static guard" FAIL \
+    "guard='$_guard_key' filter='$_jq_key' dns.tf='$_dns_key'"
+fi
+
+# THE TRIPWIRE IS NOT ACK-BYPASSABLE. `[ack-destroy]` authorizes a destroy; it
+# cannot authorize a plan whose ordering property is absent, and the counts are
+# identical in both cases — so an ack-gated arm here would be no gate at all.
+# Mirrors the host_creates HALT, which sits above the ack for the same reason.
+_wf="$REPO_ROOT/.github/workflows/apply-web-platform-infra.yml"
+_halt_line=$(grep -n 'apex_move_orphans" -gt 0\|apex_move_orphans" -ne 0' "$_wf" | head -1 | cut -d: -f1 || true)
+_ack_line=$(grep -n 'ack-destroy\\\]($|\$' "$_wf" | head -1 | cut -d: -f1 || true)
+if [[ -z "$_ack_line" ]]; then _ack_line=$(grep -n 'HEAD_MSG.*ack-destroy' "$_wf" | head -1 | cut -d: -f1 || true); fi
+if [[ -n "$_halt_line" && -n "$_ack_line" && "$_halt_line" -lt "$_ack_line" ]]; then
+  _report "AC72: the apex-move HALT precedes the [ack-destroy] gate (line $_halt_line < $_ack_line)" ok
+else
+  _report "AC72: the apex-move HALT precedes the [ack-destroy] gate" FAIL \
+    "halt='$_halt_line' ack='$_ack_line'"
+fi
+
+# MUTATION PROOF, not a read-through. Strip the clause from a sandbox copy of the
+# filter and confirm the orphaned fixture stops being detected — an assertion
+# that cannot be driven the other way is not evidence the clause is load-bearing.
+_sbx=$(mktemp -d -t apex-ac72.XXXXXXXX) || { echo "[FATAL] mktemp failed" >&2; exit 2; }
+trap 'rm -rf "$_sbx"' EXIT INT TERM HUP
+sed '/apex_move_orphans: (/,/^  ),$/d' "$FILTER" > "$_sbx/mutant.jq"
+if cmp -s "$_sbx/mutant.jq" "$FILTER"; then
+  _report "AC72 mutation: the clause was actually removed from the sandbox copy" FAIL "sed matched nothing — this row scored the baseline"
+else
+  _mut=$(jq -f "$_sbx/mutant.jq" < "$FIXTURES/tfplan-web-platform-pr4b-apex-move-orphaned.json" 2>/dev/null | jq -r '.apex_move_orphans' || true)
+  [[ "$_mut" == "null" || -z "$_mut" ]] \
+    && _report "AC72 mutation: removing the clause makes the orphaned plan undetectable (the clause is what detects it)" ok \
+    || _report "AC72 mutation: removing the clause makes the orphaned plan undetectable" FAIL "mutant still reported '$_mut'"
+fi
+
 # ANTI-VACUITY FLOOR (#6997). Nothing else asserts that the assertions RAN. Every
 # non-vacuity mechanism in this suite lives inside a helper — the `cmp -s` mutation floors,
 # the layered contract's unmutated control, the preamble-distinctive anchors — so deleting
@@ -995,11 +1107,14 @@ gate_mutate_layered "A4: classifiability call (invoked, not merely sourced)" \
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((pass + fail))
-if [[ "$_ran" -lt 46 ]]; then
+# 46 was the floor before #7640 PR4b; the AC72 arm adds 7 assertions -> 53.
+# Stated as the increment rather than a fresh literal so a sibling PR that raises
+# the base is a visible conflict here instead of a silent revert (#7291).
+if [[ "$_ran" -lt 53 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 46. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 53 (46 + 7 for AC72). Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 46)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 53)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

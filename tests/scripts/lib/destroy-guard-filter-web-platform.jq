@@ -291,6 +291,46 @@ def destroyed_at($addr):
     | length
   ),
 
+  # 8th surface (#7640 PR4b, plan AC72): the apex `moved` must have actually
+  # re-addressed the survivor PR4a left in STATE.
+  #
+  # THE ONLY CLAUSE HERE THAT IS ABOUT STATE RATHER THAN TEXT. PR4b flips the
+  # apex A record to a CNAME at ONE resource address so core serialises
+  # Delete->Create; Cloudflare rejects an A and a CNAME coexisting at one name
+  # (81053), so the ordering is the entire safety case. It holds only if the
+  # `moved` block's `from` names a key that is really in state.
+  #
+  # Terraform does NOT error on a `moved` whose source is absent from state — it
+  # NO-OPS. `pages_apex` then plans as a bare create while the real survivor
+  # plans as a separate delete: two unrelated addresses, dispatched
+  # concurrently, hazard restored, and no error anywhere.
+  #
+  # Nothing else in the system can see it. `apex-single-node-replace.test.sh` is
+  # static text, so a CONSISTENT rename of the pin and the `dns.tf` key passes it
+  # 11/11 while state holds the old key; and a PR4a that merged without
+  # converging leaves state with four instances while the repo says one.
+  # `[ack-destroy]` cannot discriminate either — `destroy_count` is 1 in the
+  # correct plan and 1 in the broken one, which is why the consumer HALTs on this
+  # counter ABOVE the ack rather than gating it behind one.
+  #
+  # Scoped to plans that BIRTH pages_apex (`index("create")` catches both the
+  # bare create and the ["delete","create"] replace). Once the move has
+  # converged, later plans carry no create for this address and the counter is
+  # permanently 0 — a one-time transition must not block every subsequent apply.
+  #
+  # The literal is pinned in three places that must agree (this filter, dns.tf's
+  # `moved.from`, and the guard's SURVIVING_APEX_KEY); their parity is asserted
+  # by test-destroy-guard-counter-web-platform.sh, because a rename touching two
+  # of the three is exactly the co-mutation the static guard is blind to.
+  apex_move_orphans: (
+    [ .resource_changes[]?
+      | select(.type == "cloudflare_record")
+      | select(.name == "pages_apex")
+      | select(.change.actions? | index("create"))
+      | select((.previous_address // "") != "cloudflare_record.github_pages[\"185.199.108.153\"]") ]
+    | length
+  ),
+
   # --- web-2 RETIRE counters (#6538) -------------------------------------
   # Read ONLY by web2_retire_gate (tests/scripts/lib/web2-retire-gate.sh) against
   # the B6.2 operator-local 5-target plan. BACKWARD-COMPAT: additive keys; the
