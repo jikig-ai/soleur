@@ -73,6 +73,15 @@ inferring ownership from any HTTP status.
   Setting it to `https://de.sentry.io/api/` produces silent 404s (ingest-only
   host has no `/api/0/...` surface). The org-subdomain is the only base_url
   shape that works for slug-scoped operations regardless of org slug.
+
+> **Corrected 2026-09-03 (#7481).** The "`de.sentry.io` is ingest-only / 404s on `/api/`"
+> reason stated above is FALSE as written: measured, `de.sentry.io` returns HTTP **200** on
+> `/api/0/organizations/jikigai-eu/events/` and on `/projects/`, and
+> `apps/web-platform/infra/scripts/fresh-host-boot-trail.sh` reads that host in production.
+> The RECOMMENDATION is unaffected and still stands — it rests on the `-eu` slug-rewrite
+> finding, which this correction does not touch. Only the parenthetical justification was
+> wrong. Appended rather than edited in place: this is a dated record.
+
   **Transition note (2026-05-16, updated 2026-05-17 for the slug-rewrite
   finding, updated 2026-05-21 for the token-scope correction):**
   `apps/web-platform/infra/sentry/main.tf` now uses
@@ -203,7 +212,17 @@ scope `project:read` + `monitor:read` (audit) and `project:write`
 
 The Sentry EU API + dashboard live at `eu.sentry.io`; `de.sentry.io` is an
 **ingest-only** host that does not serve API or settings UI (audit/import
-calls return 404). The canonical EU API base_url is therefore
+calls return 404).
+
+> **Corrected 2026-09-03 (#7481).** The parenthetical is false as written. Measured:
+> `de.sentry.io` returns HTTP **200** on `/api/0/organizations/jikigai-eu/events/` and
+> `/api/0/organizations/jikigai-eu/projects/`, and
+> `apps/web-platform/infra/scripts/fresh-host-boot-trail.sh` reads that host in
+> production. This entry is the DEFINITIONAL site the other two statements of the claim
+> in this ADR point at, so the correction is recorded once, here. What survives
+> unchanged is the recommendation: the org-subdomain is required because `eu.sentry.io`
+> rewrites `-eu`-suffixed slugs, which this correction does not touch.
+ The canonical EU API base_url is therefore
 `https://eu.sentry.io/api/` — set on the Terraform provider config in
 `apps/web-platform/infra/sentry/main.tf` whenever `var.sentry_region = "de"`.
 See `Cluster / Host Glossary` above for the full host-class split and the
@@ -275,8 +294,9 @@ over-scoped, so a least-privilege read token is the data-minimisation-aligned po
 resource, so the token is minted by Soleur automation — Playwright against the `eu.sentry.io`
 dashboard (primary; the `POST …/sentry-apps/` API path needs `org:admin`, which no existing
 token carries and which public docs do not confirm), not an operator UI step. **Host:** the
-org-subdomain `jikigai-eu.sentry.io` per the Cluster/Host Glossary (NOT `de.sentry.io`, which
-is ingest-only). **Scope note:** the inline read CLI is a **read path, not a sixth/seventh
+org-subdomain `jikigai-eu.sentry.io` per the Cluster/Host Glossary (NOT `de.sentry.io` — but
+see the 2026-09-03 correction at the Glossary: the reason is the `-eu` slug rewrite, not that
+`de.sentry.io` lacks an API surface). **Scope note:** the inline read CLI is a **read path, not a sixth/seventh
 observability layer** — `observability-coverage-reviewer` must not accept it as a
 `failure_modes:` layer citation. Runbook
 `knowledge-base/engineering/operations/runbooks/sentry-issue-read.md`.

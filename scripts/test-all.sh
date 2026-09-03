@@ -1194,6 +1194,7 @@ if want_scripts; then
   # so its arms returning the right exit codes is load-bearing coverage.
   run_suite "scripts/expenses-verify-by-check" bash scripts/expenses-verify-by-check.test.sh
   run_suite "scripts/sentry-issue" bash scripts/sentry-issue.test.sh
+  run_suite "scripts/sentry-issue-discover" bash scripts/sentry-issue-discover.test.sh
   run_suite "scripts/content-publisher" bash scripts/test-content-publisher.sh
   # Registered by #6734. scripts/*.test.sh is NOT covered by any glob here (only
   # scripts/lib/*.test.sh is), so each one must be named explicitly. The first four below

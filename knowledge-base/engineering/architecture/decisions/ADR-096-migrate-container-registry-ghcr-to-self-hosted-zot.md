@@ -871,7 +871,7 @@ gate**, and neither is a human remembering.
 
 | Role | Mechanism |
 |---|---|
-| Detection — "upstream moved" | Poll step on `.github/workflows/rule-audit.yml` (cron 1st + 15th) comparing the pinned version against `repos/project-zot/zot/releases/latest`; files **one** idempotent `zot-pin-drift` issue |
+| Detection — "upstream moved" | Poll step on `.github/workflows/rule-audit.yml` (cron 1st + 15th) comparing the pinned version against `repos/project-zot/zot/releases/latest`; files **one** idempotent `zot-pin-drift` issue. **Since #7544 that step and that issue also carry a SECOND, unrelated pin** — the git-data rung-1 rehearsal's `UBUNTU_BASE` in `apps/web-platform/infra/git-data-runcmd-rehearsal.test.sh`, compared against the live `ubuntu:24.04` manifest-list digest. The label and issue are therefore no longer zot-only; read the body for which pin is implicated. |
 | Detection — "the analysis went stale" | `MAX_AGE_DAYS=90` age gate against the committed sidecar's capture date, on the same cron |
 | Enforcement | `apps/web-platform/infra/zot-image-staleness.test.sh`, registered in `infra-validation.yml`; 12 offline assertions, blocks the PR |
 | Analysis of record | `apps/web-platform/infra/zot-image.provenance.md` — config-compat table, non-adoption decisions, version-scoped claim register, rollback target, and a `## Bump procedure` |
