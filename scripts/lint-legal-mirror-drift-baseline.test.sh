@@ -60,8 +60,8 @@ new_repo() {
   printf '%s\n' "$d"
 }
 
-commit_all() { : "${1:?fixture dir is empty; git -C '' would retarget this write}"; git -C "$1" add -A && git -C "$1" -c core.hooksPath=/dev/null commit -q -m "$2"; }
-commit_base() { : "${1:?fixture dir is empty; git -C '' would retarget this write}"; commit_all "$1" base && git -C "$1" checkout -q -b feat; }
+commit_all() { : "${1:?fixture dir is empty; git -C <empty> would retarget this write}"; git -C "$1" add -A && git -C "$1" -c core.hooksPath=/dev/null commit -q -m "$2"; }
+commit_base() { : "${1:?fixture dir is empty; git -C <empty> would retarget this write}"; commit_all "$1" base && git -C "$1" checkout -q -b feat; }
 
 run_gate() {
   local d="$1" out rc=0

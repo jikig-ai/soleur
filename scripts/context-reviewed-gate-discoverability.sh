@@ -19,7 +19,7 @@ if ! command -v jq >/dev/null 2>&1 || ! command -v git >/dev/null 2>&1 || ! comm
 fi
 
 r="$(mktemp -d)"
-: "${r:?fixture dir is empty; git -C '' would retarget this write}"
+: "${r:?fixture dir is empty; git -C <empty> would retarget this write}"
 trap 'rm -rf "$r"' EXIT
 git -C "$r" init -q
 git -C "$r" config user.email t@t.dev

@@ -449,6 +449,25 @@ else fail "must-PASS regression: guarded mktemp flagged (${n})"; fi
 
 
 ck
+n=$(synth wrongfunc <<'SYNTHEOF'
+new_repo() {
+  local d
+  d=$(mktemp -d)
+  : "${1:?fixture dir is empty}"
+  printf '%s\n' "$d"
+}
+commit_all() { git -C "$1" add -A && git -C "$1" commit -q -m "$2"; }
+SYNTHEOF
+)
+# A ONE-LINE function definition is its own FUNC_HEAD. The positional-at-use walk used to start
+# at `i - 1`, stepping over that head and running on to the PREVIOUS function's head — so a
+# guard on a same-named positional in an UNRELATED body cleared the site. Measured at 0 before
+# the fix. This is the exact placement the #7709 burn-down had to correct by hand in two
+# legal-lint suites, and the detector could not tell the two apart.
+if [[ "${n:-0}" -ge 1 ]]; then pass "a guard in a DIFFERENT (one-line) function does not clear the site"
+else fail "a \${1:?} in an unrelated function silenced a one-line function's write (${n:-none})"; fi
+
+ck
 n=$(synth reads <<'SYNTHEOF'
 h() {
   local d="$1"
@@ -532,7 +551,7 @@ canon_raw="$(awk '/^assert_fixture_dir\(\) \{/,/^\}/' "$HELPERS")"
 for case_name in empty relative bareslash; do
   ck
   r=$(probe_repo "$case_name")
-  : "${r:?fixture dir is empty; git -C '' would retarget this write}"
+  : "${r:?fixture dir is empty; git -C <empty> would retarget this write}"
   case "$case_name" in
     empty)     op="" ;;
     relative)  op="relative/path" ;;
@@ -601,7 +620,7 @@ fi
 
 # Exact, derived from a green run: 62 arms execute today. The previous 17 against 21 arms left
 # four must-trip arms deletable behind the slack (measured). Raise in lockstep; never lower.
-MIN_ASSERTIONS=62
+MIN_ASSERTIONS=63
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS}" >&2
   exit 1

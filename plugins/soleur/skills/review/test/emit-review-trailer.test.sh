@@ -156,7 +156,7 @@ for bad in "--agents-ran abc --agents-expected 5" \
            "--agents-ran 5 --agents-expected 2" \
            "--mode enthusiastic"; do
   d="$(new_repo "bad$(echo "$bad" | tr -cd 'a-z0-9')")"
-  : "${d:?fixture dir is empty; git -C '' would retarget this write}"
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
   before="$(git -C "$d" rev-parse HEAD)"
   # shellcheck disable=SC2086
   out="$(cd "$d" && bash "$SUT" $bad 2>&1)"; rc=$?

@@ -245,9 +245,12 @@ def _bind_res(var):
 # reject a relative path, which is P1b and tracked separately rather than silently folded in.
 #
 # NOT recognised, deliberately: `|| true` and `|| <fallback>`. Both are the OPPOSITE of a guard —
-# they permit the failure. Twelve live sites sit next to one. Counts and the full rationale live
-# in fixture-dir-operand-assert.baseline.txt's 2026-09-03 entry, which is the artifact whose
-# number moved; restating them here is how the two copies drift.
+# they permit the failure, and live sites sit next to them. No count is given here on purpose:
+# three defensible readings of "a site next to a fallback" produced three different numbers
+# (8 / 11 / 12) depending on whether the match is per-site or per-occurrence and whether it is
+# anchored at end-of-statement. A number that needs its predicate published alongside it is not
+# carrying the argument — the property is. Rationale lives in
+# fixture-dir-operand-assert.baseline.txt's 2026-09-03 entry.
 #
 # ALSO not recognised: `|| { …; exit N; }`, a brace-group abort. That IS a real abort and the
 # eight sites it guards in .github/scripts/test/test-infra-suite-registration-mutations.sh are
@@ -333,8 +336,17 @@ def scan_operand(paths):
             # harness, which asserts on one line and writes on the next. So the window widens back
             # to the enclosing function head — bounded there rather than by a line count, so a
             # guard in a DIFFERENT function cannot clear this one.
+            #
+            # The walk starts at `i`, NOT `i - 1`. A ONE-LINE function definition
+            # (`f() { git -C "$1" add -A; }`) is its own head, so starting above it stepped over
+            # that head and ran on to the head of the PREVIOUS function — swallowing an unrelated
+            # body, where any guard on a same-named positional cleared the site. Measured: a
+            # `${1:?}` inside `new_repo()` silenced a genuinely unguarded `commit_all()` two lines
+            # below it (SITES=0; 1 after this fix), which is exactly the placement the #7709
+            # burn-down had to correct by hand in two legal-lint suites. The comment above was
+            # asserting an invariant the code did not have.
             if form == "positional-at-use":
-                for k in range(i - 1, max(-1, i - 60), -1):
+                for k in range(i, max(-1, i - 60), -1):
                     if FUNC_HEAD.match(lines[k]):
                         break
                     bind_idx = k

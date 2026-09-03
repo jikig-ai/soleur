@@ -59,10 +59,10 @@ new_repo() {
   printf '%s\n' "$d"
 }
 
-commit_all() { : "${1:?fixture dir is empty; git -C '' would retarget this write}"; git -C "$1" add -A && git -C "$1" -c core.hooksPath=/dev/null commit -q -m "$2"; }
+commit_all() { : "${1:?fixture dir is empty; git -C <empty> would retarget this write}"; git -C "$1" add -A && git -C "$1" -c core.hooksPath=/dev/null commit -q -m "$2"; }
 # Commit the base on main, then branch. Without the branch HEAD *is* main, merge-base is
 # HEAD, and the added-line diff is empty -- every case would pass having examined nothing.
-commit_base() { : "${1:?fixture dir is empty; git -C '' would retarget this write}"; commit_all "$1" base && git -C "$1" checkout -q -b feat; }
+commit_base() { : "${1:?fixture dir is empty; git -C <empty> would retarget this write}"; commit_all "$1" base && git -C "$1" checkout -q -b feat; }
 
 run_gate() {
   local d="$1" out rc=0

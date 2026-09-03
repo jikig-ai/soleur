@@ -372,7 +372,7 @@ saving that is invisible once the sweep is underway.
 
 **Phase 1.2ᐧ0 — Availability decides the remedy far more often than binding form does.**
 Measured across the 32 holders: **4** carry an inline copy of `assert_fixture_dir`, **5** source or
-already reference it, and **23 cannot reach it at all**. So the guidance to prefer the additive remedy
+already reference it, and **24 cannot reach it at all**. So the guidance to prefer the additive remedy
 "wherever the binding form allows" describes a minority of the work. For roughly seven sites in ten the
 real question is availability, and the honest answer is that the two control-flow remedies — the ones
 that change behaviour — are the default rather than the fallback. This is the single largest cost and
@@ -386,7 +386,7 @@ so "just source the helper everywhere" is not available as a blanket answer.
 
 Decide per file, in this order:
 
-- Already has the helper, inline or sourced (9 files) — use `assert_fixture_dir`.
+- Already has the helper, inline or sourced (8 files) — use `assert_fixture_dir`.
 - A test file that can reasonably source the helper — source it rather than copying it. Every inline
   copy widens the byte-equality drift arm's surface, and there are already four.
 - A plugin script under `plugins/soleur/` — a shared bash primitive belongs in the plugin payload per

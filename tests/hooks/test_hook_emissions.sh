@@ -103,7 +103,7 @@ _check_deny_payload() {
 # branch `main` so commit-on-main cases fire. All commits inside $WORK.
 _build_fake_main_repo() {
   local path="$1"
-  : "${path:?fixture dir is empty; git -C '' would retarget this write}"
+  : "${path:?fixture dir is empty; git -C <empty> would retarget this write}"
   mkdir -p "$path"
   git -C "$path" init -q -b main
   git -C "$path" -c user.email=t@test -c user.name=t commit --allow-empty -q -m init
@@ -235,7 +235,7 @@ _check "guardrails: block-commit-on-main (chained)" "guardrails-block-commit-on-
 # degenerated to "always emit on git commit" would pass the two positive
 # cases above; this case fails it.
 FEAT_REPO=$(_build_fake_main_repo "$WORK/feat-repo")
-: "${FEAT_REPO:?fixture dir is empty; git -C '' would retarget this write}"
+: "${FEAT_REPO:?fixture dir is empty; git -C <empty> would retarget this write}"
 git -C "$FEAT_REPO" checkout -q -b feat/foo
 echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m x"},"cwd":"'"$FEAT_REPO"'"}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
@@ -246,7 +246,7 @@ _check_silent "guardrails: block-commit-on-main (feature branch)" "guardrails-bl
 # the literal markers in the test source don't themselves trip any local
 # pre-commit grep. The guard inspects `git diff --cached`.
 CONFLICT_REPO=$(_build_fake_main_repo "$WORK/main-repo-conflict")
-: "${CONFLICT_REPO:?fixture dir is empty; git -C '' would retarget this write}"
+: "${CONFLICT_REPO:?fixture dir is empty; git -C <empty> would retarget this write}"
 # Move to a feature branch so commit-on-main doesn't fire first.
 git -C "$CONFLICT_REPO" checkout -q -b feat/conflict
 printf '%s\n' '<<<<<<< HEAD' 'a' '=======' 'b' '>>>>>>> other' > "$CONFLICT_REPO/file.txt"

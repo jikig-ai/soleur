@@ -50,12 +50,22 @@
 #   apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh  (1 site)
 #     LATEST_TAG=$(git -C "$SCRIPT_DIR" tag --list 'vinngest-v*' ...)
 #     `tag` is unscoped in OPERAND_WRITE, so `tag --list` -- a READ -- is counted as a write. The
-#     operand is also provably non-empty: the file is `set -euo pipefail` with no toggles and
-#     binds SCRIPT_DIR="$(cd ... && pwd)", so a failed cd fails the assignment and errexit aborts
-#     before the site. A guard was added here during the burn-down and REMOVED on review: it was
-#     unreachable on both counts, and this file's own rule is that a vacuous guard is worse than
-#     an acknowledged row. Scoping `tag`/`branch`/`config` to their mutating spellings is a
-#     detector narrowing and belongs with the P1b scanner work, not here.
+#     A guard was added here during the burn-down and REMOVED on review: it guarded a read.
+#     Scoping `tag`/`branch`/`config` to their mutating spellings is a detector narrowing and
+#     belongs with the P1b scanner work, not here.
+#
+#     Deliberately NOT claimed: that `$(cd ... && pwd)` under `set -e` is provably non-empty.
+#     That reasoning was used earlier in this branch and is FALSE as a universal — measured, a
+#     shell STARTED in a since-deleted directory has a null cwd cache, so `pwd` errors and the
+#     substitution is empty. The row stands on the read/write misclassification alone.
+#
+# THE TEST FOR "VACUOUS", so the rule above is not applied lexically: a guard is vacuous when the
+# binding CANNOT reach the use site holding an empty value. `set -euo pipefail` with no toggles is
+# evidence, not proof — a producer ending in `printf '%s' "$d"` returns 0 while printing nothing,
+# so its consumer can still observe empty under errexit. Roughly twenty of the guards this
+# burn-down added are of that shape and are defensible defense-in-depth. Do not delete a guard
+# because its file lacks `set +e`; delete it only when you have traced that no path reaches the
+# use with an empty value, as was done here and for lint-migration-fk-preconditions.sh.
 #
 # Also retired here: apps/web-platform/scripts/lint-migration-fk-preconditions.sh, which an
 # earlier revision of this entry acknowledged as a measured false positive on the grounds that its

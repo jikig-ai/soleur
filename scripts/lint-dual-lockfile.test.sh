@@ -123,7 +123,7 @@ fi
 
 # --- Row 1: restore apps/web-platform/bun.lock ---
 R1=$(make_repo row1 4)
-: "${R1:?fixture dir is empty; git -C '' would retarget this write}"
+: "${R1:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$R1/apps/web-platform"
 printf 'lockfile\n' > "$R1/apps/web-platform/bun.lock"
 git -C "$R1" add -A
@@ -131,20 +131,20 @@ expect_red "$R1" "row1 apps/web-platform/bun.lock restored" "apps/web-platform/b
 
 # --- Row 2: restore root bun.lock ---
 R2=$(make_repo row2 4)
-: "${R2:?fixture dir is empty; git -C '' would retarget this write}"
+: "${R2:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf 'lockfile\n' > "$R2/bun.lock"
 git -C "$R2" add -A
 expect_red "$R2" "row2 root bun.lock restored" "tracked bun lockfile: bun.lock"
 
 # --- Row 3: enumeration broken (zero package-lock.json) → RED via the floor, not exit 0 ---
 R3=$(make_repo row3 4)
-: "${R3:?fixture dir is empty; git -C '' would retarget this write}"
+: "${R3:?fixture dir is empty; git -C <empty> would retarget this write}"
 git -C "$R3" rm -q --cached package-lock.json pkg1/package-lock.json pkg2/package-lock.json pkg3/package-lock.json
 expect_red "$R3" "row3 empty package-lock enumeration" "below the floor"
 
 # --- Row 4: a THIRD bun.lock while both known directories stay clean ---
 R4=$(make_repo row4 4)
-: "${R4:?fixture dir is empty; git -C '' would retarget this write}"
+: "${R4:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$R4/spike"
 printf 'lockfile\n' > "$R4/spike/bun.lock"
 git -C "$R4" add -A
@@ -152,7 +152,7 @@ expect_red "$R4" "row4 spike/bun.lock (whole-set quantification)" "spike/bun.loc
 
 # --- Row 5: a bun.lock in a directory with NO package-lock.json ---
 R5=$(make_repo row5 4)
-: "${R5:?fixture dir is empty; git -C '' would retarget this write}"
+: "${R5:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$R5/lonely"
 printf 'lockfile\n' > "$R5/lonely/bun.lock"
 git -C "$R5" add -A
@@ -160,7 +160,7 @@ expect_red "$R5" "row5 bun.lock with no sibling package-lock.json" "lonely/bun.l
 
 # --- Row 6: reintroduce [install] into a bunfig.toml ---
 R6=$(make_repo row6 4)
-: "${R6:?fixture dir is empty; git -C '' would retarget this write}"
+: "${R6:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf '[install]\nminimumReleaseAge = 259200\n\n[test]\npreload = "./x.ts"\n' > "$R6/bunfig.toml"
 git -C "$R6" add -A
 expect_red "$R6" "row6 [install] section reintroduced" "declares an [install] section"
@@ -168,14 +168,14 @@ expect_red "$R6" "row6 [install] section reintroduced" "declares an [install] se
 # Row 6b: a bunfig.toml with ONLY [test] must PASS — the guard must not reject bun as a
 # test runner. Without this, row 6 would also pass against a guard that rejects any bunfig.
 R6B=$(make_repo row6b 4)
-: "${R6B:?fixture dir is empty; git -C '' would retarget this write}"
+: "${R6B:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf '[test]\npreload = "./x.ts"\n' > "$R6B/bunfig.toml"
 git -C "$R6B" add -A
 expect_pass "$R6B" "row6b bunfig.toml with only [test] (bun stays the test runner)"
 
 # Row 6c: `[install.scopes]` — a sub-table must redden too, or the clause is bypassable.
 R6C=$(make_repo row6c 4)
-: "${R6C:?fixture dir is empty; git -C '' would retarget this write}"
+: "${R6C:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf '[install.scopes]\n"@x" = "https://y"\n' > "$R6C/bunfig.toml"
 git -C "$R6C" add -A
 expect_red "$R6C" "row6c [install.scopes] sub-table" "declares an [install] section"
@@ -184,7 +184,7 @@ expect_red "$R6C" "row6c [install.scopes] sub-table" "declares an [install] sect
 # the canonical `[install]`, so each of these declared install config and passed green.
 for spelling in "[ install ]" '["install"]' 'install.registry = "https://reg"'; do
   RS=$(make_repo "row6-$(printf '%s' "$spelling" | tr -cd '[:alnum:]')" 4)
-  : "${RS:?fixture dir is empty; git -C '' would retarget this write}"
+  : "${RS:?fixture dir is empty; git -C <empty> would retarget this write}"
   printf '%s\nminimumReleaseAge = 259200\n' "$spelling" > "$RS/bunfig.toml"
   git -C "$RS" add -A
   expect_red "$RS" "row6 TOML spelling '$spelling' is seen" "declares an [install] section"
@@ -192,7 +192,7 @@ done
 
 # Row 6h: bun also reads bunfig.local.toml, which was outside the scanned set entirely.
 R6H=$(make_repo row6h 4)
-: "${R6H:?fixture dir is empty; git -C '' would retarget this write}"
+: "${R6H:?fixture dir is empty; git -C <empty> would retarget this write}"
 printf '[install]\nminimumReleaseAge = 259200\n' > "$R6H/bunfig.local.toml"
 git -C "$R6H" add -A
 expect_red "$R6H" "row6h bunfig.local.toml is scanned" "declares an [install] section"
@@ -225,7 +225,7 @@ fi
 
 # --- H2 must-PASS: an npm-only directory, never dual. ---
 H2=$(make_repo h2 4)
-: "${H2:?fixture dir is empty; git -C '' would retarget this write}"
+: "${H2:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$H2/pencil-scripts"
 printf '{"name":"pencil","lockfileVersion":3}\n' > "$H2/pencil-scripts/package-lock.json"
 git -C "$H2" add -A
