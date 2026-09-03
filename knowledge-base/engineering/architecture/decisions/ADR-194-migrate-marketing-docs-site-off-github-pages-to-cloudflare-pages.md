@@ -39,6 +39,10 @@ brand_survival_threshold: single-user incident
 >   whether that origin is still healthy; under dual-publish every docs deploy
 >   becomes a liveness assertion against it. The cost is that dependence on the
 >   masking rule extends by two PRs, which bounds PR3→PR4 to days, not weeks.
+>   (**Amended 2026-09-03, #7640 PR4a:** three, not two — D5 splits PR4 into PR4a
+>   and PR4b, so the span is PR3→PR4a→PR4b. The bound still holds and the
+>   direction of the argument is unchanged; the arithmetic was one merge short.
+>   The full D5 amendment lands with PR4b, per tasks.md 2.7.)
 >
 > PF7 / D3 item 3(b) is **retired by construction** and was not measured; see the
 > plan's D3 supersession note.

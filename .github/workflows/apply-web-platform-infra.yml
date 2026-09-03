@@ -808,6 +808,27 @@ jobs:
             exit 1
           fi
 
+          # THE ACKED PATH NEEDS THE LIST TOO (#7640).
+          #
+          # Everything above lives inside `destroy_count > 0 && ack != true`, so
+          # the enumeration of what is about to be destroyed printed ONLY on the
+          # path where the apply was REFUSED. Once you acked, you never saw it
+          # again — and `tfplan.txt` is written to the runner filesystem, which
+          # this job neither echoes nor uploads. So a successful apply that
+          # deleted records from the live public apex left no record in the run
+          # log of WHAT it deleted, and post-incident reconstruction meant going
+          # to Cloudflare's audit log.
+          #
+          # The irony is in the gate's own text three lines up: it tells the
+          # reader to "read the 'will be destroyed' list below and confirm it is
+          # the WHOLE intended change before acking" — a list that, by
+          # construction, is absent from every run where they did.
+          if [[ "$destroy_count" -gt 0 ]]; then
+            echo "::group::Acked destroy — what this apply is about to remove"
+            grep -E 'will be destroyed|will be replaced|Plan:' tfplan.txt | head -40
+            echo "::endgroup::"
+          fi
+
       # --- #6767: fail-closed PRE-APPLY ENTRYPOINT GATE ---------------------------
       # A `kind = "zone"` / `kind = "root"` cloudflare_ruleset OWNS its phase
       # entrypoint as a WHOLE-LIST replacement. `terraform plan` reports "1 to

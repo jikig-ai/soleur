@@ -341,10 +341,45 @@ describe("checkReissuePreconditions — apex topology gate (#7640, AC25)", () =>
     expect(r.ok).toBe(false);
     expect(r.failed).toContain("apexTopologyIsA");
     expect(r.results.apexTopologyIsA).toBe(false);
-    // Non-vacuity: the CNAME apex must be the ONLY reason it blocks. If any
-    // other precondition also failed here, this test would pass for the wrong
-    // reason and would keep passing if the topology gate were deleted.
-    expect(r.failed).toEqual(["apexTopologyIsA"]);
+    // Non-vacuity: these must be the ONLY reasons it blocks. Exact equality is
+    // deliberate — if an UNRELATED precondition also failed here, this test
+    // would pass for the wrong reason and would keep passing if the topology
+    // gate were deleted.
+    //
+    // `toggleSetIsComplete` joins it here rather than diluting it: a CNAME apex
+    // yields one address record, so the toggle set is 2 against an expected 5.
+    // Both gates are supposed to fire on this topology, and the set still goes
+    // red if either is removed.
+    expect(r.failed).toEqual(["apexTopologyIsA", "toggleSetIsComplete"]);
+  });
+
+  // The regression test for the #7640 PR4a hazard. This is the shape a TYPE
+  // check cannot see, and it is why `toggleSetIsComplete` exists: shrinking the
+  // apex `for_each` from four keys to one leaves the apex an `A`, so
+  // `apexTopologyIsA` PASSES and every other precondition holds. Before the
+  // cardinality gate the routine proceeded, de-proxied both records, and then
+  // could not restore them — taking an HSTS-preloaded apex to a hard TLS
+  // failure against an origin certificate that expired 2026-08-16.
+  it("PR4a shape: apex is ONE A-record → apexTopologyIsA passes, toggleSetIsComplete fails", () => {
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: ["A", "MX", "MX", "TXT", "TXT", "TXT", "TXT"],
+    });
+    // The type gate is satisfied — this is precisely the blind spot.
+    expect(r.results.apexTopologyIsA).toBe(true);
+    // The cardinality gate is the only thing that refuses.
+    expect(r.results.toggleSetIsComplete).toBe(false);
+    expect(r.ok).toBe(false);
+    expect(r.failed).toEqual(["toggleSetIsComplete"]);
+  });
+
+  it("four apex A-records (pre-PR4a) → toggleSetIsComplete passes", () => {
+    const r = checkReissuePreconditions({
+      ...healthyPreconditions(),
+      apexRecordTypes: ["A", "A", "A", "A", "MX", "MX", "TXT"],
+    });
+    expect(r.results.toggleSetIsComplete).toBe(true);
+    expect(r.ok).toBe(true);
   });
 
   it("apex A-records (GitHub Pages topology) → passes apexTopologyIsA", () => {
