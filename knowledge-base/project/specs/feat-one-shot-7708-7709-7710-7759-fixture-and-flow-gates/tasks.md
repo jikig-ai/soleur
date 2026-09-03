@@ -153,6 +153,21 @@ Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
 - [ ] 2.2 Apply the repo's existing fix-inline-versus-file threshold — the cost-of-filing auto-flip at
       100 lines and 4 files — to the re-measured residue. If 2.1a proves large, ship the loud-failure
       family alone (3 sites) and file the other two with the measured numbers attached.
+- [x] 2.2-REVISED After review, the 2.2 disposition changed and the earlier one is retracted.
+      A two-agent review found 12 P1s -- 8 in the scanner, 4 in the suite -- and every one
+      reproduced. The decisive pair: `scan_relative` reused P1a's EMPTINESS guard set to answer a
+      RELATIVITY question (four of five arms clear a relative site while proving nothing about it),
+      and scanned for those guards from line 0 with no function bounding, so an unrelated function
+      using the same variable NAME cleared a site -- as did the assertion's name inside a
+      single-quoted string, which is the cdx() name-token gap this scanner exists to replace.
+      Corrected detector, measured: **2071 sites over 306 files**, up from 913. Every family is now
+      past the 100-line/4-file threshold, INCLUDING git -C at 39 sites over 12 files -- so the
+      "burned the git -C arm to 0 across 3 files" result of the earlier revision was an artefact of
+      the unsound guard set, not a fix, and the inline remediation is retracted. All four families
+      are grandfathered and the burn-down is tracked whole on #7808.
+      Corrections also made to published numbers: "118 of 232 source directives resolve" was wrong
+      in both figures and in the noun -- `git grep -cE ... | wc -l` counts FILES. Measured: 399
+      directives, 158 with a literal path tail, 142 resolving.
 - [ ] 2.3 Add the rule function to `plugins/soleur/test/lib/fixture-scan.py` with its own verb tables.
 - [ ] 2.4 Register the new `--rule` value in the rule-validation tuple in `main()` — a third editing
       site distinct from the rule function itself, currently `if rule not in ("operand", "cd")`.

@@ -416,8 +416,11 @@ RELATIVE_RM = re.compile(
     r'"\$\{?(?P<var>[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}?[/"]')
 RELATIVE_REDIR = re.compile(
     r'(?<![0-9<>])>>?\s*"\$\{?(?P<var>[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}?[/"]')
+# `\S+` for the source ate the OPTION instead: `mv -f "$tmp" "$out"` captured `tmp` (the source,
+# which mktemp clears) and never examined `$out`. Options are skipped explicitly, and the
+# recursive-copy alternation covers `-a`/`-R` as well as `-r`.
 RELATIVE_MVCP = re.compile(
-    r'\b(?:mv|cp\s+-r[a-zA-Z]*)\s+\S+\s+"\$\{?(?P<var>[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}?[/"]')
+    r'\b(?:mv|cp)\b(?:\s+-[a-zA-Z-]+)*\s+\S+\s+"\$\{?(?P<var>[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}?[/"]')
 
 # Redirection targets that are CI plumbing, not fixture directories. Excluded by NAME because the
 # shape is identical to a fixture write and no chain analysis can tell them apart: the runner sets
@@ -427,9 +430,33 @@ CI_SINK_VARS = frozenset({"GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_ENV", 
 _REL_ALIAS = re.compile(r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$')
 _REL_DERIV = re.compile(r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/.*$')
 _REL_CALL = re.compile(r'^\$\(\s*([A-Za-z_][A-Za-z0-9_]*)\b[^)]*\)$')
-_MKTEMP_ABS = re.compile(
-    r'^\$\(\s*mktemp\b(?![^)]*(?:\s-p\s|--tmpdir))(?![^)]*/[^\s")]*X{3,})[^)]*\)$')
-_MKTEMP_INHERIT = re.compile(r'^\$\(\s*mktemp\b[^)]*(?:\s-p\s|--tmpdir|/[^\s")]*X{3,})')
+# mktemp yields an absolute path ONLY when it is given no destination of its own. Measured, three
+# forms that do NOT and were previously classified absolute:
+#   mktemp -d tmp.XXXXXX      -> tmp.nWeiP9        a SLASHLESS template is still relative to CWD
+#   mktemp -dp "$R"           -> "$R"/tmp.XXXX     -p inside a short-flag CLUSTER
+#   mktemp -d -p"$R"          -> "$R"/tmp.XXXX     -p with an ATTACHED argument
+# So the rule is inverted from "does it look inherited" to "is it provably bare": absolute only
+# when every argument is a flag, with `-t`/`--tmpdir=` excluded because they name a directory too.
+_MKTEMP_TEMPLATE = re.compile(r'X{3,}')
+_MKTEMP_DESTFLAG = re.compile(r'(?:^|\s)-[a-zA-Z]*p|--tmpdir|(?:^|\s)-[a-zA-Z]*t(?:\s|$)')
+
+
+def _mktemp_class(val):
+    """'mktemp-abs' when the call can only yield an absolute path, else 'mktemp-inherits'."""
+    m = re.match(r'^\$\(\s*mktemp\b(?P<args>[^)]*)\)$', val)
+    if not m:
+        return None
+    args = m.group("args")
+    if _MKTEMP_DESTFLAG.search(args):
+        return "mktemp-inherits"          # -p / --tmpdir / -t all name a directory
+    for tok in args.split():
+        if tok.startswith("-"):
+            continue
+        # a positional argument is a TEMPLATE; it is relative unless it starts at root
+        if _MKTEMP_TEMPLATE.search(tok) or "/" in tok:
+            return "mktemp-abs" if tok.lstrip('"').startswith("/") else "mktemp-inherits"
+        return "mktemp-inherits"
+    return "mktemp-abs"
 # An emit can sit mid-line, after `;` or `{`. A ONE-LINE wrapper keeps it exactly there, and
 # anchoring this at `^` made every one-line fixture wrapper unresolvable.
 _EMITS = re.compile(r'(?:^|;|\{)\s*(?:echo|printf)\b[^;]*?"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"')
@@ -474,9 +501,22 @@ def _extract_value(s, pos):
     return "".join(out)
 
 
+_QUOTED = re.compile(r"'[^']*'" + r'|"[^"]*"')
+
+
+def _strip_quoted(line):
+    """Blank out BOTH quote kinds, so braces and tokens inside strings are not read as code."""
+    return _QUOTED.sub(lambda m: " " * len(m.group(0)), line)
+
+
 def _function_bodies(lines):
     """name -> (start_idx, end_idx). A ONE-LINE definition yields start == end, and every consumer
     must therefore scan an INCLUSIVE range; `range(end, start, -1)` is empty and silently skips it.
+
+    Braces are counted with QUOTED SPANS REMOVED. A single `printf '{\n'` left the depth positive
+    forever, ran the function's end to EOF, and let `_wrapper_root` pick up a LATER function's
+    `echo "$t"` and its mktemp root — reporting a wrapper that emits a relative literal as
+    absolute. jq programs, awk bodies and JSON fixtures all supply the unbalanced brace.
     """
     out = {}
     for i, l in enumerate(lines):
@@ -486,11 +526,13 @@ def _function_bodies(lines):
         name = re.match(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)', l)
         if not name:
             continue
-        depth = l.count('{') - l.count('}')
+        bare = _strip_quoted(l)
+        depth = bare.count('{') - bare.count('}')
         j = i
         while depth > 0 and j + 1 < len(lines):
             j += 1
-            depth += lines[j].count('{') - lines[j].count('}')
+            b = _strip_quoted(lines[j])
+            depth += b.count('{') - b.count('}')
         out[name.group(1)] = (i, j)
     return out
 
@@ -522,8 +564,18 @@ def _extended_funcs(path, lines, corpus, cache):
         cands = [p for p in corpus if p.replace("./", "").endswith(tail)]
         if not cands:
             continue
-        cands.sort(key=lambda p: -len(os.path.commonprefix(
-            [os.path.abspath(p), os.path.abspath(path)])))
+        # commonprefix is CHARACTER-wise, so `.../testing-extra/helpers.sh` outranked
+        # `.../test/helpers.sh` for a file in `.../testing/`. Rank by shared path COMPONENTS.
+        def _shared_components(cand):
+            a = os.path.abspath(cand).split(os.sep)
+            b = os.path.abspath(path).split(os.sep)
+            n = 0
+            for x, y in zip(a, b):
+                if x != y:
+                    break
+                n += 1
+            return n
+        cands.sort(key=lambda c: -_shared_components(c))
         sl = read_lines(cands[0])
         if sl is None:
             continue
@@ -534,10 +586,9 @@ def _extended_funcs(path, lines, corpus, cache):
 
 
 def _classify_value(val):
-    if _MKTEMP_INHERIT.match(val):
-        return "mktemp-inherits"
-    if _MKTEMP_ABS.match(val):
-        return "mktemp-abs"
+    mk = _mktemp_class(val)
+    if mk:
+        return mk
     if _REL_ALIAS.match(val):
         return "alias"
     if _REL_DERIV.match(val):
@@ -569,6 +620,14 @@ def _rhs_of(lines, upto, var, skip, lo=0, inclusive=False):
     return None, None
 
 
+def _binds_before_use(line, var):
+    """True when an assignment to `var` ends before the first `"$var"` reference on this line."""
+    v = re.escape(var)
+    b = re.search(_LEAD + _DECL + v + r'=', line)
+    u = re.search(r'"\$\{?' + v + r'\}?', line)
+    return bool(b and u and b.end() <= u.start())
+
+
 def _wrapper_root(fname, funcs, depth):
     """Root class of what same-file-or-sourced function `fname` emits."""
     if depth > 4 or fname not in funcs:
@@ -580,12 +639,22 @@ def _wrapper_root(fname, funcs, depth):
         if m:
             return _chain_root(blines, k, m.group(1), set(), funcs,
                                depth + 1, lo=lo, inclusive=one_line)[0]
+    # No `echo "$var"`. The value is whatever the LAST statement produced, so only that statement
+    # may be read. A bare `\bmktemp\b` search over the whole body claimed absoluteness from a
+    # mktemp whose output went to /dev/null while the function echoed a RELATIVE literal.
     for k in range(hi, lo - 1, -1):
-        if re.search(r'\bmktemp\b', blines[k]):
-            seg = blines[k]
-            if re.search(r'\s-p\s|--tmpdir', seg) or re.search(r'mktemp[^;|]*/[^\s";|]*X{3,}', seg):
-                return "mktemp-inherits"
-            return "mktemp-abs"
+        seg = _strip_quoted(blines[k]).strip().rstrip('}').strip()
+        if not seg or seg.startswith('#'):
+            continue
+        if not re.search(r'\bmktemp\b', seg):
+            return None                      # last statement is not a mktemp: cannot claim a root
+        if re.search(r'>\s*/dev/null|>\s*"?\$', seg):
+            return None                      # its output was redirected away, so it is not the value
+        if re.search(r'\s-[a-zA-Z]*p|--tmpdir|\s-[a-zA-Z]*t(?:\s|$)', seg):
+            return "mktemp-inherits"
+        if re.search(r'mktemp[^;|]*\s[^\s;|-][^\s;|]*X{3,}', seg):
+            return "mktemp-inherits"         # a template argument names a directory
+        return "mktemp-abs"
     return None
 
 
@@ -604,7 +673,11 @@ def _chain_root(lines, use_idx, var, skip, funcs, depth=0, lo=0, inclusive=False
             # only accept a binding that ends before the use begins so a self-referential
             # assignment (`X="$X/sub"`) cannot resolve to itself.
             j2, val2 = _rhs_of(lines, use, cur, skip, lo=lo, inclusive=True)
-            if j2 is None or j2 != use:
+            # The binding must END BEFORE the use BEGINS on that line. Testing only `j2 != use`
+            # accepted a REBIND that follows the use — `rm -rf "$WORK"; WORK=$(mktemp -d)` cleared
+            # a delete that ran against whatever `$WORK` held beforehand. The comment claimed this
+            # check; the code did not have it.
+            if j2 is None or j2 != use or not _binds_before_use(lines[use], cur):
                 return "never-bound", cur
             j, val = j2, val2
         k = _classify_value(val)
@@ -619,6 +692,101 @@ def _chain_root(lines, use_idx, var, skip, funcs, depth=0, lo=0, inclusive=False
                     or "call-unresolved"), cur
         return k, cur
     return "deep", cur
+
+
+# --- P1b guard recognition: predicates that prove ABSOLUTENESS, not merely non-emptiness ---------
+#
+# `scan_relative` used `_guard_res` — P1a's set — unchanged. That set answers "can this be EMPTY",
+# and four of its five arms clear a RELATIVE site while proving nothing about it. Measured, each
+# of these cleared `local d="$1/repo"; rm -rf "$d"`:
+#
+#   : "${d:?empty}"                  refuses empty and unset; says nothing about relative
+#   [[ -n "$d" ]] || exit 1          same predicate, spelled long
+#   case "$d" in *) : ;; esac        a catch-all that asserts nothing
+#   mkdir -p "$d" || exit 1          `mkdir -p relative/dir` SUCCEEDS, so the abort proves the
+#                                    OPPOSITE of what it was credited with
+#
+# 355 of 913 baseline rows were cleared this way. The baseline header already stated the rule this
+# violates — "a guard that only rejected EMPTY would not be [sound], and must not be added to this
+# rule's recognised set" — so the set is now built from that sentence rather than inherited.
+#
+# Two forms are recognised, and both must REJECT a relative path, not merely notice one:
+#   1. `assert_fixture_dir "$var"` — its `case` has an explicit `*) ... exit` relative arm.
+#   2. an inline `case "$var"` carrying BOTH an absolute-accept arm (`/*)`) and a default arm that
+#      aborts. This is the shape a plugin script uses when it cannot take a test-helper dependency.
+_SQUOTE = re.compile(r"'[^']*'")
+
+
+def _strip_squotes(line):
+    """Blank out single-quoted spans.
+
+    A guard is a predicate, not a word. `echo 'TODO: assert_fixture_dir "$d" was removed'` cleared
+    a live site by containing the assertion's NAME — the cdx() name-token gap this scanner exists
+    to replace, reproduced inside the replacement.
+    """
+    return _SQUOTE.sub(lambda m: " " * len(m.group(0)), line)
+
+
+def _case_proves_absolute(lines, start, var, skip):
+    """A `case "$var"` block that accepts `/*` and aborts on the default arm."""
+    v = re.escape(var)
+    if not re.search(r'case\s+"?\$\{?' + v + r'\}?"?\s+in', _strip_squotes(lines[start])):
+        return False
+    saw_abs, saw_reject = False, False
+    for k in range(start, min(start + 14, len(lines))):
+        if k in skip:
+            continue
+        seg = _strip_squotes(lines[k])
+        if re.search(r'(?:^|[\s|(])/\*\)', seg):
+            saw_abs = True
+        if re.search(r'(?:^|[\s|(])\*\)', seg) and re.search(r'\b(?:exit|return)\b', seg):
+            saw_reject = True
+        if 'esac' in seg:
+            break
+    return saw_abs and saw_reject
+
+
+def _rel_guard_window(lines, use_idx):
+    """First line the guard scan may read: the enclosing function head, else file start.
+
+    Scanning from line 0 let an UNRELATED function that happens to use the same variable name
+    clear a later unguarded site — measured, and exactly the bound P1a already applies to its own
+    window for the same reason.
+    """
+    for k in range(use_idx, -1, -1):
+        if FUNC_HEAD.match(lines[k]):
+            return k
+    return 0
+
+
+def _rel_guarded(lines, use_idx, var, endvar, skip):
+    names = [n for n in (var, endvar) if n]
+    lo = _rel_guard_window(lines, use_idx)
+    # A GLOBAL guarded once at top level is guarded for every later use, and bounding its window at
+    # the enclosing function head would discard that — measured, it discarded the inline `case`
+    # refusal on `$REPO_ROOT` in constraint-scaffold.sh, four sites. The widening is admitted ONLY
+    # when the name is not rebound inside the function, so it cannot restore the cross-function
+    # silencing the bound exists to stop: there, the name IS a local and the window stays closed.
+    if lo > 0:
+        rebound = False
+        for n in names:
+            rx = re.compile(_LEAD + _DECL + re.escape(n) + r'=')
+            if any(rx.search(lines[k]) for k in range(lo, use_idx + 1)
+                   if k not in skip and not lines[k].lstrip().startswith("#")):
+                rebound = True
+                break
+        if not rebound:
+            lo = 0
+    for k in range(lo, use_idx + 1):
+        if k in skip or lines[k].lstrip().startswith("#"):
+            continue
+        seg = _strip_squotes(lines[k])
+        for n in names:
+            if re.search(r'assert_fixture_dir\s+"?\$\{?' + re.escape(n) + r'\}?"?', seg):
+                return True
+            if _case_proves_absolute(lines, k, n, skip):
+                return True
+    return False
 
 
 # A root that cannot be relative and cannot be empty. Everything else is a candidate.
@@ -663,10 +831,7 @@ def scan_relative(paths, corpus=None):
                 root, endvar = _chain_root(lines, i, var, skip, funcs)
                 if root in _ROOT_SAFE:
                     continue
-                guards = _guard_res(var) + _guard_res(endvar)
-                if any(not (k in skip or lines[k].lstrip().startswith("#"))
-                       and any(g.search(lines[k]) for g in guards)
-                       for k in range(0, i + 1)):
+                if _rel_guarded(lines, i, var, endvar, skip):
                     continue
                 out.append((f, i + 1, fam, root, line.strip()[:70]))
     return out
