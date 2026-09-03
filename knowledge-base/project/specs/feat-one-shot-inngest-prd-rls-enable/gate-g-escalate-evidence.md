@@ -163,7 +163,7 @@ read, never a gate that will stop a merge.
 > ("Addendum — 2026-09-03"). In short: the 2026-08-26 correction addressed `edge_logs`
 > only; `auth_logs` is instrumented and its zero retains weak evidentiary value; and
 > `postgrest_logs` — the instrumented source that records REST traffic on this project —
-> was never queried and that window is now unrecoverable. **The verdict is unaffected.**
+> was never queried, and that window is recorded as not established to be recoverable (no retrieval was attempted and no probe is cited; see the 2026-09-03 addendum at the canonical record). **The verdict is unaffected.**
 > This is a pointer, not a third copy: read the addendum at the canonical record.
 
 <!-- MARKER-2026-09-03 END -->
