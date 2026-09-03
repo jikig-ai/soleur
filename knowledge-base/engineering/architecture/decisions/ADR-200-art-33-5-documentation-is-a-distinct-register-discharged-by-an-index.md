@@ -81,7 +81,7 @@ Two exclusions follow, and both are load-bearing.
 HEAD. A repo-wide total is not quoted — it counts plans, specs, this ADR and the guard's source,
 so any PR that merely discusses the field moves it (this one took it 115 → 119). A `false` on an
 availability-only or credential-only incident is a screening output. Indexing them would bury
-four determinations under a hundred routine negatives, destroying the register's verification
+five determinations under a hundred routine negatives, destroying the register's verification
 value in the name of completeness.
 
 **Prospective clearances are not breach documentation.** A review concluding that a *planned
@@ -179,3 +179,18 @@ Art. 33(5) register".
 - ADR-197 — a zero from a log surface is not evidence of absence. The reason PA-8 §(g) records a
   limitation on the Art. 33 evidentiary chain rather than a retention measure.
 - `scripts/lint-legal-registers.sh` — the gate.
+
+## Correction — 2026-09-03 (#7717, counsel review of PR #7782)
+
+> **Superseded 2026-09-03 (#7717):** in §The inclusion predicate, the sentence *"Measured
+> 2026-09-03: **102** post-mortems under `knowledge-base/engineering/operations/post-mortems/`
+> carry that field, unchanged at this PR's HEAD"*, and the parenthetical *"this one took it
+> 115 → 119"*. Re-measured at review against merge-base `9c9a485` and this branch's HEAD:
+> **104** post-mortem files carry the field at the merge-base and **104** at HEAD; repo-wide,
+> **118** → **126**. The 115 → 119 pair was already disowned as "true only mid-branch and not
+> re-measured" by the register this ADR governs, and this ADR was never updated — so it now
+> carries neither the superseded figures' successor nor a correct one. The **decision** recorded
+> here is unaffected: the screening-output exclusion turns on the order of magnitude, not on the
+> exact count. The figure is nonetheless quoted in four places — here, the register, the header of
+> `scripts/lint-legal-registers.sh`, and Art. 30 counsel-review item 12 — and is wrong in all four
+> by the same two.

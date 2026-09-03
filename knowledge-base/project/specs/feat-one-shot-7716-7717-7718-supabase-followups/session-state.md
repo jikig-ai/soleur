@@ -347,3 +347,67 @@ is 0 bytes, no `=== N/M suites passed ===` marker, and the log stops mid-line. P
 is UNRESOLVED — it is re-run below, not read as a result. The one real `[FAIL]` it surfaced before
 dying is independently reproducible and is fixed above; the other `[FAIL]` lines in that log are
 the EXPECTED instrument self-tests (`fail() increments`).
+
+## Phase 5.5 Counsel-Review Gate — CLO returned BLOCKED, and it was right
+
+The gate fired (legal diff + `single-user incident`) and the `clo` agent returned this time.
+Audit: `knowledge-base/legal/audits/2026-09-counsel-review-7717.md`,
+`status: BLOCKED (CLO-agent-reviewed…)`, `signed_off_by` null. No signature fabricated.
+
+### Both rulings put to it were confirmed
+
+`controller:` not `processor:` — without qualification. Ruling 1's METHOD confirmed, and each of
+its three original waivers holds line-by-line against its source. Its **set** was the block.
+
+### B1 — the inclusion predicate was applied inconsistently
+
+> **Superseded 2026-09-03 (#7717):** the earlier record said *"4 indexed / 3 waived, not 7/0"*.
+> That was the ruling at the time and is retained above; the set is now **5 indexed / 6 waived**.
+
+The indexed 2026-05-16 row's canonical source contains **no** occurrence of `4(12)`, `Art. 4` or
+`Article 4` — it states its determination as an Art. 33/34 conclusion — yet it is indexed. So limb
+2 was already being read **substantively** there. On that same reading
+`audits/sentry-migration-audit-2026-05-15.md` satisfies both limbs, and its waiver's stated ground
+("cites no Art. 4(12) assessment") does not survive. The CLO ruled limb 2 substantive, not
+citational, and upheld the other pending waiver on the stronger ground that it is evidence inside
+an already-indexed determination.
+
+**Resolved by giving it its own row, not by subsuming it** into the 2026-05-16 row. The two share a
+root cause (the `jikigai-us` shadow org) but are different fact patterns with different canonical
+sources: 2026-05-16 is phantom-ingest to an unreachable destination; 2026-05-15 is Art. 5(2)
+accountability evidence regenerated against the US cluster, raising a suspected unlawful
+third-country transfer and answering it on its own facts. Subsuming it would point a regulator at a
+record that never discusses the transfer question. The index row, the §Excluded records table and
+the guard's `NOT_TRANSCRIBED` array moved **in one commit** — the CLO warned that splitting them
+reds assertion (d) on the parity it exists to protect. Guard after: `rows=5 waived=6
+waiver-parity=ok`, suite 36/36.
+
+### R1 — required before merge, applied
+
+`compliance-posture.md`'s Better Stack Vendor DPA Status read `PENDING` while the Art. 30 Vendor
+Mapping now reads `NOT EXECUTED`, and the published privacy policy and data-protection disclosure
+both point the data subject at that table as canonical. Corrected with a dated marker quoting the
+prior text. The substantive posture is unchanged; AC15's escalation is already filed at #7529.
+
+### Corrections the CLO appended (all append-only, quoting what they supersede)
+
+Measured figures (104/104 post-mortems; 118→126 repo-wide, not 102 and 116→123); the 2026-05-16
+row's evidentiary cell answering its own column twice; the double-count clause naming the wrong
+surplus element (the operator, not the 2 signups — 8 + 2 = 10 exactly); a 2026-08-06 "status
+divergence" the register actually withdraws; and the Sentry T3 cell. It also ratified a third
+in-tree CLO ruling that was not put to it (the `docs/legal/**` lockstep deferral to #7786) and said
+so.
+
+### Known cost, recorded rather than discovered later
+
+**Every future counsel review of this register will need its own `NOT_TRANSCRIBED` waiver** — a
+counsel review is determination-shaped to the producer, which is scoped to `audits/**`. Not a
+defect; the price of the producer's scope, and now written down.
+
+### What the CLO could not resolve
+
+Whether CNIL accepts the separate-instrument choice (outside a v1 internal attestation's envelope —
+stays as Art. 30 counsel-review item 12); and whether determinations exist outside `audits/**` and
+the one indexed post-mortem (the producer cannot see them; the completeness claim is bounded
+accordingly). **`breach-register.md` stays `draft-requires-counsel-review` — the CLO was explicit
+that its own audit must not promote it.**

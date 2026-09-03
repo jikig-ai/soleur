@@ -39,6 +39,15 @@ unchanged.
 Two **binding** rulings were obtained from the `clo` agent before implementation and were applied
 as given. These are the CLO's, not mine.
 
+> **Superseded 2026-09-03 (#7717), same day, by the Phase 5.5 counsel review.** Ruling 1's METHOD
+> was confirmed and each of its three original waivers holds line-by-line against its source, but its
+> SET was revised: `audits/sentry-migration-audit-2026-05-15.md` satisfies both limbs on the
+> substantive reading of limb 2 that the indexed 2026-05-16 row already relies on, and was moved from
+> waived to indexed. The set is now **5 indexed / 6 waived** (the waived count also grew by the
+> counsel-review audit itself, which is determination-shaped to the producer). See
+> `knowledge-base/legal/audits/2026-09-counsel-review-7717.md` §B1. The paragraph below is retained
+> as the record of what was ruled at the time.
+
 **Ruling 1 — the determination set is 4 indexed / 3 waived, not the 7 the plan specified.** The
 plan derived its set from the pinned regex `4\(12\)|33\(5\)|Art\. 33`, two paragraphs after
 warning that "the discriminator is semantic and no regex makes a legal judgement". Applying the
@@ -129,6 +138,50 @@ instrument choice and the inclusion predicate.
 
 Nothing in this document discharges an Art. 33(5) obligation. The per-incident determinations in
 the canonical records do that, and they did so before this register existed.
+
+## Counsel-review supersessions — 2026-09-03 (#7717, PR #7782)
+
+Appended by the CLO agent under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate; audit at
+`knowledge-base/legal/audits/2026-09-counsel-review-7717.md`, overall disposition **BLOCKED**.
+This file's `attested_by: "NOBODY"` frontmatter was the right call and is undisturbed — refusing
+to sign an attestation that was not performed is the behaviour #7717 exists to institutionalise.
+What is corrected below is two statements this record makes *about the implementation*: both
+describe a draft that did not ship.
+
+> **Superseded 2026-09-03 (#7717):** §Two open items carried forward, first item, reading *"The
+> 2026-08-06 source's status is internally divergent — frontmatter
+> `status: draft-requires-counsel-review` and a `BLOCKED` disposition coexist with a performed CLO
+> internal sign-off in the same file. The register **records the divergence rather than resolving
+> it**, in the row's evidentiary-limbs cell."* Both halves are false against what shipped. The
+> register does not record that divergence — it **withdraws** it, in the §Register maintenance
+> bullet headed "Withdrawn open item". And there was no divergence to record: the 2026-08-06
+> source contains zero occurrences of `signed off` / `SIGNED-OFF` / `attested` and carries no
+> `signed_off_at` or `signed_off_by` frontmatter (verified at review), while its
+> attestation-authority paragraph reads "The CLO agent **performs** this v1 *internal* sign-off" —
+> a sentence allocating authority, not one recording that an act occurred. The row's
+> evidentiary-limbs cell records the RNE *pouvoirs* directory-listing limb instead, and says
+> expressly that the document-workflow point it replaced was not an evidentiary limb.
+
+<!-- -->
+> **Superseded 2026-09-03 (#7717):** §What I verified, the paragraph reading *"The cell now reads
+> **Partially** and names the actual residual: the granular causal mechanism of the
+> token-membership boundary at Theory state T3, `NOT YET TESTED`, with T0 falsification holding in
+> every causal variant — an engineering residual, not an evidentiary limb"*. The cell that landed
+> says the opposite of its central fact: T3 was **RESOLVED 2026-05-21 and promoted to T4**
+> (post-mortem frontmatter `t3_resolved_at: "2026-05-21T07:00:00Z"` and `t3_mechanism:
+> "T4-internal-integration-proxy-user-membership-boundary"`; evidence at
+> `knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md`), and the cell closes
+> "No evidentiary limb remains open on this determination". The unresolved-T3 phrasing is the
+> post-mortem's own 2026-05-19 Phase 9 text, which that file's later line supersedes. This record
+> described the draft it had corrected rather than the cell it shipped — which is the same defect
+> in miniature that the whole PR is about.
+
+**Neither supersession disturbs the disposition.** Implementation remains VERIFIED against
+AC1-AC13 as this record states, and the attestation gap it refuses to paper over remains real. The
+counsel review's own blocking finding is separate and is recorded in the register's
+§Counsel-review corrections: the inclusion predicate is applied inconsistently, and
+`audits/sentry-migration-audit-2026-05-15.md` — a controller-voice notifiability determination —
+is outside the index on a ground that does not hold.
 
 ---
 
