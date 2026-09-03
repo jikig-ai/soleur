@@ -119,8 +119,12 @@ resolves the `edge` half and is silent on the `auth` half.
 **`auth_logs` is instrumented, and its zero retains weak evidentiary value.** The 30-day
 `group by source` census recorded in
 `knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`
-shows `auth_logs` present with 21 rows, alongside `supavisor_logs` 13873, `postgres_logs`
-1480 and `postgrest_logs` 71 — with `edge_logs` absent from the result set entirely. So
+shows `auth_logs` present, `postgrest_logs` present, and `edge_logs` absent from the result
+set entirely. The per-source counts are deliberately NOT restated here: that file states it is
+the single source for the contract and asks to be cited rather than copied, and the 2026-08-26
+addendum above says the same. Its boundary can move, and this file's amendment convention forbids
+in-place edits — so a second copy could only be corrected by a third addendum correcting an
+addendum, or would silently diverge. Cite the contract file. So
 the `auth_logs` zero on 2026-06-29 is a real observation of an emitting source, not an
 instrumentation artifact. It is weak — 21 rows over 30 days is a low base rate, and it
 speaks to authentication events rather than to REST reads — but it is not nothing, and
