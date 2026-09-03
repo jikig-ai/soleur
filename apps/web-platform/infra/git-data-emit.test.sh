@@ -580,7 +580,7 @@ sed -i "s#-X POST 'http://127.0.0.1:1/bs'#-X POST 'http://127.0.0.1:${PORT}/bs'#
 # Better Stack is flat.
 # ---------------------------------------------------------------------------------
 : > "$CAPTURE"
-BSPASS='Zt5w9QnB2xLmK7vR4pYd'
+BSPASS='Zt5w9-NOT-A-REAL-TOKEN-K7vR4pYd'
 ( cd "$TMP" && BETTERSTACK_LOGS_TOKEN=stub GIT_DATA_LUKS_KEY="$BSPASS" \
     ./git-data-emit "workspace ${UUID} down" boot_complete fatal \
     "cryptsetup: bad passphrase ${BSPASS} for ${UUID}" "luks_mounted=no" ) >/dev/null 2>&1
@@ -612,7 +612,7 @@ fi
 # the PATTERN rule and says nothing about `_devalue_bs`. A vendor rejection quoting a bare
 # token is the shape the value rule exists for.
 : > "$CAPTURE"
-BSTOK='Qk7vN2pR9wLmX4tZ8yHc'
+BSTOK='Qk7vN-NOT-A-REAL-TOKEN-X4tZ8yHc'
 ( cd "$TMP" && BETTERSTACK_LOGS_TOKEN="$BSTOK" \
     ./git-data-emit "ingest rejected" betterstack_ingest warning \
     "vendor said: source token ${BSTOK} not valid" ) >/dev/null 2>&1
