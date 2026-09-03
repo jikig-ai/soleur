@@ -15,12 +15,33 @@
 #   * a floor on SITES alone is satisfiable by NARROWING the corpus, so FILES carries its own floor.
 #   * a scanner that stops looking reports SITES=0, which a shrink-only ratchet reads as progress,
 #     so the live count is pinned by EQUALITY to the baseline sum, not by `<=`.
+# MUTATION MATRIX (Guard 1, #7708) — executed in place against a pristine backup, with a GREEN
+# unmutated control required first. Observed:
+#   control  unmutated                                            GREEN
+#   row 1    delete a verb family from the P1b assembly           RED
+#   row 2    second offending site in an already-baselined file   RED
+#   row 3    rule function returns no rows at all                 RED
+#   row 4    MOVE a guard from before the use to after it         RED   (text still present)
+#   row 5    narrow the corpus glob *.sh -> *.test.sh             RED   (FILES floor)
+#   row 6    remove a binding form from the P1b resolver          RED
+#   H1       neuter the failure counter                           RED   rc=2, ledger reconciliation
+#   H2       non-canonical must-PASS (mktemp + `|| return 1`)     quiet (section D)
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 SCANNER="$SCRIPT_DIR/lib/fixture-scan.py"
 BASELINE="$SCRIPT_DIR/fixture-relative-assert.baseline.txt"
+
+# This suite is itself a tracked *.sh file, so it appears in the corpus it scans. `$(cd X && pwd)`
+# prints an absolute path but yields EMPTY when the cd fails, which would root $BASELINE at `/`.
+# Dogfooding the rule rather than baselining its author.
+case "$SCRIPT_DIR" in
+  "")      echo "FATAL: SCRIPT_DIR is empty; writes below would retarget" >&2; exit 2 ;;
+  /|//|/.) echo "FATAL: SCRIPT_DIR resolves to the filesystem root; refusing" >&2; exit 2 ;;
+  /*)      : ;;
+  *)       echo "FATAL: SCRIPT_DIR is RELATIVE; refusing" >&2; exit 2 ;;
+esac
 
 command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
 [[ -f "$SCANNER" ]] || { echo "FATAL: scanner missing at $SCANNER" >&2; exit 2; }
@@ -206,6 +227,40 @@ ck; n=$(scan_sites "$D/ci_sink.sh"); [[ "${n:-1}" -eq 0 ]] \
   && pass "CI plumbing sinks are excluded by name" \
   || fail "false positive on CI plumbing sinks (SITES=${n:-unset})"
 
+cat > "$D/same_line_binding.sh" <<'EOF'
+run() {
+  local T
+  T=$(mktemp -d)
+  L="$T/log"; : > "$L"
+}
+EOF
+ck; n=$(scan_sites "$D/same_line_binding.sh"); [[ "${n:-1}" -eq 0 ]] \
+  && pass "a binding on the SAME line as the use resolves" \
+  || fail "same-line binding read as never-bound (SITES=${n:-unset}) -- false positive"
+
+# ...but the inclusive retry must not let an assignment resolve to ITSELF.
+cat > "$D/self_reference.sh" <<'EOF'
+run() {
+  local r="$1"
+  X="$X/sub"; : > "$X"
+}
+EOF
+ck; n=$(scan_sites "$D/self_reference.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "a self-referential binding does not resolve to itself" \
+  || fail "X=\"\$X/sub\" resolved to itself (SITES=${n:-unset}) -- the inclusive retry is too loose"
+
+cat > "$D/noncanonical_pass.sh" <<'EOF'
+run() {
+  local d
+  d=$(mktemp -d) || return 1
+  rm -rf "$d/scratch"
+  echo x > "$d/out"
+}
+EOF
+ck; n=$(scan_sites "$D/noncanonical_pass.sh"); [[ "${n:-1}" -eq 0 ]] \
+  && pass "non-canonical must-PASS: mktemp binding + \`|| return 1\` guard stays quiet" \
+  || fail "false positive on a permitted binding+guard combination (SITES=${n:-unset})"
+
 # --- E. The two resolver bugs that made sites look SAFE. Both are pinned in the FAIL direction. ----
 echo "E. resolver regressions (both were false-NEGATIVE bugs)"
 E="$TMP_ROOT/e"; mkdir -p "$E"
@@ -279,7 +334,7 @@ if [[ $((passes + fails)) -ne "$asserted" ]]; then
   exit 2
 fi
 
-MIN_ASSERTIONS=16
+MIN_ASSERTIONS=21
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- arms were removed" >&2
   exit 2

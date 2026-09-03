@@ -597,7 +597,16 @@ def _chain_root(lines, use_idx, var, skip, funcs, depth=0, lo=0, inclusive=False
         j, val = _rhs_of(lines, use, cur, skip, lo=lo, inclusive=inc)
         inc = False
         if j is None:
-            return "never-bound", cur
+            # A binding can sit on the SAME line as the use, ahead of it:
+            #   VERDICT_LOG="$TMP/verdicts.txt"; : > "$VERDICT_LOG"
+            # Walking strictly upward never sees it and reports never-bound, which is a FALSE
+            # POSITIVE: the chain is resolvable and, here, mktemp-rooted. Retry inclusively, and
+            # only accept a binding that ends before the use begins so a self-referential
+            # assignment (`X="$X/sub"`) cannot resolve to itself.
+            j2, val2 = _rhs_of(lines, use, cur, skip, lo=lo, inclusive=True)
+            if j2 is None or j2 != use:
+                return "never-bound", cur
+            j, val = j2, val2
         k = _classify_value(val)
         if k == "alias":
             cur, use = _REL_ALIAS.match(val).group(1), j
