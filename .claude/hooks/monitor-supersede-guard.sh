@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse hook on Monitor|TaskStop.
-# Blocks arming a SECOND Monitor on a target this session is already watching,
-# and redirects to TaskStop-then-rearm.
+# REPORTS — never blocks — arming a Monitor on a target this session already
+# armed one for and never stopped.
 #
 # Source rule: hr-monitor-not-run-in-background-for-polling (AGENTS.rules.md) —
 # that rule governs WHICH tool polls. This hook governs the tool's LIFETIME,
@@ -9,42 +9,58 @@
 # means stopping the old watcher, not layering a new one beside it.
 #
 # Why: 2026-09-02 — a single session ran THREE monitors against `gh pr checks
-# 7753` simultaneously. Each time the scope changed (CI → infra+CI → CI) a new
+# 7753` simultaneously. Each time the scope changed (CI -> infra+CI -> CI) a new
 # monitor was armed and the superseded one was left running. None self-terminated,
 # because each only exits when the polled state goes terminal — which had not
 # happened yet. Three API calls per 45s interval against one endpoint, and three
 # chances to report the same result. The operator noticed; no gate did.
 #
-# Detection (AND-gated; a missing signature falls through to allow):
+# WHY THIS REPORTS INSTEAD OF BLOCKING — the load-bearing part, and the thing to
+# re-read before anyone "restores" the deny:
+#
+# The gate a deny needs is "is the prior monitor still running". This hook cannot
+# answer that, by either available route, and both were measured on 2026-09-03:
+#
+#   1. INFERRED from the clock. A hook sees arms and TaskStops, never completions,
+#      so "inside its declared timeout" was used as a proxy. Monitors mostly end
+#      by early exit (their loop breaks on a terminal state) or by harness reap —
+#      neither writes a stop record. The proxy therefore decays into "armed
+#      recently", and the gate denied on recency while claiming liveness. A 50%
+#      fraction was added to blunt it; that only made the wrong predicate quieter.
+#      Concretely it denied ship Phase 7's own fix-and-retry path, which re-polls
+#      one PR after pushing a fix — same session, same signature, same window.
+#
+#   2. MEASURED from the process table. `pgrep -f <signature>` looks decisive and
+#      is not: the agent's own Bash calls routinely carry the PR number, so the
+#      probe matches the very command asking the question. Verified — a control
+#      probe for a signature with NO monitor matched its own shell. Liveness by
+#      process inspection is contaminated by ordinary session activity.
+#
+# A gate whose central predicate is unmeasurable must not deny. And it does not
+# need to: the audience is an agent that reads tool output, so a message at the
+# moment of the arm is as effective as a block, and only the block can wedge the
+# pipeline. False notice costs one paragraph; false deny cost a ship run.
+#
+# What survives is honest and still useful: the notice names the prior arm, its
+# age, and the remedy, at exactly the moment the mistake is made.
+#
+# Detection (AND-gated; anything missing falls through to silence):
 #   tool_name == Monitor
 #   AND a TARGET SIGNATURE can be extracted from .tool_input.command / .ws.url
 #   AND this session already armed a monitor with the SAME signature
-#   AND that arm is still inside its own declared timeout_ms
+#   AND that arm is still inside its own declared timeout_ms  (recency, not liveness)
 #   AND no TaskStop has been observed since that arm
-#
-# The last two conjuncts are what keep this from false-blocking. A monitor that
-# has aged past its timeout is gone; a TaskStop since the arm means the agent
-# already cleaned up. Both err toward ALLOW, which is the correct direction for a
-# deny gate whose false positives cost real work.
 #
 # Signature is deliberately narrow — a PR/issue number, a workflow name, an
 # absolute path, or a ws:// URL. Two monitors watching genuinely different things
-# never collide, and a command with no extractable target is never blocked.
+# never collide, and a command with no extractable target is never reported.
 #
-# Known limit, stated rather than papered over: a monitor that EXITS EARLY (breaks
-# its loop on a terminal marker well before its timeout) still looks live to this
-# hook, because a hook cannot observe task completion. Re-arming on that same
-# target inside the original timeout window is the one false-positive case. The
-# override marker below is the escape, and TaskStop is the better one.
-#
-# Override hatch: add the literal comment
-#   # gate-override: monitor-supersede
-# anywhere in the monitor command.
+# There is no override marker. Nothing blocks, so nothing needs escaping; case 20
+# pins that the hook emits no permissionDecision on any input shape.
 #
 # Hook stdin: JSON payload with session_id + tool_name + tool_input.
-# Hook stdout: JSON {hookSpecificOutput: {...}} on deny; silent on allow.
-# Hook exit code: 0 always. Fail-open on any missing field — a no-op hook is
-# never a false block.
+# Hook stdout: JSON {systemMessage: "..."} when reporting; silent otherwise.
+# Hook exit code: 0 always.
 
 set -uo pipefail
 
@@ -99,18 +115,6 @@ case "$TIMEOUT_MS" in ''|*[!0-9]*) TIMEOUT_MS=300000 ;; esac
 [ "$PERSISTENT" = "true" ] && TIMEOUT_MS=3600000
 WINDOW_S=$(( TIMEOUT_MS / 1000 ))
 
-# Percentage of a prior arm's window during which it is treated as "still live" for
-# supersede purposes. Not 100: a hook cannot see a monitor finish, so late in a window
-# the ledger's "live" is mostly stale. 50 keeps the fast-layering catch (the incident
-# was <10% elapsed) and drops the late-re-arm false positive.
-LIVE_FRACTION="${SOLEUR_MONITOR_LIVE_PCT:-50}"
-case "$LIVE_FRACTION" in ''|*[!0-9]*) LIVE_FRACTION=50 ;; esac
-
-# Override hatch.
-case "$CMD" in
-  *"gate-override: monitor-supersede"*) exit 0 ;;
-esac
-
 # ---- signature extraction (first match wins; no match => allow) --------------
 SIG=""
 if [ -n "$WSURL" ]; then
@@ -135,17 +139,17 @@ if [ -z "$SIG" ]; then
   exit 0
 fi
 
-# ---- is a prior arm on this signature still live? ---------------------------
+# ---- is there a RECENT prior arm on this signature? --------------------------
 PRIOR=""
 if [ -r "$LEDGER" ]; then
   # `-R 'fromjson? // empty'` reads line-at-a-time and DROPS unparseable lines
   # instead of failing the whole read. A torn or hand-edited line then costs one
   # record, not the entire gate.
-  PRIOR=$(jq -R 'fromjson? // empty' "$LEDGER" 2>/dev/null | jq -s --arg s "$SESSION" --arg sig "$SIG" --argjson now "$NOW" --argjson frac "$LIVE_FRACTION" -r '
+  PRIOR=$(jq -R 'fromjson? // empty' "$LEDGER" 2>/dev/null | jq -s --arg s "$SESSION" --arg sig "$SIG" --argjson now "$NOW" -r '
     ( [ .[] | select(.event == "stop" and .session == $s) | .ts ] | max // 0 ) as $laststop
     | [ .[]
         | select(.event == "arm" and .session == $s and .sig == $sig)
-        | select(.ts + ((.window // 300) * $frac / 100) > $now)
+        | select(.ts + (.window // 300) > $now)
         | select(.ts > $laststop)
       ] | last // empty
     | "\(.ts)\t\(.desc)"
@@ -155,31 +159,24 @@ fi
 if [ -n "$PRIOR" ]; then
   prior_ts=$(printf '%s' "$PRIOR" | head -1 | cut -f1)
   prior_desc=$(printf '%s' "$PRIOR" | head -1 | cut -f2-)
-  # A non-numeric ts means the record is unusable; fail OPEN rather than abort.
-  case "$prior_ts" in ''|*[!0-9]*) exit 0 ;; esac
-  age=$(( NOW - prior_ts ))
-  emit monitor-supersede deny "duplicate monitor on $SIG" 2>/dev/null || true
-  jq -n --arg sig "$SIG" --arg d "$prior_desc" --arg age "$age" --arg new "$DESC" '
-    {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: (
-          "BLOCKED: this session already has a monitor watching " + $sig +
-          " — \"" + $d + "\", armed " + $age + "s ago and still inside its timeout.\n\n" +
-          "Arming \"" + $new + "\" beside it means two watchers polling one target: " +
+  # A non-numeric ts means the record is unusable; say nothing rather than abort.
+  case "$prior_ts" in ''|*[!0-9]*) prior_ts="" ;; esac
+  if [ -n "$prior_ts" ]; then
+    age=$(( NOW - prior_ts ))
+    emit monitor-supersede warn "recent prior monitor on $SIG" "$CMD" 2>/dev/null || true
+    # `systemMessage` is the exit-0 channel: Claude Code DISCARDS a PreToolUse
+    # hook's stderr when it allows, so a stderr-only notice reaches nobody.
+    # Same reasoning as pre-merge-auto-close-scan.sh's `allow_exit`.
+    jq -n --arg sig "$SIG" --arg d "$prior_desc" --arg age "$age" '
+      { systemMessage: (
+          "monitor-supersede: this session armed a monitor on " + $sig + " " + $age +
+          "s ago — \"" + $d + "\" — and never stopped it.\n" +
+          "If it is still running, two watchers are now polling one target: " +
           "duplicate API calls every interval and two reports of the same result. " +
-          "A monitor is a resource with a lifetime — re-scoping what you watch means " +
-          "STOPPING the old one, not layering a new one.\n\n" +
-          "Do one of:\n" +
-          "  1. TaskStop the prior monitor, then arm this one (usually correct);\n" +
-          "  2. keep the prior monitor and drop this call, if it already covers you;\n" +
-          "  3. if the prior monitor already exited early, add the literal comment\n" +
-          "     `# gate-override: monitor-supersede` to this command."
-        )
-      }
-    }' 2>/dev/null || true
-  exit 0
+          "TaskStop the prior one unless it has already returned.\n" +
+          "(This hook cannot see a monitor finish, so it reports the arm, not a fault.)"
+        ) }' 2>/dev/null || true
+  fi
 fi
 
 # ---- allow, and record the arm ----------------------------------------------

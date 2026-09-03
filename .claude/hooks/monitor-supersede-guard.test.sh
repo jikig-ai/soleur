@@ -34,7 +34,8 @@ run() {
   jq -nc --arg s "$sess" --arg t "$tool" --argjson ti "$ti" \
     '{session_id:$s, tool_name:$t, tool_input:$ti}' | bash "$HOOK" 2>/dev/null
 }
-denied() { printf '%s' "$1" | grep -q '"permissionDecision": *"deny"'; }
+warned() { printf '%s' "$1" | grep -q '"systemMessage"'; }
+blocked() { printf '%s' "$1" | grep -q '"permissionDecision"'; }
 
 CI='{"command":"gh pr checks 7753 --json name,state","description":"ci","timeout_ms":600000}'
 CI2='{"command":"gh pr checks 7753 --json state","description":"ci again","timeout_ms":600000}'
@@ -52,85 +53,88 @@ PASS=$_p; FAIL=$_f
 # --- 1. first arm is always allowed ------------------------------------------
 fresh 1
 out=$(run s1 "$CI")
-rc=1; denied "$out" || rc=0
+rc=1; warned "$out" || rc=0
 verdict "$rc" 'a first monitor on a target is ALLOWED'
 
-# --- 2. second arm on the SAME target is denied ------------------------------
+# --- 2. second arm on the SAME target is warned ------------------------------
 fresh 2
 run s1 "$CI" >/dev/null
 out=$(run s1 "$CI2")
-rc=1; denied "$out" && rc=0
-verdict "$rc" 'a second monitor on the SAME pr is DENIED (the #7753 case)'
+rc=1; warned "$out" && rc=0
+verdict "$rc" 'a second monitor on the SAME pr is REPORTED (the #7753 case)'
 
 # --- 3. a DIFFERENT target is allowed ----------------------------------------
 fresh 3
 run s1 "$CI" >/dev/null
 out=$(run s1 "$OTHER")
-rc=1; denied "$out" || rc=0
+rc=1; warned "$out" || rc=0
 verdict "$rc" 'a monitor on a DIFFERENT pr is ALLOWED'
 
 # --- 4. a different SESSION is allowed ---------------------------------------
 fresh 4
 run s1 "$CI" >/dev/null
 out=$(run s2 "$CI2")
-rc=1; denied "$out" || rc=0
+rc=1; warned "$out" || rc=0
 verdict "$rc" 'another session watching the same pr is ALLOWED (ledger is session-scoped)'
 
-# --- 5. TaskStop clears the block --------------------------------------------
+# --- 5. TaskStop clears the notice --------------------------------------------
 fresh 5
 run s1 "$CI" >/dev/null
 run s1 '{"task_id":"abc"}' TaskStop >/dev/null
 out=$(run s1 "$CI2")
-rc=1; denied "$out" || rc=0
-verdict "$rc" 'after TaskStop the same target is ALLOWED again'
+rc=1; warned "$out" || rc=0
+verdict "$rc" 'after TaskStop the same target is silent again'
 
-# --- 6. an expired arm no longer blocks --------------------------------------
+# --- 6. an expired arm is no longer reported --------------------------------------
 fresh 6
 run s1 '{"command":"gh pr checks 7753","description":"short","timeout_ms":1000}' >/dev/null
 sleep 2
 out=$(run s1 "$CI2")
-rc=1; denied "$out" || rc=0
-verdict "$rc" 'an arm past its own timeout no longer blocks'
+rc=1; warned "$out" || rc=0
+verdict "$rc" 'an arm past its own timeout is no longer reported'
 
-# --- 7. the override hatch works ---------------------------------------------
+# --- 7. the RETIRED override marker is inert ---------------------------------
+# The hatch existed to escape a false deny. With no deny there is nothing to
+# escape, so the marker must carry no special meaning — otherwise it survives as
+# a magic string that silently suppresses a notice.
 fresh 7
 run s1 "$CI" >/dev/null
 out=$(run s1 '{"command":"gh pr checks 7753 # gate-override: monitor-supersede","description":"x","timeout_ms":600000}')
-rc=1; denied "$out" || rc=0
-verdict "$rc" 'the override marker suppresses the deny'
+rc=1; warned "$out" && rc=0
+verdict "$rc" 'the retired override marker no longer suppresses the notice'
 
-# --- 8. no extractable signature => never blocked ----------------------------
+# --- 8. no extractable signature => never reported ----------------------------
 fresh 8
 run s1 '{"command":"tail -f nothing-identifiable","description":"a"}' >/dev/null
 out=$(run s1 '{"command":"tail -f also-nothing","description":"b"}')
-rc=1; denied "$out" || rc=0
-verdict "$rc" 'commands with no extractable target are never blocked'
+rc=1; warned "$out" || rc=0
+verdict "$rc" 'commands with no extractable target are never reported'
 
 # --- 9. path signature collides ----------------------------------------------
 fresh 9
 run s1 '{"command":"grep X /var/tmp/soleur/run.log","description":"p1","timeout_ms":600000}' >/dev/null
 out=$(run s1 '{"command":"tail /var/tmp/soleur/run.log","description":"p2","timeout_ms":600000}')
-rc=1; denied "$out" && rc=0
+rc=1; warned "$out" && rc=0
 verdict "$rc" 'two monitors on the same absolute log path collide'
 
 # --- 10. workflow signature collides -----------------------------------------
 fresh 10
 run s1 '{"command":"gh run list --workflow ci.yml","description":"w1","timeout_ms":600000}' >/dev/null
 out=$(run s1 '{"command":"gh run list --workflow ci.yml --json x","description":"w2","timeout_ms":600000}')
-rc=1; denied "$out" && rc=0
+rc=1; warned "$out" && rc=0
 verdict "$rc" 'two monitors on the same workflow collide'
 
 # --- 11. malformed stdin fails OPEN ------------------------------------------
 fresh 11
 out=$(printf 'not json' | bash "$HOOK" 2>/dev/null)
-rc=1; denied "$out" || rc=0
-verdict "$rc" 'malformed stdin fails OPEN (a no-op hook is never a false block)'
+rc=1; warned "$out" || rc=0
+verdict "$rc" 'malformed stdin fails OPEN and silent'
 
 # --- 12. a non-Monitor tool is ignored ---------------------------------------
 fresh 12
 run s1 "$CI" >/dev/null
 out=$(run s1 "$CI2" Bash)
-rc=1; denied "$out" || rc=0
+rc=1; warned "$out" || rc=0
 verdict "$rc" 'a Bash call carrying the same text is ignored'
 
 # --- 13. THE PRIMARY FLOW MUST NOT BE BLOCKED ---------------------------------
@@ -142,28 +146,26 @@ fresh 13
 run s1 '{"command":"while true; do gh pr view 7753 --json state,mergeStateStatus; sleep 30; done","description":"merge wait","timeout_ms":1800000}' >/dev/null
 run s1 '{"command":"while true; do gh run list --workflow web-platform-release.yml --branch main; sleep 30; done","description":"release wait","timeout_ms":1800000}' >/dev/null
 out=$(run s1 '{"command":"gh run list --workflow ci.yml --branch main","description":"ci wait","timeout_ms":1800000}')
-rc=1; denied "$out" || rc=0
+rc=1; warned "$out" || rc=0
 verdict "$rc" "ship Phase 7's merge->release->ci sequence is ALLOWED end to end (different targets never collide)"
 
-# --- 14. A LATE re-arm is allowed; an EARLY one is not ------------------------
-# The distinguishing observation, measured 2026-09-03: real layering happens FAST
-# (the incident's three monitors were minutes apart on 45-55 minute windows, i.e.
-# single-digit percent elapsed), whereas a re-arm LATE in a window is almost always
-# replacing a watcher that has already finished — which a hook cannot observe. So
-# "still live" is scoped to the early fraction of the prior window, not all of it.
-# Without this the author's own next re-arm would have been denied.
+# --- 14/15. RECENCY, honestly named ------------------------------------------
+# This was an early-vs-late split gated on 50% of the prior window, justified as
+# "still live". That premise is unobservable — see the hook header. What remains
+# is recency: an arm inside its own declared window MIGHT still be running, so it
+# is worth mentioning; one past its window cannot be, so it is not.
 fresh 14
-run s1 '{"command":"gh pr checks 7753","description":"early prior","timeout_ms":4000}' >/dev/null
+run s1 '{"command":"gh pr checks 7753","description":"prior","timeout_ms":4000}' >/dev/null
 out=$(run s1 '{"command":"gh pr checks 7753 --json state","description":"immediate re-arm","timeout_ms":4000}')
-rc=1; denied "$out" && rc=0
-verdict "$rc" 'an IMMEDIATE re-arm (the layering shape) is still DENIED'
+rc=1; warned "$out" && rc=0
+verdict "$rc" 'a re-arm INSIDE the prior window is REPORTED'
 
 fresh 15
-run s1 '{"command":"gh pr checks 7753","description":"aging prior","timeout_ms":4000}' >/dev/null
-sleep 3   # >50% of the 4s window
-out=$(run s1 '{"command":"gh pr checks 7753 --json state","description":"late re-arm","timeout_ms":4000}')
-rc=1; denied "$out" || rc=0
-verdict "$rc" 'a re-arm LATE in the prior window is ALLOWED (the watcher has almost certainly finished)'
+run s1 '{"command":"gh pr checks 7753","description":"aging prior","timeout_ms":3000}' >/dev/null
+sleep 4   # past the whole 3s window, not a fraction of it
+out=$(run s1 '{"command":"gh pr checks 7753 --json state","description":"late re-arm","timeout_ms":3000}')
+rc=1; warned "$out" || rc=0
+verdict "$rc" 'a re-arm after the prior window EXPIRES is silent'
 
 # --- 16. A MALFORMED LEDGER LINE MUST NOT DISABLE THE GATE --------------------
 # `jq -rs` is all-or-nothing: one unparseable line failed the whole slurp, the
@@ -174,7 +176,7 @@ fresh 16
 run s1 "$CI" >/dev/null
 printf 'CORRUPT NOT JSON\n' >> "$LEDGER"
 out=$(run s1 "$CI2")
-rc=1; denied "$out" && rc=0
+rc=1; warned "$out" && rc=0
 verdict "$rc" 'a malformed ledger line does NOT disable the gate (unparseable lines are skipped, not fatal)'
 
 # --- 17. A NEWLINE IN description MUST NOT KILL THE DENY ----------------------
@@ -185,17 +187,25 @@ verdict "$rc" 'a malformed ledger line does NOT disable the gate (unparseable li
 fresh 17
 run s1 '{"command":"gh pr checks 7753","description":"line1\nline2","timeout_ms":600000}' >/dev/null
 out=$(run s1 "$CI2")
-rc=1; denied "$out" && rc=0
+rc=1; warned "$out" && rc=0
 verdict "$rc" 'a newline in a prior description does NOT crash the deny path'
 
-# --- 18. TELEMETRY ARGUMENT ORDER --------------------------------------------
+# --- 18. TELEMETRY LANDS AS A READABLE ROW ------------------------------------
 # emit_incident takes <rule_id> <event_type> <prefix>. Transposed, every firing
 # landed as rule_id="deny" and was invisible to rule-metrics-aggregate.sh, which
-# keys its counters on rule_id. Pin the order against the sibling call site.
+# keys its counters on rule_id. Assert the ROW the hook actually wrote, not the
+# call's source text: a grep for the literal passes just as well when the helper's
+# signature changes underneath it.
 fresh 18
+INC="$CLAUDE_PROJECT_DIR/.claude/.rule-incidents.jsonl"
+: > "$INC" 2>/dev/null || true
+run s1 "$CI" >/dev/null
+run s1 "$CI2" >/dev/null
 rc=1
-grep -qE "emit monitor-supersede deny " "$HOOK" && rc=0
-verdict "$rc" 'the emit_incident call passes <rule_id> then <event_type>, matching the helper signature'
+if [ -r "$INC" ]; then
+  jq -e 'select(.rule_id == "monitor-supersede" and .event_type == "warn")' "$INC" >/dev/null 2>&1 && rc=0
+fi
+verdict "$rc" 'the firing writes a row keyed rule_id=monitor-supersede, event_type=warn'
 
 # --- 19. A LEDGER POISONED BY AN OLDER HOOK VERSION ---------------------------
 # Case 17 only reaches the WRITE-time sanitiser: with `tr -d '\n\t'` in place a
@@ -211,11 +221,25 @@ now=$(date +%s)
 # would exercise case 16 instead of the read-time guard this case exists for.
 printf '{"event":"arm","session":"s1","sig":"pr:7753","desc":"line1\\nline2","ts":%s,"window":600}\n' "$now" >> "$LEDGER"
 out=$(run s1 "$CI2")
-rc=1; denied "$out" && rc=0
+rc=1; warned "$out" && rc=0
 verdict "$rc" 'a ledger record containing a raw newline (written by an older hook) still denies, rather than aborting'
 
+# --- 20. THE INVARIANT: this hook never blocks -------------------------------
+# The whole redesign rests on this. Drive every colliding shape through the hook
+# and assert not one of them emits a permissionDecision at all — so a future edit
+# that reintroduces a deny fails here rather than in someone's ship run.
+fresh 20
+rc=0
+run s1 "$CI" >/dev/null
+for probe in "$CI2" \
+  '{"command":"gh pr checks 7753 # gate-override: monitor-supersede","description":"o","timeout_ms":600000}' \
+  '{"command":"grep X /var/tmp/soleur/run.log","description":"p","timeout_ms":600000}'; do
+  blocked "$(run s1 "$probe")" && rc=1
+done
+verdict "$rc" 'no input shape produces a permissionDecision — the hook cannot block'
+
 printf '\n'
-EXPECTED_CASES=19
+EXPECTED_CASES=20
 if [ "$CASES" -ne "$EXPECTED_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected exactly %d\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
