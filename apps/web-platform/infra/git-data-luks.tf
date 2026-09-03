@@ -105,16 +105,26 @@ resource "doppler_secret" "git_data_luks_key" {
 # the token CAN read it (probe arm B: exit 0, secret present). Before that correction
 # this secret would have been dark by construction, which is the ADR-149 item-2 trap.
 #
-# SCOPE, stated because it is the whole safety argument: it is read ONLY by emits that
-# are post-Doppler BY CONSTRUCTION. The early boot stages and every FATAL emit use the
-# BAKED Sentry DSN with no Doppler dependency, precisely so they still work when Doppler
-# is itself the broken stage. Routing a fatal through this token would make the fatal
-# channel depend on the thing it most often has to report on.
+# SCOPE. This copy is read by the POST-DOPPLER emits. Every FATAL emit still uses the
+# BAKED Sentry DSN with no Doppler dependency, precisely so it works when Doppler is itself
+# the broken stage — routing a fatal through this token would make the fatal channel depend
+# on the thing it most often has to report on. That invariant is unchanged by #7460.
 #
-# It is NEVER baked into user_data — user_data is retrievable from the Hetzner metadata
-# API, the same rationale that keeps the LUKS passphrase out. The Sentry DSN is different
-# and IS baked: it is semi-public (already in the client bundle) and baking it is what
-# makes the fatal channel independent.
+# SUPERSEDED IN PART BY #7460 (ADR-198). This comment used to read "It is NEVER baked into
+# user_data ... the same rationale that keeps the LUKS passphrase out." It IS now baked, so
+# that sentence would otherwise stand as a live falsehood next to the resource it describes —
+# and "the same rationale as the LUKS passphrase" was the part that did not survive review.
+#
+# The two are not the same case. The ingest token's capability ceiling is write-only append to
+# a telemetry sink (forged rows, quota burn); the passphrase decrypts every user's source at
+# rest and defends a control the privacy policy publicly claims. ADR-198 states that as a
+# three-part capability test, because the derivability argument the first draft used licenses
+# baking the passphrase too.
+#
+# This Doppler copy REMAINS, and is not redundant: env wins over the baked file, so after a
+# Better-Stack-side rotation the post-Doppler stages pick up the fresh value here while only
+# the pre-Doppler stages fall back to the stale baked one. That degradation is mirrored to
+# Sentry at stage:betterstack_ingest rather than swallowed.
 resource "doppler_secret" "git_data_betterstack_logs_token" {
   project    = doppler_config.git_data_prd.project
   config     = doppler_config.git_data_prd.name
