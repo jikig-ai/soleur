@@ -1,6 +1,7 @@
 # Session State
 
 ## Plan Phase
+
 - Plan file: knowledge-base/project/plans/2026-09-03-chore-supabase-followups-art30-register-orphan-linter-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
@@ -10,6 +11,7 @@
   hits, no `origin/main` grep hit. Clean.
 
 ### Errors
+
 - Self-inflicted, caught in-session: a Python slice anchored on `## Alternative Approaches
   Considered` matched a backticked *mention* of that heading and duplicated the Technical Approach
   section. Excised. Same anchor-matched-a-mention class as `cq-cite-content-anchor-not-line-number`
@@ -20,6 +22,7 @@
 - Non-blocking: `plugin:github:github` MCP server failed to connect; all GitHub work used `gh` CLI.
 
 ### Decisions
+
 - W1 promotes the deprecated-endpoint guard via one `run_suite` line on the already-required
   `test` context, NOT the issue's prescribed four-file public-ABI route. The ADR-139
   `ALLOWED_PATHS ∩ SCAN_DIRS` intersection re-derives to EMPTY, so #7716's mandated bot-PR
@@ -40,12 +43,14 @@
   names is a live 401).
 
 ### Open decision escalated to operator
+
 - DC-1: two independent reviewers recommend shipping #7717 (statutory) as its own PR. The plan's
   mitigation for bundling was FALSIFIED — `ship` merges `--squash`, so there is no independently
   revertable statutory commit. Coupling recorded as real and unmitigated. Awaiting operator call
   before Step 3 (`/work`).
 
 ### Components Invoked
+
 - Skills: `soleur:plan`, `soleur:gdpr-gate`, `soleur:plan-review`, `soleur:deepen-plan`
 - Research: `repo-research-analyst`, `learnings-researcher`, `functional-discovery`, 4x `Explore`
 - Domain review: `soleur:engineering:cto`, `soleur:legal:clo`, `soleur:product:cpo`
@@ -62,18 +67,21 @@
   follow-on PR (not behind a branch SHA — ship squash-merges, so none survives in main).
 
 ### Acceptance criteria — W6 block
+
 AC1-AC13 verified by running each criterion's LITERAL command (not a normalized variant).
 AC7 verified across all three sibling files. AC14 pending the CLO attestation (1.13).
 AC4 is four rows, not seven — see the CLO ruling below.
 AC8 was rewritten before it could be satisfied: the corpus-wide form was unsatisfiable.
 
 ### Split-boundary check (8.5) — verified, not assumed
+
 All nine W1/W7/W3/W4/W5 files are absent from the diff. Two shared files carry W6-only edits:
 `scripts/test-all.sh` (+4 legal `run_suite` rows; 0 W1/W7 rows touched) and
 `plugins/soleur/skills/incident/SKILL.md` (+15 lines, 0 `triggers:` lines — the register routing
 only, which ADR-200 needed in order to be true).
 
 ### CLO rulings obtained and applied
+
 1. **4 indexed / 3 waived, not 7/0.** The plan derived its determination set from the pinned
    regex two paragraphs after warning that "no regex makes a legal judgement". Three of the six
    `audits/` matches fail the inclusion predicate's first limb (a breach-shaped fact pattern):
@@ -92,6 +100,7 @@ closed both the ownership question (Sentry support confirmed both orgs operator-
 and the enumeration question (population enumerated). The row now records the actual residual.
 
 ### Defects found in the plan and corrected (measured, not inherited)
+
 - AC8 unsatisfiable as written; rescoped to the register files, matching the guard's own scope.
 - Corpus counts stale by one each: 115 files carry `art_33_triggered`, 102 post-mortems (not
   114/101). Swept at all five asserting sites by grepping the OLD value.
@@ -112,6 +121,7 @@ and the enumeration question (population enumerated). The row now records the ac
   pinned.
 
 ### Defects found in my own work by mutation
+
 - `lint-legal-registers.sh` assertion (c) tested membership with `grep -F` over the whole
   register, and the register's §Excluded records table lists the waived paths — so a file listed
   as EXCLUDED counted as INDEXED and every waiver was unfalsifiable. Anchored on the index
@@ -124,12 +134,14 @@ and the enumeration question (population enumerated). The row now records the ac
   were pre-existing and my new one copied the mistake.
 
 ### Issue flow
-Closing 1 (#7717). Filing 2: #7786 (published-disclosure contradiction, `compliance/critical`),
-#7787 (guard promotion, with its trigger). Net +1, both justified — the first fires the three-way
+
+Closing 1 (#7717). Filing 2: #7786 (published-disclosure contradiction,
+`compliance/critical`), #7787 (guard promotion, with its trigger). Net +1, both justified — the first fires the three-way
 `docs/legal/**` lockstep, the second is temporally blocked by construction.
 Executed, not filed: `action-required` on #7529; #7125 re-milestoned to Phase 4.
 
 ### Open
+
 - 1.13 CLO attestation (in flight).
 - 8.2 `/soleur:gdpr-gate` on the cumulative diff.
 - 8.3 full battery at `/ship` Phase 4 — deferred: a sibling worktree's full-gate run was in
@@ -137,6 +149,7 @@ Executed, not filed: `action-required` on #7529; #7125 re-milestoned to Phase 4.
   run instead and all green.
 
 ### Pipe-overflow class swept across the legal corpus (found while self-checking my own tables)
+
 GFM splits table cells on `|` **even inside backticked code spans**, so an unescaped pipe pushes
 a row past its header's column count and the overflow cells are **discarded at render time** —
 present in the raw markdown, invisible in the rendered document, and green under every
@@ -162,6 +175,7 @@ header: PA-8 §(f) 3, PA-8 §(g) 3, vendor mapping 7, PA-31 §(g) 3, compliance-
 four breach-register rows 10.
 
 ### AC14 — NOT met, and deliberately so
+
 The `clo` agent was invoked to produce the attestation required by plan task 1.13 and terminated
 on an API 529 three times (`req_011CegcTbK6bQXipPMqhFHVS`, `req_011CegcmkyX9kXDsZxkqP2fn`,
 `req_011Cegd6WcbnQP2vaVHPMcTW`). An attestation is an act of authority; writing one and signing
@@ -183,12 +197,13 @@ the gate was proven end-to-end on a real file rather than only on fixtures: it r
 file as neither indexed nor waived (rc=1), and passed once the waiver landed (rc=0).
 
 ### Issue flow, final
+
 Closing 1 (#7717). Filing 3: #7786 (published-disclosure contradiction), #7787 (guard
 promotion), #7791 (outstanding CLO attestation). **Net +2.** Justifications: #7786 fires the
 three-way `docs/legal/**` lockstep and must not ride inside a statutory chore; #7787 is
 temporally blocked by construction; #7791 is an authority I cannot supply and must not forge.
 Executed rather than filed: `action-required` on #7529; #7125 re-milestoned to Phase 4.
-#7791's number was reconciled after filing — five references had been pre-written as 7788.
+The number #7791 was reconciled after filing — five references had been pre-written as 7788.
 
 ## Review Phase — DEGRADED, and the PR is NOT ready
 
@@ -202,6 +217,7 @@ respawned, and retries stopped helping. Trailer records
 review is not adequate evidence at that threshold. This is the operator's call, not mine.
 
 ### What DID run, and is green
+
 - **Deterministic gates, all clean:** shellcheck on all 6 changed shell files; 9 repo lints
   (`guard-vacuity-floor`, `lint-window-closure-assertion`, `lint-guard-contract`,
   `lint-trap-tempfile-ownership`, `lint-diagnosis-claims`, `lint-credential-path-literals`,
@@ -220,6 +236,7 @@ review is not adequate evidence at that threshold. This is the operator's call, 
   42 assertions, run green) and concurrent corpus modification mid-run.
 
 ### Findings — 6, all self-found, all fixed inline (net 0 issues filed)
+
 1. **P1 — the two waiver copies could diverge silently.** Deleting a row from the register's
    §Excluded records left guard and suite green, so a regulator would see 3 exclusions while the
    guard enforced 4. Assertion (d) added, mutation-proven both directions plus the refusal, and
@@ -242,6 +259,7 @@ review is not adequate evidence at that threshold. This is the operator's call, 
    total counts plans, specs, the ADR and the guard's own source.
 
 ### Instrument errors I made and corrected
+
 - A counter-redirection mutation first reported CAUGHT for the *wrong reason* — my decoy was
   unbound, so `set -u` killed it before the self-test ran. Re-tested with a bound decoy.
 - Read a guard's exit code through a pipe to `tail`, which reported rc=0 over a real abort.
@@ -279,6 +297,7 @@ shellcheck for a bash-only diff. The trailer on commit `1239211c1` carries the s
 - Phase 1.6 token-efficiency skipped; measured root cause reported on **#3497** (net +0 issues).
 
 ### Drift found at compound, to resolve before merge
+
 Branch is **11 behind / 31 ahead** of `origin/main` (fetched 2026-09-03). Two files overlap
 main's drift: `plugins/soleur/skills/review/SKILL.md` (branch copy is missing ~50 lines main
 gained — a structural-cause roll-up and a coverage-consult step) and `scripts/test-all.sh`.
@@ -286,6 +305,7 @@ Rebase onto `origin/main` at ship before the battery; re-verify the split-bounda
 after the rebase.
 
 ### Archival decision — deliberately NOT archived
+
 `archive-kb.sh --dry-run` proposed archiving `specs/feat-one-shot-7716-7717-7718-supabase-followups`
 (and, per the documented slug-glob gap, did NOT discover the plan, whose filename carries a topic
 rather than the branch slug). **Skipped.** `tasks.md` §Deferred to the follow-on PR holds the
@@ -295,6 +315,7 @@ while the plan stays live would strand that work in an inconsistent pair. Archiv
 when the follow-on merges.
 
 ### Operator decision needed — the local lefthook layer is inert
+
 `core.hooksPath` → `.git/hooks` contains only `*.sample` files, so `lefthook install` has never
 been run on this machine, and every `LEFTHOOK=0` in this session's commits was a no-op flag over
 an absent gate. `lefthook.yml` (16.8 kB) and `lefthook` 2.1.6 are both present; plain
@@ -303,3 +324,26 @@ an absent gate. `lefthook.yml` (16.8 kB) and `lefthook` 2.1.6 are both present; 
 **shared** `.git/hooks` that sibling worktree sessions were committing through at the time, so it
 was surfaced rather than executed. Enforcement meanwhile is `/soleur:ship` Phase 5.5 and CI, both
 of which do run.
+
+### Resolved 2026-09-03 — lefthook installed
+
+Operator authorized it in-session. `lefthook install --force` (plain `install` refuses while
+`core.hooksPath` is explicitly set) created `pre-commit` and `pre-push`. First commit under real
+hooks: **1.33 s**, `gitleaks-staged` green, every other hook skipped for no matching staged files.
+The >60 s worktree hang the retired `cq-when-lefthook-hangs-in-a-worktree-60s` rule is conditioned
+on did not occur.
+
+### Ship Phase 4 — the battery found a red the review's lint pass did not
+
+`lint-trap-tempfile-ownership` rule (c) flagged BOTH suites this PR adds: each `mkrepo`/`mkcorpus`
+call allocated a top-level `mktemp -d` with no owning trap, leaking one directory per case. Live,
+not theoretical — 1,179 `llr-suite*` + 211 `pa22-suite*` directories (441 MB) had accumulated in
+`/var/tmp` from this session's own inner loop. Fixed with the repo's existing single-`SANDBOX_ROOT`
+idiom and proven in both directions (clean run delta 0; SIGTERM mid-run delta 0). 1,344 stale
+directories removed; 46 recent ones left for the sibling worktree that may own them.
+
+**The first battery run was REAPED, not failed.** ~40 min in, the wrapper was killed: `battery.rc`
+is 0 bytes, no `=== N/M suites passed ===` marker, and the log stops mid-line. Per ship Phase 4 that
+is UNRESOLVED — it is re-run below, not read as a result. The one real `[FAIL]` it surfaced before
+dying is independently reproducible and is fixed above; the other `[FAIL]` lines in that log are
+the EXPECTED instrument self-tests (`fail() increments`).
