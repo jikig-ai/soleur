@@ -117,3 +117,103 @@ describe("docker build context: no included file imports an excluded one", () =>
     },
   );
 });
+
+/**
+ * WIDENING (#7756). The block above is correct and its WINDOW was narrower than
+ * the property this file names: it enumerated only context-root `*.config.ts`,
+ * and `relativeImports()` matches only `./`-style specifiers. So it was blind on
+ * both axes at once to the shape that broke the release —
+ * `lib/feature-flags/identity.test.ts` (build-INCLUDED, not a root config)
+ * importing `@/test/helpers/mock-supabase` (an ALIAS, not a relative path).
+ *
+ * The import was years old and unchanged; #7756's Next 16 bump widened the set
+ * of files `next build` type-checks to include colocated `lib/**\/*.test.ts`,
+ * which is why every pre-merge gate stayed green while the image build failed.
+ *
+ * Both axes are covered here: every build-INCLUDED source file, and the `@/`
+ * alias form in addition to relative specifiers.
+ */
+
+/** Directories `next build` type-checks that are NOT pruned from the context. */
+const BUILD_INCLUDED_DIRS = ["app", "components", "hooks", "lib", "server"];
+
+function walkTs(dir: string, acc: string[] = []): string[] {
+  const abs = path.join(APP_ROOT, dir);
+  if (!fs.existsSync(abs)) return acc;
+  for (const entry of fs.readdirSync(abs, { withFileTypes: true })) {
+    const rel = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === ".next") continue;
+      walkTs(rel, acc);
+    } else if (/\.tsx?$/.test(entry.name)) {
+      acc.push(rel);
+    }
+  }
+  return acc;
+}
+
+/** `@/x` alias specifiers declared by a source file (tsconfig maps `@/*` -> app root). */
+function aliasImports(file: string): string[] {
+  const src = fs.readFileSync(path.join(APP_ROOT, file), "utf8");
+  const out: string[] = [];
+  // Covers `import … from "@/x"`, `export … from "@/x"`, and `vi.mock("@/x")`
+  // — the mock form matters because it is how this very file references
+  // build-excluded modules elsewhere.
+  const re = /(?:from\s+|vi\.mock\(\s*|import\(\s*)["'](@\/[^"']+)["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) out.push(m[1]);
+  return out;
+}
+
+function resolveAlias(spec: string): string | null {
+  const base = path.resolve(APP_ROOT, spec.slice(2));
+  for (const cand of [base, `${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")]) {
+    if (fs.existsSync(cand) && fs.statSync(cand).isFile()) {
+      return path.relative(APP_ROOT, cand);
+    }
+  }
+  return null;
+}
+
+describe("docker build context: build-included sources do not import excluded ones", () => {
+  const lines = dockerignoreLines();
+  const files = BUILD_INCLUDED_DIRS.flatMap((d) => walkTs(d)).filter(
+    (f) => !isExcludedFromContext(f, lines),
+  );
+
+  it("enumerates a non-trivial set of build-included sources", () => {
+    // Anti-vacuity floor. If the walk ever returns (nearly) nothing, every
+    // assertion below passes for the wrong reason — which is exactly how the
+    // narrower window above stayed green through three instances of this class.
+    expect(files.length).toBeGreaterThan(200);
+  });
+
+  it("the walk reaches the file that broke the #7756 release", () => {
+    // Non-vacuity control naming a concrete member: a future refactor that
+    // stops walking lib/ must fail here rather than silently shrink coverage.
+    expect(files).toContain(path.join("lib", "feature-flags", "identity.test.ts"));
+  });
+
+  it("no build-included file imports a build-excluded module", () => {
+    const offenders: string[] = [];
+    for (const file of files) {
+      for (const spec of [...aliasImports(file), ...relativeImports(file)]) {
+        const target = spec.startsWith("@/")
+          ? resolveAlias(spec)
+          : resolveToRepoRelative(file, spec);
+        if (target === null) continue; // unresolvable here; tsc owns that error
+        if (isExcludedFromContext(target, lines)) {
+          offenders.push(`${file} imports "${spec}" -> ${target}, excluded by .dockerignore`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      offenders.length
+        ? `\n${offenders.join(
+            "\n",
+          )}\n\nThis compiles locally and in CI but FAILS the production image build.\nEither add a "!<path>" re-include to apps/web-platform/.dockerignore\n(see !test/helpers/mock-supabase.ts, !test/repo-wide-suites.ts and\n!scripts/sandbox-canary.mjs), or move the imported file out of the\nexcluded directory.\n`
+        : undefined,
+    ).toEqual([]);
+  });
+});

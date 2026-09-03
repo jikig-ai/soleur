@@ -120,6 +120,31 @@ test/
 # re-include stays in step with what vitest.config.ts actually imports.
 !test/repo-wide-suites.ts
 
+# Third instance of the same class (#7756 landed Next 16, which widened what
+# `next build` type-checks to include colocated `lib/**/*.test.ts`). That
+# surfaced `lib/feature-flags/identity.test.ts` — build-INCLUDED because it sits
+# under lib/ — importing `@/test/helpers/mock-supabase`, which this file prunes:
+# `Cannot find module '@/test/helpers/mock-supabase'`. The release job failed on
+# 2d5d19088 and on every merge after it, and prod served a stale build.
+#
+# The import is old (#4331); nothing about it changed. What changed is the set
+# of files the image build type-checks, which is why every pre-merge gate stayed
+# green — local `tsc`, CI `test` and `vitest` all see the unpruned tree.
+#
+# mock-supabase.ts imports only `vitest`, so like repo-wide-suites.ts above the
+# re-include cannot cascade.
+#
+# NOTE the exact-path form, and do NOT "fix" it by adding a `!test/helpers/`
+# directory bang above it. That bang is unnecessary — measured with a minimal
+# `docker build`: with `test/` excluded, `!test/helpers/mock-supabase.ts` ALONE
+# puts the file in the context while its 25 siblings stay pruned. It is also
+# actively harmful, for the reason the _plugin-vendored block below already
+# records: a bare directory bang is RECURSIVE, so it would re-include
+# test/helpers/* wholesale — including four `*.test.ts` files and helpers that
+# import `esbuild` and `@anthropic-ai/claude-agent-sdk` — and `next build`
+# would then type-check them inside the image.
+!test/helpers/mock-supabase.ts
+
 # Migrations/templates not needed at runtime
 supabase/
 
