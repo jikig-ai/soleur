@@ -1,4 +1,4 @@
-"""Shared corpus scanner for the two fixture-safety guards (#7652).
+"""Shared corpus scanner for the fixture-safety guards (#7652, #7708).
 
 WHY ONE MODULE AND NOT TWO COPIES. `fixture-cd-containment.test.sh` forbids the shape where a
 failed `cd` redirects a git write into the caller's repository. Its sibling forbids the shape where
@@ -8,7 +8,7 @@ code, which lines are comments, whether a `set -e` is in scope — is identical,
 file asking the reader to keep it in step with another file is not an invariant. Sharing the module
 is what makes the composition checkable instead of aspirational.
 
-THE TWO RULES
+THE RULES
 
 `scan_cd` — the 2026-08-20 shape:
 
@@ -35,10 +35,26 @@ THE TWO RULES
 harmless" is wrong and would otherwise cull it: `git -C "" init` returns 0 and reinitialises the
 caller's repository.
 
-SCOPE. `scan_operand` covers P1a — the EMPTY operand — only. P1b (a RELATIVE operand, and the
-`rm -rf ""` / `mv a ""` / redirection families) is tracked separately, because the verbs do not
-share a failure mode: measured, only `git -C` WIDENS on an empty operand, `rm -rf ""` is a silent
-no-op and `mv a ""` errors. Stating that is the point — a silent omission would read as coverage.
+`scan_relative` — the P1b shape, added by #7708. Same operands, a different question: not "can
+this be EMPTY" but "can this be RELATIVE, or rooted at `/` by an empty parent":
+
+    setup() {
+      local root="$1"                      # caller may pass a relative path
+      local work="$root/repo"              # ...so this is relative too
+      rm -rf "$work"                       # -> deletes relative to CWD
+    }
+
+SCOPE. `scan_operand` covers P1a — the EMPTY operand — only, and its verdicts are frozen: #7708
+forbids changing `OPERAND_WRITE` or `scan_operand`, because P1a's baseline is a shrink-only
+ratchet and a detector change would silently re-price every row in it. `scan_relative` therefore
+carries its OWN binding resolver rather than extending `_binding_of`. The two rules ask different
+questions and the verbs do not share a failure mode: measured, only `git -C` WIDENS on an empty
+operand, `rm -rf ""` is a silent no-op and `mv a ""` errors. Stating that is the point — a silent
+omission would read as coverage.
+
+The `git -C` arm of `scan_relative` claims only the residue P1a structurally CANNOT see (sites
+where `_binding_of` returns None). Overlapping the two would let one ratchet retire the other's
+rows.
 """
 
 import os
@@ -364,6 +380,290 @@ def scan_operand(paths):
     return out
 
 
+# --- P1b: a RELATIVE or ROOT-ANCHORED operand ---------------------------------------------------
+#
+# P1a asks whether the operand can be EMPTY. P1b asks whether it can be RELATIVE, or whether an
+# empty PARENT can root it at `/`. The two do not share a failure mode and are not folded together:
+# measured, only `git -C ""` widens silently, `rm -rf ""` is a no-op and `mv a ""` errors.
+#
+# THREE FAMILIES, named by what they do rather than by verb (see #7708):
+#   widening       a relative `git -C` / `rm -rf` / redirection target resolves against whatever
+#                  CWD happens to be, which for these suites is the developer's live worktree.
+#   root-anchored  `"$X/f"` with `$X` empty is `/f`, not `f`. Usually loud, occasionally not.
+#   loud-failure   `mv a "$X"` / `cp -r a "$X"` into an empty destination exits non-zero.
+#
+# WHY THIS RULE CARRIES ITS OWN BINDING RESOLVER AND DOES NOT REUSE `_binding_of`.
+# `_binding_of` stops at the nearest assignment and returns None when that assignment is not a P1a
+# shape. That is correct for P1a and useless here: measured over 921 tracked files, 199 of the 497
+# named-variable `git -C` write sites terminate that way, and EVERY one of them has a real binding.
+# The relativity question is a property of the chain ROOT, so the chain has to be walked:
+#   X="$tmp/work"  ->  tmp=$(mktemp -d)   ->  absolute, cannot be relative
+#   X="$1/work"    ->  unresolved caller  ->  candidate
+# Extending `_binding_of` itself would change P1a's verdicts, which #7708 explicitly forbids.
+#
+# WHAT COUNTS AS PROVABLY ABSOLUTE, and the two things that measurably do NOT:
+#   `$(mktemp -d)`, `$(mktemp)`, `$(mktemp -d -t pre.XXXXXX)`  -> absolute
+#   `$(mktemp -d -p "$R")`, `$(mktemp -d "$ROOT/c.XXXXXX")`    -> INHERITS `$R` / `$ROOT`
+# The second line is the one that bites. A path-bearing TEMPLATE inherits its prefix exactly as
+# `-p` does, and classifying it absolute silently cleared 114 `rm -rf` and 153 redirection sites.
+# Note also that mktemp's absoluteness is ENVIRONMENTAL, not lexical: `TMPDIR=reldir mktemp -d`
+# returns `reldir/tmp.XXXX`, measured. It is treated as absolute here because this corpus has zero
+# relative `TMPDIR` literals and zero relative `-p` arguments — established with a positive control
+# showing the pattern can match — not because mktemp guarantees it.
+
+RELATIVE_RM = re.compile(
+    r'\brm\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*r[a-zA-Z]*f?[a-zA-Z]*\s+'
+    r'"\$\{?(?P<var>[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}?[/"]')
+RELATIVE_REDIR = re.compile(
+    r'(?<![0-9<>])>>?\s*"\$\{?(?P<var>[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}?[/"]')
+RELATIVE_MVCP = re.compile(
+    r'\b(?:mv|cp\s+-r[a-zA-Z]*)\s+\S+\s+"\$\{?(?P<var>[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}?[/"]')
+
+# Redirection targets that are CI plumbing, not fixture directories. Excluded by NAME because the
+# shape is identical to a fixture write and no chain analysis can tell them apart: the runner sets
+# them, they are absolute, and flagging them is how a guard stops being read.
+CI_SINK_VARS = frozenset({"GITHUB_OUTPUT", "GITHUB_STEP_SUMMARY", "GITHUB_ENV", "GITHUB_PATH"})
+
+_REL_ALIAS = re.compile(r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$')
+_REL_DERIV = re.compile(r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/.*$')
+_REL_CALL = re.compile(r'^\$\(\s*([A-Za-z_][A-Za-z0-9_]*)\b[^)]*\)$')
+_MKTEMP_ABS = re.compile(
+    r'^\$\(\s*mktemp\b(?![^)]*(?:\s-p\s|--tmpdir))(?![^)]*/[^\s")]*X{3,})[^)]*\)$')
+_MKTEMP_INHERIT = re.compile(r'^\$\(\s*mktemp\b[^)]*(?:\s-p\s|--tmpdir|/[^\s")]*X{3,})')
+# An emit can sit mid-line, after `;` or `{`. A ONE-LINE wrapper keeps it exactly there, and
+# anchoring this at `^` made every one-line fixture wrapper unresolvable.
+_EMITS = re.compile(r'(?:^|;|\{)\s*(?:echo|printf)\b[^;]*?"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"')
+_SOURCE = re.compile(r'^\s*(?:source|\.)\s+"?([^"\s;]+)"?')
+
+
+def _extract_value(s, pos):
+    """The value token beginning at s[pos].
+
+    Quote-aware AND substitution-aware: a closing quote INSIDE `$( )` does not end the value.
+    `X="$(mktemp -d "$ROOT")"` truncated to `$(mktemp -d ` under a naive reader, which then
+    failed every mktemp test and reported the site as an unresolved candidate.
+    """
+    n = len(s)
+    if pos >= n:
+        return ""
+    out = []
+    if s[pos] in '"\'':
+        q = s[pos]; pos += 1; depth = 0
+        while pos < n:
+            c = s[pos]
+            if c == '\\' and pos + 1 < n:
+                out.append(s[pos + 1]); pos += 2; continue
+            if c == '$' and pos + 1 < n and s[pos + 1] == '(':
+                depth += 1; out.append('$('); pos += 2; continue
+            if c == ')' and depth:
+                depth -= 1; out.append(c); pos += 1; continue
+            if c == q and depth == 0:
+                break
+            out.append(c); pos += 1
+        return "".join(out)
+    depth = 0
+    while pos < n:
+        c = s[pos]
+        if c == '$' and pos + 1 < n and s[pos + 1] == '(':
+            depth += 1; out.append('$('); pos += 2; continue
+        if c == ')' and depth:
+            depth -= 1; out.append(c); pos += 1; continue
+        if depth == 0 and c in ' \t;|&':
+            break
+        out.append(c); pos += 1
+    return "".join(out)
+
+
+def _function_bodies(lines):
+    """name -> (start_idx, end_idx). A ONE-LINE definition yields start == end, and every consumer
+    must therefore scan an INCLUSIVE range; `range(end, start, -1)` is empty and silently skips it.
+    """
+    out = {}
+    for i, l in enumerate(lines):
+        m = FUNC_HEAD.match(l)
+        if not m:
+            continue
+        name = re.match(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)', l)
+        if not name:
+            continue
+        depth = l.count('{') - l.count('}')
+        j = i
+        while depth > 0 and j + 1 < len(lines):
+            j += 1
+            depth += lines[j].count('{') - lines[j].count('}')
+        out[name.group(1)] = (i, j)
+    return out
+
+
+def _literal_tail(arg):
+    """Trailing literal path fragment of a `source` argument: `"$V/lib/x.sh"` -> `lib/x.sh`."""
+    s = re.sub(r'\$\([^)]*\)', '\x00', arg)
+    s = re.sub(r'\$\{?[A-Za-z_][A-Za-z0-9_]*\}?', '\x00', s)
+    tail = s.split('\x00')[-1].lstrip('/')
+    return tail if tail.endswith('.sh') else None
+
+
+def _extended_funcs(path, lines, corpus, cache):
+    """Same-file functions plus, one hop out, functions from sourced helpers.
+
+    Fixture wrappers frequently live in a shared `test-helpers.sh`, so a resolver that only reads
+    the current file reports every `d=$(new_fixture)` as unresolved.
+    """
+    if path in cache:
+        return cache[path]
+    funcs = {n: (lo, hi, lines) for n, (lo, hi) in _function_bodies(lines).items()}
+    for l in lines:
+        m = _SOURCE.match(l)
+        if not m:
+            continue
+        tail = _literal_tail(m.group(1))
+        if not tail:
+            continue
+        cands = [p for p in corpus if p.replace("./", "").endswith(tail)]
+        if not cands:
+            continue
+        cands.sort(key=lambda p: -len(os.path.commonprefix(
+            [os.path.abspath(p), os.path.abspath(path)])))
+        sl = read_lines(cands[0])
+        if sl is None:
+            continue
+        for n, (lo, hi) in _function_bodies(sl).items():
+            funcs.setdefault(n, (lo, hi, sl))
+    cache[path] = funcs
+    return funcs
+
+
+def _classify_value(val):
+    if _MKTEMP_INHERIT.match(val):
+        return "mktemp-inherits"
+    if _MKTEMP_ABS.match(val):
+        return "mktemp-abs"
+    if _REL_ALIAS.match(val):
+        return "alias"
+    if _REL_DERIV.match(val):
+        return "derived"
+    if val.startswith("/"):
+        return "absolute-literal"
+    if _REL_CALL.match(val):
+        return "call"
+    if val.startswith("$("):
+        return "other-cmdsubst"
+    return "other"
+
+
+def _rhs_of(lines, upto, var, skip, lo=0, inclusive=False):
+    """Nearest binding of `var` at or before `upto`.
+
+    `inclusive` reads line `upto` itself, which is where a ONE-LINE wrapper keeps both its binding
+    and its emit (`f() { local d="$T/x"; echo "$d"; }`).
+    """
+    v = re.escape(var)
+    rx = re.compile(_LEAD + _DECL + v + r'=')
+    start = upto if inclusive else upto - 1
+    for j in range(start, lo - 1, -1):
+        if j in skip or lines[j].lstrip().startswith("#"):
+            continue
+        m = rx.search(lines[j])
+        if m:
+            return j, _extract_value(lines[j], m.end())
+    return None, None
+
+
+def _wrapper_root(fname, funcs, depth):
+    """Root class of what same-file-or-sourced function `fname` emits."""
+    if depth > 4 or fname not in funcs:
+        return None
+    lo, hi, blines = funcs[fname]
+    one_line = (lo == hi)
+    for k in range(hi, lo - 1, -1):
+        m = _EMITS.search(blines[k])
+        if m:
+            return _chain_root(blines, k, m.group(1), set(), funcs,
+                               depth + 1, lo=lo, inclusive=one_line)[0]
+    for k in range(hi, lo - 1, -1):
+        if re.search(r'\bmktemp\b', blines[k]):
+            seg = blines[k]
+            if re.search(r'\s-p\s|--tmpdir', seg) or re.search(r'mktemp[^;|]*/[^\s";|]*X{3,}', seg):
+                return "mktemp-inherits"
+            return "mktemp-abs"
+    return None
+
+
+def _chain_root(lines, use_idx, var, skip, funcs, depth=0, lo=0, inclusive=False):
+    """Walk aliases and derivations to the root binding. Returns (root_class, final_var)."""
+    cur, use, d, inc = var, use_idx, 0, inclusive
+    while d < 8:
+        d += 1
+        j, val = _rhs_of(lines, use, cur, skip, lo=lo, inclusive=inc)
+        inc = False
+        if j is None:
+            return "never-bound", cur
+        k = _classify_value(val)
+        if k == "alias":
+            cur, use = _REL_ALIAS.match(val).group(1), j
+            continue
+        if k == "derived":
+            cur, use = _REL_DERIV.match(val).group(1), j
+            continue
+        if k == "call":
+            return (_wrapper_root(_REL_CALL.match(val).group(1), funcs, depth)
+                    or "call-unresolved"), cur
+        return k, cur
+    return "deep", cur
+
+
+# A root that cannot be relative and cannot be empty. Everything else is a candidate.
+_ROOT_SAFE = frozenset({"mktemp-abs", "absolute-literal"})
+
+_REL_FAMILIES = (
+    ("git-C", None),          # OPERAND_WRITE, restricted to what P1a structurally cannot see
+    ("rm-rf", RELATIVE_RM),
+    ("redirect", RELATIVE_REDIR),
+    ("mv-cp", RELATIVE_MVCP),
+)
+
+
+def scan_relative(paths, corpus=None):
+    """P1b: operands whose chain root is neither provably absolute nor guarded."""
+    corpus = corpus if corpus is not None else paths
+    cache = {}
+    out = []
+    for f in paths:
+        lines = read_lines(f)
+        if lines is None:
+            continue
+        skip = heredoc_lines(lines)
+        funcs = _extended_funcs(f, lines, corpus, cache)
+        for fam, rx in _REL_FAMILIES:
+            pat = OPERAND_WRITE if rx is None else rx
+            for i, line in enumerate(lines):
+                if i in skip or line.lstrip().startswith("#"):
+                    continue
+                m = pat.search(line)
+                if not m:
+                    continue
+                var = m.group("var")
+                if var.isdigit():
+                    continue
+                if fam == "redirect" and var in CI_SINK_VARS:
+                    continue
+                # The git -C arm claims ONLY the residue P1a cannot see. Anything P1a can resolve
+                # is P1a's to report, and reporting it twice is how two ratchets start disagreeing.
+                if fam == "git-C" and _binding_of(lines, i, var, skip) is not None:
+                    continue
+                root, endvar = _chain_root(lines, i, var, skip, funcs)
+                if root in _ROOT_SAFE:
+                    continue
+                guards = _guard_res(var) + _guard_res(endvar)
+                if any(not (k in skip or lines[k].lstrip().startswith("#"))
+                       and any(g.search(lines[k]) for g in guards)
+                       for k in range(0, i + 1)):
+                    continue
+                out.append((f, i + 1, fam, root, line.strip()[:70]))
+    return out
+
+
+
 # --- CLI ------------------------------------------------------------------------------------------
 
 def main(argv):
@@ -395,16 +695,23 @@ def main(argv):
         # `*.test.sh`, so this costs nothing today and closes the gap for every file added later.
         files = tracked_shell_files(repo, "*.sh")
 
-    if rule not in ("operand", "cd"):
-        raise SystemExit(f"fixture-scan: unknown --rule {rule!r} (want 'operand' or 'cd')")
+    if rule not in ("operand", "cd", "relative"):
+        raise SystemExit(
+            f"fixture-scan: unknown --rule {rule!r} (want 'operand', 'cd' or 'relative')")
 
-    if rule == "operand":
+    if rule == "relative":
+        hits = scan_relative(files, corpus=files)
+        for f, n, fam, root, src in hits:
+            rel = os.path.relpath(f, repo) if repo else f
+            print(f"{rel}:{n}: operand not provably absolute ({fam}, root={root})")
+            print(f"    {src}")
+    elif rule == "operand":
         hits = scan_operand(files)
         for f, n, form, verb, src in hits:
             rel = os.path.relpath(f, repo) if repo else f
             print(f"{rel}:{n}: unasserted fixture dir ({form}) -> git -C write `{verb}`")
             print(f"    {src}")
-    else:
+    else:  # rule == "cd"
         hits = scan_cd(files)
         for f, n, cd, wn, w in hits:
             rel = os.path.relpath(f, repo) if repo else f

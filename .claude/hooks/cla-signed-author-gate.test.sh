@@ -58,6 +58,7 @@ init_git_repo() {
 make_branch() {
   local tmp="$1" branch="$2" author_email="$3"
   local work="$tmp/work" origin="$tmp/origin.git" inc="$tmp/inc"
+  assert_fixture_dir "$work"
   mkdir -p "$work" "$inc"
   git init -q --bare "$origin"
   init_git_repo "$work"

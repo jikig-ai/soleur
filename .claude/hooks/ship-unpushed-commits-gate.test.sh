@@ -64,6 +64,7 @@ init_git_repo() {
 make_synced_branch() {
   local tmp="$1" branch="$2"
   local work="$tmp/work" origin="$tmp/origin.git" incidents="$tmp/incidents"
+  assert_fixture_dir "$work"
   mkdir -p "$work" "$incidents"
   git init -q --bare "$origin"
   init_git_repo "$work"
@@ -176,6 +177,7 @@ t2_clean_state_pass() {
 t3_on_main_pass() {
   local tmp; tmp=$(mktemp -d)
   local work="$tmp/work" incidents="$tmp/incidents"
+  assert_fixture_dir "$work"
   mkdir -p "$work" "$incidents"
   init_git_repo "$work"
   git -C "$work" commit -q --allow-empty -m "init"
@@ -193,6 +195,7 @@ t3_on_main_pass() {
 t4_detached_head_pass() {
   local tmp; tmp=$(mktemp -d)
   local work="$tmp/work" incidents="$tmp/incidents"
+  assert_fixture_dir "$work"
   mkdir -p "$work" "$incidents"
   init_git_repo "$work"
   echo a > "$work/a"
@@ -218,6 +221,7 @@ t4_detached_head_pass() {
 t5_no_upstream_pass() {
   local tmp; tmp=$(mktemp -d)
   local work="$tmp/work" incidents="$tmp/incidents"
+  assert_fixture_dir "$work"
   mkdir -p "$work" "$incidents"
   init_git_repo "$work"
   git -C "$work" commit -q --allow-empty -m "init"
