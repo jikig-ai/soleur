@@ -326,3 +326,18 @@ if [[ "$COVERAGE_VALUE" == "unknown" ]]; then
   echo "emit-review-trailer: NOTE — coverage is 'unknown' because no --agents-ran/--agents-expected was passed." >&2
   echo "  This is recorded honestly, but it means nothing downstream can tell a full review from a degraded one." >&2
 fi
+
+# Lifecycle successor, printed at the one moment it is actionable.
+#
+# Emitting this trailer means review is DONE, and review is not a stopping point
+# (rf-never-skip-qa-review-before-merging). Twice in one session (2026-09-03) the
+# lead pushed `review:` fixes, reported status, and ended the turn — the operator
+# had to ask "why did you stop?" both times. The rule was present and had already
+# been routed into review/SKILL.md as prose after the first occurrence; prose was
+# not the gap, and a second paragraph would not have closed it.
+#
+# So the reminder is emitted by the tool at the checkpoint instead of relied upon
+# as recall. This is stdout, not an error: it cannot fail a pipeline, and it costs
+# two lines at exactly the point where the next action is unambiguous.
+echo "emit-review-trailer: NEXT → /soleur:compound, then /soleur:ship (carry the PR to MERGED)."
+echo "emit-review-trailer: review is not a turn boundary — 'CI is running' is not a handoff."
