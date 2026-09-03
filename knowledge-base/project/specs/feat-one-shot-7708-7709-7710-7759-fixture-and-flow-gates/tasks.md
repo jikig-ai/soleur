@@ -107,6 +107,28 @@ Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
       a literal and drops the site. Correct for P1a (empty), wrong for P1b (relative) — if `$TMP` is
       relative so is the derived path. Either resolve the parent variable or scope P1b explicitly to
       the recognized binding forms and document the exclusion.
+- [ ] 2.1c MEASURED (PR 2), superseding 2.1's projected residue for the `git -C` arm. Funnel over
+      921 tracked `*.sh`, every stage controlled:
+      504 `git -C "$VAR" <write>` sites -> 497 named-variable -> **199 where `_binding_of` returns
+      None**, i.e. structurally invisible to P1a. All 199 have a real binding; none is an unbound
+      global. Shapes: 184 derived `X="$Y/sub"`, 11 alias `X="$Y"`, 4 command-substitution.
+      Resolving each chain transitively to its root (extractor + classifier carry a 9-case positive
+      control that must PASS before the scan runs):
+        170  rooted at bare `$(mktemp -d)`  -> absolute, cannot be relative
+         12  guarded by other means
+         17  TRUE RESIDUE: unguarded AND not provably absolute, across 3 files
+      The 17 split 13 rooted at a positional `$1` and 4 at a `${VAR:-$(...)}` default.
+      **2.7 as written targets an EMPTY SET.** It scopes the arm to "literal-bound relative
+      operands"; there are zero relative literal bindings repo-wide. The residue P1a cannot see is
+      entirely 2.1b's derived/alias territory, so 2.7 and 2.1b are one task, not two.
+- [ ] 2.1d ...AND the 17 are defended, just not lexically. Read individually: the 8 in
+      `ship-unpushed-commits-gate.test.sh` are `work="$tmp/work"` sites whose enclosing helper calls
+      `init_git_repo "$work"`, and THAT function opens with `assert_fixture_dir "$dir"`. The defence
+      is INTERPROCEDURAL, which a line-oriented scanner cannot see and should not pretend to.
+      Consequence for scoping: the P1b `git -C` arm has no undefended site to burn down. Its value
+      is as a shrink-only RATCHET over the 17 acknowledged rows, not as a remediation. Per PR 1's
+      finding that a widening which silences is worse than the false positives it removes, do NOT
+      teach the rule to chase call graphs to retire these; acknowledge them with the measured reason.
 - [ ] 2.2 Apply the repo's existing fix-inline-versus-file threshold — the cost-of-filing auto-flip at
       100 lines and 4 files — to the re-measured residue. If 2.1a proves large, ship the loud-failure
       family alone (3 sites) and file the other two with the measured numbers attached.
