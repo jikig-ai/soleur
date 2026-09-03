@@ -505,6 +505,13 @@ INLINE_ALLOWLIST = {
     "/usr/local/bin/git-data-emit",
     "/home/git/.ssh/authorized_keys",
     "/etc/ssh/sshd_config.d/01-hardening.conf",
+    # (#7460) Two 0600 root:root credential env files. Inline BY DESIGN, not by omission: each
+    # is a single template-interpolated assignment, so a repo-source file would hold a
+    # placeholder that never matches the rendered bytes and would defeat the byte-identity
+    # check this allowlist exists to protect. git-data-doppler MOVED here from a
+    # printf-then-chmod runcmd pair, which left the token at 0644 between the two entries.
+    "/etc/default/git-data-betterstack",
+    "/etc/default/git-data-doppler",
 }
 # An absolute floor, NOT a self-derived one. The first rewrite of this check derived the
 # expected roster from cloud-init-git-data.yml — the same artifact that produces the

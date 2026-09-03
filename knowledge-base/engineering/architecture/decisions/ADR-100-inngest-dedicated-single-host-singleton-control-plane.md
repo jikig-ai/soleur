@@ -884,3 +884,107 @@ no in-repo remediation today. The `inngest-volume-recut` design — five guard l
 on, behind the existing `inngest-cutover` required-reviewer environment — is complete and tracked
 for the PR that opens the cutover window. It is deliberately not built inert: its guards can only
 be graded against synthesized fixtures until a real dispatch exists.
+
+## Addendum — 2026-09-03 (#7761) — a Doppler config is an untrusted NAME-space, not only an untrusted value-space
+
+This amends the trust model this ADR records, rather than minting a new ordinal: the change is a
+divergence from a boundary already stated here, and it is continuous with the 2026-08-25 (#7674)
+addendum's replace-only delivery constraint, which this change obeys rather than restates.
+
+### 1. What was wrong
+
+This ADR and `model.c4`'s `doppler -> inngest` edge both presented the dedicated `soleur-inngest`
+project isolation as the safety property for the dedicated host's credential. Isolation is real and
+worth having, but it bounds **which secrets exist** — it says nothing about **what a writer to that
+project can cause the host to do**.
+
+`inngest-cutover-flip.service` ran as root with a bare `doppler run --config prd`, which injects the
+*whole* config into the process environment. `inngest-cutover-flip.sh` reads its fixture seams
+straight from that environment, and several of those seams are **executed**
+(`CUTOVER_REDIS_CLI_CMD`, `CUTOVER_SYSTEMCTL_CMD`, `CUTOVER_FLAG_SET_CMD`, `CUTOVER_LOGGER_CMD`,
+`CUTOVER_CURL_CMD`). Each is a legal Doppler secret name. So **write access to the
+`soleur-inngest/prd` config was arbitrary command execution as root** on the dedicated host at the
+next 30-second timer fire — inside the same unit that performs the irreversible `FLUSHALL` and
+writes the flush latch.
+
+The exposure was armed rather than latent: the host is live, the timer fires every 30 seconds, and
+the config carries the production Postgres DSN.
+
+### 2. The decision
+
+**A Doppler config is an untrusted name-space for host units, not only an untrusted value-space.**
+
+Two consequences, and they are not interchangeable — they close different holes:
+
+1. **A `doppler run` unit enumerates what it injects.** `--only-secrets` filters *before* `exec`,
+   which makes it the only mechanism that reaches the names bash honours without the script ever
+   naming them — `BASH_ENV`, `PATH`, `LD_PRELOAD`, `IFS`. Measured against live Doppler on
+   2026-09-03: the bare form injected 10 names including `INNGEST_POSTGRES_URI`; the bounded form
+   injects `INNGEST_CUTOVER_FLIP` and `INNGEST_REDIS_PASSWORD`.
+2. **A script whose behaviour an environment value can redirect gates that value on something the
+   secrets store cannot produce.** Here that is argv: the seams are honoured only under
+   `--fixture-seams`. An environment-keyed sentinel would have been forgeable by exactly the writer
+   being excluded.
+
+Neither half is sufficient alone. The unit's bound cannot express "this name is a test seam"; the
+script's gate cannot reach the names bash consumes on its own.
+
+`--no-exit-on-missing-only-secrets` is set on this unit and diverges from house convention
+deliberately. `INNGEST_CUTOVER_FLIP` is legitimately **absent** on a pre-arm host — a designed FSM
+state, not an error — and measured, `doppler run` exits 1 on a listed-but-absent name, which would
+stop the 30-second poll dead. The trade is that a mis-authored list degrades quietly instead of
+loudly, which is why **these lists are authored and commented, never derived**: two independent
+exhaustive derivations over the same sibling scripts disagreed in both directions, and the misses
+are invisible at run time. It is not wholly silent — `doppler` still emits a `Warning:` naming the
+missing secret, and that rides journald to Better Stack.
+
+### 3. The invariant's stated limit
+
+`--only-secrets` **cannot** bound a unit whose secret *name* is per-host. A tracked unit holds a
+*variable* name (`${!WEB_ZOT_CONSUMER_URL_KEY}`), never the secret's name, so there is nothing to
+enumerate — that alone is the limit, and it is sufficient.
+
+An earlier revision of this addendum also argued "the flag is fail-closed on a listed-but-absent
+name, so the same unit shipped to a second web host would break." **That is refuted two paragraphs
+above**, where this same decision ships `--no-exit-on-missing-only-secrets` and thereby makes the
+flag fail-OPEN. It is recorded here as removed rather than silently deleted, because it is the
+rationale a future author would route around using the very flag this ADR adopts.
+
+Measured correction to the exemption's scope: only **two** of the four probe units are per-host
+today (`server.tf` builds `WEB_NIC_GUARD_URL_KEY` and `WEB_ZOT_CONSUMER_URL_KEY` as
+`<NAME>_${upper(...)}`); the inngest and git-data keys are identity mappings, because there is one
+of each host. The exemption holds for all four on the never-named-in-the-unit ground, and the other
+two become per-host on the multi-host path the fleet is opening.
+
+The four indirect-name probe units are therefore a **recorded exemption class**, not a false
+positive to be predicated away: `web-zot-consumer-probe.service`, `inngest-consumer-probe.service`,
+`web-git-data-probe.service`, `web-private-nic-guard.service`. They resolve their own secret by
+indirect expansion over a per-host key Terraform bakes in. Bounding them needs a different
+mechanism. This is stated here so it is a known boundary rather than something a future author
+discovers as a red build.
+
+### 4. Scope actually delivered
+
+This addendum records the decision fleet-wide; the **remediation shipped on one host**. Four sibling
+`doppler run`-wrapped root units whose scripts take a command from the environment remain unbounded
+— `container-restart-monitor.service`, `cron-egress-firewall.service`, `cron-egress-resolve.service`
+and `git-data-gc.service` — and they are tracked separately. They were split out rather than bundled
+because this change's delivery path (`apply_target=inngest-host`) reaches none of them: bundling
+would have merged them green and left them undeployed, reproducing the exact failure mode the
+rollout phase exists to prevent.
+
+**Sequencing, corrected against the live estate.** An earlier revision of this addendum said
+`git-data-gc.service` was "the largest single narrowing available" and should be sequenced first,
+on the ground that it injects "roughly 129 secrets … into a script running on the host that holds
+every connected user's source code". That figure was uncited and the present tense is wrong.
+Measured 2026-09-03: `doppler configs -p soleur` returns 13 configs and **`prd_git_data` is not
+among them** (a direct read fails `Could not find requested config`), and `knowledge-base/operations/expenses.md`
+records the git-data host as PHANTOM — "this host has NEVER existed … re-verified absent from
+Terraform state 2026-07-27" — with no birth route at all (#6977). So that unit injects nothing
+today, because neither its host nor its config exists.
+
+The branch-config inheritance finding itself stands (`knowledge-base/project/learnings/security-issues/2026-07-07-doppler-branch-config-does-not-isolate-secrets.md`,
+audited under #6167): a branch config under `prd` resolves the whole root, which today carries
+**130** names (measured). It is the right reason to bound `git-data-gc` **before** the host is ever
+born — cheaper then than after — but it is a pre-birth hardening item, not a live exposure, and it
+must not be described as one. The **live** members of this set are the three web-host units.

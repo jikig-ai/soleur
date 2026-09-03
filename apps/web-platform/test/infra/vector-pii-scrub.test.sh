@@ -560,14 +560,21 @@ fi
 # a future heredoc/cloud-init unit WITHOUT SyslogIdentifier= is a known coverage gap — such a
 # unit must carry an explicit SyslogIdentifier= (or the basename loop must be extended to its
 # file type) to be guarded. Also note the exclusions below are COARSE by wrapper basename: a
-# future unit wrapping a REAL emitter in `/bin/sh -c` or `doppler run --` is silently covered by
-# the `sh`/`doppler` exclusion, so its payload must log under its own allowlisted logger -t tag.
+# future unit wrapping a REAL emitter in `/bin/sh -c` is silently covered by the `sh` exclusion,
+# so its payload must log under its own allowlisted logger -t tag.
+#
+# `doppler` is NO LONGER an exclusion (#7761). It covered inngest-cutover-flip.service and
+# inngest-redis.service; both now declare SyslogIdentifier=, so AC3c-stale below correctly
+# reported the entry dead and this removal is what it asked for. The consequence is a STRICTER
+# guard, and it is the point: a future `doppler run`-wrapped unit that forgets SyslogIdentifier=
+# is now a VIOLATOR here rather than silently inheriting a wrapper exclusion — which is exactly
+# how inngest-cutover-flip.service spent months writing every diagnostic to a `doppler` tag no
+# Vector source admits.
 #
 # The explicit-exclusion half: a basename that legitimately does NOT ship to Source 4, WITH a
 # reason. Keep this to genuine wrapper basenames, never a lockstep bypass for a real emitter.
 declare -A SYSLOG_TAG_EXCLUSIONS=(
   [sh]="shared /bin/sh wrapper basename (cron-egress-{firewall,resolve}, cron-egress-alarm@, container-restart-monitor). Not a per-unit diagnostic channel — those units' payload scripts log under their own logger -t tags (covered by AC3); the bare /bin/sh wrapper carries nothing to ship."
-  [doppler]="doppler-run wrapper basename (inngest-cutover-flip.service, inngest-redis.service). The wrapped binary's real output is captured by Source 1 inngest_journald (include_units) or is non-diagnostic; the bare 'doppler' channel is not a Source 4 log surface."
   [sysctl]="sysctl(8) wrapper basename (bwrap-userns-sysctl.service, #6459 Phase 2.2). A one-shot that sets kernel.apparmor_restrict_unprivileged_userns=0 and exits — no per-unit diagnostic payload; a set failure surfaces via systemd unit-state, not a log line, so the bare 'sysctl' channel is not a Source 4 log surface."
   [orphan-reaper.sh]="orphan-workspace reaper basename (orphan-reaper.service/.timer, #6459 Phase 2.2). Its output names /workspaces paths (a potential user-identifier PII surface), so it is DELIBERATELY not shipped to the Better Stack Source 4 log store; reaper malfunction is a timer-liveness/alarm concern (its own emit path), not a log-content one."
 )

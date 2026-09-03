@@ -82,6 +82,7 @@ make_sandbox() {
   local fixture="$1" probe="${2:-$PROBE_SRC}"
   local d
   d=$(mktmpd -t ft6297.XXXXXXXX)
+  : "${d:?fixture dir is empty; git -C <empty> would retarget this write}"
   git -C "$d" init -q 2>/dev/null
   mkdir -p "$d/scripts/followthroughs"
   cp "$probe" "$d/scripts/followthroughs/anthropic-admin-key-6297.sh"

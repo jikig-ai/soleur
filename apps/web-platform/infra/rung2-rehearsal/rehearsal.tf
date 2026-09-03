@@ -162,6 +162,13 @@ module "git_data_userdata" {
   git_data_server_type   = var.git_data_server_type
   sentry_dsn             = var.sentry_dsn
   betterstack_ingest_url = var.betterstack_ingest_url
+  # (#7460) MUST MATCH PROD, and deliberately NOT a declarable divergence. Prod and rehearsal
+  # ship their stage markers to the SAME Better Stack source, exactly as sentry_dsn and
+  # betterstack_ingest_url already do — neither of which is on the divergence allowlist
+  # either. Adding this one to that allowlist would permit a rehearsal that shipped to a
+  # DIFFERENT sink than production while still producing hash-valid evidence, which is the
+  # one thing the allowlist exists to refuse.
+  betterstack_logs_token = var.betterstack_logs_token
 }
 
 # --- The host ----------------------------------------------------------------

@@ -1548,6 +1548,14 @@ jobs:
       - name: Run credential-persist-to-home guard (#6633 — ProtectHome=read-only cred-write class)
         run: bash apps/web-platform/infra/credential-persist-home-guard.test.sh
 
+      # Registered explicitly for the same reason as the guard above. Guard 2 of #7761: every
+      # `doppler run` unit whose target script takes an environment value in command position
+      # bounds its injected secret set with `--only-secrets`, or carries a reasoned ack whose
+      # cardinality is pinned. Same environment needs: pure bash + python3, no terraform,
+      # cloud-init, docker, network or root.
+      - name: Run doppler-injection bound guard (#7761 — --only-secrets on every doppler run unit)
+        run: bash apps/web-platform/infra/doppler-injection-bound.test.sh
+
       # Registered here and NOWHERE ELSE (#7587). `run-registered-suites.sh` DERIVES its list by
       # grepping this file for step commands that invoke a `.test.sh` in the infra directory. That
       # pattern is deliberately NOT spelled out literally here: `run-registered-suites.test.sh`'s

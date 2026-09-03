@@ -696,6 +696,46 @@ t22_grep_rewrite_disarm_count_and_stderr() {
 }
 
 # --- T23: zero disarms is silent (no false alarm on a healthy run) ----------
+# --- T24: monitor-supersede is not an orphan (PR #7760) ---------------------
+# .claude/hooks/monitor-supersede-guard.sh emits `monitor-supersede`/`warn` when
+# this session arms a Monitor on a target it is still watching. Same tier-gate
+# rationale as T20: the rule body lives in the hook header and governs a TOOL
+# LIFETIME rather than a workflow step, so the id has no core AGENTS.md tag.
+#
+# Verified RED before the exclusion landed: one `monitor-supersede` row exited
+# the aggregator 5 with
+#   "ERROR: orphan rule_id(s) ... : monitor-supersede"
+# On the post-write path that exit also short-circuits jsonl rotation, so the
+# hook would have disarmed rotation of the shared telemetry sink.
+t24_monitor_supersede_prefix_not_orphan() {
+  local root exit_code=0 metrics
+  root=$(make_fixture_repo)
+  write_event "$root" "monitor-supersede" "warn" "2026-09-03T10:00:00Z"
+  write_event "$root" "hr-rule-a-synthetic-test" "deny" "2026-09-03T10:00:01Z"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T24 monitor-supersede does not trip the orphan gate" "0" "$exit_code"
+
+  metrics="$root/knowledge-base/project/rule-metrics.json"
+  assert_eq "T24 orphan_rule_ids empty" "0" \
+    "$(jq -r '.summary.orphan_rule_ids | length' < "$metrics")"
+  rm -rf "$root"
+}
+
+# --- T25: that exclusion is a PREFIX rule, not a blanket amnesty -------------
+# Non-vacuity partner for T24, mirroring T21. Without this, replacing the orphan
+# filter with `map(select(false))` would leave T24 green.
+t25_monitor_supersede_plus_orphan_isolates_real_orphan() {
+  local root exit_code=0
+  root=$(make_fixture_repo)
+  write_event "$root" "monitor-supersede" "warn" "2026-09-03T10:00:00Z"
+  write_event "$root" "a-genuinely-unknown-id" "warn" "2026-09-03T10:00:01Z"
+
+  INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" >/dev/null 2>&1 || exit_code=$?
+  assert_eq "T25 a real orphan still exits 5 alongside monitor-supersede" "5" "$exit_code"
+  rm -rf "$root"
+}
+
 t23_grep_rewrite_disarm_zero_is_silent() {
   local root stderr exit_code=0
   root=$(make_fixture_repo)
@@ -785,6 +825,8 @@ t20_grep_rewrite_prefix_not_orphan
 t21_grep_rewrite_plus_orphan_isolates_real_orphan
 t22_grep_rewrite_disarm_count_and_stderr
 t23_grep_rewrite_disarm_zero_is_silent
+t24_monitor_supersede_prefix_not_orphan
+t25_monitor_supersede_plus_orphan_isolates_real_orphan
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
