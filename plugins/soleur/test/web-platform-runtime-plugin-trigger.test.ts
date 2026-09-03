@@ -26,6 +26,7 @@ import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from 
 import { execFileSync } from "child_process";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
+import { gitCleanEnv } from "./lib/git-clean-env";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -123,15 +124,11 @@ function extractOnPushPaths(yml: string): string[] {
 // This is the #7553/#7652 class ("a suite whose fixture cd fails, or whose
 // `git -C` operand is empty, runs git in the caller CWD") reached by a third
 // route: the cwd was correct and the ENVIRONMENT pointed elsewhere.
-const {
-  GIT_DIR: _gd,
-  GIT_WORK_TREE: _gwt,
-  GIT_INDEX_FILE: _gif,
-  GIT_COMMON_DIR: _gcd,
-  GIT_PREFIX: _gp,
-  GIT_OBJECT_DIRECTORY: _god,
-  ...GIT_SAFE_ENV
-} = process.env;
+// Exclusion BY PREFIX, from the shared helper — not a hand-listed set of
+// names. This block used to name six GIT_* variables, which is a claim about
+// which ones git honours; `GIT_CEILING_DIRECTORIES` and `GIT_NAMESPACE` alone
+// falsify it. See plugins/soleur/test/lib/git-clean-env.ts for why (#7822).
+const GIT_SAFE_ENV = gitCleanEnv();
 
 let GATE_SCRIPT: string;
 let PATH_FILTER: string;
