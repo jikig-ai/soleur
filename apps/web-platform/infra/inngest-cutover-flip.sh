@@ -475,6 +475,38 @@ LATCH_FILE="${INNGEST_CUTOVER_LATCH:-/mnt/data/inngest-cutover/flip-done.latch}"
 # value disables the gate for tests without also disabling it for an empty-but-set production env.
 LATCH_REQUIRE_MOUNT="${INNGEST_CUTOVER_LATCH_MOUNT-/mnt/data}"
 
+# --- is_real_mount: the durability predicate, and NOT `mountpoint -q` (#7761) -----------------
+#
+# THE DEFECT THIS AVOIDS. `mountpoint(1)` (util-linux, verified by strace: it opens
+# /proc/self/mountinfo) answers "does a mount entry exist for this path in MY namespace". Under
+# `ProtectSystem=strict` systemd grants write access to a subdirectory of a read-only tree the only
+# way it can — by BIND-MOUNTING each `ReadWritePaths=` entry onto itself — and that self-bind is a
+# mount entry. So the moment this unit gained `ReadWritePaths=/mnt/data`, `mountpoint -q /mnt/data`
+# began returning TRUE even when the Hetzner volume never mounted, which is precisely the state
+# this gate exists to detect: cloud-init mounts with `|| true` under fstab `nofail`, so a failed
+# mount leaves /mnt/data as an ordinary directory on the EPHEMERAL root disk.
+#
+# The consequence was not a false alarm but a silent fail-UNSAFE: the pre-flush gate would pass, the
+# FLUSHALL would run, the anti-double-flush latch would be written to the root disk looking durable,
+# and the next host replace would erase it — re-opening the #5450 second-FLUSHALL-against-prod path
+# that #7228 closed. A hardening directive would have disarmed the guard protecting the one
+# irreversible operation on this host.
+#
+# THE FIX. A bind mount does NOT change st_dev, so comparing a path's device to its PARENT's is
+# immune to it while still answering the real question — is this a different filesystem from the one
+# its parent lives on? That is the classic test `mountpoint` itself used before it moved to
+# mountinfo. Measured: /tmp (a real tmpfs) reads as a mount; /home, /var/tmp and a `mktemp -d`
+# fixture dir read as not-a-mount, so the latch suite's non-mountpoint case keeps its meaning.
+#
+# Fails CLOSED: a `stat` that cannot answer returns 1 (not a mount), so an unreadable path aborts
+# `latch-unrecordable` rather than authorizing a flush.
+is_real_mount() {
+  local p="$1" d pd
+  d="$(stat -c %d "$p" 2>/dev/null)" || return 1
+  pd="$(stat -c %d "$p/.." 2>/dev/null)" || return 1
+  [[ -n "$d" && -n "$pd" && "$d" != "$pd" ]]
+}
+
 flush_already_performed() {
   # NOTE on the unprovable-mount case: it is NOT handled here. Gating this predicate on the mount
   # would work, but it reports through whichever caller consulted it — so an absent /mnt/data
@@ -508,7 +540,7 @@ flush_already_performed() {
 # path as well as in the predicate.
 record_flush_latch() {
   local dbsize="$1" dir
-  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! mountpoint -q "$LATCH_REQUIRE_MOUNT" 2>/dev/null; then
+  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! is_real_mount "$LATCH_REQUIRE_MOUNT"; then
     emit_state 1 "$dbsize" "latch-unrecordable" aborted
     logger -t "$LOG_TAG" "latch-unrecordable detail=not-a-mountpoint path=${LATCH_REQUIRE_MOUNT} — a latch written here would sit on the ephemeral root disk and NOT survive a host replace" 2>/dev/null || true
     flag_set aborted
@@ -549,7 +581,7 @@ run_preflush_flip() {
   # DURABILITY GATE BEFORE THE DESTRUCTIVE OP. The write-path gate in record_flush_latch sits
   # AFTER stop_server + redis_flushall, so on an absent /mnt/data the queue was already destroyed
   # by the time it spoke. Assert it here, before anything irreversible happens, and abort loudly.
-  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! mountpoint -q "$LATCH_REQUIRE_MOUNT" 2>/dev/null; then
+  if [[ -n "$LATCH_REQUIRE_MOUNT" ]] && ! is_real_mount "$LATCH_REQUIRE_MOUNT"; then
     "${CUTOVER_LOGGER_CMD:-logger}" -t "$LOG_TAG" "SOLEUR_INNGEST_CUTOVER_ABORT reason=latch-unrecordable detail=pre-flush path=${LATCH_REQUIRE_MOUNT} is not a mountpoint — refusing to FLUSHALL when the latch that prevents a SECOND flush cannot be durably recorded. Nothing was stopped or flushed. #7228" 2>/dev/null || true
     flag_set aborted
     emit_state 1 "" "latch-unrecordable" aborted
