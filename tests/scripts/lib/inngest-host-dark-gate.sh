@@ -501,6 +501,19 @@ inngest_host_dark_gate() {
   # sign shape that would sail through a `-le` bound on a signed difference.
   [[ "$row_age" -ge 0 ]]              || { _ihdg_verdict "stale_row"; return $?; }
   [[ "$row_age" -le "$max_row_age" ]] || { _ihdg_verdict "stale_row"; return $?; }
+  # HOW REACHABLE IS THIS, HONESTLY. The workflow queries `--since 90m` and this bound defaults to
+  # 5400s, so under the CURRENT wiring almost no row that arrives here can exceed it — a row older
+  # than the window is not returned at all, and the gate answers `silent` instead. Said plainly
+  # rather than left for a reader to assume this predicate is carrying independent weight, which is
+  # the mistake the boot_id version of G3 got away with for a whole merge.
+  #
+  # It is kept, and it is not decorative, for four reasons: the bound belongs to the GATE rather
+  # than to one caller (the same posture as sorting rows here instead of trusting the query);
+  # clock skew between the log service and the runner can push a returned row past the bound;
+  # the FUTURE arm above is reachable regardless of any window; and `--since` is a workflow literal
+  # that a later edit can widen — which is why Row 7 of the suite pins it at 90m on BOTH queries
+  # and counts them, so widening the window and leaving this bound behind reddens rather than
+  # silently making the emptiness claim older than the argument that justifies it.
 
   # ── G4 — probe_schema is EXACTLY 3 ──────────────────────────────────────────────
   # EXACT EQUALITY, NOT `>=`. A `>=` comparison would silently accept a FUTURE schema whose field

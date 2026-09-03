@@ -184,6 +184,16 @@ SERVING, satisfies the boot pin, and is then discarded in favour of an older row
 opposite. Constructed and executed during review: a newest row reading `http_code=200
 server_active=active` with no `probe_schema=` returned **`dark`, rc 0**.
 
+And its replacement is recorded with its real reach rather than its best case: the workflow
+queries `--since 90m` and the bound defaults to 5400s, so under the current wiring a row that
+exceeds it is usually not returned at all and the gate answers `silent` instead. The bound is kept
+because it belongs to the GATE rather than to one caller, because clock skew can push a returned
+row past it, because the future-dated arm is reachable regardless of any window, and because
+`--since` is a workflow literal a later edit can widen — which is why the suite now pins it at 90m
+on both queries and counts them. Stating that is the point: the boot_id version got away with
+being cited as a staleness bound for a whole merge precisely because nobody wrote down what it
+could actually catch.
+
 Two changes. The chosen row must now BE the newest row — a newest row that cannot be graded is
 `unreadable`, never a licence to reach further back. And G3 is now the wall-clock bound this ADR's
 own "≤90-minute-old" heading always assumed and never enforced: the newest row must be no older
