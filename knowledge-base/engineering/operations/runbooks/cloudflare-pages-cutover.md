@@ -106,6 +106,75 @@ discovered:
   stays in the build because it is part of the GitHub Pages configuration
   retained for rollback. `.nojekyll` is a 0-byte marker and carries nothing.
 
+## Verifying the cutover — CUT0'-CUT9
+
+Run the committed runner, not a checklist. It emits one row per assertion and one
+exit code, and it distinguishes three outcomes rather than two:
+
+```bash
+# The expected SHA is the one PF-DOCS recorded — the last SUCCESSFUL
+# deploy-docs.yml run on main. It is NOT the cutover merge SHA:
+# deploy-docs.yml deliberately does not fire on dns.tf, so no build exists at
+# the merge SHA and CUT0 read literally would fail all three samples and drive
+# a FALSE rollback. That is why the assertion is CUT0', not CUT0.
+PF_SHA=$(gh run list --workflow=deploy-docs.yml --branch main --limit 1 \
+           --json headSha --jq '.[0].headSha')
+
+doppler run -p soleur -c prd_terraform --command "
+  export SENTRY_ORG=\$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain)
+  bash apps/web-platform/infra/cutover-verify.sh --expected-sha $PF_SHA"
+```
+
+| exit | meaning | what to do |
+|------|---------|-----------|
+| 0 | every assertion passed | take another sample; three consecutive clean at 60 s |
+| 1 | at least one assertion FAILED | the rollback path below |
+| 2 | nothing failed, something was UNREACHABLE | **re-run.** An assertion that could not be evaluated is not one that passed, and this is not clearance to proceed |
+
+**Do not run it under `bash -x`.** It authenticates with
+`curl -H "Authorization: Bearer …"`, and `set -x` traces every argument, so the
+Sentry and BetterStack tokens are printed in full. That has already happened once
+(#7797).
+
+### CUT8 judges REGRESSION, not absolute health, and you need to know why
+
+`soleur-ai-www` is in an active failure incident *before* this cutover: it records
+its own correct `301` as a failure because the `equals 301` assertion declared in
+`sentry/uptime-monitors.tf` is not live on the monitor (#7798). Read absolutely,
+"all five monitors green" can therefore never be true, and the T+20 rule below
+turns any CUT8 failure into a rollback — so a perfectly healthy cutover would be
+rolled back on a defect that predates it.
+
+CUT8 compares against `apps/web-platform/infra/cutover-monitor-baseline.txt` and
+fails only on a monitor that was healthy at baseline and is unhealthy now. A
+monitor that was already red is printed as `pre-existing`. If #7798 is fixed
+before the cutover, re-capture the baseline first:
+
+```bash
+bash apps/web-platform/infra/cutover-verify.sh --capture-monitor-baseline \
+  apps/web-platform/infra/cutover-monitor-baseline.txt
+```
+
+### The T+20 budget, and what eats it
+
+The decision point is 20 minutes from the apply. Two things consume that budget
+before you get to spend it on judgement:
+
+- **`deploy-docs.yml` and the infra apply share a concurrency group.** A rollback
+  PR merged while another run holds the group QUEUES rather than starting, and
+  the queue wait counts against T+20, not against the clock afterwards. Generate
+  the rollback PR at PF8' — immediately after the merge, in parallel with the
+  propagation wait — so its CI is already green when you need it. Discovering you
+  need a rollback and only then opening the PR spends the budget on CI.
+- **Three consecutive clean samples at 60 s is three minutes minimum**, and only
+  if the first three are clean. Budget two sampling rounds, not one.
+
+**Hypothesis Z measured FALSE 2026-09-03.** The apex serves from GitHub Pages,
+not Cloudflare, so the record swap is what moves the origin. Re-probe with
+`apex-origin-probe.sh` within the hour before merging; a Cloudflare verdict
+before the merge means the origin moved without the record and the plan shape
+changed under the ack — **stop**.
+
 ## Rollback
 
 ### The merge path is the only path
@@ -121,6 +190,33 @@ dispatch escape hatch structurally cannot execute this rollback.
 own line in the BODY of a commit on the revert branch — not the subject, because
 GitHub prefixes subjects with `* ` when composing the squash body, which breaks
 the line anchor.
+
+### PF8' — generate the rollback PR immediately, not when you need it
+
+Within minutes of the PR4b merge, and in parallel with the propagation wait:
+
+```bash
+bash apps/web-platform/infra/generate-apex-rollback-pr.sh --open-pr
+```
+
+Its CI then runs concurrently with the verification window, so at T+20 the
+rollback is already green and mergeable. The generator asserts `[ack-destroy]`
+landed on its own line in the **branch commit body** before pushing — read the
+commit body (`git log -1 --format=%B`), never `gh pr view --json`, because none
+of those fields can see a commit body and the ack landing in the squash message
+is the single point of failure for the whole rollback.
+
+### If the apply dies mid-replace
+
+The replace is Delete-then-Create at one address, so there is a window in which
+the `A` record is gone and the `CNAME` is not yet created. If the apply fails
+inside it, the apex has no address at all and resolves NXDOMAIN.
+
+**Re-run the failed job.** The remaining plan is a bare create — the delete has
+already happened — so it passes the destroy-guard **unacked** and needs no new
+`[ack-destroy]`. Do not reach for the rollback generator here: there is nothing
+to move back, because the source address is already gone from state, and the
+generated `moved` would no-op exactly as a mismatched forward one would.
 
 ### Procedure
 

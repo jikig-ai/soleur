@@ -22,12 +22,11 @@ rejected alternatives are in the Cut List with the measurement that killed each.
 - [x] 0.4 PF-TARGET: confirm **both** `-target=cloudflare_record.github_pages` and
       `-target=cloudflare_record.pages_apex` are in `apply-web-platform-infra.yml`'s allow-list,
       line-anchored. A `moved` block with one endpoint untargeted **hard-errors** the apply.
-- [ ] 0.5 PF-DEFER: `gh issue view <N>` the deferred-cleanup issue, or file it (AC52).
-      **STILL OPEN — re-checked 2026-09-03, the issue does not exist.** PR4a did not
-      resolve this. PR4b must FILE it and wire the number into the plan's
-      `## Encryption Posture` `tracking_issue:` field, which today holds only a prose
-      description. AC52 blocks marking PR4b ready, so this is PR4b work, not Phase 0
-      history.
+- [x] 0.5 PF-DEFER: `gh issue view <N>` the deferred-cleanup issue, or file it (AC52).
+      **DONE 2026-09-03 — it did not exist across two sessions, so PR4b FILED it: #7799.**
+      The plan's `## Encryption Posture` `tracking_issue:` now cites it by number rather
+      than as a description. It carries the `ssl = "full"` removal conditions, both of
+      which must hold.
 - [x] 0.6 PF-SSL: `seo-config-rules.tf` carries exactly one `ssl = "full"`. **Do not touch it**;
       PR #7753 owns its guard.
 
@@ -50,29 +49,29 @@ rejected alternatives are in the Cut List with the measurement that killed each.
 
 ## Phase 2 — PR4b: flip the survivor to a `CNAME`
 
-- [ ] 2.1 `dns.tf`: add the `moved` block (`from` = the key PR4a left behind, **byte-identical**;
+- [x] 2.1 `dns.tf`: add the `moved` block (`from` = the key PR4a left behind, **byte-identical**;
       `to = cloudflare_record.pages_apex`); declare `pages_apex` with `name = "soleur.ai"`
       (never `@`), `type = "CNAME"`, `content = cloudflare_pages_project.docs.subdomain`,
       `proxied = true`, `ttl = 1`; retarget `www`'s `content`; keep `www` a **CNAME** (Camp B).
-- [ ] 2.2 Rewrite the contract comment **in dot-notation** — a comment quoting the declaration
+- [x] 2.2 Rewrite the contract comment **in dot-notation** — a comment quoting the declaration
       verbatim false-fails AC43's absence grep.
-- [ ] 2.3 Build `apps/web-platform/infra/generate-apex-rollback-pr.sh` + its `.test.sh`. Its
+- [x] 2.3 Build `apps/web-platform/infra/generate-apex-rollback-pr.sh` + its `.test.sh`. Its
       strongest test: the generated `dns.tf` is **byte-identical to `dns.tf` as PR4a left it**.
-- [ ] 2.4 Add the cache-buster to `apps/web-platform/infra/apex-origin-probe.sh`; keep all three
+- [x] 2.4 Add the cache-buster to `apps/web-platform/infra/apex-origin-probe.sh`; keep all three
       verdicts and both AP-021 `UNREACHABLE` arms (AC61).
-- [ ] 2.5 Build `apps/web-platform/infra/cutover-verify.sh` (CUT0′-CUT9 runner) and commit
+- [x] 2.5 Build `apps/web-platform/infra/cutover-verify.sh` (CUT0′-CUT9 runner) and commit
       `cutover-mx-txt-baseline.txt` as a sorted, normalised fixture for CUT9 (AC62).
-- [ ] 2.6 Flip the `## Observability` `discoverability_test.expected_output` to
+- [x] 2.6 Flip the `## Observability` `discoverability_test.expected_output` to
       `SERVING-FROM-CLOUDFLARE-PAGES` in this hunk (AC59).
-- [ ] 2.7 Amend ADR-194: Z falsified, single-address replace ordered by Terraform core, the
+- [x] 2.7 Amend ADR-194: Z falsified, single-address replace ordered by Terraform core, the
       `git revert` finding, the rejected alternatives. **Amendment — no new ordinal** (AC51).
-- [ ] 2.8 Runbook: the `git revert` prohibition at the rollback **step** in the imperative
+- [x] 2.8 Runbook: the `git revert` prohibition at the rollback **step** in the imperative
       (AC71); the two-step rollback; PF8′; the mid-replace recovery line; the concurrency-queue
       cost against T+20 (AC50).
-- [ ] 2.9 PF9b: one address, actions `["delete","create"]`, `(moved from …)` annotation, plus the
+- [x] 2.9 PF9b: one address, actions `["delete","create"]`, `(moved from …)` annotation, plus the
       in-place `www` update; through `destroy-guard-filter-web-platform.jq`:
       `resource_deletes: 1, nested_deletes: 0, reboot_updates: 0, host_creates: 0`.
-- [ ] 2.10 Re-run PF-Z2 / PF-R8b within the hour before merging (AC49).
+- [x] 2.10 Re-run PF-Z2 / PF-R8b within the hour before merging (AC49).
 - [ ] 2.11 Merge with `[ack-destroy]`. AC60 again on the squash body.
 
 ## Phase 3 — Post-merge verification (automated; no operator action)
