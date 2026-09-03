@@ -332,6 +332,7 @@ echo "Test 14: #6184 PRIMARY — respect the host-seeded OWNER local identity (n
 # EEXIST class (same failure git hits on the real rdev=1:3 chardevice); the true
 # chardevice node is only reachable under mknod/root (see Test 9).
 MAIN14=$(mktemp -d "$TMP/main14.XXXXXX"); git init -q -b main "$MAIN14" >/dev/null 2>&1
+assert_fixture_dir "$MAIN14"
 git -C "$MAIN14" config user.email "owner@workspace.example"   # host-seeded OWNER (shared/common)
 git -C "$MAIN14" config user.name "Workspace Owner"
 git -C "$MAIN14" commit -q --allow-empty -m init >/dev/null 2>&1
@@ -368,6 +369,7 @@ echo "Test 15: #6184 set-when-absent — set from global via atomic_git_config l
 # The identity must be set from global through the lockless writer and land in the
 # RESOLVED common-dir config, plus emit the benign DIAG precondition marker.
 MAIN15=$(mktemp -d "$TMP/main15.XXXXXX"); git init -q -b main "$MAIN15" >/dev/null 2>&1
+assert_fixture_dir "$MAIN15"
 git -C "$MAIN15" -c user.email=temp@t -c user.name=temp commit -q --allow-empty -m init >/dev/null 2>&1
 WT15="$MAIN15/wt"; git -C "$MAIN15" worktree add -q "$WT15" -b feat15 >/dev/null 2>&1
 git -C "$MAIN15" config --unset user.email 2>/dev/null || true   # ensure NO local identity in the shared config
@@ -470,6 +472,7 @@ echo "Test 18: #6184 F1 — bot-shaped LOCAL is OVERRIDDEN by a human --global (
 # human --global over a bot-shaped local. (RED against the presence-only respect-local rule,
 # which returns 0 and keeps the bot.)
 MAIN18=$(mktemp -d "$TMP/main18.XXXXXX"); git init -q -b main "$MAIN18" >/dev/null 2>&1
+assert_fixture_dir "$MAIN18"
 git -C "$MAIN18" config user.email "1234+github-actions[bot]@users.noreply.github.com"  # inherited BOT local
 git -C "$MAIN18" config user.name "github-actions[bot]"
 git -C "$MAIN18" commit -q --allow-empty -m init >/dev/null 2>&1
@@ -499,6 +502,7 @@ echo "Test 19: #6184 F2 — a bot-shaped --global is REFUSED, never silently wri
 # fix must REFUSE: emit the wedge sentinel + return 1 (fail loud), NOT author as the bot.
 # (RED against the pre-fix code, which sets from the bot global and returns 0.)
 MAIN19=$(mktemp -d "$TMP/main19.XXXXXX"); git init -q -b main "$MAIN19" >/dev/null 2>&1
+assert_fixture_dir "$MAIN19"
 git -C "$MAIN19" -c user.email=temp@t -c user.name=temp commit -q --allow-empty -m init >/dev/null 2>&1
 WT19="$MAIN19/wt"; git -C "$MAIN19" worktree add -q "$WT19" -b feat19 >/dev/null 2>&1
 git -C "$MAIN19" config --unset user.email 2>/dev/null || true   # LOCAL absent (seed failed)
@@ -607,6 +611,7 @@ echo "Test 23: #5934 D3 — non-bare guard SKIPS surgery under a mask-degraded r
 # .git IS a directory. The HARDENED guard detects non-bare via `.git`-is-a-directory and SKIPS
 # regardless of rev-parse, so native `git worktree add` (which never writes .git/config) proceeds.
 WS24=$(mktemp -d "$TMP/misfire24.XXXXXX"); git init -q -b main "$WS24" >/dev/null 2>&1
+assert_fixture_dir "$WS24"
 git -C "$WS24" config core.bare true
 _SAVED_GIT_ROOT="$GIT_ROOT"; _SAVED_PWD="$PWD"
 cd "$WS24"; GIT_ROOT=""              # the exact sandbox failure: empty GIT_ROOT, CWD is the clone
@@ -708,6 +713,7 @@ echo "Test 26: #5934 round-3 — verify_worktree_created: RELATIVE path REJECTED
 # SOLEUR_GIT_WORKTREE_VERIFY_FAILED marker carrying BOTH paths. (RED destroys the worktree via
 # the branch's cleanup remove, so it runs last.)
 MAIN26=$(cd "$(mktemp -d "$TMP/verify26.XXXXXX")" && pwd -P); git init -q -b main "$MAIN26" >/dev/null 2>&1
+assert_fixture_dir "$MAIN26"
 git -C "$MAIN26" -c user.email=t@t.local -c user.name=t commit -q --allow-empty -m init >/dev/null 2>&1
 _SAVED_PWD="$PWD"; cd "$MAIN26"
 git worktree add -q ".worktrees/feat-26" -b feat-26 >/dev/null 2>&1

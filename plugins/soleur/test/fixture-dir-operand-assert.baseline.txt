@@ -56,7 +56,6 @@
 1	plugins/soleur/test/ralph-loop.test.sh
 12	plugins/soleur/test/resolve-git-root.test.sh
 1	plugins/soleur/test/token-drift-workflow-causes.test.sh
-18	plugins/soleur/test/worktree-manager-atomic-config.test.sh
 1	plugins/soleur/test/worktree-manager-bare-in-dotgit-layout.test.sh
 4	plugins/soleur/test/worktree-manager-safe-branch-sanitization.test.sh
 7	scripts/context-reviewed-gate-discoverability.sh
