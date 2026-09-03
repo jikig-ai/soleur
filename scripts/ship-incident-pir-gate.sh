@@ -32,8 +32,6 @@ set -uo pipefail
 # because the report says "failed at the zot-mirror bridge" and "pinned three
 # releases behind" rather than "failed in production". The gate that exists to
 # stop an incident shipping without its learning missed a textbook one.
-# Verified additive: the new alternation matches ZERO of the nine existing
-# fixtures, so no prior verdict moves.
 OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was down|took down|brought down|stopped working|silently (broke|broken|failing)|regression in prod|users? (could not|were unable to)|shipped broken|ran broken|failed in prod(uction)?|broke prod(uction)?|releases? behind|(releases?|deploys?|deployments?) (was|were) blocked|blocked (every|all) (release|deploy))'
 # `prod` is boundary-guarded — this is the SAME substring class the header above
 # documents fixing for `incident`/`incidental`, left unfixed one line below it.
@@ -60,6 +58,18 @@ OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was dow
 # Standalone `live` stays a production token — only the substrings are rejected.
 PROD_RE='(prod(uction)?([^a-zA-Z]|$)|deployed|([^a-zA-Z]|^)live([^a-zA-Z]|$)|app\.soleur\.ai|tenant-zero|customer)'
 
+# The ONLY discriminator between "a plan citing a closed incident as precedent" and "a plan
+# reporting an unreported outage" inside a hypothetical paragraph — the two are otherwise
+# textually identical, so this is a whitelist, not a decision procedure.
+# Vocabulary is MEASURED, not imagined: across the 4116 lines that fall inside a stripped
+# paragraph in all 1548 plans, `already happened` hits 4x and `not hypothetical` 1x; every other
+# phrasing tried (`this happened`, `did happen`, `has happened`, `actually happened|occurred|
+# fired`) hit ZERO. `already occurred` is kept as the one unmeasured near-miss of the measured
+# winner. Adding an alternative requires a corpus hit or a fixture — the same bar as OUTAGE_RE.
+# Every fail-open found in the wild adds a phrase HERE and a fixture; do NOT widen or narrow the
+# paragraph rule instead. **Why:** #7801 R3.
+ACTUALITY_RE='already (happened|occurred)|not hypothetical'
+
 # Strip, in order:
 #   1. fenced code blocks (``` … ```) — regexes/config/SQL quoted in a plan are
 #      DATA, not an incident report (a plan that documents this very gate quotes
@@ -68,7 +78,19 @@ PROD_RE='(prod(uction)?([^a-zA-Z]|$)|deployed|([^a-zA-Z]|^)live([^a-zA-Z]|$)|app
 #   3. the threshold declaration (frontmatter key + the bold User-Brand-Impact
 #      label) and the hypothetical/conditional framing lines, so trigger 3 does
 #      not read a plan's own metadata or its "if this lands broken" section as
-#      an incident;
+#      an incident. The strip is PARAGRAPH-scoped, not line-scoped (#7801): the
+#      label line opens a window that runs to the next block boundary, because
+#      #6813 removed the framing LINE and left the sentences after it in the
+#      same paragraph, so a plan CITING a past closed incident as design
+#      precedent still read as an outage report. Three boundaries close the
+#      window — a blank line, a heading, a new list item; tables and
+#      blockquotes deliberately do NOT (an accepted residual, named so the
+#      omission stays a decision). An actuality idiom (ACTUALITY_RE) re-opens
+#      it: once a paragraph says the event HAPPENED, the rest of it is a
+#      report. The strip is LEXICAL and cannot decide precedent-citation from
+#      self-report — a real outage phrased without an actuality idiom inside
+#      the paragraph is swallowed, pinned as a characterization fixture rather
+#      than left undocumented;
 #   4. the `Network-Outage Deep-Dive determination` HEADING (deepen-plan Phase
 #      4.5, recorded per `hr-ssh-diagnosis-verify-firewall` so an N/A skip is
 #      auditable). This is a plan-TEMPLATE section name, not an outage claim —
@@ -90,11 +112,50 @@ PROD_RE='(prod(uction)?([^a-zA-Z]|$)|deployed|([^a-zA-Z]|^)live([^a-zA-Z]|$)|app
 #      below (not added to a negative lookahead) so the token cannot reach
 #      OUTAGE_RE at all; this is the same shape as the threshold-label strip.
 # shellcheck disable=SC2016  # the sed backticks are literal (inline-code strip), no expansion wanted
-haystack="$(cat \
-  | awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' \
+# The assignment is GUARDED (#7801). A broken strip stage would otherwise empty
+# the haystack, exit 1, and read as a clean no-signal — byte-identical to "this
+# PR is fine" on a surface where nothing is watching: this gate ships to a
+# customer's own CLI (observability layer 7), where there is no CI run to notice
+# an awk that does not accept the program. So a pipeline FAILURE fires.
+#
+# The terminal `grep -v` needs the `|| [ $? -eq 1 ]` arm because grep exits 1
+# when it selects NO lines, which is the ordinary outcome for an empty PR body
+# or one whose every line is filtered. Measured: without the arm the guard fires
+# on empty stdin and reports an incident for a PR with no text at all. Exit 2 (a
+# real grep error) still propagates. The plan prescribed the bare guard; the
+# premise was checked against `cat` and does not hold for `grep -v`.
+if ! haystack="$(cat \
+  | awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; print ""; next} !f{print}' \
   | sed 's/`[^`]*`//g' \
   | sed -E 's/[Nn]etwork-[Oo]utage//g' \
-  | grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break|Network-Outage Deep-Dive')"
+  | awk -v ACTUALITY_RE="$ACTUALITY_RE" 'BEGIN{skip=0}
+       # --- ORDER IS THE DESIGN (#7801). Boundaries reset; the trigger opens; the re-admit closes.
+       # A block boundary always prints and can never be eaten as paragraph body, so these come first.
+       # The hash rule requires a space or EOL after the run of `#` — a bare /^[[:space:]]*#/ treats a
+       # `#6691` continuation line as a heading and lets the outage claim after it through, which
+       # defeats this fix on a reflow of its own target class (R7). Tables and blockquotes are NOT
+       # boundaries: an accepted residual, listed here so the omission is deliberate, not forgotten.
+       /^[[:space:]]*$/                                 {skip=0; print; next}
+       /^[[:space:]]*#+([[:space:]]|$)/                 {skip=0; print; next}
+       # The label line. ANCHORED, and ABOVE the list-item rule so a bulleted label is consumed
+       # rather than read as a new block. The anchor bounds a STATEFUL rule: unanchored, one
+       # subordinate clause silences a whole paragraph. This trigger list is a deliberate SUBSET of
+       # the line-scoped `grep -vaiE` below (no `would break`/`could break`: those are mid-sentence
+       # conditionals, and paragraph-scoping them would swallow arbitrary prose).
+       tolower($0) ~ /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)?[*_]*if this (lands|leaks)/ {skip=1; next}
+       # A NEW list item is a NEW markdown block. (A nested sub-bullet also resets — deliberate,
+       # and the fail-toward-fire direction.)
+       /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ {skip=0; print; next}
+       # Once a paragraph says the event HAPPENED, the rest of it is an incident report.
+       tolower($0) ~ ACTUALITY_RE                       {skip=0; print; next}
+       # --- Rules below run only inside a skip window. Do NOT append past this line: it is dead code.
+       skip                                             {next}
+                                                        {print}' \
+  | { grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break|Network-Outage Deep-Dive' || [ "$?" -eq 1 ]; })"; then
+  echo "INCIDENT-SIGNAL: yes"
+  echo "ship-incident-pir-gate: strip pipeline failed — failing toward PIR (#7801)" >&2
+  exit 0
+fi
 
 # Herestrings (no pipe) — a piped `grep -q` under pipefail can SIGPIPE on an
 # early match and invert the result; a herestring cannot.

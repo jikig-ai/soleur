@@ -37,6 +37,22 @@ function signals(fixture: string): boolean {
   return false;
 }
 
+/**
+ * Same status contract as `signals()`, against in-memory text. Some properties
+ * are not expressible as a file fixture: the PR/plan concatenation seam is a
+ * TWO-document property, and the template anti-rot check has to read the
+ * template at runtime rather than snapshot it.
+ */
+function signalsText(text: string): boolean {
+  const res = spawnSync("bash", [GATE], { input: text, encoding: "utf8" });
+  if (res.status === 0) {
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+    return true;
+  }
+  expect(res.status).toBe(1);
+  return false;
+}
+
 describe("ship Incident-PIR gate (#6813)", () => {
   // AC20: the real #6782-shaped preventive-hardening `single-user incident` plan
   // (with all four tripping lines) produces NO signal.
@@ -156,5 +172,155 @@ describe("ship Incident-PIR gate (#6813)", () => {
     const res = spawnSync("bash", [GATE], { input: "nothing to see here\n", encoding: "utf8" });
     expect(res.status).toBe(1);
     expect(res.stdout.trim()).toBe("");
+  });
+
+  // ── #7801 — the hypothetical-paragraph strip ───────────────────────────────
+  //
+  // #6813 stripped the hypothetical FRAMING LINE but not the sentences that
+  // follow it in the SAME `## User-Brand Impact` paragraph, so a plan that
+  // merely CITES a past, closed incident as design precedent still read as an
+  // outage report. The strip is now paragraph-scoped: bounded by a blank line,
+  // a heading, or a new list item, and re-opened by an actuality idiom.
+  //
+  // Both directions are pinned on purpose. F2-F8 assert a real outage claim
+  // STILL signals — trading this false positive for a false negative is the
+  // worse outcome for a gate whose posture is fire-when-uncertain, and those
+  // seven already passed before the fix precisely so the widening cannot
+  // overshoot without reddening something.
+
+  // F1 — the reported bug.
+  test("a precedent citation inside the hypothetical paragraph does NOT signal", () => {
+    expect(signals("precedent-citation-inside-hypothetical-paragraph.md")).toBe(false);
+  });
+
+  // F2 — the re-admit: once a paragraph says the event HAPPENED, the remainder
+  // of it is an incident report. Its production token deliberately sits in
+  // `## Overview`, OUTSIDE the stripped paragraph — PROD_RE matches the whole
+  // haystack, so a fixture whose only prod token sat inside would read `no`
+  // under both scripts and make this assertion vacuous.
+  test("an actuality idiom inside the paragraph re-admits the outage claim", () => {
+    expect(signals("real-outage-claimed-inside-hypothetical-paragraph.md")).toBe(true);
+  });
+
+  // F3 — a blank line is a boundary.
+  test("a real outage after the hypothetical paragraph DOES signal", () => {
+    expect(signals("real-outage-after-hypothetical-paragraph.md")).toBe(true);
+  });
+
+  // F4 — a new list item is a new markdown block.
+  test("a real outage in a sibling bullet DOES signal", () => {
+    expect(signals("real-outage-in-sibling-bullet.md")).toBe(true);
+  });
+
+  // F5 — a heading is a boundary even with no blank line before it.
+  test("a real outage after a heading boundary DOES signal", () => {
+    expect(signals("real-outage-after-heading-boundary.md")).toBe(true);
+  });
+
+  // F6 — a nested sub-bullet resets too. Deliberate, and the fail-toward-fire
+  // direction.
+  test("a real outage in a nested sub-bullet DOES signal", () => {
+    expect(signals("real-outage-in-nested-sub-bullet.md")).toBe(true);
+  });
+
+  // F7 — the fence strip must leave a block boundary behind. Without it a fenced
+  // block abutting the paragraph merges the paragraph with whatever follows the
+  // fence, and the claim after it goes dark.
+  test("a real outage after a fence abutting the paragraph DOES signal", () => {
+    expect(signals("real-outage-after-fenced-block-abutting-paragraph.md")).toBe(true);
+  });
+
+  // F8 — the trigger is ANCHORED. Unanchored, a single subordinate clause
+  // ("safe even if this lands out of order") would silence the rest of an
+  // arbitrary paragraph.
+  test("a mid-sentence conditional does not open a stripped paragraph", () => {
+    expect(signals("midsentence-conditional-does-not-open-a-paragraph.md")).toBe(true);
+  });
+
+  // F9 — pins the tightened hash rule. A bare /^[[:space:]]*#/ boundary treats a
+  // `#6691` continuation line as a heading, which reopens the window and lets the
+  // outage claim through — defeating this fix on a REFLOW of its own target class.
+  test("a reflowed citation whose continuation starts with an issue ref does NOT signal", () => {
+    expect(signals("reflowed-citation-with-issue-ref-continuation.md")).toBe(false);
+  });
+
+  // F10 — the DOCUMENTED RESIDUAL, pinned as a characterization test rather than
+  // left as an undocumented hole. Precedent-citation and self-report are lexically
+  // undecidable inside the paragraph, so a real past-tense outage report phrased
+  // without an actuality idiom is swallowed. If a future change closes this hole,
+  // this expectation flips — deliberately, and visibly.
+  test("a real outage inside the paragraph without an actuality idiom is swallowed (residual)", () => {
+    expect(signals("real-outage-inside-paragraph-without-actuality-idiom.md")).toBe(false);
+  });
+
+  // Template anti-rot. The trigger is anchored on the wording the plan template
+  // actually emits, so if that wording or its `- **` prefix drifts the anchor
+  // stops matching and the gate silently reverts to firing on every plan. Reading
+  // the template at runtime is the only mechanism that catches that drift.
+  test("the anchored trigger matches the plan template's own wording", () => {
+    const tpl = require("fs").readFileSync(
+      resolve(REPO_ROOT, "plugins/soleur/skills/plan/references/plan-issue-templates.md"),
+      "utf8",
+    );
+    const triggers = tpl
+      .split("\n")
+      .filter((l: string) => /^- \*\*If this (lands broken|leaks)/.test(l))
+      .slice(0, 2);
+    expect(triggers.length).toBe(2); // the template still emits both trigger lines
+    const body = triggers
+      .map((t: string) => `${t}\n  The 2026-08-16 apex outage took the production site down.`)
+      .join("\n");
+    expect(signalsText(`# p\n\n## User-Brand Impact\n\n${body}\n`)).toBe(false);
+  });
+
+  // Fail-toward-PIR. On a customer's unpinned awk a failed strip stage otherwise
+  // empties the haystack -> exit 1 -> byte-identical to a clean no-signal, on a
+  // surface (the customer's own CLI, observability layer 7) where no CI is
+  // present to notice. Probing by emptying PATH would fail for the wrong reason:
+  // `env PATH=/nonexistent bash` cannot find bash at all.
+  test("a failing strip stage fails TOWARD a PIR rather than silently", () => {
+    const fs = require("fs");
+    const dir = fs.mkdtempSync(resolve(require("os").tmpdir(), "pir-gate-awk-"));
+    const stub = resolve(dir, "awk");
+    fs.writeFileSync(stub, "#!/bin/sh\nexit 2\n");
+    fs.chmodSync(stub, 0o755);
+    const res = spawnSync("bash", [GATE], {
+      input: "nothing to see here\n",
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+    });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+  });
+
+  // The guard above must distinguish a BROKEN pipeline from an EMPTY one. The
+  // terminal `grep -v` exits 1 when it selects no lines, which is the ordinary
+  // outcome for a PR with an empty body or one whose every line is filtered — so
+  // a bare `if ! haystack=...` guard reports an incident for a PR with no text at
+  // all. That is the fail-open direction the guard was added to close, inverted
+  // into a false positive on the most ordinary input there is. Measured against
+  // the bare guard: `empty` and `every line filtered` both signal (those two are
+  // the discriminators), while `whitespace only` passes either way — its blank
+  // lines are lines `grep -v` selects, so grep exits 0. It is kept as a boundary
+  // case, not counted as proof.
+  test.each([
+    ["empty", ""],
+    ["whitespace only", "\n\n"],
+    ["every line filtered", "If this lands broken\n"],
+  ])("a %s haystack is a clean no-signal, not a pipeline failure", (_label, input) => {
+    const res = spawnSync("bash", [GATE], { input, encoding: "utf8" });
+    expect(res.status).toBe(1);
+    expect(res.stdout.trim()).toBe("");
+  });
+
+  // The seam ship itself creates: `printf '%s\n%s' "$PR_TEXT" "$PLAN_TEXT"` joins
+  // the two documents with a SINGLE newline, so the PR body's last line and the
+  // plan's first line become adjacent with no blank line between them. No file
+  // fixture can observe this — every fixture is one document.
+  test("the PR/plan concatenation seam does not swallow the plan", () => {
+    const prText = "fix: apex\n\n**If this lands broken, the user experiences:** an error page.";
+    const planText =
+      "# fix: apex\n\n## Overview\n\nThe 2026-08-16 apex outage took the production site down.";
+    expect(signalsText(`${prText}\n${planText}`)).toBe(true);
   });
 });
