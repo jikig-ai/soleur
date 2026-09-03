@@ -130,10 +130,18 @@ the 2026-08-26 addendum does not credit it.
 instrumented source that emits on this project's REST surface. The evidence file
 `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
 records exactly two sources consulted — `edge_logs` and `auth_logs`, both zero — and
-contains no reference to `postgrest_logs` at all. The determination therefore attributed
+records no `postgrest_logs` query among the sources consulted (as that file stood on
+2026-08-26; this addendum adds a pointer to it, so the literal string now appears there). The
+determination therefore attributed
 its REST-absence evidence to `edge_logs`, the one source on this project that does not
 emit, while the source that does was not consulted. That window is now past any retained
-span and is **unrecoverable**.
+span. **It is recorded as not established to be recoverable, rather than as unrecoverable:
+no retrieval was attempted for `postgrest_logs` over that window, and no probe is cited here.**
+Asserting unrecoverability would be an inference drawn from the very instrument this addendum and
+ADR-197 describe as untrustworthy for absence — the endpoint answers HTTP 200 with `error: null`
+over windows it silently truncates, and its real boundary can move. That is the error ADR-197
+names, inverted. If the question becomes load-bearing, run the probe and record the result with
+its date.
 
 **Why the verdict is unaffected.** The determination states in terms that it "rests
 primarily on the never-published key", and the access-log dimension was already recorded
