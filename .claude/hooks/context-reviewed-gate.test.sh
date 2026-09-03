@@ -107,6 +107,7 @@ assert_incident() {
 # --- AC1: staged last_reviewed bump, no trailer → deny --------------------
 t_ac1_staged_bump_deny() {
   local r; r=$(new_repo "last_reviewed: 2026-01-01")
+  assert_fixture_dir "$r"
   printf 'last_reviewed: 2026-07-05\n' > "$r/doc.md"; git -C "$r" add doc.md
   run_hook "$(make_input "git -C $r commit -m 'docs: bump'" "$r")"
   assert_deny "AC1 staged bump no-trailer → deny"
@@ -139,6 +140,7 @@ t_pathspec_bump_deny() {
 #     not all markdown, so the unrelated edit does not false-deny. -----------
 t_pathspec_scoped_allow() {
   local r; r=$(new_repo "title: seed")
+  assert_fixture_dir "$r"
   mkdir -p "$r/kb"; printf 'last_reviewed: 2026-01-01\n' > "$r/kb/other.md"
   git -C "$r" add kb/other.md; git -C "$r" commit -q -m "add other"
   printf 'x: 1\n' > "$r/doc.md"                          # the committed change (no last_reviewed)
@@ -152,6 +154,7 @@ t_pathspec_scoped_allow() {
 #     mode: `git commit -m x && ls -la` with an unrelated unstaged bump → allow.
 t_chained_flag_allow() {
   local r; r=$(new_repo "title: seed")
+  assert_fixture_dir "$r"
   printf 'last_reviewed: 2026-07-05\n' > "$r/doc.md"     # unstaged bump, NOT in this commit
   printf 'x\n' > "$r/staged.md"; git -C "$r" add staged.md  # the actual staged change
   run_hook "$(make_input "git -C $r commit -m 'docs: unrelated' && ls -la" "$r")"
@@ -162,6 +165,7 @@ t_chained_flag_allow() {
 # --- AC3a: net-new doc adding last_reviewed for the first time → allow ------
 t_ac3a_netnew_add_allow() {
   local r; r=$(new_repo "")
+  assert_fixture_dir "$r"
   printf 'last_reviewed: 2026-07-05\n' > "$r/newdoc.md"; git -C "$r" add newdoc.md
   run_hook "$(make_input "git -C $r commit -m 'docs: new'" "$r")"
   assert_allow "AC3a net-new add (only +) → allow without trailer"
@@ -171,6 +175,7 @@ t_ac3a_netnew_add_allow() {
 # --- AC3b: quoted / space-before-colon / case-variant CHANGE, no trailer → deny
 t_ac3b_quoted_variant_deny() {
   local r; r=$(new_repo '"Last_Reviewed" : 2026-01-01')
+  assert_fixture_dir "$r"
   printf '"Last_Reviewed" : 2026-07-05\n' > "$r/doc.md"; git -C "$r" add doc.md
   run_hook "$(make_input "git -C $r commit -m 'docs: bump'" "$r")"
   assert_deny "AC3b quoted/spaced/case variant change → deny (P1-4)"
@@ -180,6 +185,7 @@ t_ac3b_quoted_variant_deny() {
 # --- AC3c: last_reviewed line DELETION, no trailer → deny ------------------
 t_ac3c_deletion_deny() {
   local r; r=$(new_repo "$(printf 'title: x\nlast_reviewed: 2026-01-01')")
+  assert_fixture_dir "$r"
   printf 'title: x\n' > "$r/doc.md"; git -C "$r" add doc.md   # last_reviewed removed
   run_hook "$(make_input "git -C $r commit -m 'docs: drop clock'" "$r")"
   assert_deny "AC3c deletion → deny"
@@ -189,6 +195,7 @@ t_ac3c_deletion_deny() {
 # --- AC4a: trailer in a 2nd -m paragraph → allow --------------------------
 t_ac4a_trailer_2nd_m_allow() {
   local r; r=$(new_repo "last_reviewed: 2026-01-01")
+  assert_fixture_dir "$r"
   printf 'last_reviewed: 2026-07-05\n' > "$r/doc.md"; git -C "$r" add doc.md
   run_hook "$(make_input "git -C $r commit -m 'docs: bump' -m 'Context-Reviewed: all'" "$r")"
   assert_allow "AC4a trailer in 2nd -m → allow (P1-5)"
@@ -198,6 +205,7 @@ t_ac4a_trailer_2nd_m_allow() {
 # --- AC4b: trailer via -F file → allow ------------------------------------
 t_ac4b_trailer_F_allow() {
   local r; r=$(new_repo "last_reviewed: 2026-01-01")
+  assert_fixture_dir "$r"
   printf 'last_reviewed: 2026-07-05\n' > "$r/doc.md"; git -C "$r" add doc.md
   printf 'docs: bump\n\nContext-Reviewed: all\n' > "$r/msg.txt"
   run_hook "$(make_input "git -C $r commit -F $r/msg.txt" "$r")"
@@ -208,6 +216,7 @@ t_ac4b_trailer_F_allow() {
 # --- last_updated-only change → allow (not a last_reviewed delta) ----------
 t_last_updated_only_allow() {
   local r; r=$(new_repo "$(printf 'last_updated: 2026-01-01\nlast_reviewed: 2026-01-01')")
+  assert_fixture_dir "$r"
   printf 'last_updated: 2026-07-05\nlast_reviewed: 2026-01-01\n' > "$r/doc.md"; git -C "$r" add doc.md
   run_hook "$(make_input "git -C $r commit -m 'docs: touch'" "$r")"
   assert_allow "last_updated-only change → allow"
@@ -217,6 +226,7 @@ t_last_updated_only_allow() {
 # --- AC5: -F file unreadable on a real last_reviewed commit → fail-open + warn
 t_ac5_F_unreadable_failopen() {
   local r; r=$(new_repo "last_reviewed: 2026-01-01")
+  assert_fixture_dir "$r"
   printf 'last_reviewed: 2026-07-05\n' > "$r/doc.md"; git -C "$r" add doc.md
   run_hook "$(make_input "git -C $r commit -F $r/does-not-exist.txt" "$r")"
   assert_allow "AC5 -F unreadable → fail-open (allow)"
@@ -227,6 +237,7 @@ t_ac5_F_unreadable_failopen() {
 # --- non-commit git command → silent fail-open (no deny) -------------------
 t_noncommit_silent() {
   local r; r=$(new_repo "last_reviewed: 2026-01-01")
+  assert_fixture_dir "$r"
   printf 'last_reviewed: 2026-07-05\n' > "$r/doc.md"; git -C "$r" add doc.md
   run_hook "$(make_input "git -C $r status" "$r")"
   assert_allow "non-commit (git status) → silent fail-open"
@@ -237,6 +248,7 @@ t_noncommit_silent() {
 #     NO actual last_reviewed delta → allow (bodies stripped before trigger) --
 t_message_documents_but_no_delta_allow() {
   local r; r=$(new_repo "last_reviewed: 2026-01-01")
+  assert_fixture_dir "$r"
   printf 'x\n' > "$r/other.md"; git -C "$r" add other.md   # unrelated staged change
   run_hook "$(make_input "git -C $r commit -m 'docs: note about last_reviewed convention'" "$r")"
   assert_allow "message mentions last_reviewed but no delta → allow"

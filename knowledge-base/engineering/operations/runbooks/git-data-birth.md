@@ -67,11 +67,15 @@
 >
 > Related measurement, since it shaped the capture script: `stage:bootcmd_start` reaches
 > **Sentry only**. It is a bare `curl` inside `bootcmd`, which runs before `write_files`,
-> so `/usr/local/bin/git-data-emit` does not exist yet — and the emitter's Better Stack
-> block is gated on `BETTERSTACK_LOGS_TOKEN`, which is present only under `doppler run`. On
-> a *successful* boot the only Better Stack row a git-data host ever produces is
-> `boot_complete` itself. Do not anchor a Better Stack query on anything earlier; it will
-> return zero rows on a perfect rehearsal.
+> so `/usr/local/bin/git-data-emit` does not exist yet. That much still holds.
+>
+> **Superseded in part by #7460 (ADR-198).** The rest of this paragraph used to read: "the
+> emitter's Better Stack block is gated on `BETTERSTACK_LOGS_TOKEN`, which is present only
+> under `doppler run`. On a *successful* boot the only Better Stack row a git-data host ever
+> produces is `boot_complete` itself." The token is now baked at `0600` in `user_data`, so
+> EIGHT of the nine stages reach Better Stack and only `bootcmd_start` is Sentry-only.
+> Anchoring a Better Stack query on an early stage is now correct, not a mistake — but
+> `bootcmd_start` specifically still returns zero rows.
 >
 > If only the container-harness rung was reached, that is **not** sufficient: the harness
 > cannot exercise `doppler run` against real Doppler, `luksOpen` against a real volume, the

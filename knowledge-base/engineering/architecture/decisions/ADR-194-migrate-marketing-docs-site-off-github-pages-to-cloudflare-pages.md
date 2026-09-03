@@ -546,3 +546,106 @@ in Terraform**. `cloudflare_zone_settings_override.soleur_ai` manages `security_
 inferred from the 526 having actually occurred. The new guard protects the override; nothing
 protects the default it overrides. If the zone were flipped to `flexible`, apex would serve
 cleartext to origin and every assertion added by #7749 would still pass.
+
+## Addendum — 2026-09-03 (#7640 PR4b): how the apex transition is actually ordered
+
+An amendment to this ADR, not a new decision — the *decision* (migrate to
+Cloudflare Pages) is unchanged. What changed is the mechanism by which the apex
+record swap is made safe, and it changed because of measurement.
+
+### Hypothesis Z is FALSE, measured
+
+Z was that the apex might already be served by Cloudflare, making the DNS record
+swap a formality. Measured 2026-09-03 with `apex-origin-probe.sh`:
+`SERVING-FROM-GITHUB-PAGES`, rc 0 — the response carries `x-proxy-cache` and the
+other GitHub/Fastly origin markers. The record swap is therefore what moves the
+origin, and it moves it on a live, HSTS-preloaded apex.
+
+A corollary that only shows up once you look: the probe's
+`SERVING-FROM-CLOUDFLARE-PAGES` arm is **residual** — "200, and no GitHub
+marker" — so anything that suppresses the markers reads as Cloudflare, and that
+verdict is the rollback's branch selector.
+
+**Corrected 2026-09-03 (review).** An earlier draft of this paragraph justified
+the cache-buster by claiming a cached pre-cutover response reads as Cloudflare.
+Re-measured, that is not so: the GitHub markers are served *alongside* the cache
+headers, so a stale copy reads GITHUB — the direction that blocks the merge,
+which is safe. The buster is still correct and cheap, but for the general reason
+rather than that specific one: a residual verdict must be reached only by a
+fresh origin read, never by anything the edge might replay.
+
+The sharper defect the same review found was not caching at all. The probe knew
+**three** origin markers while `cutover-verify.sh` CUT2 knew **six**, and the
+live pre-cutover apex carries one of the missing three (`x-proxy-cache`). A
+response bearing only those would have read as "already on Cloudflare" and
+routed an operator into reverting PR3 — a second destroy. Both consumers now
+source one list from `apex-origin-markers.sh`.
+
+### The ordering comes from Terraform core, not from a two-pass apply
+
+The original design ordered the swap with a scoped pre-pass: destroy the four
+apex `A` records in one targeted apply, then create the `CNAME` in a second.
+That is cut, and the reason is the rollback rather than the forward path.
+`deploy-docs.yml` and the infra apply run `on: push` from the **merged** ref, so
+a `git revert` of the cutover PR deletes the pre-pass *along with* the DNS hunk —
+the rollback would then run unordered against an apex that is already failing.
+A mechanism that is correct forwards and absent backwards is not a mechanism.
+
+What replaced it needs no machinery at all: collapse the transition onto ONE
+Terraform resource address and let core's replace semantics serialise it.
+Measured at provider 4.52.7 / Terraform 1.10.5, `type` is ForceNew, so `A`→`CNAME`
+at a single address plans as actions `["delete","create"]` — one address,
+inherently ordered. Cloudflare rejects an `A` and a `CNAME` coexisting at one
+name with error `81053`, and that is the collision this design is built around.
+
+(PF-SYM measured `81053` on a scratch *name*. The apex additionally carries 2 MX
+and 4 TXT records, and CNAME-at-root is governed by Cloudflare's flattening
+rules rather than the plain subdomain case. Flattening with MX at the root is
+Cloudflare's own headline feature so the risk is low, but "the only collision"
+overstates what was measured — recorded rather than re-litigated.)
+
+Getting to one address takes two merges, which is why PR4 became PR4a and PR4b:
+PR4a shrinks the `for_each` to a single key (`destroy_count = 3`, three deletes,
+zero creates), and PR4b flips that one address with a `moved` block
+(`resource_deletes = 1`).
+
+### `git revert` is forbidden for PR4b, and this is the sharp edge
+
+The `moved` block is the entire thing supplying the ordering, and a revert
+deletes it along with the DNS hunk. The reverted plan then has
+`github_pages[...]` as a create and `pages_apex` as a destroy at two unrelated
+addresses, dispatched concurrently — the `81053` hazard reproduced in the reverse
+direction, on an apex that is by then already broken. The obvious,
+muscle-memory action is the dangerous one, so the rollback is a **generated
+reverse-`moved` PR** (`generate-apex-rollback-pr.sh`) rather than a revert.
+
+### The failure mode nothing else can see
+
+Terraform does **not** error on a `moved` block whose source is absent from
+state. It no-ops. `pages_apex` then plans as a bare create while the real
+survivor plans as a separate delete: two addresses, concurrent, hazard fully
+restored, and no error anywhere.
+
+Two drift shapes produce exactly that, and both defeat the static guard: a
+*consistent* rename of the `moved` pin and the `dns.tf` key (which passes
+`apex-single-node-replace.test.sh` 11/11, because that guard is text), and a
+PR4a that merges without converging (state holds four instances while the repo
+says one). `[ack-destroy]` cannot discriminate either — `destroy_count` is 1 in
+the correct plan and 1 in the broken one.
+
+The only check that can see it reads STATE rather than text: the
+`apex_move_orphans` clause in `destroy-guard-filter-web-platform.jq` asserts the
+`pages_apex` change carries
+`previous_address == cloudflare_record.github_pages["185.199.108.153"]`, and the
+apply HALTs on it above the ack gate.
+
+### Rejected alternatives, with the fact that disqualifies each
+
+| Alternative | Disqualifying fact |
+|---|---|
+| Two-pass targeted apply (destroy pass, then create pass) | `git revert` of the cutover deletes the pre-pass with the DNS hunk, so the rollback runs unordered on a failing apex |
+| One merge, four deletes + one create | Four deletes and a create are unrelated graph nodes; no assertion over that plan can make the create wait |
+| `create_before_destroy` on the apex record | Inverts the one ordering Cloudflare rejects — the `CNAME` create would be dispatched *before* the `A` delete |
+| `www` as an `A` record (Cloudflare's own www-redirect recipe) | `type` is ForceNew, so it becomes a SECOND replacement racing the apex's, moving `destroy_count` to 2 |
+| `git revert` as the rollback | Measured: two unrelated addresses, concurrent, `81053` in reverse, on an already-broken apex |
+| A plan-JSON order gate | There is no sequence left to assert — core enforces it at one address. The residual property is static (`create_before_destroy` is not set), and is asserted as such |

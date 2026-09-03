@@ -301,6 +301,7 @@ module "git_data_userdata" {
   git_data_server_type   = var.git_data_server_type
   sentry_dsn             = var.sentry_dsn
   betterstack_ingest_url = local.betterstack_logs_ingest_url
+  betterstack_logs_token = var.betterstack_logs_token
   git_transport_pubkey   = local.git_transport_pubkey
   git_provision_pubkey   = local.git_provision_pubkey
   git_remove_pubkey      = local.git_remove_pubkey

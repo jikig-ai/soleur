@@ -135,6 +135,7 @@ fi
 
 # --- Refuse-if-exists: a pre-existing stage file blocks the emit (exit 66) -----------
 FX2="$(make_repo refuse)"
+: "${FX2:?fixture dir is empty; git -C <empty> would retarget this write}"
 mkdir -p "$(dirname "$FX2/$FIX_A")"
 printf '# already here\n' > "$FX2/$FIX_A"
 git -C "$FX2" add -A && git -C "$FX2" commit -q -m "pre-place fix-constraints-stage-a"
