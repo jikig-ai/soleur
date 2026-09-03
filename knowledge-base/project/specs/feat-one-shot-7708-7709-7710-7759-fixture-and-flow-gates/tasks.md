@@ -162,8 +162,18 @@ Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
       `/f`), and loud-failure (`mv` and `cp -r` into an empty destination, which exit non-zero).
 - [ ] 2.7 For the `git -C` arm, claim only the residue P1a cannot see: literal-bound relative operands,
       which `_binding_of` skips because the nearest binding is a literal.
-- [ ] 2.8 Extract the baseline compare, regenerate and floor logic into a shared helper used by both
-      suites, rather than copying it. Only the fixture corpora differ.
+- [x] 2.8 NOT DONE, with measured cause. The premise "only the fixture corpora differ" does not
+      hold once both suites exist. Compared line by line, the genuinely identical logic is ONE
+      line — the `ACK_TOTAL` sum
+      (`grep -vE '^#|^[[:space:]]*$' "$BASELINE" | awk -F'\t' '{s+=$1} END {print s+0}'`).
+      The `--write-baseline` blocks are NOT shareable as written: they differ because the two
+      scanners print different shapes, so P1a extracts a path with `cut -d: -f1` and P1b with
+      `sed -E 's/^([^:]+):.*/\1/'`. Extracting one shared line would mean sourcing a new helper
+      into both suites — including the P1a suite hardened in #7709 — and would add a failure mode
+      (a missing sourced helper) to two ratchets in exchange for de-duplicating one line. The
+      drift 2.8 exists to prevent is already caught: each suite's own SITES-equals-baseline arm
+      fails if its regeneration and its compare disagree. Revisit if a THIRD rule lands, where the
+      arithmetic changes.
 - [ ] 2.9 Add the P1b test file with its own baseline path, modelled on the existing lettered sections.
 - [ ] 2.10 Seed the P1b baseline against the post-burn-down tree.
 - [ ] 2.11 Confirm `git diff` shows no change to `OPERAND_WRITE` or `scan_operand`, and that the P1a
