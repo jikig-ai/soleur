@@ -36,6 +36,32 @@ follow-up consult, and two mechanical deepen sweeps.
 | 9 | **Phases were reordered twice into dependency order.** The filings phase now runs before the amendment (two cells cite an issue number it mints) and before the sweep (a `compliance-posture.md` row needs the same). The same read-before-write inversion was found twice in one plan | architecture-strategist + spec-flow |
 | 10 | **Nine factual corrections to this plan's own research**, recorded in place rather than quietly rewritten — including `:658` being PA-33 rather than PA-35, which had propagated into five load-bearing places including two of the CLO's own rulings | the review panel |
 
+### Deepen-plan post-edit self-audit sweep
+
+The revision passes above renumbered phases twice, cut acceptance criteria from thirty to nineteen,
+replaced one phase wholesale and appended an addendum. **Stale internal cross-references are the
+predictable cost of that, and a mechanical sweep found six**, all now fixed:
+
+- A sentence still saying **Phase 1 measures the archive** — the phase it names had been rewritten to
+  hand that measurement to the PR B issue and record UNMEASURED. The exact contradiction the revision
+  existed to remove, surviving one section away from the fix.
+- Phase 5 step 2 still opening **"net one addition and zero edits"** after the addendum raised it to
+  four rows. Phase 2 and the Files list had both been updated; this one sentence had not.
+- A reference to **`AC29`**, which no longer exists — leftover from the pre-revision thirty.
+- **A duplicate, orphaned `### AC pre-flight` section** sitting under Alternative Approaches
+  Considered, carrying pre-revision AC numbers. It should have been deleted when its replacement was
+  written; a section inventory earlier in the session had listed it twice and the duplicate was not
+  acted on.
+- Two **"Phase 4 step 2"** citations pointing at a phase that writes the #7622 record and has no
+  step 2; both meant Phase 5.
+- **"fourteen of the nineteen" / "the five it does not cover"** in the pre-flight table's own
+  preamble, where the table below it covers thirteen and omits six — a counting error in the
+  paragraph whose whole subject is honest coverage.
+
+Four adjacent staleness fixes came out of the same read: a Risks row citing `AC22` (cut), one citing
+`AC6` where it meant `AC5`, one saying "seven facts wrong" where the count is nine, and one naming
+Phase 2 where the anchoring rule now lives at Phase 3.
+
 ### The pattern behind this plan's own errors, worth carrying forward
 
 Every one came from **paraphrasing a plausible mirror instead of reading the thing**: `SignerRow` for
@@ -201,7 +227,8 @@ Measured:
 Not measured: the bucket itself. `apps/cla-evidence/scripts/inspect-evidence.sh` exists and reads
 Doppler `prd_cla`. **The archive's realised contents are UNKNOWN and this plan records them as
 UNKNOWN.** A code-path reading is evidence about what the path permits, never about what the archive
-holds; the deciding datum is obtainable, so Phase 1 measures it rather than reasoning to a verdict.
+holds; the deciding datum is obtainable, so Phase 1 hands the measurement to the PR B issue rather
+than reasoning to a verdict here. It was cut from this PR at review — see Phase 1.
 
 **The first draft of Phase 1 prescribed `inspect-evidence.sh --help` and "the script's own listing
 verb". Both were fabricated.** The script accepts exactly four modes — `by-pr`, `by-contributor`,
@@ -719,7 +746,8 @@ until this lands the register has two spellings and any sentinel must accept bot
 **4. The two C4 gaps** enumerated in `## Architecture Decision (ADR/C4)` — FreeTSA has no element and
 the `soleur-cla-evidence` R2 edge has no relationship. One issue covering both; they are the same
 class. Milestone `Post-MVP / Later`; labels `domain/engineering`, `chore`. Filed under
-`wg-when-an-audit-identifies-pre-existing`, and deliberately **not** gated by AC29 — a reviewer called
+`wg-when-an-audit-identifies-pre-existing`, and deliberately **not** gated by AC19's filed-and-dated
+clause — a reviewer called
 this one audit-generates-audit-work, and that is a fair charge against gating a merge on it, though
 not against recording it.
 
@@ -855,7 +883,8 @@ Per `2026-03-18-legal-cross-document-audit-review-cycle.md`, the audit runs **af
    (quotes PA-7's balancing limb (i)). Neither is edited by this PR — a superseded quotation in a
    dated audit record is the record of what was believed then. Confirm that reading holds and say so
    in the attestation rather than leaving the next reader to re-derive it.
-2. Apply Ruling 6. Its answer is **net one addition and zero edits**: add a new row to
+2. Apply Ruling 6 **as the addendum resolved it: four additions and zero edits.** Ruling 6 first said
+   one row; A5 raised it to four, one per Critical finding. Add the rows to
    `## Active Compliance Items` in `knowledge-base/legal/compliance-posture.md` recording that AUP
    §4.7 is scoped by its own heading and opening sentence to the hosted chat surface and does not
    reach the CLA capture path, so that path carries no organisational control.
@@ -1209,10 +1238,12 @@ what makes them necessary.
 The assertions below were executed against the unmodified tree so that a green reading after the
 change means something. An AC that has never been observed failing is not a gate.
 
-**This table covers fourteen of the nineteen, not all of them, and the heading used to say
-otherwise.** The five it does not cover are asserted against artefacts that do not exist yet (the two
-audit files, the Phase 4 issues, the `compliance-posture.md` rows). Naming the gap rather than
-implying full coverage is the same standard this plan applies to the register.
+**This table covers thirteen of the nineteen — AC1-AC5, AC7-AC10, AC13, AC14, AC16 and AC19 — and
+the heading used to claim all of them.** The six it does not cover (AC6, AC11, AC12, AC15, AC17,
+AC18) assert against artefacts that do not exist yet: the two audit files, the Phase 2 issues, and
+the `compliance-posture.md` rows. Naming the gap rather than implying full coverage is the same
+standard this plan applies to the register. *An earlier draft of this paragraph said "fourteen" and
+"five" — neither matched the table below it.*
 
 | AC | Command run at plan time | Reading on unmodified `main` |
 |---|---|---|
@@ -1238,13 +1269,13 @@ implying full coverage is the same standard this plan applies to the register.
 | **Nothing in CI validates this file.** No gate checks table integrity, PA numbering, or required cells; no gate validates `audits/` frontmatter. A malformed row or a missing frontmatter key ships silently | AC1/AC2 assert the table shape with an anti-vacuity floor; AC10 asserts the frontmatter contract by hand. The systemic fix is **#7669**, deliberately not built here. **Verified, and it is stronger than "no gate":** `.markdownlint.json` sets `"MD056": false`, so even the linter that *does* run on staged Markdown has table-column-count checking switched off repo-wide — AC2 is the only table guard in existence for this file, not merely the most convenient one |
 | **The register cannot be staged through lefthook.** Ten pre-existing markdownlint errors, all outside PA-7, and `.markdownlintignore` covers only `distribution-content/` and `INDEX.md` | AC14 scopes markdownlint to the files this PR authors and records the baseline; Phase 2 item 6 files the ten errors; the commit decision (ignore-file first, or `--no-verify` with the baseline in the PR body) is made deliberately rather than discovered at commit time |
 | The §(c) rewrite drifts into deciding the *processing* rather than the *record* — e.g. concluding the capture path should filter | Phase 1's second arm routes that to a separate issue explicitly, matching how #7668 handles retention. The advisory's Ruling 5 sets the boundary and governs |
-| The Art. 9 answer moves and a downstream Art. 9 claim is left stale — the §0 DPO non-designation at `:28`, or `compliance-posture.md:20,44` | Ruling 6 enumerates exactly which must move. Phase 4 step 2 applies only that list |
-| An absence-grep AC false-fails because the audit record legitimately quotes the string being removed | AC6 is scoped to the PA-7 block, not the repo. This is the specific trap the plan's own AC set was checked against |
+| The Art. 9 answer moves and a downstream Art. 9 claim is left stale — the §0 DPO non-designation at `:28`, or `compliance-posture.md:20,44` | Ruling 6 as amended by A5 enumerates exactly which must move. Phase 5 step 2 applies only that list |
+| An absence-grep AC false-fails because the audit record legitimately quotes the string being removed | AC5 is scoped to the PA-7 block, not the repo. This is the specific trap the plan's own AC set was checked against |
 | **The advisory does require a `docs/legal/**` edit — Ruling 5(B).** The published corpus frames the archive as processing "CLA signature data when contributors sign", which is now known to be narrower than the code | Split, not folded. PR B is filed as its own issue in Phase 5 with the full gate list. AC17 fails the build if such an edit lands in this PR, so the split cannot silently collapse. The transparency gap does **not** depend on measuring the bucket — it follows from the workflow `if:` conditions — so PR B is owed regardless of Phase 1's outcome |
 | Splitting leaves a real Art. 13/14 gap open on the published surface for as long as PR B takes | Recorded, not minimised. Ruling 5's own sequencing note applies: landing the engineering fix first turns PR B's disclosure into a historic window rather than an ongoing practice. Both are filed in Phase 5 so neither depends on memory |
-| The plan's own research got seven facts wrong, three of them load-bearing, and the advisory caught them | Every one is recorded in place as a visible correction rather than quietly rewritten, in the same spirit the register applies to itself. The pattern is worth naming: each error came from **paraphrasing a plausible mirror** — `SignerRow` for the record shape, the receipt for the notice, `:242` for a PA-7 block — rather than reading the thing itself |
-| Line-number citations in this plan go stale as sibling amendments land | Phase 2 anchors every edit on its row's `| **<cell>** |` prefix; line numbers appear only as reading aids, per `cq-cite-content-anchor-not-line-number` |
-| The archive cannot be read in-session and the register describes an unmeasured scope | AC22 requires the attestation to record which of the two happened. The capture-rule description is true on both arms |
+| The plan's own research got nine facts wrong, four of them load-bearing, and the review panel caught every one | Every one is recorded in place as a visible correction rather than quietly rewritten, in the same spirit the register applies to itself. The pattern is worth naming: each error came from **paraphrasing a plausible mirror** — `SignerRow` for the record shape, the receipt for the notice, `:242` for a PA-7 block — rather than reading the thing itself |
+| Line-number citations in this plan go stale as sibling amendments land | Phase 3 anchors every edit on its row's `| **<cell>** |` prefix; line numbers appear only as reading aids, per `cq-cite-content-anchor-not-line-number` |
+| The archive cannot be read in-session and the register describes an unmeasured scope | Phase 1 records the archive as UNMEASURED by default and hands the measurement to the PR B issue, where it is load-bearing. The capture-rule description is true on both arms, per Ruling 1 |
 
 ## Alternative Approaches Considered
 
@@ -1255,24 +1286,6 @@ implying full coverage is the same standard this plan applies to the register.
 | Fold in the #7624-class corpus edits so the published surfaces match | Those live under `docs/legal/**` and fire five legal gates plus a mirror/SHA re-pin — a different change class. #7622's body already reasons this out for the same corpus |
 | Build a CI sentinel binding §(c) to `schema.ts` | **#7669** already owns that capability. See the Cut List |
 | Fold in #7668 (retention proportionality) or #7670 (transfer test) since both touch PA-7 | Both are controller decisions about the processing, not record-accuracy questions. Each has its own issue and its own analysis |
-
-### AC pre-flight — every scoped command was run against `main` before being frozen
-
-Each assertion below was executed against the unmodified register so that a green reading after the
-change means something. An AC that has never been observed failing is not a gate.
-
-| AC | Command run at plan time | Reading on unmodified `main` |
-|---|---|---|
-| AC1 | `pa7 \| grep -c '^\|'` | `11` — comfortably over the floor of 9 |
-| AC2 | the 2-column awk | `rc=0` — PA-7 parses cleanly today, so a post-change failure is attributable |
-| AC3 | `grep -c comment_body "$REG"` | `0` — the defect |
-| AC5 | `pa7 \| grep -cE '^\| \*\*Special categories\*\* \| None\. \|[[:space:]]*$'` | `1` — **the first draft of this AC anchored on `None\.$` and read `0`, because the row ends `None. \|`. It would have passed vacuously on an unchanged file.** Corrected here |
-| AC6 | `pa7 \| grep -c 'signer is informed of the record at signing time'` | `1` |
-| AC19 | the `vector.toml` parse | `source_id=2457081`, `cluster=eu-fsn-3`; present in the register 4x and 5x respectively |
-| AC13 | `python3 scripts/lint-credential-path-literals.py` | `rc=0`, 8074 files scanned |
-| AC21 | `python3 scripts/lint-infra-no-human-steps.py <this plan>` | `OK: no human-run infra steps in 1 scanned file(s)` |
-| AC14 | `cd apps/web-platform && npx vitest run --project repo-wide test/legal-doc-consistency.test.ts` | `1 passed (1)` / `35 passed (35)` in 725ms — the pre-change baseline, so a post-change failure is attributable to this diff |
-| Phase 5 labels | `gh label list --limit 200` | All ten labels the phase needs exist; no `gh label create` is owed |
 
 ## Domain Review
 
@@ -1328,7 +1341,7 @@ Recorded as satisfied-by-CLO rather than skipped silently, so a future reader ca
 and disagree with it. If the advisory's Ruling 1 declares an Art. 9 consequence, the
 `compliance-posture.md` Active Items row and any `compliance/critical` filing the gate would have
 produced are owed regardless of which authority surfaced it — that obligation is carried into
-Phase 4 step 2 via Ruling 6.
+Phase 5 step 2 via Ruling 6 as amended by addendum A5.
 
 ## Gates assessed and not applicable
 
