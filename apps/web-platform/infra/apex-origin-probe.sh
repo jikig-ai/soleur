@@ -34,6 +34,13 @@
 
 set -uo pipefail
 
+# The marker set is single-sourced (see apex-origin-markers.sh): this probe knew
+# three of the six, and its Cloudflare arm is residual, so the three it did not
+# know read as Cloudflare — the verdict that routes a rollback into a second
+# destroy.
+# shellcheck source=apps/web-platform/infra/apex-origin-markers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/apex-origin-markers.sh"
+
 URL="${APEX_PROBE_URL:-https://soleur.ai/}"
 
 # CACHE-BUSTER (#7640 PR4b, AC61). Measured 2026-09-02: the apex answers with
@@ -95,7 +102,7 @@ esac
 # grep is fed by a herestring rather than a pipe: under `set -o pipefail`,
 # `printf ... | grep -q` returns 141 when grep exits early on a match and the
 # producer takes SIGPIPE, which would misreport a found marker as not-found.
-if grep -qiE '^(x-github-request-id|x-fastly-request-id|via: 1\.1 varnish)' <<<"$HEADERS"; then
+if grep -qiE "$APEX_GH_ORIGIN_MARKERS" <<<"$HEADERS"; then
   echo "SERVING-FROM-GITHUB-PAGES"
 else
   echo "SERVING-FROM-CLOUDFLARE-PAGES"

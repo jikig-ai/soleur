@@ -27,6 +27,18 @@
 # actually wanted: the apex serves the build the Pages project holds.
 set -uo pipefail
 
+# REFUSE TO RUN UNDER XTRACE. This script authenticates with bearer tokens, and
+# `set -x` traces every argument of every command — which is exactly how #7797
+# printed the Sentry and BetterStack tokens into a transcript. A prose warning in
+# the runbook cannot see `bash -x`, `SHELLOPTS=xtrace`, or a BASH_ENV that sets
+# it; this can.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script passes bearer tokens, and -x would print them (see #7797)\n' >&2; exit 64 ;;
+esac
+if [[ "${SHELLOPTS:-}" == *xtrace* ]]; then
+  printf '[FATAL] refusing to run with SHELLOPTS=xtrace: this script passes bearer tokens (see #7797)\n' >&2; exit 64
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APEX="${CUTOVER_APEX:-soleur.ai}"
 BASELINE="${CUTOVER_MX_TXT_BASELINE:-$SCRIPT_DIR/cutover-mx-txt-baseline.txt}"
@@ -51,12 +63,18 @@ usage:
   cutover-verify.sh --capture-baseline <path>         write the CUT9 MX/TXT fixture from live DNS
   cutover-verify.sh --capture-monitor-baseline <path> write the CUT8 monitor-health baseline
 
+  Exit codes: 0 all assertions passed; 1 an assertion FAILED (the rollback path);
+  2 nothing failed but something was UNREACHABLE (re-run); 64 usage error.
+
   --expected-sha is the SHA recorded by PF-DOCS (the last successful
   deploy-docs.yml run), NOT the cutover merge SHA. deploy-docs.yml does not fire
   on dns.tf, so no build exists at the merge SHA and CUT0 read literally would
   fail all three samples and drive a false rollback.
 USAGE
-  exit 2
+  # 64 (EX_USAGE), NOT 2. The header contract maps 2 to "re-run", so sharing it
+  # with a usage error makes a mistyped flag look like a transient condition and
+  # an operator under T+20 pressure re-runs it forever.
+  exit 64
 }
 
 # ---------------------------------------------------------------------------------------
@@ -86,7 +104,11 @@ normalise_records() {
 # — and fixing only the first left CUT9 comparing `MX<TAB>20 mailsec...` on one
 # side against a bare `20 mailsec...` on the other, i.e. a guaranteed FAIL that
 # says "mail routing changed" when nothing had.
-label_records() { sed "s/^/$1\t/"; }
+# NO-OP ON EMPTY. `printf '%s\n' ""` emits one blank line, which this would turn
+# into a bare `MX<TAB>` row that `grep -v '^$'` cannot remove — a phantom record
+# that makes CUT9 report "mail routing changed" when one side simply did not
+# resolve. Guarding here kills the class rather than one instance of it.
+label_records() { awk -v L="$1" 'NF { print L "\t" $0 }'; }
 
 capture_baseline() { # <out>
   local out="$1" mx txt
@@ -117,7 +139,12 @@ capture_baseline() { # <out>
     printf '# Captured %s via %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RESOLVER"
     printf '%s\n' "$mx"  | label_records MX
     printf '%s\n' "$txt" | label_records TXT
-  } > "$out"
+  } > "$out" || { printf '[FATAL] could not write %s\n' "$out" >&2; return 2; }
+  # A failed redirection leaves the group non-zero but does NOT stop the next
+  # command without `set -e`, so an unwritable path previously printed "wrote"
+  # and exited 0 — telling the operator a fresh baseline exists while CUT9 kept
+  # grading against the stale committed one.
+  [[ -s "$out" ]] || { printf '[FATAL] wrote an empty %s\n' "$out" >&2; return 2; }
   printf 'wrote %s\n' "$out"
 }
 
@@ -143,7 +170,7 @@ BETTERSTACK_MONITOR="${CUTOVER_BETTERSTACK_MONITOR:-soleur dot ai apex}"
 probe_monitor_health() {
   local mon_json name mid proj checks total bad bs_json bs_status
   if [[ -n "${SENTRY_AUTH_TOKEN:-}" && -n "${SENTRY_ORG:-}" ]]; then
-    mon_json="$(curl -sS --max-time "$CURL_MAX_TIME" -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+    mon_json="$(curl_auth "$SENTRY_AUTH_TOKEN" \
         "https://sentry.io/api/0/organizations/${SENTRY_ORG}/uptime/" 2>/dev/null)" || mon_json=""
     if [[ -z "$mon_json" ]] || ! printf '%s' "$mon_json" | jq -e 'type == "array"' >/dev/null 2>&1; then
       for name in "${SENTRY_MONITORS[@]}"; do printf '%s\tunknown\n' "$name"; done
@@ -154,10 +181,30 @@ probe_monitor_health() {
         # A monitor CUT8 names but the org does not have is `unknown`, never
         # healthy — "I could not find it" must not read as "it is green".
         if [[ -z "$mid" || "$mid" == "null" ]]; then printf '%s\tunknown\n' "$name"; continue; fi
-        checks="$(curl -sS --max-time "$CURL_MAX_TIME" -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+        checks="$(curl_auth "$SENTRY_AUTH_TOKEN" \
             "https://sentry.io/api/0/projects/${SENTRY_ORG}/${proj}/uptime/${mid}/checks/" 2>/dev/null)" || checks=""
         total="$(printf '%s' "$checks" | jq -r 'if type=="array" then length else "x" end' 2>/dev/null)"
         if [[ ! "$total" =~ ^[0-9]+$ || "$total" == "0" ]]; then printf '%s\tunknown\n' "$name"; continue; fi
+        # BOUND THE WINDOW. The endpoint returns a rolling collection with no time
+        # bound, so an unbounded `bad == 0` grades the cutover against checks that
+        # PREDATE it — including the failures the cutover's own propagation window
+        # produces. At T+20, with monitors on a 300 s interval, those are still in
+        # the collection, so every monitor reads unhealthy, every one is scored a
+        # REGRESSION, and the gate that decides whether to perform a SECOND
+        # destructive change is biased hard toward "roll back" by the very outage
+        # it is measuring.
+        #
+        # `CUTOVER_SINCE` (ISO-8601) scopes the grade to checks at or after the
+        # cutover. With no post-cutover sample yet the answer is `unknown` — which
+        # routes to UNREACHABLE ("re-run"), never to a regression.
+        if [[ -n "${CUTOVER_SINCE:-}" ]]; then
+          checks="$(printf '%s' "$checks" | jq --arg t "$CUTOVER_SINCE" \
+            '[.[] | select((.timestamp // "") >= $t)]' 2>/dev/null)" || checks=""
+          total="$(printf '%s' "$checks" | jq -r 'if type=="array" then length else "x" end' 2>/dev/null)"
+          if [[ ! "$total" =~ ^[0-9]+$ || "$total" == "0" ]]; then
+            printf '%s\tunknown\n' "$name"; continue
+          fi
+        fi
         bad="$(printf '%s' "$checks" | jq -r '[.[] | select(.checkStatus != "success")] | length' 2>/dev/null)"
         if [[ "$bad" =~ ^[0-9]+$ && "$bad" == "0" ]]; then printf '%s\thealthy\n' "$name"
         else printf '%s\tunhealthy\n' "$name"; fi
@@ -170,7 +217,7 @@ probe_monitor_health() {
   # The fifth monitor is a DIFFERENT VENDOR (BetterStack), not a fifth Sentry row.
   local bs_token="${BETTERSTACK_API_TOKEN_READONLY:-${BETTERSTACK_API_TOKEN:-}}"
   if [[ -n "$bs_token" ]]; then
-    bs_json="$(curl -sS --max-time "$CURL_MAX_TIME" -H "Authorization: Bearer ${bs_token}" \
+    bs_json="$(curl_auth "$bs_token" \
         "https://uptime.betterstack.com/api/v2/monitors" 2>/dev/null)" || bs_json=""
     bs_status="$(printf '%s' "$bs_json" | jq -r --arg n "$BETTERSTACK_MONITOR" \
         '.data[]? | select((.attributes.pronounceable_name // "") == $n) | .attributes.status' 2>/dev/null | head -1)"
@@ -188,6 +235,16 @@ case "$MODE" in
   --capture-monitor-baseline)
     [[ $# -eq 2 ]] || usage
     mb="$(probe_monitor_health)"
+    # Refuse ANY unknown row, not merely an all-unknown file. A partial capture
+    # (one monitor resolved, four not) is written by the weaker check, and each
+    # unresolved monitor then reads `unknown` at CUT8 — the exact ambiguity the
+    # guard's own rationale says makes later comparisons unsound.
+    if [[ -n "$mb" ]] && grep -q "$(printf '\t')unknown$" <<<"$mb"; then
+      printf '[FATAL] refusing to write a baseline with unresolved monitors:\n' >&2
+      grep "$(printf '\t')unknown$" <<<"$mb" | sed 's/^/  /' >&2
+      printf '[FATAL] fix credentials/connectivity and re-capture; a partial baseline scores those monitors as regressions later.\n' >&2
+      exit 2
+    fi
     if [[ -z "$mb" ]] || ! grep -qE "$(printf '\t')(healthy|unhealthy)\$" <<<"$mb"; then
       printf '[FATAL] no monitor resolved to a definite state — refusing to write a baseline of all-unknown.\n' >&2
       printf '[FATAL] Such a baseline makes every later comparison read as a REGRESSION.\n' >&2
@@ -212,7 +269,16 @@ esac
 
 [[ -n "${EXPECTED_SHA:-}" ]] || usage
 
-printf '\ncutover-verify (ADR-194 apex cutover) — apex=%s expected_sha=%s\n\n' "$APEX" "$EXPECTED_SHA"
+# Print every resolved input. Seven env seams can change what this run measures,
+# and the T+20 decision is read off this output — a verdict that does not say
+# what it graded against is not reproducible.
+printf '\ncutover-verify (ADR-194 apex cutover)\n'
+printf '  apex=%s expected_sha=%s resolver=%s max_time=%s\n' "$APEX" "$EXPECTED_SHA" "$RESOLVER" "$CURL_MAX_TIME"
+printf '  mx_txt_baseline=%s (sha256 %s)\n' "$BASELINE" \
+  "$( [[ -r "$BASELINE" ]] && sha256sum "$BASELINE" 2>/dev/null | cut -c1-12 || echo '<unreadable>')"
+printf '  monitor_baseline=%s (sha256 %s)\n' "$MONITOR_BASELINE" \
+  "$( [[ -r "$MONITOR_BASELINE" ]] && sha256sum "$MONITOR_BASELINE" 2>/dev/null | cut -c1-12 || echo '<unreadable>')"
+printf '  redirect_source=%s since=%s\n\n' "${CUTOVER_REDIR_TF:-$SCRIPT_DIR/seo-bulk-redirects.tf}" "${CUTOVER_SINCE:-<unbounded>}"
 
 # Fetch headers+body once per URL. `HTTPCODE=` is emitted by -w so an empty
 # response is distinguishable from a 200 with no body.
@@ -229,6 +295,15 @@ CUTOVER_TMPDIR="$(mktemp -d -t cutover-verify.XXXXXXXX)" || {
   printf '[FATAL] could not create a scratch directory\n' >&2; exit 2; }
 trap 'rm -rf "$CUTOVER_TMPDIR"' EXIT INT TERM HUP
 
+# AUTH HEADER VIA STDIN, NEVER ARGV. A `-H "Authorization: Bearer $TOK"` sits in
+# /proc/<pid>/cmdline and `ps` for the life of the request. `curl --config -`
+# reads the header from stdin, so the token never appears in an argument list.
+curl_auth() { # <bearer> <url...>
+  local tok="$1"; shift
+  printf 'header = "Authorization: Bearer %s"\n' "$tok" \
+    | curl -sS --max-time "$CURL_MAX_TIME" --config - "$@"
+}
+
 fetch() { # <url> -> "code<TAB>headers<TAB>body" via globals; rc 1 on transport failure
   local url="$1" sep
   sep="$(mktemp -p "$CUTOVER_TMPDIR")" || return 1
@@ -242,11 +317,11 @@ fetch() { # <url> -> "code<TAB>headers<TAB>body" via globals; rc 1 on transport 
   return 0
 }
 
-# The GitHub/Fastly origin markers. `server: cloudflare` is deliberately NOT a
-# discriminator: it is true BEFORE the cutover as well, because the apex was
-# already proxied. Anchored on `^` — these are header NAMES at line start, and an
-# unanchored match also hits the token inside another header's VALUE.
-GH_MARKERS='^(x-github-request-id|x-github-edge-region|x-fastly-request-id|x-served-by|x-proxy-cache|via: 1\.1 varnish)'
+# Single-sourced with apex-origin-probe.sh — the two lists had diverged, and the
+# probe held the SHORTER one while being the rollback's branch selector.
+# shellcheck source=apps/web-platform/infra/apex-origin-markers.sh
+. "$SCRIPT_DIR/apex-origin-markers.sh"
+GH_MARKERS="$APEX_GH_ORIGIN_MARKERS"
 
 # --- CUT0': the apex serves the build the Pages project holds --------------------------
 if fetch "https://${APEX}/version.txt?cb=${NONCE}"; then
@@ -272,7 +347,12 @@ if fetch "https://${APEX}/?cb=${NONCE}"; then
     row CUT1 FAIL "apex returns HTTP ${FETCH_CODE:-<none>}"
   fi
 
-  if hit="$(grep -iE "$GH_MARKERS" <<<"$FETCH_HEADERS")"; then
+  # A negative assertion whose PASS arm is reached whenever the grep finds
+  # nothing also passes on NO headers at all. CUT1 masks that today, but only
+  # incidentally, and CUT2's row would still read PASS in the decision log.
+  if [[ -z "$FETCH_HEADERS" ]]; then
+    row CUT2 UNREACHABLE "no response headers captured — the marker check was not evaluated"
+  elif hit="$(grep -iE "$GH_MARKERS" <<<"$FETCH_HEADERS")"; then
     row CUT2 FAIL "GitHub/Fastly origin marker still present: $(printf '%s' "$hit" | head -1 | cut -c1-60)"
   else
     row CUT2 PASS "no GitHub/Fastly origin markers"
@@ -395,7 +475,13 @@ while IFS=$'\t' read -r mname mstate; do
       cut8_fail=$((cut8_fail + 1))
       base_state=""
       [[ -r "$MONITOR_BASELINE" ]] && base_state="$(grep -F "$mname"$'\t' "$MONITOR_BASELINE" 2>/dev/null | head -1 | cut -f2)"
-      if [[ "$base_state" == "unhealthy" ]]; then
+      # An `unknown` baseline row means the monitor was not measured at capture
+      # time, which is not evidence that it was healthy — so it must not produce
+      # a REGRESSION verdict. Treat it as unverifiable and route to UNREACHABLE.
+      if [[ "$base_state" == "unknown" ]]; then
+        cut8_fail=$((cut8_fail - 1)); cut8_unreach=$((cut8_unreach + 1))
+        printf '           %s: unhealthy now, but the baseline never measured it — not scored as a regression\n' "$mname"
+      elif [[ "$base_state" == "unhealthy" ]]; then
         preexisting=$((preexisting + 1))
         # MEASURED-BY: this monitor's row in $MONITOR_BASELINE, captured before
         # the cutover, records `unhealthy`. That is evidence the failure PREDATES
@@ -411,7 +497,7 @@ done <<< "$MON_NOW"
 
 if   [[ "$regressions" -gt 0 ]];  then row CUT8 FAIL "$regressions of $CUT8_TOTAL monitor(s) REGRESSED since the pre-cutover baseline"
 elif [[ "$cut8_unreach" -gt 0 ]]; then row CUT8 UNREACHABLE "$cut8_unreach of $CUT8_TOTAL monitors could not be verified (this is not a pass)"
-elif [[ "$preexisting" -gt 0 ]];  then row CUT8 PASS "no monitor regressed; $preexisting pre-existing failure(s) carried (see above)"
+elif [[ "$preexisting" -gt 0 ]];  then row CUT8 PASS "no monitor regressed; $preexisting pre-existing failure(s) carried — named above. If soleur-ai-www is among them its 301 is still covered in-band by CUT3/CUT4 (#7798)"
 else row CUT8 PASS "all $CUT8_TOTAL monitors healthy"
 fi
 
@@ -420,10 +506,24 @@ if [[ ! -r "$BASELINE" ]]; then
   row CUT9 UNREACHABLE "baseline fixture missing: $BASELINE"
 else
   want="$(grep -vE '^#' "$BASELINE" | grep -v '^$' | LC_ALL=C sort -u)"
+  # A zero-byte, comments-only or truncated fixture would otherwise compare an
+  # empty `want` against a populated `got` and report FAIL — i.e. "mail routing
+  # changed" — for a fixture problem. Require at least one row of each type.
+  if ! grep -q "^MX$(printf '\t')" <<<"$want" || ! grep -q "^TXT$(printf '\t')" <<<"$want"; then
+    row CUT9 UNREACHABLE "baseline $BASELINE carries no MX and/or TXT rows — not evaluated (regenerate with --capture-baseline)"
+    want=""
+  fi
+  if [[ -n "$want" ]]; then :; else true; fi
   mx_now="$(dig +short MX "$APEX" "@$RESOLVER" 2>/dev/null | normalise_records)"
   txt_now="$(dig +short TXT "$APEX" "@$RESOLVER" 2>/dev/null | normalise_records)"
-  if [[ -z "$mx_now" && -z "$txt_now" ]]; then
-    row CUT9 UNREACHABLE "no MX or TXT answer from $RESOLVER — DNS could not be read"
+  # `||`, NOT `&&`. Requiring BOTH sides empty means a resolver that answers MX
+  # and times out on TXT falls through into the comparison with one side missing,
+  # which reports FAIL — and under the T+20 rule any FAIL is "merge the rollback".
+  # One dropped UDP packet would roll back a healthy, live, HSTS-preloaded apex
+  # while reporting the cause as "mail routing changed". The capture path one
+  # screen up already had this right.
+  if [[ -z "$mx_now" || -z "$txt_now" ]]; then
+    row CUT9 UNREACHABLE "incomplete DNS read from $RESOLVER (MX:$([[ -n "$mx_now" ]] && echo ok || echo empty) TXT:$([[ -n "$txt_now" ]] && echo ok || echo empty)) — not evaluated"
   else
     got="$( { printf '%s\n' "$mx_now" | label_records MX
               printf '%s\n' "$txt_now" | label_records TXT
@@ -435,6 +535,16 @@ else
       diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") | sed 's/^/           /'
     fi
   fi
+fi
+
+# EVERY assertion must be accounted for. A run that emits fewer rows than the ten
+# CUT assertions has skipped one, and a skipped assertion is not a passed one.
+CUT_ROWS_EXPECTED=10
+_rows=$((PASS + FAILED + UNREACH))
+if [[ "$_rows" -ne "$CUT_ROWS_EXPECTED" ]]; then
+  printf '\n[FATAL] %d CUT rows emitted, expected exactly %d — an assertion was skipped, and a skipped assertion is not a pass\n' \
+    "$_rows" "$CUT_ROWS_EXPECTED" >&2
+  exit 64
 fi
 
 printf '\ncutover-verify: %d passed, %d failed, %d unreachable\n' "$PASS" "$FAILED" "$UNREACH"

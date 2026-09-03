@@ -59,24 +59,48 @@ run_gen() { # <dns.tf> <baseline> <args...>
 }
 
 # ---------------------------------------------------------------------------------------
-# THE BYTE-IDENTITY CONTRACT (AC70)
+# THE SAFETY CONTRACT: THE ROLLBACK TOUCHES THE APEX AND NOTHING ELSE
 # ---------------------------------------------------------------------------------------
-rc="$(run_gen "$LIVE" "$BASELINE" --emit-tf-stripped "$SBX/rollback-stripped.tf")"
-verdict "$rc" "the generator emits a stripped rollback dns.tf (exit $rc)"
-
-if cmp -s "$SBX/rollback-stripped.tf" "$BASELINE"; then rc=0; else rc=1; fi
-verdict "$rc" "AC70: the rollback dns.tf, minus the reverse moved block, is BYTE-IDENTICAL to dns.tf as PR4a left it"
-
+# This replaces an earlier byte-identity-to-the-baseline assertion that was
+# TAUTOLOGICAL: `emit_tf` was `cp "$BASELINE" "$out"`, and the row then asserted
+# `cmp "$out" "$BASELINE"` — i.e. that `cp` copies. It could not see a baseline
+# that had drifted from the file PR4a shipped, and the generator it certified
+# would revert the WHOLE of dns.tf to a frozen snapshot, deleting every record
+# merged since (app.soleur.ai, the Protonmail MX/DKIM set, DMARC, DNSSEC) under
+# a pre-baked [ack-destroy].
+#
+# The property that actually matters is scope: every declaration live in dns.tf
+# survives the rollback except the apex address being moved.
 rc="$(run_gen "$LIVE" "$BASELINE" --emit-tf "$SBX/rollback.tf")"
 verdict "$rc" "the generator emits the full rollback dns.tf (exit $rc)"
 
-# The ONLY difference between the two modes must be the reverse block — a
-# generator that also mutated a record while emitting would satisfy the stripped
-# comparison above and still ship a wrong rollback.
-only_added="$(diff "$BASELINE" "$SBX/rollback.tf" | grep -cE '^[<>]' || true)"
-removed="$(diff "$BASELINE" "$SBX/rollback.tf" | grep -cE '^<' || true)"
-rc=1; [[ "$removed" == "0" && "$only_added" -gt 0 ]] && rc=0
-verdict "$rc" "the full rollback differs from the baseline by ADDITIONS ONLY (removed lines: $removed)"
+live_labels="$(grep -oE '^resource "[a-z_]+" "[a-z_0-9]+"' "$LIVE" | grep -v '"pages_apex"' | sort -u)"
+gen_labels="$(grep -oE '^resource "[a-z_]+" "[a-z_0-9]+"' "$SBX/rollback.tf" | sort -u)"
+dropped="$(comm -23 <(printf '%s\n' "$live_labels") <(printf '%s\n' "$gen_labels"))"
+rc=1; [[ -z "$dropped" ]] && rc=0
+verdict "$rc" "every non-apex declaration live in dns.tf survives the rollback (dropped: ${dropped//$'\n'/ })"
+
+# THE REGRESSION THAT MOTIVATED THE REWRITE, fixtured directly: a record added
+# after PR4b must still be present in a rollback generated later. Under the old
+# whole-file copy this record simply vanished, and the generated commit carried
+# [ack-destroy], so Terraform destroyed it without a gate.
+{ cat "$LIVE"; printf '\nresource "cloudflare_record" "added_after_pr4b" {\n  zone_id = var.cf_zone_id\n  name    = "newthing"\n  content = "192.0.2.7"\n  type    = "A"\n  proxied = false\n  ttl     = 1\n}\n'; } > "$SBX/live-plus-one.tf"
+rc="$(run_gen "$SBX/live-plus-one.tf" "$BASELINE" --emit-tf "$SBX/rollback-plus-one.tf")"
+r2=1; [[ "$rc" == "0" ]] && grep -qE '^resource "cloudflare_record" "added_after_pr4b"' "$SBX/rollback-plus-one.tf" && r2=0
+verdict "$r2" "a record added AFTER the cutover survives the rollback (the whole-file-copy regression)"
+
+# THE BASELINE IS ANCHORED TO THE COMMIT PR4a SHIPPED, not to whatever the file
+# happens to contain. Without this the fixture is its own oracle: truncate it or
+# delete a record from it and every other row here still passes.
+PR4A_SHA="428e1ec78a23b2d4425a5f48d170eefb777d37e3"
+if git -C "$SCRIPT_DIR" cat-file -e "$PR4A_SHA:apps/web-platform/infra/dns.tf" 2>/dev/null; then
+  if git -C "$SCRIPT_DIR" show "$PR4A_SHA:apps/web-platform/infra/dns.tf" | cmp -s - "$BASELINE"; then rc=0; else rc=1; fi
+  verdict "$rc" "the baseline fixture is byte-identical to dns.tf as PR4a ($PR4A_SHA) shipped it"
+else
+  # A shallow clone cannot reach the blob. That is a coverage gap, not a pass —
+  # never let "could not look" read as "looked and it was fine".
+  verdict 1 "the PR4a blob is unreachable in this checkout — the baseline's provenance was NOT verified (fetch depth?)"
+fi
 
 # ---------------------------------------------------------------------------------------
 # THE REVERSE BLOCK ITSELF — the half that makes this not a `git revert`
@@ -84,8 +108,15 @@ verdict "$rc" "the full rollback differs from the baseline by ADDITIONS ONLY (re
 rc=1; grep -qE '^  from = cloudflare_record\.pages_apex$' "$SBX/rollback.tf" && rc=0
 verdict "$rc" "the reverse moved block moves FROM cloudflare_record.pages_apex"
 
-rc=1; grep -qE '^  to   = cloudflare_record\.github_pages\["185\.199\.108\.153"\]$' "$SBX/rollback.tf" && rc=0
-verdict "$rc" "the reverse moved block moves TO the survivor key the forward cutover moved from"
+# The restored resource carries NO `for_each` — that meta-argument was an
+# artifact of the pre-PR4a four-address config — so the reverse move targets a
+# plain address. That keeps the rollback a single-address replace, exactly as
+# the forward cutover was.
+rc=1; grep -qE '^  to   = cloudflare_record\.github_pages$' "$SBX/rollback.tf" && rc=0
+verdict "$rc" "the reverse moved block moves TO a single-address cloudflare_record.github_pages"
+
+rc=1; grep -qE '^  content = "185\.199\.108\.153"$' "$SBX/rollback.tf" && rc=0
+verdict "$rc" "the restored record carries the survivor IP as a literal"
 
 # Direction matters and is the whole point: a block with the endpoints the RIGHT
 # way round for the forward cutover is a no-op here, and the rollback would then
@@ -102,8 +133,13 @@ verdict "$rc" "the rollback restores cloudflare_record.github_pages"
 rc=0; grep -qE '^resource "cloudflare_record" "pages_apex" \{' "$SBX/rollback.tf" && rc=1
 verdict "$rc" "the rollback declares no cloudflare_record.pages_apex (the address it moves away from)"
 
-rc=1; grep -qE '^  type    = "A"$' "$SBX/rollback.tf" && rc=0
-verdict "$rc" "the apex returns to type A"
+# SCOPED to the github_pages block. A bare `type = "A"` matches cloudflare_record.app
+# (the web-1 ingress) too, so the unscoped form passed on a record the rollback
+# has nothing to do with.
+rc=1
+awk '/^resource "cloudflare_record" "github_pages"/,/^}/' "$SBX/rollback.tf" \
+  | grep -qE '^  type    = "A"$' && rc=0
+verdict "$rc" "the apex record itself returns to type A"
 
 rc=1; grep -qF 'content = "jikig-ai.github.io"' "$SBX/rollback.tf" && rc=0
 verdict "$rc" "www returns to the GitHub Pages origin"
@@ -187,7 +223,10 @@ verdict "$r2" "no refusal path wrote an output file (a refusal that still emits 
 # floor routed through `fail` is disarmed by the same edit that disarms every
 # assertion it witnesses.
 printf '\n'
-EXPECTED_CASES=23
+# 26 `verdict` calls execute per run — 30 are written, but the terraform-present
+# and PR4a-blob-reachable forks each contribute one of their two rows — minus the
+# 2 instrument self-test rows the harness subtracts above.
+EXPECTED_CASES=24
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[VACUITY] %d case(s) ran, expected exactly %d — a case was deleted, skipped or added without bumping the floor\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
