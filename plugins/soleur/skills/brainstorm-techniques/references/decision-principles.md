@@ -118,11 +118,17 @@ When surfacing (attached) or persisting (headless) a User-Challenge, use:
 ## "Both signals" — scope, disagreement, and the security exception
 
 **Both signals = the session model + the ADR-083 scoped `fable`→`opus` consult**,
-and only at the two gates where that consult already fires: `plan` Step 4.5 and
-`ship` Phase 5.5. Elsewhere (e.g. `work` emergent decisions) there is a **single**
-signal — the session model + this surface criterion. **Do not add a new
-per-decision consult** (that would balloon ADR-083's scoped 2-gate consult into
-cost/latency creep).
+and only at the two **decision** gates: `plan` Step 4.5 and `ship` Phase 5.5.
+Elsewhere (e.g. `work` emergent decisions) there is a **single** signal — the
+session model + this surface criterion. **Do not add a new per-decision consult**
+(that would balloon ADR-083's scoped consult into cost/latency creep).
+
+ADR-083 gained a third gate on 2026-09-03 — `review` §5 Step 1, findings-synthesis
+— and it is deliberately **not** a "both signals" surface. That consult asks
+whether the panel's findings share an unnamed structural cause; it does not
+classify a decision for operator surfacing, which is what this section governs.
+Counting it here would silently widen the decision-surfacing rule on the strength
+of a shared model tier, which is not a shared purpose.
 
 - **Disagreement:** when the two signals disagree at a gate, promote the item to
   the recorded/surfaced tier (a Taste item becomes a persisted/surfaced one). The

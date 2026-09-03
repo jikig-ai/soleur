@@ -7,7 +7,10 @@
 
 ## Context
 
-Fable 5 prices at $10/$50 per MTok — 2× Opus 4.8, 3.3× Sonnet 4.6, 10× Haiku 4.5. All 66 plugin agents use `model: inherit` and no workflow script passed `opts.model`, so a Fable 5 session ran every mechanical subagent step (diff classification, GitHub-issue filing, comment fetching, commit-message generation, report assembly) at top-tier rates. Anthropic's agent-design guidance endorses cheaper-model subagents for sub-tasks, and the web platform already tiers in production (Sonnet crons, Haiku routing, deliberate sonnet→opus upgrades for scoring workloads).
+Fable 5 prices at $10/$50 per MTok — 2× Opus 4.8, 3.3× Sonnet 4.6, 10× Haiku 4.5. **(Basis
+superseded 2026-09-03 — see the Fable 5.1 re-tier review below. Sonnet 5 bills $2/$10, so the
+Fable-vs-Sonnet multiple is now 5×, not 3.3×. The ratios in this paragraph are retained as the
+basis the original decision was made on, not as current pricing.)** All 66 plugin agents use `model: inherit` and no workflow script passed `opts.model`, so a Fable 5 session ran every mechanical subagent step (diff classification, GitHub-issue filing, comment fetching, commit-message generation, report assembly) at top-tier rates. Anthropic's agent-design guidance endorses cheaper-model subagents for sub-tasks, and the web platform already tiers in production (Sonnet crons, Haiku routing, deliberate sonnet→opus upgrades for scoring workloads).
 
 ## Decision
 
@@ -39,6 +42,69 @@ Phase 0 of the adoption PR captured ground truth with a one-spawn probe workflow
 | SKILL.md prose advisories | harness enum alias in prose | Advisory-only, no mechanical gate; discoverable via `grep -rn 'model: sonnet\|model: haiku' plugins/soleur/skills/*/SKILL.md`; mechanical-step classes only, must cite this ADR. |
 
 #5100 (`model-launch-review` skill) is the re-pin trigger for all three surfaces at each model release.
+
+## Fable 5.1 re-tier review (2026-09-03, #7774)
+
+`model-launch-review` (#5100) is the re-pin trigger for all three pin surfaces at each model
+release. Fable 5.1 launched; this section records the review it triggered. **Outcome: no pin
+moves.** Recorded because "we looked and changed nothing" is a result, and without it the next
+launch re-derives this from scratch.
+
+### What actually changed in the pricing
+
+Fable 5.1 costs **the same per token as Fable 5** — $10 input / $50 output per MTok. The only
+delta is the **cache-read** rate: **$1.00 → $0.25 per MTok** (0.1× → 0.025× of base input).
+Output and cache writes are unchanged.
+
+The consequence is narrow and easy to overstate: Fable 5.1 is cheaper than Fable 5 **only where
+a warm prefix is re-read**. It is not cheaper on input, not cheaper on output, and identical on
+a cold call.
+
+Separately, the comparison basis moved underneath this ADR. Sonnet 5 bills $2/$10 (the
+2026-08-31 intro-pricing expiry to $3/$15 was **cancelled**), so the tier spread is now:
+
+| tier | $/MTok in-out | vs Fable 5.1 |
+|---|---|---|
+| Fable 5.1 | 10 / 50 | 1× |
+| Opus 5 | 5 / 25 | 2× |
+| Sonnet 5 | 2 / 10 | **5×** (was 3.3× vs Sonnet 4.6) |
+| Haiku 4.5 | 1 / 5 | 10× |
+
+The Fable-vs-Sonnet gap **widened**. Every judgment in this ADR that leaned on 3.3× is therefore
+conservative in the safe direction: the case for pinning mechanical steps down to Sonnet is
+*stronger* now, not weaker.
+
+### Surface-by-surface verdict
+
+| Surface | Population | Fable candidates | Why |
+|---|---|---|---|
+| 1. Agent frontmatter | 64 `inherit`, 5 `haiku`, 1 unset (68 agents) | **none** | This ADR rejects upgrade pins here by design — a frontmatter upgrade silently overrides a cheaper session the operator chose. The `haiku` floor is safe precisely *because* it cannot upgrade. |
+| 2. Workflow call-site pins | 12 pins (10 `sonnet`, 2 `haiku`) | **none, by construction** | Every pinned site is mechanical — parse, classify, cluster, fetch, commit-message, report, file-issue. This ADR forbids pinning judgment steps, and Fable is a judgment tier. |
+| 3. Never-downgrade list | review / security / legal / C-suite / scoring | **none** | Deliberately `inherit` so a stronger session model flows through. Pinning Fable here would *cap* a Fable session at no gain and *upgrade* a Sonnet session without consent. |
+| 4. SKILL.md prose (ADR-083) | 2 gates → **3** (see below) | the only place Fable can live | Scoped, curated-payload, single-shot. |
+| 5. Product runtime (`apps/web-platform`) | `claude-sonnet-5` leader + routers, `claude-haiku-4-5` domain routing, `claude-opus-5` audit | **none** | Founder BYOK spend under a 260¢ per-spawn ceiling (ADR-041). Fable at 5× Sonnet would exhaust that ceiling ~5× faster for the same work. |
+
+### The finding that decides it
+
+Both pre-existing Fable call sites — `plan` Step 4.5 and `ship` Phase 5.5 — are **cold
+single-shot spawns with authored, curated payloads and no reused prefix**. Their cache reads are
+≈0. Fable 5.1's *sole* improvement therefore moves Soleur's advisor spend by ≈nothing.
+
+That is worth stating plainly because the intuition runs the other way: a new top-tier model
+shipping reads as a reason to use more of it. Here the opposite holds — the upgrade was free (the
+harness `model: fable` alias is version-agnostic and auto-follows, so no literal needed changing),
+and the widened Sonnet gap argues *against* extending Fable's footprint, not for it.
+
+One gate was added on operator decision — `review` findings-synthesis, see ADR-083 — and it was
+added on a judgment argument, explicitly **not** on a Fable-5.1-is-cheaper argument, which does
+not hold here.
+
+### Re-evaluation trigger
+
+Unchanged: `model-launch-review` (#5100) at each model release. The question to ask then is not
+"is the new model better" but **"does any pinned or unpinned site now re-read a large warm
+prefix?"** — that is the only condition under which Fable 5.1-class cache pricing changes a tier
+decision, and it was false everywhere in this repo on 2026-09-03.
 
 ## Alternatives considered
 
