@@ -383,12 +383,33 @@ the one you want; `seo-bulk-redirects.tf` is.
 > answer a question the sequencing had already made moot. D3's body still
 > describes 3(b) as "measured in PR2" and is superseded on that point.
 
-### Rollback content freeze
+### PR5 NARROWED THE ROLLBACK: it is three acts now, not one
 
-GitHub Pages serves the **last pre-cutover build** and nothing re-asserts the
-`CNAME` file to it once `deploy-docs.yml` stops deploying there. A rollback
-three weeks after the cutover serves three-week-old docs. Acceptable for an
-availability rollback; stated so nobody is surprised by it.
+**This section describes the state from PR5 (#7640, AC33/AC56) onward.** Read it
+before reaching for anything above that says "a DNS-only revert IS the rollback"
+— that was true through PR4 and is not true now.
+
+PR5 deleted the GitHub Pages publish leg from `deploy-docs.yml` (the three
+`actions/*-pages*` steps, the deployment `environment:` block, and the
+`pages:`/`id-token: write` grants). Consequences, in the order they bite:
+
+1. **The retained GitHub Pages content is FROZEN** at the last PR4-era build.
+   Nothing republishes to it, and nothing re-asserts its `CNAME` file.
+2. **Restoring that origin now takes THREE acts, not one:**
+   1. re-add the publish leg to `deploy-docs.yml` (and the permissions and
+      `environment:` block it needs) and merge it;
+   2. let that workflow run so GitHub Pages holds a CURRENT build — a revert
+      onto stale content is an availability rollback, not a content one;
+   3. only then revert the DNS, via
+      `apps/web-platform/infra/generate-apex-rollback-pr.sh` — **never
+      `git revert`**, for the reason in "The merge path is the only path".
+3. **The apex cutover rollback itself is unchanged and still one act** — the
+   generated reverse-`moved` PR. What changed is what that rollback LANDS ON.
+
+So a rollback three weeks after the cutover serves three-week-old docs unless
+step 2 runs first. Acceptable for an availability rollback; stated here, in
+`deploy-docs.yml`'s own comment, and in the re-evaluation criteria on #7799, so
+nobody rediscovers it mid-incident.
 
 ### The rollback window depends on deferred cleanup staying deferred
 

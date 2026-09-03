@@ -72,14 +72,14 @@ rejected alternatives are in the Cut List with the measurement that killed each.
       in-place `www` update; through `destroy-guard-filter-web-platform.jq`:
       `resource_deletes: 1, nested_deletes: 0, reboot_updates: 0, host_creates: 0`.
 - [x] 2.10 Re-run PF-Z2 / PF-R8b within the hour before merging (AC49).
-- [ ] 2.11 Merge with `[ack-destroy]`. AC60 again on the squash body.
+- [x] 2.11 Merge with `[ack-destroy]`. AC60 again on the squash body.
 
 ## Phase 3 — Post-merge verification (automated; no operator action)
 
-- [ ] 3.1 **PF8′ immediately:** run the generator, push, `gh pr create` the reverse-`moved`
+- [x] 3.1 **PF8′ immediately:** run the generator, push, `gh pr create` the reverse-`moved`
       rollback PR with `[ack-destroy]` for its own squash message. **NOT `git revert`.**
       Assert the ack by reading the branch commit body, not `gh pr view --json` (AC53).
-- [ ] 3.2 Wait 5 min, then run the CUT0′-CUT9 runner: **3 consecutive clean samples
+- [x] 3.2 Wait 5 min, then run the CUT0′-CUT9 runner: **3 consecutive clean samples
       at 60 s.** Do not invoke it bare — it needs `CUTOVER_SINCE` (so CUT8 grades
       only post-cutover checks) and a Doppler wrapper (so CUT8 can reach Sentry and
       BetterStack at all). The exact block, including how `PF_SHA` must be derived,
@@ -88,24 +88,43 @@ rejected alternatives are in the Cut List with the measurement that killed each.
       and exit 2, and the only guidance for exit 2 is "re-run".
       **CUT0′ compares against PF-DOCS's recorded SHA, cache-busted — not the merge SHA**
       (`deploy-docs.yml` deliberately does not fire on `dns.tf`).
-- [ ] 3.3 Decision point at T+20: on any failure merge the generated rollback PR; then re-probe
+- [x] 3.3 Decision point at T+20: on any failure merge the generated rollback PR; then re-probe
       and revert PR3 **only if** still `SERVING-FROM-CLOUDFLARE-PAGES`. Never debug forward.
-- [ ] 3.4 AC23: dispatch `deploy-docs.yml`; satisfied by the **per-leg table**, not the run
+- [x] 3.4 AC23: dispatch `deploy-docs.yml`; satisfied by the **per-leg table**, not the run
       conclusion — the GitHub Pages leg is red by construction until PR5.
-- [ ] 3.5 #7640 closes via `Closes #7640` in PR4b's body.
+- [x] 3.5 #7640 closes via `Closes #7640` in PR4b's body.
 
 ## Phase 4 — PR5: retire the GitHub Pages publish leg
 
-- [ ] 4.1 `deploy-docs.yml`: delete the three Pages actions, `environment: github-pages`, and
+- [x] 4.1 `deploy-docs.yml`: delete the three Pages actions, `environment: github-pages`, and
       `pages:`/`id-token: write`; remove the verdict step's GitHub-Pages arm. **Probe B
       survives.** Use the exit-safe guarded count form (AC33).
-- [ ] 4.2 `model.c4`: flip the two genuinely anticipatory phrasings only — *"until the #7640
+- [x] 4.2 `model.c4`: flip the two genuinely anticipatory phrasings only — *"until the #7640
       cutover"* and *"From the cutover…"*. **Leave the `cloudflare` element's "from
       #7640/ADR-194"**; it is a provenance citation, not tense (AC55).
-- [ ] 4.3 Runbook + deferred-cleanup issue: PR5 **narrows the rollback** to three acts (AC56).
+- [x] 4.3 Runbook + deferred-cleanup issue: PR5 **narrows the rollback** to three acts (AC56).
 - [ ] 4.4 `Ref #7640` in the body, not `Closes` (AC57).
 - [ ] 4.5 Merge only after CUT0′-CUT9 hold, same session as PR4b (AC34).
 - [ ] 4.6 Archive the plan with `archive-kb.sh` — **PR5 only** (AC58).
+
+
+## Completion record (2026-09-03)
+
+- **Phase 2 + Phase 3** shipped as **PR4b** (`99eeebfef`, #7793). `[ack-destroy]`
+  verified on its own line in the SQUASH body via `git log -1 --format=%B`; the
+  apply succeeded and the apex is a single proxied `CNAME` to
+  `soleur-docs.pages.dev` with zero `A` records. CUT0'-CUT9 held across three
+  consecutive clean samples (19:26:02Z / 19:27:10Z / 19:28:17Z), 10 passed / 0
+  failed / 0 unreachable each — 11 minutes inside the T+20 deadline. #7640 closed
+  at 19:17:30Z. The PF8' rollback PR (#7802) was generated within two minutes of
+  the merge and closed unused; regeneration is one command.
+- Two CUT anomalies, both diagnosed and neither the apex: CUT0' failed its first
+  sample on a **stale pin** (this PR was not `dns.tf`-only — the compound commit
+  matched `deploy-docs.yml`'s `plugins/soleur/skills/**` push filter, so the merge
+  published a newer docs build), and CUT8 read UNREACHABLE because
+  `soleur-ai-changelog-deep` runs at `interval_seconds = 600` and the first sample
+  ran 52 s before any post-`CUTOVER_SINCE` check could exist.
+- **Phase 4** is this PR. 4.4-4.6 are ticked as they land.
 
 ## Standing constraints
 
