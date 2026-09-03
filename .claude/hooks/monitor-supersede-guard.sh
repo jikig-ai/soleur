@@ -55,7 +55,9 @@ if [ -f "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" ]; then
   # shellcheck disable=SC1091
   . "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" || true
 fi
-emit() { command -v emit_incident >/dev/null 2>&1 && emit_incident "$@" || true; }
+emit() {
+  if command -v emit_incident >/dev/null 2>&1; then emit_incident "$@" || true; fi
+}
 
 INPUT="$(cat 2>/dev/null || true)"
 [ -n "$INPUT" ] || exit 0
@@ -79,7 +81,15 @@ fi
 
 CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) || exit 0
 WSURL=$(printf '%s' "$INPUT" | jq -r '.tool_input.ws.url // ""' 2>/dev/null) || true
-DESC=$(printf '%s' "$INPUT" | jq -r '.tool_input.description // ""' 2>/dev/null) || true
+# `tr -d '\n\t'` is a MESSAGE normaliser, not a safety fix, and the distinction is
+# load-bearing for anyone re-testing this line. The crash it looks like it prevents
+# is prevented by `head -1` at the READ site instead: this value reaches the ledger
+# through `jq -nc --arg d`, which escapes a newline to an in-string `\n` and emits a
+# valid single-line record either way. Measured — replacing this `tr` with `cat`
+# leaves the suite green (an equivalent mutant), while reverting the read-side
+# `head -1` reddens case 19. What it buys is the deny TEXT: without it a multi-line
+# description renders as its first line only, because `head -1` is what truncates.
+DESC=$(printf '%s' "$INPUT" | jq -r '.tool_input.description // ""' 2>/dev/null | tr -d '\n\t' | cut -c1-200) || true
 TIMEOUT_MS=$(printf '%s' "$INPUT" | jq -r '.tool_input.timeout_ms // 300000' 2>/dev/null) || TIMEOUT_MS=300000
 PERSISTENT=$(printf '%s' "$INPUT" | jq -r '.tool_input.persistent // false' 2>/dev/null) || PERSISTENT=false
 
@@ -128,7 +138,10 @@ fi
 # ---- is a prior arm on this signature still live? ---------------------------
 PRIOR=""
 if [ -r "$LEDGER" ]; then
-  PRIOR=$(jq -rs --arg s "$SESSION" --arg sig "$SIG" --argjson now "$NOW" --argjson frac "$LIVE_FRACTION" '
+  # `-R 'fromjson? // empty'` reads line-at-a-time and DROPS unparseable lines
+  # instead of failing the whole read. A torn or hand-edited line then costs one
+  # record, not the entire gate.
+  PRIOR=$(jq -R 'fromjson? // empty' "$LEDGER" 2>/dev/null | jq -s --arg s "$SESSION" --arg sig "$SIG" --argjson now "$NOW" --argjson frac "$LIVE_FRACTION" -r '
     ( [ .[] | select(.event == "stop" and .session == $s) | .ts ] | max // 0 ) as $laststop
     | [ .[]
         | select(.event == "arm" and .session == $s and .sig == $sig)
@@ -136,14 +149,16 @@ if [ -r "$LEDGER" ]; then
         | select(.ts > $laststop)
       ] | last // empty
     | "\(.ts)\t\(.desc)"
-  ' "$LEDGER" 2>/dev/null) || PRIOR=""
+  ') || PRIOR=""
 fi
 
 if [ -n "$PRIOR" ]; then
-  prior_ts=$(printf '%s' "$PRIOR" | cut -f1)
-  prior_desc=$(printf '%s' "$PRIOR" | cut -f2)
+  prior_ts=$(printf '%s' "$PRIOR" | head -1 | cut -f1)
+  prior_desc=$(printf '%s' "$PRIOR" | head -1 | cut -f2-)
+  # A non-numeric ts means the record is unusable; fail OPEN rather than abort.
+  case "$prior_ts" in ''|*[!0-9]*) exit 0 ;; esac
   age=$(( NOW - prior_ts ))
-  emit deny monitor-supersede "duplicate monitor on $SIG" 2>/dev/null || true
+  emit monitor-supersede deny "duplicate monitor on $SIG" 2>/dev/null || true
   jq -n --arg sig "$SIG" --arg d "$prior_desc" --arg age "$age" --arg new "$DESC" '
     {
       hookSpecificOutput: {

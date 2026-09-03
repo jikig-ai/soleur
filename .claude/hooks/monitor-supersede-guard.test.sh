@@ -17,6 +17,14 @@ verdict() { CASES=$((CASES + 1)); if [ "$1" = "0" ]; then pass "$2"; else fail "
 WORK="$(mktemp -d -t monsup-XXXXXX)" || exit 2
 trap 'rm -rf "$WORK"' EXIT
 
+# Point the incident logger at a throwaway repo root. Without this the suite
+# writes synthetic `deny` rows into the operator's real
+# .claude/.rule-incidents.jsonl on every run — measured at 4 rows per run — which
+# poisons rule-metrics-aggregate.sh's input. Same class commit dd8683701 forbids.
+mkdir -p "$WORK/fakeroot/.claude/hooks/lib"
+cp .claude/hooks/lib/incidents.sh "$WORK/fakeroot/.claude/hooks/lib/" 2>/dev/null || true
+export CLAUDE_PROJECT_DIR="$WORK/fakeroot"
+
 # Each case gets its own ledger so rows cannot leak into one another.
 fresh() { LEDGER="$WORK/ledger-$1.jsonl"; : > "$LEDGER"; export SOLEUR_MONITOR_LEDGER="$LEDGER"; }
 
@@ -157,8 +165,57 @@ out=$(run s1 '{"command":"gh pr checks 7753 --json state","description":"late re
 rc=1; denied "$out" || rc=0
 verdict "$rc" 'a re-arm LATE in the prior window is ALLOWED (the watcher has almost certainly finished)'
 
+# --- 16. A MALFORMED LEDGER LINE MUST NOT DISABLE THE GATE --------------------
+# `jq -rs` is all-or-nothing: one unparseable line failed the whole slurp, the
+# `|| PRIOR=""` swallowed it, and an empty PRIOR reads as "no prior arm" — so a
+# single torn record turned the gate off permanently and silently. Measured
+# before the fix: this case was ALLOWED.
+fresh 16
+run s1 "$CI" >/dev/null
+printf 'CORRUPT NOT JSON\n' >> "$LEDGER"
+out=$(run s1 "$CI2")
+rc=1; denied "$out" && rc=0
+verdict "$rc" 'a malformed ledger line does NOT disable the gate (unparseable lines are skipped, not fatal)'
+
+# --- 17. A NEWLINE IN description MUST NOT KILL THE DENY ----------------------
+# PRIOR became multi-line, `cut -f1` yielded two lines, and the arithmetic on a
+# newline-bearing string was fatal under `set -u` — the hook exited 0 having
+# printed nothing, so the tool proceeded. Measured before the fix:
+# `line 145: line2: unbound variable`, NOT denied.
+fresh 17
+run s1 '{"command":"gh pr checks 7753","description":"line1\nline2","timeout_ms":600000}' >/dev/null
+out=$(run s1 "$CI2")
+rc=1; denied "$out" && rc=0
+verdict "$rc" 'a newline in a prior description does NOT crash the deny path'
+
+# --- 18. TELEMETRY ARGUMENT ORDER --------------------------------------------
+# emit_incident takes <rule_id> <event_type> <prefix>. Transposed, every firing
+# landed as rule_id="deny" and was invisible to rule-metrics-aggregate.sh, which
+# keys its counters on rule_id. Pin the order against the sibling call site.
+fresh 18
+rc=1
+grep -qE "emit monitor-supersede deny " "$HOOK" && rc=0
+verdict "$rc" 'the emit_incident call passes <rule_id> then <event_type>, matching the helper signature'
+
+# --- 19. A LEDGER POISONED BY AN OLDER HOOK VERSION ---------------------------
+# Case 17 only reaches the WRITE-time sanitiser: with `tr -d '\n\t'` in place a
+# newline can no longer enter the ledger through this hook, so reverting the
+# READ-time guard leaves 17 green (measured — the mutation survived). The
+# read-time guard exists for a record written by a PRE-FIX hook or edited by
+# hand, which the suite cannot produce through the new code path. So inject one
+# directly. Without the guard this aborts under `set -u` before the deny.
+fresh 19
+now=$(date +%s)
+# `\\n` in the source: printf emits a literal backslash-n, i.e. VALID JSON whose
+# decoded .desc carries a real newline. A raw newline would be invalid JSON and
+# would exercise case 16 instead of the read-time guard this case exists for.
+printf '{"event":"arm","session":"s1","sig":"pr:7753","desc":"line1\\nline2","ts":%s,"window":600}\n' "$now" >> "$LEDGER"
+out=$(run s1 "$CI2")
+rc=1; denied "$out" && rc=0
+verdict "$rc" 'a ledger record containing a raw newline (written by an older hook) still denies, rather than aborting'
+
 printf '\n'
-EXPECTED_CASES=15
+EXPECTED_CASES=19
 if [ "$CASES" -ne "$EXPECTED_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected exactly %d\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
