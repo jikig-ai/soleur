@@ -138,6 +138,16 @@ EnvironmentFile=/etc/default/inngest-server
 # row H). The flag that would disable it is NOT written here, and this comment deliberately does
 # not spell that flag: a body-grep sees comments too, so naming it in prose would false-trip the
 # very assertion that checks it is absent (cq-assert-anchor-not-bare-token).
+#
+# BUT `PrivateTmp=true` ABOVE MAKES THAT CACHE PER-INVOCATION, and saying only "enabled" would
+# leave a reader believing it buys something it does not. The cache is written under
+# DOPPLER_CONFIG_DIR, which /etc/default/inngest-server points at the unit's own /tmp — and a
+# private /tmp is created fresh on every start, so nothing written on one 30-second fire is
+# visible to the next. Enabled, and empty at every start. The real resilience against a Doppler
+# read failure is the poll cadence itself: the unit fails that fire, emits its Warning, and the
+# timer retries in 30 seconds. Do NOT "fix" this by pointing DOPPLER_CONFIG_DIR at
+# StateDirectory= — that would persist an encrypted secret cache on disk to buy resilience the
+# retry already provides, inside the PR that exists to shrink this unit's secret exposure.
 # All flags sit AFTER `--config prd` so inngest.test.sh:1570-1571's contiguous-substring
 # assertion on `doppler run --config prd` still matches, and BEFORE the `--` so they are
 # doppler's flags rather than the script's arguments.
