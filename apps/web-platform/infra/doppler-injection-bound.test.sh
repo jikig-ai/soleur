@@ -143,10 +143,33 @@ import os, re, sys
 ROOT = os.path.abspath(sys.argv[1])
 
 # ── floors, all DERIVED FROM A GREEN RUN, never guessed ──────────────────────────────────────
-# Measured on the tree at 2026-09-03: service=16 sh-heredoc=6 tf-heredoc=4 cloud-init=7,
-# injected=1, doppler units=16, bound-required population=8. Set below the measurement so an
-# ordinary deletion does not red, but far enough above zero that a broken extractor does.
-# RAISE these in lockstep when the population grows; NEVER lower one to make a run pass.
+#
+# WHAT EACH FLOOR IS FOR. These do not guard correctness — they guard against a VACUOUS GREEN.
+# Every bound assertion in this suite quantifies over a set the scanner extracted; if an extractor
+# silently breaks (a changed heredoc shape, a lost `.tf` `\n`-unescape, a bad glob), that set goes
+# empty and every assertion over it passes trivially. The floors are what turn "found nothing" into
+# a failure instead of a pass. That is also why they are per-surface: one aggregate floor stays
+# satisfied while a single surface's extractor goes dark.
+#
+# DERIVATION — re-run the suite and read its own `CENSUS:` lines; each floor sits below the value
+# printed next to it. Measured on this tree 2026-09-03 (scanned -> floor):
+#
+#   service       16 -> 12      sh-heredoc     6 -> 4
+#   tf-heredoc     4 -> 3       cloud-init     7 -> 5
+#   sh-injected    1 -> 1       doppler units 17 -> 12
+#   bound-required population 8 -> 5
+#
+# The gap is deliberate slack: an ordinary deletion of one or two units must not red the suite,
+# while a broken extractor — which drops a whole surface at once — must. `sh-injected` has no
+# slack available because the population is 1; it is a floor of 1 precisely so that surface
+# disappearing is caught, and it will need raising rather than slack if a second one appears.
+#
+# The `doppler units` figure previously read 16 here, transcribed from the adjacent `service=16`
+# rather than measured; the suite's own CENSUS reports 17. Corrected 2026-09-03. Re-derive from
+# CENSUS rather than copying this block.
+#
+# RAISE these in lockstep when the population grows; NEVER lower one to make a run pass — a red
+# floor means an extractor stopped seeing a surface, and lowering it re-arms the vacuous green.
 MIN_UNITS_BY_SURFACE = {'service': 12, 'sh-heredoc': 4, 'tf-heredoc': 3, 'cloud-init': 5}
 MIN_INJECTED_DIRECTIVES = 1
 MIN_DOPPLER_UNITS = 12
