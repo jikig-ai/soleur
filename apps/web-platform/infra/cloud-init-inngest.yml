@@ -472,9 +472,12 @@ runcmd:
   # plaintext `mount … || true` up at the mkdir; it has been REMOVED, not duplicated —
   # grep this file for `scsi-0HC_Volume_` and there must be exactly one consumer, this one.
   #
-  # THE DISCRIMINATOR READS THE DEVICE, NOT TERRAFORM. `hcloud_volume.inngest_redis` still
-  # declares `format = "ext4"` (under `ignore_changes`, see inngest-host.tf), so the
-  # Terraform attribute is NOT a truthful statement about what is on the disk after a recut.
+  # THE DISCRIMINATOR READS THE DEVICE, NOT TERRAFORM, and that is load-bearing in BOTH
+  # directions. `hcloud_volume.inngest_redis` no longer declares `format` at all (dropped
+  # 2026-09-03, #7695, so the recut's replacement volume is born RAW — `ignore_changes`
+  # suppresses diffs, never creates), while the LIVE device is still ext4 from its 2026-07-07
+  # creation. So the Terraform attribute and the disk disagree today and would have disagreed
+  # the other way before the drop: it was never a truthful statement about what is on the disk.
   # blkid is. Five arms, and every non-handled state is FATAL rather than a fallthrough:
   #
   #   device absent after a bounded wait  -> FATAL (never format a path that is not a device)
