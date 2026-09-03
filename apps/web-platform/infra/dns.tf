@@ -355,24 +355,12 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 #
 # The right time to remove this is when the rollback window formally closes,
 # together with the ssl rule, as one deliberate change — not as tidy-up.
-moved {
-  from = cloudflare_record.github_pages["185.199.108.153"]
-  to   = cloudflare_record.pages_apex
-}
 
-resource "cloudflare_record" "pages_apex" {
-  zone_id = var.cf_zone_id
-  name    = "soleur.ai" # never "@" -- see AC43; the two are not interchangeable on read-back
-  content = cloudflare_pages_project.docs.subdomain
-  type    = "CNAME"
-  proxied = true
-  ttl     = 1
-}
 
 resource "cloudflare_record" "www" {
   zone_id = var.cf_zone_id
   name    = "www"
-  content = cloudflare_pages_project.docs.subdomain
+  content = "jikig-ai.github.io"
   type    = "CNAME"
   proxied = true
   ttl     = 1
@@ -411,4 +399,28 @@ resource "cloudflare_record" "buttondown_ns2" {
 # Verify: dig soleur.ai DS @8.8.8.8 +short
 resource "cloudflare_zone_dnssec" "soleur_ai" {
   zone_id = var.cf_zone_id
+}
+resource "cloudflare_record" "github_pages" {
+  # Restored by generate-apex-rollback-pr.sh. NO `for_each`: the rollback target
+  # is a single address, so the reverse `moved` below is a single-address move
+  # and the A<-CNAME change is one replace that Terraform core serialises —
+  # the same property the forward cutover relied on.
+  zone_id = var.cf_zone_id
+  name    = "soleur.ai"
+  content = "185.199.108.153"
+  type    = "A"
+  proxied = true
+  ttl     = 1
+}
+
+# --- ADR-194 apex rollback (reverse moved) ---
+# Emitted by generate-apex-rollback-pr.sh.
+#
+# It returns the apex to its pre-cutover address so the CNAME->A change is a
+# single-address replace that Terraform core serialises. Without it the rollback
+# is two unrelated addresses dispatched concurrently, which is Cloudflare 81053
+# in the reverse direction — the measured reason 'git revert' is forbidden here.
+moved {
+  from = cloudflare_record.pages_apex
+  to   = cloudflare_record.github_pages
 }
