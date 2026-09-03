@@ -80,8 +80,7 @@
     "doppler.secrets",
     "betterstack.logs",
     "r2.terraform_state_backend",
-    "redis.session_store",
-    "git_data.baked_credentials_on_host"
+    "redis.session_store"
   ],
   "stores": [
     {
@@ -99,31 +98,17 @@
       }
     },
     {
-      "store": "cloudflare_pages_project.docs",
-      "kind": "provider-bucket",
-      "at_rest": {
-        "mechanism": "provider-managed:Cloudflare-Pages-SOC2-Type-II",
-        "evidence": "Cloudflare Pages stores deployment assets on Cloudflare-managed infrastructure encrypted at rest; Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) per the Cloudflare Trust Hub - the report is NDA-gated, the attestation's existence and scope are public. Holds the PUBLIC marketing/docs site build output for soleur.ai only (Eleventy _site): no personal data, no credentials, no customer content. Every byte it holds is already served publicly by design, so at-rest encryption is not the control that matters here - integrity of the deploy path is (ADR-194, #7640).",
-        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
-        "retrieved_on": "2026-08-20",
-        "defends_against": "Cloudflare-managed at-rest encryption of stored deployment assets against physical-media compromise in Cloudflare's infrastructure",
-        "does_not_defend": "a leaked Pages:Edit API token, which can REPLACE the deployed site wholesale; this store's real risk is integrity and supply-chain, not confidentiality - see the cf_api_token_pages scope ledger in apps/web-platform/infra/variables.tf",
-        "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated - public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
-      }
-    },
-    {
       "store": "cloudflare_r2_bucket.cla_evidence",
       "kind": "provider-bucket",
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub \u2014 the report is available under NDA, the attestation's existence and scope are public; holds CLA (Contributor License Agreement) signing evidence records.",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds CLA (Contributor License Agreement) signing evidence records.",
         "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "Cloudflare-managed at-rest encryption of stored objects against physical-media compromise in Cloudflare's infrastructure",
         "does_not_defend": "a leaked R2 API token, an application-layer read, or any access via the credentials that legitimately reach the bucket; a provider-managed key is not a customer-held key",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated \u2014 public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
@@ -131,13 +116,13 @@
       "kind": "provider-bucket",
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub \u2014 the report is available under NDA, the attestation's existence and scope are public; holds LUKS-header escrow, itself useless without the separately-held passphrase",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; holds LUKS-header escrow, itself useless without the separately-held passphrase",
         "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "physical-media compromise of the escrowed LUKS headers in Cloudflare's infrastructure",
         "does_not_defend": "a leaked R2 token; note a LUKS header alone cannot decrypt a volume without the passphrase held in a separate Doppler config",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated \u2014 public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
@@ -152,26 +137,6 @@
         "does_not_defend": "a leaked Doppler service token or a compromised host with a live token; the LUKS passphrases themselves live here, so a Doppler compromise is a key-custody compromise",
         "disclosed_as": "not-publicly-claimed",
         "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
-      }
-    },
-    {
-      "store": "git_data.baked_credentials_on_host",
-      "kind": "secret-store",
-      "at_rest": {
-        "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml write_files: /etc/default/git-data-betterstack and /etc/default/git-data-doppler at 0600 root:root; sentry_dsn remains baked inside /usr/local/bin/git-data-emit at 0755 root:root",
-        "attestation_url": "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architecture/decisions/ADR-198-baking-the-better-stack-ingest-token-into-git-data-user-data.md",
-        "retrieved_on": "2026-09-03",
-        "defends_against": "a file-read-only primitive held by the non-root `git` account (a path traversal in the transport wrapper, say), for the two 0600 files",
-        "does_not_defend": "CODE EXECUTION as any account: hcloud_firewall.git_data declares zero rules, which under Hetzner semantics is inbound-denied and egress fully open, so the whole user_data is readable from the metadata endpoint. Also does not defend the 0755 sentry_dsn copy, which the `git` account can read today. Rotation of the baked ingest token requires a host replace (user_data is ForceNew, ADR-149/ADR-152). Tracked: #7772",
-        "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:the git-data host has never been born; no soleur-git-data server exists to probe",
-        "exception": {
-          "justification": "credentials baked into user_data are plaintext by construction \u2014 user_data is retrievable from the Hetzner metadata endpoint, so no on-host file mode can make them encrypted-at-rest. The two 0600 files bound a file-read-only primitive; the 0755 sentry_dsn copy predates #7460 and is bounded by nothing. Accepted on the ADR-198 capability test: every credential here has a write-only ingest ceiling. GIT_DATA_LUKS_KEY fails that test and is deliberately NOT baked.",
-          "tracking_issue": "#7772",
-          "reevaluate_when": "BEFORE the git-data host is born \u2014 user_data is ForceNew (ADR-149/ADR-152), so the per-source ingest token and the metadata-endpoint egress rule are free to land today and cost a destructive host replace afterwards",
-          "expires_on": "2026-10-22"
-        }
       }
     },
     {
@@ -264,15 +229,15 @@
       },
       "at_rest": {
         "mechanism": "plaintext-exception",
-        "evidence": "apps/web-platform/infra/rung2-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal\" (format = \"ext4\", no LUKS apparatus) \u2014 a deliberate byte-for-byte mirror of hcloud_volume.git_data's declaration",
+        "evidence": "apps/web-platform/infra/rung2-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal\" (format = \"ext4\", no LUKS apparatus) — a deliberate byte-for-byte mirror of hcloud_volume.git_data's declaration",
         "defends_against": "nothing at the volume layer",
-        "does_not_defend": "at-rest recovery of the detached device \u2014 which is acceptable here only because the volume is created empty and destroyed empty",
+        "does_not_defend": "at-rest recovery of the detached device — which is acceptable here only because the volume is created empty and destroyed empty",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:n/a by construction \u2014 NO user data ever reaches a rehearsal host. The volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown, with a post-teardown Hetzner API assertion that no rehearsal-prefixed server survives (#7025).",
+        "live_verification": "unavailable:n/a by construction — NO user data ever reaches a rehearsal host. The volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown, with a post-teardown Hetzner API assertion that no rehearsal-prefixed server survives (#7025).",
         "exception": {
-          "justification": "It mirrors the PROD plaintext store BY DESIGN. Making the rehearsal volume LUKS while hcloud_volume.git_data is plaintext would rehearse a boot that does not exist \u2014 the rung-2 rehearsal's entire value is that it boots what production would boot, so its dual-volume shape has to match production's, including the part that is currently unencrypted.",
+          "justification": "It mirrors the PROD plaintext store BY DESIGN. Making the rehearsal volume LUKS while hcloud_volume.git_data is plaintext would rehearse a boot that does not exist — the rung-2 rehearsal's entire value is that it boots what production would boot, so its dual-volume shape has to match production's, including the part that is currently unencrypted.",
           "tracking_issue": "#6897",
-          "reevaluate_when": "hcloud_volume.git_data becomes the LUKS volume (the GIT_DATA_STORE_ENABLED cutover) \u2014 at which point this mirror must move with it, or the rehearsal stops rehearsing production",
+          "reevaluate_when": "hcloud_volume.git_data becomes the LUKS volume (the GIT_DATA_STORE_ENABLED cutover) — at which point this mirror must move with it, or the rehearsal stops rehearsing production",
           "expires_on": "2026-12-31"
         }
       }
@@ -291,7 +256,7 @@
         "defends_against": "a seized/RMA'd or snapshot-imaged rehearsal block volume between creation and teardown: unreadable without the throwaway Doppler-held passphrase",
         "does_not_defend": "anything readable while the rehearsal host is up and the mapper is open; and the passphrase in the rehearsal root's terraform.tfstate (distinct R2 key, so it is not prod material)",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:no rehearsal has been dispatched yet \u2014 #7025 ships the ROUTE unfired. The rehearsal IS the live verification when it runs: scripts/followthroughs/git-data-rung2-evidence-capture.sh requires stage:boot_complete with luks_mounted=yes before writing evidence, and writes nothing otherwise. Recorded as unavailable rather than available because a capability that has never executed is not an observation."
+        "live_verification": "unavailable:no rehearsal has been dispatched yet — #7025 ships the ROUTE unfired. The rehearsal IS the live verification when it runs: scripts/followthroughs/git-data-rung2-evidence-capture.sh requires stage:boot_complete with luks_mounted=yes before writing evidence, and writes nothing otherwise. Recorded as unavailable rather than available because a capability that has never executed is not an observation."
       }
     },
     {
@@ -339,13 +304,13 @@
       "kind": "provider-bucket",
       "at_rest": {
         "mechanism": "provider-managed:Cloudflare-R2-SOC2-Type-II",
-        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub \u2014 the report is available under NDA, the attestation's existence and scope are public; the R2-backed Terraform state bucket (soleur-terraform-state, main.tf:2-6) \u2014 in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 previously asserted 'encrypted' with no attestation, now substantiated",
+        "evidence": "Cloudflare R2 stores objects encrypted at rest with AES-256-GCM (developers.cloudflare.com/r2/reference/data-security/); Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) with R2 in scope per the Cloudflare Trust Hub — the report is available under NDA, the attestation's existence and scope are public; the R2-backed Terraform state bucket (soleur-terraform-state, main.tf:2-6) — in-repo comments in doppler-write-token.tf:23 / ghcr-minter-doppler-token.tf:36 previously asserted 'encrypted' with no attestation, now substantiated",
         "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
         "retrieved_on": "2026-07-24",
         "defends_against": "physical-media compromise of the Terraform state store",
         "does_not_defend": "a leaked R2 token; Terraform state contains resource metadata and any non-sensitive-marked values",
         "disclosed_as": "not-publicly-claimed",
-        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated \u2014 public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated — public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
       }
     },
     {
@@ -392,6 +357,40 @@
         "does_not_defend": "a leaked service-role key, an RLS bypass, or any query via a legitimate connection; the encryption key is provider-managed",
         "disclosed_as": "not-publicly-claimed",
         "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
+      }
+    },
+    {
+      "store": "cloudflare_pages_project.docs",
+      "kind": "provider-bucket",
+      "at_rest": {
+        "mechanism": "provider-managed:Cloudflare-Pages-SOC2-Type-II",
+        "evidence": "Cloudflare Pages stores deployment assets on Cloudflare-managed infrastructure encrypted at rest; Cloudflare holds an AICPA SOC 2 Type II attestation (Security/Confidentiality/Availability) per the Cloudflare Trust Hub - the report is NDA-gated, the attestation's existence and scope are public. Holds the PUBLIC marketing/docs site build output for soleur.ai only (Eleventy _site): no personal data, no credentials, no customer content. Every byte it holds is already served publicly by design, so at-rest encryption is not the control that matters here - integrity of the deploy path is (ADR-194, #7640).",
+        "attestation_url": "https://www.cloudflare.com/trust-hub/compliance-resources/soc-2/",
+        "retrieved_on": "2026-08-20",
+        "defends_against": "Cloudflare-managed at-rest encryption of stored deployment assets against physical-media compromise in Cloudflare's infrastructure",
+        "does_not_defend": "a leaked Pages:Edit API token, which can REPLACE the deployed site wholesale; this store's real risk is integrity and supply-chain, not confidentiality - see the cf_api_token_pages scope ledger in apps/web-platform/infra/variables.tf",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:provider-managed at-rest; SOC 2 Type II report is NDA-gated - public attestation cited via mechanism/attestation_url; no customer-side live probe of Cloudflare disk encryption"
+      }
+    },
+    {
+      "store": "git_data.baked_credentials_on_host",
+      "kind": "secret-store",
+      "at_rest": {
+        "mechanism": "plaintext-exception",
+        "evidence": "apps/web-platform/infra/cloud-init-git-data.yml write_files: /etc/default/git-data-betterstack and /etc/default/git-data-doppler at 0600 root:root; sentry_dsn remains baked inside /usr/local/bin/git-data-emit at 0755 root:root",
+        "attestation_url": "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/architecture/decisions/ADR-198-baking-the-better-stack-ingest-token-into-git-data-user-data.md",
+        "retrieved_on": "2026-09-03",
+        "defends_against": "a file-read-only primitive held by the non-root `git` account (a path traversal in the transport wrapper, say), for the two 0600 files. Also closes the /proc/<pid>/cmdline channel for both credentials: every POST passes its header via `curl -K -` on stdin, and both redactors read their sed script from a 0600 file rather than an -e operand, so no external process carries a secret in argv (cmdline is mode 444; environ is 400).",
+        "does_not_defend": "CODE EXECUTION as any account: hcloud_firewall.git_data declares zero rules, which under Hetzner semantics is inbound-denied and egress fully open, so the whole user_data is readable from the metadata endpoint. Also does not defend the 0755 sentry_dsn copy, which the `git` account can read today. Rotation of the baked ingest token requires a host replace (user_data is ForceNew, ADR-149/ADR-152). Tracked: #7772",
+        "disclosed_as": "not-publicly-claimed",
+        "live_verification": "unavailable:the git-data host has never been born; no soleur-git-data server exists to probe",
+        "exception": {
+          "justification": "credentials baked into user_data are plaintext by construction - user_data is retrievable from the Hetzner metadata endpoint, so no on-host file mode can make them encrypted-at-rest. The two 0600 files bound a file-read-only primitive; the 0755 sentry_dsn copy predates #7460 and is bounded by nothing. Accepted on the ADR-198 capability test: every credential here has a write-only ingest ceiling. GIT_DATA_LUKS_KEY fails that test and is deliberately NOT baked.",
+          "tracking_issue": "#7772",
+          "reevaluate_when": "BEFORE the git-data host is born - user_data is ForceNew (ADR-149/ADR-152), so the per-source ingest token and the metadata-endpoint egress rule are free to land today and cost a destructive host replace afterwards",
+          "expires_on": "2026-10-22"
+        }
       }
     }
   ],

@@ -156,10 +156,25 @@ write_files:
       # this 0755 script: doing that would place an ingest token at a LOOSER mode than the
       # doppler_token it claims equivalence with, readable by the `git` account that serves
       # every user's push. ADR-198 carries the full argument.
+      # PARSED, NEVER SOURCED. /bin/sh is dash, where `.` is a POSIX SPECIAL builtin: a parse
+      # failure terminates the shell outright, so a malformed value would make the one component
+      # whose job is reporting failures silent on its most likely failure. That is the A2 class
+      # (git-data-gc.service:31 states the rule; git-data-luks.test.sh A2 records the incident).
+      # The value is template-interpolated and NOT shell-quoted, so sourcing would also EXECUTE
+      # a token containing `;` or a backtick, as root, on every emit -- measured, not theorised.
+      # `sed -n s///p` can do neither.
+      #
+      # BS_ENV_FILE is overridable ONLY so the suite can drive the baked path; production has
+      # exactly one value and no caller sets the override.
+      BS_ENV_FILE="$${GIT_DATA_BS_ENV_FILE:-/etc/default/git-data-betterstack}"
       BS_TOKEN_SOURCE=env
-      if [ -z "$${BETTERSTACK_LOGS_TOKEN:-}" ] && [ -r /etc/default/git-data-betterstack ]; then
-        . /etc/default/git-data-betterstack
-        BS_TOKEN_SOURCE=baked
+      if [ -z "$${BETTERSTACK_LOGS_TOKEN:-}" ] && [ -r "$${BS_ENV_FILE}" ]; then
+        BETTERSTACK_LOGS_TOKEN=$(sed -n 's/^BETTERSTACK_LOGS_TOKEN=\(.*\)$/\1/p' "$${BS_ENV_FILE}" 2>/dev/null)
+        # `baked` ONLY on a non-empty load. Setting it on the branch alone reported
+        # token_source=baked for an empty or malformed file -- precisely the state where the
+        # channel is dark AND the 5.3 mirror (nested in the -n guard below) cannot fire, so the
+        # tag asserted coverage exactly when there was none. Measured against a `ab cd` value.
+        [ -n "$${BETTERSTACK_LOGS_TOKEN}" ] && BS_TOKEN_SOURCE=baked
       fi
 
       # Sanitiser + redactor on EVERY value, EVERY path. The UUID rule is critical: repos
@@ -203,10 +218,32 @@ write_files:
       # and reverted: passing the passphrase as a positional made the expansion a THIRD shape,
       # which A28b correctly refused. Widening that allowlist to fit a refactor would trade a
       # closed audit for a convenience — the guard is right and the refactor was wrong.
+      # THE SED SCRIPT GOES IN A 0600 FILE, NEVER ON ARGV. `sed` is /usr/bin/sed -- an EXTERNAL
+      # binary -- so `sed -e "s/$SAFE/.../"` publishes the secret in /proc/<pid>/cmdline for the
+      # life of the process. Measured on this host: cmdline is mode 444 (world-readable) while
+      # environ is 400. The first draft closed the argv hole for the two POSTs and opened this
+      # one in the redactor, which runs ~20 times per emit -- far more often than either POST.
+      #
+      # The LUKS passphrase is the sharper case. It is NOT in user_data and NOT retrievable from
+      # the metadata endpoint, so ADR-198's "0600 does not defend against code execution" escape
+      # hatch does not cover it: a pure FILE-READ primitive -- exactly what 0600 is claimed to
+      # stop -- reads it out of /proc during any post-Doppler emit, including the daily GC timer.
+      #
+      # A28b is UNCHANGED and still pins two shapes: the secret's only expansions remain
+      # `[ -n "$X" ]` and `printf '%s' "$X"`. What moves is the ESCAPED COPY, and it moves via
+      # printf, a dash builtin -- no external process, no argv. sed -f is POSIX.
+      # mktemp, not a fixed path: it creates at 0600 ATOMICALLY, picks an unpredictable name
+      # (so there is no symlink-preload window), and honours TMPDIR -- so the same line works
+      # as root on the host and unprivileged in the suites. A fixed /run path did neither: /run
+      # is root-only, so the suites silently got no script file and sed -f emitted NOTHING,
+      # which the emit suite caught as 27 empty values.
       _devalue_luks() {
         if [ -n "$${GIT_DATA_LUKS_KEY:-}" ]; then
           SAFE=$(printf '%s' "$${GIT_DATA_LUKS_KEY}" | LC_ALL=C sed -e 's/[]\/$*.^[]/\\&/g')
-          LC_ALL=C sed -e "s/$${SAFE}/LUKS_KEY_REDACTED/g"
+          _dvl=$(mktemp) || { cat; return; }
+          printf 's/%s/LUKS_KEY_REDACTED/g\n' "$${SAFE}" > "$${_dvl}"
+          LC_ALL=C sed -f "$${_dvl}"
+          rm -f "$${_dvl}"
         else
           cat
         fi
@@ -214,7 +251,10 @@ write_files:
       _devalue_bs() {
         if [ -n "$${BETTERSTACK_LOGS_TOKEN:-}" ]; then
           BSAFE=$(printf '%s' "$${BETTERSTACK_LOGS_TOKEN}" | LC_ALL=C sed -e 's/[]\/$*.^[]/\\&/g')
-          LC_ALL=C sed -e "s/$${BSAFE}/BETTERSTACK_TOKEN_REDACTED/g"
+          _dvb=$(mktemp) || { cat; return; }
+          printf 's/%s/BETTERSTACK_TOKEN_REDACTED/g\n' "$${BSAFE}" > "$${_dvb}"
+          LC_ALL=C sed -f "$${_dvb}"
+          rm -f "$${_dvb}"
         else
           cat
         fi
@@ -269,43 +309,57 @@ write_files:
       # construction (it fires before write_files, so this script does not exist yet).
       # $${TAGS} rides here too: THREE consumers read the four boot_complete booleans from
       # BETTER STACK, not Sentry.
+      # --- (#7460 5.3) THE SILENT-FALLBACK MIRROR ------------------------------------------
+      # cq-silent-fallback-must-mirror-to-sentry. Defined BEFORE the POST and called from BOTH
+      # the failure arm AND the no-token arm. Nesting it inside the -n guard (the first draft)
+      # meant an empty or malformed baked file skipped the POST *and* the mirror -- so the ONE
+      # state where the channel is completely dark emitted nothing at all. Measured, not feared.
+      #
+      # Mirrored to SENTRY: that channel is unconditional from the baked DSN and does not depend
+      # on the sink that just failed. Level `warning`, never `fatal` -- the exit contract is
+      # 0 delivered / 1 transient / 2 STRUCTURAL and only 2 refuses a boot. RC IS NOT TOUCHED
+      # here; a second-sink failure must never promote into a boot failure.
+      #
+      # KEY/SHOST/PROJ are derived in the `[ -n "$DSN" ]` block above and dash has no block
+      # scoping, so they are live here. The guard below makes that dependency explicit rather
+      # than leaving it to the reader to notice.
+      #
+      # Carries the token SOURCE and curl's rc, never the token. The message states only what
+      # was measured -- a POST that did not succeed. It deliberately does NOT say the token was
+      # rejected: curl is non-zero for DNS failure, connection refused, timeout, TLS error and
+      # 5xx as well as 401/403, and naming a credential fault would send the operator to rotate
+      # a healthy token at the cost of a DESTRUCTIVE HOST REPLACE (user_data is ForceNew --
+      # ADR-149/ADR-152). Not a rename: ADR-147 freezes SHIPPED literals and this stage has
+      # never reached a sink.
+      _bs_mirror() {
+        [ -n "$${DSN}" ] || return 0
+        MBODY=$(printf '{"message":"git-data Better Stack ingest unavailable","level":"warning","tags":{"stage":"betterstack_ingest","host_name":"%s","token_source":"%s","emit_stage":"%s","reason":"%s","curl_rc":"%s"}}' \
+          '${host_name}' "$${BS_TOKEN_SOURCE}" "$${STAGE}" "$1" "$2")
+        printf 'header = "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=%s"\n' "$${KEY}" \
+          | curl --connect-timeout 5 -m 10 -sf -X POST "https://$${SHOST}/api/$${PROJ}/store/" \
+              -K - \
+              -H 'Content-Type: application/json' \
+              -d "$${MBODY}" >/dev/null 2>&1 || true
+      }
+
       if [ -n "$${BETTERSTACK_LOGS_TOKEN:-}" ]; then
         # -K - PUTS THE CREDENTIAL ON STDIN, NEVER ARGV. /proc/<pid>/cmdline is world-readable
         # on stock Ubuntu 24.04 and there is no hidepid anywhere in this template, so a
         # `-H "Authorization: Bearer ..."` is readable by ANY local account that polls during
         # an emit -- which the 0600 file mode does nothing to prevent.
-        if printf 'header = "Authorization: Bearer %s"\n' "$${BETTERSTACK_LOGS_TOKEN}" \
+        printf 'header = "Authorization: Bearer %s"\n' "$${BETTERSTACK_LOGS_TOKEN}" \
              | curl --connect-timeout 5 -m 10 -sf -X POST '${betterstack_ingest_url}' \
                  -K - \
                  -H 'Content-Type: application/json' \
                  --data-raw "{\"message\":\"$${MSG}\",\"stage\":\"$${STAGE}\",\"level\":\"$${LEVEL}\",\"host_name\":\"${host_name}\",\"detail\":\"$${DETAIL}\"$${TAGS}}" \
-                 >/dev/null 2>&1; then
-          :
-        else
-          # --- (#7460 5.3) THE SILENT-FALLBACK MIRROR ------------------------------------
-          # cq-silent-fallback-must-mirror-to-sentry. The failure this exists to surface:
-          # after a Better-Stack-side rotation the pre-Doppler stages keep shipping on the
-          # STALE BAKED token and go dark -- silently darkening exactly the stages #7460
-          # widened coverage to. The old `|| true` swallowed that completely.
-          #
-          # Mirrored to SENTRY because that channel is unconditional from the baked DSN and
-          # does not depend on the sink that just failed. Level `warning`, never `fatal`: the
-          # emitter's exit contract is 0 delivered / 1 transient / 2 STRUCTURAL, and only 2
-          # refuses a boot. RC IS DELIBERATELY NOT TOUCHED HERE -- a second-sink failure must
-          # never promote into a boot failure.
-          #
-          # Carries the token SOURCE, never the token. Message literals are frozen by ADR-147;
-          # this is a NEW emit with a new stage tag, not a rename of an existing one.
-          if [ "$${BS_TOKEN_SOURCE}" = "baked" ] && [ -n "$${DSN}" ]; then
-            MBODY=$(printf '{"message":"git-data Better Stack ingest rejected the baked token","level":"warning","tags":{"stage":"betterstack_ingest","host_name":"%s","token_source":"%s","emit_stage":"%s"}}' \
-              '${host_name}' "$${BS_TOKEN_SOURCE}" "$${STAGE}")
-            printf 'header = "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=%s"\n' "$${KEY}" \
-              | curl --connect-timeout 5 -m 10 -sf -X POST "https://$${SHOST}/api/$${PROJ}/store/" \
-                  -K - \
-                  -H 'Content-Type: application/json' \
-                  -d "$${MBODY}" >/dev/null 2>&1 || true
-          fi
-        fi
+                 >/dev/null 2>&1
+        _bs_rc=$?
+        [ "$${_bs_rc}" -eq 0 ] || _bs_mirror post_failed "$${_bs_rc}"
+      else
+        # No token loaded at all -- eight of the nine stages are dark for this boot and the POST
+        # above never ran. This is the state the mirror most needs to report, and the state the
+        # `baked`-gated first draft was structurally unable to report.
+        _bs_mirror no_token none
       fi
 
       exit $${RC}
