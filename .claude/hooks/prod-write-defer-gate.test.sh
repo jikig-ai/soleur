@@ -8,6 +8,12 @@
 # redirects the .rule-incidents.jsonl off the operator's real sink.
 
 set -uo pipefail
+
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
 # -e omitted: tests must report FAIL when the hook misbehaves, not abort the
 # whole run. Final exit code is driven by $FAIL.
 
