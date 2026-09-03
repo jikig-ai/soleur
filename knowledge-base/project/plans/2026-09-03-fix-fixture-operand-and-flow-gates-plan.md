@@ -80,6 +80,13 @@ would have checked was verified by at least two other readers.
   rule id, and it is not the deferral rule.
 - 23 of the 32 burn-down holders cannot reach `assert_fixture_dir`, so the behaviour-changing remedies
   are the default rather than the fallback — the inverse of the plan's first draft.
+- The P1b residue was measured rather than deferred, and it splits the rule: `mv` and `cp -r` yield 3
+  and 0 real sites, while `rm -rf` and redirection yield 941 and 1759 — overwhelmingly false positives,
+  because a `$(mktemp -d)` binding is structurally safe but nothing recognizes it as self-guarding.
+  Those two families need a machinery prerequisite before a baseline over them would mean anything.
+- `_guard_res` matches only the literal keywords `exit` and `return`, so roughly 140 custom-helper
+  failure idioms across the holders read as unguarded. Some of the 167 may need guard recognition
+  rather than a new assertion.
 
 ## Research Insights
 
@@ -348,6 +355,21 @@ Any site that genuinely cannot take an assertion — for instance a test whose s
 so a guard would defeat the test — gets an explicit acknowledged entry recording the file, the reason,
 and the re-evaluation trigger. It never gets a silent count adjustment.
 
+**Phase 1.1a — Some of the 167 may already be guarded by something the scanner cannot see.**
+`_guard_res` recognizes a failure guard only as the literal keywords `exit` or `return` — its pattern
+is `.*\|\|\s*(?:exit|return)`. A site guarded by a project-specific failure helper, the
+`… || _setup_fail "message"` idiom, does not match, so the scanner reports it as unguarded when a
+reader would call it guarded. The holders carry roughly 140 such idioms between them.
+
+Check this before remediating, because it changes the right answer: a site already guarded by a custom
+helper does not need a second assertion, and bolting one on adds redundant code while leaving the
+detector just as blind for the next such site. Where the idiom is the real guard, the honest remedy is
+to extend the guard recognition, which retires several sites at once and is a smaller diff than
+editing them individually. Where it is not, remediate normally.
+
+Do this early: it may materially reduce the 167 before a single site is edited, and it is the kind of
+saving that is invisible once the sweep is underway.
+
 **Phase 1.2ᐧ0 — Availability decides the remedy far more often than binding form does.**
 Measured across the 32 holders: **4** carry an inline copy of `assert_fixture_dir`, **5** source or
 already reference it, and **23 cannot reach it at all**. So the guidance to prefer the additive remedy
@@ -404,20 +426,68 @@ exercise cannot see.
 
 ### PR 2 — add the P1b detector (#7708)
 
-**Phase 2.1 — Prototype and measure before committing to a shape.**
-Write the rule function, run it over the corpus, and record its live site and file counts. That number
-is not known today and it decides the rest of this pull request.
+**Phase 2.1 — The residue was measured at plan time, and it splits the rule in two.**
+This phase originally said "prototype, measure, then decide". The measurement was then performed
+during deepening — a throwaway prototype reusing `_binding_of`, `_guard_res` and `heredoc_lines`
+verbatim, applied to each family — so the decision is made here rather than deferred into
+implementation.
 
-**The threshold is the repo's existing one, not a fresh judgement.** `net-issue-flow.sh` already states
-the canonical fix-inline-versus-file rule in its own remedy text — the cost-of-filing auto-flip at
-**100 lines and 4 files**. That is the same decision in the same repo, so it governs here: a residue
-that fits inside it is burned down in this pull request, and anything larger ships as a grandfathering
+| Family | Raw | No local binding | Guarded | **Survives** | Files |
+|---|---|---|---|---|---|
+| `mv a "$X"` | 41 | 28 | 10 | **3** | 3 |
+| `cp -r a "$X"` | 19 | 19 | 0 | **0** | 0 |
+| `rm -rf "$X"` | 1093 | 95 | 57 | **941** | 316 |
+| `> "$X/…"` and `>>` | 2321 | 461 | 101 | **1759** | 244 |
+
+For reference, the same three filters cut P1a from 838 raw to 167: verb-scoping to 535, local-binding
+to 305, guard correlation to 167. Each does comparable work.
+
+**The loud-failure family is tractable; the widening and root-anchored families are not — yet.** The
+reason is specific and fixable rather than fundamental. Of the 941 surviving `rm -rf` sites, 939 are
+command-substitution bindings and 650 are literally `X=$(mktemp -d …)`; of the 1759 redirection sites,
+1586 are command substitutions and 1130 are `mktemp -d`. A further 206 and 186 respectively resolve to
+a same-file wrapper function that itself calls `mktemp -d`, and the unresolved tail is dominated by
+helper names that almost certainly live in a sourced file the prototype could not follow.
+
+`mktemp -d` always prints an absolute, non-empty path, so a variable bound that way is structurally
+immune to both the widening and the root-anchoring risk — but `_guard_res` has no notion of a
+self-guarding binding, so every reuse of that variable re-fires as a separate unguarded site. The
+overwhelming majority of those 2,700 sites are therefore false positives by construction. Shipping
+them as a baseline would produce a rule nobody can keep green, or one pre-neutered by an exemption
+list that swallows its own coverage — which is the failure this scanner's own docstring warns about.
+
+So PR 2 ships in two parts, in this order:
+
+1. **Teach the machinery what a self-guarding binding is.** Recognize `X=$(mktemp -d …)` — directly,
+   through a same-file wrapper, and through a wrapper defined in a sourced helper — as satisfying the
+   guard requirement. This is a prerequisite, not a refinement.
+2. **Then add the P1b rule over all families.** Re-measure after step 1; the residue that remains is
+   the real one, and the Phase 2.2 threshold applies to it.
+
+If step 1 proves larger than it looks, ship the loud-failure family alone — 3 sites, hand-reviewable —
+and file the widening and root-anchored families with these measured numbers attached. That filing is
+honest scope discovery, not a deferral of what #7708 asked for.
+
+**Phase 2.2 — The threshold, once the residue is real.**
+`net-issue-flow.sh` states the canonical fix-inline-versus-file rule in its own remedy text — the
+cost-of-filing auto-flip at **100 lines and 4 files**. That is the same decision in the same repo, so
+it governs: a residue inside it is burned down here, anything larger ships as a grandfathering
 baseline with the burn-down filed. Naming a number matters more than which number it is — "small
-enough" is a phrase that accommodates whatever was measured, and it would reintroduce exactly the
-bundling this three-way split exists to prevent. The planning-time estimate says the grandfathering
-branch is far more likely, but the scanner's output decides it, not the estimate.
+enough" accommodates whatever was measured.
 
-**Phase 2.2 — Add the rule.**
+**Phase 2.2a — A machinery gap that P1b must not inherit.**
+`_bind_res` treats a derived binding like `R2F="$TMP/r2floor"` as a literal and stops the search,
+dropping the site. That is *correct* for P1a, whose claim is about an **empty** operand — a literal
+suffix guarantees the result is never `""`. It is *wrong* for P1b, whose claim is about a **relative**
+one: if `$TMP` is relative then so is `$TMP/r2floor`, and nothing traces that inheritance. This is
+exactly why `cp -r` measured 0 of 19 — every destination in the corpus is built this way.
+
+P1b must either resolve the parent variable referenced inside a `"$PARENT/literal"` binding, or
+explicitly scope itself to the binding forms `_bind_res` already recognizes and say so, the way P1a
+already documents inherited globals as out of scope. Silently inheriting the drop would let P1b claim
+a relativity property it does not have.
+
+**Phase 2.3 — Add the rule.**
 Add a third rule function to `fixture-scan.py` alongside `scan_cd` and `scan_operand`, register its
 `--rule` value in `main()`, and give it its own verb tables. State the three measured behaviours as
 three families rather than one property:
@@ -444,7 +514,7 @@ sections, and seed its baseline from the post-burn-down tree.
 **Do not widen `OPERAND_WRITE` or `scan_operand`.** That is the one edit that would couple the two
 rules and move the P1a counts. An acceptance criterion pins it.
 
-**Phase 2.3 — File the P1b burn-down.**
+**Phase 2.4 — File what remains.**
 Unless Phase 2.1 measured a residue small enough to clear in place, file the burn-down as its own
 issue, carrying the measured count, the per-family split, and the largest holders — the same shape
 #7709 was given.

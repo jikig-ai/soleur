@@ -32,6 +32,11 @@ Body carries `Closes #7709` and nothing else.
 - [ ] 1.2 Order the 32 holders by descending count from the live baseline, not from the issue body
       (which is stale: it says 23 for `ship-unpushed-commits-gate.test.sh`, live is 19, and it omits
       `context-reviewed-gate.test.sh` at 12 and `pencil-collapse-guard.test.sh` at 10).
+- [ ] 1.2a BEFORE remediating: `_guard_res` matches only literal `|| exit` / `|| return`, so a site
+      guarded by a `… || _setup_fail "msg"` helper reads as unguarded (~140 such idioms across the
+      holders). Where that idiom is the real guard, extend guard recognition instead of adding a second
+      assertion — it retires several sites at once and is a smaller diff. This may reduce the 167
+      before any site is edited.
 - [ ] 1.3 Sequence the two largest holders first and review them separately.
 - [ ] 1.4 Choose the remedy by AVAILABILITY first, then binding form. Measured: only 4 holders carry an
       inline `assert_fixture_dir`, 5 source or reference it, and 23 cannot reach it at all — so the
@@ -65,9 +70,20 @@ Body carries `Closes #7709` and nothing else.
 
 Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
 
-- [ ] 2.1 Prototype the rule function and measure its live site and file counts over the corpus.
+- [ ] 2.1 The residue is already measured (plan Phase 2.1): `mv` 3 sites, `cp -r` 0, `rm -rf` 941 across
+      316 files, redirection 1759 across 244. The last two are overwhelmingly false positives —
+      939/941 and 1586/1759 are command-substitution bindings, and 650 / 1130 are literally
+      `X=$(mktemp -d)`, which always yields an absolute non-empty path.
+- [ ] 2.1a PREREQUISITE for the widening and root-anchored families: teach the machinery that a
+      `$(mktemp -d)` binding is self-guarding — directly, through a same-file wrapper, and through a
+      wrapper defined in a sourced helper. Re-measure after this; that residue is the real one.
+- [ ] 2.1b Handle derived bindings for the relativity claim: `_bind_res` treats `R2F="$TMP/r2floor"` as
+      a literal and drops the site. Correct for P1a (empty), wrong for P1b (relative) — if `$TMP` is
+      relative so is the derived path. Either resolve the parent variable or scope P1b explicitly to
+      the recognized binding forms and document the exclusion.
 - [ ] 2.2 Apply the repo's existing fix-inline-versus-file threshold — the cost-of-filing auto-flip at
-      100 lines and 4 files — to decide between burning the residue down here and grandfathering it.
+      100 lines and 4 files — to the re-measured residue. If 2.1a proves large, ship the loud-failure
+      family alone (3 sites) and file the other two with the measured numbers attached.
 - [ ] 2.3 Add the rule function to `plugins/soleur/test/lib/fixture-scan.py` with its own verb tables.
 - [ ] 2.4 Register the new `--rule` value in the rule-validation tuple in `main()` — a third editing
       site distinct from the rule function itself, currently `if rule not in ("operand", "cd")`.
