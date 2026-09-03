@@ -530,6 +530,36 @@ FATAL_SQL="
     AND JSONExtractString(raw,'level') = 'fatal'
   ORDER BY dt ASC LIMIT 1000 FORMAT JSONEachRow"
 
+# (#7772 item 1) PIN THE TABLE TO GIT-DATA'S OWN SOURCE. betterstack-query.sh defaults BS_TABLE
+# to `t520508_soleur_inngest_vector_prd_3_logs` — the SHARED source (2457081) this host stopped
+# shipping to. git-data now has its own source, 2734275 / table_name `soleur_git_data_prd`, and
+# the naming convention the query script documents is `t<team>_<table_name>_logs`.
+#
+# WHY THIS IS NOT COSMETIC. Leaving the default in place does not error: the shared table exists
+# and answers, it simply holds no rows from a host that no longer writes there. Every arm of this
+# capture would then read an empty result and report a DARK BOOT — on a rehearsal that cost a real
+# Hetzner host and in fact booted fine. A false FAIL is the expensive direction here, because the
+# operator's next move is to re-dispatch (another paid host) rather than to doubt the query.
+# Exported rather than passed as `--table` so the S3 sibling derives from it (BS_TABLE_S3 defaults
+# to `${BS_TABLE%_logs}_s3`), keeping the hot and archive arms on the same source by construction.
+#
+# THE TABLE IS CREATED LAZILY, ON FIRST INGEST — measured 2026-09-03, minutes after the source was
+# minted: `SELECT count() FROM remote(t520508_soleur_git_data_prd_logs)` answered HTTP 500
+# `Code: 701 … CLUSTER_DOESNT_EXIST`, not an empty result set. The name is right (the API reports
+# team_id=520508 and table_name=soleur_git_data_prd, and the incumbent derives identically); the
+# table just does not exist until something writes to it.
+#
+# So on a rehearsal this arm has THREE outcomes, not two, and only two of them are about the host:
+# rows (the boot emitted), an empty result (the table exists, so something has written to this
+# source before, and THIS boot was dark), and CLUSTER_DOESNT_EXIST (nothing has EVER written to
+# this source). The third reaches `_run_query` as a non-zero transport rc and is reported TRANSIENT
+# — no verdict — which is the correct degradation: it is emphatically not a PASS, and it is not the
+# false FAIL that would send the operator to re-dispatch another paid host. It does mean a fully
+# dark first rehearsal burns its 16-minute poll before saying "no verdict" rather than "dark boot".
+# Accepted rather than special-cased: distinguishing the two costs a vendor-error-string match, and
+# a string match on a vendor 500 is exactly the kind of guard that rots silently.
+export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
+
 _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
   bash "$QUERY" "$1" 2>&1
 }

@@ -247,11 +247,19 @@ _value_proven=""
 #
 # A SECOND COPY of a literal, so it is guarded rather than trusted. Both sides extracted BY
 # SHAPE from their own file: a hardcoded expectation here would pass while prod moved.
+#
+# (#7772) THE PROD SIDE MOVED FILES, AND THAT IS WHY THIS ARM IS BY-SHAPE ON BOTH SIDES.
+# git-data has its own Better Stack source since item 1, so production's literal is
+# `local.git_data_betterstack_ingest_url` in git-data.tf, NOT
+# `local.betterstack_logs_ingest_url` in zot-registry.tf. That older local still EXISTS and
+# still serves the four non-git-data consumers, so an arm left aimed at zot-registry.tf would
+# keep extracting a real, well-formed URL and keep passing -- while comparing the wrong pair.
+# A green arm over the wrong operand is the failure mode here, not a red one.
 reh_ingest="$(sed 's/^[[:space:]]*#.*$//' "$REH/variables.tf" \
   | awk '/^variable "betterstack_ingest_url"/{i=1} i&&/^[[:space:]]*default[[:space:]]*=/{print;exit} i&&/^}/{exit}' \
   | sed 's/.*"\([^"]*\)".*/\1/')"
-prod_ingest="$(sed 's/^[[:space:]]*#.*$//' "$DIR/zot-registry.tf" \
-  | grep -oE 'betterstack_logs_ingest_url[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 \
+prod_ingest="$(sed 's/^[[:space:]]*#.*$//' "$DIR/git-data.tf" \
+  | grep -oE 'git_data_betterstack_ingest_url[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 \
   | sed 's/.*"\([^"]*\)"$/\1/')"
 if [[ -n "$reh_ingest" && -n "$prod_ingest" && "$reh_ingest" == "$prod_ingest" ]]; then
   _value_proven="${_value_proven} betterstack_ingest_url"
@@ -1590,7 +1598,7 @@ _res_ok=1
 for _need in 'name[[:space:]]*=[[:space:]]*"BETTERSTACK_LOGS_TOKEN"' \
              'config[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.name' \
              'project[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.project' \
-             'value[[:space:]]*=[[:space:]]*var\.betterstack_logs_token' \
+             'value[[:space:]]*=[[:space:]]*var\.git_data_betterstack_logs_token' \
              'ignore_changes[[:space:]]*=[[:space:]]*\[value\]'; do
   [[ "$(grep -cE "$_need" <<<"$_bs_res" || true)" -ge 1 ]] || _res_ok=0
 done
@@ -1603,7 +1611,17 @@ fi
 
 # 5.6a THE DIVERGENCE ALLOWLIST MUST NOT HAVE GROWN. Adding betterstack_logs_token to it would
 # permit a rehearsal that shipped its stage markers to a DIFFERENT sink than production while
-# still producing hash-valid evidence — the one thing the allowlist exists to refuse. Asserted
+# still producing hash-valid evidence — the one thing the allowlist exists to refuse.
+#
+# (#7772, D1) THE PREMISE'S WORDING CHANGED; THE PIN DID NOT. This arm used to be justified as
+# "prod and rehearsal share one sink", meaning the SHARED source 2457081. Since item 1 they
+# share git-data's OWN source (2734275) instead — a different sink, still exactly one, so the
+# assertion this arm makes is unchanged and the allowlist is NOT widened. The briefing framed
+# this as widen-or-weaken; it is neither. What made that possible is renaming the rehearsal
+# root's variable in lockstep: this root resolves inputs by Doppler name transformation, so
+# re-pointing prod alone would have left the rehearsal on the shared credential while every
+# structural arm here stayed green.
+# Asserted
 # as ABSENCE of this name, not as an exact-set pin: the set legitimately changes for identity
 # vars, and pinning it whole here would duplicate the gate's own authority.
 # NO `head -1`. Shell assignment is LAST-WINS, so reading only the first occurrence let a
@@ -1642,12 +1660,12 @@ _modblk() {  # $1 = root .tf ; prints the git-data-userdata module block only
 }
 _prod_blk="$(_modblk "$_prod_tf")"; _reh_blk="$(_modblk "$_reh_tf")"
 [[ -n "$_prod_blk" && -n "$_reh_blk" ]] || { _prod_blk=""; _reh_blk=""; }
-_prod_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' <<<"$_prod_blk" || true)"
-_reh_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' <<<"$_reh_blk" || true)"
+_prod_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.git_data_betterstack_logs_token[[:space:]]*$' <<<"$_prod_blk" || true)"
+_reh_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.git_data_betterstack_logs_token[[:space:]]*$' <<<"$_reh_blk" || true)"
 if [[ "$_prod_pass" -ge 1 && "$_reh_pass" -ge 1 ]]; then
-  pass "both roots pass their own var.betterstack_logs_token into the module"
+  pass "both roots pass their own var.git_data_betterstack_logs_token into the module"
 else
-  fail "both roots pass their own var.betterstack_logs_token into the module" \
+  fail "both roots pass their own var.git_data_betterstack_logs_token into the module" \
        "one root hardcodes it, renames it, or does not pass it at all"
 fi
 
@@ -1657,7 +1675,7 @@ fi
 _novar_default() {  # $1 = variables.tf path ; 0 = no default declared
   local _blk _n
   _blk="$(sed 's/[[:space:]]#.*$//' "$1" \
-    | awk '/^variable "betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
+    | awk '/^variable "git_data_betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
   # `-n "$_blk"` FIRST. An absent variable block is an empty string, which has zero `default`
   # lines and so PASSED -- "neither root declares a default" was satisfied by "neither root
   # declares the variable". Measured: deleting the block from BOTH roots left 75/0 green.
@@ -1667,9 +1685,9 @@ _novar_default() {  # $1 = variables.tf path ; 0 = no default declared
 }
 cases=$((cases + 1))
 if _novar_default "${DIR}/variables.tf" && _novar_default "${DIR}/rung2-rehearsal/variables.tf"; then
-  pass "neither root declares a default for betterstack_logs_token (no silent fallback)"
+  pass "neither root declares a default for git_data_betterstack_logs_token (no silent fallback)"
 else
-  fail "neither root declares a default for betterstack_logs_token (no silent fallback)" \
+  fail "neither root declares a default for git_data_betterstack_logs_token (no silent fallback)" \
        "a default lets one root resolve a different value while every structural check still passes"
 fi
 
