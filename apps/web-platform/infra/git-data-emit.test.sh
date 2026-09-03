@@ -408,7 +408,12 @@ done
 _producer_keys="$(grep -vE '^[[:space:]]*#' "$DIR/git-data-bootstrap.sh" \
   | sed -n '/^[[:space:]]*"\$GIT_DATA_EMIT".*boot_complete/,/|| true$/p' \
   | grep -oE '"[a-z0-9_]+=' | tr -d '"=' | sort -u | tr '\n' ' ')"
-_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision disk_pct inode_pct | sort -u | tr '\n' ' ')"
+# (#7772 item 2) nft_metadata_drop joins the set. Unlike its four boolean siblings it is
+# MEASURED at emit time (it reads the live nft chain) rather than `yes` by construction, so it
+# is the one key here whose value carries information about the host rather than about the code
+# path having been reached. That is deliberate: it covers the case the arm-time warning cannot,
+# namely the ruleset being flushed AFTER a successful load.
+_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop disk_pct inode_pct | sort -u | tr '\n' ' ')"
 if [ -z "$_producer_keys" ]; then
   fail "AC30-parity: derived NO keys from git-data-bootstrap.sh — the extraction drifted, so this parity check would pass vacuously"
 elif [ "$_producer_keys" = "$_asserted_keys" ]; then

@@ -72,12 +72,20 @@ locals {
   # hcloud resource. Mirrors local.registry_private_ip (zot-registry.tf:40, #6415):
   # the host's own file owns the constant, network.tf consumes it.
   #
-  # THIS BEING A STATIC LITERAL IS THE WHOLE POINT. ADR-149 cut this secret from #6977
-  # because sourcing it from hcloud_server_network.git_data.ip (a COMPUTED attribute)
-  # would drag hcloud_server.git_data into any -target closure that reached the secret,
-  # and the natural remedy — a per-PR -target line — wedges every merge to main. A
-  # literal has no such edge: the secret is plannable and appliable with the host
-  # absent, which is exactly the state it must survive (see the resource comment).
+  # THIS BEING A STATIC LITERAL IS THE WHOLE POINT — FOR network.tf, which is its only
+  # consumer (`ip = local.git_data_private_ip`). The host's own file owns the constant.
+  #
+  # (#7772) WHAT THIS PARAGRAPH USED TO SAY, AND WHY IT WAS WRONG. It read: "ADR-149 cut this
+  # secret from #6977 because sourcing it from hcloud_server_network.git_data.ip (a COMPUTED
+  # attribute) would drag hcloud_server.git_data into any -target closure that reached the
+  # secret … A literal has no such edge: the secret is plannable and appliable with the host
+  # absent." That describes a design DC-3 mandated against and DC-5 reversed before merge, and
+  # it sat ten lines above the resource comment that says so — see
+  # doppler_secret.git_data_ssh_host below, whose `value` IS
+  # `hcloud_server_network.git_data.ip`. The reversal holds because that secret's only -target
+  # line is the birth job, which already targets the server AND the NIC, so the computed edge
+  # drags nothing new into any plan that exists. Corrected rather than deleted: the local is
+  # still here and still correct, just for a different consumer than this text claimed.
   #
   # web = .10/.11, git-data = .20, registry = .30, inngest = .40.
   git_data_private_ip = "10.0.1.20"

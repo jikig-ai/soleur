@@ -512,6 +512,22 @@ INLINE_ALLOWLIST = {
     # printf-then-chmod runcmd pair, which left the token at 0644 between the two entries.
     "/etc/default/git-data-betterstack",
     "/etc/default/git-data-doppler",
+    # (#7772 item 2) The metadata-endpoint egress closure: its script and its unit. These two
+    # are inline for a DIFFERENT reason than the four above, and the distinction matters
+    # because the reason above ("template-interpolated, so a repo file could not match the
+    # rendered bytes") does not apply here — neither carries an interpolation, so either could
+    # have been a file() payload.
+    #
+    # They are inline to avoid SILENT FLOOR DECAY. Promoting them to file() payloads takes the
+    # hashed set from 9 to 11, and the payload count is pinned in four places that do not know
+    # about each other: the floor in git_data_rung2_user_data_sha256() ("ship binds 9"), the
+    # derived-roster comparison below, and two sibling suites. A count raised in some of those
+    # and not others goes loose by exactly the number missed, in the gate whose entire job is
+    # refusing a template it has not attested. That is a real trade, not a free win: these two
+    # forfeit the byte-identity check the file()-bound payloads get, which is why they are
+    # named here explicitly rather than skipped.
+    "/usr/local/bin/git-data-nftables.sh",
+    "/etc/systemd/system/git-data-nftables.service",
 }
 # An absolute floor, NOT a self-derived one. The first rewrite of this check derived the
 # expected roster from cloud-init-git-data.yml — the same artifact that produces the
@@ -2090,7 +2106,15 @@ _R3_R2D_PAT='^[[:space:]]*GIT_DATA_RUNCMD_DETAIL='
 # windows -- which is why the floor conjunct below is `-ge 6` and not 8. An earlier
 # revision of this comment said "8 reporting emit sites", contradicting the code three
 # lines down.
+# (#7772 item 2) FOUR WINDOWS -> FIVE, and the floor 6 -> 7 with it. The metadata-egress-drop
+# runcmd item adds exactly one reporting emit: the warning on failure to arm. Both operands move
+# together BY CONSTRUCTION here — a new window that reports contributes a row — so raising the
+# set without the floor would leave the cardinality bound one short and silently tolerate a
+# reporting site being swapped away inside any window. Measured with the arm's own analyzer, not
+# assumed: it now parses 7 reporting rows across 5 windows (it reported exactly that in the FAIL
+# that caught this change, which is the guard working).
 _R3B_EXPECTED_SITES='gc_timer
+gitdata_nftables_metadata
 luks_err
 on_err
 sshd_config'
@@ -2104,7 +2128,8 @@ _r3b_sites_ok() {  # $1 = row count, $2 = newline-separated window names; 0 = ac
   # that still has others; the floor is what bounds that direction, and it bounds it only by
   # cardinality. Pinning the per-window distribution would close it and would hard-code a
   # snapshot of today's render, which is the staleness AP-023 warns about one level up.
-  [ "$1" -ge 6 ] || return 1
+  # 6 -> 7 (#7772): one reporting emit added with the gitdata_nftables_metadata window above.
+  [ "$1" -ge 7 ] || return 1
   [ "$(printf '%s\n' "$2" | sort -u)" = "$(printf '%s\n' "$_R3B_EXPECTED_SITES" | sort -u)" ]
 }
 
@@ -2362,8 +2387,26 @@ if cmp -s "$_fxBp" "$_bp_mut"; then pass; else
 # ── FIXTURE C — one reporting site deleted and one unrelated site added. Finding (3): a
 #    `>= 6` COUNT floor holds across that swap; the property is a SET.
 _fxC_b="$_r3c_dir/C_before"; _fxC_a="$_r3c_dir/C_after"
-printf 'gc_timer\nluks_err\non_err\nsshd_config\n' > "$_fxC_b"
-printf 'gc_timer\nluks_err\non_err\nZZZ_unrelated\n' > "$_fxC_a"
+# (#7772) DERIVED FROM THE ROSTER, not restated. These fixtures used to hardcode the four
+# window names, so the control broke the moment the roster legitimately grew to five: the
+# predicate correctly REJECTED the stale complete-set fixture, both arms returned rc=1, and the
+# control reported "the predicate cannot discriminate" — an accurate statement about a corpus
+# that no longer described the producer, not about the predicate. That is a control failing for
+# a reason that has nothing to do with what it controls, which is the worst kind.
+#
+# Deriving C_before from $_R3B_EXPECTED_SITES makes it track the roster by construction. The
+# swap still has to be built by hand — that is the mutation under test — but it is now built
+# FROM the derived set (drop the last member, add an unrelated one) rather than from a second
+# copy of the literal. The row count stays a literal that clears the floor with headroom: this
+# control is about the SET predicate, and coupling it to the floor would make one arm answer
+# for two properties.
+printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u > "$_fxC_b"
+{ printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u | sed '$d'; echo 'ZZZ_unrelated'; } | sort -u > "$_fxC_a"
+# A control whose two corpora are equal proves nothing, and the derivation above could make
+# them equal if the roster ever held a single member. Assert they differ before relying on them.
+if cmp -s "$_fxC_b" "$_fxC_a"; then
+  fail "R3(3b)(i) CONTROL SETUP: the complete and swapped corpora are identical — the swap did not land, so the discrimination check below would pass vacuously"
+fi
 # Drive the ARM's OWN predicate over both corpora. The complete set must be ACCEPTED and the
 # swapped one REJECTED; a count floor accepts both, which is the defect.
 _c_ok_before=1; _r3b_sites_ok 8 "$(cat "$_fxC_b")" && _c_ok_before=0
