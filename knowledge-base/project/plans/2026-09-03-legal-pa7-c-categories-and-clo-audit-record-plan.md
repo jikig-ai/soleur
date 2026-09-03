@@ -423,16 +423,23 @@ unmodelled), and neither belongs in this PR.
 
 ## Files to Edit
 
-- `knowledge-base/legal/article-30-register.md` — PA-7 only. Four cells in scope:
-  **(c) Categories of data subjects**, **(c) Categories of personal data**, **Special categories**
-  (whose row label is also harmonised to **Special categories (Art. 9 / 10)**, matching PA-15/27/32/35),
-  and **Lawful basis**. Cells explicitly **not** in scope: (b), (d), (e), (f), (g). PA-7's §(e)
+- `knowledge-base/legal/article-30-register.md` — PA-7 only. **Five rows: four amended and one new.**
+  Amended: **(c) Categories of data subjects**, **(c) Categories of personal data**,
+  **Special categories** (whose row label is also harmonised to **Special categories (Art. 9 / 10)** —
+  the form 24 of the register's 31 Special-categories rows already use), and **Lawful basis**. New:
+  **(h) DSAR (Art. 15 / 20)**, which PA-7 lacks and which PA-32 and PA-33 both carry for the same
+  reason PA-7 now needs one. Cells explicitly **not** in scope: (b), (d), (e), (f), (g). PA-7's §(e)
   `OPEN QUESTION` block stands untouched.
-- `knowledge-base/legal/compliance-posture.md` — **one new Active Items row only**, recording that
-  AUP §4.7 does not reach the CLA capture path. Per the advisory's Ruling 6 this is an *addition*;
-  the existing lines 20 and 44 are **not** edited, because neither is a PA-7 Art. 9 statement (line
-  20 is the #5363 entry scoped to PA-2 `turn_summary`; line 44 is the #3988 entry recording that AUP
-  §§4.7/4.8 were added, which remains an accurate historical record).
+- `knowledge-base/legal/compliance-posture.md` — **four new Active Items rows**, one per Critical
+  finding in the addendum's A5 table, each keyed to its own `compliance/critical` issue. Per Ruling 6
+  these are *additions*; the existing lines 20 and 44 are **not** edited, because neither is a PA-7
+  Art. 9 statement (line 20 is the #5363 entry scoped to PA-2 `turn_summary`; line 44 is the #3988
+  entry recording that AUP §§4.7/4.8 were added, which remains an accurate historical record). The
+  `last_updated` frontmatter date is bumped, as `compliance-posture.md:190` requires.
+
+  *An earlier draft of this list said "four cells" and "one new Active Items row only". Both were
+  left behind by the review revisions that made them five and four — the class of stale
+  cross-reference a post-edit sweep exists to catch, found in the plan's own Files list.*
 - `knowledge-base/INDEX.md` — regenerated, not hand-edited (`bash scripts/generate-kb-index.sh`).
 
 ## Files to Create
