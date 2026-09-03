@@ -160,3 +160,32 @@ None of the four was introduced by this PR; all were found by checking my own ed
 then sweeping the class rather than the instance. Every row this PR added or edited matches its
 header: PA-8 §(f) 3, PA-8 §(g) 3, vendor mapping 7, PA-31 §(g) 3, compliance-posture 7, and all
 four breach-register rows 10.
+
+### AC14 — NOT met, and deliberately so
+The `clo` agent was invoked to produce the attestation required by plan task 1.13 and terminated
+on an API 529 three times (`req_011CegcTbK6bQXipPMqhFHVS`, `req_011CegcmkyX9kXDsZxkqP2fn`,
+`req_011Cegd6WcbnQP2vaVHPMcTW`). An attestation is an act of authority; writing one and signing
+it `signed_off_by: CLO agent` would fabricate a signature, which is the same defect class this
+issue closes. So:
+
+- The attestation path `audits/2026-09-03-clo-attestation-7717-art-33-5-register.md` is
+  **deliberately absent** — nothing can be mistaken for it.
+- `audits/2026-09-03-implementation-record-7717-art-33-5-register.md` records the CLO's two
+  binding rulings **with attribution**, and separately records what I verified, labelled as
+  implementation verification rather than legal attestation. Its frontmatter carries
+  `attested_by: "NOBODY"`.
+- Tracked at **#7791**, whose scope includes ratifying the one cell I corrected without CLO
+  sign-off, and deleting the implementation record on completion rather than annotating it.
+- `breach-register.md` stays `status: draft-requires-counsel-review`.
+
+The implementation record itself matched the guard's determination-shaped producer, which is how
+the gate was proven end-to-end on a real file rather than only on fixtures: it red-lined the new
+file as neither indexed nor waived (rc=1), and passed once the waiver landed (rc=0).
+
+### Issue flow, final
+Closing 1 (#7717). Filing 3: #7786 (published-disclosure contradiction), #7787 (guard
+promotion), #7791 (outstanding CLO attestation). **Net +2.** Justifications: #7786 fires the
+three-way `docs/legal/**` lockstep and must not ride inside a statutory chore; #7787 is
+temporally blocked by construction; #7791 is an authority I cannot supply and must not forge.
+Executed rather than filed: `action-required` on #7529; #7125 re-milestoned to Phase 4.
+#7791's number was reconciled after filing — five references had been pre-written as 7788.

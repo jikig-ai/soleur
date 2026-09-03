@@ -126,6 +126,7 @@ NOT_TRANSCRIBED=(
   "knowledge-base/legal/audits/2026-05-12-gdpr-gate-plan-phase-2-7-outcome.md | No Art. 4(12) assessment: never cites Art. 4(12), matched solely on one Art. 33 occurrence, and its non-notifiable statement is expressly attributed to the operator's framing rather than recorded as a controller determination (#7717)"
   "knowledge-base/legal/audits/2026-06-counsel-review-5103.md | No event and no determination: the sole Art. 33 occurrence verifies the accuracy of a statutory-deadline catalog entry, not a fact pattern (#7717)"
   "knowledge-base/legal/audits/2026-08-counsel-review-7440.md | Express Art. 4(12) assessment, but of a prospective PA-8 amendment with no fact pattern; a row would dilute the register with routine change approvals (#7717)"
+  "knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md | Not a determination: an implementation record ABOUT this register, which necessarily quotes the article numbers and so matches the producer pattern. It assesses no fact pattern and records no controller determination (#7717)"
 )
 
 # The one indexed determination that lives outside the producer's scope. Asserted literally

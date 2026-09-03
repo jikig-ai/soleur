@@ -134,6 +134,7 @@ lives in `scripts/lint-legal-registers.sh`; this section is its human-readable m
 | `knowledge-base/legal/audits/2026-05-12-gdpr-gate-plan-phase-2-7-outcome.md` | No Art. 4(12) assessment: the file never cites Art. 4(12), matched the pattern solely on one `Art. 33` occurrence, and its non-notifiable statement is expressly attributed to *the operator's framing* rather than recorded as a controller determination. Indexing it would launder a framing into a determination. The underlying matter is a disclosure-timing lag, not a security event (#7717) |
 | `knowledge-base/legal/audits/2026-06-counsel-review-5103.md` | No event and no determination: the sole `Art. 33` occurrence verifies the accuracy of a statutory-deadline catalog entry, not a fact pattern. A regex false positive (#7717) |
 | `knowledge-base/legal/audits/2026-08-counsel-review-7440.md` | Express Art. 4(12) assessment, but of a **prospective** PA-8 amendment with no fact pattern — nothing was destroyed, lost, altered or disclosed. There is no breach documentation to index, and a row would dilute the register with routine change approvals (#7717) |
+| `knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md` | Not a determination: an implementation record *about* this register. It necessarily quotes Art. 4(12) / Art. 33(5) and so matches the producer pattern, but it assesses no fact pattern and records no controller determination. Note it is **not** a CLO attestation — that artifact was not obtained and is tracked at #7791 (#7717) |
 
 ## Register maintenance
 

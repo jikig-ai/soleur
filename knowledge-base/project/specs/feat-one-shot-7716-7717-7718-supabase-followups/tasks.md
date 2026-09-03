@@ -44,7 +44,7 @@ preconditions for W1/W7/W3 and move to the follow-on with their phases.
 - [x] 1.10 Add the two PA-8 entries the CLO ruled in place of a retention measure — the Art. 33 evidentiary-chain limitation in §(g), and the durable-sink item citing #5697.
 - [x] 1.11 State the non-scope in the register itself, with both evidence citations.
 - [x] 1.12 Bump `last_reviewed:`; add counsel-review item 12.
-- [ ] 1.13 Write the CLO attestation at `knowledge-base/legal/audits/2026-09-03-clo-attestation-7717-art-33-5-register.md`.
+- [ ] 1.13 **NOT DONE — AC14 unmet, tracked at #7791.** The `clo` agent terminated on an API 529 three times. An attestation is an act of authority and signing one the CLO did not produce would fabricate a signature, so the gap is recorded instead: `knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md` reproduces the CLO's two binding rulings with attribution and records what I verified, under a distinct filename so it cannot be mistaken for the attestation. The attestation path is deliberately absent.
 
 ## Phase 7 — Register gate and ADR (W6 slice only)
 
@@ -58,7 +58,7 @@ preconditions for W1/W7/W3 and move to the follow-on with their phases.
 ## Phase 8 — Verification
 
 - [x] 8.1 Work through §Acceptance Criteria **§Pre-merge — W6 (statutory)** in order. The engineering AC block is not asserted on this branch.
-- [ ] 8.2 Re-run `/soleur:gdpr-gate` at the work Phase 2 exit.
+- [x] 8.2 Re-run `/soleur:gdpr-gate` at the work Phase 2 exit. Zero canonical-regex matches (no migrations, auth, api or .sql in the diff); three of the four items the plan's §GDPR gate named are W6 and were disposed of, the fourth is W3 and travels with the follow-on.
 - [ ] 8.3 Full battery `bash scripts/test-all.sh` at the `/ship` Phase 4 checkpoint.
 - [x] 8.4 Re-derive the ADR ordinal against a fresh fetch immediately before merge; sweep plan, tasks and ACs if it moved.
 - [x] 8.5 **Split-specific.** Confirm the merged diff touches no W1/W7/W3/W4/W5 file — `git diff origin/main...HEAD --name-only` must not list `scripts/lint-orphan-test-suites.sh`, `scripts/lint-supabase-deprecated-endpoints.sh`, `scripts/test-all.sh` W7/W1 rows, `.github/workflows/ci.yml`, the C4 model, or `plugins/soleur/skills/incident/**`.
