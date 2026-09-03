@@ -187,6 +187,9 @@ ROOT = os.path.abspath(sys.argv[1])
 # floor means an extractor stopped seeing a surface, and lowering it re-arms the vacuous green.
 MIN_UNITS_BY_SURFACE = {'service': 12, 'sh-heredoc': 4, 'tf-heredoc': 3, 'cloud-init': 5}
 MIN_INJECTED_DIRECTIVES = 1
+# These two guard the sets every violation assertion quantifies over — stage 2 (the doppler-run
+# population) and stage 4 (the bound-required set). Zeroing either used to leave the suite green:
+# the anti-vacuity catcher below only walked the per-surface keys. Both are now covered by it.
 MIN_DOPPLER_UNITS = 12
 MIN_POPULATION = 5
 
@@ -238,19 +241,33 @@ ACK_REASONS = {
         'NEXT_PUBLIC_SUPABASE_URL / SUPABASE_URL by indirect expansion over a literal loop list, '
         'and omitting one is SILENT under --no-exit-on-missing-only-secrets — :154-155 only warns '
         'and forces the tick additive-only with pruning suspended (an egress firewall that '
-        'quietly stops pruning). Bounding it needs a hand-authored list, out of scope for #7761.',
+        'quietly stops pruning). Bounding it needs a hand-authored list, out of scope for #7761. Tracked in #7775.',
     'git-data-gc.service':
         "git-data-emit's redactor is VALUE-based (cloud-init-git-data.yml:142-150) because the "
         'LUKS passphrase is high-entropy and matches no pattern. Under a list that omits '
         'GIT_DATA_LUKS_KEY, _devalue degrades to `cat` and repack stderr rides into the emit '
         'detail (git-data-gc.sh:138,142) — a passphrase could ship unredacted to Sentry and '
-        'Better Stack. Bounding this unit is a security-reviewed change, not a hygiene edit.',
+        'Better Stack. Bounding this unit is a security-reviewed change, not a hygiene edit. Tracked in #7775.',
     'container-restart-monitor.service':
         'sources an env-named file (a `. "$ENV_FILE"` at container-restart-monitor.sh:61) whose '
         'contents are not in-repo, so the tracked script does not bound the read-set; its Sentry '
-        'alarm path also degrades silently on a missing name (:67 returns without emitting).',
+        'alarm path also degrades silently on a missing name (:69 returns without emitting). Tracked in #7775.',
+    'cron-egress-firewall.service':
+        'ADDED by the #7761 review, and it is the sharpest member of class B. '
+        'cron-egress-nftables.sh:134 executes "$RESOLVE_SCRIPT" behind an ASSIGNMENT PREFIX '
+        '(CRON_EGRESS_FROM_LOADER=1 …), a shape the seam predicate did not match, so this unit '
+        'was enumerated but never entered the bound-required population — while its ExecStart '
+        'wraps `doppler run --project soleur --config prd`, i.e. the WHOLE shared soleur/prd root '
+        'into a root script that then executes an environment-supplied path. That is the #7761 '
+        'defect class on a larger config, and the guard said green. It is acked rather than '
+        'bounded here for the same reason as its siblings: this PR delivers via '
+        'apply_target=inngest-host, which does not reach the web hosts, so a bound added here '
+        'would merge green and land nowhere. Tracked in #7775.',
 }
-ACK_CARDINALITY = 7
+# 7 -> 8: cron-egress-firewall.service, added when the review widened the seam predicate. This
+# pin exists so the escape hatch cannot grow silently; it should only ever RATCHET DOWN as #7775
+# drains it.
+ACK_CARDINALITY = 8
 
 # ── surface enumeration (LIFTED from credential-persist-home-guard.test.sh:506-605) ───────────
 # The two non-obvious behaviours a fresh scanner gets wrong SILENTLY are kept verbatim:
@@ -474,7 +491,22 @@ def analyse_exec(exec_text):
 # forms only. Deliberately NARROW: a loose form (matching after `&&`, or inside [[ … ]]) put
 # arithmetic and string comparisons into the population when measured, and a false member here is
 # a permanently-red guard, not a near miss.
-CMD_POS_RE = re.compile(r'^[ \t]*"\$\{?([A-Z_][A-Z0-9_]*)(?:[:#%/][^"]*)?\}?"')
+# An optional COMMAND PREFIX may sit between the line start and the variable: an assignment
+# (`FOO=1 "$X"`) or a wrapper carrying its own arguments (`env FOO=1 "$X"`, `timeout 5 "$X"`).
+# Without it, cron-egress-nftables.sh's `CRON_EGRESS_FROM_LOADER=1 "$RESOLVE_SCRIPT"` was not a
+# seam, so cron-egress-firewall.service — a ROOT unit injecting the whole shared soleur/prd
+# (~116 names) into a script that then executes an environment-supplied path — was enumerated but
+# never entered the bound-required population. Same defect class as #7761, larger config, and the
+# guard said green. The prefix is anchored and non-greedy so it cannot swallow a continued
+# argument list (see the docstring below for why that exclusion is load-bearing).
+# The assignment value excludes `$` and backtick DELIBERATELY. Without that, `DETAIL=$(tail -n 20
+# "${DETAIL_SRC}"` parses as assignment-prefix + flag + count + quoted-var and puts
+# git-data-gc-failure.service into the population on the strength of a value that is READ as a
+# path, never executed — a false member, which per the docstring below is a permanently-red guard
+# rather than a near miss. Measured: the widening admitted it, and this exclusion removes it while
+# keeping the true positive (`CRON_EGRESS_FROM_LOADER=1 "$RESOLVE_SCRIPT"`).
+_CMD_PREFIX = r'(?:(?:env|command|timeout|xargs|nohup|setsid|sudo)[ \t]+)?(?:[A-Za-z_][A-Za-z0-9_]*=[^ \t"$`]*[ \t]+|-[^ \t]+[ \t]+|[0-9]+[ \t]+)*'
+CMD_POS_RE = re.compile(r'^[ \t]*' + _CMD_PREFIX + r'"\$\{?([A-Z_][A-Z0-9_]*)(?:[:#%/][^"]*)?\}?"')
 SEAM_FORMS = (
     ('exec-var', re.compile(r'\bexec[ \t]+"?\$\{?([A-Z_][A-Z0-9_]*)', re.M)),
     ('sourced-path', re.compile(r'(?:^|[ \t;])(?:\.|source)[ \t]+"?\$\{?([A-Z_][A-Z0-9_]*)', re.M)),
@@ -710,6 +742,26 @@ for _s in service sh-heredoc tf-heredoc cloud-init sh-injected; do
   fi
 done
 
+# THE SAME ANTI-VACUITY CHECK FOR THE TWO NON-SURFACE FLOORS. The loop above walks only the
+# per-surface keys, so MIN_DOPPLER_UNITS and MIN_POPULATION had no meta-floor: setting either to 0
+# left the suite fully green. Those two guard the sets EVERY violation assertion quantifies over —
+# stage 2 (the doppler-run population) and stage 4 (the bound-required set) — so a zeroed floor
+# there is the most load-bearing vacuity available in this file.
+for _c in doppler_run_units bound_required_population; do
+  _line="$(grep -E "^CENSUS: ${_c}=" "$CONTROL_OUT" | head -1 || true)"
+  if [[ -z "$_line" ]]; then
+    fail "census: no count reported for '$_c'"
+    continue
+  fi
+  _got="$(sed -E "s/.*${_c}=([0-9]+).*/\1/" <<<"$_line")"
+  _min="$(sed -E 's/.*min=([0-9]+).*/\1/' <<<"$_line")"
+  if (( _got >= _min )) && (( _min >= 1 )); then
+    pass "census: '$_c' is $_got (floor $_min, and the floor is non-zero)"
+  else
+    fail "census: '$_c' is $_got, floor $_min (a zero floor makes every assertion over this set vacuous)"
+  fi
+done
+
 # IDENTITY, not just cardinality. `>= N` is satisfied by ANY member, so a scanner that lost the
 # ExecStartPre extraction or the `command -v doppler` spelling still clears every floor. Pin the
 # members the four scoping decisions are ABOUT, by name.
@@ -902,8 +954,18 @@ ENTRY = r"    'container-restart-monitor\.service':\n(?:        .*\n)+"
 if prog == 'drop-ack-entry':
     # Remove the ack entry AND lower the pinned cardinality, so the cardinality pin cannot be what
     # reds — this row must be carried by the now-unacked unbounded unit itself.
+    #
+    # The cardinality is DERIVED, not transcribed. It was hardcoded as `7 -> 6`, so the day the ack
+    # list legitimately grew the replace silently no-opped: the mutation did not land, the
+    # cardinality pin fired instead of the FINDING, and the row reported a failure that was not
+    # about what it claimed. A mutation that does not land is the documented worst case — it
+    # reports a verdict about something other than the property under test.
     s = re.sub(ENTRY, '', s)
-    s = s.replace('ACK_CARDINALITY = 7', 'ACK_CARDINALITY = 6')
+    m = re.search(r'^ACK_CARDINALITY = (\d+)$', s, re.M)
+    if not m:
+        raise SystemExit('drop-ack-entry: could not find ACK_CARDINALITY to lower')
+    n = int(m.group(1))
+    s = re.sub(r'^ACK_CARDINALITY = \d+$', 'ACK_CARDINALITY = %d' % (n - 1), s, count=1, flags=re.M)
 elif prog == 'drop-ack-entry-only':
     s = re.sub(ENTRY, '', s)
 else:
@@ -932,8 +994,16 @@ PY
 expect_red_scanner "R7a ack entry removed without bounding its unit" \
   "FINDING unit=container-restart-monitor.service reason=no --only-secrets bound" 'drop-ack-entry'
 # R7b — the CARDINALITY row proper: the pin refuses a silent change to the escape hatch's size.
+#
+# The expected string is DERIVED from the scanner's own ACK_CARDINALITY, not transcribed. Both R7
+# rows previously carried the literal (`ack_cardinality=6 expected=7`), so adding a member to the
+# ack list — which is a legitimate, reviewed act — silently falsified the mutation rows and the
+# suite dropped two assertions. The floor caught it; a transcribed literal in a mutation row is
+# the same replicated-literal class this guard exists to police, one level up.
+ACK_N="$(grep -oE '^ACK_CARDINALITY = [0-9]+' "$SCRIPT_DIR/doppler-injection-bound.test.sh" | grep -oE '[0-9]+$')"
+[[ "$ACK_N" =~ ^[0-9]+$ ]] || { printf 'FATAL: could not derive ACK_CARDINALITY for the R7b row.\n' >&2; exit 1; }
 expect_red_scanner "R7b ack cardinality pin (a silent ack edit cannot open a hole)" \
-  "ACK_FAIL ack_cardinality=6 expected=7" 'drop-ack-entry-only'
+  "ACK_FAIL ack_cardinality=$((ACK_N - 1)) expected=${ACK_N}" 'drop-ack-entry-only'
 
 # ── harness rows ──────────────────────────────────────────────────────────────────────────────
 echo ""
@@ -1042,7 +1112,7 @@ expect_green "H4 runcmd doppler invocation is NOT flagged (boot self-check must 
 TOTAL=$((PASS + FAIL))
 # 25 -> 29: set to the measured green count, not below it. Slack in a floor is the budget an
 # attacker (or an accidental deletion) gets for free.
-MIN_ASSERTIONS=29
+MIN_ASSERTIONS=31
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
