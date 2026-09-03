@@ -470,6 +470,26 @@ FLAGV=arm         mutate G19 's|^    rolled-back\|aborted) : ;;|    *) : ;;|'   
 DBOOT=1           mutate G20 's|^    ..\|0) : ;;|    *) : ;;|'                                         "$ROWS" diagnostic_boot --diagnostic-boot 1
 unset LIVEID FTRC FLAGV DBOOT
 
+# ══ 5. THE GUARD'S OWN OPERANDS (the axis every other battery misses) ═══════════
+# Batteries 1-4 all mutate the SUT or the input and confirm the guard REDS. None of them asks how
+# the guard fails OPEN. This one degenerates an operand the guard itself INTERPOLATES — the kind of
+# value that turns a containment test into a wildcard — and asserts the verdict is still a refusal.
+#
+# The shape being guarded against: `expected_dev="/dev/disk/by-id/scsi-0HC_Volume_${id}"` with an
+# empty `$id` yields a PREFIX that no real device matches (safe), but the same construction one
+# character different — a glob, a regex, a path prefix — degrades to "matches everything" and the
+# guard accepts every input while looking exactly like a healthy run. A guard that accepts
+# everything is indistinguishable from a healthy run, which is why this cannot be caught by
+# reading the pass counts.
+expect "OPERAND: an EMPTY volume-id pin must refuse, never build a matching device prefix" id_pin_mismatch "$ROWS" "$FIN" --expected-volume-id ""
+expect "OPERAND: a non-numeric volume-id pin must refuse" id_pin_mismatch "$ROWS" "$FIN" --expected-volume-id "*"
+expect "OPERAND: an EMPTY expected-schema must refuse, not match every schema" stale_schema "$ROWS" "$FIN" --expected-schema ""
+expect "OPERAND: an EMPTY host identity must refuse, not match every host" wrong_host "$ROWS" "$FIN" --host ""
+expect "OPERAND: an EMPTY host_name identity must refuse" wrong_host "$ROWS" "$FIN" --host-name ""
+expect "OPERAND: a non-numeric query rc must refuse, not coerce to success" unreadable "$ROWS" "$FIN" --query-rc "x"
+expect "OPERAND: a non-numeric followthrough rc must refuse" followthrough_7674 "$ROWS" "$FIN" --followthrough-rc ""
+expect "OPERAND: an unknown flag must refuse, never fall through to a decision" unreadable "$ROWS" "$FIN" --not-a-real-flag 1
+
 # ══ FLOORS ═══════════════════════════════════════════════════════════════════════
 # TWO floors, and they measure different things. The predicate floor is the one AC B11 is about: a
 # battery keyed on verdict TOKENS needs only ~10 cases because several predicates share a token, so
@@ -486,11 +506,11 @@ fi
 _ran=$((passes + fails))
 if [[ "$_ran" -lt 55 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 63. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
   printf 'inngest-host-dark-gate: %s passed, %s failed\n' "$passes" "$fails"
   exit 1
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 63)\n' "$_ran"
 fi
 
 echo ""

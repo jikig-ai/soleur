@@ -254,6 +254,20 @@ if grep -qE '^[[:space:]]*if ! inngest_volume_recut_gate ' "$WF"; then pass; els
 # every test here passes.
 if grep -qE '^[[:space:]]*if ! inngest_volume_recut_gate "[^"]+" "\$\{?EXPECTED_INNGEST_VOLUME_ID' "$WF"; then pass; else fail "Row 6c: the workflow does not pass expected_inngest_volume_id to the gate"; fi
 
+# ── The guard's OWN operands (the axis every other row misses) ────────────────────
+# Every row above mutates the PLAN and confirms the guard REDS. None asks how the guard fails OPEN.
+# These degenerate an operand the guard interpolates. `$expected` reaches jq via `--arg`, so it
+# cannot become a wildcard the way an unquoted shell glob or an interpolated regex could — but
+# "cannot" is a claim, and this is what makes it a measured one. A guard that accepts everything is
+# indistinguishable from a healthy run, so no pass count can catch this class.
+write_plan "${PASS_SET}"
+check "OPERAND: a GLOB-shaped pin must not match the real id (jq --arg is not a pattern)" 1 "reason=luks_id_mismatch" "$TMP/plan.json" "*"
+check "OPERAND: a REGEX-shaped pin must not match the real id" 1 "reason=luks_id_mismatch" "$TMP/plan.json" ".*"
+check "OPERAND: a pin that is a PREFIX of the real id must not match" 1 "reason=luks_id_mismatch" "$TMP/plan.json" "10626194"
+# A directory where a plan file is expected: `-f` rejects it, so the gate aborts on the readable
+# assert rather than handing jq something it will silently read as empty.
+check "OPERAND: a DIRECTORY as the plan path => fail-closed" 1 "ABORT" "$TMP" "$PINNED_ID"
+
 # ── H1: anti-vacuity floor ────────────────────────────────────────────────────────
 # DELIBERATELY SELF-CONTAINED — bash builtins and this suite's own counters only. The first
 # version of this pattern called a harness helper whose `source` lived inside the arm block, so
@@ -263,13 +277,13 @@ if grep -qE '^[[:space:]]*if ! inngest_volume_recut_gate "[^"]+" "\$\{?EXPECTED_
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the suite on
 # every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 30 ]]; then
+if [[ "$_ran" -lt 34 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 30. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 34. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
   printf 'inngest-volume-recut-gate: %s passed, %s failed\n' "$passes" "$fails"
   exit 1
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 30)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 34)\n' "$_ran"
 fi
 
 echo ""
