@@ -64,7 +64,10 @@ PrivateTmp=true
 # from the ExecStart BASENAME, which here is `doppler` — a tag no Vector source admits. The
 # script's own markers were never affected (emit_state calls `logger -t inngest-cutover-flip`
 # explicitly), but everything the UNIT writes was: doppler's own diagnostics, and every bash
-# error in the ~460-line window before the ERR trap is installed. This repo has been bitten by
+# error in the window before `trap on_unexpected_exit ERR` is installed in run_flip — measured
+# 2026-09-03 at 548 lines from the seam gate, most of the script. Cited as an anchor plus a dated
+# measurement rather than a bare figure: the earlier `~460` here was stale by ~90 lines and this
+# comment's whole subject is a claim that has to stay checkable. This repo has been bitten by
 # exactly this before — journald-config.test.sh records inngest-redis.service "was tagged
 # 'doppler'" and inngest-nftables.service "tagged inngest-nftables.sh" for the same reason.
 # The literal is asserted on both sides; do not change it without changing vector.toml with it.
