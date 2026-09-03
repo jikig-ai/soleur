@@ -645,6 +645,25 @@ jobs:
         timeout-minutes: 3
         run: bash apps/web-platform/infra/ci-deploy.test.sh
 
+      # (#7749) ssl-full-mitigation.test.sh guards the ONE Cloudflare config rule
+      # holding soleur.ai + www.soleur.ai up. The GitHub Pages origin cert expired
+      # 2026-08-16 and is never renewed (ADR-194); `ssl = "full"` is what keeps the
+      # apex off HTTP 526 for the whole pre-cutover interval, and nothing in CI
+      # protected it before this. The guard is stage-aware — it reads dns.tf and
+      # stops requiring the rule once the apex leaves GitHub Pages.
+      - name: ssl=full apex mitigation guard (#7749)
+        run: bash apps/web-platform/infra/ssl-full-mitigation.test.sh
+
+      # Its mutation battery. A config-file assertion is exactly the class that rots
+      # into vacuity, so the guard's falsifiability is itself committed rather than
+      # left as a claim: 20 rows across three axes — 16 kill rows (the rule's fields;
+      # a competing ssl rule above, below, or matching the apex WITHOUT naming it;
+      # count/for_each and lifecycle on the resource; phase; the rule's absence; and
+      # the guard's own verdict helpers) plus 4 GREEN rows, two of which pin the
+      # stage against ordinary refactors that used to retire the guard silently.
+      - name: ssl=full apex mitigation mutation battery (#7749)
+        run: bash apps/web-platform/infra/ssl-full-mitigation-mutation.test.sh
+
       - name: Run cosign trusted-root staleness + integrity gate (#6005)
         run: bash apps/web-platform/infra/cosign-trusted-root-staleness.test.sh
 
