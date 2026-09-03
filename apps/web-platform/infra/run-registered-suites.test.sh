@@ -101,7 +101,15 @@ if [[ -z "${SOLEUR_MUTATION_CHILD:-}" ]]; then
 # Pinned as an ENUMERATED ratchet rather than a count: a bare "8 known gaps" comment is
 # documentation, not a guard. This list must SHRINK — it reds both when a new underived suite
 # is registered AND when one is fixed but left listed.
+#
+# `inngest-redis-luks-loopback.test.sh` was added 2026-09-03 (#7695). It is the SAME shape and the
+# same reason as the workspaces entry beneath it: `sudo bash` inside a multi-line `run: |`, because
+# it needs root for losetup/cryptsetup/mkfs. Its structural half is a separate file with a plain
+# single-line registration and IS derived — the split exists so the arms needing no privilege stay
+# inside the local gate. Growth of this list is a cost, and it was paid deliberately here rather
+# than by excluding the whole suite: #7076 tracks the derive-but-do-not-execute fix that empties it.
 KNOWN_UNDERIVED=(
+  apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
   apps/web-platform/infra/workspaces-luks-loopback.test.sh
   apps/web-platform/infra/inngest-rls/apply-inngest-rls-dev-workflow.test.sh
   apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
