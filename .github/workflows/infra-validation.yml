@@ -1113,10 +1113,13 @@ jobs:
       - name: Run apex-single-node-replace drift-guard (#7640)
         run: bash apps/web-platform/infra/apex-single-node-replace.test.sh
 
-      # Its falsifiability evidence: M1-M9 plus the harness rows, including M3 -- the
-      # moved-index mismatch, which Terraform does NOT error on. It no-ops the move, the
-      # apex plans as two concurrent addresses again, and this battery is the only thing
-      # in the system that can see it.
+      # Its falsifiability evidence. The thing that would see a real moved-index
+      # mismatch in dns.tf is the GUARD above; this battery is what proves the guard's
+      # cases can actually go RED -- including M3, the mismatch Terraform does NOT error
+      # on (it no-ops the move and the apex plans as two concurrent addresses again).
+      #
+      # Rows name the FAIL string they expect: `rc != 0` is a symptom several assertions
+      # share, so scoring on the exit code alone credits a row for an unrelated failure.
       - name: Run apex-single-node-replace mutation battery (#7640)
         run: bash apps/web-platform/infra/apex-single-node-replace-mutation.test.sh
 

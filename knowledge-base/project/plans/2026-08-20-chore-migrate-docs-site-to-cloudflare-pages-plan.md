@@ -160,6 +160,33 @@ have converted GitHub Pages from a warm standby into a cold one: at ~1 docs
 merge/day (measured 14 in 14 days) the revert target this plan retains
 DNS-detached would be days stale by PR4, which is the stale-build outcome
 `## User-Brand Impact` calls brand-fatal. Both origins now publish every run; the
+
+> **Added 2026-09-03 (#7640 PR4a review).** Three artifact+vector pairs the
+> section did not name, all specific to the PR4a->PR4b window rather than to the
+> flip:
+>
+> - **`soleur.ai` origin-pull with no retry target.** Four proxied `A` records
+>   let Cloudflare retry a second origin address on a connection failure; one
+>   does not. `185.199.108.153` is itself anycast, and all four sit inside the
+>   single announced prefix `185.199.108.0/22`, so what is given up is per-VIP
+>   retry, not per-PoP redundancy — a BGP withdrawal took all four together
+>   anyway. The residual is a 522 on an HSTS-preloaded apex, where the visitor
+>   has no `http://` fallback. Reversible in one revert (3 creates, 0 destroys,
+>   no ack); the window is bounded by the standing constraint in `tasks.md`.
+> - **Search index, which does not recover symmetrically.** A crawl-time 522
+>   during that window costs crawl budget and can deindex the only marketing
+>   surface a prospect meets pre-signup. The DNS is instantly reversible; the
+>   index recovers on Google's schedule, not the operator's.
+> - **The `[ack-destroy]` gate is COUNT-based, not SHAPE-based.** It authorizes
+>   whatever the plan contains within `-target` scope, and the apex MX/TXT
+>   records (Protonmail, SPF, the verification TXTs) are all in that allow-list.
+>   The diff cannot reach them — the change is one hunk inside
+>   `cloudflare_record.github_pages`, and a `for_each` key removal destroys only
+>   instances of its own address — but PF9a is the SHAPE assertion and it is read
+>   by inspection, not enforced. Re-read the actual merge-time plan output
+>   immediately before typing the token, with the same discipline the plan
+>   already applies to PF-Z2 and PF-R8b. A silent mail break is invisible to
+>   every uptime monitor in this repo.
 GitHub Pages leg retires in PR5, after CUT0-CUT9 hold. This also makes the apex a
 legitimate hard gate at PR2 (Probe B), which the swap could not do until PR4.
 **PF7 is retired by construction** — see D3's supersession note.
@@ -451,7 +478,7 @@ arms (below). No invocation is carried from memory.
 | **R1.** "Retiring the ACME carve-out frees exactly the rule the www redirect needs." | The carve-out is an inline `and not (…)` clause **inside Rule 10's expression**. Retiring it frees zero rules. Only deleting Rule 10 frees a slot, which requires re-enabling zone `always_use_https` — the deferred cleanup. | D1 rebuilds the 301 outside that ruleset. ADR-194 is amended to correct its own reasoning. |
 | **R2.** `dns.tf`: "There is no `cloudflare_page_rule` / `cloudflare_list` / `http_request_redirect` resource anywhere in this repo." | **Stale since 2026-06-09.** `seo-bulk-redirects.tf` declares `cloudflare_list.legal_redirects` (12 items, 10 of them legacy legal paths) and `cloudflare_ruleset.bulk_redirects` (`kind = "root"`, `http_request_redirect`, account-scoped). | The comment is rewritten to enumerate **all three** redirect substrates and which is authoritative for what — a comment naming one substrate rots the same way this one did. |
 | **R5.** `sentry_uptime_monitor.soleur_www` keeps working unchanged. | Confirmed — asserts `301` on a URL that does not move. `soleur_acme_probe` also still holds (Pages serves `404.html` at 404), but it becomes **vacuous**, not merely misdescribed: its stated property is "ACME carve-out regression detector" for Rule 10, and today the 404 comes from a passthrough to the GitHub Pages origin. Post-cutover the 404 comes from Cloudflare Pages' own `404.html` regardless of Rule 10's state, so the assertion is a permanent pass with zero coupling to the thing it guards — while Rule 10 and its carve-out are explicitly retained in scope. | Monitors unedited; the `soleur_acme_probe` description is corrected (comment-only), and **the loss of its property is recorded against the deferred-cleanup issue** — a guard losing its property is a different finding from a stale description. |
-| **R6.** The DNS change is destructive. | Four apex `A` records collapse to one apex `CNAME`; `name`/`type` are ForceNew → **4 deletes + 1 create**, plus an **in-place update** of www (`content` is not ForceNew). `destroy_count > 0` fails the apply without `[ack-destroy]`. | PF/CUT assertions; PR3 carries the ack. |
+| **R6.** The DNS change is destructive. | > **Superseded 2026-09-03 (D5).** This row describes the pre-D5 single-merge shape — *"4 deletes + 1 create, plus an in-place update of www; PR3 carries the ack"* — and both the counts and the PR are wrong now. The cutover is two merges: **PR4a** plans 3 deletes / 0 creates (`destroy_count = 3`) and **PR4b** plans one delete+create at ONE address (`resource_deletes = 1`). `name`/`type` are still ForceNew, and `destroy_count > 0` still fails the apply without `[ack-destroy]` — which **PR4a and PR4b each carry**, not PR3. | PF9a / PF9b; each destructive merge carries its own ack. |
 | **R7.** "`_redirects` can host the www→apex 301." | **False, three ways.** (a) Cloudflare documents "Domain-level redirects" as *unsupported*, citing the exact shape. (b) The repo's own canonical-host build gate greps `_site/` recursively for `https://www\.soleur\.ai($\|[^a-zA-Z0-9.-])` — the `_redirects` line matches, failing every build. (c) A hostless source would match the apex too and loop. | Option A is removed entirely, not held as a fallback. D1 selects Bulk Redirects. |
 | **R8.** "`cloudflare_pages_domain` manages no DNS." | The claim is **true for the Terraform path**, but an earlier draft proved it from the *provider schema* — a schema exposing no DNS attribute shows the resource has no DNS field, not that the API has no side effect. The correct citation is the provider documentation at the pin: *"A DNS record for the domain is not automatically created. You need to create a `cloudflare_record` resource for the domain you want to use."* The **dashboard** flow does auto-create (*"the CNAME record will be added automatically after you confirm your DNS record"*), so the two paths genuinely differ. | Claim retained, citation corrected to the provider docs. PF3 keeps a cheap confirmation probe — had the claim been false, the failure would have arrived as error `81053` from a direction nobody was watching. |
 | **R9.** "`terraform-target-parity.test.ts` and `test-destroy-guard-counter-web-platform.sh` are the orphan suites to sweep." | Neither can see a `cloudflare_pages_*` resource. The parity test's predicate is a `terraform_data` resource with **both** an SSH `connection` block and a `provisioner` block, and it self-documents as one-directional. The destroy-guard counter's five nested-block clauses cover other `cloudflare_*` types; Pages resources have no nested-block surface. | AC14 becomes a **direct grep** of the `-target=` lines. Delegating to suites that structurally cannot see the resources would have passed vacuously. |
@@ -2339,7 +2366,7 @@ Carry forward the existing header note: *"A2/A3 grep the `cloudflare_record` res
 future v4→v5 bump renames `cloudflare_record` → `cloudflare_dns_record`."* It applies unchanged
 to the rewritten assertions.
 
-### Guard 2 — `apex-single-node-replace.test.sh` (PR4b)
+### Guard 2 — `apex-single-node-replace.test.sh` (ships in **PR4a**)
 
 **Write the matrix before the guard.** A matrix derived from finished code tests the code that
 exists; this one is derived from the property.

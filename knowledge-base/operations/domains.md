@@ -12,12 +12,16 @@ last_updated: 2026-08-20
 
 **Source of truth: `apps/web-platform/infra/dns.tf` (Terraform-managed).** The table below mirrors that file for at-a-glance ops reference; edits to records MUST be made in `dns.tf` and applied via the operator runbook, not the Cloudflare dashboard.
 
+> **Updated 2026-09-03 (#7640 PR4a).** The apex carried four proxied `A` records
+> until PR4a shrank the `for_each` to one. Nothing cross-reads this table against
+> `dns.tf`, so the mirror is honour-system — if you change apex records, change
+> this table in the same PR. The `A` rows are the hidden ORIGIN set: they are
+> proxied, so public resolution returns Cloudflare anycast and never these
+> addresses.
+
 | Type | Name | Content | Proxied | Notes |
 |------|------|---------|---------|-------|
-| A | soleur.ai | 185.199.108.153 | Yes | GitHub Pages |
-| A | soleur.ai | 185.199.109.153 | Yes | GitHub Pages |
-| A | soleur.ai | 185.199.110.153 | Yes | GitHub Pages |
-| A | soleur.ai | 185.199.111.153 | Yes | GitHub Pages |
+| A | soleur.ai | 185.199.108.153 | Yes | GitHub Pages — the ONE surviving apex origin after #7640 PR4a |
 | CNAME | <www.soleur.ai> | jikig-ai.github.io | Yes | GitHub Pages |
 | TXT | _github-pages-challenge-jikig-ai.soleur.ai | 8fcc2ac37a5abcac6cd2c71556053f | No | Domain verification |
 
@@ -118,12 +122,23 @@ The migration ships as three sequenced PRs; the table stays accurate until the t
 
 | Record | Today (as tabled above) | After the cutover |
 |---|---|---|
-| `soleur.ai` | four proxied `A` records on GitHub Pages anycast (`185.199.10[89].153`, `185.199.11[01].153`) | one proxied `CNAME` to the Cloudflare Pages project, flattened at the apex; the `MX` and `TXT` records at the apex are unaffected — CNAME flattening is what makes that legal |
+| `soleur.ai` | ONE proxied `A` record on GitHub Pages anycast (`185.199.108.153`) since #7640 PR4a shrank it from four | one proxied `CNAME` to the Cloudflare Pages project, flattened at the apex; the `MX` and `TXT` records at the apex are unaffected — CNAME flattening is what makes that legal |
 | `www.soleur.ai` | proxied `CNAME` to `jikig-ai.github.io`; the `www -> apex` **301 is GitHub-Pages-owned** | proxied `CNAME` to the same Pages project, with the 301 rebuilt as a **Cloudflare Bulk Redirect** (account-level, `http_request_redirect` phase — *not* a rule in `seo_page_redirects`) running in front of the project |
 | `_github-pages-challenge-jikig-ai.soleur.ai` | `TXT`, unproxied, domain verification | retained; GitHub Pages configuration is left in place but DNS-detached, because that is what makes the rollback a DNS-only revert |
 
-`apps/web-platform/infra/dns.tf` remains the source of truth for all of it, and the cutover is a
-single-hunk change to that file — deliberately, so the rollback is one revert.
+`apps/web-platform/infra/dns.tf` remains the source of truth for all of it.
+
+> **Superseded 2026-09-03 (#7640 PR4a).** This paragraph used to read *"the
+> cutover is a single-hunk change to that file — deliberately, so the rollback is
+> one revert."* Both halves are now false, and the second is the dangerous one.
+> The cutover is TWO merges (PR4a shrinks the apex to one address; PR4b flips
+> that address `A`->`CNAME` via a `moved` block), and **`git revert` is forbidden
+> for PR4b** — reverting it deletes the `moved` block that supplies the ordering,
+> so the plan becomes a create and a destroy at two unrelated addresses,
+> concurrently, which is Cloudflare error `81053` in reverse on an apex that is
+> already broken. The rollback is a generated reverse-`moved` PR. See
+> `knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md`
+> §Rollback, which is the authority; this file defers to it.
 
 **The GitHub Pages certificate-reissue routine is disarmed, not deleted.** Post-cutover it would
 otherwise flip **`www` to `proxied = false`** — dropping HSTS, Rule 10's HTTPS upgrade, WAF and

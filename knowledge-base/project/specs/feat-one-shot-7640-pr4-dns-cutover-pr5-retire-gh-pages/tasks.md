@@ -98,6 +98,38 @@ rejected alternatives are in the Cut List with the measurement that killed each.
 ## Standing constraints
 
 - `ssl = "full"` **stays**. Do not remove it; do not co-locate PR #7753's work here.
+- **PR4b must NOT remove the `ssl = "full"` rule, and this is the sharpest trap
+  in the whole migration.** `ssl-full-mitigation.test.sh` resolves its stage from
+  a three-way OR over `dns.tf` — apex GitHub-Pages IPs present, `www` still
+  CNAME'd at `jikig-ai.github.io`, or the `github_pages` block still declared.
+  PR4b drives all three to zero in ONE commit, flipping the guard to
+  `post-cutover`, where all nine mitigation assertions become unconditional
+  passes and the rule reads as deletable. It is not: if PR4b is then rolled back,
+  the stage returns to `pre-cutover` with the rule gone and the apex at HTTP 526
+  against an origin certificate that expired 2026-08-16.
+- **Reverting PR4a AFTER PR4b has merged is unsafe in a way git will not show
+  you.** PR4b deletes the `github_pages` block, so a revert of PR4a conflicts on
+  `dns.tf` — but NOT on `apex-single-node-replace.test.sh`, its battery,
+  `infra-validation.yml`, or `guard-vacuity-floor.test.sh`. Resolving that
+  conflict with "keep PR4b's `dns.tf`" lands a tree with the flip in place and
+  the guard plus its registration silently deleted.
+- **PF9b must be mechanized in PR4b, not read by eye (AC-new).** The guard is
+  static, so it cannot see repo-vs-STATE drift: a consistent rename of the pin
+  and the `dns.tf` key passes 11/11 while state still holds the old key, and a
+  PR4a that merges without converging (`[skip-web-platform-apply]`, or a failed
+  apply) leaves state holding four instances while the repo says one. In both
+  cases PR4b's `moved` no-ops and the hazard returns silently — and
+  `[ack-destroy]` cannot discriminate, because `destroy_count` is 1 in the
+  correct plan and 1 in the broken one. The apply job already pipes plan JSON
+  through `destroy-guard-filter-web-platform.jq`; one clause asserting the
+  `pages_apex` change carries
+  `previous_address == cloudflare_record.github_pages["185.199.108.153"]` is the
+  only check in the system that is about state rather than about text.
+- **Bound the PR4a->PR4b window explicitly.** Between the merges the apex has one
+  origin address instead of four, so Cloudflare has no retry target on an
+  origin-pull failure — on an HSTS-preloaded apex, with a 180 s email-only
+  monitor as the automated backstop. If PR4b has not merged by the end of the
+  session, revert PR4a: it plans 3 creates / 0 destroys and applies unattended.
 - `www` stays a **CNAME**. `type` is ForceNew at provider 4.52.7 (measured).
 - Do not archive the plan until PR5.
 - `git revert` is **forbidden** for PR4b.

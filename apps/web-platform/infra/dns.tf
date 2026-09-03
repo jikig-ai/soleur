@@ -294,7 +294,8 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 #   (via: 1.1 varnish, x-fastly-request-id, x-github-request-id).
 #
 #   The managed substrate that makes this work is exactly two facts below:
-#     - `cloudflare_record.github_pages` — apex A-records → GitHub Pages IPs, proxied.
+#     - `cloudflare_record.github_pages` — the apex A-record → a GitHub Pages IP,
+#       proxied. Was four records until #7640 PR4a shrank the `for_each` to one.
 #     - `cloudflare_record.www`          — www CNAME → jikig-ai.github.io, proxied.
 #   Flip `docs/CNAME` to www, or repoint either record off GitHub Pages, and the
 #   canonical direction inverts/breaks. Pure TF resource-drift sees the records

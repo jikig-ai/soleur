@@ -20,9 +20,9 @@ safe to re-run. Where a step says "run", that is what it means; where it says
 | PR1 | Pages project, Actions secrets, www Bulk Redirect, cert-reissue disarmament | apply-web-platform-infra | the substrate |
 | PR2 | `deploy-docs.yml` swap to wrangler | deploy-docs | the deploy path |
 | PR3 | `cloudflare_pages_domain.apex` + `.www` | apply-web-platform-infra | the custom-domain attachment |
-| PR4a | `dns.tf`: shrink the apex `for_each` to ONE key; ship `apex-single-node-replace.test.sh` | apply-web-platform-infra | two of the three surviving apex A-records |
-| PR4b | `dns.tf`: `moved` block + the `A`->`CNAME` flip on that one address | apply-web-platform-infra | the DNS record — **and see the prohibition below** |
-| PR5 | retire the GitHub Pages publish leg from `deploy-docs.yml` | deploy-docs | the second publish leg |
+| PR4a | `dns.tf`: shrink the apex `for_each` to ONE key; ship `apex-single-node-replace.test.sh`. **Needs `[ack-destroy]`** (`destroy_count = 3`) | apply-web-platform-infra | reverting RESTORES the three deleted apex A-records (`destroy_count = 0`, so no ack needed) |
+| PR4b | `dns.tf`: `moved` block + the `A`->`CNAME` flip on that one address. **Needs `[ack-destroy]`** (`resource_deletes = 1`) | apply-web-platform-infra | **do NOT `git revert` this one** — see the prohibition below |
+| PR5 | retire the GitHub Pages publish leg from `deploy-docs.yml` | deploy-docs | reverting RESTORES the GitHub Pages publish leg |
 
 **The cutover is TWO merges, not one.** Cloudflare rejects an `A` and a `CNAME`
 coexisting at one name with error `81053`, so four apex deletes dispatched
@@ -31,6 +31,21 @@ apex. Shrinking to one address first means the flip is a single-address REPLACE,
 which Terraform core serialises Delete->Create by construction. There is no
 pre-pass, no plan-JSON gate and no between-assert to run: the ordering is a
 property of the graph, not of a procedure someone has to follow.
+
+Both destructive merges need `[ack-destroy]` on its own line in the SQUASH
+BODY (not the subject — GitHub prefixes squash-body subjects with `* `, which
+breaks the line anchor). Get it wrong and the apply fails with `dns.tf` on
+`main` disagreeing with the zone, and **every subsequent infra merge trips the
+same gate** until a new push touching `apps/web-platform/infra/**` carries the
+token. `workflow_dispatch` cannot rescue it: `github.event.head_commit` is
+absent on a dispatch run, so `HEAD_MSG` is empty and the anchor can never
+match.
+
+**Rolling back PR4a is the cheap direction and needs no ack.** Reverting it
+plans 3 creates / 0 changes / 0 destroys, so `destroy_count = 0` and the apply
+runs unattended. The surviving key is untouched by the revert, so the apex
+never stops resolving. That asymmetry with the forward merge is worth knowing
+before you need it.
 
 PR4b's `moved.from` index must name PR4a's surviving key **byte-identically**.
 A mismatch does not error — Terraform no-ops the move, the apex plans as two
@@ -53,23 +68,28 @@ Consequences worth knowing before you read the rollback:
   repo, the second is a public hostname.
 - The job is a **conjunction**: if either origin fails to publish, or either
   build-identity probe fails, the whole run is red. No leg aborts the others.
-- **Between the PR4 apply and the PR5 merge, a red GitHub-Pages leg is EXPECTED
+- **Between the PR4b apply and the PR5 merge, a red GitHub-Pages leg is EXPECTED
   and benign.** Once the apex `A` records are gone, GitHub's custom-domain DNS
   check fails and that leg cannot succeed. The remedy is to merge PR5, which
-  removes the leg — not to debug it, and not to revert PR4.
+  removes the leg — not to debug it, and not to revert PR4b.
+
+  **This does NOT apply in the PR4a->PR4b window.** After PR4a the apex is
+  still served by GitHub Pages and GitHub Pages is still the rollback target,
+  so a red publish leg there is a real failure on the origin currently serving
+  the site — investigate it, do not wave it through.
 
 ## State after PR2 (this PR)
 
 `deploy-docs.yml` publishes to the `soleur-docs` Pages project. The apex is
-**still GitHub Pages** until PR4. Consequences, stated so they are not
+**still GitHub Pages** until PR4b. Consequences, stated so they are not
 discovered:
 
 - `soleur.ai` serves the **last GitHub Pages build** and stops advancing. Docs
-  merged between PR2 and PR4 are live on `soleur-docs.pages.dev` and not on the
-  apex. The longer PR4 is delayed, the staler the public site.
+  merged between PR2 and PR4b are live on `soleur-docs.pages.dev` and not on
+  the apex. The longer PR4b is delayed, the staler the public site.
 - The post-deploy build-identity probe runs **reporting-only** and targets
   `soleur-docs.pages.dev`, because the apex it will eventually assert about is
-  not yet served by this project. PR4 repoints it at `https://soleur.ai/version.txt`
+  not yet served by this project. PR4b repoints it at `https://soleur.ai/version.txt`
   and removes `continue-on-error`.
 - `_site/CNAME` is **expected** to become a publicly served static file
   (`https://soleur-docs.pages.dev/CNAME`). GitHub Pages consumed it; wrangler's
@@ -110,6 +130,22 @@ the line anchor.
    bash apps/web-platform/infra/generate-apex-rollback-pr.sh
    ```
 
+   **The generator ships WITH PR4b** (it is that PR's own deliverable). Between
+   the PR4a and PR4b merges it does not exist — and it does not need to, because
+   nothing is flipped yet and PR4a's rollback is a plain revert (above). If you
+   are reading this mid-incident and the script is missing, the reverse block is
+   three lines and you can hand-write it:
+
+   ```hcl
+   moved {
+     from = cloudflare_record.pages_apex
+     to   = cloudflare_record.github_pages["185.199.108.153"]
+   }
+   ```
+
+   What you must NOT do is reach for `git revert` because the generator is
+   absent. That is the one path measured to reproduce the outage.
+
    This is an imperative, not a preference, and it is measured rather than
    reasoned. `git revert` of PR4b deletes the `moved` block along with the DNS
    hunk — and the `moved` block is the entire thing supplying the ordering. The
@@ -140,16 +176,20 @@ the line anchor.
 
 4. If step 3 did not restore a working origin, the remaining lever is to put the
    apex back on Cloudflare Pages deliberately rather than to keep reverting:
-   re-merge PR3 and PR4 and treat the incident as forward-fix. Reverting further
+   re-merge PR3, then PR4a, then PR4b **in that order** — never "PR4" as one
+   act, which is the four-deletes-racing-one-create shape this whole design
+   exists to remove. Treat the incident as forward-fix. Reverting further
    does not help — PR2's revert removes the *publisher*, leaving the apex on
    Pages with nothing deploying to it.
 
-   This is the case PF7 would have measured. The four-PR split makes the
+   This is the case PF7 would have measured. The staged split makes the
    *procedure* correct without that measurement (steps 1-3), but it does not
    answer whether detaching a custom domain promptly clears edge routing. If you
    reach this step, record what you observe — that is the measurement.
 
-Step 3 is why the cutover is four PRs rather than three. PR3 and PR4 each
+Step 3 is why the cutover is staged rather than a single merge (five PRs as
+the table above enumerates: PR1, PR2, PR3, PR4a, PR4b, PR5 — six rows, because
+PR4 is two merges). PR3, PR4a and PR4b each
 introduce exactly one **apex**-origin-selecting mechanism, so whichever of the
 two is actually selecting the origin, reverting the PR that introduced it
 removes it — the procedure is correct without knowing in advance which.
@@ -163,7 +203,7 @@ the one you want; `seo-bulk-redirects.tf` is.
 > **PF7 is retired, and this is why.** An earlier revision of the plan
 > scheduled a scratch-custom-domain attach/detach probe in PR2 (D3 open item
 > 3(b)) to decide whether a DNS-only revert is sufficient. The 2026-08-20
-> four-PR amendment retires that question **by construction instead of by
+> staged amendment retires that question **by construction instead of by
 > measurement** — the two mechanisms now live in separate reverts, so the
 > answer changes nothing about the procedure above. The probe was not run: it
 > would have attached and detached a hostname on the live production zone to
@@ -220,13 +260,13 @@ content rollback is a **forward** operation:
 2. Merging it fires `deploy-docs.yml`, which rebuilds and deploys the corrected
    tree.
 3. The post-deploy build-identity probe confirms the served bytes match the new
-   commit. Before PR4 that probe is reporting-only, so read its output rather
+   commit. Before PR4b that probe is reporting-only, so read its output rather
    than relying on the job's colour.
 
 `wrangler pages deployment delete` removes a deployment but does not select
 which one the production branch serves; do not reach for it as a rollback.
 
-## Cutover verification (PR4)
+## Cutover verification (PR4b)
 
 Run the probe rather than reading a dashboard:
 
