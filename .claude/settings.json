@@ -193,6 +193,15 @@
         ]
       },
       {
+        "matcher": "Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/monitor-supersede-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit",
         "hooks": [
           {
@@ -398,6 +407,15 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/post-dispatch-watch-gate.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Monitor|TaskStop",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/monitor-arm-recorder.sh"
           }
         ]
       }
