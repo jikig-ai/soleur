@@ -92,8 +92,28 @@ write_files:
   #
   # `DefaultDependencies=no` + `Before=inngest-redis.service` + `RequiresMountsFor` on the Redis
   # side is the ordering: the mapper must exist before anything tries to mount or write it.
-  # The passphrase comes from the same 0600 root env file the other units read; there is no
-  # second credential path to keep in sync.
+  #
+  # THE PASSPHRASE COMES FROM ITS OWN 0600 FILE, `/etc/default/inngest-luks`, AND THAT IS A
+  # SECOND CREDENTIAL PATH — an earlier revision of this comment claimed there was none, and the
+  # unit shipped reading `INNGEST_REDIS_LUKS_KEY` from `/etc/default/inngest-doppler`, which
+  # carries only HOME + the Doppler token. Every boot >= 2 would have hit `reopen_key_missing`,
+  # left the mapper closed, and let the `nofail` fstab line skip silently — Redis writing its AOF
+  # to the ephemeral root disk while the ledger, the ADR and this file all claimed LUKS at rest.
+  # That is precisely the failure this unit exists to prevent, reintroduced by the unit itself.
+  #
+  # It cannot be solved by wrapping ExecStart in `doppler run`: this unit is ordered
+  # `DefaultDependencies=no` / `Before=local-fs.target`, so it runs before the network exists and
+  # a Doppler fetch cannot resolve. The file is written on FIRST BOOT by the runcmd LUKS stage,
+  # which already holds the key in scope, and mirrors `/etc/default/inngest-probe` exactly:
+  # ONE variable, 0600 root:root, and FAIL-CLOSED — no file at all rather than an empty
+  # assignment. `EnvironmentFile=` here carries no `-` prefix, so an absent file FAILS the unit
+  # rather than letting it proceed with an unset key and mount nothing.
+  #
+  # AND THE UNIT MUST BE ENABLED. It shipped un-enabled too: `write_files` puts the unit on disk
+  # and nothing else in this file ran `systemctl enable` for it, so on boot 2 systemd would not
+  # have started it at all. The enable now happens in runcmd right after the LUKS stage, with
+  # `--now` so a malformed unit surfaces at PROVISION time (off-box, via the phone-home) rather
+  # than at the next reboot, when nothing is watching.
   #
   # IDEMPOTENT: if the mapper is already open (first boot, where runcmd just opened it) this is
   # a no-op. It is NOT a substitute for the runcmd stage — that stage owns the format/mkfs
@@ -112,6 +132,7 @@ write_files:
       RemainAfterExit=yes
       SyslogIdentifier=inngest-luks-stage
       EnvironmentFile=/etc/default/inngest-doppler
+      EnvironmentFile=/etc/default/inngest-luks
       ExecStart=/usr/local/bin/inngest-luks-open.sh
       [Install]
       WantedBy=multi-user.target
@@ -507,6 +528,19 @@ runcmd:
     MAPPER=/dev/mapper/inngest-redis
     [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || { echo "FATAL: INNGEST_REDIS_LUKS_KEY empty — refusing an unencrypted mount" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
+    # STAGE THE PASSPHRASE FOR THE BOOT-REOPEN UNIT. runcmd is first-boot-only, so this stage
+    # opens the mapper exactly once in the life of the host; inngest-luks-open.service does it on
+    # every later boot, and it runs before the network exists, so it cannot fetch from Doppler.
+    # This is the ONLY place the key is in scope without a network call. ONE variable, 0600
+    # root:root, and the write is FATAL rather than best-effort: a staged key that silently failed
+    # to land reproduces the exact plaintext-AOF-on-root-disk failure the unit exists to prevent,
+    # one boot later and with nothing watching. Mirrors /etc/default/inngest-probe.
+    STAGE=luks_key_stage
+    ( umask 0177 && printf 'INNGEST_REDIS_LUKS_KEY=%s\n' "$${INNGEST_REDIS_LUKS_KEY}" > /etc/default/inngest-luks )
+    chown root:root /etc/default/inngest-luks
+    [ -s /etc/default/inngest-luks ] || { echo "FATAL: /etc/default/inngest-luks is empty after staging — the boot-reopen unit would fail on every later boot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    luks_emit luks_key_stage 0 n/a staged
+
     # ARM 0 — bounded device-presence wait, BEFORE the discriminator. blkid on an absent path
     # returns rc 2, which the accept-0-or-2 policy below would otherwise route straight into
     # the luksFormat arm. A volume that is merely slow to attach must not be read as blank.
@@ -590,6 +624,20 @@ runcmd:
     luks_emit verify 0 "$${BLK_TYPE:-empty}"
     # NO `trap - EXIT`: disarming on success would make the rc guard unreachable and untested.
     LUKSEOF
+
+  # Arm the boot-reopen unit. `--now` on purpose: the mapper is already open at this point (the
+  # stage above just opened it) so starting is a no-op, but it makes systemd PARSE and accept the
+  # unit at provision time. A malformed unit or a missing EnvironmentFile then reports HERE,
+  # off-box, instead of at boot 2 when the only observable is an AOF quietly landing on the root
+  # disk. The rc is checked and phoned home either way — an unenabled unit is exactly how this
+  # shipped the first time, and nothing noticed because a `write_files` entry looks like delivery.
+  - |
+    systemctl daemon-reload
+    if systemctl enable --now inngest-luks-open.service; then
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-luks-reopen-armed "" || true
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-luks-reopen-ARM-FAILED "the mapper will not reopen on boot 2" || true
+    fi
 
   # --- #6178 boot observability: stage the Better Stack token + emit the FIRST marker ---
   # Reached only if the Doppler CLI install + scoped-token auth + the LUKS stage all succeeded,

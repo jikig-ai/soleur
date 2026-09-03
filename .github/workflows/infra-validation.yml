@@ -996,6 +996,33 @@ jobs:
           sudo apt-get install -y -qq cryptsetup-bin
           sudo bash apps/web-platform/infra/workspaces-luks-loopback.test.sh
 
+      # (#7695) The inngest Redis AOF LUKS apparatus. TWO tiers in one suite: a structural tier
+      # that reads cloud-init-inngest.yml / inngest-redis.service / inngest-redis-bootstrap.sh, and
+      # a behavioural tier that builds a REAL loopback device and drives the REAL extracted
+      # cloud-init LUKS stage through all five blkid arms plus a SECOND SIMULATED BOOT through the
+      # real reopen script.
+      #
+      # THE STRUCTURAL TIER IS NOT CEREMONY — it is the tier that caught the two P0s this branch
+      # had already committed: the boot-reopen unit was never `systemctl enable`d (so on boot 2 it
+      # did not run at all), and it read INNGEST_REDIS_LUKS_KEY from an env file that carries only
+      # the Doppler token (so it would have failed reopen_key_missing even if it had). Either one
+      # leaves the mapper closed, the `nofail` fstab line skipping silently, and Redis writing its
+      # AOF to the ephemeral root disk while the ledger, the ADR and the cloud-init all claim LUKS
+      # at rest. A `write_files` entry looks like delivery and is not.
+      #
+      # `cryptsetup-bin` is installed again rather than inherited from the step above: a
+      # registration that silently depends on a SIBLING step's apt-get breaks the moment either
+      # step moves, and the failure would be LOOPBACK_UNAVAILABLE — read as infrastructure noise
+      # rather than as the missing dependency it is. apt-get on an installed package is a no-op.
+      #
+      # The suite NEVER self-skips: without the device layer it exits non-zero with the literal
+      # token LOOPBACK_UNAVAILABLE. It self-elevates via passwordless sudo, but is invoked under
+      # sudo here so the privilege requirement is explicit at the call site.
+      - name: Run inngest Redis AOF LUKS apparatus evidence (#7695 five blkid arms + boot-2 reopen + mount guard)
+        run: |
+          sudo apt-get install -y -qq cryptsetup-bin
+          sudo bash apps/web-platform/infra/inngest-redis-luks.test.sh
+
       # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
       # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
       # #6357 fail-fast mitigation on the registry origin was inert for weeks while every apply
