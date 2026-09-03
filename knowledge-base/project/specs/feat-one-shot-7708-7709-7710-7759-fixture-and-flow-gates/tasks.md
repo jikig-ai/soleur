@@ -81,10 +81,28 @@ Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
 - [ ] 2.1 The residue is already measured (plan Phase 2.1): `mv` 3 sites, `cp -r` 0, `rm -rf` 941 across
       316 files, redirection 1759 across 244. The last two are overwhelmingly false positives —
       939/941 and 1586/1759 are command-substitution bindings, and 650 / 1130 are literally
-      `X=$(mktemp -d)`, which always yields an absolute non-empty path.
+      `X=$(mktemp -d)`. **That parenthetical is FALSE and was corrected during PR 2 — see 2.1a.**
 - [ ] 2.1a PREREQUISITE for the widening and root-anchored families: teach the machinery that a
       `$(mktemp -d)` binding is self-guarding — directly, through a same-file wrapper, and through a
       wrapper defined in a sourced helper. Re-measure after this; that residue is the real one.
+      **MEASURED CORRECTION (PR 2).** The premise "always yields an absolute non-empty path" is
+      false on BOTH counts, measured on uutils coreutils 0.8.0:
+      `TMPDIR=reldir mktemp -d` -> `reldir/tmp.XXXX` (RELATIVE), `mktemp -d -p reldir` -> relative,
+      and a failing `mktemp -d` exits 1 leaving the binding EMPTY. The absolute-path property is
+      environmental, not lexical: it depends on `TMPDIR` at runtime, which a static scanner cannot
+      see. Documented behaviour ("use `$TMPDIR` if set, else `/tmp`", no absolutisation) is
+      implementation-agnostic; only uutils was available to measure on this host.
+      Therefore self-guarding may be claimed ONLY as follows, and the distinction is load-bearing:
+      (a) bare `$(mktemp -d)` / `$(mktemp -d -t PREFIX)` -> self-guards RELATIVITY. Measured safe
+          for this corpus: zero relative `TMPDIR` literals and zero relative `-p`/`--tmpdir` args
+          repo-wide, established with a positive control showing the pattern can match (8 real
+          `-p` uses, all `$`-expansions or `/tmp`).
+      (b) `mktemp -d -p "$X"` / `--tmpdir="$X"` -> does NOT self-guard: it inherits `$X`'s
+          relativity, which is task 2.1b's derived-binding problem, not a separate one.
+      (c) NOTHING about `mktemp` self-guards EMPTINESS. A failed `mktemp` binds empty, so the P1a
+          rule must keep treating these as command-substitution bindings needing `|| exit`.
+      Encoding the blanket claim would have silenced ~650/1130 and ~939/941 sites — the same
+      "widening that silences" P1 the nine-agent review caught on PR 1, one PR later.
 - [ ] 2.1b Handle derived bindings for the relativity claim: `_bind_res` treats `R2F="$TMP/r2floor"` as
       a literal and drops the site. Correct for P1a (empty), wrong for P1b (relative) — if `$TMP` is
       relative so is the derived path. Either resolve the parent variable or scope P1b explicitly to
