@@ -1004,8 +1004,16 @@ expect_red_scanner "R7a ack entry removed without bounding its unit" \
 # ack list — which is a legitimate, reviewed act — silently falsified the mutation rows and the
 # suite dropped two assertions. The floor caught it; a transcribed literal in a mutation row is
 # the same replicated-literal class this guard exists to police, one level up.
-ACK_N="$(grep -oE '^ACK_CARDINALITY = [0-9]+' "$SCRIPT_DIR/doppler-injection-bound.test.sh" | grep -oE '[0-9]+$')"
-[[ "$ACK_N" =~ ^[0-9]+$ ]] || { printf 'FATAL: could not derive ACK_CARDINALITY for the R7b row.\n' >&2; exit 1; }
+#
+# The `|| true` is LOAD-BEARING, not hygiene. Without it the FATAL guard on the line below is
+# UNREACHABLE in the one case it exists for: this file runs under `set -Eeuo pipefail`, so a grep
+# that matches nothing aborts the script AT THE ASSIGNMENT, and the diagnostic naming the broken
+# derivation never prints — the suite just stops, which reads like a harness reap rather than a
+# defect in its own accounting. Caught by scripts/lint-shell-capture-exit; the guard-with-an-
+# unreachable-guard is the same shape as routing an assertion floor through the helper it
+# backstops, which review already found three times in this PR.
+ACK_N="$(grep -oE '^ACK_CARDINALITY = [0-9]+' "$SCRIPT_DIR/doppler-injection-bound.test.sh" | grep -oE '[0-9]+$' || true)"
+[[ "$ACK_N" =~ ^[0-9]+$ ]] || { printf 'FATAL: could not derive ACK_CARDINALITY for the R7b row (got %s).\n' "${ACK_N:-<empty>}" >&2; exit 1; }
 expect_red_scanner "R7b ack cardinality pin (a silent ack edit cannot open a hole)" \
   "ACK_FAIL ack_cardinality=$((ACK_N - 1)) expected=${ACK_N}" 'drop-ack-entry-only'
 
