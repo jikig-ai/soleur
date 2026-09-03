@@ -101,23 +101,32 @@ function uuidv5(name: string, namespace: string): string {
 // wrong going forward: every row already written is permanently
 // uncorrectable, and both BYOK cap layers sum that column.
 //
-// SONNET IS TIME-VARYING, and we deliberately do NOT model the window: Claude
-// Sonnet 5 bills $2/$10 under introductory pricing through 2026-08-31, then
-// $3/$15 from 2026-09-01. The values below are the POST-INTRO rates, so Sonnet
-// is over-attributed by 50% until then (#6942 tracks the expiry).
+// SONNET IS NO LONGER TIME-VARYING. $2/$10 shipped as an "introductory" rate
+// through 2026-08-31 with a rise to $3/$15 scheduled for 2026-09-01; Anthropic
+// cancelled that increase and $2/$10 is now the standard price. #6942 held this
+// row at the scheduled $3/$15 so it would become correct on Sep 1 without a
+// second edit — it is discharged by the cancellation, not by the date passing.
 //
-// The real justification is NOT "a constant can't express a window" — it
-// trivially could (`Date.now() < Date.parse(...)`). It is that
-// PER_SPAWN_COST_CEILING_CENTS was itself calibrated in $3/$15 space (see its
-// docstring in leader-prompts/constants.ts), so ceiling and attribution share
-// one assumed rate and Layer-2 enforcement stays internally self-consistent;
-// modelling the window would desynchronize them and add a cliff.
+// PER_SPAWN_COST_CEILING_CENTS does NOT track this row, and an earlier version
+// of this comment was wrong to say it did. It claimed the ceiling was
+// "calibrated in $3/$15 space" so ceiling and attribution shared one assumed
+// rate. The ceiling is a real-dollar promise rendered to the founder by
+// costBreakerCopy, and Layer 3 (8 turns × 4096 max_tokens, ≈$0.33 worst-case) is
+// what bounds work — so correcting this row makes the ceiling finally mean its
+// own label rather than desynchronizing anything. It stays at 260; see its
+// docstring in leader-prompts/constants.ts.
 //
-// Be precise about what that buys: over-attribution is conservative for the
-// CAP, but these same cents are written to the WORM `audit_byok_use` ledger
-// and rendered on user-visible cost surfaces (workspace_cost_aggregate, the
-// Today cost route, the audit page) — so the operator sees a permanently
-// inflated Sonnet figure. Safe for enforcement is not the same as correct.
+// THE REGIME BOUNDARY IS UNDATED IN THE DATA. `audit_byok_use` carries no model
+// or rate column, so a row written at $3/$15 is indistinguishable from one
+// written at $2/$10, and migration 037 makes both permanent. The only partition
+// key is `created_at` against this row's change date — 2026-09-03, #7774. Both
+// cap layers self-heal across it (Layer 1's window is 1 rolling hour, Layer 2's
+// is a single spawn, and straddling rows are the over-attributed ones, so a trip
+// can only be early). Reporting does not: every lifetime aggregate spanning the
+// boundary — workspace_cost_aggregate, the Today cost route, the audit page —
+// permanently blends a 50%-over-attributed Sonnet segment with a correct one,
+// error bounded by a third of pre-boundary Sonnet cents. Do not present those
+// totals as reconcilable against the founder's Anthropic invoice.
 //
 // Values are pinned by model-tiers.test.ts so a drift must be deliberate.
 interface ModelPricing {
@@ -134,11 +143,19 @@ interface ModelPricing {
 // .model` is `AnthropicModelId` (sonnet|haiku), the only value flowing
 // through `MODEL_PRICING[…]`, so opus never reaches this lookup.
 export const MODEL_PRICING: Record<string, ModelPricing> = {
+  // Claude Sonnet 5: $2 input / $10 output / $0.20 cache-read / $2.50 5m cache-write.
+  // These were the "introductory" rates through 2026-08-31; #6942 deliberately
+  // held the row at the scheduled post-intro $3/$15 so it would become correct
+  // on 2026-09-01 without a second edit. That increase was CANCELLED — Anthropic
+  // now states $2/$10 is the standard price and the Sep-1 rise will not occur —
+  // so the row is corrected here (verified 2026-09-03 against
+  // https://platform.claude.com/docs/en/about-claude/pricing.md). Holding $3/$15
+  // over-attributes cost 50%, tripping the BYOK cap early.
   [SONNET_MODEL]: {
-    inputPerToken: 3 / 1_000_000,
-    outputPerToken: 15 / 1_000_000,
-    cacheReadPerToken: 0.3 / 1_000_000,
-    cacheCreatePerToken: 3.75 / 1_000_000,
+    inputPerToken: 2 / 1_000_000,
+    outputPerToken: 10 / 1_000_000,
+    cacheReadPerToken: 0.2 / 1_000_000,
+    cacheCreatePerToken: 2.5 / 1_000_000,
   },
   // Claude Haiku 4.5: $1 input / $5 output / $0.10 cache-read / $1.25 5m cache-write.
   [HAIKU_MODEL]: {
@@ -419,6 +436,34 @@ export async function agentOnSpawnRequestedHandler({
     });
   }
 
+  // Window anchor for the Layer-2 ceiling. Read from the DB, NOT `new Date()`:
+  // an Inngest replay re-executes this function body, so a wall-clock anchor
+  // would re-derive a different window on every retry and make the ceiling
+  // non-deterministic. `step.run` memoizes the DB value, so replays reuse the
+  // one the first attempt saw.
+  const spawnWindowStart = await step.run(
+    "read-action-send-created-at",
+    async () => {
+      const sb = getServiceClient();
+      const { data, error } = await sb
+        .from("action_sends")
+        .select("created_at")
+        .eq("id", actionSendId)
+        .single();
+      if (error || !data?.created_at) {
+        // Fail closed, matching the adjacent cap-check and precheck steps: a
+        // missing anchor would otherwise silently widen the window back to
+        // "all of history", which is the defect this read exists to close.
+        throw new Error(
+          `agent-on-spawn: could not read action_sends.created_at for ${actionSendId}: ${
+            error?.message ?? "no row"
+          }`,
+        );
+      }
+      return data.created_at as string;
+    },
+  );
+
   // The leader prompt loop. Layer-3 backstop (LEADER_MAX_TURNS = 8 turns,
   // per ADR-041); the primary gates are the Layer-1 cap-check + Layer-2
   // cost ceiling.
@@ -476,6 +521,24 @@ export async function agentOnSpawnRequestedHandler({
     }
 
     // Step: turn-n-precheck-cost-ceiling (Layer 2, AC15).
+    //
+    // `.gt("created_at", spawnWindowStart)` is what makes this PER-SPAWN. Note
+    // `leaderId` is `agent.spawn.requested:${actionClass}` — an action CLASS,
+    // constant across every spawn a founder ever makes of that class — so the
+    // two `.eq` filters alone summed the founder's LIFETIME spend for the class.
+    // Once that crossed 260¢ every later spawn of the class failed at turn 1
+    // with `cost_ceiling_exceeded`, permanently, and `audit_byok_use` is WORM
+    // (migration 037 raises P0001 on UPDATE/DELETE) so the balance could not be
+    // trimmed. The step name, the constant name, the failure message and
+    // `whichWindow: "spawn"` all already claimed per-spawn scope; only the query
+    // did not. Predicate shape mirrors the windowed sibling in
+    // app/api/dashboard/today/[id]/cost/route.ts, which keeps the
+    // (founder_id, agent_role, created_at) index usable.
+    //
+    // No upper bound, deliberately — unlike that sibling, which bounds with
+    // `.lte(created_at, acknowledged_at ?? now)` because it renders a settled
+    // total. This gate asks "what has THIS spawn spent so far", and every row
+    // after the anchor belongs to it.
     const cumulativeCents = await step.run(
       `turn-${n}-precheck-cost-ceiling`,
       async () => {
@@ -484,7 +547,8 @@ export async function agentOnSpawnRequestedHandler({
           .from("audit_byok_use")
           .select("unit_cost_cents")
           .eq("founder_id", founderId)
-          .eq("agent_role", leaderId)) as {
+          .eq("agent_role", leaderId)
+          .gt("created_at", spawnWindowStart)) as {
           data: { unit_cost_cents: number | null }[] | null;
           error: { message: string } | null;
         };
