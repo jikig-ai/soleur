@@ -436,6 +436,34 @@ export async function agentOnSpawnRequestedHandler({
     });
   }
 
+  // Window anchor for the Layer-2 ceiling. Read from the DB, NOT `new Date()`:
+  // an Inngest replay re-executes this function body, so a wall-clock anchor
+  // would re-derive a different window on every retry and make the ceiling
+  // non-deterministic. `step.run` memoizes the DB value, so replays reuse the
+  // one the first attempt saw.
+  const spawnWindowStart = await step.run(
+    "read-action-send-created-at",
+    async () => {
+      const sb = getServiceClient();
+      const { data, error } = await sb
+        .from("action_sends")
+        .select("created_at")
+        .eq("id", actionSendId)
+        .single();
+      if (error || !data?.created_at) {
+        // Fail closed, matching the adjacent cap-check and precheck steps: a
+        // missing anchor would otherwise silently widen the window back to
+        // "all of history", which is the defect this read exists to close.
+        throw new Error(
+          `agent-on-spawn: could not read action_sends.created_at for ${actionSendId}: ${
+            error?.message ?? "no row"
+          }`,
+        );
+      }
+      return data.created_at as string;
+    },
+  );
+
   // The leader prompt loop. Layer-3 backstop (LEADER_MAX_TURNS = 8 turns,
   // per ADR-041); the primary gates are the Layer-1 cap-check + Layer-2
   // cost ceiling.
@@ -493,6 +521,24 @@ export async function agentOnSpawnRequestedHandler({
     }
 
     // Step: turn-n-precheck-cost-ceiling (Layer 2, AC15).
+    //
+    // `.gt("created_at", spawnWindowStart)` is what makes this PER-SPAWN. Note
+    // `leaderId` is `agent.spawn.requested:${actionClass}` — an action CLASS,
+    // constant across every spawn a founder ever makes of that class — so the
+    // two `.eq` filters alone summed the founder's LIFETIME spend for the class.
+    // Once that crossed 260¢ every later spawn of the class failed at turn 1
+    // with `cost_ceiling_exceeded`, permanently, and `audit_byok_use` is WORM
+    // (migration 037 raises P0001 on UPDATE/DELETE) so the balance could not be
+    // trimmed. The step name, the constant name, the failure message and
+    // `whichWindow: "spawn"` all already claimed per-spawn scope; only the query
+    // did not. Predicate shape mirrors the windowed sibling in
+    // app/api/dashboard/today/[id]/cost/route.ts, which keeps the
+    // (founder_id, agent_role, created_at) index usable.
+    //
+    // No upper bound, deliberately — unlike that sibling, which bounds with
+    // `.lte(created_at, acknowledged_at ?? now)` because it renders a settled
+    // total. This gate asks "what has THIS spawn spent so far", and every row
+    // after the anchor belongs to it.
     const cumulativeCents = await step.run(
       `turn-${n}-precheck-cost-ceiling`,
       async () => {
@@ -501,7 +547,8 @@ export async function agentOnSpawnRequestedHandler({
           .from("audit_byok_use")
           .select("unit_cost_cents")
           .eq("founder_id", founderId)
-          .eq("agent_role", leaderId)) as {
+          .eq("agent_role", leaderId)
+          .gt("created_at", spawnWindowStart)) as {
           data: { unit_cost_cents: number | null }[] | null;
           error: { message: string } | null;
         };

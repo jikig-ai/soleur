@@ -233,3 +233,35 @@ single spawn, and straddling rows are the over-attributed ones, so a trip can on
 the Today cost route, the audit page — permanently blends a 50%-over-attributed Sonnet segment with
 a correct one, with error bounded by a third of pre-boundary Sonnet cents. Those totals must not be
 presented as reconcilable against the founder's Anthropic invoice.
+
+### Correction in the same PR: Layer 2 was not actually per-spawn
+
+Reviewing the ruling above surfaced that the enforcement query never matched the semantics this
+ADR describes. `turn-${n}-precheck-cost-ceiling` summed `audit_byok_use` on
+`founder_id` + `agent_role` with **no time bound**, and `agent_role` is
+`agent.spawn.requested:${actionClass}` — an action CLASS, constant across every spawn a founder
+ever makes of that class. So the "per-spawn" ceiling was a LIFETIME per-(founder, class)
+accumulator: once a founder's total for one class crossed 260¢, every later spawn of that class
+failed at turn 1 with `cost_ceiling_exceeded`, permanently. `audit_byok_use` is WORM, so the
+balance could not be trimmed or reset.
+
+The step name, the constant name, the failure message (`per-spawn cost ceiling reached at turn N`)
+and the notification's `whichWindow: "spawn"` all already claimed per-spawn scope. Only the query
+did not — the single-click guarantee this ADR justifies Layer 2 by was never the thing enforced.
+
+Fixed by anchoring the sum at the spawn's originating `action_sends.created_at`, mirroring the
+windowed sibling in `app/api/dashboard/today/[id]/cost/route.ts` (which keeps the
+`(founder_id, agent_role, created_at)` index usable). The anchor is read from the database inside
+a `step.run`, never from `new Date()`: an Inngest replay re-executes the function body, so a
+wall-clock anchor would re-derive a different window on each retry and make the ceiling
+non-deterministic. The read fails closed — a missing anchor would silently widen the window back
+to all of history, which is the defect being closed.
+
+No backfill or remediation is required, and that is a property of the fix rather than a judgement:
+windowing at the action send excludes every historical row **by construction**, so a founder
+previously locked out on a class starts their next spawn at zero. This was initially proposed as a
+deferred scope-out on the theory that WORM rows needed a remediation path; the CONCUR gate
+dissented, correctly — the premise dissolves once the window lands.
+
+Residual, unchanged and out of scope: the ceiling read fails closed on a transient Postgres error,
+so a database blip fails the spawn rather than admitting it.
