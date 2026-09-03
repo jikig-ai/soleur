@@ -20,7 +20,22 @@ safe to re-run. Where a step says "run", that is what it means; where it says
 | PR1 | Pages project, Actions secrets, www Bulk Redirect, cert-reissue disarmament | apply-web-platform-infra | the substrate |
 | PR2 | `deploy-docs.yml` swap to wrangler | deploy-docs | the deploy path |
 | PR3 | `cloudflare_pages_domain.apex` + `.www` | apply-web-platform-infra | the custom-domain attachment |
-| PR4 | the `dns.tf` record swap | apply-web-platform-infra | the DNS record |
+| PR4a | `dns.tf`: shrink the apex `for_each` to ONE key; ship `apex-single-node-replace.test.sh` | apply-web-platform-infra | two of the three surviving apex A-records |
+| PR4b | `dns.tf`: `moved` block + the `A`->`CNAME` flip on that one address | apply-web-platform-infra | the DNS record — **and see the prohibition below** |
+| PR5 | retire the GitHub Pages publish leg from `deploy-docs.yml` | deploy-docs | the second publish leg |
+
+**The cutover is TWO merges, not one.** Cloudflare rejects an `A` and a `CNAME`
+coexisting at one name with error `81053`, so four apex deletes dispatched
+concurrently with the `CNAME` create is a coin-flip on a live, HSTS-preloaded
+apex. Shrinking to one address first means the flip is a single-address REPLACE,
+which Terraform core serialises Delete->Create by construction. There is no
+pre-pass, no plan-JSON gate and no between-assert to run: the ordering is a
+property of the graph, not of a procedure someone has to follow.
+
+PR4b's `moved.from` index must name PR4a's surviving key **byte-identically**.
+A mismatch does not error — Terraform no-ops the move, the apex plans as two
+concurrent addresses again, and the hazard returns with no signal anywhere.
+`apex-single-node-replace.test.sh` row M3 is the only detection there is.
 
 ## Dual-publish: both origins are live
 
@@ -89,8 +104,22 @@ the line anchor.
 
 ### Procedure
 
-1. Merge the pre-opened revert of **PR4**. This restores the apex DNS record to
-   GitHub Pages. Requires `[ack-destroy]`.
+1. **Do NOT `git revert` PR4b.** Generate the rollback PR instead:
+
+   ```bash
+   bash apps/web-platform/infra/generate-apex-rollback-pr.sh
+   ```
+
+   This is an imperative, not a preference, and it is measured rather than
+   reasoned. `git revert` of PR4b deletes the `moved` block along with the DNS
+   hunk — and the `moved` block is the entire thing supplying the ordering. The
+   reverted plan plans `github_pages[...]` as a CREATE and `pages_apex` as a
+   DESTROY at two unrelated addresses, concurrently: the original `81053` hazard,
+   in reverse, on an apex that is by then already broken. Terraform cannot derive
+   the reverse `moved` block on its own, so the generator writes it.
+
+   Merge the generated PR. It restores the apex DNS record to GitHub Pages and
+   requires `[ack-destroy]` in the squash body, exactly as the forward flip did.
 2. Confirm which origin is actually serving:
    `bash apps/web-platform/infra/apex-origin-probe.sh`
    It reports `SERVING-FROM-GITHUB-PAGES`, `SERVING-FROM-CLOUDFLARE-PAGES`, or
