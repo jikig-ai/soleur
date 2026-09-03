@@ -199,14 +199,11 @@ ck; n=$(scan_sites "$D/wrapper_oneline.sh"); [[ "${n:-1}" -eq 0 ]] \
   && pass "a ONE-LINE mktemp wrapper resolves (the range(hi,lo,-1) regression)" \
   || fail "one-line wrapper not resolved (SITES=${n:-unset}) -- the empty-range bug is back"
 
+# NOTE: this fixture CALLS assert_fixture_dir but deliberately does not DEFINE it. The fixture is
+# only ever scanned, never executed, so a body is unnecessary — and the sibling P1a suite asserts
+# byte-equality across every tracked copy of that function, which a simplified copy here would
+# break. The rule keys on the call, so the call is all this fixture needs.
 cat > "$D/guarded_positional.sh" <<'EOF'
-assert_fixture_dir() {
-  case "${1-}" in
-    "") exit 2 ;;
-    /*) : ;;
-    *)  exit 2 ;;
-  esac
-}
 run() {
   local root="$1"
   assert_fixture_dir "$root"

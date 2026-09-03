@@ -4,7 +4,7 @@
 #   bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline
 # and only in the same commit as the source edits that earned the shrink.
 #
-# WHAT THIS IS NOT. These are NOT 909 defects. P1b asks whether an operand can be RELATIVE, or be
+# WHAT THIS IS NOT. These are NOT 913 defects. P1b asks whether an operand can be RELATIVE, or be
 # rooted at `/` by an empty parent. It does not assert any of these is reachable with such a value
 # today. The rows are the residue left AFTER the scanner resolved everything it could: mktemp in
 # every form, one-line and multi-line same-file wrappers, wrappers reached through a sourced helper
@@ -18,9 +18,9 @@
 #
 #   family      sites  files   disposition
 #   git -C          0      0   REMEDIATED INLINE in #7708 (was 17 across 3) -- no git-C row below
-#   rm -rf        194     40   grandfathered
-#   redirect      695    171   grandfathered
-#   mv / cp -r     20     18   grandfathered
+#   rm -rf        194    40   grandfathered
+#   redirect      699    173  grandfathered
+#   mv / cp -r    20     18   grandfathered
 #
 # The three grandfathered families are an order of magnitude past the threshold. Filing the
 # measured number beats asserting a fix. Burn-down is tracked on its own issue.
@@ -35,7 +35,7 @@
 # same hazard as the one-line FUNC_HEAD finding in #7709), and `mktemp -d "$ROOT/c.XXXXXX"` was
 # classified absolute when a path-bearing template inherits its prefix exactly as `-p` does.
 # Fixing those moved the count UP, 982 -> 1114. Then teaching the resolver to read a same-line
-# binding moved it DOWN, 1089 -> 909, because `L="$T/log"; : > "$L"` had been reported never-bound
+# binding moved it DOWN, 1089 -> 909 (913 after a sibling merge added four), because `L="$T/log"; : > "$L"` had been reported never-bound
 # while `T` was plainly mktemp-rooted. That 180-row shrink was validated by reading the cleared
 # sites, not by trusting the delta: in `tests/scripts/test-zot-log-channel-probe.sh` (28 -> 2) the
 # cleared rows resolve through `TMP="$(mktemp -d)" || { ...; exit 2; }`, and the two survivors are
@@ -67,8 +67,10 @@
 6	apps/web-platform/infra/credential-persist-home-guard.bench.sh
 1	apps/web-platform/infra/cron-egress-firewall.test.sh
 1	apps/web-platform/infra/cron-egress-resolve.sh
+1	apps/web-platform/infra/cutover-verify.sh
 1	apps/web-platform/infra/disk-monitor.sh
 8	apps/web-platform/infra/disk-monitor.test.sh
+3	apps/web-platform/infra/generate-apex-rollback-pr.sh
 2	apps/web-platform/infra/git-data-gc.sh
 1	apps/web-platform/infra/git-data-luks.test.sh
 2	apps/web-platform/infra/git-data-pre-receive.sh
