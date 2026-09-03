@@ -44,7 +44,10 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-: "${REPO_ROOT:?fixture dir is empty; git -C '' would retarget this write}"
+# Reachable: this file is `set -uo pipefail` with no `-e`, so a failed `cd` leaves REPO_ROOT
+# empty and execution continues. `git -C ""` then reads the CALLER's repository and the
+# comparison below silently reports a verdict about the wrong tree.
+: "${REPO_ROOT:?repo root resolved empty; git -C with an empty operand would read the calling repository}"
 WF="$REPO_ROOT/.github/workflows/scheduled-terraform-drift.yml"
 DETECTOR="$REPO_ROOT/scripts/check-cloudflare-token-drift.sh"
 INVENTORY="$REPO_ROOT/apps/web-platform/infra/doppler-config-inventory.txt"

@@ -47,6 +47,16 @@
 #   bindings in the corpus use the MULTI-LINE brace spelling, which no single-line pattern reaches
 #   at all.
 #
+#   apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh  (1 site)
+#     LATEST_TAG=$(git -C "$SCRIPT_DIR" tag --list 'vinngest-v*' ...)
+#     `tag` is unscoped in OPERAND_WRITE, so `tag --list` -- a READ -- is counted as a write. The
+#     operand is also provably non-empty: the file is `set -euo pipefail` with no toggles and
+#     binds SCRIPT_DIR="$(cd ... && pwd)", so a failed cd fails the assignment and errexit aborts
+#     before the site. A guard was added here during the burn-down and REMOVED on review: it was
+#     unreachable on both counts, and this file's own rule is that a vacuous guard is worse than
+#     an acknowledged row. Scoping `tag`/`branch`/`config` to their mutating spellings is a
+#     detector narrowing and belongs with the P1b scanner work, not here.
+#
 # Also retired here: apps/web-platform/scripts/lint-migration-fk-preconditions.sh, which an
 # earlier revision of this entry acknowledged as a measured false positive on the grounds that its
 # `|| pwd` fallback cannot produce an empty value. That is true and it is the wrong test. The
@@ -65,3 +75,4 @@
 # a scanner narrowed to a subdirectory keeps finding these eight and passes.
 #
 8	.github/scripts/test/test-infra-suite-registration-mutations.sh
+1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh

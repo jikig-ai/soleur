@@ -15,7 +15,7 @@ brand_survival_threshold: aggregate pattern
 ## Overview
 
 Four test-gate and compliance-gate repairs, all filed as deferred scope by the fixture-operand-guard
-work that merged 2026-08-31. They ship as four pull requests, one per issue, for
+work that merged 2026-09-02. They ship as four pull requests, one per issue, for
 reasons the Implementation Phases section derives from measurement rather than from the issue count.
 
 Two concern the fixture-operand scanner. One burns down the grandfathered site list the first rule
