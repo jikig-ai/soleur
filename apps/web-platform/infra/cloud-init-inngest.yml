@@ -878,6 +878,38 @@ runcmd:
   - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\n' '${doppler_token}' > /etc/default/inngest-server )
   - chown root:deploy /etc/default/inngest-server
 
+  # --- #7695 probe_schema=3: the probe's Redis credential, and NOTHING else ----------------
+  # ONE VARIABLE, ON PURPOSE. inngest-server-probe.service reads this via a tolerant
+  # `EnvironmentFile=-`, so the blast radius of the probe holding a credential is this single
+  # secret rather than a whole Doppler config — which is what makes it preferable to wrapping
+  # its ExecStart in `doppler run` (that would inject every secret in `prd` and make the
+  # probe's fixture seams settable by anyone with Doppler write access).
+  #
+  # 0600 root:root, NOT root:deploy like the file above. The probe unit carries no `User=` so
+  # it runs as root; the `deploy` account has no reason to read a Redis password, and it holds
+  # NOPASSWD sudo on this host, so a group-readable copy would be a gratuitous second path to
+  # the same secret. If the unit ever gains a `User=`, match it and move to 0640.
+  #
+  # FAIL CLOSED: if the Doppler read yields empty we write NO FILE. Never
+  # `INNGEST_REDIS_PASSWORD=` — an empty assignment would make the probe's keyspace arm run
+  # with a blank password, and a NOAUTH reply that the `# Keyspace` header test correctly
+  # rejects is indistinguishable at the gate from a warehouse outage. Absence is the honest
+  # signal: the variable stays unset, the arm never runs, and redis_keys reports
+  # __UNREADABLE__, which Guard 2 refuses on.
+  - |
+    set -a
+    . /etc/default/inngest-doppler
+    set +a
+    _rp="$(doppler secrets get INNGEST_REDIS_PASSWORD --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+    if [ -n "$_rp" ]; then
+      ( umask 0177 && printf 'INNGEST_REDIS_PASSWORD=%s\n' "$_rp" > /etc/default/inngest-probe )
+      chown root:root /etc/default/inngest-probe
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-probe-cred-staged "" || true
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-probe-cred-ABSENT "redis_keys will report __UNREADABLE__" || true
+    fi
+    unset _rp
+
   # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
   # Gated on the isolation sentinel above (fail-closed). Mirrors the web block in
   # cloud-init.yml opened by `docker create --name soleur-inngest-bootstrap-extract`:

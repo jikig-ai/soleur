@@ -871,10 +871,18 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
 # that must never appear?". The claim this change exists to make is `never 0`, so that is what
 # is asserted, in EVERY arm, over EVERY field — including the arms where the expected token is
 # also pinned positively.
-PROBE_7695_FIELDS="probe_schema host_role flush_latched data_mount_src data_bytes"
+# Presence/parity list. `redis_keys` is here.
+PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys data_mount_src data_bytes"
+# NEVER-ZERO list — deliberately EXCLUDES redis_keys, and that exclusion is the whole point.
+# For every other field `0` is a degradation masquerading as a measurement. For redis_keys `0`
+# is the CLEARING VALUE: an empty keyspace is exactly what authorizes the recut. Putting it in
+# the never-zero loop would assert that the gate's own success condition can never be emitted.
+# Its protection is the opposite shape and lives in its own cases below: a failed or
+# unauthenticated read must degrade to __UNREADABLE__ and never to 0.
+PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes"
 
-assert "#7695 probe declares probe_schema=2 (Guard 2 refuses a stale_schema row)" \
-  "grep -qE 'probe_schema=2( |\$)' '$PROBE_LOG'"
+assert "#7695 probe declares probe_schema=3 (Guard 2 refuses a stale_schema row)" \
+  "grep -qE 'probe_schema=3( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
@@ -920,7 +928,7 @@ PATH="$PROBE_W_BIN:$PATH" LOGGER_OUT="$PROBE_W_LOG" \
 
 assert "#7695 web host declares host_role=web (the row carries its own role, not just an id)" \
   "grep -qE 'host_role=web( |\$)' '$PROBE_W_LOG'"
-for _f7695 in flush_latched data_mount_src data_bytes; do
+for _f7695 in flush_latched redis_keys data_mount_src data_bytes; do
   assert "#7695 web host with /mnt/data MOUNTED and a latch present, $_f7695 is n/a" \
     "grep -qE '$_f7695=n/a( |\$)' '$PROBE_W_LOG'"
 done
@@ -949,12 +957,20 @@ cat > "$PROBE_D_BIN/du" <<'DUEOF'
 echo "4096	/mnt/data"
 DUEOF
 chmod +x "$PROBE_D_BIN/findmnt" "$PROBE_D_BIN/du"
+# Two dbs with DIFFERENT counts so a sum (7) and a db0-only DBSIZE read (3) are
+# distinguishable; equal counts would make the fixture agree with the bug.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+printf '# Keyspace\ndb0:keys=3,expires=0\ndb1:keys=4,expires=0\n'
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
 PROBE_D_LOG="$PING_TMP/logger-probe-dedicated.txt"
 : > "$PROBE_D_LOG"
 PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_D_LOG" \
   PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
   PROBE_DATA_MOUNT="/mnt/data" \
   DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
   sh "$PROBE_BODY" >/dev/null 2>&1 || true
 
 assert "#7695 dedicated shape: host_role=dedicated (same fixture as ARM 1 but for the project)" \
@@ -965,6 +981,97 @@ assert "#7695 dedicated shape: data_bytes is the measured byte count" \
   "grep -qE 'data_bytes=4096( |\$)' '$PROBE_D_LOG'"
 assert "#7695 dedicated shape: a present latch reads flush_latched=true" \
   "grep -qE 'flush_latched=true( |\$)' '$PROBE_D_LOG'"
+# 3 + 4 across TWO dbs. A DBSIZE implementation reads db0 only and would report 3 — smaller
+# than the store actually is, which is the direction that wrongly CLEARS a destroy. The two
+# dbs carry different counts so a sum and a db0-only read are distinguishable; equal counts
+# would make the fixture agree with the bug.
+assert "#7695 dedicated shape: redis_keys SUMS every db (INFO keyspace, never DBSIZE)" \
+  "grep -qE 'redis_keys=7( |\$)' '$PROBE_D_LOG'"
+
+# --- ARM 6: a NOAUTH reply must NOT render as an empty store -------------------------------
+# THE SINGLE MOST DANGEROUS DEGRADATION IN THE PROBE. redis answers an unauthenticated INFO
+# with an error and no `db<N>:` lines; `awk … END {print s+0}` prints 0 on no input, so without
+# the `# Keyspace` header test an AUTHENTICATION FAILURE would render as `redis_keys=0` — the
+# clearing value — on the field that authorizes an irreversible destroy.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+printf 'NOAUTH Authentication required.\n'
+exit 1
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
+PROBE_NA_LOG="$PING_TMP/logger-probe-noauth.txt"
+: > "$PROBE_NA_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_NA_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-wrong-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#7695 a NOAUTH reply degrades redis_keys to __UNREADABLE__, NEVER 0" \
+  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_NA_LOG'"
+assert "#7695 a NOAUTH reply never emits redis_keys=0" \
+  "! grep -qE 'redis_keys=0( |\$)' '$PROBE_NA_LOG'"
+
+# --- ARM 7: no credential at all (the web host's state, and a failed cred stage) ------------
+# cloud-init writes NO file when the Doppler read is empty, so INNGEST_REDIS_PASSWORD is unset
+# rather than blank. The arm must not run, and must not report a measurement it did not take.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+printf '# Keyspace\ndb0:keys=9,expires=0\n'
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
+PROBE_NC_LOG="$PING_TMP/logger-probe-nocred.txt"
+: > "$PROBE_NC_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_NC_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#7695 with no credential staged, redis_keys is __UNREADABLE__ even if redis would answer" \
+  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_NC_LOG'"
+assert "#7695 with no credential staged, the keyspace arm did not run (no 9 leaked through)" \
+  "! grep -qE 'redis_keys=9( |\$)' '$PROBE_NC_LOG'"
+
+# --- ARM 8: a header with NO db lines is an empty store, and that IS a measurement ----------
+# The legitimate clearing case. Distinguishing it from ARM 6 is the whole reason the header
+# test exists: same absence of `db<N>:` lines, opposite meaning, discriminated by the header.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+printf '# Keyspace\n'
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
+PROBE_MT_LOG="$PING_TMP/logger-probe-emptykeyspace.txt"
+: > "$PROBE_MT_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_MT_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#7695 an authenticated empty keyspace reads redis_keys=0 (the clearing value IS emittable)" \
+  "grep -qE 'redis_keys=0( |\$)' '$PROBE_MT_LOG'"
+
+# --- ARM 9: a header with a NON-NUMERIC keys= value ----------------------------------------
+# `awk … END {print s+0}` coerces a non-numeric addend to 0, so a truncated or garbled reply
+# that still carries the header would otherwise sum to the clearing value. The numeric
+# normaliser is what catches it, and without a fixture that normaliser is untested code.
+cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
+#!/bin/sh
+printf '# Keyspace\ndb0:keys=abc,expires=0\n'
+RCEOF
+chmod +x "$PROBE_D_BIN/redis-cli"
+PROBE_NN_LOG="$PING_TMP/logger-probe-nonnumeric.txt"
+: > "$PROBE_NN_LOG"
+PATH="$PROBE_D_BIN:$PATH" LOGGER_OUT="$PROBE_NN_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+assert "#7695 a non-numeric keys= value degrades to __UNREADABLE__, never 0" \
+  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_NN_LOG'"
+assert "#7695 a non-numeric keys= value never emits redis_keys=0" \
+  "! grep -qE 'redis_keys=0( |\$)' '$PROBE_NN_LOG'"
 
 # --- ARM 3: DEDICATED, latch ABSENT — the steady state, and the only honest `false` ---------
 # Never fixtured before this change: every dedicated run planted a latch, so `flush_latched`
@@ -1021,6 +1128,14 @@ assert "#7695 unreadable store: data_bytes is __UNREADABLE__, never 0" \
   "grep -qE 'data_bytes=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
 assert "#7695 unreadable store: flush_latched inherits __UNREADABLE__, never a bare false" \
   "grep -qE 'flush_latched=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
+# redis_keys too. If the volume cannot be read, a keyspace count from the Redis PROCESS is not
+# a statement about the DEVICE being destroyed — it is a statement about a process whose backing
+# store just failed to answer. A `0` here would be the clearing value derived from an unreadable
+# volume, which is the entire fail-open this vocabulary exists to prevent.
+assert "#7695 unreadable store: redis_keys is __UNREADABLE__, never 0" \
+  "grep -qE 'redis_keys=__UNREADABLE__( |\$)' '$PROBE_U_LOG'"
+assert "#7695 unreadable store: redis_keys is never 0" \
+  "! grep -qE 'redis_keys=0( |\$)' '$PROBE_U_LOG'"
 
 # --- ARM 5: DEDICATED, no mount at all -----------------------------------------------------
 PROBE_M_BIN="$PING_TMP/probe-bin-nomount"
@@ -1039,7 +1154,7 @@ PATH="$PROBE_M_BIN:$PATH" LOGGER_OUT="$PROBE_M_LOG" \
   DOPPLER_PROJECT="soleur-inngest" \
   sh "$PROBE_BODY" >/dev/null 2>&1 || true
 
-for _f7695 in data_mount_src data_bytes flush_latched; do
+for _f7695 in data_mount_src data_bytes flush_latched redis_keys; do
   assert "#7695 dedicated with no mount: $_f7695 is __UNREADABLE__ (the question applied)" \
     "grep -qE '$_f7695=__UNREADABLE__( |\$)' '$PROBE_M_LOG'"
 done
@@ -1049,7 +1164,7 @@ done
 # arms, so no degradation path — present or future, in any arm — can render as the value that
 # clears a destroy.
 for _l7695 in "$PROBE_LOG" "$PROBE_W_LOG" "$PROBE_D_LOG" "$PROBE_N_LOG" "$PROBE_U_LOG" "$PROBE_M_LOG"; do
-  for _f7695 in $PROBE_7695_FIELDS; do
+  for _f7695 in $PROBE_7695_NEVER_ZERO; do
     assert "#7695 never-zero: $_f7695 is not 0 in $(basename "$_l7695")" \
       "! grep -qE '$_f7695=0( |\$)' '$_l7695'"
   done
@@ -1057,7 +1172,9 @@ done
 # Cardinality guard on the loop above: a typo in either list makes the body run zero times and
 # this block reports success having asserted nothing.
 assert "#7695 never-zero invariant covered 6 logs x 5 fields" \
-  "[[ \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) -eq 5 ]]"
+  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 5 ]]"
+assert "#7695 the presence list carries one MORE field than the never-zero list (redis_keys)" \
+  "[[ \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) -eq 6 ]]"
 
 # --- Site parity ---------------------------------------------------------------------------
 # The field list appears TWICE in inngest-bootstrap.sh — the unconditional `logger` emit and
@@ -1738,7 +1855,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # + exit (ADR-193), never through `assert`/`fail`: a floor that dispatches through the helper
 # it backstops dies with the same edit that disarms the helper. Raise in lockstep when adding
 # assertions; the value is the exact count from a green run, with no slack.
-INNGEST_MIN_ASSERTIONS=289
+INNGEST_MIN_ASSERTIONS=303
 if [[ "$TOTAL" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$TOTAL" "$INNGEST_MIN_ASSERTIONS" >&2
