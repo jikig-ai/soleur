@@ -815,6 +815,23 @@ runcmd:
   # NOT brick — the units are enabled and persist. It is re-provision/`-replace` that re-runs
   # it, which is exactly what `hcloud_server.inngest` does on any user_data edit (it carries
   # no lifecycle.ignore_changes=[user_data]).
+  # INNGEST_REDIS_LUKS_KEY (#7695) MUST be admitted, and this is the THIRD instance of the same
+  # defect class in this one regex — the file already records two. inngest-redis-luks.tf declares a
+  # `doppler_secret` of that name into THIS project, and #7695 puts it in the per-merge `-target=`
+  # allowlist so it is minted at MERGE rather than at a dispatch (the passphrase has to exist before
+  # any host boots that reads it). From the moment that apply lands, an unadmitted name makes
+  # n_total(6) != n_inngest(5) → FATAL → no Vector, no inngest-server, no flip timer — and the
+  # failure is invisible off-box, because the component that ships logs is the one that never
+  # installs. That is verbatim what omitting INNGEST_CUTOVER_FLIP did in #6178. Admitting a name
+  # before its secret exists is a NO-OP for the subset test (both counters exclude an absent name),
+  # so landing the admission early is free and removes the ordering hazard entirely — the same
+  # argument the INNGEST_CONFIG_DIGEST note below makes.
+  #
+  # ITS PLACEMENT INSIDE THE GROUP IS NOT ARBITRARY: it sits BEFORE HEARTBEAT_URL so the
+  # `HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)` anchor in inngest-host.test.sh — which proves
+  # BETTERSTACK_LOGS_TOKEN is a TOP-LEVEL sibling rather than a nested member — still reads. A new
+  # member appended after HEARTBEAT_URL would break that anchor and the fix would look like
+  # "update the test", which is how the nesting guarantee gets lost.
   # INNGEST_CONFIG_DIGEST is admitted AHEAD of its terraform apply, deliberately.
   # inngest-config-digest.tf declares a doppler_secret of that name into THIS project and its
   # header requires the admitting regex to land atomically with the apply — admitting an
@@ -838,7 +855,7 @@ runcmd:
     set -euo pipefail
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
     if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi

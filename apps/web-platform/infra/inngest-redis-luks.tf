@@ -51,6 +51,29 @@ resource "random_password" "inngest_redis_luks" {
 # into the agent container's environment (the boundary workspaces-luks.tf
 # documents at length). This host does not, and the isolation is the reason its
 # apparatus can key off the root `prd` config at all.
+# ── WHY THIS PAIR IS PER-MERGE `-target`ed, UNLIKE ITS THREE SIBLINGS ────────
+# random_password.workspaces_luks, random_password.registry_luks and
+# random_password.git_data_luks are all OPERATOR_APPLIED_EXCLUSIONS: each rides
+# the gated dispatch that PROVISIONS its volume, so mint-at-dispatch is right for
+# them — the key and the volume it opens are created by one apply.
+#
+# This volume already EXISTS. The recut is a `-replace` of it, and the LUKS cut
+# happens on the host's NEXT BOOT via cloud-init's blkid discriminator — a
+# different apply from the one that mints the key, and possibly a different day.
+# A host replaced before the key is minted reaches the LUKS stage, finds
+# INNGEST_REDIS_LUKS_KEY empty, and FATALs. So the pair is in the per-merge
+# `-target=` allowlist in .github/workflows/apply-web-platform-infra.yml: "the
+# merge is inert" is the defect on this path, not the safety property.
+#
+# THE ADMISSION MUST LAND IN THE SAME COMMIT. The boot isolation self-check on
+# soleur-inngest/prd is EXACT-SET (`n_total -ne n_inngest` → FATAL), so a new name
+# in that project boot-bricks the host on its next re-provision unless
+# cloud-init-inngest.yml's admitting regex knows it. It does, as of #7695, and
+# inngest-host.test.sh replays the predicate behaviourally over a name set
+# including INNGEST_REDIS_LUKS_KEY. Ordering within the merge is safe: this apply
+# creates the secret, hcloud_server.inngest is NOT per-merge targeted, so the
+# running host does not re-provision — the check re-runs only on the next
+# dispatched replace, which boots the cloud-init that already admits the name.
 resource "doppler_secret" "inngest_redis_luks_key" {
   project    = doppler_project.inngest.name
   config     = doppler_environment.inngest_prd.slug
