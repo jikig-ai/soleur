@@ -141,7 +141,16 @@ locals {
     # when Doppler is the broken stage, which on this host is the most likely stage to
     # break. It is semi-public (already in the client bundle; variables.tf says so) and
     # lands in tfstate + metadata-retrievable user_data — accepted, and the reason the
-    # LUKS passphrase and the Better Stack INGEST token are deliberately NOT baked.
+    # LUKS passphrase is deliberately NOT baked.
+    #
+    # SUPERSEDED IN PART BY #7460 (ADR-198): the Better Stack INGEST token IS now baked, and
+    # this comment used to name it alongside the LUKS passphrase. That sentence sat INSIDE a
+    # digest input — main.tf is one of the files the evidence hash binds — so leaving it would
+    # have attested a falsehood. The two credentials are NOT the same case: the ingest token's
+    # ceiling is write-only append to a telemetry sink, while the passphrase decrypts every
+    # user's source at rest AND defends a control the privacy policy publicly claims. ADR-198
+    # states that as a three-part capability test rather than as a derivability argument,
+    # because the derivability argument licenses baking the passphrase too.
     #
     # This interpolation is also the birth-readiness INTERLOCK's sentinel:
     # git-data-birth-readiness-gate.sh refuses to plan while `${sentry_dsn}` is absent
@@ -149,6 +158,7 @@ locals {
     # threading it here IS the work — the sentinel cannot be faked by a comment.
     sentry_dsn             = var.sentry_dsn
     betterstack_ingest_url = var.betterstack_ingest_url
+    betterstack_logs_token = var.betterstack_logs_token
     # Baked at RENDER time, so it is a create-time constant rather than a runtime-
     # guaranteed invariant — it discriminates git-data's rows from its siblings on the
     # shared Better Stack source 2457081. The rehearsal diverges here BY DESIGN: it is

@@ -508,12 +508,44 @@ if grep -qF '"luks_mounted":"no"' <<<"$BS_BODY"; then pass; else
   fail "Better Stack body: k=v tags are not carried (three consumers read them from HERE)" "$BS_BODY"
 fi
 
+# --- (#7460) THE INGEST TOKEN IS NOW IN EVERY EMIT'S ENVIRONMENT ------------------
+# Before #7460 the token reached this script only under `doppler run`. It is now baked and
+# loaded on EVERY emit, and 5.3 adds an emit whose entire subject is a failing Better Stack
+# POST — the detail most likely to carry it. `_clean`'s `Bearer <tok>` pattern does not catch
+# a BARE token, so this is a VALUE redaction (_devalue_bs), exactly like the LUKS passphrase.
+#
+# The token is fixtured as a distinctive high-entropy literal so a hit is unambiguous, and it
+# is planted BARE in the DETAIL — the operator-controlled field that carries vendor error text
+# on the path 5.3 introduces. BARE IS THE POINT: written as `Bearer <tok>` the pattern rule in
+# `_clean` catches it and collapses the value redaction's own marker, so that fixture proves
+# the PATTERN rule and says nothing about `_devalue_bs`. A vendor rejection quoting a bare
+# token is the shape the value rule exists for.
+: > "$CAPTURE"
+BSTOK='Qk7vN2pR9wLmX4tZ8yHc'
+( cd "$TMP" && BETTERSTACK_LOGS_TOKEN="$BSTOK" \
+    ./git-data-emit "ingest rejected" betterstack_ingest warning \
+    "vendor said: source token ${BSTOK} not valid" ) >/dev/null 2>&1
+TOK_BODIES="$(cat "$CAPTURE")"
+if [ -n "$TOK_BODIES" ]; then pass; else fail "#7460: no body captured for the ingest-token redaction arm" ""; fi
+if grep -qF "$BSTOK" <<<"$TOK_BODIES"; then
+  fail "#7460: the Better Stack INGEST TOKEN reached the wire" "$TOK_BODIES"
+else pass; fi
+if grep -qF 'BETTERSTACK_TOKEN_REDACTED' <<<"$TOK_BODIES"; then pass; else
+  fail "#7460: the ingest-token redaction marker is absent — _devalue_bs did not run" "$TOK_BODIES"
+fi
+
 # --- Minimum-cardinality guard: a silently-empty harness must fail loud ---
 total=$((passes + fails))
-if [ "$total" -lt 44 ]; then
-  echo "FAIL: ran only ${total} assertions (<44) — suite did not execute fully" >&2
+if [ "$total" -lt 47 ]; then
+  echo "FAIL: ran only ${total} assertions (<47) — suite did not execute fully" >&2
   exit 1
 fi
 
 echo "git-data-emit: ${passes} passed, ${fails} failed (${total} assertions)"
-[ "$fails" -eq 0 ]
+# AN EXPLICIT exit, NOT A TRAILING TEST EXPRESSION. As the final statement, `[ "$fails" -eq 0 ]`
+# makes the suite's exit status a property of whichever line happens to be LAST: appending any
+# command after it (a printf, a stray echo) permanently greens the suite while it goes on
+# printing accurate failure text, and run_suite() classifies on the exit code alone. Deleting
+# the line has the same effect. Pre-existing; fixed here because #7460 is already editing this
+# file and the sibling suites already carry the explicit form.
+exit $(( fails > 0 ))

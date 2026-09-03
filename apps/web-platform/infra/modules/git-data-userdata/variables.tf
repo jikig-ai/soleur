@@ -80,6 +80,12 @@ variable "betterstack_ingest_url" {
   type        = string
 }
 
+variable "betterstack_logs_token" {
+  description = "Write-only Better Stack Logs INGEST token, baked into user_data at 0600 root:root so the pre-Doppler boot stages can reach the queryable channel (#7460). Capability ceiling is append-to-a-telemetry-sink: forged rows and quota burn, never log READ (that is BETTERSTACK_QUERY_*) and never sink management (BETTERSTACK_API_TOKEN). No default (hr-tf-variable-no-operator-mint-default) — both roots already resolve it from Doppler prd_terraform. See ADR-198 for why this is bakeable where GIT_DATA_LUKS_KEY is not."
+  type        = string
+  sensitive   = true
+}
+
 variable "git_transport_pubkey" {
   description = "PUBLIC half of the transport keypair, trimspace()'d by the caller."
   type        = string

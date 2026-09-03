@@ -90,10 +90,48 @@ write_files:
     permissions: '0600'
     defer: true
 
+  # --- (#7460) The BAKED Better Stack ingest token, at 0600 root:root.
+  #
+  # write_files, NOT `printf > file` + `chmod 600`. The two-runcmd idiom leaves the file at
+  # 0644 under the ambient 022 umask for the window BETWEEN the two entries; write_files
+  # creates it at the declared mode with no such window. The sibling Doppler token below was
+  # written that way and is fixed in this same pass -- #7460 is the one sanctioned cloud-init
+  # edit, so the incumbent gets the fix too rather than waiting for a host replace.
+  #
+  # NOT baked into the 0755 git-data-emit. That would place an ingest token at a looser mode
+  # than the doppler_token it claims equivalence with, readable by the `git` account that
+  # serves every connected user's push. ADR-198 carries the argument and its limits -- in
+  # particular that 0600 defends a file-read primitive, NOT code execution, because the
+  # git-data firewall declares zero rules and egress to the metadata endpoint is open.
+  - path: /etc/default/git-data-betterstack
+    content: |
+      BETTERSTACK_LOGS_TOKEN=${betterstack_logs_token}
+    owner: root:root
+    permissions: '0600'
+
+  # --- Restricted (0600 root) env file with the Doppler service token — NOT written to
+  # world-readable /etc/environment (mirrors the web host's /etc/default/webhook-deploy).
+  # HOME is REQUIRED: cloud-init runcmd runs with no $HOME, and the Doppler CLI aborts with
+  # "Doppler Error: $HOME is not defined" even when DOPPLER_CONFIG_DIR is set — so `doppler run`
+  # below fails and the git-data host never bootstraps (same latent bug fixed for zot in #6122).
+  #
+  # MOVED FROM runcmd TO write_files (#7460): the printf-then-chmod pair left this token at
+  # 0644 between the two entries. write_files runs before runcmd, so every consumer below is
+  # unaffected by the move.
+  - path: /etc/default/git-data-doppler
+    content: |
+      HOME=/root
+      DOPPLER_TOKEN=${doppler_token}
+      DOPPLER_CONFIG_DIR=/tmp/.doppler
+      DOPPLER_ENABLE_VERSION_CHECK=false
+    owner: root:root
+    permissions: '0600'
+
   # --- (#6982, W1) Off-host emitter. ONE script, one redactor. Rationale: ADR-147's #6982
   # addendum (terse here: ForceNew user_data, hard 32 KB cap). A FILE not an inline function
   # — luksOpen runs in a CHILD bash. Sentry unconditional from the BAKED DSN; Better Stack
-  # only when the ingest token is in env (only under `doppler run`) = the D1 split.
+  # from the baked 0600 token, or from env when `doppler run` supplies a fresher one (#7460 —
+  # this replaced the D1 channel split, which is why eight stages now reach Better Stack).
   # Usage: <msg> <stage> <level> [detail-file-or-literal] [k=v ...]
   - path: /usr/local/bin/git-data-emit
     content: |
@@ -107,6 +145,22 @@ write_files:
       if [ "$#" -ge 4 ]; then shift 4; else shift "$#"; fi
 
       command -v curl >/dev/null 2>&1 || exit 2   # structural: nothing to emit WITH
+
+      # --- (#7460) the BAKED ingest token, and which copy we ended up using -------------
+      # ENV WINS. After a Better-Stack-side rotation the `doppler run` stages carry the fresh
+      # value and only the pre-Doppler stages fall back to the baked copy, so a rotation
+      # degrades coverage rather than breaking it. BS_TOKEN_SOURCE is what makes that state
+      # observable instead of silent -- see the mirror at the Better Stack block below.
+      #
+      # The file is 0600 root:root (write_files, not printf-then-chmod). It is NOT baked into
+      # this 0755 script: doing that would place an ingest token at a LOOSER mode than the
+      # doppler_token it claims equivalence with, readable by the `git` account that serves
+      # every user's push. ADR-198 carries the full argument.
+      BS_TOKEN_SOURCE=env
+      if [ -z "$${BETTERSTACK_LOGS_TOKEN:-}" ] && [ -r /etc/default/git-data-betterstack ]; then
+        . /etc/default/git-data-betterstack
+        BS_TOKEN_SOURCE=baked
+      fi
 
       # Sanitiser + redactor on EVERY value, EVERY path. The UUID rule is critical: repos
       # are <workspace_id>.git and workspace_id === user_id (mig-053 N2), so a bare repo
@@ -139,8 +193,17 @@ write_files:
           | tail -c 180
       }
 
-      # VALUE-based: the LUKS passphrase is high-entropy, matches no pattern, and is in env.
-      _devalue() {
+      # VALUE-based: high-entropy secrets that match no pattern and live in env.
+      # TWO of them since #7460. The ingest token joined this list because the baked copy is
+      # in the emitter's env on EVERY emit, and 5.3 adds an emit whose entire SUBJECT is a
+      # failing Better Stack POST -- the detail most likely to carry it. `_clean`'s
+      # `Bearer <tok>` rule does not catch a BARE token, so pattern redaction is not enough.
+      # ONE HELPER PER VALUE, each keeping the two shapes A28b audits (`[ -n "$VAR"` and
+      # `printf '%s' "$VAR"`). A generic _dv_one(value, placeholder) helper was written first
+      # and reverted: passing the passphrase as a positional made the expansion a THIRD shape,
+      # which A28b correctly refused. Widening that allowlist to fit a refactor would trade a
+      # closed audit for a convenience — the guard is right and the refactor was wrong.
+      _devalue_luks() {
         if [ -n "$${GIT_DATA_LUKS_KEY:-}" ]; then
           SAFE=$(printf '%s' "$${GIT_DATA_LUKS_KEY}" | LC_ALL=C sed -e 's/[]\/$*.^[]/\\&/g')
           LC_ALL=C sed -e "s/$${SAFE}/LUKS_KEY_REDACTED/g"
@@ -148,6 +211,15 @@ write_files:
           cat
         fi
       }
+      _devalue_bs() {
+        if [ -n "$${BETTERSTACK_LOGS_TOKEN:-}" ]; then
+          BSAFE=$(printf '%s' "$${BETTERSTACK_LOGS_TOKEN}" | LC_ALL=C sed -e 's/[]\/$*.^[]/\\&/g')
+          LC_ALL=C sed -e "s/$${BSAFE}/BETTERSTACK_TOKEN_REDACTED/g"
+        else
+          cat
+        fi
+      }
+      _devalue() { _devalue_luks | _devalue_bs; }
 
       _san() { printf '%s' "$1" | _devalue | _clean; }
 
@@ -179,23 +251,61 @@ write_files:
           "$${MSG}" "$${LEVEL}" "$${STAGE}" '${host_name}' "$${DETAIL}" "$${TAGS}")
         # -f makes a 4xx/5xx non-zero: delivery detection without curl's --write-out, whose
         # percent-brace format specifier Terraform would read as a template directive.
-        if curl --connect-timeout 5 -m 10 --retry 2 -sf -X POST "https://$${SHOST}/api/$${PROJ}/store/" \
-             -H 'Content-Type: application/json' \
-             -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$${KEY}" \
-             -d "$${BODY}" >/dev/null 2>&1; then
+        # -K - for the same reason as the Better Stack POST below: the DSN's secret half is
+        # an ingest key with the same blast radius, and it was already argv-exposed here. This
+        # fixes the INCUMBENT, not just the credential #7460 adds.
+        if printf 'header = "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=%s"\n' "$${KEY}" \
+             | curl --connect-timeout 5 -m 10 --retry 2 -sf -X POST "https://$${SHOST}/api/$${PROJ}/store/" \
+                 -K - \
+                 -H 'Content-Type: application/json' \
+                 -d "$${BODY}" >/dev/null 2>&1; then
           RC=0
         fi
       fi
 
-      # Better Stack: queryable second copy, post-Doppler only — an absent token skips this
-      # block, which IS the channel split. $${TAGS} rides here too: THREE consumers read the
-      # four boot_complete booleans from BETTER STACK, not Sentry.
+      # Better Stack: queryable second copy. SUPERSEDED IN PART BY #7460 -- an absent token no
+      # longer means "pre-Doppler", because the token is now baked and loaded above, so EIGHT
+      # of the nine stages reach this sink. The bootcmd beacon remains Sentry-only by
+      # construction (it fires before write_files, so this script does not exist yet).
+      # $${TAGS} rides here too: THREE consumers read the four boot_complete booleans from
+      # BETTER STACK, not Sentry.
       if [ -n "$${BETTERSTACK_LOGS_TOKEN:-}" ]; then
-        curl --connect-timeout 5 -m 10 -sf -X POST '${betterstack_ingest_url}' \
-          -H "Authorization: Bearer $${BETTERSTACK_LOGS_TOKEN}" \
-          -H 'Content-Type: application/json' \
-          --data-raw "{\"message\":\"$${MSG}\",\"stage\":\"$${STAGE}\",\"level\":\"$${LEVEL}\",\"host_name\":\"${host_name}\",\"detail\":\"$${DETAIL}\"$${TAGS}}" \
-          >/dev/null 2>&1 || true
+        # -K - PUTS THE CREDENTIAL ON STDIN, NEVER ARGV. /proc/<pid>/cmdline is world-readable
+        # on stock Ubuntu 24.04 and there is no hidepid anywhere in this template, so a
+        # `-H "Authorization: Bearer ..."` is readable by ANY local account that polls during
+        # an emit -- which the 0600 file mode does nothing to prevent.
+        if printf 'header = "Authorization: Bearer %s"\n' "$${BETTERSTACK_LOGS_TOKEN}" \
+             | curl --connect-timeout 5 -m 10 -sf -X POST '${betterstack_ingest_url}' \
+                 -K - \
+                 -H 'Content-Type: application/json' \
+                 --data-raw "{\"message\":\"$${MSG}\",\"stage\":\"$${STAGE}\",\"level\":\"$${LEVEL}\",\"host_name\":\"${host_name}\",\"detail\":\"$${DETAIL}\"$${TAGS}}" \
+                 >/dev/null 2>&1; then
+          :
+        else
+          # --- (#7460 5.3) THE SILENT-FALLBACK MIRROR ------------------------------------
+          # cq-silent-fallback-must-mirror-to-sentry. The failure this exists to surface:
+          # after a Better-Stack-side rotation the pre-Doppler stages keep shipping on the
+          # STALE BAKED token and go dark -- silently darkening exactly the stages #7460
+          # widened coverage to. The old `|| true` swallowed that completely.
+          #
+          # Mirrored to SENTRY because that channel is unconditional from the baked DSN and
+          # does not depend on the sink that just failed. Level `warning`, never `fatal`: the
+          # emitter's exit contract is 0 delivered / 1 transient / 2 STRUCTURAL, and only 2
+          # refuses a boot. RC IS DELIBERATELY NOT TOUCHED HERE -- a second-sink failure must
+          # never promote into a boot failure.
+          #
+          # Carries the token SOURCE, never the token. Message literals are frozen by ADR-147;
+          # this is a NEW emit with a new stage tag, not a rename of an existing one.
+          if [ "$${BS_TOKEN_SOURCE}" = "baked" ] && [ -n "$${DSN}" ]; then
+            MBODY=$(printf '{"message":"git-data Better Stack ingest rejected the baked token","level":"warning","tags":{"stage":"betterstack_ingest","host_name":"%s","token_source":"%s","emit_stage":"%s"}}' \
+              '${host_name}' "$${BS_TOKEN_SOURCE}" "$${STAGE}")
+            printf 'header = "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=%s"\n' "$${KEY}" \
+              | curl --connect-timeout 5 -m 10 -sf -X POST "https://$${SHOST}/api/$${PROJ}/store/" \
+                  -K - \
+                  -H 'Content-Type: application/json' \
+                  -d "$${MBODY}" >/dev/null 2>&1 || true
+          fi
+        fi
       fi
 
       exit $${RC}
@@ -502,13 +612,8 @@ runcmd:
     tar xzf /tmp/doppler.tar.gz -C /usr/local/bin doppler
     chmod +x /usr/local/bin/doppler
     rm /tmp/doppler.tar.gz
-  # Restricted (0600 root) env file with the Doppler service token — NOT written to
-  # world-readable /etc/environment (mirrors the web host's /etc/default/webhook-deploy).
-  # HOME is REQUIRED: cloud-init runcmd runs with no $HOME, and the Doppler CLI aborts with
-  # "Doppler Error: $HOME is not defined" even when DOPPLER_CONFIG_DIR is set — so `doppler run`
-  # below fails and the git-data host never bootstraps (same latent bug fixed for zot in #6122).
-  - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/git-data-doppler
-  - chmod 600 /etc/default/git-data-doppler
+  # /etc/default/git-data-doppler is created in write_files at 0600 (#7460) — it used to be
+  # a printf-then-chmod pair here, which left the token at 0644 in between.
 
   # --- FRESH LUKS-at-rest volume (Sub-PR 3.D cutover target) --------------------
   # Guest-side LUKS (NOT an hcloud attribute): the fresh block volume is a PLAIN

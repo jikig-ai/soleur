@@ -596,9 +596,14 @@ if [[ "$_mod_var_declared" -ne "$_mod_var_extracted" ]]; then
   cases=$((cases + 1)); fail "the module-input extraction saw ${_mod_var_extracted} of ${_mod_var_declared} declared variable blocks" \
     "the name pattern is narrower than the identifiers actually in use; the set comparison below would be over a subset"
 fi
-_mod_var_expected="betterstack_ingest_url,doppler_config_name,doppler_token,git_data_luks_volume_id,git_data_server_type,git_data_volume_id,git_provision_pubkey,git_remove_pubkey,git_transport_pubkey,host_name,sentry_dsn"
+# 11 -> 12 (#7460): betterstack_logs_token. This pin exists so a new module input cannot appear
+# unreviewed, so widening it IS the review point — not a formality cleared to make a suite pass.
+# The new input is NOT a declarable divergence: prod and rehearsal deliberately ship to the SAME
+# Better Stack source, exactly as sentry_dsn and betterstack_ingest_url already do, and neither of
+# those is on the divergence allowlist either. See the parity arms below.
+_mod_var_expected="betterstack_ingest_url,betterstack_logs_token,doppler_config_name,doppler_token,git_data_luks_volume_id,git_data_server_type,git_data_volume_id,git_provision_pubkey,git_remove_pubkey,git_transport_pubkey,host_name,sentry_dsn"
 if [[ "$_mod_var_names" == "$_mod_var_expected" ]]; then
-  cases=$((cases + 1)); pass "the module's input surface is exactly the pinned 11 — no doppler arch/checksum input exists, and no new input can appear unreviewed"
+  cases=$((cases + 1)); pass "the module's input surface is exactly the pinned 12 — no doppler arch/checksum input exists, and no new input can appear unreviewed"
 else
   cases=$((cases + 1)); fail "the module's input surface drifted from the pinned set" \
     "expected=${_mod_var_expected} actual=${_mod_var_names}"
@@ -1559,19 +1564,95 @@ fi
 # not move with the suite only ever guards the work that predates it, and the deletion it
 # most needs to catch is the one that removes the arms someone just argued for.
 #
+# ── ARMS 72–75 (#7460): the baked ingest token's bindings ──────────────────────────
+#
+# 5.5 RESIDENCY. The issue asks for an assertion that trips red if the credential's scope is
+# later narrowed. Targeted at the TERRAFORM DECLARATION rather than at a live Doppler config,
+# because the git-data host has never been born and `prd_git_data` holds nothing to read.
+_luks_tf="${DIR}/git-data-luks.tf"
+_bs_res="$(sed 's/[[:space:]]#.*$//' "$_luks_tf" 2>/dev/null \
+  | awk '/^resource "doppler_secret" "git_data_betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
+cases=$((cases + 1))
+if grep -qE 'name[[:space:]]*=[[:space:]]*"BETTERSTACK_LOGS_TOKEN"' <<<"$_bs_res" \
+   && grep -qE 'config[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.name' <<<"$_bs_res"; then
+  pass "git-data-luks.tf still provisions BETTERSTACK_LOGS_TOKEN into the git-data prd config"
+else
+  fail "git-data-luks.tf still provisions BETTERSTACK_LOGS_TOKEN into the git-data prd config" \
+       "the doppler_secret resource was renamed, rescoped, or removed — the post-Doppler stages lose their token"
+fi
+
+# 5.6a THE DIVERGENCE ALLOWLIST MUST NOT HAVE GROWN. Adding betterstack_logs_token to it would
+# permit a rehearsal that shipped its stage markers to a DIFFERENT sink than production while
+# still producing hash-valid evidence — the one thing the allowlist exists to refuse. Asserted
+# as ABSENCE of this name, not as an exact-set pin: the set legitimately changes for identity
+# vars, and pinning it whole here would duplicate the gate's own authority.
+_allow="$(grep -oE 'GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="[^"]*"' "$GATE" | head -1)"
+cases=$((cases + 1))
+if [[ -n "$_allow" ]] && ! grep -q 'betterstack_logs_token' <<<"$_allow"; then
+  pass "betterstack_logs_token is NOT a declarable divergence (prod and rehearsal share one sink)"
+else
+  fail "betterstack_logs_token is NOT a declarable divergence (prod and rehearsal share one sink)" \
+       "allowlist=${_allow:-<not found>}"
+fi
+
+# 5.6b STRUCTURAL PARITY, and the plan is honest that this is weaker than value equality.
+# The gate refuses DECLARED divergences; nothing asserts the two roots pass the same VALUE, and
+# a value assertion is not implementable here — the value is a secret resolved at apply time and
+# this suite must never read it. What IS checkable: each root passes its OWN root variable into
+# the module, and both root variables are declared with NO default, so neither can silently fall
+# back to something else. That is the same binding sentry_dsn already has. The residual is
+# tracked (render-arg values are bound by declaration, not by the evidence).
+_prod_tf="${DIR}/git-data.tf"
+_reh_tf="${DIR}/rung2-rehearsal/rehearsal.tf"
+cases=$((cases + 1))
+# `grep -cE`, NOT `grep -qE` ON A PIPE. Under `set -o pipefail` a piped `grep -q` that matches
+# EARLY closes the pipe, the producer takes SIGPIPE (141), and pipefail propagates it — so a real
+# match reads as a MISS. Measured here: both predicates return 1 standalone and the arm still
+# failed. `-c` reads all input, so there is no early close. (#6649 documents this class.)
+_prod_pass="$(sed 's/[[:space:]]#.*$//' "$_prod_tf" | grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' || true)"
+_reh_pass="$(sed 's/[[:space:]]#.*$//' "$_reh_tf" | grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' || true)"
+if [[ "$_prod_pass" -ge 1 && "$_reh_pass" -ge 1 ]]; then
+  pass "both roots pass their own var.betterstack_logs_token into the module"
+else
+  fail "both roots pass their own var.betterstack_logs_token into the module" \
+       "one root hardcodes it, renames it, or does not pass it at all"
+fi
+
+# NO DEFAULT on either root variable. A default is how the two roots silently diverge: one
+# resolves from Doppler, the other falls back to a literal, and every structural check above
+# still passes.
+_novar_default() {  # $1 = variables.tf path ; 0 = no default declared
+  local _blk _n
+  _blk="$(sed 's/[[:space:]]#.*$//' "$1" \
+    | awk '/^variable "betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
+  _n="$(grep -cE '^[[:space:]]*default[[:space:]]*=' <<<"$_blk" || true)"
+  [[ "$_n" -eq 0 ]]
+}
+cases=$((cases + 1))
+if _novar_default "${DIR}/variables.tf" && _novar_default "${DIR}/rung2-rehearsal/variables.tf"; then
+  pass "neither root declares a default for betterstack_logs_token (no silent fallback)"
+else
+  fail "neither root declares a default for betterstack_logs_token (no silent fallback)" \
+       "a default lets one root resolve a different value while every structural check still passes"
+fi
+
 # RAISED 70 -> 71 WITH THE ARM THAT MADE IT NECESSARY (#7227 item 4): arm 10's comparison
 # chain gained a FOURTH replica of the rehearsal prefix — the evidence-capture script's
 # `--host-name` constraint, which is now a consumer of the same literal and drifts the same
 # way. Folded into the existing chain rather than given its own arm plus mutation, because
 # that chain's whole property is already "every replica of one literal agrees".
 # 70 + 1 = 71. Measured: 71 passed, 0 failed.
-if [[ "$cases" -lt 71 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 71.\n' "$cases" >&2
+#
+# RAISED 71 -> 75 (#7460): four arms binding the baked ingest token — its Doppler residency, its
+# ABSENCE from the divergence allowlist, both roots passing their own root variable, and neither
+# root declaring a default. 71 + 4 = 75. Measured: 75 passed, 0 failed.
+if [[ "$cases" -lt 75 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 75.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 71)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 75)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 [[ "$fails" -eq 0 ]]
