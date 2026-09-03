@@ -248,6 +248,107 @@ compound's "inherited SENTENCE" gate firing on a real case: the words survived t
 context, the evidence did not. The comment now cites the measurement and explicitly warns that the
 block below is stale.
 
+### 13. The measurement was one grep away, and I wrote the conclusion instead
+
+I asserted in an ADR that Soleur's advisor consults are "cold single-shot spawns" whose "cache
+reads are ≈0", and put it under the heading **"The finding that decides it"** with no hedge —
+while the costing table twelve lines below was correctly labelled *"estimated, method stated —
+not measured"*. Same evidentiary basis; the unhedged one was the load-bearing one.
+
+Measured over the 17 Task-subagent transcripts the session had already produced:
+
+| | |
+|---|---|
+| cache-read input | 56,998,076 |
+| uncached input | 1,766 |
+| cache-read share | **100.00%** |
+| average per spawn | 3,352,828 tokens |
+| lightest spawn | 227,239 over 7 turns |
+
+Wrong by six orders of magnitude. The defect was conflating two propositions that share a
+phrase: **across** spawns there is no reused prefix (true), **within** a spawn the prefix is
+re-read every turn (false to deny — a Task subagent is an agentic loop).
+
+Three things make this worse than an ordinary mistake, and they are the transferable part:
+
+1. **The evidence already existed in the repo, arguing the other way.** `AGENTS.md` rejects the
+   built-in advisor because it re-sends the transcript *uncached* — which is only a
+   distinguishing defect if ordinary Task spawns **are** cached. The claim and its refutation
+   sat in the same corpus on the same day.
+2. **The data was already on disk.** The spawns had run; their transcripts carry `usage` blocks.
+   Cost of checking: one aggregation script. I wrote a conclusion because the reasoning felt
+   tight, and reasoning that feels tight is exactly the input this repo's rules say to falsify.
+3. **The hedging was inverted.** I hedged the estimate I could not measure and did not hedge the
+   claim I could. Label strength by evidence, not by how confident the sentence sounds.
+
+It also inverted a number the rest of the document leaned on. Because cache read dominates
+input, Fable 5.1 is **1.25× Sonnet 5** at cache-read rates ($0.25 vs $0.20), not the 5× the
+headline $10/$50 gives. The "5× Sonnet" figure I used to argue *against* widening Fable
+describes the wrong line item for this workload.
+
+**Gate:** before writing a cost or performance claim, ask "has this already run, and did it
+leave a record?" If yes, the record is the claim. If no, say `estimated` in the sentence itself.
+
+### 14. The gate I added was the inverse of the argument I used to justify it
+
+The proposal added a consult seat at review-synthesis, justified by the skill's own
+structural-enumeration seat — which says, in the same file:
+
+> Allocate the seat by **REPLACING** one adversarial seat, not by adding to the panel — the
+> point is a cheaper panel, not a larger one.
+
+I quoted that reasoning and added a seat. The file now argued both things about the same failure
+class, and nothing in the diff acknowledged the contradiction.
+
+The tell was available without a reviewer: **the justification and the mechanism had different
+shapes.** The thesis prescribes a *pre-panel enumeration that replaces*; the diff shipped a
+*post-panel advisory that adds*. Detecting at synthesis that the panel sampled one gap N times
+relabels findings after the token spend rather than avoiding it.
+
+The remedy was smaller and free: hoist the seat's existing "Reading its output" line into
+`<synthesis_tasks>` as an unconditional, auditable checklist item. It had been living inside a
+**conditional** block, so on any PR that did not trip that seat, nobody read it.
+
+**Gate:** when a diff cites an existing rule as its justification, quote the rule's *prescription*
+next to the mechanism and check they have the same shape. "Cites a real principle" and
+"implements that principle" are different claims.
+
+### 15. A prose bound moves silently, and the PR that moves it also deletes its anchor
+
+ADR-083 bounded the Fable pin to "exactly two gates". Nothing enforced it — the existing
+`workflow-model-pins.test.ts` scans `*.workflow.js` only, and the ADR says so itself. My diff
+moved the bound to three *and*, in the same change, deleted the only numeric anchor another file
+carried ("balloon ADR-083's scoped **2-gate** consult"). I widened a boundary and removed the
+evidence that it had been narrower.
+
+The fix is mechanical, not rhetorical: a test asserting the pin appears at exactly the sanctioned
+set, so admitting a gate is a test edit. Paired with a written admission rule whose third clause —
+*a session-model spawn was tried and demonstrably failed* — the proposal itself could not clear.
+Writing the bar down is what revealed the proposal did not meet it; the consult ships unpinned
+with the counterfactual recorded as un-run.
+
+**Corollary, and the sharpest instance of insight 11 yet:** that test's first draft matched
+`` /`model: fable`/ `` and reported **three** gates where two exist — because `review/SKILL.md`
+contains a sentence *explaining why it is not pinned*, and that sentence quotes the pin. A
+body-grep sees prose. This is `cq-assert-anchor-not-bare-token`, committed inside the guard
+written to enforce a model-cost policy, hours after I routed that same lesson into
+`review/SKILL.md`. Anchoring on the call form (`subagent with \`model: fable\``) fixed it; M1–M4
+then all caught.
+
+### 16. A justification can be false for half the population it names
+
+The audit's surface table ruled out the product runtime with: *"Founder BYOK spend under a 260¢
+per-spawn ceiling."* True for the leader loop. **False for the 53 `cron-*.ts` functions** in the
+same row, which run on the operator's own API key — `cron-agent-native-audit.ts` states it and a
+test enforces it. So the protection I cited does not reach the half of the population that spends
+Soleur's *uncapped* money, and the row read as safe precisely where it was least protected.
+
+Two-population rows are the shape to distrust: the moment a cell lists more than one system, the
+justification has to hold for each one separately or the row is a summary of the strongest case.
+
+**Gate:** for every row of a risk or exemption table, name the *weakest* member and check the
+stated reason against that one.
+
 ## Unresolved
 
 The audit script reproducibly selects a binary file that my standalone `grep` reproducibly does
@@ -326,6 +427,29 @@ documents a ugrep/GNU-grep hazard elsewhere).
     run-level conclusion, which is still `null`/in-progress while a job inside it is red. —
     **Prevention:** poll job-level state (`gh run view --json jobs`) when the question is "did
     anything fail yet"; run-level conclusion answers "is it over", which is a different question.
+21. **Asserted a measurable cost claim as "the finding that decides it" without measuring it**,
+    while correctly hedging the estimate beside it. — Recovery: ran the aggregation; the claim was
+    wrong by six orders of magnitude and inverted a tier ratio the document leaned on. —
+    **Prevention:** insight 13 — if the thing has already run and left a record, the record is the
+    claim; otherwise the word `estimated` goes in the sentence.
+22. **Added a mechanism justified by a principle that prescribes the opposite mechanism.** —
+    Recovery: replaced the spawn with a free unconditional checklist line and dropped the tier
+    pin. — **Prevention:** insight 14 — quote the cited rule's prescription next to your mechanism
+    and check the shapes match.
+23. **Widened a prose bound and deleted its only numeric anchor in the same diff.** —
+    Recovery: reverted to the original bound and made it mechanical with a test plus a written
+    admission rule. — **Prevention:** insight 15 — a bound worth stating is worth a test; if it
+    is only prose, the PR that moves it is the one that also erases the evidence.
+24. **Wrote a table row whose stated justification was false for half the population it named**
+    (a BYOK cap cited over 53 crons that do not run on BYOK). — **Prevention:** insight 16 — check
+    the reason against the weakest member of the row, not the representative one.
+25. **Stopped after pushing review fixes instead of continuing to compound → ship — the SECOND
+    time in this session**, after the first was already written up as error 1 and routed into
+    `review/SKILL.md` as "CI is running is NOT a handoff". The operator asked "why did you stop
+    here?" both times. — **Prevention:** the existing rule was not the gap; adherence was. The
+    concrete trigger: **pushing a `review:` commit is the point where compound is next**, not a
+    place to report status and wait. Treat "I have just pushed review fixes" as a lifecycle
+    checkpoint that has an obligatory successor, never as a turn boundary.
 
 ## Prevention
 
