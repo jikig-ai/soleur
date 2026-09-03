@@ -294,8 +294,8 @@ expect "[G16b] flush_latched=true still => dark (neither polarity blocks)" dark 
 
 # G17 — the LIVE Hetzner attachment disagrees with the operator's pin. Guard 1's ID-PIN reads a plan
 # document; this one reads the world, and it is the world that gets destroyed.
-predicate G17 "live attachment id != the pin => id_pin_mismatch" id_pin_mismatch "$ROWS" "$FIN" --live-attachment-id "$OTHERID"
-expect "[G17b] an UNREADABLE live attachment id => id_pin_mismatch (fail-closed)" id_pin_mismatch "$ROWS" "$FIN" --live-attachment-id ""
+predicate G17 "the live volume id != the pin => id_pin_mismatch" id_pin_mismatch "$ROWS" "$FIN" --live-attachment-id "$OTHERID"
+expect "[G17b] an UNREADABLE live volume id => id_pin_mismatch (fail-closed)" id_pin_mismatch "$ROWS" "$FIN" --live-attachment-id ""
 
 # G18 — #7674 has not read PASS. Without it the recut is strictly counterproductive: the first arm
 # would write a fresh latch, fail verify_or_abort, and land in terminal `aborted` with the store gone.
@@ -599,7 +599,7 @@ fi
 _bind() {  # _bind <label> <extended-regex>
   if grep -qE "$2" "$WF"; then pass; else fail "Row 7: $1 — the workflow does not pass this from a variable (a literal here makes the predicate tautological)"; fi
 }
-_bind "G17's live attachment id"    '\-\-live-attachment-id[[:space:]]+"\$\{?LIVE_'
+_bind "G17's live volume id"    '\-\-live-attachment-id[[:space:]]+"\$\{?LIVE_'
 _bind "G18's followthrough rc"      '\-\-followthrough-rc[[:space:]]+"\$\{?FT_'
 _bind "G19's cutover flag"          '\-\-cutover-flag[[:space:]]+"\$\{?FLAG'
 _bind "G20's diagnostic-boot value" '\-\-diagnostic-boot[[:space:]]+"\$\{?DBOOT'

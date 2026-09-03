@@ -187,7 +187,7 @@ on:
       #   curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
       #     'https://api.hetzner.cloud/v1/volumes?name=soleur-inngest-redis-store' | jq -r '.volumes[0].id'
       expected_inngest_volume_id:
-        description: "[inngest-volume-recut] the numeric Hetzner id of the inngest Redis AOF volume to destroy (id-pin — checked against BOTH the live Hetzner attachment and the plan's before.id). Read it from the Hetzner API, not from a drift run."
+        description: "[inngest-volume-recut] the numeric Hetzner id of the inngest Redis AOF volume to destroy (id-pin — checked against BOTH the live Hetzner volume resolved BY NAME and the plan's before.id). Read it from the Hetzner API, not from a drift run."
         required: false
         type: string
       # `manual-rerun` (default) preserves the historical escape-hatch behavior EXACTLY
@@ -2317,7 +2317,7 @@ jobs:
             echo "**Pinned volume id:** ${EXPECTED_INNGEST_VOLUME_ID:-n/a}"
             echo "**Run:** ${RUN_URL}"
             echo ""
-            echo "Guard 2 (host dark + store measured empty, 20 predicates) ran BEFORE the plan; Guard 1 graded the plan; both id-pins were checked against independent sources (live Hetzner attachment, plan before.id)."
+            echo "Guard 2 (host dark + store measured empty, 20 predicates) ran BEFORE the plan; Guard 1 graded the plan; both id-pins were checked against independent sources (the live Hetzner volume resolved by NAME and asserted attached to the inngest server, and the plan's before.id)."
             echo ""
             echo "The replacement volume is RAW. **This dispatch does not encrypt anything by itself, and it does not finish the cutover.**"
             echo ""

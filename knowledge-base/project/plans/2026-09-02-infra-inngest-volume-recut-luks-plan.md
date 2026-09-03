@@ -625,7 +625,7 @@ across rows:**
 5. **`redis_keys == 0`**, from `INFO keyspace` across **all** databases — **not `DBSIZE`**, which
    is db-0 only while `FLUSHALL` spans every db. The shipped post-flush assert already carries that
    asymmetry; it must not be inherited into a gate that authorizes destruction.
-6. The live Hetzner attachment's volume id equals the id the dispatch pinned.
+6. The live Hetzner volume id equals the id the dispatch pinned. *(Corrected 2026-09-03: this read "the live Hetzner attachment's volume id". The workflow resolves the id by NAME (`/volumes?name=soleur-inngest-redis-store`) and then asserts that volume is attached to the inngest server; it is not a read of the attachment resource. So G17 answers "the volume carrying this name is the pinned id, and it is attached to the host we measured" — which is what the mount pin needs — and does NOT independently prove the terraform ADDRESS resolves to that volume. Guard 1's `before.id` pin is what answers the address question; the two are complementary and neither subsumes the other.)*
 7. **Host identity — `host=soleur-inngest` AND `host_name=soleur-inngest-prd` on the row.**
    `inngest-bootstrap.sh` is the **SHARED** renderer for both hosts, so the co-located web host
    emits this probe too. Without the full conjunction a web-host row reporting its own (irrelevant)
@@ -1050,7 +1050,7 @@ distinguishable only that way.
 | `not_dark` | `server_active=active` or `http_code=200` | The host is serving. **Stop.** Nothing about this plan applies to a serving host |
 | `redis_keys > 0` | Store is populated | Destructive path refused. Route to ADR-142 byte-copy under #6894 — **but see the circularity note below** |
 | `mount_mismatch` | `/mnt/data` is not on the pinned device | The mount failed open and Redis is on the root disk. Do **not** recut; the volume's real contents are unmeasured |
-| `id_pin_absent` / `luks_id_mismatch` | Pin missing, or address resolves elsewhere | Re-read the live Hetzner attachment id and re-dispatch. If the volume was stranded, use the bare-create recovery shape |
+| `id_pin_absent` / `luks_id_mismatch` | Pin missing, or address resolves elsewhere | Re-read the live Hetzner volume id (resolved by name) and re-dispatch. If the volume was stranded, use the bare-create recovery shape |
 | Guard 1 `out_of_scope` / `resource_deletes` | Drift is in the plan | Do **not** widen the gate. Reconcile drift under its own dispatch first |
 | LUKS boot fails after Dispatch B | Volume already destroyed | **No rollback exists.** The store was empty by precondition, so recovery is re-provision: functions re-sync from Postgres and the SDK re-registers |
 

@@ -114,7 +114,7 @@
 #   Read proof
 #     G16 flush_latched ∈ {true,false}   (READABILITY ONLY)                    -> unreadable
 #   Dispatch-time live re-reads (NOT from the row)
-#     G17 the live Hetzner attachment volume id == the operator's pin          -> id_pin_mismatch
+#     G17 the live Hetzner volume (BY NAME) id == the operator's pin           -> id_pin_mismatch
 #     G18 scripts/followthroughs/inngest-host-not-serving-7674.sh reads PASS   -> followthrough_7674
 #     G19 INNGEST_CUTOVER_FLIP (synchronous) ∈ {rolled-back, aborted}          -> flag_unsafe
 #     G20 INNGEST_DIAGNOSTIC_BOOT (synchronous) is unset or 0                  -> diagnostic_boot
