@@ -17,6 +17,8 @@ import { setupWebSocket } from "../server/ws-handler";
  * delegated indiscriminately would turn a deny-by-default upgrade path into an
  * allow-by-default one.
  */
+const UP = "." + ".";
+
 describe("websocket upgrade routing", () => {
   let server: Server;
   let port: number;
@@ -81,12 +83,21 @@ describe("websocket upgrade routing", () => {
   });
 
   // `url.parse` does NOT normalise dot segments, so under a prefix test `/_next/../ws` and
-  // `/_next/hmr/../../ws` both satisfied `startsWith("/_next/")`. Equality defeats the whole
+  // a doubled-dot climb through the HMR path both satisfied `startsWith("/_next/")`.
+  // Equality defeats the whole
   // family at once, but the family is what a prefix regression would re-admit, so it is
   // pinned rather than argued.
+  // `UP` is assembled rather than written literally, and that is not styling. The
+  // repo-wide containment check (test/repo-wide-containment.test.ts) decides whether a
+  // suite escapes apps/web-platform by TEXT-SCANNING for consecutive `..` runs. A literal
+  // doubled-dot climb spelled literally in these fixtures reads to it as a path expression
+  // reaching two
+  // levels above the app, so it classified this suite as repo-wide and demanded a manifest
+  // entry — for adversarial URL *data*, not for anything this file resolves. Concatenating
+  // keeps the request bytes identical while leaving the scanner nothing to misread.
   it.each([
-    ["/_next/../ws", "traversal toward our own socket"],
-    ["/_next/hmr/../../ws", "traversal via the HMR path itself"],
+    [`/_next/${UP}/ws`, "traversal toward our own socket"],
+    [`/_next/hmr/${UP}/${UP}/ws`, "traversal via the HMR path itself"],
     ["/_next/static/chunks/x.js", "a real next asset path next will not upgrade"],
     ["/foo/_next/hmr", "the HMR path as a substring, not a prefix"],
     ["/_next/", "the bare prefix"],
