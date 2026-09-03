@@ -995,9 +995,26 @@ also went green while P2 — this plan's headline property — went unguarded. P
 on the row are the fix, and they are the same technique AC7 already uses.
 
 **AC5 — limb (iii) no longer claims what the workflow does not deliver.** The old string
-`signer is informed of the record at signing time` returns **0** from `pa7`. The grep is scoped to the
-PA-7 block deliberately: the new audit records quote that string as the text being corrected, so a
-repo-wide absence grep would false-fail a correct implementation.
+`signer is informed of the record at signing time` must not survive in the **live cell text**:
+
+```bash
+row 'Lawful basis' | sed 's/\*\*\[2026-.*//' | grep -c 'signer is informed of the record at signing time'
+```
+
+returns **0**, and the same command against `main` returns **1** — so the criterion is non-vacuous.
+
+**Amended at implementation; the first form was unsatisfiable by a correct implementation.** It
+asserted the string returns 0 from `pa7` — the whole PA-7 block — and scoped away only the *audit
+records*. But this register's amendment convention requires every block to quote the text it
+supersedes (*"this cell previously read X"*), and Ruling 4's binding CORRECTION block does exactly
+that. So the string is necessarily present inside the block, and the original AC forbade the very
+convention the advisory mandates. Measured: 1 occurrence in PA-7, 0 of them in live text.
+
+The `sed` strips from the first amendment block onward, leaving only the operative cell. The AC now
+tests the real property — the live limb makes no claim the workflow does not deliver — rather than a
+proxy that a correct file fails. Fixing the artifact here would have meant deleting a mandated block;
+the criterion was the thing that was wrong, and it is amended explicitly rather than quietly replaced
+with a looser command at run time.
 
 **AC6 — the lawful-basis cell names the real mechanism and splits the balancing.** Against
 `row 'Lawful basis'`: `custom-notsigned-prcomment` returns ≥ 1; `necessity` returns ≥ 1; and
@@ -1045,9 +1062,37 @@ Ruling 2's own replacement §(c) cell contains the literal strings `Lawful basis
 out-of-scope row that happens to mention one of the four names, including PA-12's `Lawful basis` row
 and PA-15's `Special categories (Art. 9 / 10)` row.
 
-Paired with a magnitude check, since a name filter cannot see a row whose prefix is unchanged:
-`git diff main...HEAD -- "$REG" | grep -c '^[+-][^+-]'` equals twice the number of rows this PR
-rewrites — four today, five if the CLO's answer to the `(h)` question adds one.
+**But the anchored form above is ALSO only a proxy, and this was found at implementation.** Its
+allowlist is keyed on the row **label** with no Processing-Activity scoping, so `Special categories.*`
+and `Lawful basis` match those rows in **all 35** activities. It would pass a full semantic rewrite of
+PA-31's `Special categories` cell and fail a trailing-pipe repair on PA-34's `(a) Controller` — it does
+not assert "only PA-7's rows" at all. That is the defect class this branch's own learning file names:
+a check certifying something narrower than the name it carries.
+
+**Mutation-proven, not reasoned.** A PA-31 Special-categories cell was mutated semantically and the
+two forms were run against the same tree: the label limb reported **PASS**, the strengthened form
+below reported **FAIL**. A guard whose removal changes no verdict is vacuous; this one's does.
+
+**AC9-STRONG — the invariant itself.** Extract PA-7 from `main` and from the working tree, and assert
+that the register's whole changed-line count equals PA-7's:
+
+```bash
+extract() { awk '/^## Processing Activity 7 /{f=1;next} /^## Processing Activity /{f=0} f'; }
+git show main:"$REG" | extract > /tmp/pa7.main; extract < "$REG" > /tmp/pa7.head
+whole=$(git diff main -- "$REG" | grep -c '^[+-][^+-]')
+only7=$(git diff --no-index --unified=0 -- /tmp/pa7.main /tmp/pa7.head | grep -c '^[+-][^+-]')
+[ "$whole" = "$only7" ]   # every changed line in the file is inside PA-7
+```
+
+Reading at implementation: **9 and 9** — 4 rows rewritten (+4/−4) plus the new `(h)` row (+1).
+
+**Use `git diff main`, not `git diff main...HEAD`.** The three-dot form reads the committed tree, so it
+reports `0` for an uncommitted edit — which reads as "nothing changed outside PA-7" and passes for the
+wrong reason. The two-number comparison is what surfaced this: `whole=0` against `only7=9` is a
+contradiction a single-number assertion could not have shown.
+
+The magnitude count the first draft paired here (`= twice the rows rewritten`) is subsumed: it was a
+number the plan chose for itself, and the equality above is derived from the file.
 
 This also subsumes the Better Stack disclosure tokens (source ID `2457081`, cluster `eu-fsn-3`), which
 live in other Processing Activities' rows: any edit to them fails this AC.
@@ -1197,9 +1242,21 @@ the AC2 field-count awk with `NF != 7` (five columns plus the leading and traili
 and every such line greps `#[0-9]\+`.
 
 *Count*: `compliance-posture.md` gains **exactly four** rows under `## Active Compliance Items`, one
-per finding in the addendum's A5 table, each carrying its own `compliance/critical` issue number,
+per finding in the addendum's A5 table, each carrying **a** `compliance/critical` issue number,
 `Status: OPEN`, and a `check_id`. **Zero DPIA rows** — A5 records why, so the count is not
 re-litigated later.
+
+**"its own" → "a", ruled at A7.2, and the row count is unaffected.** Four rows carry **three**
+distinct numbers: Rows 2 and 4 are the same article (Art. 9) on the same activity, differing only by
+population, gateway and remediation, and remediation-splitting is not this register's test. A5's
+stated precedent was falsified at implementation — #7119's own title is *"PA-32: minimise or cease the
+community republication limb (R1-R5)"*, bundling five remediations under one obligation, and the PA-32
+trio splits on Art. 6 / Art. 14 / Art. 35. `compliance-posture.md` already carries multiple rows on a
+single number, so the `Issue` column requires a number per row, not a distinct number per row.
+
+Assert instead: four rows, and `sort -u` over their `Issue` cells returns **three** numbers. **Rows 2
+and 4 must carry different `Notes` text**, each naming which surface its share of the shared issue
+covers — a repeated number with duplicated notes is indistinguishable from a copy-paste error.
 
 An earlier draft asserted *exactly one* row, on Ruling 6's "net one addition". Review challenged that
 against the PA-32 precedent (#7119/#7120/#7121 — three rows plus a published sentence) and the
@@ -1207,15 +1264,33 @@ question went back to the reviewing authority, which answered **four**. Had the 
 assertion survived, it would have blocked the correct outcome — an AC frozen on an unverified count
 gating against the right answer.
 
-*Filed and dated*: **every Phase 2 issue — items 1, 2, 3, 3b, 4, the four at item 5, and item 6 —**
-exists and is referenced by number in the PR body, and for each
-number `gh issue view N --json labels,milestone` returns a non-empty label set drawn from the verified
-allowlist. **Phase 2 items 1 and 2 additionally carry the `Phase 4: Validate + Scale` milestone** — a merge
-gate on that, not merely on the labels, because an issue in `Post-MVP / Later` is where a split
-quietly becomes a deferral. Items 3 and 4 are filed to `Post-MVP / Later` and are **not** gated here.
+*Filed and dated*: **all seven Phase 2 issues** exist, are referenced by number in the PR body, and
+for each number `gh issue view N --json labels,milestone` returns a non-empty label set drawn from the
+verified allowlist. **The four that carry an obligation or a mechanism — #7812, #7813, #7814, #7816 —
+additionally carry the `Phase 4: Validate + Scale` milestone**, a merge gate on the milestone and not
+merely on the labels, because an issue in `Post-MVP / Later` is where a split quietly becomes a
+deferral. #7815, #7817 and #7818 are filed to `Post-MVP / Later` and are **not** gated here.
+
 The first draft asserted that labels "were verified via `gh label list` before the issue was created",
 which is a process claim no command can falsify after the fact; asserting the issue's actual label set
 is the state-based form.
+
+**Ten planned filings became seven, and the enumeration is restated because the item numbers moved.**
+A `code-simplicity-reviewer` CONCUR gate ran as admission control before any issue was created, and
+established that the plan's stated blocker for inlining seven of them — that AC9 forbade touching rows
+outside PA-7 — was false (see AC9 above). The scope question that survived is a legal one and was
+ruled by the attestation authority at A7, not by the reviewer. Net issue flow: **+6**, from a planned
++9.
+
+| Issue | Carries | Milestone |
+|---|---|---|
+| #7812 | Posture Row 3, and the `CORPUS DIVERGENCE` / `(h)` tracking reference | Phase 4 |
+| #7813 | Posture Row 1 — Art. 6 | Phase 4 |
+| #7814 | Posture Rows 2 **and** 4 — Art. 9, both surfaces | Phase 4 |
+| #7815 | The four over-broad AUP § 4.7 sites (2 correction, 2 determination) | Post-MVP |
+| #7816 | The specified-but-unbuilt sign-phrase gate + `override_reason` vocabulary | Phase 4 |
+| #7817 | Register hygiene — six bare labels, ten pre-existing lint errors | Post-MVP |
+| #7818 | Two C4 gaps | Post-MVP |
 
 ### Cut at plan review — recorded, not silently dropped
 
