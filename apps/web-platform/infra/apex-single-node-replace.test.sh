@@ -235,7 +235,7 @@ verdict "$rc" "exactly one apex address record in dns.tf (found ${APEX_COUNT}: $
 cbd_offenders=""
 while IFS=$'\t' read -r rname rtype rcbd; do
   [[ -z "${rname:-}" ]] && continue
-  [[ "$rcbd" == "1" ]] && cbd_offenders="${cbd_offenders}${rname} "
+  [[ "$rcbd" == "1" ]] && cbd_offenders="${cbd_offenders}${rname}(${rtype}) "
 done <<<"$APEX_RECS"
 rc=1; [[ -z "$cbd_offenders" ]] && rc=0
 verdict "$rc" "no apex address record declares create_before_destroy (offenders: ${cbd_offenders:-none})"
