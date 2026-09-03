@@ -148,6 +148,23 @@ than either shipping it or silently dropping it.
     strip is #6665's intent, not a bug. **Prevention:** before calling inherited
     behaviour a defect, read the comment that introduced it.
 
+## Routing (deferred, deliberately)
+
+The floor-UNIT class belongs in `plugins/soleur/skills/review/SKILL.md`'s defect
+catalogue, beside the existing floor-derivation rule which covers the NUMBER but not
+the UNIT. It is **not** routed there in this PR: editing that file would put this PR
+outside conjunct 2 of the meta-case exemption it introduces, and widening a safety
+gate so the author's own PR fits through it is the anti-pattern the gate exists to
+resist. The insight is recorded here in full; `scheduled-compound-promote.yml`
+consumes learnings and proposes exactly this kind of skill edit.
+
+Proposed bullet, ready to lift: *ask what UNIT an anti-vacuity floor counts — a floor
+over ROWS is blind to a row that asserts nothing, and the headline it prints is
+byte-identical either way. Emit one assertion per CHECK, fail a row whose check list
+is empty, and assert the baseline table's own cardinality. An anchor rule of "the
+count must SHRINK" is wrong for a replacement mutation that CREATES a pattern; require
+the anchor to MOVE in either direction, and for a REORDER assert inverted ORDER.*
+
 ## Key Insight
 
 On a PR whose deliverable is a guard, **review the new assertions before the new
