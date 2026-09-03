@@ -35,6 +35,7 @@ __pycache__/
 # covers `.<sink>.jsonl`, `.<sink>-YYYY-MM.jsonl`, `.<sink>-YYYY-MM.jsonl.gz`,
 # and any HHMMSSN-suffixed collision archive.
 .claude/.rule-incidents*
+.claude/.monitor-arms*
 # Freeze edit-lock runtime state (.claude/hooks/lib/freeze-lock.sh) — a single
 # worktree-local line holding the active allowed path prefix; never committed.
 .claude/.freeze*
