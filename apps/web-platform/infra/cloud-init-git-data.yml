@@ -27,11 +27,18 @@ bootcmd:
       KEY=$(printf '%s' "$${DSN}" | sed -E 's#https://([^@]+)@.*#\1#')
       SHOST=$(printf '%s' "$${DSN}" | sed -E 's#https://[^@]+@([^/]+)/.*#\1#')
       PROJ=$(printf '%s' "$${DSN}" | sed -E 's#.*/([0-9]+)$#\1#')
-      curl --connect-timeout 5 -m 8 -sf -X POST "https://$${SHOST}/api/$${PROJ}/store/" \
-        -H 'Content-Type: application/json' \
-        -H "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=$${KEY}" \
-        -d '{"message":"git-data boot stage","level":"info","tags":{"stage":"bootcmd_start","host_name":"${host_name}"}}' \
-        >/dev/null 2>&1 || true ) || true
+      # -K - HERE TOO. This is the SECOND call site of the same sentry_key, and #7460's first
+      # draft converted only the emitter's two POSTs while ADR-198 claimed "the argv hole,
+      # closed for both credentials". There are THREE POSTs carrying a credential on this host
+      # and this was the one left on argv. Nothing exempts it: it is a plain inline curl, so
+      # the "it fires before write_files" argument that keeps this stage Sentry-only says
+      # nothing about how it passes its header.
+      printf 'header = "X-Sentry-Auth: Sentry sentry_version=7, sentry_key=%s"\n' "$${KEY}" \
+        | curl --connect-timeout 5 -m 8 -sf -X POST "https://$${SHOST}/api/$${PROJ}/store/" \
+            -K - \
+            -H 'Content-Type: application/json' \
+            -d '{"message":"git-data boot stage","level":"info","tags":{"stage":"bootcmd_start","host_name":"${host_name}"}}' \
+            >/dev/null 2>&1 || true ) || true
 
 # Dedicated transport user for git over the private net. Its login shell is
 # git-shell (no arbitrary commands), and the authorized_keys forced-command below

@@ -25,6 +25,12 @@
 #     sentry_dsn                    — the fatal channel under test; a rehearsal against a
 #                                     different DSN proves a channel prod does not use
 #     betterstack_ingest_url        — same, for the stage-marker channel
+#     betterstack_logs_token        — the CREDENTIAL half of that same channel (#7460). The
+#                                     argument is stronger here than for the URL: the capture
+#                                     script's ANCHOR_SQL and HOST_SQL read ONE source, so a
+#                                     rehearsal shipping under a different token would have the
+#                                     anchor answered by unrelated hosts while this host's rows
+#                                     landed somewhere the script never queries.
 #
 #   NOT INPUTS AT ALL — doppler_arch and doppler_sha256 were module variables until #7025 R7
 #   and are now derived internally from git_data_server_type. They are listed here only to
@@ -84,6 +90,16 @@ variable "betterstack_logs_token" {
   description = "Write-only Better Stack Logs INGEST token, baked into user_data at 0600 root:root so the pre-Doppler boot stages can reach the queryable channel (#7460). Capability ceiling is append-to-a-telemetry-sink: forged rows and quota burn, never log READ (that is BETTERSTACK_QUERY_*) and never sink management (BETTERSTACK_API_TOKEN). No default (hr-tf-variable-no-operator-mint-default) — both roots already resolve it from Doppler prd_terraform. See ADR-198 for why this is bakeable where GIT_DATA_LUKS_KEY is not."
   type        = string
   sensitive   = true
+
+  # NON-EMPTY, asserted at the MODULE. "No default" does not exclude the empty string, and empty
+  # is the worst reachable value: the file renders as `BETTERSTACK_LOGS_TOKEN=`, the POST's -n
+  # guard skips, and eight of the nine stages go dark on a hash-VALID boot. This is the shared
+  # chokepoint for both roots AND an evidence-hash input, so the constraint is self-invalidating
+  # — removing it moves the digest and re-holds the rung-2 gate.
+  validation {
+    condition     = length(var.betterstack_logs_token) > 20
+    error_message = "betterstack_logs_token must be a real ingest token; an empty or stub value darkens eight of the nine git-data boot stages while still producing hash-valid rung-2 evidence."
+  }
 }
 
 variable "git_transport_pubkey" {

@@ -1485,4 +1485,8 @@ if [ "$total" -lt 133 ]; then
 fi
 
 echo "git-data-luks: ${passes} passed, ${fails} failed (${total} assertions)"
-[ "$fails" -eq 0 ]
+# `exit $(( fails > 0 ))`, NOT a trailing `[ "$fails" -eq 0 ]`. A bare final test expression
+# makes 133 assertions' worth of exit status a property of whichever line is last: one appended
+# printf turns a run printing real failures into rc=0. #7460 fixed this in git-data-emit.test.sh
+# and asserted the siblings already carried the explicit form -- this file did not.
+exit $(( fails > 0 ))
