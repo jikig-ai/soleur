@@ -95,16 +95,30 @@ fi
 # were both fully green. This battery was armed against deletion and neutering and unarmed against
 # SHRINKAGE, which is the direction a future edit actually takes.
 SITES_LIVE=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null | sed -n 's/^SITES=//p')
-if [[ "${SITES_LIVE:-0}" -lt 120 ]]; then
-  printf '[FATAL] live corpus reports only %s sites (floor 120). The baseline is shrink-only, so a\n' "${SITES_LIVE:-unset}" >&2
-  printf '        narrowed scanner is INVISIBLE to it — this floor is what makes narrowing loud.\n' >&2
-  printf '        If a real remediation dropped the count, lower this floor in the SAME commit.\n' >&2
+# EXACT, not a floor. The `>= 120` form was the right instrument while 167 sites were
+# grandfathered: it made a narrowed scanner loud, because the shrink-only baseline can only ever
+# detect GROWTH. The burn-down (#7709) took the population to 1, and a floor over a population of
+# 1 is worthless — it cannot tell a narrowed scanner from a clean tree, which is this whole
+# family's failure mode.
+#
+# Equality is strictly stronger in both directions at this size, and it is now the arm that
+# enforces plan task 1.11: the live count must equal the ACKNOWLEDGED row total, so a site can
+# only survive by being written down with a reason. Growth is still caught per-file by the ratchet
+# below; narrowing is caught here AND by the synthetic must-FAIL fixtures in section E, which feed
+# the scanner known-bad shapes and are the real anti-narrowing burden now that the corpus is clean.
+ACK_TOTAL=$(grep -vE '^#|^[[:space:]]*$' "$BASELINE" | awk -F'\t' '{s+=$1} END {print s+0}')
+if [[ "${SITES_LIVE:-unset}" != "$ACK_TOTAL" ]]; then
+  printf '[FATAL] live corpus reports %s sites; the baseline acknowledges %s.\n' \
+    "${SITES_LIVE:-unset}" "$ACK_TOTAL" >&2
+  printf '        HIGHER: a new unasserted site appeared — fix it, do not regenerate.\n' >&2
+  printf '        LOWER:  either a real remediation (drop the row in the SAME commit) or the\n' >&2
+  printf '                scanner narrowed, which is the failure this arm exists to catch.\n' >&2
   exit 1
 fi
-# A named member, at its exact count: a floor over a total cannot see one file going to zero while
-# another grows. `context-reviewed-gate.test.sh` is one of the six this issue remediated.
-NAMED_FILE=".claude/hooks/context-reviewed-gate.test.sh"
-NAMED_WANT=12
+# A named member, at its exact count. A total cannot see one file going to zero while another
+# grows, so the surviving acknowledged file is pinned by name as well as by the sum above.
+NAMED_FILE="apps/web-platform/scripts/lint-migration-fk-preconditions.sh"
+NAMED_WANT=1
 NAMED_GOT=$(python3 "$SCANNER" --rule operand --repo "$REPO_ROOT" 2>/dev/null \
   | grep -E "^${NAMED_FILE}:[0-9]+:" | wc -l | tr -d ' ')
 if [[ "$NAMED_GOT" != "$NAMED_WANT" ]]; then
@@ -143,7 +157,13 @@ ck
 sandbox_base="$TMP_ROOT/shrunk.txt"
 # EVERY row decremented, not just the first with count>1. Decrementing one row made this arm a
 # 1-of-33 sample whose apparent power was threshold luck, and coupled it to that file's real count.
-awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print; next} {print ($1>1 ? $1-1 : $1), $2}' "$base" > "$sandbox_base"
+#
+# Unconditionally, including rows at 1. The `$1>1 ? $1-1 : $1` form silently became a NO-OP when
+# the burn-down (#7709) took the corpus to a single acknowledged row of count 1: nothing was
+# shrunk, so nothing was detected, and this arm reported the ratchet decorative while the ratchet
+# was fine. A row shrunk 1 -> 0 is exactly the "this file may not appear at all" case, which is
+# the strongest form of the claim, so there was never a reason to exempt it.
+awk -F'\t' 'BEGIN{OFS="\t"} /^#/{print; next} {print ($1-1), $2}' "$base" > "$sandbox_base"
 shrunk_violation=""
 while IFS=$'\t' read -r n f; do
   [[ -n "$f" ]] || continue
@@ -526,6 +546,7 @@ canon_raw="$(awk '/^assert_fixture_dir\(\) \{/,/^\}/' "$HELPERS")"
 for case_name in empty relative bareslash; do
   ck
   r=$(probe_repo "$case_name")
+  : "${r:?fixture dir is empty; git -C '' would retarget this write}"
   case "$case_name" in
     empty)     op="" ;;
     relative)  op="relative/path" ;;

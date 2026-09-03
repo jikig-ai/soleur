@@ -16,6 +16,7 @@ command -v jq >/dev/null 2>&1 || { echo "SKIP: jq missing"; exit 0; }
 command -v git >/dev/null 2>&1 || { echo "SKIP: git missing"; exit 0; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+: "${WORK:?fixture dir is empty; git -C '' would retarget this write}"
 git -C "$WORK" init -q
 STATE_DIR="$WORK/.git"
 

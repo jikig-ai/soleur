@@ -101,6 +101,7 @@ expect_pass() {
 
 add_wf() { # repo, relative path, body
   local repo="$1" rel="$2"
+  : "${repo:?fixture dir is empty; git -C '' would retarget this write}"
   mkdir -p "$repo/$(dirname "$rel")"
   cat > "$repo/$rel"
   git -C "$repo" add -A
@@ -403,6 +404,7 @@ YML
 expect_red "$R9" "row9a NESTED .github/workflows is in scope" "apps/web-platform/.github/workflows/nested.yml"
 
 R9B=$(make_repo row9b)
+: "${R9B:?fixture dir is empty; git -C '' would retarget this write}"
 mkdir -p "$R9B/plugins/soleur/scripts"
 printf '#!/usr/bin/env bash\nset -euo pipefail\nbun install --frozen-lockfile\n' > "$R9B/plugins/soleur/scripts/gate.sh"
 git -C "$R9B" add -A
@@ -413,6 +415,7 @@ expect_red "$R9B" "row9b plugins/**/*.sh is in scope" "plugins/soleur/scripts/ga
 # `/`, so they covered arbitrary depth BELOW those two and missed every scripts/ directory
 # elsewhere, leaving ~185 tracked scripts unscanned while the header named one exclusion.
 R9C=$(make_repo row9c)
+: "${R9C:?fixture dir is empty; git -C '' would retarget this write}"
 mkdir -p "$R9C/apps/web-platform/scripts"
 printf '#!/usr/bin/env bash\nset -euo pipefail\nbun install --frozen-lockfile\n' > "$R9C/apps/web-platform/scripts/setup.sh"
 git -C "$R9C" add -A
@@ -422,6 +425,7 @@ expect_red "$R9C" "row9c a non-root scripts/ directory is in scope" "apps/web-pl
 # variable name after ltrim, so the head-anchored extractor could not see it — and
 # worktree-manager.sh carries live examples on the /ship path.
 R10=$(make_repo row10)
+: "${R10:?fixture dir is empty; git -C '' would retarget this write}"
 mkdir -p "$R10/scripts"
 printf '#!/usr/bin/env bash\ncmd=(bun install --frozen-lockfile --cwd "$d")\n' > "$R10/scripts/wt.sh"
 git -C "$R10" add -A
@@ -429,6 +433,7 @@ expect_red "$R10" "row10 array-assignment bun install is seen" "installs with bu
 
 # Row 10b: the per-line waiver suppresses exactly that line...
 R10B=$(make_repo row10b)
+: "${R10B:?fixture dir is empty; git -C '' would retarget this write}"
 mkdir -p "$R10B/scripts"
 printf '#!/usr/bin/env bash\ncmd=(bun install --frozen-lockfile) # lint-workflow-install-sites: allow-bun\n' > "$R10B/scripts/wt.sh"
 git -C "$R10B" add -A
@@ -437,6 +442,7 @@ expect_pass "$R10B" "row10b per-line allow-bun waiver suppresses its own line"
 # Row 10c: ...and ONLY that line. A naked reintroduction in the same file must still RED,
 # or the waiver would be a file-wide exemption wearing a per-line label.
 R10C=$(make_repo row10c)
+: "${R10C:?fixture dir is empty; git -C '' would retarget this write}"
 mkdir -p "$R10C/scripts"
 printf '#!/usr/bin/env bash\ncmd=(bun install --frozen-lockfile) # lint-workflow-install-sites: allow-bun\nbun install --frozen-lockfile\n' > "$R10C/scripts/wt.sh"
 git -C "$R10C" add -A
@@ -472,6 +478,7 @@ expect_pass "$H2" "H2 workflow with no install step (guard does not require one)
 # out of scope. Composite actions are NO LONGER a boundary -- row 11 asserts they are
 # scanned -- so this row now pins only the Dockerfile half.
 H3=$(make_repo h3)
+: "${H3:?fixture dir is empty; git -C '' would retarget this write}"
 printf 'FROM node:22\nRUN npm ci\nRUN npm ci --omit=dev\n' > "$H3/Dockerfile"
 git -C "$H3" add -A
 expect_pass "$H3" "H3 the production Dockerfile bare 'npm ci' stays out of scope"

@@ -134,6 +134,7 @@ res=$(resolve "$nonrepo" "main"); rc=${res%%|*}
 
 # Unrelated histories: a ref that resolves but shares no ancestor must not report clean.
 d2=$(mk_repo)
+: "${d2:?fixture dir is empty; git -C '' would retarget this write}"
 git -C "$d2" checkout -q --orphan orphan
 echo x > "$d2/g"; git -C "$d2" add -A; git -C "$d2" -c core.hooksPath=/dev/null commit -qm orphan
 res=$(resolve "$d2" "main"); rc=${res%%|*}

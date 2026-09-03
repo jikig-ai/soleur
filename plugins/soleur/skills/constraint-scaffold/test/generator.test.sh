@@ -75,6 +75,7 @@ fi
 
 # --- exit 67: --refresh-baseline on a dirty tree refuses ----------------------
 FX="$(make_repo dirty next)"
+: "${FX:?fixture dir is empty; git -C '' would retarget this write}"
 printf '// gate config\n' > "$FX/apps/web-platform/.dependency-cruiser.cjs"
 git -C "$FX" add apps/web-platform
 git -C "$FX" commit -q -m "seed gate"

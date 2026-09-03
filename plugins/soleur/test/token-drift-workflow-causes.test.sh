@@ -44,6 +44,7 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+: "${REPO_ROOT:?fixture dir is empty; git -C '' would retarget this write}"
 WF="$REPO_ROOT/.github/workflows/scheduled-terraform-drift.yml"
 DETECTOR="$REPO_ROOT/scripts/check-cloudflare-token-drift.sh"
 INVENTORY="$REPO_ROOT/apps/web-platform/infra/doppler-config-inventory.txt"

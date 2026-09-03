@@ -22,6 +22,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+: "${SCRIPT_DIR:?script dir resolved empty; git -C with an empty operand would act on the caller repository}"
 CLOUD_INIT="$SCRIPT_DIR/cloud-init.yml"
 
 # NO `producer | grep -q` ANYWHERE IN THIS FILE. Under `set -o pipefail` (above) `grep -q`

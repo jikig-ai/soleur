@@ -35,6 +35,7 @@ trap 'rm -rf "$HIC_TMPROOT"' EXIT
 # sibling gates (#5192), so the branch is set rather than inherited.
 mk_repo() {
   local d; d="$(mktemp -d -p "$HIC_TMPROOT")"
+  : "${d:?fixture dir is empty; git -C '' would retarget this write}"
   git -C "$d" init -q -b feat-fixture
   git -C "$d" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
   echo "$d"

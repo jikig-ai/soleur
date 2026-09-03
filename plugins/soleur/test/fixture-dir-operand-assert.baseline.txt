@@ -34,29 +34,24 @@
 # planning estimate that ~140 sites carried an unrecognised custom guard was measured false here:
 # of 167, exactly 8 carried a real abort the detector missed.
 #
+#
+# 2026-09-03 BURNED DOWN, 159 -> 1 (#7709). The grandfather list is spent. What remains is ONE
+# acknowledged row, and it is acknowledged because it was measured to be a FALSE POSITIVE rather
+# than because it was expensive to fix:
+#
+#   apps/web-platform/scripts/lint-migration-fk-preconditions.sh
+#     REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || pwd)"
+#     The `|| pwd` fallback cannot produce an empty value. Measured in all three reachable states:
+#     git resolves (prints a path), git fails (pwd prints the CWD), and the CWD has been DELETED
+#     out from under the shell (bash's pwd builtin still prints $PWD, rc=0). So the operand is
+#     non-empty on every path and a guard added here could never fire. A vacuous guard is worse
+#     than an acknowledged row: it reads as protection and asserts nothing.
+#
+# The suite now asserts SITES == this file's acknowledged total EXACTLY, in both directions. The
+# old `SITES >= 120` floor was the right instrument against a narrowed scanner while 167 sites
+# were grandfathered; over a population of 1 a floor cannot tell narrowing from a clean tree.
+#
 # Counts, not line numbers: line numbers churn on every unrelated edit above them, and a
 # baseline that reds for a comment insertion gets regenerated reflexively, which is how a
 # ratchet stops being one.
-10	.claude/hooks/pencil-collapse-guard.test.sh
-1	.claude/hooks/post-dispatch-watch-gate.test.sh
-6	.claude/hooks/pre-merge-auto-close-scan.test.sh
-2	.claude/hooks/ship-soak-followthrough-gate.test.sh
-5	.claude/hooks/skill-context-queries.test.sh
-1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
-2	apps/web-platform/infra/workspaces-luks-loopback.test.sh
 1	apps/web-platform/scripts/lint-migration-fk-preconditions.sh
-1	plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh
-2	plugins/soleur/skills/constraint-scaffold/test/generator.test.sh
-2	plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh
-1	plugins/soleur/skills/review/test/emit-review-trailer.test.sh
-2	plugins/soleur/test/fixture-dir-operand-assert.test.sh
-12	plugins/soleur/test/harvest-debt.test.sh
-1	plugins/soleur/test/token-drift-workflow-causes.test.sh
-7	scripts/context-reviewed-gate-discoverability.sh
-1	scripts/followthroughs/anthropic-admin-key-6297.test.sh
-2	scripts/lib/legal-base-ref.test.sh
-11	scripts/lint-dual-lockfile.test.sh
-2	scripts/lint-legal-mirror-drift-baseline.test.sh
-2	scripts/lint-legal-scope-block-placement.test.sh
-7	scripts/lint-workflow-install-sites.test.sh
-4	tests/hooks/test_hook_emissions.sh

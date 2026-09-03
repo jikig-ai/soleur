@@ -1200,6 +1200,17 @@ _identity_is_bot() {
 ensure_worktree_identity() {
   local worktree_path="$1"
 
+  # An empty operand here is the #6184 bug with the repository swapped: `git -C ""` reads the
+  # CALLER's identity, and the write path below would then set identity on the caller's
+  # repository instead of the worktree. Both call sites are `if ! ensure_worktree_identity ...`,
+  # so this returns 1 rather than aborting -- an `exit`/`${var:?}` here would bypass the
+  # caller's own handling and the `exit 1` it deliberately performs instead of a set -e abort.
+  if [[ -z "$worktree_path" ]]; then
+    echo "SOLEUR_GIT_LOCK_IDENTITY_WEDGED source=ensure_worktree_identity reason=empty-worktree-path file=config"
+    headless_or_stderr warn "ensure_worktree_identity: empty worktree path; refusing to touch git identity."
+    return 1
+  fi
+
   # Read BOTH identities up front. On a linked worktree `--local` targets the shared
   # common-dir config (on Concierge, the host-seeded owner). --global is the operator's
   # identity locally, but the sandbox IMAGE bakes a `github-actions[bot]` --global.

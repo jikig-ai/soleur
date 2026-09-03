@@ -492,6 +492,7 @@ D_DST="$STAGING_DIR"
 # mk_repo — a real git repo with one commit, then handed to uid 1001 (production ownership).
 mk_repo() {
   local d="$1"
+  : "${d:?fixture dir is empty; git -C '' would retarget this write}"
   mkdir -p "$d"
   git init -q "$d" >/dev/null 2>&1
   printf 'content\n' > "$d/f.txt"
