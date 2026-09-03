@@ -3,7 +3,7 @@ title: "fix: restore the release-outcome notification"
 ---
 
 <!-- The claim sentence MUST carry BOTH an actuality idiom and a DROP_RE conditional
-     ("would break") on the SAME physical line. That collision is the whole point.
+     (a `DROP_RE` conditional) on the SAME physical line. That collision is the whole point.
      This comment deliberately uses none of the report vocabulary: prose in a fixture is
      matched too, and a comment naming it would satisfy the assertion by itself. -->
 # fix: restore the release-outcome notification

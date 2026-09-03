@@ -3,7 +3,8 @@
 # hypothetical-paragraph strip in scripts/ship-incident-pir-gate.sh (#7801).
 #
 # WHY THIS EXISTS: the strip is a STATEFUL awk program, and a fixture suite alone cannot tell a
-# load-bearing rule from a decorative one — nine of the original ten fixtures pass on `main`. So
+# load-bearing rule from a decorative one — SEVEN of the original ten fixtures pass on `main`
+# unchanged (F1, F9 and F10 are the three that redden). So
 # "does each rule of this stage do anything?" is answered nowhere else.
 #
 # FIVE STRUCTURAL REQUIREMENTS, each closing a defect this repo has already paid for:
@@ -74,6 +75,23 @@ bulleted-label-consumed-by-trigger.md:no
 actuality-occurred-inflection.md:yes
 actuality-outranks-conditional-clause.md:yes"
 
+# --- the baseline TABLE is itself a claim -----------------------------------------------------
+# The table is hand-maintained, so the baseline block proves only that whatever it lists behaves.
+# Deleting entries used to shrink the guarded set with no signal at all. Assert its CARDINALITY
+# against the fixture set this class introduced, and that every named file exists — a count alone
+# cannot see a substitution.
+FIXTURE_MIN=13
+table_n=$(printf '%s\n' "$FIXTURES" | grep -c ':')
+if [ "$table_n" -lt "$FIXTURE_MIN" ]; then
+  fail "baseline table lists $table_n fixtures, floor is $FIXTURE_MIN — entries were removed from the guarded set"
+else
+  pass "baseline table lists $table_n fixtures (floor $FIXTURE_MIN)"
+fi
+missing=0
+while IFS=: read -r f _; do [ -f "$FIX/$f" ] || { missing=$((missing+1)); echo "  MISSING FIXTURE: $f"; }; done <<< "$FIXTURES"
+if [ "$missing" -eq 0 ]; then pass "every fixture named in the baseline table exists on disk"
+else fail "$missing fixture(s) named in the baseline table are absent"; fi
+
 # --- requirement 1: GREEN BASELINE, before any row ------------------------------------------
 baseline_bad=0
 while IFS=: read -r f want; do
@@ -95,7 +113,7 @@ HASH  = "       /^[[:space:]]*#+([[:space:]]|$)/                 {skip=0}\n"
 TRIG  = "       tolower($0) ~ /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)?[*_]*if this (lands|leaks)/ {skip=1; next}\n"
 LIST  = "       /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ {skip=0}\n"
 ACT   = "       tolower($0) ~ ACTUALITY_RE                       {skip=0; print; next}\n"
-DROP  = "       tolower($0) ~ DROP_RE                            {next}\n"
+DROP  = "       tolower($0) ~ DROP_RE    { if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next }\n"
 def one(t):
     assert s.count(t) == 1, "anchor not unique for " + mid
     return s.replace(t, "", 1)
@@ -109,7 +127,7 @@ elif mid == "M4":
 elif mid == "M5": s = one(HASH)
 elif mid == "M6": s = one(LIST)
 elif mid == "M7":                                    # re-admit BELOW the skip sink
-    assert s.count(ACT) == 1 and s.count("       skip { if (!noted") == 1
+    assert s.count(ACT) == 1 and s.count("       skip                     { if (!noted") == 1
     s = s.replace(ACT, "", 1).replace(DROP, ACT + DROP, 1)
 elif mid == "M8":                                    # un-anchor the trigger
     old = "tolower($0) ~ /^[[:space:]]*([-*+]"
@@ -142,20 +160,50 @@ run_row() {
   if cmp -s "$PRISTINE" "$mut"; then
     fail "$id: VACUOUS — the mutation produced no change (a non-landing mutant reports the baseline)"; return
   fi
-  local n; n=$(grep -cE -- "$anchor" "$mut" || true)
+  # ORDER mode: a REORDER changes no counts, so a count anchor cannot distinguish moved from
+  # untouched (measured: M7/M11 anchors were satisfied by the unmutated file). `ORDER%A%B` asserts
+  # A precedes B in the pristine and follows it in the mutant — the reorder itself.
+  if [[ "$anchor" == ORDER%* ]]; then
+    local a="${anchor#ORDER%}"; local pa="${a%%\%*}" pb="${a#*%}"
+    local p1 p2 m1 m2
+    p1=$(grep -nE -- "$pa" "$PRISTINE" | head -1 | cut -d: -f1); p2=$(grep -nE -- "$pb" "$PRISTINE" | head -1 | cut -d: -f1)
+    m1=$(grep -nE -- "$pa" "$mut"      | head -1 | cut -d: -f1); m2=$(grep -nE -- "$pb" "$mut"      | head -1 | cut -d: -f1)
+    if [ -z "$p1" ] || [ -z "$p2" ] || [ -z "$m1" ] || [ -z "$m2" ]; then
+      fail "$id: ORDER anchor did not resolve in one of the files (pristine $p1/$p2, mutant $m1/$m2)"; return
+    fi
+    if ! { [ "$p1" -lt "$p2" ] && [ "$m1" -gt "$m2" ]; }; then
+      fail "$id: ORDER not inverted (pristine $p1 vs $p2, mutant $m1 vs $m2) — the reorder did not land"; return
+    fi
+  else
+  local n p; n=$(grep -cE -- "$anchor" "$mut" || true); p=$(grep -cE -- "$anchor" "$PRISTINE" || true)
+  # The anchor must MOVE. Counting it only in the mutant cannot distinguish "the edit removed it"
+  # from "the anchor never matched anything" — measured: a nonsense anchor passed every want_n=0 row.
+  if [ "$p" -eq "$want_n" ]; then
+    fail "$id: anchor '$anchor' already occurs $want_n time(s) in the PRISTINE file — it cannot distinguish mutated from untouched"; return
+  fi
   if [ "$n" -ne "$want_n" ]; then
     fail "$id: anchor '$anchor' occurs $n time(s) in the mutant, expected $want_n (edit landed elsewhere)"; return
   fi
-  local ok=1 detail="" IFSsave="$IFS"
+  fi
+  # ONE ASSERTION PER FIXTURE CHECK. Emitting one per ROW made the floor count rows rather than
+  # discrimination: emptying every check list, truncating an all-of-2 row to 1-of-1, or deleting
+  # fixtures from FIXTURES all printed the byte-identical headline. Measured, before this fix, a
+  # battery asserting NOTHING about behaviour reported `20 passed, 0 failed (11 rows, 20
+  # assertions)` — the exact vacuity this file claims to police.
+  if [ -z "$checks" ]; then
+    fail "$id: NO fixture checks — a row that asserts nothing is the vacuity this battery exists to prevent"
+    return
+  fi
+  local IFSsave="$IFS"
   IFS=,
   for chk in $checks; do
     IFS="$IFSsave"
     local f="${chk%%:*}" want="${chk##*:}" got; got="$(verdict "$mut" "$f")"
-    [ "$got" = "$want" ] || { ok=0; detail="$detail ${f%.md}(want=$want got=$got)"; }
+    if [ "$got" = "$want" ]; then pass "$id/${f%.md}: $why"
+    else fail "$id/${f%.md}: did NOT redden — want=$want got=$got"; fi
     IFS=,
   done
   IFS="$IFSsave"
-  if [ "$ok" -eq 1 ]; then pass "$id: $why"; else fail "$id: did NOT redden as required —$detail"; fi
 }
 
 # shellcheck disable=SC2016  # the run_row anchors are literal ERE patterns, no expansion wanted
@@ -171,14 +219,15 @@ run_row M5  '#\+\(\[\[:space:\]\]\|\$\)' 0 "real-outage-after-heading-boundary.m
   "deleting the hash boundary swallows a claim after a real heading"
 run_row M6  '\[-\*\+\]\[\[:space:\]\]\+\|\[0-9\]\+\[\.\)\]' 1 "real-outage-in-sibling-bullet.md:no,real-outage-in-nested-sub-bullet.md:no" \
   "deleting the list boundary swallows both sibling and nested blocks"
-run_row M7  'ACTUALITY_RE +\{skip=0; print; next\}' 1 "real-outage-claimed-inside-hypothetical-paragraph.md:no" \
+run_row M7  'ORDER%ACTUALITY_RE +\{skip=0; print; next\}%^ +skip +\{ if \(!noted' 0 "real-outage-claimed-inside-hypothetical-paragraph.md:no" \
   "moving the re-admit BELOW the skip sink disarms it — the one ordering measured load-bearing"
 # shellcheck disable=SC2016  # literal ERE anchor, no expansion wanted
 run_row M8  'tolower\(\$0\) ~ /\[\[:space:\]\]\*\(\[-\*\+\]' 1 "midsentence-conditional-does-not-open-a-paragraph.md:no" \
   "un-anchoring the trigger lets one subordinate clause silence a whole paragraph"
 run_row M9  'print \"\"; next' 0 "real-outage-after-fenced-block-abutting-paragraph.md:no" \
   "reverting the fence boundary merges the paragraph with what follows the fence"
-run_row M11 'DROP_RE +\{next\}' 1 "actuality-outranks-conditional-clause.md:no" \
+# shellcheck disable=SC2016  # literal ERE anchor, no expansion wanted
+run_row M11 'ORDER%ACTUALITY_RE +\{skip=0; print; next\}%tolower\(\$0\) ~ DROP_RE' 0 "actuality-outranks-conditional-clause.md:no" \
   "moving DROP_RE above the re-admit restores the two-stage incoherence: one conditional clause silences a stated actuality"
 
 # M10's observable is a pipeline failure, not a fixture verdict.
@@ -210,17 +259,26 @@ for probe in "" $'\n\n' $'If this lands broken\n'; do
 done
 
 # --- dispatch + floor, emitted directly (never through the helper it backstops) --------------
-if [ "$rows" -eq 11 ]; then pass "dispatch: all 11 mutation rows ran"
-else fail "dispatch: $rows rows ran, expected 11"; fi
+# A FLOOR, not an equality — the row count is developer-incremented, and this file argues exactly
+# that for MIN_ASSERTIONS two blocks down. An equality here would make every added row a failure.
+if [ "$rows" -ge 11 ]; then pass "dispatch: $rows mutation rows ran (floor 11)"
+else fail "dispatch: only $rows rows ran, floor is 11"; fi
 
-if cmp -s "$ORIG" "$PRISTINE"; then pass "restore check: the SUT on disk is byte-identical to the pristine copy"
-else fail "restore check: the SUT ON DISK WAS MODIFIED by this battery"; fi
+# This battery never writes to $ORIG (mutants go to $WORK), so the old `cmp $ORIG $PRISTINE`
+# assertion was unfailable by construction while still counting toward the floor. Assert the
+# INSTRUMENT instead: the pristine copy must still be a working gate, which a corrupted or
+# truncated $WORK would fail.
+if [ -s "$PRISTINE" ] && bash "$PRISTINE" < "$FIX/precedent-citation-inside-hypothetical-paragraph.md" >/dev/null 2>&1; then
+  fail "instrument check: the pristine copy SIGNALS on a known-negative — every verdict above is void"
+else
+  pass "instrument check: the pristine copy is a working gate (known-negative still reads no-signal)"
+fi
 
 # The floor is DERIVED from a measured green run, not from the number I expected — an expected
 # number is how a floor ends up one above what the suite can reach. Raise it in lockstep when
 # assertions are added; it is a floor, never an equality (an equality makes every new assertion
 # a spurious failure). Emitted directly, never through the helper it backstops.
-MIN_ASSERTIONS=20
+MIN_ASSERTIONS=24
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FATAL: only %d assertions ran, floor is %d — the battery is vacuous\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1

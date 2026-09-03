@@ -3,9 +3,11 @@ title: "fix: restore release-outcome notification"
 brand_survival_threshold: single-user incident
 ---
 
-<!-- The production token MUST stay in ## Overview, OUTSIDE the stripped paragraph.
-     PROD_RE matches the whole haystack; a fixture whose only prod token is inside
-     the paragraph reads `no` under both scripts and makes M2/M7 vacuous. -->
+<!-- The `production` token MUST stay in ## Overview, OUTSIDE the stripped paragraph.
+     `PROD_RE` matches the whole haystack; a fixture whose only `prod` token is inside
+     the paragraph reads `no` under both scripts and makes M2/M7 vacuous.
+     Both tokens are BACKTICKED: the inline-code strip removes them before either matcher
+     runs, so this comment cannot satisfy the conjunct it exists to warn about. -->
 
 # fix: restore the release-outcome notification
 

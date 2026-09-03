@@ -57,13 +57,27 @@ describes it (Phase 3).
       paragraph, which is precisely the class this change closes, so it cannot pass on `main`.
       The plan's "every other new test must already pass" was wrong for that one row.
 
+> **Corrected at review: the corpus figures changed because the GLOB changed, not because the
+> corpus grew.** Task 2.6 prescribes `knowledge-base/project/plans/*.md` (top-level, 1548 files);
+> the implementation swept recursively (1878, including `archive/`). Both readings are internally
+> correct and were measured on the same tree — at the plan-authoring commit the counts were
+> already 1548 top-level / 1878 recursive. Top-level gives 268 -> 260 with 8 movers; recursive
+> gives 315 -> 304 with 11. The PR quotes the recursive figures, so **AC6c must be verified with
+> the recursive sweep** or a verifier reconciling against `*.md` will find 8 movers, not 11.
+
 ## Phase 2 — GREEN (the strip widening)
 
-- [x] **2.1** Declare `ACTUALITY_RE='already (happened|occurred)|not hypothetical'` beside
+- [x] **2.1** ~~Declare `ACTUALITY_RE='already (happened|occurred)|not hypothetical'`~~ **AMENDED
+      at review: shipped as `already (happened|occurred)`.** `not hypothetical` had a corpus hit but
+      no fixture and zero verdict effect, so it failed the bar the comment above it sets. Beside
       `OUTAGE_RE`/`PROD_RE`, with the measured-vocabulary rationale comment from the plan.
 - [x] **2.2** Change the fence strip to emit a block boundary:
       `awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; print ""; next} !f{print}'`.
-- [x] **2.3** Insert the paragraph-strip `awk -v ACTUALITY_RE=…` stage after the
+- [x] **2.3** ~~Insert the stage before the `grep -vaiE`, with the `# ORDER IS THE DESIGN`
+      comment.~~ **AMENDED at review: the `grep -vaiE` was MERGED into this awk (it ran after the
+      paragraph strip and deleted lines the re-admit had restored), and the ORDER comment now
+      names which orderings measurement showed are load-bearing rather than asserting all are.**
+      Insert the paragraph-strip `awk -v ACTUALITY_RE=…` stage after the
       `[Nn]etwork-[Oo]utage` sed and before the `grep -vaiE`, with the inline `# ORDER IS THE
       DESIGN` comments. Rule order per the plan; the hash rule is
       `/^[[:space:]]*#+([[:space:]]|$)/`, NOT a bare `#`.
@@ -86,7 +100,7 @@ describes it (Phase 3).
 - [x] **3.2** Add the third disposition to the Incident-PIR Gate's `- **No match:**` bullet,
       available in BOTH modes, gated on **both** conjuncts: the diff includes
       `scripts/ship-incident-pir-gate.sh` AND the PR body carries
-      `INCIDENT-PIR: meta-case — <reason>`. Include the #7242 counter-example explaining why a
+      `INCIDENT-SIGNAL: meta-case — <reason>`. Include the #7242 counter-example explaining why a
       diff-only predicate is unsafe.
 
 ## Phase 4 — Verification
@@ -114,7 +128,7 @@ describes it (Phase 3).
       `--headless`, so every ship prompt lands on an interactive arm inside an unattended loop.
       Re-evaluation criterion: "every ship phase whose headless and interactive arms differ has been
       audited for one-shot's dispatch path."
-- [ ] **5.2** Ensure the PR body carries the `INCIDENT-PIR: meta-case — …` declaration (AC13). This
+- [ ] **5.2** Ensure the PR body carries the `INCIDENT-SIGNAL: meta-case — …` declaration (AC13). This
       plan trips its own gate with certainty; without the declaration Phase 5.5 has no legal exit
       and will author a post-mortem for an event that never happened.
 - [ ] **5.3** Confirm `git diff --name-only origin/main...HEAD` satisfies AC11, including **no**

@@ -1246,7 +1246,7 @@ if want_scripts; then
   run_suite "scripts/orphan-process-reaper-mutations" bash scripts/orphan-process-reaper-mutation.test.sh
   # The Incident-PIR hypothetical-paragraph strip's mutation battery (#7801). The
   # strip is a STATEFUL, ORDERED awk program, so a fixture suite alone cannot tell a
-  # load-bearing rule from a decorative one — nine of its ten fixtures pass on `main`.
+  # load-bearing rule from a decorative one — seven of its ten original fixtures pass on `main`.
   # Registered explicitly for the same reason as its neighbours: scripts/*.test.sh is
   # NOT auto-globbed, so an unregistered suite silently never gates.
   run_suite "scripts/ship-incident-pir-gate-mutations" bash scripts/ship-incident-pir-gate-mutation.test.sh

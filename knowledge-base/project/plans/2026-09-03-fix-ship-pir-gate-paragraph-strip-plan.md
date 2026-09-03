@@ -367,7 +367,7 @@ fi
 
     > **Meta-case — the PR's subject IS this gate.** When `git diff --name-only origin/main...HEAD`
     > includes `scripts/ship-incident-pir-gate.sh` **and** the PR body carries a line
-    > `INCIDENT-PIR: meta-case — <one sentence naming why no production event occurred>`, record
+    > `INCIDENT-SIGNAL: meta-case — <one sentence naming why no production event occurred>`, record
     > that line and proceed **without** a PIR.
 
     **Why both conjuncts — verified against git history, not asserted.** A diff-only predicate is
@@ -425,10 +425,15 @@ fi
   the tightened-hash pin (R7); F10 is the documented residual (Property 3).
 - **AC6** Corpus sweep, asserted as **direction-and-identity** invariants rather than a count,
   because the corpus grows under sibling sessions (`cq-ac-must-not-depend-on-concurrent-sessions`):
-  - **AC6a** No plan moves `no -> yes`. **Structural, not empirical:** the awk stage only ever drops
-    whole records and both matchers are line-oriented, so removing lines cannot create a match.
-    Recorded as an invariant; a violation would mean the stage is *rewriting* records rather than
-    filtering them, which is the only defect this row can detect.
+  - **AC6a** No plan moves `no -> yes`. ~~**Structural, not empirical:** the awk stage only ever
+    drops whole records … so removing lines cannot create a match.~~ **CORRECTED at /work: the
+    claim is true of the paragraph stage and FALSE of the pipeline.** Three stages above it
+    REWRITE records — the fence strip emits `""`, and both `sed`s deleted their match, fusing the
+    neighbouring characters into a forged token. Measured on the pre-fix pipeline:
+    `The system pro`+`` `x` ``+`duction went down.` SIGNALLED, on a document containing no
+    unbroken `production`. Both `sed`s now substitute a SPACE, which closes the fusion (0 fixture
+    and 0 corpus movers). The row survives as an EMPIRICAL assertion — measured 0 `no -> yes`
+    across 1878 plans — not as a structural guarantee.
   - **AC6b** `knowledge-base/project/plans/2026-08-01-release-outcome-email-step-env-refs-plan.md`
     signals under **both** binaries — the corpus's own instance of F2.
   - **AC6c** Every `yes -> no` mover is inspected and its removed line quoted in the PR body. For
@@ -466,7 +471,7 @@ fi
   assertions.** M10 (the fail-toward-PIR guard) and M11 (the re-admit precedence) were added
   after the plan. A run reporting `0 mutations` still fails. A run reporting `0 mutations` fails — a
   battery that dispatches nothing is the vacuity it exists to prevent.
-- **AC13** The PR body carries the `INCIDENT-PIR: meta-case — …` declaration and the post-change
+- **AC13** The PR body carries the `INCIDENT-SIGNAL: meta-case — …` declaration and the post-change
   signal rate.
 - **AC14** `bash scripts/test-all.sh bun` is green and
   `grep -c 'ship-incident-pir-gate-mutation' scripts/test-all.sh || true` ≥ 1.

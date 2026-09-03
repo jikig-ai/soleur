@@ -1,6 +1,8 @@
-<!-- The outage claim MUST stay on the line AFTER the one carrying `if this lands`.
-     On one physical line the untouched `grep -vaiE` deletes the whole line, the
-     fixture reads `no` under both scripts, and mutation M8 cannot redden. -->
+<!-- The report sentence MUST stay on the line AFTER the one carrying `if this lands`.
+     On one physical line `DROP_RE` deletes the whole line, the fixture reads `no` under
+     both scripts, and mutation M8 cannot redden. (`DROP_RE` is the merged awk rule that
+     replaced the separate `grep -vaiE` stage.) This comment carries no report vocabulary:
+     fixture prose is matched too. -->
 
 # fix: apex ordering
 
