@@ -93,7 +93,18 @@ if grep -qF '[ -s /etc/default/inngest-luks ] ||' "$CLOUD_INIT"; then ok "T1.5 t
 # accept-0-or-2 policy would otherwise route into the luksFormat arm — a volume that is merely
 # slow to attach must never be read as blank. Tier 2 lowers this bound for one case; this is the
 # pin that keeps that a declared harness knob rather than an invented budget.
-if [ "$(grep -cE '\[ "\$_i" -lt 30 \]|\[ "\$\$_i" -lt 30 \]' "$CLOUD_INIT")" -ge 2 ]; then ok "T1.6 both the runcmd stage and the reopen script bound the attach wait at 30s"; else no "T1.6 the 30s device-presence wait bound is missing from one of the two device readers"; fi
+# PER-WINDOW, NOT A WHOLE-FILE COUNT — the same defect T1.10 carried. A `-ge 2` over the file is
+# satisfied by two bounds in ONE reader and none in the other, which is precisely the state the arm
+# names ("missing from one of the two"). Split at the runcmd stage's heredoc opener: above it is
+# the write_files region shipping the boot-2 reopen script, below it the first-boot runcmd stage.
+_split6="$(grep -n "bash -s <<'LUKSEOF'" "$CLOUD_INIT" | head -1 | cut -d: -f1)"
+if [ -n "$_split6" ]; then
+  _w6r="$(head -n "$((_split6 - 1))" "$CLOUD_INIT" | grep -cE '\[ "\$_i" -lt 30 \]|\[ "\$\$_i" -lt 30 \]')"
+  _w6c="$(tail -n +"$_split6" "$CLOUD_INIT" | grep -cE '\[ "\$_i" -lt 30 \]|\[ "\$\$_i" -lt 30 \]')"
+  if [ "$_w6r" -ge 1 ] && [ "$_w6c" -ge 1 ]; then ok "T1.6 BOTH device readers bound the attach wait at 30s (reopen ${_w6r}x, runcmd ${_w6c}x)"; else no "T1.6 the 30s device-presence wait bound is missing from one of the two device readers (reopen ${_w6r}x, runcmd ${_w6c}x)"; fi
+else
+  no "T1.6 could not locate the runcmd LUKS stage in $CLOUD_INIT — the per-window split is vacuous"
+fi
 
 # T1.7 No `|| true` / `|| :` / `set +e` on a mount. The whole apparatus is defeated by one of them:
 # a swallowed mount failure leaves /mnt/data as a plain directory on the root disk while every

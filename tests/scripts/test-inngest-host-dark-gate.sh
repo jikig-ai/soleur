@@ -519,8 +519,10 @@ fi
 # command reads db-0 only while `FLUSHALL` spans every db, so a store with keys in db-1 reads zero
 # under it — a false `dark` authorizing a destroy. The historical `latch_dbsize` probe field carried
 # exactly that asymmetry and sits one field name away.
-if [[ "$(grep -c 'DBSIZE' "$GATE" || true)" == "0" ]]; then pass; else fail "B13: the gate mentions DBSIZE"; fi
-if [[ "$(grep -c 'latch_dbsize' "$GATE" || true)" == "0" ]]; then pass; else fail "B13: the gate mentions latch_dbsize"; fi
+# CASE-INSENSITIVE. `redis-cli dbsize` is as valid as `DBSIZE`, and the field name is lowercase —
+# a case-sensitive grep for the uppercase form passes against the exact call an author would
+# actually write. One `-i` grep covers both spellings and both names.
+if [[ "$(grep -ci 'dbsize' "$GATE" || true)" == "0" ]]; then pass; else fail "B13: the gate mentions dbsize/DBSIZE/latch_dbsize (case-insensitive) — the db-0-only reading must not appear by name"; fi
 # …and behaviourally: a row carrying BOTH a db-0-only reading of 0 and a true redis_keys of 5 must
 # refuse. A gate that read the wrong field would call this dark.
 mk_rows "$TMP/rows-b13.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg redis_keys=5) latch_dbsize=0")"
@@ -760,7 +762,7 @@ fi
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=108
+_FLOOR=107
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

@@ -265,8 +265,12 @@ check "H3c: passphrase FIRST create => PASS (this volume is cut to LUKS for the 
 # Recorded explicitly rather than left implicit: the four PASS arms above ARE the H2 contract, and
 # a RED-only battery cannot detect `return 1`. The assertion below makes the dependency legible so
 # deleting every PASS arm is a visible loss rather than a quieter suite.
-_pass_arms=4
-if [[ "$_pass_arms" -ge 4 ]]; then pass; else fail "H2: fewer than 4 must-PASS arms — a guard stuck at 'reject everything' would go undetected"; fi
+# COUNTED FROM THE FILE, NOT DECLARED. This was `_pass_arms=4; [[ 4 -ge 4 ]]` — a literal compared
+# to itself, which is true for every possible state of the suite including "every PASS arm was
+# deleted". It made the dependency legible to a reader and measured nothing, which is worse than
+# leaving it implicit: it reads as coverage. Derive the count from the arms that actually exist.
+_pass_arms="$(grep -cE '^check "[^"]*" 0 "inngest_volume_recut_gate: PASS"' "${BASH_SOURCE[0]}" || true)"
+if [[ "$_pass_arms" =~ ^[0-9]+$ ]] && [[ "$_pass_arms" -ge 4 ]]; then pass; else fail "H2: only ${_pass_arms} must-PASS arms found (floor 4) — a guard stuck at 'reject everything' would go undetected"; fi
 
 # ── Preamble binding (#6997): INVOKED, not merely sourced ─────────────────────────
 _PG_DIR="$DIR"
