@@ -13,6 +13,47 @@ brand_survival_threshold: aggregate pattern
 requires_cpo_signoff: false
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-03 · **Panel:** dhh-rails-reviewer, kieran-rails-reviewer,
+code-simplicity-reviewer, architecture-strategist, spec-flow-analyzer, cto, plus a scoped
+strong-model advisor consult (ADR-083 Step 4.5).
+
+Every reviewer rebuilt the prototype and re-ran the corpus independently; the `268 → 260` /
+8-mover result reproduced exactly in four separate sweeps. The panel changed the **design**, not
+just the prose:
+
+1. **The hash boundary was defective and defeated the fix on its own target class.** A bare
+   `/^[[:space:]]*#/` treats a `#6691` continuation line as a heading. Measured on a reflow of
+   fixture F1 that differs only in where the line wraps: shipped `SIGNAL`, draft design **`SIGNAL`**
+   — the fix did not fix it. Tightened to `#+([[:space:]]|$)`; fixture F9 now pins it.
+2. **The thematic-break rule was dead machinery** (0 terminations in 1548 plans, two independent
+   measurements) and its fixture modelled markdown incorrectly (`---` under a paragraph line is a
+   setext underline). Cut, with the seam-rescue counter-hypothesis tested and disproved.
+3. **The actuality vocabulary was fitted to N=1 with 8 unmeasured alternatives.** Trimmed to the
+   two with corpus hits, and Property 3 was rewritten to stop overclaiming: at line scope,
+   precedent-citation and self-report are undecidable. Fixture F10 now pins the residual as a
+   characterization test instead of leaving the hole undocumented.
+4. **Four acceptance criteria could not pass or could not fail.** AC2 contradicted AC3 (its glob
+   would contain the new fixtures); AC8 was green on unmodified `main` (the phrase wraps a comment
+   line break); AC9 was red on a correct edit (markdown emphasis breaks the anchor); AC6c's
+   discriminator was false against 5 of the 8 measured movers *and* self-refuting.
+5. **`git show origin/main:<script> | bash` is input-independent exit 0** — every "signals under
+   both scripts" AC would have passed vacuously. Phase 4.0 now materializes and self-checks the
+   baseline.
+6. **The plan had no legal exit from its own gate.** `adjudicat`/`meta-case` return zero hits
+   across ship, incident and AGENTS.rules.md, and the self-trip is certain. Phase 3.2 adds the
+   disposition, two-conjunct-gated against a counter-example verified in git history.
+7. **The mutation rows became executable.** The repo has 11 `*-mutation.test.sh` batteries; prose
+   rows in an archived plan are performed once and never again, which is how this gate regressed
+   four times with a green suite.
+
+Deepen-plan gates: 4.6 (User-Brand Impact) **pass**; 4.7 (Observability) initially **failed** on a
+missing `logs:` field — added; 4.11 (Guard Contract) **pass** via `lint-guard-contract.py`. Gates
+4.5, 4.55, 4.8, 4.9 and 4.10 do not fire (no network symptom, no serving-surface downtime, no
+PAT-shaped variable, no UI surface, no persistent store). All cited AGENTS rule IDs verified active
+against `AGENTS.md`; the #7242/#7244 attribution verified against `git show d31d8a2c7`.
+
 ## Overview
 
 The `/ship` Phase 5.5 Incident-PIR gate (`scripts/ship-incident-pir-gate.sh`) strips the
@@ -170,7 +211,7 @@ and `plugins/soleur/skills/ship/SKILL.md`. **None.**
 
 ## Files to Create
 
-- `scripts/ship-incident-pir-gate-mutation.test.sh` — the executable battery (M1-M7), following the
+- `scripts/ship-incident-pir-gate-mutation.test.sh` — the executable battery (M1-M9), following the
   repo's 11 existing `*-mutation.test.sh` precedents.
 
 Under `plugins/soleur/test/fixtures/ship-incident-pir-gate/` — bodies and measured verdicts in the
@@ -329,10 +370,16 @@ fi
     > `INCIDENT-PIR: meta-case — <one sentence naming why no production event occurred>`, record
     > that line and proceed **without** a PIR.
 
-    **Why both conjuncts.** A diff-only predicate is unsafe: #7242 was a real delivery outage whose
-    fix edited this very script and owed a PIR. The declaration is what separates the two — a PR
-    editing the gate *because of* a production event omits the line and gets the normal requirement.
-    A false declaration is a deliberate, recorded act, the same trust model as every `[ack]` here.
+    **Why both conjuncts — verified against git history, not asserted.** A diff-only predicate is
+    unsafe, and the repo contains the counter-example. Issue **#7242** ("Web Platform Release blocked
+    at the zot mirror … prod is 3 releases behind") was a real production delivery outage; the PR
+    that fixed it, **#7244** (commit `d31d8a2c7`), **edited `scripts/ship-incident-pir-gate.sh`**
+    — adding the `releases? behind` alternation — *and* shipped
+    `knowledge-base/engineering/operations/post-mortems/…-zot-mirror-blocked-releases-…-postmortem.md`
+    in the same commit. A diff-only meta-case arm would have waved that PIR through. The
+    declaration is the conjunct that separates the two cases: a PR editing the gate *because of* a
+    production event omits the line and gets the normal requirement. A false declaration is a
+    deliberate, recorded act — the same trust model as every `[ack]` in this repo.
 
 ### Phase 4 — Verification
 
@@ -406,7 +453,7 @@ fi
   in the diff. `learnings/` is allowed because ship Phase 2 auto-invokes `compound`; the
   post-mortems exclusion is the observable proof that Phase 3.2 fired instead of a fabricated PIR
   (R9).
-- **AC12** `bash scripts/ship-incident-pir-gate-mutation.test.sh` exits 0 and reports **7**
+- **AC12** `bash scripts/ship-incident-pir-gate-mutation.test.sh` exits 0 and reports **9**
   mutations, each flipping at least one fixture verdict. A run reporting `0 mutations` fails — a
   battery that dispatches nothing is the vacuity it exists to prevent.
 - **AC13** The PR body carries the `INCIDENT-PIR: meta-case — …` declaration and the post-change
@@ -481,6 +528,9 @@ failure_modes:
   - mode: "the plan template's label wording drifts, the anchored trigger stops matching, and the gate silently reverts to fires-on-every-plan"
     detection: "test F11, which extracts the label lines from the live template rather than a copy"
     alert_route: "CI job test-bun"
+logs:
+  where: "the gate writes no log file. Its entire output is one stdout line consumed by /ship Phase 5.5, plus the Phase 2.4 stderr diagnostic; both land in the operator's terminal transcript. The durable record is the PR body, which carries the verdict, the corpus signal rate, and (on a meta-case) the INCIDENT-PIR declaration."
+  retention: "the operator's terminal session; the PR body is permanent. No server-side sink exists or is warranted for a local CLI gate that persists nothing."
 discoverability_test:
   command: "bun test plugins/soleur/test/ship-incident-pir-gate.test.ts"
   expected_output: "29 pass, 0 fail"
@@ -533,7 +583,7 @@ them.
 
 | # | Harness edit | Expected |
 | --- | --- | --- |
-| H1 | Make the battery's mutation loop a no-op | AC12's "7 mutations" assertion fails. Pins the battery's **own dispatch**: a battery reporting `0 mutations` and exiting 0 is exactly the vacuity it exists to prevent. |
+| H1 | Make the battery's mutation loop a no-op | AC12's "9 mutations" assertion fails. Pins the battery's **own dispatch**: a battery reporting `0 mutations` and exiting 0 is exactly the vacuity it exists to prevent. |
 | H2 | **must-PASS, non-canonical:** F3 is a permitted variation of the canonical F1 — the same sentence, one blank line down — and must pass with the **opposite** verdict. F11 is a second such input, generated at runtime from a file this PR does not edit. A suite whose only must-PASS input is the canonical cannot detect a strip that rejects everything. |
 
 ## Architecture Decision (ADR/C4)
