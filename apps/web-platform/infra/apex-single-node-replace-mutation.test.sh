@@ -71,6 +71,39 @@ trap 'rm -rf "$SANDBOX"' EXIT INT TERM HUP
 PRISTINE="$SANDBOX/pristine"; WORK="$SANDBOX/work"
 mkdir -p "$PRISTINE/tf" "$WORK/tf" || { printf '[FATAL] mkdir failed\n' >&2; exit 2; }
 cp "$SCRIPT_DIR"/*.tf "$PRISTINE/tf/"   || { printf '[FATAL] cp *.tf failed\n' >&2; exit 2; }
+
+# THE PRE-FLIP BASELINE IS A FROZEN FIXTURE, NOT THE LIVE `dns.tf` (#7640 PR4b).
+#
+# Every pre-flip row (M14/M15/M16, H3) and `make_post_flip` itself need a tree in
+# the shape PR4a left behind. Sourcing that from the live `dns.tf` worked for
+# exactly one merge: PR4b flips the live file to post-flip, `make_post_flip`'s
+# regex then finds no `github_pages` block, and the battery aborts at setup.
+#
+# It aborted LOUDLY (exit 2) rather than scoring a baseline it could not build,
+# which is the property this file's own header demands — but the fix is to stop
+# deriving a fixture from a file whose stage moves underneath it. Pinning the
+# pristine `dns.tf` to the committed PR4a baseline makes the battery
+# stage-independent: it scores the GUARD against synthetic trees, while the
+# guard itself is what validates the live root (it runs against `$SCRIPT_DIR`
+# in CI, unseamed).
+#
+# The fixture is asserted PRE-FLIP below. A baseline that had drifted post-flip
+# would make every pre-flip row vacuous while all of them still reported PASS —
+# the exact fail-open this battery exists to refuse.
+PRE_FLIP_BASELINE="$SCRIPT_DIR/fixtures/dns.tf.pr4a-baseline"
+if [[ ! -r "$PRE_FLIP_BASELINE" ]]; then
+  printf '[FATAL] pre-flip baseline fixture missing: %s\n' "$PRE_FLIP_BASELINE" >&2; exit 2
+fi
+if ! grep -qE '^resource "cloudflare_record" "github_pages" \{' "$PRE_FLIP_BASELINE"; then
+  printf '[FATAL] baseline fixture is not PRE-flip (no github_pages resource) — every pre-flip row would be vacuous\n' >&2; exit 2
+fi
+if grep -qE '^resource "cloudflare_record" "pages_apex" \{' "$PRE_FLIP_BASELINE"; then
+  printf '[FATAL] baseline fixture is POST-flip (declares pages_apex) — it is meant to be the shape PR4a left\n' >&2; exit 2
+fi
+if ! grep -qF "\"$SURVIVING_KEY\"" "$PRE_FLIP_BASELINE"; then
+  printf '[FATAL] baseline fixture does not carry the surviving key %s\n' "$SURVIVING_KEY" >&2; exit 2
+fi
+cp "$PRE_FLIP_BASELINE" "$PRISTINE/tf/dns.tf" || { printf '[FATAL] cp baseline failed\n' >&2; exit 2; }
 cp "$SRC_APPLY" "$PRISTINE/apply.yml"   || { printf '[FATAL] cp apply failed\n' >&2; exit 2; }
 cp "$SRC_VALID" "$PRISTINE/valid.yml"   || { printf '[FATAL] cp valid failed\n' >&2; exit 2; }
 cp "$GUARD" "$PRISTINE/guard.sh"        || { printf '[FATAL] cp guard failed\n' >&2; exit 2; }

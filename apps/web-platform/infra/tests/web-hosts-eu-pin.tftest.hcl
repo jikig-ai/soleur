@@ -77,9 +77,12 @@ variables {
   # this test opts out. seo-config-rules.tf explains what the adoption is for,
   # and test/seo-config-rules.test.ts pins that the default is `true` — because
   # flipping it to `false` silently restores the whole-list clobber (#6767).
-  adopt_seo_config_entrypoint  = false
-  betterstack_api_token        = "dummy"
-  betterstack_logs_token       = "dummy"
+  adopt_seo_config_entrypoint = false
+  betterstack_api_token       = "dummy"
+  # Length-bearing, not "dummy": modules/git-data-userdata/variables.tf validates this is a
+  # real ingest token, because an empty or stub value renders `BETTERSTACK_LOGS_TOKEN=` and
+  # darkens eight of the nine git-data boot stages on a HASH-VALID boot (#7460).
+  betterstack_logs_token       = "stub-NOT-A-REAL-TOKEN-000000000000"
   cf_access_client_id          = "0123456789012345678901234567890123456789.access"
   cf_access_client_secret      = "0123456789012345678901234567890123456789012345678901234567890123"
   cf_account_id                = "0123456789abcdef0123456789abcdef"

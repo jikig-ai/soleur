@@ -280,91 +280,51 @@ resource "cloudflare_record" "protonmail_dkim_3" {
   ttl     = 1
 }
 
-# Cloudflare Pages -- docs site (soleur.ai apex + www)
+# GitHub Pages -- docs site (soleur.ai apex + www redirect)
 # These records were previously created via dashboard; imported to Terraform for IaC governance.
 #
-# www->apex canonicalizer contract (#4584, spun out of #4577; ADR-194 D1):
-#   The live `www.soleur.ai -> 301 -> soleur.ai` redirect (host- and
-#   path-preserving) is CLOUDFLARE-owned as of the #7640 PR4b cutover: it is the
-#   Bulk Redirect pair `cloudflare_list.www_canonical` +
-#   `cloudflare_ruleset.bulk_redirects` in `seo-bulk-redirects.tf`, which
-#   Cloudflare documents as running IN FRONT OF the Pages project.
-#
-#   It was GitHub-Pages-owned before that merge -- Pages auto-301'd every
-#   non-primary alias to the custom domain named by `plugins/soleur/docs/CNAME`
-#   -- and the 301 then carried Fastly/GitHub origin headers (via: 1.1 varnish,
-#   x-fastly-request-id, x-github-request-id). It no longer does, and their
-#   ABSENCE is what cutover assertion CUT2/CUT3 check. `docs/CNAME` stays in the
-#   build for rollback only; it no longer determines the canonical direction.
+# www→apex canonicalizer contract (#4584, spun out of #4577):
+#   The live `www.soleur.ai → 301 → soleur.ai` redirect (host- and
+#   path-preserving) is GitHub-Pages-owned — it is NOT a Cloudflare Redirect
+#   Rule or Page Rule. There is no cloudflare_page_rule / cloudflare_list /
+#   http_request_redirect resource anywhere in this repo. GitHub Pages auto-301s
+#   every non-primary alias to the primary custom domain configured by the
+#   repo-tracked file `plugins/soleur/docs/CNAME = "soleur.ai"` (the apex).
+#   The www 301 response carries Fastly/GitHub origin headers
+#   (via: 1.1 varnish, x-fastly-request-id, x-github-request-id).
 #
 #   The managed substrate that makes this work is exactly two facts below:
-#     - `cloudflare_record.pages_apex` -- the apex CNAME -> the Pages project,
-#       proxied. Replaced `cloudflare_record.github_pages` (the apex A-record ->
-#       a GitHub Pages IP) at ONE resource address, via the `moved` block below.
-#     - `cloudflare_record.www`        -- www CNAME -> the same Pages project, proxied.
-#   Repoint either record off the Pages project and the canonical direction
-#   inverts/breaks. Pure TF resource-drift sees the records but neither the
-#   redirect pair nor the semantic contract, so `www-apex-canonicalizer.test.sh`
-#   asserts them together at CI time -- it is stage-aware, and this is its
-#   `cf-pages` stage. Runtime drift of the 301 is guarded by
-#   sentry_uptime_monitor.soleur_www.
-#
-# WHY www STAYS A CNAME (Camp B; CTO ruling; measured at provider 4.52.7):
-#   `type` is ForceNew, so an `A` here would be a SECOND replacement racing the
-#   apex's, and `apex-single-node-replace.test.sh` rejects it. The failure mode
-#   is chosen deliberately: if the Bulk Redirect ever stops firing, www SERVES
-#   the site (duplicate content for one monitor interval) rather than returning
-#   a 522 on an HSTS-preloaded host.
+#     - `cloudflare_record.github_pages` — the apex A-record → a GitHub Pages IP,
+#       proxied. Was four records until #7640 PR4a shrank the `for_each` to one.
+#     - `cloudflare_record.www`          — www CNAME → jikig-ai.github.io, proxied.
+#   Flip `docs/CNAME` to www, or repoint either record off GitHub Pages, and the
+#   canonical direction inverts/breaks. Pure TF resource-drift sees the records
+#   but neither the CNAME file nor the semantic contract, so
+#   `www-apex-canonicalizer.test.sh` asserts all three together at CI time.
+#   Runtime drift of the 301 is guarded by sentry_uptime_monitor.soleur_www.
+resource "cloudflare_record" "github_pages" {
+  # PR4a of the ADR-194 cutover (#7640) shrank this from all four GitHub Pages
+  # anycast IPs to ONE. The point is not the record count -- it is that the apex
+  # transition must end up on a SINGLE Terraform resource address, so core's
+  # replace semantics serialise Delete->Create when PR4b flips it to a CNAME.
+  # Cloudflare rejects an A and a CNAME coexisting at one name with error 81053,
+  # and four deletes racing one create is exactly that collision.
+  #
+  # This key is a two-merge CONTRACT: PR4b's `moved` block must name it
+  # byte-identically. A mismatch does not error -- Terraform no-ops the move and
+  # the hazard returns silently. `apex-single-node-replace.test.sh` M3 is the only
+  # detection there is.
+  #
+  # Losing the other three costs Cloudflare's origin-level failover across them
+  # for the pre-flip window only; 185.199.108.153 is itself anycast.
+  for_each = toset([
+    "185.199.108.153",
+  ])
 
-# THE TWO-MERGE CONTRACT (#7640, ADR-194 D5). Read this before editing either block.
-#
-# `from` must name the `for_each` key PR4a left behind, BYTE-IDENTICALLY.
-# Terraform does NOT error on a `moved` whose source is absent from state: it
-# no-ops. `pages_apex` then plans as a bare create while the real survivor plans
-# as a separate delete -- two unrelated addresses dispatched concurrently, which
-# is precisely the Cloudflare 81053 collision (an A and a CNAME at one name)
-# that this single-address design exists to prevent. There is no error anywhere.
-#
-# `apex-single-node-replace.test.sh` M3 is the only STATIC detection, and it is
-# text-only -- it cannot see repo-vs-STATE drift (a consistent rename of this
-# pin and the key passes 11/11 while state still holds the old key). The clause
-# in `tests/scripts/lib/destroy-guard-filter-web-platform.jq` asserting this
-# change's `previous_address` is the only check that reads STATE (plan AC72).
-#
-# `git revert` of this commit is FORBIDDEN. Measured: it produces a two-address
-# concurrent plan and reproduces 81053 in the REVERSE direction, on an apex that
-# is already broken. The rollback is the reverse-`moved` PR emitted by
-# `generate-apex-rollback-pr.sh`.
-#
-# DO NOT DELETE THIS BLOCK AS DEAD WEIGHT ONCE THE MOVE HAS CONVERGED.
-# Two things depend on it that nothing connects to it:
-#
-#   1. `ssl-full-mitigation.test.sh` resolves its stage from a three-way OR over
-#      the .tf files, and PR4b drives two of those arms to zero. The ONLY arm
-#      still holding it in `pre-cutover` is the IP literal on the `from` line
-#      below (measured: `pages IPs: 1, github.io target: no, record block: no`).
-#      Delete this block and the guard flips to `post-cutover`, where nine
-#      mitigation assertions become unconditional passes and `ssl = "full"` in
-#      seo-config-rules.tf becomes unguarded text that reads as deletable. That
-#      rule is what masks a GitHub Pages origin certificate expired 2026-08-16,
-#      and the ROLLBACK depends on it. #7799 carries the removal conditions.
-#
-#   2. Re-attempting PR4b after a rollback requires the REVERSE block emitted by
-#      the generator to be deleted first — leaving both makes every plan on this
-#      root fail with "Moved object still exists".
-#
-# The right time to remove this is when the rollback window formally closes,
-# together with the ssl rule, as one deliberate change — not as tidy-up.
-moved {
-  from = cloudflare_record.github_pages["185.199.108.153"]
-  to   = cloudflare_record.pages_apex
-}
-
-resource "cloudflare_record" "pages_apex" {
   zone_id = var.cf_zone_id
-  name    = "soleur.ai" # never "@" -- see AC43; the two are not interchangeable on read-back
-  content = cloudflare_pages_project.docs.subdomain
-  type    = "CNAME"
+  name    = "soleur.ai"
+  content = each.value
+  type    = "A"
   proxied = true
   ttl     = 1
 }
@@ -372,7 +332,7 @@ resource "cloudflare_record" "pages_apex" {
 resource "cloudflare_record" "www" {
   zone_id = var.cf_zone_id
   name    = "www"
-  content = cloudflare_pages_project.docs.subdomain
+  content = "jikig-ai.github.io"
   type    = "CNAME"
   proxied = true
   ttl     = 1

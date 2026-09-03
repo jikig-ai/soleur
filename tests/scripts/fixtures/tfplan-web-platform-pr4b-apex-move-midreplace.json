@@ -1,0 +1,31 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "cloudflare_record.pages_apex",
+      "mode": "managed",
+      "type": "cloudflare_record",
+      "name": "pages_apex",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {},
+        "after_unknown": {},
+        "before_sensitive": {
+          "data": [],
+          "metadata": [],
+          "tags": []
+        },
+        "after_sensitive": {
+          "data": [],
+          "metadata": [],
+          "tags": []
+        }
+      }
+    }
+  ]
+}
