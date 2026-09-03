@@ -194,10 +194,25 @@ inngest_volume_recut_gate() {
             # empty-store window producing an UNENCRYPTED volume, while the workflow prints "The
             # new volume is RAW" twice. Counted on the CREATE side only: `before.format` is ext4
             # today and that is the volume being destroyed.
+            #
+            # REFUSE ANYTHING THAT IS NOT A POSITIVELY-OBSERVED NULL. `after.format != null` alone
+            # read three other shapes as "born RAW" and PASSED: `after` absent entirely, `after`
+            # explicitly null, and — the reachable one — a format UNKNOWN at plan time, which
+            # terraform serialises as null in `after` with `true` in `after_unknown`. The sibling
+            # counter in destroy-guard-filter-web-platform.jq (`reboot_updates`) already documents
+            # that exact serialisation and was deliberately written to err SAFE on it; this one
+            # erred unsafe. A provider bump making `format` Optional+Computed, or any
+            # `format = <expression>`, flips the same null from "declared absent" to "unknown" and
+            # the born-RAW enforcement evaporates while the gate prints PASS.
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_volume.inngest_redis")
               | select(.change.actions? | index("create"))
-              | select(.change.after.format != null) ]
+              | select(
+                  (.change | has("after") | not)
+                  or (.change.after == null)
+                  or (.change.after.format != null)
+                  or ((.change.after_unknown.format // false) == true)
+                ) ]
             | length
           ),
           id_pin_unverifiable: (

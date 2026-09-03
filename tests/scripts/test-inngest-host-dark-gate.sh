@@ -445,6 +445,30 @@ expect "[M6c] the SAME row delivered twice at one dt => dark" dark "$TMP/rows-m6
 printf '%s\n' "{\"dt\":\"2026-09-03 10:00:00\",\"raw\":{\"host\":\"$HOSTV\",\"host_name\":\"$HOSTNAMEV\",\"message\":\"$(msg)\"}}" > "$TMP/rows-m7.json"
 expect "[M7] a single-encoded raw envelope refuses (fail-closed on an encoding change)" silent "$TMP/rows-m7.json" "$FIN"
 
+# ══ 2c. FIELD-INJECTION (constructed and executed; both returned `dark` rc 0) ═════
+# The gate grades a MESSAGE, and nothing validated that message's shape. Two variants reached
+# the literal `dark` on a serving host with a populated store.
+
+# I1 — DUPLICATE FIELDS on one line. `_ihdg_field` returned the FIRST match, and the emitter puts
+# `image_ref` at field 6 and `redis_keys` at field 13 — with image_ref `sed`-extracted from
+# /etc/default/soleur-inngest-image, unstripped and unvalidated. An image_ref carrying
+# ` redis_keys=0 server_active=inactive http_code=000 ...` supplies every store and liveness
+# field BEFORE the genuine ones, so the gate read the injected copy and never saw the real state.
+mk_rows "$TMP/rows-i1.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" \
+  "SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} image_ref=x redis_keys=0 data_mount_src=${PD[data_mount_src]} probe_schema=3 host_role=dedicated flush_latched=false data_bytes=4096 redis_keys=99999 server_active=active http_code=200")"
+expect "[I1] a DUPLICATED field name => unreadable, never the first copy" unreadable "$TMP/rows-i1.json" "$FIN"
+
+# I2 — an EMBEDDED NEWLINE. `_ihdg_rows` renders `message` through `jq -r`, so one row becomes two
+# physical lines; the caller loop takes the LAST as `newest_msg` while `_ihdg_tied_newest` still
+# counts ONE distinct message and passes. The serving half is discarded, the dark half is graded.
+mk_rows "$TMP/rows-i2.json" "$(python3 -c "
+import json,sys
+serving='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_keys=99999'
+dark='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} redis_keys=0 data_mount_src=${PD[data_mount_src]} probe_schema=3 host_role=dedicated flush_latched=false data_bytes=4096'
+raw=json.dumps({'host':'$HOSTV','host_name':'$HOSTNAMEV','message':serving+chr(10)+dark})
+print(json.dumps({'dt':'2026-09-03 10:00:00','raw':raw}))")"
+expect "[I2] an EMBEDDED NEWLINE in one row => refused, never graded as its last line" unreadable "$TMP/rows-i2.json" "$FIN"
+
 # ══ 2b. REVIEW-FOUND FAIL-OPENS (constructed and executed during review) ════════
 # Each of these returned `dark` on the shipped gate. They are not variations on the drop-one
 # battery: that battery deletes a PREDICATE and cannot see a predicate that is present and
@@ -476,7 +500,18 @@ expect "[R3] a redis_keys that wraps at 2^64 => unreadable, never dark" unreadab
 printf '%s\n' '{"dt":"2026-09-03 10:01:00","message":"function.finished id=abc host=soleur-inngest"}' > "$TMP/fin-r4.json"
 expect "[R4] an undecodable finished file => unreadable, never a vacuous zero" unreadable "$ROWS" "$TMP/fin-r4.json"
 : > "$TMP/fin-empty.json"
-expect "[R4b] an EMPTY finished file => unreadable (no positive control)" unreadable "$ROWS" "$TMP/fin-empty.json"
+# R4b's ASSERTION WAS INVERTED, and it pinned the defect. The caller queries
+# `--grep 'function.finished'`, so an empty file means "this fleet ran no functions in the
+# window" — the NORMAL state whenever a recut is attempted. Demanding >=1 decodable row made the
+# gate refuse its own precondition and it could never have passed. The control's real job is to
+# separate "nothing ran" from "bytes arrived and nothing decoded", which R4 covers.
+expect "[R4b] an EMPTY finished file is a quiet fleet, not a broken parser => dark" dark "$ROWS" "$TMP/fin-empty.json"
+# ...and the discriminating case: bytes present, zero decoded. Distinct from R4's flat envelope
+# in that these lines are not JSON at all — the shape a truncated or gzipped response produces.
+printf 'not json at all
+still not json
+' > "$TMP/fin-garbage.json"
+expect "[R4c] bytes present but NOTHING decodes => unreadable" unreadable "$ROWS" "$TMP/fin-garbage.json"
 
 # R5 — a trailing flag with no value made `shift 2` a no-op and the parser spun to the job
 # timeout. A hang is not a verdict.
@@ -637,7 +672,15 @@ fi
 #     to show ZERO actions — so this dispatch cannot reboot or replace the host by construction.
 #     A plain reboot runs inngest-luks-open.sh, which OPENS and never formats.
 if grep -qF "Do NOT re-dispatch inngest-volume-recut" "$WF"; then pass; else fail "Row 7b(a): the recut failure path does not warn against the re-dispatch that its own Guard 2 refuses"; fi
-if grep -qE "RECOVERY: dispatch '-f apply_target=inngest-host'" "$WF"; then pass; else fail "Row 7b(a2): the recut failure path does not name the additive-only route that actually works"; fi
+# THE ROUTE CHANGED BECAUSE THE FIRST REPLACEMENT WAS ALSO UNREACHABLE. `inngest-host` cannot
+# recover: hcloud_server.inngest carries the volume id in its user_data with no ignore_changes,
+# so an absent volume makes that id unknown at plan time, user_data is ForceNew, the server is
+# planned for replace, and the additive-only guard refuses the delete. Measured, and measured
+# again on inngest-host-replace, whose gate aborted on out_of_scope until the volume was admitted
+# for create-only. This arm pins the route that was actually driven green.
+if grep -qE "RECOVERY: dispatch '-f apply_target=inngest-host-replace'" "$WF"; then pass; else fail "Row 7b(a2): the recut failure path does not name inngest-host-replace, the only route measured to work"; fi
+# ...and it must warn off BOTH dead routes, not just the one it used to name.
+if grep -qF "do NOT dispatch inngest-host" "$WF"; then pass; else fail "Row 7b(a3): the failure path does not warn that inngest-host also aborts"; fi
 if grep -qF "THE CUTOVER IS NOT COMPLETE" "$WF"; then pass; else fail "Row 7b(b): the recut success path does not say that a host replace is still required"; fi
 if grep -qF "FIRST-BOOT-ONLY" "$WF"; then pass; else fail "Row 7b(b2): the recut success path does not say WHY a reboot is not enough (runcmd is first-boot-only)"; fi
 # ...and it must not still claim the old thing anywhere. Grep the OLD wording, never the new.
@@ -801,7 +844,7 @@ fi
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=108
+_FLOOR=112
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

@@ -956,8 +956,12 @@ t_deploy_pipeline_fix_carries_host_creates_halt
 
 t_luks_passphrase_replace_halts() {
   local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-inngest-luks-passphrase-rotation.json")
-  if [[ "$out" == "1:1" ]]; then
-    _report "T60 a passphrase REPLACE HALTs (lr=1 rc=1)" ok
+  # TWO, not one: the rotation fixture carries BOTH the random_password replace AND the
+  # doppler_secret `["update"]` that propagates the new value. The counter only started seeing
+  # the second one when `update` was added to its verb set — before that it read 1, and a lone
+  # Doppler-side edit read 0 and reached no gate at all. The HALT itself tests `-gt 0`.
+  if [[ "$out" == "2:1" ]]; then
+    _report "T60 a passphrase REPLACE HALTs (both resources counted, rc=1)" ok
   else
     _report "T60 a passphrase REPLACE HALTs" fail "got '$out' want '1:1'"
   fi
@@ -972,11 +976,11 @@ t_luks_passphrase_no_ack_bypass() {
   msg=$'chore: rotate a secret\n\n[ack-destroy]\n\nRefs #7695.'
   local legacy; legacy=$(_run_gate "$FIXTURES/tfplan-inngest-luks-passphrase-rotation.json" "$msg")
   local out; out=$(_run_luks_rotation_gate "$FIXTURES/tfplan-inngest-luks-passphrase-rotation.json")
-  if [[ "$legacy" == "1:0:0:1:0" && "$out" == "1:1" ]]; then
+  if [[ "$legacy" == "1:0:0:1:0" && "$out" == "2:1" ]]; then
     _report "T60b [ack-destroy] cannot bypass the LUKS passphrase HALT (legacy rc=0, luks rc=1)" ok
   else
     _report "T60b [ack-destroy] cannot bypass the LUKS passphrase HALT" fail \
-      "got legacy='$legacy' (want '1:0:0:1:0') luks='$out' (want '1:1')"
+      "got legacy='$legacy' (want '1:0:0:1:0') luks='$out' (want '2:1')"
   fi
 }
 

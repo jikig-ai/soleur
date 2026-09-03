@@ -61,19 +61,24 @@ fi
 passes=$_p0; fails=$_f0
 
 # ── Fixture builders ──────────────────────────────────────────────────────────────
+# EVERY BUILDER EMITS AN `after`, because terraform always does on a create and these fixtures
+# did not. `new_volume_formatted` refuses anything that is not a positively-observed null format
+# — including an ABSENT `after` — so an `after`-less fixture is both unrealistic and now
+# correctly refused. Emitting `{}` here makes the whole suite grade documents shaped like the
+# ones the gate will actually see.
 # A resource_change object with the given address + actions array (no `before`).
-rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
+rc_obj() { printf '{"address":"%s","change":{"actions":[%s],"after":{}}}' "$1" "$2"; }
 # A resource_change object carrying a `before.id` (the physical volume being acted on).
-rc_obj_id() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":"%s"}}}' "$1" "$2" "$3"; }
+rc_obj_id() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":"%s"},"after":{}}}' "$1" "$2" "$3"; }
 write_plan() { printf '{"format_version":"1.2","resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
 # A resource_change whose `after` carries a format — the shape a `format = "ext4"` config emits on
 # the CREATE side of a replace. Measured on the real plan, not invented.
 rc_obj_fmt() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":"%s"},"after":{"format":"ext4"}}}' "$1" "$2" "$3"; }
 # A `before` that EXISTS but carries no id. Terraform emits this when the prior state entry is
 # present but its id was never recorded or was nulled; `rc_obj_id` can never produce it.
-rc_obj_nullid() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":null}}}' "$1" "$2"; }
+rc_obj_nullid() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":null},"after":{}}}' "$1" "$2"; }
 # A NUMERIC before.id. The gate coerces with `| tostring`; nothing measured that it does.
-rc_obj_numid() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":%s}}}' "$1" "$2" "$3"; }
+rc_obj_numid() { printf '{"address":"%s","change":{"actions":[%s],"before":{"id":%s},"after":{}}}' "$1" "$2" "$3"; }
 
 # The scoped recut: the volume shows a REPLACE carrying the pinned id; its attachment replaces too.
 VOL_REPLACE="$(rc_obj_id 'hcloud_volume.inngest_redis' '"delete","create"' "$PINNED_ID")"
@@ -133,6 +138,15 @@ check "PASS: create-before-destroy replace ordering" 0 "inngest_volume_recut_gat
 # DIFFS, never CREATES. Measured on the real recut plan: with the line, after.format=ext4.
 write_plan "$(rc_obj_fmt 'hcloud_volume.inngest_redis' '"delete","create"' "$PINNED_ID"),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
 check "N1: the new volume is created ext4 => ABORT new_volume_formatted" 1 "reason=new_volume_formatted" "$TMP/plan.json" "$PINNED_ID"
+# N1b — format UNKNOWN at plan time. Terraform serialises this as null in `after` with true in
+# `after_unknown`, which `after.format != null` alone read as "born RAW" and PASSED. This is the
+# reachable one: a provider bump making `format` Optional+Computed, or any `format = <expr>`,
+# produces it. The sibling `reboot_updates` counter documents the same serialisation and errs safe.
+write_plan "$(printf '{"address":"hcloud_volume.inngest_redis","change":{"actions":["delete","create"],"before":{"id":"%s"},"after":{"format":null},"after_unknown":{"format":true}}}' "$PINNED_ID"),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N1b: format UNKNOWN at plan time => ABORT new_volume_formatted" 1 "reason=new_volume_formatted" "$TMP/plan.json" "$PINNED_ID"
+# N1c — an `after`-less create is not a shape terraform emits; refuse rather than guess.
+write_plan "$(printf '{"address":"hcloud_volume.inngest_redis","change":{"actions":["delete","create"],"before":{"id":"%s"}}}' "$PINNED_ID"),${ATT_REPLACE},${SRV_NOOP},${WSVOL_NOOP},${WSATT_NOOP},${WEB1_NOOP},${PW_NOOP},${SECRET_NOOP}"
+check "N1c: a create with NO after key => ABORT new_volume_formatted" 1 "reason=new_volume_formatted" "$TMP/plan.json" "$PINNED_ID"
 
 # ── N2: A DESTROY THE PLAN CANNOT NAME ────────────────────────────────────────────
 # `before` non-null, `before.id` null. luks_id_mismatch selects on `before.id != null` and
@@ -353,13 +367,13 @@ check "OPERAND: a DIRECTORY as the plan path => fail-closed" 1 "ABORT" "$TMP" "$
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the suite on
 # every legitimately-added assertion and train people to bump it unread.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 48 ]]; then
+if [[ "$_ran" -lt 50 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 48. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 50. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" >&2
   printf 'inngest-volume-recut-gate: %s passed, %s failed\n' "$passes" "$fails"
   exit 1
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 48)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 50)\n' "$_ran"
 fi
 
 echo ""

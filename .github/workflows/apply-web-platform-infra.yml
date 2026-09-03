@@ -2156,7 +2156,13 @@ jobs:
           # genuinely unset (safe, G20 accepts it); if it does not, nothing was measured.
           if [[ "$DBOOT_RC" -ne 0 ]]; then
             if doppler secrets --project soleur-inngest --config prd --only-names --token "$DOPPLER_TOKEN_INNGEST_ARM" >/dev/null 2>&1; then
-              DBOOT=""
+              # `unset`, NOT "". The gate's accepting set is `0|unset`, and the empty string is
+              # deliberately NOT in it: "" is what the gate sees when the caller never passed
+              # --diagnostic-boot at all, and that must refuse. This branch is the opposite state —
+              # we DID measure, and the key is genuinely absent — so it must say so in the gate's
+              # own vocabulary. Passing "" here made every healthy dispatch verdict
+              # `diagnostic_boot`, refusing the recut on its own happy path.
+              DBOOT="unset"
             else
               DBOOT="__UNREADABLE__"
             fi
@@ -2269,10 +2275,10 @@ jobs:
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
             echo "::error::terraform apply (inngest-volume-recut) failed — the plaintext AOF volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state)."
-            echo "::error::RECOVERY: dispatch '-f apply_target=inngest-host'. Do NOT re-dispatch inngest-volume-recut — it will ABORT, and the abort is correct."
+            echo "::error::RECOVERY: dispatch '-f apply_target=inngest-host-replace'. Do NOT re-dispatch inngest-volume-recut, and do NOT dispatch inngest-host — both ABORT, and both aborts are correct."
             echo "::error::  WHY the re-dispatch cannot work: Guard 2 runs BEFORE the plan and grades the LIVE host. After a partial apply there is no volume by that name, so the live-id lookup yields nothing and G17 returns id_pin_mismatch; /mnt/data is not mounted from the pinned device, so G14 returns mount_mismatch; and Redis cannot have started against an absent store, so G11 returns redis_down. Guard 1's recovery bare-create arm is real, but the dispatch never reaches Guard 1. An earlier version of this line prescribed exactly that re-dispatch and it was unreachable — the operator would have followed it into three consecutive aborts while the store stayed absent."
-            echo "::error::  WHY inngest-host is the right route: it targets hcloud_volume.inngest_redis and hcloud_volume_attachment.inngest_redis, and its guard is ADDITIVE-ONLY (any delete aborts). A bare create of an absent volume is additive, so it passes — and with 'format' no longer declared, the volume it creates is RAW, which is what the next boot needs."
-            echo "::error::  THEN dispatch '-f apply_target=inngest-host-replace' to cut the header (see the sequencing note on the success path — a raw volume is not an encrypted one until a FIRST boot runs the cloud-init LUKS stage against it)."
+            echo "::error::  WHY NOT inngest-host: hcloud_server.inngest carries the volume id inside its user_data (inngest_volume_id = hcloud_volume.inngest_redis.id) with NO lifecycle ignore_changes on user_data. With the volume absent from state that id is unknown at plan time, so user_data changes, user_data is ForceNew, and the server is planned for REPLACE — which its additive-only guard refuses on the delete. Measured."
+            echo "::error::  WHY inngest-host-replace IS the route: it expects the server replace, terraform pulls the missing volume in as a dependency of that server, its gate admits hcloud_volume.inngest_redis for CREATE ONLY (redis_volume_destroyed still refuses any delete or forget at that address), and its fresh FIRST boot then runs the cloud-init LUKS stage against the new raw device — so one dispatch both re-creates the volume and cuts the header."
             exit 1
           fi
           for ADDR in 'hcloud_server.inngest' 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]' 'hcloud_server.web["web-1"]'; do
@@ -2323,7 +2329,13 @@ jobs:
             echo ""
             echo "The LUKS cut lives in cloud-init-inngest.yml's runcmd stage, and cloud-init runcmd is FIRST-BOOT-ONLY. A plain reboot runs inngest-luks-open.service instead, which OPENS and never formats — so against this raw volume it would format nothing, /mnt/data would not mount, and the Redis mount guard would refuse the start."
             echo ""
-            echo "**NEXT: dispatch \`-f apply_target=inngest-host-replace\`.** Its fresh first boot takes ARM 3 of the five-arm blkid discriminator (the only arm that may write a header), luksFormats, mkfs'"'"'s and mounts /dev/mapper/inngest-redis. The encryption-posture ledger row keeps its exception until that boot is observed reaching stage=fstab on the mapper."
+            if [[ "${JOB_STATUS}" == "success" ]]; then
+              echo "**NEXT: dispatch \`-f apply_target=inngest-host-replace\`.** Its fresh first boot takes ARM 3 of the five-arm blkid discriminator (the only arm that may write a header), luksFormats, mkfs'"'"'s and mounts /dev/mapper/inngest-redis. The encryption-posture ledger row keeps its exception until that boot is observed reaching stage=fstab on the mapper."
+            else
+              echo "**This dispatch did NOT succeed — do NOT run the step above.** If the apply failed part-way the AOF volume may be destroyed with no replacement, and \`inngest-host-replace\` would then rebuild the host with no volume to attach: cloud-init'"'"'s bounded device wait FATALs and the host comes up with no /mnt/data at all."
+              echo ""
+              echo "**Recovery: dispatch \`-f apply_target=inngest-host-replace\`.** Terraform pulls the missing volume in as a dependency of the server it replaces, that gate admits the volume for CREATE only, and its fresh first boot cuts the header — one dispatch recovers and completes. \`inngest-host\` does NOT work (the volume id sits in the server-s ForceNew user_data, so a bare create forces a server replace its additive-only guard refuses), and re-dispatching \`inngest-volume-recut\` will NOT work: Guard 2 runs before the plan and grades the live host, so it returns id_pin_mismatch, mount_mismatch or redis_down. Read the failed step'"'"'s ::error:: lines for the full route."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ─── registry-host scoped -replace (dispatch-only; re-run cloud-init; ADR-096) ─

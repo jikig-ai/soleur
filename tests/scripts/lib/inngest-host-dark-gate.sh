@@ -166,17 +166,35 @@
 # `*` would expand against the working directory. The probe's fields are space-separated `k=v` with
 # no spaces in any value, so word-splitting is exact rather than approximate.
 _ihdg_field() {
-  local msg="$1" name="$2" tok
+  local msg="$1" name="$2" tok val hits=0
   local -a toks=()
   local IFS=' '
+  # A MESSAGE CARRYING A NEWLINE IS NOT ONE MESSAGE. `_ihdg_rows` renders `message` through
+  # `jq -r`, so an embedded newline becomes two PHYSICAL lines out of ONE row — and the caller
+  # loop then takes the LAST line as `newest_msg` while `_ihdg_tied_newest` still sees a single
+  # distinct message and passes. Refuse the whole read instead.
+  [[ "$msg" != *$'\n'* ]] || return 1
   read -ra toks <<< "$msg"
   for tok in "${toks[@]}"; do
     if [[ "$tok" == "${name}="* ]]; then
-      printf '%s' "${tok#"${name}"=}"
-      return 0
+      hits=$((hits + 1))
+      [[ "$hits" -eq 1 ]] && val="${tok#"${name}"=}"
     fi
   done
-  return 1
+  # FIRST-MATCH-WINS WAS A FAIL-OPEN, and the emitter's own field order made it reachable.
+  # `logger -t inngest-server-probe "... boot_id=X image_ref=$image_ref ... redis_keys=$redis_keys
+  # data_mount_src=$data_mount_src ..."` puts image_ref at field 6 and redis_keys at field 13,
+  # and image_ref is `sed`-extracted from /etc/default/soleur-inngest-image with no whitespace
+  # strip and no charset validation (inngest-bootstrap.sh). A value containing
+  # ` redis_keys=0 server_active=inactive http_code=000 ...` therefore supplies every store and
+  # liveness field BEFORE the real ones, and first-match-wins reads the injected copy — verdict
+  # `dark`, rc 0, on a serving host with a populated store, authorizing the irreversible destroy.
+  #
+  # A duplicated field name means the message is not the shape this gate grades. There is no
+  # reading of it that is safe to prefer, so refuse rather than choose.
+  [[ "$hits" -eq 1 ]] || return 1
+  printf '%s' "$val"
+  return 0
 }
 
 # _ihdg_rows <rows-file> <host> <host_name>
@@ -236,6 +254,26 @@ _ihdg_newest_dt() {
       ]
       | sort
       | last // ""
+    ' -r < "$rows_file" 2>/dev/null
+}
+
+# _ihdg_row_count <rows-file> <host> <host_name>
+#
+# How many ROWS the identity+marker filter selected — as opposed to how many physical LINES
+# `_ihdg_rows` emitted. They differ by exactly the number of embedded newlines, which is what
+# makes the comparison a newline detector. Echoes the empty string on any read failure so the
+# caller's numeric predicate refuses.
+_ihdg_row_count() {
+  local rows_file="$1" host="$2" host_name="$3"
+  jq -Rn --arg h "$host" --arg hn "$host_name" '
+      [ inputs
+        | fromjson?
+        | select(type == "object")
+        | ((.raw? // empty) | fromjson?) as $d
+        | select(($d | type) == "object")
+        | select($d.host == $h and $d.host_name == $hn)
+        | select((($d.message? // "") | test("^SOLEUR_INNGEST_SERVER_PROBE ")))
+      ] | length
     ' -r < "$rows_file" 2>/dev/null
 }
 
@@ -370,6 +408,20 @@ inngest_host_dark_gate() {
   # uncomputed count would silently satisfy every threshold.
   if [[ -z "$rows_tsv" ]]; then rows_count=0; else rows_count="$(printf '%s\n' "$rows_tsv" | wc -l)"; fi
   rows_count="${rows_count//[[:space:]]/}"
+  # A MESSAGE CARRYING A NEWLINE IS NOT ONE MESSAGE, and the split happens HERE, upstream of every
+  # predicate. `_ihdg_rows` renders `message` through `jq -r`, so one row containing a newline is
+  # emitted as two physical lines; the selection loop below then takes the LAST as `newest_msg`
+  # while `_ihdg_tied_newest` still counts ONE distinct message and passes. Constructed and
+  # executed: a single row whose message read `http_code=200 server_active=active redis_keys=99999`
+  # followed by a newline and a fully-dark second half returned `dark`, rc 0 — the serving half
+  # discarded, the forged half graded, on a gate authorizing an irreversible destroy.
+  #
+  # Comparing jq's ROW count to the physical LINE count is the detector: they are equal exactly
+  # when no message contains a newline.
+  local rows_rowcount
+  rows_rowcount="$(_ihdg_row_count "$rows_file" "$host" "$host_name")"
+  [[ "$rows_rowcount" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
+  [[ "$rows_rowcount" == "$rows_count" ]] || { _ihdg_verdict "unreadable"; return $?; }
   [[ "$rows_count" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
 
   # ── G5/G6 — envelope identity, COMPUTED BEFORE G2 SO THE ARM IS REACHABLE ───────
@@ -457,11 +509,15 @@ inngest_host_dark_gate() {
   # no-schema-ANYWHERE case still falls through to G4's `stale_schema`, which is the actionable
   # verdict for a host running the pre-schema-3 renderer.
   if [[ "$chosen_msg" != "$newest_msg" ]]; then
-    # Distinguish the two shapes for the operator: if NO row carries a schema the whole window is
-    # pre-schema-3 and the remedy is "replace the host first"; if some row does but the newest
-    # does not, the newest reading is unclassifiable and the remedy is to look at why.
-    if [[ "$chosen_msg" == *"probe_schema="* ]]; then _ihdg_verdict "unreadable"; return $?; fi
-    _ihdg_verdict "stale_schema"; return $?
+    # ONE ARM, because the other one was dead. `chosen_msg` is assigned only when the message
+    # carries `probe_schema=`, and otherwise falls back to `newest_msg` — which makes them EQUAL
+    # and skips this block entirely. Reaching here therefore implies `chosen_msg` carries a schema,
+    # the `if` always fired, and the `stale_schema` line beneath it was unreachable for every
+    # possible rows-file. Its justifying comment also contradicted the one eight lines above,
+    # which correctly states the no-schema-anywhere case falls through to G4. Measured both ways:
+    # an all-pre-schema window returns `stale_schema` (from G4); an older schema-3 row under a
+    # newer pre-schema row returns `unreadable` (from here).
+    _ihdg_verdict "unreadable"; return $?
   fi
 
   # ── G3 — the newest row is RECENT ───────────────────────────────────────────────
@@ -572,14 +628,28 @@ inngest_host_dark_gate() {
   # channel that never reaches this Logs source all read as "no functions ran". Note the polarity
   # difference that made it dangerous: in `_ihdg_rows` a dropped row pushes toward `silent`, a
   # refusal; here a dropped row pushes toward `dark`.
-  local finished_total finished_count
+  # THE CONTROL COMPARES BYTES TO DECODES, NOT DECODES TO ZERO. An earlier revision required
+  # `finished_total >= 1` — at least one decodable row — and that was self-defeating: the CALLER
+  # queries `--grep 'function.finished'` (apply-web-platform-infra.yml), so the file handed to us
+  # is ALREADY marker-filtered. "No rows" therefore means "this fleet ran no functions in the
+  # window", which is the NORMAL state whenever a recut is attempted — so the gate refused
+  # `unreadable` on its own precondition and could never pass. The control's comment claimed it
+  # "deliberately does NOT filter on the marker": true of the control, false of its INPUT, which
+  # is the half that decides what it can see.
+  #
+  # The failure it exists to catch is an UNDECODABLE envelope — bytes arrived and the parser
+  # understood none of them. That is exactly `raw_lines > 0 && decoded == 0`, and it is
+  # distinguishable from a legitimately empty window without requiring the fleet to be busy.
+  local finished_raw finished_total finished_count
+  finished_raw="$(grep -c . "$finished_file" 2>/dev/null || true)"
+  [[ "$finished_raw" =~ ^[0-9]+$ ]]   || { _ihdg_verdict "unreadable"; return $?; }
   finished_total="$(_ihdg_finished_lines "$finished_file")"
   [[ "$finished_total" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
   finished_count="$(_ihdg_finished_count "$finished_file" "$host" "$host_name")"
   [[ "$finished_count" =~ ^[0-9]+$ ]] || { _ihdg_verdict "unreadable"; return $?; }
-  # If the file decodes to nothing at all we did not measure the fleet, we measured our own
-  # parser. Refuse rather than accept the zero.
-  [[ "$finished_total" -ge 1 ]]       || { _ihdg_verdict "unreadable"; return $?; }
+  if [[ "$finished_raw" -ge 1 && "$finished_total" -eq 0 ]]; then
+    _ihdg_verdict "unreadable"; return $?
+  fi
   [[ "$finished_count" -eq 0 ]]       || { _ihdg_verdict "host_executing"; return $?; }
 
   # ── G11 — Redis is UP, so its keyspace answer means something ───────────────────
@@ -658,12 +728,14 @@ inngest_host_dark_gate() {
   # state at dispatch time. They can disagree — a plan is a projection of state, and state can be
   # wrong about the world — and it is the world that gets destroyed.
   #
-  # WHAT THE CALLER ACTUALLY READS, stated precisely because an earlier revision of this comment
-  # overstated it. The workflow resolves the id by NAME and then asserts the volume is attached to
-  # the inngest server; it is not a read of the attachment resource. So G17 answers "the volume
-  # carrying this name is the pinned id, and it is attached to the host we measured" — which is
-  # what the mount pin in G14 needs — and does NOT independently prove that the terraform ADDRESS
-  # resolves to that volume. Guard 1's before.id pin is the counter that answers the address
+  # WHAT THE CALLER ACTUALLY READS — and this comment has now overstated it in BOTH directions.
+  # The workflow does `curl .../volumes?name=soleur-inngest-redis-store | jq -r '.volumes[0].id'`
+  # and NOTHING ELSE: there is no `.server` read and no attachment assertion anywhere in the job.
+  # A previous revision said it "reads the live ATTACHMENT" (too strong); the revision correcting
+  # THAT then added "and asserts the volume is attached to the inngest server", which is equally
+  # false. G17 proves exactly one thing: the volume carrying this NAME has the id the operator
+  # pinned. The attachment property is carried by G14's `data_mount_src` — a fact about what the
+  # host actually mounted — and the terraform ADDRESS question by Guard 1's `before.id`. Guard 1's before.id pin is the counter that answers the address
   # question; the two are complementary and neither subsumes the other.
   #
   # An unreadable live id lands here rather than on `unreadable`: the pin could not be confirmed,

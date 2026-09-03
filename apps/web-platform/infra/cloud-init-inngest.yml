@@ -636,6 +636,21 @@ runcmd:
     # fstab converts a slow attach into an unrecoverable boot wedge. Loud failure belongs in the
     # Redis unit's ExecStartPre re-assertion (which refuses to start on an unmounted /mnt/data),
     # not in a line that can brick the boot before anything is able to report it.
+    # THE MARKER THE OPERATOR IS TOLD TO QUERY FOR. Six sites — this host's variables.tf, the
+    # recut dispatch's ::warning:: and its job summary, and three lines of the plan — instruct the
+    # operator to confirm the cutover by querying `SOLEUR_INNGEST_LUKS_STAGE stage=fstab`, and it
+    # was emitted NOWHERE: the terminal stage was `verify`. Following the instruction returned zero
+    # rows forever, which is indistinguishable from "the stage never ran" — the exact question the
+    # query exists to answer, on a host with no SSH and no console.
+    #
+    # It is also the honest marker for what it names: `verify` proves /mnt/data is mounted NOW,
+    # while the fstab line is what makes that survive the next reboot. Asserted, not assumed —
+    # a missing line here means the mount is live but not persistent, which is a silent one-boot
+    # time bomb rather than a failure anyone would see today.
+    STAGE=fstab
+    grep -q ' /mnt/data ' /etc/fstab || { echo "FATAL: /mnt/data mounted but no fstab line was written — the mount would not survive a reboot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    luks_emit fstab 0 "$${BLK_TYPE:-empty}"
+
     STAGE=verify
     mountpoint -q /mnt/data || { echo "FATAL: /mnt/data is not a mountpoint after the stage completed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     luks_emit verify 0 "$${BLK_TYPE:-empty}"

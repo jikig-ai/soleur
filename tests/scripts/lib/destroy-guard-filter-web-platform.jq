@@ -306,7 +306,18 @@ def destroyed_at($addr):
   # worse outcome: a reborn host is recoverable, a rotated header is not. Read OUTSIDE the
   # destroy_count sum, so `[ack-destroy]` cannot reach it.
   #
-  # `index("delete")` OR `index("forget")`, and NOT `create`. A first CREATE is legal and expected
+  # `update` OR `delete` OR `forget`, and NOT `create`.
+  #
+  # `update` WAS MISSING, and the comment below already claimed it was here. A Doppler-side
+  # value change plans as a bare `["update"]` on the secret — no delete, no forget — so it scored
+  # ZERO on every counter in this file, `destroy_count` stayed 0, and the apply never even reached
+  # the ackable destroy gate, let alone this HALT. Measured on this repo's own rotation fixture
+  # with the sibling random_password row removed:
+  #     {"resource_deletes":0,"luks_passphrase_rotations":0}
+  # That address is in the per-merge `-target=` list, so an unattended merge apply reaches it. The
+  # result is a Doppler passphrase the live LUKS header was never cut from: the store is
+  # unopenable on the next boot, on a host with no SSH and no console, and the header key is the
+  # only copy. The parity claim below is now true rather than aspirational. A first CREATE is legal and expected
   # — this volume is being cut to LUKS for the first time, and inngest_volume_recut_gate makes the
   # same three-verb exclusion for the same reason. `forget` IS counted: a Terraform 1.7+ state-drop
   # of the passphrase leaves the header cut from a value nothing records any more, which is the
@@ -315,7 +326,7 @@ def destroyed_at($addr):
     [ .resource_changes[]?
       | select(.address == "random_password.inngest_redis_luks"
             or .address == "doppler_secret.inngest_redis_luks_key")
-      | select(.change.actions? | any(. == "delete" or . == "forget")) ]
+      | select(.change.actions? | any(. == "update" or . == "delete" or . == "forget")) ]
     | length
   ),
 
