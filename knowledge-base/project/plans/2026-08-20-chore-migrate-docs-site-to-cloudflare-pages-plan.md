@@ -2145,7 +2145,7 @@ logs:
 
 discoverability_test:
   command: bash apps/web-platform/infra/apex-origin-probe.sh
-  expected_output: "SERVING-FROM-GITHUB-PAGES"
+  expected_output: "SERVING-FROM-CLOUDFLARE-PAGES"
 ```
 
 **Amended 2026-08-25.** The command was inline and preflight Check 10 could not run it, in
@@ -2156,10 +2156,19 @@ ad-hoc. Semantically its `expected_output` asserted the POST-cutover origin, so 
 migration every run before the cutover reported a mismatch: the check could only ever fail
 until the last PR landed.
 
-`expected_output` therefore tracks the CURRENT stage and is `SERVING-FROM-GITHUB-PAGES` through
-PR1-PR3. **PR4 flips it to `SERVING-FROM-CLOUDFLARE-PAGES` as part of the cutover hunk** — that
-flip is the cutover's own assertion, and until it happens an unexpected Cloudflare verdict means
-the origin moved without the record swap, which is exactly what we want to hear about.
+`expected_output` therefore tracks the CURRENT stage. It was `SERVING-FROM-GITHUB-PAGES`
+through PR1-PR3; **PR4b flips it to `SERVING-FROM-CLOUDFLARE-PAGES` in the cutover hunk itself**
+(AC59, done 2026-09-03), because that flip IS the cutover's own assertion. Before the flip, an
+unexpected Cloudflare verdict meant the origin had moved without the record swap; after it, a
+GitHub-Pages verdict means the swap did not take, and both are exactly what we want to hear
+about.
+
+**The probe gained a cache-buster in the same hunk (AC61).** Measured 2026-09-02 the apex
+answers `cache-control: max-age=600`, `age: 279`, `x-cache: HIT`, and the
+`SERVING-FROM-CLOUDFLARE-PAGES` arm is RESIDUAL — "200, and no GitHub marker" — so a cached
+pre-cutover response reads as Cloudflare. Since this probe is the rollback's branch selector at
+T+20, that false reading is what would route a session into reverting PR3, a SECOND destroy.
+The three verdicts and both AP-021 `UNREACHABLE` arms are unchanged.
 
 The plan previously recorded that an earlier ad-hoc version of this probe "failed open, printing
 the success verdict for an unreachable site" and had been "hardened and verified across all four
@@ -2327,10 +2336,10 @@ exception:
       origin that only serves because of this rule. Removing it is part of the deferred
       cleanup. That it becomes inert for these hosts post-cutover (no origin leg remains) is a
       claim to MEASURE during that cleanup, not to assert here.
-    tracking_issue: the deferred-cleanup issue filed in PR1 — UNVERIFIED as of 2026-09-03; a
-      `gh issue list` search did not surface it, so AC52 (PF-DEFER) requires PR4 to verify it
-      by number with `gh issue view` and file it if absent. A tracking_issue named only as a
-      description is not a tracking issue.
+    tracking_issue: "#7799"   # filed 2026-09-03 by PR4b, discharging AC52 (PF-DEFER).
+      # It did NOT exist: two sessions recorded it as unfindable and PR4a did not resolve it,
+      # so it is now cited by NUMBER rather than as a description — the plan's own rule is that
+      # a tracking_issue named only as a description is not a tracking issue.
     reevaluate_when: the site is verified serving from Cloudflare Pages across a full
       certificate cycle AND the rollback window is formally closed
     expires_on: 2026-11-20

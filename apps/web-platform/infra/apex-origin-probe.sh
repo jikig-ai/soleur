@@ -27,15 +27,55 @@
 #   UNREACHABLE (transport)       rc 2  — curl could not complete the request
 #   UNREACHABLE (status not 200)  rc 2  — reached, but not a 200
 #
+# The cache-buster added in PR4b changes the URL requested, NOT the arms: still
+# three verdicts and both AP-021 UNREACHABLE arms (AC61).
+#
 # Reads only public HTTP. No credentials, no private network, no SSH.
 
 set -uo pipefail
 
 URL="${APEX_PROBE_URL:-https://soleur.ai/}"
 
+# CACHE-BUSTER (#7640 PR4b, AC61). Measured 2026-09-02: the apex answers with
+# `cache-control: max-age=600`, `age: 279`, `x-cache: HIT`, so an unbusted
+# request can be served from cache for up to ten minutes.
+#
+# That is not a cosmetic staleness problem here, because of which arm is
+# RESIDUAL. `SERVING-FROM-CLOUDFLARE-PAGES` is not positively detected — it is
+# "200, and no GitHub marker". A cached pre-cutover response, or any
+# Cloudflare-served 200 error page, therefore reads as CLOUDFLARE. This probe is
+# the ROLLBACK'S BRANCH SELECTOR at the T+20 decision point: a false
+# "already on Cloudflare" is what routes an operator into reverting PR3 — a
+# SECOND destroy — during an active incident.
+#
+# Query-aware join so an APEX_PROBE_URL that already carries a query string is
+# not corrupted into a second `?`. The sibling build-identity probe uses the same
+# `cb=` idiom (deploy-docs.yml passes `?cb=${{ github.sha }}`); here the nonce is
+# per-invocation, because this probe runs repeatedly within one cutover window
+# and a fixed nonce would be cached after the first sample.
+PROBE_CB="${APEX_PROBE_CB:-$(date -u +%s)-$$-${RANDOM}}"
+case "$URL" in
+  *\?*) PROBE_URL="${URL}&cb=${PROBE_CB}" ;;
+  *)    PROBE_URL="${URL}?cb=${PROBE_CB}" ;;
+esac
+
+# INTROSPECTION SEAM: print the URL that WOULD be requested and exit, making no
+# request at all. It cannot fabricate a verdict — there is no network path
+# through it — so it is safe to leave unguarded, unlike a seam that could
+# redirect the probe at a fixture and report green about a site nobody serves.
+if [[ -n "${APEX_PROBE_PRINT_URL:-}" ]]; then
+  printf '%s\n' "$PROBE_URL"
+  exit 0
+fi
+
 # -D - writes response headers to stdout; -o /dev/null discards the body so a
 # large page cannot flood the caller. --max-time bounds the whole request.
-if ! HEADERS=$(curl -sS -D - -o /dev/null --max-time 20 -w 'HTTPCODE=%{http_code}\n' "$URL" 2>/dev/null); then
+# `Cache-Control`/`Pragma` are belt-and-braces beside the query-string buster:
+# intermediaries may honour them, but the distinct URL is what actually
+# guarantees a fresh edge lookup.
+if ! HEADERS=$(curl -sS -D - -o /dev/null --max-time 20 \
+    -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' \
+    -w 'HTTPCODE=%{http_code}\n' "$PROBE_URL" 2>/dev/null); then
   echo "UNREACHABLE (transport)"
   exit 2
 fi
