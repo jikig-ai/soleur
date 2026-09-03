@@ -132,11 +132,24 @@ CANDIDATES=$(printf '%s' "$ROWS" | jq -s -r --arg s "$SESSION" --arg sig "$SIG" 
 task_is_complete() {   # $1 = task id; rc 0 => observed complete
   [ -n "${1:-}" ] || return 1
   [ -n "$TRANSCRIPT" ] && [ -r "$TRANSCRIPT" ] || return 1
-  grep -F "<task-id>$1</task-id>" "$TRANSCRIPT" 2>/dev/null \
-    | jq -r 'select((.type? // "") != "assistant")
-             | (.content // (.message.content | if type=="string" then . else ([.[]? | .text? // empty] | join(" ")) end) // "")
-             | tostring' 2>/dev/null \
-    | grep -q '<status>completed</status>'
+  # Count with -c and compare, rather than letting a quiet grep end the pipe.
+  # Under `pipefail`, a producer still holding unwritten data when a quiet grep
+  # exits early makes a SUCCESSFUL match report failure (#6992). Here that
+  # INVERTS liveness — a completed monitor reads as still running — and it
+  # surfaces only on a transcript big enough to still be writing, which no
+  # fixture is. Verified on the real 8.9MB transcript after CI caught it
+  # following a green local run.
+  # (Worded without the literal forbidden token on purpose:
+  # grep-q-pipe-guard.test.sh is a text search, so prose NAMING the shape trips
+  # it exactly like code does. Its own header says so; this comment tripped it.)
+  local n
+  n=$(grep -F "<task-id>$1</task-id>" "$TRANSCRIPT" 2>/dev/null \
+      | jq -r 'select((.type? // "") != "assistant")
+               | (.content // (.message.content | if type=="string" then . else ([.[]? | .text? // empty] | join(" ")) end) // "")
+               | tostring' 2>/dev/null \
+      | grep -c '<status>completed</status>' || true)
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$n" -gt 0 ]
 }
 
 LIVE_N=0
