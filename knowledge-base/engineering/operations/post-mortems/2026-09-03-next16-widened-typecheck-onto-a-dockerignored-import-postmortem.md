@@ -163,7 +163,9 @@ root files `middleware.ts` / `instrumentation.ts`. One `@/test/helpers/…` impo
 an e2e file would have reproduced this incident **past a green guard**.
 
 Review found two of the new anti-vacuity controls were themselves vacuous: a flat `> 200`
-floor against ~820 real files tolerated dropping `server/` (316 files, the largest root),
+floor against **843** real files (measured: `app` 165, `components` 220, `server` 316, `lib`
+106, `e2e` 16, `hooks` 13, `docs` 0, `public` 0, plus 7 root files) tolerated dropping
+`server/` — the largest root, 316 files — and still passing,
 and `expect(offenders).toEqual([])` was satisfied by a resolver that returned `null` for 18
 real edges because it omitted `index.tsx` — an unresolvable specifier is an *unchecked*
 one, and the green looks identical either way. Both survived the author's first mutation
