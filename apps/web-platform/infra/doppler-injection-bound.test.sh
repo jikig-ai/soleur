@@ -97,6 +97,21 @@ FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1"; [[ -n "${2:-}" ]] && echo "        $2"; return 0; }
 
+# INSTRUMENT SELF-TEST (#7761 review, P0). Measured on this suite: with the SUT genuinely broken
+# (`sys.exit(main())` -> `main(); sys.exit(0)`) it printed 10 real FAIL: lines and, with fail()
+# neutered, reported "20/20 passed, 0 failed" and exit 0 — self-consistently, because the
+# denominator is PASS+FAIL. CI reads only the exit code. Neutering pass() IS caught (the floor sums
+# PASS); neutering fail() was not, because the floor reported THROUGH fail(). Prove both counters
+# move, then reset. Output suppressed so the deliberate FAIL row is not misread as a real one.
+pass "instrument self-test" >/dev/null
+fail "instrument self-test" >/dev/null
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then
+  printf 'FATAL: assertion counters are broken (PASS=%s FAIL=%s, expected 1/1).\n' "$PASS" "$FAIL" >&2
+  exit 1
+fi
+PASS=0
+FAIL=0
+
 TMPROOT="$(mktemp -d)"
 trap 'rm -rf "$TMPROOT"' EXIT INT TERM HUP
 
@@ -1025,10 +1040,16 @@ expect_green "H4 runcmd doppler invocation is NOT flagged (boot self-check must 
 # expect_red/expect_green invocation would report FAIL=0 and exit 0. A FLOOR, not equality: bump
 # it deliberately when adding assertions; NEVER lower it to make a run pass.
 TOTAL=$((PASS + FAIL))
-MIN_ASSERTIONS=25
-[[ "$PASS" -ge "$MIN_ASSERTIONS" ]] || \
-  fail "assertion count $PASS < floor $MIN_ASSERTIONS — the battery silently stopped running" \
-    "an assertion was deleted or an early return skipped a block; this is not a count to lower"
+# 25 -> 29: set to the measured green count, not below it. Slack in a floor is the budget an
+# attacker (or an accidental deletion) gets for free.
+MIN_ASSERTIONS=29
+if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
+  # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
+  # protect means one edit disarms both. See the instrument self-test at the top.
+  printf 'FAIL: assertion count %s < floor %s — the battery silently stopped running. An assertion was deleted or an early return skipped a block; this is not a count to lower.\n' \
+    "$PASS" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 
 echo ""
 echo "=== doppler-injection-bound: Results: $PASS/$TOTAL passed, $FAIL failed ==="

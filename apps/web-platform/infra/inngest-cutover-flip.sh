@@ -58,6 +58,13 @@
 set -Eeuo pipefail
 
 readonly LOG_TAG="inngest-cutover-flip"
+# DELIVERY DISCRIMINATOR (#7761). Stamped into every emit_state row so the post-replace
+# probe can prove the new script REACHED the host. Without it every observable the probe
+# checks — the flag value, the noop markers, the absence of flush transitions — is emitted
+# byte-identically by the PRE-fix script, so a replace that silently kept the old image
+# (a digest that never moved, a flip-asset copy that failed its `|| true` guard) would
+# report "delivered". Bump when a future change needs the same proof.
+readonly GUARD_REV="7761"
 readonly SERVER_UNIT="inngest-server.service"
 
 # --- SEAM GATE (#7761): the fixture seams are honoured ONLY when argv says so ---------------
@@ -433,7 +440,8 @@ emit_state() {
     --arg reason "$reason" \
     --arg flag "$flag" \
     --arg start_ts "$START_TS" \
-    '{exit_code:$exit_code, dbsize:$dbsize, reason:$reason, flag:$flag, start_ts:$start_ts}')"
+    --arg guard "$GUARD_REV" \
+    '{exit_code:$exit_code, dbsize:$dbsize, reason:$reason, flag:$flag, start_ts:$start_ts, guard:$guard}')"
   # Debug-aid state slot (cat-inngest-cutover-state.sh) — best-effort, never fatal.
   printf '%s\n' "$json" > "$STATE_FILE" 2>/dev/null || true
   # No-SSH state channel: journald -> Vector -> Better Stack (P0-2).

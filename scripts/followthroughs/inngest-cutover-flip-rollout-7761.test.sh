@@ -19,6 +19,21 @@ PASS=0; FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
+# INSTRUMENT SELF-TEST (#7761 review, P0). Measured on this suite: with the SUT genuinely broken
+# (`sys.exit(main())` -> `main(); sys.exit(0)`) it printed 10 real FAIL: lines and, with fail()
+# neutered, reported "20/20 passed, 0 failed" and exit 0 — self-consistently, because the
+# denominator is PASS+FAIL. CI reads only the exit code. Neutering pass() IS caught (the floor sums
+# PASS); neutering fail() was not, because the floor reported THROUGH fail(). Prove both counters
+# move, then reset. Output suppressed so the deliberate FAIL row is not misread as a real one.
+pass "instrument self-test" >/dev/null
+fail "instrument self-test" >/dev/null
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then
+  printf 'FATAL: assertion counters are broken (PASS=%s FAIL=%s, expected 1/1).\n' "$PASS" "$FAIL" >&2
+  exit 1
+fi
+PASS=0
+FAIL=0
+
 WORK="$(mktemp -d -t flip7761probe.XXXXXXXX)" || { echo "SETUP FAIL: mktemp"; exit 2; }
 trap 'rm -rf "$WORK"' EXIT
 
@@ -197,7 +212,11 @@ rc="$(run_probe "$(make_stub "$f")")"
 # exit 0. Derived from a green run, never guessed.
 MIN_ASSERTIONS=19
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
-  fail "assertion floor: only $PASS assertions ran, expected >= $MIN_ASSERTIONS — a block was skipped"
+  # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
+  # protect means one edit disarms both. See the instrument self-test at the top.
+  printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped.\n' \
+    "$PASS" "$MIN_ASSERTIONS" >&2
+  exit 1
 fi
 
 echo ""

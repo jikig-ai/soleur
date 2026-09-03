@@ -46,6 +46,23 @@ assert_logger() {
   if [[ -s "$LOGTRACE" ]]; then pass "$desc"; else fail "$desc (no logger line emitted)"; fi
 }
 
+# INSTRUMENT SELF-TEST (#7761 review, P0). Every claim in this file dispatches through pass()/fail(),
+# and the assertion floor at the bottom used to dispatch through fail() too — so ONE edit (fail()
+# stops incrementing FAIL) made every assertion AND the floor that backstops them report green
+# together. Measured on this suite: with the seam gate deleted the suite printed
+# "116 passed, 0 failed" and exit 0, with 11 real FAIL: lines on stdout that nothing counted. CI
+# reads the exit code. Note the asymmetry — neutering pass() IS caught, because the floor sums
+# PASS; neutering fail() was not. So prove both counters move before trusting anything, then reset.
+# Output suppressed so the deliberate FAIL row cannot be misread as a real one.
+pass "instrument self-test" >/dev/null
+fail "instrument self-test" >/dev/null
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 ]]; then
+  printf 'FATAL: assertion counters are broken (PASS=%s FAIL=%s, expected 1/1).\n' "$PASS" "$FAIL" >&2
+  exit 1
+fi
+PASS=0
+FAIL=0
+
 WORK=""
 LATCH=""
 TRACE="" STATE="" LOGTRACE=""
@@ -699,7 +716,14 @@ derived_prefixed_names() {
 # itself, NOT from a comment sentinel: the list is load-bearing code, and anchoring a completeness
 # check on prose would let the check pass against a gate whose actual list had drifted.
 gate_unset_names() {
-  awk '/^[[:space:]]*for[[:space:]]+_seam[[:space:]]+in/{f=1} f{print} f&&/^[[:space:]]*do[[:space:]]*$/{exit}' "$FLIP_SRC" \
+  # COMMENT-STRIPPED, and that is load-bearing rather than symmetry with the sibling above. Read
+  # raw, this window is satisfied by PROSE: a comment naming a seam between the list's last entry
+  # and `do` is valid bash, sits inside the extraction, and makes the completeness tripwire pass
+  # against a gate whose list no longer carries that name — reopening the exact hole the tripwire
+  # exists to close. Measured: dropping CUTOVER_GQL_URL from the list while leaving such a comment
+  # kept the suite green at 126/0 with a live seam un-unset.
+  flip_src_nocomments \
+    | awk '/^[[:space:]]*for[[:space:]]+_seam[[:space:]]+in/{f=1} f{print} f&&/^[[:space:]]*do[[:space:]]*$/{exit}' \
     | grep -oE '(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+' \
     | sort -u || true
 }
@@ -783,13 +807,13 @@ assert_contains "the gate's predicate reads positional argv, not the environment
 # one failure shape this FSM exists never to have. Pin the two constructs that would cause it.
 # Same anchoring discipline as GATE_LN above: start at the predicate construct, not at the first
 # prose mention of the flag, and stop at the block's own closing `fi` at column 0.
-GATE_BODY="$(awk '/\$\{1:-\}.*--fixture-seams/{f=1} f{print} f&&/^fi[[:space:]]*$/{exit}' "$FLIP_SRC" || true)"
+GATE_BODY="$(flip_src_nocomments | awk '/\$\{1:-\}.*--fixture-seams/{f=1} f{print} f&&/^fi[[:space:]]*$/{exit}' || true)"
 assert_absent "the gate's counter uses n=\$((n+1)), never (( n++ )) which returns 1 on 0->1" \
   "$GATE_BODY" '((_seams_present++))'
 assert_absent "no loop body in the gate ends in a bare [[ ... ]] && ... short-circuit" \
   "$GATE_BODY" ']] &&'
 assert_contains "the refusal marker's logger call is failure-tolerant in the pre-trap window" \
-  "$GATE_BODY" '|| true'
+  "$GATE_BODY" '2>/dev/null || true'
 # Mutation row 8: a gate that sanitised PATH/BASH_ENV/IFS/LD_PRELOAD would silently BLIND its own
 # refusal tests rather than redden them. Those names are --only-secrets' job, at the unit.
 for forbidden in PATH BASH_ENV IFS LD_PRELOAD; do
@@ -897,16 +921,68 @@ fi
 rm -rf "$ALT_ROOT"
 teardown_case
 
+# --- #7761 THE UNIT'S SANDBOXING SHAPE ------------------------------------------------------
+#
+# WHY THESE EXIST. The five sandboxing directives were added by this PR and pinned by NOTHING —
+# repo-wide there was not one assertion on any of them for this unit. That matters more than the
+# usual "untested config" case, because the unit's own comment calls the correct spelling
+# non-obvious ("wrong twice") and names the failure mode: a `ReadWritePaths=` entry naming a
+# directory that does not exist makes systemd fail mount-namespace setup, so the unit dies on
+# EVERY 30-second fire after a host replace, emitting nothing, on the one host with no inbound
+# control channel. A later hygiene edit — adding ProtectHome, `-`-prefixing /mnt/data, dropping
+# StateDirectory — would have reddened nothing and surfaced only as a permanently silent host.
+#
+# inngest.test.sh's all-members PrivateTmp check derives its population from heredocs inside
+# inngest-bootstrap.sh, and this is a STANDALONE .service file, so it was never in that set.
+UNIT_SRC="$SCRIPT_DIR/inngest-cutover-flip.service"
+echo "TEST: #7761 the unit's sandboxing directives are pinned"
+assert_eq "the unit file exists" "yes" "$([[ -f "$UNIT_SRC" ]] && echo yes || echo no)"
+for d in 'NoNewPrivileges=yes' 'ProtectSystem=strict' 'PrivateTmp=true' 'StateDirectory=inngest-cutover'; do
+  # Anchored at column 0 on the directive itself: the unit documents every one of these in prose
+  # directly above it, so a bare-substring check would be satisfied by the comment explaining it
+  # (cq-assert-anchor-not-bare-token — this PR has already been bitten by that twice).
+  if grep -qE "^${d}\$" "$UNIT_SRC"; then pass "unit sets ${d}"; else fail "unit does not set ${d}"; fi
+done
+# PrivateTmp must be spelled `true`: inngest.test.sh asserts `^PrivateTmp=true$` by regex, and
+# every inngest-family unit uses it. git-data-gc.service is the repo's lone `yes`.
+if grep -qE '^PrivateTmp=yes$' "$UNIT_SRC"; then fail "PrivateTmp spelled 'yes' — inngest family uses 'true'"; else pass "PrivateTmp is not spelled 'yes'"; fi
+# ProtectHome would mask /root and break the Doppler CLI's home resolution, defeating the
+# Environment=HOME=/root above it. git-data-gc.service records this.
+if grep -qE '^ProtectHome' "$UNIT_SRC"; then fail "ProtectHome is set — it masks /root and breaks the Doppler CLI"; else pass "ProtectHome is NOT set (it would break the Doppler CLI)"; fi
+# The writable paths must name the MOUNTS, never the lazily-created subdirectories inside them —
+# and must not be `-`-prefixed, which would leave them read-only under ProtectSystem=strict and
+# abort `latch-unrecordable` on every fire.
+assert_contains "ReadWritePaths names the mounts, not the lazily-created subdirs" \
+  "$(grep -E '^ReadWritePaths=' "$UNIT_SRC" || true)" "/var/lock /mnt/data"
+RWP="$(grep -E '^ReadWritePaths=' "$UNIT_SRC" || true)"
+assert_absent "no ReadWritePaths entry is '-'-prefixed (that would make it read-only)" "$RWP" "=-"
+assert_absent "ReadWritePaths does not name a lazily-created subdirectory" "$RWP" "inngest-cutover"
+# The unit's own stderr must be tagged, or journald derives the tag from the ExecStart basename —
+# `doppler` — which no Vector source admits, and every diagnostic the unit writes is dark.
+assert_contains "the unit sets SyslogIdentifier (else journald tags it 'doppler')" \
+  "$(grep -E '^SyslogIdentifier=' "$UNIT_SRC" || true)" "SyslogIdentifier=inngest-cutover-flip"
+# The shipped unit must NOT authorise the fixture seams. Nothing else in the repo pins this, and
+# it is a one-word edit that would disable the entire gate in production while leaving Guard 2
+# green (the flag sits after the `--`, so the --only-secrets bound is untouched).
+UNIT_EXEC="$(sed -n '/^ExecStart=/,/[^\\]$/p' "$UNIT_SRC" | sed 's/\\$//' | tr -d '\n')"
+assert_absent "the SHIPPED unit does not pass --fixture-seams (that would disable the gate)" \
+  "$UNIT_EXEC" "--fixture-seams"
+
 # --- S8: an assertion-count FLOOR ----------------------------------------------------------
 # Every suite here gates only on FAIL. Deleting a whole test block drops the PASS count and
 # still exits 0, so "all assertions passed" and "fewer assertions ran" are the same signal.
 # A FLOOR, never -eq: adding tests must not red the suite.
-# 102 -> 126: +24 for the #7761 seam-gate block (tripwire, companion assertion, position/predicate/
-# pre-trap-window shape, the four behavioural refusal + must-PASS cases). Derived from a green run,
-# never guessed; raise in lockstep when adding tests.
-MIN_ASSERTIONS=126
+# 102 -> 138: +24 for the #7761 seam-gate block (tripwire, companion assertion, position/predicate/
+# pre-trap-window shape, the four behavioural refusal + must-PASS cases), then +12 for the
+# unit sandboxing-shape block review found pinned by nothing. Derived from a green run, never
+# guessed; raise in lockstep when adding tests.
+MIN_ASSERTIONS=138
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
-  fail "assertion floor: only $PASS assertions ran, expected >= $MIN_ASSERTIONS — a block was skipped or silently emptied"
+  # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
+  # protect means one edit disarms both. See the instrument self-test at the top.
+  printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
+    "$PASS" "$MIN_ASSERTIONS" >&2
+  exit 1
 fi
 
 echo ""
