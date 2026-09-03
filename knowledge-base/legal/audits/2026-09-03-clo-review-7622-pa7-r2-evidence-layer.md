@@ -23,6 +23,21 @@ re_evaluation_triggers:
 
 # CLO review — PA-7 omitted the R2 evidence layer, and one of its processors (PR #7622)
 
+## Two frontmatter notes, recorded rather than left to be inferred
+
+**`issue: 7601`, on a file named for 7622.** Both sibling records match their filename number to
+their `issue:` key. This one cannot: 7622 is a **pull request**, and the issue it closed is 7601.
+The filename carries the PR number because this record is of a PR review; the frontmatter carries the
+issue number because that is what the key means. A reader grepping `issue: 7622` will find nothing —
+grep `pr: 7622`.
+
+**`type: clo-review-record` is a new value in this directory**, alongside `clo-attestation`,
+`counsel-review` and `clo-ruling`. Minted deliberately and named here rather than silently: this is
+neither a ruling (it decides nothing) nor an attestation of the PR it sits in (it records another
+review, of another PR, three weeks later). The same PR argues against minting a tenth *amendment
+label* for the register; that argument turns on #7669 having to learn any new label, and no consumer
+parses these `type:` values today.
+
 ## What this record is, and when it was written
 
 This is the retrospective audit record of a CLO review conducted on **2026-08-20**, written on
@@ -115,7 +130,9 @@ neither was work the pull request could have done.
   three canonical documents under `docs/legal/**` and four Eleventy mirrors, a change class that
   fires all five legal CI gates and requires canonical and mirror to move atomically with a
   document-SHA re-pin. Also the more serious defect — Art. 13(1)(f) transparency rather than Art. 30
-  record-keeping.
+  record-keeping. **Those figures are the scope as estimated on 2026-08-20 and are transcribed here
+  rather than re-derived; the correction actually shipped as #7664, touching five canonical documents
+  and five mirrors.**
 - **#7625 — PA-7 §(c) omits `comment_body`.** Directed **do not bundle**, because the Art. 9
   consequence needed its own analysis: `comment_body` is the only unbounded-content field in PA-7,
   and the Special-categories cell asserted "None" over it. Re-deriving that determination was held

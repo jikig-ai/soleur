@@ -522,8 +522,18 @@ source.** Answering them surfaced two further defects in text the authority had 
 verbatim.
 
 **This addendum governs where it and anything above it disagree.** As with A1, the transcribed
-rulings are left byte-identical and the corrections live here — the transcription is a record of what
-was said, not an operative text.
+rulings are left unaltered and the corrections live here — the transcription is a record of what was
+said, not an operative text.
+
+**One precision about "verbatim", since the word is doing work.** The transcription above is
+byte-identical to the advisory **as it stood in the plan at the moment of transcription**, and that
+was verified mechanically rather than asserted. It is *not* a transcript of the advisory as first
+obtained: the plan-review pass had already annotated it in place — `"not PA-35, which was a
+misattribution corrected at plan review"`, `"[Count corrected at plan review; the argument is
+unaffected…]"` — and those marks are carried through here along with everything else. So "verbatim"
+means *faithful to the governing text this implementation was handed*, which is the property that
+matters for whether `/work` invented legal wording. It does not mean the reviewing authority wrote
+every word in the form shown.
 
 ### A7 — the three questions, and their binding answers
 
@@ -686,9 +696,17 @@ WIDENING block; A2's Categories-of-data-subjects WIDENING block; A3's CORPUS DIV
 (placeholder substitution only) — no text change to any of them. Each was re-read for § 4.7
 references, PA-35 comparisons and cross-activity claims; there are none.
 
-**Placeholder guard, generalised.** No `#<…>` marker may land in either the register or this record:
-`grep -cE '#<[a-z0-9-]+>'` must return 0 over both. `#7812` substitutes for every `#<PR-B-issue>`,
-and #7813 / #7814 / #7815 for the rest.
+**Placeholder guard, generalised — and corrected at implementation review, because as first
+written it returned 0 for the wrong reason.** No `#<…>` marker may land in the **register**, and
+none may land in the **operative** sections of this record. The check is
+`grep -ciE '#<[a-z0-9-]+>'` — **case-insensitive**: the original `grep -cE '#<[a-z0-9-]+>'` used a
+lower-case-only class that structurally cannot match `PR-B`, the very placeholder it was written to
+catch, so it would have returned 0 against a register full of unsubstituted markers spelled with a
+capital. Measured on the corrected form: **0 over the register** (genuinely clean — `#7812` at both
+sites, `#7815` at the third), and **4 within this record**, all inside the A3 and A4 transcriptions
+and this guard's own sentence. Those four are correct and must stay: a transcription records what
+was said, and A3/A4 were written before the issues existed. The original guard's scope — "either
+the register or this record" — was therefore wrong in both directions at once.
 
 **Disposition: PROCEED-WITH-CHANGES.** The attestation is extended to cover A7–A11. Nothing here
 acquires a `docs/legal/**` edit — the register, this record and `compliance-posture.md` are all under
@@ -727,3 +745,42 @@ claims in this record. Two of its three findings were **false positives** — it
 `(#7100)` amendment citations as pull-request numbers and compared them against PR #7110, which
 closed issue #7100; this register cites **issues** throughout, so those citations were correct. The
 third was real. A finding is a hypothesis until its evidence is re-derived, in both directions.
+
+### A13 — how to read the transcription, and two citation corrections (2026-09-04)
+
+Both found by a convention pass at implementation review. Neither changes a legal conclusion; both
+change what a reader of the transcription should believe.
+
+**A13.1 — five of the seven "precedent cells" line citations were broken by this very PR.** The
+transcribed *Files the reviewing authority read* list cites `article-30-register.md` as *"PA-7 lines
+152-164; precedent cells 28, 74, 242, 291, 540, 639, 658"*. Those were correct when the advisory was
+written. Inserting PA-7's `(h)` row at line 165 shifted everything below it by one, so **242, 291,
+540, 639 and 658 now land on `(c) Categories of personal data` rows instead of the
+`Special categories (Art. 9 / 10)` cells that were plainly meant** — and the PA-7 range is now
+156–165, not 152–164. (Lines 28 and 74 sit above the insertion and still resolve.)
+
+Read that list by **content anchor**, not by number: the intended precedents are the
+`Special categories (Art. 9 / 10)` cells of **PA-12, PA-15, PA-27, PA-32 and PA-33**, plus the § 0
+DPO non-designation cell and PA-2's `(g) TOMs (Art. 32)`.
+
+Worth naming for what it is: this is `cq-cite-content-anchor-not-line-number` violated **by the
+commit that moved the lines**, inside a record that argues elsewhere for anchoring on content. The
+transcription is left as written because it records what was cited; this entry is the correction, and
+no new line numbers are introduced here.
+
+**A13.2 — the transcription addresses the plan, and says so in the plan's voice.** Read literally,
+passages inside it are confusing in a file whose frontmatter says `status: SIGNED-OFF`:
+
+- *"These rulings are **inputs to `/work`, not review comments.** Where this section and any earlier
+  section of **this plan** disagree, this section governs. `/work` Phase 0 writes it verbatim to
+  `…/2026-09-counsel-review-7625.md`"* — i.e. the record instructing that it be written to itself.
+- *"**PR A (this plan — internal only).**"*
+- *"**Do not land this with `#<PR-B-issue>` unsubstituted.** Mint the PR B issue in Phase 2 first"* —
+  an unexecuted instruction, in a record of completed work.
+
+None is an error. The advisory was addressed to the plan and to `/work`, and transcribing it faithfully
+means carrying its deixis intact. **Read every "this plan", "`/work`", "Phase N" and imperative inside
+the transcription as addressed to the implementation that has since happened, not to the reader of this
+record.** The instructions were carried out: `#7812` and `#7815` are substituted at all three register
+sites, and PR A landed internal-only. Where the transcription and the world disagree, the addenda
+govern — that is what they are for.

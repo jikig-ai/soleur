@@ -12,7 +12,9 @@ brand_survival_threshold: single-user incident
 Derived from the plan after a seven-agent review pass. **The plan's
 `## CLO Advisory — Binding Rulings` and its `## Addendum after plan review` govern; where a task here
 and the advisory disagree, the advisory wins.** Phase order is dependency order, not narrative order —
-the filings phase runs before the amendment because two cells cite an issue number it mints.
+the filings phase runs before the amendment because THREE cells cite issue numbers it mints — the
+`CORPUS DIVERGENCE` block and the `(h)` cell cite #7812, and the Special-categories cell cites issue
+7815. (An earlier draft said two and missed that third dependency.)
 
 > **Numbering note.** This file counts phases from 1; the plan counts from 0. The mapping is
 > `tasks N` = `plan N-1` throughout: tasks Phase 1 = plan Phase 0 (transcribe the advisory), tasks
@@ -62,8 +64,11 @@ the filings phase runs before the amendment because two cells cite an issue numb
       `override_reason` enum + DPA-log split + the `>=10 chars` help-text drift + both runbook sites;
       a sign-comment mode for `sentinel-pr.sh`.
 - [ ] 3.4 File the four `compliance/critical` issues, one per Active Items row (A5 table).
-- [ ] 3.5 File the AUP §4.7 over-broad citation issue — **two cells, `:313` (PA-17) and `:658`
-      (PA-33)**, not PA-35.
+- [ ] 3.5 File the AUP §4.7 over-broad citation issue — **four sites**: PA-17's Special-categories
+      cell AND its Art. 6(1)(f) balancing limb, PA-31's Special-categories cell, PA-33's
+      Special-categories cell. Not PA-35, and not two — the two-site figure was retracted at
+      addendum A7.1. Cite by activity and cell, never by line number (`cq-cite-content-anchor-not-line-number`):
+      the `(h)` row this PR adds shifts every line anchor below it.
 - [ ] 3.6 File the six remaining bare `**Special categories**` labels (PA-3/4/5/6/8/9) as one
       mechanical pass. Measured: 31 rows, 24 suffixed, 7 bare. Post-MVP.
 - [ ] 3.7 File the C4 gaps issue (FreeTSA element, `soleur-cla-evidence` R2 edge). Post-MVP.

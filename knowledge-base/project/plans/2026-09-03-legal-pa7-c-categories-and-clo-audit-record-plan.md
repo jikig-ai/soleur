@@ -467,7 +467,8 @@ unmodelled), and neither belongs in this PR.
   *An earlier draft of this list said "four cells" and "one new Active Items row only". Both were
   left behind by the review revisions that made them five and four — the class of stale
   cross-reference a post-edit sweep exists to catch, found in the plan's own Files list.*
-- `knowledge-base/INDEX.md` — regenerated, not hand-edited (`bash scripts/generate-kb-index.sh`).
+- `knowledge-base/INDEX.md` and `knowledge-base/kb-tags.txt` — regenerated, not hand-edited
+  (`bash scripts/generate-kb-index.sh` writes both).
 
 ## Files to Create
 
@@ -725,16 +726,30 @@ strong: the `allowlist/` bypass arm at `cla-evidence.yml:169` is untouched by th
 processing non-signers, `deruelle` among them. If PR B is drafted on the premise that the whole
 non-signer category becomes historic, it will be wrong again in the same direction as today.
 
-**3. The over-broad AUP §4.7 citation — two cells, and neither is PA-35.** `article-30-register.md:313`
-(PA-17) and `:658` (PA-33) each cite §4.7 as prohibiting Art. 9/10 content "in repository
-submissions", when §4.7 is scoped by its own heading and opening sentence to the hosted chat surface.
-The advisory and an earlier draft of this plan both attributed this to PA-35; PA-35 begins at `:701`
-and its Special-categories cell reads a bare `None identified.` **Verified at plan review** —
-`grep -n "repository submissions"` returns exactly `:313` and `:658`, and
+**3. The over-broad AUP §4.7 citation — FOUR sites, and none is PA-35.** **This item carried a
+"Verified at plan review" badge on a false count, and the badge is the worse half: a wrong claim
+marked verified is more dangerous than an unmarked one.** The four sites are PA-17's
+Special-categories cell, **PA-17's Art. 6(1)(f) balancing limb**, PA-31's Special-categories cell,
+and PA-33's Special-categories cell — each citing §4.7 as prohibiting Art. 9/10 content "in
+repository submissions" when §4.7 is scoped by its own heading and opening sentence to the hosted
+chat surface. An earlier draft attributed this to PA-35, whose Special-categories cell reads a bare
+`None identified.` and cites nothing.
+
+**Why the plan-review grep undercounted, twice over.** `grep -n "repository submissions"` returns
+**three** hits on `main` — `:313` (PA-17), `:620` (PA-31), `:658` (PA-33) — not the two recorded
+here; PA-31 was simply missed while reading the output. And the fourth site cannot be found by that
+phrase at all: PA-17's balancing limb spells it as a parenthetical naming § 4.7 beside the
+render-time `redactGithubSourcedText` minimisation, so a phrase-anchored sweep is structurally blind to
+it. Sweep the CLAIM, not one of its phrasings. Retained rather than silently repaired, and
 `awk 'NR<=658 && /^## Processing Activity /{last=NR": "$0} END{print last}'` returns `649: ## Processing Activity 33`. Milestone `Post-MVP / Later`; labels `domain/legal`,
 **`compliance/critical`**. That label is not decorative — Phase 5's `compliance-posture.md` row keys
 on this issue number, and `/ship` Phase 5.5's gdpr-gate acknowledgment gate verifies every
 PR-referenced `compliance/critical` issue has a row there before merge.
+
+> **Line numbers in this section are `origin/main` coordinates and this PR's own `(h)` insertion
+> shifted everything below register line 165 by one. Cite these cells by activity and row label, not
+> by number — the four AUP § 4.7 sites are PA-17's Special-categories cell and its Art. 6(1)(f)
+> balancing limb, PA-31's Special-categories cell, and PA-33's Special-categories cell.**
 
 **3b. The six remaining bare `**Special categories**` row labels** — PA-3, PA-4, PA-5, PA-6, PA-8 and
 PA-9, which alone in the register lack the `(Art. 9 / 10)` suffix that the other 24 rows carry.
@@ -802,8 +817,12 @@ gave three, and the fourth and fifth were **sent back to the reviewing authority
 here** — see `## CLO Advisory — Addendum after plan review`. Having `/work` author governing legal
 text mid-implementation is exactly what obtaining the advisory at plan time exists to prevent.
 
-**This is why the filings phase now runs first.** The `CORPUS DIVERGENCE` block and the `(h)` cell
-both cite the PR B issue number, so that issue must exist before these cells can be written. An
+**This is why the filings phase now runs first.** **Three** PA-7 cells cite numbers this phase mints —
+the `CORPUS DIVERGENCE` block and the `(h)` cell both cite the PR B issue (#7812), and the
+Special-categories cell cites the AUP § 4.7 issue (#7815) in its sibling-comparison sentence. All
+three must exist before those cells can be written. (An earlier draft said "two cells" and missed
+the #7815 dependency — which was the least safe one to leave uncounted, since that issue's scope was
+still being argued at A7.1.) An
 earlier draft had the amendment at Phase 2 and the filings at Phase 4 — the same read-before-write
 inversion review caught in the `compliance-posture.md` row, found twice in one plan.
 
@@ -945,8 +964,12 @@ row() { pa7 | grep -F "| **$1** |"; }
 ```
 
 **AC1 — the extraction is non-vacuous, and the row count is exact.** `pa7 | grep -c '^|'` returns
-**11**, the count measured on `main`. This change rewrites cells and adds no rows, so an exact floor
-is available and is strictly better than a lower bound: it also catches a row accidentally added or
+**12** on HEAD, against **11** measured on `main` — the difference is the new `(h) DSAR (Art. 15 / 20)`
+row. **Corrected at implementation review: this criterion originally asserted `11` and "adds no
+rows", which the PR's own `(h)` row falsifies.** The stale number came from an early draft written
+before addendum A4 minted that row, and it survived because the AC set is the only gate on this file
+— exactly the condition this section names two paragraphs down. An exact count
+is still strictly better than a lower bound: it also catches a row accidentally added or
 deleted whose `| **…** |` prefix AC9 would not see. Every scoped AC below depends on this one; if it
 reads 0, they are all meaningless.
 
@@ -1228,8 +1251,9 @@ git diff main...HEAD -U0 -- knowledge-base/legal/compliance-posture.md \
   && { echo "add only — a line was removed or edited"; exit 1; } || exit 0
 ```
 
-**The carve-out is required, not a loosening.** `compliance-posture.md:190` states *"Update
-`last_updated` frontmatter date on every change"*, and the file carries `last_updated: 2026-07-31`.
+**The carve-out is required, not a loosening.** `compliance-posture.md` §"How to Update This
+Document" states *"Update `last_updated` frontmatter date on every change"* (cited by content anchor:
+the line number was already off by one on `main` and this PR's four added rows widen the drift), and the file carries `last_updated: 2026-07-31`.
 Bumping it emits a `-last_updated:` line, so the uncarved form would force `/work` to choose between
 skipping a documented required bump and failing the AC.
 

@@ -1,12 +1,14 @@
 # Session State
 
 ## Plan Phase
+
 - Plan file: knowledge-base/project/plans/2026-09-03-legal-pa7-c-categories-and-clo-audit-record-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 - Closes: 7625
 
 ### Errors
+
 - Planning subagent issued a premature Session Summary while a background sweep was still
   running; that sweep returned six stale cross-references, all fixed in 5fe43616c. The final
   summary supersedes the premature one.
@@ -27,6 +29,7 @@
 - MCP servers `playwright` and `plugin:github:github` failed to connect. Neither was needed.
 
 ### Decisions
+
 - CLO advisory obtained at plan time and made binding, then re-consulted after review, so
   `/work` implements a decided Art. 9 question rather than making a subjective legal
   determination mid-implementation. The artefact `/ship` Phase 5.5 requires already exists.
@@ -50,6 +53,7 @@
   not a simplification a reviewer is authorised to make.
 
 ### Components Invoked
+
 `soleur:plan` - `soleur:plan-review` - `soleur:deepen-plan` - `soleur:legal:clo` (x2: advisory,
 then addendum on four review-found gaps) - `Explore` -
 `soleur:engineering:research:learnings-researcher` -
@@ -61,6 +65,7 @@ then addendum on four review-found gaps) - `Explore` -
 sweep: 27 confirmed / 1 contradicted; post-edit self-audit sweep: 6 drifts)
 
 ### Gate re-probe (one-shot Step 0a.5, post-plan)
+
 - Plan frontmatter `closes: 7625` — same ref cleared pre-worktree; no new work target introduced.
 - Collision candidates #7622 / #7664 dismissed on evidence: `comment_body` absent from the
   register, and PA-7 §(e) records "§(c) field omissions remain tracked at #7625 and are
@@ -72,6 +77,7 @@ sweep: 27 confirmed / 1 contradicted; post-edit self-audit sweep: 6 drifts)
 - Closes: 7625. Filed: 7812, 7813, 7814, 7815, 7816, 7817, 7818. Net issue flow +6 (planned +9).
 
 ### Deliverables
+
 - `knowledge-base/legal/audits/2026-09-counsel-review-7625.md` — the binding advisory,
   spliced mechanically and proven byte-identical, plus the A7-A11 second addendum.
 - `knowledge-base/legal/audits/2026-09-03-clo-review-7622-pa7-r2-evidence-layer.md` — the
@@ -80,6 +86,7 @@ sweep: 27 confirmed / 1 contradicted; post-edit self-audit sweep: 6 drifts)
 - `knowledge-base/legal/compliance-posture.md` — four Active Items rows on three numbers.
 
 ### Decisions taken during work (each departs from the plan as written)
+
 1. **CONCUR gate run as admission control before filing, not after.** Net was +9 for one
    closed issue. The gate found the plan's stated blocker for inlining seven filings was
    false, that the plan undercounted the AUP 4.7 sites (four, not two), and that the PA-32
@@ -94,12 +101,17 @@ sweep: 27 confirmed / 1 contradicted; post-edit self-audit sweep: 6 drifts)
    the old limb-(iii) string anywhere in PA-7, while this register's amendment convention
    REQUIRES the block to quote the text it supersedes. Rescoped to live cell text; reads 0 on
    HEAD and 1 on main, so it is non-vacuous.
-5. **AC9 strengthened and mutation-proven.** The original was label-scoped, not PA-scoped: it
+5. **Two planned filings landed as one issue.** `tasks.md` 3.6 (six bare `Special categories`
+   labels) and 3.8 (ten pre-existing markdownlint errors) were planned separately and filed together
+   as #7817 — same file, same class, both register-cleanup-outside-PA-7, per the consolidation rule.
+   Recorded here because the plan enumerated eight filings and seven exist.
+6. **AC9 strengthened and mutation-proven.** The original was label-scoped, not PA-scoped: it
    would pass a full semantic rewrite of PA-31's cell. A mutated PA-31 row PASSES the old form
    and FAILS the replacement. AC9-STRONG asserts whole-register changed lines == PA-7 changed
    lines: 9 and 9.
 
 ### Errors made and corrected in-session
+
 - A mutation test reported PASS/PASS because `git diff main...HEAD` reads the COMMITTED tree
   and the mutation was in the working tree — the mutation never landed, so both arms measured
   the baseline. Redone with a diff that sees the change; the two-number comparison is what
@@ -112,6 +124,7 @@ sweep: 27 confirmed / 1 contradicted; post-edit self-audit sweep: 6 drifts)
   have rendered with a dropped cell. Caught by AC19's field-count check; escaped.
 
 ### Verification
+
 Targeted suites, because the `scripts` shard exited **rc=4 = REFUSED** (a sibling full-gate run
 in another worktree, #7553) — nothing ran; that is neither a pass nor a failure of this diff.
 `legal-doc-consistency` 35 passed · `lint-credential-path-literals` exit 0 ·
