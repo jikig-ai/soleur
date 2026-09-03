@@ -19,9 +19,20 @@ import nextConfig from "../next.config";
  *   → local is matched against `localPatterns` only, never `remotePatterns`
  *   → `/api/shared` is in PUBLIC_PATHS, and serves KB binaries RAW with an
  *     extension-derived content type (no decode, no re-encode on upload or read)
- *   → decoded by `next/node_modules/sharp`, which `next` pins at 0.34.5 — the copy
- *     Dependabot advisory 144 covers. Our top-level sharp is patched at 0.35.3, but the
- *     optimizer does not resolve that one.
+ *   → decoded by sharp
+ *
+ * SUPERSEDED 2026-09-02 (#7591) — the last limb only. Until next 16 this read: "decoded by
+ * `next/node_modules/sharp`, which `next` pins at 0.34.5 — the copy Dependabot advisory 144
+ * covers. Our top-level sharp is patched at 0.35.3, but the optimizer does not resolve that
+ * one." next 16 stopped vendoring the nested copy, so there is no longer a 0.34.5 for the
+ * optimizer to resolve: the only sharp in the tree is the top-level 0.35.3, a direct
+ * `^0.35.0` dependency, and advisory 144 is discharged (see RESOLVED_ABSENT in
+ * scripts/assert-dependabot-drain.py).
+ *
+ * This does NOT weaken the reason for the guard. The decode-attacker-bytes path is
+ * unchanged; only the claim about WHICH sharp decodes them is. A patched decoder is still a
+ * decoder, and the localPatterns restriction below is what keeps attacker-supplied bytes
+ * from reaching it at all.
  *
  * These assertions execute Next's OWN matcher rather than pattern-matching the config, so
  * they test the behaviour the optimizer will actually have rather than the spelling of the

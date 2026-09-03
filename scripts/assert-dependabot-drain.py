@@ -112,10 +112,32 @@ FLOOR_ANCHORS = {
     ("@opentelemetry/propagator-jaeger", 2): "2.9.0",
 }
 
-# Deliberately left OPEN, never dismissed: `next` pins these nested copies and only a
-# next 15.x -> 16.x major can move them. The top-level copies are already patched.
-DEFERRED = [("web-platform", "postcss", "node_modules/next/node_modules/postcss"),
-            ("web-platform", "sharp", "node_modules/next/node_modules/sharp")]
+# DISCHARGED 2026-09-02 (#7591) -- the next 15.x -> 16.x major this list was waiting for.
+# next 16 stopped vendoring these nested copies, so the advisories are RESOLVED rather
+# than moved: the vulnerable `next/node_modules/postcss@8.4.31` and
+# `next/node_modules/sharp@0.34.5` are gone outright, no nested copy of either package
+# exists anywhere in the tree, and the top-level copies were already patched
+# (postcss 8.5.23, sharp 0.35.3) and remain so.
+#
+# The rows are kept, inverted, rather than deleted. Deleting them would drop the only
+# assertion about these paths and let a future next re-vendor a vulnerable nested copy
+# silently -- the deferral would have to be rediscovered from an advisory feed instead of
+# from a red gate. Inverted, the same two lines now ratchet the discharge: they RED if the
+# path comes back.
+MUST_STAY_ABSENT = [("web-platform", "postcss", "node_modules/next/node_modules/postcss"),
+                    ("web-platform", "sharp", "node_modules/next/node_modules/sharp")]
+
+# Floor, for the same reason MIN_ROWS and MIN_RESOLVED exist. An absence assertion over an
+# EMPTY list is vacuous and prints a confident clean summary, so emptying this list -- or
+# dropping just the sharp row, which no arm exercised -- exited 0 with the discharge
+# unguarded. Measured before this floor existed.
+MIN_ABSENT = 2
+
+# The prefix each absent path hangs off. An absence assertion cannot detect a TYPO in its
+# own literal: `node_modules/next/node_modules/postcssX` is absent forever and green
+# forever, ratcheting nothing. Asserting the parent is PRESENT keeps the literals live --
+# if `next` is renamed or unvendored, this REDs instead of going quietly vacuous.
+ABSENT_PATH_ANCHOR = ("web-platform", "node_modules/next")
 
 
 def ver(s):
@@ -280,11 +302,25 @@ def main():
                     f"{manifest}: {name}@{version} is present on major line {major}, which no "
                     f"row covers. Add ({manifest!r}, {name!r}, {major}, '<patched>') to the "
                     f"table or confirm the major is not affected.")
-    for manifest, pkg, path in DEFERRED:
-        if path not in packages[manifest]:
+    if len(MUST_STAY_ABSENT) < MIN_ABSENT:
+        failures.append(
+            f"MUST_STAY_ABSENT has {len(MUST_STAY_ABSENT)} row(s), below the floor of "
+            f"{MIN_ABSENT}. A discharged advisory's ratchet was deleted; an absence "
+            f"assertion over an empty list passes while checking nothing.")
+    anchor_manifest, anchor_path = ABSENT_PATH_ANCHOR
+    if anchor_path not in packages[anchor_manifest]:
+        failures.append(
+            f"{anchor_manifest}: {anchor_path} is not installed, so every MUST_STAY_ABSENT "
+            f"row below it is trivially absent and asserts nothing. Re-derive the paths "
+            f"against the current tree before trusting this gate.")
+    for manifest, pkg, path in MUST_STAY_ABSENT:
+        if path in packages[manifest]:
             failures.append(
-                f"{manifest}: {path} is gone. The deferral of the {pkg} advisory rests on it "
-                f"being a next-pinned nested copy; re-derive the deferral rather than assuming it.")
+                f"{manifest}: {path} is back at "
+                f"{packages[manifest][path].get('version', '<unknown version>')}. The {pkg} advisory was "
+                f"discharged (#7591) on the grounds that next 16 no longer vendors this nested copy. "
+                f"A re-vendored copy is NOT covered by the top-level row: re-derive the advisory "
+                f"against this path before removing this line.")
 
     print()
     if failures:
@@ -294,7 +330,7 @@ def main():
         return 1
     print(f"drain assertion: {checked} rows evaluated, {resolved} resolved to an installed "
           f"version (floor {MIN_RESOLVED}), across {len(LOCKS)} manifests; "
-          f"{len(DEFERRED)} deferred advisories still present as next-pinned nested copies (expected).")
+          f"{len(MUST_STAY_ABSENT)} discharged advisories confirmed absent as nested copies.")
     return 0
 
 
