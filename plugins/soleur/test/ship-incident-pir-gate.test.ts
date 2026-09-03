@@ -253,6 +253,43 @@ describe("ship Incident-PIR gate (#6813)", () => {
     expect(signals("real-outage-inside-paragraph-without-actuality-idiom.md")).toBe(false);
   });
 
+  // F11 — the plan template emits a BULLETED label (`- **If this lands broken…`), and until the
+  // #7801 review no fixture used that shape: every one wrote the unbulleted form. So the
+  // production input shape was the untested one. The trigger regex admits an optional list
+  // marker, which is what consumes it.
+  test("the template's own BULLETED label is consumed by the trigger", () => {
+    expect(signals("bulleted-label-consumed-by-trigger.md")).toBe(false);
+  });
+
+  // F12 — `already occurred` is the measured winner's own inflection. It is kept for the
+  // fail-safe direction and pinned here, rather than carried on the assertion that it is a
+  // plausible near-miss: the header sets the bar at "a corpus hit AND a fixture".
+  test("the `already occurred` inflection also re-admits", () => {
+    expect(signals("actuality-occurred-inflection.md")).toBe(true);
+  });
+
+  // F13 — the re-admit OUTRANKS the line-scoped drop rules. As two pipeline stages the line
+  // filter ran after the paragraph strip and deleted lines the re-admit had restored, so one
+  // trailing conditional clause silenced a stated actuality. Merging both into one awk, with the
+  // re-admit above the drop rules, is what fixes it; this fixture is what pins it.
+  test("an actuality claim outranks a conditional clause in the same sentence", () => {
+    expect(signals("actuality-outranks-conditional-clause.md")).toBe(true);
+  });
+
+  // The documented residual is OBSERVABLE, not merely fixtured. `exit 1` is byte-identical
+  // whether the gate found nothing or suppressed an outage line inside a stripped paragraph, and
+  // ship/SKILL.md now tells the reader this note exists — so the claim needs something behind it.
+  test("suppressing an outage line inside the paragraph emits a stderr note", () => {
+    const res = spawnSync("bash", [GATE], {
+      input: require("fs").readFileSync(
+        resolve(FIX, "real-outage-inside-paragraph-without-actuality-idiom.md"), "utf8"),
+      encoding: "utf8",
+    });
+    expect(res.status).toBe(1);                       // still a no-signal
+    expect(res.stderr).toContain("PIR-STRIP-SUPPRESSED");
+    expect(res.stdout.trim()).toBe("");               // and the note never reaches stdout
+  });
+
   // Template anti-rot. The trigger is anchored on the wording the plan template
   // actually emits, so if that wording or its `- **` prefix drifts the anchor
   // stops matching and the gate silently reverts to firing on every plan. Reading

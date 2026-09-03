@@ -60,15 +60,27 @@ PROD_RE='(prod(uction)?([^a-zA-Z]|$)|deployed|([^a-zA-Z]|^)live([^a-zA-Z]|$)|app
 
 # The ONLY discriminator between "a plan citing a closed incident as precedent" and "a plan
 # reporting an unreported outage" inside a hypothetical paragraph — the two are otherwise
-# textually identical, so this is a whitelist, not a decision procedure.
-# Vocabulary is MEASURED, not imagined: across the 4116 lines that fall inside a stripped
-# paragraph in all 1548 plans, `already happened` hits 4x and `not hypothetical` 1x; every other
-# phrasing tried (`this happened`, `did happen`, `has happened`, `actually happened|occurred|
-# fired`) hit ZERO. `already occurred` is kept as the one unmeasured near-miss of the measured
-# winner. Adding an alternative requires a corpus hit or a fixture — the same bar as OUTAGE_RE.
-# Every fail-open found in the wild adds a phrase HERE and a fixture; do NOT widen or narrow the
-# paragraph rule instead. **Why:** #7801 R3.
-ACTUALITY_RE='already (happened|occurred)|not hypothetical'
+# textually identical, so this is a whitelist, not a decision procedure. F2 and F10 are the same
+# document minus `This already happened —`, with opposite verdicts; that is how thin it is.
+#
+# HONEST WEIGHT (#7801 review). The corpus survey covered 4116 lines inside a stripped paragraph
+# across 1548 plans, but the survey is not the EFFECT: deleting this rule moves exactly ONE plan
+# in 1878 — 2026-08-01-release-outcome-email-step-env-refs-plan.md, a genuine incident whose
+# paragraph reads "This already happened — the outage began ~2026-07-30". n=1, in the fail-open
+# direction, and no cheaper discriminator exists (date, issue-ref and past-tense form all appear
+# in the precedent fixture too). `occurred` is the measured winner's own inflection, kept for the
+# fail-safe direction and pinned by a fixture rather than asserted. `not hypothetical` was cut:
+# zero verdict effect across 1878 plans and no fixture, so it did not clear the bar this comment
+# sets. Adding an alternative requires a corpus hit AND a fixture. **Why:** #7801 R3.
+ACTUALITY_RE='already (happened|occurred)'
+
+# The line-scoped drop set. Folded into the SAME awk as the paragraph rules (#7801 review): as two
+# stages it was incoherent, because the line filter ran AFTER the paragraph strip and so deleted
+# lines the ACTUALITY_RE re-admit had deliberately restored. Measured: "The outage already happened
+# … and it would break production again." read as NO SIGNAL — one conditional clause silenced a
+# stated actuality, contradicting the re-admit's own contract. Lowercased; every match runs against
+# tolower($0).
+DROP_RE='^brand_survival_threshold:|brand-survival threshold:|if this lands broken|if this leaks|if this lands|would break|could break|network-outage deep-dive'
 
 # Strip, in order:
 #   1. fenced code blocks (``` … ```) — regexes/config/SQL quoted in a plan are
@@ -112,46 +124,54 @@ ACTUALITY_RE='already (happened|occurred)|not hypothetical'
 #      below (not added to a negative lookahead) so the token cannot reach
 #      OUTAGE_RE at all; this is the same shape as the threshold-label strip.
 # shellcheck disable=SC2016  # the sed backticks are literal (inline-code strip), no expansion wanted
-# The assignment is GUARDED (#7801). A broken strip stage would otherwise empty
-# the haystack, exit 1, and read as a clean no-signal — byte-identical to "this
-# PR is fine" on a surface where nothing is watching: this gate ships to a
-# customer's own CLI (observability layer 7), where there is no CI run to notice
-# an awk that does not accept the program. So a pipeline FAILURE fires.
+# The assignment is GUARDED (#7801). A broken strip stage would otherwise empty the haystack, exit
+# 1, and read as a clean no-signal — byte-identical to "this PR is fine" on a surface where nothing
+# is watching: this gate ships to a customer's own CLI (observability layer 7), where there is no CI
+# run to notice an awk that does not accept the program. So a pipeline FAILURE fires.
 #
-# The terminal `grep -v` needs the `|| [ $? -eq 1 ]` arm because grep exits 1
-# when it selects NO lines, which is the ordinary outcome for an empty PR body
-# or one whose every line is filtered. Measured: without the arm the guard fires
-# on empty stdin and reports an incident for a PR with no text at all. Exit 2 (a
-# real grep error) still propagates. The plan prescribed the bare guard; the
-# premise was checked against `cat` and does not hold for `grep -v`.
+# The guard is the plan's original bare form, and it is correct ONLY because the pipeline now
+# terminates in awk. It did not, in the first draft: `grep -v` exits 1 when it selects no lines —
+# the ordinary outcome for an empty PR body — so the bare guard reported an incident for a PR with
+# no text at all. Merging the line filter into the awk removed the terminal grep and with it that
+# whole failure mode, rather than papering over it with an exit-code arm.
 if ! haystack="$(cat \
   | awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; print ""; next} !f{print}' \
   | sed 's/`[^`]*`//g' \
   | sed -E 's/[Nn]etwork-[Oo]utage//g' \
-  | awk -v ACTUALITY_RE="$ACTUALITY_RE" 'BEGIN{skip=0}
-       # --- ORDER IS THE DESIGN (#7801). Boundaries reset; the trigger opens; the re-admit closes.
-       # A block boundary always prints and can never be eaten as paragraph body, so these come first.
-       # The hash rule requires a space or EOL after the run of `#` — a bare /^[[:space:]]*#/ treats a
-       # `#6691` continuation line as a heading and lets the outage claim after it through, which
-       # defeats this fix on a reflow of its own target class (R7). Tables and blockquotes are NOT
-       # boundaries: an accepted residual, listed here so the omission is deliberate, not forgotten.
-       /^[[:space:]]*$/                                 {skip=0; print; next}
-       /^[[:space:]]*#+([[:space:]]|$)/                 {skip=0; print; next}
-       # The label line. ANCHORED, and ABOVE the list-item rule so a bulleted label is consumed
-       # rather than read as a new block. The anchor bounds a STATEFUL rule: unanchored, one
-       # subordinate clause silences a whole paragraph. This trigger list is a deliberate SUBSET of
-       # the line-scoped `grep -vaiE` below (no `would break`/`could break`: those are mid-sentence
-       # conditionals, and paragraph-scoping them would swallow arbitrary prose).
+  | awk -v ACTUALITY_RE="$ACTUALITY_RE" -v DROP_RE="$DROP_RE" -v OUTAGE_RE="$OUTAGE_RE" 'BEGIN{skip=0; noted=0}
+       # --- ORDER (#7801). Exactly ONE of these five orderings is load-bearing, and saying so
+       # precisely is the point: the first draft of this comment claimed "ORDER IS THE DESIGN" and
+       # named two constraints, one of which measurement then falsified. An overstated contract
+       # deters the next person from simplifying, which is a real cost paid for nothing.
+       # MEASURED across the 25 fixtures, by permuting each rule and counting verdict movers:
+       #   re-admit BELOW skip{next} .... 2 movers  -> LOAD-BEARING (it can never fire)     [M7]
+       #   DROP_RE ABOVE the re-admit ... pinned by actuality-outranks-conditional-clause.md [M11]
+       #   blank/heading BELOW trigger .. 0 movers  -> free
+       #   list ABOVE the trigger ....... 0 movers  -> free (boundaries only SET state and fall
+       #                                   through, so the trigger still matches a bulleted label;
+       #                                   this ordering DID constrain before the two stages were
+       #                                   merged, which is why the claim survived into the draft)
+       # Both real constraints are about where the re-admit sits, and both are mutation-pinned
+       # rather than asserted here. Tables and blockquotes are NOT boundaries: an accepted
+       # residual, named so the omission stays a decision rather than an oversight.
+       /^[[:space:]]*$/                                 {skip=0}
+       /^[[:space:]]*#+([[:space:]]|$)/                 {skip=0}
        tolower($0) ~ /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)?[*_]*if this (lands|leaks)/ {skip=1; next}
-       # A NEW list item is a NEW markdown block. (A nested sub-bullet also resets — deliberate,
-       # and the fail-toward-fire direction.)
-       /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ {skip=0; print; next}
-       # Once a paragraph says the event HAPPENED, the rest of it is an incident report.
+       /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ {skip=0}
+       # An actuality claim OUTRANKS the drop rules below: once a paragraph says the event
+       # HAPPENED, the rest of it is a report, and a trailing conditional clause in the same
+       # sentence must not silence it.
        tolower($0) ~ ACTUALITY_RE                       {skip=0; print; next}
-       # --- Rules below run only inside a skip window. Do NOT append past this line: it is dead code.
-       skip                                             {next}
-                                                        {print}' \
-  | { grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break|Network-Outage Deep-Dive' || [ "$?" -eq 1 ]; })"; then
+       # The documented residual, made OBSERVABLE rather than merely fixtured: a real outage
+       # phrased with no actuality idiom inside the paragraph is swallowed here. Emitting once on
+       # stderr keeps "found nothing" distinguishable from "suppressed something".
+       skip { if (!noted && tolower($0) ~ OUTAGE_RE) {
+                noted=1
+                print "ship-incident-pir-gate: PIR-STRIP-SUPPRESSED — outage vocabulary inside a hypothetical paragraph was stripped; if this PR fixes a real incident, say so outside that paragraph (#7801)" > "/dev/stderr"
+              }
+              next }
+       tolower($0) ~ DROP_RE                            {next}
+                                                        {print}')"; then
   echo "INCIDENT-SIGNAL: yes"
   echo "ship-incident-pir-gate: strip pipeline failed — failing toward PIR (#7801)" >&2
   exit 0

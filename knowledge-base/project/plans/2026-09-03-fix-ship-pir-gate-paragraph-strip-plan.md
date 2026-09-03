@@ -399,8 +399,12 @@ fi
 
 ### Pre-merge (PR)
 
-- **AC1** `bun test plugins/soleur/test/ship-incident-pir-gate.test.ts` reports **29 pass, 0 fail**
-  (16 pre-existing + 10 fixture + 3 in-memory).
+- **AC1** ~~reports **29 pass, 0 fail** (16 pre-existing + 10 fixture + 3 in-memory)~~ —
+  **AMENDED at /work: 36 pass, 0 fail.** The plan's arithmetic was wrong before review even ran
+  (it omitted the template anti-rot, fail-toward-PIR and concatenation-seam tests and counted a
+  3-case `test.each` as one), and review then added four more: the bulleted-label fixture, the
+  `already occurred` inflection, the actuality-outranks-conditional case, and the residual
+  stderr note. The number was a prediction; 36 is the measurement.
 - **AC2** All **15** pre-existing fixtures keep their verdicts, with the input set enumerated from
   `origin/main` so the 10 new fixtures cannot enter it (a working-tree glob would contain them, and
   AC3 *requires* one of those to move):
@@ -446,15 +450,21 @@ fi
 - **AC9** `grep -cF 'hypothetical framing **paragraph**' plugins/soleur/skills/ship/SKILL.md || true`
   prints ≥ 1 — anchored on the literal bytes the edit writes, emphasis markers included, not on its
   reading (R8).
-- **AC10** `grep -c 'ORDER IS THE DESIGN' scripts/ship-incident-pir-gate.sh || true` ≥ 1 — the
-  ordering contract is in the code, which outlives this plan.
+- **AC10** ~~`grep -c 'ORDER IS THE DESIGN'` >= 1~~ — **AMENDED at /work: the ordering contract
+  is pinned by mutation rows M7 and M11, not by a prose literal.** Measurement falsified the
+  prose: exactly ONE of the five orderings is load-bearing (re-admit above `skip{next}`, 2
+  movers), plus the re-admit-above-DROP_RE precedence which a fixture pins. The original AC made
+  a sentence a merge condition, so correcting the sentence would have failed the gate — an AC
+  that pins prose is a standing veto on fixing the prose. Replaced with:
+  `grep -cE '^run_row M(7|11) ' scripts/ship-incident-pir-gate-mutation.test.sh` = 2.
 - **AC11** `git diff --name-only origin/main...HEAD | grep -vE '^(scripts/|plugins/soleur/test/|plugins/soleur/skills/ship/|knowledge-base/project/(plans|specs|learnings)/)' | grep .`
   emits nothing, **and** no path under `knowledge-base/engineering/operations/post-mortems/` appears
   in the diff. `learnings/` is allowed because ship Phase 2 auto-invokes `compound`; the
   post-mortems exclusion is the observable proof that Phase 3.2 fired instead of a fabricated PIR
   (R9).
-- **AC12** `bash scripts/ship-incident-pir-gate-mutation.test.sh` exits 0 and reports **9**
-  mutations, each flipping at least one fixture verdict. A run reporting `0 mutations` fails — a
+- **AC12** ~~exits 0 and reports **9** mutations~~ — **AMENDED at /work: 11 mutation rows, 20
+  assertions.** M10 (the fail-toward-PIR guard) and M11 (the re-admit precedence) were added
+  after the plan. A run reporting `0 mutations` still fails. A run reporting `0 mutations` fails — a
   battery that dispatches nothing is the vacuity it exists to prevent.
 - **AC13** The PR body carries the `INCIDENT-PIR: meta-case — …` declaration and the post-change
   signal rate.
