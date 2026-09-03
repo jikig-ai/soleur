@@ -292,7 +292,7 @@ concrete artifact is the user's checked-out worktree, mutated by a test they ran
 writes, or transmits user data; the compliance-gate arm changes only how a local advisory tool
 describes its own rule freshness, and the vendored content it attests to is public MIT-licensed text.
 
-**Brand-survival threshold:** aggregate pattern.
+- **Brand-survival threshold:** aggregate pattern.
 
 The scanner arm is a guard over test fixtures — a defect degrades a safety net rather than exposing a
 user. The gate arms change gate reporting, not product behaviour. No single-user incident is
@@ -963,8 +963,13 @@ logs:
   retention: as per the existing aggregation
 discoverability_test:
   command: python3 plugins/soleur/test/lib/fixture-scan.py --rule operand --repo .
-  expected_output: a trailer reading FILES=<n> and SITES=<total of any acknowledged baseline rows,
-                   0 when there are none> once the burn-down completes; SITES=167 before it starts
+  expected_output: "SITES=9"
+  # A matchable token, not prose. Check 10 substring-matches this against the command's real
+  # stdout, so a sentence describing the invariant fails the gate no matter how accurate it is.
+  # 9 is the acknowledged-row total in fixture-dir-operand-assert.baseline.txt after PR 1
+  # (8 brace-group sites + 1 read-counted-as-write); the suite asserts SITES == that total
+  # exactly, in both directions, so this number and the baseline cannot drift apart silently.
+  # PR 2 changes the corpus and must update this line with it.
 ```
 
 ## Acceptance Criteria
