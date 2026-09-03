@@ -119,7 +119,11 @@ REGISTER_FILES=(
 )
 
 # Determination-shaped pattern for (c). Pinned literally: its cardinality decides the gate's
-# character. At this pattern the producer matched 6 of 41 audits/ files on `main` at 2026-09-03,
+# character. The producer walks `audits/` RECURSIVELY (`find`, not a `*.md` glob): a bash `*` does
+# not descend, so `mkdir audits/archive/` and filing the next determination there removed coverage
+# with no signal at all -- `produced` simply stopped growing while the floor stayed satisfied by
+# the top-level files. The repo already runs an `archive/` convention in other knowledge-base
+# trees, so that was the plausible next move rather than a contrived one. At this pattern the producer matched 6 of 41 audits/ files on `main` at 2026-09-03,
 # and 7 of 42 at this PR's HEAD -- the extra is this PR's own implementation record, which quotes
 # the article numbers and is therefore waived rather than indexed. Both figures are stated
 # because a lone post-PR count reads as though it were the pre-existing corpus.
@@ -223,10 +227,32 @@ cited_paths="$(awk -F'|' '
 ' "$BREACH_REGISTER")"
 [[ -n "$cited_paths" ]] || die2 "no determination rows parsed from the breach register index"
 
+# CONTAINED, TRACKED, AND NOT A SYMLINK -- `-f` alone was three fail-opens. Assertion (b)'s
+# stated purpose is that the documentation "exists AND can be produced", and a bare `-f` satisfies
+# that check for things that cannot be produced: `../../../../../../etc/hostname` resolves (and
+# survives a naive "must start with knowledge-base/" filter, since
+# `knowledge-base/legal/audits/../../../..` also resolves), a committed symlink pointing outside
+# the tree resolves, and an untracked or gitignored working-tree file resolves locally while CI
+# sees nothing. Measured at review.
 resolved=0; broken=0
 while IFS= read -r p; do
   [[ -n "$p" ]] || continue
-  if [[ -f "$REPO_ROOT/$p" ]]; then
+  if [[ "$p" == /* || "$p" == *..* ]]; then
+    broken=$((broken + 1))
+    fail "(b) breach-register cites a non-contained canonical source: $p
+           A pointer must be a repo-relative path with no '..' segment -- a determination register
+           whose pointers can leave the repository cannot produce what it cites."
+  elif [[ -L "$REPO_ROOT/$p" ]]; then
+    broken=$((broken + 1))
+    fail "(b) breach-register cites a SYMLINK: $p
+           The link target is not governed by this repository's history, so the record it points
+           at is not the record a regulator would be shown."
+  elif ! git -C "$REPO_ROOT" ls-files --error-unmatch -- "$p" >/dev/null 2>&1; then
+    broken=$((broken + 1))
+    fail "(b) breach-register cites a path that is not TRACKED: $p
+           It may resolve in this working tree and not in a clean checkout, so the local run and
+           CI would disagree about whether the documentation exists."
+  elif [[ -f "$REPO_ROOT/$p" ]]; then
     resolved=$((resolved + 1))
   else
     broken=$((broken + 1))
@@ -336,7 +362,8 @@ while IFS= read -r f; do
            Either add a row to knowledge-base/legal/breach-register.md, or add a
            NOT_TRANSCRIBED entry to scripts/lint-legal-registers.sh with a reason and a
            citing issue. A silent omission is the one option the gate removes."
-done < <(grep -lE "$DETERMINATION_PATTERN" "$AUDITS_DIR"/*.md 2>/dev/null || true)
+done < <(find "$AUDITS_DIR" -type f -name '*.md' -print0 2>/dev/null \
+           | xargs -0 -r grep -lE "$DETERMINATION_PATTERN" 2>/dev/null || true)
 
 # DISJOINTNESS, computed outside the producer loop. It lived INSIDE the loop as the negation of
 # a branch that had already `continue`d on the same predicate, so it was unreachable: a file both
