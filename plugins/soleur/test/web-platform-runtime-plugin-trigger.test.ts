@@ -99,6 +99,40 @@ function extractOnPushPaths(yml: string): string[] {
   return out;
 }
 
+// SCRUB GIT'S OWN ENVIRONMENT FOR EVERY CHILD PROCESS IN THIS FILE.
+// `cwd` does NOT win over `GIT_DIR`: git resolves the repository from
+// GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE first and only falls back to discovery
+// from the working directory. Every git HOOK exports those, and this repo's
+// `lefthook` pre-commit runs the plugin component tests — so unscrubbed, these
+// fixtures execute against the CALLER'S repository.
+//
+// Measured 2026-09-03, controlled both ways from one temp repo:
+//   no GIT_DIR  -> `git commit --allow-empty -m base` lands in the fixture repo
+//   GIT_DIR set -> the identical call MOVED THE CALLER'S BRANCH TIP
+// Observed in the wild as a chain of `base`/`change` commits on a feature
+// branch, which consumed the commit the contributor was making at the time.
+//
+// Two distinct harms, and the second is the quieter one:
+//   1. the `git add -A` + `git commit` pair in runGate() corrupts the caller's
+//      branch (data loss — it takes the in-flight commit with it);
+//   2. the NON-GIT-DIRECTORY case below becomes VACUOUS. Its premise is that
+//      `git diff` must FAIL for want of a repository; with GIT_DIR inherited it
+//      SUCCEEDS against the real repo, so the assertion proves nothing while
+//      staying green.
+//
+// This is the #7553/#7652 class ("a suite whose fixture cd fails, or whose
+// `git -C` operand is empty, runs git in the caller CWD") reached by a third
+// route: the cwd was correct and the ENVIRONMENT pointed elsewhere.
+const {
+  GIT_DIR: _gd,
+  GIT_WORK_TREE: _gwt,
+  GIT_INDEX_FILE: _gif,
+  GIT_COMMON_DIR: _gcd,
+  GIT_PREFIX: _gp,
+  GIT_OBJECT_DIRECTORY: _god,
+  ...GIT_SAFE_ENV
+} = process.env;
+
 let GATE_SCRIPT: string;
 let PATH_FILTER: string;
 let ON_PUSH_PATHS: string[];
@@ -120,6 +154,7 @@ function runGate(changedPaths: string[]): string {
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], {
       cwd: dir,
       stdio: "pipe",
+      env: GIT_SAFE_ENV,
     });
   git(["init", "-q"]);
   git(["commit", "-q", "--allow-empty", "-m", "base"]);
@@ -136,7 +171,7 @@ function runGate(changedPaths: string[]): string {
     cwd: dir,
     stdio: "pipe",
     env: {
-      ...process.env,
+      ...GIT_SAFE_ENV,
       FORCE_RUN: "false",
       PATH_FILTER,
       COMPONENT: "web-platform",
@@ -198,7 +233,9 @@ describe("inner check_changed gate — fail-loud, no shell-glob", () => {
         cwd: dir,
         stdio: "pipe",
         env: {
-          ...process.env,
+          // GIT_SAFE_ENV, not process.env: with GIT_DIR inherited this
+          // "non-git directory" is a git repository and the case is vacuous.
+          ...GIT_SAFE_ENV,
           FORCE_RUN: "false",
           PATH_FILTER,
           COMPONENT: "web-platform",
