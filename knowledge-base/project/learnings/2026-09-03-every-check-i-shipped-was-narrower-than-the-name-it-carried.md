@@ -289,25 +289,43 @@ documents a ugrep/GNU-grep hazard elsewhere).
 8. **Wrote guessed issue numbers (#7786/#7787) into the PIR before filing them.** — Recovery:
    filed for real (#7788/#7789) and corrected every citation. — **Prevention:** file first, then
    write the number; never draft a placeholder that looks like a real reference.
-4. **The exit-70 guard could not fire.** — **Prevention:** for any guard, name the input that
+9. **The exit-70 guard could not fire.** — **Prevention:** for any guard, name the input that
    should trip it and run that input, rather than reasoning that the branch is reachable.
-5. **Three defects in the `[2b]` block I edited.** — **Prevention:** editing a block makes its
-   whole surface reviewable, not just the lines changed.
-6. **Called a single-axis mutation "load-bearing".** — **Prevention:** insight 8.
-7. **Wrote a false causal claim into code comments and the commit message.** — **Prevention:**
-   for every causal claim prose ADDS, name the command that falsifies it and run it. One
-   `git show origin/main:… && bash … --detect` would have caught it.
-8. **Proposed a scope-out whose premise the fix dissolves.** — **Prevention:** insight 7.
-9. **Misread `rc=$?` after a pipe** (got `tail`'s status, reported a lint as failing when it was
-   a usage error); **ran the window-closure lint without `--allowlist`** and read rc=1 as a
-   finding. — **Prevention:** capture rc into a variable before any pipe, and invoke a lint the
-   way `test-all.sh` invokes it rather than bare.
-10. **Spawned the review panel before committing an inline fix**, against the skill's own sharp
+10. **Three defects in the `[2b]` block I edited.** — **Prevention:** editing a block makes its
+    whole surface reviewable, not just the lines changed.
+11. **Called a single-axis mutation "load-bearing".** — **Prevention:** insight 8.
+12. **Wrote a false causal claim into code comments and the commit message.** — **Prevention:**
+    for every causal claim prose ADDS, name the command that falsifies it and run it. One
+    `git show origin/main:… && bash … --detect` would have caught it.
+13. **Proposed a scope-out whose premise the fix dissolves.** — **Prevention:** insight 7.
+14. **Misread `rc=$?` after a pipe** (got `tail`'s status, reported a lint as failing when it was
+    a usage error); **ran the window-closure lint without `--allowlist`** and read rc=1 as a
+    finding. — **Prevention:** capture rc into a variable before any pipe, and invoke a lint the
+    way `test-all.sh` invokes it rather than bare.
+15. **Spawned the review panel before committing an inline fix**, against the skill's own sharp
     edge; one agent reported it as uncommitted drift. — **Prevention:** commit pre-review fixes
     first (one-off; the rule already exists).
-11. **Unexplained grep/script divergence** — see Unresolved above.
-12. **One mutation row had a wrong anchor** (landing-fail, correctly reported as such rather than
+16. **Unexplained grep/script divergence** — see Unresolved above.
+17. **One mutation row had a wrong anchor** (landing-fail, correctly reported as such rather than
     as a survivor). — One-off; the landing assertion did its job.
+18. **Could not name the one local suite that failed.** An uncontended `TEST_GROUP=all` run went
+    red (351 `[ok]` + 4 `[skip]` of 356 registered suites, so exactly one emitted neither), but
+    the `[FAIL] <label> (Nms)` marker goes to **stderr** and I had captured only stdout. Two
+    instrumented re-runs were then REFUSED with rc=4 because a sibling session held a full-gate
+    run, and the window never reopened. — **Prevention:** `test-all.sh` already writes a durable
+    `label\tms\tFAIL` row per suite when `TEST_TIMING_LOG` points at a writable path, gated so a
+    default run pays nothing. Set it on every battery run and redirect `2>&1`; a battery whose
+    only record is stdout scrollback can go unnamed on the first refusal. Note the rc contract
+    while reading such a run: 1 = red, 3 = KILLED/unresolved, 4 = REFUSED (nothing ran).
+19. **Reported a false test result twice from one battery.** The first background run REFUSED
+    with rc=4 and I read its contention preamble as "started"; the completion notification then
+    reported exit 0, which was my own trailing `echo`, not the suite's status. — **Prevention:**
+    write the runner's rc to a file immediately after it exits and read only that file
+    afterwards. A wrapper's exit status is never the wrapped command's.
+20. **My own release monitor reported `failed=none` while a job had already failed.** It read the
+    run-level conclusion, which is still `null`/in-progress while a job inside it is red. —
+    **Prevention:** poll job-level state (`gh run view --json jobs`) when the question is "did
+    anything fail yet"; run-level conclusion answers "is it over", which is a different question.
 
 ## Prevention
 
