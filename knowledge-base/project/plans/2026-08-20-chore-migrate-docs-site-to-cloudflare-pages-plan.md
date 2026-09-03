@@ -125,7 +125,7 @@ mechanism and the cutover.
 |---|---|---|---|
 | **PR1 — substrate** | `cf-pages.tf` (project, apex domain, two `github_actions_secret`), `main.tf` alias, `variables.tf`, the www Bulk Redirect (`seo-bulk-redirects.tf`), the cert-reissue disarmament, `-target=` allow-list, guard rewrite, ADR/C4/docs. **No `dns.tf`, no `deploy-docs.yml`.** | apply-infra | PF1-PF4 |
 | **PR2 — deploy path** | `deploy-docs.yml` only — wrangler leg added **alongside the retained GitHub Pages leg** (dual-publish), build-identity stamp, two probes, publish-verdict step, workflow self-trigger, rename. **`environment:` and `permissions:` RETAINED.** | deploy-docs | PF5, PF6, PF8 (PF7 retired) |
-| **PR3 — attach** | `cloudflare_pages_domain.apex` + `.www` **alone** | apply-infra | PF9 (R8 probe + origin headers matching the branch PF-Z established) |
+| **PR3 — attach** | `cloudflare_pages_domain.apex` + `.www` **alone** | apply-infra | PR3-GATE (below) — **not** PF9, which is PR4's `dns.tf` plan shape |
 | **PR4 — record swap** | the `dns.tf` hunk **alone** + Z-probe teardown, merged with `[ack-destroy]` | apply-infra | CUT0-CUT9 |
 | **PR5 — retire GH Pages leg** | `deploy-docs.yml` only: delete the three Pages actions, `environment:`, `pages:`/`id-token:` write, and the verdict step's GH-Pages arm. **Probe B survives.** | deploy-docs | AC33, AC34 |
 
@@ -540,8 +540,12 @@ risk-table note.
 
 ## Design Decision D3 — rollback
 
-Rollback is a revert of the **PR3** commit — one hunk, one file — merged with
-`[ack-destroy]`. Three things make that real rather than aspirational:
+Rollback is a revert of the **PR4** commit — one hunk, one file — merged with
+`[ack-destroy]`. (**Corrected 2026-09-03:** this read "PR3" under the superseded
+three-PR numbering. PR3 is now the `cloudflare_pages_domain` attach, and reverting it
+is NOT the DNS rollback — pointing an operator at it mid-incident sends them to the
+wrong lever, with no CI failure to catch the mistake. The cutover runbook's table is
+authoritative.) Three things make that real rather than aspirational:
 
 1. **The revert PR is opened, green and mergeable *before* PR3 merges.** Under a
    `single-user incident` threshold the dominant cost is not authoring the revert, it is
@@ -1043,7 +1047,7 @@ uses `$(grep -c … || true)` compared with `[ "$n" = "0" ]`, or `! grep -q`.
   `knowledge-base/engineering/operations/runbooks/gh-pages-cert-renewal.md`.
   The `CF_API_TOKEN_DNS_EDIT` secret and `doppler_secret.cf_api_token_dns_edit` are likewise untouched.
 - **AC9** — `plugins/soleur/docs/CNAME` still exists and reads exactly `soleur.ai`.
-- **AC10** — the rewritten `www-apex-canonicalizer.test.sh` exits `0` on the branch, and **each of Guard 1's mutation rows M1-M7 drives it to a non-zero exit**, and harness row H1 fails while H2 passes. (The row count is stated as the explicit range, not a bare number — an earlier draft said "three" against a six-row matrix, which would have let the guard ship with its chokepoint and vacuity rows unexercised.)
+- **AC10** — the rewritten `www-apex-canonicalizer.test.sh` exits `0` on the branch, and **each of Guard 1's mutation rows M1-M10, including the lettered variants M4b, M5a/M5b, M7a/M7b drives it to a non-zero exit**, and harness row H1 fails while H2 passes. (The row count is stated as the explicit range, not a bare number — an earlier draft said "three" against a six-row matrix, which would have let the guard ship with its chokepoint and vacuity rows unexercised.)
 - **AC11** — the guard's anti-vacuity floor conforms to **AP-023**: it reports with `printf >&2` + `exit 1` rather than through the suite's own `fail`, and the case counter increments **at the call site**, not inside both verdict helpers. The current file has the banned shape (`TOTAL=$((TOTAL + 1))` inside both `pass()` and `fail()`), so this is a required change, not a preserved property. `scripts/guard-vacuity-floor.test.sh` passes.
 - **AC12** — the Phase 0 token probe records `pages -> 200` and `rulesets -> 403`, and `TF_VAR_cf_api_token_pages` resolves from Doppler `prd_terraform`. Asserted by re-running the probe, not by the presence of text in a PR body.
 - **AC13** — `terraform plan` shows zero changes to `seo_page_redirects`, `seo_config_settings`, `zone_settings_override`, and the apex MX/TXT records.
@@ -1089,7 +1093,21 @@ uses `$(grep -c … || true)` compared with `[ "$n" = "0" ]`, or `! grep -q`.
 
 - **AC36 (PR2)** — the workflow self-trigger exists: `grep -cF '.github/workflows/deploy-docs.yml' .github/workflows/deploy-docs.yml` returns `1` from inside `on.push.paths`, and `gh run list --workflow=deploy-docs.yml --json headSha` contains PR2's merge SHA. Asserted on an actual run, not on the YAML alone.
 
-### PR3 (cutover)
+### PR3 — the attach, and its gate
+
+**PR3-GATE.** The Delivery Sequencing cell previously cited *"PF9 (R8 probe + origin headers
+matching the branch PF-Z established)"*. All three components were unusable: PF9 is PR4's
+`dns.tf` plan shape (4 deletes + 1 create); the R8 probe is PF3, assigned to PR1 where the
+attachment did not exist so it was structurally unrunnable; and PF-Z was never measured. The
+cell named three things that do not exist. Replaced by:
+
+| # | Assertion | When |
+|---|---|---|
+| PR3-G1 | The last `deploy-docs.yml` run on `main` is `success` with both build-identity probes `success`, and its `headSha` is `main`'s tip. `gh run list --workflow=deploy-docs.yml --branch main --limit 1 --json conclusion,headSha`. **This is what makes the attach safe** — "the Pages project is current" is a per-run property, and merging PR3 does not fire `deploy-docs.yml`, so without this the apex could adopt a stale build under Z-true. | pre-merge, blocking |
+| PR3-G2 | **R8, measured for the first time.** `GET /zones/$ZONE/dns_records?name=soleur.ai` returns exactly the four `A` records and no new `CNAME`; `?name=www.soleur.ai` returns exactly the one `CNAME`. This is PF3 relocated to the only PR where it can run. **PR4 cannot be written until this is measured** — if the attach auto-creates a record, `cloudflare_record.pages_apex` becomes an `import`, not a `create`, and PF9's expected shape changes under the operator's `[ack-destroy]`. | post-apply, blocking |
+| PR3-G3 | Which branch of Z obtains: the post-apply step in `apply-web-platform-infra.yml` records `apex-origin-probe.sh`'s verdict. Reporting-only — both verdicts are legitimate. Pair it with `curl -s 'https://soleur.ai/version.txt?cb=<nonce>'` equalling the SHA Probe B last asserted, because `SERVING-FROM-CLOUDFLARE-PAGES` is a residual verdict and alone cannot distinguish "the right project at the right build" from "not GitHub". | post-apply, reporting |
+
+### PR3 (superseded numbering below)
 
 - **AC22** — CUT0 through CUT9 all hold under the 3-sample rule, recorded with measured output.
 - **AC23** — a `workflow_dispatch` run of `deploy-docs.yml` publishes a change and `https://soleur.ai/version.txt` reflects the new SHA. (Asserted by an explicitly dispatched run, not by waiting on an unrelated future commit — `cq-ac-must-not-depend-on-concurrent-sessions`.)
@@ -1422,7 +1440,7 @@ links and the guard must assert all five:
 
 1. the redirect declaration — the `www.soleur.ai/` item in `cloudflare_list.www_canonical`, with `subpath_matching` and `preserve_path_suffix` both `"enabled"` and `include_subdomains` `"disabled"`;
 2. the **binding chokepoint** — the second `rules { }` block in `cloudflare_ruleset.bulk_redirects` whose `from_list.name` references that list, declared **after** the `legal_redirects` rule. A list nothing binds is inert, and a rule ordered before the legal rule silently changes which redirect wins;
-3. the DNS substrate — the apex is a proxied `CNAME` at the Pages project and www is a proxied `A` at the black-hole address;
+3. the DNS substrate — the apex is a proxied `CNAME` at the Pages project **and www is a proxied `CNAME` at that same project**, per D1's deliberate divergence from Cloudflare's `192.0.2.1` recipe. The arm must REJECT a surviving `CNAME` at `jikig-ai.github.io` (www left on the retired origin) **and** any `A` record including `192.0.2.1` (www left the project — which deletes D1's chosen failure mode *and* turns the PR4 swap into a ForceNew replace, `destroy_count = 5`, contradicting R6 and PF9). An earlier draft read *"www is a proxied `A` at the black-hole address"*: residue of the rejected recipe, contradicting D1, ADR-194, R6 and PF9 in this same document. The guard and its mutation fixture were written from that draft; corrected 2026-09-03.
 4. the **cross-file deploy coupling** — `deploy-docs.yml`'s `--branch` equals `cf-pages.tf`'s `production_branch`;
 5. the **cross-file project coupling** — `deploy-docs.yml`'s `--project-name` equals `cloudflare_pages_project.docs`'s `name`.
 
