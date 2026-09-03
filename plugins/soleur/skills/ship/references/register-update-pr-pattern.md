@@ -49,6 +49,10 @@ the custodian and adds the row in the **same PR** that lands the determination;
 `scripts/lint-legal-registers.sh` asserts that nothing determination-shaped under
 `knowledge-base/legal/audits/` is dropped without a committed, issue-citing reason.
 
+## Editing an evidentiary record without destroying it
+
+- **A register fails in four ways a code file does not, and all four stay green under grep.** (1) **A fabricated authority** — before writing any word from the family *signed / attested / approved / reviewed by*, grep the source for it; if it is absent the sentence is yours, so say so. When the authority is unreachable (an agent that will not return), record the absence: put what you can honestly produce under a **different filename**, carry `attested_by: "NOBODY"`, leave the attestation path deliberately empty, and file the gap. (2) **An in-place edit of a dated cell** — if the cell is cited downstream, the edit is an amendment: append `> **Superseded YYYY-MM-DD (#N):**` quoting the prior text rather than overwriting it. Resolving a placeholder inside a dated or signed instrument is an amendment too. (3) **A correction that reached only the canonical copy** — grep the claim's SUBJECT corpus-wide, read every hit, and re-read the underlying record before writing the replacement; a correction sourced from memory lands on a superseded state. (4) **Discarded table cells** — GFM splits a row on `|` *even inside a backticked code span*, and cells past the header count are dropped at render time, so a row can be complete in the raw markdown and truncated in the rendered document. Assert `cells == header_cells` for every row added or edited; escape as `\|`. **Why:** #7717 shipped all four before review caught them, and the sweep found a signed counsel review (`audits/2026-07-counsel-review-6588.md`) whose per-row `CONFIRMED` verdict cell had never rendered. See `knowledge-base/project/learnings/2026-09-03-four-ways-i-destroyed-evidence-in-the-pr-that-exists-to-preserve-it.md`.
+
 ## The register file itself is implementation-cited
 
 The Article 30 register

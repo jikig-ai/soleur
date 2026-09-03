@@ -247,3 +247,59 @@ review is not adequate evidence at that threshold. This is the operator's call, 
 - Read a guard's exit code through a pipe to `tail`, which reported rc=0 over a real abort.
 - Mislabelled the tautology control: the mutant is tautological *by construction*, and its
   failure to catch is the proof the real assertion is not.
+
+## Review Phase — Addendum 2026-09-03 (supersedes the DEGRADED verdict above)
+
+> **Superseded 2026-09-03 (#7717):** the section above states *"Coverage: 0 of 12 agents"* and
+> *"Remaining: re-run `/review` with the panel. NOT `/compound` → `/ship`."* Both were accurate
+> when written. The operator asked for the retry; it ran. The original text is retained because a
+> dated record is append-only.
+
+**Coverage after the retry: 6 of 12 agents**, each finding a class the others did not —
+`architecture-strategist`, `security-sentinel`, `test-design-reviewer`, structural-enumeration,
+`user-impact-reviewer`, `data-integrity-guardian`, `code-quality-analyst`. Seats that did not run:
+`git-history-analyzer`, `pattern-recognition-specialist`, `performance-oracle`,
+`agent-native-reviewer`, `observability-coverage-reviewer`; `semgrep-sast` substituted by
+shellcheck for a bash-only diff. The trailer on commit `1239211c1` carries the superseding
+`Reviewed-Coverage` line; `emit-review-trailer.sh` is idempotent and will not stack a second one.
+
+**35 findings, all fixed inline, 0 filed from review.** Issue flow unchanged at net +2
+(#7786, #7787, #7791 filed; #7717 closing).
+
+**Still open at ship:** task 1.13 / AC14 (no CLO attestation — three API 529s; tracked #7791,
+`breach-register.md` stays `draft-requires-counsel-review`) and task 8.3 (full
+`scripts/test-all.sh` battery, deferred when a sibling worktree held the gate and it exited 4).
+
+## Compound Phase — 2026-09-03
+
+- Learning: `knowledge-base/project/learnings/2026-09-03-four-ways-i-destroyed-evidence-in-the-pr-that-exists-to-preserve-it.md` (46 session errors, each with a Prevention line).
+- Route-to-definition: one bullet appended to `plugins/soleur/skills/ship/references/register-update-pr-pattern.md` (§Editing an evidentiary record without destroying it) — the file was already in this PR's diff, so no scope widening.
+- Rule budget: `[WARN] B_ALWAYS=46000 >= 44000` at the 46000-byte ratchet, exit 0. **No AGENTS.rules.md addition is possible** — the placement gate routes this session's insights to a skill reference, which is where they belong anyway (domain-scoped to register PRs). Registry: 46073 bytes / 105 rules (longest 600 bytes); `constitution.md` 298 bullets.
+- `rule-metrics-aggregate.sh` ran; `rule-metrics.json` unchanged (not staged). Its `rules_unused_over_8w=105` is degenerate — it reports every rule as unused, the known incidents-log pollution filed earlier today — so no pruning hint was surfaced.
+- Phase 1.6 token-efficiency skipped; measured root cause reported on **#3497** (net +0 issues).
+
+### Drift found at compound, to resolve before merge
+Branch is **11 behind / 31 ahead** of `origin/main` (fetched 2026-09-03). Two files overlap
+main's drift: `plugins/soleur/skills/review/SKILL.md` (branch copy is missing ~50 lines main
+gained — a structural-cause roll-up and a coverage-consult step) and `scripts/test-all.sh`.
+Rebase onto `origin/main` at ship before the battery; re-verify the split-boundary check (8.5)
+after the rebase.
+
+### Archival decision — deliberately NOT archived
+`archive-kb.sh --dry-run` proposed archiving `specs/feat-one-shot-7716-7717-7718-supabase-followups`
+(and, per the documented slug-glob gap, did NOT discover the plan, whose filename carries a topic
+rather than the branch slug). **Skipped.** `tasks.md` §Deferred to the follow-on PR holds the
+unexecuted Phases 2–6 (#7716 + #7718 + #6489), which were moved INTO the file precisely so they
+would survive a squash-merge; the follow-on PR runs against the same plan file. Archiving the spec
+while the plan stays live would strand that work in an inconsistent pair. Archive both together
+when the follow-on merges.
+
+### Operator decision needed — the local lefthook layer is inert
+`core.hooksPath` → `.git/hooks` contains only `*.sample` files, so `lefthook install` has never
+been run on this machine, and every `LEFTHOOK=0` in this session's commits was a no-op flag over
+an absent gate. `lefthook.yml` (16.8 kB) and `lefthook` 2.1.6 are both present; plain
+`lefthook install` refuses because `core.hooksPath` is explicitly set, and prints the
+`--force` hint. Fix is one command — `lefthook install --force` — but it arms hooks in the
+**shared** `.git/hooks` that sibling worktree sessions were committing through at the time, so it
+was surfaced rather than executed. Enforcement meanwhile is `/soleur:ship` Phase 5.5 and CI, both
+of which do run.
