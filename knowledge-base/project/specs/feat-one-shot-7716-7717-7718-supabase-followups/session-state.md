@@ -135,3 +135,28 @@ Executed, not filed: `action-required` on #7529; #7125 re-milestoned to Phase 4.
 - 8.3 full battery at `/ship` Phase 4 — deferred: a sibling worktree's full-gate run was in
   flight, so `test-all.sh` exited 4 (REFUSED, measured sibling condition #7553). Targeted suites
   run instead and all green.
+
+### Pipe-overflow class swept across the legal corpus (found while self-checking my own tables)
+GFM splits table cells on `|` **even inside backticked code spans**, so an unescaped pipe pushes
+a row past its header's column count and the overflow cells are **discarded at render time** —
+present in the raw markdown, invisible in the rendered document, and green under every
+grep-based check. Four instances found; two were fixed, two are not defects.
+
+- `compliance-posture.md:167` — **FIXED.** `acceptance.accepted === false || withdrawn === true`
+  inside a code span split a 4-column row into 7 cells; the Notes cell rendered truncated
+  mid-sentence. Living posture document, not a signed instrument.
+- `audits/2026-07-counsel-review-6588.md:180` — **FIXED, and it was material.** A literal `|`
+  inside `` `<p>Effective … | Last Updated July 24, 2026</p>` `` made a 3-column row render as
+  four cells, so the row's **`CONFIRMED` verdict cell was discarded** — a signed counsel review
+  whose per-row verdict did not render. One character; changes no claim; restores signed content
+  to visibility rather than amending it, which is why it was fixed inline rather than annotated.
+- `audits/2026-08-counsel-review-7440.md:270-271` — **NOT defects, deliberately left.** Those
+  rows are a table *demonstrating* pipe escaping: the left column shows the unescaped form and
+  the right the escaped one. Escaping the left column would falsify the example. Same principle
+  as the guard's inline-code exemption one level up — a corpus documenting its own convention
+  must remain writable.
+
+None of the four was introduced by this PR; all were found by checking my own edited tables and
+then sweeping the class rather than the instance. Every row this PR added or edited matches its
+header: PA-8 §(f) 3, PA-8 §(g) 3, vendor mapping 7, PA-31 §(g) 3, compliance-posture 7, and all
+four breach-register rows 10.
