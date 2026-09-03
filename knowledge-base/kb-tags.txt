@@ -2005,6 +2005,7 @@ legal-docs
 legal-document-generator
 legal-documents
 legal-record
+legal-register
 leginfo
 lib-helpers
 library-api
