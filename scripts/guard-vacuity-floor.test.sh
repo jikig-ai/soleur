@@ -241,7 +241,14 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # Its floor (`ASSERT_FLOOR`, a literal bound adjacent to the test) is mutant-CONSTRUCTIBLE and
 # measured FIRES under neutered assertion machinery, so this is a promotion that buys real
 # mutation coverage rather than an exemption that moves a number.
-PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh)$'
+# `pages-build-identity-probe.test.sh` added by #7640 PR2 — the build-identity probe's suite,
+# under a deferred directory. Its floor (`MIN_ASSERTIONS`, a literal bound) is emitted by a direct
+# `echo` + `exit 1` and NOT dispatched through the suite's own pass()/fail(), so the one-line edit
+# that disarms every assertion cannot disarm the floor that backstops them. Measured: neutering
+# pass()/fail() to no-ops leaves `ASSERTED` at 0 and the floor FIRES (`only 0 assertions ran,
+# floor is 14`, rc 1). It also carries a passes+fails==asserted reconciliation, so a stalled
+# counter cannot satisfy it. Promotion, not exemption: the ledger SHRINKS 48 -> 47.
+PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
