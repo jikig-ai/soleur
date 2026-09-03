@@ -73,14 +73,15 @@ reflowed-citation-with-issue-ref-continuation.md:no
 real-outage-inside-paragraph-without-actuality-idiom.md:no
 bulleted-label-consumed-by-trigger.md:no
 actuality-occurred-inflection.md:yes
-actuality-outranks-conditional-clause.md:yes"
+actuality-outranks-conditional-clause.md:yes
+unbalanced-fence-does-not-swallow-the-tail.md:yes"
 
 # --- the baseline TABLE is itself a claim -----------------------------------------------------
 # The table is hand-maintained, so the baseline block proves only that whatever it lists behaves.
 # Deleting entries used to shrink the guarded set with no signal at all. Assert its CARDINALITY
 # against the fixture set this class introduced, and that every named file exists — a count alone
 # cannot see a substitution.
-FIXTURE_MIN=13
+FIXTURE_MIN=14
 table_n=$(printf '%s\n' "$FIXTURES" | grep -c ':')
 if [ "$table_n" -lt "$FIXTURE_MIN" ]; then
   fail "baseline table lists $table_n fixtures, floor is $FIXTURE_MIN — entries were removed from the guarded set"
@@ -102,7 +103,7 @@ if [ "$baseline_bad" -ne 0 ]; then
   echo "FATAL: unmutated control is RED — aborting rather than scoring rows against it."
   exit 2
 fi
-pass "baseline: all 13 canonical fixtures match under the unmutated gate"
+pass "baseline: all 14 canonical fixtures match under the unmutated gate"
 
 cat > "$WORK/mutate.py" <<'PYEOF'
 import sys
@@ -141,6 +142,9 @@ elif mid == "M10":                                   # delete the fail-toward-PI
     i = s.index("{print}')\"; then\n")
     j = s.index("fi\n", i) + len("fi\n")
     s = s[:i] + "{print}')\"\n" + s[j:]
+elif mid == "M12":                                   # revert the unbalanced-fence re-emit
+    old = "\n         END{ if (f) for (i=1; i<=n; i++) print buf[i] }"
+    assert s.count(old) == 1; s = s.replace(old, "", 1)
 elif mid == "M11":                                   # DROP_RE above the re-admit
     assert s.count(DROP) == 1 and s.count(ACT) == 1
     s = s.replace(DROP, "", 1).replace(ACT, DROP + ACT, 1)
@@ -230,6 +234,10 @@ run_row M9  'print \"\"; next' 0 "real-outage-after-fenced-block-abutting-paragr
 run_row M11 'ORDER%ACTUALITY_RE +\{skip=0; print; next\}%tolower\(\$0\) ~ DROP_RE' 0 "actuality-outranks-conditional-clause.md:no" \
   "moving DROP_RE above the re-admit restores the two-stage incoherence: one conditional clause silences a stated actuality"
 
+# shellcheck disable=SC2016  # literal ERE anchor, no expansion wanted
+run_row M12 'END\{ if \(f\)' 0 "unbalanced-fence-does-not-swallow-the-tail.md:no" \
+  "reverting the unbalanced-fence re-emit silently swallows the document tail"
+
 # M10's observable is a pipeline failure, not a fixture verdict.
 rows=$((rows+1))
 if python3 "$WORK/mutate.py" M10 "$PRISTINE" "$WORK/M10.sh" 2>/dev/null; then
@@ -261,8 +269,8 @@ done
 # --- dispatch + floor, emitted directly (never through the helper it backstops) --------------
 # A FLOOR, not an equality — the row count is developer-incremented, and this file argues exactly
 # that for MIN_ASSERTIONS two blocks down. An equality here would make every added row a failure.
-if [ "$rows" -ge 11 ]; then pass "dispatch: $rows mutation rows ran (floor 11)"
-else fail "dispatch: only $rows rows ran, floor is 11"; fi
+if [ "$rows" -ge 12 ]; then pass "dispatch: $rows mutation rows ran (floor 12)"
+else fail "dispatch: only $rows rows ran, floor is 12"; fi
 
 # This battery never writes to $ORIG (mutants go to $WORK), so the old `cmp $ORIG $PRISTINE`
 # assertion was unfailable by construction while still counting toward the floor. Assert the
@@ -278,7 +286,7 @@ fi
 # number is how a floor ends up one above what the suite can reach. Raise it in lockstep when
 # assertions are added; it is a floor, never an equality (an equality makes every new assertion
 # a spurious failure). Emitted directly, never through the helper it backstops.
-MIN_ASSERTIONS=24
+MIN_ASSERTIONS=25
 if [ "$asserted" -lt "$MIN_ASSERTIONS" ]; then
   printf 'FATAL: only %d assertions ran, floor is %d — the battery is vacuous\n' "$asserted" "$MIN_ASSERTIONS" >&2
   exit 1

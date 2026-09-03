@@ -290,6 +290,15 @@ describe("ship Incident-PIR gate (#6813)", () => {
     expect(res.stdout.trim()).toBe("");               // and the note never reaches stdout
   });
 
+  // F14 — an UNBALANCED fence must not eat the document tail. The parity toggle would otherwise
+  // leave every later line inside a block that never closes and drop it at exit 1 with no note —
+  // byte-identical to a clean no-signal, and reachable from an odd ``` count in a pasted PR body,
+  // which would delete the entire linked plan. Buffered lines are re-emitted when the toggle is
+  // still open at EOF; a BALANCED fence still hides its contents, which is the strip's purpose.
+  test("an unbalanced fence does not swallow the document tail", () => {
+    expect(signals("unbalanced-fence-does-not-swallow-the-tail.md")).toBe(true);
+  });
+
   // Template anti-rot. The trigger is anchored on the wording the plan template
   // actually emits, so if that wording or its `- **` prefix drifts the anchor
   // stops matching and the gate silently reverts to firing on every plan. Reading

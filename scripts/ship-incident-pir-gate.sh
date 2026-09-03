@@ -95,7 +95,12 @@ DROP_RE='^brand_survival_threshold:|brand-survival threshold:|if this lands brok
 # Strip, in order:
 #   1. fenced code blocks (``` … ```) — regexes/config/SQL quoted in a plan are
 #      DATA, not an incident report (a plan that documents this very gate quotes
-#      `OUTAGE_RE='(outage|incident|…)'`);
+#      `OUTAGE_RE='(outage|incident|…)'`). An UNBALANCED fence is NOT treated as a
+#      block: the parity toggle would otherwise leave the rest of the document
+#      inside a fence that never closes and drop it, at exit 1, with no note —
+#      byte-identical to a clean no-signal, and reachable from an odd ``` count
+#      in a pasted PR body, which deletes the whole linked plan. Buffered lines
+#      are re-emitted at END when the toggle is still open (#7801 review).
 #   2. inline `code` spans — same reason, for backticked tokens;
 #   3. the threshold declaration (frontmatter key + the bold User-Brand-Impact
 #      label) and the hypothetical/conditional framing lines, so trigger 3 does
@@ -119,13 +124,14 @@ DROP_RE='^brand_survival_threshold:|brand-survival threshold:|if this lands brok
 #      and since nearly every plan carries some prod word, matching the word
 #      `Outage` inside it made the gate fire on any plan that recorded the
 #      determination, including ones whose body says the checklist is "not
-#      applicable rather than unverified". CORRECTED #7801 review: this is NOT
-#      a heading-line strip. The sed is a GLOBAL, line-agnostic token deletion,
-#      so `network-outage` vanishes from ordinary prose too — measured, "The
-#      network-outage on 2026-08-16 took the production site offline" does not
-#      signal while the same sentence without the hyphenated token does. That
-#      is a real miss, tracked separately; the comment is corrected here rather
-#      than left describing a mechanism that does not run. **Why:** #7003.
+#      applicable rather than unverified". CLARIFIED #7801 review: this is a
+#      GLOBAL token deletion, not a heading-line strip — which is what #6665
+#      INTENDED ("gate NAMES are stripped so the token cannot reach OUTAGE_RE at
+#      all"), not a defect. Its accepted cost, stated plainly because it was not:
+#      a genuine report phrased with the hyphenated gate name ("The
+#      network-outage on 2026-08-16 took the production site offline") loses its
+#      outage token and does not signal, while the same sentence without the
+#      hyphen does. **Why:** #7003, #6665.
 # Residual (accepted): a plan whose SUBJECT is incident detection still discusses
 # outages in prose and may signal — that is fail-toward-PIR over-production the
 # operator hand-adjudicates, not the #6813 false-positive class (which was every
@@ -149,7 +155,10 @@ DROP_RE='^brand_survival_threshold:|brand-survival threshold:|if this lands brok
 # no text at all. Merging the line filter into the awk removed the terminal grep and with it that
 # whole failure mode, rather than papering over it with an exit-code arm.
 if ! haystack="$(cat \
-  | awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; print ""; next} !f{print}' \
+  | awk 'BEGIN{f=0; n=0} /^[[:space:]]*```/{f=!f; print ""; next}
+         !f{print; next}
+         {buf[++n]=$0}
+         END{ if (f) for (i=1; i<=n; i++) print buf[i] }' \
   | sed 's/`[^`]*`/ /g' \
   | sed -E 's/[Nn]etwork-[Oo]utage/ /g' \
   | awk -v ACTUALITY_RE="$ACTUALITY_RE" -v DROP_RE="$DROP_RE" -v OUTAGE_RE="$OUTAGE_RE" -v SENTINEL="$SENTINEL" 'BEGIN{skip=0; noted=0}
