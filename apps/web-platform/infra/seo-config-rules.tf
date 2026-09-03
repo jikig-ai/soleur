@@ -281,7 +281,8 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   # this into the rejected zone-wide option.
   #
   # test/seo-config-rules.test.ts pins this expression by EXACT EQUALITY, and
-  # pins the ruleset to exactly two rules. Both are deliberate: a deny-list of
+  # pins the ruleset's rule count (three since #7584 added the ssl mitigation
+  #  below; seo-config-rules.test.ts asserts the exact length). All are deliberate: a deny-list of
   # forbidden hostnames constrains spelling rather than scope, and review
   # produced several mutants that name no forbidden host yet widen the rule to
   # the whole zone (`or ends_with(http.host, ".soleur.ai")`, a `zone_name`
@@ -361,15 +362,50 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   # only AFTER expiry, as happened here, and DNS-only means broken TLS. Same
   # mechanism, opposite user impact, purely from when it is run.
   #
-  # REMOVAL CONDITION. Delete this rules block once `gh api
-  # repos/jikig-ai/soleur/pages` reports `https_certificate.state` in
-  # {approved, issued} with a future `expires_at`. Removing it restores strict
-  # validation on apex+www. Leaving it after that point is silent risk with no
-  # benefit, so the removal is tracked, not left to memory.
+  # REMOVAL CONDITION (corrected #7749 — the previous one could never be met).
   #
-  # NOTE the ordering constraint that follows from the above: this rule can only
-  # be retired immediately AFTER a successful renewal window, while the fresh
-  # cert is valid. Retiring it at any other time re-arms the 526.
+  # This block used to say: delete it once `gh api repos/jikig-ai/soleur/pages`
+  # reports `https_certificate.state` in {approved, issued} with a future
+  # `expires_at`. Under ADR-194 that can NEVER happen. The cutover ABANDONS the
+  # Pages certificate rather than renewing it, and the cert cannot renew while
+  # these records are proxied — it expired 2026-08-16 13:53:34Z and has stayed
+  # expired since. So the old condition left a reader with no exit: the test it
+  # names never passes, and deleting the block anyway takes the HSTS-preloaded
+  # apex straight back to HTTP 526.
+  #
+  # This is therefore NOT a stopgap buying time against an approaching expiry.
+  # The expiry already happened, with zero user impact, because this rule was in
+  # place. It is load-bearing production infrastructure for the whole
+  # pre-cutover interval.
+  #
+  # Two measurable exits, EITHER of which is sufficient:
+  #
+  #   1. THE CUTOVER LANDED — apex and www no longer resolve to GitHub Pages.
+  #      The expired origin leaves the serving path, so validation can be
+  #      restored. This is the real exit.
+  #   2. ROLLBACK — ADR-194 is reverted and the Pages cert is valid again.
+  #
+  # Exit 1 is ENFORCED, not remembered: `ssl-full-mitigation.test.sh` resolves
+  # the stage from `dns.tf` and requires this block for as long as the apex
+  # still carries the GitHub Pages anycast records. Delete it before then and
+  # that guard fails in CI. Exit 2 is not statically observable from the repo,
+  # but taking it means editing `dns.tf`, which moves the same guard's stage.
+  #
+  # Ordering is load-bearing too, and also guarded. `set_config` is a
+  # NON-TERMINATING action, and Cloudflare's ruleset engine documents that for
+  # those "the last change made by rules in the same phase will win (later rules
+  # can overwrite changes done by previous rules)". So an `ssl` rule added BELOW
+  # this one for the same hosts overwrites it — this block would still read
+  # `full` and the site would still be down.
+  #
+  # Note this is the OPPOSITE of the first-match-wins rule that governs the
+  # redirect ruleset in seo-bulk-redirects.tf. Redirects are TERMINATING, so
+  # there the first match wins; here the last one does. Do not carry the
+  # reasoning from one file to the other.
+  #
+  # The guard sidesteps the direction entirely by asserting that exactly ONE
+  # `ssl` rule targets these hosts, which is position-agnostic and catches a
+  # second rule inserted on either side.
   rules {
     action      = "set_config"
     description = "TEMPORARY (2026-08-16 outage): accept the expired GitHub Pages origin cert on soleur.ai + www.soleur.ai — remove when the Pages cert is valid again"

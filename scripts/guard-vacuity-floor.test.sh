@@ -248,7 +248,30 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # pass()/fail() to no-ops leaves `ASSERTED` at 0 and the floor FIRES (`only 0 assertions ran,
 # floor is 14`, rc 1). It also carries a passes+fails==asserted reconciliation, so a stalled
 # counter cannot satisfy it. Promotion, not exemption: the ledger SHRINKS 48 -> 47.
-PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh)$'
+# `apex-single-node-replace.test.sh` added by #7640 — the guard keeping the ADR-194 apex
+# cutover on ONE Terraform resource address, so core supplies the Delete->Create ordering.
+# Promoted rather than deferred: its floor is an exact cardinality split into `-lt`/`-gt`
+# halves reported through a direct printf, which is the shape this meta-guard can actually
+# mutation-test, and the property it protects is a live-apex outage class.
+#
+# Its mutation battery is promoted alongside it and for the same reason -- it carries the
+# identical floor shape. Promoting BOTH is what keeps the deferral ledger flat: adding a
+# floor-bearing suite under a deferred directory grows that ratchet, and the ratchet is not
+# a number to raise.
+#
+# `ssl-full-mitigation.test.sh` added by #7749 — the guard on the Cloudflare config rule
+# holding the apex off HTTP 526 while the GitHub Pages origin cert sits expired. Its floor is
+# an exact cardinality split into `-lt` and `-gt` halves (no slack), reported via a direct
+# `printf >&2` + `exit 1`, never through the suite's own `fail()`, so neutering the assertion
+# machinery cannot disarm it — and the suite additionally carries a positive control that
+# drives `pass()`/`fail()` once and requires both counters to move, which is what catches a
+# neutered `fail()` that an exact-count floor alone cannot see. Promotion, not exemption: it
+# is mutation-tested like any covered suite. Ledger arithmetic re-derived after merging
+# origin/main (which promoted pages-build-identity-probe in the same window): this suite
+# ADDS one floor-bearing file to a deferred directory and its promotion removes it again,
+# so the ledger returns to MAX_DEFERRED rather than growing. An earlier revision of this
+# comment said "48 -> 47", which was true of my branch alone and not of the merge.
+PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"

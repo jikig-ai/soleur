@@ -96,6 +96,19 @@ describe("leader-prompt registry — AC2 sentinels", () => {
   it("PER_SPAWN_COST_CEILING_CENTS SSOT constant equals 260 ($2.60 USD)", () => {
     // Layer 2 cap (ADR-041), raised from the brainstorm-locked $2.00 by ~30%
     // for the Sonnet 5 tokenizer (see constants.ts rationale).
+    //
+    // This pin is ALSO the guard against a pricing-driven re-scale. #7774
+    // corrected MODEL_PRICING's Sonnet row to $2/$10 and deliberately left 260
+    // alone: the ceiling is a real-dollar promise rendered to the founder by
+    // costBreakerCopy, not a token budget that tracks the rate table. The
+    // superficially symmetric move — 260 x (2/3) = 173, "preserving the
+    // work-per-spawn budget" — would ratify the pre-#7774 effective $1.73 that
+    // nobody chose. Ruled in ADR-041's 2026-09-03 amendment; changing this
+    // number amends that ADR.
+    //
+    // NOTE: this value pin is the ONLY guard on the constant. The
+    // `constants-ssot.test.ts` literal drift-guard that constants.ts and
+    // ADR-041 both used to cite has never existed in this repo.
     expect(PER_SPAWN_COST_CEILING_CENTS).toBe(260);
   });
 

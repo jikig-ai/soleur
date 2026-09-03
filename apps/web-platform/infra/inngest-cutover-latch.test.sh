@@ -173,7 +173,7 @@ run_flip() {
       CUTOVER_VERIFY_WINDOW_S=0 \
       CUTOVER_VERIFY_INTERVAL_S=0 \
       ${extra[@]+"${extra[@]}"} \
-      bash "$TARGET" >/dev/null 2>&1 || rc=$?
+      bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
 trace_csv() { paste -sd, "$TRACE" 2>/dev/null || true; }
@@ -311,6 +311,63 @@ assert_eq "(7) non-mountpoint => NO fake-durable latch was left behind" \
   "no" "$([[ -e "$LATCH" ]] && echo yes || echo no)"
 teardown_case
 
+# --- 7b. THE DURABILITY PREDICATE MUST BE BIND-MOUNT-IMMUNE (#7761) ------------------------
+#
+# WHY THIS EXISTS. Case 7 above passes under BOTH a correct predicate and a broken one, because a
+# `mktemp -d` fixture is neither a real mount nor a self-bind-mount. So the regression that
+# prompted this block was invisible to it: adding `ReadWritePaths=/mnt/data` to the unit made
+# systemd bind-mount that path onto itself (that is how a writable hole in `ProtectSystem=strict`
+# is expressed), and `mountpoint(1)` — which answers from /proc/self/mountinfo, verified by strace
+# — then reported TRUE for a /mnt/data whose Hetzner volume had never mounted. The pre-flush gate
+# would have passed, the FLUSHALL would have run, and the anti-double-flush latch would have been
+# written to the ephemeral root disk looking durable — re-opening the #5450 second-flush path on
+# the next replace. A hardening directive disarming the guard over the one irreversible operation.
+#
+# WHAT IS AND IS NOT DRIVABLE HERE. Creating a bind mount needs root or an unprivileged user
+# namespace, and CI has neither (measured: `unshare -rm` -> "write failed /proc/self/uid_map:
+# Operation not permitted"). So the bind case itself is asserted STRUCTURALLY — the durability gate
+# must not call `mountpoint`, which is the only construct that can be fooled — while the
+# predicate's ordinary contract is asserted behaviourally below. Both halves are needed: the
+# structural one alone would pass against a predicate that answers nothing, and the behavioural one
+# alone would pass against `mountpoint`.
+echo "TEST: #7761 the durability gate is bind-mount-immune"
+GATE_LINES="$(grep -nE '^[[:space:]]*if \[\[ -n "\$LATCH_REQUIRE_MOUNT" \]\] &&' "$TARGET" || true)"
+GATE_COUNT="$(printf '%s\n' "$GATE_LINES" | grep -cE '^[0-9]+:' || true)"
+assert_eq "(7b) both durability gate sites are present" "2" "$GATE_COUNT"
+# Anchored on the gate CONSTRUCT, not a bare `mountpoint` token: the file legitimately discusses
+# mountpoint(1) in the comment explaining why it is not used, and a bare-token check would match
+# that prose (cq-assert-anchor-not-bare-token).
+assert_absent "(7b) neither gate site calls mountpoint(1) (bind mounts satisfy it)" \
+  "$GATE_LINES" "mountpoint"
+assert_contains "(7b) both gate sites use the device-identity predicate" \
+  "$GATE_LINES" "is_real_mount"
+
+# Behavioural: drive the predicate itself. Extracted rather than sourced — sourcing the SUT runs
+# its top-level seam gate, which would unset this suite's own fixture seams.
+eval "$(awk '/^is_real_mount\(\) \{/{f=1} f{print} f&&/^\}$/{exit}' "$TARGET")"
+PLAIN_DIR="$(mktemp -d)"
+assert_eq "(7b) a plain directory is NOT a durable mount" \
+  "no" "$(is_real_mount "$PLAIN_DIR" && echo yes || echo no)"
+assert_eq "(7b) an unreadable path fails CLOSED (not a mount)" \
+  "no" "$(is_real_mount /nonexistent-7761 && echo yes || echo no)"
+# A REAL mount, discovered rather than assumed: the first mountinfo target whose device differs
+# from its parent's. Without this the suite has only must-NOT-be-a-mount fixtures, and a predicate
+# hardcoded to `return 1` would score full marks — the fixture-direction gap.
+REAL_MOUNT=""
+while IFS= read -r m; do
+  [[ -d "$m" ]] || continue
+  [[ "$(stat -c %d "$m" 2>/dev/null)" != "$(stat -c %d "$m/.." 2>/dev/null)" ]] && { REAL_MOUNT="$m"; break; }
+done < <(awk '{print $5}' /proc/self/mountinfo 2>/dev/null | grep -vx '/' | head -40)
+if [[ -n "$REAL_MOUNT" ]]; then
+  assert_eq "(7b) a real mount ($REAL_MOUNT) IS a durable mount" \
+    "yes" "$(is_real_mount "$REAL_MOUNT" && echo yes || echo no)"
+else
+  # Never silently skip: a suite with no positive fixture cannot distinguish a working predicate
+  # from one that always refuses, and that is the direction that fails toward "safe".
+  fail "(7b) no real mount found on this host — the positive arm did not run"
+fi
+rm -rf "$PLAIN_DIR"
+
 # --- 8. MONOTONICITY: no branch may clear the latch ----------------------------------------
 # The failure mode was an erasing WRITE, so assert directly that every terminal branch leaves it.
 echo "TEST: no FSM branch erases the latch"
@@ -351,7 +408,9 @@ assert_eq "unprovable mount => state reason is latch-unrecordable" \
 teardown_case
 
 # --- assertion-count FLOOR ------------------------------------------------------------------
-LATCH_MIN_ASSERTIONS=45  # derived from a green run; raise in lockstep when adding assertions
+# 45 -> 51: +6 for the #7761 bind-mount-immunity block (case 7b). Derived from a green run;
+# raise in lockstep when adding assertions.
+LATCH_MIN_ASSERTIONS=51
 if [[ "$PASS" -lt "$LATCH_MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193, and #7695's mutation audit): routing the floor through
   # the counter it exists to protect means one edit disarms both.

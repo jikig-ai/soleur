@@ -791,7 +791,13 @@ _diff_touches() {
 _relevance_declined=0
 
 _infra_in_diff=0
-if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names"; then
+# Two prefixes, not one. The infra guards assert against
+# `.github/workflows/apply-web-platform-infra.yml` as well as against the `.tf`
+# files -- `apex-single-node-replace.test.sh` reads its `-target=` allow-list --
+# so a PR editing ONLY that workflow could drop an allow-list entry while this
+# runner declined the whole infra suite as not-in-diff (#7640).
+if grep -qF 'apps/web-platform/infra/' <<<"$_diff_names" \
+  || grep -qF '.github/workflows/apply-web-platform-infra.yml' <<<"$_diff_names"; then
   _infra_in_diff=1
 fi
 
@@ -1350,6 +1356,16 @@ if want_scripts; then
   # invokes it by hand — which for a probe that auto-closes a tracker means the anti-vacuity floor
   # is decoration.
   run_suite "scripts/zot-fill-rate-7341" bash scripts/followthroughs/zot-fill-rate-7341.test.sh
+  # #7761 cutover-flip rollout probe. Registered because lint-orphan-test-suites.sh caught it
+  # unregistered: every assertion in it gated nothing, which for a probe that authorizes
+  # closing a P1 security issue after a production host replace is the permanent silent no-op
+  # its own header says it exists to retire. The suite pins the two properties that decide
+  # whether the probe can be trusted: its query stub APPLIES the --grep the probe passes (a
+  # stub that ignored it certified a probe whose grep matched none of the rows it counts), and
+  # a post-boundary marker must carry the guard stamp only the post-fix script emits (without
+  # it every observable is byte-identical to the pre-fix script, so a replace that delivered
+  # nothing would report success).
+  run_suite "scripts/inngest-cutover-flip-rollout-7761" bash scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
   # whether it can be trusted: the verdict is anchored at line start (an unanchored grep closes

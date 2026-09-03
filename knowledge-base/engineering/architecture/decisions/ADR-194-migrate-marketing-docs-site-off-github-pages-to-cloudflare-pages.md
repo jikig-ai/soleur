@@ -39,6 +39,10 @@ brand_survival_threshold: single-user incident
 >   whether that origin is still healthy; under dual-publish every docs deploy
 >   becomes a liveness assertion against it. The cost is that dependence on the
 >   masking rule extends by two PRs, which bounds PR3→PR4 to days, not weeks.
+>   (**Amended 2026-09-03, #7640 PR4a:** three, not two — D5 splits PR4 into PR4a
+>   and PR4b, so the span is PR3→PR4a→PR4b. The bound still holds and the
+>   direction of the argument is unchanged; the arithmetic was one merge short.
+>   The full D5 amendment lands with PR4b, per tasks.md 2.7.)
 >
 > PF7 / D3 item 3(b) is **retired by construction** and was not measured; see the
 > plan's D3 supersession note.
@@ -456,3 +460,89 @@ Two implementation choices inside (iii), both deliberate:
 
 Not reconsidered here, because the migration does not touch them: Rule 10, its ACME carve-out
 clause, `always_use_https = "off"`, and the `ssl = "full"` Configuration Rule.
+
+---
+
+## Amendment — 2026-09-02 (#7749): the pre-cutover interval is held by `ssl = "full"`, not by cert renewal
+
+This amends a factual premise about the interval. It does not reverse the decision above.
+
+The last line of the previous section says the `ssl = "full"` Configuration Rule is "not
+reconsidered here, because the migration does not touch them." That is true of the migration and
+false of the interval: for as long as the cutover has not landed, **that rule is what keeps the
+apex serving at all.** Recording it here because nothing else did, and because the rule's own
+removal condition pointed the other way.
+
+**The origin certificate is already expired, permanently, by design.** Measured 2026-09-02 from
+outside the proxy:
+
+```
+$ echo | openssl s_client -servername soleur.ai -connect 185.199.108.153:443 \
+    | openssl x509 -noout -subject -issuer -dates
+subject=CN=soleur.ai
+issuer=C=US, O=Let's Encrypt, CN=R13
+notBefore=May 18 13:53:35 2026 GMT
+notAfter=Aug 16 13:53:34 2026 GMT
+```
+
+Identical on `.109`, `.110`, `.111`. That `notAfter` is the exact timestamp of the 8h15m HTTP 526
+outage in this ADR's own timeline. It cannot renew while the records are proxied, and this ADR
+abandons rather than renews it — so it never will.
+
+Meanwhile `https://soleur.ai/` returns 200 and `https://www.soleur.ai/` returns 301. The zone
+default is Full (STRICT), which validates the origin cert and is what produced the 526; the
+`set_config` rule in `seo-config-rules.tf` overrides it to `full` (non-strict), which encrypts the
+CF→origin leg without validating the certificate.
+
+Four consequences, none of which were written down before:
+
+1. **PR #7584 did not buy time against an approaching expiry — it retired the expiry failure class
+   for the whole pre-cutover interval.** The countdown reached zero on 2026-08-16 with zero user
+   impact, because the rule was already in place.
+2. **Cert-expiry detection is deliberately retired, not replaced.** Disarming
+   `cron-gh-pages-cert-state` and its Sentry monitor was correct: the property they measured has
+   decoupled from user impact. Re-arming the daily poll would be actively harmful — the cert is
+   already expired, so it trips on its first run and every run after, filing a daily countdown
+   issue whose remediation instruction fires the reissue routine. That reconstructs the #6691
+   unread-countdown pathology — whose issue body is a literal "Days until expiry" counter — with
+   the escalation path permanently hot. (The de-proxy step in that routine is *not* one-way today:
+   `cron-gh-pages-cert-reissue.ts` restores the proxied state in an unconditional final step plus
+   an `onFailure` handler, and post-cutover its `precondition_blocked` outcome refuses to run at
+   all. An earlier draft of this amendment overstated that hazard. The argument against re-arming
+   stands on the simpler ground: it trips on every run, forever.)
+3. **The removal condition was unsatisfiable and has been replaced.** It previously said to delete
+   the rule once the Pages API reported a valid `https_certificate`, which this ADR guarantees will
+   never happen. The two exits are now: the cutover landed (apex and www no longer resolve to
+   GitHub Pages), **or** this ADR is rolled back and the cert is valid again. Exit 1 is enforced by
+   `apps/web-platform/infra/ssl-full-mitigation.test.sh`, which resolves the stage from `dns.tf`
+   and therefore self-retires rather than needing deletion at cutover.
+4. **Accepted cost, stated explicitly:** `full` does not validate the origin certificate, so a MITM
+   between Cloudflare and the GitHub Pages anycast range would go undetected for apex and www for
+   the duration of the interval. Severity is low — these hosts serve static public documentation
+   with no authentication and no credentials — but it is the reason the removal condition matters
+   and why the interval should not be extended indefinitely.
+
+What detects a regression here is unchanged and already sufficient: removing the rule produces
+HTTP 526, caught by three probes across two independent vendors. Their real timings, read from the
+resources rather than assumed:
+
+| Probe | Cadence | Threshold | Time to page |
+|---|---|---|---|
+| `sentry_uptime_monitor.soleur_apex` | 300s | `downtime_threshold = 3` | ~15 min |
+| `sentry_uptime_monitor.soleur_www` | 300s | `downtime_threshold = 3` | ~15 min |
+| `betteruptime_monitor.soleur_apex` | 180s | `confirmation_period = 60` | ~4 min |
+
+An earlier draft of this amendment said "within one check interval … 180s cadence" for all three.
+That was wrong twice over — only BetterStack runs at 180s, and no probe *alerts* within one
+interval, because each carries a confirmation threshold. The 526 is *observed* within one interval;
+paging takes 4-15 minutes depending on the vendor.
+
+The gap was never detection of the *outage* — it was that nothing guarded the *config* those probes
+depend on. That is what #7749 added.
+
+One caveat that belongs in the record: the zone-level SSL mode this rule overrides is **not pinned
+in Terraform**. `cloudflare_zone_settings_override.soleur_ai` manages `security_header` and
+`always_use_https` only, so the default is dashboard-managed and unverifiable from the repo — it is
+inferred from the 526 having actually occurred. The new guard protects the override; nothing
+protects the default it overrides. If the zone were flipped to `flexible`, apex would serve
+cleartext to origin and every assertion added by #7749 would still pass.
