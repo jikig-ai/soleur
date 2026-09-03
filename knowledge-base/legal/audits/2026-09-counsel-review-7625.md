@@ -48,7 +48,7 @@ re_evaluation_triggers:
   - "A natural person other than `deruelle` is added to the CLA-action allowlist in `.github/workflows/cla.yml`, or `deruelle` is removed — moves the Categories of data subjects cell limb (ii)."
   - "First arms-length (non-Jikigai) contributor signs the CLA — carried forward from #7624. The first data subject of PA-7 who is not the operator, and the first reader of these cells with an adverse interest. This trigger also converts the 'accepted at present scale' residual in Special categories from a two-person posture into one requiring re-argument."
   - "Adoption of a retention ceiling at #7668 — this review does not decide it, but Ruling 1 supplies a new argument for it (an Art. 9 disclosure that only `gdpr-override.sh` can reach). Re-read Special categories when #7668 closes."
-  - "AUP § 4.7 is re-scoped beyond the hosted chat surface — would supply the organisational control this path currently lacks, and would also bear on the two cells that cite § 4.7 for repository submissions (PA-17 and PA-33; flagged, not fixed, in this review)."
+  - "AUP § 4.7 is re-scoped beyond the hosted chat surface — would supply the organisational control this path currently lacks, and would also bear on the four sites in this register that cite § 4.7 for repository submissions: PA-17's Special-categories cell and its Art. 6(1)(f) balancing limb, PA-31's Special-categories cell, and PA-33's Special-categories cell. Flagged, not fixed, in this review; tracked at #7815."
   - "External counsel re-review reserved for: first arms-length contributor, EEA-out, regulated industry, or any move from 'may arrive unsolicited' to a positive Art. 9 processing declaration."
 related:
   - knowledge-base/legal/article-30-register.md
@@ -511,3 +511,183 @@ records exist, not whether the basis is available.
   Ruling 4.
 - **Ruling 4 now covers five blocks:** `WIDENING` on both §(c) cells, `CORRECTION` on Special
   categories and on Lawful basis, `CORPUS DIVERGENCE` on Categories of data subjects.
+
+---
+
+## CLO Advisory — Second addendum after implementation (2026-09-03)
+
+Implementation surfaced three facts that challenged two rulings above, and the questions were sent
+back to the reviewing authority rather than resolved by `/work`. **All three facts verified against
+source.** Answering them surfaced two further defects in text the authority had itself supplied
+verbatim.
+
+**This addendum governs where it and anything above it disagree.** As with A1, the transcribed
+rulings are left byte-identical and the corrections live here — the transcription is a record of what
+was said, not an operative text.
+
+### A7 — the three questions, and their binding answers
+
+**A7.1 — the AUP § 4.7 citations: FILE, do not inline.** A code-simplicity review dissented from
+Ruling 5, arguing that four cells in one internal file sit inside the inline threshold. Two facts were
+established against it.
+
+*The count was wrong in the advisory.* There are **four** sites, not two: PA-17's
+`Special categories (Art. 9 / 10)` cell, PA-17's `Lawful basis` cell (the clause sits **inside** the
+Art. 6(1)(f) balancing test), PA-31's Special-categories cell, and PA-33's Special-categories cell.
+
+*The stated blocker was also wrong, and the ruling stands anyway.* The plan asserted that sweeping
+these cells would fail the acceptance criterion restricting this PR to PA-7's rows. That criterion was
+label-scoped rather than activity-scoped, so it would have permitted the edit — and would equally have
+permitted a full semantic rewrite of any other activity's `Special categories` or `Lawful basis` cell.
+The criterion has been strengthened to be genuinely PA-7-scoped, and the ruling is made on the merits
+rather than on the false constraint.
+
+*The merits.* The § 4.7 clause at PA-17 is **the implementation of a prior counsel recommendation** —
+`knowledge-base/legal/audits/2026-05-counsel-review-4558.md` finding B2 recommended cross-referencing
+the § 4.7 prohibition and `redactGithubSourcedText` as the active control. Striking it reverses that
+recommendation. At PA-17's Special-categories cell, removing § 4.7 leaves `None by design.` standing on
+nothing, since the same cell already concedes that `redactGithubSourcedText` does not claim to scrub
+free-text Art. 9 disclosures and the #7100 NARROWING already withdrew the display-only claim — a fresh
+Art. 9 determination, on a different activity and a different population (third-party contributors to a
+customer's connected repository, who are not Soleur users). At PA-17's Lawful-basis cell it is worse:
+the clause is the sole support for "the derived signal is operational metadata … not special-category
+data" inside a balancing attested 2026-05-28.
+
+*The middle option was available and is declined.* PA-31 and PA-33 genuinely are determination-neutral
+— both already reason rather than deny, both already carry named residuals, and neither
+`2026-07-31-dpia-screening-claude-eval-fleet-and-ci.md` nor
+`2026-07-31-claude-eval-fleet-and-ci-lia.md` cites § 4.7, so nothing downstream moves. Correcting
+those two inline would nonetheless put non-PA-7 amendment blocks, carrying their own labels and their
+own issue citation, into a PR whose attestation names PA-7 alone as its governing record — making this
+attestation false on its face to buy two sentence-level fixes in a document that is in no Eleventy tree
+and is read by no route. Declined as a bad trade.
+
+Filed as **#7815**, one issue in two parts: Part 1 the determination-neutral PA-31/PA-33 citation
+correction, Part 2 the PA-17 determination re-opening. The issue carries `domain/legal` and
+`priority/p1-high` but deliberately **not** `compliance/critical` — what is established is that PA-17's
+stated control is false, not that its Art. 9 determination fails. If Part 2 concludes `None by design.`
+does not survive, that finding is `compliance/critical` and earns its own Active Items row then.
+
+**The marked/unmarked hazard is closed inside PA-7 instead**, at A8.1 — marking lives where the
+finding was made, the same shape as A3's CORPUS DIVERGENCE block.
+
+**A7.2 — four Active Items rows, three issue numbers.** A5's stated precedent is falsified and the
+reasoning is withdrawn; the row count is not. #7119's title is "PA-32: minimise or cease the community
+republication limb (**R1-R5**)" — it bundles five remediations in one issue. The PA-32 trio splits on
+distinct legal **obligation** (Art. 6 at #7119, Art. 14 at #7120, Art. 35 at #7121), not on distinct
+remediation. Applying the test the precedent actually uses:
+
+| Row | Obligation | Issue |
+|---|---|---|
+| 1 — non-signer capture, no Art. 6 basis | Art. 6(1) | **#7813** |
+| 2 — `comment_body` Art. 9 ingress, no technical or organisational control | Art. 9(1)/(2) | **#7814** |
+| 3 — corpus does not disclose the non-signer population; no Art. 21(1) route | Art. 13/14 + Art. 21(1) | **#7812** |
+| 4 — tombstone `override_reason` Art. 9 surface | Art. 9(1)/(2) | **#7814** — same number as Row 2 |
+
+Rows 2 and 4 are the same article on the same activity, differing by population, gateway and
+remediation; remediation-splitting is not this register's test, so they fold. `compliance-posture.md`
+already demonstrates multiple rows on one number — the `Issue` column requires a number per row, not a
+distinct number per row. **Rows 2 and 4 must carry different `Notes` text**, each naming which surface
+its share of #7814 covers: a repeated number with duplicated notes is indistinguishable from an error.
+
+**A7.3 — Row 3 and the PR B tracking issue are the same issue: #7812.** One finding, one remediation.
+Two numbers for one finding is the discharged-somewhere hazard A3 exists to prevent — a reader finding
+the divergence block pointing at one number and the posture row at another cannot tell whether both
+must close. That single number serves three referents: Active Items Row 3, the `CORPUS DIVERGENCE`
+block's tracking reference, and the `(h)` cell's "tracked for the corpus at".
+
+**One correction accepted into the record.** The plan's stated reason for the phase ordering — that
+`/ship` Phase 5.5's gdpr-gate acknowledgment gate forces these issues to exist before the posture rows
+are written — is **false**. That gate requires both a diff matching its canonical regex and a
+`compliance/critical` reference, and a `knowledge-base/legal/**`-only diff matches none of the regex.
+The surviving reason is weaker and sufficient: the `Issue` column needs real numbers. (The
+Counsel-Review CLO-Attestation Gate at the same file *does* fire, on `knowledge-base/legal/` plus the
+`single-user incident` threshold. That one is discharged by this record.)
+
+### A8 — two corrections to Ruling 1's and Ruling 4's supplied cell text
+
+**A8.1 — Ruling 1's Special-categories cell contains a false sibling comparison.** Verified: PA-35's
+cell reads a bare `None identified.` and names no control, denying rather than reasoning; PA-32's cell
+names no control either — it names their **absence**. The supplied sentence is false on two of its
+three comparators.
+
+In the Ruling 1 replacement cell, the sentence beginning *"This is a weaker control posture than
+PA-27, PA-32 or PA-35, each of which names at least one."* is replaced by:
+
+```text
+Of this register's other cells that reason about unsolicited Art. 9 arrival, only **PA-27** names a control this path lacks — a system-prompt omission instruction, a statutory fast-path that never invokes the LLM, and non-persistence of bodies. **PA-32** names none, and **PA-35** denies rather than reasons. **PA-31** and **PA-33** each name AUP § 4.7 as an organisational measure over repository submissions, and **PA-17** rests `None by design.` on the same citation and repeats it inside its Art. 6(1)(f) balancing — four sites that overstate § 4.7 for the reason just given. Those are defects of their own activities' records, are not amended here, and are tracked at #7815; PA-7 relies on § 4.7 in no form.
+```
+
+**A8.2 — Ruling 4's Special-categories CORRECTION block carries the same false claim.** The clause
+*"the conditions under which this register's own PA-27, PA-32 and PA-35 cells reason rather than
+deny."* is replaced by:
+
+```text
+the conditions under which four of this register's own cells — PA-27, PA-31, PA-32 and PA-33 — reason rather than deny.
+```
+
+### A9 — Ruling 4's Lawful-basis CORRECTION block does not comply with A3
+
+A3 directed that this block end with a pointer to the divergence rather than restating it, and the
+verbatim block does not. Since the addendum governs, the block as transcribed is wrong. The tail
+*"where it fails on necessity. Recorded rather than silently repaired…"* is replaced by:
+
+```text
+where it fails on necessity. The corpus divergence this creates is recorded once, at the `(c) Categories of data subjects` cell, and is not restated here. Recorded rather than silently repaired, per this register's amendment-history convention.]**
+```
+
+The `convention.]**` closing formula the acceptance criteria check is preserved.
+
+### A10 — two cross-reference fixes in A4's `(h)` cell
+
+The A1 standing instruction — re-read every cross-reference against its target document — applied to
+the cell A4 supplied.
+
+**A10.1 — DEF-9 is recorded by three activities, not two.** Verified at PA-31, PA-32 and PA-33. The
+clause *"Same shape as the gap PA-32 and PA-33 record at **DEF-9** (#7126); tracked for the corpus at
+…"* is replaced by:
+
+```text
+Same shape as the gap PA-31, PA-32 and PA-33 each record at **DEF-9** (#7126); tracked for the corpus at #7812.
+```
+
+**A10.2 — the § 8.1 claim is true but one word from reading as false.** § 8.1's community-digest
+carve-out names "a **GitHub commenter**", so a reader checking the claim will think it covers the PA-7
+commenter. It does not: that carve-out is scoped by its own terms to handles and words appearing in the
+Privacy Policy § 4.4 automated digests. The clause *"and carries **no CLA carve-out** — so a non-signer
+commenter or an allowlist-bypass principal,"* is replaced by:
+
+```text
+and carries **no carve-out reaching this archive** — the nearest, the community-digest carve-out, is scoped by its own terms to handles and words appearing in the automated digests at Privacy Policy § 4.4 and does not reach the CLA evidence archive — so a non-signer commenter or an allowlist-bypass principal,
+```
+
+### A11 — corrections to the advisory's own record, with no register impact
+
+- **Ruling 5's § 4.7 bullet undercounts.** Four sites, not two — PA-17 Special-categories, PA-17
+  Lawful basis, PA-31 Special-categories, PA-33 Special-categories. The transcription above is left
+  intact; this entry governs.
+- **A4's rationale prose mis-attributes two line anchors.** It says PA-32 and PA-33 mint their `(h)`
+  cells at two anchors that in fact belong to PA-31 and PA-32; PA-33's is a third. Rationale only —
+  the cell text itself is corrected at A10.1.
+- **Both § 4.7 re-evaluation triggers in this file were wrong.** The operative frontmatter trigger
+  named two cells (PA-17 and PA-33) and has been corrected in place to name all four sites and to
+  cite #7815. The trigger inside the transcribed `re_evaluation_triggers` block named *PA-35's*
+  citation — the wrong activity entirely — and is left byte-identical as a record of what was said;
+  the frontmatter trigger is the operative one and governs.
+
+### Everything else stands unchanged
+
+Explicitly, so implementation can proceed on the originals: **Ruling 2's two §(c) replacement cells;
+Ruling 3's Lawful-basis cell as already amended by A1; Ruling 4's §(c) Categories-of-personal-data
+WIDENING block; A2's Categories-of-data-subjects WIDENING block; A3's CORPUS DIVERGENCE block**
+(placeholder substitution only) — no text change to any of them. Each was re-read for § 4.7
+references, PA-35 comparisons and cross-activity claims; there are none.
+
+**Placeholder guard, generalised.** No `#<…>` marker may land in either the register or this record:
+`grep -cE '#<[a-z0-9-]+>'` must return 0 over both. `#7812` substitutes for every `#<PR-B-issue>`,
+and #7813 / #7814 / #7815 for the rest.
+
+**Disposition: PROCEED-WITH-CHANGES.** The attestation is extended to cover A7–A11. Nothing here
+acquires a `docs/legal/**` edit — the register, this record and `compliance-posture.md` are all under
+`knowledge-base/`, so none of the five legal gates fire and PR B's class is unchanged. The standing
+caveat carries.
