@@ -49,6 +49,7 @@ AUTOFIX_PAIRS=(
   "claude-opus-4-6=claude-opus-5"
   "claude-sonnet-4-6=claude-sonnet-5"
   "claude-sonnet-4-5=claude-sonnet-5"
+  "claude-fable-5=claude-fable-5-1"
 )
 
 # SINGLE-HOP INVARIANT (fail-fast). A convergent map rewrites every stale id
@@ -78,6 +79,28 @@ autofix_from_re() {
   for p in "${AUTOFIX_PAIRS[@]}"; do out="${out:+$out|}${p%%=*}"; done
   printf '%s' "$out"
 }
+
+# RIGHT-BOUNDARY of a model id: the next char must not extend the id. Model ids
+# are [0-9A-Za-z-], so a bare alternation would match a PREFIX of a longer id.
+#
+# This is not hypothetical: `claude-fable-5` is a strict prefix of its own
+# successor `claude-fable-5-1` — the first pair in this table where that is
+# true (opus-4-8 -> opus-5 and sonnet-4-6 -> sonnet-5 share no prefix). The
+# `--fix` sed has always been anchored, but SELECTION was not, so a file
+# already sitting on `claude-fable-5-1` was picked as a hit, `--fix` reported
+# "fixed" while changing nothing, and `--detect` re-flagged it forever: the
+# permanently-red drift cron that auto-files issues it cannot fix — the same
+# failure mode the single-hop invariant above exists to prevent, reached by
+# prefix-shadowing instead of chaining. `assert_single_hop` does NOT catch it
+# ('claude-fable-5-1' is not itself a source id).
+#
+# Selection and rewriting MUST use this one boundary, or they can disagree
+# again: the sed cannot fix what only the grep considers stale.
+ID_BOUNDARY='([^0-9A-Za-z-]|$)'
+
+# Anchored matcher — the ONLY pattern that may decide "this file is stale".
+autofix_match_re() { printf '%s%s' "($(autofix_from_re))" "$ID_BOUNDARY"; }
+
 FLAG_ONLY_STALE_RE='claude-3[._-]|claude-(opus|sonnet|haiku)-[0-9.]+-20250[0-9]+'
 
 DELETION_GUARD=20   # abort --fix if any file would lose more than this many lines
@@ -100,7 +123,7 @@ EXCLUDE_RE='(/node_modules/|/\.git/|/\.next/|/test/|/__tests__/|/spike/|/archive
 # the failure mode #5100 exists to prevent.
 collect_config_hits() {
   local re out rc
-  re="$(autofix_from_re)"
+  re="$(autofix_match_re)"
   out="$(grep -rEl "$re" "$ROOT" \
     --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.next \
     --exclude-dir=test --exclude-dir=__tests__ --exclude-dir=spike --exclude-dir=archive \
@@ -155,9 +178,11 @@ if [[ "$MODE" == "fix" ]]; then
     cp "$f" "$tmp"
     for pair in "${AUTOFIX_PAIRS[@]}"; do
       from="${pair%%=*}"; to="${pair#*=}"
-      # anchored: preserve the trailing char so a longer/dated variant
-      # (e.g. claude-opus-4-7-20260101) is NOT corrupted by a prefix swap.
-      sed -i -E "s/${from}([^0-9A-Za-z-]|\$)/${to}\1/g" "$f"
+      # anchored on the SAME boundary as selection (ID_BOUNDARY): preserve the
+      # trailing char so a longer/dated variant (claude-opus-4-7-20260101) or a
+      # successor that extends the stale id (claude-fable-5-1) is NOT corrupted
+      # by a prefix swap.
+      sed -i -E "s/${from}${ID_BOUNDARY}/${to}\1/g" "$f"
     done
     after=$(wc -l < "$f")
     # deletion guard: a 1-for-1 ID swap must not change line count materially.
@@ -183,7 +208,10 @@ load_hits "  model-ID inventory"
 if [[ ${#hits[@]} -gt 0 ]]; then
   echo "  stale config model IDs found (mechanical same-tier swap):"
   for f in "${hits[@]}"; do
-    ids="$(grep -oE "$(autofix_from_re)" "$f" | sort -u | tr '\n' ' ')"
+    # Same anchored matcher as selection, then drop the boundary char the
+    # pattern had to capture (an end-of-line match captures nothing to drop),
+    # so the report names the id and not `claude-fable-5"`.
+    ids="$(grep -oE "$(autofix_match_re)" "$f" | sed -E 's/[^0-9A-Za-z-]+$//' | sort -u | tr '\n' ' ')"
     echo "    - $(rel "$f")  [${ids}]"
   done
   echo "  → run with --fix (each stale id → its current same-tier id), then open a CI-gated PR."
@@ -244,9 +272,39 @@ echo "[2b] pinned claude-code CLI knows the tier models (FLAG-ONLY)"
 # --model. This is invisible to the model-ID sweep, to tsc, and to the suite —
 # the argv is well-formed and the run succeeds. Grep the installed bundle when
 # present; absence of node_modules is UNKNOWN, never a pass.
+#
+# WHAT IS MEASURED: the INSTALLED tree, which is not necessarily the PIN. The
+# model table ships in the platform binary (@anthropic-ai/claude-code-linux-x64),
+# fetched by the stub's postinstall — the npm tarball for @anthropic-ai/claude-code
+# is a ~23 kB launcher that contains no model ids at all, so only an installed
+# (or separately unpacked platform) tree can answer this question.
+#
+# A stale node_modules therefore reports DRIFT against ids the PIN actually
+# knows. Observed 2026-09-03: node_modules held 2.1.142 while package.json
+# pinned 2.1.219, and this check reported `claude-opus-5` and `claude-sonnet-5`
+# ABSENT — both are present in 2.1.219. A false DRIFT here costs a needless
+# dependency bump; the same skew in the other direction (node_modules NEWER
+# than the pin) would report a false PASS, which is worse. So state the two
+# versions and refuse to call a mismatch a measurement of the pin.
+_cli_pinned="$(grep -oE '"@anthropic-ai/claude-code"[[:space:]]*:[[:space:]]*"[^"]+"' \
+  "$ROOT/apps/web-platform/package.json" 2>/dev/null | grep -oE '[0-9][^"]*' || true)"
+_cli_installed="$(grep -oE '"version"[[:space:]]*:[[:space:]]*"[^"]+"' \
+  "$ROOT/apps/web-platform/node_modules/@anthropic-ai/claude-code/package.json" 2>/dev/null \
+  | head -1 | grep -oE '[0-9][^"]*' || true)"
+if [[ -n "$_cli_pinned" && -n "$_cli_installed" && "$_cli_pinned" != "$_cli_installed" ]]; then
+  echo "    NOTE: measuring INSTALLED ${_cli_installed}, but package.json pins ${_cli_pinned}."
+  echo "          Findings below describe the installed tree, NOT the pin — reinstall before trusting them."
+elif [[ -n "$_cli_pinned" ]]; then
+  echo "    measuring installed tree @ ${_cli_pinned} (matches the package.json pin)."
+fi
 _cli_dir="$ROOT/apps/web-platform/node_modules/@anthropic-ai"
 if [[ -d "$_cli_dir" ]]; then
-  for _m in $(grep -ohE '"claude-(opus|sonnet|haiku)-[0-9a-z-]+"' \
+  # `fable` included: the alternation must cover every tier that can appear in
+  # the scanned registries, or the one model whose id the pin lacks is the one
+  # model never checked. (Fable reaches Soleur as the harness `model: fable`
+  # ALIAS today, so no fable literal is in these files yet — this closes the
+  # gap for the launch where one lands.)
+  for _m in $(grep -ohE '"claude-(opus|sonnet|haiku|fable)-[0-9a-z-]+"' \
                 "$ROOT/apps/web-platform/server/inngest/model-tiers.ts" \
                 "$ROOT/apps/web-platform/server/inngest/leader-prompts/constants.ts" 2>/dev/null \
               | tr -d '"' | sort -u); do

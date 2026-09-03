@@ -134,11 +134,19 @@ interface ModelPricing {
 // .model` is `AnthropicModelId` (sonnet|haiku), the only value flowing
 // through `MODEL_PRICING[…]`, so opus never reaches this lookup.
 export const MODEL_PRICING: Record<string, ModelPricing> = {
+  // Claude Sonnet 5: $2 input / $10 output / $0.20 cache-read / $2.50 5m cache-write.
+  // These were the "introductory" rates through 2026-08-31; #6942 deliberately
+  // held the row at the scheduled post-intro $3/$15 so it would become correct
+  // on 2026-09-01 without a second edit. That increase was CANCELLED — Anthropic
+  // now states $2/$10 is the standard price and the Sep-1 rise will not occur —
+  // so the row is corrected here (verified 2026-09-03 against
+  // https://platform.claude.com/docs/en/about-claude/pricing.md). Holding $3/$15
+  // over-attributes cost 50%, tripping the BYOK cap early.
   [SONNET_MODEL]: {
-    inputPerToken: 3 / 1_000_000,
-    outputPerToken: 15 / 1_000_000,
-    cacheReadPerToken: 0.3 / 1_000_000,
-    cacheCreatePerToken: 3.75 / 1_000_000,
+    inputPerToken: 2 / 1_000_000,
+    outputPerToken: 10 / 1_000_000,
+    cacheReadPerToken: 0.2 / 1_000_000,
+    cacheCreatePerToken: 2.5 / 1_000_000,
   },
   // Claude Haiku 4.5: $1 input / $5 output / $0.10 cache-read / $1.25 5m cache-write.
   [HAIKU_MODEL]: {

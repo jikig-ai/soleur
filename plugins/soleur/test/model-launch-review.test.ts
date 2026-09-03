@@ -16,13 +16,16 @@ const SKILL_DIR = resolve(REPO_ROOT, "plugins/soleur/skills/model-launch-review"
 const SKILL_MD = resolve(SKILL_DIR, "SKILL.md");
 const AUDIT_SH = resolve(SKILL_DIR, "scripts/audit-models.sh");
 
-// Current model landscape (2026-07). The auditor flags anything NOT in this set
-// that lives in a config-class path. Source of truth: claude-api skill table.
+// Current model landscape (2026-09). The auditor flags anything NOT in this set
+// that lives in a config-class path. Source of truth: claude-api skill table +
+// https://platform.claude.com/docs/en/about-claude/models/overview.md.
+// `claude-fable-5` moved OUT of this set at the Fable 5.1 launch — it is now a
+// source id (still served, but superseded in-tier by `claude-fable-5-1`).
 const CURRENT_IDS = [
   "claude-opus-5",
   "claude-sonnet-5",
   "claude-haiku-4-5-20251001",
-  "claude-fable-5",
+  "claude-fable-5-1",
 ];
 
 /** Parse AUTOFIX_PAIRS out of the script so tests are driven BY the table
@@ -280,6 +283,45 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     expect(r.status).toBe(78);
     expect(r.stderr).toContain("NON-CONVERGENT");
     rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  test("a stale id that is a PREFIX of its successor does not self-flag forever", () => {
+    // Fable 5.1 is the first launch where the stale id (`claude-fable-5`) is a
+    // strict prefix of its target (`claude-fable-5-1`). The --fix sed was
+    // always boundary-anchored, but SELECTION was a bare alternation, so a file
+    // already on the CURRENT id matched, --fix reported "fixed" while changing
+    // nothing, and --detect re-flagged it on every run: a permanently-red drift
+    // cron auto-filing issues it cannot fix. assert_single_hop does not catch
+    // this ('claude-fable-5-1' is not itself a source id), so pin it here.
+    //
+    // Derived from the pair table, not hardcoded — this must keep holding at
+    // the next launch that introduces a prefix-shadowed pair.
+    const prefixPairs = parseAutofixPairs().filter(([from, to]) =>
+      to.startsWith(from),
+    );
+    expect(
+      prefixPairs.length,
+      "expected at least one prefix-shadowed pair (claude-fable-5=claude-fable-5-1)",
+    ).toBeGreaterThan(0);
+
+    for (const [, to] of prefixPairs) {
+      const root = mkdtempSync(join(tmpdir(), "mlr-prefix-"));
+      const dir = join(root, "apps/web-platform/server/inngest/functions");
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, "cron-current.ts");
+      // Already on the CURRENT id — nothing to do.
+      writeFileSync(file, `export const M = "${to}";\n`);
+
+      expect(run(["--detect"], root).status, `${to} must read as clean`).toBe(0);
+
+      // And the rewriter must agree with the selector: no corruption into
+      // `${to}-1`, and the file converges rather than oscillating.
+      expect(run(["--fix"], root).status).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe(`export const M = "${to}";\n`);
+      expect(run(["--detect"], root).status).toBe(0);
+
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("Opus and Sonnet stale ids each map to their OWN tier target in one run", () => {

@@ -6,7 +6,7 @@ description: "This skill should be used when auditing the recurring per-Anthropi
 # Model-launch review
 
 `model-launch-review` runs the recurring per-Anthropic-model-release checklist. Each release
-(Opus 4.6 → 4.7 → 4.8 → Fable 5) recurs the same five-item audit. This skill **audits** all
+(Opus 4.6 → 4.7 → 4.8 → Fable 5 → Fable 5.1) recurs the same five-item audit. This skill **audits** all
 five, **auto-fixes** the one mechanical-bulk item (stale model-ID swaps) into a **CI-gated PR**
 under operator identity, and **flags** the rest for human sign-off. ADR-053 names this skill as
 the per-release re-pin trigger.
@@ -14,6 +14,9 @@ the per-release re-pin trigger.
 ## When to invoke
 
 - After a new Anthropic model ships (Opus/Sonnet/Haiku/Fable family bump).
+- When a dormant deferral's **date trigger** fires (e.g. #6942's 2026-09-01 pricing re-eval). The
+  `[3]` dormant-work query exists to surface these; a trigger firing is not the same as the
+  deferral's stated assumption holding — re-read the live source before acting on either.
 - When the `model-drift` issue filed by `rule-audit.yml`'s detection step appears.
 - Before relying on a model ID or pricing assumption that may have drifted.
 
@@ -67,6 +70,25 @@ Only item 1 is auto-applied. Items 2–5 are reported in the PR body for human s
    — the linux-x64 CLI is a compiled binary and a text-mode grep reports zero hits for
    EVERY id, a null result that reads exactly like a real one.
 
+   **`[2b]` measures `node_modules`, which is NOT the pin.** The check greps the installed
+   tree because the model table ships in the platform binary
+   (`@anthropic-ai/claude-code-linux-x64`) — the `@anthropic-ai/claude-code` npm tarball is a
+   ~23 kB launcher stub with no model ids in it, so packing that tarball to "check the pin"
+   returns ABSENT for *every* id including known-good ones. A stale `node_modules` therefore
+   reports DRIFT against ids the pin knows perfectly well (2026-09-03: node_modules held
+   2.1.142 while package.json pinned 2.1.219, and `[2b]` reported `claude-opus-5` and
+   `claude-sonnet-5` ABSENT — both are present in 2.1.219). The script now prints both
+   versions and refuses to describe a mismatch as a measurement of the pin; to actually test
+   a candidate version, unpack `@anthropic-ai/claude-code-linux-x64@<version>` and grep that.
+
+   **The 3-day release-age floor can make the required bump un-shippable.** If the only
+   versions carrying the new id are <3 days old, `apps/web-platform/.npmrc`'s
+   `min-release-age=3` (#1174) rejects them with `ETARGET … with a date before <date>`, and
+   `--min-release-age=0` does not rescue it: CI's `lockfile-sync` job re-runs
+   `npm install --package-lock-only` *without* the override, so the PR is red no matter what
+   the local regen produced. Either wait for the version to age past the floor, or land the
+   bump in its own PR — do not weaken the floor to get a launch sweep green.
+
 3. **Auto-fix** model-ID swaps (mechanical; allowlist + deletion guard; never `git add -A`):
 
    ```bash
@@ -113,6 +135,20 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
 
 - Resolve every model ID / pin SHA / release tag via `gh api` or official docs in-pass — never
   from memory (2026-04-18 / 2026-02-22 learnings; SHA-from-memory errors recur).
+- **A stale id that is a PREFIX of its successor needs a boundary, not just a single hop.**
+  `claude-fable-5` → `claude-fable-5-1` is the first such pair (`opus-4-8`→`opus-5` and
+  `sonnet-4-6`→`sonnet-5` share no prefix). `assert_single_hop` does **not** catch it — the
+  target is not itself a source id — so it passes while a file already on the CURRENT id gets
+  selected as stale, `--fix` prints "fixed" having changed nothing, and `--detect` re-flags it
+  every run: the same permanently-red drift cron the single-hop invariant exists to prevent,
+  reached by prefix-shadowing. Selection and rewriting must share one right-boundary
+  (`ID_BOUNDARY` in `audit-models.sh`); a bare alternation in either half re-opens it.
+  Pinned by `model-launch-review.test.ts` ("a stale id that is a PREFIX of its successor…"),
+  which derives the case from the pair table rather than hardcoding fable.
+- **A dormant deferral's stated assumption can expire along with its trigger.** #6942 pinned
+  the sonnet pricing row to the *scheduled* post-intro $3/$15 so it would become correct on
+  2026-09-01 with no second edit; Anthropic then cancelled that increase. Re-read the live
+  source when the trigger fires — the deferral records what was true when it was written.
 - Inventory by independent grep, not by a checklist's file list (inventories undercount).
 - **When the launch migration bumps the Anthropic SDK toolchain in
   `apps/web-platform/package.json` (`@anthropic-ai/claude-code`,
