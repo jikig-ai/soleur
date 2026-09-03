@@ -211,7 +211,16 @@ if [[ ${#hits[@]} -gt 0 ]]; then
     # Same anchored matcher as selection, then drop the boundary char the
     # pattern had to capture (an end-of-line match captures nothing to drop),
     # so the report names the id and not `claude-fable-5"`.
-    ids="$(grep -oE "$(autofix_match_re)" "$f" | sed -E 's/[^0-9A-Za-z-]+$//' | sort -u | tr '\n' ' ')"
+    # `set -o pipefail` is in force, so a no-match here kills the script with no
+    # message. That silence is the wrong failure: the file is in `hits` BECAUSE
+    # the selector matched it, so an empty re-scan means selection and display
+    # have diverged — the exact class ID_BOUNDARY exists to prevent — and it
+    # must be named rather than mistaken for an ordinary abort.
+    if ! ids="$(grep -oE "$(autofix_match_re)" "$f" | sed -E 's/[^0-9A-Za-z-]+$//' | sort -u | tr '\n' ' ')"; then
+      echo "audit-models: INTERNAL — selector matched $(rel "$f") but the display re-scan found no id." >&2
+      echo "  selection and display disagree; they must share autofix_match_re." >&2
+      exit 70
+    fi
     echo "    - $(rel "$f")  [${ids}]"
   done
   echo "  → run with --fix (each stale id → its current same-tier id), then open a CI-gated PR."
