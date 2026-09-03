@@ -260,7 +260,14 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # ADDS one floor-bearing file to a deferred directory and its promotion removes it again,
 # so the ledger returns to MAX_DEFERRED rather than growing. An earlier revision of this
 # comment said "48 -> 47", which was true of my branch alone and not of the merge.
-PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh)$'
+# `.claude/hooks/monitor-supersede-guard.test.sh` added by #7760 — the
+# monitor-lifetime hook pair. Promoted rather than deferred: its floor was
+# previously written `-ne`, a shape this sweep does not match, so the suite was
+# invisible here on two counts (shape, and `.claude/hooks/` not being in
+# COVERED_DIRS). Rewriting the floor as `-lt` fixed the first; this line fixes
+# the second for this file. The directory-wide fix needs a per-scope ratchet
+# first — see #7585.
+PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"

@@ -1,187 +1,170 @@
 #!/usr/bin/env bash
-# PreToolUse hook on Monitor|TaskStop.
-# REPORTS — never blocks — arming a Monitor on a target this session already
-# armed one for and never stopped.
+# PreToolUse hook on Monitor.
+# REPORTS — never blocks — arming a Monitor on a target this session is still
+# watching, and names the task ids to stop.
 #
-# Source rule: hr-monitor-not-run-in-background-for-polling (AGENTS.rules.md) —
-# that rule governs WHICH tool polls. This hook governs the tool's LIFETIME,
-# which nothing enforced: a monitor is a resource, and re-scoping what you watch
-# means stopping the old watcher, not layering a new one beside it.
+# Source rule: hr-monitor-not-run-in-background-for-polling (AGENTS.rules.md)
+# governs WHICH tool polls. This governs the tool's LIFETIME, which nothing
+# enforced: a monitor is a resource, and re-scoping what you watch means
+# stopping the old watcher, not layering a new one beside it.
 #
-# Why: 2026-09-02 — a single session ran THREE monitors against `gh pr checks
-# 7753` simultaneously. Each time the scope changed (CI -> infra+CI -> CI) a new
-# monitor was armed and the superseded one was left running. None self-terminated,
-# because each only exits when the polled state goes terminal — which had not
-# happened yet. Three API calls per 45s interval against one endpoint, and three
-# chances to report the same result. The operator noticed; no gate did.
+# Why: 2026-09-02 — one session ran THREE monitors against `gh pr checks 7753`
+# at once. Each re-scope (CI -> infra+CI -> CI) armed a new monitor and left the
+# previous running; none self-terminated, because each exits only when the polled
+# state goes terminal. The operator noticed; no gate did. (First-person account —
+# no ledger entry corroborates it, necessarily, since this is the hook that would
+# have recorded one.)
 #
-# WHY THIS REPORTS INSTEAD OF BLOCKING — the load-bearing part, and the thing to
-# re-read before anyone "restores" the deny:
+# LIVENESS IS MEASURED, NOT INFERRED — and this is the part to re-read before
+# changing anything. An earlier revision asserted a hook "cannot observe a monitor
+# finishing" and inferred liveness from the clock instead. That was false, and it
+# was asserted after testing two of three routes:
 #
-# The gate a deny needs is "is the prior monitor still running". This hook cannot
-# answer that, by either available route, and both were measured on 2026-09-03:
+#   1. Clock inference — "still inside its declared timeout_ms". Rejected: a
+#      monitor usually ends by early exit or harness reap long before its window,
+#      so this degrades into "armed recently" and fires mostly on dead monitors.
+#   2. Process table — `pgrep -f <signature>`. Rejected, and instructively: the
+#      agent's own Bash commands carry the PR number, so the probe matches the
+#      shell asking the question. A control probe for a signature with NO monitor
+#      matched its own shell.
+#   3. The transcript. `transcript_path` is in the hook payload; a Monitor's
+#      PostToolUse response carries `toolUseResult.taskId`; and a task's end is
+#      recorded as a `<status>completed</status>` task-notification keyed to that
+#      id. THIS ONE WORKS, and is what the hook uses.
 #
-#   1. INFERRED from the clock. A hook sees arms and TaskStops, never completions,
-#      so "inside its declared timeout" was used as a proxy. Monitors mostly end
-#      by early exit (their loop breaks on a terminal state) or by harness reap —
-#      neither writes a stop record. The proxy therefore decays into "armed
-#      recently", and the gate denied on recency while claiming liveness. A 50%
-#      fraction was added to blunt it; that only made the wrong predicate quieter.
-#      Concretely it denied ship Phase 7's own fix-and-retry path, which re-polls
-#      one PR after pushing a fix — same session, same signature, same window.
+# Route 3 has the same contamination trap as route 2 and it must be filtered
+# structurally: the transcript also contains the AGENT'S OWN command text, so a
+# naive `grep -F "<task-id>X</task-id>" | grep completed` reports a live monitor
+# as finished the moment the agent greps for it. Verified — the filter below
+# excludes `.type == "assistant"` records for exactly this reason, and a live
+# task read as DEAD without it.
 #
-#   2. MEASURED from the process table. `pgrep -f <signature>` looks decisive and
-#      is not: the agent's own Bash calls routinely carry the PR number, so the
-#      probe matches the very command asking the question. Verified — a control
-#      probe for a signature with NO monitor matched its own shell. Liveness by
-#      process inspection is contaminated by ordinary session activity.
+# WHY THIS STILL DOES NOT DENY, given liveness now works: the transcript's record
+# shape is an undocumented harness internal with no compatibility contract. If it
+# changes, every task reads NOT-DEAD — which for a report means extra noise, and
+# for a deny would mean blocking every re-arm in the repo. Fail-open is only
+# available at the report tier. The cost asymmetry says the same thing: a false
+# notice costs a paragraph, a false deny cost a ship run.
 #
-# A gate whose central predicate is unmeasurable must not deny. And it does not
-# need to: the audience is an agent that reads tool output, so a message at the
-# moment of the arm is as effective as a block, and only the block can wedge the
-# pipeline. False notice costs one paragraph; false deny cost a ship run.
-#
-# What survives is honest and still useful: the notice names the prior arm, its
-# age, and the remedy, at exactly the moment the mistake is made.
-#
-# Detection (AND-gated; anything missing falls through to silence):
+# Detection (anything missing falls through to silence):
 #   tool_name == Monitor
-#   AND a TARGET SIGNATURE can be extracted from .tool_input.command / .ws.url
-#   AND this session already armed a monitor with the SAME signature
-#   AND that arm is still inside its own declared timeout_ms  (recency, not liveness)
-#   AND no TaskStop has been observed since that arm
-#
-# Signature is deliberately narrow — a PR/issue number, a workflow name, an
-# absolute path, or a ws:// URL. Two monitors watching genuinely different things
-# never collide, and a command with no extractable target is never reported.
-#
-# There is no override marker. Nothing blocks, so nothing needs escaping; case 20
-# pins that the hook emits no permissionDecision on any input shape.
+#   AND a signature is extractable (lib/monitor-sig.sh; its misses are listed there)
+#   AND this session has arms on that signature
+#   AND those arms are neither stopped (exact, by task id) nor observed complete
 #
 # Hook stdin: JSON payload with session_id + tool_name + tool_input.
-# Hook stdout: JSON {systemMessage: "..."} when reporting; silent otherwise.
+# Hook stdout: JSON {hookSpecificOutput:{additionalContext}, systemMessage} when
+#   reporting; silent otherwise. BOTH fields deliberately: `additionalContext` is
+#   the channel this repo has verified reaches the model (phase-surface-hint.sh),
+#   while `systemMessage` is documented upstream as model-visible and in-repo as
+#   operator-visible. The two sources disagree; emitting both is correct under
+#   either reading and costs three lines. stderr is NOT a channel here — Claude
+#   Code discards a PreToolUse hook's stderr on exit 0.
 # Hook exit code: 0 always.
-
 set -uo pipefail
+
+_HOOK_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)" || exit 0
+[ -f "$_HOOK_DIR/lib/monitor-sig.sh" ] || exit 0
+# shellcheck source=/dev/null
+. "$_HOOK_DIR/lib/monitor-sig.sh" || exit 0
+export SOLEUR_HOOK_NAME="monitor-supersede-guard"
+# Sourced INSIDE emit(), not at the top: measured, the top-level source costs 8
+# processes and ~19ms on every invocation, and emit() is reached on the
+# reporting path only — well under 1% of calls.
+emit() {
+  if [ -f "$_HOOK_DIR/lib/incidents.sh" ]; then
+    # shellcheck source=/dev/null
+    . "$_HOOK_DIR/lib/incidents.sh" || return 0
+  fi
+  if command -v emit_incident >/dev/null 2>&1; then emit_incident "$@" || true; fi
+}
 
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 LEDGER="${SOLEUR_MONITOR_LEDGER:-$PROJECT_DIR/.claude/.monitor-arms.jsonl}"
-
-if [ -f "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" ]; then
-  # shellcheck disable=SC1091
-  . "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" || true
-fi
-emit() {
-  if command -v emit_incident >/dev/null 2>&1; then emit_incident "$@" || true; fi
-}
 
 INPUT="$(cat 2>/dev/null || true)"
 [ -n "$INPUT" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
 TOOL=$(printf '%s' "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null) || exit 0
-SESSION=$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null) || exit 0
-NOW=$(date +%s 2>/dev/null) || exit 0
-
-mkdir -p "$(dirname "$LEDGER")" 2>/dev/null || exit 0
-
-# A TaskStop clears the "still layered" condition for this session. It cannot be
-# correlated to a specific signature (the arm predates the task id), so it clears
-# broadly — deliberately, since over-clearing only ever allows.
-if [ "$TOOL" = "TaskStop" ]; then
-  printf '{"event":"stop","session":"%s","ts":%s}\n' "$SESSION" "$NOW" >> "$LEDGER" 2>/dev/null || true
-  exit 0
-fi
-
 [ "$TOOL" = "Monitor" ] || exit 0
+SESSION=$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null) || exit 0
+TRANSCRIPT=$(printf '%s' "$INPUT" | jq -r 'if ((.transcript_path? // null)|type)=="string" then .transcript_path else "" end' 2>/dev/null) || TRANSCRIPT=""
+NOW=$(date +%s 2>/dev/null) || exit 0
+case "$NOW" in ''|*[!0-9]*) exit 0 ;; esac
 
-CMD=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // ""' 2>/dev/null) || exit 0
-WSURL=$(printf '%s' "$INPUT" | jq -r '.tool_input.ws.url // ""' 2>/dev/null) || true
-# `tr -d '\n\t'` is a MESSAGE normaliser, not a safety fix, and the distinction is
-# load-bearing for anyone re-testing this line. The crash it looks like it prevents
-# is prevented by `head -1` at the READ site instead: this value reaches the ledger
-# through `jq -nc --arg d`, which escapes a newline to an in-string `\n` and emits a
-# valid single-line record either way. Measured — replacing this `tr` with `cat`
-# leaves the suite green (an equivalent mutant), while reverting the read-side
-# `head -1` reddens case 19. What it buys is the deny TEXT: without it a multi-line
-# description renders as its first line only, because `head -1` is what truncates.
-DESC=$(printf '%s' "$INPUT" | jq -r '.tool_input.description // ""' 2>/dev/null | tr -d '\n\t' | cut -c1-200) || true
-TIMEOUT_MS=$(printf '%s' "$INPUT" | jq -r '.tool_input.timeout_ms // 300000' 2>/dev/null) || TIMEOUT_MS=300000
-PERSISTENT=$(printf '%s' "$INPUT" | jq -r '.tool_input.persistent // false' 2>/dev/null) || PERSISTENT=false
+SIG="$(monitor_sig "$INPUT")"
+[ -n "$SIG" ] || exit 0
+[ -r "$LEDGER" ] || exit 0
 
-# A persistent monitor has no timeout; treat its window as the max Monitor ceiling
-# so it ages out rather than blocking this session forever.
-case "$TIMEOUT_MS" in ''|*[!0-9]*) TIMEOUT_MS=300000 ;; esac
-[ "$PERSISTENT" = "true" ] && TIMEOUT_MS=3600000
-WINDOW_S=$(( TIMEOUT_MS / 1000 ))
+# ---- read the ledger -------------------------------------------------------
+# `fromjson? | objects | select((.ts|type)=="number")` — all three filters are
+# load-bearing and each was measured. `fromjson?` drops unparseable lines; that
+# alone was the previous version, and it let a bare `12345` through pass 1 to
+# kill pass 2 with "Cannot index number with string", disarming the gate
+# PERMANENTLY and silently. `objects` drops scalars and arrays; the ts type test
+# drops a string timestamp, which otherwise poisons `max` and makes every
+# comparison false. Each malformed row now costs one record, which is what the
+# comment here used to claim without covering.
+# `tail -n 2000` is what removes the growth term: measured, an uncapped read is
+# linear in file size (12s and 841MB RSS at 1M lines) while a capped one is flat
+# at ~20ms from 10k lines to 1M. Rotation alone would still leave ~370ms at the
+# 5MB threshold. Sound, not just faster: the query is session-scoped, a monitor
+# cannot outlive its session, and the busiest observed session wrote 34 rows — so
+# 2000 is ~60x the worst case, and any stop that clears an in-window arm is
+# physically later than it in an append-only file, hence also inside the tail.
+ROWS=$(tail -n 2000 "$LEDGER" 2>/dev/null | jq -R 'fromjson? | objects | select((.ts? | type) == "number")' 2>/dev/null) || exit 0
+[ -n "$ROWS" ] || exit 0
 
-# ---- signature extraction (first match wins; no match => allow) --------------
-SIG=""
-if [ -n "$WSURL" ]; then
-  SIG="ws:$WSURL"
-else
-  # A PR / issue number under a gh subcommand that takes one.
-  n=$(printf '%s' "$CMD" | grep -oE 'gh (pr|issue) [a-z-]+ [0-9]+' | grep -oE '[0-9]+$' | head -1)
-  if [ -n "$n" ]; then
-    SIG="pr:$n"
-  else
-    w=$(printf '%s' "$CMD" | grep -oE '\-\-workflow[= ][A-Za-z0-9._-]+' | head -1 | sed 's/.*[= ]//')
-    if [ -n "$w" ]; then
-      SIG="workflow:$w"
-    else
-      p=$(printf '%s' "$CMD" | grep -oE '/(var/tmp|tmp)/[A-Za-z0-9._/-]+' | head -1)
-      [ -n "$p" ] && SIG="path:$p"
-    fi
-  fi
-fi
+STOPPED=$(printf '%s' "$ROWS" | jq -s -r --arg s "$SESSION" \
+  '[ .[] | select(.event=="stop" and .session==$s) | (.task? // "") | select(. != "") ] | unique | join(" ")' 2>/dev/null) || STOPPED=""
 
-if [ -z "$SIG" ]; then
-  exit 0
-fi
+CANDIDATES=$(printf '%s' "$ROWS" | jq -s -r --arg s "$SESSION" --arg sig "$SIG" --argjson now "$NOW" '
+  [ .[]
+    | select(.event=="arm" and .session==$s and .sig==$sig)
+    # An arm with no task id predates the recorder or lost its response; fall
+    # back to the old recency test for those rather than dropping them.
+    | select((.task? // "") != "" or (.ts + (.window // 300) > $now))
+  ] | .[] | "\(.ts)\t\(.task // "")\t\(.desc // "")"' 2>/dev/null) || exit 0
+[ -n "$CANDIDATES" ] || exit 0
 
-# ---- is there a RECENT prior arm on this signature? --------------------------
-PRIOR=""
-if [ -r "$LEDGER" ]; then
-  # `-R 'fromjson? // empty'` reads line-at-a-time and DROPS unparseable lines
-  # instead of failing the whole read. A torn or hand-edited line then costs one
-  # record, not the entire gate.
-  PRIOR=$(jq -R 'fromjson? // empty' "$LEDGER" 2>/dev/null | jq -s --arg s "$SESSION" --arg sig "$SIG" --argjson now "$NOW" -r '
-    ( [ .[] | select(.event == "stop" and .session == $s) | .ts ] | max // 0 ) as $laststop
-    | [ .[]
-        | select(.event == "arm" and .session == $s and .sig == $sig)
-        | select(.ts + (.window // 300) > $now)
-        | select(.ts > $laststop)
-      ] | last // empty
-    | "\(.ts)\t\(.desc)"
-  ') || PRIOR=""
-fi
+# ---- liveness: is this task OBSERVED complete? -----------------------------
+task_is_complete() {   # $1 = task id; rc 0 => observed complete
+  [ -n "${1:-}" ] || return 1
+  [ -n "$TRANSCRIPT" ] && [ -r "$TRANSCRIPT" ] || return 1
+  grep -F "<task-id>$1</task-id>" "$TRANSCRIPT" 2>/dev/null \
+    | jq -r 'select((.type? // "") != "assistant")
+             | (.content // (.message.content | if type=="string" then . else ([.[]? | .text? // empty] | join(" ")) end) // "")
+             | tostring' 2>/dev/null \
+    | grep -q '<status>completed</status>'
+}
 
-if [ -n "$PRIOR" ]; then
-  prior_ts=$(printf '%s' "$PRIOR" | head -1 | cut -f1)
-  prior_desc=$(printf '%s' "$PRIOR" | head -1 | cut -f2-)
-  # A non-numeric ts means the record is unusable; say nothing rather than abort.
-  case "$prior_ts" in ''|*[!0-9]*) prior_ts="" ;; esac
-  if [ -n "$prior_ts" ]; then
-    age=$(( NOW - prior_ts ))
-    emit monitor-supersede warn "recent prior monitor on $SIG" "$CMD" 2>/dev/null || true
-    # `systemMessage` is the exit-0 channel: Claude Code DISCARDS a PreToolUse
-    # hook's stderr when it allows, so a stderr-only notice reaches nobody.
-    # Same reasoning as pre-merge-auto-close-scan.sh's `allow_exit`.
-    jq -n --arg sig "$SIG" --arg d "$prior_desc" --arg age "$age" '
-      { systemMessage: (
-          "monitor-supersede: this session armed a monitor on " + $sig + " " + $age +
-          "s ago — \"" + $d + "\" — and never stopped it.\n" +
-          "If it is still running, two watchers are now on one target — for a poll " +
-          "loop that is duplicate requests every interval, for a ws:// stream a " +
-          "second subscription — and two reports of the same result. " +
-          "TaskStop the prior one unless it has already returned.\n" +
-          "(This hook cannot see a monitor finish, so it reports the arm, not a fault.)"
-        ) }' 2>/dev/null || true
-  fi
-fi
+LIVE_N=0
+LIVE_LIST=""
+while IFS=$'\t' read -r a_ts a_task a_desc; do
+  [ -n "${a_ts:-}" ] || continue
+  case " $STOPPED " in *" $a_task "*) continue ;; esac
+  task_is_complete "$a_task" && continue
+  age=$(( NOW - a_ts ))
+  LIVE_N=$(( LIVE_N + 1 ))
+  LIVE_LIST="${LIVE_LIST}  - ${a_task:-(no task id)} — \"${a_desc}\" (armed ${age}s ago)"$'\n'
+done <<EOF
+$CANDIDATES
+EOF
 
-# ---- allow, and record the arm ----------------------------------------------
-jq -nc --arg s "$SESSION" --arg sig "$SIG" --arg d "$DESC" \
-       --argjson ts "$NOW" --argjson w "$WINDOW_S" \
-  '{event:"arm", session:$s, sig:$sig, desc:$d, ts:$ts, window:$w}' >> "$LEDGER" 2>/dev/null || true
+[ "$LIVE_N" -gt 0 ] || exit 0
+
+emit monitor-supersede warn "still-live monitor on $SIG" "$SIG" 2>/dev/null || true
+
+MSG="monitor-supersede: this session has ${LIVE_N} monitor(s) still watching ${SIG}:
+${LIVE_LIST}Arming another means duplicate work on one target — for a poll loop, duplicate
+requests every interval; for a ws:// stream, a second subscription — and two
+reports of the same result. TaskStop the one(s) above you are replacing.
+(Liveness is read from the transcript: stopped and completed monitors are
+already excluded, so every task listed was still running when this was written.)"
+
+jq -n --arg m "$MSG" '{
+  hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: $m },
+  systemMessage: $m
+}' 2>/dev/null || true
 exit 0
