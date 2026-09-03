@@ -497,6 +497,17 @@ jobs:
         # `apps/web-platform/infra/.terraform.lock.hcl`.
         run: terraform init -input=false -lockfile=readonly
 
+      # The pages_apex record address in the list below is PRE-ADDED AT PR3
+      # and is INERT until PR4 declares that resource — a -target for an address not in
+      # configuration is a no-op. It costs nothing now and closes the worst failure this
+      # migration has: if PR4 lands dns.tf WITHOUT it, the targeted apply plans the four
+      # cloudflare_record.github_pages deletes and never plans the CNAME create — a
+      # permanent NXDOMAIN on an HSTS-preloaded apex, the top row of the plan's own risk
+      # table. Nothing mechanically forces it at PR4 (per R9 neither the target-parity
+      # suite nor the destroy-guard counter can see these addresses), so it is added by
+      # the PR that had no reason to forget it. Do NOT put comments inside the
+      # backslash-continued -target list: a `#` line there makes the next line a command
+      # name (shellcheck SC2215).
       - name: Terraform plan (allow-list, non-SSH resources only)
         id: plan
         working-directory: ${{ env.INFRA_DIR }}
@@ -593,6 +604,7 @@ jobs:
               -target=cloudflare_pages_project.docs \
               -target=cloudflare_pages_domain.apex \
               -target=cloudflare_pages_domain.www \
+              -target=cloudflare_record.pages_apex \
               -target=github_actions_secret.cloudflare_api_token_pages \
               -target=github_actions_secret.cloudflare_account_id_pages \
               -target=cloudflare_record.buttondown_ns1 \
@@ -882,6 +894,40 @@ jobs:
       # times from one runner colo samples ONE sticky binding N times, not a
       # distribution. (b) asserts an INVARIANT (the route serves), which is
       # colo-independent and needs no control arm.
+      # HYPOTHESIS Z, MEASURED RATHER THAN ASSERTED (ADR-194 PR3).
+      #
+      # cf-pages.tf said the branch of Z "is measured AFTER this applies, by
+      # apex-origin-probe.sh". Nothing invoked it: the probe was wired to no
+      # workflow, and deploy-docs.yml's build-identity probes do not fire on an
+      # infra-only merge (their paths do not match). So under Z-true with
+      # content-identical origins, the apex origin could move and NOTHING would
+      # observe it — the project's first datum on Z depended on a human
+      # remembering to type a command. This step is that measurement.
+      #
+      # REPORTING-ONLY, deliberately. Both verdicts are legitimate at this stage:
+      # SERVING-FROM-GITHUB-PAGES means Z is false and the record swap (PR4) is
+      # what moves the origin; SERVING-FROM-CLOUDFLARE-PAGES means Z holds and
+      # attachment already moved it. Neither is a failure — the failure mode this
+      # step exists to end is having no record at all. UNREACHABLE is the one
+      # result worth alarming on, and it exits non-zero into the summary.
+      #
+      # `if: always()` so a failed apply still records where the apex is pointing,
+      # which is exactly when you most want to know.
+      - name: Measure the apex origin (ADR-194 Hypothesis Z)
+        if: always()
+        run: |
+          set -uo pipefail
+          rc=0
+          out="$(bash apps/web-platform/infra/apex-origin-probe.sh 2>&1)" || rc=$?
+          printf '%s\n' "$out"
+          case "$rc" in
+            0) echo "- apex origin after this apply: \`${out}\`" >> "$GITHUB_STEP_SUMMARY" ;;
+            2) echo "::warning::apex origin probe could not reach the site: ${out}"
+               echo "- apex origin after this apply: **UNREACHABLE** — could not check" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::warning::apex origin probe returned an unmapped status ${rc}"
+               echo "- apex origin after this apply: **UNMAPPED rc=${rc}**" >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+
       - name: Verify tunnel ingress origins are live and origin-relative
         if: success()
         working-directory: ${{ env.INFRA_DIR }}

@@ -67,8 +67,29 @@ resource "cloudflare_pages_project" "docs" {
 # depends on the answer.
 #
 # STILL NOT THE CUTOVER. dns.tf is untouched by this PR: the apex A records
-# still point at GitHub Pages. Reverting this PR removes exactly these two
-# resources and nothing else.
+# still point at GitHub Pages.
+#
+# ‼️ REVERTING THIS PR IS TWO STEPS, AND A PLAIN `git revert` IS A NO-OP.
+#
+# A plain revert removes the two `resource` blocks AND the two matching
+# `-target=` lines from apply-web-platform-infra.yml in one commit. A targeted
+# plan is filtered to `T ∪ deps(T)`, so a state-only orphan whose address
+# matches no `-target` is excluded entirely: the destroy is never planned,
+# `destroy_count` stays 0, no `[ack-destroy]` is demanded — and both custom
+# domains stay attached at Cloudflare and stay in tfstate. The apply goes green
+# having done nothing, which is the worst possible shape for a rollback.
+#
+# This is the mechanism the plan already documents for the sibling resource
+# ("`-target=cloudflare_record.github_pages` must be RETAINED in the allow-list,
+# not removed"). It was applied to PR4's record and not to PR3's own resources —
+# the ones whose entire reason for living in a separate PR is revertability.
+#
+#   Step A — revert the two `resource` blocks ONLY. Leave both `-target=` lines
+#            in place. That apply plans `2 to destroy` and therefore needs
+#            `[ack-destroy]` on its own line in the squash BODY.
+#   Step B — a follow-up PR drops the two `-target=` lines once state is clean.
+#
+# The runbook's rollback section carries the same two-step shape.
 
 resource "cloudflare_pages_domain" "apex" {
   provider     = cloudflare.pages
