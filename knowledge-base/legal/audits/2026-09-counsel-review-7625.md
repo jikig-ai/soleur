@@ -542,10 +542,13 @@ permitted a full semantic rewrite of any other activity's `Special categories` o
 The criterion has been strengthened to be genuinely PA-7-scoped, and the ruling is made on the merits
 rather than on the false constraint.
 
-*The merits.* The § 4.7 clause at PA-17 is **the implementation of a prior counsel recommendation** —
-`knowledge-base/legal/audits/2026-05-counsel-review-4558.md` finding B2 recommended cross-referencing
-the § 4.7 prohibition and `redactGithubSourcedText` as the active control. Striking it reverses that
-recommendation. At PA-17's Special-categories cell, removing § 4.7 leaves `None by design.` standing on
+*The merits.* **[Provenance corrected at implementation review — see A12; the ruling is unchanged and
+its surviving ground is the stronger one.]** The § 4.7 clause at PA-17's **Lawful basis** cell landed
+on 2026-05-28 in commit `c22598015`, the counsel-review PR for
+`knowledge-base/legal/audits/2026-05-counsel-review-4558.md` itself, as part of the Art. 6(1)(f)
+balancing test that review attested and recorded as *"(ii) update PA-17 inline balancing test —
+applied"*. Striking it therefore re-opens an attested balancing limb. At PA-17's Special-categories
+cell, removing § 4.7 leaves `None by design.` standing on
 nothing, since the same cell already concedes that `redactGithubSourcedText` does not claim to scrub
 free-text Art. 9 disclosures and the #7100 NARROWING already withdrew the display-only claim — a fresh
 Art. 9 determination, on a different activity and a different population (third-party contributors to a
@@ -691,3 +694,36 @@ and #7813 / #7814 / #7815 for the rest.
 acquires a `docs/legal/**` edit — the register, this record and `compliance-posture.md` are all under
 `knowledge-base/`, so none of the five legal gates fire and PR B's class is unchanged. The standing
 caveat carries.
+
+### A12 — provenance correction to A7.1, found at implementation review (2026-09-04)
+
+A7.1 asserted that the AUP § 4.7 clause at PA-17 is "the implementation of a prior counsel
+recommendation", citing finding B2 of `2026-05-counsel-review-4558.md`. **Verified against git
+history at implementation review; the claim is wrong in both of its parts, and the ruling it
+supported is unchanged.**
+
+| Site | § 4.7 clause added | Commit | Relative to counsel review 4558 (2026-05-28) |
+|---|---|---|---|
+| PA-17 `Special categories (Art. 9 / 10)` | 2026-05-19 | `5bc14c7f9` (a feature PR) | **predates it by nine days** |
+| PA-17 `Lawful basis` | 2026-05-28 | `c22598015` — the counsel-review's **own** PR | contemporaneous, inside the attested balancing test |
+
+And finding B2 was not implemented at all: that review's discharge records it as *"Non-blocking items
+(Artifact 5 copy refinement; B2 AUP cross-reference) **deferred to the legal-scaffolding track**"*. So
+neither citation implements B2, and the Special-categories citation could not have — it already
+existed when the recommendation was written.
+
+**What survives, and it is the stronger ground.** A7.1's *other* stated reason is verified: the
+Lawful-basis clause landed as part of the Art. 6(1)(f) balancing test that review attested, recorded
+in its own text as *"(ii) update PA-17 inline balancing test — applied"*. Striking it therefore
+re-opens **an attested balancing limb** — a firmer objection than reversing a non-blocking
+recommendation that was deferred and never carried out. The Special-categories half rests on its own
+independent ground, also unchanged: remove § 4.7 and `None by design.` stands on nothing.
+
+**Disposition unchanged: FILE, do not inline** (#7815). The correction strengthens Part 2's framing
+and weakens nothing. #7815's body is corrected to match.
+
+**How it was found, since it bears on the class.** A history-verification pass checked three dated
+claims in this record. Two of its three findings were **false positives** — it read the register's
+`(#7100)` amendment citations as pull-request numbers and compared them against PR #7110, which
+closed issue #7100; this register cites **issues** throughout, so those citations were correct. The
+third was real. A finding is a hypothesis until its evidence is re-derived, in both directions.
