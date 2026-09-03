@@ -173,7 +173,7 @@ run_flip() {
       CUTOVER_VERIFY_WINDOW_S=0 \
       CUTOVER_VERIFY_INTERVAL_S=0 \
       ${extra[@]+"${extra[@]}"} \
-      bash "$TARGET" >/dev/null 2>&1 || rc=$?
+      bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
 trace_csv() { paste -sd, "$TRACE" 2>/dev/null || true; }

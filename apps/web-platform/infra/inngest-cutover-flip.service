@@ -44,6 +44,38 @@ TimeoutStartSec=420
 # server/heartbeat units. HOME=/root is set so the Doppler CLI's os.UserHomeDir() init
 # does not fail with "$HOME is not defined" (the reason the deploy-user units set User=).
 Environment=HOME=/root
+# SANDBOXING (#7761). This unit runs as root and wraps `doppler run`, and it was the only
+# root-doppler unit in the repo with no sandboxing at all. The shape converges on
+# git-data-gc.service:57-66, which this unit had previously copied only the HOME= line from.
+#
+# ProtectHome is deliberately NOT set: git-data-gc.service:63-64 records that it masks /root
+# inside the unit's namespace, which defeats the Environment=HOME=/root above and breaks the
+# Doppler CLI's os.UserHomeDir() init.
+#
+# PrivateTmp is spelled `true`, not the `yes` git-data-gc.service uses. That file is the lone
+# `yes` in the repo; every inngest-family unit uses `true`, and inngest.test.sh:232 asserts
+# `^PrivateTmp=true$` by regex. /etc/default/inngest-server sets DOPPLER_CONFIG_DIR=/tmp/.doppler,
+# and inngest-bootstrap.sh:372-388 records why that path is only safe under a private /tmp.
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=true
+# WRITABLE PATHS — the sharp edge of this block, because the obvious spelling is wrong twice.
+# The script writes three paths, and neither /var/lib/inngest-cutover nor
+# /mnt/data/inngest-cutover exists on a fresh host; their only creators are the lazy `mkdir -p`
+# inside the script itself (:247 and :432).
+#   * Naming a non-existent directory in ReadWritePaths= makes systemd fail mount-namespace
+#     setup, so the unit would die on EVERY 30s fire after a host replace — no marker, on the
+#     one host with no other control channel.
+#   * `-`-prefixing does not rescue it: the path is then simply not made writable, so under
+#     ProtectSystem=strict the script's own `mkdir -p` hits a read-only filesystem and the FSM
+#     aborts `latch-unrecordable` on every fire instead.
+# So: StateDirectory makes systemd itself create and rw-mount /var/lib/inngest-cutover (the
+# DONE_OWNER_MARKER dir at :240), and ReadWritePaths names the MOUNTS — /var/lock for the state
+# slot at :62, /mnt/data for the flip-done latch at :387 — never the subdirectories the script
+# creates inside them. /mnt/data is created unconditionally by cloud-init-inngest.yml:323
+# (`mkdir -p /mnt/data`, before the `nofail` mount), so it resolves even when the volume is absent.
+StateDirectory=inngest-cutover
+ReadWritePaths=/var/lock /mnt/data
 # EnvironmentFile carries DOPPLER_TOKEN + DOPPLER_CONFIG_DIR so `doppler run` (and the
 # script's `doppler secrets set` flag transitions) authenticate against soleur-inngest/prd.
 EnvironmentFile=/etc/default/inngest-server
@@ -51,7 +83,39 @@ EnvironmentFile=/etc/default/inngest-server
 # the loopback redis-cli FLUSHALL/DBSIZE) into the script's env. The Doppler project is
 # resolved from DOPPLER_PROJECT in EnvironmentFile=/etc/default/inngest-server (#6555; the
 # dedicated host sets soleur-inngest) — no --project flag.
-ExecStart=/usr/bin/doppler run --config prd -- /usr/local/bin/inngest-cutover-flip.sh
+#
+# --only-secrets IS THE PRIMARY CONTROL FOR #7761, not hygiene. A bare `doppler run` injects the
+# WHOLE soleur-inngest/prd config, so any name in that config lands in the environment of a
+# root script — which made Doppler *config-write access* equivalent to arbitrary command
+# execution as root here, at the next 30s poll, inside the same unit that performs the
+# irreversible FLUSHALL. The script's argv gate (--fixture-seams) closes the seams the script
+# itself reads; only this flag reaches the names bash honours WITHOUT the script ever naming
+# them — BASH_ENV, PATH, LD_PRELOAD, IFS — because it filters before exec rather than after.
+# Measured against live Doppler 2026-09-03: bare injects 10 names including INNGEST_POSTGRES_URI
+# (the production DSN); this form injects exactly INNGEST_CUTOVER_FLIP + INNGEST_REDIS_PASSWORD
+# (plus the DOPPLER_PROJECT/CONFIG/ENVIRONMENT trio doppler sets itself regardless of the flag).
+#
+# --no-exit-on-missing-only-secrets DIVERGES FROM HOUSE CONVENTION ON PURPOSE, and the reason is
+# `noop-unset`. INNGEST_CUTOVER_FLIP is legitimately ABSENT on a pre-arm host — that is a
+# designed FSM state, not an error. Measured: without this flag doppler exits 1 on a
+# listed-but-absent name, which would stop the 30-second poll dead on exactly the hosts that
+# have not been armed yet. Deleting this flag as hygiene breaks the FSM. The trade is that a
+# MIS-AUTHORED list degrades quietly rather than loudly, which is why the list above is authored
+# and commented rather than derived — see the plan's Guard 2 section. It is not wholly silent:
+# doppler still emits a `Warning:` naming the missing secret, which rides journald to Better Stack.
+#
+# The on-disk encrypted fallback cache is deliberately left ENABLED (see the plan's Alternatives
+# row H). The flag that would disable it is NOT written here, and this comment deliberately does
+# not spell that flag: a body-grep sees comments too, so naming it in prose would false-trip the
+# very assertion that checks it is absent (cq-assert-anchor-not-bare-token).
+# All flags sit AFTER `--config prd` so inngest.test.sh:1570-1571's contiguous-substring
+# assertion on `doppler run --config prd` still matches, and BEFORE the `--` so they are
+# doppler's flags rather than the script's arguments.
+ExecStart=/usr/bin/doppler run --config prd \
+  --only-secrets INNGEST_CUTOVER_FLIP \
+  --only-secrets INNGEST_REDIS_PASSWORD \
+  --no-exit-on-missing-only-secrets \
+  -- /usr/local/bin/inngest-cutover-flip.sh
 
 [Install]
 WantedBy=multi-user.target

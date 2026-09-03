@@ -59,6 +59,92 @@ set -Eeuo pipefail
 
 readonly LOG_TAG="inngest-cutover-flip"
 readonly SERVER_UNIT="inngest-server.service"
+
+# --- SEAM GATE (#7761): the fixture seams are honoured ONLY when argv says so ---------------
+#
+# THE DEFECT THIS CLOSES. This script runs as ROOT under `doppler run` (inngest-cutover-flip.service),
+# and a bare `doppler run` injects the WHOLE soleur-inngest/prd config into the environment. Every
+# seam below reads straight from that environment and several are EXECUTED, so a Doppler secret
+# whose NAME happened to be e.g. CUTOVER_REDIS_CLI_CMD was arbitrary command execution as root at
+# the next 30-second timer fire — inside the same unit that performs the irreversible FLUSHALL.
+# The trust boundary was reasoned about as "root on the host"; it was in fact "write access to the
+# Doppler config".
+#
+# WHY ARGV. The authorisation token has to be something a config writer cannot supply, and argv is
+# the one channel `doppler run` does not touch: it sets the environment and execs. A sentinel
+# ENVIRONMENT variable would have been forgeable by exactly the writer this excludes. It would also
+# have been self-defeating — named CUTOVER_*, the gate's own input would fall inside the
+# completeness tripwire's derivation prefix and redden it on the first green run of the thing it
+# guards. This script takes no other top-level positional arguments (every $1/$@/$* in the file is
+# function-local), so the flag is free.
+#
+# THIS IS ONLY HALF THE FIX, and deliberately so. It covers the names the script itself reads. It
+# does NOT — and structurally cannot — cover BASH_ENV, PATH, LD_PRELOAD or IFS, which bash honours
+# without this script ever naming them. Those are bounded at the unit by `--only-secrets`, which
+# filters BEFORE exec. Do not extend this block to sanitise them: doing so would silently blind the
+# refusal tests rather than redden them, and would move a control away from the layer that can
+# actually enforce it.
+#
+# PRE-TRAP WINDOW — LOAD-BEARING. `trap on_unexpected_exit ERR` is not installed until run_flip,
+# ~460 lines below. Under `set -Eeuo pipefail` a stray non-zero HERE exits the script silently: no
+# marker, no transition, no state slot — precisely the #5934 failure shape this FSM exists to never
+# have. Hence: a `[[ ]]` test that cannot fail and touches no filesystem, `n=$((n+1))` rather than
+# `(( n++ ))` (which returns 1 when incrementing 0 to 1), no loop body ending in a `[[ … ]] && …`
+# short-circuit, and a `|| true` on the logger call.
+if [[ "${1:-}" != "--fixture-seams" ]]; then
+  _seams_present=0
+  # THE SEAM LIST — fifteen names, and its completeness is not trusted to review.
+  # inngest-cutover-flip.test.sh derives the seam set from THIS FILE by shape and asserts it equals
+  # this list plus INNGEST_CUTOVER_FLIP, so adding a seam read without adding it here reds the
+  # suite. Keep one name per line and keep `do` on its own line — the tripwire extracts this list
+  # from the `for` construct itself rather than from a comment.
+  #
+  # `unset` is the single operation that restores ALL of this file's expansion idioms to their
+  # production arm at once — ${V:-d}, ${V-d}, and the ${V+x} set-versus-absent test in read_flag,
+  # which is why one chokepoint replaces fifteen call-site checks. A defaulting assignment would
+  # not: it cannot make a name look ABSENT, only empty.
+  #
+  # NOT unset, deliberately: INNGEST_CUTOVER_FLIP (the FSM's real input) and INNGEST_REDIS_PASSWORD
+  # (the real Redis credential — unsetting it would send `redis-cli -a ""` at a password-protected
+  # Redis). Both are real inputs delivered by --only-secrets, not seams.
+  for _seam in \
+    CUTOVER_CURL_CMD \
+    CUTOVER_DONE_OWNER_MARKER \
+    CUTOVER_FLAG_SET_CMD \
+    CUTOVER_FLIP_FLAG \
+    CUTOVER_GQL_URL \
+    CUTOVER_HEALTH_URL \
+    CUTOVER_LOGGER_CMD \
+    CUTOVER_REDIS_CLI_CMD \
+    CUTOVER_REDIS_DBSIZE \
+    CUTOVER_SYSTEMCTL_CMD \
+    CUTOVER_VERIFY_INTERVAL_S \
+    CUTOVER_VERIFY_WINDOW_S \
+    INNGEST_CUTOVER_LATCH \
+    INNGEST_CUTOVER_LATCH_MOUNT \
+    INNGEST_CUTOVER_STATE
+  do
+    if [[ -n "${!_seam+x}" ]]; then
+      _seams_present=$((_seams_present + 1))
+    fi
+    unset "$_seam"
+  done
+  # Emitted ONLY when a seam was actually present. A marker on every ordinary poll would be noise
+  # on the one channel the operator reads for this host, and noise trains people to ignore it.
+  #
+  # RAW `logger`, not emit_state, for two reasons: emit_state does not exist yet at this point in
+  # the file, and it truncates the state slot that carries the legacy half of the
+  # anti-double-FLUSHALL latch. Keeping this event out of the FSM's reason vocabulary also avoids
+  # the scripts/cutover-inngest.sh parity coupling entirely. The tag is already allowlisted in
+  # vector.toml, so the marker reaches Better Stack with no shipper change.
+  if [[ "$_seams_present" -gt 0 ]]; then
+    logger -t "$LOG_TAG" \
+      "SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED count=${_seams_present} detail=fixture seam names were present in the environment but the script was not invoked with --fixture-seams; they were unset and ignored. On this host that means a name in the soleur-inngest/prd Doppler config collided with a seam name. #7761" \
+      2>/dev/null || true
+  fi
+  unset _seam _seams_present
+fi
+
 STATE_FILE="${INNGEST_CUTOVER_STATE:-/var/lock/inngest-cutover-flip.state}"
 START_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 

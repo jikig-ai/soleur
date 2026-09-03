@@ -51,7 +51,15 @@ LATCH=""
 TRACE="" STATE="" LOGTRACE=""
 SYSCTL="" REDIS="" FLAGSET="" LOGGER=""
 
+# (#7761) The HOST-DEFAULT state slot. A refusal case runs with INNGEST_CUTOVER_STATE unset by the
+# gate, so emit_state falls back to this path — a best-effort `>` write that is `|| true`-guarded
+# and therefore silent either way. Clear it around every case so one case's fallback write cannot
+# bleed into a later case's assertions. Guarded: on a runner /var/lock is root-owned and the write
+# never lands at all, which is fine — this must never be the reason a case fails.
+clean_host_state_slot() { rm -f /var/lock/inngest-cutover-flip.state 2>/dev/null || true; }
+
 setup_case() {
+  clean_host_state_slot
   WORK=$(mktemp -d)
   TRACE="$WORK/trace"
   STATE="$WORK/state.json"
@@ -136,7 +144,7 @@ EOF
   chmod +x "$SYSCTL" "$REDIS" "$FLAGSET" "$LOGGER"
 }
 
-teardown_case() { rm -rf "$WORK"; }
+teardown_case() { rm -rf "$WORK"; clean_host_state_slot; }
 
 # run_flip <flag> [EXTRA_VAR=val ...] -> echoes the exit code; populates the traces.
 run_flip() {
@@ -156,7 +164,7 @@ run_flip() {
       CUTOVER_VERIFY_WINDOW_S=0 \
       CUTOVER_VERIFY_INTERVAL_S=0 \
       ${extra[@]+"${extra[@]}"} \
-      bash "$TARGET" >/dev/null 2>&1 || rc=$?
+      bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
 
@@ -290,7 +298,7 @@ EOF
       CUTOVER_FLAG_SET_CMD="$FLAGSET" CUTOVER_LOGGER_CMD="$LOGGER" \
       INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" \
       CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 "$@" \
-      bash "$TARGET" >/dev/null 2>&1 || rc=$?
+      bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"
 }
 
@@ -331,7 +339,7 @@ env CUTOVER_FLIP_FLAG="armed" CUTOVER_SYSTEMCTL_CMD="$SYSCTL" \
     CUTOVER_LOGGER_CMD="$LOGGER" INNGEST_CUTOVER_STATE="$STATE" INNGEST_CUTOVER_LATCH="$LATCH" INNGEST_CUTOVER_LATCH_MOUNT="" \
     CUTOVER_CURL_CMD="$CURLSTUB" CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" CUTOVER_VERIFY_WINDOW_S=0 CUTOVER_VERIFY_INTERVAL_S=0 \
     CUTOVER_REDIS_DBSIZE=0 \
-    bash "$TARGET" >/dev/null 2>&1 || rc=$?
+    bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
 order=$(trace_csv)
 assert_eq "non-zero exit on flag_set(done) failure" "1" "$rc"
 assert_contains "flag reached terminal aborted after done-write failure" "$order" "flag:aborted"
@@ -623,11 +631,256 @@ else
   pass "both probe URLs target 127.0.0.1:$BIND_PORT, the port inngest-server binds"
 fi
 
+# --- #7761 GUARD 1: the argv seam gate, and its completeness tripwire ----------------------
+#
+# THE DEFECT. inngest-cutover-flip.service runs as root under `doppler run`, which injects the
+# WHOLE soleur-inngest/prd config into the environment. This script's fixture seams read straight
+# from that environment and EXECUTE what they find, so a Doppler secret NAME — e.g. a secret
+# literally called CUTOVER_REDIS_CLI_CMD — was arbitrary command execution as root at the next
+# 30-second poll, inside the same unit that performs the irreversible FLUSHALL. The trust boundary
+# was documented as "root on the host"; it was actually "Doppler config-write access".
+#
+# THE FIX HAS TWO HALVES and they close different holes. The unit's --only-secrets bounds what is
+# injected AT ALL (it is the only half that can reach BASH_ENV/PATH/LD_PRELOAD/IFS, which bash
+# honours without this script ever naming them). This half — the argv gate — closes the seams the
+# script itself reads, and it is unforgeable by any environment writer for the simple reason that
+# argv is not the environment.
+#
+# WHY THE ASSERTIONS BELOW ARE MOSTLY STRUCTURAL. The gate's whole purpose is to make the seams
+# unobservable, so a refusal cannot be watched THROUGH the seams it just unset. It is therefore
+# observed as an ABSENCE (a canary that is not written) plus shape assertions on the gate itself.
+# Deliberately NO PATH shadowing is introduced: infra-validation.yml runs ubuntu-24.04 with a real
+# systemctl, and that workflow's own comment records the standing safety property — "It mocks
+# systemctl + redis inside a mktemp -d, so no real Redis is reached and no FLUSHALL is executed."
+# That guarantee exists BECAUSE commands are seamed explicitly and PATH is never touched; shadowing
+# PATH to observe a refusal would invert it.
+
+FLIP_SRC="$TARGET"
+
+# Comments stripped FIRST. The script carries ${VAR+x} and ${VAR-default} inside explanatory prose,
+# and a derivation that reads those would demand names the script never actually reads.
+flip_src_nocomments() { sed -E 's/(^|[^\\])#.*$/\1/' "$FLIP_SRC"; }
+
+# The seam-name set DERIVED FROM THE SCRIPT BY SHAPE — the tripwire's left-hand side.
+#
+# Scoped to the CUTOVER_ and INNGEST_CUTOVER_ prefixes. Unscoped it would sweep in
+# ${INNGEST_REDIS_PASSWORD:-}, forcing it into the unset list and breaking `redis-cli -a ""`
+# against a password-protected Redis. INNGEST_CUTOVER_FLIP is inside the prefix and is a real
+# input rather than a seam, which is why the expected set is the unset list PLUS that one name.
+#
+# Matches the WHOLE expansion grammar, not the three idioms this file happens to use today:
+# ${NAME}, ${NAME:-}, ${NAME-}, ${NAME:+}, ${NAME+}, ${NAME:=}, ${NAME=}, ${NAME:?}, ${NAME?} and
+# bare $NAME. Stopping at :- / +x / - would miss a future ${CUTOVER_X:+...} or bare $CUTOVER_X and
+# re-open the hole silently. The bare forms are redundant in today's file — every bare read also
+# appears in a default form — but that is a property of this file today, not of the shape.
+derived_prefixed_names() {
+  flip_src_nocomments \
+    | grep -oE '\$\{(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+(\}|:-|-|:\+|\+|:=|=|:\?|\?)|\$(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+' \
+    | grep -oE '(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+' \
+    | sort -u || true
+}
+
+# The gate's own unset list — the tripwire's right-hand side. Extracted from the `for` construct
+# itself, NOT from a comment sentinel: the list is load-bearing code, and anchoring a completeness
+# check on prose would let the check pass against a gate whose actual list had drifted.
+gate_unset_names() {
+  awk '/^[[:space:]]*for[[:space:]]+_seam[[:space:]]+in/{f=1} f{print} f&&/^[[:space:]]*do[[:space:]]*$/{exit}' "$FLIP_SRC" \
+    | grep -oE '(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+' \
+    | sort -u || true
+}
+
+echo "TEST: #7761 the gate's unset list is COMPLETE against the script's own seam reads"
+DERIVED="$(derived_prefixed_names)"
+UNSET_LIST="$(gate_unset_names)"
+EXPECTED="$(printf '%s\nINNGEST_CUTOVER_FLIP\n' "$UNSET_LIST" | grep -vE '^$' | sort -u || true)"
+assert_eq "derived seam set == unset list + INNGEST_CUTOVER_FLIP (the completeness tripwire)" \
+  "$DERIVED" "$EXPECTED"
+# A FLOOR on the list's size, so the tripwire cannot be satisfied by an EMPTY gate agreeing with an
+# empty derivation. Measured at 15 seams this session; a floor, never -eq, so adding a seam and its
+# list entry together stays green.
+UNSET_COUNT="$(printf '%s\n' "$UNSET_LIST" | grep -cE '^(CUTOVER_|INNGEST_CUTOVER_)' || true)"
+if [[ "$UNSET_COUNT" -ge 15 ]]; then
+  pass "the gate unsets at least 15 seam names (got $UNSET_COUNT)"
+else
+  fail "the gate's unset list holds only $UNSET_COUNT names, expected >= 15"
+fi
+assert_absent "INNGEST_REDIS_PASSWORD is NOT unset (it is a real input, not a seam)" \
+  "$UNSET_LIST" "INNGEST_REDIS_PASSWORD"
+assert_absent "INNGEST_CUTOVER_FLIP is NOT unset (it is the FSM's real input)" \
+  "$UNSET_LIST" "INNGEST_CUTOVER_FLIP"
+
+echo "TEST: #7761 the companion assertion — no UNPREFIXED external value in command position"
+# The tripwire above is prefix-scoped, so a future seam named outside both prefixes is invisible to
+# it. This pairs with it: every expansion appearing in COMMAND POSITION must either be prefix-scoped
+# (and therefore covered by the gate) or be assigned somewhere in this file (and therefore not
+# externally supplied). Without this pairing the gate's property does not hold.
+CMD_POS_VARS="$(flip_src_nocomments \
+  | grep -oE '(^|[;&|]|\bthen\b|\belse\b|\bdo\b|\{)[[:space:]]*"?\$\{?[A-Za-z_][A-Za-z0-9_]*' \
+  | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' \
+  | grep -oE '[A-Za-z_][A-Za-z0-9_]*' | sort -u || true)"
+ASSIGNED_VARS="$(grep -oE '^[[:space:]]*(local |readonly |export )?[A-Za-z_][A-Za-z0-9_]*=' "$FLIP_SRC" \
+  | grep -oE '[A-Za-z_][A-Za-z0-9_]*=' | tr -d '=' | sort -u || true)"
+UNGOVERNED=""
+while IFS= read -r v; do
+  [[ -n "$v" ]] || continue
+  case "$v" in CUTOVER_*|INNGEST_CUTOVER_*) continue ;; esac
+  if ! printf '%s\n' "$ASSIGNED_VARS" | grep -qxF "$v"; then
+    UNGOVERNED="$UNGOVERNED $v"
+  fi
+done <<< "$CMD_POS_VARS"
+assert_eq "no unprefixed externally-supplied expansion sits in command position" "" "${UNGOVERNED# }"
+
+echo "TEST: #7761 the gate's POSITION, its predicate, and its pre-trap-window safety"
+# Position asserted BY SHAPE, never a hardcoded line number. It must sit after `readonly
+# SERVER_UNIT` (the earliest point at which $LOG_TAG is safe to reference under set -u) and before
+# the STATE_FILE assignment (the FIRST seam read). Specified against STATE_FILE and not "after
+# read_flag": read_flag is only a DEFINITION and its seam is not evaluated until run_flip, so a gate
+# moved below it would still precede every deferred read and would stay green.
+SERVER_UNIT_LN="$(grep -nE '^readonly SERVER_UNIT=' "$FLIP_SRC" | head -1 | cut -d: -f1 || true)"
+STATE_FILE_LN="$(grep -nE '^STATE_FILE=' "$FLIP_SRC" | head -1 | cut -d: -f1 || true)"
+# Anchored on the PREDICATE CONSTRUCT, not the bare flag name: a body-grep sees comments too, and
+# the script's own header documents this flag in prose. A bare-token anchor would resolve to that
+# header line — above `readonly SERVER_UNIT` — and fail a correctly-placed gate
+# (cq-assert-anchor-not-bare-token).
+GATE_LN="$(grep -nE '\$\{1:-\}.*--fixture-seams' "$FLIP_SRC" | head -1 | cut -d: -f1 || true)"
+if [[ -n "$GATE_LN" && -n "$SERVER_UNIT_LN" && -n "$STATE_FILE_LN" \
+      && "$GATE_LN" -gt "$SERVER_UNIT_LN" && "$GATE_LN" -lt "$STATE_FILE_LN" ]]; then
+  pass "the gate sits between readonly SERVER_UNIT ($SERVER_UNIT_LN) and STATE_FILE ($STATE_FILE_LN), at $GATE_LN"
+else
+  fail "gate position wrong: gate=$GATE_LN server_unit=$SERVER_UNIT_LN state_file=$STATE_FILE_LN"
+fi
+# The predicate must be ARGV, not an environment marker. An env-keyed sentinel would be forgeable by
+# exactly the writer this gate exists to exclude, and — if it were named CUTOVER_* — would put the
+# gate's own input inside the tripwire's derivation prefix, reddening it on its first green run.
+assert_contains "the gate's predicate reads positional argv, not the environment" \
+  "$(flip_src_nocomments | grep -F -- '--fixture-seams' | head -1 || true)" '${1:-}'
+# The gate runs ~460 lines BEFORE `trap on_unexpected_exit ERR` is installed, so under
+# `set -Eeuo pipefail` any stray non-zero there is a SILENT death: no marker, no transition — the
+# one failure shape this FSM exists never to have. Pin the two constructs that would cause it.
+# Same anchoring discipline as GATE_LN above: start at the predicate construct, not at the first
+# prose mention of the flag, and stop at the block's own closing `fi` at column 0.
+GATE_BODY="$(awk '/\$\{1:-\}.*--fixture-seams/{f=1} f{print} f&&/^fi[[:space:]]*$/{exit}' "$FLIP_SRC" || true)"
+assert_absent "the gate's counter uses n=\$((n+1)), never (( n++ )) which returns 1 on 0->1" \
+  "$GATE_BODY" '((_seams_present++))'
+assert_absent "no loop body in the gate ends in a bare [[ ... ]] && ... short-circuit" \
+  "$GATE_BODY" ']] &&'
+assert_contains "the refusal marker's logger call is failure-tolerant in the pre-trap window" \
+  "$GATE_BODY" '|| true'
+# Mutation row 8: a gate that sanitised PATH/BASH_ENV/IFS/LD_PRELOAD would silently BLIND its own
+# refusal tests rather than redden them. Those names are --only-secrets' job, at the unit.
+for forbidden in PATH BASH_ENV IFS LD_PRELOAD; do
+  assert_absent "the gate does not touch $forbidden (that is --only-secrets' job, at the unit)" \
+    "$GATE_BODY" "unset $forbidden"
+done
+# Scenario 2 / 3: the refusal marker is emitted, and its emission is CONDITIONAL on a seam actually
+# having been present — a marker fired on every ordinary production poll would be noise that trains
+# the operator to ignore the channel. Asserted structurally because the marker rides the RAW logger:
+# CUTOVER_LOGGER_CMD is itself one of the seams the gate has just unset, so it cannot be observed
+# through the harness sink without the PATH shadowing this suite deliberately does not introduce.
+assert_contains "a refusal emits the SEAM_REFUSED marker on the inngest-cutover-flip tag" \
+  "$GATE_BODY" 'SOLEUR_INNGEST_CUTOVER_SEAM_REFUSED'
+assert_contains "the refusal marker is gated on a non-zero count of seams actually present" \
+  "$GATE_BODY" '"$_seams_present" -gt 0'
+
+echo "TEST: #7761 REFUSAL is observable as an absence — the canary is not written"
+# The discriminator. CUTOVER_LOGGER_CMD is the seam every branch reaches, including the terminal
+# no-ops, so it observes the gate without going anywhere near the destructive arm.
+#
+# The flag is left ABSENT so the run takes `noop-unset`, which touches neither systemctl nor
+# redis-cli nor the latch and cannot reach anything destructive. CUTOVER_FLIP_FLAG is set to
+# "armed" precisely so the case is a real test of the gate: if the gate did not unset it, the
+# ${VAR+x} set-versus-absent distinction would resolve to "armed" and drive the forward path.
+setup_case
+CANARY="$WORK/canary"
+CANARY_STUB="$WORK/canary.sh"
+cat > "$CANARY_STUB" <<EOF
+#!/usr/bin/env bash
+printf 'pwned\n' >> "$CANARY"
+EOF
+chmod +x "$CANARY_STUB"
+rc=0
+env CUTOVER_LOGGER_CMD="$CANARY_STUB" CUTOVER_FLIP_FLAG="armed" \
+    bash "$TARGET" >/dev/null 2>&1 || rc=$?
+assert_eq "a refused run still exits 0 (it takes the noop-unset arm)" "0" "$rc"
+if [[ -e "$CANARY" ]]; then
+  fail "REFUSAL FAILED: the seam ran — canary exists at $CANARY"
+else
+  pass "the environment-supplied command seam did NOT execute (canary absent)"
+fi
+teardown_case
+
+echo "TEST: #7761 the must-PASS control — with --fixture-seams the same seam IS honoured"
+# Without this control the matrix cannot distinguish a correct gate from one that refuses
+# everything, which would pass every absence assertion above while breaking all 147 existing cases.
+setup_case
+CANARY="$WORK/canary"
+CANARY_STUB="$WORK/canary.sh"
+cat > "$CANARY_STUB" <<EOF
+#!/usr/bin/env bash
+printf 'ok\n' >> "$CANARY"
+EOF
+chmod +x "$CANARY_STUB"
+rc=0
+env CUTOVER_LOGGER_CMD="$CANARY_STUB" CUTOVER_FLIP_FLAG="" \
+    bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
+assert_eq "an authorised run exits 0" "0" "$rc"
+if [[ -e "$CANARY" ]]; then
+  pass "with --fixture-seams the seam IS honoured (canary written)"
+else
+  fail "the gate refuses even an authorised run — canary absent at $CANARY"
+fi
+teardown_case
+
+echo "TEST: #7761 a repointed state slot is not written when the seams are refused"
+# Scenario 9. Without the gate, INNGEST_CUTOVER_STATE lets any environment writer choose a path the
+# root script truncates with `>`. With it, the name is unset and STATE_FILE falls back to the
+# host default, so nothing appears at the caller-named path.
+setup_case
+PWNED_STATE="$WORK/pwned.state"
+rc=0
+env INNGEST_CUTOVER_STATE="$PWNED_STATE" CUTOVER_FLIP_FLAG="" \
+    bash "$TARGET" >/dev/null 2>&1 || rc=$?
+assert_eq "the refused run exits 0" "0" "$rc"
+if [[ -e "$PWNED_STATE" ]]; then
+  fail "REFUSAL FAILED: the caller-named state slot was written at $PWNED_STATE"
+else
+  pass "no file appeared at the caller-named state path"
+fi
+teardown_case
+
+echo "TEST: #7761 the must-PASS non-canonical — seams honoured under a second temp root"
+# Scenario 11. The gate authorises on argv alone and must not have acquired a hidden dependency on
+# any particular fixture location; a gate keyed on a path prefix would pass every case above and
+# fail here.
+setup_case
+ALT_ROOT="$(mktemp -d)"
+ALT_CANARY="$ALT_ROOT/elsewhere"
+ALT_STUB="$ALT_ROOT/stub.sh"
+cat > "$ALT_STUB" <<EOF
+#!/usr/bin/env bash
+printf 'ok\n' >> "$ALT_CANARY"
+EOF
+chmod +x "$ALT_STUB"
+rc=0
+env CUTOVER_LOGGER_CMD="$ALT_STUB" CUTOVER_FLIP_FLAG="" \
+    bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
+assert_eq "the alternate-root authorised run exits 0" "0" "$rc"
+if [[ -e "$ALT_CANARY" ]]; then
+  pass "seams are honoured under a differently-named fixture root (argv, not path, authorises)"
+else
+  fail "the gate refused an authorised run under an alternate root"
+fi
+rm -rf "$ALT_ROOT"
+teardown_case
+
 # --- S8: an assertion-count FLOOR ----------------------------------------------------------
 # Every suite here gates only on FAIL. Deleting a whole test block drops the PASS count and
 # still exits 0, so "all assertions passed" and "fewer assertions ran" are the same signal.
 # A FLOOR, never -eq: adding tests must not red the suite.
-MIN_ASSERTIONS=102  # derived from a green run, never guessed; raise in lockstep when adding tests
+# 102 -> 126: +24 for the #7761 seam-gate block (tripwire, companion assertion, position/predicate/
+# pre-trap-window shape, the four behavioural refusal + must-PASS cases). Derived from a green run,
+# never guessed; raise in lockstep when adding tests.
+MIN_ASSERTIONS=126
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   fail "assertion floor: only $PASS assertions ran, expected >= $MIN_ASSERTIONS — a block was skipped or silently emptied"
 fi
