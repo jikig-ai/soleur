@@ -70,6 +70,14 @@ Body carries `Closes #7709` and nothing else.
 
 Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
 
+- [x] 2.0 CARRIED FROM PR 1's POSTMERGE, declared here so it is not smuggled into a scanner PR:
+      postmerge Phase 4 reported all 5 spot-checked files MISSING on a healthy merge. The worktree
+      had not fetched the merge commit, and git's wording for an object it does NOT have
+      (`exists on disk, but not in <sha>`) reads like a verdict about the file. Measured against a
+      control on the same commit: a path genuinely absent from a real tree says
+      `does not exist in <sha>` instead. The two messages are one word apart and mean opposite
+      things. Fix in `plugins/soleur/skills/postmerge/SKILL.md`: fetch before the first `git show`,
+      plus a table naming both messages. Per `wg-when-a-workflow-gap-causes-a-mistake-fix`.
 - [ ] 2.1 The residue is already measured (plan Phase 2.1): `mv` 3 sites, `cp -r` 0, `rm -rf` 941 across
       316 files, redirection 1759 across 244. The last two are overwhelmingly false positives —
       939/941 and 1586/1759 are command-substitution bindings, and 650 / 1130 are literally
