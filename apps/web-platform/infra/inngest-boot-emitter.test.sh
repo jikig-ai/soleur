@@ -219,8 +219,28 @@ else
   # Keys come from the templatefile() call site in inngest-host.tf — the authoritative statement
   # of what this template receives. A missing key is a render error, not a silent empty string,
   # so a future var addition trips this loudly rather than degrading the assertions to vacuity.
-  printf 'templatefile("%s", { inngest_volume_id="v", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt" })\n' \
+  printf 'templatefile("%s", { inngest_volume_id="v", inngest_expect_luks="false", doppler_token="d", sdk_url="https://sdk", inngest_cli_arch="amd64", inngest_cli_sha256="s", vector_sha256="vs", doppler_arch="amd64", doppler_sha256="ds", ghcr_read_user="u", ghcr_read_token="g", web_host_private_ips="10.0.1.10", betterstack_logs_token="BS_TOKEN_SENTINEL_7228", zot_registry_endpoint="10.0.1.30:5000", zot_pull_user="zu", zot_pull_token="zt" })\n' \
     "$CLOUD_INIT" | terraform -chdir="$RENDER_DIR" console > "$RENDERED" 2>"$WORK/render.err"
+
+  # KEY-SET PARITY WITH THE REAL CALL SITE (#7695). The map above is hand-kept, and the comment
+  # above it promises a future var addition "trips this loudly". It does — but it trips as
+  # `Invalid function argument`, which reads as a broken test rather than as a drifted key set,
+  # and the three assertions that follow then fail for a reason that names nothing.
+  #
+  # Measured: #7695 added `inngest_expect_luks` to the inngest-host.tf call site and this map was
+  # not updated, so all three AC5 assertions went red on `main` with a stderr blob about console
+  # input. Deriving the expected set from the .tf and DIFFING it names the missing key instead.
+  TF_KEYS="$(awk '/templatefile\("\$\{path\.module\}\/cloud-init-inngest\.yml", \{/,/^  \}\)\)$/' \
+    "$SCRIPT_DIR/inngest-host.tf" | grep -oE '^    [a-z_]+ +=' | tr -d ' =' | sort -u)"
+  MAP_KEYS="$(grep -oE '\{ inngest_volume_id=.*\}' "${BASH_SOURCE[0]}" | head -1 \
+    | grep -oE '[a-z_]+=' | tr -d '=' | sort -u)"
+  # Non-vacuity: an extraction that found nothing must not report parity.
+  assert "AC5 key-set parity: the .tf call site's keys were extracted" \
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 10 ]]"
+  MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
+  EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
+  assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \
+    "[[ -z '${MISSING}' && -z '${EXTRA}' ]]"
 
   # A truncated or empty render makes every assertion below pass or fail for the wrong reason.
   assert "AC5 the userdata rendered at all (terraform console produced output)" \

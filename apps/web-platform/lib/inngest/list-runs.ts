@@ -1,7 +1,18 @@
 // PR-G (#3947) — Server-only Inngest HTTP API proxy. INNGEST_SIGNING_KEY
 // is the read-API auth credential (event key is write-only for SDK
-// ingestion). Self-hosted Inngest exposes /v1/* at INNGEST_BASE_URL
-// (ADR-030: bound to 127.0.0.1:8288 on the Hetzner host).
+// ingestion). Self-hosted Inngest exposes /v1/* at INNGEST_BASE_URL.
+//
+// CORRECTED 2026-09-03 (#7695): this comment cited "ADR-030: bound to 127.0.0.1:8288", and that
+// ADR line is now struck. The server binds --host 0.0.0.0 (since #4017 — a bridge-networked
+// container cannot register an SDK against a loopback-bound server). What IS loopback-restricted
+// is /v1/* itself: Inngest gates that surface to loopback-origin requests in software,
+// independent of the bind (measured 2026-05-31, #4708 — /health returns 200 from the app
+// container while /v1/runs returns 404, and #4694 proved no auth or network change lifts it).
+//
+// THAT IS A LIVE QUESTION FOR THIS MODULE, not just a citation fix. This proxy is the Art. 15
+// access route the data-protection disclosure §2.3(o) offers to data subjects, and if /v1/runs
+// answers 404 to a containerized caller the route returns nothing while we represent it as
+// working. Tracked as a verify-before-close item on the #7695 compliance issue.
 //
 // This module is consumed ONLY by app/api/dashboard/runs/route.ts (server
 // route). TR7 (test/lint/inngest-key-server-only.test.ts) grep-asserts

@@ -1022,7 +1022,7 @@ fi
 # vestigial-but-harmless in the durable form).
 cat > "$UNIT_FILE" <<'UNITEOF'
 [Unit]
-Description=Inngest self-hosted server (loopback 127.0.0.1:8288/8289)
+Description=Inngest self-hosted server (:8288/:8289, firewall+nftables scoped)
 After=network-online.target
 Wants=network-online.target
 

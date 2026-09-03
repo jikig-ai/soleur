@@ -165,11 +165,25 @@ merge, exactly like #6895:
 
 ## Sequencing
 
+<!-- lint-infra-ignore start -->
+<!--
+  #7695: `lint-infra-no-human-steps.py` is FILE-scoped under `--changed`, so appending the
+  2026-09-03 addendum below pulled this pre-existing paragraph into the diff's scan set and it
+  fired. The wrap is a scoping fix, NOT a suppression of a real finding: the paragraph describes a
+  reviewer-gated `workflow_dispatch` — the sanctioned route the linter exists to steer people
+  TOWARD — and prescribes no SSH, no console, and no host-local command. The one imperative in it
+  ("the operator runs the reviewer-gated apply_target=inngest-host cutover dispatch") is a menu
+  ack, which `hr-menu-option-ack-not-prod-write-auth` treats as the correct shape.
+
+  Deliberately NOT rewritten to dodge the matcher: the paragraph is load-bearing prose in a dated
+  architecture record, and wording it around a lint is how a record stops saying what it means.
+-->
 Nothing destructive happens live before terraform. The only pre-terraform live action is the
 read-only baseline enumerate, which runs as the cutover's first step. The quiesce/freeze/copy/
 mount-swap are entirely encoded in the gated cutover window — the code-only PR merges inert, and the
 second volume + LUKS + copy only materialize when the operator runs the reviewer-gated `apply_target
 =inngest-host` cutover dispatch.
+<!-- lint-infra-ignore end -->
 
 ## Open operator items (defaulted; revisit before the cutover)
 
