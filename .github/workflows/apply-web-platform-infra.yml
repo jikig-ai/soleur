@@ -5559,6 +5559,12 @@ jobs:
             # no annotation, instead of retrying. The empty-result path is rc=0, so the common
             # path polled fine and hid this. `rc=$?` must be the first command after the
             # assignment; `set -e` is re-armed immediately after the read.
+            # (#7772) PIN THE TABLE. git-data ships to its OWN Better Stack source (2734275) since #7772, NOT the shared
+            # 2457081 that betterstack-query.sh defaults BS_TABLE to. Leaving the default does not
+            # error -- the shared table exists and answers, it just holds no rows from a host that
+            # stopped writing there -- so this reader would see zero rows on a PERFECT boot and
+            # report a dark host. On the one birth this host gets, that is a false failure.
+            export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
             set +e
             out=$(bash scripts/betterstack-query.sh "
               SELECT dt,
@@ -5567,7 +5573,8 @@ jobs:
                      JSONExtractString(raw,'luks_mounted') AS luks_mounted,
                      JSONExtractString(raw,'repo_root')    AS repo_root,
                      JSONExtractString(raw,'hooks_path')   AS hooks_path,
-                     JSONExtractString(raw,'provision')    AS provision
+                     JSONExtractString(raw,'provision')    AS provision,
+                     JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
               FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
                     UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
               WHERE dt > now() - INTERVAL 2 HOUR
@@ -5606,7 +5613,11 @@ jobs:
           # A boot_complete carrying a FALSE assertion is worse than none: the bootstrap
           # reached its final stage with an invariant unmet. Checked per NAMED FIELD — a bare
           # `grep -qE '\bno\b'` over the whole payload would match the word anywhere.
-          for f in luks_mounted repo_root hooks_path provision; do
+          # (#7772) nft_metadata_drop joins the four. It is the only MEASURED member -- the
+          # other four are `yes` by construction -- so it is the one that can report a real
+          # host fact. It is armed BEFORE the bootstrap runcmd item precisely so it can read
+          # a loaded chain here; arming it after would pin it at `no` for the host's life.
+          for f in luks_mounted repo_root hooks_path provision nft_metadata_drop; do
             if printf '%s' "$found" | grep -q "\"${f}\":\"no\""; then
               echo "::error::boot_complete arrived with ${f}=no — the host is up but an invariant is unmet. Treat as a failed birth."
               exit 1
@@ -5616,7 +5627,7 @@ jobs:
               exit 1
             fi
           done
-          echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision all positive."
+          echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision/nft_metadata_drop all positive."
 
       - name: Dispatch summary
         if: always()

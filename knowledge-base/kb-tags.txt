@@ -5,6 +5,7 @@
 .github/actions/bot-pr-with-synthetic-checks/action.yml
 .github/workflows
 .pen file not modified in git after batch-design
+/proc
 /work-phase-1-real-db-cross-reference
 11
 116
@@ -131,6 +132,7 @@ adr-079
 adr-080
 adr-081
 adr-087
+adr-091
 adr-092
 adr-093
 adr-096
@@ -143,6 +145,7 @@ adr-151
 adr-155
 adr-166
 adr-193
+adr-194
 adr-corpus
 adr-drift
 adr-hygiene
@@ -588,6 +591,7 @@ capability-precedent
 capacity
 capture
 captured-fixture
+cardinality-vs-type
 cascade
 cascade-architecture
 cascade-ordering
@@ -920,6 +924,7 @@ correction-pr
 correction-sweep
 cosign
 cost-attribution
+cost-caps
 cost-efficiency
 cost-estimate
 cost-model
@@ -1083,6 +1088,7 @@ deletion-sweep
 delivery
 demotion
 deny-by-default
+deny-vs-report
 dependabot
 dependencies
 dependency check for gui app without package manager
@@ -1129,6 +1135,7 @@ destructive-migration
 destructive-operations
 destructive-ops
 destructive-tests
+destructive-tools
 detection
 detector-design
 determinism
@@ -1296,6 +1303,7 @@ encryption
 endpoint-swap
 endpoints
 enforcement
+enforcement-tier
 engine-floor
 engineering
 enoent
@@ -1341,6 +1349,7 @@ event_unique_user_frequency
 evidence
 evidence-discarding
 evidence-first
+evidence-integration
 exacerbation-rule
 exact-equality
 exec
@@ -1381,6 +1390,7 @@ factory-pattern
 fail
 fail-closed
 fail-closed-gate
+fail-closed-gates
 fail-loud
 fail-open
 fail-safe
@@ -1418,6 +1428,7 @@ false-positive-traps
 false-positives
 false-precision
 false-premise
+false-red
 false-success
 false-verdict
 falsifiable-test
@@ -1474,6 +1485,7 @@ fixture-design
 fixture-direction
 fixture-fidelity
 fixture-redaction
+fixture-safety
 fixture-seam
 fixture-shape
 fixture-size
@@ -1688,6 +1700,7 @@ guard-building
 guard-building-pr
 guard-contract
 guard-design
+guard-equals-claim
 guard-erosion
 guard-itself-dark
 guard-test
@@ -1752,6 +1765,7 @@ honest-reporting
 honesty-surface
 hook
 hook-design
+hook-test-isolation
 hook-timeout
 hook_enforcement
 hooks
@@ -1787,6 +1801,7 @@ ide-mode
 idempotence
 idempotency
 idempotent-scripts
+identifier-collision
 identities
 identity
 identity-not-cardinality
@@ -1816,6 +1831,7 @@ inadequate-documentation
 incident
 incident-derived
 incident-response
+incident-suppression
 incident-triage
 incident-verification
 index
@@ -1855,6 +1871,7 @@ installation-detection
 installation-id
 installation-takeover
 installation-token
+instrument-error
 instrument-verification
 instrumentation
 integration
@@ -2171,6 +2188,7 @@ module-level-state
 module-resolution
 modulesupabase
 monitor
+monitor-lifetime
 monitoring
 monorepo
 mount-namespace
@@ -2286,6 +2304,7 @@ nosniff
 not-null
 not-rest-mutable
 notification not sent
+notification-channel
 notification-migration
 notifications
 npm
@@ -2681,6 +2700,7 @@ precedent-verification
 precondition
 precondition-staleness
 precondition-verification
+preconditions
 predicate-placement
 prefers-reduced-motion
 prefix
@@ -2875,6 +2895,7 @@ recurring-class
 recurring-pattern
 recursive
 red-discipline
+red-green
 red-green-refactor
 red-herring
 red-verification
@@ -3007,8 +3028,10 @@ review-fix-inline
 review-gap
 review-gate
 review-gates
+review-instrument
 review-panel
 review-panel-cost
+review-panels
 review-pipeline
 review-reasoning
 review-reminder
@@ -3064,6 +3087,7 @@ rule-budget
 rule-exists-no-gate-enforces-it
 rule-governance
 rule-ids
+rule-incidents
 rule-metrics
 rule-retirement
 rule-utility
@@ -3168,6 +3192,7 @@ sdk-read-tool
 sdk-router
 sdk-shape
 sdk-tooling
+seam-guard
 search
 search-path-injection
 search-path-pinning
@@ -3212,6 +3237,7 @@ seed-script
 seen
 segfault
 segment-rules
+self-clearing
 self-contained-duplication
 self-derived-oracle
 self-graded-battery
@@ -3223,6 +3249,7 @@ self-hosted-users
 self-hosting
 self-leak
 self-match
+self-matching-probe
 self-pull
 self-pull-observability
 self-reference
@@ -3598,6 +3625,7 @@ sweep-discipline
 sweep-fixes
 sweep-scope
 sweeper
+sweeps
 swr
 symbol-rename
 symlink
@@ -3699,6 +3727,7 @@ test-relevance-gate
 test-runner
 test-scope
 test-scripts
+test-seams
 test-tooling
 test-vacuity
 test-wiring
@@ -3739,6 +3768,7 @@ tiered-gating
 time
 timeout
 timeout-attribution
+timeout-ladder
 timeouts
 timer
 timer-design
@@ -3899,6 +3929,7 @@ vacuous-gate
 vacuous-gates
 vacuous-green
 vacuous-guard
+vacuous-guards
 vacuous-red
 vacuous-test
 vacuous-tests
@@ -3939,6 +3970,7 @@ verification-gate
 verification-grep
 verification-grep-scope
 verification-habits
+verification-instruments
 verification-scope
 verification-shape
 verify

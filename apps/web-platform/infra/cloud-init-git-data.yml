@@ -937,6 +937,48 @@ runcmd:
     # untested. The guard IS what keeps a healthy boot silent (AC36/T17).
     LUKSEOF
 
+  # (#7772 item 2) Arm the metadata-endpoint drop. PLACED BEFORE THE BOOTSTRAP ITEM, and the
+  # ordering is load-bearing rather than stylistic: git-data-bootstrap.sh emits
+  # stage:boot_complete carrying the MEASURED nft_metadata_drop boolean, so arming after it
+  # would have the boolean read a chain that is not loaded yet. runcmd is once-per-instance
+  # and ADR-115 bars this host from the reboot primitive, so that boolean would have reported
+  # `no` on EVERY boot of a perfectly healthy host, for the host's whole life -- and the one
+  # case it exists to catch (the ruleset flushed AFTER a successful load) would be
+  # indistinguishable from the steady state. The plan specified `after the gc_timer block`;
+  # that placement is what created the defect, and review caught it.
+  #
+  # Arming earlier is also strictly better on its own terms: it shrinks the window in which
+  # the host runs with the metadata endpoint readable by the non-root `git` account.
+  #
+  # (#7772 item 2) Arm the metadata-endpoint drop. Same substitution-plus-`if` shape as the
+  # gc_timer capture directly above, for the same two reasons #7227 records: a failed REDIRECT
+  # must not be indistinguishable from a failed unit, and the guard must sit INSIDE the failure
+  # branch or it runs before systemctl writes stderr and discards the real error.
+  #
+  # `enable --now`, never a bare `enable`. A bare enable leaves the control INERT for the life
+  # of the host: git-data is barred from the reboot primitive (ADR-115), so "it will apply next
+  # boot" means "it will apply when the host is replaced", and the whole point of landing this
+  # pre-birth is that the first boot is the one that counts.
+  #
+  # Never a bare `|| true` either -- that makes the failure unobservable, which is the exact
+  # write-only class item C exists to close. A failure here emits at WARNING, and
+  # stage:gitdata_nftables_metadata_warn IS routed (issue-alerts.tf, the new low-severity rule).
+  # The host still boots: an unarmed egress drop is a hardening regression, not a dark host, so
+  # it must not join the fatal stages that refuse a boot.
+  - |
+    STAGE=gitdata_nftables_metadata
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
+    systemctl daemon-reload || true
+    _nft_rc=0
+    _nft_err="$(systemctl enable --now git-data-nftables.service 2>&1)" || _nft_rc=$?
+    if [ "$_nft_rc" -ne 0 ]; then
+      _nft_detail=/run/git-data-nftables.err
+      [ -z "$_nft_err" ] || ( umask 077; printf '%s\n' "$_nft_err" > "$_nft_detail" ) 2>/dev/null || true
+      [ -s "$_nft_detail" ] || _nft_detail="git-data metadata egress drop failed to arm (rc=$_nft_rc): no stderr captured"
+      /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_NFT metadata egress drop failed to arm" "$${STAGE}_warn" warning \
+        "$_nft_detail" "nft_metadata_drop=unarmed" || true
+    fi
+
   # Run the idempotent bootstrap UNDER doppler run (so its LUKS re-assert has
   # GIT_DATA_LUKS_KEY). Installs git substrate + bare-repo root + fence placeholder +
   # core.hooksPath on the plaintext volume, re-asserts the LUKS mapper is open +
@@ -992,31 +1034,3 @@ runcmd:
         "$_gc_detail" "gc_timer=unarmed" || true
     fi
 
-  # (#7772 item 2) Arm the metadata-endpoint drop. Same substitution-plus-`if` shape as the
-  # gc_timer capture directly above, for the same two reasons #7227 records: a failed REDIRECT
-  # must not be indistinguishable from a failed unit, and the guard must sit INSIDE the failure
-  # branch or it runs before systemctl writes stderr and discards the real error.
-  #
-  # `enable --now`, never a bare `enable`. A bare enable leaves the control INERT for the life
-  # of the host: git-data is barred from the reboot primitive (ADR-115), so "it will apply next
-  # boot" means "it will apply when the host is replaced", and the whole point of landing this
-  # pre-birth is that the first boot is the one that counts.
-  #
-  # Never a bare `|| true` either -- that makes the failure unobservable, which is the exact
-  # write-only class item C exists to close. A failure here emits at WARNING, and
-  # stage:gitdata_nftables_metadata_warn IS routed (issue-alerts.tf, the new low-severity rule).
-  # The host still boots: an unarmed egress drop is a hardening regression, not a dark host, so
-  # it must not join the fatal stages that refuse a boot.
-  - |
-    STAGE=gitdata_nftables_metadata
-    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
-    systemctl daemon-reload || true
-    _nft_rc=0
-    _nft_err="$(systemctl enable --now git-data-nftables.service 2>&1)" || _nft_rc=$?
-    if [ "$_nft_rc" -ne 0 ]; then
-      _nft_detail=/run/git-data-nftables.err
-      [ -z "$_nft_err" ] || ( umask 077; printf '%s\n' "$_nft_err" > "$_nft_detail" ) 2>/dev/null || true
-      [ -s "$_nft_detail" ] || _nft_detail="git-data metadata egress drop failed to arm (rc=$_nft_rc): no stderr captured"
-      /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_NFT metadata egress drop failed to arm" "$${STAGE}_warn" warning \
-        "$_nft_detail" "nft_metadata_drop=unarmed" || true
-    fi
