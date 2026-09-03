@@ -47,7 +47,8 @@
 #   4. AN EXEMPTION CLASS IS REQUIRED, NOT OPTIONAL. Four probe units resolve their own secret by
 #      indirect expansion over a per-host key name Terraform bakes in and the tracked unit never
 #      contains — `export WEB_ZOT_CONSUMER_URL="${!WEB_ZOT_CONSUMER_URL_KEY}"` — where the key
-#      expands to e.g. WEB_ZOT_CONSUMER_URL_WEB_1 per server.tf:683,734,820,871. A literal
+#      expands to e.g. WEB_ZOT_CONSUMER_URL_WEB_1 (server.tf:683,734; :820 and :871 are identity
+#      mappings today — see ACK_REASONS for the measured correction). A literal
 #      `--only-secrets` list in a TRACKED unit cannot name a per-host secret, and the flag is
 #      fail-closed on a listed-but-absent name, so the same unit on a second web host would break
 #      — on the multi-host path the fleet is actively opening. That is a real limit of the
@@ -168,23 +169,31 @@ GUARD1_UNSET_CARDINALITY = 15
 
 # ── the ack list: AUTHORED, each entry carrying WHY, cardinality pinned ───────────────────────
 ACK_REASONS = {
-    # -- exemption class A: per-host indirect expansion (plan Guard 2, scoping decision 4) ------
-    # These four resolve their own secret as ${!<NAME>_KEY}, where <NAME>_KEY is baked in per
-    # host by server.tf:683,734,820,871 and expands to e.g. WEB_ZOT_CONSUMER_URL_WEB_1. A literal
-    # `--only-secrets` list in a TRACKED unit cannot name a per-host secret, and the flag is
-    # fail-closed on a listed-but-absent name, so the same unit on a second web host would break.
+    # -- exemption class A: indirect expansion over a Terraform-supplied key name ---------------
+    # These four resolve their own secret as ${!<NAME>_KEY}: the tracked unit never contains the
+    # secret's NAME at all, only the name of a variable holding it, which Terraform writes into
+    # /etc/default/<unit> per host. A literal `--only-secrets` list in a TRACKED unit therefore
+    # cannot name the secret, and the flag is fail-closed on a listed-but-absent name.
+    #
+    # MEASURED, and it corrects the plan: only TWO of the four keys are per-host TODAY.
+    # server.tf:683 and :734 build the key as `<NAME>_${upper(replace("web-1","-","_"))}`, i.e.
+    # WEB_NIC_GUARD_URL_WEB_1 / WEB_ZOT_CONSUMER_URL_WEB_1. server.tf:820 and :871 are IDENTITY
+    # mappings ('INNGEST_CONSUMER_URL' / 'GIT_DATA_HEARTBEAT_URL') because there is one dedicated
+    # inngest host and one git-data host. The exemption holds for all four regardless: the name is
+    # not in the unit, and :820/:871 become per-host on the multi-host path the fleet is opening.
     'web-zot-consumer-probe.service':
-        'per-host indirect expansion of WEB_ZOT_CONSUMER_URL_KEY; the secret name is per-host '
-        '(server.tf:683) so no literal list in a tracked unit can name it',
-    'inngest-consumer-probe.service':
-        'per-host indirect expansion of INNGEST_CONSUMER_URL_KEY; per-host secret name '
-        '(server.tf:734), same fail-closed multi-host break',
-    'web-git-data-probe.service':
-        'per-host indirect expansion of GIT_DATA_HEARTBEAT_URL_KEY; per-host secret name '
-        '(server.tf:820)',
+        'indirect expansion of WEB_ZOT_CONSUMER_URL_KEY, which server.tf:734 builds PER HOST '
+        '(WEB_ZOT_CONSUMER_URL_WEB_1) — no literal list in a tracked unit can name it',
     'web-private-nic-guard.service':
-        'per-host indirect expansion of WEB_NIC_GUARD_URL_KEY; per-host secret name '
-        '(server.tf:871)',
+        'indirect expansion of WEB_NIC_GUARD_URL_KEY, which server.tf:683 builds PER HOST '
+        '(WEB_NIC_GUARD_URL_WEB_1) — same fail-closed multi-host break',
+    'inngest-consumer-probe.service':
+        'indirect expansion of INNGEST_CONSUMER_URL_KEY; server.tf:820 maps it to the identity '
+        'name today (one dedicated inngest host), but the unit still never names the secret, so '
+        'the list would have to be authored against a variable rather than a name',
+    'web-git-data-probe.service':
+        'indirect expansion of GIT_DATA_HEARTBEAT_URL_KEY; server.tf:871 is an identity mapping '
+        'today for the single git-data host, with the same never-named-in-the-unit limit',
     # -- exemption class B: the read-set is not authorable from the tracked source ---------------
     'cron-egress-resolve.service':
         'read-set is not derivable: cron-egress-resolve.sh:149-157 reads SENTRY_INGEST_DOMAIN / '
