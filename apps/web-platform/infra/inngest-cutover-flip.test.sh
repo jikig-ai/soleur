@@ -691,7 +691,10 @@ FLIP_SRC="$TARGET"
 
 # Comments stripped FIRST. The script carries ${VAR+x} and ${VAR-default} inside explanatory prose,
 # and a derivation that reads those would demand names the script never actually reads.
-flip_src_nocomments() { sed -E 's/(^|[^\\])#.*$/\1/' "$FLIP_SRC"; }
+# `#` starts a comment only at line start or after whitespace. The naive form (`[^\]#`) truncates
+# ${VAR#prefix} at the `#`, which made an entire expansion family invisible to the derivation below
+# — Guard 2's scanner already had this right in the same PR, so the two disagreed.
+flip_src_nocomments() { sed -E 's/(^|[[:space:]])#.*$/\1/' "$FLIP_SRC"; }
 
 # The seam-name set DERIVED FROM THE SCRIPT BY SHAPE — the tripwire's left-hand side.
 #
@@ -706,8 +709,11 @@ flip_src_nocomments() { sed -E 's/(^|[^\\])#.*$/\1/' "$FLIP_SRC"; }
 # re-open the hole silently. The bare forms are redundant in today's file — every bare read also
 # appears in a default form — but that is a property of this file today, not of the shape.
 derived_prefixed_names() {
+  # Matches the NAME inside `${…}` regardless of which operator follows it, plus the bare `$NAME`
+  # and the `${#NAME}` / `${!NAME}` prefixed forms. Enumerating TERMINATORS (the previous approach)
+  # covered 6 of 14 spellings and silently exempted the rest.
   flip_src_nocomments \
-    | grep -oE '\$\{(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+(\}|:-|-|:\+|\+|:=|=|:\?|\?)|\$(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+' \
+    | grep -oE '\$\{[#!]?(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+|\$(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+' \
     | grep -oE '(CUTOVER_|INNGEST_CUTOVER_)[A-Za-z0-9_]+' \
     | sort -u || true
 }
@@ -753,10 +759,33 @@ echo "TEST: #7761 the companion assertion — no UNPREFIXED external value in co
 # it. This pairs with it: every expansion appearing in COMMAND POSITION must either be prefix-scoped
 # (and therefore covered by the gate) or be assigned somewhere in this file (and therefore not
 # externally supplied). Without this pairing the gate's property does not hold.
-CMD_POS_VARS="$(flip_src_nocomments \
-  | grep -oE '(^|[;&|]|\bthen\b|\belse\b|\bdo\b|\{)[[:space:]]*"?\$\{?[A-Za-z_][A-Za-z0-9_]*' \
-  | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' \
-  | grep -oE '[A-Za-z_][A-Za-z0-9_]*' | sort -u || true)"
+# The preceding-context alternation IS the assertion, so a missing operator is a silent exemption.
+# The previous form covered 9 of 26 command-position shapes; review proved eight escapes, all
+# unprefixed, externally-supplied, executed as root, and green: `$( )`, `( )`, `if`, `while`, `!`,
+# `exec`, a command prefix (`env FOO=1 "$X"`), and `source`/`.` — the last pair being exactly what
+# Guard 2's property statement names as the class ("executes it, or sources a path named by it").
+# All sixteen review-proved escapes (these eight plus eight expansion forms) are now caught,
+# verified by mutation.
+#
+# THIS REMAINS A HEURISTIC, and saying so is the point: bash command position is not a regular
+# language, so a determined shape can still evade it (`eval "$X"`, an alias, a variable holding
+# the whole command line, a `$@` splat). It is the SECONDARY control. The primary ones are the
+# prefix-scoped completeness tripwire above — which is exhaustive over the CUTOVER_ /
+# INNGEST_CUTOVER_ namespace by construction — and `--only-secrets` at the unit, which bounds what
+# can be in the environment at all. Do not read a green run here as "no unprefixed seam exists".
+CMD_POS_VARS="$( { flip_src_nocomments \
+    | grep -oE '(^|[;&|(`]|\$\(|\bthen\b|\belse\b|\bdo\b|\bif\b|\belif\b|\bwhile\b|\buntil\b|\bexec\b|\bcommand\b|\benv\b|\bsource\b|!|\{)[[:space:]]*"?\$\{?[A-Za-z_][A-Za-z0-9_]*' \
+    | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*'
+  flip_src_nocomments \
+    | grep -oE '(^|[[:space:]])\.[[:space:]]+"?\$\{?[A-Za-z_][A-Za-z0-9_]*' \
+    | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*'
+  # Command PREFIXES: an assignment (`FOO=1 "$X"`) or a wrapper carrying its own arguments
+  # (`env FOO=1 "$X"`, `timeout 5 "$X"`, `command -p "$X"`) puts tokens between the keyword and
+  # the variable, so the alternation above walks past it.
+  flip_src_nocomments \
+    | grep -oE '(^|[;&|(`{]|\$\()[[:space:]]*((env|command|timeout|xargs|nohup|setsid|sudo)[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|-[^[:space:]]+[[:space:]]+|[0-9]+[[:space:]]+)+"?\$\{?[A-Za-z_][A-Za-z0-9_]*' \
+    | grep -oE '"?\$\{?[A-Za-z_][A-Za-z0-9_]*$' | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*'
+  } | grep -oE '[A-Za-z_][A-Za-z0-9_]*' | sort -u || true)"
 # ASSIGNED_VARS is a FALSE-POSITIVE SUPPRESSOR, and as of #7761 it is inert — measured, every
 # command-position expansion in this script today is prefix-scoped, so it has nothing to suppress.
 # It survived its own mutation (emptying it left the suite green) and that survivor is EQUIVALENT,
