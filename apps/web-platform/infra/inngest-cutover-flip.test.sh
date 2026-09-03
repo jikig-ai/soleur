@@ -718,6 +718,15 @@ CMD_POS_VARS="$(flip_src_nocomments \
   | grep -oE '(^|[;&|]|\bthen\b|\belse\b|\bdo\b|\{)[[:space:]]*"?\$\{?[A-Za-z_][A-Za-z0-9_]*' \
   | grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' \
   | grep -oE '[A-Za-z_][A-Za-z0-9_]*' | sort -u || true)"
+# ASSIGNED_VARS is a FALSE-POSITIVE SUPPRESSOR, and as of #7761 it is inert — measured, every
+# command-position expansion in this script today is prefix-scoped, so it has nothing to suppress.
+# It survived its own mutation (emptying it left the suite green) and that survivor is EQUIVALENT,
+# not a gap: emptying it makes the assertion STRICTER, never weaker, so the degenerate direction
+# fails closed. It is kept because a future in-file-assigned variable used in command position
+# would otherwise trip this assertion for no reason. Recorded here so the next reader does not
+# re-litigate the surviving mutant. The assertion's real teeth were verified separately against
+# three shapes — an indented call on its own line, a call after a pipe, and the braced
+# ${NAME:-} form — each of which reds it.
 ASSIGNED_VARS="$(grep -oE '^[[:space:]]*(local |readonly |export )?[A-Za-z_][A-Za-z0-9_]*=' "$FLIP_SRC" \
   | grep -oE '[A-Za-z_][A-Za-z0-9_]*=' | tr -d '=' | sort -u || true)"
 UNGOVERNED=""
