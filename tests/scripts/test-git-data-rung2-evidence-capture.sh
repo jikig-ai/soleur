@@ -81,12 +81,25 @@ for _p in "${_payloads[@]}"; do printf '#!/usr/bin/env bash\ntrue\n' > "$FIX/$_p
 # right rows in the wrong order can make a broken script look correct.
 #
 # Each canned response is a file of JSONEachRow lines, keyed by which query shape asked.
-make_stub() {  # $1=stubpath  $2=anchor-rows-file  $3=host-rows-file
+# $4 (fatal-rows) MODELS THE UNLIMITED FATAL QUERY, and defaults to the fatal rows PRESENT IN
+# $3 rather than to $3 itself. That default is the faithful production model for every arm
+# where the row window is not truncating: the fatal query is a SUPERSET of the windowed one,
+# and when nothing fell out of the window the two agree on exactly the fatal rows. Passing $4
+# explicitly is what lets an arm model a CHATTY boot — a fatal that the newest-50 window drops
+# while the unlimited query still returns it (#7460 §5.0).
+make_stub() {  # $1=stubpath  $2=anchor-rows-file  $3=host-rows-file  [$4=fatal-rows-file]
+  local _fatal="${4:-}"
+  if [[ -z "$_fatal" ]]; then
+    _fatal="${3}.derived-fatal"
+    grep '"level":"fatal"' "$3" > "$_fatal" 2>/dev/null || : > "$_fatal"
+  fi
   cat > "$1" <<STUB
 #!/usr/bin/env bash
 sql="\$1"
 if printf '%s' "\$sql" | grep -q '__ANCHOR__'; then
   cat "$2"
+elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
+  cat "$_fatal"
 elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
   cat "$3"
 else
@@ -851,12 +864,47 @@ else
   fail "an absent SENTRY_ISSUE_RO_TOKEN is reported as a named skip, not read as silence" "$rc" "$out"
 fi
 
-_ran=$((passes + fails))
-if [[ "$_ran" -lt 55 ]]; then
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 55. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+# ARM 24 (#7460 §5.0) — A CHATTY BOOT MUST NOT BURY ITS OWN FATAL.
+#
+# HOST_SQL ends `ORDER BY dt DESC LIMIT 50`. That bound was safe only while the channel split
+# held: ADR-149 recorded that "on a successful boot the only Better Stack row a git-data host
+# produces is boot_complete itself". Phase 5 bakes the ingest token, so every post-write_files
+# stage now emits — and the emitter fires far more often than once per stage (sshd warn, mount,
+# gc-timer, the LUKS trap, per-stage on_err).
+#
+# So an EARLY fatal followed by enough later rows falls OUT of the newest-50 window. The fatal
+# arm then finds nothing, control reaches the boot_complete check, and the script writes
+# RUNG2_BOOT_REHEARSAL=PASS over an unread fatal — the exact artifact ## User-Brand Impact
+# names as the failure this route exists to prevent.
+#
+# THE FIXTURE ENCODES THE TRUNCATION, because that is what production does: the host fixture is
+# what the WINDOWED query returns (fatal already dropped), and the fatal fixture is what the
+# UNLIMITED query returns. An arm that put the fatal in both files would pass against the
+# defect and prove nothing.
+HOSTROWS_CHATTY="$TMP/rows-chatty.jsonl"
+: > "$HOSTROWS_CHATTY"
+for _i in $(seq 1 50); do
+  row mount info "detail=routine emit ${_i}" >> "$HOSTROWS_CHATTY"
+done
+row boot_complete info luks_mounted=yes repo_root=yes hooks_path=yes provision=yes >> "$HOSTROWS_CHATTY"
+FATALROWS_CHATTY="$TMP/rows-chatty-fatal.jsonl"
+row luks_open fatal "rc=32" "detail=mount(2) ESRCH" > "$FATALROWS_CHATTY"
+
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS_CHATTY" "$FATALROWS_CHATTY"
+OUT_CHATTY="$TMP/evidence-chatty.env"
+out="$(run_sut --out "$OUT_CHATTY")"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"FATAL"* && ! -f "$OUT_CHATTY" ]]; then
+  pass "ARM 24: a fatal outside the newest-50 window still FAILs, and writes no evidence file"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 55)\n' "$_ran"
+  fail "ARM 24: a fatal outside the newest-50 window still FAILs, and writes no evidence file" "$rc" "$out"
+fi
+
+_ran=$((passes + fails))
+if [[ "$_ran" -lt 56 ]]; then
+  fails=$((fails + 1))
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 56. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+else
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 56)\n' "$_ran"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is

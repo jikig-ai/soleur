@@ -28,11 +28,17 @@
 # MEASURED, that emit cannot reach Better Stack at all: it is a bare `curl` to Sentry inside
 # `bootcmd`, which runs BEFORE `write_files`, so `/usr/local/bin/git-data-emit` does not exist
 # yet and there is no Better Stack call in it. Worse, the emitter's Better Stack block is
-# gated on `BETTERSTACK_LOGS_TOKEN` being in the environment, which happens only under
-# `doppler run` — so on a SUCCESSFUL boot the only row this source ever receives from a
-# git-data host is `boot_complete` itself. An anchor that is a strict prerequisite of the
-# thing it is anchoring is not an anchor; it would have returned zero rows on a perfect
-# rehearsal, forever, and the failure would have read as "dark boot".
+# gated on `BETTERSTACK_LOGS_TOKEN` being in the environment.
+#
+# SUPERSEDED IN PART BY #7460: that token is now BAKED, so the gate is satisfied from
+# `write_files` onward and EIGHT of the nine stages reach this source rather than one. The
+# `bootcmd` beacon stays Sentry-only by construction — it fires before `write_files`, so the
+# shared emitter does not exist yet, and no baked token changes that.
+#
+# The anchor's rationale is UNCHANGED and is why it was never keyed on this host: an anchor
+# that is a strict prerequisite of the thing it is anchoring is not an anchor; it would have
+# returned zero rows on a perfect rehearsal, forever, and the failure would have read as
+# "dark boot". What DID change is the row-window bound — see FATAL_SQL below.
 #
 # So the anchor asks a different question: IS THIS SOURCE ANSWERING AT ALL? One query for any
 # row from any host in the window. If the source is live and this host said nothing, the
@@ -476,6 +482,34 @@ HOST_SQL="
     AND JSONExtractString(raw,'host_name') = '${HOST_NAME}'
   ORDER BY dt DESC LIMIT 50 FORMAT JSONEachRow"
 
+# THE FATAL ARM MUST NOT BE ROW-WINDOW-BOUNDED (#7460 §5.0).
+#
+# HOST_SQL keeps the NEWEST 50 rows. That was safe only while the channel split held and a
+# healthy boot produced a single row. Now that eight stages emit — and the emitter fires far
+# more often than once per stage (sshd warn, mount, gc-timer, the LUKS trap, per-stage
+# `on_err`) — an EARLY fatal followed by enough later rows drops out of the window. The FAIL
+# arm would then find nothing, fall through to the boot_complete check, and write PASS over an
+# unread fatal.
+#
+# A verdict that depends on how chatty a healthy boot happens to be is not a verdict, so the
+# fatal question gets its own query: same host, same window, filtered server-side to
+# level='fatal', with a bound far above any plausible fatal count rather than above any
+# plausible ROW count. `LIMIT 1000` is a runaway guard, not a window — a boot emitting 1000
+# fatals has already answered the question this script asks.
+FATAL_SQL="
+  SELECT /* __FATALROWS__ every FATAL this rehearsal host reported, unbounded by row chatter */
+         dt,
+         JSONExtractString(raw,'stage')  AS stage,
+         JSONExtractString(raw,'level')  AS level,
+         JSONExtractString(raw,'host_name') AS host,
+         JSONExtractString(raw,'detail') AS detail,
+         JSONExtractString(raw,'rc')     AS rc
+  FROM ${_bs_source}
+  WHERE dt > now() - INTERVAL ${WINDOW}
+    AND JSONExtractString(raw,'host_name') = '${HOST_NAME}'
+    AND JSONExtractString(raw,'level') = 'fatal'
+  ORDER BY dt ASC LIMIT 1000 FORMAT JSONEachRow"
+
 _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
   bash "$QUERY" "$1" 2>&1
 }
@@ -514,6 +548,17 @@ if [[ "$host_rc" -ne 0 ]]; then
             "$(printf '%s\n' "$host_out" | tail -5)"
 fi
 
+# ── ARTIFACT 2b: every FATAL this host reported, unbounded by row chatter ─────────
+# Separate query, deliberately. See FATAL_SQL. A transport failure here is TRANSIENT for the
+# same reason it is on the other two: an unanswered fatal query cannot be read as "no fatal",
+# and reading it that way is precisely the silence-is-health defect this route exists to end.
+fatal_out="$(_run_query "$FATAL_SQL")"; fatal_rc=$?
+if [[ "$fatal_rc" -ne 0 ]]; then
+  transient "TRANSIENT: the unbounded fatal query exited ${fatal_rc} after the anchor succeeded. No verdict —" \
+            "an unanswered fatal query is NOT a clean bill." \
+            "$(printf '%s\n' "$fatal_out" | tail -5)"
+fi
+
 # ── ARTIFACT 3: the FAIL arms ─────────────────────────────────────────────────────
 #
 # (#7025, R5) `level=fatal` IS THE REAL FAIL ARM, and the inherited `\bno\b` match is the
@@ -525,9 +570,12 @@ fi
 #
 # The `\bno\b` arm is retained anyway: it costs nothing and it is exactly the arm that fires
 # if those literals are ever replaced by real measurements.
-if grep -q '"level":"fatal"' <<<"$host_out"; then
+# READS `fatal_out`, NOT `host_out` (#7460 §5.0). Grepping the windowed row set here is what
+# made a chatty boot able to bury its own fatal; the predicate is kept identical so a mutation
+# that points it back at `host_out` is a one-token, clearly-visible revert.
+if grep -q '"level":"fatal"' <<<"$fatal_out"; then
   echo "FAIL: ${HOST_NAME} reported a FATAL. The rehearsal found the failure class this route exists to catch — a boot that would have looked green from the apply."
-  grep '"level":"fatal"' <<<"$host_out" | head -10
+  grep '"level":"fatal"' <<<"$fatal_out" | head -10
   echo
   echo "NO EVIDENCE FILE WRITTEN. Fix the cause, then re-run the rehearsal against the corrected template."
   exit 1
@@ -664,6 +712,10 @@ fi
   printf '# ARTIFACT 2 — every stage this host reported, and ARTIFACT 3 — the fatal/false-assertion\n'
   printf '# arms, both read from this one result set.\n'
   printf '# QUERY:%s\n' "$(printf '%s' "$HOST_SQL" | tr '\n' ' ' | tr -s ' ')"
+  # The fatal arm is a SEPARATE query, so the evidence records both or it under-states what
+  # was actually asked. An auditor reading only the windowed query would conclude the verdict
+  # was window-bounded, which since #7460 it is not.
+  printf '# QUERY_FATAL:%s\n' "$(printf '%s' "$FATAL_SQL" | tr '\n' ' ' | tr -s ' ')"
   printf '#\n'
   # THE SECOND CHANNEL'S VERDICT IS PART OF THE EVIDENCE, not just of the log.
   #
