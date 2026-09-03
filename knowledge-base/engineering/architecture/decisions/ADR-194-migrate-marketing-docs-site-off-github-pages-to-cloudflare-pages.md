@@ -563,10 +563,23 @@ origin, and it moves it on a live, HSTS-preloaded apex.
 
 A corollary that only shows up once you look: the probe's
 `SERVING-FROM-CLOUDFLARE-PAGES` arm is **residual** — "200, and no GitHub
-marker". The apex answers `cache-control: max-age=600`, so a cached pre-cutover
-response reads as Cloudflare. That verdict is the rollback's branch selector, so
-the probe now carries a cache-buster; without it a cached 200 could route an
-operator into reverting PR3, a second destroy, during an active incident.
+marker" — so anything that suppresses the markers reads as Cloudflare, and that
+verdict is the rollback's branch selector.
+
+**Corrected 2026-09-03 (review).** An earlier draft of this paragraph justified
+the cache-buster by claiming a cached pre-cutover response reads as Cloudflare.
+Re-measured, that is not so: the GitHub markers are served *alongside* the cache
+headers, so a stale copy reads GITHUB — the direction that blocks the merge,
+which is safe. The buster is still correct and cheap, but for the general reason
+rather than that specific one: a residual verdict must be reached only by a
+fresh origin read, never by anything the edge might replay.
+
+The sharper defect the same review found was not caching at all. The probe knew
+**three** origin markers while `cutover-verify.sh` CUT2 knew **six**, and the
+live pre-cutover apex carries one of the missing three (`x-proxy-cache`). A
+response bearing only those would have read as "already on Cloudflare" and
+routed an operator into reverting PR3 — a second destroy. Both consumers now
+source one list from `apex-origin-markers.sh`.
 
 ### The ordering comes from Terraform core, not from a two-pass apply
 
@@ -583,7 +596,13 @@ Terraform resource address and let core's replace semantics serialise it.
 Measured at provider 4.52.7 / Terraform 1.10.5, `type` is ForceNew, so `A`→`CNAME`
 at a single address plans as actions `["delete","create"]` — one address,
 inherently ordered. Cloudflare rejects an `A` and a `CNAME` coexisting at one
-name with error `81053`, and that is the only collision to avoid.
+name with error `81053`, and that is the collision this design is built around.
+
+(PF-SYM measured `81053` on a scratch *name*. The apex additionally carries 2 MX
+and 4 TXT records, and CNAME-at-root is governed by Cloudflare's flattening
+rules rather than the plain subdomain case. Flattening with MX at the root is
+Cloudflare's own headline feature so the risk is low, but "the only collision"
+overstates what was measured — recorded rather than re-litigated.)
 
 Getting to one address takes two merges, which is why PR4 became PR4a and PR4b:
 PR4a shrinks the `for_each` to a single key (`destroy_count = 3`, three deletes,

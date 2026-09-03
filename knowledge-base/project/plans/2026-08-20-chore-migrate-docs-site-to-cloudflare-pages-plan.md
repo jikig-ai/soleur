@@ -512,7 +512,13 @@ ordering is a blocker rather than a refinement.
 
 **A second, quieter blast radius:** the apex also carries the company's Protonmail `MX` and
 four `TXT` records. The A→CNAME transition touches that name. A silent mail break would be
-invisible to every uptime monitor. P8/CUT9 exist for this.
+invisible to every uptime monitor. P8/CUT9 exist for this — **but scoped
+precisely: CUT9 compares the APEX `MX` and `TXT` sets only.** The DKIM CNAMEs,
+`_dmarc`, and the SES `send.`/`inbound.` MX records are subdomains and are
+outside it. They are also outside this cutover's reach (Terraform touches only
+`pages_apex` and `www`), so that is a legitimate scope-out — but it is a
+scope-out, not coverage, and an earlier phrasing of this line implied CUT9
+covered "mail" generally.
 
 **If this leaks, the user's workflow is exposed via:** a Cloudflare API token scoped to
 `Account → Cloudflare Pages → Edit` reaching CI. That token is a **site-content replacement

@@ -187,8 +187,13 @@ Phase 2 tasks 2.1-2.10 are implemented and committed on
   the in-place `www` update. Only those two resources change.
 - **PF-R8b (Cloudflare API, not a resolver):** apex = 1 A, 0 CNAME, 2 MX, 4 TXT;
   www = exactly one proxied CNAME. This also proves **PR4a converged**.
-- **PF-Z2:** `SERVING-FROM-GITHUB-PAGES` — CUT2 sees `x-proxy-cache: MISS`
-  pre-cutover, which is the positive control for the discriminator.
+- **PF-Z2:** `SERVING-FROM-GITHUB-PAGES`, and CUT2 FAILs pre-cutover on
+  `x-proxy-cache: MISS`, which is the positive control for CUT2's discriminator.
+  **Corrected 2026-09-03 (review):** this line originally offered that marker as
+  the control for the PROBE's verdict. It was not — the probe knew only three of
+  the six markers and `x-proxy-cache` was one of the three it did not know, which
+  is precisely the divergence the review found. Both now source
+  `apex-origin-markers.sh`.
 - **AC48:** `seo-config-rules.tf` still carries exactly one `ssl = "full"` and is
   untouched by this branch.
 

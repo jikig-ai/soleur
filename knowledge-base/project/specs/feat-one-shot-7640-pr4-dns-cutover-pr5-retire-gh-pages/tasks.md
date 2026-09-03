@@ -79,7 +79,13 @@ rejected alternatives are in the Cut List with the measurement that killed each.
 - [ ] 3.1 **PF8′ immediately:** run the generator, push, `gh pr create` the reverse-`moved`
       rollback PR with `[ack-destroy]` for its own squash message. **NOT `git revert`.**
       Assert the ack by reading the branch commit body, not `gh pr view --json` (AC53).
-- [ ] 3.2 Wait 5 min, then `cutover-verify.sh`: CUT0′-CUT9, 3 consecutive clean samples at 60 s.
+- [ ] 3.2 Wait 5 min, then run the CUT0′-CUT9 runner: **3 consecutive clean samples
+      at 60 s.** Do not invoke it bare — it needs `CUTOVER_SINCE` (so CUT8 grades
+      only post-cutover checks) and a Doppler wrapper (so CUT8 can reach Sentry and
+      BetterStack at all). The exact block, including how `PF_SHA` must be derived,
+      is in `knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md`
+      §"Verifying the cutover". Invoked bare it reports five unverifiable monitors
+      and exit 2, and the only guidance for exit 2 is "re-run".
       **CUT0′ compares against PF-DOCS's recorded SHA, cache-busted — not the merge SHA**
       (`deploy-docs.yml` deliberately does not fire on `dns.tf`).
 - [ ] 3.3 Decision point at T+20: on any failure merge the generated rollback PR; then re-probe

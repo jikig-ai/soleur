@@ -335,6 +335,26 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 # concurrent plan and reproduces 81053 in the REVERSE direction, on an apex that
 # is already broken. The rollback is the reverse-`moved` PR emitted by
 # `generate-apex-rollback-pr.sh`.
+#
+# DO NOT DELETE THIS BLOCK AS DEAD WEIGHT ONCE THE MOVE HAS CONVERGED.
+# Two things depend on it that nothing connects to it:
+#
+#   1. `ssl-full-mitigation.test.sh` resolves its stage from a three-way OR over
+#      the .tf files, and PR4b drives two of those arms to zero. The ONLY arm
+#      still holding it in `pre-cutover` is the IP literal on the `from` line
+#      below (measured: `pages IPs: 1, github.io target: no, record block: no`).
+#      Delete this block and the guard flips to `post-cutover`, where nine
+#      mitigation assertions become unconditional passes and `ssl = "full"` in
+#      seo-config-rules.tf becomes unguarded text that reads as deletable. That
+#      rule is what masks a GitHub Pages origin certificate expired 2026-08-16,
+#      and the ROLLBACK depends on it. #7799 carries the removal conditions.
+#
+#   2. Re-attempting PR4b after a rollback requires the REVERSE block emitted by
+#      the generator to be deleted first — leaving both makes every plan on this
+#      root fail with "Moved object still exists".
+#
+# The right time to remove this is when the rollback window formally closes,
+# together with the ssl rule, as one deliberate change — not as tidy-up.
 moved {
   from = cloudflare_record.github_pages["185.199.108.153"]
   to   = cloudflare_record.pages_apex

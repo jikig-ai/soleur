@@ -117,12 +117,36 @@ exit code, and it distinguishes three outcomes rather than two:
 # deploy-docs.yml deliberately does not fire on dns.tf, so no build exists at
 # the merge SHA and CUT0 read literally would fail all three samples and drive
 # a FALSE rollback. That is why the assertion is CUT0', not CUT0.
-PF_SHA=$(gh run list --workflow=deploy-docs.yml --branch main --limit 1 \
-           --json headSha --jq '.[0].headSha')
+# The last run whose CLOUDFLARE PAGES leg succeeded — not merely the last run.
+# `--limit 1 --json headSha` alone returns the newest run whatever happened to
+# it; if its Pages leg failed, CUT0' compares the apex against a SHA that was
+# never published, fails all three samples, and drives a FALSE rollback — the
+# exact failure CUT0' exists to remove. The run CONCLUSION is also the wrong
+# field here: after the cutover the GitHub Pages leg is red by construction
+# until PR5, so the run is red while the Pages leg is green. Read the job.
+PF_SHA=$(gh run list --workflow=deploy-docs.yml --branch main --limit 20 \
+           --json databaseId,headSha --jq '.[] | "\(.databaseId) \(.headSha)"' \
+  | while read -r id sha; do
+      if gh run view "$id" --json jobs \
+           --jq '[.jobs[] | select(.name | test("Cloudflare Pages"))
+                          | select(.conclusion == "success")] | length' \
+         | grep -qv '^0$'; then printf '%s\n' "$sha"; break; fi
+    done)
+[ -n "$PF_SHA" ] || { echo "no deploy-docs run with a successful Pages leg in the last 20 — do NOT proceed"; }
 
-doppler run -p soleur -c prd_terraform --command "
-  export SENTRY_ORG=\$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain)
-  bash apps/web-platform/infra/cutover-verify.sh --expected-sha $PF_SHA"
+# CUTOVER_SINCE scopes CUT8 to checks taken AFTER the apply. Without it the
+# monitors' rolling window still contains the cutover's own propagation failures
+# at T+20, every monitor scores a REGRESSION, and the gate that decides whether
+# to perform a SECOND destructive change is biased toward rollback by the very
+# outage it is measuring.
+export CUTOVER_SINCE="$(date -u -d '-2 minutes' +%Y-%m-%dT%H:%M:%SZ)"   # set once, at the apply
+
+# No nested `doppler secrets get`: prd_terraform already carries SENTRY_ORG,
+# SENTRY_AUTH_TOKEN and BETTERSTACK_API_TOKEN_READONLY. The nested read could
+# only overwrite a correct value with an empty one, which reads as four
+# unverifiable monitors and exit 2 forever.
+doppler run -p soleur -c prd_terraform --command \
+  "bash apps/web-platform/infra/cutover-verify.sh --expected-sha $PF_SHA"
 ```
 
 | exit | meaning | what to do |
@@ -130,6 +154,7 @@ doppler run -p soleur -c prd_terraform --command "
 | 0 | every assertion passed | take another sample; three consecutive clean at 60 s |
 | 1 | at least one assertion FAILED | the rollback path below |
 | 2 | nothing failed, something was UNREACHABLE | **re-run.** An assertion that could not be evaluated is not one that passed, and this is not clearance to proceed |
+| 64 | usage error, or the runner refused to start | fix the invocation. This used to share code 2, so a mistyped flag read as "re-run" and an operator under T+20 pressure would retry it forever |
 
 **Do not run it under `bash -x`.** It authenticates with
 `curl -H "Authorization: Bearer …"`, and `set -x` traces every argument, so the
@@ -160,12 +185,20 @@ bash apps/web-platform/infra/cutover-verify.sh --capture-monitor-baseline \
 The decision point is 20 minutes from the apply. Two things consume that budget
 before you get to spend it on judgement:
 
-- **`deploy-docs.yml` and the infra apply share a concurrency group.** A rollback
-  PR merged while another run holds the group QUEUES rather than starting, and
-  the queue wait counts against T+20, not against the clock afterwards. Generate
-  the rollback PR at PF8' — immediately after the merge, in parallel with the
-  propagation wait — so its CI is already green when you need it. Discovering you
-  need a rollback and only then opening the PR spends the budget on CI.
+- **The rollback's apply queues behind the apply it is rolling back.** An earlier
+  version of this section said `deploy-docs.yml` and the infra apply share a
+  concurrency group. They do not — `deploy-docs.yml` is `group: "pages"` and the
+  infra apply is `group: terraform-apply-web-platform-host`. The real queue is
+  tighter than that and was not stated: the forward apply and the rollback apply
+  are the SAME workflow and therefore the same group, with
+  `cancel-in-progress: false`, and that workflow's own comment budgets a worst
+  case of preflight 1 + apply 41 + notify 5 = 47 minutes. So at T+20 the rollback
+  can be queued behind the tail of the very run you are rolling back.
+
+  The lever is therefore confirming the forward run has actually CONCLUDED
+  (`gh run watch`), not pre-baking CI. Still generate the rollback PR at PF8' —
+  a green PR is one less thing to wait on — but do not mistake that for the
+  thing that clears the queue.
 - **Three consecutive clean samples at 60 s is three minutes minimum**, and only
   if the first three are clean. Budget two sampling rounds, not one.
 
@@ -228,16 +261,43 @@ generated `moved` would no-op exactly as a mismatched forward one would.
 
    **The generator ships WITH PR4b** (it is that PR's own deliverable). Between
    the PR4a and PR4b merges it does not exist — and it does not need to, because
-   nothing is flipped yet and PR4a's rollback is a plain revert (above). If you
-   are reading this mid-incident and the script is missing, the reverse block is
-   three lines and you can hand-write it:
+   nothing is flipped yet and PR4a's rollback is a plain revert (above).
+
+   **If the script is missing mid-incident, the fallback is TWO edits, not one.**
+   An earlier version of this runbook showed only the `moved` block. That is
+   worse than useless: it moves state into an address that has no `resource`
+   block in configuration, and Terraform's response to a state entry with no
+   config is to plan it for DESTROY. The result is `1 to destroy, 0 to add` —
+   the apex loses its address entirely — and no guard catches it, because
+   `apex_move_orphans` counts a `pages_apex` CREATE and this plan has none.
+
+   Delete the `resource "cloudflare_record" "pages_apex"` block and the forward
+   `moved` block, then add BOTH of these:
 
    ```hcl
    moved {
      from = cloudflare_record.pages_apex
-     to   = cloudflare_record.github_pages["185.199.108.153"]
+     to   = cloudflare_record.github_pages
+   }
+
+   resource "cloudflare_record" "github_pages" {
+     zone_id = var.cf_zone_id
+     name    = "soleur.ai"
+     content = "185.199.108.153"
+     type    = "A"
+     proxied = true
+     ttl     = 1
    }
    ```
+
+   Also return `cloudflare_record.www`'s `content` to `"jikig-ai.github.io"`.
+   Leave its `name` and `type` alone — `type` is ForceNew, so editing it makes
+   www a second replacement racing the apex's.
+
+   Note the reverse `moved` targets a PLAIN address, with no `for_each`. That
+   meta-argument was an artifact of the pre-PR4a four-address config; using it
+   here would make the rollback a multi-instance move rather than the
+   single-address one core serialises.
 
    What you must NOT do is reach for `git revert` because the generator is
    absent. That is the one path measured to reproduce the outage.
