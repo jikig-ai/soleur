@@ -1269,12 +1269,17 @@ logs:
   retention: "GitHub artifact 7 days; GitHub run logs 90 days; Sentry per plan retention; Better Stack per plan retention"
 
 discoverability_test:
-  command: "bash tests/scripts/test-git-data-rung2-evidence-capture.sh && bash tests/scripts/test-git-data-birth-readiness-gate.sh"
-  expected_output: "both suites print a terminal summary line with 0 failed and an assertion count at or above their anti-vacuity floor"
+  command: bash tests/scripts/test-git-data-birth-readiness-gate.sh
+  expected_output: 0 failed
 ```
 
-The `discoverability_test` reads the harness's own guards with no network and no credentials —
-the two suites that decide whether a dispatch can be trusted. It deliberately excludes the live
+The `discoverability_test` reads the harness's own guards with no network and no credentials.
+It names ONE suite, not two: `/ship` preflight Check 10 executes this command inside a bwrap
+sandbox and rejects any shell-active token, so the `&&`-joined pair this field originally carried
+was unrunnable by the gate that consumes it — a discoverability test the discoverability gate
+could not perform. The sibling suite
+(`tests/scripts/test-git-data-rung2-evidence-capture.sh`) is covered by the registered infra
+runner and by this PR's Test plan. It deliberately excludes the live
 Sentry probe: that needs `SENTRY_ISSUE_RO_TOKEN`, and there is an unauthenticated substitute for
 the property being verified (the stubbed arms), so no `credentials_required` declaration is
 claimed.
