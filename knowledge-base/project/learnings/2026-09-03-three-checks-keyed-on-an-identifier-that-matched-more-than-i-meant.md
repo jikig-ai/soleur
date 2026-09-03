@@ -6,6 +6,7 @@ issues: [7460]
 pr: 7784
 tags: [mutation-testing, vacuous-guard, identifier-collision, verification]
 related:
+  - 2026-09-03-every-check-i-shipped-was-narrower-than-the-name-it-carried.md
   - 2026-09-03-the-deviation-ledger-was-an-hour-of-my-own-test-fixtures.md
   - 2026-09-02-every-guard-i-wrote-was-satisfiable-by-a-guard-that-asserts-nothing.md
   - 2026-08-01-my-battery-was-green-and-my-own-tests-pinned-the-bug.md
@@ -128,6 +129,14 @@ nothing](2026-09-02-every-guard-i-wrote-was-satisfiable-by-a-guard-that-asserts-
 (an assertion whose predicate is trivially true). Those two are about the
 *assertion*. This one is about the *identifier*: the assertion is fine, and it is
 pointed at a set you did not enumerate.
+
+Landed on `main` the same day from unrelated work: [every check I shipped was
+narrower than the name it
+carried](2026-09-03-every-check-i-shipped-was-narrower-than-the-name-it-carried.md).
+Different subject (a model-launch auditor), same family — a check whose real scope
+is narrower than the one its name advertises. Read together they bracket the
+question: that one asks *"is the check as wide as its name?"*, this one asks *"is
+the key as narrow as I think?"*
 
 ## Session Errors
 
