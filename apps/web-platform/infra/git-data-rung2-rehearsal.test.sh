@@ -1530,6 +1530,12 @@ fi
 # neutering fail() silences the rows AND the check meant to notice the silence. The literal
 # `[FATAL] accounting` is load-bearing — guard-vacuity-floor's ARM 10 builds its conservation
 # population by grepping that exact string (#7588).
+# (#7460) MOVED BELOW EVERY ARM. It used to sit here, ABOVE the arms this PR appended, so
+# those four were outside its coverage entirely: replacing an arm's whole verdict with a bare
+# `passes=$((passes + 1))` -- the exact fails->passes swap that bit PR A -- left the suite at
+# 75/0 green, because conservation had already been evaluated before the arm ever ran. A check
+# that runs before the last assertion only ever conserves the assertions that predate it.
+
 if [[ $((passes + fails)) -ne "$cases" ]]; then
   printf '\n[FATAL] accounting: passes+fails (%d) != cases (%d).\n' \
     "$((passes + fails))" "$cases" >&2
@@ -1573,12 +1579,26 @@ _luks_tf="${DIR}/git-data-luks.tf"
 _bs_res="$(sed 's/[[:space:]]#.*$//' "$_luks_tf" 2>/dev/null \
   | awk '/^resource "doppler_secret" "git_data_betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
 cases=$((cases + 1))
-if grep -qE 'name[[:space:]]*=[[:space:]]*"BETTERSTACK_LOGS_TOKEN"' <<<"$_bs_res" \
-   && grep -qE 'config[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.name' <<<"$_bs_res"; then
-  pass "git-data-luks.tf still provisions BETTERSTACK_LOGS_TOKEN into the git-data prd config"
+# name+config alone is not SCOPE, which is what the issue asked for. Measured: rescoping
+# `project` to another Doppler project, or replacing `value` with a placeholder literal, both
+# left this arm green. `ignore_changes = [value]` is the load-bearing one -- baked copy and
+# Doppler copy come from the SAME variable, so that single line is the entire reason a Better
+# Stack rotation "degrades coverage rather than breaking it". Delete it and the next apply
+# silently restores the stale token on BOTH paths, with BS_TOKEN_SOURCE=env suppressing the
+# 5.3 mirror: total darkness, green rehearsal. Nothing else in the repo pins it.
+_res_ok=1
+for _need in 'name[[:space:]]*=[[:space:]]*"BETTERSTACK_LOGS_TOKEN"' \
+             'config[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.name' \
+             'project[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.project' \
+             'value[[:space:]]*=[[:space:]]*var\.betterstack_logs_token' \
+             'ignore_changes[[:space:]]*=[[:space:]]*\[value\]'; do
+  [[ "$(grep -cE "$_need" <<<"$_bs_res" || true)" -ge 1 ]] || _res_ok=0
+done
+if [[ "$_res_ok" -eq 1 ]]; then
+  pass "git-data-luks.tf still provisions BETTERSTACK_LOGS_TOKEN into the git-data prd config, unrescoped, from the shared var, with ignore_changes"
 else
-  fail "git-data-luks.tf still provisions BETTERSTACK_LOGS_TOKEN into the git-data prd config" \
-       "the doppler_secret resource was renamed, rescoped, or removed — the post-Doppler stages lose their token"
+  fail "git-data-luks.tf still provisions BETTERSTACK_LOGS_TOKEN into the git-data prd config, unrescoped, from the shared var, with ignore_changes" \
+       "renamed, rescoped to another project/config, given a placeholder value, or lost ignore_changes = [value]"
 fi
 
 # 5.6a THE DIVERGENCE ALLOWLIST MUST NOT HAVE GROWN. Adding betterstack_logs_token to it would
@@ -1586,7 +1606,10 @@ fi
 # still producing hash-valid evidence — the one thing the allowlist exists to refuse. Asserted
 # as ABSENCE of this name, not as an exact-set pin: the set legitimately changes for identity
 # vars, and pinning it whole here would duplicate the gate's own authority.
-_allow="$(grep -oE 'GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST="[^"]*"' "$GATE" | head -1)"
+# NO `head -1`. Shell assignment is LAST-WINS, so reading only the first occurrence let a
+# second assignment -- or a `+=` append -- put the name in the effective allowlist while this
+# arm kept reading a clean first line. Measured: appending one line survived the arm.
+_allow="$(grep -oE 'GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST(\+)?=("[^"]*"|[^[:space:]]+)' "$GATE" || true)"
 cases=$((cases + 1))
 if [[ -n "$_allow" ]] && ! grep -q 'betterstack_logs_token' <<<"$_allow"; then
   pass "betterstack_logs_token is NOT a declarable divergence (prod and rehearsal share one sink)"
@@ -1609,8 +1632,18 @@ cases=$((cases + 1))
 # EARLY closes the pipe, the producer takes SIGPIPE (141), and pipefail propagates it — so a real
 # match reads as a MISS. Measured here: both predicates return 1 standalone and the arm still
 # failed. `-c` reads all input, so there is no early close. (#6649 documents this class.)
-_prod_pass="$(sed 's/[[:space:]]#.*$//' "$_prod_tf" | grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' || true)"
-_reh_pass="$(sed 's/[[:space:]]#.*$//' "$_reh_tf" | grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' || true)"
+# SCOPED TO THE MODULE BLOCK. Grepping the whole file measured "this line appears somewhere",
+# not "the root passes it into the module": moving the assignment into a top-level `locals`
+# block left this arm green while its named property was false, and two PRE-EXISTING arms were
+# what actually caught it.
+_modblk() {  # $1 = root .tf ; prints the git-data-userdata module block only
+  sed 's/[[:space:]]#.*$//' "$1" \
+    | awk '/^module "/{blk=""; inb=1} inb{blk=blk $0 ORS} inb&&/^}/{inb=0; if (blk ~ /git-data-userdata/) printf "%s", blk}'
+}
+_prod_blk="$(_modblk "$_prod_tf")"; _reh_blk="$(_modblk "$_reh_tf")"
+[[ -n "$_prod_blk" && -n "$_reh_blk" ]] || { _prod_blk=""; _reh_blk=""; }
+_prod_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' <<<"$_prod_blk" || true)"
+_reh_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' <<<"$_reh_blk" || true)"
 if [[ "$_prod_pass" -ge 1 && "$_reh_pass" -ge 1 ]]; then
   pass "both roots pass their own var.betterstack_logs_token into the module"
 else
@@ -1625,6 +1658,10 @@ _novar_default() {  # $1 = variables.tf path ; 0 = no default declared
   local _blk _n
   _blk="$(sed 's/[[:space:]]#.*$//' "$1" \
     | awk '/^variable "betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
+  # `-n "$_blk"` FIRST. An absent variable block is an empty string, which has zero `default`
+  # lines and so PASSED -- "neither root declares a default" was satisfied by "neither root
+  # declares the variable". Measured: deleting the block from BOTH roots left 75/0 green.
+  [[ -n "$_blk" ]] || return 1
   _n="$(grep -cE '^[[:space:]]*default[[:space:]]*=' <<<"$_blk" || true)"
   [[ "$_n" -eq 0 ]]
 }
@@ -1655,4 +1692,10 @@ fi
 printf '  ok   anti-vacuity floor: %d assertions ran (floor 75)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
-[[ "$fails" -eq 0 ]]
+# `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression
+# makes the suite's exit status a property of whichever line happens to be last: appending a
+# single `printf` after it turned a run printing "74 passed, 1 failed" into rc=0. Measured.
+# #7460 fixed exactly this in git-data-emit.test.sh and claimed "the sibling suites already
+# carry the explicit form" -- false: this suite and git-data-luks.test.sh did not, and this is
+# the one carrying the four arms that PR added.
+exit $(( fails > 0 ))
