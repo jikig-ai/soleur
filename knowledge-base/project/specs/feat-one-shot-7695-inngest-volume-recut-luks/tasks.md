@@ -22,9 +22,18 @@ brand_survival_threshold: single-user incident
 > - **5.5** — done for both guards (Guard 1: 34 assertions; Guard 2: 61, including a 20-case
 >   per-PREDICATE drop-one battery and a guard-mutation harness that requires each mutation to
 >   change exactly one line). Also done for all 13 structural arms of the LUKS suite.
-> - **4.4 / 4.5** (Article 30 PA-13) — routed to the CLO agent with three MEASURED findings, since
->   two of them are false Art. 32 mechanism claims and the split between a scoping clarification
->   and a retraction is not mine to make.
+> - **4.4 / 4.5** — DONE. The CLO ruled, and widened it: the propagation set is THIRTEEN files, not
+>   one limb. PA-13 (e), (f) and (g)/TOM-11 are corrected in place with the CLO's drafted wording;
+>   the published data-protection disclosure and privacy policy are corrected canonical + mirror
+>   with the SHAs re-pinned; ADR-030's `Bound to 127.0.0.1 only` Decision clause is STRUCK (it is
+>   the citation every downstream false claim traced back to); a runbook intro and a source comment
+>   are corrected; and the LIA plus two DPIA screenings get dated APPENDED addenda rather than
+>   in-place edits, because silently editing the factual premise of a completed balancing destroys
+>   the evidence of what was weighed. The CLO also reversed part of its own first draft: `/v1/*` IS
+>   loopback-gated in software, so the retired text understated the safeguard rather than
+>   overstating it. Deferred to #7779: the Redis AOF retention determination, the shared-store
+>   plaintext-at-rest gap across PA-13/14/21/22/27/31, and a live probe of whether
+>   `/api/dashboard/runs` actually functions as the Art. 15 route we publish.
 > - **B4** is recorded FALSIFIED AS WRITTEN in the plan's delivery addendum, with the property it
 >   was standing in for measured PASSING. It is not quietly satisfied by a looser reading.
 
@@ -139,9 +148,9 @@ undeliverable. Phase order is load-bearing throughout.
       inversion between `op=arm` and `op=resume`.
 - [x] 4.3 Ledger row: **keep the `exception`**, re-dated, with the bare-line-number citation
       replaced by a content anchor. Do **not** flip `mechanism` to `luks` in this merge.
-- [ ] 4.4 Article 30 PA-13 limb (e) — substrate is a host-local Redis AOF on a block volume on a
+- [x] 4.4 Article 30 PA-13 limb (e) — substrate is a host-local Redis AOF on a block volume on a
       dedicated host, not "SQLite on the same Hetzner host".
-- [ ] 4.5 File a `compliance/` issue for PA-13 limb (f).
+- [x] 4.5 File a `compliance/` issue for PA-13 limb (f).
 - [x] 4.6 File an issue for the **append-only authorized latch clear** — the stated fallback for the
       `redis_keys > 0` branch, which is otherwise circular.
 - [x] 4.7 Art. 5(2) destruction-record template under `knowledge-base/legal/audits/`.
