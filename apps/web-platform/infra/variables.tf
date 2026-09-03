@@ -727,3 +727,18 @@ variable "grok_dogfood_private_ip" {
   type        = string
   default     = "10.0.1.50"
 }
+
+# #7695. Arms the cloud-init LUKS discriminator's post-recut refusal on the dedicated inngest
+# host. While FALSE, an ext4 signature on the Redis AOF volume is the expected pre-recut state
+# and is mounted as-is. Once TRUE, an ext4 signature means the recut did not take, and the boot
+# refuses rather than putting in-flight job payloads back on a plaintext volume while the
+# encryption-posture ledger claims otherwise.
+#
+# This flips on the recut branch, in the SAME change that drops `format` from
+# hcloud_volume.inngest_redis — the two are one decision and splitting them re-opens the window
+# they exist to close. It is not an operator-supplied value and has no secret content.
+variable "inngest_expect_luks" {
+  description = "Whether the dedicated inngest host should REFUSE to mount an ext4 /mnt/data (i.e. the LUKS recut has run)."
+  type        = bool
+  default     = false
+}

@@ -294,6 +294,13 @@ resource "hcloud_server" "inngest" {
     # Mount the Redis AOF volume by its specific id (by-id pattern). Known at plan time;
     # the attachment is a separate resource.
     inngest_volume_id = hcloud_volume.inngest_redis.id
+    # #7695. Arms the post-recut refusal in the cloud-init LUKS discriminator. FALSE today and
+    # for as long as the volume is ext4; the recut branch flips it in the same change that drops
+    # `format` from hcloud_volume.inngest_redis. It is threaded as a STRING because templatefile
+    # interpolates it into a shell comparison (`[ "$EXPECT_LUKS" = "true" ]`) — a bare bool would
+    # render as `true`/`false` and compare correctly, but the explicit tostring() makes the
+    # rendered form independent of how HCL chooses to stringify it.
+    inngest_expect_luks = tostring(var.inngest_expect_luks)
     # Scoped Doppler token → 0600 root env file. read/write on the ISOLATED `soleur-inngest`
     # project's `prd` root config (the flip FSM writes INNGEST_CUTOVER_FLIP under it — see the
     # doppler_service_token.inngest note above, #6178). It is a SEPARATE project — NO
@@ -425,6 +432,31 @@ resource "hcloud_volume" "inngest_redis" {
 
   labels = {
     app = "soleur-web-platform"
+  }
+
+  # #7695. `format` IS STILL DECLARED, AND KEEPING IT IS THE POINT.
+  #
+  # The LUKS precedents (hcloud_volume.workspaces_luks, hcloud_volume.registry_store)
+  # omit `format` so the device is born raw and `blkid -o value -s TYPE` is a sound
+  # discriminator. Copying that here would be wrong in a way `terraform validate`
+  # cannot see: `format` is ForceNew, so REMOVING the line queues a volume replace.
+  # `apply_target=inngest-host` carries an additive-only destroy guard ("a net-new
+  # host provisioning must create, never destroy"), so a queued replace makes that
+  # target abort PERMANENTLY — disabling the recovery dispatch for a host that is
+  # already not serving, for as long as the guard refuses. That is the opposite of
+  # what this work is for.
+  #
+  # `ignore_changes = [format]` keeps the attribute declared and the plan empty. The
+  # `format` line drops only on the recut branch itself, where the replace is the
+  # intended act rather than a side effect of it. The recut therefore does not rely
+  # on this attribute at all — it pins the physical volume id and lets the cloud-init
+  # discriminator read the DEVICE, which is the only source that cannot drift from
+  # what is actually on the disk.
+  #
+  # AC B4: `terraform plan` for apply_target=inngest-host must show ZERO deletes with
+  # this block in place. Record the verbatim plan line when re-deriving it.
+  lifecycle {
+    ignore_changes = [format]
   }
 }
 
