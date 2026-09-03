@@ -140,15 +140,24 @@ PR #7785 merged as `511638e24` at 14:31:56Z. The release run it triggered
 job whose "Build and push Docker image" step had failed on every merge since 11:57Z —
 with `migrate`, `verify-migrations`, `deploy` and `live-verify` all green.
 
+Measured at **~15:05Z**, immediately after the deploy — the transcript below is a snapshot
+at that instant, not a standing assertion:
+
 ```
-$ curl https://app.soleur.ai/health
+$ curl https://app.soleur.ai/health          # ~15:05Z
 {"status":"ok","version":"0.257.2",
  "build_sha":"511638e244f352e957bd4e40a675ce15be700cad",
  "supabase":"connected","sentry":"configured","uptime":87}
 
-$ git log --oneline 511638e24..origin/main
+$ git log --oneline 511638e24..origin/main   # ~15:05Z
 (empty)
 ```
+
+Do not expect either command to reproduce that output later: `main` advances with every
+merge, and `uptime` grows. `511638e24..origin/main` was empty *at recovery* — that is the
+claim, and it is what proves the backlog had drained. It went non-empty within the hour
+(#7768), which is normal operation, not a regression. The durable check is that the live
+`build_sha` is an ancestor of `origin/main` with no FAILED release run between them.
 
 All three previously-undeployed merges went live in that single deploy: #7756, #7774
 (the Fable 5.1 model-launch sweep) and #7780. First failed release to prod serving the
