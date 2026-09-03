@@ -99,3 +99,61 @@ untouched. The follow-up stays open.
 - `knowledge-base/engineering/operations/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
 
 <!-- ADDENDUM-2026-08-26 END -->
+
+<!-- ADDENDUM-2026-09-03 START -->
+
+## Addendum — 2026-09-03 (annotation only; the determination is unchanged)
+
+Filed under #7717 while creating `knowledge-base/legal/breach-register.md`. Like the
+2026-08-26 addendum above, it amends **nothing**: the Verdict, the Reasoning, the
+Conditions, the Art. 33(5) record and the 2026-06-29 sign-off all stand exactly as
+determined and signed. **The verdict is unaffected.**
+
+**What the 2026-08-26 addendum corrected, and what it left standing.** That addendum
+established that `edge_logs` is uninstrumented on this project and that its zero "is an
+instrumentation gap and never was evidence of no traffic". It addressed `edge_logs`
+**only**. The record above, at the Determination paragraph, reads *"Retained edge/auth
+logs show zero REST/GraphQL/auth traffic"* — a conjunction. The 2026-08-26 annotation
+resolves the `edge` half and is silent on the `auth` half.
+
+**`auth_logs` is instrumented, and its zero retains weak evidentiary value.** The 30-day
+`group by source` census recorded in
+`knowledge-base/engineering/operations/references/supabase-management-api-log-contract.md`
+shows `auth_logs` present with 21 rows, alongside `supavisor_logs` 13873, `postgres_logs`
+1480 and `postgrest_logs` 71 — with `edge_logs` absent from the result set entirely. So
+the `auth_logs` zero on 2026-06-29 is a real observation of an emitting source, not an
+instrumentation artifact. It is weak — 21 rows over 30 days is a low base rate, and it
+speaks to authentication events rather than to REST reads — but it is not nothing, and
+the 2026-08-26 addendum does not credit it.
+
+**The source that records REST traffic was never queried.** `postgrest_logs` is the
+instrumented source that emits on this project's REST surface. The evidence file
+`knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
+records exactly two sources consulted — `edge_logs` and `auth_logs`, both zero — and
+contains no reference to `postgrest_logs` at all. The determination therefore attributed
+its REST-absence evidence to `edge_logs`, the one source on this project that does not
+emit, while the source that does was not consulted. That window is now past any retained
+span and is **unrecoverable**.
+
+**Why the verdict is unaffected.** The determination states in terms that it "rests
+primarily on the never-published key", and the access-log dimension was already recorded
+as INCONCLUSIVE and NOT certified clean for 2026-06-17 → ~2026-06-27. This addendum
+neither improves nor worsens that limb; it corrects *which source* the limb's evidence was
+attributed to, and records that a better source existed and was missed. No re-opening. No
+change to the Art. 33 or Art. 34 conclusions.
+
+**What this changes going forward.** It is the reason Art. 30 PA-8 §(g) now records a
+limitation on the Art. 33 evidentiary chain rather than a retention technical measure: an
+access-log zero from this surface is corroborating only, and must carry a coverage verdict
+naming the sources actually queried.
+
+**Register cross-reference.** This determination is indexed at
+`knowledge-base/legal/breach-register.md`. That index is a pointer, not a copy: this file
+remains the canonical record.
+
+**Sibling records carrying a pointer to this addendum:**
+
+- `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md`
+- `knowledge-base/engineering/operations/post-mortems/inngest-prd-rls-disabled-exposure-postmortem.md`
+
+<!-- ADDENDUM-2026-09-03 END -->

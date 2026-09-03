@@ -725,6 +725,7 @@ Every path below was confirmed to exist, and every glob this plan prescribes was
 - `plugins/soleur/test/required-checks-canonical-parity.test.sh` — Test 9, the intersection assertion (Guard 2).
 - `knowledge-base/engineering/architecture/decisions/ADR-197-a-zero-from-a-log-surface-is-not-evidence-of-absence.md` — the superseded promotion paragraph.
 - `knowledge-base/engineering/architecture/decisions/ADR-139-earned-green-required-for-reachable-surface-content-gates.md` — the amendment paragraph under `## Decision`.
+- `knowledge-base/project/specs/feat-one-shot-inngest-prd-rls-enable/gate-g-escalate-evidence.md` — **added at /work, and it is a cross-PR hazard the split created.** That file's tail states the deprecated-endpoint guard "is advisory only — not merge-blocking — so a red result is a finding to read, never a gate that will stop a merge." That sentence is TRUE while W6 ships alone and becomes FALSE the moment W1 lands. The W6 PR touches this file (the 2026-09-03 addendum pointer) but must NOT pre-emptively correct it; the follow-on PR must. Grep `git grep -n 'advisory only' -- knowledge-base/` before closing W1.
 
 **W3 — credentials (Phase 4):**
 
