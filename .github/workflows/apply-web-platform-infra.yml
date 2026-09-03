@@ -2268,7 +2268,11 @@ jobs:
           set -euo pipefail
           if ! doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform apply -no-color -input=false tfplan; then
-            echo "::error::terraform apply (inngest-volume-recut) failed — the plaintext AOF volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state). RECOVERY: re-dispatch inngest-volume-recut with the SAME confirm + expected_inngest_volume_id — a re-dispatch plans a bare create, which Guard 1's recovery arm accepts (before==null, so the plan id-pin is a no-op) and which Guard 2 still gates on the host being dark."
+            echo "::error::terraform apply (inngest-volume-recut) failed — the plaintext AOF volume may be destroyed with the raw replacement not yet created (destroy-before-create; the volume then leaves state)."
+            echo "::error::RECOVERY: dispatch '-f apply_target=inngest-host'. Do NOT re-dispatch inngest-volume-recut — it will ABORT, and the abort is correct."
+            echo "::error::  WHY the re-dispatch cannot work: Guard 2 runs BEFORE the plan and grades the LIVE host. After a partial apply there is no volume by that name, so the live-id lookup yields nothing and G17 returns id_pin_mismatch; /mnt/data is not mounted from the pinned device, so G14 returns mount_mismatch; and Redis cannot have started against an absent store, so G11 returns redis_down. Guard 1's recovery bare-create arm is real, but the dispatch never reaches Guard 1. An earlier version of this line prescribed exactly that re-dispatch and it was unreachable — the operator would have followed it into three consecutive aborts while the store stayed absent."
+            echo "::error::  WHY inngest-host is the right route: it targets hcloud_volume.inngest_redis and hcloud_volume_attachment.inngest_redis, and its guard is ADDITIVE-ONLY (any delete aborts). A bare create of an absent volume is additive, so it passes — and with 'format' no longer declared, the volume it creates is RAW, which is what the next boot needs."
+            echo "::error::  THEN dispatch '-f apply_target=inngest-host-replace' to cut the header (see the sequencing note on the success path — a raw volume is not an encrypted one until a FIRST boot runs the cloud-init LUKS stage against it)."
             exit 1
           fi
           for ADDR in 'hcloud_server.inngest' 'hcloud_volume.workspaces["web-1"]' 'hcloud_volume_attachment.workspaces["web-1"]' 'hcloud_server.web["web-1"]'; do
@@ -2291,7 +2295,11 @@ jobs:
             echo "::error::the AOF volume did not show a replace (delete+create) or recovery create, or the attachment no create, in the applied plan — the recut did not produce a fresh raw target. Failing hard."
             exit 1
           fi
-          echo "inngest host + live /workspaces store untouched (0 actions); AOF volume REPLACED (delete+create) + attachment re-created. The new volume is RAW: the LUKS cut happens on the next boot, via cloud-init-inngest.yml's blkid discriminator."
+          echo "inngest host + live /workspaces store untouched (0 actions); AOF volume REPLACED (delete+create) + attachment re-created. The new volume is RAW."
+          echo "::warning::THE CUTOVER IS NOT COMPLETE. The next step is a HOST REPLACE, not a reboot, and without it this host has no /mnt/data at all."
+          echo "::warning::  The LUKS cut lives in cloud-init-inngest.yml's runcmd stage, and cloud-init runcmd is FIRST-BOOT-ONLY. What runs on boot 2+ is inngest-luks-open.service, whose script OPENS and never formats: against a raw device it takes the reopen_skip_plaintext arm (expect_luks=false) or fails reopen_not_luks (expect_luks=true). Either way nothing is formatted, /mnt/data does not mount, and inngest-redis.service's ExecStartPre mount guard refuses to start Redis onto the root disk — correctly, and until a first boot happens."
+          echo "::warning::  Guard 1 requires hcloud_server.inngest to show ZERO actions, so this dispatch deliberately cannot reboot or replace the host. That is the three-dispatch split working as designed, not an omission — but it means the operator owns the ordering."
+          echo "::warning::  NEXT: dispatch '-f apply_target=inngest-host-replace'. Its fresh first boot runs the runcmd stage, which reads the raw device via blkid, takes ARM 3 (the only arm that may write a header), luksFormats, mkfs's and mounts /dev/mapper/inngest-redis. Confirm by querying for SOLEUR_INNGEST_LUKS_STAGE stage=luks_format and then stage=fstab; the encryption-posture ledger row keeps its exception until that boot is observed."
 
       - name: Dispatch summary
         if: always()
@@ -2311,7 +2319,11 @@ jobs:
             echo ""
             echo "Guard 2 (host dark + store measured empty, 20 predicates) ran BEFORE the plan; Guard 1 graded the plan; both id-pins were checked against independent sources (live Hetzner attachment, plan before.id)."
             echo ""
-            echo "The replacement volume is RAW. The LUKS cut happens on the NEXT BOOT of the inngest host, via cloud-init-inngest.yml's five-arm blkid discriminator — this dispatch does not encrypt anything by itself, and the encryption-posture ledger row keeps its exception until a boot is observed reaching stage=fstab on /dev/mapper/inngest-redis."
+            echo "The replacement volume is RAW. **This dispatch does not encrypt anything by itself, and it does not finish the cutover.**"
+            echo ""
+            echo "The LUKS cut lives in cloud-init-inngest.yml's runcmd stage, and cloud-init runcmd is FIRST-BOOT-ONLY. A plain reboot runs inngest-luks-open.service instead, which OPENS and never formats — so against this raw volume it would format nothing, /mnt/data would not mount, and the Redis mount guard would refuse the start."
+            echo ""
+            echo "**NEXT: dispatch \`-f apply_target=inngest-host-replace\`.** Its fresh first boot takes ARM 3 of the five-arm blkid discriminator (the only arm that may write a header), luksFormats, mkfs'"'"'s and mounts /dev/mapper/inngest-redis. The encryption-posture ledger row keeps its exception until that boot is observed reaching stage=fstab on the mapper."
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ─── registry-host scoped -replace (dispatch-only; re-run cloud-init; ADR-096) ─

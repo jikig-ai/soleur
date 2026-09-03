@@ -615,6 +615,28 @@ else
   pass
 fi
 
+# ══ Row 7b — THE OPERATOR-FACING CLAIMS ═════════════════════════════════════════
+# Prose in a workflow is not decoration here: it is the only instruction the operator gets at
+# the moment a destructive dispatch finishes, and two of these claims were false in ways that
+# would have stranded the host.
+#
+# (a) The failure path prescribed "re-dispatch inngest-volume-recut". Guard 2 runs BEFORE the
+#     plan and grades the LIVE host, so after a partial apply it returns id_pin_mismatch (no
+#     volume by that name), mount_mismatch (/mnt/data not on the pinned device) and redis_down
+#     (Redis cannot have started against an absent store). Guard 1's recovery bare-create arm is
+#     real, but the dispatch never reaches Guard 1. The operator would have followed the
+#     instruction into three consecutive aborts.
+# (b) The success path said "the LUKS cut happens on the next boot". It does not: the cut lives
+#     in cloud-init runcmd, which is FIRST-BOOT-ONLY, and Guard 1 requires hcloud_server.inngest
+#     to show ZERO actions — so this dispatch cannot reboot or replace the host by construction.
+#     A plain reboot runs inngest-luks-open.sh, which OPENS and never formats.
+if grep -qF "Do NOT re-dispatch inngest-volume-recut" "$WF"; then pass; else fail "Row 7b(a): the recut failure path does not warn against the re-dispatch that its own Guard 2 refuses"; fi
+if grep -qE "RECOVERY: dispatch '-f apply_target=inngest-host'" "$WF"; then pass; else fail "Row 7b(a2): the recut failure path does not name the additive-only route that actually works"; fi
+if grep -qF "THE CUTOVER IS NOT COMPLETE" "$WF"; then pass; else fail "Row 7b(b): the recut success path does not say that a host replace is still required"; fi
+if grep -qF "FIRST-BOOT-ONLY" "$WF"; then pass; else fail "Row 7b(b2): the recut success path does not say WHY a reboot is not enough (runcmd is first-boot-only)"; fi
+# ...and it must not still claim the old thing anywhere. Grep the OLD wording, never the new.
+if grep -qF "the LUKS cut happens on the next boot" "$WF"; then fail "Row 7b(c): the superseded 'next boot' claim survives somewhere in the workflow"; else pass; fi
+
 # ══ Row 8 — the DEFAULT clock ═══════════════════════════════════════════════════
 # Every arm above pins `--now-epoch`, so the branch that reads the real clock (`date -u +%s`, the
 # one production takes) is never executed. A row stamped at this moment must clear it.
@@ -738,7 +760,7 @@ fi
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=103
+_FLOOR=108
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))
