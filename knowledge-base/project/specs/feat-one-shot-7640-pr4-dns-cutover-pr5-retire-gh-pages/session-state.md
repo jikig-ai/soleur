@@ -169,3 +169,60 @@ by a 180 s email-only monitor. If PR4b does not merge this session, revert PR4a
 - Plan recovery + amendment (AC72), `tasks.md` reconciliation
 - `gh issue view` / `gh pr list` collision probes, `git merge-base --is-ancestor`
 - Next: `soleur:work`
+
+---
+
+## Session 2 — Work phase complete (2026-09-03)
+
+Phase 2 tasks 2.1-2.10 are implemented and committed on
+`feat-one-shot-7640-pr4b-apex-cname-flip` (draft PR #7793, 6 commits pushed).
+2.11 is the merge itself.
+
+### Measured, so a resume does not re-derive them
+
+- **PF9b (real state, real filter):** `resource_deletes: 1, nested_deletes: 0,
+  reboot_updates: 0, host_creates: 0, apex_move_orphans: 0`. One address,
+  `cloudflare_record.pages_apex`, actions `["delete","create"]`, carrying
+  `previous_address = cloudflare_record.github_pages["185.199.108.153"]`, plus
+  the in-place `www` update. Only those two resources change.
+- **PF-R8b (Cloudflare API, not a resolver):** apex = 1 A, 0 CNAME, 2 MX, 4 TXT;
+  www = exactly one proxied CNAME. This also proves **PR4a converged**.
+- **PF-Z2:** `SERVING-FROM-GITHUB-PAGES` — CUT2 sees `x-proxy-cache: MISS`
+  pre-cutover, which is the positive control for the discriminator.
+- **AC48:** `seo-config-rules.tf` still carries exactly one `ssl = "full"` and is
+  untouched by this branch.
+
+**These are perishable.** Task 2.10 requires PF-Z2 / PF-R8b re-run within the
+hour before merging; do not inherit the readings above if the merge slips.
+
+### Filed this session
+
+- **#7797** — I printed two live bearer tokens (Sentry, BetterStack) into the
+  agent transcript by running `cutover-verify.sh` under `bash -x`. **Both must be
+  rotated.** The Sentry token cannot rotate itself (`/api/0/api-tokens/` → 403),
+  so it is a dashboard action.
+- **#7798** — `sentry_uptime_monitor.soleur_www` records its own asserted 301 as
+  a failure; the www redirect has no working alarm. Remediation is a dispatch of
+  `apply-sentry-infra.yml`, then re-capture the CUT8 baseline.
+- **#7799** — the ADR-194 deferred-cleanup tracker (AC52), now cited by number in
+  the plan's `tracking_issue:` field.
+
+### Deviations from the plan, each recorded where it was made
+
+- **AC70 clarified** — byte-identity to PR4a's `dns.tf` MODULO the reverse
+  `moved` block, because PR4a's file has no such block and the rollback cannot
+  work without one. Mechanized via `--emit-tf-stripped` + an additions-only row.
+- **AC72 added** — the plan cited it only as "(AC-new)"; `previous_address`
+  appeared nowhere in the plan.
+- **CUT8 judges REGRESSION** against `cutover-monitor-baseline.txt` rather than
+  absolute green, because #7798 makes absolute unsatisfiable and the T+20 rule
+  would then roll back a healthy cutover.
+- **CUT7 derives its pairs** from `seo-bulk-redirects.tf`; the identity mapping
+  assumed by the plan's prose is wrong (`terms-of-service` consolidates into
+  `terms-and-conditions` — ten sources, nine targets).
+
+### Next
+
+`/review` → resolve findings → `/qa` → `/compound` → `/ship`. Then Phase 3
+(PF8' immediately, `cutover-verify.sh` at T+5, decision at T+20) and only then
+Phase 4 (PR5).
