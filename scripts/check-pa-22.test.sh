@@ -24,12 +24,20 @@ _b=$checks; { pass x; fail x; } >/dev/null 2>&1
 [[ $checks -eq $((_b + 2)) && $fails -eq 1 ]] || { echo "::error::instrument self-test failed" >&2; exit 2; }
 fails=0; checks=$_b
 
+# One owning sandbox root, removed on exit (ADR-129 rule (c)). Each case allocates INSIDE it
+# rather than calling `mktemp -d` at top level, so N cases leak zero directories even when the
+# suite dies mid-case. Guarded so the trap can never expand to a bare `rm -rf ""`.
+SANDBOX_ROOT="$(mktemp -d -t pa22-suite-root.XXXXXXXX)" \
+  || { echo "::error::mktemp -d failed" >&2; exit 2; }
+cleanup_sandbox() { [[ -n "${SANDBOX_ROOT:-}" && -d "$SANDBOX_ROOT" ]] && rm -rf "$SANDBOX_ROOT"; return 0; }
+trap cleanup_sandbox EXIT INT TERM
+
 [[ -f "$SUT"     ]] || { echo "::error::SUT not found: $SUT" >&2; exit 2; }
 [[ -f "$REG_SRC" ]] || { echo "::error::register not found: $REG_SRC" >&2; exit 2; }
 
 mkrepo() {
   local d
-  d="$(mktemp -d -t pa22-suite.XXXXXXXX)" || return 2
+  d="$(mktemp -d "$SANDBOX_ROOT/case.XXXXXXXX")" || return 2
   mkdir -p "$d/scripts" "$d/knowledge-base/legal" || return 2
   cp "$SUT" "$d/scripts/check-pa-22.sh" || return 2
   cp "$REG_SRC" "$d/knowledge-base/legal/article-30-register.md" || return 2

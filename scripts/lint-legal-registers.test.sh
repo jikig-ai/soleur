@@ -33,6 +33,14 @@ _b=$checks
 [[ $checks -eq $((_b + 2)) && $fails -eq 1 ]] || { echo "::error::instrument self-test failed" >&2; exit 2; }
 fails=0; checks=$_b
 
+# One owning sandbox root, removed on exit (ADR-129 rule (c)). Each case allocates INSIDE it
+# rather than calling `mktemp -d` at top level, so N cases leak zero directories even when the
+# suite dies mid-case. Guarded so the trap can never expand to a bare `rm -rf ""`.
+SANDBOX_ROOT="$(mktemp -d -t llr-suite-root.XXXXXXXX)" \
+  || { echo "::error::mktemp -d failed" >&2; exit 2; }
+cleanup_sandbox() { [[ -n "${SANDBOX_ROOT:-}" && -d "$SANDBOX_ROOT" ]] && rm -rf "$SANDBOX_ROOT"; return 0; }
+trap cleanup_sandbox EXIT INT TERM
+
 [[ -f "$GUARD"    ]] || { echo "::error::guard not found: $GUARD" >&2; exit 2; }
 [[ -f "$DELEGATE" ]] || { echo "::error::delegate not found: $DELEGATE" >&2; exit 2; }
 
@@ -44,7 +52,7 @@ fails=0; checks=$_b
 # ---------------------------------------------------------------------------------------
 mkcorpus() {
   local d
-  d="$(mktemp -d -t llr-suite.XXXXXXXX)" || return 2
+  d="$(mktemp -d "$SANDBOX_ROOT/case.XXXXXXXX")" || return 2
   mkdir -p "$d/scripts" "$d/knowledge-base/legal/audits" \
            "$d/knowledge-base/engineering/operations/post-mortems" || return 2
   cp "$GUARD" "$d/scripts/lint-legal-registers.sh" || return 2
