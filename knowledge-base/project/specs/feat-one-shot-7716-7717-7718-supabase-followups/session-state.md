@@ -189,3 +189,61 @@ three-way `docs/legal/**` lockstep and must not ride inside a statutory chore; #
 temporally blocked by construction; #7791 is an authority I cannot supply and must not forge.
 Executed rather than filed: `action-required` on #7529; #7125 re-milestoned to Phase 4.
 #7791's number was reconciled after filing — five references had been pre-written as 7788.
+
+## Review Phase — DEGRADED, and the PR is NOT ready
+
+**Coverage: 0 of 12 agents.** Eight API 529s across three seats (3 on the CLO attestation, 3 on
+`code-simplicity-reviewer`, 2 on `architecture-strategist`); each was resumed rather than
+respawned, and retries stopped helping. Trailer records
+`Reviewed-Coverage: inline-fallback 0/12 agents` with every missing seat named.
+
+**Remaining: re-run `/review` with the panel.** NOT `/compound` → `/ship`. The plan declares
+`brand_survival_threshold: single-user incident`, and review Gate 2a is explicit that a degraded
+review is not adequate evidence at that threshold. This is the operator's call, not mine.
+
+### What DID run, and is green
+- **Deterministic gates, all clean:** shellcheck on all 6 changed shell files; 9 repo lints
+  (`guard-vacuity-floor`, `lint-window-closure-assertion`, `lint-guard-contract`,
+  `lint-trap-tempfile-ownership`, `lint-diagnosis-claims`, `lint-credential-path-literals`,
+  `lint-orphan-test-suites`, `lint-legal-scope-block-placement`, `lint-legal-mirror-drift-baseline`).
+  Run BEFORE the panel deliberately — their yield is disjoint from it and they are far cheaper.
+- **semgrep skipped deliberately:** bash-only diff, where OSS semgrep parses ~100% of lines and
+  matches 0 rules — a vacuous clean. shellcheck is the bash-native substitute.
+- **Inline adversarial pass on the guard — 19 axes, all caught:** three stub attacks
+  (`exit 0`/`exit 1`/`exit 2`); dispatch (`fail()` no-op, both helpers no-op); counter
+  redirection onto a *bound* variable; all five token-class members; inline-code exemption and
+  `audits/`-not-scanned (must-PASS); pointer resolution; walk continuation past the first break;
+  table degeneracy; waiver removed / uncited / both-indexed-and-waived; producer emptiness;
+  degenerate `REPO_ROOT`; assertion floor; producer and pointer walk truncation; population
+  growth. Suites: guard 6/6, its suite 26/26, `check-pa-22` 9/9, delegate 42/42.
+- **Axes NOT mutated, stated plainly:** the delegated awk parser's internals (covered by its own
+  42 assertions, run green) and concurrent corpus modification mid-run.
+
+### Findings — 6, all self-found, all fixed inline (net 0 issues filed)
+1. **P1 — the two waiver copies could diverge silently.** Deleting a row from the register's
+   §Excluded records left guard and suite green, so a regulator would see 3 exclusions while the
+   guard enforced 4. Assertion (d) added, mutation-proven both directions plus the refusal, and
+   shown non-tautological (a deliberately tautological mutant fails to catch what the real one
+   catches). This PR's own defect class, one level up.
+2. **Assertion (d) aborted on an unbound variable** — it read (c)'s loop variable, so it was
+   order-dependent. Now derived from the array directly.
+3. **(d)'s fail-closed branch was dead code.** `x=$(… | grep …)` under `set -euo pipefail` dies
+   at the assignment when grep matches nothing, so the `[[ -z ]]` refusal never ran and an
+   emptied table exited 1 from the abort — indistinguishable from an ordinary failure. Braced
+   with `|| true`; now exits 2 and says why.
+4. **The suite's corpus carried ONE waived member**, so "drop a row" and "empty the table" were
+   the same mutation — 1-of-1 is indistinguishable from all-of-1. Corpus now carries two.
+5. **"First corpus-level lint over `knowledge-base/legal/**`" was FALSE** —
+   `lint-infra-no-human-steps.py` already scans `legal/runbooks`. Narrowed to the true claim (no
+   lint covered the *registers*) at all three asserting sites.
+6. **Three counts were stale by this PR's own diff** (audits 41→42, regex 6/41→7/42,
+   `art_33_triggered` 113→119). Both figures now stated for the first two; the third dropped and
+   re-anchored on the post-mortem count (102, stable on main and at HEAD), because the repo-wide
+   total counts plans, specs, the ADR and the guard's own source.
+
+### Instrument errors I made and corrected
+- A counter-redirection mutation first reported CAUGHT for the *wrong reason* — my decoy was
+  unbound, so `set -u` killed it before the self-test ran. Re-tested with a bound decoy.
+- Read a guard's exit code through a pipe to `tail`, which reported rc=0 over a real abort.
+- Mislabelled the tautology control: the mutant is tautological *by construction*, and its
+  failure to catch is the proof the real assertion is not.
