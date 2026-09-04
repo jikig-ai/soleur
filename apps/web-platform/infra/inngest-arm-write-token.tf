@@ -76,6 +76,32 @@ resource "github_repository_environment" "inngest_cutover" {
   reviewers {
     users = [54279]
   }
+
+  # #7695. THE REVIEWER RULE ALONE DOES NOT GATE THE CODE THAT RUNS. `workflow_dispatch` executes
+  # the SELECTED REF's workflow and the scripts that workflow sources, and the reviewer prompt
+  # shows a branch NAME, not a diff. The destructive `inngest_volume_recut` job added under this
+  # environment sources BOTH of its guards from `${GITHUB_WORKSPACE}` — so without a branch pin,
+  # anyone who can dispatch can point the run at a branch carrying neutered guards and ask the
+  # reviewer to approve what reads as a routine recut.
+  #
+  # Measured 2026-09-03: `gh api repos/jikig-ai/soleur/environments/inngest-cutover` returned
+  # `deployment_branch_policy: null`, which the API reads as "every branch may deploy".
+  # web-host-birth-environment.tf already carries the full argument for why that is fatal for a
+  # gate sourced from the workspace, and already records THIS environment as one of three with a
+  # null policy — it was written as a warning about a sibling and is now a defect in the sibling.
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+# `custom_branch_policies = true` only declares that the environment uses a NAMED LIST; without
+# this resource the list is empty, which GitHub treats as "no branch may deploy" — the opposite
+# failure from omitting the block, and equally wrong. Both halves are required.
+resource "github_repository_environment_deployment_policy" "inngest_cutover_main" {
+  repository     = "soleur"
+  environment    = github_repository_environment.inngest_cutover.environment
+  branch_pattern = "main"
 }
 
 # The write token published as a REPO-level github_actions_secret. It was originally an ENVIRONMENT

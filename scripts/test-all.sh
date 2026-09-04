@@ -1094,6 +1094,9 @@ if want_scripts; then
   # the real defect into a tree copy.
   run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
   run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
+  # #7695 review: actionlint flags unparseable run: bodies, but lint-workflows.sh treats its rc=1 as
+  # accepted (census tracked in #7042), so the class was green in CI. This one exits non-zero.
+  run_suite "scripts/lint-workflow-run-body-syntax" python3 scripts/lint-workflow-run-body-syntax.py
   # ADR-191 (#7084). Same both-halves shape as the pair above, and for the same reason: after
   # this change the passing state of Guard 1 is "zero bun.lock found", which is byte-identical
   # to the output of a guard whose search is broken. The unit suites carry the anti-vacuity
@@ -1552,6 +1555,11 @@ if want_scripts; then
   # #6197: inngest-host-replace scoped-recreate destroy-guard (same sourced-gate shape the
   # web2-recreate gate used before #6575 deleted it).
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
+  # #7695 — the two guards on apply_target=inngest-volume-recut. NOTHING auto-discovers
+  # tests/scripts/: the `*.test.sh` glob elsewhere in this file cannot match a `test-*` prefix, so
+  # an unregistered suite here never gates and the failure is silent-and-green.
+  run_suite "tests/scripts/inngest-volume-recut-gate" bash tests/scripts/test-inngest-volume-recut-gate.sh
+  run_suite "tests/scripts/inngest-host-dark-gate" bash tests/scripts/test-inngest-host-dark-gate.sh
   # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
   run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh
   # #7542: vector-redeliver scoped-delivery gate. Unlike the -replace arms above it permits a bare

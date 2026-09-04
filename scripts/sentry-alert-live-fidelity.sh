@@ -103,12 +103,48 @@ fi
 # property under test (a changed id is reported as deleted+new, which is what it
 # is).
 PROJECT='
+  # ALLOWLIST PROJECTION, not a blocklist. The committed capture was normalised
+  # when taken; the live API returns server-assigned fields on every object
+  # (`id`, `conditionResult`, `organizationId` on triggers/conditions;
+  # `integrationId`, `status` on actions). Comparing raw live against a
+  # normalised capture makes EVERY rule differ: measured 2026-09-04 against
+  # production, that reported 38 divergences on a completely healthy org.
+  #
+  # That is not cosmetic. This probe files a p1 and runs daily, so it would have
+  # opened a 38-finding false alarm on its first scheduled run and every run
+  # after — exactly how a drift probe gets muted, which this file elsewhere warns
+  # about. The suite could not catch it: its fixtures ARE the capture, so both
+  # sides were normalised by construction and the shapes always agreed.
+  #
+  # Enumerating server fields to DELETE is a list you discover one false alarm at
+  # a time. Projecting ONLY the fields this probe asserts on makes a future
+  # server-side addition inert by construction.
+  # DEEP KEY CANONICALISATION, applied before anything else reads the document.
+  # `sort_by(tostring)` below serialises with INSERTION order, so two payloads
+  # holding the same data with different key order sort into different ARRAY
+  # order — and array order is not something sorting keys at comparison time can
+  # repair. Canonicalising here makes every downstream step order-independent.
+  def canon: walk(if type == "object"
+                  then (to_entries | sort_by(.key) | from_entries)
+                  else . end);
+
   def excluded: ["event_unique_user_frequency_count",
                  "new_high_priority_issue",
                  "existing_high_priority_issue"];
   def in_scope: [ .triggers.conditions[]?.type ] as $t
                 | (excluded | any(. as $e | $t | index($e))) | not;
-  map(select(in_scope))
+
+  # NOT-YET-ADOPTED carve-out. A rule can be in scope by the trigger predicate and
+  # still be managed by this repo as `sentry_issue_alert`, because it landed on
+  # main AFTER the capture this adoption generates from. Without naming it, the
+  # reverse-direction check reports it as UNMANAGED ("nothing in this repo manages
+  # it"), which is FALSE. `git-data-boot-warning` (#7772) is the only one today,
+  # and unlike the two `event_unique_user_frequency_count` survivors it is not
+  # BLOCKED — it can migrate whenever someone re-captures. This list is meant to
+  # shrink to empty; delete the entry the day it does.
+  canon
+  | map(select(.name | IN("git-data-boot-warning") | not))
+  | map(select(in_scope))
   | map({
       name: .name,
       enabled: .enabled,
@@ -116,11 +152,16 @@ PROJECT='
       frequency: .config.frequency,
       triggerLogicType: .triggers.logicType,
       triggerConditions: ([ .triggers.conditions[]? | {type, comparison} ]
-                          | sort_by(.type | tostring)),
+                          | sort_by(tostring)),
       actionFilters: [ .actionFilters[]? | {
-          logicType,
+          logicType: .logicType,
           conditions: ([ .conditions[]? | {type, comparison} ] | sort_by(tostring)),
-          actions:    ([ .actions[]?    | {type, config, data} ] | sort_by(tostring))
+          actions: ([ .actions[]? | {
+              type: .type,
+              targetType: .config.targetType,
+              targetIdentifier: .config.targetIdentifier,
+              fallthroughType: .data.fallthroughType
+            } ] | sort_by(tostring))
         } ]
     })
   | INDEX(.name)
@@ -159,8 +200,14 @@ while IFS= read -r name; do
   # Field-by-field so the report names WHICH attribute moved, not just "differs".
   while IFS= read -r field; do
     [[ -n "$field" ]] || continue
-    local_cap=$(jq -c --arg n "$name" --arg f "$field" '.[$n][$f]' <<<"$cap_proj")
-    local_live=$(jq -c --arg n "$name" --arg f "$field" '.[$n][$f]' <<<"$live_proj")
+    # `-S` (sort keys) is load-bearing, not tidiness. These values are compared as
+    # STRINGS, and `jq -c` preserves key INSERTION order — so a capture holding
+    # `{"comparison":…,"type":…}` and a live payload holding `{"type":…,"comparison":…}`
+    # serialise differently while being the same JSON. Measured against production:
+    # that alone produced 11 false DRIFT findings on identical data. Canonicalise
+    # both sides before comparing them.
+    local_cap=$(jq -S -c --arg n "$name" --arg f "$field" '.[$n][$f]' <<<"$cap_proj")
+    local_live=$(jq -S -c --arg n "$name" --arg f "$field" '.[$n][$f]' <<<"$live_proj")
     if [[ "$local_cap" != "$local_live" ]]; then
       case "$field" in
         detectorIds)

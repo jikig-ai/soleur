@@ -2,22 +2,28 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **27 `sentry_alert` rules** + **2 `sentry_issue_alert` rules** (29 alert rules total)
+- **27 `sentry_alert` rules** + **3 `sentry_issue_alert` rules** (30 alert rules total)
   (#7650 Phase 2). The 27 are adopted from live Sentry and fully Terraform-owned:
   `ignore_changes = [environment]` only, real `trigger_conditions` and
   `action_filters`, read through the non-deprecated
-  `organizations/{org}/workflows/` endpoint. The 2 remaining
-  `sentry_issue_alert` resources — `auth-per-user-loop` and
-  `sandbox-startup-failure` — stay behind for one reason: they trigger on
+  `organizations/{org}/workflows/` endpoint.
+
+  **THREE remain on `sentry_issue_alert`, and only TWO of them are blocked.**
+  `auth-per-user-loop` and `sandbox-startup-failure` trigger on
   `event_unique_user_frequency_count`, which the pinned provider's
   `trigger_conditions` does not offer (upstream
-  jianyuan/terraform-provider-sentry issue 950). They still refresh through the
-  DEPRECATED alert-rule endpoint, so **a clean plan is not evidence the
-  deprecation lifted** — it may only mean the plan ran outside a brownout
-  window, which is why `apply-sentry-infra.yml` keeps its brownout retry.
-  `configure-sentry-alerts.sh` is NOT deleted: it remains the only executable
-  definition of `auth-per-user-loop`. Older rules that terraform owns from real
-  `conditions_v2`/`filters_v2`/`actions_v2` include the
+  jianyuan/terraform-provider-sentry issue 950) — they *cannot* migrate.
+  `git-data-boot-warning` is different: it landed on `main` in #7772, AFTER the
+  live capture this adoption generates from, so it is out of scope here for a
+  sequencing reason rather than a technical one and can migrate whenever someone
+  re-captures. Do not read "three remain" as "three are blocked".
+
+  All three still refresh through the DEPRECATED alert-rule endpoint, so **a
+  clean plan is not evidence the deprecation lifted** — it may only mean the plan
+  ran outside a brownout window, which is why `apply-sentry-infra.yml` keeps its
+  brownout retry. `configure-sentry-alerts.sh` is NOT deleted: it remains the
+  only executable definition of `auth-per-user-loop`. Older rules that terraform
+  owns from real `conditions_v2`/`filters_v2`/`actions_v2` include the
   BYOK-delegations rules (`byok-art-33-breach`, `byok-cap-exceeded`, #4364).
   `byok-art-33-breach` uses `action_match = "any"` over three event-lifecycle
   conditions (`first_seen_event` + `reappeared_event` + `regression_event`) so a

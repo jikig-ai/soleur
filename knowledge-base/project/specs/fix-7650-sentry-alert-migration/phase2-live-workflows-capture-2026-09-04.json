@@ -1895,6 +1895,14 @@
               "value": "gc_timer"
             },
             "type": "tagged_event"
+          },
+          {
+            "comparison": {
+              "key": "stage",
+              "match": "eq",
+              "value": "gitdata_nftables_metadata"
+            },
+            "type": "tagged_event"
           }
         ],
         "logicType": "any-short"

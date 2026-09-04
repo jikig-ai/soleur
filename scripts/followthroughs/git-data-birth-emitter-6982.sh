@@ -45,6 +45,15 @@ done
 # window (measured 2026-07-15), and a once-per-boot marker falls out of it immediately.
 # Field isolation via Mode 1 raw SQL — a bare-substring --grep compiles to `raw LIKE '%…%'`
 # and the shared source is contaminated by inngest webhook logs quoting issue bodies.
+# (#7772) PIN THE TABLE. git-data ships to its OWN Better Stack source (2734275) since #7772, NOT the shared
+# 2457081 that betterstack-query.sh defaults BS_TABLE to. Leaving the default does not
+# error -- the shared table exists and answers, it just holds no rows from a host that
+# stopped writing there -- so this reader would see zero rows on a PERFECT boot and
+# report a dark host. On the one birth this host gets, that is a false failure.
+# Without this the probe could only ever print TRANSIENT, which makes a DAILY probe
+# permanently unfalsifiable -- strictly worse than not having one.
+export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
+
 SQL="
   SELECT dt,
          JSONExtractString(raw,'stage')     AS stage,
@@ -52,7 +61,8 @@ SQL="
          JSONExtractString(raw,'luks_mounted') AS luks_mounted,
          JSONExtractString(raw,'repo_root')    AS repo_root,
          JSONExtractString(raw,'hooks_path')   AS hooks_path,
-         JSONExtractString(raw,'provision')    AS provision
+         JSONExtractString(raw,'provision')    AS provision,
+         JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
   FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
         UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
   WHERE dt > now() - INTERVAL 30 DAY

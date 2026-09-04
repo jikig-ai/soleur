@@ -294,6 +294,13 @@ resource "hcloud_server" "inngest" {
     # Mount the Redis AOF volume by its specific id (by-id pattern). Known at plan time;
     # the attachment is a separate resource.
     inngest_volume_id = hcloud_volume.inngest_redis.id
+    # #7695. Arms the post-recut refusal in the cloud-init LUKS discriminator. FALSE today and
+    # for as long as the volume is ext4; the recut branch flips it in the same change that drops
+    # `format` from hcloud_volume.inngest_redis. It is threaded as a STRING because templatefile
+    # interpolates it into a shell comparison (`[ "$EXPECT_LUKS" = "true" ]`) — a bare bool would
+    # render as `true`/`false` and compare correctly, but the explicit tostring() makes the
+    # rendered form independent of how HCL chooses to stringify it.
+    inngest_expect_luks = tostring(var.inngest_expect_luks)
     # Scoped Doppler token → 0600 root env file. read/write on the ISOLATED `soleur-inngest`
     # project's `prd` root config (the flip FSM writes INNGEST_CUTOVER_FLIP under it — see the
     # doppler_service_token.inngest note above, #6178). It is a SEPARATE project — NO
@@ -421,10 +428,50 @@ resource "hcloud_volume" "inngest_redis" {
   name     = "soleur-inngest-redis-store"
   size     = var.inngest_redis_volume_size
   location = var.location
-  format   = "ext4"
 
   labels = {
     app = "soleur-web-platform"
+  }
+
+  # #7695. `format` IS NOT DECLARED, AND THAT IS THE POINT — the LUKS precedents
+  # (hcloud_volume.workspaces_luks, hcloud_volume.registry_store) omit it so the
+  # device is born RAW and `blkid -o value -s TYPE` is a sound discriminator.
+  #
+  # AN EARLIER REVISION OF THIS BLOCK KEPT `format = "ext4"` AND ARGUED FOR IT AT
+  # LENGTH. The argument was that `format` is ForceNew, so removing the line would
+  # queue a volume replace, and `apply_target=inngest-host`'s additive-only destroy
+  # guard would then abort PERMANENTLY. Every word of that is plausible and the
+  # conclusion is false, because it reasons about ForceNew while ignoring the
+  # `ignore_changes` directly beneath it. MEASURED 2026-09-03, `terraform plan`
+  # against live state with the line removed and the lifecycle block kept:
+  #
+  #     hcloud_volume.inngest_redis  actions=["no-op"]  after.format=ext4
+  #
+  # No replace is queued; `ignore_changes = [format]` suppresses the diff exactly as
+  # it is designed to. The lifecycle block is RETAINED for that reason — it is what
+  # keeps the existing ext4 volume's plan empty now that the config no longer names
+  # a format.
+  #
+  # And the cost of having believed it, measured the same way on the recut plan
+  # (`-replace=hcloud_volume.inngest_redis`):
+  #
+  #     with    format = "ext4":  actions=["delete","create"]  after.format=ext4
+  #     without format = "ext4":  actions=["delete","create"]  after.format=null
+  #
+  # `ignore_changes` suppresses DIFFS, never CREATES. So with the line present the
+  # replacement volume is created ext4, cloud-init's ARM 1 mounts it plaintext, and
+  # the one-shot empty-store window — the whole reason this apparatus exists — is
+  # spent producing an unencrypted volume while the workflow prints "The new volume
+  # is RAW" twice. inngest_volume_recut_gate reads `.change.after.format` from the
+  # plan and refuses unless it is null, so this is enforced against the PLAN rather
+  # than against this file staying the way it is.
+  #
+  # AC B4: `terraform plan` for apply_target=inngest-host must show ZERO deletes of
+  # this volume with this block in place. Re-measured 2026-09-03: no-op. Record the
+  # verbatim plan line when re-deriving it.
+
+  lifecycle {
+    ignore_changes = [format]
   }
 }
 

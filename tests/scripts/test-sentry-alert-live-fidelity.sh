@@ -17,7 +17,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROBE="$REPO_ROOT/scripts/sentry-alert-live-fidelity.sh"
 CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
 pass=0; fail=0
-EXPECTED_TESTS=12
+EXPECTED_TESTS=13
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -78,6 +78,89 @@ _drift_case() { # $1=label $2=jq-program $3=expected-marker $4=human description
     _report "$4" ok
   else
     _report "$4" fail "rc=$_rc (want 1), marker '$3' not found. Output: $(head -c 400 <<<"$_out")"
+  fi
+}
+
+# F13 — THE LIVE API'S SHAPE, which every other row in this file structurally
+# cannot see.
+#
+# Every fixture here is derived from the committed capture, so both sides of the
+# comparison are already normalised and their shapes agree BY CONSTRUCTION. The
+# real API does not look like that: it returns server-assigned fields (`id`,
+# `conditionResult`, `organizationId` on triggers and conditions;
+# `integrationId`, `status` on actions) and does not sort object keys. Measured
+# against production on 2026-09-04, the probe reported 38 divergences on a
+# completely healthy org — and this probe files a p1 and runs daily, so that is
+# a 38-finding false alarm on its first scheduled run and every one after.
+#
+# This row rebuilds an API-SHAPED payload from the capture — server fields added
+# back, key order reversed — and asserts the probe still reports PASS. It is the
+# only row that would have caught it.
+#
+# WHAT IT PINS, precisely: the DEEP KEY CANONICALISATION. Mutation-tested —
+# removing `canon` from the projection reds this row. The allowlist projection
+# of `actions` does NOT red it, because `integrationId`/`status` are siblings of
+# `config`/`data` and a `{type, config, data}` shorthand drops them anyway. The
+# allowlist is therefore defence-in-depth against a FUTURE server field landing
+# inside `config` or `data`, not something this row proves today. Said plainly so
+# nobody reads a green F13 as coverage it does not give.
+t_live_api_shape() {
+  local shaped="$TMPD/api-shaped.json"
+  # Reverse keys RECURSIVELY. The projection REBUILDS the outer objects, so their
+  # input key order is irrelevant — but `comparison` is passed through verbatim by
+  # the `{type, comparison}` shorthand, so ITS internal order survives into the
+  # serialised string the probe compares. That is where the real 11 false
+  # findings came from, and a top-level-only reversal reproduces none of it.
+  jq -c '
+    def deep_reverse_keys:
+      walk(if type == "object" then (to_entries | reverse | from_entries) else . end);
+    def add_server:
+      walk(if type == "object" and has("type")
+           then . + {id: "9999", conditionResult: true}
+           else . end);
+    map(
+      add_server
+      | .triggers += {id: "8888", organizationId: "1"}
+      | .actionFilters = [ .actionFilters[] | .actions = [ .actions[] | . + {integrationId: null, status: "active"} ] ]
+      | deep_reverse_keys
+    )
+  ' "$CAPTURE" > "$shaped" 2>/dev/null
+
+  if [[ ! -s "$shaped" ]] || ! jq -e 'length == 30' "$shaped" >/dev/null 2>&1; then
+    _report "F13 an API-shaped payload (server fields + unsorted keys) still PASSES" fail \
+      "the shaped fixture was not built — this row proves nothing"
+    return
+  fi
+  # Landing assert 1: it must differ from the capture as RAW BYTES (server fields
+  # and key order), or it is the identity case F1 already covers.
+  if jq -c . "$shaped" | cmp -s - <(jq -c . "$CAPTURE"); then
+    _report "F13 an API-shaped payload still PASSES" fail \
+      "the shaped fixture is byte-identical to the capture"
+    return
+  fi
+  # Landing assert 2: it must be SEMANTICALLY equal (same data, different shape).
+  # Without this the row could pass by feeding the probe genuinely different data.
+  # Scoped to `triggers` and `actionFilters` ONLY. A blanket `del(.id, …)` also
+  # strips each RULE's real workflow id (e.g. "566201"), which the capture
+  # legitimately carries — so the two sides would differ for a reason that has
+  # nothing to do with the shape under test. (This assert caught that in its own
+  # first draft.)
+  if ! jq -S -c 'map(
+         .triggers      |= walk(if type=="object" then del(.id,.conditionResult,.organizationId) else . end)
+       | .actionFilters |= walk(if type=="object" then del(.id,.conditionResult,.organizationId,.integrationId,.status) else . end)
+       )' "$shaped" \
+       | cmp -s - <(jq -S -c . "$CAPTURE"); then
+    _report "F13 an API-shaped payload still PASSES" fail \
+      "the shaped fixture is not semantically identical to the capture — it changes DATA, not just SHAPE, so a RED would not mean what this row claims"
+    return
+  fi
+
+  _run "$shaped"
+  if [[ "$_rc" -eq 0 ]] && grep -q 'in-scope rules match' <<<"$_out"; then
+    _report "F13 an API-shaped payload (server fields + unsorted keys) still PASSES" ok
+  else
+    _report "F13 an API-shaped payload still PASSES" fail \
+      "rc=$_rc — the projection is not normalising both sides, so the probe would open a false p1 on its first real run. Output: $(head -c 300 <<<"$_out")"
   fi
 }
 
@@ -194,6 +277,7 @@ t_survivors_out_of_scope() {
 }
 
 t_identity_passes
+t_live_api_shape
 t_deleted
 t_disabled
 t_detector_unbind

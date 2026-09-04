@@ -72,15 +72,45 @@ locals {
   # hcloud resource. Mirrors local.registry_private_ip (zot-registry.tf:40, #6415):
   # the host's own file owns the constant, network.tf consumes it.
   #
-  # THIS BEING A STATIC LITERAL IS THE WHOLE POINT. ADR-149 cut this secret from #6977
-  # because sourcing it from hcloud_server_network.git_data.ip (a COMPUTED attribute)
-  # would drag hcloud_server.git_data into any -target closure that reached the secret,
-  # and the natural remedy — a per-PR -target line — wedges every merge to main. A
-  # literal has no such edge: the secret is plannable and appliable with the host
-  # absent, which is exactly the state it must survive (see the resource comment).
+  # THIS BEING A STATIC LITERAL IS THE WHOLE POINT — FOR network.tf, which is its only
+  # consumer (`ip = local.git_data_private_ip`). The host's own file owns the constant.
+  #
+  # (#7772) WHAT THIS PARAGRAPH USED TO SAY, AND WHY IT WAS WRONG. It read: "ADR-149 cut this
+  # secret from #6977 because sourcing it from hcloud_server_network.git_data.ip (a COMPUTED
+  # attribute) would drag hcloud_server.git_data into any -target closure that reached the
+  # secret … A literal has no such edge: the secret is plannable and appliable with the host
+  # absent." That describes a design DC-3 mandated against and DC-5 reversed before merge, and
+  # it sat ten lines above the resource comment that says so — see
+  # doppler_secret.git_data_ssh_host below, whose `value` IS
+  # `hcloud_server_network.git_data.ip`. The reversal holds because that secret's only -target
+  # line is the birth job, which already targets the server AND the NIC, so the computed edge
+  # drags nothing new into any plan that exists. Corrected rather than deleted: the local is
+  # still here and still correct, just for a different consumer than this text claimed.
   #
   # web = .10/.11, git-data = .20, registry = .30, inngest = .40.
   git_data_private_ip = "10.0.1.20"
+
+  # (#7772 item 1) Better Stack Logs ingest endpoint for git-data's OWN source. Region/cluster-bound
+  # exactly as the registry's sibling local is: source 2734275 authenticates on `eu-central-1a`, the
+  # host the create response named (verified 2026-09-03 by an authenticated non-writing probe against
+  # this URL: 202 accepting). Do NOT pattern-match this off the registry's `eu-fsn-3` literal — the two
+  # sources sit on different clusters, and the API reports `eu-central-1a` for 2457081 as well, so the
+  # older literal's shape is not a template for new ones.
+  #
+  # A LOCAL, NOT A SECOND NO-DEFAULT VARIABLE (D5). An ingest URL is a public endpoint; only the token
+  # that authorizes writing to it is secret, and that one IS a variable. Making the URL a variable too
+  # would double this change's exposure to its own top risk (a root variable resolves before -target
+  # pruning, so an unset one fails every apply in the root, not just git-data's).
+  #
+  # WHAT REUSES THIS: git-data's user_data render below, and — by SHAPE, not by import —
+  # rung2-rehearsal/variables.tf's `betterstack_ingest_url` default, which
+  # git-data-rung2-rehearsal.test.sh arm 7 extracts from BOTH sides and fails on divergence. Keep the
+  # two in sync; the arm is what makes that mechanical rather than remembered.
+  #
+  # The four NON-git-data consumers stay on 2457081 via local.betterstack_logs_ingest_url
+  # (zot-registry.tf). Re-pointing that local would move the web hosts and the registry onto git-data's
+  # source and break fresh-boot-ready.test.sh S9.
+  git_data_betterstack_ingest_url = "https://s2734275.eu-central-1a.betterstackdata.com/"
 
   # trimspace() strips the trailing newline tls_private_key.public_key_openssh
   # carries — without it the cloud-init authorized_keys line renders with a
@@ -217,7 +247,12 @@ resource "doppler_secret" "git_remove_ssh_private_key" {
   # schedules both at once); a transient Doppler 5xx on the ssh-host write would otherwise
   # leave the switch armed and the antidote missing, and every account deletion from that
   # instant files a FALSE "erasure failed" event. No cycle: git_data_ssh_host reads a
-  # static local and has no upstream at all.
+  # computed NIC attribute, so it DOES have an upstream — but that upstream is
+  # hcloud_server_network.git_data, which the birth job already targets alongside the server,
+  # so the edge drags nothing new into any plan that exists. (#7772 corrected this sentence:
+  # it read "reads a static local and has no upstream at all", which describes the design
+  # ADR-149's DC-3 mandated AGAINST and DC-5 reversed before merge. The no-cycle conclusion
+  # is unchanged and now rests on the reason that is actually true.)
   depends_on = [hcloud_server.git_data, doppler_secret.git_data_ssh_host]
 }
 
@@ -300,8 +335,8 @@ module "git_data_userdata" {
   doppler_config_name    = "prd_git_data"
   git_data_server_type   = var.git_data_server_type
   sentry_dsn             = var.sentry_dsn
-  betterstack_ingest_url = local.betterstack_logs_ingest_url
-  betterstack_logs_token = var.betterstack_logs_token
+  betterstack_ingest_url = local.git_data_betterstack_ingest_url
+  betterstack_logs_token = var.git_data_betterstack_logs_token
   git_transport_pubkey   = local.git_transport_pubkey
   git_provision_pubkey   = local.git_provision_pubkey
   git_remove_pubkey      = local.git_remove_pubkey

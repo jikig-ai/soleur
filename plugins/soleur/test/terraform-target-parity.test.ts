@@ -1105,12 +1105,17 @@ function stripDispatchJobs(workflowText: string): string {
   // rather than merely uniform: ALL EIGHTEEN of its -targets are
   // OPERATOR_APPLIED_EXCLUSIONS (ADR-103), so folding them into `allTargets` would assert
   // per-merge coverage for a fan-out the per-merge apply deliberately never touches.
+  // inngest_volume_recut (#7695): the dispatch-only recut of the inngest Redis AOF volume. Its 2
+  // -targets (hcloud_volume.inngest_redis + its attachment) are BOTH already
+  // OPERATOR_APPLIED_EXCLUSIONS, so stripping is coverage-neutral today — but strip it per the
+  // uniform rule: a dispatch writer surface must never broaden the per-merge coverage anchor, so a
+  // FUTURE recut -target that is NOT an exclusion cannot silently mask a per-merge miss.
   //
   // NOTE for whoever edits this function next: the guard above extracts EVERY
   // "[a-z0-9_]+" string literal in this body and requires each to name a real top-level
   // job. Adding any other lowercase quoted literal here — even in a helper call — makes
   // that guard treat it as a job name and go red. Comments are fine; literals are not.
-  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create");
+  return stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(stripJob(workflowText, "inngest_host"), "registry_host_replace"), "registry_region_migrate"), "registry_luks_recut"), "git_data_host_replace"), "workspaces_luks_recut"), "web_host_create"), "web_host_replace"), "git_data_host_create"), "inngest_volume_recut");
 }
 
 /** Inverse of stripJob: return ONLY the named job's block (header → next job/EOF). */
@@ -1242,9 +1247,16 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // the `doppler_secret.git_data_ssh_host` proposal outright; it does not. It bites only
   // under the remedy "give the new secret a per-PR -target line", which is not the remedy
   // any of its five sibling secrets use — they sit in THIS set with no per-PR target at
-  // all. Sourcing the value from a static local (local.git_data_private_ip) instead of the
-  // computed NIC attribute removes the last edge that could reach the server. So the
-  // secret ships in #6982 as an exclusion + a birth -target, with no wedge.
+  // all. So the secret ships in #6982 as an exclusion + a birth -target, with no wedge.
+  //
+  // (#7772) THE SENTENCE THAT STOOD HERE described the rejected design. It said the value is
+  // sourced "from a static local (local.git_data_private_ip) instead of the computed NIC
+  // attribute", which "removes the last edge that could reach the server". DC-3 mandated the
+  // opposite and DC-5 was reversed before merge: git-data.tf reads
+  // `hcloud_server_network.git_data.ip`. The no-wedge conclusion is unaffected and stands on
+  // the reason above it — this exclusion means no per-PR -target, so the computed edge is
+  // never in a per-merge plan closure. `local.git_data_private_ip` still exists and is still
+  // load-bearing, but for network.tf's own `ip =` assignment, not for this secret.
   "doppler_config.git_data_prd",
   // (#6982) Both ride the git-data-host-create dispatch, never the per-PR apply — same
   // class as every git-data sibling above.
@@ -2648,6 +2660,203 @@ describe("registry-luks-recut dispatch -target/-replace set (#6929)", () => {
 });
 
 /**
+ * `apply_target=inngest-volume-recut` (#7695) is the ONE dispatch in this workflow that must prove
+ * something about the WORLD before it plans. Everything below pins the six registration sites AC B6
+ * enumerates, the enum<->job binding of B7, and the shared-mutex property of B9.
+ *
+ * B9 IS ASSERTED AS A PROPERTY, NOT AS A STRING, and the deviation is deliberate. The plan named a
+ * NEW `inngest-cutover` concurrency literal for four jobs. A GitHub job may declare exactly ONE
+ * concurrency group, and `cutover-inngest.yml` already serializes on `deploy-inngest-restart`
+ * together with `deploy-inngest-image.yml` and `restart-inngest-server.yml` — so minting a new
+ * literal and putting it on the cutover job would have REMOVED that job from the group it shares
+ * with the deploy pipeline, letting a deploy restart inngest-server mid-cutover. That is a strictly
+ * worse race than the one B9 set out to close ("a mutex on one side of a race is not a mutex" is
+ * the plan's own framing). Joining the EXISTING literal covers six surfaces instead of four and
+ * orphans none. Asserting the property — all four surfaces carry ONE identical group — rather than
+ * the literal is also what keeps this guard alive across a future rename.
+ */
+describe("inngest-volume-recut dispatch: registration, binding, and the shared mutex (#7695)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const jobBlock = extractJobBlock(wf, "inngest_volume_recut");
+
+  test("B6/B7: the enum option and its bound job BOTH exist", () => {
+    // The binding is asserted in BOTH directions on purpose. An option with no job is a menu entry
+    // that silently no-ops (every job's `if:` is false, the run is green, nothing happened) — the
+    // worst outcome for a destructive target. A job with no option is unreachable and rots.
+    expect(wf).toMatch(/^ {10}- inngest-volume-recut$/m);
+    expect(jobBlock.length).toBeGreaterThan(0);
+    expect(jobBlock).toContain("inputs.apply_target == 'inngest-volume-recut'");
+  });
+
+  test("B7 (non-vacuity): the binding check can distinguish present from absent", () => {
+    // Without this, the two `toContain`s above would pass against a workflow where the option and
+    // the job merely happen to coexist for unrelated reasons.
+    const noOption = wf.replace(/^ {10}- inngest-volume-recut$/m, "");
+    expect(/^ {10}- inngest-volume-recut$/m.test(noOption)).toBe(false);
+    const noJob = stripJob(wf, "inngest_volume_recut");
+    expect(noJob).not.toContain("inputs.apply_target == 'inngest-volume-recut'");
+  });
+
+  test("-targets are exactly the AOF volume and its attachment", () => {
+    const targets = extractAllTargets(jobBlock);
+    expect([...targets].sort()).toEqual([
+      "hcloud_volume.inngest_redis",
+      "hcloud_volume_attachment.inngest_redis",
+    ]);
+  });
+
+  test("carries exactly one -replace flag, on the volume", () => {
+    // Anchored on the flag syntax, not a bare address: the same address appears as a `-target=` on
+    // the next line and throughout the job's prose, so a bare-token grep would pass against a job
+    // that lost its -replace entirely and therefore planned a no-op.
+    const replaced = [...jobBlock.matchAll(/-replace='([^']+)'/g)].map((m) => m[1]);
+    expect(replaced).toEqual(["hcloud_volume.inngest_redis"]);
+  });
+
+  test("sources BOTH gates and states there is no ack-destroy bypass", () => {
+    expect(jobBlock).toContain("tests/scripts/lib/inngest-volume-recut-gate.sh");
+    expect(jobBlock).toContain("tests/scripts/lib/inngest-host-dark-gate.sh");
+    expect(jobBlock).toMatch(/^\s*if ! inngest_volume_recut_gate /m);
+    expect(jobBlock).toMatch(/^\s*if ! inngest_host_dark_gate /m);
+    // Anchored on the phrase inside the job BODY, not the header comment: extractJobBlock starts
+    // at the `  inngest_volume_recut:` line, so a header-comment anchor would be asserting text
+    // the block does not contain — and a reader "fixing" that would reach for the header rather
+    // than for the operator-visible ::error:: where the claim actually has to hold.
+    expect(jobBlock).toContain("NO [ack-destroy] bypass on this path.");
+  });
+
+  test("Guard 2 runs BEFORE the plan", () => {
+    // A serving host must cost nothing and reach no terraform at all. If the plan ran first, a
+    // refusal would still be correct but would have already touched state — and the ordering is
+    // exactly the kind of thing a later edit reorders without noticing.
+    const darkAt = jobBlock.indexOf("inngest_host_dark_gate");
+    const planAt = jobBlock.indexOf("terraform plan -no-color");
+    expect(darkAt).toBeGreaterThan(-1);
+    expect(planAt).toBeGreaterThan(-1);
+    expect(darkAt).toBeLessThan(planAt);
+  });
+
+  test("does NOT re-derive an inline copy of Guard 1's counter logic in the plan step", () => {
+    // The gate must be the SAME BYTES the test suite exercises. An inline jq over
+    // resource_changes inside the PLAN step would be a second, untested implementation.
+    // (The APPLY step's jq backstops are deliberate and separate — they re-read the SAVED plan
+    // after the gate has already passed, so they are redundancy, not a second decision.)
+    const planStep = jobBlock.slice(
+      jobBlock.indexOf("Terraform plan (inngest-redis volume recut"),
+      jobBlock.indexOf("Terraform apply (inngest-redis volume recut"),
+    );
+    expect(planStep.length).toBeGreaterThan(0);
+    expect(planStep).not.toContain("resource_changes");
+  });
+
+  test("requires the typed confirm and the id-pin before planning", () => {
+    expect(jobBlock).toContain("RECUT-INNGEST-VOLUME");
+    expect(jobBlock).toContain("expected_inngest_volume_id");
+  });
+
+  test("B8: RECUT-INNGEST-VOLUME is distinct from every other confirm literal", () => {
+    // A token typed for one target must never authorize another. Derived from the workflow rather
+    // than from a hand-kept list, so a future target that reuses the literal reddens here.
+    const literals = [...wf.matchAll(/"\$CONFIRM" != "([A-Z-]+)"/g)].map((m) => m[1]);
+    expect(literals).toContain("RECUT-INNGEST-VOLUME");
+    // Exactly ONE job gates on it. A GLOBAL uniqueness assertion would be wrong and was measured
+    // so: RECUT-REGISTRY-LUKS legitimately appears twice, because registry_pull_path_gate and
+    // registry_luks_recut are two jobs bound to the SAME apply_target and must accept the same
+    // token. The property that matters is per-TOKEN, not per-occurrence — a token typed for one
+    // TARGET must not authorize a different one.
+    expect(literals.filter((l) => l === "RECUT-INNGEST-VOLUME")).toHaveLength(1);
+    // …and no OTHER target's token collides with it.
+    const others = literals.filter((l) => l !== "RECUT-INNGEST-VOLUME");
+    expect(others.length).toBeGreaterThan(0); // non-vacuity: there ARE siblings to be distinct from
+    expect(others).not.toContain("RECUT-INNGEST-VOLUME");
+  });
+
+  test("B6: the `confirm` input DESCRIPTION names this target as environment-gated", () => {
+    // The description enumerates which targets carry an `environment:` reviewer gate. Leaving it
+    // stale makes the workflow's own documentation assert something false about the one field an
+    // operator reads before firing a destroy.
+    const confirmDesc = /confirm:\n\s*description: "([^"]*)"/.exec(wf);
+    expect(confirmDesc).not.toBeNull();
+    expect(confirmDesc![1]).toContain("inngest-volume-recut");
+  });
+
+  test("declares the required-reviewer environment (the SOLE authorization)", () => {
+    expect(jobBlock).toMatch(/^ {4}environment: inngest-cutover$/m);
+  });
+
+  test("asserts the reviewer set is non-empty at dispatch time (DP-11 F8)", () => {
+    // A zero-reviewer environment AUTO-APPROVES, which silently demotes layer 1 — the only
+    // authorization in the chain — to decoration while every other layer still reports green. It
+    // lives in the GitHub API, so no test in this repo can observe it; the job must read it.
+    expect(jobBlock).toContain("environments/inngest-cutover");
+    expect(jobBlock).toContain("required_reviewers");
+  });
+
+  test("B9: the recut, inngest_host, inngest_host_replace and cutover-inngest share ONE mutex", () => {
+    const CUTOVER_WORKFLOW = resolve(
+      REPO_ROOT,
+      ".github/workflows/cutover-inngest.yml",
+    );
+    const groupOf = (block: string): string | null => {
+      const m = /^ {4}concurrency:\n {6}group: (\S+)\n {6}cancel-in-progress: (\S+)$/m.exec(block);
+      return m ? `${m[1]}|${m[2]}` : null;
+    };
+    const surfaces: Array<[string, string | null]> = [
+      ["inngest_volume_recut", groupOf(jobBlock)],
+      ["inngest_host", groupOf(extractJobBlock(wf, "inngest_host"))],
+      ["inngest_host_replace", groupOf(extractJobBlock(wf, "inngest_host_replace"))],
+      [
+        "cutover-inngest.yml:cutover",
+        groupOf(
+          extractJobBlock(readFileSync(CUTOVER_WORKFLOW, "utf8"), "cutover"),
+        ),
+      ],
+    ];
+    // Every surface declares one, and every declaration is the SAME literal with
+    // cancel-in-progress: false. GitHub does NOT error on divergent group strings — they silently
+    // fail to serialize — which is why this is asserted rather than assumed.
+    for (const [name, g] of surfaces) {
+      expect(g, `${name} declares no job-level concurrency group`).not.toBeNull();
+    }
+    const groups = new Set(surfaces.map(([, g]) => g));
+    expect([...groups]).toEqual(["deploy-inngest-restart|false"]);
+  });
+
+  test("pins timeout-minutes below GitHub's 360-minute default", () => {
+    const m = /timeout-minutes:\s*(\d+)/.exec(jobBlock);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBeLessThanOrEqual(30);
+  });
+
+  test("stripDispatchJobs removes this job's -targets from the coverage set", () => {
+    const strippedTargets = extractAllTargets(stripDispatchJobs(wf));
+    // Non-vacuity: unstripped, the whole-file scan DOES see them.
+    expect(extractAllTargets(wf).has("hcloud_volume.inngest_redis")).toBe(true);
+    expect(strippedTargets.has("hcloud_volume.inngest_redis")).toBe(false);
+    // The ATTACHMENT survives stripDispatchJobs, and that is NOT this job's doing:
+    // inngest_host_replace also -targets it and is one of the two inngest dispatch jobs
+    // deliberately "left folded-in historically" (see the stripDispatchJobs comment). Asserting
+    // its absence here would be asserting someone else's property and would redden on a change
+    // this job does not own — so the claim is narrowed to what this strip actually removes, and
+    // the attachment is checked against a text with that sibling removed too.
+    const alsoNoReplace = extractAllTargets(
+      stripJob(stripDispatchJobs(wf), "inngest_host_replace"),
+    );
+    expect(alsoNoReplace.has("hcloud_volume_attachment.inngest_redis")).toBe(false);
+  });
+
+  test("B5: the LUKS passphrase pair is in the PER-MERGE -target list, not this job's", () => {
+    // The passphrase must exist before any host boots that reads it, so it is minted at MERGE.
+    // It must NOT be in the recut job's -target set: Guard 1 refuses any update/delete/forget on
+    // it, and targeting it here would put a rotation one plan away from the volume it opens.
+    expect(extractAllTargets(jobBlock).has("random_password.inngest_redis_luks")).toBe(false);
+    const perMerge = extractAllTargets(stripDispatchJobs(wf));
+    expect(perMerge.has("random_password.inngest_redis_luks")).toBe(true);
+    expect(perMerge.has("doppler_secret.inngest_redis_luks_key")).toBe(true);
+  });
+});
+
+/**
  * ALLOW-SET <=> -target PARITY across all three registry dispatch jobs.
  *
  * The identical 6-address set now lives in SIX places (three gate libs + three job -target
@@ -2911,11 +3120,23 @@ const GIT_DATA_BIRTH_TARGET_BASES = [
   // about the config CONTAINING the key. Omit these and luksOpen fails — silently.
   "random_password.git_data_luks",
   "doppler_secret.git_data_luks_key",
-  // (#6982) SIBLING, dependency-free by design. Publishes GIT_DATA_SSH_HOST from a STATIC
-  // local, never from hcloud_server_network.git_data.ip — that is what makes it plannable
-  // with the host absent and keeps it clear of any upstream closure onto the server.
-  // ADR-149 cut it from #6977 believing the opposite; see its resource comment. Omit it and
-  // every account deletion files a FALSE Art. 17 erasure-failed event from birth onward.
+  // (#6982) SIBLING. Publishes GIT_DATA_SSH_HOST from `hcloud_server_network.git_data.ip` —
+  // the COMPUTED NIC attribute, which is what ADR-149's DC-3 mandates and what git-data.tf
+  // actually does (`value = hcloud_server_network.git_data.ip`).
+  //
+  // (#7772) THIS COMMENT SAID THE OPPOSITE and was corrected here. It claimed the value came
+  // from a STATIC local "never from hcloud_server_network.git_data.ip", and closed by saying
+  // ADR-149 "cut it from #6977 believing the opposite" — describing the position DC-3
+  // REVERSED before merge, in a birth-route artifact, about a birth-route resource. The
+  // reversal is safe precisely because this secret's only -target line IS the birth job,
+  // which already targets both hcloud_server.git_data and hcloud_server_network.git_data:
+  // the edge drags nothing new into any plan that exists, and there is no pre-birth window to
+  // protect because the secret is created BY the dispatch. The mandated form is also strictly
+  // stronger — a birth that landed the server but not the NIC can no longer publish an
+  // address nothing answers on.
+  //
+  // Omit it and every account deletion files a FALSE Art. 17 erasure-failed event from birth
+  // onward. That part was always true and is unchanged.
   "doppler_secret.git_data_ssh_host",
   // (#6982) SIBLING. The Better Stack ingest token in prd_git_data, read by the
   // post-Doppler emits (boot-completion, gc faults). Omit it and the queryable copy of the

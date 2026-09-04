@@ -345,8 +345,15 @@ empty. The addendum states what is measured and what is not — including that t
 "was a FLUSHALL ever performed" question is unanswerable at ~20d retention. It does **not** touch
 ADR-142's `## Decision`. Small.
 
-**(b) A NEW ADR for the decision this plan actually makes** — provisionally **ADR-198**, the next
-free ordinal measured across all **64** `origin/*` refs (highest seen: ADR-197):
+**(b) A NEW ADR for the decision this plan actually makes** — **ADR-199**.
+
+> **Superseded 2026-09-03 (#7695):** this paragraph originally read *"provisionally ADR-198, the
+> next free ordinal measured across all 64 `origin/*` refs (highest seen: ADR-197)"*. That reading
+> was correct when taken and is stale now. Re-derived at merge across **67** refs: ADR-198 is
+> claimed by the open branch `feat-one-shot-7460-betterstack-baked-token`, so the next free ordinal
+> is **199**. The ordinal above has been advanced (the plan declared it provisional and instructed
+> exactly this re-derivation); the original measurement is preserved in this note rather than
+> overwritten, and the full record is in `## Addendum — 2026-09-03 (#7695, Merge B as delivered)`.
 
 > *No-SSH authorized clearance of the inngest monotonic flush latch, bounded by a measured
 > empty-store precondition.*
@@ -355,7 +362,7 @@ Its Decision: the destructive recut is authorized **only** when the store is *me
 the host *measured* dark on the same probe row; ADR-142's byte-copy remains mandatory otherwise.
 This is not a reversal of ADR-142 — it is the branch ADR-142 never had to consider, because when
 ADR-142 was written the store was presumed live. The two coexist: ADR-142 governs a populated
-store, ADR-198 governs a provably empty one, and the gate decides which world you are in **at
+store, ADR-199 governs a provably empty one, and the gate decides which world you are in **at
 dispatch time** rather than at authoring time.
 
 **Why the bound, and not a blanket override.** The reasoning that "a re-flip `FLUSHALL`s Redis
@@ -372,7 +379,7 @@ Also recorded in the new ADR:
   precondition SATISFIED), so any change to latch semantics must be reasoned through both.
 - The escrow ruling (below), so the next reader does not re-litigate it.
 
-The ADR-198 ordinal is **provisional**. `/ship`'s ADR-Ordinal Collision Gate must re-derive it
+The ADR-199 ordinal is **provisional**. `/ship`'s ADR-Ordinal Collision Gate must re-derive it
 against freshly-fetched refs immediately before merge, and any renumber must sweep this plan,
 `tasks.md`, and every AC naming the ordinal **in the same edit** — a renumber that reaches only the
 ADR body leaves an AC asserting a nonexistent file.
@@ -618,7 +625,7 @@ across rows:**
 5. **`redis_keys == 0`**, from `INFO keyspace` across **all** databases — **not `DBSIZE`**, which
    is db-0 only while `FLUSHALL` spans every db. The shipped post-flush assert already carries that
    asymmetry; it must not be inherited into a gate that authorizes destruction.
-6. The live Hetzner attachment's volume id equals the id the dispatch pinned.
+6. The live Hetzner volume id equals the id the dispatch pinned. *(Corrected 2026-09-03: this read "the live Hetzner attachment's volume id". The workflow resolves the id by NAME (`/volumes?name=soleur-inngest-redis-store`) and then asserts that volume is attached to the inngest server; it is not a read of the attachment resource. So G17 answers "the volume carrying this name is the pinned id, and it is attached to the host we measured" — which is what the mount pin needs — and does NOT independently prove the terraform ADDRESS resolves to that volume. Guard 1's `before.id` pin is what answers the address question; the two are complementary and neither subsumes the other.)*
 7. **Host identity — `host=soleur-inngest` AND `host_name=soleur-inngest-prd` on the row.**
    `inngest-bootstrap.sh` is the **SHARED** renderer for both hosts, so the co-located web host
    emits this probe too. Without the full conjunction a web-host row reporting its own (irrelevant)
@@ -1043,7 +1050,7 @@ distinguishable only that way.
 | `not_dark` | `server_active=active` or `http_code=200` | The host is serving. **Stop.** Nothing about this plan applies to a serving host |
 | `redis_keys > 0` | Store is populated | Destructive path refused. Route to ADR-142 byte-copy under #6894 — **but see the circularity note below** |
 | `mount_mismatch` | `/mnt/data` is not on the pinned device | The mount failed open and Redis is on the root disk. Do **not** recut; the volume's real contents are unmeasured |
-| `id_pin_absent` / `luks_id_mismatch` | Pin missing, or address resolves elsewhere | Re-read the live Hetzner attachment id and re-dispatch. If the volume was stranded, use the bare-create recovery shape |
+| `id_pin_absent` / `luks_id_mismatch` | Pin missing, or address resolves elsewhere | Re-read the live Hetzner volume id (resolved by name) and re-dispatch. If the volume was stranded, use the bare-create recovery shape |
 | Guard 1 `out_of_scope` / `resource_deletes` | Drift is in the plan | Do **not** widen the gate. Reconcile drift under its own dispatch first |
 | LUKS boot fails after Dispatch B | Volume already destroyed | **No rollback exists.** The store was empty by precondition, so recovery is re-provision: functions re-sync from Postgres and the SDK re-registers |
 
@@ -1158,7 +1165,7 @@ issue; the destruction-record template.
 | `tests/scripts/lib/inngest-host-dark-gate.sh` | Guard 2 decision function (positive allowlist on `dark`) |
 | `tests/scripts/test-inngest-host-dark-gate.sh` | Mutation matrix + harness rows for Guard 2 |
 | `apps/web-platform/infra/inngest-redis-luks.test.sh` | LUKS apparatus guard: no `format` on the volume, key on `soleur-inngest` not `soleur`, blkid discriminator present, three-arm coverage |
-| `knowledge-base/engineering/architecture/decisions/ADR-198-*.md` | New decision (ordinal provisional — re-derive before merge) |
+| `knowledge-base/engineering/architecture/decisions/ADR-199-*.md` | New decision (ordinal provisional — re-derive before merge) |
 | `knowledge-base/legal/audits/inngest-aof-destruction-record.md` | Art. 5(2) destruction record template |
 | `apps/web-platform/infra/inngest-luks-open.service` (or its `write_files` stanza) | Boot-reopen unit — `runcmd` runs first boot only, so the mapper is otherwise absent on boot 2 |
 
@@ -1367,7 +1374,7 @@ body and file as an `action-required` issue. They are **not** applied silently.
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
   text, or omits the threshold will fail `deepen-plan` Phase 4.6. It is filled above with a
   concrete artifact and a concrete exposure vector.
-- The ADR-198 ordinal is provisional and **will** move if a sibling PR claims it. Re-derive against
+- The ADR-199 ordinal is provisional and **will** move if a sibling PR claims it. Re-derive against
   freshly-fetched refs before merge and sweep this plan, `tasks.md`, and AC14 in the same edit.
 - Guard fixtures must be **synthesized** plan JSON. A captured production plan would embed real
   volume ids and drift silently (`cq-test-fixtures-synthesized-only`).
@@ -1449,3 +1456,161 @@ apply on this host) and `__UNREADABLE__` (applied, unanswerable), never `0`. `fl
 inherits `data_bytes`' unreadability rather than being tested independently, because `[ -f ]`
 cannot distinguish "no latch" from "cannot read the directory" — on a volume detached while still
 mounted it would emit `false`, a positive claim about a store never read.
+
+## Addendum — 2026-09-03 (#7695, Merge B): §D2 reason 2 was FALSE, and the CTO reversed it
+
+Appended, not edited. §D2 above stands as the record of what Merge A shipped and why I believed
+it at the time. This section records that one of its three reasons does not survive contact with
+the source, and that the decision it drove has been reversed for Merge B.
+
+### The false claim
+
+§D2 reason 2 says supplying the probe's Redis credential "means wrapping the probe's `ExecStart`
+in `doppler run`", and that doing so would fail `203/EXEC` on the co-located web host because
+`/usr/bin/doppler` is symlinked only by `cloud-init-inngest.yml`.
+
+**The premise is false.** The probe unit as rendered by `inngest-bootstrap.sh` already carries two
+tolerant environment files and a plain script `ExecStart`:
+
+```
+EnvironmentFile=-/etc/default/inngest-doppler
+EnvironmentFile=-/etc/default/inngest-server
+ExecStart=/usr/local/bin/inngest-server-probe.sh
+```
+
+A third `EnvironmentFile=-/etc/default/inngest-probe` is shape-identical to what is already there.
+`ExecStart` is not touched, so there is no `/usr/bin/doppler` dependency and no `203/EXEC` on
+web-1 — that host simply has no such file, the `-` prefix tolerates the absence, and
+`INNGEST_REDIS_PASSWORD` stays unset, which is the honest state for a host with no inngest Redis.
+
+The second sub-objection (that `doppler run` would inject every secret and make the fixture seam
+settable by anyone with Doppler write access) dissolves with it: a one-variable env file injects
+one variable.
+
+The pattern is not even new. `web-probe-envwrite.sh` already writes a single-purpose
+`/etc/default/inngest-consumer-probe` under `umask 0137` + `chmod 600`, consumed by
+`EnvironmentFile=` in `inngest-consumer-probe.service`.
+
+### How it got shipped, and where it propagated
+
+I reasoned from "the unit needs a secret" to "the unit must run under `doppler run`" without
+reading the unit I had edited in the same PR. The claim then went into this plan's §D2, into the
+compound learning, into PR #7754's body, and into its commit message — four sites, two of them
+now on `main` and one immutable — before anything tested it. Grepping the OLD claim is what
+found them; a residual count over the corrected text would have been blind to every one.
+
+That is the same defect class §D1 records one level up: §D1 was a false premise about a *host*,
+this is a false premise about a *unit*, and both were written into a comment as settled fact.
+
+### What Merge B does instead (CTO ruling, 2026-09-03)
+
+Option (d): re-add `redis_keys` at `probe_schema=3`, credentialed by a probe-specific
+single-secret env file, and rest Guard 2's emptiness claim on `redis_keys == 0` **conjoined with**
+`data_mount_src` pinning. Rejected alternatives, with the reasoning, are recorded in the new ADR
+rather than restated here.
+
+Two consequences worth stating at this file's level:
+
+- **§D2 reason 3 was overstated.** R2's remedy was to ADD mount-source pinning, not to retire
+  `redis_keys`. With `data_mount_src` pinned to the physical volume and `redis_active=active` on
+  the same row, the Redis process's `dir` provably sits on the block device being destroyed, and
+  `INFO keyspace = 0` becomes a statement about that device. The conjunction is what bridges
+  process to device — which was always R2's design.
+- **Plan condition 11 has no input either, and §D2 did not catch it.** `INNGEST_DIAGNOSTIC_BOOT`
+  is not an emitted field; the probe emits `cutover_flag` (a read of `INNGEST_CUTOVER_FLIP`) and
+  nothing about diagnostic boot. It moves to a dispatch-time synchronous Doppler read, which is
+  strictly better than a ≤90-minute-old snapshot.
+
+## Addendum — 2026-09-03 (#7695, Merge B as delivered)
+
+Appended, not edited, except for the ADR ordinal — which this plan itself declared **provisional**
+and instructed to be re-derived before merge, so resolving it is the instructed action rather than
+a rewrite of a dated reading. Everything else above stands as approved.
+
+### The ADR ordinal moved 198 -> 199, and re-deriving against `origin/main` alone would have missed it
+
+`origin/main`'s highest is **ADR-197**, so a `max+1` against main yields 198 — the value this plan
+carried. Re-derived across **all 67 `origin/*` refs** on 2026-09-03,
+`ADR-198-baking-the-better-stack-ingest-token-into-git-data-user-data.md` already exists on the OPEN
+branch `feat-one-shot-7460-betterstack-baked-token`. The next free ordinal is therefore **ADR-199**,
+and every reference in this plan and in `tasks.md` now says so.
+
+This is the collision class the plan's own §Sharp Edges anticipated, arriving exactly as described.
+The derivation that catches it is over refs, not over `main`:
+
+```
+for r in $(git for-each-ref --format='%(refname)' refs/remotes/origin/); do
+  git ls-tree -r --name-only "$r" knowledge-base/engineering/architecture/decisions/ 2>/dev/null
+done | grep -oE 'ADR-[0-9]+' | sort -t- -k2 -n -u | tail -1
+```
+
+### B4 is FALSIFIED AS WRITTEN, and the property it exists to establish HOLDS
+
+AC B4 says: "`terraform plan` for `apply_target=inngest-host` shows **zero deletes** after the
+`ignore_changes = [format]` change. Record the verbatim plan line."
+
+Run on 2026-09-03 against the live state, with the `inngest_host` job's own sixteen `-target`s:
+
+```
+Plan: 3 to add, 1 to change, 3 to destroy.
+```
+
+So the literal criterion is **NOT met**, and the AC is recorded here as falsified rather than
+quietly satisfied by a looser reading. The three destroys, measured per address from
+`terraform show -json`:
+
+| Address | Actions | Why |
+|---|---|---|
+| `hcloud_server.inngest` | `delete,create` | `~ user_data … # forces replacement` — this merge's cloud-init edits, which the plan authorizes explicitly |
+| `hcloud_server_network.inngest` | `delete,create` | `~ server_id … # forces replacement` |
+| `hcloud_volume_attachment.inngest_redis` | `delete,create` | `~ server_id … # forces replacement` |
+| **`hcloud_volume.inngest_redis`** | **`no-op`** | **the property B4 exists to establish** |
+
+`ignore_changes = [format]` does exactly what §2.2 claims: the volume is **untouched**, so keeping
+`format = "ext4"` declared does not queue a replace. What B4's wording did not anticipate is that
+Merge B's own cloud-init edits force a host replace in the same plan — `user_data` is ForceNew with
+no `ignore_changes` — so a zero-delete plan for this target was never reachable from this branch.
+
+**The corrected criterion, and it was measured PASSING:** the delivery vehicle for a cloud-init edit
+is `apply_target=inngest-host-replace`, not `inngest-host`. That job's own plan
+(`-replace=hcloud_server.inngest` plus its three `-target`s) was run and graded with the REAL gate:
+
+```
+Plan: 3 to add, 0 to change, 3 to destroy.
+inngest_out_of_scope_changes=0 redis_volume_destroyed=0 inngest_server_replaced=1
+inngest_host_replace_gate: PASS — scoped inngest-host recreate permitted
+  (server + 2 dependents replace; Redis AOF volume preserved)
+```
+
+`redis_volume_destroyed=0` is the AOF-preservation property, measured rather than asserted, on the
+branch as it will merge. Dispatch A is therefore still reachable after this merge — which is what
+B4 was ultimately protecting and what a zero-delete count was standing in for.
+
+### Two P0s in Merge B's own Phase 2, found by the suite written to satisfy B15/B16
+
+`inngest-luks-open.service` shipped (a) never `systemctl enable`d and (b) reading
+`INNGEST_REDIS_LUKS_KEY` from `/etc/default/inngest-doppler`, which carries only `HOME` and the
+Doppler token. Either alone leaves the mapper closed on boot 2, the `nofail` fstab line skipping
+silently, and Redis writing its AOF to the ephemeral root disk — the exact failure the unit exists
+to prevent. The comment above the unit asserted "there is no second credential path to keep in
+sync", which is how it passed reading. Task 2.10's two-state `ExecStartPre` guard was also not
+delivered. All three are fixed in this merge and pinned by mutation-proven structural arms.
+
+### AC B9's concurrency literal was changed, deliberately
+
+B9 named a NEW `inngest-cutover` group for four surfaces. A GitHub job may declare exactly ONE
+concurrency group, and `cutover-inngest.yml` already serialises on `deploy-inngest-restart` together
+with `deploy-inngest-image.yml` and `restart-inngest-server.yml`. Minting a new literal and putting
+it on the cutover job would have REMOVED that job from the group it shares with the deploy pipeline,
+letting a deploy restart inngest-server mid-cutover — a strictly worse race than the one B9 set out
+to close. All four surfaces now carry the EXISTING literal, which covers six surfaces instead of
+four and orphans none. `terraform-target-parity.test.ts` asserts the PROPERTY (all four carry one
+identical group) rather than the string, so the guard survives a rename.
+
+### A third instance of the #6178 boot-brick class, in the same regex
+
+`cloud-init-inngest.yml`'s boot isolation self-check is EXACT-SET, and its admitting regex did not
+know `INNGEST_REDIS_LUKS_KEY`. Since this merge puts the passphrase pair in the per-merge `-target=`
+allowlist (AC B5), the secret lands at merge — from which point `n_total != n_inngest` FATALs every
+re-provision, with no Vector to report it. Admitted, placed before `HEARTBEAT_URL` so the existing
+top-level-anchor assertion still reads, and pinned behaviourally rather than by source fragment.

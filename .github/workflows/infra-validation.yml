@@ -651,6 +651,26 @@ jobs:
       # apex off HTTP 526 for the whole pre-cutover interval, and nothing in CI
       # protected it before this. The guard is stage-aware — it reads dns.tf and
       # stops requiring the rule once the apex leaves GitHub Pages.
+      # (#7772, task 5.4) THE ONE PLACE THE nft SYNTAX CHECK ACTUALLY DISCRIMINATES.
+      # `nft -c -f` needs privilege: measured on nftables v1.0.9, an unprivileged run reports
+      # `cache initialization failed: Operation not permitted` for a VALID ruleset and an INVALID
+      # one alike, so it cannot tell a syntax error from its own lack of rights. The suite proves
+      # the checker discriminates before trusting it, and skips loudly where it cannot — so this
+      # step installs nftables to make that proof possible. Without the install the suite still
+      # runs (run-registered-suites.sh auto-discovers it) but only reaches its extraction and
+      # non-vacuity arms.
+      # The install is a SEPARATE step on purpose. `test-infra-suite-registration.sh` requires
+      # every infra suite to be invoked as a single-line `run: bash <path>` — a multi-line
+      # `run: |` block both fails that gate and DE-REGISTERS the suite from
+      # run-registered-suites.sh, which derives single-line only. Measured here: the first draft
+      # folded the apt-get into the same step, and the suite silently vanished from the local
+      # runner's roster (112 recorded of 121 on disk) while CI would still have run it.
+      - name: Install nftables (for the git-data ruleset syntax gate, #7772)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq nftables
+
+      - name: git-data nftables ruleset syntax (#7772)
+        run: bash apps/web-platform/infra/git-data-nftables-syntax.test.sh
+
       - name: ssl=full apex mitigation guard (#7749)
         run: bash apps/web-platform/infra/ssl-full-mitigation.test.sh
 
@@ -831,6 +851,15 @@ jobs:
       # no runner at all, locally or in CI, while reading as coverage.
       - name: Run inngest boot-trace emitter loudness tests
         run: bash apps/web-platform/infra/inngest-boot-emitter.test.sh
+
+      # (#7695) The STRUCTURAL half of the LUKS apparatus evidence. Registered in the plain
+      # single-line form ON PURPOSE: its sibling loopback suite needs root and is therefore
+      # invisible to run-registered-suites.sh's derivation, and these are the arms that caught the
+      # two P0s this branch had already committed (a boot-reopen unit that was never enabled, and
+      # one reading its passphrase from a file that does not carry it). Putting them behind a
+      # privilege check would have kept them out of the local gate the work and ship skills mandate.
+      - name: Run inngest Redis AOF LUKS structural guard (#7695 reopen unit enabled + credentialed, two-state mount guard)
+        run: bash apps/web-platform/infra/inngest-redis-luks.test.sh
 
       # inngest-server-flip-guard.sh is the live ExecStartPre guard, in documented lockstep with
       # the cutover FSM above (#6553). Registering this makes that ADR-100 lockstep CI-enforced
@@ -1014,6 +1043,33 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq cryptsetup-bin
           sudo bash apps/web-platform/infra/workspaces-luks-loopback.test.sh
+
+      # (#7695) The inngest Redis AOF LUKS apparatus. TWO tiers in one suite: a structural tier
+      # that reads cloud-init-inngest.yml / inngest-redis.service / inngest-redis-bootstrap.sh, and
+      # a behavioural tier that builds a REAL loopback device and drives the REAL extracted
+      # cloud-init LUKS stage through all five blkid arms plus a SECOND SIMULATED BOOT through the
+      # real reopen script.
+      #
+      # THE STRUCTURAL TIER IS NOT CEREMONY — it is the tier that caught the two P0s this branch
+      # had already committed: the boot-reopen unit was never `systemctl enable`d (so on boot 2 it
+      # did not run at all), and it read INNGEST_REDIS_LUKS_KEY from an env file that carries only
+      # the Doppler token (so it would have failed reopen_key_missing even if it had). Either one
+      # leaves the mapper closed, the `nofail` fstab line skipping silently, and Redis writing its
+      # AOF to the ephemeral root disk while the ledger, the ADR and the cloud-init all claim LUKS
+      # at rest. A `write_files` entry looks like delivery and is not.
+      #
+      # `cryptsetup-bin` is installed again rather than inherited from the step above: a
+      # registration that silently depends on a SIBLING step's apt-get breaks the moment either
+      # step moves, and the failure would be LOOPBACK_UNAVAILABLE — read as infrastructure noise
+      # rather than as the missing dependency it is. apt-get on an installed package is a no-op.
+      #
+      # The suite NEVER self-skips: without the device layer it exits non-zero with the literal
+      # token LOOPBACK_UNAVAILABLE. It self-elevates via passwordless sudo, but is invoked under
+      # sudo here so the privilege requirement is explicit at the call site.
+      - name: Run inngest Redis AOF LUKS apparatus evidence (#7695 five blkid arms + boot-2 reopen + mount guard)
+        run: |
+          sudo apt-get install -y -qq cryptsetup-bin
+          sudo bash apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
 
       # #6511: `connect_timeout = 5` was a bare number where the pinned v4 provider's schema says
       # `string`. It coerced to "5", failed Cloudflare's duration parse, landed as "0s", and the
