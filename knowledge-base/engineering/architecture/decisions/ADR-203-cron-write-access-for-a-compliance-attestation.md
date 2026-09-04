@@ -38,8 +38,18 @@ through a self-merging bot pull request, gated on a comparison it performed in t
 run.**
 
 That sentence is the architecturally novel part, and it is narrower than the reasoning
-that produced it. Everything else here is a restoration or a citation of decisions
-ADR-121, ADR-186, ADR-094 and ADR-196 already made.
+that produced it. The rest is a restoration, plus four citations — each named for the
+specific point it carries rather than as a blanket appeal:
+
+- **ADR-094** — a freshness field must be written by the process that establishes the
+  fact, and an audit tripwire must exist for when it is not. This ADR's defect is that
+  ADR-094's writer was deleted and its tripwire never fired.
+- **ADR-121** — a verification date typed by hand falsifies the expiry gate it feeds.
+  This is why `last-verified` is not hand-bumped here.
+- **ADR-186** — a freshness gate's verdict depends on whether the write it waits for was
+  expected. Here the write was expected weekly and never came.
+- **ADR-196** — a gate's refusal must bind to a measured condition. The `POSTURE_FAIL`
+  being fixed bound to a stale field instead of to a measurement.
 
 This is a **deviation from AP-024** ("a verification surface does not actuate … must not
 itself perform the write it is judging"), recorded rather than argued away. The write step

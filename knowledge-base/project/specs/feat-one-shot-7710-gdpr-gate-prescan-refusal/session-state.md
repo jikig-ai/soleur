@@ -40,9 +40,11 @@ Four, all resolved by the planning subagent, none blocking:
   field, because its `sed` writer lived in a workflow deleted in #4483 and the Inngest
   replacement never reimplemented it while still shipping a PR-body sentence claiming
   it does. Fix = restore the writer, gate it on a three-state comparison, and give the
-  path scan an output of its own. Replacing the threshold was rejected: ADR-121 and
-  ADR-186 each place that substitution in a rejected-alternatives table (an identity
-  check cannot see calendar rot and passes by construction on the no-drift arm).
+  path scan an output of its own. Replacing the threshold was rejected because an
+  identity check cannot see calendar rot and passes by construction on the no-drift
+  arm. (CORRECTED 2026-09-04: this line originally attributed that rejection to
+  ADR-121 and ADR-186 "each placing it in a rejected-alternatives table". FALSE —
+  neither does; the citation came from the plan and was never verified. See ADR-203.)
   PARENT-VERIFIED: `git log -S'last-verified' -- .../gdpr-gate/NOTICE` returns exactly
   one commit (#3521, the introducing one); `last-verified: 2026-05-10` still on disk.
 
