@@ -118,7 +118,7 @@ the canonical record under its own dated marker, never an edit to signed text.
 | Date | Event | PA(s) touched | Awareness anchor (Art. 33(1) clock origin) | Determination | Art. 33 engaged? | Art. 34 engaged? | Evidentiary limbs inconclusive? | Canonical source |
 |---|---|---|---|---|---|---|---|---|
 | 2026-05-15 | Art. 5(2) accountability evidence for PA-8 was regenerated against the US shadow org `jikigai-us`: the audit script's region probe returned the first host to answer `/users/me/`, which was `sentry.io`, while the IaC tfstate stayed pinned to that US cluster. The artifact was then cited by PA-8 as the DE-residency evidence, raising a suspected unlawful third-country transfer | PA-8 | 2026-05-15 — surfaced by the audit artifact itself: its own `**API host:** sentry.io` line prompted the residency review recorded in the same file's §Correction (2026-05-15) | Not a notifiable breach. No personal data left the EEA: user-event ingest is DE-bound, anchored by the production DSN cluster substring `o4511123328466944.ingest.de.sentry.io` (the authoritative residency signal per learning `2026-05-15-sentry-dsn-cluster-substring-authoritative-residency.md`). What the US cluster held was monitor and alert-rule metadata, not personal data. Remediated in PR #3863: the `SENTRY_API_HOST` default flipped to `de.sentry.io`, the probe loop reversed, and a fail-closed residency-mismatch detector added that refuses to emit an artifact when the probed host disagrees with the DSN cluster | No | No | **Partially — on the accountability limb only, not on notifiability.** The Art. 33 determination is closed on its own facts. What remains open is the Art. 5(2) *evidence*: this artifact was generated from the wrong cluster and its replacement is pending at **#3861** (Phase A2 cluster surgery), after which a regenerated `sentry-migration-audit-<post-fix-date>.md` becomes the load-bearing §5(2) artifact and PA-8's pointer is updated | `knowledge-base/legal/audits/sentry-migration-audit-2026-05-15.md` |
-| 2026-05-16 | Sentry phantom-ingest: prd runtime error/event envelopes POSTed for ~49 days to an org the operator could not, at the time, enumerate or administer | PA-8 | 2026-05-16T12:50:00Z — surfaced externally/manually during A2 brainstorm prereq verification, **not by any monitor**; MTTD ~49 days from DSN introduction 2026-03-28T18:03:00Z | Not a notifiable breach. Phase 9 (2026-05-19) reattributed the apparent non-ownership to an internal `SENTRY_AUTH_TOKEN` membership-scope defect: Sentry support confirmed in writing that **both** `jikigai` and `jikigai-eu` are owned by the operator's user and that all audit-log actions in both were performed by it. No third-party recipient, no cross-controller transfer, no sub-processor outside operator control | No | No | **Partially — and narrower than the pre-Phase-9 record suggests.** Phase 9 closed the ownership and enumeration questions; the affected population is enumerated as **10** operator-adjacent accounts (founders, team, bot, internal QA, and 2 friends-of-team test signups under operator instruction), matching Art. 30 PA-8 §(d). The source PIR's §Summary phrases this as "operator + 8 operator-adjacent accounts + 2 friends-of-team", which double-counts the 2 signups already inside the 10 — its §Authenticated app user paragraph and its frontmatter both say 10. **No — corrected twice, and the second correction was also wrong.** An earlier draft cited a pre-Phase-9 statement; the replacement cited a 2026-05-19 parenthetical *inside* Phase 9 that the same section supersedes 25 lines later: **T3 was RESOLVED 2026-05-21 and promoted to T4** (frontmatter `t3_resolved_at: 2026-05-21T07:00:00Z`, `t3_mechanism: T4-internal-integration-proxy-user-membership-boundary`; evidence at `knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md`), with the mechanism named as the Internal Integration proxy-user membership scope in superposition with the `eu.sentry.io` `activeorg` slug-rewrite bug. Phase 9 closed ownership (Sentry support confirmed both orgs operator-owned, audit logs included) and enumeration. **No evidentiary limb remains open on this determination** | `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` |
+| 2026-05-16 | Sentry phantom-ingest: prd runtime error/event envelopes POSTed for ~49 days to an org the operator could not, at the time, enumerate or administer | PA-8 | 2026-05-16T12:50:00Z — surfaced externally/manually during A2 brainstorm prereq verification, **not by any monitor**; MTTD ~49 days from DSN introduction 2026-03-28T18:03:00Z | Not a notifiable breach. Phase 9 (2026-05-19) reattributed the apparent non-ownership to an internal `SENTRY_AUTH_TOKEN` membership-scope defect: Sentry support confirmed in writing that **both** `jikigai` and `jikigai-eu` are owned by the operator's user and that all audit-log actions in both were performed by it. No third-party recipient, no cross-controller transfer, no sub-processor outside operator control | No | No | **No.** Phase 9 (2026-05-19) closed both questions this cell previously left open. **Ownership:** Sentry support confirmed in writing that `jikigai` and `jikigai-eu` are both owned by the operator's user and that every audit-log action in both was performed by it. **Enumeration:** the affected population is **10** operator-adjacent accounts (founders, team, bot, internal QA, and 2 friends-of-team test signups under operator instruction), matching Art. 30 PA-8 §(d). The one residual an earlier revision recorded here — the granular causal mechanism at theory state T3 — is also closed: **T3 was RESOLVED 2026-05-21 and promoted to T4** (post-mortem frontmatter `t3_resolved_at: "2026-05-21T07:00:00Z"`, `t3_mechanism: "T4-internal-integration-proxy-user-membership-boundary"`; evidence at `knowledge-base/legal/audits/2026-05-21-sentry-token-t3-resolution.md`), the mechanism being the Internal Integration proxy-user membership scope in superposition with the `eu.sentry.io` `activeorg` slug-rewrite bug. **No evidentiary limb remains open on this determination.** One discrepancy inside the source is recorded here because it is visible to anyone who opens it, and it is **not** an open limb: the PIR's §Summary reads "operator + 8 operator-adjacent accounts … plus 2 friends-of-team test signups" — eleven — against the ten its §Authenticated app user paragraph and its frontmatter both give. 8 + 2 = 10 exactly, so the surplus of one is the **operator**, counted separately from the founders who already contain him; the 2 signups are counted once. Neither the Art. 33 nor the Art. 34 conclusion turns on it. | `knowledge-base/engineering/operations/post-mortems/sentry-phantom-ingest-destination-unreachable-postmortem.md` |
 | 2026-06-29 | RLS disabled on 14 public tables of Supabase project `soleur-inngest-prd` (`pigsfuxruiopinouvjwy`); PostgREST public schema reachable in principle by any holder of the project anon key. Tables can embed event payloads, step I/O and tenant identifiers incl. `event_user` and `worker_ip`. Exposure window 2026-06-17 → 2026-06-29 (~12 days) | Not attributed to a Processing Activity in the source. PA-8 §(g) now carries the Art. 33 evidentiary-chain limitation this determination motivated | 2026-06-22 — Supabase security advisor flagged `rls_disabled_in_public` | REACHABILITY-ONLY, no notifiable breach. No Art. 4(12) breach arose. Rests **primarily on the absent exploitation precondition** — this project's anon key was never published in any client bundle or commit (clean tree + full git-history pickaxe) — not on absence of access evidence. DISCHARGED | No | No | **Yes** — the access-log dimension is INCONCLUSIVE and expressly **not certified clean** for 2026-06-17 → ~2026-06-27. Two annotations narrow it further: the 2026-08-26 addendum established `edge_logs` is uninstrumented on this project so its zero was never evidence; the 2026-09-03 addendum established that `auth_logs` is instrumented (weak positive value) and that `postgrest_logs`, the source that records REST traffic, was never queried, and that window is recorded as not established to be recoverable (no retrieval was attempted and no probe is cited; see the 2026-09-03 addendum at the canonical record) | `knowledge-base/legal/audits/2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md` |
 | 2026-08-06 | Operator ran Soleur agents against an alpha tester's repository content under a Jikigai Anthropic API key, at the tester's request, with no Art. 28(3) instrument in place | PA-34 and PA-35 (controller limb); record P-1 in the Art. 30(2) register (processor limb) | 2026-08-06 — same-day session-scope reconstruction of the run; the source gives no separate awareness moment and states expressly that no notification clock is running | Not a personal-data breach under Art. 4(12): the finding fails on the **security** limb, being a lawfulness-and-documentation failure of a different defect class. **Contested, and recorded as such** — the source preserves the contrary argument that the processing can be argued into "unauthorised" within Art. 4(12) and records that argument as **not frivolous**, and states in terms that it does not conclude nothing happened | No — contested; see the preserved counter-argument in the source | No — contested, as above | **Yes — and it is an evidentiary limb, not a workflow one.** The source records at §7 that a directory listing surfaced French business-register (RNE) *pouvoirs* sample data, which names **company officers — natural persons** (the source's own `data_subjects` frontmatter says so). The transcript shows these as a directory listing **with no evidence their contents were read, and it cannot positively exclude a partial read**; the source states that this does not convert into a clean bill of health and that the tester-facing message must not claim no personal data was involved. That is the material open limb. An earlier draft recorded a document-workflow point instead (frontmatter status vs `BLOCKED`), which is not an evidentiary limb — and which the source pre-empts at its header: v1 CLO attestation is *internal*, `draft-requires-counsel-review` refers to *external* counsel, and `BLOCKED` is a disposition on conditions C1-C9. The three are consistent by design | `knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md` |
 | 2026-08-17 | `cla-evidence` required status check failed (exit 127, `bun: command not found`) blocking all PRs; an admin bypass was used to land the repair PR #7597 on a surface PA-7 §(c) confirms processes personal data | PA-7, expressly **unchanged** — purposes, categories, recipients, retention and TOMs are untouched by a transient CI outage | 2026-08-16T23:38Z — first failing run of the `Record allowlist-bypass` step. The source records the failure onset and states no separate awareness moment; the determination is dated 2026-08-17 | No Art. 33 notification duty. Art. 4(12) requires destruction, loss, alteration, unauthorised disclosure of or access to personal data processed; **a record that was never created is not a record that was lost**. Confidentiality and integrity of the existing R2 store were untouched throughout and Object Lock held. APPROVED / DISCHARGED | No | **Not stated in source** — the source makes no Art. 34 finding, and its Art. 33 finding is not read as covering one | No — exposure was **measured** NIL, not assumed | `knowledge-base/legal/audits/2026-08-17-clo-ruling-cla-evidence-admin-bypass-7597.md` |
@@ -135,20 +135,25 @@ These files match the CI guard's determination-shaped pattern under
 `knowledge-base/legal/audits/` and are **not indexed**. Each carries a committed reason, so
 nothing is silently dropped.
 
-**Two dispositions, and they are not the same claim.** Six rows are *assessed and outside* the
-inclusion predicate. Two — the 2026-05-15 and 2026-05-17 Sentry audits, surfaced only when the
-producer pattern was widened on 2026-09-03 — are **undetermined**, pending the CLO ruling
-requested at #7791, and are marked as such in their reason cells. A preamble asserting all eight
-"fall outside the inclusion predicate" would state a determination that has not been made for
-those two, which in a regulator-facing register is the thing this file exists not to do. The machine-readable waiver list
-lives in `scripts/lint-legal-registers.sh`; this section is its human-readable mirror.
+**Two dispositions, and they are not the same claim — and as of 2026-09-04 only one of them is
+live.** All **eight** rows below are *assessed and outside* the inclusion predicate. An earlier
+revision of this paragraph carried a second disposition, **undetermined**, for two Sentry audits
+surfaced when the producer pattern was widened on 2026-09-03. Both were ruled on 2026-09-03 in
+§Rulings on the two waivers recorded as pending, and attested 2026-09-04 at
+`knowledge-base/legal/audits/2026-09-03-clo-attestation-7717-art-33-5-register.md`:
+`audits/sentry-migration-audit-2026-05-15.md` was ruled **into** the index and is the 2026-05-15
+row above, and `audits/2026-05-17-sentry-ingest-window-auth-users-audit.md` stays waived on a held
+ground. The principle the earlier paragraph stated — that a register must not assert a disposition
+it has not reached — is why the pendency was recorded rather than guessed, and it is retained here
+as the standing rule for the next row. The machine-readable waiver list lives in
+`scripts/lint-legal-registers.sh`; this section is its human-readable mirror.
 
 | File | Reason for exclusion |
 |---|---|
 | `knowledge-base/legal/audits/2026-05-12-gdpr-gate-plan-phase-2-7-outcome.md` | No Art. 4(12) assessment: the file never cites Art. 4(12), matched the pattern solely on one `Art. 33` occurrence, and its non-notifiable statement is expressly attributed to *the operator's framing* rather than recorded as a controller determination. Indexing it would launder a framing into a determination. The underlying matter is a disclosure-timing lag, not a security event (#7717) |
 | `knowledge-base/legal/audits/2026-06-counsel-review-5103.md` | No event and no determination: the sole `Art. 33` occurrence verifies the accuracy of a statutory-deadline catalog entry, not a fact pattern. A regex false positive (#7717) |
 | `knowledge-base/legal/audits/2026-08-counsel-review-7440.md` | Express Art. 4(12) assessment, but of a **prospective** PA-8 amendment with no fact pattern — nothing was destroyed, lost, altered or disclosed. There is no breach documentation to index, and a row would dilute the register with routine change approvals (#7717) |
-| `knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md` | Matches the producer only on "CNIL Art 33 filing posture per brainstorm Decision #10" — a reference to filing posture, not a fact pattern assessed against Art. 4(12). Confirm alongside the row above at #7791 (#7717) |
+| `knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md` | Not a determination of its own, and the ground is **held, not pending**: this file is evidence *inside* an already-indexed determination. Its frontmatter classifies it `art-30-5-accountability-evidence` and its `incident_pir` names the very post-mortem the 2026-05-16 row indexes; what it records is a population count. Indexing it would enter one incident twice. Its match on the producer is a filing-posture reference ("CNIL Art 33 filing posture per brainstorm Decision #10"), not a fact pattern assessed against Art. 4(12) — true, but the thinner of the two grounds. Ruled 2026-09-03 (#7717, §B1/§A9), attested 2026-09-04 (#7791) |
 | `knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md` | Not a determination: an implementation record *about* this register. It necessarily quotes Art. 4(12) / Art. 33(5) and so matches the producer pattern, but it assesses no fact pattern and records no controller determination. Note it is **not** a CLO attestation — that artifact was not obtained and is tracked at #7791 (#7717) |
 | `knowledge-base/legal/audits/2026-09-counsel-review-7717.md` | Not a determination: the **counsel review of this register**, added 2026-09-03 under the ship Phase 5.5 gate. It quotes Art. 4(12) and Art. 33(5) throughout in order to rule on the predicate, and so matches the producer pattern, but it assesses no fact pattern and records no controller determination. Every future counsel review of this register will need the same waiver — that is a known cost of scoping the producer to `audits/**`, not a defect (#7717) |
 | `knowledge-base/legal/audits/2026-09-counsel-review-7625.md` | Not a determination: the **counsel review for the Art. 30 PA-7 amendment** (#7625), added 2026-09-04 under the ship Phase 5.5 gate. It cites Art. 4(12) only to record the *negative* — that an Art. 30(1) record-keeping incompleteness is not a personal-data breach and triggers no Art. 33/34 duty — and assesses no fact pattern: nothing was destroyed, lost, altered or disclosed. Same disposition as the #7440 row above: assessed and outside the inclusion predicate (#7717) |
@@ -163,6 +168,19 @@ lives in `scripts/lint-legal-registers.sh`; this section is its human-readable m
   `scripts/lint-legal-registers.sh` strips the backticks and resolves the path against the
   working tree; a row whose pointer does not resolve is an assertion failure — which, for the advisory window (#7787), is reported as a warning and does **not** block, while a fail-closed refusal blocks throughout. Stated precisely because this is the bullet a maintainer reads before restyling the column. A determination register
   whose pointers rot is worse than none.
+- **Verified 2026-09-04 (#7791) — the 2026-05-15 row's accountability residual is recorded on a
+  ground that is now spent, and the surviving ground is narrower.** That row's evidentiary cell
+  says the §5(2) replacement artifact is *"pending at #3861 (Phase A2 cluster surgery)"*,
+  transcribing its canonical record's own §Correction. **#3861 is CLOSED as COMPLETED
+  (2026-05-21T08:29:21Z)**, and a DE-cluster regeneration exists at
+  `knowledge-base/legal/audits/sentry-migration-audit-2026-05-17.md` — org `jikigai-eu`, probed
+  host `jikigai-eu.sentry.io`, DSN cluster `de`, no orphans — which is the shape the fail-closed
+  residency detector shipped in PR #3863 admits. What has **not** happened is the second half of
+  that record's own commitment: Art. 30 PA-8 §(c) still points at the template
+  `sentry-migration-audit-<YYYY-MM-DD>.md`, so no file is recorded as *the* load-bearing §5(2)
+  artifact. The residual is therefore a **pointer-pinning** gap, not a missing-artifact gap, and
+  the row's Art. 33 and Art. 34 determinations are untouched by it on either reading. The cell is
+  left as written because it is an accurate summary of its canonical record. Tracked at #7847.
 - **Review cadence:** on every new determination, and on the Art. 30 register's quarterly
   review.
 - **Withdrawn open item — the 2026-08-06 "status divergence" was not one.** An earlier revision
@@ -258,6 +276,35 @@ diff against a prior export.
 > disposition it has not reached — is exactly right and is why the pendency was recorded rather
 > than guessed.
 
+<!-- -->
+> **Superseded 2026-09-04 (#7791) — CLO attestation.** The 2026-09-03 marker immediately above
+> quotes the §Excluded records preamble as reading *"Four rows are assessed and outside…"*. **No
+> such text is in this file.** The preamble was edited to *"Six rows…"* in the same change that
+> added the seventh and eighth waiver rows, so that marker's quotation identifies nothing a reader
+> can diff against — the append-only discipline failing on the one paragraph a correction was
+> quoting. It is recorded here rather than tidied. Two of its figures are also spent: the table now
+> carries **eight** rows, and the row ruled into the index **has been moved** —
+> `audits/sentry-migration-audit-2026-05-15.md` is the 2026-05-15 row of §Index of determinations,
+> and its waiver is gone from both copies of the waiver set. Measured 2026-09-04:
+> `bash scripts/lint-legal-registers.sh` → exit 0, `7 assertion(s), 0 failed (registers=4 rows=5
+> produced=12 waived=8 waiver-parity=ok)`.
+
+<!-- -->
+> **Applied in-cell 2026-09-04 (#7791) — CLO attestation.** Corrections **C2** and **C3** were
+> recorded as supersessions on 2026-09-03 but were never applied to the cell they correct. Until
+> today the 2026-05-16 row's "Evidentiary limbs inconclusive?" cell still opened **Partially**,
+> still answered **No** twice more, and still carried the arithmetic C3 falsified — a correction
+> that leaves both drafts standing, which is the #7349 half-applied-replacement defect reproduced
+> inside the instrument that names it. The cell now carries a single headline **No** and attributes
+> the source's internal discrepancy to the operator, per C2 and C3. Both blockquotes above are
+> undisturbed and remain the record of what the cell said before. **RATIFIED and OVERRULED, in
+> part:** the pre-landing correction of this cell against its source is **ratified as to
+> direction** — the drafted cell cited the post-mortem's pre-Phase-9 *"No arms-length
+> external-party exposure has been positively confirmed"*, a sentence Phase 9 superseded on both
+> its limbs, and removing it was right. It is **overruled as to the cell it produced**, which named
+> T3 as an open residual that the same section had already resolved. That question was put to this
+> attestation expressly by the record it supersedes, and this is its answer.
+
 ### Rulings on the two waivers recorded as pending
 
 Two §Excluded records rows read **"Disposition pending CLO ruling (#7791)"**. That pendency is
@@ -300,6 +347,26 @@ or is recorded as subsumed by the 2026-05-16 row is a drafting call the reviewer
 the author — the two matters share a root cause (the `jikigai-us` shadow org) but differ in
 surface, and either treatment is defensible. Silence is not. **Until that lands, this register is
 incomplete against its own stated predicate, and this paragraph is the record of it.**
+
+<!-- -->
+> **DISCHARGED 2026-09-04 (#7791) — CLO attestation.** The paragraph immediately above closes
+> *"Until that lands, this register is incomplete against its own stated predicate, and this
+> paragraph is the record of it."* **That landed.** `audits/sentry-migration-audit-2026-05-15.md`
+> is indexed as the 2026-05-15 row of §Index of determinations, and its `NOT_TRANSCRIBED` waiver is
+> removed from both copies of the waiver set in the same commit — which is what the paragraph
+> required and what assertion (d) exists to enforce. The drafting call the review expressly left to
+> the author was made: **its own row**, not subsumption under the 2026-05-16 row. The two matters
+> share the `jikigai-us` shadow org as root cause but differ in surface — runtime event ingest
+> versus §5(2) accountability-evidence generation — they carry different awareness anchors, and
+> subsumption would have left a controller-voice notifiability determination discoverable only by
+> reading a cell about a different incident. **B1 is CLOSED.** **R1 is CLOSED**:
+> `knowledge-base/legal/compliance-posture.md`'s Vendor DPA Status row for Better Stack s.r.o. now
+> reads *"NOT EXECUTED — no Art. 28(3) instrument recorded"* under a dated correction quoting the
+> superseded `PENDING`, matching the Art. 30 Vendor Mapping verbatim; re-verified independently on
+> 2026-09-04 rather than carried over. The register's completeness claim now has no known
+> counter-example inside the gate's producer scope. The three limits recorded at §What this review
+> could not resolve are undisturbed, and `status: draft-requires-counsel-review` **stays** —
+> external counsel promotes it, not this attestation.
 
 ---
 
