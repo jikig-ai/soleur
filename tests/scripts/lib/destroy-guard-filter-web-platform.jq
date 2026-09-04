@@ -376,6 +376,39 @@ def destroyed_at($addr):
   # same three-verb exclusion for the same reason. `forget` IS counted: a Terraform 1.7+ state-drop
   # of the passphrase leaves the header cut from a value nothing records any more, which is the
   # stranding hazard wearing a different hat (the same note the retire counters carry at T49).
+  # 10th surface (#7695 review F1): AN ENTRY WHOSE VERB SET CANNOT BE READ, AT ANY ADDRESS.
+  #
+  # I closed this shape at the two LUKS addresses and left the CLASS open everywhere else — the
+  # instance fixed, the defect kept. `[] | any(...)` is `false` and `[] | index("delete")` is null,
+  # so an entry with `"actions": []`, `before` populated and `after` null — the shape of a destroy —
+  # is invisible to resource_deletes, host_creates, reboot_updates, apex_move_orphans, destroyed_at()
+  # and every web2 retire counter. MEASURED on this filter before this counter existed, with three
+  # such entries at hcloud_volume.inngest_redis, hcloud_server.web["web-1"] and
+  # hcloud_volume.workspaces["web-2"]:
+  #     {"plan_ok":true,"resource_deletes":0,"host_creates":0,"nested_deletes":0,
+  #      "reboot_updates":0,"luks_passphrase_rotations":0}
+  # Three destroys of sole-copy volumes — the Inngest AOF and every user's repository tree — read as
+  # a clean plan. `destroy_count` is then 0, so `[ack-destroy]` is never even demanded and the apply
+  # proceeds against the saved binary tfplan.
+  #
+  # This is NOT hypothetical and it is not new: gate-suite-harness.sh's own `rc_empty_actions`
+  # docstring records a real 18-address birth plan that also carried hcloud_server.web["web-1"] with
+  # `"actions": []` and `"after": null` — a destroy of the singleton behind app.soleur.ai — scoring
+  # destroys=0, out_of_scope=0, and PASSING. The shape was measured in this repo and the general
+  # remedy was never applied to this filter.
+  #
+  # `plan_gate_preamble.sh` closes exactly this for the GATE scripts via plan_gate_assert_classifiable;
+  # it does not run on the workflow path, which is why the check has to exist here too.
+  #
+  # `[]` is the ONLY silent shape. `"actions": null`, a missing `.change`, and a scalar `.change` all
+  # make jq exit non-zero, which `set -e` on the `counts=$(jq …)` assignment surfaces. This counter
+  # covers the one that returns rc 0 with a well-formed all-zeros document.
+  undecidable_entries: (
+    [ .resource_changes[]?
+      | select(((.change.actions | type) != "array") or ((.change.actions | length) == 0)) ]
+    | length
+  ),
+
   luks_passphrase_rotations: (
     [ .resource_changes[]?
       | select(.address == "random_password.inngest_redis_luks"

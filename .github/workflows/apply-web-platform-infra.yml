@@ -770,6 +770,12 @@ jobs:
           # tests/scripts/lib/destroy-guard-filter-web-platform.jq.
           host_creates=$(echo "$counts" | jq -r '.host_creates')
           luks_rotations=$(echo "$counts" | jq -r '.luks_passphrase_rotations')
+          # undecidable_entries (#7695 review F1): any entry, at ANY address, whose actions array is
+          # empty or not an array. `[] | any(...)` is false and `[] | index("delete")` is null, so
+          # such an entry is invisible to every other counter in the filter — a destroy of the
+          # inngest AOF volume or of hcloud_volume.workspaces (every user's repo tree) reads as a
+          # clean plan with destroy_count 0, which never even demands [ack-destroy].
+          undecidable_entries=$(echo "$counts" | jq -r '.undecidable_entries')
           # apex_move_orphans (#7640 PR4b, plan AC72): a `moved` block that no-opped
           # against absent state. The ONLY counter here that is about STATE rather
           # than about the text of dns.tf. Source of truth:
@@ -792,8 +798,18 @@ jobs:
           # added a counter, and a merge that keeps only one side's list leaves the other counter
           # unvalidated — it would then read empty on a jq failure and evaluate false in its own
           # `-gt 0` HALT, which is precisely the fail-open this validation exists to prevent.
-          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]] || [[ ! "$apex_move_orphans" =~ ^[0-9]+$ ]] || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]]; then
-            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}', apex_move_orphans='${apex_move_orphans}', luks_passphrase_rotations='${luks_rotations}')."
+          if [[ ! "$resource_deletes" =~ ^[0-9]+$ ]] || [[ ! "$nested_deletes" =~ ^[0-9]+$ ]] || [[ ! "$reboot_updates" =~ ^[0-9]+$ ]] || [[ ! "$host_creates" =~ ^[0-9]+$ ]] || [[ ! "$apex_move_orphans" =~ ^[0-9]+$ ]] || [[ ! "$luks_rotations" =~ ^[0-9]+$ ]] || [[ ! "$undecidable_entries" =~ ^[0-9]+$ ]]; then
+            echo "::error::destroy-guard counter parse failed (resource_deletes='${resource_deletes}', nested_deletes='${nested_deletes}', reboot_updates='${reboot_updates}', host_creates='${host_creates}', apex_move_orphans='${apex_move_orphans}', luks_passphrase_rotations='${luks_rotations}', undecidable_entries='${undecidable_entries}')."
+            exit 1
+          fi
+          # HALT on an entry this filter cannot classify (#7695 review F1). Evaluated OUTSIDE and
+          # BEFORE the destroy_count sum, like the two HALTs below it, so `[ack-destroy]` cannot
+          # reach it. An entry whose verb set cannot be read is not evidence of a safe plan.
+          if [[ "$undecidable_entries" -gt 0 ]]; then
+            echo "::error::terraform plan contains ${undecidable_entries} resource change(s) whose action list is empty or not an array. Every counter in the destroy guard reads such an entry as 0 — an empty actions array is invisible to both \`any(...)\` and \`index(\"delete\")\` — so a DESTROY hiding in this shape would show as a clean plan and never demand [ack-destroy]."
+            echo "::error::This is refused rather than counted because the guard cannot tell what the entry does. It is the same fail-closed posture plan-gate-preamble.sh takes for the dispatch gates (plan_gate_assert_classifiable); that preamble does not run on this path, which is why the check exists here."
+            echo "::error::Remediation: re-run \`terraform plan\` and inspect the offending entries with: jq '.resource_changes[] | select((.change.actions | type) != \"array\" or (.change.actions | length) == 0)' <plan.json>. A well-formed plan from a current terraform never emits this shape; if it appeared, the plan document is truncated, hand-edited, or produced by a provider/terraform version this guard has not been taught to read."
+            echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply, it does not perform it."
             exit 1
           fi
           # HALT on a LUKS passphrase rotation (#7695). Evaluated OUTSIDE the destroy_count sum
@@ -2446,11 +2462,11 @@ jobs:
             echo "The LUKS cut lives in cloud-init-inngest.yml's runcmd stage, and cloud-init runcmd is FIRST-BOOT-ONLY. A plain reboot runs inngest-luks-open.service instead, which OPENS and never formats — so against this raw volume it would format nothing, /mnt/data would not mount, and the Redis mount guard would refuse the start."
             echo ""
             if [[ "${JOB_STATUS}" == "success" ]]; then
-              echo "**NEXT: dispatch \`-f apply_target=inngest-host-replace\`.** Its fresh first boot takes ARM 3 of the five-arm blkid discriminator (the only arm that may write a header), luksFormats, mkfs'"'"'s and mounts /dev/mapper/inngest-redis. The encryption-posture ledger row keeps its exception until that boot is observed reaching stage=fstab on the mapper."
+              echo "**NEXT: dispatch \`-f apply_target=inngest-host-replace\`.** Its fresh first boot takes ARM 3 of the five-arm blkid discriminator (the only arm that may write a header), luksFormats, mkfs's and mounts /dev/mapper/inngest-redis. The encryption-posture ledger row keeps its exception until that boot is observed reaching stage=fstab on the mapper."
             else
-              echo "**This dispatch did NOT succeed — do NOT run the step above.** If the apply failed part-way the AOF volume may be destroyed with no replacement, and \`inngest-host-replace\` would then rebuild the host with no volume to attach: cloud-init'"'"'s bounded device wait FATALs and the host comes up with no /mnt/data at all."
+              echo "**This dispatch did NOT succeed — do NOT run the step above.** If the apply failed part-way the AOF volume may be destroyed with no replacement, and \`inngest-host-replace\` would then rebuild the host with no volume to attach: cloud-init's bounded device wait FATALs and the host comes up with no /mnt/data at all."
               echo ""
-              echo "**Recovery: dispatch \`-f apply_target=inngest-host-replace\`.** Terraform pulls the missing volume in as a dependency of the server it replaces, that gate admits the volume for CREATE only, and its fresh first boot cuts the header — one dispatch recovers and completes. \`inngest-host\` does NOT work (the volume id sits in the server-s ForceNew user_data, so a bare create forces a server replace its additive-only guard refuses), and re-dispatching \`inngest-volume-recut\` will NOT work: Guard 2 runs before the plan and grades the live host, so it returns id_pin_mismatch, mount_mismatch or redis_down. Read the failed step'"'"'s ::error:: lines for the full route."
+              echo "**Recovery: dispatch \`-f apply_target=inngest-host-replace\`.** Terraform pulls the missing volume in as a dependency of the server it replaces, that gate admits the volume for CREATE only, and its fresh first boot cuts the header — one dispatch recovers and completes. \`inngest-host\` does NOT work (the volume id sits in the server-s ForceNew user_data, so a bare create forces a server replace its additive-only guard refuses), and re-dispatching \`inngest-volume-recut\` will NOT work: Guard 2 runs before the plan and grades the live host, so it returns id_pin_mismatch, mount_mismatch or redis_down. Read the failed step's ::error:: lines for the full route."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

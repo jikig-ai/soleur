@@ -1061,9 +1061,67 @@ t_luks_rotations_parse_failure_fails_closed() {
 # value change plans as a bare ["update"]) and then to include an unreadable action list. An
 # operator reading that message during an incident would look for a delete that is not there and
 # conclude the HALT misfired. The message is the only thing they see; the jq is not.
+# T60j — THE CLASS, not the instance (#7695 review F1). I closed `"actions": []` at the two LUKS
+# addresses and left every other counter in the same filter blind to it. MEASURED on the filter
+# before `undecidable_entries` existed, with three such entries at hcloud_volume.inngest_redis,
+# hcloud_server.web["web-1"] and hcloud_volume.workspaces["web-2"] — all `before` populated, `after`
+# null, i.e. three destroys of sole-copy volumes:
+#     {"plan_ok":true,"resource_deletes":0,"host_creates":0,"nested_deletes":0,
+#      "reboot_updates":0,"luks_passphrase_rotations":0}
+# A clean plan. destroy_count 0, so [ack-destroy] was never even demanded.
+t_undecidable_entries_counts_every_address() {
+  local tmp; tmp="$(mktemp)"; local ok=1 detail=''
+  cat > "$tmp" <<'JSON'
+{"resource_changes":[
+{"address":"hcloud_volume.inngest_redis","type":"hcloud_volume","change":{"actions":[],"before":{"id":"12345"},"after":null}},
+{"address":"hcloud_server.web[\"web-1\"]","type":"hcloud_server","change":{"actions":[],"before":{"id":"999"},"after":null}},
+{"address":"hcloud_volume.workspaces[\"web-2\"]","type":"hcloud_volume","change":{"actions":[],"before":{"id":"777"},"after":null}}
+]}
+JSON
+  local got; got="$(jq -f "$FILTER" "$tmp" | jq -r '.undecidable_entries')"
+  [[ "$got" == "3" ]] || { ok=0; detail="three empty-actions destroys scored ${got}, want 3;"; }
+  # The real prod baseline and every shipped fixture must stay 0, or this HALT fires on every merge.
+  local base; base="$(jq -f "$FILTER" "$REPO_ROOT/tests/scripts/fixtures/tfplan-web-platform-real-baseline.json" | jq -r '.undecidable_entries')"
+  [[ "$base" == "0" ]] || { ok=0; detail="${detail} real baseline scored ${base}, want 0;"; }
+  rm -f "$tmp"
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T60j undecidable_entries counts an empty actions array at ANY address, and is 0 on the real plan" ok
+  else
+    _report "T60j undecidable_entries counts an empty actions array at ANY address" fail "$detail"
+  fi
+}
+
+# T60k — the HALT is wired, validated, and upstream of the destroy_count sum (so [ack-destroy]
+# cannot reach it). Job-scoped and comment-stripped, per T60g.
+t_undecidable_halt_wired_and_upstream() {
+  local block code ok=1 detail='' halt_off sum_off
+  block="$(_job_block "$WORKFLOW_YML" "apply")"
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+  grep -qF "undecidable_entries=\$(echo \"\$counts\" | jq -r '.undecidable_entries')" <<<"$code" || { ok=0; detail="${detail} not-parsed;"; }
+  grep -qF '! "$undecidable_entries" =~ ^[0-9]+$' <<<"$code" || { ok=0; detail="${detail} not-validated;"; }
+  halt_off="$(grep -n '\[\[ "\$undecidable_entries" -gt 0 \]\]' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  sum_off="$(grep -n 'destroy_count=\$((resource_deletes' <<<"$code" | head -1 | cut -d: -f1 || true)"
+  [[ -n "$halt_off" && -n "$sum_off" && "$halt_off" -lt "$sum_off" ]] || { ok=0; detail="${detail} halt_off=${halt_off:-none} sum_off=${sum_off:-none};"; }
+  if [[ "$ok" -eq 1 ]]; then
+    _report "T60k the undecidable-entries HALT is parsed, validated and upstream of the destroy_count sum" ok
+  else
+    _report "T60k the undecidable-entries HALT is parsed, validated and upstream of the destroy_count sum" fail "$detail"
+  fi
+}
+
 t_luks_halt_message_names_the_counted_verbs() {
-  local wf="$WORKFLOW_YML" line ok=1 missing=''
-  line="$(grep -F 'inngest LUKS passphrase resource(s)' "$wf" | head -1 || true)"
+  # JOB-SCOPED AND COMMENT-STRIPPED, like T60g one function above — which is exactly the treatment
+  # this arm shipped without. MEASURED: commenting out the single `echo "::error::"` line the
+  # operator actually reads during the incident left the suite at 73 passed, 0 failed with T60i
+  # still [ok], because the commented line still carries the message text. T60g reds on the block
+  # but never reads the message, so the one line that matters could be deleted silently. Same
+  # cq-assert-anchor-not-bare-token class this commit family closed eight instances of.
+  local wf="$WORKFLOW_YML" line ok=1 missing='' block code
+  block="$(_job_block "$wf" "apply")"
+  code="$(grep -vE '^[[:space:]]*#' <<<"$block" || true)"
+  line="$(grep -F 'inngest LUKS passphrase resource(s)' <<<"$code" | head -1 || true)"
+  # It must be an EMISSION, not merely text present in the job.
+  grep -qF 'echo "::error::' <<<"$line" || { ok=0; missing="${missing} not-an-::error::-emission"; }
   if [[ -z "$line" ]]; then
     _report "T60i the LUKS HALT message names the verbs the counter counts" fail "the HALT message line is gone"
     return
@@ -1164,6 +1222,13 @@ GATE="${_PG_DIR}/lib/web2-retire-gate.sh"
 PREAMBLE="${_PG_DIR}/lib/plan-gate-preamble.sh"
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${_PG_DIR}/lib/gate-suite-harness.sh"
+
+
+# The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
+# gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
+# them: a bare `pass "$name"` in gate_check left six suites totalling 280 assertions green on ONE
+# edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
+gate_harness_selftest || true
 
 mk_plan "$TMP/pg-d5.json" "[$(rc_empty_actions 'hcloud_volume.workspaces' 'hcloud_volume')]"
 mk_plan "$TMP/pg-d6.json" "[$(rc_scalar_change 'hcloud_volume.workspaces' 'hcloud_volume')]"
@@ -1376,6 +1441,8 @@ t_luks_passphrase_forget_halts
 t_luks_passphrase_first_create_passes
 t_luks_rotations_baseline_zero
 t_luks_rotations_parse_failure_fails_closed
+t_undecidable_entries_counts_every_address
+t_undecidable_halt_wired_and_upstream
 t_luks_halt_message_names_the_counted_verbs
 t_luks_counter_undecidable_actions_fails_closed
 t_apply_job_luks_halt_job_scoped
@@ -1397,15 +1464,17 @@ t_apply_job_luks_halt_job_scoped
 # A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
 # suite on every legitimately-added assertion and train people to bump it unread.
 _ran=$((pass + fail))
-# Measured on the as-written suite: 49 pre-PR4b + the AC72 arm. Set to the full
+# Measured on the as-written suite after the origin/main merge: 49 shared with the merge base,
+# + 9 added by this branch, + 15 added by main (PR4b/AC72) = 73. Exact, not a ceiling: deleting a
+# single arm invocation reports "only 72 assertions ran, floor is 75".
 # current count rather than leaving slack — the review panel showed 3 assertions
 # of headroom absorbed a deleted arm silently, and slack in an anti-vacuity floor
 # is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 73 ]]; then
+if [[ "$_ran" -lt 75 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 73. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 75. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 73)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 75)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

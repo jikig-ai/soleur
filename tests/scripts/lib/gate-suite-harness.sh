@@ -112,6 +112,11 @@ rc_scalar_change() {
 # A FLOOR, NOT EQUALITY. The count is developer-incremented, so `-eq` would turn every
 # newly-added assertion into a spurious failure and train people to bump the number without
 # reading it. Derive the floor from a green run and set it at or just below that.
+# SUPERSEDED — ZERO CALLERS, DELIBERATELY (#7695 review F6).
+# Every suite hand-rolls its own floor instead, which is the CORRECT choice for the reason ADR-193
+# gives: a floor that calls the `fail()` one edit disarms is not a floor, and this helper reports
+# through the harness's own pass/fail. Kept for the documented rationale below, but do not read the
+# text that follows as live coverage — nothing in the repo invokes it.
 gate_assert_ran() {
   local observed="$1" floor="$2"
   if [[ ! "$observed" =~ ^[0-9]+$ ]] || [[ ! "$floor" =~ ^[0-9]+$ ]]; then
@@ -233,7 +238,7 @@ gate_mutate_layered() {
 # a wrapper self-test for whatever local `check()` it defines. NEITHER reaches the two wrappers
 # DEFINED HERE. Measured on test-inngest-volume-recut-gate.sh: replacing `gate_check`'s body with a
 # bare `pass "$name"` left the suite at 50 passed, 0 failed with the anti-vacuity floor healthy,
-# and `gate_mutate_layered` the same — and this harness is sourced by four suites, so one edit here
+# and `gate_mutate_layered` the same — and this harness is sourced by 13 suites, so one edit here
 # silences the degraded-shape and invoked-not-sourced batteries in all of them at once.
 #
 # Call it once, immediately after sourcing, BEFORE the first real arm. It drives each wrapper in
@@ -241,34 +246,82 @@ gate_mutate_layered() {
 # It does not use `pass`/`fail` to report its own result for the same reason ADR-193 gives: a floor
 # must not be built out of the helper it backstops.
 gate_harness_selftest() {
-  local _p="${passes:-${pass_count:-0}}" _f="${fails:-${fail_count:-0}}"
-  local _rc=0 _ok=1
+  # COUNTER NAMES ARE RESOLVED ONCE, BY PRESENCE, AND WRITTEN THROUGH INDIRECTION.
+  #
+  # The first cut read `${passes:-${pass_count:-0}}` and then restored ALL FOUR names
+  # unconditionally. Two defects, both measured:
+  #
+  #   (a) The restore CREATED the name the chain reads first. In a pass_count/fail_count suite,
+  #       call 1 left `fails` set, and `:-` fires only on unset-or-empty -- `0` is neither -- so
+  #       call 2 bound to the stale `fails` instead of the live `fail_count`. Three real failures
+  #       recorded between the calls were erased by the restore, and the diagnosis blamed
+  #       gate_check(), which was working correctly.
+  #   (b) A THIRD naming fell through to a literal `0`. tests/scripts/test-destroy-guard-counter-
+  #       web-platform.sh -- the suite guarding the destroy filter -- names its counters
+  #       `pass`/`fail`. Neither `passes` nor `pass_count` exists there, so `_f` bound to 0,
+  #       gate_check incremented `fail`, the chain never read it, and the self-test printed
+  #       "every gate_check assertion in this suite is decorative" against a HEALTHY gate_check.
+  #       Anyone wiring this into that suite would have seen a red and most plausibly "fixed" the
+  #       harness.
+  #
+  # `${x+set}` tests PRESENCE, not emptiness, so a legitimate 0 does not fall through. If no known
+  # pair is defined the function refuses loudly rather than defaulting to 0 and inventing a verdict.
+  #
+  # REQUIRES `GATE` and `PREAMBLE` to be set (gate_mutate_layered reads them), so call this after
+  # the suite has set them -- NOT merely after sourcing this file.
+  local _n_p='' _n_f=''
+  local _cand
+  for _cand in passes pass_count pass; do
+    if [[ -n "${!_cand+set}" ]]; then _n_p="$_cand"; break; fi
+  done
+  for _cand in fails fail_count fail; do
+    if [[ -n "${!_cand+set}" ]]; then _n_f="$_cand"; break; fi
+  done
+  if [[ -z "$_n_p" || -z "$_n_f" ]]; then
+    printf '  FAIL INSTRUMENT: gate_harness_selftest could not find this suite'"'"'s pass/fail counters (looked for passes/pass_count/pass and fails/fail_count/fail). Refusing to report a verdict it did not measure.\n' >&2
+    return 1
+  fi
+
+  local _p="${!_n_p}" _f="${!_n_f}"
+  local _ok_check=1 _ok_layered=1
   _ghs_never_aborts() { echo "gate_harness_selftest: this fixture always succeeds"; return 0; }
 
   # gate_check: demand an ABORT from a function that cannot abort. Must record a FAILURE.
-  gate_check "SELFTEST (expected to fail)" _ghs_never_aborts 1 "reason=impossible" >/dev/null 2>&1 || _rc=$?
-  [[ "${fails:-${fail_count:-0}}" -eq $((_f + 1)) ]] || _ok=0
+  gate_check "SELFTEST (expected to fail)" _ghs_never_aborts 1 "reason=impossible" >/dev/null 2>&1 || true
+  [[ "${!_n_f}" -eq $((_f + 1)) ]] || _ok_check=0
 
-  local _ok_check="$_ok"
-
-  # gate_mutate_layered: hand it a sed expression that matches NOTHING. Its own byte-identical-copy
-  # arm must fire, which means recording a FAILURE. This drives the wrapper without needing a real
-  # mutation, and it exercises the `cmp -s` guard that every layered row depends on.
-  _ok=1
+  # gate_mutate_layered: a sed expression that matches NOTHING, so its byte-identical-copy arm fires.
+  #
+  # ACKNOWLEDGED LIMIT: this drives only the FIRST of that wrapper's four checks. The layered
+  # contract it backstops (rc==1 AND own-token absent AND fallback-token present) is not exercised,
+  # so a neutering that preserves `cmp -s` and softens the final comparison would pass this. Driving
+  # the full contract needs a real gate plus a landing mutation, which belongs in the calling suite's
+  # own layered rows, not in a harness self-test. Recorded rather than left for a reader to assume
+  # this covers more than it does.
   gate_mutate_layered "SELFTEST (expected to fail)" 's|__GHS_MATCHES_NOTHING_XYZZY__|:|' \
     "__ghs_own__" "__ghs_fallback__" _ghs_never_aborts >/dev/null 2>&1 || true
-  [[ "${fails:-${fail_count:-0}}" -eq $((_f + 2)) ]] || _ok=0
+  [[ "${!_n_f}" -eq $((_f + 2)) ]] || _ok_layered=0
 
-  passes="$_p"; fails="$_f"; pass_count="$_p"; fail_count="$_f"
+  # Restore ONLY the pair actually read, so a differently-named counter is never created or clobbered.
+  # On FAILURE the fail counter is restored and then incremented by one, so the suite's own tally and
+  # exit status carry the verdict — a self-test that only returns non-zero relies on every call site
+  # remembering to act on it, and ten of the eleven call sites are one line written by a sweep.
+  printf -v "$_n_p" '%s' "$_p"
+  if [[ "$_ok_check" -ne 1 || "$_ok_layered" -ne 1 ]]; then
+    printf -v "$_n_f" '%s' "$((_f + 1))"
+  else
+    printf -v "$_n_f" '%s' "$_f"
+  fi
   unset -f _ghs_never_aborts
+
   if [[ "$_ok_check" -ne 1 ]]; then
-    printf '  FAIL INSTRUMENT: gate_check() did not record a failure on a must-fail arm — every gate_check assertion in this suite is decorative.\n' >&2
+    printf '  FAIL INSTRUMENT: gate_check() did not record a failure on a must-fail arm (watched counter: %s) -- every gate_check assertion in this suite is decorative.\n' "$_n_f" >&2
     return 1
   fi
-  if [[ "$_ok" -ne 1 ]]; then
-    printf '  FAIL INSTRUMENT: gate_mutate_layered() did not record a failure on a mutation that cannot land — every layered assertion in this suite is decorative.\n' >&2
+  if [[ "$_ok_layered" -ne 1 ]]; then
+    printf '  FAIL INSTRUMENT: gate_mutate_layered() did not record a failure on a mutation that cannot land (watched counter: %s) -- every layered assertion in this suite is decorative.\n' "$_n_f" >&2
     return 1
   fi
-  printf '  ok   instrument: gate_check() and gate_mutate_layered() both discriminate\n'
+  printf '  ok   instrument: gate_check() and gate_mutate_layered() both discriminate (counters: %s/%s)\n' "$_n_p" "$_n_f"
   return 0
 }

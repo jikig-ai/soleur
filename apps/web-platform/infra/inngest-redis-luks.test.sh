@@ -169,14 +169,30 @@ if printf '%s\n' "$_BOOT_CODE" | grep -qF 'if [ -e "$MAPPER" ]; then'; then ok "
 # T1.9c The identity read FAILS CLOSED. `proj=""` used to fall through to the `|| exit 0` written
 # for the web host, so a dedicated host whose env file failed to write — the exact host this guard
 # exists for — was waved through. Anchored on the refusal, which is the thing that can be deleted.
-_id_ok=1
-printf '%s\n' "$_BOOT_CODE" | grep -qF 'DOPPLER_PROJECT:-' || _id_ok=0            # it actually reads the identity
-printf '%s\n' "$_BOOT_CODE" | grep -qF 'if [ -z "$proj" ]; then' || _id_ok=0      # empty identity is a branch
-printf '%s\n' "$_BOOT_CODE" | grep -qF '[ ! -r "$ENVFILE" ]' || _id_ok=0          # unreadable is its own branch
-# The two refusals must EXIT NON-ZERO. `exit 0` on either is the fail-open this arm exists to catch,
-# and it is one character away from the correct code.
-[ "$(printf '%s\n' "$_BOOT_CODE" | grep -cE '^[[:space:]]*exit 1[[:space:]]*$')" -ge 3 ] || _id_ok=0
-if [ "$_id_ok" -eq 1 ]; then ok "T1.9c an absent/unreadable host identity REFUSES (three live branches, each exiting non-zero)"; else no "T1.9c the guard's fail-closed identity read is not live in the executable text — it fails open on the host it gates"; fi
+# FOUR SEPARATE VERDICTS, and the exit code bound to ITS OWN BRANCH.
+#
+# The first cut fused these into one `_id_ok` boolean and asserted the exit codes with
+# `grep -c '^exit 1$' >= 3` over the WHOLE FILE. inngest-redis-bootstrap.sh has NINE bare `exit 1`
+# lines against a floor of three — six units of slack on the exact axis the comment claimed to
+# guard. MEASURED: flipping the unreadable-envfile refusal to `exit 0`, or the no-DOPPLER_PROJECT
+# refusal to `exit 0`, or BOTH, each left the suite at 23 passed, 0 failed while printing
+# `ok - T1.9c … each exiting non-zero` — a verdict line asserting as a pass a statement false in
+# both halves. A `grep -c` is evidence about a file, never about a branch.
+#
+# Each refusal is now located by its own message and the FOLLOWING non-blank line must be `exit 1`.
+_next_stmt() {  # _next_stmt <needle> — the first non-blank executable line after the match
+  printf '%s\n' "$_BOOT_CODE" | grep -A3 -F "$1" | tail -n +2 | grep -vE '^\s*$' | head -1 | sed 's/^[[:space:]]*//'
+}
+if printf '%s\n' "$_BOOT_CODE" | grep -qF 'DOPPLER_PROJECT:-'; then ok "T1.9c1 the guard actually READS the host identity"; else no "T1.9c1 the guard never reads DOPPLER_PROJECT — it cannot know which host it is on"; fi
+if printf '%s\n' "$_BOOT_CODE" | grep -qF 'if [ -z "$proj" ]; then'; then ok "T1.9c2 an EMPTY identity is its own branch"; else no "T1.9c2 an empty DOPPLER_PROJECT is not branched on — it falls through to the web-host exit 0"; fi
+if printf '%s\n' "$_BOOT_CODE" | grep -qF '[ ! -r "$ENVFILE" ]'; then ok "T1.9c3 an UNREADABLE env file is its own branch"; else no "T1.9c3 an unreadable env file is not branched on"; fi
+_x_unreadable="$(_next_stmt 'exists but is unreadable')"
+_x_noproj="$(_next_stmt 'carries no DOPPLER_PROJECT')"
+if [ "$_x_unreadable" = "exit 1" ] && [ "$_x_noproj" = "exit 1" ]; then
+  ok "T1.9c4 BOTH identity refusals exit non-zero (bound to their own branch, not a file-wide count)"
+else
+  no "T1.9c4 an identity refusal does not exit non-zero — it fails OPEN on the host it gates (after-unreadable='${_x_unreadable}' after-no-project='${_x_noproj}')"
+fi
 
 # T1.10 expect_luks is threaded into BOTH device readers, or the post-recut refusal is armed in
 # only one of them and an ext4 signature after a recut mounts plaintext from the other.
@@ -248,11 +264,11 @@ if [ "$_rc" -ne 0 ] && printf '%s' "$_out" | grep -q 'inngest-luks-FAILED'; then
 # ═══ FLOOR ══════════════════════════════════════════════════════════════════════
 # Self-contained: bash builtins and this suite's own counters only. A floor that lives in a helper
 # is silenced by the same move that silences the arms it guards.
-if [ "$executed" -lt 23 ]; then
+if [ "$executed" -lt 26 ]; then
   fail=$((fail + 1))
-  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 23. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
+  printf 'FAIL - ANTI-VACUITY: only %s assertions ran, floor is 26. Arms were deleted, skipped, or the suite exited early.\n' "$executed" >&2
 else
-  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 23)\n' "$executed"
+  printf 'ok   - anti-vacuity floor: %s assertions ran (floor 26)\n' "$executed"
 fi
 
 echo ""

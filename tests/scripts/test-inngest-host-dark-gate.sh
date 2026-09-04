@@ -751,7 +751,13 @@ if grep -qE 'echo "::error::.*RECOVERY: dispatch .-f apply_target=inngest-host-r
 # the token boundary.
 if grep -qF 'echo "::error::' <<<"$(grep -F "do NOT dispatch inngest-host —" <<<"$WF_CODE")"; then pass; else fail "Row 7b(a3): the failure path does not warn that inngest-host (not -replace) also aborts"; fi
 if grep -qF 'echo "::warning::' <<<"$(grep -F "THE CUTOVER IS NOT COMPLETE" <<<"$WF_CODE")"; then pass; else fail "Row 7b(b): the recut success path does not say that a host replace is still required"; fi
-if grep -qF 'echo "' <<<"$(grep -F "FIRST-BOOT-ONLY" <<<"$WF_CODE")"; then pass; else fail "Row 7b(b2): the recut success path does not say WHY a reboot is not enough (runcmd is first-boot-only)"; fi
+# `FIRST-BOOT-ONLY` occurs TWICE in the workflow, on two different branches, and this arm took any
+# match: commenting out the success-path line it names left the suite at 115/0 while a DIFFERENT
+# code path satisfied it. Its emitter anchor was also the weakest of the five (`echo "` rather than
+# a severity). Require the success-path `::warning::` emission specifically — the same line Row
+# 7b(b) anchors on — so the two arms bind to one region rather than to a token.
+_b2="$(grep -F 'FIRST-BOOT-ONLY' <<<"$WF_CODE" | grep -F 'echo "::warning::' || true)"
+if [[ -n "$_b2" ]]; then pass; else fail "Row 7b(b2): the recut success path does not warn WHY a reboot is not enough (runcmd is first-boot-only) as a live ::warning:: emission"; fi
 # ...and it must not still claim the old thing anywhere. Grep the OLD wording, never the new.
 if grep -qF "the LUKS cut happens on the next boot" "$WF"; then fail "Row 7b(c): the superseded 'next boot' claim survives somewhere in the workflow"; else pass; fi
 
