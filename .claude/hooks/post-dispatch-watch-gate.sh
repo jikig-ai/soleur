@@ -75,15 +75,18 @@ if [[ "$HOOK_TOOL_NAME" == "Monitor" ]]; then
   MON_CMD="$(_field 'tool_input.command')"
   if [[ -n "$MON_CMD" ]]; then
     # Delegating to a known-good reporter, or a naturally-streaming source, needs no check.
-    if printf '%s' "$MON_CMD" | grep -qE 'monitor-pr-checks\.sh|tail -f|inotifywait|websocat'; then
+    if grep -qE 'monitor-pr-checks\.sh|tail -f|inotifywait|websocat' <<<"$MON_CMD"; then
       exit 0
     fi
     # A loop is present but every emission is conditional => the healthy path is silent.
-    if printf '%s' "$MON_CMD" | grep -qE '\b(while|until|for)\b' \
-       && ! printf '%s' "$MON_CMD" | grep -qE '^[[:space:]]*(echo|printf)' ; then
+    # HERE-STRINGS, NOT `printf | grep -q` (#6992, enforced by grep-q-pipe-guard.test.sh):
+    # `grep -q` exits on its first match and SIGPIPEs the producer, which under `pipefail` is
+    # rc=141 — inside a policy-gate hook that is an unexplained failure, not a verdict.
+    if grep -qE '\b(while|until|for)\b' <<<"$MON_CMD" \
+       && ! grep -qE '^[[:space:]]*(echo|printf)' <<<"$MON_CMD" ; then
       emit_incident post-dispatch-watch-gate warn \
         "monitor armed with no unconditional progress emission" "${MON_CMD:0:50}" 2>/dev/null || true
-      jq -n '{hookSpecificOutput: {additionalContext:
+      jq -n '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext:
         ("post-dispatch-watch-gate: the Monitor you just armed has a poll loop whose every emission " +
          "looks conditional. If nothing prints on the HEALTHY still-running path, silence will be " +
          "indistinguishable from a dead watch for the whole run (#7778).\n" +
