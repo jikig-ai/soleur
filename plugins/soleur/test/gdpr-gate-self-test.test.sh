@@ -60,6 +60,31 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# Workflow-filename parity. NOTICE_PARSER_SRC was declared for this check in
+# #3541 and the check was never written, so the variable sat unused for
+# months (shellcheck SC2034) while the drift it names went unguarded —
+# a captured-but-never-asserted verdict.
+#
+# The literal `scheduled-content-vendor-drift.yml` is a DEAD workflow name
+# (the job moved to Inngest in #4483; see #7255). It survives deliberately in
+# both sites, each explaining that the probe it belongs to is inert. This
+# assertion pins them together: whoever revives the cron-run-stale binding
+# must update the parser AND the doc, or this fails loud instead of leaving
+# one of them asserting a defence that is not running.
+DEAD_WORKFLOW_LITERAL='scheduled-content-vendor-drift.yml'
+parser_hits=$(grep -cF "$DEAD_WORKFLOW_LITERAL" "$NOTICE_PARSER_SRC" || true)
+skill_hits=$(grep -cF "$DEAD_WORKFLOW_LITERAL" "$SKILL_MD" || true)
+if [[ "$parser_hits" -gt 0 && "$skill_hits" -gt 0 ]]; then
+  echo "  PASS: dead-workflow literal documented in BOTH the parser ($parser_hits) and SKILL.md ($skill_hits)"
+  PASS=$((PASS + 1))
+elif [[ "$parser_hits" -eq 0 && "$skill_hits" -eq 0 ]]; then
+  echo "  PASS: dead-workflow literal retired from both the parser and SKILL.md"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: dead-workflow literal drifted — parser=$parser_hits SKILL.md=$skill_hits (one site was updated without the other; see #7255)"
+  FAIL=$((FAIL + 1))
+fi
+
 # Inngest function must exist on disk — the vendor-drift cron was migrated
 # from GHA to Inngest (TR9 Phase 2 #3948). The notice-frontmatter.sh parser
 # still references the old GHA workflow name for cron-run-stale calculation
