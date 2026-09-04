@@ -36,6 +36,39 @@ lifted-files:
     upstream-blob-sha: a073ef24a0527c2c3a6d738b65ea3ef9d6194abe
     local-blob-sha: 29357a020bfa0e61f91dd529070fe3eb7cd251da
     status: active-soleur-rewritten
+  - path: references/layers/auth-sessions.md
+    upstream-path: pii-detector/layers/auth-sessions.md
+    upstream-blob-sha: 71dd9d01fe55d3e58f8b35f1cf745d47ba5f0985
+    local-blob-sha: a2eac5e15c72b28a7f271f5ab98f376f4448f005
+    status: active-eu-extended
+  - path: references/layers/frontend.md
+    upstream-path: pii-detector/layers/frontend.md
+    upstream-blob-sha: 5f39e08fe2404759d7cbdbdea54a4f6210b91b8f
+    local-blob-sha: 7ab925695fb02151b0214ef171d92f10059b1d50
+    status: active-eu-extended
+  - path: references/layers/testing-seeding.md
+    upstream-path: pii-detector/layers/testing-seeding.md
+    upstream-blob-sha: a2f299418a5f85246fd2203475d89106936f7a72
+    local-blob-sha: 3dc230db21b657a9da31886d52abf982d7203f4b
+    status: active-eu-extended
+soleur-authored:
+  # Reference files written from scratch for this plugin. Same record shape and
+  # same `local-blob-sha` tamper check as `lifted-files` above, but NO upstream
+  # provenance — these never appear in `upstream-files`, and a `lifted-files`
+  # row for one of them would attest goSprinto MIT provenance for Soleur's own
+  # writing. Pinning them here is what makes them editable through the normal
+  # update-the-pin flow: before #7710 they were rejected outright as "silent
+  # local addition", which blocked the documented v2->v3 lifecycle of
+  # `legal-consent.md` without `--no-verify`.
+  - path: references/non-negotiables.md
+    local-blob-sha: 44a3a255c937950fbc9de8cd64d3ad70caceafda
+    status: soleur-authored
+  - path: references/legal-consent.md
+    local-blob-sha: f9677a14d731836315d1ce8f4274726c9c156911
+    status: soleur-authored
+  - path: references/legacy/legal-consent-v1-prose.md
+    local-blob-sha: 239bc26f02098f2bb59eb1e961f92ef128094c7b
+    status: soleur-authored-archived
 ---
 
 # NOTICE
@@ -65,12 +98,13 @@ Upstream: <https://github.com/goSprinto/compliance-skills>
 
 ## Soleur-authored layers
 
-The following reference files are written from scratch for this plugin and carry a `<!-- Soleur-authored — see NOTICE -->` header on line 1 instead of the upstream attribution header.
+The following reference files are written from scratch for this plugin and carry no upstream attribution header. `legal-consent.md` carries an explicit `<!-- Soleur-authored — see NOTICE -->` marker on line 1 and the archived v1 prose carries its own provenance note; `non-negotiables.md` opens directly on its title. Their integrity is pinned by the `soleur-authored` frontmatter block above rather than by the header line.
 
 | File | Purpose |
 |---|---|
 | `references/non-negotiables.md` | GDPR-first regulatory framing for the plugin's scope. |
 | `references/legal-consent.md` | Layer-shaped (LC-01..LC-05) ePrivacy + GDPR Art. 7 / 13 / 14 / 35 checks. **v2 promotion:** v1 prose-shaped version is preserved at `references/legacy/legal-consent-v1-prose.md` for one release cycle and removed at v3. |
+| `references/legacy/legal-consent-v1-prose.md` | Archived v1 prose-shape of the above, retained for regulatory-citation provenance until v3. |
 
 ## License
 

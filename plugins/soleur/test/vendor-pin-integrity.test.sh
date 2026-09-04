@@ -156,4 +156,257 @@ else
 fi
 echo ""
 
+# ---------------------------------------------------------------------------
+# Guard 1 — the vendored-pin registry (#7710)
+#
+# Property: every file under the gate's `references/**` carries a pin
+# appropriate to its provenance — upstream-derived files in `lifted-files`,
+# Soleur-authored files in `soleur-authored` — and no file appears in the
+# wrong list or in neither.
+#
+# The chokepoint is THIS WALK, not vendor-pin-integrity.sh: the script
+# iterates only over its arguments and never reads the tree, so the
+# symmetric-difference property is bought here and lefthook/CI do not reach
+# it through the script.
+# ---------------------------------------------------------------------------
+
+# Build a fixture NOTICE from a lifted-files block and a soleur-authored block.
+# Kept as a helper so each mutation case differs only in the registry content.
+make_notice() {
+  # $1 = destination path, $2 = lifted-files body, $3 = soleur-authored body
+  cat > "$1" <<NOTICE_EOF
+---
+upstream: github.com/goSprinto/compliance-skills
+pinned-commit: 7b58d68461cb1fc033a063e34cc9de63d0b4144b
+last-verified: 2026-05-10
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+$2
+soleur-authored:
+$3
+---
+
+# NOTICE (test fixture)
+NOTICE_EOF
+}
+
+# --- TS6: reverse parity — every references/** file is in exactly one list ---
+# Mutation 1 in the Guard Contract: a file listed in NEITHER registry must go
+# RED. This is the direction nothing asserted before #7710, and it is why
+# three files sat unpinned for 117 days.
+echo "TS6: disk(references/**) == lifted-files U soleur-authored (symmetric difference empty)"
+
+DISK_FILES=()
+while IFS= read -r f; do
+  DISK_FILES+=("${f#"$SKILL_DIR"/}")
+done < <(find "$SKILL_DIR/references" -type f -name '*.md' | sort)
+
+REGISTRY_FILES=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  REGISTRY_FILES+=("${line%%:*}")
+done < <(bash "$PARSER" lifted-files; bash "$PARSER" soleur-authored)
+
+# Own dispatch (mutation 5): `0 checked, 0 failed` must not read as success.
+# A walk that yields nothing is a broken harness, not a clean registry.
+if (( ${#DISK_FILES[@]} < 8 )); then
+  echo "  FAIL: disk walk yielded ${#DISK_FILES[@]} files under references/ (expected >= 8) — harness defect, not a clean registry"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: disk walk yielded ${#DISK_FILES[@]} files under references/"
+  PASS=$((PASS + 1))
+fi
+
+if (( ${#REGISTRY_FILES[@]} < 8 )); then
+  echo "  FAIL: registry union yielded ${#REGISTRY_FILES[@]} entries (expected >= 8) — parser or NOTICE defect"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: registry union yielded ${#REGISTRY_FILES[@]} entries"
+  PASS=$((PASS + 1))
+fi
+
+UNPINNED=()
+for d in "${DISK_FILES[@]}"; do
+  found=0
+  for r in "${REGISTRY_FILES[@]}"; do
+    [[ "$d" == "$r" ]] && { found=1; break; }
+  done
+  (( found )) || UNPINNED+=("$d")
+done
+assert_eq "" "${UNPINNED[*]:-}" "no references/ file is absent from both registries"
+
+ORPHANED=()
+for r in "${REGISTRY_FILES[@]}"; do
+  found=0
+  for d in "${DISK_FILES[@]}"; do
+    [[ "$d" == "$r" ]] && { found=1; break; }
+  done
+  (( found )) || ORPHANED+=("$r")
+done
+assert_eq "" "${ORPHANED[*]:-}" "no registry entry names a file absent from disk"
+echo ""
+
+# --- TS7: no file appears in BOTH registries (provenance falsification) ---
+# Mutation 2: moving a Soleur-authored file into lifted-files attests
+# goSprinto MIT provenance for Soleur's own writing. It must be REJECTED,
+# not merely un-required.
+echo "TS7: no file appears in both lifted-files and soleur-authored"
+BOTH=()
+while IFS= read -r lifted; do
+  [[ -z "$lifted" ]] && continue
+  lp="${lifted%%:*}"
+  while IFS= read -r auth; do
+    [[ -z "$auth" ]] && continue
+    ap="${auth%%:*}"
+    [[ "$lp" == "$ap" ]] && BOTH+=("$lp")
+  done < <(bash "$PARSER" soleur-authored)
+done < <(bash "$PARSER" lifted-files)
+assert_eq "" "${BOTH[*]:-}" "lifted-files and soleur-authored are disjoint"
+echo ""
+
+# --- TS8: Soleur-authored files are integrity-checked, not rejected ---
+# AC4 first half. Before #7710 these three exited 1 as "silent local
+# addition", which is why the documented v2->v3 lifecycle of
+# legal-consent.md could not be committed without --no-verify.
+echo "TS8: Soleur-authored reference files pass the integrity check"
+AUTHORED_PATHS=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  AUTHORED_PATHS+=("$SKILL_DIR/${line%%:*}")
+done < <(bash "$PARSER" soleur-authored)
+
+if (( ${#AUTHORED_PATHS[@]} == 0 )); then
+  echo "  FAIL: soleur-authored list is empty — nothing was checked"
+  FAIL=$((FAIL + 1))
+else
+  set +e
+  ( cd "$REPO_ROOT" && bash "$INTEGRITY" "${AUTHORED_PATHS[@]}" >/dev/null 2>&1 )
+  RC=$?
+  set -e
+  assert_eq "0" "$RC" "exit 0 for ${#AUTHORED_PATHS[@]} Soleur-authored files with matching SHAs"
+fi
+echo ""
+
+# --- TS9: mismatched Soleur-authored SHA is rejected, and named as such ---
+# AC4 second half. The message must name the Soleur-authored list rather
+# than "silent local addition" — a contributor who edits legal-consent.md
+# is following a documented lifecycle, not smuggling in a vendored file.
+echo "TS9: mismatched soleur-authored SHA -> exit 1, message names the right list"
+TMP_TS9="$(mktemp -d -t vpi-ts9.XXXXXXXX)"
+assert_fixture_dir "$TMP_TS9"
+trap 'rm -rf "$TMP_TS9"' EXIT
+
+make_notice "$TMP_TS9/NOTICE" \
+"  - path: references/fields.md
+    upstream-path: pii-detector/patterns/fields.md
+    upstream-blob-sha: c1bb748fe00a53b283efe66ec937fa39437d2efc
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/fields.md")
+    status: active-eu-extended" \
+"  - path: references/non-negotiables.md
+    local-blob-sha: 0000000000000000000000000000000000000000
+    status: soleur-authored"
+
+set +e
+STDERR=$( cd "$REPO_ROOT" && NOTICE_FILE="$TMP_TS9/NOTICE" bash "$INTEGRITY" \
+  "$SKILL_DIR/references/non-negotiables.md" 2>&1 >/dev/null )
+RC=$?
+set -e
+assert_eq "1" "$RC" "exit 1 on soleur-authored blob-sha mismatch"
+assert_contains "$STDERR" "non-negotiables.md" "stderr names the mismatched file"
+assert_contains "$STDERR" "soleur-authored" "stderr names the soleur-authored list"
+echo ""
+
+# --- TS10: second member — the walk must not stop at the first compliant file
+# Mutation 4: file A compliant, file B not, A ordered first.
+echo "TS10: a compliant first argument does not mask a non-compliant second"
+set +e
+STDERR=$( cd "$REPO_ROOT" && NOTICE_FILE="$TMP_TS9/NOTICE" bash "$INTEGRITY" \
+  "$SKILL_DIR/references/fields.md" "$SKILL_DIR/references/non-negotiables.md" 2>&1 >/dev/null )
+RC=$?
+set -e
+assert_eq "1" "$RC" "exit 1 when only the SECOND argument mismatches"
+assert_contains "$STDERR" "non-negotiables.md" "stderr names the second (failing) file"
+echo ""
+
+# --- TS11: entry order is not significant (must-PASS non-canonical input) ---
+# Harness row (ii). Reordering ENTRIES is permitted; reordering KEYS within
+# an entry is not, since _emit_files hard-codes `- path:` as each record's
+# first key. Quoted scalars are deliberately NOT used as the variant here —
+# notice-frontmatter.sh strips whitespace but not quotes, so a quoted SHA
+# would emit the quotes and the fix would loosen an injection guard.
+echo "TS11: reordering registry ENTRIES does not change the verdict"
+make_notice "$TMP_TS9/NOTICE-reordered" \
+"  - path: references/leakage-vectors.md
+    upstream-path: pii-detector/rules/leakage-vectors.md
+    upstream-blob-sha: 15a46e529e789930149f4b9bce875bfe5c53e478
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/leakage-vectors.md")
+    status: active-verbatim
+  - path: references/fields.md
+    upstream-path: pii-detector/patterns/fields.md
+    upstream-blob-sha: c1bb748fe00a53b283efe66ec937fa39437d2efc
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/fields.md")
+    status: active-eu-extended" \
+"  - path: references/legal-consent.md
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/legal-consent.md")
+    status: soleur-authored
+  - path: references/non-negotiables.md
+    local-blob-sha: $(git hash-object --no-filters "$SKILL_DIR/references/non-negotiables.md")
+    status: soleur-authored"
+
+set +e
+( cd "$REPO_ROOT" && NOTICE_FILE="$TMP_TS9/NOTICE-reordered" bash "$INTEGRITY" \
+  "$SKILL_DIR/references/fields.md" \
+  "$SKILL_DIR/references/leakage-vectors.md" \
+  "$SKILL_DIR/references/non-negotiables.md" \
+  "$SKILL_DIR/references/legal-consent.md" >/dev/null 2>&1 )
+RC=$?
+set -e
+assert_eq "0" "$RC" "exit 0 with entries in non-canonical order"
+echo ""
+
+# --- TS12: the mismatch message names a mechanism that exists (AC18) ---
+# It told a blocked contributor to "run the vendor-drift workflow", which has
+# not existed since #4483. It is the only exit they get at the moment their
+# commit is refused.
+echo "TS12: mismatch guidance does not name the deleted vendor-drift workflow"
+if grep -q 'vendor-drift workflow' "$INTEGRITY"; then
+  echo "  FAIL: mismatch message still points at the workflow deleted in #4483"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: mismatch message does not name the deleted workflow"
+  PASS=$((PASS + 1))
+fi
+echo ""
+
+# --- TS13: lefthook glob reaches every registry path, legacy/ included ---
+# The pre-#7710 parity check (TS4) walked lifted-files only and matched two
+# single-level patterns. Adding references/legacy/** to a registry without
+# adding it to the glob would leave that file ungated while appearing pinned.
+echo "TS13: lefthook glob covers every registry path including references/legacy/"
+UNGLOBBED=()
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  rel_path="${line%%:*}"
+  if [[ ! "$rel_path" =~ ^references/[^/]+\.md$ ]] && \
+     [[ ! "$rel_path" =~ ^references/layers/[^/]+\.md$ ]] && \
+     [[ ! "$rel_path" =~ ^references/legacy/[^/]+\.md$ ]]; then
+    UNGLOBBED+=("$rel_path")
+  fi
+done < <(bash "$PARSER" lifted-files; bash "$PARSER" soleur-authored)
+assert_eq "" "${UNGLOBBED[*]:-}" "every registry path matches a lefthook glob pattern"
+
+for pat in \
+  "plugins/soleur/skills/gdpr-gate/references/*.md" \
+  "plugins/soleur/skills/gdpr-gate/references/layers/*.md" \
+  "plugins/soleur/skills/gdpr-gate/references/legacy/*.md"; do
+  if grep -qF -- "\"$pat\"" "$LEFTHOOK"; then
+    echo "  PASS: lefthook declares glob $pat"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: lefthook is missing glob $pat"
+    FAIL=$((FAIL + 1))
+  fi
+done
+echo ""
+
 print_results
