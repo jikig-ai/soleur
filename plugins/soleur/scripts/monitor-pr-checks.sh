@@ -28,8 +28,15 @@
 # A correct monitor and a dead monitor then look identical to the operator, and the
 # longer the job runs the more it looks like something is stuck.
 #
-# Rule of thumb this encodes: a monitor must emit on every poll, not on every EVENT.
-# Progress IS the event when the thing you are watching takes tens of minutes.
+# Rule of thumb this encodes: SILENCE MUST NEVER BE THE HEALTHY SIGNAL. But "emit every poll
+# unconditionally" over-corrects into the opposite failure — a 35-minute CI run at a 120s cadence
+# is ~17 identical lines, and the Monitor tool auto-stops a watch that produces too many events, so
+# over-emitting eventually reproduces silence by another route.
+#
+# The contract is therefore: emit on CHANGE, and emit a HEARTBEAT every --heartbeat-every polls
+# even when nothing changed. Change tells the operator what moved; the heartbeat proves the watch
+# is alive. Neither alone is sufficient — change-only is what went silent for 50 minutes, and
+# every-poll is what gets throttled.
 #
 # Usage:
 #   monitor-pr-checks.sh <pr-number> [--interval SECONDS] [--max-polls N] [--repo OWNER/REPO]
@@ -43,11 +50,12 @@
 # 3 on usage error. The caller's Monitor watch ends when this exits.
 set -uo pipefail
 
-PR=""; INTERVAL=120; MAX_POLLS=60; REPO_ARG=()
+PR=""; INTERVAL=120; MAX_POLLS=60; HEARTBEAT_EVERY=5; REPO_ARG=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --interval)  INTERVAL="${2:?--interval needs a value}"; shift 2 ;;
     --max-polls) MAX_POLLS="${2:?--max-polls needs a value}"; shift 2 ;;
+    --heartbeat-every) HEARTBEAT_EVERY="${2:?--heartbeat-every needs a value}"; shift 2 ;;
     --repo)      REPO_ARG=(--repo "${2:?--repo needs a value}"); shift 2 ;;
     -h|--help)   sed -n '1,40p' "$0"; exit 0 ;;
     -*)          echo "monitor-pr-checks: unknown flag $1" >&2; exit 3 ;;
@@ -58,8 +66,9 @@ done
 [[ "$PR" =~ ^[0-9]+$ ]] || { echo "monitor-pr-checks: <pr-number> is required and must be numeric" >&2; exit 3; }
 [[ "$INTERVAL" =~ ^[0-9]+$ && "$INTERVAL" -ge 10 ]] || { echo "monitor-pr-checks: --interval must be an integer >= 10" >&2; exit 3; }
 [[ "$MAX_POLLS" =~ ^[0-9]+$ && "$MAX_POLLS" -ge 1 ]] || { echo "monitor-pr-checks: --max-polls must be an integer >= 1" >&2; exit 3; }
+[[ "$HEARTBEAT_EVERY" =~ ^[0-9]+$ && "$HEARTBEAT_EVERY" -ge 1 ]] || { echo "monitor-pr-checks: --heartbeat-every must be an integer >= 1" >&2; exit 3; }
 
-n=0
+n=0; prev_sig=""
 while :; do
   n=$((n + 1))
 
@@ -81,12 +90,24 @@ while :; do
   waiting=$(jq -r '[.[]|select(.bucket=="pending")|.name]|join(",")' <<<"$checks" 2>/dev/null | cut -c1-90)
   red=$(jq -r '[.[]|select(.bucket=="fail" or .bucket=="cancel")|"\(.bucket):\(.name)"]|join(" ")' <<<"$checks" 2>/dev/null | cut -c1-160)
 
-  # ── THE HEARTBEAT. Unconditional, before any terminal branch. This is the whole point of the
-  # script: the healthy path emits too, so silence can only ever mean the monitor is dead.
-  printf '[%s|%s|automerge=%s] %s/%s pass · %s fail · %s cancel · %s pending%s%s\n' \
-    "$state" "$mergestate" "$automerge" "$pass" "$tot" "$fail" "$cancel" "$pend" \
-    "${waiting:+ → }" "$waiting"
-  [[ -n "$red" ]] && printf '    NON-PASS: %s\n' "$red"
+  # ── THE EMISSION DECISION, before any terminal branch. Emit when the observable state CHANGED,
+  # and otherwise every HEARTBEAT_EVERY polls so a long quiet stretch still proves liveness. The
+  # first poll always emits (prev is empty), so the operator sees a baseline immediately.
+  sig="${state}|${mergestate}|${automerge}|${pass}|${tot}|${fail}|${cancel}|${pend}"
+  if [[ "$sig" != "${prev_sig:-}" ]]; then
+    why=""
+  elif [[ $(( n % HEARTBEAT_EVERY )) -eq 0 ]]; then
+    why=" · unchanged, still watching"
+  else
+    why="SKIP"
+  fi
+  if [[ "$why" != "SKIP" ]]; then
+    printf '[%s|%s|automerge=%s] %s/%s pass · %s fail · %s cancel · %s pending%s%s%s\n' \
+      "$state" "$mergestate" "$automerge" "$pass" "$tot" "$fail" "$cancel" "$pend" \
+      "${waiting:+ → }" "$waiting" "$why"
+    [[ -n "$red" ]] && printf '    NON-PASS: %s\n' "$red"
+  fi
+  prev_sig="$sig"
 
   case "$state" in
     MERGED) printf 'MERGED — PR #%s landed (%s/%s pass, %s fail, %s cancel).\n' "$PR" "$pass" "$tot" "$fail" "$cancel"; exit 0 ;;

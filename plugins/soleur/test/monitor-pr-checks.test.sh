@@ -78,11 +78,27 @@ if [[ "$rc" -eq 2 && "$out" == *"2/3 pass"* && "$out" == *"1 pending"* && "$out"
 else
   no "T3 in-progress emission — the defect this script exists to close" "rc=$rc out=[$out]"
 fi
-# T3b: it emits EVERY poll, not once.
+# T3b: the emission path is capable of firing on EVERY poll — asserted at --heartbeat-every 1
+# rather than at the default. This arm originally read "3 polls -> 3 lines" with no flag, which
+# encoded the OVER-correction (emit unconditionally) and went red the moment throttling landed.
+# Re-scoped rather than deleted: the property worth pinning is that nothing structurally caps the
+# emission below one-per-poll; T3c pins the throttle, and the two together are the contract.
 mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
-out="$(run 7778 --interval 10 --max-polls 3)"
+out="$(run 7778 --interval 10 --max-polls 3 --heartbeat-every 1)"
 lines="$(grep -c 'pass · ' <<<"$out")"
-[[ "$lines" -eq 3 ]] && ok "T3b emits one progress line PER POLL (3 polls -> 3 lines)" || no "T3b per-poll emission" "got $lines lines"
+[[ "$lines" -eq 3 ]] && ok "T3b at --heartbeat-every 1 every poll emits (3 polls -> 3 lines)" || no "T3b per-poll emission" "got $lines lines"
+
+# ── T3c/T3d: change-plus-heartbeat, the OTHER half of the contract ───────────────
+# Emitting every poll unconditionally is the over-correction: a 35-minute run at a 120s cadence is
+# ~17 identical lines, and the Monitor tool auto-stops a watch that produces too many events —
+# which reproduces silence by another route. Unchanged state must therefore be throttled, but not
+# to zero.
+mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 6 --heartbeat-every 3)"
+lines="$(grep -c 'pass · ' <<<"$out")"
+# poll 1 emits (baseline, prev empty); polls 3 and 6 emit as heartbeats; 2/4/5 are suppressed.
+[[ "$lines" -eq 3 ]] && ok "T3c unchanged state is THROTTLED to a heartbeat (6 polls, every-3 -> 3 lines)"   || no "T3c heartbeat throttling" "expected 3 lines, got $lines"
+[[ "$out" == *"unchanged, still watching"* ]] && ok "T3d the heartbeat line SAYS it is unchanged, not silent"   || no "T3d heartbeat is labelled" "out=[$out]"
 
 # ── T4 red checks ────────────────────────────────────────────────────────────────
 mkstub 'OPEN|BLOCKED|true' "$RED_CHECKS"
@@ -115,9 +131,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 10 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 10.\n' "$_ran" >&2
+if [[ "$_ran" -lt 12 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 12.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 10)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 12)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1
