@@ -3,21 +3,22 @@ title: "CLO attestation — Art. 33(5) breach register (#7717 / #7791): per-arti
 type: clo-attestation
 date: 2026-09-03
 attested: 2026-09-04
+attested_commit_range: origin/main...HEAD
 issue: 7791
 attestation-authority: clo
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
-disposition: "DISCHARGED — B1 cleared, R1 cleared, C2/C3 applied in-cell, six stale sites corrected, five findings recorded, two of them tracked (#7847, #7848), four carve-outs recorded"
+disposition: "DISCHARGED — B1 cleared, R1 cleared on the internal registers only, C2/C3 applied in-cell, six stale sites corrected, six findings recorded, three of them tracked (#7847, #7848, #7851), four carve-outs recorded"
 signed_off_at: 2026-09-04
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the operator retains an optional veto)"
 supersedes: knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md
 rulings_of_record:
   - "Ruling 1 (instrument-and-scope; the determination set) — CONFIRMED as to method, SUPERSEDED as to set the same day by counsel-review finding B1. Limb 2 of the inclusion predicate is SUBSTANTIVE, not citational. The set of record is 5 indexed / 8 waived. Applying Ruling 1's verbatim '4 indexed / 3 waived' would un-index audits/sentry-migration-audit-2026-05-15.md and reopen a blocking finding."
   - "Ruling 2 (frontmatter identity field: controller:, not processor:) — CONFIRMED without qualification. Art. 33(1) and 33(5) bind the controller on their face; the field names the capacity in which the register is kept. AC1's other prohibitions (version, last_reviewed, dpo, contact) stand."
-  - "Ruling 3 (scoping the published docs/legal/** copies out of a statutory-register change, deferred to #7786) — RATIFIED. Attributed in-tree, not among the two rulings put to the 2026-09-03 review, ratified there and re-ratified here. #7786 is OPEN and carries the re-grounding, the retention wording and the Vendor DPA Status row."
+  - "Ruling 3 (scoping the published docs/legal/** copies out of a statutory-register change) — RATIFIED as to the SCOPING, which is right: a three-way lockstep and a possible TC_VERSION bump must not ride inside a statutory-register change. NOT RATIFIED as to the deferral TARGET. The 2026-09-03 review recorded that #7786 carries the re-grounding, the retention wording and the Vendor DPA Status row; measured at attestation, #7786 carries none of the three — its scope is retiring the stale no-off-host-shipping clauses, and its Out-of-scope section forbids caveating the Better Stack disclosure. The three divergences are filed at #7851."
 carve_outs:
   - "NOT ATTESTED — the merits of any indexed determination. This attestation reaches whether the register REPRESENTS each determination correctly, not whether each determination was correctly made; each was made and signed at the time of its event in its canonical record."
   - "NOT ATTESTED — the status: and BLOCKED disposition of knowledge-base/legal/audits/2026-08-06-alpha-tester-controller-processor-determination.md. Those are dispositions on the §11 conditions of #7331 and are outside this envelope. Nothing here moves them."
-  - "NOT ATTESTED — completeness outside the gate's producer scope (audits/** plus the one literally-pinned post-mortem), and internal citations inside indexed canonical sources (#7848). The three limits at §What this review could not resolve in the 2026-09-03 audit are undisturbed and this attestation is no broader."
+  - "NOT ATTESTED — completeness outside the gate's producer scope (audits/** plus the one literally-pinned post-mortem), internal citations inside indexed canonical sources (#7848), and the published docs/legal/** copies (#7851). Limits 2 and 3 at §What this review could not resolve in the 2026-09-03 audit are undisturbed; limit 1 is RESOLVED by §B1 and R1 of this attestation."
   - "NOT PROMOTED — the register's status: draft-requires-counsel-review. External counsel promotes it. This is the v1 INTERNAL sign-off; the operator retains an optional veto."
 re_evaluation_triggers:
   - "First arms-length (non-Jikigai-affiliate) data subject affected by an indexed determination — the Soleur-as-tenant-zero posture grounding v1 internal attestation ends there."
@@ -66,27 +67,49 @@ names the day the act was actually performed. **Nothing here is backdated.** A s
 would have had to lie in one direction or the other, and that conflation is exactly how a
 fabricated signature acquires a plausible timestamp.
 
-**Measured state at the time of signing** (worktree at commit `c2d8d86ae`, `bash
+**Measured state at the time of signing** (`attested_commit_range: origin/main...HEAD`; `bash
 scripts/lint-legal-registers.sh`):
 
 ```
 7 assertion(s), 0 failed (registers=4 rows=5 produced=12 waived=8 waiver-parity=ok)   exit 0
 ```
 
-**The certification condition on the final state.** Publishing this file adds a
-determination-shaped file to `audits/**` — it quotes Art. 4(12) and Art. 33(5) throughout — so
-guard check (c) requires it to be waived, and check (d) requires the waiver to exist in **both**
-copies of the waiver set. In the same change, the superseded implementation record is deleted and
-its waiver removed from both copies. That swap **conserves cardinality**: 12 → 11 → 12 produced,
-8 → 7 → 8 waived. The final run must therefore print the identical summary line above. It is
-stated as a falsifiable condition rather than as a measurement, because at signing time the swap
-has not yet been applied and I will not certify a figure I have not seen: **if the post-swap
-summary line differs from the line above, the swap went wrong and this attestation's Method
-section is the thing that catches it.**
+**The certification condition on the final state — stated on MEMBERSHIP, not on cardinality.**
+Publishing this file adds a determination-shaped file to `audits/**` — it quotes Art. 4(12) and
+Art. 33(5) throughout — so guard check (c) requires it to be waived and check (d) requires the
+waiver in **both** copies of the waiver set. In the same change the superseded implementation
+record is deleted and its waiver removed from both copies.
 
-**The summary line is the certified artifact, not the exit code.** Check (c) prints `0 failed`
-whether the producer matched 12 files or 11. A green exit is not by itself evidence that the swap
-landed; only the `produced=` and `waived=` fields are.
+**That swap conserves cardinality, which is exactly why cardinality cannot certify it.** `waived`
+prints `${#NOT_TRANSCRIBED[@]}` — array length — and `produced` is a match count; 12 → 11 → 12 and
+8 → 7 → 8 return to their starting values. Measured on a reconstructed pre-swap tree, the summary
+line is **byte-identical** to the post-swap line. So the line above cannot distinguish *the swap
+landed* from *the swap never ran*: if a rebase dropped the atomic commit, the guard would exit 0
+printing my certified string over a register citing an attestation that does not exist. An earlier
+revision of this section certified against that line alone. **That was a real defect in this
+attestation and it is corrected here rather than quietly rewritten** — a certification that cannot
+fail on the event it certifies is decoration.
+
+**The condition, restated so it can fail.** The final state is certified when all four hold:
+
+1. `scripts/lint-legal-registers.sh` exits 0 with `7 assertion(s), 0 failed`;
+2. the waiver set differs from the set at signing by **exactly** `{− audits/2026-09-03-implementation-record-7717-art-33-5-register.md, + audits/2026-09-03-clo-attestation-7717-art-33-5-register.md}` — verified by **membership**, in **both** the `NOT_TRANSCRIBED` array and the register's §Excluded records File column, not by counting either;
+3. `test ! -f knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md` succeeds;
+4. `test -f knowledge-base/legal/audits/2026-09-03-clo-attestation-7717-art-33-5-register.md` succeeds.
+
+Conditions 2–4 are the load-bearing ones. Condition 1 is necessary and nowhere near sufficient.
+
+**Executed 2026-09-04, after the swap landed.** All four pass. Condition 1: exit 0,
+`7 assertion(s), 0 failed (registers=4 rows=5 produced=12 waived=8 waiver-parity=ok)`. Condition 2:
+both copies enumerate the identical eight paths, the implementation record absent from each and
+this attestation present in each — the delta from the set at signing is exactly the intended pair.
+Condition 3 and condition 4: both succeed. **The swap is certified on membership, and the summary
+line in condition 1 is reported as corroboration rather than as evidence**, because it is the same
+string the pre-swap tree produced.
+
+**Neither the summary line nor the exit code is the certified artifact.** Check (c) prints
+`0 failed` whether the producer matched 12 files or 11, and the summary line is invariant across
+the transition it is supposed to witness. Membership is the certified artifact.
 
 **The swap is atomic by construction**, which is why it can be trusted to one commit:
 `die2 "NOT_TRANSCRIBED waives a path that does not exist"` fires on a waiver left behind by the
@@ -103,7 +126,7 @@ reaches the merits of a determination — see the carve-outs.
 | V2 | The 2026-05-15 row | **ATTESTED**, with a residual recorded. Its Art. 33 / Art. 34 conclusions are sound and its evidentiary cell accurately summarises its canonical record. The cell's `#3861` ground is spent (§Findings, N3) — a pointer-pinning gap, not a missing-artifact gap, and it moves neither determination. Tracked at **#7847** |
 | V3 | The 2026-05-16 row | **ATTESTED as corrected.** Its evidentiary cell answered its own column three times in two directions until today. C2 and C3 are applied in-cell; the cell now carries a single headline **No**. See §The one correction made without sign-off |
 | V4 | The 2026-06-29 row | **ATTESTED.** Accurate against its source and both addenda, including the two hard parts: that `edge_logs` is uninstrumented so its zero was never evidence, and that `postgrest_logs` was never queried and the window is recorded as *not established to be recoverable* rather than as unrecoverable. Claiming the stronger negative would have been an inference drawn from the instrument the same addendum proves untrustworthy |
-| V5 | The 2026-08-06 row | **ATTESTED, on the narrow scope at §The 2026-08-06 verdict.** Its Art. 33 / Art. 34 cells correctly carry the preserved counter-argument rather than flattening it to "No", and its evidentiary cell correctly names the RNE *pouvoirs* limb. The source file is **not** touched and its `status:` and `BLOCKED` disposition do not move |
+| V5 | The 2026-08-06 row | **ATTESTED, on the narrow scope at §The 2026-08-06 verdict, with one clause expressly excepted.** Its Art. 33 / Art. 34 cells correctly carry the preserved counter-argument rather than flattening it to "No", and its evidentiary cell correctly names the RNE *pouvoirs* limb. The source file is **not** touched and its `status:` and `BLOCKED` disposition do not move. **EXCEPTED — the contrastive clause** in the §Register maintenance withdrawal bullet, *"unlike the 2026-06-29 and 2026-08-17 sources, which carry both"*. Measured: `2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md` has **no frontmatter at all** — its first line is the H1 — and therefore zero `signed_off_at` / `signed_off_by`; only the 2026-08-17 source carries them. The bullet's operative finding (zero sign-off tokens in the 2026-08-06 source, six patterns, independently re-measured) is sound; its *contrast* is half wrong and is not attested |
 | V6 | The 2026-08-17 row | **ATTESTED.** Its Art. 34 cell reads *Not stated in source* because no Art. 34 text exists there. That is right and must not be tidied to "No", which would mint a finding nobody made |
 | V7 | §Excluded records — the eight waivers | **ATTESTED.** All eight are now *assessed and outside* the inclusion predicate on held grounds. No row is undetermined. The 2026-05-17 waiver is re-grounded on the stronger reason (evidence inside an already-indexed determination) in both copies |
 | V8 | `scripts/lint-legal-registers.sh` — the gate | **ATTESTED as to the waiver set it declares.** The array carries exactly eight entries, none of them the 2026-05-15 file, each with a reason and a citing issue. Its logic was approved on 2026-09-03 and is not re-opened here; what I attest is that its declared set matches the register's, which assertion (d) confirms at 8/8 |
@@ -120,10 +143,15 @@ verified.
 **B1 — CLEARED.** `audits/sentry-migration-audit-2026-05-15.md` is the canonical source of the
 2026-05-15 row in §Index of determinations. It appears in **neither** waiver copy: the guard's
 `NOT_TRANSCRIBED` array holds exactly eight entries and none is that path, and the register's
-§Excluded records File column likewise. Both remaining mentions of the path — one in the guard's
-header comment explaining why the producer pattern was widened, one in the §Excluded records
-preamble describing the ruling — are **prose, not waivers**, and neither is anchored in a File
-column or in the array. Check (c) confirms the indexed and waived sets are disjoint, which is the
+§Excluded records File column likewise. **That state was reached by PR #7782 (commit
+`5d8a12736`), not by this one** — `origin/main` already carries five index rows and an eight-entry
+array with no 05-15 path. What #7791 does is *verify and attest* that state and clear the finding
+that turned on it; nothing here should be read as a claim that #7791 performed the removal. Seven
+other mentions of the path survive across the two files — six in the register, one in the guard's
+header comment explaining why the producer pattern was widened — all of them **prose, not
+waivers**, none anchored in a File column or in the array. An earlier revision of this paragraph
+said "both remaining mentions", which was a miscount; the load-bearing claim is unchanged and
+re-measured. Check (c) confirms the indexed and waived sets are disjoint, which is the
 assertion that would fire if the file were somehow both.
 
 **The drafting call the review left to the author.** The 2026-09-03 audit expressly declined to
@@ -140,10 +168,19 @@ Art. 33(5) exists to prevent, reintroduced one level down.
 quotes the superseded *"PENDING (sign Vendor DPA — operator action)"* rather than silently
 replacing it, and cites #7529 (OPEN, `compliance/critical`). Measured: zero live occurrences of the
 `PENDING` status on that row. The Art. 30 Vendor Mapping row carries the identical phrase, likewise
-under a dated correction quoting what it retracts. Verified independently that both
-`docs/legal/privacy-policy.md` and `docs/legal/data-protection-disclosure.md` cite
-`compliance-posture.md` as the canonical signing state — so the published pointer now lands the
-data subject on the same answer the controller holds internally, which was R1's whole point.
+under a dated correction quoting what it retracts. **R1 is cleared on the two INTERNAL registers, and on nothing else.** Verified independently that
+both `docs/legal/privacy-policy.md` and `docs/legal/data-protection-disclosure.md` cite
+`compliance-posture.md` as the canonical signing state — that pointer is correct and now resolves
+to NOT EXECUTED. An earlier revision of this paragraph went further and said the published pointers
+"now land on the same statement the controller holds internally". **That was an overclaim and it is
+withdrawn.** Three statements in the published copies still describe an executed instrument:
+`docs/legal/data-protection-disclosure.md` §2.3(m) records data flowing "under processor-DPA
+terms", a ground PA-8's own 2026-09-03 correction calls falsified; `docs/legal/privacy-policy.md`
+§5.14 has "SCCs incorporated" into an instrument recorded as non-existent; and both carry
+"Retention: Better Stack paid-tier default" against PA-8 §(f)'s `NOT RECORDED`. A data subject who
+follows the pointer and one who reads the surrounding prose still get two different answers to one
+Art. 28(3) question. Filed at **#7851** — and it is not #7786's, whose Out-of-scope section forbids
+caveating the Better Stack disclosure because its defect runs the other way.
 
 ## The one correction made without sign-off — RATIFIED in part, OVERRULED in part
 
@@ -225,7 +262,7 @@ in place, with a marker recording that the correction happened.**
 | # | Site | Treatment | What was wrong |
 |---|---|---|---|
 | 1 | §Excluded records preamble | corrected in place | Named a file no longer in the table and asserted a pendency discharged three screens below it |
-| 2 | The 2026-09-03 supersession on that preamble | marker stacked | It quotes the preamble as *"Four rows are…"*; the live text reads *"Six rows…"*. The preamble had been edited **in place** when rows 7 and 8 were added, so the marker's quotation identified nothing a reader could diff against — the append-only discipline failing on the one paragraph a correction was quoting. Recorded, not tidied |
+| 2 | The 2026-09-03 supersession on that preamble | marker stacked | It quotes the preamble as *"Four rows are…"*. No such text was in the file: the preamble had been edited **in place** to *"Six rows…"* when rows 7 and 8 were added, so the marker's quotation identified nothing a reader could diff against. (Correction 1 has since replaced that preamble again — it now opens *"All **eight** rows below"*, and the only surviving occurrence of *"Six rows"* is inside the 2026-09-04 marker quoting it. Both quoted strings are therefore historical, which is what an append-only record is for) — the append-only discipline failing on the one paragraph a correction was quoting. Recorded, not tidied |
 | 3 | The 2026-05-17 waiver ground, **both copies** | corrected in place | *"Confirm alongside the row above at #7791"* — "the row above" had become a different file in **both** the register table and the guard array, since assertion (d) compares paths and never reasons. Re-grounded on the held reason: evidence inside an already-indexed determination |
 | 4 | The live incompleteness admission | marker stacked adjacent | *"this register is incomplete against its own stated predicate"* was untrue from the moment the remediation landed in the same commit as the annotation. Placed adjacent so no reader reaches the admission without the discharge |
 | 5 | The 2026-05-15 `#3861` residual | marker in §Register maintenance | Ground spent (§Findings, N3). Cell deliberately left as written — it is an accurate summary of its canonical record, and editing it in-cell would make the register say something its source does not |
@@ -233,7 +270,8 @@ in place, with a marker recording that the correction happened.**
 
 ## Findings recorded here
 
-Five were found by reading the corpus rather than put to me. Two remain open and are tracked.
+Six. Five were found by reading the corpus rather than put to me; N6 was reported at pass 1 and
+reached no instrument until now. Three remain open and are tracked (#7847, #7848, #7851).
 
 **N1 — the unmoored supersession quotation.** Remedied at correction 2 above.
 
@@ -258,22 +296,56 @@ Art. 34 determinations are untouched on either reading.
 **N4 — the implementation record's own supersession is stale**, stating *"5 indexed / 6 waived"*
 against a measured 5/8. Moot on deletion, and noted so that no one cites that file for the set.
 
-**N5 — an indexed canonical source cites a renamed evidence file that no longer exists. OPEN,
-tracked at #7848.** The phantom-ingest post-mortem cites **two** paths for the same evidence file at
-the sentence grounding the 10-account figure: `…2026-05-17-sentry-ingest-window-auth-users-audit.md`
-(present) and `…2026-05-17-sentry-phantom-ingest-window-auth-users-audit.md` (**missing** — the
-pre-rename path, renamed under #3861 and never swept). **Assertion (b) cannot see it**: it resolves
-the pointers *in* the register, not pointers *inside* the sources the register indexes. That scope
-is correct for what (b) is for; this is simply outside it.
+**N5 — the evidence pointer at the load-bearing sentence of an indexed canonical source resolves
+to nothing. OPEN, tracked at #7848.** The phantom-ingest post-mortem's §Authenticated app user
+sentence — the sentence that grounds the **10-account figure**, on which the 2026-05-16 row's
+Art. 33 and Art. 34 determinations and counsel-review correction C3 all rest — cites exactly **one**
+evidence path: `…2026-05-17-sentry-phantom-ingest-window-auth-users-audit.md`. That file **does not
+exist**; it is the pre-rename path, renamed under #3861 and never swept. The live path
+`…2026-05-17-sentry-ingest-window-auth-users-audit.md` appears **158 lines away**, in a different
+section (§5(2) accountability evidence).
 
-**Ruling on N5's envelope.** The finding is recorded here; the **remedy is outside this
-attestation's envelope**. That file is an engineering post-mortem under a different custodian, and
-this attestation reaches the register's representation of determinations, not the internal
-citations of the engineering records it indexes. Annotating it would also be the wrong instrument —
-it is a canonical record, so under the governing rule it takes a marker, and that marker belongs to
-whoever owns the record. **What is not open** is whether the evidence exists: it does, and it is
-reachable at the correct path, which is also cited in the same sentence. One of two citations to it
-rotted. The Art. 33 and Art. 34 conclusions on the 2026-05-16 row are unaffected.
+**An earlier revision of this finding said the correct path "is also cited in the same sentence".
+That is false, and it was the sentence that downgraded the finding.** Measured: the two citations
+are in different sections and only the dead one carries the figure. The mitigation is withdrawn and
+the severity is raised accordingly — this is not a redundant citation with one bad copy, it is the
+sole pointer at the one sentence a supervisory authority would follow.
+
+**Assertion (b) cannot see it**: it resolves the pointers *in* the register, not pointers *inside*
+the sources the register indexes. That scope is correct for what (b) is for; this is simply outside
+it, and #7848 asks whether one-hop resolution is worth adding.
+
+**Ruling on N5's envelope — the ruling survives the withdrawn mitigation, because it never rested
+on it.** The remedy is outside this attestation's envelope on the custodianship ground alone: that
+file is an engineering post-mortem under a different custodian, this attestation reaches the
+register's representation of determinations rather than the internal citations of the engineering
+records it indexes, and under the governing rule a canonical record takes a marker that belongs to
+whoever owns it. What changes is severity, not envelope: **#7848 is raised and must carry a
+priority label.**
+
+**And the disposition is unaffected, for a reason worth stating rather than assuming.** Art. 33(5)
+is discharged by the per-incident documentation, which exists; the evidence file is in the
+repository and is reachable, and the same document cites it correctly elsewhere. What is degraded
+is **producibility at the point of use** — a real defect in an accountability instrument, and worse
+than I first recorded it, but one a reader closes with a single grep. It does not unmake the
+determination and does not move DISCHARGED.
+
+**N6 — the register carries a fourth correction blockquote that no C-row accounts for.**
+§Counsel-review corrections holds **four** `> **Superseded 2026-09-03 (#7717):**` markers, while the
+2026-09-03 audit's correction table records three touching the register (C1, C2, C3 — C4 and C5
+land on the implementation record). The fourth, on the §Excluded records preamble, is unnumbered
+and appears in no C-row. Verified present at `origin/main`, so it is **pre-existing and not
+introduced by #7791**. I reported it at pass 1 and it reached no instrument, which is why it is
+recorded here.
+
+**Ruling: recorded, not remedied.** It is a bookkeeping gap, not a substantive one — the correction
+itself is sound, quotes what it supersedes, and is dated; what is missing is its identifier in a
+table one document away. Retro-numbering it would mean editing the 2026-09-03 audit's signed
+correction table to add a row for a correction that audit did not enumerate, which is a worse act
+than leaving an unnumbered marker: it would put text in a signed instrument that its signer did not
+write. The honest disposition is to say plainly that the register carries four corrections and the
+audit enumerates three, and that the discrepancy is in the enumeration rather than in the
+correction.
 
 ## One process finding, recorded because it nearly cost a statutory cell
 
@@ -300,9 +372,13 @@ already says the equivalent for lines, and this is the same failure in two dimen
 - **It does not promote `status: draft-requires-counsel-review`** on the register. External counsel
   promotes it, not an internal audit. That field was out of bounds throughout and is unchanged.
 - **It does not re-open the gate's logic**, approved on 2026-09-03 and not re-litigated here.
-- **It does not extend the register's completeness claim.** The three limits at §What this review
-  could not resolve in the 2026-09-03 audit stand, and #7848 adds a fourth: internal citations
-  inside indexed canonical sources are not verified by any gate.
+- **It does not extend the register's completeness claim.** Limits **2 and 3** at §What this
+  review could not resolve in the 2026-09-03 audit stand undisturbed. **Limit 1 — whether the 05-15
+  audit warrants its own row — is RESOLVED** by §B1 and R1 above; saying all three were undisturbed
+  while resolving one of them was an error and is corrected here. Two further limits are added:
+  internal citations inside indexed canonical sources are verified by no gate (#7848), and the
+  published `docs/legal/**` copies still carry three statements the internal registers contradict
+  (#7851).
 - **It does not attest any determination's merits.** Every determination was made and signed at the
   time of its event, in its canonical record. Art. 33(5) was discharged by those records before this
   register existed, and this index is an Art. 5(2) accountability improvement over them — not a
@@ -312,11 +388,20 @@ already says the equivalent for lines, and this is the same failure in two dimen
 
 **DISCHARGED.** AC14 is met. #7791 closes.
 
-B1 cleared, R1 cleared, both re-verified against the corrected tree. The 2026-09-03 counsel review
-is re-issued **SIGNED-OFF** on its own three conditions. Corrections C2 and C3 are applied to the
-cell they correct. Six stale sites are remedied and two open findings are tracked at **#7847** and
-**#7848**. The unratified correction is ratified as to direction and overruled as to the cell it
-produced.
+B1 cleared. R1 cleared **on the two internal registers only** — the published `docs/legal/**`
+copies still carry three contradicting statements, filed at **#7851**. Both re-verified against the
+corrected tree. The 2026-09-03 counsel review is re-issued **SIGNED-OFF** on its own three
+conditions, with an adjacent marker reconciling the two body sentences that still read BLOCKED.
+Corrections C2 and C3 are applied to the cell they correct. Six stale sites are remedied; six
+findings are recorded and three are tracked at **#7847**, **#7848** and **#7851**. The unratified
+correction is ratified as to direction and overruled as to the cell it produced.
+
+**Six defects in this attestation's own first revision were found by review and are corrected in
+place above, each disclosed rather than silently rewritten** — a certification condition that could
+not fail on the event it certified, a false mitigation on N5, an overclaim on R1's reach, a
+mis-attributed deferral target, a change-claim about a removal PR #7782 performed, and a
+present-tense claim my own correction had falsified. An attestation that quietly repaired itself
+would be the same defect class as the register it attests.
 
 The register's completeness claim now has no known counter-example inside the gate's producer
 scope, and its `status:` remains `draft-requires-counsel-review` pending external counsel.
@@ -360,7 +445,7 @@ shape — nothing in this section is a judgement that the artifact is legally ad
 | Vendor Mapping DPA status → `NOT EXECUTED` | "signed" removed; cites #7529; carries 2026-11-13 | AC9 literal command |
 | `compliance-posture.md` `__TBD_DPA_DATE__` | Resolved; 0 standalone markers across all four register files | AC8 |
 | `compliance-posture.md` AC15 narrowing | Stale "has never been filed" gone; substantive execute-or-record limb retained | AC10 |
-| Second 2026-06-29 addendum | Present in all three siblings, each naming `auth_logs` and `postgrest_logs`; no fence transcribed | AC5, AC7 |
+| Second 2026-06-29 addendum | Present in all three siblings, each naming `auth_logs` and `postgrest_logs` and stating the verdict unaffected; no fence transcribed | AC5, AC7 |
 | PA-8 §(g) — Art. 33 evidentiary-chain limitation | Present, citing the log contract and ADR-197 | AC11 |
 | PA-8 §(g) — durable-sink item | Present, named OPEN, citing #5697 | AC11 |
 | Non-scope: no retention TOM for the Supabase log surface | Stated in both PA-8 and the register | AC12 |

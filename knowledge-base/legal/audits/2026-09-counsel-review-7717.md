@@ -37,6 +37,18 @@ re-review is reserved for the `re_evaluation_triggers` above. It is not legal ad
 
 **Overall disposition: BLOCKED.**
 
+> **RE-ISSUED SIGNED-OFF 2026-09-04 (#7791) — read this line and the paragraph below it as of
+> 2026-09-03.** The frontmatter of this audit now reads `SIGNED-OFF`; the sentence immediately
+> above, and the §"Two things this audit does not do" paragraph below reading *"it does not sign
+> off anything: `status:` above is `BLOCKED`, and `signed_off_at` / `signed_off_by` are null on
+> purpose"*, both describe the disposition **as issued on 2026-09-03** and are left standing as
+> that record. They are not live status. B1 and R1 are cleared, this audit's three self-declared
+> re-issue conditions are met, and the discharge is at §Discharge on re-issue. This marker exists
+> because a frontmatter-only re-issue left the body asserting the opposite of the frontmatter —
+> one document with two answers to "was this signed?" — which is the half-applied-replacement
+> defect class (#7349) that this audit's own correction C2 names. Recorded rather than repaired
+> in place: the body is signed text.
+
 The instrument is right, the reasoning is unusually careful, and the gate is the best-argued lint
 in this corpus. It is blocked on one thing: **the inclusion predicate is applied inconsistently,
 and a genuine controller-voice notifiability determination sits outside the index on a ground that
@@ -287,18 +299,28 @@ verified in this worktree on 2026-09-04 rather than accepted from the record tha
 §Index of determinations, on the drafting call this review expressly declined to make for the
 author: **its own row**, not subsumption. The two matters share the `jikigai-us` shadow org as root
 cause but differ in surface — runtime event ingest versus §5(2) accountability-evidence generation
-— and carry different awareness anchors. Its `NOT_TRANSCRIBED` waiver is removed from **both**
-copies of the waiver set, which is what B1's remediation paragraph required; assertion (d) reports
-8 waivers agreeing between the shell array and §Excluded records.
+— and carry different awareness anchors. Its `NOT_TRANSCRIBED` waiver is absent from **both** copies of
+the waiver set, which is what B1's remediation paragraph required; assertion (d) reports 8 waivers
+agreeing between the shell array and §Excluded records. **That state was reached by PR #7782
+(commit `5d8a12736`), not by #7791** — `origin/main` already carries five index rows and an
+eight-entry array with no 05-15 path. An earlier revision of this paragraph said the waiver "is
+removed … in the same commit", which reads as a change-claim about #7791; it is a **state** claim,
+and #7791's act is to verify and attest that state and clear the finding that turned on it.
 
 **R1 — CLEARED.** `knowledge-base/legal/compliance-posture.md`'s Vendor DPA Status row for Better
 Stack s.r.o. reads **NOT EXECUTED — no Art. 28(3) instrument recorded**, under a dated 2026-09-03
 correction that quotes the superseded `PENDING (sign Vendor DPA — operator action)` rather than
 silently replacing it, and cites #7529 (OPEN, `compliance/critical`). The Art. 30 Vendor Mapping
-row carries the identical phrase. The two registers no longer hand a data subject two answers to
-one Art. 28(3) question, and the published pointers at `docs/legal/privacy-policy.md` and
-`docs/legal/data-protection-disclosure.md` now land on the same statement the controller holds
-internally.
+row carries the identical phrase. The two **internal** registers no longer hand a data subject
+two answers to one Art. 28(3) question, and the published pointers at
+`docs/legal/privacy-policy.md` and `docs/legal/data-protection-disclosure.md` correctly cite
+`compliance-posture.md` as the canonical signing state. **R1 is cleared on the internal registers
+and on nothing further.** An earlier revision of this paragraph said the published pointers "now
+land on the same statement the controller holds internally"; that is an overclaim and is withdrawn.
+Three statements in the published copies still describe an executed instrument — §2.3(m)'s "under
+processor-DPA terms", §5.14's "SCCs incorporated", and both copies' "Retention: Better Stack
+paid-tier default" against PA-8 §(f)'s `NOT RECORDED`. Filed at **#7851**, separately from #7786,
+whose Out-of-scope section forbids caveating this disclosure because its defect runs the other way.
 
 **The guard — GREEN.** `bash scripts/lint-legal-registers.sh` → exit 0, `7 assertion(s), 0 failed
 (registers=4 rows=5 produced=12 waived=8 waiver-parity=ok)`.
@@ -307,8 +329,10 @@ internally.
 appended during this review: A1 and A2 stand as issued on 2026-09-03, and a verdict is a record of
 a judgement at a date, not a live status field. Read them with this section. Nor does it promote
 the register's `status: draft-requires-counsel-review` — that is external counsel's to promote, and
-§What this review could not resolve item 2 says so in terms. The three limits recorded there are
-undisturbed.
+§What this review could not resolve item 2 says so in terms. Limits **2 and 3** recorded there are
+undisturbed; **limit 1 — whether the 05-15 audit warrants its own row — is RESOLVED** above (own
+row, on the differing-surface ground). An earlier revision of this paragraph said all three were
+undisturbed while the paragraph above it resolved one of them.
 
 **A4's subject was deleted.**
 `knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md` is removed

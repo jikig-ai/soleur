@@ -122,6 +122,12 @@ the arithmetic each first carried.
 > is **left verbatim**: `architecture-strategist` did measure `produced=11` unreachable and did
 > correct it to `produced=10` on 2026-09-04, against the tree as it then stood. That finding stands;
 > only the absolute numbers moved. Rewriting it would falsify what was measured.
+>
+> **Reading the two side by side.** The historical entries say `produced=11` was unreachable and was
+> corrected to `produced=10`; the operative sections say the probe state is `produced=13` and the
+> final state `produced=12`. Both are right, one baseline apart: `11`/`10` were measured against the
+> pre-#7803 tree, `13`/`12` against this one. The *finding* — that the probe state is unreachable in
+> any passing state, so it must never be certified — is baseline-independent and stands.
 
 - `bash scripts/lint-legal-registers.sh` → **exit 0**, `7 assertion(s), 0 failed
   (registers=4 rows=5 produced=12 waived=8 waiver-parity=ok)`.
@@ -613,7 +619,14 @@ not per-PR: Phase 6's ship-time waiver is a second such change and obeys it inde
    irreversible-looking window is one this ordering never opens.
 
    Protocol: apply 1.4 (remove any partial attestation, resume the same agent, never respawn,
-   never downgrade). If the agent is unreachable, stop **before** 3.1 — leave the corrections in
+   never downgrade). **Halt-arm correction (added at review).** Three of the corrections cite the attestation by path
+and date ("attested 2026-09-04 at …"). On the halt arm those citations assert a file that was never
+written, which is the defect class this issue exists to close. On a halt, the attestation-path
+citations must be stripped from the corrections before stopping, or deferred to the atomic commit
+that writes the file. The corrections' own substance stands on its own merits; the attribution does
+not.
+
+If the agent is unreachable, stop **before** 3.1 — leave the corrections in
    place (they stand on their own merits and are individually correct), leave the record and its
    waiver untouched, assert `bash scripts/lint-legal-registers.sh` exits 0, and take the 1.5
    terminal state: PR in draft, #7791 open and commented with the request IDs.
