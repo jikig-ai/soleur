@@ -3,7 +3,7 @@ title: "ADR-198 — baking the Better Stack ingest token into git-data user_data
 status: accepted
 date: 2026-09-03
 tags: [git-data, observability, secrets, user-data, betterstack, luks]
-related_adrs: [ADR-096, ADR-147, ADR-149, ADR-152, ADR-163]
+related_adrs: [ADR-096, ADR-115, ADR-147, ADR-149, ADR-152, ADR-163]
 related_runbooks:
   - knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
   - knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
@@ -157,6 +157,14 @@ conflated them.
 
 ### Cross-host blast radius
 
+> **SUPERSEDED 2026-09-04 (#7772) — this section's premise is spent, and its conclusion with it.**
+> The sentence below was accurate when measured and is kept because the remediation cost it prices
+> is exactly what motivated the split. It is no longer the estate: **two** Logs sources now exist
+> on team `520508`, git-data ships to its own (`soleur-git-data-prd`, id 2734275), and it has its
+> own root variable `var.git_data_betterstack_logs_token`. The four non-git-data consumers stay on
+> 2457081. See "Leg (3)" in the #7772 addendum below for what the split does and does not buy, and
+> `knowledge-base/legal/audits/2026-09-04-betterstack-source-split-7772.md` for the Art. 30 record.
+
 Measured 2026-09-03 against the Better Stack API: **one** Logs source exists
 (`soleur-inngest-vector-prd`, id 2457081). `var.betterstack_logs_token` fans out to the Inngest
 host's bake and its Doppler project, the zot registry's Doppler secret, git-data's Doppler secret,
@@ -242,7 +250,11 @@ deciding axis; **mode is**. See the table above.
   measured behaviour. What DOES rest on a single line is `lifecycle { ignore_changes = [value] }`
   on `doppler_secret.git_data_betterstack_logs_token`: baked copy and Doppler copy come from the
   same variable, so without it the next apply reverts a rotated token on both paths at once.
-  `git-data-rung2-rehearsal.test.sh` now pins it.
+  `git-data-rung2-rehearsal.test.sh` now pins it. **(#7772) The corollary was missing and is what
+  made the first draft of the §2 addendum contradict this bullet:** because Terraform is barred
+  from writing that value, the fresh token has to reach `prd_git_data` OUT OF BAND, or "the
+  Doppler copy still wins at runtime" describes a copy nobody updated. The corrected three-write
+  procedure is at §2 below; neither half of this is `terraform apply`.
 - `sentry_dsn` and this token both belong in the `## Encryption Posture` on-host store — a third
   store alongside `user_data` and `terraform.tfstate`, with its own mode and its own
   `does_not_defend`.
@@ -297,15 +309,50 @@ no Playwright, no dashboard and no operator step.
 
 That does not make it Terraform-managed. It is the same out-of-band provision source 2457081 took
 on 2026-05-21, and it is recorded as an IaC gap on the same terms rather than claimed as IaC.
-**Rotation procedure until a provider exists:** `POST /api/v2/sources` (or the dashboard) to mint,
-then write the new token to Doppler `soleur/prd_terraform` as `GIT_DATA_BETTERSTACK_LOGS_TOKEN`,
-then apply — `user_data` is ForceNew, so a rotation costs a host replace. Two hygiene rules the
+**Rotation procedure until a provider exists — CORRECTED, because the first draft of this
+addendum ended "then apply" and that instruction was wrong twice over.** It contradicted this
+ADR's own Consequences bullet ("it does not require a replace") three screens up, and it would
+not have rotated the credential it claimed to rotate: `doppler_secret.git_data_betterstack_logs_token`
+carries `lifecycle { ignore_changes = [value] }`, so an apply leaves the `prd_git_data` copy at
+the OLD value while re-rendering `user_data` with the new one — and `env` beats `baked`, so every
+post-Doppler stage would go on presenting the revoked token and 401. An apply is also the one
+action that turns a zero-downtime rotation into a destructive replace of the host holding every
+connected user's source.
+
+The three writes are independent and none of them is `terraform apply`:
+
+1. **Mint** — `POST /api/v2/sources` (or the dashboard) for a fresh token on source `2734275`.
+2. **Doppler `soleur/prd_git_data` → `BETTERSTACK_LOGS_TOKEN`**, written OUT OF BAND. This is
+   what `ignore_changes = [value]` exists to permit: the Doppler copy's source of truth is the
+   vendor, not this repo, and Terraform is deliberately not allowed to push a value back over it.
+   The running host picks this up at its next boot, because `doppler run` reads once at start.
+3. **Doppler `soleur/prd_terraform` → `GIT_DATA_BETTERSTACK_LOGS_TOKEN`**, so the NEXT render
+   bakes the fresh value. Do **not** apply for this alone. It lands with the next host replace,
+   whenever one happens for its own reasons.
+
+Between (2) and (3) the pre-Doppler stages (`bootcmd_start`..`doppler_run`) ship on the stale
+baked token and their Better Stack copy is refused. That is the degradation the Consequences
+bullet describes, it is bounded to those stages, and it is mirrored to Sentry at
+`stage:betterstack_ingest` rather than swallowed — which is the failure mode #7772 item C routes
+to a rule for the first time. Two hygiene rules the
 mint itself must keep, both learned the hard way here: the API token goes on **stdin**
 (`curl -K -`), never argv, because `/proc/<pid>/cmdline` is world-readable; and every read pipes
 through `jq` selecting named fields, because `GET /sources` returns **every source's ingest
 token**, including the shared credential four production consumers depend on.
 
 ### 3. Leg (2) — the metadata-endpoint escape — is closed for non-root
+
+**A correction this PR deliberately did NOT ship, because a comment costs a host.**
+`cloud-init-inngest.yml` asserts that "`nft -f` table declarations replace our table atomically →
+idempotent". Measured on `ubuntu:24.04` / nftables v1.0.9: applying a bare `table` declaration
+twice leaves **two** copies of every rule — `nft -f` MERGES. The git-data ruleset therefore uses
+the bare-declare / `delete table` / declare idiom and records the measurement inline. The inngest
+comment stays wrong on purpose: `hcloud_server.inngest` carries no `ignore_changes = [user_data]`
+and that template has no render-time rationale strip, so editing one comment forces a destructive
+replace of the live Inngest host. Tracked on **#7827**, to land opportunistically in whatever PR
+next replaces that host. It is not a live defect there — the unit is a boot-time `oneshot` and a
+reboot clears nftables, so the merge has nothing to merge into — but a reader trusting the comment
+would be free to re-run the script within a boot, and then it would be.
 
 §"Why 0600, and exactly what that buys" concedes that `0600` defends a file-read primitive and not
 code execution, because `hcloud_firewall.git_data` declares zero rules and any code execution as

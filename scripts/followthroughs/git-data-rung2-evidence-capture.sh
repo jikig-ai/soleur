@@ -584,11 +584,59 @@ fi
 # bare `grep -q 'host'` and reported the source LIVE. The rows are FORMAT JSONEachRow with the
 # column aliased `host`, so the field shape is available and strictly tighter — and this is
 # the one predicate the whole live-vs-silent distinction rests on.
+#
+# (#7772) THE FOREIGN-HOST ANCHOR DIED WITH THE SOURCE SPLIT, AND THE FALLBACK IS AN INGEST PROBE.
+#
+# This predicate asks "is the source answering AT ALL?" by requiring a row from some host OTHER
+# than the rehearsal host. That worked only because source 2457081 was SHARED and its other
+# tenants were chatty (measured 2026-09-03: soleur-web-platform ~1.99M rows, soleur-inngest-prd
+# ~150k). git-data now ships to its OWN source 2734275, whose only possible writers are the prod
+# host (never born) and rehearsal hosts -- which this predicate excludes BY DESIGN, and whose
+# HOST_NAME embeds a per-run id so no two rehearsals share one.
+#
+# So on a single-tenant source the anchor is UNSATISFIABLE: a PERFECT first rehearsal creates the
+# table, writes its rows, is excluded by the `!=` clause, reports ZERO foreign rows, and lands on
+# TRANSIENT -- no evidence file, no verdict, and RUNG2_BOOT_REHEARSAL=PASS structurally
+# unreachable. Each attempt costs a real Hetzner host and an environment approval. The failure is
+# indistinguishable from a dark boot, which is the one distinction this whole arm exists to make.
+#
+# The question is unchanged; the instrument has to change. `betterstack-ingest-probe.sh` answers
+# "is this source live?" directly at the WRITE endpoint, without writing a row (an empty batch),
+# and discriminates 0 accepting / 4 refused (auth or quota) / 2 unreachable. That is strictly
+# better than the foreign-host SELECT even on a shared source: it measures THIS source's
+# liveness rather than inferring it from a neighbour's traffic.
+#
+# The foreign-host read is kept as a SUFFICIENT condition, not a necessary one -- if another host
+# has written recently the source is obviously live, and that costs nothing to accept.
 if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
-  transient "TRANSIENT: the source-liveness anchor returned ZERO rows from ANY other host in the last ${WINDOW}." \
-            "That is a statement about the INSTRUMENT, not about ${HOST_NAME}: a live source with a" \
-            "silent host and a dead source look identical from this host's rows alone, so this run" \
-            "declines to read silence as a dark boot."
+  _probe="${BETTERSTACK_INGEST_PROBE:-${REPO_ROOT}/scripts/betterstack-ingest-probe.sh}"
+  if [[ ! -r "$_probe" ]]; then
+    transient "TRANSIENT: no foreign-host rows, and the ingest probe is unreadable at ${_probe}," \
+              "so this run cannot tell a live-but-silent source from a dead one. Not a verdict" \
+              "about ${HOST_NAME}."
+  fi
+  _probe_rc=0
+  BETTERSTACK_INGEST_URL="${GIT_DATA_BETTERSTACK_INGEST_URL:-https://s2734275.eu-central-1a.betterstackdata.com/}" \
+  BETTERSTACK_LOGS_TOKEN="${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-${BETTERSTACK_LOGS_TOKEN:-}}" \
+    bash "$_probe" >/dev/null 2>&1 || _probe_rc=$?
+  case "$_probe_rc" in
+    0)
+      # Source live, this host silent. That IS a statement about the host, so fall through to the
+      # host read below and let it produce the verdict.
+      printf 'anchor: no foreign-host rows; ingest probe says the source is ACCEPTING (single-tenant source, expected)\n' >&2
+      ;;
+    4)
+      transient "TRANSIENT: no foreign-host rows, and the ingest probe reports the source REFUSING" \
+                "writes (auth or quota). A refused sink cannot have recorded this boot, so silence" \
+                "here is a statement about the INSTRUMENT, not about ${HOST_NAME}."
+      ;;
+    *)
+      transient "TRANSIENT: no foreign-host rows, and the ingest probe could not reach the source" \
+                "(rc=${_probe_rc}). A live source with a silent host and an unreachable source look" \
+                "identical from this host's rows alone, so this run declines to read silence as a" \
+                "dark boot."
+      ;;
+  esac
 fi
 
 # ── ARTIFACT 2: everything this host reported ─────────────────────────────────────

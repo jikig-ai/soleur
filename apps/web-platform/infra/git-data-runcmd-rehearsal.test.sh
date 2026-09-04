@@ -529,14 +529,20 @@ INLINE_ALLOWLIST = {
     "/usr/local/bin/git-data-nftables.sh",
     "/etc/systemd/system/git-data-nftables.service",
 }
-# An absolute floor, NOT a self-derived one. The first rewrite of this check derived the
-# expected roster from cloud-init-git-data.yml — the same artifact that produces the
-# delivered set — so deleting a payload shrank BOTH sides and the equality held. Measured:
-# deleting the git-data-gc.timer block reported "OK: 8 payloads". That was a net REGRESSION
-# against the `checked >= 9` floor it replaced, in the arm whose comment claimed to have
-# fixed a measured fail-open. The roster authority is modules/git-data-userdata/main.tf (it
-# moved there in #7025/R7 so both roots render from one map); the floor is absolute.
-MIN_PAYLOADS = 9
+# A CAP, NOT A FLOOR (#7772 review) — this set is the one place in B1 where growth is a
+# WEAKENING. Every member is a payload whose bytes nothing compares, so each addition trades
+# byte-identity for convenience; the set went 5 -> 7 in this PR with nothing watching. The cap
+# makes the next addition a review event, which is the only gate that was ever wanted here.
+# It is deliberately equal to the current size: this is not headroom to spend.
+MAX_INLINE = 7
+if len(INLINE_ALLOWLIST) > MAX_INLINE:
+    print("B1 FAIL: INLINE_ALLOWLIST holds %d entries (cap %d). Each entry is a delivered "
+          "payload whose bytes NOTHING compares — growing this set is a weakening, not a "
+          "bookkeeping update." % (len(INLINE_ALLOWLIST), MAX_INLINE))
+    print("  If the new payload carries no template interpolation, bind it with file() in "
+          "modules/git-data-userdata/main.tf and add it to EXPECTED_PATHS instead; it then "
+          "gets the byte-identity check and raises MIN_PAYLOADS automatically.")
+    sys.exit(1)
 
 # THE DESTINATION CONTRACT, OWNED BY THIS TEST. Deriving the expected path from the template
 # too would re-create the tautology one level down: relocating a payload moves BOTH sides and
@@ -558,6 +564,26 @@ EXPECTED_PATHS = {
     "git_data_gc_timer":                "/etc/systemd/system/git-data-gc.timer",
     "git_data_pre_receive_placeholder": "/tmp/git-data-pre-receive-placeholder.sh",
 }
+
+# An absolute floor, NOT a self-derived one. The first rewrite of this check derived the
+# expected roster from cloud-init-git-data.yml — the same artifact that produces the
+# delivered set — so deleting a payload shrank BOTH sides and the equality held. Measured:
+# deleting the git-data-gc.timer block reported "OK: 8 payloads". That was a net REGRESSION
+# against the `checked >= 9` floor it replaced, in the arm whose comment claimed to have
+# fixed a measured fail-open. The roster authority is modules/git-data-userdata/main.tf (it
+# moved there in #7025/R7 so both roots render from one map).
+#
+# (#7772) THE FLOOR IS A RATCHET, NOT A CONSTANT — it was a bare `9` and that decayed in one
+# direction the comment above did not consider. Adding a TENTH payload correctly (binding +
+# EXPECTED_PATHS entry) left the floor one BELOW the real roster, so the next deletion was
+# free: bindings 10 -> 9 still cleared `< 9`. Taking `len(EXPECTED_PATHS)` alone would have
+# been worse in the other direction — that roster is hand-maintained here, so a two-site
+# deletion (binding AND entry) shrinks the floor with it and the check goes vacuous, which is
+# exactly the self-derivation trap the paragraph above records. `max()` of the two is the only
+# form with neither failure: the literal is a permanent lower bound that a shrinking roster
+# cannot lower, and the derived term raises it automatically the moment the roster grows.
+# The literal stays 9 because 9 is what SHIPPED and what the sibling gates pin.
+MIN_PAYLOADS = max(9, len(EXPECTED_PATHS))
 
 # (#7025, R7) The templatefile map and the strip expression moved out of git-data.tf and into
 # modules/git-data-userdata/main.tf, which BOTH the production root and the rung-2 rehearsal
@@ -646,6 +672,7 @@ expected = {EXPECTED_PATHS[v]: bindings[v] for v in bindings}   # full path -> s
 
 d = yaml.safe_load(open(rendered))
 seen_paths, delivered, unknown, bad = [], {}, [], []
+inline = {}          # allowlisted path -> {"content": str, "permissions": str|None}
 for wf in d["write_files"]:
     path = wf["path"]
     seen_paths.append(path)
@@ -653,6 +680,9 @@ for wf in d["write_files"]:
         delivered[path] = wf["content"].encode()
     elif path not in INLINE_ALLOWLIST:
         unknown.append(path)
+    else:
+        inline[path] = {"content": wf.get("content", ""),
+                        "permissions": wf.get("permissions")}
 
 dupes = sorted({p for p in seen_paths if seen_paths.count(p) > 1})
 if dupes:
@@ -673,6 +703,66 @@ missing = sorted(set(expected) - set(delivered))
 if missing:
     print("B1 FAIL: %d expected payload path(s) were never delivered: %s"
           % (len(missing), ", ".join(missing)))
+    sys.exit(1)
+
+# (#7772) THE ALLOWLIST IS A PERMISSION AND WAS NOT ALSO A REQUIREMENT — measured, and it is
+# the reason this block exists.
+#
+# The `unknown` check above runs the allowlist in ONE direction: "is this delivered path
+# accounted for?" `expected` is built only from file()-bound payloads, so an allowlisted path
+# was never in `set(expected)` and the `missing` check above could not see it either. Net
+# effect, PROVEN by deleting both write_files entries for the metadata-egress closure — the
+# entire #7772 item-2 security control, 52 lines — from cloud-init-git-data.yml: this suite
+# reported 76 passed / 0 failed, and so did git-data-emit (59/0), git-data-rung2-rehearsal
+# (75/0) and the warning-stage op contract (5/5). Four green suites over a host shipped
+# without the control.
+#
+# The gap was created by this PR's own trade: routing these two payloads through the allowlist
+# INSTEAD of the file() set (to avoid taking the hashed roster 9 -> 11 across four
+# independently-pinned counts) also routed them out of every presence and byte-identity check
+# the file() set gets. That trade is still the right one — see the INLINE_ALLOWLIST note — but
+# it owes this direction back.
+missing_inline = sorted(INLINE_ALLOWLIST - set(seen_paths))
+if missing_inline:
+    print("B1 FAIL: %d allowlisted inline payload(s) are on INLINE_ALLOWLIST but were never "
+          "delivered by cloud-init-git-data.yml: %s" % (len(missing_inline), ", ".join(missing_inline)))
+    print("  The allowlist says 'nothing compares these bytes, and that is accepted'. It must "
+          "not also say 'these may vanish'. If a payload is genuinely retired, remove its "
+          "allowlist entry in the same change.")
+    sys.exit(1)
+
+# CONTENT, NOT MERELY PRESENCE — an empty file at the right path clears every check above.
+# These are the SUBSTANTIVE assertions on item 2, and they are deliberately narrow: each names
+# the one token whose loss silently converts the control into decoration. `169.254.169.254` is
+# the address the whole item exists to drop; `skuid` is what keeps root's own cloud-init and
+# apt reachable (a drop without it breaks the boot it is meant to protect); `delete table` is
+# the idiom that makes `nft -f` replace rather than MERGE, measured on ubuntu:24.04 /
+# nftables v1.0.9 as the difference between one rule and one-per-boot.
+_NFT_SH = "/usr/local/bin/git-data-nftables.sh"
+_NFT_UNIT = "/etc/systemd/system/git-data-nftables.service"
+_nft_want = {
+    _NFT_SH: ["169.254.169.254", "skuid", "delete table", "hook output"],
+    _NFT_UNIT: ["ExecStart=" + _NFT_SH, "RemainAfterExit=yes"],
+}
+for _p, _toks in _nft_want.items():
+    _body = inline.get(_p, {}).get("content", "")
+    _absent = [t for t in _toks if t not in _body]
+    if _absent:
+        print("B1 FAIL: the metadata-egress payload %s is delivered but does not contain %s"
+              % (_p, ", ".join(repr(t) for t in _absent)))
+        print("  Presence at the right path is not the control; these tokens are. A payload "
+              "that lands without them ships a host whose non-root egress to the metadata "
+              "endpoint — and therefore to the whole of user_data — is open.")
+        sys.exit(1)
+# The script is armed by a systemd unit, so it must be EXECUTABLE. cloud-init's default is
+# 0644, which would make ExecStart fail with 203/EXEC and leave the ruleset unloaded — a
+# failure mode that reaches Sentry only via the arm's own warn emit, i.e. one level of
+# indirection away from the thing this asserts directly.
+_nft_mode = str(inline.get(_NFT_SH, {}).get("permissions") or "")
+if not _nft_mode.endswith("755"):
+    print("B1 FAIL: %s is delivered with permissions %r, not an 0755 mode — systemd would "
+          "fail its ExecStart with 203/EXEC and the ruleset would never load"
+          % (_NFT_SH, _nft_mode or None))
     sys.exit(1)
 
 if len(delivered) < MIN_PAYLOADS:
@@ -2118,6 +2208,10 @@ gitdata_nftables_metadata
 luks_err
 on_err
 sshd_config'
+# The number of reporting rows in EXCESS of the window count — i.e. how many windows carry
+# more than one reporting emit. 7 rows across 5 windows, measured with the arm's own analyzer.
+# This is the only hand-maintained half of the floor; see _r3b_sites_ok for why.
+_R3B_MULTI_EMIT_SURPLUS=2
 _r3b_sites_ok() {  # $1 = row count, $2 = newline-separated window names; 0 = accept
   # A FLOOR **AND** A SET (#7613 finding 3). The floor alone holds across the exact mutation
   # that matters — delete one reporting site, add an unrelated one — because the count does
@@ -2128,8 +2222,22 @@ _r3b_sites_ok() {  # $1 = row count, $2 = newline-separated window names; 0 = ac
   # that still has others; the floor is what bounds that direction, and it bounds it only by
   # cardinality. Pinning the per-window distribution would close it and would hard-code a
   # snapshot of today's render, which is the staleness AP-023 warns about one level up.
-  # 6 -> 7 (#7772): one reporting emit added with the gitdata_nftables_metadata window above.
-  [ "$1" -ge 7 ] || return 1
+  # (#7772 review) THE FLOOR IS DERIVED FROM THE ROSTER, because as two independent literals
+  # they went out of step in the direction that fails OPEN. Measured on the predicate itself:
+  #
+  #   roster 5, floor 7:  7 rows / 5 windows -> ACCEPT ;  6 rows / 5 windows -> REJECT  (right)
+  #   roster 6, floor 7:  8 rows / 6 windows -> ACCEPT ;  7 rows / 6 windows -> ACCEPT  (wrong)
+  #
+  # The second row is one reporting emit lost and accepted — verbatim the outcome the comment
+  # above this roster names as the thing to avoid, diagnosed and then left unasserted. Both
+  # operands DO move together by construction (a new window that reports contributes a row), so
+  # the relationship is expressible: floor = |windows| + the number of EXTRA reporting rows
+  # contributed by windows carrying more than one. That surplus is 2 today (7 rows, 5 windows)
+  # and is the one term that still needs a human when it changes — which is the right place for
+  # the review event, because a second reporting emit inside an existing window is a real
+  # change to what this arm attests, while a new window is not.
+  _r3b_floor=$(( $(printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u | wc -l) + _R3B_MULTI_EMIT_SURPLUS ))
+  [ "$1" -ge "$_r3b_floor" ] || return 1
   [ "$(printf '%s\n' "$2" | sort -u)" = "$(printf '%s\n' "$_R3B_EXPECTED_SITES" | sort -u)" ]
 }
 
@@ -2352,7 +2460,12 @@ printf 'git-data-emit stage level msg "$_luks_detail"   # guarded by [ -s "$_luk
 # test gpat in isolation and could never be flipped by the stripper change that actually
 # closes this. The control therefore runs the arm's own stripper over the fixture and then the
 # arm's own guard predicate over the result.
-_b_hits=$(R3_GUARD_PAT="$_R3_GUARD_PAT" R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
+# ONE PREDICATE DRIVER, TWO FIXTURES (#7772 review). Extracted into a function so the negative
+# fixture below and the POSITIVE one after it drive byte-identically the same code — a second
+# hand-copied heredoc would be free to drift, and a control that drifts from the arm certifies
+# nothing.
+_r3_guard_hits() {   # $1 = fixture path, $2 = stderr path; echoes the hit count or ERROR
+  R3_GUARD_PAT="$_R3_GUARD_PAT" R3_TAIL_STRIP="$_R3_TAIL_STRIP" python3 -c '
 import os, re, sys
 tail = os.environ["R3_TAIL_STRIP"]   # no default: a missing export is a defect, not "do not strip"
 tre = re.compile(tail) if tail else None
@@ -2365,7 +2478,9 @@ for l in open(sys.argv[1]).read().splitlines():
     out.append(l)
 pat = re.compile(os.environ["R3_GUARD_PAT"] + re.escape("$_luks_detail"))
 print(len(pat.findall("\n".join(out))))
-' "$_fxB" 2>"$_r3c_dir/B.err") || _b_hits=ERROR
+' "$1" 2>"$2" || echo ERROR
+}
+_b_hits=$(_r3_guard_hits "$_fxB" "$_r3c_dir/B.err")
 # FAIL CLOSED (#7613 review). This was `2>/dev/null || echo 0`, and 0 is the PASS value --
 # so a KeyError, a bad regex, or an absent python3 reported "no match" and the one control
 # written to prove a deleted guard plus prose reports GUARDED could not tell "no match"
@@ -2373,6 +2488,23 @@ print(len(pat.findall("\n".join(out))))
 if [ "${_b_hits:-ERROR}" = "0" ]; then pass; else
   fail "R3(3b)(ii) CONTROL: the arm's guard predicate returned '${_b_hits}' (expected 0) on a corpus whose ONLY occurrence of the guard shape is a trailing comment; ERROR means the predicate could not run: $(head -c 200 "$_r3c_dir/B.err" 2>/dev/null) — deleting a real guard and leaving prose about it reports GUARDED" \
        "That reopens the literal-leak branch the guard exists to close."; fi
+
+# ── FIXTURE B'' — THE POSITIVE DIRECTION, and it is the one that was missing (#7772 review).
+#    Fixture B asserts the predicate returns 0 on a prose-only corpus. 0 is the PASS value, so
+#    fixture B is structurally blind to a predicate that matches NOTHING: measured, widening
+#    _R3_GUARD_PAT to `.*` reds fixture B as designed, but NARROWING it to an unmatchable
+#    pattern leaves fixture B green — only the production arm R3(3b)(ii) reds, and it does so
+#    INCIDENTALLY, because today's render happens to contain guards. A narrowing that today's
+#    render still satisfies (a tighter whitespace class, say) would have had nothing watching
+#    it at all. Every sibling pattern in this family is already two-sided (A1 compares against
+#    a second literal; D asserts anchored==2 AND bare==1; _R3_TAIL_STRIP via the _g5_stripped
+#    conjunct); guard-pat was the holdout.
+_fxBpp="$_r3c_dir/Bpp.code.sh"
+printf '[ -s "$_luks_detail" ] && git-data-emit stage level msg "$_luks_detail"\n' > "$_fxBpp"
+_bpp_hits=$(_r3_guard_hits "$_fxBpp" "$_r3c_dir/Bpp.err")
+if [ "${_bpp_hits:-ERROR}" = "1" ]; then pass; else
+  fail "R3(3b)(ii) CONTROL (positive): the arm's guard predicate returned '${_bpp_hits}' (expected 1) on a corpus carrying a REAL \`[ -s \"\$_luks_detail\" ]\` guard; ERROR means it could not run: $(head -c 200 "$_r3c_dir/Bpp.err" 2>/dev/null)" \
+       "A predicate that matches nothing reports every stage as UNGUARDED, or — depending on the arm's polarity — as guarded by default. Fixture B cannot see this because 0 is its pass value."; fi
 
 # ── FIXTURE B' — R3(3d): a trailing comment matching the deletion sed's shape must not be
 #    what the mutation lands on, or the arm's cmp -s did-not-land guard never fires.
@@ -2397,9 +2529,19 @@ _fxC_b="$_r3c_dir/C_before"; _fxC_a="$_r3c_dir/C_after"
 # Deriving C_before from $_R3B_EXPECTED_SITES makes it track the roster by construction. The
 # swap still has to be built by hand — that is the mutation under test — but it is now built
 # FROM the derived set (drop the last member, add an unrelated one) rather than from a second
-# copy of the literal. The row count stays a literal that clears the floor with headroom: this
-# control is about the SET predicate, and coupling it to the floor would make one arm answer
-# for two properties.
+# copy of the literal.
+#
+# (#7772 review) THE ROW COUNT IS NOW DERIVED TOO, and the previous reasoning here was wrong on
+# its own terms. It said "the row count stays a literal that clears the floor with headroom …
+# coupling it to the floor would make one arm answer for two properties". It WAS coupled — a
+# literal 8 against a floor of 7 — and the headroom was exactly 1, so simulating two more
+# legitimate roster growths reddened this control with the message "the arm's site predicate
+# accepted the complete set (rc=1) and the swapped set (rc=1) alike": it said ACCEPTED when both
+# were REJECTED, which is the same wrong-reason failure the rewrite above was written to
+# eliminate, recurring one growth later. Driving both arms at EXACTLY the floor removes the
+# coupling instead of hiding it: the count conjunct is then satisfied identically in both arms,
+# so the only thing that can differ between them is the SET predicate — which is what this
+# control is for.
 printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u > "$_fxC_b"
 { printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u | sed '$d'; echo 'ZZZ_unrelated'; } | sort -u > "$_fxC_a"
 # A control whose two corpora are equal proves nothing, and the derivation above could make
@@ -2409,11 +2551,21 @@ if cmp -s "$_fxC_b" "$_fxC_a"; then
 fi
 # Drive the ARM's OWN predicate over both corpora. The complete set must be ACCEPTED and the
 # swapped one REJECTED; a count floor accepts both, which is the defect.
-_c_ok_before=1; _r3b_sites_ok 8 "$(cat "$_fxC_b")" && _c_ok_before=0
-_c_ok_after=1;  _r3b_sites_ok 8 "$(cat "$_fxC_a")" && _c_ok_after=0
-if [ "$_c_ok_before" -eq 0 ] && [ "$_c_ok_after" -ne 0 ]; then pass; else
-  fail "R3(3b)(i) CONTROL: the arm's site predicate accepted the complete set (rc=${_c_ok_before}) and the swapped set (rc=${_c_ok_after}) alike — one reporting site was deleted and an unrelated one added, and it could not tell" \
-       "A floor is not a set. Sub-assertion (iv) already does message-set equality for fatals and is the model this should follow."; fi
+_c_rows=$(( $(printf '%s\n' "$_R3B_EXPECTED_SITES" | sed '/^$/d' | sort -u | wc -l) + _R3B_MULTI_EMIT_SURPLUS ))
+_c_ok_before=1; _r3b_sites_ok "$_c_rows" "$(cat "$_fxC_b")" && _c_ok_before=0
+_c_ok_after=1;  _r3b_sites_ok "$_c_rows" "$(cat "$_fxC_a")" && _c_ok_after=0
+# NAME THE ARM THAT DIVERGED. The single combined message asserted "accepted … and … alike",
+# which is a claim about WHICH way each arm went and was false in the case that actually fired.
+# `_c_ok_before` is deliberately not load-bearing as a discriminator — with the rows now driven
+# at the floor it can only fail if the derivation itself broke, and the `cmp -s` guard above is
+# what proves the two corpora differ. It is kept as a setup assertion and reported as one.
+if [ "$_c_ok_before" -ne 0 ]; then
+  fail "R3(3b)(i) CONTROL SETUP: the arm's site predicate REJECTED the complete roster (rc=${_c_ok_before}) driven at its own floor (${_c_rows} rows) — the derivation is broken, not the predicate" \
+       "This half is not the discrimination test; it proves the fixture is well-formed before the swapped half is trusted."
+elif [ "$_c_ok_after" -eq 0 ]; then
+  fail "R3(3b)(i) CONTROL: the arm's site predicate ACCEPTED the swapped roster — one reporting site was deleted and an unrelated one added at the same row count, and it could not tell" \
+       "A floor is not a set. Sub-assertion (iv) already does message-set equality for fatals and is the model this should follow."
+else pass; fi
 
 # ── FIXTURE D — R3(2d) is the CONTROL PROVING THE ANCHORING STYLE WORKS, so its RED is a
 #    mutation of its own anchor and its behaviour must otherwise be unchanged.
@@ -3050,6 +3202,45 @@ if [ "$SKIPPED_ASSERTIONS" -le "$_SKIP_CEILING" ]; then pass; else
 # satisfied; an arm that stops running WITHOUT declaring anything still reds. That is the
 # distinction `passes + fails` alone could not draw — it read a legitimate declared skip and a
 # silently vanished arm as the same number.
+
+# ── INSTRUMENT SELF-TEST (#7772 review) ───────────────────────────────────────────
+# EVERY FLOOR IN THIS FILE IS A PASSIVE COUNT, AND A TWO-TOKEN EDIT TO fail() DEFEATS ALL OF
+# THEM AT ONCE. Measured against a real injected regression, not hypothesised:
+#
+#   fail() { passes=$((passes + 1)); FAILURES+=("$1"); ... }   -> caught by the ledger
+#   fail() { passes=$((passes + 1)); ...no append... }         -> 76 passed, 0 failed, rc=0,
+#                                                                 AND the accurate
+#                                                                 `FAIL: R1-PIN: ...` line
+#                                                                 still printed to stderr
+#
+# The second is the whole hardening failing. The comment at the top of this file reasons that
+# "silencing the suite now requires removing the append too — and removing the whole body
+# drops `passes`, which the floor DOES see." It does not require removing the whole body: keep
+# the increment, drop only the append, and `passes` clears the floor, `${#FAILURES[@]}` equals
+# `fails` (both 0) so the ledger reconciles, and the verdict reads an empty ledger.
+#
+# The defect is structural: no floor DISPATCHES THROUGH the helper it backstops, so every one
+# of them measures the helpers' side effects without ever proving the helpers still have any.
+# The canary is the missing dispatch. It drives both helpers once on a sentinel and requires
+# all three counters to have moved by exactly one, then unwinds itself so the reported totals
+# are unchanged. It runs BEFORE the floors, so a neutered helper fails here rather than
+# reaching a count that a neutered helper has already made meaningless.
+_can_p0=$passes; _can_f0=$fails; _can_l0=${#FAILURES[@]}
+pass
+fail "CANARY — instrument self-test, not a real failure" 2>/dev/null
+if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ] || [ "${#FAILURES[@]}" -ne $((_can_l0 + 1)) ]; then
+  echo "FAIL CANARY: driving pass()/fail() once each moved the counters" >&2
+  echo "      passes ${_can_p0}->${passes} (want +1), fails ${_can_f0}->${fails} (want +1), ledger ${_can_l0}->${#FAILURES[@]} (want +1)." >&2
+  echo "      One of the assertion helpers has been neutered. Every floor below counts its" >&2
+  echo "      side effects, so none of them can see this; the suite would have reported a" >&2
+  echo "      clean total over silenced assertions." >&2
+  exit 1
+fi
+# Unwind. The canary must not appear in the reported totals or it would inflate every floor by
+# one and mask exactly the arm-deletion the floors exist to catch.
+passes=$_can_p0; fails=$_can_f0
+if [ "$_can_l0" -eq 0 ]; then FAILURES=(); else FAILURES=("${FAILURES[@]:0:$_can_l0}"); fi
+
 total=$((passes + fails + SKIPPED_ASSERTIONS))
 # Floor = the ACTUAL assertion count (B1: 1, B2: 1, D1: 2, T5: 4 + 1 mutation, T17: 2 + 1
 # mutation, S1: 3 + 4 mutation). THIS LIST IS THE FROZEN 19-ERA BASELINE, not a running total —
@@ -3255,8 +3446,16 @@ total=$((passes + fails + SKIPPED_ASSERTIONS))
 # RAISED 75 -> 76 (#7481 review), ITEMISED — one assertion binding the LIVE D1 arm to
 # _d1_holds. D1-MUT proved the HELPER rejects the mutant and nothing proved the arm calls it.
 #     1
-if [ "$total" -lt 76 ]; then
-  echo "FAIL: ran only ${total} assertions (floor 76) — harness did not execute fully" >&2
+# RAISED 76 -> 77 (#7772 review), ITEMISED — FIXTURE B'', the POSITIVE direction of the guard
+# predicate. Fixture B asserts 0 hits on a prose-only corpus, and 0 is its pass value, so it is
+# structurally blind to a predicate narrowed until it matches nothing. B'' asserts 1 hit on a
+# corpus carrying a real guard.
+#     1
+# NOT COUNTED, deliberately: the instrument self-test above drives pass() and fail() once each
+# and then UNWINDS both counters. Letting the canary count would inflate this floor by one and
+# mask exactly the arm-deletion it exists to catch.
+if [ "$total" -lt 77 ]; then
+  echo "FAIL: ran only ${total} assertions (floor 77) — harness did not execute fully" >&2
   exit 1
 fi
 # LEDGER RECONCILIATION (#7481 review, V2). FAILURES is append-only and the verdict reads it,

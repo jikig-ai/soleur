@@ -247,7 +247,12 @@ resource "doppler_secret" "git_remove_ssh_private_key" {
   # schedules both at once); a transient Doppler 5xx on the ssh-host write would otherwise
   # leave the switch armed and the antidote missing, and every account deletion from that
   # instant files a FALSE "erasure failed" event. No cycle: git_data_ssh_host reads a
-  # static local and has no upstream at all.
+  # computed NIC attribute, so it DOES have an upstream — but that upstream is
+  # hcloud_server_network.git_data, which the birth job already targets alongside the server,
+  # so the edge drags nothing new into any plan that exists. (#7772 corrected this sentence:
+  # it read "reads a static local and has no upstream at all", which describes the design
+  # ADR-149's DC-3 mandated AGAINST and DC-5 reversed before merge. The no-cycle conclusion
+  # is unchanged and now rests on the reason that is actually true.)
   depends_on = [hcloud_server.git_data, doppler_secret.git_data_ssh_host]
 }
 

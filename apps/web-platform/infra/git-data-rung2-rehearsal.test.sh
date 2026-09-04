@@ -1701,6 +1701,43 @@ fi
 # RAISED 71 -> 75 (#7460): four arms binding the baked ingest token — its Doppler residency, its
 # ABSENCE from the divergence allowlist, both roots passing their own root variable, and neither
 # root declaring a default. 71 + 4 = 75. Measured: 75 passed, 0 failed.
+# ── INSTRUMENT SELF-TEST (#7772 review) ───────────────────────────────────────────
+# THIS SUITE'S FLOOR IS DENOMINATED IN A THIRD COUNTER AND CANNOT SEE EITHER HELPER. `cases` is
+# incremented at each arm, independently of pass() and fail(), so a neutered fail() leaves the
+# floor perfectly satisfied. Measured against a real injected regression (`default = ""` added
+# to git_data_betterstack_logs_token in rung2-rehearsal/variables.tf, which reds one arm):
+#
+#   fail() { passes=$((passes + 1)); ... }  -> 75 passed, 0 failed, rc=0 — BYTE-IDENTICAL to a
+#                                              clean run
+#   fail() { :; }                           -> 74 passed, 0 failed, rc=0, and the floor still
+#                                              printed `ok anti-vacuity floor: 75 assertions ran`
+#
+# The second case prints `74` and `75` on adjacent lines and nothing compares them. Both checks
+# below close that: the canary proves the helpers still dispatch, and the reconciliation proves
+# every counted case actually reached one of them.
+_can_p0=$passes; _can_f0=$fails
+pass "CANARY — instrument self-test, not a real assertion" >/dev/null
+fail "CANARY — instrument self-test, not a real failure" >/dev/null
+if [[ "$passes" -ne $((_can_p0 + 1)) || "$fails" -ne $((_can_f0 + 1)) ]]; then
+  printf '\n[FATAL] CANARY: driving pass()/fail() once each moved passes %d->%d (want +1) and fails %d->%d (want +1).\n' \
+    "$_can_p0" "$passes" "$_can_f0" "$fails" >&2
+  printf '  An assertion helper has been neutered. The cases floor below counts a SEPARATE\n' >&2
+  printf '  variable and is structurally blind to this.\n' >&2
+  exit 1
+fi
+passes=$_can_p0; fails=$_can_f0
+
+# RECONCILIATION: every counted case must have reached exactly one helper. Without this, a
+# no-op fail() shows up only as a silent one-per-failure gap between `passes + fails` and
+# `cases` — printed, adjacent, and compared by nobody.
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: %d passed + %d failed = %d, but %d case(s) were counted.\n' \
+    "$passes" "$fails" "$((passes + fails))" "$cases" >&2
+  printf '  Every arm increments `cases` and then calls pass() or fail(). A gap means an arm\n' >&2
+  printf '  counted itself and reached neither helper — an assertion that ran and said nothing.\n' >&2
+  exit 1
+fi
+
 if [[ "$cases" -lt 75 ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 75.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2

@@ -123,7 +123,11 @@ write_files:
   # than the doppler_token it claims equivalence with, readable by the `git` account that
   # serves every connected user's push. ADR-198 carries the argument and its limits -- in
   # particular that 0600 defends a file-read primitive, NOT code execution, because the
-  # git-data firewall declares zero rules and egress to the metadata endpoint is open.
+  # git-data firewall declares zero rules and egress to the metadata endpoint is open TO ROOT.
+  # (#7772) NARROWED, not closed: a host-local nftables rule now drops 169.254.169.254 for
+  # non-root UIDs, so the `git` account can no longer read this file's contents back out of
+  # user_data over the network. Root still can, and a file-read primitive against this 0600
+  # file is untouched — which is why the 0600 mode still carries its own weight.
   - path: /etc/default/git-data-betterstack
     content: |
       BETTERSTACK_LOGS_TOKEN=${betterstack_logs_token}
@@ -471,7 +475,10 @@ write_files:
   # `curl http://169.254.169.254/hetzner/v1/userdata` and read the ENTIRE user_data:
   # doppler_token, sentry_dsn and the baked ingest token alike. ADR-198 concedes that 0600
   # defends a file-read primitive and not code execution, and names this rule as the closure
-  # that restores the category for all three credentials at once.
+  # that restores the category for the two 0600 credentials — doppler_token and the ingest
+  # token — against a NON-ROOT reader. NOT all three: sentry_dsn is baked inside the 0755
+  # git-data-emit, which the `git` account reads directly without touching the network, so no
+  # egress rule reaches it. The encryption-posture ledger records the same split.
   #
   # WHY IT IS HERE AND NOT IN .tf — the correction that forced this into the pre-rehearsal
   # window. #7772 describes item 2 as "a .tf firewall change, NOT a template change". That is
@@ -480,8 +487,13 @@ write_files:
   # all. Being a template change, it re-holds git_data_rung2_rehearsal_gate — which is the point,
   # not a defect. AC2 asserts the hash moved.
   #
-  # SAFE ON THIS HOST, MEASURED NOT ASSUMED. `grep -c 169.254.169.254` is 0 across this template
-  # and all nine file()-bound payloads, so git-data makes no IMDS calls of its own. Root is
+  # SAFE ON THIS HOST, MEASURED NOT ASSUMED — and the measurement is dated, because this block
+  # changed it. BEFORE this block existed, `grep -c 169.254.169.254` was 0 across this template
+  # and all nine file()-bound payloads, so git-data issues no IMDS REQUEST of its own. The count
+  # in THIS file is now 4 (this sentence, the rule's two lines, and a comment), so a reader
+  # re-running the bare grep today gets a number that contradicts an undated claim. The
+  # proposition that matters — no IMDS consumer on this host — is unchanged; re-check it by
+  # grepping the nine payloads, not this file.
   # exempt so cloud-init's own datasource — which queries the metadata server every boot, as
   # root, to configure networking — is untouched.
   - path: /usr/local/bin/git-data-nftables.sh
@@ -950,8 +962,8 @@ runcmd:
   # Arming earlier is also strictly better on its own terms: it shrinks the window in which
   # the host runs with the metadata endpoint readable by the non-root `git` account.
   #
-  # (#7772 item 2) Arm the metadata-endpoint drop. Same substitution-plus-`if` shape as the
-  # gc_timer capture directly above, for the same two reasons #7227 records: a failed REDIRECT
+  # Same substitution-plus-`if` shape as the gc_timer capture (now BELOW this item — review
+  # moved this one ahead of the bootstrap, see the ordering note above), for the same two reasons #7227 records: a failed REDIRECT
   # must not be indistinguishable from a failed unit, and the guard must sit INSIDE the failure
   # branch or it runs before systemctl writes stderr and discards the real error.
   #

@@ -278,7 +278,16 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # COVERED_DIRS). Rewriting the floor as `-lt` fixed the first; this line fixes
 # the second for this file. The directory-wide fix needs a per-scope ratchet
 # first — see #7585.
-PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh)$'
+# `apps/web-platform/infra/git-data-nftables-syntax.test.sh` added by #7772 — the syntax gate on
+# git-data's metadata-egress ruleset. PROMOTED, not deferred, and the choice is the one this
+# gate's own FAIL message prescribes ("cover it, or promote its directory into COVERED_DIRS — do
+# NOT raise this number"): promoting the FILE is the narrower of the two, since
+# `apps/web-platform/infra/` holds 100+ suites and moving the whole directory into COVERED_DIRS
+# is the change #7585 says needs a per-scope ratchet first. The suite qualifies: its floor is
+# `-lt` over `passes + fails`, so a neutered assertion machinery drives it to 0 and the floor
+# FIRES — and it carries an instrument self-test that exits 1 on a neutered helper before the
+# floor is even reached.
+PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"

@@ -27,8 +27,22 @@ const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
 const cloudInit = readFileSync(join(here, "../infra/cloud-init-git-data.yml"), "utf8");
 
-// MUTATION-PROVEN, and one axis deliberately NOT covered — stated so it is not mistaken for
-// coverage. Seven mutations across six axes all go RED: dropping a stage from the IS_IN set,
+// MUTATION-PROVEN, with one axis deliberately NOT covered and one that was CLAIMED and was
+// not — stated so neither is mistaken for coverage.
+//
+// THE CLAIM THAT WAS FALSE, kept here rather than quietly corrected: the original header
+// said seven mutations across six axes all went RED. The fatal-side paging axis did not.
+// `toContain("ActiveMembers")` was satisfied by two comments inside the slice, so flipping
+// the fatal router to "NoOne" -- de-paging every dark-host fatal on the host holding every
+// user's source -- passed 5/0. Review mutation-proved it; both the anchor and the slice
+// boundary are fixed above, and the mutation now reds.
+//
+// (#7772 review) TWO FURTHER SURVIVORS, both now closed by the nearest-preceding-assignment
+// assertion in the first `it`: interposing a second STAGE= between the assignment and the emit
+// (Q3), and renaming the emitting assignment to a PREFIX-EXTENDED name (Q4). Both left the
+// suite 5/0 while shipping a host whose nftables-arm failure routes nowhere.
+//
+// The mutations that DO go RED: dropping a stage from the IS_IN set,
 // flipping NoOne to ActiveMembers, swapping event_frequency for first_seen_event (scoped to the
 // warning resource), re-pointing the fatal-side stage value, renaming the runcmd STAGE
 // assignment, dropping the `_warn` suffix from the emit, and renaming the resource itself (which
@@ -61,7 +75,17 @@ function scopeResource(src: string, name: string): string {
   expect(start, `resource ${name} not found in issue-alerts.tf`).toBeGreaterThan(-1);
   const rest = src.slice(start + 1);
   const next = rest.indexOf("\nresource ");
-  return next === -1 ? src.slice(start) : src.slice(start, start + 1 + next);
+  if (next === -1) return src.slice(start);
+  // STOP AT THE NEIGHBOUR'S COMMENT BLOCK, not at its `resource` keyword. A slice that ends at
+  // the keyword swallows the next resource's entire leading rationale, so every toContain/
+  // not.toContain in this file would quantify over prose belonging to a DIFFERENT rule. That is
+  // not hypothetical: this PR's own warning-rule comment explains why the fatal router pages,
+  // and it contains the literal "ActiveMembers" -- see the anchor note on that assertion.
+  let end = start + 1 + next;
+  const lines = src.slice(start, end).split("\n");
+  while (lines.length && /^\s*(#|$)/.test(lines[lines.length - 1])) lines.pop();
+  end = start + lines.join("\n").length;
+  return src.slice(start, end);
 }
 
 describe("git-data warning-stage routing op contract", () => {
@@ -74,10 +98,39 @@ describe("git-data warning-stage routing op contract", () => {
     // that construct: the name also appears in prose in this template and in git-data-luks.tf.
     expect(cloudInit).toContain('"level":"warning"');
     expect(cloudInit).toContain('"stage":"betterstack_ingest"');
-    expect(cloudInit).toContain('"$${STAGE}_warn" warning');
-    // ...and that the _warn suffix is built from THIS stage, so the interpolation above resolves
-    // to gitdata_nftables_metadata_warn rather than some other stage's _warn.
-    expect(cloudInit).toContain(`STAGE=${NFT_FATAL_STAGE}`);
+    const emitAt = cloudInit.indexOf('"$${STAGE}_warn" warning');
+    expect(emitAt, "the _warn emit is absent from the template").toBeGreaterThan(-1);
+
+    // ...and that the _warn suffix is built from THIS stage. CO-PRESENCE IS NOT LOCALITY, and
+    // the previous form here was `toContain(\`STAGE=${NFT_FATAL_STAGE}\`)` — an unanchored
+    // substring test over a 1050-line file that already carries ten STAGE= assignments. Two
+    // mutations were MEASURED to survive it, both of which ship a host whose failures route
+    // nowhere:
+    //
+    //   Q3  insert `STAGE=some_other_window` BETWEEN the assignment and the emit. STAGE is
+    //       whatever was last assigned when the emit runs, so the arm reports
+    //       `stage:some_other_window_warn` — matching no IS_IN value in the very rule this
+    //       suite exists to pin. Survived: the old assertion only asked whether the string
+    //       appeared SOMEWHERE.
+    //   Q4  rename the emitting assignment to `STAGE=gitdata_nftables_metadata_v2`. toContain
+    //       is a substring test, so every `gitdata_nftables_metadata*` name satisfies it —
+    //       while the FATAL router's EQUAL filter stops matching. A dark fatal, green suite.
+    //
+    // Both close by asserting the pair as ONE construct: find the NEAREST PRECEDING whole-line
+    // STAGE assignment and require it to be exactly this stage. That is the same shape the
+    // runcmd suite's R3(2) arm uses for its own ordering property ("co-presence is not
+    // ordering"), one directory over.
+    const assignments = [...cloudInit.matchAll(/^\s*STAGE=([A-Za-z0-9_]+)\s*$/gm)];
+    expect(assignments.length, "no whole-line STAGE= assignments found").toBeGreaterThan(0);
+    const preceding = assignments.filter((m) => m.index! < emitAt);
+    expect(preceding.length, "the _warn emit has no STAGE assignment before it").toBeGreaterThan(0);
+    const nearest = preceding[preceding.length - 1];
+    expect(
+      nearest[1],
+      `the _warn emit resolves to "${nearest[1]}_warn", not "${NFT_FATAL_STAGE}_warn" — ` +
+        "STAGE is whatever was last assigned when the emit runs, so an assignment interposed " +
+        "between them re-points the stage and the warning rule stops routing it",
+    ).toBe(NFT_FATAL_STAGE);
   });
 
   it("every warning stage is routed by the low-severity rule", () => {
@@ -115,7 +168,14 @@ describe("git-data warning-stage routing op contract", () => {
     // correct code -- and would have been "fixed" by deleting the explanation
     // (cq-assert-anchor-not-bare-token). This caught itself on first run.
     expect(fatal).not.toMatch(/value\s*=\s*"gitdata_nftables_metadata_warn"/);
-    expect(fatal).toContain("ActiveMembers");
+    // ANCHORED ON THE CONSTRUCT. `toContain("ActiveMembers")` was MUTATION-PROVEN to false-pass:
+    // flipping this very rule's fallthrough_type to "NoOne" -- silently de-paging every git-data
+    // dark-host fatal, the most consequential mutation available in this file -- left the suite
+    // 5/0 green, because the bare token also occurs in two comments. One of those comments was
+    // added by this PR. The lesson was applied to the not.toMatch on the line above and not to
+    // this line; the header's "seven mutations across six axes" claim was false for the axis
+    // that matters most. Both halves are now fixed: this anchor, and scopeResource's boundary.
+    expect(fatal).toMatch(/fallthrough_type\s*=\s*"ActiveMembers"/);
   });
 
   it("the two rules are distinct resources with distinct names", () => {
