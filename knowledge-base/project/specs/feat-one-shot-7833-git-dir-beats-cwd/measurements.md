@@ -74,3 +74,30 @@ one directory over. The 11 `.test.sh` git-spawning suites in the same directory 
 measured. M-5's divergence is therefore unverified against the pinned version. The helper's shape is
 correct either way — only mutation row M6 is version-sensitive — so this is recorded, not blocking,
 and carried into the follow-up's re-evaluation triggers.
+
+---
+
+## Verification record (Phase 5)
+
+| AC | Evidence |
+|---|---|
+| AC1 (the fix) | `lefthook.yml` `plugin-component-test` → `run: unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE && bun test plugins/soleur/test/` |
+| AC2-AC4 (containment) | `bun test plugins/soleur/test/git-fixture-env.test.ts` → **6 pass, 0 fail, 22 expect()**. Includes a real commit under the helper env (AC3) and a `TMPDIR=/var/tmp` fixture with a space- and `-`-leading path segment (AC4) |
+| AC5 (tripwire aborts) | `bash plugins/soleur/test/git-tripwire.test.sh` → **20 assertions, 0 failed**. Asserts an observed non-zero abort from each of the three runtimes, not the file's existence |
+| AC6 (registered) | `bunfig.toml` → `preload = ["./plugins/soleur/test/lib/git-tripwire.ts"]`; both vitest `setupFiles` import it, derived from `vitest.config.ts` rather than restated |
+| AC7-AC8 (entry points) | `bash plugins/soleur/test/hook-git-env-coverage.test.sh` → **8 passed, 0 failed**, receipt `run_lines=26 runners=3 hook_files=2 assertions=8`. N2/N3 pin the two pre-existing scrub copies |
+| AC9 (no sibling drift) | `FILES` 936 → **940** = +4, exactly the tracked `.sh` files added. `cd` SITES 0 → 0; `operand` 9 → 9; `relative` 1236 → 1243 (+7, all in the two new batteries), baseline regenerated in the same commit. All three sibling suites pass |
+| AC10 (mutation matrices) | Guard 1 **10/10** (M1-M8, H1-H2); Guard 2 **10/10** (N1-N6, J1-J4); Guard 3 K/L matrix observed in its driver output |
+| AC11 (full battery) | `test-all.sh` refused with **rc=4** — a sibling worktree's full-gate run was in flight (#7553). Per that contract, targeted suites were run instead: bun `plugins/soleur/test/` **2563 tests / 0 fail**, webplat vitest **1060 files, 13081 tests, 0 fail (rc=0)**, and every affected shell + python suite individually. The full battery runs at `/ship` Phase 4 (ADR-183) |
+| AC13 (live hook) | Real commit `297569daf` in this linked worktree, hooks **live**. `plugin-component-test` ran (50.27 s, 2553 pass / 0 fail), commit rc=0, depth +1 exactly, **0 phantom subjects** in `git reflog` |
+| AC14 (deferral filed) | **#7849** — OPEN, `type/chore` + `deferred-scope-out`, carries both load-bearing conditions, the between-the-lists file enumeration, and all three re-evaluation triggers |
+| AC15 (end-to-end) | Under the real hook env (`GIT_DIR`/`GIT_INDEX_FILE` set as git exports them to a linked-worktree hook): **Arm A** — the unfixed command form — now aborts `rc=97` instead of corrupting silently; **Arm B** — the shipped form — runs clean (2563 tests). Branch tip unmoved; reflog free of `base`/`change`/fixture subjects |
+| AC16 (citations) | 10 distinct `knowledge-base/**.md` citations in the plan, **0 missing** |
+
+### A note on the glob, found while discharging AC13
+
+`plugin-component-test`'s glob is `plugins/soleur/**/*.md`, which does **not** match a file sitting
+directly in `plugins/soleur/` — a first attempt staging `plugins/soleur/AGENTS.md` reported
+`plugin-component-test (skip) no matching staged files`. The job fires only for `.md` files in a
+subdirectory. Recorded rather than changed: widening the glob is out of scope here, and the entry
+point is now scrubbed either way.

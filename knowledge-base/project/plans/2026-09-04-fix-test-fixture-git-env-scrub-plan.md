@@ -417,7 +417,7 @@ Every glob and count below was derived by a command quoted beside it.
 
 ### Deferral (`wg-defer-only-after-inline-triage`)
 
-Per-suite conversion to the helper is deliberately deferred to a follow-up issue: *"test-fixtures:
+Per-suite conversion to the helper is deliberately deferred to **#7849** (filed 2026-09-04, open): *"test-fixtures:
 adopt `gitFixtureEnv()` at every fixture-creating suite (defence-in-depth behind #7833's process
 boundary)"*. Triaged inline and deferred because (a) it buys nothing over layers 1-3 in any reachable
 invocation, (b) the beneficiary set is not reliably greppable (`git grep -l 'git init'` misses the
