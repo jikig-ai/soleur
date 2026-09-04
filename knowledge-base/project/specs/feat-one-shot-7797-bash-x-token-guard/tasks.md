@@ -119,7 +119,9 @@
       `lint-guard-contract.py` rc=0; `TEST_GROUP=scripts` rc=0 (354/357, 3
       declined). `webplat` RED is environmental — `apps/web-platform/node_modules`
       is absent so `vitest: not found`, and this diff changes 0 `.ts` files there.
-      Infra runner deferred to the ship Phase 4 checkpoint per the coverage NOTE.
+      `apps/web-platform/infra/run-registered-suites.sh` rc=0 — 112 passed, 0
+      failed, 0 unaccounted (of 112), which closes the coverage NOTE the scripts
+      shard emitted for this diff's infra half.
 
 ## Phase 8 — Follow-ups (each with a re-evaluation trigger)
 
