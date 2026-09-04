@@ -115,6 +115,13 @@ mkstub 'OPEN|BEHIND|true' "$GREEN_CHECKS"
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
 [[ "$rc" -eq 1 && "$out" == *"BEHIND"* ]] && ok "T6 green-but-BEHIND is surfaced, not waited on forever" || no "T6 behind" "rc=$rc out=$out"
 
+# ── T6b: DIRTY, the sibling of BEHIND that the first cut missed ──────────────────
+# Both are "green, but a human must act", and both occur WHILE auto-merge is armed. Found by
+# running this script against a real PR that went green and then DIRTY: it polled straight through.
+mkstub 'OPEN|DIRTY|true' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 1 && "$out" == *"DIRTY"* && "$out" == *"conflict"* ]] && ok "T6b green-but-DIRTY is surfaced as needing action, not polled through" || no "T6b dirty" "rc=$rc out=$out"
+
 # ── T7 a gh failure must not kill the loop ───────────────────────────────────────
 printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
 out="$(run 7778 --interval 10 --max-polls 2)"; rc=$?
@@ -131,9 +138,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 12 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 12.\n' "$_ran" >&2
+if [[ "$_ran" -lt 13 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 13.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 12)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 13)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1

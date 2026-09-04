@@ -126,9 +126,15 @@ while :; do
     fi
     # Green but still OPEN with auto-merge armed: keep watching for the merge itself, but say so
     # rather than looping silently.
-    if [[ "$mergestate" == "BEHIND" ]]; then
-      printf 'CHECKS GREEN BUT BEHIND — PR #%s needs a sync before it can merge.\n' "$PR"; exit 1
-    fi
+    # BEHIND and DIRTY are both "green, but a human has to do something", and both are reachable
+    # WHILE auto-merge is armed — auto-merge does not resync a stale branch and cannot resolve a
+    # conflict. FOUND BY DOGFOODING: the first cut handled BEHIND and not DIRTY, so watching a real
+    # PR that went green-then-DIRTY kept polling a state that needed action. The bug was in the
+    # branch the operator would read as "still working".
+    case "$mergestate" in
+      BEHIND) printf 'CHECKS GREEN BUT BEHIND — PR #%s needs a sync before it can merge (auto-merge does not resync).\n' "$PR"; exit 1 ;;
+      DIRTY)  printf 'CHECKS GREEN BUT DIRTY — PR #%s has a merge conflict; auto-merge cannot resolve it.\n' "$PR"; exit 1 ;;
+    esac
   fi
 
   if [[ "$n" -ge "$MAX_POLLS" ]]; then
