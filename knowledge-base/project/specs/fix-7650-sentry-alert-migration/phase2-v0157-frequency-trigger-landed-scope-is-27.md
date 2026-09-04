@@ -304,8 +304,26 @@ Uniform across all 27, verified rather than assumed:
 
 ## 7. What did NOT change
 
-- `state rm` remains refresh-free and therefore survives a brownout; `removed {}` remains
-  unusable, because a plan/apply refresh of the removed resource hits the 410.
+- `state rm` remains refresh-free and therefore survives a brownout.
+
+> **SUPERSEDED 2026-09-04 (#7650 Phase 2).** This bullet used to continue:
+> *"`removed {}` remains unusable, because a plan/apply refresh of the removed
+> resource hits the 410."* **That is false and was never measured.** Measured on
+> Terraform v1.10.5: a `removed {}` carrying `lifecycle { destroy = false }`
+> plans as `actions: ["forget"]` and emits ZERO `Refreshing state...` lines,
+> against one for the same resource with its block present. A forget is
+> state-only — there is no `after` object to compute — so it never issues a
+> read, and it is therefore the ONE construct guaranteed not to touch the
+> deprecated `rules/` endpoint. See HashiCorp PR 35458
+> (`node_resource_plan_orphan.go`: `if !n.skipRefresh && !forget`), the plan's
+> §R1 two-arm measurement, and `phase2-measurements-2026-09-04.md` §2.
+>
+> This retraction matters beyond tidiness: `phase2-measurements-2026-09-04.md`
+> names THIS document as authoritative for the provider-schema sections, so an
+> operator following that pointer mid-brownout would have read an unretracted
+> claim that the adopted mechanism is unusable, and reached for `state rm` +
+> `import` — the path the plan rejects as not implementable against `main` and
+> whose worst case is 27 duplicate live paging rules created ungated.
 - `terraform state mv` between the two types remains impossible — the schemas share only
   name/organization/id (`apps/web-platform/infra/sentry/issue-alerts.tf:28-31`).
 - Import ID format, from the provider's own example

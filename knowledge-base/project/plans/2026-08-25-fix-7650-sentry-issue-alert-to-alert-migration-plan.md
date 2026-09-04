@@ -1116,6 +1116,18 @@ asserts a control that was not operating.
 **Two peers deserve the same treatment and an earlier revision gave them none:**
 `workspaces-luks-drift` and `git-data-boot-fatal` (`stage=luks_open`) page on **at-rest encryption
 failing over identifiable user data**, on a host with deny-all ingress, no SSH, no console and no
+> **DELIVERY STATUS (2026-09-04).** The detection this section relies on is
+> NOT in the adoption PR. Phases 2 (guards), 5 (gate wiring), 6 (the §2.9 drift
+> probe) and 7 (forensics) are unstarted at that merge, so read every
+> "AC19 covers", "the guards detect" and "§2.9" below as DEFERRED, not
+> delivered. What DOES land with the adoption: the `resource_deletes`/`forget`
+> manifest on the destroy gate, and the AC11 monitor-binding assertion in both
+> workflow jobs (`scripts/sentry-monitor-binding-gate.sh`). Post-apply liveness
+> in the interim remains `assert-byok-rules-exist.sh`, which covers 4 of the 27
+> names and asserts only present+enabled — the same coverage `main` had. This
+> banner exists because the section otherwise asserts a safety posture the
+> merge does not have.
+
 log shipper — by construction the only trace. Neither is in `EXPECTED_RULES`. AC19 now covers all
 27 rather than leaving them to the generic gate.
 

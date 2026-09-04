@@ -56,9 +56,21 @@
 #   cron-egress-blocked            -> egress_blocked
 #   web-host-private-nic-boot-gate -> web_private_nic_boot_gate
 #   web-host-terminal-boot-fatal   -> web_terminal_boot_fatal
-# These are historical aliases. Renaming one to match its live name is a
-# Terraform address change, i.e. a destroy+create of a live paging rule. The
-# generator encodes them in LABEL_OVERRIDES; do not "tidy" them here.
+# These are historical aliases inherited from the `sentry_issue_alert` blocks
+# this migration replaces. Being precise about why they are kept, because the
+# obvious justification is wrong for half of it: the alias is FORCED only on the
+# `removed{}` from-addresses, which must match the addresses already in state.
+# The new `sentry_alert` labels were free to choose. They match the aliases so
+# that a rule's three blocks (resource / removed / import) share one label and
+# the forget<->import bijection is readable by eye. Once this config is applied
+# the `sentry_alert` labels ARE state, and renaming one then IS a Terraform
+# address change -- a destroy+create of a live paging rule. So: free to change
+# before the first apply, load-bearing after it. Do not "tidy" them.
+#
+# Note the three runs below are sorted by LIVE RULE NAME, not by label, so
+# `egress_blocked` sits under `cron-egress-blocked` between
+# `container_restart_burst` and `disk_io_wal_concentration`. That is consistent
+# across all three runs and is not a sort bug.
 #
 # A CLEAN PLAN IS NOT EVIDENCE THE DEPRECATION LIFTED. The two survivors still
 # read through the deprecated endpoint, so a green plan may simply mean it ran

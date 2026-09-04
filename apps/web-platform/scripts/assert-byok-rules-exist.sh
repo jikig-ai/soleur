@@ -37,8 +37,11 @@
 # `ignore_changes = [conditions_v2, filters_v2, actions_v2, environment, frequency]`
 # — but on the `auth-*` resources, which are a DIFFERENT set of rules, managed
 # by `configure-sentry-alerts.sh` and tracked by #4781. The four in
-# EXPECTED_RULES below carry `ignore_changes = [environment]` only and do not
-# declare the v2 attributes empty, so Terraform genuinely owns their filters.
+# EXPECTED_RULES below carry `ignore_changes = [environment]` only, so Terraform
+# genuinely owns their filters. (Since #7650 Phase 2 all four are `sentry_alert`
+# resources, a type that has no `conditions_v2`/`filters_v2`/`actions_v2`
+# attributes at all -- so "they do not declare the v2 attributes empty" is now
+# true vacuously rather than by choice. The ownership conclusion is unchanged.)
 # A file-level grep for `ignore_changes` cannot tell those two sets apart;
 # resolve the attribute per RESOURCE BLOCK before believing either claim.
 #

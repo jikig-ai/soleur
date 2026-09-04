@@ -5,7 +5,7 @@ The capture is the ONLY authoring source -- never issue-alerts.tf, and never
 configure-sentry-alerts.sh (measured 2026-09-04: the script is the drift source,
 writing frequency 60 where live carries 60/61/62).
 """
-import json, re, sys, io, os
+import json, sys, io, os
 
 ROOT = os.environ.get("REPO", ".")
 CAP = os.path.join(ROOT, "knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json")
@@ -40,15 +40,51 @@ caps = json.load(io.open(CAP, encoding="utf-8"))
 scoped = sorted([w for w in caps if in_scope(w)], key=lambda w: w["name"])
 
 name_to_res = {w["name"]: resource_label(w["name"]) for w in scoped}
+
+# Two live names must never collapse onto one Terraform address. The override
+# table makes this reachable: a future rule genuinely named `egress-blocked`
+# derives the same label as `cron-egress-blocked`'s alias. Emitting both would
+# produce duplicate addresses -- caught by `terraform validate`, but not by the
+# tool a reviewer actually runs, and the duplicate would be a live paging rule.
+_labels = list(name_to_res.values())
+if len(set(_labels)) != len(_labels):
+    _dupes = sorted({l for l in _labels if _labels.count(l) > 1})
+    sys.exit("FATAL: duplicate resource label(s) %s -- two live names collapse onto "
+             "one Terraform address (likely a new rule colliding with a "
+             "LABEL_OVERRIDES alias). Refusing to emit." % _dupes)
 if len(scoped) != 27:
     sys.exit("FATAL: expected 27 in scope, got %d" % len(scoped))
 
 def q(s):
-    return '"%s"' % str(s).replace("\\", "\\\\").replace('"', '\\"')
+    # Fail closed on HCL interpolation sigils. Escaping `\` and `"` is not
+    # enough: a captured value containing `${` or `%{` would emit HCL that
+    # INTERPOLATES rather than a literal, silently changing a live paging
+    # filter. No current name or tag value contains either (measured), so this
+    # is latent -- which is exactly when to close it, consistent with the other
+    # fail-closed guards in this file.
+    s = str(s)
+    if "${" in s or "%{" in s:
+        sys.exit("FATAL: value %r contains an HCL interpolation sigil; refusing to emit." % s)
+    return '"%s"' % s.replace("\\", "\\\\").replace('"', '\\"')
 
 blocks, removed, imports = [], [], []
 for w in scoped:
     res, wid = name_to_res[w["name"]], w["id"]
+    # The provider exposes no logic_type on trigger_conditions and hardcodes
+    # any-short on write. That is only semantics-preserving while every group
+    # with a non-any-short logicType holds exactly ONE condition (where `all`
+    # and `any-short` are identical). Fail closed rather than silently WIDENING
+    # a live paging trigger from "A and B" to "A or B" -- which is precisely the
+    # class this generator exists to prevent, so it must not be the one thing it
+    # emits without checking.
+    _tlogic = w["triggers"].get("logicType")
+    if _tlogic != "any-short" and len(w["triggers"]["conditions"]) > 1:
+        sys.exit(
+            "FATAL: %s has trigger logicType %r over %d conditions. The provider "
+            "would write any-short, WIDENING the trigger. Refusing to emit."
+            % (w["name"], _tlogic, len(w["triggers"]["conditions"]))
+        )
+
     tcs = []
     for c in w["triggers"]["conditions"]:
         t = c["type"]

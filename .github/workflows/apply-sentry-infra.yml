@@ -401,9 +401,13 @@ jobs:
           # and typing one ack must not wave through the other. Diff-matched,
           # not blanket-acked — the normal add-a-monitor flow passes silently.
           if [[ "$resource_creates" -gt 0 ]]; then
-            terraform show -json tfplan \
-              | jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
-              > /tmp/sentry-creates.txt
+            terraform show -json tfplan > /tmp/sentry-pr-plan.json
+            # AC11 — same binding assertion as the apply job. Early feedback
+            # here; the apply job's copy is the enforcement.
+            bash "${GITHUB_WORKSPACE}/scripts/sentry-monitor-binding-gate.sh" /tmp/sentry-pr-plan.json
+
+            jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
+              /tmp/sentry-pr-plan.json > /tmp/sentry-creates.txt
             git -C "${GITHUB_WORKSPACE}" diff "origin/${BASE_REF}...HEAD" \
               -- 'apps/web-platform/infra/sentry/*.tf' > /tmp/sentry-tf.diff
             bash "${GITHUB_WORKSPACE}/scripts/sentry-create-gate.sh" \
@@ -415,8 +419,19 @@ jobs:
             exit 0
           fi
 
+          # Show DELETES and FORGETS separately. Selecting `== ["delete"]`
+          # alone printed an EMPTY list while the gate claimed N destructive
+          # changes, because `destroy_count` also sums nested-block shrinks and
+          # (since #7650 Phase 2) `["forget"]` rows, neither of which is a
+          # delete. An ack with no manifest is what makes a blanket ack unsafe:
+          # the operator cannot see WHAT they are acknowledging. `forget` is
+          # state-only and destroys nothing, so the two are labelled, never
+          # merged -- a reader must be able to tell "27 forgets, nothing
+          # destroyed" from "26 forgets plus a real delete of a paging rule".
           addresses=$(terraform show -json tfplan | \
-            jq -r '[.resource_changes[] | select(.change.actions == ["delete"]) | .address] | sort | .[]')
+            jq -r '[.resource_changes[] | select(.change.actions | index("delete")) | .address] | sort | .[]')
+          forget_addresses=$(terraform show -json tfplan | \
+            jq -r '[.resource_changes[] | select(.change.actions | index("forget")) | .address] | sort | .[]')
 
           # ── The ack must actually REACH the merge commit ──────────────────
           # This gate greens on a pre-staged [ack-destroy], which only survives
@@ -496,14 +511,30 @@ jobs:
             ack_destroy=true
           fi
 
+          # An ack is blanket -- it names no address and no count -- so the
+          # manifest below is the only thing that lets a human tell "27 forgets,
+          # nothing destroyed" from "26 forgets plus a real delete of a live
+          # paging rule". Print BOTH lists, always, and say explicitly when one
+          # is empty: `printf` on an empty variable emits a blank line, which
+          # reads as "list shown, nothing in it" whether or not the query ran.
+          _emit_set() { # $1=label $2=payload
+            if [[ -z "$2" ]]; then
+              printf '  %s: (none)\n' "$1"
+            else
+              printf '%s\n' "$2" | sed "s|^|  $1: |"
+            fi
+          }
+
           if [[ "$ack_destroy" == "true" ]]; then
-            echo "sentry destroy gate: PASS (${destroy_count} destroy(s) acknowledged via a pre-staged [ack-destroy])"
-            printf '%s\n' "$addresses" | sed 's/^/  destroys: /'
+            echo "sentry destroy gate: PASS (${destroy_count} destructive change(s) acknowledged via a pre-staged [ack-destroy])"
+            _emit_set "DESTROYS (resource-level delete)" "$addresses"
+            _emit_set "forgets (state-only, destroys nothing)" "$forget_addresses"
             exit 0
           fi
 
-          echo "::error::this PR destroys ${destroy_count} Sentry resource(s):"
-          printf '%s\n' "$addresses" | sed 's/^/::error::  /'
+          echo "::error::this PR makes ${destroy_count} destructive change(s) to Sentry:"
+          _emit_set "DESTROYS (resource-level delete)" "$addresses" >&2
+          _emit_set "forgets (state-only, destroys nothing)" "$forget_addresses" >&2
           echo "::error::The merge commit must contain a line [ack-destroy]. Pre-stage it now so it survives the squash: put [ack-destroy] on its own line in the BODY of a commit on this branch (not the subject line — GitHub prefixes subjects with '* ' when it composes the squash body, which breaks the line anchor). Then this check goes green and the post-merge apply is authorized to destroy the resources listed above. If you did not intend to destroy anything, restore the resource block(s) instead."
           exit 1
 
@@ -796,6 +827,16 @@ jobs:
           # the plan_pr gate above calls identically — see its header for why
           # (these blocks were inline in both jobs and the arithmetic drifted).
           terraform show -json tfplan > /tmp/sentry-apply-plan.json
+
+          # AC11 — every sentry_alert must bind the expected issue-stream
+          # detector. A correlated rebind is invisible to the destroy guard
+          # (a scalar monitor_ids change is not a delete, a create, or a
+          # nested shrink), so destroy_count stays 0 and this job would
+          # otherwise pass green while all 27 paging rules go dark. Runs
+          # BEFORE the ack is consulted: this is not an acknowledgeable
+          # destroy, it is a silent misbinding.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-monitor-binding-gate.sh" /tmp/sentry-apply-plan.json
+
           eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json)"
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
@@ -806,7 +847,8 @@ jobs:
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
-            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s))."
+            forget_count=$(jq -r '[.resource_changes[] | select(.change.actions | index("forget"))] | length' /tmp/sentry-apply-plan.json)
+            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s); ${forget_count} of the plan's rows are state-only [\"forget\"] and destroy nothing)."
             echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
             grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
             exit 1

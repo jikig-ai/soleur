@@ -79,10 +79,16 @@ expiring. Either Sentry's brownout window is now wider than the budget, or the
 alert-rule family is fully retired and every attempt now 410s.
 
 Raising the attempt count is NOT the fix and will not work in the second case.
-The fix is the sentry_alert migration — see the plan referenced from #7650. Note
-the migration is 25 + 4: the four auth-* rules cannot be carried by Terraform
-because configure-sentry-alerts.sh owns their definitions and its write shape
-against workflows/ is blocked on #7634.
+The fix is the sentry_alert migration — see the plan referenced from #7650.
+Since Phase 2 (2026-09-04) the split is 27 + 2, not 25 + 4: 27 rules are managed
+as sentry_alert and are unaffected by this family's retirement. Exactly TWO
+remain on the deprecated path — auth-per-user-loop and sandbox-startup-failure —
+because the pinned provider cannot express event_unique_user_frequency_count as
+a trigger (upstream jianyuan/terraform-provider-sentry issue 950, tracked here by
+ #7634). Only auth-per-user-loop still has configure-sentry-alerts.sh as its
+writer; the other three auth-* rules are Terraform-owned and reconcile via
+terraform apply. If this family is fully retired, ONE rule is stranded without a
+writer, not four.
 MSG
   exit 1
 fi

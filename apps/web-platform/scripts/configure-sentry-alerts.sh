@@ -23,10 +23,25 @@
 # only executable definition of that one rule. Do not delete it. See
 # knowledge-base/project/learnings/2026-08-19-i-proposed-deleting-a-control-because-terraform-appeared-to-own-it.md
 #
-# THIS SCRIPT WRITES THROUGH THE DEPRECATED /rules/ ENDPOINT. Measured
-# 2026-09-04: before the narrowing it wrote `frequency 60` for all three burst
-# rules while live carried 60/61/62, so running it rewrote two live paging
-# cadences. That drift vector is removed by the deletion below.
+# THIS SCRIPT STILL WRITES THROUGH THE DEPRECATED /rules/ ENDPOINT. The
+# narrowing below does NOT remove that: `auth-per-user-loop` is still upserted
+# through `projects/{org}/{proj}/rules/`, which Sentry deprecated on 2026-05-14
+# and serves under scheduled brownouts. What the narrowing removes is one
+# specific drift vector, not the endpoint dependency.
+#
+# The vector removed: measured 2026-09-04, before the narrowing this script
+# wrote `frequency 60` for all three burst rules while live carried 60/61/62,
+# so running it rewrote two live paging cadences. Those three are now
+# Terraform-owned and are no longer written here.
+#
+# A drift leg that REMAINS on the surviving rule: the action payload below is
+# computed at runtime, and if a Sentry team slugged `ops` or `engineering` ever
+# exists it writes `targetType: "Team"`. Live `auth-per-user-loop` carries
+# `issue_owners` / `ActiveMembers`, and its `sentry_issue_alert` block keeps
+# `actions_v2` inside a wide `ignore_changes`, so no apply restores it. Measured
+# 2026-09-04: the org has exactly one team (`jikigai-eu`) and neither slug
+# exists, so this is LATENT, not active. It becomes active the day someone
+# creates such a team.
 #
 # Idempotency: GET /rules/, match by name, PUT if found else POST.
 # Region detection: probes /users/me/ on sentry.io and de.sentry.io.
@@ -164,8 +179,10 @@ upsert_rule() {
 }
 
 # --- The one remaining rule: per-user broken loop ------------------------
-# Unique-user frequency accepts the same intervals; 5m matches the issue
-# body directly. Lower frequency cap (30 min) so per-user paging is timely.
+# Unique-user frequency accepts Sentry's interval enum
+# ({1m,5m,15m,1h,1d,1w,30d}); 5m matches the issue
+# body directly. A 30-minute frequency cap (lower than the 60 the
+# now-Terraform-owned burst rules use) keeps per-user paging timely.
 upsert_rule "auth-per-user-loop" \
   '[{"id":"sentry.rules.conditions.event_frequency.EventUniqueUserFrequencyCondition","value":3,"interval":"5m"}]' \
   '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"}]' \
