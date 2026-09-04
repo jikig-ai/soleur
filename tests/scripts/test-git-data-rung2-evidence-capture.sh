@@ -142,6 +142,22 @@ run_sut() {  # remaining args appended
 }
 
 STUB="$TMP/bs-stub.sh"
+
+# ── THE INGEST PROBE, STUBBED (#7772) ─────────────────────────────────────────────
+# The foreign-host anchor is no longer the sole liveness instrument; when it returns nothing,
+# the script asks scripts/betterstack-ingest-probe.sh whether the SOURCE is accepting. Every
+# arm below pins that probe to a stub for two reasons: an unstubbed arm would make a real
+# network call to a production ingest endpoint from a unit test, and its verdict would depend
+# on whether credentials happened to be in the environment — the run would be green on this
+# machine and a different colour in CI, for reasons unrelated to the code.
+PROBE="$TMP/ingest-probe.sh"
+make_probe() {  # $1 = exit code the stub reports (0 accepting | 4 refused | 2 unreachable)
+  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "$PROBE"
+  chmod +x "$PROBE"
+}
+make_probe 0
+export BETTERSTACK_INGEST_PROBE="$PROBE"
+
 ANCHOR_LIVE="$TMP/anchor-live.jsonl"
 ANCHOR_DEAD="$TMP/anchor-dead.jsonl"
 # THE REAL ROW SHAPE. ANCHOR_SQL selects `JSONExtractString(raw,'host_name') AS host`, so
@@ -269,6 +285,53 @@ make_stub "$STUB" "$ANCHOR_SELF" "$HOSTROWS_EMPTY"
 out="$(run_sut --out "$TMP/evidence-self.env")"; rc=$?
 if [[ "$rc" -eq 2 ]]; then pass "an anchor carrying only this host's rows still => TRANSIENT"; else
   fail "an anchor carrying only this host's rows still => TRANSIENT" "$rc" "$out"; fi
+
+# ── ARM 4b: THE SINGLE-TENANT DEADLOCK (#7772) ────────────────────────────────────
+#
+# THIS IS THE ARM THE SOURCE SPLIT MADE NECESSARY, and it fails against the pre-#7772 script.
+#
+# The foreign-host anchor asks "is the source answering?" by requiring a row from a host OTHER
+# than this one. That worked only because source 2457081 was SHARED and its other tenants were
+# chatty. git-data now ships to its OWN source 2734275, whose only possible writers are the prod
+# host (never born) and rehearsal hosts -- which the `!=` clause excludes BY DESIGN, and whose
+# HOST_NAME embeds a per-run id so no two rehearsals share one.
+#
+# So on a single-tenant source the predicate is UNSATISFIABLE, and a PERFECT rehearsal lands on
+# TRANSIENT: no evidence file, no verdict, RUNG2_BOOT_REHEARSAL=PASS structurally unreachable,
+# and every retry costs another real Hetzner host and another environment approval. The failure
+# is indistinguishable from a dark boot -- the one distinction this whole script exists to make.
+#
+# The fix keeps the foreign-host read as SUFFICIENT and adds the ingest probe as the necessary
+# condition. These four arms pin every branch of that, in both directions.
+make_stub "$STUB" "$ANCHOR_DEAD" "$HOSTROWS"          # zero foreign rows, a PERFECT boot
+make_probe 0                                          # ...and the source is demonstrably live
+OUT_ST="$TMP/evidence-singletenant.env"
+out="$(run_sut --out "$OUT_ST")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then pass "zero foreign rows + a LIVE ingest probe => a VERDICT, not TRANSIENT"; else
+  fail "zero foreign rows + a LIVE ingest probe => a VERDICT, not TRANSIENT" "$rc" "$out"; fi
+if [[ -f "$OUT_ST" ]]; then pass "the single-tenant PASS writes its evidence file"; else
+  fail "the single-tenant PASS writes its evidence file" "$rc" "a perfect rehearsal produced no evidence — this is the deadlock"; fi
+
+# REFUSED is a statement about the INSTRUMENT, so it must stay TRANSIENT. Without this arm the
+# fix above would be a fail-open: "no foreign rows" would simply stop meaning anything.
+make_probe 4
+out="$(run_sut --out "$TMP/evidence-refused.env")"; rc=$?
+if [[ "$rc" -eq 2 ]]; then pass "zero foreign rows + a REFUSING source => TRANSIENT"; else
+  fail "zero foreign rows + a REFUSING source => TRANSIENT" "$rc" "$out"; fi
+if [[ "$out" == *"REFUSING"* ]]; then pass "the refused TRANSIENT names the refusal, not the host"; else
+  fail "the refused TRANSIENT names the refusal, not the host" "$rc" "$out"; fi
+
+make_probe 2
+out="$(run_sut --out "$TMP/evidence-unreachprobe.env")"; rc=$?
+if [[ "$rc" -eq 2 ]]; then pass "zero foreign rows + an UNREACHABLE source => TRANSIENT"; else
+  fail "zero foreign rows + an UNREACHABLE source => TRANSIENT" "$rc" "$out"; fi
+
+# AND THE INSTRUMENT ITSELF MUST FAIL CLOSED. An absent probe is "cannot tell", never "fine".
+BETTERSTACK_INGEST_PROBE="$TMP/no-such-probe.sh" \
+  out="$(run_sut --out "$TMP/evidence-noprobe.env")"; rc=$?
+if [[ "$rc" -eq 2 ]]; then pass "zero foreign rows + an UNREADABLE probe => TRANSIENT, not a verdict"; else
+  fail "zero foreign rows + an UNREADABLE probe => TRANSIENT, not a verdict" "$rc" "$out"; fi
+make_probe 0
 
 # ── ARM 5: the query transport failing is TRANSIENT, never FAIL ───────────────────
 cat > "$STUB" <<'STUB'
@@ -919,11 +982,11 @@ else
 fi
 
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 56 ]]; then
+if [[ "$_ran" -lt 62 ]]; then
   fails=$((fails + 1))
   printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 56. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 56)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 62)\n' "$_ran"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is

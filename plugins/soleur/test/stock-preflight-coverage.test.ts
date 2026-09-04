@@ -97,6 +97,27 @@ const EXCLUSION_ALLOWLIST = new Map<string, string>([
     "volume replace (no server → stock-preflight is a no-op); its own gate forbids touching the live volume/web-1, and /mnt/data serves from a different volume, so a miss is recoverable, not a strand",
   ],
   [
+    "inngest-volume-recut",
+    // #7695 scoped -replace of the inngest Redis AOF volume (job `inngest_volume_recut`). It
+    // `-replace`s a VOLUME and `-target`s the volume + its attachment — NO hcloud_server — so
+    // stock-preflight-gate.sh (which `select(.type == "hcloud_server")`) hits its legitimate-empty
+    // out-of-scope branch and cannot fire. Same class as workspaces-luks-recut: a scoped -replace
+    // of a non-server resource.
+    //
+    // Its OWN Guard 1 asserts inngest_server_touched == 0 — the host is named-live with ZERO
+    // actions — so this arm is structurally incapable of destroying a server, which is the entire
+    // hazard stock-preflight exists to pre-empt. There is no destroy-then-discover-no-stock
+    // surface: the "create" half provisions a VOLUME from Hetzner, and a volume create that fails
+    // leaves the resource out of state, which Guard 1's recovery bare-create arm accepts on a
+    // re-dispatch (the automated remedy, not an operator strand).
+    //
+    // Worth stating because the adjacency invites the wrong conclusion: this target IS destructive,
+    // which is why it carries an `environment:` reviewer gate AND a second gate (inngest_host_dark_gate)
+    // that refuses unless the host is measured dark. That authorization chain is orthogonal to the
+    // server-stock concern this gate covers.
+    "volume replace (no server -> stock-preflight is a no-op); its own gate names hcloud_server.inngest live with ZERO actions, so no server can be destroyed here, and a failed volume create is recoverable by re-dispatch via the gate's bare-create arm",
+  ],
+  [
     "entrypoint-audit",
     // #6767 read-only Cloudflare-rulesets drift audit (job `entrypoint_audit`). It runs
     // NO `terraform apply` — only HTTP GETs to the Cloudflare rulesets API + a `gh issue

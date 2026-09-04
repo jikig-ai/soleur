@@ -19,6 +19,7 @@ packages:
   - nftables # host-local :8288/:8289 control-API scoping (SEC-H2)
   - curl
   - jq # parse `doppler secrets --only-names --json` for the boot isolation self-check
+  - cryptsetup # #7695 guest-side LUKS-at-rest for /mnt/data (the Redis AOF store)
 
 groups:
   - docker
@@ -78,6 +79,106 @@ write_files:
       }
       NFTEOF
       echo "[inngest-nft] OK: :8288/:8289 scoped to web hosts (${web_host_private_ips})"
+    owner: root:root
+    permissions: '0755'
+
+  # --- #7695: LUKS boot-reopen unit ---------------------------------------------------
+  # THE REASON THIS UNIT EXISTS: cloud-init `runcmd:` runs on FIRST BOOT ONLY. The LUKS stage
+  # in runcmd therefore opens the mapper exactly once, in the life of the host. On boot 2 the
+  # mapper is absent, the `nofail` fstab line for /dev/mapper/inngest-redis skips silently, and
+  # Redis writes its AOF to the ephemeral root disk while every artifact — the ledger, the ADR,
+  # this file — claims LUKS at rest. That is not a degraded state; it is a false encryption
+  # claim about user prompts and agent output, and it is silent by construction.
+  #
+  # `DefaultDependencies=no` + `Before=inngest-redis.service` + `RequiresMountsFor` on the Redis
+  # side is the ordering: the mapper must exist before anything tries to mount or write it.
+  #
+  # THE PASSPHRASE COMES FROM ITS OWN 0600 FILE, `/etc/default/inngest-luks`, AND THAT IS A
+  # SECOND CREDENTIAL PATH — an earlier revision of this comment claimed there was none, and the
+  # unit shipped reading `INNGEST_REDIS_LUKS_KEY` from `/etc/default/inngest-doppler`, which
+  # carries only HOME + the Doppler token. Every boot >= 2 would have hit `reopen_key_missing`,
+  # left the mapper closed, and let the `nofail` fstab line skip silently — Redis writing its AOF
+  # to the ephemeral root disk while the ledger, the ADR and this file all claimed LUKS at rest.
+  # That is precisely the failure this unit exists to prevent, reintroduced by the unit itself.
+  #
+  # It cannot be solved by wrapping ExecStart in `doppler run`: this unit is ordered
+  # `DefaultDependencies=no` / `Before=local-fs.target`, so it runs before the network exists and
+  # a Doppler fetch cannot resolve. The file is written on FIRST BOOT by the runcmd LUKS stage,
+  # which already holds the key in scope, and mirrors `/etc/default/inngest-probe` exactly:
+  # ONE variable, 0600 root:root, and FAIL-CLOSED — no file at all rather than an empty
+  # assignment. `EnvironmentFile=` here carries no `-` prefix, so an absent file FAILS the unit
+  # rather than letting it proceed with an unset key and mount nothing.
+  #
+  # AND THE UNIT MUST BE ENABLED. It shipped un-enabled too: `write_files` puts the unit on disk
+  # and nothing else in this file ran `systemctl enable` for it, so on boot 2 systemd would not
+  # have started it at all. The enable now happens in runcmd right after the LUKS stage, with
+  # `--now` so a malformed unit surfaces at PROVISION time (off-box, via the phone-home) rather
+  # than at the next reboot, when nothing is watching.
+  #
+  # IDEMPOTENT: if the mapper is already open (first boot, where runcmd just opened it) this is
+  # a no-op. It is NOT a substitute for the runcmd stage — that stage owns the format/mkfs
+  # decision, which this unit must never make. If the device is not already crypto_LUKS, this
+  # unit FAILS rather than formatting: a boot-time unit that can create a filesystem is a boot
+  # -time unit that can destroy one.
+  - path: /etc/systemd/system/inngest-luks-open.service
+    content: |
+      [Unit]
+      Description=Open the LUKS mapper for /mnt/data before Redis starts (#7695)
+      DefaultDependencies=no
+      After=cryptsetup-pre.target systemd-udev-settle.service
+      Before=inngest-redis.service local-fs.target
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      SyslogIdentifier=inngest-luks-stage
+      EnvironmentFile=/etc/default/inngest-doppler
+      EnvironmentFile=/etc/default/inngest-luks
+      ExecStart=/usr/local/bin/inngest-luks-open.sh
+      [Install]
+      WantedBy=multi-user.target
+    owner: root:root
+    permissions: '0644'
+
+  - path: /usr/local/bin/inngest-luks-open.sh
+    content: |
+      #!/usr/bin/env bash
+      # Boot-reopen for the /mnt/data LUKS mapper. Opens ONLY; never formats, never mkfs.
+      set -euo pipefail
+      DEV="/dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id}"
+      MAPPER=/dev/mapper/inngest-redis
+      emit() { logger -t inngest-luks-stage "SOLEUR_INNGEST_LUKS_STAGE stage=$$1 rc=$$2 blkid_type=$${3:-n/a} expect_luks=${inngest_expect_luks} detail=$${4:-none}" || true; }
+      fail() { emit "$$1" "$$2" "$${3:-n/a}" "$$4"; exit 1; }
+
+      # Already open (first boot, or a re-run) — nothing to do.
+      [ -e "$$MAPPER" ] && { emit reopen_noop 0 crypto_LUKS already-open; exit 0; }
+
+      # Bounded attach wait, same reason as the runcmd stage: blkid on an absent path returns 2,
+      # and "not attached yet" must never be read as "no header".
+      _i=0
+      while [ "$$_i" -lt 30 ]; do
+        [ -b "$$DEV" ] && [ "$$(/usr/sbin/blockdev --getsize64 "$$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
+        sleep 1; _i=$$((_i+1))
+      done
+      [ -b "$$DEV" ] || fail reopen_device_wait 1 n/a "device absent after 30s"
+
+      _blk_rc=0
+      BLK_TYPE="$$(/usr/sbin/blkid -o value -s TYPE "$$DEV" 2>/dev/null)" || _blk_rc=$$?
+      { [ "$$_blk_rc" -eq 0 ] || [ "$$_blk_rc" -eq 2 ]; } || fail reopen_blkid "$$_blk_rc" n/a "blkid could not read the device"
+
+      # NOT crypto_LUKS. On a pre-recut (ext4) host this unit has nothing to do and must not
+      # interfere with the plaintext mount the runcmd stage made; on a post-recut host an ext4
+      # signature is a hard error the runcmd stage already refuses. Either way: never format.
+      if [ "$$BLK_TYPE" != "crypto_LUKS" ]; then
+        if [ "${inngest_expect_luks}" = "true" ]; then
+          fail reopen_not_luks 1 "$${BLK_TYPE:-empty}" "expect_luks=true but the device is not crypto_LUKS"
+        fi
+        emit reopen_skip_plaintext 0 "$${BLK_TYPE:-empty}" "pre-recut host; nothing to reopen"
+        exit 0
+      fi
+
+      [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || fail reopen_key_missing 1 crypto_LUKS "INNGEST_REDIS_LUKS_KEY empty"
+      printf '%s' "$$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$$DEV" inngest-redis
+      emit reopen_ok 0 crypto_LUKS
     owner: root:root
     permissions: '0755'
 
@@ -320,9 +421,11 @@ runcmd:
   # Mount the Redis AOF volume by id at /mnt/data (inngest-redis.conf `dir /mnt/data/redis`).
   # `nofail` so a volume hiccup does not wedge boot; the redis unit's RequiresMountsFor=
   # /mnt/data pins Redis behind this mount so the AOF never lands on the ephemeral root disk.
+  # #7695: the plaintext `mount … || true` + ext4 fstab line that used to live here have MOVED,
+  # not been duplicated — they are now the ext4 arm of the LUKS discriminator further down, which
+  # cannot run until the Doppler CLI and token file exist. `mkdir` stays here so the mountpoint
+  # exists for anything that probes it in between.
   - mkdir -p /mnt/data
-  - mount /dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id} /mnt/data || true
-  - echo '/dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id} /mnt/data ext4 defaults,nofail 0 2' >> /etc/fstab
 
   # --- Doppler CLI (arch-derived) — the ONLY channel for the inngest secret set --------
   # The scoped token is NEVER baked into user_data (retrievable via the hcloud metadata
@@ -362,10 +465,223 @@ runcmd:
   - printf 'HOME=/root\nDOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\n' '${doppler_token}' > /etc/default/inngest-doppler
   - chmod 600 /etc/default/inngest-doppler
 
+  # --- #7695: LUKS-at-rest for /mnt/data (the Redis AOF store) -------------------------
+  # WHY THIS RUNS HERE AND NOT WITH `mkdir -p /mnt/data` ABOVE. The passphrase lives in
+  # Doppler (INNGEST_REDIS_LUKS_KEY on the isolated soleur-inngest/prd), so this stage
+  # cannot run before the CLI install + token file above. The mount was previously a
+  # plaintext `mount … || true` up at the mkdir; it has been REMOVED, not duplicated —
+  # grep this file for `scsi-0HC_Volume_` and there must be exactly one consumer, this one.
+  #
+  # THE DISCRIMINATOR READS THE DEVICE, NOT TERRAFORM, and that is load-bearing in BOTH
+  # directions. `hcloud_volume.inngest_redis` no longer declares `format` at all (dropped
+  # 2026-09-03, #7695, so the recut's replacement volume is born RAW — `ignore_changes`
+  # suppresses diffs, never creates), while the LIVE device is still ext4 from its 2026-07-07
+  # creation. So the Terraform attribute and the disk disagree today and would have disagreed
+  # the other way before the drop: it was never a truthful statement about what is on the disk.
+  # blkid is. Five arms, and every non-handled state is FATAL rather than a fallthrough:
+  #
+  #   device absent after a bounded wait  -> FATAL (never format a path that is not a device)
+  #   TYPE=ext4                           -> pre-recut: mount as-is.  post-recut: FATAL
+  #   TYPE empty (no signature)           -> luksFormat + luksOpen + mkfs + mount
+  #   TYPE=crypto_LUKS                    -> luksOpen + mount
+  #   anything else                       -> FATAL
+  #
+  # The ext4 arm is what keeps this deliverable. The volume is ext4 TODAY and this cloud-init
+  # edit force-replaces the host, so the very first boot under this stage is the ext4 case.
+  # A three-arm mirror of git-data (which owns a born-raw volume) would have made that boot
+  # FATAL and taken the host dark on merge. `expect_luks` is what arms the post-recut refusal:
+  # once the recut has run, an ext4 signature means the recut silently did not take, and
+  # mounting it would put the AOF back on plaintext while every artifact claims otherwise.
+  - |
+    set -a
+    . /etc/default/inngest-doppler
+    set +a
+    doppler run --project soleur-inngest --config prd -- bash -s <<'LUKSEOF'
+    set -euo pipefail
+    # HEREDOC-LOCAL STAGE + TRAP. This is a CHILD of `doppler run`, so the parent's STAGE and
+    # on_err do not cross the exec boundary — without a local trap a failed luksOpen and a
+    # Doppler scope failure would both surface as the same parent stage, collapsing exactly
+    # the discriminator an off-box diagnosis depends on (#6982's lesson, git-data's R2).
+    STAGE=luks_open
+    # DETAIL FILE SEEDED AT STAGE ENTRY, BEFORE THE TRAP. Ordering is load-bearing: the trap
+    # covers the WHOLE stage, so a detail file created later would not exist on any earlier
+    # failure and the emitter would ship the literal PATH STRING as the diagnostic (#7204).
+    INNGEST_LUKS_DETAIL=/run/inngest-luks-stage.log
+    ( umask 077; : > "$INNGEST_LUKS_DETAIL" ) || true
+    luks_emit() {
+      # journald -> Vector Source 4 -> Better Stack. The tag is allowlisted in vector.toml;
+      # journald-config.test.sh asserts BOTH sides, because Source 4 is exact-value equality
+      # and a one-sided change is a silent no-op.
+      logger -t inngest-luks-stage \
+        "SOLEUR_INNGEST_LUKS_STAGE stage=$1 rc=$2 blkid_type=$${3:-n/a} expect_luks=$${EXPECT_LUKS} detail=$${4:-none}" || true
+    }
+    luks_err() {
+      rc=$?
+      # SUCCESS IS NOT A FAILURE, and this trap said it was. The stage deliberately does not
+      # `trap - EXIT` on success (see the note at the end of the block), so this handler runs on
+      # EVERY exit — and it ended in an unconditional `exit 1`. A completely successful LUKS stage
+      # therefore emitted stage=verify rc=0, then re-entered here, phoned home
+      # `inngest-luks-FAILED`, and exited 1: cloud-init recorded the runcmd item as failed, the
+      # off-box signal said the LUKS stage had failed, and it did so on every healthy boot.
+      # Caught by the loopback suite's FIRST real execution — every mount arm did its work
+      # correctly (device mounted, header written, canary intact) and still returned rc 1.
+      #
+      # Branch here rather than disarming: keeping the trap armed is what makes the rc guard
+      # reachable and testable, which is the property the end-of-block note is protecting.
+      if [ "$rc" -eq 0 ]; then
+        exit 0
+      fi
+      _d="$(tail -c 400 "$INNGEST_LUKS_DETAIL" 2>/dev/null || true)"
+      # The terminal fallback is a self-describing LITERAL, never a path: a path would be
+      # shipped verbatim and impersonate a diagnostic (#7204).
+      [ -n "$_d" ] || _d="detail capture unavailable (/run unwritable or empty)"
+      luks_emit "$STAGE" "$rc" "$${BLK_TYPE:-unknown}" "$_d"
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-luks-FAILED "stage=$STAGE rc=$rc" || true
+      exit 1
+    }
+    trap luks_err EXIT
+    EXPECT_LUKS='${inngest_expect_luks}'
+    DEV="/dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id}"
+    MAPPER=/dev/mapper/inngest-redis
+    [ -n "$${INNGEST_REDIS_LUKS_KEY:-}" ] || { echo "FATAL: INNGEST_REDIS_LUKS_KEY empty — refusing an unencrypted mount" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+
+    # STAGE THE PASSPHRASE FOR THE BOOT-REOPEN UNIT. runcmd is first-boot-only, so this stage
+    # opens the mapper exactly once in the life of the host; inngest-luks-open.service does it on
+    # every later boot, and it runs before the network exists, so it cannot fetch from Doppler.
+    # This is the ONLY place the key is in scope without a network call. ONE variable, 0600
+    # root:root, and the write is FATAL rather than best-effort: a staged key that silently failed
+    # to land reproduces the exact plaintext-AOF-on-root-disk failure the unit exists to prevent,
+    # one boot later and with nothing watching. Mirrors /etc/default/inngest-probe.
+    STAGE=luks_key_stage
+    ( umask 0177 && printf 'INNGEST_REDIS_LUKS_KEY=%s\n' "$${INNGEST_REDIS_LUKS_KEY}" > /etc/default/inngest-luks )
+    chown root:root /etc/default/inngest-luks
+    [ -s /etc/default/inngest-luks ] || { echo "FATAL: /etc/default/inngest-luks is empty after staging — the boot-reopen unit would fail on every later boot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    luks_emit luks_key_stage 0 n/a staged
+
+    # ARM 0 — bounded device-presence wait, BEFORE the discriminator. blkid on an absent path
+    # returns rc 2, which the accept-0-or-2 policy below would otherwise route straight into
+    # the luksFormat arm. A volume that is merely slow to attach must not be read as blank.
+    STAGE=device_wait
+    _i=0
+    while [ "$_i" -lt 30 ]; do
+      [ -b "$DEV" ] && [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] && break
+      sleep 1; _i=$((_i+1))
+    done
+    [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device after 30s — refusing to proceed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    [ "$(/usr/sbin/blockdev --getsize64 "$DEV" 2>/dev/null || echo 0)" -gt 0 ] || { echo "FATAL: $DEV reports zero size after 30s" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+
+    # blkid's OWN rc is checked: 0=signature found, 2=none found. Anything else is "could not
+    # measure", which is NEVER "blank". A wrong format here is terminal — there is no header
+    # backup for this volume (ADR-142 rejects R2 escrow for this store on confidentiality
+    # grounds), so the cost of guessing is the whole AOF.
+    STAGE=blkid_probe
+    _blk_rc=0
+    BLK_TYPE="$(/usr/sbin/blkid -o value -s TYPE "$DEV" 2>/dev/null)" || _blk_rc=$?
+    { [ "$_blk_rc" -eq 0 ] || [ "$_blk_rc" -eq 2 ]; } || { echo "FATAL: blkid could not read $DEV (rc=$_blk_rc) — refusing to write to a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    luks_emit blkid_probe 0 "$${BLK_TYPE:-empty}"
+
+    case "$${BLK_TYPE:-}" in
+      ext4)
+        # ARM 1 — the pre-recut steady state. Mount the plaintext volume as-is and say so.
+        if [ "$EXPECT_LUKS" = "true" ]; then
+          echo "FATAL: expect_luks=true but $DEV still carries an ext4 signature — the recut did not take. Refusing to mount the AOF plaintext while the ledger claims encryption." | tee -a "$INNGEST_LUKS_DETAIL"
+          exit 1
+        fi
+        STAGE=mount_ext4
+        mkdir -p /mnt/data
+        mountpoint -q /mnt/data || mount "$DEV" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+        grep -q ' /mnt/data ' /etc/fstab || echo "$DEV /mnt/data ext4 defaults,nofail 0 2" >> /etc/fstab
+        luks_emit mount_ext4 0 ext4
+        ;;
+      crypto_LUKS)
+        # ARM 2 — already recut. Open and mount; never format.
+        STAGE=luks_open_existing
+        [ -e "$MAPPER" ] || printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
+        luks_emit luks_open_existing 0 crypto_LUKS
+        STAGE=mount_luks
+        mkdir -p /mnt/data
+        mountpoint -q /mnt/data || mount "$MAPPER" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+        grep -q ' /mnt/data ' /etc/fstab || echo "$MAPPER /mnt/data ext4 defaults,nofail 0 2" >> /etc/fstab
+        luks_emit mount_luks 0 crypto_LUKS
+        ;;
+      "")
+        # ARM 3 — raw device, no signature. This is the ONLY arm that may write a new header,
+        # and it is reachable only because blkid returned rc 0-or-2 with an EMPTY type: a
+        # positive proof of blankness, not an inference from a failed probe.
+        STAGE=luks_format
+        printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksFormat --batch-mode --type luks2 --key-file - "$DEV" 2>>"$INNGEST_LUKS_DETAIL"
+        luks_emit luks_format 0 empty
+        STAGE=luks_open_fresh
+        printf '%s' "$INNGEST_REDIS_LUKS_KEY" | cryptsetup luksOpen --key-file - "$DEV" inngest-redis 2>>"$INNGEST_LUKS_DETAIL"
+        luks_emit luks_open_fresh 0 empty
+        STAGE=mkfs
+        mkfs.ext4 -q "$MAPPER" 2>>"$INNGEST_LUKS_DETAIL"
+        luks_emit mkfs 0 empty
+        STAGE=mount_luks
+        mkdir -p /mnt/data
+        mountpoint -q /mnt/data || mount "$MAPPER" /mnt/data 2>>"$INNGEST_LUKS_DETAIL"
+        grep -q ' /mnt/data ' /etc/fstab || echo "$MAPPER /mnt/data ext4 defaults,nofail 0 2" >> /etc/fstab
+        luks_emit mount_luks 0 empty
+        ;;
+      *)
+        # ARM 4 — an unrecognised signature. Refuse. A device carrying LVM, swap, a foreign
+        # filesystem or a damaged header is a device whose contents we cannot account for.
+        echo "FATAL: $DEV carries an unhandled signature TYPE=$BLK_TYPE — refusing to write to a device whose contents are unknown" | tee -a "$INNGEST_LUKS_DETAIL"
+        exit 1
+        ;;
+    esac
+
+    # THE MOUNT IS FATAL ON EVERY ARM. No `|| true`, no `|| :`, no `set +e`, and no fallback to
+    # the raw device. `nofail` STAYS in fstab: this host has no SSH and no console, so a strict
+    # fstab converts a slow attach into an unrecoverable boot wedge. Loud failure belongs in the
+    # Redis unit's ExecStartPre re-assertion (which refuses to start on an unmounted /mnt/data),
+    # not in a line that can brick the boot before anything is able to report it.
+    # THE MARKER THE OPERATOR IS TOLD TO QUERY FOR. Six sites — this host's variables.tf, the
+    # recut dispatch's ::warning:: and its job summary, and three lines of the plan — instruct the
+    # operator to confirm the cutover by querying `SOLEUR_INNGEST_LUKS_STAGE stage=fstab`, and it
+    # was emitted NOWHERE: the terminal stage was `verify`. Following the instruction returned zero
+    # rows forever, which is indistinguishable from "the stage never ran" — the exact question the
+    # query exists to answer, on a host with no SSH and no console.
+    #
+    # It is also the honest marker for what it names: `verify` proves /mnt/data is mounted NOW,
+    # while the fstab line is what makes that survive the next reboot. Asserted, not assumed —
+    # a missing line here means the mount is live but not persistent, which is a silent one-boot
+    # time bomb rather than a failure anyone would see today.
+    STAGE=fstab
+    grep -q ' /mnt/data ' /etc/fstab || { echo "FATAL: /mnt/data mounted but no fstab line was written — the mount would not survive a reboot" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    luks_emit fstab 0 "$${BLK_TYPE:-empty}"
+
+    STAGE=verify
+    mountpoint -q /mnt/data || { echo "FATAL: /mnt/data is not a mountpoint after the stage completed" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
+    luks_emit verify 0 "$${BLK_TYPE:-empty}"
+    # NO `trap - EXIT`: disarming on success would make the rc guard unreachable and untested.
+    # That is why `luks_err` branches on rc instead — see its own note. Keeping the trap armed
+    # while the handler treated rc=0 as a failure is what made every successful boot report
+    # `inngest-luks-FAILED` and exit 1.
+    LUKSEOF
+
+  # Arm the boot-reopen unit. `--now` on purpose: the mapper is already open at this point (the
+  # stage above just opened it) so starting is a no-op, but it makes systemd PARSE and accept the
+  # unit at provision time. A malformed unit or a missing EnvironmentFile then reports HERE,
+  # off-box, instead of at boot 2 when the only observable is an AOF quietly landing on the root
+  # disk. The rc is checked and phoned home either way — an unenabled unit is exactly how this
+  # shipped the first time, and nothing noticed because a `write_files` entry looks like delivery.
+  - |
+    systemctl daemon-reload
+    if systemctl enable --now inngest-luks-open.service; then
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-luks-reopen-armed "" || true
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-luks-reopen-ARM-FAILED "the mapper will not reopen on boot 2" || true
+    fi
+
   # --- #6178 boot observability: stage the Better Stack token + emit the FIRST marker ---
-  # Reached only if the volume mount + Doppler CLI install + scoped-token auth all succeeded,
+  # Reached only if the Doppler CLI install + scoped-token auth + the LUKS stage all succeeded,
   # so a received `doppler-token-fetched` marker proves the boot got this far AND Doppler auth
   # works; TOTAL marker absence localizes the failure to those earlier stages (or lost egress).
+  # CORRECTED (#7695): this used to read "the volume mount + Doppler CLI install". The mount now
+  # runs AFTER the CLI install (it needs the passphrase), so the old ordering claim was inverted
+  # by that move — and it is the kind of sentence a later reader would use to localize a dark
+  # boot to the wrong stage.
   # 0600 in tmpfs /run; the phone-home reads it. set +e: fail-open.
   #
   # CORRECTED (#7228): this comment used to say "re-fetched every boot", which no line of this
@@ -582,6 +898,23 @@ runcmd:
   # NOT brick — the units are enabled and persist. It is re-provision/`-replace` that re-runs
   # it, which is exactly what `hcloud_server.inngest` does on any user_data edit (it carries
   # no lifecycle.ignore_changes=[user_data]).
+  # INNGEST_REDIS_LUKS_KEY (#7695) MUST be admitted, and this is the THIRD instance of the same
+  # defect class in this one regex — the file already records two. inngest-redis-luks.tf declares a
+  # `doppler_secret` of that name into THIS project, and #7695 puts it in the per-merge `-target=`
+  # allowlist so it is minted at MERGE rather than at a dispatch (the passphrase has to exist before
+  # any host boots that reads it). From the moment that apply lands, an unadmitted name makes
+  # n_total(6) != n_inngest(5) → FATAL → no Vector, no inngest-server, no flip timer — and the
+  # failure is invisible off-box, because the component that ships logs is the one that never
+  # installs. That is verbatim what omitting INNGEST_CUTOVER_FLIP did in #6178. Admitting a name
+  # before its secret exists is a NO-OP for the subset test (both counters exclude an absent name),
+  # so landing the admission early is free and removes the ordering hazard entirely — the same
+  # argument the INNGEST_CONFIG_DIGEST note below makes.
+  #
+  # ITS PLACEMENT INSIDE THE GROUP IS NOT ARBITRARY: it sits BEFORE HEARTBEAT_URL so the
+  # `HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)` anchor in inngest-host.test.sh — which proves
+  # BETTERSTACK_LOGS_TOKEN is a TOP-LEVEL sibling rather than a nested member — still reads. A new
+  # member appended after HEARTBEAT_URL would break that anchor and the fix would look like
+  # "update the test", which is how the nesting guarantee gets lost.
   # INNGEST_CONFIG_DIGEST is admitted AHEAD of its terraform apply, deliberately.
   # inngest-config-digest.tf declares a doppler_secret of that name into THIS project and its
   # header requires the admitting regex to land atomically with the apply — admitting an
@@ -605,7 +938,7 @@ runcmd:
     set -euo pipefail
     names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
     n_total="$(printf '%s\n' "$names" | grep -c . || true)"
-    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
+    n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
     if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
       echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_) — refusing to bootstrap"; exit 1
     fi
@@ -644,6 +977,38 @@ runcmd:
   # the shell var; the dedicated host is always soleur-inngest.
   - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\n' '${doppler_token}' > /etc/default/inngest-server )
   - chown root:deploy /etc/default/inngest-server
+
+  # --- #7695 probe_schema=3: the probe's Redis credential, and NOTHING else ----------------
+  # ONE VARIABLE, ON PURPOSE. inngest-server-probe.service reads this via a tolerant
+  # `EnvironmentFile=-`, so the blast radius of the probe holding a credential is this single
+  # secret rather than a whole Doppler config — which is what makes it preferable to wrapping
+  # its ExecStart in `doppler run` (that would inject every secret in `prd` and make the
+  # probe's fixture seams settable by anyone with Doppler write access).
+  #
+  # 0600 root:root, NOT root:deploy like the file above. The probe unit carries no `User=` so
+  # it runs as root; the `deploy` account has no reason to read a Redis password, and it holds
+  # NOPASSWD sudo on this host, so a group-readable copy would be a gratuitous second path to
+  # the same secret. If the unit ever gains a `User=`, match it and move to 0640.
+  #
+  # FAIL CLOSED: if the Doppler read yields empty we write NO FILE. Never
+  # `INNGEST_REDIS_PASSWORD=` — an empty assignment would make the probe's keyspace arm run
+  # with a blank password, and a NOAUTH reply that the `# Keyspace` header test correctly
+  # rejects is indistinguishable at the gate from a warehouse outage. Absence is the honest
+  # signal: the variable stays unset, the arm never runs, and redis_keys reports
+  # __UNREADABLE__, which Guard 2 refuses on.
+  - |
+    set -a
+    . /etc/default/inngest-doppler
+    set +a
+    _rp="$(doppler secrets get INNGEST_REDIS_PASSWORD --project soleur-inngest --config prd --plain 2>/dev/null || true)"
+    if [ -n "$_rp" ]; then
+      ( umask 0177 && printf 'INNGEST_REDIS_PASSWORD=%s\n' "$_rp" > /etc/default/inngest-probe )
+      chown root:root /etc/default/inngest-probe
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-probe-cred-staged "" || true
+    else
+      /usr/local/bin/inngest-boot-phone-home.sh inngest-probe-cred-ABSENT "redis_keys will report __UNREADABLE__" || true
+    fi
+    unset _rp
 
   # --- Extract + run inngest-bootstrap.sh from the baked OCI image ---------------------
   # Gated on the isolation sentinel above (fail-closed). Mirrors the web block in

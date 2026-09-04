@@ -93,10 +93,16 @@ resource "doppler_secret" "git_data_luks_key" {
 
 # (#6982, W1/D1) Better Stack Logs INGEST token, in the same isolated config, so the
 # post-Doppler emits (boot-completion, gc faults) can ship a queryable copy off-box.
-# EXACT MIRROR of doppler_secret.registry_betterstack_logs_token (zot-registry.tf:261) —
-# same source-2457081 token, same `ignore_changes = [value]` (rotation is managed at the
-# source of truth), same TF-managed project/config references so a `-target` of this
-# secret pulls the config in rather than 404-ing at apply.
+# A MIRROR OF SHAPE, and since #7772 no longer of VALUE. It matches
+# doppler_secret.registry_betterstack_logs_token structurally — same
+# `ignore_changes = [value]` (rotation is managed at the source of truth), same TF-managed
+# project/config references so a `-target` of this secret pulls the config in rather than
+# 404-ing at apply.
+#
+# (#7772) WHAT CHANGED: this comment read "EXACT MIRROR … same source-2457081 token". The
+# registry keeps 2457081; git-data now has its own source 2734275 and its own root variable,
+# so the two resources no longer carry the same credential. Left as a shape mirror on purpose
+# — the ignore_changes rationale is what transfers, and it still does.
 #
 # WHY THIS IS READABLE AT ALL, and why it was nearly cut: the Phase-0 W0 probe measured
 # that `doppler run --config prd` under this project's single-config token exits 1
@@ -129,7 +135,7 @@ resource "doppler_secret" "git_data_betterstack_logs_token" {
   project    = doppler_config.git_data_prd.project
   config     = doppler_config.git_data_prd.name
   name       = "BETTERSTACK_LOGS_TOKEN"
-  value      = var.betterstack_logs_token
+  value      = var.git_data_betterstack_logs_token
   visibility = "masked"
 
   lifecycle {
@@ -144,7 +150,7 @@ resource "doppler_secret" "git_data_betterstack_logs_token" {
 # CARDINALITY (#6982): this config now holds TWO secrets — GIT_DATA_LUKS_KEY and
 # BETTERSTACK_LOGS_TOKEN (the ingest token added above). It was one until #6982. The
 # blast-radius argument is unchanged in kind: an ingest token is write-only against a
-# shared log source and cannot read anything back, so a compromise still yields no
+# log source (git-data's OWN since #7772, not the shared one) and cannot read anything back, so a compromise still yields no
 # service-role, GIT_REMOVE or PROXY_TLS material. `.key` is Computed/write-once (same handling as
 # doppler_service_token.write / .kb_drift); rotate via
 # `terraform apply -replace=doppler_service_token.git_data`.

@@ -2,7 +2,7 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **29 issue alerts** — a mix of import-only auth/observability rules (mirrored
+- **30 issue alerts** — a mix of import-only auth/observability rules (mirrored
   from rules created by `apps/web-platform/scripts/configure-sentry-alerts.sh`)
   and **apply-created** rules that terraform fully owns from real
   `conditions_v2`/`filters_v2`/`actions_v2`. The apply-created set includes the
@@ -59,7 +59,7 @@ terraform plan
 
 ## First-time import — COMPLETE, runbook retired (#7590)
 
-First-time adoption of the issue-alert rules is done: this root declares 29
+First-time adoption of the issue-alert rules is done: this root declares 30
 `sentry_issue_alert` resources and plans clean against the full root. The
 step-by-step import runbook that stood here was retired for two reasons, both
 of which made it actively misleading rather than merely obsolete:

@@ -284,7 +284,27 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # entry above: it is floor-bearing, its floor is mutation-testable, and leaving
 # it deferred would grow the shrink-only ledger. The directory-wide fix for
 # `.claude/hooks/` still needs a per-scope ratchet — see #7585.
-PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh)$'
+# `apps/web-platform/infra/pr5-anchor-integrity.test.sh` added by #7640 PR5 — the
+# guard pinning the cutover runbook's cited anchors at HEADING position with an
+# exactly-one count. Promoted, not deferred, on the same three grounds as the
+# entries above: it is floor-bearing (MIN_ASSERTIONS=12), its floor is emitted by
+# `printf` + `exit 1` rather than through the `fail()` it backstops (ADR-193) so
+# it survives a neutered assertion machinery, and its bound is a literal adjacent
+# to the test, so it is mutant-CONSTRUCTIBLE. Measured before promotion: 11/11
+# mutants caught with a green control, 14 passed / 15 assertions against the
+# floor of 12. Deferring it would have grown a shrink-only ledger for a suite
+# that meets the covered bar — which is the outcome this ratchet exists to
+# prevent, not to record.
+# `apps/web-platform/infra/git-data-nftables-syntax.test.sh` added by #7772 — the syntax gate on
+# git-data's metadata-egress ruleset. PROMOTED, not deferred, and the choice is the one this
+# gate's own FAIL message prescribes ("cover it, or promote its directory into COVERED_DIRS — do
+# NOT raise this number"): promoting the FILE is the narrower of the two, since
+# `apps/web-platform/infra/` holds 100+ suites and moving the whole directory into COVERED_DIRS
+# is the change #7585 says needs a per-scope ratchet first. The suite qualifies: its floor is
+# `-lt` over `passes + fails`, so a neutered assertion machinery drives it to 0 and the floor
+# FIRES — and it carries an instrument self-test that exits 1 on a neutered helper before the
+# floor is even reached.
+PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"

@@ -611,6 +611,12 @@ variable "betterstack_logs_token" {
   sensitive   = true
 }
 
+variable "git_data_betterstack_logs_token" {
+  description = "Write-only Better Stack Logs ingest token for git-data's OWN source (2734275, soleur-git-data-prd, platform http, eu-central-1a, 90d retention) — NOT the shared 2457081 credential its four siblings use. Split out by #7772 item 1: the shared token fans out to the Inngest bake, the zot registry's Doppler secret and the web host's Vector sink, so a git-data metadata leak forced a rotation that darkened two other shippers and cost two host replaces. A dedicated source shrinks forged-row blast radius to git-data's own stream and satisfies leg (3) of ADR-198's capability test, which was the open residual. Published to Doppler soleur/prd_terraform as TF_VAR_git_data_betterstack_logs_token (--name-transformer tf-var). NO default (hr-tf-variable-no-operator-mint-default). Minted 2026-09-03 via POST /api/v2/sources — the `betterstackhq/better-uptime` provider still exposes no Logs-source resource (inngest.tf's IaC gap), so this is the same out-of-band provision that source 2457081 took, recorded rather than claimed; the ADR-198 amendment carries the rotation procedure."
+  type        = string
+  sensitive   = true
+}
+
 variable "inngest_config_digest" {
   description = "Promoted digest pointer (INNGEST_CONFIG_DIGEST) for the ADR-135 pull-based config-refresh channel (#6780). The IMMUTABLE @sha256 digest of the currently-promoted, keyless-signed config bundle. Provisioned into the ISOLATED soleur-inngest/prd project by inngest-config-digest.tf; the host timer resolves it, pulls the bundle @sha256 GHCR-direct, and cosign-verify-blobs offline before applying. Published to Doppler soleur/prd_terraform as TF_VAR_inngest_config_digest (--name-transformer tf-var) on each `terraform apply`-driven promotion (HARD-6: Terraform is the writer, no standing CI write-token into the isolated project). Unlike the sibling secrets this is NOT rotation-at-source: promotion CHANGES the value, so the resource does NOT ignore_changes=[value]. Default is EMPTY — the honest dark/pre-promotion sentinel (nothing promoted yet). This is NOT a minted-secret default (hr-tf-variable-no-operator-mint-default targets secrets a default would let an operator skip minting): the value is a CI promotion OUTPUT whose absence is a legitimate state, and an empty default keeps every unrelated `terraform plan`/apply between merge and the #6178 cutover from failing var-resolution (the whole root resolves all TF_VARs before -target pruning). The doppler_secret is excluded from the apply -target list until the cutover, so the empty default never propagates."
   type        = string
@@ -730,4 +736,42 @@ variable "grok_dogfood_private_ip" {
   description = "Reserved private IP if private-net attach is re-enabled later. Unused in Phase 1 (no hcloud_server_network). Default 10.0.1.50."
   type        = string
   default     = "10.0.1.50"
+}
+
+# #7695. Arms the cloud-init LUKS discriminator's post-recut refusal on the dedicated inngest
+# host. While FALSE, an ext4 signature on the Redis AOF volume is the expected pre-recut state
+# and is mounted as-is. Once TRUE, an ext4 signature means the recut did not take, and the boot
+# refuses rather than putting in-flight job payloads back on a plaintext volume while the
+# encryption-posture ledger claims otherwise.
+#
+# THIS MUST NOT FLIP IN THE SAME CHANGE THAT DROPS `format`, and an earlier revision of this
+# comment said it must ("the two are one decision"). Following that instruction bricks the
+# dedicated host's store. The two settings act at different moments:
+#
+#   `format` governs what a CREATE produces — it matters exactly once, on the recut apply.
+#   `inngest_expect_luks` governs what every BOOT refuses — it matters on every boot after it flips.
+#
+# The delivery order is four dispatches (ADR-199 addendum, 2026-09-03):
+#
+#   1. merge                    `format` gone; expect_luks STILL false
+#   2. inngest-host-replace     first boot; the volume is STILL the old ext4 one, so ARM 1 mounts
+#                               it plaintext and the host serves. With expect_luks=true here, ARM 1
+#                               REFUSES instead, /mnt/data never mounts, inngest-redis.service's
+#                               mount guard correctly declines to start, and the dedicated host
+#                               comes up with no store — on a host with no SSH and no console.
+#   3. inngest-volume-recut     the volume is destroyed and re-created RAW (this is where dropping
+#                               `format` pays off; ignore_changes suppresses diffs, never creates)
+#   4. inngest-host-replace     first boot against a RAW device: ARM 3 luksFormats it. ARM 3 does
+#                               not consult expect_luks at all, so the cut does not need it either.
+#
+# So expect_luks buys nothing until AFTER step 4, and costs the host its store if flipped before
+# step 2. Flip it in a LATER change, once a boot has been observed reaching
+# `SOLEUR_INNGEST_LUKS_STAGE stage=fstab` on /dev/mapper/inngest-redis — at which point an ext4
+# signature really does mean the recut did not take, which is the only state it exists to refuse.
+#
+# It is not an operator-supplied value and has no secret content.
+variable "inngest_expect_luks" {
+  description = "Whether the dedicated inngest host should REFUSE to mount an ext4 /mnt/data (i.e. the LUKS recut has run)."
+  type        = bool
+  default     = false
 }

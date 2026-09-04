@@ -15,6 +15,17 @@ safe to re-run. Where a step says "run", that is what it means; where it says
 
 ## Sequence
 
+> **Plan (ARCHIVED 2026-09-03 by PR5, AC58).** The migration plan this runbook
+> implements now lives at
+> `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`,
+> and its two spec dirs at
+> `knowledge-base/project/specs/archive/20260903-221104-feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages`
+> and
+> `knowledge-base/project/specs/archive/20260903-221155-feat-one-shot-7640-cloudflare-pages-migration`.
+> **This runbook is the live artifact** — the plan is history, kept for the
+> measurements and rejected alternatives behind each decision here.
+
+
 | PR | Contents | Applied by | Reverting it removes |
 |---|---|---|---|
 | PR1 | Pages project, Actions secrets, www Bulk Redirect, cert-reissue disarmament | apply-web-platform-infra | the substrate |
@@ -52,7 +63,13 @@ A mismatch does not error — Terraform no-ops the move, the apex plans as two
 concurrent addresses again, and the hazard returns with no signal anywhere.
 `apex-single-node-replace.test.sh` row M3 is the only detection there is.
 
-## Dual-publish: both origins are live
+## Dual-publish: both origins WERE live (PR2 -> PR5) — HISTORY, not current state
+
+> **STATE AS OF 2026-09-03: SINGLE-ORIGIN, Cloudflare Pages only.** PR5 retired
+> the GitHub Pages publish leg. This section and `## State after PR2` below are
+> the TRANSITION RECORD. If you are here during an incident, the current state
+> and the rollback you want are in `### PR5 NARROWED THE ROLLBACK` further down.
+
 
 From PR2 until PR5, **every docs merge publishes to both origins** — GitHub Pages
 and the `soleur-docs` Cloudflare Pages project — from the same `_site`.
@@ -68,17 +85,27 @@ Consequences worth knowing before you read the rollback:
   repo, the second is a public hostname.
 - The job is a **conjunction**: if either origin fails to publish, or either
   build-identity probe fails, the whole run is red. No leg aborts the others.
-- **Between the PR4b apply and the PR5 merge, a red GitHub-Pages leg is EXPECTED
-  and benign.** Once the apex `A` records are gone, GitHub's custom-domain DNS
-  check fails and that leg cannot succeed. The remedy is to merge PR5, which
-  removes the leg — not to debug it, and not to revert PR4b.
+- **THIS PREDICTION WAS WRONG, and the correction matters for the rollback.**
+  This bullet used to say a red GitHub-Pages leg was EXPECTED between the PR4b
+  apply and the PR5 merge, because GitHub's custom-domain DNS check would fail
+  once the apex `A` records were gone. **Measured 2026-09-03, after the flip:**
+  run `33802992407` (`9c9a48505`, >1h post-apply) reported `Deploy to GitHub
+  Pages: success`, and so did every other post-apply run. The mechanism is
+  `gh api repos/{owner}/{repo}/pages` -> `"build_type": "workflow"`: a
+  workflow-source deployment does NOT gate on the custom-domain DNS check, even
+  with `https_certificate.state: bad_authz` and `expires_at: 2026-08-16`.
+  **This is load-bearing for the rollback, not a footnote.** Because
+  `actions/deploy-pages` succeeds while DNS points at Cloudflare, act 2 of the
+  three-act rollback ("redeploy so GitHub Pages holds a CURRENT build") is
+  executable BEFORE act 3 restores DNS. Had the original prediction held, that
+  ordering would have been impossible and the rollback below would be wrong.
 
   **This does NOT apply in the PR4a->PR4b window.** After PR4a the apex is
   still served by GitHub Pages and GitHub Pages is still the rollback target,
   so a red publish leg there is a real failure on the origin currently serving
   the site — investigate it, do not wave it through.
 
-## State after PR2 (this PR)
+## State after PR2 (HISTORY — PR2 is long merged; see the state banner above)
 
 `deploy-docs.yml` publishes to the `soleur-docs` Pages project. The apex is
 **still GitHub Pages** until PR4b. Consequences, stated so they are not
@@ -227,6 +254,61 @@ changed under the ack — **stop**.
 
 ## Rollback
 
+> ### READ THIS BEFORE `### Procedure` — PR5 CHANGED THE ORDER
+>
+> `### Procedure` below is written for the pre-PR5 world and its **step 1 is the
+> DNS revert**. Since PR5 (2026-09-03) the DNS revert is the LAST act, not the
+> first: GitHub Pages content is frozen at the last PR4-era build, so doing it
+> alone serves stale content under the real domain and `### Procedure` step 3
+> will tell you that you are finished.
+>
+> **Act 0 — PRECONDITION, check before anything else.**
+> `grep -c 'ssl *= *"full"' apps/web-platform/infra/seo-config-rules.tf` must
+> return `1`. The GitHub Pages origin certificate expired 2026-08-16; that
+> Configuration Rule is the ONLY thing keeping the apex on TLS once it points
+> back at GitHub Pages. Without it the apex returns **HTTP 526**, and
+> `soleur.ai` is HSTS-preloaded, so there is no `http://` fallback. If it is
+> missing, restore it before touching DNS (#7799 holds the removal conditions).
+>
+> **Act 1 — re-add the publish leg** to `.github/workflows/deploy-docs.yml`
+> (the three `actions/*-pages*` steps, the `environment:` block, and the
+> `pages:`/`id-token: write` grants) and merge it.
+>
+> **Act 2 — let it run so GitHub Pages holds a CURRENT build.** Acts 1 and 2 are
+> ONE merge, not two: `deploy-docs.yml` is inside its own `paths:` filter, so
+> merging act 1 fires act 2 automatically. Do not sit waiting for a separate
+> trigger. This act IS executable before act 3 — see the measured correction
+> under `## Dual-publish` about `build_type: workflow`.
+>
+> **Act 3 — revert the DNS**, via
+> `apps/web-platform/infra/generate-apex-rollback-pr.sh`. Never `git revert`.
+> This is `### Procedure` below; start there only once acts 0-2 are done.
+>
+> **Act 4 — CONDITIONAL.** If `apex-origin-probe.sh` still reports
+> `SERVING-FROM-CLOUDFLARE-PAGES` after act 3, the custom-domain ATTACHMENT is
+> also routing: revert PR3 too (`### Procedure` step 3, which needs its own
+> `[ack-destroy]`). This is why the count is "three, or four" — never a bare
+> three.
+>
+> **The branch restriction PR5 replaced, and how it was measured.** The retired
+> deployment environment carried exactly one deployment-branch policy. PR5
+> replaced it with a `github.ref == 'refs/heads/main'` conjunct on the job's
+> `if:`, because `workflow_dispatch` carries no ref restriction of its own and
+> without it a dispatch from any branch would publish that branch to the
+> production apex with both build-identity probes reporting MATCH. Re-measure
+> with:
+>
+> ```bash
+> gh api repos/{owner}/{repo}/environments/github-pages/deployment-branch-policies \
+>   --jq '{total: .total_count, policies: [.branch_policies[] | {name, type}]}'
+> # measured 2026-09-03 -> {"total":1,"policies":[{"name":"main","type":"branch"}]}
+> ```
+>
+> **Preconditions measured 2026-09-03, so acts 1-2 are not speculative:**
+> `gh api repos/{owner}/{repo}/pages` -> `cname: soleur.ai`,
+> `build_type: workflow`. The custom-domain binding SURVIVED the PR4b cutover,
+> so act 2 has somewhere to publish to. Re-measure before relying on it.
+
 ### The merge path is the only path
 
 `workflow_dispatch` **cannot** perform the infrastructure rollback. The destroy
@@ -334,7 +416,11 @@ generated `moved` would no-op exactly as a mismatched forward one would.
    It reports `SERVING-FROM-GITHUB-PAGES`, `SERVING-FROM-CLOUDFLARE-PAGES`, or
    an explicit `UNREACHABLE` — it never reports an origin it did not observe.
 3. Branch on what step 2 actually reported:
-   - `SERVING-FROM-GITHUB-PAGES` — the rollback is complete. Stop here.
+   - `SERVING-FROM-GITHUB-PAGES` — the DNS half is done. **Post-PR5 that is
+     "complete" only for AVAILABILITY, and only if acts 1-2 ran first.** If they
+     did not, the apex is now serving the frozen last-PR4-era build: go back to
+     the acts 0-4 block at the top of `## Rollback` and do acts 1-2, which will
+     republish current content to the origin you just pointed at.
    - `SERVING-FROM-CLOUDFLARE-PAGES` — merge the revert of **PR3** as well.
      Custom-domain attachment, not only the DNS record, can establish edge
      routing for a hostname. **That revert destroys two `cloudflare_pages_domain`
@@ -383,12 +469,54 @@ the one you want; `seo-bulk-redirects.tf` is.
 > answer a question the sequencing had already made moot. D3's body still
 > describes 3(b) as "measured in PR2" and is superseded on that point.
 
-### Rollback content freeze
+### PR5 NARROWED THE ROLLBACK: three acts, or four — rationale
 
-GitHub Pages serves the **last pre-cutover build** and nothing re-asserts the
-`CNAME` file to it once `deploy-docs.yml` stops deploying there. A rollback
-three weeks after the cutover serves three-week-old docs. Acceptable for an
-availability rollback; stated so nobody is surprised by it.
+**This section describes the state from PR5 (#7640, AC33/AC56) onward.** The
+ordering summary now lives at the TOP of `## Rollback` as acts 0-4, because a
+correction 150 lines below the procedure it corrects is not a correction. This
+section is the rationale behind it.
+
+An earlier revision of this paragraph told the reader to distrust "anything
+above that says a DNS-only revert IS the rollback" — a string that appeared
+nowhere above it. The claims it meant are `## Dual-publish` ("it is the rollback
+target, and it is kept current"), now retitled as history with a state banner,
+and `### Procedure` step 1, now preceded by the acts 0-4 block.
+
+PR5 deleted the GitHub Pages publish leg from `deploy-docs.yml` (the three
+`actions/*-pages*` steps, the deployment `environment:` block, and the
+`pages:`/`id-token: write` grants). Consequences, in the order they bite:
+
+1. **The retained GitHub Pages content is FROZEN** at the last PR4-era build.
+   Nothing republishes to it, and nothing re-asserts its `CNAME` file.
+2. **Restoring that origin now takes THREE acts, or FOUR** — the canonical
+   list is the acts 0-4 block at the top of `## Rollback`; it is not repeated
+   here so the two cannot drift. The fourth is conditional: if
+   `apex-origin-probe.sh` still reports `SERVING-FROM-CLOUDFLARE-PAGES` after
+   the DNS revert, the custom-domain ATTACHMENT is routing independently of the
+   record and PR3 must be reverted too. **Never quote a bare "three".**
+3. **The apex cutover rollback itself is unchanged and still one act** — the
+   generated reverse-`moved` PR. What changed is what that rollback LANDS ON.
+
+So a rollback three weeks after the cutover serves three-week-old docs unless
+act 2 runs first. Acceptable for an availability rollback; stated here, in
+`deploy-docs.yml`'s own comment, and in the re-evaluation criteria on #7799, so
+nobody rediscovers it mid-incident.
+
+**What the pre-PR5 verification actually covered, stated so it is not
+over-read.** CUT0'-CUT9 held across three consecutive clean samples at 60 s,
+~90 minutes after the apply. Every one of those ten assertions is a
+POINT-IN-TIME read (an HTTP code, a header, a redirect code, an MX/TXT set
+comparison), so three samples bound FLAPPING and nothing else. They did NOT and
+could not observe the class the plan itself calls brand-fatal and
+asymmetric-recovering: search-index health. No CUT row, neither build-identity
+probe, and none of the five uptime monitors samples crawl or index state, and a
+90-minute window cannot contain a Googlebot cycle. If the index degrades, the
+signal is Search Console coverage or a sitemap-fetch check — not anything in
+this runbook — and the remedy is the three-to-four-act rollback above onto
+frozen content, which is precisely what PR5 made more expensive. This is a
+disclosed residual, not a defect: same-session merge was chosen for the flap
+class and for CI hygiene (a standing red required check on every docs merge is
+how real signal gets ignored), not because 90 minutes settled the index class.
 
 ### The rollback window depends on deferred cleanup staying deferred
 

@@ -247,11 +247,19 @@ _value_proven=""
 #
 # A SECOND COPY of a literal, so it is guarded rather than trusted. Both sides extracted BY
 # SHAPE from their own file: a hardcoded expectation here would pass while prod moved.
+#
+# (#7772) THE PROD SIDE MOVED FILES, AND THAT IS WHY THIS ARM IS BY-SHAPE ON BOTH SIDES.
+# git-data has its own Better Stack source since item 1, so production's literal is
+# `local.git_data_betterstack_ingest_url` in git-data.tf, NOT
+# `local.betterstack_logs_ingest_url` in zot-registry.tf. That older local still EXISTS and
+# still serves the four non-git-data consumers, so an arm left aimed at zot-registry.tf would
+# keep extracting a real, well-formed URL and keep passing -- while comparing the wrong pair.
+# A green arm over the wrong operand is the failure mode here, not a red one.
 reh_ingest="$(sed 's/^[[:space:]]*#.*$//' "$REH/variables.tf" \
   | awk '/^variable "betterstack_ingest_url"/{i=1} i&&/^[[:space:]]*default[[:space:]]*=/{print;exit} i&&/^}/{exit}' \
   | sed 's/.*"\([^"]*\)".*/\1/')"
-prod_ingest="$(sed 's/^[[:space:]]*#.*$//' "$DIR/zot-registry.tf" \
-  | grep -oE 'betterstack_logs_ingest_url[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 \
+prod_ingest="$(sed 's/^[[:space:]]*#.*$//' "$DIR/git-data.tf" \
+  | grep -oE 'git_data_betterstack_ingest_url[[:space:]]*=[[:space:]]*"[^"]+"' | head -1 \
   | sed 's/.*"\([^"]*\)"$/\1/')"
 if [[ -n "$reh_ingest" && -n "$prod_ingest" && "$reh_ingest" == "$prod_ingest" ]]; then
   _value_proven="${_value_proven} betterstack_ingest_url"
@@ -1590,7 +1598,7 @@ _res_ok=1
 for _need in 'name[[:space:]]*=[[:space:]]*"BETTERSTACK_LOGS_TOKEN"' \
              'config[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.name' \
              'project[[:space:]]*=[[:space:]]*doppler_config\.git_data_prd\.project' \
-             'value[[:space:]]*=[[:space:]]*var\.betterstack_logs_token' \
+             'value[[:space:]]*=[[:space:]]*var\.git_data_betterstack_logs_token' \
              'ignore_changes[[:space:]]*=[[:space:]]*\[value\]'; do
   [[ "$(grep -cE "$_need" <<<"$_bs_res" || true)" -ge 1 ]] || _res_ok=0
 done
@@ -1603,7 +1611,17 @@ fi
 
 # 5.6a THE DIVERGENCE ALLOWLIST MUST NOT HAVE GROWN. Adding betterstack_logs_token to it would
 # permit a rehearsal that shipped its stage markers to a DIFFERENT sink than production while
-# still producing hash-valid evidence — the one thing the allowlist exists to refuse. Asserted
+# still producing hash-valid evidence — the one thing the allowlist exists to refuse.
+#
+# (#7772, D1) THE PREMISE'S WORDING CHANGED; THE PIN DID NOT. This arm used to be justified as
+# "prod and rehearsal share one sink", meaning the SHARED source 2457081. Since item 1 they
+# share git-data's OWN source (2734275) instead — a different sink, still exactly one, so the
+# assertion this arm makes is unchanged and the allowlist is NOT widened. The briefing framed
+# this as widen-or-weaken; it is neither. What made that possible is renaming the rehearsal
+# root's variable in lockstep: this root resolves inputs by Doppler name transformation, so
+# re-pointing prod alone would have left the rehearsal on the shared credential while every
+# structural arm here stayed green.
+# Asserted
 # as ABSENCE of this name, not as an exact-set pin: the set legitimately changes for identity
 # vars, and pinning it whole here would duplicate the gate's own authority.
 # NO `head -1`. Shell assignment is LAST-WINS, so reading only the first occurrence let a
@@ -1642,12 +1660,12 @@ _modblk() {  # $1 = root .tf ; prints the git-data-userdata module block only
 }
 _prod_blk="$(_modblk "$_prod_tf")"; _reh_blk="$(_modblk "$_reh_tf")"
 [[ -n "$_prod_blk" && -n "$_reh_blk" ]] || { _prod_blk=""; _reh_blk=""; }
-_prod_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' <<<"$_prod_blk" || true)"
-_reh_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.betterstack_logs_token[[:space:]]*$' <<<"$_reh_blk" || true)"
+_prod_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.git_data_betterstack_logs_token[[:space:]]*$' <<<"$_prod_blk" || true)"
+_reh_pass="$(grep -cE '^[[:space:]]*betterstack_logs_token[[:space:]]*=[[:space:]]*var\.git_data_betterstack_logs_token[[:space:]]*$' <<<"$_reh_blk" || true)"
 if [[ "$_prod_pass" -ge 1 && "$_reh_pass" -ge 1 ]]; then
-  pass "both roots pass their own var.betterstack_logs_token into the module"
+  pass "both roots pass their own var.git_data_betterstack_logs_token into the module"
 else
-  fail "both roots pass their own var.betterstack_logs_token into the module" \
+  fail "both roots pass their own var.git_data_betterstack_logs_token into the module" \
        "one root hardcodes it, renames it, or does not pass it at all"
 fi
 
@@ -1657,7 +1675,7 @@ fi
 _novar_default() {  # $1 = variables.tf path ; 0 = no default declared
   local _blk _n
   _blk="$(sed 's/[[:space:]]#.*$//' "$1" \
-    | awk '/^variable "betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
+    | awk '/^variable "git_data_betterstack_logs_token"/{f=1} f{print} f&&/^}/{exit}')"
   # `-n "$_blk"` FIRST. An absent variable block is an empty string, which has zero `default`
   # lines and so PASSED -- "neither root declares a default" was satisfied by "neither root
   # declares the variable". Measured: deleting the block from BOTH roots left 75/0 green.
@@ -1667,9 +1685,9 @@ _novar_default() {  # $1 = variables.tf path ; 0 = no default declared
 }
 cases=$((cases + 1))
 if _novar_default "${DIR}/variables.tf" && _novar_default "${DIR}/rung2-rehearsal/variables.tf"; then
-  pass "neither root declares a default for betterstack_logs_token (no silent fallback)"
+  pass "neither root declares a default for git_data_betterstack_logs_token (no silent fallback)"
 else
-  fail "neither root declares a default for betterstack_logs_token (no silent fallback)" \
+  fail "neither root declares a default for git_data_betterstack_logs_token (no silent fallback)" \
        "a default lets one root resolve a different value while every structural check still passes"
 fi
 
@@ -1683,6 +1701,43 @@ fi
 # RAISED 71 -> 75 (#7460): four arms binding the baked ingest token — its Doppler residency, its
 # ABSENCE from the divergence allowlist, both roots passing their own root variable, and neither
 # root declaring a default. 71 + 4 = 75. Measured: 75 passed, 0 failed.
+# ── INSTRUMENT SELF-TEST (#7772 review) ───────────────────────────────────────────
+# THIS SUITE'S FLOOR IS DENOMINATED IN A THIRD COUNTER AND CANNOT SEE EITHER HELPER. `cases` is
+# incremented at each arm, independently of pass() and fail(), so a neutered fail() leaves the
+# floor perfectly satisfied. Measured against a real injected regression (`default = ""` added
+# to git_data_betterstack_logs_token in rung2-rehearsal/variables.tf, which reds one arm):
+#
+#   fail() { passes=$((passes + 1)); ... }  -> 75 passed, 0 failed, rc=0 — BYTE-IDENTICAL to a
+#                                              clean run
+#   fail() { :; }                           -> 74 passed, 0 failed, rc=0, and the floor still
+#                                              printed `ok anti-vacuity floor: 75 assertions ran`
+#
+# The second case prints `74` and `75` on adjacent lines and nothing compares them. Both checks
+# below close that: the canary proves the helpers still dispatch, and the reconciliation proves
+# every counted case actually reached one of them.
+_can_p0=$passes; _can_f0=$fails
+pass "CANARY — instrument self-test, not a real assertion" >/dev/null
+fail "CANARY — instrument self-test, not a real failure" >/dev/null
+if [[ "$passes" -ne $((_can_p0 + 1)) || "$fails" -ne $((_can_f0 + 1)) ]]; then
+  printf '\n[FATAL] CANARY: driving pass()/fail() once each moved passes %d->%d (want +1) and fails %d->%d (want +1).\n' \
+    "$_can_p0" "$passes" "$_can_f0" "$fails" >&2
+  printf '  An assertion helper has been neutered. The cases floor below counts a SEPARATE\n' >&2
+  printf '  variable and is structurally blind to this.\n' >&2
+  exit 1
+fi
+passes=$_can_p0; fails=$_can_f0
+
+# RECONCILIATION: every counted case must have reached exactly one helper. Without this, a
+# no-op fail() shows up only as a silent one-per-failure gap between `passes + fails` and
+# `cases` — printed, adjacent, and compared by nobody.
+if [[ $((passes + fails)) -ne "$cases" ]]; then
+  printf '\n[FATAL] accounting: %d passed + %d failed = %d, but %d case(s) were counted.\n' \
+    "$passes" "$fails" "$((passes + fails))" "$cases" >&2
+  printf '  Every arm increments `cases` and then calls pass() or fail(). A gap means an arm\n' >&2
+  printf '  counted itself and reached neither helper — an assertion that ran and said nothing.\n' >&2
+  exit 1
+fi
+
 if [[ "$cases" -lt 75 ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 75.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2

@@ -2,19 +2,11 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, mkdirSync, existsSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { gitCleanEnv } from "./lib/git-clean-env";
 
 const HOOK_PATH = join(import.meta.dir, "../hooks/welcome-hook.sh");
 
 // Build a clean env excluding all GIT_* variables that lefthook injects.
-// Both git init and the hook must use this env — otherwise GIT_DIR from
-// the parent process causes git to resolve the wrong repository.
-function gitCleanEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, val] of Object.entries(process.env)) {
-    if (!key.startsWith("GIT_") && val !== undefined) env[key] = val;
-  }
-  return env;
-}
 
 function createTempGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "welcome-hook-test-"));
