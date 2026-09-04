@@ -16,6 +16,45 @@ requires_cpo_signoff: true
 > No `knowledge-base/project/specs/<branch>/spec.md` exists for this branch, so `lane:` could not be
 > carried forward and defaults to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-04
+**Halt gates:** 4.6 User-Brand Impact PASS · 4.7 Observability PASS (5/5 fields, verb `bash`, no SSH)
+· 4.9 UI-wireframe SKIP (no UI surface) · 4.10 Encryption Posture SKIP (no store or new connection)
+· 4.11 Guard Contract PASS (`lint-guard-contract.py` green; Assembly is structural — it names the
+run-time producer and the two waiver copies, not today's six members)
+
+### Verification performed at deepen time
+
+| Check | Result |
+|---|---|
+| Cited AGENTS rule ids active | 3/3 active (`cq-cite-content-anchor-not-line-number`, `wg-block-pr-ready-on-undeferred-operator-steps`, `wg-ui-feature-requires-pen-wireframe`); none in `scripts/retired-rule-ids.txt` |
+| Cited commit attribution | `5d8a12736` resolves, **is an ancestor of `origin/main`**, is PR #7782, and its diff adds 3 lines citing `sentry-migration-audit-2026-05-15` to the register — the B1-remediation claim holds |
+| Cited issue/PR states | 7/7 resolve as asserted — #7717 CLOSED, #7782 MERGED, #7787/#7786/#7791 OPEN, #7347/#7349 CLOSED |
+| Grep-AC self-match sweep | **One hazard found and fixed.** AC10's unscoped `grep -rl` matched this plan and the #7717 `session-state.md`, both of which quote the 529 request IDs — it would have read as coverage that does not exist. Now scoped with `--exclude-dir=specs --exclude='*-plan.md'` and re-measured |
+| Guard arithmetic | Final state simulated in a sandbox: `produced=10 waived=6 waiver-parity=ok`, `(c) all 10 … indexed or waived` green |
+
+### Key improvements from the review rounds
+
+1. **The ordering was circular and would have redded CI.** The waiver cannot precede the file, the
+   deletion cannot precede the waiver removal, and the guard is green only after all three. Now a
+   two-pass CLO interaction with a stated atomic-commit requirement.
+2. **`produced=11` was unreachable in any passing state** — corrected to `produced=10` at six sites
+   after simulating the swap rather than reasoning about it.
+3. **Three of the issue's own premises were inverted**, one of which ("apply Ruling 1 as given")
+   would have reopened a blocking finding.
+4. **A false claim was inherited from a signed document**: R-e asserted four stale `102` sites; only
+   three are stale. The correctness pass caught it by running the greps.
+
+### New considerations discovered
+
+- The register **defers to #7791 by name** in places the issue never mentions, and carries a live
+  admission of its own incompleteness that its contents falsify — the highest-severity item here,
+  and absent from the issue's four scope items.
+- The counsel review's own frontmatter is stale `BLOCKED` over a tree meeting all three of its
+  self-declared re-issue conditions.
+- Ship Phase 5.5 will write a second audit into the same directory and re-trip the same guard check.
+
 ## Overview
 
 The Art. 33(5) breach register landed without its CLO attestation. The gap is procedural, not
@@ -791,7 +830,7 @@ shelf life of one PR.
 | AC7b | …and its `status:` was **not** | `git diff origin/main -- knowledge-base/legal/breach-register.md \| grep -c '^[-+]status:'` = 0 | Passes trivially alone — **load-bearing only paired with AC7a** |
 | AC8 | The implementation record is retired | `test ! -f knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md` | **FAILS** (present) |
 | AC9 | `INDEX.md` points at the attestation, not the retired record | `grep -c 'implementation-record-7717' knowledge-base/INDEX.md` = 0 **and** `grep -c 'clo-attestation-7717' knowledge-base/INDEX.md` = 1 | **FAILS** (`1` and `0`) |
-| AC10 | Nothing unique is lost. **Per CLO ruling F9 all four items land INSIDE the attestation**, with the AC1–AC13 table carried as an annex labelled *"engineering verification, adopted by the CLO as evidence, not as legal finding"*. (An earlier draft of this AC required the opposite — re-homing them outside — and was corrected at plan review: F9 overruled that routing, and the AC had not been updated to match.) | the attestation carries the three 529 request IDs, the unratified narrative, `Implementation: VERIFIED`, and the labelled AC1–AC13 annex; `grep -rl 'req_011CegcTbK6bQXipPMqhFHVS' --exclude-dir=.git` still returns the learning file | Baseline: **3** tracked files on `origin/main` carry the request IDs (`git grep -l … origin/main`), and no attestation exists — **FAILS**. An earlier draft said 4, counting this plan's own untracked prose — the same count-includes-my-own-diff mechanism as R-e |
+| AC10 | Nothing unique is lost. **Per CLO ruling F9 all four items land INSIDE the attestation**, with the AC1–AC13 table carried as an annex labelled *"engineering verification, adopted by the CLO as evidence, not as legal finding"*. (An earlier draft of this AC required the opposite — re-homing them outside — and was corrected at plan review: F9 overruled that routing, and the AC had not been updated to match.) | the attestation carries the three 529 request IDs, the unratified narrative, `Implementation: VERIFIED`, and the labelled AC1–AC13 annex; the learning file survives — `grep -rl 'req_011CegcTbK6bQXipPMqhFHVS' --exclude-dir=.git --exclude-dir=specs --exclude='*-plan.md'` still returns `knowledge-base/project/learnings/2026-09-03-four-ways-…md`. **The exclusions are load-bearing**: this plan and the #7717 `session-state.md` both quote the request IDs, so an unscoped grep matches the planning artifacts and reads as coverage that does not exist | Baseline: **3** tracked files on `origin/main` carry the request IDs (`git grep -l … origin/main`), and no attestation exists — **FAILS**. An earlier draft said 4, counting this plan's own untracked prose — the same count-includes-my-own-diff mechanism as R-e |
 | AC11 | Every markdown row added or edited satisfies `cells == header_cells` (index table **9**, `§Excluded records` **2**) | per-row cell count over the diff | n/a — asserted over the diff |
 | AC12 | The blocking unit suite passes, including its `live corpus passes the guard` case | `bash scripts/lint-legal-registers.test.sh` | Passes at baseline; **would red** on a broken swap |
 | AC14 | The counsel review's **signed verdict rows A1–A9 and corrections C1–C5 are byte-unchanged**; the only edits are the frontmatter re-issue and the appended `## Discharge on re-issue` section | `git diff origin/main -- …2026-09-counsel-review-7717.md` touches no line inside `## Per-artifact verdicts` or `## Corrections appended during this review`; `related:` unchanged | Empty at baseline — paired with AC8, which makes the reference dangle |
