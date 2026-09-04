@@ -244,6 +244,37 @@ cmd_record_count() {
   '
 }
 
+cmd_key_count() {
+  # Count occurrences of a KEY inside the named block, independent of record
+  # boundaries.
+  #
+  # This exists as a SECOND, differently-derived view of the registry's size.
+  # `record-count` counts `- path:` openers, so it shares its record-opener
+  # predicate with `_emit_files` — which means deleting an OPENER line shrinks
+  # both views together and a completeness check comparing them holds while a
+  # record was silently absorbed into its predecessor (measured: declared 7,
+  # emitted 7, one record lost, #7710 review). Counting a key that every record
+  # carries but the opener predicate does NOT consume breaks that coupling.
+  local block_key="${1:-lifted-files}"
+  local want_key="${2:-status}"
+  local fm
+  fm=$(extract_frontmatter) || { echo 0; return 0; }
+  [[ -n "$fm" ]] || { echo 0; return 0; }
+  printf '%s\n' "$fm" | awk -v block_key="$block_key" -v want_key="$want_key" '
+    BEGIN { in_block=0; n=0 }
+    $0 ~ "^" block_key ":[[:space:]]*$" { in_block=1; next }
+    /^[A-Za-z]/ { in_block=0 }
+    in_block {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+:[[:space:]]+/, ": ", line)
+      split(line, tok, /[[:space:]]+/)
+      if (tok[1] == want_key ":") n++
+    }
+    END { print n+0 }
+  '
+}
+
 cmd_soleur_authored() {
   # Soleur-authored reference files. These are NOT upstream-derived, so they
   # carry a `local-blob-sha` only and never appear in `upstream-files` — a
@@ -271,11 +302,14 @@ case "${1:-}" in
   record-count)
     cmd_record_count "${2:-lifted-files}"
     ;;
+  key-count)
+    cmd_key_count "${2:-lifted-files}" "${3:-status}"
+    ;;
   upstream-files)
     cmd_upstream_files
     ;;
   *)
-    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|soleur-authored|upstream-files|record-count [block]}" >&2
+    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|soleur-authored|upstream-files|record-count [block]|key-count [block] [key]}" >&2
     exit 2
     ;;
 esac

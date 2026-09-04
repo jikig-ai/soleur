@@ -7,7 +7,12 @@
 // ADR-033 invariants (binding all cron-*.ts files):
 //   I1 — Octokit + node:fs reads called INSIDE step.run (replay memoization).
 //   I2 — Operator-owned data only; never founder BYOK.
-//   I3 — Outer wall-clock safety via Promise.race (MAX_RUN_DURATION_MS).
+//   I3 — NOT SATISFIED in this file. There is no `Promise.race`, and
+//        `MAX_RUN_DURATION_MS` is exported but never applied to anything, so
+//        this function has no outer wall-clock bound; it relies on Inngest's
+//        own step timeouts. This line claimed the guard was in force until
+//        #7710 review measured it. Corrected rather than removed so the gap
+//        is visible.
 //   I4 — N/A (no claude binary; Octokit + git spawn only).
 //   I5 — Deterministic step.run return shape per step (see handler).
 //   I6 — Any event payload this function emits carries `actor: "platform"`.
@@ -50,6 +55,18 @@ import { SYNTHETIC_CHECK_NAMES, safeCommitAndPr } from "./_cron-safe-commit";
 const SENTRY_MONITOR_SLUG = "scheduled-content-vendor-drift";
 
 export const MAX_RUN_DURATION_MS = 15 * 60 * 1000;
+
+/**
+ * Days below which a verified-clean run skips the write entirely.
+ *
+ * The banner fires at STALENESS_WARN_DAYS (30), so re-attesting a field only
+ * days old costs a bot PR on a compliance-critical file for no signal. At 21
+ * a weekly cron writes at most once per three weeks and the observed age
+ * never exceeds 21 on the healthy path, leaving 9 days of margin before the
+ * banner — enough to absorb one missed run (28) but not two (35), which is
+ * the intended alarm.
+ */
+export const WRITE_SUPPRESSION_DAYS = 21;
 const TOKEN_MIN_LIFETIME_MS = 20 * 60 * 1000;
 
 export const NOTICE_FILE_REL = "plugins/soleur/skills/gdpr-gate/NOTICE";
@@ -58,6 +75,21 @@ export const PARSER_REL =
 export const CLASSIFIER_REL =
   "plugins/soleur/skills/gdpr-gate/scripts/vendor-drift-classify.sh";
 export const SKILL_PREFIX = "plugins/soleur/skills/gdpr-gate";
+
+/**
+ * Branch prefix for the freshness-attestation PR.
+ *
+ * DELIBERATELY OUTSIDE the `ci/content-vendor-drift-` namespace that
+ * `deriveBranchName(cronName, …)` would produce. The detect step dedups the
+ * re-vendor route with `head:ci/content-vendor-drift-`, a guard written when
+ * only that route created such branches. An attestation PR sitting on the
+ * same prefix — which is the ORDINARY state, since the direct merge normally
+ * falls back to armed auto-merge — would make the next run that finds genuine
+ * drift return `skipped-open-pr` and open no re-vendor PR at all, while the
+ * heartbeat reported healthy. Two independent reviewers converged on this
+ * (#7710 review).
+ */
+export const ATTEST_BRANCH_PREFIX = "ci/vendor-attest";
 
 /** Drift labels mapped from classifier categories. */
 const CATEGORY_LABELS: Record<string, string[]> = {
@@ -73,6 +105,10 @@ const CATEGORY_LABELS: Record<string, string[]> = {
 export const ISSUE_EXIT_CODES = new Set([10, 11, 12, 15, 16]);
 
 /**
+/** Repository-level state of the upstream, observed once per run. */
+export type UpstreamRepoState = "ok" | "archived" | "renamed" | "unreachable";
+
+/**
  * Totals produced by one comparison pass over the NOTICE registry.
  *
  * `filesExamined` counts registry lines that yielded a usable
@@ -80,8 +116,6 @@ export const ISSUE_EXIT_CODES = new Set([10, 11, 12, 15, 16]);
  * WITHOUT incrementing `filesExamined`, so it fails the completeness conjunct
  * from both directions.
  */
-export type UpstreamRepoState = "ok" | "archived" | "renamed" | "unreachable";
-
 export interface ComparisonTotals {
   registryCount: number;
   filesExamined: number;
@@ -172,23 +206,69 @@ export function mayAttestFreshness(totals: ComparisonTotals): boolean {
 }
 
 /**
+ * The 30-day threshold at which `gdpr-gate.sh` starts printing its staleness
+ * banner. The heartbeat is keyed on the same number so the monitor and the
+ * customer-visible banner cannot disagree about what "current" means.
+ */
+export const STALENESS_WARN_DAYS = 30;
+
+/**
+ * Whether the run failed to MEASURE, as distinct from measuring drift.
+ *
+ * These states have no route: they produce no issue, no PR and no artifact,
+ * so without this predicate they end in a GREEN check-in with nothing behind
+ * it — which is the #7710 shape exactly, re-armed one layer up. Drift is
+ * different: it is routed to an issue or a re-vendor PR, so a run that found
+ * drift is doing its job and reports healthy.
+ */
+export function couldNotMeasure(totals: ComparisonTotals): boolean {
+  return (
+    totals.registryCount === 0 ||
+    totals.filesExamined !== totals.registryCount ||
+    totals.filesError > 0 ||
+    totals.upstreamRepoState === "unreachable"
+  );
+}
+
+/**
  * Whether the Sentry check-in may report healthy.
  *
- * The heartbeat must reflect the ARTIFACT, not the run. A run that compared
- * clean over the complete registry and then failed to commit the advance is
- * NOT healthy: that is precisely the shape that let a dead writer sit
- * undetected for 117 days behind a green monitor, because the failure path
- * inside `safeCommitAndPr` terminates in `reportSilentFallback` while the
- * heartbeat posted `ok: true` unconditionally.
+ * The monitor tracks the ARTIFACT — is `last-verified` inside the window the
+ * gate warns at — NOT whether this particular run performed a merge.
  *
- * A run that was never eligible (drift found, or a comparison that could not
- * complete) is healthy as far as THIS signal goes — it has its own routes.
+ * That distinction is the whole finding. An earlier revision keyed this on
+ * `res.merged`, i.e. the direct `PUT .../merge` succeeding inside the run.
+ * Measured against the sibling `mergeMode: "direct"` cron, that is the
+ * UNCOMMON path: PRs #4083, #3766 and #3468 each show `autoMergeEnabledAt` at
+ * created + 6s (the direct merge failed) and `mergedAt` at +54s to +69s. The
+ * artifact lands reliably, just after the run has ended. Keying on the merge
+ * would therefore have posted non-OK and raised a Sentry issue on essentially
+ * EVERY healthy attestation — and a monitor that pages on the healthy path is
+ * muted within two cycles, which is the condition that let #7710 run for 117
+ * days undetected.
+ *
+ * Reading the age from the freshly-cloned default branch at the START of the
+ * run makes the signal self-correcting without needing to observe the merge:
+ * a healthy weekly cron with the 21-day write suppression sees ages of 7, 14,
+ * 21 (writes, resets to 0), so it never approaches 30. If a write fails to
+ * land, the next run sees the age keep climbing, and at 30 the monitor pages —
+ * one cadence after the banner would have fired for a human anyway.
+ *
+ * @param observedAgeDays age of `last-verified` on the default branch as read
+ *   BEFORE this run's write, or `null` when it could not be read at all.
  */
 export function heartbeatOk(
+  measurementFailed: boolean,
   attestationEligible: boolean,
-  wroteAttestation: boolean,
+  observedAgeDays: number | null,
 ): boolean {
-  return !attestationEligible || wroteAttestation;
+  // "I could not measure" is never healthy — it has no other route.
+  if (measurementFailed) return false;
+  // Drift found: routed to an issue or a re-vendor PR. Working as intended.
+  if (!attestationEligible) return true;
+  // Eligible to attest but the field we attest could not be read.
+  if (observedAgeDays === null) return false;
+  return observedAgeDays < STALENESS_WARN_DAYS;
 }
 
 // =============================================================================
@@ -591,10 +671,30 @@ export async function cronContentVendorDriftHandler({
             },
             "Drift detected",
           );
-        } catch {
-          driftFlags = "--renamed";
+        } catch (fetchErr) {
+          // A per-FILE fetch failure is not evidence about the REPOSITORY.
+          // This arm used to raise the repo-level rename flag, telling the
+          // classifier the whole upstream had moved — and routing to
+          // `vendor/upstream-archived` + `needs-human-review` — on a single
+          // 404 or 5xx. That is "I could not measure" read as evidence, which
+          // is the defect this PR exists to close (#7710 review). The
+          // superseded assignment is described rather than quoted: the
+          // regression guard greps this region for it, and a body-grep cannot
+          // tell code from a comment.
+          //
+          // The error is counted, which is enough: `filesError > 0` both
+          // refuses the attestation and marks the run as unable to measure,
+          // so it reaches the heartbeat without inventing a repo-level claim.
           driftDetected = true;
           filesError += 1;
+          logger.warn(
+            {
+              fn: "cron-content-vendor-drift",
+              path: upstreamPath,
+              err: (fetchErr as Error).message,
+            },
+            "Upstream contents fetch failed for one file — scored ERROR",
+          );
         }
       }
 
@@ -615,17 +715,45 @@ export async function cronContentVendorDriftHandler({
         { cwd: repoRoot, env },
       );
       const declaredRaw = declaredResult.stdout.trim();
+
+      // A SECOND, differently-derived view of the registry's size.
+      //
+      // `record-count` shares its record-opener predicate with `_emit_files`,
+      // so deleting an OPENER line shrinks both together: measured, declared 7
+      // and emitted 7 with one record silently absorbed into its predecessor,
+      // and the completeness conjunct held. Counting a key the opener
+      // predicate does not consume breaks that coupling — on the same fixture
+      // it reads 8 against an emitted 7.
+      const statusResult = await spawnScriptCapture(
+        parserPath,
+        ["key-count", "lifted-files", "status"],
+        { cwd: repoRoot, env },
+      );
+      const statusRaw = statusResult.stdout.trim();
       // Fail closed: a non-numeric answer means the registry could not be
       // read, and 0 makes `registryCount > 0` refuse.
-      const registryCount = /^\d+$/.test(declaredRaw) ? Number(declaredRaw) : 0;
-      if (registryCount !== upstreamFiles.length) {
+      // Fail closed: a non-numeric answer means the registry could not be
+      // read, and 0 makes `registryCount > 0` refuse.
+      const declaredOpeners = /^\d+$/.test(declaredRaw) ? Number(declaredRaw) : 0;
+      const declaredStatus = /^\d+$/.test(statusRaw) ? Number(statusRaw) : 0;
+
+      // The LARGER of the two declared views. Any record loss inflates the
+      // denominator relative to what was examined, so the completeness
+      // conjunct refuses; a missing `status:` key alone does not (it costs no
+      // comparability, and all records were still compared).
+      const registryCount = Math.max(declaredOpeners, declaredStatus);
+      if (
+        declaredOpeners !== declaredStatus ||
+        registryCount !== upstreamFiles.length
+      ) {
         logger.warn(
           {
             fn: "cron-content-vendor-drift",
-            declared: registryCount,
+            declaredOpeners,
+            declaredStatus,
             emitted: upstreamFiles.length,
           },
-          "NOTICE declares more lifted records than the parser emitted — an incomplete record is being dropped; the attestation will refuse",
+          "NOTICE registry views disagree — a record is malformed or being dropped; the attestation will refuse",
         );
       }
 
@@ -873,8 +1001,11 @@ export async function cronContentVendorDriftHandler({
     //                              verified; without this, an outage reads as
     //                              a clean bill of health.
     const attestationEligible = mayAttestFreshness(detectResult);
+    const measurementFailed = couldNotMeasure(detectResult);
 
     let wroteAttestation = false;
+    let artifactCurrent = false;
+    let observedAgeDays: number | null = null;
     let attestationOutcome = "not-eligible";
     // A PR number, not a commit SHA. `safeCommitAndPr`'s committed arm
     // reports `prNumber`; calling it `commitSha` on the only forensic surface
@@ -904,39 +1035,43 @@ export async function cronContentVendorDriftHandler({
           return {
             outcome: "notice-unparseable" as const,
             wrote: false,
+            current: false,
+            ageDays: null as number | null,
             pr: null as string | null,
           };
         }
+
+        // Age of the field on the freshly-cloned default branch, measured
+        // BEFORE this run writes. This is what the heartbeat reads: it says
+        // whether the ARTIFACT is current, which is observable, rather than
+        // whether this run's merge succeeded, which is usually false even on
+        // the healthy path (see heartbeatOk).
+        const observedAge = Math.floor(
+          (Date.parse(`${today}T00:00:00Z`) -
+            Date.parse(`${match[1]}T00:00:00Z`)) /
+            86_400_000,
+        );
+        const ageDays =
+          Number.isFinite(observedAge) && observedAge >= 0 ? observedAge : null;
         // Suppress a write that buys no signal. The banner fires at 30 days,
         // so re-attesting a field that is only days old costs a bot PR on a
         // compliance-critical file for nothing. 21 days keeps a full cron
         // cadence of slack ahead of the 30-day threshold while cutting the
         // write rate ~3x — which also shrinks the CODEOWNERS-bypass residual
         // ADR-203 has to argue away (#7710 review).
-        const ageDays = Math.floor(
-          (Date.parse(`${today}T00:00:00Z`) -
-            Date.parse(`${match[1]}T00:00:00Z`)) /
-            86_400_000,
-        );
-        if (Number.isFinite(ageDays) && ageDays >= 0 && ageDays < 21) {
+        if (ageDays !== null && ageDays < WRITE_SUPPRESSION_DAYS) {
+          // Nothing is written on this arm, so `wrote` is FALSE. The artifact
+          // is nonetheless current, which is what the heartbeat cares about —
+          // conflating the two would make the accountability log report a
+          // write that did not happen.
           return {
             outcome: "still-fresh" as const,
-            wrote: true,
+            wrote: false,
+            current: true,
+            ageDays,
             pr: null as string | null,
           };
         }
-        if (match[1] === today) {
-          // Already advanced this UTC day — a replay or a second run. The
-          // attestation is current, so this is a success, not a failure to
-          // write. Distinguished in the outcome so the two are never
-          // conflated in telemetry.
-          return {
-            outcome: "already-current" as const,
-            wrote: true,
-            pr: null as string | null,
-          };
-        }
-
         await writeFile(
           noticePath,
           before.replace(
@@ -954,11 +1089,50 @@ export async function cronContentVendorDriftHandler({
         // what the drift route already does, and inherits the allow-list, the
         // deletion guard and the replay idempotency a hand-rolled path would
         // discard.
+        // Idempotency: do not stack attestation PRs. The 21-day suppression
+        // reads `last-verified` from the freshly-cloned default branch, so an
+        // unmerged PR is invisible to it — without this guard a stuck PR means
+        // a NEW one every cadence, each self-merging, each editing the same
+        // line and so mutually conflicting, on a CODEOWNERS-protected
+        // compliance file (#7710 review).
+        const { data: openAttestPRs } = await octokit.request(
+          "GET /search/issues",
+          {
+            q: `is:pr is:open repo:${REPO_OWNER}/${REPO_NAME} head:${ATTEST_BRANCH_PREFIX}-`,
+            per_page: 5,
+          },
+        );
+        if (openAttestPRs.total_count > 0) {
+          return {
+            outcome: "attest-pr-already-open" as const,
+            wrote: false,
+            // The artifact is NOT current — a PR is open precisely because it
+            // is stale — so this must not green the heartbeat. `ageDays`
+            // carries the truth and the heartbeat reads that.
+            current: false,
+            ageDays,
+            pr: null as string | null,
+          };
+        }
+
         const res = await safeCommitAndPr({
           spawnCwd: repoRoot,
           installationToken,
           cronName: "cron-content-vendor-drift",
-          commitMessage: `chore(vendor-drift): attest gosprinto/compliance-skills unchanged (${today})`,
+          // The squash commit that lands on `main` carries COMMIT_MESSAGES,
+          // not the PR body (verified against the repo's
+          // `squash_merge_commit_message` setting), so the evidence has to be
+          // IN the commit message or it does not survive the merge — and
+          // ADR-203's Art. 5(2) argument rests on the commit being the record.
+          commitMessage: [
+            `chore(vendor-drift): attest gosprinto/compliance-skills unchanged (${today})`,
+            "",
+            `Compared ${detectResult.filesExamined} of ${detectResult.registryCount} registered files, pinned at ${pinnedForBody}, against upstream main:`,
+            `${detectResult.filesSame} SAME, ${detectResult.filesDrifted} drifted, ${detectResult.filesError} errors, repo-state ${detectResult.upstreamRepoState}.`,
+            "",
+            "Advances last-verified only; no vendored content is changed.",
+          ].join("\n"),
+          branchName: `${ATTEST_BRANCH_PREFIX}-${runStartedAt.replace(/[:.]/g, "-")}`,
           allowedPaths: [`${SKILL_PREFIX}/NOTICE`],
           runStartedAt,
           scheduledIssueLabel: SENTRY_MONITOR_SLUG,
@@ -991,7 +1165,13 @@ export async function cronContentVendorDriftHandler({
             res.status === "committed" && res.merged !== true
               ? "pr-open-not-merged"
               : res.status,
+          // `wrote` means this run merged the advance. It is FALSE on the
+          // ordinary `pr-open-not-merged` path, which is fine — the heartbeat
+          // reads `ageDays`, not this. It is reported so the accountability
+          // log can separate "merged in-run" from "PR opened, lands shortly".
           wrote: res.status === "committed" && res.merged === true,
+          current: false,
+          ageDays,
           pr:
             res.status === "committed" && typeof res.prNumber === "number"
               ? String(res.prNumber)
@@ -1000,6 +1180,8 @@ export async function cronContentVendorDriftHandler({
       });
 
       wroteAttestation = attestation.wrote;
+      artifactCurrent = attestation.current;
+      observedAgeDays = attestation.ageDays;
       attestationOutcome = attestation.outcome;
       attestationPrNumber = attestation.pr;
     }
@@ -1021,7 +1203,13 @@ export async function cronContentVendorDriftHandler({
     // corrupts the evidence it exists to be. Same for the Sentry mirror
     // below (#7710 review).
     await step.run("attestation-summary", async () => {
-      logger.info(
+      // WARN, not info. Measured: `logger.info` reaches no observability
+      // layer — the Sentry breadcrumb mirror keeps >= warn
+      // (SENTRY_BREADCRUMB_MIN_LEVEL) and the Vector pipeline drops pino
+      // level < 40 — so an `info` line carrying the ADR-203 accountability
+      // fields would exist only in a stream nothing ingests. This IS the
+      // compliance record; it has to be queryable.
+      logger.warn(
       {
         fn: "cron-content-vendor-drift",
         op: "attestation-summary",
@@ -1034,19 +1222,33 @@ export async function cronContentVendorDriftHandler({
         wroteAttestation,
         attestationOutcome,
         attestationPrNumber,
+        artifactCurrent,
+        observedAgeDays,
+        measurementFailed,
+        isHealthy: heartbeatOk(
+          measurementFailed,
+          attestationEligible,
+          observedAgeDays,
+        ),
       },
       "Vendor-drift attestation summary",
       );
 
-      if (!heartbeatOk(attestationEligible, wroteAttestation)) {
+      if (!heartbeatOk(measurementFailed, attestationEligible, observedAgeDays)) {
         reportSilentFallback(
           new Error(
-            `Verified-clean comparison did not produce a committed attestation (outcome=${attestationOutcome})`,
+            `Vendor-drift run is not healthy (outcome=${attestationOutcome}, age=${observedAgeDays ?? "unreadable"})`,
           ),
           {
             feature: "cron-content-vendor-drift",
-            op: "attestation-not-written",
-            message: `examined=${detectResult.filesExamined}/${detectResult.registryCount} drifted=${detectResult.filesDrifted} errors=${detectResult.filesError} repo=${detectResult.upstreamRepoState} outcome=${attestationOutcome}`,
+            op: measurementFailed
+              ? "comparison-could-not-measure"
+              : "attestation-stale",
+            // `pr` is load-bearing: on the ordinary `pr-open-not-merged` path
+            // this is the ONLY Sentry event, and without it the operator
+            // cannot tell "a PR is open and auto-merging" from "nothing was
+            // created".
+            message: `examined=${detectResult.filesExamined}/${detectResult.registryCount} drifted=${detectResult.filesDrifted} errors=${detectResult.filesError} repo=${detectResult.upstreamRepoState} outcome=${attestationOutcome} pr=${attestationPrNumber ?? "none"} age=${observedAgeDays ?? "unreadable"}`,
           },
         );
       }
@@ -1058,7 +1260,11 @@ export async function cronContentVendorDriftHandler({
     // to commit, and still report healthy — the failure path inside
     // safeCommitAndPr terminates in reportSilentFallback under a green
     // check-in, which is how a broken writer stays invisible for 117 days.
-    const isHealthy = heartbeatOk(attestationEligible, wroteAttestation);
+    const isHealthy = heartbeatOk(
+      measurementFailed,
+      attestationEligible,
+      observedAgeDays,
+    );
 
     await step.run("sentry-heartbeat", () =>
       postSentryHeartbeat({
@@ -1085,6 +1291,19 @@ export async function cronContentVendorDriftHandler({
       op: "handler-top-level",
       message: e.message,
     });
+    // The attestation summary is the ADR-203 accountability record, and the
+    // step that emits it is never reached on a throw — so without this the
+    // runs with NO record are exactly the runs that failed. Emitted outside a
+    // step deliberately: the handler is already unwinding.
+    logger.warn(
+      {
+        fn: "cron-content-vendor-drift",
+        op: "attestation-summary",
+        attestationOutcome: "handler-threw",
+        isHealthy: false,
+      },
+      "Vendor-drift attestation summary (run aborted before the summary step)",
+    );
     try {
       await postSentryHeartbeat({
         ok: false,

@@ -131,9 +131,19 @@ export type SafeCommitResult =
        * Armed auto-merge also disarms silently on conflict.
        *
        * `true` = merged in this call. `false` = a PR exists but is not merged
-       * (armed auto-merge, or create-only). `undefined` = NOT DETERMINED —
-       * the replay-resume arm never runs the merge, so it cannot report one;
-       * treat undefined as "not merged" when the artifact matters (#7710).
+       * (armed auto-merge, or create-only).
+       *
+       * Optional rather than required because a future second `committed`
+       * return would otherwise be forced to invent a value; a caller reading
+       * `merged === true` treats an absent field as "not merged", which is
+       * the fail-closed direction. Note the replay-resume arm DOES reach the
+       * merge tail (it skips only the scan/commit block), so on today's code
+       * this is always a boolean — an earlier revision of this comment
+       * claimed otherwise (#7710 review).
+       *
+       * Do NOT key a health signal on this. The direct merge normally fails
+       * with checks pending and the fallback arms auto-merge, which lands the
+       * PR seconds after the run ends — measured on PRs #4083 / #3766 / #3468.
        */
       merged?: boolean;
       /** 0 on a replay-resume (counts are not recomputed for an existing commit). */
