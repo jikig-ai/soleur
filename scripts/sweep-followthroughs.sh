@@ -364,6 +364,20 @@ run_one() {
   out=$("${env_args[@]}" "$script" 2>&1) || rc=$?
   log "issue #$issue_num: $script exit=$rc"
 
+  # STRIP SHELL-TRACE LINES BEFORE THIS OUTPUT REACHES A PUBLIC COMMENT (#7797).
+  # `$out` is posted verbatim into a GitHub issue comment below, and issue-comment
+  # bodies do NOT pass through the Actions runner's secret masker -- that masking
+  # covers job LOG output and only for values sourced from `secrets.*`, while
+  # these probes fetch credentials at runtime via doppler. So this is the one
+  # genuinely unmasked channel in the sweep, and one strip here protects every
+  # probe rather than relying on 76 scripts each carrying a correct preamble.
+  #
+  # `^\+` and not `^\+ `: bash prefixes nested trace lines with `++ `, `+++ `,
+  # and so on, so anchoring on the single-space form would let every nested line
+  # through -- which is exactly where a credential bound inside a function or a
+  # command substitution surfaces.
+  out=$(printf '%s' "$out" | grep -v '^+' || true)
+
   local trimmed_out
   trimmed_out=$(printf '%s' "$out" | tail -c 4000)
 

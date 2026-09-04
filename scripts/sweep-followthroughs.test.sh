@@ -724,6 +724,70 @@ EOF
   unset GH_TOKEN; rm -rf "$root"
 }
 
+# --- T17 (#7797): shell-trace lines must never reach a public issue comment ---
+# The probe's combined output is posted verbatim into a GitHub issue comment,
+# and issue-comment bodies do NOT pass through the Actions runner's secret
+# masker -- that masking covers job LOG output and only for `secrets.*` values,
+# while these probes fetch credentials at runtime via doppler. So a traced probe
+# would publish its own credential.
+#
+# RUNS WITH DRY_RUN=0 AND A CAPTURING STUB, DELIBERATELY. The first draft of
+# this case asserted on run_one's stdout under DRY_RUN, where `body_msg` is
+# never emitted -- so it passed with the scrub fully DISABLED. That is the
+# vacuity this whole PR is about, reproduced inside its own test. The body is
+# only observable where it is actually sent, so the stub captures stdin.
+t17_trace_lines_are_scrubbed_before_comment() {
+  local root; root=$(setup_tmpdir)
+  cat > "$root/scripts/followthroughs/traced-test.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '+ TOK=NOTAREALTOKEN_T17\n'
+printf '++ printf %%s NOTAREALTOKEN_T17\n'
+printf '+++ curl -H Bearer NOTAREALTOKEN_T17\n'
+printf 'genuine probe output line\n'
+exit 1
+EOF
+  chmod +x "$root/scripts/followthroughs/traced-test.sh"
+
+  # Capture the comment body instead of discarding it.
+  cat > "$root/bin/gh" <<EOF
+#!/usr/bin/env bash
+case "\$*" in
+  *"issue comment"*) cat > "$root/comment-body" ;;
+  *) : ;;
+esac
+EOF
+  chmod +x "$root/bin/gh"
+
+  local body
+  body=$(cat <<'EOF'
+<!-- soleur:followthrough script=scripts/followthroughs/traced-test.sh earliest=2020-01-01T00:00:00Z -->
+EOF
+)
+  (
+    cd "$root"
+    export PATH="$root/bin:$PATH" GH_REPO="test/test" DRY_RUN=0
+    # shellcheck disable=SC1090
+    source "$SUT"
+    set +e
+    run_one 9999 "$body" >/dev/null 2>&1
+  )
+
+  local posted=""
+  [[ -f "$root/comment-body" ]] && posted=$(cat "$root/comment-body")
+
+  # Precondition: if nothing was captured, every assertion below is vacuous.
+  if [[ -z "$posted" ]]; then
+    echo "FAIL: T17 captured no comment body -- the assertions would be vacuous"
+    FAIL=$((FAIL + 1))
+  else
+    assert_not_contains "T17 traced probe output is scrubbed before it reaches a public comment" \
+                        "NOTAREALTOKEN_T17" "$posted"
+    assert_contains     "T17 genuine (non-trace) probe output survives the scrub" \
+                        "genuine probe output line" "$posted"
+  fi
+  rm -rf "$root"
+}
+
 t1_realpath_rejects_traversal
 t2_first_directive_wins
 t3_anchored_awk_skips_mid_prose
@@ -741,6 +805,7 @@ t13_reopen_cap_bounds_the_loop
 t14_failed_reopen_emits_error_annotation
 t15_open_path_still_honors_earliest
 t16_main_closed_set_dispatch
+t17_trace_lines_are_scrubbed_before_comment
 
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
