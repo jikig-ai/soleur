@@ -1242,6 +1242,15 @@ For most features: tests + linting + following patterns is sufficient.
 
 ## Common Pitfalls to Avoid
 
+- **Scope every mechanical edit to lines the BRANCH added** (`git diff origin/main...HEAD`), and
+  assert the pre-existing count is unchanged afterwards. **Why:** #7810 — a remediation keyed on
+  `assert_fixture_dir "$work"` deleted 13 PRE-EXISTING guards from #7709's burn-down, surfacing only
+  because an unrelated count jumped 0 to 43.
+- **Changing a function that decides what gets SCANNED? Diff its behaviour corpus-wide in BOTH
+  directions and require the unsafe direction to be empty.** **Why:** #7810 — a heredoc repair meant
+  to unhide code HID 1864 more lines, one file going 0 to 910 skipped. The shipped version asserts
+  "files skipping MORE than before must be 0".
+
 - **Analysis paralysis** - Don't overthink, read the plan and execute
 - **Skipping clarifying questions** - Ask now, not after building wrong thing
 - **Ignoring plan references** - The plan has links for a reason

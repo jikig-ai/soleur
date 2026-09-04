@@ -112,43 +112,32 @@ beforeAll(() => {
   ON_PUSH_PATHS = extractOnPushPaths(readFileSync(WEBPLAT, "utf8"));
 });
 
-// Build a 2-commit git repo (HEAD~1 = empty base, HEAD = the changed paths),
-// run the extracted gate against it with force_run=false, and return `changed`.
-// SCRUB EVERY GIT_* FROM THE CHILD ENV. `cwd` is NOT enough, and this is not defensive
-// programming — it is a fix for damage this fixture actually did.
-//
-// Git EXPORTS `GIT_DIR` and `GIT_INDEX_FILE` into hook environments, and lefthook runs this
-// battery from `pre-commit` (twice over: the `bun-test` step and the `plugin-component-test`
-// step). `execFileSync` inherits `process.env`, and `GIT_DIR` OVERRIDES `cwd` — so `git init`
-// below created no repository in the sandbox at all, and `base`/`change` were committed onto
-// the developer's live branch using the developer's index.
-//
-// Measured, twice, on #7772: 16 fixture commits landed on a feature branch and the worktree
-// index was cut from ~14,000 entries to 2. Reproduced from first principles afterwards:
-//
-//   export GIT_DIR=$PWD/victim/.git GIT_INDEX_FILE=$PWD/victim/.git/index
-//   cd sandbox && git init -q          # creates NO sandbox/.git
-//   git commit -q --allow-empty -m base && git add -A && git commit -q -m change
-//   -> both commits land on victim's branch, victim's index rewritten
-//
-// `plugins/soleur/test/welcome-hook.test.ts` already carried this fix and its comment already
-// named the mechanism ("all GIT_* variables that lefthook injects"). It was fixed in one place
-// and never swept; #7835 tracks the other seven fixtures and a lint to stop it decaying again.
-function gitCleanEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
+// Build a clean env excluding every GIT_* variable that lefthook (and git itself)
+// inject into hook processes. This is NOT optional hygiene: `GIT_DIR` OVERRIDES
+// `cwd`, so without it every git call below resolves to the DEVELOPER'S repository
+// instead of the temp fixture -- `git init` no-ops and the two commits land on
+// whatever branch is checked out. Measured on PR #7782: the `plugin-component-test`
+// lefthook job ran this file during a commit and appended 16 `base`/`change`
+// commits to the feature branch, which the following `git push` then published.
+// Same defense as `welcome-hook.test.ts` and `lint-orphan-test-suites.test.sh`.
+function gitCleanEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
   for (const [key, val] of Object.entries(process.env)) {
     if (!key.startsWith("GIT_") && val !== undefined) env[key] = val;
   }
   return env;
 }
 
+// Build a 2-commit git repo (HEAD~1 = empty base, HEAD = the changed paths),
+// run the extracted gate against it with force_run=false, and return `changed`.
 function runGate(changedPaths: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), "deploygap-gate-"));
+  const cleanEnv = gitCleanEnv();
   const git = (args: string[]) =>
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], {
       cwd: dir,
-      env: gitCleanEnv(),
       stdio: "pipe",
+      env: cleanEnv,
     });
   git(["init", "-q"]);
   git(["commit", "-q", "--allow-empty", "-m", "base"]);
@@ -165,9 +154,7 @@ function runGate(changedPaths: string[]): string {
     cwd: dir,
     stdio: "pipe",
     env: {
-      // Same scrub as the git helper above: GATE_SCRIPT runs `git` itself, so an inherited
-      // GIT_DIR would point it at the developer's repository instead of this sandbox.
-      ...gitCleanEnv(),
+      ...cleanEnv,
       FORCE_RUN: "false",
       PATH_FILTER,
       COMPONENT: "web-platform",
@@ -229,8 +216,7 @@ describe("inner check_changed gate — fail-loud, no shell-glob", () => {
         cwd: dir,
         stdio: "pipe",
         env: {
-          // Same scrub — see the git helper above.
-          ...gitCleanEnv(),
+          ...process.env,
           FORCE_RUN: "false",
           PATH_FILTER,
           COMPONENT: "web-platform",

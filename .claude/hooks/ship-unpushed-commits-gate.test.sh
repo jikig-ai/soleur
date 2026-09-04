@@ -9,6 +9,12 @@
 
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 # Refuse before writing, rather than let an empty operand retarget a git write at whatever
 # repository the caller happens to be standing in. `git -C ""` does NOT error — it silently
 # operates on the current directory, which under TEST_GROUP=scripts is the developer's live
@@ -64,6 +70,7 @@ init_git_repo() {
 make_synced_branch() {
   local tmp="$1" branch="$2"
   local work="$tmp/work" origin="$tmp/origin.git" incidents="$tmp/incidents"
+  assert_fixture_dir "$tmp"
   mkdir -p "$work" "$incidents"
   git init -q --bare "$origin"
   init_git_repo "$work"

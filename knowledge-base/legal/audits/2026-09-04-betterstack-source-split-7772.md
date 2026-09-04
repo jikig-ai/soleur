@@ -64,13 +64,36 @@ and its standard DPA terms carry an EU-region commitment. This defect is larger 
 the new source and older than this PR: the incumbent's published locality was
 unsupported too.
 
-**2. Retention.** The 90-day sink disturbs the LIA *as written* — PA-8 cited "short
-retention" as a whole-plane mitigation, and with 3 days on `2457081` and 90 on
-`2734275` that is no longer true of the plane. It does **not** disturb the LIA's
-*conclusion*, because the two streams earn the mitigation differently:
+**2. Retention — the ruling's premise was wrong, and the correction makes it stronger.**
 
-- `2457081` carries **pseudonymous** identifiers (`userIdHash`). A pseudonym
-  persists; a short window genuinely bounds it. Retention is load-bearing there.
+> **Superseded 2026-09-04, during implementation.** This holding was drafted on
+> "3 days on `2457081`, 90 on `2734275`" and built a per-source divergence argument
+> on it. **Both sources are 90 days.** Measured twice, on two endpoint shapes
+> (`GET /api/v2/sources` and `GET /api/v2/sources/<id>`): `logs_retention=90` and
+> `metrics_retention=90` for each. The `3-day` figure came from
+> `betterstack-log-query.md` and was a FREE-TIER value predating the 2026-08-16 move
+> to a paid plan; it had already propagated into the Art. 30 register and both
+> published legal documents. All corrected in the implementing change.
+>
+> This also supersedes #7717's PA-8 §(f) entry, which recorded Better Stack retention
+> as NOT RECORDED because the account tier cannot be pulled. That is true of the tier
+> and false of the retention: `logs_retention` is a **per-source attribute**, not a
+> billing field, and it reads directly. Art. 30(1)(f) is discharged for this plane,
+> not deferred.
+>
+> **The disposition is unchanged and the reasoning is now simpler.** There is no
+> per-source divergence to explain. "Short retention" is withdrawn as a mitigation
+> for the WHOLE Better Stack plane rather than for one source — it never described
+> any of it — and what actually carries the balancing is stated per stream below.
+
+PA-8 cited "short retention" as a whole-plane mitigation. At 90 days on every source
+that is not true of any of it. It does **not** disturb the LIA's *conclusion*,
+because neither stream ever depended on the window — they earn the mitigation
+differently:
+
+- `2457081` carries **pseudonymous** identifiers (`userIdHash`, HMAC-SHA256 under a
+  Doppler-held pepper the processor does not have). Recital 26 applies for the full
+  90 days; the mitigation is the pepper, not the window.
 - `2734275` carries **redacted** output. `git-data-emit`'s `_clean` applies a
   bare-UUID rule and a `/mnt/git-data[-luks]/repositories/…` path rule, both ABOVE
   the `tail -c 180` cap, and both SUBSTITUTE rather than hash. `REPO_ROOT` is
@@ -78,12 +101,14 @@ retention" as a whole-plane mitigation, and with 3 days on `2457081` and 90 on
   `_gc_run`'s `2>>"$ERRLOG"` and the `gc_report` emit that ships that log — is
   caught by both rules. No identifier is present for a retention window to bound.
 
-So 90 days is not a weakening. It becomes one the moment that redaction is narrowed,
-which is why that is a re-evaluation trigger above rather than a footnote.
+So 90 days is not a weakening on either stream. It becomes one on `2734275` the
+moment that redaction is narrowed, which is why that is a re-evaluation trigger
+above rather than a footnote.
 
-`__TBD_BETTERSTACK_RETENTION__` is **RETIRED, not filled**: one placeholder for two
-independently configured windows could never have resolved correctly. The register
-now carries one value per source.
+The register now carries the **measured** value per source, and records that
+retention is a per-source attribute so a future source cannot be assumed to inherit
+it. That is a stronger record than the placeholder it replaces and than the
+"NOT RECORDED" that stood in its place.
 
 **3. Materiality and public scope.** The stream stays recorded in PA-8 — not because
 it carries an identifier, but because its non-identifiability depends on a redactor,
@@ -117,9 +142,9 @@ two byte-identical copies of a stale region name pass all five.
 
 | Ref | Artifact | Change |
 |---|---|---|
-| MUST-1 | `docs/legal/privacy-policy.md` §5.14 (+ mirror) | processing-location bullet rewritten; retention stated as 3 days |
-| MUST-2 | `docs/legal/data-protection-disclosure.md` §2.3(m) (+ mirror) | source pin rewritten; retention stated as 3 days and flagged as per-source |
-| MUST-3 | `knowledge-base/legal/article-30-register.md` PA-8 §(e)/§(f)/lawful basis | two sources enumerated; locality withdrawn; retention per source; LIA limb scoped per source |
+| MUST-1 | `docs/legal/privacy-policy.md` §5.14 (+ mirror) | processing-location bullet rewritten; retention stated as **90 days**, measured |
+| MUST-2 | `docs/legal/data-protection-disclosure.md` §2.3(m) (+ mirror) | source pin rewritten; retention stated as **90 days**, measured, and flagged as per-source |
+| MUST-3 | `knowledge-base/legal/article-30-register.md` PA-8 §(e)/§(f)/lawful basis | two sources enumerated; locality withdrawn; retention MEASURED at 90 days per source (superseding #7717's NOT RECORDED); "short retention" withdrawn plane-wide |
 | MUST-4 | same file, Better Stack sub-processor row | location cell corrected; dated entry appended |
 | MUST-5 | `knowledge-base/legal/compliance-posture.md` | location cell corrected; dated entry appended with both open items |
 | MUST-6 | `knowledge-base/legal/data-processing-agreement-template.md` §11.1 + Schedule 2 | region and purpose corrected |
