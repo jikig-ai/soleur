@@ -26,6 +26,18 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)" || exit 2
 readonly REPO_ROOT
 readonly TRIPWIRE_RC=97
 
+# One owning scratch dir with a single trap (ADR-129). The per-site `mktemp` this replaces left a
+# file behind whenever the suite died between allocation and its `rm -f` -- which is precisely the
+# window the tripwire arms exercise, since several of them expect a non-zero exit.
+WORK="$(mktemp -d -t g3.XXXXXXXX)" || { printf 'FATAL: mktemp -d failed\n' >&2; exit 2; }
+case "$WORK" in
+  ""|/|//|/.) printf 'FATAL: WORK degenerate (%s); refusing\n' "$WORK" >&2; exit 2 ;;
+  /*) : ;;
+  *) printf 'FATAL: WORK is RELATIVE (%s); refusing\n' "$WORK" >&2; exit 2 ;;
+esac
+readonly WORK
+trap 'rm -rf "$WORK"' EXIT INT TERM HUP
+
 PASS=0
 FAIL=0
 # Independent, append-only tally of assertions that actually executed. The floors at the bottom
@@ -97,7 +109,7 @@ while IFS= read -r f; do SHELL_SUITE="$f"; break; done < <(grep -l 'test-helpers
 if [[ -z "$SHELL_SUITE" ]]; then
   bad "no .test.sh sources test-helpers.sh — the shell arm's corpus is empty"
 else
-  err="$(mktemp -t g3sh.XXXXXXXX)" || exit 2
+  err="$WORK/shell.err"
   ( cd "$REPO_ROOT" && GIT_DIR=/tmp/hostile bash "$SHELL_SUITE" >/dev/null 2>"$err" )
   rc=$?
   if [[ "$rc" == "$TRIPWIRE_RC" ]]; then
@@ -110,7 +122,6 @@ else
   else
     bad "shell abort message does not name the variable"
   fi
-  rm -f "$err"
 fi
 
 printf '\n=== K: vitest arm — the third runtime must abort too ===\n'
@@ -130,7 +141,7 @@ else
   if [[ -z "$probe" ]]; then
     bad "no vitest probe suite found under apps/web-platform/test/"
   else
-    vout="$(mktemp -t g3vt.XXXXXXXX)" || exit 2
+    vout="$WORK/vitest.out"
     ( cd "$REPO_ROOT/apps/web-platform" && GIT_DIR=/tmp/hostile-vitest "$VITEST_BIN" run "$probe" ) \
       > "$vout" 2>&1
     vrc=$?
@@ -140,7 +151,6 @@ else
       bad "vitest did NOT abort as expected — rc=$vrc"
       tail -5 "$vout" | sed 's/^/        /'
     fi
-    rm -f "$vout"
   fi
 fi
 
