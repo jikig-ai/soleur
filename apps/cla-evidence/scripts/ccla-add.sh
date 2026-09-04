@@ -52,7 +52,7 @@ Usage:
                      --authorized-from 2026-09-04T00:00:00Z
                      --instrument-sha256 <64-hex>
                      --login <github-login> [--login <github-login> ...]
-                     [--cla-git-sha <sha>] [--notes "..."]
+                     [--cla-git-sha <sha>]
 
   ccla-add.sh remove --record-ref CCLA-0001 --login <github-login>
                      --withdrawn-at 2026-09-04T00:00:00Z
@@ -93,7 +93,7 @@ TSX="apps/web-platform/node_modules/.bin/tsx"
 
 # ---- argument parsing -------------------------------------------------------
 RECORD_REF=""; ORG=""; SOLE_TRADER=0; SIGNED_AT=""; AUTHORIZED_FROM=""
-INSTRUMENT_SHA=""; CLA_GIT_SHA=""; NOTES=""; WITHDRAWN_AT=""
+INSTRUMENT_SHA=""; CLA_GIT_SHA=""; WITHDRAWN_AT=""
 LOGINS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -104,7 +104,6 @@ while [[ $# -gt 0 ]]; do
     --authorized-from)    AUTHORIZED_FROM="${2:-}"; shift 2 ;;
     --instrument-sha256)  INSTRUMENT_SHA="${2:-}"; shift 2 ;;
     --cla-git-sha)        CLA_GIT_SHA="${2:-}"; shift 2 ;;
-    --notes)              NOTES="${2:-}"; shift 2 ;;
     --withdrawn-at)       WITHDRAWN_AT="${2:-}"; shift 2 ;;
     --login)              LOGINS+=("${2:-}"); shift 2 ;;
     -h|--help)            usage ;;
@@ -222,7 +221,7 @@ if [[ "$MODE" == "add" ]]; then
   ORG_JSON="$(jq -n \
     --arg ref "$RECORD_REF" --arg signed "$SIGNED_AT" --arg path "$CLA_DOC_PATH" \
     --arg gsha "$CLA_GIT_SHA" --arg csha "$CLA_CONTENT_SHA" --arg isha "$INSTRUMENT_SHA" \
-    --argjson reps "$REPS" --argjson soletrader "$SOLE_TRADER" --arg org "$ORG" --arg notes "$NOTES" \
+    --argjson reps "$REPS" --argjson soletrader "$SOLE_TRADER" --arg org "$ORG" \
     '{
        legal_name: (if $soletrader == 1 then null else $org end),
        record_ref: $ref,
@@ -230,7 +229,7 @@ if [[ "$MODE" == "add" ]]; then
        cla_doc: {path: $path, git_sha: $gsha, content_sha256: $csha},
        executed_instrument_sha256: $isha,
        representatives: $reps
-     } + (if $notes == "" then {} else {notes: $notes} end)')"
+     }')"
 
   jq --argjson org "$ORG_JSON" --arg ref "$RECORD_REF" '
       if ([.organizations[]? | select(.record_ref == $ref)] | length) > 0

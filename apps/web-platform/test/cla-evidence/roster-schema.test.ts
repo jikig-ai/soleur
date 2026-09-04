@@ -124,12 +124,19 @@ describe("Guard 2 — RosterSchema", () => {
     expect(() => validateRosterRecord(noRef)).toThrow(SchemaVersionMismatchError);
   });
 
-  it("must-PASS: a field DECLARED optional in the schema is accepted under .strict()", () => {
-    // Passes precisely because it is declared — the intended semantics, and
-    // not a contradiction of G2-M3.
-    const withOptional = validRoster();
-    (withOptional.organizations[0] as Record<string, unknown>).notes = "countersigned by CLO";
-    expect(() => validateRosterRecord(withOptional)).not.toThrow();
+  it("the schema admits NO free-text field on this permanently-public surface", () => {
+    // An operator `notes` string was drafted into the schema and removed. The
+    // roster is world-readable and cannot be erased, and no limb of the
+    // Art. 6(1)(f) balancing test covers unbounded operator prose about a third
+    // party. This asserts the ABSENCE, so reintroducing such a key reds here
+    // rather than landing quietly.
+    const withFreeText = validRoster();
+    (withFreeText.organizations[0] as Record<string, unknown>).notes = "countersigned by CLO";
+    expect(() => validateRosterRecord(withFreeText)).toThrow(SchemaVersionMismatchError);
+
+    const withComment = validRoster();
+    (withComment.organizations[0] as Record<string, unknown>).comment = "ex-employee, left under a cloud";
+    expect(() => validateRosterRecord(withComment)).toThrow(SchemaVersionMismatchError);
   });
 
   it("G2-M5 (dispatch): validateRosterRecord must parse, not pass the payload through", () => {

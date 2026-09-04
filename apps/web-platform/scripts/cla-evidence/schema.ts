@@ -133,7 +133,13 @@ const RosterOrganizationSchema = z
     /** SHA-256 of the executed instrument as received. The instrument is off-repo. */
     executed_instrument_sha256: Sha256Hex,
     representatives: z.array(RosterRepresentativeSchema),
-    notes: z.string().optional(),
+    // NO FREE-TEXT FIELD, deliberately. An operator `notes` string was drafted
+    // here and removed: it is unbounded text about a third party on a surface
+    // that is world-readable and from which nothing can be erased, and no limb
+    // of the Art. 6(1)(f) balancing test at gdpr-policy.md 3.4 covers it — that
+    // test enumerates the join fields and stops. Refusing to store it beats
+    // disclosing it. The roster-schema suite asserts this absence, so
+    // reintroducing a free-text key reds rather than lands quietly.
   })
   .strict();
 
