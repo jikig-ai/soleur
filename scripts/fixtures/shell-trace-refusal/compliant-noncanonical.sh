@@ -5,7 +5,7 @@ set -euo pipefail
 # canonical fixture, to prove the lint matches shape rather than a fixed string.
 case $- in
   *x*)
-    [ -z "${BETTERSTACK_API_TOKEN_READONLY:-}" ] || {
+    [ -z "${BETTERSTACK_API_TOKEN_READONLY:+x}" ] || {
       echo "will not trace with a live token in scope" >&2
       exit 78
     }

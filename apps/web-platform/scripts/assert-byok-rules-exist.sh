@@ -53,6 +53,22 @@
 # Test injection (assert-byok-rules-exist.test.sh ONLY):
 #   SENTRY_FIXTURE_RULES — file path; served instead of the live GET.
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so SENTRY_AUTH_TOKEN would be printed in full the moment it is
+# bound -- which is exactly how two live tokens reached an agent transcript.
+# `$-` is the load-bearing arm: bash applies an env-supplied SHELLOPTS or
+# BASH_ENV before line 1, so `x` is already set by the time this runs. Do not
+# delete it. Tracing stays available with the credential unset, so this refuses
+# a leak without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with SENTRY_AUTH_TOKEN set (see #7797). Re-run with SENTRY_AUTH_TOKEN= to trace safely.\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -euo pipefail
 
 # Fail-loud on a cleared/misconfigured org secret (no silent default) — a wrong
@@ -71,7 +87,7 @@ set -euo pipefail
 EXPECTED_RULES=("byok-art-33-breach" "byok-cap-exceeded" "chat-message-save-failure" "workspace-sync-health")
 
 fetch_rules() {
-  if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
+  if [[ -n "${SENTRY_FIXTURE_RULES:+x}" ]]; then
     cat "$SENTRY_FIXTURE_RULES"
     return
   fi

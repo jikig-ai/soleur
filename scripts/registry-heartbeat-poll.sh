@@ -55,6 +55,22 @@
 #                           status string. Defaults to a curl against the Better Stack API.
 #   REGISTRY_HB_SLEEP_CMD   (test seam) — defaults to `sleep`.
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so BETTERSTACK_API_TOKEN would be printed in full the moment it is
+# bound -- which is exactly how two live tokens reached an agent transcript.
+# `$-` is the load-bearing arm: bash applies an env-supplied SHELLOPTS or
+# BASH_ENV before line 1, so `x` is already set by the time this runs. Do not
+# delete it. Tracing stays available with the credential unset, so this refuses
+# a leak without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_API_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with BETTERSTACK_API_TOKEN set (see #7797). Re-run with BETTERSTACK_API_TOKEN= to trace safely.\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -uo pipefail
 
 TFSTATE="${1-}"
@@ -92,13 +108,13 @@ if [[ -z "$HB_ID" || "$HB_ID" == "null" ]]; then
 fi
 
 if [[ -z "${REGISTRY_HB_STATUS_CMD:-}" ]]; then
-  [[ -n "${BETTERSTACK_API_TOKEN:-}" ]] || die "BETTERSTACK_API_TOKEN unset — cannot read heartbeat ${HB_ID}. This is the Uptime mgmt API token, NOT BETTERSTACK_QUERY_* and NOT the host-side ingest-only BETTERSTACK_LOGS_TOKEN."
+  [[ -n "${BETTERSTACK_API_TOKEN:+x}" ]] || die "BETTERSTACK_API_TOKEN unset — cannot read heartbeat ${HB_ID}. This is the Uptime mgmt API token, NOT BETTERSTACK_QUERY_* and NOT the host-side ingest-only BETTERSTACK_LOGS_TOKEN."
   echo "::add-mask::${BETTERSTACK_API_TOKEN}"
 fi
 
 # hb_status → echoes the status string, or "" on any failure (treated as fail-closed by callers).
 hb_status() {
-  if [[ -n "${REGISTRY_HB_STATUS_CMD:-}" ]]; then
+  if [[ -n "${REGISTRY_HB_STATUS_CMD:+x}" ]]; then
     $REGISTRY_HB_STATUS_CMD "$HB_ID"
     return
   fi

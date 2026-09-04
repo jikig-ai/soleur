@@ -175,6 +175,45 @@ else
   fail "could not extract a paste-ready preamble from the violation message"
 fi
 
+# --- FUNCTIONAL: the preamble must not LEAK while refusing --------------------
+# The lint checks that a refusal is PRESENT; nothing above checks what the
+# refusal does at runtime. That gap shipped a real defect during this PR: the
+# first draft guarded with `[ -n "${VAR:-}" ]`, which expands the value, so
+# xtrace printed `+ '[' -n <TOKEN> ']'` -- the preamble reintroduced, in
+# miniature, the exact leak it exists to prevent. `${VAR:+x}` is the same
+# predicate without ever placing the value on a command line.
+#
+# Assert the value that must NEVER appear, over both arms.
+PROBE_TOKEN="FAKE_notarealtoken_0000000000"
+leak_probe() { # <script> -> number of trace lines containing the token
+  SENTRY_AUTH_TOKEN="$PROBE_TOKEN" bash -x "$1" 2>&1 | grep -c "$PROBE_TOKEN"
+}
+
+n="$(leak_probe "$FIX/compliant-canonical.sh")"
+[ "$n" = "0" ] && pass "refusal leaks NO token value under bash -x (0 trace lines)" \
+  || fail "refusal LEAKED the token value in $n trace line(s) -- the guard expands the value it protects"
+
+SENTRY_AUTH_TOKEN="$PROBE_TOKEN" bash -x "$FIX/compliant-canonical.sh" >/dev/null 2>&1
+rc=$?
+[ "$rc" = "78" ] && pass "refusal exits 78 (EX_CONFIG) -- not 64, which is EX_USAGE at 57 sites" \
+  || fail "refusal should exit 78, got $rc"
+
+env -u SENTRY_AUTH_TOKEN bash -x "$FIX/compliant-canonical.sh" >/dev/null 2>&1
+rc=$?
+[ "$rc" != "78" ] && pass "escape hatch: tracing is allowed when the credential is unset" \
+  || fail "escape hatch closed -- a guard that blocks a state you must recover from is a P1"
+
+# The leaky form must be DETECTABLE, or the assertion above is unfalsifiable.
+cp "$FIX/compliant-canonical.sh" "$WORK/leaky.sh"
+perl -0pi -e 's/\$\{([A-Z_]+):\+x\}/\${$1:-}/' "$WORK/leaky.sh"
+if diff -q "$FIX/compliant-canonical.sh" "$WORK/leaky.sh" >/dev/null 2>&1; then
+  fail "M7 leaky-guard mutation did NOT land"
+else
+  n="$(leak_probe "$WORK/leaky.sh")"
+  [ "$n" -gt 0 ] && pass "M7 reverting to the value-expanding guard LEAKS ($n line(s)) -- the no-leak assertion is falsifiable" \
+    || fail "M7 leaky guard leaked nothing -- the no-leak assertion cannot fail and proves nothing"
+fi
+
 # --- MUTATION MATRIX ---------------------------------------------------------
 # Every row: copy to a sandbox, assert the mutation LANDED, then assert the
 # mutant's verdict changed on ITS OWN fixture. Each row names the fixture it
@@ -247,7 +286,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Absolute floor, recorded from a MEASURED green run (never from expectation --
 # that was wrong three times in sibling PR #7806). Reported with printf + exit 1
 # directly, never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=23
+MIN_ASSERTIONS=27
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

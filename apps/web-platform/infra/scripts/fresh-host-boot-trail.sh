@@ -30,6 +30,22 @@
 # (fatal stage, or no terminal event inside the host's own boot window).
 
 set +e
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so SENTRY_AUTH_TOKEN would be printed in full the moment it is
+# bound -- which is exactly how two live tokens reached an agent transcript.
+# `$-` is the load-bearing arm: bash applies an env-supplied SHELLOPTS or
+# BASH_ENV before line 1, so `x` is already set by the time this runs. Do not
+# delete it. Tracing stays available with the credential unset, so this refuses
+# a leak without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}${WEB_HOST_KEY:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN, WEB_HOST_KEY) (see #7797). Re-run with SENTRY_AUTH_TOKEN= (and the others) to trace safely.\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 # Prose-only. Defaulted rather than required so a caller that forgets it degrades to the
 # historical wording instead of printing an empty label into the operator-facing summary.
 DISPATCH_LABEL="${DISPATCH_LABEL:-web-host-create}"
@@ -58,7 +74,7 @@ SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c p
 # it is the only NEW secret the PR introduced. Latent today (no `set -x` anywhere
 # in the file, and nothing echoes it) — masked anyway, because "no current caller
 # prints it" is a property of today's code, not of the secret.
-[[ -n "${SENTRY_AUTH_TOKEN:-}" ]] && printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
+[[ -n "${SENTRY_AUTH_TOKEN:+x}" ]] && printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
 SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform 2>/dev/null || true)
 SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform 2>/dev/null || true)
 # Echo to the LOG as well as the summary so

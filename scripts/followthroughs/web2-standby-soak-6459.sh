@@ -39,6 +39,22 @@
 
 set -uo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so BETTERSTACK_API_TOKEN would be printed in full the moment it is
+# bound -- which is exactly how two live tokens reached an agent transcript.
+# `$-` is the load-bearing arm: bash applies an env-supplied SHELLOPTS or
+# BASH_ENV before line 1, so `x` is already set by the time this runs. Do not
+# delete it. Tracing stays available with the credential unset, so this refuses
+# a leak without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_API_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with BETTERSTACK_API_TOKEN set (see #7797). Re-run with BETTERSTACK_API_TOKEN= to trace safely.\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 if [[ -z "${BETTERSTACK_API_TOKEN:-}" ]]; then
   echo "TRANSIENT: BETTERSTACK_API_TOKEN is unset or empty — cannot query the Better Stack heartbeats API (declare it in the directive's secrets= clause and wire it into the sweeper env)." >&2
   exit 2

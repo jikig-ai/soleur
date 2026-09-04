@@ -111,7 +111,7 @@ EXCLUDE_PATTERNS = (
 
 REMEDY = """case "$-" in
   *x*)
-    if [ -n "${YOUR_CREDENTIAL_VAR:-}" ]; then
+    if [ -n "${YOUR_CREDENTIAL_VAR:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential in scope (see #7797). Re-run with YOUR_CREDENTIAL_VAR= to trace safely.\\n' >&2
       exit 78
     fi
