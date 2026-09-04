@@ -261,6 +261,7 @@ app
 app-removal
 app-router
 apparmor
+append-only
 appimage crash headless
 apply-path
 apply-pipeline
@@ -1350,6 +1351,7 @@ evidence
 evidence-discarding
 evidence-first
 evidence-integration
+evidentiary-records
 exacerbation-rule
 exact-equality
 exec
@@ -2005,6 +2007,7 @@ legal-docs
 legal-document-generator
 legal-documents
 legal-record
+legal-register
 leginfo
 lib-helpers
 library-api

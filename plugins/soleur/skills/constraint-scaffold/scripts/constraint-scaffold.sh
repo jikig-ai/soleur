@@ -29,6 +29,15 @@ REF_DIR="$(cd "$SCRIPT_DIR/../references" && pwd)"
 # hermetic generator self-tests; in normal use it is unset. Templates (REF_DIR)
 # always come from the real skill.
 REPO_ROOT="${CONSTRAINT_SCAFFOLD_REPO_ROOT:-$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)}"
+# CONSTRAINT_SCAFFOLD_REPO_ROOT is caller-supplied. The `:-` default is absolute
+# (`rev-parse --show-toplevel`), but an override is not, and every `git -C "$REPO_ROOT"` below —
+# including a `worktree add`/`worktree remove` pair — would then resolve against CWD instead.
+case "$REPO_ROOT" in
+  "")            printf 'FATAL: REPO_ROOT is empty; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+  /|//|/.)       printf 'FATAL: REPO_ROOT resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+  /*)            : ;;
+  *)             printf 'FATAL: REPO_ROOT %s is RELATIVE; refusing\n' "$REPO_ROOT" >&2; exit 2 ;;
+esac
 
 # v1: the one supported target.
 TARGET_REL="apps/web-platform"

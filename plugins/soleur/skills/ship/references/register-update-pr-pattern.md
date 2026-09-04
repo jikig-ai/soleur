@@ -27,13 +27,36 @@ AVOID full file paths in PROSE when those paths are not in this PR's diff:
 If a file-path reference is genuinely necessary for clarity, wrap it in inline
 backticks — `` `server/cc-dispatcher.ts:889` `` — which the `pr-body-vs-diff`
 gate exempts (see [`#3882`](https://github.com/jikig-ai/soleur/pull/3882) and
-[`check-pr-body-vs-diff.sh`](../../../../.github/scripts/check-pr-body-vs-diff.sh)
+[`check-pr-body-vs-diff.sh`](../../../../../.github/scripts/check-pr-body-vs-diff.sh)
 inline-`code`-span strip).
+
+## Which register — there is more than one
+
+Three register files live under `knowledge-base/legal/`, and a register-update PR is routed to
+the wrong one if only the first is known:
+
+| Register | File | What belongs in it |
+|---|---|---|
+| Art. 30(1) — processing activities | `knowledge-base/legal/article-30-register.md` | Processing Activities, kept in **controller** capacity |
+| Art. 30(2) — processor records | `knowledge-base/legal/article-30-2-register.md` | Processing carried out on behalf of a controller, kept in **processor** capacity |
+| Art. 33(5) — breach documentation | `knowledge-base/legal/breach-register.md` | Personal-data breach **determinations**, as an index with canonical pointers |
+
+**Art. 33(5) determinations do not go in the Art. 30 register.** Art. 30(1)'s limbs are a closed
+list and breach documentation is not among them; see
+[ADR-200](../../../../../knowledge-base/engineering/architecture/decisions/ADR-200-art-33-5-documentation-is-a-distinct-register-discharged-by-an-index.md),
+which also fixes the breach register's inclusion predicate and its column set. The `clo` agent is
+the custodian and adds the row in the **same PR** that lands the determination;
+`scripts/lint-legal-registers.sh` asserts that nothing determination-shaped under
+`knowledge-base/legal/audits/` is dropped without a committed, issue-citing reason.
+
+## Editing an evidentiary record without destroying it
+
+- **A register fails in four ways a code file does not, and all four stay green under grep.** (1) **A fabricated authority** — before writing any word from the family *signed / attested / approved / reviewed by*, grep the source for it; if it is absent the sentence is yours, so say so. When the authority is unreachable (an agent that will not return), record the absence: put what you can honestly produce under a **different filename**, carry `attested_by: "NOBODY"`, leave the attestation path deliberately empty, and file the gap. (2) **An in-place edit of a dated cell** — if the cell is cited downstream, the edit is an amendment: append `> **Superseded YYYY-MM-DD (#N):**` quoting the prior text rather than overwriting it. Resolving a placeholder inside a dated or signed instrument is an amendment too. (3) **A correction that reached only the canonical copy** — grep the claim's SUBJECT corpus-wide, read every hit, and re-read the underlying record before writing the replacement; a correction sourced from memory lands on a superseded state. (4) **Discarded table cells** — GFM splits a row on `|` *even inside a backticked code span*, and cells past the header count are dropped at render time, so a row can be complete in the raw markdown and truncated in the rendered document. Assert `cells == header_cells` for every row added or edited; escape as `\|`. **Why:** #7717 shipped all four before review caught them, and the sweep found a signed counsel review (`audits/2026-07-counsel-review-6588.md`) whose per-row `CONFIRMED` verdict cell had never rendered. See `knowledge-base/project/learnings/2026-09-03-four-ways-i-destroyed-evidence-in-the-pr-that-exists-to-preserve-it.md`.
 
 ## The register file itself is implementation-cited
 
 The Article 30 register
-([`knowledge-base/legal/article-30-register.md`](../../../../knowledge-base/legal/article-30-register.md))
+([`knowledge-base/legal/article-30-register.md`](../../../../../knowledge-base/legal/article-30-register.md))
 follows the PA10/PA11 convention of citing exact file paths + line numbers
 inline in the TOM cells — that's the load-bearing accountability evidence
 under GDPR Art. 5(2). This guidance applies to the **PR BODY only**, not to
