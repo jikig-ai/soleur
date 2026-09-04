@@ -76,8 +76,27 @@
 # ack. Mirrors AC5's pure-delete SET assertion, which uses the same
 # exact-equality shape for the same reason.
 #
+# ── resource_forgets (#7650 Phase 2) ───────────────────────────────────────
+# A `removed { lifecycle { destroy = false } }` block plans as `actions:["forget"]`:
+# the address leaves Terraform's management and the live object is left alone.
+# NOTHING else in this filter sees it as leaving. It is not a `delete`
+# (`resource_deletes` selects `index("delete")`), and for a type with no nested
+# clause here — `sentry_cron_monitor` and `sentry_uptime_monitor` both expose
+# zero array-of-blocks, by design — the nested arithmetic is 0 too. So without
+# this counter a plan that drops every cron monitor out of state scores
+# `destroy_count = 0` and the gate prints `PASS (plan destroys nothing)`.
+#
+# It is counted SEPARATELY from `resource_deletes` and never folded into it,
+# because AC4's discrimination depends on `resource_deletes == 0` being the
+# thing that says "nothing was actually destroyed" while the forgets are
+# acknowledged. Folding the two together makes that sentence unsayable.
+#
+# `index("forget")` rather than exact `== ["forget"]`: Terraform is documented to
+# emit `forget` alone today, but the actions array is a list precisely because it
+# composes, and a composed forget is still a departure from management.
+#
 # Input: `terraform show -json <plan>` document.
-# Output: {resource_deletes: int, resource_creates: int, nested_deletes: int}.
+# Output: {resource_deletes, resource_creates, resource_forgets, nested_deletes}, all int.
 
 # Count the array-of-blocks v2 surfaces on a sentry_issue_alert side. Sum of
 # conditions_v2 + filters_v2 + actions_v2 elements; `($side // {})` null-coalesces
@@ -127,6 +146,8 @@ def sentry_issue_alert_blocks_count($side):
   # Pure creates only — see the resource_creates note in the header for why a
   # replace (["delete","create"]) is deliberately excluded.
   resource_creates: ([.resource_changes[]? | select(.change.actions? == ["create"])] | length),
+  # Every type, no type-specific clause — a forget is type-independent (#7650).
+  resource_forgets: ([.resource_changes[]? | select(.change.actions? | index("forget"))] | length),
   nested_deletes: (
     [
       # sentry_issue_alert.{conditions_v2,filters_v2,actions_v2} (#4364)

@@ -1659,6 +1659,15 @@ if want_scripts; then
   run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
   run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
   run_suite "tests/scripts/sentry-create-gate" bash tests/scripts/test-sentry-create-gate.sh
+  # #7650 Phase 2 — Guard A (create protection, now wired into BOTH workflow jobs)
+  # and Guard B (the forget<->import bijection) for the sentry_alert adoption.
+  # Registered HERE for the reason the neighbouring comments give and this suite
+  # makes acute: nothing under tests/scripts/ is auto-discovered, and the guards
+  # this suite covers are the only things standing between a one-character edit
+  # and 27 live paging rules — including the GDPR Art. 33 breach alert — being
+  # orphaned or duplicated. An unregistered suite here would read as green
+  # forever while asserting nothing.
+  run_suite "tests/scripts/sentry-alert-adoption-guards" bash tests/scripts/test-sentry-alert-adoption-guards.sh
   # Class D (live monitor with no .tf block) is the delete path's other half: the
   # full-root apply can only reclaim a monitor the config once declared. Its whole
   # value is the non-zero exit — registered here because nothing auto-discovers

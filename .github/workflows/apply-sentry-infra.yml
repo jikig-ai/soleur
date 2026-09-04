@@ -395,17 +395,33 @@ jobs:
           terraform show -json tfplan > /tmp/sentry-pr-plan.json
           eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-pr-plan.json)"
 
+          # ── UNCONDITIONAL, UN-ACKABLE assertions (#7650 Phase 2) ─────────
+          # All three run on every plan, before the destroy gate, and none of
+          # them reads the commit message. They are not acknowledgeable
+          # failures: they describe states that are wrong however deliberately
+          # they were arrived at.
+          #
+          # These were previously nested inside `if resource_creates > 0`,
+          # which made the binding gate — the one thing that notices all 27
+          # paging rules being repointed at a detector that watches nothing —
+          # unreachable on exactly the plans it is for. A correlated rebind
+          # creates nothing.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-issue-alert-create-tripwire.sh" /tmp/sentry-pr-plan.json
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-monitor-binding-gate.sh" /tmp/sentry-pr-plan.json
+          # AC2 — self-skipping: exits 0 on any plan with no forget/import rows,
+          # which is every plan once the adoption has applied. Early feedback
+          # here; the `apply` job's copy is the enforcement, because the apply
+          # re-plans and what it plans is what actually reaches prod.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-adoption-plan-assert.sh" \
+            /tmp/sentry-pr-plan.json 27 \
+            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+
           # ── CREATE gate (#6589) ──────────────────────────────────────────
           # Runs BEFORE the destroy gate and has NO [ack-destroy] bypass: an
           # unexplained create is a different failure from an intended delete,
           # and typing one ack must not wave through the other. Diff-matched,
           # not blanket-acked — the normal add-a-monitor flow passes silently.
           if [[ "$resource_creates" -gt 0 ]]; then
-            terraform show -json tfplan > /tmp/sentry-pr-plan.json
-            # AC11 — same binding assertion as the apply job. Early feedback
-            # here; the apply job's copy is the enforcement.
-            bash "${GITHUB_WORKSPACE}/scripts/sentry-monitor-binding-gate.sh" /tmp/sentry-pr-plan.json
-
             jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
               /tmp/sentry-pr-plan.json > /tmp/sentry-creates.txt
             git -C "${GITHUB_WORKSPACE}" diff "origin/${BASE_REF}...HEAD" \
@@ -581,6 +597,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Two commits, not one. Guard A(i) — the diff-matched create gate that
+          # until #7650 Phase 2 ran ONLY in `plan_pr` — needs the merge commit's
+          # own diff to decide whether a planned create is explained by a block
+          # this merge added. On the squash merges this repo uses, `HEAD~1..HEAD`
+          # IS the merged change. The default depth-1 checkout has no HEAD~1.
+          fetch-depth: 2
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -828,16 +851,54 @@ jobs:
           # (these blocks were inline in both jobs and the arithmetic drifted).
           terraform show -json tfplan > /tmp/sentry-apply-plan.json
 
+          # ── EVERYTHING BELOW RUNS BEFORE THE ACK IS CONSULTED ────────────
+          # This job RE-PLANS. Whatever `plan_pr` saw on the PR is not what gets
+          # applied — this plan is. Its only pre-#7650 gate was `destroy_count`,
+          # which the merge's `[ack-destroy]` greens by design (the adoption
+          # legitimately reports 27 forgets and 142 nested shrinks). So on the
+          # one run that actually mutates prod, a blanket ack waved through
+          # everything that was not a delete. These four assertions are the
+          # plug, and none of them reads HEAD_MSG.
+
           # AC11 — every sentry_alert must bind the expected issue-stream
           # detector. A correlated rebind is invisible to the destroy guard
           # (a scalar monitor_ids change is not a delete, a create, or a
           # nested shrink), so destroy_count stays 0 and this job would
-          # otherwise pass green while all 27 paging rules go dark. Runs
-          # BEFORE the ack is consulted: this is not an acknowledgeable
-          # destroy, it is a silent misbinding.
+          # otherwise pass green while all 27 paging rules go dark.
           bash "${GITHUB_WORKSPACE}/scripts/sentry-monitor-binding-gate.sh" /tmp/sentry-apply-plan.json
 
+          # Guard A(ii) — no run ever creates a sentry_issue_alert again.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-issue-alert-create-tripwire.sh" /tmp/sentry-apply-plan.json
+
+          # AC2/AC10 — the adoption is EXACTLY an adoption: 27 forgets, 27
+          # matching imports, every other managed row a no-op. Self-skipping on
+          # any plan with no adoption rows, so it is inert from the run after
+          # this one onward.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-adoption-plan-assert.sh" \
+            /tmp/sentry-apply-plan.json 27 \
+            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+
           eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json)"
+
+          # Guard A(i) — the diff-matched create gate, ported from `plan_pr`.
+          # This job computed `$resource_creates` and never read it: the apply
+          # arm had NO create check at all, so the one worst case of a botched
+          # adoption — 27 duplicate live paging rules — was created ungated.
+          # `HEAD~1..HEAD` is the merged change on a squash merge, which is why
+          # the checkout above asks for depth 2. On `workflow_dispatch` it is the
+          # last merge, i.e. the change whose state is being applied.
+          if [[ "$resource_creates" -gt 0 ]]; then
+            if ! git -C "${GITHUB_WORKSPACE}" rev-parse --verify -q HEAD~1 >/dev/null; then
+              echo "::error::apply create gate: no HEAD~1 available, so a planned create cannot be matched against the merged diff. Refusing to apply ${resource_creates} unexplained create(s)." >&2
+              exit 1
+            fi
+            jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
+              /tmp/sentry-apply-plan.json > /tmp/sentry-apply-creates.txt
+            git -C "${GITHUB_WORKSPACE}" diff HEAD~1 HEAD \
+              -- 'apps/web-platform/infra/sentry/*.tf' > /tmp/sentry-apply-tf.diff
+            bash "${GITHUB_WORKSPACE}/scripts/sentry-create-gate.sh" \
+              /tmp/sentry-apply-creates.txt /tmp/sentry-apply-tf.diff
+          fi
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
           # the token cannot fire from a quoted block, code fence, or
@@ -847,10 +908,21 @@ jobs:
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
-            forget_count=$(jq -r '[.resource_changes[] | select(.change.actions | index("forget"))] | length' /tmp/sentry-apply-plan.json)
-            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s); ${forget_count} of the plan's rows are state-only [\"forget\"] and destroy nothing)."
+            # All three terms come from the shared counter script — never a
+            # second inline jq. `resource_forgets` is state-only: the address
+            # leaves Terraform's management and the live Sentry rule is left
+            # untouched. It is summed into `destroy_count` (a departure from
+            # management is unreviewed change) but reported separately, so the
+            # operator can tell "27 forgets, zero actual deletes" from "26
+            # forgets plus a real delete of a live paging rule".
+            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s) + ${resource_forgets} state-only [\"forget\"] row(s), which destroy nothing)."
             echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
-            grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
+            # `will no longer be managed` is how Terraform renders a `removed{}`
+            # forget in the human plan. Without it this excerpt is EMPTY on a
+            # forget-only plan while the annotation above claims N destructive
+            # changes — the same empty-manifest failure the address-display jq
+            # in `plan_pr` had.
+            grep -E 'will be destroyed|will no longer be managed|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
 
