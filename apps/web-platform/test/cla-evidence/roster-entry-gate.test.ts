@@ -72,21 +72,48 @@ describe("Guard 3 — contribution-triggered entry", () => {
     ).toThrow(ContributionTriggeredEntryError);
   });
 
+  it("G3-M2: EVERY offender is named, not just the first", () => {
+    // Asserting only that it throws cannot distinguish "reports all" from
+    // "reports the first" — with one offender the two are identical. This is
+    // the arm that kills a `.slice(0, 1)` on the offender list.
+    try {
+      assertContributionTriggeredEntry(rosterWith([[999998, 999999]]), ledger([54279]));
+      throw new Error("expected assertContributionTriggeredEntry to throw");
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(e).toBeInstanceOf(ContributionTriggeredEntryError);
+      expect(msg).toContain("999998");
+      expect(msg).toContain("999999");
+      expect(msg).toContain("2 roster account(s)");
+    }
+  });
+
   it("G3-M2 (sibling): a second unsigned representative inside ONE organisation is rejected", () => {
     expect(() =>
       assertContributionTriggeredEntry(rosterWith([[54279, 999999]]), ledger([54279])),
     ).toThrow(ContributionTriggeredEntryError);
   });
 
-  it("G3-M3: an EMPTY signature ledger is refused outright, not treated as permissive", () => {
-    // A check whose reference set is empty passes everything. This is the
-    // fail-open the gate exists to prevent.
-    expect(() => assertContributionTriggeredEntry(rosterWith([[54279]]), ledger([]))).toThrow(
-      ContributionTriggeredEntryError,
-    );
-    expect(() =>
-      assertContributionTriggeredEntry(rosterWith([[54279]]), { signedContributors: [] }),
-    ).toThrow(ContributionTriggeredEntryError);
+  it("G3-M3: an EMPTY signature ledger is refused, and says SO rather than blaming the accounts", () => {
+    // Note what this arm can and cannot see. On the VERDICT the empty-ledger
+    // guard is equivalent to the generic missing-account branch: with an empty
+    // reference set every account is missing, so removing the guard still
+    // throws and no fixture could tell the difference.
+    //
+    // It earns its place on the DIAGNOSIS. "The ledger did not load" and "these
+    // people have not signed the ICLA" call for opposite operator actions, and
+    // collapsing the first into the second is the failure AP-021 forbids. So
+    // the message is the observable, and asserting it is what makes neutering
+    // the guard detectable at all.
+    for (const l of [ledger([]), { signedContributors: [] } as { signedContributors: never[] }]) {
+      try {
+        assertContributionTriggeredEntry(rosterWith([[54279]]), l);
+        throw new Error("expected assertContributionTriggeredEntry to throw");
+      } catch (e) {
+        expect(e).toBeInstanceOf(ContributionTriggeredEntryError);
+        expect((e as Error).message).toContain("ledger is EMPTY");
+      }
+    }
   });
 
   it("G3-M3 (sibling): a malformed/stub ledger is refused, not read as empty", () => {
