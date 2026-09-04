@@ -65,17 +65,17 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 
 ## Phase 4 — Operator affordance (script)
 
-- [ ] 4.1. `apps/cla-evidence/scripts/ccla-add.sh` — resolve logins → numeric ids; **refuse any id
+- [x] 4.1. `apps/cla-evidence/scripts/ccla-add.sh` — resolve logins → numeric ids; **refuse any id
       absent from `origin/cla-signatures:signatures/cla.json`**; validate against the schema; open a
       single-file PR. Support `CCLA_ADD_DRY_RUN=1`.
-- [ ] 4.2. Collect the countersigning fields the schema requires — `signed_at`, CCLA `git_sha` +
+- [x] 4.2. Collect the countersigning fields the schema requires — `signed_at`, CCLA `git_sha` +
       `content_sha256`, `executed_instrument_sha256`. Spec FR6's prompt set could not produce a
       schema-valid record.
-- [ ] 4.3. Build the **remove** path too (withdrawal of designation). CCLA §5 makes removal an
+- [x] 4.3. Build the **remove** path too (withdrawal of designation). CCLA §5 makes removal an
       email; leaving it unbuilt makes withdrawing an ex-employee's authorization a hand-edit.
-- [ ] 4.4. `apps/cla-evidence/scripts/ccla-add.test.sh` (collected by the existing
+- [x] 4.4. `apps/cla-evidence/scripts/ccla-add.test.sh` (collected by the existing
       `apps/cla-evidence/scripts/*.test.sh` glob).
-- [ ] 4.5. Add a CCLA section to `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`.
+- [x] 4.5. Add a CCLA section to `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`.
 - [x] 4.6. Declare the new repo-reading suites in `apps/web-platform/test/repo-wide-suites.ts`.
 
 ## Phase 5 — Corpus corrections

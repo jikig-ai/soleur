@@ -28,5 +28,9 @@ export const CORPORATE_CLA_DOC_PATH = "docs/legal/corporate-cla.md";
 // Guarded CLI. True only when this file is the process entrypoint, so an
 // `import` from a test or a sibling script remains side-effect free.
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
-  process.stdout.write(INDIVIDUAL_CLA_DOC_PATH);
+  // `cla-doc-path.ts` -> the Individual CLA (the default: every pre-existing
+  // producer wanted that one). `cla-doc-path.ts corporate` -> the Corporate CLA.
+  process.stdout.write(
+    process.argv[2] === "corporate" ? CORPORATE_CLA_DOC_PATH : INDIVIDUAL_CLA_DOC_PATH,
+  );
 }
