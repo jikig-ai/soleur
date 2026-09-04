@@ -32,7 +32,7 @@ ADOPT="$REPO_ROOT/scripts/sentry-adoption-plan-assert.sh"
 CREATE_GATE="$REPO_ROOT/scripts/sentry-create-gate.sh"
 WF="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 pass=0; fail=0
-EXPECTED_TESTS=23
+EXPECTED_TESTS=24
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -408,6 +408,65 @@ t_b_harness_constant_extractor_defeats_b1() {
   fi
 }
 
+# B7 — LOCALE COLLATION. The regression that the p1/p2/p3 fixtures structurally
+# could not catch, found only by running the guard against the real 27-rule plan.
+#
+# `sort` under a UTF-8 locale applies collation rules that ignore punctuation;
+# `comm` compares byte-wise. On names carrying `_` — which is every one of the
+# real 27 — the two disagree, `comm` prints "file 1 is not in sorted order" to
+# stderr, and its output is UNDEFINED: it may invent differences or, worse, miss
+# real ones. The live plan passed anyway, by luck. A guard that is correct by
+# luck on the one input that matters is exactly what this suite exists to stop.
+#
+# This row asserts BOTH halves, because either alone is satisfiable by a broken
+# implementation: the clean case must pass with NO collation warning on stderr,
+# and a genuinely broken pair among the same underscore-bearing names must still
+# be found and named.
+# The name set is MEASURED, not decorative. Under en_US.UTF-8 `sort` these
+# interleave (punctuation is ignored):
+#     web_a  weba  web_host  webhost
+# under `LC_ALL=C sort` they group (`_` is 0x5F, below every lowercase letter):
+#     web_a  web_host  weba  webhost
+# Two different orders, which is precisely what makes `comm` unsafe. An earlier
+# draft of this row used plausible-looking names (byok_art_33_breach, ...) that
+# happen to collate IDENTICALLY under both rules — it passed against a
+# deliberately broken implementation, which is the "fixture that proves nothing"
+# trap. Do not "tidy" these names; the divergence IS the fixture. Verified the
+# same way the bug was found: the real 27-rule plan diverges at
+# `workspaces_luks_drift`, for the same reason.
+_pairs_underscored() { # $1=n -> N matched pairs whose names EXPOSE the collation split
+  local n="$1" i rows=()
+  local names=(web_a weba web_host webhost web_zz webzz
+               zot_a zota zot_mirror zotmirror)
+  for ((i = 0; i < n; i++)); do
+    rows+=("$(_row sentry_issue_alert "${names[$i]}" '["forget"]')")
+    rows+=("$(_row sentry_alert "${names[$i]}" '["no-op"]' "acme/20$i")")
+  done
+  _plan "${rows[@]}"
+}
+
+t_b7_locale_collation() {
+  local clean broken rc_clean rc_broken err_clean
+  clean=$(_pairs_underscored 10 | _write b7clean)
+  broken=$(_pairs_underscored 10 \
+    | jq -c 'del(.resource_changes[] | select(.address == "sentry_alert.web_host"))' \
+    | _write b7broken)
+
+  err_clean=$(bash "$BIJECTION" "$clean" 2>&1 >/dev/null); rc_clean=$?
+  rc_broken=$(_rc bash "$BIJECTION" "$broken")
+  local msg_broken; msg_broken=$(_err bash "$BIJECTION" "$broken")
+
+  if [[ "$rc_clean" -eq 0 ]] \
+     && ! grep -qi 'not in sorted order' <<<"$err_clean" \
+     && [[ "$rc_broken" -eq 1 ]] \
+     && grep -q 'web_host' <<<"$msg_broken"; then
+    _report "B7 underscore-bearing names: no collation warning, and a broken pair is still named" ok
+  else
+    _report "B7 underscore-bearing names sort byte-wise for comm" fail \
+      "clean rc=$rc_clean (want 0) stderr='$err_clean' (want no 'not in sorted order'); broken rc=$rc_broken (want 1) named=$(grep -c web_host <<<"$msg_broken") — LC_ALL=C is missing from a sort feeding comm, so comm's output is undefined"
+  fi
+}
+
 # ════════════════════════════════════════════════════════════════════════════
 # AC2/AC10 — the adoption assert, which is what carries Guard B into the apply
 # ════════════════════════════════════════════════════════════════════════════
@@ -507,6 +566,7 @@ t_b5_zero_and_zero_red
 t_b6_matched_pairs_green
 t_b_harness_three_pairs_green
 t_b_harness_constant_extractor_defeats_b1
+t_b7_locale_collation
 t_c1_non_adoption_plan_skips
 t_c2_extra_change_red
 t_c3_dropped_pair_red

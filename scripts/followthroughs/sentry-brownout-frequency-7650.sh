@@ -23,7 +23,25 @@
 #   1 = FAIL       an `outcome=exhausted` was observed — the window now exceeds the
 #                  budget, or the family is fully retired. Either way the retry has
 #                  reached its shelf life and the sentry_alert migration is the fix.
-#   * = TRANSIENT  API unreachable / no runs in window — retry next sweep
+#   * = TRANSIENT  API unreachable / no runs in window, or the window contains failed
+#                  runs this meter cannot explain — retry next sweep
+#
+# TWO FIELDS WERE FETCHED AND NEVER READ (#7650 Phase 2). `conclusion` and
+# `createdAt` were both in the `--json` list and neither was consumed:
+#
+#   * `conclusion`. A FAILED apply that carries no `exhausted` marker scored
+#     `exhausted=0` and exited 0, so this meter posted PASS — "the deprecated
+#     family answered on first attempt every time" — over a window in which the
+#     workflow was failing. Whatever the cause, that is not a sentence this
+#     script was in a position to write. Failures it cannot explain now yield
+#     TRANSIENT, which is the honest verdict: the meter did not measure a clean
+#     window, it measured a window it does not understand.
+#
+#   * `createdAt`. The window was "the last N runs" with no time bound, so on a
+#     workflow that fires rarely those N runs can span a year and the meter
+#     reports a brownout rate from a period the vendor's deprecation schedule has
+#     moved on from. The window is now bounded in DAYS as well, and the observed
+#     span is printed so a reader can see what the number describes.
 #
 # FAIL is deliberately NOT wired to "the rate went up". A rising rate is information the
 # operator should see, not a page: the retry is still absorbing it, and a threshold
@@ -34,21 +52,40 @@ set -uo pipefail
 
 WORKFLOW="apply-sentry-infra.yml"
 WINDOW="${BROWNOUT_WINDOW_RUNS:-40}"
+# Days, not just runs. Both bounds apply; whichever is tighter wins.
+WINDOW_DAYS="${BROWNOUT_WINDOW_DAYS:-30}"
 
 if [[ -z "${GH_TOKEN:-}" ]]; then
   echo "TRANSIENT: GH_TOKEN not set — the sweeper's env -i sandbox did not pass it through." >&2
   exit 3
 fi
 
-runs=$(gh run list --workflow "$WORKFLOW" --limit "$WINDOW" \
+all_runs=$(gh run list --workflow "$WORKFLOW" --limit "$WINDOW" \
          --json databaseId,conclusion,createdAt 2>/dev/null) || {
   echo "TRANSIENT: could not list runs for $WORKFLOW." >&2; exit 3; }
 
+# Bound on `createdAt` as well as on count. `date -d` is GNU-only, which is what
+# the sweeper runs on; a portability fallback that silently skipped the bound
+# would reinstate the unbounded window it exists to remove.
+cutoff=$(date -u -d "${WINDOW_DAYS} days ago" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null) || {
+  echo "TRANSIENT: could not compute a ${WINDOW_DAYS}-day cutoff (no GNU date -d)." >&2; exit 3; }
+runs=$(jq -c --arg c "$cutoff" '[ .[] | select(.createdAt >= $c) ]' <<<"$all_runs" 2>/dev/null) || {
+  echo "TRANSIENT: could not apply the ${WINDOW_DAYS}-day window." >&2; exit 3; }
+
 total=$(jq -r 'length' <<<"$runs" 2>/dev/null || echo 0)
 if [[ "${total:-0}" -eq 0 ]]; then
-  echo "TRANSIENT: no $WORKFLOW runs in the last $WINDOW — nothing to measure yet." >&2
+  echo "TRANSIENT: no $WORKFLOW runs in the last $WINDOW runs / $WINDOW_DAYS days — nothing to measure yet." >&2
   exit 3
 fi
+
+# The observed span, so the reported rate is legible as "over what".
+span_from=$(jq -r 'map(.createdAt) | min' <<<"$runs")
+span_to=$(jq -r 'map(.createdAt) | max' <<<"$runs")
+
+# `conclusion` is now READ. A failed run in the window that carries no
+# `exhausted` marker is something this meter cannot account for, and reporting
+# PASS over it is the defect being fixed.
+failed=$(jq -r '[ .[] | select(.conclusion == "failure") ] | length' <<<"$runs")
 
 retried=0; cleared=0; exhausted=0; scanned=0
 # Only non-success runs can carry an `exhausted`, but a CLEARED brownout lives inside a
@@ -68,7 +105,7 @@ if [[ "$scanned" -eq 0 ]]; then
   exit 3
 fi
 
-echo "SOLEUR_SENTRY_BROWNOUT_METER window_runs=${scanned} retry_events=${retried} cleared=${cleared} exhausted=${exhausted} #7650"
+echo "SOLEUR_SENTRY_BROWNOUT_METER window_runs=${scanned} window_days=${WINDOW_DAYS} span=${span_from}..${span_to} failed_runs=${failed} retry_events=${retried} cleared=${cleared} exhausted=${exhausted} #7650"
 
 if [[ "$exhausted" -gt 0 ]]; then
   cat >&2 <<MSG
@@ -85,7 +122,7 @@ as sentry_alert and are unaffected by this family's retirement. Exactly TWO
 remain on the deprecated path — auth-per-user-loop and sandbox-startup-failure —
 because the pinned provider cannot express event_unique_user_frequency_count as
 a trigger (upstream jianyuan/terraform-provider-sentry issue 950, tracked here by
- #7634). Only auth-per-user-loop still has configure-sentry-alerts.sh as its
+#7634). Only auth-per-user-loop still has configure-sentry-alerts.sh as its
 writer; the other three auth-* rules are Terraform-owned and reconcile via
 terraform apply. If this family is fully retired, ONE rule is stranded without a
 writer, not four.
@@ -93,9 +130,31 @@ MSG
   exit 1
 fi
 
+# Ordered AFTER the exhausted check on purpose: an `exhausted` marker is a
+# specific, actionable verdict, and demoting it to "I cannot explain these
+# failures" because the same window also holds an unrelated red would lose the
+# louder finding to the quieter one.
+if [[ "$failed" -gt 0 ]]; then
+  cat >&2 <<MSG
+TRANSIENT: ${failed} of the ${scanned} runs in this window FAILED, and none of them
+carries an \`outcome=exhausted\` marker.
+
+This meter measures brownout frequency. It cannot explain a failure that is not a
+brownout, and it must not report PASS over one: before #7650 Phase 2 it did
+exactly that — \`exhausted=0\` was read as "the deprecated family answered on first
+attempt every time", over a window in which the workflow was failing for some
+other reason entirely.
+
+Read the failed runs directly:
+  gh run list --workflow ${WORKFLOW} --limit ${WINDOW} --json databaseId,conclusion,createdAt \\
+    | jq -r '.[] | select(.conclusion == "failure") | .databaseId'
+MSG
+  exit 3
+fi
+
 if [[ "$retried" -eq 0 ]]; then
-  echo "PASS: no brownout retries in the last ${scanned} runs — the deprecated family answered on first attempt every time."
+  echo "PASS: no brownout retries across the ${scanned} runs in the last ${WINDOW_DAYS} days (${span_from}..${span_to}), and no failed runs — the deprecated family answered on first attempt every time."
 else
-  echo "PASS: ${retried} retry event(s) across ${scanned} runs, ${cleared} cleared within budget, 0 exhausted."
+  echo "PASS: ${retried} retry event(s) across ${scanned} runs in the last ${WINDOW_DAYS} days (${span_from}..${span_to}), ${cleared} cleared within budget, 0 exhausted, 0 failed."
 fi
 exit 0

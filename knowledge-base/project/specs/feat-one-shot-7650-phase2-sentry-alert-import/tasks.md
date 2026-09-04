@@ -45,10 +45,10 @@ wrong, three of them inside the plan's own acceptance criteria) and
       which asserts the post-authoring state — see 3.6).
 - [x] **1.5** Confirm `apply-sentry-infra.yml` pins Terraform `>= 1.7` (currently `1.10.5`, `:131`)
       and `.terraform.lock.hcl` pins provider `0.15.7`.
-- [ ] **1.6** Preflight the Sentry token's **`workflows/` write** scope. Reads are exercised by the
+- [x] **1.6** Preflight the Sentry token's **`workflows/` write** scope. Reads are exercised by the
       capture and the imports; the first *write* happens on the first Update after adoption, and a
       missing scope would surface mid-apply in the half-applied state.
-- [ ] **1.7** Measure `plan_pr`'s runtime against a plan carrying 27 live import reads plus up to
+- [x] **1.7** Measure `plan_pr`'s runtime against a plan carrying 27 live import reads plus up to
       210 s of retry sleep. `timeout-minutes: 15` (`:211`) was never re-derived for this shape, and
       a timeout is a `failure` the aggregator fails closed with no brownout annotation.
 
@@ -57,18 +57,18 @@ wrong, three of them inside the plan's own acceptance criteria) and
 Write each matrix **before** the guard. Three guards; two proposed guards are in the plan's Cut
 List with reasons.
 
-- [ ] **2.1** `tests/scripts/test-sentry-alert-adoption-guards.sh` — **Guard A** (create
+- [x] **2.1** `tests/scripts/test-sentry-alert-adoption-guards.sh` — **Guard A** (create
       protection, correctly scoped to `sentry_alert` creates too) and **Guard B** (the
       forget↔import bijection), with harness rows.
-- [ ] **2.2** Wire Guard A into **both** `plan_pr` and `apply`, on the plan artifact, with the
+- [x] **2.2** Wire Guard A into **both** `plan_pr` and `apply`, on the plan artifact, with the
       apply gated on its exit. Rows 8-10 exist because one invocation would otherwise satisfy the
       whole matrix while reproducing the asymmetry the guard closes.
-- [ ] **2.3** **Guard C** — `resource_forgets` in `destroy-guard-filter-sentry.jq`, summed into
+- [x] **2.3** **Guard C** — `resource_forgets` in `destroy-guard-filter-sentry.jq`, summed into
       `destroy_count`. A counter that reports but does not feed the sum is a report, not a gate.
-- [ ] **2.4** **Register the new suite in `scripts/test-all.sh`.** Nothing under `tests/scripts/`
+- [x] **2.4** **Register the new suite in `scripts/test-all.sh`.** Nothing under `tests/scripts/`
       is auto-discovered — every sibling is hand-registered (`:1043-1082`, `:1446-1459`). An
       unregistered suite is an orphan that reads as green. **AC12.**
-- [ ] **2.5** Run every matrix; confirm each RED row reds and each must-PASS row passes. **AC12.**
+- [x] **2.5** Run every matrix; confirm each RED row reds and each must-PASS row passes. **AC12.**
 
 ## Phase 3 — Author the 27
 
@@ -104,55 +104,55 @@ List with reasons.
 - [x] **4.3** Rewrite the header enumeration (`:5-9`), which lists four rules.
 - [x] **4.4** Fix the docstring at `apps/web-platform/test/auth/sentry-tag-coverage.test.ts:8` and
       confirm the test still passes.
-- [ ] **4.5** Update the ownership table in the 2026-08-19 learning; post the split to #4781.
+- [x] **4.5** Update the ownership table in the 2026-08-19 learning; post the split to #4781.
 
 ## Phase 5 — Gate wiring
 
-- [ ] **5.1** **AC10 — the apply-side `0 to change`.** Add the same plan-JSON assertion as AC2 to
+- [x] **5.1** **AC10 — the apply-side `0 to change`.** Add the same plan-JSON assertion as AC2 to
       the `apply` job against `/tmp/sentry-apply-plan.json`, **before** `terraform apply`, not
       `[ack-destroy]`-reachable. The apply **re-plans**, and its only gate is `destroy_count`,
       which the blanket ack greens by design. This is the largest hole the review round found.
-- [ ] **5.2** **AC11 — monitor-id equality.** Assert the resolved
+- [x] **5.2** **AC11 — monitor-id equality.** Assert the resolved
       `data.sentry_project_issue_stream_monitor.web_platform.id` equals the captured `1213799`, in
       **both** jobs. A correlated rebind plans 27 updates with all four counters at 0.
-- [ ] **5.3** Widen the destroy gate's **address-display** jq (`:419`) to
+- [x] **5.3** Widen the destroy gate's **address-display** jq (`:419`) to
       `index("delete") or index("forget")`. Per R6 it currently selects `["delete"]` only, so it
       prints an empty list while claiming N destructive changes. `resource_deletes` itself stays
       `delete`-only — AC4's discrimination depends on it.
-- [ ] **5.4** Update the destroy-gate operator message (`:809`), which itemizes two terms and would
+- [x] **5.4** Update the destroy-gate operator message (`:809`), which itemizes two terms and would
       understate its own verdict once `destroy_count` has three.
-- [ ] **5.5** Sweep the counter consumers: `scripts/sentry-destroy-counts.sh` (`:55` validation,
+- [x] **5.5** Sweep the counter consumers: `scripts/sentry-destroy-counts.sh` (`:55` validation,
       `:66` sum); `tests/scripts/test-destroy-guard-counter-sentry.sh` **whole-object literals at
       `:174`/`:191`** → per-field assertions, and its `_run_gate` hand-rolled
       `dcount=$((rdel + ndel))`; `tests/scripts/test-sentry-destroy-counts.sh` T3 (`:71`).
-- [ ] **5.6** Add `sentry_alert` fixtures to `tests/scripts/test-sentry-create-gate.sh` — the one
+- [x] **5.6** Add `sentry_alert` fixtures to `tests/scripts/test-sentry-create-gate.sh` — the one
       guard suite in scope with no case for the new type.
-- [ ] **5.7** Add the `if: failure()` issue-open step to the `apply` job. The apply arm of the
+- [x] **5.7** Add the `if: failure()` issue-open step to the `apply` job. The apply arm of the
       duplicate-creation mode has no operator route today.
-- [ ] **5.8** **AC9** — confirm the brownout retry blocks are byte-unchanged in both jobs. This PR
+- [x] **5.8** **AC9** — confirm the brownout retry blocks are byte-unchanged in both jobs. This PR
       edits that file in both, and §3.3 makes the retry the mitigation for the two survivors.
 
 ## Phase 6 — Ongoing detection (§2.9)
 
-- [ ] **6.1** `scripts/sentry-alert-live-fidelity.sh` — one read-only `GET …/workflows/`, diffed
+- [x] **6.1** `scripts/sentry-alert-live-fidelity.sh` — one read-only `GET …/workflows/`, diffed
       against the committed capture. Detects deletion, `enabled:false`, name drift, changed
       `comparison.{value,interval}`, changed `tagged_event`, `logicType` flip, `monitor_ids`
       unbind — for all 27, not the 4 in `EXPECTED_RULES`.
-- [ ] **6.2** `.github/workflows/scheduled-sentry-alert-drift.yml` — schedule it per ADR-033
+- [x] **6.2** `.github/workflows/scheduled-sentry-alert-drift.yml` — schedule it per ADR-033
       (Inngest cron → `workflow_dispatch`), opening/updating an issue on drift. **AC22.**
       **Do not** add the Sentry root to `scheduled-terraform-drift.yml`'s matrix instead: that leg
       would plan the full root, still refreshing the two survivors through the deprecated
       endpoint, with none of the brownout retry.
-- [ ] **6.3** Wire the same script as a post-apply step in `apply-sentry-infra.yml` — it needs the
+- [x] **6.3** Wire the same script as a post-apply step in `apply-sentry-infra.yml` — it needs the
       three secrets already present at `:830-834`. **AC19/AC20.**
 
 ## Phase 7 — Recovery and forensics (§2.5)
 
-- [ ] **7.1** Capture `terraform state pull` as a workflow artifact **before and after** the apply,
+- [x] **7.1** Capture `terraform state pull` as a workflow artifact **before and after** the apply,
       with an explicit short retention. Labelled **forensics**, not rollback.
-- [ ] **7.2** Add the Encryption Posture row for that artifact — it is a new egress surface
+- [x] **7.2** Add the Encryption Posture row for that artifact — it is a new egress surface
       carrying the whole root's state, readable by anyone with repo read.
-- [ ] **7.3** Probe R2 `list-object-versions`; if unsupported, file the issue that
+- [x] **7.3** Probe R2 `list-object-versions`; if unsupported, file the issue that
       `infra/github/README.md` §"Phase 5 — Rollback" documents a capability that does not exist for
       **every** root on that bucket. Named owner, not a PR-body line.
 - [ ] **7.4** Put the recovery gesture in the PR body: **re-run the failed job on the original
@@ -166,31 +166,31 @@ List with reasons.
       distinction, the warning and the per-resource-block instruction. **Do not weaken it**; this
       PR *inverts* the paragraph, and the file records having been "briefly 'corrected' into a
       falsehood on 2026-08-19 before being restored".
-- [ ] **8.2** `scripts/followthroughs/sentry-brownout-frequency-7650.sh` — the `25 + 4` FAIL
+- [x] **8.2** `scripts/followthroughs/sentry-brownout-frequency-7650.sh` — the `25 + 4` FAIL
       message → 27 + 2; **read the `conclusion` it already fetches** (a failed apply currently
       yields `exhausted=0` → exit 0 → the sweeper posts PASS); bound the window on `createdAt`.
-- [ ] **8.3** `apps/web-platform/infra/sentry/README.md` — the adopted state and the mechanism.
-- [ ] **8.4** `tests/scripts/test-destroy-guard-sentry-scope-guard.sh:3-16` — four types covered.
-- [ ] **8.5** `apps/web-platform/scripts/sentry-monitors-audit.sh:1312` — a code-comment nit, not a
+- [x] **8.3** `apps/web-platform/infra/sentry/README.md` — the adopted state and the mechanism.
+- [x] **8.4** `tests/scripts/test-destroy-guard-sentry-scope-guard.sh:3-16` — four types covered.
+- [x] **8.5** `apps/web-platform/scripts/sentry-monitors-audit.sh:1312` — a code-comment nit, not a
       compliance item (comments in the `{ … } > "$out_file"` block are not emitted).
-- [ ] **8.6** Verify the v0.15.5 spec's dated supersede banner survived (done at plan time).
+- [x] **8.6** Verify the v0.15.5 spec's dated supersede banner survived (done at plan time).
       **`versions.tf` is deliberately NOT edited** — a second drift-capable record of a fact the
       ADR holds.
 
 ## Phase 9 — Architecture record
 
-- [ ] **9.1** ADR-031 `**Amendment (2026-09-04, #7650)**`: the deferral executed for 27 of 29; the
+- [x] **9.1** ADR-031 `**Amendment (2026-09-04, #7650)**`: the deferral executed for 27 of 29; the
       ownership-model change and the AP-001 deviation shrunk 4→1; **`forget` entering the destroy
       gate's vocabulary and `destroy_count` gaining a third term**; the hardcoded `any-short` as a
       standing constraint; and the `auth-per-user-loop` residue.
-- [ ] **9.2** Consider a short standalone ADR for the *mechanism* — config-block adoption,
+- [x] **9.2** Consider a short standalone ADR for the *mechanism* — config-block adoption,
       including the "blocks stay in config until verification passes" sequencing. The repo now has
       two competing adoption patterns with nothing adjudicating between them.
-- [ ] **9.3** Correct `model.c4:619` (`actions_v2` → `action_filters[].actions[].email`, 28-of-29 →
+- [x] **9.3** Correct `model.c4:619` (`actions_v2` → `action_filters[].actions[].email`, 28-of-29 →
       27-of-29). **Preserve** the `byok_cap_exceeded`/`NoOne` carve-out and the 30th-rule paragraph
       verbatim.
-- [ ] **9.4** Run `c4-code-syntax.test.ts` and `c4-render.test.ts`.
-- [ ] **9.5** Re-narrow #7634 to `auth-per-user-loop` and record the residue: once `rules/` is
+- [x] **9.4** Run `c4-code-syntax.test.ts` and `c4-render.test.ts`.
+- [x] **9.5** Re-narrow #7634 to `auth-per-user-loop` and record the residue: once `rules/` is
       retired, that rule is unwritable by any available mechanism.
 
 ## Phase 10 — Pre-merge verification

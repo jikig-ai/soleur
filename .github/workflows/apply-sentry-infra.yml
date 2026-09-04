@@ -940,6 +940,38 @@ jobs:
             exit 1
           fi
 
+      - name: Capture PRE-apply state (forensics)
+        # FORENSICS, NOT ROLLBACK. Read the distinction before using these files.
+        #
+        # The pair exists so that after a failed or PARTIAL apply a human can diff
+        # state either side of it and see which of the 27 addresses actually
+        # moved. They are not a restore path: recovery for this change is
+        # roll-forward only — re-run the failed job on the original run.
+        #
+        # Nor is R2 a restore path. `list-object-versions` against
+        # soleur-terraform-state returns `NotImplemented` (measured 2026-09-04,
+        # rc=254, with a passing `list-objects-v2` control proving it is not an
+        # auth problem), so the point-in-time recovery that infra/github/README.md
+        # §"Phase 5 — Rollback" describes does not exist for ANY root on that
+        # bucket. Filed as #7836. That is why a forensic copy is worth taking —
+        # and why writing one back is not a supported gesture.
+        #
+        # NEW EGRESS SURFACE, named as one in the plan's Encryption Posture. This
+        # takes the WHOLE root's state out from behind the R2 credential boundary
+        # into storage readable by anyone with repo read, and carries every
+        # resource in the root, not just the 27 alerts. Mitigated by an explicit
+        # SHORT retention rather than the 90-day default, and by the sentinel
+        # sweep before upload.
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          terraform state pull > "${RUNNER_TEMP}/sentry-state-pre.json"
+          printf 'pre-apply state: %s bytes, %s resources\n' \
+            "$(wc -c < "${RUNNER_TEMP}/sentry-state-pre.json")" \
+            "$(jq -r '.resources | length' "${RUNNER_TEMP}/sentry-state-pre.json")"
+
       - name: Terraform apply (cron + uptime monitors)
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -947,6 +979,83 @@ jobs:
         run: |
           set -euo pipefail
           terraform apply -auto-approve -input=false tfplan
+
+      - name: Capture POST-apply state and sweep both for secret bytes
+        # `if: always()` so a FAILED apply still leaves the after-picture. That is
+        # the case the pair exists for: a partial apply is exactly when the diff
+        # between the two files is the only record of what moved.
+        #
+        # ONE sweep, over BOTH files, in ONE step — deliberately not a copy of the
+        # sentinel regex in each capture step. Two copies of a guard's pattern is
+        # how the destroy arithmetic drifted (see sentry-destroy-counts.sh's
+        # header); here it would mean the pre-artifact and the post-artifact could
+        # end up held to different standards. The uploads are therefore both
+        # placed AFTER this step; the pre-capture still happens before the apply,
+        # which is the part that has to be ordered.
+        #
+        # FORWARD-LOOKING, not a response to a known leak. Measured 2026-09-04
+        # against the live state object for this root: 89 resources, ZERO sentinel
+        # matches, zero attributes named like a credential, zero
+        # `sensitive_attributes`. The provider does not put its token in state
+        # today. This fails the UPLOAD closed on the day a provider bump changes
+        # that, rather than discovering it from a published artifact.
+        if: always()
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+        run: |
+          set -uo pipefail
+          # Non-fatal pull: this is evidence collection on a path that may already
+          # be failing, and turning a diagnostic into a second failure would
+          # replace the real error in the run summary with this one.
+          if terraform state pull > "${RUNNER_TEMP}/sentry-state-post.json" 2>/dev/null; then
+            printf 'post-apply state: %s bytes, %s resources\n' \
+              "$(wc -c < "${RUNNER_TEMP}/sentry-state-post.json")" \
+              "$(jq -r '.resources | length' "${RUNNER_TEMP}/sentry-state-post.json")"
+          else
+            echo "::warning::could not pull post-apply state; no after-picture for this run."
+          fi
+
+          # Same sentinel set the destroy-guard fixtures are redacted against.
+          sentinel='BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}|sntrys_|dp\.st\.|re_[A-Za-z0-9]{16,}'
+          swept=0
+          for f in "${RUNNER_TEMP}/sentry-state-pre.json" "${RUNNER_TEMP}/sentry-state-post.json"; do
+            [[ -f "$f" ]] || continue
+            swept=$((swept + 1))
+            # rc captured on its OWN LINE. `grep | head` would report head's status
+            # and a match would sweep past as a pass.
+            grep -qE "$sentinel" "$f"
+            rc=$?
+            if [[ "$rc" -eq 0 ]]; then
+              # Delete rather than publish. The step stays green: the artifact is
+              # a diagnostic, and refusing to publish it is the guard working.
+              rm -f "$f"
+              echo "::error::$(basename "$f") carried secret-shaped bytes and was NOT uploaded. A provider bump has started writing a credential into state — fix that before relying on these artifacts again."
+            elif [[ "$rc" -ne 1 ]]; then
+              rm -f "$f"
+              echo "::error::the sentinel sweep failed to run over $(basename "$f") (grep rc=$rc); refusing to upload an unswept state file."
+            fi
+          done
+          if [[ "$swept" -eq 0 ]]; then
+            echo "::warning::no state files to sweep — neither capture produced a file."
+          fi
+
+      - name: Upload state forensics (pre + post)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sentry-forensics-state-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/sentry-state-pre.json
+            ${{ runner.temp }}/sentry-state-post.json
+          # SHORT on purpose. The diagnostic value of these files is measured in
+          # hours after a failed apply; the disclosure surface they open is not.
+          retention-days: 7
+          # `warn`, not `error`: the sweep above deliberately deletes a file rather
+          # than publishing it, and the capture tolerates a failed pull — so
+          # demanding a file here would red a run for the absence of a diagnostic,
+          # or for the secret guard having done its job.
+          if-no-files-found: warn
 
       - name: BYOK Art.33 detector liveness assertion (#4656 item 5)
         # Read-only post-apply check: assert both BYOK issue-alert rules
@@ -965,6 +1074,29 @@ jobs:
           set -euo pipefail
           which jq >/dev/null 2>&1 || sudo apt-get install -y jq
           bash apps/web-platform/scripts/assert-byok-rules-exist.sh
+
+      - name: sentry_alert live fidelity (AC19/AC20)
+        # The post-apply half of §2.9. `assert-byok-rules-exist.sh` above covers
+        # 4 of the 27 rules, by name and enablement; this covers all 27,
+        # field-by-field, against the capture the blocks were generated from.
+        #
+        # POST-apply on purpose. Immediately after `terraform apply` has written
+        # every Terraform-owned field from source, a divergence here cannot be
+        # config drift — it is either live state Terraform does not own
+        # (enablement, detector binding) or evidence the apply did not do what it
+        # reported. Both are worth failing the run for.
+        #
+        # Uses the same three secrets as the step above, already present in this
+        # job. Read-only: one GET against the NON-deprecated org workflows
+        # endpoint, so it adds no exposure to the brownout the two survivors
+        # still refresh through.
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+        run: |
+          set -euo pipefail
+          bash scripts/sentry-alert-live-fidelity.sh
 
       - name: File or comment tracking issue (apply failed)
         # UNCONDITIONAL `if: failure()` — no `&& steps.x.outputs.y != ''` rider.
@@ -1031,8 +1163,13 @@ jobs:
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
               --body "Still failing at ${NOW} for merge SHA \`${MERGE_SHA}\`. Run: ${RUN_URL}"
           else
+            # "Post-MVP / Later", matching the sibling auto-filers, and NOT a phase
+            # milestone: phase milestones are closed as a routine act and
+            # `gh issue create` HARD-FAILS on a closed one, which would silently
+            # stop this verdict reaching a human the day the phase closed.
             gh issue create --repo "$GH_REPO" --title "$TITLE" \
-              --label "ci/apply-sentry-infra" --label "type/infra" --label "priority/p1-high" \
+              --label "ci/apply-sentry-infra" --label "type/chore" --label "priority/p1-high" \
+              --milestone "Post-MVP / Later" \
               --body-file "$BODY_FILE"
           fi
 

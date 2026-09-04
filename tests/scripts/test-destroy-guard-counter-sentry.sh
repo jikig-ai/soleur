@@ -378,7 +378,7 @@ t_forget_must_be_summed_into_destroy_count() {
     return
   fi
   local f; f=$(_forget_fixture sentry_cron_monitor)
-  local dc; dc=$(bash "$mut" "$f" 2>/dev/null | grep -oP '^destroy_count=\K.*')
+  local dc; dc=$(bash "$mut" "$f" 2>/dev/null | grep -oP '^destroy_count=\K.*' || true)
   if [[ "$dc" == "0" ]]; then
     _report "T18 an un-summed resource_forgets yields destroy_count=0 — so T15 is load-bearing" ok
   else

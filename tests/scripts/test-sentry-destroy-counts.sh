@@ -77,7 +77,7 @@ t_destroy_count_is_the_sum() {
   local rd nd rf dc
   rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out")
   nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out")
-  rf=$(grep -oP '^resource_forgets=\K.*' <<<"$out")
+  rf=$(grep -oP '^resource_forgets=\K.*' <<<"$out" || true)
   dc=$(grep -oP '^destroy_count=\K.*' <<<"$out")
   if [[ "$rd" == "0" && "$nd" == "1" && "$rf" == "0" && "$dc" == "1" ]]; then
     _report "T3 destroy_count sums resource+nested (nested-only delete is counted)" ok
@@ -93,7 +93,7 @@ t_destroy_count_sums_forgets() {
   local rd nd rf dc
   rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out")
   nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out")
-  rf=$(grep -oP '^resource_forgets=\K.*' <<<"$out")
+  rf=$(grep -oP '^resource_forgets=\K.*' <<<"$out" || true)
   dc=$(grep -oP '^destroy_count=\K.*' <<<"$out")
   if [[ "$rd" == "0" && "$nd" == "0" && "$rf" == "1" && "$dc" == "1" ]]; then
     _report "T3b destroy_count sums resource_forgets too (forget-only plan scores 1, not 0)" ok

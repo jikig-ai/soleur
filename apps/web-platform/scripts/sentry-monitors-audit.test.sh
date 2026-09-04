@@ -1440,18 +1440,33 @@ TF_DIR="$SCRIPT_DIR/../infra/sentry"
 # into a loud failure rather than a silent pass.
 n_cron=$( { grep -h -c '^resource "sentry_cron_monitor"' "$TF_DIR"/*.tf 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}')
 n_alert=$( { grep -h -c '^resource "sentry_issue_alert"' "$TF_DIR"/*.tf 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}')
+# TWO alert types since #7650 Phase 2, and the split is the load-bearing fact.
+# Deriving only `sentry_issue_alert` would demand the README say "2 issue
+# alerts" — true to this derivation and FALSE as prose, because the root still
+# governs 29 alert rules. The anchors are disjoint: `"sentry_alert"` carries a
+# closing quote, so it cannot match `"sentry_issue_alert"`, and vice versa.
+n_salert=$( { grep -h -c '^resource "sentry_alert"' "$TF_DIR"/*.tf 2>/dev/null || true; } | awk '{s+=$1} END{print s+0}')
 readme="$TF_DIR/README.md"
 t25_ok=1
 # Non-vacuity: the derivation must actually find resources.
-if (( n_cron < 1 )) || (( n_alert < 1 )); then
+if (( n_cron < 1 )) || (( n_alert < 1 )) || (( n_salert < 1 )); then
   fail "T25: derived 0 resources from $TF_DIR — the anchor broke, not the prose"
   t25_ok=0
 else
   if ! grep -q "\*\*${n_cron} cron monitors\*\*" "$readme"; then
     fail "T25: README cron-monitor count disagrees with the tf root (${n_cron})"; t25_ok=0
   fi
-  if ! grep -q "\*\*${n_alert} issue alerts\*\*" "$readme"; then
-    fail "T25: README issue-alert count disagrees with the tf root (${n_alert})"; t25_ok=0
+  if ! grep -q "\*\*${n_salert} \`sentry_alert\` rules\*\*" "$readme"; then
+    fail "T25: README sentry_alert count disagrees with the tf root (${n_salert})"; t25_ok=0
+  fi
+  if ! grep -q "\*\*${n_alert} \`sentry_issue_alert\` rules\*\*" "$readme"; then
+    fail "T25: README sentry_issue_alert count disagrees with the tf root (${n_alert})"; t25_ok=0
+  fi
+  # The TOTAL is cited too, and it is the number a reader carries away. Pinning
+  # only the two parts would let "29 alert rules" rot into 28 unnoticed.
+  n_alert_total=$(( n_salert + n_alert ))
+  if ! grep -q "(${n_alert_total} alert rules total)" "$readme"; then
+    fail "T25: README alert-rule TOTAL disagrees with the tf root (${n_alert_total})"; t25_ok=0
   fi
   # The script's Class D comment cites the cron count three times in one
   # sentence; any stale figure there is the shape that shipped as "verified".
@@ -1459,7 +1474,7 @@ else
     fail "T25: the script's Class D comment cites a stale cron count (tf root says ${n_cron})"; t25_ok=0
   fi
 fi
-(( t25_ok == 1 )) && pass "prose counts agree with the tf root (${n_cron} cron, ${n_alert} issue alerts)"
+(( t25_ok == 1 )) && pass "prose counts agree with the tf root (${n_cron} cron, ${n_salert} sentry_alert, ${n_alert} sentry_issue_alert)"
 
 # ------------------------------------------------------------------------
 # T22 — ASSEMBLY: no Sentry call bypasses the curl_retry chokepoint.

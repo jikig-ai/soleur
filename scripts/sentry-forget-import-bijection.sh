@@ -78,9 +78,17 @@ if [[ "$n_forget" -eq 0 && "$n_import" -eq 0 ]]; then
   exit 1
 fi
 
-# A duplicate name on either side would make the sorted lists compare equal
-# while the relation is not a bijection (two forgets, one import, same name).
-_dupes() { tr ' ' '\n' <<<"$1" | sed '/^$/d' | sort | uniq -d | tr '\n' ' '; }
+# LC_ALL=C on EVERY sort that feeds `comm`, and on the uniq pipeline beside it.
+# `sort` under a UTF-8 locale uses collation rules that ignore punctuation, while
+# `comm` compares byte-wise — so on names carrying `_` (which is all 27 of the
+# real ones) the two disagree, `comm` prints "file 1 is not in sorted order", and
+# its output is undefined: it can report differences that do not exist or, worse,
+# MISS real ones. Measured against the live 27-rule plan on 2026-09-04: the
+# warning fired on every invocation and the verdict happened to be right anyway.
+# A guard that is correct by luck on the one input that matters is the failure
+# this whole file exists to prevent. The 3-name fixtures could never have caught
+# it — `p1`/`p2`/`p3` collate identically under both rules.
+_dupes() { tr ' ' '\n' <<<"$1" | sed '/^$/d' | LC_ALL=C sort | uniq -d | tr '\n' ' '; }
 dup_f=$(_dupes "$forget_names"); dup_i=$(_dupes "$import_names")
 if [[ -n "${dup_f// /}" || -n "${dup_i// /}" ]]; then
   echo "::error::forget/import bijection: duplicate resource name(s) — forgets: '${dup_f:-none}' imports: '${dup_i:-none}'." >&2
@@ -89,10 +97,9 @@ if [[ -n "${dup_f// /}" || -n "${dup_i// /}" ]]; then
 fi
 
 # Report BOTH directions, in full. Not "the first mismatch".
-only_forget=$(comm -23 <(tr ' ' '\n' <<<"$forget_names" | sed '/^$/d' | sort) \
-                       <(tr ' ' '\n' <<<"$import_names" | sed '/^$/d' | sort))
-only_import=$(comm -13 <(tr ' ' '\n' <<<"$forget_names" | sed '/^$/d' | sort) \
-                       <(tr ' ' '\n' <<<"$import_names" | sed '/^$/d' | sort))
+_sorted() { tr ' ' '\n' <<<"$1" | sed '/^$/d' | LC_ALL=C sort; }
+only_forget=$(LC_ALL=C comm -23 <(_sorted "$forget_names") <(_sorted "$import_names"))
+only_import=$(LC_ALL=C comm -13 <(_sorted "$forget_names") <(_sorted "$import_names"))
 
 if [[ -z "$only_forget" && -z "$only_import" ]]; then
   echo "forget/import bijection: PASS ($n_forget forget(s) paired one-to-one with $n_import import(s))"

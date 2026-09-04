@@ -104,3 +104,64 @@ the historical aliases (`cron-egress-blocked` → `egress_blocked`,
 `web-host-private-nic-boot-gate` → `web_private_nic_boot_gate`,
 `web-host-terminal-boot-fatal` → `web_terminal_boot_fatal`) and reads nothing
 from `issue-alerts.tf`, so deleting the legacy blocks cannot break it.
+
+## 6. Sentry token `workflows/` WRITE scope — present (task 1.6)
+
+The adoption itself writes nothing to Sentry: 27 imports and `0 to change` is a
+read-only plan. The first WRITE happens on the first later apply that changes an
+adopted rule, so a missing write scope would not surface here — it would surface
+mid-apply, months from now, in a half-applied state. Hence the preflight.
+
+Probed 2026-09-04 with `SENTRY_IAC_AUTH_TOKEN` (Doppler `soleur/prd_terraform`),
+against `jikigai-eu.sentry.io`:
+
+| Request | Status | Reading |
+|---|---|---|
+| `GET  /api/0/organizations/jikigai-eu/workflows/?per_page=1` | **200** | read scope present (control) |
+| `PUT  /api/0/organizations/jikigai-eu/workflows/999999999/` with `{}` | **404** | **write scope present** — the request was authorised and failed only on the id |
+
+**404, not 403, is the whole result.** Sentry rejects an unauthorised write with
+403 before it looks the resource up; a 404 means authorisation passed and the
+lookup failed. So the token can write this endpoint family.
+
+**Why the probe is safe to have run against production.** The id `999999999` does
+not exist, so no mutation was reachable on any code path — a PUT to a missing
+resource cannot partially apply. That is deliberately the ONLY shape of write
+probe used here: sending `{}` to a REAL workflow id would have distinguished the
+same two cases while risking a live paging rule.
+
+**What this does NOT establish.** Nothing about the write ENVELOPE. Whether
+`workflows/` accepts a PUT/POST body that Terraform or
+`configure-sentry-alerts.sh` could construct is still unknown and is exactly
+what #7634 tracks. Scope and schema are different questions; this answers only
+the first.
+
+## 7. `plan_pr` runtime against the adoption-shaped plan (task 1.7)
+
+`apply-sentry-infra.yml`'s `plan_pr` carries `timeout-minutes: 15`, set before this
+plan shape existed. A timeout is a `failure`, and the aggregator fails closed on
+it with **no brownout annotation** — so an under-set budget would present as an
+unexplained red on the one PR that moves 27 live paging rules.
+
+Measured 2026-09-04, full root, warm provider cache, this branch:
+
+```
+terraform plan -no-color -input=false -out=/tmp/tfplan.sentry
+  rc=0   elapsed=12s
+  Plan: 27 to import, 0 to add, 0 to change, 0 to destroy.
+  410 responses: 0
+```
+
+The 27 live import reads cost seconds, not minutes: Terraform issues them during
+the same refresh walk it already performs.
+
+**Budget arithmetic, worst case.** 12 s of plan + the brownout retry's full
+ceiling (3 attempts, 5 s then 10 s backoff, plus two further plan attempts) is
+under 4 minutes even if every attempt runs to completion. `timeout-minutes: 15`
+has roughly 4x headroom and does **not** need raising for this shape.
+
+**What this measurement does not cover.** A GitHub-hosted runner adds cold
+`terraform init` (provider download, ~20-40 s observed on sibling roots) and has
+no warm cache, and a real brownout adds the 210 s of sleep this arithmetic
+already budgets. Both are inside the headroom above. The number to re-derive if
+that stops being true is the plan itself, not the retry count.

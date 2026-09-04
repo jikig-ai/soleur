@@ -2,10 +2,22 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **29 issue alerts** — a mix of import-only auth/observability rules (mirrored
-  from rules created by `apps/web-platform/scripts/configure-sentry-alerts.sh`)
-  and **apply-created** rules that terraform fully owns from real
-  `conditions_v2`/`filters_v2`/`actions_v2`. The apply-created set includes the
+- **27 `sentry_alert` rules** + **2 `sentry_issue_alert` rules** (29 alert rules total)
+  (#7650 Phase 2). The 27 are adopted from live Sentry and fully Terraform-owned:
+  `ignore_changes = [environment]` only, real `trigger_conditions` and
+  `action_filters`, read through the non-deprecated
+  `organizations/{org}/workflows/` endpoint. The 2 remaining
+  `sentry_issue_alert` resources — `auth-per-user-loop` and
+  `sandbox-startup-failure` — stay behind for one reason: they trigger on
+  `event_unique_user_frequency_count`, which the pinned provider's
+  `trigger_conditions` does not offer (upstream
+  jianyuan/terraform-provider-sentry issue 950). They still refresh through the
+  DEPRECATED alert-rule endpoint, so **a clean plan is not evidence the
+  deprecation lifted** — it may only mean the plan ran outside a brownout
+  window, which is why `apply-sentry-infra.yml` keeps its brownout retry.
+  `configure-sentry-alerts.sh` is NOT deleted: it remains the only executable
+  definition of `auth-per-user-loop`. Older rules that terraform owns from real
+  `conditions_v2`/`filters_v2`/`actions_v2` include the
   BYOK-delegations rules (`byok-art-33-breach`, `byok-cap-exceeded`, #4364).
   `byok-art-33-breach` uses `action_match = "any"` over three event-lifecycle
   conditions (`first_seen_event` + `reappeared_event` + `regression_event`) so a
@@ -59,10 +71,27 @@ terraform plan
 
 ## First-time import — COMPLETE, runbook retired (#7590)
 
-First-time adoption of the issue-alert rules is done: this root declares 29
-`sentry_issue_alert` resources and plans clean against the full root. The
-step-by-step import runbook that stood here was retired for two reasons, both
-of which made it actively misleading rather than merely obsolete:
+First-time adoption of the issue-alert rules is done. Since #7650 Phase 2 this
+root declares **27 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was
+29 `sentry_issue_alert`) and plans clean against the full root.
+
+The 27 were adopted by CONFIG-BLOCK adoption, not by a `terraform import`
+command: 27 `import { to = sentry_alert.<n> }` blocks paired with 27
+`removed { from = sentry_issue_alert.<n>  lifecycle { destroy = false } }`
+blocks, landed on the branch and applied in ONE merge. That shape is not a
+stylistic choice — `terraform import` REQUIRES an existing config block, and
+`main` had zero `sentry_alert` blocks, so a pre-merge import could never have
+run against `main`. `required_version` is `>= 1.9` for the same class of
+reason: on an older CLI a `removed` block plans a DESTROY of the live rule
+rather than a forget. **Do not lower it.**
+
+Those `import{}`/`removed{}` blocks are still present and are removed only
+under the hard precondition in #7826 — `terraform state list` showing 27
+`sentry_alert.` addresses on `main`. Removing an `import{}` whose address was
+never imported turns it into a planned CREATE that collides with the live rule.
+
+The step-by-step import runbook that stood here was retired for two reasons,
+both of which made it actively misleading rather than merely obsolete:
 
 1. It was stale by 25 resources — it described importing "the 4 issue-alert
    rules" created by the legacy `configure-sentry-alerts.sh`.
@@ -132,6 +161,24 @@ Class D candidates as *unresolved*, never as clean.
 
 ## Drift detection
 
-Existing `scheduled-terraform-drift.yml` walks `apps/web-platform/infra/`. The
-matrix needs to be extended to also scan `apps/web-platform/infra/sentry/` —
-tracked separately as a follow-up (NOT in scope for #3814).
+Two different things drift here, and they have two different detectors.
+
+**Alert-rule fidelity** — `.github/workflows/scheduled-sentry-alert-drift.yml`,
+daily, Inngest-dispatched per ADR-033. It runs
+`scripts/sentry-alert-live-fidelity.sh`: one read-only GET against the
+non-deprecated workflows endpoint, diffed field-by-field against the committed
+capture at
+`knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json`.
+It detects deletion, `enabled:false`, name drift, changed
+`comparison.{value,interval}`, changed `tagged_event`, a `logicType` flip and a
+`monitor_ids` unbind — for all 27, not the 4 that
+`assert-byok-rules-exist.sh` covers. This exists because a migrated rule can go
+dark weeks later: still present, still planning clean, matching nothing.
+
+**Everything else in the root** is still not on `scheduled-terraform-drift.yml`'s
+matrix, and adding `apps/web-platform/infra/sentry/` to it is DELIBERATELY not
+the fix for the alert rules. That leg would plan the FULL ROOT, which still
+refreshes the two surviving `sentry_issue_alert` resources through the
+deprecated endpoint — with none of `apply-sentry-infra.yml`'s brownout retry —
+so it would go red on Sentry's brownout calendar rather than on drift, and get
+muted. The remaining gap (cron and uptime monitors) is unchanged from #3814.
