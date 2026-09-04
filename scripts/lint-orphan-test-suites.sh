@@ -501,13 +501,19 @@ REQUIRED_RUNNERS=(
   ".github/scripts/test/run-all.sh"
   "scripts/lint-legal-scope-block-placement.sh"
   "scripts/lint-legal-mirror-drift-baseline.sh"
+  # Added #7717. Both its nearest siblings above were already here and it was not, so deleting
+  # its `run_suite ... --advisory` line from test-all.sh was the cheapest single-line disarm on
+  # the guard: the unit suite stays green, the MIN_CHECKS floor never runs, and the legal
+  # registers are ungated with no signal anywhere. That is precisely the shape this list's own
+  # header describes, applied to a guard whose subject is silent omission.
+  "scripts/lint-legal-registers.sh"
 )
 # FLOOR. `RELEVANCE_ARRAYS` got a derived floor and this list, the same shape, got none --
 # `REQUIRED_RUNNERS=()` exited 0 printing `orphan test suites: none` over zero checks. Absolute and
 # hand-ratcheted: unlike the gate count there is nothing in the runner to derive it from, and the
 # set only ever grows.
-if (( ${#REQUIRED_RUNNERS[@]} < 5 )); then
-  echo "ERROR: REQUIRED_RUNNERS has ${#REQUIRED_RUNNERS[@]} entries, expected >= 5 -- an emptied or trimmed list makes every runner-registration check below pass over nothing." >&2
+if (( ${#REQUIRED_RUNNERS[@]} < 6 )); then
+  echo "ERROR: REQUIRED_RUNNERS has ${#REQUIRED_RUNNERS[@]} entries, expected >= 6 -- an emptied or trimmed list makes every runner-registration check below pass over nothing." >&2
   fails=$((fails + 1))
 fi
 for r in ${REQUIRED_RUNNERS[@]+"${REQUIRED_RUNNERS[@]}"}; do

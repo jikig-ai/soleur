@@ -5,7 +5,7 @@
 # commit as the source edit that earned it:
 #   bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline
 #
-# WHAT THIS IS NOT. These are NOT 1226 defects. P1b asks whether an operand can be RELATIVE, or be
+# WHAT THIS IS NOT. These are NOT 1236 defects. P1b asks whether an operand can be RELATIVE, or be
 # rooted at `/` by an empty parent. It does not assert any of these is reachable with such a value
 # today. The rows are the residue left AFTER the scanner resolved what it could: mktemp in every
 # form, one-line and multi-line same-file wrappers, wrappers reached through a sourced helper (399
@@ -20,7 +20,7 @@
 #   family      sites  files
 #   git -C         16      5
 #   rm -rf        197     46
-#   redirect      892    216
+#   redirect      902    218
 #   mv / cp -r    121     73
 #
 # The `git -C` rows are the highest-value subset for burn-down: all 16 are in PRODUCTION scripts,
@@ -79,6 +79,11 @@
 #
 #   1225 -> 1226   a sibling merge added one site in a new file
 #                  (.claude/hooks/incident-sandbox-coverage.test.sh, from #7804).
+#   1226 -> 1236   a second sibling merge added ten more, all in two NEW files from
+#                  #7782 (scripts/lint-legal-registers.test.sh 9, check-pa-22.test.sh 1).
+#                  Verified: neither file existed pre-merge, and no PRE-EXISTING file's
+#                  count rose -- a rise in an existing row would be a regression, a new
+#                  file is churn.
 #
 # A future change that SHRINKS this file deserves the scrutiny a growth would get. From the count
 # alone, a better resolver and a detector that stopped looking are indistinguishable, and across
@@ -257,6 +262,7 @@
 1	scripts/audit-bot-codeql-coverage.sh
 1	scripts/check-cloudflare-token-drift.sh
 1	scripts/check-cloudflare-token-drift.test.sh
+1	scripts/check-pa-22.test.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh
 1	scripts/content-publisher.sh
@@ -290,6 +296,7 @@
 1	scripts/lint-guard-contract.test.sh
 1	scripts/lint-legal-mirror-drift-baseline.sh
 19	scripts/lint-legal-mirror-drift-baseline.test.sh
+9	scripts/lint-legal-registers.test.sh
 77	scripts/lint-legal-scope-block-placement.test.sh
 1	scripts/lint-orphan-test-suites.test.sh
 25	scripts/lint-workflow-errexit-capture.test.sh
