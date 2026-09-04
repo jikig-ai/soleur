@@ -28,7 +28,12 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TPL="${GIT_DATA_CLOUD_INIT:-$HERE/cloud-init-git-data.yml}"
-TMP="$(mktemp -d "${TMPDIR:-/var/tmp}/gdnft.XXXXXX")"
+# `mktemp -d` with NO template, deliberately. A path-bearing template is not PROVABLY absolute
+# to the P1b scanner (fixture-relative-assert.test.sh treats `mktemp -d <dir>/x.XXXXXX` as
+# unproven by design — one of its E-series false-negative fixes), so the templated form would add
+# three new rows to a baseline whose whole point is that it only shrinks. The bare form honours
+# TMPDIR identically and is provably absolute.
+TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 passes=0; fails=0; skipped=0
