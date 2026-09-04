@@ -240,6 +240,7 @@ describe("mayAttestFreshness — Guard 3 write predicate", () => {
     filesSame: 8,
     filesDrifted: 0,
     filesError: 0,
+    upstreamRepoState: "ok",
   };
 
   it("permits the write on a complete, clean, error-free comparison", () => {
@@ -281,6 +282,7 @@ describe("mayAttestFreshness — Guard 3 write predicate", () => {
         filesSame: 5,
         filesDrifted: 0,
         filesError: 0,
+        upstreamRepoState: "ok",
       }),
     ).toBe(false);
   });
@@ -295,6 +297,7 @@ describe("mayAttestFreshness — Guard 3 write predicate", () => {
         filesSame: 1,
         filesDrifted: 1,
         filesError: 0,
+        upstreamRepoState: "ok",
       }),
     ).toBe(false);
   });
@@ -310,6 +313,7 @@ describe("mayAttestFreshness — Guard 3 write predicate", () => {
         filesSame: 0,
         filesDrifted: 0,
         filesError: 0,
+        upstreamRepoState: "ok",
       }),
     ).toBe(false);
   });
@@ -325,6 +329,7 @@ describe("mayAttestFreshness — Guard 3 write predicate", () => {
       filesSame: 3,
       filesDrifted: 0,
       filesError: 0,
+      upstreamRepoState: "ok",
     };
     const b: ComparisonTotals = { ...a };
     expect(mayAttestFreshness(a)).toBe(mayAttestFreshness(b));
@@ -334,11 +339,38 @@ describe("mayAttestFreshness — Guard 3 write predicate", () => {
   // Every conjunct must be independently load-bearing. If dropping one still
   // yields the same verdict on some input, that conjunct is dead code and the
   // predicate is weaker than it reads.
+  // P1-A. Every file compares SAME against an archived upstream — the blobs at
+  // the pinned SHAs still resolve — so the per-file totals are IDENTICAL to a
+  // healthy run. Before this conjunct the cron opened a `compliance/critical`
+  // "upstream archived" issue and advanced `last-verified` in the same pass.
+  it("refuses when upstream is ARCHIVED, though every file compares SAME", () => {
+    expect(mayAttestFreshness({ ...clean, upstreamRepoState: "archived" })).toBe(
+      false,
+    );
+  });
+
+  it("refuses when upstream was RENAMED", () => {
+    expect(mayAttestFreshness({ ...clean, upstreamRepoState: "renamed" })).toBe(
+      false,
+    );
+  });
+
+  // "I could not reach the repo" is not evidence the repo is fine, and it is
+  // also not evidence it is archived — it is its own state, and it refuses.
+  it("refuses when the repo-meta probe could not answer", () => {
+    expect(
+      mayAttestFreshness({ ...clean, upstreamRepoState: "unreachable" }),
+    ).toBe(false);
+  });
+
   it("has no redundant conjunct — each one alone flips a clean verdict", () => {
     expect(mayAttestFreshness({ ...clean, registryCount: 0, filesExamined: 0 })).toBe(false);
     expect(mayAttestFreshness({ ...clean, filesExamined: 7 })).toBe(false);
     expect(mayAttestFreshness({ ...clean, filesDrifted: 1 })).toBe(false);
     expect(mayAttestFreshness({ ...clean, filesError: 1 })).toBe(false);
+    expect(
+      mayAttestFreshness({ ...clean, upstreamRepoState: "archived" }),
+    ).toBe(false);
   });
 });
 
@@ -421,6 +453,24 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
     // — one branch for two different facts.
     expect(src).not.toMatch(/!currentSha \|\| currentSha === oldSha/);
     expect(src).toMatch(/filesError \+= 1;/);
+  });
+
+  it("derives registryCount from DECLARED records, not the emitted view", () => {
+    // The tautology this closes: `upstream-files` drops a record missing its
+    // upstream SHA, so `upstreamFiles.length` shrinks with `filesExamined`
+    // and the completeness conjunct can never fail (#7710 review).
+    expect(src).not.toMatch(/const registryCount = upstreamFiles\.length;/);
+    expect(src).toMatch(/\["record-count", "lifted-files"\]/);
+  });
+
+  it("threads repository-level drift into the predicate", () => {
+    expect(src).toMatch(/upstreamRepoState = "archived";/);
+    expect(src).toMatch(/upstreamRepoState = "renamed";/);
+    expect(src).toMatch(/upstreamRepoState = "unreachable";/);
+  });
+
+  it("uses the memoized runStartedAt for the attestation date", () => {
+    expect(src).toMatch(/const today = runStartedAt\.slice\(0, 10\);/);
   });
 
   it("populates aggDiffParts — the classifier must receive the diff", () => {

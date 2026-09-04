@@ -119,6 +119,23 @@ export type SafeCommitResult =
       status: "committed";
       prNumber: number;
       branch: string;
+      /**
+       * Whether the PR actually reached the default branch in THIS call.
+       *
+       * `status: "committed"` alone cannot answer that. Under
+       * `mergeMode: "direct"` a failed `PUT .../merge` falls back to ARMING
+       * auto-merge and returns the same `committed` status, so a caller that
+       * reads the status as "the artifact landed" is wrong on the expected
+       * path — the bot self-signs only a subset of the required contexts, so
+       * pending checks make the fallback ordinary rather than exceptional.
+       * Armed auto-merge also disarms silently on conflict.
+       *
+       * `true` = merged in this call. `false` = a PR exists but is not merged
+       * (armed auto-merge, or create-only). `undefined` = NOT DETERMINED —
+       * the replay-resume arm never runs the merge, so it cannot report one;
+       * treat undefined as "not merged" when the artifact matters (#7710).
+       */
+      merged?: boolean;
       /** 0 on a replay-resume (counts are not recomputed for an existing commit). */
       fileCount: number;
       deletionCount: number;
@@ -773,6 +790,7 @@ export async function safeCommitAndPr(
     //        Repo has delete_branch_on_merge=true, so branch cleanup is
     //        handled by GitHub in all merging paths.
     const mergeMode = config.mergeMode ?? "auto";
+    let mergedInThisCall = false;
     if (mergeMode === "direct") {
       try {
         await octokit.request("PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge", {
@@ -782,6 +800,7 @@ export async function safeCommitAndPr(
           merge_method: "squash",
           headers: { "X-GitHub-Api-Version": "2022-11-28" },
         });
+        mergedInThisCall = true;
       } catch (mergeErr) {
         const autoMerge = await enableAutoMergeSquash(octokit, prNodeId);
         if (!autoMerge.enabled) {
@@ -858,6 +877,7 @@ export async function safeCommitAndPr(
       branch,
       fileCount,
       deletionCount,
+      merged: mergedInThisCall,
       // Spread-conditional so the replay-resume arm carries NEITHER key rather
       // than an explicit `paths: undefined` — callers discriminate on presence.
       ...(paths ? { paths } : {}),
