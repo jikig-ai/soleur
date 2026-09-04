@@ -454,6 +454,38 @@ replaced the CI-log argument entirely.
 | `DEBUG` trap via `BASH_ENV` evades `$-` | Named residual in the Property's limits |
 | Sweeper comments forever on a refusal | Exit 78 documented in the runbook; scrub removes the leak channel independently |
 
+## Implementation Deviations (recorded 2026-09-04)
+
+Every number below was re-derived after the ship-time rebase, not carried from
+plan time.
+
+| Plan said | Actual | Why |
+|---|---|---|
+| 932 tracked `.sh` | **936**, then 949 scanned | `main` moved 42 files under the branch; the literal was stale exactly as predicted |
+| ~170 in scope pre-exclusion | **165** offenders pre-remediation, **144** after | census is the authority, not the hand-derived estimate |
+| 21 to remediate | **21** — held | verified against the lint's own census, not a grep |
+| Phase 6.3: add to `required-checks.txt` + ruleset | **Deviated.** Registered the lint in `test-all.sh`, which runs in the required `test` context | `lint-bot-statuses` is advisory AND already carries its own follow-up comment to promote the whole job. Forking a parallel ruleset path to beat it would duplicate that work; registering in the required context achieves blocking today. The `ci.yml` step remains the fast advisory signal. |
+| 3 follow-up issues | **2** (#7842 consolidates the hook + CI form lint; #7843 the argv sweep) | net-issue-flow: two deferrals that share a trigger shape belong in one tracker; the argv sweep stays separate as a different subsystem |
+| ADR ordinal picked at plan time | **ADR-202** | `origin/main` topped at ADR-200 but ADR-201 was already claimed by a pushed branch — a `main`-only probe would have collided |
+| — | **AP-025 added** | the register is the zero-per-turn-cost home for the convention, replacing the `AGENTS.md` rule dropped on budget |
+
+### The defect this implementation introduced and caught
+
+The first preamble draft guarded with `[ -n "${VAR:-}" ]`, which **expands the
+value** — so `set -x` printed `+ '[' -n <TOKEN> ']'` while the script was in the
+middle of refusing to run. Measured 1 leaking line; `${VAR:+x}` is the same
+predicate with the value never on a command line. Measured after: 0.
+
+It was invisible to the suite as written, because the suite checked that a
+refusal was PRESENT and never what the refusal DID at runtime. The suite gained
+a functional no-leak assertion plus M7, which reverts the guard to the expanding
+form and confirms that assertion can actually fail.
+
+The sweeper's T17 had the same shape one level up: its first draft asserted on
+`run_one`'s stdout under `DRY_RUN`, where `body_msg` is never emitted, so it
+passed with the scrub **fully disabled**. Rewritten to capture the real comment
+body, guarded on an empty capture, and re-verified by disabling the scrub.
+
 ## Sharp Edges
 
 - `env SHELLOPTS=xtrace` cannot be reproduced as `SHELLOPTS=xtrace bash s.sh` —

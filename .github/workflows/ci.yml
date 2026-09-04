@@ -176,6 +176,8 @@ jobs:
         run: python3 scripts/lint-trap-tempfile-ownership.py
       - name: Ratchet the accepted class-b tempfile population
         run: python3 scripts/lint-trap-tempfile-ownership.py --check-highwater
+      - name: shell-trace credential refusal (#7797)
+        run: python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main
       - name: Lint orphan test suites (every tracked *.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
       # Supabase Management API deprecation + host-pin assembly guard.
