@@ -190,3 +190,30 @@ Prevention: a count in a PR body is a measurement with a timestamp; re-derive
 every one immediately before marking ready. Writing this into the body of a PR
 whose subject is *a gate reporting a number nobody re-derived* is the session's
 tidiest instance of its own thesis.
+
+**My own plan declared `credentials_required` in the direction that DISABLES the
+gate.** Preflight Check 10 executes a plan's `discoverability_test.command` in a
+bwrap sandbox. The field means *"this probe cannot run without credentials, so do
+not execute it"* — a non-placeholder value returns `SKIP-DECLARED` and the probe
+never runs. The plan wrote `credentials_required: none — the probe exercises the
+no-token path`, meaning *"needs no credentials"*, which is the opposite. It also
+escaped the placeholder reject, which anchors on a bare `none`. So the field as
+written silently turned off the only gate that runs the probe — on a
+`single-user incident` plan, in a PR whose entire subject is a gate reporting
+success without having verified anything. — Recovery: removed the field; the
+probe now executes and passes. — Prevention: for any field whose effect is *"skip
+a check"*, write down what happens when it is present before writing a value.
+
+**And the same block's `expected_output` was unmatchable.** It was a `|` block
+scalar of prose; Check 10 reads the value with a single-line `sub()`, so
+`EXPECTED` would have been the literal `"|"` and the substring match would have
+failed. The two defects masked each other exactly: `credentials_required` made
+the check skip before it could discover that its expectation could never match. —
+Recovery: replaced with the single token the assertion is about. — Prevention:
+run the gate, do not read the block and judge it well-formed.
+
+**And the same plan's `## User-Brand Impact` threshold was not in the canonical
+bullet form**, so Check 6 could not parse it and would have FAILed a plan that
+had answered the question correctly in prose. — Recovery: converted the section
+to the template's bullet form. — Prevention: the template is machine-read; match
+it exactly rather than approximately.

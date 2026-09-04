@@ -178,22 +178,22 @@ when it reads the models, the `.c4` edit becomes an in-scope task here.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a compliance gate reporting a current corpus over
-rules that have drifted — or, in the specific failure this plan came within one wording of shipping,
-an attestation advanced over a corpus the cron had just detected drift in.
+- **If this lands broken, the user experiences:** a compliance gate reporting a current corpus over
+  rules that have drifted — or, in the specific failure this plan came within one wording of shipping,
+  an attestation advanced over a corpus the cron had just detected drift in.
 
-**If this leaks, the user's data is exposed via:** no new exposure vector; the values written are
-repository metadata about vendored MIT documents. One new surface does exist: the scan-completion line
-goes to stdout on a customer machine, so it must carry **counts only, never path names** — the
-existing path-naming breadcrumb is on stderr, and `#7331` is the live scar behind
-`hr-third-party-content-grep-on-undertaking`.
+- **If this leaks, the user's data is exposed via:** no new exposure vector; the values written are
+  repository metadata about vendored MIT documents. One new surface does exist: the scan-completion line
+  goes to stdout on a customer machine, so it must carry **counts only, never path names** — the
+  existing path-naming breadcrumb is on stderr, and `#7331` is the live scar behind
+  `hr-third-party-content-grep-on-undertaking`.
 
-**Brand-survival threshold:** `single-user incident` — upheld at CPO sign-off against the counter-
-argument. The taxonomy's `single-user incident` tier reads "at least one real user impacted **or any
-sensitive-data surface is at risk**", and a degraded detection control on the regulated-data surface is
-that clause's referent. `aggregate pattern` is the *more severe* tier, defined by breadth across
-multiple users or tenants, and is unreachable with one external user. The advisory nature of the hook
-lowers probability, not blast radius, and this scale measures blast radius.
+- **Brand-survival threshold:** `single-user incident` — upheld at CPO sign-off against the counter-
+  argument. The taxonomy's `single-user incident` tier reads "at least one real user impacted **or any
+  sensitive-data surface is at risk**", and a degraded detection control on the regulated-data surface is
+  that clause's referent. `aggregate pattern` is the *more severe* tier, defined by breadth across
+  multiple users or tenants, and is unreachable with one external user. The advisory nature of the hook
+  lowers probability, not blast radius, and this scale measures blast radius.
 
 ## Implementation Phases
 
@@ -528,12 +528,24 @@ logs:
 
 discoverability_test:
   command: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh README.md apps/web-platform/lib/auth/x.ts
-  expected_output: |
-    A scan-completion line on stdout reporting two paths examined and one matched, carrying no path
-    names, and exit 0. It contains neither `days stale` nor `POSTURE_FAIL`, so its presence is
-    independent of the corpus's freshness state — which is the property being verified.
-  credentials_required: none — the probe exercises the no-token path, which is the state a
-    contributor machine and a subagent shell are actually in
+  expected_output: "path scan complete — 2 examined"
+  # NO `credentials_required` — deliberately. An earlier revision declared
+  # `credentials_required: none — the probe exercises the no-token path`, meaning
+  # "needs no credentials". That is the OPPOSITE of what the field means: a
+  # non-placeholder value makes preflight Check 10 return SKIP-DECLARED and never
+  # execute the probe. The value would also have escaped the placeholder reject,
+  # which anchors on a bare `none`. So the field as written disabled the one gate
+  # that runs this command — on a `single-user incident` plan, and in a change whose
+  # entire subject is a gate reporting success without having verified anything.
+  # The probe runs unauthenticated by design; omitting the field is what makes it run.
+  #
+  # `expected_output` was also unmatchable: Check 10 reads the value with a
+  # single-line `sub()`, so a `|` block scalar yields the literal "|" and the
+  # substring match fails. It is now the single token the assertion is actually
+  # about — the scan-completion line, which carries neither `days stale` nor
+  # `POSTURE_FAIL` and so is independent of corpus freshness. Verified live:
+  # the probe prints `gdpr-gate: path scan complete — 2 examined, 1 matched`
+  # BESIDE both staleness banners, which is the property being claimed.
 ```
 
 ## Acceptance Criteria
