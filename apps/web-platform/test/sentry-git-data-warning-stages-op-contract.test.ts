@@ -27,6 +27,25 @@ const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
 const cloudInit = readFileSync(join(here, "../infra/cloud-init-git-data.yml"), "utf8");
 
+// THE ORDERING ASSERTIONS QUANTIFY OVER CODE, NOT PROSE — and this is not hypothetical
+// tidiness. The first version of the nearest-preceding-STAGE check below searched the RAW
+// template, and a later comment in that template quoted the emit's own literal
+// (`git-data-emit "$${STAGE}_warn" warning`) while explaining why the unit carries no
+// SyslogIdentifier. `indexOf` found the PROSE copy first, ~400 lines above the real emit and
+// above every STAGE= assignment, and the arm failed with "the _warn emit has no STAGE
+// assignment before it" against a template that was entirely correct.
+//
+// That is `cq-assert-anchor-not-bare-token` one level up: it is not enough for the ANCHOR to
+// be a construct rather than a token if the CORPUS still contains commentary quoting that
+// construct. Stripping whole-line `#` comments is also the more faithful corpus: ADR-152's
+// render-time rationale strip removes exactly these lines, so what remains is what the host
+// actually receives. Line structure is preserved (comments become empty lines) so no index
+// comparison silently shifts.
+const cloudInitCode = cloudInit
+  .split("\n")
+  .map((l) => (/^\s*#/.test(l) ? "" : l))
+  .join("\n");
+
 // MUTATION-PROVEN, with one axis deliberately NOT covered and one that was CLAIMED and was
 // not — stated so neither is mistaken for coverage.
 //
@@ -98,7 +117,7 @@ describe("git-data warning-stage routing op contract", () => {
     // that construct: the name also appears in prose in this template and in git-data-luks.tf.
     expect(cloudInit).toContain('"level":"warning"');
     expect(cloudInit).toContain('"stage":"betterstack_ingest"');
-    const emitAt = cloudInit.indexOf('"$${STAGE}_warn" warning');
+    const emitAt = cloudInitCode.indexOf('"$${STAGE}_warn" warning');
     expect(emitAt, "the _warn emit is absent from the template").toBeGreaterThan(-1);
 
     // ...and that the _warn suffix is built from THIS stage. CO-PRESENCE IS NOT LOCALITY, and
@@ -120,7 +139,7 @@ describe("git-data warning-stage routing op contract", () => {
     // STAGE assignment and require it to be exactly this stage. That is the same shape the
     // runcmd suite's R3(2) arm uses for its own ordering property ("co-presence is not
     // ordering"), one directory over.
-    const assignments = [...cloudInit.matchAll(/^\s*STAGE=([A-Za-z0-9_]+)\s*$/gm)];
+    const assignments = [...cloudInitCode.matchAll(/^\s*STAGE=([A-Za-z0-9_]+)\s*$/gm)];
     expect(assignments.length, "no whole-line STAGE= assignments found").toBeGreaterThan(0);
     const preceding = assignments.filter((m) => m.index! < emitAt);
     expect(preceding.length, "the _warn emit has no STAGE assignment before it").toBeGreaterThan(0);

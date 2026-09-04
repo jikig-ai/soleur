@@ -538,10 +538,33 @@ write_files:
       Wants=network-online.target
       [Service]
       Type=oneshot
-      # #6617c: without this systemd tags the unit from the ExecStart basename --
-      # `git-data-nftables.sh`, WITH the .sh -- which matches no vector.toml source, so this
-      # deny-all-public host's own "nft binary not found" / rule-load failure never leaves it.
-      SyslogIdentifier=git-data-nftables
+      # NO SyslogIdentifier=, DELIBERATELY -- and the first draft had one, copied from the
+      # inngest sibling along with a rationale that is FALSE on this host.
+      #
+      # That draft read: "#6617c: without this systemd tags the unit from the ExecStart
+      # basename -- `git-data-nftables.sh`, WITH the .sh -- which matches no vector.toml
+      # source, so this host's rule-load failure never leaves it." Every clause about
+      # vector.toml is wrong here. MEASURED: the only occurrence of "vector" anywhere in this
+      # template was that comment, `git-data.tf` references vector.toml nowhere, and
+      # `vector.toml` is delivered by `server.tf` to the WEB host alone. git-data runs no
+      # Vector agent, so no journald tag on this host ships anywhere, and a SyslogIdentifier
+      # here buys exactly nothing.
+      #
+      # It also cost something. `vector-pii-scrub.test.sh` AC3 derives its expected tag set
+      # from `SyslogIdentifier=` across `infra/cloud-init*.yml` and requires every tag to
+      # appear in vector.toml's `host_scripts_journald` include list -- a premise that holds
+      # for the Vector-shipped web and inngest templates and breaks on the first host without
+      # an agent. Satisfying it by ADDING `git-data-nftables` to vector.toml would declare a
+      # journald source for a tag that can never appear on the web host: a permanently dead
+      # entry asserting a shipping path that does not exist. The gate's own text says to
+      # reconcile in the direction the emitter dictates, and here the emitter is the wrong half.
+      #
+      # WHAT ACTUALLY CARRIES THIS ARM'S FAILURES, unchanged by any of the above: the runcmd
+      # item emits `git-data-emit "$${STAGE}_warn" warning` on a soft failure and the top-armed
+      # trap emits `stage:gitdata_nftables_metadata` on a fatal -- straight to Sentry and to
+      # git-data's own Better Stack source, both routed by issue-alerts.tf since #7772. The
+      # script's own `[git-data-nft]` echoes land in journald and stay on the box, which is
+      # true with or without a tag.
       ExecStart=/usr/local/bin/git-data-nftables.sh
       RemainAfterExit=yes
       [Install]
