@@ -98,3 +98,4 @@ Key insight: cleaning env in only one function is insufficient. Both `git init` 
 
 - [Lefthook hangs in git worktrees](./2026-04-02-lefthook-hangs-in-git-worktrees.md) — different lefthook issue (typecheck hanging), same worktree context
 - [#1454](https://github.com/jikig-ai/soleur/issues/1454) — tracking issue for this test failure (now fixed)
+- [A learning, two working copies, and it still got re-derived wrong](../2026-09-04-a-learning-two-working-copies-and-it-still-got-re-derived-wrong.md) — **2026-09-03: this recurred.** A third fixture in the same directory spread a raw `process.env` and its `git commit` landed on a live feature branch, consuming an in-flight commit. This document's Prevention section was correct and was not read in time; the fix that mattered was extracting `gitCleanEnv` into an importable helper (`plugins/soleur/test/lib/git-clean-env.ts`), since two correct-but-uncopyable implementations did not prevent a wrong third.
