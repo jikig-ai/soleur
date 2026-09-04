@@ -1,13 +1,32 @@
 #!/usr/bin/env bash
 # Idempotent Sentry alert-rule configurator for the auth observability stack.
 #
-# Configures four issue-alert rules that page ops via email on user-facing
-# auth regressions detected through the existing `feature:auth` Sentry tag:
+# SCOPE NARROWED TO ONE RULE (#7650 Phase 2, 2026-09-04). This script now
+# configures exactly one issue-alert rule:
 #
-#   1. auth-exchange-code-burst    — >=5 events in 15m, op:exchangeCodeForSession
-#   2. auth-callback-no-code-burst — >=3 events in 15m, op:callback_no_code
-#   3. auth-per-user-loop          — >=3 unique-user events in 5m, feature:auth
-#   4. auth-signout-burst          — >=5 events in 15m, op:signOut
+#   1. auth-per-user-loop — >=3 unique-user events in 5m, feature:auth
+#
+# The other three (auth-exchange-code-burst, auth-callback-no-code-burst,
+# auth-signout-burst) were adopted into Terraform as `sentry_alert` resources
+# with their real definitions read from live, and their stanzas were deleted
+# from here. Terraform now owns their filters outright — their blocks carry
+# `ignore_changes = [environment]` only, not the wide list that previously made
+# this script their sole executable definition.
+#
+# WHY THIS SCRIPT STILL EXISTS. `auth-per-user-loop` uses
+# `event_unique_user_frequency_count`, which the pinned provider (0.15.7)
+# does not offer under `trigger_conditions` — verified against the provider
+# schema, upstream jianyuan/terraform-provider-sentry issue 950. Its
+# `sentry_issue_alert` block still declares `conditions_v2 = []` /
+# `filters_v2 = []` under a wide `ignore_changes`, so Terraform explicitly does
+# NOT own its filters and an apply cannot restore them. This script remains the
+# only executable definition of that one rule. Do not delete it. See
+# knowledge-base/project/learnings/2026-08-19-i-proposed-deleting-a-control-because-terraform-appeared-to-own-it.md
+#
+# THIS SCRIPT WRITES THROUGH THE DEPRECATED /rules/ ENDPOINT. Measured
+# 2026-09-04: before the narrowing it wrote `frequency 60` for all three burst
+# rules while live carried 60/61/62, so running it rewrote two live paging
+# cadences. That drift vector is removed by the deletion below.
 #
 # Idempotency: GET /rules/, match by name, PUT if found else POST.
 # Region detection: probes /users/me/ on sentry.io and de.sentry.io.
@@ -144,22 +163,7 @@ upsert_rule() {
   fi
 }
 
-# --- Rule 1: exchangeCodeForSession burst -------------------------------
-# >=5 events in 15m. Issue body said 10m; Sentry intervals are
-# {1m,5m,15m,1h,1d,1w,30d} — 10m is rejected. 15m is the next-larger
-# accepted value (conservative on paging).
-upsert_rule "auth-exchange-code-burst" \
-  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":5,"interval":"15m"}]' \
-  '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"op","match":"eq","value":"exchangeCodeForSession"}]' \
-  60
-
-# --- Rule 2: callback_no_code burst (likely uri_allow_list drift) -------
-upsert_rule "auth-callback-no-code-burst" \
-  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":3,"interval":"15m"}]' \
-  '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"op","match":"eq","value":"callback_no_code"}]' \
-  60
-
-# --- Rule 3: per-user broken loop ---------------------------------------
+# --- The one remaining rule: per-user broken loop ------------------------
 # Unique-user frequency accepts the same intervals; 5m matches the issue
 # body directly. Lower frequency cap (30 min) so per-user paging is timely.
 upsert_rule "auth-per-user-loop" \
@@ -167,14 +171,4 @@ upsert_rule "auth-per-user-loop" \
   '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"}]' \
   30
 
-# --- Rule 4: auth-signout-burst (sign-out teardown failures) ------------
-# Elevated signOut failures (server 5xx, network outage, CORS regression on
-# the auth endpoint) leave users stuck on a half-authenticated session — the
-# shared-device leak the dashboard layout's User-Brand Impact paragraph
-# names. Mirrors auth-exchange-code-burst's >=5/15m threshold.
-upsert_rule "auth-signout-burst" \
-  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":5,"interval":"15m"}]' \
-  '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"op","match":"eq","value":"signOut"}]' \
-  60
-
-echo "[done] All four Sentry alert rules upserted."
+echo "[done] auth-per-user-loop upserted (the other three are Terraform-owned since #7650)."
