@@ -208,20 +208,35 @@ pre-commit:
         - "*.sql"
       run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}
     # vendor-pin-integrity (FR5): verifies the staged contents of every
-    # NOTICE-tracked lifted file match the blob SHAs pinned in NOTICE
-    # frontmatter. Detects silent local edits to upstream-vendored content
-    # and silent additions of files outside the registry. The integrity
-    # script reads its registry from NOTICE at runtime, so the glob
-    # intentionally covers the whole `references/` subtree (plus NOTICE
-    # itself) — any new file added under `references/` triggers the script,
-    # which then rejects it via the "staged but not in NOTICE" branch.
-    # Narrow per-file globs would let a re-vendor land a 6th file without
-    # the integrity gate ever firing on it.
+    # NOTICE-registered reference file match the blob SHAs pinned in NOTICE
+    # frontmatter — `lifted-files` for upstream-vendored content and
+    # `soleur-authored` for files written for this plugin (#7710). Detects
+    # silent local edits and silent additions of files outside both
+    # registries. The integrity script reads its registry from NOTICE at
+    # runtime, so the globs are directory patterns rather than per-file
+    # literals: any new file in a covered directory triggers the script,
+    # which then rejects it via the "neither registry" branch. Narrow
+    # per-file globs would let a re-vendor land a new file without the
+    # integrity gate ever firing on it.
+    #
+    # These patterns are SINGLE-LEVEL and enumerate the three directories
+    # that exist today; they do NOT cover the `references/` subtree as a
+    # whole. gobwas `**` matches 1+ intermediate dirs, not 0+, so a single
+    # `references/**/*.md` would silently skip the depth-1 files — see
+    # 2026-03-21-lefthook-gobwas-glob-double-star.md. The consequence is
+    # real and must be stated rather than assumed away: a NEW subdirectory
+    # under `references/` is ungated until a pattern is added for it. The
+    # backstop is the symmetric-difference walk in
+    # plugins/soleur/test/vendor-pin-integrity.test.sh, which reads the disk
+    # rather than the glob and fails on any reference file missing from both
+    # registries. `references/legacy/` was ungated until #7710 while the
+    # comment here claimed whole-subtree coverage.
     vendor-pin-integrity:
       priority: 6
       glob:
         - "plugins/soleur/skills/gdpr-gate/references/*.md"
         - "plugins/soleur/skills/gdpr-gate/references/layers/*.md"
+        - "plugins/soleur/skills/gdpr-gate/references/legacy/*.md"
         - "plugins/soleur/skills/gdpr-gate/NOTICE"
       run: bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh {staged_files}
     # skill-security-scan advisory hook (#2719).

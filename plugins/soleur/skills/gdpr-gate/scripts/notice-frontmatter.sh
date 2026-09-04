@@ -20,6 +20,14 @@
 #   lifted-files      One `<path>:<local-blob-sha>` per line. Local blob SHAs
 #                     pin the file as it exists in this repo (post-attribution
 #                     header) and are consumed by `vendor-pin-integrity.sh`.
+#   soleur-authored   One `<path>:<local-blob-sha>` per line, for the reference
+#                     files written from scratch for this plugin. Same record
+#                     shape and same consumer as `lifted-files`, but no
+#                     upstream provenance: these never appear in
+#                     `upstream-files`. Pinning them keeps a tamper check on
+#                     the files the gate's own GDPR framing depends on while
+#                     leaving them editable through the normal update-the-pin
+#                     flow (#7710).
 #   upstream-files    One `<upstream-path>:<upstream-blob-sha>` per line.
 #                     Upstream blob SHAs pin the file as it exists at
 #                     `pinned-commit` and are consumed by the drift workflow.
@@ -96,17 +104,26 @@ cmd_days_stale() {
 }
 
 _emit_files() {
-  # Args: $1 = path-key ("path" | "upstream-path"), $2 = sha-key
-  # ("local-blob-sha" | "upstream-blob-sha"). Walks the lifted-files block
-  # and prints `<path-value>:<sha-value>` per entry.
-  local path_key="$1"
-  local sha_key="$2"
+  # Args: $1 = block-key ("lifted-files" | "soleur-authored"), $2 = path-key
+  # ("path" | "upstream-path"), $3 = sha-key ("local-blob-sha" |
+  # "upstream-blob-sha"). Walks the named block and prints
+  # `<path-value>:<sha-value>` per entry.
+  #
+  # The block key is a parameter rather than a literal because the registry
+  # has TWO lists with the same record shape and opposite provenance
+  # (#7710): upstream-derived files in `lifted-files`, Soleur-authored files
+  # in `soleur-authored`. Both are pinned by `local-blob-sha` and both are
+  # checked by vendor-pin-integrity.sh; only the former carries an upstream
+  # SHA, so only the former is a valid input to `upstream-files`.
+  local block_key="$1"
+  local path_key="$2"
+  local sha_key="$3"
   local fm
   fm=$(extract_frontmatter) || return 0
   [[ -n "$fm" ]] || return 0
-  printf '%s\n' "$fm" | awk -v path_key="$path_key" -v sha_key="$sha_key" '
+  printf '%s\n' "$fm" | awk -v block_key="$block_key" -v path_key="$path_key" -v sha_key="$sha_key" '
     BEGIN { in_block=0; cur_path=""; cur_sha="" }
-    /^lifted-files:[[:space:]]*$/ { in_block=1; next }
+    $0 ~ "^" block_key ":[[:space:]]*$" { in_block=1; next }
     /^[A-Za-z]/ { in_block=0 }
     in_block {
       line = $0
@@ -183,11 +200,19 @@ cmd_cron_run_stale() {
 }
 
 cmd_lifted_files() {
-  _emit_files path local-blob-sha
+  _emit_files lifted-files path local-blob-sha
 }
 
 cmd_upstream_files() {
-  _emit_files upstream-path upstream-blob-sha
+  _emit_files lifted-files upstream-path upstream-blob-sha
+}
+
+cmd_soleur_authored() {
+  # Soleur-authored reference files. These are NOT upstream-derived, so they
+  # carry a `local-blob-sha` only and never appear in `upstream-files` — a
+  # `lifted-files` row for one of them would attest goSprinto MIT provenance
+  # for Soleur's own writing, falsifying provenance in both directions.
+  _emit_files soleur-authored path local-blob-sha
 }
 
 case "${1:-}" in
@@ -203,11 +228,14 @@ case "${1:-}" in
   lifted-files)
     cmd_lifted_files
     ;;
+  soleur-authored)
+    cmd_soleur_authored
+    ;;
   upstream-files)
     cmd_upstream_files
     ;;
   *)
-    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|upstream-files}" >&2
+    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|soleur-authored|upstream-files}" >&2
     exit 2
     ;;
 esac

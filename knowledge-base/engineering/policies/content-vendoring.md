@@ -9,6 +9,7 @@ The first registry instance is `gosprinto/compliance-skills`, lifted into `plugi
 In-scope: any file that originated upstream and was committed verbatim or with documented edits to the Soleur repo, where the upstream project remains the canonical authority for the content.
 
 Out-of-scope:
+
 - Code dependencies installed via package managers (`npm`, `bun`, `cargo`). Those are pinned via lockfiles and audited via `npm audit` / `bun audit`.
 - Service-vendor data flows (Hetzner, Supabase, Stripe, Cloudflare, Resend, Doppler) — those are governed by signed DPAs in `compliance-posture.md` §Vendor DPA Status.
 - Content the team writes from scratch and credits as inspired-by.
@@ -40,9 +41,11 @@ When deciding to lift content from an upstream:
 
 1. Verify the license permits redistribution + modification (MIT, Apache-2.0, BSD, ISC, CC-BY are typically fine; AGPL imposes obligations the operator must accept consciously).
 2. Lift the file verbatim first. Each lifted file MUST start with an attribution header on line 1:
+
    ```text
    <!-- Adapted from <owner>/<repo> (<license>) — see NOTICE -->
    ```
+
 3. Add a row to the bundle NOTICE `lifted-files` block with both blob SHAs computed via `git hash-object --no-filters`.
 4. Add the lifted-file path to the lefthook `vendor-pin-integrity` glob — the parity assertion in `plugins/soleur/test/vendor-pin-integrity.test.sh` AC5b ensures NOTICE and lefthook stay in sync.
 5. Add a row to `compliance-posture.md` §Vendored Code Provenance with the upstream + license + pinned-commit + lifted-file count + status.
@@ -125,7 +128,7 @@ The current regulated-data PR can ship; the staleness-driven follow-up is a sepa
 
 | Bundle | Upstream | License | Pinned | Last Verified | NOTICE | Status |
 |---|---|---|---|---|---|---|
-| gdpr-gate references | `github.com/goSprinto/compliance-skills` | MIT | `7b58d68` | 2026-05-10 | `plugins/soleur/skills/gdpr-gate/NOTICE` | active (5 lifted files) |
+| gdpr-gate references | `github.com/goSprinto/compliance-skills` | MIT | `7b58d68` | 2026-05-10 | `plugins/soleur/skills/gdpr-gate/NOTICE` | active (8 lifted files) |
 
 When a new bundle is added: append a row here, write its NOTICE per §2, register the lefthook glob per §4.2, and add the `compliance-posture.md` row per §3 step 5.
 

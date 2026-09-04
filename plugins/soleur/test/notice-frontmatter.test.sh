@@ -48,13 +48,44 @@ OUT=$(bash "$PARSER" field last-verified)
 assert_eq "2026-05-10" "$OUT" "field last-verified is correct"
 echo ""
 
-# --- TS4: lifted-files emits 5 path:sha lines ---
+# --- TS4: lifted-files entry count matches the NOTICE body table ---
 # lifted-files emits LOCAL blob SHAs (consumed by lefthook integrity gate);
 # upstream-files emits UPSTREAM blob SHAs (consumed by drift workflow).
-echo "TS4a: lifted-files prints 5 entries in <path>:<local-blob-sha> form"
+#
+# The expected count is DERIVED from the NOTICE's own human-readable table,
+# not written as a literal. NOTICE's preamble says "The frontmatter above is
+# the canonical machine-readable form; the table below is the human-readable
+# form. Drift between them is a bug." — so this assertion IS that bug's
+# guard, and a literal here would have to be edited in lockstep with the very
+# drift it is meant to catch.
+#
+# This is not hypothetical: #7710. The table listed EIGHT lifted files while
+# the frontmatter carried FIVE, for 117 days. Three reference files were
+# consequently rejected by the integrity gate as "silent local additions",
+# and the drift cron compared five of eight files while reporting a clean
+# corpus. A hardcoded `5` here was green throughout.
+TABLE_COUNT=$(awk '
+  /^## gosprinto\/compliance-skills \(MIT\)/ { in_tbl=1; next }
+  /^## / { in_tbl=0 }
+  in_tbl && /^\| `references\// { n++ }
+  END { print n+0 }
+' "$LIVE_NOTICE")
+
+# Own-dispatch floor: an awk range that stops matching yields 0, and `0 == 0`
+# against an empty registry would read as agreement. A zero table count is a
+# harness defect, never a clean result.
+if (( TABLE_COUNT < 8 )); then
+  echo "  FAIL: NOTICE body table yielded $TABLE_COUNT lifted rows (expected >= 8) — table scrape is broken, not a clean registry"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: NOTICE body table yielded $TABLE_COUNT lifted rows"
+  PASS=$((PASS + 1))
+fi
+
+echo "TS4a: lifted-files entry count equals the NOTICE table's row count"
 OUT=$(bash "$PARSER" lifted-files)
 LINE_COUNT=$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')
-assert_eq "5" "$LINE_COUNT" "lifted-files emits 5 lines"
+assert_eq "$TABLE_COUNT" "$LINE_COUNT" "lifted-files frontmatter entries == NOTICE table rows"
 assert_contains "$OUT" "references/fields.md:68675dd747fcbc74bb84c99eaa14983c9c5a6b24" "fields.md local-sha line present"
 assert_contains "$OUT" "references/leakage-vectors.md:8d1d7fc44183e866e128707c3e91e7b63ce835fd" "leakage-vectors.md local-sha line present"
 assert_contains "$OUT" "references/layers/api-layer.md:802fc866e320bebeecae2f8e53658253853ab5f9" "api-layer.md local-sha line present"
@@ -62,10 +93,14 @@ assert_contains "$OUT" "references/layers/data-in-transit.md:2ce203e9c041c1b1992
 assert_contains "$OUT" "references/layers/data-lifecycle.md:29357a020bfa0e61f91dd529070fe3eb7cd251da" "data-lifecycle.md local-sha line present"
 echo ""
 
-echo "TS4b: upstream-files prints 5 entries in <upstream-path>:<upstream-blob-sha> form"
+echo "TS4b: upstream-files entry count equals the NOTICE table's row count"
 OUT=$(bash "$PARSER" upstream-files)
 LINE_COUNT=$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')
-assert_eq "5" "$LINE_COUNT" "upstream-files emits 5 lines"
+# Same derived count, second key. lifted-files and upstream-files walk the
+# SAME block with different keys, so a divergence between these two means an
+# entry is missing `upstream-path` or `upstream-blob-sha` — an entry the
+# drift cron would silently skip while the integrity gate still pinned it.
+assert_eq "$TABLE_COUNT" "$LINE_COUNT" "upstream-files frontmatter entries == NOTICE table rows"
 assert_contains "$OUT" "pii-detector/patterns/fields.md:c1bb748fe00a53b283efe66ec937fa39437d2efc" "fields.md upstream line present"
 assert_contains "$OUT" "pii-detector/rules/leakage-vectors.md:15a46e529e789930149f4b9bce875bfe5c53e478" "leakage-vectors.md upstream line present"
 assert_contains "$OUT" "pii-detector/layers/api-layer.md:9d3202175c1d0225f60a912c489dbdacf4df491c" "api-layer.md upstream line present"
