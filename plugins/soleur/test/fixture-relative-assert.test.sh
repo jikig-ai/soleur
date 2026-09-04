@@ -16,17 +16,21 @@
 #   * a scanner that stops looking reports SITES=0, which a shrink-only ratchet reads as progress,
 #     so the live count is pinned by EQUALITY to the baseline sum, not by `<=`.
 # MUTATION MATRIX (Guard 1, #7708) -- executed in place against a pristine backup, with a GREEN
-# unmutated control required first. Re-run in full after the review corrections. Observed:
-#   control  unmutated                                            GREEN  32/32
+# unmutated control required first. Re-run in full after each review round. Observed:
+#   control  unmutated                                            GREEN  46/46
 #   R1       delete a verb family from the P1b assembly           RED
 #   R3       rule function returns no rows at all                 RED
 #   R5       narrow the corpus glob *.sh -> *.test.sh             RED    (FILES floor)
-#   R6       remove a binding form from the P1b resolver          RED
 #   R7       re-widen the guard set with an emptiness-only form   RED    (section C2)
 #   R8       unbound the guard window back to line 0              RED    (section C3)
+#   R9       re-classify `-t` as a destination flag               RED    (the 783-row FP flood)
+#   R10      widen _ROOT_SAFE with call-unresolved                RED    (section C9)
 #   H1       neuter the failure counter                           RED    rc=2, ledger reconciliation
-#   H2       retract `fails` AFTER every reconciliation           RED    the ledger is the gate
-#   H3       non-canonical must-PASS                              quiet  (section D)
+#   H4       point arm A at the baseline instead of live data     RED    (the independent-totals arm)
+#
+# H4 is the row that matters most: before the round-2 corrections it survived GREEN at 32/32.
+# Section B proved `compare_rows` WORKS; nothing proved arm A calls it with LIVE data, so one
+# argument swap turned the ratchet off while every arm stayed green.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,6 +54,17 @@ command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
 if [[ "${1:-}" == "--write-baseline" ]]; then
   hdr="$(mktemp)" || exit 2
   grep -E '^#|^[[:space:]]*$' "$BASELINE" > "$hdr"
+  # Refuse to write from a failed or truncated scan. Without this, a scanner that raised wrote a
+  # HEADER-ONLY baseline and exited 0 -- destroying the ratchet through the exact recovery path
+  # arm A's own failure message recommends.
+  _wb="$(mktemp)" || exit 2
+  if ! python3 "$SCANNER" --rule relative --repo "$REPO_ROOT" > "$_wb" 2>&1; then
+    echo "FATAL: scan failed; baseline NOT rewritten" >&2; sed 's/^/  /' "$_wb" >&2; exit 2
+  fi
+  _wf=$(sed -n 's/^FILES=//p' "$_wb"); _wr=$(grep -c 'operand not provably absolute' "$_wb" || true)
+  if [[ -z "$_wf" || "$_wf" -lt 900 || "$_wr" -lt 1 ]]; then
+    echo "FATAL: scan looks wrong (FILES=${_wf:-unset}, rows=$_wr); baseline NOT rewritten" >&2; exit 2
+  fi
   { cat "$hdr"
     python3 "$SCANNER" --rule relative --repo "$REPO_ROOT" 2>/dev/null \
       | grep 'operand not provably absolute' \
@@ -70,7 +85,25 @@ pass() { echo "  PASS: $1"; echo "PASS" >> "$VERDICT_LOG"; passes=$((passes + 1)
 fail() { echo "  FAIL: $1"; echo "FAIL" >> "$VERDICT_LOG"; fails=$((fails + 1)); }
 ck()   { asserted=$((asserted + 1)); }
 
-scan_sites() { python3 "$SCANNER" --rule relative "$@" 2>/dev/null | sed -n 's/^SITES=//p'; }
+# A missing SITES= line is a SCANNER failure, not a rule verdict. Discarding stderr and rc made a
+# transient failure byte-indistinguishable from mutation R3 ("rule returns no rows"), and the arms
+# then reported it as "guard set widened unsoundly" -- a confident claim about code that never ran.
+# Held in a variable so the literal pattern never appears in this file's own source: this suite is
+# a tracked *.sh scanned by the rule it tests, and printf-built fixtures (unlike heredoc-built
+# ones, whose bodies the scanner skips) would otherwise inject rows into the corpus it measures.
+_RMRF="rm -rf"
+
+scan_sites() {
+  local _o _rc
+  _o=$(python3 "$SCANNER" --rule relative "$@" 2>"$TMP_ROOT/scan.err"); _rc=$?
+  local _n; _n=$(printf '%s\n' "$_o" | sed -n 's/^SITES=//p')
+  if [[ "$_rc" -ne 0 || -z "$_n" ]]; then
+    echo "FATAL: scanner did not report SITES for $* (rc=$_rc)" >&2
+    sed 's/^/       /' "$TMP_ROOT/scan.err" >&2
+    exit 2
+  fi
+  printf '%s\n' "$_n"
+}
 
 # --- A. The live corpus against the shrink-only baseline ------------------------------------------
 echo "A. live corpus vs baseline"
@@ -139,6 +172,18 @@ fi
 # Fed the BASELINE's own rows, not the live ones: this arm must prove compare_rows is not simply
 # always-RED, and it must do so independently of whether the baseline is currently in sync (that
 # is arm A's job, and duplicating it here makes one failure print twice).
+# Independent of compare_rows entirely. Section B proves the FUNCTION works; it did not prove arm
+# A calls it with LIVE data, and swapping arm A's argument to baseline_rows left the ratchet off at
+# 32/32 green. These two totals come from different pipelines and must agree.
+ck; _live_sum=$(printf '%s\n' "$LIVE_ROWS" | awk -F'\t' '{s+=$1} END {print s+0}')
+_live_rows=$(printf '%s\n' "$LIVE_ROWS" | sed '/^$/d' | wc -l | tr -d ' ')
+_base_rows=$(baseline_rows | wc -l | tr -d ' ')
+if [[ "$_live_sum" != "$ACK_TOTAL" || "$_live_rows" != "$_base_rows" ]]; then
+  fail "live totals disagree with the baseline: sites $_live_sum vs $ACK_TOTAL, rows $_live_rows vs $_base_rows"
+else
+  pass "live site total and row count both equal the baseline ($ACK_TOTAL over $_base_rows rows)"
+fi
+
 ck; if compare_rows "$(baseline_rows)" >/dev/null 2>&1; then
   pass "compare_rows accepts an identical row set (the arm is not simply always-RED)"
 else
@@ -197,7 +242,7 @@ ck; n=$(scan_sites "$C/rel_mv.sh"); [[ "${n:-0}" -ge 1 ]] \
 echo "C2. weak guards must NOT clear a relativity finding"
 C2="$TMP_ROOT/c2"; mkdir -p "$C2"
 _weak_guard_case() {
-  printf '#!/usr/bin/env bash\nsetup() {\n  local d="$1/repo"\n  %s\n  rm -rf "$d"\n}\n' "$2" > "$C2/$1.sh"
+  printf '#!/usr/bin/env bash\nsetup() {\n  local d="$1/repo"\n  %s\n  %s "$d"\n}\n' "$2" "$_RMRF" > "$C2/$1.sh"
   ck; n=$(scan_sites "$C2/$1.sh")
   if [[ "${n:-0}" -ge 1 ]]; then
     pass "weak guard [$2] does not clear a relative site"
@@ -234,9 +279,12 @@ setup() {
   rm -rf "$d"
 }
 EOF
-ck; n=$(scan_sites "$C2/sound_case.sh"); [[ "${n:-1}" -eq 0 ]] \
-  && pass "an inline case with a /* accept and an aborting default still clears" \
-  || fail "the inline-case guard no longer clears (SITES=${n:-unset})"
+# The inline `case` form was REMOVED from the recognised set: it was defeated four ways (an extra
+# allow-arm, `exit` inside a double-quoted message, a catch-all before `/*)`, and an ignored return
+# code). It must now REPORT, or the removal did not take.
+ck; n=$(scan_sites "$C2/sound_case.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "an inline case guard is NOT recognised (removed: silenceable four ways)" \
+  || fail "an inline case still clears a site (SITES=${n:-unset}) -- the heuristic is back"
 
 # --- C3. THE WINDOW. A guard must be correlated to the site, not merely present in the file.
 echo "C3. guard window is bounded and code-only"
@@ -291,6 +339,168 @@ EOF
 ck; n=$(scan_sites "$C4/use_precedes_binding.sh"); [[ "${n:-0}" -ge 1 ]] \
   && pass "a use that PRECEDES its binding is reported" \
   || fail "use-before-binding was cleared by a later rebind (SITES=${n:-unset})"
+
+# --- C5. The guard WINDOW. The top-level-guard widening was REMOVED; a guard outside the enclosing
+#         function must never clear a use inside it. Both bypasses that killed the widening are
+#         pinned here so re-adding it reddens.
+echo "C5. a guard outside the enclosing function does not clear"
+C5="$TMP_ROOT/c5"; mkdir -p "$C5"
+cat > "$C5/helper_mutates.sh" <<'EOF'
+ROOT=/abs/fixtures
+assert_fixture_dir "$ROOT"
+pick_target() { ROOT=$(cat target.txt); }
+purge() {
+  pick_target
+  rm -rf "$ROOT/objects"
+}
+EOF
+ck; n=$(scan_sites "$C5/helper_mutates.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "a helper that mutates the global does not inherit the top-level guard" \
+  || fail "helper-call mutation cleared by a stale top-level guard (SITES=${n:-unset})"
+
+cat > "$C5/eval_rebind.sh" <<'EOF'
+ROOT=$(cat cfg.txt)
+assert_fixture_dir "$ROOT"
+purge() {
+  eval "ROOT=$(cat rel.txt)"
+  rm -rf "$ROOT/objects"
+}
+EOF
+ck; n=$(scan_sites "$C5/eval_rebind.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "an eval rebind does not inherit the top-level guard" \
+  || fail "eval rebind cleared by a stale top-level guard (SITES=${n:-unset})"
+
+# --- C6. `<<<` is a HERESTRING. Reading it as a heredoc opener made every following line count as
+#         heredoc BODY, and both rules skipped it -- measured, 299 lines across 6 files.
+echo "C6. a herestring does not blank the rest of the file"
+C6="$TMP_ROOT/c6"; mkdir -p "$C6"
+cat > "$C6/herestring.sh" <<'EOF'
+run() {
+  local d="$1/repo"
+  grep -q x <<< "some text"
+  rm -rf "$d"
+}
+EOF
+ck; n=$(scan_sites "$C6/herestring.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "a site AFTER a <<< herestring is still scanned" \
+  || fail "a <<< herestring blanked the rest of the file (SITES=${n:-unset})"
+
+cat > "$C6/real_heredoc.sh" <<'EOF'
+run() {
+  cat <<INNER
+  rm -rf "$1/repo"
+INNER
+}
+EOF
+ck; n=$(scan_sites "$C6/real_heredoc.sh"); [[ "${n:-1}" -eq 0 ]] \
+  && pass "a real heredoc BODY is still skipped" \
+  || fail "heredoc bodies are being scanned as code (SITES=${n:-unset})"
+
+# --- C7. Wrapper resolution. Each row was a live FALSE NEGATIVE: the wrapper was credited with an
+#         absolute root it does not produce.
+echo "C7. wrapper roots are read correctly"
+C7="$TMP_ROOT/c7"; mkdir -p "$C7"
+cat > "$C7/quoted_template.sh" <<'EOF'
+new_fx() { local base="$1"; mktemp -d "$base/fx.XXXXXX"; }
+run() { local d; d=$(new_fx "$2"); rm -rf "$d/x"; }
+EOF
+ck; n=$(scan_sites "$C7/quoted_template.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "a QUOTED path-bearing template is not read as absolute" \
+  || fail "quoted template read as absolute (SITES=${n:-unset}) -- the two code paths disagree again"
+
+cat > "$C7/last_is_assign.sh" <<'EOF'
+mk() { cd relroot || return 1; d=$(mktemp -d); }
+W=$(mk)
+rm -rf "$W/objects"
+EOF
+ck; n=$(scan_sites "$C7/last_is_assign.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "a wrapper whose mktemp output never reaches stdout is not credited" \
+  || fail "wrapper emitting nothing read as mktemp-rooted (SITES=${n:-unset})"
+
+cat > "$C7/comment_brace.sh" <<'EOF'
+mk_rel() {
+  # dir layout { see docs
+  printf %s relroot
+}
+mk_abs() { local t; t=$(mktemp -d); echo "$t"; }
+run() { local d; d=$(mk_rel); rm -rf "$d/x"; }
+EOF
+ck; n=$(scan_sites "$C7/comment_brace.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "a brace inside a COMMENT does not run a function body to EOF" \
+  || fail "comment brace extended the body and imported a later mktemp (SITES=${n:-unset})"
+
+cat > "$C7/heredoc_brace.sh" <<'EOF'
+mk_rel() {
+  cat <<SH
+{ nested
+SH
+  printf %s relroot
+}
+mk_abs() { local t; t=$(mktemp -d); echo "$t"; }
+run() { local d; d=$(mk_rel); rm -rf "$d/x"; }
+EOF
+ck; n=$(scan_sites "$C7/heredoc_brace.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "a brace inside a HEREDOC body does not run a function body to EOF" \
+  || fail "heredoc brace extended the body and imported a later mktemp (SITES=${n:-unset})"
+
+# --- C8. False-positive controls. A guard that reports everything is not read, and 46% of an
+#         earlier revision of this baseline was noise of exactly these two shapes.
+echo "C8. resolvable roots are NOT reported"
+C8="$TMP_ROOT/c8"; mkdir -p "$C8"
+cat > "$C8/three_hop.sh" <<'EOF'
+export TMPDIR="${TMPDIR:-/var/tmp}"
+ROOT=$(mktemp -d -t legal.XXXXXXXX) || exit 2
+run() { d=$(mktemp -d "$ROOT/case-XXXXXXXX") || return 1; rm -rf "$d/x"; }
+EOF
+ck; n=$(scan_sites "$C8/three_hop.sh"); [[ "${n:-1}" -eq 0 ]] \
+  && pass "an inheriting mktemp whose PREFIX resolves absolute is not reported" \
+  || fail "false positive: resolvable three-hop root reported (SITES=${n:-unset})"
+
+cat > "$C8/redir_tok.sh" <<'EOF'
+run() { t=$(mktemp 2>/dev/null); : > "$t"; }
+EOF
+ck; n=$(scan_sites "$C8/redir_tok.sh"); [[ "${n:-1}" -eq 0 ]] \
+  && pass "a redirection token is not mistaken for a template" \
+  || fail "false positive: 2>/dev/null read as a template (SITES=${n:-unset})"
+
+cat > "$C8/apostrophe.sh" <<'EOF'
+run() {
+  local d="$1/repo"
+  echo "it's the fixture root"
+  assert_fixture_dir "$d"
+  echo "that's checked"
+  rm -rf "$d"
+}
+EOF
+ck; n=$(scan_sites "$C8/apostrophe.sh"); [[ "${n:-1}" -eq 0 ]] \
+  && pass "apostrophes in prose do not blank a real guard between them" \
+  || fail "false positive: apostrophe pairing erased a guard (SITES=${n:-unset})"
+
+# --- C9. The two residue root classes with no must-FAIL arm. 101 live sites could be silenced by
+#         adding either to _ROOT_SAFE, reddening ONLY the arm that says "regenerate".
+echo "C9. unpinned root classes"
+C9="$TMP_ROOT/c9"; mkdir -p "$C9"
+cat > "$C9/call_unresolved.sh" <<'EOF'
+run() {
+  local d
+  d=$(some_helper_defined_elsewhere)
+  rm -rf "$d/x"
+}
+EOF
+ck; n=$(scan_sites "$C9/call_unresolved.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "an unresolvable wrapper call is reported" \
+  || fail "call-unresolved was cleared (SITES=${n:-unset}) -- _ROOT_SAFE widened"
+
+cat > "$C9/other_cmdsubst.sh" <<'EOF'
+run() {
+  local d
+  d=$(git rev-parse --show-toplevel)
+  rm -rf "$d/x"
+}
+EOF
+ck; n=$(scan_sites "$C9/other_cmdsubst.sh"); [[ "${n:-0}" -ge 1 ]] \
+  && pass "an unrecognised command substitution root is reported" \
+  || fail "other-cmdsubst was cleared (SITES=${n:-unset}) -- _ROOT_SAFE widened"
 
 # --- D. Must-PASS fixtures. Each would be a false positive, and each is a way the rule could
 #        become noise-that-nobody-reads rather than a guard. -----------------------------------------
@@ -452,7 +662,7 @@ if [[ $((passes + fails)) -ne "$asserted" ]]; then
   exit 2
 fi
 
-MIN_ASSERTIONS=32
+MIN_ASSERTIONS=46
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- arms were removed" >&2
   exit 2

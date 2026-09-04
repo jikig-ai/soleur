@@ -65,7 +65,7 @@ import sys
 # --- shared lexical machinery -------------------------------------------------------------------
 
 SET_E = re.compile(r'^\s*set\s+-[a-zA-Z]*e')
-HEREDOC = re.compile(r'<<-?\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)[\'"]?')
+HEREDOC = re.compile(r'(?<!<)<<(?!<)-?\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)[\'"]?')
 
 
 def heredoc_lines(lines):
@@ -437,25 +437,40 @@ _REL_CALL = re.compile(r'^\$\(\s*([A-Za-z_][A-Za-z0-9_]*)\b[^)]*\)$')
 #   mktemp -d -p"$R"          -> "$R"/tmp.XXXX     -p with an ATTACHED argument
 # So the rule is inverted from "does it look inherited" to "is it provably bare": absolute only
 # when every argument is a flag, with `-t`/`--tmpdir=` excluded because they name a directory too.
-_MKTEMP_TEMPLATE = re.compile(r'X{3,}')
-_MKTEMP_DESTFLAG = re.compile(r'(?:^|\s)-[a-zA-Z]*p|--tmpdir|(?:^|\s)-[a-zA-Z]*t(?:\s|$)')
-
-
+_MKTEMP_DESTARG = re.compile(r'(?:^|\s)-[a-zA-Z]*p(?:\s|=|"|$)|--tmpdir')
+_MKTEMP_TFLAG = re.compile(r'(?:^|\s)-[a-zA-Z]*t(?:\s|$)')
+_REDIR_TOK = re.compile(r'^\d*[<>]')
 def _mktemp_class(val):
-    """'mktemp-abs' when the call can only yield an absolute path, else 'mktemp-inherits'."""
+    """'mktemp-abs' when the call can only yield an absolute path, else 'mktemp-inherits'.
+
+    Measured against real coreutils, because the flags do not behave the way their names suggest:
+
+        mktemp -d                     -> /tmp/tmp.Gyhi0vkghY     TMPDIR-based
+        mktemp -d -t pre.XXXX         -> /tmp/pre.RRbk           TMPDIR-based, IDENTICAL to bare
+        TMPDIR=rd mktemp -d           -> rd/tmp.4QxuE0mOYa       both go relative together
+        TMPDIR=rd mktemp -d -t p.XXXX -> rd/probe.j1oZdD
+        mktemp -d tmp.XXXXXX          -> tmp.5c9z0r              relative to CWD
+        mktemp -d -p reldir           -> reldir/tmp.y2nFHEwPr6   inherits its argument
+
+    `-t` is NOT a destination flag: it makes the positional a PREFIX under TMPDIR, the same
+    dependency bare `mktemp -d` already has. Classifying it as inheriting was this rule's single
+    largest false-positive class -- 783 baseline rows, 38% -- and it was inverted on its own stated
+    axis: the form that cannot produce a relative path was reported, while bare `mktemp -d`, which
+    demonstrably can, was cleared.
+    """
     m = re.match(r'^\$\(\s*mktemp\b(?P<args>[^)]*)\)$', val)
     if not m:
         return None
     args = m.group("args")
-    if _MKTEMP_DESTFLAG.search(args):
-        return "mktemp-inherits"          # -p / --tmpdir / -t all name a directory
-    for tok in args.split():
-        if tok.startswith("-"):
-            continue
-        # a positional argument is a TEMPLATE; it is relative unless it starts at root
-        if _MKTEMP_TEMPLATE.search(tok) or "/" in tok:
-            return "mktemp-abs" if tok.lstrip('"').startswith("/") else "mktemp-inherits"
+    if _MKTEMP_DESTARG.search(args):
         return "mktemp-inherits"
+    if _MKTEMP_TFLAG.search(args):
+        return "mktemp-abs"
+    for tok in args.split():
+        if tok.startswith("-") or _REDIR_TOK.match(tok):
+            continue          # a flag, or a redirection such as `2>/dev/null` -- not a template
+        t = tok.lstrip('"\'')
+        return "mktemp-abs" if t.startswith("/") else "mktemp-inherits"
     return "mktemp-abs"
 # An emit can sit mid-line, after `;` or `{`. A ONE-LINE wrapper keeps it exactly there, and
 # anchoring this at `^` made every one-line fixture wrapper unresolvable.
@@ -507,17 +522,19 @@ _QUOTED = re.compile(r"'[^']*'" + r'|"[^"]*"')
 def _strip_quoted(line):
     """Blank out BOTH quote kinds, so braces and tokens inside strings are not read as code."""
     return _QUOTED.sub(lambda m: " " * len(m.group(0)), line)
-
-
-def _function_bodies(lines):
+def _function_bodies(lines, skip=None):
     """name -> (start_idx, end_idx). A ONE-LINE definition yields start == end, and every consumer
     must therefore scan an INCLUSIVE range; `range(end, start, -1)` is empty and silently skips it.
 
-    Braces are counted with QUOTED SPANS REMOVED. A single `printf '{\n'` left the depth positive
-    forever, ran the function's end to EOF, and let `_wrapper_root` pick up a LATER function's
-    `echo "$t"` and its mktemp root — reporting a wrapper that emits a relative literal as
-    absolute. jq programs, awk bodies and JSON fixtures all supply the unbalanced brace.
+    Braces are counted with quoted spans stripped, COMMENTS dropped, and HEREDOC BODIES excluded.
+    All three matter and each was found separately: one `printf '{'`, one `# layout { see docs`,
+    and one `{` inside a `<<'SH'` fixture body each left the depth positive forever, ran the
+    function's end to EOF, and let `_wrapper_root` pick up a LATER function's mktemp root -- so a
+    wrapper emitting a relative literal read as absolute. This module's own docstring notes that
+    suites here routinely EMBED fixture scripts in heredocs, which is why the third one is not
+    hypothetical.
     """
+    skip = skip or set()
     out = {}
     for i, l in enumerate(lines):
         m = FUNC_HEAD.match(l)
@@ -526,17 +543,20 @@ def _function_bodies(lines):
         name = re.match(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)', l)
         if not name:
             continue
-        bare = _strip_quoted(l)
-        depth = bare.count('{') - bare.count('}')
+
+        def _code(idx):
+            if idx in skip:
+                return ""
+            t = _strip_quoted(lines[idx])
+            return t.split("#", 1)[0]
+
+        depth = _code(i).count('{') - _code(i).count('}')
         j = i
         while depth > 0 and j + 1 < len(lines):
             j += 1
-            b = _strip_quoted(lines[j])
-            depth += b.count('{') - b.count('}')
+            depth += _code(j).count('{') - _code(j).count('}')
         out[name.group(1)] = (i, j)
     return out
-
-
 def _literal_tail(arg):
     """Trailing literal path fragment of a `source` argument: `"$V/lib/x.sh"` -> `lib/x.sh`."""
     s = re.sub(r'\$\([^)]*\)', '\x00', arg)
@@ -545,7 +565,7 @@ def _literal_tail(arg):
     return tail if tail.endswith('.sh') else None
 
 
-def _extended_funcs(path, lines, corpus, cache):
+def _extended_funcs(path, lines, corpus, cache, skip=None):
     """Same-file functions plus, one hop out, functions from sourced helpers.
 
     Fixture wrappers frequently live in a shared `test-helpers.sh`, so a resolver that only reads
@@ -553,7 +573,7 @@ def _extended_funcs(path, lines, corpus, cache):
     """
     if path in cache:
         return cache[path]
-    funcs = {n: (lo, hi, lines) for n, (lo, hi) in _function_bodies(lines).items()}
+    funcs = {n: (lo, hi, lines) for n, (lo, hi) in _function_bodies(lines, skip).items()}
     for l in lines:
         m = _SOURCE.match(l)
         if not m:
@@ -579,10 +599,25 @@ def _extended_funcs(path, lines, corpus, cache):
         sl = read_lines(cands[0])
         if sl is None:
             continue
-        for n, (lo, hi) in _function_bodies(sl).items():
+        for n, (lo, hi) in _function_bodies(sl, heredoc_lines(sl)).items():
             funcs.setdefault(n, (lo, hi, sl))
     cache[path] = funcs
     return funcs
+
+
+def _mktemp_prefix(val):
+    """The directory an inheriting mktemp call resolves against: a bare variable name, or a
+    literal path. Returns None when it cannot be read."""
+    m = re.search(r'(?:\s-[a-zA-Z]*p\s*|--tmpdir=?\s*)"?(?P<d>[^"\s)]+)', val)
+    if not m:
+        m = re.search(r'mktemp\b(?:\s+-[a-zA-Z-]+)*\s+"?(?P<d>[^"\s)]*)/[^"\s)]*X{3,}', val)
+    if not m:
+        return None
+    d = m.group("d")
+    mv = re.match(r'^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$', d)
+    if mv:
+        return mv.group(1)
+    return d if d.startswith("/") else None
 
 
 def _classify_value(val):
@@ -626,8 +661,6 @@ def _binds_before_use(line, var):
     b = re.search(_LEAD + _DECL + v + r'=', line)
     u = re.search(r'"\$\{?' + v + r'\}?', line)
     return bool(b and u and b.end() <= u.start())
-
-
 def _wrapper_root(fname, funcs, depth):
     """Root class of what same-file-or-sourced function `fname` emits."""
     if depth > 4 or fname not in funcs:
@@ -640,24 +673,31 @@ def _wrapper_root(fname, funcs, depth):
             return _chain_root(blines, k, m.group(1), set(), funcs,
                                depth + 1, lo=lo, inclusive=one_line)[0]
     # No `echo "$var"`. The value is whatever the LAST statement produced, so only that statement
-    # may be read. A bare `\bmktemp\b` search over the whole body claimed absoluteness from a
-    # mktemp whose output went to /dev/null while the function echoed a RELATIVE literal.
+    # may be read.
     for k in range(hi, lo - 1, -1):
-        seg = _strip_quoted(blines[k]).strip().rstrip('}').strip()
+        raw = blines[k]
+        seg = _strip_quoted(raw).strip().rstrip('}').strip()
         if not seg or seg.startswith('#'):
             continue
         if not re.search(r'\bmktemp\b', seg):
-            return None                      # last statement is not a mktemp: cannot claim a root
+            return None
+        # The mktemp output must actually REACH STDOUT. `>/dev/null` was already rejected;
+        # `d=$(mktemp -d)` is the same discard with different syntax and left the function
+        # emitting nothing, so the caller bound "" and the site became `rm -rf "/objects"`.
         if re.search(r'>\s*/dev/null|>\s*"?\$', seg):
-            return None                      # its output was redirected away, so it is not the value
-        if re.search(r'\s-[a-zA-Z]*p|--tmpdir|\s-[a-zA-Z]*t(?:\s|$)', seg):
-            return "mktemp-inherits"
-        if re.search(r'mktemp[^;|]*\s[^\s;|-][^\s;|]*X{3,}', seg):
-            return "mktemp-inherits"         # a template argument names a directory
-        return "mktemp-abs"
+            return None
+        if re.search(r'(?:^|;|\s)' + _DECL + r'[A-Za-z_][A-Za-z0-9_]*=\$\(\s*mktemp', raw):
+            return None
+        # Classify the mktemp on the RAW line. Stripping quotes first erased a path-bearing
+        # template -- `mktemp -d "$base/fx.XXXXXX"` -- so this path answered `mktemp-abs` while
+        # `_mktemp_class` answered `mktemp-inherits` for the identical call. Two code paths
+        # disagreeing on the form this rule calls load-bearing.
+        mm = re.search(r'\$\(\s*mktemp\b[^)]*\)', raw)
+        if mm:
+            return _mktemp_class(mm.group(0)) or "mktemp-abs"
+        args = raw[re.search(r'\bmktemp\b', raw).end():]
+        return _mktemp_class('$(mktemp' + args.split(';')[0].rstrip(' }') + ')') or "mktemp-abs"
     return None
-
-
 def _chain_root(lines, use_idx, var, skip, funcs, depth=0, lo=0, inclusive=False):
     """Walk aliases and derivations to the root binding. Returns (root_class, final_var)."""
     cur, use, d, inc = var, use_idx, 0, inclusive
@@ -681,6 +721,17 @@ def _chain_root(lines, use_idx, var, skip, funcs, depth=0, lo=0, inclusive=False
                 return "never-bound", cur
             j, val = j2, val2
         k = _classify_value(val)
+        if k == "mktemp-inherits":
+            # Do not stop here. `mktemp -d "$SANDBOX_ROOT/case-XXXX"` inherits SANDBOX_ROOT, and
+            # that parent is very often resolvable in the same file -- the largest single holder in
+            # the baseline pinned TMPDIR to /var/tmp three lines above the binding. Treating this
+            # as terminal reported 179 rows whose root is plainly absolute.
+            pref = _mktemp_prefix(val)
+            if pref:
+                if pref.startswith("/"):
+                    return "absolute-literal", cur
+                cur, use = pref, j
+                continue
         if k == "alias":
             cur, use = _REL_ALIAS.match(val).group(1), j
             continue
@@ -715,37 +766,20 @@ def _chain_root(lines, use_idx, var, skip, funcs, depth=0, lo=0, inclusive=False
 #   2. an inline `case "$var"` carrying BOTH an absolute-accept arm (`/*)`) and a default arm that
 #      aborts. This is the shape a plugin script uses when it cannot take a test-helper dependency.
 _SQUOTE = re.compile(r"'[^']*'")
-
-
 def _strip_squotes(line):
     """Blank out single-quoted spans.
 
     A guard is a predicate, not a word. `echo 'TODO: assert_fixture_dir "$d" was removed'` cleared
-    a live site by containing the assertion's NAME — the cdx() name-token gap this scanner exists
+    a live site by containing the assertion's NAME -- the cdx() name-token gap this scanner exists
     to replace, reproduced inside the replacement.
+
+    Skipped when the count of quotes is ODD, because then at least one of them is an apostrophe and
+    pairing is guesswork: `echo "it's the root"; assert_fixture_dir "$d"; echo "that's checked"`
+    paired `it's` with `that's` and blanked a REAL guard between them.
     """
+    if line.count("'") % 2:
+        return line
     return _SQUOTE.sub(lambda m: " " * len(m.group(0)), line)
-
-
-def _case_proves_absolute(lines, start, var, skip):
-    """A `case "$var"` block that accepts `/*` and aborts on the default arm."""
-    v = re.escape(var)
-    if not re.search(r'case\s+"?\$\{?' + v + r'\}?"?\s+in', _strip_squotes(lines[start])):
-        return False
-    saw_abs, saw_reject = False, False
-    for k in range(start, min(start + 14, len(lines))):
-        if k in skip:
-            continue
-        seg = _strip_squotes(lines[k])
-        if re.search(r'(?:^|[\s|(])/\*\)', seg):
-            saw_abs = True
-        if re.search(r'(?:^|[\s|(])\*\)', seg) and re.search(r'\b(?:exit|return)\b', seg):
-            saw_reject = True
-        if 'esac' in seg:
-            break
-    return saw_abs and saw_reject
-
-
 def _rel_guard_window(lines, use_idx):
     """First line the guard scan may read: the enclosing function head, else file start.
 
@@ -757,26 +791,36 @@ def _rel_guard_window(lines, use_idx):
         if FUNC_HEAD.match(lines[k]):
             return k
     return 0
-
-
 def _rel_guarded(lines, use_idx, var, endvar, skip):
+    """Is this operand covered by a guard that REFUSES a relative path?
+
+    Only `assert_fixture_dir` is recognised. Two other forms were tried and REMOVED, each because
+    it could be silenced in ways no pattern list closes:
+
+      * an inline `case` with a `/*` accept arm and an aborting default. Defeated four ways, every
+        one verified against real bash: an extra `fixtures/*)` allow-arm (and an allowlist arm is
+        exactly WHY someone writes an inline case rather than calling the helper); `exit` appearing
+        inside a double-quoted message on the default arm; a catch-all `*)` placed BEFORE `/*)`;
+        and a sound validator whose return code the caller ignores. Recognising it correctly needs
+        arm-order and quoting analysis -- a shell parser approximated in a regex.
+      * admitting a top-level guard on a global that is "not rebound" in the function. Defeated by
+        every assignment form a textual test cannot see -- `read`, `for`, `printf -v`, `+=`,
+        `(( ))`, `mapfile` -- and then, after that was narrowed to a read-only test, by a HELPER
+        CALL that mutates the global and by `eval "VAR=..."`, which quote-stripping erases before
+        the check runs. Neither is a spelling; both are the limit of reading one function's text.
+
+    `assert_fixture_dir` is recognised because it is a real function with a testable contract: its
+    `case` refuses the empty string, `..` components, synthetic-fs paths and the filesystem root,
+    accepts `/*`, and refuses everything else as RELATIVE. The sibling P1a suite asserts that every
+    tracked copy of it is byte-identical, so that contract cannot drift silently.
+
+    The cost is false positives: a genuine inline guard no longer clears its rows, and they are
+    acknowledged in the baseline instead. That is the trade this repo already made once, when
+    #7709 reverted its brace-group widening -- a widening that silences a genuinely unguarded site
+    is strictly worse than the false positives it removes.
+    """
     names = [n for n in (var, endvar) if n]
     lo = _rel_guard_window(lines, use_idx)
-    # A GLOBAL guarded once at top level is guarded for every later use, and bounding its window at
-    # the enclosing function head would discard that — measured, it discarded the inline `case`
-    # refusal on `$REPO_ROOT` in constraint-scaffold.sh, four sites. The widening is admitted ONLY
-    # when the name is not rebound inside the function, so it cannot restore the cross-function
-    # silencing the bound exists to stop: there, the name IS a local and the window stays closed.
-    if lo > 0:
-        rebound = False
-        for n in names:
-            rx = re.compile(_LEAD + _DECL + re.escape(n) + r'=')
-            if any(rx.search(lines[k]) for k in range(lo, use_idx + 1)
-                   if k not in skip and not lines[k].lstrip().startswith("#")):
-                rebound = True
-                break
-        if not rebound:
-            lo = 0
     for k in range(lo, use_idx + 1):
         if k in skip or lines[k].lstrip().startswith("#"):
             continue
@@ -784,11 +828,7 @@ def _rel_guarded(lines, use_idx, var, endvar, skip):
         for n in names:
             if re.search(r'assert_fixture_dir\s+"?\$\{?' + re.escape(n) + r'\}?"?', seg):
                 return True
-            if _case_proves_absolute(lines, k, n, skip):
-                return True
     return False
-
-
 # A root that cannot be relative and cannot be empty. Everything else is a candidate.
 _ROOT_SAFE = frozenset({"mktemp-abs", "absolute-literal"})
 
@@ -810,7 +850,7 @@ def scan_relative(paths, corpus=None):
         if lines is None:
             continue
         skip = heredoc_lines(lines)
-        funcs = _extended_funcs(f, lines, corpus, cache)
+        funcs = _extended_funcs(f, lines, corpus, cache, skip)
         for fam, rx in _REL_FAMILIES:
             pat = OPERAND_WRITE if rx is None else rx
             for i, line in enumerate(lines):
