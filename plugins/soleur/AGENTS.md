@@ -223,6 +223,39 @@ grep -E '^description:' skills/*/SKILL.md | grep -v 'This skill'
 # Should return nothing if all use third person
 ```
 
+## Test Fixture Conventions
+
+### A test that spawns `git` must pass a constructed environment
+
+Use `gitFixtureEnv(dir)` / `gitFixture(dir)` from
+[`test/lib/git-fixture-env.ts`](./test/lib/git-fixture-env.ts) (python sibling:
+`tests/scripts/_git_fixture_env.py`). Do **not** hand-roll a per-file `gitCleanEnv()`.
+
+`cwd` and `git -C` are not sufficient. In a **linked worktree** — which every feature branch here
+is — git exports `GIT_DIR` and `GIT_INDEX_FILE` to its hooks as absolute paths, and a `git`
+subprocess honours those over both its working directory and `-C`. A fixture's `git init` then
+initialises nothing and its commits land on the developer's live branch. Scrubbing `GIT_DIR` alone
+is also insufficient: an absolute `GIT_INDEX_FILE` still stages into the other repository's index.
+
+Two non-obvious consequences:
+
+- **The scrub goes on the invocation, not in the runtime.** Under Bun a `delete process.env.GIT_DIR`
+  does not reach a child spawned without an explicit `env`, so an in-process scrub looks correct and
+  protects nothing. (Node propagates it; the divergence only shows for an *inherited* variable.)
+- **Transitive spawns count.** If the suite shells out to a script that runs `git` itself, that
+  spawn needs the constructed env too — no helper-call grep or source scan can see it.
+
+### `rc=97` from a test runner is the tripwire, not a flake
+
+`plugins/soleur/test/lib/git-tripwire.ts` (registered as a `bunfig.toml` preload and imported by
+both vitest setup files) and the prelude in `test/test-helpers.sh` abort a runner that *starts*
+holding a git-location variable. They fail rather than scrub, so the broken entry point gets fixed
+instead of silently papered over. The message names the variables and the remedy: prefix the entry
+point with `unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE`. A suite whose subject genuinely is the
+inherited environment can set `SOLEUR_GIT_TRIPWIRE_ALLOW=1`.
+
+Background and measurements: #7833.
+
 ## Domain Leader Interface
 
 Domain leaders are agents that orchestrate a business domain's specialist team. Each leader follows a 3-phase contract:
