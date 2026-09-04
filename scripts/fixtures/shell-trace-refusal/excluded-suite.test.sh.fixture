@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -uo pipefail
+# A suite that synthesizes a fake token per cq-test-fixtures-synthesized-only.
+# It must stay traceable: the file you most need `bash -x` on is the failing suite.
+export SENTRY_AUTH_TOKEN="FAKE_synthesized_for_fixture_only"
+printf 'len=%s\n' "${#SENTRY_AUTH_TOKEN}"

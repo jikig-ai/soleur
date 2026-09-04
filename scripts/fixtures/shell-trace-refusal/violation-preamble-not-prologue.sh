@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+echo "argument parsing and other work happens first"
+echo "line 1"
+echo "line 2"
+echo "line 3"
+echo "line 4"
+echo "line 5"
+echo "line 6"
+echo "line 7"
+echo "line 8"
+echo "line 9"
+echo "line 10"
+echo "line 11"
+echo "line 12"
+echo "line 13"
+echo "line 14"
+echo "line 15"
+echo "line 16"
+echo "line 17"
+echo "line 18"
+echo "line 19"
+echo "line 20"
+echo "line 21"
+echo "line 22"
+echo "line 23"
+echo "line 24"
+echo "line 25"
+echo "line 26"
+echo "line 27"
+echo "line 28"
+echo "line 29"
+echo "line 30"
+echo "line 31"
+echo "line 32"
+echo "line 33"
+echo "line 34"
+echo "line 35"
+echo "line 36"
+echo "line 37"
+echo "line 38"
+echo "line 39"
+echo "line 40"
+
+case "$-" in
+  *x*) printf "refusing\n" >&2; exit 78 ;;
+esac
+
+curl -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true
