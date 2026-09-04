@@ -261,6 +261,7 @@ app
 app-removal
 app-router
 apparmor
+append-only
 appimage crash headless
 apply-path
 apply-pipeline
@@ -1350,6 +1351,7 @@ evidence
 evidence-discarding
 evidence-first
 evidence-integration
+evidentiary-records
 exacerbation-rule
 exact-equality
 exec
@@ -1957,6 +1959,7 @@ knowledge-base/project/learnings/2026-03-20-eleventy-mirror-dual-date-locations.
 knowledge-base/project/learnings/security-issues/2026-04-19-socat-load-bearing-for-bwrap-sandbox.md
 knowledge-base/project/plans/2026-05-15-feat-goal-primitive-operator-escape-hatch-plan.md
 knowledge-cutoff
+knowledge-propagation
 known-gap-is-not-a-pin
 labels
 ladder

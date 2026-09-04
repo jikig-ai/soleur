@@ -143,6 +143,18 @@ beforeAll(() => {
   ON_PUSH_PATHS = extractOnPushPaths(readFileSync(WEBPLAT, "utf8"));
 });
 
+// SECOND, INDEPENDENT OCCURRENCE — kept because it is the stronger evidence.
+// PR #7782 hit this same bug in this same file, concurrently with #7822 and
+// without either knowing of the other: the `plugin-component-test` lefthook job
+// ran this file during a commit and appended SIXTEEN `base`/`change` commits to
+// the feature branch, which the following `git push` then PUBLISHED. #7822's
+// occurrence was caught before it left the machine; this one was not.
+//
+// Two sessions independently re-derived the same helper in the same week, which
+// is why it now lives in ./lib/git-clean-env.ts and is IMPORTED rather than
+// copied. That file carries the mechanism and the reason the exclusion must be
+// by PREFIX. Do not re-inline it here — that is exactly how this recurred.
+
 // Build a 2-commit git repo (HEAD~1 = empty base, HEAD = the changed paths),
 // run the extracted gate against it with force_run=false, and return `changed`.
 function runGate(changedPaths: string[]): string {
