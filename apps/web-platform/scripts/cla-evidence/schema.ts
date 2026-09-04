@@ -8,7 +8,7 @@ import { z } from "zod";
  */
 export const SCHEMA_VERSION = "1.0" as const;
 
-const Sha256Hex = z.string().regex(/^[0-9a-f]{64}$/, "must be 64 lowercase hex chars");
+export const Sha256Hex = z.string().regex(/^[0-9a-f]{64}$/, "must be 64 lowercase hex chars");
 
 const ActorSchema = z.object({
   login: z.string().min(1),
@@ -65,8 +65,8 @@ export type EvidenceRecord = z.infer<typeof EvidenceRecordSchema>;
  */
 export class SchemaVersionMismatchError extends Error {
   readonly exitCode = 3;
-  constructor(messages: string) {
-    super(`evidence record invalid (schema_version=${SCHEMA_VERSION}): ${messages}`);
+  constructor(messages: string, subject = "evidence record") {
+    super(`${subject} invalid (schema_version=${SCHEMA_VERSION}): ${messages}`);
     this.name = "SchemaVersionMismatchError";
   }
 }
@@ -81,6 +81,80 @@ export function validateEvidenceRecord(payload: unknown): EvidenceRecord {
   if (!parsed.success) {
     const messages = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new SchemaVersionMismatchError(messages);
+  }
+  return parsed.data;
+}
+
+// ---------------------------------------------------------------------------
+// Corporate CLA coverage map (the "roster").
+//
+// Folded into this module rather than a sibling `roster-schema.ts`: that would
+// re-declare a 64-hex regex and a parallel error class, which is duplication
+// wearing a convention's clothes. `Sha256Hex` and `SchemaVersionMismatchError`
+// are reused as-is.
+//
+// WHAT THIS FILE MAY NOT CARRY. Per the CLO ruling of 2026-09-04 (B1-c), the
+// roster is tracked in a PUBLIC repository, so identity fields are removed from
+// the schema permanently — not gated pending a decision. `.strict()` is what
+// makes that a closed set by construction: a fifth key name like
+// `signatory_email` walks straight through any four-name denylist, and cannot
+// walk through this.
+// ---------------------------------------------------------------------------
+
+const RosterRepresentativeSchema = z
+  .object({
+    /** GitHub numeric account id. The upstream ledger keys on id, not login. */
+    id: z.number().int().positive(),
+    login: z.string().min(1),
+    /** The legally operative date from the instrument — NOT a commit timestamp. */
+    authorized_from: z.string().datetime({ offset: true }),
+    /**
+     * Withdrawal-of-designation marker. NOT erasure, and it must never be
+     * described as one: the surface is a public git repository and the earlier
+     * association survives in history and in every clone. Deliberately not
+     * called a "tombstone" — that word already denotes something
+     * erasure-shaped here (`tombstones/<sha>.deleted.json` on the R2 path).
+     */
+    removed_at: z.string().datetime({ offset: true }).nullable(),
+  })
+  .strict();
+
+const RosterOrganizationSchema = z
+  .object({
+    /**
+     * Null where the organisation's legal name IS a natural person's name — a
+     * sole trader, or anyone trading under their own name (CLO amendment
+     * B1-c-2). Such a counterparty is published under `record_ref` alone.
+     */
+    legal_name: z.string().min(1).nullable(),
+    record_ref: z.string().regex(/^CCLA-[0-9]{4,}$/, "must look like CCLA-0001"),
+    signed_at: z.string().datetime({ offset: true }),
+    cla_doc: ClaDocSchema.strict(),
+    /** SHA-256 of the executed instrument as received. The instrument is off-repo. */
+    executed_instrument_sha256: Sha256Hex,
+    representatives: z.array(RosterRepresentativeSchema),
+    notes: z.string().optional(),
+  })
+  .strict();
+
+export const RosterSchema = z
+  .object({
+    schema_version: z.literal(SCHEMA_VERSION),
+    organizations: z.array(RosterOrganizationSchema),
+  })
+  .strict();
+
+export type Roster = z.infer<typeof RosterSchema>;
+
+/**
+ * Consumer-boundary assertion for the roster. Same exit-3 contract as
+ * `validateEvidenceRecord`, via the same error type.
+ */
+export function validateRosterRecord(payload: unknown): Roster {
+  const parsed = RosterSchema.safeParse(payload);
+  if (!parsed.success) {
+    const messages = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+    throw new SchemaVersionMismatchError(messages, "roster record");
   }
   return parsed.data;
 }
