@@ -50,6 +50,21 @@ pattern, not a one-off:
   completion rather than annotating it.
 - `breach-register.md` stays `status: draft-requires-counsel-review`.
 
+> **Superseded 2026-09-04 (#7791).** All four bullets above are true **as of
+> 2026-09-03** and are left as written; read them as a record of that session,
+> not as current state. Two have since been discharged. The attestation path is
+> **no longer absent** — `audits/2026-09-03-clo-attestation-7717-art-33-5-register.md`
+> was written and signed by the `clo` agent on 2026-09-04, across two passes, and
+> this pipeline never wrote into it. The implementation record was **deleted**, not
+> annotated, under its own `re_evaluation_triggers` entry; its four unique items
+> (the 529 provenance, the AC1–AC13 verification table, the unratified-correction
+> disclosure, and Ruling 1 as originally issued) survive in that file's Annex A at
+> their original authority level, with the engineering verification labelled as
+> such rather than absorbed into a legal attestation. The one cell corrected
+> without sign-off was **ratified as to direction and overruled as to the cell it
+> produced**: corrections C2 and C3 had been recorded as supersessions and never
+> applied to the cell they correct.
+
 Gate: before writing any word from the family *signed / attested / approved /
 reviewed by*, grep the source for it. If it is not there, the sentence is yours,
 not the authority's, and it must say so.
