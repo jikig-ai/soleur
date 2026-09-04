@@ -6,7 +6,7 @@ import { describe, it, expect } from "vitest";
 // Cross-artifact contract tests for the two #6512 Sentry issue-alerts, mirroring the sibling
 // `sentry-*-alert-op-contract.test.ts` convention (kb_db_error, zot_mirror_fallback_rate, …).
 //
-// Both alerts use `filter_match = "all"` with a single `tagged_event` on a string the EMITTER must
+// Both alerts use `logic_type = "all"` with a single `tagged_event` on a string the EMITTER must
 // produce as a Sentry tag. A rename of the tag value on EITHER side — the emitter (ci-deploy.sh's
 // `registry_pull_event "local-cache"`, or seccomp-unenforced-alert.sh's `op: "seccomp-remediation-
 // failed"`) or the `.tf` filter value — would silently zero the alert's matches and dark the page,
@@ -26,7 +26,7 @@ const alertScript = readFileSync(
 );
 
 function tfBlockFor(resourceName: string): string {
-  const decl = `resource "sentry_issue_alert" "${resourceName}"`;
+  const decl = `resource "sentry_alert" "${resourceName}"`;
   const start = tf.indexOf(decl);
   if (start === -1) return "";
   const next = tf.indexOf("\nresource ", start + decl.length);
@@ -37,10 +37,10 @@ function tfBlockFor(resourceName: string): string {
 // HCL attribute line in the file (line-anchored so a comment mention like `frequency = 26` in
 // prose cannot inflate the count — the drift-guard false-fail class).
 function assertUniqueFrequency(block: string): void {
-  const m = block.match(/^\s*frequency\s*=\s*(\d+)/m);
+  const m = block.match(/^\s*frequency_minutes\s*=\s*(\d+)/m);
   expect(m).not.toBeNull();
   const freq = m![1];
-  const all = tf.match(new RegExp(`^\\s*frequency\\s*=\\s*${freq}\\b`, "gm")) ?? [];
+  const all = tf.match(new RegExp(`^\\s*frequency_minutes\\s*=\\s*${freq}\\b`, "gm")) ?? [];
   expect(all.length).toBe(1);
 }
 
@@ -49,7 +49,7 @@ describe("local_cache_reload_rate alert ↔ ci-deploy.sh registry tag contract (
 
   it("declares the resource", () => {
     expect(block).toContain(
-      'resource "sentry_issue_alert" "local_cache_reload_rate"',
+      'resource "sentry_alert" "local_cache_reload_rate"',
     );
   });
 
@@ -62,8 +62,8 @@ describe("local_cache_reload_rate alert ↔ ci-deploy.sh registry tag contract (
   });
 
   it("ANDs its filter on registry == local-cache (structural pins)", () => {
-    expect(block).toContain('filter_match = "all"');
-    expect(block).toMatch(/key\s*=\s*"registry"[\s\S]*?match\s*=\s*"EQUAL"/);
+    expect(block).toContain('logic_type = "all"');
+    expect(block).toMatch(/key\s*=\s*"registry"[\s\S]*?match\s*=\s*"eq"/);
     expect(block).toMatch(/value\s*=\s*"local-cache"/);
   });
 
@@ -75,7 +75,7 @@ describe("seccomp_remediation_failed alert ↔ seccomp-unenforced-alert.sh op ta
 
   it("declares the resource", () => {
     expect(block).toContain(
-      'resource "sentry_issue_alert" "seccomp_remediation_failed"',
+      'resource "sentry_alert" "seccomp_remediation_failed"',
     );
   });
 
@@ -87,8 +87,8 @@ describe("seccomp_remediation_failed alert ↔ seccomp-unenforced-alert.sh op ta
   });
 
   it("ANDs its filter on op == seccomp-remediation-failed (structural pins)", () => {
-    expect(block).toContain('filter_match = "all"');
-    expect(block).toMatch(/key\s*=\s*"op"[\s\S]*?match\s*=\s*"EQUAL"/);
+    expect(block).toContain('logic_type = "all"');
+    expect(block).toMatch(/key\s*=\s*"op"[\s\S]*?match\s*=\s*"eq"/);
     expect(block).toMatch(/value\s*=\s*"seccomp-remediation-failed"/);
   });
 
