@@ -5,7 +5,7 @@
 # commit as the source edit that earned it:
 #   bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline
 #
-# WHAT THIS IS NOT. These are NOT 1225 defects. P1b asks whether an operand can be RELATIVE, or be
+# WHAT THIS IS NOT. These are NOT 1226 defects. P1b asks whether an operand can be RELATIVE, or be
 # rooted at `/` by an empty parent. It does not assert any of these is reachable with such a value
 # today. The rows are the residue left AFTER the scanner resolved what it could: mktemp in every
 # form, one-line and multi-line same-file wrappers, wrappers reached through a sourced helper (399
@@ -20,7 +20,7 @@
 #   family      sites  files
 #   git -C         16      5
 #   rm -rf        197     46
-#   redirect      891    215
+#   redirect      892    216
 #   mv / cp -r    121     73
 #
 # The `git -C` rows are the highest-value subset for burn-down: all 16 are in PRODUCTION scripts,
@@ -76,6 +76,9 @@
 # measured and REJECTED: blanking quotes before the search destroys the real delimiter in
 # `cat > "$f" <<'EOF'` (+155/-12, P1a 9 -> 21), and scanning ALL matches for the first unquoted one
 # HID 1864 further lines (one file went 0 -> 910 skipped, its whole body).
+#
+#   1225 -> 1226   a sibling merge added one site in a new file
+#                  (.claude/hooks/incident-sandbox-coverage.test.sh, from #7804).
 #
 # A future change that SHRINKS this file deserves the scrutiny a growth would get. From the count
 # alone, a better resolver and a detector that stopped looking are indistinguishable, and across
@@ -178,6 +181,7 @@
 2	.claude/hooks/follow-through-directive-gate.test.sh
 1	.claude/hooks/guardrails.test.sh
 1	.claude/hooks/hook-input-contract.test.sh
+1	.claude/hooks/incident-sandbox-coverage.test.sh
 1	.claude/hooks/incidents.test.sh
 1	.claude/hooks/lib/freeze-lock.sh
 1	.claude/hooks/lib/incidents.sh
