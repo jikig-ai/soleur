@@ -37,11 +37,11 @@ Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed); no
 | The script is at `scripts/gdpr-gate.sh` | It is at `plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh`. | Use the real path. |
 | "The gate refuses before scanning anything" | **False.** It prints its banners, runs the `CANONICAL_REGEX` loop, then `exit 0`, on every path. `repo-scan.sh` has no staleness check at all. Nothing is suppressed. | Re-aim at the defect that is present: the scan produces no output of its own. |
 | "The gate is invoked at `plan` Phase 2.7 and `work` Phase 2 exit, so every invocation returns the same refusal" | **False on the mechanism.** Both invoke the *skill*, never the script. `POSTURE_FAIL` has one producer — the lefthook hook — and zero blocking consumers. | Correct the causal story. See the residual below: this also means the plan cannot fix those gates, and that is now named rather than left implied. |
-| (unstated) The lefthook hook runs on every commit | **False.** `lefthook.yml` gives `gdpr-gate-advisory` a 14-entry glob, and `{staged_files}` is pre-filtered to it (measured on lefthook 2.1.6: unmatched paths are dropped; with no matches the command is skipped entirely). The glob is a strict subset of `CANONICAL_REGEX`, so on that surface `matched == examined ≥ 1` always. | **The zero-match arm of the headline defect is unreachable from the only mechanical caller.** It is reachable from manual invocation, `repo-scan.sh`, the self-test and `gdpr-gate.test.ts`. Restate Phase 3's justification on the real surface, and add the glob-liveness guard, because a line emitted by the script cannot witness the script not running. |
+| (unstated) The lefthook hook runs on every commit | **False.** `lefthook.yml` gives `gdpr-gate-advisory` a 15-entry glob, and `{staged_files}` is pre-filtered to it (measured on lefthook 2.1.6: unmatched paths are dropped; with no matches the command is skipped entirely). The glob is a strict subset of `CANONICAL_REGEX`, so on that surface `matched == examined ≥ 1` always. | **The zero-match arm of the headline defect is unreachable from the only mechanical caller.** It is reachable from manual invocation, `repo-scan.sh`, the self-test and `gdpr-gate.test.ts`. Restate Phase 3's justification on the real surface, and add the glob-liveness guard, because a line emitted by the script cannot witness the script not running. |
 | "The rule corpus is 108 days stale" | The **attestation** is 117 days old. The rules are current: 8 SAME / 0 DRIFTED / 0 ERROR against live upstream, 2026-09-04. | Do not re-vendor. |
 | (unstated) The NOTICE record is complete | The frontmatter pins **5** of 8; `auth-sessions.md`, `frontend.md`, `testing-seeding.md` carry no pin. | Reconcile — and it is a hard prerequisite of the writer, not only of an attestation. |
 | (unstated) Those three files had *no* integrity guard | **False, inverted.** The lefthook glob routes any commit staging them into the "staged but not in NOTICE" branch, which rejects them outright. For 117 days they were guarded *more* strictly than the pinned five. | Phase 1 **relaxes** them to "SHA-divergent edit blocked". Never write it up as closing a hole that did not exist. |
-| (unstated) The undercount is in three places plus prose | **Two.** `compliance-posture.md:106` and `content-vendoring.md:128`. The NOTICE body prose already reads "lifts **eight** reference files", and the body table already carries all 8 rows. | Correct two sites. **This matters beyond bookkeeping:** the earlier draft mandated writing "the three corrected locations" into an Art. 5(2) record — a false claim, in the plan's own defect class, in the artifact whose value is that it contains none. |
+| (unstated) The undercount is in three places plus prose | **Two matching the plan's literals, and a third the literals miss.** `compliance-posture.md` and `content-vendoring.md` carry the two quoted forms; the NOTICE body prose already reads "lifts **eight** reference files" and its table already carries all 8 rows. But `ADR-026`'s C4 component block carries `5 lifted (MIT) + rewritten layers` — a differently-worded third site that neither acceptance-criterion grep would catch. | Correct two sites. **This matters beyond bookkeeping:** the earlier draft mandated writing "the three corrected locations" into an Art. 5(2) record — a false claim, in the plan's own defect class, in the artifact whose value is that it contains none. |
 | (unstated) `last-verified` is maintained | Never advanced by automation. `git log -S` returns one commit — `10670383f`, the one that introduced the field. Its writer was a `sed -i` in a workflow deleted in `5b2c1922d` (#4483); the Inngest replacement never reimplemented it, while still shipping a PR-body sentence claiming it does. | The root cause, and the reason any hand bump is a 90-day snooze. |
 | (unstated) The cron's comparison is correct | **Two defects.** (a) `if (!currentSha \|\| currentSha === oldSha) continue;` treats an unparseable response as SAME — a false-clean arm. (b) `aggDiffParts` is declared and never populated, so the classifier always sees an empty diff and returns `no-op`. | Both must be fixed *in this plan*, because the writer is founded on that comparison. |
 | (unstated) The cron has one `drift: "none"` exit | **Two.** The genuine one (`!driftDetected && !driftFlags`) and one at `classifyRc === 0` reached **after** drift was detected, precisely because of (b). | A writer keyed on `detectResult.drift` would advance a compliance attestation over a drifted corpus. This is the single highest-severity finding in review and it reverses an earlier scope-out. |
@@ -138,6 +138,11 @@ None. 63 open `code-review` issues; no body references any file in `## Files to 
 
 ## Architecture Decision (ADR/C4)
 
+This plan changes the semantics of a governed compliance-registry field and gives a cron write
+access to a compliance attestation. Both are architectural, so
+`wg-architecture-decision-is-a-plan-deliverable` makes the record a deliverable of this plan
+rather than a follow-up issue.
+
 ### The decision
 
 **Neither option the brief named.** The date-based threshold is the right instrument for the question
@@ -219,12 +224,17 @@ be committed without `--no-verify` — which blocks the documented v2→v3 lifec
 file, and have `vendor-pin-integrity.sh` check those SHAs exactly as it checks `lifted-files`, while
 never treating them as upstream-derived. This makes them editable through the normal
 update-the-pin flow, keeps a tamper check on the file the gate's own GDPR framing depends on, and
-keeps provenance truthful. Name `references/legacy/**` in that list too, or the Phase 2 reverse-parity
-assertion goes red at merge on a file this plan otherwise only mentions in passing.
+keeps provenance truthful. Name `references/legacy/**` in that list too, or the reverse-parity
+assertion added in this same phase goes red at merge on a file this plan otherwise only mentions in passing.
 
-Correct the undercount in its **two** sites — `compliance-posture.md` (``5 (gdpr-gate `references/`)``,
-backticks included) and `content-vendoring.md` (`active (5 lifted files)`). The NOTICE prose and body
-table are already right.
+Correct the undercount in all **three** sites — `compliance-posture.md` (``5 (gdpr-gate `references/`)``,
+backticks included), `content-vendoring.md` (`active (5 lifted files)`), and `ADR-026`'s C4 component
+block (`5 lifted (MIT) + rewritten layers`). The NOTICE prose and body table are already right.
+
+The third site is the one to notice: it is worded differently from the other two, so neither literal
+grep in the acceptance criteria finds it. A count that drifts in three artifacts and is only
+*searchable* in two is the same shape as the defect this plan repairs — so the criterion asserts the
+absence of the number in all three named files, not the absence of two quoted strings.
 
 Fix `lefthook.yml`'s comment claiming the glob covers the whole `references/` subtree; both patterns
 are single-level.
@@ -371,6 +381,7 @@ to `hr-gdpr-gate-on-regulated-data-surfaces` itself. Label `compliance/critical`
 - `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts` — three-state comparison; populate `aggDiffParts`; totals-gated write via `safeCommitAndPr` `mergeMode: "direct"`; conditional heartbeat; discriminating event; corrected PR-body sentence.
 - `knowledge-base/legal/compliance-posture.md` — provenance count 5→8; Active Items row; widened Status enum and scoping comment.
 - `knowledge-base/engineering/policies/content-vendoring.md` — §6a; §4 layer count; §8 repoint; §10 registry count.
+- `knowledge-base/engineering/architecture/decisions/ADR-026-pii-gate-as-plan-work-phase-skill-with-diff-hook.md` — the C4 component block's `5 lifted` count.
 - `plugins/soleur/skills/gdpr-gate/SKILL.md` — Sharp edges.
 - `lefthook.yml` — correct the subtree-coverage comment.
 - `plugins/soleur/test/vendor-pin-integrity.test.sh` — reverse parity assertion; `soleur-authored` cases.
@@ -540,9 +551,12 @@ discoverability_test:
 4. Staging a Soleur-authored reference file with a matching `soleur-authored` SHA succeeds; with a
    mismatched SHA it is rejected, and the message names the Soleur-authored list rather than "silent
    local addition".
-5. ``grep -c '5 (gdpr-gate `references/`)' knowledge-base/legal/compliance-posture.md`` returns 0 —
-   note the backticks; the un-backticked literal returns 0 on an unmodified tree and certifies
-   nothing. `grep -c 'active (5 lifted files)' …/content-vendoring.md` returns 0, from 1 today.
+5. The stale count is absent from all three artifacts: ``grep -c '5 (gdpr-gate `references/`)'
+   knowledge-base/legal/compliance-posture.md`` returns 0, `grep -c 'active (5 lifted files)'` on
+   `content-vendoring.md` returns 0 (from 1 today), and `grep -c '5 lifted'` on
+   `ADR-026-pii-gate-as-plan-work-phase-skill-with-diff-hook.md` returns 0 (from 1 today).
+   Note the backticks in the first pattern — the un-backticked literal returns 0 on an unmodified
+   tree and would certify nothing.
 6. The comparison returns `{filesExamined, filesSame, filesDrifted, filesError}`; a fixture whose
    upstream fetch fails scores `filesError`, not `filesSame`.
 7. `aggDiffParts` is populated; a fixture with real content drift no longer classifies `no-op`.
