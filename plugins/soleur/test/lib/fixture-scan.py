@@ -66,6 +66,23 @@ import sys
 
 SET_E = re.compile(r'^\s*set\s+-[a-zA-Z]*e')
 HEREDOC = re.compile(r'(?<!<)<<(?!<)-?\s*[\'"]?([A-Za-z_][A-Za-z0-9_]*)[\'"]?')
+def _outside_quotes(line, pos):
+    """True when `pos` lies outside every quoted span on this line."""
+    q = None
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if c == "\\" and q != "'":
+            i += 2
+            continue
+        if q is None and c in "\"'":
+            q = c
+        elif c == q:
+            q = None
+        if i == pos:
+            return q is None or (q == c)
+        i += 1
+    return True
 
 
 def heredoc_lines(lines):
@@ -73,8 +90,21 @@ def heredoc_lines(lines):
 
     Suites here routinely EMBED fixture scripts in heredocs, including fixtures that deliberately
     spell the forbidden shape so a scanner can be proven non-vacuous. Those bodies are data, not
-    code that will run in this shell — treating them as code makes every such suite a false
+    code that will run in this shell -- treating them as code makes every such suite a false
     positive, starting with the scanners themselves.
+
+    The opener is accepted only when its `<<` lies OUTSIDE every quoted span. Searching the raw
+    line let a `<<` inside a string open a phantom heredoc whose terminator never appears, so the
+    rest of the file was skipped by BOTH rules -- measured, 1806 lines across 13 files, hiding 9
+    executable sites. `echo "BODY<<END"`, `sed -e '1{/^<<EOT$/d}'` and an awk program containing
+    `<<'NICEOF'` are all live examples.
+
+    Two repairs were tried and rejected, each measured:
+      * blanking quotes before the search destroys the real delimiter in `cat > "$f" <<'EOF'`
+        (+155/-12 rows, and P1a moves 9 -> 21);
+      * scanning ALL matches and taking the first unquoted one finds openers the single-match form
+        never considered, which HID 1864 further lines (one file went 0 -> 910 skipped, its whole
+        body). Only the first match is tested, exactly as before; a quoted one simply opens nothing.
     """
     inside, term, out = False, None, set()
     for i, l in enumerate(lines):
@@ -84,11 +114,9 @@ def heredoc_lines(lines):
                 inside, term = False, None
             continue
         m = HEREDOC.search(l)
-        if m and not l.lstrip().startswith("#"):
+        if m and not l.lstrip().startswith("#") and _outside_quotes(l, m.start()):
             inside, term = True, m.group(1)
     return out
-
-
 def scope_has_set_e(lines, idx):
     """`set -e` at file level, or inside the subshell enclosing `idx`."""
     for l in lines[:idx]:
@@ -231,7 +259,10 @@ BIND_READ_PROCSUB = re.compile(
 
 _DECL = r'(?:local\s+|declare\s+|typeset\s+|export\s+)?'
 _LEAD = r'(?:^|;|\s|\()'
-FUNC_HEAD = re.compile(r'^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{')
+# `f()` with the brace on the NEXT line, and `function f {` with no parens, are both valid bash.
+# Missing them let `_rel_guard_window` walk past the real head and return 0, restoring the
+# cross-function silencing the bound exists to stop.
+FUNC_HEAD = re.compile(r'^\s*(?:function\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:\(\))?|[A-Za-z_][A-Za-z0-9_]*\s*\(\))\s*\{?\s*$|^\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\)\s*\{')
 
 
 def _bind_res(var):
@@ -548,6 +579,11 @@ def _function_bodies(lines, skip=None):
             if idx in skip:
                 return ""
             t = _strip_quoted(lines[idx])
+            # `${PWD#$HOME/}`, `${#PATH}` and `${1##*/}` all carry a `#` that is NOT a comment.
+            # Splitting on it truncated the line, dropped its closing brace, and ran the function
+            # body to EOF -- the same failure this masking exists to prevent. Measured: 80 of 930
+            # files had a body mis-measured, and functions computed to reach EOF fell 91 -> 15.
+            t = re.sub(r'\$\{[^{}]*\}', ' ', t)
             return t.split("#", 1)[0]
 
         depth = _code(i).count('{') - _code(i).count('}')
@@ -630,6 +666,19 @@ def _classify_value(val):
         return "derived"
     if val.startswith("/"):
         return "absolute-literal"
+    # `${TMPDIR:-/abs}` and friends: a parameter expansion whose DEFAULT is an absolute literal.
+    # Cleared on exactly the grounds bare `mktemp -d` is already cleared -- this corpus has zero
+    # relative TMPDIR literals, established with a positive control -- and it is strictly safer
+    # than the form already cleared, because it also carries an absolute fallback. Reporting it
+    # while clearing `mktemp -d` was self-inconsistent: 57 rows.
+    #
+    # NOT extended to `${VAR:-/abs}` for an arbitrary VAR, which is unsound: VAR may be relative.
+    # NOT extended to `$(cd X && pwd)` either, though `pwd` always prints an absolute path. When
+    # the `cd` FAILS the `&&` short-circuits and the substitution is EMPTY, so `"$X/sub"` becomes
+    # `/sub` -- the ROOT-ANCHORED family this rule also covers. #7709 made and then retracted the
+    # claim that this idiom is provably non-empty; the retraction stands.
+    if re.match(r'^\$\{TMPDIR:?-/[^}]*\}$', val):
+        return "absolute-literal"
     if _REL_CALL.match(val):
         return "call"
     if val.startswith("$("):
@@ -684,7 +733,7 @@ def _wrapper_root(fname, funcs, depth):
         # The mktemp output must actually REACH STDOUT. `>/dev/null` was already rejected;
         # `d=$(mktemp -d)` is the same discard with different syntax and left the function
         # emitting nothing, so the caller bound "" and the site became `rm -rf "/objects"`.
-        if re.search(r'>\s*/dev/null|>\s*"?\$', seg):
+        if re.search(r'>\s*/dev/null|>\s*"?\$|\d>&\d|>\s*\S', seg):
             return None
         if re.search(r'(?:^|;|\s)' + _DECL + r'[A-Za-z_][A-Za-z0-9_]*=\$\(\s*mktemp', raw):
             return None
@@ -791,42 +840,68 @@ def _rel_guard_window(lines, use_idx):
         if FUNC_HEAD.match(lines[k]):
             return k
     return 0
+def _use_col(seg, name):
+    """Column of the first `"$name"` read on this line, or a large number when absent."""
+    m = re.search(r'"\$\{?' + re.escape(name) + r'\}?', seg)
+    return m.start() if m else 10 ** 6
+
+
 def _rel_guarded(lines, use_idx, var, endvar, skip):
     """Is this operand covered by a guard that REFUSES a relative path?
 
-    Only `assert_fixture_dir` is recognised. Two other forms were tried and REMOVED, each because
-    it could be silenced in ways no pattern list closes:
+    Only `assert_fixture_dir` is recognised, and only as an executed STATEMENT whose failure can
+    reach the script. Two other forms were tried and REMOVED, each because it could be silenced in
+    ways no pattern list closes:
 
       * an inline `case` with a `/*` accept arm and an aborting default. Defeated four ways, every
         one verified against real bash: an extra `fixtures/*)` allow-arm (and an allowlist arm is
-        exactly WHY someone writes an inline case rather than calling the helper); `exit` appearing
-        inside a double-quoted message on the default arm; a catch-all `*)` placed BEFORE `/*)`;
-        and a sound validator whose return code the caller ignores. Recognising it correctly needs
-        arm-order and quoting analysis -- a shell parser approximated in a regex.
+        exactly WHY someone writes an inline case rather than calling the helper); `exit` inside a
+        double-quoted message on the default arm; a catch-all `*)` placed BEFORE `/*)`; and a sound
+        validator whose return code the caller ignores.
       * admitting a top-level guard on a global that is "not rebound" in the function. Defeated by
         every assignment form a textual test cannot see -- `read`, `for`, `printf -v`, `+=`,
-        `(( ))`, `mapfile` -- and then, after that was narrowed to a read-only test, by a HELPER
-        CALL that mutates the global and by `eval "VAR=..."`, which quote-stripping erases before
-        the check runs. Neither is a spelling; both are the limit of reading one function's text.
+        `(( ))`, `mapfile` -- and then, after narrowing to a read-only test, by a HELPER CALL that
+        mutates the global and by `eval "VAR=..."`. Neither is a spelling; both are the limit of
+        reading one function's text.
 
     `assert_fixture_dir` is recognised because it is a real function with a testable contract: its
     `case` refuses the empty string, `..` components, synthetic-fs paths and the filesystem root,
-    accepts `/*`, and refuses everything else as RELATIVE. The sibling P1a suite asserts that every
-    tracked copy of it is byte-identical, so that contract cannot drift silently.
+    accepts `/*`, and refuses everything else as RELATIVE. The P1a suite asserts every tracked copy
+    is byte-identical, so the contract cannot drift silently.
 
-    The cost is false positives: a genuine inline guard no longer clears its rows, and they are
-    acknowledged in the baseline instead. That is the trade this repo already made once, when
-    #7709 reverted its brace-group widening -- a widening that silences a genuinely unguarded site
-    is strictly worse than the false positives it removes.
+    THE CALL MUST BE A STATEMENT. "A validator whose return code the caller ignores" is one of the
+    four reasons the inline `case` was deleted, and it applies verbatim to the form that was kept.
+    Measured against real bash, the guard's `exit 2` does NOT reach the script in any of these, so
+    none of them may clear a site:
+
+        msg=$(assert_fixture_dir "$d")      exit kills the subshell only        (rc=2, continues)
+        assert_fixture_dir "$d" | tee log   left of a pipe is a subshell        (rc=0!)
+        ( assert_fixture_dir "$d" )         explicit subshell                   (rc=2, continues)
+
+    And it must be CODE, not a mention: a trailing comment or double-quoted prose naming the
+    function is not a guard. `_strip_squotes` covers single quotes; a statement-position test is
+    what covers the rest, including `rm -rf "$d"; assert_fixture_dir "$d"`, where the guard runs
+    AFTER the write it is credited with protecting.
     """
     names = [n for n in (var, endvar) if n]
     lo = _rel_guard_window(lines, use_idx)
     for k in range(lo, use_idx + 1):
         if k in skip or lines[k].lstrip().startswith("#"):
             continue
-        seg = _strip_squotes(lines[k])
+        seg = _strip_squotes(lines[k]).split("#", 1)[0]
         for n in names:
-            if re.search(r'assert_fixture_dir\s+"?\$\{?' + re.escape(n) + r'\}?"?', seg):
+            pat = r'assert_fixture_dir\s+"?\$\{?' + re.escape(n) + r'\}?"?'
+            for m in re.finditer(pat, seg):
+                head = seg[:m.start()]
+                # a statement boundary, and not inside a command substitution or a subshell
+                if not re.search(r'(?:^|;|&&|\|\||\{|\bthen\b|\bdo\b|\belse\b)\s*$', head):
+                    continue
+                if head.count("$(") > head.count(")") or head.count("(") > head.count(")"):
+                    continue
+                if re.match(r'\s*\|[^|]', seg[m.end():]):
+                    continue
+                if k == use_idx and m.start() > _use_col(seg, n):
+                    continue          # the guard runs AFTER the write on this line
                 return True
     return False
 # A root that cannot be relative and cannot be empty. Everything else is a candidate.

@@ -16,21 +16,24 @@
 #   * a scanner that stops looking reports SITES=0, which a shrink-only ratchet reads as progress,
 #     so the live count is pinned by EQUALITY to the baseline sum, not by `<=`.
 # MUTATION MATRIX (Guard 1, #7708) -- executed in place against a pristine backup, with a GREEN
-# unmutated control required first. Re-run in full after each review round. Observed:
-#   control  unmutated                                            GREEN  46/46
+# unmutated control required first. Re-run in full after each of three review rounds. Observed:
+#   control  unmutated                                            GREEN  62/62
 #   R1       delete a verb family from the P1b assembly           RED
 #   R3       rule function returns no rows at all                 RED
 #   R5       narrow the corpus glob *.sh -> *.test.sh             RED    (FILES floor)
-#   R7       re-widen the guard set with an emptiness-only form   RED    (section C2)
-#   R8       unbound the guard window back to line 0              RED    (section C3)
-#   R9       re-classify `-t` as a destination flag               RED    (the 783-row FP flood)
-#   R10      widen _ROOT_SAFE with call-unresolved                RED    (section C9)
+#   R8       unbound the guard window back to line 0              RED    (C3, C5)
+#   R9       re-classify `-t` as a destination flag               RED    (C8, +858 rows)
+#   R10      widen _ROOT_SAFE with call-unresolved                RED    (C9)
+#   R11      drop the guard's statement-position test             RED    (C10)
+#   R12      revert the quoted-heredoc-operator repair            RED    rc=2 (C12)
 #   H1       neuter the failure counter                           RED    rc=2, ledger reconciliation
-#   H4       point arm A at the baseline instead of live data     RED    (the independent-totals arm)
+#   H5       point LIVE_ROWS at the baseline instead of live      RED    (independent totals arm)
 #
-# H4 is the row that matters most: before the round-2 corrections it survived GREEN at 32/32.
-# Section B proved `compare_rows` WORKS; nothing proved arm A calls it with LIVE data, so one
-# argument swap turned the ratchet off while every arm stayed green.
+# H5 is the row that matters. Round 2 added a totals arm to close H4 -- the same edit one line
+# lower -- but derived BOTH its operands from $LIVE_ROWS, the variable arm A already consumes, so
+# moving the edit up one line satisfied both arms at once and the ratchet went off at 46/46 GREEN.
+# The arm now reads the scanner's own SITES= line and the raw hit lines in $SCAN_OUT, neither of
+# which flows through $LIVE_ROWS.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,11 +68,17 @@ if [[ "${1:-}" == "--write-baseline" ]]; then
   if [[ -z "$_wf" || "$_wf" -lt 900 || "$_wr" -lt 1 ]]; then
     echo "FATAL: scan looks wrong (FILES=${_wf:-unset}, rows=$_wr); baseline NOT rewritten" >&2; exit 2
   fi
-  { cat "$hdr"
-    python3 "$SCANNER" --rule relative --repo "$REPO_ROOT" 2>/dev/null \
-      | grep 'operand not provably absolute' \
-      | sed -E 's/^([^:]+):.*/\1/' | sort | uniq -c | awk '{printf "%s\t%s\n", $1, $2}' | sort -k2
-  } > "$BASELINE"
+  # Write from $_wb -- the bytes the floor above already validated. Running the scanner a SECOND
+  # time here meant the floor checked one run and the file was written from another: with a
+  # scanner that succeeded once and failed on the second call, the baseline went 341 lines -> 86
+  # (header only), rc=0, "baseline rewritten". That is the exact regression this floor was added
+  # to prevent, reachable through the recovery path arm A's own failure message recommends.
+  if ! { cat "$hdr"
+         grep 'operand not provably absolute' "$_wb" \
+           | sed -E 's/^([^:]+):.*/\1/' | sort | uniq -c | awk '{printf "%s\t%s\n", $1, $2}' | sort -k2
+       } > "$BASELINE"; then
+    echo "FATAL: could not write $BASELINE" >&2; exit 2
+  fi
   rm -f "$hdr"
   echo "baseline rewritten: $BASELINE"
   exit 0
@@ -96,13 +105,21 @@ _RMRF="rm -rf"
 scan_sites() {
   local _o _rc
   _o=$(python3 "$SCANNER" --rule relative "$@" 2>"$TMP_ROOT/scan.err"); _rc=$?
-  local _n; _n=$(printf '%s\n' "$_o" | sed -n 's/^SITES=//p')
-  if [[ "$_rc" -ne 0 || -z "$_n" ]]; then
-    echo "FATAL: scanner did not report SITES for $* (rc=$_rc)" >&2
-    sed 's/^/       /' "$TMP_ROOT/scan.err" >&2
+  local _n; _n=$(printf '%s\n' "$_o" | sed -n 's/^SITES=//p' | head -1)
+  if [[ "$_rc" -ne 0 || -z "$_n" ]]; then printf 'SCANFAIL\n'; return 0; fi
+  printf '%s\n' "$_n"
+}
+
+# `exit` inside `$( )` kills only the SUBSHELL -- measured: the suite ran every remaining arm and
+# reported 9 passed / 37 failed with messages like "was MISSED" and "guard set widened unsoundly",
+# which are confident claims about code that never ran. The sentinel is therefore checked HERE, in
+# the main shell, where exiting actually works.
+_sf() {
+  if [[ "$1" == SCANFAIL ]]; then
+    echo "FATAL: the scanner did not report SITES for $2 -- this is a SCANNER failure, not a rule verdict" >&2
+    sed 's/^/       /' "$TMP_ROOT/scan.err" >&2 2>/dev/null || true
     exit 2
   fi
-  printf '%s\n' "$_n"
 }
 
 # --- A. The live corpus against the shrink-only baseline ------------------------------------------
@@ -175,13 +192,18 @@ fi
 # Independent of compare_rows entirely. Section B proves the FUNCTION works; it did not prove arm
 # A calls it with LIVE data, and swapping arm A's argument to baseline_rows left the ratchet off at
 # 32/32 green. These two totals come from different pipelines and must agree.
-ck; _live_sum=$(printf '%s\n' "$LIVE_ROWS" | awk -F'\t' '{s+=$1} END {print s+0}')
-_live_rows=$(printf '%s\n' "$LIVE_ROWS" | sed '/^$/d' | wc -l | tr -d ' ')
+# Round 2 added a "totals" arm here that derived BOTH operands from $LIVE_ROWS -- the same
+# variable arm A consumes -- so `LIVE_ROWS=$(baseline_rows)` satisfied arm A and this arm at once
+# and the ratchet went off at 46/46 green. That pinned H4's SPELLING one line below where the class
+# lives. These operands come off the scanner's own SITES=/FILES= lines and the raw hit lines in
+# $SCAN_OUT, none of which flow through $LIVE_ROWS.
+ck; _scan_rows=$(grep -c 'operand not provably absolute' "$SCAN_OUT")
+_scan_files=$(grep 'operand not provably absolute' "$SCAN_OUT" | sed -E 's/^([^:]+):.*/\1/' | sort -u | wc -l | tr -d ' ')
 _base_rows=$(baseline_rows | wc -l | tr -d ' ')
-if [[ "$_live_sum" != "$ACK_TOTAL" || "$_live_rows" != "$_base_rows" ]]; then
-  fail "live totals disagree with the baseline: sites $_live_sum vs $ACK_TOTAL, rows $_live_rows vs $_base_rows"
+if [[ "$SITES_LIVE" != "$ACK_TOTAL" || "$_scan_rows" != "$ACK_TOTAL" || "$_scan_files" != "$_base_rows" ]]; then
+  fail "independent totals disagree: SITES=$SITES_LIVE, hit-lines=$_scan_rows, files=$_scan_files vs baseline $ACK_TOTAL over $_base_rows"
 else
-  pass "live site total and row count both equal the baseline ($ACK_TOTAL over $_base_rows rows)"
+  pass "scanner SITES, hit-line count and file count all equal the baseline ($ACK_TOTAL over $_base_rows)"
 fi
 
 ck; if compare_rows "$(baseline_rows)" >/dev/null 2>&1; then
@@ -201,7 +223,7 @@ setup() {
   git -C "$work" commit -m x
 }
 EOF
-ck; n=$(scan_sites "$C/rel_gitc.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C/rel_gitc.sh"); _sf "$n" "$C/rel_gitc.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "git -C with a positional-rooted operand is reported" \
   || fail "git -C with a positional-rooted operand was MISSED (SITES=${n:-unset})"
 
@@ -211,7 +233,7 @@ cleanup() {
   rm -rf "$base/scratch"
 }
 EOF
-ck; n=$(scan_sites "$C/rel_rm.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C/rel_rm.sh"); _sf "$n" "$C/rel_rm.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "rm -rf with a positional-rooted operand is reported" \
   || fail "rm -rf with a positional-rooted operand was MISSED (SITES=${n:-unset})"
 
@@ -221,7 +243,7 @@ emit() {
   echo hello > "$out/log.txt"
 }
 EOF
-ck; n=$(scan_sites "$C/rel_redir.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C/rel_redir.sh"); _sf "$n" "$C/rel_redir.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "redirection into a positional-rooted target is reported" \
   || fail "redirection into a positional-rooted target was MISSED (SITES=${n:-unset})"
 
@@ -231,7 +253,7 @@ stage() {
   mv payload "$dest/payload"
 }
 EOF
-ck; n=$(scan_sites "$C/rel_mv.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C/rel_mv.sh"); _sf "$n" "$C/rel_mv.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "mv into a positional-rooted destination is reported" \
   || fail "mv into a positional-rooted destination was MISSED (SITES=${n:-unset})"
 
@@ -264,7 +286,7 @@ setup() {
   rm -rf "$d"
 }
 EOF
-ck; n=$(scan_sites "$C2/sound_assert.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$C2/sound_assert.sh"); _sf "$n" "$C2/sound_assert.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "assert_fixture_dir (which refuses relative) still clears" \
   || fail "a SOUND guard no longer clears (SITES=${n:-unset}) -- the set is now reject-everything"
 
@@ -282,7 +304,7 @@ EOF
 # The inline `case` form was REMOVED from the recognised set: it was defeated four ways (an extra
 # allow-arm, `exit` inside a double-quoted message, a catch-all before `/*)`, and an ignored return
 # code). It must now REPORT, or the removal did not take.
-ck; n=$(scan_sites "$C2/sound_case.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C2/sound_case.sh"); _sf "$n" "$C2/sound_case.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "an inline case guard is NOT recognised (removed: silenceable four ways)" \
   || fail "an inline case still clears a site (SITES=${n:-unset}) -- the heuristic is back"
 
@@ -299,7 +321,7 @@ setup() {
   rm -rf "$d"
 }
 EOF
-ck; n=$(scan_sites "$C3/other_function.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C3/other_function.sh"); _sf "$n" "$C3/other_function.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a guard in a DIFFERENT function does not clear this site" \
   || fail "cross-function silencing (SITES=${n:-unset}) -- the window is unbounded again"
 
@@ -312,7 +334,7 @@ setup() {
   rm -rf "$d"
 }
 EOF
-ck; n=$(scan_sites "$C3/quoted_token.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C3/quoted_token.sh"); _sf "$n" "$C3/quoted_token.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "the assertion NAME inside a quoted string does not clear a site" \
   || fail "name-token silencing (SITES=${n:-unset}) -- the cdx() gap this scanner replaces"
 
@@ -326,7 +348,7 @@ cleanup() {
   rm -rf "$SCRATCH_ROOT/x"
 }
 EOF
-ck; n=$(scan_sites "$C4/never_bound.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C4/never_bound.sh"); _sf "$n" "$C4/never_bound.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a never-bound global is reported" \
   || fail "never-bound global was cleared (SITES=${n:-unset})"
 
@@ -336,7 +358,7 @@ reset() {
   WORK=$(mktemp -d)
 }
 EOF
-ck; n=$(scan_sites "$C4/use_precedes_binding.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C4/use_precedes_binding.sh"); _sf "$n" "$C4/use_precedes_binding.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a use that PRECEDES its binding is reported" \
   || fail "use-before-binding was cleared by a later rebind (SITES=${n:-unset})"
 
@@ -354,7 +376,7 @@ purge() {
   rm -rf "$ROOT/objects"
 }
 EOF
-ck; n=$(scan_sites "$C5/helper_mutates.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C5/helper_mutates.sh"); _sf "$n" "$C5/helper_mutates.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a helper that mutates the global does not inherit the top-level guard" \
   || fail "helper-call mutation cleared by a stale top-level guard (SITES=${n:-unset})"
 
@@ -366,7 +388,7 @@ purge() {
   rm -rf "$ROOT/objects"
 }
 EOF
-ck; n=$(scan_sites "$C5/eval_rebind.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C5/eval_rebind.sh"); _sf "$n" "$C5/eval_rebind.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "an eval rebind does not inherit the top-level guard" \
   || fail "eval rebind cleared by a stale top-level guard (SITES=${n:-unset})"
 
@@ -381,7 +403,7 @@ run() {
   rm -rf "$d"
 }
 EOF
-ck; n=$(scan_sites "$C6/herestring.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C6/herestring.sh"); _sf "$n" "$C6/herestring.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a site AFTER a <<< herestring is still scanned" \
   || fail "a <<< herestring blanked the rest of the file (SITES=${n:-unset})"
 
@@ -392,7 +414,7 @@ run() {
 INNER
 }
 EOF
-ck; n=$(scan_sites "$C6/real_heredoc.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$C6/real_heredoc.sh"); _sf "$n" "$C6/real_heredoc.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "a real heredoc BODY is still skipped" \
   || fail "heredoc bodies are being scanned as code (SITES=${n:-unset})"
 
@@ -404,7 +426,7 @@ cat > "$C7/quoted_template.sh" <<'EOF'
 new_fx() { local base="$1"; mktemp -d "$base/fx.XXXXXX"; }
 run() { local d; d=$(new_fx "$2"); rm -rf "$d/x"; }
 EOF
-ck; n=$(scan_sites "$C7/quoted_template.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C7/quoted_template.sh"); _sf "$n" "$C7/quoted_template.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a QUOTED path-bearing template is not read as absolute" \
   || fail "quoted template read as absolute (SITES=${n:-unset}) -- the two code paths disagree again"
 
@@ -413,7 +435,7 @@ mk() { cd relroot || return 1; d=$(mktemp -d); }
 W=$(mk)
 rm -rf "$W/objects"
 EOF
-ck; n=$(scan_sites "$C7/last_is_assign.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C7/last_is_assign.sh"); _sf "$n" "$C7/last_is_assign.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a wrapper whose mktemp output never reaches stdout is not credited" \
   || fail "wrapper emitting nothing read as mktemp-rooted (SITES=${n:-unset})"
 
@@ -425,7 +447,7 @@ mk_rel() {
 mk_abs() { local t; t=$(mktemp -d); echo "$t"; }
 run() { local d; d=$(mk_rel); rm -rf "$d/x"; }
 EOF
-ck; n=$(scan_sites "$C7/comment_brace.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C7/comment_brace.sh"); _sf "$n" "$C7/comment_brace.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a brace inside a COMMENT does not run a function body to EOF" \
   || fail "comment brace extended the body and imported a later mktemp (SITES=${n:-unset})"
 
@@ -439,7 +461,7 @@ SH
 mk_abs() { local t; t=$(mktemp -d); echo "$t"; }
 run() { local d; d=$(mk_rel); rm -rf "$d/x"; }
 EOF
-ck; n=$(scan_sites "$C7/heredoc_brace.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C7/heredoc_brace.sh"); _sf "$n" "$C7/heredoc_brace.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a brace inside a HEREDOC body does not run a function body to EOF" \
   || fail "heredoc brace extended the body and imported a later mktemp (SITES=${n:-unset})"
 
@@ -452,14 +474,14 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 ROOT=$(mktemp -d -t legal.XXXXXXXX) || exit 2
 run() { d=$(mktemp -d "$ROOT/case-XXXXXXXX") || return 1; rm -rf "$d/x"; }
 EOF
-ck; n=$(scan_sites "$C8/three_hop.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$C8/three_hop.sh"); _sf "$n" "$C8/three_hop.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "an inheriting mktemp whose PREFIX resolves absolute is not reported" \
   || fail "false positive: resolvable three-hop root reported (SITES=${n:-unset})"
 
 cat > "$C8/redir_tok.sh" <<'EOF'
 run() { t=$(mktemp 2>/dev/null); : > "$t"; }
 EOF
-ck; n=$(scan_sites "$C8/redir_tok.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$C8/redir_tok.sh"); _sf "$n" "$C8/redir_tok.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "a redirection token is not mistaken for a template" \
   || fail "false positive: 2>/dev/null read as a template (SITES=${n:-unset})"
 
@@ -472,7 +494,7 @@ run() {
   rm -rf "$d"
 }
 EOF
-ck; n=$(scan_sites "$C8/apostrophe.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$C8/apostrophe.sh"); _sf "$n" "$C8/apostrophe.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "apostrophes in prose do not blank a real guard between them" \
   || fail "false positive: apostrophe pairing erased a guard (SITES=${n:-unset})"
 
@@ -487,7 +509,7 @@ run() {
   rm -rf "$d/x"
 }
 EOF
-ck; n=$(scan_sites "$C9/call_unresolved.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C9/call_unresolved.sh"); _sf "$n" "$C9/call_unresolved.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "an unresolvable wrapper call is reported" \
   || fail "call-unresolved was cleared (SITES=${n:-unset}) -- _ROOT_SAFE widened"
 
@@ -498,9 +520,126 @@ run() {
   rm -rf "$d/x"
 }
 EOF
-ck; n=$(scan_sites "$C9/other_cmdsubst.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$C9/other_cmdsubst.sh"); _sf "$n" "$C9/other_cmdsubst.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "an unrecognised command substitution root is reported" \
   || fail "other-cmdsubst was cleared (SITES=${n:-unset}) -- _ROOT_SAFE widened"
+
+# --- C10. A guard must be an EXECUTED STATEMENT, not a mention. Every row was measured against
+#          real bash: in the last three the guard's `exit 2` does not reach the script at all.
+echo "C10. the guard must be a statement whose failure reaches the script"
+CA="$TMP_ROOT/c10"; mkdir -p "$CA"
+_ASSERT_DEF='assert_fixture_dir() { case "${1-}" in /*) : ;; *) exit 2 ;; esac; }'
+_mention_case() {
+  printf '#!/usr/bin/env bash\n%s\nsetup() {\n  local d="$1/repo"\n  %s\n  %s "$d"\n}\n' \
+    "$_ASSERT_DEF" "$2" "$_RMRF" > "$CA/$1.sh"
+  ck; n=$(scan_sites "$CA/$1.sh"); _sf "$n" "$CA/$1.sh"
+  if [[ "${n:-0}" -ge 1 ]]; then pass "guard as $1 does not clear"
+  else fail "guard as $1 CLEARED a site (SITES=${n:-unset}) -- a mention is not a guard"; fi
+}
+_mention_case trailing_comment ': nothing   # assert_fixture_dir "$d" used to live here'
+_mention_case dquote_prose     'echo "TODO: assert_fixture_dir $d was deleted"'
+_mention_case cmdsubst         'msg=$(assert_fixture_dir "$d")'
+_mention_case pipeline         'assert_fixture_dir "$d" | tee -a /dev/null'
+_mention_case subshell         '( assert_fixture_dir "$d" )'
+
+# ...and a real statement must still clear, or the above is just reject-everything.
+printf '#!/usr/bin/env bash\n%s\nsetup() {\n  local d="$1/repo"\n  assert_fixture_dir "$d"\n  %s "$d"\n}\n' \
+  "$_ASSERT_DEF" "$_RMRF" > "$CA/real_statement.sh"
+ck; n=$(scan_sites "$CA/real_statement.sh"); _sf "$n" "$CA/real_statement.sh"
+[[ "${n:-1}" -eq 0 ]] && pass "an executed assert_fixture_dir statement still clears" \
+  || fail "a REAL guard no longer clears (SITES=${n:-unset}) -- now reject-everything"
+
+# The guard must precede the write it is credited with.
+printf '#!/usr/bin/env bash\n%s\nsetup() {\n  local d="$1/repo"\n  %s "$d"; assert_fixture_dir "$d"\n}\n' \
+  "$_ASSERT_DEF" "$_RMRF" > "$CA/after_use.sh"
+ck; n=$(scan_sites "$CA/after_use.sh"); _sf "$n" "$CA/after_use.sh"
+[[ "${n:-0}" -ge 1 ]] && pass "a guard AFTER the write on the same line does not clear" \
+  || fail "guard-after-use cleared the write it follows (SITES=${n:-unset})"
+
+# --- C11. FUNC_HEAD must recognise every definition form, or the window bound walks past the real
+#          head and reopens cross-function silencing.
+echo "C11. function-head forms"
+CB="$TMP_ROOT/c11"; mkdir -p "$CB"
+printf '#!/usr/bin/env bash\n%s\nsafe()\n{\n  local d="$1"\n  assert_fixture_dir "$d"\n}\ndanger()\n{\n  local d="$1/repo"\n  %s "$d"\n}\n' "$_ASSERT_DEF" "$_RMRF" > "$CB/brace_next_line.sh"
+ck; n=$(scan_sites "$CB/brace_next_line.sh"); _sf "$n" "$CB/brace_next_line.sh"
+[[ "${n:-0}" -ge 1 ]] && pass "f() with the brace on the NEXT line is a function head" \
+  || fail "brace-next-line head unmatched (SITES=${n:-unset}) -- cross-function silencing is back"
+printf '#!/usr/bin/env bash\n%s\nfunction safe {\n  local d="$1"\n  assert_fixture_dir "$d"\n}\nfunction danger {\n  local d="$1/repo"\n  %s "$d"\n}\n' "$_ASSERT_DEF" "$_RMRF" > "$CB/function_kw.sh"
+ck; n=$(scan_sites "$CB/function_kw.sh"); _sf "$n" "$CB/function_kw.sh"
+[[ "${n:-0}" -ge 1 ]] && pass 'function-keyword form is a function head' \
+  || fail "function-keyword head unmatched (SITES=${n:-unset})"
+
+# --- C12. Heredoc detection. Both repairs are in the direction that UNHIDES code; the control
+#          proves a real heredoc body is still data.
+echo "C12. heredoc openers"
+CC="$TMP_ROOT/c12"; mkdir -p "$CC"
+cat > "$CC/quoted_operator.sh" <<'EOF'
+run() {
+  echo "BODY<<END"
+  local d="$1/repo"
+  rm -rf "$d"
+}
+EOF
+ck; n=$(scan_sites "$CC/quoted_operator.sh"); _sf "$n" "$CC/quoted_operator.sh"
+[[ "${n:-0}" -ge 1 ]] && pass "a << inside a quoted string does not open a heredoc" \
+  || fail "quoted << opened a phantom heredoc and hid the rest of the file (SITES=${n:-unset})"
+
+cat > "$CC/real_quoted_delim.sh" <<'OUTER'
+run() {
+  cat > "$1/f" <<'EOF'
+  rm -rf "$1/repo"
+EOF
+}
+OUTER
+ck; n=$(scan_sites "$CC/real_quoted_delim.sh"); _sf "$n" "$CC/real_quoted_delim.sh"
+[[ "${n:-1}" -eq 0 ]] && pass "a real heredoc with a QUOTED delimiter is still body, not code" \
+  || fail "quote-blanking broke real delimiter detection (SITES=${n:-unset})"
+
+# --- C13. Remaining round-3 repairs.
+echo "C13. wrapper stdout spellings, parameter expansion, TMPDIR default"
+CD="$TMP_ROOT/c13"; mkdir -p "$CD"
+cat > "$CD/redir_fd.sh" <<'EOF'
+mk() { mktemp -d 1>&2; }
+W=$(mk)
+rm -rf "$W/x"
+EOF
+ck; n=$(scan_sites "$CD/redir_fd.sh"); _sf "$n" "$CD/redir_fd.sh"
+[[ "${n:-0}" -ge 1 ]] && pass "mktemp with stdout redirected to fd 2 is not credited" \
+  || fail "1>&2 read as reaching stdout (SITES=${n:-unset})"
+
+cat > "$CD/param_expansion.sh" <<'EOF'
+mk_rel() {
+  rel=${PWD#$HOME/}
+  printf %s relroot
+}
+mk_abs() { local t; t=$(mktemp -d); echo "$t"; }
+run() { local d; d=$(mk_rel); rm -rf "$d/x"; }
+EOF
+ck; n=$(scan_sites "$CD/param_expansion.sh"); _sf "$n" "$CD/param_expansion.sh"
+[[ "${n:-0}" -ge 1 ]] && pass "a # inside \${VAR#pat} does not truncate a function body" \
+  || fail "parameter expansion read as a comment, body ran to EOF (SITES=${n:-unset})"
+
+cat > "$CD/tmpdir_default.sh" <<'EOF'
+run() { R="${TMPDIR:-/var/tmp}"; rm -rf "$R/x"; }
+EOF
+ck; n=$(scan_sites "$CD/tmpdir_default.sh"); _sf "$n" "$CD/tmpdir_default.sh"
+[[ "${n:-1}" -eq 0 ]] && pass "\${TMPDIR:-/abs} is cleared (same grounds as bare mktemp -d)" \
+  || fail "false positive on \${TMPDIR:-/abs} (SITES=${n:-unset})"
+
+cat > "$CD/othervar_default.sh" <<'EOF'
+run() { R="${SOMEVAR:-/abs}"; rm -rf "$R/x"; }
+EOF
+ck; n=$(scan_sites "$CD/othervar_default.sh"); _sf "$n" "$CD/othervar_default.sh"
+[[ "${n:-0}" -ge 1 ]] && pass "\${VAR:-/abs} for an arbitrary VAR is NOT cleared" \
+  || fail "the TMPDIR clear leaked to arbitrary variables (SITES=${n:-unset})"
+
+cat > "$CD/cd_pwd.sh" <<'EOF'
+D=$(cd "$(dirname "$0")" && pwd)
+run() { rm -rf "$D/x"; }
+EOF
+ck; n=$(scan_sites "$CD/cd_pwd.sh"); _sf "$n" "$CD/cd_pwd.sh"
+[[ "${n:-0}" -ge 1 ]] && pass "\$(cd X && pwd) stays reported (absolute OR EMPTY -> root-anchored)" \
+  || fail "\$(cd X && pwd) cleared (SITES=${n:-unset}) -- #7709 retracted that claim"
 
 # --- D. Must-PASS fixtures. Each would be a false positive, and each is a way the rule could
 #        become noise-that-nobody-reads rather than a guard. -----------------------------------------
@@ -515,7 +654,7 @@ run() {
   git -C "$d" commit -m x
 }
 EOF
-ck; n=$(scan_sites "$D/mktemp_bare.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$D/mktemp_bare.sh"); _sf "$n" "$D/mktemp_bare.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "a bare mktemp -d root is not reported" \
   || fail "false positive on a bare mktemp -d root (SITES=${n:-unset})"
 
@@ -526,7 +665,7 @@ run() {
   rm -rf "$R/scratch"
 }
 EOF
-ck; n=$(scan_sites "$D/wrapper_oneline.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$D/wrapper_oneline.sh"); _sf "$n" "$D/wrapper_oneline.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "a ONE-LINE mktemp wrapper resolves (the range(hi,lo,-1) regression)" \
   || fail "one-line wrapper not resolved (SITES=${n:-unset}) -- the empty-range bug is back"
 
@@ -541,7 +680,7 @@ run() {
   rm -rf "$root/scratch"
 }
 EOF
-ck; n=$(scan_sites "$D/guarded_positional.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$D/guarded_positional.sh"); _sf "$n" "$D/guarded_positional.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "an assert_fixture_dir on the operand clears the site" \
   || fail "false positive despite an assertion on the operand (SITES=${n:-unset})"
 
@@ -551,7 +690,7 @@ emit() {
   echo "## summary" >> "$GITHUB_STEP_SUMMARY"
 }
 EOF
-ck; n=$(scan_sites "$D/ci_sink.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$D/ci_sink.sh"); _sf "$n" "$D/ci_sink.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "CI plumbing sinks are excluded by name" \
   || fail "false positive on CI plumbing sinks (SITES=${n:-unset})"
 
@@ -562,7 +701,7 @@ run() {
   L="$T/log"; : > "$L"
 }
 EOF
-ck; n=$(scan_sites "$D/same_line_binding.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$D/same_line_binding.sh"); _sf "$n" "$D/same_line_binding.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "a binding on the SAME line as the use resolves" \
   || fail "same-line binding read as never-bound (SITES=${n:-unset}) -- false positive"
 
@@ -573,7 +712,7 @@ run() {
   X="$X/sub"; : > "$X"
 }
 EOF
-ck; n=$(scan_sites "$D/self_reference.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$D/self_reference.sh"); _sf "$n" "$D/self_reference.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a self-referential binding does not resolve to itself" \
   || fail "X=\"\$X/sub\" resolved to itself (SITES=${n:-unset}) -- the inclusive retry is too loose"
 
@@ -585,7 +724,7 @@ run() {
   echo x > "$d/out"
 }
 EOF
-ck; n=$(scan_sites "$D/noncanonical_pass.sh"); [[ "${n:-1}" -eq 0 ]] \
+ck; n=$(scan_sites "$D/noncanonical_pass.sh"); _sf "$n" "$D/noncanonical_pass.sh"; [[ "${n:-1}" -eq 0 ]] \
   && pass "non-canonical must-PASS: a mktemp-rooted binding stays quiet (the || return 1 is incidental)" \
   || fail "false positive on a permitted binding+guard combination (SITES=${n:-unset})"
 
@@ -602,7 +741,7 @@ run() {
   rm -rf "$D/scratch"
 }
 EOF
-ck; n=$(scan_sites "$E/template_inherits.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$E/template_inherits.sh"); _sf "$n" "$E/template_inherits.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "a path-bearing mktemp template is NOT treated as absolute" \
   || fail "mktemp -d \"\$root/c.XXXXXX\" read as absolute (SITES=${n:-unset}) -- inheritance bug is back"
 
@@ -613,7 +752,7 @@ run() {
   rm -rf "$D/scratch"
 }
 EOF
-ck; n=$(scan_sites "$E/mktemp_p_inherits.sh"); [[ "${n:-0}" -ge 1 ]] \
+ck; n=$(scan_sites "$E/mktemp_p_inherits.sh"); _sf "$n" "$E/mktemp_p_inherits.sh"; [[ "${n:-0}" -ge 1 ]] \
   && pass "mktemp -d -p \$root is NOT treated as absolute" \
   || fail "mktemp -p read as absolute (SITES=${n:-unset})"
 
@@ -662,7 +801,7 @@ if [[ $((passes + fails)) -ne "$asserted" ]]; then
   exit 2
 fi
 
-MIN_ASSERTIONS=46
+MIN_ASSERTIONS=62
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   echo "FATAL: only $asserted assertions executed, floor is $MIN_ASSERTIONS -- arms were removed" >&2
   exit 2

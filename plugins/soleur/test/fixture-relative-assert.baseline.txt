@@ -1,83 +1,85 @@
 # P1b baseline -- operands that are neither provably absolute nor guarded (#7708).
 #
 # ROW-BY-ROW EQUALITY. Every row must match: a fall reddens exactly like a rise, because a fall is
-# also how a detector that stopped looking presents itself. The
-# suite diffs every row, not the sum: enforcing only a total is direction-blind on the row axis,
-# and a compensating edit (one file 19 -> 0, another +19) passed it. Regenerate with
+# also how a detector that stopped looking presents itself. Regenerate deliberately, in the same
+# commit as the source edit that earned it:
 #   bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline
-# and only in the same commit as the source edits that earned the shrink.
 #
-# WHAT THIS IS NOT. These are NOT 1273 defects. P1b asks whether an operand can be RELATIVE, or be
+# WHAT THIS IS NOT. These are NOT 1225 defects. P1b asks whether an operand can be RELATIVE, or be
 # rooted at `/` by an empty parent. It does not assert any of these is reachable with such a value
 # today. The rows are the residue left AFTER the scanner resolved what it could: mktemp in every
-# form, one-line and multi-line same-file wrappers, and wrappers reached through a sourced helper
-# (399 source directives in the corpus, 158 carrying a literal path tail, 142 resolving to a
-# tracked file). What remains is dominated by roots the scanner cannot see through: never-bound
-# globals, positional parameters from a caller, and uses that textually PRECEDE their binding.
+# form, one-line and multi-line same-file wrappers, wrappers reached through a sourced helper (399
+# source directives, 158 carrying a literal path tail, 142 resolving to a tracked file), bindings on
+# the same line as the use, and an inheriting mktemp's prefix. What remains is dominated by roots
+# no single-file reading can resolve: caller parameters, never-bound globals, and uses that
+# textually PRECEDE their binding.
 #
 # EVERY FAMILY IS GRANDFATHERED, measured against the repo fix-inline threshold of 100 lines and
 # 4 files:
 #
 #   family      sites  files
 #   git -C         16      5
-#   rm -rf        198     46
-#   redirect      936    215
-#   mv / cp -r    123     71
+#   rm -rf        197     46
+#   redirect      891    215
+#   mv / cp -r    121     73
 #
-# An earlier revision of this change claimed the git -C family had been burned to 0 across 3 files
-# and remediated it inline. That claim was an artefact of an unsound detector, not a result: the
-# rule was clearing sites with guards that do not answer its question (see below). Under the
-# corrected rule the family is 39 sites over 12 files -- past the threshold like the other three --
-# so nothing is remediated inline here and the burn-down is tracked whole.
+# The `git -C` rows are the highest-value subset for burn-down: all 16 are in PRODUCTION scripts,
+# not tests -- pre-merge-rebase.sh (5), worktree-manager.sh (4), constraint-scaffold.sh (4),
+# ship-unpushed-commits-gate.sh (2), cla-signed-author-gate.sh (1). At 5 files it sits one file
+# over the inline threshold.
 #
-# WHAT A GUARD HAS TO PROVE. This rule asks about RELATIVITY, so only a predicate that REFUSES a
-# relative path counts. It previously reused P1a's EMPTINESS set unchanged, and four of those five
-# arms clear a relative site while proving nothing about it -- measured, each cleared
-# `local d="$1/repo"; rm -rf "$d"`:
+# WHAT A GUARD HAS TO PROVE. Only `assert_fixture_dir` is recognised, and only as an executed
+# STATEMENT. Everything else was tried and removed; see `_rel_guarded` for the four ways an inline
+# `case` was defeated and the six-plus ways a top-level-guard widening was. A guard that merely
+# APPEARS does not count: a trailing comment, double-quoted prose naming the function, a call whose
+# `exit` cannot reach the script (`$( )`, left of a pipe, an explicit subshell -- all three measured
+# against real bash), and a call that runs AFTER the write on the same line are each rejected.
+# Section C2 pins the five weak-guard spellings in the FAIL direction; C3 and C5 pin the window.
 #
-#   : "${d:?empty}"             refuses empty and unset; says nothing about relative
-#   [[ -n "$d" ]] || exit 1     the same predicate, spelled long
-#   case "$d" in *) : ;; esac   a catch-all that asserts nothing
-#   mkdir -p "$d" || exit 1     `mkdir -p relative/dir` SUCCEEDS, so the abort proves the OPPOSITE
+# THE COUNT HAS MOVED IN BOTH DIRECTIONS, and every move is a DETECTOR change, not a code change.
+# Isolated deltas below are measured by reverting ONE thing against the SHIPPED scanner, which is
+# the only order-independent way to state them:
 #
-# Two forms are recognised now: `assert_fixture_dir` (whose case has an explicit relative-refusing
-# arm) and an inline `case` carrying both a `/*` accept and an aborting default. Section C2 of the
-# suite pins all four weak spellings in the FAIL direction, so re-widening the set reddens there
-# and not only in a count arm whose message tells the reader to regenerate.
-#
-# THE COUNT HAS MOVED IN BOTH DIRECTIONS, and every move is a DETECTOR change, not a code change:
-#
-#   1089 ->  909   reading a binding on the SAME LINE as its use, which had been reported
-#                  never-bound while its root was plainly mktemp.
-#    909 ->  913   a sibling merge adding four sites in new files (+1 cutover-verify.sh,
-#                  +3 generate-apex-rollback-pr.sh).
+#   1089 ->  909   reading a binding on the SAME LINE as its use.
+#    909 ->  913   a sibling merge adding four sites in new files.
 #    913 -> 2071   review round 1: the guard set had been P1a's EMPTINESS set, reused to answer a
 #                  RELATIVITY question, and the guard window ran from line 0 with no function
-#                  bound, so an unrelated function -- or the assertion's NAME inside a quoted
-#                  string -- cleared sites. Plus three mktemp forms, `mv -f` binding the SOURCE, a
-#                  same-line rebind FOLLOWING its use, a wrapper fallback crediting any mktemp in
-#                  the body, and brace counting that read `{` inside a string.
-#   2071 -> 1273   review round 2, in both directions at once:
-#                    REMOVED two heuristics rather than patch them (see _rel_guarded) -- the inline
-#                    `case` guard, defeated four ways, and the top-level-guard widening, defeated
-#                    by a helper call that mutates the global and by `eval`. Neither is a spelling
-#                    a pattern list can close. This direction ADDS rows.
-#                    FIXED a 46% false-positive rate: `-t` is TMPDIR-based and identical to bare
-#                    `mktemp -d` (783 rows), an inheriting mktemp's PREFIX is now resolved instead
-#                    of treated as terminal (179 rows), `2>/dev/null` is no longer read as a
-#                    template, and apostrophes in prose no longer pair across a real guard.
-#                    Also: `<<<` is a herestring, not a heredoc -- reading it as one left 299 lines
-#                    across 6 files unscanned by BOTH rules.
+#                  bound. Plus three mktemp forms, `mv -f` binding the SOURCE, a same-line rebind
+#                  FOLLOWING its use, a wrapper fallback crediting any mktemp in the body, and
+#                  brace counting that read `{` inside a string.
+#   2071 -> 1273   review round 2: DELETED two heuristics rather than patch them (adds rows), and
+#                  fixed a large false-positive class (removes more).
+#   1273 -> 1225   review round 3: +9 from the heredoc repair below, then -57 from clearing
+#                  `${TMPDIR:-/abs}`.
+#
+#   isolated, against the shipped scanner:
+#     `-t` re-treated as a destination flag          +858 rows
+#     prefix recursion disabled                      +136 rows
+#     `${TMPDIR:-/abs}` no longer cleared             +57 rows
+#
+# `-t` is TMPDIR-based and IDENTICAL to bare `mktemp -d` (measured: /tmp/pre.RRbk, and TMPDIR=rd
+# sends both relative together). `${TMPDIR:-/abs}` is cleared on exactly the grounds bare
+# `mktemp -d` already is -- this corpus has zero relative TMPDIR literals, established with a
+# positive control -- and carries an absolute fallback besides. NOT extended to `${VAR:-/abs}` for
+# an arbitrary VAR, which is unsound, nor to `$(cd X && pwd)`: `pwd` always prints an absolute
+# path, but when the `cd` FAILS the `&&` short-circuits and the substitution is EMPTY, making
+# `"$X/sub"` into `/sub` -- the ROOT-ANCHORED family this rule also covers. #7709 made and then
+# retracted the claim that this idiom is provably non-empty; that retraction stands.
+#
+# HEREDOC DETECTION, twice repaired, both times in the direction that UNHIDES code:
+#   `<<<` is a herestring, not a heredoc opener.
+#   A `<<DELIM` inside a QUOTED STRING is not one either -- `echo "BODY<<END"`,
+#   `sed -e '1{/^<<EOT$/d}'` and an awk program containing `<<'NICEOF'` each opened a phantom
+#   heredoc whose terminator never appeared, so the rest of the file was skipped by BOTH rules.
+# Together these return 3804 lines across 31 files to scanning, versus origin/main, and revealed 9
+# executable sites. P1a is unmoved at 9 and its baseline is byte-identical. Two other repairs were
+# measured and REJECTED: blanking quotes before the search destroys the real delimiter in
+# `cat > "$f" <<'EOF'` (+155/-12, P1a 9 -> 21), and scanning ALL matches for the first unquoted one
+# HID 1864 further lines (one file went 0 -> 910 skipped, its whole body).
 #
 # A future change that SHRINKS this file deserves the scrutiny a growth would get. From the count
-# alone, a better resolver and a detector that stopped looking are indistinguishable -- and every
-# defect found in review so far has been in the shrinking direction.
-#
-# mktemp absoluteness is ENVIRONMENTAL, not lexical: `TMPDIR=reldir mktemp -d` returns
-# `reldir/tmp.XXXX`, measured on uutils coreutils 0.8.0. It is treated as absolute here only for a
-# call with no destination argument of its own, because this corpus has zero relative TMPDIR
-# literals and zero relative -p arguments -- established with a positive control proving the
-# pattern can match -- not because mktemp guarantees it.
+# alone, a better resolver and a detector that stopped looking are indistinguishable, and across
+# three review rounds every defect found in this rule has been in the shrinking direction.
 #
 # Excluded by NAME as CI plumbing rather than fixture dirs: $GITHUB_OUTPUT, $GITHUB_STEP_SUMMARY,
 # $GITHUB_ENV, $GITHUB_PATH. Their shape is identical to a fixture write and no chain analysis
@@ -109,6 +111,7 @@
 5	apps/web-platform/infra/git-data-remove.test.sh
 1	apps/web-platform/infra/git-data-rung2-rehearsal.test.sh
 9	apps/web-platform/infra/git-data-transport-wrapper.test.sh
+2	apps/web-platform/infra/git-data-userdata-budget.sh
 2	apps/web-platform/infra/git-lock-chardevice-sweep.sh
 6	apps/web-platform/infra/infra-config-apply.sh
 9	apps/web-platform/infra/infra-config-apply.test.sh
@@ -133,8 +136,10 @@
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
 2	apps/web-platform/infra/luks-monitor.test.sh
+1	apps/web-platform/infra/nic-wait-gate.test.sh
 1	apps/web-platform/infra/orphan-reaper.sh
 2	apps/web-platform/infra/registry-luks.test.sh
+1	apps/web-platform/infra/registry-userdata-budget.sh
 1	apps/web-platform/infra/registry-userdata-budget.test.sh
 1	apps/web-platform/infra/resource-monitor.sh
 10	apps/web-platform/infra/resource-monitor.test.sh
@@ -171,6 +176,7 @@
 1	.claude/hooks/cla-signed-author-gate.sh
 2	.claude/hooks/docs-cli-verification.test.sh
 2	.claude/hooks/follow-through-directive-gate.test.sh
+1	.claude/hooks/guardrails.test.sh
 1	.claude/hooks/hook-input-contract.test.sh
 1	.claude/hooks/incidents.test.sh
 1	.claude/hooks/lib/freeze-lock.sh
@@ -265,13 +271,12 @@
 1	scripts/generate-article-30-register.sh
 5	scripts/generate-kb-index.sh
 1	scripts/grok-fidelity-bootstrap.sh
-26	scripts/guard-vacuity-floor.test.sh
+6	scripts/guard-vacuity-floor.test.sh
 12	scripts/infra-config-red-alert.test.sh
 1	scripts/kb-staleness-metric.sh
 8	scripts/learning-retrieval-bench.sh
 1	scripts/lib/legal-base-ref.test.sh
 3	scripts/lib/repo-write-boundary.test.sh
-1	scripts/lib/supabase-logs-verdict.test.sh
 23	scripts/lint-agents-compound-sync.test.sh
 1	scripts/lint-agents-enforcement-tags.test.sh
 4	scripts/lint-diagnosis-claims.test.sh
@@ -288,9 +293,9 @@
 8	scripts/orphan-process-reaper-mutation.test.sh
 4	scripts/orphan-process-reaper.sh
 7	scripts/orphan-process-reaper.test.sh
-23	scripts/plugin-delivery-canary.sh
-50	scripts/plugin-delivery-canary.test.sh
-50	scripts/plugin-legacy-resolver-probe.test.sh
+7	scripts/plugin-delivery-canary.sh
+37	scripts/plugin-delivery-canary.test.sh
+49	scripts/plugin-legacy-resolver-probe.test.sh
 28	scripts/prod-version-drift-check.test.sh
 5	scripts/raise-tmp-tmpfs-ceiling.sh
 3	scripts/raise-tmp-tmpfs-ceiling.test.sh
@@ -314,13 +319,14 @@
 3	scripts/test-all-killed-classification.test.sh
 1	scripts/test-all.sh
 5	scripts/test-contention.test.sh
+4	scripts/test-content-publisher.sh
 6	scripts/tmpfs-guard.sh
 1	scripts/tmpfs-guard.test.sh
 1	scripts/update-ci-required-ruleset.sh
 1	scripts/upstream-report-scrub.sh
 1	scripts/weakness-miner.sh
 3	scripts/weekly-analytics.sh
-8	tests/commands/test-sync-producer-reachability.sh
+2	tests/commands/test-sync-producer-reachability.sh
 2	tests/commands/test-sync-rule-prune.sh
 2	tests/hooks/test_hook_emissions.sh
 3	tests/scripts/lib/gate-suite-harness.sh
