@@ -78,7 +78,7 @@ resource "doppler_secret" "rehearsal_betterstack_logs_token" {
   project    = doppler_config.rehearsal.project
   config     = doppler_config.rehearsal.name
   name       = "BETTERSTACK_LOGS_TOKEN"
-  value      = var.betterstack_logs_token
+  value      = var.git_data_betterstack_logs_token
   visibility = "masked"
 }
 
@@ -168,7 +168,7 @@ module "git_data_userdata" {
   # either. Adding this one to that allowlist would permit a rehearsal that shipped to a
   # DIFFERENT sink than production while still producing hash-valid evidence, which is the
   # one thing the allowlist exists to refuse.
-  betterstack_logs_token = var.betterstack_logs_token
+  betterstack_logs_token = var.git_data_betterstack_logs_token
 }
 
 # --- The host ----------------------------------------------------------------

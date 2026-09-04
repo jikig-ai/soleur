@@ -1247,9 +1247,16 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   // the `doppler_secret.git_data_ssh_host` proposal outright; it does not. It bites only
   // under the remedy "give the new secret a per-PR -target line", which is not the remedy
   // any of its five sibling secrets use — they sit in THIS set with no per-PR target at
-  // all. Sourcing the value from a static local (local.git_data_private_ip) instead of the
-  // computed NIC attribute removes the last edge that could reach the server. So the
-  // secret ships in #6982 as an exclusion + a birth -target, with no wedge.
+  // all. So the secret ships in #6982 as an exclusion + a birth -target, with no wedge.
+  //
+  // (#7772) THE SENTENCE THAT STOOD HERE described the rejected design. It said the value is
+  // sourced "from a static local (local.git_data_private_ip) instead of the computed NIC
+  // attribute", which "removes the last edge that could reach the server". DC-3 mandated the
+  // opposite and DC-5 was reversed before merge: git-data.tf reads
+  // `hcloud_server_network.git_data.ip`. The no-wedge conclusion is unaffected and stands on
+  // the reason above it — this exclusion means no per-PR -target, so the computed edge is
+  // never in a per-merge plan closure. `local.git_data_private_ip` still exists and is still
+  // load-bearing, but for network.tf's own `ip =` assignment, not for this secret.
   "doppler_config.git_data_prd",
   // (#6982) Both ride the git-data-host-create dispatch, never the per-PR apply — same
   // class as every git-data sibling above.
@@ -3113,11 +3120,23 @@ const GIT_DATA_BIRTH_TARGET_BASES = [
   // about the config CONTAINING the key. Omit these and luksOpen fails — silently.
   "random_password.git_data_luks",
   "doppler_secret.git_data_luks_key",
-  // (#6982) SIBLING, dependency-free by design. Publishes GIT_DATA_SSH_HOST from a STATIC
-  // local, never from hcloud_server_network.git_data.ip — that is what makes it plannable
-  // with the host absent and keeps it clear of any upstream closure onto the server.
-  // ADR-149 cut it from #6977 believing the opposite; see its resource comment. Omit it and
-  // every account deletion files a FALSE Art. 17 erasure-failed event from birth onward.
+  // (#6982) SIBLING. Publishes GIT_DATA_SSH_HOST from `hcloud_server_network.git_data.ip` —
+  // the COMPUTED NIC attribute, which is what ADR-149's DC-3 mandates and what git-data.tf
+  // actually does (`value = hcloud_server_network.git_data.ip`).
+  //
+  // (#7772) THIS COMMENT SAID THE OPPOSITE and was corrected here. It claimed the value came
+  // from a STATIC local "never from hcloud_server_network.git_data.ip", and closed by saying
+  // ADR-149 "cut it from #6977 believing the opposite" — describing the position DC-3
+  // REVERSED before merge, in a birth-route artifact, about a birth-route resource. The
+  // reversal is safe precisely because this secret's only -target line IS the birth job,
+  // which already targets both hcloud_server.git_data and hcloud_server_network.git_data:
+  // the edge drags nothing new into any plan that exists, and there is no pre-birth window to
+  // protect because the secret is created BY the dispatch. The mandated form is also strictly
+  // stronger — a birth that landed the server but not the NIC can no longer publish an
+  // address nothing answers on.
+  //
+  // Omit it and every account deletion files a FALSE Art. 17 erasure-failed event from birth
+  // onward. That part was always true and is unchanged.
   "doppler_secret.git_data_ssh_host",
   // (#6982) SIBLING. The Better Stack ingest token in prd_git_data, read by the
   // post-Doppler emits (boot-completion, gc faults). Omit it and the queryable copy of the

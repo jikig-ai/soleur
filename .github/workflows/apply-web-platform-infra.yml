@@ -6025,6 +6025,12 @@ jobs:
             # no annotation, instead of retrying. The empty-result path is rc=0, so the common
             # path polled fine and hid this. `rc=$?` must be the first command after the
             # assignment; `set -e` is re-armed immediately after the read.
+            # (#7772) PIN THE TABLE. git-data ships to its OWN Better Stack source (2734275) since #7772, NOT the shared
+            # 2457081 that betterstack-query.sh defaults BS_TABLE to. Leaving the default does not
+            # error -- the shared table exists and answers, it just holds no rows from a host that
+            # stopped writing there -- so this reader would see zero rows on a PERFECT boot and
+            # report a dark host. On the one birth this host gets, that is a false failure.
+            export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
             set +e
             out=$(bash scripts/betterstack-query.sh "
               SELECT dt,
@@ -6033,7 +6039,8 @@ jobs:
                      JSONExtractString(raw,'luks_mounted') AS luks_mounted,
                      JSONExtractString(raw,'repo_root')    AS repo_root,
                      JSONExtractString(raw,'hooks_path')   AS hooks_path,
-                     JSONExtractString(raw,'provision')    AS provision
+                     JSONExtractString(raw,'provision')    AS provision,
+                     JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
               FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
                     UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
               WHERE dt > now() - INTERVAL 2 HOUR
@@ -6072,6 +6079,20 @@ jobs:
           # A boot_complete carrying a FALSE assertion is worse than none: the bootstrap
           # reached its final stage with an invariant unmet. Checked per NAMED FIELD — a bare
           # `grep -qE '\bno\b'` over the whole payload would match the word anywhere.
+          # (#7772) nft_metadata_drop is REPORTED here, NOT enforced -- and that split is the
+          # correction of a defect this PR briefly shipped. The first fix added it to this abort
+          # loop, which made an unarmed egress drop a FAILED BIRTH, and a failed birth routes the
+          # operator to "that host must be replaced, not completed". Two other artifacts in this
+          # same change say the opposite: cloud-init-git-data.yml ("an unarmed egress drop is a
+          # hardening regression, not a dark host, so it must not join the fatal stages that
+          # refuse a boot") and issue-alerts.tf, which exists as a SECOND rule precisely so this
+          # does not page. A transient `nftables` package-install failure -- which the template
+          # documents as non-fatal -- would otherwise destroy a healthy host holding every
+          # connected user's repositories.
+          #
+          # It is still the only MEASURED member (the other four are `yes` by construction), so it
+          # is the one that can report a real host fact, and it is armed BEFORE the bootstrap
+          # runcmd item so it reads a loaded chain rather than `no` for the host's life.
           for f in luks_mounted repo_root hooks_path provision; do
             if printf '%s' "$found" | grep -q "\"${f}\":\"no\""; then
               echo "::error::boot_complete arrived with ${f}=no — the host is up but an invariant is unmet. Treat as a failed birth."
@@ -6082,6 +6103,13 @@ jobs:
               exit 1
             fi
           done
+          # nft_metadata_drop: reported, never terminal. `::warning::` surfaces in the run summary
+          # and in the annotations API, so an agent can read it without a dashboard.
+          if printf '%s' "$found" | grep -q '"nft_metadata_drop":"no"'; then
+            echo "::warning::git-data booted with nft_metadata_drop=no — the metadata-endpoint egress drop did NOT arm. The host is healthy and the birth stands; the hardening control is absent. Check stage:gitdata_nftables_metadata_warn in Sentry for the arm-time cause, then re-arm via a host replace (user_data is ForceNew)."
+          elif ! printf '%s' "$found" | grep -q '"nft_metadata_drop":"yes"'; then
+            echo "::warning::boot_complete carried no nft_metadata_drop assertion — the emit contract and this reader have drifted. The birth stands; the hardening control's state is UNKNOWN, which is not the same as absent."
+          fi
           echo "boot signal received: git-data reported boot_complete with luks_mounted/repo_root/hooks_path/provision all positive."
 
       - name: Dispatch summary

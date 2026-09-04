@@ -82,31 +82,37 @@ variables {
   # Length-bearing, not "dummy": modules/git-data-userdata/variables.tf validates this is a
   # real ingest token, because an empty or stub value renders `BETTERSTACK_LOGS_TOKEN=` and
   # darkens eight of the nine git-data boot stages on a HASH-VALID boot (#7460).
-  betterstack_logs_token       = "stub-NOT-A-REAL-TOKEN-000000000000"
-  cf_access_client_id          = "0123456789012345678901234567890123456789.access"
-  cf_access_client_secret      = "0123456789012345678901234567890123456789012345678901234567890123"
-  cf_account_id                = "0123456789abcdef0123456789abcdef"
-  cf_api_token                 = "0123456789012345678901234567890123456789"
-  cf_api_token_bot_management  = "0123456789012345678901234567890123456789"
-  cf_api_token_dns_edit        = "0123456789012345678901234567890123456789"
-  cf_api_token_r2              = "0123456789012345678901234567890123456789"
-  cf_api_token_pages           = "0123456789012345678901234567890123456789"
-  cf_api_token_rulesets        = "0123456789012345678901234567890123456789"
-  cf_api_token_zone_settings   = "0123456789012345678901234567890123456789"
-  cf_notification_email        = "ops@example.com"
-  cf_zone_id                   = "0123456789abcdef0123456789abcdef"
-  doppler_token                = "dp.st.prd.testdummy" # #7095: must satisfy the shape precondition
-  doppler_token_tf             = "dummy"
-  github_app_id                = "12345"
-  github_app_private_key       = "dummy"
-  ghcr_read_user               = "dummy"
-  ghcr_read_token              = "dummy"
-  hcloud_token                 = "dummy"
-  kb_drift_operator_founder_id = "00000000-0000-0000-0000-000000000000"
-  resend_api_key               = "dummy"
-  resend_receiving_api_key     = "dummy"
-  supabase_access_token        = "dummy"
-  webhook_deploy_secret        = "dummy"
+  betterstack_logs_token = "stub-NOT-A-REAL-TOKEN-000000000000"
+  # (#7772) git-data's own source token. Same length-bearing rationale as the shared sibling
+  # directly above — it feeds the SAME module validation. It needs a value here for a reason
+  # `terraform validate` cannot surface: a run block resolves EVERY root variable before it
+  # evaluates anything, so a new no-default variable fails all three run blocks with
+  # "No value for required variable" while validate stays green. Measured on this branch.
+  git_data_betterstack_logs_token = "stub-NOT-A-REAL-GIT-DATA-TOKEN-000"
+  cf_access_client_id             = "0123456789012345678901234567890123456789.access"
+  cf_access_client_secret         = "0123456789012345678901234567890123456789012345678901234567890123"
+  cf_account_id                   = "0123456789abcdef0123456789abcdef"
+  cf_api_token                    = "0123456789012345678901234567890123456789"
+  cf_api_token_bot_management     = "0123456789012345678901234567890123456789"
+  cf_api_token_dns_edit           = "0123456789012345678901234567890123456789"
+  cf_api_token_r2                 = "0123456789012345678901234567890123456789"
+  cf_api_token_pages              = "0123456789012345678901234567890123456789"
+  cf_api_token_rulesets           = "0123456789012345678901234567890123456789"
+  cf_api_token_zone_settings      = "0123456789012345678901234567890123456789"
+  cf_notification_email           = "ops@example.com"
+  cf_zone_id                      = "0123456789abcdef0123456789abcdef"
+  doppler_token                   = "dp.st.prd.testdummy" # #7095: must satisfy the shape precondition
+  doppler_token_tf                = "dummy"
+  github_app_id                   = "12345"
+  github_app_private_key          = "dummy"
+  ghcr_read_user                  = "dummy"
+  ghcr_read_token                 = "dummy"
+  hcloud_token                    = "dummy"
+  kb_drift_operator_founder_id    = "00000000-0000-0000-0000-000000000000"
+  resend_api_key                  = "dummy"
+  resend_receiving_api_key        = "dummy"
+  supabase_access_token           = "dummy"
+  webhook_deploy_secret           = "dummy"
   # command=plan evaluates file(var.ssh_key_path) (hcloud_ssh_key.default). The
   # default ~/.ssh/id_ed25519.pub does not exist in CI, so point at a committed
   # fixture (content is irrelevant — the hcloud provider is mocked). Path is

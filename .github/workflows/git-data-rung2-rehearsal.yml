@@ -308,7 +308,8 @@ jobs:
             for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD \
                      SENTRY_ISSUE_RO_TOKEN SENTRY_ISSUE_RW_TOKEN \
                      AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY \
-                     DOPPLER_TOKEN HCLOUD_TOKEN BETTERSTACK_LOGS_TOKEN GIT_DATA_LUKS_KEY; do
+                     DOPPLER_TOKEN HCLOUD_TOKEN BETTERSTACK_LOGS_TOKEN \
+                     GIT_DATA_BETTERSTACK_LOGS_TOKEN GIT_DATA_LUKS_KEY; do
               val="${!v:-}"
               [ "${#val}" -ge 12 ] && printf "::add-mask::%s\n" "$val"
             done
@@ -552,12 +553,20 @@ jobs:
           # it is length 0 in prd_terraform: the production copy lives in prd_git_data and
           # the rehearsal copy in the per-run prd_git_data_rehearsal_<run_id> config, and
           # this step runs under neither. os.environ.get returns "" and the >= 4 floor
-          # skips it every run. Eleven names, ten controls — said plainly so the next
+          # skips it every run. TWELVE names, eleven controls — said plainly so the next
           # reader does not count this entry as cover for the passphrase.
+          #
+          # (#7772) GIT_DATA_BETTERSTACK_LOGS_TOKEN joined both lists with git-data's own
+          # Better Stack source. It is a LIVE control, not defence-in-depth: unlike the LUKS
+          # passphrase it DOES resolve in prd_terraform, so it is present in the capture
+          # step's environment on every run, and that step's stdout AND stderr are tee'd
+          # verbatim into a 7-day artifact on a PUBLIC repo. Omitting it is the #7481 defect
+          # this list was widened to close, one credential later.
           for var in ("BETTERSTACK_QUERY_HOST", "BETTERSTACK_QUERY_USERNAME", "BETTERSTACK_QUERY_PASSWORD",
                       "SENTRY_ISSUE_RO_TOKEN", "SENTRY_ISSUE_RW_TOKEN",
                       "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-                      "DOPPLER_TOKEN", "HCLOUD_TOKEN", "BETTERSTACK_LOGS_TOKEN", "GIT_DATA_LUKS_KEY"):
+                      "DOPPLER_TOKEN", "HCLOUD_TOKEN", "BETTERSTACK_LOGS_TOKEN",
+                      "GIT_DATA_BETTERSTACK_LOGS_TOKEN", "GIT_DATA_LUKS_KEY"):
               val = os.environ.get(var, "")
               if len(val) >= 4:                      # a 1-3 char value would carpet the file
                   text = text.replace(val, "<redacted:%s>" % var)
