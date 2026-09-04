@@ -120,6 +120,7 @@ Sections requiring amendment: `privacy-policy.md` §4.5 + §10, `gdpr-policy.md`
 2. **learnings-researcher asserted signatory name + title + corporate email are Art. 9 special-category data.** Art. 9's categories are closed and a job title is not among them. The CLO independently assessed every field under Art. 6(1)(f). Not propagated.
 3. **repo-research-analyst presented a reconstructed quote as verbatim PA-7 §(c) text** ("authorised signatory name and corporate email address"); the actual text is "signatory name + corporate email + corporate identity". Substance held, wording did not — caught by grepping the quoted string and getting zero hits.
 4. **repo-research-analyst gave two different paths for the allowlist parser.** Real path: `apps/web-platform/scripts/cla-evidence/build-bypass.ts`. There is no `cla-backfill-evidence/build-bypass.ts`.
+5. **`knowledge-base/product/roadmap.md` fails `markdown-lint` on `main`**, so the CPO's recommended row 4.13 could not be committed — the hook lints staged files, so any commit touching the roadmap is blocked. Confirmed pre-existing against `git show main:…`. Filed as **#7832**; the row is carried in the spec's Sequencing section so it is not lost. A trap recorded there: `markdownlint-cli2 --fix` clears the errors but **deletes a real space** on line 74, rendering `All-in burn**$643.24/mo**` — the MD037 it "fixes" is a false positive on balanced markers.
 
 ## Capability Gaps
 

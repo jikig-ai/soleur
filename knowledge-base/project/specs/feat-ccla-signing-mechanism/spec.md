@@ -78,4 +78,10 @@ Two published artifacts already describe a CCLA record that has never existed �
 
 **Tier 2 — corpus corrections.** FR8, FR9, TR5. Route the cross-document sweep through `legal-compliance-auditor`.
 
+**Carried, not dropped — roadmap row 4.13.** The CPO's recommended row is:
+
+> `| 4.13 | Corporate CLA recording mechanism (public coverage map + private signatory record + operator affordance; no allowlist widening) | P1 | First corporate contributor at the gate (2026-09-04); Art. 30 PA-7 and corporate-cla.md §0 already declare processing that has no machinery | #3210 |`
+
+It is **not** in this PR: `knowledge-base/product/roadmap.md` fails `markdown-lint` on `main` with 5 pre-existing errors, and the hook lints staged files, so any commit touching it is blocked. Tracked at **#7832**, which also records that `markdownlint-cli2 --fix` damages line 74 (it deletes a real space, producing `All-in burn**$643.24/mo**`). Add the row in the same change that fixes #7832. Note `wg-every-feature-listed-in-a-roadmap-phase` runs the other way — it requires roadmap rows to carry linked issues, which this row does — so nothing is out of compliance in the interim.
+
 **Blocked / referred.** R2 write (on #7813 + #7814 + #7816); Pakistani employment-law question, Art. 49-vs-SCCs, CCLA §3 moral rights, and #7668 extended to the CCLA population — all to outside French counsel.
