@@ -1,7 +1,3 @@
-// Guard 3 (#7833): abort before any test if this runner inherited a git-location
-// environment (GIT_DIR et al). See plugins/soleur/test/lib/git-tripwire.ts.
-import "../../../plugins/soleur/test/lib/git-tripwire";
-
 // Node (unit) project setup.
 //
 // Default WORKSPACES_ROOT to a writable temp dir. Server startup paths

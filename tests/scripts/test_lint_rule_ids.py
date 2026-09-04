@@ -85,13 +85,23 @@ def _run_with_retired(agents_content: str, retired_content: str | None) -> subpr
 # subprocess cwd and `-C`, so these fixtures wrote into the developer's repository when the suite
 # ran from a git hook (#7833). The identity pins below are kept: without them the fixture commits
 # fail `Author identity unknown` (measurements.md §M-7).
-_GIT_ENV = {
-    **git_fixture_env(tempfile.gettempdir()),
-    "GIT_AUTHOR_NAME": "t",
-    "GIT_AUTHOR_EMAIL": "t@test",
-    "GIT_COMMITTER_NAME": "t",
-    "GIT_COMMITTER_EMAIL": "t@test",
-}
+def _git_env(repo) -> dict[str, str]:
+    """Fixture git env scoped to THIS repo.
+
+    Previously a module-level constant built from ``git_fixture_env(tempfile.gettempdir())``. That
+    is the wrong scope twice over: the ceiling became the parent of the temp ROOT (``/var``, or
+    ``/`` when TMPDIR is unset — which git ignores entirely), so the discovery ceiling was a no-op
+    while the code read as though it had one; and it was computed once at import, before any
+    fixture existed. The location-var sweep still protected these calls, but one of the three
+    documented protections was silently off.
+    """
+    return {
+        **git_fixture_env(repo),
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@test",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@test",
+    }
 
 
 def _run_git_seeded(agents_head: str, agents_working: str, retired_content: str | None) -> subprocess.CompletedProcess:
@@ -104,11 +114,11 @@ def _run_git_seeded(agents_head: str, agents_working: str, retired_content: str 
     with tempfile.TemporaryDirectory() as tmp:
         repo = Path(tmp) / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=_GIT_ENV)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=_git_env(repo))
         agents = repo / "AGENTS.md"
         agents.write_text(agents_head)
-        subprocess.run(["git", "-C", str(repo), "add", "AGENTS.md"], check=True, env=_GIT_ENV)
-        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True, env=_GIT_ENV)
+        subprocess.run(["git", "-C", str(repo), "add", "AGENTS.md"], check=True, env=_git_env(repo))
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True, env=_git_env(repo))
         agents.write_text(agents_working)
         argv = [sys.executable, str(SCRIPT)]
         if retired_content is not None:
@@ -332,11 +342,11 @@ class TestCrossFileMode(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="lint-xfile-")
         repo = Path(tmp) / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=_GIT_ENV)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=_git_env(repo))
         for name, body in files_at_head.items():
             (repo / name).write_text(body)
-        subprocess.run(["git", "-C", str(repo), "add", "."], check=True, env=_GIT_ENV)
-        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True, env=_GIT_ENV)
+        subprocess.run(["git", "-C", str(repo), "add", "."], check=True, env=_git_env(repo))
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True, env=_git_env(repo))
         # Overwrite / add files for working tree
         # First, delete any files that exist at HEAD but not in working
         for name in files_at_head:

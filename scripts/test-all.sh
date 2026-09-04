@@ -220,7 +220,7 @@ fi
 # and GIT_WORK_TREE in the environment. These override GIT_CEILING_DIRECTORIES
 # and cause test-spawned git commands to operate on the parent repo instead of
 # their temp directories. Unsetting them restores normal git discovery behavior.
-unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH
 
 # --- Bare Repo Guard ---
 # Bare repos contain stale working-tree files that diverge from HEAD.

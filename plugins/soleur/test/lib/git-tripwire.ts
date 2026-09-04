@@ -18,16 +18,7 @@
 // Exit code 97 is arbitrary but distinctive: it must not collide with a runner's own failure
 // codes, so an aborted run is attributable at a glance.
 
-/** Variables that redirect WHERE git reads and writes. Kept in sync with git-fixture-env.ts. */
-const GIT_LOCATION_VARS = [
-  "GIT_DIR",
-  "GIT_WORK_TREE",
-  "GIT_INDEX_FILE",
-  "GIT_COMMON_DIR",
-  "GIT_OBJECT_DIRECTORY",
-  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-  "GIT_NAMESPACE",
-] as const;
+import { GIT_LOCATION_VARS } from "./git-fixture-env";
 
 export const GIT_TRIPWIRE_EXIT_CODE = 97;
 
@@ -58,6 +49,20 @@ export function assertNoInheritedGitLocation(runner: string): void {
   const found = detectGitLocationVars();
   if (found.length === 0) return;
 
+  // Same escape as the shell prelude in `plugins/soleur/test/test-helpers.sh`, for a suite whose
+  // subject genuinely IS the inherited environment. It existed only on the shell arm, while
+  // `plugins/soleur/AGENTS.md` documented it against all three — so a contributor following the
+  // documentation under `bun test` was stuck at rc=97 with no way out. Announce when taken: a
+  // switch that disarms a write-boundary guard with no trace is the shape this guard exists to
+  // prevent, and a green run must still show it.
+  if (process.env.SOLEUR_GIT_TRIPWIRE_ALLOW === "1") {
+    process.stderr.write(
+      `[git-tripwire] DISARMED by SOLEUR_GIT_TRIPWIRE_ALLOW=1 in ${runner}; ` +
+        `inherited: ${found.join(" ")}\n`,
+    );
+    return;
+  }
+
   const detail = found.map((k) => `  ${k}=${process.env[k]}`).join("\n");
   process.stderr.write(
     [
@@ -74,7 +79,10 @@ export function assertNoInheritedGitLocation(runner: string): void {
       "",
       "Fix the ENTRY POINT that started this runner, by prefixing it with:",
       "",
-      "  unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE && <runner>",
+      // Print what was actually FOUND. A fixed three-name spelling here was a loop: this guard
+      // refuses nine variables, so an environment carrying (say) GIT_OBJECT_DIRECTORY was told to
+      // unset three names that would not clear it, re-ran, and aborted again with the same message.
+      `  unset ${found.join(" ")} && <runner>`,
       "",
       "Do not scrub in-process: under Bun a `delete process.env.GIT_DIR` does not reach a child",
       "spawned without an explicit `env`.",

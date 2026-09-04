@@ -1,7 +1,3 @@
-// Guard 3 (#7833): abort before any test if this runner inherited a git-location
-// environment (GIT_DIR et al). See plugins/soleur/test/lib/git-tripwire.ts.
-import "../../../plugins/soleur/test/lib/git-tripwire";
-
 import "@testing-library/jest-dom/vitest";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { configure } from "@testing-library/react";

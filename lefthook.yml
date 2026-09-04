@@ -259,7 +259,7 @@ pre-commit:
       # with it 0. A plain clone exports neither, so this reproduces only in a worktree.
       # scripts/test-all.sh (above) already carries the same unset internally; this is the second
       # test runner in this file and it had none.
-      run: unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE && bun test plugins/soleur/test/
+      run: unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH && bun test plugins/soleur/test/
     terraform-fmt:
       priority: 8
       glob: "apps/*/infra/*.tf"
