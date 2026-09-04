@@ -112,14 +112,32 @@ beforeAll(() => {
   ON_PUSH_PATHS = extractOnPushPaths(readFileSync(WEBPLAT, "utf8"));
 });
 
+// Build a clean env excluding every GIT_* variable that lefthook (and git itself)
+// inject into hook processes. This is NOT optional hygiene: `GIT_DIR` OVERRIDES
+// `cwd`, so without it every git call below resolves to the DEVELOPER'S repository
+// instead of the temp fixture -- `git init` no-ops and the two commits land on
+// whatever branch is checked out. Measured on PR #7782: the `plugin-component-test`
+// lefthook job ran this file during a commit and appended 16 `base`/`change`
+// commits to the feature branch, which the following `git push` then published.
+// Same defense as `welcome-hook.test.ts` and `lint-orphan-test-suites.test.sh`.
+function gitCleanEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [key, val] of Object.entries(process.env)) {
+    if (!key.startsWith("GIT_") && val !== undefined) env[key] = val;
+  }
+  return env;
+}
+
 // Build a 2-commit git repo (HEAD~1 = empty base, HEAD = the changed paths),
 // run the extracted gate against it with force_run=false, and return `changed`.
 function runGate(changedPaths: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), "deploygap-gate-"));
+  const cleanEnv = gitCleanEnv();
   const git = (args: string[]) =>
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], {
       cwd: dir,
       stdio: "pipe",
+      env: cleanEnv,
     });
   git(["init", "-q"]);
   git(["commit", "-q", "--allow-empty", "-m", "base"]);
@@ -136,7 +154,7 @@ function runGate(changedPaths: string[]): string {
     cwd: dir,
     stdio: "pipe",
     env: {
-      ...process.env,
+      ...cleanEnv,
       FORCE_RUN: "false",
       PATH_FILTER,
       COMPONENT: "web-platform",

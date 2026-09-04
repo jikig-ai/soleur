@@ -34,6 +34,7 @@ All prod-touching steps are advisory + ack-gated per `hr-menu-option-ack-not-pro
 
 > **No-SSH fact-pulling (Soleur vision — `hr-no-dashboard-eyeball-pull-data-yourself`).** The operator is non-technical: NEVER ask them to SSH, run `df -h`, or read a dashboard, and do NOT trust the report's stated *mechanism* — pull the actual prod error/state yourself. This includes NEVER asking the operator to paste verbatim error output, run `grep`/`stat`/`git config` probes, or eyeball logs — the operator decides, they do not retrieve. Also pull Better Stack `SOLEUR_*` markers yourself (`doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since <N> --grep <marker>`). Toolchain: Doppler `DATABASE_URL_POOLER` (prod DB read), **Sentry issues via `doppler run -p soleur -c prd -- scripts/sentry-issue.sh <id>` / `--latest-event` (prefer the least-privilege `SENTRY_ISSUE_RO_TOKEN`; falls back to `SENTRY_ISSUE_RW_TOKEN`; `SENTRY_AUTH_TOKEN` 403s on issues — the producer's real stderr is in `exception.values[].value`; runbook `sentry-issue-read.md`)**, `/soleur:trigger-cron`, **Supabase platform logs (postgres/auth/postgrest/supavisor) via `doppler run -p soleur -c prd -- scripts/supabase-logs-query.sh --ref <project-ref> --source <src> --since <window>` — never emits a zero row count without a coverage verdict; runbook `supabase-log-query.md`**, prod HTTP/`gh run`. If a needed signal has no no-SSH read path, **BUILD one** — add a monitored stdout `SOLEUR_*` marker in the emitting code (or emit to a GitHub issue/DB/endpoint) so the next occurrence self-reports, rather than deferring to the operator. **Why:** #4886 — the incident report blamed ENOSPC; the real cause (a dirty-clone `.claude/settings.json` blocking `git pull`) was one Sentry-issue read away. #5934 — the worktree-wedge diagnosis twice asked the operator to paste `grep`/`stat` output that the observability layer held once instrumented (`SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_WORKTREE_VERIFY_FAILED`). See [[2026-06-03-no-ssh-prod-signal-toolchain-never-hand-the-operator-an-ssh-task]] and [[2026-07-08-self-pull-observability-in-diagnostic-loops-never-ask-operator-to-fetch]].
 
+<!-- -->
 > **Unreachable host with no log-shipping — READ before you MUTATE (`hr-no-dashboard-eyeball-pull-data-yourself` extended to diagnosis).** When the failing surface is a host that answers nothing (no SSH, no Vector/journald shipping, no Sentry emit), the self-serve read path is the **provider API + rescue mode** — it is NOT an operator-console task. Ladder, in order: (1) **Provider API reads** — `GET /servers/{id}` (status, `private_net`), `/metrics?type=cpu,disk,network`, `/actions`. Query the **BOOT window**, not the current window: an unreachable-but-idle host reads `net=0/disk=0` and looks "dead" when it merely has no clients. (2) **Rescue-mode disk read** (Hetzner: `enable_rescue` with `{"type":"linux64","ssh_keys":[<id>]}` to inject a registered key whose private half is in your agent → key auth, no `sshpass`; scope SSH in by `set_rules` allowing ONLY your egress IP on `:22` and restore `{"rules":[]}` immediately after; `reboot` → SSH → `lsblk` (the OS disk is NOT necessarily `sda` — an attached volume can take it) → mount the boot partition → read `/var/log/cloud-init-output.log`, `grep -iE 'error|fail' /var/log/cloud-init.log`, `/var/lib/cloud/data/status.json`). (3) **Only then mutate**, and only via the sanctioned destroy-guarded dispatch (`apply-web-platform-infra.yml apply_target=…`) — **never a hand-rolled `terraform apply`**: an out-of-band apply on an unverified hypothesis diverges prod from `main` and makes the guarded recovery abort `out_of_scope=1`, blocking the real fix. Guard aborts are information — read their counters (`out_of_scope=`, `server_replaced=`, `volume_created=`) to learn which recovery path actually fits. And `Apply complete` is not proof: `GET` the resource to confirm the provider's reality. **Why:** #6400 — four hypotheses (credential → firewall → store OOM → boot) were mutated-then-tested over hours; a rescue read of `cloud-init.log` named the real cause (a transient IMDS failure left the host with no private NIC) in one shot, and a hypothesis-driven firewall apply blocked the sanctioned recreate three times. See [[2026-07-15-infra-incident-diagnose-before-mutate-and-no-out-of-band-applies]].
 
 Collect from the operator (or from the dry-run fixture):
@@ -65,6 +66,7 @@ Compute locally (FR7 LLM-trust boundary — never accept these from an LLM-emitt
 - `slug` — `awk` kebab-case of title, dropping non-`[a-z0-9-]`.
 - File path — derived from slug: `knowledge-base/engineering/operations/post-mortems/${slug}-postmortem.md`.
 - `MTTR` (mean time to recovery) / `MTTD` (mean time to detect) — computed from validated timestamps, NEVER an LLM-emitted duration. The ISO regex gates FORMAT but not calendar validity (it accepts month 13 / day 40 / hour 25), so `date -u -d` can still reject a regex-passing value — capture the epoch with explicit failure handling and HALT on a bad date or a transposed (negative) pair rather than emitting a garbage/empty duration:
+
   ```bash
   # Returns the epoch on stdout and FAILS on a regex-valid-but-calendar-invalid date.
   # It must not print a marker and must not `exit`: every call site below is a COMMAND
@@ -132,6 +134,21 @@ Compute three values:
 - `art_33_triggered` — true if `data_categories_breached` is non-empty AND `risk_to_subjects != none`. (Art. 33 covers any personal-data breach.)
 - `art_34_triggered` — true if `risk_to_subjects == high`. (Art. 34 covers high-risk breaches requiring direct subject notification.)
 - `art_33_deadline` — `date -u -d "${detected_at} +72 hours" +%Y-%m-%dT%H:%M:%SZ`. CNIL hard 72h deadline.
+
+**Where an Art. 33 determination is RECORDED (ADR-200).** When `art_33_triggered` is true, the
+PIR is the per-incident documentation Art. 33(5) requires, and it also needs a row in the
+**Art. 33(5) breach register** at `knowledge-base/legal/breach-register.md` — an index with
+stable canonical pointers, not a transcription, so add a summary row pointing at the PIR and copy
+nothing out of it. Columns and the inclusion predicate are fixed by
+[ADR-200](../../../../knowledge-base/engineering/architecture/decisions/ADR-200-art-33-5-documentation-is-a-distinct-register-discharged-by-an-index.md);
+record Art. 33 and Art. 34 as **separate** columns, and where this PIR makes a finding on one and
+is silent on the other, record the silence rather than inferring it.
+
+**Do NOT add a row when `art_33_triggered` is false.** That is a *screening output*, not a
+determination, and the register's predicate excludes it expressly: 104 post-mortems generated
+from `templates/pir.md` carry the field, and indexing them would bury the determinations under
+routine negatives. The row belongs to the CLO, who adds it in the same PR that lands the PIR;
+[lint-legal-registers.sh](../../../../scripts/lint-legal-registers.sh) asserts nothing determination-shaped is dropped silently.
 
 **Block Phase 3+ if EITHER trigger fires.** If only Art. 33 fires, prompt one ack:
 
