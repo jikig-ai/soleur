@@ -88,7 +88,9 @@ const READ_ONLY_PROBES = [
 
 // Dispatch-hybrid crons (#5872 acknowledgment) — a fourth implicit class beyond
 // MIGRATED/EXEMPT/READ_ONLY_PROBES. `cron-dev-migration-drift`, `cron-terraform-drift`,
-// `cron-domain-model-drift` and `cron-inngest-config-drift` (#6780, event-only/dormant)
+// `cron-domain-model-drift`, `cron-inngest-config-drift` (#6780, event-only/dormant)
+// and `cron-sentry-alert-drift` (#7650 Phase 2 — the §2.9 Sentry-alert drift
+// detector, same shape as cron-terraform-drift)
 // are SCHEDULERS ONLY: the dispatcher mints a
 // short-lived installation token and POSTs a `workflow_dispatch`, holding no git
 // and opening no PR (the git-touching / issue-filing work runs in the ephemeral
