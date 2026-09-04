@@ -25,6 +25,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+# Fire the tripwire on import. `python3 -m unittest` does not load conftest.py, so registering
+# it there alone would leave the arm scripts/test-all.sh actually drives unprotected. Every
+# python suite that spawns git imports THIS module, which makes it the real chokepoint.
+from tests.conftest import assert_no_inherited_git_location
+
+assert_no_inherited_git_location("python")
+
 #: The variables that redirect WHERE git reads and writes, or that make ``git init`` copy
 #: executable content into the fixture.
 #:

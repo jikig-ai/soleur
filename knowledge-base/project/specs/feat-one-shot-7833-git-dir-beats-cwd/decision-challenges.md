@@ -50,6 +50,18 @@ call forms are visible. It is not a good first instrument.
 **Your direction.** "Shared helper adopted across every git-spawning test site" — and
 `hr-write-boundary-sentinel-sweep-all-write-sites` was cited as applying.
 
+> **Superseded 2026-09-04 (review).** The claim below that "with the entry-point scrub and the
+> runtime tripwire in force, none of them can observe a hostile environment in any reachable
+> invocation" was FALSIFIED by the review panel and is retracted. Three reachable gaps existed at
+> the time it was written: the python arm had no tripwire at all (there was no `conftest.py`
+> anywhere in the repo); `cd plugins/soleur && bun test` loaded no preload, because bun resolves
+> `bunfig.toml` from the invocation cwd — and `grok-fidelity-gate.sh` does exactly that `cd`; and
+> the five `skills/git-worktree/test/*.test.sh` suites, which drive `worktree remove`, `branch -D`
+> and `reset --hard`, sourced no prelude. All three are now closed in this PR rather than deferred,
+> along with a live bare-`cd` `git commit` in `tests/scripts/test-weakness-miner.sh`. The deferral
+> that remains is genuine defence-in-depth over the suites that ARE covered by a tripwire; reasons
+> (b) and (c) below stand, reason (a) did not.
+
 **What I found.** The rule is satisfied, but by a different sweep than the brief assumed. The
 sentinel in this plan lives at the **process boundary**, so its write sites are the *entry points*,
 and those are enumerated exhaustively and pinned mechanically (Guard 2). The ~48 fixture suites are

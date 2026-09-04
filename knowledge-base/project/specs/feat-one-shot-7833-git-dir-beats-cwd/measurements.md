@@ -10,7 +10,11 @@ Worktree: `feat-one-shot-7833-git-dir-beats-cwd`. git 2.53.0, bun 1.3.11 (`.bun-
 | M-3 | Is scrubbing `GIT_DIR` alone enough? | **No.** With `GIT_DIR` unset and an absolute `GIT_INDEX_FILE`, `git add` staged `g.txt` into the **victim's** index; the fixture index stayed empty | CONFIRMED |
 | M-4 | `GIT_CEILING_DIRECTORIES` = fixture dir vs parent | fixture-dir spelling still resolved the enclosing repo; **parent** spelling → `not a git repository` | CONFIRMED — parent is the working spelling |
 | M-5 | Does `delete process.env.X` reach a child? | **Bun 1.3.11:** default-env child still sees `GIT_DIR`; explicit `env:{...process.env}` child clean. **Node v22.22.2:** clean both ways | CONFIRMED — *only for an INHERITED variable* (see note) |
+| M-6 | Does an invocation-layer scrub fix the Bun case? | `env -u GIT_DIR …` and `bash -c 'unset …; …'`, control without | Both clean; control shows the variables. Both spellings equivalent |
+| M-7 | Does a read-only probe allowlist survive a fixture commit? | `env -i PATH HOME GIT_CONFIG_NOSYSTEM=1 … git commit` | **`Author identity unknown`** — an allowlist cannot be reused; an identity must be pinned |
+| M-8 | Can a runner prelude abort the run? | a preload that exits 97 when the family is present, with and without | Aborts **rc=97** when set; **rc=0** and the suite passes when clean |
 | M-9 | Does `unset … && cmd` scrub inside a hook `run:`? | control `2` → prefixed `0` | CONFIRMED |
+| M-10 | Is `scripts/test-all.sh` already protected? | read of its `--- Git Hook Isolation ---` block | **Yes** — landed `dccfd9b0e` (#1090, 2026-03-24) |
 
 **M-5 refinement (not in the plan).** The Bun divergence manifests **only for a variable inherited
 from the ambient environment**. A first probe that did `process.env.GIT_DIR = …` then
@@ -43,14 +47,14 @@ suites there, three already carry a **private** `gitCleanEnv()` and two carry no
 
 | Suite | State |
 |---|---|
-| `web-platform-runtime-plugin-trigger.test.ts` | private `gitCleanEnv()` — landed **#7782, 2026-09-03** |
+| `web-platform-runtime-plugin-trigger.test.ts` | private `gitCleanEnv()` — landed **#7782 (`5d8a12736`), 2026-09-04** |
 | `welcome-hook.test.ts` | private `gitCleanEnv()` — landed 2026-04-03 |
 | `gdpr-gate-repo-scan.test.ts` | private `gitCleanEnv(envOverrides)` |
 | `heartbeat-reprovision-parity.test.ts` | **no scrub** |
 | `skill-security-scan.test.ts` | **no scrub** |
 
 That is **three independent copies of one idea** (four counting `test/pre-merge-rebase.test.ts`'s
-`GIT_ENV` destructure), the newest landed the day before #7833 was filed — and the suite the
+`GIT_ENV` destructure), the newest landed the SAME day as #7833 — and the suite the
 incident report names was already patched per-file by #7782. This is the plan's central claim
 measured rather than argued: the per-file fix has been applied three times and did not generalise
 one directory over. The 11 `.test.sh` git-spawning suites in the same directory are not collected by
@@ -101,3 +105,20 @@ directly in `plugins/soleur/` — a first attempt staging `plugins/soleur/AGENTS
 `plugin-component-test (skip) no matching staged files`. The job fires only for `.md` files in a
 subdirectory. Recorded rather than changed: widening the glob is out of scope here, and the entry
 point is now scrubbed either way.
+
+## Cost (added after review — this record had none)
+
+For a change that adds work to every file of a 1114-file suite, a cost figure belongs here.
+
+| Arm | Cost | Method |
+|---|---|---|
+| bun preload | once per PROCESS, inside the ~10-20 ms bun startup floor | counter preload: 1 execution for 6 test files |
+| vitest, as first shipped (`setupFiles`) | **~20 ms per FILE** → ~22 CPU-s, **~1.7 s wall** (~1.2% of a 136 s suite) | 120-file ABBA A/B (deltas 1.94 s / 2.76 s, same sign both blocks) and a within-run paired probe (24.5 ms vs 7.7 ms, paired delta 16.8 ms, apparatus floor 0.58 ms). A whole-run 40-file A/B could NOT resolve it — per-run SD ~1.3 s against a ~0.3 s effect — and is reported as unresolved rather than as a number |
+| vitest, as shipped (`globalSetup`) | **once per RUN** | `globalSetup` executes in vitest's main process — the one that actually inherited the environment, and the one workers fork from. The property is unchanged and rc=97 now propagates instead of vitest's aggregate 1 |
+| Guard 1 suite | 0.485 s; 34 `git`, 3 `bun`, 1 `bash` spawn | PATH shims counting and exec'ing the real binary. The two driver children are ~35 ms (~7%); the git spawns dominate. Kept — written the mutate-`process.env` way, mutation rows M4/M6 both SURVIVED, which is why the child exists |
+| Guard 3 driver | 2.89 s → ~1.9 s after pointing the three clean-control arms at a one-assertion probe instead of re-running the full Guard 1 suite | ~1.5 s of the original was three redundant Guard 1 runs, which also coupled L2's verdict to Guard 1's health |
+| Guard 2 | 0.23 s | pure static |
+
+Guard 1 also leaked 7 temp directories per run with no cleanup (922 accumulated on the dev box,
+~106 MB) and wrote its driver file to the `TMPDIR` root rather than anywhere sweepable. Now one
+owning scratch root removed in `afterAll`; measured delta after the fix is 0 directories per run.

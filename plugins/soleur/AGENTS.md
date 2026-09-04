@@ -227,9 +227,12 @@ grep -E '^description:' skills/*/SKILL.md | grep -v 'This skill'
 
 ### A test that spawns `git` must pass a constructed environment
 
-Use `gitFixtureEnv(dir)` / `gitFixture(dir)` from
-[`test/lib/git-fixture-env.ts`](./test/lib/git-fixture-env.ts) (python sibling:
-`tests/scripts/_git_fixture_env.py`). Do **not** hand-roll a per-file `gitCleanEnv()`.
+Use `gitCleanEnv()` from [`test/lib/git-clean-env.ts`](./test/lib/git-clean-env.ts) for the env
+sweep, or `gitFixtureEnv(dir)` / `gitFixture(dir)` from
+[`test/lib/git-fixture-env.ts`](./test/lib/git-fixture-env.ts) when the fixture WRITES — that
+layers a discovery ceiling, config hermeticity and a pinned identity on top of the sweep
+(python sibling: `tests/scripts/_git_fixture_env.py`). Do **not** hand-roll a per-file copy:
+three independent ones existed before extraction and the third is what lost data.
 
 `cwd` and `git -C` are not sufficient. In a **linked worktree** — which every feature branch here
 is — git exports `GIT_DIR` and `GIT_INDEX_FILE` to its hooks as absolute paths, and a `git`
@@ -247,12 +250,23 @@ Two non-obvious consequences:
 
 ### `rc=97` from a test runner is the tripwire, not a flake
 
-`plugins/soleur/test/lib/git-tripwire.ts` (registered as a `bunfig.toml` preload and imported by
-both vitest setup files) and the prelude in `test/test-helpers.sh` abort a runner that *starts*
-holding a git-location variable. They fail rather than scrub, so the broken entry point gets fixed
-instead of silently papered over. The message names the variables and the remedy: prefix the entry
-point with `unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE`. A suite whose subject genuinely is the
-inherited environment can set `SOLEUR_GIT_TRIPWIRE_ALLOW=1`.
+`plugins/soleur/test/lib/git-tripwire.ts` aborts a runner that *starts* holding a git-location
+variable. It is registered once per RUNTIME, and each registration is cwd- or config-scoped, so all
+four matter:
+
+| Runtime | Registration |
+|---|---|
+| bun (repo root) | `bunfig.toml` `[test] preload` |
+| bun (`cd plugins/soleur`) | `plugins/soleur/bunfig.toml` — bun resolves `bunfig.toml` from the INVOCATION cwd, so the root one does not apply |
+| vitest | `globalSetup` in `apps/web-platform/vitest.config.ts` (not `setupFiles`, which re-runs per file) |
+| shell | the prelude in `test/test-helpers.sh` |
+| python | `tests/conftest.py`, fired on import from `tests/scripts/_git_fixture_env.py` |
+
+They fail rather than scrub, so the broken entry point gets fixed instead of silently papered over.
+The message names the variables it FOUND and a remedy derived from them — a fixed spelling was a
+loop, since the guard refuses nine variables and the old remedy named three. A suite whose subject
+genuinely is the inherited environment can set `SOLEUR_GIT_TRIPWIRE_ALLOW=1`, which is honoured by
+every arm and announces itself on stderr.
 
 Background and measurements: #7833.
 

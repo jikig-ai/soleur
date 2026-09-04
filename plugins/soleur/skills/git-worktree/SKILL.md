@@ -328,8 +328,9 @@ Navigate back to the repository root directory.
 ## Sharp Edges
 
 - **A git hook running in a LINKED WORKTREE exports `GIT_DIR` and `GIT_INDEX_FILE` as ABSOLUTE
-  paths, and they override a subprocess's `cwd` and `git -C`.** A plain clone exports neither
-  (its `GIT_INDEX_FILE` is relative and harmless), so this reproduces only here — anyone
+  paths, and they override a subprocess's `cwd` and `git -C`.** A plain clone exports no
+  `GIT_DIR` at all, and only a RELATIVE `GIT_INDEX_FILE` (`.git/index`) which resolves
+  against the subprocess's own cwd and is harmless — so this reproduces only here; anyone
   diagnosing it in a fresh clone will measure nothing and wrongly conclude the report is stale.
   Consequence: a test fixture's `git init` initialises nothing and its commits land on the
   worktree's live branch, moving the tip. Test-side convention and the `rc=97` tripwire that now

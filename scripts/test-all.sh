@@ -630,8 +630,20 @@ run_suite() {
     echo "[KILLED] $label (exit=$rc, signal-shaped 128+$(( rc - 128 )) = SIG$(kill -l $(( rc - 128 )) 2>/dev/null), ${elapsed_ms}ms) — UNRESOLVED, not a failure: this runner did not measure what terminated it, and exit $rc is also what a suite calling exit($rc) reports.${_bnote}" >&2
     printf '%s\t%d\tKILLED%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
   else
-    echo "[FAIL] $label (${elapsed_ms}ms)" >&2
-    printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
+    # rc 97 is the git-location tripwire (#7833), not an assertion failure. It means the runner
+    # ABORTED before executing a single test because it started holding GIT_DIR (or a sibling), so
+    # this suite's coverage was never obtained and the cause is the ENTRY POINT, not the diff. The
+    # bare `[FAIL] <label> (<ms>)` line drops rc entirely, which made a tripwire abort
+    # indistinguishable from a failed assertion — the tripwire's own rationale says 97 is
+    # "distinctive… attributable at a glance", and that was not true of the one runner in this repo
+    # that classifies exit codes.
+    if (( rc == 97 )); then
+      echo "[TRIPWIRE] $label (rc=97, ${elapsed_ms}ms) — the runner aborted on an inherited git-location environment; its coverage was NOT obtained. Fix the entry point that started it (see the FATAL block above for the exact unset), then re-run. This is not a failing assertion." >&2
+      printf '%s\t%d\tTRIPWIRE%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
+    else
+      echo "[FAIL] $label (${elapsed_ms}ms)" >&2
+      printf '%s\t%d\tFAIL%s\n' "$label" "$elapsed_ms" "$tmp_field" >> "${TEST_TIMING_LOG:-/dev/null}"
+    fi
   fi
 }
 

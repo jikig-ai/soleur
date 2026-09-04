@@ -256,7 +256,9 @@ pre-commit:
       # paths, and a `git` subprocess honours them over both its working directory and `-C`. A
       # fixture's `git init` then initialises nothing and its commits land on the developer's live
       # branch, moving the tip. Measured: without this prefix a hook command sees 2 such variables,
-      # with it 0. A plain clone exports neither, so this reproduces only in a worktree.
+      # with it 0. A plain clone exports no GIT_DIR and only a RELATIVE GIT_INDEX_FILE
+      # (`.git/index`), which resolves against the subprocess's own cwd and is harmless — so
+      # the hazard is worktree-only, but not because a clone exports nothing.
       # scripts/test-all.sh (above) already carries the same unset internally; this is the second
       # test runner in this file and it had none.
       run: unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH && bun test plugins/soleur/test/
