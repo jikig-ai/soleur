@@ -145,6 +145,35 @@ its own `-gt 0` HALT. A fail-open on the destroy path, produced by a *correct-lo
 resolution. When resolving a conflict in a validation list, the resolution is the union; check
 that every operand later compared is in it.
 
+### 9. `rc=$?` after a pipe reports the LAST command, and it cost two false reports
+
+Twice in one session I read a status that belonged to `tail`:
+
+```bash
+bash some-suite.sh | tail -6; echo "rc=$?"     # <- tail's rc, always 0
+```
+
+The first cost a false GREEN: `plugins/soleur/test/fixture-relative-assert.test.sh` had
+been failing since the merge that brought it in, and I reported it passing to the
+operator. CI found it. The second cost a false RED: I called a CI job hung at "~45
+minutes" when it was at 29, inside that job's own band on `main`.
+
+This is the same defect class the branch's review hunted for INSIDE the gates
+(`local x="$(cmd)"` masking rc, `set -euo pipefail` + a no-match `grep` killing a
+function) — committed in the VERIFICATION of the gates rather than in the gates. The
+instrument being the blind spot, one more level out.
+
+Use `set -o pipefail`, or capture first and inspect second:
+
+```bash
+out="$(bash some-suite.sh 2>&1)"; rc=$?      # rc is the suite's
+printf '%s\n' "$out" | tail -6
+```
+
+Corollary for a verdict that will be REPORTED to someone: the tally line and the exit
+status are two different claims. `60 passed, 2 failed` printed next to a captured
+`rc=0` should have read as a contradiction, and I read it as agreement.
+
 ## Session Errors
 
 - **Reintroduced `cq-assert-anchor-not-bare-token` three times inside the commits fixing it.**
@@ -177,6 +206,12 @@ that every operand later compared is in it.
 - **Used `/tmp` for scratch files instead of the session scratchpad**, contributing to filling
   the 4 GB tmpfs (ENOSPC — tool output was lost for two calls). Recovery: cleared task outputs.
   Prevention: use the session scratchpad directory the environment provides.
+- **Read `rc=$?` after a pipe, twice, and reported both readings.** Once as a false
+  green (a suite that had been failing since the merge) and once as a false red (a CI
+  job called hung at 29 minutes). Recovery: re-measured with the rc captured before the
+  pipe; the real failure was then found and fixed. Prevention: see insight 9 — capture
+  the output, then inspect it; and treat a tally line disagreeing with an exit status as
+  a contradiction to resolve, never as agreement.
 - **One-offs, no recurrence vector:** a `sleep 100` chain rejected by the harness; a second
   Monitor armed on `pr:7778` without stopping the first (hook warned; stopped it); a malformed
   `gh run list --jq` expression (`expected an object but got: string`).
