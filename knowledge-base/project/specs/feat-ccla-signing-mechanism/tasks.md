@@ -22,7 +22,7 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 - [x] 0.2. Write the CLO ruling to
       `knowledge-base/legal/audits/2026-09-04-clo-ruling-ccla-register-siting-and-coverage-map-basis-3210.md`,
       with its external-counsel re-review triggers in frontmatter.
-- [ ] 0.3. Re-derive the ADR ordinal across **all** `origin/*` refs (not `origin/main` — `main` max
+- [x] 0.3. Re-derive the ADR ordinal across **all** `origin/*` refs (not `origin/main` — `main` max
       is ADR-198, all-refs max is ADR-200). Record the chosen ordinal as provisional.
 - [x] 0.4. Establish and record the mail provider for `legal@jikigai.com` before any §0 sentence
       describes where the executed instrument is received. Do **not** assume by analogy with
@@ -96,17 +96,17 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 
 ## Phase 6 — ADR, C4, principle
 
-- [ ] 6.1. Write ADR-201 scoped to: the CCLA record is a repo-tracked git artifact; not an allowlist
+- [x] 6.1. Write ADR-201 scoped to: the CCLA record is a repo-tracked git artifact; not an allowlist
       entry and not a third required check; **fail-open** for additive evidence. Record the custody
       ruling (B1-c) and the two operator scope reversals.
-- [ ] 6.2. `## Alternatives Considered` must include **"record the CCLA in the existing R2
+- [x] 6.2. `## Alternatives Considered` must include **"record the CCLA in the existing R2
       write-once store"** — the central alternative, absent from the first draft.
 - [ ] 6.3. Re-derive the ordinal immediately before merge; if it moves, sweep plan + spec + tasks
       + ACs in the same edit.
-- [ ] 6.4. C4: no change required under B1-c beyond an optional `contributor` description
+- [x] 6.4. C4: no change required under B1-c beyond an optional `contributor` description
       amendment. If any `.c4` edit lands, run `scripts/regenerate-c4-model.sh` and commit
       `model.likec4.json` in the same commit.
-- [ ] 6.5. Propose a principles-register row for "additive evidence must not gate", citing #7597.
+- [x] 6.5. Propose a principles-register row for "additive evidence must not gate", citing #7597.
 
 ## Phase 7 — Verification
 
