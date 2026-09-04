@@ -606,7 +606,7 @@ cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 # before the emit loses the whole row — including vector_active and the Vector-down fallback.
 # `du` on a sick block device blocks in D-state and `redis-cli` has no default deadline, so an
 # unbounded call here goes dark exactly when the disk is the thing being measured.
-probe_schema=2
+probe_schema=3
 data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
 latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
 
@@ -616,6 +616,7 @@ host_role=web
 data_mount_src=n/a
 data_bytes=n/a
 flush_latched=n/a
+redis_keys=n/a
 
 case "$host_role" in
 dedicated)
@@ -628,6 +629,7 @@ dedicated)
   __UNREADABLE__)
     data_bytes=__UNREADABLE__
     flush_latched=__UNREADABLE__
+    redis_keys=__UNREADABLE__
     ;;
   *)
     data_bytes="$(timeout 15 du -sb "$data_mount" 2>/dev/null | awk 'NR==1{print $1}' || true)"
@@ -646,13 +648,59 @@ dedicated)
       [ -f "${latch_dir}/flip-done.latch" ] && flush_latched=true
       ;;
     esac
+
+    # #7695 probe_schema=3. INFO keyspace summed across EVERY db — never DBSIZE, which reads
+    # db0 only while FLUSHALL spans all of them, so DBSIZE would report 0 on a populated store.
+    #
+    # THE `# Keyspace` HEADER TEST IS THE MOST DANGEROUS LINE IN THIS BLOCK. Without it a NOAUTH
+    # error reply produces no `db<N>:` lines, `END{print s+0}` prints 0, and an AUTHENTICATION
+    # FAILURE renders as an empty store — the precise inverse of the outcome, on the field a
+    # destroy is authorized by. The header is a positive proof that redis answered the question.
+    #
+    # REDISCLI_AUTH, never `-a`: `-a` puts the password on argv where /proc/<pid>/cmdline exposes
+    # it host-wide to the co-resident deploy user. Bounded, because redis-cli has no default
+    # deadline and this runs before the unconditional emit.
+    #
+    # The credential arrives via EnvironmentFile=-/etc/default/inngest-probe (see the unit
+    # below). Absent on the web host by construction, so this whole arm is unreachable there.
+    redis_keys=__UNREADABLE__
+    if [ -n "${INNGEST_REDIS_PASSWORD:-}" ]; then
+      # DIRECT INVOCATION, no `eval` and no command-string seam. The previous revision took the
+      # command from ${PROBE_REDIS_CLI_CMD:-…} and eval'd it; tests stub `redis-cli` on PATH
+      # instead, which exercises the real argv path rather than a shell string and leaves no
+      # injection surface to reason about.
+      redis_raw="$(REDISCLI_AUTH="$INNGEST_REDIS_PASSWORD" timeout 5 \
+        redis-cli -h 127.0.0.1 -p 6379 INFO keyspace 2>/dev/null || true)"
+      case "$redis_raw" in
+      *'# Keyspace'*)
+        # awk MUST VALIDATE, because awk COERCES. `s += $2` on a `keys=abc` field yields 0
+        # silently, so a truncated or garbled reply that still carries the header would sum to
+        # the CLEARING VALUE and the numeric normaliser downstream would see a perfectly valid
+        # `0`. Matching `keys=[0-9]+` explicitly and exiting non-zero on any db line that does
+        # not is the only way the difference survives to the caller.
+        #
+        # `n == 0` is NOT an error: a header with no `db<N>:` lines is a genuinely empty
+        # keyspace, which is the legitimate clearing reading. Only a MALFORMED line is.
+        redis_rc=0
+        redis_sum="$(printf '%s\n' "$redis_raw" | awk '
+          /^db[0-9]+:/ {
+            if (match($0, /keys=[0-9]+/)) { s += substr($0, RSTART + 5, RLENGTH - 5) }
+            else { bad = 1 }
+          }
+          END { if (bad) exit 1; print s + 0 }')" || redis_rc=$?
+        if [ "$redis_rc" -eq 0 ]; then
+          case "$redis_sum" in '' | *[!0-9]*) redis_keys=__UNREADABLE__ ;; *) redis_keys="$redis_sum" ;; esac
+        fi
+        ;;
+      esac
+    fi
     ;;
   esac
   ;;
 esac
 
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched data_mount_src=$data_mount_src data_bytes=$data_bytes"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys data_mount_src=$data_mount_src data_bytes=$data_bytes"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -669,7 +717,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
 fi
 exit 0
 PROBESCRIPTEOF
@@ -688,8 +736,8 @@ SyslogIdentifier=inngest-server-probe
 # Type=oneshot disables the start timeout by default; the probe makes bounded calls before its
 # unconditional emit, so bound the unit too — a hung probe holds the unit `activating`, and
 # OnUnitActiveSec cannot re-fire while it is, silently ending the hourly marker.
-# Budget (#7695): curl 5 + curl 3 + inngest 10 + doppler 10 + findmnt 5 + du 15 = 48s of
-# bounded work, so 60 no longer leaves headroom. Raised to 120 rather than trimming a bound:
+# Budget (#7695): curl 5 + curl 3 + inngest 10 + doppler 10 + findmnt 5 + du 15 + redis-cli 5
+# = 53s of bounded work, so 60 no longer leaves headroom. Raised to 120 rather than trimming a bound:
 # a bound that fires degrades ONE field, the unit timeout loses the WHOLE row.
 TimeoutStartSec=120
 # #7228: the cutover_flag field reads Doppler, which needs DOPPLER_TOKEN + DOPPLER_CONFIG_DIR
@@ -708,14 +756,23 @@ EnvironmentFile=-/etc/default/inngest-doppler
 # later in this same script, and a probe that refuses to start is worse than one reporting
 # `web` for a boot or two.
 #
-# NOT WRAPPED IN `doppler run`, unlike inngest-cutover-flip.service. Two reasons, both
-# decisive. (1) `/usr/bin/doppler` is a symlink created ONLY by cloud-init-inngest.yml; the web
-# host installs to /usr/local/bin and has no such symlink, so this SHARED unit would fail
-# 203/EXEC there and silently end the hourly liveness marker on the host that actually serves.
-# (2) `doppler run` injects every secret in the config as an env var, which would make the
-# fixture seams below settable by anyone with Doppler write access. The probe therefore reads
-# no secret and needs none.
+# STILL NOT WRAPPED IN `doppler run`, and the reason is narrower than it used to be stated.
+# `doppler run` would inject EVERY secret in the config, making the fixture seams below settable
+# by anyone with Doppler write access — that objection stands. The OTHER reason previously given
+# here, that supplying a credential requires `doppler run` and would therefore 203/EXEC on the
+# web host, was FALSE: this unit already reads env files and its ExecStart is a plain script
+# path, so a third tolerant EnvironmentFile costs nothing and touches no interpreter. That
+# false claim is what scoped `redis_keys` out of #7754; the correction is recorded in the
+# plan's `## Addendum — 2026-09-03`.
+#
+# #7695 probe_schema=3: /etc/default/inngest-probe carries INNGEST_REDIS_PASSWORD and nothing
+# else, so the blast radius of this read is one variable rather than a whole config.
+# `-` prefixed and ABSENT ON THE WEB HOST BY CONSTRUCTION — cloud-init-inngest.yml is the only
+# writer. There, INNGEST_REDIS_PASSWORD stays unset, the keyspace arm never runs, and
+# redis_keys reports `n/a` because host_role is `web`. That is the honest state for a host with
+# no inngest Redis, and it is why this file must never be written by the shared bootstrap.
 EnvironmentFile=-/etc/default/inngest-server
+EnvironmentFile=-/etc/default/inngest-probe
 ExecStart=/usr/local/bin/inngest-server-probe.sh
 PROBEUNITEOF
 
@@ -965,7 +1022,7 @@ fi
 # vestigial-but-harmless in the durable form).
 cat > "$UNIT_FILE" <<'UNITEOF'
 [Unit]
-Description=Inngest self-hosted server (loopback 127.0.0.1:8288/8289)
+Description=Inngest self-hosted server (:8288/:8289, firewall+nftables scoped)
 After=network-online.target
 Wants=network-online.target
 

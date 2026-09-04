@@ -731,3 +731,41 @@ variable "grok_dogfood_private_ip" {
   type        = string
   default     = "10.0.1.50"
 }
+
+# #7695. Arms the cloud-init LUKS discriminator's post-recut refusal on the dedicated inngest
+# host. While FALSE, an ext4 signature on the Redis AOF volume is the expected pre-recut state
+# and is mounted as-is. Once TRUE, an ext4 signature means the recut did not take, and the boot
+# refuses rather than putting in-flight job payloads back on a plaintext volume while the
+# encryption-posture ledger claims otherwise.
+#
+# THIS MUST NOT FLIP IN THE SAME CHANGE THAT DROPS `format`, and an earlier revision of this
+# comment said it must ("the two are one decision"). Following that instruction bricks the
+# dedicated host's store. The two settings act at different moments:
+#
+#   `format` governs what a CREATE produces — it matters exactly once, on the recut apply.
+#   `inngest_expect_luks` governs what every BOOT refuses — it matters on every boot after it flips.
+#
+# The delivery order is four dispatches (ADR-199 addendum, 2026-09-03):
+#
+#   1. merge                    `format` gone; expect_luks STILL false
+#   2. inngest-host-replace     first boot; the volume is STILL the old ext4 one, so ARM 1 mounts
+#                               it plaintext and the host serves. With expect_luks=true here, ARM 1
+#                               REFUSES instead, /mnt/data never mounts, inngest-redis.service's
+#                               mount guard correctly declines to start, and the dedicated host
+#                               comes up with no store — on a host with no SSH and no console.
+#   3. inngest-volume-recut     the volume is destroyed and re-created RAW (this is where dropping
+#                               `format` pays off; ignore_changes suppresses diffs, never creates)
+#   4. inngest-host-replace     first boot against a RAW device: ARM 3 luksFormats it. ARM 3 does
+#                               not consult expect_luks at all, so the cut does not need it either.
+#
+# So expect_luks buys nothing until AFTER step 4, and costs the host its store if flipped before
+# step 2. Flip it in a LATER change, once a boot has been observed reaching
+# `SOLEUR_INNGEST_LUKS_STAGE stage=fstab` on /dev/mapper/inngest-redis — at which point an ext4
+# signature really does mean the recut did not take, which is the only state it exists to refuse.
+#
+# It is not an operator-supplied value and has no secret content.
+variable "inngest_expect_luks" {
+  description = "Whether the dedicated inngest host should REFUSE to mount an ext4 /mnt/data (i.e. the LUKS recut has run)."
+  type        = bool
+  default     = false
+}
