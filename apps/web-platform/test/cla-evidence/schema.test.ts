@@ -3,6 +3,7 @@
 // TS24: sidecar tombstone-append aborts on schema_version mismatch (consumer
 //       boundary assertion per cq-pg-security-definer-... / learning #18).
 import { describe, it, expect } from "vitest";
+import { INDIVIDUAL_CLA_DOC_PATH } from "@/scripts/cla-evidence/cla-doc-path";
 import {
   validateEvidenceRecord,
   EvidenceRecordSchema,
@@ -17,7 +18,7 @@ const validRecord = {
   actor: { login: "deruelle", id: 17031, type: "User" as const },
   pr_of_record: { number: 3196, repo: "jikig-ai/soleur" },
   cla_doc: {
-    path: "docs/legal/individual-cla.md",
+    path: INDIVIDUAL_CLA_DOC_PATH,
     git_sha: "0123456789abcdef0123456789abcdef01234567",
     content_sha256: "b".repeat(64),
   },

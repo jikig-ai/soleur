@@ -45,11 +45,13 @@ Before `git push` under Grok Build, run `bash plugins/soleur/scripts/grok-pre-pu
 
 Before your first pull request can be merged, you must sign the [Individual Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html) (CLA). The CLA bot will prompt you automatically on your first PR.
 
+**How it works:** Comment `I have read the CLA Document and I hereby sign the CLA` on your first PR. The CLA bot records your signature and the check passes. That is the whole ask, and you only need to sign once.
+
 **What does the CLA do?** You keep your copyright. Jikigai gets a license to use, distribute, and relicense your contribution -- this is needed because Soleur uses a [Business Source License](LICENSE) with dual licensing.
 
-**If your employer owns your work** (common with full-time employment contracts), ask them to sign the [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) by emailing legal@jikigai.com.
+**If your employer owns your work** (common with full-time employment contracts), a [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) is also needed -- **but chasing it is the maintainer's job, not yours.** Do not hold your pull request back on it and do not approach your employer's legal team yourself. Sign the individual CLA as above, tell us who your employer is, and we will approach them at legal@jikigai.com. We aim to reply within **3 business days**.
 
-**How it works:** Comment `I have read the CLA Document and I hereby sign the CLA` on your first PR. The CLA bot will record your signature and the check will pass. You only need to sign once.
+While a Corporate CLA is in flight your pull request is in the state **"CCLA in progress -- maintainer action, not yours"**. It is reviewed and merged on its merits in the meantime: the Corporate CLA is paperwork we owe your employer, not a task assigned to you, and once it is on file every future contribution from your colleagues is covered without anyone signing anything again.
 
 ## Submitting Changes
 

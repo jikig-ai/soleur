@@ -369,6 +369,7 @@ auto-coercion
 auto-fill
 auto-merge
 auto-revert
+autofix
 automation
 automation-claims
 automation-priority
@@ -680,6 +681,7 @@ ci/plausible-analytics
 ci/weekly-analytics
 citation-discipline
 citation-drift
+citation-integrity
 citation-rot
 citation-verification
 citations
@@ -920,6 +922,7 @@ cookie-injection
 cookies
 copy
 copywriter
+corpus-correction
 correction-discipline
 correction-pr
 correction-sweep
@@ -1073,6 +1076,7 @@ defensive-coding
 defer
 defer-vs-ship
 deferral
+deferral-triggers
 deferral-vs-legal-floor
 deferred
 deferred-artifact
@@ -1910,6 +1914,7 @@ issue-body-drift
 issue-body-staleness
 issue-deduplication
 issue-filing
+issue-hygiene
 issue-tracking
 issue-triage
 issue-verification

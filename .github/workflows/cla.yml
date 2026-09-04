@@ -57,15 +57,19 @@ jobs:
           # entry like `Soleur Agent`. See #5520 (the PR that exposed the null-login gap).
           allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot],soleur-ai[bot]"
           custom-notsigned-prcomment: |
-            Thank you for your contribution! Before we can accept it, you need to sign our [Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html).
+            Thank you for your contribution! One thing is needed before we can merge it.
 
-            **Why?** Soleur uses a Business Source License (BSL 1.1) and supports dual licensing. The CLA ensures Jikigai has the rights needed to maintain and distribute your contribution under all applicable licenses, while you retain your copyright.
-
-            **How to sign:** Comment on this PR with the following text:
+            **Comment this line on this PR, and the check goes green:**
 
             > I have read the CLA Document and I hereby sign the CLA
 
-            If your employer owns your work, please ask them to sign the [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) by contacting legal@jikigai.com.
+            That is the whole ask, it takes a few seconds, and it is the only thing this check is waiting on. You sign once and never again. Read the [Individual Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html) first if you would like to.
+
+            **Why?** Soleur uses a Business Source License (BSL 1.1) and supports dual licensing. The CLA ensures Jikigai has the rights needed to maintain and distribute your contribution under all applicable licenses, while you retain your copyright.
+
+            **If your employer owns your work** (common under a full-time employment contract), a [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) is also needed — **but chasing it is the maintainer's job, not yours.** Do not wait on it and do not go and ask your employer's legal team yourself. Sign the line above, tell us your employer's name, and we will approach them. We aim to reply within **3 business days**.
+
+            While that is in flight this PR is in the state **"CCLA in progress — maintainer action, not yours"**. Your pull request is reviewed and merged on its merits in the meantime; the Corporate CLA is our paperwork to finish, and any delay in it is ours rather than a request for anything further from you.
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
           custom-allsigned-prcomment: "All contributors have signed the CLA. Thank you!"
           lock-pullrequest-aftermerge: false

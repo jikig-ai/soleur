@@ -422,6 +422,98 @@ The monthly cron (`cla-evidence-timestamp.yml`) files a tracking issue per faile
 
 ---
 
+## 10. Corporate CLA — recording and withdrawing a designation
+
+Sections 1-9 concern the *Individual* CLA evidence archive in R2. A Corporate
+CLA is recorded differently and deliberately so: it lives in a git-tracked
+coverage map, `apps/cla-evidence/roster/ccla-roster.json`, with the executed
+instrument held off-repo. Nothing in this section touches R2.
+
+**Read this first.** The roster is tracked in a **public** repository. Every row
+committed to it is world-readable, is copied into every clone and fork, and
+**cannot afterwards be erased**. That is why the schema carries no name, title,
+email address or postal address — permanently, not pending a decision — and why
+the CLO ruling of 2026-09-04
+(`knowledge-base/legal/audits/2026-09-04-clo-ruling-ccla-register-siting-and-coverage-map-basis-3210.md`)
+governs what may go in it.
+
+### 10.1 Before you record anything
+
+1. The executed instrument has arrived at `legal@jikigai.com` and has been moved
+   to the encrypted operator drive. The mailbox is transport; the drive is
+   custody, and it is the surface an Art. 15 or Art. 17 request is answered
+   against.
+2. Compute the instrument hash over the bytes as received:
+   `sha256sum <instrument>`. Record that, not a hash of a re-exported copy.
+3. **Each account you are about to record has itself signed the Individual CLA
+   on a pull request here.** This is contribution-triggered entry and it is not
+   a formality — the Art. 6(1)(f) balancing, the Art. 13 notice route and the
+   Art. 17(3)(e) ground all rest on it. `ccla-add.sh` refuses to write an
+   account that has not signed, and CI refuses it a second time. If someone has
+   not signed yet, ask them to; the roster catches up afterwards. Their pull
+   request is not blocked in the meantime.
+4. Add the row to `knowledge-base/legal/ccla-register.md` (the index) using the
+   next free `Record ref`.
+
+### 10.2 Record a designation
+
+Dry-run first. It resolves logins to numeric ids, enforces the ledger check,
+validates against the schema, and writes nothing:
+
+```bash
+CCLA_ADD_DRY_RUN=1 bash apps/cla-evidence/scripts/ccla-add.sh add \
+  --record-ref CCLA-0001 \
+  --org "Example SARL" \
+  --signed-at 2026-09-04T00:00:00Z \
+  --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 <64-hex> \
+  --login octocat --login hubot
+```
+
+Re-run without `CCLA_ADD_DRY_RUN=1` to open a single-file pull request.
+
+Where the counterparty's legal name **is** a natural person's name — a sole
+trader, or anyone trading under their own name — pass `--sole-trader` instead
+of `--org`. The legal name is then held off-repo with the instrument and only
+the opaque `Record ref` is published (CLO amendment B1-c-2).
+
+### 10.3 Withdraw a designation
+
+Corporate CLA §5 makes withdrawal an email. Record it the same day it arrives:
+
+```bash
+bash apps/cla-evidence/scripts/ccla-add.sh remove \
+  --record-ref CCLA-0001 --login octocat --withdrawn-at 2026-09-05T00:00:00Z
+```
+
+**This is not erasure and must never be described as one**, to the data subject
+or in any document. It records that the organisation's designation of that
+account ended on a date. The earlier association remains in git history and in
+every copy of the repository. Do not call it a "tombstone" either — that word
+already denotes something erasure-shaped here (the `tombstones/<sha>.deleted.json`
+objects in §7's R2 override protocol), and reusing it is how a false statement
+about erasure reaches a data subject.
+
+### 10.4 Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Written (pull request opened), or dry-run emitted |
+| 2 | Pre-flight failure — `gh` unavailable or unauthenticated, dirty working tree, unreadable ledger |
+| 3 | The roster failed schema validation; nothing was written |
+| 4 | An account has not signed the Individual CLA; nothing was written |
+| 64 | Usage error |
+
+### 10.5 If an Art. 17 request arrives for a roster account
+
+Do not reach for `gdpr-override.sh` — that drives the R2 archive and has no
+effect on a git-tracked file. There is no erasure route for this surface, and
+saying otherwise is the failure this section exists to prevent. Route the
+request to the CLO. Art. 17(3)(b) is **not** available (no statute obliges a
+contributor roster; the obligation is contractual and self-imposed).
+Art. 17(3)(e) **is** available per record for an account whose association
+evidences that a merged commit was covered. Record the ground relied on.
+
 ## Appendix A: Sharp edges
 
 - **Tokens are config-pinned in Doppler** (learning #9). `DOPPLER_TOKEN_CLA` works only against the `prd_cla` config. Read tokens generated for inspection live in your local shell only, never in Doppler.

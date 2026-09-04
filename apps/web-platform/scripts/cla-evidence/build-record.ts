@@ -8,6 +8,7 @@
 // Exit codes: 0 ok, 2 fatal-4xx from comment-fetch, 3 schema mismatch, 1 other.
 
 import { computeBodyHash } from "./hash";
+import { INDIVIDUAL_CLA_DOC_PATH } from "./cla-doc-path";
 import { fetchCommentBody } from "./comment-fetch";
 import {
   validateEvidenceRecord,
@@ -95,7 +96,7 @@ async function main(): Promise<void> {
     },
     pr_of_record: { number: Number(env("PR_NUMBER")), repo: env("REPO_FULL") },
     cla_doc: {
-      path: "docs/legal/individual-cla.md",
+      path: INDIVIDUAL_CLA_DOC_PATH,
       git_sha: env("DOC_GIT_SHA"),
       content_sha256: env("DOC_CONTENT_SHA256"),
     },
