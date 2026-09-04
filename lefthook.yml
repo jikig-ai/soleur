@@ -208,15 +208,38 @@ pre-commit:
         - "*.sql"
       run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}
     # vendor-pin-integrity (FR5): verifies the staged contents of every
-    # NOTICE-tracked lifted file match the blob SHAs pinned in NOTICE
-    # frontmatter. Detects silent local edits to upstream-vendored content
-    # and silent additions of files outside the registry. The integrity
-    # script reads its registry from NOTICE at runtime, so the glob
-    # intentionally covers the whole `references/` subtree (plus NOTICE
-    # itself) — any new file added under `references/` triggers the script,
-    # which then rejects it via the "staged but not in NOTICE" branch.
-    # Narrow per-file globs would let a re-vendor land a 6th file without
-    # the integrity gate ever firing on it.
+    # NOTICE-registered reference file match the blob SHAs pinned in NOTICE
+    # frontmatter — `lifted-files` for upstream-vendored content and
+    # `soleur-authored` for files written for this plugin (#7710). Detects
+    # silent local edits and silent additions of files outside both
+    # registries. The integrity script reads its registry from NOTICE at
+    # runtime, so the globs are directory patterns rather than per-file
+    # literals: any new file in a covered directory triggers the script,
+    # which then rejects it via the "neither registry" branch. Narrow
+    # per-file globs would let a re-vendor land a new file without the
+    # integrity gate ever firing on it.
+    #
+    # `references/*.md` covers the WHOLE subtree at every depth. In lefthook's
+    # gobwas matcher a single `*` CROSSES `/` — measured on lefthook 2.1.6:
+    #
+    #   pattern            depth-1   depth-2
+    #   refs/*.md            yes       yes
+    #   refs/**/*.md         NO        yes
+    #   refs/**              yes       yes
+    #
+    # So the `layers/` entry below is redundant (kept: pre-existing and
+    # harmless; removing it is not this change's business), and a `legacy/`
+    # entry would be too.
+    #
+    # An earlier revision of this comment claimed the opposite — that these
+    # patterns are single-level and a new subdirectory stays ungated until a
+    # pattern is added — and added a `legacy/*.md` glob on that basis. Both
+    # were wrong. The repo's gobwas learning
+    # (2026-03-21-lefthook-gobwas-glob-double-star.md) is about `**`, which
+    # DOES require 1+ intermediate dirs; generalising it to `*` is the error.
+    # `references/legacy/` was reachable by this gate all along — which is why
+    # the three unpinned files were REJECTED as "not in NOTICE" rather than
+    # left silently unprotected, exactly as the compliance-posture row says.
     vendor-pin-integrity:
       priority: 6
       glob:
