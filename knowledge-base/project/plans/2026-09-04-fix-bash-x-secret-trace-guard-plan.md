@@ -473,8 +473,8 @@ plan time.
 | Plan said | Actual | Why |
 |---|---|---|
 | 932 tracked `.sh` | **936**, then 949 scanned | `main` moved 42 files under the branch; the literal was stale exactly as predicted |
-| ~170 in scope pre-exclusion | **153** in scope at ship: **23** carry the refusal, **130** deferred (23 + 130 = 153) | census is the authority, not the hand-derived estimate. The figure moved again when ship-time review added `SIGNAL_INDIRECT` and remediated `sweep-followthroughs.sh` |
-| 21 to remediate | **22** | review found `sweep-followthroughs.sh` in scope via `${!name}` and edited by this PR, so the drawdown trigger required remediating it rather than baselining it |
+| ~170 in scope pre-exclusion | **154** in scope at ship: **24** carry the refusal, **130** deferred (24 + 130 = 154) | census is the authority, not the hand-derived estimate. The figure moved again when ship-time review added `SIGNAL_INDIRECT` and remediated `sweep-followthroughs.sh` |
+| 21 to remediate | **23** | review added two: `sweep-followthroughs.sh` (in scope via `${!name}`, and edited by this PR, so the drawdown trigger required remediating it) and `tests/scripts/lib/preapply-entrypoint-gate.sh` (a live CI gate the `tests/` path exclusion was exempting) |
 | Phase 6.3: add to `required-checks.txt` + ruleset | **Deviated.** Registered the lint in `test-all.sh`, which runs in the required `test` context | `lint-bot-statuses` is advisory AND already carries its own follow-up comment to promote the whole job. Forking a parallel ruleset path to beat it would duplicate that work; registering in the required context achieves blocking today. The `ci.yml` step remains the fast advisory signal. |
 | 3 follow-up issues | **2** (#7842 consolidates the hook + CI form lint; #7843 the argv sweep) | net-issue-flow: two deferrals that share a trigger shape belong in one tracker; the argv sweep stays separate as a different subsystem |
 | ADR ordinal picked at plan time | **ADR-202** | `origin/main` topped at ADR-200 but ADR-201 was already claimed by a pushed branch — a `main`-only probe would have collided |

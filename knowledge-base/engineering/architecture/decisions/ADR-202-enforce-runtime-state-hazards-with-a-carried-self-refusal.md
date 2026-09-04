@@ -31,9 +31,9 @@ note about one lint.
 Applied to #7797: every tracked shell script that binds a live credential
 **must carry** a `case "$-" in *x*)` refusal in its prologue, enforced by
 `scripts/lint-shell-trace-credential-refusal.py`. Stated as an obligation, not
-as an accomplished fact: of 153 in-scope scripts, 23 carry it today (22 added
+as an accomplished fact: of 154 in-scope scripts, 24 carry it today (23 added
 here, plus `cutover-verify.sh`, which already did) and 130 are enumerated in the
-baseline as deferred. A Decision sentence in the indicative would assert a
+baseline as deferred (24 + 130 = 154). A Decision sentence in the indicative would assert a
 coverage property the artifact does not yet provide.
 
 ### Why the state predicate wins
