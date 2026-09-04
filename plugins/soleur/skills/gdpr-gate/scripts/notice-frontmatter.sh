@@ -28,6 +28,20 @@
 #                     the files the gate's own GDPR framing depends on while
 #                     leaving them editable through the normal update-the-pin
 #                     flow (#7710).
+#   record-count <block>
+#                     Integer count of `- path:` records DECLARED in the named
+#                     block, regardless of whether each record is complete.
+#
+#                     This exists because every other view here is a FILTERED
+#                     projection: `_emit_files` flushes a record only when BOTH
+#                     its path key and its sha key are non-empty, so a record
+#                     that loses `upstream-blob-sha` is silently absent from
+#                     `upstream-files`. A consumer that derives "how many files
+#                     should I have compared?" from that view is comparing the
+#                     parser's output against itself — the denominator shrinks
+#                     with the numerator and a partial comparison reads as
+#                     complete (#7710 review). `record-count` is the
+#                     unfiltered denominator.
 #   upstream-files    One `<upstream-path>:<upstream-blob-sha>` per line.
 #                     Upstream blob SHAs pin the file as it exists at
 #                     `pinned-commit` and are consumed by the drift workflow.
@@ -207,6 +221,29 @@ cmd_upstream_files() {
   _emit_files lifted-files upstream-path upstream-blob-sha
 }
 
+cmd_record_count() {
+  # Count `- path:` record openers in the named block. Deliberately does NOT
+  # require the record to be complete: the whole point is to expose records
+  # that the filtered views drop.
+  local block_key="${1:-lifted-files}"
+  local fm
+  fm=$(extract_frontmatter) || { echo 0; return 0; }
+  [[ -n "$fm" ]] || { echo 0; return 0; }
+  printf '%s\n' "$fm" | awk -v block_key="$block_key" '
+    BEGIN { in_block=0; n=0 }
+    $0 ~ "^" block_key ":[[:space:]]*$" { in_block=1; next }
+    /^[A-Za-z]/ { in_block=0 }
+    in_block {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      sub(/[[:space:]]+:[[:space:]]+/, ": ", line)
+      n_tok = split(line, tok, /[[:space:]]+/)
+      if (n_tok >= 3 && tok[1] == "-" && tok[2] == "path:") n++
+    }
+    END { print n+0 }
+  '
+}
+
 cmd_soleur_authored() {
   # Soleur-authored reference files. These are NOT upstream-derived, so they
   # carry a `local-blob-sha` only and never appear in `upstream-files` — a
@@ -231,11 +268,14 @@ case "${1:-}" in
   soleur-authored)
     cmd_soleur_authored
     ;;
+  record-count)
+    cmd_record_count "${2:-lifted-files}"
+    ;;
   upstream-files)
     cmd_upstream_files
     ;;
   *)
-    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|soleur-authored|upstream-files}" >&2
+    echo "Usage: $0 {field <name>|days-stale|cron-run-stale|lifted-files|soleur-authored|upstream-files|record-count [block]}" >&2
     exit 2
     ;;
 esac
