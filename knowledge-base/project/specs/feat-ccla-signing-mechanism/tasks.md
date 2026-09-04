@@ -30,10 +30,10 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 
 ## Phase 1 — Tier 0 (serve Convergence this week)
 
-- [ ] 1.1. FR7 copy in `.github/workflows/cla.yml` `custom-notsigned-prcomment`: lead with the ICLA
+- [x] 1.1. FR7 copy in `.github/workflows/cla.yml` `custom-notsigned-prcomment`: lead with the ICLA
       sign line; state the CCLA is the maintainer's to chase; name a turnaround.
-- [ ] 1.2. Same three changes in `CONTRIBUTING.md`.
-- [ ] 1.3. Add the in-flight state ("CCLA in progress — maintainer action, not yours") — the
+- [x] 1.2. Same three changes in `CONTRIBUTING.md`.
+- [x] 1.3. Add the in-flight state ("CCLA in progress — maintainer action, not yours") — the
       brainstorm's third minimum-fix item, dropped by the spec.
 - [ ] 1.4. Reply to Convergence: request a named signatory with title and an individually-
       attributable mailbox, plus the §5 notice-delivery confirmation the ruling now requires.
