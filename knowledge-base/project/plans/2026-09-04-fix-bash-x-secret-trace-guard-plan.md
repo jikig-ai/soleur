@@ -85,9 +85,10 @@ Two reasons survive the panel; the third was cut.
 
 1. **Completeness by construction.** `case "$-" in *x*)` tests whether tracing
    is *on*. A hook enumerates the ways to turn it on — measured at eight forms,
-   three carrying no `-x` token (`env SHELLOPTS=xtrace`, `env BASH_ENV=…`,
-   `BASH_XTRACEFD`). That list cannot be proven complete; the state test needs
-   no list.
+   two carrying no `-x` token (`env SHELLOPTS=xtrace`, `env BASH_ENV=…`).
+   (`BASH_XTRACEFD` does NOT enable tracing — measured, `$-` stays `hB`; it only
+   redirects a trace already enabled, which is a redaction-argument fact, not an
+   enabler.) That list cannot be proven complete; the state test needs no list.
 2. **The scaffold is proven.** `lint-trap-tempfile-ownership.py` already walks
    *every tracked `*.sh`* with `--changed` and a highwater.
 3. ~~CI coverage.~~ **Cut.** See below.
@@ -129,7 +130,8 @@ lint, sibling to `lint-workflow-errexit-capture.py`, with its own Guard Contract
 
 ### Blast radius, measured
 
-16 of the 22 credential readers are `scripts/followthroughs/*.sh`.
+15 of the 22 credential readers are `scripts/followthroughs/*.sh`.
+(Plan-time said 16; re-measured at 15 both at merge-base and at HEAD.)
 
 - The sweeper invokes probes under `env -i PATH=… HOME=…`, which **strips
   `SHELLOPTS` and `BASH_ENV`**, and xtrace does not cross `exec`. So under the
@@ -141,12 +143,21 @@ lint, sibling to `lint-workflow-errexit-capture.py`, with its own Guard Contract
   (`sweep-followthroughs.sh` anchor `TRANSIENT on a closed issue: no action AND
   no comment`). `followthrough-convention.md` names the never-converging shape
   as an anti-pattern, so the contract change is in scope.
-- **`exit 64` is already `EX_USAGE` in 57 files.** The preamble must not reuse
-  it. This plan uses **78** (`EX_CONFIG`), unused in the repo.
+- **`exit 64` is already `EX_USAGE` in 57 `.sh` files** (77 across all tracked
+  files). The preamble must not reuse it. This plan uses **78** (`EX_CONFIG`).
+  An earlier draft called 78 "unused in the repo" — **false**: `sentry-issue.sh`
+  already uses 78 for HTTP 403 and 77 (`EX_NOPERM`) for 401, and two other
+  scripts exit 78. That existing precedent is the better argument, and it is
+  what ADR-202 records.
 
 ### Detection base rate, measured
 
-| Detector | In scope / 932 |
+> **Superseded 2026-09-04 (#7797):** the denominator moved (932 → 936 → 949)
+> and the exclusion rules changed after this table was written. The lint's own
+> `--census` is the authority; final figures are in the Implementation
+> Deviations table below. Kept as the plan-time reading, not as current fact.
+
+| Detector | In scope / 932 (plan-time) |
 |---|---|
 | Naive (any token vocabulary) | 346 |
 | Refined, `doppler run` **removed** (it binds nothing in the parent — 87 files, 39 with no secret expansion at all) | 248 |
@@ -271,7 +282,7 @@ Preamble first, baseline after, so the baseline records only the deferred set.
 
 A path list, not a count — the precedent is
 `lint-window-closure-assertion.allowlist.txt`. A bare integer cannot say *which*
-149, so nobody can pick up the next ten. Measured: no `.highwater` in this repo
+130 (the shipped figure; plan-time said 149), so nobody can pick up the next ten. Measured: no `.highwater` in this repo
 has ever been deliberately driven down. Drawdown trigger, enforceable by the
 `--changed` mode already being built: **any PR that edits a listed script must
 remediate it.**
@@ -462,8 +473,8 @@ plan time.
 | Plan said | Actual | Why |
 |---|---|---|
 | 932 tracked `.sh` | **936**, then 949 scanned | `main` moved 42 files under the branch; the literal was stale exactly as predicted |
-| ~170 in scope pre-exclusion | **165** offenders pre-remediation, **144** after | census is the authority, not the hand-derived estimate |
-| 21 to remediate | **21** — held | verified against the lint's own census, not a grep |
+| ~170 in scope pre-exclusion | **153** in scope at ship: **23** carry the refusal, **130** deferred (23 + 130 = 153) | census is the authority, not the hand-derived estimate. The figure moved again when ship-time review added `SIGNAL_INDIRECT` and remediated `sweep-followthroughs.sh` |
+| 21 to remediate | **22** | review found `sweep-followthroughs.sh` in scope via `${!name}` and edited by this PR, so the drawdown trigger required remediating it rather than baselining it |
 | Phase 6.3: add to `required-checks.txt` + ruleset | **Deviated.** Registered the lint in `test-all.sh`, which runs in the required `test` context | `lint-bot-statuses` is advisory AND already carries its own follow-up comment to promote the whole job. Forking a parallel ruleset path to beat it would duplicate that work; registering in the required context achieves blocking today. The `ci.yml` step remains the fast advisory signal. |
 | 3 follow-up issues | **2** (#7842 consolidates the hook + CI form lint; #7843 the argv sweep) | net-issue-flow: two deferrals that share a trigger shape belong in one tracker; the argv sweep stays separate as a different subsystem |
 | ADR ordinal picked at plan time | **ADR-202** | `origin/main` topped at ADR-200 but ADR-201 was already claimed by a pushed branch — a `main`-only probe would have collided |

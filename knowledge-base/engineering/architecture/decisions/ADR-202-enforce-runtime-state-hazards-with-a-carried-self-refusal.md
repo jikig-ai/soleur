@@ -31,7 +31,8 @@ note about one lint.
 Applied to #7797: every tracked shell script that binds a live credential
 **must carry** a `case "$-" in *x*)` refusal in its prologue, enforced by
 `scripts/lint-shell-trace-credential-refusal.py`. Stated as an obligation, not
-as an accomplished fact: 21 scripts carry it today and 131 are enumerated in the
+as an accomplished fact: of 153 in-scope scripts, 23 carry it today (22 added
+here, plus `cutover-verify.sh`, which already did) and 130 are enumerated in the
 baseline as deferred. A Decision sentence in the indicative would assert a
 coverage property the artifact does not yet provide.
 
@@ -40,7 +41,7 @@ coverage property the artifact does not yet provide.
 `case "$-" in *x*)` asks *is tracing on*. It is complete by construction. A
 boundary interceptor must instead enumerate the ways to turn tracing on, and
 that list cannot be proven complete. Measured on bash 5.3.9, eight forms enable
-tracing and **three carry no `-x` token at all**:
+tracing and **two carry no `-x` token at all**:
 
 | Form | `-x` in argv? | Leaks expanded args? |
 |---|---|---|
@@ -48,7 +49,13 @@ tracing and **three carry no `-x` token at all**:
 | `set -x` / `set -o xtrace` in-script | yes | yes |
 | `env SHELLOPTS=xtrace` | **no** | yes |
 | `env BASH_ENV=<file with set -x>` | **no** | yes |
-| `BASH_XTRACEFD=N` | n/a | yes, redirected off stdout/stderr |
+
+`BASH_XTRACEFD=N` is deliberately **not** in that table: measured, it does not
+enable tracing at all (`$-` stays `hB`, no trace output). It only *redirects* a
+trace some other form already enabled — which is why it belongs to the redaction
+argument below rather than to the enumeration of enablers. An earlier draft
+counted it as a third no-token enabler; that was wrong, and the correction
+shrinks the enumeration without touching the decision.
 
 `BASH_XTRACEFD` independently rules out the mitigation alternative: the trace
 can be sent to an arbitrary file descriptor, so redacting stdout and stderr does
@@ -136,7 +143,7 @@ what remains after the lint.
 
 | Alternative | Why not |
 |---|---|
-| **PreToolUse(Bash) hook** (the issue's own proposal, and this plan's v1) | Cannot see CI logs; depends on an unprovable enumeration of trace spellings, three of which carry no `-x` token. Filed as the complement. |
+| **PreToolUse(Bash) hook** (the issue's own proposal, and this plan's v1) | Cannot see CI logs; depends on an unprovable enumeration of trace spellings, two of which carry no `-x` token. Filed as the complement. |
 | **Extend the lint to CI `run:` bodies** (this plan's v2) | Cut. Detecting "enables tracing" in YAML is exactly the enumeration the decision above rejects, with no `$-` to lean on, against a live population of **zero** trace-enabling steps. Filed as its own guard with its own contract. |
 | **Redact the trace output** as the GENERAL mechanism | Not available: `BASH_XTRACEFD` sends the trace to an arbitrary fd, so no stdout/stderr filter bounds the channel. **This does not forbid a targeted redaction on a specific, known channel** — the same PR strips `^\+` lines in `sweep-followthroughs.sh` before probe output reaches a public issue comment. That is defense-in-depth on one enumerated sink, not a substitute for the carried refusal, and the two are complementary rather than contradictory. |
 | **Reuse `redact-engine.py` (ADR-095) as the detector** | Wrong predicate. It finds secrets present as *literals in a file*; the at-risk scripts read them from the environment and contain no literal, so it returns clean for exactly the dangerous case. |

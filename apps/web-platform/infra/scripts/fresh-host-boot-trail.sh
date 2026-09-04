@@ -31,20 +31,13 @@
 
 set +e
 
-# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
-# expansion, so SENTRY_AUTH_TOKEN would be printed in full the moment it is
-# bound -- which is exactly how two live tokens reached an agent transcript.
-# `$-` is the load-bearing arm: bash applies an env-supplied SHELLOPTS or
-# BASH_ENV before line 1, so `x` is already set by the time this runs. Do not
-# delete it. Tracing stays available with the credential unset, so this refuses
-# a leak without blocking a debugging session.
+# REFUSE TO RUN UNDER XTRACE (#7797). This script ACQUIRES a credential at
+# runtime, so the refusal is UNCONDITIONAL: a `${VAR:+x}` hatch would be open
+# here by construction (the variable is still empty) and the fetch itself would
+# then be traced. `$-` is the load-bearing arm -- bash applies an env-supplied
+# SHELLOPTS or BASH_ENV before line 1, so `x` is already set by the time this runs.
 case "$-" in
-  *x*)
-    if [ -n "${SENTRY_AUTH_TOKEN:+x}${WEB_HOST_KEY:+x}" ]; then
-      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN, WEB_HOST_KEY) (see #7797). Re-run with SENTRY_AUTH_TOKEN= (and the others) to trace safely.\n' >&2
-      exit 78
-    fi
-    ;;
+  *x*) printf '[FATAL] refusing to run under xtrace: this script fetches a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
 esac
 # Prose-only. Defaulted rather than required so a caller that forgets it degrades to the
 # historical wording instead of printing an empty label into the operator-facing summary.

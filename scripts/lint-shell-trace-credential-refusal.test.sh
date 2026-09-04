@@ -129,6 +129,19 @@ for c in doppler-get capture gh-auth; do
     || fail "signal class '$c' should bring the file into scope, got rc=$rc"
 done
 
+# --- Unenumerable credential set: the hatch is unrepresentable ---------------
+# A file in scope via ${!name} ALONE names no credential, so a `${VAR:+x}` hatch
+# has nothing real to test and is open by construction. Both rows are required:
+# the must-PASS one is the positive control that separates "discriminates" from
+# "rejects every indirect file".
+rc="$(rc_of "$LINT" "$FIX/violation-indirect-conditional-hatch.sh")"
+[ "$rc" = "1" ] && pass "indirect-only file with a conditional hatch is rejected" \
+  || fail "indirect-only + conditional hatch should report rc=1, got rc=$rc"
+
+rc="$(rc_of "$LINT" "$FIX/compliant-indirect-unconditional.sh")"
+[ "$rc" = "0" ] && pass "indirect-only file refusing UNCONDITIONALLY is accepted (positive control)" \
+  || fail "indirect-only + unconditional refusal should report rc=0, got rc=$rc"
+
 # --- Fail-closed: unparseable input exits EXACTLY 2 (not merely non-zero) ----
 rc="$(rc_of "$LINT" "$FIX/malformed-not-utf8.sh")"
 [ "$rc" = "2" ] && pass "unparseable input exits exactly 2 (fail-closed, distinguishable from a violation)" \
@@ -285,6 +298,12 @@ mutate_row 'M6 fail-closed: unparseable treated as clean' \
   's/return 2, \[\]  # unparseable/return 0, []  # unparseable/' \
   "$FIX/malformed-not-utf8.sh" 2 0
 
+# M8: the INDIRECT arm is the one this PR added; without a row, deleting it
+# leaves every unenumerable file silently accepting a hatch that cannot fire.
+mutate_row 'M8 unenumerable: indirect arm dropped' \
+  's/if INDIRECT_RE\.search\(body\) and not referenced_credentials\(lines\):/if False:/' \
+  "$FIX/violation-indirect-conditional-hatch.sh" 1 0
+
 # --- H1: the floor must fail via a DIRECT exit, not through the helpers -------
 # H1: assert the floor by DRIVING it, not by grepping for its name -- the old
 # check searched for a literal its own grep line contains, so deleting the floor
@@ -307,7 +326,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Absolute floor, recorded from a MEASURED green run (never from expectation --
 # that was wrong three times in sibling PR #7806). Reported with printf + exit 1
 # directly, never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=28
+MIN_ASSERTIONS=31
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

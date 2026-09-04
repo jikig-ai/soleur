@@ -31,12 +31,14 @@ set -uo pipefail
 # `set -x` traces every argument of every command — which is exactly how #7797
 # printed the Sentry and BetterStack tokens into a transcript. A prose warning in
 # the runbook cannot see `bash -x`, `SHELLOPTS=xtrace`, or a BASH_ENV that sets
-# it; this can.
+# it; this can. Exit 78 (EX_CONFIG), not 64 (EX_USAGE at 57 sites here): the
+# refusal reports a misconfigured RUN, not a misuse of the CLI (ADR-202). The
+# two `exit 64`s further down ARE usage errors and stay 64.
 case "$-" in
-  *x*) printf '[FATAL] refusing to run under xtrace: this script passes bearer tokens, and -x would print them (see #7797)\n' >&2; exit 64 ;;
+  *x*) printf '[FATAL] refusing to run under xtrace: this script passes bearer tokens, and -x would print them (see #7797)\n' >&2; exit 78 ;;
 esac
 if [[ "${SHELLOPTS:-}" == *xtrace* ]]; then
-  printf '[FATAL] refusing to run with SHELLOPTS=xtrace: this script passes bearer tokens (see #7797)\n' >&2; exit 64
+  printf '[FATAL] refusing to run with SHELLOPTS=xtrace: this script passes bearer tokens (see #7797)\n' >&2; exit 78
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

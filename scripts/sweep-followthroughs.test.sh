@@ -728,7 +728,9 @@ EOF
 # The probe's combined output is posted verbatim into a GitHub issue comment,
 # and issue-comment bodies do NOT pass through the Actions runner's secret
 # masker -- that masking covers job LOG output and only for `secrets.*` values,
-# while these probes fetch credentials at runtime via doppler. So a traced probe
+# The probe secrets DO come from `secrets.*`; masking is applied to the log
+# stream, not to an API payload, so a registered value still lands unmasked in a
+# comment. So a traced probe
 # would publish its own credential.
 #
 # RUNS WITH DRY_RUN=0 AND A CAPTURING STUB, DELIBERATELY. The first draft of

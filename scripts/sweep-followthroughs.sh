@@ -20,6 +20,20 @@
 
 set -euo pipefail
 
+# Refuse unconditionally, not behind a `${VAR:+x}` hatch: the forwarded-secret
+# set is determined at RUNTIME by each issue's `secrets=` clause, so no literal
+# name exists for a hatch to test and it would be open by construction.
+# Measured -- the append at `env_args+=("$name=${!name}")` does NOT leak (bash
+# prints array appends unexpanded), but the invocation below traces as
+#   ++ env -i PATH=... SENTRY_AUTH_TOKEN=<value> scripts/followthroughs/<probe>
+# putting every secret this sweeper forwards onto one line, which then reaches a
+# public issue comment. To debug a probe, trace the probe itself: xtrace is not
+# inherited across this child invocation (and `env -i` clears it outright), so
+# tracing the sweeper never showed the probe's execution anyway.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script forwards live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;
+esac
+
 REPO="${GH_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner)}"
 DRY_RUN="${DRY_RUN:-0}"
 SCRIPTS_ROOT="scripts/followthroughs"
@@ -367,8 +381,11 @@ run_one() {
   # STRIP SHELL-TRACE LINES BEFORE THIS OUTPUT REACHES A PUBLIC COMMENT (#7797).
   # `$out` is posted verbatim into a GitHub issue comment below, and issue-comment
   # bodies do NOT pass through the Actions runner's secret masker -- that masking
-  # covers job LOG output and only for values sourced from `secrets.*`, while
-  # these probes fetch credentials at runtime via doppler. So this is the one
+  # is applied to the runner's LOG stream, not to an API payload, so a value that
+  # IS registered still lands in a comment unmasked. (Every probe secret here does
+  # come from `secrets.*`; an earlier draft of this comment claimed they are
+  # fetched at runtime via doppler, which is false and would mislead the next
+  # reader about why the strip is needed.) So this is the one
   # genuinely unmasked channel in the sweep, and one strip here protects every
   # probe rather than relying on 76 scripts each carrying a correct preamble.
   #

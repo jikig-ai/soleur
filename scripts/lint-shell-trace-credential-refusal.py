@@ -9,8 +9,9 @@ preamble the rule rather than a one-off.
 
 WHY A COMMIT-TIME LINT AND NOT A HARNESS HOOK. `case "$-" in *x*)` tests whether
 tracing is ON. A boundary interceptor must instead enumerate the ways to turn it
-on -- measured at eight forms, three of which carry no `-x` token at all
-(`env SHELLOPTS=xtrace`, `env BASH_ENV=<file with set -x>`, `BASH_XTRACEFD`).
+on -- measured at eight forms, two of which carry no `-x` token at all
+(`env SHELLOPTS=xtrace`, `env BASH_ENV=<file with set -x>`). `BASH_XTRACEFD`
+only REDIRECTS an already-enabled trace; measured, it enables nothing.
 That list cannot be proven complete; the state test needs no list. The
 interceptor is the COMPLEMENT, scoped to what is never committed (ad-hoc
 `bash -c`, scripts the model wrote but never committed) -- filed separately.
@@ -167,15 +168,15 @@ def check_rule_a(rel: str, lines: list[str], preamble_at: int | None) -> list[st
         # developer red under Rule C after pasting it verbatim -- a guard that
         # tells you how to satisfy it and then rejects that is a dead end.
         creds = sorted(referenced_credentials(lines))
-        if ACQUIRES.search("".join(strip_comment(l) for l in lines)):
-            remedy = (
-                'case "$-" in\n'
-                "  *x*) printf '[FATAL] refusing to run under xtrace: this script fetches a "
-                "credential (see #7797)\\n' >&2; exit 78 ;;\n"
-                "esac"
-            )
+        body_a = "".join(strip_comment(l) for l in lines)
+        # `not creds` is the fail-closed arm: if no credential can be NAMED, the
+        # only representable guard is the unconditional one. Emitting a
+        # placeholder variable name here would hand the developer a remedy that
+        # can never guard anything real.
+        if unconditional_reason(body_a, lines) or not creds:
+            remedy = UNCONDITIONAL_REMEDY
         else:
-            cond = "".join(f'${{{c}:+x}}' for c in creds) or "${YOUR_CREDENTIAL:+x}"
+            cond = "".join(f'${{{c}:+x}}' for c in creds)
             remedy = (
                 'case "$-" in\n  *x*)\n'
                 f'    if [ -n "{cond}" ]; then\n'
@@ -213,6 +214,51 @@ ACQUIRES = re.compile(
     r"|gh auth token"
     r"|[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)=\"?\$\("
 )
+
+INDIRECT_RE = re.compile(SIGNAL_INDIRECT)
+
+# The one remedy text for every file whose credential set is not statically
+# knowable. Single-sourced so Rule A's "add this" and Rule C's "use this
+# instead" can never drift apart.
+UNCONDITIONAL_REMEDY = (
+    'case "$-" in\n'
+    "  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live "
+    "credential and -x would print it (see #7797)\\n' >&2; exit 78 ;;\n"
+    "esac"
+)
+
+
+def unconditional_reason(body: str, lines: list[str]) -> tuple[str, str] | None:
+    """Why this file cannot use the conditional escape hatch, or None.
+
+    Two distinct causes, one consequence -- the guard cannot name the credential
+    it must cover, so any `${VAR:+x}` hatch is open at guard time and the
+    credential is traced anyway:
+
+      ACQUIRES  the credential is FETCHED at runtime, so the variable is empty
+                at the preamble by construction.
+      INDIRECT  the credential is NAMED at runtime (`${!name}`), so no literal
+                name exists for the guard to test.
+
+    Measured for the INDIRECT case in `sweep-followthroughs.sh`: the forwarded
+    secrets do NOT leak at the array append (bash prints `arr+=(...)`
+    unexpanded) but DO leak at the invocation --
+    `++ env -i ... SENTRY_AUTH_TOKEN=<value> <script>` -- putting every secret
+    the sweeper forwards onto a single trace line.
+    """
+    if ACQUIRES.search(body):
+        return (
+            "ACQUIRES a credential at runtime",
+            "The variable is empty at this line by construction, the hatch opens, "
+            "and the acquisition is then traced.",
+        )
+    if INDIRECT_RE.search(body) and not referenced_credentials(lines):
+        return (
+            "names its credentials indirectly (`${!name}`)",
+            "The credential set is determined at runtime, so no literal name exists "
+            "for the hatch to test and it is open by construction.",
+        )
+    return None
 
 CREDENTIAL_NAME = re.compile(r"\b([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\b")
 GUARDED_NAME = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?\+[^}]*\}")
@@ -277,24 +323,25 @@ def check_rule_c(rel: str, lines: list[str], preamble_at: int | None) -> list[st
         return []  # Rule A already reported the absence.
     referenced = referenced_credentials(lines)
     guarded = guarded_credentials(lines, preamble_at)
-    if not referenced:
-        return []
     out: list[str] = []
     body = "".join(strip_comment(l) for l in lines)
     window = arm_window(lines, preamble_at)
 
-    if ACQUIRES.search(body) and ":+" in window:
+    # BEFORE the `not referenced` return: a file that names its credentials
+    # indirectly has an EMPTY referenced set, so an early return here would make
+    # this rule structurally unable to see the very class it exists to catch.
+    reason = unconditional_reason(body, lines)
+    if reason and ":+" in window:
+        label, why = reason
+        indented = "\n".join("    " + l for l in UNCONDITIONAL_REMEDY.splitlines())
         out.append(
-            f"{rel}:{preamble_at + 1}: this script ACQUIRES a credential at runtime, so a "
-            f"conditional refusal cannot protect it.\n"
-            f"  The variable is empty at this line by construction, the hatch opens, and the "
-            f"acquisition is then traced.\n"
-            f"  Refuse unconditionally instead:\n\n"
-            f"    case \"$-\" in\n"
-            f"      *x*) printf '[FATAL] refusing to run under xtrace: this script fetches a "
-            f"credential (see #7797)\\n' >&2; exit 78 ;;\n"
-            f"    esac\n"
+            f"{rel}:{preamble_at + 1}: this script {label}, so a conditional refusal "
+            f"cannot protect it.\n"
+            f"  {why}\n"
+            f"  Refuse unconditionally instead:\n\n{indented}\n"
         )
+    if not referenced:
+        return out
 
     # Predicate form: a guard that expands the value is worse than none,
     # because it leaks WHILE refusing and reads as protection.
