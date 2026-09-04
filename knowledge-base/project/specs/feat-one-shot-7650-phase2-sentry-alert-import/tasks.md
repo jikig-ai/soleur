@@ -195,21 +195,36 @@ List with reasons.
 
 ## Phase 10 — Pre-merge verification
 
-- [ ] **10.1** **AC2** on the PR plan JSON: zero non-`no-op`/non-`forget` rows; 27 `["forget"]`;
+- [x] **10.1** **AC2** on the PR plan JSON: zero non-`no-op`/non-`forget` rows; 27 `["forget"]`;
       27 `.change.importing.id` (**note the path**); ids match the capture. The summary line
       (`Plan: 27 to import, 0 to add, 0 to change, 0 to destroy.` — **note the `to import`
       clause**) is corroboration, not the assertion.
-- [ ] **10.2** **AC3** — the bijection, membership not cardinality.
-- [ ] **10.3** **AC4** — `sentry-squash-ack-detect.sh` exits 0 on the branch commits (the
+- [x] **10.2** **AC3** — the bijection, membership not cardinality.
+- [x] **10.3** **AC4** — `sentry-squash-ack-detect.sh` exits 0 on the branch commits (the
       *predictor*, which is what is checkable pre-merge), and the counters read
       `deletes=0 / creates=0 / forgets=27`.
-- [ ] **10.4** **AC5** — assert the merge method is **squash**. A merge-commit merge yields a body
+- [x] **10.4** **AC5** — assert the merge method is **squash**. A merge-commit merge yields a body
       with no ack and reds the apply after `main` has already taken the config.
-- [ ] **10.5** Pre-stage `[ack-destroy]` on its own line in a commit **BODY** (never a subject).
-- [ ] **10.6** **AC11** — the monitor-id equality check is green in `plan_pr`.
-- [ ] **10.7** `scripts/test-all.sh` green, including the newly-registered suite and the four
+      **Verified 2026-09-04, and the result carries a caveat.** `squash_merge_commit_message`
+      is `COMMIT_MESSAGES`, so the AC4 predictor's squash-body emulation is VALID and its
+      green verdict means what it says. But the repo also has `allow_merge_commit: true` and
+      `allow_rebase_merge: true`, so a merge-commit merge is *possible* — nothing mechanically
+      prevents it. The guarantee here is procedural: merge with `--squash`. The PR body states
+      it in bold. Closing this repo-wide would disable merge commits for every PR and is out
+      of scope.
+- [x] **10.5** Pre-stage `[ack-destroy]` on its own line in a commit **BODY** (never a subject).
+- [x] **10.6** **AC11** — the monitor-id equality check is green in `plan_pr`.
+- [~] **10.7** `scripts/test-all.sh` green, including the newly-registered suite and the four
       touched guard suites. Run each suite's own invocation, not a reconstruction of its inputs.
-- [ ] **10.8** **AC14** — the PR body carries: the re-run recovery gesture; revert is forbidden; a
+      **PARTIAL — 21 suites run individually, green; the full gate was not completed locally.**
+      The pre-commit full gate blocked on `flock` behind a sibling worktree's gate for 63
+      minutes without executing a single suite (that sibling held the lock for 111 min). The
+      prior completed full gate on this branch reported 351/361 with 7 failures; all seven are
+      now fixed or confirmed environmental (`memory-backstop` passes standalone at 54/54 and
+      this diff touches nothing under `.claude/`). Each affected suite was run via its own
+      invocation, not a reconstruction. **CI runs the authoritative gate on the PR — that is
+      the run this AC should be closed against, not a local one.**
+- [x] **10.8** **AC14** — the PR body carries: the re-run recovery gesture; revert is forbidden; a
       clean plan is not evidence the deprecation lifted; two resources still read the deprecated
       path; and the brownout-deadlock case.
 - [ ] **10.9** Full review panel — authorised and **required** before ship.

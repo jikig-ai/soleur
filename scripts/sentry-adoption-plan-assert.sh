@@ -41,7 +41,11 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLAN="${1:?usage: sentry-adoption-plan-assert.sh <plan.json> [expected-pairs] [capture.json]}"
-EXPECTED="${2:-27}"
+# REQUIRED, not defaulted. The header six lines up says the literal is "passed
+# explicitly by the caller" so a future adoption of a different size has to change
+# the call deliberately — and a `${2:-27}` default contradicted exactly that by
+# silently re-arming the assertion at 27 for a caller that forgot.
+EXPECTED="${2:?usage: sentry-adoption-plan-assert.sh <plan.json> <expected-pairs> [capture.json]}"
 CAPTURE="${3:-}"
 
 if [[ ! -r "$PLAN" ]]; then
@@ -62,6 +66,17 @@ if [[ ! "${n_forget:-}" =~ ^[0-9]+$ || ! "${n_import:-}" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+# ROW-COUNT FLOOR before the skip branch. "Zero forgets and zero imports" is the
+# legitimate post-adoption state AND what a truncated or unwritten plan document
+# looks like, and the skip branch cannot tell them apart. Without this, the
+# AC2/AC10 assertion that gates the run which mutates prod relied on the create
+# tripwire happening to run first at both call sites.
+rows=$(jq -r '(.resource_changes // []) | length' "$PLAN" 2>/dev/null) || rows=""
+if [[ ! "$rows" =~ ^[0-9]+$ ]] || [[ "$rows" -eq 0 ]]; then
+  echo "::error::adoption plan assert: '$PLAN' has ZERO resource_changes rows. A full-root Sentry plan always carries one row per managed resource, no-ops included — zero means the document is truncated, targeted, or was never written, not that there is nothing to assert." >&2
+  exit 1
+fi
+
 if [[ "$n_forget" -eq 0 && "$n_import" -eq 0 ]]; then
   echo "adoption plan assert: SKIP — this plan carries no forget and no import rows, so it is not an adoption plan. (Expected on every run after the adoption has applied, and permanently after #7826 removes the blocks.)"
   exit 0
@@ -78,8 +93,27 @@ fi
 # ── 2. Cardinality against the landed scope. The bijection holds for 26 pairs
 #       too; this is what notices that a pair went missing from BOTH sides. ──
 if [[ "$n_forget" -ne "$EXPECTED" || "$n_import" -ne "$EXPECTED" ]]; then
-  echo "::error::adoption plan assert: expected ${EXPECTED} forget(s) and ${EXPECTED} import(s), got ${n_forget} and ${n_import}." >&2
-  echo "::error::A removed{}+import{} pair dropped together keeps the bijection intact while a live paging rule is silently left on the old address. If the scope genuinely changed, update the expected count at the call site." >&2
+  # TWO DIFFERENT SITUATIONS, and conflating them made the PR's own documented
+  # recovery unusable. A RESUMED PARTIAL APPLY looks like `k == k < EXPECTED`:
+  # the pairs that already committed leave no rows behind (a removed{} naming an
+  # address no longer in state produces no forget; an import{} naming an address
+  # already in state is a measured silent no-op), so a run that got 15 of 27
+  # through re-plans as exactly 12 + 12. A DROPPED PAIR looks the same
+  # arithmetically but means something else entirely.
+  #
+  # Both must still refuse to apply — the caller declared a scope and this is not
+  # it — but they need different sentences, because the operator's next action
+  # differs and the apply-failure issue tells them to "re-run the failed job,
+  # it is the only gesture that works". Under a partial apply the re-run reds
+  # HERE, and the previous wording sent them hunting for a dropped block.
+  if [[ "$n_forget" -eq "$n_import" && "$n_forget" -lt "$EXPECTED" ]]; then
+    echo "::error::adoption plan assert: ${n_forget} matched pair(s), expected ${EXPECTED} — this is the shape of a RESUMED PARTIAL APPLY, not a dropped block." >&2
+    echo "::error::A pair that already applied leaves NO rows in a re-plan: its removed{} names an address no longer in state, and its import{} names an address already in state. So $(( EXPECTED - n_forget )) of the ${EXPECTED} pairs appear to have committed and ${n_forget} remain." >&2
+    echo "::error::VERIFY THAT before acting, because a dropped removed{}+import{} pair is arithmetically identical here. Run AC17: 'terraform state list' for this root should show $(( EXPECTED - n_forget )) sentry_alert. addresses and ${n_forget} sentry_issue_alert. addresses still to move. If it does, the adoption is genuinely mid-flight and the remaining ${n_forget} are what is left to apply — resuming needs the expected count at the call site lowered to ${n_forget} in a reviewed commit, NOT an edit made under time pressure. If state does not agree, a pair really was dropped: restore the block." >&2
+  else
+    echo "::error::adoption plan assert: expected ${EXPECTED} forget(s) and ${EXPECTED} import(s), got ${n_forget} and ${n_import}." >&2
+    echo "::error::The two counts differ, so this is not a resumed partial apply. A removed{}+import{} pair dropped together keeps the bijection intact while a live paging rule is silently left on the old address. If the scope genuinely changed, update the expected count at the call site." >&2
+  fi
   rc=1
 fi
 
@@ -92,7 +126,18 @@ others=$(jq -r '
     | select((.change.actions // []) != ["forget"])
     | "\(.address) actions=\((.change.actions // []) | join(","))" ]
   | .[]
-' "$PLAN") || others=""
+' "$PLAN") || others="JQFAIL"
+
+# A jq failure must not read as the SUCCESS signal. An empty `$others` means
+# "every managed row is a no-op or a forget" — the strongest claim this script
+# makes — so `|| others=""` made an unparseable plan indistinguishable from a
+# clean one. The sentinel mirrors the capture cross-check twenty lines down,
+# which already got this right.
+if [[ "$others" == "JQFAIL" ]]; then
+  echo "::error::adoption plan assert: could not scan managed rows in '$PLAN'; refusing to report the 0-add/0-change/0-destroy assertion as passed." >&2
+  rc=1
+  others=""
+fi
 
 if [[ -n "$others" ]]; then
   count=$(grep -c '' <<<"$others")

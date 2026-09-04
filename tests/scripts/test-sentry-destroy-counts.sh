@@ -16,6 +16,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/sentry-destroy-counts.sh"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
 pass=0; fail=0
+EXPECTED_TESTS=9
 
 _report() {
   local label="$1" status="$2" detail="${3:-}"
@@ -174,4 +175,15 @@ t_no_args_fails
 t_both_jobs_call_the_script
 
 echo "=== $pass passed, $fail failed ==="
+# HARNESS FLOOR (#7650 review). A commented-out dispatch line reads green
+# forever without this: the suite reports `0 failed` and exits 0 having
+# silently stopped running assertions. The three suites added by #7650 Phase 2
+# carry the same floor; these three were EXTENDED by it and deserve it too,
+# because the rows added here are the ones carrying Guard C.
+ran=$((pass + fail))
+if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then
+  echo "[FAIL] harness: ran $ran test(s), expected $EXPECTED_TESTS — a suite that silently stops running its assertions reports green" >&2
+  exit 1
+fi
+
 [[ "$fail" -eq 0 ]]

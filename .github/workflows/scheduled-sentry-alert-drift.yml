@@ -28,12 +28,24 @@
 # `sentry_cron_monitor` resource in cron-monitors.tf — and adding a resource to
 # THIS root in THIS PR would plan `1 to add`, which AC2 forbids: the adoption's
 # whole safety argument is that its plan is 27 imports and nothing else. The
-# monitor is tracked by #7834, to add once the adoption has applied. Until
-# then, scheduler liveness is covered by `cron-inngest-cron-watchdog` via the
-# `EXPECTED_CRON_FUNCTIONS` parity manifest, and the probe itself is additionally
-# run as a post-apply step in apply-sentry-infra.yml. What is NOT covered in the
-# interim is "the dispatch was accepted and the runner never ran" — say so rather
-# than implying the chain is fully instrumented.
+# monitor is tracked by #7834, to add once the adoption has applied.
+#
+# WHAT IS COVERED IN THE INTERIM: scheduler liveness, via
+# `cron-inngest-cron-watchdog` and the `EXPECTED_CRON_FUNCTIONS` parity manifest
+# — if the cron stops being planned, that pages. And since #7650 review, an
+# `unavailable` verdict now files its own issue from this workflow, so "the
+# probe ran and could not establish a verdict" IS routed.
+#
+# WHAT IS NOT: "the dispatch was accepted and the runner never ran." No GHA run
+# means no step of this workflow executes, so nothing here can file anything.
+# The sibling's `sentry-heartbeat` covers that via a MISSED CHECK-IN, and that
+# is the term #7834 restores.
+#
+# NOT counted as interim coverage: the post-apply invocation in
+# apply-sentry-infra.yml. That workflow's push trigger is `paths:`-scoped to
+# `apps/web-platform/infra/sentry/**`, so once this adoption merges it is
+# near-dormant — it is a MERGE-TIME check on days someone changes the Sentry
+# root, not ongoing coverage on the days that matter.
 #
 # To test manually: gh workflow run scheduled-sentry-alert-drift.yml
 name: Sentry Alert Drift Detection
@@ -165,6 +177,91 @@ jobs:
           fi
           echo "::error::sentry_alert drift detected — see the tracking issue."
           exit 1
+
+      - name: File or update the probe-unavailable issue
+        # THE DETECTOR'S OWN DEAD-MAN'S SWITCH.
+        #
+        # `unavailable` means this run established NOTHING about the 27 rules.
+        # Until this step existed, that verdict — and every abort before the
+        # probe ran at all (a cleared secret, a checkout failure, an OOM) —
+        # terminated in a red row in the Actions tab of a cron-dispatched
+        # workflow nobody is subscribed to. There is no repo-wide
+        # `workflow_run`-failure watcher; `post-merge-monitor.yml` watches the
+        # release pipeline only. So the §2.9 detector could be dead for weeks
+        # while `byok-art-33-breach` went unwatched, and that state was
+        # INDISTINGUISHABLE FROM CLEAN to every keyboard-reachable channel.
+        #
+        # The verdict logic already separated "could not run" from "ran and
+        # found nothing" correctly. The ROUTING collapsed them. This is the
+        # missing route, and it needs no `sentry_cron_monitor` — so it does not
+        # touch AC2 and is not blocked on #7834.
+        #
+        # `always() &&` on a `failure()` predicate: `failure()` alone would also
+        # skip if an earlier step in this job had already failed AND been
+        # tolerated. Written as the explicit pair for the same reason the two
+        # steps below carry it.
+        if: always() && failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERDICT: ${{ steps.probe.outputs.verdict }}
+        run: |
+          set -euo pipefail
+          TITLE="[ci/sentry-alert-drift] the drift probe could not establish a verdict"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          gh label create "ci/sentry-alert-drift" --repo "$GH_REPO" \
+            --description "sentry_alert live-fidelity drift (#7650 §2.9)" --color "B60205" 2>/dev/null || true
+
+          BODY_FILE="${RUNNER_TEMP}/unavailable-issue.md"
+          {
+            printf '## The Sentry alert drift probe did not run to a verdict\n\n'
+            printf 'This is NOT a report that something drifted. It is a report that **nobody checked**. While this is open, the 27 adopted `sentry_alert` rules — including `byok-art-33-breach`, which anchors the GDPR Art. 33 72-hour clock — are unwatched, and that state looks identical to healthy everywhere except this issue.\n\n'
+            printf -- '- Verdict reached: `%s`\n' "${VERDICT:-<none — the run aborted before the probe step wrote one>}"
+            printf -- '- Detected at: %s\n' "$NOW"
+            printf -- '- Run log: %s\n\n' "$RUN_URL"
+            printf '### What to check, in order\n\n'
+            printf -- '1. **A cleared or expired secret.** The run refuses loudly if `SENTRY_IAC_AUTH_TOKEN`, `SENTRY_ORG` or `SENTRY_API_HOST` is empty; the first step names which.\n'
+            printf -- '2. **The pagination ceiling.** The probe refuses at >= 100 workflows because a rule on page 2 would read as DELETED and produce a false "27 rules are gone" alarm. If the org has grown past 100, the fix is cursor-following in `scripts/sentry-alert-live-fidelity.sh`, not raising the ceiling.\n'
+            printf -- '3. **A non-array payload.** A 200 carrying something other than a JSON array means schema drift or an interstitial, not an auth problem — `curl -fsS` would already have aborted on any >= 400.\n'
+            printf -- '4. **An unreadable capture.** The probe refuses if the committed capture yields zero in-scope rules, rather than reporting "no drift" having compared nothing.\n\n'
+            printf 'Re-run this workflow once the cause is fixed; it auto-closes this issue on any run that reaches a verdict.\n'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
+            --limit 100 --json number,title \
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body-file "$BODY_FILE"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label "ci/sentry-alert-drift" --label "type/chore" --label "priority/p1-high" \
+              --milestone "Post-MVP / Later" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Close the probe-unavailable issue (a verdict was reached)
+        # Closes on EITHER real verdict. `clean` and `drift` both mean the probe
+        # ran end to end; only `unavailable` means it did not. Deliberately NOT
+        # gated on `success()` alone — a `drift` run ends red because the filer
+        # below exits 1, and that run did establish a verdict.
+        if: always() && (steps.probe.outputs.verdict == 'clean' || steps.probe.outputs.verdict == 'drift')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
+            --limit 100 --json number,title \
+            --jq 'map(select(.title == "[ci/sentry-alert-drift] the drift probe could not establish a verdict")) | .[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" \
+              --comment "The probe reached a verdict again at ${NOW}. Run: ${RUN_URL}"
+          fi
 
       - name: Close the drift issue (clean)
         # Gated on `clean`, never on `!= drift`. An `unavailable` run establishes

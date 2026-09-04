@@ -53,8 +53,19 @@ CAPTURE="${SENTRY_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650
 
 [[ -r "$CAPTURE" ]] || { echo "ERROR: capture not readable at $CAPTURE" >&2; exit 1; }
 
+# FIXTURE MODE IS ANNOUNCED, LOUDLY. The override exists for this script's own
+# suite, but "its own suite ONLY" was prose, not a mechanism: the PASS line was
+# byte-identical whether the rules came from live Sentry or from a local file,
+# down to the word "live". Both call sites invoke this bare, in jobs where an
+# earlier step writes to `$GITHUB_ENV` — so any future step, repo variable or
+# environment value named SENTRY_FIXTURE_RULES would silently convert the one
+# post-apply probe covering `byok-art-33-breach` into a self-comparison that can
+# never fail, with no trace in the log.
+FIXTURE_MODE=0
 fetch_rules() {
   if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
+    FIXTURE_MODE=1
+    echo "::warning::sentry_alert live fidelity: FIXTURE MODE — SENTRY_FIXTURE_RULES is set, so this run did NOT read live Sentry. A PASS here says the fixture matches the capture and NOTHING about production." >&2
     cat "$SENTRY_FIXTURE_RULES"
     return
   fi
@@ -204,7 +215,13 @@ while IFS= read -r name; do
 done < <(jq -r 'keys[]' <<<"$live_proj")
 
 if [[ "$findings" -eq 0 ]]; then
-  echo "sentry_alert live fidelity: PASS (all ${cap_count} in-scope rules match the committed capture field-for-field)"
+  # The verdict carries the mode. A grep for `PASS (all N` in a log must not be
+  # satisfiable by a fixture run.
+  if [[ "$FIXTURE_MODE" -eq 1 ]]; then
+    echo "sentry_alert live fidelity: PASS (FIXTURE — not live) (all ${cap_count} in-scope rules match the committed capture field-for-field)"
+  else
+    echo "sentry_alert live fidelity: PASS (all ${cap_count} in-scope rules match the committed capture field-for-field)"
+  fi
   exit 0
 fi
 

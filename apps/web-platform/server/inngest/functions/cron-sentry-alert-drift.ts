@@ -28,12 +28,14 @@
  *    `EXPECTED_CRON_FUNCTIONS` manifest keep this cron in the watchdog's purview.
  *  - Dispatch error path: a token-mint / Octokit failure is reported loudly to
  *    the Sentry issues stream via `reportSilentFallback` (token redacted).
- *  - NOT covered yet: "the dispatch was accepted and the runner never ran". The
- *    workflow carries no `sentry-heartbeat` step because that needs a
+ *  - Probe-unavailable: the workflow files its OWN issue when the probe runs but
+ *    cannot establish a verdict, so "it ran and could not tell" is routed.
+ *  - NOT covered yet: "the dispatch was accepted and the runner never ran". No
+ *    GHA run means no step of that workflow executes, so nothing there can
+ *    report it. The workflow carries no `sentry-heartbeat` step — that needs a
  *    `sentry_cron_monitor` resource, and adding one to the Sentry root in the
- *    adoption PR would plan `1 to add` — which AC2 forbids. It is filed as a
- *    follow-up (#7834) to add once the adoption has applied. Stated here rather than
- *    left for a reader to infer from the absence of a step.
+ *    adoption PR would plan `1 to add`, which AC2 forbids. A MISSED CHECK-IN is
+ *    exactly the term that covers this case, and #7834 restores it.
  */
 import { inngest } from "@/server/inngest/client";
 import {

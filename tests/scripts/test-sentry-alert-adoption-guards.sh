@@ -29,10 +29,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TRIPWIRE="$REPO_ROOT/scripts/sentry-issue-alert-create-tripwire.sh"
 BIJECTION="$REPO_ROOT/scripts/sentry-forget-import-bijection.sh"
 ADOPT="$REPO_ROOT/scripts/sentry-adoption-plan-assert.sh"
+BINDING="$REPO_ROOT/scripts/sentry-monitor-binding-gate.sh"
 CREATE_GATE="$REPO_ROOT/scripts/sentry-create-gate.sh"
 WF="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 pass=0; fail=0
-EXPECTED_TESTS=24
+EXPECTED_TESTS=31
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -45,7 +46,7 @@ _report() {
   fi
 }
 
-for f in "$TRIPWIRE" "$BIJECTION" "$ADOPT" "$CREATE_GATE" "$WF"; do
+for f in "$TRIPWIRE" "$BIJECTION" "$ADOPT" "$BINDING" "$CREATE_GATE" "$WF"; do
   [[ -f "$f" ]] || { echo "ERROR: $f does not exist — RED phase expected this." >&2; exit 1; }
 done
 
@@ -96,7 +97,7 @@ _job_region() { # $1=job name -> that job's YAML on stdout
 # "RED" alone is satisfied by a guard that reds on everything; naming the
 # address is what makes the failure actionable at 3am.
 t_a1_issue_alert_create_red() {
-  local f; f=$(_pairs 1 > /dev/null; _plan "$(_row sentry_issue_alert byok_art_33_breach '["create"]')" | _write a1)
+  local f; f=$(_plan "$(_row sentry_issue_alert byok_art_33_breach '["create"]')" | _write a1)
   local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
   local msg; msg=$(_err bash "$TRIPWIRE" "$f")
   if [[ "$rc" -eq 1 ]] && grep -q 'sentry_issue_alert.byok_art_33_breach' <<<"$msg"; then
@@ -177,7 +178,13 @@ t_a5_replace_red() {
   local f; f=$(_plan "$(_row sentry_issue_alert auth_per_user_loop '["create","delete"]')" | _write a5)
   local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
   local msg; msg=$(_err bash "$TRIPWIRE" "$f")
-  if [[ "$rc" -eq 1 ]] && grep -q 'auth_per_user_loop' <<<"$msg"; then
+  # Anchored on the FINDING LINE, not the bare name. The tripwire's static error
+  # prose says "Only two sentry_issue_alert resources may exist
+  # (auth_per_user_loop, sandbox_startup_failure)" on EVERY failure, so a bare
+  # `grep -q auth_per_user_loop` was satisfied by the boilerplate — a mutation
+  # that stopped naming the offending address left this row green. Verified by
+  # the review's mutation battery.
+  if [[ "$rc" -eq 1 ]] && grep -qE 'sentry_issue_alert\.auth_per_user_loop actions=' <<<"$msg"; then
     _report "A5 a create_before_destroy REPLACE on sentry_issue_alert REDs (index, not ==)" ok
   else
     _report "A5 a replace on sentry_issue_alert REDs" fail "rc=$rc (want 1); msg=$msg"
@@ -193,7 +200,10 @@ t_a6_zero_rows_red() {
   empty=$(printf '{"resource_changes":[]}' | _write a6-empty)
   missing=$(printf '{}' | _write a6-missing)
   local rc1 rc2; rc1=$(_rc bash "$TRIPWIRE" "$empty"); rc2=$(_rc bash "$TRIPWIRE" "$missing")
-  if [[ "$rc1" -eq 1 && "$rc2" -eq 1 ]]; then
+  # The message is pinned too: both SUTs also exit 1 on an unparseable document,
+  # so an rc-only assertion would pass on a fixture that broke for another reason.
+  local m1; m1=$(_err bash "$TRIPWIRE" "$empty")
+  if [[ "$rc1" -eq 1 && "$rc2" -eq 1 ]] && grep -q 'ZERO resource_changes' <<<"$m1"; then
     _report "A6 a plan with zero resource_changes REDs (vacuity floor on dispatch)" ok
   else
     _report "A6 a plan with zero resource_changes REDs" fail \
@@ -241,6 +251,64 @@ t_a8_a9_invoked_in_both_jobs() {
 # A10 — placement. On the plan artifact, with the apply gated on its exit. A
 # tripwire that runs after `terraform apply` fires when the resource already
 # exists, which is a report, not a gate.
+# A11 — the guards run UNCONDITIONALLY, which A8/A9 cannot see.
+#
+# THE REGRESSION THIS PR ITSELF FIXED, and which nothing asserted. The tripwire,
+# the binding gate and the adoption assert were originally nested inside
+# `if [[ "$resource_creates" -gt 0 ]]`, which made the binding gate — the only
+# thing that notices all 27 paging rules being repointed at a detector that
+# watches nothing — unreachable on exactly the plans it is for, because a
+# correlated rebind CREATES NOTHING. Re-nesting them leaves A8/A9 green (the
+# strings are still in both job regions), A2 green (still before the ack) and
+# A10 green (still before the apply). Verified by the review's mutation battery.
+#
+# So this asserts PLACEMENT, not presence: in each job region, the invocation
+# must not sit inside any `if`/`elif` block. Measured by indentation — an
+# invocation nested in a conditional is indented deeper than the `if` that opens
+# it, and the shipped calls sit at the same level as the `if` keyword itself.
+t_a11_guards_are_unconditional() {
+  local nested
+  nested=$(python3 - "$WF" <<'PYEOF'
+import sys, yaml
+GUARDS = ["sentry-issue-alert-create-tripwire.sh",
+          "sentry-monitor-binding-gate.sh",
+          "sentry-adoption-plan-assert.sh"]
+doc = yaml.safe_load(open(sys.argv[1]))
+bad, seen = [], set()
+for jname in ("plan_pr", "apply"):
+    for step in (doc["jobs"][jname].get("steps") or []):
+        run = step.get("run")
+        if not run:
+            continue
+        lines = [l for l in run.split("\n") if l.strip()]
+        if not lines:
+            continue
+        # Base indent of this run: script — the level a top-level statement sits at.
+        base = min(len(l) - len(l.lstrip()) for l in lines)
+        for g in GUARDS:
+            for l in lines:
+                if g in l and not l.lstrip().startswith("#"):
+                    seen.add((jname, g))
+                    ind = len(l) - len(l.lstrip())
+                    if ind != base:
+                        bad.append(f"{jname}:{g} indented {ind} vs base {base}")
+                    break
+for jname in ("plan_pr", "apply"):
+    for g in GUARDS:
+        if (jname, g) not in seen:
+            bad.append(f"{jname}:{g} ABSENT")
+for b in bad:
+    print(b)
+PYEOF
+)
+  if [[ -z "$nested" ]]; then
+    _report "A11 the tripwire, binding gate and adoption assert run UNCONDITIONALLY in both jobs" ok
+  else
+    _report "A11 the guards run unconditionally in both jobs" fail \
+      "not at the run-script's top level: ${nested} — a correlated rebind creates nothing, so a guard behind \`if resource_creates > 0\` is unreachable on precisely the plans it exists for"
+  fi
+}
+
 t_a10_runs_before_apply() {
   local region; region=$(_job_region apply)
   local tw ap
@@ -342,7 +410,8 @@ t_b4_second_pair_broken_red() {
 t_b5_zero_and_zero_red() {
   local f; f=$(_plan "$(_row sentry_cron_monitor unrelated '["no-op"]')" | _write b5)
   local rc; rc=$(_rc bash "$BIJECTION" "$f")
-  if [[ "$rc" -eq 1 ]]; then
+  local msg; msg=$(_err bash "$BIJECTION" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -q 'ZERO forgets and ZERO imports' <<<"$msg"; then
     _report "B5 zero forgets AND zero imports REDs (vacuity floor)" ok
   else
     _report "B5 zero forgets and zero imports REDs" fail "rc=$rc want 1"
@@ -468,6 +537,88 @@ t_b7_locale_collation() {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
+# AC11 — the monitor-binding gate. 79 lines of hard gate on the apply path
+# whose only prior coverage anywhere in the tree was a grep for its FILENAME.
+#
+# Its failure mode is the quietest in this PR: a correlated rebind is not a
+# delete, not a create and not a nested shrink, so `destroy_count` stays 0, the
+# ack passes, and all 27 paging rules — `byok-art-33-breach` included — end up
+# pointed at a detector that watches nothing, on a green apply.
+# ════════════════════════════════════════════════════════════════════════════
+_binding_plan() { # $1..$n = monitor_ids arrays (or the literal `null`)
+  local rows=() i=0
+  for ids in "$@"; do
+    i=$((i + 1))
+    rows+=("$(printf '{"type":"sentry_alert","address":"sentry_alert.r%s","mode":"managed","change":{"actions":["no-op"],"before":{},"after":{"monitor_ids":%s}}}' "$i" "$ids")")
+  done
+  _plan "${rows[@]}"
+}
+
+t_d1_correct_binding_passes() {
+  local f; f=$(_binding_plan '["1213799"]' '["1213799"]' | _write d1)
+  local rc; rc=$(_rc bash "$BINDING" "$f")
+  if [[ "$rc" -eq 0 ]]; then _report "D1 every sentry_alert binding the expected detector PASSES" ok
+  else _report "D1 correct bindings pass" fail "rc=$rc want 0"; fi
+}
+
+t_d2_wrong_binding_reds() {
+  local f; f=$(_binding_plan '["1213799"]' '["9999999"]' | _write d2)
+  local rc; rc=$(_rc bash "$BINDING" "$f"); local msg; msg=$(_err bash "$BINDING" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -q 'sentry_alert.r2' <<<"$msg"; then
+    _report "D2 a rebound detector REDs and names the address" ok
+  else _report "D2 a rebound detector REDs and names it" fail "rc=$rc msg=$msg"; fi
+}
+
+t_d3_unreadable_binding_reds() {
+  local f; f=$(_binding_plan '["1213799"]' 'null' | _write d3)
+  local rc; rc=$(_rc bash "$BINDING" "$f"); local msg; msg=$(_err bash "$BINDING" "$f")
+  if [[ "$rc" -eq 1 ]] && grep -q '<unreadable>' <<<"$msg"; then
+    _report "D3 a null monitor_ids is UNCHECKED, not passing — REDs as <unreadable>" ok
+  else _report "D3 a null monitor_ids REDs" fail "rc=$rc msg=$msg"; fi
+}
+
+# A DELETE row has `.change.after == null`. Before the review it read as an
+# unreadable binding, so the first PR deliberately retiring an alert hit a
+# permanent, un-acknowledgeable refusal — this gate has no ack path and, unlike
+# the adoption assert, does not self-retire.
+t_d4_delete_row_is_skipped() {
+  local f
+  f=$(_plan "$(_row sentry_alert keeper '["no-op"]')" \
+            '{"type":"sentry_alert","address":"sentry_alert.retired","mode":"managed","change":{"actions":["delete"],"before":{"monitor_ids":["1213799"]},"after":null}}' \
+      | jq -c '(.resource_changes[] | select(.address=="sentry_alert.keeper") | .change.after) = {"monitor_ids":["1213799"]}' | _write d4)
+  local rc; rc=$(_rc bash "$BINDING" "$f")
+  if [[ "$rc" -eq 0 ]]; then
+    _report "D4 a DELETE row is skipped, not read as an unreadable binding" ok
+  else
+    _report "D4 a delete row is skipped" fail \
+      "rc=$rc want 0 — an intentional retirement cannot be acknowledged past this gate, so it would be permanently un-mergeable"
+  fi
+}
+
+# The floor that was DEAD CODE: `checked -eq 0` is unreachable, so the real
+# vacuity case (a truncated `terraform show -json`) printed a green line. It was
+# mitigated only by the create tripwire running first at both call sites.
+t_d5_zero_rows_reds() {
+  local empty missing
+  empty=$(printf '{"resource_changes":[]}' | _write d5e)
+  missing=$(printf '{}' | _write d5m)
+  local r1 r2; r1=$(_rc bash "$BINDING" "$empty"); r2=$(_rc bash "$BINDING" "$missing")
+  local m; m=$(_err bash "$BINDING" "$empty")
+  if [[ "$r1" -eq 1 && "$r2" -eq 1 ]] && grep -q 'ZERO resource_changes' <<<"$m"; then
+    _report "D5 a zero-row plan REDs on the gate's OWN floor, not a neighbour's ordering" ok
+  else _report "D5 a zero-row plan REDs" fail "empty rc=$r1 absent rc=$r2 msg=$m"; fi
+}
+
+# Non-vacuity: a legitimate plan touching only monitors must still pass.
+t_d6_no_sentry_alert_rows_passes() {
+  local f; f=$(_plan "$(_row sentry_cron_monitor nightly '["update"]')" | _write d6)
+  local rc; rc=$(_rc bash "$BINDING" "$f")
+  if [[ "$rc" -eq 0 ]]; then
+    _report "D6 a non-empty plan with no sentry_alert rows passes (non-vacuity for D5)" ok
+  else _report "D6 a monitor-only plan passes" fail "rc=$rc want 0 — every unrelated Sentry PR would red"; fi
+}
+
+# ════════════════════════════════════════════════════════════════════════════
 # AC2/AC10 — the adoption assert, which is what carries Guard B into the apply
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -557,6 +708,7 @@ t_a6_zero_rows_red
 t_a7_update_green
 t_a8_a9_invoked_in_both_jobs
 t_a10_runs_before_apply
+t_a11_guards_are_unconditional
 t_a_harness_three_unrelated_creates_pass
 t_b1_missing_import_red
 t_b2_missing_forget_red
@@ -572,6 +724,12 @@ t_c2_extra_change_red
 t_c3_dropped_pair_red
 t_c4_clean_adoption_green
 t_c5_import_id_not_in_capture_red
+t_d1_correct_binding_passes
+t_d2_wrong_binding_reds
+t_d3_unreadable_binding_reds
+t_d4_delete_row_is_skipped
+t_d5_zero_rows_reds
+t_d6_no_sentry_alert_rows_passes
 
 echo "=== $pass passed, $fail failed ==="
 

@@ -929,7 +929,18 @@ jobs:
             # management is unreviewed change) but reported separately, so the
             # operator can tell "27 forgets, zero actual deletes" from "26
             # forgets plus a real delete of a live paging rule".
-            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s) + ${resource_forgets} state-only [\"forget\"] row(s), which destroy nothing)."
+            # `nested_deletes` DOUBLE-COUNTS a forget, and the message says so.
+            # A forget row survives the nested clause's delete filter and has
+            # `after == null`, so its whole `before` block count is booked as a
+            # shrink. On this adoption that is where "142" comes from: it is the
+            # same 27 rows' blocks, not 142 separate removals. Saying "142
+            # nested-block removal(s)" flatly would have an operator hunting for
+            # 142 deletions that do not exist.
+            nested_note=""
+            if [[ "${resource_forgets}" -gt 0 ]]; then
+              nested_note=" — note the nested figure INCLUDES the blocks of those forget rows, which are not being removed from anything; a forget leaves the live object untouched"
+            fi
+            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s) + ${resource_forgets} state-only [\"forget\"] row(s), which destroy nothing)${nested_note}."
             echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
             # `will no longer be managed` is how Terraform renders a `removed{}`
             # forget in the human plan. Without it this excerpt is EMPTY on a
@@ -958,10 +969,21 @@ jobs:
         #
         # NEW EGRESS SURFACE, named as one in the plan's Encryption Posture. This
         # takes the WHOLE root's state out from behind the R2 credential boundary
-        # into storage readable by anyone with repo read, and carries every
-        # resource in the root, not just the 27 alerts. Mitigated by an explicit
-        # SHORT retention rather than the 90-day default, and by the sentinel
-        # sweep before upload.
+        # and carries every resource in the root, not just the 27 alerts.
+        #
+        # THIS REPOSITORY IS PUBLIC. "Readable by anyone with repo read" therefore
+        # means any authenticated GitHub account, via the artifacts API, for the
+        # retention window — not "the team". Measured 2026-09-04, the incremental
+        # disclosure is nil: the root declares only cron/uptime monitors and alert
+        # rules, there is no `sentry_key` (so no DSN), every alert action is
+        # `email` to `issue_owners` with no webhook URL or integration token, and
+        # the state carries zero email-shaped strings, zero non-null
+        # `target_identifier`, and `.owner` null on all 89 resources. Stated
+        # plainly because the next person deciding whether to widen `path:` will
+        # read this sentence.
+        #
+        # Mitigated by an explicit SHORT retention rather than the 90-day default,
+        # and by the sentinel sweep before upload.
         working-directory: ${{ env.INFRA_DIR }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
@@ -1000,25 +1022,51 @@ jobs:
         # today. This fails the UPLOAD closed on the day a provider bump changes
         # that, rather than discovering it from a published artifact.
         if: always()
+        id: forensics_sweep
         working-directory: ${{ env.INFRA_DIR }}
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
         run: |
           set -uo pipefail
+          # `set +e` BRACKET — the trap this file documents twice (see the plan
+          # steps) and that the first draft of THIS step walked straight into.
+          # Actions runs a bare `run:` as `bash -e {0}`, so errexit is INHERITED
+          # and `set -uo pipefail` cannot clear it. `grep -q` returns 1 on NO
+          # MATCH, which is the outcome on every clean run — so the unbracketed
+          # form killed this step on the normal path, silently, before any
+          # annotation. Measured: rc=1 with only the "post-apply state" line
+          # printed. Because steps 12 and 13 (the BYOK liveness assertion and the
+          # AC19/AC20 fidelity probe) carry no `if:` and therefore inherit an
+          # implicit `success()`, BOTH were skipped — the two checks that prove
+          # `byok-art-33-breach` is still live after the apply — and the
+          # `if: failure()` filer then filed a p1 saying "assume a partial write"
+          # after a perfectly clean apply.
+          set +e
           # Non-fatal pull: this is evidence collection on a path that may already
           # be failing, and turning a diagnostic into a second failure would
           # replace the real error in the run summary with this one.
-          if terraform state pull > "${RUNNER_TEMP}/sentry-state-post.json" 2>/dev/null; then
+          #
+          # stderr is NOT discarded. A failed diagnostic is exactly when the
+          # reason matters, and `2>/dev/null` left the else-branch printing
+          # "could not pull" with no cause.
+          if terraform state pull > "${RUNNER_TEMP}/sentry-state-post.json" \
+             && jq -e 'has("resources")' "${RUNNER_TEMP}/sentry-state-post.json" >/dev/null; then
             printf 'post-apply state: %s bytes, %s resources\n' \
               "$(wc -c < "${RUNNER_TEMP}/sentry-state-post.json")" \
               "$(jq -r '.resources | length' "${RUNNER_TEMP}/sentry-state-post.json")"
           else
-            echo "::warning::could not pull post-apply state; no after-picture for this run."
+            # `state pull` can exit 0 having written a short or empty document.
+            # Without the `has("resources")` check that lands as a 0-byte artifact
+            # published as if it were evidence, and the sentinel sweep below finds
+            # nothing in it — a clean bill of health over no content at all.
+            echo "::warning::could not pull a usable post-apply state; no after-picture for this run."
+            rm -f "${RUNNER_TEMP}/sentry-state-post.json"
           fi
 
           # Same sentinel set the destroy-guard fixtures are redacted against.
           sentinel='BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}|sntrys_|dp\.st\.|re_[A-Za-z0-9]{16,}'
           swept=0
+          secret_shape=false
           for f in "${RUNNER_TEMP}/sentry-state-pre.json" "${RUNNER_TEMP}/sentry-state-post.json"; do
             [[ -f "$f" ]] || continue
             swept=$((swept + 1))
@@ -1027,12 +1075,12 @@ jobs:
             grep -qE "$sentinel" "$f"
             rc=$?
             if [[ "$rc" -eq 0 ]]; then
-              # Delete rather than publish. The step stays green: the artifact is
-              # a diagnostic, and refusing to publish it is the guard working.
               rm -f "$f"
-              echo "::error::$(basename "$f") carried secret-shaped bytes and was NOT uploaded. A provider bump has started writing a credential into state — fix that before relying on these artifacts again."
+              secret_shape=true
+              echo "::error::$(basename "$f") carried secret-shaped bytes and was NOT uploaded. A provider bump has started writing a credential into Terraform state — deleting the artifact copy does NOT fix that, the credential is in the R2 state object either way."
             elif [[ "$rc" -ne 1 ]]; then
               rm -f "$f"
+              secret_shape=true
               echo "::error::the sentinel sweep failed to run over $(basename "$f") (grep rc=$rc); refusing to upload an unswept state file."
             fi
           done
@@ -1040,22 +1088,17 @@ jobs:
             echo "::warning::no state files to sweep — neither capture produced a file."
           fi
 
-      - name: Upload state forensics (pre + post)
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: sentry-forensics-state-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/sentry-state-pre.json
-            ${{ runner.temp }}/sentry-state-post.json
-          # SHORT on purpose. The diagnostic value of these files is measured in
-          # hours after a failed apply; the disclosure surface they open is not.
-          retention-days: 7
-          # `warn`, not `error`: the sweep above deliberately deletes a file rather
-          # than publishing it, and the capture tolerates a failed pull — so
-          # demanding a file here would red a run for the absence of a diagnostic,
-          # or for the secret guard having done its job.
-          if-no-files-found: warn
+          # ROUTED, not just annotated. `::error::` annotates; it does not fail a
+          # step, and this step deliberately does NOT `exit 1` — steps 12 and 13
+          # below inherit an implicit `success()`, so failing here would suppress
+          # the two probes that assert `byok-art-33-breach` is live. Instead the
+          # verdict becomes an OUTPUT, which (i) gates the success-closer so a
+          # green run cannot resolve an open incident issue while a
+          # credential-in-state annotation stands, and (ii) drives its own filer.
+          # Refusing to publish is the guard working; refusing to REPORT is not.
+          printf 'secret_shape=%s\n' "$secret_shape" >> "$GITHUB_OUTPUT"
+          set -e
+
 
       - name: BYOK Art.33 detector liveness assertion (#4656 item 5)
         # Read-only post-apply check: assert both BYOK issue-alert rules
@@ -1097,6 +1140,36 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/sentry-alert-live-fidelity.sh
+
+      - name: Upload state forensics (pre + post)
+        # `failure()`, NOT `always()`, and placed AFTER the post-apply probes.
+        #
+        # The captures are cheap and unconditional; the EGRESS is not. Uploading
+        # on every run made a one-merge diagnostic into permanent machinery: every
+        # routine cron-monitor merge, forever, would publish the whole root's
+        # state to a public repo's artifact storage for 7 days. The stated value
+        # of these files is "measured in hours after a FAILED apply", so that is
+        # exactly when they are published.
+        #
+        # Placed after the BYOK liveness assertion and the AC19/AC20 fidelity
+        # probe so a failure in EITHER of those also captures the state — those
+        # are the checks most likely to want an after-picture, and gating the
+        # upload earlier would have missed them.
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sentry-forensics-state-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/sentry-state-pre.json
+            ${{ runner.temp }}/sentry-state-post.json
+          # SHORT on purpose. The diagnostic value of these files is measured in
+          # hours after a failed apply; the disclosure surface they open is not.
+          retention-days: 7
+          # `warn`, not `error`: the sweep deliberately deletes a file rather than
+          # publishing it, and the capture tolerates a failed pull — so demanding
+          # a file here would red a run for the absence of a diagnostic, or for
+          # the secret guard having done its job.
+          if-no-files-found: warn
 
       - name: File or comment tracking issue (apply failed)
         # UNCONDITIONAL `if: failure()` — no `&& steps.x.outputs.y != ''` rider.
@@ -1167,17 +1240,74 @@ jobs:
             # milestone: phase milestones are closed as a routine act and
             # `gh issue create` HARD-FAILS on a closed one, which would silently
             # stop this verdict reaching a human the day the phase closed.
+            # `--milestone` is BEST-EFFORT, never load-bearing. `gh issue create`
+            # hard-fails on a closed or renamed milestone, and under `set -e`
+            # that would abort this step and file nothing — the milestone guard
+            # becoming the silence it exists to prevent, one layer down.
             gh issue create --repo "$GH_REPO" --title "$TITLE" \
               --label "ci/apply-sentry-infra" --label "type/chore" --label "priority/p1-high" \
               --milestone "Post-MVP / Later" \
-              --body-file "$BODY_FILE"
+              --body-file "$BODY_FILE" \
+              || gh issue create --repo "$GH_REPO" --title "$TITLE" \
+                   --label "ci/apply-sentry-infra" --label "type/chore" --label "priority/p1-high" \
+                   --body-file "$BODY_FILE"
+          fi
+
+      - name: File the credential-in-state issue (sentinel hit)
+        # The sweep's verdict needs a channel of its own. It cannot ride
+        # `if: failure()` — the sweep deliberately stays green so it does not
+        # suppress the two liveness probes — so without this step "a provider
+        # bump has started writing a credential into Terraform state" was an
+        # annotation on a green run and nothing else.
+        if: always() && steps.forensics_sweep.outputs.secret_shape == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TITLE="[ci/apply-sentry-infra] secret-shaped bytes in Terraform state"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/apply-sentry-infra" --repo "$GH_REPO" \
+            --description "apply-sentry-infra.yml apply-job failures" --color "B60205" 2>/dev/null || true
+          BODY_FILE="${RUNNER_TEMP}/secret-state-issue.md"
+          {
+            printf '## A credential-shaped string appeared in the Sentry root Terraform state\n\n'
+            printf 'The forensics sweep matched the secret sentinel against a `terraform state pull` and **refused to publish the artifact**. That is the guard working — but it addresses only the artifact copy. **The value is in the R2 state object either way**, and the state object is what every apply reads and writes.\n\n'
+            printf -- '- Detected at: %s\n' "$NOW"
+            printf -- '- Run log: %s\n\n' "$RUN_URL"
+            printf '### What this means\n\n'
+            printf 'Measured 2026-09-04, this root'"'"'s state carried 89 resources, ZERO sentinel matches and zero `sensitive_attributes`. The provider did not write its token into state. If this issue exists, that has changed — most likely a provider upgrade.\n\n'
+            printf '### What to do\n\n'
+            printf -- '1. Read the run log for which capture matched (pre or post).\n'
+            printf -- '2. Identify the attribute. Do NOT paste it here.\n'
+            printf -- '3. Rotate the credential — it is in remote state, which is a different exposure from the artifact that was withheld.\n'
+            printf -- '4. Decide whether the forensics artifacts should keep running at all while the provider does this; they are gated on the adoption and are removable with #7826.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/apply-sentry-infra" --state open \
+            --limit 100 --json number,title \
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still matching at ${NOW}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label "ci/apply-sentry-infra" --label "type/security" --label "priority/p1-high" \
+              --milestone "Post-MVP / Later" \
+              --body-file "$BODY_FILE" \
+              || gh issue create --repo "$GH_REPO" --title "$TITLE" \
+                   --label "ci/apply-sentry-infra" --label "type/security" --label "priority/p1-high" \
+                   --body-file "$BODY_FILE"
           fi
 
       - name: Close the apply-failure tracking issue (success)
         # The filer above is only half a route. Without this, the first failed
         # apply leaves an open p1 that stays open through every subsequent green
         # run, and the operator learns to ignore the label.
-        if: success()
+        #
+        # Gated on the sweep's verdict too: a green run must not resolve an open
+        # incident issue while a credential-in-state annotation is standing.
+        if: success() && steps.forensics_sweep.outputs.secret_shape != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

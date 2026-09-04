@@ -97,9 +97,18 @@ t_deleted() {
     "F2 a DELETED rule is detected (byok-art-33-breach — the GDPR Art. 33 control)"
 }
 
+# Anchored on the FINDING, not the token. The probe's epilogue prints "DISABLED
+# and MONITOR UNBIND are live state an apply will not touch" on every failing
+# run, and `enabled` ALSO reds through the generic per-field loop as
+# `DRIFT: '…'.enabled` — so suppressing the dedicated DISABLED finding left this
+# row green while the classification silently changed. That is not cosmetic: the
+# drift issue routes DRIFT to "re-run the apply" and DISABLED to "an apply will
+# NOT fix this", so a misclassified UI mute sends the operator down the wrong
+# path. Verified by the review's mutation battery.
 t_disabled() {
-  _drift_case disabled 'map(if .name=="byok-art-33-breach" then .enabled=false else . end)' 'DISABLED' \
-    "F3 a rule muted in the UI is detected (present, enabled:false, pages nobody)"
+  _drift_case disabled 'map(if .name=="byok-art-33-breach" then .enabled=false else . end)' \
+    "DISABLED: 'byok-art-33-breach'" \
+    "F3 a rule muted in the UI is detected AND classified as DISABLED, not DRIFT"
 }
 
 t_detector_unbind() {

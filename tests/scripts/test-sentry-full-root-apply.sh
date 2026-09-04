@@ -66,6 +66,65 @@ _has_executable_target() {
   grep -qE -- '-target=' <<<"$body"
 }
 
+# T13 (#7650 review) — INHERITED ERREXIT around a status-bearing command.
+#
+# THE CLASS, not the instance. Actions invokes a bare `run:` as `bash -e {0}`, so
+# errexit is INHERITED and a `set -uo pipefail` line cannot clear it. Any command
+# whose NON-ZERO exit is a normal answer — `grep -q` (1 = no match), `diff` (1 =
+# they differ) — therefore kills the step on its ordinary path unless the block
+# brackets it with `set +e` or consumes the status in a condition.
+#
+# This workflow's header documents the trap twice, and a step added in #7650
+# Phase 2 walked into it anyway: the forensics sweep ran `grep -qE "$sentinel"`
+# followed by `rc=$?`, so on every CLEAN run (no secret, grep returns 1) the step
+# died at that line, silently, before any annotation — skipping the two
+# post-apply probes that assert `byok-art-33-breach` is live, and filing a p1
+# that told the operator to "assume a partial write" after a perfectly clean
+# apply. Measured rc=1 by emulating `bash -e` on the extracted block.
+#
+# So the assertion is structural and general: in every `run:` block of this
+# workflow, a bare `grep -q…` / `diff` line IMMEDIATELY followed by `rc=$?` must
+# sit inside a `set +e` region. Consuming the status in an `if`/`&&`/`||` is the
+# other correct shape and is not flagged, because there the status is handled.
+t_no_unbracketed_status_capture() {
+  local findings
+  findings=$(python3 - "$WORKFLOW" <<'PYEOF'
+import re, sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+bad = []
+for jname, job in (doc.get("jobs") or {}).items():
+    for step in (job.get("steps") or []):
+        run = step.get("run")
+        if not run:
+            continue
+        lines = run.split("\n")
+        errexit = True          # inherited from `bash -e {0}`
+        for i, raw in enumerate(lines):
+            ln = raw.strip()
+            if re.match(r"^set\s+\+e\b", ln) or re.match(r"^set\s+[-a-z]*\+[a-z]*e\b", ln):
+                errexit = False
+            elif re.match(r"^set\s+-[a-z]*e\b", ln):
+                errexit = True
+            if not errexit:
+                continue
+            # A bare status-bearing command whose exit is then captured.
+            if re.match(r"^(grep|diff|cmp)\b", ln) and not re.search(r"(\|\||&&|;|\bif\b|\bwhile\b|\buntil\b)", ln):
+                nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+                if re.match(r"^\w+=\$\?", nxt):
+                    bad.append(f"{jname} :: {step.get('name','(unnamed)')} :: {ln[:60]}")
+for b in bad:
+    print(b)
+PYEOF
+)
+  if [[ -z "$findings" ]]; then
+    _report "T13 no run: block captures a status-bearing command's exit while errexit is in force" ok
+  else
+    _report "T13 no unbracketed status capture under inherited errexit" fail \
+      "these die on their NORMAL path (grep -q returns 1 on no-match) before any annotation:
+$findings"
+  fi
+}
+
 t_no_executable_target() {
   if _has_executable_target "$WORKFLOW"; then
     local hits; hits=$(_strip_comments "$WORKFLOW" | grep -nE -- '-target=' | head -5)
@@ -340,6 +399,7 @@ t_scope_guard_reads_tf
 t_scope_guard_fails_on_empty
 t_scope_guard_catches_state_only_uncovered_type
 t_filter_counts_removed_block
+t_no_unbracketed_status_capture
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

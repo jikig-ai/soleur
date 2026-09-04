@@ -62,6 +62,32 @@ sets=$(jq -r '
   exit 1
 }
 
+# TYPE TRANSITION, asserted before the names are compared. The relation this
+# guard exists for is `sentry_issue_alert.<n>` -> `sentry_alert.<n>`; pairing on
+# the suffix after the first dot alone does not say that. A `removed{}` block
+# naming the WRONG TYPE — the easy copy-paste error in a file of 27
+# near-identical blocks — would then pair cleanly: a live `sentry_cron_monitor`
+# leaves Terraform's management, this prints PASS, the cardinality check still
+# sees 27/27, and `[ack-destroy]` greens the destroy gate over it.
+_type_violations() {
+  jq -r '
+    [ (.resource_changes[]? | select((.change.actions // []) == ["forget"])
+        | select((.address | startswith("sentry_issue_alert.")) | not)
+        | "forget of a non-sentry_issue_alert address: \(.address)"),
+      (.resource_changes[]? | select(.change.importing.id != null)
+        | select((.address | startswith("sentry_alert.")) | not)
+        | "import into a non-sentry_alert address: \(.address)") ]
+    | .[]
+  ' "$PLAN" 2>/dev/null
+}
+bad_types=$(_type_violations)
+if [[ -n "$bad_types" ]]; then
+  echo "::error::forget/import bijection: the plan forgets or imports the WRONG RESOURCE TYPE." >&2
+  sed 's/^/::error::  /' <<<"$bad_types" >&2
+  echo "::error::This adoption moves sentry_issue_alert.<n> -> sentry_alert.<n> and nothing else. A removed{} naming another type drops a live resource out of management while the name-pairing below still reports a clean bijection." >&2
+  exit 1
+fi
+
 _field() { sed -n "s/^$1\t//p" <<<"$sets"; }
 forget_addrs=$(_field FORGET_ADDRS)
 import_addrs=$(_field IMPORT_ADDRS)

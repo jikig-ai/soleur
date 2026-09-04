@@ -810,23 +810,32 @@ a rule fires.
 config-block adoption (`import{}` + `removed{}` landed on the branch and applied in ONE merge)
 rather than the pre-merge `terraform import` surgery the earlier roots used.
 
-> **Use config-block adoption whenever the address being adopted does not yet exist on
-> `main`.** Use imperative `terraform import` only to adopt into a block `main` already
-> declares.
+> **Use config-block adoption whenever the root AUTO-APPLIES from the default branch.** Use
+> imperative `terraform import` only where nothing applies from `main` between the import and
+> the merge that declares the blocks.
 
-That is not a preference. `terraform import` REQUIRES an existing config block — it exits 1
-with "resource address does not exist in the configuration" — and `main` had zero
-`sentry_alert` blocks, so the prescribed surgery could never have run against `main` at all.
-Any adoption that introduces a NEW resource type or a new address therefore has exactly one
-implementable shape, and the earlier pattern is not an alternative to weigh against it. The
-two patterns are not competing designs; they answer different questions, and the question is
-"does the target address already exist in the config on the default branch".
+The discriminator is the WINDOW, not the address. An earlier draft of this rule said "use
+config-block adoption whenever the address does not yet exist on `main`", reasoning that
+`terraform import` requires an existing config block so the surgery "could never have run
+against `main`". That premise is true and does not support the conclusion: `terraform import`
+runs from a working DIRECTORY, not from `main`, and the pre-merge-surgery pattern is precisely
+to check out the feature branch — which does declare the blocks — and import against shared
+remote state. Whether the address exists on `main` never enters into whether the command can
+run, so that rule would mis-adjudicate in both directions.
 
-The corollary is the cost: config-block adoption leaves `import{}` and `removed{}` blocks in
+The real disqualifier here is stronger. **This root auto-applies on every push to `main`**
+(`apply-sentry-infra.yml`, `on.push.paths: apps/web-platform/infra/sentry/**`). Imperative
+import opens a window in which state holds 27 `sentry_alert` addresses that `main`'s config
+does not declare — and any merge to `main` during that window plans a **destroy of all 27 live
+paging rules**, gated only by whether that unrelated merge happens to carry `[ack-destroy]`.
+Config-block adoption closes the window by construction: config and state change in the same
+apply.
+
+The corollary is the cost. Config-block adoption leaves `import{}` and `removed{}` blocks in
 the tree after it succeeds, so the root is not reproducible from zero until they are removed,
-and removing them early converts an un-imported address into a planned CREATE. That is a real
-liability and it is why the removal is hard-gated (#7826) rather than tidied up in the same
-PR. The blocks stay in config until the
+and removing one whose address was never imported converts it into a planned CREATE that
+collides with the live rule. That is why the removal is hard-gated as #7826 rather than tidied
+up in the same PR. The blocks stay in config until the
 post-merge verification passes; removing them earlier turns any un-imported address into a
 planned CREATE that collides with the live rule it was meant to adopt. That removal is a
 hard-gated follow-up (#7826); the adoption is not reproducible from zero while they remain.

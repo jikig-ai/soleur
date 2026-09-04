@@ -23,6 +23,14 @@
 set -uo pipefail
 
 PLAN="${1:?usage: sentry-monitor-binding-gate.sh <plan.json> [expected-id]}"
+# Provenance of the literal: measured against live prod on 2026-09-04 and
+# recorded in knowledge-base/project/specs/fix-7650-sentry-alert-migration/
+# phase2-measurements-2026-09-04.md — it is the id
+# `data.sentry_project_issue_stream_monitor.web_platform` resolves to, and the
+# same value all 27 `.change.after.monitor_ids` carry in the verified plan.
+# Both call sites pass no `$2`, so this default IS the invariant in force:
+# "every sentry_alert in this root binds one specific detector". Correct today;
+# the day a second issue-stream detector is legitimate, this line is the edit.
 EXPECTED="${2:-1213799}"
 
 if [[ ! -r "$PLAN" ]]; then
@@ -30,13 +38,38 @@ if [[ ! -r "$PLAN" ]]; then
   exit 1
 fi
 
+# ROW-COUNT FLOOR, on the whole document. The `-z "$bindings"` branch below used
+# to exit 0 with "nothing to check", which made the DOCUMENTED anti-vacuity floor
+# further down dead code: it tests `checked -eq 0`, reachable only when
+# `$bindings` is non-empty AND the loop parses nothing — impossible. So the real
+# vacuity case (a truncated or stub `terraform show -json`) printed a green line.
+# It was mitigated only by the create tripwire happening to run first at both
+# call sites, i.e. by a NEIGHBOUR'S ordering rather than this gate's own contract.
+rows=$(jq -r '(.resource_changes // []) | length' "$PLAN" 2>/dev/null) || rows=""
+if [[ ! "$rows" =~ ^[0-9]+$ ]]; then
+  echo "::error::sentry monitor-binding gate: could not read .resource_changes from '$PLAN'." >&2
+  exit 1
+fi
+if [[ "$rows" -eq 0 ]]; then
+  echo "::error::sentry monitor-binding gate: '$PLAN' has ZERO resource_changes rows — a truncated, targeted or unwritten plan document, not a plan with nothing to check. Refusing to report PASS." >&2
+  exit 1
+fi
+
 # Read the RESOLVED binding for every sentry_alert row. `.change.after` is the
 # post-apply object; on an import row it is the adopted state. Fail closed on a
 # null/absent monitor_ids rather than treating it as "nothing to check" — an
 # unreadable binding is an UNCHECKED binding, not a passing one.
+# `select(index("delete") | not)` — a DELETE row has `.change.after == null`, so
+# without this every intentional retirement of a `sentry_alert` reads as an
+# "unreadable binding" and reds this gate. This gate runs before the ack and has
+# no `[ack-destroy]` path by design, and unlike the adoption assert it does not
+# self-retire — so the first PR that deliberately deletes an alert would have hit
+# a permanent, un-acknowledgeable refusal. An absent binding is not an unreadable
+# one; a delete belongs to the destroy gate, which is where it now goes.
 bindings=$(jq -r '
   [ .resource_changes[]?
     | select(.type == "sentry_alert")
+    | select((.change.actions // []) | index("delete") | not)
     | { addr: .address,
         ids: (.change.after.monitor_ids // null) } ]
   | .[]
@@ -47,7 +80,10 @@ bindings=$(jq -r '
 }
 
 if [[ -z "$bindings" ]]; then
-  echo "sentry monitor-binding gate: no sentry_alert rows in this plan — nothing to check."
+  # Reachable only for a non-empty plan carrying no non-delete `sentry_alert`
+  # rows. That is legitimate (a plan touching only monitors), and the row-count
+  # floor above has already refused the truncated-document case.
+  echo "sentry monitor-binding gate: no non-delete sentry_alert rows in this ${rows}-row plan — nothing to check."
   exit 0
 fi
 

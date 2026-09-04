@@ -13,6 +13,16 @@
 # underneath it — the failure mode test-sentry-brownout-retry.sh's header
 # records having shipped twice.
 #
+# TWO ROWS WERE CUT AT REVIEW and the reason is worth keeping. `t_discriminates`
+# re-asserted `verdict == drift` and `verdict == unavailable`, which W2 and W3
+# already assert — it could not fail unless one of them had already failed. And a
+# status-function check on the issue steps duplicated
+# `scripts/alarm-issue-filing-guard.test.sh`, which walks EVERY workflow in the
+# repo and ratchets against a highwater file; that highwater is unchanged by this
+# PR, which is itself the evidence the repo-wide gate already walked this file
+# and found it clean. A second implementation of a live gate is not
+# defence-in-depth, it is a second thing to keep true.
+#
 # The one branch that matters most is `unavailable`. If the probe cannot reach
 # Sentry, this run establishes NOTHING; closing a real drift issue on that
 # basis is the worst outcome the workflow can produce, and it is the outcome a
@@ -22,7 +32,7 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WF="$REPO_ROOT/.github/workflows/scheduled-sentry-alert-drift.yml"
 pass=0; fail=0
-EXPECTED_TESTS=6
+EXPECTED_TESTS=5
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -106,18 +116,6 @@ t_unavailable() {
   else _report "W3 unavailable" fail "rc=$_rc out='$_out'"; fi
 }
 
-# W2 vs W3 is the whole design: same exit code from the probe, different verdict.
-t_discriminates() {
-  local d u
-  _drive "$STUB_DRIFT";   d=$(sed -n 's/^verdict=//p' <<<"$_out")
-  _drive "$STUB_UNAVAIL"; u=$(sed -n 's/^verdict=//p' <<<"$_out")
-  if [[ "$d" == "drift" && "$u" == "unavailable" ]]; then
-    _report "W4 drift and unavailable are DISTINGUISHED despite identical probe exit codes" ok
-  else
-    _report "W4 drift vs unavailable" fail "drift='$d' unavailable='$u' — the marker discriminator is gone, so a Sentry outage would file a drift issue naming no drift"
-  fi
-}
-
 # The close arm must be gated on `clean` ITSELF, never on `!= drift`. Under
 # `!= drift`, an `unavailable` run closes a real drift issue because the probe
 # could not reach Sentry — a false all-clear on 27 paging rules.
@@ -138,37 +136,55 @@ PY
   fi
 }
 
-# Both issue steps must carry an explicit status function. A bare-expression
-# `if:` inherits success() and skips after ANY earlier failure, so the verdict
-# reaches nobody. This is the alarm-issue-filing-guard property, asserted here
-# too because that guard is a repo-wide baseline and this is the specific claim.
-t_issue_steps_have_status_fn() {
-  local bad=()
-  while IFS=$'\t' read -r name cond; do
-    [[ -n "$name" ]] || continue
-    grep -qE '\b(always|success|failure|cancelled)\s*\(' <<<"$cond" || bad+=("$name")
-  done < <(python3 - "$WF" <<'PY'
-import sys, yaml
-d = yaml.safe_load(open(sys.argv[1]))
-for s in d["jobs"]["drift-check"]["steps"]:
-    n = s.get("name") or ""
-    if "issue" in n.lower():
-        print(f"{n}\t{s.get('if','')}")
-PY
-)
-  if [[ ${#bad[@]} -eq 0 ]]; then
-    _report "W6 every issue step carries an explicit status function (no implicit success())" ok
+# W7 — THE CONTRACT BETWEEN THE STEP AND THE PROBE.
+#
+# W1-W5 drive the shipped step against STUBS, and `STUB_DRIFT` hard-codes the
+# marker `live fidelity FAILED` because that is what the step greps. So the
+# suite verifies the step reads its own literal correctly and says NOTHING about
+# whether the probe still emits it. Renaming the marker in
+# `scripts/sentry-alert-live-fidelity.sh` left this suite AND the probe's own
+# suite fully green while, in production, every drift verdict would reclassify as
+# `unavailable`: the drift issue would never file, and the close arm would never
+# fire. Verified by the review's mutation battery.
+#
+# This row closes the gap by running the REAL probe on a REAL divergence and
+# asserting its output carries the literal the REAL step greps — both sides read
+# from the shipped files, neither is restated here.
+t_probe_marker_matches_what_the_step_greps() {
+  local probe="$REPO_ROOT/scripts/sentry-alert-live-fidelity.sh"
+  local capture="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+  if [[ ! -f "$probe" || ! -f "$capture" ]]; then
+    _report "W7 the probe emits the marker the step greps" fail "probe or capture missing"
+    return
+  fi
+  # The literal the SHIPPED step greps, extracted rather than retyped.
+  local marker
+  marker=$(grep -oE "grep -q '[^']+' \"\\$\{RUNNER_TEMP\}/probe.txt\"" "$TMPD/probe-step.sh" \
+           | sed "s/.*grep -q '//; s/'.*//")
+  if [[ -z "$marker" ]]; then
+    _report "W7 the probe emits the marker the step greps" fail \
+      "could not extract the step's grep literal — the anchor moved"
+    return
+  fi
+  # A REAL divergence through the REAL probe.
+  local mut="$TMPD/w7-drift.json"
+  jq -c 'map(select(.name != "byok-art-33-breach"))' "$capture" > "$mut" 2>/dev/null
+  local out
+  out=$(SENTRY_AUTH_TOKEN=fixture SENTRY_ORG=fixture SENTRY_FIXTURE_RULES="$mut" \
+        bash "$probe" 2>&1) || true
+  if grep -qF "$marker" <<<"$out"; then
+    _report "W7 the real probe emits the exact marker the real step greps ('$marker')" ok
   else
-    _report "W6 issue steps carry a status function" fail "bare-expression if: on: ${bad[*]}"
+    _report "W7 the real probe emits the marker the step greps" fail \
+      "the step greps '$marker' and the probe does not emit it — every drift would reclassify as 'unavailable', so no drift issue is ever filed"
   fi
 }
 
 t_clean
 t_drift
 t_unavailable
-t_discriminates
 t_close_gated_on_clean_only
-t_issue_steps_have_status_fn
+t_probe_marker_matches_what_the_step_greps
 
 echo "=== $pass passed, $fail failed ==="
 ran=$((pass + fail))

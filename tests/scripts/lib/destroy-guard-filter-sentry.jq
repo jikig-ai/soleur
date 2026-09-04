@@ -125,21 +125,48 @@
 #   action_filters[].actions[]
 #
 # Both the container and its contents are counted, so removing a whole action_filter
-# registers a larger shrink than removing one condition inside it. Either is > 0,
-# which is all the guard needs; the magnitude is only for the operator message.
-def sentry_alert_blocks_count($side):
-  ($side // {})
-  | ([.trigger_conditions[]?] | length)
-  + ([.legacy_trigger_conditions[]?] | length)
-  + ([.action_filters[]?] | length)
-  + ([.action_filters[]?.conditions[]?] | length)
-  + ([.action_filters[]?.actions[]?] | length);
+# registers a larger shrink than removing one condition inside it.
+#
+# PER-SURFACE, NEVER A SUMMED TOTAL (#7650 review). An earlier revision summed all
+# five surfaces into one scalar and took `before - after` of that. The sum is a NET
+# delta, so any edit that removes from one surface and adds to another cancels to
+# zero. Measured against the block this PR actually ships, `sentry_alert.byok_art_33_breach`
+# (trigger_conditions=3, legacy=0, action_filters=1, .conditions=2, .actions=1, total 7):
+# delete the SOLE `{ email = { … } }` from `action_filters[0].actions` and add one more
+# `tagged_event` to `action_filters[0].conditions` — the new total is also 7, the delta is
+# 0, `destroy_count` is 0, and both jobs print "plan destroys nothing" while the only
+# action that pages a human has been removed from the rule that starts the GDPR Art. 33
+# clock. The comment this replaces claimed "either is > 0, which is all the guard needs";
+# that is true only for a pure removal.
+#
+# So each surface is differenced INDEPENDENTLY and only the shrinking ones contribute.
+# Growth in one surface can no longer mask a removal in another. `max(0, …)` per surface
+# is what `map(select(. > 0))` expresses here; the outer `select(. > 0)` on the resource
+# is retained so a purely-growing resource still scores 0.
+# Each surface is written out LONGHAND. jq has no first-class filters, so a
+# `$paths`-style abstraction cannot work here: the array would be passed as a
+# VALUE and every difference would evaluate to 0 — a filter that reports
+# "nothing shrank" for every plan, which is the failure this whole def exists to
+# prevent. Verbosity is the correct trade.
+def _positive_shrink($diffs): $diffs | map(select(. > 0)) | add // 0;
 
-def sentry_issue_alert_blocks_count($side):
-  ($side // {})
-  | ([.conditions_v2[]?] | length)
-  + ([.filters_v2[]?] | length)
-  + ([.actions_v2[]?] | length);
+def sentry_alert_shrink($before; $after):
+  ($before // {}) as $b | ($after // {}) as $a
+  | _positive_shrink([
+      ([$b.trigger_conditions[]?]              | length) - ([$a.trigger_conditions[]?]              | length),
+      ([$b.legacy_trigger_conditions[]?]       | length) - ([$a.legacy_trigger_conditions[]?]       | length),
+      ([$b.action_filters[]?]                  | length) - ([$a.action_filters[]?]                  | length),
+      ([$b.action_filters[]?.conditions[]?]    | length) - ([$a.action_filters[]?.conditions[]?]    | length),
+      ([$b.action_filters[]?.actions[]?]       | length) - ([$a.action_filters[]?.actions[]?]       | length)
+    ]);
+
+def sentry_issue_alert_shrink($before; $after):
+  ($before // {}) as $b | ($after // {}) as $a
+  | _positive_shrink([
+      ([$b.conditions_v2[]?] | length) - ([$a.conditions_v2[]?] | length),
+      ([$b.filters_v2[]?]    | length) - ([$a.filters_v2[]?]    | length),
+      ([$b.actions_v2[]?]    | length) - ([$a.actions_v2[]?]    | length)
+    ]);
 
 {
   resource_deletes: ([.resource_changes[]? | select(.change.actions? | index("delete"))] | length),
@@ -154,14 +181,14 @@ def sentry_issue_alert_blocks_count($side):
       (.resource_changes[]?
        | select(.type == "sentry_issue_alert")
        | select(.change.actions? | index("delete") | not)
-       | (sentry_issue_alert_blocks_count(.change.before) - sentry_issue_alert_blocks_count(.change.after))
+       | sentry_issue_alert_shrink(.change.before; .change.after)
        | select(. > 0)),
 
       # sentry_alert.{trigger_conditions,legacy_trigger_conditions,action_filters[.conditions,.actions]} (#7650)
       (.resource_changes[]?
        | select(.type == "sentry_alert")
        | select(.change.actions? | index("delete") | not)
-       | (sentry_alert_blocks_count(.change.before) - sentry_alert_blocks_count(.change.after))
+       | sentry_alert_shrink(.change.before; .change.after)
        | select(. > 0))
     ] | add // 0
   )

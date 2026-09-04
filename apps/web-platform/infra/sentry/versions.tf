@@ -42,21 +42,28 @@
 # above.
 terraform {
   # Raised 1.6 -> 1.9 by #7650 Phase 2. `issue-alerts.tf` now uses `removed`
-  # blocks carrying `lifecycle { destroy = false }`. On a Terraform that does
-  # not support that option, a `removed` block plans a DESTROY -- which for
-  # these 27 addresses is 27 live paging rules, including the GDPR Art. 33
-  # breach alert. The floor is therefore a safety boundary, not a nicety: an
-  # operator on an older CLI must get this diagnostic rather than a plan that
-  # silently means the opposite of what the config says.
+  # blocks carrying `lifecycle { destroy = false }`.
   #
-  # Provenance, stated honestly: `destroy = false` is documented by HashiCorp as
-  # arriving in 1.9, and `removed` blocks themselves in 1.7. The only version
-  # VERIFIED here is 1.10.5 -- what CI pins (apply-sentry-infra.yml) and what
-  # every measurement in phase2-measurements-2026-09-04.md was taken on. The 1.9
-  # boundary is taken from Terraform's own docs and is not independently
-  # re-measured; it is set conservatively because the failure direction is
-  # catastrophic and the cost of being one minor version too strict is a
-  # spurious upgrade prompt.
+  # CORRECTED at review time. An earlier version of this comment said that on a
+  # Terraform without that option "a `removed` block plans a DESTROY" of 27 live
+  # paging rules. That is NOT a state Terraform can reach: it does not silently
+  # reinterpret unrecognised syntax. A CLI predating `removed` blocks fails to
+  # PARSE ("Blocks of type \"removed\" are not expected here"); one that accepts
+  # `removed` but not the lifecycle argument fails to parse too ("Unsupported
+  # argument"). There is no version in which `lifecycle { destroy = false }` is
+  # accepted-and-ignored, which is what that catastrophe required.
+  #
+  # So this floor is CONSERVATIVE OVER-STRICTNESS, not a safety boundary, and
+  # the honest reason to keep it is that the parse error an old CLI produces is
+  # a worse diagnostic than a version-constraint error. Recording the correction
+  # rather than quietly deleting the claim: a future reader who lowers the floor
+  # and finds nothing bad happens would otherwise conclude the comment was wrong
+  # and trust the rest of this block less.
+  #
+  # Provenance: `destroy = false` is documented by HashiCorp as arriving in 1.9
+  # and `removed` blocks in 1.7. The only version VERIFIED here is 1.10.5 --
+  # what CI pins (apply-sentry-infra.yml) and what every measurement in
+  # phase2-measurements-2026-09-04.md was taken on.
   required_version = ">= 1.9"
 
   required_providers {
