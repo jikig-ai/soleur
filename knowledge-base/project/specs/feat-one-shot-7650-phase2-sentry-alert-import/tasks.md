@@ -243,9 +243,16 @@ List with reasons.
       types.
 - [ ] **11.2** **AC16** — all four counters zero; type-scope guard passes with
       `SENTRY_STATE_TYPES` from the plan's own types.
-- [ ] **11.3** **AC17** — `terraform state list` shows 27 `sentry_alert.` and 2
+- [x] **11.3** **AC17** — `terraform state list` shows 27 `sentry_alert.` and 2
       `sentry_issue_alert.`, **no orphan**. This is what fails loudly on a partial apply rather
       than deferring it to the next unrelated push.
+      **AUTOMATED, not an operator step.** Review found this AC had no keyboard route: it needs
+      R2 backend creds plus `SENTRY_IAC_AUTH_TOKEN`, which only the apply job holds, and the
+      apply-failure issue body tells the operator NOT to `workflow_dispatch` (no
+      `head_commit.message`, so no `[ack-destroy]`). It now runs as an `if: always()` step in
+      the apply job, writes the counts into the run summary as a table, and reds with the
+      partial-adoption diagnosis when they are not 27/2. The remaining Phase 11 ACs verify on
+      the merge run; this one no longer waits for a human with credentials they do not have.
 - [ ] **11.4** **AC18** — `legacy_trigger_conditions` empty for all 27 in state.
 - [ ] **11.5** **AC19** — the §2.9 probe: all 27 match the committed capture.
 - [ ] **11.6** **AC20** — `byok-art-33-breach` field-by-field against the capture.

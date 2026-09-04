@@ -1118,6 +1118,49 @@ jobs:
           which jq >/dev/null 2>&1 || sudo apt-get install -y jq
           bash apps/web-platform/scripts/assert-byok-rules-exist.sh
 
+      - name: AC17 — state holds 27 sentry_alert + 2 sentry_issue_alert, no orphan
+        # AUTOMATED, because the alternative was an operator task nobody can do.
+        # AC17 is the check that decides whether a failed apply was PARTIAL, and
+        # the failure issue named it as such — while `terraform state list` needs
+        # the R2 backend credentials and `SENTRY_IAC_AUTH_TOKEN` that only this
+        # job holds, and the same issue body tells the operator NOT to
+        # `workflow_dispatch` (a dispatch carries no `head_commit.message`, so it
+        # cannot supply an `[ack-destroy]`). So the documented emergency check had
+        # no keyboard route at all. It runs here instead, and the counts go into
+        # the run summary so the answer is READ rather than reproduced.
+        #
+        # `if: always()` — a FAILED apply is exactly when this matters. On a
+        # partial adoption the counts will not be 27/2, and that is the signal.
+        if: always()
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+        run: |
+          set -uo pipefail
+          set +e
+          addrs=$(terraform state list)
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::AC17: could not read terraform state; the partial-apply question is UNANSWERED for this run."
+            exit 1
+          fi
+          n_alert=$(grep -c '^sentry_alert\.'       <<<"$addrs"); [[ -n "$n_alert" ]] || n_alert=0
+          n_issue=$(grep -c '^sentry_issue_alert\.' <<<"$addrs"); [[ -n "$n_issue" ]] || n_issue=0
+          {
+            echo "### AC17 — Sentry alert addresses in state"
+            echo ""
+            echo "| type | count | expected |"
+            echo "|---|---|---|"
+            echo "| \`sentry_alert.\` | ${n_alert} | 27 |"
+            echo "| \`sentry_issue_alert.\` | ${n_issue} | 2 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "AC17: state holds ${n_alert} sentry_alert and ${n_issue} sentry_issue_alert address(es)"
+          if [[ "$n_alert" -ne 27 || "$n_issue" -ne 2 ]]; then
+            echo "::error::AC17 FAILED: expected 27 sentry_alert and 2 sentry_issue_alert addresses in state, found ${n_alert} and ${n_issue}. This is the partial-adoption signal: some of the 27 moved and some did not. Re-run THIS job (not a workflow_dispatch — it carries no head_commit.message and so cannot supply the [ack-destroy]); the adoption assert will report how many pairs remain."
+            exit 1
+          fi
+
       - name: sentry_alert live fidelity (AC19/AC20)
         # The post-apply half of §2.9. `assert-byok-rules-exist.sh` above covers
         # 4 of the 27 rules, by name and enablement; this covers all 27,
