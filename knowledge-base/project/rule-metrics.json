@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-03T12:37:37Z",
+  "generated_at": "2026-09-04T15:30:02Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -263,6 +263,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "hr-all-infrastructure-provisioning-servers",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-always-read-a-file-before-editing-it",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -445,6 +458,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "hr-monitor-not-run-in-background-for-polling",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-multi-step-post-merge-bootstrap-script",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -511,6 +537,19 @@
     },
     {
       "id": "hr-never-run-commands-with-unbounded-output",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-never-write-to-claude-code-memory-claude",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -757,6 +796,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "hr-when-a-command-exits-non-zero-or-prints",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-when-a-plan-specifies-relative-paths-e-g",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -875,6 +927,19 @@
     },
     {
       "id": "rf-before-spawning-review-agents-push-the",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1108,6 +1173,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "wg-pm-class-followthrough-for-operator-dogfood",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "wg-record-recurring-vendor-expense-before-ready",
       "section": "Workflow Gates",
       "hit_count": 0,
@@ -1277,112 +1355,24 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "rf-never-skip-qa-review-before-merging",
-      "section": "Review & Feedback",
-      "hit_count": 2,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 2,
-      "prevented_errors": 2,
-      "last_hit": "2026-09-03T11:15:50Z",
-      "first_seen": "2026-09-03T11:15:48Z",
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-gdpr-gate-on-regulated-data-surfaces",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 3,
+      "applied_count": 2,
       "warn_count": 0,
-      "fire_count": 3,
+      "fire_count": 2,
       "prevented_errors": 0,
-      "last_hit": "2026-09-03T11:24:59Z",
-      "first_seen": "2026-09-03T07:55:57Z",
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "hr-when-a-command-exits-non-zero-or-prints",
-      "section": "Hard Rules",
-      "hit_count": 4,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 4,
-      "prevented_errors": 4,
-      "last_hit": "2026-09-03T11:15:51Z",
-      "first_seen": "2026-09-03T11:15:49Z",
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "hr-never-write-to-claude-code-memory-claude",
-      "section": "Hard Rules",
-      "hit_count": 6,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 6,
-      "prevented_errors": 6,
-      "last_hit": "2026-09-03T11:29:42Z",
-      "first_seen": "2026-09-03T11:29:42Z",
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "hr-monitor-not-run-in-background-for-polling",
-      "section": "Hard Rules",
-      "hit_count": 6,
-      "bypass_count": 1,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 7,
-      "prevented_errors": 5,
-      "last_hit": "2026-09-03T11:28:06Z",
-      "first_seen": "2026-09-03T11:28:05Z",
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "wg-pm-class-followthrough-for-operator-dogfood",
-      "section": "Workflow Gates",
-      "hit_count": 9,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 9,
-      "prevented_errors": 9,
-      "last_hit": "2026-09-03T11:28:15Z",
-      "first_seen": "2026-09-03T11:28:14Z",
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "hr-all-infrastructure-provisioning-servers",
-      "section": "Hard Rules",
-      "hit_count": 253,
-      "bypass_count": 63,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 316,
-      "prevented_errors": 190,
-      "last_hit": "2026-09-03T11:29:35Z",
-      "first_seen": "2026-09-03T11:28:43Z",
+      "last_hit": "2026-09-04T10:56:49Z",
+      "first_seen": "2026-09-04T10:56:49Z",
       "rule_text_prefix": ""
     }
   ],
   "summary": {
     "total_rules_tagged": 105,
-    "rules_unused_over_8w": 98,
-    "rules_bypassed_over_baseline": 2,
-    "orphan_rule_ids": [
-      "adr-033-inngest-cron-canonical",
-      "cq-docs-cli-verification",
-      "durable-reminder-prefer-inngest",
-      "git-commit-secret-scan",
-      "hr-in-github-actions-run-blocks-never-use",
-      "kb-domain-allowlist-guard",
-      "post-dispatch-watch-gate",
-      "pre-ask-technical-fork-gate",
-      "pre-merge-auto-close-scan"
-    ],
+    "rules_unused_over_8w": 104,
+    "rules_bypassed_over_baseline": 0,
+    "orphan_rule_ids": [],
     "gate_exemptions": [],
     "gate_override_count": 0,
     "gate_timeout_warn_count": 0,
@@ -1393,9 +1383,7 @@
     "drops_rotation_fail_count": 0,
     "grep_rewrite_fault_count": 0,
     "grep_rewrite_fault_reasons": {},
-    "hook_input_fault_count": 5,
-    "hook_input_fault_reasons": {
-      "unparseable": 5
-    }
+    "hook_input_fault_count": 0,
+    "hook_input_fault_reasons": {}
   }
 }

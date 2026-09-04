@@ -1,6 +1,6 @@
 # Tasks — feat-one-shot-7797-bash-x-token-guard
 
-**Plan:** `knowledge-base/project/plans/2026-09-04-fix-bash-x-secret-trace-guard-plan.md`
+**Plan:** `knowledge-base/project/plans/archive/20260904-172931-2026-09-04-fix-bash-x-secret-trace-guard-plan.md`
 **Issue:** #7797
 **Lane:** `procedural`
 
