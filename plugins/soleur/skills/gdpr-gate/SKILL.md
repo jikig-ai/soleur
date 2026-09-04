@@ -218,27 +218,41 @@ records the last time the pinned corpus was compared against upstream.
   section.
 
 Both thresholds are stable design parameters, not settings: they are not
-relaxable without a published ADR. `last-verified` is advanced by the weekly
-content-vendor-drift cron when — and only when — in that same run it
-(a) compared every record the NOTICE **declares**, (b) found zero drift,
-(c) found zero fetch errors, and (d) observed the upstream repository itself to
-be neither archived, renamed, nor unreachable. That last condition is separate
-because every file compares SAME against an archived upstream — the blobs at
-the pinned SHAs still resolve — so the per-file result cannot see it.
+relaxable without a published ADR.
+
+`last-verified` is advanced by Soleur's weekly content-vendor-drift cron, and
+only on a run that itself compared the complete upstream-derived registry and
+found it clean against a healthy upstream. The conjuncts are stated canonically
+in the content-vendoring policy (§6a) rather than restated here, because
+restating them is how the two copies came to disagree. Two consequences are
+worth having on this page:
+
+- The scope is the **upstream-derived** records. Files written for this plugin
+  carry their own pins and are checked at commit time, not by the attestation.
+- The cron skips a write while the field is recently advanced, so its value
+  moves in steps of roughly three weeks rather than weekly.
 
 A missing NOTICE, an unparseable date, or a future date all resolve to `999`
 days, which fires both banners; that is the fail-safe direction.
 
-To refresh manually, re-run the comparison and update `last-verified` plus any
-changed `local-blob-sha` in NOTICE. Contributors working in the Soleur repo
-have the full policy at
-`knowledge-base/engineering/policies/content-vendoring.md`; that file is not
-shipped with the installed plugin, which is why the operator chain below is
-reproduced here rather than linked.
+**Do not edit `last-verified` by hand.** An earlier version of this section
+suggested exactly that, which is the one action the governing ADR (ADR-203)
+explicitly rejects: a hand-written value asserts a comparison that no artifact
+records, and on an installed plugin it is overwritten by the next update
+anyway. If the banner is firing on an installed plugin, the corpus is refreshed
+upstream and the fix is to update the plugin.
 
 ## POSTURE_FAIL operator chain
 
-When the gate emits a `POSTURE_FAIL:` line:
+**If you are running an installed copy of this plugin** (you are not developing
+Soleur itself), the short version is: the gate is advisory, it exits 0, and it
+is telling you the detection corpus shipped with your copy is old. Nothing in
+your repository is wrong and there is no action to take in it. Update the
+plugin to pick up a refreshed corpus. The numbered chain below is for
+contributors working in the Soleur repository — its steps reference registers
+and internal endpoints that only exist there.
+
+**In the Soleur repository**, when the gate emits a `POSTURE_FAIL:` line:
 
 1. **Do not pause the current PR.** The gate is advisory and exits 0. The
    staleness signal is a separate work cycle from whatever diff triggered it.
