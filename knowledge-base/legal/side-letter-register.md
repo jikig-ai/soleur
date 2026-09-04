@@ -34,6 +34,21 @@ Additional columns (PDF SHA-256, template version, external-counsel re-review tr
 
 ## Notes
 
+- **DO NOT APPEND A `Counterparty` LEGAL NAME UNTIL THE SCHEMA QUESTION IS RESOLVED — see the
+  tracked issue below.** This file is tracked in a **public** repository. `Counterparty` is defined
+  above as *"Full legal name of the Co-Member"*, which is **always** a natural person's name, and it
+  would be published alongside a workspace UUID and a signature timestamp — a directly-identifying
+  triple, world-readable, copied into every clone and fork, and **not erasable**. The table being
+  empty is currently the only thing preventing that.
+  This is the same defect class as Blocking Finding B1 of #3210, where the Corporate CLA register
+  was specified with identity columns on the same surface and the CLO ruled them out permanently
+  (`knowledge-base/legal/audits/2026-09-04-clo-ruling-ccla-register-siting-and-coverage-map-basis-3210.md`,
+  option B1-c). That reasoning is **surface-based, not instrument-based**, so it reaches this
+  register too. The fix here is the same shape — an opaque record reference published, the legal
+  name held off-repo with the executed instrument — but it is not applied in that PR because this
+  register's schema carries a recorded counsel attestation (`2026-05-counsel-review-4289.md`), and
+  amending it is a counsel re-review event rather than a documentation edit. Tracked at #7844.
+
 - This is a SINGLE LEDGER FILE — not a directory of per-counterparty files. Append rows; do not split.
 - The executed PDF lives off-repo (encrypted operator drive). The repository carries only the template and this register.
 - Counsel-review audit at `knowledge-base/legal/audits/2026-05-counsel-review-4289.md` records the operator-attested counsel sign-off on the template + this register's schema; external counsel re-review triggers are listed in that audit file's §External Counsel Re-Review Triggers section.
