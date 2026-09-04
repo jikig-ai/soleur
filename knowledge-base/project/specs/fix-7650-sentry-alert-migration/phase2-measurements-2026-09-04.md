@@ -1,85 +1,26 @@
 ---
-title: "Phase 2 measurements — scope, traps, and provider schema at v0.15.7"
+title: "Phase 2 in-session measurements — the drift source, and the live plan"
 issue: 7650
 date: 2026-09-04
 tags: [sentry, terraform, migration, measurement]
 ---
 
-# Phase 2 measurements (2026-09-04)
+# Phase 2 in-session measurements (2026-09-04)
 
-Every number here was measured in-session against live prod or the pinned provider.
-Nothing is quoted from the plan, the resume prompt, or a changelog.
+Deliberately NOT a restatement of
+[`phase2-v0157-frequency-trigger-landed-scope-is-27.md`](./phase2-v0157-frequency-trigger-landed-scope-is-27.md).
+That document is authoritative for the provider schema at the pinned tag (§1, §3),
+the boolean-comparison trap (§2), the hardcoded `any-short` (§4), and the 27 with
+every attribute the translation needs (§6). All of it was independently
+re-derived in this session and agreed; it is not repeated here.
 
-## Scope: 27, derived not asserted
+What follows is only what that document does NOT contain.
 
-Source: `phase2-live-workflows-capture-2026-09-04.json`, captured `HTTP/2 200` from
-`GET /api/0/organizations/jikigai-eu/workflows/?per_page=100`.
+## 1. The frequency trap runs the OTHER way — the script is the drift source
 
-| Step | Count |
-|---|---|
-| Live workflows in the org | 30 |
-| less `Send a notification for high priority issues` (566201, vendor default: `new_high_priority_issue` + `existing_high_priority_issue`) | -1 |
-| less `auth-per-user-loop` (566671) and `sandbox-startup-failure` (669246), both `event_unique_user_frequency_count` | -2 |
-| **In scope** | **27** |
-
-Re-derived from the committed capture, not from the raw response.
-
-## Trap 2 — comparison shape: CLEAR
-
-11 `event_frequency_count` trigger conditions across the org; **0** carry a bare-boolean
-comparison. All 11 are objects, so none falls into `legacy_trigger_conditions` and none
-loses its threshold.
-
-## Detector uniformity: CONFIRMED
-
-`[.[] | .detectorIds] | flatten | unique` over all 30 returns exactly `["1213799"]`.
-`monitor_ids` does not branch per rule class.
-
-## Provider schema at the pinned tag (read from the provider, not the changelog)
-
-`terraform providers schema -json` against `jianyuan/sentry 0.15.7` in a scratch root:
-
-- `trigger_conditions` (list) offers `event_frequency_count{interval,value}`,
-  `first_seen_event`, `reappeared_event`, `regression_event`, `issue_resolved_trigger`.
-  Frequency triggers **are** expressible at 0.15.7 — the plan's v0.15.5-era
-  "NOT MIGRATABLE" is stale, as recorded.
-- `trigger_conditions` has **no** `event_unique_user_frequency_count`. This is upstream
-  jianyuan/terraform-provider-sentry issue 950 confirmed *from the schema itself*, and it
-  is why the two exclusions above are real rather than assumed.
-- `trigger_conditions` has **no** `logic_type` attribute — the provider hardcodes
-  `any-short`. See the semantics check below.
-- `action_filters` is REQUIRED, with REQUIRED `actions` and REQUIRED `logic_type`
-  (`any` | `any-short` | `all` | `none`).
-- `action_filters[].conditions` **does** offer `event_unique_user_frequency_count` — it is
-  available as a filter condition and merely absent as a *trigger*, which is precisely the
-  shape upstream 950 describes.
-- There is **no** `project` attribute; `organization` is REQUIRED.
-
-## The hardcoded `any-short` is semantics-preserving — proven, not assumed
-
-14 of the 27 in-scope rules report `triggers.logicType = "all"` rather than `any-short`.
-Every one of those 14 has **exactly one** trigger condition, where `all` and `any-short`
-are semantically identical. Rules with multiple trigger conditions all already report
-`any-short`.
-
-    count of (logicType != "any-short" AND n_conditions > 1) = 0
-
-So authoring under the provider's hardcoded `any-short` changes no paging semantics.
-Had any multi-condition trigger used `all`, adoption would have silently widened it.
-
-## `action_filters[].logic_type`: 4 of 27 are `any-short`
-
-`git-data-boot-fatal`, `web-host-private-nic-boot-gate`, `web-host-terminal-boot-fatal`,
-`zot-mirror-fallback-rate`. The other 23 are `all`. Must be authored per rule.
-
-## `fallthrough_type`: `NoOne` on `byok-cap-exceeded` alone
-
-The other 26 are `ActiveMembers`. Note this is `ActiveMembers`, not `AllMembers`.
-
-## Frequency: the trap runs the OTHER way
-
-The resume prompt stated the `.tf` carried 61/62 as dedup placeholders against a live
-value of 60. Measured, that is inverted:
+The resume brief stated that `issue-alerts.tf` carried `61`/`62` as
+dedup-avoidance placeholders against a live value of `60`. Measured, that is
+inverted:
 
 | Source | auth-signout-burst | auth-exchange-code-burst | auth-callback-no-code-burst |
 |---|---|---|---|
@@ -87,14 +28,79 @@ value of 60. Measured, that is inverted:
 | `issue-alerts.tf` | 60 | 61 | 62 |
 | `configure-sentry-alerts.sh` | 60 | 60 | 60 |
 
-The `.tf` matches live byte-for-byte. **`configure-sentry-alerts.sh` is the drift source:**
-any run of it today rewrites two live paging cadences (61 to 60, 62 to 60) through the
-deprecated `/rules/` endpoint. Retiring its ownership of the three burst rules therefore
-removes an active drift vector, not merely a redundant writer — which strengthens the
-operator's decision to fold the auth-three into this pass.
+The `.tf` matched live byte-for-byte. `configure-sentry-alerts.sh` wrote `60`
+for all three, so **any run of it rewrote two live paging cadences** (61→60,
+62→60) through the deprecated `/rules/` endpoint.
 
-`auth-per-user-loop` (frequency 30) stays in the script, so the script is not deleted.
+Retiring its ownership of those three (§2.2) therefore removes an ACTIVE drift
+vector, not merely a redundant writer. `auth-per-user-loop` (frequency 30) stays
+in the script, so the script is not deleted.
 
-## Environment and enabled
+## 2. The live plan — the adoption is a no-op on every rule
 
-All 27 are `enabled: true` with `environment: null`.
+Read-only `terraform plan` against live prod state, this branch:
+
+    Plan: 27 to import, 0 to add, 0 to change, 0 to destroy.
+
+Plan JSON, asserted directly rather than read off the summary line:
+
+| Assertion | Measured |
+|---|---|
+| `["forget"]` rows | 27 |
+| `.change.importing.id` keys (note the path) | 27 |
+| actions containing `delete` | 0 |
+| actions equal to `["create"]` | 0 |
+| all other rows | 88 × `["no-op"]` |
+| resolved `monitor_ids` across the imports | `["1213799"]` |
+
+`0 to change` is the load-bearing one: it means the 27 authored blocks are
+faithful to live, so no paging threshold, filter, cadence or recipient is
+silently rewritten. The equal-length-attribute rewrite class (which produces
+`deletes=0 / creates=0 / nested_deletes=0` and is invisible to the destroy
+guard) is excluded by measurement, not by argument.
+
+The last row also settles a design risk: `monitor_ids` resolves through
+`data.sentry_project_issue_stream_monitor.web_platform` rather than a hardcoded
+literal, and it resolved to exactly the captured detector.
+
+**A clean plan is NOT evidence the deprecation lifted.** The two surviving
+`sentry_issue_alert` rules still refresh through the deprecated endpoint; this
+plan simply ran outside a brownout window. The retry stays.
+
+## 3. Ack posture — measured on the real plan, not predicted
+
+Running the repo's own `scripts/sentry-destroy-counts.sh` against the real plan
+JSON:
+
+    resource_deletes=0  resource_creates=0  nested_deletes=142  destroy_count=142
+
+A `forget` carries `after == null`, and `destroy-guard-filter-sentry.jq` selects
+`sentry_issue_alert` rows on `index("delete") | not` — true for `forget` — then
+computes `before - after`. So all 27 rules' nested conditions, filters and
+actions register as nested deletes.
+
+Consequences, both of which the merge must honour:
+
+- The merge commit **must** carry `[ack-destroy]` on its own line in the commit
+  BODY, and that ack is **correct** — nothing is being destroyed.
+- Because the ack is blanket and names no address set, it must be paired with an
+  explicit **`resource_deletes == 0`** assertion. That is the discriminator
+  proving no genuine delete rode along under it, and it held: 0.
+
+## 4. Type-scope coverage
+
+The plan's four resource types — `sentry_alert` (27), `sentry_issue_alert` (29:
+27 forgets + 2 no-ops), `sentry_cron_monitor` (55), `sentry_uptime_monitor` (4) —
+match the types declared in `*.tf` exactly, and all four are in
+`COVERED_TYPES` in `tests/scripts/test-destroy-guard-sentry-scope-guard.sh`
+(the Phase 1 extension, already on main).
+
+## 5. Generator parity
+
+`phase2-generate-alert-blocks.py` re-run against the committed capture
+reproduces the committed `resource` / `removed` / `import` runs byte-for-byte.
+It derives resource labels mechanically with a three-entry override table for
+the historical aliases (`cron-egress-blocked` → `egress_blocked`,
+`web-host-private-nic-boot-gate` → `web_private_nic_boot_gate`,
+`web-host-terminal-boot-fatal` → `web_terminal_boot_fatal`) and reads nothing
+from `issue-alerts.tf`, so deleting the legacy blocks cannot break it.

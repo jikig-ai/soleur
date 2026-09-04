@@ -233,7 +233,7 @@ List with reasons.
 
 ## Phase 12 — Cleanup (follow-up PR)
 
-- [ ] **12.1** File the tracking issue **now**, at deferral time, per
+- [x] **12.1** Filed as #7826 (2026-09-04). File the tracking issue **now**, at deferral time, per
       `wg-when-deferring-a-capability-create-a` — not as the last task of the deferred work.
 - [ ] **12.2** **AC23 — hard precondition.** Before removing the 27 `import{}` and 27 `removed{}`
       blocks: `terraform state list | grep -c '^sentry_alert\.'` on `main` is **27**, and

@@ -34,6 +34,32 @@
 #     on `main`. Removing an `import{}` for an address that was NOT actually
 #     imported turns it into a planned CREATE of a live-colliding paging rule.
 #
+# TRIGGER LOGIC IS HARDCODED BY THE PROVIDER. `sentry_alert` exposes no
+# `logic_type` on `trigger_conditions` -- it always applies `any-short`. That is
+# semantics-preserving for all 27: measured 2026-09-04, every in-scope rule whose
+# live `logicType` is "all" carries exactly ONE trigger condition, where `all` and
+# `any-short` are identical, and zero rules have both multiple conditions and a
+# non-any-short logic type. Had even one, adoption would have silently WIDENED a
+# live paging trigger. Do not add a multi-condition trigger here without
+# re-checking that. (Stated once: a per-block copy on 27 of 27 blocks is
+# boilerplate, and the plan's own Cut List rejects markers that ship
+# pre-suppressed for exactly that reason.)
+#
+# `ignore_changes = [environment]` on every block: no block SETS `environment`
+# and all 27 are live-null, so this defends against an out-of-band UI edit
+# binding a rule to an environment, not against config drift. It is deliberately
+# the ONLY ignored attribute -- the wide `ignore_changes` the legacy blocks
+# carried is what made Terraform not own their filters (see
+# assert-byok-rules-exist.sh and the 2026-08-19 learning).
+#
+# THREE RESOURCE LABELS ARE NOT MECHANICAL derivations of their live name:
+#   cron-egress-blocked            -> egress_blocked
+#   web-host-private-nic-boot-gate -> web_private_nic_boot_gate
+#   web-host-terminal-boot-fatal   -> web_terminal_boot_fatal
+# These are historical aliases. Renaming one to match its live name is a
+# Terraform address change, i.e. a destroy+create of a live paging rule. The
+# generator encodes them in LABEL_OVERRIDES; do not "tidy" them here.
+#
 # A CLEAN PLAN IS NOT EVIDENCE THE DEPRECATION LIFTED. The two survivors still
 # read through the deprecated endpoint, so a green plan may simply mean it ran
 # outside a brownout window. The brownout retry in apply-sentry-infra.yml STAYS
@@ -147,10 +173,6 @@ resource "sentry_alert" "action_required_sla_veto_bypass" {
   frequency_minutes = 5
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
   ]
@@ -181,10 +203,6 @@ resource "sentry_alert" "auth_callback_no_code_burst" {
   frequency_minutes = 62
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "15m", value = 3 } },
   ]
@@ -214,10 +232,6 @@ resource "sentry_alert" "auth_exchange_code_burst" {
   frequency_minutes = 61
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "15m", value = 5 } },
   ]
@@ -247,10 +261,6 @@ resource "sentry_alert" "auth_signout_burst" {
   frequency_minutes = 60
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "15m", value = 5 } },
   ]
@@ -280,10 +290,6 @@ resource "sentry_alert" "byok_art_33_breach" {
   frequency_minutes = 5
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -315,10 +321,6 @@ resource "sentry_alert" "byok_cap_exceeded" {
   frequency_minutes = 15
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
   ]
@@ -348,10 +350,6 @@ resource "sentry_alert" "chat_message_save_failure" {
   frequency_minutes = 10
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -383,10 +381,6 @@ resource "sentry_alert" "container_restart_burst" {
   frequency_minutes = 17
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -418,10 +412,6 @@ resource "sentry_alert" "egress_blocked" {
   frequency_minutes = 30
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -453,10 +443,6 @@ resource "sentry_alert" "disk_io_wal_concentration" {
   frequency_minutes = 21
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -488,10 +474,6 @@ resource "sentry_alert" "gh_pages_cert_reissue_failed" {
   frequency_minutes = 63
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "1h", value = 0 } },
   ]
@@ -520,10 +502,6 @@ resource "sentry_alert" "git_data_boot_fatal" {
   frequency_minutes = 24
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "1h", value = 0 } },
   ]
@@ -560,10 +538,6 @@ resource "sentry_alert" "github_webhook_founder_ambiguous" {
   frequency_minutes = 19
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -595,10 +569,6 @@ resource "sentry_alert" "inbox_action_required_notify_failure" {
   frequency_minutes = 15
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
   ]
@@ -628,10 +598,6 @@ resource "sentry_alert" "kb_db_error" {
   frequency_minutes = 13
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -663,10 +629,6 @@ resource "sentry_alert" "kb_sync_protected_fallback_failed" {
   frequency_minutes = 18
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -698,10 +660,6 @@ resource "sentry_alert" "kb_sync_silent_failure" {
   frequency_minutes = 12
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -733,10 +691,6 @@ resource "sentry_alert" "local_cache_reload_rate" {
   frequency_minutes = 26
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "1h", value = 0 } },
   ]
@@ -765,10 +719,6 @@ resource "sentry_alert" "outbound_email_send_failure" {
   frequency_minutes = 16
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -799,10 +749,6 @@ resource "sentry_alert" "repo_resolver_divergence" {
   frequency_minutes = 20
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -833,10 +779,6 @@ resource "sentry_alert" "seccomp_remediation_failed" {
   frequency_minutes = 27
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "1h", value = 0 } },
   ]
@@ -865,10 +807,6 @@ resource "sentry_alert" "stale_bot_pr" {
   frequency_minutes = 14
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -900,10 +838,6 @@ resource "sentry_alert" "web_private_nic_boot_gate" {
   frequency_minutes = 24
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "1h", value = 1 } },
   ]
@@ -933,10 +867,6 @@ resource "sentry_alert" "web_terminal_boot_fatal" {
   frequency_minutes = 24
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "1h", value = 1 } },
   ]
@@ -969,10 +899,6 @@ resource "sentry_alert" "workspace_sync_health" {
   frequency_minutes = 11
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
@@ -1003,10 +929,6 @@ resource "sentry_alert" "workspaces_luks_drift" {
   frequency_minutes = 25
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "1h", value = 0 } },
   ]
@@ -1036,10 +958,6 @@ resource "sentry_alert" "zot_mirror_fallback_rate" {
   frequency_minutes = 23
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  # The provider exposes no logic_type on trigger_conditions -- it hardcodes
-  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is
-  # "all" carries exactly ONE trigger condition, where all == any-short, so this
-  # is semantics-preserving. See phase2-measurements-2026-09-04.md.
   trigger_conditions = [
     { event_frequency_count = { interval = "1h", value = 0 } },
   ]

@@ -9,7 +9,6 @@ import json, re, sys, io, os
 
 ROOT = os.environ.get("REPO", ".")
 CAP = os.path.join(ROOT, "knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json")
-TF  = os.path.join(ROOT, "apps/web-platform/infra/sentry/issue-alerts.tf")
 OUTDIR = os.environ["OUTDIR"]
 
 EXCLUDE = {"event_unique_user_frequency_count", "new_high_priority_issue", "existing_high_priority_issue"}
@@ -17,20 +16,30 @@ EXCLUDE = {"event_unique_user_frequency_count", "new_high_priority_issue", "exis
 def in_scope(w):
     return not any(c["type"] in EXCLUDE for c in w["triggers"]["conditions"])
 
-src = io.open(TF, encoding="utf-8").read()
-name_to_res = {}
-for m in re.finditer(r'^resource "sentry_issue_alert" "([a-z0-9_]+)" \{(.*?)^\}', src, re.S | re.M):
-    res, body = m.group(1), m.group(2)
-    nm = re.search(r'^\s*name\s*=\s*"([^"]+)"', body, re.M)
-    if nm:
-        name_to_res[nm.group(1)] = res
+# Resource labels are derived MECHANICALLY from the live name (- -> _), with an
+# explicit override table for the three that are NOT mechanical. Those three
+# aliases previously existed only inside the `sentry_issue_alert` blocks this
+# migration deletes, so without this table they are an unencoded invariant: a
+# future author "correcting" them would rename a Terraform address, which is a
+# destroy+create of a live paging rule.
+#
+# This function deliberately does NOT parse issue-alerts.tf. An earlier revision
+# did, and became unrunnable the moment task 3.4 deleted the blocks it read --
+# so the script's whole reason to exist (re-run it and diff, rather than reading
+# 27 blocks by eye) was void exactly when a reviewer needed it.
+LABEL_OVERRIDES = {
+    "cron-egress-blocked": "egress_blocked",
+    "web-host-private-nic-boot-gate": "web_private_nic_boot_gate",
+    "web-host-terminal-boot-fatal": "web_terminal_boot_fatal",
+}
+
+def resource_label(live_name):
+    return LABEL_OVERRIDES.get(live_name, live_name.replace("-", "_"))
 
 caps = json.load(io.open(CAP, encoding="utf-8"))
 scoped = sorted([w for w in caps if in_scope(w)], key=lambda w: w["name"])
 
-missing = [w["name"] for w in scoped if w["name"] not in name_to_res]
-if missing:
-    sys.exit("FATAL: no .tf resource name for: %s" % missing)
+name_to_res = {w["name"]: resource_label(w["name"]) for w in scoped}
 if len(scoped) != 27:
     sys.exit("FATAL: expected 27 in scope, got %d" % len(scoped))
 
@@ -79,10 +88,6 @@ for w in scoped:
         "  enabled           = %s\n"
         "  frequency_minutes = %s\n"
         "  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]\n\n"
-        "  # The provider exposes no logic_type on trigger_conditions -- it hardcodes\n"
-        "  # any-short. Measured 2026-09-04: every in-scope rule whose live logicType is\n"
-        '  # "all" carries exactly ONE trigger condition, where all == any-short, so this\n'
-        "  # is semantics-preserving. See phase2-measurements-2026-09-04.md.\n"
         "  trigger_conditions = [\n%s\n  ]\n\n"
         "  action_filters = [\n%s\n  ]\n\n"
         "  lifecycle {\n    ignore_changes = [environment]\n  }\n"
