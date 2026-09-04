@@ -88,6 +88,15 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
 ROSTER="${CCLA_ADD_ROSTER:-apps/cla-evidence/roster/ccla-roster.json}"
+# Resolve to an ABSOLUTE path. We cd to the repo root above, so the default
+# would resolve correctly today — but `cp`/`jq` operands that are only
+# conditionally absolute are the class `fixture-relative-assert` exists to
+# catch: an overridden CCLA_ADD_ROSTER, or any future cd, silently retargets
+# the write. Being provably absolute costs one line.
+case "$ROSTER" in
+  /*) ;;
+  *) ROSTER="$REPO_ROOT/$ROSTER" ;;
+esac
 VALIDATOR="apps/web-platform/scripts/cla-evidence/validate-roster.ts"
 TSX="apps/web-platform/node_modules/.bin/tsx"
 

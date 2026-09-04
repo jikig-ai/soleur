@@ -51,7 +51,7 @@ Before your first pull request can be merged, you must sign the [Individual Cont
 
 **If your employer owns your work** (common with full-time employment contracts), a [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) is also needed -- **but chasing it is the maintainer's job, not yours.** Do not hold your pull request back on it and do not approach your employer's legal team yourself. Sign the individual CLA as above, tell us who your employer is, and we will approach them at legal@jikigai.com. We aim to reply within **3 business days**.
 
-While a Corporate CLA is in flight your pull request is in the state **"CCLA in progress -- maintainer action, not yours"**. It is reviewed and merged on its merits in the meantime: the Corporate CLA is paperwork we owe your employer, not a task assigned to you, and once it is on file every future contribution from your colleagues is covered without anyone signing anything again.
+While a Corporate CLA is in flight your pull request is in the state **"CCLA in progress -- maintainer action, not yours"**. It is reviewed and merged on its merits in the meantime: the Corporate CLA is paperwork we owe your employer, not a task assigned to you, and once it is on file every future contribution from your colleagues is covered by that same Corporate CLA -- no second Corporate CLA is ever needed. Each colleague still signs the Individual CLA once, on their own first pull request.
 
 ## Submitting Changes
 

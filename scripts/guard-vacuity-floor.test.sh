@@ -278,13 +278,21 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # COVERED_DIRS). Rewriting the floor as `-lt` fixed the first; this line fixes
 # the second for this file. The directory-wide fix needs a per-scope ratchet
 # first — see #7585.
+# `apps/cla-evidence/scripts/ccla-add.test.sh` added by #3210 — the write-side
+# half of the Corporate CLA contribution-triggered entry gate. Promoted rather
+# than deferred for the same reason as the two entries above: it is
+# floor-bearing, its floor is mutation-testable (printf + exit 1, not routed
+# through the suite's own fail()), and the deferral ledger is shrink-only, so
+# deferring it would grow a set that is only allowed to shrink. Its directory
+# `apps/cla-evidence/scripts/` is not in COVERED_DIRS and a directory-wide fix
+# needs a per-scope ratchet first — see #7585.
 # `.claude/hooks/incident-sandbox-coverage.test.sh` added by #7804 — the guard
 # keeping hook-suite telemetry out of the operator's live incident ledger.
 # Promoted rather than deferred for the same reason as the monitor-supersede
 # entry above: it is floor-bearing, its floor is mutation-testable, and leaving
 # it deferred would grow the shrink-only ledger. The directory-wide fix for
 # `.claude/hooks/` still needs a per-scope ratchet — see #7585.
-PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh)$'
+PROMOTED_FILES='^(apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/cla-evidence/scripts/ccla-add\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"

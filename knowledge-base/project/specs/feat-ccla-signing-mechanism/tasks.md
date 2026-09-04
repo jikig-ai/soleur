@@ -93,6 +93,14 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 - [ ] 5.8. Route the cross-document sweep through `legal-compliance-auditor`.
 - [x] 5.9. Do **not** enrol either CLA in `BODY_EQUIVALENCE_DOCS` — measured drift is non-zero.
 - [x] 5.10. Keep every `#NNNN` reference mid-line (markdownlint phantom-H1 trap).
+- [x] 5.11. `Last Updated` on the three published notices: the in-place bump is BLOCKED — those lines carry ~30 kB
+      of pre-existing canonical/mirror divergence, so any in-place edit trips the mirror-drift ratchet
+      ("a line that was already drifting was edited in place"). Resolved by the CLO-ruled third way: a new
+      `**Amended:** September 4, 2026` line added IDENTICALLY to both surfaces, which contributes no drift line
+      and leaves the `Previous:` chain untouched. The mirror hero block keeps its August 9 date — it exists only
+      on the mirror, so editing it trips the same ratchet; the `**Amended:**` wording neutralises it by referring
+      to "the dates shown above". One-time deviation from the `Previous:`-chain convention; folds back in when
+      the drift closes at #7465, where this is recorded.
 
 ## Phase 6 — ADR, C4, principle
 

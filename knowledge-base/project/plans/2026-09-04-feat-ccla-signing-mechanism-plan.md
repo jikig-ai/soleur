@@ -382,7 +382,7 @@ Referred to the CLO for a ruling, with drafted replacement wording requested bac
 **Status:** reviewed (carry-forward) — **two decisions strengthened by measurement**
 **Assessment:** The executed instrument specifies the mechanism, so option (a) is decided by
 the instrument. Sidecar required; fold into `cla-evidence`. No allowlist widening. Numeric-id
-matching with `removed_at` tombstones, base-ref reads, CODEOWNERS-protected.
+matching with `removed_at` tombstones *(the CLO subsequently renamed this a withdrawal-of-designation marker — see the ruling Section 4; the word "tombstone" already denotes something erasure-shaped in this codebase)*, base-ref reads, CODEOWNERS-protected.
 **Measured refinements:** KD5's lockstep is six artifacts and additionally trips the #6049
 auto-fabrication ceiling — the decision is stronger than argued. KD12's CODEOWNERS clause
 enforces nothing today (no branch protection exists) and must not be counted as the

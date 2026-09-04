@@ -39,8 +39,8 @@ Two published artifacts already describe a CCLA record that has never existed �
 
 ## Functional Requirements
 
-- **FR1.** A public **coverage map** maps employer legal name → authorized GitHub logins (numeric `id` as the match key, `login` for display) → `signed_at` → CCLA doc `git_sha` + `content_sha256`. Contains no personal data.
-- **FR2.** A private **signatory record** holds signatory name, title, corporate email, and the verbatim representation of authority. Enumerated fields only — **no free text, no email body**.
+- **FR1.** A public **coverage map** maps employer legal name → authorized GitHub logins (numeric `id` as the match key, `login` for display) → `signed_at` → CCLA doc `git_sha` + `content_sha256`. Contains no personal data. **[SUPERSEDED 2026-09-04 by the CLO ruling, Section 3 (#3210): "Contains no personal data" is FALSE and no document in this corpus may say it. The map asserts an employer-to-account association, which is personal data under Art. 4(1); `corporate-cla.md` Section 4(e) already classed GitHub usernames as personal information. The correct statement is no special-category data and no contact data. Retained unrewritten as the audit trail of what was specified before the ruling.]**
+- **FR2.** *(SUPERSEDED 2026-09-04 by the CLO ruling, Sections 1 and 1.3-1.4: there is NO private signatory record. B1-a (gitignored) and B1-b (a separate private repo) were both refused; identity fields are removed from the schema permanently and rest only in the executed instrument, held off-repo. Retained unrewritten as the audit trail.)* A private **signatory record** holds signatory name, title, corporate email, and the verbatim representation of authority. Enumerated fields only — **no free text, no email body**.
 - **FR3.** Representatives are never deleted; removal sets `removed_at`. A merge must be evaluable against the roster as of that merge.
 - **FR4.** Roster verification is a **step inside the existing `cla-evidence` job**, reading the roster **only from the base ref**.
 - **FR5.** `apps/cla-evidence/roster/` is added to `.github/CODEOWNERS`.
@@ -64,7 +64,7 @@ Two published artifacts already describe a CCLA record that has never existed �
 
 - AC1. A corporate contributor's PR greens `cla-check` via the normal one-comment ICLA path, with no allowlist entry and no second check.
 - AC2. `git grep -n 'allowlist' .github/workflows/cla.yml` shows the value unchanged from `main`.
-- AC3. The coverage map contains no personal data; the signatory record is not on a world-readable surface.
+- AC3. *(SUPERSEDED 2026-09-04 — see FR1.)* The coverage map contains no personal data; the signatory record is not on a world-readable surface.
 - AC4. A roster edit on a PR head ref does not affect that PR's own verification.
 - AC5. No CCLA record is written to `soleur-cla-evidence` while #7813, #7814 or #7816 is open.
 - AC6. `docs/legal/corporate-cla.md` §0 no longer asserts a record that is not written, and the canonical/mirror SHA gate passes.
