@@ -88,7 +88,13 @@ tests precede the helper (`cq-write-failing-tests-before`).
 - [ ] 5.4 Convert `plugins/soleur/test/web-platform-runtime-plugin-trigger.test.ts` (the suite named in
       the incident report).
 - [ ] 5.5 Convert `plugins/soleur/test/welcome-hook.test.ts` and
-      `plugins/soleur/test/gdpr-gate-repo-scan.test.ts`.
+      `plugins/soleur/test/gdpr-gate-repo-scan.test.ts`. **Read
+      `knowledge-base/project/learnings/workflow-issues/2026-04-03-lefthook-git-env-var-leak-breaks-tests.md`
+      before touching `welcome-hook.test.ts`** — it is the file that was already fixed once for this
+      exact defect under this exact lefthook command, five months ago. Confirm the helper subsumes
+      that per-file fix rather than leaving a fourth spelling of it in place. That learning also
+      names `Bun.spawnSync()` as a spawn form the constructed env must reach, alongside
+      `execFileSync`.
 - [ ] 5.6 `tests/scripts/test_lint_rule_ids.py`: strip the location family from the existing
       `_GIT_ENV` dict — **keep** its `GIT_AUTHOR_*`/`GIT_COMMITTER_*` pins.
 - [ ] 5.7 `tests/scripts/test_lint_rule_bodies.py`: **different shape** — its `_git()` helper passes

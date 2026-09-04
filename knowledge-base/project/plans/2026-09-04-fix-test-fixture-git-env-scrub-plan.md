@@ -118,6 +118,20 @@ It did **not** touch the sibling `plugin-component-test` command, which had exis
 named in the incident report. `scripts/hooks/pre-push` independently acquired its own copy of the
 same `unset`. Three copies of one idea, one uncovered sibling, and nothing measuring the set.
 
+**#7833 is not merely the fourth instance of a class — it is the same defect, in the same lefthook
+command, that was already fixed once.** `knowledge-base/project/learnings/workflow-issues/2026-04-03-lefthook-git-env-var-leak-breaks-tests.md`
+records `plugins/soleur/test/welcome-hook.test.ts` passing under `bun test <file>` and failing under
+lefthook's **`plugin-component-test`** — the exact command in this plan's Files to Edit — because
+"the `git init` call also inherited `GIT_DIR` from lefthook, causing it to silently fail or
+initialize against the wrong directory", and it names the transport precisely: lefthook's `GIT_*`
+"leak into Bun's test runner and then into any child processes spawned by `Bun.spawnSync()`".
+
+That was five months before #7833. The fix was applied **inside the one test file that hurt**. The
+entry point was left as it was, and a different suite under the same command reproduced it. This is
+the strongest available evidence for the plan's redirection: a per-file fix to this defect has already
+been tried, and it did not generalize even to the next file in the same directory. It also confirms
+`Bun.spawnSync()` as a spawn form the helper's env must reach, alongside `execFileSync`.
+
 ## Research Insights
 
 ### Applicable institutional learnings
@@ -609,6 +623,9 @@ failure_modes:
   - mode: "the fixture helper degrades to a pass-through, or loses pinned identity"
     detection: "Guard 1 — drives a real git write against a real victim repo and asserts HEAD, refs and index (mutations M5, M7)"
     alert_route: "CI red"
+logs:
+  where: "the test runner's own stdout/stderr — locally in the developer's terminal, and in the GitHub Actions job log for the ci.yml test shard that runs scripts/test-all.sh. Guard 3's abort message is written to stderr before any test output, so it is the first thing on the screen rather than buried in a suite summary. There is no log shipper on this path and none is wanted: the reader is the person running the command."
+  retention: "GitHub Actions job logs follow the repository's default retention (90 days); local terminal output is not retained. Durable evidence for this change lives in the repo instead — the three observed mutation tables committed under this branch's spec directory (AC10), which is why AC10 requires a file rather than a PR-body paragraph."
 discoverability_test:
   command: "bash plugins/soleur/test/hook-git-env-coverage.test.sh"
   expected_output: "RUN_LINES=26, RUNNER_LINES=2, HOOK_SCRIPTS=2 and a PASS line per examined runner command; exit 0"
@@ -654,6 +671,17 @@ with no data processing, no vendor, no recurring cost, and no customer-facing su
 | `scripts/hooks/*` may be dead files, making part of Guard 2 vacuous | Phase 0 step 3 determines the install path and records the answer. Covering them costs ~2 lines either way; claiming they are live without checking would not be acceptable |
 | The `lefthook.yml` `unset … &&` form might not be honoured | Probed with a control (§M-9): `0` with the prefix, `2` without |
 | The helper's deny-list misses a future `GIT_*` variable | The location family is enumerated from git's own documented set; Guard 1 mutation M1/M2 covers regression on the two that matter, and Guard 3 watches the same set at process start, so a miss shows up as an abort rather than a silent write |
+
+### Precedent diff (deepen-plan Phase 4.4)
+
+Three of the four mechanisms have in-repo precedent; one does not, and is flagged accordingly.
+
+| Mechanism | Precedent | Diff |
+|---|---|---|
+| Invocation-layer `unset` before a runner | `scripts/test-all.sh` › `--- Git Hook Isolation ---`; `scripts/hooks/pre-push` | **Identical.** This plan adds a third instance at the one entry point that lacks it, and pins all three (Guard 2 N1/N2/N3) rather than leaving a fourth to be added unmeasured. |
+| Fixture env constructor | `test/pre-merge-rebase.test.ts` › `GIT_ENV` (destructure-out + `GIT_CONFIG_NOSYSTEM` + `GIT_CONFIG_GLOBAL=/dev/null` + ceiling); `apps/web-platform/server/git-worktree-validity.ts` › `buildGitProbeEnv()` (allowlist + ceiling at parent) | **Deliberate divergence, measured.** Takes the ceiling-at-parent and config-hardening from `buildGitProbeEnv()`, the deny-list shape from `GIT_ENV`, and adds pinned `GIT_AUTHOR_*`/`GIT_COMMITTER_*` — which neither precedent needs, because `buildGitProbeEnv()` only reads and `GIT_ENV`'s suite supplies identity another way. Without the pin, every fixture commit fails `Author identity unknown` (§M-7). |
+| vitest setup file that aborts | `apps/web-platform/test/setup-dom.ts` already `throw`s from a setup file | **Same shape.** The vitest arm of Guard 3 follows it. |
+| `bunfig.toml` `[test] preload` | **None — `git grep preload -- '*.toml'` returns only Terraform fixture hits.** | **Novel pattern; scrutinise it.** Neither `bunfig.toml` declares a `preload` key today. Measured working (§M-8: rc=97 on a hostile env, rc=0 clean), but this is the one mechanism in the plan with no in-repo precedent, and mutation K3 exists precisely because the registration — not the file — is the part that can silently stop applying. |
 
 ## Re-evaluation Triggers
 
@@ -720,6 +748,40 @@ verification" and drives from a verification script.
   and `fixture-relative-assert.baseline.txt` (262 rows) is row-by-row equality-pinned. An AC that
   asserts sibling `FILES=` is *unchanged* deadlocks against the PR's own new files — express the delta
   (AC9), and regenerate the baselines in the same commit (Phase 4b).
-- **This is the fourth recurrence** — 2026-03-24 (#1090), 2026-04-03 ×2, now #7833 — each fixed at the
-  one site that hurt, none with a ratchet. If this ships the `lefthook.yml` line without Guard 2,
-  expect a fifth.
+- **This is the fourth recurrence, and the second in the same lefthook command.** 2026-03-24 (#1090),
+  2026-04-03 ×2, now #7833 — each fixed at the one site that hurt, none with a ratchet. The
+  2026-04-03 instance was `welcome-hook.test.ts` failing under `plugin-component-test` for exactly
+  this reason; it was fixed inside that one file, and a sibling suite in the same directory
+  reproduced it five months later. A per-file fix to this defect has already been tried and did not
+  generalise one directory over. If this ships the `lefthook.yml` line without Guard 2, expect a
+  fifth.
+
+## Deepen-Plan Record
+
+Gates run: 4.4 precedent-diff (see `## Risks & Mitigations` › Precedent diff — one mechanism has no
+in-repo precedent and is flagged), 4.45 verify-the-negative (every `never`/`cannot`/`does not` claim
+traced to a probe in §Measurements or to a cited file; two asserted claims — the gobwas depth-1
+behaviour and "all four recurrences entered through a hook entry point" — were read from source and
+both held, the second yielding the finding now in `## Provenance of the recurrence`), 4.6 user-brand
+impact (PASS: section present, threshold `single-user incident`), 4.7 observability (initially
+**REJECTED** — the `logs:` field was absent; added, re-checked, all five fields present with
+non-placeholder children and a `bash` probe verb), 4.8 PAT-shaped variables (no match), 4.11 guard
+contract (`python3 scripts/lint-guard-contract.py` green over all 3 entries; assembly read as
+structural, not a member list — each guard names a chokepoint and each says how many injection sites
+there are).
+
+Gates skipped, with reasons: **4.5 network-outage** — the keyword scan matches, but only on the
+literal strings `GIT_SSH_COMMAND` / `GIT_PROXY_COMMAND` (env-var names on the helper's deny-list) and
+on the sentence asserting `ssh` appears in no probe. There is no network-connectivity symptom and no
+`provisioner`/`connection` block in scope, so the L3→L7 checklist has nothing to verify; recorded
+rather than silently skipped. **4.55 downtime/cutover** — no serving surface, no host replace, no
+lock-taking DDL, no router change. **4.9 UI wireframe** — `## Files to Create` and `## Files to Edit`
+contain zero paths matching the UI-surface globs (measured: 0 hits over both sections; the two
+whole-file matches are the Domain Review sentence *asserting* their absence). **4.10 encryption
+posture** — no `.tf`, no migration, no cloud-init, no compose file; no persistent store and no new
+cross-component connection.
+
+Also verified in this pass: all 8 cited AGENTS rule IDs resolve to active `[id: …]` entries in
+`AGENTS.md` and none appears in `scripts/retired-rule-ids.txt`; every `knowledge-base/…​.md` citation
+resolves on disk; every cited issue, PR and commit (`#7833`, `#7708`, `#7709`, `#7810`, `#1090` /
+`dccfd9b0e`, `e9d4eccc0`) was resolved live rather than from memory.
