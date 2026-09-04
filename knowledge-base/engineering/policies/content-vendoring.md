@@ -30,10 +30,20 @@ lifted-files:
     upstream-blob-sha: <upstream `git hash-object --no-filters` value>
     local-blob-sha: <local `git hash-object --no-filters` value>
     status: active|active-verbatim|active-eu-extended|active-soleur-rewritten|deprecated
+soleur-authored:
+  - path: <repo-relative path inside the bundle>
+    local-blob-sha: <local `git hash-object --no-filters` value>
+    status: soleur-authored|soleur-authored-archived
 ---
 ```
 
-Two blob SHAs per file because the lifted file MUST carry an attribution header on line 1, so its local hash necessarily differs from the upstream hash. The `upstream-blob-sha` feeds the drift workflow; the `local-blob-sha` feeds the lefthook integrity gate. **Frontmatter is the canonical machine-readable form.** Any human-readable table in the body of NOTICE is convenience prose; if the two diverge the frontmatter wins and the table is a bug.
+Two blob SHAs per lifted file because the lifted file MUST carry an attribution header on line 1, so its local hash necessarily differs from the upstream hash. The `upstream-blob-sha` feeds the drift comparison; the `local-blob-sha` feeds the lefthook integrity gate.
+
+`soleur-authored` is the second registry, for reference files written from scratch for the bundle. Same record shape and the same `local-blob-sha` tamper check, but **no upstream provenance**: these never appear in the `upstream-files` view and are never compared against upstream. The split is deliberate rather than a nullable `upstream-path` on one list — provenance must be a DECLARED category, never inferable from a missing field, because a `lifted-files` row for a Soleur-authored file would attest third-party licence provenance for the project's own writing. The attribution header on line 1 is the oracle for which list a file belongs in: every `lifted-files` entry carries it, no `soleur-authored` entry does.
+
+Registering a file in neither list is what the integrity gate rejects; registering it in both is refused outright as ambiguous provenance.
+
+**Frontmatter is the canonical machine-readable form.** Any human-readable table in the body of NOTICE is convenience prose; if the two diverge the frontmatter wins and the table is a bug. That divergence is not hypothetical — the gdpr-gate NOTICE listed eight lifted files in its table and five in its frontmatter for 117 days (`#7710`), so the parity is now asserted by test rather than trusted.
 
 ## 3. Lifting Procedure
 
@@ -46,7 +56,7 @@ When deciding to lift content from an upstream:
    <!-- Adapted from <owner>/<repo> (<license>) — see NOTICE -->
    ```
 
-3. Add a row to the bundle NOTICE `lifted-files` block with both blob SHAs computed via `git hash-object --no-filters`.
+3. Add a row to the bundle NOTICE with blob SHAs computed via `git hash-object --no-filters`: `lifted-files` (both SHAs) for an upstream-derived file, or `soleur-authored` (`local-blob-sha` only) for one written for the bundle. A file must appear in exactly one of the two — the attribution header on line 1 decides which — and the human-readable table must be updated in the same commit.
 4. Add the lifted-file path to the lefthook `vendor-pin-integrity` glob — the parity assertion in `plugins/soleur/test/vendor-pin-integrity.test.sh` AC5b ensures NOTICE and lefthook stay in sync.
 5. Add a row to `compliance-posture.md` §Vendored Code Provenance with the upstream + license + pinned-commit + lifted-file count + status.
 6. Apply Soleur extensions in subsequent commits with `status:` set per the divergence type (`active-verbatim` if zero edits, `active-eu-extended` if EU-specific additions, `active-soleur-rewritten` if structurally changed).
@@ -116,16 +126,19 @@ For classifier exits 12/15/16 (archived / rollback / renamed), the workflow open
 
 §6 governs the drift-detected path only. It says nothing about the far more common outcome — the comparison ran, every file matched, and there is nothing to re-vendor — and before #7710 no clause covered it. The consequence was not a gap in prose: `last-verified` had no writer at all on the clean path, so the field aged 117 days while the corpus was verified clean every week, and the gdpr-gate's staleness banner fired continuously on a corpus that had never drifted.
 
-**Trigger.** A single run of the content-vendor-drift cron that compared the COMPLETE registry and found every file SAME with zero errors. Formally, the run may advance the field only when all of the following hold:
+**Trigger.** A single run of the content-vendor-drift cron that compared the COMPLETE registry and found every file SAME with zero errors, against an upstream repository that is itself healthy. Formally, the run may advance the field only when all of the following hold:
 
 - the registry is non-empty (`0 of 0` is not evidence of currency);
-- every registered file was examined (a partial comparison is not evidence);
+- every record the NOTICE **declares** was examined — the count comes from the declared records, not from the parser's emitted view, because a record missing its `upstream-blob-sha` is dropped from that view and would otherwise shrink the denominator alongside the numerator, making a partial comparison read as complete;
 - zero files drifted;
-- zero files errored — a file that could not be fetched is not a file that was verified.
+- zero files errored — a file that could not be fetched is not a file that was verified;
+- the upstream repository is neither archived, renamed, nor unreachable. This is a separate condition because it is invisible to the per-file result: every file compares SAME against an archived upstream, since the blobs at the pinned SHAs still resolve. Without it a run would escalate a `compliance/critical` "upstream archived" issue and advance the attestation in the same pass.
 
-**What advances.** `last-verified` only. No `pinned-commit` change, no `local-blob-sha` change, no content change. The commit's allowlist is the NOTICE alone, so a verification-only refresh is structurally incapable of carrying a content edit.
+**What advances.** `last-verified` only. No `pinned-commit` change, no `local-blob-sha` change, no content change. The commit's allowlist is the NOTICE path alone, so a verification-only refresh cannot carry a `references/` edit. Note the allowlist is a path PREFIX rather than an exact path, and it does not constrain the commit to a single FIELD within the NOTICE — nothing else on this path dirties that file, but the guarantee is "one path", not "one line".
 
-**Who advances it.** The cron, via a self-merging bot pull request (`safeCommitAndPr`, `mergeMode: "direct"`). Writes to `last-verified` are reserved to that automation: an operator editing the field by hand is asserting a comparison no artifact records, which is the state this section exists to end. The commit message records the pinned commit compared against and the per-state counts.
+**Who advances it.** The cron, via a self-merging bot pull request (`safeCommitAndPr`, `mergeMode: "direct"`). The commit message records the pinned commit compared against and the per-state counts.
+
+Writes to `last-verified` are reserved to that automation **by convention, not by mechanism** — an operator editing the field by hand is asserting a comparison no artifact records, which is the state this section exists to end, but nothing currently rejects such an edit: CODEOWNERS auto-requests a reviewer and no ruleset on this repository's default branch requires the review. Stated as a convention rather than a control, because a prose reservation with no enforcement is the same defect class `#7710` documents.
 
 **What it does NOT assert.** That upstream is healthy, maintained, or still the right dependency. An abandoned-but-unarchived upstream returns SAME forever, and this refresh will keep attesting to it. That residual is recorded in ADR-203 rather than papered over.
 

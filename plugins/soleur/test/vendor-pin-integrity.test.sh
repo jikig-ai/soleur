@@ -425,26 +425,27 @@ UNGLOBBED=()
 while IFS= read -r line; do
   [[ -z "$line" ]] && continue
   rel_path="${line%%:*}"
-  if [[ ! "$rel_path" =~ ^references/[^/]+\.md$ ]] && \
-     [[ ! "$rel_path" =~ ^references/layers/[^/]+\.md$ ]] && \
-     [[ ! "$rel_path" =~ ^references/legacy/[^/]+\.md$ ]]; then
+  # `references/*.md` reaches every depth: lefthook's gobwas `*` crosses `/`
+  # (measured, lefthook 2.1.6 — see the lefthook.yml comment). This mirrors
+  # that semantic rather than the intuitive single-level one, which is what an
+  # earlier revision of this test encoded.
+  if [[ ! "$rel_path" =~ ^references/.*\.md$ ]]; then
     UNGLOBBED+=("$rel_path")
   fi
 done < <(bash "$PARSER" lifted-files; bash "$PARSER" soleur-authored)
 assert_eq "" "${UNGLOBBED[*]:-}" "every registry path matches a lefthook glob pattern"
 
-for pat in \
-  "plugins/soleur/skills/gdpr-gate/references/*.md" \
-  "plugins/soleur/skills/gdpr-gate/references/layers/*.md" \
-  "plugins/soleur/skills/gdpr-gate/references/legacy/*.md"; do
-  if grep -qF -- "\"$pat\"" "$LEFTHOOK"; then
-    echo "  PASS: lefthook declares glob $pat"
-    PASS=$((PASS + 1))
-  else
-    echo "  FAIL: lefthook is missing glob $pat"
-    FAIL=$((FAIL + 1))
-  fi
-done
+# One subtree-covering pattern is what the gate needs. Asserting a
+# per-subdirectory list would re-encode the wrong glob model and would fail
+# the moment someone correctly removes the redundant `layers/` entry.
+SUBTREE_GLOB="plugins/soleur/skills/gdpr-gate/references/*.md"
+if grep -qF -- "\"$SUBTREE_GLOB\"" "$LEFTHOOK"; then
+  echo "  PASS: lefthook declares subtree-covering glob $SUBTREE_GLOB"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: lefthook is missing subtree-covering glob $SUBTREE_GLOB"
+  FAIL=$((FAIL + 1))
+fi
 echo ""
 
 # --- TS14: provenance oracle — the attribution header decides the list ---
@@ -508,4 +509,4 @@ echo ""
 # "Passed: 27 / Failed: 0 / ALL TESTS PASSED" and exit 0 — measured during
 # #7710. A FLOOR, not equality: adding an assertion must not red the suite.
 # Derived from a green run (39 assertions on 2026-09-04).
-print_results 39
+print_results 37

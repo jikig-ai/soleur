@@ -219,10 +219,15 @@ records the last time the pinned corpus was compared against upstream.
 
 Both thresholds are stable design parameters, not settings: they are not
 relaxable without a published ADR. `last-verified` is advanced by the weekly
-content-vendor-drift cron when — and only when — it has compared the complete
-registry against upstream in that run and found zero drift and zero fetch
-errors. A missing NOTICE, an unparseable date, or a future date all resolve to
-`999` days, which fires both banners; that is the fail-safe direction.
+content-vendor-drift cron when — and only when — in that same run it
+(a) compared every record the NOTICE **declares**, (b) found zero drift,
+(c) found zero fetch errors, and (d) observed the upstream repository itself to
+be neither archived, renamed, nor unreachable. That last condition is separate
+because every file compares SAME against an archived upstream — the blobs at
+the pinned SHAs still resolve — so the per-file result cannot see it.
+
+A missing NOTICE, an unparseable date, or a future date all resolve to `999`
+days, which fires both banners; that is the fail-safe direction.
 
 To refresh manually, re-run the comparison and update `last-verified` plus any
 changed `local-blob-sha` in NOTICE. Contributors working in the Soleur repo
@@ -273,14 +278,17 @@ follow-up gets its own review and merge.
   which drives the real lefthook binary over the real `lefthook.yml` with a
   regulated path staged. This repo has shipped the dead-glob trap twice; gobwas
   `**` matches 1+ intermediate directories, never 0+.
-- **The `vendor-pin-integrity` globs are single-level and enumerate three
-  directories**, not the `references/` subtree as a whole. A new subdirectory
-  under `references/` is ungated until a pattern is added for it — the comment
-  in `lefthook.yml` claimed whole-subtree coverage until #7710, while
-  `references/legacy/` was in fact unreachable. The backstop is the
+- **`references/*.md` in the `vendor-pin-integrity` glob covers the whole
+  subtree**, because lefthook's gobwas `*` crosses `/`. Measured on lefthook
+  2.1.6: `refs/*.md` matches both depth-1 and depth-2; `refs/**/*.md` matches
+  depth-2 only (that is the `**` behaviour the repo's 2026-03-21 gobwas
+  learning describes, and it does not generalise to `*`). So the `layers/`
+  entry is redundant, and no per-subdirectory entry is needed. The
   symmetric-difference walk in
-  [vendor-pin-integrity.test.sh](../../test/vendor-pin-integrity.test.sh),
-  which reads the disk rather than the glob.
+  [vendor-pin-integrity.test.sh](../../test/vendor-pin-integrity.test.sh) is
+  still the backstop for registry membership — it reads the disk, not the
+  glob — but it is not compensating for a coverage hole, because there is
+  none.
 - **Two registries, opposite provenance** (#7710): NOTICE frontmatter carries
   `lifted-files` (upstream-derived, MIT, pinned against goSprinto) and
   `soleur-authored` (written for this plugin, no upstream). Both are

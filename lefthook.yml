@@ -219,24 +219,32 @@ pre-commit:
     # per-file globs would let a re-vendor land a new file without the
     # integrity gate ever firing on it.
     #
-    # These patterns are SINGLE-LEVEL and enumerate the three directories
-    # that exist today; they do NOT cover the `references/` subtree as a
-    # whole. gobwas `**` matches 1+ intermediate dirs, not 0+, so a single
-    # `references/**/*.md` would silently skip the depth-1 files — see
-    # 2026-03-21-lefthook-gobwas-glob-double-star.md. The consequence is
-    # real and must be stated rather than assumed away: a NEW subdirectory
-    # under `references/` is ungated until a pattern is added for it. The
-    # backstop is the symmetric-difference walk in
-    # plugins/soleur/test/vendor-pin-integrity.test.sh, which reads the disk
-    # rather than the glob and fails on any reference file missing from both
-    # registries. `references/legacy/` was ungated until #7710 while the
-    # comment here claimed whole-subtree coverage.
+    # `references/*.md` covers the WHOLE subtree at every depth. In lefthook's
+    # gobwas matcher a single `*` CROSSES `/` — measured on lefthook 2.1.6:
+    #
+    #   pattern            depth-1   depth-2
+    #   refs/*.md            yes       yes
+    #   refs/**/*.md         NO        yes
+    #   refs/**              yes       yes
+    #
+    # So the `layers/` entry below is redundant (kept: pre-existing and
+    # harmless; removing it is not this change's business), and a `legacy/`
+    # entry would be too.
+    #
+    # An earlier revision of this comment claimed the opposite — that these
+    # patterns are single-level and a new subdirectory stays ungated until a
+    # pattern is added — and added a `legacy/*.md` glob on that basis. Both
+    # were wrong. The repo's gobwas learning
+    # (2026-03-21-lefthook-gobwas-glob-double-star.md) is about `**`, which
+    # DOES require 1+ intermediate dirs; generalising it to `*` is the error.
+    # `references/legacy/` was reachable by this gate all along — which is why
+    # the three unpinned files were REJECTED as "not in NOTICE" rather than
+    # left silently unprotected, exactly as the compliance-posture row says.
     vendor-pin-integrity:
       priority: 6
       glob:
         - "plugins/soleur/skills/gdpr-gate/references/*.md"
         - "plugins/soleur/skills/gdpr-gate/references/layers/*.md"
-        - "plugins/soleur/skills/gdpr-gate/references/legacy/*.md"
         - "plugins/soleur/skills/gdpr-gate/NOTICE"
       run: bash plugins/soleur/skills/gdpr-gate/scripts/vendor-pin-integrity.sh {staged_files}
     # skill-security-scan advisory hook (#2719).
