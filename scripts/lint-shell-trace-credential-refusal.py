@@ -45,6 +45,7 @@ EXIT CODES (mirroring lint-credential-path-literals.py):
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -128,7 +129,40 @@ def strip_comment(line: str) -> str:
     return "" if line.lstrip().startswith("#") else line
 
 
+# `tests/` is excluded because test files legitimately synthesize tokens
+# (cq-test-fixtures-synthesized-only). But `tests/scripts/lib/*-gate.sh` are NOT
+# tests -- they are production CI gates that ADR-136/ADR-148 place there by
+# convention, and one of them binds a live Cloudflare token whose `2>&1` capture
+# `apply-web-platform-infra.yml` posts VERBATIM into a public issue comment.
+#
+# Carve back in only the EXECUTED units. The discriminator is a positive
+# identity the role owns -- a shebang plus the exec bit -- not the absence of
+# something. A gate with neither is SOURCED: it runs in the caller's shell under
+# the caller's `$-`, so the caller's preamble already governs it and a second
+# refusal there would guard nothing new.
+#
+# Measured 2026-09-04: of 17 files in tests/scripts/lib, exactly one is an
+# executed unit (preapply-entrypoint-gate.sh, executed at 2 workflow sites,
+# sourced at 0); the other 16 are sourced libraries with neither shebang nor
+# exec bit.
+PRODUCTION_GATE = re.compile(r"^tests/scripts/lib/[^/]*-gate\.sh$")
+
+
+def is_executed_unit(rel: str) -> bool:
+    """A shebang AND the exec bit -- i.e. something run as its own process."""
+    path = REPO_ROOT / rel
+    try:
+        with path.open("rb") as fh:
+            if fh.read(2) != b"#!":
+                return False
+    except OSError:
+        return False
+    return os.access(path, os.X_OK)
+
+
 def excluded(rel: str) -> bool:
+    if PRODUCTION_GATE.search(rel) and is_executed_unit(rel):
+        return False
     return any(p.search(rel) for p in EXCLUDE_PATTERNS)
 
 

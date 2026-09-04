@@ -142,6 +142,30 @@ rc="$(rc_of "$LINT" "$FIX/compliant-indirect-unconditional.sh")"
 [ "$rc" = "0" ] && pass "indirect-only file refusing UNCONDITIONALLY is accepted (positive control)" \
   || fail "indirect-only + unconditional refusal should report rc=0, got rc=$rc"
 
+# --- Production gates under tests/ are carved back in by ROLE, not by path ----
+# The `tests/` exclusion exempted a live CI gate that binds a Cloudflare token
+# and whose 2>&1 capture is posted verbatim into a public issue comment. The
+# carve-out keys on a positive identity the executed role owns (shebang + exec
+# bit), so a SOURCED gate -- which runs under the caller's `$-` -- stays out.
+# Asserted against the real repo files: the predicate reads the filesystem, so a
+# staged copy under $WORK could not exercise it.
+_pred() { python3 -c "
+import importlib.util,sys
+s=importlib.util.spec_from_file_location('l','$LINT');m=importlib.util.module_from_spec(s);s.loader.exec_module(m)
+print(m.excluded(sys.argv[1]))" "$1"; }
+
+[ "$(_pred tests/scripts/lib/preapply-entrypoint-gate.sh)" = "False" ] \
+  && pass "executed production gate under tests/ is IN scope (shebang + exec bit)" \
+  || fail "executed production gate must not be excluded -- the #7797 leak path"
+
+[ "$(_pred tests/scripts/lib/web-host-replace-gate.sh)" = "True" ] \
+  && pass "SOURCED gate stays excluded (runs under the caller's \$-)" \
+  || fail "sourced gate should stay excluded, the caller's preamble governs it"
+
+[ "$(_pred tests/scripts/lib/no-such-gate.sh)" = "True" ] \
+  && pass "unreadable gate path falls back to EXCLUDED (fail-closed carve-out)" \
+  || fail "an unreadable gate path must not be carved in"
+
 # --- Fail-closed: unparseable input exits EXACTLY 2 (not merely non-zero) ----
 rc="$(rc_of "$LINT" "$FIX/malformed-not-utf8.sh")"
 [ "$rc" = "2" ] && pass "unparseable input exits exactly 2 (fail-closed, distinguishable from a violation)" \
@@ -326,7 +350,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Absolute floor, recorded from a MEASURED green run (never from expectation --
 # that was wrong three times in sibling PR #7806). Reported with printf + exit 1
 # directly, never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=31
+MIN_ASSERTIONS=34
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
