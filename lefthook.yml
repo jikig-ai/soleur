@@ -251,7 +251,15 @@ pre-commit:
     plugin-component-test:
       priority: 7
       glob: "plugins/soleur/**/*.md"
-      run: bun test plugins/soleur/test/
+      # The `unset` is the fix for #7833 and is load-bearing. In a LINKED WORKTREE — which every
+      # feature branch here is — git exports GIT_DIR and GIT_INDEX_FILE to its hooks as ABSOLUTE
+      # paths, and a `git` subprocess honours them over both its working directory and `-C`. A
+      # fixture's `git init` then initialises nothing and its commits land on the developer's live
+      # branch, moving the tip. Measured: without this prefix a hook command sees 2 such variables,
+      # with it 0. A plain clone exports neither, so this reproduces only in a worktree.
+      # scripts/test-all.sh (above) already carries the same unset internally; this is the second
+      # test runner in this file and it had none.
+      run: unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE && bun test plugins/soleur/test/
     terraform-fmt:
       priority: 8
       glob: "apps/*/infra/*.tf"
