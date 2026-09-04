@@ -9,6 +9,12 @@
 # blamed telemetry for it (measured).
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 HERE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 GUARD="$HERE/monitor-supersede-guard.sh"
 REC="$HERE/monitor-arm-recorder.sh"
