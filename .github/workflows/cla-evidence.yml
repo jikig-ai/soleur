@@ -52,7 +52,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
-          fetch-depth: 0 # need history for `git show <baseSha>:docs/legal/individual-cla.md`
+          fetch-depth: 0 # need history for the base-SHA `git show` of the CLA document
 
       - name: Setup Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
@@ -90,6 +90,26 @@ jobs:
         working-directory: apps/web-platform
         run: npm ci --ignore-scripts
 
+      # Resolve the CLA document path from its ONE definition
+      # (apps/web-platform/scripts/cla-evidence/cla-doc-path.ts) instead of
+      # re-declaring the literal in YAML. Bash cannot import TypeScript, so the
+      # module carries a CLI guarded on being the entrypoint; importing it stays
+      # side-effect free. Two definitions of a path that decides WHICH legal
+      # instrument a record evidences is exactly the drift this discriminant
+      # exists to remove.
+      - name: Resolve CLA document path (discriminant)
+        run: |
+          set -euo pipefail
+          cla_doc_path=$(apps/web-platform/node_modules/.bin/tsx \
+            apps/web-platform/scripts/cla-evidence/cla-doc-path.ts)
+          # Fail loud: an empty value here would silently hash the wrong tree
+          # object (or the whole repo) further down.
+          if [[ -z "$cla_doc_path" ]]; then
+            echo "::error::discriminant emitted an empty CLA document path"
+            exit 1
+          fi
+          echo "CLA_DOC_PATH=$cla_doc_path" >> "$GITHUB_ENV"
+
       # Plan Phase 2 step 5/6 — folded gate. Poll the upstream action's
       # `license/cla` Status API check up to 30s. If green, run sidecar; if
       # red/pending, mark cla-evidence Check Run as pending (matching state).
@@ -125,7 +145,7 @@ jobs:
         run: |
           set -euo pipefail
           base_sha="${BASE_SHA:-HEAD}"
-          content_sha=$(git show "${base_sha}:docs/legal/individual-cla.md" | sha256sum | awk '{print $1}')
+          content_sha=$(git show "${base_sha}:${CLA_DOC_PATH}" | sha256sum | awk '{print $1}')
           echo "doc_git_sha=${base_sha}" >> "$GITHUB_OUTPUT"
           echo "doc_content_sha256=${content_sha}" >> "$GITHUB_OUTPUT"
 
@@ -214,5 +234,5 @@ jobs:
           # The R2 record itself is content-addressed at signatures/<sha>.json,
           # but the sha is not predictable from the contributor's view (depends
           # on workflow_run_id), so we don't promise a specific bucket key.
-          body="Recorded: signed against \`docs/legal/individual-cla.md\` at SHA \`$DOC_GIT_SHA\` (content \`sha256:$DOC_CONTENT_SHA256\`). Verify with \`git show $DOC_GIT_SHA:docs/legal/individual-cla.md | sha256sum\`. The evidence record is archived off-site under a Cloudflare R2 Lock Rule (age-based, 10-year write-once floor; retention is indefinite) and retrievable via \`bash apps/cla-evidence/scripts/inspect-evidence.sh by-pr $PR_NUMBER\` (operator-only, see retrieval runbook)."
+          body="Recorded: signed against \`${CLA_DOC_PATH}\` at SHA \`$DOC_GIT_SHA\` (content \`sha256:$DOC_CONTENT_SHA256\`). Verify with \`git show $DOC_GIT_SHA:${CLA_DOC_PATH} | sha256sum\`. The evidence record is archived off-site under a Cloudflare R2 Lock Rule (age-based, 10-year write-once floor; retention is indefinite) and retrievable via \`bash apps/cla-evidence/scripts/inspect-evidence.sh by-pr $PR_NUMBER\` (operator-only, see retrieval runbook)."
           gh api "repos/$REPO_FULL/issues/$PR_NUMBER/comments" -X POST -f body="$body"
