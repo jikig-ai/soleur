@@ -29,8 +29,11 @@ note about one lint.
 > scoped to what is never committed.
 
 Applied to #7797: every tracked shell script that binds a live credential
-carries a `case "$-" in *x*)` refusal in its prologue, and
-`scripts/lint-shell-trace-credential-refusal.py` requires it.
+**must carry** a `case "$-" in *x*)` refusal in its prologue, enforced by
+`scripts/lint-shell-trace-credential-refusal.py`. Stated as an obligation, not
+as an accomplished fact: 21 scripts carry it today and 131 are enumerated in the
+baseline as deferred. A Decision sentence in the indicative would assert a
+coverage property the artifact does not yet provide.
 
 ### Why the state predicate wins
 
@@ -89,15 +92,28 @@ what remains after the lint.
   `+ '[' -n <TOKEN> ']'`. `${VAR:+x}` is the same predicate with the value never
   on a command line. Any future variant must preserve that property; the suite
   asserts it functionally and mutation-proves the assertion can fail.
-- **A guard that blocks a recovery path gets deleted.** The refusal permits
-  tracing when the credential is unset, and says so in its own message. This is
+- **The escape hatch is sound only for an INHERITED credential.** A script that
+  ACQUIRES its credential has the variable empty at the refusal, so a conditional
+  hatch is open by construction and the fetch is then traced — measured live in
+  `fresh-host-boot-trail.sh`. Those files refuse unconditionally; the lint tells
+  the two classes apart and requires the right form for each. This was found by
+  review after the conditional form had already shipped to 21 scripts.
+- **The refusal must cover every credential the file references.** Rules A and B
+  check placement and what follows; neither checks that the guard names the right
+  variable. Six of the 21 remediated scripts guarded one credential and consumed
+  another, and one printed a Better Stack password in cleartext while "passing".
+  Rule C closes it, so the mismatch cannot recur.
+- **A guard that blocks a recovery path gets deleted.** For the inherited class
+  the refusal permits tracing when the credential is unset, and says so. This is
   the direct lesson of
   `knowledge-base/project/learnings/2026-09-03-my-guard-blocked-the-recovery-and-missed-the-hazard.md`,
   from this issue's own lineage.
-- Exit **78** (`EX_CONFIG`), not 64 — 64 is `EX_USAGE` at 57 sites in this repo.
-  Under `sweep-followthroughs.sh` any non-0/1 exit maps to TRANSIENT, which is
-  the fail-safe direction; the runbook now names 78 so it is not misread as a
-  network flake.
+- Exit **78** (`EX_CONFIG`), not 64. 64 is `EX_USAGE` across 57 files here, and
+  78 is *already* this repo's `EX_CONFIG` — `scripts/sentry-issue.sh` uses 78 for
+  HTTP 403 and 77 (`EX_NOPERM`) for 401. An earlier draft of this ADR said 78 was
+  unused; it is not, and the existing precedent is the better argument. Under
+  `sweep-followthroughs.sh` any non-0/1 exit maps to TRANSIENT, the fail-safe
+  direction; the runbook names 78 so it is not misread as a network flake.
 - The deferred population is an **enumerated path list**, not an integer. A
   count cannot say *which* files, so nobody can pick up the next ten. Drawdown
   trigger: any PR that edits a listed script must remediate it, enforced by
@@ -122,7 +138,7 @@ what remains after the lint.
 |---|---|
 | **PreToolUse(Bash) hook** (the issue's own proposal, and this plan's v1) | Cannot see CI logs; depends on an unprovable enumeration of trace spellings, three of which carry no `-x` token. Filed as the complement. |
 | **Extend the lint to CI `run:` bodies** (this plan's v2) | Cut. Detecting "enables tracing" in YAML is exactly the enumeration the decision above rejects, with no `$-` to lean on, against a live population of **zero** trace-enabling steps. Filed as its own guard with its own contract. |
-| **Redact the trace output** | Not an available mechanism: `BASH_XTRACEFD` sends the trace off stdout and stderr entirely. |
+| **Redact the trace output** as the GENERAL mechanism | Not available: `BASH_XTRACEFD` sends the trace to an arbitrary fd, so no stdout/stderr filter bounds the channel. **This does not forbid a targeted redaction on a specific, known channel** — the same PR strips `^\+` lines in `sweep-followthroughs.sh` before probe output reaches a public issue comment. That is defense-in-depth on one enumerated sink, not a substitute for the carried refusal, and the two are complementary rather than contradictory. |
 | **Reuse `redact-engine.py` (ADR-095) as the detector** | Wrong predicate. It finds secrets present as *literals in a file*; the at-risk scripts read them from the environment and contain no literal, so it returns clean for exactly the dangerous case. |
 | **Require the refusal in every script** | Fails the third property — the ~673 credential-free scripts must stay freely traceable, and a gate that blocks ordinary debugging gets routed around. |
 

@@ -61,16 +61,25 @@ BASELINE_FILE = Path(__file__).resolve().parent / "lint-shell-trace-credential-r
 # trace the parent emits `+ doppler run -- ./child.sh` and nothing else. The
 # secret enters the CHILD, which is scored on its own row. Measured: including
 # it added 87 files of which 39 had no secret expansion at all.
-SIGNAL_EXPANSION = r"\$\{?[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)\}?"
-SIGNAL_CAPTURE = r"[A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)=\$\("
+SIGNAL_EXPANSION = (
+    r"\$\{?[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)\}?(?![A-Za-z0-9_])"
+)
+SIGNAL_CAPTURE = r"[A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)=\"?\$\("
 SIGNAL_DOPPLER_GET = r"doppler secrets get"
 SIGNAL_GH_AUTH = r"gh auth token"
+# `${!name}` expands a variable chosen at RUNTIME, so a static reader cannot
+# know which. Under trace it prints the VALUE. `sweep-followthroughs.sh`
+# materialises every declared secret of every probe through exactly this form
+# (`env_args+=("$name=${!name}")`) and was out of scope until this class existed
+# -- the one process concentrating the whole credential surface, declared clean.
+SIGNAL_INDIRECT = r"\$\{!"
 
 SECRET_SIGNALS = [
     re.compile(SIGNAL_EXPANSION),
     re.compile(SIGNAL_CAPTURE),
     re.compile(SIGNAL_DOPPLER_GET),
     re.compile(SIGNAL_GH_AUTH),
+    re.compile(SIGNAL_INDIRECT),
 ]
 
 # --- TRACE_TOKENS (Rule B only) ----------------------------------------------
@@ -99,7 +108,7 @@ NONZERO_EXIT = re.compile(r"\bexit\s+([1-9][0-9]*)\b")
 
 # How many executable commands may precede the refusal. `set`/`shopt` are carved
 # out explicitly so the rule stays mechanical; everything else counts.
-PROLOGUE_MAX_CMDS = 4
+PROLOGUE_MAX_CMDS = 0
 PROLOGUE_ALLOWED = re.compile(r"^\s*(?:set|shopt|readonly\s+-\w+)\b")
 
 EXCLUDE_PATTERNS = (
@@ -162,9 +171,28 @@ def find_preamble(lines: list[str]) -> int | None:
 def check_rule_a(rel: str, lines: list[str], preamble_at: int | None) -> list[str]:
     """The refusal must sit in the prologue."""
     if preamble_at is None:
+        # The remedy must name THIS file's credentials. A placeholder leaves the
+        # developer red under Rule C after pasting it verbatim -- a guard that
+        # tells you how to satisfy it and then rejects that is a dead end.
+        creds = sorted(referenced_credentials(lines))
+        if ACQUIRES.search("".join(strip_comment(l) for l in lines)):
+            remedy = (
+                'case "$-" in\n'
+                "  *x*) printf '[FATAL] refusing to run under xtrace: this script fetches a "
+                "credential (see #7797)\\n' >&2; exit 78 ;;\n"
+                "esac"
+            )
+        else:
+            cond = "".join(f'${{{c}:+x}}' for c in creds) or "${YOUR_CREDENTIAL:+x}"
+            remedy = (
+                'case "$-" in\n  *x*)\n'
+                f'    if [ -n "{cond}" ]; then\n'
+                "      printf '[FATAL] refusing to trace with a live credential set "
+                "(see #7797)\\n' >&2\n      exit 78\n    fi\n    ;;\nesac"
+            )
         return [
             f"{rel}: binds a live credential but carries no xtrace refusal.\n"
-            f"  Add this as the first thing after `set …` (see #7797):\n\n{REMEDY}\n"
+            f"  Add this as the first thing after `set …` (see #7797):\n\n{remedy}\n"
         ]
     cmds_before = 0
     for raw in lines[:preamble_at]:
@@ -181,6 +209,133 @@ def check_rule_a(rel: str, lines: list[str], preamble_at: int | None) -> list[st
             f"  Move it directly below `set …`:\n\n{REMEDY}\n"
         ]
     return []
+
+
+# A file that ACQUIRES a credential at runtime cannot use the conditional escape
+# hatch: at preamble time the variable is empty by construction, so the hatch
+# opens and the acquisition itself is traced. Measured live --
+# `+ SENTRY_AUTH_TOKEN=<value>` with the guard fully "passing". These files must
+# refuse unconditionally; the hatch is sound only for an INHERITED credential.
+ACQUIRES = re.compile(
+    r"doppler secrets get"
+    r"|gh auth token"
+    r"|[A-Za-z_][A-Za-z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT)=\"?\$\("
+)
+
+CREDENTIAL_NAME = re.compile(r"\b([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\b")
+GUARDED_NAME = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*):?\+[^}]*\}")
+# Any expansion of a credential inside the arm that is NOT the `:+`/`+` form
+# puts the VALUE on the command line, which xtrace then prints -- so the refusal
+# leaks the thing it is refusing over. This is the PR's own headline defect
+# (`[ -n "${VAR:-}" ]` traced as `+ '[' -n <TOKEN> ']'`), and without this check
+# a one-character revert in any of 22 production copies re-ships it, lint-green.
+EXPANDING_IN_ARM = re.compile(
+    r"\$\{([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))(?::?-[^}]*)?\}"
+    r"|\$([A-Z][A-Z0-9_]*_(?:TOKEN|KEY|SECRET|PASSWORD|PAT))\b"
+)
+
+
+def arm_window(lines: list[str], preamble_at: int) -> str:
+    """The refusal's own text, bounded at `esac`.
+
+    A fixed-size slice runs past the block into the script body, where ordinary
+    credential USE then reads as a leaking guard -- the window-scoping defect
+    this repo has recorded twice. The window must end where the construct does.
+    """
+    out = []
+    for raw in lines[preamble_at : preamble_at + 20]:
+        out.append(raw)
+        if re.match(r"^\s*esac\b", strip_comment(raw)):
+            break
+    return "".join(out)
+
+
+def referenced_credentials(lines: list[str]) -> set[str]:
+    """Every credential-shaped variable name the file references, comments
+    stripped so prose cannot inflate the set."""
+    out: set[str] = set()
+    for raw in lines:
+        line = strip_comment(raw)
+        if line:
+            out.update(CREDENTIAL_NAME.findall(line))
+    return out
+
+
+def guarded_credentials(lines: list[str], preamble_at: int | None) -> set[str]:
+    """Names the refusal actually tests, via the `${NAME:+x}` form."""
+    if preamble_at is None:
+        return set()
+    return set(GUARDED_NAME.findall(arm_window(lines, preamble_at)))
+
+
+def check_rule_c(rel: str, lines: list[str], preamble_at: int | None) -> list[str]:
+    """The refusal must cover EVERY credential the file references.
+
+    WHY THIS RULE EXISTS. Rules A and B verify the refusal's PLACEMENT and that
+    nothing re-enables tracing below it. Neither checks that it guards the right
+    variable -- so a script can carry a perfectly-placed refusal naming one
+    credential while binding a different one, and leak it. That is not
+    hypothetical: six of the 21 scripts remediated in this PR shipped with
+    exactly that mismatch, lint-green, and one of them printed a Better Stack
+    password in cleartext under `bash -x` (`+ [[ -z <password> ]]`). A guard
+    whose assembly is narrower than the property it names is the defect this
+    whole lint exists to prevent, so it needed a rule of its own.
+    """
+    if preamble_at is None:
+        return []  # Rule A already reported the absence.
+    referenced = referenced_credentials(lines)
+    guarded = guarded_credentials(lines, preamble_at)
+    if not referenced:
+        return []
+    out: list[str] = []
+    body = "".join(strip_comment(l) for l in lines)
+    window = arm_window(lines, preamble_at)
+
+    if ACQUIRES.search(body) and ":+" in window:
+        out.append(
+            f"{rel}:{preamble_at + 1}: this script ACQUIRES a credential at runtime, so a "
+            f"conditional refusal cannot protect it.\n"
+            f"  The variable is empty at this line by construction, the hatch opens, and the "
+            f"acquisition is then traced.\n"
+            f"  Refuse unconditionally instead:\n\n"
+            f"    case \"$-\" in\n"
+            f"      *x*) printf '[FATAL] refusing to run under xtrace: this script fetches a "
+            f"credential (see #7797)\\n' >&2; exit 78 ;;\n"
+            f"    esac\n"
+        )
+
+    # Predicate form: a guard that expands the value is worse than none,
+    # because it leaks WHILE refusing and reads as protection.
+    expanding = sorted(
+        {m[0] or m[1] for m in EXPANDING_IN_ARM.findall(window)}
+    )
+    if expanding:
+        out.append(
+            f"{rel}:{preamble_at + 1}: the xtrace refusal EXPANDS the credential it "
+            f"guards ({', '.join(expanding)}).\n"
+            f"  Under `set -x` that prints the value while the script refuses to run.\n"
+            f"  Use the `:+x` form, which tests non-emptiness without expanding:\n"
+            f'    if [ -n "${{{expanding[0]}:+x}}" ]; then\n'
+        )
+
+    # An UNCONDITIONAL refusal (no `${VAR:+x}` test in the arm) covers every
+    # credential by construction -- there is nothing for it to be narrower than.
+    # Without this, the strongest possible guard reports as the weakest.
+    if ":+" not in window:
+        return out
+
+    missing = sorted(referenced - guarded)
+    if not missing:
+        return out
+    every = "".join(f'${{{n}:+x}}' for n in sorted(referenced))
+    out.append(
+        f"{rel}:{preamble_at + 1}: the xtrace refusal does not cover every credential "
+        f"this file references. Unguarded: {', '.join(missing)}.\n"
+        f"  Tracing is permitted whenever the guarded names happen to be empty, so an\n"
+        f"  unguarded credential is still printed after expansion. Test them all:\n\n"
+        f'    if [ -n "{every}" ]; then\n'
+    )
+    return out
 
 
 def check_rule_b(rel: str, lines: list[str], preamble_at: int | None) -> list[str]:
@@ -223,6 +378,7 @@ def check_file(path: Path) -> tuple[int, list[str]]:
     preamble_at = find_preamble(lines)
     violations = check_rule_a(rel, lines, preamble_at)
     violations += check_rule_b(rel, lines, preamble_at)
+    violations += check_rule_c(rel, lines, preamble_at)
     return (1 if violations else 0), violations
 
 
@@ -281,7 +437,11 @@ def main() -> int:
     args = ap.parse_args()
 
     targets = targets_from_args(args)
-    baseline = load_baseline()
+    # The baseline grandfathers a deferred population for the REPO-WIDE sweep only.
+    # In --changed / explicit-path mode it is bypassed, which is what makes the
+    # header's drawdown trigger true rather than aspirational -- it was advertised
+    # and never implemented.
+    baseline = set() if (args.changed or args.paths) else load_baseline()
 
     scanned = 0
     offenders: list[str] = []
@@ -321,7 +481,14 @@ def main() -> int:
         print(f"baseline written: {len(offenders)} entries")
         return 0
 
-    if cannot_evaluate:
+    # A scan of zero files is the vacuity this lint exists to prevent; reporting
+    # OK would be the guard certifying its own absence.
+    if scanned == 0 and not args.changed:
+        print(
+            "lint-shell-trace-credential-refusal: scanned 0 files -- refusing to report "
+            "a clean result for a scan that inspected nothing",
+            file=sys.stderr,
+        )
         return 2
 
     if all_violations:
@@ -332,7 +499,12 @@ def main() -> int:
             f"in {scanned} scanned file(s)",
             file=sys.stderr,
         )
-        return 1
+        # Report violations BEFORE the cannot-evaluate exit: one unreadable byte
+        # anywhere previously discarded every real finding in the run.
+        return 2 if cannot_evaluate else 1
+
+    if cannot_evaluate:
+        return 2
 
     print(f"OK: {scanned} scanned file(s), {len(offenders)} baselined")
     return 0

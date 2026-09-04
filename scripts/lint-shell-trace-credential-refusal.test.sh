@@ -246,9 +246,12 @@ mutate_row() { # <label> <perl-expr> <fixture> <baseline-rc> <expected-mutant-rc
 
 # Own dispatch first: a lint that resolves nothing and exits 0 is the vacuity
 # every other row is structurally blind to.
+# Expected mutant rc is 2, not 0: the zero-target guard added after review turns
+# "the walker resolved nothing" into an explicit refusal rather than a silent
+# clean report. A row expecting 0 here would now fail for the RIGHT reason.
 mutate_row 'M5 own-dispatch: walker yields nothing' \
   's|(def targets_from_args[^\n]*\n)|$1    return []\n|s' \
-  "$FIX/violation-no-preamble.sh" 1 0
+  "$FIX/violation-no-preamble.sh" 1 2
 
 mutate_row 'M1 SECRET_SIGNALS: doppler-get class removed' \
   's/SIGNAL_DOPPLER_GET = r"[^"]*"/SIGNAL_DOPPLER_GET = r"__NEVER_MATCHES__"/' \
