@@ -4,12 +4,16 @@ type: counsel-review
 date: 2026-09-03
 issue: 7717
 pr: 7782
-status: BLOCKED (CLO-agent-reviewed, Soleur-as-tenant-zero v1)
-signed_off_at: null
-signed_off_by: null
-disposition: BLOCKED — one blocking finding (inclusion-predicate inconsistency), one required fix, five corrections appended
-blocking_findings: [B1]
-required_before_merge: [R1]
+status: SIGNED-OFF (CLO-agent-reviewed and re-issued, Soleur-as-tenant-zero v1)
+signed_off_at: 2026-09-04
+signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the operator retains an optional veto)"
+disposition: "RE-ISSUED SIGNED-OFF 2026-09-04 (#7791). The 2026-09-03 disposition was BLOCKED on B1 with R1 required before merge; both are cleared and the guard is green. Superseded, not deleted — see §Discharge on re-issue."
+blocking_findings: []
+blocking_findings_cleared: [B1]
+required_before_merge: []
+required_before_merge_cleared: [R1]
+reissued_at: 2026-09-04
+reissue_attestation: knowledge-base/legal/audits/2026-09-03-clo-attestation-7717-art-33-5-register.md
 corrections_appended:
   - knowledge-base/legal/breach-register.md
   - knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md
@@ -271,6 +275,48 @@ The attestation gap this PR's own implementation record refuses to paper over (#
 remains open and is **not** closed by this audit: this is the counsel review of the artifacts, and
 that issue tracks the per-artifact attestation that follows a clean review. #7791 should be
 updated to record that the review ran, that it ruled the two pending waivers, and that it blocked.
+
+## Discharge on re-issue — 2026-09-04 (#7791)
+
+This audit was issued **BLOCKED** on 2026-09-03 and named its own re-issue conditions at
+§Disposition: *"Clear B1, apply R1, and re-run `bash scripts/lint-legal-registers.sh`… On those
+two, the artifact set is sound and this audit may be re-issued as SIGNED-OFF."* All three are met,
+verified in this worktree on 2026-09-04 rather than accepted from the record that asserted them.
+
+**B1 — CLEARED.** `audits/sentry-migration-audit-2026-05-15.md` is indexed as its own row in
+§Index of determinations, on the drafting call this review expressly declined to make for the
+author: **its own row**, not subsumption. The two matters share the `jikigai-us` shadow org as root
+cause but differ in surface — runtime event ingest versus §5(2) accountability-evidence generation
+— and carry different awareness anchors. Its `NOT_TRANSCRIBED` waiver is removed from **both**
+copies of the waiver set, which is what B1's remediation paragraph required; assertion (d) reports
+8 waivers agreeing between the shell array and §Excluded records.
+
+**R1 — CLEARED.** `knowledge-base/legal/compliance-posture.md`'s Vendor DPA Status row for Better
+Stack s.r.o. reads **NOT EXECUTED — no Art. 28(3) instrument recorded**, under a dated 2026-09-03
+correction that quotes the superseded `PENDING (sign Vendor DPA — operator action)` rather than
+silently replacing it, and cites #7529 (OPEN, `compliance/critical`). The Art. 30 Vendor Mapping
+row carries the identical phrase. The two registers no longer hand a data subject two answers to
+one Art. 28(3) question, and the published pointers at `docs/legal/privacy-policy.md` and
+`docs/legal/data-protection-disclosure.md` now land on the same statement the controller holds
+internally.
+
+**The guard — GREEN.** `bash scripts/lint-legal-registers.sh` → exit 0, `7 assertion(s), 0 failed
+(registers=4 rows=5 produced=12 waived=8 waiver-parity=ok)`.
+
+**What this discharge does not do.** It does not disturb §Per-artifact verdicts or §Corrections
+appended during this review: A1 and A2 stand as issued on 2026-09-03, and a verdict is a record of
+a judgement at a date, not a live status field. Read them with this section. Nor does it promote
+the register's `status: draft-requires-counsel-review` — that is external counsel's to promote, and
+§What this review could not resolve item 2 says so in terms. The three limits recorded there are
+undisturbed.
+
+**A4's subject was deleted.**
+`knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md` is removed
+in the same change that publishes the attestation, under its own frontmatter trigger — *"On CLO
+attestation being obtained — this file is then superseded by it and should be deleted, not
+annotated."* Everything in it not reproduced elsewhere is carried into Annex A of that attestation
+at its original authority level. A4's **APPROVED** verdict, and the commendation of its refusal to
+fabricate a signature, stand as issued.
 
 ---
 
