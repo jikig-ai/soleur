@@ -78,10 +78,13 @@ OK CNAME and sitemap present
 ### Next Steps
 - [ ] Commit any pending changes
 - [ ] Push to main branch
-- [ ] Verify deployment at https://soleur-docs.pages.dev/
+- [ ] Verify deployment at https://soleur.ai/ (the live apex)
 
-> **Until the ADR-194 cutover completes (PR4), `https://soleur.ai/` is still
-> served by GitHub Pages and does NOT advance with these deploys.** Verify at
-> the `pages.dev` hostname above. See
+> **The ADR-194 cutover is COMPLETE (2026-09-03).** `https://soleur.ai/` is
+> served by Cloudflare Pages and DOES advance with these deploys — verify at the
+> apex, not at `pages.dev`. Until PR4b this block said the opposite and sent the
+> operator to the `pages.dev` hostname; that was correct then and is misdirection
+> now. `soleur-docs.pages.dev` still resolves and is still a useful
+> origin-vs-edge discriminator, but it is not where a deploy is confirmed. See
 > `knowledge-base/engineering/operations/runbooks/cloudflare-pages-cutover.md`.
 ```

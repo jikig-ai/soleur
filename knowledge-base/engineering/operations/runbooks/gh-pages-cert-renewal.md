@@ -22,8 +22,13 @@ never affected by anything on this page.**
 > **Superseded 2026-08-20 (#7640) — read this before running anything below.** The
 > marketing/docs site is migrating off GitHub Pages to Cloudflare Pages (ADR-194, accepted
 > 2026-08-20; plan
-> `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`).
-> This page is **retained deliberately**, not by oversight — a DNS-only revert to GitHub Pages
+> `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`).
+> **Corrected 2026-09-03 (#7640 PR5): the revert is no longer DNS-only.** PR5 retired the
+> GitHub Pages publish leg, so restoring that origin is three acts, or four (cutover runbook,
+> `### PR5 NARROWED THE ROLLBACK`). The retention rationale below stands; the one-act framing
+> does not.
+>
+> This page is **retained deliberately**, not by oversight — a revert to GitHub Pages
 > is the migration's rollback, so the procedure has to survive. But once the apex cutover
 > (PR3 of #7640) has landed, **this procedure no longer works and two of its steps are actively
 > harmful**:

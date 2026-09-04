@@ -8,7 +8,7 @@ and its perishable measurements are explicitly stale — see the staleness note 
 ## Session 1 — PR4a planning (2026-09-03, branch `…-pr4-dns-cutover-pr5-retire-gh-pages`)
 
 ### Plan Phase
-- Plan file: knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md
 - Status: complete (with one coordinator-applied repair, below)
 
 #### Errors
@@ -76,7 +76,7 @@ and its perishable measurements are explicitly stale — see the staleness note 
 ## Session 2 — PR4b implementation (2026-09-03, branch `…-pr4b-apex-cname-flip`)
 
 ### Plan Phase
-- Plan file: `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`
+- Plan file: `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`
 - Status: **recovered from on-disk plan** (not re-planned)
 - Plan artifact: complete (selector=branch, after frontmatter retarget)
 - Branch: `feat-one-shot-7640-pr4b-apex-cname-flip` (PR4b) — draft PR #7793
