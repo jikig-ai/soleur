@@ -147,6 +147,26 @@ if [[ -n "$others" ]]; then
   rc=1
 fi
 
+# ── 3b. Import ids are UNIQUE. ──────────────────────────────────────────────
+# The membership check below only catches ids that were NEVER live. The capture
+# holds all 30 live workflows, so an id copy-pasted from ANOTHER of the 30 —
+# the realistic generator or hand-edit error — passes it. Two addresses importing
+# the same workflow id means one live rule adopted twice and one adopted by
+# nobody.
+dup_ids=$(jq -r '
+  [ .resource_changes[]? | select(.change.importing.id != null) | .change.importing.id ]
+  | group_by(.) | map(select(length > 1) | .[0]) | .[]
+' "$PLAN" 2>/dev/null) || dup_ids="JQFAIL"
+if [[ "$dup_ids" == "JQFAIL" ]]; then
+  echo "::error::adoption plan assert: could not check import ids for duplicates." >&2
+  rc=1
+elif [[ -n "$dup_ids" ]]; then
+  echo "::error::adoption plan assert: the same workflow id is imported at more than one address:" >&2
+  sed 's/^/::error::  /' <<<"$dup_ids" >&2
+  echo "::error::One live Sentry rule would be adopted twice and another adopted by nobody. This is what a copy-pasted id looks like, and the capture-membership check below cannot see it — every duplicated id IS live." >&2
+  rc=1
+fi
+
 # ── 4. Every import id resolves to a workflow that was live at capture time. ─
 if [[ -n "$CAPTURE" ]]; then
   if [[ ! -r "$CAPTURE" ]]; then

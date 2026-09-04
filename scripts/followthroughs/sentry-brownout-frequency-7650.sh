@@ -85,14 +85,22 @@ span_to=$(jq -r 'map(.createdAt) | max' <<<"$runs")
 # `conclusion` is now READ. A failed run in the window that carries no
 # `exhausted` marker is something this meter cannot account for, and reporting
 # PASS over it is the defect being fixed.
+# Counted over the WHOLE window, and reported against `total` — never against
+# `scanned`. The two denominators are different (`scanned` excludes unreadable
+# logs) and mixing them rendered messages like "5 of 1 runs FAILED".
 failed=$(jq -r '[ .[] | select(.conclusion == "failure") ] | length' <<<"$runs")
 
-retried=0; cleared=0; exhausted=0; scanned=0
+retried=0; cleared=0; exhausted=0; scanned=0; unread=0
 # Only non-success runs can carry an `exhausted`, but a CLEARED brownout lives inside a
 # SUCCESSFUL run — which is the whole point of the meter — so every run must be read.
 while read -r id; do
   [[ -n "$id" ]] || continue
-  log=$(gh run view "$id" --log 2>/dev/null) || continue
+  # An UNREADABLE log is counted, not dropped. `|| continue` silently shrank the
+  # denominator: with 39 of 40 logs expired or 403, `scanned` became 1 and the
+  # meter printed "no brownout retries across the 1 runs" — clean, over a window
+  # it had not measured. That is the same defect class this script was just fixed
+  # for on `conclusion`, reached through log retention instead.
+  log=$(gh run view "$id" --log 2>/dev/null) || { unread=$((unread+1)); continue; }
   scanned=$((scanned+1))
   r=$(grep -c 'SOLEUR_SENTRY_BROWNOUT outcome=retry'     <<<"$log")
   c=$(grep -c 'SOLEUR_SENTRY_BROWNOUT outcome=cleared'   <<<"$log")
@@ -105,7 +113,15 @@ if [[ "$scanned" -eq 0 ]]; then
   exit 3
 fi
 
-echo "SOLEUR_SENTRY_BROWNOUT_METER window_runs=${scanned} window_days=${WINDOW_DAYS} span=${span_from}..${span_to} failed_runs=${failed} retry_events=${retried} cleared=${cleared} exhausted=${exhausted} #7650"
+# COVERAGE FLOOR. Reading a minority of the window and reporting on it is a
+# verdict about a sample, presented as a verdict about the window. Two thirds is
+# an arbitrary line and is named as such — the point is that there IS one.
+if (( scanned * 3 < total * 2 )); then
+  echo "TRANSIENT: read only ${scanned} of ${total} run logs in the window (${unread} unreadable — retention or permissions). That is too small a fraction to characterise the brownout rate, and reporting PASS over it would describe a sample while sounding like a verdict about the window." >&2
+  exit 3
+fi
+
+echo "SOLEUR_SENTRY_BROWNOUT_METER window_runs=${total} logs_read=${scanned} logs_unread=${unread} window_days=${WINDOW_DAYS} span=${span_from}..${span_to} failed_runs=${failed} retry_events=${retried} cleared=${cleared} exhausted=${exhausted} #7650"
 
 if [[ "$exhausted" -gt 0 ]]; then
   cat >&2 <<MSG
@@ -136,8 +152,8 @@ fi
 # louder finding to the quieter one.
 if [[ "$failed" -gt 0 ]]; then
   cat >&2 <<MSG
-TRANSIENT: ${failed} of the ${scanned} runs in this window FAILED, and none of them
-carries an \`outcome=exhausted\` marker.
+TRANSIENT: ${failed} of the ${total} runs in this window FAILED (${scanned} logs read,
+${unread} unreadable), and none of the runs read carries an \`outcome=exhausted\` marker.
 
 This meter measures brownout frequency. It cannot explain a failure that is not a
 brownout, and it must not report PASS over one: before #7650 Phase 2 it did
@@ -153,8 +169,8 @@ MSG
 fi
 
 if [[ "$retried" -eq 0 ]]; then
-  echo "PASS: no brownout retries across the ${scanned} runs in the last ${WINDOW_DAYS} days (${span_from}..${span_to}), and no failed runs — the deprecated family answered on first attempt every time."
+  echo "PASS: no brownout retries across the ${scanned} of ${total} runs read in the last ${WINDOW_DAYS} days (${span_from}..${span_to}), and no failed runs — the deprecated family answered on first attempt every time."
 else
-  echo "PASS: ${retried} retry event(s) across ${scanned} runs in the last ${WINDOW_DAYS} days (${span_from}..${span_to}), ${cleared} cleared within budget, 0 exhausted, 0 failed."
+  echo "PASS: ${retried} retry event(s) across the ${scanned} of ${total} runs read in the last ${WINDOW_DAYS} days (${span_from}..${span_to}), ${cleared} cleared within budget, 0 exhausted, 0 failed."
 fi
 exit 0

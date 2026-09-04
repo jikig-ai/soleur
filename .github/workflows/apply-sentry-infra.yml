@@ -395,7 +395,16 @@ jobs:
           # permanently red by accident, green path never once executed. See the
           # script's header. One copy makes that unrepresentable.
           terraform show -json tfplan > /tmp/sentry-pr-plan.json
-          eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-pr-plan.json)"
+          # `eval "$(cmd)"` returns EVAL's status, not the script's — on failure
+          # `eval ""` succeeds. It is fail-closed only because `set -u` then kills
+          # the step at the first unbound counter, which makes the headline
+          # "resource_creates: unbound variable" instead of the script's own
+          # `::error::`. Capture and check first.
+          counts=$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-pr-plan.json) || {
+            echo "::error::sentry destroy counters could not be computed for the PR plan; refusing to report a gate verdict."
+            exit 1
+          }
+          eval "$counts"
 
           # ── UNCONDITIONAL, UN-ACKABLE assertions (#7650 Phase 2) ─────────
           # All three run on every plan, before the destroy gate, and none of
@@ -892,7 +901,11 @@ jobs:
             /tmp/sentry-apply-plan.json 27 \
             "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
 
-          eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json)"
+          counts=$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json) || {
+            echo "::error::sentry destroy counters could not be computed for the apply plan; refusing to apply."
+            exit 1
+          }
+          eval "$counts"
 
           # Guard A(i) — the diff-matched create gate, ported from `plan_pr`.
           # This job computed `$resource_creates` and never read it: the apply

@@ -33,7 +33,7 @@ BINDING="$REPO_ROOT/scripts/sentry-monitor-binding-gate.sh"
 CREATE_GATE="$REPO_ROOT/scripts/sentry-create-gate.sh"
 WF="$REPO_ROOT/.github/workflows/apply-sentry-infra.yml"
 pass=0; fail=0
-EXPECTED_TESTS=31
+EXPECTED_TESTS=32
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -680,6 +680,32 @@ t_c4_clean_adoption_green() {
 # C5 — the import ids are cross-checked against the committed live capture. An
 # id typo does not fail Terraform: it adopts a DIFFERENT live rule under this
 # name, and the plan is clean.
+# C6 — a DUPLICATED import id. The realistic generator/hand-edit error, and the
+# one C5 structurally cannot see: the capture holds all 30 live workflows, so an
+# id copy-pasted from another rule IS present in it and passes membership. Two
+# addresses importing one id means one live rule adopted twice and one adopted by
+# nobody.
+t_c6_duplicate_import_id_red() {
+  # The capture must hold the ids `_pairs` actually emits (acme/10N -> 101,102,103),
+  # AND the duplicate must be one of them. Otherwise this reds on MEMBERSHIP
+  # instead of uniqueness — a fixture failing for a second reason, which proves
+  # nothing about C6. The assertion below rejects that outcome explicitly rather
+  # than accepting any red.
+  local cap="$TMPD/capture6.json"
+  printf '[{"id":"101","name":"p1"},{"id":"102","name":"p2"},{"id":"103","name":"p3"}]' > "$cap"
+  local f
+  f=$(_pairs 3 | jq -c '(.resource_changes[] | select(.address == "sentry_alert.p3") | .change.importing.id) = "acme/101"' | _write c6)
+  local rc; rc=$(_rc bash "$ADOPT" "$f" 3 "$cap")
+  local msg; msg=$(_err bash "$ADOPT" "$f" 3 "$cap")
+  if [[ "$rc" -eq 1 ]] && grep -q 'imported at more than one address' <<<"$msg" \
+     && ! grep -q 'not present in the committed live capture' <<<"$msg"; then
+    _report "C6 a DUPLICATED (but live) import id REDs on uniqueness, not on membership" ok
+  else
+    _report "C6 a duplicated live import id REDs on uniqueness" fail \
+      "rc=$rc; msg=$msg — if this red on membership instead, the fixture's duplicate is not a live id and the row proves nothing"
+  fi
+}
+
 t_c5_import_id_not_in_capture_red() {
   local cap="$TMPD/capture.json"
   # `_pairs` emits import ids of the form `acme/10N`, so the capture's workflow
@@ -724,6 +750,7 @@ t_c2_extra_change_red
 t_c3_dropped_pair_red
 t_c4_clean_adoption_green
 t_c5_import_id_not_in_capture_red
+t_c6_duplicate_import_id_red
 t_d1_correct_binding_passes
 t_d2_wrong_binding_reds
 t_d3_unreadable_binding_reds
