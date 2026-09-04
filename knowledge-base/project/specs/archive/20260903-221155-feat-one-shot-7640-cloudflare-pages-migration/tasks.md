@@ -1,6 +1,35 @@
 # Tasks — Cloudflare Pages migration (#7640)
 
-Plan: `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`
+Plan: **ARCHIVED 2026-09-03** to
+`knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`
+(the live path this line used to cite no longer exists — see AC58).
+
+> **STATUS, recorded 2026-09-03 at archive time.** Every checkbox below is
+> UNTICKED and that is a bookkeeping gap, not a statement about the work: PRs
+> 1-3 all shipped. **The boxes are deliberately left as they are** rather than
+> bulk-ticked, because ticking a claim nobody verified is worse than leaving an
+> honest gap — this file is being archived, not resumed.
+>
+> What actually landed, by merge commit on `main`:
+>
+> | PR | commit | subject |
+> |---|---|---|
+> | PR1 | `a05ae1f77` | Cloudflare Pages substrate (#7649) |
+> | PR2 | `3244be4f5` | dual-publish through the cutover window (#7751) |
+> | PR3 | `2a589e9f4` | attach the custom domains (#7771) |
+> | (guard) | `171338cd7` | guard the `ssl = "full"` rule holding the apex up (#7753) |
+> | PR4a | `428e1ec78` | shrink the apex to one address (#7780) |
+> | PR4b | `99eeebfef` | flip the apex to a CNAME (#7793) |
+> | PR5 | this PR | retire the GitHub Pages publish leg |
+>
+> Deliverables verified present at archive time: `cf-pages.tf` (2
+> `cloudflare_pages_domain` attachments), `seo-bulk-redirects.tf`.
+>
+> PR4/PR5 were tracked in a SEPARATE spec dir
+> (`feat-one-shot-7640-pr4-dns-cutover-pr5-retire-gh-pages`), archived alongside
+> this one. **Precisely:** that dir's Phases 1-2 were maintained as the work went;
+> 2.11 and all of Phases 3-4 were still unticked on `origin/main` and were ticked
+> retroactively by PR5 against verified evidence. "Maintained" overstated it.
 
 Delivery is **three sequenced PRs, IaC first** (plan §Delivery Sequencing). A single merge
 cannot produce the verification order the plan asserts.
