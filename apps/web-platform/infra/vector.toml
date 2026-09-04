@@ -199,6 +199,14 @@ include_matches.SYSLOG_IDENTIFIER = [
   "inngest-server-flip-guard",
   "inngest-registry-probe",
   "inngest-doublefire-probe",
+  # #7695: the LUKS boot stage. Source 4 is EXACT-VALUE equality, so without this entry every
+  # SOLEUR_INNGEST_LUKS_STAGE marker is silently dropped at the source and a failed luksOpen on
+  # a deny-all-public host with no SSH is undiagnosable — the #6617 lesson this file already
+  # records for the probe trio. Emitted by BOTH the cloud-init runcmd stage and
+  # inngest-luks-open.service (the boot-reopen unit), which share the tag deliberately: they are
+  # two entry points to one question ("is /mnt/data on the mapper?") and splitting the tag would
+  # split the query an operator has to run.
+  "inngest-luks-stage",
   # #7228: the boot-trace emitter reporting its OWN death. inngest-boot-phone-home.sh
   # (cloud-init-inngest.yml) is the single delivery path for all eight
   # SOLEUR_INNGEST_BOOT_STAGE markers — the entire diagnosis of a boot failure on a host

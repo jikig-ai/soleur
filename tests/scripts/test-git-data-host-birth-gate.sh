@@ -63,6 +63,13 @@ source "$GATE"
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${ROOT}/tests/scripts/lib/gate-suite-harness.sh"
 
+
+# The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
+# gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
+# them: a bare `pass "$name"` in gate_check left six suites totalling 280 assertions green on ONE
+# edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
+gate_harness_selftest || true
+
 # rc_update <address> <type> <before-json> <after-json>
 #
 # The one shape rc_entry cannot express: it hardcodes before:null, the create/delete edge.

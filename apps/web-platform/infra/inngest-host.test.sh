@@ -243,6 +243,15 @@ LIVE7=("${DARK5[@]}" INNGEST_CUTOVER_FLIP INNGEST_HEARTBEAT_URL)
 [[ "$(isolation_decision "${LIVE7[@]}")" == PASS ]] && pass || fail "armed 7-secret set must PASS — op=arm writes INNGEST_CUTOVER_FLIP; rejecting it boot-bricks the dedicated host (#6178)"
 # The QUEUED repeat: inngest-config-digest.tf declares an 8th name into the same project.
 [[ "$(isolation_decision "${LIVE7[@]}" INNGEST_CONFIG_DIGEST)" == PASS ]] && pass || fail "8-secret set incl. INNGEST_CONFIG_DIGEST must PASS — inngest-config-digest.tf applies it at this cutover and requires the admitting regex to land atomically"
+# (#7695) INNGEST_REDIS_LUKS_KEY: inngest-redis-luks.tf declares a 9th name into this project,
+# and #7695 puts the passphrase pair in the PER-MERGE `-target=` allowlist — so unlike the digest
+# above, this secret lands at MERGE rather than at a dispatch. From that apply onward an unadmitted
+# name makes n_total != n_inngest → FATAL on every re-provision, with no Vector to report it. This
+# is the third instance of the #6178 class in one regex; the behavioural case is what stops a
+# fourth, because a source-fragment grep stays green while the live regex is mutated.
+[[ "$(isolation_decision "${LIVE7[@]}" INNGEST_CONFIG_DIGEST INNGEST_REDIS_LUKS_KEY)" == PASS ]] && pass || fail "9-secret set incl. INNGEST_REDIS_LUKS_KEY must PASS — inngest-redis-luks.tf mints it into soleur-inngest/prd at MERGE (per-merge -target), so an unadmitted name boot-bricks the host on its next re-provision (#7695, the #6178 class)"
+# Nesting holds for it too: the member is INNGEST_REDIS_LUKS_KEY, not a bare REDIS_LUKS_KEY.
+[[ "$(isolation_decision "${DARK5[@]}" REDIS_LUKS_KEY)" == FATAL ]] && pass || fail "a BARE REDIS_LUKS_KEY (no INNGEST_ prefix) must FATAL — the member is nested inside the INNGEST_ group"
 # Isolation still holds: an over-scoped token leaking ONE foreign name must fail closed.
 [[ "$(isolation_decision "${LIVE7[@]}" SUPABASE_SERVICE_ROLE_KEY)" == FATAL ]] && pass || fail "a foreign secret must FATAL — this is the over-scoped-credential defense the self-check exists for"
 # Floor still bites (catches the degenerate empty-read case where n_total==n_inngest==0).
