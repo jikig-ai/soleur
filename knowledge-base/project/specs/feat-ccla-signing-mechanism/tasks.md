@@ -37,12 +37,22 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
       brainstorm's third minimum-fix item, dropped by the spec.
 - [ ] 1.4. Reply to Convergence: request a named signatory with title and an individually-
       attributable mailbox, plus the §5 notice-delivery confirmation the ruling now requires.
+  **BLOCKED ON AN EXTERNAL PARTY + OPERATOR AUTHORISATION — tracked at #7846.** The draft is committed at
+      `knowledge-base/legal/drafts/2026-09-04-convergence-ccla-reply.md` (`status: awaiting-operator-send`). Sending binding
+      correspondence to a counterparty is an operator decision, and the Playwright MCP server was unavailable for the whole
+      session, so no automation attempt was possible. Both facts are recorded in #7846 because they have different remedies.
 - [ ] 1.5. Their contributor signs the ICLA through the ordinary path; the PR merges on its merits.
+  **BLOCKED ON A THIRD PARTY.** Convergence's contributor must themselves sign the ICLA on a pull request here. No
+      action available on this branch; the ordinary path already works and is untouched by this PR.
 - [ ] 1.6. Countersign; compute and record the executed-instrument SHA-256 on receipt.
+  **BLOCKED ON 1.4/1.5.** Countersigning and hashing the executed instrument require the instrument to exist.
 - [x] 1.7. Create `knowledge-base/legal/ccla-register.md` with the CLO's ruled field table and an
       empty Register table.
 - [ ] 1.8. Add the first roster row — **only after 0.1 and only for an ICLA signer**.
 
+  **BLOCKED ON 1.5 + 1.6, and gated by design.** `ccla-add.sh` REFUSES any account absent from the ICLA ledger
+      (contribution-triggered entry), so the first roster row is not writable until their contributor has signed. Verified:
+      the refusal path exits 4 and is mutation-proven.
 ## Phase 2 — Contracts, before any consumer
 
 - [x] 2.1. Create `apps/web-platform/scripts/cla-evidence/cla-doc-path.ts` (the discriminant module).
@@ -90,7 +100,7 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 - [x] 5.5. `data-protection-disclosure.md` §2.3(d) + §6.4 — triple lockstep.
 - [x] 5.6. `article-30-register.md` PA-7 §(c), §(d), §(e) **and the Lawful basis row**.
 - [x] 5.7. Rename `removed_at` from "tombstone" to *withdrawal-of-designation marker* everywhere.
-- [ ] 5.8. Route the cross-document sweep through `legal-compliance-auditor`.
+- [x] 5.8. Route the cross-document sweep through `legal-compliance-auditor`.
 - [x] 5.9. Do **not** enrol either CLA in `BODY_EQUIVALENCE_DOCS` — measured drift is non-zero.
 - [x] 5.10. Keep every `#NNNN` reference mid-line (markdownlint phantom-H1 trap).
 - [x] 5.11. `Last Updated` on the three published notices: the in-place bump is BLOCKED — those lines carry ~30 kB
@@ -111,6 +121,8 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
       write-once store"** — the central alternative, absent from the first draft.
 - [ ] 6.3. Re-derive the ordinal immediately before merge; if it moves, sweep plan + spec + tasks
       + ACs in the same edit.
+  Re-derived across all 67 `origin/*` refs at Phase 6: max is ADR-200, so ADR-201 is free. Must be re-derived once more
+      immediately before merge, per this task's own wording.
 - [x] 6.4. C4: no change required under B1-c beyond an optional `contributor` description
       amendment. If any `.c4` edit lands, run `scripts/regenerate-c4-model.sh` and commit
       `model.likec4.json` in the same commit.
@@ -118,10 +130,13 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 
 ## Phase 7 — Verification
 
-- [ ] 7.1. Run every AC in the plan's `## Acceptance Criteria`.
+- [x] 7.1. Run every AC in the plan's `## Acceptance Criteria`.
 - [ ] 7.2. `bash scripts/test-all.sh` — the **full** battery, not touched-file shards.
-- [ ] 7.3. Verify prose against code item by item (#7349 class): no `ccla/` write path;
+  Ran to completion this session: **359/366**, two failing suites, both fixed afterwards (guard-vacuity-floor
+      registration and the fixture-relative baseline). A clean re-run is still owed — a sibling full-gate run in another
+      worktree currently refuses concurrent runs, which is the mechanical backstop working as intended.
+- [x] 7.3. Verify prose against code item by item (#7349 class): no `ccla/` write path;
       `ccla-add.sh` refuses un-signed ids; the custody location named in §0 is the one actually used.
-- [ ] 7.4. File the `side-letter-register.md` legal-name-column issue, citing the B1 ruling as the
+- [x] 7.4. File the `side-letter-register.md` legal-name-column issue, citing the B1 ruling as the
       fix pattern.
-- [ ] 7.5. Extend #7668 with the CCLA-association retention sub-question.
+- [x] 7.5. Extend #7668 with the CCLA-association retention sub-question.
