@@ -151,6 +151,21 @@ two byte-identical copies of a stale region name pass all five.
 | S-1 | `knowledge-base/legal/audits/2026-08-counsel-review-7440.md` | erratum APPENDED, body not amended (a dated record is append-only) |
 | S-2 | `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` | second source documented; region aliasing recorded; the "single source" sentence corrected |
 
+> **Amended during implementation — MUST-1(a) and MUST-2(a) dropped a literal a shipped
+> gate requires.** The ruling directed dropping the pinned ingest URL from the two public
+> documents, reasoning that it "asserts exhaustiveness over an estate that will contain two
+> endpoints". That reasoning stands, but the drafting also removed the source ID `2457081` —
+> and `validate-vector-config` (#4293 FR5) parses the sink URI out of `vector.toml` and
+> requires BOTH the source id and the cluster string to appear in all six disclosure files.
+> CI caught it. This ruling's own "Gate mechanics for the implementer" section listed four
+> gates and did not include this one, so the instruction was incomplete rather than wrong.
+>
+> Resolved by restoring `2457081` to both public documents (and both mirrors) **as the source
+> for THIS stream**, with an explicit sentence that naming it is not a claim it is the only
+> source on the account. That satisfies the drift control and keeps the exhaustiveness fix the
+> ruling actually wanted. Both literals verified present in all six files against the gate's
+> exact predicate.
+
 Both public mirrors were edited byte-identically and `legal-doc-shas.ts` re-pinned.
 Gates run from the worktree root: `check-tc-document-sha.sh` rc=0,
 `lint-legal-mirror-drift-baseline.sh --base origin/main` rc=0 (drift within baseline,
