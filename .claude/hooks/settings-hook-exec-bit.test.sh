@@ -47,6 +47,12 @@
 
 set -uo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Applied to EVERY hook suite, not just ones whose hook is a sibling .sh:
+# security_reminder_hook is a .py, so pairing by filename missed it and it
+# kept writing the real ledger. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
 SETTINGS=".claude/settings.json"

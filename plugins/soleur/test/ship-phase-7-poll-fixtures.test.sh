@@ -281,6 +281,47 @@ run_scenario "5-absent-required-check" "$SCEN5" \
 rm -f "$SCEN5"
 
 # ---------------------------------------------------------------------------
+# The poll budget must stay above the repo's own CI wall-clock.
+#
+# It was 15 minutes, which is BELOW the fastest full CI run ever observed here
+# (min 22 / median 32 / p90 43 / max 54, measured over 12 runs on main). A budget
+# that cannot outlast CI does not merely give up early — it reports
+# "Merge poll timed out" on a PR that is merging perfectly well, which reads as a
+# failure and invites someone to intervene by hand. Floor is 45: above the
+# measured p90, so an ordinary run finishes inside it.
+#
+# Asserted on BOTH the canonical block and the mirror, and asserted EQUAL —
+# a budget that drifts between them is the same defect wearing a mirror.
+budget_of() { grep -oE '^MAX_POLL_MIN=[0-9]+' "$1" | head -1 | cut -d= -f2; }
+SHIP_MD="$REPO_ROOT/plugins/soleur/skills/ship/SKILL.md"
+MERGE_MD="$REPO_ROOT/plugins/soleur/skills/merge-pr/SKILL.md"
+ship_budget=$(budget_of "$SHIP_MD")
+merge_budget=$(budget_of "$MERGE_MD")
+
+if [[ -z "$ship_budget" || -z "$merge_budget" ]]; then
+  fail "MAX_POLL_MIN not found in ship (got '${ship_budget:-}') and/or merge-pr (got '${merge_budget:-}')"
+else
+  if [[ "$ship_budget" == "$merge_budget" ]]; then
+    pass "poll budget agrees across canonical and mirror ($ship_budget min)"
+  else
+    fail "poll budget DRIFTED: ship=$ship_budget merge-pr=$merge_budget"
+  fi
+  if [[ "$ship_budget" -ge 45 ]]; then
+    pass "poll budget ($ship_budget min) is above the measured CI p90 (43 min)"
+  else
+    fail "poll budget $ship_budget min is at or below the measured CI p90 (43 min) — CI outlasts the poll, so it reports a spurious timeout"
+  fi
+fi
+
+# No stale hardcoded budget may survive alongside the variable.
+stale=$(grep -rlE '\-ge 15 \]|timed out after 15 minutes' "$SHIP_MD" "$MERGE_MD" 2>/dev/null | wc -l)
+if [[ "$stale" -eq 0 ]]; then
+  pass "no hardcoded 15-minute budget remains in either file"
+else
+  fail "a hardcoded 15-minute budget survives in $stale file(s) beside MAX_POLL_MIN"
+fi
+
+# ---------------------------------------------------------------------------
 rm -f "$BLOCK_FILE" "$BLOCK_FILE.err" "$MIRROR_FILE"
 echo
 echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
