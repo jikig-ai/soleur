@@ -24,6 +24,44 @@ PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh
 SKILL_DIR="$REPO_ROOT/plugins/soleur/skills/gdpr-gate"
 LEFTHOOK="$REPO_ROOT/lefthook.yml"
 
+# --- Instrument self-test (Guard 1 harness row i) ---------------------------
+# Drive BOTH assertion helpers once each and refuse to continue unless both
+# counters actually moved. An assertion-count FLOOR cannot do this job: a
+# stubbed `assert_eq() { PASS=$((PASS+1)); }` still increments, so the floor
+# is satisfied by construction and the suite reports a full green having
+# verified nothing. Measured during #7710 — that exact stub survived both a
+# 27-assertion suite and a 39-assertion floor.
+#
+# Reported with printf + exit 1 rather than through pass/fail, per ADR-193:
+# a backstop must not be routed through the instrument it backstops.
+_selftest() {
+  local p0="$PASS" f0="$FAIL"
+  # EVERY helper this suite asserts through, not just the first one. Measured
+  # during #7710: a self-test driving only assert_eq left a neutered
+  # assert_contains fully undetected, and this suite asserts through both.
+  assert_eq       "x" "x"   "instrument self-test — assert_eq must record a pass"
+  assert_eq       "x" "y"   "instrument self-test — assert_eq must record a failure (EXPECTED FAIL above)"
+  assert_contains "xy" "x"  "instrument self-test — assert_contains must record a pass"
+  assert_contains "xy" "zz" "instrument self-test — assert_contains must record a failure (EXPECTED FAIL above)"
+  if (( PASS != p0 + 2 )); then
+    printf 'INSTRUMENT SELF-TEST FAILED: helpers did not record 2 passes (PASS %s -> %s).\n' "$p0" "$PASS" >&2
+    printf 'An assertion helper is neutered; every result below would be meaningless.\n' >&2
+    exit 1
+  fi
+  if (( FAIL != f0 + 2 )); then
+    printf 'INSTRUMENT SELF-TEST FAILED: helpers did not record 2 failures (FAIL %s -> %s).\n' "$f0" "$FAIL" >&2
+    printf 'A helper that cannot fail certifies nothing. Refusing to report a green run.\n' >&2
+    exit 1
+  fi
+  # Both counters moved; discard the self-test's own bookkeeping so it does
+  # not pollute the suite result.
+  PASS="$p0"
+  FAIL="$f0"
+  printf '  (instrument self-test OK — assert_eq and assert_contains can each both pass and fail)\n'
+}
+_selftest
+echo ""
+
 echo "=== vendor-pin-integrity tests ==="
 echo ""
 
@@ -409,4 +447,65 @@ for pat in \
 done
 echo ""
 
-print_results
+# --- TS14: provenance oracle — the attribution header decides the list ---
+# Guard 1 mutation 2. TS7 asserts the two registries are DISJOINT, which is
+# necessary and NOT sufficient: moving a Soleur-authored file OUT of
+# soleur-authored and INTO lifted-files keeps them disjoint, so an
+# intersection check certifies a provenance falsification as clean. Measured
+# during #7710 — that mutation survived a 27-assertion suite.
+#
+# The oracle is the repo's own policy, content-vendoring.md §3 step 2: every
+# lifted file MUST start with the attribution header on line 1. A file
+# without it is not upstream-derived, whatever the registry claims; a
+# Soleur-authored file WITH it would be claiming MIT provenance for Soleur's
+# own writing. Both directions are asserted, because a one-directional check
+# is how the wrong-list case survives.
+echo "TS14: attribution header presence matches the registry a file is listed in"
+ATTRIB='<!-- Adapted from gosprinto/compliance-skills (MIT) — see NOTICE -->'
+
+LIFTED_CHECKED=0
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  rel="${line%%:*}"
+  LIFTED_CHECKED=$((LIFTED_CHECKED + 1))
+  if [[ "$(head -1 "$SKILL_DIR/$rel")" == "$ATTRIB" ]]; then
+    echo "  PASS: $rel (lifted-files) carries the upstream attribution header"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: $rel is in lifted-files but line 1 is not the attribution header — it is not upstream-derived"
+    FAIL=$((FAIL + 1))
+  fi
+done < <(bash "$PARSER" lifted-files)
+
+AUTHORED_CHECKED=0
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  rel="${line%%:*}"
+  AUTHORED_CHECKED=$((AUTHORED_CHECKED + 1))
+  if [[ "$(head -1 "$SKILL_DIR/$rel")" == "$ATTRIB" ]]; then
+    echo "  FAIL: $rel is in soleur-authored but carries the upstream attribution header — provenance falsification"
+    FAIL=$((FAIL + 1))
+  else
+    echo "  PASS: $rel (soleur-authored) carries no upstream attribution header"
+    PASS=$((PASS + 1))
+  fi
+done < <(bash "$PARSER" soleur-authored)
+
+# Own dispatch: both loops are driven by the parser, so an empty registry
+# would run zero iterations and report nothing rather than failing.
+if (( LIFTED_CHECKED >= 8 && AUTHORED_CHECKED >= 3 )); then
+  echo "  PASS: provenance oracle examined $LIFTED_CHECKED lifted + $AUTHORED_CHECKED authored entries"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: provenance oracle examined $LIFTED_CHECKED lifted + $AUTHORED_CHECKED authored entries (expected >= 8 and >= 3) — registry read is broken"
+  FAIL=$((FAIL + 1))
+fi
+echo ""
+
+# Anti-vacuity floor (Guard 1 harness row i). Without an argument,
+# print_results greens on `FAIL -eq 0` and nothing on `PASS > 0`, so
+# replacing assert_eq with a stub that always passes reported
+# "Passed: 27 / Failed: 0 / ALL TESTS PASSED" and exit 0 — measured during
+# #7710. A FLOOR, not equality: adding an assertion must not red the suite.
+# Derived from a green run (39 assertions on 2026-09-04).
+print_results 39
