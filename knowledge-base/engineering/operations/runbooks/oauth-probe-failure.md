@@ -571,7 +571,9 @@ curl -s --max-time 10 \
 Confirms the auth rules (`auth-exchange-code-burst`,
 `auth-callback-no-code-burst`, `auth-per-user-loop`, `auth-signout-burst`)
 exist and shows when each last fired. Verified live 2026-08-19: all four
-present, `enabled: true`.
+present, `enabled: true`. This is a READ against the non-deprecated
+`workflows/` endpoint and stays correct for all four regardless of which
+system owns each rule's definition — see the ownership table below.
 
 ### Reconcile alert rules (rule drift / missing rule)
 
@@ -592,11 +594,30 @@ present, `enabled: true`.
 >    separately; do not attempt it inline during an incident.
 >
 > If the rules are drifted and this script will not run, the fallback is the
-> Sentry UI. Do NOT delete this script: `infra/sentry/issue-alerts.tf`
-> declares `conditions_v2`/`filters_v2`/`actions_v2` as `[]` and lists them in
-> `lifecycle.ignore_changes`, so Terraform does not own those filters and an
-> apply cannot restore them. This script is their only executable definition
-> (see #4781, the open recurrence guard for the 2026-06-02 drift).
+> Sentry UI. Do NOT delete this script — but note the ownership split changed
+> on 2026-09-04 (#7650 Phase 2), and this recipe reconciles only ONE of the
+> four rules now:
+>
+> | rule | owner | how to reconcile drift |
+> |---|---|---|
+> | `auth-per-user-loop` | **this script** | run the command below |
+> | `auth-signout-burst` | Terraform (`sentry_alert`) | `terraform apply` on the sentry root |
+> | `auth-exchange-code-burst` | Terraform (`sentry_alert`) | `terraform apply` on the sentry root |
+> | `auth-callback-no-code-burst` | Terraform (`sentry_alert`) | `terraform apply` on the sentry root |
+>
+> Only `auth-per-user-loop` still declares `conditions_v2`/`filters_v2` as `[]`
+> under a wide `lifecycle.ignore_changes`, so Terraform does not own its filters
+> and an apply cannot restore them — this script remains its ONLY executable
+> definition. The other three now carry their real definitions in
+> `infra/sentry/issue-alerts.tf` with `ignore_changes = [environment]` only, so
+> Terraform genuinely owns them and an apply DOES restore them.
+>
+> Running the script below reconciles `auth-per-user-loop` alone. If all four
+> drifted (the 2026-06-02 mode — see #4781, still open), running it will fix one
+> and leave three drifted; reconcile those three via the Sentry root's apply.
+> `auth-per-user-loop` cannot move to Terraform until upstream
+> jianyuan/terraform-provider-sentry issue 950 lands
+> `event_unique_user_frequency_count` as a trigger (tracked by #7634).
 
 If a rule is missing from the GET output above, or someone edited a
 rule via the Sentry UI and it has drifted from the configurator's

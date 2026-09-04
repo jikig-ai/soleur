@@ -68,6 +68,7 @@ export const EXPECTED_CRON_FUNCTIONS: string[] = [
   "cron-roadmap-review",
   "cron-rule-prune",
   "cron-ruleset-bypass-audit",
+  "cron-sentry-alert-drift",
   "cron-seo-aeo-audit",
   "cron-skill-freshness",
   "cron-stale-deferred-scope-outs",

@@ -1,0 +1,287 @@
+# §2.9 of the #7650 `sentry_alert` migration — the ongoing detector for a
+# migrated paging rule that goes dark WEEKS after the adopting apply.
+#
+# WHAT IT DETECTS THAT NOTHING ELSE DOES. A rule can exist, plan clean, and match
+# nothing: renamed in the UI, muted, rebound to a different detector, or its
+# `tagged_event` key edited. `terraform plan` says config and state agree; it
+# says nothing about whether the rule still fires. `assert-byok-rules-exist.sh`
+# covers 4 of the 27, by name and enablement only. This reads live Sentry and
+# diffs all 27 field-by-field against the capture the blocks were generated from.
+#
+# WHY NOT ADD apps/web-platform/infra/sentry TO scheduled-terraform-drift.yml's
+# MATRIX INSTEAD. That leg would plan the FULL ROOT, which still refreshes the
+# two surviving `sentry_issue_alert` resources through Sentry's deprecated
+# alert-rule endpoint — with none of apply-sentry-infra.yml's brownout retry. It
+# would go red on Sentry's brownout calendar rather than on drift, which is how a
+# probe gets muted. This workflow makes ONE read-only GET against the
+# non-deprecated org workflows endpoint.
+#
+# Trigger: Inngest-dispatched `workflow_dispatch` per ADR-033, from
+# apps/web-platform/server/inngest/functions/cron-sentry-alert-drift.ts. Not a
+# GHA `schedule:` — Inngest is the single scheduling substrate, and GHA's
+# scheduled-delivery jitter (observed up to 339 min late over a 58-day survey)
+# is what ADR-033 moved off.
+#
+# NO SENTRY CRON HEARTBEAT, and that is a deliberate, dated gap rather than an
+# oversight. Every sibling scheduled-*.yml ends in the `sentry-heartbeat`
+# composite action, which requires a `monitor-slug` backed by a
+# `sentry_cron_monitor` resource in cron-monitors.tf — and adding a resource to
+# THIS root in THIS PR would plan `1 to add`, which AC2 forbids: the adoption's
+# whole safety argument is that its plan is 27 imports and nothing else. The
+# monitor is tracked by #7834, to add once the adoption has applied.
+#
+# WHAT IS COVERED IN THE INTERIM: scheduler liveness, via
+# `cron-inngest-cron-watchdog` and the `EXPECTED_CRON_FUNCTIONS` parity manifest
+# — if the cron stops being planned, that pages. And since #7650 review, an
+# `unavailable` verdict now files its own issue from this workflow, so "the
+# probe ran and could not establish a verdict" IS routed.
+#
+# WHAT IS NOT: "the dispatch was accepted and the runner never ran." No GHA run
+# means no step of this workflow executes, so nothing here can file anything.
+# The sibling's `sentry-heartbeat` covers that via a MISSED CHECK-IN, and that
+# is the term #7834 restores.
+#
+# NOT counted as interim coverage: the post-apply invocation in
+# apply-sentry-infra.yml. That workflow's push trigger is `paths:`-scoped to
+# `apps/web-platform/infra/sentry/**`, so once this adoption merges it is
+# near-dormant — it is a MERGE-TIME check on days someone changes the Sentry
+# root, not ongoing coverage on the days that matter.
+#
+# To test manually: gh workflow run scheduled-sentry-alert-drift.yml
+name: Sentry Alert Drift Detection
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: sentry-alert-drift
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Verify required secrets present
+        env:
+          SENTRY_TOKEN_CHECK: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_ORG_CHECK: ${{ secrets.SENTRY_ORG }}
+          SENTRY_HOST_CHECK: ${{ secrets.SENTRY_API_HOST }}
+        run: |
+          set -uo pipefail
+          missing=()
+          [[ -n "$SENTRY_TOKEN_CHECK" ]] || missing+=(SENTRY_IAC_AUTH_TOKEN)
+          [[ -n "$SENTRY_ORG_CHECK" ]]   || missing+=(SENTRY_ORG)
+          [[ -n "$SENTRY_HOST_CHECK" ]]  || missing+=(SENTRY_API_HOST)
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            # Fail LOUD rather than skipping. A drift probe that silently does
+            # nothing when a secret is cleared reports "no drift" forever.
+            echo "::error::missing required secret(s): ${missing[*]} — refusing to report a drift verdict this run."
+            exit 1
+          fi
+
+      - name: Probe live Sentry against the committed capture
+        id: probe
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+        run: |
+          set -uo pipefail
+          # rc captured on its OWN LINE, before any pipe. `probe | tee` would
+          # report tee's status, and the probe's non-zero drift verdict would be
+          # swallowed into a green run — the failure this whole workflow exists
+          # to make loud.
+          set +e
+          bash scripts/sentry-alert-live-fidelity.sh > "${RUNNER_TEMP}/probe.txt" 2>&1
+          rc=$?
+          set -e
+          cat "${RUNNER_TEMP}/probe.txt"
+          echo "exit_code=${rc}" >> "$GITHUB_OUTPUT"
+          # Exit 0 here on a DRIFT verdict (rc=1) so the filer below runs; a
+          # transport/parse failure is a different thing and must red the job.
+          # The probe uses rc=1 for both, so the discriminator is the marker it
+          # prints — absence of the FAILED line means it never got that far.
+          if [[ "$rc" -eq 0 ]]; then
+            echo "verdict=clean" >> "$GITHUB_OUTPUT"
+          elif grep -q 'live fidelity FAILED' "${RUNNER_TEMP}/probe.txt"; then
+            echo "verdict=drift" >> "$GITHUB_OUTPUT"
+          else
+            echo "verdict=unavailable" >> "$GITHUB_OUTPUT"
+            echo "::error::the fidelity probe could not complete, so this run establishes NOTHING about drift. Do not read a clean verdict from it."
+            exit 1
+          fi
+
+      - name: File or update the drift issue
+        # `always() &&`, not a bare expression. A plain-expression `if:` inherits
+        # an implicit `success()`, so this step would SKIP after any earlier
+        # failure in the job — and a drift verdict that reaches nobody is the
+        # exact failure class this filer exists to prevent. The explicit
+        # `always()` decouples it. (`verdict` is a non-empty string literal, so a
+        # crashed producer's null output does not match it either.)
+        if: always() && steps.probe.outputs.verdict == 'drift'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TITLE="[ci/sentry-alert-drift] a migrated Sentry alert has drifted from the committed capture"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          gh label create "ci/sentry-alert-drift" --repo "$GH_REPO" \
+            --description "sentry_alert live-fidelity drift (#7650 §2.9)" --color "B60205" 2>/dev/null || true
+
+          BODY_FILE="${RUNNER_TEMP}/drift-issue.md"
+          {
+            printf '## Live Sentry no longer matches the committed capture\n\n'
+            printf 'One or more of the 27 adopted `sentry_alert` rules has diverged. A rule in this state typically still EXISTS and still PLANS CLEAN — it just no longer matches the events it was written for, so it pages nobody and nothing else notices.\n\n'
+            printf -- '- Detected at: %s\n' "$NOW"
+            printf -- '- Run log: %s\n\n' "$RUN_URL"
+            printf '### Findings\n\n```\n'
+            cat "${RUNNER_TEMP}/probe.txt"
+            printf '```\n\n'
+            printf '### How to read them\n\n'
+            printf -- '- `DELETED or RENAMED` / `DRIFT` — config-side. Re-run `apply-sentry-infra.yml`; Terraform owns these fields and will restore them.\n'
+            printf -- '- `DISABLED` / `MONITOR UNBIND` — LIVE state. An apply will **not** fix either. Re-enable or re-bind in the Sentry UI.\n'
+            printf -- '- `UNMANAGED` — a rule created outside Terraform that falls inside the migration scope. Either adopt it or delete it; nothing in this repo manages it today.\n\n'
+            printf '### If the drift is intentional\n\n'
+            printf 'The capture at `knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json` is the authoring source for all 27 blocks. Re-capture it, regenerate with `phase2-generate-alert-blocks.py`, and diff — do not hand-edit either the capture or the `.tf` blocks to make this probe go quiet.\n\n'
+            printf '**`byok-art-33-breach` is one of the 27.** If it is named above, treat this as the highest-priority item in the repo: its silence stops the GDPR Art. 33 72-hour notification clock from ever starting.\n'
+          } > "$BODY_FILE"
+
+          # Dedupe by LABEL, not `--search`: the search API can return empty
+          # under some token contexts, which would file a fresh duplicate daily.
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
+            --limit 100 --json number,title \
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body-file "$BODY_FILE"
+          else
+            # "Post-MVP / Later", matching the sibling auto-filers, and NOT a phase
+            # milestone: phase milestones are closed as a routine act and
+            # `gh issue create` HARD-FAILS on a closed one, which would silently
+            # stop this verdict reaching a human the day the phase closed.
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label "ci/sentry-alert-drift" --label "type/chore" --label "priority/p1-high" \
+              --milestone "Post-MVP / Later" \
+              --body-file "$BODY_FILE"
+          fi
+          echo "::error::sentry_alert drift detected — see the tracking issue."
+          exit 1
+
+      - name: File or update the probe-unavailable issue
+        # THE DETECTOR'S OWN DEAD-MAN'S SWITCH.
+        #
+        # `unavailable` means this run established NOTHING about the 27 rules.
+        # Until this step existed, that verdict — and every abort before the
+        # probe ran at all (a cleared secret, a checkout failure, an OOM) —
+        # terminated in a red row in the Actions tab of a cron-dispatched
+        # workflow nobody is subscribed to. There is no repo-wide
+        # `workflow_run`-failure watcher; `post-merge-monitor.yml` watches the
+        # release pipeline only. So the §2.9 detector could be dead for weeks
+        # while `byok-art-33-breach` went unwatched, and that state was
+        # INDISTINGUISHABLE FROM CLEAN to every keyboard-reachable channel.
+        #
+        # The verdict logic already separated "could not run" from "ran and
+        # found nothing" correctly. The ROUTING collapsed them. This is the
+        # missing route, and it needs no `sentry_cron_monitor` — so it does not
+        # touch AC2 and is not blocked on #7834.
+        #
+        # `always() &&` on a `failure()` predicate: `failure()` alone would also
+        # skip if an earlier step in this job had already failed AND been
+        # tolerated. Written as the explicit pair for the same reason the two
+        # steps below carry it.
+        if: always() && failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          VERDICT: ${{ steps.probe.outputs.verdict }}
+        run: |
+          set -euo pipefail
+          TITLE="[ci/sentry-alert-drift] the drift probe could not establish a verdict"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          gh label create "ci/sentry-alert-drift" --repo "$GH_REPO" \
+            --description "sentry_alert live-fidelity drift (#7650 §2.9)" --color "B60205" 2>/dev/null || true
+
+          BODY_FILE="${RUNNER_TEMP}/unavailable-issue.md"
+          {
+            printf '## The Sentry alert drift probe did not run to a verdict\n\n'
+            printf 'This is NOT a report that something drifted. It is a report that **nobody checked**. While this is open, the 27 adopted `sentry_alert` rules — including `byok-art-33-breach`, which anchors the GDPR Art. 33 72-hour clock — are unwatched, and that state looks identical to healthy everywhere except this issue.\n\n'
+            printf -- '- Verdict reached: `%s`\n' "${VERDICT:-<none — the run aborted before the probe step wrote one>}"
+            printf -- '- Detected at: %s\n' "$NOW"
+            printf -- '- Run log: %s\n\n' "$RUN_URL"
+            printf '### What to check, in order\n\n'
+            printf -- '1. **A cleared or expired secret.** The run refuses loudly if `SENTRY_IAC_AUTH_TOKEN`, `SENTRY_ORG` or `SENTRY_API_HOST` is empty; the first step names which.\n'
+            printf -- '2. **The pagination ceiling.** The probe refuses at >= 100 workflows because a rule on page 2 would read as DELETED and produce a false "27 rules are gone" alarm. If the org has grown past 100, the fix is cursor-following in `scripts/sentry-alert-live-fidelity.sh`, not raising the ceiling.\n'
+            printf -- '3. **A non-array payload.** A 200 carrying something other than a JSON array means schema drift or an interstitial, not an auth problem — `curl -fsS` would already have aborted on any >= 400.\n'
+            printf -- '4. **An unreadable capture.** The probe refuses if the committed capture yields zero in-scope rules, rather than reporting "no drift" having compared nothing.\n\n'
+            printf 'Re-run this workflow once the cause is fixed; it auto-closes this issue on any run that reaches a verdict.\n'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
+            --limit 100 --json number,title \
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body-file "$BODY_FILE"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label "ci/sentry-alert-drift" --label "type/chore" --label "priority/p1-high" \
+              --milestone "Post-MVP / Later" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Close the probe-unavailable issue (a verdict was reached)
+        # Closes on EITHER real verdict. `clean` and `drift` both mean the probe
+        # ran end to end; only `unavailable` means it did not. Deliberately NOT
+        # gated on `success()` alone — a `drift` run ends red because the filer
+        # below exits 1, and that run did establish a verdict.
+        if: always() && (steps.probe.outputs.verdict == 'clean' || steps.probe.outputs.verdict == 'drift')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
+            --limit 100 --json number,title \
+            --jq 'map(select(.title == "[ci/sentry-alert-drift] the drift probe could not establish a verdict")) | .[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" \
+              --comment "The probe reached a verdict again at ${NOW}. Run: ${RUN_URL}"
+          fi
+
+      - name: Close the drift issue (clean)
+        # Gated on `clean`, never on `!= drift`. An `unavailable` run establishes
+        # nothing, and closing a real drift issue because the probe could not
+        # reach Sentry is the worst outcome this workflow could produce. That is
+        # also why the literal is `'clean'` and not `''` or `'0'`: GitHub casts
+        # across types, so an unset output from a CRASHED probe equals both of
+        # those — a false all-clear that would auto-close a live drift issue.
+        if: always() && steps.probe.outputs.verdict == 'clean'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --label "ci/sentry-alert-drift" --state open \
+            --limit 100 --json number,title \
+            --jq 'map(select(.title == "[ci/sentry-alert-drift] a migrated Sentry alert has drifted from the committed capture")) | .[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" \
+              --comment "All 27 adopted sentry_alert rules match the committed capture again at ${NOW}. Run: ${RUN_URL}"
+          fi

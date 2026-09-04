@@ -4,10 +4,19 @@ import { resolve, join, relative } from "path";
 
 /**
  * Drift-guard: every site that calls a Supabase auth verb must mirror to
- * Sentry with `feature: "auth"` and a matching `op: "<verb>"` tag. The
- * three issue-alert rules in apps/web-platform/scripts/configure-sentry-alerts.sh
- * filter on these tags — silently dropping a tag breaks paging without any
- * runtime symptom.
+ * Sentry with `feature: "auth"` and a matching `op: "<verb>"` tag. The four
+ * auth alert rules filter on these tags — silently dropping a tag breaks
+ * paging without any runtime symptom.
+ *
+ * Ownership split since #7650 Phase 2 (2026-09-04): three of the four
+ * (auth-signout-burst, auth-exchange-code-burst, auth-callback-no-code-burst)
+ * are now Terraform-managed as `sentry_alert` in
+ * apps/web-platform/infra/sentry/issue-alerts.tf, with their real tag filters
+ * declared there. The fourth, auth-per-user-loop, is still defined by
+ * apps/web-platform/scripts/configure-sentry-alerts.sh because the pinned
+ * provider cannot express `event_unique_user_frequency_count` as a trigger
+ * (upstream jianyuan/terraform-provider-sentry issue 950). Either way the tag
+ * contract this guard enforces is unchanged.
  *
  * Pattern: apps/web-platform/lib/auth/csrf-coverage.test.ts (no glob dep,
  * fs.readdirSync + fs.statSync recursive walk).

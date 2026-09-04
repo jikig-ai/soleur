@@ -57,19 +57,25 @@ describe("web-host-terminal-boot-fatal alert op contract", () => {
   // list" condition left to assert.
   it("issue-alerts.tf declares web_terminal_boot_fatal as a first-occurrence page with a notify target", () => {
     expect(tf).toContain(
-      'resource "sentry_issue_alert" "web_terminal_boot_fatal"',
+      'resource "sentry_alert" "web_terminal_boot_fatal"',
     );
     const start = tf.indexOf(
-      'resource "sentry_issue_alert" "web_terminal_boot_fatal"',
+      'resource "sentry_alert" "web_terminal_boot_fatal"',
     );
     const rest = tf.slice(start + 1);
     const nextResource = rest.indexOf("\nresource ");
     const scoped =
       nextResource === -1 ? tf.slice(start) : tf.slice(start, start + 1 + nextResource);
     // Page on the FIRST fatal (value=1 over 1h) — a dead serving host is high-severity, not a rate.
-    expect(scoped).toMatch(/filter_match\s*=\s*"any"/);
+    // `any-short` is the provider's spelling for OR on
+    // `action_filters[].logic_type` (short-circuiting). Semantics are
+    // identical to the old `filter_match = "any"`; only the spelling moved.
+    expect(scoped).toMatch(/logic_type\s*=\s*"any-short"/);
     expect(scoped).toContain("event_frequency");
-    expect(scoped).toMatch(/comparison_type\s*=\s*"count"/);
+// The count-vs-percent discriminator moved from a `comparison_type` FIELD to
+    // the attribute NAME: `{ event_frequency_count = { interval, value } }`.
+    // Same semantics, and still unsatisfiable by prose.
+    expect(scoped).toMatch(/event_frequency_count\s*=/);
     expect(scoped).toMatch(/value\s*=\s*1/);
     expect(scoped).toMatch(/interval\s*=\s*"1h"/);
     // Every filter selects on key = "stage" (the shared soleur-boot-emit events tag the region).
@@ -77,7 +83,9 @@ describe("web-host-terminal-boot-fatal alert op contract", () => {
     expect(scoped).not.toMatch(/key\s*=\s*"(?!stage")/);
     expect(scoped).toMatch(/key\s*=\s*"stage"/);
     // No-SSH page target: a silent removal would make the alarm fire-but-page-nobody.
-    expect(scoped).toContain("IssueOwners");
+    // Lowercase `issue_owners` on `sentry_alert`; the CamelCase spelling belongs to
+    // the retired `sentry_issue_alert` shape.
+    expect(scoped).toMatch(/email\s*=\s*\{[^}]*target_type\s*=\s*"issue_owners"/);
     expect(scoped).toContain("ActiveMembers");
   });
 });

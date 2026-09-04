@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Forward-looking guard: asserts every Sentry resource TYPE that can appear in an
 # apply-sentry-infra.yml plan is a type whose nested-block exposure
-# destroy-guard-filter-sentry.jq has been verified to cover. Currently:
-# sentry_cron_monitor, sentry_uptime_monitor, sentry_issue_alert.
+# destroy-guard-filter-sentry.jq has been verified to cover. Currently FOUR:
+# sentry_cron_monitor, sentry_uptime_monitor, sentry_issue_alert, sentry_alert.
 #
 # WHY TYPES MATTER. The jq filter counts resource-level deletes generically, but
 # an ARRAY-OF-BLOCKS shrink (an `actions_v2` element removed from an alert that
@@ -11,8 +11,13 @@
 # array-of-blocks (every attribute is scalar; uptime's `assertion_json` is a
 # function-built string, `owner` a single-nested attribute), so the filter's
 # literal `nested_deletes: 0` is correct for them. sentry_issue_alert DOES carry
-# array-of-blocks and has a matching clause (#4364). A FOURTH type arriving
-# without a filter clause would silently bypass the nested-block guard.
+# array-of-blocks and has a matching clause (#4364), and so does sentry_alert,
+# which #7650 Phase 2 added ahead of the 27 adopted rules — five surfaces there
+# (`trigger_conditions`, `legacy_trigger_conditions`, `action_filters` and both
+# `action_filters[].conditions` and `.actions`). A FIFTH type arriving without a
+# filter clause would silently bypass the nested-block guard: with no walk() in
+# the filter, an uncovered type's shrink is counted as 0 rather than erroring,
+# which is why this allow-list is the thing that has to be loud.
 #
 # ── WHERE THE TYPE SET COMES FROM (#6589) ──────────────────────────────────
 # This guard used to read the types out of apply-sentry-infra.yml's `-target=`

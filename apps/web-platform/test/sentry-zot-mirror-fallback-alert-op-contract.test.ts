@@ -38,11 +38,22 @@ const soak = readFileSync(
 // `target_type`), and would over-collect the first time a quoted filter of any
 // other kind is added — which is how a test gets deleted instead of fixed.
 function alarmFilterSet(): Set<string> {
-  const start = tf.indexOf('resource "sentry_issue_alert" "zot_mirror_fallback_rate"');
+  const start = tf.indexOf('resource "sentry_alert" "zot_mirror_fallback_rate"');
   if (start === -1) throw new Error("zot_mirror_fallback_rate resource not found in issue-alerts.tf");
   const resource = tf.slice(start);
-  const filtersStart = resource.indexOf("filters_v2 = [");
-  if (filtersStart === -1) throw new Error("filters_v2 block not found on zot_mirror_fallback_rate");
+  // `filters_v2 = [` became `conditions = [` INSIDE `action_filters` when this
+  // rule was adopted as `sentry_alert` (#7650 Phase 2). Same contents — the
+  // `tagged_event` regex below is unchanged — only the containing block renamed.
+  //
+  // Anchor through `action_filters` FIRST. A bare indexOf("conditions = [")
+  // matches `trigger_conditions = [`, which appears EARLIER in the block and
+  // holds no `tagged_event` — so the extractor returned an empty set and the
+  // parity assertion below failed at its own non-vacuity floor rather than
+  // silently comparing nothing. (It caught this; that floor is why.)
+  const afStart = resource.indexOf("action_filters = [");
+  if (afStart === -1) throw new Error("action_filters block not found on zot_mirror_fallback_rate");
+  const filtersStart = resource.indexOf("conditions = [", afStart);
+  if (filtersStart === -1) throw new Error("action_filters[].conditions block not found on zot_mirror_fallback_rate");
   // Indentation-tolerant for the same reason as soakFailQueries: a hard-coded "\n  ]" is
   // coupled to `terraform fmt`'s current two-space output. A reindent would not return -1 —
   // it would find the NEXT column-2 `]` (actions_v2's), silently widening the block. Harmless
@@ -50,7 +61,7 @@ function alarmFilterSet(): Set<string> {
   // over-collect into the watched set and make this parity assertion noise.
   const filtersRest = resource.slice(filtersStart);
   const filtersEnd = filtersRest.search(/\n[ \t]*\]/);
-  if (filtersEnd === -1) throw new Error("filters_v2 block is not closed");
+  if (filtersEnd === -1) throw new Error("action_filters[].conditions block is not closed");
   const block = filtersRest.slice(0, filtersEnd);
   const set = new Set<string>();
   const re = /tagged_event\s*=\s*\{[^}]*?key\s*=\s*"([^"]+)"[^}]*?value\s*=\s*"([^"]+)"[^}]*?\}/g;
@@ -116,7 +127,7 @@ const soakQueryFor = (signal: string) => soakFailQueries().get(signal);
 
 const observability = readFileSync(join(here, "../server/observability.ts"), "utf8");
 
-// Scope a `resource "sentry_issue_alert" "<name>"` BODY out of issue-alerts.tf —
+// Scope a `resource "sentry_alert" "<name>"` BODY out of issue-alerts.tf —
 // from its header to its own column-0 closing brace.
 //
 // The lower bound is load-bearing, not tidiness. Terminating at the NEXT `\nresource `
@@ -126,9 +137,23 @@ const observability = readFileSync(join(here, "../server/observability.ts"), "ut
 // `# GROUPING NOTE (mirrors ...)` POINTER, which satisfied a /^#\s*GROUPING\b/m intended to
 // find the paragraph the pointer names — so deleting the real paragraph still passed.
 // Nested HCL braces are indented, so a column-0 `\n}` is unambiguously the resource's own.
+function _scopeHeader(name: string): number {
+  // The file now legitimately holds BOTH types: 27 rules adopted as
+  // `sentry_alert` in #7650 Phase 2, and 2 that stay `sentry_issue_alert`
+  // because the pinned provider cannot express their
+  // `event_unique_user_frequency_count` trigger. `sandbox_startup_failure` is
+  // one of those two and shares this helper, so hardcoding either type makes
+  // the OTHER rule throw "resource not found" — a suite that reds while naming
+  // the wrong cause.
+  for (const type of ["sentry_alert", "sentry_issue_alert"]) {
+    const i = tf.indexOf(`resource "${type}" "${name}"`);
+    if (i !== -1) return i;
+  }
+  return -1;
+}
+
 function scopeResource(name: string): string {
-  const header = `resource "sentry_issue_alert" "${name}"`;
-  const start = tf.indexOf(header);
+  const start = _scopeHeader(name);
   if (start === -1) throw new Error(`resource not found in issue-alerts.tf: ${name}`);
   const block = tf.slice(start);
   const end = block.search(/\n\}\n/);
@@ -142,8 +167,7 @@ function scopeResource(name: string): string {
 // header alone silently yields a near-empty string, and a `not.toMatch()` against
 // it passes vacuously (the exact false-green this file's subject matter is about).
 function scopeResourceWithComment(name: string): string {
-  const header = `resource "sentry_issue_alert" "${name}"`;
-  const start = tf.indexOf(header);
+  const start = _scopeHeader(name);
   if (start === -1) throw new Error(`resource not found in issue-alerts.tf: ${name}`);
   const lines = tf.slice(0, start).split("\n");
   let i = lines.length - 1;
@@ -227,7 +251,11 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // Anchored on the HCL assignment rather than a bare toContain: this PR adds an
     // enumerating comment naming app_ghcr_served, and prose cannot produce `^\s*value =`.
     // See :227-231 — mutation-testing proved a bare toContain lets the whole block go.
-    expect(tf).toMatch(/^\s*value\s*=\s*"app_ghcr_served"/m);
+    // Anchored on the `tagged_event` CONSTRUCT. The migrated shape puts the
+    // value INLINE (`{ tagged_event = { key = ..., value = "app_ghcr_served" } }`),
+    // so a line-anchored `^\\s*value =` matches nothing — the same rebind the
+    // nic-wait-gate suite needed. Prose still cannot satisfy this anchor.
+    expect(tf).toMatch(/tagged_event\s*=\s*\{[^}]*value\s*=\s*"app_ghcr_served"/);
   });
 
   // apply-sentry-infra.yml plans the sentry root FULL (no `-target=` allowlist), so
@@ -237,20 +265,26 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
   // list" condition left to assert.
   it("issue-alerts.tf declares the zot_mirror_fallback_rate resource with an any-match event_frequency rule", () => {
     expect(tf).toContain(
-      'resource "sentry_issue_alert" "zot_mirror_fallback_rate"',
+      'resource "sentry_alert" "zot_mirror_fallback_rate"',
     );
     // Fire-on-first intent: event_frequency count > 0 within 1h (#6285). value MUST stay 0 —
     // any value > 0 is fleet-shape-dependent and silently unreachable whenever the per-group
     // event count cannot exceed it. See the resource comment in issue-alerts.tf for the
     // mechanism; do NOT "normalize" this to the value = 1 used by web_terminal_boot_fatal.
     const block = tf.slice(
-      tf.indexOf('resource "sentry_issue_alert" "zot_mirror_fallback_rate"'),
+      tf.indexOf('resource "sentry_alert" "zot_mirror_fallback_rate"'),
     );
     const resourceEnd = block.indexOf("\nresource ");
     const scoped = resourceEnd === -1 ? block : block.slice(0, resourceEnd);
-    expect(scoped).toMatch(/filter_match\s*=\s*"any"/);
+    // `any-short` is the provider's spelling for OR on
+    // `action_filters[].logic_type` (short-circuiting). Semantics are
+    // identical to the old `filter_match = "any"`; only the spelling moved.
+    expect(scoped).toMatch(/logic_type\s*=\s*"any-short"/);
     expect(scoped).toContain("event_frequency");
-    expect(scoped).toMatch(/comparison_type\s*=\s*"count"/);
+// The count-vs-percent discriminator moved from a `comparison_type` FIELD to
+    // the attribute NAME: `{ event_frequency_count = { interval, value } }`.
+    // Same semantics, and still unsatisfiable by prose.
+    expect(scoped).toMatch(/event_frequency_count\s*=/);
     expect(scoped).toMatch(/value\s*=\s*0/);
     expect(scoped).toMatch(/interval\s*=\s*"1h"/);
     // Pin the no-SSH page target: a silent removal of the notify action would
@@ -262,8 +296,13 @@ describe("zot-mirror-fallback-rate alert op contract", () => {
     // bare toContain() is satisfied by that prose — mutation-testing proved the whole
     // actions_v2 block could be deleted with the suite still 10/10 green. Prose cannot
     // produce `^\s*target_type =`.
-    expect(scoped).toMatch(/^\s*target_type\s*=\s*"IssueOwners"/m);
-    expect(scoped).toMatch(/^\s*fallthrough_type\s*=\s*"ActiveMembers"/m);
+    // The email action moved inline and lowercase on `sentry_alert`:
+    // `{ email = { target_type = "issue_owners", fallthrough_type = ... } }`.
+    // A line-anchored `^\\s*target_type =` therefore matches nothing, and the
+    // CamelCase literal is gone. Anchored on the `email = {` construct so the
+    // surrounding comments (which name both literals) still cannot satisfy it.
+    expect(scoped).toMatch(/email\s*=\s*\{[^}]*target_type\s*=\s*"issue_owners"/);
+    expect(scoped).toMatch(/email\s*=\s*\{[^}]*fallthrough_type\s*=\s*"ActiveMembers"/);
   });
 
   // --- Parity: the soak gate must count every signal the alarm watches -------
@@ -351,6 +390,11 @@ describe("sandbox-startup-failure alert op contract (#6429)", () => {
     // ever became event_frequency, the count would be events-per-group rather than
     // distinct tenants and the threshold below would mean something else entirely.
     expect(body).toContain("event_unique_user_frequency");
+    // SURVIVOR — `sandbox_startup_failure` stays `sentry_issue_alert` because the
+    // pinned provider cannot express `event_unique_user_frequency_count` as a
+    // trigger. So its shape is UNCHANGED by #7650 and this assertion must keep
+    // the v2 spelling; rewriting it to the sentry_alert form asserts against a
+    // shape this resource does not have.
     expect(body).toMatch(/comparison_type\s*=\s*"count"/);
     expect(body).toMatch(/interval\s*=\s*"1h"/);
     // RED pre-fix: value = 3 under a strict `>` fires at >=4 tenants, contradicting
@@ -379,6 +423,9 @@ describe("sandbox-startup-failure alert op contract (#6429)", () => {
     // Anchored, not toContain() — see the zot sibling above. The in-body comment at
     // issue-alerts.tf:260 names both literals, so toContain() passed with actions_v2
     // deleted entirely: this "fire-but-page-nobody guard" guarded nothing.
+    // SURVIVOR — unchanged by #7650: `sandbox_startup_failure` keeps the
+    // `sentry_issue_alert` shape (CamelCase, its own line under actions_v2),
+    // because the pinned provider cannot express its trigger.
     expect(scoped).toMatch(/^\s*target_type\s*=\s*"IssueOwners"/m);
     expect(scoped).toMatch(/^\s*fallthrough_type\s*=\s*"ActiveMembers"/m);
   });

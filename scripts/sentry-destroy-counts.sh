@@ -2,13 +2,21 @@
 # sentry-destroy-counts.sh — the ONE place the sentry destroy arithmetic lives (#6589).
 #
 # Usage: sentry-destroy-counts.sh <terraform-show-json-file>
-#   stdout (on success): four `key=value` lines, eval-able by the caller:
+#   stdout (on success): five `key=value` lines, eval-able by the caller:
 #       resource_deletes=<int>
 #       resource_creates=<int>
+#       resource_forgets=<int>
 #       nested_deletes=<int>
-#       destroy_count=<int>     # resource_deletes + nested_deletes
+#       destroy_count=<int>     # resource_deletes + nested_deletes + resource_forgets
 #   exit 0: counts parsed and validated
 #   exit 1: jq failed, or a counter is not a non-negative integer
+#
+# `resource_forgets` joins the SUM, not just the report (#7650 Phase 2). A
+# counter that is emitted but not summed is a report, not a gate: the
+# `["forget"]` rows would be visible in the log while `destroy_count` stayed 0
+# and the gate printed `PASS (plan destroys nothing)` over a plan that drops
+# resources out of management. It stays a SEPARATE key from `resource_deletes`
+# so a reader (and AC4) can still say "27 forgets, zero actual deletes".
 #
 # ── WHY THIS IS A SCRIPT AND NOT INLINE BASH ───────────────────────────────
 # It was inline, in two places, and they drifted — on this PR, in the shape the
@@ -48,11 +56,13 @@ counts=$(jq -f "$filter" < "$plan_json") || {
 
 resource_deletes=$(jq -r '.resource_deletes' <<<"$counts")
 resource_creates=$(jq -r '.resource_creates' <<<"$counts")
+resource_forgets=$(jq -r '.resource_forgets' <<<"$counts")
 nested_deletes=$(jq -r '.nested_deletes' <<<"$counts")
 
 # Fail-closed numeric validation. An empty value from a jq failure would evaluate
 # false in a `-gt 0` test and let a destroying plan through green.
-for pair in "resource_deletes:$resource_deletes" "resource_creates:$resource_creates" "nested_deletes:$nested_deletes"; do
+for pair in "resource_deletes:$resource_deletes" "resource_creates:$resource_creates" \
+            "resource_forgets:$resource_forgets" "nested_deletes:$nested_deletes"; do
   name="${pair%%:*}"; val="${pair#*:}"
   if [[ ! "$val" =~ ^[0-9]+$ ]]; then
     echo "::error::sentry-destroy-counts: ${name}='${val}' is not a non-negative integer — destroy-guard counter parse failed." >&2
@@ -62,5 +72,6 @@ done
 
 printf 'resource_deletes=%s\n' "$resource_deletes"
 printf 'resource_creates=%s\n' "$resource_creates"
+printf 'resource_forgets=%s\n' "$resource_forgets"
 printf 'nested_deletes=%s\n' "$nested_deletes"
-printf 'destroy_count=%s\n' "$((resource_deletes + nested_deletes))"
+printf 'destroy_count=%s\n' "$((resource_deletes + nested_deletes + resource_forgets))"

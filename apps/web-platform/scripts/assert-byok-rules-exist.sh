@@ -35,12 +35,25 @@
 # Recording why, because the mistake is one grep away from being made again:
 # `issue-alerts.tf` DOES contain
 # `ignore_changes = [conditions_v2, filters_v2, actions_v2, environment, frequency]`
-# — but on the four `auth-*` resources, which are a DIFFERENT four rules,
-# managed by `configure-sentry-alerts.sh` and tracked by #4781. The four in
-# EXPECTED_RULES below carry `ignore_changes = [environment]` only and do not
-# declare the v2 attributes empty, so Terraform genuinely owns their filters.
+# — but on the `auth-*` resources, which are a DIFFERENT set of rules, managed
+# by `configure-sentry-alerts.sh` and tracked by #4781. The four in
+# EXPECTED_RULES below carry `ignore_changes = [environment]` only, so Terraform
+# genuinely owns their filters. (Since #7650 Phase 2 all four are `sentry_alert`
+# resources, a type that has no `conditions_v2`/`filters_v2`/`actions_v2`
+# attributes at all -- so "they do not declare the v2 attributes empty" is now
+# true vacuously rather than by choice. The ownership conclusion is unchanged.)
 # A file-level grep for `ignore_changes` cannot tell those two sets apart;
 # resolve the attribute per RESOURCE BLOCK before believing either claim.
+#
+# NARROWED FOUR -> ONE (#7650 Phase 2, 2026-09-04). That `auth-*` set was four
+# rules; it is now ONE. auth-signout-burst, auth-exchange-code-burst and
+# auth-callback-no-code-burst were adopted as `sentry_alert` with their real
+# definitions and now carry `ignore_changes = [environment]` only, so Terraform
+# owns their filters exactly as it owns the EXPECTED_RULES four. Only
+# `auth-per-user-loop` still declares the v2 attributes empty under the wide
+# `ignore_changes`, and it is the only rule `configure-sentry-alerts.sh` still
+# writes. The distinction above is therefore NARROWER, not gone — the two sets
+# are still disjoint and the per-RESOURCE-BLOCK instruction still stands.
 #
 # SCOPE — org-wide since #7590, previously project-scoped. The replacement
 # endpoint (below) is org-scoped and its payload carries no project binding, so

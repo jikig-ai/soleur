@@ -61,6 +61,7 @@ import { cronReviewReminder } from "@/server/inngest/functions/cron-review-remin
 import { cronRoadmapReview } from "@/server/inngest/functions/cron-roadmap-review";
 import { cronRulePrune } from "@/server/inngest/functions/cron-rule-prune";
 import { cronRulesetBypassAudit } from "@/server/inngest/functions/cron-ruleset-bypass-audit";
+import { cronSentryAlertDrift } from "@/server/inngest/functions/cron-sentry-alert-drift";
 import { cronSeoAeoAudit } from "@/server/inngest/functions/cron-seo-aeo-audit";
 import { cronSkillFreshness } from "@/server/inngest/functions/cron-skill-freshness";
 import { cronStaleDeferredScopeOuts } from "@/server/inngest/functions/cron-stale-deferred-scope-outs";
@@ -169,6 +170,7 @@ export const { GET, POST, PUT } = serve({
     cronRoadmapReview,
     cronRulePrune,
     cronRulesetBypassAudit,
+    cronSentryAlertDrift,
     cronSeoAeoAudit,
     cronSkillFreshness,
     cronStaleDeferredScopeOuts,
