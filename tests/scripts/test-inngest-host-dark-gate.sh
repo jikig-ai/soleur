@@ -107,7 +107,19 @@ msg() {
 }
 
 # Baseline: one identity-correct, schema-3, dark, empty-store row.
-mk_rows() { local f="$1"; shift; : > "$f"; local l; for l in "$@"; do printf '%s\n' "$l" >> "$f"; done; }
+# P1b relative-operand rule (#7810): `: > "$f"` TRUNCATES whatever the caller names, and `$f` is a
+# positional this function cannot see the root of. Every caller passes "$TMP/...", but that is a
+# fact about the callers, not about this line — and a future caller passing a bare filename would
+# silently truncate a file in the CWD, which for a suite run from the repo root is a tracked file.
+_mk_rows_abs() {
+  case "${1-}" in
+    "")            printf 'FATAL: mk_rows target is EMPTY\n' >&2; exit 2 ;;
+    */../*|*/..)   printf 'FATAL: mk_rows target %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /*)            : ;;
+    *)             printf 'FATAL: mk_rows target %s is RELATIVE; refusing to truncate it\n' "$1" >&2; exit 2 ;;
+  esac
+}
+mk_rows() { local f="$1"; shift; _mk_rows_abs "$f"; : > "$f"; local l; for l in "$@"; do printf '%s\n' "$l" >> "$f"; done; }
 
 ROWS="$TMP/rows.json"
 FIN="$TMP/finished.json"

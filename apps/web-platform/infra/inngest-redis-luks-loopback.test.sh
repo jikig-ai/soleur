@@ -115,6 +115,15 @@ CLEAN_MAPPERS+=("inngest-redis")
 # variables are substituted with the values the call site passes.
 render_stage() {
   local expect="$1" dev="$2" mnt="$3" fstab="$4" detail="$5" phone="$6" waitbound="${7:-30}" out="$8"
+  # P1b relative-operand rule (#7810): the `> "$out"` below TRUNCATES whatever the 8th positional
+  # names, and this function cannot see its root. Callers pass "$TMPROOT/...", but that is a fact
+  # about the callers; a bare filename would truncate a file in the CWD instead.
+  case "$out" in
+    "")          printf 'FATAL: render target is EMPTY\n' >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: render target %s contains ..; refusing\n' "$out" >&2; exit 2 ;;
+    /*)          : ;;
+    *)           printf 'FATAL: render target %s is RELATIVE; refusing to truncate it\n' "$out" >&2; exit 2 ;;
+  esac
   awk '/doppler run --project soleur-inngest --config prd -- bash -s <<.LUKSEOF.$/{f=1;next} /^    LUKSEOF$/{f=0} f' "$CLOUD_INIT" \
     | sed -e 's/\$\${/${/g' \
           -e "s|\${inngest_expect_luks}|${expect}|g" \
@@ -125,7 +134,7 @@ render_stage() {
           -e "s|/run/inngest-luks-stage.log|${detail}|g" \
           -e "s|/usr/local/bin/inngest-boot-phone-home.sh|${phone}|g" \
           -e "s|\\[ \"\\\$_i\" -lt 30 \\]|[ \"\$_i\" -lt ${waitbound} ]|" \
-    > "$out"
+    > "$out"   # operand guarded by the case above (P1b, #7810)
   # EVERY substitution is asserted. A sed that matched nothing exits 0, so an un-rendered
   # placeholder would otherwise sail through and the case would measure the wrong device.
   local bad=""
