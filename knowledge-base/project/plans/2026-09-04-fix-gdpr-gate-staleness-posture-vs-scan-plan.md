@@ -670,7 +670,7 @@ glob; the mechanical override did not fire.
 | Re-vendor the corpus | Measured no-op: 8 SAME against live upstream. |
 | Hand-bump `last-verified` | The restored writer advances it within one cadence on machine evidence; typing it first is the `ADR-094`/`ADR-121` falsification, and it would give the field two writers with ambiguous provenance. |
 | Raise the 30d/90d window | Buys no property, widens the drifted-reports-clean interval, and §7 forbids it without an ADR. |
-| Replace the date with the blob-SHA comparison | In a rejected-alternatives table twice (`ADR-121`, `ADR-186`): an identity check cannot see calendar rot and passes by construction on the no-drift arm. |
+| Replace the date with the blob-SHA comparison | An identity check cannot see calendar rot and passes by construction on the no-drift arm — the arm that was failing. <br>**Corrected 2026-09-04 (#7841):** this row originally cited `ADR-121` and `ADR-186` as already placing that substitution in a rejected-alternatives table. **That was false** — neither does; the citation was never verified. The reasoning stands on its own and is recorded in `ADR-203` § *Alternatives Considered*. |
 | Strengthen `vendor-pin-integrity.sh --verify-upstream` into a drift check | Would author a second implementation and delete the working one; relocate the divergence into an unschema'd bash↔TypeScript contract; overload `exit 1` across missing-`gh`, rate-limited and tampered; and make a PR-blocking check third-party-flippable. Fix the comparison where it lives. |
 | Make that comparison blocking | A third party's push would red every matching PR including the remediation one. |
 | Make `POSTURE_FAIL` a non-zero exit | `ADR-026` fixes the advisory contract; a separate decision needing its own ADR. |
