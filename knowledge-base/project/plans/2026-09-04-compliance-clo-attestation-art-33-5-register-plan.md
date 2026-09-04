@@ -32,7 +32,7 @@ run-time producer and the two waiver copies, not today's six members)
 | Cited commit attribution | `5d8a12736` resolves, **is an ancestor of `origin/main`**, is PR #7782, and its diff adds 3 lines citing `sentry-migration-audit-2026-05-15` to the register — the B1-remediation claim holds |
 | Cited issue/PR states | 7/7 resolve as asserted — #7717 CLOSED, #7782 MERGED, #7787/#7786/#7791 OPEN, #7347/#7349 CLOSED |
 | Grep-AC self-match sweep | **One hazard found and fixed.** AC10's unscoped `grep -rl` matched this plan and the #7717 `session-state.md`, both of which quote the 529 request IDs — it would have read as coverage that does not exist. Now scoped with `--exclude-dir=specs --exclude='*-plan.md'` and re-measured |
-| Guard arithmetic | Final state simulated in a sandbox: `produced=10 waived=6 waiver-parity=ok`, `(c) all 10 … indexed or waived` green |
+| Guard arithmetic | Final state simulated in a sandbox: `produced=12 waived=8 waiver-parity=ok`, `(c) all 10 … indexed or waived` green |
 
 ### Key improvements from the review rounds
 
@@ -93,7 +93,7 @@ those four would cause a regression if implemented "as given".
 | P2 | Attestation path absent | `test -f …2026-09-03-clo-attestation-7717-art-33-5-register.md` → ABSENT | HOLDS |
 | P3 | Implementation record present | PRESENT, 14274 bytes | HOLDS |
 | P4 | Register `status: draft-requires-counsel-review`, `controller:` set | Both confirmed in frontmatter | HOLDS |
-| P5 | `NOT_TRANSCRIBED` holds the implementation-record waiver | Confirmed; array has **6** entries, not 1 | HOLDS |
+| P5 | `NOT_TRANSCRIBED` holds the implementation-record waiver | Confirmed; array has **8** entries, not 1 | HOLDS |
 | P6 | **Binding ruling (a): the set is "4 indexed / 3 waived, not 7" — apply as given** | **SUPERSEDED SAME-DAY.** The register now carries **5 indexed rows / 6 waived**, measured. `sentry-migration-audit-2026-05-15.md` moved waived → indexed under counsel-review finding B1 | **INVERTED — do not apply as given** |
 | P7 | Scope 2: "the cell now reads `Partially`" | The 2026-05-16 cell contains **both** `Partially` **and** `No`, and correction **C2** ruled the headline is **No** | **STALE** |
 | P8 | Scope 2: "names the T3 granular-causal residual" | Correction **C5**: T3 was **RESOLVED 2026-05-21 and promoted to T4** (`t3_resolved_at: 2026-05-21T07:00:00Z`) | **STALE** |
@@ -109,8 +109,22 @@ the arithmetic each first carried.
 
 ### Measured baseline (commands run against the untouched tree)
 
+> **Re-baselined 2026-09-04 (#7791), after rebase onto `b576e4ab7` (#7803):** every figure in this
+> section was re-measured. #7803 landed while this plan was being written and added two waivers
+> (`2026-09-counsel-review-7625.md`, `2026-09-03-clo-review-7622-pa7-r2-evidence-layer.md`), moving
+> the baseline from `produced=10 waived=6` to **`produced=12 waived=8`**. The probe state moved from
+> `produced=11` to **`produced=13`**; the BLOCKED arm's waiver arithmetic from `6 → 7` to **`8 → 9`**.
+> All three were re-measured in a git-backed sandbox with a GREEN control matching this worktree
+> byte-for-byte, not derived by adding 2. The swap still conserves cardinality — measured
+> `produced=12 waived=8 waiver-parity=ok`, exit 0.
+>
+> The planning-review record below (§Enhancement Summary item 2, §Review rounds, §Findings row 1)
+> is **left verbatim**: `architecture-strategist` did measure `produced=11` unreachable and did
+> correct it to `produced=10` on 2026-09-04, against the tree as it then stood. That finding stands;
+> only the absolute numbers moved. Rewriting it would falsify what was measured.
+
 - `bash scripts/lint-legal-registers.sh` → **exit 0**, `7 assertion(s), 0 failed
-  (registers=4 rows=5 produced=10 waived=6 waiver-parity=ok)`.
+  (registers=4 rows=5 produced=12 waived=8 waiver-parity=ok)`.
 - Index table data rows: **5** — `2026-05-15`, `2026-05-16`, `2026-06-29`, `2026-08-06`, `2026-08-17`.
 - `sentry-migration-audit-2026-05-15.md` in `NOT_TRANSCRIBED`: **0 hits** → it is indexed, not waived.
   B1's remediation **has landed**. (A research agent reported the opposite by reading the register's
@@ -125,16 +139,16 @@ planting a probe file carrying `Art. 33(5)` and `Art. 4(12)` and running the gua
 ```
 ::error::(c) determination-shaped file is neither indexed nor waived:
   knowledge-base/legal/audits/2026-09-03-clo-attestation-7717-art-33-5-register.md
-lint-legal-registers: 7 assertion(s), 1 failed (… produced=11 waived=6 …)   EXIT_CODE=1
-# NOTE: produced=11 is the PROBE state (attestation added, record not yet deleted).
-# The FINAL state is produced=10 -- the swap conserves cardinality. Measured below.
+lint-legal-registers: 7 assertion(s), 1 failed (… produced=13 waived=8 …)   EXIT_CODE=1
+# NOTE: produced=13 is the PROBE state (attestation added, record not yet deleted).
+# The FINAL state is produced=12 -- the swap conserves cardinality. Measured below.
 ```
 
 The guard's producer is `find audits/ -name '*.md' | xargs grep -lE
 '4[[:space:]]*\(12\)|33[[:space:]]*\(5\)|Art\.?[[:space:]]*33|Article[[:space:]]+33|…'`. Any
 attestation of an Art. 33(5) register necessarily matches it. So the waiver arithmetic is a
 **swap, not a subtraction**: remove the implementation-record waiver, add an attestation waiver,
-net **6 → 6** with different membership — in **both** copies, in the **same commit**.
+net **8 → 8** with different membership — in **both** copies, in the **same commit**.
 
 ### Guard mechanics — `scripts/lint-legal-registers.sh`
 
@@ -273,7 +287,7 @@ Handled at Phase 3.6.
 | Sentry cell "now reads Partially" | Cell carries **both** `Partially` and `No`; C2 ruled headline **No**, recorded as an append-only supersession, not applied in-cell | Put the *current* cell text to the CLO; ask whether C2 is applied in-cell or left as supersession |
 | Cell "names the T3 residual" | C5: T3 RESOLVED 2026-05-21, promoted to **T4** | Ratification subject is the current text, not the T3 draft |
 | 2026-08-06 carries "a performed CLO internal sign-off" | Zero `signed off`/`attested` hits; C4 **withdrew** the claim; register retracted it in `§Register maintenance` | Scope item 3 reduces to *recording* the withdrawal under CLO authority |
-| Waiver set exists twice; remove both | True — **and** the attestation file itself must be **added** to both, or check (c) fails (measured, exit 1) | Waiver swap: 6 → 6, membership changed |
+| Waiver set exists twice; remove both | True — **and** the attestation file itself must be **added** to both, or check (c) fails (measured, exit 1) | Waiver swap: 8 → 8, membership changed |
 | (absent from issue) | `§Excluded records` preamble, its supersession blockquote, and the 2026-05-17 "row above" anchor are all stale, and two of them **defer to #7791 by name** | Discharge them, subject to CLO ruling F6 |
 | (absent from issue) | Ship Phase 5.5 will fire on this PR and may write a second audit file into `audits/`, re-tripping check (c) | Pre-declared and handled in Phase 6 |
 
@@ -292,7 +306,7 @@ plan's edit set. **None.**
 
 | Path | Change |
 |---|---|
-| `scripts/lint-legal-registers.sh` | `NOT_TRANSCRIBED`: remove the implementation-record entry, add an attestation entry citing `#7791`. Net 6 → 6 |
+| `scripts/lint-legal-registers.sh` | `NOT_TRANSCRIBED`: remove the implementation-record entry, add an attestation entry citing `#7791`. Net 8 → 8 |
 | `knowledge-base/legal/breach-register.md` | `§Excluded records` table: same swap. Plus the stale preamble / supersession / "row above" anchor, subject to CLO ruling. **`status:` untouched** |
 | `knowledge-base/INDEX.md` | Replace the line-461 implementation-record entry with the attestation entry, matching the line-454 `CLO attestation — …` shape |
 | `knowledge-base/legal/audits/2026-09-counsel-review-7717.md` | **Frontmatter re-issue only** (`status`, `signed_off_at`, `signed_off_by`, `disposition`, empty `blocking_findings`/`required_before_merge`) plus an appended `## Discharge on re-issue` section. Self-authorised by that audit's own disposition. **Signed verdict rows A1–A9 and corrections C1–C5 untouched** |
@@ -307,7 +321,7 @@ plan's edit set. **None.**
 
 ### Phase 0 — Preconditions
 
-0.1 Re-run the baseline: `bash scripts/lint-legal-registers.sh` → exit 0, `waived=6`.
+0.1 Re-run the baseline: `bash scripts/lint-legal-registers.sh` → exit 0, `waived=8`.
 0.2 `git fetch origin && git diff origin/main --stat -- knowledge-base/legal/` → confirm no drift
    (`work` Phase 0.5 check 6 FAILs hard on `knowledge-base/legal/**` drift).
 0.3 Capture the byte-exact `status:` line of `breach-register.md` from `origin/main` for the AC7 diff.
@@ -357,7 +371,7 @@ Execution order:
 **Breaking the circularity without a third CLO write.** Phase 3.7's measured exit code cannot exist
 when the CLO signs at step 4, and the pipeline may never write into the attestation. So the CLO's
 Method section states the guard output it **certifies against** (`exit 0`,
-`7 assertion(s), 0 failed … produced=10 waived=6`); Phase 3.7 runs the guard and **AC4 asserts the
+`7 assertion(s), 0 failed … produced=12 waived=8`); Phase 3.7 runs the guard and **AC4 asserts the
 actual matches the stated**. If they diverge, the attestation is void by its own terms. No third
 invocation, and no pipeline write into a CLO-authored file.
 
@@ -559,7 +573,7 @@ not per-PR: Phase 6's ship-time waiver is a second such change and obeys it inde
    `## Discharge on re-issue - 2026-09-04 (#7791)` section. The body's **signed verdict rows A1-A9
    and corrections C1-C5 are not touched** - that is the F7 line, and it holds.
 
-3.7 `bash scripts/lint-legal-registers.sh` **without `--advisory`** -> exit 0, `waived=6`. R-g: under
+3.7 `bash scripts/lint-legal-registers.sh` **without `--advisory`** -> exit 0, `waived=8`. R-g: under
    `--advisory` a waiver-parity break prints a warning and exits 0, so "CI was green" is not
    evidence of parity. Record the exit code and the summary line in the attestation's Method
    section. The bare invocation **is** the non-advisory path, so no script or flag change is needed.
@@ -623,7 +637,7 @@ re-verification finds B1 or R1 open after all — then:
     record against it would be the evidence destruction Phase 1.5 also guards against.
 4b.3 The waiver swap of 3.1/3.2 **still runs** — the attestation file exists and must be waived
     either way, and the implementation record keeps its waiver because it keeps existing. Net
-    waivers **6 → 7**, not 6 → 6.
+    waivers **8 → 9**, not 8 → 8.
 4b.4 The PR does not merge. #7791 stays open, retitled to the unmet condition, and the blocker is
     surfaced in the review trailer.
 
@@ -698,7 +712,7 @@ guard's entire purpose. So the chokepoint is a *commit-level* one: 2 and 3 must 
 | M4 | Attestation waiver added to both copies with a reason carrying no `#NNNN` | **RED** — fail-closed refusal, exit **2** (not downgraded by `--advisory`) |
 | M5 | *(guard's own dispatch)* Producer resolves to zero files | **RED** — the guard must refuse, not report "0 checked" and exit 0 |
 | M6 | *(second member after a compliant first)* Attestation waived correctly, then a **second** determination-shaped file added unwaived | **RED** — proves (c) does not stop at the first member |
-| M7 | *(must-PASS, non-canonical)* The full intended swap applied | **GREEN**, exit 0, `waived=6` |
+| M7 | *(must-PASS, non-canonical)* The full intended swap applied | **GREEN**, exit 0, `waived=8` |
 
 **Harness rows.**
 
@@ -748,27 +762,27 @@ logs:
   retention: "GitHub Actions default retention"
 discoverability_test:
   command: "bash scripts/lint-legal-registers.sh"
-  expected_output: "lint-legal-registers: 7 assertion(s), 0 failed (registers=4 rows=5 produced=10 waived=6 waiver-parity=ok) followed by === lint-legal-registers: all assertions passed ===, exit 0"
+  expected_output: "lint-legal-registers: 7 assertion(s), 0 failed (registers=4 rows=5 produced=12 waived=8 waiver-parity=ok) followed by === lint-legal-registers: all assertions passed ===, exit 0"
 ```
 
-**`produced` stays at 10 — the swap conserves cardinality.** The retired implementation record leaves
+**`produced` stays at 12 — the swap conserves cardinality.** The retired implementation record leaves
 the producer set and the attestation enters it, one for one. An earlier draft of this plan asserted
-`produced=11` in four places; that is the *intermediate* state (attestation added, record not yet
+`produced=13` in four places; that is the *intermediate* state (attestation added, record not yet
 deleted), which does not pass. Corrected at plan review after the final state was simulated in a
-sandbox and measured: `produced=10 waived=6 waiver-parity=ok`, with
-`(c) all 10 determination-shaped audits/ file(s) are indexed or waived` green. The ship-time counsel
-review of Phase 6 then makes it 11.
+sandbox and measured: `produced=12 waived=8 waiver-parity=ok`, with
+`(c) all 12 determination-shaped audits/ file(s) are indexed or waived` green. The ship-time counsel
+review of Phase 6 then makes it 13.
 
 ## Test Scenarios
 
 | # | Scenario | Expectation |
 |---|---|---|
-| T1 | Guard run on the untouched tree | exit 0, `produced=10 waived=6` |
+| T1 | Guard run on the untouched tree | exit 0, `produced=12 waived=8` |
 | T2 | Attestation added, no waiver | exit 1, (c) names the file |
 | T3 | Waiver removed from the array only | exit 1, (d) prints the parity diff |
 | T4 | Waiver removed from the register table only | exit 1, (d) prints the parity diff |
 | T5 | Attestation waiver reason with no issue citation | exit 2 |
-| T6 | Full swap applied (attestation created, record deleted, both waiver copies swapped) | exit 0, `produced=10 waived=6` |
+| T6 | Full swap applied (attestation created, record deleted, both waiver copies swapped) | exit 0, `produced=12 waived=8` |
 | T7 | `bash scripts/lint-legal-registers.test.sh` | all assertions pass |
 | T8 | `git diff origin/main -- knowledge-base/legal/breach-register.md \| grep '^[-+]status:'` | **empty** |
 | T9 | Every markdown row added or edited | `cells == header_cells` (index table 9, `§Excluded records` 2) |
@@ -813,7 +827,7 @@ order-dependent (AC7b is only meaningful once AC7a holds; AC10's file count depe
 run), and hand-transcribing 27 commands across a session boundary is exactly where a wrong path or
 a wrong baseline produces a false pass. Emit one `[ok]`/`::error::` line per assertion plus a
 summary — the shape the guard itself uses — and paste the output into the review trailer. The
-script is session-scoped and **not committed**: its literals (`produced=10`, specific paths) have a
+script is session-scoped and **not committed**: its literals (`produced=12`, specific paths) have a
 shelf life of one PR.
 
 ### Pre-merge (PR)
@@ -823,7 +837,7 @@ shelf life of one PR.
 | AC1 | The attestation exists | `test -f knowledge-base/legal/audits/2026-09-03-clo-attestation-7717-art-33-5-register.md` | **FAILS** (absent) |
 | AC2 | It was authored by the `clo` agent, not this pipeline. The review trailer records the invocation, its outcome, and any 529/resume cycles | trailer inspection + `grep -c 'attestation-authority: clo' <attestation>` ≥ 1 | **FAILS** (no file) |
 | AC3 | It carries per-artifact verdicts and a disposition | `grep -cE '^disposition:\s*(DISCHARGED\|BLOCKED)' <attestation>` = 1 **and** a `\| Artifact \| Verdict \|`-shaped table is present | **FAILS** |
-| AC4 | The guard passes with the swapped set, run **without `--advisory`** (R-g: advisory downgrades a parity break to exit 0, so "CI was green" is not evidence of parity) | `bash scripts/lint-legal-registers.sh` → exit 0, summary reads `produced=10 waived=6`; exit code and summary recorded in the attestation's Method section | Baseline also exits 0 at `produced=10` — **so AC4 is load-bearing only via AC5/AC6's membership check plus T2-T5's mutation rows**; the count alone cannot distinguish baseline from the swapped set |
+| AC4 | The guard passes with the swapped set, run **without `--advisory`** (R-g: advisory downgrades a parity break to exit 0, so "CI was green" is not evidence of parity) | `bash scripts/lint-legal-registers.sh` → exit 0, summary reads `produced=12 waived=8`; exit code and summary recorded in the attestation's Method section | Baseline also exits 0 at `produced=12` — **so AC4 is load-bearing only via AC5/AC6's membership check plus T2-T5's mutation rows**; the count alone cannot distinguish baseline from the swapped set |
 | AC5 | The retired record is absent from **both** waiver copies | `grep -c 'implementation-record-7717' scripts/lint-legal-registers.sh knowledge-base/legal/breach-register.md` → `0` and `0` | **FAILS** (`1` and `1`) |
 | AC6 | The attestation is waived in **both** copies | same grep for `clo-attestation-7717` → ≥ `1` and ≥ `1` | **FAILS** (`0` and `0`) |
 | AC7a | The register was actually edited | `git diff origin/main --name-only \| grep -c 'legal/breach-register.md'` = 1 | **FAILS** (0) |
@@ -1081,7 +1095,7 @@ capacity failure mode the underlying issue documents.
 | 2 | Ordering: waiver-swap checkpoint sequenced before the deletion reds the guard | architecture + spec-flow (+ independently by this plan) | mechanical | **Applied.** `### Ordering` now states the circularity, the atomic-commit requirement, and a 9-step execution order with Phase 3.7 after Phase 4 |
 | 3 | AC10 contradicted CLO ruling F9 | spec-flow | mechanical | **Applied.** AC10 rewritten to require all four items inside the attestation |
 | 4 | Phase 1 brief stale — never instructs the CLO to draft what Phases 2–3 expect | spec-flow | mechanical | **Applied** as Phase 1.1b |
-| 5 | BLOCKED arm had no writer-path | spec-flow | mechanical | **Applied** as Phase 4b, including the `6 → 7` waiver arithmetic that arm implies |
+| 5 | BLOCKED arm had no writer-path | spec-flow | mechanical | **Applied** as Phase 4b, including the `8 → 9` waiver arithmetic that arm implies |
 | 6 | Terminal halt could leave a guard-failing tree; PR fate unstated | spec-flow | mechanical | **Applied** in Phase 1.5, plus Phase 1.6 for a returned-but-deficient artifact |
 | 7 | AC15 had no owning step | spec-flow | mechanical | **Applied.** Phase 6 now has numbered sub-steps 6.1–6.4 |
 | 8 | `--advisory` framing overstated the risk | cto | mechanical | **Applied.** The blocking net is the unit suite's `live corpus passes the guard` case; Phase 3.7 says so |
