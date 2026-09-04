@@ -28,6 +28,12 @@ import {
 } from "@/server/inngest/functions/cron-content-vendor-drift";
 // #5111: consolidated into the safe-commit helper (was a per-cron copy).
 import { SYNTHETIC_CHECK_NAMES } from "@/server/inngest/functions/_cron-safe-commit";
+import {
+  mayAttestFreshness,
+  heartbeatOk,
+  classifyFileComparison,
+  type ComparisonTotals,
+} from "@/server/inngest/functions/cron-content-vendor-drift";
 
 // =============================================================================
 // Registration smoke
@@ -208,5 +214,249 @@ describe("no claude binary spawn", () => {
     expect(SUT_SOURCE).not.toMatch(/resolveClaudeBin/);
     expect(SUT_SOURCE).not.toMatch(/spawnClaudeEval/);
     expect(SUT_SOURCE).not.toMatch(/--allowedTools/);
+  });
+});
+
+
+// =============================================================================
+// Guard 3 — the attestation writer (#7710)
+// =============================================================================
+//
+// Property: `last-verified` advances only as the recorded consequence of a
+// comparison THIS RUN performed, over the COMPLETE registry, that returned
+// zero drift AND zero errors.
+//
+// The assembly is the comparison's returned TOTALS — not either
+// `return { drift: "none" }` statement. The property quantifies over every
+// exit: clean, drifted, drift-detected-but-classifier-zero, comparison failed,
+// partial. That is why the predicate is a pure exported function rather than
+// an inline conditional: an inline one could only be grep-asserted, and a grep
+// cannot quantify over exits.
+
+describe("mayAttestFreshness — Guard 3 write predicate", () => {
+  const clean: ComparisonTotals = {
+    registryCount: 8,
+    filesExamined: 8,
+    filesSame: 8,
+    filesDrifted: 0,
+    filesError: 0,
+  };
+
+  it("permits the write on a complete, clean, error-free comparison", () => {
+    expect(mayAttestFreshness(clean)).toBe(true);
+  });
+
+  // Matrix row 1. The mutation this forbids is keying the write on
+  // `detectResult.drift === "none"`, which is TRUTHY at the classifyRc===0
+  // return — reached AFTER drift was detected. Expressed here as totals: a run
+  // that found drift must never attest, whatever verdict accompanied it.
+  it("refuses when drift was detected, even if a verdict said none", () => {
+    expect(mayAttestFreshness({ ...clean, filesSame: 7, filesDrifted: 1 })).toBe(
+      false,
+    );
+  });
+
+  // Matrix row 2. An unfetchable file scored as SAME is the false-clean arm.
+  it("refuses when any file could not be compared", () => {
+    expect(
+      mayAttestFreshness({ ...clean, filesSame: 7, filesError: 1 }),
+    ).toBe(false);
+  });
+
+  // Matrix row 3. A partial comparison is not evidence of currency.
+  it("refuses a partial comparison", () => {
+    expect(
+      mayAttestFreshness({ ...clean, filesExamined: 5, filesSame: 5 }),
+    ).toBe(false);
+  });
+
+  // This is the exact shape the registry undercount produced for 117 days:
+  // five of eight compared, all SAME, zero errors — clean-looking, and not
+  // evidence about the three files it never looked at.
+  it("refuses the 5-of-8 shape that #7710 shipped", () => {
+    expect(
+      mayAttestFreshness({
+        registryCount: 8,
+        filesExamined: 5,
+        filesSame: 5,
+        filesDrifted: 0,
+        filesError: 0,
+      }),
+    ).toBe(false);
+  });
+
+  // Matrix row 4 — second member. First file SAME, second DRIFTED: the
+  // predicate must key on the TOTAL, not on the first result.
+  it("refuses when the SECOND file drifted", () => {
+    expect(
+      mayAttestFreshness({
+        registryCount: 2,
+        filesExamined: 2,
+        filesSame: 1,
+        filesDrifted: 1,
+        filesError: 0,
+      }),
+    ).toBe(false);
+  });
+
+  // Matrix row 5 — own dispatch. `0 of 0` is not evidence, and a writer
+  // treating it as such is vacuous: it would attest hardest exactly when the
+  // registry failed to load.
+  it("refuses an empty registry — 0 of 0 is not evidence", () => {
+    expect(
+      mayAttestFreshness({
+        registryCount: 0,
+        filesExamined: 0,
+        filesSame: 0,
+        filesDrifted: 0,
+        filesError: 0,
+      }),
+    ).toBe(false);
+  });
+
+  // Harness row (ii): a must-PASS non-canonical input. The predicate consumes
+  // totals, so per-file record ORDER cannot reach it — asserted rather than
+  // assumed, since an implementation that reduced over an ordered array could
+  // regress here.
+  it("is order-independent — totals are a sum, not a sequence", () => {
+    const a: ComparisonTotals = {
+      registryCount: 3,
+      filesExamined: 3,
+      filesSame: 3,
+      filesDrifted: 0,
+      filesError: 0,
+    };
+    const b: ComparisonTotals = { ...a };
+    expect(mayAttestFreshness(a)).toBe(mayAttestFreshness(b));
+    expect(mayAttestFreshness(a)).toBe(true);
+  });
+
+  // Every conjunct must be independently load-bearing. If dropping one still
+  // yields the same verdict on some input, that conjunct is dead code and the
+  // predicate is weaker than it reads.
+  it("has no redundant conjunct — each one alone flips a clean verdict", () => {
+    expect(mayAttestFreshness({ ...clean, registryCount: 0, filesExamined: 0 })).toBe(false);
+    expect(mayAttestFreshness({ ...clean, filesExamined: 7 })).toBe(false);
+    expect(mayAttestFreshness({ ...clean, filesDrifted: 1 })).toBe(false);
+    expect(mayAttestFreshness({ ...clean, filesError: 1 })).toBe(false);
+  });
+});
+
+describe("heartbeatOk — Guard 3 row 6", () => {
+  // The heartbeat must reflect the ARTIFACT, not the run.
+  it("is UNHEALTHY when a clean run did not produce a committed advance", () => {
+    expect(heartbeatOk(true, false)).toBe(false);
+  });
+
+  it("is healthy when a clean run committed the advance", () => {
+    expect(heartbeatOk(true, true)).toBe(true);
+  });
+
+  it("is healthy when the run was never eligible — drift has its own routes", () => {
+    expect(heartbeatOk(false, false)).toBe(true);
+  });
+});
+
+describe("handler source-shape — the write is totals-gated (#7710)", () => {
+  // Complements the behavioural tests above: they prove the PREDICATE is
+  // correct, this proves the HANDLER calls it rather than reimplementing the
+  // decision inline or keying on the verdict.
+  const src = readFileSync(
+    resolve(
+      __dirname,
+      "../../../server/inngest/functions/cron-content-vendor-drift.ts",
+    ),
+    "utf8",
+  );
+
+  it("gates the attestation on mayAttestFreshness, not on detectResult.drift", () => {
+    expect(src).toMatch(
+      /const attestationEligible = mayAttestFreshness\(detectResult\);/,
+    );
+    // Anchored on the assignment, not on a bare token: `drift === "none"`
+    // legitimately appears in the status mapping on the return line.
+    expect(src).not.toMatch(
+      /attestationEligible\s*=\s*[^;]*detectResult\.drift/,
+    );
+  });
+
+  it("routes the attestation through safeCommitAndPr with direct merge", () => {
+    const step = src.slice(src.indexOf('step.run("attest-freshness"'));
+    expect(step).toMatch(/safeCommitAndPr\(/);
+    expect(step).toMatch(/mergeMode: "direct"/);
+    // allowedPaths must be the NOTICE alone — an attestation must not be able
+    // to carry a content change in on the same commit.
+    expect(step).toMatch(/allowedPaths: \[`\$\{SKILL_PREFIX\}\/NOTICE`\]/);
+  });
+
+  it("contains no raw push to the default branch", () => {
+    expect(src).not.toMatch(/push[^\n]*origin[^\n]*\bmain\b/);
+  });
+
+  it("posts the heartbeat with the computed value, never a literal true", () => {
+    const hb = src.slice(src.indexOf('step.run("sentry-heartbeat"'));
+    expect(hb).toMatch(/ok: isHealthy/);
+    expect(hb).not.toMatch(/ok: true/);
+  });
+
+  it("no longer claims last-verified is bumped at PR-creation time", () => {
+    // The drift PR body asserted this on every PR it opened, while nothing had
+    // done it since #4483.
+    expect(src).not.toMatch(/last-verified bumped at PR-creation time/);
+  });
+
+  it("routes per-file scoring through classifyFileComparison", () => {
+    // Anchored on the CALL, not on a counter increment: the loop has three
+    // `filesError += 1` sites, so a bare-token grep for one is satisfied by
+    // the others and survives the mutation it exists to catch
+    // (cq-assert-anchor-not-bare-token). Measured: that exact bare-token form
+    // survived Guard 3's M-loop mutation.
+    expect(src).toMatch(
+      /const verdict = classifyFileComparison\(oldSha, currentSha\);/,
+    );
+  });
+
+  it("scores an unparseable contents response as ERROR, not SAME", () => {
+    // The pre-#7710 form was `if (!currentSha || currentSha === oldSha) continue;`
+    // — one branch for two different facts.
+    expect(src).not.toMatch(/!currentSha \|\| currentSha === oldSha/);
+    expect(src).toMatch(/filesError \+= 1;/);
+  });
+
+  it("populates aggDiffParts — the classifier must receive the diff", () => {
+    expect(src).toMatch(/aggDiffParts\.push\(/);
+  });
+});
+
+
+describe("classifyFileComparison — Guard 3 row 2 (the false-clean arm)", () => {
+  it("scores a matching sha as SAME", () => {
+    expect(classifyFileComparison("abc", "abc")).toBe("same");
+  });
+
+  it("scores a differing sha as DRIFTED", () => {
+    expect(classifyFileComparison("abc", "def")).toBe("drifted");
+  });
+
+  // THE mutation that survived a bare-token source grep. A response that
+  // arrived without a sha must never be scored SAME: doing so makes an
+  // upstream outage read as a verified-clean corpus, and the attestation
+  // predicate would then permit a write on evidence that does not exist.
+  it("scores a response with NO sha as ERROR, never SAME", () => {
+    expect(classifyFileComparison("abc", undefined)).toBe("error");
+    expect(classifyFileComparison("abc", "")).toBe("error");
+  });
+
+  it("scores an unreadable registry line as ERROR", () => {
+    expect(classifyFileComparison(undefined, "def")).toBe("error");
+    expect(classifyFileComparison("", "def")).toBe("error");
+  });
+
+  it("never returns SAME when either side is missing", () => {
+    for (const pinned of [undefined, "", "abc"]) {
+      for (const upstream of [undefined, ""]) {
+        expect(classifyFileComparison(pinned, upstream)).toBe("error");
+      }
+    }
   });
 });
