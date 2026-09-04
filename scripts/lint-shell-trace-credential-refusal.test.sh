@@ -166,6 +166,38 @@ print(m.excluded(sys.argv[1]))" "$1"; }
   && pass "unreadable gate path falls back to EXCLUDED (fail-closed carve-out)" \
   || fail "an unreadable gate path must not be carved in"
 
+# --- --write-baseline must never write a TRUNCATED population ----------------
+_bl="$REPO_ROOT/scripts/lint-shell-trace-credential-refusal.baseline.txt"
+_before="$(md5sum "$_bl" | cut -d" " -f1)"
+rc="$(rc_of "$LINT" --write-baseline --changed --base origin/main)"
+[ "$rc" = "2" ] && pass "--write-baseline refuses to run with --changed (would truncate the baseline)" \
+  || fail "--write-baseline with --changed must exit 2, got rc=$rc"
+rc="$(rc_of "$LINT" --write-baseline "$FIX/compliant-canonical.sh")"
+[ "$rc" = "2" ] && pass "--write-baseline refuses explicit paths (would truncate the baseline)" \
+  || fail "--write-baseline with explicit paths must exit 2, got rc=$rc"
+[ "$(md5sum "$_bl" | cut -d" " -f1)" = "$_before" ] \
+  && pass "the refused --write-baseline runs left the baseline byte-identical" \
+  || fail "a refused --write-baseline still rewrote the baseline"
+
+# --- The SCAFFOLD must be born compliant -------------------------------------
+# The stub template is where every future probe starts. If it ships without a
+# refusal, each new probe is born violating the guard and the population grows
+# faster than the drawdown.
+_tpl="$REPO_ROOT/plugins/soleur/skills/ship/references/followthrough-stub-template.sh"
+if [ -f "$_tpl" ]; then
+  cp "$_tpl" "$WORK/fx/probe-scaffolded.sh"
+  printf 'TOK="$SENTRY_AUTH_TOKEN"\ncurl -H "Authorization: Bearer $TOK" https://example.invalid >/dev/null 2>&1 || true\n' \
+    >> "$WORK/fx/probe-scaffolded.sh"
+  rc="$(rc_of "$LINT" "$WORK/fx/probe-scaffolded.sh")"
+  [ "$rc" = "0" ] && pass "a probe scaffolded from the stub template passes the lint" \
+    || fail "the stub template scaffolds a NON-COMPLIANT probe (rc=$rc) -- every new probe is born violating"
+  _n="$(SENTRY_AUTH_TOKEN=SEKRIT_SCAFFOLD bash -x "$WORK/fx/probe-scaffolded.sh" 2>&1 </dev/null | grep -c 'SEKRIT_SCAFFOLD')"
+  [ "$_n" = "0" ] && pass "the scaffolded probe leaks NO token value under bash -x" \
+    || fail "the scaffolded probe leaked $_n line(s) under bash -x"
+else
+  fail "stub template not found at the expected path -- the scaffold guard cannot run"
+fi
+
 # --- Fail-closed: unparseable input exits EXACTLY 2 (not merely non-zero) ----
 rc="$(rc_of "$LINT" "$FIX/malformed-not-utf8.sh")"
 [ "$rc" = "2" ] && pass "unparseable input exits exactly 2 (fail-closed, distinguishable from a violation)" \
@@ -350,7 +382,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Absolute floor, recorded from a MEASURED green run (never from expectation --
 # that was wrong three times in sibling PR #7806). Reported with printf + exit 1
 # directly, never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=34
+MIN_ASSERTIONS=39
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

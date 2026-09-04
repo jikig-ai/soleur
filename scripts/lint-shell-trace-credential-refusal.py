@@ -468,7 +468,12 @@ def git_out(args: list[str]) -> list[str]:
 
 
 def all_shell_files() -> list[Path]:
-    return [REPO_ROOT / p for p in git_out(["ls-files", "*.sh"])]
+    # `git ls-files` lists the INDEX, which still names a file deleted from the
+    # working tree. Without this filter such a path reaches check_file, which
+    # fail-closes at rc=2 and reds the required `test` shard for an ordinary
+    # deletion. Fail-closed is right for an UNREADABLE file and wrong for an
+    # ABSENT one -- they are different conditions.
+    return [p for p in (REPO_ROOT / q for q in git_out(["ls-files", "*.sh"])) if p.exists()]
 
 
 def changed_shell_files(base: str) -> list[Path]:
@@ -543,6 +548,16 @@ def main() -> int:
         return 0
 
     if args.write_baseline:
+        # The baseline is the WHOLE deferred population. Writing it from a
+        # --changed or explicit-path run would silently truncate it to whatever
+        # that run happened to scan, discarding the rest and reporting success.
+        if args.changed or args.paths:
+            print(
+                "--write-baseline rewrites the ENTIRE baseline and must scan the "
+                "whole tree. Re-run it without --changed and without explicit paths.",
+                file=sys.stderr,
+            )
+            return 2
         BASELINE_FILE.write_text(
             "# Files that bind a live credential without the xtrace refusal (#7797).\n"
             "# ENUMERATED, not a count: a bare integer cannot say WHICH files, so\n"
