@@ -35,15 +35,15 @@ wrong, three of them inside the plan's own acceptance criteria) and
 
 ## Phase 1 — Measure and capture
 
-- [ ] **1.1** Re-run the scope derivation against live `workflows/`; assert exactly 27 rows. **AC1.**
-- [ ] **1.2** Re-run the comparison-shape measurement; assert zero bare-boolean
+- [x] **1.1** Re-run the scope derivation against live `workflows/`; assert exactly 27 rows. **AC1.**
+- [x] **1.2** Re-run the comparison-shape measurement; assert zero bare-boolean
       `event_frequency_count`. A precondition on authoring, not a post-condition.
-- [ ] **1.3** Commit the live capture as
+- [x] **1.3** Commit the live capture as
       `specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-<date>.json`. It is the
       sole authoring source **and** the baseline for the Phase-6 probe and for AC19/AC20. **AC8.**
-- [ ] **1.4** Record the pre-change 25/4 `ignore_changes` split as a baseline (this is *not* AC6,
+- [x] **1.4** Record the pre-change 25/4 `ignore_changes` split as a baseline (this is *not* AC6,
       which asserts the post-authoring state — see 3.6).
-- [ ] **1.5** Confirm `apply-sentry-infra.yml` pins Terraform `>= 1.7` (currently `1.10.5`, `:131`)
+- [x] **1.5** Confirm `apply-sentry-infra.yml` pins Terraform `>= 1.7` (currently `1.10.5`, `:131`)
       and `.terraform.lock.hcl` pins provider `0.15.7`.
 - [ ] **1.6** Preflight the Sentry token's **`workflows/` write** scope. Reads are exercised by the
       capture and the imports; the first *write* happens on the first Update after adoption, and a
@@ -72,37 +72,37 @@ List with reasons.
 
 ## Phase 3 — Author the 27
 
-- [ ] **3.1** Add `data "sentry_project_issue_stream_monitor" "web_platform"`.
-- [ ] **3.2** Author 27 `resource "sentry_alert"` blocks **from the 1.3 capture only**: `name`
+- [x] **3.1** Add `data "sentry_project_issue_stream_monitor" "web_platform"`.
+- [x] **3.2** Author 27 `resource "sentry_alert"` blocks **from the 1.3 capture only**: `name`
       byte-for-byte; `frequency_minutes` per rule; per-rule `action_filters[].logic_type` (4 of 27
       are `any-short`); `match` lowercase `eq`/`in`; `target_type = "issue_owners"`;
       `fallthrough_type` (`NoOne` for `byok_cap_exceeded` alone); `ignore_changes = [environment]`
       and nothing else; no `project` attribute.
-- [ ] **3.3** Add the inline comment at the `trigger_conditions` site recording the provider's
+- [x] **3.3** Add the inline comment at the `trigger_conditions` site recording the provider's
       hardcoded `any-short` — the replacement for the lint that would have shipped pre-suppressed
       on 13 of 27 blocks.
-- [ ] **3.4** Delete the 27 corresponding `sentry_issue_alert` blocks in the same commit — a
+- [x] **3.4** Delete the 27 corresponding `sentry_issue_alert` blocks in the same commit — a
       `removed{}` naming an address that still has a resource block is a config error. Keep
       `auth_per_user_loop` and `sandbox_startup_failure`.
-- [ ] **3.5** Add 27 `removed { from = sentry_issue_alert.<n>  lifecycle { destroy = false } }`
+- [x] **3.5** Add 27 `removed { from = sentry_issue_alert.<n>  lifecycle { destroy = false } }`
       and 27 `import { to = sentry_alert.<n>  id = "<org>/<workflow id>" }`.
-- [ ] **3.6** Per-block assertions with a walker anchored on `/^resource "sentry_alert"/` — **not**
+- [x] **3.6** Per-block assertions with a walker anchored on `/^resource "sentry_alert"/` — **not**
       the Trap-3 walker, which is anchored on `sentry_issue_alert` and returns nothing here:
       `[environment]` for all 27 (**AC6**), and zero `IssueOwners`/`"EQUAL"`/`"IS_IN"` *within
       those blocks* (**AC7**). A file-level grep fails on a correct migration — 49 and 50
       occurrences legitimately remain, five of them in the two survivors.
-- [ ] **3.7** `terraform validate`, **plus a deliberately conflicting fixture** that must fail —
+- [x] **3.7** `terraform validate`, **plus a deliberately conflicting fixture** that must fail —
       without the negative arm this is a syntax check, not an `ExactlyOneOf` check.
 
 ## Phase 4 — Retire the script's ownership of the three
 
-- [ ] **4.1** Read
+- [x] **4.1** Read
       [`2026-08-19-i-proposed-deleting-a-control-because-terraform-appeared-to-own-it.md`](../../learnings/2026-08-19-i-proposed-deleting-a-control-because-terraform-appeared-to-own-it.md)
       **before cutting anything.**
-- [ ] **4.2** Delete **only** the three burst stanzas (`:151-154`, `:157-160`, `:175-178`). Keep
+- [x] **4.2** Delete **only** the three burst stanzas (`:151-154`, `:157-160`, `:175-178`). Keep
       `auth-per-user-loop` (`:165-168`); the script is **not** deleted. **AC13.**
-- [ ] **4.3** Rewrite the header enumeration (`:5-9`), which lists four rules.
-- [ ] **4.4** Fix the docstring at `apps/web-platform/test/auth/sentry-tag-coverage.test.ts:8` and
+- [x] **4.3** Rewrite the header enumeration (`:5-9`), which lists four rules.
+- [x] **4.4** Fix the docstring at `apps/web-platform/test/auth/sentry-tag-coverage.test.ts:8` and
       confirm the test still passes.
 - [ ] **4.5** Update the ownership table in the 2026-08-19 learning; post the split to #4781.
 
@@ -162,7 +162,7 @@ List with reasons.
 
 ## Phase 8 — Sweep (§2.8)
 
-- [ ] **8.1** `assert-byok-rules-exist.sh:33-43` — auth-\* set **four → one**. Keep the
+- [x] **8.1** `assert-byok-rules-exist.sh:33-43` — auth-\* set **four → one**. Keep the
       distinction, the warning and the per-resource-block instruction. **Do not weaken it**; this
       PR *inverts* the paragraph, and the file records having been "briefly 'corrected' into a
       falsehood on 2026-08-19 before being restored".
