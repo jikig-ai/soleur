@@ -161,6 +161,60 @@ t_gate_discriminates() {
   fi
 }
 
+# ── T10-T12 (#7650 Phase 2): sentry_alert, the type this gate now also sees ──
+# Until Phase 2 the gate's every fixture was a monitor. `sentry_alert` is the
+# type the adoption introduces, and it is the one whose unexplained create is
+# most expensive: 27 of them are live paging rules, one is the GDPR Art. 33
+# breach alert, and a duplicate does not fail loudly — it pages twice and bills
+# twice. A guard whose matrix never names the type it was extended for is
+# asserting coverage it does not have.
+t_sentry_alert_added_block_explains_create() {
+  local rc; rc=$(_run 'sentry_alert.byok_art_33_breach
+' '+resource "sentry_alert" "byok_art_33_breach" {
++  name = "byok-art-33-breach"
+')
+  if [[ "$rc" -eq 0 ]]; then
+    _report "T10 a sentry_alert create explained by an added block passes silently" ok
+  else
+    _report "T10 a sentry_alert create explained by an added block passes silently" fail \
+      "rc=$rc — the gate fires on the normal add-an-alert flow"
+  fi
+}
+
+# The case a dropped `import{}` produces in any PR that did not also add the
+# block: Terraform sees config with nothing in state behind it and plans a CREATE
+# of a rule that already exists live.
+t_sentry_alert_unexplained_create_fails() {
+  local rc; rc=$(_run 'sentry_alert.byok_cap_exceeded
+' '+  frequency_minutes = 60
++# byok_cap_exceeded is unchanged here
+')
+  if [[ "$rc" -eq 1 ]]; then
+    _report "T11 a sentry_alert create with no added block FAILS (the dropped-import{} shape)" ok
+  else
+    _report "T11 a sentry_alert create with no added block FAILS" fail "rc=$rc want 1"
+  fi
+}
+
+# Cross-type collision. The 27 adopted rules keep the resource NAME they had as
+# `sentry_issue_alert`, so for every one of them there is a same-named block of
+# the other type in this file's history — and, for the two survivors, in its
+# present. An added `sentry_issue_alert "x"` must never explain a create of
+# `sentry_alert.x`: that is precisely a half-done migration, and waving it
+# through is how the same live rule ends up managed at two addresses.
+t_sentry_alert_not_explained_by_issue_alert_block() {
+  local rc; rc=$(_run 'sentry_alert.auth_per_user_loop
+' '+resource "sentry_issue_alert" "auth_per_user_loop" {
++  name = "auth-per-user-loop"
+')
+  if [[ "$rc" -eq 1 ]]; then
+    _report "T12 an added sentry_issue_alert block does NOT explain a sentry_alert create" ok
+  else
+    _report "T12 an added sentry_issue_alert block does NOT explain a sentry_alert create" fail \
+      "rc=$rc — a same-named block of the OTHER type satisfied the gate; that is a half-done migration passing as explained"
+  fi
+}
+
 t_added_block_explains_create
 t_unexplained_create_fails
 t_no_creates_passes
@@ -170,6 +224,9 @@ t_partial_match_fails
 t_prefix_does_not_cross_explain
 t_type_must_match
 t_gate_discriminates
+t_sentry_alert_added_block_explains_create
+t_sentry_alert_unexplained_create_fails
+t_sentry_alert_not_explained_by_issue_alert_block
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

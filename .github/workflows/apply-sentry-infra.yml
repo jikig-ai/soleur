@@ -118,7 +118,9 @@ concurrency:
 permissions:
   contents: read
   # Read the PR's branch commit messages to detect a pre-staged [ack-destroy]
-  # (see the destroy gate). Read-only; no write scope anywhere in this workflow.
+  # (see the destroy gate). Read-only. The DEFAULT for every job is read-only;
+  # the `apply` job overrides this block with a job-scoped `issues: write` so its
+  # failure filer can post (#7650 Phase 2), and no other job holds any write.
   pull-requests: read
   # NOTE: `squash_merge_commit_message` (read by the destroy gate) is an
   # administration-scoped field, and `administration` is NOT a grantable
@@ -577,6 +579,18 @@ jobs:
 
   apply:
     needs: preflight
+    # JOB-SCOPED, deliberately. The workflow default stays read-only; only this
+    # job files an issue, and `plan_pr` runs on `pull_request` where a write
+    # scope has no business being. A job-level block REPLACES the workflow-level
+    # one, so `contents: read` is restated here for the checkout.
+    #
+    # `issues: write` is what makes the `if: failure()` filer below actually
+    # post. Without it `gh issue create` returns "Resource not accessible by
+    # integration" — and the whole point of that step is that a failed apply of
+    # live paging state must not be only a red run nobody owns.
+    permissions:
+      contents: read
+      issues: write
     # Event guard (#6589): this workflow now also triggers on pull_request and
     # merge_group for the destroy gate. Without this guard, adding those triggers
     # would make the APPLY job reachable from a PR — applying prod Sentry infra
@@ -951,6 +965,96 @@ jobs:
           set -euo pipefail
           which jq >/dev/null 2>&1 || sudo apt-get install -y jq
           bash apps/web-platform/scripts/assert-byok-rules-exist.sh
+
+      - name: File or comment tracking issue (apply failed)
+        # UNCONDITIONAL `if: failure()` — no `&& steps.x.outputs.y != ''` rider.
+        # An abort that exits before any step writes an output (an unbound var
+        # under `set -u`, a syntax error, an OOM kill) makes such a rider false,
+        # and the run goes red having filed NOTHING.
+        #
+        # WHY THE APPLY ARM NEEDS ITS OWN ROUTE. On a PR the operator is already
+        # looking: the gate reds a check they are watching, and `plan_pr` writes
+        # its verdict where the review happens. This job runs AFTER the merge,
+        # on `main`, with nobody watching — and it is the arm that touches live
+        # paging state. A failure here can mean a HALF-APPLIED adoption: some of
+        # the 27 rules moved to their `sentry_alert` address and the rest did
+        # not, which no later plan describes as an emergency and which AC17
+        # (`terraform state list` shows 27 + 2, no orphan) is the check for.
+        # Until this step existed, that outcome's only trace was a red run in a
+        # workflow list.
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MERGE_SHA: ${{ github.sha }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          TITLE="[ci/apply-sentry-infra] apply failed on main"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          gh label create "ci/apply-sentry-infra" --repo "$GH_REPO" \
+            --description "apply-sentry-infra.yml apply-job failures" --color "B60205" 2>/dev/null || true
+
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## The Sentry infra apply failed after a merge to main\n\n'
+            printf 'This job owns live Sentry paging state. A failure here is not a red build to re-run at leisure: until it succeeds, `main` and live Sentry disagree, and the disagreement may be PARTIAL.\n\n'
+            printf -- '- Merge SHA: `%s`\n' "$MERGE_SHA"
+            printf -- '- Trigger: %s\n' "$TRIGGER"
+            printf -- '- Detected at: %s\n' "$NOW"
+            printf -- '- Run log: %s\n\n' "$RUN_URL"
+            printf '### First, establish whether the apply was partial\n\n'
+            printf 'Read the run log above and find which step failed.\n\n'
+            printf -- '- Failed BEFORE `Terraform apply`: nothing was written. Live Sentry is untouched and the gates did their job. Fix the cause and re-run.\n'
+            printf -- '- Failed DURING or AFTER `Terraform apply`: assume a partial write. Terraform state and live Sentry may now disagree per-resource.\n\n'
+            printf '### Recovery is ROLL-FORWARD (#7650)\n\n'
+            printf -- '1. **Re-run the failed job on THIS run.** It is the only gesture that works, because it is the only one that carries the original `head_commit.message` — and therefore any `[ack-destroy]` the merge needed.\n'
+            printf -- '2. **Do NOT `workflow_dispatch`.** A dispatch has no `head_commit.message`, so it can never supply the ack, and a plan needing one will red again for a different reason.\n'
+            printf -- '3. **Do NOT revert.** A revert re-adds the `sentry_issue_alert` blocks for addresses that are no longer in state and removes the `sentry_alert` blocks for addresses that now are, which plans as a destroy of live paging rules.\n'
+            printf -- '4. **Do NOT restore state from a backup.** The forensics artifacts on this run are for reading, not for writing back; a state restore re-asserts management over addresses whose live objects have already moved.\n\n'
+            printf '### If the failure was a Sentry 410\n\n'
+            printf 'The two surviving `sentry_issue_alert` resources still refresh through the deprecated alert-rule endpoint, which Sentry serves under brownouts. The plan step retries for exactly this. An exhausted retry means the brownout window is now wider than the budget, or the family is fully retired; in both cases the fix is to finish the migration, not to raise the attempt count.\n\n'
+            printf '### The check that decides whether this is an emergency\n\n'
+            printf 'AC17: `terraform state list` for this root must show 27 `sentry_alert.` and 2 `sentry_issue_alert.` addresses, with no orphan. Anything else is a partial adoption and the highest-priority thing in the repo — `byok-art-33-breach` is among the 27, and its silence stops the GDPR Art. 33 72-hour clock from ever starting.\n'
+          } > "$BODY_FILE"
+
+          # Dedupe by LABEL, not `--search`: the search API can return empty
+          # under some token contexts, which would file a fresh duplicate on
+          # every re-run of a failing apply.
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/apply-sentry-infra" --state open \
+            --limit 100 --json number,title \
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still failing at ${NOW} for merge SHA \`${MERGE_SHA}\`. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label "ci/apply-sentry-infra" --label "type/infra" --label "priority/p1-high" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Close the apply-failure tracking issue (success)
+        # The filer above is only half a route. Without this, the first failed
+        # apply leaves an open p1 that stays open through every subsequent green
+        # run, and the operator learns to ignore the label.
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --label "ci/apply-sentry-infra" --state open \
+            --limit 100 --json number,title \
+            --jq 'map(select(.title == "[ci/apply-sentry-infra] apply failed on main")) | .[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" \
+              --comment "apply-sentry-infra applied cleanly again at ${NOW}. Run: ${RUN_URL}"
+          fi
 
       - name: Post-apply summary
         if: always()
