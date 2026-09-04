@@ -50,9 +50,9 @@ pattern, not a one-off:
   completion rather than annotating it.
 - `breach-register.md` stays `status: draft-requires-counsel-review`.
 
-> **Superseded 2026-09-04 (#7791).** All four bullets above are true **as of
+> **Superseded 2026-09-04 (#7791).** All **five** bullets above are true **as of
 > 2026-09-03** and are left as written; read them as a record of that session,
-> not as current state. Two have since been discharged. The attestation path is
+> not as current state. Two of the five have since been discharged; the fifth — that the register keeps `status: draft-requires-counsel-review` — remains true and is expressly held. The attestation path is
 > **no longer absent** — `audits/2026-09-03-clo-attestation-7717-art-33-5-register.md`
 > was written and signed by the `clo` agent on 2026-09-04, across two passes, and
 > this pipeline never wrote into it. The implementation record was **deleted**, not

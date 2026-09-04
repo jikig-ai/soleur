@@ -10,6 +10,13 @@ plan: knowledge-base/project/plans/2026-09-04-compliance-clo-attestation-art-33-
 
 # Tasks
 
+> **Status 2026-09-04 — SHIPPED, do not re-run.** The checkboxes below are left unticked
+> deliberately: an acceptance checkbox is a claim, and bulk-toggling 49 of them would assert
+> per-task verification that was not performed per task. What was verified is recorded in the
+> commits and in the attestation's Method section. **The deletion at 4.1 and the waiver swap at
+> 3.1/3.2 are DONE** — re-running them would recreate a file whose absence is now load-bearing
+> (the guard would red at check (c)). Read this file as the plan of record, not as a work queue.
+
 Derived from the finalized (post-review) plan. **Task numbers follow the plan's stable section ids;
 the execution order is the numbered list in the plan's `### Ordering` block, which is different.**
 
