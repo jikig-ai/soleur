@@ -70,6 +70,7 @@ init_git_repo() {
 make_synced_branch() {
   local tmp="$1" branch="$2"
   local work="$tmp/work" origin="$tmp/origin.git" incidents="$tmp/incidents"
+  assert_fixture_dir "$tmp"
   mkdir -p "$work" "$incidents"
   git init -q --bare "$origin"
   init_git_repo "$work"
