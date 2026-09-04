@@ -3,4 +3,7 @@ set -uo pipefail
 # A suite that synthesizes a fake token per cq-test-fixtures-synthesized-only.
 # It must stay traceable: the file you most need `bash -x` on is the failing suite.
 export SENTRY_AUTH_TOKEN="FAKE_synthesized_for_fixture_only"
-printf 'len=%s\n' "${#SENTRY_AUTH_TOKEN}"
+# Expanded the way a real suite would use it, so this fixture is POLICY-REACHABLE:
+# `${#VAR}` matches no SECRET_SIGNALS class, so the earlier fixture was rejected at
+# in_scope() one gate BEFORE excluded() -- H4 passed without ever testing exclusion.
+curl -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true

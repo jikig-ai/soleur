@@ -76,6 +76,8 @@ rc_of() {
   printf '%s' "$?"
 }
 
+PROBE_TOKEN="FAKE_notarealtoken_0000000000"
+
 reports() { # reports <basename> -> 0 if the last run named that file
   grep -q -- "$1" "$WORK/out" "$WORK/err"
 }
@@ -171,6 +173,14 @@ then
   rc="$(rc_of "$LINT" "$WORK/remedy.sh")"
   [ "$rc" = "0" ] && pass "the emitted remedy text itself passes the lint (message cannot rot)" \
     || fail "the emitted remedy text does NOT pass the lint (rc=$rc) -- following the message leaves you red"
+
+  # LINT-COMPLIANT IS NOT LEAK-SAFE. The remedy is the text every remediating
+  # author pastes, so reverting its `:+x` to `:-` reintroduces the PR's own
+  # headline defect into the canonical source while staying lint-clean. The
+  # leak probe previously ran on ONE fixture and never on this.
+  n="$(SENTRY_AUTH_TOKEN="$PROBE_TOKEN" bash -x "$WORK/remedy.sh" 2>&1 | grep -c "$PROBE_TOKEN")"
+  [ "$n" = "0" ] && pass "the emitted remedy text is LEAK-SAFE under bash -x (0 trace lines)" \
+    || fail "the emitted remedy LEAKS in $n line(s) -- the text 131 scripts are told to paste expands the value"
 else
   fail "could not extract a paste-ready preamble from the violation message"
 fi
@@ -184,7 +194,6 @@ fi
 # predicate without ever placing the value on a command line.
 #
 # Assert the value that must NEVER appear, over both arms.
-PROBE_TOKEN="FAKE_notarealtoken_0000000000"
 leak_probe() { # <script> -> number of trace lines containing the token
   SENTRY_AUTH_TOKEN="$PROBE_TOKEN" bash -x "$1" 2>&1 | grep -c "$PROBE_TOKEN"
 }
@@ -277,10 +286,19 @@ mutate_row 'M6 fail-closed: unparseable treated as clean' \
   "$FIX/malformed-not-utf8.sh" 2 0
 
 # --- H1: the floor must fail via a DIRECT exit, not through the helpers -------
-if grep -q 'MIN_ASSERTIONS' "${BASH_SOURCE[0]}"; then
-  pass "H1 an absolute assertion floor is declared"
+# H1: assert the floor by DRIVING it, not by grepping for its name -- the old
+# check searched for a literal its own grep line contains, so deleting the floor
+# block entirely left it passing. An outside witness is the only real test.
+_h1="$WORK/h1.sh"
+sed 's/^MIN_ASSERTIONS=[0-9]*$/MIN_ASSERTIONS=99999/' "${BASH_SOURCE[0]}" > "$_h1"
+if [ -s "$_h1" ] && ! diff -q "$_h1" "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
+  ( cd "$REPO_ROOT/scripts" && cp "$_h1" .h1probe.tmp.sh && bash .h1probe.tmp.sh >/dev/null 2>&1 )
+  _h1rc=$?
+  rm -f "$REPO_ROOT/scripts/.h1probe.tmp.sh"
+  [ "$_h1rc" = "1" ] && pass "H1 the assertion floor actually bites (unreachable floor -> exit 1)" \
+    || fail "H1 floor did not bite: raising it to 99999 exited $_h1rc, expected 1"
 else
-  fail "H1 no assertion floor declared"
+  fail "H1 could not build the floor probe -- the assertion would be vacuous"
 fi
 
 # --- verdict -----------------------------------------------------------------
@@ -289,7 +307,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Absolute floor, recorded from a MEASURED green run (never from expectation --
 # that was wrong three times in sibling PR #7806). Reported with printf + exit 1
 # directly, never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=27
+MIN_ASSERTIONS=28
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

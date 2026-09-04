@@ -118,14 +118,6 @@ EXCLUDE_PATTERNS = (
     re.compile(r"^scripts/lib/"),
 )
 
-REMEDY = """case "$-" in
-  *x*)
-    if [ -n "${YOUR_CREDENTIAL_VAR:+x}" ]; then
-      printf '[FATAL] refusing to trace with a live credential in scope (see #7797). Re-run with YOUR_CREDENTIAL_VAR= to trace safely.\\n' >&2
-      exit 78
-    fi
-    ;;
-esac"""
 
 
 def strip_comment(line: str) -> str:
@@ -206,7 +198,7 @@ def check_rule_a(rel: str, lines: list[str], preamble_at: int | None) -> list[st
         return [
             f"{rel}:{preamble_at + 1}: xtrace refusal is not in the prologue "
             f"({cmds_before} commands run before it, all of them traced).\n"
-            f"  Move it directly below `set …`:\n\n{REMEDY}\n"
+            f"  Move it directly below `set …` (keep the refusal you already have).\n"
         ]
     return []
 
