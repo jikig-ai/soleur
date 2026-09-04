@@ -19,7 +19,7 @@ the execution order is the numbered list in the plan's `### Ordering` block, whi
 
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 `bash scripts/lint-legal-registers.sh` → exit 0, `registers=4 rows=5 produced=10 waived=6 waiver-parity=ok`
+- [ ] 0.1 `bash scripts/lint-legal-registers.sh` → exit 0, `registers=4 rows=5 produced=12 waived=8 waiver-parity=ok`
 - [ ] 0.2 `git fetch origin && git diff origin/main --stat -- knowledge-base/legal/` → no drift
       (work Phase 0.5 check 6 FAILs hard on `knowledge-base/legal/**` drift)
 - [ ] 0.3 Capture the byte-exact `status:` line of `breach-register.md` from `origin/main` for AC7b
@@ -66,7 +66,7 @@ the execution order is the numbered list in the plan's `### Ordering` block, whi
       carried items with the AC1–AC13 annex labelled as adopted evidence, `date:`/`attested:`, three
       `rulings_of_record`, and the AC20 carve-outs
 - [ ] 3.8b Its Method section states the guard output it **certifies against** (`exit 0`,
-      `produced=10 waived=6`) — the pipeline never writes into this file
+      `produced=12 waived=8`) — the pipeline never writes into this file
 - [ ] 3.9 **Pass-2 outage protocol.** Apply 1.4 (remove any partial file, resume, never respawn,
       never downgrade). If unreachable, stop **before** 3.1: leave the 3.3/3.5/3.6 corrections in
       place (they stand on their own and leave the guard green), leave the record and its waiver
@@ -91,13 +91,13 @@ the execution order is the numbered list in the plan's `### Ordering` block, whi
 
 - [ ] 4b.1 The attestation is still written, by the CLO, with `disposition: BLOCKED`
 - [ ] 4b.2 **Phase 4 does not run** — the implementation record stays
-- [ ] 4b.3 The waiver swap still runs; net waivers **6 → 7**, not 6 → 6
+- [ ] 4b.3 The waiver swap still runs; net waivers **8 → 9**, not 8 → 8
 - [ ] 4b.4 PR does not merge; #7791 stays open; blocker surfaced in the review trailer
 
 ## Phase 3.7 — Verification (first moment the guard can be green)
 
 - [ ] 3.7 `bash scripts/lint-legal-registers.sh` **without `--advisory`** → exit 0,
-      `produced=10 waived=6`. Record exit code + summary
+      `produced=12 waived=8`. Record exit code + summary
 - [ ] 3.7b State the honest R-g version: the blocking net is
       `lint-legal-registers.test.sh`'s `live corpus passes the guard` case, not the advisory arm
 
