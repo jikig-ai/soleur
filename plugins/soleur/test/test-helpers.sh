@@ -4,6 +4,42 @@
 
 set -euo pipefail
 
+# --- Guard 3 (#7833): fail-loud git-location tripwire ------------------------------------------
+# A suite sourcing this file must not be running under an inherited git-location environment. In a
+# linked worktree git exports GIT_DIR/GIT_INDEX_FILE to every hook as ABSOLUTE paths, and they
+# override both a subprocess's working directory and `git -C` -- so a fixture's `git init`
+# initialises nothing and its commits land on the developer's live branch.
+#
+# This ABORTS rather than unsetting. Scrubbing here would hide a broken entry point: the next suite
+# that does not source this file would still be exposed, and the operator would never learn which
+# runner invocation lacked the scrub. SOLEUR_GIT_TRIPWIRE_ALLOW=1 is the deliberate escape for a
+# suite whose subject IS the inherited environment.
+if [[ "${SOLEUR_GIT_TRIPWIRE_ALLOW:-0}" == "1" ]]; then
+  # Announce when the escape is taken. A switch that disarms a write-boundary guard with no trace
+  # is the shape this guard exists to prevent, so a green run must still show it.
+  printf '[git-tripwire] DISARMED by SOLEUR_GIT_TRIPWIRE_ALLOW=1 in %s\n' \
+    "${BASH_SOURCE[1]:-this suite}" >&2
+else
+  _soleur_git_leaked=""
+  # Kept in lockstep with GIT_LOCATION_VARS in plugins/soleur/test/lib/git-fixture-env.ts and with
+  # GIT_LOCATION_VARS in tests/scripts/_git_fixture_env.py. That lockstep is ENFORCED, not asserted
+  # in prose: plugins/soleur/test/git-env-list-parity.test.sh derives all three and compares them.
+  for _v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+            GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH; do
+    if [[ -n "${!_v:-}" ]]; then
+      _soleur_git_leaked="${_soleur_git_leaked}  ${_v}=${!_v}"$'\n'
+    fi
+  done
+  if [[ -n "$_soleur_git_leaked" ]]; then
+    printf '\nFATAL: %s started with an inherited git-location environment:\n\n%s\n' \
+      "${BASH_SOURCE[1]:-this suite}" "$_soleur_git_leaked" >&2
+    printf 'Fix the ENTRY POINT, by prefixing it with:\n\n  unset%s && <runner>\n\n' \
+      "$(printf '%s' "$_soleur_git_leaked" | sed 's/=.*$//' | tr '\n' ' ' | sed 's/^/ /;s/  */ /g;s/ $//')" >&2
+    exit 97
+  fi
+  unset _soleur_git_leaked _v
+fi
+
 PASS=0
 FAIL=0
 SKIPPED=0

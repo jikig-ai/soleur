@@ -13,6 +13,22 @@
 
 set -uo pipefail
 
+# Git-location tripwire (#7833). These suites drive worktree-manager.sh, which runs
+# `git worktree remove`, `git branch -D` and `git reset --hard` -- the highest-damage git writes
+# in the corpus. An inherited GIT_DIR aims all of them at the developer's real repository, so
+# this file aborts rather than proceeding. Inline rather than sourcing test-helpers.sh, which
+# would also import an assertion framework these suites do not use.
+for _v in GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY \
+          GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH; do
+  if [[ -n "${!_v:-}" && "${SOLEUR_GIT_TRIPWIRE_ALLOW:-0}" != "1" ]]; then
+    printf 'FATAL: %s started with an inherited git-location environment (%s=%s).\n' \
+      "${BASH_SOURCE[0]}" "$_v" "${!_v}" >&2
+    printf 'Fix the ENTRY POINT: unset %s && <runner>\n' "$_v" >&2
+    exit 97
+  fi
+done
+unset _v
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../../.." && pwd)"
 WM="$REPO_ROOT/plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh"
 

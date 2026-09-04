@@ -5,6 +5,12 @@
 # inside a command substitution must not abort before _report prints.
 set -uo pipefail
 
+# Git-location scrub (#7833). Every git call below is a bare `( cd "$root" && git … )` with no
+# -C and no explicit env, so an inherited GIT_DIR / GIT_INDEX_FILE from a hook would send these
+# fixture commits into the developer's real repository -- the reported defect, unchanged. This
+# suite sources no test-helpers.sh prelude, so the scrub belongs here.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH 2>/dev/null || true
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/weakness-miner.sh"
 pass=0; fail=0
