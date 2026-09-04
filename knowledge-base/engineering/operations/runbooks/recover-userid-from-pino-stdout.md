@@ -149,9 +149,14 @@ two-primitive separation.
 ## Flow 2 — PA8 §(f) retention pin (one-time measurement)
 
 The Article 30 register PA8 §(f) claims **30 MB rolling per container**
-(structural cap from `apps/web-platform/infra/cloud-init.yml:303-310`). To
-convert MB → days, the operator runs one round of measurement and updates
-the register sentinel `__TBD_OBSERVED_VOLUME__` via a follow-up PR.
+(structural cap from `apps/web-platform/infra/cloud-init.yml:303-310`). There
+is no MB → days conversion to record: a capacity-bounded ring buffer has no
+envisaged time limit, because its duration is a function of instantaneous
+emission rate. Art. 30 PA-8 §(f) records the **mechanism** rather than a
+duration, and the sentinel this runbook used to direct the operator to fill
+has been resolved to `NOT RECORDED` with that reasoning. The measurement
+below remains available as a method if a figure is ever needed; it is no
+longer an outstanding obligation.
 
 ### Re-verification triggers
 
@@ -227,16 +232,14 @@ the PA8 §(f) row and this runbook in the same PR.
    # Any failure → drift; file a compliance/critical issue.
    ```
 
-### Post-measurement: update the register
+### Post-measurement: the register is already resolved
 
-Open a follow-up PR replacing the `__TBD_OBSERVED_VOLUME__` sentinel in
-`knowledge-base/legal/article-30-register.md` PA8 §(f) row with the
-measured value:
-
-```diff
-- Observed daily log volume: __TBD_OBSERVED_VOLUME__ (post-merge operator measurement; …)
-+ Observed daily log volume: ~<X> MB/day at <YYYY-MM-DD>, yielding ~<Y> days effective time retention (…)
-```
+**Do not open a PR to fill a sentinel — there is no longer one to fill.** Art. 30
+PA-8 §(f) records effective time-retention as `NOT RECORDED`, on the ground that
+Art. 30(1)(f) asks for an *envisaged time limit* and this surface has none. If a
+measurement is taken for an operational reason, add it to §(f) as a dated
+observation **beside** the mechanism, and do not replace the mechanism with it:
+the mechanism is the durable record and a single day's rate is not.
 
 After the follow-up PR merges:
 
