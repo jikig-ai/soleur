@@ -64,38 +64,64 @@ function hostileEnv(victimDir: string): Record<string, string> {
   };
 }
 
+/**
+ * Build a fixture repo inside a CHILD bun process started under `env`.
+ *
+ * The indirection is the point. The hazard is an environment INHERITED at process start, and Bun
+ * only reproduces it that way: a variable assigned to `process.env` mid-test does not reach a
+ * child spawned without an explicit `env`. Driving the fixture through a real child process makes
+ * the default-env path observable, which is what lets mutation rows M4 and M6 discriminate.
+ */
+function runFixtureDriver(
+  fixtureDir: string,
+  env: Record<string, string>,
+): { status: number; head: string } {
+  const driver = join(fixtureDir, "..", `driver-${Math.random().toString(36).slice(2)}.ts`);
+  writeFileSync(
+    driver,
+    [
+      `import { gitFixture } from ${JSON.stringify(join(import.meta.dir, "lib", "git-fixture-env.ts"))};`,
+      `import { writeFileSync } from "node:fs";`,
+      `import { join } from "node:path";`,
+      `const dir = process.argv[2];`,
+      `const git = gitFixture(dir);`,
+      `git(["init", "-q", "-b", "main"]);`,
+      `writeFileSync(join(dir, "f.txt"), "hello\\n");`,
+      `git(["add", "f.txt"]);`,
+      `git(["commit", "-q", "-m", "fixture-commit"]);`,
+      `process.stdout.write(git(["rev-parse", "HEAD"]).trim());`,
+      ``,
+    ].join("\n"),
+  );
+  try {
+    const head = execFileSync("bun", ["run", driver, fixtureDir], {
+      env,
+      encoding: "utf8",
+    }).trim();
+    return { status: 0, head };
+  } catch {
+    return { status: 1, head: "" };
+  }
+}
+
 describe("Guard 1 — fixture git writes are contained under a hostile inherited env", () => {
   test("a fixture built with gitFixture() leaves the victim's HEAD, refs and index untouched", () => {
     const victim = makeVictim();
     const before = victim.read();
+    const fixtureDir = scratch("guard1-fixture-");
 
-    // Enter the hostile environment for the duration of the fixture's work, exactly as an
-    // inherited hook env would. gitFixtureEnv() must neutralise it.
-    const saved = { d: process.env.GIT_DIR, i: process.env.GIT_INDEX_FILE };
-    process.env.GIT_DIR = join(victim.dir, ".git");
-    process.env.GIT_INDEX_FILE = join(victim.dir, ".git", "index");
-    try {
-      const fixtureDir = scratch("guard1-fixture-");
-      const git = gitFixture(fixtureDir);
-      git(["init", "-q", "-b", "main"]);
-      writeFileSync(join(fixtureDir, "f.txt"), "hello\n");
-      git(["add", "f.txt"]);
-      git(["commit", "-q", "-m", "fixture-commit"]);
+    // The hostile environment MUST be present at the child's process START, not injected by
+    // mutating process.env in this process. Under Bun a child spawned without an explicit `env`
+    // receives the values the process was STARTED with, so a `process.env.GIT_DIR = ...` here
+    // would never reach a default-env grandchild — the fixture would be running clean while
+    // claiming to be hostile, and any arm exercising the default-env path would pass vacuously.
+    // Measured: written the mutate-process.env way, mutation rows M4 and M6 both SURVIVED.
+    const out = runFixtureDriver(fixtureDir, hostileEnv(victim.dir));
+    expect(out.status).toBe(0);
 
-      // The fixture must be a real repository of its own — not a no-op that wrote elsewhere.
-      const fixtureHead = execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: fixtureDir,
-        env: gitFixtureEnv(fixtureDir),
-        encoding: "utf8",
-      }).trim();
-      expect(fixtureHead).toMatch(/^[0-9a-f]{40}$/);
-      record("fixture-is-a-real-repo");
-    } finally {
-      if (saved.d === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = saved.d;
-      if (saved.i === undefined) delete process.env.GIT_INDEX_FILE;
-      else process.env.GIT_INDEX_FILE = saved.i;
-    }
+    // The fixture must be a real repository of its own — not a no-op that wrote elsewhere.
+    expect(out.head).toMatch(/^[0-9a-f]{40}$/);
+    record("fixture-is-a-real-repo");
 
     expect(victim.read()).toBe(before);
     record("victim-triple-unchanged");
@@ -116,16 +142,26 @@ describe("Guard 1 — fixture git writes are contained under a hostile inherited
     );
     chmodSync(script, 0o755);
 
-    const saved = process.env.GIT_DIR;
-    process.env.GIT_DIR = join(victim.dir, ".git");
-    try {
-      const inner = join(fixtureDir, "repo");
-      mkdirSync(inner, { recursive: true });
-      execFileSync("bash", [script, inner], { env: gitFixtureEnv(inner), encoding: "utf8" });
-    } finally {
-      if (saved === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = saved;
-    }
+    const inner = join(fixtureDir, "repo");
+    mkdirSync(inner, { recursive: true });
+
+    // Same reason as above: the hostile env must be inherited at process START, or the arm passes
+    // vacuously against a clean environment.
+    const driver = join(fixtureDir, "transitive-driver.ts");
+    writeFileSync(
+      driver,
+      [
+        `import { gitFixtureEnv } from ${JSON.stringify(join(import.meta.dir, "lib", "git-fixture-env.ts"))};`,
+        `import { execFileSync } from "node:child_process";`,
+        `const [script, dir] = process.argv.slice(2);`,
+        `execFileSync("bash", [script, dir], { env: gitFixtureEnv(dir) });`,
+        ``,
+      ].join("\n"),
+    );
+    execFileSync("bun", ["run", driver, script, inner], {
+      env: hostileEnv(victim.dir),
+      encoding: "utf8",
+    });
 
     expect(victim.read()).toBe(before);
     record("transitive-spawn-contained");
