@@ -245,7 +245,9 @@
 6	plugins/soleur/test/fanout-suite-scope.test.sh
 1	plugins/soleur/test/fixture-dir-operand-assert.test.sh
 1	plugins/soleur/test/fixture-relative-assert.test.sh
+2	plugins/soleur/test/git-fixture-env.mutation.sh
 4	plugins/soleur/test/harvest-debt.test.sh
+5	plugins/soleur/test/hook-git-env-coverage.mutation.sh
 14	plugins/soleur/test/lint-bot-synthetic-completeness.test.sh
 13	plugins/soleur/test/lint-bot-synthetic-statuses.test.sh
 2	plugins/soleur/test/operator-digest-provision.test.sh

@@ -24,6 +24,16 @@ TEST_ALL="$REPO_ROOT/scripts/test-all.sh"
 [[ -f "$TEST_ALL" ]] || { printf 'FATAL: test-all.sh missing\n' >&2; exit 2; }
 
 WORK="$(mktemp -d -t g2mut.XXXXXXXX)" || exit 2
+
+# $WORK roots every cp/rm below. mktemp -d returns an absolute path, but "returns" is not "was
+# verified": an empty or relative value here would point the restore and the rm -rf at the CWD,
+# which is the working tree. Dogfooding the rule this directory's sibling scanners enforce.
+case "$WORK" in
+  ""|/|//|/.) printf 'FATAL: WORK degenerate (%s); refusing\n' "$WORK" >&2; exit 2 ;;
+  /*) : ;;
+  *) printf 'FATAL: WORK is RELATIVE (%s); refusing\n' "$WORK" >&2; exit 2 ;;
+esac
+readonly WORK
 cp "$GUARD" "$WORK/guard.pristine"       || { printf 'FATAL: cp guard failed\n' >&2; exit 2; }
 cp "$TEST_ALL" "$WORK/testall.pristine"  || { printf 'FATAL: cp test-all failed\n' >&2; exit 2; }
 

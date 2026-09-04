@@ -31,6 +31,16 @@ SUITE="$SCRIPT_DIR/git-fixture-env.test.ts"
 [[ -f "$SUITE"  ]] || { printf 'FATAL: suite missing at %s\n' "$SUITE" >&2; exit 2; }
 
 WORK="$(mktemp -d -t g1mut.XXXXXXXX)" || exit 2
+
+# $WORK roots every cp/rm below. mktemp -d returns an absolute path, but "returns" is not "was
+# verified": an empty or relative value here would point the restore and the rm -rf at the CWD,
+# which is the working tree. Dogfooding the rule this directory's sibling scanners enforce.
+case "$WORK" in
+  ""|/|//|/.) printf 'FATAL: WORK degenerate (%s); refusing\n' "$WORK" >&2; exit 2 ;;
+  /*) : ;;
+  *) printf 'FATAL: WORK is RELATIVE (%s); refusing\n' "$WORK" >&2; exit 2 ;;
+esac
+readonly WORK
 M="$WORK/mut"; mkdir -p "$M" || exit 2
 PRISTINE_HELPER="$WORK/helper.pristine"
 PRISTINE_SUITE="$WORK/suite.pristine"
