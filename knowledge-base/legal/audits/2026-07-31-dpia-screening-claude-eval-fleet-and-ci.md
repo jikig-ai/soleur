@@ -218,10 +218,21 @@ either of these two gaining a new write path.
 **(e) The register snapshot decays with no mechanical guard.** PA-31's 21-member snapshot and
 PA-33's 5-member snapshot are dated statements of fact with nothing asserting them in CI. The
 repository already contains the counter-example: `scripts/check-pa-22.sh` was written to guard
-the PA-22 entry and is wired into no workflow (`git grep check-pa-22 .github/` returns zero
-hits). *Accepted only because the fix is out of this record's scope*; tracked as deferred item
-**DEF-2** (#7125), which folds `check-pa-22.sh`'s single assertion into the same sweep. *Re-screening
-trigger:* before the next new Anthropic-egressing function lands.
+the PA-22 entry and ran in no runner. *Accepted only because the fix is out of this record's
+scope*; tracked as deferred item **DEF-2** (#7125), which folds `check-pa-22.sh`'s single
+assertion into the same sweep. *Re-screening trigger:* before the next new Anthropic-egressing
+function lands.
+
+> **Annotation — 2026-09-03 (#7717; annotation only, nothing above is retracted).** The
+> counter-example above is now spent: `scripts/check-pa-22.sh` is wired, as a `run_suite` line in
+> `scripts/test-all.sh`, which rides the required `test` context. This paragraph originally cited
+> `git grep check-pa-22 .github/` returning zero hits as its evidence. **That command still
+> returns zero**, because the wiring is not in `.github/` — so the sentence would have remained
+> literally true while the claim it carried became false. The evidence is therefore re-anchored
+> on a command that would change: `grep -c 'run_suite "scripts/check-pa-22' scripts/test-all.sh`
+> returns 2. **Finding (e) itself is unaffected:** PA-31's and PA-33's membership snapshots still
+> have no mechanical guard, and DEF-2 (#7125) — which is about that snapshot rotting rather than
+> about sentinel wiring generally — remains open. Only the illustration changed.
 
 ---
 

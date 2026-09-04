@@ -1247,6 +1247,12 @@ if want_scripts; then
   # running is cq-ac-must-not-depend-on-concurrent-sessions reproduced inside
   # the gate.
   run_suite "scripts/orphan-process-reaper-mutations" bash scripts/orphan-process-reaper-mutation.test.sh
+  # The Incident-PIR hypothetical-paragraph strip's mutation battery (#7801). The
+  # strip is a STATEFUL, ORDERED awk program, so a fixture suite alone cannot tell a
+  # load-bearing rule from a decorative one — seven of its ten original fixtures pass on `main`.
+  # Registered explicitly for the same reason as its neighbours: scripts/*.test.sh is
+  # NOT auto-globbed, so an unregistered suite silently never gates.
+  run_suite "scripts/ship-incident-pir-gate-mutations" bash scripts/ship-incident-pir-gate-mutation.test.sh
   # The fstab ceiling applier. Every case drives a FIXTURE fstab through the
   # RAISE_TMPFS_FSTAB seam — the real /etc/fstab is never read or written, because a
   # test that touched it could leave the machine unbootable. Registered explicitly for
@@ -1294,6 +1300,31 @@ if want_scripts; then
   run_suite "scripts/lint-legal-mirror-drift-baseline-live" bash scripts/lint-legal-mirror-drift-baseline.sh
   run_suite "scripts/tenant-dpa-register-guard-unit" bash scripts/tenant-dpa-register-guard.test.sh
   run_suite "scripts/tenant-dpa-register-guard-live" bash scripts/tenant-dpa-register-guard.sh count-signed
+  run_suite "scripts/lint-legal-registers-unit" bash scripts/lint-legal-registers.test.sh
+  # ADVISORY FOR ONE MERGE CYCLE (#7717). The live arm is the first lint over the legal
+  # REGISTER FILES (not over knowledge-base/legal/** -- lint-infra-no-human-steps.py already
+  # scans legal/runbooks; no lint covered the registers). Its scope was DESIGNED rather than
+  # measured. --advisory reports
+  # findings as warnings and exits 0; it does NOT downgrade a fail-closed refusal (rc=2), which
+  # is what keeps "I could not decide" distinguishable from "nothing to report".
+  # PROMOTION: delete the --advisory flag on the next line. Trigger: one green merge cycle with
+  # no unexplained finding. Tracked at #7787, which carries the full promotion checklist. The
+  # unit arm above is blocking from the start -- a guard's own tests have no reason to be
+  # advisory.
+  run_suite "scripts/lint-legal-registers-live" bash scripts/lint-legal-registers.sh --advisory
+  # WIRED HERE, NOT IN .github/ (#7717). check-pa-22.sh was written to guard the PA-22 register
+  # entry and then ran in ZERO runners -- one of the five documented instances in
+  # 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md. Wiring it
+  # without driving it red would reproduce that learning rather than discharge it, so it was
+  # mutation-tested at #7717, including by moving the TOMs row OUT of the PA-22 block: its
+  # assertion (iv) uses an awk range whose terminator does not match the heading that actually
+  # follows PA-22, so the range spans past Vendor Mapping and Cross-Cutting TOMs and a naive
+  # inject-and-confirm passes. Art. 30 PA-31 §(g) and the 2026-07-31 DPIA memo cited
+  # `git grep check-pa-22 .github/` as evidence it was unwired; that command still returns zero
+  # and would have stayed literally true while its claim became false, so both were re-anchored
+  # on a grep over THIS file.
+  run_suite "scripts/check-pa-22-unit" bash scripts/check-pa-22.test.sh
+  run_suite "scripts/check-pa-22-live" bash scripts/check-pa-22.sh
   # DECIDABILITY, not emptiness. `assert-empty` encoded a BUSINESS fact ("Jikigai has zero
   # tenants") as a passing test, so onboarding tenant #1 -- the day the guard finally matters --
   # would red the whole suite, and the under-pressure fix is to delete this line. `count-signed`

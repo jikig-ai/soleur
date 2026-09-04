@@ -185,3 +185,16 @@ existed only as a blockquote in the source plan; it is now
 - `knowledge-base/legal/audits/2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md`
 
 <!-- ADDENDUM-2026-08-26 END -->
+
+<!-- MARKER-2026-09-03 START -->
+
+> **Pointer — 2026-09-03 (#7717).** A second annotation-only addendum was added to the
+> canonical determination at
+> `knowledge-base/legal/audits/2026-06-29-inngest-prd-rls-reachability-gdpr-determination.md`
+> ("Addendum — 2026-09-03"). In short: the 2026-08-26 correction addressed `edge_logs`
+> only; `auth_logs` is instrumented and its zero retains weak evidentiary value; and
+> `postgrest_logs` — the instrumented source that records REST traffic on this project —
+> was never queried, and that window is recorded as not established to be recoverable (no retrieval was attempted and no probe is cited; see the 2026-09-03 addendum at the canonical record). **The verdict is unaffected.**
+> This is a pointer, not a third copy: read the addendum at the canonical record.
+
+<!-- MARKER-2026-09-03 END -->

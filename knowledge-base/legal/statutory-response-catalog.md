@@ -7,6 +7,7 @@ status: draft-requires-counsel-review
 related:
   [
     article-30-register,
+    "knowledge-base/legal/breach-register.md",
     "apps/web-platform/lib/email-triage/statutory-rules.ts",
     "knowledge-base/legal/legitimate-interest-assessments/2026-06-11-operator-inbox-triage-lia.md",
   ]
@@ -246,8 +247,11 @@ period is confirmed; a mise en demeure may set a materially shorter one).
    sender identity is an unauthenticated claim).
 2. Calendar the letter's stated deadline; replace the one-month default.
 3. Pull the accountability pack: Article 30 register
-   (`knowledge-base/legal/article-30-register.md`), compliance posture
-   (`knowledge-base/legal/compliance-posture.md`), the relevant LIA(s) and
+   (`knowledge-base/legal/article-30-register.md`), the **Art. 33(5) breach
+   register** (`knowledge-base/legal/breach-register.md` — the index of personal-data
+   breach determinations; a supervisory authority asking about an incident asks for
+   this, and it is a different instrument from the Art. 30 register), compliance
+   posture (`knowledge-base/legal/compliance-posture.md`), the relevant LIA(s) and
    DPIA screening memos — these are the documents a DPA asks for first.
 4. Engage external counsel for anything beyond a routine information request.
 5. Do not archive the item; statutory rows are retained for the
