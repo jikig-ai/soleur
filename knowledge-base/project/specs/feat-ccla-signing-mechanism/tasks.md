@@ -119,10 +119,14 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
       ruling (B1-c) and the two operator scope reversals.
 - [x] 6.2. `## Alternatives Considered` must include **"record the CCLA in the existing R2
       write-once store"** — the central alternative, absent from the first draft.
-- [ ] 6.3. Re-derive the ordinal immediately before merge; if it moves, sweep plan + spec + tasks
+- [x] 6.3. Re-derive the ordinal immediately before merge; if it moves, sweep plan + spec + tasks
       + ACs in the same edit.
-  Re-derived across all 67 `origin/*` refs at Phase 6: max is ADR-200, so ADR-201 is free. Must be re-derived once more
-      immediately before merge, per this task's own wording.
+  Re-derived at Phase 6 AND again immediately before merge. **The maximum MOVED between the two probes** — ADR-200 at
+      Phase 6, ADR-202 now (70 refs) — which is exactly the case this task exists to catch. But the max is the wrong
+      question: ADR-202 was taken by a sibling branch (`feat-one-shot-7797-bash-x-token-guard`), and a per-ordinal
+      probe shows **ADR-201 is held by this branch and no other**. No collision, so no renumber sweep. Re-probe per
+      ORDINAL, not against the maximum: a moved maximum is not a collision, and a stable maximum would not prove
+      the absence of one on an unmerged ref.
 - [x] 6.4. C4: no change required under B1-c beyond an optional `contributor` description
       amendment. If any `.c4` edit lands, run `scripts/regenerate-c4-model.sh` and commit
       `model.likec4.json` in the same commit.
@@ -131,10 +135,11 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 ## Phase 7 — Verification
 
 - [x] 7.1. Run every AC in the plan's `## Acceptance Criteria`.
-- [ ] 7.2. `bash scripts/test-all.sh` — the **full** battery, not touched-file shards.
-  Ran to completion this session: **359/366**, two failing suites, both fixed afterwards (guard-vacuity-floor
-      registration and the fixture-relative baseline). A clean re-run is still owed — a sibling full-gate run in another
-      worktree currently refuses concurrent runs, which is the mechanical backstop working as intended.
+- [x] 7.2. `bash scripts/test-all.sh` — the **full** battery, not touched-file shards.
+  **DISCHARGED.** Clean re-run once the sibling full-gate run cleared: `rc=0`, 366 suites — 362 passed, **0 failed, 0
+      killed**, 4 declined as not relevant to this diff. The only coverage NOTE is `apps/web-platform/infra/ is NOT
+      covered above (diff does not touch it)`, which is accurate. All three branch-relevant suites green:
+      guard-vacuity-floor, fixture-relative-assert, ccla-add. (The first run was 359/366 with two failures, both fixed.)
 - [x] 7.3. Verify prose against code item by item (#7349 class): no `ccla/` write path;
       `ccla-add.sh` refuses un-signed ids; the custody location named in §0 is the one actually used.
 - [x] 7.4. File the `side-letter-register.md` legal-name-column issue, citing the B1 ruling as the
