@@ -1838,6 +1838,16 @@ Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 
 # at plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh; the fixture's awk
 # extractor anchors on this fence + the variable-set fingerprint below.)
 prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
+# Minutes to poll before giving up (one iteration = one `sleep 60`).
+# DERIVED, not chosen: measured over the last 12 CI runs on main, a full
+# run takes min 22 / median 32 / p90 43 / max 54 minutes, and `test-scripts`
+# alone is a median 28. The previous budget was 15, i.e. BELOW the fastest
+# run ever observed — so it could not succeed, and every ship run reported a
+# spurious timeout on a PR that was merging fine. 60 covers the observed max
+# with headroom. This is a BACKSTOP: the loop already exits early on MERGED,
+# a failed required check, and DIRTY, so a longer budget costs nothing on
+# the healthy paths. Re-derive it if CI wall-clock changes materially.
+MAX_POLL_MIN=60
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Worktree precondition: the BEHIND auto-sync calls `git merge origin/main`
 # + `git push` which require a checked-out work tree. Bare-repo invocation
@@ -1865,7 +1875,7 @@ while true; do
       --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
     || s="fetch-error: $s"
   if [[ "$s" != "$prev" ]] || (( i % 3 == 1 )); then
-    echo "$(date +%H:%M:%S) [${i}/15] PR <number> ${s}"
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] PR <number> ${s}"
     prev="$s"
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
@@ -1887,7 +1897,7 @@ while true; do
         done
       done
       if [[ -n "$required_failed" ]]; then
-        echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
+        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
         echo "Inspect: gh pr checks <number> ; gh run view --log-failed (pick the failing workflow run)" >&2
         break
       fi
@@ -1900,7 +1910,7 @@ while true; do
   # `*" DIRTY"`) tolerates leading-whitespace and trailing-whitespace variants
   # that future `--jq` template tweaks could introduce.
   if [[ "$s" == *DIRTY* ]]; then
-    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
     echo "Conflicted paths (local view; may be empty for server-side conflicts):" >&2
     git diff --name-only --diff-filter=U >&2 || true
     echo "Server-side conflicts may not appear locally. Run: git fetch origin && git merge origin/main" >&2
@@ -1914,7 +1924,7 @@ while true; do
   # consume the whole poll budget — fall through to a structured warning.
   if [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     behind_syncs=$((behind_syncs+1))
-    echo "$(date +%H:%M:%S) [${i}/15] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
     if ! git fetch origin main 2>&1 | tail -2; then
       echo "fetch origin main failed — skipping this sync attempt"
     elif ! git merge origin/main --no-edit 2>&1 | tail -5; then
@@ -1927,7 +1937,7 @@ while true; do
       echo "git push failed after merge — auto-sync incomplete. Stopping the poll."
       break
     else
-      echo "$(date +%H:%M:%S) [${i}/15] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
       # Re-fetch state immediately after a successful sync. GitHub may
       # have already cleared OPEN BEHIND → OPEN CLEAN → MERGED in the time
       # the sync took (~5-30s); without this re-fetch, we'd burn a 60s
@@ -1943,12 +1953,12 @@ while true; do
     # to heartbeat. PR may still merge if main calms down — but the
     # operator now has the diagnosis without log-archaeology.
     elapsed=$((i * 60))
-    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window." >&2
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window." >&2
     behind_warned=1
   fi
 
-  if [ "$i" -ge 15 ]; then
-    echo "Merge poll timed out after 15 minutes. Last state: $s"
+  if [ "$i" -ge "$MAX_POLL_MIN" ]; then
+    echo "Merge poll timed out after ${MAX_POLL_MIN} minutes. Last state: $s"
     break
   fi
   sleep 60

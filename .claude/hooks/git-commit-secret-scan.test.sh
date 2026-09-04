@@ -3,6 +3,12 @@
 # Deterministic — uses a temp git repo per test, no network, no real secrets.
 set -euo pipefail
 
+# Redirect incident telemetry into a per-suite sandbox BEFORE any case runs.
+# Inline per-call `INCIDENTS_REPO_ROOT=… bash "$HOOK"` is what leaked here:
+# it was set on some invocations and missed on others, which greps identically
+# to full isolation. See the helper header.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOOK="$REPO_ROOT/.claude/hooks/git-commit-secret-scan.sh"
 GITLEAKS_TOML="$REPO_ROOT/.gitleaks.toml"
