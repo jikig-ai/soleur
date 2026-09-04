@@ -80,19 +80,19 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 
 ## Phase 5 — Corpus corrections
 
-- [ ] 5.1. `docs/legal/corporate-cla.md` §0 (two-copies **and** erasure-procedure assertions), §5,
+- [x] 5.1. `docs/legal/corporate-cla.md` §0 (two-copies **and** erasure-procedure assertions), §5,
       §Signing — CLO's drafted replacements. Pair with mirror + `legal-doc-shas.ts` re-pin **in the
       same commit**.
-- [ ] 5.2. `docs/legal/individual-cla.md` §1 (`:40`), §4(a) (`:60`), Art. 13 notice sentence —
+- [x] 5.2. `docs/legal/individual-cla.md` §1 (`:40`), §4(a) (`:60`), Art. 13 notice sentence —
       triple lockstep.
-- [ ] 5.3. `privacy-policy.md` §4.5 (coverage map as a **distinct** disclosure) + §10 — triple lockstep.
-- [ ] 5.4. `gdpr-policy.md` §3.4 (third balancing test — already landed at 0.1) + §6 — triple lockstep.
-- [ ] 5.5. `data-protection-disclosure.md` §2.3(d) + §6.4 — triple lockstep.
-- [ ] 5.6. `article-30-register.md` PA-7 §(c), §(d), §(e) **and the Lawful basis row**.
-- [ ] 5.7. Rename `removed_at` from "tombstone" to *withdrawal-of-designation marker* everywhere.
+- [x] 5.3. `privacy-policy.md` §4.5 (coverage map as a **distinct** disclosure) + §10 — triple lockstep.
+- [x] 5.4. `gdpr-policy.md` §3.4 (third balancing test — already landed at 0.1) + §6 — triple lockstep.
+- [x] 5.5. `data-protection-disclosure.md` §2.3(d) + §6.4 — triple lockstep.
+- [x] 5.6. `article-30-register.md` PA-7 §(c), §(d), §(e) **and the Lawful basis row**.
+- [x] 5.7. Rename `removed_at` from "tombstone" to *withdrawal-of-designation marker* everywhere.
 - [ ] 5.8. Route the cross-document sweep through `legal-compliance-auditor`.
-- [ ] 5.9. Do **not** enrol either CLA in `BODY_EQUIVALENCE_DOCS` — measured drift is non-zero.
-- [ ] 5.10. Keep every `#NNNN` reference mid-line (markdownlint phantom-H1 trap).
+- [x] 5.9. Do **not** enrol either CLA in `BODY_EQUIVALENCE_DOCS` — measured drift is non-zero.
+- [x] 5.10. Keep every `#NNNN` reference mid-line (markdownlint phantom-H1 trap).
 
 ## Phase 6 — ADR, C4, principle
 
