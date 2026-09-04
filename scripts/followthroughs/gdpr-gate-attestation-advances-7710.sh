@@ -31,10 +31,21 @@ REPO="jikig-ai/soleur"
 command -v gh >/dev/null 2>&1 || { echo "TRANSIENT: gh CLI not on PATH" >&2; exit 2; }
 [[ -n "${GH_TOKEN:-}" ]] || { echo "TRANSIENT: GH_TOKEN not set" >&2; exit 2; }
 
-# Window: the probe is enrolled at merge+8d, so ask about the last 14 days. A
-# wider window than the cadence keeps a one-off retry from reading as a failure,
-# while still being far narrower than the 117-day lapse this exists to detect.
-SINCE=$(date -u -d '14 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) \
+# Window: 30 days.
+#
+# It MUST exceed the producer's write interval or a healthy system fails this
+# probe. The writer suppresses any write while `last-verified` is under 21 days
+# old, so on a weekly cadence consecutive attestation commits are 21-27 days
+# apart. An earlier revision asked for a commit in the last 14 days, which is
+# SHORTER than that interval: every sweep landing 15-27 days after a write
+# would have reported "the restored writer is not advancing the field" on a
+# perfectly healthy pipeline (#7710 review). It passed its first evaluation
+# only because the field is 117 days stale today, so the first post-merge run
+# writes unconditionally.
+#
+# 30 days is the same threshold the gate's own staleness banner uses, so this
+# probe and the banner cannot disagree about what "current" means.
+SINCE=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) \
   || { echo "TRANSIENT: could not compute window" >&2; exit 2; }
 
 COMMITS=$(gh api \
@@ -77,6 +88,17 @@ fi
 
 if (( ATTESTATIONS > 0 )); then
   echo "PASS: ${ATTESTATIONS} freshness attestation commit(s) on the default branch since ${SINCE}; last-verified is ${AGE_DAYS} day(s) old."
+  exit 0
+fi
+
+# Second PASS arm: no commit in the window, but the field is fresh.
+#
+# That is the write-suppression working as designed, not a dead writer — the
+# producer deliberately skips a write while the field is under 21 days old.
+# Without this arm the probe would fail on exactly the state the suppression
+# exists to produce.
+if [[ "$AGE_DAYS" != "unknown" ]] && (( AGE_DAYS < 21 )); then
+  echo "PASS: no attestation commit in the window, but last-verified is ${AGE_DAYS} day(s) old — the writer's under-21-day suppression is working."
   exit 0
 fi
 

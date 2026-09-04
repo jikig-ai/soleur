@@ -29,10 +29,43 @@ echo "=== gdpr-gate glob-liveness tests ==="
 echo ""
 
 if ! command -v lefthook >/dev/null 2>&1; then
-  echo "  SKIP: lefthook binary not on PATH — cannot exercise the glob"
+  # A skip here is NOT a pass. This suite is the ONLY witness of "the hook was
+  # never invoked", and `lefthook` is on no CI runner's PATH — so the earlier
+  # form (SKIPPED++ then a floorless `print_results`) exited 0 having asserted
+  # nothing, in exactly the environment that matters. Measured during #7710
+  # review: `Passed: 0 / Failed: 0 / Skipped: 1 / ALL EXECUTED TESTS PASSED`.
+  #
+  # Under CI this is a hard failure: the gate is declared to run there, so an
+  # absent binary is a broken gate, not an unavailable convenience. Locally it
+  # degrades loudly to a skip so a contributor without lefthook is not blocked.
+  if [[ -n "${CI:-}" ]]; then
+    printf 'FAIL: lefthook is not on PATH under CI — Guard 2 second chokepoint cannot run.\n' >&2
+    printf 'This suite is the only witness that the gdpr-gate-advisory hook is still invoked;\n' >&2
+    printf 'a skip here is indistinguishable from a dead glob. Install lefthook in the job.\n' >&2
+    exit 1
+  fi
+  echo "  SKIP: lefthook binary not on PATH — cannot exercise the glob (local only; CI fails)"
   SKIPPED=$((SKIPPED + 1))
-  print_results
+  print_results 1
 fi
+
+# Instrument self-test for the ONE helper this suite routes an assertion
+# through. The other five assertions are raw inline if/else, which a helper
+# stub cannot neuter — so neutering assert_eq/assert_contains here is an
+# EQUIVALENT mutation (they are not called), not a coverage gap.
+_selftest_file_exists() {
+  local p0="$PASS" f0="$FAIL"
+  assert_file_exists "$LEFTHOOK_YML" "instrument self-test — records a pass"
+  assert_file_exists "/nonexistent/definitely-not-here" \
+    "instrument self-test — records a failure (EXPECTED FAIL above)"
+  if (( PASS != p0 + 1 || FAIL != f0 + 1 )); then
+    printf 'INSTRUMENT SELF-TEST FAILED: assert_file_exists cannot both pass and fail.\n' >&2
+    exit 1
+  fi
+  PASS="$p0"; FAIL="$f0"
+  printf '  (instrument self-test OK)\n'
+}
+_selftest_file_exists
 
 assert_file_exists "$LEFTHOOK_YML" "lefthook.yml exists"
 
@@ -79,18 +112,62 @@ build_sandbox() {
   cp "$REPO_ROOT/plugins/soleur/skills/gdpr-gate/NOTICE" \
      "$SANDBOX/repo/plugins/soleur/skills/gdpr-gate/"
 
-  {
-    printf 'pre-commit:\n  parallel: false\n  commands:\n    gdpr-gate-advisory:\n      glob:\n'
-    printf '%s\n' "$1"
-    printf '      run: bash plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh {staged_files}\n'
-  } > "$SANDBOX/repo/lefthook.yml"
+  # Copy the REAL lefthook.yml and keep ONLY the gdpr-gate-advisory stanza.
+  #
+  # An earlier revision SYNTHESISED a 5-line config from the extracted glob
+  # lines plus a hardcoded `run:`. That put everything else about the shipped
+  # stanza out of reach — measured during #7710 review, adding `skip: true` to
+  # the real stanza, or replacing its `run:` with `/bin/true`, BOTH survived
+  # while this suite printed "lefthook did not report gdpr-gate-advisory as
+  # skipped". A harness that rebuilds its target cannot witness the target.
+  #
+  # `$1` is honoured only when it differs from the live globs, which is how
+  # the negative control (TS2) narrows the glob without touching the real file.
+  python3 - "$REPO_ROOT/lefthook.yml" "$SANDBOX/repo/lefthook.yml" "$1" <<'PYEOF'
+import sys, re
+src, dst, globs_override = sys.argv[1], sys.argv[2], sys.argv[3]
+text = open(src, encoding="utf-8").read()
+m = re.search(r"^    gdpr-gate-advisory:\n(?:^(?:      |\t).*\n|^\n)*", text, re.M)
+if not m:
+    sys.stderr.write("FATAL: gdpr-gate-advisory stanza not found in the real lefthook.yml\n")
+    sys.exit(2)
+stanza = m.group(0)
+if globs_override.strip():
+    stanza = re.sub(
+        r"      glob:\n(?:^        - .*\n)+",
+        "      glob:\n" + globs_override.rstrip("\n") + "\n",
+        stanza,
+        flags=re.M,
+    )
+open(dst, "w", encoding="utf-8").write(
+    "pre-commit:\n  parallel: false\n  commands:\n" + stanza
+)
+PYEOF
 }
 
+# One path per CANONICAL_REGEX alternation.
+#
+# A single fixture cannot see a glob set shrinking: measured during #7710
+# review, deleting 10 of the 15 declared globs — every `app/api/**` entry,
+# every `server/*auth*` entry, and BOTH `.sql` entries — left this suite green,
+# because the surviving `lib/auth` globs still matched the one staged file and
+# the count floor still passed. The gate would have stopped firing on every SQL
+# migration and every API route with nothing red.
+REGULATED_PATHS=(
+  "apps/web-platform/lib/auth/probe.ts"
+  "apps/web-platform/app/api/probe/route.ts"
+  "apps/web-platform/server/probe-auth-helper.ts"
+  "apps/web-platform/supabase/migrations/999_probe.sql"
+)
+
 stage_regulated_path() {
-  # A path the CANONICAL_REGEX in gdpr-gate.sh matches. Depth-1 under
-  # lib/auth/ deliberately: that is the depth a bare `**` glob silently drops.
-  mkdir -p "$SANDBOX/repo/apps/web-platform/lib/auth"
-  printf 'export const probe = 1;\n' > "$SANDBOX/repo/apps/web-platform/lib/auth/probe.ts"
+  # Depth-1 under lib/auth/ deliberately: that is the depth a bare `**` glob
+  # silently drops.
+  local p
+  for p in "${REGULATED_PATHS[@]}"; do
+    mkdir -p "$SANDBOX/repo/$(dirname "$p")"
+    printf 'probe\n' > "$SANDBOX/repo/$p"
+  done
   git -C "$SANDBOX/repo" add -A
 }
 
@@ -104,6 +181,26 @@ echo "TS1: live gdpr-gate-advisory glob -> command runs on a staged regulated pa
 build_sandbox "$GLOBS"
 stage_regulated_path
 OUT="$(run_hook)"
+
+# Every regulated arm must actually REACH the gate.
+#
+# Asserted per PATH, not as a count: redundant glob entries make lefthook pass
+# some files twice (`app/api/*.ts` and `app/api/**/*.ts` both match a nested
+# route, because `*` crosses `/`), so the examined count is 6 for 4 fixtures
+# and a count assertion would encode that accident. The stderr breadcrumb
+# names each matched path, which is the per-arm signal.
+UNREACHED=()
+for p in "${REGULATED_PATHS[@]}"; do
+  grep -qF -- "$p" <<<"$OUT" || UNREACHED+=("$p")
+done
+if (( ${#UNREACHED[@]} == 0 )); then
+  echo "  PASS: all ${#REGULATED_PATHS[@]} CANONICAL_REGEX arms reached the gate through the live glob set"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: these regulated paths never reached the gate — a glob arm is missing: ${UNREACHED[*]}"
+  printf '%s\n' "$OUT" | sed 's/^/          /'
+  FAIL=$((FAIL + 1))
+fi
 
 if grep -q 'path scan complete' <<<"$OUT"; then
   echo "  PASS: gdpr-gate.sh executed via lefthook (scan-completion line observed)"
@@ -140,4 +237,4 @@ else
   PASS=$((PASS + 1))
 fi
 
-print_results 5
+print_results 6

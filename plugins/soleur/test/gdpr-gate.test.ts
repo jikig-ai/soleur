@@ -425,6 +425,45 @@ describe("gdpr-gate runtime staleness banner (FR6, AC6a-d)", () => {
     expect(exitCode).toBe(0);
   });
 
+  // The 90-day boundary had a population of ONE, all on the firing side, so
+  // nothing asserted POSTURE_FAIL is ABSENT at any age. Measured during #7710
+  // review: moving the threshold from `> 90` to `> 31` — which emits
+  // "compliance/critical posture row required" 60 days early on every
+  // month-old corpus — survived the entire battery, and the one `> 90` mutant
+  // that was caught was caught only incidentally, because the POSTURE_FAIL
+  // string happens to contain the substring "days stale".
+  test("between the thresholds: warn banner fires, POSTURE_FAIL does NOT", () => {
+    const notice = makeNoticeAt(60);
+    const { stdout, exitCode } = runHook({ NOTICE_FILE: notice });
+    expect(stdout).toMatch(/gdpr-gate rules 60 days stale/);
+    expect(stdout).not.toMatch(/POSTURE_FAIL/);
+    expect(exitCode).toBe(0);
+  });
+
+  test("just below the POSTURE_FAIL threshold: still no POSTURE_FAIL", () => {
+    const { stdout } = runHook({ NOTICE_FILE: makeNoticeAt(90) });
+    expect(stdout).toMatch(/days stale/);
+    expect(stdout).not.toMatch(/POSTURE_FAIL/);
+  });
+
+  test("just above the POSTURE_FAIL threshold: POSTURE_FAIL fires", () => {
+    const { stdout } = runHook({ NOTICE_FILE: makeNoticeAt(91) });
+    expect(stdout).toMatch(/POSTURE_FAIL/);
+  });
+
+  // The warn threshold needs the same two-sided treatment.
+  test("just below the warn threshold: no staleness banner at all", () => {
+    const { stdout } = runHook({ NOTICE_FILE: makeNoticeAt(30) });
+    expect(stdout).not.toMatch(/days stale/);
+    expect(stdout).not.toMatch(/POSTURE_FAIL/);
+  });
+
+  test("just above the warn threshold: banner fires, POSTURE_FAIL does not", () => {
+    const { stdout } = runHook({ NOTICE_FILE: makeNoticeAt(31) });
+    expect(stdout).toMatch(/31 days stale/);
+    expect(stdout).not.toMatch(/POSTURE_FAIL/);
+  });
+
   test("(AC6c) NOTICE missing → days_stale=999, banner + POSTURE_FAIL fire, exit 0", () => {
     const { stdout, exitCode } = runHook({
       NOTICE_FILE: "/nonexistent/path/NOTICE",

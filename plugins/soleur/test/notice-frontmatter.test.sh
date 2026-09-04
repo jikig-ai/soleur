@@ -19,6 +19,38 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
+# --- Instrument self-test -----------------------------------------------
+# Drive BOTH assertion helpers and refuse to continue unless both counters
+# moved. An assertion-COUNT floor cannot do this job: a stub of the form
+# `assert_eq() { PASS=$((PASS+1)); }` still increments, so the floor is
+# satisfied by construction. Measured during #7710 review: neutering the
+# helpers in THIS suite printed "Passed: 8 / ALL TESTS PASSED", exit 0, with
+# every banner, staleness and scan-line assertion silently dropped — and this
+# is the suite `gdpr-gate-self-test.yml` runs as a blocking gate.
+#
+# Reported via printf + exit 1, never through the helper it backstops (ADR-193).
+_selftest() {
+  local p0="$PASS" f0="$FAIL"
+  assert_eq       "x" "x"   "instrument self-test — assert_eq records a pass"
+  assert_eq       "x" "y"   "instrument self-test — assert_eq records a failure (EXPECTED FAIL above)"
+  assert_contains "xy" "x"  "instrument self-test — assert_contains records a pass"
+  assert_contains "xy" "zz" "instrument self-test — assert_contains records a failure (EXPECTED FAIL above)"
+  if (( PASS != p0 + 2 )); then
+    printf "INSTRUMENT SELF-TEST FAILED: helpers recorded %s passes, expected 2.\\n" "$((PASS - p0))" >&2
+    exit 1
+  fi
+  if (( FAIL != f0 + 2 )); then
+    printf "INSTRUMENT SELF-TEST FAILED: helpers recorded %s failures, expected 2.\\n" "$((FAIL - f0))" >&2
+    printf "A helper that cannot fail certifies nothing.\\n" >&2
+    exit 1
+  fi
+  PASS="$p0"; FAIL="$f0"
+  printf "  (instrument self-test OK)\\n"
+}
+_selftest
+echo ""
+
+
 REPO_ROOT="$SCRIPT_DIR/../../.."
 PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh"
 LIVE_NOTICE="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/NOTICE"
@@ -314,4 +346,83 @@ else
 fi
 echo ""
 
-print_results
+# --- record-count / key-count: the completeness denominator ---------------
+#
+# These subcommands carry the `filesExamined === registryCount` conjunct in
+# cron-content-vendor-drift, and until #7710 review NOTHING EXECUTED THEM —
+# only a source-grep asserted the call site. Measured: replacing the
+# `record-count` case body with `echo 0` (which disables the writer forever)
+# and with `cmd_upstream_files | wc -l` (which REINSTATES the exact tautology
+# the conjunct exists to close) both survived all four bash suites.
+echo "TS-RC: record-count and key-count over a registry with a dropped record"
+
+RC_DIR="$(mktemp -d -t notice-rc.XXXXXXXX)"
+assert_fixture_dir "$RC_DIR"
+trap 'rm -rf "$RC_DIR"' EXIT
+
+# 3 declared records. Record b is missing `upstream-blob-sha`, so the FILTERED
+# views drop it; record c is intact.
+cat > "$RC_DIR/NOTICE" <<'RC_EOF'
+---
+upstream: github.com/goSprinto/compliance-skills
+pinned-commit: 7b58d68461cb1fc033a063e34cc9de63d0b4144b
+last-verified: 2026-05-10
+registry: knowledge-base/engineering/policies/content-vendoring.md
+lifted-files:
+  - path: references/a.md
+    upstream-path: pii/a.md
+    upstream-blob-sha: aaa1111111111111111111111111111111111111
+    local-blob-sha: bbb1111111111111111111111111111111111111
+    status: active
+  - path: references/b.md
+    upstream-path: pii/b.md
+    local-blob-sha: bbb2222222222222222222222222222222222222
+    status: active
+  - path: references/c.md
+    upstream-path: pii/c.md
+    upstream-blob-sha: aaa3333333333333333333333333333333333333
+    local-blob-sha: bbb3333333333333333333333333333333333333
+    status: active
+---
+RC_EOF
+
+RC_DECLARED=$(NOTICE_FILE="$RC_DIR/NOTICE" bash "$PARSER" record-count lifted-files)
+RC_STATUS=$(NOTICE_FILE="$RC_DIR/NOTICE" bash "$PARSER" key-count lifted-files status)
+RC_EMITTED=$(NOTICE_FILE="$RC_DIR/NOTICE" bash "$PARSER" upstream-files | wc -l | tr -d ' ')
+
+assert_eq "3" "$RC_DECLARED" "record-count counts DECLARED records, including the incomplete one"
+assert_eq "3" "$RC_STATUS" "key-count counts a key the record-opener predicate does not consume"
+assert_eq "2" "$RC_EMITTED" "the filtered upstream view silently DROPS the incomplete record"
+
+# The whole point: the denominator must NOT equal the filtered view, or the
+# completeness conjunct can never fail.
+if [[ "$RC_DECLARED" != "$RC_EMITTED" ]]; then
+  echo "  PASS: declared ($RC_DECLARED) != emitted ($RC_EMITTED) — a partial comparison is detectable"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: declared == emitted on a registry with a dropped record — the completeness conjunct is a tautology"
+  FAIL=$((FAIL + 1))
+fi
+
+# Opener deletion: the record's keys are absorbed by its predecessor, so the
+# opener count AND the filtered view both shrink together. Only a key the
+# opener predicate does not consume still sees three.
+sed '/^  - path: references\/c.md$/d' "$RC_DIR/NOTICE" > "$RC_DIR/NOTICE-noopener"
+RC_D2=$(NOTICE_FILE="$RC_DIR/NOTICE-noopener" bash "$PARSER" record-count lifted-files)
+RC_S2=$(NOTICE_FILE="$RC_DIR/NOTICE-noopener" bash "$PARSER" key-count lifted-files status)
+assert_eq "2" "$RC_D2" "opener deletion shrinks the record count"
+assert_eq "3" "$RC_S2" "key-count still sees three records — it does not share the opener predicate"
+if [[ "$RC_S2" != "$RC_D2" ]]; then
+  echo "  PASS: the two declared views DISAGREE on opener loss, so it cannot pass silently"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: both declared views moved together — opener loss is undetectable"
+  FAIL=$((FAIL + 1))
+fi
+
+# Empty registry must be 0, not an error that reads as a count.
+assert_eq "0" "$(NOTICE_FILE=/nonexistent/NOTICE bash "$PARSER" record-count lifted-files)" \
+  "record-count returns 0 when the NOTICE cannot be read (fail-closed)"
+echo ""
+
+print_results 41

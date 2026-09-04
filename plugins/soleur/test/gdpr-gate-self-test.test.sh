@@ -28,6 +28,36 @@ GH_STUB_DIR="$FIXTURE_DIR/gh-stub"
 # emit. Asserted in Case A; absence asserted in Case B.
 BANNER_LITERAL='ℹ gdpr-gate: operator-attested mode (no GH_TOKEN available — cron-run timestamp unverified, falling back to NOTICE last-verified)'
 
+# --- Instrument self-test -----------------------------------------------
+# Drive BOTH assertion helpers and refuse to continue unless both counters
+# moved. An assertion-COUNT floor cannot do this job: a stub of the form
+# `assert_eq() { PASS=$((PASS+1)); }` still increments, so the floor is
+# satisfied by construction. Measured during #7710 review: neutering the
+# helpers in THIS suite printed "Passed: 8 / ALL TESTS PASSED", exit 0, with
+# every banner, staleness and scan-line assertion silently dropped — and this
+# is the suite `gdpr-gate-self-test.yml` runs as a blocking gate.
+#
+# Reported via printf + exit 1, never through the helper it backstops (ADR-193).
+_selftest() {
+  local p0="$PASS" f0="$FAIL"
+  assert_eq       "x" "x"   "instrument self-test — assert_eq records a pass"
+  assert_eq       "x" "y"   "instrument self-test — assert_eq records a failure (EXPECTED FAIL above)"
+  assert_contains "xy" "x"  "instrument self-test — assert_contains records a pass"
+  assert_contains "xy" "zz" "instrument self-test — assert_contains records a failure (EXPECTED FAIL above)"
+  if (( PASS != p0 + 2 )); then
+    printf "INSTRUMENT SELF-TEST FAILED: helpers recorded %s passes, expected 2.\\n" "$((PASS - p0))" >&2
+    exit 1
+  fi
+  if (( FAIL != f0 + 2 )); then
+    printf "INSTRUMENT SELF-TEST FAILED: helpers recorded %s failures, expected 2.\\n" "$((FAIL - f0))" >&2
+    printf "A helper that cannot fail certifies nothing.\\n" >&2
+    exit 1
+  fi
+  PASS="$p0"; FAIL="$f0"
+  printf "  (instrument self-test OK)\\n"
+}
+_selftest
+echo ""
 echo "=== gdpr-gate self-test ==="
 echo ""
 
@@ -201,4 +231,4 @@ fi
 assert_contains "$CASE_C2_OUT" "POSTURE_FAIL:" "Case C: POSTURE_FAIL still present alongside the scan line"
 echo ""
 
-print_results
+print_results 20
