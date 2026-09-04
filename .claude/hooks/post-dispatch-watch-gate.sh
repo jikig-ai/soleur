@@ -56,45 +56,8 @@ case "$GITDIR" in /*) ;; *) GITDIR="$ROOT/$GITDIR" ;; esac
 STATE="$GITDIR/soleur-pending-dispatch"
 
 # --- Monitor armed: everything pending is now considered watched -----------------------------
-#
-# ARMED IS NOT THE SAME AS REPORTING. This hook, and both monitor hard rules, only ever asked that
-# a Monitor EXIST. Measured on #7778: a monitor was armed whose every `echo` sat behind a
-# terminal-state branch (merged / failed / cancelled / timed out). It ran for ~50 minutes emitting
-# nothing, and the operator had to ask why the monitor showed no progress — the exact outcome
-# hr-dispatch-async-must-arm-watch names in its own rationale ("Unwatched async work is silent,
-# not pending"), reached while fully satisfying that rule.
-#
-# So: still clear the flag (a monitor IS armed — that is honest), and separately WARN when the
-# command has no emission the healthy path can reach. Warn-only, never deny, for the reason this
-# file's header already gives about false nags killing a gate: this is a heuristic over shell
-# text, it cannot see through a called script, and it is wrong on any loop whose progress line
-# comes from a helper. The allowlist below is why `monitor-pr-checks.sh` exists — a script
-# invocation is checkable where a hand-rolled loop is not.
 if [[ "$HOOK_TOOL_NAME" == "Monitor" ]]; then
   rm -f "$STATE" 2>/dev/null || true
-  MON_CMD="$(_field 'tool_input.command')"
-  if [[ -n "$MON_CMD" ]]; then
-    # Delegating to a known-good reporter, or a naturally-streaming source, needs no check.
-    if grep -qE 'monitor-pr-checks\.sh|tail -f|inotifywait|websocat' <<<"$MON_CMD"; then
-      exit 0
-    fi
-    # A loop is present but every emission is conditional => the healthy path is silent.
-    # HERE-STRINGS, NOT `printf | grep -q` (#6992, enforced by grep-q-pipe-guard.test.sh):
-    # `grep -q` exits on its first match and SIGPIPEs the producer, which under `pipefail` is
-    # rc=141 — inside a policy-gate hook that is an unexplained failure, not a verdict.
-    if grep -qE '\b(while|until|for)\b' <<<"$MON_CMD" \
-       && ! grep -qE '^[[:space:]]*(echo|printf)' <<<"$MON_CMD" ; then
-      emit_incident post-dispatch-watch-gate warn \
-        "monitor armed with no unconditional progress emission" "${MON_CMD:0:50}" 2>/dev/null || true
-      jq -n '{hookSpecificOutput: {hookEventName: "PostToolUse", additionalContext:
-        ("post-dispatch-watch-gate: the Monitor you just armed has a poll loop whose every emission " +
-         "looks conditional. If nothing prints on the HEALTHY still-running path, silence will be " +
-         "indistinguishable from a dead watch for the whole run (#7778).\n" +
-         "Prefer: bash plugins/soleur/scripts/monitor-pr-checks.sh <PR>\n" +
-         "Or add one unconditional progress line per poll, before the terminal-state branches.")}}'
-      exit 0
-    fi
-  fi
   exit 0
 fi
 

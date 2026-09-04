@@ -122,10 +122,63 @@ mkstub 'OPEN|DIRTY|true' "$GREEN_CHECKS"
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
 [[ "$rc" -eq 1 && "$out" == *"DIRTY"* && "$out" == *"conflict"* ]] && ok "T6b green-but-DIRTY is surfaced as needing action, not polled through" || no "T6b dirty" "rc=$rc out=$out"
 
-# ── T7 a gh failure must not kill the loop ───────────────────────────────────────
+# ── T9: `skipping` is a real bucket (pass|fail|pending|skipping|cancel) ─────────
+# It is part of the array length, so counting it in `tot` but in no tally made the pass fraction
+# UNREACHABLE on any PR with a path-filtered job — the script printed `1/3 pass` and `ALL GREEN`
+# on adjacent lines. Every PR in this repo has skipped checks, so this was wrong on every run.
+SKIP_CHECKS='[{"name":"a","bucket":"pass"},{"name":"e2e","bucket":"skipping"},{"name":"d","bucket":"skipping"}]'
+mkstub 'OPEN|CLEAN|false' "$SKIP_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 0 && "$out" == *"1/1 pass"* && "$out" == *"2 skipped"* ]]; then
+  ok "T9 skipped checks are reported and excluded from the pass denominator (1/1, not 1/3)"
+else
+  no "T9 skipping bucket accounting" "rc=$rc out=[$out]"
+fi
+
+# ── T10: a DRAFT must never get a 'go merge it' verdict ──────────────────────────
+# `gh pr view --json state` returns OPEN for a draft (isDraft is a separate field), so the
+# auto-merge branch fired and exited rc=0 telling the operator to merge a PR GitHub will refuse.
+mkstub 'OPEN|DRAFT|false' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -ne 0 && "$out" == *"DRAFT"* ]] && ok "T10 a green DRAFT is NOT reported as ready to merge" || no "T10 draft" "rc=$rc out=$out"
+
+# ── T11: green + BLOCKED + auto-merge armed must not poll forever ────────────────
+# BLOCKED with nothing pending means branch protection is unsatisfied OUTSIDE the check list;
+# auto-merge sits there indefinitely. It rendered identically to CLEAN, which lands in seconds.
+mkstub 'OPEN|BLOCKED|true' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -ne 0 && "$out" == *"BLOCKED"* ]] && ok "T11 green-but-BLOCKED is surfaced, not polled through" || no "T11 blocked" "rc=$rc out=$out"
+
+# ── T12: a NON-REQUIRED failure under auto-merge is not a false red ──────────────
+mkstub 'OPEN|UNSTABLE|true' "$RED_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 2 && "$out" == *"NON-REQUIRED"* ]] && ok "T12 a non-required failure under UNSTABLE keeps watching instead of exiting red" || no "T12 unstable" "rc=$rc out=$out"
+
+# ── T13: degraded input must not render as measured input ────────────────────────
+# The fallbacks are literals, not readings; printing five zeroes in the same shape as real counts
+# is the "a zero that does not say what it means" class.
 printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
 out="$(run 7778 --interval 10 --max-polls 2)"; rc=$?
-[[ "$rc" -eq 2 && "$out" == *"UNKNOWN"* ]] && ok "T7 a failing gh degrades to UNKNOWN and keeps polling (does not die silently)" || no "T7 gh failure" "rc=$rc out=$out"
+[[ "$out" == *"gh probe FAILED"* && "$out" != *"0/0 pass"* ]] && ok "T13 a gh outage says so instead of printing fabricated zeroes" || no "T13 degraded rendering" "out=[$out]"
+
+# ── T14: every line carries a poll counter (unique heartbeats, TIMEOUT countdown) ─
+mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 2 --heartbeat-every 1)"
+[[ "$out" == *"(poll 1/2)"* && "$out" == *"(poll 2/2)"* ]] && ok "T14 each line carries (poll n/MAX) — heartbeats are unique, not byte-identical" || no "T14 poll counter" "out=[$out]"
+
+# ── T7 a gh failure must not kill the loop ───────────────────────────────────────
+printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
+# RE-SCOPED (not deleted): this asserted the OLD rendering, `UNKNOWN|UNKNOWN|automerge=false 0/0`,
+# which T13 established was the defect — degraded input printed in the same shape as measured input.
+# The property that still matters is the one this arm was written for: a gh failure must not kill
+# the loop, and must not be mistaken for a settled PR. It keeps polling and exits rc=2.
+out="$(run 7778 --interval 10 --max-polls 2)"; rc=$?
+lines="$(grep -c 'poll [0-9]*/' <<<"$out")"
+if [[ "$rc" -eq 2 && "$lines" -ge 1 && "$out" != *"SETTLED"* && "$out" != *"MERGED"* ]]; then
+  ok "T7 a failing gh keeps polling and never forges a terminal verdict (rc=2, no SETTLED/MERGED)"
+else
+  no "T7 gh failure" "rc=$rc lines=$lines out=$out"
+fi
 
 # ── T8 argument validation ───────────────────────────────────────────────────────
 mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
@@ -138,9 +191,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 13 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 13.\n' "$_ran" >&2
+if [[ "$_ran" -lt 19 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 19.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 13)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 19)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1

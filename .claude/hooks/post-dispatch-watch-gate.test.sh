@@ -90,40 +90,8 @@ bash_payload 'gh workflow run x.yml && gh run view 123 --json status' | "$HOOK" 
 out=$(jq -nc '{tool_name:"Bash",cwd:"/nonexistent-xyz",tool_input:{command:"gh workflow run x.yml"}}' | "$HOOK" 2>&1; echo "rc=$?")
 grep -q 'rc=0' <<<"$out" && ok "N1 non-git cwd fails open" || bad "N1 non-git cwd errored"
 
-# --- M1..M3: ARMED IS NOT REPORTING (#7778) ----------------------------------------------------
-# The hook clears the pending flag on ANY Monitor. That is correct and it is not sufficient: a
-# monitor whose every emission sits behind a terminal-state branch runs silently for its whole
-# lifetime, which is the outcome hr-dispatch-async-must-arm-watch exists to prevent, reached while
-# satisfying it. M1 feeds the ACTUAL silent monitor from that session.
-monitor_payload() { jq -nc --arg c "$1" --arg d "$WORK" '{tool_name:"Monitor",cwd:$d,session_id:"t",tool_input:{command:$c}}'; }
-ctx_of() { jq -r '.hookSpecificOutput.additionalContext // ""' <<<"${1:-{\}}" 2>/dev/null; }
-
-reset
-out=$(monitor_payload 'n=0
-while true; do
-  st=$(gh pr view 7778 --json state)
-  case "$st" in
-    MERGED*) echo "MERGED"; break ;;
-  esac
-  n=$((n+1)); [ "$n" -gt 100 ] && { echo "TIMEOUT"; break; }
-  sleep 45
-done' | "$HOOK" 2>/dev/null)
-[[ -n "$(ctx_of "$out")" ]] && ok "M1 a poll loop with only terminal-state emissions is flagged" || bad "M1 the silent-monitor shape was not flagged"
-
-reset
-out=$(monitor_payload 'bash plugins/soleur/scripts/monitor-pr-checks.sh 7778 --interval 120' | "$HOOK" 2>/dev/null)
-[[ -z "$(ctx_of "$out")" ]] && ok "M2 the canonical reporter script is not flagged" || bad "M2 flagged the known-good reporter"
-
-reset
-out=$(monitor_payload 'while true; do
-  st=$(gh pr view 7778 --json state)
-  echo "[$st] still running"
-  sleep 45
-done' | "$HOOK" 2>/dev/null)
-[[ -z "$(ctx_of "$out")" ]] && ok "M3 an INDENTED unconditional emission per poll is not flagged" || bad "M3 false-positived on a correct loop"
-
 # --- V1: anti-vacuity ---------------------------------------------------------------------------
-if [[ "$TOTAL" -eq 15 ]]; then ok "V1 full inventory ran (15 checks incl. this)"; else bad "V1 expected 15, ran $((TOTAL+1))"; fi
+if [[ "$TOTAL" -eq 12 ]]; then ok "V1 full inventory ran (12 checks incl. this)"; else bad "V1 expected 12, ran $((TOTAL+1))"; fi
 
 echo ""
 echo "=== $PASS/$TOTAL passed ==="

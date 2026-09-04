@@ -39,7 +39,8 @@
 # every-poll is what gets throttled.
 #
 # Usage:
-#   monitor-pr-checks.sh <pr-number> [--interval SECONDS] [--max-polls N] [--repo OWNER/REPO]
+#   monitor-pr-checks.sh <pr-number> [--interval SECONDS] [--max-polls N]
+#                        [--heartbeat-every N] [--repo OWNER/REPO]
 #
 # Emits one line per poll:
 #   [OPEN|BLOCKED|automerge=true] 73/78 pass · 0 fail · 0 cancel · 2 pending → test-scripts,...
@@ -57,7 +58,7 @@ while [[ $# -gt 0 ]]; do
     --max-polls) MAX_POLLS="${2:?--max-polls needs a value}"; shift 2 ;;
     --heartbeat-every) HEARTBEAT_EVERY="${2:?--heartbeat-every needs a value}"; shift 2 ;;
     --repo)      REPO_ARG=(--repo "${2:?--repo needs a value}"); shift 2 ;;
-    -h|--help)   sed -n '1,40p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '41,58p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*)          echo "monitor-pr-checks: unknown flag $1" >&2; exit 3 ;;
     *)           if [[ -n "$PR" ]]; then echo "monitor-pr-checks: unexpected argument $1" >&2; exit 3; fi
                  PR="$1"; shift ;;
@@ -76,24 +77,34 @@ while :; do
   # the loop. A monitor that dies on one bad request is the silent failure one level up.
   view="$(gh pr view "$PR" "${REPO_ARG[@]}" --json state,mergeStateStatus,autoMergeRequest \
            --jq '"\(.state)|\(.mergeStateStatus)|\(.autoMergeRequest != null)"' 2>/dev/null || true)"
-  [[ -n "$view" ]] || view="UNKNOWN|UNKNOWN|false"
+  probe_ok=1
+  [[ -n "$view" ]] || { view="UNKNOWN|UNKNOWN|false"; probe_ok=0; }
   IFS='|' read -r state mergestate automerge <<<"$view"
 
   checks="$(gh pr checks "$PR" "${REPO_ARG[@]}" --json name,bucket 2>/dev/null || true)"
-  [[ -n "$checks" ]] || checks='[]'
+  [[ -n "$checks" ]] || { checks='[]'; probe_ok=0; }
 
   tot=$(jq  'length'                                        <<<"$checks" 2>/dev/null || echo 0)
   pass=$(jq '[.[]|select(.bucket=="pass")]|length'          <<<"$checks" 2>/dev/null || echo 0)
   fail=$(jq '[.[]|select(.bucket=="fail")]|length'          <<<"$checks" 2>/dev/null || echo 0)
   cancel=$(jq '[.[]|select(.bucket=="cancel")]|length'      <<<"$checks" 2>/dev/null || echo 0)
   pend=$(jq '[.[]|select(.bucket=="pending")]|length'       <<<"$checks" 2>/dev/null || echo 0)
+  # `skipping` IS a documented gh bucket (pass|fail|pending|skipping|cancel) and it is part of the
+  # array length. Counting it in `tot` but in none of the tallies made the pass fraction
+  # unreachable on any PR with a path-filtered job: `1/3 pass` printed next to `ALL GREEN`.
+  skip=$(jq '[.[]|select(.bucket=="skipping")]|length'      <<<"$checks" 2>/dev/null || echo 0)
+  # The denominator is what CAN pass. Skipped checks are reported separately rather than folded in.
+  gradable=$(( tot - skip ))
   waiting=$(jq -r '[.[]|select(.bucket=="pending")|.name]|join(",")' <<<"$checks" 2>/dev/null | cut -c1-90)
   red=$(jq -r '[.[]|select(.bucket=="fail" or .bucket=="cancel")|"\(.bucket):\(.name)"]|join(" ")' <<<"$checks" 2>/dev/null | cut -c1-160)
 
   # ── THE EMISSION DECISION, before any terminal branch. Emit when the observable state CHANGED,
   # and otherwise every HEARTBEAT_EVERY polls so a long quiet stretch still proves liveness. The
   # first poll always emits (prev is empty), so the operator sees a baseline immediately.
-  sig="${state}|${mergestate}|${automerge}|${pass}|${tot}|${fail}|${cancel}|${pend}"
+  # `waiting` and `red` are IN the signature: a re-run that swaps which check is pending, or a
+  # different check failing at the same count, changes nothing numeric but changes what the
+  # operator is waiting on. probe_ok is in it so repeated outages are not collapsed.
+  sig="${probe_ok}|${state}|${mergestate}|${automerge}|${pass}|${tot}|${skip}|${fail}|${cancel}|${pend}|${waiting}|${red}"
   if [[ "$sig" != "${prev_sig:-}" ]]; then
     why=""
   elif [[ $(( n % HEARTBEAT_EVERY )) -eq 0 ]]; then
@@ -102,9 +113,17 @@ while :; do
     why="SKIP"
   fi
   if [[ "$why" != "SKIP" ]]; then
-    printf '[%s|%s|automerge=%s] %s/%s pass · %s fail · %s cancel · %s pending%s%s%s\n' \
-      "$state" "$mergestate" "$automerge" "$pass" "$tot" "$fail" "$cancel" "$pend" \
-      "${waiting:+ → }" "$waiting" "$why"
+    if [[ "$probe_ok" != "1" ]]; then
+      # DEGRADED INPUT MUST NOT RENDER AS MEASURED INPUT. The fallbacks below are literals, not
+      # readings; printing them in the same shape as real counts is the "a zero that does not say
+      # what it means" class this repo fixed twice on the observability side.
+      printf '[gh probe FAILED — state unknown] (poll %s/%s)%s\n' "$n" "$MAX_POLLS" "$why"
+    else
+      printf '[%s|%s|automerge=%s] %s/%s pass · %s fail · %s cancel · %s pending%s skipped · (poll %s/%s)%s%s%s\n' \
+        "$state" "$mergestate" "$automerge" "$pass" "$gradable" "$fail" "$cancel" "$pend" \
+        " · $skip" "$n" "$MAX_POLLS" \
+        "${waiting:+ → }" "$waiting" "$why"
+    fi
     [[ -n "$red" ]] && printf '    NON-PASS: %s\n' "$red"
   fi
   prev_sig="$sig"
@@ -116,13 +135,25 @@ while :; do
 
   # Auto-merge silently switching off is a state the operator must hear about: the PR then sits
   # green and unmerged forever, which reads exactly like "still waiting".
-  if [[ "$automerge" == "false" && "$state" == "OPEN" && "$tot" -gt 0 && "$pend" -eq 0 && "$fail" -eq 0 && "$cancel" -eq 0 ]]; then
+  # `mergestate != DRAFT` is load-bearing: `gh pr view --json state` returns OPEN for a draft
+  # (isDraft is a separate field this never queried), so without it a green DRAFT exited rc=0
+  # telling the operator to merge a PR GitHub will refuse. Reachable mid-watch too — converting
+  # back to draft disarms auto-merge, which is exactly this branch's condition.
+  if [[ "$automerge" == "false" && "$state" == "OPEN" && "$mergestate" != "DRAFT" \
+        && "$tot" -gt 0 && "$pend" -eq 0 && "$fail" -eq 0 && "$cancel" -eq 0 ]]; then
     printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge.\n' "$PR"; exit 0
   fi
 
   if [[ "$tot" -gt 0 && "$pend" -eq 0 ]]; then
     if [[ "$fail" -gt 0 || "$cancel" -gt 0 ]]; then
-      printf 'CHECKS SETTLED WITH NON-PASS — PR #%s: %s\n' "$PR" "$red"; exit 1
+      # UNSTABLE/CLEAN + auto-merge armed means the failing check is NOT required — GitHub still
+      # considers the PR mergeable and auto-merge is expected to land it. Exiting rc=1 there is a
+      # false red that stops the operator watching a PR that is about to merge anyway.
+      if [[ "$automerge" == "true" && ( "$mergestate" == "UNSTABLE" || "$mergestate" == "CLEAN" ) ]]; then
+        printf 'NON-REQUIRED CHECK FAILED — PR #%s: %s · mergeState=%s, auto-merge still expected to land it; continuing to watch.\n' "$PR" "$red" "$mergestate"
+      else
+        printf 'CHECKS SETTLED WITH NON-PASS — PR #%s: %s\n' "$PR" "$red"; exit 1
+      fi
     fi
     # Green but still OPEN with auto-merge armed: keep watching for the merge itself, but say so
     # rather than looping silently.
@@ -132,14 +163,27 @@ while :; do
     # PR that went green-then-DIRTY kept polling a state that needed action. The bug was in the
     # branch the operator would read as "still working".
     case "$mergestate" in
-      BEHIND) printf 'CHECKS GREEN BUT BEHIND — PR #%s needs a sync before it can merge (auto-merge does not resync).\n' "$PR"; exit 1 ;;
-      DIRTY)  printf 'CHECKS GREEN BUT DIRTY — PR #%s has a merge conflict; auto-merge cannot resolve it.\n' "$PR"; exit 1 ;;
+      BEHIND)  printf 'CHECKS GREEN BUT BEHIND — PR #%s needs a sync before it can merge (auto-merge does not resync).\n' "$PR"; exit 1 ;;
+      DIRTY)   printf 'CHECKS GREEN BUT DIRTY — PR #%s has a merge conflict; auto-merge cannot resolve it.\n' "$PR"; exit 1 ;;
+      DRAFT)   printf 'CHECKS GREEN BUT DRAFT — PR #%s cannot merge until it is marked ready.\n' "$PR"; exit 1 ;;
+      # BLOCKED with nothing pending means branch protection is unsatisfied by something OUTSIDE
+      # the check list — a missing required review, a required context that never posts, a merge
+      # queue. Auto-merge sits there indefinitely. It renders identically to CLEAN, which lands in
+      # seconds: same line, opposite futures. That is the defect class this script exists to close,
+      # and it is the sibling of the DIRTY miss found by dogfooding.
+      BLOCKED) printf 'CHECKS GREEN BUT BLOCKED — PR #%s is held by branch protection outside the check list (a required review, an unposted required context, or a merge queue). Auto-merge will not resolve it.\n' "$PR"; exit 1 ;;
     esac
   fi
 
   if [[ "$n" -ge "$MAX_POLLS" ]]; then
-    printf 'TIMEOUT — PR #%s still %s after %s polls (%ss apart); last: %s/%s pass, %s pending.\n' \
-      "$PR" "$state" "$n" "$INTERVAL" "$pass" "$tot" "$pend"; exit 2
+    # The TIMEOUT line must not fabricate counts either — it was the last place a total gh outage
+    # still rendered `0/0 pass, 0 pending` as if measured.
+    if [[ "$probe_ok" != "1" ]]; then
+      printf 'TIMEOUT — PR #%s: the gh probe FAILED on the final poll, so no state was measured (%s polls, %ss apart). This is an unreachable GitHub, not a quiet PR.\n' \
+        "$PR" "$n" "$INTERVAL"; exit 2
+    fi
+    printf 'TIMEOUT — PR #%s still %s after %s polls (%ss apart); last: %s/%s pass, %s skipped, %s pending.\n' \
+      "$PR" "$state" "$n" "$INTERVAL" "$pass" "$gradable" "$skip" "$pend"; exit 2
   fi
   sleep "$INTERVAL"
 done
