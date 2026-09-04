@@ -55,7 +55,7 @@ When the upstream is no longer reachable (404, archived, deleted), follow the po
 
 ## 4. Drift Detection
 
-Three layers, each catching a distinct failure mode:
+Four layers, each catching a distinct failure mode:
 
 ### 4.1 Cron-driven content drift (workflow)
 
@@ -73,6 +73,14 @@ When the cron pipeline silently breaks (workflow disabled, GH outage, PR queued 
 - `days_stale > 90` → additional STDOUT line: `POSTURE_FAIL: gdpr-gate rules >90 days stale — compliance/critical posture row required.`
 
 Banner + POSTURE_FAIL emit to STDOUT (not stderr) because agent runtimes (Claude Code skill harness, MCP servers) commonly swallow stderr. NOTICE missing / parser deletion / future-dated `last-verified` all resolve to `days_stale=999` → banner fires. The gate exits 0 in all paths (advisory contract preserved).
+
+### 4.4 Pull-request-time upstream verification (CI)
+
+`.github/workflows/vendor-pin-verify.yml` runs `vendor-pin-integrity.sh --verify-upstream` on every pull request touching the vendored tree. It asserts that each `upstream-blob-sha` in NOTICE resolves to a real, fetchable object in the upstream repository, which closes the co-edit bypass: a PR that edits a lifted file AND its NOTICE pin in the same diff satisfies the local hash check tautologically, because both sides move together.
+
+Note what this layer does and does not buy. It proves each pinned blob EXISTS upstream; it does not prove the pin is CURRENT. A pin that resolves is not a pin that matches upstream `main` — that is §4.1's job, and conflating the two is why a "verify" step can read as a freshness guarantee it never made.
+
+This layer was omitted from this section's own count until #7710, which is a small instance of the failure the whole document is about: an enforcement surface that exists, runs, and is not written down is one nobody reasons about.
 
 ## 5. Severity Classification
 
@@ -104,6 +112,23 @@ For classifier exits 12/15/16 (archived / rollback / renamed), the workflow open
 
 **Pre-vendor diff scan** (for first-time lifts of new bundles): currently DEFERRED — see scope-out issue. The first re-vendor PR landing under this policy will introduce the scan as a workflow step before this policy section is filled in. Until then, reviewer eyes + the conflict-marker grep are the manual fallback.
 
+## 6a. Verification-Only Refresh (no drift)
+
+§6 governs the drift-detected path only. It says nothing about the far more common outcome — the comparison ran, every file matched, and there is nothing to re-vendor — and before #7710 no clause covered it. The consequence was not a gap in prose: `last-verified` had no writer at all on the clean path, so the field aged 117 days while the corpus was verified clean every week, and the gdpr-gate's staleness banner fired continuously on a corpus that had never drifted.
+
+**Trigger.** A single run of the content-vendor-drift cron that compared the COMPLETE registry and found every file SAME with zero errors. Formally, the run may advance the field only when all of the following hold:
+
+- the registry is non-empty (`0 of 0` is not evidence of currency);
+- every registered file was examined (a partial comparison is not evidence);
+- zero files drifted;
+- zero files errored — a file that could not be fetched is not a file that was verified.
+
+**What advances.** `last-verified` only. No `pinned-commit` change, no `local-blob-sha` change, no content change. The commit's allowlist is the NOTICE alone, so a verification-only refresh is structurally incapable of carrying a content edit.
+
+**Who advances it.** The cron, via a self-merging bot pull request (`safeCommitAndPr`, `mergeMode: "direct"`). Writes to `last-verified` are reserved to that automation: an operator editing the field by hand is asserting a comparison no artifact records, which is the state this section exists to end. The commit message records the pinned commit compared against and the per-state counts.
+
+**What it does NOT assert.** That upstream is healthy, maintained, or still the right dependency. An abandoned-but-unarchived upstream returns SAME forever, and this refresh will keep attesting to it. That residual is recorded in ADR-203 rather than papered over.
+
 ## 7. Runtime Staleness Contract
 
 The 30-day banner threshold and 90-day POSTURE_FAIL threshold are stable design parameters, not configurable settings. They are not relaxable without a published Architecture Decision Record. Rationale: the gdpr-gate's "no findings" output is rendered as authoritative narrative claims via the gate's weave-don't-append shape; staleness is the user's only signal that those claims may be based on an outdated rule set, and the threshold is calibrated to the upstream's typical patch cadence (multiple commits per month).
@@ -116,7 +141,7 @@ When `gdpr-gate.sh` emits a `POSTURE_FAIL:` line during a regulated PR's `/soleu
 2. Opens a tracking issue with `gh issue create --label compliance/critical --title "[gdpr-gate] >90d stale rules — N days since last-verified"`.
 3. Appends a row to `compliance-posture.md` §Active Compliance Items per the canonical row schema (the gate never writes there directly; this is operator-acknowledged write only).
 4. Commits the row with `compliance: register vendor-pin-staleness for #<issue>`.
-5. Pings the in-flight `ci/vendor-drift-*` PR (or dispatches the cron manually via `/soleur:trigger-cron` with `cron/content-vendor-drift.manual-trigger` -- `gh workflow run` cannot reach it, there is no workflow) to drive re-vendor.
+5. Pings the in-flight `ci/content-vendor-drift-*` PR (or dispatches the cron manually via `/soleur:trigger-cron` with `cron/content-vendor-drift.manual-trigger` -- `gh workflow run` cannot reach it, there is no workflow) to drive re-vendor.
 
 The current regulated-data PR can ship; the staleness-driven follow-up is a separate work cycle with its own review + merge.
 
