@@ -55,7 +55,10 @@ comparison. See ADR-189 for the principle's origin.
 
 Three properties make the grant acceptable:
 
-1. **The gate is the comparison's own totals, not a verdict.** The detect step has two
+1. **The gate is the comparison's own totals, not a verdict.** The conjuncts are
+   stated once, canonically, in `content-vendoring.md` §6a; this ADR does not restate
+   them, because an earlier revision restated them as FOUR while the predicate had five
+   and the two sentences a hundred lines apart disagreed with each other. The detect step has two
    returns that yield `drift: "none"`, and only one of them means "I compared everything
    and it matched"; the other is reached *after* drift was detected, when the classifier
    declines to categorise it. The write predicate therefore quantifies over
@@ -70,9 +73,18 @@ Three properties make the grant acceptable:
 
 3. **The route is a pull request, not a push.** `safeCommitAndPr` has no direct-to-branch
    mode — every path opens a PR against `main` — and a raw push is independently blocked by
-   the **two** rulesets targeting this repository's default branch
-   (`ruleset-ci-required.tf`, `ruleset-cla-required.tf`), whose relevant bypass actors are
-   both `bypass_mode: "pull_request"`. The stronger containment argument, omitted by an
+   the rulesets targeting this repository's default branch, whose relevant bypass actors
+   are `bypass_mode: "pull_request"`.
+
+   Counted LIVE rather than from Terraform, because both previous attempts got it wrong in
+   opposite directions: `gh api repos/jikig-ai/soleur/rulesets` returns **three** active
+   rulesets on `~DEFAULT_BRANCH` — `CI Required`, `CLA Required`, and
+   `Force Push Prevention`, which has NO `infra/github/ruleset-*.tf` file at all. A first
+   revision said three by counting a ruleset that governs a different repository; the
+   correction said two by counting Terraform instead of the repo
+   (`hr-no-dashboard-eyeball-pull-data-yourself`, applied to my own correction). The
+   untracked third ruleset strengthens the containment argument and is worth its own
+   issue. The stronger containment argument, omitted by an
    earlier revision: the bot is in **no bypass list at all**, so its PR must satisfy the
    required CI contexts, of which it self-signs only the synthetic subset. (That revision
    counted **three**; the third governs `jikig-ai/soleur-marketplace` — a different
@@ -96,9 +108,12 @@ it was lying because its writer had been deleted.
 
 > An earlier revision attributed that rejection to ADR-121 and ADR-186, claiming each
 > "already places that substitution in a rejected-alternatives table". **That was false** —
-> neither mentions identity, hashing or checksums at all, and ADR-186 leans the other way,
-> *adopting* an equality assertion in place of a freshness pin. The claim came from this
-> change's plan and shipped unverified. The reasoning above is sound and is **this ADR's
+> neither places it in such a table, and ADR-186 leans the other way,
+> *adopting* an equality assertion in place of a freshness pin. (The retraction's own first
+> wording — "neither mentions identity, hashing or checksums **at all**" — was itself an
+> over-claim: ADR-186 mentions hashed files twice, in an unrelated context. The
+> substantive point stands; the absolute did not.) The claim came from this change's plan
+> and shipped unverified. The reasoning above is sound and is **this ADR's
 > own**; it inherits nothing. Recorded rather than quietly deleted, because a false
 > citation propagates further than a missing one — AP-024's own registration note.
 
@@ -163,6 +178,18 @@ These are recorded as live gaps. None is claimed to be fixed by this decision.
    practical exposure is nil; but "one file, one field" is what residual 4 leans on, and it
    should be stated as what it is.
 
+6. **The attestation covers the upstream-derived registry only.** `registryCount` counts
+   `lifted-files`; the three `soleur-authored` records carry a `local-blob-sha` that the
+   cron never re-verifies. `last-verified` is a single scalar the gate reads as the age of
+   the whole corpus, so its scope (8 files) is narrower than its apparent meaning (11).
+
+7. **A file ADDED upstream is invisible.** The comparison enumerates only paths the NOTICE
+   already declares — one contents call per registry line — and never lists the upstream
+   directory. A new upstream rule file is structurally undetectable, every registered file
+   still returns SAME, and once the field is bot-advanced a fresh `last-verified`
+   suppresses the very banner whose text warns the corpus "may miss recently-patched
+   detection rules". Distinct from residual 3, which is about silent abandonment.
+
 ## Consequences
 
 - `last-verified` becomes a machine-written field. Its value is now evidence of a specific
@@ -175,7 +202,15 @@ These are recorded as live gaps. None is claimed to be fixed by this decision.
   heartbeat keys on that. Keying on the status would have flipped the monitor green the
   moment the PR opened, before anything reached `main`.
 - The 30-day banner becomes a genuine early warning instead of a standing condition. If it
-  fires after this lands, the writer has stopped — which is a real signal for the first
-  time.
+  fires after this lands, the writer has stopped — a real signal for the first time. That
+  conclusion depends on an arithmetic worth stating rather than leaving in a constant:
+  the writer suppresses a write below `WRITE_SUPPRESSION_DAYS` (21), so on a weekly cadence
+  the observed age never exceeds 21, leaving 9 days of margin. One missed run (28) stays
+  inside the window; two (35) do not, which is the intended alarm. Raise the suppression
+  above 30 and this consequence silently becomes false.
+- The Sentry monitor is keyed on that same observed age, NOT on whether a given run merged.
+  Keying it on the merge was measured to page on the healthy path: the direct merge
+  normally fails with checks pending and the fallback arms auto-merge, which lands the PR
+  seconds after the run ends.
 - `content-vendoring.md` §6a governs the verification-only refresh path, which §6 (drift
   detected) never covered.

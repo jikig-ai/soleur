@@ -32,6 +32,7 @@ on:
       - "plugins/soleur/skills/gdpr-gate/NOTICE"
       - "plugins/soleur/test/fixtures/gdpr-gate-stale/**"
       - "plugins/soleur/test/gdpr-gate-self-test.test.sh"
+      - "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh"
       - "plugins/soleur/test/test-helpers.sh"
       - "lefthook.yml"
       - ".github/workflows/gdpr-gate-self-test.yml"
@@ -71,3 +72,38 @@ jobs:
 
       - name: Run self-test (with-token path)
         run: bash plugins/soleur/test/gdpr-gate-self-test.test.sh
+
+  # Guard 2's SECOND chokepoint. The scan-completion line inside gdpr-gate.sh
+  # cannot witness its own non-execution: if the `gdpr-gate-advisory` glob stops
+  # matching, lefthook prints `(skip)`, the script never runs, and every
+  # in-script assertion stays green. Only driving the real lefthook binary over
+  # the real lefthook.yml can see that.
+  #
+  # It lives here rather than in the required `test-scripts` shard on purpose:
+  # that shard is path-filter-free and gates every PR, so installing lefthook
+  # there would put a registry dependency on the merge-queue critical path. This
+  # workflow already path-filters on `lefthook.yml` and the gdpr-gate scripts —
+  # the exact change-set that can break the glob.
+  glob-liveness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      # Turns the suite's "lefthook absent" skip into a hard failure. Without
+      # it the suite would exit 0 having asserted nothing, which is the state
+      # it exists to make impossible.
+      SOLEUR_REQUIRE_LEFTHOOK: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+
+      - name: Install lefthook
+        run: npm install --no-save --no-audit --no-fund lefthook@2
+
+      - name: Put lefthook on PATH
+        run: echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Verify lefthook is reachable
+        run: lefthook version
+
+      - name: Run glob-liveness suite
+        run: bash plugins/soleur/test/gdpr-gate-glob-liveness.test.sh

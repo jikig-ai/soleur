@@ -493,9 +493,19 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
   });
 
   it("routes the attestation through safeCommitAndPr with direct merge", () => {
-    const step = src.slice(src.indexOf('step.run("attest-freshness"'));
+    // Slice BOUNDED to the attest step. Running to EOF also swallows the
+    // drift route's own `mergeMode: "direct"`, so the assertion could be
+    // satisfied by the wrong call site (found while mutation-proving).
+    const attestStart = src.indexOf('step.run("attest-freshness"');
+    const attestEnd = src.indexOf("attestationPrNumber = attestation.pr");
+    expect(attestStart).toBeGreaterThan(-1);
+    expect(attestEnd).toBeGreaterThan(attestStart);
+    const step = src.slice(attestStart, attestEnd);
     expect(step).toMatch(/safeCommitAndPr\(/);
-    expect(step).toMatch(/mergeMode: "direct"/);
+    // Anchored at line-start on the property assignment: the same slice
+    // contains a comment quoting `mergeMode: "direct"`, so a bare match
+    // survives changing the actual option (measured during #7710 review).
+    expect(step).toMatch(/^\s*mergeMode: "direct",$/m);
     // allowedPaths must be the NOTICE alone — an attestation must not be able
     // to carry a content change in on the same commit.
     expect(step).toMatch(/allowedPaths: \[`\$\{SKILL_PREFIX\}\/NOTICE`\]/);

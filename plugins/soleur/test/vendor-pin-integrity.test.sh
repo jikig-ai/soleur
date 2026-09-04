@@ -185,7 +185,10 @@ echo ""
 # --no-filters (TR1; line-ending normalisation otherwise diverges from
 # upstream blob SHAs).
 echo "TS5: script uses 'git hash-object --no-filters' (TR1)"
-if grep -q 'git hash-object --no-filters' "$INTEGRITY"; then
+# Anchored on the CALL, not the bare literal: the phrase also appears in the
+# script's header comment, so a bare grep passes with the flag stripped from
+# the actual invocation (measured during #7710 review).
+if grep -qE '^[[:space:]]*actual=.*git hash-object --no-filters' "$INTEGRITY"; then
   echo "  PASS: --no-filters flag present"
   PASS=$((PASS + 1))
 else
@@ -508,5 +511,5 @@ echo ""
 # replacing assert_eq with a stub that always passes reported
 # "Passed: 27 / Failed: 0 / ALL TESTS PASSED" and exit 0 — measured during
 # #7710. A FLOOR, not equality: adding an assertion must not red the suite.
-# Derived from a green run (39 assertions on 2026-09-04).
+# Derived from a green run (37 assertions on 2026-09-04).
 print_results 37

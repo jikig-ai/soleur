@@ -38,13 +38,26 @@ if ! command -v lefthook >/dev/null 2>&1; then
   # Under CI this is a hard failure: the gate is declared to run there, so an
   # absent binary is a broken gate, not an unavailable convenience. Locally it
   # degrades loudly to a skip so a contributor without lefthook is not blocked.
-  if [[ -n "${CI:-}" ]]; then
-    printf 'FAIL: lefthook is not on PATH under CI — Guard 2 second chokepoint cannot run.\n' >&2
-    printf 'This suite is the only witness that the gdpr-gate-advisory hook is still invoked;\n' >&2
-    printf 'a skip here is indistinguishable from a dead glob. Install lefthook in the job.\n' >&2
+  # Hard-fail ONLY where the caller has declared lefthook is provisioned.
+  #
+  # Not on bare `CI`: the required `test-scripts` shard is path-filter-free and
+  # runs on every PR, and adding a package-manager install there would put a
+  # registry dependency on the merge-queue critical path for the whole repo —
+  # the trap #6454 documents. Real CI coverage lives in
+  # `.github/workflows/gdpr-gate-self-test.yml`, which already path-filters on
+  # `lefthook.yml` and the gdpr-gate scripts (exactly the change-set that can
+  # break the glob) and installs lefthook for this suite. That job sets
+  # SOLEUR_REQUIRE_LEFTHOOK=1, so a skip there is a failure.
+  if [[ "${SOLEUR_REQUIRE_LEFTHOOK:-}" == "1" ]]; then
+    printf 'FAIL: lefthook is not on PATH but SOLEUR_REQUIRE_LEFTHOOK=1.\n' >&2
+    printf 'Guard 2 second chokepoint cannot run; this suite is the only witness that\n' >&2
+    printf 'the gdpr-gate-advisory hook is still invoked, and a skip is indistinguishable\n' >&2
+    printf 'from a dead glob. Install lefthook in the job.\n' >&2
     exit 1
   fi
-  echo "  SKIP: lefthook binary not on PATH — cannot exercise the glob (local only; CI fails)"
+  echo "  SKIP: lefthook binary not on PATH — cannot exercise the glob."
+  echo "        (Set SOLEUR_REQUIRE_LEFTHOOK=1 to make this a hard failure; the"
+  echo "         gdpr-gate-self-test workflow does.)"
   SKIPPED=$((SKIPPED + 1))
   print_results 1
 fi

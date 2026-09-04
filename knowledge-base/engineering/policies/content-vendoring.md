@@ -132,7 +132,26 @@ For classifier exits 12/15/16 (archived / rollback / renamed), the workflow open
 - every record the NOTICE **declares** was examined — the count comes from the declared records, not from the parser's emitted view, because a record missing its `upstream-blob-sha` is dropped from that view and would otherwise shrink the denominator alongside the numerator, making a partial comparison read as complete;
 - zero files drifted;
 - zero files errored — a file that could not be fetched is not a file that was verified;
-- the upstream repository is neither archived, renamed, nor unreachable. This is a separate condition because it is invisible to the per-file result: every file compares SAME against an archived upstream, since the blobs at the pinned SHAs still resolve. Without it a run would escalate a `compliance/critical` "upstream archived" issue and advance the attestation in the same pass.
+- the upstream repository is neither archived, renamed, nor unreachable.
+
+Two scope limits, stated here because this is the canonical statement and the
+other surfaces point at it:
+
+- **The registry compared is the upstream-derived one.** `soleur-authored`
+  records carry a `local-blob-sha` checked at commit time; the attestation says
+  nothing about them, while `last-verified` is a single scalar the gate reads
+  as the age of the whole corpus.
+- **A file ADDED upstream is invisible.** The comparison enumerates only the
+  paths the NOTICE already declares and never lists the upstream directory, so
+  a new upstream rule file is undetectable and every registered file still
+  reads SAME.
+
+**Cadence.** A verified-clean run does not write if the field was advanced
+recently — the write is suppressed below 21 days. The banner fires at 30, so
+the observed age never exceeds 21 on the healthy path: one missed run stays
+inside the window, two do not. That 9-day margin is what makes the banner a
+genuine early warning rather than a standing condition, so the suppression
+constant cannot be raised past the banner threshold without breaking it. This is a separate condition because it is invisible to the per-file result: every file compares SAME against an archived upstream, since the blobs at the pinned SHAs still resolve. Without it a run would escalate a `compliance/critical` "upstream archived" issue and advance the attestation in the same pass.
 
 **What advances.** `last-verified` only. No `pinned-commit` change, no `local-blob-sha` change, no content change. The commit's allowlist is the NOTICE path alone, so a verification-only refresh cannot carry a `references/` edit. Note the allowlist is a path PREFIX rather than an exact path, and it does not constrain the commit to a single FIELD within the NOTICE — nothing else on this path dirties that file, but the guarantee is "one path", not "one line".
 
