@@ -32,8 +32,6 @@ set -uo pipefail
 # because the report says "failed at the zot-mirror bridge" and "pinned three
 # releases behind" rather than "failed in production". The gate that exists to
 # stop an incident shipping without its learning missed a textbook one.
-# Verified additive: the new alternation matches ZERO of the nine existing
-# fixtures, so no prior verdict moves.
 OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was down|took down|brought down|stopped working|silently (broke|broken|failing)|regression in prod|users? (could not|were unable to)|shipped broken|ran broken|failed in prod(uction)?|broke prod(uction)?|releases? behind|(releases?|deploys?|deployments?) (was|were) blocked|blocked (every|all) (release|deploy))'
 # `prod` is boundary-guarded — this is the SAME substring class the header above
 # documents fixing for `incident`/`incidental`, left unfixed one line below it.
@@ -60,24 +58,80 @@ OUTAGE_RE='(incident report|post-?incident|post-?mortem|outage|went down|was dow
 # Standalone `live` stays a production token — only the substrings are rejected.
 PROD_RE='(prod(uction)?([^a-zA-Z]|$)|deployed|([^a-zA-Z]|^)live([^a-zA-Z]|$)|app\.soleur\.ai|tenant-zero|customer)'
 
+# The ONLY discriminator between "a plan citing a closed incident as precedent" and "a plan
+# reporting an unreported outage" inside a hypothetical paragraph — the two are otherwise
+# textually identical, so this is a whitelist, not a decision procedure. F2 and F10 are the same
+# document minus `This already happened —`, with opposite verdicts; that is how thin it is.
+#
+# HONEST WEIGHT (#7801 review). The EFFECT, not a survey: deleting this rule moves exactly ONE
+# plan of the 1878 under knowledge-base/project/plans/ (recursive, incl. archive/) —
+# 2026-08-01-release-outcome-email-step-env-refs-plan.md, a genuine incident whose
+# paragraph reads "This already happened — the outage began ~2026-07-30". n=1, in the fail-open
+# direction, and no cheaper discriminator exists (date, issue-ref and past-tense form all appear
+# in the precedent fixture too). `occurred` is the measured winner's own inflection, kept for the
+# fail-safe direction and pinned by a fixture. `not hypothetical` was cut: it had a corpus hit but
+# no fixture and no verdict effect.
+# THE BAR, stated so the two survive it honestly: a measured winner needs a corpus hit AND a
+# fixture; an INFLECTION of one needs only a fixture. `already occurred` has zero corpus hits and
+# zero verdict movers — it is kept solely because losing an inflection of the measured winner fails
+# OPEN on a safety gate, and it is pinned by actuality-occurred-inflection.md rather than asserted.
+# Anything that is not an inflection needs the full bar. **Why:** #7801 R3.
+ACTUALITY_RE='already (happened|occurred)'
+
+# The line-scoped drop set. `network-outage deep-dive` was REMOVED: the sed two stages up deletes
+# that token globally, so DROP_RE could never see it — provably dead code, carried forward from the
+# grep this replaced.
+# Folded into the SAME awk as the paragraph rules (#7801 review): as two
+# stages it was incoherent, because the line filter ran AFTER the paragraph strip and so deleted
+# lines the ACTUALITY_RE re-admit had deliberately restored. Measured: "The outage already happened
+# … and it would break production again." read as NO SIGNAL — one conditional clause silenced a
+# stated actuality, contradicting the re-admit's own contract. Lowercased; every match runs against
+# tolower($0).
+# The sentinel the strip emits on stdout when it suppressed an outage line; the shell converts
+# it to the stderr note and removes it from the haystack before either matcher runs.
+SENTINEL='__PIR_STRIP_SUPPRESSED__'
+DROP_RE='^brand_survival_threshold:|brand-survival threshold:|if this lands broken|if this leaks|if this lands|would break|could break'
+
 # Strip, in order:
 #   1. fenced code blocks (``` … ```) — regexes/config/SQL quoted in a plan are
 #      DATA, not an incident report (a plan that documents this very gate quotes
-#      `OUTAGE_RE='(outage|incident|…)'`);
+#      `OUTAGE_RE='(outage|incident|…)'`). An UNBALANCED fence is NOT treated as a
+#      block: the parity toggle would otherwise leave the rest of the document
+#      inside a fence that never closes and drop it, at exit 1, with no note —
+#      byte-identical to a clean no-signal, and reachable from an odd ``` count
+#      in a pasted PR body, which deletes the whole linked plan. Buffered lines
+#      are re-emitted at END when the toggle is still open (#7801 review).
 #   2. inline `code` spans — same reason, for backticked tokens;
 #   3. the threshold declaration (frontmatter key + the bold User-Brand-Impact
 #      label) and the hypothetical/conditional framing lines, so trigger 3 does
 #      not read a plan's own metadata or its "if this lands broken" section as
-#      an incident;
+#      an incident. The strip is PARAGRAPH-scoped, not line-scoped (#7801): the
+#      label line opens a window that runs to the next block boundary, because
+#      #6813 removed the framing LINE and left the sentences after it in the
+#      same paragraph, so a plan CITING a past closed incident as design
+#      precedent still read as an outage report. Three boundaries close the
+#      window — a blank line, a heading, a new list item; tables and
+#      blockquotes deliberately do NOT (an accepted residual, named so the
+#      omission stays a decision). An actuality idiom (ACTUALITY_RE) re-opens
+#      it: once a paragraph says the event HAPPENED, the rest of it is a
+#      report. The strip is LEXICAL and cannot decide precedent-citation from
+#      self-report — a real outage phrased without an actuality idiom inside
+#      the paragraph is swallowed, pinned as a characterization fixture rather
+#      than left undocumented;
 #   4. the `Network-Outage Deep-Dive determination` HEADING (deepen-plan Phase
 #      4.5, recorded per `hr-ssh-diagnosis-verify-firewall` so an N/A skip is
 #      auditable). This is a plan-TEMPLATE section name, not an outage claim —
 #      and since nearly every plan carries some prod word, matching the word
 #      `Outage` inside it made the gate fire on any plan that recorded the
 #      determination, including ones whose body says the checklist is "not
-#      applicable rather than unverified". Same structural-artifact shape as
-#      (3): only the heading LINE is stripped, so a real outage claim inside
-#      that section still signals. **Why:** #7003.
+#      applicable rather than unverified". CLARIFIED #7801 review: this is a
+#      GLOBAL token deletion, not a heading-line strip — which is what #6665
+#      INTENDED ("gate NAMES are stripped so the token cannot reach OUTAGE_RE at
+#      all"), not a defect. Its accepted cost, stated plainly because it was not:
+#      a genuine report phrased with the hyphenated gate name ("The
+#      network-outage on 2026-08-16 took the production site offline") loses its
+#      outage token and does not signal, while the same sentence without the
+#      hyphen does. **Why:** #7003, #6665.
 # Residual (accepted): a plan whose SUBJECT is incident detection still discusses
 # outages in prose and may signal — that is fail-toward-PIR over-production the
 # operator hand-adjudicates, not the #6813 false-positive class (which was every
@@ -90,11 +144,71 @@ PROD_RE='(prod(uction)?([^a-zA-Z]|$)|deployed|([^a-zA-Z]|^)live([^a-zA-Z]|$)|app
 #      below (not added to a negative lookahead) so the token cannot reach
 #      OUTAGE_RE at all; this is the same shape as the threshold-label strip.
 # shellcheck disable=SC2016  # the sed backticks are literal (inline-code strip), no expansion wanted
-haystack="$(cat \
-  | awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' \
-  | sed 's/`[^`]*`//g' \
-  | sed -E 's/[Nn]etwork-[Oo]utage//g' \
-  | grep -vaiE '^brand_survival_threshold:|Brand-survival threshold:|If this lands broken|If this leaks|if this lands|would break|could break|Network-Outage Deep-Dive')"
+# The assignment is GUARDED (#7801). A broken strip stage would otherwise empty the haystack, exit
+# 1, and read as a clean no-signal — byte-identical to "this PR is fine" on a surface where nothing
+# is watching: this gate ships to a customer's own CLI (observability layer 7), where there is no CI
+# run to notice an awk that does not accept the program. So a pipeline FAILURE fires.
+#
+# The guard is the plan's original bare form, and it is correct ONLY because the pipeline now
+# terminates in awk. It did not, in the first draft: `grep -v` exits 1 when it selects no lines —
+# the ordinary outcome for an empty PR body — so the bare guard reported an incident for a PR with
+# no text at all. Merging the line filter into the awk removed the terminal grep and with it that
+# whole failure mode, rather than papering over it with an exit-code arm.
+if ! haystack="$(cat \
+  | awk 'BEGIN{f=0; n=0} /^[[:space:]]*```/{f=!f; print ""; next}
+         !f{print; next}
+         {buf[++n]=$0}
+         END{ if (f) for (i=1; i<=n; i++) print buf[i] }' \
+  | sed 's/`[^`]*`/ /g' \
+  | sed -E 's/[Nn]etwork-[Oo]utage/ /g' \
+  | awk -v ACTUALITY_RE="$ACTUALITY_RE" -v DROP_RE="$DROP_RE" -v OUTAGE_RE="$OUTAGE_RE" -v SENTINEL="$SENTINEL" 'BEGIN{skip=0; noted=0}
+       # --- ORDER (#7801). Exactly ONE of these five orderings is load-bearing, and saying so
+       # precisely is the point: the first draft of this comment claimed "ORDER IS THE DESIGN" and
+       # named two constraints, one of which measurement then falsified. An overstated contract
+       # deters the next person from simplifying, which is a real cost paid for nothing.
+       # MEASURED across the 28 fixtures, by permuting each rule and counting verdict movers:
+       #   re-admit BELOW skip{next} .... 3 movers  -> LOAD-BEARING (cannot fire inside a window) [M7]
+       #   DROP_RE ABOVE the re-admit ... 1 mover   -> LOAD-BEARING (actuality-outranks-...)  [M11]
+       #   blank/heading BELOW trigger .. 0 movers  -> free
+       #   list ABOVE the trigger ....... 0 movers  -> free (boundaries only SET state and fall
+       #                                   through, so the trigger still matches a bulleted label;
+       #                                   this ordering DID constrain before the two stages were
+       #                                   merged, which is why the claim survived into the draft)
+       # Both real constraints are about where the re-admit sits, and both are mutation-pinned
+       # rather than asserted here. Tables and blockquotes are NOT boundaries: an accepted
+       # residual, named so the omission stays a decision rather than an oversight.
+       /^[[:space:]]*$/                                 {skip=0}
+       /^[[:space:]]*#+([[:space:]]|$)/                 {skip=0}
+       tolower($0) ~ /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)?[*_]*if this (lands|leaks)/ {skip=1; if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next}
+       /^[[:space:]]*([-*+][[:space:]]+|[0-9]+[.)][[:space:]]+)/ {skip=0}
+       # An actuality claim OUTRANKS the drop rules below: once a paragraph says the event
+       # HAPPENED, the rest of it is a report, and a trailing conditional clause in the same
+       # sentence must not silence it.
+       tolower($0) ~ ACTUALITY_RE                       {skip=0; print; next}
+       # The residual, made OBSERVABLE. The note is emitted as a SENTINEL LINE on stdout, not
+       # written to /dev/stderr from inside awk: mawk exits 2 when that write fails (closed fd,
+       # /dev/full, no /proc), the guard below reads any non-zero as a broken pipeline, and the
+       # verdict then depended on whether fd 2 happened to be writable — on the very surface, a
+       # customer CLI, that the guard exists for. Measured before the fix: identical input gave
+       # exit 1 with a terminal and INCIDENT-SIGNAL with `2>&-`. The shell re-emits it below.
+       # It covers all THREE drop paths, not just the paragraph sink, so a silenced report is
+       # never silent about being silenced.
+       skip                     { if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next }
+       tolower($0) ~ DROP_RE    { if (!noted && tolower($0) ~ OUTAGE_RE) { noted=1; print SENTINEL } next }
+                                                        {print}')"; then
+  echo "INCIDENT-SIGNAL: yes"
+  echo "ship-incident-pir-gate: strip pipeline failed — failing toward PIR (#7801)" >&2
+  exit 0
+fi
+
+# Convert the strip sentinel into the operator-facing note and drop it from the haystack. Both
+# steps are AFTER the guarded assignment, so neither can influence the verdict: a failed write to
+# a closed stderr leaves the verdict untouched, which is the whole reason the note is not emitted
+# from inside awk.
+if [[ "$haystack" == *"$SENTINEL"* ]]; then
+  echo "ship-incident-pir-gate: PIR-STRIP-SUPPRESSED — outage vocabulary inside a hypothetical paragraph was stripped; if this PR fixes a real incident, say so outside that paragraph (#7801)" >&2 || true
+  haystack="${haystack//$SENTINEL/}"
+fi
 
 # Herestrings (no pipe) — a piped `grep -q` under pipefail can SIGPIPE on an
 # early match and invert the result; a herestring cannot.

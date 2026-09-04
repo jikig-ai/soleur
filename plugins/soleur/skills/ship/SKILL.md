@@ -1075,7 +1075,7 @@ Enforces the operator's standing rule — **every detected incident gets a post-
    fi
    ```
 
-   The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing before matching, and matches only PAST-TENSE outage vocabulary (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
+   The scan strips the `brand_survival_threshold:` label and the `## User-Brand Impact` hypothetical framing **paragraph** (a sentence in that paragraph that says the event already happened is re-admitted) before matching, and matches only PAST-TENSE outage vocabulary — the strip is PARAGRAPH-scoped, not line-scoped (#7801): the label opens a window running to the next blank line, heading, or new list item, so a plan that merely CITES a past closed incident as design precedent inside that paragraph no longer reads as an outage report (never bare `incident`, which trips on the threshold literal and inside `incidental` — the #6813 false positive). A greenfield-feature PR (no production-failure framing) does NOT trigger — the signals require BOTH a past-tense outage verb AND a production context. When uncertain, the gate fires (fail-toward-PIR for ambiguous prod-fix PRs); over-producing a short PIR is cheaper than losing an incident's learning — with one named exception: a real outage phrased with no actuality idiom INSIDE the hypothetical paragraph is swallowed (#7801, pinned by `real-outage-inside-paragraph-without-actuality-idiom.md`). The gate prints a `PIR-STRIP-SUPPRESSED` note on stderr when that happens. It has no programmatic consumer — this block branches on the exit code alone — so it is a signal to the reader of the transcript, not a gate. **Why:** #6813 — the old inline regex fired on essentially every `single-user incident` plan (incl. the preventive-hardening PR #6782), training the operator to dismiss it. The gate now lives in a tested script (`plugins/soleur/test/ship-incident-pir-gate.test.ts` runs it against both-direction fixtures).
 
 **If triggered — require a PIR on the branch:**
 
@@ -1114,6 +1114,60 @@ git diff --name-only origin/main...HEAD | grep -E '^knowledge-base/engineering/o
 
      If `bad` is non-empty: halt and require each unbacked item to be filed as a GitHub issue (cross-referencing the source PR) and its `#NNNN` recorded in the table, OR collapsed into the permitted no-item sentence when genuinely resolved. This applies in BOTH headless and interactive modes — file the issues, do not defer.
 - **No match:** the incident has no PIR. **Headless mode:** invoke `/soleur:incident` (or, if unavailable in the loaded plugin snapshot, author the PIR directly using `plugins/soleur/skills/incident/templates/pir.md` → `knowledge-base/engineering/operations/post-mortems/<slug>-postmortem.md`), commit it, then re-run the gate. **Interactive mode:** prompt — (a) run `/soleur:incident` now, (b) author the PIR inline, or (c) defer with a tracked `type/chore` issue carrying a `Re-eval by:` criterion AND the `deferred-automation` sentinel (only when the PIR genuinely needs data not yet available). Default-deny on "we'll write it later" with no tracked issue.
+
+  **Meta-case — the PR's subject IS this gate.** Available in **both** modes. Proceed **without**
+  a PIR only when ALL THREE hold:
+
+  1. `git diff --name-only origin/main...HEAD` touches
+     [scripts/ship-incident-pir-gate.sh](../../../../scripts/ship-incident-pir-gate.sh),
+     [scripts/ship-incident-pir-gate-mutation.test.sh](../../../../scripts/ship-incident-pir-gate-mutation.test.sh),
+     `plugins/soleur/test/ship-incident-pir-gate.test.ts`, or
+     `plugins/soleur/test/fixtures/ship-incident-pir-gate/`.
+  2. **Every** changed path is one of those, or
+     [scripts/test-all.sh](../../../../scripts/test-all.sh), or a
+     `knowledge-base/project/{plans,specs,brainstorms,learnings}/` artifact. If this file is also
+     changed, **every hunk** of `git diff -U0 origin/main...HEAD -- plugins/soleur/skills/ship/SKILL.md`
+     must land inside this Phase 5.5 section — a section is not a path, so without that check
+     conjunct 2 cannot tell a Phase 5.5 edit from a rewrite of the merge gate below it.
+  3. The PR body carries `INCIDENT-SIGNAL: meta-case — <one sentence naming why no live event
+     took place>`. Record that line. **Word it without outage or production vocabulary** — the PR
+     body is itself part of the haystack, so "no production outage occurred" makes the gate fire
+     on the declaration exempting it (measured). "No live event took place" does not.
+
+  **Why conjuncts 2 and 3 exist — verified in both directions, not asserted.** Issue #7242 ("Web
+  Platform Release blocked at the zot mirror … prod is 3 releases behind") was a real production
+  delivery outage; the PR that fixed it, #7244 (commit `d31d8a2c7`), **edited the gate script**
+  — adding the `releases? behind` alternation — *and* shipped a post-mortem in the same commit.
+  Conjunct 1 alone would have exempted it. Conjunct 2 rejects it **without consulting any
+  declaration**, because that commit also touches `.github/workflows/reusable-release.yml`,
+  [scripts/zot-mirror-diagnosis.sh](../../../../scripts/zot-mirror-diagnosis.sh) and a runbook.
+
+  **The named residual, because conjunct 2's tempting universal form is false.** *"A PR fixing this
+  gate because of a production event necessarily touches the thing that broke"* holds for #7244 and
+  NOT in general: this gate is itself shipped software (it runs on a customer's own CLI), so when
+  the GATE is what broke, the thing that broke IS a gate-subject path. A PR fixing a released
+  regression in it can satisfy conjuncts 1 and 2 while owing a PIR. Conjunct 3 is the only thing
+  standing there, and it is a self-attestation.
+
+  A fourth, mechanical conjunct was tried and REJECTED on measurement: *"the gate must not signal
+  on the PR's own added `knowledge-base/` artifacts, read alone."* It voids the exemption for
+  essentially every PR in this class, including the one that introduced the arm — a plan ABOUT an
+  incident gate is necessarily dense with outage vocabulary, so it signals whether or not any
+  event occurred. It therefore cannot separate the residual case from the ordinary one, and a
+  conjunct that no legitimate user can satisfy is a gate that gets bypassed rather than met.
+  Measured on this PR: the plan and `tasks.md` both signal; `session-state.md` does not.
+
+  Conjunct 3 remains because 1 and 2 are necessary and not sufficient, and a false declaration is
+  then a deliberate, recorded act. Note the honest limit: unlike `[ack-destroy]`, which is pinned
+  across seven sites and re-derived from the squash body by an independent script, this
+  declaration has **no mechanical consumer** and is graded by the same agent that writes it.
+  Conjunct 2 is what keeps that from being the only safeguard. If this arm is reached a third
+  time, give it a script that decides all three — and revisit the residual above, which a script
+  could address by asking whether the gate itself shipped broken, a question no path test answers.
+
+  Without this arm a PR fixing this gate has no legal exit, and under `/soleur:one-shot` step 7
+  ship runs with no `--headless`, so the interactive prompt above would fire inside an unattended
+  loop whose continuation gate forbids handing off to the operator.
 
 **The merged `## Action Items & Follow-ups` table is the single home for residual work** (the former split `## Follow-ups` + `## Action Items` sections were consolidated so a concern cannot hide as a bare bullet in one while the issue-bearing list lives in the other). Each row's issue is filed BEFORE the row is written — a PIR whose follow-ups never become issues is shelf-ware.
 
@@ -1784,6 +1838,16 @@ Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 
 # at plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh; the fixture's awk
 # extractor anchors on this fence + the variable-set fingerprint below.)
 prev=""; i=0; behind_syncs=0; MAX_BEHIND_SYNCS=6; behind_warned=0
+# Minutes to poll before giving up (one iteration = one `sleep 60`).
+# DERIVED, not chosen: measured over the last 12 CI runs on main, a full
+# run takes min 22 / median 32 / p90 43 / max 54 minutes, and `test-scripts`
+# alone is a median 28. The previous budget was 15, i.e. BELOW the fastest
+# run ever observed — so it could not succeed, and every ship run reported a
+# spurious timeout on a PR that was merging fine. 60 covers the observed max
+# with headroom. This is a BACKSTOP: the loop already exits early on MERGED,
+# a failed required check, and DIRTY, so a longer budget costs nothing on
+# the healthy paths. Re-derive it if CI wall-clock changes materially.
+MAX_POLL_MIN=60
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 # Worktree precondition: the BEHIND auto-sync calls `git merge origin/main`
 # + `git push` which require a checked-out work tree. Bare-repo invocation
@@ -1811,7 +1875,7 @@ while true; do
       --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
     || s="fetch-error: $s"
   if [[ "$s" != "$prev" ]] || (( i % 3 == 1 )); then
-    echo "$(date +%H:%M:%S) [${i}/15] PR <number> ${s}"
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] PR <number> ${s}"
     prev="$s"
   fi
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
@@ -1833,7 +1897,7 @@ while true; do
         done
       done
       if [[ -n "$required_failed" ]]; then
-        echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
+        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_failed] check='${required_failed}' — exiting poll" >&2
         echo "Inspect: gh pr checks <number> ; gh run view --log-failed (pick the failing workflow run)" >&2
         break
       fi
@@ -1846,7 +1910,7 @@ while true; do
   # `*" DIRTY"`) tolerates leading-whitespace and trailing-whitespace variants
   # that future `--jq` template tweaks could introduce.
   if [[ "$s" == *DIRTY* ]]; then
-    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dirty] PR is DIRTY (merge conflict) — exiting poll" >&2
     echo "Conflicted paths (local view; may be empty for server-side conflicts):" >&2
     git diff --name-only --diff-filter=U >&2 || true
     echo "Server-side conflicts may not appear locally. Run: git fetch origin && git merge origin/main" >&2
@@ -1860,7 +1924,7 @@ while true; do
   # consume the whole poll budget — fall through to a structured warning.
   if [[ "$s" == "OPEN BEHIND" && "$behind_syncs" -lt "$MAX_BEHIND_SYNCS" ]]; then
     behind_syncs=$((behind_syncs+1))
-    echo "$(date +%H:%M:%S) [${i}/15] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] BEHIND detected — auto-sync attempt ${behind_syncs}/${MAX_BEHIND_SYNCS}"
     if ! git fetch origin main 2>&1 | tail -2; then
       echo "fetch origin main failed — skipping this sync attempt"
     elif ! git merge origin/main --no-edit 2>&1 | tail -5; then
@@ -1873,7 +1937,7 @@ while true; do
       echo "git push failed after merge — auto-sync incomplete. Stopping the poll."
       break
     else
-      echo "$(date +%H:%M:%S) [${i}/15] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
+      echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] auto-sync ${behind_syncs} pushed — auto-merge will re-evaluate"
       # Re-fetch state immediately after a successful sync. GitHub may
       # have already cleared OPEN BEHIND → OPEN CLEAN → MERGED in the time
       # the sync took (~5-30s); without this re-fetch, we'd burn a 60s
@@ -1889,12 +1953,12 @@ while true; do
     # to heartbeat. PR may still merge if main calms down — but the
     # operator now has the diagnosis without log-archaeology.
     elapsed=$((i * 60))
-    echo "$(date +%H:%M:%S) [${i}/15] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window." >&2
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.behind_exhausted] BEHIND budget exhausted after ${MAX_BEHIND_SYNCS} auto-syncs in ${elapsed}s. origin/main is moving faster than this PR's CI cycle. Recommendation: for a zero-conflict-surface change, use the settle-then-admin-merge escape hatch (gh pr merge --squash --admin after confirming required checks are green on the current SHA — see \"Auto-sync on BEHIND\" below for the full procedure); else merge during a quieter window." >&2
     behind_warned=1
   fi
 
-  if [ "$i" -ge 15 ]; then
-    echo "Merge poll timed out after 15 minutes. Last state: $s"
+  if [ "$i" -ge "$MAX_POLL_MIN" ]; then
+    echo "Merge poll timed out after ${MAX_POLL_MIN} minutes. Last state: $s"
     break
   fi
   sleep 60
