@@ -70,20 +70,104 @@ Body carries `Closes #7709` and nothing else.
 
 Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
 
+- [x] 2.0 CARRIED FROM PR 1's POSTMERGE, declared here so it is not smuggled into a scanner PR:
+      postmerge Phase 4 reported all 5 spot-checked files MISSING on a healthy merge. The worktree
+      had not fetched the merge commit, and git's wording for an object it does NOT have
+      (`exists on disk, but not in <sha>`) reads like a verdict about the file. Measured against a
+      control on the same commit: a path genuinely absent from a real tree says
+      `does not exist in <sha>` instead. The two messages are one word apart and mean opposite
+      things. Fix in `plugins/soleur/skills/postmerge/SKILL.md`: fetch before the first `git show`,
+      plus a table naming both messages. Per `wg-when-a-workflow-gap-causes-a-mistake-fix`.
 - [ ] 2.1 The residue is already measured (plan Phase 2.1): `mv` 3 sites, `cp -r` 0, `rm -rf` 941 across
       316 files, redirection 1759 across 244. The last two are overwhelmingly false positives —
       939/941 and 1586/1759 are command-substitution bindings, and 650 / 1130 are literally
-      `X=$(mktemp -d)`, which always yields an absolute non-empty path.
+      `X=$(mktemp -d)`. **That parenthetical is FALSE and was corrected during PR 2 — see 2.1a.**
 - [ ] 2.1a PREREQUISITE for the widening and root-anchored families: teach the machinery that a
       `$(mktemp -d)` binding is self-guarding — directly, through a same-file wrapper, and through a
       wrapper defined in a sourced helper. Re-measure after this; that residue is the real one.
+      **MEASURED CORRECTION (PR 2).** The premise "always yields an absolute non-empty path" is
+      false on BOTH counts, measured on uutils coreutils 0.8.0:
+      `TMPDIR=reldir mktemp -d` -> `reldir/tmp.XXXX` (RELATIVE), `mktemp -d -p reldir` -> relative,
+      and a failing `mktemp -d` exits 1 leaving the binding EMPTY. The absolute-path property is
+      environmental, not lexical: it depends on `TMPDIR` at runtime, which a static scanner cannot
+      see. Documented behaviour ("use `$TMPDIR` if set, else `/tmp`", no absolutisation) is
+      implementation-agnostic; only uutils was available to measure on this host.
+      Therefore self-guarding may be claimed ONLY as follows, and the distinction is load-bearing:
+      (a) bare `$(mktemp -d)` / `$(mktemp -d -t PREFIX)` -> self-guards RELATIVITY. Measured safe
+          for this corpus: zero relative `TMPDIR` literals and zero relative `-p`/`--tmpdir` args
+          repo-wide, established with a positive control showing the pattern can match (8 real
+          `-p` uses, all `$`-expansions or `/tmp`).
+      (b) `mktemp -d -p "$X"` / `--tmpdir="$X"` -> does NOT self-guard: it inherits `$X`'s
+          relativity, which is task 2.1b's derived-binding problem, not a separate one.
+      (c) NOTHING about `mktemp` self-guards EMPTINESS. A failed `mktemp` binds empty, so the P1a
+          rule must keep treating these as command-substitution bindings needing `|| exit`.
+      Encoding the blanket claim would have silenced ~650/1130 and ~939/941 sites — the same
+      "widening that silences" P1 the nine-agent review caught on PR 1, one PR later.
 - [ ] 2.1b Handle derived bindings for the relativity claim: `_bind_res` treats `R2F="$TMP/r2floor"` as
       a literal and drops the site. Correct for P1a (empty), wrong for P1b (relative) — if `$TMP` is
       relative so is the derived path. Either resolve the parent variable or scope P1b explicitly to
       the recognized binding forms and document the exclusion.
+- [ ] 2.1c MEASURED (PR 2), superseding 2.1's projected residue for the `git -C` arm. Funnel over
+      921 tracked `*.sh`, every stage controlled:
+      504 `git -C "$VAR" <write>` sites -> 497 named-variable -> **199 where `_binding_of` returns
+      None**, i.e. structurally invisible to P1a. All 199 have a real binding; none is an unbound
+      global. Shapes: 184 derived `X="$Y/sub"`, 11 alias `X="$Y"`, 4 command-substitution.
+      Resolving each chain transitively to its root (extractor + classifier carry a 9-case positive
+      control that must PASS before the scan runs):
+        170  rooted at bare `$(mktemp -d)`  -> absolute, cannot be relative
+         12  guarded by other means
+         17  TRUE RESIDUE: unguarded AND not provably absolute, across 3 files
+      The 17 split 13 rooted at a positional `$1` and 4 at a `${VAR:-$(...)}` default.
+      **2.7 as written targets an EMPTY SET.** It scopes the arm to "literal-bound relative
+      operands"; there are zero relative literal bindings repo-wide. The residue P1a cannot see is
+      entirely 2.1b's derived/alias territory, so 2.7 and 2.1b are one task, not two.
+- [ ] 2.1d ...AND the 17 are defended, just not lexically. Read individually: the 8 in
+      `ship-unpushed-commits-gate.test.sh` are `work="$tmp/work"` sites whose enclosing helper calls
+      `init_git_repo "$work"`, and THAT function opens with `assert_fixture_dir "$dir"`. The defence
+      is INTERPROCEDURAL, which a line-oriented scanner cannot see and should not pretend to.
+      Consequence for scoping: the P1b `git -C` arm has no undefended site to burn down. Its value
+      is as a shrink-only RATCHET over the 17 acknowledged rows, not as a remediation. Per PR 1's
+      finding that a widening which silences is worse than the false positives it removes, do NOT
+      teach the rule to chase call graphs to retire these; acknowledge them with the measured reason.
+- [x] 2.1a-DONE Resolution implemented and measured. Handles every mktemp form, one-line AND
+      multi-line same-file wrappers, and wrappers reached through a sourced helper (118 of the 232
+      source directives resolve). Two bugs were caught by controls, BOTH of which had been making
+      sites look safe:
+      (i) a ONE-LINE function body was never read — the body range was `(i, i)` and the scan ran
+          `range(hi, lo, -1)`, which is empty. Same hazard class as PR 1's fifth finding.
+      (ii) `mktemp -d "$TMPROOT/case.XXXXXX"` was classified absolute. A path-bearing TEMPLATE
+          inherits its prefix exactly as `-p` does. Fixing it pushed residue UP, the honest
+          direction: rm -rf 136 -> 205, redirection 809 -> 866, mv/cp 20 -> 26.
+      Excluded as not-a-fixture-dir: 31 redirection sites targeting CI plumbing
+      (`$GITHUB_OUTPUT`, `$GITHUB_STEP_SUMMARY`, `$GITHUB_ENV`, `$GITHUB_PATH`).
+      FINAL RESIDUE (unguarded AND not provably absolute), against 921 tracked `*.sh`:
+        family        candidates  residue  files   2.2 verdict
+        git -C               199       17      3   fix inline
+        rm -rf              1136      205     50   grandfather + file issue
+        redirection         3865      866    190   grandfather + file issue
+        mv / cp -r            90       26     19   grandfather + file issue
+- [x] 2.2-DECIDED Threshold applied to the measured residue, not the projected one. `git -C` is the
+      only family under 100 lines / 4 files, so it is remediated inline; the other three are
+      grandfathered behind shrink-only baselines. ONE burn-down issue covers all three families
+      (not three issues): they are one class, and 1 close + 1 file keeps net-issue-flow at 0.
 - [ ] 2.2 Apply the repo's existing fix-inline-versus-file threshold — the cost-of-filing auto-flip at
       100 lines and 4 files — to the re-measured residue. If 2.1a proves large, ship the loud-failure
       family alone (3 sites) and file the other two with the measured numbers attached.
+- [x] 2.2-REVISED After review, the 2.2 disposition changed and the earlier one is retracted.
+      A two-agent review found 12 P1s -- 8 in the scanner, 4 in the suite -- and every one
+      reproduced. The decisive pair: `scan_relative` reused P1a's EMPTINESS guard set to answer a
+      RELATIVITY question (four of five arms clear a relative site while proving nothing about it),
+      and scanned for those guards from line 0 with no function bounding, so an unrelated function
+      using the same variable NAME cleared a site -- as did the assertion's name inside a
+      single-quoted string, which is the cdx() name-token gap this scanner exists to replace.
+      Corrected detector, measured: **2071 sites over 306 files**, up from 913. Every family is now
+      past the 100-line/4-file threshold, INCLUDING git -C at 39 sites over 12 files -- so the
+      "burned the git -C arm to 0 across 3 files" result of the earlier revision was an artefact of
+      the unsound guard set, not a fix, and the inline remediation is retracted. All four families
+      are grandfathered and the burn-down is tracked whole on #7808.
+      Corrections also made to published numbers: "118 of 232 source directives resolve" was wrong
+      in both figures and in the noun -- `git grep -cE ... | wc -l` counts FILES. Measured: 399
+      directives, 158 with a literal path tail, 142 resolving.
 - [ ] 2.3 Add the rule function to `plugins/soleur/test/lib/fixture-scan.py` with its own verb tables.
 - [ ] 2.4 Register the new `--rule` value in the rule-validation tuple in `main()` — a third editing
       site distinct from the rule function itself, currently `if rule not in ("operand", "cd")`.
@@ -93,8 +177,18 @@ Body carries `Closes #7708` and nothing else. Begins only after PR 1 has merged.
       `/f`), and loud-failure (`mv` and `cp -r` into an empty destination, which exit non-zero).
 - [ ] 2.7 For the `git -C` arm, claim only the residue P1a cannot see: literal-bound relative operands,
       which `_binding_of` skips because the nearest binding is a literal.
-- [ ] 2.8 Extract the baseline compare, regenerate and floor logic into a shared helper used by both
-      suites, rather than copying it. Only the fixture corpora differ.
+- [x] 2.8 NOT DONE, with measured cause. The premise "only the fixture corpora differ" does not
+      hold once both suites exist. Compared line by line, the genuinely identical logic is ONE
+      line — the `ACK_TOTAL` sum
+      (`grep -vE '^#|^[[:space:]]*$' "$BASELINE" | awk -F'\t' '{s+=$1} END {print s+0}'`).
+      The `--write-baseline` blocks are NOT shareable as written: they differ because the two
+      scanners print different shapes, so P1a extracts a path with `cut -d: -f1` and P1b with
+      `sed -E 's/^([^:]+):.*/\1/'`. Extracting one shared line would mean sourcing a new helper
+      into both suites — including the P1a suite hardened in #7709 — and would add a failure mode
+      (a missing sourced helper) to two ratchets in exchange for de-duplicating one line. The
+      drift 2.8 exists to prevent is already caught: each suite's own SITES-equals-baseline arm
+      fails if its regeneration and its compare disagree. Revisit if a THIRD rule lands, where the
+      arithmetic changes.
 - [ ] 2.9 Add the P1b test file with its own baseline path, modelled on the existing lettered sections.
 - [ ] 2.10 Seed the P1b baseline against the post-burn-down tree.
 - [ ] 2.11 Confirm `git diff` shows no change to `OPERAND_WRITE` or `scan_operand`, and that the P1a
