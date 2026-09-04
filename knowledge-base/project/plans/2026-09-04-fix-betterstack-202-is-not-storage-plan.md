@@ -13,6 +13,54 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-04
+**Gates run:** 4.5 (network — fired on a false positive, disposition recorded), 4.6 (user-brand
+impact — pass), 4.7 (observability — **halted this plan**, `logs:` was missing, now added), 4.8
+(PAT-shaped — pass), 4.9 (UI wireframe — not triggered), 4.10 (encryption posture — not triggered),
+4.11 (guard contract — `lint-guard-contract.py` green, 3 entries).
+**Review panel:** Kieran, architecture-strategist, spec-flow-analyzer, code-simplicity-reviewer, and
+a scoped strong-model advisor. **Deepen agents:** verify-the-negative sweep, Better Stack schema
+research, follow-through precedent diff.
+
+### Key improvements
+
+1. **The mechanism changed.** An earlier draft added a fourth state to the shared
+   `bs_absence_classify`. That function takes **no arguments** and classifies the *warehouse*, and
+   its only production consumer branches on the token as a string with no default arm — so a fourth
+   token would have fallen through into the live-channel path. Replaced by a composition in the one
+   caller that needs it (C6), which touches no shared contract.
+2. **A false safety claim was caught.** The plan asserted source `2734275` was no alarm's positive
+   control. It **is** — `ANCHOR_SQL` is an any-foreign-row control on exactly that source. The probe
+   marker now carries no `host_name` key, and Guard 2 asserts the **field**, not the source id.
+3. **A live credential bypass was found and pulled into scope.** The probe's
+   `https://*.betterstackdata.com/*` destination check accepts `https://evil.com/?x=.betterstackdata.com/`,
+   because a shell glob crosses `/` and `?`. The plan's own User-Brand Impact had been resting on it.
+4. **Three load-bearing numbers were wrong and are now measured:** the poll bound is 16 minutes (not
+   ~50, which was the comment's unbounded worst case), the caller population is 39 files / 141 lines
+   / 29 invocation sites (not "eight", nor "71 sites"), and ADR-198 carries 3 occurrences of the
+   eight-of-nine claim while the cloud-init file carries 4 more that this plan does not edit.
+5. **The round-trip readback is grounded, not guessed.** The warehouse column set
+   (`dt`, `raw`, `_row_type`, `ingest_time`, …) was measured against live archive rows, and
+   `ingest_time` gives a server-side latency figure independent of the runner's clock. One residual
+   unknown is named: the `http`-platform table's schema is inferred, not verified.
+6. **The follow-through's exit codes were re-mapped to the sweeper's real semantics** — it collapses
+   every non-0/1 code into one TRANSIENT arm, so the discrimination lives in the stdout verdict token
+   the sweeper embeds in the issue comment.
+
+### New considerations discovered
+
+- The vendor **documents 402 "refused and discarded"** for over-quota, not 202-and-drop. The observed
+  behaviour is 202 with nothing stored, so #7811 should not settle on quota without evidence.
+- The first successful round-trip write **permanently creates the ClickHouse table**, which retires
+  the `CLUSTER_DOESNT_EXIST` discriminator for that source forever. The instrument consumes its own
+  discriminator exactly once; recorded in the ADR-192 amendment rather than discovered later.
+- A cheaper H5 decider already exists at zero credential cost: correlating the emitter's existing
+  Sentry `stage:betterstack_ingest` POST outcome against a CI readback.
+- Eleven mechanisms were cut, six of them during review. Two ADR amendments, no new ADR, no ordinal
+  claimed.
+
 ## Overview
 
 The rung-2 rehearsal for the git-data host cannot reach a verdict because the Better Stack query
@@ -95,7 +143,14 @@ API exposes no usage or billing endpoint under the credentials available — `GE
 `/api/v2/query/usage` and `/api/v2/source-groups` all return 404 — so the quota hypothesis is **not**
 confirmable from the observability layer as currently credentialed.
 
-One discrepancy is carried to #7811 **without** asserting causation, and with a correction: repo
+One **documented** contrast is worth carrying to #7811, stated as documentation rather than as a
+diagnosis: Better Stack's HTTP ingest API documents **402** with body `{"error": "Quota exceeded"}`
+as the over-quota response, and describes those logs as *refused and discarded*. The observed
+behaviour is a **202** with nothing stored. So "silently over quota" is not the vendor's documented
+failure mode for this endpoint, and #7811 should not settle on it without evidence. This plan draws
+no conclusion from that; it records it.
+
+A second discrepancy is carried across **without** asserting causation, and with a correction: repo
 literals for source `2457081` post to `s2457081.eu-fsn-3.betterstackdata.com` while the API reports
 that source's `ingesting_host` as `s2457081.eu-central-1a.betterstackdata.com`. This is **not a
 novel finding** — `apps/web-platform/infra/git-data.tf` already records it from #7772: *"Do NOT
@@ -160,13 +215,13 @@ them** — recorded rather than quietly dropped, because most were wrong for rea
 
 | Cut mechanism | Property claimed | What already covers it / forbids it |
 |---|---|---|
-| **C1.** New exit codes in `scripts/betterstack-query.sh` for table-absent | P1 | **Forbidden by a standing decision.** `scripts/betterstack-assert-absence.sh` §"WHY A SEPARATE SCRIPT…": *"that file is a pure transport. Its exit vocabulary is already spoken for … Overloading it would make every existing caller's error handling ambiguous."* Measured blast radius: **39 non-test scripts / 71 sites** reference it (not the "eight" an earlier draft asserted — that number was invented and attributed to a header that says only *"every existing caller"*). The miscount strengthens the cut. |
+| **C1.** New exit codes in `scripts/betterstack-query.sh` for table-absent | P1 | **Forbidden by a standing decision.** `scripts/betterstack-assert-absence.sh` §"WHY A SEPARATE SCRIPT…": *"that file is a pure transport. Its exit vocabulary is already spoken for … Overloading it would make every existing caller's error handling ambiguous."* Measured blast radius, re-derived at deepen time because an earlier draft's figure did not reproduce: **39 non-test scripts, 141 referencing lines, 29 of which actually invoke the script** (`git grep -ln 'betterstack-query' -- scripts/ | grep -v '\.test\.sh$' | wc -l` → 39; the same grep with `-n` → 141). An earlier draft said "eight", attributed to a header that states only *"every existing caller"* and names no number; a later draft said "71 sites", which also did not reproduce. Both miscounts strengthen the cut. |
 | **C2.** Build a three-state classifier | P1 | **Already exists.** `bs_absence_classify` emits `TRANSPORT_FAIL` / `INGEST_DARK` / `LIVE` (ADR-192 I-1). |
 | **C3.** Make `betterstack-ingest-probe.sh` post a real payload and read it back | P2 | **Explicitly rejected by ADR-192**: *"The probe writes nothing … a probe that wrote its own marker would satisfy that control forever and convert a two-day outage into a permanent blind spot."* |
 | **C4.** A new principle that poll budgets derive from measured latency | P3 | **Already decided.** ADR-172 §2: *"The poll budget is a multiple of the measured 17 s POST→queryable latency; below that floor a non-observation is `unknown`, never a verdict."* |
 | **C5.** Widen the rung-2 polling window | P3 | **Measured: nothing to fix.** `.github/workflows/git-data-rung2-rehearsal.yml` sets `deadline=$(( SECONDS + 16 * 60 ))` — **16 minutes**, ~56× the measured 17 s. An earlier draft said "~50 min / ~176×", read off the *comment* describing the unbounded attempt-count worst case the deadline exists to cut. Corrected against the literal. |
 | **C6.** A fourth state in `bs_absence_classify` | P1 | **Cut at review.** The function takes **no arguments**: it reads `$BS_CONTROL_WINDOW`, queries once, and answers about *the warehouse*. A target-vs-control state needs an arity change to a shared library whose only production consumer, `scripts/zot-restart-loop-alarm.sh`, branches on the token **as a string** at two sites — one `if/if` with no `else` and one `case` with no `*)` arm. A fourth token would fall through both into the live-channel path. The state is available to the caller as the product `(anchor_rc != 0) × bs_absence_classify()`; composing it costs one arm of one script and touches the alarm not at all. |
-| **C7.** An enumerator forcing all `betterstack-query.sh` callers through the chokepoint | P1 | **Cut at review.** Population is 39 files / 71 sites, of which exactly **one** routes through `bs_absence_classify` today — so the guard is red on day one and greens only via ~38 opt-out declarations in scripts belonging to other issues, at which point it certifies annotation, not behaviour. The repo's only comparable enumerator (`scripts/lint-supabase-deprecated-endpoints.sh`) costs 460 + 606 LOC, and its own suite records that an allowlist *"buys 'this file is not a caller', never 'this file is exempt'"* — the opposite of the opt-out semantics this would need. |
+| **C7.** An enumerator forcing all `betterstack-query.sh` callers through the chokepoint | P1 | **Cut at review.** Population is 39 files / 141 lines / 29 real invocation sites, of which exactly **one file** routes through `bs_absence_classify` today — so the guard is red on day one and greens only via ~38 opt-out declarations in scripts belonging to other issues, at which point it certifies annotation, not behaviour. The repo's only comparable enumerator (`scripts/lint-supabase-deprecated-endpoints.sh`) costs 460 + 606 LOC, and its own suite records that an allowlist *"buys 'this file is not a caller', never 'this file is exempt'"* — the opposite of the opt-out semantics this would need. |
 | **C8.** A new ADR for the readback-placement decision | P4 | **Cut at review** — it records a non-decision, and the convention (ADR-096 *"No new ordinal is claimed; this amends ADR-096 in place"*, ADR-164, ADR-116) is to amend when the subject is an existing ADR's subject. Folded into the ADR-198 amendment. Removes the ordinal-collision risk entirely. |
 | **C9.** A separate `scripts/betterstack-roundtrip-probe.sh` behind the follow-through | P2 | **Cut at review** — the abstraction is justified only by a second caller, and no phase creates one. `followthrough-convention.md` requires the sweeper's `script=` path to live under `scripts/followthroughs/`; it does not require a second file behind it. Collapsed into one script plus its suite. |
 | **C10.** A `--dry-run` arm to satisfy `discoverability_test` | P2 | **Cut at review** — self-defeating. `deepen-plan` Check 10 rejects a command whose first token is outside its allowlist (`doppler` is not on it) and skips execution entirely when `credentials_required` is declared, so the arm's only gate never runs it, while AC-ing it created a live-credential operator step in a pre-merge list. `discoverability_test.command` now points at the suite, whose first token is `bash` — allowlisted, credential-free, and actually executed. |
@@ -220,6 +275,28 @@ them** — recorded rather than quietly dropped, because most were wrong for rea
 | H5 | POSTs accepted-not-stored *for this payload shape* | **UNKNOWN** | Untestable while the warehouse stores nothing from any producer. Phase 3's follow-through decides it. |
 | H6 | The warehouse accepts and discards writes team-wide | **CONSISTENT, NOT CONFIRMED** | Three producers in lockstep; nothing stored 27.6 h; ingest still 202. No usage endpoint. Tracked as #7811, **not adopted as a finding**. |
 | H7 | The `eu-fsn-3` / `eu-central-1a` literal mismatch | **OBSERVED, CAUSATION NOT ESTABLISHED, AND ALREADY RECORDED** | `git-data.tf` documented it in #7772; ADR-172 measured a working POST against `eu-fsn-3`. Reported to #7811. |
+
+## Network-Outage Deep-Dive (gate fired on a false positive — disposition recorded)
+
+`deepen-plan` Phase 4.5's keyword scan fires on this plan: `unreachable` appears 7 times, `SSH`
+once, `firewall` once. **All are false positives, and recording that is cheaper than skipping the
+gate silently.** Every `unreachable` occurrence is the quoted literal
+*"unreachable or unauthorised"* — the string this plan exists to DELETE from the capture, because
+it names two causes the run never measured. `SSH` appears only in the `logs` field asserting the
+paths need none; `firewall` only in the IaC-skip sentence listing what is not introduced.
+
+This plan diagnoses no connectivity symptom. Nonetheless the layer status for the transport it does
+touch, per `hr-ssh-diagnosis-verify-firewall`'s L3→L7 ordering:
+
+| Layer | Status for this plan's paths |
+|---|---|
+| L3 firewall / egress | **Not implicated, verified by measurement.** The ClickHouse query path answers `{"n":0}` with exit 0 from this session against `2457081`, so egress to Better Stack is open and authenticated. A blocked path would not have produced a successful control read. |
+| L3 DNS / routing | **Not implicated.** Both source hosts resolve and answer; the `2734275` failure is an application-layer 500 carrying a ClickHouse error code, not a connect or resolve failure. |
+| L7 TLS / proxy | **Not implicated.** `--proto '=https'` is enforced and the reads complete with HTTP status codes, so TLS terminates correctly. |
+| L7 application | **This is the whole subject.** The 500 `CLUSTER_DOESNT_EXIST` is an application response to a well-formed authenticated request. |
+
+The one genuinely open network-adjacent question — why the vendor accepts writes it does not store —
+belongs to #7811 and is recorded as H6/H7 above, unconfirmed.
 
 ## User-Brand Impact
 
@@ -346,6 +423,14 @@ failure_modes:
   - mode: the credential could be forwarded off-vendor
     detection: Guard 3 in tests/scripts/test-betterstack-roundtrip-latency.sh
     alert_route: CI red at PR time; this mode is prevented, not observed in production
+logs:
+  where: the rung-2 capture writes to the `git-data-rung2-capture-log` workflow artifact and to
+         `$GITHUB_STEP_SUMMARY`; the follow-through's output is captured by
+         `.github/workflows/scheduled-followthrough-sweeper.yml` and rendered as a comment on the
+         tracker issue. Neither path requires SSH, and neither writes to the git-data host.
+  retention: GitHub Actions artifact retention for the capture log (repo default, 90 days) and
+             indefinite on the tracker issue for the follow-through comments, which is what makes
+             the latency measurement durable once it lands
 discoverability_test:
   command: bash tests/scripts/test-betterstack-roundtrip-latency.sh
   expected_output: the suite's final line reports a non-zero case count with passes + fails == cases
@@ -384,7 +469,7 @@ scripts that call `betterstack-query.sh` (C7).
 | 3 | Make the target-failed-control-answered arm assert the producer is at fault | Over-claims: a misaddressed source (H1) produces the identical pair. |
 | 4 | Delete the `BS_TABLE`/`BS_TABLE_S3` override on the classify call | The capture `export`s `BS_TABLE=t520508_soleur_git_data_prd_logs` process-wide, so the "control" would read the **absent target**, always return `TRANSPORT_FAIL`, and collapse three states into one — a silent regression to today's behaviour with the suite otherwise green. |
 | 5 | Reorder so the classification line is emitted **before** `bs_absence_classify` runs, using a default | A property about which datum informs a decision cannot be tested by deletion — deletion reds any case that reads the output at all, while moving it reds only a case observing the decision *during* the window the property is about. |
-| 6 | Change the arm enumerator's `transient(` pattern to a token present nowhere, so it reports "0 arms checked" and exits 0 | **Targets the guard's own dispatch.** The floor fires on its own emptiness with `printf >&2` + `exit 1`, reported directly rather than through the suite's verdict helpers (ADR-193 / AP-023). |
+| 6 | Change the arm enumerator's `transient(` pattern to a token present nowhere, so it reports "0 arms checked" and exits 0 | **Targets the guard's own dispatch.** The floor fires on its own emptiness. It must be written in the shape `scripts/guard-vacuity-floor.test.sh` recognises — a bracket or arithmetic test with `-lt`/`-le`/`-ge` polarity against a counter the suite itself increments, reporting with `printf >&2` + `exit 1` and **never** through the suite's `fail()`/verdict helper (a floor routed through the suspect cannot witness the suspect). ADR-193 / AP-023. |
 
 **Harness rows.**
 
@@ -490,10 +575,25 @@ contract is 0/1/2 plus 64 for usage errors**; do not "tidy" the 64 path. `rc=3` 
 workflow is minted by the workflow's own Doppler self-probe, not by the capture, and must not be
 disturbed.
 
-1.3 Record the honest limit in code, as `scripts/betterstack-assert-absence.sh` does for its own: an
-`INGEST_DARK` reading cannot distinguish "the warehouse refuses writes" from "every producer on the
-control source stopped at once". It still correctly declines to blame git-data, which is the decision
-the caller needs.
+1.3 **Set the control window deliberately, and record two honest limits in code**, as
+`scripts/betterstack-assert-absence.sh` does for its own.
+
+The window is a separate knob from the capture's own `WINDOW="30 DAY"`: `bs_absence_classify` reads
+`BS_CONTROL_WINDOW`, which defaults to `6h`. Verified: it calls the transport in **mode 2**
+(`--since "$BS_CONTROL_WINDOW" --limit 1`), which queries the hot arm **and** the s3 archive arm —
+which is exactly why both `BS_TABLE` and `BS_TABLE_S3` must be overridden, not just the first. Pass
+the window explicitly rather than inheriting the default silently, so the value is a decision on the
+record.
+
+The two limits:
+
+- An `INGEST_DARK` reading cannot distinguish "the warehouse refuses writes" from "every producer on
+  the control source stopped at once". It still correctly declines to blame git-data, which is the
+  decision the caller needs.
+- If the control source is ever retired or renamed, its read fails and the arm reports
+  `TRANSPORT_FAIL` — "the instrument could not answer". That is defensible (the instrument genuinely
+  cannot answer) but it is not precise, and a future maintainer should know the control source is a
+  named dependency of this arm rather than an interchangeable one.
 
 1.4 Add the arm enumerator over `transient(` call sites in that one file, with its zero-arms floor
 reporting via `printf >&2` + `exit 1` in the shape `scripts/guard-vacuity-floor.test.sh` derives.
@@ -532,11 +632,32 @@ and record the observed POST→queryable latency. It reuses the fixed authority 
 whose positive control its marker could satisfy. `ANCHOR_SQL` selects on `host_name != ''`, so a
 marker without that key cannot become foreign-host liveness.
 
-3.3 **Distinct exit codes** for `ROUNDTRIP_STORED` (0), `ROUNDTRIP_NOT_STORED` (the H5 decider — a
-vendor data-loss finding), `ROUNDTRIP_DARK` (nothing to measure yet), and `ROUNDTRIP_UNKNOWN` (the
-readback itself could not answer, or the deadline was below the measured floor). Collapsing the
-middle two onto one non-zero exit would render them as one identical daily TRANSIENT comment — this
-plan's own thesis, applied to its own instrument (Guard 2 row 6).
+3.3 **Four verdicts, mapped onto the sweeper's three actions — and the mapping is measured, not
+assumed.** `scripts/sweep-followthroughs.sh` dispatches on `case "$rc"`: **0** closes the issue,
+**1** comments FAIL and leaves it open (reopening a closed one, capped at `REOPEN_MAX=3`), and
+**every other code** — 2, 3, 4 alike — takes one identical TRANSIENT arm. So distinct exit codes do
+**not** by themselves buy distinct sweeper behaviour, and a design that assumed they would was wrong.
+
+What the sweeper *does* preserve is the script's stdout: it captures the last 4 KB and embeds it in
+the issue comment. The discrimination therefore lives in the verdict token, with the exit code
+carrying the action:
+
+| Verdict (stdout, load-bearing) | Exit | Sweeper action | Why |
+|---|---|---|---|
+| `ROUNDTRIP_STORED` | 0 | closes, latency recorded | the measurement completed |
+| `ROUNDTRIP_NOT_STORED` | 1 | FAIL comment, stays open, reopens if closed | **the H5 decider.** A confirmed accepted-not-stored is a vendor data-loss finding; exit 1 is right precisely because it must not be quietly retried away, and here "the assertion did not hold" is literally true |
+| `ROUNDTRIP_DARK` | 2 | TRANSIENT, retried | nothing to measure yet |
+| `ROUNDTRIP_UNKNOWN` | 3 | TRANSIENT, retried | the readback could not answer, or the deadline was below the floor |
+
+Exits 2 and 3 render identically at the sweeper **by design of the sweeper, not by accident of this
+script**; the token on stdout is what separates them for the reader, and Guard 2 row 6 asserts the
+tokens never collapse. Record this asymmetry in the script header so nobody later "fixes" the
+duplicate-looking codes.
+
+Per `scripts/lint-followthrough-varq-ban.sh`, the script must **not** use `${VAR:?msg}` or
+`: "${VAR:?}"` for required inputs — that form aborts with status 1, which the sweeper reads as a
+FAIL and comments daily. Use `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT: <reason>" >&2; exit 2;
+fi` instead.
 
 3.4 **Deadline and the AP-024 carve-out.** Until a latency is measured for this source, the interim
 deadline is a stated multiple of ADR-172's 17 s, and a non-observation **below that floor degrades to
@@ -569,9 +690,53 @@ and a bot writing to `.github/workflows/` is a mechanism nobody asked for. Chang
 if a measurement ever warrants it, is a separate human-authored PR. **No constant changes in this
 PR** (C5).
 
-3.9 Record the known risk that the readback predicate is authored against an `http`-platform source
-that never stored a row, so its `WHERE` clause and the `raw` shape are unverified until the first
-live run. The first live execution is expected to be a *measurement*, not a pass.
+3.9 **The readback predicate is grounded, not guessed — and the one residual unknown is named.**
+Deepen-pass measured the real warehouse schema against the control table's archive rather than
+composing it from what the format permits (Phase 0.1's rule):
+
+| column | ClickHouse type | use |
+|---|---|---|
+| `dt` | `DateTime64(6, 'UTC')` | event time — the `WHERE`/`ORDER BY` key |
+| `raw` | `String` | the log entry, **double-encoded** JSON (a JSON string containing a JSON document) |
+| `_row_type` | `UInt8` | `= 1` selects log rows, excluding metrics/spans whose `raw` has a different shape |
+| `ingest_time` | `DateTime64(6, 'UTC')` | **the warehouse's own receive timestamp** |
+| `_insert_index`, `_pattern` | `UInt32`, `String` | Better Stack internals; not used |
+
+`ingest_time` is the find that makes the measurement precise: the POST→queryable latency this
+follow-through exists to establish is bounded by the probe's own wall clock, but `ingest_time - dt`
+gives a **server-side** figure that does not depend on the runner's clock. Record both.
+
+Vendor ingest contract (documented): a single JSON object **or** an array; `dt` and `message` are
+reserved and both optional (`dt` defaults to reception time, and accepts UNIX s/ms/ns, RFC 3339 or
+ISO 8601); every other key passes through as a custom field. Responses are **202** accepted,
+**402** quota exceeded (*"refused and discarded"*), **403** bad token, **406** bad JSON.
+
+**Readback shape — two-stage, because ADR-192 I-2 forbids resting on an unanchored `raw LIKE`.**
+Stage 1 is a cheap SQL prefilter; stage 2 is the actual predicate, decoded and field-anchored:
+
+```sql
+SELECT dt, ingest_time, raw
+FROM s3Cluster(primary, t520508_soleur_git_data_prd_s3)
+WHERE _row_type = 1
+  AND dt >= now() - INTERVAL <window>
+  AND raw LIKE '%<MARKER>%'
+ORDER BY dt DESC LIMIT 10 FORMAT JSONEachRow
+```
+
+then confirm by decoding twice and matching the **field**, never the bare line:
+`jq -r '.raw | fromjson | select(.message | startswith("<MARKER>")) | .message'`. The marker is a
+quote-free, escape-free token so the prefilter survives double-encoding. Match on **presence of at
+least one row**, never on an exact count — a retry or a duplicate delivery is legitimate, which is
+what Guard 2 harness row H2 asserts.
+
+The marker payload is `{"dt": …, "message": "<MARKER> run_id=…"}` and carries **no `host_name`
+key** (Guard 2 row 4).
+
+**The one residual unknown, stated as unknown:** the column set above is measured against the
+*control* table, which is a `vector`-platform source. Source `2734275` is `http`-platform and its
+table does not yet exist, so its schema is *expected* to match and is **not** verified. That is an
+inference, and the first live run is what converts it into a measurement — which is precisely why
+that run's correct outcome may be `ROUNDTRIP_UNKNOWN` rather than a pass.
 
 ### Phase 4 — ADR amendments
 
@@ -600,7 +765,7 @@ Sentry-correlation alternative.
 - `tests/scripts/test-betterstack-roundtrip-latency.sh` (Phase 3.5)
 
 **Explicitly NOT edited:** `apps/web-platform/infra/cloud-init-git-data.yml` (ForceNew),
-`scripts/betterstack-query.sh` (C1; 39 scripts / 71 sites depend on its vocabulary),
+`scripts/betterstack-query.sh` (C1; 39 scripts / 29 invocation sites depend on its vocabulary),
 `scripts/lib/betterstack-absence.sh` (C6; shared arity with a live consumer), and
 `scripts/zot-restart-loop-alarm.sh` (untouched precisely because C6 adds no token that could reach
 its no-`*)`-arm `case`).
@@ -651,9 +816,13 @@ its no-`*)`-arm `case`).
    three Guard 3 rows each drive it red.
 10. Guard 2 harness H3 passes in the capture suite: an `ANCHOR_SQL` result containing a round-trip
     marker does **not** read as foreign-host liveness.
-11. The new suite is registered: `grep -c 'test-betterstack-roundtrip-latency' scripts/test-all.sh`
-    returns at least 1, and `plugins/soleur/test/fixture-relative-assert.baseline.txt` is regenerated
-    in the same commit.
+11. The new suite is registered **in the form the orphan detector actually reads**.
+    `scripts/lint-orphan-test-suites.sh` anchors on the COMMAND after `bash`, never the free-form
+    `run_suite` label, so the AC asserts the command:
+    `grep -cE 'run_suite .*[[:space:]]bash[[:space:]]+"?tests/scripts/test-betterstack-roundtrip-latency\.sh"?' scripts/test-all.sh`
+    returns 1, and `bash scripts/lint-orphan-test-suites.sh` passes.
+    `plugins/soleur/test/fixture-relative-assert.baseline.txt` is regenerated in the same commit via
+    `bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline`.
 12. `.github/workflows/scheduled-followthrough-sweeper.yml` carries `BETTERSTACK_LOGS_TOKEN` in its
     `env:` block.
 13. **Scope boundary:** the diff changes zero Better Stack ingest-URL literals.
