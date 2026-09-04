@@ -155,7 +155,7 @@ List with reasons.
 - [x] **7.3** Probe R2 `list-object-versions`; if unsupported, file the issue that
       `infra/github/README.md` §"Phase 5 — Rollback" documents a capability that does not exist for
       **every** root on that bucket. Named owner, not a PR-body line.
-- [ ] **7.4** Put the recovery gesture in the PR body: **re-run the failed job on the original
+- [x] **7.4** Put the recovery gesture in the PR body: **re-run the failed job on the original
       run** is the only one that works — `workflow_dispatch` has no `head_commit.message` so it
       cannot carry the ack, and the push trigger is path-filtered so an ack-only commit does not
       retrigger. **Revert and state-restore are both traps** (§2.5). **AC14.**
@@ -227,7 +227,15 @@ List with reasons.
 - [x] **10.8** **AC14** — the PR body carries: the re-run recovery gesture; revert is forbidden; a
       clean plan is not evidence the deprecation lifted; two resources still read the deprecated
       path; and the brownout-deadlock case.
-- [ ] **10.9** Full review panel — authorised and **required** before ship.
+- [x] **10.9** Full review panel — authorised and **required** before ship.
+      **Ran 2026-09-04 against `aba5c5af5`, six agents, report-only.** security-sentinel,
+      observability-coverage-reviewer, test-design-reviewer, silent-failure-hunter,
+      terraform-architect, code-simplicity-reviewer. Every finding fixed inline in
+      `2b3e05853`; nothing deferred. Highest-value: a CRITICAL inherited-errexit bug that
+      would have redded EVERY clean apply and skipped both post-apply liveness probes; a
+      destroy-gate bypass where `nested_deletes` was a net delta; and three of my own
+      assertions proved vacuous by a 24-mutant battery. All three mutations that survived
+      were re-run after the fix and now die.
 
 ## Phase 11 — Post-merge verification
 
