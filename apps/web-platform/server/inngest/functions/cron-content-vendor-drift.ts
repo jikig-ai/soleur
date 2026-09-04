@@ -68,6 +68,104 @@ const CATEGORY_LABELS: Record<string, string[]> = {
 /** Exit codes that route to issue (security-relevant). */
 export const ISSUE_EXIT_CODES = new Set([10, 11, 12, 15, 16]);
 
+/**
+ * Totals produced by one comparison pass over the NOTICE registry.
+ *
+ * `filesExamined` counts registry lines that yielded a usable
+ * `<upstream-path>:<sha>` pair. A malformed line increments `filesError`
+ * WITHOUT incrementing `filesExamined`, so it fails the completeness conjunct
+ * from both directions.
+ */
+export interface ComparisonTotals {
+  registryCount: number;
+  filesExamined: number;
+  filesSame: number;
+  filesDrifted: number;
+  filesError: number;
+}
+
+/**
+ * Whether a run may advance NOTICE `last-verified` (#7710).
+ *
+ * This is the ONLY predicate permitted to gate the freshness attestation, and
+ * it deliberately takes TOTALS rather than the detect step's `drift` verdict.
+ * Two of that step's returns yield `drift: "none"`, and only one of them means
+ * "I compared everything and it matched"; the other is reached AFTER drift was
+ * detected, when the classifier declines to categorise it. A writer keyed on
+ * the verdict would advance a compliance attestation over a corpus the same
+ * run had just found drift in.
+ *
+ * Exported and pure so the property can be asserted behaviourally over every
+ * exit — clean, drifted, drift-detected-but-classifier-zero, comparison
+ * failed, partial — rather than grep-asserted against the handler's source.
+ *
+ * Every conjunct is load-bearing:
+ * - `registryCount > 0` — `0 of 0` is not evidence of currency. A writer that
+ *   treats an empty registry as a clean comparison is vacuous by construction.
+ * - `filesExamined === registryCount` — a PARTIAL comparison is not evidence.
+ *   Before the Phase 1 reconciliation the registry read 5 while the corpus was
+ *   8, so the cron compared five of eight files and reported clean.
+ * - `filesDrifted === 0` — the obvious one.
+ * - `filesError === 0` — a file that could not be fetched is not a file that
+ *   was verified. Without this conjunct an upstream outage reads as a clean
+ *   bill of health, which is the failure direction that stays invisible.
+ */
+/**
+ * The three states a single per-file comparison can land in (#7710).
+ *
+ * `"error"` is the state that did not exist before: a response that ARRIVED
+ * but could not be parsed — a degraded 200, a body with no `sha` field — was
+ * previously indistinguishable from "unchanged", so an upstream serving
+ * garbage read as a clean corpus.
+ *
+ * Exported and pure so the distinction is provable by a test that changes the
+ * INPUT, rather than by grepping the loop for a token. A grep for a counter
+ * increment cannot tell which branch it came from — the loop has three of
+ * them — so the guard has to sit here.
+ */
+export type FileComparison = "same" | "drifted" | "error";
+
+export function classifyFileComparison(
+  pinnedSha: string | undefined,
+  upstreamSha: string | undefined,
+): FileComparison {
+  // A registry line we could not read is not a file we verified.
+  if (!pinnedSha) return "error";
+  // A response that did not carry a sha is NOT evidence of sameness. This is
+  // the arm whose absence made an outage look like a clean bill of health.
+  if (!upstreamSha) return "error";
+  return upstreamSha === pinnedSha ? "same" : "drifted";
+}
+
+export function mayAttestFreshness(totals: ComparisonTotals): boolean {
+  return (
+    totals.registryCount > 0 &&
+    totals.filesExamined === totals.registryCount &&
+    totals.filesDrifted === 0 &&
+    totals.filesError === 0
+  );
+}
+
+/**
+ * Whether the Sentry check-in may report healthy.
+ *
+ * The heartbeat must reflect the ARTIFACT, not the run. A run that compared
+ * clean over the complete registry and then failed to commit the advance is
+ * NOT healthy: that is precisely the shape that let a dead writer sit
+ * undetected for 117 days behind a green monitor, because the failure path
+ * inside `safeCommitAndPr` terminates in `reportSilentFallback` while the
+ * heartbeat posted `ok: true` unconditionally.
+ *
+ * A run that was never eligible (drift found, or a comparison that could not
+ * complete) is healthy as far as THIS signal goes — it has its own routes.
+ */
+export function heartbeatOk(
+  attestationEligible: boolean,
+  wroteAttestation: boolean,
+): boolean {
+  return !attestationEligible || wroteAttestation;
+}
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -374,9 +472,35 @@ export async function cronContentVendorDriftHandler({
       let driftDetected = false;
       const aggDiffParts: string[] = [];
 
+      // THREE states, not two (#7710). The previous form collapsed a missing
+      // sha and an equal sha into ONE `continue`, which scores a response that
+      // ARRIVED BUT COULD NOT BE PARSED — a degraded 200, a body with no
+      // `sha` field — identically to "this file is unchanged".
+      //
+      // (That superseded expression is deliberately not quoted verbatim here:
+      // the regression guard in the test suite greps this file for it, and a
+      // body-grep cannot tell code from a comment.)
+      // That is a false-clean: the run cannot distinguish "I compared it and
+      // it matched" from "I could not compare it", and both fed a `drift:
+      // none` return that reads as evidence of currency.
+      //
+      // A fetch that did not answer is ERROR, never SAME.
+      let filesExamined = 0;
+      let filesSame = 0;
+      let filesDrifted = 0;
+      let filesError = 0;
+
       for (const line of upstreamFiles) {
         const [upstreamPath, oldSha] = line.split(":");
-        if (!upstreamPath || !oldSha) continue;
+        if (!upstreamPath || !oldSha) {
+          // A malformed registry line is not a file we compared. Counting it
+          // as examined-and-same would let a corrupt NOTICE manufacture a
+          // clean total.
+          filesError += 1;
+          continue;
+        }
+
+        filesExamined += 1;
 
         try {
           const { data: contents } = await octokit.request(
@@ -389,9 +513,38 @@ export async function cronContentVendorDriftHandler({
             },
           );
           const currentSha = (contents as { sha?: string }).sha;
-          if (!currentSha || currentSha === oldSha) continue;
+          const verdict = classifyFileComparison(oldSha, currentSha);
 
+          if (verdict === "error") {
+            filesError += 1;
+            logger.warn(
+              {
+                fn: "cron-content-vendor-drift",
+                path: upstreamPath,
+                oldSha,
+              },
+              "Upstream contents response carried no sha — scored ERROR, not SAME",
+            );
+            continue;
+          }
+
+          if (verdict === "same") {
+            filesSame += 1;
+            continue;
+          }
+
+          filesDrifted += 1;
           driftDetected = true;
+
+          // Populate the classifier's stdin. This array was declared and
+          // joined into `stdin` but NEVER written to (#7710), so the
+          // classifier received an empty diff on every run, returned 0, and
+          // the handler took the `classifyRc === 0` early return — which is
+          // the SECOND `drift: "none"` site, reached AFTER drift was
+          // detected. Categorising drift is the classifier's whole job and it
+          // was being asked to categorise nothing.
+          aggDiffParts.push(`${upstreamPath}\t${oldSha}\t${currentSha}`);
+
           logger.info(
             {
               fn: "cron-content-vendor-drift",
@@ -404,8 +557,16 @@ export async function cronContentVendorDriftHandler({
         } catch {
           driftFlags = "--renamed";
           driftDetected = true;
+          filesError += 1;
         }
       }
+
+      // The registry's own size, read from the same frontmatter the loop
+      // walked. The write predicate below compares against THIS rather than a
+      // literal: a partial comparison must never be able to satisfy it, and
+      // before the Phase 1 reconciliation this number was 5 while the corpus
+      // was 8 — the cron compared five of eight files and reported clean.
+      const registryCount = upstreamFiles.length;
 
       if (!driftDetected && !driftFlags) {
         return {
@@ -413,6 +574,11 @@ export async function cronContentVendorDriftHandler({
           route: "none" as const,
           labels: [] as string[],
           classifyRc: 0,
+          filesExamined,
+          filesSame,
+          filesDrifted,
+          filesError,
+          registryCount,
         };
       }
 
@@ -444,11 +610,22 @@ export async function cronContentVendorDriftHandler({
       );
 
       if (classifyRc === 0) {
+        // NOT an attestation-worthy exit. This return is reached AFTER drift
+        // was detected, whenever the classifier declines to categorise it.
+        // Keying the freshness write on `drift === "none"` would therefore
+        // advance a compliance attestation over a corpus this very run found
+        // drift in — which is the exact falsification #7710 exists to
+        // prevent. The write predicate keys on the TOTALS instead.
         return {
           drift: "none" as const,
           route: "none" as const,
           labels: [] as string[],
           classifyRc: 0,
+          filesExamined,
+          filesSame,
+          filesDrifted,
+          filesError,
+          registryCount,
         };
       }
 
@@ -461,6 +638,11 @@ export async function cronContentVendorDriftHandler({
           route: "issue" as const,
           labels,
           classifyRc,
+          filesExamined,
+          filesSame,
+          filesDrifted,
+          filesError,
+          registryCount,
         };
       }
 
@@ -488,6 +670,11 @@ export async function cronContentVendorDriftHandler({
             route: "none" as const,
             labels,
             classifyRc,
+          filesExamined,
+          filesSame,
+          filesDrifted,
+          filesError,
+          registryCount,
           };
         }
 
@@ -496,6 +683,11 @@ export async function cronContentVendorDriftHandler({
           route: "pr" as const,
           labels,
           classifyRc,
+          filesExamined,
+          filesSame,
+          filesDrifted,
+          filesError,
+          registryCount,
         };
       }
 
@@ -505,6 +697,11 @@ export async function cronContentVendorDriftHandler({
         route: "issue" as const,
         labels,
         classifyRc,
+          filesExamined,
+          filesSame,
+          filesDrifted,
+          filesError,
+          registryCount,
       };
     });
 
@@ -528,8 +725,17 @@ export async function cronContentVendorDriftHandler({
           allowedPaths: [`${SKILL_PREFIX}/NOTICE`, `${SKILL_PREFIX}/references/`],
           runStartedAt,
           scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          // The sentence claiming the NOTICE freshness field was advanced at
+          // PR-creation time was removed here (#7710). Nothing had done that
+          // since the GHA workflow carrying the `sed` was deleted in #4483, so
+          // this body asserted a bump on every drift PR it opened while the
+          // field sat unchanged. The retired sentence is described rather than
+          // quoted: the regression guard greps this file for it. `last-verified` is now advanced by the
+          // attest-freshness step below, and ONLY on a verified-clean run —
+          // which is deliberately not this path, since this path exists
+          // because drift WAS found.
           prBody:
-            "Automated re-vendor on upstream drift. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified bumped at PR-creation time. Classifier exit and labels set in commit metadata.",
+            "Automated re-vendor on upstream drift. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md. NOTICE last-verified is NOT advanced here — this PR exists because drift was detected; the field advances only on a verified-clean comparison. Classifier exit and labels set in commit metadata.",
           prLabels: detectResult.labels,
           syntheticChecks: {
             names: SYNTHETIC_CHECK_NAMES,
@@ -592,9 +798,170 @@ export async function cronContentVendorDriftHandler({
       });
     }
 
+    // -- Freshness attestation (#7710) ------------------------------------
+    //
+    // `last-verified` in NOTICE is what the gdpr-gate hook reads to decide
+    // whether its detection corpus is current. Nothing had advanced it since
+    // the workflow carrying the `sed` was deleted in #4483: `git log -S` over
+    // that field returns exactly one commit, the one that introduced it. The
+    // field therefore aged from 2026-05-10 to 117 days stale while this cron
+    // compared the corpus every week and found it clean the whole time.
+    //
+    // THE PREDICATE IS THE TOTALS, NEVER `detectResult.drift`. Two of the
+    // returns above yield `drift: "none"` and only one of them means "I
+    // compared everything and it matched" — the other is reached after drift
+    // was detected and the classifier declined to categorise it. Keying on
+    // the return value would advance a compliance attestation over a corpus
+    // the same run had just found drift in.
+    //
+    // Every conjunct is load-bearing:
+    //   registryCount > 0        — `0 of 0` is not evidence of currency, and
+    //                              a writer treating it as such is vacuous.
+    //   filesExamined === count  — a PARTIAL comparison is not evidence.
+    //   filesDrifted === 0       — the obvious one.
+    //   filesError === 0         — a file we could not fetch is not a file we
+    //                              verified; without this, an outage reads as
+    //                              a clean bill of health.
+    const attestationEligible = mayAttestFreshness(detectResult);
+
+    let wroteAttestation = false;
+    let attestationOutcome = "not-eligible";
+    let commitSha: string | null = null;
+
+    if (attestationEligible) {
+      const attestation = await step.run("attest-freshness", async () => {
+        const noticePath = join(repoRoot, NOTICE_FILE_REL);
+        const before = await readFile(noticePath, "utf8");
+        const today = new Date().toISOString().slice(0, 10);
+
+        // The pinned commit the comparison was made against, read from the
+        // same file we are about to advance. Recorded in the PR body so the
+        // attestation says WHAT was compared, not merely that something was.
+        const pinnedMatch = before.match(/^pinned-commit:[ \t]*(\S+)[ \t]*$/m);
+        const pinnedForBody = pinnedMatch ? pinnedMatch[1] : "unknown";
+
+        const match = before.match(/^last-verified:[ \t]*(\S+)[ \t]*$/m);
+        if (!match) {
+          return {
+            outcome: "notice-unparseable" as const,
+            wrote: false,
+            sha: null as string | null,
+          };
+        }
+        if (match[1] === today) {
+          // Already advanced this UTC day — a replay or a second run. The
+          // attestation is current, so this is a success, not a failure to
+          // write. Distinguished in the outcome so the two are never
+          // conflated in telemetry.
+          return {
+            outcome: "already-current" as const,
+            wrote: true,
+            sha: null as string | null,
+          };
+        }
+
+        await writeFile(
+          noticePath,
+          before.replace(
+            /^last-verified:[ \t]*\S+[ \t]*$/m,
+            `last-verified: ${today}`,
+          ),
+          "utf8",
+        );
+
+        // Routed through safeCommitAndPr rather than a raw push: the helper
+        // has no direct-to-branch mode (every path opens a PR against main),
+        // and a raw push is independently blocked by the branch rulesets
+        // whose relevant bypass actors are all `bypass_mode: "pull_request"`.
+        // `mergeMode: "direct"` opens the PR and squash-merges it, which is
+        // what the drift route already does, and inherits the allow-list, the
+        // deletion guard and the replay idempotency a hand-rolled path would
+        // discard.
+        const res = await safeCommitAndPr({
+          spawnCwd: repoRoot,
+          installationToken,
+          cronName: "cron-content-vendor-drift",
+          commitMessage: `chore(vendor-drift): attest gosprinto/compliance-skills unchanged (${today})`,
+          allowedPaths: [`${SKILL_PREFIX}/NOTICE`],
+          runStartedAt,
+          scheduledIssueLabel: SENTRY_MONITOR_SLUG,
+          prBody: [
+            "Automated freshness attestation.",
+            "",
+            `Compared ${detectResult.filesExamined} of ${detectResult.registryCount} registered files, pinned at \`${pinnedForBody}\`, against upstream \`main\`: ${detectResult.filesSame} SAME, ${detectResult.filesDrifted} drifted, ${detectResult.filesError} errors.`,
+            "",
+            "This PR advances `last-verified` only. It does not change any vendored content.",
+          ].join("\n"),
+          prLabels: [],
+          syntheticChecks: {
+            names: SYNTHETIC_CHECK_NAMES,
+            summary: "Freshness attestation — no content change",
+          },
+          mergeMode: "direct",
+          octokit,
+          logger,
+        });
+
+        return {
+          outcome: res.status,
+          wrote: res.status === "committed",
+          sha:
+            res.status === "committed"
+              ? String((res as { prNumber: number }).prNumber)
+              : null,
+        };
+      });
+
+      wroteAttestation = attestation.wrote;
+      attestationOutcome = attestation.outcome;
+      commitSha = attestation.sha;
+    }
+
+    // ONE line carrying every field together. Four hypotheses share the
+    // symptom "the attestation did not advance" — clean-and-written,
+    // clean-and-the-merge-was-refused, drifted-and-correctly-withheld, and
+    // never-compared — and a single boolean cannot separate them. Emitted as
+    // a structured log rather than an Inngest event: ADR-033 I6 forbids event
+    // payloads from this function.
+    logger.info(
+      {
+        fn: "cron-content-vendor-drift",
+        op: "attestation-summary",
+        filesExamined: detectResult.filesExamined,
+        filesSame: detectResult.filesSame,
+        filesDrifted: detectResult.filesDrifted,
+        filesError: detectResult.filesError,
+        registryCount: detectResult.registryCount,
+        attestationEligible,
+        wroteAttestation,
+        attestationOutcome,
+        commitSha,
+      },
+      "Vendor-drift attestation summary",
+    );
+
+    // The heartbeat must reflect the ARTIFACT, not the run. Previously this
+    // posted ok:true unconditionally, so the cron could compare clean, fail
+    // to commit, and still report healthy — the failure path inside
+    // safeCommitAndPr terminates in reportSilentFallback under a green
+    // check-in, which is how a broken writer stays invisible for 117 days.
+    const isHealthy = heartbeatOk(attestationEligible, wroteAttestation);
+    if (!isHealthy) {
+      reportSilentFallback(
+        new Error(
+          `Verified-clean comparison did not produce a committed attestation (outcome=${attestationOutcome})`,
+        ),
+        {
+          feature: "cron-content-vendor-drift",
+          op: "attestation-not-written",
+          message: `examined=${detectResult.filesExamined}/${detectResult.registryCount} drifted=${detectResult.filesDrifted} errors=${detectResult.filesError} outcome=${attestationOutcome}`,
+        },
+      );
+    }
+
     await step.run("sentry-heartbeat", () =>
       postSentryHeartbeat({
-        ok: true,
+        ok: isHealthy,
         sentryMonitorSlug: SENTRY_MONITOR_SLUG,
         cronName: "cron-content-vendor-drift",
         logger,
@@ -602,7 +969,7 @@ export async function cronContentVendorDriftHandler({
     );
 
     return {
-      ok: true,
+      ok: isHealthy,
       status: detectResult.drift === "none" ? "no-drift" : detectResult.drift,
       route: detectResult.route,
       labels: detectResult.labels,
