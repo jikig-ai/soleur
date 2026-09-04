@@ -22,7 +22,7 @@ export const LEGAL_DOC_SHAS: Readonly<Record<string, string>> = {
   "disclaimer":
     "ea66cca071771aad58b151ad022649326bcedf8b734d6afcffcd4ce1bcb44d7e",
   "gdpr-policy":
-    "ca4741f44f6f10a278aba7b842b5afa3b51a50a768c6a771521c8346b5e66735",
+    "e2e9d32501d8263fac3f99a76ba786c98291fbea4b0cac7de07e0514ea243a64",
   "individual-cla":
     "16b64913a58064dcd4103500a15a21b982c3052ec63760e91e68d1e945f687f2",
   "privacy-policy":
