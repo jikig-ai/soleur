@@ -3,6 +3,8 @@
 
 import os
 import subprocess
+
+from tests.scripts._git_fixture_env import git_fixture_env
 import sys
 import tempfile
 import unittest
@@ -54,6 +56,8 @@ def _run(content: str) -> subprocess.CompletedProcess:
         return subprocess.run(
             [sys.executable, str(SCRIPT), str(path)],
             capture_output=True, text=True,
+            # Transitive spawn: the linter runs `git show HEAD:<path>` itself.
+            env=git_fixture_env(tmp),
         )
 
 
@@ -73,11 +77,16 @@ def _run_with_retired(agents_content: str, retired_content: str | None) -> subpr
             retired.write_text(retired_content)
             argv.extend(["--retired-file", str(retired)])
         argv.append(str(agents))
-        return subprocess.run(argv, capture_output=True, text=True)
+        # Transitive spawn: the linter runs `git show HEAD:<path>` itself.
+        return subprocess.run(argv, capture_output=True, text=True, env=git_fixture_env(tmp))
 
 
+# `**os.environ` inherited the git-location family too (GIT_DIR et al), which overrides both the
+# subprocess cwd and `-C`, so these fixtures wrote into the developer's repository when the suite
+# ran from a git hook (#7833). The identity pins below are kept: without them the fixture commits
+# fail `Author identity unknown` (measurements.md §M-7).
 _GIT_ENV = {
-    **os.environ,
+    **git_fixture_env(tempfile.gettempdir()),
     "GIT_AUTHOR_NAME": "t",
     "GIT_AUTHOR_EMAIL": "t@test",
     "GIT_COMMITTER_NAME": "t",
@@ -107,7 +116,11 @@ def _run_git_seeded(agents_head: str, agents_working: str, retired_content: str 
             retired.write_text(retired_content)
             argv.extend(["--retired-file", str(retired)])
         argv.append("AGENTS.md")
-        return subprocess.run(argv, capture_output=True, text=True, cwd=str(repo))
+        # Transitive spawn: the linter resolves `git show HEAD:AGENTS.md` in `repo`, so it
+        # needs the scrubbed env too -- an inherited GIT_DIR would resolve the developer's
+        # repository instead and the assertion would read the wrong exit code.
+        return subprocess.run(argv, capture_output=True, text=True, cwd=str(repo),
+                              env=git_fixture_env(repo))
 
 
 class LintTests(unittest.TestCase):
@@ -341,7 +354,11 @@ class TestCrossFileMode(unittest.TestCase):
             argv.extend(["--retired-file", str(retired)])
         argv.extend(["--index-file", index])
         argv.extend(sidecars)
-        return subprocess.run(argv, capture_output=True, text=True, cwd=str(repo))
+        # Transitive spawn: the linter resolves `git show HEAD:AGENTS.md` in `repo`, so it
+        # needs the scrubbed env too -- an inherited GIT_DIR would resolve the developer's
+        # repository instead and the assertion would read the wrong exit code.
+        return subprocess.run(argv, capture_output=True, text=True, cwd=str(repo),
+                              env=git_fixture_env(repo))
 
     # ---- Pointer / body relationship ----
 
