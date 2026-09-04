@@ -120,4 +120,60 @@ fi
 assert_eq "0" "$CASE_B_RC" "Case B: gate exits 0 (advisory contract)"
 echo ""
 
+# --- Case C: scan-completion line, matched and unmatched (Guard 2, #7710) ---
+# This case is the one the Observability block names as the detection route
+# for "the scan-completion line stops being emitted": this suite is run by
+# .github/workflows/gdpr-gate-self-test.yml on every change under
+# skills/gdpr-gate/scripts/** and weekly.
+#
+# The line must fire on the ZERO-MATCH scan as well as the matched one. That
+# is the whole property: before #7710, a scan that examined paths and matched
+# none produced no output, so it was byte-identical to a gate that never ran.
+# The fixture NOTICE here is >90 days stale, so this also pins that the line
+# is emitted ALONGSIDE the staleness banners rather than instead of them.
+echo "Case C: scan-completion line reports what the loop measured"
+
+set +e
+CASE_C_OUT=$(NOTICE_FILE="$FIXTURE_NOTICE" GH_TOKEN="" GITHUB_TOKEN="" \
+  bash "$GATE" "README.md" "docs/x.md" 2>/dev/null)
+CASE_C_RC=$?
+set -e
+assert_contains "$CASE_C_OUT" "gdpr-gate: path scan complete — 2 examined, 0 matched" \
+  "Case C: zero-match scan still reports it ran (2 examined, 0 matched)"
+assert_eq "0" "$CASE_C_RC" "Case C: gate exits 0 on a zero-match scan"
+
+# Matched case, with the non-matching path ordered FIRST so an implementation
+# reporting the first result rather than the totals is caught.
+set +e
+CASE_C2_OUT=$(NOTICE_FILE="$FIXTURE_NOTICE" GH_TOKEN="" GITHUB_TOKEN="" \
+  bash "$GATE" "README.md" "$CASE_A_PATH" "apps/web-platform/supabase/migrations/001_x.sql" 2>/dev/null)
+set -e
+assert_contains "$CASE_C2_OUT" "gdpr-gate: path scan complete — 3 examined, 2 matched" \
+  "Case C: mixed scan reports totals (3 examined, 2 matched), not the first result"
+
+# Counts only. The line reaches a customer terminal; the stderr breadcrumb is
+# where path names belong (hr-third-party-content-grep-on-undertaking).
+SCAN_LINE=$(printf '%s\n' "$CASE_C2_OUT" | grep 'path scan complete' || true)
+if [[ -n "$SCAN_LINE" && "$SCAN_LINE" != *"/"* ]]; then
+  echo "  PASS: Case C: scan line carries no path separators (counts only)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: Case C: scan line leaked a path: $SCAN_LINE"
+  FAIL=$((FAIL + 1))
+fi
+
+# Independent of corpus freshness: neither banner token may appear in the line.
+if [[ "$SCAN_LINE" != *"days stale"* && "$SCAN_LINE" != *"POSTURE_FAIL"* ]]; then
+  echo "  PASS: Case C: scan line carries no staleness vocabulary"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: Case C: scan line entangled with the staleness banners: $SCAN_LINE"
+  FAIL=$((FAIL + 1))
+fi
+
+# And the stale-corpus banners must STILL be present on this same run — the
+# scan line is additive, not a replacement.
+assert_contains "$CASE_C2_OUT" "POSTURE_FAIL:" "Case C: POSTURE_FAIL still present alongside the scan line"
+echo ""
+
 print_results

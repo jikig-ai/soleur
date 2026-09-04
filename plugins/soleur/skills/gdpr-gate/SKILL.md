@@ -114,6 +114,7 @@ Each finding follows this schema:
 ```
 
 Severity levels:
+
 - `Critical` — reserved for Art. 9 (special-category) column-name matches in v1. Triggers the operator-acknowledgment escalation flow.
 - `Important` — Art. 6 / Art. 5(1)(e) / Art. 17 / Chapter V findings. Logs to console; operator may file a `compliance/improvement` issue at their discretion.
 - `Suggestion` — DPIA reminder, Art. 7 consent UX hint, ePrivacy banner alignment, etc. Read-only.
@@ -204,8 +205,89 @@ Add new severities in this file's table FIRST, then run the three greps before w
 
 Canonical disambiguation prose lives in `plugins/soleur/skills/review/SKILL.md` §boundaries.
 
+## Corpus freshness
+
+The detection rules this gate uses are partly lifted from upstream
+`gosprinto/compliance-skills` and pinned in [NOTICE](./NOTICE). `last-verified`
+records the last time the pinned corpus was compared against upstream.
+
+- **> 30 days** — the gate prints a staleness banner to stdout. Output stays
+  advisory and the gate still exits 0, but a "no findings" result may be based
+  on rules that predate a recently-patched detection pattern.
+- **> 90 days** — the gate additionally prints `POSTURE_FAIL:`. See the next
+  section.
+
+Both thresholds are stable design parameters, not settings: they are not
+relaxable without a published ADR. `last-verified` is advanced by the weekly
+content-vendor-drift cron when — and only when — it has compared the complete
+registry against upstream in that run and found zero drift and zero fetch
+errors. A missing NOTICE, an unparseable date, or a future date all resolve to
+`999` days, which fires both banners; that is the fail-safe direction.
+
+To refresh manually, re-run the comparison and update `last-verified` plus any
+changed `local-blob-sha` in NOTICE. Contributors working in the Soleur repo
+have the full policy at
+`knowledge-base/engineering/policies/content-vendoring.md`; that file is not
+shipped with the installed plugin, which is why the operator chain below is
+reproduced here rather than linked.
+
+## POSTURE_FAIL operator chain
+
+When the gate emits a `POSTURE_FAIL:` line:
+
+1. **Do not pause the current PR.** The gate is advisory and exits 0. The
+   staleness signal is a separate work cycle from whatever diff triggered it.
+2. Open a tracking issue labelled `compliance/critical`, titled
+   `[gdpr-gate] >90d stale rules — N days since last-verified`.
+3. Append a row to the compliance posture register's Active Compliance Items,
+   per that document's row schema. The gate never writes there itself: this is
+   an operator-acknowledged write only.
+4. Commit the row with `compliance: register vendor-pin-staleness for #<issue>`.
+5. Drive a re-vendor: ping the in-flight `ci/content-vendor-drift-*` PR if one
+   is open, or dispatch the cron manually via `/soleur:trigger-cron` with
+   `cron/content-vendor-drift.manual-trigger`. `gh workflow run` cannot reach
+   it — the job is an Inngest cron, not a GitHub Actions workflow.
+
+The regulated-data PR that surfaced the banner can ship; the staleness
+follow-up gets its own review and merge.
+
 ## Sharp edges
 
+- **Scan-completion line** (#7710): the gate prints
+  `gdpr-gate: path scan complete — N examined, M matched` to stdout on every
+  invocation, unconditionally and after the match loop. It exists because
+  "the scan ran and matched nothing" and "the scan never ran" were previously
+  byte-identical — both produced no output at all — so on a stale corpus the
+  gate printed two banners about its rule set and no evidence that any diff had
+  been examined. It carries **counts only, never path names**: this line
+  reaches a customer's terminal, and path structure is third-party-content
+  adjacent (`hr-third-party-content-grep-on-undertaking`). The stderr
+  breadcrumb still names paths for the local operator. The line deliberately
+  contains neither `days stale` nor `POSTURE_FAIL`, so the evidence that a scan
+  occurred is independent of the corpus's age.
+- **The scan line cannot witness its own most likely failure.** If the
+  `gdpr-gate-advisory` glob in `lefthook.yml` stops matching, lefthook prints
+  `(skip)`, this script never executes, and no line of any kind is emitted —
+  every in-script assertion stays green. That half is covered from outside by
+  [gdpr-gate-glob-liveness.test.sh](../../test/gdpr-gate-glob-liveness.test.sh),
+  which drives the real lefthook binary over the real `lefthook.yml` with a
+  regulated path staged. This repo has shipped the dead-glob trap twice; gobwas
+  `**` matches 1+ intermediate directories, never 0+.
+- **The `vendor-pin-integrity` globs are single-level and enumerate three
+  directories**, not the `references/` subtree as a whole. A new subdirectory
+  under `references/` is ungated until a pattern is added for it — the comment
+  in `lefthook.yml` claimed whole-subtree coverage until #7710, while
+  `references/legacy/` was in fact unreachable. The backstop is the
+  symmetric-difference walk in
+  [vendor-pin-integrity.test.sh](../../test/vendor-pin-integrity.test.sh),
+  which reads the disk rather than the glob.
+- **Two registries, opposite provenance** (#7710): NOTICE frontmatter carries
+  `lifted-files` (upstream-derived, MIT, pinned against goSprinto) and
+  `soleur-authored` (written for this plugin, no upstream). Both are
+  tamper-checked by `local-blob-sha`; only the former appears in
+  `upstream-files`. A file must appear in exactly one, and the attribution
+  header on line 1 is the oracle for which. Moving a file between them is a
+  provenance falsification, not a bookkeeping change.
 - Hook layer is **advisory only** (`exit 0`). Operators expecting `lefthook` to block will be surprised — the blocking enforcement is at `/soleur:ship` Phase 5.5, post-PR.
 - The lefthook breadcrumb does NOT fire when lefthook itself is bypassed: `git commit --no-verify`, GitHub web-UI edits, fork PRs whose authors don't have lefthook installed, or agent commits on machines without `lefthook install`. In those paths the only enforcement is `/soleur:ship` Phase 5.5's critical-finding-acknowledgment gate (post-PR). Plan Phase 2.7 + work Phase 2 exit gates run regardless of lefthook because they live inside the skill, not the hook layer.
 - The `*auth*` regex match is intentionally broad — false-positives on `auth-error.ts` etc. are accepted because output is advisory and cheap.

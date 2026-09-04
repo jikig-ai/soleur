@@ -6,9 +6,18 @@
 # stderr breadcrumb when staged paths match the canonical regulated-data
 # regex (single source of truth: SKILL.md §"Path globs (canonical)").
 #
-# Telemetry: emits a `gdpr-gate-touch` event via .claude/hooks/lib/incidents.sh
-# when a regulated-data path is touched. Telemetry survives even when the
+# Telemetry: emits, via .claude/hooks/lib/incidents.sh, an
+# `hr-gdpr-gate-on-regulated-data-surfaces` event when a regulated-data path
+# is touched, plus `gdpr-gate-staleness` and `gdpr-gate-cron-binding` events
+# for the corpus-freshness signals. Telemetry survives even when the
 # operator's terminal swallows stderr.
+#
+# This block previously documented a `gdpr-gate-touch` event. No such event
+# has ever been emitted by this file (#7710). The name was corrected rather
+# than the emit: `hr-gdpr-gate-on-regulated-data-surfaces` is the rule this
+# gate enforces, and it is accepted by the incident allow-list via the
+# closed-corpus arm of `_valid_rule` (it is a real `[id: ...]` in
+# AGENTS.rules.md), not via the synthetic `gdpr-gate-*` prefix arm.
 #
 # Invoked from lefthook.yml:
 #   gdpr-gate-advisory:
@@ -140,13 +149,13 @@ last_verified=$(NOTICE_FILE="${NOTICE_FILE:-}" \
   bash "$NOTICE_PARSER" field last-verified 2>/dev/null || echo "unknown")
 [[ -n "$last_verified" ]] || last_verified="unknown"
 if (( days_stale > 30 )); then
-  printf '⚠ gdpr-gate rules %s days stale (last verified %s) — output is advisory only and may miss recently-patched detection rules. Refresh: see knowledge-base/engineering/policies/content-vendoring.md\n' \
+  printf '⚠ gdpr-gate rules %s days stale (last verified %s) — output is advisory only and may miss recently-patched detection rules. Refresh: see "Corpus freshness" in this skill'"'"'s SKILL.md.\n' \
     "$days_stale" "$last_verified"
   emit_incident gdpr-gate-staleness warn "${days_stale}-days-stale" \
     2>/dev/null || true
 fi
 if (( days_stale > 90 )); then
-  printf 'POSTURE_FAIL: gdpr-gate rules >90 days stale — compliance/critical posture row required. Operator chain: knowledge-base/engineering/policies/content-vendoring.md#posture-fail-operator-chain\n'
+  printf 'POSTURE_FAIL: gdpr-gate rules >90 days stale — compliance/critical posture row required. Operator chain: see "POSTURE_FAIL operator chain" in this skill'"'"'s SKILL.md.\n'
   emit_incident gdpr-gate-staleness deny "${days_stale}-days-stale-posture-fail" \
     2>/dev/null || true
 fi
@@ -155,11 +164,43 @@ fi
 CANONICAL_REGEX='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)'
 
 matched=()
+examined=0
 for f in "$@"; do
+  examined=$((examined + 1))
   if [[ "$f" =~ $CANONICAL_REGEX ]]; then
     matched+=("$f")
   fi
 done
+
+# Scan-completion line (#7710). UNCONDITIONAL and AFTER the loop, reporting
+# what the loop actually counted.
+#
+# Before this line existed, "the scan ran and matched nothing" and "the scan
+# never ran" produced byte-identical output — nothing at all. On a corpus
+# past the 90-day threshold the gate printed a staleness banner and a
+# POSTURE_FAIL and no evidence that any path had been examined, so the
+# refusal read as the whole output and a reader could not tell a healthy
+# no-findings scan from a gate that never looked. That is the defect #7710
+# reported, and it is why this line must NOT be gated on
+# `${#matched[@]} > 0`: the zero-match case is precisely the state the
+# property forbids being silent about.
+#
+# STDOUT, because agent runtimes commonly swallow stderr — the same reason
+# the staleness banners are on stdout. The path-naming breadcrumb below stays
+# on stderr.
+#
+# COUNTS ONLY, never path names: this line goes to a customer's terminal, and
+# path structure is third-party-content-adjacent
+# (hr-third-party-content-grep-on-undertaking; #7331 is the live scar). The
+# stderr breadcrumb already names paths for the local operator.
+#
+# It carries neither `days stale` nor `POSTURE_FAIL`, so its presence is
+# independent of the corpus's freshness state. That independence is the
+# point: the evidence that a scan occurred must not be entangled with the
+# age of the rules the scan used. It also keeps the existing negative
+# assertions on those two strings able to witness a banner regression.
+printf 'gdpr-gate: path scan complete — %d examined, %d matched\n' \
+  "$examined" "${#matched[@]}"
 
 if (( ${#matched[@]} > 0 )); then
   echo "gdpr-gate: regulated-data path touched (${matched[*]}); run /soleur:gdpr-gate" >&2
@@ -168,11 +209,23 @@ if (( ${#matched[@]} > 0 )); then
 
   # Operator-attested-mode banner — fires ONLY when (a) a regulated path is
   # being judged this commit AND (b) the cron binding is unavailable but
-  # NOTICE last-verified is parseable. Gating on matched paths prevents
-  # banner-fatigue (otherwise the banner would fire on every commit in a
-  # subagent shell without GH_TOKEN, training operators to ignore the
-  # signal). Banner literal is load-bearing: the self-test asserts it
-  # verbatim. See review finding from user-impact-reviewer #3541.
+  # NOTICE last-verified is parseable.
+  #
+  # The #3541 relevance property is real, but this conditional is not what
+  # delivers it, and the previous wording here was false (#7710). It claimed
+  # that without the matched-path gate the banner "would fire on every
+  # commit". It would not: lefthook invokes this script only when a staged
+  # path matches the `gdpr-gate-advisory` glob, so on the pre-commit path
+  # relevance is already bought by the glob and this conditional is a second,
+  # narrower filter over an already-filtered set.
+  #
+  # What the conditional actually buys is relevance on the paths the glob does
+  # NOT gate: direct invocation, the CI self-test, and `/soleur:gdpr-gate`,
+  # where arbitrary arguments reach the script. That is a real property and
+  # worth keeping — it is simply a different one from the claim it replaced.
+  #
+  # Banner literal is load-bearing: the self-test asserts it verbatim. See
+  # review finding from user-impact-reviewer #3541.
   if [[ "$cron_days_stale" == "999" && "$notice_days_stale" != "999" ]]; then
     printf 'ℹ gdpr-gate: operator-attested mode (no GH_TOKEN available — cron-run timestamp unverified, falling back to NOTICE last-verified)\n'
     emit_incident gdpr-gate-cron-binding unavailable \
