@@ -73,8 +73,26 @@ rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${add_args[@]}" --login deruelle)
 grep -q '"id": 54279' "$WORK/out.txt" \
   && pass "login resolved to its numeric id in the emitted roster" \
   || fail "emitted roster does not carry the resolved numeric id"
-grep -q 'no PR opened' "$WORK/out.txt" \
+grep -q 'no PR opened' "$WORK/err.txt" \
   && pass "dry run opens no PR" || fail "dry run did not report that it opened no PR"
+# stdout is the emitted roster ALONE — a caller must be able to pipe it to jq
+# without first stripping banners with sed.
+jq -e . "$WORK/out.txt" >/dev/null 2>&1 \
+  && pass "dry-run stdout is parseable JSON, diagnostics kept on stderr" \
+  || fail "dry-run stdout is not parseable JSON — a diagnostic is interleaved with the roster"
+
+# --- V4: the LOOSENING probe. The script's own security rationale is that the
+# --- ledger is keyed on numeric id and never on login, "because a login can be
+# --- renamed and reused, an id cannot". Every other fixture makes login, ledger
+# --- name and id agree, so `select(.id == $id)` -> `select(.name == $l)` passed
+# --- the whole suite. The tightening direction cannot see it either — the TS
+# --- validator catches that case downstream and still returns 4. Only a renamed
+# --- account whose ID IS SIGNED discriminates: it must be ACCEPTED.
+rc=$(run_sut "$SCRIPT" '{"newhandle":54279}' add --record-ref CCLA-0007 --org "Renamed Ltd" \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 "$SHA64" --login newhandle)
+[[ "$rc" == "0" ]] && pass "renamed account whose id has signed is ACCEPTED (ledger is id-keyed)" \
+  || fail "renamed-but-signed account rejected — the ledger lookup is keyed on login, not id (rc=$rc)"
 
 rc=$(run_sut "$SCRIPT" '{"stranger":999999}' add --record-ref CCLA-0002 --org "Nobody Ltd" \
   --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
@@ -145,25 +163,98 @@ else
   fail "dry run mutated the roster on disk"
 fi
 
+# --- V12: rc=3 is a DOCUMENTED exit code in this script's header and appears
+# --- nowhere in the suite. A mutation hardcoding the validator's passthrough to
+# --- 2 ships green without it. Seed a roster the schema refuses.
+printf '{\n  "schema_version": "2.0",\n  "organizations": []\n}\n' > "$WORK/roster.json"
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${add_args[@]}" --login deruelle)
+[[ "$rc" == "3" ]] && pass "schema-invalid roster refused with the documented code (rc=3)" \
+  || fail "schema-invalid roster: expected rc=3, got $rc"
+grep -q 'roster record invalid' "$WORK/err.txt" \
+  && pass "rc=3 refusal names schema validation, not the entry gate" \
+  || fail "rc=3 refusal does not name schema validation"
+printf '{\n  "schema_version": "1.0",\n  "organizations": []\n}\n' > "$WORK/roster.json"
+
+# --- An UNPARSEABLE ledger must be reported as an unusable reference set, never
+# --- as a finding about a person. "Could not measure" and "measured bad" are
+# --- different verdicts and the second one sends the operator to ask a
+# --- contributor to re-sign for no reason.
+printf '<!DOCTYPE html><html>gateway error</html>' > "$WORK/garbage-ledger.json"
+rc=$(CCLA_ADD_DRY_RUN=1 CCLA_ADD_LEDGER="$WORK/garbage-ledger.json" \
+     CCLA_ADD_ROSTER="$WORK/roster.json" CCLA_ADD_ID_MAP='{"deruelle":54279}' \
+     bash "$SCRIPT" "${add_args[@]}" --login deruelle > "$WORK/out.txt" 2> "$WORK/err.txt"; echo $?)
+[[ "$rc" == "2" ]] && pass "unparseable ledger refused as an operator fault (rc=2)" \
+  || fail "unparseable ledger: expected rc=2, got $rc"
+grep -q 'UNUSABLE' "$WORK/err.txt" && ! grep -q 'have not signed' "$WORK/err.txt" \
+  && pass "unparseable ledger is NOT reported as an unsigned contributor" \
+  || fail "unparseable ledger reported as a finding about a person"
+
 # A caller-supplied ledger must survive the script's own cleanup trap.
 [[ -s "$WORK/ledger.json" ]] && pass "caller-supplied ledger not deleted by the cleanup trap" \
   || fail "cleanup trap deleted the caller's ledger"
 
 # --- remove path (withdrawal of designation) --------------------------------
-run_sut "$SCRIPT" '{"deruelle":54279}' "${add_args[@]}" --login deruelle >/dev/null
-sed -n '/^{/,$p' "$WORK/out.txt" | sed '/^---/d' > "$WORK/populated.json"
+# --- V5: TWO representatives, not one. At cardinality 1 "stamped the designated
+# --- account" and "stamped EVERY account" are the same observation, so
+# --- `map(if .login == $login then .removed_at = $at else . end)` ->
+# --- `map(.removed_at = $at)` passed the whole suite — silently withdrawing
+# --- designation from every representative of the organisation, in a legal
+# --- record.
+run_sut "$SCRIPT" '{"deruelle":54279,"colleague":92384917}' "${add_args[@]}" \
+  --login deruelle --login colleague >/dev/null
+cp "$WORK/out.txt" "$WORK/populated.json"
 if jq -e . "$WORK/populated.json" >/dev/null 2>&1; then
   cp "$WORK/populated.json" "$WORK/roster.json"
   rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-0001 --login deruelle \
     --withdrawn-at 2026-09-05T00:00:00Z)
   [[ "$rc" == "0" ]] && pass "remove path records a withdrawal (rc=0)" || fail "remove: expected rc=0, got $rc"
-  grep -q '"removed_at": "2026-09-05T00:00:00Z"' "$WORK/out.txt" \
+  jq -e --arg l deruelle '[.organizations[].representatives[] | select(.login == $l)]
+        | length == 1 and .[0].removed_at == "2026-09-05T00:00:00Z"' "$WORK/out.txt" >/dev/null \
     && pass "withdrawal marker written to the designated account" \
     || fail "withdrawal marker not written"
+  jq -e --arg l colleague '[.organizations[].representatives[] | select(.login == $l)]
+        | length == 1 and .[0].removed_at == null' "$WORK/out.txt" >/dev/null \
+    && pass "the OTHER representative of the same organisation is untouched" \
+    || fail "withdrawal stamped a representative it was not asked to withdraw"
+  # Capture the withdrawn roster HERE, while out.txt still holds it. The probes
+  # below deliberately fail, and a failed run leaves out.txt empty — reading it
+  # afterwards seeds every later arm with an unparseable roster and reports the
+  # harness's own ordering bug as a defect in the SUT.
+  cp "$WORK/out.txt" "$WORK/withdrawn.json"
 
   rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-9999 --login deruelle \
     --withdrawn-at 2026-09-05T00:00:00Z)
   [[ "$rc" != "0" ]] && pass "remove against an unknown record_ref fails" || fail "remove accepted an unknown record_ref"
+
+  # A recorded withdrawal date is the legally operative one. Re-running `remove`
+  # must NOT move it forward — the record of when a designation ended is the
+  # thing this file exists to hold.
+  cp "$WORK/withdrawn.json" "$WORK/roster.json"
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-0001 --login deruelle \
+    --withdrawn-at 2026-09-30T00:00:00Z)
+  [[ "$rc" == "2" ]] && pass "re-withdrawing an already-withdrawn account is refused (rc=2, not jq's own code)" \
+    || fail "re-withdrawal accepted — the operative withdrawal date was rewritten"
+  grep -q 'already withdrawn' "$WORK/err.txt" \
+    && pass "re-withdrawal refusal names the date already on file" \
+    || fail "re-withdrawal refusal does not say what is already recorded"
+
+  # A live designation of the same id must not be appended a second time under a
+  # different record_ref: two live rows make "who vouches for this contributor"
+  # unanswerable from the record. A WITHDRAWN row must not block it — that is
+  # how a person moves between employers.
+  cp "$WORK/populated.json" "$WORK/roster.json"
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0055 --org "Second Employer SAS" \
+    --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+    --instrument-sha256 "$SHA64" --login deruelle)
+  [[ "$rc" == "2" ]] && pass "a second LIVE designation of the same id is refused (rc=2, not jq's own code)" \
+    || fail "the same id was designated live under two organisations"
+  cp "$WORK/withdrawn.json" "$WORK/roster.json"
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0055 --org "Second Employer SAS" \
+    --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+    --instrument-sha256 "$SHA64" --login deruelle)
+  [[ "$rc" == "0" ]] && pass "re-designation after a withdrawal is ACCEPTED (changing employer)" \
+    || fail "a withdrawn designation blocked a legitimate re-designation (rc=$rc)"
+  printf '{\n  "schema_version": "1.0",\n  "organizations": []\n}\n' > "$WORK/roster.json"
   printf '{\n  "schema_version": "1.0",\n  "organizations": []\n}\n' > "$WORK/roster.json"
 else
   fail "harness: could not recover the emitted roster for the remove path"
@@ -222,7 +313,11 @@ echo "---"
 echo "Total: $passes passed, $fails failed"
 # Assertion floor, reported with printf + exit rather than through fail(),
 # which is the helper it exists to backstop.
-MIN_ASSERTIONS=22
+# TIGHT, not a lower bound with slack. At 22 against 23 actual assertions, one
+# assertion could be deleted and the run stayed green and silent — the floor
+# only fires when TWO go. `guard-vacuity-floor.test.sh` verifies that floors
+# FIRE, never that they are tight, so nothing else catches the slack.
+MIN_ASSERTIONS=34
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

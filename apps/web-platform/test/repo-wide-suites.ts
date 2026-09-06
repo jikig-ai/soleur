@@ -33,6 +33,7 @@ export const REPO_WIDE_SUITES: readonly string[] = [
   "test/c4-project-route.test.ts",
   "test/cc-dispatcher-concierge-context.test.ts",
   "test/cla-evidence/allowlist.test.ts",
+  "test/cla-evidence/cla-doc-path.test.ts",
   "test/cla-evidence/hash.test.ts",
   "test/cla-evidence/roster-entry-gate.test.ts",
   "test/context-injection.test.ts",

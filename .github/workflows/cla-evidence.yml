@@ -46,6 +46,21 @@ jobs:
     env:
       REPO_FULL: ${{ github.repository }}
       RUN_ID: ${{ github.run_id }}
+      # The CLA document this workflow evidences. Its ONE definition is
+      # `INDIVIDUAL_CLA_DOC_PATH` in
+      # apps/web-platform/scripts/cla-evidence/cla-doc-path.ts, and the literal
+      # here is pinned to it by a guard
+      # (apps/web-platform/test/cla-evidence/cla-doc-path.test.ts) in the same
+      # shape as the Guard 1 allowlist pin: the drift is caught by a test that
+      # reads BOTH artifacts, not by resolving the value at run time.
+      #
+      # An earlier revision ran `tsx cla-doc-path.ts` here and wrote the result
+      # to $GITHUB_ENV. That put a Node install, an npm ci and a new `exit 1`
+      # on the critical path of a REQUIRED check, in a `pull_request_target`
+      # job, to compute a constant — and it bought nothing a guard does not
+      # buy, because a wrong literal is a code change either way and a guard
+      # catches it before merge rather than at run time.
+      CLA_DOC_PATH: docs/legal/individual-cla.md
     steps:
       # Base ref only — never check out PR head under pull_request_target.
       - name: Checkout base ref
@@ -89,26 +104,6 @@ jobs:
       - name: Install dependencies (zod for schema validation)
         working-directory: apps/web-platform
         run: npm ci --ignore-scripts
-
-      # Resolve the CLA document path from its ONE definition
-      # (apps/web-platform/scripts/cla-evidence/cla-doc-path.ts) instead of
-      # re-declaring the literal in YAML. Bash cannot import TypeScript, so the
-      # module carries a CLI guarded on being the entrypoint; importing it stays
-      # side-effect free. Two definitions of a path that decides WHICH legal
-      # instrument a record evidences is exactly the drift this discriminant
-      # exists to remove.
-      - name: Resolve CLA document path (discriminant)
-        run: |
-          set -euo pipefail
-          cla_doc_path=$(apps/web-platform/node_modules/.bin/tsx \
-            apps/web-platform/scripts/cla-evidence/cla-doc-path.ts)
-          # Fail loud: an empty value here would silently hash the wrong tree
-          # object (or the whole repo) further down.
-          if [[ -z "$cla_doc_path" ]]; then
-            echo "::error::discriminant emitted an empty CLA document path"
-            exit 1
-          fi
-          echo "CLA_DOC_PATH=$cla_doc_path" >> "$GITHUB_ENV"
 
       # Plan Phase 2 step 5/6 — folded gate. Poll the upstream action's
       # `license/cla` Status API check up to 30s. If green, run sidecar; if

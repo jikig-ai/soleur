@@ -124,6 +124,75 @@ describe("Guard 2 — RosterSchema", () => {
     expect(() => validateRosterRecord(noRef)).toThrow(SchemaVersionMismatchError);
   });
 
+  // The three G2-M3 rows above name five keys — `signatory_email`,
+  // `signatory_name`, `corporate_email`, `notes`, `comment`. A
+  // `.passthrough().superRefine()` carrying exactly that five-name DENYLIST
+  // satisfies every one of them, which is precisely the implementation the
+  // schema's own comment says `.strict()` defeats. The claim is about keys
+  // NOBODY would think to denylist, so the fixture has to use one: an
+  // undeclared key with no meaning at all, at every level the roster has.
+  // `cla_doc` is the fourth level and the one most likely to lose its
+  // `.strict()` by accident, because `ClaDocSchema` is shared with the evidence
+  // record where it is deliberately NOT strict — and `cla_doc.signatory_email`
+  // is exactly the shape the CLO ruling forbids.
+  it("G2-M3: an undeclared key nobody would denylist is rejected at ALL FOUR levels", () => {
+    const levels: Array<[string, (r: ReturnType<typeof validRoster>) => Record<string, unknown>]> = [
+      ["top level", (r) => r as unknown as Record<string, unknown>],
+      ["organisation", (r) => r.organizations[0] as unknown as Record<string, unknown>],
+      ["representative", (r) => r.organizations[0].representatives[0] as unknown as Record<string, unknown>],
+      ["cla_doc", (r) => r.organizations[0].cla_doc as unknown as Record<string, unknown>],
+    ];
+    for (const [label, at] of levels) {
+      const roster = validRoster();
+      at(roster).zz_unforeseen = 1;
+      expect(() => validateRosterRecord(roster), label).toThrow(SchemaVersionMismatchError);
+    }
+  });
+
+  // Seven constraints the suite declared and never fixtured. Each row below was
+  // measured to survive the battery as written: relaxing the constraint in
+  // schema.ts left every other fixture green. A regex or a format that no
+  // fixture ever violates is documentation, not a guard.
+  it("G2-M6: each declared field constraint refuses its own violation", () => {
+    const cases: Array<[string, (r: ReturnType<typeof validRoster>) => void]> = [
+      ["record_ref shape", (r) => void (r.organizations[0].record_ref = "NOPE")],
+      ["signed_at needs an offset", (r) => void (r.organizations[0].signed_at = "2026-09-04")],
+      [
+        "authorized_from needs an offset",
+        (r) => void (r.organizations[0].representatives[0].authorized_from = "2026-09-04"),
+      ],
+      [
+        "removed_at is a timestamp or null, not free text",
+        (r) => void (r.organizations[0].representatives[0].removed_at = "yesterday" as unknown as null),
+      ],
+      ["cla_doc.git_sha shape", (r) => void (r.organizations[0].cla_doc.git_sha = "not-a-sha")],
+      [
+        "sha256 is lowercase hex",
+        (r) => void (r.organizations[0].executed_instrument_sha256 = "B".repeat(64)),
+      ],
+      ["id is a positive integer", (r) => void (r.organizations[0].representatives[0].id = 0)],
+      // The roster is permanently public. An unbounded string field is a place
+      // to put something that is not a login and not a company name.
+      ["login is bounded at GitHub's own 39-char ceiling", (r) => void (r.organizations[0].representatives[0].login = "x".repeat(40))],
+      ["legal_name is bounded", (r) => void (r.organizations[0].legal_name = "x".repeat(201))],
+    ];
+    for (const [label, mutate] of cases) {
+      const roster = validRoster();
+      mutate(roster);
+      expect(() => validateRosterRecord(roster), label).toThrow(SchemaVersionMismatchError);
+    }
+  });
+
+  // The far side of the withdrawal marker. `removed_at` is nullable BY DESIGN,
+  // and tightening it to `z.null()` — the mutation that breaks every withdrawal
+  // the operator will ever record — is invisible to a suite whose every fixture
+  // leaves it null. This is the only must-PASS that sees it.
+  it("G2-M6b: a past withdrawal-of-designation timestamp is ACCEPTED", () => {
+    const withdrawn = validRoster();
+    withdrawn.organizations[0].representatives[0].removed_at = "2026-09-01T00:00:00Z" as unknown as null;
+    expect(() => validateRosterRecord(withdrawn)).not.toThrow();
+  });
+
   it("the schema admits NO free-text field on this permanently-public surface", () => {
     // An operator `notes` string was drafted into the schema and removed. The
     // roster is world-readable and cannot be erased, and no limb of the

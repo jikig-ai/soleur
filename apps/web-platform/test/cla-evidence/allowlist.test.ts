@@ -92,10 +92,13 @@ describe("Guard 1 — parseAllowlistLine against the tracked cla.yml", () => {
   it("anti-vacuity: the text under test is the tracked workflow, not a fixture (G1-M5)", () => {
     // Swapping this read for SAMPLE_CLA_YML_ALLOWLIST must RED. These anchors
     // exist only in the real workflow file.
-    expect(claYmlPath.endsWith(CLA_YML_REL)).toBe(true);
+    //
+    // `claYmlPath.endsWith(CLA_YML_REL)` used to sit here: it is a tautology
+    // over a path BUILT by joining CLA_YML_REL, and so is `not.toBe(SAMPLE)`
+    // over a 76-line file. Three assertions labelled anti-vacuity, two of them
+    // vacuous. Only the content anchors below can actually fail.
     expect(claYml).toContain("contributor-assistant/github-action");
     expect(claYml).toContain("path-to-signatures");
-    expect(claYml).not.toBe(SAMPLE_CLA_YML_ALLOWLIST);
   });
 
   it("parses the real allowlist line — G1-M1..G1-M4 drive this RED", () => {
@@ -106,10 +109,14 @@ describe("Guard 1 — parseAllowlistLine against the tracked cla.yml", () => {
   });
 
   it("agrees with the value the upstream action is actually configured with", () => {
-    // Ties the parse to the file's own bytes, so a silent allowlist change is
-    // visible here as well as at AC1.
-    const parsed = parseAllowlistLine(claYml)!;
-    for (const login of parsed) expect(claYml).toContain(login);
+    // `for (const login of parsed) expect(claYml).toContain(login)` used to
+    // stand here and CANNOT FAIL: every element of `parsed` is by construction a
+    // contiguous substring of `claYml`, because it was cut out of it. A parse
+    // that silently dropped `soleur-ai[bot]` stayed green. The allowlist is a
+    // repo-controlled constant, not a measured quantity, so pinning the exact
+    // set is legitimate and makes this the change-detector it always claimed to
+    // be: adding or removing a bypass must be a deliberate two-file edit.
+    expect(new Set(parseAllowlistLine(claYml)!)).toEqual(new Set(SAMPLE_CLA_YML_ALLOWLIST.split(",")));
   });
 
   it("G1-M1: an unquoted scalar does not parse", () => {
@@ -137,7 +144,12 @@ describe("Guard 1 — parseAllowlistLine against the tracked cla.yml", () => {
   });
 
   it("build-bypass.ts delegates to this one implementation — the chokepoint stays singular", () => {
+    // `toContain("parseAllowlistLine")` is satisfied by the explanatory COMMENT
+    // in that file — a reverted build-bypass.ts that inlines the regex but keeps
+    // its comment passed. Anchor on the import specifier and the call site, per
+    // cq-assert-anchor-not-bare-token.
     const src = readFileSync(join(repoRoot, "apps/web-platform/scripts/cla-evidence/build-bypass.ts"), "utf8");
-    expect(src).toContain("parseAllowlistLine");
+    expect(src).toMatch(/import\s*\{[^}]*\bparseAllowlistLine\b[^}]*\}\s*from/);
+    expect(src).toContain("parseAllowlistLine(");
   });
 });

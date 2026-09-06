@@ -56,7 +56,13 @@ and this ADR records that we implemented what we signed.
 **2. It is not an allowlist entry.** `cla.yml`'s `allowlist:` value and format are untouched, and
 a guard now pins the regex against the real file so the #7597 class cannot recur silently.
 
-**3. It is not a third required check.** Folded into the existing `cla-evidence` job. Adding a
+**3. It is not a third required check.** The guards ride CI surfaces that already exist and are
+already required: the TypeScript suites in the `test` job (registered in
+`apps/web-platform/test/repo-wide-suites.ts`) and the shell suite in `scripts/test-all.sh`'s
+pre-existing `apps/cla-evidence/scripts/*.test.sh` glob. **Nothing in this change runs inside the
+`cla-evidence` job** — an earlier revision of this ADR said "folded into the existing
+`cla-evidence` job", which was false: a `git grep` for the roster across `.github/workflows/`
+returns zero. Adding a
 content-scoped required check costs a **six**-artifact lockstep — `infra/github/ruleset-cla-required.tf`,
 `scripts/ci-cla-required-ruleset-canonical-required-status-checks.json`,
 `scripts/create-cla-required-ruleset.sh`, `scripts/required-checks.txt`,
@@ -72,11 +78,26 @@ coverage. The fail-closed ICLA gate it sits beside is untouched. A contributor's
 by whether they signed the Individual CLA, never by whether the maintainer has finished the
 corporate paperwork. The generalisation is registered as **AP-025**.
 
-**5. Reads are at the base ref.** `cla-evidence.yml` checks out `github.event.pull_request.base.sha`
-and never the PR head. This is what stops a contributor authorizing themselves by editing the
-roster in the same pull request the roster authorizes. It is **not new machinery** — the checkout
-and its comment already existed and were already reviewed; this ADR records it as a load-bearing
-invariant so a future edit to that `ref:` is legible as the security change it would be.
+**5. Reads are at the base ref — and what that does *not* buy.** `cla-evidence.yml` checks out
+`github.event.pull_request.base.sha` and never the PR head, so a pull request cannot rewrite
+`individual-cla.md` and have its own permanently-archived evidence record attest to the rewritten
+text. It is **not new machinery** — the checkout and its comment already existed and were already
+reviewed; this ADR records it as a load-bearing invariant so a future edit to that `ref:` is
+legible as the security change it would be.
+
+An earlier revision of this ADR claimed the base-ref checkout is "what stops a contributor
+authorizing themselves by editing the roster in the same pull request the roster authorizes."
+**That was false in two directions and is recorded here rather than quietly deleted.**
+`cla-evidence.yml` contains no roster reference at all, so the checkout ref cannot be protecting
+it; and the only CI surface that reads the roster — `roster-entry-gate.test.ts` in the `test` job —
+reads it **at PR head**, which is the correct thing for a guard whose job is to judge the proposed
+change.
+
+What actually forecloses self-authorization is that there is nothing to authorize. Per **4**, the
+roster is additive evidence that gates no merge, so a row confers no capability a contributor
+could grant themselves; per **6**, a row is refused outright unless that numeric account has
+already signed the Individual CLA here, whoever proposed it. A roster edit is therefore an ordinary
+content change to a tracked legal record, reviewed as one.
 
 **6. Entry is contribution-triggered.** An account enters the roster only at or after that person
 has signed the Individual CLA on a pull request here. This is a *legal* requirement adopted as an
@@ -112,6 +133,16 @@ receipt-comment output is gated on an `issue_comment` sign comment that a *retur
 never posts — so its only durable output today is a `::notice::` in a 90-day log, while the
 temporal-record property it was meant to buy is bought permanently and for free by the roster
 file's own git history.
+
+**The `cla-evidence.yml` runtime path resolution is reverted to a pinned literal.** A revision of
+this branch resolved `CLA_DOC_PATH` by shelling out to `cla-doc-path.ts` and writing the result to
+`$GITHUB_ENV`, which put an `npm ci`, a Node toolchain and a **new `exit 1`** on the critical path
+of a required check inside a `pull_request_target` job — to compute a constant. The path is now a
+job-level `env:` literal pinned to `INDIVIDUAL_CLA_DOC_PATH` by
+`apps/web-platform/test/cla-evidence/cla-doc-path.test.ts`, in the same shape as the Guard 1
+allowlist pin. Single-definition is preserved; a wrong literal is a code change either way, and a
+guard catches it before merge rather than at run time. The module's CLI survives because
+`ccla-add.sh` genuinely cannot import TypeScript.
 
 **The operator affordance is a script, not a skill**, reversing spec FR6. The two operator-facing
 CLA affordances that already exist — `gdpr-override.sh` and `inspect-evidence.sh` — are both

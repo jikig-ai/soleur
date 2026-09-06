@@ -105,7 +105,11 @@ const RosterRepresentativeSchema = z
   .object({
     /** GitHub numeric account id. The upstream ledger keys on id, not login. */
     id: z.number().int().positive(),
-    login: z.string().min(1),
+    // GitHub's own ceiling is 39 characters. Bounded because this is a
+    // permanently-public record: an unbounded string is a place to put
+    // something that is not a login, on a surface from which nothing can be
+    // erased. `.strict()` closes the key set; this closes the value.
+    login: z.string().min(1).max(39),
     /** The legally operative date from the instrument — NOT a commit timestamp. */
     authorized_from: z.string().datetime({ offset: true }),
     /**
@@ -126,7 +130,7 @@ const RosterOrganizationSchema = z
      * sole trader, or anyone trading under their own name (CLO amendment
      * B1-c-2). Such a counterparty is published under `record_ref` alone.
      */
-    legal_name: z.string().min(1).nullable(),
+    legal_name: z.string().min(1).max(200).nullable(),
     record_ref: z.string().regex(/^CCLA-[0-9]{4,}$/, "must look like CCLA-0001"),
     signed_at: z.string().datetime({ offset: true }),
     cla_doc: ClaDocSchema.strict(),

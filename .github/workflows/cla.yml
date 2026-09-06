@@ -67,9 +67,15 @@ jobs:
 
             **Why?** Soleur uses a Business Source License (BSL 1.1) and supports dual licensing. The CLA ensures Jikigai has the rights needed to maintain and distribute your contribution under all applicable licenses, while you retain your copyright.
 
-            **If your employer owns your work** (common under a full-time employment contract), a [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) is also needed — **but chasing it is the maintainer's job, not yours.** Do not wait on it and do not go and ask your employer's legal team yourself. Sign the line above, tell us your employer's name, and we will approach them. We aim to reply within **3 business days**.
+            **If your employer owns your work** (common under a full-time employment contract), a [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) is also needed — **and chasing it is the maintainer's job, not yours.** You do not have to approach your employer's legal team. Send us your employer's name and we will approach them; we aim to reply within **3 business days**.
 
-            While that is in flight this PR is in the state **"CCLA in progress — maintainer action, not yours"**. Your pull request is reviewed and merged on its merits in the meantime; the Corporate CLA is our paperwork to finish, and any delay in it is ours rather than a request for anything further from you.
+            **Email that to legal@jikigai.com rather than posting it here**, unless you would rather it were public. This thread is world-readable and permanent, and who you work for is yours to disclose or not.
+
+            One thing we do have to ask you, because signing says it on your behalf. Section 4(a) of the Individual CLA is a representation about your employer's position: that your employer has given you permission to contribute, **or** has waived its rights in this work, **or** has signed a Corporate CLA naming you. Most contributors are already covered by the first — an open-source contribution policy, or work that simply is not your employer's. **If none of the three is true for you, or you are not sure, tell us at legal@jikigai.com instead of signing** — you need not say why on this thread. We will sort the Corporate CLA out first and come back to you. Signing is quick precisely because it is a real statement, and we would rather wait than have you make one that is not accurate.
+
+            **While a Corporate CLA of yours is in flight** — and only then — this PR carries the state **"CCLA in progress — maintainer action, not yours"**. It is reviewed and merged on its merits in the meantime; that paperwork is ours to finish, and any delay in it is ours rather than a request for anything further from you.
+
+            None of the above applies if you are contributing your own work on your own time. In that case the one line at the top is genuinely the whole ask.
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
           custom-allsigned-prcomment: "All contributors have signed the CLA. Thank you!"
           lock-pullrequest-aftermerge: false

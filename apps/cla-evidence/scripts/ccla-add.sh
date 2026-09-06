@@ -87,7 +87,23 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 [[ -n "$REPO_ROOT" ]] || die "not inside a git repository"
 cd "$REPO_ROOT"
 
-ROSTER="${CCLA_ADD_ROSTER:-apps/cla-evidence/roster/ccla-roster.json}"
+# TEST SEAMS ARE DRY-RUN ONLY. Each of these three overrides substitutes one of
+# the gate's operands, so leaving them live on the write path makes the whole
+# mechanism bypassable with one environment variable:
+#   CCLA_ADD_LEDGER  replaces Guard 3's REFERENCE SET
+#   CCLA_ADD_ID_MAP  replaces login -> id resolution, so any login can be bound
+#                    to any signed id and published as a false association
+#   CCLA_ADD_ROSTER  retargets the write to a file CI does not watch
+# The CI half checks one hardcoded path, so a retargeted write is unguarded on
+# both sides. Refuse them unless this is a dry run.
+if [[ "${CCLA_ADD_DRY_RUN:-0}" != "1" ]]; then
+  for _seam in CCLA_ADD_LEDGER CCLA_ADD_ID_MAP CCLA_ADD_ROSTER; do
+    [[ -z "${!_seam:-}" ]] || die "$_seam is a TEST SEAM and is refused on the write path — it substitutes one of the gate's own operands. Re-run with CCLA_ADD_DRY_RUN=1, or unset it." 2
+  done
+fi
+
+ROSTER_REL="${CCLA_ADD_ROSTER:-apps/cla-evidence/roster/ccla-roster.json}"
+ROSTER="$ROSTER_REL"
 # Resolve to an ABSOLUTE path. We cd to the repo root above, so the default
 # would resolve correctly today — but `cp`/`jq` operands that are only
 # conditionally absolute are the class `fixture-relative-assert` exists to
@@ -104,17 +120,21 @@ TSX="apps/web-platform/node_modules/.bin/tsx"
 RECORD_REF=""; ORG=""; SOLE_TRADER=0; SIGNED_AT=""; AUTHORIZED_FROM=""
 INSTRUMENT_SHA=""; CLA_GIT_SHA=""; WITHDRAWN_AT=""
 LOGINS=()
+# `shift 2` returns non-zero when there is no value to shift, and a `case` body
+# is NOT exempt from `set -e` — so a trailing `--record-ref` aborted with exit 1
+# and ZERO output, which is not one of the documented codes. Check arity first.
+need() { [[ $# -ge 2 ]] || { echo "::error::$1 requires a value" >&2; usage; }; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --record-ref)         RECORD_REF="${2:-}"; shift 2 ;;
-    --org)                ORG="${2:-}"; shift 2 ;;
+    --record-ref)         need "$@"; RECORD_REF="$2"; shift 2 ;;
+    --org)                need "$@"; ORG="$2"; shift 2 ;;
     --sole-trader)        SOLE_TRADER=1; shift ;;
-    --signed-at)          SIGNED_AT="${2:-}"; shift 2 ;;
-    --authorized-from)    AUTHORIZED_FROM="${2:-}"; shift 2 ;;
-    --instrument-sha256)  INSTRUMENT_SHA="${2:-}"; shift 2 ;;
-    --cla-git-sha)        CLA_GIT_SHA="${2:-}"; shift 2 ;;
-    --withdrawn-at)       WITHDRAWN_AT="${2:-}"; shift 2 ;;
-    --login)              LOGINS+=("${2:-}"); shift 2 ;;
+    --signed-at)          need "$@"; SIGNED_AT="$2"; shift 2 ;;
+    --authorized-from)    need "$@"; AUTHORIZED_FROM="$2"; shift 2 ;;
+    --instrument-sha256)  need "$@"; INSTRUMENT_SHA="$2"; shift 2 ;;
+    --cla-git-sha)        need "$@"; CLA_GIT_SHA="$2"; shift 2 ;;
+    --withdrawn-at)       need "$@"; WITHDRAWN_AT="$2"; shift 2 ;;
+    --login)              need "$@"; LOGINS+=("$2"); shift 2 ;;
     -h|--help)            usage ;;
     *) echo "::error::unknown flag: $1" >&2; usage ;;
   esac
@@ -145,6 +165,14 @@ if [[ "$MODE" == "add" ]]; then
   [[ "$SOLE_TRADER" -eq 1 && -n "$ORG" ]] && die "--org and --sole-trader are mutually exclusive" 64
 else
   [[ -n "$WITHDRAWN_AT" ]] || die "--withdrawn-at is required for remove" 64
+  # The remove filter withdraws ONE login. Accepting more and acting on the
+  # first silently leaves an ex-employee designated while the PR body lists
+  # them as withdrawn — a partial write reported as complete, in the one
+  # direction this script's header calls security-relevant.
+  [[ ${#LOGINS[@]} -eq 1 ]] || die "remove takes exactly one --login (got ${#LOGINS[@]}: ${LOGINS[*]}) — run it once per account so each withdrawal is its own reviewable record" 64
+fi
+if [[ -n "$CLA_GIT_SHA" ]]; then
+  [[ "$CLA_GIT_SHA" =~ ^[0-9a-f]{7,40}$ ]] || die "--cla-git-sha must be 7-40 lowercase hex (got: $CLA_GIT_SHA) — a revision expression such as HEAD~3 would silently hash a different instrument" 64
 fi
 
 # ---- the ICLA signature ledger (the reference set) --------------------------
@@ -171,6 +199,13 @@ if [[ -z "$LEDGER_FILE" ]]; then
   fi
 fi
 [[ -s "$LEDGER_FILE" ]] || die "ICLA signature ledger is empty or unreadable at $LEDGER_FILE"
+# Non-empty is not parseable. Assert the SHAPE once, loudly, before the gate
+# reads it — otherwise a truncated fetch or an HTML error page is reported as
+# "these people have not signed", which sends the operator to ask a contributor
+# to re-sign when the actual fault is the reference set. That is the
+# could-not-measure / measured-bad collapse AP-021 forbids.
+jq -e 'type == "object" and (.signedContributors | type) == "array"' "$LEDGER_FILE" >/dev/null 2>&1 \
+  || die "the ICLA signature ledger at $LEDGER_FILE is not a JSON object carrying a \`signedContributors\` array — the reference set is UNUSABLE, so contribution-triggered entry cannot be evaluated at all. This is NOT a finding about any account." 2
 
 # ---- resolve logins to numeric ids ------------------------------------------
 # The ledger keys on the numeric id, not the login: a login can be renamed and
@@ -188,20 +223,37 @@ for login in "${LOGINS[@]}"; do
     fi
   fi
   [[ "$id" =~ ^[0-9]+$ ]] || die "resolved id for $login is not numeric: '${id}'"
-  echo "resolved ${login} -> ${id}"
+  # stderr: stdout carries the emitted roster on a dry run, and a caller must be
+  # able to pipe it to jq without reconstructing the document with sed.
+  echo "resolved ${login} -> ${id}" >&2
   IDS+=("$id")
 done
 
 # ---- Guard 3, write side: refuse any id absent from the ICLA ledger ---------
 # This is the check whose deletion is mutation row G3-M5. Every id is checked
 # and every offender reported — stopping at the first is itself the defect.
+# Scoped to `add`. Gating REMOVAL on it means the more broken the ICLA record
+# is, the harder it becomes to revoke an ex-employee's authorization — and the
+# refusal message would tell the operator to obtain a signature in order to
+# RETIRE a row. Every row already in the roster is still gated by the validator
+# below and by the CI half, so scoping the write-side check loses no coverage.
 MISSING=()
+if [[ "$MODE" == "add" ]]; then
 for i in "${!LOGINS[@]}"; do
   id="${IDS[$i]}"
-  if [[ "$(jq --argjson id "$id" '[.signedContributors[]? | select(.id == $id)] | length' "$LEDGER_FILE")" == "0" ]]; then
-    MISSING+=("${LOGINS[$i]} (id ${id})")
-  fi
+  # NOT `[[ "$(jq ...)" == "0" ]]`. A command substitution inside `[[ ]]` is
+  # exempt from `set -e`, so ANY jq failure yielded "" — and "" != "0" meant the
+  # account was silently NOT added to MISSING and the gate PASSED it. The
+  # write-side guard failed OPEN on exactly the malformed input it should refuse.
+  # The `?` is gone too: it turns "not an array" into "empty", which is the same
+  # collapse one level down.
+  hits=""
+  hits="$(jq --argjson id "$id" '[.signedContributors[] | select(.id == $id)] | length' "$LEDGER_FILE")" \
+    || die "ledger query failed for ${LOGINS[$i]} (id ${id}) — the reference set could not be read, so no conclusion about this account is available" 2
+  [[ "$hits" =~ ^[0-9]+$ ]] || die "ledger query for ${LOGINS[$i]} produced a non-numeric count: '${hits}'" 2
+  [[ "$hits" -eq 0 ]] && MISSING+=("${LOGINS[$i]} (id ${id})")
 done
+fi
 if [[ ${#MISSING[@]} -gt 0 ]]; then
   die "refusing to write: ${#MISSING[@]} account(s) have not signed the Individual CLA: ${MISSING[*]}. Contribution-triggered entry — an account enters the roster only at or after that person has signed the ICLA on a pull request here. Ask them to sign first; the roster catches up afterwards." 4
 fi
@@ -211,14 +263,23 @@ NEW_ROSTER="$(mktemp -t ccla-roster.XXXXXXXX.json)"
 TMP_FILES+=("$NEW_ROSTER")
 
 if [[ "$MODE" == "add" ]]; then
-  CLA_DOC_PATH="$("$TSX" apps/web-platform/scripts/cla-evidence/cla-doc-path.ts corporate)"
-  [[ -n "$CLA_DOC_PATH" ]] || die "discriminant emitted an empty Corporate CLA path"
+  # `VAR=$(cmd)` DOES take the substitution's exit status, so `set -e` aborts
+  # here on a tool failure — with a raw exit code and no message, and the
+  # assertion on the next line never runs. That is a silent-to-the-operator
+  # abort at a step whose failure modes are all actionable, so each one names
+  # itself instead.
+  CLA_DOC_PATH="$("$TSX" apps/web-platform/scripts/cla-evidence/cla-doc-path.ts corporate)" \
+    || die "could not resolve the Corporate CLA path — is apps/web-platform/node_modules installed? (npm ci --prefix apps/web-platform)" 2
+  [[ -n "$CLA_DOC_PATH" ]] || die "discriminant emitted an empty Corporate CLA path" 2
+  [[ -f "$REPO_ROOT/$CLA_DOC_PATH" ]] || die "the Corporate CLA is not at $CLA_DOC_PATH" 2
   if [[ -z "$CLA_GIT_SHA" ]]; then
-    CLA_GIT_SHA="$(git log -1 --format=%H -- "$CLA_DOC_PATH")"
+    CLA_GIT_SHA="$(git log -1 --format=%H -- "$CLA_DOC_PATH")" \
+      || die "could not read git history for $CLA_DOC_PATH" 2
   fi
-  [[ -n "$CLA_GIT_SHA" ]] || die "could not determine the Corporate CLA git sha"
-  CLA_CONTENT_SHA="$(git show "${CLA_GIT_SHA}:${CLA_DOC_PATH}" | sha256sum | awk '{print $1}')"
-  [[ "$CLA_CONTENT_SHA" =~ ^[0-9a-f]{64}$ ]] || die "computed Corporate CLA content sha is not 64 hex: $CLA_CONTENT_SHA"
+  [[ -n "$CLA_GIT_SHA" ]] || die "could not determine the Corporate CLA git sha — $CLA_DOC_PATH has no commit touching it" 2
+  CLA_CONTENT_SHA="$(git show "${CLA_GIT_SHA}:${CLA_DOC_PATH}" | sha256sum | awk '{print $1}')" \
+    || die "could not hash ${CLA_DOC_PATH} at ${CLA_GIT_SHA} — is that sha in this clone? (git fetch --unshallow)" 2
+  [[ "$CLA_CONTENT_SHA" =~ ^[0-9a-f]{64}$ ]] || die "computed Corporate CLA content sha is not 64 hex: $CLA_CONTENT_SHA" 2
 
   REPS="$(jq -n '[]')"
   for i in "${!LOGINS[@]}"; do
@@ -243,7 +304,25 @@ if [[ "$MODE" == "add" ]]; then
   jq --argjson org "$ORG_JSON" --arg ref "$RECORD_REF" '
       if ([.organizations[]? | select(.record_ref == $ref)] | length) > 0
       then error("record_ref already present: " + $ref + " — use `remove`, or pick the next free ref")
-      else .organizations += [$org] end' "$ROSTER" > "$NEW_ROSTER"
+      else . end
+      # An id already designated — under THIS record_ref or any other — is
+      # refused rather than appended. Two live rows for one account make
+      # "which organisation vouches for this contributor" unanswerable from the
+      # record, and the roster is the artifact that is supposed to answer it.
+      # A WITHDRAWN row is not a conflict: that is exactly how a person moves
+      # between employers.
+      | ([.organizations[]?.representatives[]? | select(.removed_at == null) | .id]) as $live
+      | ([$org.representatives[].id] | map(select(. as $i | $live | index($i)))) as $dupes
+      | if ($dupes | length) > 0
+        then error("already designated under a live roster row: id(s) " + ($dupes | join(", "))
+                   + " — withdraw the existing designation first")
+        else . end
+      | ([$org.representatives[].id] | group_by(.) | map(select(length > 1) | .[0])) as $self
+      | if ($self | length) > 0
+        then error("the same id was passed twice in one invocation: " + ($self | join(", ")))
+        else . end
+      | .organizations += [$org]' "$ROSTER" > "$NEW_ROSTER" \
+    || die "the roster edit was refused (see the jq error above) — nothing written" 2
 else
   jq --arg ref "$RECORD_REF" --arg login "${LOGINS[0]}" --arg at "$WITHDRAWN_AT" '
       ([.organizations[]? | select(.record_ref == $ref)] | length) as $n
@@ -252,13 +331,28 @@ else
           if .record_ref == $ref then
             (([.representatives[] | select(.login == $login)] | length) as $m
              | if $m == 0 then error("login not designated under " + $ref + ": " + $login) else . end)
+            # A recorded withdrawal date is the LEGALLY OPERATIVE one and is not
+            # rewritten. Re-running `remove` on an already-withdrawn account
+            # would silently move the date forward, changing the record of when
+            # a designation ended — on a surface whose whole point is that the
+            # record is durable. Refuse and say what is already on file.
+            | (([.representatives[] | select(.login == $login and .removed_at != null)] | first) as $w
+               | if $w != null
+                 then error("already withdrawn under " + $ref + ": " + $login
+                            + " on " + $w.removed_at
+                            + " — a recorded withdrawal date is the operative one and is not rewritten")
+                 else . end)
             | .representatives |= map(if .login == $login then .removed_at = $at else . end)
-          else . end)' "$ROSTER" > "$NEW_ROSTER"
+          else . end)' "$ROSTER" > "$NEW_ROSTER" \
+    || die "the withdrawal was refused (see the jq error above) — nothing written" 2
 fi
 
 # ---- validate BEFORE anything is written or pushed --------------------------
-# One validation implementation, shared with CI. A shell reimplementation would
-# drift from the schema it claims to enforce.
+# CI does not run this CLI — it calls the same two modules directly from
+# `roster-entry-gate.test.ts`. What is shared is the IMPLEMENTATION
+# (`schema.ts` + `roster-entry-gate.ts`), which is the part that matters: a
+# shell reimplementation of the checks would drift from the schema it claims to
+# enforce, and the write path and the merge gate would disagree.
 rc=0
 "$TSX" "$VALIDATOR" "$NEW_ROSTER" "$LEDGER_FILE" || rc=$?
 if [[ "$rc" -ne 0 ]]; then
@@ -266,9 +360,9 @@ if [[ "$rc" -ne 0 ]]; then
 fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
-  echo "--- CCLA_ADD_DRY_RUN=1: the roster that WOULD be written ---"
+  echo "--- CCLA_ADD_DRY_RUN=1: the roster that WOULD be written ---" >&2
   cat "$NEW_ROSTER"
-  echo "--- no PR opened, nothing written, nothing pushed ---"
+  echo "--- no PR opened, nothing written, nothing pushed ---" >&2
   exit 0
 fi
 
@@ -291,10 +385,19 @@ branch was created.
 
 Ref #3210.
 COMMITEOF
-git push --quiet -u origin "$BRANCH"
+if ! git push --quiet -u origin "$BRANCH"; then
+  # The commit is safe on "$BRANCH" and the base branch was never touched, but
+  # leaving the operator on a branch they did not create, with no idea what
+  # state they are in, is how a half-finished legal record gets re-run from
+  # scratch and duplicated. Say exactly where the work is and how to resume.
+  printf '::error::push failed. The change is committed locally on branch %s and NOTHING was published.\n' "$BRANCH" >&2
+  printf 'Resume with:  git push -u origin %s && gh pr create --base %s --head %s\n' "$BRANCH" "$BASE_BRANCH" "$BRANCH" >&2
+  printf 'Abandon with: git switch - && git branch -D %s\n' "$BRANCH" >&2
+  exit 2
+fi
 gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" \
   --title "chore(ccla): ${MODE} ${RECORD_REF} in the corporate coverage map" \
-  --body "Single-file change to \`${ROSTER}\`, written by \`ccla-add.sh\`.
+  --body "Single-file change to \`${ROSTER_REL}\`, written by \`ccla-add.sh\`.
 
 Contribution-triggered entry was enforced at write time: every account below was verified present in \`origin/cla-signatures:signatures/cla.json\` before the roster was written. The roster was schema-validated (\`.strict()\`) before this branch existed.
 

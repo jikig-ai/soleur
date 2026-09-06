@@ -23,6 +23,36 @@ import {
   type SignatureLedger,
 } from "./roster-entry-gate";
 
+const LEDGER_REF = "origin/cla-signatures:signatures/cla.json";
+
+const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+function fatal(message: string): never {
+  process.stderr.write(`::error::${message}\n`);
+  process.exit(1);
+}
+
+function read(path: string, what: string): string {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (e) {
+    fatal(`could not read the ${what} at ${path}: ${msg(e)}`);
+  }
+}
+
+function showLedgerRef(): string {
+  try {
+    return execFileSync("git", ["show", LEDGER_REF], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    fatal(
+      `could not read ${LEDGER_REF}: ${msg(e)}. That branch is maintained by the upstream CLA action ` +
+        "and is absent from a shallow single-branch clone — fetch it with " +
+        "`git fetch origin +refs/heads/cla-signatures:refs/remotes/origin/cla-signatures`, " +
+        "or pass a ledger path explicitly.",
+    );
+  }
+}
+
 function main(): void {
   const [rosterPath, ledgerPath] = process.argv.slice(2);
   if (!rosterPath) {
@@ -30,15 +60,36 @@ function main(): void {
     process.exit(64);
   }
 
-  const roster = validateRosterRecord(JSON.parse(readFileSync(rosterPath, "utf8")));
+  // Five distinct causes used to arrive at the same generic catch arm below —
+  // roster unreadable, roster unparseable, ledger unreachable, ledger
+  // unreadable, ledger unparseable — all reported as exit 1 with whatever
+  // message the underlying library happened to raise. The operator could not
+  // tell "I typed the path wrong" from "the signature branch is not fetched".
+  // Each one now says which artifact failed and what to do about it.
+  let rosterPayload: unknown;
+  try {
+    rosterPayload = JSON.parse(read(rosterPath, "roster"));
+  } catch (e) {
+    fatal(`the roster at ${rosterPath} is not valid JSON: ${msg(e)}`);
+  }
+  const roster = validateRosterRecord(rosterPayload);
 
   const ledgerRaw = ledgerPath
-    ? readFileSync(ledgerPath, "utf8")
-    : execFileSync("git", ["show", "origin/cla-signatures:signatures/cla.json"], { encoding: "utf8" });
-  const ledger = JSON.parse(ledgerRaw) as SignatureLedger;
+    ? read(ledgerPath, "ICLA signature ledger")
+    : showLedgerRef();
+  let ledger: SignatureLedger;
+  try {
+    ledger = JSON.parse(ledgerRaw) as SignatureLedger;
+  } catch (e) {
+    fatal(
+      `the ICLA signature ledger is not valid JSON (${ledgerPath ?? LEDGER_REF}): ${msg(e)}. ` +
+        "The reference set is UNUSABLE — this is not a finding about any account.",
+    );
+  }
 
   const checked = assertContributionTriggeredEntry(roster, ledger);
-  process.stdout.write(
+  // stderr: this is a diagnostic, and callers pipe this CLI's stdout.
+  process.stderr.write(
     `roster OK: ${roster.organizations.length} organisation(s), ${checked} account(s) cross-checked against the ICLA ledger\n`,
   );
 }

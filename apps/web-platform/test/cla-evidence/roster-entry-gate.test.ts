@@ -2,7 +2,9 @@
 // Guard 3 — contribution-triggered entry is a property of the artifact.
 //
 // This is the CLO ruling's load-bearing mitigation: the Art. 6(1)(f) balancing,
-// the Art. 14 discharge and the Art. 17(3)(e) ground all rest on every roster
+// the Art. 13 notice route (NOT Art. 14 — this comment used to say 14, which
+// inverts the point of the whole mechanism) and the Art. 17(3)(e) ground all
+// rest on every roster
 // id belonging to someone who has themselves signed the Individual CLA here.
 // It is enforced by the artifact, not by an instruction in a script nobody
 // re-reads — because one hurried write bypasses a convention permanently, on a
@@ -50,6 +52,21 @@ describe("Guard 3 — contribution-triggered entry", () => {
     // G3-M4 (dispatch): a gate that reports "0 ids checked" and exits 0 must RED.
     // The expected count is derived independently of the gate's own return.
     expect(checked).toBe(2);
+  });
+
+  // The row above cannot tell `checked` apart from `signed.size` or
+  // `ledger.signedContributors.length`: every fixture where the two sets are the
+  // SAME SIZE agrees with all three. Both wrong implementations report how many
+  // people signed the ICLA repo-wide rather than how many roster rows were
+  // examined — a gate that says "4 checked" over a 1-row roster is reporting a
+  // number it did not measure. Only a ledger strictly larger than the roster
+  // separates them.
+  it("G3-M4b: the count is roster rows examined, NOT ledger size", () => {
+    expect(assertContributionTriggeredEntry(rosterWith([[54279]]), ledger([54279, 92384917, 111, 222]))).toBe(1);
+  });
+
+  it("G3-M4c: the same id designated by two organisations counts as two rows checked", () => {
+    expect(assertContributionTriggeredEntry(rosterWith([[54279], [54279]]), ledger([54279, 92384917]))).toBe(2);
   });
 
   it("G3-M1: a roster row whose id has NO ICLA signature is rejected, naming the id", () => {
@@ -133,7 +150,11 @@ describe("Guard 3 — contribution-triggered entry", () => {
 
   it("matches an id that differs only in login case/spelling — the ledger is keyed on numeric id", () => {
     const roster = rosterWith([[92384917]]);
-    roster.organizations[0].representatives[0].login = "elvalio"; // ledger says "Elvalio"
+    // The fixture ledger's `name` for this id is `user-92384917`; the roster row
+    // says `elvalio`. They disagree on EVERY character, and the row still passes,
+    // because nothing here reads `name`. That is the property: a login can be
+    // renamed and reused, a numeric id cannot.
+    roster.organizations[0].representatives[0].login = "elvalio";
     expect(assertContributionTriggeredEntry(roster, ledger([92384917]))).toBe(1);
   });
 });
@@ -141,29 +162,77 @@ describe("Guard 3 — contribution-triggered entry", () => {
 describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA ledger", () => {
   const rosterPath = join(repoRoot, ROSTER_REL);
 
+  // The ledger lives on an orphan branch the upstream action maintains, NOT in
+  // this checkout's history. `actions/checkout` defaults to `fetch-depth: 1`
+  // single-branch, so `origin/cla-signatures` is simply absent in every job that
+  // has not asked for it — and this suite is in REPO_WIDE_SUITES, so it runs in
+  // `test-webplat`, which has not. `git show` then exits 128 and reds the
+  // required `test` check repo-wide, on every PR, for a reason unrelated to the
+  // PR. Fetch the one ref we need, shallowly, and let a genuine unavailability
+  // surface as an explicit refusal rather than as either a green run or a
+  // mystery 128.
+  const readRealLedger = (): { signedContributors: Array<{ id: number }> } => {
+    const show = () =>
+      execFileSync("git", ["show", "origin/cla-signatures:signatures/cla.json"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    try {
+      return JSON.parse(show());
+    } catch {
+      // Missing locally. One shallow fetch of exactly this ref.
+      execFileSync(
+        "git",
+        ["fetch", "--depth=1", "origin", "+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures"],
+        { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+      );
+      return JSON.parse(show());
+    }
+  };
+
   it("anti-vacuity: the artifact under test is the tracked roster, not an inline fixture", () => {
+    // `endsWith(ROSTER_REL)` on a path BUILT by joining ROSTER_REL is a
+    // tautology, so it is gone. What is worth asserting is that the file exists
+    // and parses as the roster it claims to be.
     expect(existsSync(rosterPath)).toBe(true);
-    expect(rosterPath.endsWith(ROSTER_REL)).toBe(true);
+    expect(validateRosterRecord(JSON.parse(readFileSync(rosterPath, "utf8"))).schema_version).toBe("1.0");
+  });
+
+  // Two arms over ONE code path. The tracked roster is empty until the first
+  // corporate contributor lands, so the arm below it takes the early return and
+  // never calls the gate at all — `assertContributionTriggeredEntry = () => 0`
+  // would pass it. This arm runs the identical wiring against the identical real
+  // ledger with a synthetic roster carrying a known-unsigned id, so the
+  // cross-check is proven to bite today rather than on some future PR.
+  it("the real ledger, fed a roster row that never signed, is REFUSED", () => {
+    const realLedger = readRealLedger();
+    expect(Array.isArray(realLedger.signedContributors)).toBe(true);
+    expect(realLedger.signedContributors.length).toBeGreaterThan(0);
+    // Not a plausible id: chosen far outside GitHub's issued range so it cannot
+    // collide with a real signer and turn this arm green by accident.
+    const NEVER_SIGNED = 2_147_483_646;
+    expect(realLedger.signedContributors.some((c) => c.id === NEVER_SIGNED)).toBe(false);
+    expect(() => assertContributionTriggeredEntry(rosterWith([[NEVER_SIGNED]]), realLedger)).toThrow(
+      ContributionTriggeredEntryError,
+    );
+    // And the far side: a row whose id IS in the real ledger passes, so the arm
+    // above is refusing on the signature, not on the shape of a real ledger.
+    const signedId = realLedger.signedContributors[0].id;
+    expect(assertContributionTriggeredEntry(rosterWith([[signedId]]), realLedger)).toBe(1);
   });
 
   it("the tracked roster is schema-valid and every id in it has signed the ICLA", () => {
     const roster = validateRosterRecord(JSON.parse(readFileSync(rosterPath, "utf8")));
-    const raw = execFileSync("git", ["show", "origin/cla-signatures:signatures/cla.json"], {
-      cwd: repoRoot,
-      encoding: "utf8",
-    });
-    const realLedger = JSON.parse(raw);
-
-    // The real ledger must be non-empty, or this whole check is vacuous.
-    expect(Array.isArray(realLedger.signedContributors)).toBe(true);
-    expect(realLedger.signedContributors.length).toBeGreaterThan(0);
-
+    const realLedger = readRealLedger();
     const expected = roster.organizations.reduce((n, o) => n + o.representatives.length, 0);
     if (expected === 0) {
       // Steady state before the first corporate contributor. Assert the
       // emptiness positively rather than skipping — a skipped guard reads as a
-      // passing one in the run summary.
-      expect(roster.organizations).toEqual([]);
+      // passing one in the run summary. Asserting on the REPRESENTATIVE count
+      // rather than `organizations === []`: an organisation that has signed but
+      // designated nobody yet is legitimate, and would break the stricter form.
+      expect(roster.organizations.flatMap((o) => o.representatives)).toEqual([]);
       return;
     }
     expect(assertContributionTriggeredEntry(roster, realLedger)).toBe(expected);
