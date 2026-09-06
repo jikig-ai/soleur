@@ -566,9 +566,92 @@ _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
 
 # ── ARTIFACT 1: the source-liveness anchor ────────────────────────────────────────
 anchor_out="$(_run_query "$ANCHOR_SQL")"; anchor_rc=$?
+#
+# (#7855) A FAILED READ IS THREE STATES, AND ONLY ONE OF THEM IS ABOUT THIS HOST.
+#
+# This arm used to print "the Better Stack query transport exited N (unreachable or
+# unauthorised)" — naming two causes the run had not measured. Run 33888071954 printed it
+# twenty times while the transport was reachable and the credential was valid: the read failed
+# because the SOURCE'S TABLE DOES NOT EXIST. Better Stack creates the ClickHouse table lazily on
+# the first STORED row, so a source that has never stored one answers 500 CLUSTER_DOESNT_EXIST
+# rather than returning an empty result. That is AP-021 exactly — a message may name only a
+# cause the run measured.
+#
+# The discriminator is a CONTROL READ against a source that is not this one. Pairing it with the
+# target read separates:
+#
+#   target fails + control answers with rows  -> nothing has ever been stored to THIS source
+#                                                (or it is misaddressed). About this source.
+#   target fails + control answers with none  -> the warehouse is storing nothing from ANY
+#                                                producer. About the warehouse (#7811).
+#   target fails + control fails              -> the instrument is unusable. About nothing.
+#
+# WHY THE VENDOR ERROR STRING IS NOT THE DECISION. The hot and archive arms fail with DIFFERENT
+# codes (701 CLUSTER_DOESNT_EXIST vs 669 NAMED_COLLECTION_DOESNT_EXIST, both measured
+# 2026-09-04), so a classifier keyed on either string is half a classifier and rots the first
+# time Better Stack renames one. The codes are carried as the REASON; the control read decides.
+#
+# COMPOSED, NOT WIDENED. `bs_absence_classify` takes no arguments and answers about the
+# warehouse; the target-vs-control distinction is the product (anchor_rc != 0) x classify().
+# Composing it here costs one arm of one script. Adding a fourth state to the shared library
+# would need an arity change, and its only other production consumer
+# (scripts/zot-restart-loop-alarm.sh) branches on the token as a STRING at two sites — one
+# `if/if` with no `else`, one `case` with no `*)` — so a new token would fall through both into
+# the live-channel path. See ADR-192.
 if [[ "$anchor_rc" -ne 0 ]]; then
-  transient "TRANSIENT: the Better Stack query transport exited ${anchor_rc} (unreachable or unauthorised). No verdict — this says nothing about the rehearsal host." \
-            "$(printf '%s\n' "$anchor_out" | tail -5)"
+  # shellcheck source=../lib/betterstack-absence.sh
+  source "${REPO_ROOT}/scripts/lib/betterstack-absence.sh"
+
+  # PIN THE CONTROL TO A DIFFERENT SOURCE, AND PIN THE TRANSPORT TO THIS SCRIPT'S OWN.
+  #
+  # This script exports BS_TABLE=<git-data> process-wide (see above), so a classify call that
+  # does not override it would read the ABSENT TARGET as its "control", always answer
+  # TRANSPORT_FAIL, and collapse all three states into one — a silent regression to the
+  # behaviour this block replaces, with the suite otherwise green. The capture suite's
+  # GUARD1/2 arm is the detector for exactly that deletion.
+  #
+  # BETTERSTACK_QUERY_SCRIPT is the library's seam and BETTERSTACK_QUERY_SH is this script's;
+  # pinning the former to $QUERY keeps both legs on ONE transport, so a test that stubs the
+  # capture cannot leave the control read reaching the real network.
+  #
+  # The assignments ride on a COMMAND SUBSTITUTION, whose subshell contains them: classify's
+  # entire contract is stdout plus a return code, so nothing is lost by running it in a
+  # subshell, and BS_TABLE is not disturbed for the arms below.
+  _ctl_token="$(
+    BS_TABLE=t520508_soleur_inngest_vector_prd_3_logs \
+    BS_TABLE_S3=t520508_soleur_inngest_vector_prd_3_s3 \
+    BETTERSTACK_QUERY_SCRIPT="$QUERY" \
+      bs_absence_classify
+  )"
+  _anchor_tail="$(printf '%s\n' "$anchor_out" | tail -5)"
+
+  case "$_ctl_token" in
+    LIVE)
+      transient "TRANSIENT: this source's table does not exist — NEVER STORED A ROW. The control source is answering and carrying rows, so the warehouse is up; this source has stored nothing, or the table name is wrong. No verdict about ${HOST_NAME}: a misaddressed source and a host that never shipped look identical from here." \
+                "Target read exited ${anchor_rc}. Reason follows (carried, not the decision):" \
+                "$_anchor_tail"
+      ;;
+    INGEST_DARK)
+      # THE HONEST LIMIT OF THIS STATE, recorded rather than papered over. A control read that
+      # comes back empty cannot separate "the warehouse is refusing writes" from "every producer
+      # on the control source stopped at the same moment". Both are alarming and neither is a
+      # fact about this host, so they share an arm and the sentence claims only what the pair of
+      # reads establishes. The inverse residual is on the other side: a SINGLE surviving row
+      # makes the control read LIVE, so this arm under-reports a partially-dark warehouse.
+      # Narrowing either would need a second, independent producer to compare against, which is
+      # the account-wide monitoring #7811 owns — not something this capture can settle.
+      transient "TRANSIENT: the warehouse is DARK FOR EVERY PRODUCER. The control read answered and returned no rows from any source, so this is an account-wide storage condition (#7811), not a fact about this source and not a fact about ${HOST_NAME}. A 2xx from the ingest endpoint would not contradict this — an acknowledgement is not storage." \
+                "Target read exited ${anchor_rc}. Reason follows (carried, not the decision):" \
+                "$_anchor_tail"
+      ;;
+    *)
+      # TRANSPORT_FAIL, or any token a future library revision adds. Both reads failed, so the
+      # instrument is unusable and nothing was learned — the correct fail-closed default.
+      transient "TRANSIENT: the CONTROL READ ALSO FAILED (classifier said ${_ctl_token:-<empty>}), so this run cannot tell a missing table from a dark warehouse from a broken instrument. Nothing is known, least of all anything about ${HOST_NAME}." \
+                "Target read exited ${anchor_rc}. Reason follows (carried, not the decision):" \
+                "$_anchor_tail"
+      ;;
+  esac
 fi
 # DELIBERATELY EXCLUDES THIS HOST'S OWN ROWS (see the SQL). If the anchor could be satisfied
 # by the rehearsal host, then "this host emitted nothing" would make the anchor dead too — and
