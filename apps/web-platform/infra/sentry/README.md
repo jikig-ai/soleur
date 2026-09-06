@@ -77,9 +77,15 @@ terraform plan
 
 ## First-time import — COMPLETE, runbook retired (#7590)
 
-First-time adoption of the issue-alert rules is done. Since #7650 Phase 2 this
-root declares **27 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was
-29 `sentry_issue_alert`) and plans clean against the full root.
+First-time adoption of the issue-alert rules is done. Since Phase 2 this root
+declares **27 `sentry_alert` + 3 `sentry_issue_alert`** resources (it was 29
+`sentry_issue_alert`) and plans clean against the full root.
+
+The third `sentry_issue_alert` is `git-data-boot-warning`, which landed after
+the adoption capture was taken and so was never in the migration's scope. This
+paragraph said **2** until 2026-09-06 (#7826) while line 5 of this same file
+already said 3 — the file contradicted itself, and the stale half was the one
+the adoption tooling's error text had copied.
 
 The 27 were adopted by CONFIG-BLOCK adoption, not by a `terraform import`
 command: 27 `import { to = sentry_alert.<n> }` blocks paired with 27

@@ -81,5 +81,5 @@ fi
 count=$(grep -c '' <<<"$creates")
 echo "::error::sentry_issue_alert create tripwire: this plan CREATES ${count} sentry_issue_alert resource(s):" >&2
 sed 's/^/::error::  /' <<<"$creates" >&2
-echo "::error::Only two sentry_issue_alert resources may exist (auth_per_user_loop, sandbox_startup_failure) and both are import-only; the other 27 were adopted as sentry_alert in #7650 Phase 2. A create here means a duplicate live paging rule that bills and double-pages, or an adoption that failed and is being resolved by creating instead of importing. There is NO acknowledgement for this and [ack-destroy] does not reach it: investigate the divergence." >&2
+echo "::error::Only three sentry_issue_alert resources may exist (auth_per_user_loop, sandbox_startup_failure, git_data_boot_warning) and all are import-only; the other 27 were adopted as sentry_alert in Phase 2. A create here means a duplicate live paging rule that bills and double-pages, or an adoption that failed and is being resolved by creating instead of importing. There is NO acknowledgement for this and [ack-destroy] does not reach it: investigate the divergence." >&2
 exit 1
