@@ -1519,6 +1519,7 @@ if want_scripts; then
   # greenly. Both are registered here in the same commit that adds them.
   run_suite "tests/scripts/betterstack-absence-classifier" bash tests/scripts/test-betterstack-absence-classifier.sh
   run_suite "tests/scripts/betterstack-ingest-probe" bash tests/scripts/test-betterstack-ingest-probe.sh
+  run_suite "tests/scripts/betterstack-roundtrip-latency" bash tests/scripts/test-betterstack-roundtrip-latency.sh
   run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
   run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
   run_suite "scripts/rule-metrics-aggregate" bash scripts/rule-metrics-aggregate.test.sh
