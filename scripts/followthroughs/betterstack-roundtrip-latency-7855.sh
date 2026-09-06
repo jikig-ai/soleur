@@ -24,6 +24,9 @@
 #   * scripts/betterstack-assert-absence.sh — scopes both its absence and control reads to an
 #     exact `--host`, so a row with no host_name can never be its control either.
 #
+# A THIRD control is NOT host-scoped and Rule 1 does not reach it: `bs_absence_classify` asks
+# "does this source carry ANY row in the window". That is what Rule 2 is for.
+#
 # A marker with no host_name key satisfies neither. `JSONExtractString(raw,'host_name')` returns
 # the empty string for an absent key, which both predicates exclude. This is asserted by the
 # suite against the payload's FIELD SET, not against the source id — the field is the property.
@@ -58,19 +61,27 @@
 # one actor, and this verdict's only actuation is a sweeper comment, never a deploy gate — but it
 # is a waiver and is recorded as one rather than implied by the two rules above.
 #
-# ── RETIREMENT: THIS PROBE DOES NOT STOP WHEN THE TRACKER CLOSES ─────────────────────────────
-# `scripts/sweep-followthroughs.sh` runs a follow-through script on the CLOSED set too, and on
-# that set an rc=1 REOPENS the issue. So once ROUNDTRIP_STORED closes the tracker, this probe
-# keeps POSTing a synthetic marker into the git-data log source on every sweep, indefinitely, and
-# a single slow day would reopen the tracker with "Better Stack acknowledged a write it did not
-# store". The ADR-192 amendment's framing — that the instrument consumes its own discriminator
-# once — is true of the MEASUREMENT, not of the delivery mechanism.
+# ── RETIREMENT: BOUNDED, BUT NOT ZERO ────────────────────────────────────────────────────────
+# An earlier revision of this header claimed the probe becomes a "perpetual production writer"
+# once the tracker closes. That is FALSE, and it was corrected against `sweep-followthroughs.sh`
+# rather than reasoned about. Two independent mechanisms bound it:
 #
-# RETIREMENT CONDITION, therefore, stated so it is checkable rather than remembered: once the
-# tracker records a measured POST->queryable latency for source 2734275, REMOVE the
-# `soleur:followthrough` directive from the tracker body. That un-enrols the probe; the script
-# stays in the tree as the reproduction. Leaving the directive in place is what makes a one-shot
-# measurement a perpetual production writer.
+#   * `closed_precheck` returns 1 — "not re-litigating" — when the issue carries the sweeper's own
+#     `### Sweeper run: PASS` block, BEFORE the script runs. A ROUNDTRIP_STORED close is authored
+#     by the sweeper, so in the expected exit path the probe never runs again. Not once.
+#   * The closed set is `closed:>=$(date -d "${CLOSED_LOOKBACK_DAYS} days ago")`, default 14, and
+#     `REOPEN_MAX` is 3.
+#
+# So the real residual is: if a HUMAN closes the tracker (no sweeper PASS block), the probe keeps
+# writing a marker daily for up to 14 days, and can reopen the issue at most 3 times with
+# "Better Stack acknowledged a write it did not store". Bounded and small — but not nothing, and
+# a reopen carrying a vendor accusation is the wrong artifact to leave to chance.
+#
+# RETIREMENT CONDITION, stated so it is checkable rather than remembered: once the tracker records
+# a measured POST->queryable latency for this source, remove the `soleur:followthrough` directive
+# from the tracker body. That un-enrols the probe on every path, including the human-close one;
+# the script stays in the tree as the reproduction. The instruction lives in the tracker body
+# itself, not only here, because that is where the action has to be taken.
 #
 # ── EXIT CONTRACT ────────────────────────────────────────────────────────────────────────────
 # The sweeper has THREE actions and this probe has FOUR verdicts, so two verdicts share an
@@ -90,7 +101,10 @@
 # They are kept distinct because their REMEDIES differ (ADR-199 commitment 3): one waits on a
 # vendor incident, the other on provisioning.
 #
-# Observability layer: 3 (the producer path into Better Stack). `hr-observability-layer-citation`.
+# Observability layer: 6 (sweeper workflow run log + the tracker issue comment the sweeper posts).
+# NOT layer 3 — an earlier revision said 3, the Vector journald shipper on the Hetzner host. This
+# script runs in a GitHub Actions runner under `env -i`; it never touches journald or Vector, so a
+# layer-3 citation names a channel this code cannot reach. `hr-observability-layer-citation`.
 #
 # cq-test-fixtures-synthesized-only: no live response is captured into this file.
 
@@ -101,7 +115,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${BETTERSTACK_QUERY_SH:-${REPO_ROOT}/scripts/betterstack-query.sh}"
 
 # ── Latency budget ───────────────────────────────────────────────────────────────────────────
-# ADR-172 §2 records a MEASURED POST -> queryable latency of 17 s (2026-08-06, source 2457081).
+# ADR-172 records a MEASURED POST -> queryable latency of 17 s, in its "What was measured before
+# writing this (2026-08-06)" table (§2 references it rather than recording it). That row reads
+# "Better Stack Logs ingest POST from a workstation" and does NOT name a source id — attributing
+# it to 2457081 is an inference from that being the repo's default ingest URL, not something the
+# ADR states. Which makes the floor even more borrowed than the next paragraph says.
 # The budget is a stated multiple of that floor rather than a round number picked for feeling
 # generous, and the multiple is named so a future reader can re-derive it: 20 x 17 s = 340 s.
 #
@@ -230,13 +248,25 @@ esac
 #
 # `_row_type = 1` on the archive arm and the `dt`/`ingest_time` columns are the measured
 # warehouse schema. NOTE: that schema was verified against the `vector`-platform inngest source;
-# this source is `http`-platform and its schema is INFERRED, not verified. If the columns differ
-# the read fails loudly (a transport error), which degrades to UNKNOWN rather than to a verdict.
+# this source is `http`-platform and its schema is INFERRED, not verified. A column mismatch
+# surfaces as a transport error, and the `_read_ever_answered` gate below turns "the read never
+# worked" into ROUNDTRIP_UNKNOWN rather than into a storage verdict. That gate is what makes the
+# previous sentence true; before it existed the same condition produced ROUNDTRIP_NOT_STORED.
 rt_read() {
   local sql
+  # HOT WINDOW ONLY, no archive arm. A marker written seconds ago cannot have reached the
+  # archive, so `s3Cluster` adds nothing to what this query can find — and it can take the whole
+  # query away: measured 2026-09-04, `s3Cluster(primary, t520508_soleur_git_data_prd_s3)` answers
+  # 669 NAMED_COLLECTION_DOESNT_EXIST for this source, and a UNION ALL fails if EITHER arm fails.
+  # With the archive arm present the readback errored on every poll whether or not the row was
+  # stored, which is the readback equivalent of the defect this whole issue is about.
+  #
+  # `_` IS A SINGLE-CHARACTER WILDCARD IN SQL LIKE, and the marker is full of them, so this
+  # prefilter is looser than it reads. That is deliberate and safe: the DECISION is the jq field
+  # anchor below, which is a literal `startswith`. Do not delete the jq leg on the grounds that
+  # the SQL already anchors the marker — it does not.
   sql="SELECT dt, ingest_time, raw
-       FROM (SELECT dt, ingest_time, raw FROM remote(\$BS_TABLE)
-             UNION ALL SELECT dt, ingest_time, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+       FROM remote(\$BS_TABLE)
        WHERE raw LIKE '%${RT_MARKER}%'
        ORDER BY dt DESC LIMIT 5 FORMAT JSONEachRow"
   BS_TABLE="$RT_TABLE" BS_TABLE_S3="$RT_TABLE_S3" bash "$QUERY" "$sql" 2>&1
@@ -244,12 +274,23 @@ rt_read() {
 
 _observed=""
 _read_rc=0
+# DID THE TARGET READ EVER ANSWER? Without this, a readback that failed on EVERY poll is
+# indistinguishable from one that answered and found nothing — and the code below would then
+# consult the CONTROL source (a different, healthy table), find it LIVE, and emit
+# ROUNDTRIP_NOT_STORED: a public vendor data-loss accusation derived from a query that never
+# ran. That is the AP-021 defect this issue exists to remove, reintroduced in its own fix.
+_read_ever_answered=0
+_last_read_err=""
 while :; do
   _elapsed=$(( $(date -u +%s) - _t0 ))
   [[ "$_elapsed" -ge "$RT_DEADLINE_S" ]] && break
   sleep "$RT_POLL_INTERVAL_S"
   _out="$(rt_read)"; _read_rc=$?
+  if [[ "$_read_rc" -ne 0 ]]; then
+    _last_read_err="$(printf '%s\n' "$_out" | tail -3 | tr '\n' ' ')"
+  fi
   if [[ "$_read_rc" -eq 0 ]]; then
+    _read_ever_answered=1
     # FIELD ANCHOR, not a line grep. `raw` is a JSON string containing a JSON document.
     if printf '%s\n' "$_out" \
        | jq -e --arg m "$RT_MARKER" 'select(.raw != null) | .raw | fromjson
@@ -271,8 +312,18 @@ if [[ -n "$_observed" ]]; then
   exit 0
 fi
 
-# Not observed. The reason decides the verdict, and it is the same composed reading the rung-2
-# capture uses: ask a source that is NOT this one whether the warehouse is storing anything.
+# THE INSTRUMENT BEFORE THE VERDICT. If the target read never once answered, this run learned
+# nothing about storage — the control source is a DIFFERENT table, so its health says nothing
+# about whether our read of THIS table works. Carry the ClickHouse error so the next reader does
+# not have to re-derive it (the capture does the same with its anchor tail).
+if [[ "$_read_ever_answered" -eq 0 ]]; then
+  emit "ROUNDTRIP_UNKNOWN" "the readback never answered in ${_elapsed}s (last transport rc=${_read_rc}: ${_last_read_err:-no output}); with no working read of the target table this run cannot tell a storage failure from a broken query, and must not accuse the vendor of either"
+  exit 3
+fi
+
+# Not observed, and the readback DID work at least once. The reason decides the verdict, and it is
+# the same composed reading the rung-2 capture uses: ask a source that is NOT this one whether the
+# warehouse is storing anything.
 #
 # THIS USES THE SHARED CLASSIFIER, and that is not a style preference. The hand-rolled version
 # this replaced tested the control read for EMPTINESS
@@ -299,11 +350,11 @@ _ctl_token="$(
 
 case "$_ctl_token" in
   INGEST_DARK)
-    emit "ROUNDTRIP_DARK" "the marker was not read back within ${_elapsed}s, and the control source is storing nothing either — the warehouse is dark for every producer (#7811), so this is not a finding about this source"
+    emit "ROUNDTRIP_DARK" "the marker was not read back within ${_elapsed}s, and the control source (${RT_CONTROL_TABLE}) is storing nothing either. That is ONE source, shared and multi-tenant, so an empty result there is the account-wide signal #7811 tracks — but this run read one source, not the account, so it is not a finding about THIS source either way"
     exit 2
     ;;
   LIVE)
-    emit "ROUNDTRIP_NOT_STORED" "the warehouse is demonstrably storing other producers' rows, and a marker acknowledged by ${_rt_host} was NOT retrievable after ${_elapsed}s (${RT_MULTIPLE} x the ${RT_LATENCY_FLOOR_S}s floor). Better Stack acknowledged a write it did not store"
+    emit "ROUNDTRIP_NOT_STORED" "the warehouse is demonstrably storing other producers' rows, and a marker acknowledged by ${_rt_host} was NOT retrievable after ${_elapsed}s (${RT_MULTIPLE} x a ${RT_LATENCY_FLOOR_S}s floor BORROWED from a different source on a different platform and region — this source has no measured latency, which is what this probe exists to establish). On that budget: Better Stack acknowledged a write it did not store"
     exit 1
     ;;
   *)

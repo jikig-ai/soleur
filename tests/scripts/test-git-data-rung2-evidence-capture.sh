@@ -1148,6 +1148,21 @@ if [[ "$_g1_arms" -lt 6 ]]; then
   exit 1
 fi
 
+# INSTRUMENT SELF-TEST, before any verdict is read. Drives BOTH helpers once and requires each
+# counter AND the ledger to move. A floor that sums passes+fails cannot witness a fail() that
+# routes its count into passes, and a ledger check cannot witness a fail() whose append was
+# removed -- this catches both, and it reports directly rather than through the helpers it tests.
+_canary_p=$passes _canary_f=$fails _canary_l=${#FAILURES[@]}
+pass "instrument self-test: pass() moves its counter"
+fail "instrument self-test: fail() moves its counter (EXPECTED, retracted)"
+if [[ "$passes" -ne $((_canary_p + 1)) || "$fails" -ne $((_canary_f + 1)) || "${#FAILURES[@]}" -ne $((_canary_l + 1)) ]]; then
+  printf '  FAIL INSTRUMENT: pass/fail/ledger did not all move (p=%s->%s f=%s->%s ledger=%s->%s). This suite cannot certify anything.\n' \
+    "$_canary_p" "$passes" "$_canary_f" "$fails" "$_canary_l" "${#FAILURES[@]}" >&2
+  exit 1
+fi
+fails=$((fails - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'
+printf '  ok   instrument self-test: pass(), fail() and the ledger all moved (control retracted)\n'
+
 _ran=$((passes + fails))
 # FLOOR = main's 62 + the 11 assertions #7855 adds (GUARD1 arms 25-27, two harness rows, the
 # enumerator). Stated as a derivation rather than a bare literal because a sibling PR raising
@@ -1157,10 +1172,12 @@ _ran=$((passes + fails))
 # The message's own figure is interpolated from the same variable the test uses. It previously
 # read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
 # predicate, which is the shape that makes a drifting number invisible.
-_FLOOR=73
+_FLOOR=74  # 73 + the instrument self-test above
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_FLOOR"
+  # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
+  # owns cannot witness that fail() being disarmed (ADR-193, AP-023).
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_FLOOR" >&2
+  exit 1
 else
   printf '  ok   anti-vacuity floor: %s assertions ran (floor %s)\n' "$_ran" "$_FLOOR"
 fi

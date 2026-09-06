@@ -57,6 +57,7 @@ BIN="$TMP/bin"; mkdir -p "$BIN"
 cat > "$BIN/curl" <<'CURL'
 #!/usr/bin/env bash
 argv="$*"
+prev=""
 [[ "$argv" == *"Authorization: Bearer"* ]] || { echo "stub-curl: no Authorization header" >&2; exit 64; }
 [[ "$argv" == *"--proto =https"* ]] || { echo "stub-curl: --proto '=https' missing" >&2; exit 64; }
 [[ "$argv" == *"%{http_code}"* ]] || { echo "stub-curl: -w %{http_code} missing" >&2; exit 64; }
@@ -70,6 +71,12 @@ if [[ "$argv" == *'host_name'* ]]; then
   echo "stub-curl: payload carries a host_name key — it would satisfy a foreign-host control" >&2
   exit 66
 fi
+# Record what was actually POSTed, so the query stub can answer only for a marker that was
+# really written. Without this the suite asserts a read, not a round trip.
+for a in "$@"; do
+  case "$prev" in --data-raw) printf '%s' "$a" >> "${STUB_WROTE_FILE:-/dev/null}" ;; esac
+  prev="$a"
+done
 printf '%s' "${STUB_HTTP_CODE:-202}"
 CURL
 chmod +x "$BIN/curl"
@@ -81,6 +88,10 @@ QSTUB="$TMP/bs-query.sh"
 cat > "$QSTUB" <<'QS'
 #!/usr/bin/env bash
 if [[ "${1:-}" == --* ]]; then
+  if [[ "${BS_TABLE:-}" != "${STUB_EXPECT_CONTROL_TABLE:-}" ]]; then
+    echo "stub: control read queried BS_TABLE=${BS_TABLE:-<unset>}, expected ${STUB_EXPECT_CONTROL_TABLE:-<unset>}" >&2
+    exit 9
+  fi
   case "${STUB_CONTROL:-live}" in
     live) printf '{"dt":"2026-09-04 12:00:00","raw":"{}"}\n'; exit 0 ;;
     dark) exit 0 ;;
@@ -91,7 +102,24 @@ fi
 # question actually asked. A hardcoded marker models a warehouse returning a DIFFERENT run's
 # row -- which the probe is right to reject, making every stored arm fail for a fixture reason.
 sql="${1:-}"
+# TABLE-AWARE (A2). The readback must query the TARGET table and the control read the CONTROL
+# table; a stub that answers regardless of $BS_TABLE cannot see the two being swapped, which is
+# Rule 2 -- the invariant scripts/lib/betterstack-sources.sh exists to make derivable.
+if [[ "${BS_TABLE:-}" != "${STUB_EXPECT_TABLE:-}" ]]; then
+  echo "stub: readback queried BS_TABLE=${BS_TABLE:-<unset>}, expected ${STUB_EXPECT_TABLE:-<unset>}" >&2
+  exit 9
+fi
 marker="$(printf '%s' "$sql" | sed -n "s/.*LIKE '%\\(SOLEUR_BS_ROUNDTRIP_[^%']*\\)%'.*/\\1/p")"
+# WRITE-AWARE (A1). Answer only for a marker that was actually POSTed. A stub that echoes back
+# whatever the query asked for makes the round trip untestable by construction.
+# NO `-s` GUARD. An earlier revision skipped this check when the write ledger was EMPTY, which
+# is exactly backwards: an empty ledger means NOTHING was posted, so the readback must find
+# nothing. With the `-s` in place, deleting `--data-raw` from the POST left the suite GREEN --
+# a fail-open in the very guard added to make the round trip assertable. Caught by mutation.
+if [[ -n "$marker" ]]; then
+  grep -qF "$marker" "${STUB_WROTE_FILE:-/dev/null}" 2>/dev/null \
+    || { echo "stub: marker was never written — returning no rows" >&2; exit 0; }
+fi
 row() { python3 -c 'import json,sys
 inner = json.dumps({"message": sys.argv[1], "source": "betterstack-roundtrip-latency-7855"})
 print(json.dumps({"dt":"2026-09-04 12:00:05","ingest_time":"2026-09-04 12:00:22","raw":inner}))' "$1"; }
@@ -106,7 +134,11 @@ QS
 chmod +x "$QSTUB"
 
 run_rt() {  # env overrides come from the caller
+  : > "$TMP/wrote.txt"
   PATH="$BIN:$PATH" \
+  STUB_WROTE_FILE="$TMP/wrote.txt" \
+  STUB_EXPECT_TABLE="t520508_soleur_git_data_prd_logs" \
+  STUB_EXPECT_CONTROL_TABLE="t520508_soleur_inngest_vector_prd_3_logs" \
   BETTERSTACK_QUERY_SH="$QSTUB" \
   GIT_DATA_BETTERSTACK_LOGS_TOKEN="${TOKEN_OVERRIDE-synthetic-token-for-tests}" \
   BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
@@ -118,7 +150,9 @@ run_rt() {  # env overrides come from the caller
 assert_rt() {  # $1=name $2=expected-verdict $3=expected-rc
   local name="$1" want="$2" want_rc="$3" got rc=0
   got="$(run_rt)" || rc=$?
-  if [[ "$got" == *"$want"* && "$rc" == "$want_rc" ]]; then
+  # EXACT token, not a substring: `*"$want"*` accepted ROUNDTRIP_DARK_MAYBE for
+  # ROUNDTRIP_DARK, so any suffix on a verdict token passed.
+  if [[ "$got" == *"verdict=${want} "* && "$rc" == "$want_rc" ]]; then
     pass "$name → $want (rc=$rc)"
   else
     fail "$name → expected '$want' rc=$want_rc" "got: $got (rc=$rc)"
@@ -160,8 +194,26 @@ STUB_HTTP_CODE=202 STUB_READBACK=empty STUB_CONTROL=dark DEADLINE_OVERRIDE=18 \
 STUB_HTTP_CODE=202 STUB_READBACK=empty STUB_CONTROL=fail DEADLINE_OVERRIDE=18 \
   assert_rt "empty readback + failed control → nothing established" "ROUNDTRIP_UNKNOWN" 3
 
+# THE ARM THAT WAS MISSING, and its absence is why the defect shipped. The stub has had a `fail`
+# readback mode from the start; no case ever paired it with a LIVE control — which is exactly the
+# combination that produced a false vendor accusation. A readback that NEVER answered says nothing
+# about storage: the control source is a DIFFERENT table, so its health cannot license a verdict
+# about ours. This arm fails against the pre-fix implementation.
+STUB_HTTP_CODE=202 STUB_READBACK=fail STUB_CONTROL=live DEADLINE_OVERRIDE=18 \
+  assert_rt "a readback that never answered is UNKNOWN, never a vendor accusation" "ROUNDTRIP_UNKNOWN" 3
+
+# ...and the same input must NOT be reported as DARK either: a broken read of our table is not
+# evidence about the warehouse, so the control's verdict must not be borrowed in either direction.
+STUB_HTTP_CODE=202 STUB_READBACK=fail STUB_CONTROL=dark DEADLINE_OVERRIDE=18 \
+  assert_rt "a readback that never answered is UNKNOWN even when the control is dark" "ROUNDTRIP_UNKNOWN" 3
+
 # The four verdicts must be four distinct tokens on four distinct exit codes.
-_n_tok=$(grep -oE 'ROUNDTRIP_(STORED|NOT_STORED|DARK|UNKNOWN)' "$SUT" | sort -u | wc -l)
+# ANCHORED ON THE emit() CALL, not the bare token. The SUT's header carries an EXIT CONTRACT
+# table naming all four verdicts in prose, so a bare-token grep is satisfied by the comment alone
+# and every `emit "ROUNDTRIP_DARK"` call site could be deleted with this assertion still green —
+# the forbid-plus-document collision the sibling probe suite already anchors around.
+_n_tok=$(grep -oE 'emit[[:space:]]+"ROUNDTRIP_(STORED|NOT_STORED|DARK|UNKNOWN)"' "$SUT" \
+         | grep -oE 'ROUNDTRIP_[A-Z_]+' | sort -u | wc -l)
 if [[ "$_n_tok" -eq 4 ]]; then
   pass "all four verdict tokens are distinct and present"
 else
@@ -203,6 +255,9 @@ assert_dest() {  # $1=name $2=url $3=refused|accepted
     GIT_DATA_BETTERSTACK_LOGS_TOKEN="synthetic-token-for-tests" \
     BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
     BETTERSTACK_ROUNDTRIP_POLL_S=1 BETTERSTACK_ROUNDTRIP_DEADLINE_S=18 \
+    STUB_WROTE_FILE="$TMP/wrote.txt" \
+    STUB_EXPECT_TABLE="t520508_soleur_git_data_prd_logs" \
+    STUB_EXPECT_CONTROL_TABLE="t520508_soleur_inngest_vector_prd_3_logs" \
     GIT_DATA_BETTERSTACK_INGEST_URL="$2" bash "$SUT" 2>&1)" || true
   if [[ "$3" == refused ]]; then
     if [[ "$out" == *"refusing to forward the credential"* ]]; then pass "$1"; else fail "$1" "$out"; fi
@@ -254,11 +309,11 @@ fi
 # FLOOR = the as-written count, derived by running the suite rather than estimated: 20 real
 # assertions + the 2 the accounting control contributes (it retracts its deliberate failure from
 # `fails`, not from `cases`).
-if [[ "$cases" -lt 21 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is 21.\n' "$cases" >&2
+if [[ "$cases" -lt 24 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is 24.\n' "$cases" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s cases ran (floor 21)\n' "$cases"
+printf '  ok   anti-vacuity floor: %s cases ran (floor 24)\n' "$cases"
 
 if [[ "${#FAILURES[@]}" -ne "$fails" ]]; then
   printf '  FAIL LEDGER: %s failures counted but %s recorded — fail() was tampered with.\n' \

@@ -94,6 +94,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Env override is the TEST SEAM, and the only one: the suite stubs the query transport rather
 # than the decision function, so every arm exercises the real branching.
 QUERY="${BETTERSTACK_QUERY_SH:-${REPO_ROOT}/scripts/betterstack-query.sh}"
+
+# Source identities, declared once and shared with the round-trip probe so that probe's
+# write-refusal is DERIVED from this capture's control rather than restated beside it. Sourced at
+# TOP LEVEL, not inside the failed-read branch: the ingest-probe fallback below runs on the
+# anchor-SUCCEEDED path and needs BS_GIT_DATA_INGEST_URL too, and a conditional source is how a
+# fourth hand-written spelling of that URL survived the library meant to end them.
+# shellcheck source=lib/betterstack-sources.sh
+source "${REPO_ROOT}/scripts/lib/betterstack-sources.sh"
 GATE_LIB="${REPO_ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
 
 HOST_NAME=""
@@ -565,7 +573,7 @@ FATAL_SQL="
 # archive arms do in fact fail with different codes (701 vs 669, both measured 2026-09-04), so a
 # string-keyed classifier would have rotted exactly as predicted — by a route this comment did not
 # consider. Recorded in the ADR-192 amendment.
-export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
+export BS_TABLE="${BS_TABLE:-$BS_GIT_DATA_TABLE}"
 
 _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
   bash "$QUERY" "$1" 2>&1
@@ -640,11 +648,6 @@ if [[ "$anchor_rc" -ne 0 ]]; then
               "Target read exited ${anchor_rc}."
   fi
 
-  # The control source's identity is declared once and shared with the round-trip probe, so that
-  # probe's write-refusal is DERIVED from this control rather than restated beside it.
-  # shellcheck source=../lib/betterstack-sources.sh
-  source "${REPO_ROOT}/scripts/lib/betterstack-sources.sh"
-
   _ctl_token="$(
     BS_TABLE="$BS_CONTROL_TABLE" \
     BS_TABLE_S3="$BS_CONTROL_TABLE_S3" \
@@ -669,7 +672,7 @@ if [[ "$anchor_rc" -ne 0 ]]; then
       # makes the control read LIVE, so this arm under-reports a partially-dark warehouse.
       # Narrowing either would need a second, independent producer to compare against, which is
       # the account-wide monitoring #7811 owns — not something this capture can settle.
-      transient "TRANSIENT: the warehouse is DARK FOR EVERY PRODUCER. The control read answered and returned no rows from any source, so this is an account-wide storage condition (#7811), not a fact about this source and not a fact about ${HOST_NAME}. A 2xx from the ingest endpoint would not contradict this — an acknowledgement is not storage." \
+      transient "TRANSIENT: the warehouse is DARK FOR EVERY PRODUCER on the source this run sampled. The control read answered and returned no rows at all from ${BS_CONTROL_TABLE} in the last 6h. That source is shared and multi-tenant, so an empty result there is the account-wide signal #7811 tracks — but it is ONE source, and this run did not read a second, so it cannot separate a refusing warehouse from every producer on that source stopping at once. Either way it is not a fact about this source and not a fact about ${HOST_NAME}. A 2xx from the ingest endpoint would not contradict it — an acknowledgement is not storage." \
                 "Target read exited ${anchor_rc}. Reason follows (carried, not the decision):" \
                 "$_anchor_tail"
       ;;
@@ -728,9 +731,15 @@ if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
               "about ${HOST_NAME}."
   fi
   _probe_rc=0
-  BETTERSTACK_INGEST_URL="${GIT_DATA_BETTERSTACK_INGEST_URL:-https://s2734275.eu-central-1a.betterstackdata.com/}" \
-  BETTERSTACK_LOGS_TOKEN="${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-${BETTERSTACK_LOGS_TOKEN:-}}" \
-    bash "$_probe" >/dev/null 2>&1 || _probe_rc=$?
+  # CAPTURE THE PROBE'S OUTPUT. It carries the verdict token and the exact reason, and discarding
+  # it is what forced the `*)` arm below to guess. #7855 widened that probe's exit 2 from
+  # "unreachable" to five distinct INGEST_PROBE_UNCONFIGURED reasons plus four others, so a bare
+  # "could not reach the source (rc=2)" is now more often wrong than right — AP-021, in the arm
+  # that reports it. The zot workflow already threads `probe_out` this way.
+  _probe_out=""
+  _probe_out="$(BETTERSTACK_INGEST_URL="${GIT_DATA_BETTERSTACK_INGEST_URL:-$BS_GIT_DATA_INGEST_URL}" \
+    BETTERSTACK_LOGS_TOKEN="${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-${BETTERSTACK_LOGS_TOKEN:-}}" \
+    bash "$_probe" 2>&1)" || _probe_rc=$?
   case "$_probe_rc" in
     0)
       # The source ACKNOWLEDGED a write. That is not storage (#7855) — measured on this source,
@@ -746,10 +755,11 @@ if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
                 "here is a statement about the INSTRUMENT, not about ${HOST_NAME}."
       ;;
     *)
-      transient "TRANSIENT: no foreign-host rows, and the ingest probe could not reach the source" \
-                "(rc=${_probe_rc}). A live source with a silent host and an unreachable source look" \
-                "identical from this host's rows alone, so this run declines to read silence as a" \
-                "dark boot."
+      transient "TRANSIENT: no foreign-host rows, and the ingest probe did not classify the source" \
+                "(rc=${_probe_rc}). Its own verdict follows — read that rather than assuming a" \
+                "transport fault, because rc=2 now covers an unset credential, a refused" \
+                "destination, a throttle and a vendor error as well as unreachability." \
+                "${_probe_out:-<the probe produced no output>}"
       ;;
   esac
 fi

@@ -267,10 +267,17 @@ needs to know about **one target source** composes the product
 `(target_read_rc != 0) x bs_absence_classify()` rather than asking for a fourth token.
 
 This is a decision, not an omission. A fourth state would require an arity change to a shared
-library whose only other production consumer, `scripts/zot-restart-loop-alarm.sh`, branches on
+library whose then-only other production consumer, `scripts/zot-restart-loop-alarm.sh`, branches on
 the token as a **string** at two sites — one `if/if` with no `else`, one `case` with no `*)` arm
 — so an unrecognised token would fall through both into the live-channel path. Composition costs
 one arm of one caller and touches that alarm not at all.
+
+**Caller count, stated accurately:** this amendment's own PR adds two more callers (the rung-2
+capture and the round-trip probe), so at merge there are THREE production consumers, not one. The
+conclusion is unchanged — the alarm still fails open on an unknown token, so widening the shared
+function is still unsafe — but a reader re-deriving the decision from "its only consumer" would be
+working from a population that stopped being true in the same commit. Both new callers carry an
+explicit `*)` arm.
 
 `scripts/followthroughs/git-data-rung2-evidence-capture.sh` is the first such caller. **This
 reverses a decision recorded in that script:** its own comment argued that distinguishing
@@ -294,12 +301,16 @@ positive control which gates a decision.** A round-trip probe is admissible when
 `scripts/followthroughs/betterstack-roundtrip-latency-7855.sh` is the first one. It is bounded
 two ways, both asserted by its suite:
 
-1. **The marker carries no `host_name` key.** Both controls in this repo that are satisfied by a
-   row's mere presence are scoped by `host_name` — the rung-2 capture's `ANCHOR_SQL`
+1. **The marker carries no `host_name` key.** Two of the three controls in this repo satisfied by
+   a row's mere presence are scoped by `host_name` — the rung-2 capture's `ANCHOR_SQL`
    (`host_name != '' AND host_name != '<this host>'`) and `betterstack-assert-absence.sh`
    (`--host`). `JSONExtractString(raw,'host_name')` returns the empty string for an absent key,
    which both predicates exclude. **The guard asserts the field, not the source id**, because the
    field is the property.
+   **Corrected 2026-09-06:** an earlier revision of this bound said "Both controls", which
+   undercounts. The THIRD is `bs_absence_classify` itself, which asks "does this source carry ANY
+   row in the window" and is not host-scoped at all — so Rule 1 does not reach it, and bound 2 is
+   not a belt-and-braces addition but the only thing standing between the probe and that control.
 2. **It refuses source 2457081 by name.** That source's any-row liveness is precisely what the
    rung-2 capture now reads as its control, so a marker landing there would manufacture the
    answer the capture consults it for. This is the I-2 blind spot, at the source that gates a

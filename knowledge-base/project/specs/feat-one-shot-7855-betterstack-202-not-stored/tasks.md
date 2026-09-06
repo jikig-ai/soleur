@@ -77,3 +77,50 @@ Tracker filed as **#7867** (`follow-through` label). Validated by running the sw
 three fields resolve (`script`, `earliest`, `secrets`) and the script path is executable.
 
 Still open: 5.4 (full battery at `/ship` Phase 4), 5.5 (CPO + user-impact-reviewer).
+
+## Review round (Phase 5.1 continued) — 2 P1s, both in code this PR added
+
+Design-validity pass (`code-simplicity-reviewer` + `architecture-strategist`) ran BEFORE the panel
+per the design-risk ordering; it returned KEEP on every core mechanism and 12 findings, all fixed.
+Panel: 6 agents (4 died on a server-side cascade and were RESUMED from transcript, not respawned).
+`semgrep-sast` skipped — bash-only diff, where its parser matches ~0 rules; `shellcheck`
+substituted. `performance-oracle` and `data-integrity-guardian` skipped — no hot path, no
+economics claim, no data model.
+
+### The two P1s
+
+| # | Where | What |
+|---|---|---|
+| P1-A | `scripts/lib/betterstack-sources.sh` | The include guard keyed on an inheritable env var, so one exported name made `source` return before assigning anything and the destination allowlist compared two attacker strings. **Reproduced**: the write token reached `attacker.example.org/collect`. Guard removed. |
+| P1-B | `scripts/followthroughs/betterstack-roundtrip-latency-7855.sh` | The readback UNIONed an archive arm whose named collection does not exist for this source (669, measured), so it failed on every poll and the probe emitted a vendor data-loss accusation off a query that never ran. Archive arm dropped; a never-answering readback now reports UNKNOWN. |
+
+**P1-B corrects the record on the live run.** The `ROUNDTRIP_NOT_STORED` reported on 2026-09-06 was
+produced by that broken readback. The finding stands — but on the INDEPENDENT evidence (the table
+still absent after an acknowledged write, and Better Stack creates it on the first *stored* row),
+not on the probe's verdict.
+
+### Mutation-proven this round
+
+| mutation | before | after |
+|---|---|---|
+| payload marker ≠ readback marker (write/read desync) | GREEN | caught |
+| control read pointed at the target table (Rule 2) | GREEN | caught |
+| `--data-raw` deleted from the POST | GREEN → still GREEN on the first fix (its own fail-open) | caught after removing the `-s` guard |
+| delete the `?` / `#` / userinfo authority cut | GREEN ×3 | caught ×3 |
+| fully neuter `fail()` (ledger + counter) in the capture suite | `73 passed, 0 failed`, rc=0 | caught by the instrument self-test |
+| rename the capture-log path the workflow greps | GREEN | caught |
+| continuation-line cause phrase (arm enumerator) | 0 matches | caught |
+| swap which phrase gates which TRANSIENT heading | GREEN | caught |
+
+### Claims corrected (this PR's subject is over-claiming; its prose was the riskiest surface)
+
+"perpetual production writer" (false — `closed_precheck` + a 14-day window + `REOPEN_MAX=3`);
+ADR-192's "both controls" (three, and the third is not host-scoped); "its only other production
+consumer" (this PR adds two more); the plan's "no secret is introduced" (one was, and two gates
+were skipped on that premise); ADR-198's "three places … queryable" and "four
+cloud-init/variables.tf comments" (both wrong in count and file set); the sweeper comment's stated
+reason; and the dark-warehouse sentences extrapolating one source to "every producer".
+
+Filed **#7873** (plain `type/chore`, not a scope-out — the CONCUR gate correctly DISSENTed on the
+criterion) for three pre-existing unvalidated credential destinations. An inline fix was tried and
+reverted: the zot suite runs real loopback listeners, so a vendor-host pin refuses its own stub.

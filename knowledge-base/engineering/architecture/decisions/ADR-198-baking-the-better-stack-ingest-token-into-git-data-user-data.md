@@ -405,8 +405,11 @@ address. What the rule closes is the metadata-endpoint path. Tracked at #7772.
 
 ## Addendum — 2026-09-04 (#7855): "reaches the channel" is a POST, not a stored row
 
-This ADR asserts in three places that eight of the nine boot stages reach a **queryable** second
-channel. That word claimed more than anything measured. What
+This ADR asserts that eight of the nine boot stages gain a second channel in two places (the
+Coverage section and the Consequences bullet), and exactly ONE of them — the Consequences bullet —
+called that channel **queryable**. That word claimed more than anything measured.
+(An earlier draft of this addendum said "three places … queryable"; both halves were wrong, and
+the miscount is corrected here rather than quietly.) What
 `/usr/local/bin/git-data-emit` establishes is that a POST to the ingest endpoint returned a 2xx.
 Whether the row was ever stored — and therefore whether it is queryable — was never checked by
 any boot, and it is a separate fact:
@@ -451,7 +454,10 @@ that Sentry mirror against a **CI-side** readback — one that runs where the qu
 already lives — establishes the same round trip without moving any credential onto the host. That
 is what the #7855 follow-through does, and it is the reason no per-boot readback is being added.
 
-The four `cloud-init-git-data.yml` / `variables.tf` comments that describe eight stages going dark
-on a missing token are **untouched and remain correct**: they are about the token being absent, a
-condition under which the POST does not happen at all. This addendum is about the case where the
-POST happens and succeeds.
+The comments in `cloud-init-git-data.yml` and `modules/git-data-userdata/variables.tf` are
+**untouched**. Stated precisely, because an earlier draft of this addendum said "the four
+comments" and that was wrong in both count and file set: `variables.tf` carries **no** eight/nine
+comment at all, and `cloud-init-git-data.yml` carries three, of which only the one at the
+no-token branch is about stages going dark on a MISSING token. That one remains correct — it
+describes a condition under which the POST does not happen at all. The other two describe stages
+reaching the sink, and inherit the narrowing above: they establish a POST and a 2xx, not storage.

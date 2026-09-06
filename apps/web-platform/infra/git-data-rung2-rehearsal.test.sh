@@ -1785,6 +1785,20 @@ for _ph in "${!_pair[@]}"; do
   fi
 done
 
+# D1: THE BRANCHES MUST READ THE FILE THE CAPTURE WRITES. All three greps are
+# `grep -q ... 2>/dev/null`, so a wrong path is permanently false and every run falls through to
+# the generic `else` -- the exact pre-#7855 behaviour, restored silently, with the suite green.
+# Nothing tied the reader's path to the writer's until this arm.
+cases=$((cases + 1))
+_cap_written=$(grep -oE 'tee /tmp/[A-Za-z0-9_/.-]+' "$WF" | head -1 | awk '{print $2}')
+_cap_read=$(grep -oE "grep -q '[^']+' /tmp/[A-Za-z0-9_/.-]+" "$WF" | grep -oE '/tmp/[A-Za-z0-9_/.-]+' | sort -u)
+_cap_read_n=$(printf '%s\n' "$_cap_read" | grep -c . || true)
+if [[ -n "$_cap_written" && "$_cap_read_n" -eq 1 && "$_cap_read" == "$_cap_written" ]]; then
+  pass "the TRANSIENT branches read the capture log the workflow actually writes (${_cap_written})"
+else
+  fail "capture-log path drift: workflow writes '${_cap_written:-<none>}' but the branches read '${_cap_read:-<none>}' (${_cap_read_n} distinct)"
+fi
+
 # The three branches must produce THREE DIFFERENT headings. Identical headings would satisfy
 # the greps above while restoring exactly the single-sentence behaviour this replaces.
 cases=$((cases + 1))
@@ -1796,13 +1810,13 @@ else
   fail "TRANSIENT headings are not distinct" "branches=${_n_head} distinct=${_n_uniq}"
 fi
 
-if [[ "$cases" -lt 82 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 82.\n' "$cases" >&2
+if [[ "$cases" -lt 83 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 83.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 82)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 83)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression

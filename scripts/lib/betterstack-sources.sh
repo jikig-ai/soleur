@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # (#7855) The identity of the Better Stack sources this repo reads and writes.
 #
-# WHY THIS FILE EXISTS. One invariant spans two scripts and was, before this file, enforced across
-# THREE independent spellings of the same source joined only by prose:
+# WHY THIS FILE EXISTS. One invariant spans two scripts. As the round-trip probe was first written
+# — within this same PR, so this state never reached `main` — it was enforced across THREE
+# independent spellings of the same source, joined only by prose:
 #
 #   scripts/followthroughs/git-data-rung2-evidence-capture.sh  reads  t520508_soleur_inngest_vector_prd_3_logs
 #   scripts/followthroughs/betterstack-roundtrip-latency-7855.sh reads the same table by literal
@@ -22,9 +23,19 @@
 # (its only other production consumer branches on its token as a string with no default arm, so
 # widening it would fail open — see the ADR-192 amendment).
 
+# NO INCLUDE GUARD, DELIBERATELY. An earlier revision opened with
+# `[[ -n "${_BS_SOURCES_LIB_LOADED:-}" ]] && return 0`. That variable is an ordinary, inheritable
+# environment variable, so ANY caller could set it and make this file return before assigning a
+# single constant — leaving whatever the environment had exported under these names in place.
+# The destination allowlist in betterstack-roundtrip-latency-7855.sh then compares two
+# attacker-supplied strings to each other. Measured: with the guard present, one exported variable
+# sent a live ingest write token to `https://attacker.example.org/collect` with no refusal, and
+# the same input pointed at the SHARED source silently defeats RULE 2 at the birth gate.
+#
+# This file defines no functions and has no side effects, so re-sourcing costs nothing and the
+# guard bought nothing. Assign unconditionally. Do NOT make these `readonly`: the rung-2 capture
+# sources this alongside betterstack-absence.sh in one process, and a second source would abort.
 # shellcheck disable=SC2034  # every constant below is consumed by a script that SOURCES this file.
-[[ -n "${_BS_SOURCES_LIB_LOADED:-}" ]] && return 0
-_BS_SOURCES_LIB_LOADED=1
 
 # ── The CONTROL source (2457081) ─────────────────────────────────────────────────────────────
 # Shared, multi-tenant, and chatty. The rung-2 capture asks it "is the warehouse storing anything

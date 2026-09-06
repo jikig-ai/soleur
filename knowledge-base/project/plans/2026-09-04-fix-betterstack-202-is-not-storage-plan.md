@@ -376,12 +376,29 @@ Phase 1 depends on nothing and is the highest-value change. Phase 3's round-trip
 
 ## Infrastructure (IaC)
 
-**Skipped deliberately.** No server, service, cron, vendor account, DNS record, secret or firewall
-rule is introduced. `apps/web-platform/infra/cloud-init-git-data.yml` is **not** edited — the
-no-on-host-readback decision expressed as scope, since an emitter edit is `user_data` ForceNew. The
-`## Encryption Posture` gate does not fire for the same reason: no `.tf`, no migration, no cloud-init
-edit, no new persistent store, and no new cross-component connection (the round-trip's write and read
-edges both already exist from CI). AC14 makes the boundary mechanical.
+No server, service, cron, vendor account, DNS record or firewall rule is introduced.
+
+**CORRECTED AT REVIEW (2026-09-06) — a secret WAS introduced, and this section originally denied
+it.** The sentence above previously read "…DNS record, **secret** or firewall rule", and both the
+IaC gate and the encryption-posture gate were skipped on that premise. During implementation
+`GIT_DATA_BETTERSTACK_LOGS_TOKEN` was mirrored from Doppler `soleur/prd_terraform` into **GitHub
+Actions repository secrets**, because the follow-through sweeper cannot read Doppler and the probe
+would otherwise report `ROUNDTRIP_UNKNOWN` forever. Recording it here rather than letting a skipped
+gate stand on a false premise:
+
+- **What it is:** a Better Stack *ingest write* token scoped to the single git-data log source
+  (2734275). Not a read credential; it cannot query the warehouse.
+- **Blast-radius change:** the token now exists in two systems. Its sibling
+  `BETTERSTACK_LOGS_TOKEN` was already a repo Actions secret, so this adds no new *credential
+  class* and no new storage system — but a repo-level secret is referenceable by any workflow in
+  the repo, and the sweeper's `secrets=` clause is parsed from **issue body text**, so any
+  `follow-through`-labelled issue can route it to any script under `scripts/followthroughs/`.
+  Editing such an issue requires write access; recorded as defence-in-depth, not as a gap.
+- **Rotation owner:** Doppler remains the source of truth. A rotation there does **not** propagate
+  to the Actions copy; the stale copy would yield a non-2xx, which the probe reports as
+  `ROUNDTRIP_UNKNOWN` (TRANSIENT) — safe, but silent. Re-mirror on rotation.
+- **Not exposed to forks:** the sweeper triggers only on `schedule` and `workflow_dispatch`, never
+  `pull_request_target`.
 
 ## Observability
 
