@@ -115,6 +115,70 @@ the transition it is supposed to witness. Membership is the certified artifact.
 `die2 "NOT_TRANSCRIBED waives a path that does not exist"` fires on a waiver left behind by the
 deletion, and check (c) fires on a new file left unwaived. Neither half can land alone.
 
+<!-- -->
+> **Re-executed 2026-09-06 (#7791, PR #7838) — counsel review
+> `knowledge-base/legal/audits/2026-09-counsel-review-7791.md`.** This attestation was reviewed and
+> found **APPROVED**. Nothing above or below is edited; this marker carries the re-execution and one
+> correction to the wording of condition 2.
+>
+> **Why it was re-run.** The branch was rebased onto `origin/main`, where PR #7805 independently
+> added a ninth waiver — `audits/2026-09-04-betterstack-source-split-7772.md` — to both copies of
+> the waiver set, and the 2026-09-06 counsel review adds a tenth for itself. The guard moved from
+> `produced=12 waived=8` at signing to `produced=14 waived=10`, exit 0 throughout. **A certification
+> verified against a tree that has since changed is not verified** — this document's own §B1 says
+> so — so all four conditions were re-run rather than assumed.
+>
+> **All four hold.** Condition 1: exit 0, `7 assertion(s), 0 failed (registers=4 rows=5
+> produced=14 waived=10 waiver-parity=ok)`. Condition 2: both copies enumerate an **identical ten
+> paths** — extracted independently from the `NOT_TRANSCRIBED` array and from the register's
+> §Excluded records File column, sorted and diffed, no symmetric difference — with the
+> implementation record absent from each and this attestation present in each. Conditions 3 and 4:
+> both succeed. **Membership is still the certified artifact**, and it still certifies.
+>
+> **Condition 2's wording is corrected here, because it is now literally false.** It reads that the
+> set differs from the set at signing by *"**exactly** `{− implementation record, + attestation}`"*.
+> Measured against the rebased tree the delta is **three** elements, the third being the Better
+> Stack waiver, which is present in both copies **on `origin/main`** and which this PR's diff does
+> not touch. The certification survives because the failure mode condition 2 exists to catch —
+> a rebase dropping the atomic commit, leaving the register citing an attestation that does not
+> exist — is still caught: the pair it names is still the pair this change moves, and both halves
+> are verified present by membership. What the wording failed to anticipate is a **concurrent,
+> orthogonal addition from main**. The corrected scoping, which the next such instrument should be
+> drafted with from the start: **the delta attributable to this change is exactly that pair; the
+> set as a whole may legitimately move elsewhere, and a certification over a shared file must be
+> scoped to its own act rather than to the file's total contents.**
+>
+> **Every remaining `eight` / `waived=8` in this document is left verbatim as a dated measurement
+> or a signed verdict.** That is: §Method's *"Measured state at the time of signing"* and its
+> *"Executed 2026-09-04"* paragraph; **V7** (*"the eight waivers"*) and **V8** (*"exactly eight
+> entries … 8/8"*), whose envelope is the eight waivers as at 2026-09-04 and which never reached
+> the Better Stack waiver — that one is attested in the 2026-09-06 review; §B1's *"exactly eight
+> entries and none is that path"* and *"an eight-entry array"*, whose operative claims (**none is
+> that path**; `origin/main` carries five index rows) are re-verified true; and the
+> `rulings_of_record` / Annex A.4 *"5 indexed / 8 waived"*, whose operative content — **not** 4
+> indexed / 3 waived — is unchanged. Updating §Method's fenced line in particular would be a
+> mistake of substance, not only of discipline: this section's whole argument is that the line was
+> **byte-identical before and after the swap** and therefore certifies nothing. Rewriting it to
+> track reality would make it look like evidence, which is exactly what this document proves it
+> is not.
+>
+> **One further site, recorded rather than repaired.** §Corrections applied under this attestation,
+> row 2, quotes the register's §Excluded records preamble as *"All **eight** rows below"*. **No such
+> string exists in the register** — it read *All **nine** rows below* at every commit of this branch
+> and reads *All **ten** rows below* after the 2026-09-06 change. That is the **N1 defect class this
+> document named**, recurring inside the row that names it. It is recorded here, with the live
+> string quoted so a reader has something to diff against, for the same reason N1 was recorded
+> rather than tidied.
+>
+> **Also recorded: `attested_commit_range: origin/main...HEAD` is a symbolic range**, and its
+> meaning changed when `origin/main` advanced. It is corroborative rather than load-bearing — the
+> certification is on membership — and the merge-base is recoverable from the branch. The drafting
+> rule it yields is the same one condition 2 yields: **pin a commit SHA, not a ref another party
+> can move.**
+>
+> **Unchanged by this marker:** every per-artifact verdict, every finding N1–N6, the carve-outs, and
+> the **DISCHARGED** disposition. And `status: draft-requires-counsel-review` on the register stays.
+
 ## Per-artifact verdicts
 
 Each verdict states whether the artifact **represents** what it claims to represent. None of them

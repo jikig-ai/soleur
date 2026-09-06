@@ -136,7 +136,7 @@ These files match the CI guard's determination-shaped pattern under
 nothing is silently dropped.
 
 **Two dispositions, and they are not the same claim — and as of 2026-09-04 only one of them is
-live.** All **nine** rows below are *assessed and outside* the inclusion predicate. An earlier
+live.** All **ten** rows below are *assessed and outside* the inclusion predicate. An earlier
 revision of this paragraph carried a second disposition, **undetermined**, for two Sentry audits
 surfaced when the producer pattern was widened on 2026-09-03. Both were ruled on 2026-09-03 in
 §Rulings on the two waivers recorded as pending, and attested 2026-09-04 at
@@ -158,6 +158,7 @@ as the standing rule for the next row. The machine-readable waiver list lives in
 | `knowledge-base/legal/audits/2026-09-counsel-review-7717.md` | Not a determination: the **counsel review of this register**, added 2026-09-03 under the ship Phase 5.5 gate. It quotes Art. 4(12) and Art. 33(5) throughout in order to rule on the predicate, and so matches the producer pattern, but it assesses no fact pattern and records no controller determination. Every future counsel review of this register will need the same waiver — that is a known cost of scoping the producer to `audits/**`, not a defect (#7717) |
 | `knowledge-base/legal/audits/2026-09-counsel-review-7625.md` | Not a determination: the **counsel review for the Art. 30 PA-7 amendment** (#7625), added 2026-09-04 under the ship Phase 5.5 gate. It cites Art. 4(12) only to record the *negative* — that an Art. 30(1) record-keeping incompleteness is not a personal-data breach and triggers no Art. 33/34 duty — and assesses no fact pattern: nothing was destroyed, lost, altered or disclosed. Same disposition as the #7440 row above: assessed and outside the inclusion predicate (#7717) |
 | `knowledge-base/legal/audits/2026-09-03-clo-review-7622-pa7-r2-evidence-layer.md` | Not a determination: a **retrospective record**, written 2026-09-03, of the 2026-08-20 CLO review of PR #7622. It matches the producer because it transcribes that review's §(d) finding, which cites Art. 4(12) in order to conclude the omission was **not** a breach — Cloudflare was contractually covered throughout the omission window, so what was incomplete was the Art. 30 record of a lawfully-safeguarded transfer, not the safeguard. The citation is quoted history, not a determination made here (#7717) |
+| `knowledge-base/legal/audits/2026-09-counsel-review-7791.md` | Not a determination: the **counsel review of the CLO attestation of this register** (#7791 / PR #7838), signed 2026-09-06 under the ship Phase 5.5 gate. It quotes Art. 4(12) and Art. 33(5) in order to rule on the attestation, on the re-issued 2026-09-03 review and on the deletion of the superseded implementation record, and so matches the producer pattern, but it assesses no fact pattern and records no controller determination of its own. Same disposition as the `audits/2026-09-counsel-review-7717.md` and `audits/2026-09-03-clo-attestation-7717-art-33-5-register.md` rows above; every future review or attestation of this register needs the same waiver — a known cost of scoping the producer to `audits/**`, not a defect (#7791, #7717) |
 | `knowledge-base/legal/audits/2026-09-04-betterstack-source-split-7772.md` | Not a determination, and it matches the producer pattern only by **ruling one out**: the CLO ruling on the #7772 Better Stack Logs source split states in terms that no Art. 33/34 assessment arises. The split is a re-partitioning of one processor's storage — same recipient (Better Stack s.r.o.), same team `520508`, same cluster — and **no data has flowed to the new source**, because the `soleur-git-data` server has never been provisioned. A prospective PA-8 amendment with no fact pattern and no event: nothing was destroyed, lost, altered, disclosed or accessed. Same disposition and same reasoning as the `2026-08-counsel-review-7440.md` row above. Assessed and outside the inclusion predicate — not undetermined. Citing #7772. |
 
 ## Register maintenance
@@ -381,6 +382,41 @@ incomplete against its own stated predicate, and this paragraph is the record of
 > counter-example inside the gate's producer scope. The three limits recorded at §What this review
 > could not resolve are undisturbed, and `status: draft-requires-counsel-review` **stays** —
 > external counsel promotes it, not this attestation.
+
+<!-- -->
+> **Corrected and re-measured 2026-09-06 (#7791, PR #7838) — counsel review
+> `knowledge-base/legal/audits/2026-09-counsel-review-7791.md`.** Three things, and the first is
+> substantive.
+>
+> **(1) The marker immediately above is wrong on one clause, and two sibling instruments already
+> say so.** It closes *"The three limits recorded at §What this review could not resolve are
+> undisturbed."* They are not three. **Limits 2 and 3 are undisturbed; limit 1 — whether
+> `audits/sentry-migration-audit-2026-05-15.md` warrants its own row — is RESOLVED**, in this
+> register's favour, by the same act that marker records: the file is the 2026-05-15 row of §Index
+> of determinations. Both the 2026-09-03 counsel review (§Discharge on re-issue) and the 2026-09-04
+> attestation (§What this attestation does not do) state the corrected position and both note that
+> saying all three were undisturbed was an error. This copy did not get that correction. Recorded
+> here rather than edited, because the paragraph above is a dated 2026-09-04 annotation. **Nothing
+> about the register's completeness moves**: the marker claimed *less* than the register is
+> entitled to, not more.
+>
+> **(2) The guard's figures moved under this register, and the markers above are dated
+> measurements, not live status.** After a rebase onto `origin/main`, PR #7805 independently added
+> a ninth waiver — `audits/2026-09-04-betterstack-source-split-7772.md` — to both copies of the
+> waiver set, and the counsel review named above adds a tenth for itself. So the 2026-09-04 marker
+> in §Counsel-review corrections reading *"the table now carries **eight** rows"* and quoting
+> `produced=12 waived=8`, and its neighbour narrating *"the seventh and eighth waiver rows"*, are
+> **left verbatim as records of the tree they measured**. The live figures are the ones in this
+> section's own scaffolding: **§Excluded records carries ten rows**, the `NOT_TRANSCRIBED` array
+> carries the identical ten paths, and the preamble was corrected in place from *nine* to *ten*
+> in this change — the one in-place edit here, permitted because a count in living scaffolding is a
+> summary, not an instrument, and recorded in this sentence so it is not silent.
+> **Measured 2026-09-06:** `bash scripts/lint-legal-registers.sh` → exit 0, `7 assertion(s),
+> 0 failed (registers=4 rows=5 produced=14 waived=10 waiver-parity=ok)`.
+>
+> **(3) `status: draft-requires-counsel-review` at line 6 is untouched and stays**, byte-identical
+> to `origin/main`. The 2026-09-06 review's disposition is DISCHARGED, and a DISCHARGED internal
+> review does not promote that field either. External counsel promotes it.
 
 ---
 
