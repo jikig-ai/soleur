@@ -414,8 +414,19 @@ any boot, and it is a separate fact:
 - Between `2026-09-03 12:18:10Z` and the filing of #7855 the warehouse stored **no row from any
   producer**, while every 2xx-based signal in the repo continued to report healthy (#7811).
 - The git-data source (2734275) was created at `2026-09-03T21:07:19Z` — about nine hours **after**
-  the last row stored anywhere in the account — so it has never had a single opportunity to store
-  a row into a working warehouse. Its table's absence needs no git-data-specific explanation.
+  the last row stored anywhere in the account — so at the time of filing it had never had a single
+  opportunity to store a row into a working warehouse.
+
+> **Superseded 2026-09-06 (#7855):** the sentence that followed here read *"its table's absence
+> needs no git-data-specific explanation."* **That is now false, and it was measured false rather
+> than argued.** By 2026-09-06 the warehouse had resumed storing (#7811 closed; the control source
+> current to the second), and a round trip run against source `2734275` at `15:04Z` was
+> acknowledged with a 2xx and **still stored nothing**: the marker was not retrievable after 349 s
+> — 20x the ADR-172 floor — and `remote(t520508_soleur_git_data_prd_logs)` still answered
+> `CLUSTER_DOESNT_EXIST` afterwards. Better Stack creates that table on the first *stored* row, so
+> its continued absence is independent confirmation, not an inference from the probe's own verdict.
+> The absence therefore **does** need a source-specific explanation, and the account-wide outage
+> was a coincident second cause rather than the whole story. See the ADR-192 measurement addendum.
 
 The claim is therefore narrowed to what the emitter verifies: **eight of the nine stages POST to
 the second channel and observe a 2xx.** Establishing that they are queryable requires a readback,

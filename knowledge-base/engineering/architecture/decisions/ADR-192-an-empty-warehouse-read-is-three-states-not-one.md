@@ -324,6 +324,36 @@ ingest-probe path a table-exists-but-empty source reaches today. What it removes
 single-tenant-source trap the capture documents at length — an anchor that a perfect first
 rehearsal could never satisfy.
 
+### Measured 2026-09-06: the vendor acknowledged a write and stored nothing
+
+The round-trip probe was run against production once before merge, deliberately, because the
+suite stubs `curl` and a stub cannot observe what the vendor validates. Conditions at
+`2026-09-06T15:04Z`: the account-wide outage was over (#7811 closed) and the control source
+`t520508_soleur_inngest_vector_prd_3_logs` was current to the second.
+
+| leg | result |
+|---|---|
+| POST to `s2734275.eu-central-1a.betterstackdata.com` | `2xx` — acknowledged |
+| readback of the marker, polled 349 s (20x the ADR-172 floor) | never retrievable |
+| control source, same window | storing normally |
+| `remote(t520508_soleur_git_data_prd_logs)` afterwards | still `CLUSTER_DOESNT_EXIST` |
+
+Verdict `ROUNDTRIP_NOT_STORED`. **This settles the open question in #7855**, which could not
+distinguish two hypotheses: (a) an ingest→query latency longer than the capture's polling window,
+or (b) writes accepted but not stored. It is (b), and it is **source-specific** — the account was
+storing another producer's rows throughout.
+
+The last row is the independent confirmation and does not rest on the probe's own verdict: Better
+Stack creates the ClickHouse table on the first **stored** row, so a table that still does not
+exist after an acknowledged write is direct evidence that no row was stored.
+
+Two consequences for this ADR. First, the *"the first successful round trip creates the table
+permanently"* consequence recorded above **has not yet occurred** — the round trip was not
+successful, so the table was not created and the rung-2 capture's observable states are unchanged
+for now. Second, and more usefully: an instrument that reports `INGEST_ACKNOWLEDGED` on this source
+is reporting a 2xx from an endpoint that demonstrably discards the row. That is exactly the reading
+this amendment narrows the token to, and it is no longer hypothetical.
+
 ## Related
 
 - `knowledge-base/engineering/operations/post-mortems/betterstack-quota-near-miss-postmortem.md`
