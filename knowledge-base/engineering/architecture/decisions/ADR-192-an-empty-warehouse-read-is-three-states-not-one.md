@@ -238,6 +238,92 @@ match a known phrase?" — and none answered "is the evidence store still accept
 An absence of evidence is only evidence of absence once you have shown the channel could have
 carried it. That is the invariant, and it is why the positive control exists at all.
 
+## Amendment — 2026-09-04 (#7855): a 2xx is not storage, and the composed reading
+
+No new ordinal is claimed; this amends ADR-192 in place, per the convention ADR-096 states.
+
+### What the acceptance table above does NOT prove
+
+The dated table in *Acceptance evidence* records `INGEST_ACCEPTING http=202` as the restored-state
+reading on 2026-08-16. That cell is left exactly as measured — it is what the probe printed, and
+editing a dated record to match a later understanding destroys the evidence. What has changed is
+the reading of it. **A 2xx from the ingest endpoint establishes reachability and credential
+validity. It does not establish that any row was stored**, and the table's right-hand column was
+only ever evidence of the former.
+
+That distinction was not academic. Between `2026-09-03 12:18:10Z` and the filing of #7855 the
+warehouse stored no row from any producer, while `betterstack-ingest-probe.sh` continued to print
+`INGEST_ACCEPTING http=202` on every run — a token whose name asserts the one thing that was
+false, printed verbatim inside an issue titled *"Better Stack is accepting no writes"* (#7811).
+The 2xx arm remains the one arm of that probe never measured against a dark-then-restored
+production window, so its name has been narrowed to what it can observe:
+**`INGEST_ACKNOWLEDGED`**.
+
+### I-1 is composed by the caller, not widened
+
+`bs_absence_classify` answers about **the warehouse**: it takes no arguments, reads
+`$BS_CONTROL_WINDOW`, and returns `LIVE` / `INGEST_DARK` / `TRANSPORT_FAIL`. A caller that also
+needs to know about **one target source** composes the product
+`(target_read_rc != 0) x bs_absence_classify()` rather than asking for a fourth token.
+
+This is a decision, not an omission. A fourth state would require an arity change to a shared
+library whose only other production consumer, `scripts/zot-restart-loop-alarm.sh`, branches on
+the token as a **string** at two sites — one `if/if` with no `else`, one `case` with no `*)` arm
+— so an unrecognised token would fall through both into the live-channel path. Composition costs
+one arm of one caller and touches that alarm not at all.
+
+`scripts/followthroughs/git-data-rung2-evidence-capture.sh` is the first such caller. **This
+reverses a decision recorded in that script:** its own comment argued that distinguishing
+`CLUSTER_DOESNT_EXIST` from a dark warehouse "costs a vendor-error-string match, and a string
+match on a vendor 500 is exactly the kind of guard that rots silently". That reasoning was sound
+and its conclusion was still wrong — because the discriminator is not the error string at all.
+It is a **control read against a different source**, with the vendor codes carried only as the
+reason. The hot and archive arms in fact fail with *different* codes (701 `CLUSTER_DOESNT_EXIST`
+and 669 `NAMED_COLLECTION_DOESNT_EXIST`, both measured 2026-09-04), so a classifier keyed on
+either string would have been half a classifier — which is the rot the original comment
+predicted, arriving by the route it did not consider.
+
+### The non-writing rule is narrowed, not lifted
+
+The rule stated above — *"a probe that wrote its own marker would satisfy that control forever
+and convert a two-day outage into a permanent blind spot"* — stands, and
+`betterstack-ingest-probe.sh` still posts `--data-raw '[]'` and nothing else.
+
+It is narrowed to what it actually protects: **no probe may write a row that can satisfy a
+positive control which gates a decision.** A round-trip probe is admissible when it cannot, and
+`scripts/followthroughs/betterstack-roundtrip-latency-7855.sh` is the first one. It is bounded
+two ways, both asserted by its suite:
+
+1. **The marker carries no `host_name` key.** Both controls in this repo that are satisfied by a
+   row's mere presence are scoped by `host_name` — the rung-2 capture's `ANCHOR_SQL`
+   (`host_name != '' AND host_name != '<this host>'`) and `betterstack-assert-absence.sh`
+   (`--host`). `JSONExtractString(raw,'host_name')` returns the empty string for an absent key,
+   which both predicates exclude. **The guard asserts the field, not the source id**, because the
+   field is the property.
+2. **It refuses source 2457081 by name.** That source's any-row liveness is precisely what the
+   rung-2 capture now reads as its control, so a marker landing there would manufacture the
+   answer the capture consults it for. This is the I-2 blind spot, at the source that gates a
+   production host's birth.
+
+This is also an AP-024 carve-out (*a verification surface does not actuate*), claimed explicitly
+rather than by silence: the probe performs the write it judges, because the property under test
+is a round trip and no passive read can establish it.
+
+### Consequence: the round trip creates a permanent table
+
+Better Stack creates the ClickHouse table lazily on the first **stored** row. The git-data source
+(2734275) has never stored one, which is why reads against
+`t520508_soleur_git_data_prd_logs` answer HTTP 500 `CLUSTER_DOESNT_EXIST` rather than returning an
+empty result. The first successful round trip against that source therefore **creates the table
+permanently**, and the rung-2 capture's target read moves from `rc=22` to `rc=0` with zero rows.
+
+That is a deliberate and one-way change to the capture's observable states, recorded here because
+nothing else would record it. It does not weaken the capture: `ANCHOR_SQL` excludes rows with an
+empty `host_name`, so the marker cannot satisfy the anchor, and control therefore reaches the same
+ingest-probe path a table-exists-but-empty source reaches today. What it removes is the
+single-tenant-source trap the capture documents at length — an anchor that a perfect first
+rehearsal could never satisfy.
+
 ## Related
 
 - `knowledge-base/engineering/operations/post-mortems/betterstack-quota-near-miss-postmortem.md`
