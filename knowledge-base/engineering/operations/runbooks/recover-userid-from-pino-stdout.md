@@ -305,7 +305,7 @@ journald` its retention is journald's `SystemMaxUse`/`SystemKeepFree`, shared
 with every other unit on the host. §(f)'s *disposition* — `NOT RECORDED`, on the
 ground that a capacity-bounded buffer has no envisaged time limit — survives the
 correction, because journald is also capacity-bounded. The wrong mechanism is a
-register edit, out of scope for a runbook PR.
+register edit, out of scope for a runbook PR, and is tracked at **#6474**.
 
 ### Post-measurement: the register is already resolved
 
