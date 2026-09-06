@@ -165,7 +165,29 @@ CANONICAL_REGEX='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/
 
 matched=()
 examined=0
+# DEDUPE BY PATH. lefthook passes a path once PER MATCHING GLOB, not once per
+# staged file, and the `gdpr-gate-advisory` stanza carries overlapping globs by
+# construction: in gobwas a single `*` CROSSES `/`, so
+# `apps/web-platform/lib/auth/*.ts` already matches a nested file that
+# `apps/web-platform/lib/auth/**/*.ts` also matches, and bare `*.sql` already
+# matches `apps/web-platform/supabase/migrations/*.sql`.
+#
+# Measured against real lefthook 2 on the real stanza's shape: three staged
+# files — one SQL migration, one nested auth module, one nested API route —
+# arrive as SIX arguments. The two most common regulated shapes in this repo
+# are therefore ALWAYS doubled, so the un-deduped line told a customer who
+# staged one migration that two paths were examined. That is the wrong number
+# on the one artifact this change exists to produce.
+#
+# Deduping HERE rather than by trimming the glob list is deliberate: the
+# script must report what it examined whatever it is handed, and a future
+# overlapping glob must not be able to re-break the count. `seen` is keyed on
+# the literal argument, so a genuine repeat on one command line collapses too
+# — which is correct, it is the same file.
+declare -A _gdpr_seen=()
 for f in "$@"; do
+  [[ -n "${_gdpr_seen[$f]+x}" ]] && continue
+  _gdpr_seen["$f"]=1
   examined=$((examined + 1))
   if [[ "$f" =~ $CANONICAL_REGEX ]]; then
     matched+=("$f")

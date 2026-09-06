@@ -191,6 +191,21 @@ cmd_cron_run_stale() {
   # and an Inngest-aware liveness source is a different change in a different subsystem.
   # Tracked separately. The reference is corrected rather than left silently false so
   # the next reader is not hunting a workflow that does not exist.
+  # COST NOTE (#7710 review, measured on a dev workstation, 15 runs each, one
+  # regulated path staged): with GH_TOKEN set this probe costs p50 528ms / p95
+  # 649ms against p50 227ms / p95 271ms unset — ~+300ms on every matching
+  # `git commit`, with the `timeout 5s` above as the ceiling, for an answer the
+  # comment above proves is always 999.
+  #
+  # A short-circuit to 999 was written and REVERTED: it reds two suites that
+  # encode this function's contract (`notice-frontmatter` TS "cron-run-stale
+  # prints exact days (99) for fixture timestamp", and `gdpr-gate-self-test`
+  # Case B, which asserts the operator-attested banner is ABSENT when the probe
+  # resolves), and it would bake today's environment into a tested function
+  # while permanently disabling #3535's anti-backdating cross-check rather than
+  # leaving it incidentally inert. The cost belongs to the tracked
+  # Inngest-aware-liveness change, which repoints this probe rather than
+  # hard-coding its current answer.
   local token raw ts cron_epoch today_epoch days
   token="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
   [[ -n "$token" ]] || { echo 999; return 0; }

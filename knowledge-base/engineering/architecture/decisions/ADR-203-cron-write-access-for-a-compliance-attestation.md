@@ -21,10 +21,34 @@ gate's vendored detection corpus was last compared against upstream. The gdpr-ga
 reads it on every invocation and prints a staleness banner past 30 days and a
 `POSTURE_FAIL:` line past 90.
 
-The field had no writer. The `sed` that advanced it lived in a GitHub Actions workflow
-deleted by #4483, and the Inngest replacement never reimplemented it while continuing to
-ship a pull-request-body sentence claiming it did. `git log -S 'last-verified'` over the
-NOTICE returns exactly one commit — the one that introduced the field.
+The field never had a writer **on the clean path**, and it is worth being exact about that,
+because the obvious account is wrong.
+
+`git log -S 'last-verified'` over the NOTICE returns exactly one commit — `10670383f`
+(#3521), the one that introduced the field. That commit typed `last-verified: 2026-05-10`
+by hand, a date one day *older* than the commit itself, and shipped the drift workflow in
+the same change. That workflow did contain a `sed -i` advancing the field — but it sat
+**177 lines past an `exit 0`** that fires whenever no drift is detected:
+
+```yaml
+if [[ "$DRIFT_DETECTED" -eq 0 && -z "$DRIFT_FLAGS" ]]; then
+  echo "No drift detected. Exiting cleanly."
+  exit 0
+fi
+```
+
+The `sed` was reachable only after `git checkout -b`, on the drift-detected arm. The corpus
+never drifted, so it never ran — and `gh pr list --state all --search head:ci/vendor-drift`
+returns **zero** PRs for that prefix and for its successor `ci/content-vendor-drift-`. The
+field was written by hand once and never by a machine, before or after the migration.
+
+So #4483 deleted a writer that had never fired and could not have fired on the arm that
+mattered. It is not the cause; `last-verified` would read `2026-05-10` today had #4483 never
+happened. The Inngest replacement did carry the defect forward — it continued to ship a
+pull-request-body sentence claiming the field was bumped at PR-creation time — but the gap it
+inherited was a gap that had always been there.
+
+This ADR therefore records a **new capability**, not a restoration.
 
 The consequence was not a stale corpus. It was a stale *record* of a corpus that was in
 fact verified clean every week: re-measured on 2026-09-04, 8 of 8 registered files were
@@ -114,7 +138,8 @@ not less. It also treats a missing writer as a threshold-calibration problem.
 the option that looks most attractive from outside. An identity check cannot see calendar
 rot, and it passes *by construction* on the no-drift arm — which is the arm that was
 failing here. The date-based threshold is the right instrument for the question it asks;
-it was lying because its writer had been deleted.
+it was lying because it never had a clean-path writer at all — see § *Context* for why "the
+writer was deleted" is the wrong account.
 
 > An earlier revision attributed that rejection to ADR-121 and ADR-186, claiming each
 > "already places that substitution in a rejected-alternatives table". **That was false** —
@@ -205,12 +230,22 @@ These are recorded as live gaps. None is claimed to be fixed by this decision.
 - `last-verified` becomes a machine-written field. Its value is now evidence of a specific
   comparison rather than an operator's recollection, which is what makes it usable as
   Art. 5(2) accountability evidence.
-- The Sentry check-in for `scheduled-content-vendor-drift` becomes conditional: a
-  verified-clean run that fails to LAND the advance posts non-OK. It tracks the MERGE, not
-  the PR — `safeCommitAndPr`'s direct path falls back to arming auto-merge and still
-  reports `status: "committed"`, so the result carries an explicit `merged` flag and the
-  heartbeat keys on that. Keying on the status would have flipped the monitor green the
-  moment the PR opened, before anything reached `main`.
+- The Sentry check-in for `scheduled-content-vendor-drift` becomes conditional, keyed on
+  the **observed age of `last-verified` on the default branch** — the artifact — and never
+  on what this particular run did. Two revisions of that predicate were wrong before this
+  one, in opposite directions, and both are recorded here because the correct form is not
+  the obvious one:
+  - Keying on a `merged` flag pages on the HEALTHY path. Measured against three sibling
+    `mergeMode: "direct"` cron PRs (#4083 / #3766 / #3468): each armed auto-merge ~6 s
+    after creation and merged 54–69 s later, i.e. after the run had ended. A merge-keyed
+    monitor alarms every week and is muted within two cycles — which is the condition that
+    let this defect run 117 days.
+  - Short-circuiting the drift arm to healthy ("drift has its own routes") re-arms the
+    same defect one layer up. Drift is filed once and the issue-open step dedups on it
+    every week after, so the field ages past 30 and then 90 days behind a green monitor.
+  The age therefore binds on **every** path, and the drift arm additionally requires that
+  the run produced an artifact (`route !== "none"` — the `classifyRc === 0` path detects
+  drift and produces neither an issue nor a PR).
 - The 30-day banner becomes a genuine early warning instead of a standing condition. If it
   fires after this lands, the writer has stopped — a real signal for the first time. That
   conclusion depends on an arithmetic worth stating rather than leaving in a constant:

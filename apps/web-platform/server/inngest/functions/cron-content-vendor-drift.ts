@@ -91,6 +91,32 @@ export const SKILL_PREFIX = "plugins/soleur/skills/gdpr-gate";
  */
 export const ATTEST_BRANCH_PREFIX = "ci/vendor-attest";
 
+/**
+ * Cap on the lines emitted per drifted file into the classifier's stdin.
+ * The corpus is a handful of small markdown rule files; the cap exists so a
+ * pathological upstream cannot hand this cron an unbounded stdin, not because
+ * any real file approaches it.
+ */
+export const MAX_DIFF_LINES_PER_FILE = 4000;
+
+/**
+ * Decode the body of a GitHub `contents` response, or null when it does not
+ * carry one (a directory, a symlink, a submodule, or a file above the API's
+ * inline-content ceiling). Callers must treat null as "I could not read it",
+ * never as "it is empty" — an empty diff routes to the least-guarded path.
+ */
+export function decodeContentsBody(contents: unknown): string | null {
+  const c = contents as { content?: string; encoding?: string } | null;
+  if (!c || typeof c.content !== "string" || c.encoding !== "base64") {
+    return null;
+  }
+  try {
+    return Buffer.from(c.content, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
 /** Drift labels mapped from classifier categories. */
 const CATEGORY_LABELS: Record<string, string[]> = {
   security: ["vendor/pin-drift", "compliance/critical"],
@@ -261,14 +287,38 @@ export function heartbeatOk(
   measurementFailed: boolean,
   attestationEligible: boolean,
   observedAgeDays: number | null,
+  route: "pr" | "issue" | "none",
 ): boolean {
   // "I could not measure" is never healthy — it has no other route.
   if (measurementFailed) return false;
-  // Drift found: routed to an issue or a re-vendor PR. Working as intended.
-  if (!attestationEligible) return true;
-  // Eligible to attest but the field we attest could not be read.
+
+  // THE AGE GATE IS UNCONDITIONAL, AND THAT ORDERING IS THE FIX.
+  //
+  // Two revisions of this function short-circuited `return true` on the
+  // ineligible (drift-found) arm BEFORE reaching the age, on the reasoning
+  // that drift is "routed to an issue — working as intended". Both were
+  // wrong, and wrong in #7710's own shape:
+  //
+  //   Week 1: one file drifts, an issue is opened, `last-verified` freezes.
+  //   Weeks 2..N: the issue-open step dedups on an open issue with the same
+  //   title, so nothing new is filed and the totals are identical every run.
+  //   The field ages past 30 (customer banner) and then past 90
+  //   (`POSTURE_FAIL`) while this monitor reports OK every single week.
+  //
+  // A corpus stale for 90 days because its drift is unresolved is not a
+  // healthy control, whatever the run did. The artifact is the subject, so
+  // the artifact's age binds on every path — the caller now reads it
+  // unconditionally rather than only when it is about to refresh it.
   if (observedAgeDays === null) return false;
-  return observedAgeDays < STALENESS_WARN_DAYS;
+  if (observedAgeDays >= STALENESS_WARN_DAYS) return false;
+
+  // Age is fine. On the drift arm, additionally require that the run actually
+  // produced an artifact. `route`, not `attestationEligible`: on the
+  // `classifyRc === 0` path — drift detected, classifier declines to
+  // categorise — this handler returns `route: "none"`, so there is real
+  // drift, no issue, no PR, and a measurement that SUCCEEDED. Keyed on
+  // eligibility alone that run reads healthy.
+  return attestationEligible || route !== "none";
 }
 
 // =============================================================================
@@ -603,6 +653,7 @@ export async function cronContentVendorDriftHandler({
       //
       // A fetch that did not answer is ERROR, never SAME.
       let filesExamined = 0;
+      const examinedPaths = new Set<string>();
       let filesSame = 0;
       let filesDrifted = 0;
       let filesError = 0;
@@ -617,6 +668,25 @@ export async function cronContentVendorDriftHandler({
           continue;
         }
 
+        // DISTINCT paths, not records. A duplicated `upstream-path` (the
+        // ordinary copy-paste slip in a re-vendor PR) would otherwise let
+        // eight records compare seven files twice-over and satisfy
+        // `filesExamined === registryCount` with one rule file never fetched
+        // — the same 5-of-8 shape the completeness conjunct exists to catch,
+        // one level down. The Set lives on the object the predicate reads, so
+        // it cannot drift away from the conjunct that consumes it.
+        if (examinedPaths.has(upstreamPath)) {
+          filesError += 1;
+          logger.warn(
+            {
+              fn: "cron-content-vendor-drift",
+              path: upstreamPath,
+            },
+            "Duplicate upstream-path in the NOTICE registry — scored ERROR; the registry does not describe the corpus it claims to",
+          );
+          continue;
+        }
+        examinedPaths.add(upstreamPath);
         filesExamined += 1;
 
         try {
@@ -660,7 +730,43 @@ export async function cronContentVendorDriftHandler({
           // the SECOND `drift: "none"` site, reached AFTER drift was
           // detected. Categorising drift is the classifier's whole job and it
           // was being asked to categorise nothing.
-          aggDiffParts.push(`${upstreamPath}\t${oldSha}\t${currentSha}`);
+          //
+          // IT MUST BE A UNIFIED DIFF. `vendor-drift-classify.sh` says so in
+          // its header, and every category check is anchored accordingly:
+          // license on `^(\+\+\+|---) [ab]/…LICENSE`, security on `^\+`. A
+          // first revision of this fix pushed `path\told\tnew`, which begins
+          // with a path and therefore matches NEITHER — so exits 10 (security)
+          // and 11 (license) became unreachable and every drift fell through
+          // to check 5's bare non-empty test, i.e. exit 13 → the auto-PR route
+          // with `mergeMode: "direct"`. That route is restricted to exit 13
+          // precisely to keep attacker-controlled upstream bytes from landing
+          // via the weekly bot, so the shape of the string is load-bearing
+          // security, not formatting.
+          //
+          // Every line of the drifted upstream file is emitted as ADDED. That
+          // is deliberate and conservative: a minimal diff can only shrink the
+          // text the security regex sees, and the failure direction we cannot
+          // afford is under-triggering. Over-triggering costs a human reading
+          // an issue instead of a bot opening a PR.
+          const upstreamBody = decodeContentsBody(contents);
+          if (upstreamBody === null) {
+            // We know it drifted but cannot show the classifier what changed.
+            // Emitting only headers would let check 5 route it to the
+            // auto-PR path on the strength of a filename. Force the guarded
+            // route with an explicit marker the security regex matches.
+            aggDiffParts.push(
+              `--- a/${upstreamPath}\n+++ b/${upstreamPath}\n+[CRITICAL] drifted content unreadable — classify conservatively`,
+            );
+          } else {
+            const body = upstreamBody
+              .split("\n")
+              .slice(0, MAX_DIFF_LINES_PER_FILE)
+              .map((l) => `+${l}`)
+              .join("\n");
+            aggDiffParts.push(
+              `--- a/${upstreamPath}\n+++ b/${upstreamPath}\n${body}`,
+            );
+          }
 
           logger.info(
             {
@@ -904,10 +1010,12 @@ export async function cronContentVendorDriftHandler({
           runStartedAt,
           scheduledIssueLabel: SENTRY_MONITOR_SLUG,
           // The sentence claiming the NOTICE freshness field was advanced at
-          // PR-creation time was removed here (#7710). Nothing had done that
-          // since the GHA workflow carrying the `sed` was deleted in #4483, so
-          // this body asserted a bump on every drift PR it opened while the
-          // field sat unchanged. The retired sentence is described rather than
+          // PR-creation time was removed here (#7710). NOTHING HAD EVER DONE
+          // THAT. The GHA workflow deleted in #4483 did carry a `sed` for it,
+          // but 177 lines past an `exit 0` taken on every no-drift run — so it
+          // was reachable only on the drift arm, the corpus never drifted, and
+          // no `ci/vendor-drift-*` PR has ever existed. This body asserted a
+          // bump on every drift PR it opened while the field sat unchanged. The retired sentence is described rather than
           // quoted: the regression guard greps this file for it. `last-verified` is now advanced by the
           // attest-freshness step below, and ONLY on a verified-clean run —
           // which is deliberately not this path, since this path exists
@@ -979,11 +1087,15 @@ export async function cronContentVendorDriftHandler({
     // -- Freshness attestation (#7710) ------------------------------------
     //
     // `last-verified` in NOTICE is what the gdpr-gate hook reads to decide
-    // whether its detection corpus is current. Nothing had advanced it since
-    // the workflow carrying the `sed` was deleted in #4483: `git log -S` over
-    // that field returns exactly one commit, the one that introduced it. The
-    // field therefore aged from 2026-05-10 to 117 days stale while this cron
-    // compared the corpus every week and found it clean the whole time.
+    // whether its detection corpus is current. Nothing had EVER advanced it:
+    // `git log -S` over that field returns exactly one commit, the one that
+    // introduced it, and that commit typed the value by hand — a date one day
+    // older than the commit itself. The workflow deleted in #4483 carried a
+    // `sed` for the field but behind an `exit 0` on the no-drift path, so it
+    // never fired on the arm that mattered. The field therefore aged from
+    // 2026-05-10 to 117 days stale while this cron compared the corpus every
+    // week and found it clean the whole time. This step is a NEW writer, not a
+    // restored one.
     //
     // THE PREDICATE IS THE TOTALS, NEVER `detectResult.drift`. Two of the
     // returns above yield `drift: "none"` and only one of them means "I
@@ -1011,6 +1123,31 @@ export async function cronContentVendorDriftHandler({
     // reports `prNumber`; calling it `commitSha` on the only forensic surface
     // this run has would be the same conflation #7710 is about.
     let attestationPrNumber: string | null = null;
+
+    // READ THE ARTIFACT'S AGE UNCONDITIONALLY.
+    //
+    // This used to happen only inside the `if (attestationEligible)` block,
+    // so on every drift run `observedAgeDays` stayed null and was never read.
+    // That is what let a drift run report healthy indefinitely: the drift is
+    // filed once, the issue-open step dedups on it thereafter, and the field
+    // ages past 30 and then 90 days behind a green monitor. The age is a
+    // local read of the already-cloned NOTICE — it costs nothing and it is
+    // the number the whole control is about, so it is measured on every path.
+    observedAgeDays = await step.run("read-attestation-age", async () => {
+      try {
+        const notice = await readFile(join(repoRoot, NOTICE_FILE_REL), "utf8");
+        const m = notice.match(/^last-verified:[ \t]*(\S+)[ \t]*$/m);
+        if (!m) return null;
+        const age = Math.floor(
+          (Date.parse(`${runStartedAt.slice(0, 10)}T00:00:00Z`) -
+            Date.parse(`${m[1]}T00:00:00Z`)) /
+            86_400_000,
+        );
+        return Number.isFinite(age) && age >= 0 ? age : null;
+      } catch {
+        return null;
+      }
+    });
 
     if (attestationEligible) {
       const attestation = await step.run("attest-freshness", async () => {
@@ -1229,12 +1366,20 @@ export async function cronContentVendorDriftHandler({
           measurementFailed,
           attestationEligible,
           observedAgeDays,
+          detectResult.route,
         ),
       },
       "Vendor-drift attestation summary",
       );
 
-      if (!heartbeatOk(measurementFailed, attestationEligible, observedAgeDays)) {
+      if (
+        !heartbeatOk(
+          measurementFailed,
+          attestationEligible,
+          observedAgeDays,
+          detectResult.route,
+        )
+      ) {
         reportSilentFallback(
           new Error(
             `Vendor-drift run is not healthy (outcome=${attestationOutcome}, age=${observedAgeDays ?? "unreadable"})`,
@@ -1264,6 +1409,7 @@ export async function cronContentVendorDriftHandler({
       measurementFailed,
       attestationEligible,
       observedAgeDays,
+      detectResult.route,
     );
 
     await step.run("sentry-heartbeat", () =>

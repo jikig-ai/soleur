@@ -80,8 +80,11 @@ Note the measurement used **three** states. The comparison this plan builds must
 
 `ADR-196` (a refusal binds to a measured condition, not a declared one) and `ADR-094` (a verification
 clock is cleared by verifying, never by editing the date) decide against bumping the date *as the fix*.
-`ADR-121` and `ADR-186` each place the substitution of an identity check for a freshness clock in a
-rejected-alternatives table, deciding against replacing the threshold. `ADR-192`, `ADR-197` and
+~~`ADR-121` and `ADR-186` each place the substitution of an identity check for a freshness clock in a
+rejected-alternatives table, deciding against replacing the threshold.~~ **Retracted 2026-09-04
+(#7841): false — neither ADR places it in such a table, and the citation was never verified.** The
+substitution is still rejected, on its own merits: an identity check cannot see calendar rot and
+passes by construction on the no-drift arm. `ADR-203` § *Alternatives Considered* holds the account. `ADR-192`, `ADR-197` and
 `ADR-166` supply the requirement that "could not check" never collapse into "bad" — which this plan
 must apply to the comparison it is fixing, not merely cite. `ADR-026` fixes the gate's advisory,
 `exit 0`, no-pass/fail-verdict contract; it collides with `ADR-197` D-2 and that tension is a named
@@ -152,8 +155,11 @@ two, and separately give the path scan an output of its own.
 
 The architecturally novel part, and what `ADR-203` records, is narrower than the rationale: **a weekly
 cron acquires write access to the default branch for a compliance attestation, through a
-self-merging bot pull request, gated on a comparison it performed in the same run.** Everything else
-is a restoration or a citation of decisions `ADR-121`, `ADR-186`, `ADR-094` and `ADR-196` already made.
+self-merging bot pull request, gated on a comparison it performed in the same run.** **Corrected
+2026-09-04 (#7841):** it is a NEW capability, not a "restoration" — the field never had a clean-path
+writer (see the root-cause note below), so there is nothing being restored. And the blanket appeal to
+"decisions `ADR-121`, `ADR-186`, `ADR-094` and `ADR-196` already made" is replaced in `ADR-203` by four
+citations each named for the specific point it carries.
 
 `ADR-203` must record, as named residuals rather than resolved questions: the `ADR-026` /
 `ADR-197` D-2 tension; that `#7255` leaves the anti-backdating half of the trust binding inert, so the

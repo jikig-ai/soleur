@@ -431,41 +431,69 @@ describe("heartbeatOk — Guard 3 row 6", () => {
   // auto-merge 6s after creation and merged 54-69s later, i.e. after the run
   // ended. A merge-keyed heartbeat would have paged on every healthy run.
   it("is healthy when the artifact is inside the banner window", () => {
-    expect(heartbeatOk(false, true, 7)).toBe(true);
-    expect(heartbeatOk(false, true, STALENESS_WARN_DAYS - 1)).toBe(true);
+    expect(heartbeatOk(false, true, 7, "none")).toBe(true);
+    expect(heartbeatOk(false, true, STALENESS_WARN_DAYS - 1, "none")).toBe(
+      true,
+    );
   });
 
   it("is UNHEALTHY once the artifact reaches the banner threshold", () => {
-    expect(heartbeatOk(false, true, STALENESS_WARN_DAYS)).toBe(false);
-    expect(heartbeatOk(false, true, 117)).toBe(false);
+    expect(heartbeatOk(false, true, STALENESS_WARN_DAYS, "none")).toBe(false);
+    expect(heartbeatOk(false, true, 117, "none")).toBe(false);
   });
 
   it("is healthy on the ordinary PR-opened-not-yet-merged path", () => {
     // The write happened, the merge lands seconds later. Age is still fresh
     // because the previous cycle landed; nothing is wrong.
-    expect(heartbeatOk(false, true, 21)).toBe(true);
+    expect(heartbeatOk(false, true, 21, "none")).toBe(true);
   });
 
-  it("is healthy when the run was never eligible — drift has its own routes", () => {
-    expect(heartbeatOk(false, false, null)).toBe(true);
-    expect(heartbeatOk(false, false, 999)).toBe(true);
+  // THE AGE BINDS ON THE DRIFT ARM TOO. Two earlier revisions of this suite
+  // asserted the opposite — `heartbeatOk(false, false, 999) === true`, under
+  // the name "is healthy when the run was never eligible — drift has its own
+  // routes". That enshrined #7710's own defect one layer up: drift is filed
+  // ONCE, the issue-open step dedups on it every week thereafter, and the
+  // corpus ages past the 30-day banner and the 90-day POSTURE_FAIL behind a
+  // green monitor. "It was routed" is not "it is healthy".
+  it("is UNHEALTHY when drift routed but the artifact has gone stale", () => {
+    expect(heartbeatOk(false, false, 999, "issue")).toBe(false);
+    expect(heartbeatOk(false, false, STALENESS_WARN_DAYS, "pr")).toBe(false);
+  });
+
+  it("is healthy when drift routed AND the artifact is still fresh", () => {
+    expect(heartbeatOk(false, false, 7, "issue")).toBe(true);
+    expect(heartbeatOk(false, false, 7, "pr")).toBe(true);
+  });
+
+  // The `classifyRc === 0` path: drift detected, classifier declined to
+  // categorise, so route is "none" — real drift, no issue, no PR. Keyed on
+  // eligibility alone this run reads healthy for up to 30 days.
+  it("is UNHEALTHY when drift produced NO artifact, even at age zero", () => {
+    expect(heartbeatOk(false, false, 0, "none")).toBe(false);
+    expect(heartbeatOk(false, false, 7, "none")).toBe(false);
   });
 
   it("is UNHEALTHY whenever the run could not measure, regardless of age", () => {
-    expect(heartbeatOk(true, true, 0)).toBe(false);
-    expect(heartbeatOk(true, false, 0)).toBe(false);
+    expect(heartbeatOk(true, true, 0, "none")).toBe(false);
+    expect(heartbeatOk(true, false, 0, "issue")).toBe(false);
   });
 
   it("is UNHEALTHY when the field it attests could not be read", () => {
-    expect(heartbeatOk(false, true, null)).toBe(false);
+    expect(heartbeatOk(false, true, null, "none")).toBe(false);
+    // Including on the drift arm, which previously never read it at all.
+    expect(heartbeatOk(false, false, null, "issue")).toBe(false);
   });
 
   // The margin the suppression leaves. One missed run stays inside the
   // window; two do not, which is the intended alarm.
   it("leaves the suppression window inside the banner threshold", () => {
     expect(WRITE_SUPPRESSION_DAYS).toBeLessThan(STALENESS_WARN_DAYS);
-    expect(heartbeatOk(false, true, WRITE_SUPPRESSION_DAYS + 7)).toBe(true);
-    expect(heartbeatOk(false, true, WRITE_SUPPRESSION_DAYS + 14)).toBe(false);
+    expect(heartbeatOk(false, true, WRITE_SUPPRESSION_DAYS + 7, "none")).toBe(
+      true,
+    );
+    expect(heartbeatOk(false, true, WRITE_SUPPRESSION_DAYS + 14, "none")).toBe(
+      false,
+    );
   });
 });
 
@@ -539,7 +567,8 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
 
   it("no longer claims last-verified is bumped at PR-creation time", () => {
     // The drift PR body asserted this on every PR it opened, while nothing had
-    // done it since #4483.
+    // ever done it — the pre-#4483 `sed` sat behind an `exit 0` on the no-drift
+    // path and never fired.
     expect(src).not.toMatch(/last-verified bumped at PR-creation time/);
   });
 
@@ -644,8 +673,32 @@ describe("handler source-shape — the write is totals-gated (#7710)", () => {
     expect(cm).toMatch(/upstreamRepoState/);
   });
 
-  it("populates aggDiffParts — the classifier must receive the diff", () => {
+  // This assertion replaced a bare `toMatch(/aggDiffParts\.push\(/)` that
+  // carried this same NAME and could not witness one word of it: it passed
+  // against a `path\told\tnew` triple that made the classifier's security and
+  // license exits structurally unreachable. The EXIT-CODE behaviour is pinned
+  // in `plugins/soleur/test/vendor-drift-classify.test.sh`, which drives the
+  // real script; this one pins the shape at the emitting end so the two cannot
+  // drift apart.
+  it("emits a unified-diff fragment, not a bare path/sha triple", () => {
     expect(src).toMatch(/aggDiffParts\.push\(/);
+    // The two anchors every classifier category check depends on.
+    expect(src).toMatch(/`--- a\/\$\{upstreamPath\}\\n\+\+\+ b\/\$\{upstreamPath\}/);
+    // Body lines prefixed `+`, which is what the security regex matches on.
+    expect(src).toMatch(/\.map\(\(l\) => `\+\$\{l\}`\)/);
+    // And the superseded shape must be gone.
+    expect(src).not.toMatch(/aggDiffParts\.push\(\s*`\$\{upstreamPath\}\\t/);
+  });
+
+  it("fails an unreadable drifted body CLOSED, onto the guarded route", () => {
+    // Emitting only headers would let check 5 route on a filename alone.
+    expect(src).toMatch(/decodeContentsBody\(contents\)/);
+    expect(src).toMatch(/\[CRITICAL\] drifted content unreadable/);
+  });
+
+  it("counts DISTINCT upstream paths, so a duplicate cannot fake completeness", () => {
+    expect(src).toMatch(/examinedPaths\.has\(upstreamPath\)/);
+    expect(src).toMatch(/examinedPaths\.add\(upstreamPath\)/);
   });
 });
 

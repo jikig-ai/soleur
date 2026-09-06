@@ -24,6 +24,21 @@ PARSER="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh
 LIVE_NOTICE="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/NOTICE"
 FIXTURES_DIR="$SCRIPT_DIR/fixtures/vendor-drift"
 
+# ONE owning trap for every tempfile and tempdir this suite allocates (ADR-129,
+# enforced by `scripts/lint-trap-tempfile-ownership.py`). This suite allocates
+# eleven and registered none: if it died between an allocation and its cleanup —
+# which `set -euo pipefail` makes routine on any failing assertion — the leak
+# survived the run.
+#
+# Registered at each CALL SITE, in the parent shell, and NOT through a helper.
+# A first version wrapped the allocations in `_own() { _TMP_OWNED+=("$1"); ... }`
+# invoked as `$(_own "$(mktemp)")` — command substitution runs the helper in a
+# SUBSHELL, so every append mutated a copy and the parent array stayed empty
+# while the trap read as correct. That linter caught it; the note is kept so the
+# next reader does not reintroduce the tidier form.
+_TMP_OWNED=()
+trap 'rm -rf "${_TMP_OWNED[@]:-}"' EXIT INT TERM
+
 echo "=== notice-frontmatter tests ==="
 echo ""
 
@@ -48,13 +63,40 @@ OUT=$(bash "$PARSER" field last-verified)
 assert_eq "2026-05-10" "$OUT" "field last-verified is correct"
 echo ""
 
-# --- TS4: lifted-files emits 5 path:sha lines ---
+# --- TS4: the emitted registry agrees with the NOTICE body table ---
 # lifted-files emits LOCAL blob SHAs (consumed by lefthook integrity gate);
 # upstream-files emits UPSTREAM blob SHAs (consumed by drift workflow).
-echo "TS4a: lifted-files prints 5 entries in <path>:<local-blob-sha> form"
+#
+# DERIVED FROM THE TABLE, never hardcoded. A literal `5` sat here while the
+# NOTICE body table listed EIGHT, and nothing compared the two for 117 days:
+# the three unlisted files were rejected by the integrity gate as "silent
+# local additions", and the drift cron compared five of eight while reporting
+# a clean corpus. The hardcoded number was green throughout — and it went red
+# only when #7710 corrected the registry, i.e. it fired on the FIX rather than
+# on the defect. The sibling `notice-frontmatter.test.sh` was converted to the
+# table-derived form; this base suite was missed, which is the whole reason to
+# make the oracle the content rather than a number.
+TABLE_COUNT=$(awk '
+  /^## gosprinto\/compliance-skills \(MIT\)/ { in_tbl=1; next }
+  /^## / { in_tbl=0 }
+  in_tbl && /^\| `references\// { n++ }
+  END { print n+0 }
+' "$LIVE_NOTICE")
+
+# Own-dispatch floor: an awk range that stops matching yields 0, and `0 == 0`
+# against an empty registry would read as agreement.
+if (( TABLE_COUNT < 8 )); then
+  echo "  FAIL: NOTICE body table yielded $TABLE_COUNT lifted rows (expected >= 8) — table scrape is broken, not a clean registry"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: NOTICE body table yielded $TABLE_COUNT lifted rows"
+  PASS=$((PASS + 1))
+fi
+
+echo "TS4a: lifted-files entry count equals the NOTICE table's row count"
 OUT=$(bash "$PARSER" lifted-files)
 LINE_COUNT=$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')
-assert_eq "5" "$LINE_COUNT" "lifted-files emits 5 lines"
+assert_eq "$TABLE_COUNT" "$LINE_COUNT" "lifted-files frontmatter entries == NOTICE table rows"
 assert_contains "$OUT" "references/fields.md:68675dd747fcbc74bb84c99eaa14983c9c5a6b24" "fields.md local-sha line present"
 assert_contains "$OUT" "references/leakage-vectors.md:8d1d7fc44183e866e128707c3e91e7b63ce835fd" "leakage-vectors.md local-sha line present"
 assert_contains "$OUT" "references/layers/api-layer.md:802fc866e320bebeecae2f8e53658253853ab5f9" "api-layer.md local-sha line present"
@@ -62,10 +104,10 @@ assert_contains "$OUT" "references/layers/data-in-transit.md:2ce203e9c041c1b1992
 assert_contains "$OUT" "references/layers/data-lifecycle.md:29357a020bfa0e61f91dd529070fe3eb7cd251da" "data-lifecycle.md local-sha line present"
 echo ""
 
-echo "TS4b: upstream-files prints 5 entries in <upstream-path>:<upstream-blob-sha> form"
+echo "TS4b: upstream-files entry count equals the NOTICE table's row count"
 OUT=$(bash "$PARSER" upstream-files)
 LINE_COUNT=$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')
-assert_eq "5" "$LINE_COUNT" "upstream-files emits 5 lines"
+assert_eq "$TABLE_COUNT" "$LINE_COUNT" "upstream-files frontmatter entries == NOTICE table rows"
 assert_contains "$OUT" "pii-detector/patterns/fields.md:c1bb748fe00a53b283efe66ec937fa39437d2efc" "fields.md upstream line present"
 assert_contains "$OUT" "pii-detector/rules/leakage-vectors.md:15a46e529e789930149f4b9bce875bfe5c53e478" "leakage-vectors.md upstream line present"
 assert_contains "$OUT" "pii-detector/layers/api-layer.md:9d3202175c1d0225f60a912c489dbdacf4df491c" "api-layer.md upstream line present"
@@ -87,7 +129,7 @@ echo ""
 
 # --- TS6: missing NOTICE → 999 (stale-immediately fallback) ---
 echo "TS6: missing NOTICE returns 999 from days-stale"
-TMP_MISSING="$(mktemp)"
+TMP_MISSING="$(mktemp)"; _TMP_OWNED+=("$TMP_MISSING")
 rm -f "$TMP_MISSING"  # ensure absent
 OUT=$(NOTICE_FILE="$TMP_MISSING" bash "$PARSER" days-stale)
 assert_eq "999" "$OUT" "days-stale=999 when NOTICE is missing"
@@ -95,7 +137,7 @@ echo ""
 
 # --- TS7: malformed-YAML NOTICE → 999 ---
 echo "TS7: malformed-YAML NOTICE returns 999 from days-stale"
-TMP_MALFORMED="$(mktemp)"
+TMP_MALFORMED="$(mktemp)"; _TMP_OWNED+=("$TMP_MALFORMED")
 cat > "$TMP_MALFORMED" <<'EOF'
 ---
 upstream: github.com/goSprinto/compliance-skills
@@ -117,7 +159,7 @@ echo ""
 
 # --- TS9: missing frontmatter (no opening ---) → 999 ---
 echo "TS9: NOTICE without frontmatter returns 999 from days-stale"
-TMP_NOFM="$(mktemp)"
+TMP_NOFM="$(mktemp)"; _TMP_OWNED+=("$TMP_NOFM")
 cat > "$TMP_NOFM" <<'EOF'
 # NOTICE
 
@@ -130,7 +172,7 @@ echo ""
 
 # --- TS10: parser exit code is 0 even on failure paths (advisory contract) ---
 echo "TS10: parser exits 0 on missing/malformed input (advisory contract preserved)"
-TMP_GONE="$(mktemp)"
+TMP_GONE="$(mktemp)"; _TMP_OWNED+=("$TMP_GONE")
 rm -f "$TMP_GONE"
 set +e
 NOTICE_FILE="$TMP_GONE" bash "$PARSER" days-stale >/dev/null 2>&1
@@ -152,7 +194,7 @@ echo ""
 # have predictable load; enforce strictly there, skip locally.
 if [[ "${CI:-}" == "true" ]]; then
   echo "TS11: p95 < 100ms over 100 invocations of days-stale"
-  TIMINGS_FILE="$(mktemp)"
+  TIMINGS_FILE="$(mktemp)"; _TMP_OWNED+=("$TIMINGS_FILE")
   for _ in $(seq 1 100); do
     # Capture wall-clock ms via /usr/bin/time -f "%e" (seconds with 2 decimal
     # places). Multiply by 1000, round to integer.
@@ -190,7 +232,7 @@ echo ""
 # merge. Relative date + exact equality eliminates clock drift entirely
 # (the test fixture moves with today's date).
 echo "TS-cron-2: cron-run-stale with stubbed gh returns 99 (relative date)"
-STUB_DIR_2="$(mktemp -d)"
+STUB_DIR_2="$(mktemp -d)"; _TMP_OWNED+=("$STUB_DIR_2")
 STUB_TS=$(date -u -d '99 days ago' +%Y-%m-%dT00:00:00Z)
 make_gh_stub "$STUB_DIR_2" "$STUB_TS"
 OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_2:$PATH" bash "$PARSER" cron-run-stale)
@@ -202,7 +244,7 @@ echo ""
 # Matches `gh run list ... --jq '.[0].updatedAt'` on an empty result array.
 # The parser's `// empty` jq filter + strict-ISO regex must both guard this.
 echo "TS-cron-3: cron-run-stale with stub gh emitting 'null' returns 999"
-STUB_DIR_3="$(mktemp -d)"
+STUB_DIR_3="$(mktemp -d)"; _TMP_OWNED+=("$STUB_DIR_3")
 make_gh_stub "$STUB_DIR_3" "null"
 OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_3:$PATH" bash "$PARSER" cron-run-stale)
 assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits 'null'"
@@ -211,7 +253,7 @@ echo ""
 
 # --- TS-cron-4: cron-run-stale with stub gh emitting non-RFC3339 string → 999 ---
 echo "TS-cron-4: cron-run-stale with non-RFC3339 stub output returns 999"
-STUB_DIR_4="$(mktemp -d)"
+STUB_DIR_4="$(mktemp -d)"; _TMP_OWNED+=("$STUB_DIR_4")
 make_gh_stub "$STUB_DIR_4" "2026-02-01"  # date-only, missing T...Z
 OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_4:$PATH" bash "$PARSER" cron-run-stale)
 assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits a date-only string"
@@ -224,7 +266,7 @@ echo ""
 # `jq '.[0].updatedAt // empty'` collapses to empty string. The strict-ISO
 # regex must reject empty input (architecture-strategist finding on #3541).
 echo "TS-cron-empty: cron-run-stale with stub gh emitting empty stdout returns 999"
-STUB_DIR_EMPTY="$(mktemp -d)"
+STUB_DIR_EMPTY="$(mktemp -d)"; _TMP_OWNED+=("$STUB_DIR_EMPTY")
 make_gh_stub "$STUB_DIR_EMPTY" ""
 OUT=$(GH_TOKEN="stub-token" PATH="$STUB_DIR_EMPTY:$PATH" bash "$PARSER" cron-run-stale)
 assert_eq "999" "$OUT" "cron-run-stale=999 when stub gh emits empty stdout (workflow renamed/deleted case)"
@@ -234,7 +276,7 @@ echo ""
 # --- TS-cron-5: cron-run-stale with slow stub gh → 999, bounded by timeout ---
 # Asserts the `timeout 5s` wrapper fires. Wall-clock < 6s (5s + grace).
 echo "TS-cron-5: cron-run-stale with slow stub gh returns 999 within 6s"
-STUB_DIR_5="$(mktemp -d)"
+STUB_DIR_5="$(mktemp -d)"; _TMP_OWNED+=("$STUB_DIR_5")
 make_gh_stub_sleep "$STUB_DIR_5" 10
 SECS=$( { /usr/bin/time -f "%e" \
   bash -c "GH_TOKEN=stub-token PATH=\"$STUB_DIR_5:\$PATH\" bash \"$PARSER\" cron-run-stale" \
@@ -256,7 +298,7 @@ echo ""
 # local load is outside the parser's control.
 if [[ "${CI:-}" == "true" ]]; then
   echo "TS12: p95 < 100ms over 100 invocations of cron-run-stale (no-token path)"
-  TIMINGS_FILE_2="$(mktemp)"
+  TIMINGS_FILE_2="$(mktemp)"; _TMP_OWNED+=("$TIMINGS_FILE_2")
   for _ in $(seq 1 100); do
     SECS=$( { /usr/bin/time -f "%e" \
       bash -c "GH_TOKEN='' GITHUB_TOKEN='' bash \"$PARSER\" cron-run-stale" \

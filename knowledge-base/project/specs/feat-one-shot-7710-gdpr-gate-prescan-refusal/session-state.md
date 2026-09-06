@@ -37,9 +37,13 @@ Four, all resolved by the planning subagent, none blocking:
   deleted. Measured: corpus is current (8 SAME / 0 DRIFTED vs live upstream,
   2026-09-04), so re-vendoring is a no-op; and `last-verified` has never been advanced
   by automation — `git log -S` returns exactly one commit, the one that introduced the
-  field, because its `sed` writer lived in a workflow deleted in #4483 and the Inngest
-  replacement never reimplemented it while still shipping a PR-body sentence claiming
-  it does. Fix = restore the writer, gate it on a three-state comparison, and give the
+  field. CORRECTED 2026-09-04: the earlier account here ("its `sed` writer lived in a
+  workflow deleted in #4483") is FALSE. That `sed` sat 177 lines past an `exit 0` taken on
+  every no-drift run, so it was reachable only on the drift arm; the corpus never drifted,
+  no `ci/vendor-drift-*` PR has ever existed, and the value was typed by hand in the
+  commit that introduced the field. #4483 removed a writer that had never fired. The
+  Inngest replacement carried the gap forward while still shipping a PR-body sentence
+  claiming it does. Fix = restore the writer, gate it on a three-state comparison, and give the
   path scan an output of its own. Replacing the threshold was rejected because an
   identity check cannot see calendar rot and passes by construction on the no-drift
   arm. (CORRECTED 2026-09-04: this line originally attributed that rejection to

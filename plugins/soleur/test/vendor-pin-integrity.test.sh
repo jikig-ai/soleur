@@ -497,19 +497,41 @@ done < <(bash "$PARSER" soleur-authored)
 
 # Own dispatch: both loops are driven by the parser, so an empty registry
 # would run zero iterations and report nothing rather than failing.
+#
+# The failing arm EXITS, it does not tally (ADR-193). Tallying routes this
+# floor through the same counters it exists to backstop, so the block itself
+# still exits 0 — which is precisely what `scripts/guard-vacuity-floor.test.sh`
+# measures, and it named this suite as the one covered file scoring NO_FIRE.
+# A broken registry read is a harness fault, not a test result to be counted.
 if (( LIFTED_CHECKED >= 8 && AUTHORED_CHECKED >= 3 )); then
   echo "  PASS: provenance oracle examined $LIFTED_CHECKED lifted + $AUTHORED_CHECKED authored entries"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL: provenance oracle examined $LIFTED_CHECKED lifted + $AUTHORED_CHECKED authored entries (expected >= 8 and >= 3) — registry read is broken"
-  FAIL=$((FAIL + 1))
+  # The wording is load-bearing, not prose. `guard-vacuity-floor.test.sh`
+  # classifies a firing floor by grepping stderr for a sentinel vocabulary,
+  # WITHOUT `-i` — `anti-vacuity`, `vacuit`, `[FAIL]:`, `assertions ran` are all
+  # matched lowercase. An all-caps "ANTI-VACUITY FLOOR TRIPPED" matches none of
+  # them, so a correctly-firing floor was scored CONSTRUCTION (the guard cannot
+  # tell it from a mutant that crashed). Measured on this exact line.
+  printf '[FAIL]: anti-vacuity floor tripped — provenance oracle examined %d lifted + %d authored entries (expected >= 8 and >= 3); the registry read is broken, this is NOT a pass.\n' \
+    "$LIFTED_CHECKED" "$AUTHORED_CHECKED" >&2
+  exit 1
 fi
 echo ""
 
-# Anti-vacuity floor (Guard 1 harness row i). Without an argument,
+# Anti-vacuity floor (Guard 1 harness row i). Without a floor,
 # print_results greens on `FAIL -eq 0` and nothing on `PASS > 0`, so
 # replacing assert_eq with a stub that always passes reported
 # "Passed: 27 / Failed: 0 / ALL TESTS PASSED" and exit 0 — measured during
 # #7710. A FLOOR, not equality: adding an assertion must not red the suite.
 # Derived from a green run (37 assertions on 2026-09-04).
+#
+# Kept in the `print_results <floor>` form deliberately. A second, directly-
+# reported floor was written here to satisfy `scripts/guard-vacuity-floor.test.sh`
+# and REVERTED: it made this suite floor-bearing under that guard's detector for
+# the first time, which pushed the guard's shrink-only construction ratchet from
+# 15 to 16 — a red on a different arm. The guard's actual finding (a floor that
+# EXITS 0 under neutered machinery) is fixed where it lives, at the
+# provenance-oracle dispatch check above, which now exits 1 directly instead of
+# tallying through FAIL.
 print_results 37
