@@ -460,6 +460,25 @@ jobs:
             echo "The capture wrapper exited \`${rc}\`, which is not one of the three verdicts (0 PASS / 1 FAIL / 2 TRANSIENT) nor the wrapper-failure class. \`64\` is the capture script's own usage error; \`126\`/\`127\` mean \`doppler\` or the script was not executable or not found. **This is a toolchain fault, not a statement about the host.**" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
             echo "**Next:** download the \`git-data-rung2-capture-log\` artifact and read the invocation error. See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q 'DARK FOR EVERY PRODUCER' /tmp/rung2/capture.log 2>/dev/null; then
+            # (#7855) THE CAPTURE NOW ANSWERS THE QUESTION THE GENERIC BRANCH ASKS THE OPERATOR
+            # TO GO AND ANSWER. It pairs the target read with a control read against a different
+            # source, so three states that used to print one sentence now print three. Each has a
+            # different next action, and two of them are not about this host at all.
+            echo "### Rung-2 rehearsal: TRANSIENT — the warehouse is dark for EVERY producer" >> "$GITHUB_STEP_SUMMARY"
+            echo "The capture's control read answered and returned no rows from **any** source, so Better Stack is storing nothing account-wide. **This says nothing about \`${REHEARSAL_HOST}\`** — a perfect boot and a dead boot are indistinguishable while the warehouse stores nothing." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** this is the account-wide condition tracked in #7811 — do NOT re-dispatch, because another paid cpx22 cannot produce evidence while storage is down. Re-run this rehearsal once #7811 reports storage restored. A 2xx from the ingest endpoint does not contradict this: an acknowledgement is not storage. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q 'NEVER STORED A ROW' /tmp/rung2/capture.log 2>/dev/null; then
+            echo "### Rung-2 rehearsal: TRANSIENT — this source has never stored a row" >> "$GITHUB_STEP_SUMMARY"
+            echo "The control source is answering and carrying rows, so the warehouse is up; this source's table still does not exist. Better Stack creates the table lazily on the first **stored** row, so either nothing has ever been stored to it, or the table name is wrong. **This is not yet a statement about \`${REHEARSAL_HOST}\`** — a misaddressed source and a host that never shipped look identical from here." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** check the source id and table name the capture used against the Better Stack source before re-dispatching — if they are wrong, no number of paid hosts will produce evidence. Only once the name is confirmed does a dark first rehearsal become a statement about the host. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
+          elif grep -q 'CONTROL READ ALSO FAILED' /tmp/rung2/capture.log 2>/dev/null; then
+            echo "### Rung-2 rehearsal: TRANSIENT — the instrument itself is unusable" >> "$GITHUB_STEP_SUMMARY"
+            echo "Both the target read and the control read failed, so this run cannot tell a missing table from a dark warehouse from a broken query path. **Nothing is known, least of all anything about \`${REHEARSAL_HOST}\`.**" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**Next:** the suspect is the query path, not the host — check the Better Stack query credential and endpoint before spending another paid cpx22. **#7025 stays open and the DO-NOT-DISPATCH banner stays up.** See \`${RUNBOOK}\`." >> "$GITHUB_STEP_SUMMARY"
           else
             echo "### Rung-2 rehearsal: TRANSIENT (no verdict)" >> "$GITHUB_STEP_SUMMARY"
             echo "The poll expired without a terminal answer (last rc=\`${rc}\`). This is NOT evidence the host booted dark — read the capture output above to see whether the log source itself was answering." >> "$GITHUB_STEP_SUMMARY"
