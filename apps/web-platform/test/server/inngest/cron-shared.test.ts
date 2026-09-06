@@ -227,6 +227,21 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-inngest-config-drift")).toBe(false);
   });
 
+  it("cron-sentry-alert-drift is live — not Tier-2 deferred (#7650)", () => {
+    // The §2.9 Sentry-alert drift detector is a dispatch-hybrid of the same
+    // shape as cron-terraform-drift: it mints a short-lived installation token
+    // and POSTs a `workflow_dispatch`, holding no git and opening no PR — the
+    // read and the issue-filing run in the ephemeral GHA executor, not in the
+    // Node dispatcher. So it needs no CRON_BASH_ALLOWLISTS entry and is not a
+    // deferred Tier-2 cron; it participates in the watchdog purview
+    // immediately, which is load-bearing here because that watchdog is the ONLY
+    // scheduler-liveness cover this detector has until #7834 restores its
+    // Sentry cron monitor. Added to EXPECTED_CRON_FUNCTIONS in #7650 Phase 2;
+    // asserted here so the sibling-set sweep sees this dependent updated in
+    // lockstep with the cron-manifest change.
+    expect(TIER2_DEFERRED_CRONS.has("cron-sentry-alert-drift")).toBe(false);
+  });
+
   it("cron-ghcr-token-minter is live — not Tier-2 deferred (#6031)", () => {
     // The GHCR installation-token minter does NO git operations (it mints a
     // token and writes to Doppler), so it needs no CRON_BASH_ALLOWLISTS entry and

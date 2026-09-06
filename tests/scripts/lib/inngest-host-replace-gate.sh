@@ -87,7 +87,24 @@ inngest_host_replace_gate() {
         "hcloud_server.inngest",
         "hcloud_server_network.inngest",
         "hcloud_volume_attachment.inngest_redis",
-        "doppler_service_token.inngest"
+        "doppler_service_token.inngest",
+        # #7695. THE AOF VOLUME, admitted for CREATE ONLY — this is the recovery route out of a
+        # partial `inngest-volume-recut` apply, and without it there was NO route at all.
+        #
+        # Measured: after a partial recut the volume is destroyed and out of state, and every
+        # dispatch refused. `inngest-volume-recut` aborts because Guard 2 runs before the plan and
+        # grades the LIVE host (no volume by that name => id_pin_mismatch, and /mnt/data is not on
+        # the pinned device => mount_mismatch). `apply_target=inngest-host` aborts because
+        # the hcloud_server.inngest `user_data` embeds hcloud_volume.inngest_redis.id with no
+        # `ignore_changes` on it, so an absent volume makes that id unknown at plan time, forces a
+        # server replace, and the additive-only guard refuses any delete. And this gate aborted
+        # here, on `inngest_out_of_scope_changes=1`, because the volume was not in this list.
+        #
+        # ADMITTING IT COSTS NOTHING THIS GATE WAS PROTECTING. `redis_volume_destroyed` below is
+        # unchanged and still counts delete/forget at this exact address, so a plan that DESTROYS
+        # the volume aborts exactly as before. The only shape this widening newly permits is the
+        # one the recovery needs: creating a volume that is missing.
+        "hcloud_volume.inngest_redis"
       ];
       $p[0] as $plan
       | {

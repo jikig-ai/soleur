@@ -31,19 +31,24 @@ variable "betterstack_ingest_url" {
   description = "MUST be prod's Better Stack ingest URL, byte-for-byte. Same argument as sentry_dsn — this is the stage-marker channel the capture script queries to distinguish a dark boot from a slow one."
   type        = string
   # DEFAULTED to prod's value rather than threaded from the workflow, because prod does not
-  # thread it either: it is `local.betterstack_logs_ingest_url` in zot-registry.tf, a
-  # hardcoded literal. Threading it here would let a dispatch silently point the rehearsal at
-  # a different source and still produce hash-valid evidence.
+  # thread it either: since #7772 it is `local.git_data_betterstack_ingest_url` in git-data.tf,
+  # a hardcoded literal. (It was zot-registry.tf's `local.betterstack_logs_ingest_url` until
+  # git-data got its own source; that local still exists and still serves the four NON-git-data
+  # consumers, so the pointer moved rather than the literal being renamed in place.) Threading
+  # it here would let a dispatch silently point the rehearsal at a different source and still
+  # produce hash-valid evidence.
   #
   # THAT MAKES THIS A SECOND COPY OF A LITERAL, so it is guarded rather than trusted:
-  # git-data-rung2-rehearsal.test.sh extracts both sides BY SHAPE and fails if they diverge.
+  # git-data-rung2-rehearsal.test.sh arm 7 extracts both sides BY SHAPE and fails if they
+  # diverge. The arm follows the pointer to git-data.tf; an arm left aimed at zot-registry.tf
+  # would stay green while comparing the wrong pair.
   # Not a credential, so hr-tf-variable-no-operator-mint-default does not apply — an ingest
   # URL is a public endpoint; the token that authorizes writing to it is separate.
-  default = "https://s2457081.eu-fsn-3.betterstackdata.com/"
+  default = "https://s2734275.eu-central-1a.betterstackdata.com/"
 }
 
-variable "betterstack_logs_token" {
-  description = "Better Stack Logs INGEST token, written into the scratch Doppler config so the post-Doppler stage markers ship off-box. Write-only against a shared source: it cannot read anything back."
+variable "git_data_betterstack_logs_token" {
+  description = "Better Stack Logs INGEST token for git-data's OWN source (2734275), written into the scratch Doppler config so the post-Doppler stage markers ship off-box. Write-only: it cannot read anything back. RENAMED from betterstack_logs_token by #7772 item 1, and the rename is load-bearing rather than cosmetic — this root resolves its inputs by Doppler NAME TRANSFORMATION (TF_VAR_ prefix + lowercase), so re-pointing prod alone would have left the rehearsal silently resolving the SHARED credential and shipping to the shared sink while attesting a template that ships to git-data's. That is the exact divergence the rung-2 evidence exists to make unexpressible."
   type        = string
   sensitive   = true
 }

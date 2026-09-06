@@ -298,6 +298,22 @@ assert "vector side: Source 4 allowlists \"inngest-nftables\"" \
 assert "vector side: Source 4 allowlists \"inngest-server-probe\"" \
   "grep -qE '^[[:space:]]*\"inngest-server-probe\",\$' <<<\"\$HSJ\""
 
+# --- #7695 (A5 extension): the LUKS boot-stage tag, asserted on BOTH sides -----------------
+LUKS_UNIT_BLOCK="$(awk '/^  - path: \/etc\/systemd\/system\/inngest-luks-open\.service$/{f=1;next} f&&/^  - path: /{f=0} f' "$INNGEST_CI")"
+assert "LUKS reopen unit block extracted from cloud-init-inngest.yml" \
+  "[[ -n \"\$LUKS_UNIT_BLOCK\" ]]"
+# Same exact-value contract as the trio above: a unit tag with no allowlist entry is a silent
+# DROP, and an allowlist entry with no emitting unit is a silent NO-OP. Two emitters share this
+# tag on purpose (the cloud-init runcmd stage and the boot-reopen unit), so the unit-side
+# assertion checks the reopen unit specifically -- it is the one whose absence would only show
+# up on a SECOND boot, which is exactly the case cloud-init runcmd cannot cover.
+assert "unit side: inngest-luks-open.service declares SyslogIdentifier=inngest-luks-stage" \
+  "grep -qE '^[[:space:]]*SyslogIdentifier=inngest-luks-stage\$' <<<\"\$LUKS_UNIT_BLOCK\""
+assert "emitter side: the cloud-init LUKS stage logs under the same tag" \
+  "grep -qE 'logger -t inngest-luks-stage' '$INNGEST_CI'"
+assert "vector side: Source 4 allowlists \"inngest-luks-stage\"" \
+  "grep -qE '^[[:space:]]*\"inngest-luks-stage\",\$' <<<\"\$HSJ\""
+
 # CF-4 (#7228): INVERTED from a negative pair to a POSITIVE one, in the direction the EMITTER
 # dictates. It used to assert that "inngest-boot-phone-home" was ABSENT from the allowlist, on
 # the explicitly stated condition that the script "never calls logger, so an allowlist entry

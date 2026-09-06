@@ -17,6 +17,30 @@ synced_to: []
 
 # Lefthook GIT_* Environment Variable Leak Breaks Tests
 
+> **Erratum, 2026-09-04 (#7772) — appended, not amended. The diagnosis below is
+> correct; the SEVERITY is not.**
+>
+> This entry is filed `problem_type: test_failure`, `severity: medium`, with symptoms
+> framed as "test passes individually but fails in the pre-commit batch". That is an
+> accurate description of the instance observed on 2026-04-03 — and it under-states the
+> mechanism by a category.
+>
+> The same leak that makes an assertion resolve the wrong `git rev-parse` makes a
+> `git commit` land on the wrong branch with the wrong index. On 2026-09-04 it did:
+> **16 stray commits on a live feature branch and the worktree index cut from ~14,000
+> entries to 2, twice in one session, from two different lefthook steps** — and on
+> #7782 the same fixture's stray commits were **pushed**. Reproduced from first
+> principles, not inferred; see
+> `../2026-09-04-a-medium-severity-test-nuisance-was-a-repo-destroying-bug-for-five-months.md`.
+>
+> Because it read as a test nuisance, the fix landed in `welcome-hook.test.ts` alone
+> and was never swept. Measured five months on: **9** TS fixtures `mkdtemp` + `git init`
+> a sandbox and **1** scrubs the env; shell fixtures unaudited. Tracked at **#7835**,
+> with a lint, because a sweep with no gate decays the way this one did.
+>
+> **Read this entry as `problem_type: data_loss`, `severity: high`.** Classify by the
+> capability the mechanism grants, not by the symptom that surfaced it.
+
 ## Problem
 
 The `welcome-hook.test.ts` test consistently passed when run individually (`bun test plugins/soleur/test/welcome-hook.test.ts`) but consistently failed when run via lefthook's `plugin-component-test` pre-commit hook. The test creates temp git repos with `git init`, then spawns the welcome hook script against them — but the hook's `git rev-parse --show-toplevel` resolved to the parent repo instead of the temp dir.

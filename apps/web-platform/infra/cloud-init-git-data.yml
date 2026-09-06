@@ -14,6 +14,20 @@ packages:
   - cryptsetup # guest-side LUKS-at-rest for the fresh cutover volume (Sub-PR 3.D)
   # (#6982) The emit chain is a curl POST; a failed install is non-fatal to cloud-init.
   - curl
+  # (#7772 item 2) Host-local packet filter for the metadata-endpoint drop below. This host
+  # CANNOT get that control from its hcloud firewall: hcloud rules are ALLOW-only (no action /
+  # deny / policy attribute — destination_ips is documented as the list that is *allowed*),
+  # they carry no UID predicate, and Hetzner's own firewall FAQ says the firewall always permits
+  # traffic to the cloud metadata server regardless of rules. Any one of those three is
+  # sufficient on its own; together they make nftables the only place this is expressible.
+  #
+  # Installing this package ALSO installs nftables.service (ExecStop runs `nft flush ruleset`)
+  # and /etc/nftables.conf (whose third line is `flush ruleset`). It ships DISABLED, so that is
+  # latent rather than live, and we deliberately do NOT enable it — our own oneshot owns the
+  # ruleset. The nft_metadata_drop boolean on stage:boot_complete is what would surface it if
+  # something else ever did enable it, because RemainAfterExit=yes means systemd would keep
+  # reporting our oneshot "active" over an emptied ruleset indefinitely.
+  - nftables
 
 # (#6982) PRE-runcmd beacon. packages:/write_files: run before runcmd and a death there
 # leaves sshd up, so the reachability probe goes green with nothing emitted. bootcmd_start
@@ -109,7 +123,11 @@ write_files:
   # than the doppler_token it claims equivalence with, readable by the `git` account that
   # serves every connected user's push. ADR-198 carries the argument and its limits -- in
   # particular that 0600 defends a file-read primitive, NOT code execution, because the
-  # git-data firewall declares zero rules and egress to the metadata endpoint is open.
+  # git-data firewall declares zero rules and egress to the metadata endpoint is open TO ROOT.
+  # (#7772) NARROWED, not closed: a host-local nftables rule now drops 169.254.169.254 for
+  # non-root UIDs, so the `git` account can no longer read this file's contents back out of
+  # user_data over the network. Root still can, and a file-read primitive against this 0600
+  # file is untouched — which is why the 0600 mode still carries its own weight.
   - path: /etc/default/git-data-betterstack
     content: |
       BETTERSTACK_LOGS_TOKEN=${betterstack_logs_token}
@@ -446,6 +464,111 @@ write_files:
   - path: /etc/systemd/system/git-data-gc.timer
     content: |
       ${indent(6, git_data_gc_timer)}
+    owner: root:root
+    permissions: '0644'
+
+  # --- (#7772 item 2) The metadata-endpoint egress closure --------------------------------
+  #
+  # WHAT IT CLOSES. hcloud_firewall.git_data declares ZERO rules, which under Hetzner semantics
+  # is inbound-denied and egress fully OPEN, so any code execution as the `git` account — the
+  # account whose forced-command wrappers serve every connected user's push — could
+  # `curl http://169.254.169.254/hetzner/v1/userdata` and read the ENTIRE user_data:
+  # doppler_token, sentry_dsn and the baked ingest token alike. ADR-198 concedes that 0600
+  # defends a file-read primitive and not code execution, and names this rule as the closure
+  # that restores the category for the two 0600 credentials — doppler_token and the ingest
+  # token — against a NON-ROOT reader. NOT all three: sentry_dsn is baked inside the 0755
+  # git-data-emit, which the `git` account reads directly without touching the network, so no
+  # egress rule reaches it. The encryption-posture ledger records the same split.
+  #
+  # WHY IT IS HERE AND NOT IN .tf — the correction that forced this into the pre-rehearsal
+  # window. #7772 describes item 2 as "a .tf firewall change, NOT a template change". That is
+  # wrong three times over (see the `nftables` package comment above), and ADR-198's own wording
+  # settles it: the closure is scoped to NON-ROOT UIDs, which a cloud firewall cannot express at
+  # all. Being a template change, it re-holds git_data_rung2_rehearsal_gate — which is the point,
+  # not a defect. AC2 asserts the hash moved.
+  #
+  # SAFE ON THIS HOST, MEASURED NOT ASSUMED — and the measurement is dated, because this block
+  # changed it. BEFORE this block existed, `grep -c 169.254.169.254` was 0 across this template
+  # and all nine file()-bound payloads, so git-data issues no IMDS REQUEST of its own. The count
+  # in THIS file is now 4 (this sentence, the rule's two lines, and a comment), so a reader
+  # re-running the bare grep today gets a number that contradicts an undated claim. The
+  # proposition that matters — no IMDS consumer on this host — is unchanged; re-check it by
+  # grepping the nine payloads, not this file.
+  # exempt so cloud-init's own datasource — which queries the metadata server every boot, as
+  # root, to configure networking — is untouched.
+  - path: /usr/local/bin/git-data-nftables.sh
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      command -v nft >/dev/null || { echo "[git-data-nft] nft binary not found"; exit 1; }
+      # THE THREE-LINE REPLACE IDIOM, AND IT IS LOAD-BEARING. The sibling at
+      # cloud-init-inngest.yml comments that "`nft -f` table declarations replace our table
+      # atomically -> idempotent". That is FALSE, measured on this host's own image
+      # (Ubuntu 24.04 / nftables v1.0.9): a bare `table` declaration applied twice leaves TWO
+      # copies of every rule -- it MERGES. The bare-declare/delete/declare sequence below is
+      # what actually replaces, and applied twice it leaves exactly one. Without it this
+      # oneshot accumulates a duplicate drop rule on every boot.
+      nft -f - <<'NFTEOF'
+      table inet soleur_git_data
+      delete table inet soleur_git_data
+      table inet soleur_git_data {
+        chain output {
+          type filter hook output priority -10; policy accept;
+          meta skuid != 0 ip daddr 169.254.169.254 drop
+          meta skuid != 0 ip6 daddr fe80::a9fe:a9fe drop
+        }
+      }
+      NFTEOF
+      # `policy accept` plus a targeted drop leaves every other egress (apt, GitHub, Doppler,
+      # Sentry, Better Stack, DNS) untouched -- which is exactly why this works where an
+      # allow-only cloud firewall does not: that one would have to enumerate all of them.
+      #
+      # The IPv6 line matches nothing today (Hetzner documents no v6 metadata endpoint; the
+      # service is IPv4-only at 169.254.169.254). One line, kept so the control does not carry
+      # a documented v6 gap the way this repo's other v6 handling has to warn about.
+      echo "[git-data-nft] OK: metadata endpoint dropped for non-root UIDs"
+    owner: root:root
+    permissions: '0755'
+
+  - path: /etc/systemd/system/git-data-nftables.service
+    content: |
+      [Unit]
+      Description=git-data metadata-endpoint egress drop for non-root UIDs (#7772)
+      After=network-online.target
+      Wants=network-online.target
+      [Service]
+      Type=oneshot
+      # NO SyslogIdentifier=, DELIBERATELY -- and the first draft had one, copied from the
+      # inngest sibling along with a rationale that is FALSE on this host.
+      #
+      # That draft read: "#6617c: without this systemd tags the unit from the ExecStart
+      # basename -- `git-data-nftables.sh`, WITH the .sh -- which matches no vector.toml
+      # source, so this host's rule-load failure never leaves it." Every clause about
+      # vector.toml is wrong here. MEASURED: the only occurrence of "vector" anywhere in this
+      # template was that comment, `git-data.tf` references vector.toml nowhere, and
+      # `vector.toml` is delivered by `server.tf` to the WEB host alone. git-data runs no
+      # Vector agent, so no journald tag on this host ships anywhere, and a SyslogIdentifier
+      # here buys exactly nothing.
+      #
+      # It also cost something. `vector-pii-scrub.test.sh` AC3 derives its expected tag set
+      # from `SyslogIdentifier=` across `infra/cloud-init*.yml` and requires every tag to
+      # appear in vector.toml's `host_scripts_journald` include list -- a premise that holds
+      # for the Vector-shipped web and inngest templates and breaks on the first host without
+      # an agent. Satisfying it by ADDING `git-data-nftables` to vector.toml would declare a
+      # journald source for a tag that can never appear on the web host: a permanently dead
+      # entry asserting a shipping path that does not exist. The gate's own text says to
+      # reconcile in the direction the emitter dictates, and here the emitter is the wrong half.
+      #
+      # WHAT ACTUALLY CARRIES THIS ARM'S FAILURES, unchanged by any of the above: the runcmd
+      # item emits `git-data-emit "$${STAGE}_warn" warning` on a soft failure and the top-armed
+      # trap emits `stage:gitdata_nftables_metadata` on a fatal -- straight to Sentry and to
+      # git-data's own Better Stack source, both routed by issue-alerts.tf since #7772. The
+      # script's own `[git-data-nft]` echoes land in journald and stay on the box, which is
+      # true with or without a tag.
+      ExecStart=/usr/local/bin/git-data-nftables.sh
+      RemainAfterExit=yes
+      [Install]
+      WantedBy=multi-user.target
     owner: root:root
     permissions: '0644'
 
@@ -849,6 +972,48 @@ runcmd:
     # untested. The guard IS what keeps a healthy boot silent (AC36/T17).
     LUKSEOF
 
+  # (#7772 item 2) Arm the metadata-endpoint drop. PLACED BEFORE THE BOOTSTRAP ITEM, and the
+  # ordering is load-bearing rather than stylistic: git-data-bootstrap.sh emits
+  # stage:boot_complete carrying the MEASURED nft_metadata_drop boolean, so arming after it
+  # would have the boolean read a chain that is not loaded yet. runcmd is once-per-instance
+  # and ADR-115 bars this host from the reboot primitive, so that boolean would have reported
+  # `no` on EVERY boot of a perfectly healthy host, for the host's whole life -- and the one
+  # case it exists to catch (the ruleset flushed AFTER a successful load) would be
+  # indistinguishable from the steady state. The plan specified `after the gc_timer block`;
+  # that placement is what created the defect, and review caught it.
+  #
+  # Arming earlier is also strictly better on its own terms: it shrinks the window in which
+  # the host runs with the metadata endpoint readable by the non-root `git` account.
+  #
+  # Same substitution-plus-`if` shape as the gc_timer capture (now BELOW this item — review
+  # moved this one ahead of the bootstrap, see the ordering note above), for the same two reasons #7227 records: a failed REDIRECT
+  # must not be indistinguishable from a failed unit, and the guard must sit INSIDE the failure
+  # branch or it runs before systemctl writes stderr and discards the real error.
+  #
+  # `enable --now`, never a bare `enable`. A bare enable leaves the control INERT for the life
+  # of the host: git-data is barred from the reboot primitive (ADR-115), so "it will apply next
+  # boot" means "it will apply when the host is replaced", and the whole point of landing this
+  # pre-birth is that the first boot is the one that counts.
+  #
+  # Never a bare `|| true` either -- that makes the failure unobservable, which is the exact
+  # write-only class item C exists to close. A failure here emits at WARNING, and
+  # stage:gitdata_nftables_metadata_warn IS routed (issue-alerts.tf, the new low-severity rule).
+  # The host still boots: an unarmed egress drop is a hardening regression, not a dark host, so
+  # it must not join the fatal stages that refuse a boot.
+  - |
+    STAGE=gitdata_nftables_metadata
+    ( : > "$GIT_DATA_RUNCMD_DETAIL" ) 2>/dev/null || true
+    systemctl daemon-reload || true
+    _nft_rc=0
+    _nft_err="$(systemctl enable --now git-data-nftables.service 2>&1)" || _nft_rc=$?
+    if [ "$_nft_rc" -ne 0 ]; then
+      _nft_detail=/run/git-data-nftables.err
+      [ -z "$_nft_err" ] || ( umask 077; printf '%s\n' "$_nft_err" > "$_nft_detail" ) 2>/dev/null || true
+      [ -s "$_nft_detail" ] || _nft_detail="git-data metadata egress drop failed to arm (rc=$_nft_rc): no stderr captured"
+      /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_NFT metadata egress drop failed to arm" "$${STAGE}_warn" warning \
+        "$_nft_detail" "nft_metadata_drop=unarmed" || true
+    fi
+
   # Run the idempotent bootstrap UNDER doppler run (so its LUKS re-assert has
   # GIT_DATA_LUKS_KEY). Installs git substrate + bare-repo root + fence placeholder +
   # core.hooksPath on the plaintext volume, re-asserts the LUKS mapper is open +
@@ -903,3 +1068,4 @@ runcmd:
       /usr/local/bin/git-data-emit "SOLEUR_GIT_DATA_GC timer failed to arm" "$STAGE" warning \
         "$_gc_detail" "gc_timer=unarmed" || true
     fi
+

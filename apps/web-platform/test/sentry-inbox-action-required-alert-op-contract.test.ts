@@ -41,7 +41,7 @@ describe("inbox-action-required-notify-failure alert op contract", () => {
   // "wired into the apply list" condition left to assert.
   it("issue-alerts.tf declares the inbox_action_required_notify_failure resource", () => {
     expect(tf).toContain(
-      'resource "sentry_issue_alert" "inbox_action_required_notify_failure"',
+      'resource "sentry_alert" "inbox_action_required_notify_failure"',
     );
   });
 });

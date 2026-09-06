@@ -35,12 +35,25 @@
 # Recording why, because the mistake is one grep away from being made again:
 # `issue-alerts.tf` DOES contain
 # `ignore_changes = [conditions_v2, filters_v2, actions_v2, environment, frequency]`
-# — but on the four `auth-*` resources, which are a DIFFERENT four rules,
-# managed by `configure-sentry-alerts.sh` and tracked by #4781. The four in
-# EXPECTED_RULES below carry `ignore_changes = [environment]` only and do not
-# declare the v2 attributes empty, so Terraform genuinely owns their filters.
+# — but on the `auth-*` resources, which are a DIFFERENT set of rules, managed
+# by `configure-sentry-alerts.sh` and tracked by #4781. The four in
+# EXPECTED_RULES below carry `ignore_changes = [environment]` only, so Terraform
+# genuinely owns their filters. (Since #7650 Phase 2 all four are `sentry_alert`
+# resources, a type that has no `conditions_v2`/`filters_v2`/`actions_v2`
+# attributes at all -- so "they do not declare the v2 attributes empty" is now
+# true vacuously rather than by choice. The ownership conclusion is unchanged.)
 # A file-level grep for `ignore_changes` cannot tell those two sets apart;
 # resolve the attribute per RESOURCE BLOCK before believing either claim.
+#
+# NARROWED FOUR -> ONE (#7650 Phase 2, 2026-09-04). That `auth-*` set was four
+# rules; it is now ONE. auth-signout-burst, auth-exchange-code-burst and
+# auth-callback-no-code-burst were adopted as `sentry_alert` with their real
+# definitions and now carry `ignore_changes = [environment]` only, so Terraform
+# owns their filters exactly as it owns the EXPECTED_RULES four. Only
+# `auth-per-user-loop` still declares the v2 attributes empty under the wide
+# `ignore_changes`, and it is the only rule `configure-sentry-alerts.sh` still
+# writes. The distinction above is therefore NARROWER, not gone — the two sets
+# are still disjoint and the per-RESOURCE-BLOCK instruction still stands.
 #
 # SCOPE — org-wide since #7590, previously project-scoped. The replacement
 # endpoint (below) is org-scoped and its payload carries no project binding, so
@@ -53,6 +66,21 @@
 # Test injection (assert-byok-rules-exist.test.sh ONLY):
 #   SENTRY_FIXTURE_RULES — file path; served instead of the live GET.
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -euo pipefail
 
 # Fail-loud on a cleared/misconfigured org secret (no silent default) — a wrong
@@ -71,7 +99,7 @@ set -euo pipefail
 EXPECTED_RULES=("byok-art-33-breach" "byok-cap-exceeded" "chat-message-save-failure" "workspace-sync-health")
 
 fetch_rules() {
-  if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
+  if [[ -n "${SENTRY_FIXTURE_RULES:+x}" ]]; then
     cat "$SENTRY_FIXTURE_RULES"
     return
   fi

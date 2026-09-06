@@ -2201,7 +2201,15 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // sits INSIDE that plan's `discoverability_test:` sub-block, and it is genuine — Better Stack
   // is the only source for the marker rows the probe reads, and it has no unauthenticated read
   // surface, so no unauthenticated probe verifies the same property.
-  const BASELINE_DECLARED_PROBES = 7;
+  // 7 -> 8 (#7772). Confirmed against this assertion's own instruction BEFORE the number moved:
+  // the new declaration is in `2026-09-03-feat-git-data-pre-birth-hardening-plan.md`, it sits
+  // INSIDE that plan's `discoverability_test:` sub-block, and it is genuine — the probe's two
+  // halves are local (`git-data-userdata-budget.sh --json` plus a grep over the RENDER), and its
+  // value says "none" for exactly that reason, while naming the one adjacent read that DOES need
+  // `BETTERSTACK_QUERY_*` and has no unauthenticated substitute. Not a leftover template comment
+  // and not a stray line outside the sub-block, which are the two cases this instruction says to
+  // DELETE rather than baseline.
+  const BASELINE_DECLARED_PROBES = 8;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

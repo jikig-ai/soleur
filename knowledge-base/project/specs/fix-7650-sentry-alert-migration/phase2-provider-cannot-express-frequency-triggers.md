@@ -1,5 +1,31 @@
 # Phase 2 blocker — the provider cannot express a frequency TRIGGER, and round-trips it destructively
 
+> ## SUPERSEDED 2026-09-04 — the blocker below is version-scoped and has LIFTED
+>
+> **Do not act on the scope in this document.** It says Phase 2 covers **16** rules and that
+> frequency triggers are unmigratable. Both were **true at `v0.15.5`** and are **false at
+> `v0.15.7`**, which is what `apps/web-platform/infra/sentry/versions.tf` and
+> `.terraform.lock.hcl` now pin.
+>
+> Upstream PR 943 merged 2026-09-01, one day before the `v0.15.7` tag was cut
+> (`364da964`, 2026-09-02 23:43:17 +0100). `trigger_conditions` now expresses **five** types
+> including `event_frequency_count` with its `{value, interval}` comparison —
+> `internal/provider/resource_alert_gen.go:135-162 @ v0.15.7`.
+>
+> **Current scope is 27**, derived in
+> [`phase2-v0157-frequency-trigger-landed-scope-is-27.md`](./phase2-v0157-frequency-trigger-landed-scope-is-27.md).
+>
+> This file is **kept, not deleted**. It is the dated record of a correct measurement, and two
+> of its findings are still live and still load-bearing:
+>
+> - **§"The destructive round-trip" still applies to a BARE-BOOLEAN comparison.** The
+>   `default:` fallthrough and the hardcoded `true` on write are unchanged at `v0.15.7`
+>   (`resource_alert_impl.go:896-898` and `:740`). Only the *object*-comparison case was fixed.
+> - **§"Can the 13 be RESTRUCTURED instead? No" is unaffected** and remains the reason
+>   `event_unique_user_frequency_count` rules are not restructured as action filters.
+>
+> Superseded by #7650 Phase 2. See the plan's `## Retractions — 2026-09-04`.
+
 Measured 2026-09-02, from the provider source at `v0.15.5` and live org state. Read-only.
 **This retracts the scope of the Phase 0 "PASS".**
 

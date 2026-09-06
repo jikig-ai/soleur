@@ -28,7 +28,7 @@ import { describe, it, expect } from "vitest";
 //      future routine `reportSilentInfo` / `warnSilentFallback` emit under the
 //      same feature would over-page the founder. The reverse-guard below fails
 //      closed if a non-error emit is ever added — forcing the author to either
-//      change the emit level or narrow the alert to an `op` IS_IN filter.
+//      change the emit level or narrow the alert to an `op` `in` filter.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
@@ -55,7 +55,7 @@ describe("outbound-email-send-failure alert feature contract", () => {
   // "wired into the apply list" condition left to assert.
   it("issue-alerts.tf declares the outbound_email_send_failure alert resource", () => {
     expect(tf).toContain(
-      'resource "sentry_issue_alert" "outbound_email_send_failure"',
+      'resource "sentry_alert" "outbound_email_send_failure"',
     );
   });
 

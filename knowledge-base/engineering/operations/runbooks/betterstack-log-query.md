@@ -82,7 +82,10 @@ Basic-auth'd against a regional ClickHouse endpoint, separate from both tokens.
 
 ## Connection details (provisioned 2026-06-01)
 
-- Source: `soleur-inngest-vector-prd` — id **2457081**, team **520508**, table_name `soleur_inngest_vector_prd_3`, region `eu-fsn-3`, **3-day log retention**.
+- Source: `soleur-inngest-vector-prd` — id **2457081**, team **520508**, table_name `soleur_inngest_vector_prd_3`, `data_region` `eu-central-1a`, **90-day log retention**.
+  **(#7772) CORRECTED 2026-09-04 — this line read `region eu-fsn-3, 3-day log retention` and both halves were wrong.** The region is a vendor RENAME, not a move (see the naming note below). The retention was a FREE-TIER value that predates the 2026-08-16 move to a paid plan; measured twice on two endpoint shapes (`GET /api/v2/sources` and `GET /api/v2/sources/<id>`), this source reports `logs_retention=90` and `metrics_retention=90`. The stale figure had propagated into the Art. 30 register and both published legal documents, all corrected in the same change. `logs_retention` is a PER-SOURCE attribute, not a billing field — so read it here rather than inferring it from the account tier, which genuinely cannot be pulled (`/sources/<id>/usage`, `/usage`, `/billing` all 404).
+- Source: `soleur-git-data-prd` — id **2734275**, team **520508**, table_name `soleur_git_data_prd`, `data_region` `eu-central-1a`, **90-day log retention**, ingesting host `s2734275.eu-central-1a.betterstackdata.com`. git-data's OWN source since #7772. `remote()` identifier: `t520508_soleur_git_data_prd_logs`.
+- **Region naming, so nobody re-derives it:** `eu-fsn-3` and `eu-central-1a` are the SAME cluster — the former is the vendor's earlier name, CNAMEs to the latter, and both resolve to an identical five-address A set (`195.63.225.49/.50/.53/.70/.72`, measured 2026-09-04). Query creds are region-scoped, not source-scoped, so ONE connection reaches BOTH sources.
 - Query host: `eu-fsn-3-connect.betterstackdata.com:443` (region-scoped — creds fail against other clusters).
 - `remote()` table identifier: **`t<TEAM_ID>_<table_name>_logs`** → `t520508_soleur_inngest_vector_prd_3_logs`. The docs' `t123456_...` placeholder is the **team id**, not the source id. (Suffixes: `_logs`, `_metrics`, `_spans`.)
 
@@ -195,8 +198,10 @@ doppler run -p soleur -c prd_terraform -- \
     that extract alone. Any panel or query MUST filter `status='key-missing'`
     **first**.
   - **Field-isolate before trusting a match.** `--grep` is an unanchored
-    `raw LIKE '%…%'` over the single Better Stack source every host multiplexes
-    into, and GitHub webhook payloads (issue and PR bodies) reach that source —
+    `raw LIKE '%…%'` over the Better Stack source that host multiplexes into —
+    `2457081` for the web, inngest and registry planes, `2734275` for git-data
+    since #7772 — so a `--grep` sweep must name the source it is sweeping rather
+    than assume there is only one. GitHub webhook payloads (issue and PR bodies) reach that source —
     so any issue/PR text quoting the marker name will match. A structural check
     is used rather than a `source_kind` filter because it holds regardless of
     which Vector source an echo arrives on. A trustworthy producer row has `component` =

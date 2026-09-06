@@ -87,7 +87,7 @@ locals {
     doppler_arch                     = "amd64"
     doppler_sha256                   = "9c840cdd32cffff06d048329549ba2fa908146b385f21cd1d54bf34a0082d0db"
     sentry_dsn                       = "https://stubkey0000000000000000000000@o1234567.ingest.de.sentry.io/7654321"
-    betterstack_ingest_url           = "https://s2457081.eu-fsn-3.betterstackdata.com/"
+    betterstack_ingest_url           = "https://s2734275.eu-central-1a.betterstackdata.com/"
     betterstack_logs_token           = "stub-betterstack-ingest-token-0000000000"
     host_name                        = "soleur-git-data"
   }

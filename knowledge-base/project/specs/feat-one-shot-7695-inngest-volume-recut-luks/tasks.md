@@ -9,6 +9,40 @@ brand_survival_threshold: single-user incident
 
 # Tasks
 
+> **Delivery status — 2026-09-03 (Merge B).** Boxes are ticked ONLY where this session ran the
+> check itself, never in bulk. Phase 1 is Merge A's and is left untouched here — §D3 of the plan
+> records that task 1.8 was NOT delivered, so ticking Phase 1 wholesale would assert something the
+> plan itself contradicts. Still open at the end of this session, with reasons:
+>
+> - **5.1** (`bash scripts/test-all.sh` in full) — deferred to the `/ship` full-battery checkpoint
+>   per ADR-183. A sibling worktree held the advisory lock throughout
+>   (`CAPACITY_CONTENDED reason=sibling_runs`), and a run queued behind it measures nothing useful.
+> - **5.4** (`actionlint`) — run and clean; `scripts/lint-workflows.sh` reports its pre-existing
+>   census findings (tracked #7042) and none of them name the new job.
+> - **5.5** — done for both guards. **Counts corrected 2026-09-03 after review:** the figures here
+>   read "Guard 1: 34; Guard 2: 61" and were the FLOORS, not the assertion counts — 38 and 69 ran
+>   at the time of writing. After the review fixes they are **Guard 1: 48, Guard 2: 108**, and the
+>   structural LUKS suite is **17 arms, not 13**. Both suites now also self-test the `expect()` /
+>   `check()` WRAPPER, not only `pass()`/`fail()`: replacing either wrapper body with a bare `pass`
+>   produced a full green run with every anti-vacuity floor reporting healthy. Guard 2's floor also
+>   compared against 55 while printing 71 — 22 assertions of slack — and its drop-one floor counted
+>   CALLS, so twenty `predicate G1` lines would have satisfied a floor of 20; it counts distinct
+>   predicates now.
+> - **4.4 / 4.5** — DONE. The CLO ruled, and widened it: the propagation set is TWELVE files, not
+>   one limb. PA-13 (e), (f) and (g)/TOM-11 are corrected in place with the CLO's drafted wording;
+>   the published data-protection disclosure and privacy policy are corrected canonical + mirror
+>   with the SHAs re-pinned; ADR-030's `Bound to 127.0.0.1 only` Decision clause is STRUCK (it is
+>   the citation every downstream false claim traced back to); a runbook intro and a source comment
+>   are corrected; and the LIA plus two DPIA screenings get dated APPENDED addenda rather than
+>   in-place edits, because silently editing the factual premise of a completed balancing destroys
+>   the evidence of what was weighed. The CLO also reversed part of its own first draft: `/v1/*` IS
+>   loopback-gated in software, so the retired text understated the safeguard rather than
+>   overstating it. Deferred to #7779: the Redis AOF retention determination, the shared-store
+>   plaintext-at-rest gap across PA-13/14/21/22/27/31, and a live probe of whether
+>   `/api/dashboard/runs` actually functions as the Art. 15 route we publish.
+> - **B4** is recorded FALSIFIED AS WRITTEN in the plan's delivery addendum, with the property it
+>   was standing in for measured PASSING. It is not quietly satisfied by a looser reading.
+
 Derived from the plan **after** its deepen-plan revision (see §Deepen-Plan Revisions). Two merges:
 Merge A's delivery vehicle aborts on Merge B's `.tf` edits, so combining them makes Merge A
 undeliverable. Phase order is load-bearing throughout.
@@ -16,12 +50,20 @@ undeliverable. Phase order is load-bearing throughout.
 ## Phase 0 — Preconditions
 
 - [ ] 0.1 Re-run every Premise Validation reading in the plan; record verbatim.
-- [ ] 0.2 `terraform plan` — record the verbatim line proving `apply_target=inngest-host` yields a
+- [x] 0.2 `terraform plan` — record the verbatim line proving `apply_target=inngest-host` yields a
       **zero-delete** plan under `ignore_changes = [format]`.
+      **CORRECTED 2026-09-03:** this was ticked against the same measurement AC B4 records as
+      FALSIFIED AS WRITTEN, which is not a completion. Re-measured, and the result is the opposite
+      of what the task assumed: with `format` REMOVED and the lifecycle block kept,
+      `hcloud_volume.inngest_redis` plans as `actions=["no-op"]` — no replace is queued, so the
+      argument for keeping the line was false. The zero-delete property holds; the reason recorded
+      for it did not. See the ADR-199 addendum.
 - [ ] 0.3 `gh api repos/:owner/:repo/environments/inngest-cutover` — reviewer set non-empty.
 - [ ] 0.4 Read all three `.c4` files; complete the external-actor / external-system / container /
       access-relationship enumeration and record what was checked.
-- [ ] 0.5 Verify `--history-retention` against the inngest-server unit file.
+      **UNTICKED 2026-09-03:** the enumeration record this task requires does not exist anywhere in
+      the branch. The tick asserted a deliverable that was never written.
+- [x] 0.5 Verify `--history-retention` against the inngest-server unit file.
 - [ ] 0.6 Confirm `RECUT-INNGEST-VOLUME` is a unique confirm literal and the workflow is at 7 of 10
       dispatch inputs before adding the 8th.
 
@@ -68,76 +110,81 @@ undeliverable. Phase order is load-bearing throughout.
 - [ ] 2.8 No `|| true`, no `|| :`, no `set +e` on any step that could leave `/mnt/data` on the root
       disk. **Keep `nofail` in fstab** — a strict fstab on a no-SSH host turns a slow attach into an
       unrecoverable boot wedge.
-- [ ] 2.9 `inngest-luks-open.service`: `Type=oneshot`, `RemainAfterExit=yes`,
+- [x] 2.9 `inngest-luks-open.service`: `Type=oneshot`, `RemainAfterExit=yes`,
       `DefaultDependencies=no`, `Before=inngest-redis.service`; passphrase via
       `/etc/default/inngest-doppler`. `runcmd` runs **first boot only**, so without this the mapper
       is absent on boot 2 and Redis writes plaintext to the root disk.
-- [ ] 2.10 Two-state `ExecStartPre` `findmnt` gate: always assert `/mnt/data` is a mountpoint;
+- [x] 2.10 Two-state `ExecStartPre` `findmnt` gate: always assert `/mnt/data` is a mountpoint;
       assert the source is `/dev/mapper/inngest-redis` **only when** `blkid` reported `crypto_LUKS`.
       A one-state gate deadlocks the plan by blocking Redis on the pre-recut host.
 - [ ] 2.11 `SOLEUR_INNGEST_LUKS_STAGE` in `vector.toml` Source 4 **and** `vector-pii-scrub.test.sh`,
       same commit.
-- [ ] 2.12 `inngest-redis-luks.test.sh` covering all five arms + the ext4-still-starts-Redis case +
+- [x] 2.12 `inngest-redis-luks.test.sh` covering all five arms + the ext4-still-starts-Redis case +
       a second-simulated-boot case for the reopen unit (loop-file harness precedent).
 
 ## Phase 3 — MERGE B: the gated apply_target
 
 - [ ] 3.1 **Write both mutation matrices BEFORE the guards.**
-- [ ] 3.2 `tests/scripts/lib/inngest-volume-recut-gate.sh` — allow-set is the volume + its
+      **UNTICKED 2026-09-03:** nothing in the branch supports the ordering claim, and the review
+      found twelve guard mutations that survived both batteries — which is the outcome a
+      matrix-first discipline exists to prevent. Fixtures for all twelve were added after the fact.
+- [x] 3.2 `tests/scripts/lib/inngest-volume-recut-gate.sh` — allow-set is the volume + its
       attachment only; `hcloud_server.inngest` is named-live and must show zero actions. Fail-closed
       preamble, ID-PIN on `.change.before.id`, `id_pin_absent` when the pin is empty on a genuine
       destroy, recovery bare-create arm.
-- [ ] 3.3 `tests/scripts/test-inngest-volume-recut-gate.sh` — mutation rows 1-10 + harness H1-H3.
+- [x] 3.3 `tests/scripts/test-inngest-volume-recut-gate.sh` — mutation rows 1-10 + harness H1-H3.
       Fixtures **synthesized**, never captured production plans.
-- [ ] 3.4 `tests/scripts/lib/inngest-host-dark-gate.sh` — all 13 conditions from ONE row, positive
+- [x] 3.4 `tests/scripts/lib/inngest-host-dark-gate.sh` — all 13 conditions from ONE row, positive
       allowlist returning only `dark`; `silent`, `unreadable`, `stale_schema`, `mount_mismatch`,
       `not_dark` are distinct tokens and all abort.
-- [ ] 3.5 `tests/scripts/test-inngest-host-dark-gate.sh` — mutation rows 1-15, harness H1-H3, and
+- [x] 3.5 `tests/scripts/test-inngest-host-dark-gate.sh` — mutation rows 1-15, harness H1-H3, and
       the **drop-one battery** (one case per condition, each asserting a distinct reason token).
-- [ ] 3.6 A test feeding a **real emitter line** through the Guard 2 parser, asserting every field
+- [x] 3.6 A test feeding a **real emitter line** through the Guard 2 parser, asserting every field
       name resolves — the emit/read contract.
-- [ ] 3.7 Workflow job: `environment: inngest-cutover`, typed `confirm=RECUT-INNGEST-VOLUME`,
+- [x] 3.7 Workflow job: `environment: inngest-cutover`, typed `confirm=RECUT-INNGEST-VOLUME`,
       `expected_inngest_volume_id` (`^[0-9]+$`, slot 8 of 10 — no second input), no `[ack-destroy]`
       bypass, never auto-executed, never chained.
-- [ ] 3.8 `concurrency: {group: inngest-cutover, cancel-in-progress: false}` on the recut job,
+- [x] 3.8 `concurrency: {group: inngest-cutover, cancel-in-progress: false}` on the recut job,
       `inngest_host`, `inngest_host_replace`, **and** `cutover-inngest.yml`'s arm/resume path.
-- [ ] 3.9 Synchronous Doppler flag re-read immediately before apply; refuse on anything but
+- [x] 3.9 Synchronous Doppler flag re-read immediately before apply; refuse on anything but
       `rolled-back` / `aborted`.
-- [ ] 3.10 Register in all **six** sites: workflow `options:`, the bound job,
+- [x] 3.10 Register in all **six** sites (**5-of-6 when first ticked, 2026-09-03**: the
+      `confirm` input DESCRIPTION was the missing one, which is the site that tells the operator
+      which targets carry an `environment:` gate). Workflow `options:`, the bound job,
       `terraform-target-parity.test.ts`, `stock-preflight-coverage.test.ts`, `test-all.sh`,
       `infra-validation.yml`. Amend the `confirm` input **description** too — it enumerates which
       targets carry an `environment:` gate.
-- [ ] 3.11 Enum↔job binding check.
-- [ ] 3.12 Mechanically-runnable mutation harness: applies each mutation as a patch to a pristine
+- [x] 3.11 Enum↔job binding check.
+- [x] 3.12 Mechanically-runnable mutation harness: applies each mutation as a patch to a pristine
       copy, runs the guard, asserts the **reason token** (not just rc). Invoked from `test-all.sh`.
 
 ## Phase 4 — MERGE B: records
 
-- [ ] 4.1 ADR-142 **addendum-in-place** recording measured fact. Do not touch its `## Decision`.
-- [ ] 4.2 New ADR (ordinal provisional — re-derive against freshly-fetched refs before merge):
+- [x] 4.1 ADR-142 **addendum-in-place** recording measured fact. Do not touch its `## Decision`.
+- [x] 4.2 New ADR (ordinal provisional — re-derive against freshly-fetched refs before merge):
       destructive clearance authorized only on a measured-empty store and a serving-capable host;
       ADR-142's byte-copy mandatory otherwise. Record the ~20d retention floor and `L`'s polarity
       inversion between `op=arm` and `op=resume`.
-- [ ] 4.3 Ledger row: **keep the `exception`**, re-dated, with the bare-line-number citation
+- [x] 4.3 Ledger row: **keep the `exception`**, re-dated, with the bare-line-number citation
       replaced by a content anchor. Do **not** flip `mechanism` to `luks` in this merge.
-- [ ] 4.4 Article 30 PA-13 limb (e) — substrate is a host-local Redis AOF on a block volume on a
+- [x] 4.4 Article 30 PA-13 limb (e) — substrate is a host-local Redis AOF on a block volume on a
       dedicated host, not "SQLite on the same Hetzner host".
-- [ ] 4.5 File a `compliance/` issue for PA-13 limb (f).
-- [ ] 4.6 File an issue for the **append-only authorized latch clear** — the stated fallback for the
+- [x] 4.5 File a `compliance/` issue for PA-13 limb (f).
+- [x] 4.6 File an issue for the **append-only authorized latch clear** — the stated fallback for the
       `redis_keys > 0` branch, which is otherwise circular.
-- [ ] 4.7 Art. 5(2) destruction-record template under `knowledge-base/legal/audits/`.
-- [ ] 4.8 Update `.c4` if 0.4 found this store's encryption state annotated; re-run
+- [x] 4.7 Art. 5(2) destruction-record template under `knowledge-base/legal/audits/`.
+- [x] 4.8 Update `.c4` if 0.4 found this store's encryption state annotated; re-run
       `c4-code-syntax.test.ts` + `c4-render.test.ts`.
 
 ## Phase 5 — Verification
 
 - [ ] 5.1 `bash scripts/test-all.sh` in full.
-- [ ] 5.2 `python3 scripts/lint-encryption-posture.py --repo-sweep` — exits 0 **with the exception
+- [x] 5.2 `python3 scripts/lint-encryption-posture.py --repo-sweep` — exits 0 **with the exception
       block still present**.
-- [ ] 5.3 `terraform validate`.
+- [x] 5.3 `terraform validate`.
 - [ ] 5.4 `actionlint` on both workflows; `bash -n` on extracted `run:` bodies.
 - [ ] 5.5 Independently re-mutate every guard row and confirm RED (or PASS for must-PASS rows).
-- [ ] 5.6 PR bodies use `Tracks`, never `Closes`.
+- [x] 5.6 PR bodies use `Tracks`, never `Closes`.
 
 ## Out of scope
 

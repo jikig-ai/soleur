@@ -63,6 +63,13 @@ source "$GATE"
 # shellcheck source=tests/scripts/lib/gate-suite-harness.sh
 source "${ROOT}/tests/scripts/lib/gate-suite-harness.sh"
 
+
+# The harness's own wrappers self-test here. gate_check() and gate_mutate_layered() are defined in
+# gate-suite-harness.sh, not in this file, so this suite's local instrument self-test never drove
+# them: a bare `pass "$name"` in gate_check left six suites totalling 280 assertions green on ONE
+# edit. Placed after GATE/PREAMBLE are set, because gate_mutate_layered reads both.
+gate_harness_selftest || true
+
 # rc_update <address> <type> <before-json> <after-json>
 #
 # The one shape rc_entry cannot express: it hardcodes before:null, the create/delete edge.
@@ -98,6 +105,13 @@ rc_fw_attach() {
 # `creates == 1` from.
 #
 # hcloud_firewall_attachment.git_data is NOT among them — see rc_fw_attach.
+# NAMED FOUR AND CORRECTLY SO — do not "correct" this to three. This FIXTURE supplies all four
+# addresses that reference hcloud_server.git_data.id, which is the property the gate's entailment
+# argument rests on. The gate's own `creates == 1` LOOP carries three of them; the fourth,
+# hcloud_firewall_attachment.git_data, is checked by the separate outcome assertion. #7772
+# corrected the GATE's prose, which said "four" about the loop, and a review pass then proposed
+# renaming this helper to match. That would have been wrong in the other direction: the two counts
+# describe different sets, and this one is the fixture's.
 entailed_four() {
   printf '%s,%s,%s,%s' \
     "$(rc_entry 'hcloud_server_network.git_data' 'hcloud_server_network' '["create"]')" \

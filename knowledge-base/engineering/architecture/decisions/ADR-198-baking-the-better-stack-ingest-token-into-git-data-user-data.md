@@ -3,7 +3,7 @@ title: "ADR-198 — baking the Better Stack ingest token into git-data user_data
 status: accepted
 date: 2026-09-03
 tags: [git-data, observability, secrets, user-data, betterstack, luks]
-related_adrs: [ADR-096, ADR-147, ADR-149, ADR-152, ADR-163]
+related_adrs: [ADR-096, ADR-115, ADR-147, ADR-149, ADR-152, ADR-163]
 related_runbooks:
   - knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md
   - knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
@@ -157,6 +157,14 @@ conflated them.
 
 ### Cross-host blast radius
 
+> **SUPERSEDED 2026-09-04 (#7772) — this section's premise is spent, and its conclusion with it.**
+> The sentence below was accurate when measured and is kept because the remediation cost it prices
+> is exactly what motivated the split. It is no longer the estate: **two** Logs sources now exist
+> on team `520508`, git-data ships to its own (`soleur-git-data-prd`, id 2734275), and it has its
+> own root variable `var.git_data_betterstack_logs_token`. The four non-git-data consumers stay on
+> 2457081. See "Leg (3)" in the #7772 addendum below for what the split does and does not buy, and
+> `knowledge-base/legal/audits/2026-09-04-betterstack-source-split-7772.md` for the Art. 30 record.
+
 Measured 2026-09-03 against the Better Stack API: **one** Logs source exists
 (`soleur-inngest-vector-prd`, id 2457081). `var.betterstack_logs_token` fans out to the Inngest
 host's bake and its Doppler project, the zot registry's Doppler secret, git-data's Doppler secret,
@@ -242,9 +250,150 @@ deciding axis; **mode is**. See the table above.
   measured behaviour. What DOES rest on a single line is `lifecycle { ignore_changes = [value] }`
   on `doppler_secret.git_data_betterstack_logs_token`: baked copy and Doppler copy come from the
   same variable, so without it the next apply reverts a rotated token on both paths at once.
-  `git-data-rung2-rehearsal.test.sh` now pins it.
+  `git-data-rung2-rehearsal.test.sh` now pins it. **(#7772) The corollary was missing and is what
+  made the first draft of the §2 addendum contradict this bullet:** because Terraform is barred
+  from writing that value, the fresh token has to reach `prd_git_data` OUT OF BAND, or "the
+  Doppler copy still wins at runtime" describes a copy nobody updated. The corrected three-write
+  procedure is at §2 below; neither half of this is `terraform apply`.
 - `sentry_dsn` and this token both belong in the `## Encryption Posture` on-host store — a third
   store alongside `user_data` and `terraform.tfstate`, with its own mode and its own
   `does_not_defend`.
 - Better Stack's processor DPA posture is recorded at `knowledge-base/legal/compliance-posture.md`.
   Linked, not duplicated. Chapter V is not engaged: both sinks are EU-resident.
+
+---
+
+## Addendum — 2026-09-03 (#7772): leg (3) closed, and the "blocked" premise corrected
+
+This ADR shipped with one leg of its own three-part capability test open, and with a reason for
+leaving it open that was half wrong. Both are resolved here. Nothing above is edited: the original
+text is the record of what was believed on 2026-09-03 when the token was first baked, and this
+section is what changed hours later.
+
+### 1. Leg (3) — "single-purpose to this host" — now PASSES
+
+git-data has its own Better Stack Logs source: **2734275 `soleur-git-data-prd`**, platform `http`,
+region `eu-central-1a`, 90-day retention, ingesting on
+`s2734275.eu-central-1a.betterstackdata.com`, table `soleur_git_data_prd`. The token baked into
+`user_data` is that source's, not 2457081's.
+
+The cross-host blast radius recorded above is therefore retired for this host. A git-data metadata
+leak no longer forces a rotation that darkens the web host's shipper and the registry's, and no
+longer requires an Inngest host replace alongside git-data's — it requires one rotation on one
+source that one host writes to. The four non-git-data consumers stay on 2457081 deliberately.
+
+### 2. The rejection reason was half false, and the half that was false is the operative half
+
+§Alternatives says a per-source token needs "either a provider that does not exist here or an
+operator mint, which `hr-all-infrastructure-provisioning-servers` forbids doing ad hoc."
+
+The **provider** half is true and was re-verified: `betterstackhq/better-uptime` at 0.21.14 exposes
+no Logs-source resource — 97 files in its `internal/provider` tree, all monitors, heartbeats,
+on-call, status pages and integrations — and no other Better Stack provider exists in the Terraform
+registry. `inngest.tf` already records that as an IaC gap and it stands.
+
+The **operator-mint** half was an a-priori classification, and this repo's own learning
+(`2026-06-17-vendor-dashboard-mint-presumed-playwright-automatable.md`) forbids exactly that: the
+burden of proof is on the operator-only claim, discharged only by an attempt reaching a named human
+gate. No attempt had been made. Measured on 2026-09-03:
+
+| Credential | `POST /api/v2/sources` with `{}` |
+|---|---|
+| `BETTERSTACK_API_TOKEN` | **422** — missing required attributes |
+| `BETTERSTACK_API_TOKEN_READONLY` | **403** |
+
+The account-wide token already in Doppler `prd_terraform` can create Logs sources. What made the
+capability look blocked was a **suffix-variant sibling secret** sitting next to it — no token was
+operating outside its documented scope, and there was no security anomaly to file. The mint needed
+no Playwright, no dashboard and no operator step.
+
+That does not make it Terraform-managed. It is the same out-of-band provision source 2457081 took
+on 2026-05-21, and it is recorded as an IaC gap on the same terms rather than claimed as IaC.
+**Rotation procedure until a provider exists — CORRECTED, because the first draft of this
+addendum ended "then apply" and that instruction was wrong twice over.** It contradicted this
+ADR's own Consequences bullet ("it does not require a replace") three screens up, and it would
+not have rotated the credential it claimed to rotate: `doppler_secret.git_data_betterstack_logs_token`
+carries `lifecycle { ignore_changes = [value] }`, so an apply leaves the `prd_git_data` copy at
+the OLD value while re-rendering `user_data` with the new one — and `env` beats `baked`, so every
+post-Doppler stage would go on presenting the revoked token and 401. An apply is also the one
+action that turns a zero-downtime rotation into a destructive replace of the host holding every
+connected user's source.
+
+The three writes are independent and none of them is `terraform apply`:
+
+1. **Mint** — `POST /api/v2/sources` (or the dashboard) for a fresh token on source `2734275`.
+2. **Doppler `soleur/prd_git_data` → `BETTERSTACK_LOGS_TOKEN`**, written OUT OF BAND. This is
+   what `ignore_changes = [value]` exists to permit: the Doppler copy's source of truth is the
+   vendor, not this repo, and Terraform is deliberately not allowed to push a value back over it.
+   The running host picks this up at its next boot, because `doppler run` reads once at start.
+3. **Doppler `soleur/prd_terraform` → `GIT_DATA_BETTERSTACK_LOGS_TOKEN`**, so the NEXT render
+   bakes the fresh value. Do **not** apply for this alone. It lands with the next host replace,
+   whenever one happens for its own reasons.
+
+Between (2) and (3) the pre-Doppler stages (`bootcmd_start`..`doppler_run`) ship on the stale
+baked token and their Better Stack copy is refused. That is the degradation the Consequences
+bullet describes, it is bounded to those stages, and it is mirrored to Sentry at
+`stage:betterstack_ingest` rather than swallowed — which is the failure mode #7772 item C routes
+to a rule for the first time. Two hygiene rules the
+mint itself must keep, both learned the hard way here: the API token goes on **stdin**
+(`curl -K -`), never argv, because `/proc/<pid>/cmdline` is world-readable; and every read pipes
+through `jq` selecting named fields, because `GET /sources` returns **every source's ingest
+token**, including the shared credential four production consumers depend on.
+
+### 3. Leg (2) — the metadata-endpoint escape — is closed for non-root
+
+**A correction this PR deliberately did NOT ship, because a comment costs a host.**
+`cloud-init-inngest.yml` asserts that "`nft -f` table declarations replace our table atomically →
+idempotent". Measured on `ubuntu:24.04` / nftables v1.0.9: applying a bare `table` declaration
+twice leaves **two** copies of every rule — `nft -f` MERGES. The git-data ruleset therefore uses
+the bare-declare / `delete table` / declare idiom and records the measurement inline. The inngest
+comment stays wrong on purpose: `hcloud_server.inngest` carries no `ignore_changes = [user_data]`
+and that template has no render-time rationale strip, so editing one comment forces a destructive
+replace of the live Inngest host. Tracked on **#7827**, to land opportunistically in whatever PR
+next replaces that host. It is not a live defect there — the unit is a boot-time `oneshot` and a
+reboot clears nftables, so the merge has nothing to merge into — but a reader trusting the comment
+would be free to re-run the script within a boot, and then it would be.
+
+§"Why 0600, and exactly what that buys" concedes that `0600` defends a file-read primitive and not
+code execution, because `hcloud_firewall.git_data` declares zero rules and any code execution as
+`git` can read the whole `user_data` from the metadata endpoint. That escape is now closed by a
+host-local nftables drop of `169.254.169.254` for `meta skuid != 0`, delivered by cloud-init.
+
+The tracked closure said "an egress rule blocking the metadata IP for non-root UIDs", and #7772
+described it as a `.tf` firewall change. It is **not** expressible as one, for three independent
+reasons: `hcloud_firewall` rules are allow-only (no `action`/`deny`/`policy` attribute —
+`destination_ips` is documented as the list that is *allowed*); they carry no UID predicate, which
+this ADR's own wording requires; and Hetzner's firewall FAQ states the firewall always permits
+traffic to the cloud metadata server regardless of rules. Being a template change it re-holds
+`git_data_rung2_rehearsal_gate`, which is why it had to land before the rehearsal rather than after.
+
+Measured on git-data's own image (Ubuntu 24.04, nftables v1.0.9) rather than assumed — root still
+reaches the endpoint (200, so cloud-init's own datasource is unaffected), non-root is dropped, and
+an un-ruled control address still reaches, which is what makes the negative arm meaningful. Also
+measured, and it contradicts the sibling precedent this was modelled on: `cloud-init-inngest.yml`
+comments that "`nft -f` table declarations replace our table atomically → idempotent". **They do
+not — they MERGE.** A bare declaration applied twice leaves two copies of every rule. The
+declare/delete/declare idiom is what actually replaces. The inngest host carries the same latent
+accumulation and is tracked separately.
+
+### 4. The fourth tracked item is triaged OUT, with a correction rather than a deferral
+
+§"Considered: refresh the baked file from Doppler at boot" proposed a post-Doppler `runcmd` that
+rewrites `/etc/default/git-data-betterstack` from the Doppler value, to close the stale-baked-token
+window. It cannot deliver its stated benefit. `runcmd` is **once per instance**, so it runs at
+first boot — the one moment when the baked value and the Doppler value are necessarily identical,
+because the same apply wrote both. It would then never run again on a host that never reboots
+(ADR-115 bars git-data from the reboot primitive). Closing that window needs a periodic refresh, a
+different mechanism with its own failure modes. Not deferred — withdrawn as specified.
+
+### 5. What is still open
+
+The `stage:betterstack_ingest` mirror is now routed: `sentry_issue_alert.git_data_boot_warning`
+covers it and `gitdata_nftables_metadata_warn` at low severity with `fallthrough_type = "NoOne"`,
+so it lands in the issue stream without paging. The claim "a queryable record for whoever is
+already looking" is superseded.
+
+`user_data` still bakes `doppler_token`, that token still reads `prd_git_data`, and that config
+still holds `GIT_DATA_LUKS_KEY` — so **leg (2) remains failed for the incumbent** under a
+*file-read* primitive against `/etc/default/git-data-doppler`, which the nftables rule does not
+address. What the rule closes is the metadata-endpoint path. Tracked at #7772.

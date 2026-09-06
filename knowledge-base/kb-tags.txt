@@ -4163,6 +4163,7 @@ xargs
 xhr-upload
 xmlhttprequest
 xss
+xtrace
 yagni
 yaml
 yaml-frontmatter

@@ -6,8 +6,8 @@ import { describe, it, expect } from "vitest";
 // Cross-artifact contract test (#4918, PIR #4913 follow-up; re-pointed #5005).
 //
 // The `kb_sync_silent_failure` Sentry issue-alert filters on
-// `feature == "kb-route-helpers"` AND `op IS_IN` the kb/sync silent-failure
-// slug. Because the alert uses `filter_match = "all"`, a rename of the
+// `feature == "kb-route-helpers"` AND `op `in`` the kb/sync silent-failure
+// slug. Because the alert uses `logic_type = "all"`, a rename of the
 // `feature` tag OR the op slug on EITHER side (the emit site in
 // kb/sync/route.ts, or the filter value in issue-alerts.tf) would silently zero
 // the alert's matches — recreating the ~19-day-silent regression class one
@@ -30,13 +30,13 @@ const tf = readFileSync(join(here, "../infra/sentry/issue-alerts.tf"), "utf8");
 
 // Scope the filter-side assertions to the kb_sync_silent_failure resource
 // BLOCK, not the whole file. A whole-file `toContain` would pass vacuously if a
-// slug were deleted from THIS rule's IS_IN value while still lingering elsewhere
+// slug were deleted from THIS rule's `in` value while still lingering elsewhere
 // in issue-alerts.tf (e.g. a comment or a sibling rule) — the removal would
 // silently zero THIS alert's matches while the test stayed green. Slicing from
 // the resource marker to the next `resource ` (or EOF) pins the assertion to
 // this rule alone.
 const RESOURCE_DECL =
-  'resource "sentry_issue_alert" "kb_sync_silent_failure"';
+  'resource "sentry_alert" "kb_sync_silent_failure"';
 const blockStart = tf.indexOf(RESOURCE_DECL);
 const nextResource = tf.indexOf("\nresource ", blockStart + RESOURCE_DECL.length);
 const tfBlock =
@@ -94,8 +94,8 @@ describe("kb-sync-silent-failure alert op/feature contract", () => {
     });
   }
 
-  it("the alert block binds the slugs into one IS_IN filter value", () => {
-    // The IS_IN value is a single comma-joined string containing all slugs, in
+  it("the alert block binds the slugs into one `in` filter value", () => {
+    // The `in` value is a single comma-joined string containing all slugs, in
     // declaration order. Asserting against tfBlock (not the whole file) means
     // removing or reordering any slug in THIS rule fails CI even if the slug
     // survives elsewhere in the file.
