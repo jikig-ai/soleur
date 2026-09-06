@@ -1,7 +1,7 @@
 """Fixture git environment for the python test suites under ``tests/scripts``.
 
 The python sibling of ``plugins/soleur/test/lib/git-fixture-env.ts``. See #7833 and
-``knowledge-base/project/specs/feat-one-shot-7833-git-dir-beats-cwd/measurements.md``.
+``knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cwd/measurements.md``.
 
 A test that builds a temporary git fixture and passes ``-C <dir>`` to every ``git`` call is still
 not scoped to that fixture: when the test process inherits ``GIT_DIR`` / ``GIT_INDEX_FILE`` from a

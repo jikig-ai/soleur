@@ -16,7 +16,7 @@
 //      into an enclosing repository from the fixture's own directory;
 //   3. config hermeticity — a developer's ~/.config/git/attributes still rewrites fixture bytes.
 //
-// See #7833 and `knowledge-base/project/specs/feat-one-shot-7833-git-dir-beats-cwd/measurements.md`.
+// See #7833 and `knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cwd/measurements.md`.
 
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";

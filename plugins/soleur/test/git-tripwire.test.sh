@@ -224,7 +224,7 @@ printf '  %d passed, %d failed, %d assertions\n' "$PASS" "$FAIL" "$ASSERTIONS"
 
 MIN_ASSERTIONS=24
 if (( ASSERTIONS < MIN_ASSERTIONS )); then
-  printf 'FLOOR: %d assertions < %d — the suite examined less than it must\n' \
+  printf '[FATAL] assertion floor: %d assertions < %d — the suite examined less than it must\n' \
     "$ASSERTIONS" "$MIN_ASSERTIONS" >&2
   exit 1
 fi

@@ -223,12 +223,12 @@ printf '  %d passed, %d failed | run-lines=%d runners=%d hook-files=%d assertion
 
 MIN_ASSERTIONS=8
 if (( ASSERTIONS < MIN_ASSERTIONS )); then
-  printf 'FLOOR: %d assertions < %d — the guard examined less than it must\n' \
+  printf '[FATAL] assertion floor: %d assertions < %d — the guard examined less than it must\n' \
     "$ASSERTIONS" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 if (( RUN_LINES < 26 || RUNNER_LINES < 3 || HOOK_FILES < 2 )); then
-  printf 'FLOOR: corpus below floor (run-lines=%d runners=%d hook-files=%d)\n' \
+  printf '[FATAL] assertion floor: corpus below floor (run-lines=%d runners=%d hook-files=%d)\n' \
     "$RUN_LINES" "$RUNNER_LINES" "$HOOK_FILES" >&2
   exit 1
 fi

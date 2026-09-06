@@ -1,6 +1,7 @@
 # Session State
 
 ## Plan Phase
+
 - Plan file: knowledge-base/project/plans/2026-09-04-fix-test-fixture-git-env-scrub-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
@@ -9,6 +10,7 @@
   cleared. No re-target, no new refs to probe.
 
 ### Errors
+
 - deepen-plan gate 4.7 rejected the first run: `## Observability` lacked the required `logs:` field.
   Added `where`/`retention`; all five fields pass.
 - AC15's citation loop flagged a forward reference the plan had introduced
@@ -20,6 +22,7 @@
   `### Deferral` under `## Files to Edit`. Content anchor resolves.
 
 ### Decisions
+
 - The environment is the write boundary, not the operand. `git -C <abs>` and `cwd:` are both
   overridden by `GIT_DIR`; with `GIT_DIR` scrubbed, an absolute `GIT_INDEX_FILE` still retargets
   `git add` into the victim's index. Both measured (M-1, M-3).
@@ -45,6 +48,7 @@
   directory over.
 
 ### Components Invoked
+
 soleur:plan; soleur:deepen-plan; agents repo-research-analyst, learnings-researcher,
 functional-discovery, architecture-strategist, spec-flow-analyzer, code-simplicity-reviewer,
 kieran-rails-reviewer, scoped fable advisor consult; scripts lint-guard-contract.py,

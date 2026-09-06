@@ -80,7 +80,7 @@ printf '  %d passed, %d failed, %d assertions\n' "$PASS" "$FAIL" "$ASSERTIONS"
 
 MIN_ASSERTIONS=6
 if (( ASSERTIONS < MIN_ASSERTIONS )); then
-  printf 'FLOOR: %d assertions < %d\n' "$ASSERTIONS" "$MIN_ASSERTIONS" >&2; exit 1
+  printf '[FATAL] assertion floor: %d assertions < %d\n' "$ASSERTIONS" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 if (( FAIL > 0 )); then exit 1; fi
 exit 0
