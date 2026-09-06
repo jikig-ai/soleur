@@ -69,7 +69,23 @@ done
 [[ "$MAX_POLLS" =~ ^[0-9]+$ && "$MAX_POLLS" -ge 1 ]] || { echo "monitor-pr-checks: --max-polls must be an integer >= 1" >&2; exit 3; }
 [[ "$HEARTBEAT_EVERY" =~ ^[0-9]+$ && "$HEARTBEAT_EVERY" -ge 1 ]] || { echo "monitor-pr-checks: --heartbeat-every must be an integer >= 1" >&2; exit 3; }
 
-ERRTMP="$(mktemp)"; trap 'rm -f "$ERRTMP"' EXIT
+# REFUSE TO START rather than degrade. `mktemp`'s status was unchecked, and this script runs
+# `set -uo pipefail` WITHOUT `-e`: on failure ERRTMP="" — which is SET, so `set -u` does not fire —
+# and every `2>"$ERRTMP"` then fails the redirection, so the gh call NEVER RUNS. probe_ok=0 on
+# every poll, forever. MEASURED with gh stubbed healthy and mktemp stubbed failing: the monitor
+# burned its whole budget printing `gh probe FAILED` and closed with `This is an unreachable
+# GitHub, not a quiet PR` while GitHub was reachable and the PR was green.
+#
+# That is worse than the silence this script was written to fix: silence is ambiguous, a confident
+# false verdict is not. And it is a dependency this file INTRODUCED — before stderr capture there
+# was no temp file, so a full TMPDIR could not affect the success path at all.
+ERRTMP="$(mktemp 2>/dev/null)" || ERRTMP=""
+if [[ -z "$ERRTMP" || ! -w "$ERRTMP" ]]; then
+  printf 'monitor-pr-checks: cannot create a writable temp file for gh stderr (TMPDIR=%s). Refusing to run: without it every poll reports a gh outage that is not happening.\n' \
+    "${TMPDIR:-/tmp}" >&2
+  exit 3
+fi
+trap 'rm -f "$ERRTMP"' EXIT
 
 n=0; prev_sig=""
 while :; do
@@ -85,13 +101,13 @@ while :; do
   view="$(gh pr view "$PR" "${REPO_ARG[@]}" --json state,mergeStateStatus,autoMergeRequest \
            --jq '"\(.state)|\(.mergeStateStatus)|\(.autoMergeRequest != null)"' 2>"$ERRTMP" || true)"
   view_err="$(head -c 160 "$ERRTMP" 2>/dev/null | tr '\n' ' ')"
-  probe_ok=1; failed_probe=""
-  [[ -n "$view" ]] || { view="UNKNOWN|UNKNOWN|false"; probe_ok=0; failed_probe="pr view"; }
+  probe_ok=1; failed_probe=""; view_fail_err=""; checks_fail_err=""
+  [[ -n "$view" ]] || { view="UNKNOWN|UNKNOWN|false"; probe_ok=0; failed_probe="pr view"; view_fail_err="$view_err"; }
   IFS='|' read -r state mergestate automerge <<<"$view"
 
   checks="$(gh pr checks "$PR" "${REPO_ARG[@]}" --json name,bucket 2>"$ERRTMP" || true)"
   checks_err="$(head -c 160 "$ERRTMP" 2>/dev/null | tr '\n' ' ')"
-  [[ -n "$checks" ]] || { checks='[]'; probe_ok=0; failed_probe="${failed_probe:+$failed_probe + }pr checks"; }
+  [[ -n "$checks" ]] || { checks='[]'; probe_ok=0; failed_probe="${failed_probe:+$failed_probe + }pr checks"; checks_fail_err="$checks_err"; }
 
   tot=$(jq  'length'                                        <<<"$checks" 2>/dev/null || echo 0)
   pass=$(jq '[.[]|select(.bucket=="pass")]|length'          <<<"$checks" 2>/dev/null || echo 0)
@@ -126,9 +142,19 @@ while :; do
       # DEGRADED INPUT MUST NOT RENDER AS MEASURED INPUT. The fallbacks below are literals, not
       # readings; printing them in the same shape as real counts is the "a zero that does not say
       # what it means" class this repo fixed twice on the observability side.
-      printf '[gh probe FAILED: %s — state unknown] (poll %s/%s)%s%s\n' \
-        "${failed_probe:-unknown}" "$n" "$MAX_POLLS" \
-        "${view_err:+ · }${view_err}${checks_err:+ · }${checks_err}" "$why"
+      if [[ "$failed_probe" == "pr checks" ]]; then
+        # `pr view` SUCCEEDED — state, mergeState and automerge are real readings. Saying "state
+        # unknown" here would discard data we hold and hide a merge/disarm/DIRTY transition for the
+        # whole outage.
+        printf '[%s|%s|automerge=%s] check counts UNAVAILABLE — `gh pr checks` failed (poll %s/%s)%s%s\n' \
+          "$state" "$mergestate" "$automerge" "$n" "$MAX_POLLS" \
+          "${checks_fail_err:+ · checks: }${checks_fail_err}" "$why"
+      else
+        printf '[gh probe FAILED: %s — state unknown] (poll %s/%s)%s%s%s\n' \
+          "${failed_probe:-unknown}" "$n" "$MAX_POLLS" \
+          "${view_fail_err:+ · view: }${view_fail_err}" \
+          "${checks_fail_err:+ · checks: }${checks_fail_err}" "$why"
+      fi
     else
       printf '[%s|%s|automerge=%s] %s/%s pass · %s fail · %s cancel · %s pending%s skipped · (poll %s/%s)%s%s%s\n' \
         "$state" "$mergestate" "$automerge" "$pass" "$gradable" "$fail" "$cancel" "$pend" \
@@ -143,12 +169,32 @@ while :; do
     # `$gradable`, NOT `$tot` — the same denominator the poll line uses. Fixing the fraction in the
     # per-poll renderer and leaving it raw here made the landing run print `68/68 pass` and
     # `68/73 pass` two lines apart. The instance fixed, the class left.
-    MERGED) printf 'MERGED — PR #%s landed (%s/%s pass, %s skipped, %s fail, %s cancel).\n' "$PR" "$pass" "$gradable" "$skip" "$fail" "$cancel"; exit 0 ;;
+    MERGED)
+      # The degraded guard belongs here too. `gh pr checks` failing on the very poll that first
+      # observes MERGED is a REALISTIC co-occurrence, not a contrived one: the head branch has just
+      # been auto-deleted, and gh reports `no checks reported on the '<branch>' branch` with empty
+      # stdout and a non-zero exit — this script's failure condition exactly. Without the guard the
+      # closing line read `landed (0/0 pass, 0 skipped, 0 fail, 0 cancel)` from the `[]` literal.
+      if [[ "$probe_ok" != "1" ]]; then
+        printf 'MERGED — PR #%s landed, but the %s probe FAILED on this poll, so the check counts were NOT measured.\n' "$PR" "${failed_probe:-gh}"
+      else
+        printf 'MERGED — PR #%s landed (%s/%s pass, %s skipped, %s fail, %s cancel).\n' "$PR" "$pass" "$gradable" "$skip" "$fail" "$cancel"
+      fi
+      exit 0 ;;
     CLOSED) printf 'CLOSED WITHOUT MERGE — PR #%s.\n' "$PR"; exit 1 ;;
   esac
 
   # Auto-merge silently switching off is a state the operator must hear about: the PR then sits
   # green and unmerged forever, which reads exactly like "still waiting".
+  # NOTHING TO GRADE is its own verdict. `gradable` was introduced as "the denominator is what CAN
+  # pass", and this gate — which decides whether anything settled at all — was left asking `tot`.
+  # On a PR whose every job is path-filtered that produced `0/0 pass` immediately above `ALL GREEN`.
+  # `ALL GREEN` and `68/68 pass` render identically to the eye and mean entirely different things.
+  if [[ "$tot" -gt 0 && "$pend" -eq 0 && "$gradable" -eq 0 && "$probe_ok" == "1" ]]; then
+    printf 'CHECKS SETTLED, NOTHING TO GRADE — PR #%s: all %s check(s) were skipped (path filters); no check actually ran (mergeState=%s).\n' \
+      "$PR" "$skip" "$mergestate"; exit 0
+  fi
+
   if [[ "$tot" -gt 0 && "$pend" -eq 0 ]]; then
     if [[ "$fail" -gt 0 || "$cancel" -gt 0 ]]; then
       # UNSTABLE/CLEAN + auto-merge armed means the failing check is NOT required — GitHub still

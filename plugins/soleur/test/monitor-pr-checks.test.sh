@@ -190,12 +190,21 @@ out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
 # The landing run for #7839 printed `68/68 pass` on the status line and `68/73 pass` on the MERGED
 # line two lines apart: the poll renderer used $gradable and the terminal line used raw $tot. The
 # fraction was fixed in one place and left raw in the other — the instance, not the class.
-mkstub 'MERGED|CLEAN|true' "$SKIP_CHECKS"
+# FIXTURE MUST MAKE pass != gradable. The first cut reused SKIP_CHECKS (pass=1, gradable=1), where
+# `$pass` and `$gradable` render the SAME string — so a MERGED line hardcoded to `$pass/$pass`
+# (always N/N, hiding every discrepancy) passed. Mutation-proven: that build was green at 28/28.
+# One non-required failure makes gradable=2 against pass=1, and a PR CAN merge in that state.
+MERGED_MIXED='[{"name":"a","bucket":"pass"},{"name":"opt","bucket":"fail"},{"name":"e2e","bucket":"skipping"},{"name":"d","bucket":"skipping"}]'
+mkstub 'MERGED|CLEAN|true' "$MERGED_MIXED"
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
-if [[ "$rc" -eq 0 && "$out" == *"MERGED"* && "$out" == *"1/1 pass"* && "$out" == *"2 skipped"* && "$out" != *"1/3"* ]]; then
-  ok "T17 the MERGED line uses the gradable denominator and names skips (never 1/3)"
+# Asserted against the MERGED LINE ALONE. The first cut checked `$out` as a whole, whose positive
+# clauses were satisfied by the POLL line printed just above — so a MERGED line rendering `$pass/$pass`
+# (always N/N, hiding every discrepancy, i.e. the whole subject of this PR) passed 23/23 green.
+_merged_line="$(grep '^MERGED' <<<"$out" || true)"
+if [[ "$rc" -eq 0 && "$_merged_line" == *"landed (1/2 pass, 2 skipped,"* ]]; then
+  ok "T17 the MERGED LINE ITSELF renders gradable+skips (asserted in isolation, not against the poll line)"
 else
-  no "T17 MERGED denominator" "rc=$rc out=[$out]"
+  no "T17 MERGED denominator" "rc=$rc merged_line=[$_merged_line]"
 fi
 
 # ── T18: a probe failure must name WHICH probe and carry the error ──────────────
@@ -213,6 +222,120 @@ if [[ "$out" == *"gh probe FAILED:"* && "$out" == *"pr view"* && "$out" == *"con
   ok "T18 a probe failure names the failing call and quotes gh's stderr"
 else
   no "T18 probe failure diagnosability" "rc=$rc out=[$out]"
+fi
+
+# ── T18b/T18c: ONE-SIDED probe failures — the arms that make attribution non-vacuous ────
+# T18's stub fails BOTH calls, so `failed_probe` is "pr view + pr checks" and a build that wrote
+# "pr view" in both branches matched it. MUTATION-PROVEN vacuous: replacing the checks-branch
+# label with "pr view" left the suite 23/23 green, certifying a script in which half this PR's
+# headline fix does not exist. Every failure stub in the file was all-or-nothing.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   printf '%s' 'OPEN|CLEAN|true' ;;
+  checks) echo "gh: HTTP 502 from api.github.com" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+if [[ "$out" == *"check counts UNAVAILABLE"* && "$out" == *"502"* && "$out" != *"pr view"* && "$out" == *"OPEN|CLEAN"* ]]; then
+  ok "T18b only-checks-fails: names checks, does NOT say 'pr view', and still reports the state it DID measure"
+else
+  no "T18b probe attribution / partial-failure reporting" "out=[$out]"
+fi
+
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   echo "gh: could not resolve host" >&2; exit 1 ;;
+  checks) printf '%s' '[{"name":"a","bucket":"pass"}]' ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+if [[ "$out" == *"FAILED: pr view"* && "$out" != *"pr checks"* && "$out" == *"could not resolve"* ]]; then
+  ok "T18c only-view-fails: names 'pr view' and NOT 'pr checks' (the mirror — together these pin attribution)"
+else
+  no "T18c probe attribution mirror" "out=[$out]"
+fi
+
+# ── T19: a successful call's stderr must not be printed as the failed call's cause ──
+# gh writes to stderr on SUCCESS (the release-upgrade nag). Both fragments were rendered
+# unconditionally with identical separators and no attribution, so the working call's benign
+# notice appeared first, as the most prominent "cause" of the other call's failure.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   echo "gh: A new release of gh is available: 2.62.0 -> 2.63.2" >&2; printf '%s' 'OPEN|CLEAN|true' ;;
+  checks) echo "gh: HTTP 502" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+[[ "$out" != *"new release"* && "$out" == *"502"* ]] && ok "T19 only a FAILED call's stderr is carried (the success nag is not shown as the cause)" || no "T19 stderr attribution" "out=[$out]"
+
+# ── T20: mktemp failure must REFUSE TO RUN, not report a false outage ───────────────
+# CRITICAL regression this PR introduced: unchecked mktemp -> ERRTMP="" (which is SET, so `set -u`
+# is silent) -> `2>""` fails the redirection -> the gh call never runs -> probe_ok=0 forever.
+# MEASURED with gh healthy: the monitor burned its whole budget and closed with
+# "This is an unreachable GitHub, not a quiet PR" while GitHub was reachable.
+mkstub 'OPEN|CLEAN|true' "$GREEN_CHECKS"
+cat > "$STUB/mktemp" <<'EOF'
+#!/usr/bin/env bash
+echo "mktemp: No space left on device" >&2
+exit 1
+EOF
+chmod +x "$STUB/mktemp"
+out="$(run 7778 --interval 10 --max-polls 2 2>&1)"; rc=$?
+rm -f "$STUB/mktemp"
+if [[ "$rc" -eq 3 && "$out" == *"Refusing to run"* && "$out" != *"probe FAILED"* ]]; then
+  ok "T20 an unwritable TMPDIR REFUSES to start (rc=3) instead of reporting a gh outage that is not happening"
+else
+  no "T20 mktemp failure handling" "rc=$rc out=[$out]"
+fi
+
+# ── T21: all-skipped settles as NOTHING TO GRADE, never 'ALL GREEN' ─────────────────
+ALLSKIP='[{"name":"a","bucket":"skipping"},{"name":"b","bucket":"skipping"}]'
+mkstub 'OPEN|CLEAN|false' "$ALLSKIP"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 0 && "$out" == *"NOTHING TO GRADE"* && "$out" != *"ALL GREEN"* ]] && ok "T21 a fully path-filtered PR settles as NOTHING TO GRADE, not ALL GREEN over 0/0" || no "T21 all-skipped verdict" "rc=$rc out=[$out]"
+
+# ── T19b: the OTHER stderr branch — view FAILS while checks SUCCEEDS with a nag ──────
+# T19 only exercises the partial-failure renderer (`check counts UNAVAILABLE`). The
+# `gh probe FAILED` renderer is a DIFFERENT line with its own fragments, and a mutation swapping
+# `checks_fail_err` back to `checks_err` there survived T19 untouched. Here `pr checks` SUCCEEDS
+# while printing the upgrade nag, so a build that renders the successful call's stderr shows it.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   echo "gh: could not resolve host" >&2; exit 1 ;;
+  checks) echo "gh: A new release of gh is available: 2.62.0 -> 2.63.2" >&2; printf '%s' '[{"name":"a","bucket":"pass"}]' ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"
+[[ "$out" == *"FAILED: pr view"* && "$out" != *"new release"* ]] && ok "T19b the probe-FAILED line carries only the FAILED call's stderr (not the successful call's nag)" || no "T19b stderr attribution on the probe-FAILED branch" "out=[$out]"
+
+# ── T22: MERGED while `gh pr checks` fails — the degraded guard on the terminal line ──
+# The realistic co-occurrence: the poll that first observes MERGED is also the one where the head
+# branch was just auto-deleted, so `gh pr checks` returns empty with a non-zero exit. Without the
+# guard the closing line rendered the `[]` literal as `landed (0/0 pass, 0 skipped, 0 fail, 0
+# cancel)` — fabricated zeros as the final word on a landed PR. Mutation-proven: disabling the
+# guard left the suite green until this arm existed.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$2" in
+  view)   printf '%s' 'MERGED|UNKNOWN|true' ;;
+  checks) echo "gh: no checks reported on the 'feat/x' branch" >&2; exit 1 ;;
+esac
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+_ml="$(grep '^MERGED' <<<"$out" || true)"
+if [[ "$rc" -eq 0 && "$_ml" == *"were NOT measured"* && "$_ml" != *"0/0 pass"* ]]; then
+  ok "T22 MERGED with a failed checks probe says the counts were NOT measured (never fabricated zeros)"
+else
+  no "T22 MERGED degraded guard" "rc=$rc merged_line=[$_ml]"
 fi
 
 # ── T7 a gh failure must not kill the loop ───────────────────────────────────────
@@ -240,9 +363,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 23 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 23.\n' "$_ran" >&2
+if [[ "$_ran" -lt 30 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 30.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 23)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 30)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1
