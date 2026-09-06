@@ -186,6 +186,35 @@ mkstub 'OPEN|CLEAN|false' "$GREEN_CHECKS"
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
 [[ "$rc" -eq 0 && "$out" == *"needs an explicit merge"* ]] && ok "T16 CLEAN + auto-merge off still DOES advise the explicit merge (T15 is not just 'never advise')" || no "T16 clean advises merge" "rc=$rc out=$out"
 
+# ── T17: the MERGED line must use the SAME denominator as the poll line ─────────
+# The landing run for #7839 printed `68/68 pass` on the status line and `68/73 pass` on the MERGED
+# line two lines apart: the poll renderer used $gradable and the terminal line used raw $tot. The
+# fraction was fixed in one place and left raw in the other — the instance, not the class.
+mkstub 'MERGED|CLEAN|true' "$SKIP_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 0 && "$out" == *"MERGED"* && "$out" == *"1/1 pass"* && "$out" == *"2 skipped"* && "$out" != *"1/3"* ]]; then
+  ok "T17 the MERGED line uses the gradable denominator and names skips (never 1/3)"
+else
+  no "T17 MERGED denominator" "rc=$rc out=[$out]"
+fi
+
+# ── T18: a probe failure must name WHICH probe and carry the error ──────────────
+# `[gh probe FAILED — state unknown]` named neither the call nor the reason, so four occurrences
+# on a live run were undiagnosable afterwards. That is the same "a signal that does not say what
+# it means" defect this script exists to fix, one level in.
+cat > "$STUB/gh" <<'EOF'
+#!/usr/bin/env bash
+echo "gh: connection reset by peer" >&2
+exit 1
+EOF
+chmod +x "$STUB/gh"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$out" == *"gh probe FAILED:"* && "$out" == *"pr view"* && "$out" == *"connection reset"* ]]; then
+  ok "T18 a probe failure names the failing call and quotes gh's stderr"
+else
+  no "T18 probe failure diagnosability" "rc=$rc out=[$out]"
+fi
+
 # ── T7 a gh failure must not kill the loop ───────────────────────────────────────
 printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
 # RE-SCOPED (not deleted): this asserted the OLD rendering, `UNKNOWN|UNKNOWN|automerge=false 0/0`,
@@ -211,9 +240,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 21 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 21.\n' "$_ran" >&2
+if [[ "$_ran" -lt 23 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 23.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 21)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 23)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1

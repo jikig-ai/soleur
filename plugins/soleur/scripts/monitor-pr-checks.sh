@@ -69,20 +69,29 @@ done
 [[ "$MAX_POLLS" =~ ^[0-9]+$ && "$MAX_POLLS" -ge 1 ]] || { echo "monitor-pr-checks: --max-polls must be an integer >= 1" >&2; exit 3; }
 [[ "$HEARTBEAT_EVERY" =~ ^[0-9]+$ && "$HEARTBEAT_EVERY" -ge 1 ]] || { echo "monitor-pr-checks: --heartbeat-every must be an integer >= 1" >&2; exit 3; }
 
+ERRTMP="$(mktemp)"; trap 'rm -f "$ERRTMP"' EXIT
+
 n=0; prev_sig=""
 while :; do
   n=$((n + 1))
 
   # `|| true` on BOTH probes and a literal fallback: a transient gh/network failure must not kill
   # the loop. A monitor that dies on one bad request is the silent failure one level up.
+  # stderr is CAPTURED, not discarded. A bare "probe FAILED" line names neither which call failed
+  # nor why, so a recurring failure cannot be diagnosed from the transcript afterwards — which is
+  # the same "a signal that does not say what it means" problem this script exists to fix, one
+  # level in. `|| true` keeps a failure from killing the loop.
+  view_err=""
   view="$(gh pr view "$PR" "${REPO_ARG[@]}" --json state,mergeStateStatus,autoMergeRequest \
-           --jq '"\(.state)|\(.mergeStateStatus)|\(.autoMergeRequest != null)"' 2>/dev/null || true)"
-  probe_ok=1
-  [[ -n "$view" ]] || { view="UNKNOWN|UNKNOWN|false"; probe_ok=0; }
+           --jq '"\(.state)|\(.mergeStateStatus)|\(.autoMergeRequest != null)"' 2>"$ERRTMP" || true)"
+  view_err="$(head -c 160 "$ERRTMP" 2>/dev/null | tr '\n' ' ')"
+  probe_ok=1; failed_probe=""
+  [[ -n "$view" ]] || { view="UNKNOWN|UNKNOWN|false"; probe_ok=0; failed_probe="pr view"; }
   IFS='|' read -r state mergestate automerge <<<"$view"
 
-  checks="$(gh pr checks "$PR" "${REPO_ARG[@]}" --json name,bucket 2>/dev/null || true)"
-  [[ -n "$checks" ]] || { checks='[]'; probe_ok=0; }
+  checks="$(gh pr checks "$PR" "${REPO_ARG[@]}" --json name,bucket 2>"$ERRTMP" || true)"
+  checks_err="$(head -c 160 "$ERRTMP" 2>/dev/null | tr '\n' ' ')"
+  [[ -n "$checks" ]] || { checks='[]'; probe_ok=0; failed_probe="${failed_probe:+$failed_probe + }pr checks"; }
 
   tot=$(jq  'length'                                        <<<"$checks" 2>/dev/null || echo 0)
   pass=$(jq '[.[]|select(.bucket=="pass")]|length'          <<<"$checks" 2>/dev/null || echo 0)
@@ -104,7 +113,7 @@ while :; do
   # `waiting` and `red` are IN the signature: a re-run that swaps which check is pending, or a
   # different check failing at the same count, changes nothing numeric but changes what the
   # operator is waiting on. probe_ok is in it so repeated outages are not collapsed.
-  sig="${probe_ok}|${state}|${mergestate}|${automerge}|${pass}|${tot}|${skip}|${fail}|${cancel}|${pend}|${waiting}|${red}"
+  sig="${probe_ok}|${failed_probe}|${state}|${mergestate}|${automerge}|${pass}|${tot}|${skip}|${fail}|${cancel}|${pend}|${waiting}|${red}"
   if [[ "$sig" != "${prev_sig:-}" ]]; then
     why=""
   elif [[ $(( n % HEARTBEAT_EVERY )) -eq 0 ]]; then
@@ -117,7 +126,9 @@ while :; do
       # DEGRADED INPUT MUST NOT RENDER AS MEASURED INPUT. The fallbacks below are literals, not
       # readings; printing them in the same shape as real counts is the "a zero that does not say
       # what it means" class this repo fixed twice on the observability side.
-      printf '[gh probe FAILED — state unknown] (poll %s/%s)%s\n' "$n" "$MAX_POLLS" "$why"
+      printf '[gh probe FAILED: %s — state unknown] (poll %s/%s)%s%s\n' \
+        "${failed_probe:-unknown}" "$n" "$MAX_POLLS" \
+        "${view_err:+ · }${view_err}${checks_err:+ · }${checks_err}" "$why"
     else
       printf '[%s|%s|automerge=%s] %s/%s pass · %s fail · %s cancel · %s pending%s skipped · (poll %s/%s)%s%s%s\n' \
         "$state" "$mergestate" "$automerge" "$pass" "$gradable" "$fail" "$cancel" "$pend" \
@@ -129,7 +140,10 @@ while :; do
   prev_sig="$sig"
 
   case "$state" in
-    MERGED) printf 'MERGED — PR #%s landed (%s/%s pass, %s fail, %s cancel).\n' "$PR" "$pass" "$tot" "$fail" "$cancel"; exit 0 ;;
+    # `$gradable`, NOT `$tot` — the same denominator the poll line uses. Fixing the fraction in the
+    # per-poll renderer and leaving it raw here made the landing run print `68/68 pass` and
+    # `68/73 pass` two lines apart. The instance fixed, the class left.
+    MERGED) printf 'MERGED — PR #%s landed (%s/%s pass, %s skipped, %s fail, %s cancel).\n' "$PR" "$pass" "$gradable" "$skip" "$fail" "$cancel"; exit 0 ;;
     CLOSED) printf 'CLOSED WITHOUT MERGE — PR #%s.\n' "$PR"; exit 1 ;;
   esac
 
