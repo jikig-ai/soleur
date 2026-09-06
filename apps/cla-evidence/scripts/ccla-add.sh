@@ -43,6 +43,15 @@
 
 set -euo pipefail
 
+# AP-025 / #7797 — a self-refusal the artifact CARRIES, because the hazard is a
+# property of runtime STATE and not of this file's text. This script binds a
+# live credential (`gh auth`, and the token `gh` holds) and under `-x` bash
+# echoes every expanded word, so a trace would print it. Placed immediately
+# after `set` so nothing credential-bearing can run ahead of it.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 usage() {
   cat >&2 <<'USAGE'
 Usage:

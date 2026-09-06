@@ -163,6 +163,21 @@ else
   fail "dry run mutated the roster on disk"
 fi
 
+# --- AP-025 / #7797: the xtrace self-refusal. This script binds a live
+# --- credential (`gh auth`), and under `-x` bash echoes every expanded word.
+# --- Asserted on BOTH the exit code and the refusal text, and paired with a
+# --- must-PASS: a script that refused unconditionally would satisfy the
+# --- negative arm alone while being completely broken.
+out_x=$(bash -x "$SCRIPT" add --record-ref CCLA-0001 2>&1); rc=$?
+[[ "$rc" == "78" ]] && pass "refuses to run under xtrace with the documented code (rc=78)" \
+  || fail "xtrace refusal: expected rc=78, got $rc"
+grep -q 'refusing to run under xtrace' <<<"$out_x" \
+  && pass "the xtrace refusal names the hazard" || fail "xtrace refusal message missing"
+# must-PASS: WITHOUT -x the same argv reaches the ordinary usage path, not 78.
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0001; true)
+[[ "$rc" != "78" ]] && pass "without xtrace the refusal does NOT fire (it is state-gated, not unconditional)" \
+  || fail "the script refuses even without -x — the guard is unconditional"
+
 # --- V12: rc=3 is a DOCUMENTED exit code in this script's header and appears
 # --- nowhere in the suite. A mutation hardcoding the validator's passthrough to
 # --- 2 ships green without it. Seed a roster the schema refuses.
@@ -317,7 +332,7 @@ echo "Total: $passes passed, $fails failed"
 # assertion could be deleted and the run stayed green and silent — the floor
 # only fires when TWO go. `guard-vacuity-floor.test.sh` verifies that floors
 # FIRE, never that they are tight, so nothing else catches the slack.
-MIN_ASSERTIONS=34
+MIN_ASSERTIONS=37
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1
