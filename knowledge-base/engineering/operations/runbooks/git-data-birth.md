@@ -156,6 +156,7 @@ approval: the interlock, the birth gate, and the stock preflight.
         f && /^  [a-z_]+:$/ && !/git_data_host_create/{exit}
         END{print n}' .github/workflows/apply-web-platform-infra.yml    # => 20
    ```
+
 6. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
    which arm refused.
 7. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
@@ -291,16 +292,22 @@ No SSH appears below, and none is possible: git-data has no human SSH path by de
 (`git-shell` + three `command=`/`no-pty` forced commands, deny-all public ingress).
 
 ```bash
-# 1. The boot-completion signal, with its four assertions. Field-isolated raw SQL — a
+# 1. The boot-completion signal, with its FIVE assertions (#7772 added nft_metadata_drop).
+#    BS_TABLE IS PINNED: git-data ships to its own source 2734275, not the shared 2457081
+#    that betterstack-query.sh defaults to. Unpinned, this returns zero rows on a healthy
+#    host and the reading instruction below sends you down the partial-birth tree for a
+#    perfectly good birth. Field-isolated raw SQL — a
 #    bare-substring grep matches the shared source's inngest rows quoting issue bodies.
 #    NOTE `remote($BS_TABLE)` takes NO `primary` argument; only s3Cluster does. The
 #    archive arm is REQUIRED: remote() alone is the ~40-minute hot window.
-doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
+BS_TABLE=t520508_soleur_git_data_prd_logs \
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh "
   SELECT dt, JSONExtractString(raw,'stage') AS stage,
              JSONExtractString(raw,'luks_mounted') AS luks_mounted,
              JSONExtractString(raw,'repo_root')    AS repo_root,
              JSONExtractString(raw,'hooks_path')   AS hooks_path,
-             JSONExtractString(raw,'provision')    AS provision
+             JSONExtractString(raw,'provision')    AS provision,
+             JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
   FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
         UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
   WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data'

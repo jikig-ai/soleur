@@ -27,7 +27,7 @@
 #   luks_passphrase_touched == 0    no delete/forget/update on the passphrase pair
 #   reboot_updates          == 0    no live host power-cycled by the birth
 #   out_of_scope            == 0    nothing outside the twenty-address fan-out
-#   the four ENTAILED members each create exactly once
+#   the three ENTAILED members each create exactly once
 #   the fifteen PRESENCE members each appear with actions ⊆ {create, no-op}
 #
 # WHY THE REQUIREMENT ARM IS SPLIT BY ENTAILMENT. This is the most important contract in
@@ -49,7 +49,7 @@
 #
 # So the rule is not "require the fan-out". It is "require exactly those members whose
 # existence the server's own creation ENTAILS, and require the rest merely to be
-# PRESENT". The four entailed members each reference `hcloud_server.git_data.id`, so a
+# PRESENT". The three entailed members each reference `hcloud_server.git_data.id`, so a
 # new server implies a new instance by construction — which is what makes demanding
 # their create safe. Nothing else has that property. Anything looser breaks a legitimate
 # retry; anything tighter is unenforceable.
@@ -391,7 +391,7 @@ git_data_host_birth_gate() {
 
   # ── REQUIREMENT ARM — ENTAILED HALF ────────────────────────────────────────────
   #
-  # Exactly these four reference hcloud_server.git_data.id, so a new server implies a new
+  # Exactly these three reference hcloud_server.git_data.id, so a new server implies a new
   # instance of each by construction. That implication is what makes `creates == 1` safe
   # to demand here and unsafe to demand anywhere else. Every arm above is a PROHIBITION,
   # and prohibitions cannot catch a MISSING member — the allow-set says these addresses
@@ -408,7 +408,7 @@ git_data_host_birth_gate() {
       < "$plan_json" 2>/dev/null)
     plan_gate_assert_numeric "git_data_host_birth_gate" "required_creates[${required_addr}]=${required_creates}" || return 1
     if [[ "$required_creates" -ne 1 ]]; then
-      echo "git_data_host_birth_gate: ABORT — the plan births ${want_addr} but does NOT create ${required_addr} (${required_creates} creates; expected exactly 1). Each of the four entailed members has a distinct catastrophic absence: hcloud_server_network.git_data missing is #6416 — the host comes up with no private-net IP, and because runcmd is once-per-instance no reboot repairs it (ADR-115 bars git-data from the reboot primitive, so the host must be REPLACED). hcloud_firewall_attachment.git_data missing leaves the host NAKED on its public IPv4/IPv6, because the deny-all firewall is bound to it by nothing else. Either hcloud_volume_attachment missing means the store boots with its volume unmounted — for git_data_luks that means at-rest encryption is absent while every artifact claims it is present. All four are entailed by the server's own creation, so their absence means the -target set is mis-scoped, not that they were deliberately omitted."
+      echo "git_data_host_birth_gate: ABORT — the plan births ${want_addr} but does NOT create ${required_addr} (${required_creates} creates; expected exactly 1). Each of the three entailed members has a distinct catastrophic absence: hcloud_server_network.git_data missing is #6416 — the host comes up with no private-net IP, and because runcmd is once-per-instance no reboot repairs it (ADR-115 bars git-data from the reboot primitive, so the host must be REPLACED). hcloud_firewall_attachment.git_data missing leaves the host NAKED on its public IPv4/IPv6, because the deny-all firewall is bound to it by nothing else. Either hcloud_volume_attachment missing means the store boots with its volume unmounted — for git_data_luks that means at-rest encryption is absent while every artifact claims it is present. All three are entailed by the server's own creation, so their absence means the -target set is mis-scoped, not that they were deliberately omitted. (hcloud_firewall_attachment.git_data is the fourth address that references the server id, but it is NOT in this loop: it is handled by the separate outcome assertion below, as the comment above the loop says. #7772 corrected four sites that still said FOUR here while the loop carried three.)"
       return 1
     fi
   done
@@ -461,7 +461,7 @@ git_data_host_birth_gate() {
       < "$plan_json" 2>/dev/null)
     plan_gate_assert_numeric "git_data_host_birth_gate" "present[${present_addr}]=${present}" || return 1
     if [[ "$present" -eq 0 ]]; then
-      echo "git_data_host_birth_gate: ABORT — ${present_addr} is not present in the plan as a create-or-no-op. Every member of the birth fan-out must appear: an address missing from the plan entirely means the -target set is mis-scoped, and nothing else in CI asserts that a -target= string names a declared address. Three of these are the SSH private-key secrets (doppler_secret.git_{transport,provision,remove}_ssh_private_key) — omit one and the host's authorized_keys holds a public half whose private half exists only in tfstate, so the web container can never use it. doppler_config.git_data_prd is the prd_git_data branch config itself; without it the two Doppler writes fail at apply with 'Could not find requested config'. Unlike the four entailed members this arm accepts a no-op, because on a resumed dispatch these legitimately already exist."
+      echo "git_data_host_birth_gate: ABORT — ${present_addr} is not present in the plan as a create-or-no-op. Every member of the birth fan-out must appear: an address missing from the plan entirely means the -target set is mis-scoped, and nothing else in CI asserts that a -target= string names a declared address. Three of these are the SSH private-key secrets (doppler_secret.git_{transport,provision,remove}_ssh_private_key) — omit one and the host's authorized_keys holds a public half whose private half exists only in tfstate, so the web container can never use it. doppler_config.git_data_prd is the prd_git_data branch config itself; without it the two Doppler writes fail at apply with 'Could not find requested config'. Unlike the three entailed members this arm accepts a no-op, because on a resumed dispatch these legitimately already exist."
       return 1
     fi
   done

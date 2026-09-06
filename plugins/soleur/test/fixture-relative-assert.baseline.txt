@@ -139,6 +139,7 @@
 1	apps/web-platform/infra/inngest-inventory.test.sh
 2	apps/web-platform/infra/inngest-rearm-reminders.sh
 9	apps/web-platform/infra/inngest-rearm-reminders.test.sh
+1	apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
 1	apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
 1	apps/web-platform/infra/inngest.test.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
@@ -346,6 +347,7 @@
 1	tests/scripts/test-betterstack-absence-classifier.sh
 2	tests/scripts/test-git-data-birth-readiness-gate.sh
 1	tests/scripts/test-git-data-rung2-evidence-capture.sh
+1	tests/scripts/test-inngest-host-dark-gate.sh
 20	tests/scripts/test-lint-supabase-deprecated-endpoints.sh
 1	tests/scripts/test-plan-gate-preamble.sh
 2	tests/scripts/test-registry-heartbeat-poll.sh

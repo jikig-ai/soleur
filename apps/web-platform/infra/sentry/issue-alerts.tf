@@ -1840,6 +1840,24 @@ resource "sentry_issue_alert" "git_data_boot_fatal" {
         value = "gc_timer"
       }
     },
+    {
+      # (#7772 item 2) The metadata-egress-drop runcmd item. Same argument as gc_timer directly
+      # above, and it is the FATAL-side name only: STAGE is whatever was last assigned when the
+      # top-armed trap fires, so a death anywhere in this item reports `gitdata_nftables_metadata`
+      # and would otherwise match no filter in this file — a write-only fatal, which is the exact
+      # class this rule exists to prevent.
+      #
+      # The item's OWN failure path emits a different value, `gitdata_nftables_metadata_warn`, at
+      # WARNING, and that one is deliberately NOT here: this is a fatal router, so adding a
+      # warning stage to it is a paging-policy change. It is routed by the low-severity rule
+      # below instead. Two names, two severities, two rules — the split is what lets an unarmed
+      # egress drop be observed without paging the founder for a host that booted fine.
+      tagged_event = {
+        key   = "stage"
+        match = "EQUAL"
+        value = "gitdata_nftables_metadata"
+      }
+    },
   ]
   # N=1 accepted risk, mirroring every sibling apply-created rule: IssueOwners has no ownership
   # rule on this project so it falls through to ActiveMembers, paging the solo founder.
@@ -1848,6 +1866,81 @@ resource "sentry_issue_alert" "git_data_boot_fatal" {
       notify_email = {
         target_type      = "IssueOwners"
         fallthrough_type = "ActiveMembers"
+      }
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# #7772 — git-data's WARNING stages, which until now reached no rule at all.
+#
+# WHAT WAS BROKEN. git-data-emit mirrors two degradations to Sentry at level:warning:
+# `betterstack_ingest` (shipped #7460 — the emitter fell back to the stale baked token after a
+# Better-Stack-side rotation, so the pre-Doppler stages go dark) and, as of #7772,
+# `gitdata_nftables_metadata_warn` (the metadata-egress drop failed to arm). NOTHING read either.
+# `git_data_boot_fatal` above filters ten stage values and neither is among them, and the rung-2
+# rehearsal's `_sentry_consult` is pinned to level:fatal BY DESIGN — its job is catching a boot
+# death the Better Stack read missed. ADR-198 states this plainly: as shipped, the mirror was "a
+# queryable record for whoever is already looking", which is a weaker claim than "not silent".
+#
+# WHY A SEPARATE RULE, not two more values on the fatal router: these are not terminal. The host
+# boots. An unarmed egress drop is a hardening regression and a stale ingest token is a telemetry
+# regression; paging the founder for either would train them to discount the rule that also
+# carries genuine dark-host fatals. Same argument the private-NIC gate below makes for itself.
+#
+# WHY IT MATTERS MOST ON THE FIRST BOOT — which is exactly when it now exists. git-data's
+# user_data is ForceNew, so this had to land before birth or cost a destructive host replace.
+# On that first boot nobody is watching a dashboard, and an ingest failure would otherwise be
+# discovered by its own absence, which is the hardest signal to notice.
+#
+# NOT `first_seen_event` (V2). That fires once per issue GROUP, ever. soleur-boot-emit sends one
+# shared message for every stage, so all boot events land in a single perpetually-active group —
+# the rule would fire once and go inert for the life of the host, silent for exactly the repeat
+# failures that indicate something systemic. `event_frequency > 0 / 1h` fires on each occurrence.
+#
+# `fallthrough_type = "NoOne"` is what makes this NON-paging: IssueOwners has no ownership rule on
+# this project, so the fatal router's "ActiveMembers" fallthrough pages the solo founder. NoOne
+# means it lands in the issue stream to be read, not pushed. That is the whole severity split.
+resource "sentry_issue_alert" "git_data_boot_warning" {
+  organization = var.sentry_org
+  project      = data.sentry_project.web_platform.slug
+  name         = "git-data-boot-warning"
+  action_match = "all"
+  filter_match = "any"
+  # Unused frequency value (taken from the free ranges 6-9, 28-29, 31-59, 64+) so this rule's
+  # dedupe window cannot be confused with a sibling's when reading the Sentry UI.
+  frequency = 31
+
+  conditions_v2 = [
+    {
+      event_frequency = {
+        comparison_type = "count"
+        value           = 0
+        interval        = "1h"
+      }
+    },
+  ]
+
+  # IS_IN, not two EQUAL filters: the values are a closed set that grows with the emitter's
+  # warning vocabulary, and one list keeps the reconciliation suite's assertion single-sited.
+  filters_v2 = [
+    {
+      tagged_event = {
+        key   = "stage"
+        match = "IS_IN"
+        value = "betterstack_ingest,gitdata_nftables_metadata_warn"
+      }
+    },
+  ]
+
+  actions_v2 = [
+    {
+      notify_email = {
+        target_type      = "IssueOwners"
+        fallthrough_type = "NoOne"
       }
     },
   ]

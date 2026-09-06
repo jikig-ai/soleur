@@ -242,7 +242,7 @@ Pages, retire the certificate-remediation subsystem, and return the zone to
 > are all explicitly out of scope for the migration. Rationale and the rejected options are
 > in **Alternatives Considered — the `www -> apex` 301 mechanism** below; the implementing
 > decision is `## Design Decision D1` of
-> `knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.
+> `knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`.
 
 ### Sequencing
 
@@ -251,6 +251,13 @@ Deliberately **after** the current incident is closed out, not during it. The
 migration should be planned work with a rollback rehearsal — not another change
 made under outage pressure. Rollback is a DNS flip: leave the GitHub Pages
 configuration in place but DNS-detached.
+
+> **Superseded 2026-09-03 (#7640 PR5) — see `## Amendment — 2026-09-03 (#7640
+> PR5)` at the end of this file.** "Rollback is a DNS flip" was true for the
+> whole PR2->PR4 window and is no longer true. PR5 retired the GitHub Pages
+> publish leg, so that origin's content is frozen and the rollback is three
+> acts, or four. The sentence is left in place because it is the reasoning the
+> decision was made on; it is not current procedure.
 
 ## Consequences
 
@@ -339,7 +346,7 @@ false.
 ## Addendum — 2026-08-20 (#7640): what the implementation plan changed about this ADR's reasoning
 
 The decision is unchanged and the status stays **ACCEPTED**. Implementation planning
-(`knowledge-base/project/plans/2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`)
+(`knowledge-base/project/plans/archive/20260903-221104-2026-08-20-chore-migrate-docs-site-to-cloudflare-pages-plan.md`)
 falsified one premise and split one deliverable, and both are recorded here rather than
 silently absorbed into the plan.
 
@@ -649,3 +656,57 @@ apply HALTs on it above the ack gate.
 | `www` as an `A` record (Cloudflare's own www-redirect recipe) | `type` is ForceNew, so it becomes a SECOND replacement racing the apex's, moving `destroy_count` to 2 |
 | `git revert` as the rollback | Measured: two unrelated addresses, concurrent, `81053` in reverse, on an already-broken apex |
 | A plan-JSON order gate | There is no sequence left to assert — core enforces it at one address. The residual property is static (`create_before_destroy` is not set), and is asserted as such |
+
+## Amendment — 2026-09-03 (#7640 PR5): the standby is COLD by decision, and the doctrine sentence above is superseded
+
+PR5 merged the same session as PR4b and retired the GitHub Pages publish leg
+from `deploy-docs.yml`. This amendment exists because without it the ADR asserts
+a doctrine the live architecture contradicts, and the ADR is where a reader
+starts.
+
+**1. What changed.** The three `actions/*-pages*` steps, the deployment
+`environment:` block and the `pages:`/`id-token: write` grants are gone. The
+GitHub Pages configuration is still retained and still DNS-detached, but its
+content now FREEZES at the last PR4-era build. The standby went from warm to
+cold, deliberately.
+
+**2. How the brand-fatal objection is answered — it is not by keeping the leg.**
+The PR2 amendment banner says "a rollback that lands in a brand-fatal state is
+not a rollback," and that reasoning was correct for the TRANSITION: while the
+apex was still being cut over, a stale revert target was the whole risk. The
+transition is over. The objection is answered by CUT0'-CUT9 holding on the LIVE
+apex before retirement (three consecutive clean samples, 10 passed / 0 failed /
+0 unreachable each, 11 minutes inside the T+20 budget), not by paying a
+dual-publish cost forever. The warm standby was insurance on a window that has
+closed.
+
+**3. The residual, stated as a residual.** While #7799's condition 2 (the
+rollback window is formally closed) is OPEN — and it has no automated detector —
+a rollback is AVAILABILITY-ONLY: it costs three acts, or four when the
+custom-domain attachment is still routing, and it lands on frozen content until
+act 2 republishes. That is a real narrowing and it is disclosed in three places:
+here, the cutover runbook's acts 0-4 block, and #7799.
+
+**4. An observability signal was removed with no replacement.** This ADR's own
+`## Consequences` notes that under dual-publish "every docs deploy becomes a
+liveness assertion" against the retained origin. From PR5 onward NOTHING
+observes whether the rollback target still serves: its custom-domain
+configuration could break, GitHub could drop the binding, or its `CNAME` file
+could go stale, with zero signal until someone reaches for it mid-incident.
+Measured at merge time (`gh api repos/{owner}/{repo}/pages`): `cname:
+soleur.ai`, `build_type: workflow` — the binding survived PR4b, so this is a
+monitoring gap and not a broken target today. Two cheap options were identified
+and neither is implemented here: a low-frequency (weekly `schedule:`) publish
+that keeps both the warm target and the liveness assertion at ~0.2% of the prior
+cost, or a read-only `curl` serviceability probe on an existing cron. Recorded
+on #7799 rather than filed separately.
+
+**5. A prediction this ADR's plan made was falsified, and the correction is
+load-bearing.** The plan and the runbook both predicted that once the apex `A`
+records were gone, GitHub's custom-domain DNS check would fail and the
+GitHub-Pages publish leg would be "red by construction" until PR5. Measured
+after the PR4b apply: every subsequent run reported `Deploy to GitHub Pages:
+success`, because `build_type: workflow` does not gate on that check. This
+matters beyond bookkeeping — it is why act 2 of the rollback (redeploy so
+GitHub Pages holds a current build) is executable BEFORE act 3 restores DNS. Had
+the prediction held, the documented rollback ordering would have been impossible.

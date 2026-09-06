@@ -408,7 +408,12 @@ done
 _producer_keys="$(grep -vE '^[[:space:]]*#' "$DIR/git-data-bootstrap.sh" \
   | sed -n '/^[[:space:]]*"\$GIT_DATA_EMIT".*boot_complete/,/|| true$/p' \
   | grep -oE '"[a-z0-9_]+=' | tr -d '"=' | sort -u | tr '\n' ' ')"
-_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision disk_pct inode_pct | sort -u | tr '\n' ' ')"
+# (#7772 item 2) nft_metadata_drop joins the set. Unlike its four boolean siblings it is
+# MEASURED at emit time (it reads the live nft chain) rather than `yes` by construction, so it
+# is the one key here whose value carries information about the host rather than about the code
+# path having been reached. That is deliberate: it covers the case the arm-time warning cannot,
+# namely the ruleset being flushed AFTER a successful load.
+_asserted_keys="$(printf '%s\n' luks_mounted repo_root hooks_path provision nft_metadata_drop disk_pct inode_pct | sort -u | tr '\n' ' ')"
 if [ -z "$_producer_keys" ]; then
   fail "AC30-parity: derived NO keys from git-data-bootstrap.sh — the extraction drifted, so this parity check would pass vacuously"
 elif [ "$_producer_keys" = "$_asserted_keys" ]; then
@@ -625,10 +630,39 @@ if grep -qF 'BETTERSTACK_TOKEN_REDACTED' <<<"$TOK_BODIES"; then pass; else
   fail "#7460: the ingest-token redaction marker is absent — _devalue_bs did not run" "$TOK_BODIES"
 fi
 
+# ── INSTRUMENT SELF-TEST (#7772 review) ───────────────────────────────────────────
+# THE FLOOR BELOW IS A SUM OF THE TWO COUNTERS, SO A fail() THAT INCREMENTS THE WRONG ONE KEEPS
+# IT EXACTLY SATISFIED. Measured against a real injected regression (renaming
+# `nft_metadata_drop=` in the producer, which reds the AC30-parity arm):
+#
+#   fail() { passes=$((passes + 1)); ... }  -> 59 passed, 0 failed, rc=0 — byte-identical to a
+#                                              clean run
+#   fail() { :; }                           -> caught, but ONLY because the floor happens to
+#                                              have zero headroom today (59 assertions, floor
+#                                              59). One added assertion restores the headroom
+#                                              and that mutant survives too.
+#
+# The canary is the missing dispatch: it drives both helpers on a sentinel, requires each
+# counter to move by one, then unwinds so the reported total is unchanged.
+_can_p0=$passes; _can_f0=$fails
+pass
+fail "CANARY — instrument self-test, not a real failure" 2>/dev/null
+if [ "$passes" -ne $((_can_p0 + 1)) ] || [ "$fails" -ne $((_can_f0 + 1)) ]; then
+  echo "FAIL CANARY: driving pass()/fail() once each moved passes ${_can_p0}->${passes} (want +1) and fails ${_can_f0}->${fails} (want +1)." >&2
+  echo "      An assertion helper has been neutered. The floor below is the SUM of these two" >&2
+  echo "      counters, so a bucket swap leaves it exactly satisfied and cannot be seen there." >&2
+  exit 1
+fi
+passes=$_can_p0; fails=$_can_f0
+
 # --- Minimum-cardinality guard: a silently-empty harness must fail loud ---
+# The floor literal and the message drifted apart: the message said `<47` while the test read
+# 59, so an operator diagnosing a short run was told the wrong threshold. Both now read from
+# one variable, which is also what stops them drifting again.
+MIN_ASSERTIONS=59
 total=$((passes + fails))
-if [ "$total" -lt 59 ]; then
-  echo "FAIL: ran only ${total} assertions (<47) — suite did not execute fully" >&2
+if [ "$total" -lt "$MIN_ASSERTIONS" ]; then
+  echo "FAIL: ran only ${total} assertions (floor ${MIN_ASSERTIONS}) — suite did not execute fully" >&2
   exit 1
 fi
 

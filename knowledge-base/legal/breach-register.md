@@ -135,10 +135,10 @@ These files match the CI guard's determination-shaped pattern under
 `knowledge-base/legal/audits/` and are **not indexed**. Each carries a committed reason, so
 nothing is silently dropped.
 
-**Two dispositions, and they are not the same claim.** Four rows are *assessed and outside* the
+**Two dispositions, and they are not the same claim.** Seven rows are *assessed and outside* the
 inclusion predicate. Two — the 2026-05-15 and 2026-05-17 Sentry audits, surfaced only when the
 producer pattern was widened on 2026-09-03 — are **undetermined**, pending the CLO ruling
-requested at #7791, and are marked as such in their reason cells. A preamble asserting all six
+requested at #7791, and are marked as such in their reason cells. A preamble asserting all nine
 "fall outside the inclusion predicate" would state a determination that has not been made for
 those two, which in a regulator-facing register is the thing this file exists not to do. The machine-readable waiver list
 lives in `scripts/lint-legal-registers.sh`; this section is its human-readable mirror.
@@ -151,6 +151,9 @@ lives in `scripts/lint-legal-registers.sh`; this section is its human-readable m
 | `knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md` | Matches the producer only on "CNIL Art 33 filing posture per brainstorm Decision #10" — a reference to filing posture, not a fact pattern assessed against Art. 4(12). Confirm alongside the row above at #7791 (#7717) |
 | `knowledge-base/legal/audits/2026-09-03-implementation-record-7717-art-33-5-register.md` | Not a determination: an implementation record *about* this register. It necessarily quotes Art. 4(12) / Art. 33(5) and so matches the producer pattern, but it assesses no fact pattern and records no controller determination. Note it is **not** a CLO attestation — that artifact was not obtained and is tracked at #7791 (#7717) |
 | `knowledge-base/legal/audits/2026-09-counsel-review-7717.md` | Not a determination: the **counsel review of this register**, added 2026-09-03 under the ship Phase 5.5 gate. It quotes Art. 4(12) and Art. 33(5) throughout in order to rule on the predicate, and so matches the producer pattern, but it assesses no fact pattern and records no controller determination. Every future counsel review of this register will need the same waiver — that is a known cost of scoping the producer to `audits/**`, not a defect (#7717) |
+| `knowledge-base/legal/audits/2026-09-counsel-review-7625.md` | Not a determination: the **counsel review for the Art. 30 PA-7 amendment** (#7625), added 2026-09-04 under the ship Phase 5.5 gate. It cites Art. 4(12) only to record the *negative* — that an Art. 30(1) record-keeping incompleteness is not a personal-data breach and triggers no Art. 33/34 duty — and assesses no fact pattern: nothing was destroyed, lost, altered or disclosed. Same disposition as the #7440 row above: assessed and outside the inclusion predicate (#7717) |
+| `knowledge-base/legal/audits/2026-09-03-clo-review-7622-pa7-r2-evidence-layer.md` | Not a determination: a **retrospective record**, written 2026-09-03, of the 2026-08-20 CLO review of PR #7622. It matches the producer because it transcribes that review's §(d) finding, which cites Art. 4(12) in order to conclude the omission was **not** a breach — Cloudflare was contractually covered throughout the omission window, so what was incomplete was the Art. 30 record of a lawfully-safeguarded transfer, not the safeguard. The citation is quoted history, not a determination made here (#7717) |
+| `knowledge-base/legal/audits/2026-09-04-betterstack-source-split-7772.md` | Not a determination, and it matches the producer pattern only by **ruling one out**: the CLO ruling on the #7772 Better Stack Logs source split states in terms that no Art. 33/34 assessment arises. The split is a re-partitioning of one processor's storage — same recipient (Better Stack s.r.o.), same team `520508`, same cluster — and **no data has flowed to the new source**, because the `soleur-git-data` server has never been provisioned. A prospective PA-8 amendment with no fact pattern and no event: nothing was destroyed, lost, altered, disclosed or accessed. Same disposition and same reasoning as the `2026-08-counsel-review-7440.md` row above. Assessed and outside the inclusion predicate — not undetermined. Citing #7772. |
 
 ## Register maintenance
 

@@ -1,0 +1,20 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "random_password.inngest_redis_luks",
+      "mode": "managed",
+      "type": "random_password",
+      "name": "inngest_redis_luks",
+      "change": { "actions": ["create"], "before": null, "after": { "length": 64 } }
+    },
+    {
+      "address": "doppler_secret.inngest_redis_luks_key",
+      "mode": "managed",
+      "type": "doppler_secret",
+      "name": "inngest_redis_luks_key",
+      "change": { "actions": ["create"], "before": null, "after": { "name": "INNGEST_REDIS_LUKS_KEY" } }
+    }
+  ]
+}
