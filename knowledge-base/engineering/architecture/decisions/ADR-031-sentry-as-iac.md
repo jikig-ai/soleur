@@ -746,6 +746,106 @@ Three corrections to what this paragraph said when first written, all measured:
 Within that scope it no longer surfaces months later as an intermittent red.
 
 
+**Amendment (2026-09-04, #7650 Phase 2) — 27 of the 29 alert rules move to `sentry_alert`;
+`forget` enters the destroy gate's vocabulary; the AP-001 deviation shrinks 4 → 1.**
+
+**The deferral in the amendment above executed, for 27 of 29.** The 2026-08-19 amendment
+recorded the alert-rule API family as deprecated-with-brownouts and named the `sentry_alert`
+migration as the fix. That migration has now happened for every rule the pinned provider can
+express: 27 rules are declared as `sentry_alert` and read through
+`organizations/{org}/workflows/`, which carries no deprecation headers and no brownout.
+
+**Exactly two stay behind, and the reason is a provider schema fact, not a preference.**
+`auth-per-user-loop` and `sandbox-startup-failure` trigger on
+`event_unique_user_frequency_count`. At the pinned `0.15.7`, `trigger_conditions` offers
+`first_seen_event` / `reappeared_event` / `regression_event` / `issue_resolved_trigger` /
+`event_frequency_count` and **does not offer** `event_unique_user_frequency_count`, while
+`action_filters[].conditions` does. That asymmetry — upstream
+jianyuan/terraform-provider-sentry issue 950, confirmed from the schema at the pinned tag
+rather than from a changelog — is the whole of the residue. **A clean plan is therefore NOT
+evidence that the deprecation lifted:** those two still refresh through the deprecated
+endpoint, and a clean plan may only mean the run fell outside a brownout window. The brownout
+retry in `apply-sentry-infra.yml` stays for exactly that reason.
+
+**The ownership model changed, and the AP-001 deviation shrank from four rules to one.**
+Before: four `auth-*` rules were import-only placeholders declaring their v2 attributes empty
+under a wide `ignore_changes = [conditions_v2, filters_v2, actions_v2, environment,
+frequency]`, with `configure-sentry-alerts.sh` as their real writer. After: three of them
+(`auth-signout-burst`, `auth-exchange-code-burst`, `auth-callback-no-code-burst`) are adopted
+as `sentry_alert` with their real definitions and `ignore_changes = [environment]` only, so
+Terraform genuinely owns them. **`auth-per-user-loop` alone** keeps the old posture, and
+`configure-sentry-alerts.sh` is therefore **not deleted** — it remains the only executable
+definition of a rule whose trigger the provider cannot express. A file-level grep for
+`ignore_changes` cannot tell these two sets apart; resolve it per RESOURCE BLOCK.
+
+**The script was the drift source, not the record of it.** Measured 2026-09-04: live Sentry
+and the committed `.tf` both carried `frequency` 60 / 61 / 62 for the three burst rules, while
+`configure-sentry-alerts.sh` wrote 60 for all three. The direction of that drift is the
+opposite of what the migration brief assumed, and the 27 blocks were generated from a
+committed capture of live rather than from either the script or the existing `.tf`.
+
+**`forget` is now a destroy-gate term, and `destroy_count` has three.** The adoption lands as
+27 `removed { lifecycle { destroy = false } }` blocks paired with 27 `import {}` blocks, which
+plan as `actions:["forget"]`. Nothing in the counter chain saw that: it is not a `delete`, and
+`sentry_cron_monitor` and `sentry_uptime_monitor` expose zero array-of-blocks by design, so
+their nested arithmetic is 0 too. A plan dropping every cron monitor out of state therefore
+scored `destroy_count = 0` and the gate printed `PASS (plan destroys nothing)`.
+`destroy-guard-filter-sentry.jq` now emits `resource_forgets`, and
+`scripts/sentry-destroy-counts.sh` **sums it** — a counter that reports without feeding the
+sum is a report, not a gate. It stays a SEPARATE key from `resource_deletes` so the merge can
+say "27 forgets, zero actual deletes" and have that be checkable rather than asserted.
+
+**`required_version` is `>= 1.9`, deliberately.** On an older CLI a `removed` block plans a
+DESTROY of 27 live paging rules rather than a forget. Do not lower it.
+
+**The provider hardcodes `any-short` on `trigger_conditions`, and that is a standing
+constraint.** It is semantics-preserving *here* and only here: 14 of the in-scope rules report
+live `logicType: "all"`, and every one of them has exactly ONE trigger condition, so the
+logic type is unobservable. Zero rules have both multiple trigger conditions and a
+non-`any-short` type. The generator FAILS CLOSED on that condition, so the day a rule acquires
+a second trigger condition under `all`, it refuses to emit rather than silently changing when
+a rule fires.
+
+**Adoption mechanism — the repo now has two, and this is the rule between them.** This used
+config-block adoption (`import{}` + `removed{}` landed on the branch and applied in ONE merge)
+rather than the pre-merge `terraform import` surgery the earlier roots used.
+
+> **Use config-block adoption whenever the root AUTO-APPLIES from the default branch.** Use
+> imperative `terraform import` only where nothing applies from `main` between the import and
+> the merge that declares the blocks.
+
+The discriminator is the WINDOW, not the address. An earlier draft of this rule said "use
+config-block adoption whenever the address does not yet exist on `main`", reasoning that
+`terraform import` requires an existing config block so the surgery "could never have run
+against `main`". That premise is true and does not support the conclusion: `terraform import`
+runs from a working DIRECTORY, not from `main`, and the pre-merge-surgery pattern is precisely
+to check out the feature branch — which does declare the blocks — and import against shared
+remote state. Whether the address exists on `main` never enters into whether the command can
+run, so that rule would mis-adjudicate in both directions.
+
+The real disqualifier here is stronger. **This root auto-applies on every push to `main`**
+(`apply-sentry-infra.yml`, `on.push.paths: apps/web-platform/infra/sentry/**`). Imperative
+import opens a window in which state holds 27 `sentry_alert` addresses that `main`'s config
+does not declare — and any merge to `main` during that window plans a **destroy of all 27 live
+paging rules**, gated only by whether that unrelated merge happens to carry `[ack-destroy]`.
+Config-block adoption closes the window by construction: config and state change in the same
+apply.
+
+The corollary is the cost. Config-block adoption leaves `import{}` and `removed{}` blocks in
+the tree after it succeeds, so the root is not reproducible from zero until they are removed,
+and removing one whose address was never imported converts it into a planned CREATE that
+collides with the live rule. That is why the removal is hard-gated as #7826 rather than tidied
+up in the same PR. The blocks stay in config until the
+post-merge verification passes; removing them earlier turns any un-imported address into a
+planned CREATE that collides with the live rule it was meant to adopt. That removal is a
+hard-gated follow-up (#7826); the adoption is not reproducible from zero while they remain.
+
+**Ongoing detection is now a deliverable, not a follow-up.**
+`scripts/sentry-alert-live-fidelity.sh` diffs all 27 against the committed capture on a daily
+Inngest-dispatched schedule and as a post-apply step. It covers what a clean plan cannot: a
+rule that exists, plans clean, and matches nothing.
+
+
 ## Consequences
 
 ### Positive

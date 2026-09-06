@@ -1094,6 +1094,9 @@ if want_scripts; then
   # the real defect into a tree copy.
   run_suite "scripts/lint-workflow-errexit-capture" bash scripts/lint-workflow-errexit-capture.test.sh
   run_suite "scripts/lint-workflow-errexit-capture-live" python3 scripts/lint-workflow-errexit-capture.py
+  # #7695 review: actionlint flags unparseable run: bodies, but lint-workflows.sh treats its rc=1 as
+  # accepted (census tracked in #7042), so the class was green in CI. This one exits non-zero.
+  run_suite "scripts/lint-workflow-run-body-syntax" python3 scripts/lint-workflow-run-body-syntax.py
   # ADR-191 (#7084). Same both-halves shape as the pair above, and for the same reason: after
   # this change the passing state of Guard 1 is "zero bun.lock found", which is byte-identical
   # to the output of a guard whose search is broken. The unit suites carry the anti-vacuity
@@ -1212,6 +1215,13 @@ if want_scripts; then
   run_suite "scripts/skill-freshness-aggregate" bash scripts/skill-freshness-aggregate.test.sh
   run_suite "scripts/compound-promote" bash scripts/compound-promote.test.sh
   run_suite "scripts/lint-trap-tempfile-ownership" bash scripts/lint-trap-tempfile-ownership.test.sh
+  run_suite "scripts/lint-shell-trace-credential-refusal" bash scripts/lint-shell-trace-credential-refusal.test.sh
+  # The SUITE above proves the lint behaves; this runs the lint over the repo
+  # so a NEW violating script reds the REQUIRED `test` context. The ci.yml step
+  # is the same check in an advisory job -- a credential guard a PR can merge
+  # past red is theatre, and promoting that whole job is a pre-existing
+  # follow-up noted in ci.yml rather than a path to fork here.
+  run_suite "scripts/lint-shell-trace-credential-refusal-repo" python3 scripts/lint-shell-trace-credential-refusal.py
   # The Cloudflare token-drift detector's Access-service-token arm. Registered explicitly
   # for the same reason as its neighbours — scripts/*.test.sh is NOT auto-globbed — and
   # the omission would be especially apt here: the defect this suite pins is a detector
@@ -1552,6 +1562,11 @@ if want_scripts; then
   # #6197: inngest-host-replace scoped-recreate destroy-guard (same sourced-gate shape the
   # web2-recreate gate used before #6575 deleted it).
   run_suite "tests/scripts/inngest-host-replace-gate" bash tests/scripts/test-inngest-host-replace-gate.sh
+  # #7695 — the two guards on apply_target=inngest-volume-recut. NOTHING auto-discovers
+  # tests/scripts/: the `*.test.sh` glob elsewhere in this file cannot match a `test-*` prefix, so
+  # an unregistered suite here never gates and the failure is silent-and-green.
+  run_suite "tests/scripts/inngest-volume-recut-gate" bash tests/scripts/test-inngest-volume-recut-gate.sh
+  run_suite "tests/scripts/inngest-host-dark-gate" bash tests/scripts/test-inngest-host-dark-gate.sh
   # registry-host-replace scoped-recreate destroy-guard (5-target; preserves the zot store volume).
   run_suite "tests/scripts/registry-host-replace-gate" bash tests/scripts/test-registry-host-replace-gate.sh
   # #7542: vector-redeliver scoped-delivery gate. Unlike the -replace arms above it permits a bare
@@ -1690,6 +1705,26 @@ if want_scripts; then
   run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
   run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
   run_suite "tests/scripts/sentry-create-gate" bash tests/scripts/test-sentry-create-gate.sh
+  # #7650 Phase 2 — Guard A (create protection, now wired into BOTH workflow jobs)
+  # and Guard B (the forget<->import bijection) for the sentry_alert adoption.
+  # Registered HERE for the reason the neighbouring comments give and this suite
+  # makes acute: nothing under tests/scripts/ is auto-discovered, and the guards
+  # this suite covers are the only things standing between a one-character edit
+  # and 27 live paging rules — including the GDPR Art. 33 breach alert — being
+  # orphaned or duplicated. An unregistered suite here would read as green
+  # forever while asserting nothing.
+  run_suite "tests/scripts/sentry-alert-adoption-guards" bash tests/scripts/test-sentry-alert-adoption-guards.sh
+  # #7650 §2.9 — the live-fidelity probe. A fidelity probe compares a document to
+  # itself for a living, and its degenerate implementation (return PASS) satisfies
+  # every happy-path test anyone writes. This suite is one row per DRIFT CLASS the
+  # probe's header claims to detect, so the claim is checked rather than asserted.
+  # Hermetic: the live GET is replaced by SENTRY_FIXTURE_RULES throughout.
+  run_suite "tests/scripts/sentry-alert-live-fidelity" bash tests/scripts/test-sentry-alert-live-fidelity.sh
+  # The drift workflow's VERDICT BRANCHING, extracted from the shipped YAML and
+  # executed — never restated. Two of its three outcomes are silent when wrong: a
+  # verdict that files nothing looks like a clean run, and a wrongly-closed issue
+  # looks like a fixed one. Neither is visible in a green workflow list.
+  run_suite "tests/scripts/sentry-alert-drift-workflow" bash tests/scripts/test-sentry-alert-drift-workflow.sh
   # Class D (live monitor with no .tf block) is the delete path's other half: the
   # full-root apply can only reclaim a monitor the config once declared. Its whole
   # value is the non-zero exit — registered here because nothing auto-discovers

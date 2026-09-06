@@ -24,6 +24,15 @@ EnvironmentFile=/etc/default/inngest-server
 # match, so the tag and the allowlist entry only work as a pair. journald-config.test.sh
 # asserts both sides; do not change this literal without changing vector.toml with it.
 SyslogIdentifier=inngest-redis
+# #7695 — TWO-STATE /mnt/data guard, installed by inngest-redis-bootstrap.sh step 3.5.
+# RequiresMountsFor above orders this unit after the fstab-generated mount unit, but the failure
+# that actually loses data is the one where NO mount unit exists: cloud-init's LUKS stage aborted,
+# /mnt/data is a plain directory on the ephemeral root disk, RequiresMountsFor resolves to nothing,
+# and Redis writes its AOF somewhere a host replace erases. The guard refuses that start.
+# It is deliberately NOT one-state: demanding /dev/mapper/inngest-redis unconditionally would
+# refuse to start Redis on the PRE-recut host (still plaintext ext4) and deadlock the cutover this
+# apparatus exists to enable. See the script's own header for the two states.
+ExecStartPre=/usr/local/bin/inngest-redis-mount-guard.sh
 # Password injected from Doppler prd at runtime, inside a bash -c so the literal
 # $INNGEST_REDIS_PASSWORD (NOT its value) appears in `ps`/journal — same
 # defense as inngest-server.service. Shipped as a FILE (not a TF inline heredoc)

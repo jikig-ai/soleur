@@ -95,6 +95,7 @@ err() { echo "::error::infra-suite-registration: $1" >&2; }
 # one today. An entry here is a debt, not a fix -- #7068 registered all 94, so nothing else
 # needs absorbing, and closing #7076 should let this entry go too.
 EXCLUSIONS=(
+  "inngest-redis-luks-loopback.test.sh|invoked as \`sudo bash\` inside a multi-line \`run: |\` block (infra-validation.yml), because it needs root for losetup/cryptsetup/mkfs.ext4. Same shape and same reason as the workspaces loopback entry below: the suite exits 2 unprivileged, so deriving it into run-registered-suites.sh would turn that mandated ship gate permanently RED for any operator without passwordless sudo. Its STRUCTURAL half is a separate file, apps/web-platform/infra/inngest-redis-luks.test.sh, which carries a plain single-line registration and IS derived — the split exists precisely so the arms that need no privilege stay inside the local gate. Fixing the derivation properly (derive-but-do-not-execute) is tracked in #7076."
   "workspaces-luks-loopback.test.sh|invoked as \`sudo bash\` inside a multi-line \`run: |\` block (infra-validation.yml), because it needs root for losetup/luksFormat. It therefore runs in CI but is invisible to run-registered-suites.sh's single-line derivation -- and it must STAY invisible to it: the suite exits 2 unprivileged, so deriving it would turn that mandated ship gate permanently RED for any operator without passwordless sudo. Fixing the derivation properly (derive-but-do-not-execute) is tracked in #7076."
 )
 

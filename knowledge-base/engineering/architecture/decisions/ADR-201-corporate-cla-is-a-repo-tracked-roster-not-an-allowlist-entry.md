@@ -76,7 +76,7 @@ because an earlier draft of the plan wrote the **inverse** into the one artifact
 PR. The roster path records and annotates; it must never fail a pull request for the *absence* of
 coverage. The fail-closed ICLA gate it sits beside is untouched. A contributor's merge is decided
 by whether they signed the Individual CLA, never by whether the maintainer has finished the
-corporate paperwork. The generalisation is registered as **AP-025**.
+corporate paperwork. The generalisation is registered as **AP-026**.
 
 **5. Reads are at the base ref — and what that does *not* buy.** `cla-evidence.yml` checks out
 `github.event.pull_request.base.sha` and never the PR head, so a pull request cannot rewrite
@@ -187,4 +187,4 @@ scripts in `apps/cla-evidence/scripts/` with runbook sections, and a `git grep` 
 - #7597 outage ruling — `knowledge-base/legal/audits/2026-08-17-clo-ruling-cla-evidence-admin-bypass-7597.md`
 - Art. 30 register PA-7 — `knowledge-base/legal/article-30-register.md`
 - Runbook §10 — `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`
-- Principle **AP-025** — `knowledge-base/engineering/architecture/principles-register.md`
+- Principle **AP-026** — `knowledge-base/engineering/architecture/principles-register.md`

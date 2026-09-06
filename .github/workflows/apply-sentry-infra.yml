@@ -118,7 +118,9 @@ concurrency:
 permissions:
   contents: read
   # Read the PR's branch commit messages to detect a pre-staged [ack-destroy]
-  # (see the destroy gate). Read-only; no write scope anywhere in this workflow.
+  # (see the destroy gate). Read-only. The DEFAULT for every job is read-only;
+  # the `apply` job overrides this block with a job-scoped `issues: write` so its
+  # failure filer can post (#7650 Phase 2), and no other job holds any write.
   pull-requests: read
   # NOTE: `squash_merge_commit_message` (read by the destroy gate) is an
   # administration-scoped field, and `administration` is NOT a grantable
@@ -393,7 +395,37 @@ jobs:
           # permanently red by accident, green path never once executed. See the
           # script's header. One copy makes that unrepresentable.
           terraform show -json tfplan > /tmp/sentry-pr-plan.json
-          eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-pr-plan.json)"
+          # `eval "$(cmd)"` returns EVAL's status, not the script's — on failure
+          # `eval ""` succeeds. It is fail-closed only because `set -u` then kills
+          # the step at the first unbound counter, which makes the headline
+          # "resource_creates: unbound variable" instead of the script's own
+          # `::error::`. Capture and check first.
+          counts=$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-pr-plan.json) || {
+            echo "::error::sentry destroy counters could not be computed for the PR plan; refusing to report a gate verdict."
+            exit 1
+          }
+          eval "$counts"
+
+          # ── UNCONDITIONAL, UN-ACKABLE assertions (#7650 Phase 2) ─────────
+          # All three run on every plan, before the destroy gate, and none of
+          # them reads the commit message. They are not acknowledgeable
+          # failures: they describe states that are wrong however deliberately
+          # they were arrived at.
+          #
+          # These were previously nested inside `if resource_creates > 0`,
+          # which made the binding gate — the one thing that notices all 27
+          # paging rules being repointed at a detector that watches nothing —
+          # unreachable on exactly the plans it is for. A correlated rebind
+          # creates nothing.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-issue-alert-create-tripwire.sh" /tmp/sentry-pr-plan.json
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-monitor-binding-gate.sh" /tmp/sentry-pr-plan.json
+          # AC2 — self-skipping: exits 0 on any plan with no forget/import rows,
+          # which is every plan once the adoption has applied. Early feedback
+          # here; the `apply` job's copy is the enforcement, because the apply
+          # re-plans and what it plans is what actually reaches prod.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-adoption-plan-assert.sh" \
+            /tmp/sentry-pr-plan.json 27 \
+            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
 
           # ── CREATE gate (#6589) ──────────────────────────────────────────
           # Runs BEFORE the destroy gate and has NO [ack-destroy] bypass: an
@@ -401,9 +433,8 @@ jobs:
           # and typing one ack must not wave through the other. Diff-matched,
           # not blanket-acked — the normal add-a-monitor flow passes silently.
           if [[ "$resource_creates" -gt 0 ]]; then
-            terraform show -json tfplan \
-              | jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
-              > /tmp/sentry-creates.txt
+            jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
+              /tmp/sentry-pr-plan.json > /tmp/sentry-creates.txt
             git -C "${GITHUB_WORKSPACE}" diff "origin/${BASE_REF}...HEAD" \
               -- 'apps/web-platform/infra/sentry/*.tf' > /tmp/sentry-tf.diff
             bash "${GITHUB_WORKSPACE}/scripts/sentry-create-gate.sh" \
@@ -415,8 +446,19 @@ jobs:
             exit 0
           fi
 
+          # Show DELETES and FORGETS separately. Selecting `== ["delete"]`
+          # alone printed an EMPTY list while the gate claimed N destructive
+          # changes, because `destroy_count` also sums nested-block shrinks and
+          # (since #7650 Phase 2) `["forget"]` rows, neither of which is a
+          # delete. An ack with no manifest is what makes a blanket ack unsafe:
+          # the operator cannot see WHAT they are acknowledging. `forget` is
+          # state-only and destroys nothing, so the two are labelled, never
+          # merged -- a reader must be able to tell "27 forgets, nothing
+          # destroyed" from "26 forgets plus a real delete of a paging rule".
           addresses=$(terraform show -json tfplan | \
-            jq -r '[.resource_changes[] | select(.change.actions == ["delete"]) | .address] | sort | .[]')
+            jq -r '[.resource_changes[] | select(.change.actions | index("delete")) | .address] | sort | .[]')
+          forget_addresses=$(terraform show -json tfplan | \
+            jq -r '[.resource_changes[] | select(.change.actions | index("forget")) | .address] | sort | .[]')
 
           # ── The ack must actually REACH the merge commit ──────────────────
           # This gate greens on a pre-staged [ack-destroy], which only survives
@@ -496,14 +538,30 @@ jobs:
             ack_destroy=true
           fi
 
+          # An ack is blanket -- it names no address and no count -- so the
+          # manifest below is the only thing that lets a human tell "27 forgets,
+          # nothing destroyed" from "26 forgets plus a real delete of a live
+          # paging rule". Print BOTH lists, always, and say explicitly when one
+          # is empty: `printf` on an empty variable emits a blank line, which
+          # reads as "list shown, nothing in it" whether or not the query ran.
+          _emit_set() { # $1=label $2=payload
+            if [[ -z "$2" ]]; then
+              printf '  %s: (none)\n' "$1"
+            else
+              printf '%s\n' "$2" | sed "s|^|  $1: |"
+            fi
+          }
+
           if [[ "$ack_destroy" == "true" ]]; then
-            echo "sentry destroy gate: PASS (${destroy_count} destroy(s) acknowledged via a pre-staged [ack-destroy])"
-            printf '%s\n' "$addresses" | sed 's/^/  destroys: /'
+            echo "sentry destroy gate: PASS (${destroy_count} destructive change(s) acknowledged via a pre-staged [ack-destroy])"
+            _emit_set "DESTROYS (resource-level delete)" "$addresses"
+            _emit_set "forgets (state-only, destroys nothing)" "$forget_addresses"
             exit 0
           fi
 
-          echo "::error::this PR destroys ${destroy_count} Sentry resource(s):"
-          printf '%s\n' "$addresses" | sed 's/^/::error::  /'
+          echo "::error::this PR makes ${destroy_count} destructive change(s) to Sentry:"
+          _emit_set "DESTROYS (resource-level delete)" "$addresses" >&2
+          _emit_set "forgets (state-only, destroys nothing)" "$forget_addresses" >&2
           echo "::error::The merge commit must contain a line [ack-destroy]. Pre-stage it now so it survives the squash: put [ack-destroy] on its own line in the BODY of a commit on this branch (not the subject line — GitHub prefixes subjects with '* ' when it composes the squash body, which breaks the line anchor). Then this check goes green and the post-merge apply is authorized to destroy the resources listed above. If you did not intend to destroy anything, restore the resource block(s) instead."
           exit 1
 
@@ -530,6 +588,18 @@ jobs:
 
   apply:
     needs: preflight
+    # JOB-SCOPED, deliberately. The workflow default stays read-only; only this
+    # job files an issue, and `plan_pr` runs on `pull_request` where a write
+    # scope has no business being. A job-level block REPLACES the workflow-level
+    # one, so `contents: read` is restated here for the checkout.
+    #
+    # `issues: write` is what makes the `if: failure()` filer below actually
+    # post. Without it `gh issue create` returns "Resource not accessible by
+    # integration" — and the whole point of that step is that a failed apply of
+    # live paging state must not be only a red run nobody owns.
+    permissions:
+      contents: read
+      issues: write
     # Event guard (#6589): this workflow now also triggers on pull_request and
     # merge_group for the destroy gate. Without this guard, adding those triggers
     # would make the APPLY job reachable from a PR — applying prod Sentry infra
@@ -550,6 +620,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Two commits, not one. Guard A(i) — the diff-matched create gate that
+          # until #7650 Phase 2 ran ONLY in `plan_pr` — needs the merge commit's
+          # own diff to decide whether a planned create is explained by a block
+          # this merge added. On the squash merges this repo uses, `HEAD~1..HEAD`
+          # IS the merged change. The default depth-1 checkout has no HEAD~1.
+          fetch-depth: 2
 
       - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
         with:
@@ -796,7 +873,59 @@ jobs:
           # the plan_pr gate above calls identically — see its header for why
           # (these blocks were inline in both jobs and the arithmetic drifted).
           terraform show -json tfplan > /tmp/sentry-apply-plan.json
-          eval "$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json)"
+
+          # ── EVERYTHING BELOW RUNS BEFORE THE ACK IS CONSULTED ────────────
+          # This job RE-PLANS. Whatever `plan_pr` saw on the PR is not what gets
+          # applied — this plan is. Its only pre-#7650 gate was `destroy_count`,
+          # which the merge's `[ack-destroy]` greens by design (the adoption
+          # legitimately reports 27 forgets and 142 nested shrinks). So on the
+          # one run that actually mutates prod, a blanket ack waved through
+          # everything that was not a delete. These four assertions are the
+          # plug, and none of them reads HEAD_MSG.
+
+          # AC11 — every sentry_alert must bind the expected issue-stream
+          # detector. A correlated rebind is invisible to the destroy guard
+          # (a scalar monitor_ids change is not a delete, a create, or a
+          # nested shrink), so destroy_count stays 0 and this job would
+          # otherwise pass green while all 27 paging rules go dark.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-monitor-binding-gate.sh" /tmp/sentry-apply-plan.json
+
+          # Guard A(ii) — no run ever creates a sentry_issue_alert again.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-issue-alert-create-tripwire.sh" /tmp/sentry-apply-plan.json
+
+          # AC2/AC10 — the adoption is EXACTLY an adoption: 27 forgets, 27
+          # matching imports, every other managed row a no-op. Self-skipping on
+          # any plan with no adoption rows, so it is inert from the run after
+          # this one onward.
+          bash "${GITHUB_WORKSPACE}/scripts/sentry-adoption-plan-assert.sh" \
+            /tmp/sentry-apply-plan.json 27 \
+            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+
+          counts=$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json) || {
+            echo "::error::sentry destroy counters could not be computed for the apply plan; refusing to apply."
+            exit 1
+          }
+          eval "$counts"
+
+          # Guard A(i) — the diff-matched create gate, ported from `plan_pr`.
+          # This job computed `$resource_creates` and never read it: the apply
+          # arm had NO create check at all, so the one worst case of a botched
+          # adoption — 27 duplicate live paging rules — was created ungated.
+          # `HEAD~1..HEAD` is the merged change on a squash merge, which is why
+          # the checkout above asks for depth 2. On `workflow_dispatch` it is the
+          # last merge, i.e. the change whose state is being applied.
+          if [[ "$resource_creates" -gt 0 ]]; then
+            if ! git -C "${GITHUB_WORKSPACE}" rev-parse --verify -q HEAD~1 >/dev/null; then
+              echo "::error::apply create gate: no HEAD~1 available, so a planned create cannot be matched against the merged diff. Refusing to apply ${resource_creates} unexplained create(s)." >&2
+              exit 1
+            fi
+            jq -r '[.resource_changes[] | select(.change.actions == ["create"]) | .address] | .[]' \
+              /tmp/sentry-apply-plan.json > /tmp/sentry-apply-creates.txt
+            git -C "${GITHUB_WORKSPACE}" diff HEAD~1 HEAD \
+              -- 'apps/web-platform/infra/sentry/*.tf' > /tmp/sentry-apply-tf.diff
+            bash "${GITHUB_WORKSPACE}/scripts/sentry-create-gate.sh" \
+              /tmp/sentry-apply-creates.txt /tmp/sentry-apply-tf.diff
+          fi
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
           # the token cannot fire from a quoted block, code fence, or
@@ -806,11 +935,77 @@ jobs:
             ack_destroy=true
           fi
           if [[ "$destroy_count" -gt 0 ]] && [[ "$ack_destroy" != "true" ]]; then
-            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s))."
+            # All three terms come from the shared counter script — never a
+            # second inline jq. `resource_forgets` is state-only: the address
+            # leaves Terraform's management and the live Sentry rule is left
+            # untouched. It is summed into `destroy_count` (a departure from
+            # management is unreviewed change) but reported separately, so the
+            # operator can tell "27 forgets, zero actual deletes" from "26
+            # forgets plus a real delete of a live paging rule".
+            # `nested_deletes` DOUBLE-COUNTS a forget, and the message says so.
+            # A forget row survives the nested clause's delete filter and has
+            # `after == null`, so its whole `before` block count is booked as a
+            # shrink. On this adoption that is where "142" comes from: it is the
+            # same 27 rows' blocks, not 142 separate removals. Saying "142
+            # nested-block removal(s)" flatly would have an operator hunting for
+            # 142 deletions that do not exist.
+            nested_note=""
+            if [[ "${resource_forgets}" -gt 0 ]]; then
+              nested_note=" — note the nested figure INCLUDES the blocks of those forget rows, which are not being removed from anything; a forget leaves the live object untouched"
+            fi
+            echo "::error::terraform plan shows ${destroy_count} destructive change(s) on sentry infra (${resource_deletes} resource-level delete(s) + ${nested_deletes} nested-block removal(s) + ${resource_forgets} state-only [\"forget\"] row(s), which destroy nothing)${nested_note}."
             echo "::error::Add a line containing exactly '[ack-destroy]' to the merge commit message to acknowledge, or revert the trigger commit."
-            grep -E 'will be destroyed|Plan:' tfplan.txt | head -20 >&2
+            # `will no longer be managed` is how Terraform renders a `removed{}`
+            # forget in the human plan. Without it this excerpt is EMPTY on a
+            # forget-only plan while the annotation above claims N destructive
+            # changes — the same empty-manifest failure the address-display jq
+            # in `plan_pr` had.
+            grep -E 'will be destroyed|will no longer be managed|Plan:' tfplan.txt | head -30 >&2
             exit 1
           fi
+
+      - name: Capture PRE-apply state (forensics)
+        # FORENSICS, NOT ROLLBACK. Read the distinction before using these files.
+        #
+        # The pair exists so that after a failed or PARTIAL apply a human can diff
+        # state either side of it and see which of the 27 addresses actually
+        # moved. They are not a restore path: recovery for this change is
+        # roll-forward only — re-run the failed job on the original run.
+        #
+        # Nor is R2 a restore path. `list-object-versions` against
+        # soleur-terraform-state returns `NotImplemented` (measured 2026-09-04,
+        # rc=254, with a passing `list-objects-v2` control proving it is not an
+        # auth problem), so the point-in-time recovery that infra/github/README.md
+        # §"Phase 5 — Rollback" describes does not exist for ANY root on that
+        # bucket. Filed as #7836. That is why a forensic copy is worth taking —
+        # and why writing one back is not a supported gesture.
+        #
+        # NEW EGRESS SURFACE, named as one in the plan's Encryption Posture. This
+        # takes the WHOLE root's state out from behind the R2 credential boundary
+        # and carries every resource in the root, not just the 27 alerts.
+        #
+        # THIS REPOSITORY IS PUBLIC. "Readable by anyone with repo read" therefore
+        # means any authenticated GitHub account, via the artifacts API, for the
+        # retention window — not "the team". Measured 2026-09-04, the incremental
+        # disclosure is nil: the root declares only cron/uptime monitors and alert
+        # rules, there is no `sentry_key` (so no DSN), every alert action is
+        # `email` to `issue_owners` with no webhook URL or integration token, and
+        # the state carries zero email-shaped strings, zero non-null
+        # `target_identifier`, and `.owner` null on all 89 resources. Stated
+        # plainly because the next person deciding whether to widen `path:` will
+        # read this sentence.
+        #
+        # Mitigated by an explicit SHORT retention rather than the 90-day default,
+        # and by the sentinel sweep before upload.
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          terraform state pull > "${RUNNER_TEMP}/sentry-state-pre.json"
+          printf 'pre-apply state: %s bytes, %s resources\n' \
+            "$(wc -c < "${RUNNER_TEMP}/sentry-state-pre.json")" \
+            "$(jq -r '.resources | length' "${RUNNER_TEMP}/sentry-state-pre.json")"
 
       - name: Terraform apply (cron + uptime monitors)
         working-directory: ${{ env.INFRA_DIR }}
@@ -819,6 +1014,104 @@ jobs:
         run: |
           set -euo pipefail
           terraform apply -auto-approve -input=false tfplan
+
+      - name: Capture POST-apply state and sweep both for secret bytes
+        # `if: always()` so a FAILED apply still leaves the after-picture. That is
+        # the case the pair exists for: a partial apply is exactly when the diff
+        # between the two files is the only record of what moved.
+        #
+        # ONE sweep, over BOTH files, in ONE step — deliberately not a copy of the
+        # sentinel regex in each capture step. Two copies of a guard's pattern is
+        # how the destroy arithmetic drifted (see sentry-destroy-counts.sh's
+        # header); here it would mean the pre-artifact and the post-artifact could
+        # end up held to different standards. The uploads are therefore both
+        # placed AFTER this step; the pre-capture still happens before the apply,
+        # which is the part that has to be ordered.
+        #
+        # FORWARD-LOOKING, not a response to a known leak. Measured 2026-09-04
+        # against the live state object for this root: 89 resources, ZERO sentinel
+        # matches, zero attributes named like a credential, zero
+        # `sensitive_attributes`. The provider does not put its token in state
+        # today. This fails the UPLOAD closed on the day a provider bump changes
+        # that, rather than discovering it from a published artifact.
+        if: always()
+        id: forensics_sweep
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+        run: |
+          set -uo pipefail
+          # `set +e` BRACKET — the trap this file documents twice (see the plan
+          # steps) and that the first draft of THIS step walked straight into.
+          # Actions runs a bare `run:` as `bash -e {0}`, so errexit is INHERITED
+          # and `set -uo pipefail` cannot clear it. `grep -q` returns 1 on NO
+          # MATCH, which is the outcome on every clean run — so the unbracketed
+          # form killed this step on the normal path, silently, before any
+          # annotation. Measured: rc=1 with only the "post-apply state" line
+          # printed. Because steps 12 and 13 (the BYOK liveness assertion and the
+          # AC19/AC20 fidelity probe) carry no `if:` and therefore inherit an
+          # implicit `success()`, BOTH were skipped — the two checks that prove
+          # `byok-art-33-breach` is still live after the apply — and the
+          # `if: failure()` filer then filed a p1 saying "assume a partial write"
+          # after a perfectly clean apply.
+          set +e
+          # Non-fatal pull: this is evidence collection on a path that may already
+          # be failing, and turning a diagnostic into a second failure would
+          # replace the real error in the run summary with this one.
+          #
+          # stderr is NOT discarded. A failed diagnostic is exactly when the
+          # reason matters, and `2>/dev/null` left the else-branch printing
+          # "could not pull" with no cause.
+          if terraform state pull > "${RUNNER_TEMP}/sentry-state-post.json" \
+             && jq -e 'has("resources")' "${RUNNER_TEMP}/sentry-state-post.json" >/dev/null; then
+            printf 'post-apply state: %s bytes, %s resources\n' \
+              "$(wc -c < "${RUNNER_TEMP}/sentry-state-post.json")" \
+              "$(jq -r '.resources | length' "${RUNNER_TEMP}/sentry-state-post.json")"
+          else
+            # `state pull` can exit 0 having written a short or empty document.
+            # Without the `has("resources")` check that lands as a 0-byte artifact
+            # published as if it were evidence, and the sentinel sweep below finds
+            # nothing in it — a clean bill of health over no content at all.
+            echo "::warning::could not pull a usable post-apply state; no after-picture for this run."
+            rm -f "${RUNNER_TEMP}/sentry-state-post.json"
+          fi
+
+          # Same sentinel set the destroy-guard fixtures are redacted against.
+          sentinel='BEGIN [A-Z ]*PRIVATE KEY|ghp_|ghs_|github_pat_|sbp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|sk_(test|live)_[a-zA-Z0-9]{24,}|sntrys_|dp\.st\.|re_[A-Za-z0-9]{16,}'
+          swept=0
+          secret_shape=false
+          for f in "${RUNNER_TEMP}/sentry-state-pre.json" "${RUNNER_TEMP}/sentry-state-post.json"; do
+            [[ -f "$f" ]] || continue
+            swept=$((swept + 1))
+            # rc captured on its OWN LINE. `grep | head` would report head's status
+            # and a match would sweep past as a pass.
+            grep -qE "$sentinel" "$f"
+            rc=$?
+            if [[ "$rc" -eq 0 ]]; then
+              rm -f "$f"
+              secret_shape=true
+              echo "::error::$(basename "$f") carried secret-shaped bytes and was NOT uploaded. A provider bump has started writing a credential into Terraform state — deleting the artifact copy does NOT fix that, the credential is in the R2 state object either way."
+            elif [[ "$rc" -ne 1 ]]; then
+              rm -f "$f"
+              secret_shape=true
+              echo "::error::the sentinel sweep failed to run over $(basename "$f") (grep rc=$rc); refusing to upload an unswept state file."
+            fi
+          done
+          if [[ "$swept" -eq 0 ]]; then
+            echo "::warning::no state files to sweep — neither capture produced a file."
+          fi
+
+          # ROUTED, not just annotated. `::error::` annotates; it does not fail a
+          # step, and this step deliberately does NOT `exit 1` — steps 12 and 13
+          # below inherit an implicit `success()`, so failing here would suppress
+          # the two probes that assert `byok-art-33-breach` is live. Instead the
+          # verdict becomes an OUTPUT, which (i) gates the success-closer so a
+          # green run cannot resolve an open incident issue while a
+          # credential-in-state annotation stands, and (ii) drives its own filer.
+          # Refusing to publish is the guard working; refusing to REPORT is not.
+          printf 'secret_shape=%s\n' "$secret_shape" >> "$GITHUB_OUTPUT"
+          set -e
+
 
       - name: BYOK Art.33 detector liveness assertion (#4656 item 5)
         # Read-only post-apply check: assert both BYOK issue-alert rules
@@ -837,6 +1130,254 @@ jobs:
           set -euo pipefail
           which jq >/dev/null 2>&1 || sudo apt-get install -y jq
           bash apps/web-platform/scripts/assert-byok-rules-exist.sh
+
+      - name: AC17 — state holds 27 sentry_alert + 2 sentry_issue_alert, no orphan
+        # AUTOMATED, because the alternative was an operator task nobody can do.
+        # AC17 is the check that decides whether a failed apply was PARTIAL, and
+        # the failure issue named it as such — while `terraform state list` needs
+        # the R2 backend credentials and `SENTRY_IAC_AUTH_TOKEN` that only this
+        # job holds, and the same issue body tells the operator NOT to
+        # `workflow_dispatch` (a dispatch carries no `head_commit.message`, so it
+        # cannot supply an `[ack-destroy]`). So the documented emergency check had
+        # no keyboard route at all. It runs here instead, and the counts go into
+        # the run summary so the answer is READ rather than reproduced.
+        #
+        # `if: always()` — a FAILED apply is exactly when this matters. On a
+        # partial adoption the counts will not be 27/2, and that is the signal.
+        if: always()
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+        run: |
+          set -uo pipefail
+          set +e
+          addrs=$(terraform state list)
+          rc=$?
+          set -e
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::AC17: could not read terraform state; the partial-apply question is UNANSWERED for this run."
+            exit 1
+          fi
+          n_alert=$(grep -c '^sentry_alert\.'       <<<"$addrs"); [[ -n "$n_alert" ]] || n_alert=0
+          n_issue=$(grep -c '^sentry_issue_alert\.' <<<"$addrs"); [[ -n "$n_issue" ]] || n_issue=0
+          {
+            echo "### AC17 — Sentry alert addresses in state"
+            echo ""
+            echo "| type | count | expected |"
+            echo "|---|---|---|"
+            echo "| \`sentry_alert.\` | ${n_alert} | 27 |"
+            echo "| \`sentry_issue_alert.\` | ${n_issue} | 2 |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "AC17: state holds ${n_alert} sentry_alert and ${n_issue} sentry_issue_alert address(es)"
+          if [[ "$n_alert" -ne 27 || "$n_issue" -ne 2 ]]; then
+            echo "::error::AC17 FAILED: expected 27 sentry_alert and 2 sentry_issue_alert addresses in state, found ${n_alert} and ${n_issue}. This is the partial-adoption signal: some of the 27 moved and some did not. Re-run THIS job (not a workflow_dispatch — it carries no head_commit.message and so cannot supply the [ack-destroy]); the adoption assert will report how many pairs remain."
+            exit 1
+          fi
+
+      - name: sentry_alert live fidelity (AC19/AC20)
+        # The post-apply half of §2.9. `assert-byok-rules-exist.sh` above covers
+        # 4 of the 27 rules, by name and enablement; this covers all 27,
+        # field-by-field, against the capture the blocks were generated from.
+        #
+        # POST-apply on purpose. Immediately after `terraform apply` has written
+        # every Terraform-owned field from source, a divergence here cannot be
+        # config drift — it is either live state Terraform does not own
+        # (enablement, detector binding) or evidence the apply did not do what it
+        # reported. Both are worth failing the run for.
+        #
+        # Uses the same three secrets as the step above, already present in this
+        # job. Read-only: one GET against the NON-deprecated org workflows
+        # endpoint, so it adds no exposure to the brownout the two survivors
+        # still refresh through.
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
+          SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+        run: |
+          set -euo pipefail
+          bash scripts/sentry-alert-live-fidelity.sh
+
+      - name: Upload state forensics (pre + post)
+        # `failure()`, NOT `always()`, and placed AFTER the post-apply probes.
+        #
+        # The captures are cheap and unconditional; the EGRESS is not. Uploading
+        # on every run made a one-merge diagnostic into permanent machinery: every
+        # routine cron-monitor merge, forever, would publish the whole root's
+        # state to a public repo's artifact storage for 7 days. The stated value
+        # of these files is "measured in hours after a FAILED apply", so that is
+        # exactly when they are published.
+        #
+        # Placed after the BYOK liveness assertion and the AC19/AC20 fidelity
+        # probe so a failure in EITHER of those also captures the state — those
+        # are the checks most likely to want an after-picture, and gating the
+        # upload earlier would have missed them.
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sentry-forensics-state-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/sentry-state-pre.json
+            ${{ runner.temp }}/sentry-state-post.json
+          # SHORT on purpose. The diagnostic value of these files is measured in
+          # hours after a failed apply; the disclosure surface they open is not.
+          retention-days: 7
+          # `warn`, not `error`: the sweep deliberately deletes a file rather than
+          # publishing it, and the capture tolerates a failed pull — so demanding
+          # a file here would red a run for the absence of a diagnostic, or for
+          # the secret guard having done its job.
+          if-no-files-found: warn
+
+      - name: File or comment tracking issue (apply failed)
+        # UNCONDITIONAL `if: failure()` — no `&& steps.x.outputs.y != ''` rider.
+        # An abort that exits before any step writes an output (an unbound var
+        # under `set -u`, a syntax error, an OOM kill) makes such a rider false,
+        # and the run goes red having filed NOTHING.
+        #
+        # WHY THE APPLY ARM NEEDS ITS OWN ROUTE. On a PR the operator is already
+        # looking: the gate reds a check they are watching, and `plan_pr` writes
+        # its verdict where the review happens. This job runs AFTER the merge,
+        # on `main`, with nobody watching — and it is the arm that touches live
+        # paging state. A failure here can mean a HALF-APPLIED adoption: some of
+        # the 27 rules moved to their `sentry_alert` address and the rest did
+        # not, which no later plan describes as an emergency and which AC17
+        # (`terraform state list` shows 27 + 2, no orphan) is the check for.
+        # Until this step existed, that outcome's only trace was a red run in a
+        # workflow list.
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MERGE_SHA: ${{ github.sha }}
+          TRIGGER: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          TITLE="[ci/apply-sentry-infra] apply failed on main"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          gh label create "ci/apply-sentry-infra" --repo "$GH_REPO" \
+            --description "apply-sentry-infra.yml apply-job failures" --color "B60205" 2>/dev/null || true
+
+          BODY_FILE=$(mktemp); trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## The Sentry infra apply failed after a merge to main\n\n'
+            printf 'This job owns live Sentry paging state. A failure here is not a red build to re-run at leisure: until it succeeds, `main` and live Sentry disagree, and the disagreement may be PARTIAL.\n\n'
+            printf -- '- Merge SHA: `%s`\n' "$MERGE_SHA"
+            printf -- '- Trigger: %s\n' "$TRIGGER"
+            printf -- '- Detected at: %s\n' "$NOW"
+            printf -- '- Run log: %s\n\n' "$RUN_URL"
+            printf '### First, establish whether the apply was partial\n\n'
+            printf 'Read the run log above and find which step failed.\n\n'
+            printf -- '- Failed BEFORE `Terraform apply`: nothing was written. Live Sentry is untouched and the gates did their job. Fix the cause and re-run.\n'
+            printf -- '- Failed DURING or AFTER `Terraform apply`: assume a partial write. Terraform state and live Sentry may now disagree per-resource.\n\n'
+            printf '### Recovery is ROLL-FORWARD (#7650)\n\n'
+            printf -- '1. **Re-run the failed job on THIS run.** It is the only gesture that works, because it is the only one that carries the original `head_commit.message` — and therefore any `[ack-destroy]` the merge needed.\n'
+            printf -- '2. **Do NOT `workflow_dispatch`.** A dispatch has no `head_commit.message`, so it can never supply the ack, and a plan needing one will red again for a different reason.\n'
+            printf -- '3. **Do NOT revert.** A revert re-adds the `sentry_issue_alert` blocks for addresses that are no longer in state and removes the `sentry_alert` blocks for addresses that now are, which plans as a destroy of live paging rules.\n'
+            printf -- '4. **Do NOT restore state from a backup.** The forensics artifacts on this run are for reading, not for writing back; a state restore re-asserts management over addresses whose live objects have already moved.\n\n'
+            printf '### If the failure was a Sentry 410\n\n'
+            printf 'The two surviving `sentry_issue_alert` resources still refresh through the deprecated alert-rule endpoint, which Sentry serves under brownouts. The plan step retries for exactly this. An exhausted retry means the brownout window is now wider than the budget, or the family is fully retired; in both cases the fix is to finish the migration, not to raise the attempt count.\n\n'
+            printf '### The check that decides whether this is an emergency\n\n'
+            printf 'AC17: `terraform state list` for this root must show 27 `sentry_alert.` and 2 `sentry_issue_alert.` addresses, with no orphan. Anything else is a partial adoption and the highest-priority thing in the repo — `byok-art-33-breach` is among the 27, and its silence stops the GDPR Art. 33 72-hour clock from ever starting.\n'
+          } > "$BODY_FILE"
+
+          # Dedupe by LABEL, not `--search`: the search API can return empty
+          # under some token contexts, which would file a fresh duplicate on
+          # every re-run of a failing apply.
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/apply-sentry-infra" --state open \
+            --limit 100 --json number,title \
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still failing at ${NOW} for merge SHA \`${MERGE_SHA}\`. Run: ${RUN_URL}"
+          else
+            # "Post-MVP / Later", matching the sibling auto-filers, and NOT a phase
+            # milestone: phase milestones are closed as a routine act and
+            # `gh issue create` HARD-FAILS on a closed one, which would silently
+            # stop this verdict reaching a human the day the phase closed.
+            # `--milestone` is BEST-EFFORT, never load-bearing. `gh issue create`
+            # hard-fails on a closed or renamed milestone, and under `set -e`
+            # that would abort this step and file nothing — the milestone guard
+            # becoming the silence it exists to prevent, one layer down.
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label "ci/apply-sentry-infra" --label "type/chore" --label "priority/p1-high" \
+              --milestone "Post-MVP / Later" \
+              --body-file "$BODY_FILE" \
+              || gh issue create --repo "$GH_REPO" --title "$TITLE" \
+                   --label "ci/apply-sentry-infra" --label "type/chore" --label "priority/p1-high" \
+                   --body-file "$BODY_FILE"
+          fi
+
+      - name: File the credential-in-state issue (sentinel hit)
+        # The sweep's verdict needs a channel of its own. It cannot ride
+        # `if: failure()` — the sweep deliberately stays green so it does not
+        # suppress the two liveness probes — so without this step "a provider
+        # bump has started writing a credential into Terraform state" was an
+        # annotation on a green run and nothing else.
+        if: always() && steps.forensics_sweep.outputs.secret_shape == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          TITLE="[ci/apply-sentry-infra] secret-shaped bytes in Terraform state"
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          gh label create "ci/apply-sentry-infra" --repo "$GH_REPO" \
+            --description "apply-sentry-infra.yml apply-job failures" --color "B60205" 2>/dev/null || true
+          BODY_FILE="${RUNNER_TEMP}/secret-state-issue.md"
+          {
+            printf '## A credential-shaped string appeared in the Sentry root Terraform state\n\n'
+            printf 'The forensics sweep matched the secret sentinel against a `terraform state pull` and **refused to publish the artifact**. That is the guard working — but it addresses only the artifact copy. **The value is in the R2 state object either way**, and the state object is what every apply reads and writes.\n\n'
+            printf -- '- Detected at: %s\n' "$NOW"
+            printf -- '- Run log: %s\n\n' "$RUN_URL"
+            printf '### What this means\n\n'
+            printf 'Measured 2026-09-04, this root'"'"'s state carried 89 resources, ZERO sentinel matches and zero `sensitive_attributes`. The provider did not write its token into state. If this issue exists, that has changed — most likely a provider upgrade.\n\n'
+            printf '### What to do\n\n'
+            printf -- '1. Read the run log for which capture matched (pre or post).\n'
+            printf -- '2. Identify the attribute. Do NOT paste it here.\n'
+            printf -- '3. Rotate the credential — it is in remote state, which is a different exposure from the artifact that was withheld.\n'
+            printf -- '4. Decide whether the forensics artifacts should keep running at all while the provider does this; they are gated on the adoption and are removable with #7826.\n'
+          } > "$BODY_FILE"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/apply-sentry-infra" --state open \
+            --limit 100 --json number,title \
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still matching at ${NOW}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label "ci/apply-sentry-infra" --label "type/security" --label "priority/p1-high" \
+              --milestone "Post-MVP / Later" \
+              --body-file "$BODY_FILE" \
+              || gh issue create --repo "$GH_REPO" --title "$TITLE" \
+                   --label "ci/apply-sentry-infra" --label "type/security" --label "priority/p1-high" \
+                   --body-file "$BODY_FILE"
+          fi
+
+      - name: Close the apply-failure tracking issue (success)
+        # The filer above is only half a route. Without this, the first failed
+        # apply leaves an open p1 that stays open through every subsequent green
+        # run, and the operator learns to ignore the label.
+        #
+        # Gated on the sweep's verdict too: a green run must not resolve an open
+        # incident issue while a credential-in-state annotation is standing.
+        if: success() && steps.forensics_sweep.outputs.secret_shape != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          STALE=$(gh issue list --repo "$GH_REPO" --label "ci/apply-sentry-infra" --state open \
+            --limit 100 --json number,title \
+            --jq 'map(select(.title == "[ci/apply-sentry-infra] apply failed on main")) | .[0].number // empty')
+          if [[ -n "$STALE" ]]; then
+            gh issue close "$STALE" --repo "$GH_REPO" \
+              --comment "apply-sentry-infra applied cleanly again at ${NOW}. Run: ${RUN_URL}"
+          fi
 
       - name: Post-apply summary
         if: always()

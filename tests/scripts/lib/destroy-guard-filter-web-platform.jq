@@ -62,7 +62,7 @@
 #
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
-#          host_creates: int}.
+#          host_creates: int, luks_passphrase_rotations: int}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
 # so the manual-rerun consumer that reads only them keeps working. host_creates
 # has TWO workflow readers: the `apply` job (#6416) and apply-deploy-pipeline-fix.yml
@@ -343,6 +343,95 @@ def destroyed_at($addr):
          | select(.name == "github_pages")
          | select(.change.actions? | index("delete")) ] | length) as $sibling_delete
     | if $apex_create > 0 and $sibling_delete > 0 then $sibling_delete else 0 end
+  ),
+
+  # 9th surface (#7695): a LUKS PASSPHRASE ROTATION on the per-PR apply path.
+  #
+  # `random_password.inngest_redis_luks` and `doppler_secret.inngest_redis_luks_key` are BOTH in
+  # the per-merge `-target=` allow-list, so a routine merge apply reaches them. A delete/replace
+  # there mints a new passphrase while the LUKS header on the live volume is still cut from the
+  # OLD one — the store is then unopenable, on a host with no SSH and no console, and the AOF it
+  # holds is user prompts and agent output. There is no recovery: the header key is the only copy.
+  #
+  # WHY IT NEEDS ITS OWN COUNTER RATHER THAN resource_deletes. A replace trips resource_deletes,
+  # and the destroy gate then prints "Add [ack-destroy] to acknowledge" — so an author acking a
+  # legitimate sibling change in the same merge acks the passphrase rotation through with it. That
+  # is exactly the reasoning host_creates records for host REBIRTH, and it applies here with a
+  # worse outcome: a reborn host is recoverable, a rotated header is not. Read OUTSIDE the
+  # destroy_count sum, so `[ack-destroy]` cannot reach it.
+  #
+  # `update` OR `delete` OR `forget`, and NOT `create`.
+  #
+  # `update` WAS MISSING, and the comment below already claimed it was here. A Doppler-side
+  # value change plans as a bare `["update"]` on the secret — no delete, no forget — so it scored
+  # ZERO on every counter in this file, `destroy_count` stayed 0, and the apply never even reached
+  # the ackable destroy gate, let alone this HALT. Measured on this repo's own rotation fixture
+  # with the sibling random_password row removed:
+  #     {"resource_deletes":0,"luks_passphrase_rotations":0}
+  # That address is in the per-merge `-target=` list, so an unattended merge apply reaches it. The
+  # result is a Doppler passphrase the live LUKS header was never cut from: the store is
+  # unopenable on the next boot, on a host with no SSH and no console, and the header key is the
+  # only copy. The parity claim below is now true rather than aspirational. A first CREATE is legal and expected
+  # — this volume is being cut to LUKS for the first time, and inngest_volume_recut_gate makes the
+  # same three-verb exclusion for the same reason. `forget` IS counted: a Terraform 1.7+ state-drop
+  # of the passphrase leaves the header cut from a value nothing records any more, which is the
+  # stranding hazard wearing a different hat (the same note the retire counters carry at T49).
+  # 10th surface (#7695 review F1): AN ENTRY WHOSE VERB SET CANNOT BE READ, AT ANY ADDRESS.
+  #
+  # I closed this shape at the two LUKS addresses and left the CLASS open everywhere else — the
+  # instance fixed, the defect kept. `[] | any(...)` is `false` and `[] | index("delete")` is null,
+  # so an entry with `"actions": []`, `before` populated and `after` null — the shape of a destroy —
+  # is invisible to resource_deletes, host_creates, reboot_updates, apex_move_orphans, destroyed_at()
+  # and every web2 retire counter. MEASURED on this filter before this counter existed, with three
+  # such entries at hcloud_volume.inngest_redis, hcloud_server.web["web-1"] and
+  # hcloud_volume.workspaces["web-2"]:
+  #     {"plan_ok":true,"resource_deletes":0,"host_creates":0,"nested_deletes":0,
+  #      "reboot_updates":0,"luks_passphrase_rotations":0}
+  # Three destroys of sole-copy volumes — the Inngest AOF and every user's repository tree — read as
+  # a clean plan. `destroy_count` is then 0, so `[ack-destroy]` is never even demanded and the apply
+  # proceeds against the saved binary tfplan.
+  #
+  # This is NOT hypothetical and it is not new: gate-suite-harness.sh's own `rc_empty_actions`
+  # docstring records a real 18-address birth plan that also carried hcloud_server.web["web-1"] with
+  # `"actions": []` and `"after": null` — a destroy of the singleton behind app.soleur.ai — scoring
+  # destroys=0, out_of_scope=0, and PASSING. The shape was measured in this repo and the general
+  # remedy was never applied to this filter.
+  #
+  # `plan_gate_preamble.sh` closes exactly this for the GATE scripts via plan_gate_assert_classifiable;
+  # it does not run on the workflow path, which is why the check has to exist here too.
+  #
+  # `[]` is the ONLY silent shape. `"actions": null`, a missing `.change`, and a scalar `.change` all
+  # make jq exit non-zero, which `set -e` on the `counts=$(jq …)` assignment surfaces. This counter
+  # covers the one that returns rc 0 with a well-formed all-zeros document.
+  undecidable_entries: (
+    [ .resource_changes[]?
+      | select(((.change.actions | type) != "array") or ((.change.actions | length) == 0)) ]
+    | length
+  ),
+
+  luks_passphrase_rotations: (
+    [ .resource_changes[]?
+      | select(.address == "random_password.inngest_redis_luks"
+            or .address == "doppler_secret.inngest_redis_luks_key")
+      | select(
+          # DECIDABILITY FIRST, then the verb set. `any(...)` over an empty array is `false`, so an
+          # entry present at one of these two addresses with `"actions": []` — `before` populated,
+          # `after` null, i.e. the shape of a destroy — scored ZERO here AND zero on
+          # resource_deletes, and the apply never reached either gate. Measured on this filter
+          # before the fix: {"luks_passphrase_rotations":0,"resource_deletes":0}. It is the only
+          # degraded shape that stays silent; `"actions": null` and a missing `.change` both make
+          # jq exit non-zero, which the apply surfaces. This is the same class #6997 closed for the
+          # gate scripts via plan-gate-preamble.sh, which does not run on this workflow path.
+          #
+          # An entry AT THESE ADDRESSES whose verb set cannot be read is not evidence of safety, so
+          # it counts. `["no-op"]` and `["create"]` are decidable and legitimately score 0 — no-op
+          # is the routine merge reading, and a first create is this volume being cut to LUKS for
+          # the first time.
+          ((.change.actions | type) != "array")
+          or ((.change.actions | length) == 0)
+          or (.change.actions | any(. == "update" or . == "delete" or . == "forget"))
+        ) ]
+    | length
   ),
 
   # --- web-2 RETIRE counters (#6538) -------------------------------------

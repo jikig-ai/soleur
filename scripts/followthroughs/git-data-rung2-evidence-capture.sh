@@ -530,6 +530,36 @@ FATAL_SQL="
     AND JSONExtractString(raw,'level') = 'fatal'
   ORDER BY dt ASC LIMIT 1000 FORMAT JSONEachRow"
 
+# (#7772 item 1) PIN THE TABLE TO GIT-DATA'S OWN SOURCE. betterstack-query.sh defaults BS_TABLE
+# to `t520508_soleur_inngest_vector_prd_3_logs` — the SHARED source (2457081) this host stopped
+# shipping to. git-data now has its own source, 2734275 / table_name `soleur_git_data_prd`, and
+# the naming convention the query script documents is `t<team>_<table_name>_logs`.
+#
+# WHY THIS IS NOT COSMETIC. Leaving the default in place does not error: the shared table exists
+# and answers, it simply holds no rows from a host that no longer writes there. Every arm of this
+# capture would then read an empty result and report a DARK BOOT — on a rehearsal that cost a real
+# Hetzner host and in fact booted fine. A false FAIL is the expensive direction here, because the
+# operator's next move is to re-dispatch (another paid host) rather than to doubt the query.
+# Exported rather than passed as `--table` so the S3 sibling derives from it (BS_TABLE_S3 defaults
+# to `${BS_TABLE%_logs}_s3`), keeping the hot and archive arms on the same source by construction.
+#
+# THE TABLE IS CREATED LAZILY, ON FIRST INGEST — measured 2026-09-03, minutes after the source was
+# minted: `SELECT count() FROM remote(t520508_soleur_git_data_prd_logs)` answered HTTP 500
+# `Code: 701 … CLUSTER_DOESNT_EXIST`, not an empty result set. The name is right (the API reports
+# team_id=520508 and table_name=soleur_git_data_prd, and the incumbent derives identically); the
+# table just does not exist until something writes to it.
+#
+# So on a rehearsal this arm has THREE outcomes, not two, and only two of them are about the host:
+# rows (the boot emitted), an empty result (the table exists, so something has written to this
+# source before, and THIS boot was dark), and CLUSTER_DOESNT_EXIST (nothing has EVER written to
+# this source). The third reaches `_run_query` as a non-zero transport rc and is reported TRANSIENT
+# — no verdict — which is the correct degradation: it is emphatically not a PASS, and it is not the
+# false FAIL that would send the operator to re-dispatch another paid host. It does mean a fully
+# dark first rehearsal burns its 16-minute poll before saying "no verdict" rather than "dark boot".
+# Accepted rather than special-cased: distinguishing the two costs a vendor-error-string match, and
+# a string match on a vendor 500 is exactly the kind of guard that rots silently.
+export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
+
 _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
   bash "$QUERY" "$1" 2>&1
 }
@@ -554,11 +584,59 @@ fi
 # bare `grep -q 'host'` and reported the source LIVE. The rows are FORMAT JSONEachRow with the
 # column aliased `host`, so the field shape is available and strictly tighter — and this is
 # the one predicate the whole live-vs-silent distinction rests on.
+#
+# (#7772) THE FOREIGN-HOST ANCHOR DIED WITH THE SOURCE SPLIT, AND THE FALLBACK IS AN INGEST PROBE.
+#
+# This predicate asks "is the source answering AT ALL?" by requiring a row from some host OTHER
+# than the rehearsal host. That worked only because source 2457081 was SHARED and its other
+# tenants were chatty (measured 2026-09-03: soleur-web-platform ~1.99M rows, soleur-inngest-prd
+# ~150k). git-data now ships to its OWN source 2734275, whose only possible writers are the prod
+# host (never born) and rehearsal hosts -- which this predicate excludes BY DESIGN, and whose
+# HOST_NAME embeds a per-run id so no two rehearsals share one.
+#
+# So on a single-tenant source the anchor is UNSATISFIABLE: a PERFECT first rehearsal creates the
+# table, writes its rows, is excluded by the `!=` clause, reports ZERO foreign rows, and lands on
+# TRANSIENT -- no evidence file, no verdict, and RUNG2_BOOT_REHEARSAL=PASS structurally
+# unreachable. Each attempt costs a real Hetzner host and an environment approval. The failure is
+# indistinguishable from a dark boot, which is the one distinction this whole arm exists to make.
+#
+# The question is unchanged; the instrument has to change. `betterstack-ingest-probe.sh` answers
+# "is this source live?" directly at the WRITE endpoint, without writing a row (an empty batch),
+# and discriminates 0 accepting / 4 refused (auth or quota) / 2 unreachable. That is strictly
+# better than the foreign-host SELECT even on a shared source: it measures THIS source's
+# liveness rather than inferring it from a neighbour's traffic.
+#
+# The foreign-host read is kept as a SUFFICIENT condition, not a necessary one -- if another host
+# has written recently the source is obviously live, and that costs nothing to accept.
 if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
-  transient "TRANSIENT: the source-liveness anchor returned ZERO rows from ANY other host in the last ${WINDOW}." \
-            "That is a statement about the INSTRUMENT, not about ${HOST_NAME}: a live source with a" \
-            "silent host and a dead source look identical from this host's rows alone, so this run" \
-            "declines to read silence as a dark boot."
+  _probe="${BETTERSTACK_INGEST_PROBE:-${REPO_ROOT}/scripts/betterstack-ingest-probe.sh}"
+  if [[ ! -r "$_probe" ]]; then
+    transient "TRANSIENT: no foreign-host rows, and the ingest probe is unreadable at ${_probe}," \
+              "so this run cannot tell a live-but-silent source from a dead one. Not a verdict" \
+              "about ${HOST_NAME}."
+  fi
+  _probe_rc=0
+  BETTERSTACK_INGEST_URL="${GIT_DATA_BETTERSTACK_INGEST_URL:-https://s2734275.eu-central-1a.betterstackdata.com/}" \
+  BETTERSTACK_LOGS_TOKEN="${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-${BETTERSTACK_LOGS_TOKEN:-}}" \
+    bash "$_probe" >/dev/null 2>&1 || _probe_rc=$?
+  case "$_probe_rc" in
+    0)
+      # Source live, this host silent. That IS a statement about the host, so fall through to the
+      # host read below and let it produce the verdict.
+      printf 'anchor: no foreign-host rows; ingest probe says the source is ACCEPTING (single-tenant source, expected)\n' >&2
+      ;;
+    4)
+      transient "TRANSIENT: no foreign-host rows, and the ingest probe reports the source REFUSING" \
+                "writes (auth or quota). A refused sink cannot have recorded this boot, so silence" \
+                "here is a statement about the INSTRUMENT, not about ${HOST_NAME}."
+      ;;
+    *)
+      transient "TRANSIENT: no foreign-host rows, and the ingest probe could not reach the source" \
+                "(rc=${_probe_rc}). A live source with a silent host and an unreachable source look" \
+                "identical from this host's rows alone, so this run declines to read silence as a" \
+                "dark boot."
+      ;;
+  esac
 fi
 
 # ── ARTIFACT 2: everything this host reported ─────────────────────────────────────

@@ -313,8 +313,25 @@ log "bootstrap complete: plaintext volume mounted, LUKS cutover volume mounted a
 # ipcent too: inodes exhaust ahead of bytes (see 6c), so bytes-only reads healthy to ENOSPC.
 # `|| true` because read returns 1 on an empty df and this script is `set -e`.
 read -r _disk_pct _inode_pct < <(df --output=pcent,ipcent "$GIT_DATA_ROOT" 2>/dev/null | tail -1 | tr -dc '0-9 \n') || true
+# (#7772 item 2) The fifth boolean, and unlike its four siblings it is MEASURED rather than
+# `yes` by construction. It reads the live ruleset, so it covers the one case the runcmd's
+# warning-on-arm-failure structurally cannot: the ruleset DISAPPEARING after a successful load.
+# That is not hypothetical here — installing `nftables` also installs nftables.service, whose
+# ExecStop runs `nft flush ruleset`, and /etc/nftables.conf whose third line is `flush ruleset`.
+# It ships disabled and we never enable it, but RemainAfterExit=yes means systemd would keep
+# reporting our oneshot "active" over an emptied ruleset indefinitely, and git-data never
+# reboots to re-assert (ADR-115 bars it from the reboot primitive). Without this boolean the
+# control's only signal is the ABSENCE of a warning, which notifies nobody.
+# Anchored on the daddr, not the table name: a table that exists with its rule flushed is
+# exactly the state being tested for, and a name-only grep would report it healthy.
+_nft_drop=no
+if command -v nft >/dev/null 2>&1 &&
+   nft list chain inet soleur_git_data output 2>/dev/null | grep -q '169\.254\.169\.254'; then
+  _nft_drop=yes
+fi
 if [[ -x "$GIT_DATA_EMIT" ]]; then
   "$GIT_DATA_EMIT" "git-data bootstrap complete" boot_complete info "" \
     "luks_mounted=yes" "repo_root=yes" "hooks_path=yes" "provision=yes" \
+    "nft_metadata_drop=${_nft_drop}" \
     "disk_pct=${_disk_pct:-unknown}" "inode_pct=${_inode_pct:-unknown}" || true
 fi

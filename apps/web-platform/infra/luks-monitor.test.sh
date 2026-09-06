@@ -113,15 +113,31 @@ else
 fi
 
 # (h) The Sentry drift alert filters on BOTH tags the emit sets, ANDed. Extract the drift resource
-# block and assert WITHIN it (the two `value=` strings + filter_match) — an unscoped grep would pass
-# even if the tags lived in two different alerts or filter_match were "any" (either tag alone pages).
-drift_block="$(awk '/resource "sentry_issue_alert" "workspaces_luks_drift"/{p=1} p{print} p&&/^}/{exit}' "$SENTRY")"
+# block and assert WITHIN it — an unscoped grep would pass even if the tags lived in two different
+# alerts, or if the two were OR-ed (either tag alone then pages, on every LUKS event).
+#
+# REBOUND for #7650 Phase 2: this rule is now `sentry_alert`, not `sentry_issue_alert`. The
+# semantics are unchanged and so is what this asserts — only the spelling moved:
+#   filters_v2 + filter_match = "all"  ->  action_filters[].conditions[] + logic_type = "all"
+# The old anchor did not fail loudly when the type changed; it simply extracted an EMPTY block
+# and reported the alert misconfigured. That is the right direction to fail in, and it is why
+# the anchor is rebound rather than relaxed.
+#
+# The `logic_type` count is part of the assertion, not decoration. Multiple `action_filters`
+# ELEMENTS are OR-ed against each other, so "both tags appear somewhere in this resource, and
+# some element says all" is satisfiable by a config that pages on either tag alone — the exact
+# defect this case exists to catch, reintroduced through the new shape. Requiring exactly ONE
+# element means the single `logic_type = "all"` provably governs both tags. A future second
+# element reds this and forces a human to re-read it.
+drift_block="$(awk '/^resource "sentry_alert" "workspaces_luks_drift"/{p=1} p{print} p&&/^}/{exit}' "$SENTRY")"
+drift_logic_n="$(printf '%s\n' "$drift_block" | grep -cE '^[[:space:]]*logic_type[[:space:]]*=' || true)"
 if printf '%s\n' "$drift_block" | grep -q 'value = "workspaces-luks"' \
   && printf '%s\n' "$drift_block" | grep -q 'value = "workspaces-luks-drift"' \
-  && printf '%s\n' "$drift_block" | grep -qE '^[[:space:]]*filter_match[[:space:]]*=[[:space:]]*"all"'; then
-  ok "sentry_issue_alert.workspaces_luks_drift ANDs (filter_match=all) feature=workspaces-luks AND op=workspaces-luks-drift"
+  && [ "$drift_logic_n" = "1" ] \
+  && printf '%s\n' "$drift_block" | grep -qE '^[[:space:]]*logic_type[[:space:]]*=[[:space:]]*"all"'; then
+  ok "sentry_alert.workspaces_luks_drift ANDs (one action_filter, logic_type=all) feature=workspaces-luks AND op=workspaces-luks-drift"
 else
-  no "sentry_issue_alert.workspaces_luks_drift must filter_match=\"all\" on BOTH feature=workspaces-luks and op=workspaces-luks-drift (a single-tag or filter_match=any alert pages on either tag alone)"
+  no "sentry_alert.workspaces_luks_drift must carry exactly ONE action_filters element with logic_type=\"all\" over BOTH feature=workspaces-luks and op=workspaces-luks-drift (a single-tag rule, logic_type=any, or a second OR-ed element all page on either tag alone). Found ${drift_logic_n} logic_type line(s)."
 fi
 
 # (i) The daily-probe heartbeat resource exists (the dead-probe switch — P1-4).

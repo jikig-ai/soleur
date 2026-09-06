@@ -26,6 +26,7 @@ import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from 
 import { execFileSync } from "child_process";
 import { tmpdir } from "os";
 import { dirname, join } from "path";
+import { gitCleanEnv } from "./lib/git-clean-env";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
@@ -99,6 +100,36 @@ function extractOnPushPaths(yml: string): string[] {
   return out;
 }
 
+// SCRUB GIT'S OWN ENVIRONMENT FOR EVERY CHILD PROCESS IN THIS FILE.
+// `cwd` does NOT win over `GIT_DIR`: git resolves the repository from
+// GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE first and only falls back to discovery
+// from the working directory. Every git HOOK exports those, and this repo's
+// `lefthook` pre-commit runs the plugin component tests — so unscrubbed, these
+// fixtures execute against the CALLER'S repository.
+//
+// Measured 2026-09-03, controlled both ways from one temp repo:
+//   no GIT_DIR  -> `git commit --allow-empty -m base` lands in the fixture repo
+//   GIT_DIR set -> the identical call MOVED THE CALLER'S BRANCH TIP
+// Observed in the wild as a chain of `base`/`change` commits on a feature
+// branch, which consumed the commit the contributor was making at the time.
+//
+// Two distinct harms, and the second is the quieter one:
+//   1. the `git add -A` + `git commit` pair in runGate() corrupts the caller's
+//      branch (data loss — it takes the in-flight commit with it);
+//   2. the NON-GIT-DIRECTORY case below becomes VACUOUS. Its premise is that
+//      `git diff` must FAIL for want of a repository; with GIT_DIR inherited it
+//      SUCCEEDS against the real repo, so the assertion proves nothing while
+//      staying green.
+//
+// This is the #7553/#7652 class ("a suite whose fixture cd fails, or whose
+// `git -C` operand is empty, runs git in the caller CWD") reached by a third
+// route: the cwd was correct and the ENVIRONMENT pointed elsewhere.
+// Exclusion BY PREFIX, from the shared helper — not a hand-listed set of
+// names. This block used to name six GIT_* variables, which is a claim about
+// which ones git honours; `GIT_CEILING_DIRECTORIES` and `GIT_NAMESPACE` alone
+// falsify it. See plugins/soleur/test/lib/git-clean-env.ts for why (#7822).
+const GIT_SAFE_ENV = gitCleanEnv();
+
 let GATE_SCRIPT: string;
 let PATH_FILTER: string;
 let ON_PUSH_PATHS: string[];
@@ -112,32 +143,27 @@ beforeAll(() => {
   ON_PUSH_PATHS = extractOnPushPaths(readFileSync(WEBPLAT, "utf8"));
 });
 
-// Build a clean env excluding every GIT_* variable that lefthook (and git itself)
-// inject into hook processes. This is NOT optional hygiene: `GIT_DIR` OVERRIDES
-// `cwd`, so without it every git call below resolves to the DEVELOPER'S repository
-// instead of the temp fixture -- `git init` no-ops and the two commits land on
-// whatever branch is checked out. Measured on PR #7782: the `plugin-component-test`
-// lefthook job ran this file during a commit and appended 16 `base`/`change`
-// commits to the feature branch, which the following `git push` then published.
-// Same defense as `welcome-hook.test.ts` and `lint-orphan-test-suites.test.sh`.
-function gitCleanEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, val] of Object.entries(process.env)) {
-    if (!key.startsWith("GIT_") && val !== undefined) env[key] = val;
-  }
-  return env;
-}
+// SECOND, INDEPENDENT OCCURRENCE — kept because it is the stronger evidence.
+// PR #7782 hit this same bug in this same file, concurrently with #7822 and
+// without either knowing of the other: the `plugin-component-test` lefthook job
+// ran this file during a commit and appended SIXTEEN `base`/`change` commits to
+// the feature branch, which the following `git push` then PUBLISHED. #7822's
+// occurrence was caught before it left the machine; this one was not.
+//
+// Two sessions independently re-derived the same helper in the same week, which
+// is why it now lives in ./lib/git-clean-env.ts and is IMPORTED rather than
+// copied. That file carries the mechanism and the reason the exclusion must be
+// by PREFIX. Do not re-inline it here — that is exactly how this recurred.
 
 // Build a 2-commit git repo (HEAD~1 = empty base, HEAD = the changed paths),
 // run the extracted gate against it with force_run=false, and return `changed`.
 function runGate(changedPaths: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), "deploygap-gate-"));
-  const cleanEnv = gitCleanEnv();
   const git = (args: string[]) =>
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...args], {
       cwd: dir,
       stdio: "pipe",
-      env: cleanEnv,
+      env: GIT_SAFE_ENV,
     });
   git(["init", "-q"]);
   git(["commit", "-q", "--allow-empty", "-m", "base"]);
@@ -154,7 +180,7 @@ function runGate(changedPaths: string[]): string {
     cwd: dir,
     stdio: "pipe",
     env: {
-      ...cleanEnv,
+      ...GIT_SAFE_ENV,
       FORCE_RUN: "false",
       PATH_FILTER,
       COMPONENT: "web-platform",
@@ -216,7 +242,9 @@ describe("inner check_changed gate — fail-loud, no shell-glob", () => {
         cwd: dir,
         stdio: "pipe",
         env: {
-          ...process.env,
+          // GIT_SAFE_ENV, not process.env: with GIT_DIR inherited this
+          // "non-git directory" is a git repository and the case is vacuous.
+          ...GIT_SAFE_ENV,
           FORCE_RUN: "false",
           PATH_FILTER,
           COMPONENT: "web-platform",

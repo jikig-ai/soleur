@@ -30,6 +30,15 @@
 # (fatal stage, or no terminal event inside the host's own boot window).
 
 set +e
+
+# REFUSE TO RUN UNDER XTRACE (#7797). This script ACQUIRES a credential at
+# runtime, so the refusal is UNCONDITIONAL: a `${VAR:+x}` hatch would be open
+# here by construction (the variable is still empty) and the fetch itself would
+# then be traced. `$-` is the load-bearing arm -- bash applies an env-supplied
+# SHELLOPTS or BASH_ENV before line 1, so `x` is already set by the time this runs.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script fetches a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 # Prose-only. Defaulted rather than required so a caller that forgets it degrades to the
 # historical wording instead of printing an empty label into the operator-facing summary.
 DISPATCH_LABEL="${DISPATCH_LABEL:-web-host-create}"
@@ -58,7 +67,7 @@ SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN --plain -p soleur -c p
 # it is the only NEW secret the PR introduced. Latent today (no `set -x` anywhere
 # in the file, and nothing echoes it) — masked anyway, because "no current caller
 # prints it" is a property of today's code, not of the secret.
-[[ -n "${SENTRY_AUTH_TOKEN:-}" ]] && printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
+[[ -n "${SENTRY_AUTH_TOKEN:+x}" ]] && printf '::add-mask::%s\n' "$SENTRY_AUTH_TOKEN"
 SENTRY_ORG=$(doppler secrets get SENTRY_ORG --plain -p soleur -c prd_terraform 2>/dev/null || true)
 SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT --plain -p soleur -c prd_terraform 2>/dev/null || true)
 # Echo to the LOG as well as the summary so
