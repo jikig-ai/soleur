@@ -1640,30 +1640,49 @@ else
   fail "G2/M8 expected count 1 after excluding the stale sibling, got: $G2_FILTERED"
 fi
 
-# --- H5 / M9: the fresh sibling still counts (the filter is not a disable) --
-# Direction matters: an inverted comparison would keep the STALE one and drop
-# the fresh one, yielding 1 as well. Pin WHICH survives by reading the rows.
+# --- The capacity report must STILL SEE the stale sibling --------------------
+# The regression guard for the worst shape this filter can take. Scoping the
+# exclusion to `sibs` itself would answer "can this box absorb another gate?"
+# with the refusal's instrument: `--capacity` printed CAPACITY_OK measured_runs=0
+# with a 46h orphan live, enumerating nothing — an idle verdict on a wedged box,
+# in the one diagnostic the operator is routed to from the lock-wait banner.
 G2_ROWS="$TESTROOT/g2-rows.txt"
 g2_report "$STALE_ROOT" 14400 > "$G2_ROWS"
 cases=$((cases + 1))
-if [[ "$(grep -cF -- "$FRESH_WT" "$G2_ROWS" || true)" -ge 1 ]]; then
-  pass "G2/H5 the FRESH sibling survives the filter and is still reported"
+if [[ "$(grep -cE '^\[contention\]   -> pid 900001 in .*wt-stale \(running' "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2 the STALE sibling is still enumerated as a detail row (capacity stays honest)"
 else
-  fail "G2/H5 fresh worktree $FRESH_WT absent from the preamble; got: $(cat "$G2_ROWS")"
+  fail "G2 capacity regression: the stale sibling vanished from the report; got: $(cat "$G2_ROWS")"
 fi
 cases=$((cases + 1))
-if [[ "$(grep -cE 'SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED' "$G2_ROWS" || true)" -ge 1 ]]; then
-  pass "G2 the exclusion is REPORTED, not silent"
+if [[ "$(grep -cE '^\[contention\] siblings: 2 other worktree' "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2 the sibling COUNT line still reports both (the machine as it is)"
 else
-  fail "G2 no SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED marker; got: $(cat "$G2_ROWS")"
+  fail "G2 the sibling count line was filtered; got: $(grep 'siblings:' "$G2_ROWS" || true)"
 fi
-# The marker must name the pid AND the elapsed it measured — a bare count would
-# leave the operator unable to tell WHICH run is stale.
+# --- H5 / M9: direction. Anchored on the DETAIL-ROW shape, never a bare path --
+# An earlier revision grepped for the fresh worktree's bare path against the
+# merged stdout+stderr — which the exclusion banner's own `cwd=` field satisfies,
+# so an inverted comparison passed it. Three of four direction arms were vacuous.
+cases=$((cases + 1))
+if [[ "$(grep -cE '^\[contention\]   -> pid 900002 in .*wt-fresh \(running' "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2/H5 the FRESH sibling is enumerated as a detail row"
+else
+  fail "G2/H5 fresh worktree absent from the detail rows; got: $(cat "$G2_ROWS")"
+fi
 cases=$((cases + 1))
 if [[ "$(grep -cE 'SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED.*pid=900001.*elapsed_s=20000' "$G2_ROWS" || true)" -ge 1 ]]; then
-  pass "G2 the exclusion marker names the excluded pid and its measured elapsed"
+  pass "G2 the exclusion is REPORTED, naming the excluded pid and its measured elapsed"
 else
-  fail "G2 marker does not name pid=900001 elapsed_s=20000; got: $(grep 'STALE_SIBLING' "$G2_ROWS" || true)"
+  fail "G2 marker missing/incorrect; got: $(grep 'STALE_SIBLING' "$G2_ROWS" || true)"
+fi
+# Direction, pinned where it is load-bearing: the marker must name the STALE pid,
+# never the fresh one. An inverted comparison reds here AND on the count arm.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED.*pid=900002' "$G2_ROWS" || true)" -eq 0 ]]; then
+  pass "G2/M9 the FRESH sibling is never the one excluded (direction)"
+else
+  fail "G2/M9 inverted direction: the fresh sibling was excluded"
 fi
 
 # --- M12: a SECOND stale sibling is also excluded ---------------------------
@@ -1687,14 +1706,11 @@ else
 fi
 
 # --- M10: an UNREADABLE elapsed must still be COUNTED -----------------------
-# WHAT THIS PINS, precisely: the END-TO-END property (a run whose starttime
-# cannot be parsed is still counted against capacity), via the producer's
-# `elapsed=0` fallback. It does NOT pin the filter's `^[0-9]+$` term — that term
-# is unreachable by construction, because _tc_scan_procs can only emit a numeric
-# third field, so mutating it away is an EQUIVALENT mutation and no fixture can
-# kill it. See the note at the filter. The arm is kept because the property it
-# does pin is the one that matters: the conservative direction for a capacity
-# gate is to refuse, never to admit.
+# WHAT THIS PINS: the END-TO-END property (a run whose starttime cannot be
+# parsed is still counted), via the producer's `elapsed=0` fallback. The filter's
+# `^[0-9]+$` term is pinned separately, by the tab-in-cwd arm below — an earlier
+# revision of this comment called that term unreachable and the mutation
+# equivalent, which was false: `sibs`'s field 3 is not the producer's field.
 UNREAD_ROOT="$TESTROOT/proc-unreadable"
 UNREAD_WT="$TESTROOT/wt-unreadable"
 mkdir -p "$UNREAD_WT"
@@ -1705,12 +1721,90 @@ printf '910001 (te) st) S 0 0 %s x 0 0\n' "$(printf '0 %.0s' {4..19})" \
 G2_UNREAD="$(g2_run "$UNREAD_ROOT" 1 | tail -1)"
 cases=$((cases + 1))
 if [[ "$G2_UNREAD" == "1" ]]; then
-  pass "G2/M10 a sibling whose starttime is unparseable is COUNTED (fails toward refusing)"
+  pass "G2/M10 a sibling whose starttime is unparseable is COUNTED in the refusal operand"
 else
   fail "G2/M10 unreadable-elapsed sibling must count even at a 1s ceiling, got: $G2_UNREAD"
 fi
 
-MIN_CASES=118
+
+# --- The `^[0-9]+$` term is REACHABLE: a TAB in a worktree path -------------
+# Rows are TAB-separated and projected `$2\t$3\t$4`, so a cwd containing a tab
+# shifts every field right — `$3` becomes a cwd fragment and elapsed falls off
+# the row. Without the numeric term, awk coerces that fragment and a LIVE
+# sibling is excluded. An earlier revision documented this mutant as
+# "equivalent, no fixture can kill it"; this is that fixture.
+TAB_ROOT="$TESTROOT/proc-tab"
+TAB_WT="$TESTROOT/wt$(printf '\t')99999x"
+mkdir -p "$TAB_WT"
+make_fake_proc "$TAB_ROOT" 950001 "$TAB_WT" 60 "scripts/test-all.sh"
+G2_TAB="$(g2_run "$TAB_ROOT" 14400 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_TAB" == "1" ]]; then
+  pass "G2 a tab-in-cwd sibling keeps a non-numeric field 3 COUNTED (the numeric term is load-bearing)"
+else
+  fail "G2 tab-in-cwd sibling was excluded — a live 60s run silently admitted; got: $G2_TAB"
+fi
+
+# --- Threshold band: the cut point, pinned from both sides ------------------
+# Every other arm probes absurd extremes (1 and 99999), which cannot constrain
+# the cut point anywhere in the band the system actually runs in: scaling the
+# comparison, or moving the shipped default, passes them all.
+BAND_ROOT="$TESTROOT/proc-band"
+BAND_AT="$TESTROOT/wt-at"; BAND_UNDER="$TESTROOT/wt-under"
+mkdir -p "$BAND_AT" "$BAND_UNDER"
+make_fake_proc "$BAND_ROOT" 970001 "$BAND_AT"    14400 "scripts/test-all.sh"
+make_fake_proc "$BAND_ROOT" 970002 "$BAND_UNDER" 14399 "scripts/test-all.sh"
+G2_BAND="$(g2_run "$BAND_ROOT" 14400 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_BAND" == "1" ]]; then
+  pass "G2 the cut is AT the ceiling: elapsed==ceiling excluded, ceiling-1 counted (pins >= and the band)"
+else
+  fail "G2 boundary wrong; expected exactly the ceiling-1 sibling to survive, got count: $G2_BAND"
+fi
+
+# --- Guard 2's validity guard: an unusable ceiling disables the FILTER ------
+# Guard 1 has an `abc` arm for this; Guard 2 had none, so `if true` survived —
+# and with an empty ceiling awk compares as STRINGS, excluding every sibling and
+# disabling the capacity gate outright.
+for _bad in "0" "abc" "-5" "12.5"; do
+  G2_BAD="$(g2_run "$STALE_ROOT" "$_bad" | tail -1)"
+  cases=$((cases + 1))
+  if [[ "$G2_BAD" == "3" ]]; then
+    pass "G2 an unusable ceiling ('${_bad}') disables the filter — every sibling counted"
+  else
+    fail "G2 unusable ceiling '${_bad}' still filtered; expected 3 counted, got: $G2_BAD"
+  fi
+done
+# EMPTY is NOT unusable: `${TC_RUNTIME_CEILING_S:-14400}` treats empty as unset, so it
+# resolves to the shipped default. Pinned explicitly because the natural assumption is the
+# opposite, and because this is the only arm where the DEFAULT is the operative value.
+# --- The SHIPPED DEFAULT is pinned against the legitimate-hold band ---------
+# Every other arm passes TC_RUNTIME_CEILING_S explicitly, so the default is never
+# the operative value and moving it (14400 -> 3000) passed the whole suite. The
+# lib's own rationale cites 3775 / 5787 / 5763 s as elapsed readings from runs
+# that were legitimately executing, so a default that excludes a ~5800s sibling
+# would discount live work. This arm makes the default a tested constant.
+DEF_ROOT="$TESTROOT/proc-default"
+DEF_LEGIT="$TESTROOT/wt-legit"
+mkdir -p "$DEF_LEGIT"
+make_fake_proc "$DEF_ROOT" 980001 "$DEF_LEGIT" 5800 "scripts/test-all.sh"
+G2_DEF="$(g2_run "$DEF_ROOT" "" | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_DEF" == "1" ]]; then
+  pass "G2 the shipped default counts a 5800s sibling (inside the documented legitimate band)"
+else
+  fail "G2 the default excludes a legitimately-running 5800s sibling; got count: $G2_DEF"
+fi
+
+G2_EMPTY="$(g2_run "$STALE_ROOT" "" | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_EMPTY" == "1" ]]; then
+  pass "G2 an EMPTY ceiling resolves to the shipped default (not disabled), excluding both stale siblings"
+else
+  fail "G2 empty ceiling did not take the default; expected 1, got: $G2_EMPTY"
+fi
+
+MIN_CASES=128
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2

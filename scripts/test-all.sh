@@ -550,45 +550,42 @@ skipped=0
 
 run_suite() {
   local label="$1"; shift
+  suites=$((suites + 1))
   # --- Runtime ceiling (#7869) ---------------------------------------------
   #
-  # Once this run has been executing longer than the ceiling, start no further
-  # suite. An orphaned run — one whose session has gone away — otherwise works
-  # through its whole suite list holding the repo-global advisory lock, with
-  # nobody to read the result; one measured orphan lived 1d22h.
+  # Once this run has been executing longer than the ceiling, start no further suite. An
+  # orphaned run — one whose session has gone away — otherwise works through its whole suite
+  # list holding the repo-global advisory lock, with nobody to read the result.
   #
-  # AN EARLY `return`, NOT AN `exit`, AND THAT IS THE WHOLE DESIGN. The lock fd
-  # is inherited by suite children (session-state.sh opens it with `exec {fd}>>`
-  # and bash sets no CLOEXEC; flock binds to the open file description), so a
-  # mid-suite exit would release nothing and would need a descendant teardown.
-  # The only teardown reaching those children is a process-group signal — and
-  # under lefthook's pre-commit the inherited process group's leader is
-  # `git commit`, so signalling it strands .git/index.lock. Returning at suite
-  # ENTRY means no suite child is live at that instant, so the ordinary exit
-  # path releases the fd by itself.
+  # AN EARLY `return`, NOT AN `exit`, AND THAT IS THE WHOLE DESIGN. The lock fd is inherited by
+  # suite children (session-state.sh opens it with `exec {fd}>>`; bash sets no CLOEXEC and flock
+  # binds to the open file description), so a mid-suite exit would release nothing. Freeing it
+  # would mean tearing down descendants, and the only teardown reaching them is a process-group
+  # signal — which this runner must not send, because it does not own its group: under lefthook
+  # each hook command runs in its own group led by the `sh -c` wrapper lefthook supervises, and
+  # under a bare git hook the leader is `git commit` itself. Returning at suite ENTRY sidesteps
+  # the question: no suite child is live at that instant, so the ordinary exit closes the fd.
   #
-  # FAILS TOWARD KEEP-RUNNING: a non-numeric or non-positive ceiling disables
-  # the check outright. A reading that cannot be trusted must never be grounds
-  # for cutting real work short (the #5454 direction, where a bare pid-liveness
-  # read deleted two live worktrees).
-  if [[ "${TC_RUNTIME_CEILING_S:-}" =~ ^[0-9]+$ ]] && (( TC_RUNTIME_CEILING_S > 0 )); then
+  # THE DECLINE IS COUNTED. `suites` is incremented ABOVE this check, so a declined suite stays
+  # in the denominator and is subtracted from the numerator — the terminal marker degrades to
+  # `N-k/N` rather than reading a perfect `N/N` over a battery that never ran. ADR-181 records
+  # that exact defect for relevance declines ("a green that is not evidence, produced by the very
+  # change that added the gate"); an earlier revision of this block reproduced it.
+  if (( _CEILING_S > 0 )); then
     local _elapsed_s=$(( "${EPOCHSECONDS:-0}" - _RUN_START_EPOCH ))
-    if (( _elapsed_s >= TC_RUNTIME_CEILING_S )); then
+    if (( _elapsed_s >= _CEILING_S )); then
       _ceiling_declined=$(( _ceiling_declined + 1 ))
+      printf '%s\t%d\tskip=runtime-ceiling\n' "$label" 0 >> "${TEST_TIMING_LOG:-/dev/null}"
       if (( _ceiling_tripped == 0 )); then
         _ceiling_tripped=1
         echo "" >&2
-        echo "[contention] BANNER SOLEUR_TEST_ALL_RUNTIME_CEILING elapsed_s=${_elapsed_s} ceiling_s=${TC_RUNTIME_CEILING_S} first_declined=${label} — this run has outlived the ceiling, so it is starting no further suite." >&2
+        echo "[contention] BANNER SOLEUR_TEST_ALL_RUNTIME_CEILING elapsed_s=${_elapsed_s} ceiling_s=${_CEILING_S} first_declined=${label} — this run has outlived the ceiling, so it is starting no further suite." >&2
         echo "             A run past the ceiling is treated as having no consumer. It exits 3 (UNRESOLVED): coverage was NOT obtained for the declined suites." >&2
         echo "             Raise TC_RUNTIME_CEILING_S if this run is legitimately long." >&2
       fi
       return 0
     fi
   fi
-  suites=$((suites + 1))
-  # Per-suite tempfile delta (#6789, probe for hypothesis H4: a shared derived
-  # tempfile path in some suite reached by this runner). Gated on
-  # TEST_TIMING_LOG so the `find` costs nothing on a default local run.
   local tmp_before=""
   if [[ -n "${TEST_TIMING_LOG:-}" ]]; then
     tmp_before=$(tc_tmp_entry_count)
@@ -1029,6 +1026,37 @@ fi
 _RUN_START_EPOCH="${EPOCHSECONDS:-0}"
 _ceiling_tripped=0
 _ceiling_declined=0
+
+# The ceiling is resolved ONCE, here, rather than re-parsed inside run_suite on each of its
+# ~194 invocations. Three defects collapse into this single evaluation:
+#
+#   (a) OCTAL. `(( 08 ))` is a base-8 literal in bash and an ERROR; awk has no such rule. Two
+#       consumers reading one knob through two parsers therefore DIVERGED on any zero-padded
+#       value — `07200` meant 3712 s here and 7200 s to the sibling filter, and 3712 s is BELOW
+#       the lowest runtime this repo records for a healthy contended run. A guard that curtails
+#       healthy work is worse than no guard. `10#` forces base 10; the runner already uses that
+#       idiom for EPOCHREALTIME microseconds and this code failed to carry it over.
+#   (b) CI. `tc_acquire` exempts CI because a shard is already isolated, and the reasoning
+#       applies with more force here: the ceiling's premise is "a run past it has no consumer",
+#       and in a shard the consumer is the required `test` check. GitHub's default job timeout is
+#       360 min against this 240 min ceiling, so unexempted it would fire FIRST and red a
+#       required check on a run that was merely slow.
+#   (c) SILENCE. The one path where the guard does nothing had no signal, so "armed" and
+#       "disabled since someone exported a malformed value" were indistinguishable.
+#
+# 0 means DISABLED. Every branch below fails toward keep-running.
+_CEILING_S=0
+if [[ -n "${CI:-}" ]]; then
+  : # Exempt, deliberately silent: it would fire on every CI run and carry no information.
+elif [[ "${TC_RUNTIME_CEILING_S:-}" =~ ^[0-9]+$ ]] && (( 10#${TC_RUNTIME_CEILING_S} > 0 )); then
+  _CEILING_S=$(( 10#${TC_RUNTIME_CEILING_S} ))
+else
+  echo "[contention] BANNER SOLEUR_TEST_ALL_CEILING_UNAVAILABLE value=${TC_RUNTIME_CEILING_S:-<unset>} — the runtime ceiling is DISABLED for this run; it will not stop starting suites however long it runs." >&2
+fi
+
+# Sampled either side of the infra run_suite call so a ceiling-declined suite cannot be
+# recorded as covered. Declared here, with its siblings, for the same splice-window reason.
+_infra_declined_before=0
 
 _repo_guard_ok=0
 _repo_state_before=""
@@ -2035,10 +2063,21 @@ if want_infra; then
     skip_suite "apps/web-platform/infra/run-registered-suites.sh" "incident" \
       "bash apps/web-platform/infra/run-registered-suites.sh"
   elif [[ "$TEST_GROUP" == "infra" || "$_infra_in_diff" == 1 ]]; then
+    _infra_declined_before="$_ceiling_declined"
     run_suite "apps/web-platform/infra/run-registered-suites.sh" bash "apps/web-platform/infra/run-registered-suites.sh"
     # THE ONLY site that may set this. Every downstream coverage claim reads it, so it records
     # what happened rather than what was predicted.
-    _infra_ran=1
+    #
+    # CONTROL REACHING THIS LINE IS NOT EVIDENCE THE RUNNER RAN (#7869). A ceiling-declined
+    # suite returns 0 from run_suite WITHOUT starting, so the unconditional form recorded
+    # coverage for a suite that never executed — and the epilogue then printed
+    # "apps/web-platform/infra/ IS covered above" over nothing, which is precisely the
+    # predicted-vs-happened confusion the comment above exists to prevent. The decline
+    # counter is sampled either side of the call because it is the only signal that
+    # distinguishes the two, run_suite returning 0 in both cases.
+    if (( _ceiling_declined == _infra_declined_before )); then
+      _infra_ran=1
+    fi
   else
     _infra_skip_reason="not_in_diff"
     skip_suite "apps/web-platform/infra/run-registered-suites.sh" "not_in_diff" \
@@ -2230,7 +2269,7 @@ _repo_boundary_reported=1
 # from the numerator: with skips in the denominator but not in `failed`, the numerator would
 # report a gated suite as PASSED — a green that is not evidence, produced by the very change
 # that added the gate.
-if (( killed > 0 || skipped > 0 || ${_repo_observations:-0} > 0 || ${_repo_unmeasured_dims:-0} > 0 )); then
+if (( killed > 0 || skipped > 0 || _ceiling_declined > 0 || ${_repo_observations:-0} > 0 || ${_repo_unmeasured_dims:-0} > 0 )); then
   # `_repo_observations` is APPENDED, never interleaved: every existing field keeps its position
   # so anchored readers of this line stay valid. Shown only when non-zero — a field that is 0 on
   # essentially every run carries no information, whereas `skipped` is routinely non-zero.
@@ -2241,7 +2280,11 @@ if (( killed > 0 || skipped > 0 || ${_repo_observations:-0} > 0 || ${_repo_unmea
   if [[ "${_repo_unmeasured_dims:-0}" -gt 0 ]]; then
     _repo_obs_field="${_repo_obs_field}, ${_repo_unmeasured_dims} boundary dimension(s) NOT MEASURED (this run is not evidence about them)"
   fi
-  echo "=== $suites suites: $((suites - failed - killed - skipped)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff)${_repo_obs_field} ==="
+  _ceiling_field=""
+  if (( _ceiling_declined > 0 )); then
+    _ceiling_field=", ${_ceiling_declined} declined (runtime ceiling — coverage not obtained)"
+  fi
+  echo "=== $suites suites: $((suites - failed - killed - skipped - _ceiling_declined)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff)${_ceiling_field}${_repo_obs_field} ==="
 fi
 # THE LEVER, PRINTED ONCE, ONLY WHEN IT CAN ACTUALLY HELP. SOLEUR_TEST_FORCE_ALL appeared exactly
 # once in this runner -- inside _diff_touches's early return -- and was printed nowhere, while the
@@ -2259,7 +2302,7 @@ if (( _relevance_declined > 0 )); then
   echo "      To run every relevance-gated suite regardless of the diff:"
   echo "        SOLEUR_TEST_FORCE_ALL=1 bash scripts/test-all.sh"
 fi
-echo "=== $((suites - failed - killed - skipped))/$suites suites passed ==="
+echo "=== $((suites - failed - killed - skipped - _ceiling_declined))/$suites suites passed ==="
 
 # Restatement of the PREAMBLE notice (#6730/#7014, re-pointed by #7103). Since the infra
 # runner is now a REGISTERED nested suite, the thing worth restating inverted: it is no

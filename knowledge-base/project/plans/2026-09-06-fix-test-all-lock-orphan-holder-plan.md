@@ -321,10 +321,10 @@ has nowhere to live and a per-call-site check would have 194 members that drift 
 added. The property quantifies over every *invocation*.
 
 **Ceiling calibration — the numbers, because a relaxed ceiling kills real work.** The uncontended
-full gate is ~2,700 s (ADR-133), but the same source records siblings legitimately holding
+full gate is ~2,700 s (ADR-133), but the same source records elapsed-at-probe readings (NOT hold times — ADR-133's 2026-08-19 addendum corrects that framing) of
 **3,775 / 5,787 / 5,763 s** under contention, and the slowest declared suite budget is
 **2,500,000 ms (~41.7 min)**. A ceiling sized on the uncontended figure would terminate healthy
-contended runs. It is set at **4 h (14,400 s)** — ~2.5× the worst observed legitimate hold and
+contended runs. It is set at **4 h (14,400 s)** — ~2.5x that elapsed reading (~1.87x once the lock wait charged against it is subtracted) and
 ~11.5× below the 46 h pathology — with an environment seam. Worst-case latency is
 `ceiling + one suite duration`, so the honest claim is **under 5 h**, not "minutes".
 
@@ -562,7 +562,7 @@ the ceiling check reads must be initialised outside the acquire/epilogue splice 
 sibling suites replace wholesale.
 
 *One reviewer correction of my own.* A reviewer sized the ceiling against the ~2,700 s uncontended
-full gate. The same source records siblings legitimately holding **3,775 / 5,787 / 5,763 s** under
+full gate. The same source records elapsed-at-probe readings (NOT hold times — ADR-133's 2026-08-19 addendum corrects that framing) of **3,775 / 5,787 / 5,763 s** under
 contention, so a ceiling on the uncontended figure would terminate healthy work. The ceiling is
 set from the observed contended maximum instead, and the calibration numbers are recorded in the
 Guard Contract.

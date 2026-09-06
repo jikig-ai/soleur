@@ -83,13 +83,21 @@ TC_WAIT_HEARTBEAT_S="${TC_WAIT_HEARTBEAT_S:-60}"
 # further suites in its own process. One knob, because two would drift and the
 # pair only makes sense read together.
 #
-# THE VALUE IS SIZED ON THE CONTENDED MAXIMUM, NOT THE UNCONTENDED ONE. The
-# uncontended full gate is ~2700 s (ADR-133), but the same record documents
-# siblings legitimately holding for 3775 / 5787 / 5763 s under contention, and
-# the slowest single declared suite budget is 2500000 ms (~41.7 min). A ceiling
-# derived from 2700 s would terminate healthy contended runs; 14400 s is ~2.5x
-# the worst observed legitimate hold and ~11.5x below the 46 h orphan that
-# motivated this (#7869).
+# THE VALUE IS SIZED ON CONTENDED ELAPSED RUNTIME, NOT ON THE UNCONTENDED BASELINE.
+# ADR-133 records a ~2700 s uncontended full gate, and its 2026-08-11 addendum records
+# 3775 / 5787 / 5763 s for three runs that were executing CONCURRENTLY. Those are
+# elapsed-at-probe readings, NOT hold times — the 2026-08-19 addendum published a
+# correction saying so, and at most one of the three held the lock. The distinction
+# mattered for TC_LOCK_TIMEOUT, which is about holding; it does not diminish them here,
+# because the quantity THIS knob compares against IS elapsed runtime. So 5787 s is a
+# legitimate reading of how long a healthy run can be executing under contention, and a
+# ceiling below it would curtail live work.
+#
+# 14400 s is ~2.5x that reading. Note the working margin is smaller than the raw ratio:
+# _RUN_START_EPOCH is stamped before tc_acquire, so up to TC_LOCK_TIMEOUT (3600 s) of
+# queueing is charged against the ceiling, leaving ~10800 s of execution budget — ~1.87x.
+# Charging the wait is deliberate (it is the holder's own lifetime that must be bounded),
+# but a future tuner should size against 10800, not 14400.
 TC_RUNTIME_CEILING_S="${TC_RUNTIME_CEILING_S:-14400}"
 
 # --- Capacity probes -------------------------------------------------------
@@ -510,44 +518,41 @@ tc_preamble() {
   fi
   scan=$(_tc_scan_procs || true)
   sibs=$(awk -F'\t' '$1=="run"   {print $2"\t"$3"\t"$4}' <<<"$scan")
+  suite_sibs=$(awk -F'\t' '$1=="suite" {print $2"\t"$3"\t"$4}' <<<"$scan")
   # Stale-sibling exclusion (#7869).
   #
-  # Applied HERE, at the single derivation, because this one assignment feeds
-  # the detail rows printed below, `sib_count`, and the exported
-  # TC_SIBLING_RUN_COUNT that scripts/test-all.sh refuses on. Filtering at the
-  # count instead would let the reported rows disagree with the verdict beside
-  # them — the two-non-atomic-snapshots defect the single walk exists to remove.
+  # SCOPED TO THE REFUSAL, NOT TO THE REPORT — and that distinction is the whole of it. One
+  # `sibs` derivation feeds consumers asking two DIFFERENT questions:
   #
-  # An orphaned run is still a running test-all.sh, so it counts as a live
-  # sibling and every later full-gate run on the box is refused (exit 4). That
-  # is the dominant symptom of #7869: capacity pinned at zero by work nobody is
-  # reading. Excluding it here restores capacity WITHOUT killing anything.
+  #   * `tc_capacity_line` and the `-> pid` detail rows ask "can this box absorb another full
+  #     gate?". An orphan is still burning tmpfs, RAM and CPU, so the honest answer counts it.
+  #   * The exported TC_SIBLING_RUN_COUNT, which scripts/test-all.sh refuses on, asks "is anyone
+  #     reading the run that is already in flight?". An orphan is exactly what that must ignore.
   #
-  # FAILS TOWARD COUNTING. A row is dropped only when its elapsed field is a
-  # valid integer at or above the ceiling. _tc_scan_procs emits `elapsed=0` when
-  # starttime is unparseable, so an unreadable reading is indistinguishable from
-  # a fresh one and both COUNT — the conservative direction for a capacity gate
-  # is to refuse, never to admit. A non-numeric or non-positive ceiling disables
-  # the filter entirely rather than silently excluding everything.
+  # An earlier revision filtered `sibs` itself. That answered the first question with the
+  # second's instrument: with a 46 h orphan live, `--capacity` printed `CAPACITY_OK
+  # measured_runs=0` and enumerated nothing — an idle verdict on a wedged box, in the one
+  # diagnostic work/SKILL.md routes the operator to from the lock-wait banner. The promotion
+  # block below already carries a comment about a verdict of "idle" printed above enumerated
+  # siblings; this would have been the same defect with the rows removed too.
   #
-  # THE `$3 ~ /^[0-9]+$/` TERM IS UNREACHABLE-BY-CONSTRUCTION AND KEPT ANYWAY.
-  # Mutating it away is an EQUIVALENT mutation, verified rather than assumed:
-  # _tc_scan_procs initialises `elapsed=0` and only overwrites it from an
-  # already-`^[0-9]+$`-validated starttime, so it cannot emit a non-numeric
-  # third field and no fixture can reach that branch. It stays because it is the
-  # term that keeps the failure direction correct if the producer ever grows a
-  # `?`-style sentinel for an unreadable reading — at which point the branch
-  # becomes reachable and this filter still counts it rather than dropping it.
-  # Recorded here so the next reader does not delete it as dead, or spend a
-  # round trying to write the fixture that kills it.
-  local _stale_sibs=""
-  if [[ "${TC_RUNTIME_CEILING_S:-}" =~ ^[0-9]+$ ]] && (( TC_RUNTIME_CEILING_S > 0 )); then
-    _stale_sibs=$(awk -F'\t' -v c="$TC_RUNTIME_CEILING_S" \
+  # FAILS TOWARD COUNTING. A row is excluded only when its elapsed field is a valid integer at
+  # or above the ceiling. `_tc_scan_procs` emits `elapsed=0` when starttime is unparseable, so an
+  # unreadable reading is indistinguishable from a fresh one and both COUNT — the conservative
+  # direction for a capacity gate is to refuse, never to admit. A non-numeric or non-positive
+  # ceiling disables the exclusion entirely rather than silently excluding everything.
+  #
+  # `10#` on the ceiling: bash reads a leading zero as octal and awk does not, so without it a
+  # zero-padded value meant one thing to this filter and another to the runner's own ceiling.
+  local _stale_sibs="" _fresh_sibs="$sibs" _ceiling_n=0
+  if [[ "${TC_RUNTIME_CEILING_S:-}" =~ ^[0-9]+$ ]] && (( 10#${TC_RUNTIME_CEILING_S} > 0 )); then
+    _ceiling_n=$(( 10#${TC_RUNTIME_CEILING_S} ))
+    _stale_sibs=$(awk -F'\t' -v c="$_ceiling_n" \
       '$3 ~ /^[0-9]+$/ && $3 + 0 >= c' <<<"$sibs" || true)
-    sibs=$(awk -F'\t' -v c="$TC_RUNTIME_CEILING_S" \
+    _fresh_sibs=$(awk -F'\t' -v c="$_ceiling_n" \
       '!($3 ~ /^[0-9]+$/ && $3 + 0 >= c)' <<<"$sibs" || true)
   fi
-  suite_sibs=$(awk -F'\t' '$1=="suite" {print $2"\t"$3"\t"$4}' <<<"$scan")
+
   # Count DISTINCT worktrees, not raw pids: one logical run legitimately shows
   # up as several processes (the script plus its wrapper shell), so a pid count
   # overstates how many concurrent runs are actually competing for the tmpfs.
@@ -618,21 +623,33 @@ tc_preamble() {
   printf '[contention] machine: %s cores, load %s, MemAvailable %sMB\n' \
     "$cores" "$load" "$memavail_mb"
   printf '[contention] siblings: %s other worktree(s) running test-all.sh\n' "$sib_count"
-  # Named per excluded run, on stderr with the BANNER prefix, so the triage grep
-  # in work/SKILL.md surfaces it and the operator can see WHICH worktree was
-  # discounted rather than inferring it from a count that quietly shrank.
+  # Named per excluded run, on stderr with the BANNER prefix, so the triage grep in
+  # work/SKILL.md surfaces it and the operator sees WHICH worktree was discounted from the
+  # refusal — while the rows above still show it as present on the machine.
+  #
+  # `_proc_sanitize`-style control-character strip on the cwd: it is an arbitrary directory
+  # name, and a newline in it would otherwise split the here-string into a second record and
+  # forge an extra `[contention] BANNER` line into the stream operators and greps read.
   if [[ -n "${_stale_sibs//[[:space:]]/}" ]]; then
     while IFS=$'\t' read -r _st_pid _st_cwd _st_elapsed; do
       [[ -n "$_st_pid" ]] || continue
-      printf '[contention] BANNER SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED pid=%s elapsed_s=%s ceiling_s=%s cwd=%s — past the runtime ceiling, so it is not counted against full-gate capacity.\n' \
-        "$_st_pid" "$_st_elapsed" "$TC_RUNTIME_CEILING_S" "$_st_cwd" >&2
+      _st_cwd=$(printf '%s' "$_st_cwd" | LC_ALL=C tr -c '[:print:]' '?')
+      printf '[contention] BANNER SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED pid=%s elapsed_s=%s ceiling_s=%s cwd=%s — past the runtime ceiling, so it is not counted against the full-gate refusal (it IS still counted against capacity).\n' \
+        "$_st_pid" "$_st_elapsed" "$_ceiling_n" "$_st_cwd" >&2
     done <<<"$_stale_sibs"
   fi
 
   # Exported so a POLICY at the call site can read it. Deliberately NOT acted on here: this
   # function is a REPORTER, and burying a refusal in a measurement function is how the next
   # reader ends up trusting a comment that is no longer true. scripts/test-all.sh decides.
-  TC_SIBLING_RUN_COUNT="$sib_count"
+  # The REFUSAL's operand, derived from the fresh set — distinct from `sib_count`, which stays
+  # whole because the capacity verdict and the detail rows above must describe the real machine.
+  local _fresh_count=0
+  if [[ -n "${_fresh_sibs//[[:space:]]/}" ]]; then
+    _fresh_count=$(cut -f2 <<<"$_fresh_sibs" | sort -u | grep -c . || true)
+  fi
+  [[ "$_fresh_count" =~ ^[0-9]+$ ]] || _fresh_count=0
+  TC_SIBLING_RUN_COUNT="$_fresh_count"
   export TC_SIBLING_RUN_COUNT
   # PROVENANCE, and deliberately NOT exported. TC_SIBLING_RUN_COUNT is exported, so a nested
   # runner INHERITS it — including one whose own tc_preamble was neutered by a test sandbox, and

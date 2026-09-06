@@ -521,9 +521,14 @@ discriminator — the same resolution `is_lease_active` reached for leases after
 bare pid-liveness read deleted two live worktrees (#5454): the time bound is the
 authority, and every term fails toward keeping the run alive.
 
-The ceiling is sized on the **contended** maximum, not the uncontended one. This
-ADR's own baseline is ~2700 s uncontended, but the 2026-08-19 addendum records
-siblings legitimately holding **3775 / 5787 / 5763 s**, and the slowest declared
-suite budget is ~41.7 min. A ceiling derived from 2700 s would terminate healthy
-work; 14400 s is ~2.5x the worst observed legitimate hold and ~11.5x below the
-46 h orphan.
+The ceiling is sized on contended ELAPSED RUNTIME — not on the uncontended baseline, and
+not on hold times. This ADR's baseline is ~2700 s uncontended; its **2026-08-11** addendum
+records **3775 / 5787 / 5763 s** for three runs executing *concurrently*, and the 2026-08-19
+addendum corrects an earlier draft that had called those "observed sibling holds": they are
+elapsed-at-probe readings, and at most one of the three held the lock. That correction stands
+and is not re-litigated here — it mattered because `TC_LOCK_TIMEOUT` is about *holding*. It
+does not diminish the figures for THIS knob, whose operand is elapsed runtime, so 5787 s is a
+sound reading of how long a healthy run can be executing under contention and a ceiling below
+it would curtail live work. 14400 s is ~2.5x that reading; because `_RUN_START_EPOCH` is
+stamped before `tc_acquire`, up to 3600 s of queueing is charged against it, leaving ~10800 s
+of execution budget (~1.87x). It sits ~11.5x below the 46 h orphan.

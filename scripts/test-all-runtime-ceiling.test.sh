@@ -83,13 +83,28 @@ j = s.index(end_anchor)
 
 # The first suite is SLOW so wall-clock advances past a 1s ceiling; the ones
 # after it are what the guard must decline.
-calls = {
-    "two":   [("slowfixture", "slow.sh"), ("after1", "ok.sh")],
-    "three": [("slowfixture", "slow.sh"), ("after1", "ok.sh"), ("after2", "ok.sh")],
-}[arm]
-body = "\n" + "".join(
-    f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
-)
+if arm == "infra":
+    # The coverage-claim arm. The infra block is EXTRACTED FROM THE SOURCE rather than
+    # retyped, so the harness cannot re-implement the conditional under test — a
+    # hand-written copy would pass against a broken runner.
+    m2 = re.search(
+        r'\n([ \t]*_infra_declined_before="\$_ceiling_declined"\n.*?\n[ \t]*fi\n)',
+        s, re.S)
+    assert m2, "MUTATION-DID-NOT-LAND: infra dispatch block not found in source"
+    infra_block = m2.group(1)
+    infra_block = re.sub(
+        r'run_suite "apps/web-platform/infra/run-registered-suites\.sh" bash "[^"]*"',
+        f'run_suite "infrarunner" bash "{fixtures}/ok.sh"', infra_block)
+    assert "infrarunner" in infra_block, "run_suite retarget failed"
+    body = f'\nrun_suite "slowfixture" bash "{fixtures}/slow.sh"\n' + infra_block
+else:
+    calls = {
+        "two":   [("slowfixture", "slow.sh"), ("after1", "ok.sh")],
+        "three": [("slowfixture", "slow.sh"), ("after1", "ok.sh"), ("after2", "ok.sh")],
+    }[arm]
+    body = "\n" + "".join(
+        f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
+    )
 s = s[:i] + body + s[j:]
 
 # Neuter the advisory lock and the preamble: taking the REAL lock would block on
@@ -101,27 +116,37 @@ s = re.sub(r'^tc_preamble\b.*$', 'true  # sandbox: preamble neutered', s, count=
 # --- Mutations. Each neuters exactly ONE guard; each MUST land. -------------
 if mutation == "no_check":
     # M1: hoist the check out of run_suite's body (delete it there).
-    m = re.search(r'\n[ \t]*# --- Runtime ceiling.*?\n(?=[ \t]*suites=\(\(|[ \t]*suites=\$)', s, re.S)
-    assert m, "MUTATION-DID-NOT-LAND: run_suite ceiling block not found"
-    s = s[:m.start()] + "\n" + s[m.end():]
+    # Anchored on a UNIQUE code line, not on the comment prefix: `# --- Runtime ceiling`
+    # now occurs twice (the run_suite block and the top-level resolution), so a regex on it
+    # could delete the state declarations instead — the sandbox would then abort under
+    # `set -u` with rc 1, and an rc-scored battery would read that as "mutant detected".
+    s = sub_once(s, 'if (( _CEILING_S > 0 )); then', 'if false; then', 'run_suite ceiling gate')
 elif mutation == "always_under":
     # M2: the elapsed comparison never fires. Aimed at the COMPARISON, not at
     # the `_ceiling_tripped` latch — that latch only gates whether the banner
     # prints once, so mutating it changes no verdict and would report a
     # survivor that is really a mis-aimed row.
-    s = sub_once(s, '(( _elapsed_s >= TC_RUNTIME_CEILING_S ))',
-                 '(( _elapsed_s >= TC_RUNTIME_CEILING_S + 999999 ))', 'elapsed comparison')
+    s = sub_once(s, '(( _elapsed_s >= _CEILING_S ))',
+                 '(( _elapsed_s >= _CEILING_S + 999999 ))', 'elapsed comparison')
 elif mutation == "no_forced_exit":
     # M3: the trip no longer forces a non-zero exit (the false-green row).
     s = sub_once(s, 'elif (( _ceiling_declined > 0 )); then',
                  'elif false; then', 'forced-exit arm')
 elif mutation == "unreadable_trips":
     # M4: an unreadable/disabled ceiling curtails the run.
-    s = sub_once(s, '[[ "${TC_RUNTIME_CEILING_S:-}" =~ ^[0-9]+$ ]] && (( TC_RUNTIME_CEILING_S > 0 ))',
-                 'true', 'ceiling validity guard')
+    # Aimed at the DISABLED DEFAULT, not the validity guard. Mutating the guard to `true`
+    # no longer expresses this property after the refactor: `10#abc` is an arithmetic error,
+    # so `_CEILING_S` simply stays 0 and the run completes — a survivor that looks like the
+    # healthy run. Flipping the default is what makes an unusable ceiling curtail.
+    s = sub_once(s, '_CEILING_S=0\nif [[ -n "${CI:-}" ]]; then',
+                 '_CEILING_S=1\nif [[ -n "${CI:-}" ]]; then', 'ceiling disabled default')
 elif mutation == "no_marker":
     # M5: the run is curtailed silently.
     s = sub_once(s, 'SOLEUR_TEST_ALL_RUNTIME_CEILING', 'QUIET_CEILING', 'ceiling marker')
+elif mutation == "unconditional_infra_ran":
+    # M8: revert the coverage claim to its unconditional form.
+    s = sub_once(s, 'if (( _ceiling_declined == _infra_declined_before )); then\n      _infra_ran=1\n    fi',
+                 '_infra_ran=1', 'infra coverage guard')
 elif mutation == "trip_once":
     # M7: only the first post-ceiling suite is declined.
     s = sub_once(s, '_ceiling_declined=$(( _ceiling_declined + 1 ))',
@@ -140,7 +165,23 @@ run_arm() {
   mkdir -p "$dir/scripts" || return 2
   build_sandbox "$dir/scripts/test-all.sh" "$arm" "$mutation" || return 2
   log="$dir/run.log"
-  ( cd "$REPO_ROOT" && env TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all \
+  # `env -u CI`: the runner exempts CI (a shard's consumer is the required check), so an
+  # inherited CI would silently disable the guard and every arm below would pass vacuously.
+  ( cd "$REPO_ROOT" && env -u CI TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all \
+      SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 \
+      bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1
+  rc=$?
+  printf '%s\n%s\n' "$log" "$rc"
+}
+
+# Same sandbox, CI set — for the exemption arm only.
+run_arm_ci() {
+  local arm="$1" mutation="$2" ceiling="$3" dir log rc
+  dir="$TESTROOT/sbci-$arm-$mutation-$ceiling"
+  mkdir -p "$dir/scripts" || return 2
+  build_sandbox "$dir/scripts/test-all.sh" "$arm" "$mutation" || return 2
+  log="$dir/run.log"
+  ( cd "$REPO_ROOT" && env CI=1 TC_RUNTIME_CEILING_S="$ceiling" TEST_GROUP=all \
       SOLEUR_ALLOW_FULL_GATE=1 SOLEUR_DISABLE_SESSION_STATE=1 \
       bash "$dir/scripts/test-all.sh" ) > "$log" 2>&1
   rc=$?
@@ -237,6 +278,83 @@ else
   fail "M4 after1 was skipped under an unusable ceiling"
 fi
 
+# --- The terminal marker must NOT read green on a curtailed run -------------
+# `=== N/N suites passed ===` is this repo's documented completion anchor, so a
+# curtailed run that prints it certifies a battery it never ran. ADR-181 records
+# the same defect for relevance declines: "a green that is not evidence, produced
+# by the very change that added the gate".
+cases=$((cases + 1))
+if [[ "$(grep -cE '^=== 1/2 suites passed ===$' "$TRIP_LOG" || true)" -ge 1 ]]; then
+  pass "the terminal marker degrades to 1/2 on a curtailed run (declines stay in the denominator)"
+else
+  fail "false green: marker does not account for the decline; got: $(grep -E '^=== .*suites passed' "$TRIP_LOG" || true)"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'declined \(runtime ceiling — coverage not obtained\)' "$TRIP_LOG" || true)" -ge 1 ]]; then
+  pass "the breakdown line names the ceiling declines"
+else
+  fail "breakdown line omits the ceiling declines; got: $(grep -E '^=== .*suites:' "$TRIP_LOG" || true)"
+fi
+
+# --- A ZERO-PADDED ceiling must not be read as octal ------------------------
+# bash reads a leading zero as base 8 and awk does not, so `07200` meant 3712s to
+# this guard and 7200s to the sibling filter — and 3712s is BELOW the lowest
+# runtime this repo records for a healthy contended run. A guard that curtails
+# healthy work is worse than no guard.
+OCTAL="$(run_arm two none 07200 || true)"
+OCTAL_RC="$(arm_rc "$OCTAL")"; OCTAL_LOG="$(arm_log "$OCTAL")"
+cases=$((cases + 1))
+if [[ "$OCTAL_RC" == "0" ]]; then
+  pass "a zero-padded ceiling (07200) is read as 7200, not octal 3712 — the run completes"
+else
+  fail "octal regression: 07200 curtailed a short run (rc $OCTAL_RC); got: $(grep 'RUNTIME_CEILING' "$OCTAL_LOG" || true)"
+fi
+
+# --- CI is exempt ----------------------------------------------------------
+# The ceiling's premise is "a run past it has no consumer"; in a CI shard the
+# consumer is the required check, and GitHub's default job timeout (360 min)
+# sits ABOVE this ceiling, so an unexempted guard would red a required check on
+# a run that was merely slow.
+CI_ARM="$(run_arm_ci two none 1 || true)"
+CI_RC="$(arm_rc "$CI_ARM")"; CI_LOG="$(arm_log "$CI_ARM")"
+cases=$((cases + 1))
+if [[ "$CI_RC" == "0" ]]; then
+  pass "CI is exempt from the ceiling (a slow shard is not curtailed)"
+else
+  fail "CI not exempt: rc $CI_RC; got: $(grep 'RUNTIME_CEILING' "$CI_LOG" || true)"
+fi
+
+# --- An unusable ceiling SAYS SO -------------------------------------------
+cases=$((cases + 1))
+if [[ "$(grep -cE 'SOLEUR_TEST_ALL_CEILING_UNAVAILABLE' "$UNREAD_LOG" || true)" -ge 1 ]]; then
+  pass "a disabled ceiling announces itself (armed vs disabled are distinguishable)"
+else
+  fail "silent disable: no SOLEUR_TEST_ALL_CEILING_UNAVAILABLE marker"
+fi
+
+# --- Coverage claim: a DECLINED suite must not be recorded as covered -------
+# `run_suite` returns 0 whether it ran or declined, so a caller that infers "it ran"
+# from control reaching the next line records coverage it does not have. The infra
+# dispatch does exactly that, and the epilogue turns the flag into a printed claim.
+INFRA_TRIP="$(run_arm infra none 1 || true)"
+INFRA_TRIP_LOG="$(arm_log "$INFRA_TRIP")"
+cases=$((cases + 1))
+if [[ "$(grep -cF 'IS covered above' "$INFRA_TRIP_LOG" || true)" -eq 0 ]]; then
+  pass "a ceiling-declined infra suite is NOT claimed as covered"
+else
+  fail "false coverage claim: 'IS covered above' printed for a suite that never started"
+fi
+# Must-PASS control — this is what makes the arm above non-vacuous: absence of the
+# claim proves nothing unless the claim is PRESENT when the suite really does run.
+INFRA_OK="$(run_arm infra none 99999 || true)"
+INFRA_OK_LOG="$(arm_log "$INFRA_OK")"
+cases=$((cases + 1))
+if [[ "$(grep -cF 'IS covered above' "$INFRA_OK_LOG" || true)" -ge 1 ]]; then
+  pass "an infra suite that actually ran IS claimed as covered (control)"
+else
+  fail "control failed: coverage claim absent though the suite ran; got: $(tail -20 "$INFRA_OK_LOG" 2>/dev/null || true)"
+fi
+
 # --- Mutation battery: each row MUST redden --------------------------------
 # Expressed against the DESIGN, and each asserted to LAND — a mutation that
 # does not land reports the baseline, which reads exactly like a pass.
@@ -275,7 +393,18 @@ else
 fi
 
 # --- Floor + accounting (M6: the guard's own dispatch) ---------------------
-MIN_CASES=15
+# M8 is scored on the LOG: a false coverage claim leaves the exit code untouched,
+# so rc-scoring is structurally blind to it — same reason M5 is scored this way.
+M8="$(run_arm infra unconditional_infra_ran 1 || true)"
+M8_LOG="$(arm_log "$M8")"
+cases=$((cases + 1))
+if [[ "$(grep -cF 'IS covered above' "$M8_LOG" || true)" -ge 1 ]]; then
+  pass "M8 unconditional coverage flag: mutant detected (false claim reappears)"
+else
+  fail "M8 MUTANT SURVIVED — reverting the guard did not reproduce the false coverage claim"
+fi
+
+MIN_CASES=23
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] only %d assertions ran, expected >= %d — the suite asserted less than it claims.\n' \
     "$cases" "$MIN_CASES" >&2
