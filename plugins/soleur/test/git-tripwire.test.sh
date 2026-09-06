@@ -159,10 +159,23 @@ printf '\n=== K: vitest arm — the third runtime, now via globalSetup ===\n'
 # vitest's MAIN process — the one that actually inherited the environment — so the real exit code
 # propagates and this arm can pin 97 exactly. Under `setupFiles` the `process.exit(97)` happened in
 # a worker and vitest reported its own aggregate 1, which this arm previously had to accept.
+#
+# THIS ARM IS ENVIRONMENT-CONDITIONAL, AND THE FLOOR BELOW IS DERIVED FROM THAT.
+# CI's `test-scripts` job is bash + python3 + bun with no web-platform npm install, so the vitest
+# binary is genuinely absent there. The first revision printed a bare `[skip]` that incremented no
+# counter, so ASSERTIONS silently fell 24 -> 23 against a hardcoded floor of 24: the suite reported
+# `23 passed, 0 failed` (internally green) while the runner marked it [FAIL]. That is the floor
+# working — it caught a missing arm — but the diagnosis was invisible from the suite's own output.
+# Record whether the arm ran and derive the floor, so a genuinely lost assertion still fires in
+# BOTH environments instead of the floor being lowered to accommodate the weaker one.
+VITEST_ARM_RAN=0
 VITEST_BIN="$REPO_ROOT/apps/web-platform/node_modules/.bin/vitest"
 if [[ ! -x "$VITEST_BIN" ]]; then
-  printf '  [skip] vitest binary absent (%s) — deps not installed\n' "$VITEST_BIN"
+  printf '  [skip] vitest runtime arm: binary absent (%s) — deps not installed here.\n' "$VITEST_BIN"
+  printf '         The vitest REGISTRATION is still asserted below (K4, vitest.config.ts globalSetup);\n'
+  printf '         only the live rc=97 probe needs the installed binary.\n'
 else
+  VITEST_ARM_RAN=1
   probe=""
   while IFS= read -r f; do probe="$f"; break; done \
     < <(cd "$REPO_ROOT/apps/web-platform" && ls test/*.test.ts 2>/dev/null | sort)
@@ -222,7 +235,19 @@ fi
 printf '\n=== summary ===\n'
 printf '  %d passed, %d failed, %d assertions\n' "$PASS" "$FAIL" "$ASSERTIONS"
 
-MIN_ASSERTIONS=24
+# DERIVED, not hardcoded: 23 arms always run; the live vitest probe runs only where the binary is
+# installed (see arm K). Hardcoding 24 made CI's scripts-side job fail on a genuinely absent
+# runtime; hardcoding 23 would let a real lost assertion pass unnoticed on a developer machine.
+# The addend is the arm's own measured did-it-run flag, so each environment gets the strictest
+# floor it can actually satisfy.
+# The re-bind is load-bearing for scripts/guard-vacuity-floor.test.sh, not for this suite: its
+# mutant carries only the floor block, widened BACKWARD over contiguous simple assignments. Without
+# a binding adjacent to the floor, VITEST_ARM_RAN is unbound under `set -u`, the mutant dies before
+# reaching the floor, and a fully compliant floor is scored as a CONSTRUCTION failure (which is
+# ratcheted). `${x:-0}` is parameter expansion, not the `$(` command substitution that widening
+# refuses, so the line is carried into the mutant.
+VITEST_ARM_RAN=${VITEST_ARM_RAN:-0}
+MIN_ASSERTIONS=$((23 + VITEST_ARM_RAN))
 if (( ASSERTIONS < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertions < %d — the suite examined less than it must\n' \
     "$ASSERTIONS" "$MIN_ASSERTIONS" >&2
