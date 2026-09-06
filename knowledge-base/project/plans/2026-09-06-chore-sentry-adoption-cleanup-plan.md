@@ -307,9 +307,23 @@ capture — the `import{}` blocks were the last committed record of that mapping
 
 **AC5 — `terraform fmt -check -recursive`** passes over `apps/web-platform/infra/**`.
 
-**AC6 — #7829's fallthrough is provably untouched, asserted on the DIFF not a file-wide count.**
-`git diff origin/main -- apps/web-platform/infra/sentry/issue-alerts.tf | grep -c '^[+-].*fallthrough_type'`
-→ `0`.
+**AC6 — #7829's fallthrough is provably untouched, asserted on the DIFF's NON-COMMENT lines.**
+
+```bash
+git diff origin/main -- apps/web-platform/infra/sentry/issue-alerts.tf \
+  | grep -E '^[+-]' | grep -vE '^[+-][[:space:]]*#' | grep -c 'fallthrough_type'
+```
+
+→ `0`. **Mutation-proven at implementation time:** `0` at baseline with AC7's comment present,
+`2` under a `NoOne` → `ActiveMembers` flip, `0` again after a byte-identical restore.
+
+> **Corrected during /work — the plan-review version of this AC was itself defeated by AC7.**
+> The reviewed form omitted the comment filter and returned **2**, because AC7 *requires* a comment
+> citing the Rule 1 / Rule 2 split and that split is literally about `fallthrough_type`. So the two
+> ACs collided: satisfying AC7 reddened AC6 on a correct change. This is the same defect class one
+> level up from the one plan review caught — a predicate that matches the TOKEN rather than the
+> INVARIANT. The invariant is "no attribute ASSIGNMENT changed", and an assignment is not a comment,
+> so the fix is to exclude comment lines rather than to weaken the assertion or drop the citation.
 > A file-wide `grep -c 'fallthrough_type = "NoOne"'` is **defeated by this PR's own mandated comment**.
 > It returns 3 today (one comment at the `git_data_boot_warning` semantics note, plus the two real
 > values). AC6 requires adding a comment that quotes the literal → count becomes 4 → the AC reds on a

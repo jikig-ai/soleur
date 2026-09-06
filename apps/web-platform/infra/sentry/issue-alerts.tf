@@ -509,6 +509,25 @@ resource "sentry_alert" "byok_art_33_breach" {
 # wider frequency + quieter `NoOne` fallthrough. Filters require
 # feature=byok-delegations AND op ∈ {hourly-cap-exceeded, daily-cap-exceeded}
 # via a single `in` match (comma-separated; `in` confirmed in beta2 schema).
+#
+# VERIFIED DELIBERATE (#7829, measured 2026-09-06) — do not "fix" this to
+# ActiveMembers without a fresh decision. #7829 asked whether this rule, the
+# only one of the 27 with `fallthrough_type = "NoOne"`, pages nobody. It does,
+# and that is the design:
+#   - The premise holds. GET https://<host>/api/0/projects/<org>/web-platform/ownership/
+#     returns HTTP 200 with `"raw":null` and `"schema":null` — no ownership rule
+#     exists — against a passing control probe on .../projects/<org>/web-platform/
+#     (HTTP 200), so the null is a real absence, not a wrong-project or auth
+#     artifact. `issue_owners` therefore resolves to nobody and `fallthrough_type`
+#     alone decides delivery.
+#   - The intent is recorded directly above: this is Rule 2 of a numbered pair.
+#     Rule 1 (`byok_art_33_breach`) is "Highest urgency: tight frequency + notify
+#     ActiveMembers fallthrough"; Rule 2 is "Lower urgency: wider frequency +
+#     quieter `NoOne` fallthrough". A cap breach is dashboard-only BY CHOICE.
+# The measurement is dated because it decays in one direction: adding a Sentry
+# ownership rule later would make `issue_owners` resolve, at which point
+# `NoOne` stops being the thing that decides delivery. Re-measure before relying
+# on this note past that change.
 resource "sentry_alert" "byok_cap_exceeded" {
   organization      = var.sentry_org
   name              = "byok-cap-exceeded"
