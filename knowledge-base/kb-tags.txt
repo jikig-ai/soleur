@@ -1335,6 +1335,7 @@ error-handling
 error-mapping
 esbuild
 escape-hatch
+escape-testing
 escaping
 eslint
 esm
@@ -1613,6 +1614,7 @@ git-data
 git-data-api
 git-diff
 git-env-vars
+git-environment
 git-fsck
 git-grep
 git-history
