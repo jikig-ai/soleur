@@ -134,7 +134,10 @@ the elapsed reading.
 ### Property List (Phase 0.6b)
 
 - **P1** — The machine's full-gate capacity is not held at zero by a run nobody is reading.
-- **P2** — A run's own lifetime is bounded, so no run can hold the repo-global lock indefinitely.
+- **P2** — A run that nobody is reading stops consuming CPU and stops holding the lock, within a
+  bounded time. Stated deliberately as *reclamation*, not as "no run can hold the lock
+  indefinitely": the stronger wording is already bought on main, because `tc_acquire` is advisory
+  and proceeds on timeout, so no waiter is ever wedged by a holder.
 - **P3** — The next occurrence self-reports, instead of requiring a manual ancestry walk.
 - ~~**P4** — never leave a partial `all.log` with no `all.rc`.~~ **WITHDRAWN — the premise is
   false.** The issue asserts this artifact pair; `git grep 'all\.rc'` over the worktree returns
@@ -289,36 +292,53 @@ discoverability_test:
 
 ### Guard 1 — runtime ceiling
 
-**Property.** A `test-all.sh` run that has been executing longer than its wall-clock ceiling
-terminates its own descendants and exits, saying why — checked between **every** suite, not once
-at startup. The reading fails toward *keep running*.
+**Property.** Once a run has been executing past its wall-clock ceiling, it starts no further
+suite, says so, and **cannot exit green** — checked at the entry of every suite, not once at
+startup. The elapsed reading fails toward *keep running*.
 
-**Assembly.** The body of `run_suite` in `scripts/test-all.sh`. Stated structurally because the
-member list is a trap: there is **no dispatch loop** — `run_suite` is defined once and invoked
-**194 times serially**, so a check "in the loop" has nowhere to live and a per-call-site check
-would have 194 members that drift on the next suite added. The property quantifies over every
-*invocation*, which is why the single function body is the only expressible chokepoint.
+**Mechanism — an early `return`, never a mid-suite `exit`.** On crossing, `run_suite` returns
+immediately at entry (counting the suite as declined) and sets a trip flag; the run then falls
+through its ordinary summary and exit path. This is deliberate and it deletes a whole hazard
+class. A mid-run `exit` would have required tearing down descendants, because the lock fd is
+inherited (`exec {fd}>>`, no CLOEXEC; measured `LOCK_STILL_HELD_BY_CHILD=yes`) — and the only
+teardown reaching those children is a process-group signal, which under `lefthook.yml`'s
+`bun-test` would signal the group whose leader **is `git commit`**, stranding `.git/index.lock`.
+Returning at suite *entry* means no suite child is live at that instant, so the ordinary exit
+releases the lock with no teardown at all.
+
+**The trip must force a non-zero exit — this is the sharp edge of the early-return design.**
+Declined suites are an ordinary green state on this runner (a diff-relevance decline exits 0),
+so a ceiling trip that merely skips the remaining suites would reach the summary with zero
+failures and **exit 0** — certifying a battery it never ran. The trip flag therefore forces exit
+**3** ("coverage unresolved"), and the exit-contract comment is widened to cover it. Reusing 3 is
+right: 4 means "nothing ran", which is false, and a new code would break the byte-identical
+`suite_exit_class` parity pinned across two files.
+
+**Assembly.** The body of `run_suite` in `scripts/test-all.sh`, plus the trip flag's read at the
+final exit ladder. Stated structurally because the member list is a trap: there is **no dispatch
+loop** — `run_suite` is defined once and invoked **194 times serially**, so a check "in the loop"
+has nowhere to live and a per-call-site check would have 194 members that drift on the next suite
+added. The property quantifies over every *invocation*.
 
 **Ceiling calibration — the numbers, because a relaxed ceiling kills real work.** The uncontended
-full gate is ~2,700 s (ADR-133), but the same source records siblings legitimately holding for
-**3,775 / 5,787 / 5,763 s** under contention, and the slowest single declared suite budget is
-**2,500,000 ms (~41.7 min)**. So a ceiling sized on the uncontended figure would terminate healthy
-contended runs. The ceiling is set at **4 h (14,400 s)** — ~2.5× the worst observed legitimate
-hold and ~11.5× below the 46 h pathology — and is overridable by an environment seam. Worst-case
-detection latency is `ceiling + one suite duration` (~41.7 min), so the honest claim is **under
-5 h**, not "minutes".
+full gate is ~2,700 s (ADR-133), but the same source records siblings legitimately holding
+**3,775 / 5,787 / 5,763 s** under contention, and the slowest declared suite budget is
+**2,500,000 ms (~41.7 min)**. A ceiling sized on the uncontended figure would terminate healthy
+contended runs. It is set at **4 h (14,400 s)** — ~2.5× the worst observed legitimate hold and
+~11.5× below the 46 h pathology — with an environment seam. Worst-case latency is
+`ceiling + one suite duration`, so the honest claim is **under 5 h**, not "minutes".
 
 **Mutation matrix** (each row MUST drive the guard RED):
 
 | # | Mutation | Why it must redden |
 |---|---|---|
-| M1 | Hoist the ceiling check out of `run_suite`'s body to the top of the script. | **Reorder, not delete.** The property is about a window — the ceiling is crossed *mid-run*. A delete-only battery passes here, because a startup check still exists and still runs. This is the row the guard exists for. |
+| M1 | Hoist the ceiling check out of `run_suite`'s body to the top of the script. | **Reorder, not delete.** The property is about a window — the ceiling is crossed *mid-run*. A delete-only battery passes here, because a startup check still exists and still runs. |
 | M2 | Make the elapsed comparison always read "under the ceiling". | A guard that never fires is vacuous. |
-| M3 | Terminate via a process **group** signal instead of enumerating descendants. | `orphan-process-reaper.sh` mandates "TERM only, one pid at a time, never to a process group", and `test-all.sh` never calls `setsid` — so under `lefthook.yml`'s `bun-test` the inherited pgid is git/lefthook's and a group TERM kills the operator's in-flight commit. |
-| M4 | Replace descendant teardown with a bare `exit`. | **MEASURED:** a bare exit releases nothing. `_acquire_lock_impl` opens the lock via `exec {fd}>>`, bash sets no CLOEXEC, and `flock` binds to the open file description — a still-running suite child holds the lock after the parent exits (`LOCK_STILL_HELD_BY_CHILD=yes`). |
-| M5 | Emit the marker *after* teardown rather than before. | Teardown can end the process before it speaks; the run must say why while it still can. |
-| M6 | Make an unreadable elapsed reading terminate the run. | Every term fails toward keep-running; an unreadable operand must never end a run (#5454's direction). |
-| M7 | Have the guard's own dispatch report zero checked runs and exit 0. | Anti-vacuity: "0 checked" must not pass. |
+| M3 | Let a tripped run reach the normal exit ladder **without** forcing non-zero. | **The false-green row.** Declined suites are green-compatible, so without the forced exit a tripped run reports success over a battery it never ran — worse than the defect being fixed. |
+| M4 | Make an unreadable elapsed reading trip the ceiling. | Every term fails toward keep-running; an unreadable operand must never curtail a run (#5454's direction). |
+| M5 | Suppress the marker on the tripping path. | P3: the occurrence must self-report, not be inferred from a bare exit code. |
+| M6 | Have the guard's own dispatch report zero checked invocations and exit 0. | Anti-vacuity: "0 checked" must not pass. |
+| M7 | Trip on the first invocation only, leaving later invocations unchecked. | A check that stops after the first member is the defect class. |
 
 **Harness rows** (mutations to the SUITE, not the guard):
 
@@ -326,7 +346,7 @@ detection latency is `ceiling + one suite duration` (~41.7 min), so the honest c
 |---|---|---|
 | H1 | Replace the suite's success condition with `fail == 0` while no case runs. | A suite that exits 0 on `0 passed, 0 failed` certifies nothing. |
 | H2 | Derive every RED fixture from one canonical elapsed value. | RED rows from a single canonical input cannot see a guard that rejects everything. |
-| H3 (must-PASS) | A run whose elapsed is *just under* the ceiling, with a different pid and a different suite count from the canonical fixture. | Permitted variation the contract explicitly allows — the row that detects a guard rejecting everything. |
+| H3 (must-PASS) | A run whose elapsed is *just under* the ceiling, with a different pid and a different suite count from the canonical fixture. | Permitted variation the contract allows — the row that detects a guard rejecting everything. |
 
 ### Guard 2 — stale-sibling exclusion
 
@@ -334,11 +354,14 @@ detection latency is `ceiling + one suite duration` (~41.7 min), so the honest c
 `TC_SIBLING_RUN_COUNT` before the full-gate refusal consults it, and the exclusion is reported —
 so a stale run cannot hold the machine's full-gate capacity at zero. Fresh siblings still refuse.
 
-**Assembly.** The count derivation in `scripts/lib/test-contention.sh` that promotes
-`TC_SIBLING_RUN_COUNT` from the `_tc_scan_procs` rows (which already carry `elapsed_s` — the walk
-is free and no second walk is added), plus the refusal predicate in `scripts/test-all.sh` that
-reads it. Both, because a filter applied at one and not the other is the drift this contract
-exists to catch.
+**Assembly.** The **single** `sibs=` derivation inside `tc_preamble` in
+`scripts/lib/test-contention.sh` — the awk that projects the `run` rows out of the one
+`_tc_scan_procs` walk. That one assignment feeds the reported rows, the sibling count, and the
+exported `TC_SIBLING_RUN_COUNT` the refusal reads, so filtering there is a single point with no
+possibility of count/report drift — and `scripts/test-all.sh` needs **no edit at all** for this
+property. (An earlier draft filtered at count-promotion and carried a mutation row for the count
+disagreeing with the report; that row dissolved with the single-point derivation.) The rows
+already carry `elapsed_s`, so no second `/proc` walk is added.
 
 **Mutation matrix:**
 
@@ -346,9 +369,8 @@ exists to catch.
 |---|---|---|
 | M8 | Remove the elapsed filter, restoring the raw count. | The capacity property is lost. |
 | M9 | Filter on the wrong comparison direction (exclude *fresh* siblings). | The refusal would fire only for stale runs — inverted. |
-| M10 | Apply the filter to the count but not to the reported sibling list. | The operator would read a list that disagrees with the verdict. |
-| M11 | Make a sibling with an unreadable `elapsed_s` be excluded. | An unreadable reading must fail toward *counting* it, i.e. toward refusing — the conservative direction for a capacity gate. |
-| M12 | Add a second stale sibling after a compliant first. | A filter that stops after the first member is the defect class. |
+| M10 | Make a sibling with an unreadable `elapsed_s` be excluded. | An unreadable reading must fail toward *counting* it, i.e. toward refusing — the conservative direction for a capacity gate. |
+| M11 | Add a second stale sibling after a compliant first. | A filter that stops after the first member is the defect class. |
 
 **Harness rows:**
 
@@ -365,10 +387,10 @@ matches.
 
 ## Files to Edit
 
-- `scripts/lib/test-contention.sh` — the stale-sibling filter on the count promotion, plus the
-  ceiling constant and its environment seam.
-- `scripts/test-all.sh` — the ceiling check in `run_suite`'s body; the terminating path; suite
-  registration.
+- `scripts/lib/test-contention.sh` — the stale-sibling filter at the single `sibs=` derivation,
+  plus the ceiling constant and its environment seam. **This file alone delivers P1.**
+- `scripts/test-all.sh` — the ceiling check at `run_suite`'s entry; the top-level trip flag; the
+  forced non-zero exit; the widened exit-contract comment; suite registration. Not needed for P1.
 - `scripts/test-contention.test.sh` — Guard 2 arms (M8–M12, H4–H5).
 - `scripts/test-all-killed-classification.test.sh`, `scripts/test-all-capacity-signal.test.sh` —
   both splice a fixture body between the acquire and epilogue anchors and **neuter the acquire**.
@@ -389,18 +411,21 @@ The lock fd is inherited because `_acquire_lock_impl` opens it with `exec {fd}>>
 CLOEXEC. Marking it close-on-exec would make a bare parent exit release the lock, removing the
 need for any teardown. **Rejected**, for two reasons. It changes lock semantics in
 `plugins/soleur/scripts/lib/session-state.sh`, which ships to customers' self-hosted CLIs
-(ADR-178), for every consumer of the primitive rather than for this one caller. And it would
-release the *lock* while leaving the suite children *running* — so the capacity property (P1) and
-the CPU cost would both survive. Recorded rather than left silent, because it is the
-lower-blast-radius option for the narrower goal and a future reader will ask.
+(ADR-178), for every consumer of the primitive rather than for this one caller. And it is no
+longer needed: the early-return design returns at suite *entry*, where no suite child is live, so
+the ordinary exit already releases the fd. The inherited-fd fact remains load-bearing as the
+**reason** a mid-suite `exit` was rejected — it is why the design returns rather than exits.
+Recorded rather than left silent, because a future reader will ask.
 
 ## Implementation Phases
 
 ### Phase 1 — Capacity first (the dominant symptom), RED before GREEN
 
-Write the Guard 2 arms against a synthetic procfs, then add the elapsed filter to the count
-promotion and the reporting line. This alone restores full-gate capacity while a stale run is
-still executing, and it kills nothing — so it carries no consent boundary and no teardown risk.
+Write the Guard 2 arms against a synthetic procfs, then add the elapsed filter at the single
+`sibs=` derivation inside `tc_preamble`. This alone restores full-gate capacity while a stale run
+is still executing, kills nothing, touches **only** `scripts/lib/test-contention.sh`, and needs no
+edit to `scripts/test-all.sh` — so it carries no consent boundary and no teardown risk. It is
+independently shippable ahead of the rest.
 
 ### Phase 2 — Guard 1 suite (RED before GREEN)
 
@@ -410,10 +435,16 @@ eventual shape.
 
 ### Phase 3 — The ceiling (GREEN)
 
-The elapsed check in `run_suite`'s body. On crossing: emit `SOLEUR_TEST_ALL_RUNTIME_CEILING`
-**first**, then terminate descendants **one pid at a time, never as a process group** (the rule
-`orphan-process-reaper.sh` states and the reason `test-all.sh`'s inherited pgid makes it
-mandatory), then exit **3**.
+The elapsed check at the **entry** of `run_suite`. On crossing: emit
+`SOLEUR_TEST_ALL_RUNTIME_CEILING`, set the trip flag, and `return` — declining this suite and
+every later one. No descendant teardown and no process-group signal: returning at suite entry
+means no suite child is live, so the ordinary exit path releases the inherited lock fd by itself.
+The trip flag is read at the final exit ladder and forces exit **3**, so a curtailed run can
+never report green over a battery it did not run.
+
+The trip-flag variable is initialised at **top level, before the acquire/epilogue splice window**
+— two sibling suites replace that window wholesale and neuter the acquire, so a variable first
+assigned inside it aborts their sandboxes under `set -u`.
 
 **The exit-code contract text must be amended, and the earlier claim that it need not be was
 wrong.** `scripts/test-all.sh`'s contract block defines 3 as *"0 failures and >= 1 suite
@@ -449,26 +480,23 @@ The two-sentence amendment; register the new suite in the runner; run the affect
    change the result (`cq-ac-must-not-depend-on-concurrent-sessions`).
 6. Against a fixture whose elapsed reading is unreadable, the run is **not** terminated and
    `SOLEUR_TEST_ALL_CEILING_UNAVAILABLE` is emitted.
-7. A fixture run driven past the ceiling terminates, and a fresh acquirer then obtains the
-   advisory lock — asserted with a **live suite child** at termination time, the only arrangement
-   in which the inherited-fd defect is observable (M4).
-8. The terminating path emits its marker **before** teardown (M5), and exits **3**.
-9. `git grep -c 'kill.*-- *-\$\|kill -[A-Z]* *-[0-9]' scripts/test-all.sh` returns 0 — no
-   process-group signal is introduced (M3).
-10. A fixture run whose elapsed is just under the ceiling completes with no terminating marker.
-11. A self-terminate driven under a **real `pre-commit` invocation** leaves `git commit` alive
-    and `.git/index.lock` absent — the shape in which the process-group hazard is observable, and
-    the one a direct-invocation fixture cannot see.
-12. The terminating path emits the summary line, and no spurious repo-write-boundary NOTE
-    accompanies it.
-13. The exit-code contract comment in `scripts/test-all.sh` covers the self-terminated run, and
-    `bash scripts/suite-exit-class-parity.test.sh` exits 0.
-14. ADR-133 carries the amendment, and its existing "Implement stale-holder detection" bullet is
+7. A fixture run driven past the ceiling declines every subsequent suite, reaches the ordinary
+   summary, and **exits 3** — never 0 (M3, the false-green row).
+8. After that run exits, a fresh acquirer obtains the advisory lock, with no teardown step in the
+   diff. This is what the early-return buys: at suite entry no child is live, so the inherited fd
+   closes with the process.
+9. `git grep -cE 'kill +-[A-Za-z0-9]+ +-{1,2}[0-9$]' scripts/test-all.sh` returns 0 — no
+   process-group signal is introduced anywhere.
+10. A fixture run whose elapsed is just under the ceiling completes normally, exits 0, and emits
+    no ceiling marker (H3).
+11. The exit-code contract comment in `scripts/test-all.sh` covers a ceiling-curtailed run, and
+    `bash scripts/suite-exit-class-parity.test.sh` exits 0 — `suite_exit_class` is untouched.
+12. ADR-133 carries the amendment, and its existing "Implement stale-holder detection" bullet is
     retained rather than deleted.
-15. `python3 scripts/lint-guard-contract.py` accepts the `## Guard Contract` section.
-16. `bash scripts/test-all-killed-classification.test.sh` and
+13. `python3 scripts/lint-guard-contract.py` accepts the `## Guard Contract` section.
+14. `bash scripts/test-all-killed-classification.test.sh` and
     `bash scripts/test-all-capacity-signal.test.sh` both exit 0 — the splice-window sandboxes are
-    unaffected.
+    unaffected by the top-level trip-flag initialisation.
 
 ### Post-merge
 
