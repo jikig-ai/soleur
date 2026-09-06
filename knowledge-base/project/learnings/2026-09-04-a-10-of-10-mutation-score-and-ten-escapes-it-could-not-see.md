@@ -341,6 +341,33 @@ locate the live Claude PID from inside the hook's process tree.
 **Prevention:** worth noting that this is #7833's own theme one directory over — a test whose
 verdict depends on what the surrounding process environment happens to provide.
 
+**30. A two-day stall that was neither my code nor the tests: an orphaned run held a
+repo-global lock.** The compound commit sat in `flock -w 3600 -x 10` on
+`.git/soleur-session-state/locks/test-all.lock` for 1d22h. The holder was another session's
+`test-all.sh` for PR #7838, started Sep 4 18:31 and **reparented to `systemd --user`** — its
+Claude session was gone, and no live session existed in that worktree.
+**Recovery:** confirmed the orphan (PPID 1, zero live sessions in the 7791 worktree, PR
+untouched for two days), killed it with operator approval, and removed its partial
+`/var/tmp/ship7791/all.log`; no `all.rc` had been written, so no false verdict was left for a
+resuming session.
+**Prevention:** the lock's own `-w 3600` did not save us — the waiter sat 46x its timeout. A
+lock whose holder has been reparented to init is mechanically detectable; the contention
+preamble reports tmp-entry deltas but not holder liveness. Worth a guard.
+
+**31. The full gate was skipped on this commit, and that is disclosed rather than hidden.**
+After the lock cleared, the commit was killed by the harness for low memory: swap was 100%
+exhausted (8 KiB free of 2 GiB) with `Committed_AS` at 37 GB against 30 GB RAM, 13 Claude
+sessions holding ~6.1 GB and a browser ~5.5 GB. With operator approval the commit was made
+`--no-verify`.
+**Evidence standing in for the gate**, all re-run AFTER the final edit: guard-vacuity-floor
+23/23 (covered firing population 73, construction failures 15 = ratchet);
+hook-git-env-coverage 8/0; git-tripwire 24/0; hook-git-env-receipt 6/0; git-env-list-parity
+10/0; markdownlint clean on every touched file; the python sibling imports. The staged content
+is markdown, an archival move, six citation-string edits and four one-line sentinel changes.
+**Prevention:** a skipped gate must be named in the artifact, not just in the conversation —
+ship's Phase 4 still owes a full battery, and whoever reads this commit should know the
+pre-commit gate did not run on it.
+
 ## Instrument yield
 
 Worth recording because it changes the running order. Each instrument found a
