@@ -4,7 +4,7 @@ category: support
 tags: [pino, userid, hash, observability, gdpr]
 date: 2026-05-13
 related_prs: [3701, 3731, 3751]
-related_issues: [3698, 3710, 3711]
+related_issues: [3698, 3710, 3711, 7823]
 ---
 
 # Recover a user's pino stdout lines from a UUID
@@ -13,17 +13,17 @@ After PR #3701 (#3698 PR-A) shipped, every authenticated pino log line emits
 `userIdHash` (HMAC-SHA256 over the raw user UUID with a Doppler-resident
 `SENTRY_USERID_PEPPER`) instead of raw `userId`. Operators handling support
 tickets receive a raw UUID and need to convert it to the corresponding hash
-before grepping the Hetzner host's docker logs.
+before querying for that user's records.
 
 This runbook covers two operator flows:
 
-1. **Recover a user's log lines from a UUID** — `hash-user-id` CLI + docker
-   logs grep.
+1. **Recover a user's log lines from a UUID** — `hash-user-id` CLI +
+   a Better Stack query. No host access.
 2. **Measure observed pino log volume for PA8 §(f) retention pin** — one-time
    measurement, repeated on re-verification triggers (see Article 30 register
    PA8 §(f)).
 
-## Flow 1 — UUID → hash → docker logs
+## Flow 1 — UUID → hash → Better Stack query
 
 ### Prerequisites
 
@@ -31,11 +31,13 @@ This runbook covers two operator flows:
   existing `apps/web-platform/scripts/verify-stripe-prices.ts` runner uses.
 - Doppler CLI authenticated for the Soleur project (`doppler whoami` returns
   non-error).
-- SSH access to the prod host (`135.181.45.178`). If `ssh` returns
-  `kex_exchange_identification` or hangs, the operator IP is not in
-  `ADMIN_IPS`; run `/soleur:admin-ip-refresh` first. If SSH still fails
-  after the allowlist refresh, see `admin-ip-drift.md` and
-  `ssh-fail2ban-unban.md`.
+- Doppler access to the `prd_terraform` config, which carries
+  `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. These are the ClickHouse
+  read credentials; `BETTERSTACK_LOGS_TOKEN` is ingest-only and
+  `BETTERSTACK_API_TOKEN` covers source metadata but not log content, so
+  neither can answer this query.
+- **No host access is required, and none should be used.** This flow reads the
+  copy Vector ships, not the container's local buffer.
 
 ### Steps
 
@@ -54,7 +56,7 @@ This runbook covers two operator flows:
 
    First, pre-check that the Doppler context is the prd config (not dev) —
    a wrong-config invocation produces a syntactically-valid 64-hex hash
-   under the dev pepper that will match zero lines in prod docker logs,
+   under the dev pepper that will match zero prod records,
    which is indistinguishable from "user has no activity":
 
    ```bash
@@ -84,20 +86,44 @@ This runbook covers two operator flows:
    suppresses the wrapper banner so `$HASH` captures only the 64-hex
    string.
 
-3. Grep the docker logs on the prod host. Use the **hardened double-grep**
-   pattern to anchor on the `userIdHash` key prefix and avoid
-   false-substring collisions with unrelated 64-hex-shaped payloads
-   (transaction IDs, request IDs, sha256 digests in error stacks):
+3. Query the shipped copy in Better Stack. Anchor on the full
+   `"<key>":"<hash>"` pair to avoid false-substring collisions with unrelated
+   64-hex-shaped payloads (transaction IDs, request IDs, sha256 digests in
+   error stacks):
 
    ```bash
-   ssh root@135.181.45.178 "docker logs soleur-web-platform 2>&1 \
-     | grep -E '\"(userIdHash|workspaceIdHash|worktreeIdHash)\":\"'\"$HASH\"'\"'"
+   doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+     --since 24h --grep "$HASH" --limit 200 \
+   | jq -r --arg h "$HASH" '
+       .raw | fromjson
+       | select(.CONTAINER_NAME == "soleur-web-platform")
+       | .message
+       | select(type == "object")
+       | select((.userIdHash // .workspaceIdHash // .worktreeIdHash) == $h)
+       | "\((.time/1000|todate))  level=\(.level)  \(.msg)"'
    ```
 
-   `grep -F` (fixed string) prevents accidental regex-metachar
-   interpretation of the hex hash and is faster than `grep -E` on tail
-   files. The first grep narrows to lines emitted by `formatters.log()`;
-   the second narrows to the operator's specific user.
+   **Two properties of `betterstack-query.sh` are load-bearing here, both from
+   its own header.** The `raw` column is **double-encoded JSON** — a JSON string
+   containing a JSON document — so a `grep` for a field name against the raw
+   line silently returns nothing; decode with `.raw | fromjson` first, as above.
+   And mode-2 `--since` already unions the hot window with the `s3Cluster`
+   archive: `remote()` alone is only ~40 minutes, so a support ticket about
+   yesterday would get a silently short answer from a hot-only query. Do not
+   reach for `--no-archive` to work around an archive error — the short answer
+   is the bug.
+
+   **Coverage limit — read this before concluding a user has no lines.** Vector
+   ships this container's stdout through `app_container_warn_filter`
+   (`apps/web-platform/infra/vector.toml`), which keeps only pino
+   **`level >= 40`** (WARN/ERROR/FATAL). `formatters.log` injects `userIdHash`
+   at *every* level, so INFO and DEBUG records carrying the hash exist on the
+   host and are **not** in Better Stack. An empty result therefore means "no
+   WARN+ record for this user in the window", never "this user did nothing".
+   The cut is a Better Stack quota measure and its own comment calls it
+   "conservative headroom, not a hard necessity" — widening it is a quota
+   decision, not a technical barrier, and is the change to make if INFO-level
+   recovery is ever actually needed.
 
    **Anti-collision contract.** This used to be a double-grep narrowing on
    `userIdHash` alone, correct while that was the only 64-hex-shaped pino
@@ -106,9 +132,9 @@ This runbook covers two operator flows:
    #6982 added `workspaceIdHash` and `worktreeIdHash` in
    `apps/web-platform/server/git-data-replication.ts`.
 
-   That broke the old form in BOTH directions, which is why the pattern
-   above is a single anchored `grep -E` on the full key-value pair rather
-   than a tightened double-grep:
+   That broke the old form in BOTH directions, which is why the query
+   above selects on the full key-value pair — via `jq`, against the decoded
+   record — rather than narrowing twice on substrings:
 
    - **False negatives.** A record carrying only `workspaceIdHash` or
      `worktreeIdHash` was skipped by `grep -F 'userIdHash'` entirely — and
@@ -143,8 +169,7 @@ two-primitive separation.
 | `usage: bun scripts/hash-user-id.ts <uuid>` to stderr | Missing argv | Pass the UUID as the only positional. |
 | `pepper not set: SENTRY_USERID_PEPPER env var required` | Operator forgot to wrap in `doppler run -p soleur -c prd` | Re-run inside `doppler run`. Never `export SENTRY_USERID_PEPPER=` outside doppler. |
 | `hash-user-id: contract drift detected` | A future change to `hashUserId` widened the return shape (e.g., added a prefix) | File a P0 issue against `apps/web-platform/server/observability.ts` — the operator boundary contract is broken. |
-| Zero matches from `docker logs … grep` | (a) User has no pino activity in the rolling window (see PA8 §(f) — 30 MB rolling cap), OR (b) wrong pepper config (`-c dev` vs `-c prd`), OR (c) `SENTRY_USERID_PEPPER` was rotated after the target log line was written — the pre-rotation pepper is required to reproduce the historical hash | Re-run the Doppler pre-check (step 2 above) to confirm `-c prd`; confirm the user authenticated recently. For (c): `hashUserId(userId, pepper?)` (`apps/web-platform/server/observability.ts`) accepts an optional pepper override — at the first rotation, wire a `SENTRY_USERID_PEPPER_PREVIOUS` Doppler key and extend the CLI with a `--prior-pepper` opt; until then, pre-rotation lines are un-grep-able by design (acceptable trade-off — the hash window aligns with the 30 MB rolling cap anyway). Check rotated log files via `docker inspect soleur-web-platform \| jq '.[0].LogPath'`. |
-| `kex_exchange_identification` on SSH | Operator IP not in `ADMIN_IPS` | Run `/soleur:admin-ip-refresh`; if still failing, see `admin-ip-drift.md`. |
+| Zero matches from the Better Stack query | **(a) the record was below WARN.** `app_container_warn_filter` keeps only pino `level >= 40`, and `formatters.log` injects `userIdHash` at every level — so INFO/DEBUG records for this user exist on the host and never shipped. This is the most common cause and it is not a fault. OR (b) the user has no WARN+ activity in the window. OR (c) wrong pepper config (`-c dev` vs `-c prd`). OR (d) `SENTRY_USERID_PEPPER` was rotated after the target line was written — the pre-rotation pepper is required to reproduce the historical hash | For (a), widening the filter is a Better Stack quota decision, not a technical barrier — its own comment calls the cut "conservative headroom, not a hard necessity". For (c), re-run the Doppler pre-check (step 2) to confirm `-c prd`. For (d): `hashUserId(userId, pepper?)` (`apps/web-platform/server/observability.ts`) accepts an optional pepper override — at the first rotation, wire a `SENTRY_USERID_PEPPER_PREVIOUS` Doppler key and extend the CLI with a `--prior-pepper` opt; until then, pre-rotation lines are unmatchable by design. |
 
 ## Flow 2 — PA8 §(f) retention pin (one-time measurement)
 
@@ -176,61 +201,45 @@ the PA8 §(f) row and this runbook in the same PR.
 
 ### Steps
 
-1. **Refresh ADMIN_IPS allowlist** if SSH is failing.
+**This flow is dormant, and it deliberately carries no executable steps.**
+Art. 30 PA-8 §(f) is resolved to `NOT RECORDED` (see below), so there is no
+obligation to discharge. What follows is the method of record, kept so a future
+reader knows what *would* be measured and why it is not written as a runnable
+procedure.
 
-   ```bash
-   /soleur:admin-ip-refresh
-   ```
+**Why there are no steps to run.** Unlike Flow 1, this measurement cannot be
+served from shipped telemetry, and the gap is structural rather than a missing
+query. It needs two host-side facts that nothing ships:
 
-2. **SSH to prod and confirm runtime driver matches the cloud-init pin.**
+- the container's `HostConfig.LogConfig` (a Docker daemon fact, not a log line);
+  and
+- the on-disk byte size of the `json-file` ring buffer at `.[0].LogPath` — the
+  size of the buffer itself, not of anything emitted from it.
 
-   ```bash
-   ssh root@135.181.45.178
-   docker inspect soleur-web-platform | jq '.[0].HostConfig.LogConfig'
-   # Expected: {"Type":"json-file","Config":{}}
-   # Any other Type → drift; file a compliance/critical issue and stop.
-   ```
+Better Stack holds neither. It receives only what Vector forwards, which for this
+container is pino `level >= 40` *records* — so counting rows there measures the
+WARN+ shipped subset, not the ring buffer's occupancy, and would answer a
+different question while looking like the right one.
 
-3. **Measure observed daily volume.** Capture three samples 8 hours apart
-   on a representative weekday. The on-disk byte counts vary across the
-   rotation cycle (`max-file=3` means up to three numbered log files); the
-   3-sample average smooths rotation timing.
+Because the only read path is a root shell, this runbook does not prescribe one:
+`hr-no-ssh-fallback-in-runbooks` exists precisely so a procedure the Soleur
+operator cannot execute is not written as though they can. If a figure is ever
+genuinely needed, the enabling change is a host-side emitter — `vector.toml`
+already runs `[sources.host_metrics]` with `disk` and `filesystem` collectors,
+so the shape exists and the work is to emit the per-container log-path size
+alongside them. That is an infrastructure change, and it should be scoped as one.
 
-   ```bash
-   LOG_PATH=$(docker inspect soleur-web-platform | jq -r '.[0].LogPath')
-   # T+0h:
-   du -sb "$LOG_PATH"
-   # T+8h:
-   du -sb "$LOG_PATH"
-   # T+16h:
-   du -sb "$LOG_PATH"
-   # Compute average; convert: <avg-bytes-per-8h> × 3 = <bytes/day>
-   # → effective retention (days) ≈ 30 MB / (bytes-per-day / 1_048_576)
-   ```
-
-   **Agent execution note:** an agent invoked once cannot block for 16
-   hours between the three samples. Schedule the T+8h and T+16h captures
-   via `ScheduleWakeup` (delaySeconds=28800 each) or the equivalent cron
-   primitive; a human operator runs them inline. Each wake-up is a
-   single `du -sb` invocation — the agent reads the prior captures from
-   conversation state on resume.
-
-4. **Confirm no off-host shippers.**
-
-   ```bash
-   systemctl list-units --type=service | grep -iE 'promtail|vector|fluent|filebeat|rsyslog'
-   # Expected: zero matches.
-   ```
-
-5. **Verify daemon.json structural pin (defense against operator hand-edits).**
-
-   ```bash
-   grep -F '"log-driver": "json-file"' /etc/docker/daemon.json \
-     && grep -F '"max-size": "10m"' /etc/docker/daemon.json \
-     && grep -F '"max-file": "3"' /etc/docker/daemon.json \
-     && echo "daemon.json structural pin OK"
-   # Any failure → drift; file a compliance/critical issue.
-   ```
+**Correction, 2026-09-06 — a step this flow used to carry is now false.** It
+previously instructed the operator to *"confirm no off-host shippers"* with
+`systemctl list-units | grep -iE 'promtail|vector|fluent|filebeat|rsyslog'` and
+**"Expected: zero matches."** That expectation no longer holds and has been
+removed rather than re-worded, because acting on it would produce a false drift
+report. Vector **is** deployed on this host: `[sources.app_container_journald]`
+matches `CONTAINER_NAME = ["soleur-web-platform"]` and ships the WARN+ subset of
+this very container's stdout to Better Stack. Flow 1 above now depends on exactly
+that. The structural claim PA-8 §(f) rests on — a capacity-bounded ring buffer
+with no envisaged time limit — is unaffected: shipping a filtered copy off-host
+does not change the buffer's rotation behaviour.
 
 ### Post-measurement: the register is already resolved
 
@@ -251,8 +260,10 @@ gh issue close 3711 \
 
 ## Cross-references
 
-- `admin-ip-drift.md` — IP allowlist drift recovery.
-- `ssh-fail2ban-unban.md` — when SSH is locked out post-multiple-failures.
+- `scripts/betterstack-query.sh` — the ClickHouse read path used by Flow 1; its
+  header carries the double-encoding and hot-window/archive contracts.
+- `apps/web-platform/infra/vector.toml` — `[sources.app_container_journald]` and
+  `[transforms.app_container_warn_filter]`, which decide what Flow 1 can see.
 - `apps/web-platform/scripts/hash-user-id.ts` — operator CLI source.
 - `apps/web-platform/server/observability.ts:36` — `hashUserId` canonical primitive.
 - `apps/web-platform/infra/cloud-init.yml:303-310` — docker daemon.json source of truth.
