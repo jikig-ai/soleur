@@ -108,7 +108,7 @@ This runbook covers two operator flows:
        | "\((.time/1000|todate))  level=\(.level)  \(.msg)"'
    ```
 
-   **Three details are load-bearing, and each fails silently if you drop it.**
+   **Four details are load-bearing, and each fails silently if you drop it.**
    `.message` arrives in **two shapes**: Better Stack auto-parses a JSON-valued
    `message` at ingest, so pino records land as an OBJECT, while fd-2 crash and
    plain lines stay STRINGS (measured 2026-09-06: 182 of 182 string-shaped
@@ -119,10 +119,12 @@ This runbook covers two operator flows:
    `.a // .b // .c == $h`: jq's `//` is a falsy-default that short-circuits on
    the first non-null key, so a record carrying `userIdHash` for one actor and
    `workspaceIdHash` for the target would be silently skipped — the exact false
-   negative the anti-collision contract below exists to prevent. And two more
-   properties come from `betterstack-query.sh`'s own header. The `raw` column is **double-encoded JSON** — a JSON string
-   containing a JSON document — so a `grep` for a field name against the raw
-   line silently returns nothing; decode with `.raw | fromjson` first, as above.
+   negative the anti-collision contract below exists to prevent.
+
+   The remaining two come from `betterstack-query.sh`'s own header. The `raw`
+   column is **double-encoded JSON** — a JSON string containing a JSON document —
+   so a `grep` for a field name against the raw line silently returns nothing;
+   decode with `.raw | fromjson` first, as above.
    And mode-2 `--since` already unions the hot window with the `s3Cluster`
    archive: `remote()` alone is only ~40 minutes, so a support ticket about
    yesterday would get a silently short answer from a hot-only query. Do not
@@ -166,7 +168,8 @@ This runbook covers two operator flows:
    **Anti-collision contract.** This used to be a double-grep narrowing on
    `userIdHash` alone, correct while that was the only 64-hex-shaped pino
    field emitted by `formatters.log()`
-   (`apps/web-platform/server/userid-pseudonymize.ts`). It no longer is:
+   (`apps/web-platform/server/logger.ts`, using the rename primitive in
+   `apps/web-platform/server/userid-pseudonymize.ts`). It no longer is:
    #6982 added `workspaceIdHash` and `worktreeIdHash` in
    `apps/web-platform/server/git-data-replication.ts`.
 
@@ -184,8 +187,9 @@ This runbook covers two operator flows:
      second `grep -F "$HASH"` match a DIFFERENT field's value on a line
      selected for containing the key name.
 
-   Anchoring on `"<key>":"<hash>"` fixes both: it selects the record only
-   when the hash is the value of one of the enumerated keys.
+   Testing each key explicitly against the decoded record fixes both: it selects
+   the record only when the hash is the value of one of the enumerated keys, and
+   it compares typed JSON values rather than substrings of a line.
 
    If you add a new 64-hex pino emission, add its key to the `or` chain in the
    query above in the same PR — or give it a key prefix that cannot be confused
