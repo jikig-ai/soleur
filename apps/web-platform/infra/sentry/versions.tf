@@ -41,7 +41,30 @@
 # Read ADR-031 §Amendment 2026-08-19 (#7590) before acting on the paragraph
 # above.
 terraform {
-  required_version = ">= 1.6"
+  # Raised 1.6 -> 1.9 by #7650 Phase 2. `issue-alerts.tf` now uses `removed`
+  # blocks carrying `lifecycle { destroy = false }`.
+  #
+  # CORRECTED at review time. An earlier version of this comment said that on a
+  # Terraform without that option "a `removed` block plans a DESTROY" of 27 live
+  # paging rules. That is NOT a state Terraform can reach: it does not silently
+  # reinterpret unrecognised syntax. A CLI predating `removed` blocks fails to
+  # PARSE ("Blocks of type \"removed\" are not expected here"); one that accepts
+  # `removed` but not the lifecycle argument fails to parse too ("Unsupported
+  # argument"). There is no version in which `lifecycle { destroy = false }` is
+  # accepted-and-ignored, which is what that catastrophe required.
+  #
+  # So this floor is CONSERVATIVE OVER-STRICTNESS, not a safety boundary, and
+  # the honest reason to keep it is that the parse error an old CLI produces is
+  # a worse diagnostic than a version-constraint error. Recording the correction
+  # rather than quietly deleting the claim: a future reader who lowers the floor
+  # and finds nothing bad happens would otherwise conclude the comment was wrong
+  # and trust the rest of this block less.
+  #
+  # Provenance: `destroy = false` is documented by HashiCorp as arriving in 1.9
+  # and `removed` blocks in 1.7. The only version VERIFIED here is 1.10.5 --
+  # what CI pins (apply-sentry-infra.yml) and what every measurement in
+  # phase2-measurements-2026-09-04.md was taken on.
+  required_version = ">= 1.9"
 
   required_providers {
     sentry = {

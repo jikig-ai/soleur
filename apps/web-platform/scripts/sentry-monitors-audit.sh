@@ -1309,9 +1309,10 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   # The `<!-- ids: ... -->` manifest was RETIRED in #7590.
   #
   # It existed to feed a first-time `terraform import` of issue-alert rules.
-  # That adoption is complete (29 sentry_issue_alert resources against a full-
-  # root plan), so the manifest has no live consumer, and its README runbook
-  # was stale by 25 resources. Repointing it at the workflows endpoint would
+  # That adoption is complete — since #7650 Phase 2 it is 27 `sentry_alert`
+  # plus 2 `sentry_issue_alert` resources against a full-root plan, not 29
+  # `sentry_issue_alert` — so the manifest has no live consumer, and its README
+  # runbook was stale by 25 resources. Repointing it at the workflows endpoint would
   # have been worse than deleting it: workflow ids and rule ids are DISJOINT
   # identifier spaces, so the marker would have kept its name and shape while
   # silently changing meaning — a live trap for the next reader who trusted it.

@@ -39,7 +39,10 @@ restore them. `configure-sentry-alerts.sh` is their only executable definition.
 The four rules that block is on are `auth-exchange-code-burst`,
 `auth-callback-no-code-burst`, `auth-per-user-loop` and `auth-signout-burst`.
 Name them, because there is a *different* set of four in the same file and
-confusing the two is the failure mode below.
+confusing the two is the failure mode below. (Since #7650 Phase 2 that wide block
+is on `auth-per-user-loop` ALONE — see the amendment under the table. The
+four-rule membership is preserved here because it is what the 2026-06-02 incident
+happened to.)
 
 This is not hypothetical. On 2026-06-02 all four auth alert rules drifted to
 empty filters, matched every issue in the project, and were repaired by a manual
@@ -73,8 +76,26 @@ tells them apart:
 | `EXPECTED_RULES` in `assert-byok-rules-exist.sh` | `byok-art-33-breach`, `byok-cap-exceeded`, `chat-message-save-failure`, `workspace-sync-health` | `[environment]` **only** | fully populated | **Terraform.** Drift *is* self-healing on the next apply. |
 | the `auth-*` set | `auth-exchange-code-burst`, `auth-callback-no-code-burst`, `auth-per-user-loop`, `auth-signout-burst` | `[conditions_v2, filters_v2, actions_v2, environment, frequency]` | declared `[]` | **Not Terraform.** `configure-sentry-alerts.sh` is their only executable definition — this is what #4781 and the 2026-06-02 incident are about. |
 
+> **Amendment (2026-09-04, #7650 Phase 2) — the second row is now ONE rule, not four.**
+> `auth-signout-burst`, `auth-exchange-code-burst` and `auth-callback-no-code-burst` were
+> adopted as `sentry_alert` resources with their real definitions and now carry
+> `ignore_changes = [environment]` only — so they moved from the second row to the first, and
+> Terraform genuinely owns their filters. **`auth-per-user-loop` alone** keeps the old posture,
+> because the pinned provider's `trigger_conditions` cannot express its
+> `event_unique_user_frequency_count` trigger (upstream issue 950). It is therefore the only
+> rule `configure-sentry-alerts.sh` still writes, and the script is **not** deleted for exactly
+> that reason.
+>
+> **The lesson is unchanged and the table is still the point.** Two disjoint sets still live in
+> one file, a file-level `ignore_changes` grep still cannot tell them apart, and the answer is
+> still a per-RESOURCE-BLOCK read. What changed is only the membership — and it changed in the
+> direction that makes the mistake EASIER to repeat, not harder: with one rule left in the
+> second row instead of four, a grep that returns the file is even less likely to be
+> interrogated. A reader who trusts this table's 2026-08-19 membership and acts on it will
+> conclude three Terraform-owned rules are unmanaged.
+
 The 2026-06-02 incident refutes the self-healing claim for the `auth-*` set and
-for that set only. Applied to the BYOK/chat/workspace-sync four it refutes
+for that set only. Since 2026-09-04 that set is `auth-per-user-loop` alone. Applied to the BYOK/chat/workspace-sync four it refutes
 nothing, because no apply was ever prevented from restoring them.
 
 **A file-level grep for `ignore_changes` cannot tell these sets apart.** Both

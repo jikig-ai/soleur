@@ -16,6 +16,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/sentry-destroy-counts.sh"
 FIXTURES="$REPO_ROOT/tests/scripts/fixtures"
 pass=0; fail=0
+EXPECTED_TESTS=9
 
 _report() {
   local label="$1" status="$2" detail="${3:-}"
@@ -32,20 +33,20 @@ TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 
 _run() { bash "$SCRIPT" "$1" 2>/dev/null; }
 
-# ── T1: the emitted contract carries ALL FOUR keys, destroy_count included ──
+# ── T1: the emitted contract carries ALL FIVE keys, destroy_count included ──
 # The shipped bug in one assertion. A consumer does `eval "$(script …)"` and then
 # reads $destroy_count under `set -u`; if the script stops emitting it, every
 # consumer dies at its first read.
 t_emits_full_contract() {
   local out; out=$(_run "$FIXTURES/tfplan-sentry-resource-delete.json")
   local missing=()
-  for k in resource_deletes resource_creates nested_deletes destroy_count; do
+  for k in resource_deletes resource_creates resource_forgets nested_deletes destroy_count; do
     grep -qE "^${k}=[0-9]+$" <<<"$out" || missing+=("$k")
   done
   if [[ ${#missing[@]} -eq 0 ]]; then
-    _report "T1 emits all four keys incl. destroy_count (the shipped-bug regression)" ok
+    _report "T1 emits all five keys incl. destroy_count (the shipped-bug regression)" ok
   else
-    _report "T1 emits all four keys incl. destroy_count" fail "missing: ${missing[*]}; got: $out"
+    _report "T1 emits all five keys incl. destroy_count" fail "missing: ${missing[*]}; got: $out"
   fi
 }
 
@@ -56,7 +57,7 @@ t_eval_binds_all_caller_vars() {
   local rc=0
   ( set -euo pipefail
     eval "$(_run "$FIXTURES/tfplan-sentry-resource-delete.json")"
-    : "$resource_deletes" "$resource_creates" "$nested_deletes" "$destroy_count"
+    : "$resource_deletes" "$resource_creates" "$resource_forgets" "$nested_deletes" "$destroy_count"
   ) >/dev/null 2>&1 || rc=$?
   if [[ "$rc" -eq 0 ]]; then
     _report "T2 eval under set -u binds every var the workflow reads (unbound-variable regression)" ok
@@ -66,18 +67,40 @@ t_eval_binds_all_caller_vars() {
   fi
 }
 
-# ── T3: destroy_count is the SUM, not a copy of one term ───────────────────
-# A nested-only delete (rdel=0, ndel=1) distinguishes sum from `=$resource_deletes`.
+# ── T3: destroy_count is the SUM of all THREE terms, not a copy of one ─────
+# A nested-only delete (rdel=0, ndel=1) distinguishes the sum from
+# `=$resource_deletes`. T3b does the same job for the third term: a forget-only
+# plan on a type with no nested clause has rdel=0 and ndel=0, so destroy_count
+# can only be 1 if `resource_forgets` is genuinely summed. That is the term whose
+# omission is invisible — it would emit correctly and gate nothing.
 t_destroy_count_is_the_sum() {
   local out; out=$(_run "$FIXTURES/tfplan-sentry-issue-alert-nested-delete.json")
-  local rd nd dc
+  local rd nd rf dc
   rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out")
   nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out")
+  rf=$(grep -oP '^resource_forgets=\K.*' <<<"$out" || true)
   dc=$(grep -oP '^destroy_count=\K.*' <<<"$out")
-  if [[ "$rd" == "0" && "$nd" == "1" && "$dc" == "1" ]]; then
+  if [[ "$rd" == "0" && "$nd" == "1" && "$rf" == "0" && "$dc" == "1" ]]; then
     _report "T3 destroy_count sums resource+nested (nested-only delete is counted)" ok
   else
-    _report "T3 destroy_count sums resource+nested" fail "rd=$rd nd=$nd dc=$dc want 0/1/1"
+    _report "T3 destroy_count sums resource+nested" fail "rd=$rd nd=$nd rf=$rf dc=$dc want 0/1/0/1"
+  fi
+}
+
+t_destroy_count_sums_forgets() {
+  local f="$TMP/forget-only.json"
+  printf '{"resource_changes":[{"type":"sentry_cron_monitor","address":"sentry_cron_monitor.gone","mode":"managed","change":{"actions":["forget"],"before":{},"after":null}}]}' > "$f"
+  local out; out=$(_run "$f")
+  local rd nd rf dc
+  rd=$(grep -oP '^resource_deletes=\K.*' <<<"$out")
+  nd=$(grep -oP '^nested_deletes=\K.*' <<<"$out")
+  rf=$(grep -oP '^resource_forgets=\K.*' <<<"$out" || true)
+  dc=$(grep -oP '^destroy_count=\K.*' <<<"$out")
+  if [[ "$rd" == "0" && "$nd" == "0" && "$rf" == "1" && "$dc" == "1" ]]; then
+    _report "T3b destroy_count sums resource_forgets too (forget-only plan scores 1, not 0)" ok
+  else
+    _report "T3b destroy_count sums resource_forgets too" fail \
+      "rd=$rd nd=$nd rf=$rf dc=$dc want 0/0/1/1 — dc=0 means the counter is emitted but not gated on"
   fi
 }
 
@@ -144,6 +167,7 @@ t_both_jobs_call_the_script() {
 t_emits_full_contract
 t_eval_binds_all_caller_vars
 t_destroy_count_is_the_sum
+t_destroy_count_sums_forgets
 t_no_changes_is_zero
 t_malformed_plan_fails
 t_missing_file_fails
@@ -151,4 +175,15 @@ t_no_args_fails
 t_both_jobs_call_the_script
 
 echo "=== $pass passed, $fail failed ==="
+# HARNESS FLOOR (#7650 review). A commented-out dispatch line reads green
+# forever without this: the suite reports `0 failed` and exits 0 having
+# silently stopped running assertions. The three suites added by #7650 Phase 2
+# carry the same floor; these three were EXTENDED by it and deserve it too,
+# because the rows added here are the ones carrying Guard C.
+ran=$((pass + fail))
+if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then
+  echo "[FAIL] harness: ran $ran test(s), expected $EXPECTED_TESTS — a suite that silently stops running its assertions reports green" >&2
+  exit 1
+fi
+
 [[ "$fail" -eq 0 ]]
