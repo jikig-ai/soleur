@@ -74,6 +74,24 @@ TC_LOCK_TIMEOUT="${TC_LOCK_TIMEOUT:-3600}"
 # LONGER, so the heartbeat ships with it rather than after it.
 TC_WAIT_HEARTBEAT_S="${TC_WAIT_HEARTBEAT_S:-60}"
 
+# Wall-clock ceiling above which a test-all.sh run is treated as no longer
+# having a consumer (#7869).
+#
+# TWO consumers, deliberately sharing one number: tc_preamble excludes a sibling
+# past it from the refusal count (so a run nobody is reading cannot hold this
+# machine's full-gate capacity at zero), and the runner uses it to stop starting
+# further suites in its own process. One knob, because two would drift and the
+# pair only makes sense read together.
+#
+# THE VALUE IS SIZED ON THE CONTENDED MAXIMUM, NOT THE UNCONTENDED ONE. The
+# uncontended full gate is ~2700 s (ADR-133), but the same record documents
+# siblings legitimately holding for 3775 / 5787 / 5763 s under contention, and
+# the slowest single declared suite budget is 2500000 ms (~41.7 min). A ceiling
+# derived from 2700 s would terminate healthy contended runs; 14400 s is ~2.5x
+# the worst observed legitimate hold and ~11.5x below the 46 h orphan that
+# motivated this (#7869).
+TC_RUNTIME_CEILING_S="${TC_RUNTIME_CEILING_S:-14400}"
+
 # --- Capacity probes -------------------------------------------------------
 # `df -P` pins POSIX single-line output so a long device name cannot wrap and
 # shift the awk field indices. TC_DF_CMD is a test seam so a suite can pin a
@@ -468,6 +486,7 @@ tc_suite_siblings() { _tc_scan_procs | awk -F'\t' '$1=="suite" {print $2"\t"$3"\
 
 tc_preamble() {
   local used_pct avail_mb entries scan sibs suite_sibs sib_count suite_count
+  local _st_pid _st_cwd _st_elapsed
   local load cores memavail_kb
   used_pct=$(tc_used_pct)
   # Read the value AND its validity in one df call. `avail_mb` keeps its
@@ -491,6 +510,32 @@ tc_preamble() {
   fi
   scan=$(_tc_scan_procs || true)
   sibs=$(awk -F'\t' '$1=="run"   {print $2"\t"$3"\t"$4}' <<<"$scan")
+  # Stale-sibling exclusion (#7869).
+  #
+  # Applied HERE, at the single derivation, because this one assignment feeds
+  # the detail rows printed below, `sib_count`, and the exported
+  # TC_SIBLING_RUN_COUNT that scripts/test-all.sh refuses on. Filtering at the
+  # count instead would let the reported rows disagree with the verdict beside
+  # them — the two-non-atomic-snapshots defect the single walk exists to remove.
+  #
+  # An orphaned run is still a running test-all.sh, so it counts as a live
+  # sibling and every later full-gate run on the box is refused (exit 4). That
+  # is the dominant symptom of #7869: capacity pinned at zero by work nobody is
+  # reading. Excluding it here restores capacity WITHOUT killing anything.
+  #
+  # FAILS TOWARD COUNTING. A row is dropped only when its elapsed field is a
+  # valid integer at or above the ceiling. _tc_scan_procs emits `elapsed=0` when
+  # starttime is unparseable, so an unreadable reading is indistinguishable from
+  # a fresh one and both COUNT — the conservative direction for a capacity gate
+  # is to refuse, never to admit. A non-numeric or non-positive ceiling disables
+  # the filter entirely rather than silently excluding everything.
+  local _stale_sibs=""
+  if [[ "${TC_RUNTIME_CEILING_S:-}" =~ ^[0-9]+$ ]] && (( TC_RUNTIME_CEILING_S > 0 )); then
+    _stale_sibs=$(awk -F'\t' -v c="$TC_RUNTIME_CEILING_S" \
+      '$3 ~ /^[0-9]+$/ && $3 + 0 >= c' <<<"$sibs" || true)
+    sibs=$(awk -F'\t' -v c="$TC_RUNTIME_CEILING_S" \
+      '!($3 ~ /^[0-9]+$/ && $3 + 0 >= c)' <<<"$sibs" || true)
+  fi
   suite_sibs=$(awk -F'\t' '$1=="suite" {print $2"\t"$3"\t"$4}' <<<"$scan")
   # Count DISTINCT worktrees, not raw pids: one logical run legitimately shows
   # up as several processes (the script plus its wrapper shell), so a pid count
@@ -562,6 +607,16 @@ tc_preamble() {
   printf '[contention] machine: %s cores, load %s, MemAvailable %sMB\n' \
     "$cores" "$load" "$memavail_mb"
   printf '[contention] siblings: %s other worktree(s) running test-all.sh\n' "$sib_count"
+  # Named per excluded run, on stderr with the BANNER prefix, so the triage grep
+  # in work/SKILL.md surfaces it and the operator can see WHICH worktree was
+  # discounted rather than inferring it from a count that quietly shrank.
+  if [[ -n "${_stale_sibs//[[:space:]]/}" ]]; then
+    while IFS=$'\t' read -r _st_pid _st_cwd _st_elapsed; do
+      [[ -n "$_st_pid" ]] || continue
+      printf '[contention] BANNER SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED pid=%s elapsed_s=%s ceiling_s=%s cwd=%s — past the runtime ceiling, so it is not counted against full-gate capacity.\n' \
+        "$_st_pid" "$_st_elapsed" "$TC_RUNTIME_CEILING_S" "$_st_cwd" >&2
+    done <<<"$_stale_sibs"
+  fi
 
   # Exported so a POLICY at the call site can read it. Deliberately NOT acted on here: this
   # function is a REPORTER, and burying a refusal in a measurement function is how the next

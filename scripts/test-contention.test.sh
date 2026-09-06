@@ -1575,7 +1575,137 @@ fi
 # RE-MEASURED, not inherited, when the counter changed from `pass_n + fails` to `cases`: a
 # green run of the as-written file reports `cases` = 110, identical to the old sum because
 # conservation holds on a healthy run. Zero slack is deliberate.
-MIN_CASES=110
+
+# ===========================================================================
+# Guard 2 (#7869): stale-sibling exclusion from the full-gate refusal count.
+#
+# PROPERTY: a sibling whose measured elapsed_s exceeds the runtime ceiling is
+# excluded from TC_SIBLING_RUN_COUNT before the refusal consults it, and the
+# exclusion is reported. Fresh siblings still refuse.
+#
+# The filter lives at the SINGLE `sibs=` derivation, which feeds the reported
+# rows, the sibling count and the exported count alike — so there is no
+# count-vs-report drift to assert separately.
+#
+# Fixtures are synthesized. Every arm pins TC_RUNTIME_CEILING_S explicitly so a
+# future change to the shipped default cannot silently move these verdicts.
+# ---------------------------------------------------------------------------
+echo "=== Guard 2 (#7869): stale-sibling exclusion ==="
+
+STALE_ROOT="$TESTROOT/proc-stale"
+STALE_WT="$TESTROOT/wt-stale"
+FRESH_WT="$TESTROOT/wt-fresh"
+STALE2_WT="$TESTROOT/wt-stale2"
+mkdir -p "$STALE_WT" "$FRESH_WT" "$STALE2_WT"
+# One stale run (elapsed 20000s) and one fresh run (elapsed 60s), in DIFFERENT
+# worktrees — the count is over distinct worktrees, not pids.
+make_fake_proc "$STALE_ROOT" 900001 "$STALE_WT" 20000 "scripts/test-all.sh"
+make_fake_proc "$STALE_ROOT" 900002 "$FRESH_WT" 60 "scripts/test-all.sh"
+
+# Runs tc_preamble against a given procfs and prints the resulting count on the
+# LAST line, with the preamble output above it. `|| true` inside the
+# substitution: a non-zero here would abort the suite under `set -e` before
+# fail() could print.
+g2_run() {
+  local root="$1" ceiling="$2"
+  env TC_PROC_ROOT="$root" TC_TMPDIR="$FAKE_TMP" TC_SELF_PID=999999 \
+      TC_XDG_DIR="" TC_NPROC=16 TC_RUNTIME_CEILING_S="$ceiling" \
+      bash -c "source '$LIB'; tc_preamble >/dev/null 2>&1; printf '%s\n' \"\${TC_SIBLING_RUN_COUNT:-MISSING}\"" 2>&1 || true
+}
+g2_report() {
+  local root="$1" ceiling="$2"
+  env TC_PROC_ROOT="$root" TC_TMPDIR="$FAKE_TMP" TC_SELF_PID=999999 \
+      TC_XDG_DIR="" TC_NPROC=16 TC_RUNTIME_CEILING_S="$ceiling" \
+      bash -c "source '$LIB'; tc_preamble" 2>&1 || true
+}
+
+# --- H4: the fixture must be non-empty, or every arm below is vacuous -------
+# A zero-sibling procfs would make "count == 1" pass for the wrong reason. This
+# arm pins the fixture's own cardinality FIRST: with the ceiling raised above
+# both runs, BOTH worktrees must be counted.
+G2_BASELINE="$(g2_run "$STALE_ROOT" 99999 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_BASELINE" == "2" ]]; then
+  pass "G2/H4 fixture cardinality: both siblings counted when the ceiling excludes neither"
+else
+  fail "G2/H4 fixture is not exercising two siblings; expected 2, got: $G2_BASELINE"
+fi
+
+# --- M8: the filter exists (removing it restores the raw count) -------------
+G2_FILTERED="$(g2_run "$STALE_ROOT" 14400 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_FILTERED" == "1" ]]; then
+  pass "G2/M8 stale sibling (20000s) excluded from TC_SIBLING_RUN_COUNT at a 14400s ceiling"
+else
+  fail "G2/M8 expected count 1 after excluding the stale sibling, got: $G2_FILTERED"
+fi
+
+# --- H5 / M9: the fresh sibling still counts (the filter is not a disable) --
+# Direction matters: an inverted comparison would keep the STALE one and drop
+# the fresh one, yielding 1 as well. Pin WHICH survives by reading the rows.
+G2_ROWS="$TESTROOT/g2-rows.txt"
+g2_report "$STALE_ROOT" 14400 > "$G2_ROWS"
+cases=$((cases + 1))
+if [[ "$(grep -cF -- "$FRESH_WT" "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2/H5 the FRESH sibling survives the filter and is still reported"
+else
+  fail "G2/H5 fresh worktree $FRESH_WT absent from the preamble; got: $(cat "$G2_ROWS")"
+fi
+cases=$((cases + 1))
+if [[ "$(grep -cE 'SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED' "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2 the exclusion is REPORTED, not silent"
+else
+  fail "G2 no SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED marker; got: $(cat "$G2_ROWS")"
+fi
+# The marker must name the pid AND the elapsed it measured — a bare count would
+# leave the operator unable to tell WHICH run is stale.
+cases=$((cases + 1))
+if [[ "$(grep -cE 'SOLEUR_TEST_ALL_STALE_SIBLING_EXCLUDED.*pid=900001.*elapsed_s=20000' "$G2_ROWS" || true)" -ge 1 ]]; then
+  pass "G2 the exclusion marker names the excluded pid and its measured elapsed"
+else
+  fail "G2 marker does not name pid=900001 elapsed_s=20000; got: $(grep 'STALE_SIBLING' "$G2_ROWS" || true)"
+fi
+
+# --- M12: a SECOND stale sibling is also excluded ---------------------------
+# A filter that stops after the first member is the defect class. Adding a
+# second stale worktree must not raise the count.
+make_fake_proc "$STALE_ROOT" 900003 "$STALE2_WT" 30000 "scripts/test-all.sh"
+G2_TWO_STALE="$(g2_run "$STALE_ROOT" 14400 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_TWO_STALE" == "1" ]]; then
+  pass "G2/M12 a second stale sibling is excluded too (filter does not stop at the first)"
+else
+  fail "G2/M12 expected count 1 with two stale siblings, got: $G2_TWO_STALE"
+fi
+# Control for the arm above: with the ceiling lifted, all three are counted.
+G2_THREE="$(g2_run "$STALE_ROOT" 99999 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_THREE" == "3" ]]; then
+  pass "G2/M12 control: all three worktrees counted when the ceiling excludes none"
+else
+  fail "G2/M12 control expected 3, got: $G2_THREE"
+fi
+
+# --- M10: an UNREADABLE elapsed must still be COUNTED -----------------------
+# The scan emits elapsed=0 when starttime is unparseable, so an unreadable
+# reading is indistinguishable from a fresh one — and both must COUNT. The
+# conservative direction for a capacity gate is to refuse, never to admit.
+UNREAD_ROOT="$TESTROOT/proc-unreadable"
+UNREAD_WT="$TESTROOT/wt-unreadable"
+mkdir -p "$UNREAD_WT"
+make_fake_proc "$UNREAD_ROOT" 910001 "$UNREAD_WT" 60 "scripts/test-all.sh"
+# Corrupt starttime so the elapsed derivation cannot parse it.
+printf '910001 (te) st) S 0 0 %s x 0 0\n' "$(printf '0 %.0s' {4..19})" \
+  > "$UNREAD_ROOT/910001/stat"
+G2_UNREAD="$(g2_run "$UNREAD_ROOT" 1 | tail -1)"
+cases=$((cases + 1))
+if [[ "$G2_UNREAD" == "1" ]]; then
+  pass "G2/M10 a sibling with an unreadable elapsed is COUNTED (fails toward refusing)"
+else
+  fail "G2/M10 unreadable-elapsed sibling must count even at a 1s ceiling, got: $G2_UNREAD"
+fi
+
+MIN_CASES=118
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_CASES" >&2
