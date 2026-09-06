@@ -87,7 +87,15 @@ const WARNING_STAGES = [
 const NFT_FATAL_STAGE = "gitdata_nftables_metadata";
 
 function scopeResource(src: string, name: string): string {
-  const marker = `resource "sentry_issue_alert" "${name}"`;
+  // BOTH types. Since #7650 Phase 2 this file holds 27 `sentry_alert` rules and
+  // 3 `sentry_issue_alert` ones, and this suite spans the boundary:
+  // `git_data_boot_fatal` MIGRATED, while `git_data_boot_warning` (added by
+  // #7772, after the adoption's live capture) did not. Hardcoding either type
+  // makes the other throw "resource not found".
+  const marker = [
+    `resource "sentry_alert" "${name}"`,
+    `resource "sentry_issue_alert" "${name}"`,
+  ].find((m) => tf.includes(m)) ?? `resource "sentry_alert" "${name}"`;
   const start = src.indexOf(marker);
   // An indexOf miss returns -1, and slice(-1) yields the LAST CHARACTER — every subsequent
   // assertion would then pass or fail for reasons unrelated to the resource. Fail loudly first.
@@ -200,9 +208,20 @@ describe("git-data warning-stage routing op contract", () => {
   it("the two rules are distinct resources with distinct names", () => {
     // A single rule cannot carry both severities; collapsing them is the likeliest future
     // "simplification" and would silently start paging on warnings.
+    // The two rules are now DIFFERENT TYPES, and that asymmetry is the point:
+    // `git_data_boot_fatal` was adopted as `sentry_alert` by #7650 Phase 2;
+    // `git_data_boot_warning` landed on main afterwards, so it is still on the
+    // deprecated type and is tracked for a later migration. Asserting both as
+    // `sentry_issue_alert` would pass only until this PR merges.
     expect(tf).toContain('resource "sentry_issue_alert" "git_data_boot_warning"');
-    expect(tf).toContain('resource "sentry_issue_alert" "git_data_boot_fatal"');
-    expect(tf).toContain('name         = "git-data-boot-warning"');
-    expect(tf).toContain('name         = "git-data-boot-fatal"');
+    expect(tf).toContain('resource "sentry_alert" "git_data_boot_fatal"');
+    // Whitespace-TOLERANT. `terraform fmt` aligns `=` to the longest attribute
+    // name in the block, so the column depends on the block's OTHER attributes:
+    // the migrated `sentry_alert` shape carries `frequency_minutes`, which is
+    // longer than anything in the old `sentry_issue_alert` block and shifts every
+    // `=` right. A hardcoded run of spaces asserts the formatter's arithmetic,
+    // not the rule's name.
+    expect(tf).toMatch(/^\s*name\s*=\s*"git-data-boot-warning"$/m);
+    expect(tf).toMatch(/^\s*name\s*=\s*"git-data-boot-fatal"$/m);
   });
 });
