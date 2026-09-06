@@ -144,7 +144,17 @@ export function gitFixture(fixtureDir: string): (args: string[]) => string {
   return (args: string[]): string =>
     execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
       cwd: fixtureDir,
-      env,
+      // The cast is about the TYPE, not the value. This repo augments
+      // `NodeJS.ProcessEnv` to require `NODE_ENV`, which is the right contract for
+      // READING `process.env` and the wrong one for an env handed to a child: a
+      // child's environment is legitimately partial. The value here is not missing
+      // NODE_ENV in practice — `gitCleanEnv()` sweeps by PREFIX, so every non-`GIT_`
+      // variable the parent holds (NODE_ENV included) is carried through — so
+      // widening the declared return type instead would move the same error rather
+      // than fix it. Caught by CI's `Type-check web-platform`, not locally: the
+      // lefthook `web-platform-typecheck` step is staged-file-globbed and reports
+      // `(skip) no matching staged files` for a diff that touches this file only.
+      env: env as NodeJS.ProcessEnv,
       encoding: "utf8",
     });
 }

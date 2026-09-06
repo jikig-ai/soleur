@@ -385,6 +385,7 @@ backfill-migration
 background-tasks
 backlog
 backtick
+backticks
 badge
 bail-early
 baked-scripts
