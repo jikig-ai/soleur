@@ -38,7 +38,9 @@ _cp=$passes; _cf=$fails
 pass "accounting-control: pass() increments"
 fail "accounting-control: fail() increments (EXPECTED, retracted below)"
 if [[ "$passes" -eq $((_cp + 1)) && "$fails" -eq $((_cf + 1)) ]]; then
-  fails=$((fails - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'
+  # Retract from `cases` as well as `fails`: the control's deliberate failure is not a case the
+  # suite ran on the SUT, and leaving it counted breaks `passes + fails == cases` (ADR-193 pt 3).
+  fails=$((fails - 1)); cases=$((cases - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'
   printf '  ok   accounting-control: counters are independent (control failure retracted)\n'
 else
   printf '  [FATAL] accounting control did not behave — this suite cannot certify anything.\n' >&2
@@ -109,7 +111,7 @@ run_rt() {  # env overrides come from the caller
   GIT_DATA_BETTERSTACK_LOGS_TOKEN="${TOKEN_OVERRIDE-synthetic-token-for-tests}" \
   BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
   BETTERSTACK_ROUNDTRIP_POLL_S="${POLL_OVERRIDE:-1}" \
-  BETTERSTACK_ROUNDTRIP_DEADLINE_S="${DEADLINE_OVERRIDE:-2}" \
+  BETTERSTACK_ROUNDTRIP_DEADLINE_S="${DEADLINE_OVERRIDE:-18}" \
     bash "$SUT" 2>&1
 }
 
@@ -162,10 +164,8 @@ STUB_HTTP_CODE=202 STUB_READBACK=empty STUB_CONTROL=fail DEADLINE_OVERRIDE=18 \
 _n_tok=$(grep -oE 'ROUNDTRIP_(STORED|NOT_STORED|DARK|UNKNOWN)' "$SUT" | sort -u | wc -l)
 if [[ "$_n_tok" -eq 4 ]]; then
   pass "all four verdict tokens are distinct and present"
-  cases=$((cases - 1))
 else
   fail "expected 4 distinct verdict tokens, found ${_n_tok}"
-  cases=$((cases - 1))
 fi
 
 # BELOW THE MEASURED FLOOR, A NON-OBSERVATION IS NOT A FINDING. A budget under ADR-172's 17 s
@@ -179,10 +179,8 @@ echo "--- GUARD 2 ROW 4/5: the marker cannot satisfy any positive control ---"
 # against the payload BUILDER. The field is the property, not the source id.
 if grep -qE 'RT_PAYLOAD=.*host_name' "$SUT"; then
   fail "the marker payload carries a host_name key — it would become foreign-host liveness for the rung-2 capture"
-  cases=$((cases - 1))
 else
   pass "the marker payload carries no host_name key"
-  cases=$((cases - 1))
 fi
 
 # ROW 5 — the shared source is refused BY NAME, because its liveness is read as an any-row
@@ -194,22 +192,18 @@ _out="$(PATH="$BIN:$PATH" BETTERSTACK_QUERY_SH="$QSTUB" \
   bash "$SUT" 2>&1)" || true
 if [[ "$_out" == *"ROUNDTRIP_UNKNOWN"* && "$_out" == *"2457081"* ]]; then
   pass "writing to the shared control source 2457081 is refused by name"
-  cases=$((cases - 1))
 else
   fail "the shared control source was not refused" "$_out"
-  cases=$((cases - 1))
 fi
 
 echo "--- GUARD 3: the ingest credential's destination is genuinely pinned ---"
 assert_dest() {  # $1=name $2=url $3=refused|accepted
   local out
-  cases=$((cases + 1))
   out="$(PATH="$BIN:$PATH" BETTERSTACK_QUERY_SH="$QSTUB" \
     GIT_DATA_BETTERSTACK_LOGS_TOKEN="synthetic-token-for-tests" \
     BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
-    BETTERSTACK_ROUNDTRIP_POLL_S=1 BETTERSTACK_ROUNDTRIP_DEADLINE_S=2 \
+    BETTERSTACK_ROUNDTRIP_POLL_S=1 BETTERSTACK_ROUNDTRIP_DEADLINE_S=18 \
     GIT_DATA_BETTERSTACK_INGEST_URL="$2" bash "$SUT" 2>&1)" || true
-  cases=$((cases - 1))
   if [[ "$3" == refused ]]; then
     if [[ "$out" == *"refusing to forward the credential"* ]]; then pass "$1"; else fail "$1" "$out"; fi
   else
@@ -257,14 +251,14 @@ fi
 # ── Anti-vacuity floor ───────────────────────────────────────────────────────────────────────
 # Reports with printf + exit, NEVER through fail(): a floor routed through the helper it
 # backstops cannot witness that helper being disarmed (ADR-193, AP-023).
-# FLOOR = the as-written count, derived by running the suite rather than estimated: 18 real
+# FLOOR = the as-written count, derived by running the suite rather than estimated: 20 real
 # assertions + the 2 the accounting control contributes (it retracts its deliberate failure from
 # `fails`, not from `cases`).
-if [[ "$cases" -lt 20 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is 20.\n' "$cases" >&2
+if [[ "$cases" -lt 21 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is 21.\n' "$cases" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s cases ran (floor 20)\n' "$cases"
+printf '  ok   anti-vacuity floor: %s cases ran (floor 21)\n' "$cases"
 
 if [[ "${#FAILURES[@]}" -ne "$fails" ]]; then
   printf '  FAIL LEDGER: %s failures counted but %s recorded — fail() was tampered with.\n' \

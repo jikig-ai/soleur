@@ -1761,6 +1761,30 @@ for _phrase in 'DARK FOR EVERY PRODUCER' 'NEVER STORED A ROW' 'CONTROL READ ALSO
   fi
 done
 
+# PAIRING, not just presence. The loop above asserts each phrase exists on both sides and the
+# check below asserts the headings are distinct — but neither pins WHICH phrase gates WHICH
+# heading. Swap two and every assertion stays green while the operator is handed the wrong next
+# action, and the actions genuinely differ (wait on #7811 / check the source name / the query
+# path is the suspect). Assert that each phrase's grep is followed by the heading that matches it.
+declare -A _pair=(
+  ['DARK FOR EVERY PRODUCER']='dark for EVERY producer'
+  ['NEVER STORED A ROW']='never stored a row'
+  ['CONTROL READ ALSO FAILED']='instrument itself is unusable'
+)
+for _ph in "${!_pair[@]}"; do
+  cases=$((cases + 1))
+  # The heading echo is the first `### Rung-2 rehearsal: TRANSIENT` line AFTER the phrase's grep.
+  _got=$(awk -v ph="$_ph" '
+    index($0, ph) && /grep -q/ { hunting = 1; next }
+    hunting && /### Rung-2 rehearsal: TRANSIENT/ { print; exit }
+  ' "$WF")
+  if [[ "$_got" == *"${_pair[$_ph]}"* ]]; then
+    pass "TRANSIENT branch '${_ph}' gates the heading that matches it"
+  else
+    fail "TRANSIENT branch '${_ph}' gates the WRONG heading" "got: ${_got:-<none>}"
+  fi
+done
+
 # The three branches must produce THREE DIFFERENT headings. Identical headings would satisfy
 # the greps above while restoring exactly the single-sentence behaviour this replaces.
 cases=$((cases + 1))
@@ -1772,13 +1796,13 @@ else
   fail "TRANSIENT headings are not distinct" "branches=${_n_head} distinct=${_n_uniq}"
 fi
 
-if [[ "$cases" -lt 79 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 79.\n' "$cases" >&2
+if [[ "$cases" -lt 82 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 82.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 79)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 82)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression

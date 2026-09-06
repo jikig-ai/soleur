@@ -558,6 +558,13 @@ FATAL_SQL="
 # dark first rehearsal burns its 16-minute poll before saying "no verdict" rather than "dark boot".
 # Accepted rather than special-cased: distinguishing the two costs a vendor-error-string match, and
 # a string match on a vendor 500 is exactly the kind of guard that rots silently.
+#
+# (#7855) SUPERSEDED — see the composed control read below. The reasoning above is sound and its
+# conclusion was still wrong: the discriminator is not the vendor error string at all, it is a
+# CONTROL READ against a different source, with the codes carried only as the reason. The hot and
+# archive arms do in fact fail with different codes (701 vs 669, both measured 2026-09-04), so a
+# string-keyed classifier would have rotted exactly as predicted — by a route this comment did not
+# consider. Recorded in the ADR-192 amendment.
 export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
 
 _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
@@ -614,13 +621,35 @@ if [[ "$anchor_rc" -ne 0 ]]; then
   # pinning the former to $QUERY keeps both legs on ONE transport, so a test that stubs the
   # capture cannot leave the control read reaching the real network.
   #
+  # BS_CONTROL_WINDOW is pinned at 6h rather than inherited: it is deliberately far shorter than
+  # this script's own 30-day target WINDOW, because the control asks "is the warehouse storing
+  # NOW", not "has it ever". Pinning it makes that asymmetry a decision on the record instead of
+  # a default nobody chose. It cannot simply reuse $WINDOW — that is a ClickHouse INTERVAL
+  # expression, not a `--since` duration.
+  #
   # The assignments ride on a COMMAND SUBSTITUTION, whose subshell contains them: classify's
   # entire contract is stdout plus a return code, so nothing is lost by running it in a
   # subshell, and BS_TABLE is not disturbed for the arms below.
+  # BOTH LEGS ON ONE CONTRACT, not merely one script. The target read runs `bash "$QUERY"`, which
+  # needs no exec bit; the library refuses a non-executable script with TRANSPORT_FAIL. A $QUERY
+  # that is readable but not executable would therefore make the target read work and the control
+  # read always answer TRANSPORT_FAIL — collapsing all three states into the "instrument unusable"
+  # arm with the suite green. Assert the stronger of the two requirements up front.
+  if [[ ! -x "$QUERY" ]]; then
+    transient "TRANSIENT: the CONTROL READ ALSO FAILED — the query script at ${QUERY} is not executable, so the control leg cannot run and this run cannot classify the target read's failure." \
+              "Target read exited ${anchor_rc}."
+  fi
+
+  # The control source's identity is declared once and shared with the round-trip probe, so that
+  # probe's write-refusal is DERIVED from this control rather than restated beside it.
+  # shellcheck source=../lib/betterstack-sources.sh
+  source "${REPO_ROOT}/scripts/lib/betterstack-sources.sh"
+
   _ctl_token="$(
-    BS_TABLE=t520508_soleur_inngest_vector_prd_3_logs \
-    BS_TABLE_S3=t520508_soleur_inngest_vector_prd_3_s3 \
+    BS_TABLE="$BS_CONTROL_TABLE" \
+    BS_TABLE_S3="$BS_CONTROL_TABLE_S3" \
     BETTERSTACK_QUERY_SCRIPT="$QUERY" \
+    BS_CONTROL_WINDOW=6h \
       bs_absence_classify
   )"
   _anchor_tail="$(printf '%s\n' "$anchor_out" | tail -5)"
@@ -704,9 +733,12 @@ if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
     bash "$_probe" >/dev/null 2>&1 || _probe_rc=$?
   case "$_probe_rc" in
     0)
-      # Source live, this host silent. That IS a statement about the host, so fall through to the
-      # host read below and let it produce the verdict.
-      printf 'anchor: no foreign-host rows; ingest probe says the source is ACCEPTING (single-tenant source, expected)\n' >&2
+      # The source ACKNOWLEDGED a write. That is not storage (#7855) — measured on this source,
+      # a 2xx-acknowledged marker was never retrievable — so this is weaker than it reads: it
+      # establishes reachability and credential validity, not that this host's rows could have
+      # landed. Falling through to the host read is still right, because the host read is what
+      # produces the verdict, but the verdict it produces inherits this weakness.
+      printf 'anchor: no foreign-host rows; ingest probe says the source ACKNOWLEDGED a write (not storage — see ADR-192)\n' >&2
       ;;
     4)
       transient "TRANSIENT: no foreign-host rows, and the ingest probe reports the source REFUSING" \
@@ -773,8 +805,12 @@ if ! grep -q 'boot_complete' <<<"$host_out"; then
             "still in progress, or it died before reaching a stage that can emit to Better Stack at" \
             "all. Since #7460 only \`stage:bootcmd_start\` is Sentry-only by construction; the other" \
             "eight stages post to Better Stack from a baked token, so silence here means the host" \
-            "died before runcmd, the baked token did not load, or the ingest POST failed — check" \
-            "Sentry for \`stage:betterstack_ingest\`, which reports exactly that."
+            "died before runcmd, the baked token did not load, the ingest POST failed, OR the POST" \
+            "SUCCEEDED AND THE ROW WAS NOT STORED (#7855: measured 2026-09-06 on this very source —" \
+            "a 2xx-acknowledged marker was never retrievable and the table still did not exist)." \
+            "The Sentry \`stage:betterstack_ingest\` row already consulted above reports the POST" \
+            "OUTCOME, which is the acknowledgement — so a clean row there does not exclude the" \
+            "fourth cause, and this run cannot distinguish it without a readback (#7855)."
 fi
 
 _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"

@@ -1123,22 +1123,26 @@ fi
 # ANCHORED ON THE CALL SHAPE, not on `transient(`: that pattern matches only the DEFINITION, so
 # an enumerator keyed on it would report one arm forever and could never see a new one. The plan
 # named `transient(` as shorthand for the chokepoint; the assembly it describes is the call sites.
-_g1_arms=0
-_g1_bad=0
-while IFS= read -r _g1_line; do
-  _g1_arms=$((_g1_arms + 1))
-  if printf '%s' "$_g1_line" | grep -qE 'unreachable or unauthorised'; then
-    _g1_bad=$((_g1_bad + 1))
-    fail "GUARD1/enum: a transient() arm names an unmeasured cause at line ${_g1_line%%:*}"
-  fi
-done < <(grep -nE '^[[:space:]]*transient ' "$SUT")
+# ANCHORED ON THE CALL SHAPE for the ARM COUNT, but the PHRASE scan runs over the whole file's
+# non-comment lines. Measured: the previous form grepped only lines matching `^\s*transient `,
+# i.e. the FIRST line of each call — and all three arms this issue adds are multi-line
+# continuations, so a cause-naming phrase on a continuation line scored ZERO. The guard was
+# narrower than the property it names, which is the defect class this whole PR is about.
+#
+# COMMENTS ARE STRIPPED FIRST. The capture documents the retired phrase in prose explaining why
+# it was wrong, so a raw whole-file grep matches that comment and fails a correct file — the
+# collision that always arises when a task requires both "assert X absent" and "document X".
+_g1_arms=$(grep -cE '^[[:space:]]*transient ' "$SUT")
+_g1_bad=$(grep -vE '^[[:space:]]*#' "$SUT" | grep -cE 'unreachable or unauthorised' || true)
 if [[ "$_g1_bad" -eq 0 ]]; then
-  pass "GUARD1/enum: no transient() arm names a cause the run did not measure (${_g1_arms} arms)"
+  pass "GUARD1/enum: no executable line names a cause the run did not measure (${_g1_arms} transient arms)"
+else
+  fail "GUARD1/enum: ${_g1_bad} executable line(s) name an unmeasured cause"
 fi
-# ANTI-VACUITY FLOOR FOR THE ENUMERATOR ITSELF (mutation 6). Change the pattern to a token
-# present nowhere and the loop reports "0 arms checked" and exits 0. The floor fires on its own
-# emptiness. It reports with printf + exit, NEVER through fail() — a floor routed through the
-# helper it backstops cannot witness that helper being disarmed (ADR-193, AP-023).
+# ANTI-VACUITY FLOOR FOR THE ENUMERATOR ITSELF (mutation 6). Change either pattern to a token
+# present nowhere and the scan reports "0 arms" and passes. The floor fires on its own emptiness.
+# It reports with printf + exit, NEVER through fail() — a floor routed through the helper it
+# backstops cannot witness that helper being disarmed (ADR-193, AP-023).
 if [[ "$_g1_arms" -lt 6 ]]; then
   printf '  FAIL GUARD1/enum floor: only %s transient() arms enumerated (floor 6) — the pattern matched nothing.\n' "$_g1_arms" >&2
   exit 1

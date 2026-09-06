@@ -823,8 +823,13 @@ its no-`*)`-arm `case`).
     returns 1, and `bash scripts/lint-orphan-test-suites.sh` passes.
     `plugins/soleur/test/fixture-relative-assert.baseline.txt` is regenerated in the same commit via
     `bash plugins/soleur/test/fixture-relative-assert.test.sh --write-baseline`.
-12. `.github/workflows/scheduled-followthrough-sweeper.yml` carries `BETTERSTACK_LOGS_TOKEN` in its
-    `env:` block.
+12. `.github/workflows/scheduled-followthrough-sweeper.yml` carries **`GIT_DATA_BETTERSTACK_LOGS_TOKEN`**
+    in its `env:` block, and does **not** carry `BETTERSTACK_LOGS_TOKEN`.
+    **Corrected at review (2026-09-06):** this AC originally named `BETTERSTACK_LOGS_TOKEN`, which no
+    follow-through reads — the probe reads only the `GIT_DATA_` one. Wiring the SHARED source's write
+    credential into a job that runs every registered follow-through, for zero consumers, is the exact
+    thing the probe's Rule 2 exists to prevent. The AC asserted the wrong variable and would have been
+    satisfied by a diff that made the codebase worse.
 13. **Scope boundary:** the diff changes zero Better Stack ingest-URL literals.
     `git diff origin/main -- . | grep -E '^[+-].*betterstackdata\.com'` returns nothing **except** the
     test fixtures added by AC7, which are synthetic (`evil.com`, `attacker.example.org`) or the two
@@ -869,7 +874,7 @@ its no-`*)`-arm `case`).
 | T8 | POST 202 and a readback returning the marker | The follow-through runs | `ROUNDTRIP_STORED`, exit 0, latency recorded |
 | T9 | POST 202 and a readback returning nothing past the deadline | The follow-through runs | `ROUNDTRIP_NOT_STORED` on its **own** exit code — the H5 decider |
 | T10 | POST 202, readback empty, but the deadline was below the measured floor | The follow-through runs | `ROUNDTRIP_UNKNOWN`, never `NOT_STORED` |
-| T11 | A row that arrives after the deadline | The next run re-reads before emitting | `ROUNDTRIP_STORED` with the longer latency, not a false `NOT_STORED` |
+| T11 | A row that arrives after the deadline | ~~The next run re-reads before emitting~~ | **UNIMPLEMENTABLE AS WRITTEN, corrected at review (2026-09-06).** `RT_MARKER` is unique per invocation, so by construction no later run can re-read an earlier run's marker — there is no cross-run state and adding some would mean persisting a marker id across sweeps. The real mitigation is weaker and worth stating honestly: a late row is *not* recovered, but the next sweep runs a FRESH round trip within 24h, and on the closed set an rc=0 leaves the tracker closed. So a one-off latency excursion produces one `ROUNDTRIP_NOT_STORED` comment that the following sweep does not repeat, rather than a self-correcting re-read. |
 | T12 | The warehouse still dark | The follow-through runs | `ROUNDTRIP_DARK` on a distinct exit code; no latency recorded |
 | T13 | A `host_name` key added to the marker payload | Guard 2 runs | Non-zero — the marker would satisfy `ANCHOR_SQL` |
 | T14 | An `ANCHOR_SQL` result containing a marker row | The capture suite runs | It does not read as foreign-host liveness |
@@ -906,7 +911,7 @@ superset. Product assessed NONE and the mechanical override did not fire.
 | `INGEST_DARK` cannot distinguish a refusing warehouse from every control producer stopping at once | Recorded as an honest limit in code and in the sentence, mirroring `betterstack-assert-absence.sh`. It still correctly declines to blame git-data. |
 | The first successful round-trip write permanently creates the table, erasing `CLUSTER_DOESNT_EXIST` for `2734275` | Recorded in the ADR-192 amendment as a designed consequence, not discovered later. The instrument consumes its own discriminator exactly once. |
 | The readback predicate is authored blind against a source that never stored a row | Phase 3.9; the first live run is expected to be a measurement, and `ROUNDTRIP_UNKNOWN` is the correct outcome until the shape is confirmed. |
-| A latency excursion is misread as vendor data loss | Below-floor degrades to `ROUNDTRIP_UNKNOWN`; a late row is re-read once before any `NOT_STORED` (T10, T11). |
+| A latency excursion is misread as vendor data loss | Below-floor budget degrades to `ROUNDTRIP_UNKNOWN` and is now checked BEFORE the write (T10). The "a late row is re-read once" mitigation was **removed at review** — it describes a mechanism that cannot exist (see T11). Residual accepted: a single excursion yields one `NOT_STORED` comment; the next sweep re-tests within 24h. |
 | The new suite is an orphan and its guards never gate | Registered in `scripts/test-all.sh` with the baseline regenerated; AC11. |
 | The sweeper cannot POST and the fault is laundered as TRANSIENT | Ingest token wired unconditionally; AC12. |
 | Renaming the probe's token breaks a consumer | No consumer string-matches it (verified); AC8 keeps the case count from silently dropping. |
