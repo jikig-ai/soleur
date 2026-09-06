@@ -166,6 +166,26 @@ mkstub 'OPEN|BLOCKED|true' "$RUNNING_CHECKS"
 out="$(run 7778 --interval 10 --max-polls 2 --heartbeat-every 1)"
 [[ "$out" == *"(poll 1/2)"* && "$out" == *"(poll 2/2)"* ]] && ok "T14 each line carries (poll n/MAX) — heartbeats are unique, not byte-identical" || no "T14 poll counter" "out=[$out]"
 
+# ── T15: the ordering bug, found by this script ON ITS OWN PR ───────────────────
+# Green + auto-merge OFF + a mergeState that CANNOT merge. The first cut ran the
+# "AUTO-MERGE NOT ARMED, needs an explicit merge" branch BEFORE the mergeState dispatch and
+# special-cased only DRAFT — so a green BEHIND PR was told to merge something GitHub would refuse.
+# MEASURED live: it printed `ALL GREEN … needs an explicit merge` at mergeState=BEHIND.
+# Fixing DRAFT alone fixed the instance and left the class; this arm pins all four states.
+for _ms in BEHIND DIRTY BLOCKED DRAFT; do
+  mkstub "OPEN|${_ms}|false" "$GREEN_CHECKS"
+  out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+  if [[ "$rc" -ne 0 && "$out" == *"${_ms}"* && "$out" != *"needs an explicit merge"* ]]; then :; else
+    no "T15 green + automerge-off + ${_ms} must not advise a merge" "rc=$rc out=$out"; _t15=bad
+  fi
+done
+[[ "${_t15:-ok}" == "ok" ]] && ok "T15 a green PR that CANNOT merge (BEHIND/DIRTY/BLOCKED/DRAFT) is never advised to merge"
+
+# ── T16: the positive control — CLEAN + automerge off DOES advise a merge ────────
+mkstub 'OPEN|CLEAN|false' "$GREEN_CHECKS"
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+[[ "$rc" -eq 0 && "$out" == *"needs an explicit merge"* ]] && ok "T16 CLEAN + auto-merge off still DOES advise the explicit merge (T15 is not just 'never advise')" || no "T16 clean advises merge" "rc=$rc out=$out"
+
 # ── T7 a gh failure must not kill the loop ───────────────────────────────────────
 printf '#!/usr/bin/env bash\nexit 1\n' > "$STUB/gh"; chmod +x "$STUB/gh"
 # RE-SCOPED (not deleted): this asserted the OLD rendering, `UNKNOWN|UNKNOWN|automerge=false 0/0`,
@@ -191,9 +211,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 19 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 19.\n' "$_ran" >&2
+if [[ "$_ran" -lt 21 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 21.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 19)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 21)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1

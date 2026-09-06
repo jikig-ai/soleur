@@ -135,15 +135,6 @@ while :; do
 
   # Auto-merge silently switching off is a state the operator must hear about: the PR then sits
   # green and unmerged forever, which reads exactly like "still waiting".
-  # `mergestate != DRAFT` is load-bearing: `gh pr view --json state` returns OPEN for a draft
-  # (isDraft is a separate field this never queried), so without it a green DRAFT exited rc=0
-  # telling the operator to merge a PR GitHub will refuse. Reachable mid-watch too — converting
-  # back to draft disarms auto-merge, which is exactly this branch's condition.
-  if [[ "$automerge" == "false" && "$state" == "OPEN" && "$mergestate" != "DRAFT" \
-        && "$tot" -gt 0 && "$pend" -eq 0 && "$fail" -eq 0 && "$cancel" -eq 0 ]]; then
-    printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge.\n' "$PR"; exit 0
-  fi
-
   if [[ "$tot" -gt 0 && "$pend" -eq 0 ]]; then
     if [[ "$fail" -gt 0 || "$cancel" -gt 0 ]]; then
       # UNSTABLE/CLEAN + auto-merge armed means the failing check is NOT required — GitHub still
@@ -173,6 +164,18 @@ while :; do
       # and it is the sibling of the DIRTY miss found by dogfooding.
       BLOCKED) printf 'CHECKS GREEN BUT BLOCKED — PR #%s is held by branch protection outside the check list (a required review, an unposted required context, or a merge queue). Auto-merge will not resolve it.\n' "$PR"; exit 1 ;;
     esac
+
+    # ORDER IS THE POINT. This branch must run AFTER the mergeStateStatus dispatch above, never
+    # before it. The first cut ran it first and special-cased only DRAFT — so a green PR that was
+    # BEHIND (or DIRTY, or BLOCKED) with auto-merge off was told "ALL GREEN, needs an explicit
+    # merge" for a merge GitHub would refuse. MEASURED on this script's own PR: it printed exactly
+    # that at `mergeState=BEHIND`. Fixing DRAFT alone fixed the INSTANCE and left the CLASS; the
+    # dispatch above is the complete set of "cannot merge right now" states, so deferring to it is
+    # the fix that does not need revisiting per-state.
+    if [[ "$automerge" == "false" && "$state" == "OPEN" \
+          && "$fail" -eq 0 && "$cancel" -eq 0 ]]; then
+      printf 'CHECKS SETTLED, ALL GREEN, AUTO-MERGE NOT ARMED — PR #%s needs an explicit merge (mergeState=%s).\n' "$PR" "$mergestate"; exit 0
+    fi
   fi
 
   if [[ "$n" -ge "$MAX_POLLS" ]]; then
