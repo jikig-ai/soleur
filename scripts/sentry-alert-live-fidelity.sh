@@ -45,6 +45,20 @@
 # Exit 1 = a divergence, or the probe could not establish that it checked anything.
 set -euo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so SENTRY_AUTH_TOKEN is printed the moment it is used. `${VAR:+x}`
+# is non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it on
+# this very line. Tracing stays available with the credential unset, so this
+# refuses a leak without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CAPTURE="${SENTRY_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json}"
 
