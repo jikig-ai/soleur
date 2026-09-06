@@ -1,10 +1,10 @@
 ---
-title: "chore(sentry-infra): retire the 27 adoption blocks, settle the byok-cap fallthrough, heartbeat the drift cron, and repair the R2 rollback runbook"
+title: "chore(sentry-infra): retire the 27 adoption blocks, settle the byok-cap fallthrough, and heartbeat the drift cron"
 date: 2026-09-06
 slug: chore-sentry-adoption-cleanup
 branch: feat-one-shot-7826-sentry-adoption-cleanup
 issue: 7826
-closes: [7826, 7829, 7834, 7836]
+closes: [7826, 7829, 7834]
 lane: cross-domain
 type: chore
 priority: p2-medium
@@ -211,193 +211,257 @@ Checked all 63 open `code-review` issues against every path in `## Files to Edit
 *(Lane note: no `spec.md` exists for this branch, so `lane:` defaulted to `cross-domain` fail-closed
 per the TR2 rule.)*
 
-## Late Reconciliation — three more briefed claims that did not survive
+## Scope change after plan review — #7836 is split out
 
-These are in addition to the table under `## Research Insights`. All were measured after that table
-was written, and each one changes the work rather than merely annotating it.
+**This plan covers #7826, #7829 and #7834 only.** #7836 (the inoperable R2 state-rollback runbook)
+moves to its own PR, tracked by
+`knowledge-base/project/plans/2026-09-06-chore-r2-rollback-runbook-repair-plan.md`.
+
+Both review lenses converged on the split independently, and a third fact settled it: #7836 shares no
+file, no gate and no failure mode with the other three, yet under the single-PR shape it inherited
+their merge hold on PR 7866 — holding a **GDPR Art. 30 register correction** hostage to an unrelated
+Sentry apply. Operator confirmed the split.
+
+`ADR-031-sentry-as-iac.md` stays **here**, not in the #7836 PR: its false sentences are about the
+adoption blocks (*"the root is not reproducible from zero until they are removed"*), which is #7826's
+story, not R2's.
+
+## Late Reconciliation — briefed claims that did not survive
+
+In addition to the table under `## Research Insights`.
 
 | Claim as briefed | Measured reality | Plan response |
 |---|---|---|
-| #7829: `NoOne` on `byok_cap_exceeded` may be a defect — "a BYOK spend-cap breach currently pages no one" | The **outcome** is real; the **defect** framing is not. `NoOne` here is a documented, deliberate severity split. | **No config change.** Record the verification in-file so it is not re-filed. See §"#7829 resolves against the change". |
-| #7836: "**every** Terraform root in this repo has a rollback runbook that cannot run" | Exactly **one** root has a rollback section at all (`infra/github/README.md` §"Phase 5 — Rollback"). Four of five live roots have no rollback section; two have no README. | Scope the repair to that one README **plus ADR-006**, which is where the false capability claim actually originates. |
-| #7836: `apply-sentry-infra.yml` carries the stale assumption | It carries the **correct** statement already (anchor: *"Nor is R2 a restore path."*, naming `NotImplemented`, the 2026-09-04 measurement, the passing control, and #7836). | **No edit.** It is the house precedent the replacement text should read like — and it is the one file this change set must not touch (PR 7866 owns it). |
+| #7829: `NoOne` on `byok_cap_exceeded` may be a defect — "pages no one" | The **outcome** is real; the **defect** framing is not. It is a documented, deliberate severity split. | **No config change.** Record the verification in-file and on the issue. See §"#7829 resolves against the change". |
+| The `NoOne` intent is documented "twice" in `issue-alerts.tf` | **Once.** The `NoOne`-semantics comment sits above `sentry_issue_alert.git_data_boot_warning` — a different rule, a different family, landed later (#7805). It documents the house pattern, not this rule's intent. #7829 already cites it. | The load-bearing evidence is the single Rule 1 / Rule 2 comment plus M3. Stated accurately below; AC6 must not repeat the mis-citation. |
 
 ### #7829 resolves against the change
 
-The brief asked to verify the premise before editing. The premise has two limbs and they resolve
-differently:
+The brief asked to verify the premise before editing. Two limbs, resolving differently:
 
-- **Limb 1 — no ownership rule — TRUE.** Measurement M3: the ownership endpoint returns HTTP 200
-  with `"raw":null` and `"schema":null`, against a passing control probe on the project itself. So
+- **Limb 1 — no ownership rule — TRUE.** M3: the ownership endpoint returns HTTP 200 with
+  `"raw":null` and `"schema":null`, against a passing control probe on the project itself. So
   `target_type = "issue_owners"` resolves to nobody and `fallthrough_type` alone decides delivery.
-- **Limb 2 — therefore this is a defect — FALSE.** `issue-alerts.tf` documents the exact opposite,
-  twice, in prose written by the author of these rules:
-  - At the `NoOne` semantics comment: *"`fallthrough_type = "NoOne"` is what makes this NON-paging:
-    IssueOwners has no ownership rule on this project, so the fatal router's "ActiveMembers"
-    fallthrough pages the solo founder. NoOne means it lands in the issue stream to be read, not
-    pushed. **That is the whole severity split.**"*
-  - Directly above the resource itself, as one half of a numbered pair: *"Rule 1 — GDPR Art. 33
-    breach … **Highest urgency**: tight frequency + notify ActiveMembers fallthrough"* versus
-    *"Rule 2 — BYOK delegation cap exceeded (hourly | daily). **Lower urgency**: wider frequency +
-    quieter `NoOne` fallthrough."*
+- **Limb 2 — therefore a defect — FALSE.** The comment directly above the resource is one half of a
+  numbered pair: *"Rule 1 — GDPR Art. 33 breach … **Highest urgency**: tight frequency + notify
+  ActiveMembers fallthrough"* versus *"Rule 2 — BYOK delegation cap exceeded (hourly | daily).
+  **Lower urgency**: wider frequency + quieter `NoOne` fallthrough."* The severity split is the
+  design, stated at the resource, contrasted against the one rule of the pair that *is* meant to page.
 
-The file therefore already answers the issue's own step 2 ("Confirm intent"): the setting is
-intentional, its rationale is recorded at the resource, and it is contrasted explicitly against the
-one rule in the pair that *is* meant to page. Flipping it to `ActiveMembers` would override a
-recorded design decision and start paging the founder on every spend-cap breach — a live paging
-change made on a premise the codebase falsifies.
-
-**Deliverable for #7829 is therefore a verification record, not a config change**: a short comment at
-the resource citing #7829, M3, and the Rule 1 / Rule 2 split, so the next reader who notices the
-`NoOne` outlier finds the answer instead of re-filing it. If the operator decides a spend-cap breach
-*should* page, that is a new decision on a settled question, not this issue.
+Flipping to `ActiveMembers` would override a recorded decision and start paging the founder on every
+spend-cap breach. **The deliverable is a verification record in two places** — the `.tf` (for the next
+reader of the file) and a closing comment on #7829 (for the next triager, who will never open the
+`.tf`). M3 is dated because it decays: adding a Sentry ownership rule later moots `NoOne` in the
+other direction.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** a duplicated or missing live Sentry paging rule. The
-worst instance is `byok-art-33-breach` — the rule that starts the GDPR Art. 33 72-hour notification
-clock on a cross-tenant BYOK key leak. Removing an `import{}` for an address that was not actually
-imported turns that address into a planned CREATE against the live object; the founder then has two
-rules where one was reviewed, or a paging rule Terraform believes it owns and does not.
+**If this lands broken, the user experiences:** a duplicated, destroyed or dark live Sentry paging
+rule. The worst instance is `byok-art-33-breach`, which starts the GDPR Art. 33 72-hour notification
+clock on a cross-tenant BYOK key leak. Two symmetric ways to get there: deleting an `import{}` for an
+address that was never imported plans a **CREATE** colliding with the live rule; deleting a
+`removed{}` whose forget never executed leaves an orphan state entry with no config and plans a
+**DESTROY** of a live rule.
 
-**If this leaks, the user's data is exposed via:** no new exposure surface. The change removes
-hardcoded live Sentry instance ids from the repository (a small reduction), adds one cron monitor,
-and rewrites two documentation surfaces. It introduces no new store, no new credential, and no new
-egress path.
+**If this leaks, the user's data is exposed via:** no new exposure surface. Net reduction — hardcoded
+live Sentry instance ids leave the repository. No new store, credential, or egress path.
 
-**Brand-survival threshold:** `single-user incident` — one founder losing Art. 33 paging is the
-whole failure. `requires_cpo_signoff: true` is set in frontmatter accordingly, and
-`user-impact-reviewer` is expected at review time.
+**Brand-survival threshold:** `single-user incident`. `requires_cpo_signoff: true`;
+`user-impact-reviewer` expected at review.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
 **AC1 — the 27 adoption blocks are gone, and nothing else went with them.**
-`grep -c '^import {' apps/web-platform/infra/sentry/issue-alerts.tf` returns `0`;
-`grep -c '^removed {' …` returns `0`;
-`grep -c '^resource "sentry_alert"' …` still returns `27`;
-`grep -c '^resource "sentry_issue_alert"' …` still returns `3`.
-The three counts that must NOT change are asserted alongside the two that must, because a
-residual-zero assertion alone certifies deletion, not correct deletion.
+`grep -c '^import {' …/issue-alerts.tf` → `0`; `grep -c '^removed {' …` → `0`;
+`grep -c '^resource "sentry_alert"' …` → **still 27**; `grep -c '^resource "sentry_issue_alert"' …`
+→ **still 3**. The three counts that must not change are asserted alongside the two that must —
+a residual-zero assertion alone certifies deletion, not correct deletion.
 
-**AC2 — the deletion is exactly the trailing block, byte-anchored.** The file's last line is the
-closing `}` of `resource "sentry_alert" "zot_mirror_fallback_rate"`'s predecessor block as it stands
-before the banner, and `git diff --stat` on `issue-alerts.tf` shows deletions only (`0` insertions
-other than the #7829 comment in AC6). The removed region begins at the banner comment
-*"Forget the legacy addresses WITHOUT destroying the live objects."* and runs to EOF.
+**AC2 — the deletion region is byte-anchored, and the anchor is the right block.**
+Delete from the banner comment *"Forget the legacy addresses WITHOUT destroying the live objects."*
+through EOF (including the blank line preceding the banner). **The new last line is the closing `}`
+of `resource "sentry_alert" "zot_mirror_fallback_rate"`, which is itself the final resource block** —
+nothing sits between it and the banner. `git diff --stat` shows deletions only in this region.
+> Plan-review caught this AC naming *"`zot_mirror_fallback_rate`'s predecessor"*, which resolves to
+> `workspaces_luks_drift` — i.e. it instructed deleting a live paging rule. AC1 and AC15 would have
+> caught it, but the AC billed as byte-precise was off by one block.
 
 **AC3 — no hardcoded live instance id survives.**
-`grep -c 'var.sentry_org}/[0-9]' apps/web-platform/infra/sentry/issue-alerts.tf` returns `0`.
-This is the actual property #7826 exists to restore (the root is rebuildable from an empty state),
-distinct from AC1's block count.
+`grep -c 'var.sentry_org}/[0-9]' …/issue-alerts.tf` → `0`. This is the property #7826 exists to
+restore (the root is rebuildable from empty state), distinct from AC1's block count.
 
-**AC4 — the file header no longer describes a mechanism that is gone.** The `ADOPTION MECHANISM`
-paragraph is rewritten to past tense, and the sentence *"The 27 `import{}`/`removed{}` blocks stay in
-config until AC15-AC22 pass on `main`"* is removed. `grep -c 'stay in config until' …` returns `0`,
-and the replacement paragraph names #7826 and the date the blocks were retired. Assert the sentence
-the diff **adds**, not only the disappearance of the old one.
+**AC4 — every stale claim in the file header is corrected, not just the mechanism paragraph.**
+Three separate falsehoods, all in scope:
 
-**AC5 — `terraform fmt -check -recursive` passes** over `apps/web-platform/infra/**`, i.e. the
-deletion left no doubled blank line where the two banner comments were.
+1. the `ADOPTION MECHANISM` paragraph → past tense;
+2. the sentence *"The 27 `import{}`/`removed{}` blocks stay in config until AC15-AC22 pass on `main`"*
+   → removed (`grep -c 'stay in config until'` → `0`);
+3. the opening enumeration *"27 of the 29 rules are now managed as `sentry_alert` … **Two** remain on
+   the deprecated `sentry_issue_alert` … `auth-per-user-loop` and `sandbox-startup-failure`"* →
+   corrected to **three** survivors, naming `git_data_boot_warning` as the third.
+Assert the sentences the diff **adds**, not only the disappearance of the old ones. The replacement
+must also record that each address's adopted live id now exists only in state and in the committed
+capture — the `import{}` blocks were the last committed record of that mapping.
 
-**AC6 — #7829's verification is recorded at the resource.** A comment immediately above
-`resource "sentry_alert" "byok_cap_exceeded"` cites #7829, the ownership-endpoint measurement (M3),
-and the Rule 1 / Rule 2 severity split. `grep -c 'fallthrough_type = "NoOne"' …` still returns the
-**same count as on `origin/main`** — this AC asserts the setting did **not** change.
+**AC5 — `terraform fmt -check -recursive`** passes over `apps/web-platform/infra/**`.
 
-**AC7 — the cron monitor exists and matches house style.**
-`apps/web-platform/infra/sentry/cron-monitors.tf` gains exactly one
-`resource "sentry_cron_monitor" "scheduled_sentry_alert_drift"` with
-`name = "scheduled-sentry-alert-drift"`, `schedule = { crontab = "15 7 * * *" }` (matching the
-Inngest trigger in `cron-sentry-alert-drift.ts`), `timezone = "UTC"`, both thresholds `1`, and
-attributes in the fixed order the other 55 resources use. `grep -c '^resource "sentry_cron_monitor"'`
-returns `56`.
+**AC6 — #7829's fallthrough is provably untouched, asserted on the DIFF not a file-wide count.**
+`git diff origin/main -- apps/web-platform/infra/sentry/issue-alerts.tf | grep -c '^[+-].*fallthrough_type'`
+→ `0`.
+> A file-wide `grep -c 'fallthrough_type = "NoOne"'` is **defeated by this PR's own mandated comment**.
+> It returns 3 today (one comment at the `git_data_boot_warning` semantics note, plus the two real
+> values). AC6 requires adding a comment that quotes the literal → count becomes 4 → the AC reds on a
+> correct change. Worse, the failure direction: flip line 531 to `ActiveMembers` **and** add the
+> quoting comment and the count stays 3 — **the AC passes on a flipped live paging rule.** The diff
+> assertion is the invariant; the count is a co-varying proxy.
 
-**AC8 — the heartbeat step is the LAST step of the job, and its status is an allowlist.**
-`.github/workflows/scheduled-sentry-alert-drift.yml` ends in a step named exactly
-`Sentry check-in (final)` with `if: always()`, `continue-on-error: true`,
-`uses: ./.github/actions/sentry-heartbeat`, `monitor-slug: scheduled-sentry-alert-drift`, and
-`status: ${{ (steps.probe.outputs.verdict == 'clean' || steps.probe.outputs.verdict == 'drift') && 'ok' || 'error' }}`.
-The expression is an **allowlist of good verdicts** — an unset output from a crashed probe falls to
-`error`, which is the behaviour the sibling workflows' comments call load-bearing.
+**AC7 — the verification record is written where each audience will find it.**
+(a) A comment above `resource "sentry_alert" "byok_cap_exceeded"` citing #7829, the **dated** M3
+measurement — endpoint path, `"raw":null` / `"schema":null`, and the passing control probe on
+`/projects/jikigai-eu/web-platform/` — and the Rule 1 / Rule 2 split. It must **not** cite the
+line-150 comment, which belongs to `git_data_boot_warning`; a reader who follows that lands on a
+different rule and re-files the issue anyway.
+(b) A closing comment on **#7829** carrying the same M3 evidence verbatim and the verdict. The
+`.tf` comment does not reach a GitHub triager, and `closes: 7829` would otherwise shut the issue with
+a link to a PR titled about retiring adoption blocks.
 
-**AC9 — the `(c2)` phantom-monitor test passes.** `scheduled-sentry-alert-drift` is added to
-`NON_INNGEST_MONITORS` in `apps/web-platform/test/server/inngest/function-registry-count.test.ts`
-with a comment explaining the class: the heartbeat is posted by the **GHA runner**, not the Inngest
-app process — `cron-sentry-alert-drift.ts` only dispatches and declares no `SENTRY_MONITOR_SLUG`,
-exactly like `main-health-monitor` and `scheduled-supabase-advisor-scan`. Verified by running the
-suite's own invocation, not a reconstruction of its inputs.
+**AC8 — the cron monitor exists, matches house style, and pins its firing window.**
+`cron-monitors.tf` gains exactly one `sentry_cron_monitor "scheduled_sentry_alert_drift"` with
+`name = "scheduled-sentry-alert-drift"`, `schedule = { crontab = "15 7 * * *" }` (matching
+`cron-sentry-alert-drift.ts`), `timezone = "UTC"`, both thresholds `1`, attributes in the fixed order
+the other 55 use. `grep -c '^resource "sentry_cron_monitor"'` → `56`.
+**`checkin_margin_minutes` and `max_runtime_minutes` are pinned explicitly**, not defaulted: the
+check-in arrives after Inngest dispatch latency + GHA queue + up to `timeout-minutes: 10`. Adopt the
+dispatch-hybrid siblings' generosity (`scheduled_terraform_drift` 60/15; `main_health_monitor` 90/65)
+rather than a value copied from a `schedule:`-driven monitor, which would page the founder on queue
+jitter. Add a comment noting `max_runtime_minutes` is **inert** here — a single terminal heartbeat
+sends no `in_progress` check-in, so runtime is not actually monitored.
 
-**AC10 — the parity suites pass unchanged in shape.**
-`apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts` passes, including
-`tf name-attr extraction is pinned to the resource count` (56 names, 56 resources) and
+**AC9 — the heartbeat step: allowlist status, and a backstop on the drift route.**
+`scheduled-sentry-alert-drift.yml` ends its job in a step named exactly `Sentry check-in (final)`,
+`if: always()`, `continue-on-error: true`, `uses: ./.github/actions/sentry-heartbeat`,
+`monitor-slug: scheduled-sentry-alert-drift`, and a status expression that is an **allowlist of good
+verdicts** — `clean` and `drift` → `ok`, everything else including an unset output → `error`.
+**Plus the drift backstop:** when the verdict is `drift` **and** the drift-issue filer's own step
+outcome is `failure`, the status is `error`, not `ok`.
+> Without the backstop, mapping `drift → ok` removes the last net under a route that can fail
+> silently. The workflow's own header documents the hazard (`gh issue create` hard-fails on a closed
+> milestone). Monitor says OK, no issue exists, and the run is one red row in a `workflow_dispatch`
+> tab nobody subscribes to — a real `byok-art-33-breach` drift reaching nobody, with the monitor now
+> affirmatively certifying health.
+
+**AC10 — the `(c2)` phantom-monitor test passes.** `scheduled-sentry-alert-drift` is added to
+`NON_INNGEST_MONITORS` in `function-registry-count.test.ts` with the class rationale: the heartbeat is
+posted by the **GHA runner**, not the Inngest app process; `cron-sentry-alert-drift.ts` only
+dispatches and declares no `SENTRY_MONITOR_SLUG` — same class as `main-health-monitor` and
+`scheduled-supabase-advisor-scan`. Record why declaring a `SENTRY_MONITOR_SLUG` in the dispatcher
+would be **actively wrong**: that const is consumed by `postSentryHeartbeat` in the app process, so a
+dispatcher check-in would satisfy the monitor on *"the dispatch was accepted"* — the exact failure
+mode #7834 exists to catch, producing a guard that is green precisely when the thing it watches is
+broken. Verified by the suite's own invocation, not a reconstruction of its inputs.
+
+**AC11 — the parity suites pass.** `sentry-monitor-iac-parity.test.ts` green, including
+`tf name-attr extraction is pinned to the resource count` (56/56) and
 `every workflow heartbeat slug has a cron-monitor in cron-monitors.tf`.
+> AC10's earlier draft asserted "no `name = "..."` may appear in the surrounding comment." That is a
+> phantom — `iacMonitorNames()` matches `/^\s*name\s*=\s*"([a-z0-9-]+)"/gm` and a `#`-prefixed line
+> cannot match. Dropped so the implementer does not chase it.
 
-**AC11 — the two "no heartbeat" paragraphs are gone and replaced with what is now true.**
-`grep -ci 'NO SENTRY CRON HEARTBEAT' .github/workflows/scheduled-sentry-alert-drift.yml` returns `0`;
-a `grep` for the phrase *carries no sentry-heartbeat step* over
-`apps/web-platform/server/inngest/functions/cron-sentry-alert-drift.ts`
-returns `0`. Both files instead contain a sentence naming the monitor slug and what a missed
-check-in now means. Assert the added sentences, not only the removals.
+**AC12 — the two "no heartbeat" paragraphs are replaced with what is now true.**
+`grep -ci 'NO SENTRY CRON HEARTBEAT' .github/workflows/scheduled-sentry-alert-drift.yml` → `0`; the
+matching paragraph in `cron-sentry-alert-drift.ts` no longer says the workflow carries no heartbeat.
+Both instead name the monitor slug and state what a missed check-in means — **and state the limit**:
+the monitor proves *a run happened in the window*, not *the scheduled dispatch fired*. The function
+declares both `{ cron: "15 7 * * *" }` and a manual-trigger event, so one manual run satisfies the
+monitor for the day. Inherent to heartbeat monitors; stated rather than left as an implied guarantee.
 
-**AC12 — ADR-006's false capability claim is corrected.**
-`knowledge-base/engineering/architecture/decisions/ADR-006-terraform-remote-backend-r2.md` no longer
-asserts *"with bucket versioning"* in its `## Decision` or *"State loss eliminated via bucket
-versioning"* in its `## Consequences`. Both are replaced with the measured posture and the gesture
-that actually works. `grep -ci 'bucket versioning' <adr>` returns `0`, and the ADR gains an amendment
-note dated 2026-09-06 citing #7836 and the `NotImplemented` measurement with its control.
+**AC13 — ADR-031's retired claims are corrected in the same change.**
+`ADR-031-sentry-as-iac.md` no longer asserts *"the root is not reproducible from zero until they are
+removed"* or *"The blocks stay in config until the post-merge verification passes; removing them
+earlier turns any un-imported address into a planned CREATE"*. Both become past tense with a dated
+note citing #7826. Without this the canonical ADR for this subsystem is false the moment the PR
+merges, defeating the plan's own Property 5.
 
-**AC13 — the rollback runbook runs.** `infra/github/README.md` §"Phase 5 — Rollback" no longer
-contains `list-object-versions` or `versionId`
-(`grep -c 'list-object-versions\|versionId' infra/github/README.md` returns `0`). Steps 1–2 are
-replaced by the take-a-snapshot-first gesture from the moved-block-wedge runbook
-(`terraform state pull > …` before the risky apply; `terraform state push <file>` to restore), and
-the existing step 3 caveat — *"NOT `apply -refresh-only`; the latter pulls state FROM the API and
-would reconcile the rollback away"* — survives verbatim. The R2 credential constraint is stated: the
-AWS keys must be exported **outside** `--name-transformer tf-var`, which would rewrite them to
-`TF_VAR_aws_*` and silently break backend auth.
+**AC14 — the two sibling artifacts that assert the retired counts are corrected.**
+(a) `apps/web-platform/infra/sentry/README.md` — *"root declares **27 `sentry_alert` + 2
+`sentry_issue_alert`** resources"* → `3`. Note the file **already contradicts itself today**: its
+line 5 says `27 + 3 (30 total)`. Fix the contradiction, do not merely re-state one side.
+(b) `scripts/sentry-issue-alert-create-tripwire.sh` — the error text *"Only two sentry_issue_alert
+resources may exist (auth_per_user_loop, sandbox_startup_failure)"* → three, naming
+`git_data_boot_warning`. **Prose only: the guard itself is sound** — it gates on any `create` action
+for the type, never on a count of two, so this is a stale message, not a live defect.
 
-**AC14 — the runbook is honest about what was lost.** The replacement text states plainly that R2
-provides **no** point-in-time recovery, so the snapshot is the operator's responsibility *before* the
-apply — rather than implying a restore path that does not exist. It reads like the existing correct
-precedent in `apply-sentry-infra.yml` (anchor: *"Nor is R2 a restore path."*).
-
-**AC15 — the combined plan shape is stated and matched.** The PR body records the expected
-`plan_pr` output — `1 to add` (the cron monitor), `0 to change`, `0 to destroy` — and the actual
-`plan_pr` run matches it. **`0 to change` is the assertion that #7829 was not silently flipped.**
-Any `to destroy` is an abort, not a discussion.
+**AC15 — the combined plan shape is stated, matched, and non-vacuous.**
+The PR body records the expected `plan_pr` output and the actual run matches. The assertion is that
+the literal string `Plan: 1 to add, 0 to change, 0 to destroy` **is present in a `plan_pr` job that
+actually ran** — not merely that `1 to change` is absent.
+> `plan_pr` is gated `if: github.event_name == 'pull_request' && needs.detect-changes.outputs.sentry
+> == 'true'` and hard-refuses on fork PRs. A **skipped** job emits no `Plan:` line at all, so an
+> absence assertion reads "no plan ran" as "clean."
+> And `1 to change` is **not diagnostic**: it is a whole-root aggregate, and the three surviving
+> `sentry_issue_alert` resources refresh through Sentry's deprecated endpoint. Live drift on any one
+> yields `1 to change`. On that signal, **identify the resource** — do not abort as a #7829 flip.
+> AC6's diff assertion is what actually decides the #7829 question.
 
 **AC16 — the create-side gate fires and passes for the right reason.**
-`scripts/sentry-create-gate.sh` runs in the `plan_pr` job and passes because the single planned
-create is explained by an added `+resource "sentry_cron_monitor"` block in the diff. Record the gate's
-own output line, not a restatement of it.
+`scripts/sentry-create-gate.sh` runs in `plan_pr` and passes because the single planned create is
+explained by the added `+resource "sentry_cron_monitor"` block. The gate is **address-matched**, not
+count-matched (`grep -qE "^\+[[:space:]]*resource[[:space:]]+\"${type}\"[[:space:]]+\"${name}\""`), so
+a spurious `sentry_alert.*` create cannot be explained away by the monitor block. Record the gate's
+own output line.
 
-### Merge gate (operator-mandated — blocks merge, does not block the PR)
+### Merge gate (operator-mandated)
 
-**AC17 — live state still holds exactly 27 `sentry_alert` addresses** at merge time, re-measured
-rather than carried from this plan (`terraform state list | grep -c '^sentry_alert\.'` → `27`), and
-the 27 in state are the 27 whose blocks were deleted (the M2 address-set equality, re-run).
+**AC17 — the #7826 precondition, BOTH limbs, re-measured not inherited.**
+Issue #7826 states the precondition as a conjunction. Both limbs are required:
 
-**AC18 — PR 7866 has merged AND the resulting apply on `main` is green.** Until then the merge is
-**HELD** and the operator is told. Rationale: 7866 makes the AC17 workflow step derive its expected
-counts from the `.tf` instead of a hardcoded `2`; while it is unmerged, every `push: main` apply reds
-on a false alarm and the AC19/AC20 live-fidelity probe is **skipped** under an implicit `success()`.
-Merging the 27-block removal into that state would leave the removal's own post-merge apply
-unverifiable for a reason unrelated to the removal.
+- **Limb 1a — the `sentry_alert` side.** `terraform state list | grep -c '^sentry_alert\.'` → `27`,
+  and the M2 address-set equality re-run (the 27 in state are the 27 whose blocks were deleted).
+- **Limb 1b — the `sentry_issue_alert` side, which the earlier draft omitted.**
+  `terraform state list | grep '^sentry_issue_alert\.'` returns **exactly**
+  `auth_per_user_loop`, `git_data_boot_warning`, `sandbox_startup_failure` — and no address matching
+  any of the 27 `removed{}` from-labels. This is the precondition for deleting a `removed{}`: if one
+  forget did not execute, its address sits in state with no config block once the `removed{}` goes,
+  and Terraform plans a **DESTROY of a live paging rule**. The earlier draft called the 27-address
+  equality "the strongest form of the precondition." It is one of two.
+- **Limb 2 — field-level live fidelity.** Run `scripts/sentry-alert-live-fidelity.sh` directly
+  (read-only, one GET) and record its verdict. The earlier draft substituted state *shape* for this.
+  They are different properties: address-set equality cannot see a rule that was imported but is
+  muted, renamed, or monitor-unbound. Limb 2 is also the limb that **demonstrably never ran
+  machine-verified** — the post-merge apply's fidelity probe was skipped under an implicit
+  `success()`, and exists only as a hand-check recorded in another PR's body.
 
-> **This AC depends on a concurrent session's PR and is therefore exempt from
-> `cq-ac-must-not-depend-on-concurrent-sessions` only as a HOLD, never as a pass condition.** It can
-> block the merge; it can never be marked satisfied by assumption.
+**AC18 — the verification path exists, and the hold has an exit.**
+Restated, because the earlier draft named an event that cannot occur: `apply-sentry-infra.yml`'s
+`push:` trigger is `paths:`-scoped to `apps/web-platform/infra/sentry/**` and
+`tests/scripts/lib/destroy-guard-filter-sentry.jq`. **PR 7866 touches only
+`.github/workflows/apply-sentry-infra.yml` — neither path — so merging it fires no apply on `main`
+and the hold would never lift.**
+
+Satisfied by **either**:
+
+1. 7866 merged **AND** a `workflow_dispatch` of `apply-sentry-infra.yml` on `main` reports AC17 green
+   with derived counts (27/3). *(AC17's own error text says "not a `workflow_dispatch`" — that is
+   about the `[ack-destroy]` path and does not apply to a no-change verification run. Stated inline so
+   the operator does not refuse the only available satisfier.)*
+2. **Escape hatch, needing nothing from 7866:** `gh workflow run scheduled-sentry-alert-drift.yml`
+   runs the same `sentry-alert-live-fidelity.sh` and reaches a `clean` verdict.
+
+If neither is available, the merge is HELD **and** the operator is told with a named next action.
+A hold with no exit is how a P2 cleanup becomes permanently deferred. The mechanism is explicit:
+do not run `gh pr merge --auto` until one of the two is recorded — this AC is prose, nothing in CI
+enforces it, and `wg-verified-work-ships-without-asking` otherwise arms auto-merge on green checks.
 
 ### Post-merge
 
-**AC19 — the post-merge apply on `main` is green**, and its AC17 step reports `27` / `3` derived (not
-hardcoded). If it reds, roll forward — per AC12's own finding there is no state-restore path.
+**AC19 — the post-merge apply on `main` is green**, its AC17 step reporting 27/3 derived. If it reds,
+roll forward — per the #7836 finding there is no state-restore path.
 
-**AC20 — the monitor exists in Sentry and receives its first check-in** within one cron period
-(next 07:15 UTC firing), verified by API read, not by dashboard eyeballing
-(`hr-no-dashboard-eyeball-pull-data-yourself`).
+**AC20 — the monitor receives its first check-in** within `checkin_margin_minutes` of the next
+07:15 UTC firing (the margin AC8 pins — without it this AC is not evaluable), verified by API read,
+never by dashboard (`hr-no-dashboard-eyeball-pull-data-yourself`).
 
 ## Guard Contract
 
@@ -406,100 +470,122 @@ hardcoded). If it reds, roll forward — per AC12's own finding there is no stat
 **Property.** A `scheduled-sentry-alert-drift` run that was dispatched but never executed becomes
 visible within the check-in margin, instead of being indistinguishable from a clean run.
 
-**Assembly.** Not "the set of files I edited" — the chokepoint is the three-way agreement that a
-check-in can arrive at all: (1) the heartbeat step must be the **terminal** step of the workflow's
-only job under `if: always()`, so it runs on the drift path where an earlier step exits 1; (2) the
-`monitor-slug:` in the workflow must equal the `name` of a `sentry_cron_monitor` that has **applied**
-to Sentry; (3) the monitor name must be reachable by the `(c2)` allowlist or the suite reds. Any one
-of the three silently disables the guard, and only (2) is currently asserted by an existing test.
+**Assembly.** Not the set of files edited — the chokepoint is the **four-way** agreement that a
+truthful check-in can arrive: (1) the heartbeat step is terminal in its job under `if: always()`, so
+it runs on the drift path where an earlier step exits 1; (2) the `monitor-slug:` equals the `name` of
+an **applied** `sentry_cron_monitor`; (3) the monitor name is reachable by the `(c2)` allowlist;
+(4) **the step id referenced in the heartbeat's `status:` expression exists in the same job and
+precedes the heartbeat.** Any one silently disables the guard; only (2) is asserted today.
 
-**Mutation matrix** (each row MUST drive something RED):
+**Mutation matrix.**
 
 | # | Mutation | Must red | Why this row exists |
 |---|---|---|---|
-| 1 | Delete `sentry_cron_monitor.scheduled_sentry_alert_drift` from `cron-monitors.tf` | `sentry-monitor-iac-parity` → *every workflow heartbeat slug has a cron-monitor* | The guard's backing resource |
-| 2 | Typo the workflow's `monitor-slug:` to `scheduled-sentry-alert-drft` | same test | Slug agreement, not mere presence |
-| 3 | **Move** the heartbeat step to before the `probe` step | new assertion (below) | **Order/lifetime row.** A delete-row cannot see this: `steps.probe.outputs.verdict` would be unset, the allowlist would resolve `error` on *every* run including clean ones, and the monitor would page continuously — a guard that is loud is still a broken guard |
-| 4 | Drop `if: always()` from the heartbeat step | new assertion | On the drift path the job is already failing, so a plain-expression `if:` inherits `success()` and the step **skips** — producing a missed check-in for a run that did happen |
-| 5 | Add a second workflow heartbeat slug with no monitor | `sentry-monitor-iac-parity` | Guard must not stop after the first member |
+| 1 | Delete `sentry_cron_monitor.scheduled_sentry_alert_drift` | parity: *every workflow heartbeat slug has a cron-monitor* | The backing resource |
+| 2 | Typo the workflow's `monitor-slug:` | same | Slug agreement, not mere presence |
+| 3 | **Move** the heartbeat above the `probe` step | new terminality assertion | **Order/lifetime row.** A delete row cannot see this: `verdict` unset → `error` on every run including clean ones — a guard that is loud is still broken |
+| 4 | Drop `if: always()` | new `if:` assertion | On the drift path the job is already failing, so a plain `if:` inherits `success()` and the step **skips** — a missed check-in for a run that did happen |
+| 5 | **Rename `id: probe` to `id: fidelity_probe`** without updating the `status:` expression | new id-reference assertion | **Rows 3–4 both pass while the guard is fully broken**: position green, `always()` green, monitor green — and the expression resolves `error` daily forever. The invariant is the reference, not the position |
+| 6 | Add a second workflow heartbeat slug with no monitor | parity | Guard must not stop at the first member |
 
 **Harness rows.**
 
-- **Suite mutation → RED:** replace the parity test's slug extractor with `() => []`. The
-  anti-vacuity case *"discovers the known workflow-heartbeat slug cohort"* must red — a suite that
-  checks nothing must not report green.
-- **Must-PASS non-canonical input:** an unrelated sibling (`scheduled-terraform-drift`, whose monitor
-  is in `NON_INNGEST_MONITORS` and whose heartbeat is also terminal) must continue to PASS. This
-  proves the new assertions reject the defect rather than rejecting everything.
+- **Suite mutation → RED:** stub the parity slug extractor to `() => []`; the anti-vacuity case
+  `expect(slugs.length).toBeGreaterThanOrEqual(4)` must red.
+- **Must-PASS non-canonical input:** `main-health-monitor.yml` — it carries
+  `if: ${{ always() && !inputs.dry_run }}` and a heartbeat that is terminal in its job. It must PASS,
+  proving the new assertions reject the defect rather than rejecting everything.
+  > The earlier draft named `scheduled-terraform-drift` as this control. **That was false** — its
+  > `Sentry check-in (final)` is followed by `Enforce token-drift result`, whose own comment claims
+  > terminality. The plan had selected as its must-PASS control the one sibling its proposed
+  > assertion falsifies.
 
-**New assertion required by rows 3 and 4.** No existing test asserts heartbeat step **position** or
-`if: always()` for any workflow. Add one to `sentry-monitor-iac-parity.test.ts`: for every
-`.github/workflows/*.yml` containing a `sentry-heartbeat` step, that step is the last step of its job
-and carries `if: always()` + `continue-on-error: true`. **Run it against the existing cohort first.**
-If pre-existing siblings violate it, narrow the assertion to this workflow and file a scope-out for
-the rest rather than widening this PR into a fleet fix.
+**The new assertion, specified from a measured cohort audit — not left as a contingency.**
+Keyed on `uses: ./.github/actions/sentry-heartbeat` (the string `sentry-heartbeat` alone pulls in two
+prose-only false members: `apply-web-platform-infra.yml` and this workflow's own current header).
+Audit of all 11 heartbeat steps across 10 workflows:
+
+| Property | Cohort status | Assertion scope |
+|---|---|---|
+| `continue-on-error: true` | **11/11** | cohort-wide |
+| `if:` **contains** `always()` | **11/11** | cohort-wide |
+| `if:` **equals** `always()` | 8/11 — `main-health-monitor`, `scheduled-supabase-advisor-scan`, `workspaces-luks-verify` carry `always() && <extra>` | **not** assertable; use *contains* |
+| heartbeat terminal in its job | not universal — `scheduled-terraform-drift` has a documented step after it | **scoped to this workflow only** |
+| step named `Sentry check-in (final)` | 10/11 (`workspaces-luks-verify` uses `Sentry Crons check-in`) | **scoped to this workflow only** |
+
+Written **job-scoped and multi-heartbeat-aware** from the start (`scheduled-terraform-drift` carries
+three occurrences across jobs; `scheduled-inngest-health` has five steps after its heartbeat in a
+different job). The earlier "narrow if siblings violate" contingency is **dropped**: narrowing would
+have made the must-PASS harness row untestable, because a narrowed assertion never evaluates a
+sibling.
 
 ## Infrastructure (IaC)
 
 ### Terraform changes
 
-- `apps/web-platform/infra/sentry/cron-monitors.tf` — **+1** `sentry_cron_monitor` resource. No new
-  provider, no new version pin, no new variable, no new secret.
-- `apps/web-platform/infra/sentry/issue-alerts.tf` — deletions only (27 `import{}` + 27 `removed{}` +
-  two banner comments), plus one comment addition for #7829.
+- `cron-monitors.tf` — **+1** `sentry_cron_monitor`. No new provider, version pin, variable or secret.
+- `issue-alerts.tf` — deletions only (27 `import{}` + 27 `removed{}` + banner), plus the #7829 comment
+  and the header corrections.
 
 ### Apply path
 
-Auto-apply on merge via `.github/workflows/apply-sentry-infra.yml` (`push: main`, `paths:`-scoped to
-`apps/web-platform/infra/sentry/**`). **Not** a `workflow_dispatch` — and note the brief's stated
-reason for that was wrong in detail while right in conclusion: `sentry-create-gate.sh` runs in
-**both** the `plan_pr` and `apply` jobs (measured), so the create-side gate is not actually bypassed
-by a dispatch. The binding reason to go through a PR is that `plan_pr` is where a human reads the
-plan output before 27 blocks disappear.
+Auto-apply on merge via `apply-sentry-infra.yml` (`push: main`, paths-scoped). Expected blast radius
+`1 to add, 0 to change, 0 to destroy`; no downtime — a cron monitor has no runtime coupling.
 
-Expected blast radius: `1 to add, 0 to change, 0 to destroy`. Downtime: none — a cron monitor is a
-Sentry-side object with no runtime coupling.
+> The brief's stated reason for requiring a PR was wrong in detail while right in conclusion:
+> `sentry-create-gate.sh` runs in **both** the `plan_pr` and `apply` jobs, so a dispatch does not
+> bypass the create gate. The binding reason is that `plan_pr` is where a human reads the plan output
+> before 27 blocks disappear.
 
 ### Distinctness / drift safeguards
 
-- The 27 `sentry_alert` resources keep their `lifecycle { ignore_changes = [environment] }`; nothing
-  in this change touches those blocks.
-- `sentry-destroy-required` and `sentry-create-gate.sh` remain the merge-time gates. This change is
-  precisely the class the create gate exists for, and it should show exactly one explained create.
-- No `-target=` allow-list change is needed: `sentry_cron_monitor.*` is already in the applied set.
+The 27 `sentry_alert` resources keep `lifecycle { ignore_changes = [environment] }`; untouched.
+`sentry-destroy-required` and `sentry-create-gate.sh` remain the merge-time gates. No `-target=`
+change needed — `sentry_cron_monitor.*` is already in the applied set.
 
 ### Vendor-tier reality check
 
-No tier gate applies — `sentry_cron_monitor` is already used 55 times on the current plan.
+No tier gate — `sentry_cron_monitor` is already used 55 times.
 
 ## Observability
 
 ```yaml
 liveness_signal:
   what: Sentry Crons check-in for monitor slug `scheduled-sentry-alert-drift`
-  cadence: daily, 15 7 * * * UTC (matches the Inngest trigger in cron-sentry-alert-drift.ts)
+  cadence: daily, 15 7 * * * UTC (matches cron-sentry-alert-drift.ts)
   alert_target: Sentry missed-check-in issue (failure_issue_threshold = 1)
   configured_in: apps/web-platform/infra/sentry/cron-monitors.tf
 error_reporting:
-  destination: Sentry (missed check-in) + the workflow's own two GitHub-issue filers
-  fail_loud: true — the heartbeat's status expression is an allowlist; an unset probe
-    output resolves to `error` rather than to `ok`
+  destination: Sentry (missed check-in) + the workflow's two GitHub-issue filers
+  fail_loud: true — the status expression is an allowlist; an unset probe output
+    resolves to `error`, never to `ok`
 failure_modes:
   - mode: the Inngest dispatch is accepted but no GHA run happens
-    detection: missed Sentry check-in (this is the gap #7834 closes; nothing detects it today)
+    detection: missed Sentry check-in (the gap #7834 closes; nothing detects it today)
     alert_route: Sentry monitor issue
   - mode: the run happens and the probe cannot reach Sentry (`unavailable`)
-    detection: heartbeat posts `status=error` AND the existing probe-unavailable issue filer
+    detection: heartbeat posts `status=error` AND the probe-unavailable issue filer
     alert_route: Sentry monitor + GitHub issue
   - mode: the run happens and finds real drift (`drift`)
-    detection: heartbeat posts `status=ok` (the job ran); the drift issue filer routes the finding
-    alert_route: GitHub issue only — deliberately NOT a monitor error, per the
-      drift/error split scheduled-terraform-drift.yml documents
-  - mode: the heartbeat step itself cannot reach Sentry ingest
-    detection: `::warning::` from the composite action, step-level `continue-on-error: true`
-    alert_route: run log warning — deliberately does not red an otherwise-green probe
+    detection: heartbeat posts `status=ok` (the job ran); the drift filer routes the finding
+    alert_route: GitHub issue — deliberately NOT a monitor error, per the drift/error
+      split scheduled-terraform-drift.yml documents
+  - mode: drift is found AND the drift-issue filer itself fails
+    detection: heartbeat posts `status=error` (AC9 backstop)
+    alert_route: Sentry monitor — without this the finding reaches nobody while the
+      monitor certifies health
+  - mode: the heartbeat step cannot reach Sentry ingest (secret outage, or curl failure
+      under the step's continue-on-error)
+    detection: NO CHECK-IN IS POSTED — with failure_issue_threshold = 1 this opens a
+      Sentry missed-check-in issue, indistinguishable from "the runner never ran"
+    alert_route: Sentry monitor issue (a false positive, but a LOUD one)
+    note: >-
+      An earlier draft recorded this as "run log warning — deliberately does not red an
+      otherwise-green probe". That is true of the GHA RUN STATUS and false of the SENTRY
+      MONITOR, which is the actual guard. A `::warning::` in a workflow_dispatch run log
+      is not a route. Corrected at plan review.
 logs:
-  where: GitHub Actions run log for scheduled-sentry-alert-drift; Sentry Crons monitor history
+  where: GitHub Actions run log; Sentry Crons monitor history
   retention: GHA default (90d); Sentry per-plan
 discoverability_test:
   command: >-
@@ -510,66 +596,65 @@ discoverability_test:
 
 ## Encryption Posture
 
-Detection fires (`.tf` files in Files to Edit). No new persistent store and no new cross-component
-connection is introduced, so the posture is inherited rather than declared fresh:
+Detection fires (`.tf` in Files to Edit). No new persistent store and no new cross-component
+connection; posture is inherited.
 
 ```yaml
 at_rest:
   - store: Terraform state for apps/web-platform/infra/sentry (existing)
-    mechanism: R2 server-side encryption (provider-managed), unchanged by this PR
-    evidence: ADR-006 as amended by AC12 — which is precisely this PR correcting the
-      record that R2 offers object VERSIONING; encryption at rest is a separate property
-      and is not touched here
-    defends_against: at-rest disclosure from the storage provider's media
-    does_not_defend: anyone holding the R2 credential; and — newly documented by AC12/AC14 —
-      there is NO point-in-time recovery, so a bad state write is not undoable from R2
-    disclosed_as: ADR-006 Consequences (rewritten by this PR)
-    live_verification: `aws s3api list-objects-v2 --bucket soleur-terraform-state` (control,
-      rc=0) alongside `list-object-versions` (NotImplemented, rc=254) — re-run at /work
+    mechanism: R2 server-side encryption (provider-managed), unchanged here
+    evidence: ADR-006 — note its versioning claim is corrected by the SPLIT-OUT #7836 PR;
+      encryption at rest is a separate property and is not touched by either PR
+    defends_against: at-rest disclosure from the provider's media
+    does_not_defend: anyone holding the R2 credential; and there is NO point-in-time
+      recovery, so a bad state write is not undoable from R2
+    disclosed_as: ADR-006 Consequences (rewritten by the #7836 PR)
+    live_verification: `list-objects-v2` control (rc=0) alongside `list-object-versions`
+      (NotImplemented, rc=254)
 in_transit:
-  - connection: GHA runner -> Sentry ingest (heartbeat check-in), NEW call site, existing endpoint
+  - connection: GHA runner -> Sentry ingest (heartbeat), NEW call site, existing endpoint
     tls: yes (https, curl default verification)
     cert_verification: on
-    does_not_defend: the monitor slug and status are not secret; the DSN public key is
-      already a public-by-design credential
+    does_not_defend: slug and status are not secret; the DSN public key is public by design
     disclosed_as: existing sentry-heartbeat composite action contract
 ```
 
-No `exception` block: no `plaintext-exception` and no `cert_verification: off` in scope.
+No `exception` block: no `plaintext-exception`, no `cert_verification: off`.
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
 
-**Amend ADR-006 (`ADR-006-terraform-remote-backend-r2.md`)** — in scope for this PR, not a follow-up.
-This is the reversal case: the ADR's `## Decision` says the backend is *"Cloudflare R2 as remote
-backend with bucket versioning"* and its `## Consequences` says *"State loss eliminated via bucket
-versioning"*. Both are false and have been since the decision was taken — R2 does not implement the
-S3 object-versioning API at all. Amend the `## Decision` to state the backend without the versioning
-claim, rewrite the `## Consequences` line to the measured posture, and add a dated amendment note
-citing #7836, the `NotImplemented` measurement, and the passing `list-objects-v2` control.
+**Amend ADR-031 (`ADR-031-sentry-as-iac.md`)** — in scope here (AC13). It is the canonical ADR for
+this subsystem and two of its sentences become false at merge. Content anchors, per
+`cq-cite-content-anchor-not-line-number`: *"the root is not reproducible from zero until they are
+removed"* and *"The blocks stay in config until the post-merge verification passes"*.
 
-No **new** ADR is warranted: this corrects a recorded decision's factual basis; it does not make a
-new architectural choice. (Consequently there is no ordinal to collide — the ADR-ordinal gate has
-nothing to re-verify at ship.)
+No **new** ADR: the cron monitor is the 56th instance of an existing pattern — no new service,
+boundary, or vendor. Consequently no ordinal to collide, and nothing for `/ship`'s ADR-ordinal gate
+to re-verify.
+
+**ADR-006 is amended by the split-out #7836 PR, not this one.**
 
 ### C4 views
 
-**No C4 impact — and here is what was checked**, against all three model files
-(`model.c4`, `views.c4`, `spec.c4`), not a keyword grep:
+**No C4 impact.** Checked against `model.c4`, `views.c4`, `spec.c4` **and** `c4-model.md` (the view
+page, added to the checked set at plan review — it is where an ADR-006 claim would live; its line
+*"All infrastructure provisioned via Terraform with R2 remote backend (ADR-006, ADR-019)"* never
+claimed versioning and survives intact).
 
-- **External human actors:** none added or changed. The only human in the loop is the founder/operator,
-  already modeled; the alert-recipient change that *would* have touched this (#7829's fallthrough)
-  is explicitly NOT being made.
-- **External systems / vendors:** Sentry and Cloudflare R2 are both already modeled as external
-  systems. This PR adds no vendor and removes none. GitHub Actions is already modeled.
-- **Containers / data stores:** none added. The cron monitor is an object inside the
-  already-modeled Sentry system, at the same granularity as the 55 existing monitors — none of
-  which are individually modeled, correctly.
-- **Actor↔surface access relationships:** unchanged. No ownership, tenancy, or recipient boundary
-  moves — AC6 asserts the paging recipient set is byte-identical.
+- **External human actors:** unchanged. The only human is the founder/operator, already modeled. The
+  one change that *would* have touched this — #7829's fallthrough — is explicitly not being made.
+- **External systems / vendors:** `sentry` and `cloudflare` are already declared `system` with
+  `#external`. None added or removed.
+- **Containers / data stores:** none added. `spec.c4` has no element kind at monitor granularity; none
+  of the 55 existing monitors is individually modeled, correctly.
+- **Access relationships:** unchanged. No ownership, tenancy, or recipient boundary moves; AC6
+  asserts the paging recipient set is byte-identical.
 
-No element description is falsified by this change.
+Positively: the `sentry` element description says the cron monitors are *"one per scheduled
+workflow"* — mildly false today, since `scheduled-sentry-alert-drift` has none. This PR **repairs**
+that rather than falsifying it.
 
 ## Domain Review
 
@@ -577,115 +662,123 @@ No element description is falsified by this change.
 
 ### Engineering (CTO)
 
-**Status:** see `### Findings` below
-**Assessment:** the change is infrastructure-and-documentation only, confined to one Terraform root
-plus two documentation surfaces and two test allowlists. The load-bearing engineering judgments are
-(a) that the 27-block deletion is gated on a re-measured live state rather than an inherited claim,
-(b) that the new cron monitor is the `NON_INNGEST_MONITORS` class rather than a `SENTRY_MONITOR_SLUG`
-producer, and (c) that #7829 resolves to no change.
+**Status:** reviewed
+**Assessment:** approved the three load-bearing judgments — the deletion gate (with the `removed{}`
+limb added, now AC17 limb 1b), the `NON_INNGEST_MONITORS` classification (stated more strongly than
+the plan had it: declaring a `SENTRY_MONITOR_SLUG` in the dispatcher would be *actively wrong*), and
+the merge hold (correct in intent, unsatisfiable as drafted — now AC18). Complexity small-to-medium;
+no hot-path DB write; breaking-change surface correctly identified as the 27 live paging rules.
 
 ### Product/UX Gate
 
-Not applicable — the mechanical UI-surface scan over `## Files to Edit` / `## Files to Create`
-matches no UI path (no `components/**/*.tsx`, no `app/**/page.tsx`, no `app/**/layout.tsx`), and the
-change has no user-facing surface. Product assessed NONE by the semantic sweep and the mechanical
-override did not fire.
+Not applicable. The mechanical UI-surface scan over `## Files to Edit` matches no UI path
+(`components/**/*.tsx`, `app/**/page.tsx`, `app/**/layout.tsx`); Product assessed NONE and the
+mechanical override did not fire.
 
 ## Open Code-Review Overlap
 
-**None.** All 63 open `code-review` issues were checked against every path in `## Files to Edit`
-using the two-stage `gh issue list --json` → standalone `jq --arg` form (single-stage `gh --jq`
-with `--arg` does not forward the argument).
+**None.** All 63 open `code-review` issues checked against every path in `## Files to Edit` via the
+two-stage `gh issue list --json` → standalone `jq --arg` form.
 
 ## Files to Edit
 
 | File | Issue | Change |
 |---|---|---|
-| `apps/web-platform/infra/sentry/issue-alerts.tf` | #7826, #7829 | delete the trailing 27 `import{}` + 27 `removed{}` blocks and their two banner comments; rewrite the header's `ADOPTION MECHANISM` paragraph to past tense; add the #7829 verification comment above `byok_cap_exceeded` |
-| `apps/web-platform/infra/sentry/cron-monitors.tf` | #7834 | +1 `sentry_cron_monitor` resource in house style |
-| `.github/workflows/scheduled-sentry-alert-drift.yml` | #7834 | delete the `NO SENTRY CRON HEARTBEAT` paragraph; append the terminal `Sentry check-in (final)` step |
-| `apps/web-platform/server/inngest/functions/cron-sentry-alert-drift.ts` | #7834 | update the header paragraph that says the workflow carries no heartbeat |
-| `apps/web-platform/test/server/inngest/function-registry-count.test.ts` | #7834 | add `scheduled-sentry-alert-drift` to `NON_INNGEST_MONITORS` with the class rationale |
-| `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts` | #7834 | add the heartbeat step-position + `if: always()` assertion (Guard 1 rows 3–4) |
-| `knowledge-base/engineering/architecture/decisions/ADR-006-terraform-remote-backend-r2.md` | #7836 | amend `## Decision` + `## Consequences`; add dated amendment note |
-| `infra/github/README.md` | #7836 | replace §"Phase 5 — Rollback" steps 1–2; preserve step 3's caveat |
+| `apps/web-platform/infra/sentry/issue-alerts.tf` | #7826, #7829 | delete the trailing 27 `import{}` + 27 `removed{}` blocks and banner; correct three header claims (AC4); add the #7829 verification comment |
+| `apps/web-platform/infra/sentry/cron-monitors.tf` | #7834 | +1 `sentry_cron_monitor`, margins pinned |
+| `.github/workflows/scheduled-sentry-alert-drift.yml` | #7834 | delete the `NO SENTRY CRON HEARTBEAT` paragraph; add the terminal heartbeat step with the drift backstop |
+| `apps/web-platform/server/inngest/functions/cron-sentry-alert-drift.ts` | #7834 | update the no-heartbeat paragraph; state the manual-trigger limit |
+| `apps/web-platform/test/server/inngest/function-registry-count.test.ts` | #7834 | `NON_INNGEST_MONITORS` entry + class rationale |
+| `apps/web-platform/test/server/inngest/sentry-monitor-iac-parity.test.ts` | #7834 | the new job-scoped assertions (Guard 1 rows 3–5) |
+| `knowledge-base/engineering/architecture/decisions/ADR-031-sentry-as-iac.md` | #7826 | past-tense the two retired claims; dated note |
+| `apps/web-platform/infra/sentry/README.md` | #7826 | `27 + 2` → `27 + 3`; resolve the file's existing self-contradiction |
+| `scripts/sentry-issue-alert-create-tripwire.sh` | #7826 | error text: two → three, naming `git_data_boot_warning` (prose only; the guard is sound) |
 
 **Files to Create:** none.
 
 **Explicitly NOT edited:**
 
-- `.github/workflows/apply-sentry-infra.yml` — owned by PR 7866 this session, and already carries the
-  correct R2 statement. Editing it would conflict and is unnecessary.
+- `.github/workflows/apply-sentry-infra.yml` — owned by PR 7866; already carries the correct R2
+  statement. Editing it conflicts and is unnecessary.
+- `ADR-006`, `infra/github/README.md`, `knowledge-base/legal/article-30-register.md`, and the two
+  `feat-terraform-state-mgmt` spec files — **the split-out #7836 PR**.
 - `knowledge-base/project/specs/feat-one-shot-7650-phase2-sentry-alert-import/tasks.md` — a
-  point-in-time migration record; carved out per the Cut List and the
-  "exclude own migration artifacts" rule.
-- Dated plans and brainstorms carrying the old R2 assumption — same reason.
+  point-in-time migration record, carved out per the Cut List.
 
 ## Implementation Phases
 
-**Phase 0 — re-measure before deleting anything.** Re-run the live-state probe: `terraform init
--lockfile=readonly` then `terraform state list`, and re-derive the M2 address-set equality (the 27
-`sentry_alert.<label>` addresses in state `diff` empty against the 27 `resource` labels in the file).
-Re-run the R2 versioning probe with its `list-objects-v2` control. **If the 27/27 equality does not
-hold, stop** — the #7826 deletion is unsafe and only that issue is blocked; #7834 and #7836 continue.
+**Phase 0 — measure before deleting, both limbs.** Re-run `terraform init -lockfile=readonly` +
+`terraform state list`; derive AC17 limb 1a (27-address equality) **and** limb 1b (exactly the three
+`sentry_issue_alert` survivors, no `removed{}` from-label present). Then run
+`scripts/sentry-alert-live-fidelity.sh` for limb 2 and record its verdict.
 
-**Phase 1 — #7836 (docs, no infra coupling).** Independent of everything else; do it first so a
-Terraform surprise cannot strand it. Amend ADR-006, rewrite `infra/github/README.md` §Phase 5.
+> **Abort contract — load-bearing, and the earlier draft had none.** If any limb fails, #7826 is
+> blocked and **#7829 and #7834 continue** (Phase 2 touches only a comment; Phase 3 touches other
+> files entirely). On that path you MUST, in the same commit: strip `7826` from the plan frontmatter
+> `closes:` **and** from the PR body, and post the Phase 0 measurement as a comment on #7826.
+> Otherwise merging auto-closes #7826 with zero work done — destroying the only artifact recording
+> that 27 blocks still pin hardcoded live ids and the root is not rebuildable from zero.
+> The reduced AC set on that path is AC7–AC12 and AC15–AC16; AC1–AC6, AC13, AC14 and AC17–AC20 do not
+> apply. **AC15 cannot discriminate this path** — the expected plan shape is `1 to add, 0 to change,
+> 0 to destroy` either way — so the `closes:` edit is the only thing preventing a false close.
 
-**Phase 2 — #7829 (verification record).** Add the comment above `byok_cap_exceeded`. No value
-changes. This lands before the #7826 deletion so the comment's surrounding context is stable.
+**Phase 1 — cohort audit (already performed at plan time; re-confirm).**
+`grep -l 'uses: ./.github/actions/sentry-heartbeat' .github/workflows/*.yml`, then per job check
+terminality and `if:` shape. The assertion is written pre-narrowed from this table, not discovered.
 
-**Phase 3 — #7834 (the monitor + heartbeat), contract-first.** The `sentry_cron_monitor` resource
-and the `NON_INNGEST_MONITORS` entry land **before** the workflow's heartbeat step, so the parity
-suites never see a slug without a monitor. Then the workflow step, then the two prose paragraphs.
-Then the new step-position assertion (Guard 1) — written from the design, before verifying it passes.
+**Phase 2 — #7829 verification record.** The `.tf` comment (AC7a). No value changes. Lands before the
+Phase 4 deletion so its surrounding context is stable. The #7829 issue comment (AC7b) is posted at
+ship, when the PR number exists.
 
-**Phase 4 — #7826 (the deletion), last.** Deleting the blocks is the only irreversible-feeling step
-and the only one gated on Phase 0's measurement. Delete the trailing region, rewrite the header
-paragraph, `terraform fmt`.
+**Phase 3 — #7834, contract-first and test-first.** In order: the `sentry_cron_monitor` resource →
+the `NON_INNGEST_MONITORS` entry → **the new parity assertions (written from the design, observed
+RED against the not-yet-added step)** → the workflow heartbeat step + drift backstop → the two prose
+paragraphs. Writing the assertion before the step it constrains is what lets it observe RED against
+the real absence rather than only against a temporarily-mutated tree (`cq-write-failing-tests-before`).
 
-**Phase 5 — combined verification.** Run the affected suites, `terraform fmt -check -recursive`, and
-read the `plan_pr` output against AC15's stated shape.
+**Phase 4 — #7826 deletion, last.** Delete the banner→EOF region, correct the three header claims,
+amend ADR-031, fix the README and tripwire text, `terraform fmt`.
+
+**Phase 5 — combined verification.** Affected suites, `terraform fmt -check -recursive`, and read
+`plan_pr` against AC15.
 
 ## Test Scenarios
 
-1. **The deletion is clean.** After Phase 4, AC1's five counts hold and `git diff` shows no insertion
-   in `issue-alerts.tf` other than the #7829 comment and the rewritten header paragraph.
-2. **The plan shape is what was predicted.** `plan_pr` reports `1 to add, 0 to change, 0 to destroy`.
-   A `1 to change` here means #7829 was flipped by accident and is an abort.
-3. **The create gate passes for the stated reason.** `sentry-create-gate.sh` explains the single
-   create by the added `+resource "sentry_cron_monitor"` block.
-4. **Guard 1 row 3 (order).** Temporarily move the heartbeat step above the probe step; the new
-   assertion reds. Restore.
-5. **Guard 1 row 4 (`if: always()`).** Temporarily drop `if: always()`; the new assertion reds.
-   Restore.
-6. **Guard 1 row 1 (backing resource).** Temporarily delete the monitor resource; the parity test's
-   *every workflow heartbeat slug has a cron-monitor* case reds. Restore.
-7. **Harness anti-vacuity.** Stub the parity slug extractor to `() => []`; the cohort-discovery case
-   reds.
-8. **Must-PASS non-canonical.** `scheduled-terraform-drift` continues to pass every assertion,
-   old and new.
-9. **The rollback runbook is executable.** Every command in the rewritten §Phase 5 runs as written
-   against the live bucket, read-only where possible (`terraform state pull` to a temp file is safe;
-   `state push` is NOT exercised).
-10. **The monitor receives its first check-in** at the next 07:15 UTC firing, read back by API.
+1. **Deletion is clean.** AC1's five counts hold; `git diff` shows no insertion in `issue-alerts.tf`
+   beyond the #7829 comment and the header corrections.
+2. **Plan shape matches.** `plan_pr` prints `Plan: 1 to add, 0 to change, 0 to destroy` **from a job
+   that ran**. On `1 to change`, identify the resource — do not assume a #7829 flip.
+3. **#7829 is provably untouched.** AC6's diff assertion returns `0`.
+4. **Create gate passes for the stated reason**, address-matched to the added monitor block.
+5. **Guard 1 row 3 (order).** Move the heartbeat above the probe; the terminality assertion reds.
+6. **Guard 1 row 4 (`always()`).** Drop `if: always()`; the `if:` assertion reds.
+7. **Guard 1 row 5 (id reference).** Rename `id: probe` without updating `status:`; the id-reference
+   assertion reds. Rows 3 and 4 stay green — that is the point.
+8. **Guard 1 row 1.** Delete the monitor resource; the workflow-slug-parity case reds.
+9. **Harness anti-vacuity.** Stub the slug extractor to `[]`; the cohort-discovery case reds.
+10. **Must-PASS non-canonical.** `main-health-monitor.yml` passes every assertion, old and new.
+11. **First check-in** arrives within the pinned margin of the next 07:15 UTC firing, read by API.
 
 ## Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| An address is un-imported and its `import{}` deletion becomes a live-colliding CREATE | Phase 0's M2 address-set equality is the gate, re-measured not inherited; AC15's `0 to change` and the create gate are the second and third nets |
-| PR 7866 does not merge before this one is ready | AC18 HOLDS the merge and tells the operator. It is never marked satisfied by assumption |
-| The new step-position assertion reds on pre-existing siblings | Planned for: narrow to this workflow and file a scope-out rather than widening this PR into a fleet fix |
-| The `(c2)` classification is wrong and the monitor should declare a `SENTRY_MONITOR_SLUG` instead | The precedent comments for `main-health-monitor` and `scheduled-supabase-advisor-scan` state the class explicitly: the heartbeat is posted by the runner, not the app process. Same shape here |
-| A reader later re-files #7829 | AC6's in-file comment is the mitigation — that is the whole deliverable for that issue |
-| The rewritten runbook is itself wrong | AC13/AC14 require every command to be run as written; the `--name-transformer tf-var` credential trap is stated because it silently breaks backend auth |
+| An `import{}` deletion becomes a live-colliding CREATE | AC17 limb 1a re-measured; AC15 `0 to change`; the address-matched create gate |
+| A `removed{}` deletion becomes a DESTROY of a live rule | **AC17 limb 1b** — the limb the earlier draft omitted; plus `0 to destroy` and `sentry-destroy-required` |
+| A rule is in state but muted/renamed/unbound — invisible to address-set equality | **AC17 limb 2** runs the field-level fidelity probe directly |
+| PR 7866 stalls | AC18's escape hatch (`scheduled-sentry-alert-drift.yml` runs the same probe and needs nothing from 7866) |
+| Phase 0 aborts and the PR silently closes #7826 anyway | The abort contract's mandatory `closes:` + PR-body strip and issue comment |
+| Drift found but the issue filer fails | AC9's backstop posts `status=error` |
+| A future edit renames `id: probe` and darks the guard | Guard 1 row 5's id-reference assertion |
+| The adopted live-id mapping is lost with the `import{}` blocks | AC4 records that it now lives in state and the committed capture |
 
 ## Sharp Edges
 
-- **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
-  text, or omits the threshold will fail `deepen-plan` Phase 4.6.** It is filled above.
-- **`terraform state push` is not in scope to test.** The rewritten runbook documents it; exercising
-  it against a live root would be the exact destructive act the ADR amendment says is unrecoverable.
-- **`apply-sentry-infra.yml` is off-limits this session.** PR 7866 owns it. Any urge to "also fix the
-  AC17 constant here" is a merge conflict with a sibling that already fixed it better.
+- **A count is not an invariant when the change itself can move the count.** AC6 and AC12 both
+  originally used file-wide residual-zero greps that this PR's own mandated additions would have
+  moved — one of them passing on a flipped live paging rule. Assert the diff.
+- **`terraform state push` is not exercised.** Documented in the #7836 PR; running it against a live
+  root is the destructive act the ADR amendment says is unrecoverable.
+- **`apply-sentry-infra.yml` is off-limits.** PR 7866 owns it. Any urge to also fix the AC17 constant
+  here is a conflict with a sibling that already fixed it better.
+- **A plan whose `## User-Brand Impact` is empty or placeholder fails `deepen-plan` Phase 4.6.**
