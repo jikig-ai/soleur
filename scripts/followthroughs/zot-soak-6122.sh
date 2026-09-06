@@ -145,6 +145,22 @@
 # Directive for the tracking issue body (pin START to the cutover UTC, earliest to >=7d):
 #   <!-- soleur:followthrough script=scripts/followthroughs/zot-soak-6122.sh earliest=<UTC+7d> secrets=SENTRY_AUTH_TOKEN,GH_TOKEN -->
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}${SENTRY_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (GH_TOKEN, SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -uo pipefail
 
 # Fail-safe env check. Deliberately NOT `: "${VAR:?msg}"` — under a non-interactive shell

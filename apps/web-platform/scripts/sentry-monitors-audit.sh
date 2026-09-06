@@ -92,6 +92,21 @@
 # Plan: knowledge-base/project/plans/2026-05-15-feat-sentry-monitors-alerts-adapt-plan.md
 # Phase: 1 (script) + 2.1 (operator run) + 2.2 (CI re-run on release)
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_AUTH_TOKEN:+x}${SENTRY_IAC_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_AUTH_TOKEN, SENTRY_IAC_AUTH_TOKEN). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -euo pipefail
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
@@ -662,7 +677,7 @@ sentry_fetch_collection() {  # $1 label, $2 path after /api/0/
 # feed Class D, the only class with teeth, where silent truncation fails OPEN on
 # unreclaimable spend.
 fetch_monitors() {
-  if [[ -n "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
+  if [[ -n "${SENTRY_FIXTURE_MONITORS:+x}" ]]; then
     FETCH_BODY="$(cat "$SENTRY_FIXTURE_MONITORS")"
     return
   fi
@@ -674,7 +689,7 @@ fetch_monitors() {
 # ORG-scoped, so the old SENTRY_PROJECT branch has no reason to exist and is
 # gone; SENTRY_PROJECT still feeds Gates 2 and 3 and the report frontmatter.
 fetch_workflows() {
-  if [[ -n "${SENTRY_FIXTURE_RULES:-}" ]]; then
+  if [[ -n "${SENTRY_FIXTURE_RULES:+x}" ]]; then
     FETCH_BODY="$(cat "$SENTRY_FIXTURE_RULES")"
     return
   fi
@@ -689,7 +704,7 @@ fetch_workflows() {
 # pre-existing test (which sets only MONITORS+RULES) would start making live
 # calls and go red.
 fetch_detectors() {
-  if [[ -n "${SENTRY_FIXTURE_DETECTORS:-}" ]]; then
+  if [[ -n "${SENTRY_FIXTURE_DETECTORS:+x}" ]]; then
     FETCH_BODY="$(cat "$SENTRY_FIXTURE_DETECTORS")"
     return
   fi
@@ -1086,7 +1101,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" || -n "${SENTRY_TF_DIR:-}" ]]; then
 
   state_known=0
   state_slugs=""
-  if [[ -n "${SENTRY_STATE_SLUGS_FILE:-}" ]]; then
+  if [[ -n "${SENTRY_STATE_SLUGS_FILE:+x}" ]]; then
     if [[ ! -f "$SENTRY_STATE_SLUGS_FILE" ]]; then
       echo "ERROR: SENTRY_STATE_SLUGS_FILE is set to '${SENTRY_STATE_SLUGS_FILE}' but no such file exists. Refusing to silently fall back to the state-unknown warn path — the caller believes it provided state. Refs #6589." >&2
       exit 1
