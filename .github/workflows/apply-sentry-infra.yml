@@ -1160,17 +1160,40 @@ jobs:
           fi
           n_alert=$(grep -c '^sentry_alert\.'       <<<"$addrs"); [[ -n "$n_alert" ]] || n_alert=0
           n_issue=$(grep -c '^sentry_issue_alert\.' <<<"$addrs"); [[ -n "$n_issue" ]] || n_issue=0
+
+          # DERIVED FROM THE CONFIG, not hardcoded. The first version of this step
+          # asserted a literal `2` surviving `sentry_issue_alert` resources, and on
+          # its very first real run it FAILED on a correct apply: #7772 had landed
+          # `git_data_boot_warning` on main, making it 3. State was 27 + 3, which is
+          # exactly right, and the check called it "the partial-adoption signal" and
+          # filed a p1 telling the operator to assume a partial write.
+          #
+          # A gate that cries partial-adoption on a healthy apply is worse than no
+          # gate: it is the false alarm that teaches an operator to skip the one
+          # message that means the 27 paging rules are half-moved. And the defect is
+          # the same class this whole change is about — a number invented at
+          # authoring time, in a file whose contents move underneath it.
+          #
+          # So both expectations now come from the .tf that produced the state.
+          exp_alert=$(grep -h -c '^resource "sentry_alert"'       *.tf 2>/dev/null | awk '{s+=$1} END{print s+0}')
+          exp_issue=$(grep -h -c '^resource "sentry_issue_alert"' *.tf 2>/dev/null | awk '{s+=$1} END{print s+0}')
+          # Non-vacuity: a broken anchor would derive 0 and make the comparison
+          # trivially satisfiable by an empty state.
+          if [[ "$exp_alert" -lt 1 ]]; then
+            echo "::error::AC17: derived 0 sentry_alert resources from the .tf — the anchor broke, not the state. Refusing to report a verdict."
+            exit 1
+          fi
           {
             echo "### AC17 — Sentry alert addresses in state"
             echo ""
             echo "| type | count | expected |"
             echo "|---|---|---|"
-            echo "| \`sentry_alert.\` | ${n_alert} | 27 |"
-            echo "| \`sentry_issue_alert.\` | ${n_issue} | 2 |"
+            echo "| \`sentry_alert.\` | ${n_alert} | ${exp_alert} |"
+            echo "| \`sentry_issue_alert.\` | ${n_issue} | ${exp_issue} |"
           } >> "$GITHUB_STEP_SUMMARY"
           echo "AC17: state holds ${n_alert} sentry_alert and ${n_issue} sentry_issue_alert address(es)"
-          if [[ "$n_alert" -ne 27 || "$n_issue" -ne 2 ]]; then
-            echo "::error::AC17 FAILED: expected 27 sentry_alert and 2 sentry_issue_alert addresses in state, found ${n_alert} and ${n_issue}. This is the partial-adoption signal: some of the 27 moved and some did not. Re-run THIS job (not a workflow_dispatch — it carries no head_commit.message and so cannot supply the [ack-destroy]); the adoption assert will report how many pairs remain."
+          if [[ "$n_alert" -ne "$exp_alert" || "$n_issue" -ne "$exp_issue" ]]; then
+            echo "::error::AC17 FAILED: the .tf declares ${exp_alert} sentry_alert and ${exp_issue} sentry_issue_alert resources, but state holds ${n_alert} and ${n_issue}. State and config disagree, which after an apply means the apply did not fully land — some of the 27 moved and some did not. Re-run THIS job (not a workflow_dispatch — it carries no head_commit.message and so cannot supply the [ack-destroy]); the adoption assert will report how many pairs remain."
             exit 1
           fi
 
