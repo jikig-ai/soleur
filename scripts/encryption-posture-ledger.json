@@ -67,6 +67,7 @@
     "null_resource",
     "random_id",
     "random_password",
+    "sentry_alert",
     "sentry_cron_monitor",
     "sentry_issue_alert",
     "sentry_uptime_monitor",
