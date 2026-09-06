@@ -529,6 +529,17 @@ tc_preamble() {
   # a fresh one and both COUNT — the conservative direction for a capacity gate
   # is to refuse, never to admit. A non-numeric or non-positive ceiling disables
   # the filter entirely rather than silently excluding everything.
+  #
+  # THE `$3 ~ /^[0-9]+$/` TERM IS UNREACHABLE-BY-CONSTRUCTION AND KEPT ANYWAY.
+  # Mutating it away is an EQUIVALENT mutation, verified rather than assumed:
+  # _tc_scan_procs initialises `elapsed=0` and only overwrites it from an
+  # already-`^[0-9]+$`-validated starttime, so it cannot emit a non-numeric
+  # third field and no fixture can reach that branch. It stays because it is the
+  # term that keeps the failure direction correct if the producer ever grows a
+  # `?`-style sentinel for an unreadable reading — at which point the branch
+  # becomes reachable and this filter still counts it rather than dropping it.
+  # Recorded here so the next reader does not delete it as dead, or spend a
+  # round trying to write the fixture that kills it.
   local _stale_sibs=""
   if [[ "${TC_RUNTIME_CEILING_S:-}" =~ ^[0-9]+$ ]] && (( TC_RUNTIME_CEILING_S > 0 )); then
     _stale_sibs=$(awk -F'\t' -v c="$TC_RUNTIME_CEILING_S" \

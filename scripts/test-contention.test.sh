@@ -1687,9 +1687,14 @@ else
 fi
 
 # --- M10: an UNREADABLE elapsed must still be COUNTED -----------------------
-# The scan emits elapsed=0 when starttime is unparseable, so an unreadable
-# reading is indistinguishable from a fresh one — and both must COUNT. The
-# conservative direction for a capacity gate is to refuse, never to admit.
+# WHAT THIS PINS, precisely: the END-TO-END property (a run whose starttime
+# cannot be parsed is still counted against capacity), via the producer's
+# `elapsed=0` fallback. It does NOT pin the filter's `^[0-9]+$` term — that term
+# is unreachable by construction, because _tc_scan_procs can only emit a numeric
+# third field, so mutating it away is an EQUIVALENT mutation and no fixture can
+# kill it. See the note at the filter. The arm is kept because the property it
+# does pin is the one that matters: the conservative direction for a capacity
+# gate is to refuse, never to admit.
 UNREAD_ROOT="$TESTROOT/proc-unreadable"
 UNREAD_WT="$TESTROOT/wt-unreadable"
 mkdir -p "$UNREAD_WT"
@@ -1700,7 +1705,7 @@ printf '910001 (te) st) S 0 0 %s x 0 0\n' "$(printf '0 %.0s' {4..19})" \
 G2_UNREAD="$(g2_run "$UNREAD_ROOT" 1 | tail -1)"
 cases=$((cases + 1))
 if [[ "$G2_UNREAD" == "1" ]]; then
-  pass "G2/M10 a sibling with an unreadable elapsed is COUNTED (fails toward refusing)"
+  pass "G2/M10 a sibling whose starttime is unparseable is COUNTED (fails toward refusing)"
 else
   fail "G2/M10 unreadable-elapsed sibling must count even at a 1s ceiling, got: $G2_UNREAD"
 fi
