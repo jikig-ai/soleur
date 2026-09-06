@@ -30,12 +30,17 @@
  *    the Sentry issues stream via `reportSilentFallback` (token redacted).
  *  - Probe-unavailable: the workflow files its OWN issue when the probe runs but
  *    cannot establish a verdict, so "it ran and could not tell" is routed.
- *  - NOT covered yet: "the dispatch was accepted and the runner never ran". No
- *    GHA run means no step of that workflow executes, so nothing there can
- *    report it. The workflow carries no `sentry-heartbeat` step — that needs a
- *    `sentry_cron_monitor` resource, and adding one to the Sentry root in the
- *    adoption PR would plan `1 to add`, which AC2 forbids. A MISSED CHECK-IN is
- *    exactly the term that covers this case, and #7834 restores it.
+ *  - Runner liveness: "the dispatch was accepted and the runner never ran" is
+ *    covered as of #7834. No GHA run means no step of that workflow executes, so
+ *    nothing there can report it; the workflow's terminal `sentry-heartbeat`
+ *    step checks in to `scheduled-sentry-alert-drift`
+ *    (`sentry_cron_monitor.scheduled_sentry_alert_drift`), and a missed check-in
+ *    inside the 60-minute margin opens a Sentry issue.
+ *
+ *    Note what that check-in proves: a run HAPPENED in the window, not that the
+ *    cron below is what caused it. This function declares a manual-trigger event
+ *    alongside the schedule, so one manual fire satisfies the monitor for the
+ *    day. Inherent to heartbeat monitors; stated rather than implied.
  */
 import { inngest } from "@/server/inngest/client";
 import {

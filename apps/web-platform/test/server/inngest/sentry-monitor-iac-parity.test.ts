@@ -248,3 +248,164 @@ describe("Sentry cron-monitor IaC parity", () => {
     ).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Heartbeat STEP SHAPE (#7834).
+//
+// The slug↔monitor parity above answers "does a declared slug have a resource".
+// It cannot see the three other ways a heartbeat silently stops being a
+// dead-man's switch, and nothing else asserted them for ANY workflow:
+//
+//   (1) the step is not the LAST step of its job, so an earlier `exit 1` on the
+//       drift path leaves it unreached;
+//   (2) its `if:` lost `always()`, so it inherits an implicit `success()` and
+//       SKIPS on exactly the failing runs the monitor exists to observe;
+//   (3) the step id its `status:` expression reads was renamed, so the
+//       expression resolves to the fallback arm on every run — the monitor then
+//       pages daily forever while (1) and (2) both still pass.
+//
+// SCOPES ARE MEASURED, NOT ASSUMED. A cohort audit of all 11 heartbeat steps
+// across 10 workflows (2026-09-06) found `continue-on-error: true` and an `if:`
+// CONTAINING `always()` universal, but terminality and the exact step name are
+// NOT: `scheduled-terraform-drift.yml` documents a step deliberately placed
+// after its heartbeat, and `workspaces-luks-verify.yml` names its step
+// `Sentry Crons check-in`. Asserting `if:` EQUALS `always()` would red three
+// siblings that legitimately carry `always() && <extra>`.
+// ---------------------------------------------------------------------------
+
+const HEARTBEAT_USES = "uses: ./.github/actions/sentry-heartbeat";
+
+type HeartbeatStep = {
+  file: string;
+  job: string;
+  name: string | null;
+  ifExpr: string | null;
+  continueOnError: boolean;
+  isLastInJob: boolean;
+  statusStepIds: string[];
+  idsBefore: Set<string>;
+};
+
+// Indentation-based walk. Keyed on the composite action PATH, never the bare
+// string "sentry-heartbeat" — two workflows mention that string in prose only
+// (apply-web-platform-infra.yml, and this workflow's own header), and a
+// substring key would pull both in as phantom cohort members.
+function heartbeatSteps(): HeartbeatStep[] {
+  const out: HeartbeatStep[] = [];
+  for (const file of readdirSync(WORKFLOWS_DIR)) {
+    if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
+    const src = readFileSync(join(WORKFLOWS_DIR, file), "utf-8");
+    if (!src.includes(HEARTBEAT_USES)) continue;
+    const lines = src.split("\n");
+
+    let job = "<none>";
+    let stepStart = -1;
+    const stepStarts: { line: number; job: string }[] = [];
+    const jobBoundaries: number[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (/^ {2}[A-Za-z_][\w-]*:\s*$/.test(l)) {
+        jobBoundaries.push(i);
+        job = l.trim().replace(/:$/, "");
+      }
+      if (/^ {6}- /.test(l)) stepStarts.push({ line: i, job });
+    }
+
+    for (let s = 0; s < stepStarts.length; s++) {
+      stepStart = stepStarts[s].line;
+      const nextStep = s + 1 < stepStarts.length ? stepStarts[s + 1].line : lines.length;
+      const nextJob = jobBoundaries.find((b) => b > stepStart) ?? lines.length;
+      const end = Math.min(nextStep, nextJob);
+      const block = lines.slice(stepStart, end).join("\n");
+      if (!block.includes(HEARTBEAT_USES)) continue;
+
+      // Last in its job iff no further step start precedes the next job boundary.
+      const isLastInJob = nextStep >= nextJob;
+
+      const nameM = block.match(/^ {6}- name:\s*(.+?)\s*$/m);
+      const ifM = block.match(/^\s*if:\s*(.+?)\s*$/m);
+      const statusM = block.match(/^\s*status:\s*(.+?)\s*$/m);
+      const statusStepIds = statusM
+        ? [...statusM[1].matchAll(/steps\.([A-Za-z_][\w-]*)\./g)].map((m) => m[1])
+        : [];
+
+      const idsBefore = new Set<string>();
+      for (const prior of stepStarts) {
+        if (prior.line >= stepStart || prior.job !== stepStarts[s].job) continue;
+        const pEnd = stepStarts.find((x) => x.line > prior.line)?.line ?? lines.length;
+        const pBlock = lines.slice(prior.line, pEnd).join("\n");
+        // Both shapes: `- id: foo` on the step's own dash line, and `id: foo`
+        // on a following line. scheduled-realtime-probe.yml uses the FIRST, and
+        // a regex anchored only on the second reports its healthy heartbeat as
+        // a dangling reference — a false positive that reads exactly like the
+        // real defect this assertion hunts.
+        const idM = pBlock.match(/^\s*(?:- )?id:\s*([A-Za-z_][\w-]*)\s*$/m);
+        if (idM) idsBefore.add(idM[1]);
+      }
+
+      out.push({
+        file,
+        job: stepStarts[s].job,
+        name: nameM ? nameM[1] : null,
+        ifExpr: ifM ? ifM[1] : null,
+        continueOnError: /^\s*continue-on-error:\s*true\s*$/m.test(block),
+        statusStepIds,
+        isLastInJob,
+        idsBefore,
+      });
+    }
+  }
+  return out;
+}
+
+describe("Sentry heartbeat step shape (#7834)", () => {
+  it("discovers the known heartbeat-step cohort (anti-vacuity)", () => {
+    const steps = heartbeatSteps();
+    // Measured 2026-09-06: 11 steps across 10 workflows. A floor, not a pin, so
+    // adding a heartbeat never reds this — but a walk that silently stops
+    // finding them does.
+    expect(steps.length).toBeGreaterThanOrEqual(10);
+    expect(steps.map((s) => s.file)).toContain("scheduled-terraform-drift.yml");
+  });
+
+  it("cohort-wide: every heartbeat step carries continue-on-error: true", () => {
+    const bad = heartbeatSteps()
+      .filter((s) => !s.continueOnError)
+      .map((s) => `${s.file}:${s.job}`);
+    expect(bad).toEqual([]);
+  });
+
+  it("cohort-wide: every heartbeat step's if: contains always()", () => {
+    // CONTAINS, not equals — main-health-monitor, scheduled-supabase-advisor-scan
+    // and workspaces-luks-verify all legitimately carry `always() && <extra>`.
+    const bad = heartbeatSteps()
+      .filter((s) => !s.ifExpr || !s.ifExpr.includes("always()"))
+      .map((s) => `${s.file}:${s.job} if=${s.ifExpr ?? "<none>"}`);
+    expect(bad).toEqual([]);
+  });
+
+  it("cohort-wide: every step id read by a status: expression exists earlier in the same job", () => {
+    // Catches the rename that leaves position and always() both green while the
+    // expression resolves to its fallback arm on every run.
+    const dangling: string[] = [];
+    for (const s of heartbeatSteps()) {
+      for (const id of s.statusStepIds) {
+        if (!s.idsBefore.has(id)) dangling.push(`${s.file}:${s.job} -> steps.${id}`);
+      }
+    }
+    expect(dangling).toEqual([]);
+  });
+
+  it("scheduled-sentry-alert-drift: the heartbeat is present, terminal, and named", () => {
+    // Scoped deliberately. Terminality is NOT a cohort invariant — see the
+    // header — so it is asserted only for the workflow this PR adds.
+    const steps = heartbeatSteps().filter(
+      (s) => s.file === "scheduled-sentry-alert-drift.yml",
+    );
+    expect(steps.length).toBe(1);
+    expect(steps[0].name).toBe("Sentry check-in (final)");
+    expect(steps[0].isLastInJob).toBe(true);
+    expect(steps[0].statusStepIds).toContain("probe");
+  });
+});

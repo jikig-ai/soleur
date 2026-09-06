@@ -1315,3 +1315,40 @@ resource "sentry_cron_monitor" "main_health_monitor" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# The §2.9 drift detector for the 27 adopted `sentry_alert` rules (#7834).
+#
+# WHAT THIS BUYS THAT NOTHING ELSE DOES. `scheduled-sentry-alert-drift.yml` was
+# the only scheduled workflow with no heartbeat, and its own header named the
+# uncovered case: "the dispatch was accepted and the runner never ran." Inngest
+# reports success, no GHA run happens, and no step of that workflow executes — so
+# nothing there can file anything. The 27 rules are then unwatched and the repo
+# looks healthy. `cron-inngest-cron-watchdog` covers the SCHEDULER going quiet;
+# only a missed check-in covers the RUNNER never starting.
+#
+# It could not land with the adoption itself: adding any resource to this root
+# would have planned `1 to add`, and that PR's whole safety argument was a plan of
+# 27 imports and nothing else.
+#
+# DISPATCH-HYBRID CLASS, so the margin is deliberately generous. The check-in
+# arrives after Inngest dispatch latency + GitHub Actions queue time + up to the
+# workflow's `timeout-minutes: 10` — none of which is bounded by the crontab. 60
+# matches `scheduled_supabase_advisor_scan`, the closest analogue (daily,
+# Inngest-dispatched, GHA-executed, same job ceiling). A margin copied from a
+# `schedule:`-driven monitor would page the founder on queue jitter.
+#
+# max_runtime_minutes tracks the workflow's `timeout-minutes: 10`, per the
+# `main_health_monitor` convention above. It is DECORATIVE under a single terminal
+# heartbeat — there is no `in_progress` check-in, so runtime is not actually
+# monitored — but it must not be FALSE.
+resource "sentry_cron_monitor" "scheduled_sentry_alert_drift" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-sentry-alert-drift"
+  schedule                = { crontab = "15 7 * * *" }
+  checkin_margin_minutes  = 60
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
