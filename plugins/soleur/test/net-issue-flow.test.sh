@@ -1330,6 +1330,35 @@ else
   fail "R14 expected an Undelivered declarations line; got: $(tr '\n' '|' < "$WORK/out")"
 fi
 
+# R15 -- CLOSING is the cheapest way to neutralise a count, so its keyword match
+# must not fire inside a longer word and must not credit a self-reference. Both
+# were pre-existing fail-opens that got materially cheaper the moment the
+# declared arm made FILED actually count on the shapes that matter.
+_r 'Work.\n\nFiled: #7001\nThis is unclosed #4242.\n' "$_PLAIN"
+cases=$((cases + 1))
+if grep -qE '^  Closing:[[:space:]]+0\b' "$WORK/out"; then
+  pass "R15 unclosed #N is not a close keyword"
+else
+  fail "R15 unclosed credited a close; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+_r 'Work.\n\nFiled: #7001\nCloses #999\n' "$_PLAIN"
+cases=$((cases + 1))
+if grep -qE '^  Closing:[[:space:]]+0\b' "$WORK/out"; then
+  pass "R15 a close naming the PR own number is not a credit"
+else
+  fail "R15 a self-referential close was credited; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+# Direction control: a REAL close keyword must still count, or the two negatives
+# above are satisfied by a match that broke entirely.
+_r 'Work.\n\nCloses #7001\n' "$_PLAIN"
+cases=$((cases + 1))
+if grep -qE '^  Closing:[[:space:]]+1\b' "$WORK/out"; then
+  pass "R15 control: a real close keyword still counts"
+else
+  fail "R15 the close match broke entirely; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+
+
 # ACCOUNTING CONSERVATION. Deliberately placed BEFORE the floor: this is the arm
 # that catches a NEUTERED verdict helper, and the floor cannot. `cases` keeps its
 # full value when fail() is a no-op, so the floor stays green while the verdicts
@@ -1371,7 +1400,7 @@ fi
 # conservation check above: routing it through fail() puts the floor inside the
 # thing it is meant to police.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=114
+MIN_ASSERTIONS=117
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2

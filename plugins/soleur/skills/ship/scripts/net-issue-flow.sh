@@ -237,9 +237,24 @@ if [[ "$PR_FENCE_RC" -ne 0 ]]; then
 fi
 
 # --- CLOSING: issues this PR closes via close-keywords in its body -----------
+# WORD-BOUNDARY the keywords, and drop the PR own number.
+#
+# Without `\b` the alternation matches INSIDE a longer word: `unclosed #4242`,
+# `disclosed #N` and `foreclosed #N` each bought a full -1 of NET credit for a
+# close GitHub will never perform. Measured (#7896 review): a body reading
+# "This is unclosed #4242." reported `Closing: 1 (#4242)`.
+#
+# `$prnum` is stripped here for the same reason the declared arm strips it: #N
+# inside PR N is a self-reference, and `Closes #<own PR>` was a free unit of
+# credit. The declared arm already had this guard; CLOSING did not.
+#
+# Both are pre-existing, and both got materially cheaper to exploit with this
+# change: before the declared-filing arm, FILED was usually 0 on the shapes that
+# matter, so there was nothing for a bogus CLOSING to neutralise.
 CLOSING_NUMS="$(printf '%s\n' "$PR_BODY_SCAN" \
-  | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' \
+  | grep -oiE '(^|[^A-Za-z])(close[sd]?|fix(e[sd])?|resolve[sd]?) #[0-9]+' \
   | grep -oE '[0-9]+' \
+  | grep -vxF "$PR_NUMBER" \
   | sort -un || true)"
 CLOSING=0
 [[ -n "$CLOSING_NUMS" ]] && CLOSING="$(printf '%s\n' "$CLOSING_NUMS" | grep -c . || true)"
