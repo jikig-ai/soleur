@@ -238,7 +238,14 @@ while IFS= read -r cfg; do
     [ -n "$t" ] || continue
     tp="$d/${t#./}"
     [ -f "$tp" ] || continue
-    if grep -q 'ensureIncidentSandbox' "$tp" 2>/dev/null; then COVERED_ROOTS+=("$d"); break; fi
+    # Anchored on the CALL form and on comment-stripped content, not on the bare name: this file's
+    # own EXPORT_RE two screens up already does that, and a `grep -q <name>` here is satisfied by
+    # the import line, by a `//` comment naming it, or by the very sentence above explaining it
+    # (cq-assert-anchor-not-bare-token). A preload that imports the helper and never calls it is
+    # exactly the shape this arm must not credit.
+    if _strip_line_comments "$tp" | grep -qE 'ensureIncidentSandbox[[:space:]]*\(' 2>/dev/null; then
+      COVERED_ROOTS+=("$d"); break
+    fi
   done < <(grep -hoE '(preload|globalSetup)[[:space:]]*[:=][[:space:]]*\[[^]]*\]' "$REPO/$cfg" 2>/dev/null \
            | grep -oE '"[^"]+"' | tr -d '"')
 done < <(grep -E '(bunfig\.toml|vitest\.config\.ts)$' "$WORK/all.txt")
