@@ -57,9 +57,16 @@
 # cloudflare/cloudflare v4→v5 bump renames `cloudflare_record` → `cloudflare_dns_record`;
 # update the type anchors in `hcl_block` calls and `apex_origin_records` when that lands.
 #
-# Runtime drift of the 301 itself is guarded separately by `sentry_uptime_monitor.soleur_www`
-# (equals 301), whose asserted URL does not move at cutover. This file is the config-drift
-# complement — it blocks the regressing PR before merge.
+# Runtime drift of the 301 itself is guarded separately by
+# `betteruptime_monitor.soleur_www_redirect` (uptime-alerts.tf, "soleur dot ai www redirect
+# 301"; runbook knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md), which is
+# the only monitor in the stack that can express it: it asserts `[301]` with
+# `follow_redirects = false`. Until
+# #7798 this said `sentry_uptime_monitor.soleur_www (equals 301)`, which was never true —
+# Sentry follows 3xx and grades the final response, so that assertion was unsatisfiable and
+# failed every check it ever ran. This file is the config-drift complement — it blocks the
+# regressing PR before merge — and since #7798 it also pins the runtime alarm's own
+# load-bearing attributes (see GUARD 1 below), because the alarm is itself a config artifact.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -363,8 +370,15 @@ else
   # it ("In case of duplicates, Bulk Redirects will run in front of your Pages project").
   # The divergence buys the FAILURE MODE: if the redirect ever stops firing, www serves the
   # site (duplicate content for one monitor interval) instead of a Cloudflare 522 on an
-  # HSTS-preloaded host. sentry_uptime_monitor.soleur_www asserts `equals 301` and pages on
-  # EITHER outcome, so detection is a wash and only the user-visible cost differs.
+  # HSTS-preloaded host.
+  #
+  # The "detection is a wash" half of this was FALSE until #7798 and is corrected here rather
+  # than deleted, because it is the justification the dns.tf Camp B ruling leans on.
+  # sentry_uptime_monitor.soleur_www was said to assert `equals 301` and page on EITHER
+  # outcome; it asserted that and paged on NEITHER, having failed 100% of its checks since
+  # the assertion landed. Detection is a wash NOW: betteruptime_monitor.soleur_www_redirect
+  # catches the serves-the-site outcome in ~20 min, and the 522 fails both the Better Stack
+  # monitor and sentry_uptime_monitor.soleur_www_reachability independently.
   #
   # This arm previously accepted ONLY type A ("proxied A, black-hole behind the Bulk
   # Redirect") — residue of the recipe D1 rejected, contradicting ADR-194, D1, R6 and PF9
@@ -467,10 +481,14 @@ verdict "$cname_rc" "plugins/soleur/docs/CNAME is the apex, not www; found ${cna
 # ran. Measured 2026-09-07: 10/10 checks `failure`/`failure_incident`, every row
 # `httpStatusCode 301`, `assertionFailureData` naming the `equals 301` assertion.
 #
-# The property moved to `betteruptime_monitor.soleur_www_redirect`, because Better Stack
-# is the only vendor in the stack that can express it (`follow_redirects = false`). These
-# cases pin the four tokens that make that monitor mean something. Each is a single-token
-# edit away from restoring a defect class this repo has now shipped twice.
+# The property moved to `betteruptime_monitor.soleur_www_redirect` — operator-facing name
+# "soleur dot ai www redirect 301" — because Better Stack is the only vendor in the stack
+# that can express it (`follow_redirects = false`). These cases pin the tokens that make
+# that monitor mean something. Each is a single-token edit away from restoring a defect
+# class this repo has now shipped twice.
+#
+# Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
+# Rationale: ADR-204.
 #
 # BLOCK-SCOPED, never a whole-file grep. `uptime-alerts.tf` contains two monitors that
 # legitimately set `follow_redirects = true`, so a file-level grep for the value we want is

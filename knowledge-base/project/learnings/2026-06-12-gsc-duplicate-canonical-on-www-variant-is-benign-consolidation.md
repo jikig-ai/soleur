@@ -43,7 +43,14 @@ direction and would make every page emit a redirecting canonical site-wide.
 (derived, not a second literal pin). This is the per-page sibling of the existing
 sitemap host-axis gate. It catches a *page-template* regression emitting a
 redirecting/other-host canonical; a *uniform* `site.url`→www flip stays covered by
-`sentry_uptime_monitor.soleur_www` (the live 301 monitor).
+`betteruptime_monitor.soleur_www_redirect` (the live 301 alarm, `uptime-alerts.tf`).
+
+> **Corrected 2026-09-07 (#7798).** This line named
+> `sentry_uptime_monitor.soleur_www` as "the live 301 monitor". It was not one.
+> It asserted `equals 301` against a URL that redirects, and Sentry follows 3xx
+> and grades the final response — so it failed every check it ever ran and could
+> not have covered anything. The property now lives on Better Stack, which can be
+> told not to follow. See ADR-204.
 
 ## Key Insight
 
@@ -82,6 +89,7 @@ wait, with at most a regression-hardening CI gate.
    X, not just the first; add a multi-occurrence fixture.
 
 ## Tags
+
 category: seo
 module: plugins/soleur/skills/seo-aeo
 related: [[2026-06-01-gsc-page-with-redirect-is-historical-memory-verify-against-build]]

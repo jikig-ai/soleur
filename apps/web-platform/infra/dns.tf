@@ -307,7 +307,12 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 #   redirect pair nor the semantic contract, so `www-apex-canonicalizer.test.sh`
 #   asserts them together at CI time -- it is stage-aware, and this is its
 #   `cf-pages` stage. Runtime drift of the 301 is guarded by
-#   sentry_uptime_monitor.soleur_www.
+#   betteruptime_monitor.soleur_www_redirect ("soleur dot ai www redirect 301"),
+#   in uptime-alerts.tf. Runbook:
+#   knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
+#   It named sentry_uptime_monitor.soleur_www until #7798;
+#   that monitor asserted `equals 301` and had never once passed, because Sentry
+#   follows 3xx and grades the final response. See ADR-204.
 #
 # WHY www STAYS A CNAME (Camp B; CTO ruling; measured at provider 4.52.7):
 #   `type` is ForceNew, so an `A` here would be a SECOND replacement racing the
@@ -315,6 +320,17 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 #   is chosen deliberately: if the Bulk Redirect ever stops firing, www SERVES
 #   the site (duplicate content for one monitor interval) rather than returning
 #   a 522 on an HSTS-preloaded host.
+#
+#   CORRECTED at #7798 -- "for one monitor interval" was resting on nothing. The
+#   monitor that bound it, sentry_uptime_monitor.soleur_www, asserted `equals 301`
+#   and failed 100% of its checks from the day the assertion landed, so it could
+#   not signal a transition into this state. The accepted bound was not "one
+#   interval"; it was UNBOUNDED, and this ruling was made on the strength of an
+#   alarm that had never fired. The bound is real now:
+#   betteruptime_monitor.soleur_www_redirect is 180s cadence with a 1200s
+#   confirmation window, i.e. ~20 min worst case. Read the acceptance as ~20 min,
+#   and do not widen it without revisiting this ruling. ADR-204 and
+#   knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md.
 
 # THE TWO-MERGE CONTRACT (#7640, ADR-194 D5). Read this before editing either block.
 #

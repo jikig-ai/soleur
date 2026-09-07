@@ -49,8 +49,12 @@
 # Live quota measured 2026-09-07 (not counted from .tf blocks, which misses the
 # unmanaged app.soleur.ai/health monitor): 3 monitors + 9 heartbeats. Heartbeats
 # are NOT pooled against the 10-monitor cap — 12 resources already coexist. This
-# monitor is the 4th of 10. Tracking issues for the residual gap and the
-# unmanaged monitor are linked from ADR-204.
+# monitor is the 4th of 10. Two tracked follow-ups, both also linked from ADR-204:
+#   #7883 — no runtime assertion of the redirect's TARGET (only its status code);
+#           re-evaluate if a Cloudflare-side change ever reaches prod un-applied.
+#   #7884 — betteruptime monitor id 4226366 (app.soleur.ai/health) is LIVE but
+#           declared in no root, so nothing converges it and it is invisible to
+#           the #5566 coverage guard. It is why the count above is measured.
 #
 # Why check_frequency = 180 (3 min) vs Sentry's 300s (5 min): denser probe
 # trades a tiny BetterStack-bill bump (free-tier sub-minute checks are paid;

@@ -711,11 +711,16 @@ discoverability_test:
   expected_output: |
     CUT3 PASS https://www.soleur.ai/ -> https://soleur.ai/
     (exit 0)
-  credentials_required: none — this mode exits before any token is read, so the
-    property is verifiable against a public unauthenticated URL by anyone, from
-    anywhere, with nothing. Confirming the SEPARATE question "is the vendor
-    monitor configured correctly" needs BETTERSTACK_API_TOKEN and is deliberately
-    not folded in here.
+  # NO `credentials_required` KEY, deliberately — and its absence is the assertion.
+  # Per #7393/ADR-175 Layer 3 the sub-field means SKIP-DECLARED: ANY non-empty
+  # value classifies the probe as unrunnable and preflight never executes it. An
+  # earlier draft of this plan wrote `credentials_required: none — this mode exits
+  # before any token is read`, which reads as documentation and functions as a
+  # waiver: it would have SUPPRESSED the one check that proves the runbook's
+  # one-command reproduction actually works. The mode needs no token, so the key
+  # must be absent and the probe must run. (Confirming the SEPARATE question "is
+  # the vendor monitor configured correctly" does need BETTERSTACK_API_TOKEN, and
+  # is deliberately not folded into this command.)
 ```
 
 **No new script.** An earlier draft created `www-redirect-check.sh`, described in
