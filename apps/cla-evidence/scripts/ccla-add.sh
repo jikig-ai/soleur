@@ -59,7 +59,7 @@ Usage:
                      (--org "Legal Name" | --sole-trader)
                      --signed-at 2026-09-04T00:00:00Z
                      --authorized-from 2026-09-04T00:00:00Z
-                     --instrument-sha256 <64-hex>
+                     (--instrument-file /abs/path | --instrument-sha256 <64-hex>)
                      --login <github-login> [--login <github-login> ...]
                      [--cla-git-sha <sha>]
 
@@ -69,6 +69,17 @@ Usage:
   CCLA_ADD_DRY_RUN=1 ccla-add.sh ...   # resolve + validate, write nothing
 
 Notes:
+  --instrument-file and --instrument-sha256 are MUTUALLY EXCLUSIVE and exactly
+  one is required. Prefer --instrument-file: it hashes the executed instrument
+  itself, so no one retypes 64 hex characters into a permanent, world-readable
+  record about a third party. The path must be ABSOLUTE and must resolve
+  OUTSIDE this repository -- the instrument is held on the encrypted operator
+  drive, never committed. --instrument-sha256 remains for the case where only
+  the digest is to hand.
+
+  Note that the path is echoed to stderr and lands in your shell history and in
+  /proc/<pid>/cmdline; the instrument's filename may carry a legal name.
+
   --sole-trader omits the organisation's legal name (published as null), for a
   counterparty whose legal name IS a natural person's name. The name is held
   off-repo with the instrument. See the CLO ruling, amendment B1-c-2.
@@ -128,6 +139,11 @@ TSX="apps/web-platform/node_modules/.bin/tsx"
 # ---- argument parsing -------------------------------------------------------
 RECORD_REF=""; ORG=""; SOLE_TRADER=0; SIGNED_AT=""; AUTHORIZED_FROM=""
 INSTRUMENT_SHA=""; CLA_GIT_SHA=""; WITHDRAWN_AT=""
+# Initialised HERE and not only in the parse arm. Under `set -euo pipefail` the
+# first `[[ -n "$INSTRUMENT_FILE" ]]` on an UNSET variable aborts with a bare
+# rc=1 and no message at all -- which is not one of the documented exit codes,
+# and is the same class the `need()` comment below was written about.
+INSTRUMENT_FILE=""; RESOLVED_INSTRUMENT=""
 LOGINS=()
 # `shift 2` returns non-zero when there is no value to shift, and a `case` body
 # is NOT exempt from `set -e` — so a trailing `--record-ref` aborted with exit 1
@@ -141,6 +157,13 @@ while [[ $# -gt 0 ]]; do
     --signed-at)          need "$@"; SIGNED_AT="$2"; shift 2 ;;
     --authorized-from)    need "$@"; AUTHORIZED_FROM="$2"; shift 2 ;;
     --instrument-sha256)  need "$@"; INSTRUMENT_SHA="$2"; shift 2 ;;
+    # A repeated --instrument-file would silently last-wins, i.e. quietly change
+    # WHICH file's bytes become the permanent record. Every other flag here is
+    # last-wins too, but this is the one where the loser is a legal artifact.
+    --instrument-file)    need "$@"
+                          [[ -z "$INSTRUMENT_FILE" ]] \
+                            || die "--instrument-file given more than once (already: $INSTRUMENT_FILE) -- pass it once, so which file was hashed is unambiguous" 64
+                          INSTRUMENT_FILE="$2"; shift 2 ;;
     --cla-git-sha)        need "$@"; CLA_GIT_SHA="$2"; shift 2 ;;
     --withdrawn-at)       need "$@"; WITHDRAWN_AT="$2"; shift 2 ;;
     --login)              need "$@"; LOGINS+=("$2"); shift 2 ;;
@@ -166,8 +189,73 @@ command -v jq >/dev/null 2>&1 || die "jq is required"
 if [[ "$MODE" == "add" ]]; then
   [[ -n "$SIGNED_AT" ]] || die "--signed-at is required" 64
   [[ -n "$AUTHORIZED_FROM" ]] || die "--authorized-from is required" 64
-  [[ -n "$INSTRUMENT_SHA" ]] || die "--instrument-sha256 is required (SHA-256 of the executed instrument as received)" 64
-  [[ "$INSTRUMENT_SHA" =~ ^[0-9a-f]{64}$ ]] || die "--instrument-sha256 must be 64 lowercase hex chars" 64
+  # ---- the executed instrument's hash: computed, or supplied ---------------
+  # Mutual exclusion FIRST, so an operator who passes both is told that rather
+  # than being told the second one won. Mirrors the --org/--sole-trader pair.
+  if [[ -n "$INSTRUMENT_FILE" && -n "$INSTRUMENT_SHA" ]]; then
+    die "--instrument-file and --instrument-sha256 are mutually exclusive. --instrument-file hashes the executed instrument itself and is of record; --instrument-sha256 records a digest you supply. Pass exactly one, so which artifact the published hash describes is never ambiguous." 64
+  fi
+  if [[ -z "$INSTRUMENT_FILE" && -z "$INSTRUMENT_SHA" ]]; then
+    die "one of --instrument-file (preferred: an absolute path to the executed instrument, hashed here) or --instrument-sha256 (64-hex, when only the digest is to hand) is required" 64
+  fi
+  if [[ -n "$INSTRUMENT_FILE" ]]; then
+    # ONE resolution, then every check AND the hash run against that same
+    # string. Checking the argument and hashing an independent second
+    # resolution leaves nothing asserting that the thing hashed is the thing
+    # checked -- and between the two a symlink can be repointed.
+    [[ "$INSTRUMENT_FILE" = /* ]] \
+      || die "--instrument-file must be an absolute path (got: $INSTRUMENT_FILE) -- the executed instrument lives on the encrypted operator drive, outside this repository, and a relative path would be resolved against a working directory this script has already changed" 64
+    # `-e` before `-f`, deliberately: `-f` ALONE reports a DIRECTORY as "no such
+    # file", which is the measured-bad-for-could-not-measure collapse this
+    # script exists to refuse. Two checks buy two true messages.
+    [[ -e "$INSTRUMENT_FILE" ]] \
+      || die "no such instrument file: $INSTRUMENT_FILE" 64
+    RESOLVED_INSTRUMENT="$(realpath -e -- "$INSTRUMENT_FILE")" \
+      || die "could not resolve --instrument-file to a real path: $INSTRUMENT_FILE" 64
+    [[ -f "$RESOLVED_INSTRUMENT" ]] \
+      || die "not a regular file: $INSTRUMENT_FILE -- pass the executed instrument itself, not a directory or a device" 64
+    [[ -s "$RESOLVED_INSTRUMENT" ]] \
+      || die "instrument file is empty: $INSTRUMENT_FILE -- an empty file hashes to a well-known constant and evidences nothing" 64
+    [[ -r "$RESOLVED_INSTRUMENT" ]] \
+      || die "instrument file is not readable: $INSTRUMENT_FILE" 64
+    # Custody (P10): the bytes of record are the instrument as received on the
+    # encrypted drive, never a copy inside this repository. The trailing slash
+    # is load-bearing -- without it a sibling directory such as
+    # /home/x/soleur-backup reads as inside /home/x/soleur.
+    #
+    # This is a TYPO CATCHER, not a boundary. A bind mount, a hardlink or a
+    # sibling worktree defeats any path comparison, and none of them is what
+    # this refusal exists to catch.
+    _repo_real="$(realpath -e -- "$REPO_ROOT")" \
+      || die "could not resolve the repository root for the custody check" 2
+    case "$RESOLVED_INSTRUMENT" in
+      "$_repo_real"/*)
+        die "the instrument at $INSTRUMENT_FILE resolves INSIDE this repository ($RESOLVED_INSTRUMENT). The executed instrument is held off-repo on the encrypted operator drive -- committing it would publish the counterparty's identity, which is the whole reason the roster carries a hash and not a document." 2 ;;
+    esac
+    # `sha256sum < "$f"`, NOT `sha256sum "$f"`. GNU sha256sum PREFIXES its output
+    # line with a backslash when the filename contains a backslash or a newline,
+    # which shifts the awk fields and yields something that is not 64 hex.
+    # Reading stdin prints no filename at all, so the shape cannot vary.
+    INSTRUMENT_SHA="$(sha256sum < "$RESOLVED_INSTRUMENT" | awk '{print $1}')" \
+      || die "could not hash the instrument at $INSTRUMENT_FILE" 2
+    # --instrument-file closes TRANSCRIPTION error. It cannot close SELECTION
+    # error -- the wrong file is hashed perfectly, and nothing downstream can
+    # tell. Size and mtime are what make that reviewable: a re-export of the
+    # same instrument differs in both. stderr, because stdout carries the
+    # emitted roster on a dry run.
+    _isize="$(wc -c < "$RESOLVED_INSTRUMENT" | tr -d '[:space:]')"
+    _imtime="$(date -u -r "$RESOLVED_INSTRUMENT" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    printf 'instrument file: %s bytes=%s mtime=%s sha256=%s\n' \
+      "$RESOLVED_INSTRUMENT" "$_isize" "$_imtime" "$INSTRUMENT_SHA" >&2
+    printf 'CHECK THIS IS THE RIGHT INSTRUMENT: this script proves the hash matches the file, never that the file is the one that was executed.\n' >&2
+  fi
+  # LOAD-BEARING for both arms, and the reason it is not written as two checks.
+  # It is the single chokepoint every value of INSTRUMENT_SHA passes before it
+  # reaches the roster, so a third source added later is covered without editing
+  # anything. On the --instrument-file path it fires when field extraction went
+  # wrong -- a `\`-prefixed sha256sum line, a truncated read -- which is exactly
+  # the failure that would otherwise publish a malformed hash.
+  [[ "$INSTRUMENT_SHA" =~ ^[0-9a-f]{64}$ ]] || die "the executed-instrument hash is not 64 lowercase hex chars: $INSTRUMENT_SHA" 64
   if [[ "$SOLE_TRADER" -eq 0 && -z "$ORG" ]]; then
     die "one of --org or --sole-trader is required. Use --sole-trader when the counterparty's legal name IS a natural person's name; the name is then held off-repo (CLO amendment B1-c-2)." 64
   fi

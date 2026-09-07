@@ -2121,7 +2121,10 @@ if want_scripts; then
   # can tell "the gate blocked this input" from "the gate never looked" (#7629).
   run_suite "scripts/skill-security-scan-step-body" bash scripts/skill-security-scan-step-body.test.sh
 
-  # EXPLICIT: scripts/followthroughs/ is covered by no glob here. Drives the T5
+  # EXPLICIT: scripts/followthroughs/ is covered by no glob here. (One further
+  # companion from that directory, ccla-representative-icla-7922, is registered
+  # in the `webplat` shard instead — it needs tsx, which this shard lacks.)
+  # Drives the T5
   # skip-persistence probe against nine fixture samples through a fake `gh`,
   # with fixtures padded past the 64 KiB pipe buffer so the SIGPIPE race the
   # probe was losing matches to is actually reachable (#7574).
@@ -2206,6 +2209,13 @@ if want_webplat; then
   # nothing ran. An ack was the other option and would have been false: every
   # entry in DOUBLE_COVERED_ACK has BOTH surfaces genuinely running the suite.
   run_suite "apps/cla-evidence/test/ccla-add.test.sh" bash apps/cla-evidence/test/ccla-add.test.sh
+  # EXPLICIT, and in THIS shard rather than `scripts`: scripts/followthroughs/ matches no
+  # SUITE_GLOBS entry, and this companion needs apps/web-platform/node_modules/.bin/tsx to
+  # run `resolveCoverageMapNoticeEpoch` as the authority its per-fixture parity arm compares
+  # the probe against. The `test-scripts` shard installs no npm dependencies, so registering
+  # it there would make the only cross-implementation check in the pair fail on a missing
+  # binary rather than on a disagreement.
+  run_suite "scripts/followthroughs/ccla-representative-icla-7922" bash scripts/followthroughs/ccla-representative-icla-7922.test.sh
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.

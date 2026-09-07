@@ -395,6 +395,27 @@ run_one() {
   # command substitution surfaces.
   out=$(printf '%s' "$out" | grep -v '^+' || true)
 
+  # TWO CONTAINMENT FIXES, in the same place and for the same reason: whatever a
+  # probe writes is republished VERBATIM under the `github-actions` identity, and
+  # the sweeper reads two of its own control markers back out of comments
+  # authored by that identity (the reopen marker, by substring; the PASS prefix).
+  # The author gate closes direct forgery. It does not close LAUNDERING —
+  # content that reaches a probe's stdout is re-emitted under the trusted
+  # identity — and #7922's probe is the first one that reads third-party
+  # controlled content at all.
+  #
+  # 1. An HTML comment opener is neutralised. `<!-- soleur:followthrough ... -->`
+  #    is the directive grammar this sweeper parses; a probe that emitted one
+  #    would be writing sweeper control syntax into a public issue.
+  # 2. The fence is raised to five backticks and any run of five-or-more in the
+  #    output is reduced to four, so no output line can close the fence. A bare
+  #    three-backtick line otherwise ends the code block and lets everything
+  #    after it render as markdown — which is where a forged marker would go.
+  #
+  # One strip here protects every probe, rather than relying on 80 scripts each
+  # carrying a correct preamble.
+  out=$(printf '%s' "$out" | sed -e 's/<!--/<!- -/g' -e 's/`\{5,\}/````/g')
+
   local trimmed_out
   trimmed_out=$(printf '%s' "$out" | tail -c 4000)
 
@@ -413,9 +434,9 @@ This issue was closed, but \`$script\` still exits 1 — the close criteria are 
 
 <details><summary>Output (last 4 KB)</summary>
 
-\`\`\`
+\`\`\`\`\`
 $trimmed_out
-\`\`\`
+\`\`\`\`\`
 
 </details>"
         ;;
@@ -461,9 +482,9 @@ Script: \`$script\` exited 0. Auto-closing per follow-through convention.
 
 <details><summary>Output (last 4 KB)</summary>
 
-\`\`\`
+\`\`\`\`\`
 $trimmed_out
-\`\`\`
+\`\`\`\`\`
 
 </details>"
       action="close"
@@ -475,9 +496,9 @@ Script: \`$script\` exited 1. Leaving issue open; the close criteria are not met
 
 <details><summary>Output (last 4 KB)</summary>
 
-\`\`\`
+\`\`\`\`\`
 $trimmed_out
-\`\`\`
+\`\`\`\`\`
 
 </details>"
       action="comment"
@@ -489,9 +510,9 @@ Script: \`$script\` exited $rc. Treating as transient; leaving issue open for ne
 
 <details><summary>Output (last 4 KB)</summary>
 
-\`\`\`
+\`\`\`\`\`
 $trimmed_out
-\`\`\`
+\`\`\`\`\`
 
 </details>"
       action="comment"

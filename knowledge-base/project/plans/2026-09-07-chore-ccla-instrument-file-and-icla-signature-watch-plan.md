@@ -514,10 +514,10 @@ because building the watch is its deliverable.
    and it is also what stops a PASS fired by an **unrelated** post-epoch signer from publicly and
    permanently correlating an arbitrary contributor with a counterparty they have no relationship
    to. If the PR is abandoned, close the tracker in the same session.
-2. Land `scripts/followthroughs/ccla-representative-icla-<TRACKER>.sh` and its companion suite,
-   **both** committed `100755`, and substitute the resolved `<TRACKER>` back into this plan in
+2. Land `scripts/followthroughs/ccla-representative-icla-7922.sh` and its companion suite,
+   **both** committed `100755`, and substitute the resolved `7922` back into this plan in
    the same commit so the shipped file is greppable from the plans corpus.
-3. Post-merge, via a committed `scripts/bootstrap-ccla-watch-<TRACKER>.sh`
+3. Post-merge, via a committed `scripts/bootstrap-ccla-watch-7922.sh`
    (`hr-multi-step-post-merge-bootstrap-script` — four scriptable steps): read-modify-append the
    body (never a bare `--body-file` over a body you did not first fetch), `--add-label
    follow-through`, dispatch `-f dry_run=true`, and assert the log line. With `earliest=` at the
@@ -526,7 +526,7 @@ because building the watch is its deliverable.
 
 ### Filename
 
-`ccla-representative-icla-<TRACKER>.sh`, not `ccla-convergence-…`. #7910's `<counterparty>` is a
+`ccla-representative-icla-7922.sh`, not `ccla-convergence-…`. #7910's `<counterparty>` is a
 placeholder, and the counterparty's status under the sole-trader rule is unknown until the
 instrument arrives — a legal name that is a natural person's name would make the filename an
 identity field in a tracked file (CLO re-evaluation trigger 4). The neutral name forecloses it.
@@ -676,7 +676,7 @@ renders them into the PR body and files the `action-required` issue.
 
 ```yaml
 liveness_signal:
-  what: "scheduled-followthrough-sweeper run, which logs `issue #<TRACKER>: running <script>` and `exit=<rc>` and posts the probe's output as a tracker comment"
+  what: "scheduled-followthrough-sweeper run, which logs `issue #7922: running <script>` and `exit=<rc>` and posts the probe's output as a tracker comment"
   cadence: "daily at 18:00 UTC (cron '0 18 * * *'); earliest= is the filing date, so the channel is live from day one"
   alert_target: "the tracker issue comment thread"
   configured_in: ".github/workflows/scheduled-followthrough-sweeper.yml"
@@ -722,8 +722,8 @@ logs:
   retention: "Actions logs 90 days (repo default); issue comments indefinitely"
 
 discoverability_test:
-  command: "bash scripts/followthroughs/ccla-representative-icla-<TRACKER>.sh --print-epoch"
-  expected_output: "prints exactly the line 2026-09-07T15:16:45Z and exits 0. Measured in this checkout: main history is intact (rev-list --count HEAD = 3496; .git/shallow holds one SHA, the cla-signatures tip), so the success branch is pinnable and the earlier 'or a CANNOT ESTABLISH line otherwise' phrasing was satisfied by both branches and therefore asserted nothing. NOTE: <TRACKER> must be substituted (Phase 4 step 2 / task 4.10) before preflight Check 10 executes this, or it fails on a nonexistent path."
+  command: "bash scripts/followthroughs/ccla-representative-icla-7922.sh --print-epoch"
+  expected_output: "prints exactly the line 2026-09-07T15:16:45Z and exits 0. Measured in this checkout: main history is intact (rev-list --count HEAD = 3496; .git/shallow holds one SHA, the cla-signatures tip), so the success branch is pinnable and the earlier 'or a CANNOT ESTABLISH line otherwise' phrasing was satisfied by both branches and therefore asserted nothing. NOTE: 7922 must be substituted (Phase 4 step 2 / task 4.10) before preflight Check 10 executes this, or it fails on a nonexistent path."
   credentials_required: "none for --print-epoch, which performs no fetch. Accurate scope: the probe declares no secrets= and holds no credential in its environment; the verdict path's `git fetch` uses whatever credential the checkout persisted in .git/config, which is why Phase 5 decides persist-credentials explicitly."
 ```
 
@@ -892,7 +892,7 @@ covers by asserting absence in the union of streams while driving the stubs' fai
 - **QG1** `bash apps/cla-evidence/test/ccla-add.test.sh` exits 0 with `0 failed`, and
   `MIN_ASSERTIONS` equals the measured total. *(The suite's floor is `-lt`, so this is a
   plan-time statement about the ratchet, not a stricter runtime condition.)*
-- **QG2** `bash scripts/followthroughs/ccla-representative-icla-<TRACKER>.test.sh` exits 0 with
+- **QG2** `bash scripts/followthroughs/ccla-representative-icla-7922.test.sh` exits 0 with
   its floor and `passes + fails == cases`.
 - **QG3** `bash scripts/lint-orphan-test-suites.sh` exits 0 — **run after `git add`**.
 - **QG4** `bash scripts/followthrough-exec-bit.test.sh` exits 0 with `MIN_PROBES` at the measured
@@ -957,9 +957,9 @@ log names the probe.
 `apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts` (back-pointer comment only);
 `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`.
 
-**Create:** `scripts/followthroughs/ccla-representative-icla-<TRACKER>.sh` (100755);
-`scripts/followthroughs/ccla-representative-icla-<TRACKER>.test.sh` (100755);
-`scripts/bootstrap-ccla-watch-<TRACKER>.sh`.
+**Create:** `scripts/followthroughs/ccla-representative-icla-7922.sh` (100755);
+`scripts/followthroughs/ccla-representative-icla-7922.test.sh` (100755);
+`scripts/bootstrap-ccla-watch-7922.sh`.
 
 ## Future Considerations
 

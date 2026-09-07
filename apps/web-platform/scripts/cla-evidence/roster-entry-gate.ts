@@ -65,6 +65,18 @@ export const NOTICE_ANCHOR = "public corporate coverage map";
  * Fails CLOSED: an unresolvable epoch refuses every account rather than
  * admitting them, because "we cannot establish when the notice existed" is not
  * "it existed early enough".
+ *
+ * A SECOND IMPLEMENTATION OF THIS DERIVATION EXISTS, and it is pinned to this
+ * one. `scripts/followthroughs/ccla-representative-icla-7922.sh --print-epoch`
+ * re-derives the same moment in bash, because that probe runs under `env -i` on
+ * a CI runner with no node toolchain. Its companion suite asserts the two agree
+ * BYTE FOR BYTE across a family of synthetic repositories (one-touch,
+ * two-touch, merge, rebase-replay, squash), so editing `--first-parent`, `%cI`,
+ * the oldest-match rule or the `--` separator here reddens a suite two
+ * directories away. That is deliberate — the alternative is the two drifting
+ * apart silently, with the merge gate and the operator's watch disagreeing
+ * about when the notice existed — but it is worth knowing before you change the
+ * argv array below.
  */
 export function resolveCoverageMapNoticeEpoch(repoRoot?: string): string {
   let out = "";

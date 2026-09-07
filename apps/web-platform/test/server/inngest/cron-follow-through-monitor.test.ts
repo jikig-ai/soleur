@@ -669,3 +669,47 @@ describe("cron-follow-through-monitor — T9 Guard C not-planned close semantics
     expect(guardC).toContain(cmd);
   });
 });
+
+describe("cron-follow-through-monitor — T10 sweeper-owned trackers are excluded (#7910)", () => {
+  // An issue carrying a `soleur:followthrough` directive is owned by
+  // scripts/sweep-followthroughs.sh, which polls it daily with its own close
+  // semantics. This monitor's Guard C closes as `not planned` at 30 business
+  // days, and the sweeper filters NOT_PLANNED out of its closed set — so a
+  // sweeper-owned tracker closed here goes invisible to BOTH systems while it
+  // is still legitimately waiting. #7922 is a legal tracker whose wait is
+  // comfortably longer than 30 business days, so this is the difference between
+  // it surviving and it silently disappearing.
+  //
+  // Asserted on the prompt text, which is the strongest guard available: the
+  // agent cannot be executed in-suite.
+
+  it("T10a: the listing step filters out issues whose body carries the directive", async () => {
+    const { FOLLOW_THROUGH_PROMPT } = await import(
+      "@/server/inngest/functions/cron-follow-through-monitor"
+    );
+    const listing = FOLLOW_THROUGH_PROMPT.slice(
+      FOLLOW_THROUGH_PROMPT.indexOf("1. List open follow-through issues"),
+      FOLLOW_THROUGH_PROMPT.indexOf("2. If zero issues are found"),
+    );
+    // Known-positive control: the slice really is the listing step. Without it
+    // an anchor drift would make every assertion below vacuously true.
+    expect(listing).toContain("gh issue list --label follow-through --state open");
+    expect(listing).toContain("soleur:followthrough");
+    expect(listing).toContain("| not)");
+  });
+
+  it("T10b: the exclusion states WHY, so it is not deleted as redundant with sla_business_days", async () => {
+    const { FOLLOW_THROUGH_PROMPT } = await import(
+      "@/server/inngest/functions/cron-follow-through-monitor"
+    );
+    const listing = FOLLOW_THROUGH_PROMPT.slice(
+      FOLLOW_THROUGH_PROMPT.indexOf("1. List open follow-through issues"),
+      FOLLOW_THROUGH_PROMPT.indexOf("2. If zero issues are found"),
+    );
+    expect(listing).toContain("not planned");
+    // sla_business_days reaches Guard B only; Guard C's 30 days is a constant in
+    // this prompt. A future reader who believes otherwise would delete the
+    // exclusion as redundant.
+    expect(listing).toContain("does not reach Guard C");
+  });
+});

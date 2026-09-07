@@ -112,8 +112,23 @@ predicates and SLA status.
 
 ## Instructions
 
-1. List open follow-through issues:
-   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author --jq '.'${"`"}
+1. List open follow-through issues, EXCLUDING any whose body carries a
+   ${"`"}soleur:followthrough${"`"} directive:
+   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author --jq '[.[] | select((.body // "") | test("soleur:followthrough") | not)]'${"`"}
+
+   The exclusion is load-bearing, not an optimisation. An issue carrying that
+   directive is owned by ${"`"}scripts/sweep-followthroughs.sh${"`"}, which polls it
+   daily on its own cadence and has its OWN close semantics — and the two
+   systems disagree in the one direction that cannot be undone. This monitor's
+   Guard C closes as ${"`"}not planned${"`"} after 30 business days, and
+   ${"`"}sweep-followthroughs.sh${"`"} filters NOT_PLANNED out of its closed set, so a
+   sweeper-owned tracker closed here becomes invisible to BOTH systems while it
+   is still legitimately waiting. Two pollers with different body formats and
+   opposite close rules on one issue is the defect; this line is the fix.
+
+   Note that ${"`"}sla_business_days${"`"} does not reach Guard C — that 30-day bound is
+   a constant in this prompt — so a ${"`"}## Verification${"`"} block cannot substitute
+   for the exclusion above.
 
 2. If zero issues are found, output "No open follow-through issues." and stop.
 
