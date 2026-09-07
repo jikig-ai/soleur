@@ -31,7 +31,7 @@ Manages Sentry-hosted infrastructure for `app.soleur.ai`:
   (#4656 item 1 — the only rule here using `"any"`). After every apply,
   `apply-sentry-infra.yml` runs a read-only `assert-byok-rules-exist.sh` liveness
   check asserting both BYOK rules still exist by name (#4656 item 5).
-- **55 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
+- **56 cron monitors** — vendor-hosted heartbeat for the scheduled GitHub
   Actions workflows that touch secrets (closes #3236). Auto-applied on
   push-to-main via `.github/workflows/apply-sentry-infra.yml`. A monitor for
   `scheduled-cf-token-expiry-check` is deferred until that workflow's
@@ -77,9 +77,15 @@ terraform plan
 
 ## First-time import — COMPLETE, runbook retired (#7590)
 
-First-time adoption of the issue-alert rules is done. Since #7650 Phase 2 this
-root declares **27 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was
-29 `sentry_issue_alert`) and plans clean against the full root.
+First-time adoption of the issue-alert rules is done. Since #7650 Phase 2 this root
+declares **27 `sentry_alert` + 3 `sentry_issue_alert`** resources (it was 29
+`sentry_issue_alert`) and plans clean against the full root.
+
+The third `sentry_issue_alert` is `git-data-boot-warning`, which landed after
+the adoption capture was taken and so was never in the migration's scope. This
+paragraph said **2** until 2026-09-06 (#7826) while line 5 of this same file
+already said 3 — the file contradicted itself, and the stale half was the one
+the adoption tooling's error text had copied.
 
 The 27 were adopted by CONFIG-BLOCK adoption, not by a `terraform import`
 command: 27 `import { to = sentry_alert.<n> }` blocks paired with 27
@@ -91,10 +97,14 @@ run against `main`. `required_version` is `>= 1.9` for the same class of
 reason: on an older CLI a `removed` block plans a DESTROY of the live rule
 rather than a forget. **Do not lower it.**
 
-Those `import{}`/`removed{}` blocks are still present and are removed only
-under the hard precondition in #7826 — `terraform state list` showing 27
-`sentry_alert.` addresses on `main`. Removing an `import{}` whose address was
-never imported turns it into a planned CREATE that collides with the live rule.
+Those `import{}`/`removed{}` blocks were REMOVED by #7826 (2026-09-06), once
+the hard precondition held on `main`: `terraform state list` showing 27
+`sentry_alert.` addresses in an exact 1:1 with the 27 resource labels, the three
+surviving `sentry_issue_alert` addresses disjoint from all 27 `removed{}`
+from-labels, and `scripts/sentry-alert-live-fidelity.sh` PASSing field-for-field.
+Until then, removing an `import{}` whose address was never imported would have
+turned it into a planned CREATE colliding with the live rule — and removing a
+`removed{}` whose forget never committed would have planned a DESTROY of one.
 
 The step-by-step import runbook that stood here was retired for two reasons,
 both of which made it actively misleading rather than merely obsolete:
@@ -126,7 +136,7 @@ named after the latter.
 
 This section previously read "the 8 `sentry_cron_monitor` resources do not
 exist in Sentry yet" and described the first apply creating them. True at
-authoring, actively misleading now: the root declares **55** of them, all live,
+authoring, actively misleading now: the root declares **56** of them, all live,
 and the audit's Class D machinery exists precisely *because* live monitors can
 outrun the `.tf` that declares them — a monitor Terraform never declared is
 spend no apply can reclaim.
@@ -184,7 +194,7 @@ dark weeks later: still present, still planning clean, matching nothing.
 **Everything else in the root** is still not on `scheduled-terraform-drift.yml`'s
 matrix, and adding `apps/web-platform/infra/sentry/` to it is DELIBERATELY not
 the fix for the alert rules. That leg would plan the FULL ROOT, which still
-refreshes the two surviving `sentry_issue_alert` resources through the
+refreshes the three surviving `sentry_issue_alert` resources through the
 deprecated endpoint — with none of `apply-sentry-infra.yml`'s brownout retry —
 so it would go red on Sentry's brownout calendar rather than on drift, and get
 muted. The remaining gap (cron and uptime monitors) is unchanged from #3814.

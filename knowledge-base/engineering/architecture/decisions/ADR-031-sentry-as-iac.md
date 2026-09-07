@@ -831,14 +831,25 @@ paging rules**, gated only by whether that unrelated merge happens to carry `[ac
 Config-block adoption closes the window by construction: config and state change in the same
 apply.
 
-The corollary is the cost. Config-block adoption leaves `import{}` and `removed{}` blocks in
-the tree after it succeeds, so the root is not reproducible from zero until they are removed,
-and removing one whose address was never imported converts it into a planned CREATE that
-collides with the live rule. That is why the removal is hard-gated as #7826 rather than tidied
-up in the same PR. The blocks stay in config until the
-post-merge verification passes; removing them earlier turns any un-imported address into a
-planned CREATE that collides with the live rule it was meant to adopt. That removal is a
-hard-gated follow-up (#7826); the adoption is not reproducible from zero while they remain.
+The corollary was the cost. Config-block adoption LEFT `import{}` and `removed{}` blocks in
+the tree after it succeeded, so the root was not reproducible from zero until they were
+removed, and removing one whose address was never imported would have converted it into a
+planned CREATE colliding with the live rule. That is why the removal was hard-gated as #7826
+rather than tidied up in the same PR.
+
+> **[2026-09-06 — #7826]** The 27 pairs have been removed: no block in `issue-alerts.tf`
+> pins a live instance id any more, so the adoption blocks no longer stand between this root
+> and a from-zero rebuild. Stated narrowly on purpose — `sentry_issue_alert.auth_per_user_loop`
+> still carries `conditions_v2 = []` / `filters_v2 = []` with a placeholder `actions_v2`, so a
+> from-zero apply would create THAT rule inert. That is a separate, pre-existing
+> non-reproducibility in the same file and #7826 does not discharge it. The gate was
+> discharged by measurement on `main`, not by elapsed time — 27 `sentry_alert` addresses in
+> state forming an exact 1:1 with the 27 resource labels, the surviving `sentry_issue_alert`
+> set disjoint from all 27 `removed{}` from-labels (the limb that rules out a silently-failed
+> forget, whose block-deletion would have planned a DESTROY rather than a CREATE), and
+> `scripts/sentry-alert-live-fidelity.sh` PASSing field-for-field against the committed
+> capture. The adopted address→live-id mapping now lives only in Terraform state and that
+> capture.
 
 **Ongoing detection is now a deliverable, not a follow-up.**
 `scripts/sentry-alert-live-fidelity.sh` diffs all 27 against the committed capture on a daily

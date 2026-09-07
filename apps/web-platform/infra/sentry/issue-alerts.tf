@@ -1,12 +1,17 @@
 # Sentry alerting for the web-platform project.
 #
-# ADOPTED (#7650 Phase 2, 2026-09-04): 27 of the 29 rules are now managed as
-# `sentry_alert`, the non-deprecated resource. Two remain on the deprecated
-# `sentry_issue_alert` because the provider cannot express their trigger:
-# `auth-per-user-loop` and `sandbox-startup-failure` both use
-# `event_unique_user_frequency_count`, which v0.15.7's `trigger_conditions`
-# does not offer (verified against the provider schema at the pinned tag, not
-# a changelog — upstream jianyuan/terraform-provider-sentry issue 950).
+# ADOPTED (Phase 2, 2026-09-04): 27 of the 30 rules are managed as
+# `sentry_alert`, the non-deprecated resource. THREE remain on the deprecated
+# `sentry_issue_alert`, and they are not all there for the same reason:
+#   - `auth-per-user-loop` and `sandbox-startup-failure` both use
+#     `event_unique_user_frequency_count`, which v0.15.7's `trigger_conditions`
+#     does not offer (verified against the provider schema at the pinned tag,
+#     not a changelog — upstream jianyuan/terraform-provider-sentry issue 950).
+#   - `git-data-boot-warning` landed later, after the adoption capture was
+#     taken, so it was never in the migration's scope at all.
+# The count is 27 + 3. An earlier revision of this header said 27 + 2 and named
+# only the first two; that was already false when this file's own README line 5
+# said 30, and the tripwire's error text carried the same stale two.
 #
 # NAMES ARE LOAD-BEARING. `apps/web-platform/scripts/assert-byok-rules-exist.sh`
 # EXPECTED_RULES and the operator dashboard queries both key on the `name`
@@ -20,19 +25,31 @@
 # while live carries 60/61/62, so it is a drift source, not a source of truth.
 # See phase2-measurements-2026-09-04.md.
 #
-# ADOPTION MECHANISM. Each rule carries a paired `removed{}` (forget the
-# `sentry_issue_alert` address without destroying the live object) and
-# `import{}` (adopt the same live object at the `sentry_alert` address). Both
-# land in ONE merge; there is no out-of-band state surgery.
-#   - `removed{}` with `destroy = false` is refresh-free: measured on Terraform
-#     v1.10.5, a forget emits ZERO "Refreshing state..." lines against one for a
-#     managed block, so it never touches the deprecated `rules/` endpoint
-#     (HashiCorp PR 35458, `node_resource_plan_orphan.go`: `!n.skipRefresh && !forget`).
-#   - `import{}` is idempotent — re-importing an already-managed address is a
-#     documented no-op — and plans as `no-op` + `importing`, never as `create`.
-#   - The 27 `import{}`/`removed{}` blocks stay in config until AC15-AC22 pass
-#     on `main`. Removing an `import{}` for an address that was NOT actually
-#     imported turns it into a planned CREATE of a live-colliding paging rule.
+# ADOPTION MECHANISM (RETIRED 2026-09-06, #7826). Each rule CARRIED a paired
+# `removed{}` (forget the `sentry_issue_alert` address without destroying the
+# live object) and `import{}` (adopt the same live object at the `sentry_alert`
+# address). All 54 blocks landed in one merge, did their job at apply time, and
+# have now been deleted. The 27 `import{}` blocks each pinned a hardcoded live
+# instance id (the `removed{}` blocks named a Terraform address, not an id), so
+# while they remained this root could not be rebuilt from an empty state — a DR rebuild or
+# a second Sentry org would have tried to import ids that do not exist there and
+# failed rather than creating the rules.
+#
+# WHERE THE ADOPTED IDS LIVE NOW. The `import{}` blocks were the last committed
+# record of which live Sentry object each address adopted. That mapping now
+# exists in exactly two places: Terraform state, and the committed capture named
+# under AUTHORING SOURCE above. Recovery is a two-step join, and both halves are
+# committed: that capture maps live id -> live rule NAME, and each
+# `resource "sentry_alert" "<label>"` block below carries its `name`. Neither half
+# needs Terraform state.
+#
+# The removal was gated, not assumed. Measured on `main` 2026-09-06, all three
+# limbs: 27 `sentry_alert` addresses in state forming an exact 1:1 with the 27
+# resource labels here; the surviving `sentry_issue_alert` set being exactly the
+# three named above, disjoint from all 27 `removed{}` from-labels (so no forget
+# had silently failed, which would have made deleting its block plan a DESTROY
+# of a live paging rule); and `scripts/sentry-alert-live-fidelity.sh` reporting
+# PASS field-for-field against the capture.
 #
 # TRIGGER LOGIC IS HARDCODED BY THE PROVIDER. `sentry_alert` exposes no
 # `logic_type` on `trigger_conditions` -- it always applies `any-short`. That is
@@ -72,10 +89,16 @@
 # `container_restart_burst` and `disk_io_wal_concentration`. That is consistent
 # across all three runs and is not a sort bug.
 #
-# A CLEAN PLAN IS NOT EVIDENCE THE DEPRECATION LIFTED. The two survivors still
+# A CLEAN PLAN IS NOT EVIDENCE THE DEPRECATION LIFTED. All THREE survivors still
 # read through the deprecated endpoint, so a green plan may simply mean it ran
 # outside a brownout window. The brownout retry in apply-sentry-infra.yml STAYS
-# until zero `sentry_issue_alert` resources remain (Phase 3.4, blocked on 950).
+# until zero `sentry_issue_alert` resources remain. Phase 3.4 is only PARTLY
+# blocked on 950: that upstream issue blocks `auth_per_user_loop` and
+# `sandbox_startup_failure`, whose `event_unique_user_frequency_count` trigger the
+# pinned provider cannot express. `git_data_boot_warning` uses `event_frequency`,
+# which `sentry_alert.trigger_conditions` already expresses in 11 of the 27 blocks
+# below — it is migratable today, and stays only because it landed after the
+# adoption capture was taken.
 
 data "sentry_project_issue_stream_monitor" "web_platform" {
   organization = var.sentry_org
@@ -84,8 +107,11 @@ data "sentry_project_issue_stream_monitor" "web_platform" {
 }
 
 # --------------------------------------------------------------------------
-# The two rules that CANNOT migrate: event_unique_user_frequency_count is
-# absent from trigger_conditions at v0.15.7 (upstream issue 950).
+# The THREE surviving `sentry_issue_alert` resources. Two CANNOT migrate:
+# event_unique_user_frequency_count is absent from trigger_conditions at v0.15.7
+# (upstream issue 950). The third, `git_data_boot_warning`, CAN — it uses
+# `event_frequency` and is unblocked; it stays only because it post-dates the
+# adoption capture. Do not read this banner as "all three are blocked".
 # --------------------------------------------------------------------------
 
 resource "sentry_issue_alert" "auth_per_user_loop" {
@@ -509,6 +535,42 @@ resource "sentry_alert" "byok_art_33_breach" {
 # wider frequency + quieter `NoOne` fallthrough. Filters require
 # feature=byok-delegations AND op ∈ {hourly-cap-exceeded, daily-cap-exceeded}
 # via a single `in` match (comma-separated; `in` confirmed in beta2 schema).
+#
+# #7829 IS NOT SETTLED BY THIS FILE. Read the whole note before changing the
+# line below, in either direction.
+#
+# WHAT WAS MEASURED (2026-09-06). The project has NO Sentry ownership rule:
+# GET /api/0/projects/<org>/web-platform/ownership/ returns HTTP 200 with
+# `"raw":null` and `"schema":null`, against a passing control probe on
+# .../projects/<org>/web-platform/ (also 200), so the null is a real absence and
+# not a wrong-project or auth artifact. `issue_owners` therefore resolves to
+# nobody, and `fallthrough_type` alone decides delivery. Re-measure before
+# relying on this: adding an ownership rule makes `issue_owners` resolve, at
+# which point `NoOne` stops being what decides delivery.
+#
+# WHAT THAT DOES AND DOES NOT ANSWER. It establishes that the `NoOne` above was
+# TYPED ON PURPOSE — see the Rule 1 / Rule 2 severity split in the comment
+# directly above this one, which is the authority for that and is not restated
+# here. It does NOT establish that a cap breach reaching nobody is acceptable,
+# which is what #7829 actually asked.
+#
+# THE PART THAT IS NOT A ROUTING QUESTION. In migration 084,
+# `check_and_record_byok_delegation_use` raises `hourly_cap_exceeded` and
+# `daily_cap_exceeded` BEFORE its `INSERT INTO public.audit_byok_use`, while its
+# siblings `consent_withdrawn` and `expired` insert first and raise after —
+# migration 061 states the house rule they follow ("accounting is sacred"). So on
+# a cap breach no audit row is written, even though the provider has already been
+# charged (`persistTurnCost` runs after `messages.create`). `v_hourly_spent` is a
+# SUM over those rows, so the window numerator does not advance either: every
+# later turn in the window also exceeds, also raises, also writes nothing. This
+# rule is the only route out of that state, and `trigger_conditions` here is
+# `first_seen_event` alone — no `reappeared_event`/`regression_event`, unlike
+# Rule 1 — so even the issue-stream entry is a single first-seen row.
+#
+# #7829 STAYS OPEN against that enforcement gap. Do not close it on the routing
+# evidence above. Flipping `fallthrough_type` here would page on every breach
+# without fixing the missing ledger row, which is the part that costs the
+# grantor money.
 resource "sentry_alert" "byok_cap_exceeded" {
   organization      = var.sentry_org
   name              = "byok-cap-exceeded"
@@ -1759,336 +1821,4 @@ resource "sentry_alert" "zot_mirror_fallback_rate" {
   lifecycle {
     ignore_changes = [environment]
   }
-}
-
-# --------------------------------------------------------------------------
-# Forget the legacy addresses WITHOUT destroying the live objects.
-# --------------------------------------------------------------------------
-
-removed {
-  from = sentry_issue_alert.action_required_sla_veto_bypass
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.auth_callback_no_code_burst
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.auth_exchange_code_burst
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.auth_signout_burst
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.byok_art_33_breach
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.byok_cap_exceeded
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.chat_message_save_failure
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.container_restart_burst
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.egress_blocked
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.disk_io_wal_concentration
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.gh_pages_cert_reissue_failed
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.git_data_boot_fatal
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.github_webhook_founder_ambiguous
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.inbox_action_required_notify_failure
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.kb_db_error
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.kb_sync_protected_fallback_failed
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.kb_sync_silent_failure
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.local_cache_reload_rate
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.outbound_email_send_failure
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.repo_resolver_divergence
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.seccomp_remediation_failed
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.stale_bot_pr
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.web_private_nic_boot_gate
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.web_terminal_boot_fatal
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.workspace_sync_health
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.workspaces_luks_drift
-  lifecycle {
-    destroy = false
-  }
-}
-
-removed {
-  from = sentry_issue_alert.zot_mirror_fallback_rate
-  lifecycle {
-    destroy = false
-  }
-}
-
-# --------------------------------------------------------------------------
-# Adopt the same live objects at the sentry_alert addresses.
-# --------------------------------------------------------------------------
-
-import {
-  to = sentry_alert.action_required_sla_veto_bypass
-  id = "${var.sentry_org}/715628"
-}
-
-import {
-  to = sentry_alert.auth_callback_no_code_burst
-  id = "${var.sentry_org}/566683"
-}
-
-import {
-  to = sentry_alert.auth_exchange_code_burst
-  id = "${var.sentry_org}/566682"
-}
-
-import {
-  to = sentry_alert.auth_signout_burst
-  id = "${var.sentry_org}/566672"
-}
-
-import {
-  to = sentry_alert.byok_art_33_breach
-  id = "${var.sentry_org}/600195"
-}
-
-import {
-  to = sentry_alert.byok_cap_exceeded
-  id = "${var.sentry_org}/600196"
-}
-
-import {
-  to = sentry_alert.chat_message_save_failure
-  id = "${var.sentry_org}/607768"
-}
-
-import {
-  to = sentry_alert.container_restart_burst
-  id = "${var.sentry_org}/638577"
-}
-
-import {
-  to = sentry_alert.egress_blocked
-  id = "${var.sentry_org}/624623"
-}
-
-import {
-  to = sentry_alert.disk_io_wal_concentration
-  id = "${var.sentry_org}/666233"
-}
-
-import {
-  to = sentry_alert.gh_pages_cert_reissue_failed
-  id = "${var.sentry_org}/705074"
-}
-
-import {
-  to = sentry_alert.git_data_boot_fatal
-  id = "${var.sentry_org}/728266"
-}
-
-import {
-  to = sentry_alert.github_webhook_founder_ambiguous
-  id = "${var.sentry_org}/671178"
-}
-
-import {
-  to = sentry_alert.inbox_action_required_notify_failure
-  id = "${var.sentry_org}/675790"
-}
-
-import {
-  to = sentry_alert.kb_db_error
-  id = "${var.sentry_org}/611582"
-}
-
-import {
-  to = sentry_alert.kb_sync_protected_fallback_failed
-  id = "${var.sentry_org}/638698"
-}
-
-import {
-  to = sentry_alert.kb_sync_silent_failure
-  id = "${var.sentry_org}/636637"
-}
-
-import {
-  to = sentry_alert.local_cache_reload_rate
-  id = "${var.sentry_org}/703994"
-}
-
-import {
-  to = sentry_alert.outbound_email_send_failure
-  id = "${var.sentry_org}/636539"
-}
-
-import {
-  to = sentry_alert.repo_resolver_divergence
-  id = "${var.sentry_org}/643978"
-}
-
-import {
-  to = sentry_alert.seccomp_remediation_failed
-  id = "${var.sentry_org}/703995"
-}
-
-import {
-  to = sentry_alert.stale_bot_pr
-  id = "${var.sentry_org}/630477"
-}
-
-import {
-  to = sentry_alert.web_private_nic_boot_gate
-  id = "${var.sentry_org}/707232"
-}
-
-import {
-  to = sentry_alert.web_terminal_boot_fatal
-  id = "${var.sentry_org}/695939"
-}
-
-import {
-  to = sentry_alert.workspace_sync_health
-  id = "${var.sentry_org}/609710"
-}
-
-import {
-  to = sentry_alert.workspaces_luks_drift
-  id = "${var.sentry_org}/703574"
-}
-
-import {
-  to = sentry_alert.zot_mirror_fallback_rate
-  id = "${var.sentry_org}/685990"
 }
