@@ -12,13 +12,24 @@ tags: [deferral, verification, instruments, secrets, evidence, review]
 
 ## Problem
 
-Twice in one session the operator had to ask **"why did you stop"**. Both times
-the turn had ended on a sentence naming the next action —
-*"Implementing the drafted wording verbatim now"*, then
-*"I'll run those rather than describe them"* — and the work had not started.
+**Five times** in one session the operator had to ask **"why did you stop"**.
+Every time, the turn had ended on a sentence naming the next action and the work
+had not started:
 
-The second instance is the sharper one, because the sentence that ended the turn
-was itself a promise not to do what the turn then did.
+1. *"Implementing the drafted wording verbatim now"*
+2. *"I'll run those rather than describe them"*
+3. *"I'll probe them rather than reason about them, then build"*
+4. *"PR #7900 still needs review before merge"* — with the review unrun
+5. *"Remaining: register it in hooks.json, run the tests, then review and ship"*
+
+Instances 3–5 happened **inside the turns building the guard against this**.
+Instance 2 is the sharpest single case: the sentence that ended the turn was
+itself a promise not to describe instead of executing, and the turn then
+described instead of executing.
+
+An earlier revision of this file said "twice". It was written after the second
+instance and never re-counted — a stale number in the learning about restating
+things without re-checking them.
 
 ## Root cause
 
@@ -102,11 +113,21 @@ token") would have destroyed the same datum permanently.
 
 ## Key insight
 
-All four failures share one shape: **an action that felt like it discharged an
+Every failure here shares one shape: **an action that felt like it discharged an
 obligation, and did not.** Writing the next step felt like taking it. Caveating
 a broken tool felt like not relying on it. Deriving a measurement felt safer than
 quoting a value. Probing liveness felt like gathering evidence rather than
-spending it.
+spending it. Documenting a residual felt like closing it.
+
+The guard built in response is itself the strongest evidence for the pattern.
+Four review seats found **twelve** defects in it, every P1 in the guard rather
+than in the thing it guards — including a predicate that was inert on any polite
+turn, an escape hatch that failed on messages over 64 KB because `grep -q` sends
+SIGPIPE under `pipefail`, a `sed` that never matched its own separator so
+per-sentence scoping was inert for all multi-line text, and a safety rationale
+in the header that was factually false about the runtime. Each round of fixes
+introduced the next defect. That is not an argument against the guard; it is the
+measurement of how little self-assessment is worth here.
 
 The common defence is to name, for each, **what would be observably different if
 the obligation had actually been discharged** — a tool call in the turn, a
@@ -116,7 +137,8 @@ that, rather than for the feeling of having handled it.
 ## Session Errors
 
 - **Ended two turns on a stated next action without executing it.** The operator
-  asked "why did you stop" twice. **Prevention:** a turn whose last paragraph
+  asked "why did you stop" five times, three of them inside the turns building
+  the guard against it. **Prevention:** a turn whose last paragraph
   names an action must contain that action's tool call; a future-tense
   first-person verb about in-session work is not a valid closing sentence.
 - **Reused a `comm` invocation after documenting it as malformed**, and acted
