@@ -950,7 +950,7 @@ logs:
   retention: "90 days (GitHub Actions default log retention)"
 
 discoverability_test:
-  command: "bash scripts/probe-legal-corpus-truth.sh"
+  command: bash scripts/probe-legal-corpus-truth.sh
   expected_output: "CORPUS-OK, with a non-zero examined-document count printed beside it (the floor Phase 5.2 adds)"
 ```
 
