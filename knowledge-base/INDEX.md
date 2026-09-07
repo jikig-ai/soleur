@@ -5671,7 +5671,7 @@
 - [Tasks — fixture-operand scanner and flow gates](project/specs/feat-one-shot-7708-7709-7710-7759-fixture-and-flow-gates/tasks.md)
 - [Tasks — fix(gdpr-gate) freshness writer and scan output](project/specs/feat-one-shot-7710-gdpr-gate-prescan-refusal/tasks.md)
 - [Tasks — W6, the Art. 33(5) breach register (#7717)](project/specs/feat-one-shot-7716-7717-7718-supabase-followups/tasks.md)
-- [Tasks — net-issue-flow PR-body attribution arm (#7759)](project/specs/feat-one-shot-7759-net-issue-flow-filing-cites-issue/tasks.md)
+- [Tasks — net-issue-flow declared-filing attribution (#7759)](project/specs/feat-one-shot-7759-net-issue-flow-filing-cites-issue/tasks.md)
 - [Tasks — git-data pre-birth hardening (#7772)](project/specs/feat-one-shot-7772-git-data-pre-birth-hardening/tasks.md)
 - [Tasks — fix: active conversation missing from Recent Conversations rail](project/specs/feat-one-shot-active-conversation-missing-from-nav/tasks.md)
 - [tasks](project/specs/feat-one-shot-adr044-webhook-sessionsync-cutover/tasks.md)
