@@ -1,7 +1,7 @@
 ---
 title: "Tasks — runbook SSH split, legal off-host claims, Art. 30 PA8 bound, register-lint promotion"
 branch: feat-one-shot-7874-7786-6474-7787-runbook-ssh-legal-registers
-plan: knowledge-base/project/plans/2026-09-07-fix-runbook-ssh-split-and-legal-register-claims-plan.md
+plan: knowledge-base/project/plans/archive/20260907-195251-2026-09-07-fix-runbook-ssh-split-and-legal-register-claims-plan.md
 lane: cross-domain
 ---
 
