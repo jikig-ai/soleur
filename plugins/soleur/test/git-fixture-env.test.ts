@@ -243,7 +243,22 @@ describe("Guard 1 — fixture git writes are contained under a hostile inherited
         // which a hook exports and which a deny-list silently kept — pinning every fixture commit
         // in a hook-mediated run to one identical timestamp.
         if (k.startsWith("GIT_AUTHOR_") || k.startsWith("GIT_COMMITTER_")) continue;
+        // The signing override (#7849) is set BY the builder, after the sweep, so these three keys
+        // are legitimately present. Asserting absence here would be asserting that the override
+        // does not work. The property that matters is unchanged and is asserted below: the
+        // INHERITED value must not survive.
+        if (k === "GIT_CONFIG_COUNT" || k === "GIT_CONFIG_KEY_0" || k === "GIT_CONFIG_VALUE_0") continue;
         expect(env[k]).toBeUndefined();
+      }
+
+      // The signing override, asserted positively AND against the hostile value it replaced. A
+      // bare `toBeDefined()` would pass on the inherited "/tmp/hostile-injected" — which is the
+      // failure mode this whole block exists to catch, one key over.
+      expect(env.GIT_CONFIG_COUNT).toBe("1");
+      expect(env.GIT_CONFIG_KEY_0).toBe("commit.gpgsign");
+      expect(env.GIT_CONFIG_VALUE_0).toBe("false");
+      for (const k of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]) {
+        expect(env[k]).not.toBe("/tmp/hostile-injected");
       }
       // SSH_ASKPASS carries no GIT_ prefix, so the sweep cannot reach it by shape.
       expect(env.SSH_ASKPASS).toBeUndefined();
