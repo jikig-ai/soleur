@@ -19,11 +19,13 @@ first.
 
 From the operator machine:
 
+<!-- lint-infra-ignore start: pasted failure transcript, not a prescribed step. This is the reader's entry-point discriminator that routes between this runbook and admin-ip-drift.md; it cannot be renamed or moved. Class (b-transcript), owner #7874. -->
 ```text
 $ ssh root@135.181.45.178 'hostname'
 kex_exchange_identification: read: Connection reset by peer
 Connection reset by 135.181.45.178 port 22
 ```
+<!-- lint-infra-ignore end -->
 
 Reset happens at the kex banner phase (before any auth). The host is
 otherwise reachable: `hcloud server list` shows `running`, HTTPS 200 on
@@ -118,7 +120,18 @@ journalctl -u ssh -n 50 --no-pager
 Look for active/running, no recent `Failed to load key` or crash
 restarts.
 
-### Step 6: Verify from the operator machine
+### Last-resort diagnosis (SSH channel -- not the noVNC channel of last resort) -- Step 6: confirm SSH is restored
+
+This is the terminal verification of the recovery above, not an entry point --
+do not start here. Reach it only after Steps 1-5 have run and the no-SSH probes
+are exhausted, per `hr-no-ssh-fallback-in-runbooks`. Attempting SSH is the only
+way to confirm SSH works, which is why this step is sanctioned rather than
+replaced: there is no no-SSH read path for "is the SSH channel open?".
+
+**"Last resort" here names the SSH _probe_, not the recovery _channel_.** This
+runbook's channel of last resort is the Hetzner Cloud Console (noVNC) named in
+the header, and its premise is that SSH is down. If this step fails, the
+escalation path is `## If This Runbook Does Not Work` -- not another SSH attempt.
 
 Back on the operator laptop:
 
