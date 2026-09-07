@@ -120,3 +120,15 @@ silently runs a subset).
 - [ ] 7.9 Post-merge: `gh workflow run web-platform-release.yml -f bump_type=patch`, then
       `curl -fsS https://app.soleur.ai/health` and confirm `build_sha` (AC26).
 - [ ] 7.10 Post-merge: record post-shard time-to-`test` p100 over 10 runs on #5806 (AC27).
+
+## Post-review amendments (2026-09-07)
+
+- [x] Guard 2 + battery + its ci.yml step DELETED on a CTO ruling; ADR-208 rewritten at the same
+      ordinal to record the rejection. Phase 4's tasks are superseded, not unmet.
+- [x] `await-ci` gains a `::warning::` at 0.7 x CEILING_S (derived, never restated) — the
+      replacement mechanism, measuring the gated quantity including the concurrency queue.
+- [x] `test-scripts` `timeout-minutes` 30 -> 60, reconciled against the 2,500,000 ms per-suite
+      budget at `scripts/test-all.sh:599`. A silent bound must not fire before a loud one.
+- [x] The "dispatch" measurement is corrected everywhere it was load-bearing; dated correction
+      stanzas appended to the plan and to decision-challenges.
+- [x] Follow-up filed: #7931 (concurrency key, aggregator diagnosis, LPT leg balance).
