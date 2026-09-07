@@ -75,14 +75,14 @@ silently runs a subset).
 
 ## Phase 4: Guard 2 — CI's declared budget is bounded by the gate
 
-- [ ] 4.1 Write the Guard 2 suite from its seven-row mutation matrix.
-- [ ] 4.2 Declare `timeout-minutes` on `test`'s `needs`-closure (today exactly `test-webplat`,
+- [x] 4.1 Write the Guard 2 suite from its seven-row mutation matrix.
+- [x] 4.2 Declare `timeout-minutes` on `test`'s `needs`-closure (today exactly `test-webplat`,
       `test-bun`, `test-scripts`, `test`, plus the legs), sized above the measured post-shard p100
       with headroom stated inline.
-- [ ] 4.3 Assert `max(closure ceilings) + test's own <= CEILING_S/60`, reading `CEILING_S` out of
+- [x] 4.3 Assert `max(closure ceilings) + test's own <= CEILING_S/60`, reading `CEILING_S` out of
       `web-platform-release.yml` rather than restating it, with a **pinned closure string** (B8e's
       shape) so a graph edit reds.
-- [ ] 4.4 Drive Guard 2 GREEN.
+- [x] 4.4 Drive Guard 2 GREEN.
 
 ## Phase 5: Guard placement in CI
 

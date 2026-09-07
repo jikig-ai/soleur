@@ -958,11 +958,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Guard 1 — shard totality (the guard itself, unmutated)
-        run: bash plugins/soleur/test/scripts-shard-totality.test.sh
-
-      - name: Guard 1 — mutation battery (every row must drive the guard RED)
+      # ONLY the batteries are invoked here, never the two guards directly, and that is a
+      # constraint imposed by scripts/lint-orphan-test-suites.sh rather than a preference: both
+      # guards are already registered by glob discovery into the scripts group, and a second
+      # explicit registration here makes them "covered by more than one surface" — a union in
+      # which de-registering from either side is a silent no-op. The lint fails on exactly that.
+      #
+      # Coverage is not lost. Each battery's CONTROL row runs its guard UNMUTATED before any
+      # mutation and aborts the battery outright if it is not green, so this job still exercises
+      # both guards against the real tree — which is what AC14 asks for: a cross-leg union
+      # asserted from a job that is not itself a leg.
+      - name: Guard 1 — shard-totality mutation battery (control + every row must drive it RED)
         run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh
+
+      # Guard 2 rides in this job for the same two reasons: its battery mutates ci.yml and
+      # web-platform-release.yml in place, and the guard reads across BOTH workflows, so it is
+      # not a member of any one shard's subject matter.
+      - name: Guard 2 — CI-budget mutation battery (control + every row must drive it RED)
+        run: bash plugins/soleur/test/ci-budget-bounded-mutations.sh
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
