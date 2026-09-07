@@ -555,20 +555,31 @@ bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh "$PR_NUMBER"
 ```
 
 [`net-issue-flow.sh`](./scripts/net-issue-flow.sh) emits the
-`Mandating rules:` / `Closing:` / `Filing:` / `Exempt:` / `Attributed:` / `Rejected:` /
-`Possible unattributed filings:` / `Net:` block (enumerating the actual issue numbers behind
+`Mandating rules:` / `Closing:` / `Filing:` / `Exempt:` / `Attributed:` /
+`Undelivered declarations:` / `Contradictory:` / `Rejected:` / `Net:` block (enumerating the actual issue numbers behind
 each count), exits **1** when `NET > 0` with no override or exemption, and **0** otherwise.
 
 **Two attribution arms, and only one of them counts (#7759).** An issue is a filing of PR *N*
 when it was created after *N* **and** either its body cites `#N` (the original arm) **or** its
-number appears on *N*'s `Filed:`/`Tracks:`/`Refs:` line. The second arm exists because the first
+number appears on *N*'s `Filed:` line. The second arm exists because the first
 cannot see a filing that cites the ORIGINATING ISSUE instead of the PR — measured live on
 PR #7702 (`Filing: 0 / Net: -1 / PASS`, versus `Filing: 3 / Net: +2 / BLOCKED` once declared)
 and again on PR #7841.
 
-`Attributed:` names the issues counted via the declared line. `Possible unattributed filings:`
-names every OTHER post-PR number the body mentions and counts toward **nothing** — not `Filing:`,
-not `Exempt:`, not `NET`. That asymmetry is the design: a declared line is an assertion of the
+`Attributed:` names the issues counted via the declared line — a **subset** of `Filing:`, not a
+fourth count. `Undelivered declarations:` names numbers the `Filed:` line declared that the gate
+could not match to an issue in range (it predates the PR, is outside the fetched window, is in
+another repo, or does not exist); those were previously dropped from `Filing:` *and* suppressed
+from every report line, i.e. silent. `Contradictory:` names numbers on both the `Filed:` line and
+a close keyword; they stay in **both** terms rather than cancelling, because subtracting them let
+one line buy two units of NET.
+
+An earlier revision printed `Possible unattributed filings:` here instead — every other number the
+body mentioned. It was computed from the PR body alone and never joined the issue list, so it had
+no recency filter, no existence check, and no exclusion of rows already counted. Live on merged
+PR #7702 it named five numbers of which four were simultaneously in `Filing: 4`. It is removed.
+
+The asymmetry that remains is the design: a declared line is an assertion of the
 filing relationship and can be counted; prose mentioning a number is not, and measured over 300
 PRs, counting bare `#N` attributes 9 issues to two different PRs each and flips 25 PRs (8.3%)
 from PASS to BLOCK. The report line keeps the blind spot visible without giving prose authority.
@@ -1587,9 +1598,16 @@ Replace `BRANCH_NAME` with the actual branch name.
    on PR #7841. Widening the query instead was rejected: it attributes transitively through a
    shared closed issue, so a sibling PR filings would count against this one.
 
-   Numbers the body mentions ANYWHERE ELSE are reported by the gate as `Possible unattributed
-   filings:` and counted toward nothing — so a missing `Filed:` line is visible in the gate output
-   rather than silent, but it still produces the wrong verdict. Emit it.
+   Numbers the body mentions anywhere else are counted toward nothing. **A missing `Filed:` line
+   is SILENT** — the gate reports the old arm's count and passes, with nothing on the output to say
+   a declaration was expected. An earlier revision of this passage claimed such a miss "is visible
+   in the gate output rather than silent"; that was true only of bodies that named the numbers
+   somewhere else, and the line it relied on has since been removed as unsound. There is no
+   backstop here. Emit it.
+
+   Write it line-initial. A leading `-`/`*` bullet, `**bold**` emphasis and any capitalisation are
+   tolerated; the colon is required, and the keyword must start the line so an ordinary sentence
+   containing "filed:" cannot declare anything.
 
    Do not quote flag names -- write `--title` not `"--title"`.
 
@@ -1604,6 +1622,7 @@ Replace `BRANCH_NAME` with the actual branch name.
    | `Tracks #N` / `Refs #N` | `ship-operator-step-gate.sh` AND the net-issue-flow mandated-filing exemption | the operator-step gate re-blocks, and a mandated filing loses its exemption and re-counts against NET |
    | `<!-- gate-override: net-issue-flow -->` + justifications | `net-issue-flow.sh` | a deliberate, recorded override is erased and the PR blocks again |
    | `Filed: #A #B #C` | `net-issue-flow.sh` (the ONLY counted attribution source, #7759) | every filing that cites the originating issue rather than the PR becomes invisible again, and the gate passes net-positive — the exact defect #7759 reports |
+   | `Tracks #N` / `Refs #N` (no colon) | `ship-operator-step-gate.sh`, and the ADR-155 exemption companion | a deferred operator step loses its tracker, and a mandated filing loses its exemption. These do **not** declare a filing — only `Filed:` does |
    | (none — `ship-operator-step-gate.sh` strips every HTML comment before matching, so no marker survives for it; its only override is `SOLEUR_SKIP_OPERATOR_STEP_GATE=1`) | — | — |
 
    Read the existing body FIRST and re-emit those lines verbatim in the new one:
@@ -1616,7 +1635,7 @@ Replace `BRANCH_NAME` with the actual branch name.
    # form silently drops the trailing same-line shape
    # `- Operator runs X (Tracks #123)`, which is exactly a companion this step
    # promises to carry forward.
-   printf '%s\n' "$OLD_BODY" | grep -nE '(Filed|Tracks|Refs):?[[:space:]]+#[0-9]+|<!-- gate-override:'
+   printf '%s\n' "$OLD_BODY" | grep -nE '^[[:space:]]*([-*+][[:space:]]+)?[*_]*[Ff][Ii][Ll][Ee][Dd][*_]*:|(^|[^A-Za-z])(Tracks|Refs)[[:space:]]+#[0-9]+|<!-- gate-override:'
    ```
 
    Anything that grep prints belongs in the replacement body. **Why:** the

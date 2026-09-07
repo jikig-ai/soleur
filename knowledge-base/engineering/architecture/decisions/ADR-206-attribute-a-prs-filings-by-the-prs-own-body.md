@@ -94,13 +94,22 @@ annotating a wrong verdict rather than correcting it — the shape the gate's ow
 
 ## Consequences
 
-- **ADR-155's mandated-filing exemption is revived.** It was **inert**: 0 of 33 whole-line
-  `Mandated-By:` issues cite a PR, so none had ever been a FILED candidate, and an exemption that
-  never has a candidate never fires. See the amendment on ADR-155.
-- **One ADR-155 conjunct collapses.** A `Tracks #N` line now BOTH admits a row into FILED and
-  satisfies exemption condition 4 (the companion), so the four conditions are no longer
-  independent. Condition 2 — the human-gated `[mandates-filing]` corpus edit — still bounds the
-  blast radius. Priced explicitly, not at zero.
+- **ADR-155's mandated-filing exemption is reached more often.** An earlier revision of this
+  section said it was **inert** — "0 of 33 whole-line `Mandated-By:` issues cite a PR, so none had
+  ever been a FILED candidate". **That measurement was wrong**, and it was wrong in the way its own
+  stated method predicts: it classified cited numbers as issue-vs-PR by *range membership*, which
+  cannot work here because GitHub issues and pull requests share one number space in this repo.
+  Re-measured 2026-09-07 on `.pull_request` presence, which is the only sound discriminator:
+  **21 of the 66 distinct cited numbers are pull requests, and 20 of the 33 issues cite at least
+  one**, over 29 (issue, cited-PR) pairs — one of which is #7710 citing #7702, the case #7759 was
+  filed about. The exemption had candidates. It was under-reached, not dead, and the stronger
+  claims this section previously derived from the bad number ("never had a candidate", "never
+  fires") are withdrawn. See the amendment on ADR-155.
+- **One ADR-155 conjunct collapses, for one admission route.** A `Filed: #N` declaration now BOTH
+  admits a row into FILED and satisfies exemption condition 4 (the companion), so for rows admitted
+  that way the conjuncts are not independent. Rows admitted via the issue-cites-PR arm still need a
+  separate companion, so the collapse is scoped. Condition 2 — the human-gated `[mandates-filing]`
+  corpus edit — still bounds the blast radius either way. Priced explicitly, not at zero.
 - **A `/ship` path that cites an EXISTING open issue self-neutralises.** Phase 5.5 writes
   `Tracks #NNNN` for an issue this PR did not file, which the declared arm would then count. Those
   issues carry `Mandated-By:` and are OPEN, and the PR body carries the companion — the three

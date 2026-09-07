@@ -49,12 +49,27 @@
 # collapses same-day precision), and both attribution arms above.
 #
 # One interaction worth stating because it collapses an ADR-155 conjunct: a
-# `Tracks #N` line now BOTH admits a row into FILED and satisfies exemption
-# condition 4 (the companion). The four conjuncts are no longer independent.
-# Condition 2 — the human-gated `[mandates-filing]` corpus edit — still bounds
-# the blast radius, and the interaction is deliberate rather than incidental:
-# before it, the exemption was INERT, because 0 of 33 whole-line `Mandated-By:`
-# issues cite a PR, so none had ever been a FILED candidate at all.
+# `Filed: #N` declaration now BOTH admits a row into FILED and satisfies
+# exemption condition 4 (the companion), so for rows admitted via THAT route the
+# four conjuncts are no longer independent. Rows admitted via the other arm (the
+# issue body cites the PR) still need a separate companion, so the collapse is
+# scoped, not total. Condition 2 — the human-gated `[mandates-filing]` corpus
+# edit — still bounds the blast radius either way.
+#
+# An earlier revision of this comment justified that collapse by asserting the
+# exemption "was INERT, because 0 of 33 whole-line `Mandated-By:` issues cite a
+# PR". That measurement was wrong and the conclusion drawn from it does not
+# hold. Re-measured 2026-09-07 by classifying each cited number through the
+# GitHub API on `.pull_request` presence, which is the only sound discriminator
+# here because issues and PRs share one number space in this repo:
+#
+#   33 whole-line `Mandated-By:` issues; all 33 cite at least one `#N`
+#   66 distinct cited numbers, of which 21 are pull requests
+#   20 of the 33 cite at least one PR, over 29 (issue, cited-PR) pairs
+#
+# One of those pairs is #7710 citing #7702 — the very case #7759 was filed
+# about. So the exemption had real candidates before this change; the honest
+# statement is that it was under-reached, not dead.
 #
 # Exits: the general override, and the narrow mandated-filing exemption
 # ---------------------------------------------------------------------
