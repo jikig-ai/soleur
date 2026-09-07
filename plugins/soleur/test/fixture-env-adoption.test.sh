@@ -148,6 +148,13 @@ OUT_OF_SCOPE_SHELL_ROOTS=('plugins/soleur/test/*')
 # — classifies as MUTATING. See the READ vs MUTATE section of the header for why this direction.
 READ_VERBS='rev-parse|ls-files|ls-remote|ls-tree|log|show|status|diff|cat-file|rev-list|describe|blame|grep|for-each-ref|check-ignore|check-attr|var|count-objects|verify-pack|shortlog|name-rev|show-ref|diff-tree|diff-index|merge-base|version|--version|help|show-branch|whatchanged|cherry|check-ref-format'
 
+# SCOPE LIMIT, stated because it is invisible from the output: both derivations enumerate through
+# `git ls-files`, so an UNTRACKED file is not in the population. Measured — a new in-scope suite
+# spawning bare git passes this guard until it is staged, and reds the moment it is (`git add -N` is
+# enough). That is the right boundary for a repo guard, but it means this cannot be the only thing
+# standing between a new suite and the operator's state; the runtime tripwire and the chokepoint
+# redirect are what cover an unstaged file.
+#
 # --- derivation A: git-spawn sites, by invocation shape --------------------------------------------
 #
 # Three shapes for code, covering `execFileSync`, `execFile`, `execFileAsync`, `spawnSync`, `spawn`,
@@ -211,6 +218,82 @@ derive_A() {
       if _line_is_mutating <<<"$(_shell_line_tokens "$line")"; then printf '%s\n' "$f"; break; fi
     done < <(_strip_shell_data "$f" | grep -E "$SHELL_SPAWN_RE" 2>/dev/null \
              | grep -vE '^[[:space:]]*#')
+  done
+}
+
+# --- derivation C: PARTIAL conversion within an adopted file --------------------------------------
+#
+# A and B are both FILE-granular: each emits a filename once and stops looking. That is correct for
+# "was this suite converted at all", and structurally blind to "was it converted EVERYWHERE".
+# Measured on this branch: removing ONE of the five `env: gitFixtureEnv(dir)` bindings in
+# worktree-config-seed.test.ts left both derivations unchanged and the guard green, while a spawn in
+# that file ran with a fully inherited environment.
+#
+# That is not a cosmetic gap. It is the exact shape of #7853 one level over: partial isolation greps
+# identically to full isolation, so a static check for the helper's NAME reports clean on a file
+# that leaks. Two prior per-call-site sweeps in this repo passed their own review for the same
+# reason.
+#
+# So: for every CODE file that has adopted the helper at all, every mutating git-spawn line must
+# carry an `env` binding. A spawn with no env argument whatsoever is unambiguously unprotected,
+# which makes this precise rather than heuristic — it does not require guessing whether some
+# in-scope identifier was bound from the helper, only that the caller passed SOMETHING.
+#
+# CODE only, deliberately. `git_fixture_env` exports into the calling shell rather than being passed
+# per-invocation, so a shell spawn correctly carries no per-line env and this check would be
+# nonsense there. The shell side is covered instead by the return-check assertion below.
+# Matches BOTH `env: value` and the ES6 shorthand `{ cwd, env, encoding }`. Requiring the colon
+# reported two shorthand call sites in git-fixture-env.test.ts as unprotected -- a false positive in
+# the direction that matters, since it would have trained the next reader to dismiss this assertion.
+readonly CODE_ENV_BINDING_RE='\benv([[:space:]]*[:,}]|[[:space:]]*$)'
+# DIRECT spawn primitives only. Derivation A deliberately matches any callee taking a git argv,
+# because a wrapper is still a spawn site for the purpose of "was this file converted". C asks a
+# narrower question -- does THIS call pass an env -- and only a primitive takes an `env` option at
+# all. Measured: including wrappers reported test/pre-merge-rebase.test.ts as partially converted
+# because its own `spawnChecked(["git", ...], { cwd })` helper carries no env at the CALL site; the
+# env is bound once inside the wrapper, which C then checks on the wrapper's own definition line.
+readonly CODE_DIRECT_SPAWN_RE='\b(execFileSync|execSync|spawnSync|execFile|spawn|Bun\.spawn|Bun\.spawnSync)[[:space:]]*\('
+
+derive_C() { # files in B that still contain an env-less mutating spawn
+  # Scans a WINDOW, not a line. A spawn call is routinely written across several lines with the
+  # `env:` binding on its own — checking only the line bearing the callee reports every multi-line
+  # call as unprotected, which measured as 4 false positives out of 4 hits on the first cut.
+  # The window ends at the call's closing `});`/`})` or after CALL_WINDOW lines, whichever is first.
+  local f n line window
+  local -r CALL_WINDOW=12
+  for f in $(derive_B | grep -E '\.(ts|tsx|js|mjs)$'); do
+    # The helper's own implementation is not a consumer of itself.
+    [[ "$f" == plugins/soleur/test/lib/git-fixture-env.ts ]] && continue
+    while IFS=: read -r n line; do
+      [[ -z "${n:-}" ]] && continue
+      case "$line" in *//*|*'*'*) ;; esac
+      _line_is_mutating <<<"$(_code_line_tokens "$line")" || continue
+      # Read forward from the callee line to the end of the CALL EXPRESSION, by paren depth.
+      #
+      # The obvious spelling -- `sed -n "$n,$endp" | sed -n '1,/})/p'` -- is WRONG, and wrong in the
+      # silent direction. In a sed range the end-address is only searched from the line AFTER the
+      # start, so a call that opens and closes on its own line does not terminate the window: it
+      # runs on and picks up the NEXT call's `env:`. Measured on this branch -- reverting one of the
+      # five bindings in worktree-config-seed.test.ts left a bare `execFileSync("git", ["init"...])`
+      # that this check reported as protected, borrowing the `env:` of the `cfg()` call ten lines
+      # below it. The whole point of derivation C is that exact mutation, so the guard was passing
+      # over the only thing it was added to catch.
+      #
+      # Counting parens terminates on the real end of the expression in both shapes. Depth is only
+      # counted from the callee line onward, and `awk` exits at depth 0 so a stray `)` later in the
+      # file cannot extend the window.
+      window="$(_strip_code_data "$f" | awk -v start="$n" -v maxlines="$CALL_WINDOW" '
+        NR < start { next }
+        { line = $0; print line
+          n_open = gsub(/\(/, "(", line); n_close = gsub(/\)/, ")", line)
+          depth += n_open - n_close
+          if (NR > start && NR - start >= maxlines) exit
+          if (depth <= 0) exit }')"
+      if ! grep -qE "$CODE_ENV_BINDING_RE" <<<"$window"; then
+        printf '%s\n' "$f"; break
+      fi
+    done < <(_strip_code_data "$f" | grep -nE "$CODE_DIRECT_SPAWN_RE" 2>/dev/null \
+             | grep -vE ':[[:space:]]*(//|\*|#)')
   done
 }
 
@@ -456,12 +539,22 @@ else
 fi
 
 # --- verdict -----------------------------------------------------------------------------------------
+# --- partial-conversion check (derivation C) ------------------------------------------------------
+PARTIAL="$(derive_C | sort -u)"
+PARTIAL_N=$(printf '%s' "$PARTIAL" | grep -c . || true)
+if [[ "$PARTIAL_N" -eq 0 ]]; then
+  pass "no adopted CODE file still spawns git with no env binding (partial conversion)"
+else
+  fail "PARTIALLY converted — these adopted files still spawn git with no env binding:"
+  printf '%s\n' "$PARTIAL" | sed 's/^/        /'
+fi
+
 printf '\n=== %d passed, %d failed, %d assertions ===\n' "$PASS" "$FAIL" "$ASSERTIONS"
 
 # Assertion-count floor. Reported with printf and exit, NEVER through fail() — this backstops fail()
 # and the counters it maintains (ADR-193). Deleting the body of any loop above leaves the counters
 # untouched and this guard would otherwise read "0 failed" over a tree it never examined.
-readonly MIN_ASSERTIONS=18
+readonly MIN_ASSERTIONS=20
 if (( ASSERTIONS < MIN_ASSERTIONS )); then
   printf '\nFATAL: only %d assertions ran (expected >= %d).\n' "$ASSERTIONS" "$MIN_ASSERTIONS" >&2
   printf 'A guard that reports "0 failed" after running almost nothing is worse than no guard.\n' >&2
