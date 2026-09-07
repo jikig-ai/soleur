@@ -13,6 +13,36 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Deepen Pass — 2026-09-07
+
+Run after the eight-reviewer plan-review panel, so its job was the checks the panel does not do:
+mechanical verification of the plan's own claims, and of the mechanism it had just chosen.
+
+**One finding would have shipped a vacuous guard.** The plan's chosen mechanism — "add Rule D to
+`scripts/lint-shell-trace-credential-refusal.py` and inherit its baseline" — is defeated by that
+baseline's granularity: it is **per-file and rule-agnostic** (`if rel not in baseline` drops *all*
+rules' findings for that file), it holds **130** entries, and **all seven** Better Stack sites are
+already in it. Rule D would have been green over exactly the population it was written for, on the
+repo-wide run that is the blocking arm. Corrected: Rule D gets its own baseline, plus mutation row 13
+to keep it that way.
+
+**Four smaller corrections**, each measured: the lint has **no ratchet** to inherit (only `--census`
+and `--write-baseline`; the four `.highwater` files live elsewhere), so Rule D adds one; Phase 0
+cited a classifier that does not exist yet, so it now *defines* the token set before censusing with
+it; AC A6's harness count was wrong (Guard 2 has 1 RED + 1 must-PASS, not 2 GREEN); and AC B6's grep
+was unscoped, so the plan — which quotes the literal — would have matched itself.
+
+**Verified clean.** A twelve-claim verify-the-negative sweep returned **12/12 CONFIRMS, zero
+contradictions**, including the SUITE_GLOBS membership claims, the coherence-preflight invocation
+sites, the `ignore_changes` coverage, the SessionStart-only hook registration, the refusal-site
+ordering at both host scripts, the orphan-linter's 25-orphan synthesis cap, and exit 78's
+no-verdict-line path. Cross-checks also confirmed: zero AGENTS rule-ID citations (so no
+fabricated-citation risk), no dangling AC cross-references, mutation-row counts matching their ACs,
+census figures consistent between plan and tasks, and neither infra workflow's `paths:` filter
+matching any PR-0/1/2 path.
+
+---
+
 ## Overview
 
 Three separable pieces of work. `lane: cross-domain` is the fail-closed default — no `spec.md`
@@ -259,12 +289,33 @@ netrc is written. The refusal exits non-zero here: no boot depends on it.
 
 **The guard is a new rule in an existing lint, not a fourth walker.**
 `scripts/lint-shell-trace-credential-refusal.py` already enumerates tracked `*.sh`, already classifies
-credential-bearing files, already carries a dated 136-entry baseline, a `--changed --base origin/main`
-mode with an **empty** baseline, a ratchet, its own suite, and wiring in both `scripts/test-all.sh`
-and `ci.yml`. Every site in the draft's table is already in its baseline. **Rule D** — *every
-credentialed `curl` carries `--disable` first and `--noproxy '*'`; where its destination comes from an
-env-settable variable, an exact-equality pin* — inherits all of it, and dissolves the registration
-question the draft spent a section on.
+credential-bearing files, already carries a dated baseline and a `--changed --base origin/main` mode,
+already has its own suite, and is already wired into both `scripts/test-all.sh` and `ci.yml`. It is
+also structured for exactly this: `check_rule_a`, `check_rule_b` and `check_rule_c` are separate
+functions, so **Rule D** is the established extension shape — *every credentialed `curl` carries
+`--disable` first and `--noproxy '*'`; where its destination comes from an env-settable variable, an
+exact-equality pin.* That dissolves the registration question the draft spent a section on.
+
+**Two things Rule D must ADD rather than inherit — the deepen pass measured both, and the first would
+have shipped a vacuous guard.**
+
+1. **The baseline is per-FILE and rule-agnostic, and every target site is already in it.** The lint
+   suppresses violations with `if rel not in baseline`, which drops *all* rules' findings for that
+   file, not just the rule that baselined it. The baseline holds **130** entries, and **seven of the
+   seven** Better Stack sites are among them — `zot-inventory.sh`, `betterstack-query.sh`,
+   `supabase-advisor-scan.sh`, `betterstack-ingest-probe.sh`, both host scripts, and
+   `arm-heartbeats.sh`. Sharing it would make Rule D green over precisely the population it was
+   written for, on the repo-wide run that is the blocking arm. **Rule D therefore needs per-rule
+   baseline granularity** — either its own baseline file or an entry shape that names the rule — with
+   a migration preserving the existing 130 as A/B/C-scoped. The `--changed` arm is unaffected:
+   `baseline = set() if (args.changed or args.paths)`, so a touched file must satisfy every rule
+   including D. The vacuity is confined to the repo-wide sweep, which is exactly where the ratchet
+   and the visibility live.
+2. **There is no ratchet.** The lint has `--census` and `--write-baseline`; it has no `.highwater`
+   file. Four exist in the repo (`lint-supabase-deprecated-endpoints`, `lint-diagnosis-claims`,
+   `lint-trap-tempfile-ownership`, `alarm-issue-filing-guard`), all one integer plus a provenance
+   header, and the offender-counting ones ratchet **down**. Rule D adds its own on that model, plus
+   the `--check-highwater` flag to read it.
 
 The classifier covers `-u` as well as `--user`, plus `--header @-`, `--netrc`/`--netrc-file`,
 `--oauth2-bearer`, `--proxy-user` and `-E`. The `*.sh` boundary and `CURL_BIN` are stated exclusions.
@@ -398,8 +449,12 @@ cycles.** If the session's budget expires mid-chain, what must already have ship
 #### Phase 0 — preconditions
 
 1. Re-run the three `gh issue view` state checks; abort any unit whose issue closed.
-2. **Regenerate the census from the classifier** — including `-u`, `--netrc-file`, `--oauth2-bearer`,
-   `--proxy-user`, `-E`. State the number. Blocking: it sets Rule D's baseline and B1's floor.
+2. **Fix the classifier's token set, then run the census with it.** The classifier does not exist yet
+   at Phase 0 — so this step *defines* it (a token set covering `-u`, `--user`, `--header @-`,
+   `--netrc`/`--netrc-file`, `--oauth2-bearer`, `--proxy-user`, `-E`) and runs a one-off sweep with
+   exactly that set. Rule D then implements the same set, and B1's floor is the number this sweep
+   returns. Deriving the floor from a *different* token set than the rule ships with is how five
+   reviewers got five different counts. State the number.
 3. Enumerate which of PR 0's and PR 2's files are baselined in the xtrace lint without a preamble, so
    the drawdown is scoped before the first commit rather than discovered by CI.
 4. Measure this runner's base distance to `claude` (`/proc` walk) so the depth harness targets
@@ -637,7 +692,10 @@ Compliance has two populations: **transport** (`--disable` first, `--noproxy '*'
 and **pin** (exact equality against a committed literal) over members whose destination comes from an
 env-settable variable. The guard ships with an **honest baseline plus a ratchet**, not a zero-exception
 floor: `arm-heartbeats.sh` and `cutover-verify.sh` are real members under `infra/**` this cycle does
-not fix, and a classifier narrowed to exclude them would make the guard lie.
+not fix, and a classifier narrowed to exclude them would make the guard lie. **That baseline is
+Rule-D-scoped, not the lint's existing shared one** — the shared baseline is per-file and
+rule-agnostic and already contains all seven Better Stack sites, so inheriting it would make this
+guard green over its own target population on the repo-wide run.
 
 **Mutation matrix:**
 
@@ -655,6 +713,7 @@ not fix, and a classifier narrowed to exclude them would make the guard lie.
 | 10 | Add a new non-compliant file **and** baseline it (the smuggling path). | RED via the ratchet — the count may only fall |
 | 11 | Change one of the six ingest-URL declarations and leave the other five. | RED — parity is over all six |
 | 12 | Write a host-side refusal as `exit 1` above the following emit. | RED — the fall-through requirement, so the fix cannot dark a detector |
+| 13 | Point Rule D at the lint's **shared** per-file baseline instead of its own. | RED — all seven target sites are in that 130-entry baseline, so sharing it makes Rule D green over its own population on the repo-wide run. This row is the one that would otherwise ship a vacuous guard. |
 
 **Harness rows:**
 
@@ -833,8 +892,9 @@ named alongside the explicit no-data-loss statement (C5).
 - `scripts/zot-inventory.sh` — the xtrace preamble; the ingest pin + transport flags; validation of
   the registry destination that feeds the netrc `machine` line.
 - `tests/scripts/test-zot-inventory.sh` — the inverted `mutate_sub` direction; the proxy case.
-- `scripts/lint-shell-trace-credential-refusal.py` and its baseline — Rule D, the widened classifier,
-  the six-declaration parity assertion.
+- `scripts/lint-shell-trace-credential-refusal.py` — Rule D (`check_rule_d`, mirroring the existing
+  `check_rule_a`/`b`/`c` shape), the widened classifier, **per-rule baseline granularity**, a
+  `--check-highwater` flag, and the six-declaration parity assertion.
 - `scripts/lint-shell-trace-credential-refusal.test.sh` — the mutation and harness rows.
 - `knowledge-base/engineering/architecture/diagrams/model.c4` — the `github -> betterstack` edge text.
 
@@ -849,6 +909,11 @@ named alongside the explicit no-data-loss statement (C5).
 
 ## Files to Create
 
+- `scripts/lint-shell-trace-credential-refusal.rule-d.baseline.txt` — Rule D's **own** grandfathered
+  population, generated from the Phase 0 census. Distinct from the existing shared
+  `…baseline.txt`, which is per-file and rule-agnostic and already contains all seven target sites.
+- `scripts/lint-shell-trace-credential-refusal.rule-d.highwater` — one integer plus a provenance
+  header, mirroring the four existing `.highwater` files; offender-counting, so it ratchets **down**.
 - The static hop-frame guard for `#7886` and its depth harness. Home: `.claude/hooks/*.test.sh`, which
   **is** in `scripts/test-all.sh`'s `SUITE_GLOBS` — so no `run_suite` line is needed and the
   orphan-suite risk does not arise. (`scripts/*.test.sh` is **not** in that array, and `tests/scripts/`
@@ -887,8 +952,8 @@ slice-boundary and debugging-order criteria were cut — a diff asserting its ow
 - **A4.** The gate's budget resolves to the **sourced** `MAX_WALK_HOPS`; changing that constant changes
   the gate's reach with no second edit.
 - **A5.** All three hook-exec sites are pinned; adding an unpinned fourth reddens the guard.
-- **A6.** Guard 2's matrix scores 6/6 RED and 2/2 must-PASS GREEN, each RED asserted on the failure
-  message anchor.
+- **A6.** Guard 2 scores 6/6 mutation rows RED, plus harness rows 1/1 RED (H1) and 1/1 must-PASS
+  GREEN (H2). Each RED is asserted on the failure-message anchor, not a bare non-zero exit.
 - **A7.** #7208 carries a comment recording that `MAX_WALK_HOPS` is not raisable-for-benefit, with the
   SessionStart-registration and cgroup-inheritance evidence.
 
@@ -898,13 +963,22 @@ slice-boundary and debugging-order criteria were cut — a diff asserting its ow
   reporting `0 checked` fails.
 - **B2.** In `--changed --base origin/main` mode Rule D uses an **empty** baseline, demonstrated by a
   fixture: a non-compliant file in the changed set fails even though it is in the repo-wide baseline.
-- **B3.** The ratchet fails when the baseline count rises and passes when it falls.
-- **B4.** Rule D's mutation matrix scores 12/12 RED; harness rows 2/2 RED and 3/3 GREEN.
-- **B5.** `scripts/zot-inventory.sh` is **not** in Rule D's baseline — both its credential paths comply.
+- **B3.** Rule D reads a **Rule-D-scoped** baseline, not the lint's shared per-file one. Demonstrated
+  by a fixture: a file present in the shared baseline for an A/B/C violation still fails Rule D on the
+  repo-wide run. Without this, all seven target sites are exempt and the guard is vacuous.
+- **B3b.** A `.highwater` ratchet exists for Rule D, mirroring the four in `scripts/`; it fails when
+  the count rises and passes when it falls.
+- **B4.** Rule D's mutation matrix scores 13/13 RED; harness rows 2/2 RED and 3/3 GREEN.
+- **B5.** `scripts/zot-inventory.sh` is **not** in Rule D's baseline — both its credential paths
+  comply. (It remains in the *shared* baseline for its xtrace history until that is separately drawn
+  down; the two baselines are now distinct, which is the point of B3.)
 - **B6.** `inv-exfil` runs the **unmutated** script with the canary URL and asserts refusal: the canary
   receives zero requests **and** the refusal message anchor appears — not a bare non-zero exit, and
   not an absence assertion alone (which would be vacuously true if the destination could never be
-  accepted). `grep -c 'the exfil mutant reaches the canary'` is 0.
+  accepted). The old pass-message is gone:
+  `grep -c 'the exfil mutant reaches the canary' tests/scripts/test-zot-inventory.sh` is 0. **Scoped
+  to that file deliberately** — this plan quotes the literal, so a repo-wide grep would match the
+  plan itself and the criterion would be unsatisfiable by construction.
 - **B7.** The proxy case **fails against the pre-fix script**, demonstrated. If the `.curlrc` case
   cannot be made to fail pre-fix, it is dropped with a stated reason rather than shipped.
 - **B8.** `bash tests/scripts/test-zot-inventory.sh` passes and its case count is ≥ its pre-change
@@ -924,7 +998,9 @@ slice-boundary and debugging-order criteria were cut — a diff asserting its ow
 
 ### Track D — #7867
 
-- **D1.** The vendor escalation was opened **before** the probe ran, unconditional on verdict.
+- **D1.** The vendor escalation was opened **before** the probe ran, unconditional on verdict, and
+  carries the marker prefix the probe writes (`SOLEUR_BS_ROUNDTRIP_7855_`) plus the timestamps of both
+  the 2026-09-06 run and this one, so the vendor has a specific reproducible round trip to look at.
 - **D2.** The probe's full stdout and exit code are recorded verbatim on #7867. **No criterion asserts
   which verdict.**
 - **D3.** The corroborating warehouse reads were pulled with `scripts/betterstack-query.sh` and are
@@ -935,8 +1011,8 @@ slice-boundary and debugging-order criteria were cut — a diff asserting its ow
   line, it was recorded as "the probe did not run", not as a verdict.
 - **D6.** On exit 1: the throwaway-source discriminator was run and its result recorded; the mechanism
   choice was routed to `cto` with that result; a review-by date is on the issue.
-- **D7.** No write to source `2457081` occurred, asserted by confirming no marker with this session's
-  prefix appears in the control table.
+- **D7.** No write to source `2457081` occurred, asserted by confirming no row carrying the
+  `SOLEUR_BS_ROUNDTRIP_7855_` marker prefix appears in the control table.
 - **D8.** If a sweeper comment for the same window already existed, no second contradicting verdict was
   posted.
 
@@ -977,7 +1053,8 @@ slice-boundary and debugging-order criteria were cut — a diff asserting its ow
 | Risk | Mitigation |
 |---|---|
 | Rule D's classifier is narrower than its property — the defect this plan found in its own draft, and the reason five reviewers returned five different counts. | Phase 0 regenerates the census **from the classifier**; B1's floor comes from it; mutation rows 7 and 8 target the `-u` and netrc misses specifically; the `*.sh` and `CURL_BIN` exclusions are stated in the property. |
-| The baseline becomes a parking lot. | The ratchet permits the count only to fall; the deferral issue carries the census. |
+| **Rule D inherits the lint's shared baseline and ships vacuous** — the deepen pass measured this: the shared baseline is per-file and rule-agnostic, holds 130 entries, and contains all seven target sites. | Rule D gets its own baseline (AC B3) and mutation row 13 drives the guard RED if it is pointed at the shared one. `--changed` mode was never affected. |
+| The baseline becomes a parking lot. | The ratchet permits the count only to fall (AC B3b); the deferral issue carries the census. |
 | Touching a baselined file reddens CI on the xtrace lint before Rule D is reached. | Phase 0 step 3 enumerates the affected files; the drawdown is explicit work in Phases 1 and 4; AC S2 asserts it. |
 | The depth harness silently tests nothing. | A1 requires it to verify its achieved depth; Guard 2 mutation row 6 and Test Scenario 2(b) drive it RED when built from nested `bash -c`. |
 | `inv-exfil` becomes vacuous once the destination can never be accepted. | B6 requires the refusal **message anchor**, not only the absence of canary requests. |

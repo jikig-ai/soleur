@@ -14,10 +14,12 @@ property of *merges*, not commits — `apply-web-platform-infra.yml` fires on th
 ## Phase 0 — Preconditions (blocking)
 
 - [ ] 0.1 Re-run `gh issue view` for #7867, #7873, #7886. Abort any unit whose issue closed.
-- [ ] 0.2 **Regenerate the credential-forwarding census from the classifier**, not from the plan's
-      table — include `-u`, `--user`, `--header @-`, `--netrc`/`--netrc-file`, `--oauth2-bearer`,
-      `--proxy-user`, `-E`. Record the number. Blocking: it sets Rule D's baseline and AC B1's floor.
-      Five reviewers returned five different counts purely from token-set differences.
+- [ ] 0.2 **Fix the classifier's token set, then run the census with it** — not from the plan's
+      table. The classifier does not exist yet at Phase 0, so this step *defines* it (`-u`, `--user`,
+      `--header @-`, `--netrc`/`--netrc-file`, `--oauth2-bearer`, `--proxy-user`, `-E`) and runs a
+      one-off sweep with exactly that set; Rule D then implements the same set. Record the number —
+      it becomes Rule D's baseline and AC B1's floor. Deriving the floor from a different token set
+      than the rule ships with is how five reviewers got five different counts.
 - [ ] 0.3 Enumerate which PR 0 / PR 2 files sit in
       `scripts/lint-shell-trace-credential-refusal.baseline.txt` **without** a
       `case "$-" in *x*)` preamble. Known: `zot-inventory.sh`, `betterstack-query.sh`,
@@ -32,7 +34,9 @@ property of *merges*, not commits — `apply-web-platform-infra.yml` fires on th
 
 - [ ] D.1 **Open the Better Stack vendor escalation — unconditional on the verdict.** #7867 records
       it as deliberately not gated; hypothesis (b) is already confirmed independently by
-      `CLUSTER_DOESNT_EXIST` persisting after an acknowledged write.
+      `CLUSTER_DOESNT_EXIST` persisting after an acknowledged write. Include the marker prefix the
+      probe writes (`SOLEUR_BS_ROUNDTRIP_7855_`) and the timestamps of both the 2026-09-06 run and
+      this one, so the vendor has a specific reproducible round trip.
 - [ ] D.2 Re-read #7867's state and latest comment. If the sweeper (cron ~19:4x UTC) already posted a
       verdict for this window, read it and re-run only if it was `UNKNOWN`/`DARK`.
 - [ ] D.3 Run `scripts/followthroughs/betterstack-roundtrip-latency-7855.sh` under
@@ -134,10 +138,23 @@ property of *merges*, not commits — `apply-web-platform-infra.yml` fires on th
 - [ ] 2.f Pin the **second credential path the issue does not name**: `REGISTRY_HOST` is derived from
       the env-settable `ZOT_INVENTORY_REGISTRY_URL` and lands in the netrc `machine` line at `:179`,
       consumed at `:194` via `--netrc-file`. Validate that destination before the netrc is written.
-- [ ] 2.g Add **Rule D** to `scripts/lint-shell-trace-credential-refusal.py`: caller-shape assembly
-      (membership is the assertion — never key on the pinned literal), widened classifier, **three**
-      chokepoints (argv, `--config`, netrc `machine`), transport over all members + pin over
-      env-settable-destination members, baseline regenerated from 0.2, ratchet.
+- [ ] 2.g Add **Rule D** to `scripts/lint-shell-trace-credential-refusal.py` as `check_rule_d`,
+      mirroring the existing `check_rule_a`/`b`/`c` shape: caller-shape assembly (membership is the
+      assertion — never key on the pinned literal), widened classifier, **three** chokepoints
+      (argv, `--config`, netrc `machine`), transport over all members + pin over
+      env-settable-destination members.
+- [ ] 2.g1 **Give Rule D its OWN baseline — do not share the lint's existing one.** Measured: the
+      shared baseline is per-file and rule-agnostic (`if rel not in baseline` drops *all* rules'
+      findings for that file), it holds **130** entries, and **all seven** Better Stack sites are
+      already in it (`zot-inventory.sh`, `betterstack-query.sh`, `supabase-advisor-scan.sh`,
+      `betterstack-ingest-probe.sh`, both host scripts, `arm-heartbeats.sh`). Sharing it makes Rule D
+      green over exactly the population it was written for, on the repo-wide run that is the blocking
+      arm. Create `scripts/lint-shell-trace-credential-refusal.rule-d.baseline.txt`, generated from
+      0.2's census. (`--changed` mode is unaffected — it bypasses the baseline entirely.)
+- [ ] 2.g2 **Add a ratchet — the lint has none.** It carries `--census` and `--write-baseline` only.
+      Create `scripts/lint-shell-trace-credential-refusal.rule-d.highwater` (one integer + provenance
+      header) mirroring the four existing `.highwater` files in `scripts/`; offender-counting, so it
+      ratchets **down**. Add the `--check-highwater` flag to read it.
 - [ ] 2.h Add the **six-declaration** parity assertion: `zot-registry.tf`, `cloud-init-inngest.yml`,
       `vector.toml`, `registry-userdata-budget.sh`, `zot-inventory.sh`, `betterstack-ingest-probe.sh`.
       Three of six would go green with the fleet split across two destinations.
