@@ -75,22 +75,22 @@ never inside `$( )`.
 
 `plugins/soleur/skills/ship/SKILL.md`.
 
-- [ ] 3.1 Emit `Filed: #A #B #C` into the Phase 6 body template when the phase filed anything.
-- [ ] 3.2 Add it as a **third row** to Phase 6's existing carry-forward table — the one that already
+- [x] 3.1 Emit `Filed: #A #B #C` into the Phase 6 body template when the phase filed anything.
+- [x] 3.2 Add it as a **third row** to Phase 6's existing carry-forward table — the one that already
       protects `Tracks #N`/`Refs #N` and `<!-- gate-override: net-issue-flow -->` because Phase 6
       full-replaces the body. Without this the line is erased before the gate ever reads it.
-- [ ] 3.3 Document the declared arm and the conservation line beside the four query properties, which
+- [x] 3.3 Document the declared arm and the conservation line beside the four query properties, which
       stay stated verbatim.
 
 ## Phase 4 — Pin the `--json` field list
 
-- [ ] 4.1 Add a fifth Case 8 assertion: the `issue list` argv contains `--json` and the field list
+- [x] 4.1 Add a fifth Case 8 assertion: the `issue list` argv contains `--json` and the field list
       contains `number`, `body`, `createdAt`, `state`. Dropping `createdAt` makes every row fail the
       recency filter → `FILED=0` → **PASS on every PR, silently**, with no prior coverage.
 
 ## Phase 5 — Anti-vacuity floor ratchet
 
-- [ ] 5.1 Run the suite, read the reported count, set `MIN_ASSERTIONS` **at** it. No slack; ratchets
+- [x] 5.1 Run the suite, read the reported count, set `MIN_ASSERTIONS` **at** it. No slack; ratchets
       upward only (ADR-193). Cut redundant assertions rather than counting them, so the floor measures
       discrimination and not padding.
 

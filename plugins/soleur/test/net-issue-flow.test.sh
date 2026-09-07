@@ -357,6 +357,33 @@ else fail "FILED query must not use --search; got: $issue_call"; fi
 cases=$((cases + 1))
 if [[ "$issue_call" == *"--state all"* ]]; then pass "FILED query uses --state all"
 else fail "FILED query must use --state all; got: $issue_call"; fi
+
+# #7759 — the FIFTH pinned property, previously uncovered. The four above pin
+# WHICH issues come back; this pins WHICH FIELDS come with them, and the failure
+# mode is the same family: dropping `createdAt` makes every row fail the
+# `select((.createdAt // "") >= $since)` recency guard, so FILED=0 and the gate
+# PASSES on every PR, silently. `state` is equally load-bearing — the ADR-155
+# exemption reads it, and `number`/`body` are the row identity and the citation
+# corpus. Asserted per FIELD, not as one string match: a single `--json` blob
+# comparison would go red on a harmless reordering and green on a partial list.
+# Extract the --json OPERAND and test membership in THAT, never a substring of
+# the whole call line. Measured: a bare `*state*` match against the line is
+# satisfied by the unrelated `--state all` flag, so dropping `state` from the
+# field list left the assertion green — the exact bare-token vacuity this
+# repo's cq-assert-anchor-not-bare-token names, in an assertion written to
+# close an always-pass path.
+_json_fields="$(printf '%s\n' "$issue_call" | sed -n 's/.*--json[[:space:]]\{1,\}\([A-Za-z,]*\).*/\1/p')"
+cases=$((cases + 1))
+if [[ -n "$_json_fields" ]]; then pass "FILED query passes --json with a field list"
+else fail "could not extract a --json field list from: $issue_call"; fi
+for _f in number body createdAt state; do
+  cases=$((cases + 1))
+  if [[ ",$_json_fields," == *",$_f,"* ]]; then
+    pass "FILED query requests --json field: $_f"
+  else
+    fail "FILED query must request --json field '$_f'; got --json '$_json_fields'"
+  fi
+done
 cases=$((cases + 1))
 if [[ "$issue_call" != *"deferred-scope-out"* ]]; then pass "FILED query is not label-filtered (label covers ~8%)"
 else fail "FILED query must not filter by deferred-scope-out; got: $issue_call"; fi
@@ -1057,7 +1084,7 @@ fi
 # conservation check above: routing it through fail() puts the floor inside the
 # thing it is meant to police.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=84
+MIN_ASSERTIONS=97
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2

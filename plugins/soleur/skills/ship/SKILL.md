@@ -555,9 +555,27 @@ bash plugins/soleur/skills/ship/scripts/net-issue-flow.sh "$PR_NUMBER"
 ```
 
 [`net-issue-flow.sh`](./scripts/net-issue-flow.sh) emits the
-`Mandating rules:` / `Closing:` / `Filing:` / `Exempt:` / `Rejected:` / `Net:` block (enumerating
-the actual issue numbers behind each count), exits **1** when `NET > 0` with no
-override or exemption, and **0** otherwise.
+`Mandating rules:` / `Closing:` / `Filing:` / `Exempt:` / `Attributed:` / `Rejected:` /
+`Possible unattributed filings:` / `Net:` block (enumerating the actual issue numbers behind
+each count), exits **1** when `NET > 0` with no override or exemption, and **0** otherwise.
+
+**Two attribution arms, and only one of them counts (#7759).** An issue is a filing of PR *N*
+when it was created after *N* **and** either its body cites `#N` (the original arm) **or** its
+number appears on *N*'s `Filed:`/`Tracks:`/`Refs:` line. The second arm exists because the first
+cannot see a filing that cites the ORIGINATING ISSUE instead of the PR — measured live on
+PR #7702 (`Filing: 0 / Net: -1 / PASS`, versus `Filing: 3 / Net: +2 / BLOCKED` once declared)
+and again on PR #7841.
+
+`Attributed:` names the issues counted via the declared line. `Possible unattributed filings:`
+names every OTHER post-PR number the body mentions and counts toward **nothing** — not `Filing:`,
+not `Exempt:`, not `NET`. That asymmetry is the design: a declared line is an assertion of the
+filing relationship and can be counted; prose mentioning a number is not, and measured over 300
+PRs, counting bare `#N` attributes 9 issues to two different PRs each and flips 25 PRs (8.3%)
+from PASS to BLOCK. The report line keeps the blind spot visible without giving prose authority.
+
+Both sets are derived INSIDE the single `jq` pass from the fence-stripped body, so an unbalanced
+fence yields an empty body and the arm contributes nothing — it fails **closed**, and cannot
+become an escape hatch.
 
 The FILED query deliberately does **not** use `--search`, does **not** filter by
 `--label deferred-scope-out`, uses `--state all`, passes `--limit 500`, and
@@ -570,7 +588,9 @@ blocking gate silently always-pass** — strictly worse than the advisory surfac
 it replaces, because it also carries the authority of having passed. Do not
 "simplify" the query without re-running
 [`plugins/soleur/test/net-issue-flow.test.sh`](../../test/net-issue-flow.test.sh);
-its call-shape assertions pin all four. The mutation battery at
+its call-shape assertions pin all four — plus, since #7759, the `--json` field
+list itself: dropping `createdAt` makes every row fail the recency filter, so
+`FILED=0` and the gate passes on every PR, silently, and nothing covered it before. The mutation battery at
 `specs/<branch>/run-mutations.sh` is a SEPARATE artifact covering the exemption,
 the report and the timeout — it does not touch the FILED-query properties, so it
 is not evidence for them. Re-run the suite before touching the query, and the
@@ -1543,6 +1563,7 @@ Replace `BRANCH_NAME` with the actual branch name.
    - bullet points
 
    Closes #ISSUE_NUMBER
+   Filed: #A #B #C
 
    ## Changelog
    - changelog entries describing what changed
@@ -1554,6 +1575,21 @@ Replace `BRANCH_NAME` with the actual branch name.
    ```
 
    If `ISSUE_NUMBER` was detected, include the `Closes #N` line. If multiple issues, list each (`Closes #N, Closes #M`). If no issue was detected, omit the `Closes` line entirely.
+
+   **The `Filed:` line is the net-issue-flow gate's ONLY counted attribution source (#7759).**
+   List every issue THIS PR filed, space-separated, on one line. Omit the line entirely when the
+   PR filed nothing — do not emit `Filed:` with no numbers.
+
+   It exists because the gate cannot infer the filing relationship from the issue side: an issue
+   filed by this PR that cites the ORIGINATING ISSUE rather than the PR is invisible to the FILED
+   query, so the gate under-counts `Filing:` and passes net-positive. Measured live on PR #7702
+   (`Filing: 0 / Net: -1 / PASS` before the line, `Filing: 3 / Net: +2 / BLOCKED` after) and again
+   on PR #7841. Widening the query instead was rejected: it attributes transitively through a
+   shared closed issue, so a sibling PR filings would count against this one.
+
+   Numbers the body mentions ANYWHERE ELSE are reported by the gate as `Possible unattributed
+   filings:` and counted toward nothing — so a missing `Filed:` line is visible in the gate output
+   rather than silent, but it still produces the wrong verdict. Emit it.
 
    Do not quote flag names -- write `--title` not `"--title"`.
 
@@ -1567,6 +1603,7 @@ Replace `BRANCH_NAME` with the actual branch name.
    |---|---|---|
    | `Tracks #N` / `Refs #N` | `ship-operator-step-gate.sh` AND the net-issue-flow mandated-filing exemption | the operator-step gate re-blocks, and a mandated filing loses its exemption and re-counts against NET |
    | `<!-- gate-override: net-issue-flow -->` + justifications | `net-issue-flow.sh` | a deliberate, recorded override is erased and the PR blocks again |
+   | `Filed: #A #B #C` | `net-issue-flow.sh` (the ONLY counted attribution source, #7759) | every filing that cites the originating issue rather than the PR becomes invisible again, and the gate passes net-positive — the exact defect #7759 reports |
    | (none — `ship-operator-step-gate.sh` strips every HTML comment before matching, so no marker survives for it; its only override is `SOLEUR_SKIP_OPERATOR_STEP_GATE=1`) | — | — |
 
    Read the existing body FIRST and re-emit those lines verbatim in the new one:
@@ -1579,7 +1616,7 @@ Replace `BRANCH_NAME` with the actual branch name.
    # form silently drops the trailing same-line shape
    # `- Operator runs X (Tracks #123)`, which is exactly a companion this step
    # promises to carry forward.
-   printf '%s\n' "$OLD_BODY" | grep -nE '(Tracks|Refs)[[:space:]]+#[0-9]+|<!-- gate-override:'
+   printf '%s\n' "$OLD_BODY" | grep -nE '(Filed|Tracks|Refs):?[[:space:]]+#[0-9]+|<!-- gate-override:'
    ```
 
    Anything that grep prints belongs in the replacement body. **Why:** the
