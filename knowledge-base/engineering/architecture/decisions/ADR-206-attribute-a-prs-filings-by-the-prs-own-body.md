@@ -78,9 +78,29 @@ one whenever both touch a shared closed issue — breaking P4 by construction. O
 override reflex.
 
 **Sweep a `Source: PR #N` line into every filing site (the issue's option 1).** Rejected at the
-**sixteen** filing sites, adopted at **one**. Measured: 11 of the 16 emit no PR number at all, and
-the 5 that do use mutually incompatible citation shapes. A convention maintained at sixteen
-producers decays; a line emitted by the skill that also runs the gate does not.
+producer sites, adopted at one. Two of the reasons first recorded here were wrong; the corrected
+version is below.
+
+*The count.* This said "**sixteen** filing sites … 11 of the 16 emit no PR number". Re-measured
+2026-09-07 (`git grep -l 'gh issue create' -- 'plugins/soleur/skills/**/*.md'`): **19 files, 48
+invocations**, of which 14 files carry no PR reference anywhere near the create. The direction of
+the argument is if anything stronger than claimed, but the specific figure was not reproducible,
+so it is replaced with the command that produces it.
+
+*The "incompatible shapes" clause is struck.* It said the 5 sites that do cite a PR "use mutually
+incompatible citation shapes", offered as a cost. It is not one. The pre-existing arm matches a
+**bare `#N`** anywhere in the issue body — `test("(^|[^0-9A-Za-z])#" + $pr + "([^0-9]|$)")` — so
+`**Source:** PR #N`, `From code review of PR #N`, `**Source PR:** #N` and `Ref #N` all already
+satisfy it identically. Shape variation costs this consumer nothing, and citing it as evidence
+against the alternative was an error.
+
+*The decisive reason was never recorded, and it is this.* `/work` files follow-ups at a site the
+skill itself documents as running **before** `/ship` (`work/SKILL.md`: "which is BEFORE `/ship`
+Phase 5.5's Net-Issue-Flow Surfacing runs"), and `gh pr create` lives in `/ship` Phase 6.
+`/brainstorm` and a standalone `/plan` file earlier still. **At those sites there is no PR number
+in existence to cite.** Option 1 is not merely undisciplined there — it is impossible. PR-side
+attribution is the only place the relationship is knowable at filing time. That argument carries
+the decision on its own; the two struck clauses were never needed.
 
 **Keyword-anchor on free prose (`Files|Filed|Tracks|Refs #N` anywhere).** Right *shape* — an
 assertion rather than a mention — but applied to an unproduced body it returns `Filing: 0` on the
