@@ -46,13 +46,16 @@ HOST_RE='s[0-9]+\.[a-z0-9-]+\.betterstackdata\.com'
 # Production declarations only. Excluding tests/fixtures/knowledge-base is not a
 # convenience: those legitimately carry synthetic and historical hosts, and a
 # suite that failed on its own fixtures could not be written.
-mapfile -t FILES < <(git grep -lE "$HOST_RE" -- . \
+# `--untracked` because `git grep` is INDEX-scoped by default: a declaring file
+# the developer just wrote is invisible until staged, so a local or pre-commit
+# run would certify parity over a population that excludes the new file.
+mapfile -t FILES < <(git grep -l --untracked -E "$HOST_RE" -- . \
   ':!knowledge-base' ':!tests' ':!*.test.sh' ':!scripts/fixtures' | sort)
 
 # A derived population can be empty for reasons that have nothing to do with the
 # property (a broken regex, a git failure, a bad CWD) -- and empty would otherwise
 # report a clean sweep. The floor is ABSOLUTE and ratchets upward.
-MIN_FILES=10
+MIN_FILES=12
 if [ "${#FILES[@]}" -lt "$MIN_FILES" ]; then
   printf '[FATAL] derived only %s declaring file(s), floor is %s -- refusing to certify parity over a population this small (broken grep? wrong CWD?)\n' \
     "${#FILES[@]}" "$MIN_FILES" >&2
@@ -89,7 +92,11 @@ fi
 # all-of-1. So the partition check must be paired with (a) a closed set of known
 # source ids and (b) an absolute floor per source. Both ratchet upward.
 KNOWN_SIDS="s2457081 s2734275"
-declare -A SID_FLOOR=( [s2457081]=6 [s2734275]=3 )
+# Ratcheted to the MEASURED population. At 6/3/10 the floors carried a unit of
+# slack, so re-pointing one file from s2457081 to s2734275 -- a silent misroute,
+# and verbatim the case the floor's own message names -- left both partitions
+# above their floors and the suite green.
+declare -A SID_FLOOR=( [s2457081]=7 [s2734275]=3 )
 
 for sid in $(printf '%s\n' "${!SEEN_HOSTS[@]}" | sort); do
   distinct="$(printf '%s' "${SEEN_HOSTS[$sid]}" | sort -u | grep -c . || true)"
@@ -137,6 +144,17 @@ else
       fail "$LIB declares $v=$id but NO literal declaration in the tree names s${id} -- the canonical id and the fleet have diverged"
     fi
   done
+fi
+
+# ANTI-VACUITY FLOOR. MIN_FILES above bounds the POPULATION; this bounds the
+# VERDICTS. Emitted with printf + exit directly -- never through the helpers it
+# backstops, which the same edit could disarm.
+MIN_ASSERTIONS=5
+_total=$((PASS + FAIL))
+if [ "$_total" -lt "$MIN_ASSERTIONS" ]; then
+  printf '[FATAL] betterstack-ingest-parity ran only %s assertion(s), floor is %s -- a skipped loop reports clean\n' \
+    "$_total" "$MIN_ASSERTIONS" >&2
+  exit 1
 fi
 
 printf 'betterstack-ingest-parity: %s passed, %s failed\n' "$PASS" "$FAIL"

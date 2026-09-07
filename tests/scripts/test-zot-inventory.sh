@@ -48,6 +48,25 @@ fail() {
   return 0
 }
 
+# POSITIVE CONTROL (ADR-193). Drive BOTH helpers once and refuse to continue
+# unless BOTH counters move. The assertion floor at the end sums passes+fails and
+# is therefore dominated by `passes`, so neutering `fail()` alone -- one token,
+# `fails + 1` -> `fails + 0` -- disarmed every negative assertion in the suite
+# and reported `147 passed, 0 failed`, rc 0. A floor that witnesses one helper is
+# not a floor. Reported with printf + exit directly, never through the helpers it
+# backstops.
+_cp=$passes
+_cf=$fails
+pass 'self-check: pass() increments (expected)'
+fail 'self-check: fail() increments (EXPECTED, not a defect)'
+if [ $((passes - _cp)) -ne 1 ] || [ $((fails - _cf)) -ne 1 ]; then
+  printf '[FATAL] test-zot-inventory: verdict helpers are not counting (pass delta %s, fail delta %s)\n' \
+    "$((passes - _cp))" "$((fails - _cf))" >&2
+  exit 1
+fi
+passes=$_cp
+fails=$_cf
+
 # A skip is not a pass, and under CI it is not even a skip.
 _skip() {
   if [ "${CI:-}" = "true" ]; then

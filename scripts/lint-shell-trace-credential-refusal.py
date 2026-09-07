@@ -482,7 +482,10 @@ def check_rule_b(rel: str, lines: list[str], preamble_at: int | None) -> list[st
 # A credential reaches curl three ways, and only the first is visible in argv.
 CURL_CRED_FLAGS = re.compile(
     r"(?:^|\s)(?:-u\s|--user\s|--netrc\b|--netrc-file\b|--oauth2-bearer\b"
-    r"|--proxy-user\s|-E\s|--cert\s|--config\s|-K\s)"
+    r"|--proxy-user\s|-E\s|--cert\s|--config\s|-K\s"
+    # A client KEY is a credential even when --cert names only the public half,
+    # and a cookie jar is a session credential in a file.
+    r"|--key\s|--pass\s|-b\s|--cookie\s|--cookie-jar\s)"
 )
 # `--config <file>` is a credential channel and the one this repo's most careful
 # call site uses: zot-inventory.sh writes `header = "Authorization: Bearer …"`
@@ -498,7 +501,11 @@ CURL_CRED_FLAGS = re.compile(
 CURL_STDIN_HEADER = re.compile(r"(?:^|\s)(?:--header|-H)\s+@-")
 CURL_AUTH_HEADER = re.compile(r"(?:Authorization|X-API-Key|Private-Token)\s*:", re.I)
 
-CURL_INVOKE = re.compile(r"(?:^|[|;&(]|\s)curl(?:\s|$)")
+# An absolute or relative PATH to curl is still curl. The previous class
+# `(?:^|[|;&(]|\s)` excluded `/`, so `/usr/bin/curl` -- live twice in
+# apps/web-platform/infra/inngest-bootstrap.sh -- was not recognised as a curl
+# invocation at all, and the file scored entirely out of scope.
+CURL_INVOKE = re.compile(r"(?:^|[|;&(`$]|\s)(?:[\w./-]*/)?curl(?:\s|$)")
 CURL_DISABLE_FIRST = re.compile(r"\bcurl\s+--disable(?:\s|$)")
 CURL_NOPROXY = re.compile(r"--noproxy\s+'?\*'?")
 
@@ -513,15 +520,41 @@ def _pin_re(var: str) -> re.Pattern:
     """
     v = re.escape(var)
     return re.compile(
-        # [[ "$VAR" == "literal" ]] / [ "$VAR" != "literal" ] -- RHS must be a
-        # quoted literal or another pinned variable reference, never bare `*`.
-        r"\[\[?[^]]*\$\{?" + v + r"\}?\"?\s*(?:==|!=|=)\s*\"?[A-Za-z0-9$_./:-]"
+        # [[ "$VAR" == "literal" ]] -- the RHS must be a LITERAL. `$` is
+        # deliberately OUT of the class: with it in, `[[ "$URL" == "$OTHER" ]]`
+        # and even `[ "$URL" = "$URL" ]` counted as pins -- verbatim the case
+        # this docstring claimed to have closed, which is worse than a missing
+        # check because it reports a satisfied property that does not hold.
+        # A comparison against another VARIABLE is reached instead by
+        # _adjudicated()'s derivation walk, where the literal is at the end of it.
+        r"\[\[?[^]]*\$\{?" + v + r"\}?\"?\s*(?:==|!=|=)\s*\"?[A-Za-z0-9_./:-]"
         # case "$VAR" in <non-`*` arm>) -- the arm carries the literal.
         r"|case\s+\"?\$\{?" + v + r"\}?\"?\s+in[^)]*?[A-Za-z0-9./:_-][^)]*\)"
-        # =~ against an anchored ERE is a pin too (the loopback shape in
-        # zot-inventory.sh is exactly this).
-        r"|\$\{?" + v + r"\}?\"?\s*=~\s*\^"
+        # =~ against an anchored ERE, with at least one literal character AFTER
+        # the anchor. A bare `^` matches every string, so requiring only `=~ ^`
+        # accepted a regex that adjudicates nothing.
+        r"|\$\{?" + v + r"\}?\"?\s*=~\s*\^[A-Za-z0-9(\[\\]"
     )
+
+
+TRAILING_COMMENT = re.compile(r"""(?:^|[ \t])\#(?=(?:[^'"]|'[^']*'|"[^"]*")*$).*$""")
+
+
+def strip_trailing_comment(line: str) -> str:
+    """Drop a trailing `#` comment when it is OUTSIDE quotes.
+
+    `strip_comment` deliberately removes only WHOLE-line comments, to protect
+    `${VAR##*/}`. That conservatism made comment text classifier input, and a
+    trailing comment then satisfied every Rule D limb at once:
+
+        curl -u "svc:$TOK" "$SINK"   # curl --disable --noproxy '*'
+
+    reported clean. This is `cq-assert-anchor-not-bare-token` inside the guard
+    itself. The lookahead counts quotes to the end of the line, so a `#` inside a
+    quoted argument (a fragment URL, a colour literal) is preserved; `${VAR#...}`
+    is preserved because it is not preceded by whitespace or line-start.
+    """
+    return TRAILING_COMMENT.sub("", line)
 
 
 def _curl_commands(lines: list[str]) -> list[tuple[int, str]]:
@@ -535,7 +568,7 @@ def _curl_commands(lines: list[str]) -> list[tuple[int, str]]:
     """
     out: list[tuple[int, str]] = []
     for i, raw in enumerate(lines):
-        line = strip_comment(raw)
+        line = strip_trailing_comment(strip_comment(raw))
         if not line or not CURL_INVOKE.search(line):
             continue
         # Walk back over the pipeline feeding this curl (bounded: 4 lines).
@@ -550,16 +583,39 @@ def _curl_commands(lines: list[str]) -> list[tuple[int, str]]:
         end = i
         while end < len(lines) - 1 and strip_comment(lines[end]).rstrip().endswith("\\"):
             end += 1
-        cmd = " ".join(strip_comment(x).strip().rstrip("\\").strip() for x in lines[start:end + 1])
+        cmd = " ".join(
+            strip_trailing_comment(strip_comment(x)).strip().rstrip("\\").strip()
+            for x in lines[start:end + 1]
+        )
+        # TWO SCOPES, because the two questions have different extents.
+        #
+        # A CREDENTIAL legitimately arrives from across a pipeline
+        # (`printf 'Authorization: …' | curl --header @-`), so classification
+        # reads the whole assembly. FLAGS cannot: they must be on the invocation
+        # itself. Reading both from one string let a compliant neighbour launder
+        # a credentialed call -- measured on both `curl --disable …; curl -u …`
+        # (same line) and a two-line pipeline whose FIRST stage was compliant.
+        segments = [x for x in re.split(r";|&&|\|\||\|", cmd) if x.strip()]
+        invocation = cmd
+        for seg in reversed(segments):
+            if CURL_INVOKE.search(seg):
+                invocation = seg
+                break
         cmd = _inline_arrays(cmd, lines, i)
         cmd = _inline_config_file(cmd, lines)
-        out.append((i, cmd))
+        # The inliners must run on the STRING, before the scope split -- an
+        # earlier revision built the pair first and the inliners then received a
+        # tuple, so the linter raised TypeError on every file with an expanded
+        # array. It surfaced as "0 findings", which is byte-identical to clean.
+        invocation = _inline_arrays(invocation, lines, i)
+        invocation = _inline_config_file(invocation, lines)
+        out.append((i, (cmd, invocation)))
     return out
 
 
 # The surrounding quotes are consumed too: substituting inside them leaves
 # `curl "--disable ...`, and the position check would miss a compliant call site.
-ARRAY_EXPANSION = re.compile(r"\"?\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}\"?")
+ARRAY_EXPANSION = re.compile(r"\"?\$\{([A-Za-z_][A-Za-z0-9_]*)\[[@*]\]\}\"?")
 CONFIG_FLAG = re.compile(r"(?:--config|-K)\s+\"?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?\"?")
 
 
@@ -652,6 +708,35 @@ def _inline_arrays(cmd: str, lines: list[str], at: int | None = None) -> str:
 DERIVES_FROM = r"^\s*(?:local\s+)?([A-Za-z_][A-Za-z0-9_]*)=\"?\$\{%s(?:[#%%/^,]|:[0-9])"
 
 
+LITERAL_CONST = r"^\s*(?:readonly\s+|declare\s+-r\s+|export\s+)?%s=\"?([^\"$`\n]+)\"?\s*$"
+
+
+def _compared_to_literal_const(var: str, body: str) -> bool:
+    """True when `$var` is compared against a variable holding a LITERAL.
+
+    Removing `$` from _pin_re's RHS class closed the indirect-pin bypass and, on
+    its own, also rejected the idiom this repo PREFERS -- single-sourcing the
+    expected value into one `readonly` constant and comparing against that:
+
+        readonly INGEST_URL_PINNED="https://…/"
+        [ "$INGEST_URL" != "$INGEST_URL_PINNED" ] && die
+
+    A rule that rejects that rewards duplicating the literal at both sites, which
+    is a drift seam. So the comparand is followed one step: it counts as a pin
+    only when its own assignment is a literal with NO expansion in it (`$` and
+    backtick are excluded from the value class), which is exactly what makes it a
+    constant rather than a second env-settable variable.
+    """
+    for m in re.finditer(
+        r"\$\{?" + re.escape(var) + r"\}?\"?\s*(?:==|!=|=)\s*\"?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?",
+        body,
+    ):
+        rhs = m.group(1)
+        if re.search(LITERAL_CONST % re.escape(rhs), body, re.M):
+            return True
+    return False
+
+
 def _adjudicated(var: str, body: str) -> bool:
     """True when the destination is adjudicated against a literal.
 
@@ -662,7 +747,7 @@ def _adjudicated(var: str, body: str) -> bool:
     UNPINNED: a false positive on the best destination validator in the tree,
     which would have taught the next reader to baseline it.
     """
-    if _pin_re(var).search(body):
+    if _pin_re(var).search(body) or _compared_to_literal_const(var, body):
         return True
     seen = {var}
     frontier = [var]
@@ -688,11 +773,18 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
     del preamble_at  # Rule D is independent of the xtrace refusal.
     body = "\n".join(strip_comment(x) for x in lines)
     out: list[str] = []
-    for lineno, cmd in _curl_commands(lines):
+    for lineno, scopes in _curl_commands(lines):
+        cmd, invocation = scopes
         credentialed = bool(
             CURL_CRED_FLAGS.search(cmd)
             or CURL_STDIN_HEADER.search(cmd)
-            or (CURL_AUTH_HEADER.search(cmd) and any(s.search(cmd) for s in SECRET_SIGNALS))
+            # An auth-shaped header on the invocation plus a credential anywhere
+            # in the FILE. Reading both from `cmd` made this `(A and B) or B`,
+            # which is just `B` -- provably dead (deleting it left --census over
+            # 989 files byte-identical). The file-scoped read is the channel it
+            # was reaching for: a header assembled from a variable set far above.
+            or (CURL_AUTH_HEADER.search(cmd)
+                and any(s.search(body) for s in SECRET_SIGNALS))
             or any(s.search(cmd) for s in SECRET_SIGNALS)
         )
         if not credentialed:
@@ -702,10 +794,10 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
         # either flag before #7873 -- two messages doubled the reported volume of
         # the deferred population without adding information.
         missing = []
-        if not CURL_DISABLE_FIRST.search(cmd):
+        if not CURL_DISABLE_FIRST.search(invocation):
             missing.append("`--disable` as its FIRST argument (position is load-bearing: "
                            "it aborts ~/.curlrc parsing, and later is too late)")
-        if not CURL_NOPROXY.search(cmd):
+        if not CURL_NOPROXY.search(invocation):
             missing.append("`--noproxy '*'` (ALL_PROXY/HTTPS_PROXY redirect it with the "
                            "destination pin fully intact)")
         if missing:
@@ -725,7 +817,16 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
                 r"|^\s*(?:export\s+)?" + v + r"=\"?\$\{[A-Za-z_][A-Za-z0-9_]*:-"  # VAR="${OTHER:-x}"
                 r"|^\s*:\s*\"?\$\{" + v + r":="                                # : "${VAR:=x}"
             )
-            if not re.search(env_settable, body, re.M):
+            assigned_anywhere = re.search(
+                r"^\s*(?:export\s+|readonly\s+|local\s+)?" + v + r"=", body, re.M
+            )
+            # A variable READ from the environment and never assigned is
+            # env-settable BY DEFINITION -- and it is the most env-settable form
+            # there is. All three spellings above are assignments, so this case
+            # matched none of them: scripts/betterstack-query.sh sends Basic auth
+            # to `https://${BETTERSTACK_QUERY_HOST}` behind a non-empty check
+            # only, which is #7873's exact shape.
+            if not re.search(env_settable, body, re.M) and assigned_anywhere:
                 continue
             if not re.search(r"(?:URL|URI|ENDPOINT|HOST)\b", var):
                 continue

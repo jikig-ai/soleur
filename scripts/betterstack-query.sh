@@ -121,6 +121,25 @@ export BS_TABLE="${BS_TABLE:-t520508_soleur_inngest_vector_prd_3_logs}"
 # silently ignored, and the caller gets rows from the DEFAULT archive with no error, because
 # the derived name exists and the query succeeds. That is this script's own headline bug
 # (asks for X, gets Y, exit 0) reintroduced one level down.
+# (#7873) BETTERSTACK_QUERY_HOST is interpolated into `https://${HOST}?...` and
+# carries Basic auth, so a value containing userinfo or a path re-points the
+# credential: `real.host@evil.example` resolves to evil.example, and
+# `evil.example/x?` puts the query on an attacker path. The non-empty check above
+# is not a destination validation.
+#
+# This is a SHAPE check, not an equality pin, and deliberately so: three suites
+# drive this script through a `BETTERSTACK_QUERY_HOST=stub` seam and pinning the
+# vendor host would send synthetic credentials at the real warehouse from CI.
+# A bare hostname (optionally with a port) is what the vendor connection is; a
+# URL is not.
+case "$BETTERSTACK_QUERY_HOST" in
+  *[[:cntrl:]]*|*@*|*/*|*\?*|*\#*|*:*:*|"")
+    printf 'betterstack-query.sh: refusing to send credentials to a malformed BETTERSTACK_QUERY_HOST (expected a bare host[:port], got %s characters of something else)\n' \
+      "${#BETTERSTACK_QUERY_HOST}" >&2
+    exit 2
+    ;;
+esac
+
 S3_EXPLICIT=0
 [[ -n "${BS_TABLE_S3:-}" ]] && S3_EXPLICIT=1
 export BS_TABLE_S3="${BS_TABLE_S3:-${BS_TABLE%_logs}_s3}"

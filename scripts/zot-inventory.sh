@@ -92,6 +92,13 @@ esac
 # Locale-pinned: every numeric shape gate below uses [[ =~ ]] with [0-9], and under a UTF-8
 # locale bash's collation makes the FULLWIDTH digits match that class.
 export LC_ALL=C
+# `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars, but
+# neither touches the env that subverts TLS ITSELF: SSLKEYLOGFILE writes the
+# session keys (verified, curl 8.18.0/OpenSSL 3.5.5) and the CA vars substitute
+# the trust store. The actor who can set ZOT_INVENTORY_INGEST_URL -- the threat
+# model this file's destination pins are written against -- can set these too,
+# and then the pin, --disable and --noproxy are all intact and all irrelevant.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME
 
 readonly MARKER_NAME="SOLEUR_ZOT_INVENTORY"
 readonly MARKER_SCHEMA=1
@@ -190,6 +197,12 @@ SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 chmod 700 "$SCRATCH"
 
+# The runner parses workflow commands from BOTH streams (see C1 above), and the
+# refusals below interpolate a fully env-controlled value into stderr. A newline
+# in it forges a second line the runner acts on. Strip control characters and
+# bound the length before echoing.
+_safe_url() { printf '%s' "${1//[[:cntrl:]]/}" | cut -c1-120; }
+
 REGISTRY_HOST="$(printf '%s' "$REGISTRY_URL" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')"
 # (#7873) The pull credential is written into the netrc `machine` line, and
 # REGISTRY_URL is env-settable with no validation -- so anything that can set
@@ -219,8 +232,20 @@ REGISTRY_HOST="$(printf '%s' "$REGISTRY_URL" | sed -E 's#^[a-zA-Z]+://##; s#[:/]
 #
 # `(:[0-9]+)?` here is anchored on both sides by the ERE, so a port is digits and
 # nothing else, and anything after it must begin `/`. Userinfo (`@`) cannot appear.
-if [[ ! "$REGISTRY_URL" =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?(/.*)?$ ]]; then
-  die "refusing to write the pull credential into a netrc for non-loopback registry '${REGISTRY_URL}' (ZOT_INVENTORY_REGISTRY_URL must name the local registry)" 2
+# bash compiles EREs with REG_EXTENDED and NOT REG_NEWLINE, so `.` matches a
+# newline and `(/.*)?` would swallow `\nhttp://evil.example/`. Refuse control
+# characters before matching, so the GUARD refuses rather than depending on the
+# curl version that happens to reject the URL.
+case "$REGISTRY_URL" in
+  *[[:cntrl:]]*) die "refusing a registry URL containing a control character" 2 ;;
+esac
+# `[::1]` is deliberately NOT allowlisted. REGISTRY_HOST above cuts at the first
+# `:`, so `http://[::1]:5000` derives the host `[`: the netrc would carry
+# `machine [`, curl would match nothing, and every registry request would go out
+# UNAUTHENTICATED with no diagnostic naming the cause. A spelling this file
+# cannot express is worse than one it refuses.
+if [[ ! "$REGISTRY_URL" =~ ^https?://(127\.0\.0\.1|localhost)(:[0-9]+)?(/.*)?$ ]]; then
+  die "refusing to write the pull credential into a netrc for non-loopback registry '$(_safe_url "$REGISTRY_URL")' (ZOT_INVENTORY_REGISTRY_URL must name the local registry)" 2
 fi
 NETRC="$SCRATCH/netrc"
 printf 'machine %s\nlogin %s\npassword %s\n' "$REGISTRY_HOST" "$ZOT_PULL_USER" "$ZOT_PULL_TOKEN" > "$NETRC"
@@ -558,7 +583,7 @@ emit_and_exit() {  # $1 outcome, $2 reason
   # comes from an env-settable variable validated by nothing. Pin it to the one
   # destination this credential belongs to. Exit non-zero: no boot depends on this.
   if [ "$INGEST_URL" != "$INGEST_URL_PINNED" ]; then
-    die "refusing to forward the Better Stack ingest credential to unpinned destination '${INGEST_URL}' (expected '${INGEST_URL_PINNED}')" 2
+    die "refusing to forward the Better Stack ingest credential to unpinned destination '$(_safe_url "$INGEST_URL")' (expected '${INGEST_URL_PINNED}')" 2
   fi
 
   local conf="$SCRATCH/ingest.conf"

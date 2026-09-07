@@ -141,6 +141,25 @@ rc="$(rc_of "$LINT" "$FIX/violation-ruled-disable-not-first.sh")"
 [ "$rc" = "1" ] && pass "Rule D: --disable present but NOT first is still reported" \
   || fail "Rule D disable-not-first should report rc=1, got rc=$rc"
 
+# --- Rule D: the DESTINATION-PIN limb, both directions ------------------------
+# This limb had ZERO fixtures in either direction, so eight independent mutations
+# of it survived at full green -- including making `_adjudicated` return False
+# unconditionally, and widening the `case` arm back to bare `*`.
+rc="$(rc_of "$LINT" "$FIX/compliant-ruled-pinned-destination.sh")"
+[ "$rc" = "0" ] && pass "Rule D: an adjudicated env-settable destination PASSES (must-pass direction)" \
+  || fail "Rule D pinned-destination should pass, got rc=$rc"
+
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-vacuous-case-pin.sh")"
+[ "$rc" = "1" ] && pass "Rule D: a \`case\` whose only arm is bare \`*\` is not a pin" \
+  || fail "Rule D vacuous-case pin should report rc=1, got rc=$rc"
+
+# The RHS class once contained `$`, so comparing the destination against another
+# env-settable variable counted as adjudicated -- a second env var redirected the
+# credential with the pin intact.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-indirect-pin.sh")"
+[ "$rc" = "1" ] && pass "Rule D: comparison against another env-settable variable is not a pin" \
+  || fail "Rule D indirect pin should report rc=1, got rc=$rc"
+
 # The `--config` channel: BOTH credential and destination live in a file the curl
 # line does not name. Without a fixture here, `_inline_config_file` had no
 # coverage at all -- and a review pass recommended deleting it as "measured zero
@@ -221,7 +240,7 @@ rc="$(rc_of "$LINT" --write-baseline "$FIX/compliant-canonical.sh")"
 _tpl="$REPO_ROOT/plugins/soleur/skills/ship/references/followthrough-stub-template.sh"
 if [ -f "$_tpl" ]; then
   cp "$_tpl" "$WORK/fx/probe-scaffolded.sh"
-  printf 'TOK="$SENTRY_AUTH_TOKEN"\ncurl -H "Authorization: Bearer $TOK" https://example.invalid >/dev/null 2>&1 || true\n' \
+  printf 'TOK="$SENTRY_AUTH_TOKEN"\ncurl --disable --noproxy '"'"'*'"'"' -H "Authorization: Bearer $TOK" https://example.invalid >/dev/null 2>&1 || true\n' \
     >> "$WORK/fx/probe-scaffolded.sh"
   rc="$(rc_of "$LINT" "$WORK/fx/probe-scaffolded.sh")"
   [ "$rc" = "0" ] && pass "a probe scaffolded from the stub template passes the lint" \
@@ -396,6 +415,18 @@ mutate_row 'M8 unenumerable: indirect arm dropped' \
   "$FIX/violation-indirect-conditional-hatch.sh" 1 0
 
 # --- Rule D mutation rows: the GUARD's own operands ---------------------------
+# Anchored on the CONDITION KEYWORD, not on the full expression. Pinning the
+# exact `if _pin_re(var).search(body):` text meant that adding a second disjunct
+# to that line made the sed a no-op -- and a mutation that does not land reports
+# the baseline, which is indistinguishable from a pass. Same coupling as D3.
+mutate_row 'D6 Rule D: destination adjudication disabled' \
+  's/^(\s*)if _pin_re\(var\)[^\n]*$/${1}if False:/m' \
+  "$FIX/compliant-ruled-pinned-destination.sh" 0 1
+
+mutate_row 'D7 Rule D: pin accepts a variable RHS again (the `$` back in the class)' \
+  's/\[A-Za-z0-9_\.\/:-\]/[A-Za-z0-9\$_.\/:-]/' \
+  "$FIX/violation-ruled-indirect-pin.sh" 1 0
+
 # D5 mutates the config-file resolution specifically. It is the one Rule D helper
 # whose deletion looks free on a healthy tree: every verdict is unchanged until a
 # destination pin regresses, which is exactly when it is needed.
