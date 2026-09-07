@@ -653,7 +653,17 @@ SENTRY_NAMES="$(strip_comments "$SENTRY_TF" \
   | sort -u | paste -sd',' -)"
 ARRAY_NAMES="$(strip_comments "$DEPLOY_SENTRY_ARRAY_SRC" \
   | awk '/^SENTRY_MONITORS=\(/ { v=$0; sub(/^SENTRY_MONITORS=\(/,"",v); sub(/\).*$/,"",v); print v }' \
-  | tr ' ' '\n' | grep -v '^$' | sort -u | paste -sd',' -)"
+  | tr ' ' '\n' | awk 'NF' | sort -u | paste -sd',' -)"
+# `awk 'NF'` and NOT `grep -v '^$'`: this file runs under `set -euo pipefail`, where a grep
+# that matches nothing exits 1 and takes the whole capture -- and the script -- down with it.
+# The no-match case is exactly the one this assertion exists to CATCH (SENTRY_MONITORS=(
+# renamed or gone), so the grep form made the guard die with an errexit abort instead of
+# reporting a clean FAIL: a check that cannot report the condition it was written to detect,
+# which is the same defect class as the monitor this PR is fixing. `awk 'NF'` drops the empty
+# lines and exits 0 either way, so an empty extraction flows into the eq_case below and fails
+# LOUDLY. Do not "simplify" this back to grep, and do not paper it over with `|| true` --
+# that would also swallow a genuine strip_comments/awk failure. Caught by
+# scripts/lint-shell-capture-exit on PR #7878.
 # Both operands non-empty, or the equality is the vacuous "" == "" this case exists
 # to avoid. Asserted rather than assumed: a broken extractor on BOTH sides passes.
 sentry_n="$(printf '%s' "$SENTRY_NAMES" | tr ',' '\n' | grep -c . || true)"
