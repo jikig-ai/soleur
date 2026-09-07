@@ -1919,6 +1919,26 @@ if want_webplat; then
     skip_suite "apps/web-platform [unit]" "relevance" \
       "cd apps/web-platform && npm run test:ci -- --project unit"
   fi
+
+  # THE SHARD MATTERS, and the PATH is what keeps the surfaces disjoint.
+  #
+  # This suite drives `ccla-add.sh`, which resolves the roster validator through
+  # `apps/web-platform/node_modules/.bin/tsx`. `test-scripts` is documented as
+  # "bash + python3 + bun" and runs no `npm ci`, so that binary is absent there
+  # and EVERY invocation dies at the script's own operator-fault exit 2 —
+  # measured, 23 of 33 assertions red on CI run 34117976566 while the suite
+  # passed locally, because a developer checkout has node_modules. It therefore
+  # runs in THIS shard, whose job runs `npm ci` in apps/web-platform.
+  #
+  # It lives in `apps/cla-evidence/test/` rather than beside the script in
+  # `apps/cla-evidence/scripts/` for one specific reason: that directory is a
+  # SUITE_GLOBS entry, and a file matching both the glob and this explicit
+  # registration is double-covered. `lint-orphan-test-suites.sh` refuses that,
+  # correctly — the covered set is a union, so deleting this line would leave the
+  # glob still reporting coverage while the `continue` that excluded it meant
+  # nothing ran. An ack was the other option and would have been false: every
+  # entry in DOUBLE_COVERED_ACK has BOTH surfaces genuinely running the suite.
+  run_suite "apps/cla-evidence/test/ccla-add.test.sh" bash apps/cla-evidence/test/ccla-add.test.sh
 fi
 
 # plugins/soleur bun-test recursion + blog-link-validation — bun shard.
