@@ -1312,12 +1312,20 @@ if want_scripts; then
   run_suite "scripts/compound-promote" bash scripts/compound-promote.test.sh
   run_suite "scripts/lint-trap-tempfile-ownership" bash scripts/lint-trap-tempfile-ownership.test.sh
   run_suite "scripts/lint-shell-trace-credential-refusal" bash scripts/lint-shell-trace-credential-refusal.test.sh
+  run_suite "scripts/betterstack-ingest-parity" bash scripts/betterstack-ingest-parity.test.sh
   # The SUITE above proves the lint behaves; this runs the lint over the repo
   # so a NEW violating script reds the REQUIRED `test` context. The ci.yml step
   # is the same check in an advisory job -- a credential guard a PR can merge
   # past red is theatre, and promoting that whole job is a pre-existing
   # follow-up noted in ci.yml rather than a path to fork here.
   run_suite "scripts/lint-shell-trace-credential-refusal-repo" python3 scripts/lint-shell-trace-credential-refusal.py
+  # (#7873) Rule D's ratchet. The repo-wide run above is SUPPRESSED by Rule D's
+  # baseline, so on its own it cannot see the deferred population grow -- which is
+  # the whole failure mode a baselined guard has. This is the one-way half:
+  # offenders may fall, never rise. It is separate from the run above because a
+  # baseline check and a ratchet answer different questions, and folding them
+  # would let a fix and a regression net out to silence.
+  run_suite "scripts/lint-shell-trace-credential-refusal-ratchet" python3 scripts/lint-shell-trace-credential-refusal.py --check-highwater
   # The Cloudflare token-drift detector's Access-service-token arm. Registered explicitly
   # for the same reason as its neighbours — scripts/*.test.sh is NOT auto-globbed — and
   # the omission would be especially apt here: the defect this suite pins is a detector
