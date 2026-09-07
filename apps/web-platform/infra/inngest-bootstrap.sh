@@ -413,8 +413,11 @@ HEARTBEATEOF
 
 # #7695: the delimiter above is QUOTED, so nothing in the unit body is expanded or
 # executed at render time. The two values the unit genuinely needs are substituted here by
-# sentinel -- the house pattern already used for @@DARK_ARM@@ and @@HOST_NAME@@. Both seds
-# anchor on the sentinel and use | as the delimiter because both values are absolute paths.
+# sentinel -- the house pattern already used for @@DARK_ARM@@ and @@HOST_NAME@@. Both seds match
+# the sentinel as a SUBSTRING (it sits mid-line inside ExecStart=, so unlike the standalone
+# @@DARK_ARM@@ line above it cannot be ^...$-anchored) and use | as the delimiter because both
+# values are absolute paths. The @@ residual check below is not ceremony: an & in a substituted
+# path expands to the whole match and corrupts it at exit 0, which set -e does not catch.
 sed -i "s|@@DOPPLER_BIN@@|${DOPPLER_BIN}|; s|@@HEARTBEAT_SCRIPT@@|${HEARTBEAT_SCRIPT}|" "$HEARTBEAT_UNIT"
 # Refuse to install a unit still carrying an unsubstituted sentinel: a half-rendered
 # ExecStart= would fail at systemd start with a message about a literal @@ path, which is
