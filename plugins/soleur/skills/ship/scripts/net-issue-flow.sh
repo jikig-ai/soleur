@@ -191,11 +191,33 @@ PR_CREATED_AT="$(gh pr view "$PR_NUMBER" --json createdAt --jq .createdAt 2>/dev
 # ship-soak-followthrough-gate.sh. Without it an unbalanced fence degrades to
 # "strip nothing after the opener" — and the jq stripper in this same file
 # already fails closed, so the two halves disagreed.
+PR_FENCE_RC=0
 PR_BODY_SCAN="$(printf '%s\n' "$PR_BODY" | awk '
   /^[[:space:]]*```/ { in_fence = !in_fence; next }
   !in_fence { print }
   END { if (in_fence) exit 2 }
-')" || PR_BODY_SCAN=""
+')" || PR_FENCE_RC=$?
+
+# An unbalanced fence is NOT a degraded read to be swallowed. Both strippers
+# yield the empty string on it, and the two halves fail in OPPOSITE directions:
+# CLOSING drops to 0 (fail-closed, harmless), while `$declared` drops to empty —
+# which deletes the entire declared-filing arm. For a filing that cites the
+# originating ISSUE rather than the PR, that arm is the ONLY one that can see it,
+# so a single unclosed ``` turns a net-positive PR into `Filing: 0 / PASS`, with
+# no residual line and no telemetry. Measured on the pristine gate (#7896 review).
+#
+# The header above used to claim this path "fails closed" by analogy with the two
+# sibling ship gates. That is true of the EXEMPTION (a claim that cannot match
+# grants nothing) and exactly backwards for FILED. Abort instead: the body is
+# unparseable, and a gate that cannot read its input must not report a verdict.
+if [[ "$PR_FENCE_RC" -ne 0 ]]; then
+  printf '\nnet-issue-flow: BLOCKED — PR #%s has an unbalanced code fence.\n\n' "$PR_NUMBER"
+  printf 'The body cannot be parsed, so neither the closing keywords nor the\n'
+  printf '`Filed:` declaration can be read, and a verdict computed from an\n'
+  printf 'unreadable body would be meaningless. Close the fence and re-run.\n'
+  _emit_as net-issue-flow-unbalanced-fence deny "PR body has an unbalanced code fence"
+  exit 1
+fi
 
 # --- CLOSING: issues this PR closes via close-keywords in its body -----------
 CLOSING_NUMS="$(printf '%s\n' "$PR_BODY_SCAN" \
@@ -323,21 +345,39 @@ GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
   | ($pr | tonumber) as $prnum
 
   # DECLARED — the only set that COUNTS. A whole-line assertion of the filing
-  # relationship, produced by /ship Phase 6, not inferred from prose. Close
-  # targets and the PR number itself are removed: a PR does not file what it
-  # closes, and #N inside PR N is a self-reference.
+  # relationship, produced by /ship Phase 6, not inferred from prose.
+  #
+  # ONE keyword, and the colon is MANDATORY. The first cut of this arm accepted
+  # `(Filed|Tracks|Refs):?`, which reads as generous and is not: `Tracks #N` and
+  # `Refs #N` are PRE-EXISTING vocabulary in this repo (the
+  # wg-block-pr-ready-on-undeferred-operator-steps companion, and ~15 script
+  # headers citing provenance), and `Refs:` is ordinary prose. Measured on a real
+  # line in this repo — `Refs: #6588, #6897, #6604, #6570. Prior decision: #6918`
+  # — the wide form admitted FIVE issues as this filings of this PR, including the one
+  # the line itself labels "Prior decision". That is the sibling-attribution failure
+  # (P4) the ADR uses to reject option 2 of the issue, reintroduced through the
+  # arm that replaced it. `Filed:` is the one shape with a producer behind it.
+  #
+  # A leading list marker and surrounding emphasis are tolerated because they are
+  # what an author actually writes; the anchor still forbids mid-line prose, so a
+  # sentence mentioning the word cannot declare anything. Case-insensitive on the
+  # keyword only.
+  #
+  # `$closenums` is deliberately NOT subtracted. It used to be, and that let one
+  # `Closes #N` line delete a declared filing from FILED *and* claim a close
+  # credit for it — a two-unit NET swing, with the number then absent from every
+  # printed line. Measured: `Filed: #7001` + `Closes #7001` reported
+  # `Closing: 1 / Filing: 0 / Net: -1 / PASS`. A number on both lines is a
+  # contradiction in the PR body; it is surfaced below and left in BOTH terms, so
+  # it nets to zero honestly instead of buying credit.
   | ( [ $pb | split("\n")[]
-        | select(test("^[ \t\r]*(Filed|Tracks|Refs):?[ \t]+#[0-9]"))
+        | select(test("^[ \t\r]*([-*+][ \t]+)?[*_]*[Ff][Ii][Ll][Ee][Dd][*_]*:[*_]*[ \t]*#[0-9]"))
         | refs[] ]
-      | unique | map(select(. != $prnum)) | map(select(IN($closenums[]) | not)) ) as $declared
+      | unique | map(select(. != $prnum)) ) as $declared
 
-  # UNATTRIBUTED — every OTHER post-PR number the body mentions. Reported, never
-  # counted: it moves neither FILED, EXEMPT nor NET. This is the blind spot made
-  # self-reporting rather than silent, without giving prose any authority.
-  | ( ($pb | refs) | unique
-      | map(select(. != $prnum))
-      | map(select(IN($closenums[]) | not))
-      | map(select(IN($declared[]) | not)) ) as $bodyonly
+  # CONTRADICTORY — declared as filed AND named by a close keyword. Reported, and
+  # left in both terms rather than cancelled.
+  | ( $declared | map(select(IN($closenums[]))) ) as $contradictory
 
   | [ .[]
       | select((.createdAt // "") >= $since)
@@ -367,8 +407,18 @@ GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
           elif ($c | length) > 1  then "multiple Mandated-By: claims"
           elif ($ok | index($c[0])) == null then "claim names a rule that does not carry [mandates-filing]: " + $c[0]
           elif ($i.state // "") != "OPEN" then "issue is not OPEN: " + ($i.state // "<absent>")
-          elif (($pb | test("(^|[^A-Za-z])(Tracks|Refs)[ \t]+#" + ($i.number | tostring) + "([^0-9]|$)")) | not)
-            then "PR body has no Tracks/Refs #" + ($i.number | tostring) + " companion"
+          # The companion asks one question: does the PR body positively name
+          # this issue? A `Filed:` declaration answers it — it is a STRONGER,
+          # whole-line assertion of the same relationship. Before this was
+          # widened, `Filed: #N` (the exact line /ship Phase 6 instructs) was the
+          # one shape that admitted a mandated filing to FILED while denying it
+          # the exemption, and the rejection printed "PR body has no Tracks/Refs
+          # #N companion" over a body that declared #N verbatim. The remediation
+          # then looped: the help text says to add `Tracks #N`, and an agent that
+          # wrote `Tracks: #N` got the identical message. Measured (#7896 review).
+          elif ((($i.number | IN($declared[]))
+                 or ($pb | test("(^|[^A-Za-z])(Tracks|Refs)[ \t]+#" + ($i.number | tostring) + "([^0-9]|$)"))) | not)
+            then "PR body neither declares `Filed: #" + ($i.number | tostring) + "` nor carries a `Tracks #" + ($i.number | tostring) + "` companion"
           else "" end
         ) as $why
       # FOUR fields now. `attribution` goes BEFORE `detail` because detail is
@@ -382,19 +432,38 @@ GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
           (if $why == "" then $c[0] else $why end) ]
       | @tsv
     )
-  | .[],
-    # Trailing sentinel row carrying the report-only set. Consumed by the loop
-    # below and never counted — `_num` is non-numeric so it cannot be mistaken
-    # for an issue row.
-    # SENTINEL the numbers field, never emit it empty. Tab is IFS-WHITESPACE, so
+  | . as $rows
+  | ($rows | map(split("\t")[0] | tonumber)) as $counted
+  | $rows[],
+    # Two trailing sentinel rows. Both are report-only, both are consumed by the
+    # loop below and never counted, and `_num` is non-numeric on each so neither
+    # can be mistaken for an issue row.
+    #
+    # SENTINEL every field, never emit one empty. Tab is IFS-WHITESPACE, so
     # `read -r a b c d` COLLAPSES an empty middle field and every later field
-    # shifts left — with an empty $bodyonly the row became `__UNATTRIBUTED__ - -`
-    # and the consumer read "-" as the number list, printing a literal
-    # `Possible unattributed filings: #-`. Found by running this gate against its
-    # own PR; no fixture had an empty residual.
-    ("__UNATTRIBUTED__\t"
-     + (if ($bodyonly | length) == 0 then "NONE"
-        else ($bodyonly | map(tostring) | join(" ")) end)
+    # shifts left.
+    #
+    # UNDELIVERED replaces an earlier "possible unattributed filings" set that was
+    # computed from the PR body ALONE — it never joined the issue array, so it had
+    # no recency filter, no existence check, and no exclusion of rows the gate had
+    # already counted. Live on merged PR #7702 it printed five numbers of which
+    # FOUR were simultaneously in `Filing: 4`, alongside a prose cross-reference to
+    # an unrelated merged PR; the parenthetical "not counted" was false for most of
+    # the line. It reported every issue number a body happened to mention, so the
+    # drift metric built on it sat at ceiling and could not rise informatively.
+    #
+    # What replaces it is true by construction: numbers the PR DECLARED that did
+    # not become a counted row. Those are the declarations the gate could not
+    # honour — the issue predates the PR, is outside the fetched window, is in
+    # another repo, or does not exist — and every one of them was previously
+    # dropped from FILED *and* suppressed from the residual, i.e. silent.
+    ("__UNDELIVERED__\t"
+     + (($declared | map(select(IN($counted[]) | not)))
+        | if length == 0 then "NONE" else (map(tostring) | join(" ")) end)
+     + "\t-\t-"),
+    ("__CONTRADICTORY__\t"
+     + ($contradictory
+        | if length == 0 then "NONE" else (map(tostring) | join(" ")) end)
      + "\t-\t-")' 2>/dev/null)" \
   || _fail_open "could not parse issue list"
 
@@ -404,14 +473,19 @@ FILED_NUMS=""
 EXEMPT_DETAIL=""
 REJECTED_DETAIL=""
 ATTRIBUTED_NUMS=""
-UNATTRIBUTED_NUMS=""
+UNDELIVERED_NUMS=""
+CONTRADICTORY_NUMS=""
 while IFS=$'\t' read -r _num _verdict _attr _detail; do
   [[ -z "$_num" ]] && continue
   # The report-only sentinel. Non-numeric by construction so it can never be
   # mistaken for an issue row, and handled BEFORE the FILED increment so it
   # cannot touch the count.
-  if [[ "$_num" == "__UNATTRIBUTED__" ]]; then
-    [[ "$_verdict" == "NONE" ]] || UNATTRIBUTED_NUMS="$_verdict"
+  if [[ "$_num" == "__UNDELIVERED__" ]]; then
+    [[ "$_verdict" == "NONE" ]] || UNDELIVERED_NUMS="$_verdict"
+    continue
+  fi
+  if [[ "$_num" == "__CONTRADICTORY__" ]]; then
+    [[ "$_verdict" == "NONE" ]] || CONTRADICTORY_NUMS="$_verdict"
     continue
   fi
   FILED=$((FILED + 1))
@@ -457,16 +531,22 @@ printf '  Filing:  %s  (%s)\n' "$FILED" "$(_fmt "$FILED_NUMS")"
 printf '  Exempt:  %s  (%s)\n' "$EXEMPT" "$(_fmt_pairs "$EXEMPT_DETAIL")"
 # #7759: attribution provenance, and the report-only residual.
 if [[ -n "$ATTRIBUTED_NUMS" ]]; then
-  printf '  Attributed: %s  (via the PR declared filing line; these cite the issue, not the PR)\n' \
+  printf '  Attributed: %s  (subset of Filing:, admitted via the PR declared filing line)\n' \
     "$(_fmt "$ATTRIBUTED_NUMS")"
   _emit_as net-issue-flow-body-attributed applied \
     "declared-arm fired pr=${PR_NUMBER} issues=$(printf '%s' "$ATTRIBUTED_NUMS" | tr -s ' ' ',' | sed 's/,$//')"
 fi
-if [[ -n "$UNATTRIBUTED_NUMS" ]]; then
-  printf '  Possible unattributed filings: %s  (reported only — not counted, does not move Net)\n' \
-    "$(_fmt "$UNATTRIBUTED_NUMS")"
-  _emit_as net-issue-flow-unattributed-reported warn \
-    "post-PR numbers in body but not declared pr=${PR_NUMBER} issues=$(printf '%s' "$UNATTRIBUTED_NUMS" | tr -s ' ' ',' | sed 's/,$//')"
+if [[ -n "$UNDELIVERED_NUMS" ]]; then
+  printf '  Undelivered declarations: %s  (declared on the Filed: line, no matching issue in range)\n' \
+    "$(_fmt "$UNDELIVERED_NUMS")"
+  _emit_as net-issue-flow-undelivered-declaration warn \
+    "declared but not counted pr=${PR_NUMBER} issues=$(printf '%s' "$UNDELIVERED_NUMS" | tr -s ' ' ',' | sed 's/,$//')"
+fi
+if [[ -n "$CONTRADICTORY_NUMS" ]]; then
+  printf '  Contradictory: %s  (on BOTH the Filed: line and a close keyword — counted in both terms)\n' \
+    "$(_fmt "$CONTRADICTORY_NUMS")"
+  _emit_as net-issue-flow-contradictory-declaration warn \
+    "declared filed and closed pr=${PR_NUMBER} issues=$(printf '%s' "$CONTRADICTORY_NUMS" | tr -s ' ' ',' | sed 's/,$//')"
 fi
 if [[ -n "$REJECTED_DETAIL" ]]; then
   printf '  Rejected: %s\n' "$(_fmt_pairs "$REJECTED_DETAIL")"

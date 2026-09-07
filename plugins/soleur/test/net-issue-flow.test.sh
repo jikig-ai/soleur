@@ -58,6 +58,46 @@ cases=0
 pass() { printf '  ok   %s\n' "$1"; passes=$((passes + 1)); }
 fail() { printf '  FAIL %s\n' "$1"; fails=$((fails + 1)); }
 
+# ---------------------------------------------------------------------------
+# INSTRUMENT SELF-TEST. Drive BOTH verdict helpers once and require each to move
+# its OWN counter, before any real assertion runs.
+#
+# The conservation check at the end of this file is DIRECTION-BLIND, and its
+# comment used to claim otherwise ("the arm that catches a NEUTERED verdict
+# helper"). It compares passes+fails against cases, so a fail() that increments
+# `passes` instead of `fails` satisfies it exactly, keeps `fails` at 0, and the
+# suite reports ALL PASS at exit 0. Measured during the #7896 review: with that
+# one-token swap AND the declared-filing arm reverted to a dead literal, this
+# suite printed TEN `FAIL` lines on screen and still exited 0.
+#
+# The anti-vacuity floor cannot see it either -- the floor reads `cases`, which
+# is untouched.
+#
+# This control does NOT cover neg(), and an earlier revision of this comment
+# claimed it did. Measured: disarming neg() (`-eq 1` -> `-ge 0`) while breaking
+# the gate left this suite at ALL PASS / exit 0. The reason is structural --
+# neg() decides its OWN verdict and then calls pass(), so the helpers are both
+# behaving perfectly and the wrong branch was taken before either ran. A
+# verdict-machinery control cannot see an assertion that asserts the wrong
+# thing; only a control that proves neg() can still REJECT can. That one is
+# immediately below.
+#
+# Reported with printf + exit 1 DIRECTLY, never through fail(): a check enforced
+# through the suspect cannot witness the suspect (ADR-193).
+# ---------------------------------------------------------------------------
+_p0=$passes; _f0=$fails
+pass "instrument self-test: pass() records a pass" >/dev/null
+fail "instrument self-test: fail() records a failure (EXPECTED, not a real failure)" >/dev/null
+if [[ $((passes - _p0)) -ne 1 || $((fails - _f0)) -ne 1 ]]; then
+  printf '\n[FATAL] verdict helpers are neutered: pass() moved passes by %d (want 1), fail() moved fails by %d (want 1).\n' \
+    "$((passes - _p0))" "$((fails - _f0))" >&2
+  printf '  Every verdict this suite records is therefore unreliable; refusing to report a result.\n' >&2
+  exit 1
+fi
+# Unwind the control so the real accounting is untouched. `cases` was never
+# incremented, so the floor and the conservation identity both stay exact.
+passes=$_p0; fails=$_f0
+
 if [[ ! -x "$GATE" ]]; then
   printf 'FAIL: gate script missing or not executable: %s\n' "$GATE" >&2
   exit 1
@@ -584,6 +624,35 @@ neg() { # $1=label  $2=issue-json  [$3=pr-body-file]
   else fail "NOT exempt expected (exit 1) for $label; got exit $CASE_RC / $(tr '\n' '|' < "$WORK/out")"; fi
 }
 
+# ---------------------------------------------------------------------------
+# neg() REJECTION CONTROL. neg() owns 16 of this suite assertions and the entire
+# "the exemption is too permissive" direction, and it decides its own verdict --
+# so a one-token edit to its comparison (`-eq 1` -> `-ge 0`) turns every one of
+# those 16 into an unconditional pass while pass(), fail(), the conservation
+# check and the floor all stay perfectly healthy. Measured (#7896 review): that
+# edit, combined with dropping the companion regex left boundary in the gate so
+# `BackRefs`/`ReTracks` grant the exemption, left this suite at
+# `ALL PASS (104 assertions)`, exit 0.
+#
+# The only thing that can witness it is proof that neg() still REJECTS. Drive it
+# once with an input that IS exempt -- valid whole-line claim, tagged rule, OPEN,
+# and a companion in $PRB_OK -- and require it to have recorded a FAILURE.
+#
+# Counters are snapshotted and unwound, so this costs the real accounting
+# nothing. Reported with printf + exit 1 directly, never through fail(): the
+# helper under test must not be the one reporting on it (ADR-193).
+# ---------------------------------------------------------------------------
+_np=$passes; _nf=$fails; _nc=$cases
+neg "control: an EXEMPT issue must be REJECTED by neg()" \
+    "$(mk_issue 7001 "$(claim_body "$MANDATED")" OPEN)" >/dev/null
+if [[ $((fails - _nf)) -ne 1 ]]; then
+  printf '\n[FATAL] neg() no longer rejects: an exempt input recorded %d failure(s), want 1.\n' \
+    "$((fails - _nf))" >&2
+  printf '  Every "NOT exempt" assertion in this suite is therefore unconditional.\n' >&2
+  exit 1
+fi
+passes=$_np; fails=$_nf; cases=$_nc
+
 neg "unknown rule id"            "$(mk_issue 7001 "$(claim_body wg-does-not-exist-anywhere)" OPEN)"
 neg "real but UNTAGGED rule id"  "$(mk_issue 7001 "$(claim_body wg-defer-only-after-inline-triage)" OPEN)"
 neg "tagged rule on an ack-UNGATED prefix (cq-*)" "$(mk_issue 7001 "$(claim_body cq-tagged-but-ungated-prefix)" OPEN)"
@@ -1026,10 +1095,18 @@ else
   fail "R3 expected 'Filing: 1'; got: $(tr '\n' '|' < "$WORK/out")"
 fi
 cases=$((cases + 1))
-if grep -qiE 'possible unattributed filing' "$WORK/out"; then
-  pass "R3 prose-only mention is REPORTED as a possible unattributed filing"
+# The prose mention must NOT be reported either. The line it used to appear on
+# was computed from the PR body alone -- it never joined the issue array, so it
+# had no recency filter, no existence check, and no exclusion of rows the gate
+# had ALREADY COUNTED. Measured live on merged PR #7702: five numbers printed as
+# "possible unattributed filings", FOUR of them simultaneously in `Filing: 4`,
+# plus a prose cross-reference to an unrelated merged PR. The parenthetical
+# "not counted" was false for most of the line, and the drift metric built on it
+# sat at ceiling. What replaces it is asserted in R8/R9 below.
+if ! grep -qiE 'possible unattributed filing' "$WORK/out"; then
+  pass "R3 a prose mention is NOT accused on a residual line"
 else
-  fail "R3 expected a 'possible unattributed filing' line; got: $(tr '\n' '|' < "$WORK/out")"
+  fail "R3 the removed unattributed line is back: $(tr '\n' '|' < "$WORK/out")"
 fi
 cases=$((cases + 1))
 # `%+d`, so a zero prints as `+0` — an unsigned `0` here would never match and
@@ -1077,10 +1154,10 @@ printf 'A PR body that mentions no issue numbers at all.\n' > "$PR_BODY_FILE"
 printf '%s\n' '[]' > "$ISSUE_LIST_FILE"
 run_gate
 cases=$((cases + 1))
-if ! grep -qE 'Possible unattributed filings' "$WORK/out"; then
-  pass "R7 empty residual prints NO unattributed line"
+if ! grep -qE 'Undelivered declarations|Contradictory:' "$WORK/out"; then
+  pass "R7 empty residual prints NO undelivered/contradictory line"
 else
-  fail "R7 printed an unattributed line for an empty residual: $(tr '\n' '|' < "$WORK/out")"
+  fail "R7 printed a residual line for an empty residual: $(tr '\n' '|' < "$WORK/out")"
 fi
 cases=$((cases + 1))
 if ! grep -qE '#-' "$WORK/out"; then
