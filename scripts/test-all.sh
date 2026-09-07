@@ -1108,8 +1108,15 @@ tc_capacity_line >&2
 # enumerate pass runs no suite, so it cannot contend with the sibling this refusal protects.
 # Leaving it in force would make the shard-totality guard fail whenever any sibling gate ran,
 # i.e. a guard whose colour depended on another worktree.
-if (( _ENUMERATE == 0 )) \
-   && [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${TC_SIBLING_RUN_COUNT_PID:-}" == "$$" \
+#
+# The exemption is a CONJUNCT INSIDE the existing `[[ ]]`, not a new condition in front of it,
+# so the statement still begins `if [[ "${TC_SIBLING_RUN_COUNT:-0}"` at column 0.
+# plugins/soleur/test/fanout-suite-scope.test.sh anchors on exactly that prefix to assert this
+# refusal precedes tc_acquire — deliberately, because a comment line cannot begin with `if [[`
+# — and requires EXACTLY ONE match, so a leading condition silently takes the count to 0 and the
+# ordering guard stops identifying any statement at all.
+if [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${TC_SIBLING_RUN_COUNT_PID:-}" == "$$" \
+      && "$_ENUMERATE" == "0" \
       && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
   echo "ERROR: refusing a full-gate run — ${TC_SIBLING_RUN_COUNT} sibling full-gate run(s) already in flight (TEST_GROUP=$TEST_GROUP)." >&2
   echo "" >&2
@@ -1225,9 +1232,30 @@ trap '_repo_boundary_exit_note' EXIT
 # NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
 # already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
 # executes no suite, so it needs no serialization.
-if (( _ENUMERATE == 0 )); then
-  tc_acquire "test-all"
-fi
+#
+# EXPRESSED AS THE LIB'S OWN KILL SWITCH RATHER THAN AN `if` AROUND THE CALL, and that shape is
+# load-bearing twice over:
+#
+#   * `scripts/test-all-killed-classification.test.sh` and `scripts/test-all-runtime-ceiling.test.sh`
+#     build their sandboxes by splicing THIS FILE from just after the acquire statement below to
+#     just before the epilogue call. An `if` wrapped around it puts its `fi` inside that removed
+#     region, so every sandbox becomes an unterminated `if` — a bash syntax error at EOF, which
+#     surfaces as dozens of unrelated-looking assertion failures rather than as anything naming
+#     this line. Measured: 37 failures across those two suites.
+#   * `plugins/soleur/test/fanout-suite-scope.test.sh` asserts refusal-before-acquire structurally
+#     on that statement at column 0, deliberately anchored so a comment cannot satisfy it.
+#     Indenting it breaks that guard's ability to see the ordering it protects.
+#
+# `tc_acquire` honours SOLEUR_DISABLE_SESSION_STATE=1 before anything else and returns 0 with a
+# named LOCK_SKIPPED_DISABLED line, so this is the layer's documented exemption rather than a
+# bypass — and the statement stays at column 0, unwrapped.
+#
+# NOTE FOR EDITORS: the acquire statement's full text and the epilogue call's full text are both
+# UNIQUENESS-ASSERTED by those sandbox builders (`assert s.count(anchor) == 1`). Quoting either
+# verbatim in a comment takes the count above one and breaks every sandbox build before a single
+# assertion runs — which is why the prose above describes them instead of reproducing them.
+if (( _ENUMERATE == 1 )); then SOLEUR_DISABLE_SESSION_STATE=1; fi
+tc_acquire "test-all"
 
 # AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
 # to TC_LOCK_TIMEOUT (3600 s) here, so a reading taken before the wait describes a
