@@ -167,7 +167,7 @@ Lane: `cross-domain` — no `spec.md` exists for this branch, so the lane defaul
 
 - [ ] **6.1** Re-verify the ADR ordinal across **every** `origin/*` ref (not just
       `origin/main` — 205 and 206 are claimed on pushed branches), then write
-      `ADR-207-conversation-grain-cost-attribution.md` per the plan's §ADR. If the ordinal
+      `ADR-209-conversation-grain-cost-attribution.md` per the plan's §ADR. If the ordinal
       moves, sweep the plan, this file, and AC19 in the same edit.
       **ADR-108 is not amended** — the marker widening was cut.
 - [ ] **6.2** PR body uses **`Ref #1055`**, not `Closes`, and states plainly that per-agent

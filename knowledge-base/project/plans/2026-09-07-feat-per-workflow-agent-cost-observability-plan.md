@@ -159,7 +159,7 @@ recommendation is in `decision-challenges.md` rather than actioned here.
   is cut, ADR-108 is **not amended** by this plan and its choke-point decision (§Decision
   item 3) is untouched.
 - **ADR ordinal.** `ADR-204` is highest on `origin/main`; `ADR-205` and `ADR-206` are
-  claimed on pushed branches. Next free is **ADR-207 — provisional**.
+  claimed on pushed branches. Next free is **ADR-209 — provisional**.
 
 ### Property List (Phase 0.6b)
 
@@ -674,7 +674,7 @@ verified present via `gh label list --limit 200`.
 ### Phase 6 — ADR
 
 Per `wg-architecture-decision-is-a-plan-deliverable` — see `## Architecture Decision (ADR/C4)`.
-With Phase 2's marker widening cut, ADR-207 is the **only** architecture deliverable and
+With Phase 2's marker widening cut, ADR-209 is the **only** architecture deliverable and
 ADR-108 is not amended.
 
 ## Files to Create
@@ -688,7 +688,7 @@ ADR-108 is not amended.
 | `apps/web-platform/test/server/api-usage-workflow-rollup.test.ts` | Sum invariant, sequential-fallback degradation, `null` vs `[]`, NUMERIC-string coercion |
 | `apps/web-platform/test/messages/workflow-copy.test.ts` | Content-shape gates, mirroring `test/messages/action-class-copy.test.ts` |
 | `apps/web-platform/test/components/settings/api-usage-breakdown.test.tsx` | The four render states |
-| `knowledge-base/engineering/architecture/decisions/ADR-207-conversation-grain-cost-attribution.md` | Ordinal **provisional** |
+| `knowledge-base/engineering/architecture/decisions/ADR-209-conversation-grain-cost-attribution.md` | Ordinal **provisional** |
 | `knowledge-base/project/specs/feat-one-shot-1055-per-workflow-cost-observability/decision-challenges.md` | Headless User-Challenge record (written at plan time) |
 
 ## Files to Edit
@@ -842,11 +842,11 @@ runs — were cut at review; `tsc --noEmit`, `vitest run`, `test-all.sh` and the
   user-facing string authored inline in the TSX.
 - **AC18** — The eight Phase 5.2 tracking issues exist with re-evaluation criteria, and
   every label used is present in `gh label list --limit 200`.
-- **AC19** — `ADR-207` (or its re-verified ordinal) exists, and no artifact for this branch
+- **AC19** — `ADR-209` (or its re-verified ordinal) exists, and no artifact for this branch
   cites a stale ordinal. The grep must be **decision-bearing**, not `ADR-2[0-9][0-9]`: this
   plan legitimately names ADR-204, 205, 206 and 207 in Research Insights, §ADR and Sharp
   Edges, so a broad pattern can never "resolve to the committed filename" (Kieran P1-4).
-  Anchor on `ADR-207-conversation-grain` and assert it equals the committed ADR's filename
+  Anchor on `ADR-209-conversation-grain` and assert it equals the committed ADR's filename
   stem.
 - **AC20** — The PR body uses **`Ref #1055`**, not `Closes #1055`, and states plainly that
   per-agent attribution is not delivered. `wg-use-closes-n-in-pr-body-not-title-to` is
@@ -1025,7 +1025,7 @@ enumerator.
 
 ### ADR
 
-**ADR-207 — Conversation-grain attribution for LLM cost observability** *(ordinal
+**ADR-209 — Conversation-grain attribution for LLM cost observability** *(ordinal
 provisional; ADR-205/206 are claimed on pushed branches; `/ship` re-verifies against
 `origin/main` before merge)*.
 
@@ -1346,7 +1346,7 @@ row.
   phase to the cheap one, and the bias is systematic toward the *earliest* workflow.
   *Mitigation:* Phase 0.2 re-verifies the write-once property; Phase 0.1 measures the
   distribution; the mechanism is disclosed in the UI whenever the breakdown renders (AC11),
-  with a worked example rather than a hedge; it is recorded in ADR-207; turn-grain is a
+  with a worked example rather than a hedge; it is recorded in ADR-209; turn-grain is a
   filed tracking issue. **A declared limitation, not a hidden one** — the proxy-vs-invariant
   failure the Sharp Edges warn about is a check that *silently* passes on a broken state,
   and here the state is named on the surface itself.
