@@ -165,6 +165,18 @@ rc="$(rc_of "$LINT" "$FIX/violation-ruled-indirect-pin.sh")"
 # coverage at all -- and a review pass recommended deleting it as "measured zero
 # impact", which was true of the FIXED tree and false of the regression it exists
 # to catch (removing zot-inventory.sh's pin goes from detected to invisible).
+# Two shapes the FIRST cut of the destination limb scored as fully compliant.
+# Both are transport-confined and credentialed; only the pin is missing, and in
+# each case the limb could not see it -- once because of the variable's NAME,
+# once because the assignment carried no default.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-unnamed-destination.sh")"
+[ "$rc" = "1" ] && pass "Rule D: destination named \$SINK (no URL/HOST token in the name) is reported" \
+  || fail "Rule D: unnamed destination should report rc=1, got rc=$rc"
+
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-bare-assignment-pin.sh")"
+[ "$rc" = "1" ] && pass "Rule D: destination assigned bare from another variable is reported" \
+  || fail "Rule D: bare-assignment destination should report rc=1, got rc=$rc"
+
 rc="$(rc_of "$LINT" "$FIX/violation-ruled-config-file.sh")"
 [ "$rc" = "1" ] && pass "Rule D: a --config file's env-settable destination is reported" \
   || fail "Rule D config-file destination should report rc=1, got rc=$rc"
@@ -434,6 +446,16 @@ mutate_row 'D5 Rule D: --config file resolution removed' \
   's/^(\s*)cmd = _inline_config_file\(cmd, lines\)$/${1}pass/m' \
   "$FIX/violation-ruled-config-file.sh" 1 0
 
+# D8/D9 mutate the two fail-OPENs the ship-gate consult found in this rule's own
+# operands. Both were live: each mutant is the code as first written.
+mutate_row 'D8 Rule D: destination limb gated on the variable NAME again' \
+  's/if var not in dest_vars:/if not re.search(r"(?:URL|URI|ENDPOINT|HOST)\\b", var):/' \
+  "$FIX/violation-ruled-unnamed-destination.sh" 1 0
+
+mutate_row 'D9 Rule D: bare-assignment spelling dropped from env_settable' \
+  's/^BARE_ASSIGN_RHS = .*$/BARE_ASSIGN_RHS = r"ZZZNEVERMATCHES"/m' \
+  "$FIX/violation-ruled-bare-assignment-pin.sh" 1 0
+
 # Every row above mutates a FIXTURE and confirms Rule D reds. These mutate the
 # RULE and confirm it does not silently WIDEN -- a guard that accepts everything
 # is indistinguishable from a healthy run.
@@ -486,7 +508,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Absolute floor, recorded from a MEASURED green run (never from expectation --
 # that was wrong three times in sibling PR #7806). Reported with printf + exit 1
 # directly, never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=39
+MIN_ASSERTIONS=43
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

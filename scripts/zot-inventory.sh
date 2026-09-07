@@ -98,7 +98,15 @@ export LC_ALL=C
 # the trust store. The actor who can set ZOT_INVENTORY_INGEST_URL -- the threat
 # model this file's destination pins are written against -- can set these too,
 # and then the pin, --disable and --noproxy are all intact and all irrelevant.
-unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME
+# The same argument reaches the RESOLVER. The netrc pin below admits the NAME
+# `localhost`, and glibc honours HOSTALIASES=<file> for dotless names in a
+# non-setuid process -- so the actor who can set ZOT_INVENTORY_REGISTRY_URL can
+# also make `localhost` resolve wherever they like, with the anchored ERE fully
+# intact. Unsetting is cheaper than dropping the name: `localhost` stays a
+# legitimate spelling for an operator's local registry, and only the resolver
+# needs removing from the trust path.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
 
 readonly MARKER_NAME="SOLEUR_ZOT_INVENTORY"
 readonly MARKER_SCHEMA=1

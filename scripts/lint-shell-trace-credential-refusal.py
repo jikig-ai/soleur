@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -506,6 +507,20 @@ CURL_AUTH_HEADER = re.compile(r"(?:Authorization|X-API-Key|Private-Token)\s*:", 
 # apps/web-platform/infra/inngest-bootstrap.sh -- was not recognised as a curl
 # invocation at all, and the file scored entirely out of scope.
 CURL_INVOKE = re.compile(r"(?:^|[|;&(`$]|\s)(?:[\w./-]*/)?curl(?:\s|$)")
+# One shell variable reference inside a single token. Shared by the destination
+# derivation and the per-call-site variable sweep so the two cannot drift.
+# curl's config-file destination key: `url = \"...\"`. Anchored on the KEY, so a
+# `printf 'url = \"%s\"' \"$X\"` hands its next token over as the destination.
+# NOTE the class: `[:space:]` is a POSIX class, valid only inside a bracket
+# expression in a POSIX ERE and NOT a Python one -- written that way this
+# silently required a literal `]` before `url`, so the key matched nothing
+# and the --config channel went dark. Use `\s`.
+# An assignment whose ENTIRE right-hand side is one expansion: `VAR="$OTHER"`,
+# `VAR=$OTHER`, `VAR="${OTHER}"`. Named so the mutation battery has a clean
+# target -- this limb is otherwise a fragment spliced into a built pattern.
+BARE_ASSIGN_RHS = r"=\"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\"?\s*$"
+CONFIG_URL_KEY = re.compile(r"(?:^|['\"\s])url\s*=", re.I)
+VAR_IN_TOKEN = re.compile(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?")
 CURL_DISABLE_FIRST = re.compile(r"\bcurl\s+--disable(?:\s|$)")
 CURL_NOPROXY = re.compile(r"--noproxy\s+'?\*'?")
 
@@ -768,6 +783,123 @@ def _adjudicated(var: str, body: str) -> bool:
     return False
 
 
+def _mask_cmdsubs(cmd: str) -> tuple[str, dict[str, list[str]]]:
+    """Replace every `$( ... )` span with an opaque placeholder token.
+
+    A command substitution is ONE curl argument, but `shlex` splits inside it,
+    so its internals surface as free-standing tokens. Measured: `--data "$(jq -nc
+    --arg q "$1" '{query:$q}')"` in scripts/supabase-advisor-scan.sh handed the
+    JQ variable `$q` to the operand rule as if it were a curl destination -- the
+    single false positive the widened derivation produced across 992 files.
+
+    The vars inside are KEPT against the placeholder rather than discarded, so
+    masking buys the tokenization fix without paying a fail-open: a destination
+    genuinely built by substitution (`curl "$(build_url "$SINK")"`) still yields
+    $SINK if -- and only if -- the enclosing argument is an operand.
+    """
+    subs: dict[str, list[str]] = {}
+    out: list[str] = []
+    i, n = 0, len(cmd)
+    while i < n:
+        if cmd.startswith("$(", i):
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if cmd.startswith("$(", j):
+                    depth += 1
+                    j += 2
+                    continue
+                if cmd[j] == ")":
+                    depth -= 1
+                j += 1
+            key = f"CMDSUB{len(subs)}X"
+            subs[key] = VAR_IN_TOKEN.findall(cmd[i:j])
+            out.append(key)
+            i = j
+        else:
+            out.append(cmd[i])
+            i += 1
+    return "".join(out), subs
+
+
+def _tok_vars(tok: str, subs: dict[str, list[str]]) -> list[str]:
+    """Variables a single token carries, resolving any masked substitution."""
+    found = list(VAR_IN_TOKEN.findall(tok))
+    for key, inner in subs.items():
+        if key in tok:
+            found.extend(inner)
+    return found
+
+
+def _destination_vars(cmd: str) -> set[str]:
+    """Variables curl would read as (part of) a destination. POSITIONAL, not name-based.
+
+    The first cut gated this on the variable's NAME -- `(?:URL|URI|ENDPOINT|HOST)\\b`
+    -- which is a fail-OPEN in the guard's own operand, and of exactly the class
+    Rule D exists to close. `curl --disable --noproxy '*' -u "svc:$TOK" "$SINK"`
+    scored fully compliant while the bearer went wherever $SINK said; so did
+    $TARGET, $DEST and $BASE, and `\\b` after HOST rejects $INGEST_HOSTNAME. A name
+    is a claim about what an author called something, never a property of the code.
+
+    Three channels, because curl has three ways to be told where to go, and the
+    fix for one blinded another until each was named:
+
+    (a) a token carrying a scheme (`://`), wherever it sits;
+    (b) the config key `url =` -- this is the `--config` channel that
+        zot-inventory.sh uses, where the value arrives as the NEXT token of a
+        `printf 'url = "%s"' "$INGEST_URL"`, and it is the site #7873 is about;
+    (c) an OPERAND of the curl invocation itself: a token not immediately
+        preceded by a `-`-leading token. That is what excludes the arguments of
+        `-u`, `-H`, `--data-raw` and `-o` without an option table to drift.
+        Confined to the curl segment, because `cmd` is the whole PIPELINE --
+        unconfined, `printf '...' "$TOKEN" | curl ...` read $TOKEN as an operand.
+
+    (a) and (b) are deliberately NOT confined to that segment: `_inline_config_file`
+    appends the config-writing block to the end of `cmd`, past the `|| true` that
+    terminates the invocation, so a segment-scoped scan cannot see it. Getting
+    this wrong in each direction was caught by a fixture, not by reading.
+
+    Unknown constructs fall toward COUNTING a token, i.e. toward demanding a pin.
+    For a guard that is the safe direction: a false positive costs one baseline
+    entry a human reads; a false negative costs a credential leaving the host.
+    """
+    masked, subs = _mask_cmdsubs(cmd)
+    try:
+        toks = shlex.split(masked, posix=False)
+    except ValueError:
+        toks = masked.split()
+    dest: set[str] = set()
+
+    for i, tok in enumerate(toks):
+        # (a) anything carrying a scheme is a destination wherever it sits.
+        if "://" in tok:
+            dest.update(_tok_vars(tok, subs))
+        # (b) the curl config `url =` key, and the explicit --url flag.
+        if CONFIG_URL_KEY.search(tok):
+            dest.update(_tok_vars(tok, subs))
+            if i + 1 < len(toks):
+                dest.update(_tok_vars(toks[i + 1], subs))
+
+    # (c) operands of the curl invocation.
+    at = next((i for i, t in enumerate(toks)
+               if t == "curl" or t.endswith("/curl")), None)
+    if at is None:
+        return dest
+    stop = len(toks)
+    for i in range(at + 1, len(toks)):
+        if toks[i] in ("|", "||", "&&", ";", "|&"):
+            stop = i
+            break
+    for i in range(at + 1, stop):
+        tok = toks[i]
+        found = _tok_vars(tok, subs)
+        if not found:
+            continue
+        if toks[i - 1].startswith("-"):
+            continue  # the argument of some flag, not an operand
+        dest.update(found)
+    return dest
+
+
 def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[str]:
     """Transport confinement + destination pin on every credentialed curl."""
     del preamble_at  # Rule D is independent of the xtrace refusal.
@@ -807,6 +939,7 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
                 f"  Model: scripts/supabase-logs-query.sh -- `curl --disable --noproxy '*' …`\n"
             )
         # Destination pin: only when the URL comes from an env-settable variable.
+        dest_vars = _destination_vars(cmd)
         for var in set(re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?", cmd)):
             v = re.escape(var)
             # THREE env-settable spellings, not one. The `: "${VAR:=default}"`
@@ -816,6 +949,13 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
                 r"^\s*(?:export\s+)?" + v + r"=\"?\$\{" + v + r":-"          # VAR="${VAR:-x}"
                 r"|^\s*(?:export\s+)?" + v + r"=\"?\$\{[A-Za-z_][A-Za-z0-9_]*:-"  # VAR="${OTHER:-x}"
                 r"|^\s*:\s*\"?\$\{" + v + r":="                                # : "${VAR:=x}"
+                # VAR="$OTHER" / VAR=$OTHER / VAR="${OTHER}" -- an assignment
+                # whose whole RHS is one expansion is env-settable TRANSITIVELY.
+                # All three spellings above contain `:-` or `:=`, so dropping the
+                # default was a ONE-TOKEN evasion of this limb that kept the file
+                # green: `INGEST_URL="${ZOT_INGEST_URL:-...}"` is caught and
+                # `INGEST_URL="$ZOT_INGEST_URL"` was not, for the same destination.
+                r"|^\s*(?:export\s+|readonly\s+|local\s+)?" + v + BARE_ASSIGN_RHS
             )
             assigned_anywhere = re.search(
                 r"^\s*(?:export\s+|readonly\s+|local\s+)?" + v + r"=", body, re.M
@@ -828,7 +968,7 @@ def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[st
             # only, which is #7873's exact shape.
             if not re.search(env_settable, body, re.M) and assigned_anywhere:
                 continue
-            if not re.search(r"(?:URL|URI|ENDPOINT|HOST)\b", var):
+            if var not in dest_vars:
                 continue
             if not _adjudicated(var, body):
                 out.append(

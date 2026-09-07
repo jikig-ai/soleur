@@ -64,6 +64,17 @@ case "$-" in
     ;;
 esac
 
+# (#7873) Same argument as scripts/zot-inventory.sh's prologue, applied to the
+# credential the plan calls its headline: `--disable` closes ~/.curlrc and
+# `--noproxy '*'` closes the proxy vars, but neither touches the env that
+# subverts TLS ITSELF. SSLKEYLOGFILE writes the session keys and the CA vars
+# substitute the trust store, so the actor who can set BETTERSTACK_QUERY_HOST can
+# read this Basic-auth credential off the wire with every other guard intact.
+# It was an asymmetry that this line lived only in zot-inventory.sh while the
+# higher-value credential went without.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 # Credential guard. These are Doppler-managed secrets that must be INJECTED into
 # the env — this script does not read Doppler itself. A bare-shell run (no
 # `doppler run` wrapper) trips this. The message is deliberately explicit that the
@@ -127,11 +138,22 @@ export BS_TABLE="${BS_TABLE:-t520508_soleur_inngest_vector_prd_3_logs}"
 # `evil.example/x?` puts the query on an attacker path. The non-empty check above
 # is not a destination validation.
 #
-# This is a SHAPE check, not an equality pin, and deliberately so: three suites
-# drive this script through a `BETTERSTACK_QUERY_HOST=stub` seam and pinning the
-# vendor host would send synthetic credentials at the real warehouse from CI.
-# A bare hostname (optionally with a port) is what the vendor connection is; a
-# URL is not.
+# This is a SHAPE check, not an equality pin, and deliberately so: ~12 suites
+# drive this script through a `BETTERSTACK_QUERY_HOST=` seam (measured values:
+# stub, h, x, dummy-host, synthetic.example.invalid, 127.0.0.1, empty) and
+# pinning the vendor host would send synthetic credentials at the real warehouse
+# from CI. A bare hostname (optionally with a port) is what the vendor connection
+# is; a URL is not.
+#
+# READ THE RESIDUAL PLAINLY, because a shape check is easy to mis-read as a pin:
+# a BARE hostname that is not the vendor's still passes every arm above.
+# `BETTERSTACK_QUERY_HOST=attacker.example` is accepted, and run_sql then sends
+# Basic auth to it preemptively on the first request. What this check closes is
+# the userinfo/path/scheme family (`real.host@evil.example`, `evil.example/x?`);
+# what it does NOT close is a substituted bare host. Closing that needs a
+# `*.betterstackdata.com` allowlist plus an explicit opt-in seam in each of those
+# ~12 suites -- a 13-file change with its own verification, tracked on #7898
+# rather than folded into the PR that added this check.
 case "$BETTERSTACK_QUERY_HOST" in
   *[[:cntrl:]]*|*@*|*/*|*\?*|*\#*|*:*:*|"")
     printf 'betterstack-query.sh: refusing to send credentials to a malformed BETTERSTACK_QUERY_HOST (expected a bare host[:port], got %s characters of something else)\n' \
