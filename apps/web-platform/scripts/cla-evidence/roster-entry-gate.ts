@@ -54,11 +54,13 @@ export const NOTICE_ANCHOR = "public corporate coverage map";
  * who WERE noticed, and their only escape would be a `DIRECT_NOTICE_GIVEN`
  * entry asserting a direct notice that never happened.
  *
- * `git log -S<anchor>` over the ICLA returns the commit that ADDED the
- * paragraph; a squash merge rewrites that commit to the merge itself, so this
- * resolves to the exact moment the notice landed on the default branch and
- * keeps resolving correctly afterwards. Both directions close permanently and
- * without anyone remembering to lower a number.
+ * `git log --first-parent -S<anchor> --format=%cI` over the ICLA returns the
+ * moment the paragraph reached the first-parent line of the current branch —
+ * which under every merge method this repo permits is the merge itself. It
+ * therefore resolves to the exact moment the notice landed on the default
+ * branch, and keeps resolving correctly afterwards. Both directions close
+ * permanently and without anyone remembering to lower a number. See the flag
+ * matrix at the call site: neither flag alone is correct.
  *
  * Fails CLOSED: an unresolvable epoch refuses every account rather than
  * admitting them, because "we cannot establish when the notice existed" is not
@@ -79,7 +81,25 @@ export function resolveCoverageMapNoticeEpoch(repoRoot?: string): string {
       }).trim();
     out = execFileSync(
       "git",
-      ["log", "-S", NOTICE_ANCHOR, "--format=%aI", "--", NOTICE_DOC],
+      // `--first-parent` AND `%cI`, and NEITHER is sufficient alone. This repo
+      // permits all three merge methods (allow_merge_commit and
+      // allow_rebase_merge are both true, there is no merge-queue rule pinning
+      // SQUASH, and main carries 35 merge commits in its last 300), so the
+      // epoch must be right under every one of them. Measured:
+      //
+      //   method         plain %aI   --first-parent %aI   --first-parent %cI
+      //   squash         merge ✓     merge ✓              merge ✓
+      //   merge commit   BRANCH ✗    merge ✓              merge ✓
+      //   rebase         BRANCH ✗    BRANCH ✗             merge ✓
+      //
+      // A merge commit leaves the branch commit reachable off the first-parent
+      // line with BOTH dates intact, so only `--first-parent` moves it; a
+      // rebase replays the commit onto main preserving its AUTHOR date, so only
+      // `%cI` moves it. Either flag alone leaves the epoch at the pre-merge date
+      // and admits every signature made in the gap — the same silent
+      // degradation to membership-only as the hardcoded constant, reached by a
+      // merge-button choice instead of the calendar.
+      ["log", "--first-parent", "-S", NOTICE_ANCHOR, "--format=%cI", "--", NOTICE_DOC],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     );
   } catch (e) {
@@ -169,6 +189,20 @@ export function assertContributionTriggeredEntry(
   // made does. Checked after the membership half so an account with no
   // signature at all is reported as unsigned rather than as un-noticed.
   const epoch = Date.parse(noticeEpoch);
+  // O-9: the citation is the whole point of the exemption, so it is VALIDATED
+  // rather than merely typed. `register_ref: ""` would otherwise unblock a
+  // write exactly as a real citation does, on a surface from which nothing can
+  // be erased. Checked here rather than left to review because the set is
+  // empty today and the first entry is precisely when nobody is looking.
+  for (const d of DIRECT_NOTICE_GIVEN) {
+    if (typeof d.register_ref !== "string" || d.register_ref.trim() === "") {
+      throw new ContributionTriggeredEntryError(
+        `DIRECT_NOTICE_GIVEN carries an entry for id ${d.id} with no register citation. ` +
+          "The exemption exists only where the direct notice is a matter of record; an entry " +
+          "without a citation is an unrecorded claim, so it is refused rather than honoured.",
+      );
+    }
+  }
   const noticedDirectly = new Set(DIRECT_NOTICE_GIVEN.map((d) => d.id));
   const signedAt = new Map(
     // O-8: `c?.id`, matching the membership half. `c.id` on a null ledger entry

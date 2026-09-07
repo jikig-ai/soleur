@@ -21,6 +21,7 @@ import {
   ContributionTriggeredEntryError,
   assertContributionTriggeredEntry,
   resolveCoverageMapNoticeEpoch,
+  DIRECT_NOTICE_GIVEN,
   NOTICE_ANCHOR,
   NOTICE_DOC,
 } from "@/scripts/cla-evidence/roster-entry-gate";
@@ -299,15 +300,26 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
       mkdirSync(join(tmp, "docs", "legal"), { recursive: true });
       const doc = join(tmp, NOTICE_DOC);
 
+      // Both dates pinned: the resolver reads `%cI`, and `--date` sets only the
+      // AUTHOR date — leaving the committer dates at "now" would make the two
+      // commits indistinguishable and quietly restore the 1-of-1 case.
+      const commitAt = (msg: string, iso: string) =>
+        execFileSync("git", ["commit", "-q", "-m", msg], {
+          cwd: tmp,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
+        });
+
       writeFileSync(doc, `intro\nthe ${NOTICE_ANCHOR} is described here\n`);
       git("add", "-A");
-      git("commit", "-q", "-m", "add the notice", "--date", "2026-01-01T00:00:00+00:00");
+      commitAt("add the notice", "2026-01-01T00:00:00+00:00");
 
       writeFileSync(doc, `intro\nthe ${NOTICE_ANCHOR} is described here, twice: ${NOTICE_ANCHOR}\n`);
       git("add", "-A");
-      git("commit", "-q", "-m", "touch the anchor again", "--date", "2026-06-01T00:00:00+00:00");
+      commitAt("touch the anchor again", "2026-06-01T00:00:00+00:00");
 
-      const all = git("log", "-S", NOTICE_ANCHOR, "--format=%aI", "--", NOTICE_DOC)
+      const all = git("log", "--first-parent", "-S", NOTICE_ANCHOR, "--format=%cI", "--", NOTICE_DOC)
         .trim()
         .split("\n")
         .map((l) => l.trim())
@@ -331,6 +343,86 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
     // this row pins the coupling that makes the fail-closed path reachable.
     const doc = readFileSync(join(repoRoot, NOTICE_DOC), "utf8");
     expect(doc).toContain(NOTICE_ANCHOR);
+  });
+
+  // The epoch must be the moment the notice reached the DEFAULT BRANCH, and
+  // this repo permits all three merge methods (allow_merge_commit and
+  // allow_rebase_merge are both true, and there is no merge-queue rule pinning
+  // SQUASH). Under a merge commit the branch commit stays reachable with both
+  // dates intact; under a rebase the commit is replayed preserving its AUTHOR
+  // date. Either one leaves the epoch at the PRE-MERGE date and admits every
+  // signature made in the gap. The property cannot rest on which button is
+  // pressed, so all three methods are instantiated here.
+  it.each(["squash", "merge-commit", "rebase"] as const)(
+    "resolves to the MERGE moment under a %s merge, not the branch date",
+    (method) => {
+      const tmp = mkdtempSync(join(tmpdir(), `notice-merge-${method}-`));
+      try {
+        const at = (iso: string) => ({ GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso });
+        const git = (args: string[], env: Record<string, string> = {}) =>
+          execFileSync("git", args, {
+            cwd: tmp,
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            env: { ...process.env, ...env },
+          });
+        const BRANCH_AT = "2026-09-04T00:00:00+00:00";
+        const MERGE_AT = "2026-09-12T00:00:00+00:00";
+
+        git(["init", "-q", "-b", "main"]);
+        git(["config", "user.email", "t@example.com"]);
+        git(["config", "user.name", "t"]);
+        writeFileSync(join(tmp, "README"), "base\n");
+        git(["add", "-A"]);
+        git(["commit", "-q", "-m", "base"], at("2026-01-01T00:00:00+00:00"));
+
+        git(["checkout", "-q", "-b", "feat"]);
+        mkdirSync(join(tmp, "docs", "legal"), { recursive: true });
+        writeFileSync(join(tmp, NOTICE_DOC), `the ${NOTICE_ANCHOR} is here\n`);
+        git(["add", "-A"]);
+        git(["commit", "-q", "-m", "notice"], at(BRANCH_AT));
+
+        // main moves on, so the branch is genuinely behind at merge time.
+        git(["checkout", "-q", "main"]);
+        writeFileSync(join(tmp, "README"), "base\nmore\n");
+        git(["add", "-A"]);
+        git(["commit", "-q", "-m", "other"], at("2026-09-05T00:00:00+00:00"));
+
+        if (method === "squash") {
+          git(["merge", "--squash", "feat"]);
+          git(["commit", "-q", "-m", "squash the notice"], at(MERGE_AT));
+        } else if (method === "merge-commit") {
+          git(["merge", "--no-ff", "feat", "-q", "-m", "merge"], at(MERGE_AT));
+        } else {
+          git(["checkout", "-q", "feat"]);
+          git(["rebase", "-q", "main"], at(MERGE_AT));
+          git(["checkout", "-q", "main"]);
+          git(["merge", "-q", "--ff-only", "feat"]);
+        }
+
+        const resolved = resolveCoverageMapNoticeEpoch(tmp);
+        expect(Date.parse(resolved)).toBe(Date.parse(MERGE_AT));
+        // The failure this pins is landing on the BRANCH date, which would
+        // admit everyone who signed between the branch and the merge.
+        expect(Date.parse(resolved)).not.toBe(Date.parse(BRANCH_AT));
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
+  // O-9. The set is empty today, so this arm exercises the validation through
+  // the exported array's own contract rather than by mutating it: an entry with
+  // a blank citation must be refused, because the citation is the only thing
+  // that distinguishes a recorded direct notice from an assertion.
+  it("a DIRECT_NOTICE_GIVEN entry without a register citation is refused", () => {
+    // The shipped set must stay empty AND every entry (now or later) must carry
+    // a non-blank citation — asserted as a property, so a future addition is
+    // covered by this row rather than needing a new one.
+    for (const d of DIRECT_NOTICE_GIVEN) {
+      expect(typeof d.register_ref === "string" && d.register_ref.trim() !== "").toBe(true);
+    }
+    expect(DIRECT_NOTICE_GIVEN.length).toBe(0);
   });
 
   it("an unresolvable epoch REFUSES rather than admitting everyone", () => {

@@ -9,16 +9,20 @@ status: BLOCKED (CLO-agent-reviewed, Soleur-as-tenant-zero v1)
 date_reviewed: 2026-09-07
 rounds:
   - "Round 1 (2026-09-07, pre-b91e5a83d) — three blockers raised: B1 privacy expectation, B2 temporal gap, B3 unimplemented state. Three defects corrected in review (F-a, F-b, F-c)."
-  - "Round 2 (2026-09-07, commit b91e5a83d) — B1 DISCHARGED, B3 DISCHARGED. B2's design DISCHARGED; B2's epoch instrument REFUSED, and re-raised as B2-a."
-disposition: "BLOCKED — one finding open. B1 and B3 are DISCHARGED in full. B2's remedy is right in every part I asked for — it fails closed on an absent or unparseable timestamp, it names the temporal ground and the suite proves the message does not read as \"never signed\", it covers both sites through the shared validator rather than a shell copy (correct, and I would have refused a second copy), and DIRECT_NOTICE_GIVEN is empty and typed. What I cannot discharge is the INSTRUMENT: `COVERAGE_MAP_NOTICE_EPOCH = \"2026-09-08T00:00:00Z\"` is a floor only by assumption about a merge that has not happened, and the assumption is asserted nowhere. Both failure directions were reproduced against the shipped code: a signature at 2026-09-09 is ACCEPTED (merge slips past the constant -> the gate silently reverts to membership-only, which is the unrecoverable direction), and a signature at 2026-09-07T18:00Z is REFUSED (a same-day post-merge signer who WAS noticed — which lands on Convergence's contributor, the first intended user, whose only escape is a DIRECT_NOTICE_GIVEN entry that would be false). The notice's introducing commit is 696f24ebb, discoverable by `git log -S`, so the derived instrument is reachable. Answering the question as asked: 2026-09-08 is not defensible, a hardcoded floor is not the right instrument, and the ICLA content hash is the semantically correct pin but is NOT reachable from the ledger. Derive it from git."
+  - "Round 2 (2026-09-07, commit b91e5a83d) — B1 DISCHARGED, B3 DISCHARGED. B2's design DISCHARGED; B2's epoch instrument REFUSED, re-raised as B2-a."
+  - "Round 3 (2026-09-07, commit 017ccf5a7) — B2-a DISCHARGED: the epoch is derived, not declared, and the fix taken was the derivation rather than the fallback minimum. O-8 applied; the AC19 ruling applied as given. One residual raised as B2-b: the derivation resolves to the moment the notice landed on main under SQUASH only, and the repository permits merge-commit and rebase merges, neither of which it survives."
+disposition: "BLOCKED — one finding open, materially narrower than either predecessor. The derivation is the right instrument and B2-a is fully discharged: `resolveCoverageMapNoticeEpoch()` resolves live to 2026-09-04T13:06:16+02:00, fails closed on both shapes (the execFileSync throw AND the anchor-not-found branch, the second of which was a real gap the author found and fixed), names the derived epoch in the refusal, and the write path refuses end-to-end at rc=4 — re-run in this worktree, not taken on trust. What does not hold is METHOD-INDEPENDENCE. `git log -S … --format=%aI` without `--first-parent` lands on the branch commit rather than the merge under a merge-commit merge, and `%aI` is preserved under a rebase merge; the repository has `allow_merge_commit: true` and `allow_rebase_merge: true`, the merge-queue ruleset that would have pinned the method was REVERTED and is absent from the live rulesets, and main carries 35 merge commits in its last 300. Measured across the full matrix in throwaway repositories: the shipped form is correct under squash only (1 of 3 permitted methods); `--first-parent` with `%cI` is correct under all three and in the pre-merge branch context. Two tokens. Under a merge-commit or rebase merge the 2026-09-04-to-merge window silently reverts to membership-only, in the direction that cannot be undone once a row is published."
 blocking_findings:
-  - "B2-a — apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts: COVERAGE_MAP_NOTICE_EPOCH is a hardcoded constant whose floor property depends on an unowned post-merge edit and on the merge landing within ~14 hours of the review. Both failure directions demonstrated empirically."
+  - "B2-b — apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts `resolveCoverageMapNoticeEpoch()`: the derivation is correct under a squash merge only. Fix is `--first-parent` plus `%cI`; verified correct across squash, merge-commit, rebase and pre-merge."
 discharged_findings:
-  - "B1 — DISCHARGED by b91e5a83d. The publication consequence is now stated in the comment BODY, before the sign line, which is stronger than the link-following it replaces."
-  - "B3 — DISCHARGED by b91e5a83d. The claim was removed rather than a label built to justify it, which is the right direction."
-  - "B2 (design) — DISCHARGED. Fail-closed, message separation, both sites via the shared validator, typed residual set. Only the epoch instrument is refused."
+  - "B1 — DISCHARGED by b91e5a83d. The publication consequence is stated in the comment BODY, before the sign line, which is stronger than the link-following it replaces."
+  - "B3 — DISCHARGED by b91e5a83d. The claim was removed rather than a label built to justify it."
+  - "B2 (design) — DISCHARGED by b91e5a83d. Fail-closed, message separation, both sites via the shared validator, typed residual set."
+  - "B2-a (the epoch instrument) — DISCHARGED by 017ccf5a7. Derived from git rather than declared; no constant to lower and no issue to remember. The author took the derivation rather than the constant-plus-suite-arm-plus-owned-issue fallback, which was the better of the two remedies offered."
+  - "O-8 — APPLIED by 017ccf5a7 (`c?.id` in the timestamp map, matching the membership half)."
+  - "AC19 / task 1.3 — APPLIED as ruled: both keep their `[x]` and carry an appended dated NOT MET line. Nothing rewritten."
 required_before_merge:
-  - "B2-a: derive the epoch from the commit that introduced the ICLA §0 coverage-map paragraph (`git log -S` over that paragraph, oldest match, commit date), failing CLOSED if it cannot be resolved. If the constant is kept instead, it needs BOTH a suite arm asserting it is not earlier than that commit's date (closes the admit direction) AND an owned, issue-tracked post-merge lowering to the merge date (closes the false-refusal direction) — the constant alone closes neither."
+  - "B2-b: add `--first-parent` and change `--format=%aI` to `--format=%cI` in resolveCoverageMapNoticeEpoch(), with a suite arm building throwaway repositories for the merge-commit and rebase cases and asserting the resolver returns the MERGE date in both — the same shape as the two-commit fixture already built for the oldest-vs-newest arm."
 attests:
   - knowledge-base/legal/article-30-register.md (PA-7, all nine rows, as re-grafted onto main)
   - knowledge-base/legal/ccla-register.md
@@ -279,9 +283,9 @@ at large, and a colleague is added by that route. Verified against §§1, 2, 3, 
 
 ## Blocking findings
 
-> **Round 1, preserved unaltered as the audit trail.** B1 and B3 were DISCHARGED and B2 was
-> partially discharged by commit b91e5a83d; §Re-review below is the current record and this
-> section must not be read as a description of the tree as it now stands.
+> **Round 1, preserved unaltered as the audit trail.** B1, B3, B2 and B2-a are all DISCHARGED as of
+> commit 017ccf5a7; §Round 3 is the current record, and this section and §Re-review must not be read
+> as descriptions of the tree as it now stands. One finding, B2-b, remains open.
 
 ### B1 — the pre-signature comment sets the privacy expectation in the wrong direction
 
@@ -733,39 +737,173 @@ carried instead as a frontmatter re-evaluation trigger, to fire before the first
 matches `^CCLA-[0-9]{4,}$` and that the cited row exists in `ccla-register.md`, in the shape of the
 anti-vacuity arm this suite already has.
 
+## Round 3 — commit 017ccf5a7 (2026-09-07)
+
+### B2-a — DISCHARGED
+
+The derivation is the right instrument and it closes B2-a completely. Verified by running it, not by
+reading it:
+
+```
+resolveCoverageMapNoticeEpoch()            -> 2026-09-04T13:06:16+02:00   (live, this worktree)
+ccla-add.sh add --login deruelle (dry run) -> rc=4, and the refusal names the derived epoch:
+  "signed 2026-02-27T09:53:45Z, before the notice existed"
+cla-evidence vitest                        -> 9 files, 93 tests, all passing
+```
+
+There is no constant left to lower and no issue left to remember, which is what B2-a was actually
+about. Both of the failure directions I demonstrated in round 2 are closed by construction: a
+same-day post-merge signer is admitted, and there is no window in which the gate silently degrades
+to membership-only because someone did not get round to editing a number.
+
+**Taking the derivation rather than the fallback was the right call.** The "constant + suite arm +
+owned issue" minimum I offered was a concession to effort, and it would have left the post-merge
+lowering as an unowned step — the thing `wg-block-pr-ready-on-undeferred-operator-steps` exists to
+stop. This has no operator step at all.
+
+**Fail-closed now covers both shapes, and the gap that was found was real.** The first fail-closed
+arm passed a nonexistent path, which throws inside `execFileSync` and returns through the catch —
+so the anchor-not-found branch, the one that fires if § 0 is ever reworded, was never exercised and
+a mutant returning epoch 0 from it survived. The second arm now builds a repository whose ICLA has
+history but never carried the anchor, and reaches that branch. **The disclosure of that gap, and of
+the two test defects below, is worth as much as the fix**: an author who reports a surviving mutant
+against their own suite is giving evidence that the rest of the suite was measured rather than
+assumed, and it is why the mutant list is treated here as evidence rather than as assertion.
+
+**The two self-reported test defects are both exactly the class this PR exists to remove**, and the
+second is the sharper one:
+
+1. *The 1-of-1 quantification.* An "oldest commit" assertion over an anchor with exactly one commit
+   passes for a resolver that takes `lines[0]`. The fixture now touches the anchor twice and guards
+   itself with `expect(all.length).toBe(2)` — the guard being the part that matters, since without it
+   the fixture reverts to the vacuous case the first time the document changes. Verified present.
+2. *`require` under vitest but not under `tsx`.* The vitest suite was **structurally incapable** of
+   seeing this: it exercised the module under a runtime the write path never uses. The shell suite
+   caught it immediately. It failed CLOSED (rc=4), so the direction was safe and no unnoticed person
+   could have been admitted — but every legitimate write would have been refused. This is the
+   strongest argument in the whole PR for keeping the shell harness alongside the unit suite, and it
+   should be said in the record: **two suites over one implementation are not redundancy here, they
+   are two different runtimes, and only one of them is the one that writes to the legal record.**
+
+**Why the ICLA content hash could not be used — recorded, and I agree with the substitute.** The
+ledger carries no document hash, and `cla_doc.content_sha256` lives only in the R2 evidence record
+behind `prd_cla` credentials a fork pull request's CI cannot hold. The git derivation is the nearest
+reachable pin to the semantics, and it pins the same fact (which text existed when) by a different
+route. No disagreement.
+
+### B2-b — the derivation is correct under ONE of the three merge methods this repository permits
+
+This is what I cannot sign off, and it is narrower than either B2 or B2-a.
+
+`resolveCoverageMapNoticeEpoch()` runs `git log -S NOTICE_ANCHOR --format=%aI -- docs/legal/individual-cla.md`
+and takes the oldest match. The code comment states the assumption honestly — *"a squash merge
+rewrites that commit to the merge itself"* — so this is disclosed rather than hidden, which is a real
+difference from B2-a. But the assumption is not enforced anywhere, and the repository does not hold it:
+
+```
+gh api repos/jikig-ai/soleur -> allow_merge_commit: true, allow_rebase_merge: true, allow_squash_merge: true
+live rulesets                -> CI Required, CLA Required, Copilot review, Force Push Prevention
+                                (NO merge_queue rule — infra/github/README.md records it as REVERTED,
+                                 and it is the merge queue that would have pinned merge_method = SQUASH)
+git log --merges -300 main   -> 35 merge commits (e.g. "Merge pull request #6326", "#5799")
+```
+
+So the merge method is convention, not enforcement — and this repository has merged with merge commits
+before. Measured across the full matrix, in throwaway repositories, with a notice commit at 2026-09-04
+and a merge at 2026-09-12 (correct answer is always 09-12 post-merge, and 09-04 pre-merge):
+
+| Merge method | shipped: plain + `%aI` | `--first-parent` + `%aI` | `--first-parent` + `%cI` |
+|---|---|---|---|
+| **Squash** (project practice) | 09-12 ✓ | 09-12 ✓ | **09-12 ✓** |
+| **Merge commit** (permitted, used before) | **09-04 ✗** | 09-12 ✓ | **09-12 ✓** |
+| **Rebase merge** (permitted) | **09-04 ✗** | **09-04 ✗** | **09-12 ✓** |
+| Pre-merge, on the feature branch (this PR's CI context) | 09-04 ✓ | 09-04 ✓ | **09-04 ✓** |
+
+`--first-parent` alone is not enough: a rebase merge replays the commit onto main's first-parent line
+with its **author** date preserved, so only `%cI` moves. `%cI` alone is not enough either: a merge
+commit preserves both dates on the branch commit, so only `--first-parent` moves. **Both, and then all
+three methods and the pre-merge context are correct.**
+
+**The consequence if this merges by either other method.** The epoch resolves to 2026-09-04T11:06Z
+instead of the merge instant, and every ICLA signature made between then and the merge — against a
+`main` that does not carry the notice — is admitted. That is the same silent degradation to
+membership-only that B2-a was, in the same unrecoverable direction, reached by a merge-button choice
+instead of by the calendar. The window is empty today (the ledger still holds two accounts, both from
+long before), so nothing is presently exposed; but the hole would be permanent for anyone who signed in
+it, not limited to the window itself.
+
+**The fix, verified so it does not have to be re-derived:**
+
+```ts
+["log", "--first-parent", "-S", NOTICE_ANCHOR, "--format=%cI", "--", NOTICE_DOC]
+```
+
+plus a suite arm building throwaway repositories for the merge-commit and rebase cases and asserting
+the resolver returns the merge date in both — the same shape as the two-commit fixture already written
+for the oldest-vs-newest arm, and the arm that makes this a property of the artifact rather than of the
+merge button.
+
+### O-9 — my answer: still not required for this merge
+
+Leaving it as the re-evaluation trigger was the right reading of my ruling, and I am not moving the
+line now merely because another round is open — a finding I called non-blocking on its merits does not
+become blocking because an unrelated one is. The set is empty, it has no callers, and any addition is a
+reviewed code change that a human reads. It stays a trigger, to fire **before the first entry exists**.
+
+Since the file is being touched anyway, the check I would write is four lines, and it is offered rather
+than required:
+
+```ts
+for (const d of DIRECT_NOTICE_GIVEN) {
+  if (!/^CCLA-[0-9]{4,}$/.test(d.register_ref)) {
+    throw new ContributionTriggeredEntryError(
+      `DIRECT_NOTICE_GIVEN entry for id ${d.id} carries no register citation — ` +
+        "the set records a notice that was given, and an entry without a citation records nothing.",
+    );
+  }
+}
+```
+
+Take it or leave it in this commit; it must exist before the set is first used.
+
+### Everything else in 017ccf5a7, verified
+
+- **O-8 applied** — `[c?.id, c?.created_at]`, matching the membership half, with the reason in the code.
+- **The AC19 ruling applied exactly as given** — plan AC19 and archived task 1.3 both keep their `[x]`
+  and carry the appended dated `NOT MET` line naming b91e5a83d. Nothing rewritten, which is the half of
+  the ruling that mattered.
+- **Anchor integrity has its own arm** — a test asserts `NOTICE_ANCHOR` still occurs in `NOTICE_DOC`, so
+  rewording § 0 reds the suite instead of silently sending the resolver down the fail-closed path
+  forever. That arm was not asked for and is the right instinct.
+- **Suites**: `cla-evidence` vitest 9 files / 93 tests passing, re-run here.
+- **Corpus gates** unchanged and green: SHA pin rc=0, mirror drift within baseline, register lint 7/7.
+
 ## Disposition
 
-**BLOCKED — one finding open: B2-a.**
+**BLOCKED — one finding open: B2-b. Everything else is discharged.**
 
-**B1 and B3 are DISCHARGED**, and both were discharged better than I specified: B1 moved the disclosure
-into the comment body rather than merely pointing at it, and B3 removed a claim rather than building a
-mechanism to make a sentence true.
+B1, B3, B2's design and B2-a are all DISCHARGED, and each was discharged by taking the stronger of the
+options offered rather than the cheaper one: the disclosure moved into the comment body rather than
+behind a link; the false state was deleted rather than a label built to justify it; and the epoch was
+derived rather than pinned to a constant with a promise to lower it later. The three corrections I made
+during round 1 (PA-7 § (e)(ii), PA-7 § (c), the compliance-posture citation) are committed unchanged,
+and the AC19 ruling was applied exactly as issued.
 
-**B2's remedy is right in every part I asked to be checked** — fail-closed on an unknown timestamp,
-a refusal that names the temporal ground with the suite asserting the *negative* that separates it from
-"never signed", both enforcement sites covered through one implementation (correctly; I would have
-refused a hand-written shell copy), a typed and empty residual set, and a suite that killed the
-vacuity mutant. The design is sound and is not re-opened by this round.
+**What remains is one line of a `git log` invocation.** The derived epoch is correct under a squash
+merge and wrong under the other two merge methods this repository permits — and the merge-queue ruleset
+that would have pinned the method to SQUASH was reverted and is absent from the live rulesets, so
+nothing enforces the assumption the code comment honestly declares. Under a merge-commit or rebase
+merge the gate reverts to membership-only for every signature made between 2026-09-04 and the merge, in
+the direction that cannot be undone once a row is published to a surface with no erasure. Adding
+`--first-parent` and changing `%aI` to `%cI` makes it correct under all three methods and in the
+pre-merge context; that is measured across the full matrix above, not reasoned about.
 
-**What is not discharged is the epoch's instrument.** `COVERAGE_MAP_NOTICE_EPOCH = "2026-09-08T00:00:00Z"`
-is a floor only if this pull request merges within the fourteen hours after this review, and nothing in
-the artifact asserts that condition or notices when it fails. Both failure directions were reproduced
-against the shipped module: a 2026-09-09 signature is ACCEPTED, and a same-day post-merge signature is
-REFUSED. The first is the unrecoverable direction the code's own comment names; the second lands on the
-first contributor this feature was built to serve. The remedy is one derivation — `git log -S` over the
-ICLA §0 paragraph, which resolves today to `696f24ebb 2026-09-04T13:06:16+02:00` — or, if the constant
-is kept, a suite arm pinning it to that commit's date *and* an owned issue for the post-merge lowering.
-
-Pinning to the ICLA content hash, which is the semantically correct instrument, is **not available**:
-the ledger this gate reads carries no document hash, and the record that does is behind operator
-credentials a fork pull request's CI cannot hold.
-
-Separately and not blocking: the archived AC19 / task 1.3 should be **annotated, not rewritten**, per
-§Ruling above.
+The window is empty today, and I would not describe this as a live exposure. I am holding the sign-off
+because the property the four published sentences depend on would rest on which button is pressed at
+merge, and because making it rest on the artifact instead costs two tokens and one test arm.
 
 Reviewed by the CLO agent as attestation authority for the Soleur-as-tenant-zero v1 posture. The
 operator retains an optional veto. **No sign-off is given while the disposition is BLOCKED** — the
-`status:` field stays `BLOCKED` and becomes
-`SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)` only when B2-a is closed and this gate is
-re-run against the corrected tree. O-2 remains the item to put in front of external counsel when one
-is engaged.
+`status:` field becomes `SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)` when B2-b is closed
+and this gate is re-run. O-2 (the Art. 13 / Art. 14 characterisation) remains the item for external
+counsel; O-9 remains a trigger, not a condition.
