@@ -50,8 +50,9 @@ enough to report it.
 
 The repo is `squash_merge_commit_message: COMMIT_MESSAGES`, so the squash body is
 built from branch commit messages and GitHub's parser reads them.
-A `Closes #7798` sat in commit `e06329cba`'s body, nine commits deep. The PR body was
-clean; the merge would still have closed the issue on an unverified promise —
+A `Closes #7798` sat in the body of commit `e06329cba`, which was the branch tip
+when it was written and had nine later commits on top of it by ship time — so it
+was nowhere near the diff anyone was still looking at. The PR body was clean; the merge would still have closed the issue on an unverified promise —
 the #6537 shape exactly.
 
 **Prevention:** the ship auto-close scan must run over `git log origin/main..HEAD
@@ -106,9 +107,43 @@ the issue closed on live evidence — check rows flipping `failure` to `success`
 when a plan blesses it. Keep the close in the hands of whoever can see the
 evidence.
 
-## 7. Merge-race note (no action, recorded for calibration)
+## 7. I asserted a cause in the runbook fix, in the PR about asserting causes
 
-The PR took ~2.5 h to merge across 8 poll rounds and 7 syncs, reaching
+Fixing the runbook's missing Sentry recipe (item above), I wrote that three
+details each return `404` on their own: the host must be `de.sentry.io`, the org
+slug must be `jikigai-eu`, and the check rows are project-scoped.
+
+Two are true. The host is not. Measured during this PR's own review, `sentry.io`
+and `de.sentry.io` BOTH return `200` for the org-scoped list and the
+project-scoped checks path. I had reached the working recipe by changing several
+things at once after a run of 404s, and then wrote up every difference between my
+first attempt and my last as a cause. `cutover-verify.sh` had been calling plain
+`sentry.io` successfully the whole time, in the same repo, in a file this PR's
+sibling had just edited.
+
+The tell was available for free: my claim implied an existing, working caller was
+broken. A claim that a shipped script cannot work is a claim to check, not to
+write down.
+
+It was not the only one in that recipe. The same pass shipped
+`?statsPeriod=24h` on the checks endpoint — measured during review, that endpoint
+ignores it entirely (no query, `24h`, `14d` and `90d` all return the same 10
+rows), and `cutover-verify.sh` says so in a comment, which is why it bounds the
+collection client-side instead. A parameter that looks like it scopes a query and
+does not is worse than no parameter: an operator mid-incident believes they are
+reading a day.
+
+**Prevention:** when a fix arrives after changing N things, the write-up owes one
+falsifying command per claimed cause — not a list of what differed. Cheapest form
+here was two `curl -o /dev/null -w '%{http_code}'` calls, which is what finally
+settled it. And when a claim implies an in-repo caller is broken, grep for that
+caller first; it is either a second bug or a refutation, and both are worth more
+than the sentence.
+
+## 8. Merge-race note (no action, recorded for calibration)
+
+The PR was open 9 h 18 m end to end (created 08:39Z, merged 17:58Z); from
+`gh pr ready` to merge was ~4 h 06 m, across 8 poll rounds and 7 syncs, reaching
 `pending=1` three times before `main` moved. Measured: `main` merges every
 ~36–46 min; the PR's CI cycle is ~35 min. The documented escape hatch
 (settle-then-admin-merge) was **declined on measurement**: it requires zero
