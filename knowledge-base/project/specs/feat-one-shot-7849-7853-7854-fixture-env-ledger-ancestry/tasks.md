@@ -66,16 +66,16 @@ predicate its mirrors follow. Do not reorder.
       spawn), `helpers/context-queries-fixture.ts` **and** the sibling site in
       `context-queries-hook.test.ts`, `server/inngest/cron-safe-commit` (`tgit()` and the two bare
       `git init` calls).
-- [ ] 3.3 Convert the four `tests/**` shell suites, each with a `git_fixture_env "$d" || { …; exit 1; }`
+- [x] 3.3 Convert the four `tests/**` shell suites, each with a `git_fixture_env "$d" || { …; exit 1; }`
       guard: `tests/hooks/test_hook_emissions.sh` (delete its partial 3-var unset),
       `tests/hooks/test_openhands_guardrails.sh`, `tests/scripts/test-weakness-miner.sh` (delete its
       9-var scrub), `tests/scripts/test-lint-supabase-deprecated-endpoints.sh`.
-- [ ] 3.3.1 **Pair every conversion with a ledger reconciliation in the same commit.** Sourcing the
+- [x] 3.3.1 **Pair every conversion with a ledger reconciliation in the same commit.** Sourcing the
       helper brings a suite inside a chokepoint, so its emitter invocations are redirected;
       `test_hook_emissions.sh` asserts on emitted rows and sets no root today.
-- [ ] 3.4 Convert `.github/scripts/test/test-check-settings-integrity.sh` and
+- [x] 3.4 Convert `.github/scripts/test/test-check-settings-integrity.sh` and
       `test-infra-suite-registration-mutations.sh`.
-- [ ] 3.5 Route `apps/web-platform/infra/workspaces-luks-loopback.test.sh`'s `mk_repo()` through
+- [x] 3.5 Route `apps/web-platform/infra/workspaces-luks-loopback.test.sh`'s `mk_repo()` through
       `git_fixture_env`; resolve the helper from a repo root computed once and assert it absolute and
       non-degenerate before sourcing (elevated-privilege context).
 - [x] 3.6 Add the 9-var `unset` to `.github/scripts/test/run-all.sh` as the **first**
@@ -106,7 +106,7 @@ predicate its mirrors follow. Do not reorder.
 - [x] 4.5 Verify `tests/scripts/test-rule-metrics-aggregate.sh`,
       `scripts/rule-metrics-aggregate.test.sh` and `tests/hooks/test_incidents.sh` still pass under
       the new default.
-- [ ] 4.6 Widen `incident-sandbox-coverage.test.sh`'s assembly: emitter set (sources the lib **or**
+- [x] 4.6 Widen `incident-sandbox-coverage.test.sh`'s assembly: emitter set (sources the lib **or**
       defines `emit_incident`, reaching the Python mirror); suite set derived from **invocation
       shapes, not name mentions** (a name-mention derivation self-includes the guard); each hop with
       a non-empty floor; **print the outside set** with a ratcheted floor; state hop 2's known false

@@ -190,14 +190,13 @@
 2	.claude/hooks/follow-through-directive-gate.test.sh
 1	.claude/hooks/guardrails.test.sh
 1	.claude/hooks/hook-input-contract.test.sh
-1	.claude/hooks/incident-sandbox-coverage.test.sh
 1	.claude/hooks/incidents.test.sh
 1	.claude/hooks/lib/freeze-lock.sh
 1	.claude/hooks/lib/incidents.sh
 2	.claude/hooks/lib/log-rotation.sh
 1	.claude/hooks/log-rotation.test.sh
 3	.claude/hooks/memory-backstop.sh
-14	.claude/hooks/memory-backstop.test.sh
+22	.claude/hooks/memory-backstop.test.sh
 2	.claude/hooks/monitor-arm-recorder.sh
 2	.claude/hooks/pencil-collapse-guard.sh
 1	.claude/hooks/post-dispatch-watch-gate.sh
@@ -357,7 +356,7 @@
 3	scripts/weekly-analytics.sh
 2	tests/commands/test-sync-producer-reachability.sh
 2	tests/commands/test-sync-rule-prune.sh
-2	tests/hooks/test_hook_emissions.sh
+3	tests/hooks/test_hook_emissions.sh
 3	tests/scripts/lib/gate-suite-harness.sh
 5	tests/scripts/test-audit-bot-codeql-coverage.sh
 23	tests/scripts/test-audit-ruleset-bypass.sh
