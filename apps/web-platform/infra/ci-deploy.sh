@@ -1,5 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# REFUSE TO RUN UNDER XTRACE (#7797). This script binds and expands live
+# credentials (Doppler reads, registry tokens, the deploy webhook secret), and
+# `set -x` traces every argument of every command — which is exactly how #7797
+# printed tokens into a transcript. A prose warning cannot see `bash -x`,
+# `SHELLOPTS=xtrace`, or a BASH_ENV that sets it; this can. Unconditional, not
+# the conditional escape hatch: this script ACQUIRES credentials at runtime, so
+# at preamble time the variables are still empty and a conditional guard would
+# open and then trace the acquisition itself. Exit 78 (EX_CONFIG) — a
+# misconfigured RUN, not a CLI misuse (ADR-202).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;
+esac
+if [[ "${SHELLOPTS:-}" == *xtrace* ]]; then
+  printf '[FATAL] refusing to run with SHELLOPTS=xtrace: this script handles live credentials (see #7797)\n' >&2; exit 78
+fi
 # Job control (#3704). Isolates backgrounded jobs (the canary probe loop's
 # parallel curl `&` + wait $!) into their own process groups so a stray
 # PGID-targeted signal — e.g., a future operator running
