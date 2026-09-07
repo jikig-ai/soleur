@@ -44,6 +44,9 @@ does not exist yet when it fires, so `stage:bootcmd_start` cannot reach Better S
 is baked. Eight of the nine stages gain the second channel; the ninth is Sentry-only by
 construction, not by configuration.
 
+> **Narrowed 2026-09-04 (#7855):** "gain the second channel" means the emitter POSTs to it and
+> receives a 2xx. It does not mean a row is queryable — see the addendum at the end of this ADR.
+
 ## Decision
 
 Bake the ingest token into `user_data`, delivered as a **`0600 root:root` env file**
@@ -230,8 +233,10 @@ deciding axis; **mode is**. See the table above.
 
 ## Consequences
 
-- Eight of nine boot stages gain a queryable second channel. The rehearsal harness can attribute a
-  pre-Doppler failure without a hand re-query.
+- Eight of nine boot stages gain a second channel the emitter POSTs to and receives a 2xx from.
+  **The word "queryable" was too strong and is narrowed by the 2026-09-04 addendum below**: no
+  boot has yet read a row back out. The rehearsal harness can attribute a pre-Doppler failure
+  without a hand re-query *once rows are actually stored*.
 - `user_data` grows 544 B (12,588 B on `origin/main` -> 13,132 B, both re-measured with
   `git-data-userdata-budget.sh`). Measured headroom after this change: **19,636 B** of
   32,768 B. The first draft asserted ~372 B and 19,808 B: a PROJECTION taken before the
@@ -397,3 +402,62 @@ already looking" is superseded.
 still holds `GIT_DATA_LUKS_KEY` — so **leg (2) remains failed for the incumbent** under a
 *file-read* primitive against `/etc/default/git-data-doppler`, which the nftables rule does not
 address. What the rule closes is the metadata-endpoint path. Tracked at #7772.
+
+## Addendum — 2026-09-04 (#7855): "reaches the channel" is a POST, not a stored row
+
+This ADR asserts that eight of the nine boot stages gain a second channel in two places (the
+Coverage section and the Consequences bullet), and exactly ONE of them — the Consequences bullet —
+called that channel **queryable**. That word claimed more than anything measured.
+(An earlier draft of this addendum said "three places … queryable"; both halves were wrong, and
+the miscount is corrected here rather than quietly.) What
+`/usr/local/bin/git-data-emit` establishes is that a POST to the ingest endpoint returned a 2xx.
+Whether the row was ever stored — and therefore whether it is queryable — was never checked by
+any boot, and it is a separate fact:
+
+- Between `2026-09-03 12:18:10Z` and the filing of #7855 the warehouse stored **no row from any
+  producer**, while every 2xx-based signal in the repo continued to report healthy (#7811).
+- The git-data source (2734275) was created at `2026-09-03T21:07:19Z` — about nine hours **after**
+  the last row stored anywhere in the account — so at the time of filing it had never had a single
+  opportunity to store a row into a working warehouse.
+
+> **Superseded 2026-09-06 (#7855):** the sentence that followed here read *"its table's absence
+> needs no git-data-specific explanation."* **That is now false, and it was measured false rather
+> than argued.** By 2026-09-06 the warehouse had resumed storing (#7811 closed; the control source
+> current to the second), and a round trip run against source `2734275` at `15:04Z` was
+> acknowledged with a 2xx and **still stored nothing**: the marker was not retrievable after 349 s
+> — 20x the ADR-172 floor — and `remote(t520508_soleur_git_data_prd_logs)` still answered
+> `CLUSTER_DOESNT_EXIST` afterwards. Better Stack creates that table on the first *stored* row, so
+> its continued absence is independent confirmation, not an inference from the probe's own verdict.
+> The absence therefore **does** need a source-specific explanation, and the account-wide outage
+> was a coincident second cause rather than the whole story. See the ADR-192 measurement addendum.
+
+The claim is therefore narrowed to what the emitter verifies: **eight of the nine stages POST to
+the second channel and observe a 2xx.** Establishing that they are queryable requires a readback,
+which `scripts/followthroughs/betterstack-roundtrip-latency-7855.sh` now performs.
+
+### Decided: the emitter does NOT read back per boot
+
+The obvious hardening — have `git-data-emit` verify one row is retrievable at least once per boot,
+rather than trusting a 2xx — is **rejected**, for a reason specific to this credential split:
+
+Reading rows requires the ClickHouse HTTP connection (`BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`),
+and **that credential is team-scoped, not source-scoped**. There is no per-source read credential to
+bake. Baking it would put a whole-warehouse read credential — every source, every host, every
+customer-adjacent log line the account carries — onto the git-data host, whose entire threat model
+is that it holds every connected user's source code and should hold as little else as possible.
+That trade is plainly bad: it widens the blast radius of a host compromise to the whole
+observability estate in order to improve a boot-time diagnostic.
+
+The cheaper alternative, recorded rather than rejected by silence: the emitter **already** mirrors
+its POST outcome to Sentry, and Sentry is a channel with an independent credential. Correlating
+that Sentry mirror against a **CI-side** readback — one that runs where the query credential
+already lives — establishes the same round trip without moving any credential onto the host. That
+is what the #7855 follow-through does, and it is the reason no per-boot readback is being added.
+
+The comments in `cloud-init-git-data.yml` and `modules/git-data-userdata/variables.tf` are
+**untouched**. Stated precisely, because an earlier draft of this addendum said "the four
+comments" and that was wrong in both count and file set: `variables.tf` carries **no** eight/nine
+comment at all, and `cloud-init-git-data.yml` carries three, of which only the one at the
+no-token branch is about stages going dark on a MISSING token. That one remains correct — it
+describes a condition under which the POST does not happen at all. The other two describe stages
+reaching the sink, and inherit the narrowing above: they establish a POST and a 2xx, not storage.
