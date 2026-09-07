@@ -12,6 +12,8 @@ domain: domain/engineering
 brand_survival_threshold: aggregate pattern
 ---
 
+> **Superseded 2026-09-07 (#7896 review):** the "0 of 33" measurement below is FALSE. It classified cited numbers issue-vs-PR by range membership, which cannot work because GitHub issues and PRs share one number space here. Re-measured on `.pull_request`: **21 of 66 cited numbers are PRs and 20 of the 33 issues cite at least one**, over 29 pairs (one being #7710 -> #7702, the case #7759 was filed about). The exemption was under-reached, not inert. Likewise the "16 filing sites / 11 emit no PR number" figure: re-measured as **19 files / 48 invocations**, 14 files with no PR reference. And the `Possible unattributed filings:` mechanism described below was REMOVED in review — it reported numbers it had itself counted. See ADR-155 amendment and ADR-206.
+
 Spec lacks valid `lane:` — defaulted to `cross-domain` (TR2 fail-closed). No `spec.md` exists for this
 branch; the domain sweep in `## Domain Review` is the substantive assessment and it found no relevant
 business domain.

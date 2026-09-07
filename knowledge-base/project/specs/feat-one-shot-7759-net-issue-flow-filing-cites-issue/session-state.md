@@ -1,5 +1,7 @@
 # Session State
 
+> **Superseded 2026-09-07 (#7896 review):** the "0 of 33" measurement below is FALSE. It classified cited numbers issue-vs-PR by range membership, which cannot work because GitHub issues and PRs share one number space here. Re-measured on `.pull_request`: **21 of 66 cited numbers are PRs and 20 of the 33 issues cite at least one**, over 29 pairs (one being #7710 -> #7702, the case #7759 was filed about). The exemption was under-reached, not inert. Likewise the "16 filing sites / 11 emit no PR number" figure: re-measured as **19 files / 48 invocations**, 14 files with no PR reference. And the `Possible unattributed filings:` mechanism described below was REMOVED in review — it reported numbers it had itself counted. See ADR-155 amendment and ADR-206.
+
 ## Plan Phase
 
 - Plan file: knowledge-base/project/plans/2026-09-07-fix-net-issue-flow-filing-cites-issue-plan.md

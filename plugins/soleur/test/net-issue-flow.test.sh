@@ -1050,7 +1050,12 @@ if [[ "$CASE_RC" -eq 1 ]]; then pass "R1 net-positive after attribution BLOCKS (
 else fail "R1 expected exit 1, got $CASE_RC"; fi
 
 # --- R2: a body-attributed issue is still eligible for the ADR-155 exemption -
-# Measured: 0 of 33 whole-line Mandated-By: issues cite a PR, so before this
+# Measured 2026-09-07 (#7896 review), classifying on `.pull_request` because
+# issues and PRs share one number space here: 21 of 66 cited numbers are PRs
+# and 20 of the 33 whole-line Mandated-By: issues cite at least one. An
+# earlier revision of this comment said 0 of 33 -- that used range
+# membership, which cannot discriminate. The exemption was under-reached
+# rather than inert, so before this
 # change none was ever a FILED candidate and the exemption could not fire.
 PR_BODY_FILE="$WORK/body-r2"; export PR_BODY_FILE
 ISSUE_LIST_FILE="$WORK/issues-r2"; export ISSUE_LIST_FILE
