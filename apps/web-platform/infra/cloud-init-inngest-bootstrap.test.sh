@@ -855,16 +855,31 @@ assert "dedicated-host pin-consistency: both refs (IREF + ZIREF) present and sha
 # `cloud-init-inngest-zot-pull-mutation.test.sh` pins a deliberately stale
 # v1.1.24@sha256:6cdaa63d... as a NEGATIVE CONTROL, and a sweep that "helpfully" updates it
 # destroys the control.
+GB_BEFORE="$TOTAL"
+# THE POPULATION IS DERIVED, NOT ENUMERATED, and that is a correction. An earlier revision named
+# two files explicitly (`--include='cloud-init.yml' --include='cloud-init-inngest.yml'`) with a
+# hardcoded `== 4`. That does not quantify over pin sites -- it quantifies over two filenames, so
+# a NEW `cloud-init-*.yml` carrying a stale tag-only pin was completely invisible (measured: an
+# added cloud-init-inngest-worker.yml pinned to v1.1.19 produced zero delta). Four sibling
+# cloud-init-*.yml already exist in this directory.
+#
+# So sweep the GLOB and derive the expected count from what was swept. The negative-control
+# fixture is still protected -- but by an explicit EXCLUDE, which is a rule, rather than by a
+# filename list that happens not to reach it: cloud-init-inngest-zot-pull-mutation.test.sh pins
+# a deliberately stale v1.1.24@sha256:6cdaa63d... and a sweep that "helpfully" updates it
+# destroys the control.
 GB_SITES_FILE="$(mktemp -t inngest-pin-sites-XXXXXX.txt)"
+GB_FILES="$(grep -rlE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' \
+             --include='cloud-init*.yml' "$SCRIPT_DIR" 2>/dev/null | sort -u || true)"
 grep -rhoE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+(@sha256:[0-9a-f]{64})?' \
-  --include='cloud-init.yml' --include='cloud-init-inngest.yml' \
-  "$SCRIPT_DIR" > "$GB_SITES_FILE" 2>/dev/null || true
+  --include='cloud-init*.yml' "$SCRIPT_DIR" > "$GB_SITES_FILE" 2>/dev/null || true
 GB_SITE_COUNT=$(grep -c . "$GB_SITES_FILE" || true)
-# Row 5 / own dispatch: an EXACT count, not `> 0`. A sweep pointed at a directory with no
-# pins, or one that silently stopped parsing a site, must RED rather than certify the
-# smaller job it still managed to do.
-assert "GuardB dispatch: the pin sweep found all 4 sites (found $GB_SITE_COUNT)" \
-  "(( GB_SITE_COUNT == 4 ))"
+GB_FILE_COUNT=$(printf '%s\n' "$GB_FILES" | grep -c . || true)
+# Own dispatch. A FLOOR of 4 (the two files known to carry pins, two legs each) catches a sweep
+# that found too few; the assertions below then quantify over however many exist, so an added
+# file is covered without a guard edit rather than being silently outside the population.
+assert "GuardB dispatch: the pin sweep found at least the 4 known sites across $GB_FILE_COUNT file(s) (found $GB_SITE_COUNT)" \
+  "[[ '$GB_SITE_COUNT' =~ ^[0-9]+$ ]] && (( GB_SITE_COUNT >= 4 ))"
 # Row 4: a site carrying a tag but no digest is the silent downgrade. Counted directly.
 GB_TAG_ONLY=$(grep -cE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+$' "$GB_SITES_FILE" || true)
 assert "GuardB: no pin site is tag-only (found $GB_TAG_ONLY tag-only site(s))" \
@@ -895,6 +910,14 @@ assert "GuardB: the deliberately-stale negative control is untouched by the swee
   "[[ ! -f '$GB_NEGCTL' ]] || (( \$(grep -cF 'soleur-inngest-bootstrap:v1.1.24@sha256:' '$GB_NEGCTL' || true) >= 1 ))"
 rm -f "$GB_SITES_FILE"
 
+# GUARD B'S OWN ANTI-VACUITY FLOOR. Previously these asserts were pooled into the ZG span's
+# floor of 47, of which only 7 belong to Guard B -- so deleting a Guard B assert and adding an
+# unrelated filler anywhere in that 266-line span kept the floor green while a real production
+# RED vanished. Measured. A floor that spans two unrelated inventories is fungible between them.
+GUARDB_ASSERTIONS=$(( TOTAL - GB_BEFORE ))
+assert "GuardB anti-vacuity: the section ran its full inventory (expected 7, ran $GUARDB_ASSERTIONS)" \
+  "(( GUARDB_ASSERTIONS == 7 ))"
+
 # --- Guard 1 anti-vacuity FLOOR: the section's own assertion count ------------------------
 # Row6 above floors the guard's INPUTS. Nothing floored its ASSERTIONS, so deleting every
 # `assert` in this section left the suite exit 0 with a clean summary — the headline claim
@@ -902,8 +925,8 @@ rm -f "$GB_SITES_FILE"
 # slack is attack budget, and one derived from what it guards descends with it. When you add an
 # assertion here, bump this number in the same edit — that is the point, not friction.
 ZG_SECTION_ASSERTIONS=$(( TOTAL - ZG_TOTAL_BEFORE ))
-assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 47, ran $ZG_SECTION_ASSERTIONS)" \
-  "(( ZG_SECTION_ASSERTIONS == 47 ))"
+assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 48, ran $ZG_SECTION_ASSERTIONS)" \
+  "(( ZG_SECTION_ASSERTIONS == 48 ))"
 
 # --- Row 7: a failed bootstrap must say WHY, on the one channel that still works -----------
 # The failure that kills the bootstrap also kills Vector, which is installed BY the bootstrap. So
@@ -984,8 +1007,12 @@ GA_COPY_NAMES=$(grep -E '^[[:space:]]*COPY [^ ]+ [^ ]+[[:space:]]*$' "$GA_WF" 2>
 GA_TOTAL_COPY=$(grep -cE '^[[:space:]]*COPY ' "$GA_WF" 2>/dev/null || true)
 GA_N_COPY=$(printf '%s\n' "$GA_COPY_NAMES" | grep -c . || true)
 GA_N_CP=$(printf '%s\n' "$GA_CP_PATHS" | grep -c . || true)
+# `grep -c ... || true` yields "" on an unreadable file, and (( "" == "" )) is a vacuous 0 == 0
+# that PASSES. Pin the count's own shape here rather than relying on a sibling assert to red.
+assert "GuardA dispatch: the COPY count is a positive integer (got '$GA_TOTAL_COPY')" \
+  "[[ '$GA_TOTAL_COPY' =~ ^[0-9]+$ ]] && (( GA_TOTAL_COPY > 0 ))"
 assert "GuardA dispatch: every COPY form parsed (parsed $GA_N_COPY of $GA_TOTAL_COPY)" \
-  "(( GA_TOTAL_COPY > 0 && GA_N_COPY == GA_TOTAL_COPY ))"
+  "(( GA_N_COPY == GA_TOTAL_COPY ))"
 assert "GuardA dispatch: cp/COPY cardinality agrees ($GA_N_CP staged vs $GA_TOTAL_COPY baked)" \
   "(( GA_N_CP == GA_TOTAL_COPY ))"
 # Same FILES, not merely the same count — a swap keeps cardinality intact.
@@ -1009,17 +1036,49 @@ assert "GuardA: the pinned tag $GA_TAG_REF resolves in git (never 'nothing to co
 # The comparison. CONTENT-ONLY: mtime and mode are permitted to differ (H2) — a guard that
 # reds on mtime is a guard nobody keeps. Second-member-after-a-compliant-first is the failure
 # this repo actually had, so the loop never stops at the first file.
+# THE COMPARISON PRIMITIVE, AND ITS INSTRUMENT SELF-TEST.
+#
+# GA_COMPARED counts LOOP TRIPS, not comparisons performed, so on its own it is structurally
+# incapable of witnessing a HOLLOWED comparison: replacing the body with `if false` keeps the
+# count at ten while comparing nothing, and the section stays green. Measured -- an earlier
+# revision of this guard claimed the exact count caught that, and it did not.
+#
+# The count is a DELETION floor. What catches HOLLOWING is driving the comparison primitive over
+# a known-identical and a known-different pair and refusing to continue unless BOTH verdicts
+# moved. Route the loop through the same function so the two cannot drift apart.
+ga_cmp() { # ga_cmp <fileA> <fileB> -> "same" | "differs"
+  if diff -q "$1" "$2" >/dev/null 2>&1; then printf 'same'; else printf 'differs'; fi
+}
+GA_ST="$(mktemp -d -t guarda-selftest-XXXXXX)"
+printf 'alpha\n' > "$GA_ST/a"; printf 'alpha\n' > "$GA_ST/b"; printf 'beta\n' > "$GA_ST/c"
+GA_ST_SAME="$(ga_cmp "$GA_ST/a" "$GA_ST/b")"
+GA_ST_DIFF="$(ga_cmp "$GA_ST/a" "$GA_ST/c")"
+rm -rf "$GA_ST"
+assert "GuardA instrument self-test: the comparison reports BOTH verdicts (same=$GA_ST_SAME differs=$GA_ST_DIFF)" \
+  "[[ '$GA_ST_SAME' == 'same' && '$GA_ST_DIFF' == 'differs' ]]"
+
 GA_COMPARED=0
 GA_DRIFTED=""
+GA_UNRESOLVED=""
 if (( GA_TAG_OK == 1 )); then
+  _ga_tmp="$(mktemp -t guarda-blob-XXXXXX)"
   while IFS= read -r _p; do
     [[ -n "$_p" ]] || continue
+    if ! git show "$GA_TAG_REF:$_p" > "$_ga_tmp" 2>/dev/null; then
+      GA_UNRESOLVED="$GA_UNRESOLVED $(basename "$_p")"
+      continue
+    fi
     GA_COMPARED=$((GA_COMPARED + 1))
-    if ! git show "$GA_TAG_REF:$_p" 2>/dev/null | diff -q - "$SCRIPT_DIR/../../../$_p" >/dev/null 2>&1; then
+    if [[ "$(ga_cmp "$_ga_tmp" "$SCRIPT_DIR/../../../$_p")" == "differs" ]]; then
       GA_DRIFTED="$GA_DRIFTED $(basename "$_p")"
     fi
   done <<< "$GA_CP_PATHS"
+  rm -f "$_ga_tmp"
 fi
+# A carrier that exists at HEAD but not at the tag is NOT "nothing to compare, pass" -- it is a
+# file the image cannot contain. Reported separately so the message does not misdirect.
+assert "GuardA: every carrier resolves at $GA_TAG_REF (unresolved:${GA_UNRESOLVED:- none})" \
+  "[[ -z '$GA_UNRESOLVED' ]]"
 assert "GuardA: every baked carrier is byte-identical at $GA_TAG_REF (drifted:${GA_DRIFTED:- none})" \
   "[[ -z '$GA_DRIFTED' ]]"
 # H1 (must-RED, mutates the SUITE): hollowing the comparison to return success must still red.
@@ -1028,8 +1087,8 @@ assert "GuardA anti-vacuity: compared exactly the cross-derived carrier set ($GA
   "(( GA_COMPARED == GA_TOTAL_COPY ))"
 
 GUARDA_ASSERTIONS=$(( TOTAL - GUARDA_BEFORE ))
-assert "GuardA anti-vacuity: the section ran its full inventory (expected 8, ran $GUARDA_ASSERTIONS)" \
-  "(( GUARDA_ASSERTIONS == 8 ))"
+assert "GuardA anti-vacuity: the section ran its full inventory (expected 11, ran $GUARDA_ASSERTIONS)" \
+  "(( GUARDA_ASSERTIONS == 11 ))"
 
 # =========================================================================================
 # Guard D (#7695) — quoted delimiters on generated artifacts
@@ -1037,24 +1096,43 @@ assert "GuardA anti-vacuity: the section ran its full inventory (expected 8, ran
 # PROPERTY. Every heredoc that writes a generated host artifact uses a NON-EXPANDING
 # delimiter, so no value in its body can be interpolated or executed at render time.
 #
-# ASSEMBLY covers all four write forms (cat >, cat >>, tee, { ...; } >) and all three
-# unquoted delimiter shapes (<<WORD, <<-WORD, << WORD). Both widenings are deliberate: today
-# every site is the `cat >` form with <<WORD, so a narrower assembly would be accurate now and
-# silently narrower than its own property the first time someone writes tee or <<-.
+# ASSEMBLY IS ONE PASS OVER THE HEREDOC OPERATOR ITSELF, and that is a correction. An earlier
+# revision used two greps -- one requiring the redirection `>` BEFORE the `<<` on the line, the
+# other anchoring the delimiter word to end-of-line. Their blind spots intersected on the most
+# idiomatic forms, and all three of these wrote a generated artifact with live command
+# substitution while the section reported green (measured):
+#     cat <<A > /etc/default/x          # redirect AFTER the operator
+#     { cat <<B; } > /etc/default/x     # compound command
+#     tee /etc/default/x <<C            # tee, which the old prose CLAIMED to cover
+#     cat > /etc/default/x <<D  # note  # anything after the word hides it from an $ anchor
+# So: find every `<<` / `<<-` operator ANYWHERE on a line and classify the delimiter as quoted or
+# unquoted. Position of the redirection is not consulted at all, because it is not part of the
+# property. `<<<` is neutralised first -- a herestring is not a heredoc and would otherwise be
+# read as `<<` followed by `<`.
 #
 # SCOPED TO THIS ONE FILE. The build workflow's Dockerfile heredoc is legitimately unquoted --
 # it must expand ${INNGEST_VERSION} -- so a repo-wide rule reds the build on day one.
+#
+# THIS GUARD'S GUARANTEE IS CONDITIONAL ON GUARD A BEING GREEN. It reads the WORKING COPY and
+# says nothing about the bytes the pinned image actually carries: at vinngest-v1.1.25 this file
+# still has the unquoted HEARTBEATEOF that HEAD fixed, so D is green on source while the
+# deployed artifact violates its property. Only the composition (A green AND D green) covers the
+# running host.
 GUARDD_BEFORE="$TOTAL"
 GD_SRC="$SCRIPT_DIR/inngest-bootstrap.sh"
 assert "GuardD: the bootstrap script is readable" "[[ -r '$GD_SRC' ]]"
 # Row 5 / own dispatch: an EXACT count. A pattern that matched nothing must RED reporting
 # "0 heredocs found", never certify a scan that inspected nothing.
-GD_ALL=$(grep -cE "(cat|tee)[[:space:]]+>>?[^<]*<<-?[[:space:]]*'?[A-Za-z_]" "$GD_SRC" 2>/dev/null || true)
+GD_SCAN="$(sed 's/<<</\x01/g' "$GD_SRC" 2>/dev/null \
+           | grep -oE "<<-?[[:space:]]*(\"[^\"]*\"|'[^']*'|[A-Za-z_][A-Za-z0-9_]*)" || true)"
+GD_ALL=$(printf '%s\n' "$GD_SCAN" | grep -c . || true)
 assert "GuardD dispatch: the heredoc scan found the full inventory (found $GD_ALL)" \
   "(( GD_ALL == 10 ))"
 # Rows 1-3: the unquoted set. Row 2 (an unquoted delimiter AFTER several compliant ones) is
 # why this counts every match rather than inspecting the first.
-GD_UNQ_NAMES=$(grep -oE "<<-?[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$" "$GD_SRC" 2>/dev/null | sed -E "s/^<<-?[[:space:]]*//; s/[[:space:]]*$//" | sort -u || true)
+# Unquoted == the delimiter carries neither ' nor ". Derived from the SAME scan as the
+# dispatch, so the two can never disagree about what was inspected.
+GD_UNQ_NAMES=$(printf '%s\n' "$GD_SCAN" | grep -vE "['\"]" | sed -E "s/^<<-?[[:space:]]*//" | grep -E '.' | sort -u || true)
 GD_UNQ_COUNT=$(printf '%s\n' "$GD_UNQ_NAMES" | grep -c . || true)
 assert "GuardD: exactly one unquoted delimiter remains (found $GD_UNQ_COUNT: ${GD_UNQ_NAMES:-none})" \
   "(( GD_UNQ_COUNT == 1 ))"
@@ -1070,7 +1148,14 @@ assert "GuardD: the sole unquoted delimiter is the named exemption (DOPPLEREOF)"
   "[[ '$(printf '%s' "$GD_UNQ_NAMES" | tr -d '[:space:]')' == 'DOPPLEREOF' ]]"
 # Row 4: the exemption grants "may interpolate", NEVER "may execute". The content assertion is
 # what keeps it honest and stops it widening silently if that body later gains a backtick.
-GD_EXEMPT_BODY=$(awk '/<<DOPPLEREOF$/{f=1;next} f&&/^DOPPLEREOF$/{exit} f' "$GD_SRC" 2>/dev/null || true)
+GD_EXEMPT_BODY=$(awk '/<<-?DOPPLEREOF([[:space:]]|$)/{f=1;next} f&&/^[[:space:]]*DOPPLEREOF[[:space:]]*$/{exit} f' "$GD_SRC" 2>/dev/null || true)
+GD_EXEMPT_LINES=$(printf '%s\n' "$GD_EXEMPT_BODY" | grep -c . || true)
+# FLOOR THE EXTRACTION BEFORE COUNTING IN IT. Measured: rewriting the exemption as `<<-DOPPLEREOF`
+# made the old awk match nothing, so the body came back EMPTY and `grep -c` over nothing returned
+# 0 -- the assert written to catch an injected $( ) passed while one was sitting in the body.
+# An empty extraction is a broken instrument, never a clean result.
+assert "GuardD: the exempt body was actually extracted ($GD_EXEMPT_LINES lines)" \
+  "(( GD_EXEMPT_LINES >= 3 ))"
 GD_EXEC_CHARS=$(printf '%s' "$GD_EXEMPT_BODY" | grep -cE '`|\$\(' || true)
 assert "GuardD: the exempt body can interpolate but NOT execute (no backtick, no \$( ) )" \
   "(( GD_EXEC_CHARS == 0 ))"
@@ -1080,8 +1165,8 @@ assert "GuardD H2: the exempt DOPPLEREOF write is present and permitted" \
   "(( \$(grep -cF 'cat > /etc/default/inngest-server <<DOPPLEREOF' '$GD_SRC' || true) == 1 ))"
 
 GUARDD_ASSERTIONS=$(( TOTAL - GUARDD_BEFORE ))
-assert "GuardD anti-vacuity: the section ran its full inventory (expected 6, ran $GUARDD_ASSERTIONS)" \
-  "(( GUARDD_ASSERTIONS == 6 ))"
+assert "GuardD anti-vacuity: the section ran its full inventory (expected 7, ran $GUARDD_ASSERTIONS)" \
+  "(( GUARDD_ASSERTIONS == 7 ))"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
