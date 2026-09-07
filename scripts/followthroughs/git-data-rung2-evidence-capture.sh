@@ -82,6 +82,23 @@
 #       [--out <path>] [--cloud-init <path>] [--window '30 DAY'] [--verify-only]
 set -uo pipefail
 
+# REFUSE TO RUN UNDER xtrace WITH A LIVE CREDENTIAL BOUND (#7797 / #7858).
+#
+# This capture binds FOUR credentials — the shared and git-data ingest tokens, the warehouse read
+# password, and the Sentry read token — and its output is published into a GitHub Actions log and
+# quoted into the rehearsal's job summary. A `set -x` above it would trace all four. The rule
+# arrived on main from #7858 while this branch was in flight; editing this file forfeits its
+# baseline grandfathering, which is correct: the moment to add the refusal is when the file is
+# being changed anyway.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}${BETTERSTACK_QUERY_PASSWORD:+x}${GIT_DATA_BETTERSTACK_LOGS_TOKEN:+x}${SENTRY_ISSUE_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # A TERMINAL SENTINEL, PRINTED ON EVERY EXIT PATH. The workflow wraps this script in
 # `doppler run`, which exits 1 on ITS OWN failures (measured: a bad token, and a bad
 # project/config, both give rc=1) — the same code this script uses for FAIL. Without a
@@ -94,6 +111,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # Env override is the TEST SEAM, and the only one: the suite stubs the query transport rather
 # than the decision function, so every arm exercises the real branching.
 QUERY="${BETTERSTACK_QUERY_SH:-${REPO_ROOT}/scripts/betterstack-query.sh}"
+
+# Source identities, declared once and shared with the round-trip probe so that probe's
+# write-refusal is DERIVED from this capture's control rather than restated beside it. Sourced at
+# TOP LEVEL, not inside the failed-read branch: the ingest-probe fallback below runs on the
+# anchor-SUCCEEDED path and needs BS_GIT_DATA_INGEST_URL too, and a conditional source is how a
+# fourth hand-written spelling of that URL survived the library meant to end them.
+# shellcheck source=lib/betterstack-sources.sh
+source "${REPO_ROOT}/scripts/lib/betterstack-sources.sh"
 GATE_LIB="${REPO_ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
 
 HOST_NAME=""
@@ -558,17 +583,179 @@ FATAL_SQL="
 # dark first rehearsal burns its 16-minute poll before saying "no verdict" rather than "dark boot".
 # Accepted rather than special-cased: distinguishing the two costs a vendor-error-string match, and
 # a string match on a vendor 500 is exactly the kind of guard that rots silently.
-export BS_TABLE="${BS_TABLE:-t520508_soleur_git_data_prd_logs}"
+#
+# (#7855) SUPERSEDED — see the composed control read below. The reasoning above is sound and its
+# conclusion was still wrong: the discriminator is not the vendor error string at all, it is a
+# CONTROL READ against a different source, with the codes carried only as the reason. The hot and
+# archive arms do in fact fail with different codes (701 vs 669, both measured 2026-09-04), so a
+# string-keyed classifier would have rotted exactly as predicted — by a route this comment did not
+# consider. Recorded in the ADR-192 amendment.
+export BS_TABLE="${BS_TABLE:-$BS_GIT_DATA_TABLE}"
 
 _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
   bash "$QUERY" "$1" 2>&1
 }
 
+# ── AN rc OF 0 IS NOT AN ANSWER (#7855, found at ship) ────────────────────────────
+#
+# `betterstack-query.sh` runs curl with `--fail-with-body`, which returns 0 for an HTTP 200
+# whose body is a ClickHouse MID-STREAM EXCEPTION. Every read below was gated on the rc alone,
+# so such a response was consumed as a result set. Measured, on this script, before the fix:
+# a `__FATALROWS__` read answering
+#
+#     Code: 241. DB::Exception: Memory limit (for query) exceeded ... (MEMORY_LIMIT_EXCEEDED)
+#
+# with rc 0 contains no `"level":"fatal"`, so the FAIL arm did not fire, and the run wrote
+# `RUNG2_BOOT_REHEARSAL=PASS` — a host cleared for birth on a fatal check that never ran. The
+# evidence file's own header says "CLEAN = a fatal read returned zero rows"; it returned an
+# exception. That is the silence-is-health defect this route exists to end, one layer below
+# where the route was looking, and it is the same class as the transport-rc misreading that
+# opened #7855.
+#
+# The predicate already existed for exactly this: `bs_absence_response_is_answer` discriminates
+# on line SHAPE, because every legitimate row of all three queries here begins `{"dt":` (`dt` is
+# the first selected column of ANCHOR_SQL, HOST_SQL and FATAL_SQL) while an exception arrives as
+# a bare line outside the JSONEachRow stream. It was reachable only from inside the
+# anchor-failed arm, which is the one path that cannot need it. Sourced at top level now.
+#
+# shellcheck source=../lib/betterstack-absence.sh
+source "${REPO_ROOT}/scripts/lib/betterstack-absence.sh"
+
+_require_answer() {  # $1 = the read's output ; $2 = which read, for the operator
+  bs_absence_response_is_answer "$1" && return 0
+  transient "TRANSIENT: the ${2} query returned rc=0, but its body is not a result set — it is a" \
+            "ClickHouse error delivered inside an HTTP 200, which curl reports as success." \
+            "NO VERDICT: an unread query is not an empty one, and reading it as empty is how a" \
+            "fatal check that never ran becomes a PASS. Body follows (carried, not the decision):" \
+            "$(printf '%s\n' "$1" | tail -5)"
+}
+
 # ── ARTIFACT 1: the source-liveness anchor ────────────────────────────────────────
 anchor_out="$(_run_query "$ANCHOR_SQL")"; anchor_rc=$?
+# An `if`, not `[[ ... ]] && ...`: a trailing `&&` whose left side is false makes the compound
+# return 1, which `set -e` reads as a failure of the script rather than of the test.
+if [[ "$anchor_rc" -eq 0 ]]; then _require_answer "$anchor_out" "source-liveness anchor"; fi
+#
+# (#7855) A FAILED READ IS THREE STATES, AND ONLY ONE OF THEM IS ABOUT THIS HOST.
+#
+# This arm used to print "the Better Stack query transport exited N (unreachable or
+# unauthorised)" — naming two causes the run had not measured. Run 33888071954 printed it
+# twenty times while the transport was reachable and the credential was valid: the read failed
+# because the SOURCE'S TABLE DOES NOT EXIST. Better Stack creates the ClickHouse table lazily on
+# the first STORED row, so a source that has never stored one answers 500 CLUSTER_DOESNT_EXIST
+# rather than returning an empty result. That is AP-021 exactly — a message may name only a
+# cause the run measured.
+#
+# The discriminator is a CONTROL READ against a source that is not this one. Pairing it with the
+# target read separates:
+#
+#   target fails + control answers with rows  -> nothing has ever been stored to THIS source
+#                                                (or it is misaddressed). About this source.
+#   target fails + control answers with none  -> the warehouse is storing nothing from ANY
+#                                                producer. About the warehouse (#7811).
+#   target fails + control fails              -> the instrument is unusable. About nothing.
+#
+# WHY THE VENDOR ERROR STRING IS NOT THE DECISION. The hot and archive arms fail with DIFFERENT
+# codes (701 CLUSTER_DOESNT_EXIST vs 669 NAMED_COLLECTION_DOESNT_EXIST, both measured
+# 2026-09-04), so a classifier keyed on either string is half a classifier and rots the first
+# time Better Stack renames one. The codes are carried as the REASON; the control read decides.
+#
+# COMPOSED, NOT WIDENED. `bs_absence_classify` takes no arguments and answers about the
+# warehouse; the target-vs-control distinction is the product (anchor_rc != 0) x classify().
+# Composing it here costs one arm of one script. Adding a fourth state to the shared library
+# would need an arity change, and its only other production consumer
+# (scripts/zot-restart-loop-alarm.sh) branches on the token as a STRING at two sites — one
+# `if/if` with no `else`, one `case` with no `*)` — so a new token would fall through both into
+# the live-channel path. See ADR-192.
 if [[ "$anchor_rc" -ne 0 ]]; then
-  transient "TRANSIENT: the Better Stack query transport exited ${anchor_rc} (unreachable or unauthorised). No verdict — this says nothing about the rehearsal host." \
-            "$(printf '%s\n' "$anchor_out" | tail -5)"
+  # (the absence library is sourced at top level, beside _require_answer)
+
+  # PIN THE CONTROL TO A DIFFERENT SOURCE, AND PIN THE TRANSPORT TO THIS SCRIPT'S OWN.
+  #
+  # This script exports BS_TABLE=<git-data> process-wide (see above), so a classify call that
+  # does not override it would read the ABSENT TARGET as its "control", always answer
+  # TRANSPORT_FAIL, and collapse all three states into one — a silent regression to the
+  # behaviour this block replaces, with the suite otherwise green. The capture suite's
+  # GUARD1/2 arm is the detector for exactly that deletion.
+  #
+  # BETTERSTACK_QUERY_SCRIPT is the library's seam and BETTERSTACK_QUERY_SH is this script's;
+  # pinning the former to $QUERY keeps both legs on ONE transport, so a test that stubs the
+  # capture cannot leave the control read reaching the real network.
+  #
+  # BS_CONTROL_WINDOW is pinned at 6h rather than inherited: it is deliberately far shorter than
+  # this script's own 30-day target WINDOW, because the control asks "is the warehouse storing
+  # NOW", not "has it ever". Pinning it makes that asymmetry a decision on the record instead of
+  # a default nobody chose. It cannot simply reuse $WINDOW — that is a ClickHouse INTERVAL
+  # expression, not a `--since` duration.
+  #
+  # The assignments ride on a COMMAND SUBSTITUTION, whose subshell contains them: classify's
+  # entire contract is stdout plus a return code, so nothing is lost by running it in a
+  # subshell, and BS_TABLE is not disturbed for the arms below.
+  # BOTH LEGS ON ONE CONTRACT, not merely one script. The target read runs `bash "$QUERY"`, which
+  # needs no exec bit; the library refuses a non-executable script with TRANSPORT_FAIL. A $QUERY
+  # that is readable but not executable would therefore make the target read work and the control
+  # read always answer TRANSPORT_FAIL — collapsing all three states into the "instrument unusable"
+  # arm with the suite green. Assert the stronger of the two requirements up front.
+  if [[ ! -x "$QUERY" ]]; then
+    transient "TRANSIENT: the CONTROL READ ALSO FAILED — the query script at ${QUERY} is not executable, so the control leg cannot run and this run cannot classify the target read's failure." \
+              "Target read exited ${anchor_rc}."
+  fi
+
+  _ctl_token="$(
+    BS_TABLE="$BS_CONTROL_TABLE" \
+    BS_TABLE_S3="$BS_CONTROL_TABLE_S3" \
+    BETTERSTACK_QUERY_SCRIPT="$QUERY" \
+    BS_CONTROL_WINDOW=6h \
+      bs_absence_classify
+  )"
+  _anchor_tail="$(printf '%s\n' "$anchor_out" | tail -5)"
+
+  case "$_ctl_token" in
+    LIVE)
+      # A LIVE CONTROL DOES NOT ESTABLISH *WHY* THE TARGET READ FAILED (#7855, found at ship).
+      #
+      # The control leg rules out an unusable instrument and an unusable credential, and nothing
+      # else. It cannot separate "the target's table does not exist" from "the target query failed
+      # for its own reason" — and the target read is the heavier query of the two: it UNIONs
+      # `s3Cluster(primary, $BS_TABLE_S3)`, whose named collection answered 669
+      # NAMED_COLLECTION_DOESNT_EXIST for this very source on 2026-09-04, and a UNION ALL fails if
+      # EITHER arm fails. That is the same measurement that made the round-trip probe drop its
+      # archive arm. So the strong sentence is emitted ONLY when the vendor's own reason says the
+      # thing does not exist; otherwise the arm reports what it has and names no cause.
+      #
+      # This matters beyond tidiness: the rehearsal workflow branches on `NEVER STORED A ROW` and
+      # tells the operator "a re-dispatch is warranted" — a paid host spun up on a query error.
+      if grep -qE 'CLUSTER_DOESNT_EXIST|NAMED_COLLECTION_DOESNT_EXIST|UNKNOWN_TABLE' <<<"$_anchor_tail"; then
+        transient "TRANSIENT: this source's table does not exist — NEVER STORED A ROW. The control source is answering and carrying rows, so the warehouse is up; this source has stored nothing, or the table name is wrong. No verdict about ${HOST_NAME}: a misaddressed source and a host that never shipped look identical from here." \
+                  "Target read exited ${anchor_rc}. Reason follows (carried, and it is what selected this reading):" \
+                  "$_anchor_tail"
+      else
+        transient "TRANSIENT: the target read FAILED FOR A REASON THE CONTROL CANNOT EXPLAIN. The control source is answering and carrying rows, so the transport and the credential both work — but the target read did not fail with a table-absence code, so this run does NOT know that this source has stored nothing. Read the vendor's reason below before concluding anything; a re-dispatch on this reading would be a host spun up on a query error." \
+                  "Target read exited ${anchor_rc}. Reason follows (carried, and it is NOT a table-absence code):" \
+                  "$_anchor_tail"
+      fi
+      ;;
+    INGEST_DARK)
+      # THE HONEST LIMIT OF THIS STATE, recorded rather than papered over. A control read that
+      # comes back empty cannot separate "the warehouse is refusing writes" from "every producer
+      # on the control source stopped at the same moment". Both are alarming and neither is a
+      # fact about this host, so they share an arm and the sentence claims only what the pair of
+      # reads establishes. The inverse residual is on the other side: a SINGLE surviving row
+      # makes the control read LIVE, so this arm under-reports a partially-dark warehouse.
+      # Narrowing either would need a second, independent producer to compare against, which is
+      # the account-wide monitoring #7811 owns — not something this capture can settle.
+      transient "TRANSIENT: the warehouse is DARK FOR EVERY PRODUCER on the source this run sampled. The control read answered and returned no rows at all from ${BS_CONTROL_TABLE} in the last 6h. That source is shared and multi-tenant, so an empty result there is the account-wide signal #7811 tracks — but it is ONE source, and this run did not read a second, so it cannot separate a refusing warehouse from every producer on that source stopping at once. Either way it is not a fact about this source and not a fact about ${HOST_NAME}. A 2xx from the ingest endpoint would not contradict it — an acknowledgement is not storage." \
+                "Target read exited ${anchor_rc}. Reason follows (carried, not the decision):" \
+                "$_anchor_tail"
+      ;;
+    *)
+      # TRANSPORT_FAIL, or any token a future library revision adds. Both reads failed, so the
+      # instrument is unusable and nothing was learned — the correct fail-closed default.
+      transient "TRANSIENT: the CONTROL READ ALSO FAILED (classifier said ${_ctl_token:-<empty>}), so this run cannot tell a missing table from a dark warehouse from a broken instrument. Nothing is known, least of all anything about ${HOST_NAME}." \
+                "Target read exited ${anchor_rc}. Reason follows (carried, not the decision):" \
+                "$_anchor_tail"
+      ;;
+  esac
 fi
 # DELIBERATELY EXCLUDES THIS HOST'S OWN ROWS (see the SQL). If the anchor could be satisfied
 # by the rehearsal host, then "this host emitted nothing" would make the anchor dead too — and
@@ -616,14 +803,23 @@ if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
               "about ${HOST_NAME}."
   fi
   _probe_rc=0
-  BETTERSTACK_INGEST_URL="${GIT_DATA_BETTERSTACK_INGEST_URL:-https://s2734275.eu-central-1a.betterstackdata.com/}" \
-  BETTERSTACK_LOGS_TOKEN="${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-${BETTERSTACK_LOGS_TOKEN:-}}" \
-    bash "$_probe" >/dev/null 2>&1 || _probe_rc=$?
+  # CAPTURE THE PROBE'S OUTPUT. It carries the verdict token and the exact reason, and discarding
+  # it is what forced the `*)` arm below to guess. #7855 widened that probe's exit 2 from
+  # "unreachable" to five distinct INGEST_PROBE_UNCONFIGURED reasons plus four others, so a bare
+  # "could not reach the source (rc=2)" is now more often wrong than right — AP-021, in the arm
+  # that reports it. The zot workflow already threads `probe_out` this way.
+  _probe_out=""
+  _probe_out="$(BETTERSTACK_INGEST_URL="${GIT_DATA_BETTERSTACK_INGEST_URL:-$BS_GIT_DATA_INGEST_URL}" \
+    BETTERSTACK_LOGS_TOKEN="${GIT_DATA_BETTERSTACK_LOGS_TOKEN:-${BETTERSTACK_LOGS_TOKEN:-}}" \
+    bash "$_probe" 2>&1)" || _probe_rc=$?
   case "$_probe_rc" in
     0)
-      # Source live, this host silent. That IS a statement about the host, so fall through to the
-      # host read below and let it produce the verdict.
-      printf 'anchor: no foreign-host rows; ingest probe says the source is ACCEPTING (single-tenant source, expected)\n' >&2
+      # The source ACKNOWLEDGED a write. That is not storage (#7855) — measured on this source,
+      # a 2xx-acknowledged marker was never retrievable — so this is weaker than it reads: it
+      # establishes reachability and credential validity, not that this host's rows could have
+      # landed. Falling through to the host read is still right, because the host read is what
+      # produces the verdict, but the verdict it produces inherits this weakness.
+      printf 'anchor: no foreign-host rows; ingest probe says the source ACKNOWLEDGED a write (not storage — see ADR-192)\n' >&2
       ;;
     4)
       transient "TRANSIENT: no foreign-host rows, and the ingest probe reports the source REFUSING" \
@@ -631,10 +827,11 @@ if ! grep -qE '"host":"[^"]+"' <<<"$anchor_out"; then
                 "here is a statement about the INSTRUMENT, not about ${HOST_NAME}."
       ;;
     *)
-      transient "TRANSIENT: no foreign-host rows, and the ingest probe could not reach the source" \
-                "(rc=${_probe_rc}). A live source with a silent host and an unreachable source look" \
-                "identical from this host's rows alone, so this run declines to read silence as a" \
-                "dark boot."
+      transient "TRANSIENT: no foreign-host rows, and the ingest probe did not classify the source" \
+                "(rc=${_probe_rc}). Its own verdict follows — read that rather than assuming a" \
+                "transport fault, because rc=2 now covers an unset credential, a refused" \
+                "destination, a throttle and a vendor error as well as unreachability." \
+                "${_probe_out:-<the probe produced no output>}"
       ;;
   esac
 fi
@@ -645,6 +842,7 @@ if [[ "$host_rc" -ne 0 ]]; then
   transient "TRANSIENT: the host-rows query exited ${host_rc} after the anchor succeeded. No verdict." \
             "$(printf '%s\n' "$host_out" | tail -5)"
 fi
+_require_answer "$host_out" "host-rows"
 
 # ── ARTIFACT 2b: every FATAL this host reported, unbounded by row chatter ─────────
 # Separate query, deliberately. See FATAL_SQL. A transport failure here is TRANSIENT for the
@@ -656,6 +854,7 @@ if [[ "$fatal_rc" -ne 0 ]]; then
             "an unanswered fatal query is NOT a clean bill." \
             "$(printf '%s\n' "$fatal_out" | tail -5)"
 fi
+_require_answer "$fatal_out" "unbounded fatal"
 
 # ── ARTIFACT 3: the FAIL arms ─────────────────────────────────────────────────────
 #
@@ -690,8 +889,12 @@ if ! grep -q 'boot_complete' <<<"$host_out"; then
             "still in progress, or it died before reaching a stage that can emit to Better Stack at" \
             "all. Since #7460 only \`stage:bootcmd_start\` is Sentry-only by construction; the other" \
             "eight stages post to Better Stack from a baked token, so silence here means the host" \
-            "died before runcmd, the baked token did not load, or the ingest POST failed — check" \
-            "Sentry for \`stage:betterstack_ingest\`, which reports exactly that."
+            "died before runcmd, the baked token did not load, the ingest POST failed, OR the POST" \
+            "SUCCEEDED AND THE ROW WAS NOT STORED (#7855: measured 2026-09-06 on this very source —" \
+            "a 2xx-acknowledged marker was never retrievable and the table still did not exist)." \
+            "The Sentry \`stage:betterstack_ingest\` row already consulted above reports the POST" \
+            "OUTCOME, which is the acknowledgement — so a clean row there does not exclude the" \
+            "fourth cause, and this run cannot distinguish it without a readback (#7855)."
 fi
 
 _bc_rows="$(grep 'boot_complete' <<<"$host_out" || true)"

@@ -27,8 +27,11 @@ TMP="$(mktemp -d)" || { echo "FATAL: mktemp failed"; exit 2; }
 trap 'rm -rf "$TMP"' EXIT
 
 PASS=0; FAIL=0; CASES=0
-pass() { PASS=$((PASS + 1)); echo "[ok] $1"; }
-fail() { FAIL=$((FAIL + 1)); echo "[FAIL] $1"; }
+# CASES IS INCREMENTED INSIDE THE HELPERS, not at each call site. It used to be bumped at 16
+# separate sites, so neutering an assertion helper's else-branch removed a real failure WITHOUT
+# lowering the count -- the cardinality floor could not witness a disarmed helper.
+pass() { PASS=$((PASS + 1)); CASES=$((CASES + 1)); echo "[ok] $1"; }
+fail() { FAIL=$((FAIL + 1)); CASES=$((CASES + 1)); echo "[FAIL] $1"; }
 
 # --- Accounting control -------------------------------------------------------------------
 # This suite shipped WITHOUT one, and review proved the consequence: neutering fail() left it
@@ -38,7 +41,9 @@ fail() { FAIL=$((FAIL + 1)); echo "[FAIL] $1"; }
 _ctl_p=$PASS; _ctl_f=$FAIL
 pass "accounting-control: pass() increments"; fail "accounting-control: fail() increments (EXPECTED, not a defect)"
 if [[ "$PASS" -eq $((_ctl_p + 1)) && "$FAIL" -eq $((_ctl_f + 1)) ]]; then
-  FAIL=$((FAIL - 1)); PASS=$((PASS - 1))
+  # Retract from CASES too, so `PASS + FAIL == CASES` holds (ADR-193 pt 3). The control's
+  # deliberate failure is not a case run against the SUT.
+  FAIL=$((FAIL - 1)); PASS=$((PASS - 1)); CASES=$((CASES - 1))
   echo "[ok] accounting-control: counters are independent (control failure retracted)"
   PASS=$((PASS + 1))
 else
@@ -106,7 +111,6 @@ run_probe() {
 # green — including the `*)` arm, in the one script whose whole job is refusing to guess.
 assert_probe() {
   local name="$1" want="$2" want_rc="$3" got rc=0
-  CASES=$((CASES + 1))
   got="$(run_probe)" || rc=$?
   if [[ "$got" == *"$want"* && "$rc" == "$want_rc" ]]; then
     pass "$name → $got (rc=$rc)"
@@ -121,9 +125,9 @@ STUB_HTTP_CODE=402 STUB_HTTP_BODY='{"error": "Quota exceeded"}' \
 STUB_HTTP_CODE=401 STUB_HTTP_BODY='{"error": "Unauthorized"}' \
   assert_probe "401 → auth refusal" "INGEST_REFUSED_AUTH" 4
 STUB_HTTP_CODE=202 STUB_HTTP_BODY='' \
-  assert_probe "202 → accepting" "INGEST_ACCEPTING" 0
+  assert_probe "202 → acknowledged (NOT stored)" "INGEST_ACKNOWLEDGED" 0
 STUB_HTTP_CODE=200 STUB_HTTP_BODY='' \
-  assert_probe "200 → accepting" "INGEST_ACCEPTING" 0
+  assert_probe "200 → acknowledged (NOT stored)" "INGEST_ACKNOWLEDGED" 0
 STUB_HTTP_CODE=503 STUB_HTTP_BODY='upstream' \
   assert_probe "503 → vendor-side error, not a verdict about quota" "INGEST_VENDOR_ERROR" 2
 STUB_HTTP_CODE=429 STUB_HTTP_BODY='slow down' \
@@ -146,7 +150,6 @@ STUB_CURL_EXIT=28 \
   assert_probe "curl exit 28 (timeout) → unreachable" "INGEST_UNREACHABLE" 2
 
 echo "--- credential guard ---"
-CASES=$((CASES + 1))
 out="$(PATH="$STUB_DIR:$PATH" BETTERSTACK_LOGS_TOKEN="" BETTERSTACK_INGEST_URL="https://s0000000.eu-fsn-3.betterstackdata.com/" bash "$PROBE" 2>&1)" || true
 if [[ "$out" == *"INGEST_PROBE_UNCONFIGURED"* ]]; then
   pass "unset token → UNCONFIGURED (never reported as a refusal)"
@@ -158,7 +161,6 @@ echo "--- destination guard: the token must not be forwarded to an arbitrary hos
 # BETTERSTACK_INGEST_URL is env-overridable and the request carries a bearer credential, so an
 # http:// or off-vendor override must be refused BEFORE the token goes on the wire. Without
 # these two cases the guard is unpinned and deleting it stays green.
-CASES=$((CASES + 1))
 out="$(PATH="$STUB_DIR:$PATH" BETTERSTACK_LOGS_TOKEN="synthetic-token-for-tests" \
   BETTERSTACK_INGEST_URL="http://s0000000.eu-fsn-3.betterstackdata.com/" bash "$PROBE" 2>&1)" || true
 if [[ "$out" == *"INGEST_PROBE_UNCONFIGURED"* ]]; then
@@ -167,7 +169,6 @@ else
   fail "http:// override → expected INGEST_PROBE_UNCONFIGURED, got '$out'"
 fi
 
-CASES=$((CASES + 1))
 out="$(PATH="$STUB_DIR:$PATH" BETTERSTACK_LOGS_TOKEN="synthetic-token-for-tests" \
   BETTERSTACK_INGEST_URL="https://attacker.example/" bash "$PROBE" 2>&1)" || true
 if [[ "$out" == *"INGEST_PROBE_UNCONFIGURED"* ]]; then
@@ -180,24 +181,144 @@ echo "--- the probe must not write a row (self-masking guard) ---"
 # The stub exits 65 if the body carries a message key. If the probe ever starts writing, this
 # case reports UNREACHABLE (curl 'failed'), which is a visible, loud change — and the grep
 # below pins the source directly so the intent cannot be lost to a refactor.
-CASES=$((CASES + 1))
 if grep -qE '\-\-data-raw[[:space:]]+.\[\].' "$PROBE"; then
   pass "probe posts a literal empty batch"
 else
   fail "probe does not post a literal empty batch — it may be writing a row"
 fi
-CASES=$((CASES + 1))
 if grep -q '"message"' "$PROBE"; then
   fail "probe source contains a message payload key — a writing probe masks the silence it detects"
 else
   pass "probe source carries no message payload"
 fi
 
+echo "--- GUARD 3 (#7855): the destination is pinned by AUTHORITY, not by a glob ---"
+#
+# THIS IS A REGRESSION TEST, NOT A HYPOTHETICAL. The pattern on origin/main was
+# `https://*.betterstackdata.com/*`, and a shell glob's `*` crosses BOTH `/` and `?`, so the
+# leading wildcard swallows the whole authority. Measured on 2026-09-04, against the real
+# pattern:
+#
+#   https://evil.com/?x=.betterstackdata.com/                 -> ACCEPTED
+#   https://attacker.example.org/a/.betterstackdata.com/x     -> ACCEPTED
+#
+# The probe forwards a bearer ingest token, and BETTERSTACK_INGEST_URL is env-overridable and
+# already exported into host environments elsewhere in this repo. The scheme anchor held; the
+# host anchor did not. Each URL below is a live bypass of the shipped guard.
+assert_dest_refused() {  # $1=name  $2=url
+  local out
+  out="$(PATH="$STUB_DIR:$PATH" BETTERSTACK_LOGS_TOKEN="synthetic-token-for-tests" \
+    BETTERSTACK_INGEST_URL="$2" bash "$PROBE" 2>&1)" || true
+  if [[ "$out" == *"INGEST_PROBE_UNCONFIGURED"* ]]; then
+    pass "$1"
+  else
+    fail "$1 — expected INGEST_PROBE_UNCONFIGURED, got '$out'"
+  fi
+}
+assert_dest_accepted() {  # $1=name  $2=url
+  local out
+  out="$(PATH="$STUB_DIR:$PATH" BETTERSTACK_LOGS_TOKEN="synthetic-token-for-tests" \
+    STUB_HTTP_CODE=202 BETTERSTACK_INGEST_URL="$2" bash "$PROBE" 2>&1)" || true
+  if [[ "$out" != *"INGEST_PROBE_UNCONFIGURED"* ]]; then
+    pass "$1"
+  else
+    fail "$1 — a real vendor endpoint was refused: '$out'"
+  fi
+}
+
+assert_dest_refused "query-string bypass: the host is evil.com, the vendor name is in the query" \
+  "https://evil.com/?x=.betterstackdata.com/"
+assert_dest_refused "path bypass: the host is attacker.example.org, the vendor name is in the path" \
+  "https://attacker.example.org/a/.betterstackdata.com/x"
+# A userinfo component is the third way to put a vendor-looking string left of the real host.
+assert_dest_refused "userinfo bypass: the vendor name is in the credentials, not the host" \
+  "https://s1.betterstackdata.com@evil.com/"
+# ONE FIXTURE PER AUTHORITY CUT, none path-delimited. Without these three, the `?`, `#` and `@`
+# cuts are unreachable -- the `%%/*` path cut consumes every other fixture before they run, so
+# deleting them stayed green while each forwarded a live bearer token off-vendor.
+assert_dest_refused "query cut: no path delimiter, so only the ? cut can catch this" \
+  "https://evil.com?x=.betterstackdata.com"
+assert_dest_refused "fragment cut: no path delimiter, so only the # cut can catch this" \
+  "https://evil.com#x.betterstackdata.com"
+assert_dest_refused "userinfo cut: the suffix match CANNOT catch this one, only the @ refusal can" \
+  "https://s1.betterstackdata.com:pw@evil.com/"
+# A suffix-match without a dot boundary accepts a lookalike registration.
+assert_dest_refused "suffix lookalike: notbetterstackdata.com is not betterstackdata.com" \
+  "https://s1.notbetterstackdata.com/"
+
+# HARNESS ROW — must-PASS non-canonical inputs. Without these the matrix cannot detect a guard
+# that refuses everything, which is the obvious wrong way to fix the rows above. Both are the
+# real endpoints this repo actually posts to.
+assert_dest_accepted "the real eu-fsn-3 endpoint is still accepted" \
+  "https://s2457081.eu-fsn-3.betterstackdata.com/"
+assert_dest_accepted "the real eu-central-1a endpoint is still accepted" \
+  "https://s2734275.eu-central-1a.betterstackdata.com/"
+
+# Guard 3 rows 1 and 2 are source-pinned: they concern flags whose ABSENCE is the defect, and a
+# stub cannot observe a flag that was never passed.
+if grep -qE "\-\-proto '=https'" "$PROBE"; then
+  pass "curl pins --proto '=https' — a plaintext override cannot put the token on the wire"
+else
+  fail "curl no longer pins --proto '=https'"
+fi
+if grep -qE '(^|[[:space:]])(-L|--location)([[:space:]]|$)' "$PROBE"; then
+  fail "curl follows redirects — a 30x would forward the bearer credential off-vendor"
+else
+  pass "curl does not follow redirects, so a 30x cannot forward the credential"
+fi
+
+echo "--- GUARD 2 (#7855): an acknowledgement is not storage ---"
+#
+# The 2xx token was `INGEST_ACCEPTING`, and that name is the defect. It was printed verbatim,
+# with http=202, throughout the 27-hour window of #7811 — an issue titled "Better Stack is
+# accepting no writes". The endpoint acknowledged every batch and stored none of them, so the
+# token asserted the one thing the run had not established.
+# ANCHORED ON THE emit() CALL, NOT THE BARE TOKEN. The probe's source documents the old name in
+# a comment explaining why it was wrong, so a bare `grep INGEST_ACCEPTING` matches that prose and
+# fails a correct file — the collision that arises whenever a task needs both a "must not
+# contain X" assertion and a comment documenting X. A verdict token only reaches an operator
+# through emit(), so the call shape is both tighter and the thing the property is actually about.
+if grep -qE 'emit[[:space:]]+"INGEST_ACCEPTING"' "$PROBE"; then
+  fail "the 2xx verdict still EMITS INGEST_ACCEPTING — the name asserts storage the probe cannot observe"
+else
+  pass "no emit() site claims the endpoint is 'accepting'"
+fi
+# The replacement must say what was NOT established, or the rename is cosmetic.
+_ack_detail="$(STUB_HTTP_CODE=202 STUB_HTTP_BODY='' run_probe 2>&1)"
+if [[ "$_ack_detail" == *"not"*"stor"* || "$_ack_detail" == *"NOT"*"stor"* ]]; then
+  pass "the 2xx detail states that storage was not established"
+else
+  fail "the 2xx detail does not say storage is unestablished: '$_ack_detail'"
+fi
+# And it must point the reader at the instrument that CAN establish it.
+if grep -q 'betterstack-roundtrip-latency-7855.sh' "$PROBE"; then
+  pass "the probe names the round-trip follow-through that can establish storage"
+else
+  fail "the probe does not point at the round-trip follow-through"
+fi
+
+# NO INGEST-URL LITERAL MAY CHANGE IN THIS PR (plan task 2.4). The bare probe invocation in
+# .github/workflows/scheduled-zot-restart-loop.yml is the pager that files and re-probes #7811;
+# changing the default mid-incident makes that issue's own 202 evidence non-comparable.
+if grep -q 's2457081.eu-fsn-3.betterstackdata.com' "$PROBE"; then
+  pass "the ingest URL default is unchanged (#7811's evidence stays comparable)"
+else
+  fail "the ingest URL default moved — #7811's in-flight evidence is no longer comparable"
+fi
+
 # Derived from the as-written file: 9 assert_probe sites + 1 credential guard +
-# 2 destination guards + 2 source-grep guards + 1 accounting control = 15.
-EXPECTED_CASES=15
+# 2 destination guards + 2 source-grep guards + 1 accounting control = 15, plus the 12 #7855
+# adds (4 assert_dest_refused + 2 assert_dest_accepted + 2 curl-flag source pins + 4 Guard 2)
+# and the 4 review adds (3 authority-cut fixtures + the reconciliation) = 31.
+# Stated as a derivation from main's 15 rather than a bare literal: a sibling PR raising the base
+# silently invalidates a copied number, so re-read `git show origin/main:<this file>` at ship.
+EXPECTED_CASES=31
 echo
 echo "cases=$CASES passed=$PASS failed=$FAIL"
+if [[ $((PASS + FAIL)) -ne "$CASES" ]]; then
+  echo "[FAIL] reconciliation: PASS+FAIL=$((PASS + FAIL)) but CASES=$CASES — a counter stalled"
+  FAIL=$((FAIL + 1))
+fi
 if [[ "$CASES" -lt "$EXPECTED_CASES" ]]; then
   echo "[FAIL] cardinality: ran $CASES cases, expected at least $EXPECTED_CASES"
   FAIL=$((FAIL + 1))
