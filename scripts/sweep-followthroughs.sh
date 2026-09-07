@@ -543,11 +543,25 @@ main() {
   export NO_DIRECTIVE_FILE
   trap 'rm -f "$NO_DIRECTIVE_FILE"' EXIT
 
+  # OPEN_LIMIT was 50 against 51 live open trackers (measured 2026-09-07), and
+  # `gh issue list` returns NEWEST FIRST -- so the OLDEST tracker was silently
+  # never swept. Its failure signature is the ABSENCE of a daily comment, which
+  # is indistinguishable from a healthy quiet probe, so nothing surfaced it.
+  #
+  # Raising the number alone would re-create the same silent failure at a higher
+  # count, which is why the truncation DETECTOR below matters more than the
+  # value: a full page means there may be more, and that is now said out loud
+  # rather than being the state in which trackers disappear.
+  local OPEN_LIMIT=200
   local issues_json
-  issues_json=$(gh issue list --repo "$REPO" --label follow-through --state open --limit 50 --json number,body)
+  issues_json=$(gh issue list --repo "$REPO" --label follow-through --state open --limit "$OPEN_LIMIT" --json number,body)
   local count
   count=$(printf '%s' "$issues_json" | jq 'length')
   log "found $count open follow-through issues"
+  if [[ "$count" -ge "$OPEN_LIMIT" ]]; then
+    printf '::error::sweep-followthroughs: the open follow-through set filled the page (%s >= %s). Trackers beyond it were NOT swept, and a never-swept tracker looks exactly like a quiet one. Raise OPEN_LIMIT or paginate.\n' \
+      "$count" "$OPEN_LIMIT" >&2
+  fi
 
   local i
   for i in $(seq 0 $((count - 1))); do

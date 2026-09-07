@@ -600,7 +600,7 @@ fi
 # written to explain the first one. Anchor on `^git commit --quiet --file`
 # instead, and describe the hazard without spelling it.
 if_commit_span=$(awk '/^git commit --quiet --file/,/^COMMITEOF$/' "$SCRIPT")
-if_prbody_span=$(awk '/^gh pr create --repo/,/^Ref #3210\."$/' "$SCRIPT")
+if_prbody_span=$(awk '/^if ! gh pr create --repo/,/^Ref #3210\."; then$/' "$SCRIPT")
 grep -q 'RECORD_REF' <<<"$if_commit_span" \
   && pass "FR8 control: the commit-heredoc span was actually extracted (it carries RECORD_REF)" \
   || fail "FR8 control: the commit-heredoc awk range extracted nothing — the absence check below would be vacuous"
@@ -788,7 +788,7 @@ s = s.replace(old, 'Accounts: ${LOGINS[*]} (instrument: ${RESOLVED_INSTRUMENT})'
 open(p, "w").write(s)
 PY
 if g1_landed "G1-M7 (path interpolated into the PR body)"; then
-  g1_span=$(awk '/^gh pr create --repo/,/^Ref #3210\."$/' "$G1MUT")
+  g1_span=$(awk '/^if ! gh pr create --repo/,/^Ref #3210\."; then$/' "$G1MUT")
   grep -q 'LOGINS' <<<"$g1_span" \
     && pass "G1-M7 control: the mutant's PR-body span was extracted" \
     || fail "G1-M7 control: the mutant's PR-body span is empty — the row below is vacuous"

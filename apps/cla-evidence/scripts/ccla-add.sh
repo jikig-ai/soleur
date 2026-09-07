@@ -504,7 +504,12 @@ if ! git push --quiet -u origin "$BRANCH"; then
   printf 'Abandon with: git switch - && git branch -D %s\n' "$BRANCH" >&2
   exit 2
 fi
-gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" \
+# A failure handler, mirroring the push above. Without one this exits non-zero
+# with gh's own message and no statement of where the work is -- and the state
+# here is WORSE than a failed push: the branch carrying the association is
+# already on the public remote, so "nothing was published" is not true and an
+# operator who re-runs from scratch duplicates a legal record.
+if ! gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" \
   --title "chore(ccla): ${MODE} ${RECORD_REF} in the corporate coverage map" \
   --body "Single-file change to \`${ROSTER_REL}\`, written by \`ccla-add.sh\`.
 
@@ -512,5 +517,11 @@ Contribution-triggered entry was enforced at write time: every account below was
 
 Accounts: ${LOGINS[*]}
 
-Ref #3210."
+Ref #3210."; then
+  printf '::error::the branch was PUSHED but `gh pr create` failed. %s is on the remote and the roster change is committed on it; nothing has merged.\n' "$BRANCH" >&2
+  printf 'Resume with:  gh pr create --repo %s --base %s --head %s\n' "$REPO" "$BASE_BRANCH" "$BRANCH" >&2
+  printf 'Abandon with: git switch - && git branch -D %s && git push origin --delete %s\n' "$BRANCH" "$BRANCH" >&2
+  printf 'Do NOT re-run this script from scratch: it would create a SECOND branch recording the same designation.\n' >&2
+  exit 2
+fi
 echo "PR opened from ${BRANCH}"

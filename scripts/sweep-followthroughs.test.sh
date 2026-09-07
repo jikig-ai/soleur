@@ -674,7 +674,17 @@ t15_open_path_still_honors_earliest() {
   assert_contains     "T15 open path still skips on a future earliest" \
                       "not yet reached" "$combined"
   assert_contains     "T15 open issue query keeps its own --state open limit" \
-                      "--state open --limit 50" "$(cat "$SUT")"
+                      '--state open --limit "$OPEN_LIMIT"' "$(cat "$SUT")"
+  # The VALUE moved from 50 to 200 because 50 was below the live open set (51
+  # measured 2026-09-07) and `gh issue list` returns newest-first, so the oldest
+  # tracker was silently never swept -- an absence of comments, which reads
+  # exactly like a healthy quiet probe.
+  assert_contains     "T15 the open limit is bound to a named constant, not a bare literal" \
+                      "OPEN_LIMIT=200" "$(cat "$SUT")"
+  # Raising the number without a detector just moves the silent failure, so the
+  # detector is pinned too: a full page must say so out loud.
+  assert_contains     "T15 a full page of open trackers is reported, not silently truncated" \
+                      'count" -ge "$OPEN_LIMIT' "$(cat "$SUT")"
   unset GH_TOKEN; rm -rf "$root"
 }
 
