@@ -48,7 +48,10 @@ All edits in `scripts/lib/repo-write-boundary.test.sh`. Use the existing `siblin
 - [ ] 1.7c **Arm 50 — the epilogue wiring.** Drive the sandboxed runner the way arms 23/24/26 do; assert a
       REPORT-only run exits 0 and a FATAL run exits 1. Every other arm asserts classifier stdout only, while
       property P1 is about the exit code and the Guard Contract's Assembly claims `test-all.sh:2217`/`:2406`.
-- [ ] 1.8 Raise `MIN_ASSERTIONS` 44 → 50 (`:851`).
+- [ ] 1.8 Raise `MIN_ASSERTIONS` from 44 by the number of new arms — **52** as landed (arms 45-52; the
+      plan projected 50 for 45-50, and /work added arm 51 for the Guard Contract's *Fail-open input*
+      mutation row and arm 52 for its *must-PASS annotated tag* harness row, both of which the arm list
+      had missed). Derive it; never carry the literal.
 - [ ] 1.9 Confirm arm 43 is untouched and still green after the Phase 2 change.
 
 ## Phase 2 — GREEN: the classifier

@@ -12,7 +12,7 @@ tags: [guards, vacuity, mutation-testing, false-red, false-green, shared-state]
 
 ## Problem
 
-#7652 is one sentence: **a claim outran its check.** `scripts/test-all.sh` printed
+Issue #7652 is one sentence: **a claim outran its check.** `scripts/test-all.sh` printed
 `[FATAL] A SUITE WROTE TO THE LIVE REPOSITORY` while inspecting only `git rev-parse HEAD` and
 `git status --porcelain` — blind to the shared-config write that actually happened. Separately,
 `git -C ""` does not error; it silently operates on the current directory, so a fixture helper
@@ -128,7 +128,6 @@ what the shipped code did, on a real run, without being staged.
 defects introduced by the fix rather than listing them separately, because they share one cause and
 one prevention. Nothing from the inventory is dropped.*
 
-
 1. **Closed #7652 on a truncated comment read.** `gh issue view --jq` piped through `head -60` cut
    3 of 5 comments; the newest filed two further in-scope instances. — *Recovery:* reopened with a
    correction comment. — **Prevention:** when a decision turns on an issue's discussion, read the
@@ -201,3 +200,11 @@ one prevention. Nothing from the inventory is dropped.*
     checkout — every CI runner) the strong class stays. Gate the softening on the measured
     condition, never on a blanket widening: arms 42-43 exist so that sibling presence can never
     launder HEAD, our own branch, or a tag.
+
+    > **Precision note (2026-09-07, #7795):** arm 43 tests a tag **move** (`git tag -f`), not a tag
+    > creation, and the sentence above reads as though it covered both. A tag *move* still cannot be
+    > laundered and arm 43 is unchanged. A collision-free tag *creation* under a shared ref store is
+    > now `REPORT`, because a `git fetch` auto-follows tags and cannot move one — so creation is the
+    > sibling-routine tag event and the only one with no attributable author. The sentence was
+    > imprecise rather than wrong; the partition it describes is recorded in
+    > [ADR-207](../../engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md).

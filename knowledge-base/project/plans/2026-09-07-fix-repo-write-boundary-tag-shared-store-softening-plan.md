@@ -417,7 +417,8 @@ it is the Guard Contract's must-PASS *annotated-tag* row that is left unguarded 
   23/24/26 already do and assert a REPORT-only run exits 0 while a FATAL run exits 1. (Arm 27 asserts only that
   the exit contract *documents* the REPORT class — not that it behaves that way.)
 
-Raise `MIN_ASSERTIONS` 44 → 50. **Assert the floor and `0 failed`, not a hardcoded pass count** — plan v1
+Raise `MIN_ASSERTIONS` 44 → 44 + the number of new arms (**52** as landed; see AC1). **Assert the floor
+and `0 failed`, not a hardcoded pass count** — plan v1
 hardcoded the count in three places and was already off by one (Kieran P1, simplicity). Note honestly that
 `MIN_ASSERTIONS` is a **deletion** detector, not a **weakening** detector (test-design P1-4): weakening arm 45
 back to `grep -q probe-tag` still passes, still counts, and conservation still balances. The mutation matrix is
@@ -539,7 +540,8 @@ There is exactly one classifier and one consumer; both are named here.
 | Neuter arm 45's fixture so no tag is created, leaving the verdict empty | Must be RED. The arm must assert it *observed* a `refs/tags/probe-tag` classification line, not merely that no `FATAL` appeared — an absence-only assertion passes on an empty verdict. |
 | Delete arms 45-50 outright | Must be RED via the `MIN_ASSERTIONS` floor (44 → 50) and the `passes+fails == asserted` conservation check at `:719`. |
 | Drop `-c tag.gpgSign=false` from a new arm | Must be RED **legibly**, not environment-dependently: the global gitconfig forces signed/annotated tags, so a bare `git tag` fails fixture setup. Each arm must hard-fail setup with a named message the way arm 36 does at `:649-651`, never fall through to a misleading assertion failure (spec-flow P1). |
-| **Must-PASS, non-canonical:** an *annotated* tag created under a sibling; and a tag created under a sibling whose name contains a `/` (`refs/tags/rel/1.0`) | Must PASS as `REPORT`. The contract permits both; field-exact matching (`awk '$2==n'`) already handles the `/` case, and a severity partition must not depend on tag object type. |
+| **Must-PASS, non-canonical:** an *annotated* tag created under a sibling | Must PASS as `REPORT` (arm 52). A severity partition must not depend on tag object type, and arms 45-49 all create LIGHTWEIGHT tags — an annotated tag puts a different sha through the same `bsha`/`asha` compare. |
+| ~~a tag created under a sibling whose name contains a `/` (`refs/tags/rel/1.0`) must PASS as `REPORT`~~ | **WITHDRAWN at /work — it contradicted this contract's own Property.** This row predates the collision guard, which was added at deepen-plan (security-sentinel P1) and which the Property, AC9 and a mutation-matrix row all state makes a `/`-containing name **FATAL**. Field-exact matching handles `/` for *reporting*; it says nothing about severity. Kept struck through rather than deleted so the contradiction is visible rather than tidied away. Arm 49's first fixture is exactly `refs/tags/origin/main`. |
 
 ## Observability
 
@@ -651,8 +653,12 @@ elsewhere — Kieran P2) — is prescribed as AC12 to back that conclusion with 
 All criteria are pre-merge; this plan has no post-merge steps.
 
 1. `bash scripts/lib/repo-write-boundary.test.sh` exits 0, its final line reports `0 failed`, and its passed
-   count is `>= 50` with the printed floor equal to `50`. (Assert the floor and zero failures, **not** a
-   hardcoded pass count — plan v1 hardcoded it in three places and was already off by one.)
+   count equals the printed floor, which is **`44 + <new arms>`** — derived at /work, not carried from
+   here. It landed at **52**: the plan projected 50 for arms 45-50, and /work added two more that the
+   Guard Contract's own rows demand and the arm list had missed — arm 51 for the *Fail-open input*
+   mutation row (nothing else exercised `_repo_boundary_branches_elsewhere`'s return), and arm 52 for
+   the *must-PASS annotated tag* harness row. Assert the floor and zero failures, **never** a hardcoded
+   pass count (plan v1 hardcoded it in three places and was already off by one).
 2. Arm 43 is unchanged: extracting its body from both revisions and diffing is empty —
    `diff <(git show origin/main:scripts/lib/repo-write-boundary.test.sh | sed -n '/--- 43\./,/--- 44\./p')
    <(sed -n '/--- 43\./,/--- 44\./p' scripts/lib/repo-write-boundary.test.sh)` prints nothing. (Arm 36 is
@@ -676,8 +682,15 @@ All criteria are pre-merge; this plan has no post-merge steps.
    without out-of-scope edits: the literal appears 4 times, only one of which is the tag arm — Kieran + spec-flow P0.)
 9. A sibling fixture + a created tag named `origin/main` yields `^FATAL`, and so does one whose name equals
    `$default_branch` (arm 49 — the collision guard). Neither yields a `REPORT`.
-9b. A REPORT-only run of the sandboxed runner exits **0**; a run with a FATAL exits **1** (arm 50 — the
-   epilogue wiring the Guard Contract's Assembly claims).
+9b. A REPORT-only run exits **0**; a run with a FATAL exits **1** (arm 50 — the epilogue wiring the
+   Guard Contract's Assembly claims). **Mechanism changed at /work:** "drive the sandboxed runner the
+   way arms 23/24/26 do" is not available for this property. Those arms reach only the runner's early
+   *refusal* path (they exit 2 before any suite); reaching the EPILOGUE means running the whole battery,
+   ~45 minutes per arm and holding the repo-global advisory lock, twice. Instead arm 50 extracts the two
+   regions of the REAL runner that carry the chain — anchored on the content `if [[ -n "$_repo_verdict" ]]; then`
+   and `_repo_boundary_reported=1`, never on a line number — and executes them verbatim under the
+   runner's own `set -euo pipefail`. The extraction hard-fails if either anchor is missing, so a refactor
+   that moves the chain reports a FIXTURE error rather than silently testing nothing.
 9c. `scripts/plugin-delivery-canary.sh:335` and `apps/web-platform/scripts/run-migrations.sh:200` both carry
    `--no-tags`, each asserted in its **own** suite (`plugin-delivery-canary.test.sh`,
    `run-migrations-schema-probe.test.sh`) anchored on the specific fetch command, not a bare flag grep. Both
@@ -723,7 +736,7 @@ Acceptance Criteria above.
 | T10 | Strip `--no-tags` from `plugin-delivery-canary.sh:335` | arm 49 RED |
 | T11 | Neuter arm 45's fixture so the verdict is empty | arm 45 RED (asserts presence, not absence) |
 | T12 | Drop `-c tag.gpgSign=false` from a new arm | fixture setup hard-fails with a named message, not a misleading assertion failure |
-| T13 | *(must-PASS)* annotated tag, and a tag named `rel/1.0`, both created under a sibling | `REPORT`, suite green |
+| T13 | *(must-PASS)* an annotated tag created under a sibling | `REPORT`, suite green (arm 52). The `rel/1.0` half is **withdrawn** — see the struck harness row above; a `/` in the name is FATAL by the collision guard. |
 
 ## Precedent Diff (deepen-plan Phase 4.4)
 
