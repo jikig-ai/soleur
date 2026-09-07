@@ -168,21 +168,62 @@ verdict "$rc" "a name-mention derivation DOES self-include (so the case above is
 # --- D. THE FIVE CHOKEPOINTS -------------------------------------------------
 # The export that makes an entire runtime safe at once. Uniform predicate: a non-comment line that
 # either assigns INCIDENTS_REPO_ROOT or calls the sandbox helper.
-CHOKEPOINTS=(
-  "plugins/soleur/test/lib/incident-sandbox.ts"
+# Each entry is a place a runner ARMS the sandbox, paired with the predicate that proves the ARMING
+# happens there -- not merely that the file mentions the mechanism.
+#
+# Three corrections, all measured:
+#   * `tests/scripts/_git_fixture_env.py` was ABSENT while ADR-205 names it "the real chokepoint for
+#     python3 -m unittest, which loads no conftest.py". Deleting its call left this section 5/5 green
+#     while the arm scripts/test-all.sh actually drives wrote the real ledger.
+#   * Both `bunfig.toml` preloads were absent, so section C's claim "removing the export from any one
+#     of them reds twice" was false for 3 of the 5 documented chokepoints.
+#   * `tests/conftest.py` was checked with a name match satisfied by its own `def` line and by an
+#     assignment INSIDE the function body, so deleting the `pytest_configure` call still passed.
+#
+# A preload is a REGISTRATION, not an export, so it needs its own predicate; a single regex over a
+# heterogeneous list is what let three entries be satisfied by the wrong thing.
+CHOKEPOINT_FILES=(
   "plugins/soleur/test/lib/git-tripwire.ts"
   "apps/web-platform/test/global-setup-git-tripwire.ts"
   "plugins/soleur/test/test-helpers.sh"
   "tests/conftest.py"
+  "tests/scripts/_git_fixture_env.py"
 )
+CHOKEPOINT_PREDS=(
+  'ensureIncidentSandbox\(\)'
+  'ensureIncidentSandbox\(\)'
+  'export[[:space:]]+INCIDENTS_REPO_ROOT'
+  '^[[:space:]]+ensure_incident_sandbox\(\)'
+  '^ensure_incident_sandbox\(\)'
+)
+# The two preload registrations, checked by their own predicate.
+PRELOAD_FILES=(
+  "bunfig.toml"
+  "plugins/soleur/bunfig.toml"
+)
+PRELOAD_RE='^preload[[:space:]]*=[[:space:]]*\[[^]]*git-tripwire\.ts'
 EXPORT_RE='^[[:space:]]*(([^#/*[:space:]]|/[^/*]).*)?(export[[:space:]]+INCIDENTS_REPO_ROOT|INCIDENTS_REPO_ROOT["'"'"']?\]?[[:space:]]*[:=]|ensureIncidentSandbox\(\)|ensure_incident_sandbox\(\))'
 ok_chokepoints=0
-for c in "${CHOKEPOINTS[@]}"; do
+# Comment-stripped so an explanatory paragraph naming the mechanism cannot satisfy the check, and
+# `grep -c` rather than `grep -q` because a `-q` on a pipe under pipefail exits non-zero on SIGPIPE
+# even when it matched.
+_strip_line_comments() { sed -E 's@[[:space:]]*(#|//).*$@@' "$1"; }
+for i in "${!CHOKEPOINT_FILES[@]}"; do
+  c="${CHOKEPOINT_FILES[$i]}"; pred="${CHOKEPOINT_PREDS[$i]}"
   rc=1
-  if [ -f "$REPO/$c" ] && grep -qE "$EXPORT_RE" "$REPO/$c" 2>/dev/null; then
-    rc=0; ok_chokepoints=$((ok_chokepoints+1))
+  if [ -f "$REPO/$c" ]; then
+    hits="$(_strip_line_comments "$REPO/$c" | grep -cE "$pred" || true)"
+    [[ "${hits:-0}" -gt 0 ]] && { rc=0; ok_chokepoints=$((ok_chokepoints+1)); }
   fi
-  verdict "$rc" "chokepoint carries the sandbox export: $c"
+  verdict "$rc" "chokepoint ARMS the sandbox: $c"
+done
+for c in "${PRELOAD_FILES[@]}"; do
+  rc=1
+  if [ -f "$REPO/$c" ]; then
+    hits="$(_strip_line_comments "$REPO/$c" | grep -cE "$PRELOAD_RE" || true)"
+    [[ "${hits:-0}" -gt 0 ]] && { rc=0; ok_chokepoints=$((ok_chokepoints+1)); }
+  fi
+  verdict "$rc" "preload registers the arming module: $c"
 done
 rc=1; [ "$ok_chokepoints" -eq "${#CHOKEPOINTS[@]}" ] && rc=0
 verdict "$rc" "every chokepoint carries the export ($ok_chokepoints/${#CHOKEPOINTS[@]})"
@@ -265,7 +306,12 @@ missing=""; population=0
 for t in "$HERE"/*.test.sh; do
   [ "$t" = "$SELF" ] && continue
   population=$((population+1))
-  grep -q 'test-incident-sandbox\.sh' "$t" 2>/dev/null || missing="${missing} $(basename "$t")"
+  # Anchored on an executable `source`/`.` line, matching section E's C1 predicate in this same
+  # file. The previous bare-token grep was satisfied by a COMMENT: verified, a file containing only
+  # `# we deliberately do not source test-incident-sandbox.sh here` passed the blanket that stands
+  # between 45 hook suites and the operator's real ledger.
+  _f_hits="$(grep -cE '^[[:space:]]*(source|\.)[[:space:]]+[^#]*test-incident-sandbox\.sh' "$t" || true)"
+  [[ "${_f_hits:-0}" -gt 0 ]] || missing="${missing} $(basename "$t")"
 done
 rc=1; [ -z "$missing" ] && rc=0
 verdict "$rc" "every hook suite sources the sandbox helper${missing:+ (missing:$missing)}"
@@ -315,7 +361,7 @@ esac
 verdict "$rc" "with mktemp failing the helper aborts loudly instead of restoring the real sink"
 
 printf '\n'
-MIN_CASES=18
+MIN_CASES=19
 if [ "$CASES" -lt "$MIN_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$CASES" "$MIN_CASES" >&2; exit 1
 fi

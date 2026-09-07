@@ -131,12 +131,30 @@ assert "4: reserved synthetic prefixes accepted (te-, gdpr-gate-, cost-of-filing
 # added. Both sides now key on ONE regex, so one grep pins the whole contract (#7853).
 AGG="${REPO_ROOT}/scripts/rule-metrics-aggregate.sh"
 SHARED_PREFIX_RE='^(hr|wg|cq|rf|pdr|cm)-'
+# Anchored on the SELECTOR each side actually evaluates, and on COMMENT-STRIPPED text.
+#
+# The previous form was a bare `grep -qF` of the regex literal over the whole file. Measured: the
+# aggregator's real selector could be rewritten to `test("^(ZZZNEVER)-")` -- making the orphan gate
+# semantically DEAD -- and this case still reported the two sides in agreement, because the literal
+# survived in an explanatory comment two lines above. That is cq-assert-anchor-not-bare-token in the
+# assertion whose entire job is pinning the shared contract.
+#
+# The hook half is anchored on its `[[ "$r" =~ ... ]]` test and the aggregator half on the jq
+# `test(...)` call, so a comment can no longer satisfy either.
+# `grep -c`, never `grep -q`, on a pipe. Under `set -o pipefail` a `grep -q` closes the pipe on its
+# FIRST match, `sed` takes SIGPIPE (141), and the pipeline exits non-zero even though grep matched --
+# so the assertion reports the selector missing from a file that contains it. Measured here: the
+# aggregator half failed exactly that way while the hook half (smaller file, sed finishes first)
+# passed, which is the flake signature the repo documents.
+_strip_sh_comments() { sed 's/[[:space:]]*#.*$//' "$1"; }
 missing=""
-grep -qF "${SHARED_PREFIX_RE}" "${HOOK}" 2>/dev/null || missing="${missing} hook"
-grep -qF "${SHARED_PREFIX_RE}" "${AGG}"  2>/dev/null || missing="${missing} aggregator"
-assert "5: hook and aggregator share the section-prefix regex ${SHARED_PREFIX_RE} verbatim" \
+_hook_hits="$(_strip_sh_comments "${HOOK}" | grep -cE '=~[[:space:]]*\^\(hr\|wg\|cq\|rf\|pdr\|cm\)-' || true)"
+_agg_hits="$(_strip_sh_comments "${AGG}" | grep -cE 'test\("\^\(hr\|wg\|cq\|rf\|pdr\|cm\)-"\)' || true)"
+[[ "${_hook_hits:-0}" -gt 0 ]] || missing="${missing} hook"
+[[ "${_agg_hits:-0}" -gt 0 ]]  || missing="${missing} aggregator"
+assert "5: hook and aggregator both EVALUATE the section-prefix regex (comment-stripped, anchored on the selector)" \
   '[[ -z "${missing}" ]]' \
-  "the shared section-prefix regex is missing from:${missing} — the two sides can now disagree about what an orphan is"
+  "the section-prefix selector is missing from:${missing} — the two sides can now disagree about what an orphan is"
 
 # --- 5b. The aggregator carries NO per-prefix exemption stanzas --------------------
 # The nine `startswith()` exemption stanzas are what the shared regex replaced. Three
