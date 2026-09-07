@@ -16,6 +16,8 @@ Run: python3 -m unittest tests.scripts.test_lint_rule_bodies
 from __future__ import annotations
 
 import subprocess
+
+from tests.scripts._git_fixture_env import git_fixture_env
 import sys
 import tempfile
 import unittest
@@ -47,16 +49,24 @@ RULES = """# AGENTS Rules
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    # `-C <repo>` is NOT sufficient on its own: an inherited GIT_DIR overrides it, so this helper
+    # previously wrote into the developer's repository whenever the suite ran from a git hook
+    # (#7833). It had no `env` argument at all, i.e. total inheritance.
     return subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True, text=True, check=True,
+        env=git_fixture_env(repo),
     )
 
 
 def _run(repo: Path, *args: str) -> subprocess.CompletedProcess:
+    # Transitive spawn: the linter resolves refs with `git` itself, so `--root <repo>` is no more
+    # sufficient than `-C` was. An inherited GIT_DIR made it resolve the developer's repository,
+    # which surfaced as 18 assertions failing on a fail-closed "cannot resolve base ref" (#7833).
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--root", str(repo), *args],
         capture_output=True, text=True,
+        env=git_fixture_env(repo),
     )
 
 
