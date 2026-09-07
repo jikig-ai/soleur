@@ -13,6 +13,16 @@
 #
 # See #7833 (the process boundary this stands behind) and #7849 (this adoption).
 
+# Idempotent. A suite may reach this file twice -- directly, and again through test-helpers.sh,
+# which sources it since #7849. Without this the second source would abort on the `readonly`
+# re-declaration below, and the tripwire would print its DISARMED announcement twice. The tripwire
+# still fires on the FIRST source, which is the one that matters: it must run before the suite can
+# create anything.
+if [[ -n "${_SOLEUR_GIT_FIXTURE_ENV_SOURCED:-}" ]]; then
+  return 0 2>/dev/null || exit 0
+fi
+_SOLEUR_GIT_FIXTURE_ENV_SOURCED=1
+
 # --- Guard 3 (#7833): fail-loud git-location tripwire ------------------------------------------
 # A suite sourcing this file must not be running under an inherited git-location environment. In a
 # linked worktree git exports GIT_DIR/GIT_INDEX_FILE to every hook as ABSOLUTE paths, and they

@@ -55,8 +55,14 @@ py_list() {
       "$REPO_ROOT/tests/scripts/_git_fixture_env.py" | grep -oE '"GIT_[A-Z_]+"' | tr -d '"' | sort
 }
 shell_list() {
-  sed -n '/for _v in GIT_/,/; do/p' "$SCRIPT_DIR/test-helpers.sh" \
-    | grep -oE '\bGIT_[A-Z_]+\b' | sort -u
+  # Reads the ARRAY LITERAL in lib/git-fixture-env.sh, which since #7849 is the single shell
+  # definition -- the tripwire and the fixture-env builder both consume it, and test-helpers.sh
+  # sources that file rather than inlining a second copy.
+  #
+  # `grep -v` the declaration line: the array is NAMED GIT_LOCATION_VARS, so a bare GIT_ extraction
+  # counts the container as one of its own members and reports ten names for a nine-name list.
+  sed -n '/^readonly GIT_LOCATION_VARS=(/,/^)/p' "$SCRIPT_DIR/lib/git-fixture-env.sh" \
+    | grep -vE '^readonly ' | grep -oE '\bGIT_[A-Z_]+\b' | sort -u
 }
 guard_list() {
   sed -n '/^readonly REQUIRED_SCRUB_VARS=(/,/^)/p' \
@@ -96,14 +102,44 @@ cmp_set() {
   fi
 }
 cmp_set "python  _git_fixture_env.py" "$TS" "$PY"
-cmp_set "shell   test-helpers.sh"     "$TS" "$SH"
+cmp_set "shell   lib/git-fixture-env.sh" "$TS" "$SH"
 cmp_set "guard   REQUIRED_SCRUB_VARS" "$TS" "$GD"
 
 printf '\n=== the scrub sites remove everything the tripwire refuses ===\n'
 # The asymmetry that matters: a variable the tripwire REFUSES but a scrub does not REMOVE makes the
 # guard print a remedy that cannot clear it. Subset direction is the whole point — the scrub must
 # cover the detect set.
-for f in "$REPO_ROOT/lefthook.yml" "$REPO_ROOT/scripts/test-all.sh" "$REPO_ROOT/scripts/hooks/pre-push"; do
+# The entry points that invoke fixture-creating suites. `.github/scripts/test/run-all.sh` joined
+# them in #7849: it is a nested runner registered by test-all.sh, but it is also invoked directly by
+# the `guard-script-fixture-tests` job, so it needs its own scrub rather than inheriting one.
+#
+# The GitHub Actions workflows that match hook-git-env-coverage.test.sh's RUNNER_RE are deliberately
+# NOT in this list. Measured at work time: seven workflows match it. They are not entry points in
+# the sense this loop means -- a GitHub Actions step starts from a clean environment, so there is no
+# inherited git-location state for them to scrub, and requiring a literal `unset` in each would be
+# a seven-file mechanical diff buying nothing over the tripwire that already stands behind them.
+# The tripwire is the correct layer there: if that premise is ever wrong, it ABORTS and names the
+# workflow, which is exactly the signal that would tell us to add one.
+ENTRY_POINTS=(
+  "$REPO_ROOT/lefthook.yml"
+  "$REPO_ROOT/scripts/test-all.sh"
+  "$REPO_ROOT/scripts/hooks/pre-push"
+  "$REPO_ROOT/.github/scripts/test/run-all.sh"
+)
+# Floor the COUNT, not just each member. Every assertion below is inside the loop, so deleting an
+# entry point removes its assertions silently and the suite still reports a clean run -- the
+# cardinality is invisible to a per-member check by construction.
+MIN_ENTRY_POINTS=4
+if (( ${#ENTRY_POINTS[@]} >= MIN_ENTRY_POINTS )); then
+  ok "entry-point set carries ${#ENTRY_POINTS[@]} members (floor $MIN_ENTRY_POINTS)"
+else
+  bad "entry-point set shrank to ${#ENTRY_POINTS[@]} members, floor is $MIN_ENTRY_POINTS"
+fi
+for f in "${ENTRY_POINTS[@]}"; do
+  if [[ ! -f "$f" ]]; then
+    bad "entry point ${f#"$REPO_ROOT"/} does not exist"
+    continue
+  fi
   rel="${f#"$REPO_ROOT"/}"
   got="$(scrub_list "$f")"
   if [[ -z "$got" ]]; then
@@ -121,7 +157,7 @@ done
 printf '\n=== summary ===\n'
 printf '  %d passed, %d failed, %d assertions\n' "$PASS" "$FAIL" "$ASSERTIONS"
 
-MIN_ASSERTIONS=10
+MIN_ASSERTIONS=12
 if (( ASSERTIONS < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertions < %d\n' "$ASSERTIONS" "$MIN_ASSERTIONS" >&2; exit 1
 fi

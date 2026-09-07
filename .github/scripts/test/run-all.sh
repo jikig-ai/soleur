@@ -41,6 +41,22 @@
 # that one member died.
 set -uo pipefail
 
+# Entry-point git-location scrub (#7833 / #7849). This runner is an ENTRY POINT: it invokes fixture
+# suites that create git repositories, and under lefthook git exports GIT_DIR and GIT_INDEX_FILE as
+# ABSOLUTE paths that override both a subprocess working directory and `git -C`. A suite reached
+# from here would then initialise nothing and commit onto the caller live branch.
+#
+# The scrub belongs at the entry point rather than in each suite: the tripwire in
+# plugins/soleur/test/lib/git-fixture-env.sh deliberately ABORTS instead of scrubbing, so that a
+# missing scrub names the runner that lacked it rather than being silently absorbed.
+#
+# Kept in lockstep with the tripwire refuse-set by plugins/soleur/test/git-env-list-parity.test.sh,
+# which asserts that every entry point unsets everything the tripwire refuses.
+# ONE physical line, matching the other three entry points. The parity test extracts this with a
+# line-oriented grep, so a backslash continuation would hide every name after the break and the
+# guard would report a scrub gap that does not exist.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH
+
 DIR=$(cd "$(dirname "$0")" && pwd)
 FAIL=0
 RAN=0
