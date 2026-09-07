@@ -136,9 +136,13 @@ that, rather than for the feeling of having handled it.
   access investigation blocking and prior to remediation. Rotation would have
   destroyed the evidence. **Prevention:** for any remediation of a security
   incident, read the governing runbook before prescribing the action, not after.
-- **Asserted "both credentials are still live" across three artifacts** from the
-  issue's opening body without re-reading the thread that superseded it. Fully
-  documented in the corrected post-mortem and its addendum.
+- **Asserted "both credentials are still live" across three artifacts** from an
+  in-thread claim that was true when written and superseded four hours later in
+  the same thread. **Prevention:** a credential's liveness is a property of live
+  infrastructure, never of the issue reporting it — the only honest sources are a
+  probe or the rotation record, and the *latest* in-thread record beats the one
+  that reads most authoritative. Fully documented in the corrected post-mortem
+  and its addendum.
 - **Dropped the BEHIND auto-sync branch when re-arming a poll**, so the branch
   stalled until noticed manually. **Prevention:** when rewriting a working
   mechanism, diff the new one against the properties the old one had — the loss
