@@ -61,5 +61,5 @@ Then say so in the artifact. The brainstorm doc records all three triggers with 
 
 ## Related
 
-- `knowledge-base/project/brainstorms/2026-09-04-ccla-signing-mechanism-brainstorm.md` — "Three pre-committed triggers have fired"
+- `knowledge-base/project/brainstorms/archive/20260907-092511-2026-09-04-ccla-signing-mechanism-brainstorm.md` — "Three pre-committed triggers have fired"
 - `knowledge-base/project/learnings/2026-09-04-an-agent-will-confidently-restate-the-position-your-corpus-already-corrected.md` — the same session's verification learning

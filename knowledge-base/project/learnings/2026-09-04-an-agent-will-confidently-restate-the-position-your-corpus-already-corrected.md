@@ -100,7 +100,7 @@ A quoted string is the cheapest possible verification target: grep it. If it doe
 
 ## Related
 
-- `knowledge-base/project/brainstorms/2026-09-04-ccla-signing-mechanism-brainstorm.md` — the session
+- `knowledge-base/project/brainstorms/archive/20260907-092511-2026-09-04-ccla-signing-mechanism-brainstorm.md` — the session
 - `knowledge-base/legal/article-30-register.md` PA-7 §(e) — the governing cell
 - #7624 — the correction the agent reversed; #7670 — the still-open importer-identity vs byte-location divergence
 - #7832 — the roadmap lint blocker

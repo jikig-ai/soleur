@@ -20,7 +20,7 @@ re_evaluation_triggers:
   - "ANY PROPOSAL TO WRITE AN IDENTITY FIELD (name, title, email, postal address, signature image) INTO A TRACKED FILE. Section 1 below removes those fields from the schema permanently. A proposal to reinstate one is a re-opening of this ruling, not a schema change."
   - "RESOLUTION OF #7668 AS APPLIED TO THIS POPULATION. Whether indefinite retention of the employer-to-account association is proportionate under Art. 5(1)(e), on a surface from which it cannot be erased, is not decided here."
 related:
-  - knowledge-base/project/plans/2026-09-04-feat-ccla-signing-mechanism-plan.md
+  - knowledge-base/project/plans/archive/20260907-092511-2026-09-04-feat-ccla-signing-mechanism-plan.md
   - knowledge-base/legal/ccla-register.md
   - knowledge-base/legal/article-30-register.md
   - docs/legal/gdpr-policy.md

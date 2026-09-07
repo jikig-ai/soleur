@@ -2137,6 +2137,7 @@ merge-livelock
 merge-pr
 merge-queue
 merge-ref
+merge-strategy
 merge-time-timebomb
 merge-time-verification
 message

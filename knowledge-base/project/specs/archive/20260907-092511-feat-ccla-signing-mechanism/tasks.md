@@ -53,6 +53,7 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
   **BLOCKED ON 1.5 + 1.6, and gated by design.** `ccla-add.sh` REFUSES any account absent from the ICLA ledger
       (contribution-triggered entry), so the first roster row is not writable until their contributor has signed. Verified:
       the refusal path exits 4 and is mutation-proven.
+
 ## Phase 2 — Contracts, before any consumer
 
 - [x] 2.1. Create `apps/web-platform/scripts/cla-evidence/cla-doc-path.ts` (the discriminant module).
