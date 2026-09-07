@@ -12,7 +12,6 @@ generated-date: 2026-02-20
 
 **Corrected September 7, 2026 (#7786 / #6474).** This document previously stated that application logs had no off-host copy, and described on-host log retention as a fixed-size Docker json-file buffer. Both were inaccurate as statements about the platform as it runs today: the user-serving application container's logs at severity WARN and above have been shipped off-host to Better Stack Logs since 2026-06-02, and on-host retention is governed by journald, not by the Docker json-file driver. The affected passages have been corrected in place. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)*
 
-
 ## 1. Introduction
 
 This Privacy Policy describes how Jikigai ("we," "us," or "our"), operator of Soleur, handles information in connection with the Soleur Company-as-a-Service platform ("the Plugin"), a Claude Code plugin providing agents, skills, commands, and a knowledge base for structured software development workflows, the Soleur documentation website located at soleur.ai ("the Docs Site"), and the Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) ("the Web Platform").

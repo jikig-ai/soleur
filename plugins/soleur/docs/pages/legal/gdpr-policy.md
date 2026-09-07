@@ -23,7 +23,6 @@ permalink: legal/gdpr-policy/
 
 **Corrected September 7, 2026 (#7786 / #6474).** This document previously stated that application logs had no off-host copy, and described on-host log retention as a fixed-size Docker json-file buffer. Both were inaccurate as statements about the platform as it runs today: the user-serving application container's logs at severity WARN and above have been shipped off-host to Better Stack Logs since 2026-06-02, and on-host retention is governed by journald, not by the Docker json-file driver. The affected passages have been corrected in place. *(The `Last Updated` date above is deliberately unchanged: that line differs between this document and its published mirror for historical reasons tracked at #7465, and editing it would deepen that divergence rather than reduce it.)*
 
-
 ---
 
 ## 1. Introduction

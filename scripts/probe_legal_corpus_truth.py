@@ -39,11 +39,18 @@ CORRECTION_NOTE = re.compile(
     # retracts -- the house convention -- would otherwise red this blocking gate on a
     # corpus that is more honest than the one that passes. Bounded by the blank line, so
     # it cannot over-consume the way the unbounded span did.
-    r"\*\*(?:Corrected|Updated)\s+" + _DATE + r"[^\n]*(?:\n(?!\s*\n)[^\n]*)*"
+    # ANCHORED to line start (`^` + re.MULTILINE), which is load-bearing and was not
+    # obvious: "bounded by the blank line" is FALSE for this corpus, because these
+    # paragraphs are single physical lines (gdpr-policy.md's is ~5 kB). `[^\n]*` therefore
+    # runs to end-of-PARAGRAPH, PARAGRAPH_BREAK never fires, and a fake note inserted
+    # MID-LINE strips every FORBIDDEN literal after it -- reopening, through the arm added
+    # in this same PR, exactly the document-edit disarm _strip_correction_notes exists to
+    # close. All six real notes lead their line, so the anchor costs nothing.
+    r"^\*\*(?:Corrected|Updated)\s+" + _DATE + r"[^\n]*(?:\n(?!\s*\n)[^\n]*)*"
     r"|\*+\(?(?:Corrected|Updated)\s+" + _DATE + r"[^)*]*\)?\*+"      # inline note forms
     r"|\*\((?:Corrected|Updated)\s+" + _DATE + r".*?\)\*"            # spanning note form
     r"|\*\*\[" + _DATE + r"\s+CORRECTION\b.*?\]\*\*",             # register bracket form
-    re.S | re.IGNORECASE,
+    re.S | re.IGNORECASE | re.MULTILINE,
 )
 
 # EXECUTABLE, not prose. The list above shipped claiming five "measured shapes actually
