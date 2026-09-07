@@ -126,7 +126,7 @@ suppression means something different: **class (a)** (a false positive owned by 
 
 ---
 
-## Diagnostic constraints (network-outage gate)
+## Hypotheses
 
 The gate fired on `SSH`/`firewall`/`unreachable`/`handshake` and
 `hr-ssh-diagnosis-verify-firewall` telemetry was emitted. This plan edits the runbooks that
@@ -477,6 +477,15 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
    `lint-orphan-test-suites.sh` does not require a unit sibling) and names Phase 8.2 as the owner
    of the unit arm. Without this, P5 is bought by nothing: the probe is referenced today only by
    its own docstring and its wrapper's `exec`.
+3b. **Register it in `REQUIRED_RUNNERS`** — `scripts/lint-orphan-test-suites.sh`. Add
+   `"scripts/probe-legal-corpus-truth.sh"` to the array and raise its hand-ratcheted floor from
+   `< 6` to `< 7` in the same edit. **Without this the wiring is a one-line disarm:** deleting the
+   `run_suite` line from `test-all.sh` would silently un-gate the corpus with no signal anywhere.
+   That array's own comment records this exact failure being fixed for `lint-legal-registers.sh`
+   at #7717 — *"deleting its `run_suite … --advisory` line from test-all.sh was the cheapest
+   single-line disarm on the guard"*. Repeating it for a guard whose subject is a silently-false
+   published claim would reproduce the learning rather than discharge it. This is also what makes
+   Guard 2's mutation row 6 true; without the registration that row is GREEN.
 4. **Pre-author the waivers for this PR's own legal artifacts.** `/ship` Phase 5.5 mandates
    `knowledge-base/legal/audits/<YYYY-MM>-counsel-review-<issue>.md`, and Phase 4.5 adds a CLO
    attestation; both will quote Art. 4(12)/33(5) and match `lint-legal-registers.sh` predicate
@@ -638,6 +647,7 @@ Recorded by subject rather than label:
 ## Files to Edit
 
 **Lint + guards:** `scripts/lint-infra-no-human-steps.py`,
+`scripts/lint-orphan-test-suites.sh` (`REQUIRED_RUNNERS` + its floor),
 `scripts/lint-infra-no-human-steps.test.sh`, `scripts/probe_legal_corpus_truth.py`,
 `scripts/lint-legal-registers.sh` (two `NOT_TRANSCRIBED` waivers), `scripts/test-all.sh` (the
 `lint-legal-registers-live` line + its comment block; the new `probe-legal-corpus-truth-live` line).
@@ -669,10 +679,22 @@ and the three mirrors under `plugins/soleur/docs/pages/legal/`;
 ## Observability
 
 The Phase 2.9 trigger does not strictly fire (no file under `apps/*/server/`, `apps/*/src/`,
-`apps/*/infra/` or `plugins/*/scripts/`; no infrastructure introduced). The failure-mode table is
-supplied anyway because the deliverable includes three gates.
+`apps/*/infra/` or `plugins/*/scripts/`; no infrastructure introduced). The block is supplied in
+full anyway — the deliverable includes three gates, and deepen-plan Phase 4.7's own trigger
+(anything not exclusively `knowledge-base/`, `docs/` or `*.md`) does fire on the `scripts/*`,
+`.ts` and `.c4` edits.
 
 ```yaml
+liveness_signal:
+  what: "the `scripts/lint-legal-registers-live` and `scripts/probe-legal-corpus-truth-live` suites inside the `test-scripts` job — the two gates this PR promotes and wires"
+  cadence: "per push and per merge-queue entry"
+  alert_target: "the required `test` context on the PR; a red blocks merge"
+  configured_in: ".github/workflows/ci.yml job test-scripts (run: bash scripts/test-all.sh scripts); registrations in scripts/test-all.sh beside the #7387 legal-corpus gates"
+
+error_reporting:
+  destination: "GitHub Actions annotations — ::error::lint-legal-registers (rc 1 and rc 2), CORPUS-FALSE on stderr from the truth probe, and lint-infra-no-human-steps FAIL lines. No Sentry surface: these are build-time gates, not runtime code"
+  fail_loud: "non-zero rc from run_suite; suite_exit_class maps every non-zero, non-signal rc to failed, so an 'I cannot decide' (rc 2) already blocks today and keeps doing so after the promotion"
+
 failure_modes:
   - mode: "A retired false claim is reintroduced into the published legal corpus"
     detection: "scripts/probe_legal_corpus_truth.py FORBIDDEN arm over both surfaces x three documents, wired blocking in scripts/test-all.sh by Phase 5.3"
@@ -693,9 +715,13 @@ failure_modes:
     detection: "not covered — regions remain heading-agnostic after Phase 0"
     alert_route: "Phase 8.1; recorded as a known gap rather than claimed as covered"
 
+logs:
+  where: "GitHub Actions run logs for the test-scripts job — gh run view <id> --log --job <jobid>; no host logs are produced or consumed by this change"
+  retention: "90 days (GitHub Actions default log retention)"
+
 discoverability_test:
   command: "bash scripts/probe-legal-corpus-truth.sh"
-  expected_output: "CORPUS-OK"
+  expected_output: "CORPUS-OK, with a non-zero examined-document count printed beside it (the floor Phase 5.2 adds)"
 ```
 
 `bash` is on preflight Check 10's `PROBE_VERB_ALLOWLIST`; the wrapper exists because Check 10
@@ -984,7 +1010,7 @@ which is exactly the shape of an agent shell in a worktree.
   `knowledge-base/engineering/operations/runbooks/`** returns hits only where the figure is
   quoted inside a dated retraction. Scoping this to `article-30-register.md` alone would miss
   `recover-userid-from-pino-stdout.md`'s two descriptions (Phase 4.3),
-  `betterstack-log-query.md` (Phase 3.10) and the DPA template (Phase 3.5d). In particular the
+  `betterstack-log-query.md` (Phase 3.10) and the DPA template (Phase 3.5d) — both plan-internal step numbers. In particular the
   register no longer asserts the mechanism at **any of its three sites** — asserted on three
   content anchors (§(f)'s opening `pino stdout:` clause, §(f)'s
   `The **mechanism is the record**` sentence, and **§(b) limb (vi)**), not on an occurrence count.
@@ -1086,7 +1112,7 @@ agent, not an operator task (`hr-no-dashboard-eyeball-pull-data-yourself`;
 | Block-form ignore markers damage the runbook's markdown (paragraph split, list terminated) | Class (a) uses inline same-line markers; AC4's deletion-grep cannot see this class, so AC6 bounds the suppressed line count instead |
 | The published corpus gains a newly-false cross-reference | AC18b enumerates and verifies every pointer the edit touches — the class AC11/AC12's absence-greps structurally cannot catch |
 | Phase 0 changes suppression semantics corpus-wide | Heading-scoped; blast radius measured at zero (no such heading exists). AC3 diffs whole-corpus finding *sets*, so any unintended change surfaces |
-| Touching `admin-ip-drift.md` un-grandfathers three findings this PR is told not to fix | Class (a) region, explicitly labelled and #6806-owned; prose untouched; the coupling is written into #6806 by Phase 1.5 |
+| Touching `admin-ip-drift.md` un-grandfathers three findings this PR is told not to fix | Class (a) inline markers, explicitly labelled and #6806-owned; prose untouched; the coupling is written into #6806 by Phase 1.4 |
 | The class-(a) region rots after #6806 lands | AC8's comment on #6806 is the trigger. A note in the suppressed file is not one — `harvest-debt` cannot see `*.md` (Phase 8.5) |
 | A suppression region reads as concealment | Every region opens with a rationale naming class and owner; class (c) names a deferral issue, not "wontfix"; the sanctioned diagnostics use the heading, not a region |
 | The corrected corpus makes a live Art. 28(3) gap visible | Intended. #7529/#7825 stay OPEN with a 2026-11-13 re-evaluation; the PR body says so |

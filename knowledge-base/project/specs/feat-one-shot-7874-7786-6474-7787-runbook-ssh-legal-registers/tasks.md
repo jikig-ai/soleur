@@ -38,10 +38,10 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
       header.
 - [ ] 1.4 Wrap each `## Symptom` fence in a `lint-infra-ignore` region (block markers are safe
       around a fence), rationale on the start marker, class (b-transcript), owner #7874.
-- [ ] 1.5 Add three INLINE SAME-LINE markers for the class-(a) prose findings in
+- [ ] 1.5 Add three INLINE SAME-LINE markers (plan Phase 1.3) for the class-(a) prose findings in
       `admin-ip-drift.md`. Never one region. Rationale names #6806 + the same-PR removal
       instruction + why the marker exists (whole-file scan).
-- [ ] 1.6 Post the #6806 comment naming the three markers by file + content anchor and the
+- [ ] 1.6 Post the #6806 comment (plan Phase 1.4) naming the three markers by file + content anchor and the
       same-PR coupling. This is the removal trigger.
 
 ## Phase 2 — grok provisioning debt
@@ -68,7 +68,7 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
       untouched. Do NOT touch #7851's other two statements.
 - [ ] 3.7 Sweep `AC15 of PR #4293` → **#7529** at all four sites.
 - [ ] 3.8 Add a Better Stack row to DPD §4.2 (or repoint `gdpr-policy.md` §3.7).
-- [ ] 3.9 Correct `data-processing-agreement-template.md` Schedule 4 items 9/11/12 and §8.3.
+- [ ] 3.9 (plan Phase 3.5d) Correct `data-processing-agreement-template.md` Schedule 4 items 9/11/12 and §8.3.
 - [ ] 3.10 Correct `betterstack-log-query.md`'s "tracked as a follow-up infra task" bullet.
 - [ ] 3.11 Carry `[DRAFT — pending CLO/counsel review per #7786]` markers on edited clauses.
 - [ ] 3.12 Bump `Last Updated` in six places; refresh three `LEGAL_DOC_SHAS` literals; correct
@@ -97,10 +97,13 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
       `rolling Docker log buffer`).
 - [ ] 5.2 Promote `REQUIRED` to a list; add the affirmative Better Stack anchor so deletion
       cannot pass.
-- [ ] 5.3 Add the checked-count floor; print the count beside `CORPUS-OK`.
-- [ ] 5.4 Register `run_suite "scripts/probe-legal-corpus-truth-live"` in `scripts/test-all.sh`
+- [ ] 5.3 (plan Phase 5.2) Add the checked-count floor; print the count beside `CORPUS-OK`.
+- [ ] 5.4 (plan Phase 5.3) Register `run_suite "scripts/probe-legal-corpus-truth-live"` in `scripts/test-all.sh`
       with the deviation comment naming Phase 8.2 as the unit-arm owner.
-- [ ] 5.5 Pre-author the waiver + parity row for any `/ship` Phase 5.5 counsel-review file.
+- [ ] 5.4b (plan Phase 5.3b) Add `"scripts/probe-legal-corpus-truth.sh"` to `REQUIRED_RUNNERS`
+      in `scripts/lint-orphan-test-suites.sh` and raise its floor from `< 6` to `< 7`. Without
+      this the wiring is a one-line disarm and Guard 2 row 6 is GREEN.
+- [ ] 5.5 (plan Phase 5.4) Pre-author the waiver + parity row for any `/ship` Phase 5.5 counsel-review file.
 
 ## Phase 6 — the promotion (LAST, own terminal commit)
 
