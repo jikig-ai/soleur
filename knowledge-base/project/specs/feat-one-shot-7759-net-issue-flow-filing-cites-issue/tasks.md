@@ -96,12 +96,12 @@ never inside `$( )`.
 
 ## Phase 6 — Guard Contract execution
 
-- [ ] 6.1 Run the battery with **no** mutation applied and confirm GREEN before trusting any row.
-- [ ] 6.2 Mutation rows M1–M8 must each RED; for each, confirm the edit landed inside the
+- [x] 6.1 Run the battery with **no** mutation applied and confirm GREEN before trusting any row.
+- [x] 6.2 Mutation rows M1–M8 must each RED; for each, confirm the edit landed inside the
       `select`/derivation/`_emit_as` region rather than merely that the file changed.
-- [ ] 6.3 Harness rows H1–H3 must RED (H1 paired with an induced product defect; H3 **keeps** the floor
+- [x] 6.3 Harness rows H1–H3 must RED (H1 paired with an induced product defect; H3 **keeps** the floor
       at N and deletes a case); H4–H7 must PASS.
-- [ ] 6.4 Revert every mutation; confirm the suite returns to green.
+- [x] 6.4 Revert every mutation; confirm the suite returns to green.
 
 ## Phase 7 — Documentation
 

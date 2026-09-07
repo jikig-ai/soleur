@@ -1040,6 +1040,90 @@ else
   fail "R3 expected 'Net: +0'; got: $(tr '\n' '|' < "$WORK/out")"
 fi
 
+# --- R4 (M2): TWO declared filings, so a first-member-only check cannot pass --
+# A derivation that stops at the first member is an instance of the very class
+# this gate exists to catch. With one declared filing per fixture, truncating
+# the set to `.[0:1]` is INVISIBLE — measured: M2 survived the whole battery.
+PR_BODY_FILE="$WORK/body-r4"; export PR_BODY_FILE
+ISSUE_LIST_FILE="$WORK/issues-r4"; export ISSUE_LIST_FILE
+{
+  printf 'Files two, closes nothing.\n'
+  printf '\n'
+  printf 'Filed: #7720 #7721\n'
+} > "$PR_BODY_FILE"
+printf '%s\n' '[{"number":7720,"body":"cites #7652 only","createdAt":"2026-07-20T12:00:00Z","state":"OPEN"},{"number":7721,"body":"cites #7652 only","createdAt":"2026-07-20T12:00:00Z","state":"OPEN"}]' > "$ISSUE_LIST_FILE"
+run_gate
+cases=$((cases + 1))
+if grep -qE 'Filing:[[:space:]]*2' "$WORK/out"; then
+  pass "R4 BOTH declared filings are counted (a first-member-only check cannot pass)"
+else
+  fail "R4 expected 'Filing: 2'; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+cases=$((cases + 1))
+if grep -qE 'Attributed:.*#7720.*#7721' "$WORK/out"; then
+  pass "R4 both numbers appear on the Attributed: line"
+else
+  fail "R4 expected both #7720 and #7721 on Attributed:; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+
+# --- R5 (M8): a filed-then-CLOSED issue is STILL a filing ---------------------
+# THE ESCAPE ROW. Conjoining `state == "OPEN"` onto the declared disjunct
+# satisfies every other row in the matrix while violating the property — which
+# is precisely why `--state all` is a pinned query property. Every other fixture
+# here is OPEN, so without this case the conjunction is invisible.
+PR_BODY_FILE="$WORK/body-r5"; export PR_BODY_FILE
+ISSUE_LIST_FILE="$WORK/issues-r5"; export ISSUE_LIST_FILE
+{
+  printf 'Files one, which has since been closed.\n'
+  printf '\n'
+  printf 'Filed: #7730\n'
+} > "$PR_BODY_FILE"
+printf '%s\n' '[{"number":7730,"body":"cites #7652 only","createdAt":"2026-07-20T12:00:00Z","state":"CLOSED"}]' > "$ISSUE_LIST_FILE"
+run_gate
+cases=$((cases + 1))
+if grep -qE 'Filing:[[:space:]]*1' "$WORK/out"; then
+  pass "R5 a filed-then-CLOSED issue is still counted (--state all is load-bearing)"
+else
+  fail "R5 expected 'Filing: 1' for a CLOSED filing; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+
+# --- R6 (M7): the body-attribution emit uses its OWN rule id ------------------
+# POSITIVE ledger assertion by exact .rule_id. An absence-only check is green
+# under the mutation that reuses the shared `net-issue-flow` id, because the
+# emit is already conditional — measured: M7 survived. Mirrors the existing
+# attr/attr_neg pair for the exemption id.
+rm -f "$INC"
+PR_BODY_FILE="$WORK/body-r1"; export PR_BODY_FILE
+ISSUE_LIST_FILE="$WORK/issues-r1"; export ISSUE_LIST_FILE
+run_gate
+body_attr=0
+if [[ -r "$INC" ]]; then
+  body_attr="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-body-attributed")] | length' < "$INC" 2>/dev/null || echo 0)"
+fi
+cases=$((cases + 1))
+if [[ "$body_attr" -ge 1 ]]; then
+  pass "declared-arm firing emits its OWN rule_id (net-issue-flow-body-attributed)"
+else
+  fail "expected >=1 net-issue-flow-body-attributed row; got $body_attr"
+fi
+
+# Negative twin: a run where the declared arm did NOT fire must emit none, or
+# the assertion above passes on every invocation and proves nothing.
+rm -f "$INC"
+PR_BODY_FILE="$WORK/body1"; export PR_BODY_FILE
+ISSUE_LIST_FILE="$WORK/issues3"; export ISSUE_LIST_FILE
+run_gate
+body_attr_neg=0
+if [[ -r "$INC" ]]; then
+  body_attr_neg="$(jq -sr '[.[] | select(.rule_id == "net-issue-flow-body-attributed")] | length' < "$INC" 2>/dev/null || echo 0)"
+fi
+cases=$((cases + 1))
+if [[ "$body_attr_neg" -eq 0 ]]; then
+  pass "no body-attributed row when every filing cites the PR directly"
+else
+  fail "expected 0 net-issue-flow-body-attributed rows on the cites-PR path; got $body_attr_neg"
+fi
+
 printf '\n'
 
 # ---------------------------------------------------------------------------
@@ -1084,7 +1168,7 @@ fi
 # conservation check above: routing it through fail() puts the floor inside the
 # thing it is meant to police.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=97
+MIN_ASSERTIONS=102
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2
