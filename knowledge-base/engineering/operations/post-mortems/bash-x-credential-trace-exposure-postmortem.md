@@ -11,7 +11,9 @@ triggers:
   - operator ran a credential-carrying script under `bash -x` to debug a failing guard
 art_33_triggered: false
 art_34_triggered: false
-art_33_deadline: "n/a"
+art_33_deadline: "not due — 72h from the 2026-09-03T15:33:16Z awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. If the open evidentiary limb resolves to BREACH, a fresh 72h runs from awareness of THAT finding, not retroactively from this anchor."
+art_33_determination: "knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md"
+art_33_determination_status: "provisional — one open evidentiary limb (Sentry last-used + org audit log not yet pulled)"
 ---
 
 ## Actor key
@@ -152,15 +154,105 @@ remains exposed. No evidence of use by any third party.
 
 ### Customer Impact (by role)
 
-- Prospect: none.
-- Authenticated app user: none.
-- Legal-document signer: none.
-- Admin via Access: none.
-- Billing customer: none.
-- OAuth installation owner: none.
+Per-role impact is recorded below as **not established**, not as **nil**. The
+distinction is the point of this section: no measurement has been taken that
+could distinguish the two, and an earlier revision of this document asserted
+"No evidence of use by any third party" without one — the same
+claim-inherited-and-never-re-checked defect the Addendum corrects one level up.
 
-Infrastructure credentials only; no personal data reached the transcript, which
-is why Art. 33/34 are both `false`.
+- Prospect: no impact identified.
+- Authenticated app user: **not established.** See the Art. 4(12) determination below.
+- Legal-document signer: no impact identified.
+- Admin via Access: no impact identified.
+- Billing customer: no impact identified.
+- OAuth installation owner: no impact identified.
+
+### GDPR Art. 4(12) determination — supersedes the "no personal data reached the transcript" ground
+
+**The prior ground is withdrawn.** This document previously read: *"Infrastructure
+credentials only; no personal data reached the transcript, which is why
+Art. 33/34 are both `false`."* That answers the wrong question. Art. 4(12)
+reaches "unauthorised **access to** personal data", so the test is what an
+exposed credential **unlocks**, not what was rendered into the stream. The
+controller's own Art. 30 register says so about this exact credential: PA-8
+§(g) records that the Sentry API read path surfaces event
+**`message` / `breadcrumb` / `tag` / `user.*` values that the ingest-time
+key-name scrub (`sentry-scrub.ts`) does NOT remove**, and PA-8 §(c)(i) records
+that Sentry error messages and stack traces "may incidentally include
+`user_id`, request paths, request headers". The conclusion below is unchanged;
+the reasoning that reaches it is not.
+
+**Limb 1 — breach of security: SATISFIED.** A credential was rendered in
+cleartext into a stream not intended to carry it. The Art. 32(1)(b)
+confidentiality measure failed. This is conceded, not contested.
+
+**Limb 2 — leading to unauthorised access or disclosure: NOT ESTABLISHED.**
+The exposure channel was bounded to the operator's own session and the
+Anthropic agent context, which PA-8 §(g) already records as covered by the
+existing Anthropic DPA. The value was not committed, not posted to an issue,
+and not emitted in CI — the public-CI path named under §Where we got lucky is
+the counterfactual that did not occur. No unauthorised recipient of the
+credential is established, and therefore no unauthorised access to the personal
+data behind it.
+
+**Governing rule.** `knowledge-base/legal/statutory-response-catalog.md`
+§`breach-art33`, first-response checklist step 4, states for exactly this fact
+pattern — a leaked key whose actual use is unknown — that **"reachability alone
+does not start the Art. 33 clock."** The same rule is stated in
+`knowledge-base/engineering/operations/runbooks/breach-access-log-investigation.md`
+§When to run this. Reachability is the trigger for the investigation, not for
+the notification.
+
+**Art. 33(1) risk assessment, recorded in the alternative.** Type: loss of
+confidentiality of a *credential*; no confidentiality breach of the data itself
+established; integrity also engaged, the token carrying org read **and write**.
+Nature: PA-8 §(c)(i) categories; no special categories systematically. Ease of
+identification: **mixed** — helper-path and direct-capture identifiers are
+`userIdHash` (HMAC-SHA256 under a Doppler-held pepper not shared with the
+processor, Recital 26), but free-text message and breadcrumb content is not
+covered by a *key-name* scrub and can carry raw identifiers. Severity: on
+confidentiality, operational telemetry on a small operator-adjacent population;
+**on integrity, PA-8 §(b)(ii) makes Sentry the canonical Art. 33
+first-observed-at clock anchor, so an unauthorised write could corrupt the
+controller's own breach-evidence chain** — recorded here because this document
+previously recorded it nowhere. Volume: **not measured**; the 2026-05-16
+register row's figure of 10 operator-adjacent accounts belongs to a different
+window and is not reused. Likelihood of receipt by an unauthorised party: low
+— ~3-minute detection, no publication path engaged — but **asserted rather than
+measured**, and the Sentry window has not closed.
+
+**Determination: no Art. 33 notification duty, and no Art. 34 communication
+duty. PROVISIONAL, on one named open limb.** Art. 34 is assessed on its own
+facts and not inferred from Art. 33: it requires a **high** risk, a strictly
+higher bar not reached, with Art. 34(3)(a) squarely available on the identifier
+path. If the open limb resolves to BREACH, **Art. 34 is re-run, not inherited.**
+
+**The open limb.** The catalog and the runbook both make the access
+investigation **blocking and prior to remediation**; it has not been run. Until
+it is, the risk limb rests on an assertion. Recorded, not elided — see
+`knowledge-base/legal/breach-register.md`, which indexes this determination with
+the limb marked open.
+
+Canonical determination:
+`knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md`.
+All output is draft material; external counsel re-review is reserved for this
+record's frontmatter re-evaluation triggers.
+
+### Exposure recorded asymmetrically — the two halves are not one determination
+
+Recording both credentials under a single finding would assert a closed window
+over a credential that is still live, and would borrow one plane's scrub as
+mitigation for the other, when PA-8 §(g) expressly **contrasts** them.
+
+| | `BETTERSTACK_API_TOKEN_READONLY` | `SENTRY_AUTH_TOKEN` (`prd_terraform`) |
+|---|---|---|
+| Exposure window | **CLOSED** — leaked value revoked 2026-09-03T20:10Z (~4h40m) | **OPEN** — still live, re-verified 2026-09-07 (`GET /api/0/organizations/` → 200); ≥4 days |
+| Capability | read-only | org read **and write** — confidentiality *and* Art. 32(1)(b) integrity |
+| Scrub posture behind the token | Vector 3-stage `pii_scrub` + `userId` → `userIdHash` HMAC before egress (PA-8 §(c)(ii), §(g)) — **but not uniformly**: the 2026-08-12 UPDATE (#7440 / ADR-184) records that `soleur-registry` POSTs directly by `curl` on paths where those transforms do **not** run. That plane's conclusion rests on a topology-dependent Art. 4(1) finding flagged as a re-evaluation trigger, **not** on the scrub | **None on the read path.** PA-8 §(g) (#5495) records that this surface exposes `message`/`breadcrumb`/`tag`/`user.*` values the `sentry-scrub.ts` key-name scrub does NOT remove — stated there in express contrast to the Better Stack plane |
+| Art. 4(12) limb 2 | not established; window closed and compensating control in place | not established; **window open, no compensating control, investigation outstanding** |
+
+Only the Sentry half carries the open limb. Nothing in the Better Stack
+resolution is available as mitigation for it.
 
 ### Revenue Impact
 
@@ -203,7 +295,7 @@ review.
 
 | Issue | Action | Status |
 |---|---|---|
-| #7797 | Rotate `SENTRY_AUTH_TOKEN` in Doppler `soleur/prd_terraform`; verify the old token returns 401. Operator-only (credential-entry gate — established by a Playwright attempt reaching the login form at `sentry.io/settings/account/api/auth-tokens/`, per `hr-never-label-any-step-as-manual-without`; an API 403 is explicitly NOT operator-only evidence and the #7797 thread already retracted that inference). Better Stack was already rotated 2026-09-03. | open |
+| #7797 | **BLOCKING, and ordered.** (1) **Before deleting anything**, capture the `SENTRY_AUTH_TOKEN` **last-used timestamp** from `sentry.io/settings/account/api/auth-tokens/` under an authenticated session. `GET /api/0/api-tokens/` returning **403 under a bearer is expected** — Sentry blocks token-auth against the token-management surface; the reading is session-only, and it is the *same* trip the rotation already requires, so its marginal cost is zero. Deleting first destroys it. Capturing a *use* timestamp records no value, length or digest and is permitted by this document's header. Record that the 2026-09-07 liveness probe has **already overwritten** this scalar with a controller use, degrading the instrument. (2) Pull the **Sentry Org Audit Log** (`GET /api/0/organizations/{org}/audit-logs/`, 2026-09-03T15:30Z → present) under the still-live token — the right instrument for the **write/integrity** limb, and expressly **not** for the read limb, which it does not record. (3) Return one of the three verdicts in `runbooks/breach-access-log-investigation.md` §Step 4 — BREACH / CLEAN / **INCONCLUSIVE** — with the window requested, the window actually covered, per-source instrumentation status, and the verdict as one block per §Recording the outcome. (4) **Only then** rotate in Doppler `soleur/prd_terraform` and verify 401. Escalate to vendor support if (1)–(2) come back thin — precedent at the 2026-05-16 register row. Operator-only (credential-entry gate — established by a Playwright attempt reaching the login form, per `hr-never-label-any-step-as-manual-without`). Better Stack was already rotated 2026-09-03. | open |
 | #7842 | Build the complements the lint cannot reach: the PreToolUse hook for uncommitted `bash -c` and the CI `run:`-body form lint. | open |
 | #7843 | Sweep 61 scripts / 108 call sites from argv bearer tokens to `curl --config -`; a traced parent leaks a callee's argv even when the callee's own preamble is clean. | open |
 
