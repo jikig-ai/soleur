@@ -196,6 +196,12 @@ and `scripts/guard-vacuity-floor.test.sh` matched **zero** bodies. **None.**
   `[REPORT] [refs] refs/tags/<name> (tag) was created` line for a tag a *suite* wrote — one stray tag in their
   own repository, additive, removable with `git tag -d`. No commit, no branch, no working-tree change: HEAD,
   the tree, this worktree's branch, tag **moves** and tag **deletions** all stay FATAL.
+  **The bound above is only true while the tag's name is inert, and the first implementation did not enforce
+  that** (found at review, fixed before merge). `refs/tags/<n>` resolves ahead of `refs/heads/<n>`, so a
+  softened tag sharing a local branch's name silently captures every later `git log/diff/merge/push <n>` for
+  that branch. The guard now derives its shadow set from the measured `refs/heads/*` rather than from
+  worktree-checked-out branches only; before that narrowing, 18 of this machine's local branches — including
+  the operator's own `backup-pre-*` recovery branches — were shadowable at REPORT.
 - **If this lands broken (too noisy — i.e. if it is not fixed), the user experiences:** `[FATAL] A SUITE WROTE
   TO THE LIVE REPOSITORY` on a healthy repo roughly once per sibling release landing inside a ~15-minute
   battery, plus the FATAL branch's recovery next-action, on a repository that needs no recovery. By the third
@@ -776,7 +782,7 @@ Actions cron, ADR-033) is not applicable — the repo has 54 `cron-*` Inngest fu
 | `--no-tags` on a fetch whose downstream consumer needs tags. | Phase 3 requires per-site confirmation before the flag is added, with a declared exemption as the alternative. `run-migrations.sh:200` is the one to check first — it runs in the release path, not only the battery. |
 | Changing the detail string breaks an existing assertion. | AC2 + AC8. Arm 43's regex was checked against the new `… (tag) was moved` output at plan time: the literal `(tag)` supplies the trailing `tag` its pattern needs. |
 | `scripts/plugin-delivery-canary.test.sh` asserts on the canary's exact fetch invocation. | Its fetch-related assertions are about which *sha* was fetched (`net/pin` rows), not the flag list; Phase 5 re-runs that suite regardless. |
-| This is the third softening of this guard; a fourth would make the soft class the default. | Deferral filed with an explicit **trigger**, not open-ended (CPO condition 3), **and** the new ADR carries an exemption ledger so the fourth request is visibly the fourth. |
+| Repeat softening of this guard erodes it; enough exemptions make the soft class the default. | **Ordinal corrected at /work — this row said "the third softening" and that is not reproducible from history.** `git log -S'shared_store'` over the library returns exactly two commits, so #7795 is the **second decision event** and the **sixth softened cell**; [ADR-207](../../engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md) carries the ledger and the correction. Deferral filed with an explicit **trigger**, not open-ended (CPO condition 3), so the seventh cell is visibly the seventh. |
 | Reviewers read the archived #7652 residual as current precedent. | Phase 2b records the reversal at the new arm; the archived artifacts stay untouched as point-in-time records. |
 | **The softening's safety rests on an author set this plan does not close.** Under `shared_store` the classifier cannot distinguish a suite-authored tag from a fetched one, and known battery creators remain after Phase 3. | Stated without hedging in §Defense Relaxation Analysis, bounded by the three-part ceiling (CI strict, creation-cell only, nothing silent), and tracked as §Non-Goals issue 1 with an *immediate* trigger. This is the plan's single largest accepted risk and must not be described as closed. |
 | Plan v1 asserted three claims that review refuted (the graft "lands on the FATAL side"; "no in-battery path can create a tag"; the manifest-based deferral rationale). | All three withdrawn in place with the refutation recorded, rather than quietly edited — the same discipline the boundary file applies to its own comments. |

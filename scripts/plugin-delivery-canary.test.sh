@@ -1042,11 +1042,6 @@ rm -rf "$r" "$r2" "$r3"
 # Minimum-cardinality vacuity guard. If the fixture builder or the seam silently
 # stopped producing cases, every row above would vanish and this suite would
 # exit 0 having asserted nothing.
-# ---------------------------------------------------------------------------
-#
-# THE FLOOR DOES NOT ROUTE THROUGH `fail`, AND THAT IS THE WHOLE POINT.
-# It used to, and that put the detector inside the blast radius of the fault it
-# detects: `fail` increments `fails`, and the exit status below reads `fails`, so
 # --- #7795: the LIVE-REPO fetch must not auto-follow tags ------------------------------------
 # ANCHORED ON THE FETCH COMMAND, never on a bare `--no-tags` grep: the flag landing on any other
 # fetch in this file would satisfy a bare grep while this site kept writing refs/tags/** into the
@@ -1054,16 +1049,23 @@ rm -rf "$r" "$r2" "$r3"
 # fetch without the flag auto-follows tags — which `scripts/lib/repo-write-boundary.sh` classifies
 # as a suite writing to the repository, correctly and FATALly on any checkout with no sibling
 # worktree. Both counts are asserted, so ADDING a second unflagged live-repo fetch reddens this
-# too; a one-sided "the good line exists" check could not see that.
+# too; a one-sided "the good line exists" check could not see that. The flag pattern is
+# ORDER-INDEPENDENT: pinning `--no-tags --depth 1` in that sequence asserts SPELLING, and a
+# behaviour-preserving reorder would redden it (#7795 review).
 cases=$((cases + 1))
 _nt_all=$({ grep -cE 'git -C "\$root" fetch ' "$CANARY" || true; })
-_nt_ok=$({ grep -cE 'git -C "\$root" fetch --no-tags --depth 1 origin "\$sha"' "$CANARY" || true; })
+_nt_ok=$({ grep -cE 'git -C "\$root" fetch( --[a-z-]+( [0-9]+)?)* --no-tags( --[a-z-]+( [0-9]+)?)* origin "\$sha"' "$CANARY" || true; })
 if [[ "$_nt_all" == "1" && "$_nt_ok" == "1" ]]; then
   pass "the live-repo (\$root) fetch passes --no-tags, so a canary run cannot write refs/tags/**"
 else
   fail "live-repo fetch not --no-tags-scoped (live-repo fetch sites=$_nt_all, flagged=$_nt_ok; both must be 1)"
 fi
 
+# ---------------------------------------------------------------------------
+#
+# THE FLOOR DOES NOT ROUTE THROUGH `fail`, AND THAT IS THE WHOLE POINT.
+# It used to, and that put the detector inside the blast radius of the fault it
+# detects: `fail` increments `fails`, and the exit status below reads `fails`, so
 # neutering `fail` (redefining it, breaking its arithmetic, losing it to an editing
 # slip) silences every row above AND this floor, and the suite prints a total and
 # exits 0. A floor enforced through the suspect cannot witness the suspect. Report

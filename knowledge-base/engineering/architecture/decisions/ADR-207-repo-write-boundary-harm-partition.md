@@ -12,10 +12,13 @@ related_issues: [7553, 7652, 7702, 7795]
 - **Status:** Accepted
 - **Date:** 2026-09-07
 - **Issue:** [#7795](https://github.com/jikig-ai/soleur/issues/7795)
-- **Ordinal note:** re-derived across all **76** `origin/*` refs, not `origin/main` alone —
-  the corpus topped out at ADR-206 (ADR-205 and ADR-206 exist only on sibling branches, so
-  `origin/main` alone would have said 204 and collided twice). Re-derive again at ship: the
-  ref count moves, and this is exactly the kind of number that rots silently.
+- **Ordinal note:** re-derived across every `origin/*` ref, not `origin/main` alone — the corpus
+  topped out at ADR-206 (ADR-205 and ADR-206 exist only on sibling branches, so `origin/main`
+  alone would have said 204 and collided twice). The population is
+  `git for-each-ref refs/remotes/origin` (~75 at the time of writing, and moving); an earlier
+  revision of this line said "76 refs" without naming the command, and no reading reproduces it
+  — `refs/remotes/origin/*` is 42 and `git ls-remote --heads` is 73. Re-derive at ship, and cite
+  the command rather than the number.
 
 ## Context
 
@@ -24,11 +27,14 @@ the end — and classifies the delta. It exists because of #7553/#7652: a suite 
 `cd` fails, or whose `git -C` operand is empty, runs git in the caller's live repository.
 
 The classifier's design record lived only in comment blocks inside
-`scripts/lib/repo-write-boundary.sh`. A repo-wide grep of this directory for
-`repo-write-boundary`, `shared_store` or `shared ref store` returned **zero** hits before this
-file, so nothing indexed reached it — and #7795 is the point at which the partition acquired a
-second reviewer-visible exemption request. A contract that is about to be widened for the
-n-th time needs to say what n is.
+`scripts/lib/repo-write-boundary.sh`. No ADR described it: a grep of **this directory**
+(`knowledge-base/engineering/architecture/decisions/`) for `repo-write-boundary`, `shared_store`
+or `shared ref store` returned **zero** hits before this file. Scoped wider, the claim would be
+false and is not made — the same grep over `knowledge-base/` returns 6, one of them the
+non-archived, index-listed learning file this change also edits. What was missing was an
+architecture record, not every mention. #7795 is the point at which the partition acquired a
+second reviewer-visible exemption request, and a contract about to be widened for the n-th time
+needs to say what n is.
 
 ## Decision
 
@@ -60,10 +66,31 @@ class.
 
 ### 2. The measurement invariant
 
-**Every classification input is read from the BEFORE snapshot. None is re-derived at classify
-time.** In particular `elsewhere` — the set of branches checked out in another worktree, whose
-non-emptiness is the entire `shared_store` predicate — is read from the snapshot's `wt` family
-with `<none>` filtered out. There is deliberately **no** re-derivation fallback.
+**The `shared_store` predicate is read from the BEFORE snapshot and is never re-derived at
+classify time.** `elsewhere` — the set of branches checked out in another worktree, whose
+non-emptiness is the entire predicate — is read from the snapshot's `wt` family with `<none>`
+filtered out. There is deliberately **no** re-derivation fallback.
+
+**Stated exactly, because a stronger version of this sentence would be false.** An earlier
+revision of this ADR said "every classification input" is snapshot-read. It is not, and asserting
+a safety invariant the code does not hold is worse than not writing it down (review found this
+before merge). Three inputs are live git reads at classify time:
+
+| Input | Read | Direction it can be wrong |
+|---|---|---|
+| `elsewhere` / `shared_store` | BEFORE snapshot | — the anti-laundering guarantee, and it holds |
+| `bsha` (create vs move) | BEFORE snapshot | — holds |
+| `default_branch` | live (`refs/remotes/origin/HEAD`, else literal `main`) | can only be repointed to make the guard *stricter or laxer*; see below |
+| `own_short` | live (`git symbolic-ref HEAD`) | empties on a detached HEAD, so the conjunct self-disables |
+| `remote_names` | live (`git remote`) | can only ADD members to the FATAL set — strictly fail-closed |
+
+The shadow test itself is derived from the **measured** `refs/heads/*` of both snapshots, so the
+two live conjuncts above are now *fallbacks* for a ref absent from the measured set rather than
+the primary test — which is what keeps a mid-run `checkout --detach` or `origin/HEAD` repoint
+from opening the softened cell. That narrowing was made in response to review; before it, either
+write silently disabled a conjunct. The residual is recorded rather than closed: `own_branch`'s
+own FATAL arm (a different, pre-existing arm) still reads `git symbolic-ref` live, and predates
+this change.
 
 The reason is not tidiness. A suite that runs `git -C "" worktree add -b probe` mid-window
 would, under a re-deriving classifier, register its own branch as a sibling and thereby
@@ -126,13 +153,29 @@ tag *move* could not exceed. Cell 6 therefore carries four conjuncts: the short 
 contain `/`, must not equal the default branch, must not equal our own branch, and must not
 name a branch in `elsewhere`.
 
-Measured cost of the guard on this repo: **3054 tags, zero contain a `/`**, and none is named
-`main`, `master`, `HEAD` or `origin`. Real release tags are `v3.262.3` / `web-v0.261.4` shaped.
+The guard therefore tests **six** shadow classes, not the four an earlier revision carried: a
+name containing `/`; a bare hex string (which shadows an abbreviated object name); a name equal to
+**any local branch in the measured `refs/heads/*` set**; a name equal to a **remote** (shadowing
+`refs/remotes/<name>/HEAD`); and — as fallbacks for a ref absent from the measured set — the
+default branch and our own branch. The third and fourth were added at review: the first
+implementation tested only branches a *sibling worktree had checked out*, which on this repo left
+18 local branches (the operator's own `backup-pre-*` recovery branches among them) softenable
+while a same-named tag captured every later `git log/diff/merge/push`.
+
+Measured cost of the guard on this repo: of **~3.05k tags**, **zero contain a `/`** and none is
+named `main`, `master`, `HEAD` or `origin` (`git tag | grep -c '/'`, `git tag | grep -cxE
+'main|master|HEAD|origin'` — both 0). The absolute count is deliberately imprecise: it was 3054
+when this was drafted and 3056 at review, two days apart. Real release tags are `v3.262.3` /
+`web-v0.261.4` shaped.
 
 ## Consequences
 
-- **The soft class is now the majority of the refs partition.** Five of the refs dimension's six
-  reachable outcomes are `REPORT` under `shared_store`. That is the position, stated plainly.
+- **The soft class is now the majority of the refs partition.** Counting the `refs` dimension's
+  emission sites reachable under `shared_store`: **five REPORT and four FATAL** (the FATALs being
+  a deleted tag or own branch, a moved tag, a shadowing tag creation, and a moved own branch).
+  An earlier revision of this line said "five of six reachable outcomes", which reads as one
+  surviving FATAL; there are four. Understating the strict half of your own partition is the
+  error this section exists to avoid.
 - **The safety case rests on an author set that is NOT closed.** Under `shared_store` the
   classifier cannot distinguish a suite-authored tag from a fetched one — by construction, since
   it refuses to re-derive attribution after the window. #7795 removes two known battery-reachable
@@ -142,9 +185,12 @@ Measured cost of the guard on this repo: **3054 tags, zero contain a `/`**, and 
 - **The ceiling is CI.** `elsewhere` is empty on every single-worktree runner, so every ref event
   in CI remains `FATAL`. The relaxation exists only where attribution is genuinely impossible.
 
-## The next request is the fourth, and it should be refused
+## The next request is the seventh cell, and it should be refused
 
-A **seventh** softened cell — or a **third** decision event — should not be granted. When the
+A **seventh** softened cell — or a **third** decision event — should not be granted. (An earlier
+revision headed this section "the fourth", carrying forward the plan's ordinal that the ledger
+two sections above corrects. The heading is the enforcement sentence, so it has to agree with the
+count.) When the
 next dimension needs an exemption from `FATAL`, implement real per-suite attribution instead
 (sample the boundary per suite rather than twice per run), which makes the exemptions
 unnecessary rather than cheaper to grant. That work is tracked with an explicit trigger in the

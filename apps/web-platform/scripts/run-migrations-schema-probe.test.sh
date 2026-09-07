@@ -245,7 +245,7 @@ fi
 # while this site kept auto-following tags. Both counts are asserted, so a
 # second unflagged fetch reddens this as well.
 _nt_all=$({ grep -cE '^[[:space:]]*(if ! )?git fetch ' "$RUNNER" || true; })
-_nt_ok=$({ grep -cE '^if ! git fetch --quiet --no-tags origin main ' "$RUNNER" || true; })
+_nt_ok=$({ grep -cE '^if ! git fetch( --[a-z-]+)* --no-tags( --[a-z-]+)* origin main ' "$RUNNER" || true; })
 if [[ "$_nt_all" == "1" && "$_nt_ok" == "1" ]]; then
   pass "the origin/main refresh passes --no-tags (cannot write refs/tags/** into the live repo)"
 else
@@ -262,15 +262,12 @@ echo "Results: $PASS passed, $FAIL failed"
 # — including the #7795 one above, which is a single line of source-grep and
 # therefore the easiest to lose in an edit — reddens instead of shrinking
 # the suite silently.
-if [[ "$PASS" -lt 5 ]]; then
-  printf '\n[FATAL] vacuity guard: only %d assertion(s) passed; expected >= 5.\n' "$PASS" >&2
-  printf '        Either an arm was deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
-  exit 1
-fi
-
-# Every assertion records exactly one verdict.
+# Gated on assertions EXECUTED, not on PASS alone: keyed on PASS, one genuinely FAILING arm trips
+# this first and reports "an arm was deleted or short-circuited" for a real defect, which is the
+# wrong haystack to hand an operator (#7795 review). Deleted and failed are now distinguishable.
 if [[ $((PASS + FAIL)) -lt 5 ]]; then
-  printf '\n[FATAL] accounting: %d verdict(s) recorded, expected >= 5.\n' "$((PASS + FAIL))" >&2
+  printf '\n[FATAL] vacuity guard: only %d assertion(s) EXECUTED; expected >= 5.\n' "$((PASS + FAIL))" >&2
+  printf '        An arm was deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
   exit 1
 fi
 

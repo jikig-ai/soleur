@@ -41,6 +41,30 @@ fail() { echo "  FAIL: $1"; fails=$((fails + 1)); }
 # cannot do that (ADR-193).
 ck() { asserted=$((asserted + 1)); }
 
+# INSTRUMENT SELF-TEST (#7795 review). Both anti-vacuity backstops below key on `passes`, and the
+# edit a person silencing a red would actually make -- `fail() { echo "  PASS: $1"; passes=$((passes
+# + 1)); }` -- INFLATES that counter. Measured: with a real classifier defect present it reported
+# `52 passed, 0 failed`, exit 0, byte-identical to a clean run, while the control reported
+# `48 passed, 4 failed`, exit 1. Conservation did not see it either, because the verdict WAS
+# recorded, just to the wrong counter.
+#
+# So drive both helpers once and require each to move its OWN counter. Reported with `printf` +
+# `exit 1` rather than through `fail()`, for the same reason as the floor: a check dispatched
+# through the helper it backstops cannot witness that helper.
+# Output suppressed with a BRACE GROUP, never `$( )`: a command substitution runs in a subshell,
+# which would discard the very counter updates being measured -- this file's own defect class.
+_it_p=$passes; _it_f=$fails; _it_a=$asserted
+{ pass "instrument self-test"; fail "instrument self-test"; } >/dev/null
+if (( passes != _it_p + 1 || fails != _it_f + 1 )); then
+  printf '\n[FATAL] instrument self-test: pass()/fail() did not each move their OWN counter\n' >&2
+  printf '        (passes %d->%d, expected %d; fails %d->%d, expected %d).\n' \
+    "$_it_p" "$passes" "$((_it_p + 1))" "$_it_f" "$fails" "$((_it_f + 1))" >&2
+  printf '        A verdict helper that records the wrong outcome silences every arm below.\n' >&2
+  exit 1
+fi
+passes=$_it_p; fails=$_it_f; asserted=$_it_a
+unset _it_p _it_f _it_a
+
 [[ -f "$LIB" ]] || { echo "FATAL: missing $LIB" >&2; exit 2; }
 
 # A probe repository, standing in for "the caller's live repo". Every case operates on a FRESH
@@ -62,12 +86,16 @@ new_probe() { # new_probe <name> -> prints an absolute path
 # `classify_in()` already give the MEASUREMENT, extended to the fixture MUTATIONS that produce what
 # is measured. Without it the operator's global gitconfig leaks in: it forces signed/annotated tags
 # here (which is why arm 36 carries `-c tag.gpgSign=false` inline), and a machine with global commit
-# signing would break every arm below that creates a commit. Fixing it at the seam beats copying
-# `-c` flags into each arm.
+# signing would break the arms below that create a commit. Copying `-c` flags into each arm is the
+# alternative; this is one seam instead.
 #
-# Deliberately does NOT set `commit.gpgsign=false`: arm 4 writes exactly that key into the probe's
-# LOCAL config as its fixture, and a wrapper-level `-c` of the same key would make that arm vacuous.
-# `--local` config is untouched here on purpose.
+# SCOPE, stated because the first draft of this comment overclaimed it (#7795 review): `pgit` covers
+# the MUTATIONS the new arms make, not the fixture SEED. `new_probe` and `sibling_probe` still run
+# plain `git init` / `config` / `commit` / `worktree add` under the operator's global config, as they
+# did before this change. Widening them is a separate, whole-suite change: `new_probe` deliberately
+# does NOT pin `commit.gpgsign`, because arm 4 writes exactly that key as its fixture.
+#
+# `--local` config is untouched here on purpose (see the arm-4 note above).
 pgit() { env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git "$@"; }
 
 # A tag fixture that cannot CONTAIN the thing an arm looks for is not a test, so its failure is a
@@ -744,8 +772,15 @@ else
     called only:   $(LC_ALL=C comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$called") | tr '\n' ' ')"
 fi
 
-# --- Accounting. Emitted DIRECTLY, never through pass()/fail(): a conservation check routed
-# through the verdict helper it exists to police cannot report the fault that corrupted it.
+# --- Accounting, FIRST CHECKPOINT (arms 1-38 only). Emitted DIRECTLY, never through pass()/fail():
+# a conservation check routed through the verdict helper it exists to police cannot report the
+# fault that corrupted it.
+#
+# This runs HERE, mid-file, so it quantifies over the arms above it and no others. That was
+# invisible until #7795's review measured it: dropping arm 52's `ck` printed
+# `52 passed, 0 failed, 51 assertion(s)` and exited 0, while dropping an arm-38 `ck` exited 1.
+# The whole-suite checkpoint at the bottom is the one that covers arms 39-52; this one is kept
+# because a mid-file failure names a much smaller haystack.
 if [[ $((passes + fails)) -ne $asserted ]]; then
   printf '\n[FATAL] accounting: passes+fails (%d) != asserted (%d).\n' "$((passes + fails))" "$asserted" >&2
   if [[ $((passes + fails)) -lt $asserted ]]; then
@@ -897,7 +932,7 @@ require_tag "$p" v9.9.9 "the created-tag partition under a shared ref store"
 state "$p"; after="$STATE_OUT"
 verdict=$(classify_in "$p" "$before" "$after")
 n_rep=$({ grep -cE '^REPORT[[:space:]]+refs.*refs/tags/v9\.9\.9 \(tag\) was created$' <<<"$verdict" || true; })
-if [[ "$n_rep" == 1 ]] && ! grep -qE '^FATAL' <<<"$verdict"; then
+if [[ "$n_rep" == 1 ]] && ! grep -qE '^FATAL[[:space:]]+refs' <<<"$verdict"; then
   pass "with siblings present, a tag CREATE is REPORT and is NAMED (the fetched-release-tag shape)"
 else
   fail "tag create partition wrong (report_lines=$n_rep): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
@@ -983,42 +1018,64 @@ else
   fail "incident shape wrong (report_refs=$n_rep): '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-300)'"
 fi
 
-# --- 49. THE COLLISION GUARD: a created tag that SHADOWS a branch stays FATAL -------------------
+# --- 49. THE COLLISION GUARD: a created tag that SHADOWS an existing name stays FATAL ----------
 # A tag CREATION alone reaches move-grade harm without moving anything, because gitrevisions
-# resolves `refs/tags/<n>` AHEAD of `refs/heads/<n>` and `refs/remotes/<n>`. Verified live at plan
-# time: with a tag literally named `origin/main` planted, `git rev-parse origin/main` returns the
-# TAG (exit 0, warning only). `scripts/test-all.sh` and the `/work`, `/qa` and `/ship` gates all
-# scope against the bare name `origin/main...HEAD`, so softening such a creation would silently
-# rescope every later gate with the exit code unchanged.
+# resolves `refs/tags/<n>` AHEAD of `refs/heads/<n>`, `refs/remotes/<n>` and
+# `refs/remotes/<n>/HEAD`. Verified live: with a tag named `origin/main` planted and the real
+# remote-tracking ref untouched, `git rev-parse origin/main` returns the TAG (exit 0, warning
+# only). `scripts/test-all.sh` and the `/work`, `/qa` and `/ship` gates all scope against the bare
+# name `origin/main...HEAD`, so softening such a creation would silently rescope every later gate
+# with the exit code unchanged.
 #
-# All four conjuncts are exercised, one fixture each, so dropping any single one reddens this arm:
-# a `/` in the name; the default branch; our own branch; and a branch checked out in a sibling.
-ck
-c49=""
-_collide() { # _collide <probe-name> <checkout-branch|-> <tag-name> <label>
-  local n="$1" co="$2" t="$3" lbl="$4" d v
+# ONE ARM PER SHADOW CLASS, each fixture built so that ONLY its own conjunct can catch it —
+# otherwise dropping a conjunct still reds via a neighbour and the mutation row is a tautology.
+# The first draft of this arm collapsed all of these into a single `ck` over an `elsewhere`-only
+# test, which is why classes (c) and (d) were reachable at REPORT (#7795 review): `elsewhere`
+# holds branches a SIBLING WORKTREE has checked out, and the harm is shadowing ANY local branch.
+# Measured on this repo at the time: 54 local branches, 34 checked out, 18 shadowable names left
+# softenable — including the operator's own `backup-pre-*` recovery branches.
+_collide() { # _collide <probe> <checkout|-> <tag> <label> [extra-setup-fn]
+  local n="$1" co="$2" t="$3" lbl="$4" setup="${5-}" d v
+  ck
   if [[ "$co" == "-" ]]; then d=$(sibling_probe "$n") || exit 2
   else d=$(sibling_probe "$n" "$co") || exit 2; fi
+  [[ -n "$setup" ]] && "$setup" "$d"
   state "$d"; local b="$STATE_OUT"
   pgit -C "$d" tag "$t"
   require_tag "$d" "$t" "the collision guard ($lbl)"
   state "$d"; local a="$STATE_OUT"
   v=$(classify_in "$d" "$b" "$a")
-  grep -qE "^FATAL[[:space:]]+refs.*refs/tags/${t//./\\.}" <<<"$v" \
-    || c49="$c49 [$lbl not FATAL: $(printf '%s' "$v" | tr '\n' '|' | cut -c1-120)]"
-  if grep -qE "^REPORT[[:space:]]+refs.*refs/tags/${t//./\\.}" <<<"$v"; then
-    c49="$c49 [$lbl softened to REPORT]"
+  if grep -qE "^FATAL[[:space:]]+refs.*refs/tags/${t//./\\.}" <<<"$v" \
+     && ! grep -qE "^REPORT[[:space:]]+refs.*refs/tags/${t//./\\.}" <<<"$v"; then
+    pass "a created tag stays FATAL when its name $lbl"
+  else
+    fail "collision class '$lbl' not FATAL: $(printf '%s' "$v" | tr '\n' '|' | cut -c1-160)"
   fi
 }
-_collide tagcol1 -         'origin/main'    'contains a slash / shadows the remote-tracking ref'
-_collide tagcol2 feat-c2   'main'           'equals the default branch'
-_collide tagcol3 feat-c3   'feat-c3'        'equals our own checked-out branch'
-_collide tagcol4 feat-c4   'tagcol4-sibbr'  'equals a branch checked out in a sibling worktree'
-if [[ -z "$c49" ]]; then
-  pass "a created tag whose name shadows a branch or remote-tracking ref stays FATAL (all 4 conjuncts)"
-else
-  fail "collision guard incomplete:$c49"
-fi
+# (a) contains a slash — shadows refs/remotes/<remote>/<branch>. No local head is named this.
+_collide tagcol1 -       'origin/main' 'contains a slash (shadows the remote-tracking ref)'
+# (b) looks like an abbreviated object name — shadows that SHA prefix. Not a branch, not a remote.
+_collide tagcol2 -       'deadbeef'    'is a bare hex string (shadows an abbreviated object name)'
+# (c) equals a LOCAL BRANCH THAT NO WORKTREE HAS CHECKED OUT. This is the class an
+#     `elsewhere`-only guard admitted: `dormant-br` is absent from every `wt` row, so only the
+#     snapshot-derived head set catches it.
+_c49_dormant() { pgit -C "$1" branch dormant-br; }
+_collide tagcol3 feat-c3 'dormant-br'  'equals a local branch no worktree has checked out' _c49_dormant
+# (d) equals a REMOTE NAME — shadows `refs/remotes/origin/HEAD`. Not a branch, no slash, not hex.
+_c49_remote() { pgit -C "$1" remote add origin https://example.invalid/x.git; }
+_collide tagcol4 feat-c4 'origin'      'equals a remote name (shadows refs/remotes/<name>/HEAD)' _c49_remote
+# (e) equals the DEFAULT BRANCH when that branch has no local ref — the one case the snapshot head
+#     set cannot see, so it isolates the `$default_branch` fallback conjunct.
+_c49_nomain() { pgit -C "$1" branch -D main >/dev/null 2>&1 || true; }
+_collide tagcol5 feat-c5 'main'        'equals the default branch (which has no local ref here)' _c49_nomain
+# (f) equals a branch a SIBLING worktree has checked out — the original class, still covered.
+_collide tagcol6 feat-c6 'tagcol6-sibbr' 'equals a branch checked out in a sibling worktree'
+#
+# NOT isolated, and said so rather than implied: the `$own_short` conjunct is now reachable only
+# for an UNBORN branch (HEAD points at a branch with no commits, so no `refs/heads/` row exists to
+# derive). Every born branch — including our own — is in the snapshot head set, and on a detached
+# HEAD `own_short` is empty and the conjunct is inert. It is kept as a fallback, not as a class
+# with its own fixture.
 
 # --- 50. THE EXIT-CODE WIRING: REPORT changes no exit code, FATAL drives exit 1 -----------------
 # Every arm above asserts `repo_boundary_classify` STDOUT. Property P1 is about the RUN'S EXIT
@@ -1118,16 +1175,32 @@ fi
 state "$p"; after="$STATE_OUT"
 verdict=$(classify_in "$p" "$before" "$after")
 if grep -qE '^REPORT[[:space:]]+refs.*refs/tags/v9\.9\.7 \(tag\) was created$' <<<"$verdict" \
-   && ! grep -qE '^FATAL' <<<"$verdict"; then
+   && ! grep -qE '^FATAL[[:space:]]+refs' <<<"$verdict"; then
   pass "an ANNOTATED tag created under a sibling is REPORT too (the partition is object-type blind)"
 else
   fail "annotated-tag partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
 fi
 
-MIN_ASSERTIONS=52
-if [[ $passes -lt $MIN_ASSERTIONS ]]; then
-  echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
+# --- Accounting, WHOLE-SUITE checkpoint. The mid-file one above stops at arm 38.
+if [[ $((passes + fails)) -ne $asserted ]]; then
+  printf '\n[FATAL] accounting (whole suite): passes+fails (%d) != asserted (%d).\n' "$((passes + fails))" "$asserted" >&2
+  printf '  An arm was counted without recording a verdict, or recorded one without being counted.\n' >&2
   exit 1
+fi
+
+# ANTI-VACUITY FLOOR. Gated on assertions EXECUTED (passes + fails), not on `passes` alone.
+# Keyed on `passes`, a suite with four genuinely FAILING arms reported
+# "only 48 assertion(s) PASSED ... arms were deleted or neutered" (#7795 review) -- the first line
+# an operator reads, misattributing a real classifier defect to suite tampering. Worse, the same
+# counter is the one a neutered `fail()` INFLATES, so the floor moved in the wrong direction
+# exactly when it mattered; the instrument self-test at the top of this file is what catches that.
+MIN_ASSERTIONS=57
+if [[ $((passes + fails)) -lt $MIN_ASSERTIONS ]]; then
+  echo "[FAIL] only $((passes + fails)) assertion(s) EXECUTED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
+  exit 1
+fi
+if [[ $fails -gt 0 ]]; then
+  echo "[FAIL] ${fails} arm(s) FAILED (all ${MIN_ASSERTIONS}+ executed, so nothing was deleted — this is a real defect, not suite tampering)" >&2
 fi
 
 echo

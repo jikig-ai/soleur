@@ -302,6 +302,20 @@ _repo_boundary_default_branch() {
   printf 'main'
 }
 
+# Membership test over a newline-separated set. Pure bash on purpose: the call site decides
+# FATAL-vs-REPORT, and `grep` distinguishes "no match" (rc 1) from "could not read" (rc 2) and
+# "not installed" (rc 127) only by a status the `||` chain collapses -- so a grep failure there
+# fails OPEN toward the softer class, which is the one place in that arm an error was not
+# fail-closed (#7795 review). A `while read` over a herestring has no such failure mode.
+_repo_boundary_name_in() { # _repo_boundary_name_in <needle> <newline-separated haystack>
+  local needle="${1-}" line
+  [[ -n "$needle" ]] || return 1
+  while IFS= read -r line; do
+    [[ "$line" == "$needle" ]] && return 0
+  done <<<"${2-}"
+  return 1
+}
+
 # Branches checked out in a worktree OTHER than this one. A measured read of the ref store via
 # `git worktree list`, not a concurrency sniff — which is what disqualified the `${CI:-}` tier.
 _repo_boundary_branches_elsewhere() {
@@ -315,7 +329,10 @@ _repo_boundary_branches_elsewhere() {
   # lines away in `scripts/test-all.sh`; a library must not depend on one consumer's precondition,
   # and #7795 adds a second consumer of `shared_store`. `_repo_state` already routes a non-zero
   # return here to `wt: not-measured`, which withholds the softening entirely.
-  here="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  # `&& [[ -n "$here" ]]` as well as the rc: a zero exit with EMPTY stdout reaches the identical
+  # fail-open the paragraph above describes, and `_repo_state`'s own head read already guards its
+  # value rather than only its status.
+  here="$(git rev-parse --show-toplevel 2>/dev/null)" && [[ -n "$here" ]] || return 1
   git worktree list --porcelain 2>/dev/null | {
     path_=""
     while IFS= read -r line; do
@@ -464,6 +481,7 @@ repo_boundary_classify() {
   # --- refs: per ref, by harm -------------------------------------------------------------------
   if [[ " $unmeasurable " != *" refs "* ]]; then
     local brefs arefs ref name bsha asha tag_short shared_store=""
+    local head_names="" remote_names="" _hl
     # ATTRIBUTION, not severity, is what the class turns on here. Every ref except our own lives in
     # the SHARED bare repo that all linked worktrees write to, so when sibling worktrees exist a
     # non-own ref delta has no attributable author: `git fetch` in any sibling moves
@@ -493,6 +511,26 @@ repo_boundary_classify() {
     [[ -n "$elsewhere" ]] && shared_store=1
     brefs="$({ grep "^refs"$'\t' <<<"$before" || true; } | sed 's/^refs\t//')"
     arefs="$({ grep "^refs"$'\t' <<<"$after"  || true; } | sed 's/^refs\t//')"
+
+    # The set a created tag can SHADOW, derived from the measured refs themselves rather than
+    # from `elsewhere` (#7795 review). gitrevisions resolves `refs/tags/<n>` ahead of
+    # `refs/heads/<n>`, so ANY local branch is shadowable -- not merely one a sibling worktree
+    # happens to have checked out. Measured on this repo at review time: 54 local branches, 34
+    # checked out somewhere, so an `elsewhere`-only test left 18 names (`backup-pre-reword-*`,
+    # the operator's own recovery branches) softenable while a tag of the same name silently
+    # captured every later `git log/diff/merge/push <name>`.
+    #
+    # Unioned across BOTH snapshots so a branch created or deleted mid-window cannot open a gap
+    # in either direction, and built in pure bash: an external command here could fail, and a
+    # failed derivation would shrink the shadow set, i.e. fail OPEN toward REPORT.
+    while IFS= read -r _hl; do
+      case "$_hl" in *' refs/heads/'*) head_names+="${_hl#* refs/heads/}"$'\n' ;; esac
+    done <<<"$brefs"$'\n'"$arefs"
+    # Remote NAMES, for the `refs/remotes/<name>/HEAD` rule: a tag named `origin` shadows
+    # `origin` itself. Read live, which is safe here in a way it is not for `elsewhere`: this
+    # input can only ADD members to the FATAL set, so a mid-run write can make the guard
+    # stricter and never laxer -- the opposite direction to the laundering `elsewhere` prevents.
+    remote_names="$(git remote 2>/dev/null || true)"
     if [[ "$brefs" != "$arefs" ]]; then
       # Field-exact throughout. A substring compare on " $name" matches ` refs/heads/foo` inside
       # ` refs/heads/foo/bar`; git's D/F rule makes that pair impossible among heads today, but a
@@ -586,12 +624,14 @@ repo_boundary_classify() {
               # This is every CI runner, and it is the path that gates merges.
               printf 'FATAL\trefs\t%s (tag) was created\n' "$name"
             elif [[ "$tag_short" == */* ]] \
+              || [[ "$tag_short" =~ ^[0-9a-fA-F]{4,}$ ]] \
               || [[ "$tag_short" == "$default_branch" ]] \
               || { [[ -n "$own_short" ]] && [[ "$tag_short" == "$own_short" ]]; } \
-              || grep -qxF -- "refs/heads/$tag_short" <<<"$elsewhere"; then
-              printf 'FATAL\trefs\t%s (tag) was created, and its short name shadows a branch or remote-tracking ref that git resolves ahead of it\n' "$name"
+              || _repo_boundary_name_in "$tag_short" "$head_names" \
+              || _repo_boundary_name_in "$tag_short" "$remote_names"; then
+              printf 'FATAL\trefs\t%s (tag) was created with a name that already means something else here; git resolves the TAG first, so `git log/diff/push %s` would silently follow it. Remove it with `git tag -d %s`\n' "$name" "$tag_short" "$tag_short"
             else
-              printf 'REPORT\trefs\tsibling worktrees share this ref store (the fetched-release-tag shape): %s (tag) was created\n' "$name"
+              printf 'REPORT\trefs\t%s (tag) was created\n' "$name"
             fi ;;
           "$own_branch")
             printf 'FATAL\trefs\t%s is this worktree'"'"'s checked-out branch and it moved\n' "$name" ;;
