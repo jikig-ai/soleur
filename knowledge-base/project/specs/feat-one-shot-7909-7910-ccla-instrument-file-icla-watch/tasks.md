@@ -6,8 +6,12 @@ Closes #7909 and #7910. Open questions for the CLO are in
 [`decision-challenges.md`](./decision-challenges.md).
 
 Read the plan's `## Guard Contract` before writing any guard — the mutation matrices are the
-specification and were written before the code by design. Read §"What plan review changed" before
-writing any epoch code: five of those nine items are measurements that falsified an earlier draft.
+specification and were written before the code by design. Read §"What plan review changed" AND
+§"Deepen-Plan Findings" before writing any probe code: between them, **nine claims this plan made
+were falsified by measurement**, including a fail-open in its own prototyped predicate that returned
+PASS on an unreadable coverage map. The Deepen-Plan Findings table carries a BLOCKER and seven HIGH
+items that are still to be applied — work them before Phase 1, because two of them change the
+shape of the deliverable.
 
 ## Phase 0 — Preconditions (no edits)
 
@@ -27,7 +31,15 @@ writing any epoch code: five of those nine items are measurements that falsified
       here.
 - [ ] 0.7 Confirm `sha256sum`, `jq`, `git`, `realpath`, `timeout` on PATH and
       `apps/web-platform/node_modules/.bin/tsx` present.
-- [ ] 0.8 Read `apps/cla-evidence/scripts/ccla-add.sh` end to end before editing it.
+- [ ] 0.9 **Work the `## Deepen-Plan Findings` table.** Its BLOCKER (no correction path exists for a
+      wrong `executed_instrument_sha256` on an unerasable public record) must be decided while
+      `organizations` is `[]` and the schema change is free. Its seven HIGH items change the shape
+      of Phase 5.3 (the register relation is asymmetric, not parity), add a `record_ref` integrity
+      prerequisite, and put two one-line hardening fixes in `sweep-followthroughs.sh` that protect
+      all 78 probes.
+- [ ] 0.10 Measure whether the probe's `git fetch` still succeeds with
+      `persist-credentials: false` before deciding that half of Phase 5.1.
+- [ ] 0.11 Read `apps/cla-evidence/scripts/ccla-add.sh` end to end before editing it.
 
 ## Phase 1 — RED: `--instrument-file` test arms
 
@@ -86,11 +98,15 @@ writing any epoch code: five of those nine items are measurements that falsified
       `--format='%H %cI'`, status checked before `tail`, and an **explicit emptiness check**;
       control B (parent exists, parent lacks the anchor — remembering `grep -c` exits 1 on zero,
       which is the success case); the ledger fetch `--no-tags` **without** `--depth=1`; ledger and
-      roster shape assertions; the `jq` predicate including the `removed_at == null` term;
+      roster shape assertions; the **materialised, status-checked** roster read — NEVER a process
+      substitution, whose exit status is invisible and which returned PASS on an unreadable roster
+      (reproduced: `count=1 rc=0`); malformedness as a COUNTED predicate, never a caught exception
+      (jq's error text carries the offending value and that text is published); "covered" as live
+      OR withdrawn; **no exit 0 on any path** (the probe reports, it does not close);
       integer epoch comparison refusing on parse failure; every external command's stderr
       suppressed and replaced by a probe-authored line; every network call inside `timeout 30`;
       one `CANNOT ESTABLISH: <reason>` shape with an addressee tag; the checked count in the
-      `NOT YET` line.
+      `REPORT` line.
 - [ ] 4.3 Run `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main`
       and add the xtrace block if and only if the lint asks for it.
 - [ ] 4.4 `chmod +x` **both** the probe and the companion suite; confirm both git INDEX modes are

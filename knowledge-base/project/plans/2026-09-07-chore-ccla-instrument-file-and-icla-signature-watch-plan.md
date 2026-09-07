@@ -13,6 +13,50 @@ requires_cpo_signoff: false
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened:** 2026-09-07. **Panels:** six plan-review agents (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, CTO-devex) then seven deepen passes
+(verify-the-negative, security-sentinel, test-design-reviewer, observability-coverage-reviewer,
+git-history-analyzer, user-impact-reviewer, data-integrity-guardian). All deepen-plan halt gates
+(4.5 scoped out, 4.6, 4.7, 4.8, 4.9, 4.10, 4.11) pass.
+
+**Nine claims this plan made were falsified by measurement and corrected here**, which is the
+deepening that mattered:
+
+1. The probe's own prototyped `jq` predicate **returned PASS on an unreadable coverage map**
+   (`count=1 rc=0`, reproduced) — a process substitution's exit status is invisible, so a broken
+   roster and an empty roster were byte-identical. It would have auto-closed the tracker
+   permanently while telling the operator the opposite of the truth.
+2. **The probe could never legitimately take exit 0.** The epoch is today and this repo requires
+   contributors to sign, so the first unrelated signer latches PASS forever. The probe is now
+   notify-only.
+3. The parity arm was **vacuous against the live repo** (one anchor match ⇒ `--first-parent` is a
+   no-op, `head == tail`) and **unrunnable on its own shard** (`ci.yml` checks out `test-webplat`
+   shallow). It now runs over a family of synthetic fixtures.
+4. The count form removed *direct* naming and left **derivable** naming intact — a dated public
+   transition next to an organisation's name joins against a public git-versioned ledger. The
+   tracker now names no counterparty.
+5. `sla_business_days` reaches Guard B only; **Guard C's 30-day close-as-`not planned` is
+   hardcoded**, so the first draft's resolution did not resolve the finding it named.
+6. Two Guard 2 mutation rows were **unbuildable or miscoded**, and the `--` drift vector was
+   covered by no fixture while `-S`→`-G` was uncoverable in principle.
+7. `discoverability_test.expected_output` was **satisfied by both branches**, so it asserted
+   nothing.
+8. "The probe binds no credential" is false on the runner — `actions/checkout` persists a token
+   into `.git/config` that `env -i` does not remove.
+9. `--no-tags` is not the fetch's bound; `FETCH_HEAD`, `gc --auto` and submodule recursion all
+   write into the shared common dir.
+
+**Also measured and folded in:** this worktree is *already* shallow from a prior `ccla-add.sh`
+fetch (which is why the `--is-shallow-repository` control was cut — it would have false-positived
+on a machine where the derivation works); `git clone --depth=1` silently ignores `--depth` on a
+local path; `date -u -d ""` returns today rather than erroring.
+
+**Larger than this PR, recorded not lost:** see `## Deepen-Plan Findings`, whose blocker is that
+no correction path exists for a wrong hash on an unerasable public record — a decision that is free
+today and a schema migration after the first row.
+
 ## Overview
 
 Two changes on the same surface — the Corporate CLA recording path — shipped together because
@@ -67,7 +111,7 @@ exists for this branch, so the domain fan-out is not narrowed.
 | **this worktree is already shallow** | `git rev-parse --is-shallow-repository` → `true`; `.git/shallow` (41 bytes) exists in the **common dir** and equals `origin/cla-signatures` — written by a prior `ccla-add.sh` ledger fetch |
 | **a second monitor polls the same label set** | `apps/web-platform/server/inngest/functions/cron-follow-through-monitor.ts` — `sla_business_days` default 5 (public "manual intervention required" comment), and Guard C closes as `not planned` at **30 business days** |
 | open `follow-through` issues | **51**, against the sweeper's hard `--limit 50` |
-| remote tags | `git ls-remote --tags origin \| wc -l` → **3084** (the "157 tags" figure in `ccla-add.test.sh:54` is stale; the conclusion `--no-tags` is unchanged) |
+| remote tags | `git ls-remote --tags origin \| wc -l` → **over 3,000** (a drifting count — measured twice minutes apart at 3084 and 3085; the "157 tags" figure at `ccla-add.test.sh:54` is stale by more than an order of magnitude, and the conclusion `--no-tags` is unchanged and strengthened) |
 
 **Mechanism-vs-ADR check.** The ADR corpus has one hit for `coverage map` / `ccla` /
 `Corporate CLA`: ADR-201, which *is* the decision both changes sit inside. Neither reverses or
@@ -81,11 +125,11 @@ extends it.
 | P2 | `--instrument-sha256` continues to work for the hash-only case. |
 | P3 | Missing, empty, not-a-regular-file and unreadable are each refused with a message naming which fault it is. |
 | P4 | The two flags cannot both take effect in one invocation. |
-| P5 | The operator is told, without asking, when an ICLA signature exists that satisfies the temporal gate and that no roster row covers. |
+| P5 | The operator is told, without asking, how many ICLA signatures satisfy the temporal gate and are unknown to the coverage map. The probe reports; it does not close. |
 | P6 | "Measured, not yet" reads differently from "could not measure", in both message and exit code. |
 | P7 | The epoch the watch uses is the same moment the merge gate uses, and is never hardcoded. |
 | P8 | The watch creates no tags and no local branches in the repository it reads, and leaves no repository-wide state change behind. |
-| P9 | No surface this plan creates publishes an association between a named GitHub account and a corporate designation. |
+| P9 | No surface this plan creates publishes — or lets a reader **derive** — an association between a named GitHub account and a corporate designation. Derivability is the operative half: the ledger it measures is public and git-versioned, so a dated public transition next to an organisation's name is a join, not a hint. |
 | P10 | The bytes hashed are the executed instrument as received on the encrypted operator drive, not a copy inside the repository. |
 | P11 | The `Instrument hash` in `knowledge-base/legal/ccla-register.md` and the `executed_instrument_sha256` in the roster cannot silently diverge. |
 
@@ -221,29 +265,99 @@ Five hazards this shape avoids, each from a named finding:
 
 ### The probe
 
-**The predicate, prototyped against live data before it was written here:**
+**The predicate — and the fail-open the first draft shipped.** The prototype in the first draft
+sourced the roster id set through a **process substitution**:
 
 ```bash
-epoch_s=$(date -u -d "$EPOCH" +%s)
-count=$(jq --argjson epoch "$epoch_s" \
-   --slurpfile r <(jq '[.organizations[]?.representatives[]?
-                        | select(.removed_at == null) | .id]' "$ROSTER") '
-  [ .signedContributors[]
-    | select((.created_at // "") != "")
-    | select((.created_at | fromdateiso8601) >= $epoch)
-    | select((.id as $i | $r[0] | index($i)) == null)
-  ] | length' "$LEDGER")
+--slurpfile r <(jq '[.organizations[]?...]' "$ROSTER")   # WRONG — DO NOT IMPLEMENT
 ```
 
-Run against the real ledger, roster and epoch it returns **0** — the correct answer today.
-`removed_at == null` is load-bearing: a *withdrawn* designation must not mask a new signature.
+A process substitution's exit status is invisible to both `set -e` and `pipefail`. If that inner
+`jq` fails — roster missing, truncated, an HTML error page, `.organizations` not an array — it
+writes nothing, `$r` binds to `[]`, `$r[0]` is `null`, and `null | index($i)` is `null` rather than
+an error, so **every ledger entry reads as uncovered**. Reproduced against a malformed roster and a
+single post-epoch ledger entry:
 
-**Exit contract** (`0` PASS, `2` measured-not-yet, `3` could-not-measure, `1` never used and
-the header says why — it is also the sweeper's reopen trigger on a closed issue). The 2/3 split
-costs one integer and buys the only unexpanded signal the operator sees:
+```
+count=1 rc=0      # -> exit 0 -> PASS -> the sweeper posts PASS and CLOSES the tracker
+```
+
+and `closed_precheck` then refuses to re-litigate an issue carrying the sweeper's own PASS block,
+so the watch is **permanently dead** while the operator has been told the opposite of the truth on
+the only channel that exists. Worse, it is invisible in the output: the legitimate empty roster
+(today's live state) also yields `[]`, so a broken roster and an empty roster are byte-identical in
+the count.
+
+**The form to implement** materialises every operand, checks its status, and asserts its shape —
+the same discipline `ccla-add.sh:222-229` already applies to the ledger:
+
+```bash
+roster_ids=$(jq -c '[.organizations[]?.representatives[]?
+                     | select(.removed_at == null) | .id]' "$ROSTER" 2>/dev/null) \
+  || cannot_establish "the coverage map at $ROSTER is not readable as JSON" 3
+[[ "$roster_ids" == \[* ]] || cannot_establish "the coverage map did not yield an id array" 3
+
+# Malformedness is a COUNTED PREDICATE, never a caught exception: `fromdateiso8601` on a bad
+# value puts that value in jq's error message, and that message is published verbatim.
+read -r n_bad n_hits < <(jq -r --argjson epoch "$epoch_s" --argjson r "$roster_ids" '
+  ([ .signedContributors[]
+     | select((.created_at | type) != "string"
+              or (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$") | not)) ]
+   | length) as $bad
+  | ([ .signedContributors[]
+       | select((.created_at | type) == "string")
+       | select(.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+       | select((.created_at | fromdateiso8601) >= $epoch)
+       | select(($r | index(.id)) == null) ]
+     | length) as $hits
+  | "\($bad) \($hits)"' "$LEDGER" 2>/dev/null) \
+  || cannot_establish "the ICLA signature ledger is UNUSABLE — this is NOT a finding about any account" 3
+(( n_bad == 0 )) || cannot_establish "$n_bad ledger entr(ies) carry no parseable created_at" 3
+```
+
+`$r`, not `$r[0]`. The malformed count is reported as a **number**, never as the offending value —
+which is what makes FR15 hold by construction rather than by suppressing a message the
+implementer will be tempted to keep. Run against the real ledger, roster and epoch the hit count is
+**0**, the correct answer today; it becomes >= 1 the moment a post-epoch signature exists that no
+live roster row covers. `removed_at == null` is load-bearing: a *withdrawn* designation must not
+mask a new signature.
+
+**Exit contract — the probe is NOTIFY-ONLY and never takes exit 0.**
+
+```
+0   (never)    exit 0 is the sweeper's CLOSE verb, and this probe cannot establish the fact that
+               would justify closing — see below
+1   (never)    exit 1 is the sweeper's FAIL verb AND its reopen trigger on a closed issue
+2   REPORT     the measurement was made; the line carries the count
+3   CANNOT     the measurement could not be made
+```
+
+**Why exit 0 is refused, measured.** The epoch is *today*, and this repository requires
+contributors to sign the ICLA, so **every future signature by anyone is post-epoch by
+construction**. The first unrelated contributor to sign satisfies "a post-epoch signature no roster
+row covers" — and the condition never clears, because that person is not a corporate representative
+and never will be. So exit 0 would fire, the sweeper would post PASS and close, `closed_precheck`
+would then refuse to re-litigate an issue carrying the sweeper's own PASS block, and a reopened
+tracker would be re-closed on the next sweep. DC-2's price ("the operator reads one comment and
+reopens") is not a one-time cost — it is a daily manual loop for the whole remaining wait, and it
+reaches the same terminal outcome the `## User-Brand Impact` section names (the CCLA is never
+recorded) by the opposite route from the one that section enumerates.
+
+The same latch is reachable a second way: a representative withdrawn under `remove` and never
+re-added is post-epoch and permanently not-live, so their id sits in the count forever. **"Covered"
+is therefore narrowed to *known to the roster at all* — live OR withdrawn** — which removes that
+cause; the absorbing-unrelated-signer cause is removed only by refusing the close verb.
+
+What #7910 asks for is that *the operator is told without having to look*. A daily comment delivers
+that. Auto-closing is a bonus the probe has not earned: its own PASS text already says it is not
+authority to record, and the close is the irreversible verb on a legal tracker. The operator closes
+it when they record the row, which is the human decision point the design already insists on.
+
+Exit 2 vs 3 costs one integer and buys the only unexpanded signal the operator sees:
 `sweep-followthroughs.sh:487` renders `TRANSIENT (exit $rc, …)` in the comment heading while the
-body sits behind a `<details>` fold. Precedent: `betterstack-roundtrip-latency-7855.sh`,
-documented in the sweeper workflow at `:94`.
+body sits behind a `<details>` fold. Precedent for a third code:
+`scripts/followthroughs/betterstack-roundtrip-latency-7855.sh`, documented in the sweeper workflow
+at `:94`.
 
 **One `CANNOT ESTABLISH: <reason>` line, not six branches**, each ending with a fixed addressee
 tag — `Operator: <exact command>` or `Operator: no action — engineering fault, file it` — so the
@@ -276,9 +390,31 @@ stubs, not only the success paths.
 The epoch derivation runs **before** the ledger fetch. Measured: `git fetch --no-tags --depth=1`
 writes `.git/shallow` into the **common dir**, flipping the whole repository — every worktree —
 to shallow. Since the ledger branch is exactly one commit (`git rev-list --count
-origin/cla-signatures` = 1), `--depth=1` buys nothing, so the probe fetches **without** it. Both
-facts are stated in the probe header, because a future reordering would silently reinstate the
-graft bug the control exists to prevent.
+origin/cla-signatures` = 1), `--depth=1` buys nothing, so the probe fetches **without** it.
+
+`--no-tags` is not the bound. The explicit refspec is what confines the write to
+`refs/remotes/origin/cla-signatures` (so a hostile origin cannot steer it elsewhere); `--no-tags`
+only stops tag refs. Three further writes into the shared common dir are unbounded by either, and
+each is one flag:
+
+```bash
+timeout 30 git -c gc.auto=0 fetch --no-tags --no-recurse-submodules --no-write-fetch-head -q \
+  origin '+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures' 2>/dev/null \
+  || cannot_establish "could not fetch the ICLA signature ledger ref" 3
+```
+
+`--no-write-fetch-head` (FETCH_HEAD is written to the common dir, the same shared surface as
+`.git/shallow`), `-c gc.auto=0` (a `gc --auto` triggered by fetch runs in the operator's live
+repository and outlives the `timeout`), and `--no-recurse-submodules` (the default is `on-demand`,
+and `.gitmodules` on the fetched branch is content controlled by whoever writes that branch — no
+`.gitmodules` exists today, so the risk is latent rather than live).
+
+The `2>/dev/null` is load-bearing and generalises the suppression rule: git relays the server's
+sideband verbatim as `remote: <arbitrary text>` on stderr, `sweep-followthroughs.sh:378` captures
+`2>&1`, and `:506` republishes it into a public comment. **The rule is therefore "every external
+command's stderr is suppressed and replaced by a probe-authored line", full stop — not "every
+command that touches ledger content"**, which is the narrower phrasing that let the transport
+layer through.
 
 ### The epoch derivation and its single control
 
@@ -331,11 +467,22 @@ comment; Guard C closes as **`not planned`** at 30 business days — and
 become invisible to both systems while still waiting. The wait here (unsent reply + a
 counterparty's turnaround + a third party opening a PR) is comfortably past 30 business days.
 
-**Resolution:** the tracker body carries a `## Verification` YAML block with an
-`sla_business_days` matching the real wait, so Guard B does not fire spuriously and Guard C's
-clock is understood rather than discovered. Phase 0 measures whether that monitor is currently
-dispatching and records the answer; the block is added either way, because "it is dark today" is
-not a design.
+**Resolution — and the correction the first draft needed.** `sla_business_days` is read at
+`cron-follow-through-monitor.ts:125` and consumed by **Guard B only** (`:163-165`). Guard C's
+30 business days is a **hardcoded constant in the prompt** (`:167`, `:172`, `:205`), so setting
+`sla_business_days` mitigates the 5-day public "manual intervention required" comment and does
+**not** reach the close-as-`not planned` at 30. The first draft's resolution therefore did not
+resolve the finding it named.
+
+The structural fix is to take sweeper-owned trackers out of that monitor's issue set: an issue
+carrying a `<!-- soleur:followthrough -->` directive already has an owner with its own cadence and
+its own close semantics, and two pollers with different formats and opposite close rules on one
+issue is the defect. This plan narrows `cron-follow-through-monitor`'s query to exclude issues
+bearing the directive, and adds the `## Verification` block as belt-and-braces for Guard B.
+**Phase 0's measurement of whether that monitor is dispatching gates enrolment** rather than
+merely being recorded — "it is dark today" is not a design, and a legal tracker closed
+`not planned` becomes invisible to both systems (`sweep-followthroughs.sh:576` filters
+`NOT_PLANNED` out of the closed set).
 
 ### `earliest=`, and the noise it does not suppress
 
@@ -356,9 +503,17 @@ resolves the script against the **default branch**, so a label applied pre-merge
 because building the watch is its deliverable.
 
 1. `gh issue create` the tracker **unlabeled** (`type/chore`, `domain/legal`,
-   `priority/p2-medium`), body carrying the `## Verification` block. Title and body name the
-   organisation and the purpose, and name **no person**. If the PR is abandoned, close the
-   tracker in the same session.
+   `priority/p2-medium`), body carrying the `## Verification` block. **The tracker names no
+   counterparty and no person, and does not reference #7846** — it describes only the mechanism
+   ("watch for an ICLA signature at or after the coverage-map notice epoch that no live roster row
+   covers"). This is what closes the derivable-association class: the probe's daily comment flips
+   from `NOT YET` to `PASS` on a dated, permanent, world-readable comment, and the ledger it
+   measured is itself public and git-versioned — so a reader who knows *which organisation the
+   tracker is about* can diff `signatures/cla.json` at that date and recover the name, id and PR
+   number of the account that flipped the count. An opaque tracker makes that join yield nothing,
+   and it is also what stops a PASS fired by an **unrelated** post-epoch signer from publicly and
+   permanently correlating an arbitrary contributor with a counterparty they have no relationship
+   to. If the PR is abandoned, close the tracker in the same session.
 2. Land `scripts/followthroughs/ccla-representative-icla-<TRACKER>.sh` and its companion suite,
    **both** committed `100755`, and substitute the resolved `<TRACKER>` back into this plan in
    the same commit so the shipped file is greppable from the plans corpus.
@@ -568,8 +723,8 @@ logs:
 
 discoverability_test:
   command: "bash scripts/followthroughs/ccla-representative-icla-<TRACKER>.sh --print-epoch"
-  expected_output: "the single line 2026-09-07T15:16:45Z on a checkout whose history reaches the anchor's parent; a CANNOT ESTABLISH line and exit 3 otherwise. It exercises the derivation and control B while touching neither the ledger nor any credential."
-  credentials_required: "none. The probe binds no credential on any path and declares no secrets= in its directive."
+  expected_output: "prints exactly the line 2026-09-07T15:16:45Z and exits 0. Measured in this checkout: main history is intact (rev-list --count HEAD = 3496; .git/shallow holds one SHA, the cla-signatures tip), so the success branch is pinnable and the earlier 'or a CANNOT ESTABLISH line otherwise' phrasing was satisfied by both branches and therefore asserted nothing. NOTE: <TRACKER> must be substituted (Phase 4 step 2 / task 4.10) before preflight Check 10 executes this, or it fails on a nonexistent path."
+  credentials_required: "none for --print-epoch, which performs no fetch. Accurate scope: the probe declares no secrets= and holds no credential in its environment; the verdict path's `git fetch` uses whatever credential the checkout persisted in .git/config, which is why Phase 5 decides persist-credentials explicitly."
 ```
 
 ## Encryption Posture
@@ -719,7 +874,11 @@ covers by asserting absence in the union of streams while driving the stubs' fai
 
 - **NFR1** The companion suite makes no network call; fixtures are synthetic and local; the probe
   runs under `env -i`.
-- **NFR2** The probe declares no `secrets=` and binds no credential.
+- **NFR2** The probe declares no `secrets=` and holds no credential **in its environment**. Its
+  `git fetch` uses whatever credential `actions/checkout` persisted into `.git/config`
+  (`http.<host>.extraheader`), which `env -i` does not remove — so "binds no credential" would
+  be an overstatement, and Phase 5 decides `persist-credentials` deliberately rather than
+  inheriting it.
 - **NFR3** The resolved `--instrument-file` path is never added to `TMP_FILES` — satisfied
   structurally by the ordering (`TMP_FILES=()` at `:191` follows the compute block) and asserted
   statically.
@@ -847,3 +1006,61 @@ learnings `2026-09-07-every-instrument-i-built-to-check-my-own-work-could-not-te
 
 **Related work:** #7909, #7910 (closed by this PR); #7846 (stays open); #3210 and PR #7828;
 and #7797 and #7220.
+
+## Deepen-Plan Findings (2026-09-07, seven verification passes)
+
+Seven passes ran after plan review: a mechanical verify-the-negative sweep, `security-sentinel`,
+`test-design-reviewer`, `observability-coverage-reviewer`, `git-history-analyzer`,
+`user-impact-reviewer` and `data-integrity-guardian`. The design changes above were made in
+response; what follows is the complete finding set with its disposition, because several findings
+are larger than this PR and must not be lost by being folded silently into prose.
+
+**Applied above** (design changed): the critical process-substitution fail-open; the notify-only
+exit contract; "covered" narrowed to live-or-withdrawn; the tracker naming no counterparty; the
+`--` fixture and the struck `-S`→`-G` vector; the grafted fixture moved out of the parity subset;
+the fetch flag set and the "every external command's stderr" rule; the NFR2 credential wording;
+the second monitor's Guard C correction; the `discoverability_test` pinned so it can fail; four
+new `failure_modes`; the layer citation; the drifting tag figure.
+
+### Still to apply at `/work` — carried here verbatim so nothing is lost
+
+| Sev | Finding | Source |
+|---|---|---|
+| BLOCKER | **No correction path exists for a wrong `executed_instrument_sha256`** (or `signed_at`, `authorized_from`). `remove` only stamps `removed_at`; `add` refuses a duplicate `record_ref`; there is no `amend`. The two available repairs are a hand-edit of the file whose whole premise is that it is never hand-edited, or a withdrawal that records a legal fact that did not occur. The register has a documented convention for this (append a dated correction); the roster has none. **Decide the affordance while `organizations` is `[]` and the schema change is free** — after the first row it is a `.strict()` migration over published rows. | data-integrity F2.1 |
+| HIGH | **Phase 5.3's "parity" is the wrong relation.** The correct one is asymmetric: `roster ⊆ register` on `record_ref`, hash equality **on the intersection only**, and `register ⊄ roster` is legal and must not be asserted — the register row is written when the instrument is executed, months before the roster row the ICLA signature gates. A symmetric assertion reds on the correct interim state, and the operator's escapes from a red required check are both worse than the defect. | data-integrity F1.2 |
+| HIGH | **The parity assertion is vacuous until the first row.** Both sides of the join are empty today, so it would report pass while comparing nothing, then run against real data for the first time at the exact moment it matters. Needs the three-state form (`0 roster orgs` = not decided and say so / joined = pass / unjoined = fail) plus a fixture arm in `lint-legal-registers.test.sh`. `lint-legal-registers.sh` legislates against exactly this vacuity three times in its own voice (`:341-346`, `:418-420`, `:44-47`). | data-integrity F1.1 |
+| HIGH | **`record_ref` integrity must land before or with the hash check.** Without it a mistyped or duplicated ref produces an *empty join*, which passes — precisely in the scenario the check exists for. Assert: register refs match the format or are the placeholder; register refs are unique; every roster `record_ref` appears in the register exactly once; the join cardinality is reported. | data-integrity F4.3 |
+| HIGH | **S3's natural repair turns the parity check into a tautology.** If the roster merges without a register row, the obvious fix is to copy the hash out of the roster — after which the two stores no longer corroborate each other and nothing records that the independence was lost. The failure message must say *re-hash the instrument on the drive*, never *copy the other cell*. | data-integrity F2.3 |
+| HIGH | **Roster validity is permanently coupled to an upstream-maintained branch.** `assertContributionTriggeredEntry` re-validates every roster account against `origin/cla-signatures` on every CI run, including withdrawn ones. If an entry is ever removed or rewritten there (an Art. 17 request is the obvious route), the merge gate bricks and both unblocking moves damage a legal record. The `failure_modes` block covers "unreachable or an HTML error page" and not "reachable, well-formed, and an entry we depend on is gone." | data-integrity F5.1 |
+| HIGH | **`persist-credentials`.** `actions/checkout` writes an `http.<host>.extraheader` carrying the workflow token into `.git/config`, which `env -i` does not remove — so every probe can recover a credential with `issues:write`, the identity `closed_precheck` treats as unforgeable. Phase 5 is the first edit to that step; decide `persist-credentials: false` there deliberately, and **measure** whether the probe's fetch still succeeds unauthenticated before doing it. | security F2 |
+| HIGH | **The public comment has an integrity property the plan models nowhere.** The sweeper reads back two control markers from comments authored by `github-actions` — the reopen marker (substring) and the PASS prefix. The author gate closes direct forgery, not *laundering*: content that reaches a probe's stdout is republished under that identity. This is the first probe to read third-party-controlled content. Two one-line fixes at the sweeper protect all 78 probes: neutralize `<!--` alongside the existing `^+` strip, and lengthen the fence so a probe line of three backticks cannot break out. | security F3 |
+| MEDIUM | Guard 2 rows to fix before RED: **row 5 is miscoded** (dropping `%H` makes both `${line%% *}` and `${line#* }` return the whole string, so the probe exits 3 on *every* fixture — it reddens for the wrong reason and its stated expectation is backwards); **row 13 cannot fire** once `--depth=1` is gone (retire it or state the ordering as a source-order assertion); **G1 H1 says "any two"** when a zero-slack floor fires on one. | test-design |
+| MEDIUM | **Four Guard 2 rows assert only `rc == 3`, and six branches produce 3.** The discriminator is already designed and unused — every exit-3 row must assert the `CANNOT ESTABLISH: <reason>` substring. `ccla-add.test.sh:376-391` is the in-repo model for proving a mutation on the *producer* of a refusal rather than on its code. | test-design |
+| MEDIUM | **No Guard 1 row covers the `sha256sum` argv/stdin hazard** the plan devotes a paragraph to. One fixture whose basename contains a backslash reddens a mutant that swaps the forms; without it that mutant passes every listed arm. Also missing: a row for mutual exclusion (P4/FR2). | test-design |
+| MEDIUM | **Fixture pre-use assertions must be discriminator-shaped, not build-shaped.** Two-touch: N==2 *and* the two `%cI` differ. Merge: ≥2 parents *and* the non-`--first-parent` log yields a different oldest. Rebase: `%aI != %cI` *and* one parent. Grafted: `.git/shallow` exists *and* `HEAD^` fails. Tag origin: tags non-empty *before* the fetch. And **`git clone --depth=1` silently ignores `--depth` on a local path** — measured; the grafted fixture must use `file://` or it is not grafted and its row reports the baseline. | test-design |
+| MEDIUM | **Pin `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null` on every fixture-building git call**, and `GIT_COMMITTER_DATE` on the `git rebase` itself — without the latter the replayed committer date is "now", both sides shift together, and the `%cI`→`%aI` row does not redden. A differential is blind to any drift the two sides share. | test-design |
+| MEDIUM | **Port the instrument self-test** (`ccla-add.test.sh:109-119`) into the companion suite. `passes + fails == cases` catches an unpaired assertion site; it does **not** catch an arm that never runs (both sides decrement equally) nor an unconditional `pass` after a discarded predicate. Describe it accurately and let the floor carry absence. | test-design |
+| MEDIUM | **`--instrument-file` closes transcription error, not selection error.** The operator can pass `~/Downloads/ccla-signed.pdf` and the script hashes the wrong bytes perfectly; nothing downstream can detect it. Add **mtime and byte size** to the stderr diagnostic (a re-export differs in both) and have QA paste that line into the PR body so provenance is a reviewable artifact. P1's wording overclaims and should say so. | data-integrity F5.2, CLO P2 |
+| MEDIUM | **The §4(c) verification step does not exist.** Runbook §10.1 has four steps and none instructs the operator to open the instrument and match `--login` against the designation list — yet that check is the plan's only named mitigation for a wrong roster row. Add the step, naming the file, the section and the comparison, plus a recorded acknowledgement. | user-impact F4 |
+| MEDIUM | **§4(c) lists usernames; the roster stores numeric ids.** A handle released and re-registered binds a stranger, and an operator performing the check exactly as instructed cannot see it. Pin the id at designation time, or refuse a login whose account creation post-dates `--authorized-from`. | user-impact F3 |
+| MEDIUM | **`gh pr create` at `ccla-add.sh:419` has no failure handler**, unlike the push at `:409-418` — and its state is worse, because the branch carrying the association is already on the public remote. Mirror the four-line resume/abandon block. | data-integrity F2.2 |
+| MEDIUM | **`ccla-add.sh` never asserts its branch point** while its PR body claims, verbatim, a single-file change — a false statement made by the tool itself in the body of the PR that establishes a legal record. It also means the duplicate-`record_ref` and duplicate-`id` checks run against a stale local roster. | data-integrity F5.4 |
+| MEDIUM | **Resolve the instrument path once.** The `-e`/`-f`/`-s`/`-r` checks run against the argument while `sha256sum` hashes an independent second resolution; nothing asserts the thing hashed is the thing checked. Resolve once, then check and hash the same string (or open once and use the fd). | security F7 |
+| MEDIUM | **`MIN_CHECKS=7` in `lint-legal-registers.sh` has zero slack** — raise it with the new assertion or the assertion is deletable without signal. The `(none yet)` placeholder is a parse hazard; delegate to `tenant-dpa-register-guard.sh --placeholder` rather than hand-rolling a fifth table parser, and pin the register's hash cell format to `^[0-9a-f]{64}$` in its Schema table. The lint gains its first `jq` dependency and needs a fail-closed pre-flight. | data-integrity F1.3-F1.5 |
+| MEDIUM | **Guard C's 30 business days is hardcoded**, so the `## Verification` block reaches Guard B only. Narrow `cron-follow-through-monitor`'s query to exclude issues bearing a `soleur:followthrough` directive, and add a companion-suite arm asserting that exclusion. | observability 1 |
+| MEDIUM | **No detection that the probe runs at all**, and **no drift gate on `fetch-depth: 0`**. The failure signature of both is the *absence* of a comment, which is also the signature of the `--limit 50` truncation — one staleness detector would cover the class. | observability 3, 7, 8 |
+| LOW | Convert FR8, FR11 and FR19 from greps to behaviour: stub `gh`/`git` on a sandbox PATH and assert captured argv (pattern at `anthropic-admin-key-6297.test.sh:268-281`); assert `rc != 1` across the fixture family; add a known-positive control to FR19's awk range before grepping for absence. | test-design |
+| LOW | Do not describe the retained 64-hex assertion as "near-tautological" — a comment saying an assertion is dead code is how assertions get deleted. Write it as load-bearing. Add a duplicate-flag refusal on the new arm. Sanitize `die()`'s `::error::` interpolation. Note in the runbook that the instrument path lands in shell history and in `/proc/<pid>/cmdline`. State that the inside-repo custody refusal is a typo catcher, not a boundary (a bind mount, a hardlink, or a sibling worktree defeat any path check). | security F9-F13, user-impact F10 |
+| LOW | Run the authority **once** over all fixtures rather than paying six `tsx` cold starts. `.removed_at == null` also matches an *absent* key — pin against a future `.optional()`. | test-design, data-integrity F3.1 |
+
+### The single highest-leverage change
+
+`data-integrity` names it and it collapses six of the findings above: **make `ccla-add.sh` the
+producer of the register row** — a separate `register` mode gated on the instrument alone (because
+`add` cannot run until the ICLA signature exists, months later), which emits six of the register's
+seven columns from operands it already computes; then make the roster write conditional on a
+register row for that `record_ref` existing and already agreeing. That converts F1.1, F1.2, F1.4,
+F2.3, F4.2 and F4.3 from a post-hoc lint on a public surface into a refusal at the write path —
+which is the doctrine `ccla-add.sh:9-18` already commits this file to, and the only control that
+has a remedy on a surface where nothing can be taken back. It is larger than #7909's scope; it
+should be decided, not defaulted.

@@ -48,9 +48,15 @@ that file passes a synthetic `repoRoot` (`:336`, `:407`, `:440`, `:456`).
 **The discharge now offered** is a differential over a **family of synthetic fixtures** —
 one-touch, two-touch, merge-commit, rebase-replay, squash, grafted — asserting byte-equality
 between the probe and `resolveCoverageMapNoticeEpoch(<fixture>)` **per fixture**. It is hermetic,
-shard-independent, and non-vacuous by construction: each drift vector reddens on at least one
-fixture, and the suite asserts each fixture's shape (match count, merge presence) before using it,
-so the arm cannot silently degrade back to the vacuous case.
+shard-independent, and non-vacuous by construction. Two corrections deepen-plan then made to that
+claim: the `--` pathspec vector was covered by **no** fixture (measured — without `--`, git resolves
+the argument as a path unless a ref shares the name, so one `git branch docs/legal/individual-cla.md`
+in one fixture is required), and `-S`→`-G` is **uncoverable in principle** and has been struck from
+the vector list. Each fixture asserts the property that makes it a *discriminator* — not merely that
+it was built — because "match count, merge presence" passes on a fixture that no longer separates
+the two implementations, which is the silent degradation this replacement exists to avoid. The
+grafted fixture is **not** in the parity subset: the TS authority has no control B and returns a
+value where the probe refuses, so byte-equality against a refusal is undefined.
 
 **What is asked of the CLO at review.** Confirm that a merge-blocking per-fixture byte-equality
 assertion against the authority is an acceptable discharge of B2-b, or name the alternative. Until
@@ -84,12 +90,20 @@ into a public, permanent comment. And it deleted the secret, the workflow `env:`
 operator's `gh secret set` step, login-grammar validation, the never-print control,
 `secrets=GH_TOKEN`, the `gh` stub, two verdict states and two mutation rows.
 
-**The honest cost.** An unrelated contributor who signs the ICLA post-epoch would satisfy the
-predicate, so the probe would PASS and the sweeper would auto-close the tracker. The operator
-reads one comment and reopens. No roster row is written by the probe — that remains a separate
-command still gated by `ccla-add.sh` Guard 3 and by the CI half — and the PASS text states
-explicitly that the executed instrument's §4(c) designation list, not the probe, is the authority
-for which account to record.
+**The honest cost, and how deepen-plan repriced it.** An unrelated contributor who signs the ICLA
+post-epoch also satisfies the predicate. This challenge originally priced that as "the operator
+reads one comment and reopens". Measurement showed the price is far higher — the condition never
+clears, so the reopened tracker is re-closed on every sweep — and **DC-4 supersedes this paragraph**:
+the probe no longer takes exit 0 at all. No roster row is written by the probe either way; that
+remains a separate command gated by `ccla-add.sh` Guard 3 and by the CI half, and the report text
+states that the executed instrument's §4(c) designation list, not the probe, is the authority for
+which account to record.
+
+A second exposure deepen-plan surfaced and closed: the count form removed *direct* naming but left
+naming **derivable** — a dated public transition next to an organisation's name joins against the
+public, git-versioned ledger to recover the account that flipped it, and a PASS fired by an
+unrelated signer would have publicly and permanently correlated an arbitrary contributor with a
+counterparty. The tracker therefore names no counterparty, no person, and does not reference #7846.
 
 **What is asked of the CLO at review.** P9 (*no surface publishes an association between a named
 account and a corporate designation*) is the CLO's own property. Confirm that the count form,
@@ -112,3 +126,36 @@ on one side, `scripts/followthroughs/**` plus the sweeper workflow on the other.
 The operator asked for both together, with both issues closed in the PR body. Operator direction
 is the default and has not been overridden. The branch is deliberately structured so the split
 remains available without rework if the watch stalls at review.
+
+---
+
+## DC-4 — the probe reports and never closes
+
+**Class:** user-challenge (it departs from the exit-code contract #7910 specifies)
+**Raised by:** `soleur:engineering:review:data-integrity-guardian`, deepen-plan, 2026-09-07
+
+Issue #7910 specifies `0 PASS (ready to record) / 1 unused / 2 TRANSIENT`. The plan now refuses exit 0
+entirely: the probe reports a count on exit 2 and never takes the sweeper's close verb.
+
+**Why.** The notice epoch is today, and this repository requires contributors to sign the ICLA, so
+every future signature by anyone is post-epoch by construction. Under the count form the first
+unrelated contributor to sign satisfies "a post-epoch signature no roster row covers" — and the
+condition never clears, because that person is not a corporate representative and never will be.
+Exit 0 would post PASS and close; `closed_precheck` then refuses to re-litigate an issue carrying
+the sweeper's own PASS block; a reopened tracker is re-closed on the next sweep. The cost priced in
+DC-2 as "the operator reads one comment and reopens" is therefore a daily manual loop for the whole
+remaining wait, and it reaches the same terminal outcome the plan's User-Brand Impact section names
+— the Corporate CLA is never recorded — by the opposite route from the one that section enumerates.
+A second latch exists independently: a representative withdrawn under `remove` and never re-added
+is post-epoch and permanently not-live. That one is removed by narrowing "covered" to
+live-or-withdrawn; the unrelated-signer latch is removed only by refusing the close verb.
+
+**What is preserved.** #7910's actual ask is that the operator is told without having to look. A
+daily comment delivers that. Auto-closing is a bonus the probe has not earned — its own PASS text
+already says it is not authority to record, and closing is the irreversible verb on a legal
+tracker. The operator closes it when they record the row, which is the human decision point the
+design already insists on.
+
+**What is asked at review.** Confirm that report-only is preferred to an auto-close that measurement
+shows will latch on the first unrelated signature. The alternative — reintroducing account precision
+so the close is trustworthy — is foreclosed by P9 and the CLO's finding P1.
