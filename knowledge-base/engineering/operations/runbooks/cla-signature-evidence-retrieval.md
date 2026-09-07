@@ -443,17 +443,48 @@ governs what may go in it.
    to the encrypted operator drive. The mailbox is transport; the drive is
    custody, and it is the surface an Art. 15 or Art. 17 request is answered
    against.
-2. Compute the instrument hash over the bytes as received:
-   `sha256sum <instrument>`. Record that, not a hash of a re-exported copy.
-3. **Each account you are about to record has itself signed the Individual CLA
+2. Do **not** compute the instrument hash by hand. Pass the file to the script
+   with `--instrument-file /absolute/path/on/the/encrypted/drive`, and it hashes
+   the bytes as received. Hand-copying 64 hex characters into a permanent,
+   world-readable record about a third party is a transcription-error surface
+   with no undo, and a wrong instrument hash is the one field nothing else in
+   the repository can contradict.
+
+   The path must be **absolute** and must resolve **outside** this repository —
+   the instrument is never committed. `--instrument-sha256 <64-hex>` remains
+   for the case where only the digest is to hand.
+
+   If you do need the digest separately, it is `sha256sum < <instrument>` — with
+   the redirect. `sha256sum <instrument>` prefixes its output line with a
+   backslash when the filename contains one, which shifts the fields.
+
+   The script echoes the resolved path, byte size, mtime and computed hash to
+   stderr. **Read that line.** It is the only check on SELECTION error: the
+   script proves the hash matches the file it was given, never that the file is
+   the instrument that was executed, and a re-exported copy differs in both size
+   and mtime. Paste the line into the pull request so the provenance is
+   reviewable. Note that the path also lands in your shell history and in
+   `/proc/<pid>/cmdline`.
+3. **Open the instrument and check its § 4(c) designation list against every
+   `--login` you are about to pass.** The script cannot do this — it verifies
+   that an account signed the Individual CLA, not that the organisation
+   designated *that* account — so this is the only control standing between a
+   typo and a false published association about a real person. § 4(c) lists
+   usernames while the roster stores numeric ids, so also confirm the account
+   was not created after `--authorized-from`: a handle released and
+   re-registered binds a stranger, and an operator performing this check exactly
+   as written cannot otherwise see it. Record in the pull request that you did
+   this.
+4. **Each account you are about to record has itself signed the Individual CLA
    on a pull request here.** This is contribution-triggered entry and it is not
    a formality — the Art. 6(1)(f) balancing, the Art. 13 notice route and the
    Art. 17(3)(e) ground all rest on it. `ccla-add.sh` refuses to write an
    account that has not signed, and CI refuses it a second time. If someone has
    not signed yet, ask them to; the roster catches up afterwards. Their pull
    request is not blocked in the meantime.
-4. Add the row to `knowledge-base/legal/ccla-register.md` (the index) using the
-   next free `Record ref`.
+5. Add the row to `knowledge-base/legal/ccla-register.md` (the index) using the
+   next free `Record ref`. Its `Instrument hash` cell must be the value the
+   script printed, not a second hand-copy of it.
 
 ### 10.2 Record a designation
 
@@ -466,11 +497,14 @@ CCLA_ADD_DRY_RUN=1 bash apps/cla-evidence/scripts/ccla-add.sh add \
   --org "Example SARL" \
   --signed-at 2026-09-04T00:00:00Z \
   --authorized-from 2026-09-04T00:00:00Z \
-  --instrument-sha256 <64-hex> \
+  --instrument-file /media/operator/encrypted/ccla/CCLA-0001-executed.pdf \
   --login octocat --login hubot
 ```
 
 Re-run without `CCLA_ADD_DRY_RUN=1` to open a single-file pull request.
+
+`--instrument-sha256 <64-hex>` is the fallback when only the digest is to hand;
+the two flags are mutually exclusive and exactly one is required.
 
 Where the counterparty's legal name **is** a natural person's name — a sole
 trader, or anyone trading under their own name — pass `--sole-trader` instead
@@ -499,10 +533,10 @@ about erasure reaches a data subject.
 | Code | Meaning |
 |---|---|
 | 0 | Written (pull request opened), or dry-run emitted |
-| 2 | Pre-flight failure — `gh` unavailable or unauthenticated, dirty working tree, unreadable ledger |
+| 2 | Pre-flight failure — `gh` unavailable or unauthenticated, dirty working tree, unreadable ledger, or an `--instrument-file` that resolves **inside** this repository (custody: the instrument is held off-repo) |
 | 3 | The roster failed schema validation; nothing was written |
 | 4 | An account has not signed the Individual CLA; nothing was written |
-| 64 | Usage error |
+| 64 | Usage error — including both instrument flags together, neither of them, a relative `--instrument-file`, or one that is missing, a directory, empty or unreadable (each with its own message) |
 
 ### 10.5 If an Art. 17 request arrives for a roster account
 
@@ -513,6 +547,51 @@ request to the CLO. Art. 17(3)(b) is **not** available (no statute obliges a
 contributor roster; the obligation is contractual and self-imposed).
 Art. 17(3)(e) **is** available per record for an account whose association
 evidences that a merged commit was covered. Record the ground relied on.
+
+### 10.6 The watch: when can I record the row?
+
+Step 3 of § 10.1 ("each account has itself signed the Individual CLA") stopped
+being answerable by eye once the entry gate became **temporal**. An account
+enters the roster only if its signature is dated at or after the coverage-map
+notice epoch — and that epoch is derived from git history, not written down
+anywhere. Every signature in the ledger today predates it, so "have they
+signed?" is the wrong question and the right one cannot be checked by looking.
+
+`scripts/followthroughs/ccla-representative-icla-7922.sh` answers it daily. It
+is enrolled in the follow-through sweeper, which posts its output as a comment
+on #7922 every sweep. You do not run it; you read the comment.
+
+It reports a **count** and names no one — no login, no id, no timestamp. That is
+deliberate: the comment is public and permanent, and the ledger it measures is
+public and git-versioned, so a dated transition next to an organisation's name
+would be a join rather than a hint.
+
+| Heading you see | What it means | What to do |
+|---|---|---|
+| `TRANSIENT (exit 2, ...)` | `NOT YET` — measured, nothing qualifies yet | Nothing. This is the normal daily state. |
+| `TRANSIENT (exit 5, ...)` | `ACTION` — at least one signature now satisfies the temporal gate and no roster row covers it | Go to § 10.1. |
+| `TRANSIENT (exit 3, ...)` | `CANNOT ESTABLISH` — the probe could not measure, and says why | Read the line. It ends in an addressee tag saying whether there is anything for you to do. |
+
+**A PASS is not authority to record.** The probe can say that *somebody*
+qualifying signed; it cannot say *who* is a designated representative. The
+executed instrument's § 4(c) list, on the encrypted drive, is the authority for
+which account to record — which is why § 10.1 step 3 exists.
+
+**The probe never closes #7922.** Exit 0 is the sweeper's close verb and this
+probe never takes it: the epoch is recent and every contributor to this repo
+must sign, so the first unrelated signer would otherwise latch a PASS that never
+clears and close a legal tracker for good. Close #7922 by hand when the row is
+recorded.
+
+**Telling "waiting" from "broken":**
+
+```bash
+bash scripts/followthroughs/ccla-representative-icla-7922.sh --print-epoch
+```
+
+It prints the derived epoch, or refuses with a reason. A refusal here almost
+always means the checkout lacks full history — the derivation needs it, which is
+why the sweeper workflow pins `fetch-depth: 0`.
 
 ## Appendix A: Sharp edges
 

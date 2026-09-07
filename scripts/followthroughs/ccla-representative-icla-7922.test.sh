@@ -224,6 +224,11 @@ run_probe() {
       bash "$PROBE" "$@" ) > "$OUT" 2> "$ERR" || rc=$?
   echo "$rc"
 }
+# MATERIALISED into a string, never piped into `grep -q`. Under `pipefail` a
+# `producer | grep -q` flakes to a FALSE NEGATIVE when the match is early:
+# grep closes the pipe on the first hit, the producer takes SIGPIPE (141),
+# and pipefail makes the pipeline non-zero -- so a leak that WAS found reads
+# as "no leak". Every FR15 arm below depends on that answer.
 both() { cat "$OUT" "$ERR"; }
 
 # ---------------------------------------------------------------------------
@@ -426,13 +431,13 @@ grep -q 'CANNOT ESTABLISH: 1 ledger entr' "$OUT" \
   && pass "the malformed-timestamp refusal reports a COUNT" \
   || fail "malformed-timestamp refusal does not report a count: $(head -c 160 "$OUT")"
 cases=$((cases + 1))
-if both | grep -qF "$POISON"; then
+if grep -qF "$POISON" <<<"$(both)"; then
   fail "FR15: the offending created_at VALUE reached an output stream — the sweeper would publish it"
 else
   pass "FR15: the offending created_at value appears in NEITHER stdout nor stderr"
 fi
 cases=$((cases + 1))
-if both | grep -qE 'fixture-login-444|Fixture Person'; then
+if grep -qE 'fixture-login-444|Fixture Person' <<<"$(both)"; then
   fail "FR15: a ledger login or name reached an output stream"
 else
   pass "FR15: no ledger login or name reaches any output stream on the refusal path"
@@ -848,8 +853,8 @@ open(p, "w").write(s)
 PY2
 if m_landed "G2-M12 (counted predicate + stderr suppression removed)"; then
   set_ledger "$D1" "{\"signedContributors\":[{\"id\":444,\"login\":\"fixture-login-444\",\"created_at\":\"$POISON\"}]}" >/dev/null 2>&1
-  run_any "$PROBE" "$F1" >/dev/null; base_leak=0; both | grep -qF "$POISON" && base_leak=1
-  run_any "$MUT"  "$F1" >/dev/null; mut_leak=0;  both | grep -qF "$POISON" && mut_leak=1
+  run_any "$PROBE" "$F1" >/dev/null; base_leak=0; grep -qF "$POISON" <<<"$(both)" && base_leak=1
+  run_any "$MUT"  "$F1" >/dev/null; mut_leak=0;  grep -qF "$POISON" <<<"$(both)" && mut_leak=1
   cases=$((cases + 1))
   [[ "$base_leak" == "0" && "$mut_leak" == "1" ]] \
     && pass "G2-M12: without the counted predicate jq's runtime error publishes the offending VALUE (base clean, mutant leaks)" \

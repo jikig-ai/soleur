@@ -50,6 +50,20 @@ trap cleanup_sandbox EXIT INT TERM
 # mutation and reports a verdict about the SUT produced by a harness that could not copy a
 # file.
 # ---------------------------------------------------------------------------------------
+# $1=dir  $2=register row block (already pipe-delimited)  $3=roster JSON
+ccla_fixture() {
+  mkdir -p "$1/knowledge-base/legal" "$1/apps/cla-evidence/roster" || return 2
+  {
+    printf -- '---\ntitle: "synthetic CCLA register"\n---\n\n'
+    printf -- '# Synthetic Corporate CLA Register\n\n## Register\n\n'
+    printf -- '| Record ref | Organisation legal name | CCLA version hash | Instrument hash | Signatory on file | Authorized from | Withdrawn at |\n'
+    printf -- '|---|---|---|---|---|---|---|\n'
+    printf -- '%s\n' "$2"
+    printf -- '\n## Notes\n\nNo markers here.\n'
+  } > "$1/knowledge-base/legal/ccla-register.md" || return 2
+  printf -- '%s\n' "$3" > "$1/apps/cla-evidence/roster/ccla-roster.json" || return 2
+}
+
 mkcorpus() {
   local d
   d="$(mktemp -d "$SANDBOX_ROOT/case.XXXXXXXX")" || return 2
@@ -73,6 +87,12 @@ mkcorpus() {
   # assertion with `if true` left the suite green.
   printf -- '---\ntitle: "synthetic out-of-scope post-mortem"\n---\n\nArt. 4(12) assessed; no breach.\n' \
     > "$d/knowledge-base/engineering/operations/post-mortems/2099-01-05-syn-postmortem.md" || return 2
+
+  # The CCLA register and the public coverage map, both in their EMPTY state --
+  # which is the live state today, and the state block (f) must report as
+  # "not yet exercised" rather than as a verified agreement.
+  mkdir -p "$d/apps/cla-evidence/roster" || return 2
+  ccla_fixture "$d" '| (none yet) | | | | | | |' '{"schema_version":"1.0","organizations":[]}' || return 2
 
   # The three other register files the token scan requires.
   for f in article-30-register article-30-2-register compliance-posture; do
@@ -289,8 +309,11 @@ D="$(mkcorpus)" || exit 2
 printf '\nA standalone TODO marker.\n' >> "$D/knowledge-base/legal/article-30-register.md" || exit 2
 printf '\nA standalone XXX marker.\n' >> "$D/knowledge-base/legal/compliance-posture.md" || exit 2
 _out="$( cd "$D" && bash scripts/lint-legal-registers.sh 2>&1 )"
-if printf '%s' "$_out" | grep -q 'article-30-register.md' \
-   && printf '%s' "$_out" | grep -q 'compliance-posture.md'; then
+# Herestrings, not pipes: same pipefail/SIGPIPE early-match flake as the block
+# (f) arm below. Pre-existing shape, corrected here because it is the identical
+# defect in the same file.
+if grep -q 'article-30-register.md' <<<"$_out" \
+   && grep -q 'compliance-posture.md' <<<"$_out"; then
   pass "(a) markers in TWO registers are BOTH reported (no break-after-first-hit)"
 else
   fail "(a) a two-register failure did not name both files"
@@ -345,11 +368,92 @@ r="$( cd "$SRC_ROOT" && bash scripts/lint-legal-registers.sh >/dev/null 2>&1; ec
 if [[ "$r" == "0" ]]; then pass "live corpus passes the guard"
 else fail "live corpus does not pass the guard (rc=$r)"; fi
 
+
+# ---------------------------------------------------------------------------------------
+# Block (f): the CCLA register <-> coverage map join (#7909 / P11).
+#
+# Every case below drives the join with REAL ROWS. The live corpus exercises only
+# the empty state, so without these the check would run against real data for the
+# first time on the day it actually matters.
+# ---------------------------------------------------------------------------------------
+HASH_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+HASH_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+roster_one() { # $1=record_ref $2=hash
+  printf '{"schema_version":"1.0","organizations":[{"legal_name":"Synthetic SARL","record_ref":"%s","signed_at":"2099-01-01T00:00:00Z","cla_doc":{"path":"docs/legal/corporate-cla.md","git_sha":"deadbee","content_sha256":"%s"},"executed_instrument_sha256":"%s","representatives":[]}]}' \
+    "$1" "$HASH_A" "$2"
+}
+
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" "$(roster_one CCLA-0001 "$HASH_A")"
+r="$(run_in "$D")"
+if [[ "$r" == "0" ]]; then pass "(f) a joined pair whose Instrument hash AGREES passes"
+else fail "(f) an agreeing joined pair was rejected (rc=$r)"; fi
+
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" "$(roster_one CCLA-0001 "$HASH_B")"
+r="$(run_in "$D")"
+if [[ "$r" == "1" ]]; then pass "(f) a joined pair whose Instrument hash DISAGREES is rejected"
+else fail "(f) a disagreeing Instrument hash was accepted (rc=$r)"; fi
+
+# THE ASYMMETRY, and the arm most likely to be got wrong. A register row with no
+# roster row is the ORDINARY interim state: the register row is written when the
+# instrument is executed, and the roster row cannot be written until a designated
+# representative signs the Individual CLA, often months later. A symmetric check
+# would red here, and both operator escapes from a red required check (delete the
+# register row, or fabricate a roster row) damage a legal record.
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| CCLA-0002 | Later SARL | $HASH_A | $HASH_B | yes | 2099-02-01 | |" '{"schema_version":"1.0","organizations":[]}'
+r="$(run_in "$D")"
+if [[ "$r" == "0" ]]; then pass "(f) a register row with NO roster row is ACCEPTED (register is legitimately a superset)"
+else fail "(f) the asymmetry was violated: a register row awaiting its roster row was rejected (rc=$r)"; fi
+
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" "$(roster_one CCLA-0009 "$HASH_A")"
+r="$(run_in "$D")"
+if [[ "$r" == "1" ]]; then pass "(f) a coverage-map record_ref absent from the register is rejected"
+else fail "(f) a roster row with no register row was accepted (rc=$r)"; fi
+
+# record_ref integrity BEFORE the hash check: a duplicated or malformed ref
+# produces an EMPTY join, which would otherwise pass in exactly the scenario the
+# check exists for.
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "$(printf '| CCLA-0001 | A SARL | %s | %s | yes | 2099-01-01 | |\n| CCLA-0001 | B SARL | %s | %s | yes | 2099-01-02 | |' "$HASH_A" "$HASH_A" "$HASH_A" "$HASH_B")" "$(roster_one CCLA-0001 "$HASH_A")"
+r="$(run_in "$D")"
+if [[ "$r" == "1" ]]; then pass "(f) a DUPLICATED register Record ref is rejected (the join would otherwise be ambiguous)"
+else fail "(f) a duplicated Record ref was accepted (rc=$r)"; fi
+
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| NOT-A-REF | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" '{"schema_version":"1.0","organizations":[]}'
+r="$(run_in "$D")"
+if [[ "$r" == "1" ]]; then pass "(f) a MALFORMED register Record ref is rejected"
+else fail "(f) a malformed Record ref was accepted (rc=$r)"; fi
+
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | not-64-hex | yes | 2099-01-01 | |" '{"schema_version":"1.0","organizations":[]}'
+r="$(run_in "$D")"
+if [[ "$r" == "1" ]]; then pass "(f) a register Instrument hash that is not 64 lowercase hex is rejected"
+else fail "(f) a malformed Instrument hash was accepted (rc=$r)"; fi
+
+# The empty state must report itself as UNEXERCISED, not as agreement. A silent
+# pass here is the vacuity this block was written to avoid.
+D="$(mkcorpus)" || exit 2
+# MATERIALISED, not piped. Under `set -o pipefail` a `producer | grep -q` FLAKES
+# to a false negative when the match is early: `grep -q` closes the pipe on the
+# first hit, the producer takes SIGPIPE (141), and pipefail makes the pipeline
+# non-zero -- so the `if` takes the ELSE branch even though grep matched.
+# Measured here: 1 spurious failure in 4 runs of an unchanged tree.
+_empty_out="$( cd "$D" && bash scripts/lint-legal-registers.sh 2>&1 || true )"
+if grep -q 'NOT YET EXERCISED' <<<"$_empty_out"; then
+  pass "(f) the empty state says NOT YET EXERCISED rather than reporting a verified agreement"
+else
+  fail "(f) the empty state did not distinguish itself from a verified agreement"
+fi
+
 # ---------------------------------------------------------------------------------------
 echo
 echo "passed: $((checks - fails)) failed: $fails total: $checks"
 
-MIN_ASSERTIONS=34
+MIN_ASSERTIONS=44  # 34 -> 44: block (f)'s register/roster join arms (#7909)
 if [[ $checks -lt $MIN_ASSERTIONS ]]; then
   printf '::error::lint-legal-registers.test.sh: only %d assertion(s) ran, expected >= %d\n' \
     "$checks" "$MIN_ASSERTIONS" >&2

@@ -127,6 +127,9 @@ REGISTER_FILES=(
   "knowledge-base/legal/article-30-2-register.md"
   "knowledge-base/legal/breach-register.md"
   "knowledge-base/legal/compliance-posture.md"
+  # #7909: the CCLA register is now joined against the public coverage map by
+  # block (f) below, so it must also be inside the generic register scans.
+  "knowledge-base/legal/ccla-register.md"
 )
 
 # Determination-shaped pattern for (c). Pinned literally: its cardinality decides the gate's
@@ -422,6 +425,128 @@ the pattern, the directory, or the corpus changed and the gate cannot decide"
 
 # ---------------------------------------------------------------------------------------
 echo
+
+# ---------------------------------------------------------------------------
+# (f) CCLA REGISTER <-> COVERAGE MAP INTEGRITY (#7909 / P11)
+# ---------------------------------------------------------------------------
+# `ccla-add.sh --instrument-file` now COMPUTES the executed-instrument hash, and
+# the operator transcribes that computed value into ccla-register.md by hand.
+# That makes the two stores' agreement MORE load-bearing than before, not less:
+# previously one typed value landed in both, so they were wrong together;
+# now one is derived and the other is typed, and they can disagree.
+#
+# THE RELATION IS ASYMMETRIC, and getting that wrong would red a correct tree.
+# A register row is written when the INSTRUMENT is executed. The roster row for
+# the same counterparty cannot be written until a designated representative has
+# signed the Individual CLA -- which is a different event, often months later.
+# So:
+#     roster.record_ref  SUBSET-OF  register.Record ref     <- asserted
+#     register           SUPERSET   roster                  <- legal, never asserted
+#     hash equality on the INTERSECTION only                <- asserted
+# A symmetric "these two files must match" check would fail on the ordinary
+# interim state, and both operator escapes from a red required check (delete the
+# register row, or fabricate a roster row) damage a legal record.
+jq_ok=1
+command -v jq >/dev/null 2>&1 || jq_ok=0
+if [[ $jq_ok -eq 0 ]]; then
+  # FAIL CLOSED. "jq is missing" must never render as "the two stores agree".
+  fail "(f) jq is required to read the coverage map and is not on PATH -- the register/roster join could NOT be evaluated. This is not a finding that they agree."
+else
+  CCLA_REGISTER="$REPO_ROOT/knowledge-base/legal/ccla-register.md"
+  CCLA_ROSTER="$REPO_ROOT/apps/cla-evidence/roster/ccla-roster.json"
+  if [[ ! -f "$CCLA_REGISTER" || ! -f "$CCLA_ROSTER" ]]; then
+    fail "(f) the CCLA register or the coverage map is missing -- expected $CCLA_REGISTER and $CCLA_ROSTER"
+  else
+    # Rows under `## Register`, minus the header, the `|---|` separator and the
+    # empty-state placeholder. The placeholder is itself a pipe-line, so a naive
+    # row count reads it as a counterparty.
+    reg_rows="$(awk '
+      /^## Register/      { inreg = 1; next }
+      inreg && /^## /     { inreg = 0 }
+      inreg && /^\|/ {
+        if ($0 ~ /^\|[[:space:]]*-+/) next
+        if ($0 ~ /Record ref/)        next
+        if ($0 ~ /\(none yet\)/)      next
+        print
+      }' "$CCLA_REGISTER")"
+
+    reg_refs=""; reg_hash_bad=0; reg_ref_bad=0; n_reg=0
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      n_reg=$((n_reg + 1))
+      r_ref="$(printf '%s' "$line"  | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')"
+      r_hash="$(printf '%s' "$line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $5); print $5}')"
+      [[ "$r_ref"  =~ ^CCLA-[0-9]{4,}$   ]] || reg_ref_bad=$((reg_ref_bad + 1))
+      [[ "$r_hash" =~ ^[0-9a-f]{64}$     ]] || reg_hash_bad=$((reg_hash_bad + 1))
+      reg_refs+="$r_ref"$'\n'
+    done <<< "$reg_rows"
+
+    if [[ $reg_ref_bad -eq 0 ]]; then
+      pass "(f) every CCLA register Record ref matches CCLA-NNNN ($n_reg row(s))"
+    else
+      fail "(f) $reg_ref_bad CCLA register row(s) carry a Record ref that is not CCLA-NNNN -- a malformed ref produces an EMPTY join below, which passes for the wrong reason"
+    fi
+
+    n_dupe="$(printf '%s' "$reg_refs" | grep -c . >/dev/null 2>&1 && printf '%s\n' "$reg_refs" | sed '/^$/d' | sort | uniq -d | sed '/^$/d' | wc -l || echo 0)"
+    if [[ "$n_dupe" -eq 0 ]]; then
+      pass "(f) CCLA register Record refs are unique"
+    else
+      fail "(f) $n_dupe duplicated Record ref(s) in the CCLA register -- a duplicate makes 'exactly once' unenforceable and the join ambiguous"
+    fi
+
+    if [[ $reg_hash_bad -eq 0 ]]; then
+      pass "(f) every CCLA register Instrument hash is 64 lowercase hex ($n_reg row(s))"
+    else
+      fail "(f) $reg_hash_bad CCLA register row(s) carry an Instrument hash that is not 64 lowercase hex"
+    fi
+
+    n_orgs="$(jq -r '[.organizations[]?] | length' "$CCLA_ROSTER" 2>/dev/null || echo INVALID)"
+    if [[ ! "$n_orgs" =~ ^[0-9]+$ ]]; then
+      fail "(f) the coverage map at $CCLA_ROSTER is not readable as JSON -- the join could NOT be evaluated"
+    elif [[ "$n_orgs" -eq 0 ]]; then
+      # THREE-STATE, and this is the state that matters most today. Both sides
+      # are empty, so a silent `pass` here would report agreement while
+      # comparing nothing -- and the check would then run against real data for
+      # the first time on the day it actually matters. Say so instead.
+      pass "(f) NOT YET EXERCISED: the coverage map holds 0 organisations, so the register/roster join has no rows to compare (register rows: $n_reg). This is not a verified agreement."
+    else
+      missing=0; mismatched=0; joined=0
+      while IFS=$'\t' read -r ros_ref ros_hash; do
+        [[ -n "$ros_ref" ]] || continue
+        # `ref` is a LOCAL, not `$2`. Assigning to a field makes awk rebuild `$0`
+        # using OFS (a space), so the pipe delimiters are gone by the time the
+        # line is re-parsed with -F'|' below and the hash is read from the wrong
+        # column -- which renders as "these two agreeing values disagree".
+        reg_line="$(printf '%s\n' "$reg_rows" | awk -F'|' -v r="$ros_ref" '
+          { ref = $2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", ref); if (ref == r) print }')"
+        n_hit="$(printf '%s' "$reg_line" | grep -c . || true)"
+        if [[ "$n_hit" -ne 1 ]]; then
+          missing=$((missing + 1))
+          continue
+        fi
+        joined=$((joined + 1))
+        reg_hash="$(printf '%s' "$reg_line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $5); print $5}')"
+        [[ "$reg_hash" == "$ros_hash" ]] || mismatched=$((mismatched + 1))
+      done < <(jq -r '.organizations[]? | [.record_ref, .executed_instrument_sha256] | @tsv' "$CCLA_ROSTER" 2>/dev/null)
+
+      if [[ $missing -eq 0 ]]; then
+        pass "(f) every coverage-map record_ref appears exactly once in the CCLA register (joined $joined of $n_orgs)"
+      else
+        fail "(f) $missing coverage-map record_ref(s) appear other than exactly once in the CCLA register. The register row is written when the INSTRUMENT is executed and must already exist; add the missing row from the instrument on the encrypted drive."
+      fi
+
+      if [[ $mismatched -eq 0 ]]; then
+        pass "(f) Instrument hash agrees between register and coverage map on all $joined joined row(s)"
+      else
+        # The natural repair is the wrong one and must not be suggested: copying
+        # one cell into the other makes the two stores stop corroborating each
+        # other, and nothing would record that the independence was lost.
+        fail "(f) $mismatched joined row(s) disagree on Instrument hash. RE-HASH THE EXECUTED INSTRUMENT on the encrypted operator drive (sha256sum < <instrument>) and correct whichever store is wrong against THAT. Do NOT copy one cell into the other -- the two values exist to corroborate each other independently."
+      fi
+    fi
+  fi
+fi
+
 # `waiver-parity` is DERIVED. It was a literal reading `ok` unconditionally, so a run with (d)
 # failing printed `1 failed (... waiver-parity=ok)` -- and every sibling field in that parenthesis
 # is a real variable, which is what made the literal read as measured.
@@ -431,7 +556,7 @@ echo "lint-legal-registers: ${checks} assertion(s), ${fails} failed \
 
 # Assertion floor. Reported with printf + exit rather than through fail(), which is the helper
 # it backstops (ADR-193): a floor that calls the function one edit disarms is not a floor.
-MIN_CHECKS=7
+MIN_CHECKS=11  # 7 -> 11: block (f)'s four register/roster join assertions (#7909)
 if [[ $checks -lt $MIN_CHECKS ]]; then
   printf '::error::lint-legal-registers: only %d assertion(s) ran, expected >= %d -- the gate was disarmed, not satisfied\n' \
     "$checks" "$MIN_CHECKS" >&2
