@@ -12,6 +12,9 @@ esac
 
 # The credential is materialised into a 0600 file HERE...
 hdr="$(mktemp)"
+# ADR-129: a single owning trap, registered immediately after allocation, so the
+# credential file cannot outlive this script on any exit path.
+trap 'rm -f "$hdr"' EXIT INT TERM HUP
 chmod 600 "$hdr"
 printf 'Authorization: Bearer %s' "${SENTRY_AUTH_TOKEN}" > "$hdr"
 
@@ -20,4 +23,3 @@ printf 'Authorization: Bearer %s' "${SENTRY_AUTH_TOKEN}" > "$hdr"
 # call as credentialed -- which is what makes the D4 mutation row discriminate.
 # Missing --disable/--noproxy: Rule D must still report it.
 curl -sS --header @- --url https://example.invalid/ < "$hdr" || true
-rm -f "$hdr"
