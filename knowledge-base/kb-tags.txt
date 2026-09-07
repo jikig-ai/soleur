@@ -3826,6 +3826,7 @@ tooling
 tooling / workflow-infra
 tooling-bug
 tooling-evaluation
+tooling-traps
 toolmcp
 tools
 touch-swipe
