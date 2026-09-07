@@ -531,6 +531,28 @@ pn_rc=1
 if [[ -n "$WWW_PN" ]] && ! grep -qxF "$WWW_PN" <<<"$SIBLING_PNS"; then pn_rc=0; fi
 verdict "$pn_rc" "soleur_www_redirect has a pronounceable_name distinct from every sibling monitor; found [${WWW_PN}]"
 
+# The bracket must not come back. deploy-docs.yml used to PAUSE the Sentry www
+# monitor around each publish and resume it afterwards, to hide a deploy-window
+# false page under the old `equals 301` assertion. Two reasons that must stay
+# gone, and neither is visible from the workflow alone:
+#
+#   1. A failed resume left the monitor paged-off, and the bracket's own comment
+#      recorded that the next apply-sentry-infra.yml run was NOT a guaranteed
+#      self-heal.
+#   2. Pausing halts checks, so Sentry RESOLVED the standing downtime issue on
+#      every docs deploy and opened a fresh one after — silently laundering the
+#      alarm's own failure record. That is why #7798's event counts and
+#      first-seen dates never reconciled across readings.
+#
+# Nothing else guards the removal, so a future "restore the deploy-window
+# suppression" PR would reintroduce both. The deploy window is absorbed by
+# confirmation_period = 1200 on the Better Stack monitor instead — a timer, not
+# a mutation. Asserted on the syntactic step-id/name anchors, and this file
+# therefore never quotes them in prose (cq-assert-anchor-not-bare-token).
+DEPLOY_MUTATIONS="$(count_matches '^[[:space:]]*(id:[[:space:]]*pause_www_monitor|-[[:space:]]*name:.*[Pp]ause .*uptime monitor)' "$DEPLOY_TXT")"
+eq_case '0' "$DEPLOY_MUTATIONS" \
+  "deploy-docs.yml declares no uptime-monitor pause/resume step (a failed resume strands the monitor paged-off, and pausing launders the incident record)"
+
 # ---------------------------------------------------------------------------------------
 # ANTI-VACUITY FLOOR AND ACCOUNTING (AP-023 / ADR-193)
 # ---------------------------------------------------------------------------------------
@@ -550,9 +572,9 @@ printf '\n'
 # pages_domain pair is replaced by a single absence assertion, so the count is one
 # lower. Bump the matching arm deliberately when you add a case.
 if [[ -n "$DOM_APEX" || -n "$DOM_WWW" ]]; then
-  EXPECTED_CASES=30   # PR3 onward: the two pages_domain couplings are live, + 6 Guard 1 (#7798)
+  EXPECTED_CASES=31   # PR3 onward: the two pages_domain couplings are live, + 7 Guard 1 (#7798)
 else
-  EXPECTED_CASES=29   # PR1/PR2: one absence assertion stands in for that pair, + 6 Guard 1 (#7798)
+  EXPECTED_CASES=30   # PR1/PR2: one absence assertion stands in for that pair, + 7 Guard 1 (#7798)
 fi
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[FATAL] vacuity floor: %d assertion cases executed, expected exactly %d — a case was deleted, skipped, or added without updating EXPECTED_CASES\n' \
