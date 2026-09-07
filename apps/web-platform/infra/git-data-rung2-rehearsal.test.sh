@@ -1738,13 +1738,85 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
   exit 1
 fi
 
-if [[ "$cases" -lt 75 ]]; then
-  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 75.\n' "$cases" >&2
+# ── (#7855) THE TRANSIENT SUMMARY MUST DISCRIMINATE, NOT SEND THE OPERATOR LOOKING ───────
+#
+# The capture now pairs its target read with a control read against a different source, so a
+# failed read resolves to one of three states with three different next actions — and two of
+# them are not about the rehearsal host at all. Before this, all three printed one sentence
+# telling the operator to go and read the capture log to work out which had happened. Run
+# 33888071954 was the dark-warehouse case and burned twenty attempts saying nothing.
+#
+# ANCHORED ON THE SENTENCE THE CAPTURE ACTUALLY EMITS. These three literals are the contract
+# between the two files: the capture prints them, the workflow greps for them. A drift in
+# either direction silently restores the single-sentence behaviour, so both sides are pinned
+# here and in tests/scripts/test-git-data-rung2-evidence-capture.sh.
+CAPTURE_SH="${ROOT}/scripts/followthroughs/git-data-rung2-evidence-capture.sh"
+for _phrase in 'DARK FOR EVERY PRODUCER' 'NEVER STORED A ROW' 'CONTROL READ ALSO FAILED'; do
+  cases=$((cases + 1))
+  if grep -qF "$_phrase" "$WF" && grep -qF "$_phrase" "$CAPTURE_SH"; then
+    pass "TRANSIENT state '${_phrase}' is emitted by the capture AND branched on by the workflow"
+  else
+    fail "TRANSIENT state '${_phrase}' is not pinned on both sides" \
+         "capture=$(grep -cF "$_phrase" "$CAPTURE_SH") workflow=$(grep -cF "$_phrase" "$WF")"
+  fi
+done
+
+# PAIRING, not just presence. The loop above asserts each phrase exists on both sides and the
+# check below asserts the headings are distinct — but neither pins WHICH phrase gates WHICH
+# heading. Swap two and every assertion stays green while the operator is handed the wrong next
+# action, and the actions genuinely differ (wait on #7811 / check the source name / the query
+# path is the suspect). Assert that each phrase's grep is followed by the heading that matches it.
+declare -A _pair=(
+  ['DARK FOR EVERY PRODUCER']='dark for EVERY producer'
+  ['NEVER STORED A ROW']='never stored a row'
+  ['CONTROL READ ALSO FAILED']='instrument itself is unusable'
+)
+for _ph in "${!_pair[@]}"; do
+  cases=$((cases + 1))
+  # The heading echo is the first `### Rung-2 rehearsal: TRANSIENT` line AFTER the phrase's grep.
+  _got=$(awk -v ph="$_ph" '
+    index($0, ph) && /grep -q/ { hunting = 1; next }
+    hunting && /### Rung-2 rehearsal: TRANSIENT/ { print; exit }
+  ' "$WF")
+  if [[ "$_got" == *"${_pair[$_ph]}"* ]]; then
+    pass "TRANSIENT branch '${_ph}' gates the heading that matches it"
+  else
+    fail "TRANSIENT branch '${_ph}' gates the WRONG heading" "got: ${_got:-<none>}"
+  fi
+done
+
+# D1: THE BRANCHES MUST READ THE FILE THE CAPTURE WRITES. All three greps are
+# `grep -q ... 2>/dev/null`, so a wrong path is permanently false and every run falls through to
+# the generic `else` -- the exact pre-#7855 behaviour, restored silently, with the suite green.
+# Nothing tied the reader's path to the writer's until this arm.
+cases=$((cases + 1))
+_cap_written=$(grep -oE 'tee /tmp/[A-Za-z0-9_/.-]+' "$WF" | head -1 | awk '{print $2}')
+_cap_read=$(grep -oE "grep -q '[^']+' /tmp/[A-Za-z0-9_/.-]+" "$WF" | grep -oE '/tmp/[A-Za-z0-9_/.-]+' | sort -u)
+_cap_read_n=$(printf '%s\n' "$_cap_read" | grep -c . || true)
+if [[ -n "$_cap_written" && "$_cap_read_n" -eq 1 && "$_cap_read" == "$_cap_written" ]]; then
+  pass "the TRANSIENT branches read the capture log the workflow actually writes (${_cap_written})"
+else
+  fail "capture-log path drift: workflow writes '${_cap_written:-<none>}' but the branches read '${_cap_read:-<none>}' (${_cap_read_n} distinct)"
+fi
+
+# The three branches must produce THREE DIFFERENT headings. Identical headings would satisfy
+# the greps above while restoring exactly the single-sentence behaviour this replaces.
+cases=$((cases + 1))
+_n_head=$(grep -cE '^\s*echo "### Rung-2 rehearsal: TRANSIENT' "$WF")
+_n_uniq=$(grep -oE '^\s*echo "### Rung-2 rehearsal: TRANSIENT[^"]*' "$WF" | sort -u | wc -l)
+if [[ "$_n_head" -ge 4 && "$_n_head" -eq "$_n_uniq" ]]; then
+  pass "each TRANSIENT branch carries a distinct heading (${_n_head} branches, ${_n_uniq} distinct)"
+else
+  fail "TRANSIENT headings are not distinct" "branches=${_n_head} distinct=${_n_uniq}"
+fi
+
+if [[ "$cases" -lt 83 ]]; then
+  printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, floor is 83.\n' "$cases" >&2
   printf '  Arms were deleted, skipped, or the suite exited early.\n' >&2
   printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed (%d cases) ===\n\n' "$passes" "$fails" "$cases"
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %d assertions ran (floor 75)\n' "$cases"
+printf '  ok   anti-vacuity floor: %d assertions ran (floor 83)\n' "$cases"
 
 printf '\n=== git-data-rung2-rehearsal: %d passed, %d failed ===\n\n' "$passes" "$fails"
 # `exit $(( fails > 0 ))`, NOT a trailing `[[ "$fails" -eq 0 ]]`. A bare final test expression

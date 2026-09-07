@@ -11,3 +11,10 @@
 # per-project environments) have no bun equivalents.
 # See: #1469, #1436
 pathIgnorePatterns = [".worktrees/**", "apps/web-platform/**"]
+
+# Guard 3 (#7833): abort the run if it started holding an inherited git-location
+# environment. In a linked worktree git exports GIT_DIR/GIT_INDEX_FILE to its hooks
+# as absolute paths, and they override both a subprocess's cwd and `git -C` -- so a
+# fixture's writes land in the developer's repo. Registration is part of the
+# mechanism: the guard asserts the tripwire FIRED, not that the file exists.
+preload = ["./plugins/soleur/test/lib/git-tripwire.ts"]

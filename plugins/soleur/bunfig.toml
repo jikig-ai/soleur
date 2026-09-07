@@ -1,0 +1,12 @@
+[test]
+# Guard 3 (#7833). bun resolves bunfig.toml from the INVOCATION cwd, not the repo root, so a
+# preload registered only in the root bunfig.toml does NOT apply to `cd plugins/soleur && bun test`.
+# Measured: from the repo root a hostile GIT_DIR aborts with rc=97; from this directory the same
+# command ran the suite with rc=0 and no tripwire at all.
+#
+# That is not hypothetical — `plugins/soleur/scripts/grok-fidelity-gate.sh` does `cd "$PLUGIN_ROOT"`
+# and then runs four `bun test` files, and it is documented as a developer command in
+# knowledge-base/engineering/grok-onboarding.md.
+#
+# The path is relative to THIS file's directory, which is what bun resolves preloads against.
+preload = ["./test/lib/git-tripwire.ts"]

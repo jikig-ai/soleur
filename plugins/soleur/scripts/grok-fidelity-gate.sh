@@ -33,6 +33,10 @@ echo "==> sync-grok-agent-compat --check"
 bun run scripts/sync-grok-agent-compat.ts --check
 
 echo "==> grok inspect contract + golden-path + lifecycle fidelity eval"
+# Scrub the inherited git-location family before starting a test runner (#7833). This is an
+# entry point outside lefthook.yml and scripts/hooks/, so Guard 2 does not see it; the
+# bunfig preload in this directory is the backstop, this line is the prevention.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH
 bun test test/grok-inspect-contract.test.ts test/go-routing-golden-path.test.ts test/workflow-fidelity.test.ts test/pr-merge-poll.test.ts
 
 if command -v grok >/dev/null 2>&1; then
