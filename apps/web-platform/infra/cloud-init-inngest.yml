@@ -1035,11 +1035,18 @@ runcmd:
     # vinngest-v* git tag; dropping the tag would silently disarm that guard, which is the
     # #6536 failure (a stale pin rebuilding the dark host pre-fix) all over again.
     #
-    # Digest verified from three independent sources before pinning: `docker buildx imagetools
-    # inspect`, the build-inngest-bootstrap-image.yml push log for run 29694156854, and the
-    # GitHub packages API. Bumping the tag WITHOUT re-resolving this digest gives you a
-    # v1.1.25 tag pinned to v1.1.24's bytes — silently, since the drift guard only reads tags.
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:f23a2a0d730d353b146d0f0675d192237c732df5c32e30cb59d16b4424faba49
+    # Digest read BY COMMAND from the run that SIGNED it — never transcribed, never eyeballed:
+    # `gh run view <run> --log | grep -oE "Signed <image>@sha256:[0-9a-f]{64}"`, asserted to
+    # return exactly one value (two means a retry moved the digest; zero means signing did not
+    # complete — both are halts). Run 34159532201, tag vinngest-v1.1.26.
+    #
+    # "Bumping the tag without re-resolving the digest" is no longer merely discouraged, which is
+    # what this comment used to say while the failure stayed available: Guard B now asserts every
+    # pin site carries a digest and that all sites agree, and Guard A compares every baked carrier
+    # against `git show <pinned tag>:<path>` — so a tag pinned to another tag's bytes reds the
+    # suite instead of shipping silently. That recurrence had already happened twice (#7630, and
+    # the v1.1.25-tag-on-v1.1.24-bytes case this paragraph used to describe).
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.26@sha256:cba7c11fb029f80a19a4212474936e79c90205986f5d5e03dfe2219c52053385
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # --- #7462 (ADR-096): resolve the effective ref ONCE, zot-primary ---------------------
     # THE DEFECT THIS CLOSES. Every other pull site in the fleet was flipped to prefer the
@@ -1083,7 +1090,7 @@ runcmd:
     . /etc/default/soleur-zot-read 2>/dev/null || true
     ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
     if [ -n "$ZOT_EP" ]; then
-      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:f23a2a0d730d353b146d0f0675d192237c732df5c32e30cb59d16b4424faba49"
+      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.26@sha256:cba7c11fb029f80a19a4212474936e79c90205986f5d5e03dfe2219c52053385"
       /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
       set +e
       install -m 600 /dev/null /var/log/inngest-zot-pull.log
