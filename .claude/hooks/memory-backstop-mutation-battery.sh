@@ -346,6 +346,16 @@ echo "== M8: move MAX_WALK_HOPS — the identity walk's traversal limit (#7854) 
 # not reproducible (measured: hop 3 standalone, hop 9 under lefthook). Synthetic
 # is the only shape in which "8, not 7 and not 9" is the same claim everywhere.
 HOPFX=$(mktemp -d -t hopfx.XXXXXXXX) || exit 2
+# Same guard as newtmp in memory-backstop.test.sh, for the same measured reason: `mktemp -d -t` is
+# only absolute when TMPDIR is, and an inherited RELATIVE TMPDIR passes straight through
+# (`TMPDIR=reltmp mktemp -d -t x.XXXX` -> `reltmp/x.abcd`, rc=0). Nothing below deletes, so the
+# harm here is writing a synthetic /proc tree into the CWD rather than losing data -- but the CWD
+# is the repo, and a fixture root we cannot prove is still one we must not build on.
+case "$HOPFX" in
+  /*) : ;;
+  *) printf 'battery: refusing a non-absolute fixture root %q (TMPDIR=%q)\n' "$HOPFX" "${TMPDIR-}" >&2
+     exit 2 ;;
+esac
 mkdir -p "$HOPFX/proc/100"
 printf 'Name:\tinit\nPid:\t100\nPPid:\t0\n' > "$HOPFX/proc/100/status"
 for i in $(seq 1 10); do
