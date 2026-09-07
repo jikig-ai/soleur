@@ -7,6 +7,16 @@
 # shipped twice. VERDICTS is appended to by each helper and the floor asserts a
 # minimum length, so silencing a helper DELETES evidence rather than moving a number.
 set -uo pipefail
+
+# Redirect incident telemetry into a sandbox before any case runs. Required of
+# every hook suite by .claude/hooks/incident-sandbox-coverage.test.sh: without
+# it these fixtures write into the operator's live .claude/.rule-incidents.jsonl,
+# which `compound` Phase 1.5 reads as deviation evidence and
+# `rule-metrics-aggregate.sh` keys its counters on. Sourcing the helper (rather
+# than setting INCIDENTS_REPO_ROOT per call) is what makes it impossible for an
+# individual invocation to forget.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 HOOK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pkill-self-match-guard.sh"
 VERDICTS=()
 MIN_ASSERTIONS=11
