@@ -254,6 +254,16 @@ readonly CODE_ENV_BINDING_RE='\benv([[:space:]]*[:,}]|[[:space:]]*$)'
 # env is bound once inside the wrapper, which C then checks on the wrapper's own definition line.
 readonly CODE_DIRECT_SPAWN_RE='\b(execFileSync|execSync|spawnSync|execFile|spawn|Bun\.spawn|Bun\.spawnSync)[[:space:]]*\('
 
+# Counters go to a FILE, not shell variables. `derive_C` is consumed as `$(derive_C | sort -u)`,
+# and command substitution runs it in a SUBSHELL: a variable incremented there is discarded, so the
+# floor below would read 0 on every run and fire on a healthy tree. Measured -- it did exactly that.
+_C_COUNTS="$(mktemp "$TMPDIR/g5-c-counts.XXXXXXXX")" || {
+  printf '[FATAL] mktemp failed for derivation C counters\n' >&2; exit 2; }
+printf '0 0\n' > "$_C_COUNTS"
+_c_bump() { # $1=files delta  $2=spawns delta
+  local f sp; read -r f sp < "$_C_COUNTS"
+  printf '%d %d\n' "$((f + $1))" "$((sp + $2))" > "$_C_COUNTS"
+}
 derive_C() { # files in B that still contain an env-less mutating spawn
   # Scans a WINDOW, not a line. A spawn call is routinely written across several lines with the
   # `env:` binding on its own — checking only the line bearing the callee reports every multi-line
@@ -261,12 +271,17 @@ derive_C() { # files in B that still contain an env-less mutating spawn
   # The window ends at the call's closing `});`/`})` or after CALL_WINDOW lines, whichever is first.
   local f n line window
   local -r CALL_WINDOW=12
-  for f in $(derive_B | grep -E '\.(ts|tsx|js|mjs)$'); do
+  # Reuse the ALREADY-COMPUTED B_SET rather than re-running derive_B. derive_B is a pure function of
+  # the tracked tree and cannot change mid-run; recomputing it here measured 4.85 s of this suite's
+  # 20.66 s (23%), for nothing.
+  for f in $(printf '%s\n' "$B_SET" | grep -E '\.(ts|tsx|js|mjs)$'); do
+    _c_bump 1 0
     # The helper's own implementation is not a consumer of itself.
     [[ "$f" == plugins/soleur/test/lib/git-fixture-env.ts ]] && continue
     while IFS=: read -r n line; do
       [[ -z "${n:-}" ]] && continue
       case "$line" in *//*|*'*'*) ;; esac
+      _c_bump 0 1
       _line_is_mutating <<<"$(_code_line_tokens "$line")" || continue
       # Read forward from the callee line to the end of the CALL EXPRESSION, by paren depth.
       #
@@ -542,6 +557,52 @@ fi
 # --- partial-conversion check (derivation C) ------------------------------------------------------
 PARTIAL="$(derive_C | sort -u)"
 PARTIAL_N=$(printf '%s' "$PARTIAL" | grep -c . || true)
+# Derivation C's OWN non-vacuity floor (A, B and the return-check each carry one; C did not).
+# Without it, two independent one-line edits flip a genuinely RED tree green with the assertion count
+# unchanged, so MIN_ASSERTIONS never notices: narrowing CODE_DIRECT_SPAWN_RE to match nothing, or
+# widening CODE_ENV_BINDING_RE to match everything. Both were measured surviving.
+#
+# Floors the WORK DONE, not the findings: a clean run and a run that scanned nothing are otherwise
+# byte-identical. Derived from the current tree (14 code files in B, 40+ direct spawn sites) with
+# headroom for ordinary shrinkage, and it is a floor rather than an equality so converting a suite
+# does not red it.
+# NON-VACUITY CONTROL for derivation C's predicate pair.
+#
+# The scan floors below prove C LOOKED at something; they cannot prove it can still DISCRIMINATE.
+# Measured: widening CODE_ENV_BINDING_RE to match everything leaves both floors satisfied (the scan
+# happened, it just concluded wrongly) and flips a genuinely partial tree green. A floor counts work
+# done; only a known-unprotected input proves the predicate still says NO.
+#
+# Two synthetic lines, run through the SAME two regexes the real derivation uses -- not a
+# reimplementation, or this would drift from what it certifies.
+_c_control() {
+  local unprotected='  execFileSync("git", ["init", dir], { cwd: dir });'
+  local protected='  execFileSync("git", ["init", dir], { cwd: dir, env: gitFixtureEnv(dir) });'
+  local must_flag=0 must_pass=0
+  grep -qE "$CODE_DIRECT_SPAWN_RE" <<<"$unprotected" \
+    && ! grep -qE "$CODE_ENV_BINDING_RE" <<<"$unprotected" && must_flag=1
+  grep -qE "$CODE_DIRECT_SPAWN_RE" <<<"$protected" \
+    && grep -qE "$CODE_ENV_BINDING_RE" <<<"$protected" && must_pass=1
+  if (( must_flag == 1 && must_pass == 1 )); then
+    pass "derivation C control: an env-less spawn is flagged AND an env-bound spawn is not"
+  else
+    fail "derivation C control FAILED (flags-unprotected=$must_flag accepts-protected=$must_pass) -- the predicate pair no longer discriminates, so the partial-conversion assertion is vacuous whatever it reports"
+  fi
+}
+_c_control
+
+read -r _C_FILES_SCANNED _C_SPAWNS_SCANNED < "$_C_COUNTS"
+rm -f "$_C_COUNTS"
+readonly C_FILE_FLOOR=8
+readonly C_SPAWN_FLOOR=20
+if (( _C_FILES_SCANNED < C_FILE_FLOOR )); then
+  fail "derivation C scanned only $_C_FILES_SCANNED code files (floor $C_FILE_FLOOR) -- its population collapsed, so the partial-conversion assertion below is vacuous"
+elif (( _C_SPAWNS_SCANNED < C_SPAWN_FLOOR )); then
+  fail "derivation C examined only $_C_SPAWNS_SCANNED direct spawn sites (floor $C_SPAWN_FLOOR) -- CODE_DIRECT_SPAWN_RE matches (almost) nothing, so a partial conversion cannot be seen"
+else
+  pass "derivation C scanned $_C_FILES_SCANNED files / $_C_SPAWNS_SCANNED spawn sites (floors $C_FILE_FLOOR / $C_SPAWN_FLOOR)"
+fi
+
 if [[ "$PARTIAL_N" -eq 0 ]]; then
   pass "no adopted CODE file still spawns git with no env binding (partial conversion)"
 else
@@ -554,7 +615,7 @@ printf '\n=== %d passed, %d failed, %d assertions ===\n' "$PASS" "$FAIL" "$ASSER
 # Assertion-count floor. Reported with printf and exit, NEVER through fail() — this backstops fail()
 # and the counters it maintains (ADR-193). Deleting the body of any loop above leaves the counters
 # untouched and this guard would otherwise read "0 failed" over a tree it never examined.
-readonly MIN_ASSERTIONS=20
+readonly MIN_ASSERTIONS=22
 if (( ASSERTIONS < MIN_ASSERTIONS )); then
   printf '\nFATAL: only %d assertions ran (expected >= %d).\n' "$ASSERTIONS" "$MIN_ASSERTIONS" >&2
   printf 'A guard that reports "0 failed" after running almost nothing is worse than no guard.\n' >&2

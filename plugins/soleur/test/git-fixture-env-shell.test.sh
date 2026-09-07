@@ -20,8 +20,13 @@ REPO_ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd -P)"
 LIB="$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
 
 PASS=0; FAIL=0; ASSERTIONS=0
-ok()  { printf '  [ok]   %s\n' "$1"; PASS=$((PASS+1)); ASSERTIONS=$((ASSERTIONS+1)); }
-bad() { printf '  [FAIL] %s\n' "$1"; FAIL=$((FAIL+1)); ASSERTIONS=$((ASSERTIONS+1)); }
+# The verdict reads an APPEND-ONLY ledger, not the counters (see the exit trap below). A counter is
+# one assignment away from lying; a ledger line has to be deleted to disappear.
+readonly MIN_ASSERTIONS=24
+_VERDICT_LEDGER="$(mktemp "$TMPDIR/gfe-verdict.XXXXXXXX")" || {
+  printf '[FATAL] mktemp failed for the verdict ledger\n' >&2; exit 2; }
+ok()  { printf '  [ok]   %s\n' "$1"; printf 'ok\n'   >>"$_VERDICT_LEDGER"; PASS=$((PASS+1)); ASSERTIONS=$((ASSERTIONS+1)); }
+bad() { printf '  [FAIL] %s\n' "$1"; printf 'FAIL\n' >>"$_VERDICT_LEDGER"; FAIL=$((FAIL+1)); ASSERTIONS=$((ASSERTIONS+1)); }
 
 # --- instrument self-test (ADR-193) --------------------------------------------------------------
 # Drive both helpers once each before any real assertion and require both counters to have moved.
@@ -37,8 +42,13 @@ if (( PASS != _p0 + 1 || FAIL != _f0 + 1 )); then
   exit 1
 fi
 # Reset so the self-test does not colour the real result.
+# Reset the LEDGER together with the counters. The self-test deliberately drives ok() and bad()
+# once each, so its two rows would otherwise make the conservation check fail on every clean run --
+# a check that fires on a healthy suite is one the next reader disables.
 PASS=0; FAIL=0; ASSERTIONS=0
+: > "$_VERDICT_LEDGER"
 printf '  [ok]   instrument self-test cleared (both counters moved)\n'
+printf 'ok\n' >>"$_VERDICT_LEDGER"
 PASS=1; ASSERTIONS=1
 
 # One owning EXIT trap for every fixture this suite allocates (ADR-129 rule (c)).
@@ -54,7 +64,46 @@ PASS=1; ASSERTIONS=1
 _FIXTURE_ROOT="$(mktemp -d "$TMPDIR/gfe-shell.XXXXXXXX")" || {
   printf '[FATAL] mktemp -d failed; harness cannot set up\n' >&2; exit 2; }
 # Guarded on the shape this function itself creates, so the trap cannot be aimed elsewhere.
-trap '[[ -n "${_FIXTURE_ROOT:-}" && "$_FIXTURE_ROOT" == "$TMPDIR"/gfe-shell.* ]] && rm -rf "$_FIXTURE_ROOT"' EXIT
+# ONE owning EXIT trap: fixture cleanup AND the verdict.
+#
+# The verdict lives in the trap, and reads the LEDGER rather than the counters, because a bare
+# `if (( FAIL > 0 )); then exit 1; fi` at the bottom of a suite is deletable in one line -- measured
+# on this very file: 3 `[FAIL]` lines printed and the suite exited 0. In the trap it fires even on
+# an early `exit 0`, and because it counts ledger rows, neutering `fail()` into `pass()` is caught
+# by the conservation check instead of silently passing.
+# RESIDUAL, stated because it is invisible from a green run: deleting the `trap
+# _verdict_and_cleanup EXIT` line below silences all of this, and a suite cannot defend its own exit
+# from inside itself. Measured: trap deleted + a real regression injected => rc=0. What the ledger
+# DOES close is the two mutations that do not touch the trap -- rewriting `bad()` to increment PASS
+# (caught by conservation) and dropping the ledger write (caught by conservation). The remaining
+# hole needs an external guard asserting every suite HAS a verdict; ADR-193's
+# guard-vacuity-floor.test.sh is the natural home, but its population today is "suites that already
+# carry a shape-recognizable floor". Tracked in #7889.
+_verdict_and_cleanup() {
+  local _rc=$?
+  local ledger_fail=0 ledger_total=0
+  if [[ -r "${_VERDICT_LEDGER:-}" ]]; then
+    ledger_fail=$(grep -c '^FAIL$' "$_VERDICT_LEDGER" || true)
+    ledger_total=$(grep -c . "$_VERDICT_LEDGER" || true)
+  fi
+  [[ -n "${_FIXTURE_ROOT:-}" && "$_FIXTURE_ROOT" == "$TMPDIR"/gfe-shell.* ]] && rm -rf "$_FIXTURE_ROOT"
+  [[ -n "${_VERDICT_LEDGER:-}" ]] && rm -f "$_VERDICT_LEDGER"
+
+  # Conservation: the counters must agree with the append-only record. A `fail()` rewritten to
+  # increment PASS moves both counters and leaves the ledger unchanged, so this catches it.
+  if (( ledger_total != ASSERTIONS || ledger_fail != FAIL )); then
+    printf '[FATAL] verdict ledger disagrees with the counters: ledger %d rows / %d FAIL vs counters %d assertions / %d FAIL\n' \
+      "$ledger_total" "$ledger_fail" "$ASSERTIONS" "$FAIL" >&2
+    exit 1
+  fi
+  if (( ledger_total < MIN_ASSERTIONS )); then
+    printf '[FATAL] assertion floor: %d ledger rows < %d\n' "$ledger_total" "$MIN_ASSERTIONS" >&2
+    exit 1
+  fi
+  (( ledger_fail > 0 )) && exit 1
+  exit "$_rc"
+}
+trap _verdict_and_cleanup EXIT
 
 mkfixture() {
   local d
@@ -238,11 +287,6 @@ fi
 
 printf '\n=== summary ===\n'
 printf '  %d passed, %d failed, %d assertions\n' "$PASS" "$FAIL" "$ASSERTIONS"
-MIN_ASSERTIONS=24
-if (( ASSERTIONS < MIN_ASSERTIONS )); then
-  printf '[FATAL] assertion floor: %d assertions < %d -- the suite did not run what it claims\n' \
-    "$ASSERTIONS" "$MIN_ASSERTIONS" >&2
-  exit 1
-fi
-if (( FAIL > 0 )); then exit 1; fi
+# No verdict here: the EXIT trap owns it, reading the append-only ledger. A bare check at this
+# position is deletable in one line and the suite would exit 0 with [FAIL] lines on screen.
 exit 0
