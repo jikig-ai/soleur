@@ -30,6 +30,32 @@
 #     prove "soleur.ai is reachable" when Sentry is the one that's broken.
 #   - Free-tier BetterStack caps the workplace at 10 monitors. Headroom matters.
 #
+# AMENDED at #7798 (ADR-204), narrowly and deliberately. "Vendor isolation, not
+# URL coverage" still governs everything above; it no longer governs a property
+# SENTRY CANNOT EXPRESS AT ALL. Sentry's uptime checker always follows 3xx and
+# evaluates every assertion against the FINAL response, so "www must 301 to the
+# apex" is not a weaker assertion there — it is an unwritable one. Better Stack's
+# `follow_redirects = false` is the only knob in the stack that can express it.
+# So betteruptime_monitor.soleur_www_redirect below is here on capability
+# grounds, not coverage grounds, and the amendment extends no further than that.
+#
+# Consequence a future reader must not get wrong: redirect-health is now a
+# SINGLE-VENDOR property. Apex reachability is watched by Sentry AND Better
+# Stack, so a Sentry outage is survivable; the www 301 is watched only here. That
+# is a gain (the property went from zero working alarms to one, not from two to
+# one), but do not infer second-sourcing from the apex pattern. ADR-204 says so
+# explicitly. Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
+#
+# Live quota measured 2026-09-07 (not counted from .tf blocks, which misses the
+# unmanaged app.soleur.ai/health monitor): 3 monitors + 9 heartbeats. Heartbeats
+# are NOT pooled against the 10-monitor cap — 12 resources already coexist. This
+# monitor is the 4th of 10. Two tracked follow-ups, both also linked from ADR-204:
+#   #7883 — no runtime assertion of the redirect's TARGET (only its status code);
+#           re-evaluate if a Cloudflare-side change ever reaches prod un-applied.
+#   #7884 — betteruptime monitor id 4226366 (app.soleur.ai/health) is LIVE but
+#           declared in no root, so nothing converges it and it is invisible to
+#           the #5566 coverage guard. It is why the count above is measured.
+#
 # Why check_frequency = 180 (3 min) vs Sentry's 300s (5 min): denser probe
 # trades a tiny BetterStack-bill bump (free-tier sub-minute checks are paid;
 # 3-minute is free-tier-allowed per BetterStack pricing snapshot 2026-05) for
@@ -131,6 +157,88 @@ resource "betteruptime_monitor" "app" {
   push  = false
 
   team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+
+  verify_ssl = true
+  paused     = false
+}
+
+# ── The www→apex 301 redirect alarm (#7798, ADR-204) ───────────────────────
+#
+# This monitor exists because the one that was supposed to hold this role never
+# worked. sentry_uptime_monitor.soleur_www asserted `equals 301` on this exact
+# URL and failed EVERY check it ever ran: Sentry's uptime checker always follows
+# 3xx and evaluates assertions against the final response, so it compared
+# `equals 301` against the apex's 200. Measured 2026-09-07 — 10/10 checks
+# failing, every row httpStatusCode 301, assertionFailureData naming that
+# assertion. That monitor is now retargeted to 2xx REACHABILITY and renamed
+# sentry_uptime_monitor.soleur_www_reachability; the redirect-health half lives
+# here, on the only vendor that can express it.
+#
+# Two alarms now watch www and they mean different things. In an inbox:
+#   "soleur dot ai www redirect 301"  → www stopped 301-ing to the apex
+#   "soleur-ai-www-reachability"      → www is unreachable / 5xx
+#
+# Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
+# The redirect itself is declared in seo-bulk-redirects.tf
+# (cloudflare_list.www_canonical); PR-time config drift is guarded by
+# infra/www-apex-canonicalizer.test.sh, which also pins the four load-bearing
+# attributes below.
+resource "betteruptime_monitor" "soleur_www_redirect" {
+  # `status` means "2xx-only" and cannot express a 301. This type is what makes
+  # the status-code list below meaningful. Free-tier acceptance of the type was
+  # MEASURED at #7798 Phase 0 (HTTP 201), because the only in-repo precedent for
+  # it is paid-tier-count-gated and has therefore never actually run.
+  monitor_type       = "expected_status_code"
+  url                = "https://www.soleur.ai/"
+  pronounceable_name = "soleur dot ai www redirect 301"
+
+  # THE SINGLE TOKEN THAT SEPARATES THIS MONITOR FROM THE BROKEN ONE. With
+  # follow_redirects = true the probe resolves to the apex 200 and [301] can
+  # never match — precisely the #7798 defect. Better Stack also refuses the
+  # combination outright (measured: HTTP 422 "Cannot follow redirects when
+  # expecting a 3xx status code"), so this fails at PR time via the guard and
+  # again at apply time via the vendor.
+  follow_redirects = false
+
+  # Exact list, not a 3xx class: a 302/307/308 is a different canonicalization
+  # contract to search engines, and admitting a 2xx would admit the exact state
+  # this monitor exists to catch (www serving the site instead of redirecting).
+  expected_status_codes = [301]
+
+  # NOT optional, despite looking like a default. The attribute is `computed` in
+  # the pinned provider, so omitting it sends nothing and the API default (true)
+  # applies — and Better Stack then REFUSES the create: HTTP 422 "Cannot keep
+  # cookies when redirecting when expecting a 3xx status code". Measured against
+  # the live API at #7798 Phase 0; without this line the resource never applies.
+  remember_cookies = false
+
+  check_frequency = 180 # free-tier-allowed 3 min, matching both siblings
+  request_timeout = 10
+
+  # 1200, deliberately NOT 900. During a Pages rebuild www transiently serves its
+  # own 200, observed at ~15 min — and 900 is exactly that, i.e. zero margin, so a
+  # rebuild running slightly long would open a false incident on the very class
+  # this setting exists to absorb. 1200 buys ~5 min of margin. The cost is
+  # symmetric and is stated rather than buried: the same timer bounds real
+  # regression detection. Worst case ADDS the cadence: up to 180 s to observe the
+  # first failure, then the 1200 s window = 1380 s, ~23 min. That replaces a bound
+  # dns.tf's Camp B ruling assumed was "one monitor interval" and which was in
+  # fact never delivering anything, the assertion behind it having never passed.
+  confirmation_period = 1200
+  recovery_period     = 60
+
+  email = true
+  call  = false
+  sms   = false
+  push  = false
+
+  team_name = "Your team"
+
+  # Follows the file convention rather than omitting it. Under the free tier the
+  # ternary is null and this changes nothing; omitting the attribute instead
+  # would silently exclude this monitor from escalation on a future
+  # betterstack_paid_tier flip, unlike every sibling.
   policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
 
   verify_ssl = true
@@ -245,7 +353,9 @@ resource "betteruptime_team_member" "ops" {
 # The post-mortem scenario this policy was meant to alert on — 526 origin
 # cert validation failures — is already covered by:
 #   - `sentry_uptime_monitor.soleur_apex` (5-min interval, 3-fail trip)
-#   - `sentry_uptime_monitor.soleur_www`
+#   - `sentry_uptime_monitor.soleur_www_reachability` (renamed at #7798; it was
+#     `soleur_www` and asserted `equals 301`, which it could never satisfy -- so
+#     read this row as covering 526 only since the 2xx retarget)
 #   - `sentry_uptime_monitor.soleur_acme_probe` (ACME-carve-out regression alarm)
 #   - `betteruptime_monitor.soleur_apex` (3-min multi-region, vendor-isolated)
 # A 526 either fails the TLS handshake or returns a 5xx — both fire the
