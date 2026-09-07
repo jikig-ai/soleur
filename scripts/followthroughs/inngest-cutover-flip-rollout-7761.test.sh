@@ -510,7 +510,31 @@ rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$
 [[ "$(probe_out)" == *"cutover_armed"* ]] && pass "names cutover_armed" || fail "reason not named: $(probe_out)"
 [[ "$(probe_out)" == *"FLUSHALL"* ]] && pass "names the FLUSHALL consequence" || fail "consequence not named: $(probe_out)"
 
-MIN_ASSERTIONS=49
+
+# --- T1: rows PRESENT for the right host, none carrying the pinned digest ---------------------
+# The plan's T1 is "no row carries the pinned digest -> boundary_underivable", and it is THE STATE
+# AT MERGE by construction. Splitting that reason from probe_channel_dark (a channel that emitted
+# nothing at all) left this exact case with no fixture: D3's foreign-host row is filtered out
+# before the digest match, so it exercises the channel-dark arm, not this one. Without this row,
+# the reason an operator will actually see at merge is untested.
+echo "TEST: #7695 T1 — rows exist for this host but carry a DIFFERENT digest"
+f="$WORK/rows-wrong-digest"
+{
+  probe_row "$(_ck '-70 minutes')" "10.0.1.30:5000/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:$(printf 'b%.0s' {1..64})"
+  row aborted noop-aborted "$(_ts '-40 minutes')"
+} > "$f"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
+[[ "$rc" == "2" ]] && pass "exit 2 when rows exist but none carry the pinned digest" \
+  || fail "expected 2, got $rc: $(probe_out)"
+[[ "$(probe_out)" == *"boundary_underivable"* ]] && pass "names boundary_underivable (not probe_channel_dark)" \
+  || fail "wrong reason: $(probe_out)"
+[[ "$(probe_out)" != *"probe_channel_dark"* ]] && pass "does NOT claim the channel is dark — rows were observed" \
+  || fail "misreported as channel_dark: $(probe_out)"
+# The observed digest is the one-line answer to "why", so it must actually be reported.
+[[ "$(probe_out)" == *"observed=sha256:bbbb"* ]] && pass "reports the OBSERVED digest alongside the pinned one" \
+  || fail "observed digest not reported: $(probe_out)"
+
+MIN_ASSERTIONS=53
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
