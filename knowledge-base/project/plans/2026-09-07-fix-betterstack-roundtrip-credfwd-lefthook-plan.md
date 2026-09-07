@@ -6,7 +6,7 @@ branch: feat-one-shot-7867-7873-7886-betterstack-credfwd-lefthook
 lane: cross-domain
 type: fix
 issue: 7873
-closes: 7873, 7886
+closes: 7873
 priority: p1-high
 domain: engineering
 brand_survival_threshold: single-user incident
@@ -319,11 +319,28 @@ Three facts bound what that means for this plan, all checked rather than assumed
 - Its mechanism is the one this plan now adopts, and the reason-classification fact behind it is real
   (12 reasons, measured above).
 
-**Consequence: PR 1 does not proceed independently.** Phase 0 re-checks #7879 first. If it has landed
-the harness fix, PR 1 shrinks to whatever remains — likely only closing #7886 against it. If it has
-not, PR 1 ships the verdict gate, which is the same mechanism, so the two converge rather than
-conflict. What PR 1 must **not** do is ship the walk-alignment fix into a file another open PR is
-rewriting with a better one.
+**RESOLVED 2026-09-07 — PR 1 is CUT and #7886 is transferred to PR #7879.**
+
+The Phase 0 step 5 re-check ran at the top of this session's `/work` handoff and found more than the
+deepen pass could see: PR #7879's fix is **implemented**, in unpushed local commit `4115024f5`
+("fix(test): ask the hook for the e2e precondition instead of re-deriving it"), touching
+`.claude/hooks/memory-backstop.test.sh` and `.claude/hooks/memory-backstop-mutation-battery.sh`. Its
+commit message carries the measured root cause this plan reached independently — the suite's walk and
+the hook's walk **start one process apart**, so matching the traversal limit cannot make them agree —
+and it gates on `outcome != "applied"` over a reason set derived from the hook's source.
+
+That is the same mechanism this plan adopted at deepen, arrived at independently, and it is further
+along. Shipping PR 1 would put two live sessions on one file. So:
+
+- This branch ships **nothing** under `.claude/hooks/**`. PR 1's tasks (1.a–1.h) are struck.
+- #7886 is commented with a pointer to #7879's commit, and #7879 must add `Closes #7886` to its body
+  so the issue is not orphaned when it merges. That comment is the transfer record.
+- The `#7208` note (task 1.g — `MAX_WALK_HOPS` is not raisable-for-benefit) travels with #7886 to
+  #7879 rather than being dropped; #7879's own plan already reaches the same conclusion and cuts the
+  raise for the same reason.
+
+The paragraph below is retained because it remains the correct reading of the count under the hook,
+and #7879's PR will need it for the same reason this one would have.
 
 **What this means under lefthook, so nobody "fixes" the count later.** At the lefthook depth the
 corrected gate reports `E2E=no` and `skip()`s seven labels; `skip()` increments neither counter, so
@@ -495,7 +512,7 @@ in one.
 | Unit | Scope | Paths | Rationale |
 |---|---|---|---|
 | **PR 0** | `--disable` + `--noproxy '*'` into the four sweep-only `scripts/` files, plus the xtrace preamble each needs | `scripts/**` | Lands the named single-user-incident vector (`betterstack-query.sh`) **first**, with no new machinery. Depends on nothing. |
-| **PR 1** | #7886 fix + its guard | `.claude/hooks/**` | Merges before PR 2 so PR 2's commits are authored through a green pre-commit gate. **Scope depends on PR #7879** — OPEN, WIP, same file, same mechanism — settled at Phase 0 step 5. |
+| ~~**PR 1**~~ | ~~#7886 fix + its guard~~ | ~~`.claude/hooks/**`~~ | **CUT 2026-09-07, on operator decision.** The Phase 0 step 5 re-check resolved: PR #7879 has the fix implemented in unpushed local commit `4115024f5`, with the same verdict-gate mechanism and a fuller reason classification. #7886 is transferred to #7879; this branch ships nothing under `.claude/hooks/**`. See §Collision. |
 | **PR 2** | #7873 site 1 (both credential paths) + Rule D + the inverted seam + the parity assertion | `scripts/**`, `tests/scripts/**`, `.github/workflows/ci.yml`, `model.c4` | The guard that keeps PR 0's sites honest. |
 | **Track D** | #7867 — escalate, run, record, discriminate | none, or ADR/C4 on the branch taken | Runs outside the PR chain, first in wall-clock. Not a PR: on three of four branches it is zero code. Its conditional docs edit folds into whichever PR is in flight when the verdict lands. |
 | **Deferred** | #7873 sites 2/3 transport flags | `apps/web-platform/infra/**` | Rides a window opened for another reason. |
@@ -518,14 +535,14 @@ cycles.** If the session's budget expires mid-chain, what must already have ship
    the drawdown is scoped before the first commit rather than discovered by CI.
 4. Measure this runner's base distance to `claude` (`/proc` walk) so the depth harness targets
    `MAX_WALK_HOPS` hops from the hook's frame rather than a hardcoded number.
-5. **Re-check PR #7879's state.** It is OPEN and WIP on `.claude/hooks/memory-backstop.test.sh`,
-   taking the verdict-gate mechanism this plan adopts. If it has landed, PR 1 shrinks accordingly and
-   #7886 may close against it; if it has not, PR 1 ships the same mechanism so the two converge.
-   PR 1's scope is settled here, not mid-implementation.
-6. Check whether the planned `#7886` guard suite will be floor-bearing. If so, it must be added to
-   `PROMOTED_FILES` in `scripts/guard-vacuity-floor.test.sh` in the same PR — `.claude/hooks/` is in
-   that guard's `DEFERRED_DIRS` and `MAX_DEFERRED=47` is shrink-only, so leaving it deferred reddens
-   CI. This is the second unscoped CI blocker the deepen pass found, alongside the xtrace drawdown.
+5. ~~Re-check PR #7879's state.~~ **DONE 2026-09-07 — outcome: PR 1 CUT.** #7879 carries the fix in
+   unpushed commit `4115024f5`. #7886 transferred to #7879; this branch ships nothing under
+   `.claude/hooks/**`. See §Collision.
+6. ~~Check whether the planned `#7886` guard suite will be floor-bearing.~~ **MOOT — PR 1 is cut, so
+   no new `.claude/hooks/` suite is added and `MAX_DEFERRED=47` is not perturbed.** The finding stands
+   for whoever ships that guard (#7879): `.claude/hooks/` is in `guard-vacuity-floor.test.sh`'s
+   `DEFERRED_DIRS` and `MAX_DEFERRED` is shrink-only, so a new deferred suite there reddens CI unless
+   it is promoted in the same PR. The xtrace drawdown blocker still applies to PR 0/PR 2.
 
 #### Phase 1 — PR 0 (the sweep)
 
@@ -537,26 +554,10 @@ cycles.** If the session's budget expires mid-chain, what must already have ship
    send synthetic credentials at the real warehouse from CI.
 3. Verify each affected suite still passes.
 
-#### Phase 2 — PR 1 (#7886)
+#### Phase 2 — PR 1 (#7886) — CUT
 
-0. **Re-check PR #7879 first.** It is OPEN, WIP, on the same file, and taking the verdict-gate
-   mechanism. If it has landed the harness fix, PR 1 shrinks to whatever remains — verify #7886 is
-   actually fixed on `origin` and close it against #7879 rather than re-fixing it. Steps 1-6 assume
-   it has not landed.
-1. **RED first**: a development-time depth harness that uses a **real fork per level**, asserts its
-   own achieved depth against `/proc`, and shows today's `FAILED 1 (passed 46)` at the boundary.
-2. Replace the gate's independent walk with a **verdict read**: run the hook, take its `outcome` and
-   `reason`, and classify per the table in *Proposed Solution* §1 — 5 defect reasons FAIL, the
-   environment reasons and the two deliberate ones SKIP.
-3. Derive the reason set **from the hook's source**, not a list in the test, so a reason added to the
-   hook without a classification reddens the guard.
-4. Add the static guard (Guard 2) over that enumeration and classification.
-5. Comment on #7208 recording that `MAX_WALK_HOPS` is not raisable-for-benefit, with the evidence.
-6. If the new guard suite is floor-bearing, add it to `PROMOTED_FILES` in
-   `scripts/guard-vacuity-floor.test.sh` — `.claude/hooks/` sits in that guard's `DEFERRED_DIRS` and
-   `MAX_DEFERRED=47` is shrink-only, so leaving it merely deferred reddens CI.
-7. Verify across the depth range: none reports `FAILED`; the boundary depth reports a green,
-   honestly-skipped result; one beyond it still skips the arm. The harness stays a development tool.
+Settled at Phase 0 step 5: PR #7879 owns this. The only work here is the two transfer comments
+(on #7886 and on #7879), described in *Acceptance Criteria* §PR 1.
 
 #### Phase 3 — Track D (#7867), first in wall-clock terms
 
@@ -964,8 +965,7 @@ named alongside the explicit no-data-loss statement (C5).
 `scripts/betterstack-ingest-probe.sh`, `scripts/followthroughs/betterstack-roundtrip-latency-7855.sh`:
 `--disable` first, `--noproxy '*'`, plus the xtrace preamble where the baseline requires it.
 
-**PR 1** — `.claude/hooks/memory-backstop.test.sh`: the `$BASHPID` seed, the sourced budget, the
-`CLAUDE_CODE_EXECPATH` branch, the static guard.
+**PR 1** — CUT. No file under `.claude/hooks/` is edited on this branch.
 
 **PR 2**
 
@@ -1017,37 +1017,17 @@ slice-boundary and debugging-order criteria were cut — a diff asserting its ow
   `tests/scripts/test-betterstack-ingest-probe.sh` and the `betterstack-query` suites pass — the
   `127.0.0.1` env seam still works, because PR 0 adds flags and **no** pin.
 
-### PR 1 — #7886
+### PR 1 — #7886 — CUT (transferred to PR #7879)
 
-- **A1.** A committed depth harness inserts hops with **real forks**, **verifies its achieved depth
-  against `/proc` before invoking the suite**, and derives its target from the measured distance to
-  `claude` rather than a hardcoded number. A harness that inserts nested `bash -c` (which adds no hop)
-  must fail its own achieved-depth check rather than reporting a green suite.
-- **A2.** Across the depth range spanning the boundary, the suite does **not** report `FAILED`, and
-  the `✗ T8 real hook did not apply (outcome='skipped' reason='claude_pid_not_found')` line is absent.
-  No absolute case count is asserted: it depends on ambient machine state (the `LIVE` gate needs a
-  user systemd bus, which CI lacks) and on how many assertions the suite carries.
-- **A3.** Every `reason="…"` the hook can emit is classified skip-or-fail by the test, and the
-  classification is derived from the hook's source rather than a list maintained in the test. Adding
-  an unclassified reason to the hook reddens the guard.
-- **A4.** The five defect reasons (`adoption_unverified`, `cap_out_of_range`, `fleet_caps_unverified`,
-  `pid_reuse_disambiguated`, `scope_caps_unverified`) still **FAIL**, and `disabled` /
-  `concurrent_apply` **SKIP**. This is the criterion that keeps T8 meaningful per #7886's own
-  requirement, and it is what the blanket `outcome != "applied" ⇒ skip` form would have lost.
-- **A5.** Guard 2 scores 7/7 mutation rows RED (row 7 applies only if the fallback walk-alignment
-  design is used), plus harness rows 1/1 RED and 1/1 must-PASS GREEN. Each RED is asserted on the
-  failure-message anchor, not a bare non-zero exit.
-- **A6.** PR #7879's state was re-checked before PR 1 was authored, and PR 1's scope reflects it:
-  if #7879 landed the harness fix, PR 1 carries only what remains; if not, PR 1 ships the same
-  verdict-gate mechanism so the two converge. PR 1 does **not** ship the walk-alignment fix into a
-  file #7879 is rewriting with the verdict gate.
-- **A7.** #7208 carries a comment recording that `MAX_WALK_HOPS` is not raisable-for-benefit, with the
-  SessionStart-registration and cgroup-inheritance evidence.
-- **A8.** If the new guard suite is floor-bearing, it is added to `PROMOTED_FILES` in
-  `scripts/guard-vacuity-floor.test.sh` — `.claude/hooks/` is in that guard's `DEFERRED_DIRS`, and
-  `MAX_DEFERRED=47` is a **shrink-only** ratchet, so an unpromoted floor-bearing suite reddens it.
-  Precedent for promotion exists (`monitor-supersede-guard.test.sh`,
-  `incident-sandbox-coverage.test.sh`).
+No acceptance criteria: this branch ships nothing for #7886. The work is PR #7879's, which already
+carries it in unpushed commit `4115024f5`. The only obligations that survive here are procedural, and
+both are discharged during `/work`:
+
+- A comment on #7886 recording the transfer and naming #7879 + the commit.
+- A comment asking #7879 to add `Closes #7886` to its body, so the issue closes with the PR that
+  actually fixes it rather than being orphaned.
+
+The `#7208` `MAX_WALK_HOPS` note travels with it (see §Collision).
 
 ### PR 2 — #7873 site 1 + Rule D
 

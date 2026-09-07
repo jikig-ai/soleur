@@ -13,7 +13,7 @@ property of *merges*, not commits — `apply-web-platform-infra.yml` fires on th
 
 ## Phase 0 — Preconditions (blocking)
 
-- [ ] 0.1 Re-run `gh issue view` for #7867, #7873, #7886. Abort any unit whose issue closed.
+- [x] 0.1 Re-run `gh issue view` for #7867, #7873, #7886 — all three OPEN at 2026-09-07T13:0xZ. Abort any unit whose issue closed.
 - [ ] 0.2 **Fix the classifier's token set, then run the census with it** — not from the plan's
       table. The classifier does not exist yet at Phase 0, so this step *defines* it (`-u`, `--user`,
       `--header @-`, `--netrc`/`--netrc-file`, `--oauth2-bearer`, `--proxy-user`, `-E`) and runs a
@@ -98,14 +98,19 @@ property of *merges*, not commits — `apply-web-platform-infra.yml` fires on th
 
 ---
 
-## PR 1 — #7886 (merge before PR 2)
+## PR 1 — #7886 — CUT 2026-09-07 (transferred to PR #7879)
 
-- [ ] 1.a **RED first.** Build the depth harness: **real forks** (`{ …; } & wait`), and it must
+Task 0.5's re-check found PR #7879 already carries this fix in unpushed local commit `4115024f5`,
+with the same verdict-gate mechanism and a fuller reason classification. Two live sessions on one
+file is the failure this cut avoids. Every task below is struck; none is to be implemented on this
+branch. The transfer is recorded as a comment on #7886, and #7879 must add `Closes #7886`.
+
+- [x] CUT — 1.a **RED first.** Build the depth harness: **real forks** (`{ …; } & wait`), and it must
       **verify its achieved depth against `/proc`** before invoking the suite. Nested `bash -c` adds
       **no** hop (measured: ×1 → 3, ×2 → 3, because the outer `exec`s into the inner), so a harness
       built that way silently tests nothing. Target is derived from 0.4, not hardcoded.
-- [ ] 1.b Confirm the harness reproduces `FAILED 1 (passed 46)` at the boundary depth.
-- [ ] 1.c **Replace the gate's independent walk with a verdict read.** Run the hook, take its
+- [x] CUT — 1.b Confirm the harness reproduces `FAILED 1 (passed 46)` at the boundary depth.
+- [x] CUT — 1.c **Replace the gate's independent walk with a verdict read.** Run the hook, take its
       `outcome`/`reason`, and classify — this *deletes* the second walk rather than aligning it.
       Measured: the hook emits **12** decline reasons. FAIL on the five defects
       (`adoption_unverified`, `cap_out_of_range`, `fleet_caps_unverified`, `pid_reuse_disambiguated`,
@@ -113,22 +118,22 @@ property of *merges*, not commits — `apply-web-platform-infra.yml` fires on th
       `no_busctl`, `no_jq`, `no_terminal_scope`) and the two deliberate ones (`disabled`,
       `concurrent_apply`). The classification is what keeps T8 meaningful — a bare
       `outcome != "applied" ⇒ skip` would lose all five defect reasons.
-- [ ] 1.d Derive the reason set **from the hook's source** (`reason="…"` assignments), never a list
+- [x] CUT — 1.d Derive the reason set **from the hook's source** (`reason="…"` assignments), never a list
       maintained in the test, so a reason added to the hook without a classification reddens the guard.
-- [ ] 1.e **Fallback only, if the verdict gate cannot be adopted:** seed the walk from **`$BASHPID`**
+- [x] CUT — 1.e **Fallback only, if the verdict gate cannot be adopted:** seed the walk from **`$BASHPID`**
       (measured: `$$` survives subshells — inside `( )` it is still the parent's PID, so "spawn a
       child" written with `$$` is a no-op) and read the budget from the sourced `MAX_WALK_HOPS`.
-- [ ] 1.f Add the **static** guard (`.claude/hooks/*.test.sh` — already in `SUITE_GLOBS`, so no
+- [x] CUT — 1.f Add the **static** guard (`.claude/hooks/*.test.sh` — already in `SUITE_GLOBS`, so no
       `run_suite` line needed) over the reason enumeration and its classification.
-- [ ] 1.f1 **If that guard is floor-bearing, add it to `PROMOTED_FILES` in
+- [x] CUT — 1.f1 **If that guard is floor-bearing, add it to `PROMOTED_FILES` in
       `scripts/guard-vacuity-floor.test.sh` in the same PR.** `.claude/hooks/` is in that guard's
       `DEFERRED_DIRS`, its population is `git ls-files '*.test.sh'`, and `MAX_DEFERRED=47` is a
       **shrink-only** ratchet — an unpromoted floor-bearing suite reddens CI. Precedent:
       `monitor-supersede-guard.test.sh`, `incident-sandbox-coverage.test.sh`.
-- [ ] 1.g Comment on #7208: `MAX_WALK_HOPS` is **not raisable-for-benefit** — the hook is registered
+- [x] CUT — 1.g Comment on #7208: `MAX_WALK_HOPS` is **not raisable-for-benefit** — the hook is registered
       only as a `SessionStart` hook (`.claude/settings.json`, no lefthook entry), runs 1-2 hops from
       `claude` there, and deeper trees are covered by cgroup inheritance from the SessionStart adoption.
-- [ ] 1.h Verify across the depth range: none reports `FAILED`; the boundary depth reports a green,
+- [x] CUT — 1.h Verify across the depth range: none reports `FAILED`; the boundary depth reports a green,
       honestly-skipped **47**; one beyond still skips the arm. **47-under-lefthook vs 54-direct is the
       correct steady state** — do not "fix" the count. *(AC A1-A7)*
 
