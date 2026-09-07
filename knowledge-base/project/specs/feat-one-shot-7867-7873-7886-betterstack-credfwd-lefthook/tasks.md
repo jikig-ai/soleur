@@ -27,6 +27,13 @@ property of *merges*, not commits — `apply-web-platform-infra.yml` fires on th
       baseline**, so touching any of them fails CI until the preamble lands in the same commit.
 - [ ] 0.4 Measure this runner's base ancestry distance to `claude` via `/proc`, so the depth harness
       targets `MAX_WALK_HOPS` hops from the hook's frame rather than a hardcoded number.
+- [ ] 0.5 **Re-check PR #7879.** It is OPEN, WIP, on `.claude/hooks/memory-backstop.test.sh`, taking
+      the same verdict-gate mechanism this plan adopts, and it does **not** close #7886. Verified at
+      plan time that its change is not yet pushed (the diff against `origin/main` for both hook files
+      is empty). If it has since landed, PR 1 shrinks — verify #7886 is actually fixed on `origin` and
+      close it against #7879 rather than re-fixing it. Settle PR 1's scope here.
+- [ ] 0.6 Decide whether the `#7886` guard suite will be floor-bearing (see 1.f1) — it changes whether
+      `scripts/guard-vacuity-floor.test.sh`'s `PROMOTED_FILES` must be edited in the same PR.
 
 ---
 
@@ -98,15 +105,26 @@ property of *merges*, not commits — `apply-web-platform-infra.yml` fires on th
       **no** hop (measured: ×1 → 3, ×2 → 3, because the outer `exec`s into the inner), so a harness
       built that way silently tests nothing. Target is derived from 0.4, not hardcoded.
 - [ ] 1.b Confirm the harness reproduces `FAILED 1 (passed 46)` at the boundary depth.
-- [ ] 1.c In `.claude/hooks/memory-backstop.test.sh`: seed the E2E gate's walk from **`$BASHPID`**,
-      not `$$`. Measured: `$$` survives subshells (parent 507774; inside `( )` still 507774, only
-      `BASHPID` moves), so "spawn a child" written with `$$` is a **no-op**.
-- [ ] 1.d Read the gate's budget from the **sourced** `MAX_WALK_HOPS` (the test already does
-      `source "$HOOK"`), replacing the literal `for _hop in 1 2 3 4 5 6 7 8`.
-- [ ] 1.e Add the hook's `CLAUDE_CODE_EXECPATH` identity branch to the gate, which currently omits it.
+- [ ] 1.c **Replace the gate's independent walk with a verdict read.** Run the hook, take its
+      `outcome`/`reason`, and classify — this *deletes* the second walk rather than aligning it.
+      Measured: the hook emits **12** decline reasons. FAIL on the five defects
+      (`adoption_unverified`, `cap_out_of_range`, `fleet_caps_unverified`, `pid_reuse_disambiguated`,
+      `scope_caps_unverified`); SKIP on the environment ones (`claude_pid_not_found`, `no_bus`,
+      `no_busctl`, `no_jq`, `no_terminal_scope`) and the two deliberate ones (`disabled`,
+      `concurrent_apply`). The classification is what keeps T8 meaningful — a bare
+      `outcome != "applied" ⇒ skip` would lose all five defect reasons.
+- [ ] 1.d Derive the reason set **from the hook's source** (`reason="…"` assignments), never a list
+      maintained in the test, so a reason added to the hook without a classification reddens the guard.
+- [ ] 1.e **Fallback only, if the verdict gate cannot be adopted:** seed the walk from **`$BASHPID`**
+      (measured: `$$` survives subshells — inside `( )` it is still the parent's PID, so "spawn a
+      child" written with `$$` is a no-op) and read the budget from the sourced `MAX_WALK_HOPS`.
 - [ ] 1.f Add the **static** guard (`.claude/hooks/*.test.sh` — already in `SUITE_GLOBS`, so no
-      `run_suite` line needed): assert `origin != $$` **and** `PPid(origin) == $$` on the PID **values**
-      — "a fork was spawned" is satisfied by the no-op. Pin **all three** hook-exec sites.
+      `run_suite` line needed) over the reason enumeration and its classification.
+- [ ] 1.f1 **If that guard is floor-bearing, add it to `PROMOTED_FILES` in
+      `scripts/guard-vacuity-floor.test.sh` in the same PR.** `.claude/hooks/` is in that guard's
+      `DEFERRED_DIRS`, its population is `git ls-files '*.test.sh'`, and `MAX_DEFERRED=47` is a
+      **shrink-only** ratchet — an unpromoted floor-bearing suite reddens CI. Precedent:
+      `monitor-supersede-guard.test.sh`, `incident-sandbox-coverage.test.sh`.
 - [ ] 1.g Comment on #7208: `MAX_WALK_HOPS` is **not raisable-for-benefit** — the hook is registered
       only as a `SessionStart` hook (`.claude/settings.json`, no lefthook entry), runs 1-2 hops from
       `claude` there, and deeper trees are covered by cgroup inheritance from the SessionStart adoption.

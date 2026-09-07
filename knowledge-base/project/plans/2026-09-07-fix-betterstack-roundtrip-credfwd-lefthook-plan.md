@@ -26,11 +26,26 @@ already in it. Rule D would have been green over exactly the population it was w
 repo-wide run that is the blocking arm. Corrected: Rule D gets its own baseline, plus mutation row 13
 to keep it that way.
 
-**Four smaller corrections**, each measured: the lint has **no ratchet** to inherit (only `--census`
-and `--write-baseline`; the four `.highwater` files live elsewhere), so Rule D adds one; Phase 0
-cited a classifier that does not exist yet, so it now *defines* the token set before censusing with
-it; AC A6's harness count was wrong (Guard 2 has 1 RED + 1 must-PASS, not 2 GREEN); and AC B6's grep
-was unscoped, so the plan — which quotes the literal — would have matched itself.
+**A second finding reversed the `#7886` design, and a third found a live collision.** PR **#7879** is
+OPEN and WIP on the same file, taking the mechanism this plan had **rejected** — and on inspection the
+rejection was aimed at a strawman. The hook emits **12** decline reasons, five of which are genuine
+defects and two of which (`disabled`, `concurrent_apply`) are correct outcomes; gating on the hook's
+verdict *with the reasons classified* deletes the duplicate ancestry walk instead of aligning it, and
+preserves P6. The plan now adopts that, demotes the `$BASHPID` walk-alignment to a fallback, and
+settles PR 1's scope against #7879 at Phase 0 rather than mid-implementation.
+
+**A second unscoped CI blocker**, alongside the xtrace drawdown: `.claude/hooks/` sits in
+`guard-vacuity-floor.test.sh`'s `DEFERRED_DIRS`, its population is `git ls-files '*.test.sh'`, and
+`MAX_DEFERRED=47` is a shrink-only ratchet — so a floor-bearing new guard there reddens CI unless it
+is promoted in the same PR.
+
+**Six smaller corrections**, each measured: the lint has **no ratchet** to inherit (only `--census`
+and `--write-baseline`; the four `.highwater` files live elsewhere), so Rule D adds one; Phase 0 cited
+a classifier that does not exist yet, so it now *defines* the token set before censusing with it; the
+`expect_field` count is **73**, not 74; the plan claimed "9 ADR ordinals" while citing 6; `ADR-197`
+was mis-attributed as the shell-trace credential refusal (that is **ADR-202**); and two line citations
+were off by one, now replaced with content anchors. AC B6's grep was also unscoped, so the plan —
+which quotes the literal — would have matched itself.
 
 **Verified clean.** A twelve-claim verify-the-negative sweep returned **12/12 CONFIRMS, zero
 contradictions**, including the SUITE_GLOBS membership claims, the coherence-preflight invocation
@@ -78,14 +93,14 @@ the same as checking it, and one reviewer claim below turned out to be wrong.
 | #7873: a positive equality check closes the gap | **Measured false.** `curl` consults `http_proxy`/`HTTPS_PROXY`/`ALL_PROXY` *before* contacting the pinned host and reads `~/.curlrc` even under `--config`. Reproduced against a local listener. | Pin **plus** transport confinement. |
 | #7873: "this is the residual" — three sites | **False by an order of magnitude.** My census: **80** tracked non-test `*.sh` invoke `curl` carrying a credential across **325** `curl` lines; **1** carries `--noproxy`. Reviewers measured 69/72/82/84/86 on different token sets. | Scope restated; enforced by a **ratcheting rule in an existing lint**. |
 | **[reviewer, verified]** The count spread is itself a finding | My pattern missed `-u`. `scripts/betterstack-query.sh:118` — this plan's headline vector — uses `-u`, not `--user`. | The classifier covers `-u`, `--user`, `--header @-`, `--netrc`/`--netrc-file`, `--oauth2-bearer`, `--proxy-user`, `-E`. Phase 0 regenerates the census **from the classifier**. |
-| **[reviewer, verified] P2 is falsified inside site 1 itself** | `scripts/zot-inventory.sh:179` writes `machine $REGISTRY_HOST … password $ZOT_PULL_TOKEN` into a netrc consumed at `:194` via `--netrc-file`; `REGISTRY_HOST` is derived from `REGISTRY_URL="${ZOT_INVENTORY_REGISTRY_URL:-http://127.0.0.1:5000}"`. Setting that variable writes the attacker's host into the netrc and curl sends the credential. The file's own `:244` comment says an unvalidated value "is an egress escape, not a formatting bug." | **A second credential path in the file #7873 names.** In scope for PR 2; the classifier must catch the netrc chokepoint. |
+| **[reviewer, verified] P2 is falsified inside site 1 itself** | `scripts/zot-inventory.sh:179` writes `machine $REGISTRY_HOST … password $ZOT_PULL_TOKEN` into a netrc consumed a couple of lines below via `--netrc-file "$NETRC"`; `REGISTRY_HOST` is derived from `REGISTRY_URL="${ZOT_INVENTORY_REGISTRY_URL:-http://127.0.0.1:5000}"`. Setting that variable writes the attacker's host into the netrc and curl sends the credential. The file's own `:244` comment says an unvalidated value "is an egress escape, not a formatting bug." | **A second credential path in the file #7873 names.** In scope for PR 2; the classifier must catch the netrc chokepoint. |
 | **[reviewer, verified]** Draft's `#7886` fix — "walk from a spawned child" | **A no-op.** `$$` survives subshells. Measured: parent `$$=507774`; inside `( )` `$$=507774`, `BASHPID=507779`. A subshell keeping `_p=$$` leaves the cursor at the test's PID while satisfying any guard that checks merely that a fork happened. | The fix names **`$BASHPID`**; the guard asserts the **origin PID value**. |
 | **[reviewer, verified]** The depth perturbation the ACs rest on | **Not achievable by the obvious construction.** Measured here: base depth to `claude` = 2; `bash -c` ×1 → 3; `bash -c` ×2 → **3** (the outer `exec`s into the inner, adding no hop); `{ …; } & wait` → 4. Nested `bash -c` adds nothing, so "five extra forks" written the natural way silently tests nothing and the AC passes green. And the base frame varies by runner, so `5` is not a constant. | The primitive is a **real fork** (`& wait`); the target depth is **derived at runtime** from the measured distance to `claude`; the harness **verifies its achieved depth** before invoking the suite. |
 | **[reviewer, verified]** Draft assumed the test must reimplement the hook's budget | The test already does `source "$HOOK"` before the gate, and `main` is guarded behind `[[ "${BASH_SOURCE[0]}" == "${0}" ]]`. `MAX_WALK_HOPS` is in scope at the gate. | The gate reads the sourced constant instead of the literal `1 2 3 4 5 6 7 8`. |
 | **[reviewer, verified]** Draft's refusal semantics — "exits non-zero rather than posting" | **Would disable the detectors it protects.** At `soleur-host-bootstrap.sh` the ingest post is immediately followed by `soleur-boot-emit … fatal`, the Vector-independent dark-host detector; at `web-private-nic-guard.sh` by the `web_nic_guard` liveness heartbeat. | The refusal is **skip-and-report** with fall-through. |
 | **[reviewer, verified]** Draft prescribed `[[ … ]]` at both host sites | The bootstrap's ingest post lives inside a quoted heredoc authoring `/usr/local/bin/soleur-fresh-boot-ready` (`#!/bin/sh`), and the bootstrap is invoked as `sh <file>`, bypassing its shebang. Both run under **dash**. | POSIX `[ … ]` there. |
-| **[reviewer, verified]** Draft's harness conversion | **Could not have worked, and was sized against the wrong number.** The pin is a bash string comparison evaluated *before* curl is invoked, so stubbing the curl binary cannot stop `run_inv` — which injects a loopback `ZOT_INVENTORY_INGEST_URL` on **every** case — from being refused on every case. And the blast radius is not 4 assertions: `marker()` reads `INGEST_BODY`, and 74 `expect_field` calls flow through it, against a suite floor of 90. | The conversion is **cut**. The seam is inverted instead — see *Proposed Solution* §2. |
-| **[reviewer, verified]** Draft did not scope the xtrace lint | `lint-shell-trace-credential-refusal.py:522` uses an **empty** baseline in `--changed`/`--paths` mode, and `ci.yml:181` runs exactly that. Verified: `zot-inventory.sh`, `betterstack-query.sh`, `supabase-advisor-scan.sh` and both host scripts are baselined with **no** preamble. | Touching any of them fails CI until the `case "$-" in *x*)` preamble lands in the same commit. Scoped as explicit work with its own AC. |
+| **[reviewer, verified]** Draft's harness conversion | **Could not have worked, and was sized against the wrong number.** The pin is a bash string comparison evaluated *before* curl is invoked, so stubbing the curl binary cannot stop `run_inv` — which injects a loopback `ZOT_INVENTORY_INGEST_URL` on **every** case — from being refused on every case. And the blast radius is not 4 assertions: `marker()` reads `INGEST_BODY`, and 73 `expect_field` calls flow through it, against a suite floor of 90. | The conversion is **cut**. The seam is inverted instead — see *Proposed Solution* §2. |
+| **[reviewer, verified]** Draft did not scope the xtrace lint | `lint-shell-trace-credential-refusal.py:522` uses an **empty** baseline in `--changed`/`--paths` mode, and `ci.yml`'s `lint-bot-statuses` job runs exactly that (the `--changed --base origin/main` step). Verified: `zot-inventory.sh`, `betterstack-query.sh`, `supabase-advisor-scan.sh` and both host scripts are baselined with **no** preamble. | Touching any of them fails CI until the `case "$-" in *x*)` preamble lands in the same commit. Scoped as explicit work with its own AC. |
 | **[reviewer, verified]** `#7867`'s leading unblock option | `apps/web-platform/infra/variables.tf:615` records that `2734275` **was itself minted via `POST /api/v2/sources` on 2026-09-03** — and has never stored a row. Recreation is a second draw from the same urn. | Run a **discriminator** before choosing. |
 | **[reviewer, verified]** `#7208`'s `MAX_WALK_HOPS` question | The hook is registered **only** as a `SessionStart` hook (`.claude/settings.json`; no lefthook entry). In production it runs 1–2 hops from `claude`; deeper trees are covered by cgroup inheritance from the SessionStart adoption. | **Retired, not deferred**, and recorded on #7208. |
 | **[reviewer claim — checked and WRONG]** "the `betterstack` C4 element records `2734275` as storing nothing" | It does not. `grep -in "never stored\|storing nothing\|no row"` over all three `.c4` files returns zero. That claim lives only at **ADR-192:326** and in `model.c4:630`'s `TARGET state — wired at merge, unobserved` clause. | The plan names the actual target text, so nobody hunts a string that is not there. |
@@ -101,7 +116,7 @@ the same as checking it, and one reviewer claim below turned out to be wrong.
 ### Premise Validation (Phase 0.6)
 
 All three cited issues are `OPEN`. `#7855`/`#7811` are `CLOSED`; `#7856` is `MERGED`. All 28 cited
-paths exist; all 9 ADR ordinals resolve; all 10 issue/PR references resolve with the stated states.
+paths exist; all 6 cited ADR ordinals resolve; all 10 issue/PR references resolve with the stated states.
 No premise was stale; five were incomplete and one reviewer-supplied claim was wrong — all corrected.
 
 ### Property List (Phase 0.6b)
@@ -175,7 +190,7 @@ destination is a `readonly` hardcoded literal — a transport gap, not a pin gap
 ### Related issues and PRs
 
 `#7855`, `#7856`, `#7811`, `#7840`/`#7835` (git-env boundary, excluded), `#7208`, `#7169`, `#7409`,
-`#7797`/ADR-197 (the lint this plan extends), `#7776`/`#7807` (the inverted brand-survival ladder),
+`#7797`/ADR-202 (the lint this plan extends; ADR-197 is a different decision), `#7776`/`#7807` (the inverted brand-survival ladder),
 `#7502` (the contributor-hook path that makes this plan's vector reachable).
 
 ---
@@ -248,23 +263,67 @@ up to `MAX_WALK_HOPS=8` **from the hook's own `$$`**, and the hook is a *child* 
 | **5** | **8** | **`FAILED 1 (passed 46)`** + the exact `✗ T8 real hook did not apply (outcome='skipped' reason='claude_pid_not_found')` line |
 | 6 | 9 | `PASSED 41 [live: yes, e2e SKIPPED]` — a different mode |
 
-**Three corrections, each measured, because each obvious spelling is wrong.**
+**Delete the second walk; do not align it. [revised at deepen — see the collision note below.]**
 
-- **Seed from `$BASHPID`, not `$$`.** Measured: inside `( )`, `$$` is still the parent's PID and only
-  `BASHPID` moves. A subshell keeping `_p=$$` is a no-op that satisfies any guard checking merely
-  that a fork happened.
-- **Read the budget from the sourced `MAX_WALK_HOPS`**, not the literal `for _hop in 1 2 3 4 5 6 7 8`.
-  The test already sources the hook, so the two cannot drift. Also add the hook's
-  `CLAUDE_CODE_EXECPATH` identity branch, which the gate omits — otherwise the two disagree on what
-  counts as `claude`.
-- **Perturb depth with a real fork, and derive the target at runtime.** Measured on this machine:
-  base distance to `claude` = 2; `bash -c` ×1 → 3; `bash -c` ×2 → **3**; `{ …; } & wait` → 4. Nested
-  `bash -c` adds **no** hop (the outer `exec`s into the inner), and the base frame varies by runner —
-  so "insert five forks" written the natural way tests nothing and passes green. The harness must use
-  a real fork per level, **measure its own achieved depth against `/proc` before invoking the suite**,
-  and target `MAX_WALK_HOPS` hops from the hook's frame rather than a hardcoded 5.
+The draft aligned the two walks by seeding the gate from `$BASHPID` and reading the sourced
+`MAX_WALK_HOPS`. That works, but it keeps two independent walks one frame apart and spends a guard
+keeping them synchronized. The better answer is to **remove the gate's walk entirely and ask the hook
+for its own verdict**, because the hook is the only thing whose reach actually matters. That
+eliminates the defect class rather than managing it.
 
-The hook is exec'd at **three** E2E-gated sites, all one hop. The guard pins all three.
+**It has to be reason-aware, and that is what makes it non-vacuous.** The hook emits **12** distinct
+decline reasons — measured: `adoption_unverified`, `cap_out_of_range`, `claude_pid_not_found`,
+`concurrent_apply`, `disabled`, `fleet_caps_unverified`, `no_bus`, `no_busctl`, `no_jq`,
+`no_terminal_scope`, `pid_reuse_disambiguated`, `scope_caps_unverified`. They are not
+interchangeable, so the gate classifies rather than collapsing them:
+
+| Class | Reasons | Gate behaviour |
+|---|---|---|
+| Environment cannot exercise the arm | `claude_pid_not_found`, `no_bus`, `no_busctl`, `no_jq`, `no_terminal_scope` | **SKIP** — a legitimate context, accounted for by `live_mark` |
+| Deliberate opt-out or a concurrent run | `disabled`, `concurrent_apply` | **SKIP** — both are correct outcomes, not defects |
+| The hook tried and something was wrong | `adoption_unverified`, `cap_out_of_range`, `fleet_caps_unverified`, `pid_reuse_disambiguated`, `scope_caps_unverified` | **FAIL** — these are the defects T8 exists to catch |
+
+This is what preserves P6, and it is why the draft's blanket rejection of "gate on `outcome`" was
+wrong: it rejected the *unclassified* form ("skip whenever `outcome != applied`", which really would
+make T8 unable to redden) and mistook it for this one. Corrected.
+
+**Fallback, if the verdict gate cannot be adopted:** seed the gate's walk from **`$BASHPID`**, not
+`$$` — measured, inside `( )` `$$` is still the parent's PID and only `BASHPID` moves, so a subshell
+keeping `_p=$$` is a no-op that satisfies any guard checking merely that a fork happened — and read
+the budget from the sourced `MAX_WALK_HOPS` rather than the literal `for _hop in 1 2 3 4 5 6 7 8`.
+
+**Either way, the depth harness must use a real fork and verify its own depth.** Measured on this
+machine: base distance to `claude` = 2; `bash -c` ×1 → 3; `bash -c` ×2 → **3**; `{ …; } & wait` → 4.
+Nested `bash -c` adds **no** hop (the outer `exec`s into the inner), and the base frame varies by
+runner — so "insert five forks" written the natural way tests nothing and passes green. Use a real
+fork per level, **measure the achieved depth against `/proc` before invoking the suite**, and derive
+the target at runtime rather than hardcoding 5.
+
+### Collision: PR #7879 is already taking this file
+
+**Verified at deepen time.** PR **#7879** ("WIP: test-fixture env adoption, gdpr-gate ledger
+isolation, memory-backstop ancestry", branch
+`feat-one-shot-7849-7853-7854-fixture-env-ledger-ancestry`) is **OPEN and WIP**, and a comment on issue
+7208 dated `2026-09-07T11:17:44Z` states it changes `.claude/hooks/memory-backstop.test.sh` with
+exactly the verdict-gate mechanism above — *"the suite now asks the hook for its verdict and gates on
+`outcome != "applied"` rather than on any single reason string, since the hook has eleven distinct
+decline reasons and two of them (the documented opt-out and `concurrent_apply`) must skip rather than
+fail."*
+
+Three facts bound what that means for this plan, all checked rather than assumed:
+
+- The change is **not yet pushed**: `git diff origin/main...origin/feat-one-shot-7849-7853-7854-fixture-env-ledger-ancestry`
+  over both hook files is **empty**, and the gate at that branch's HEAD still carries `_p=$$` and the
+  literal `for _hop in 1 2 3 4 5 6 7 8`. So #7886 is still unfixed on `origin`.
+- PR #7879 closes #7849, #7853 and #7854 — **not** #7886.
+- Its mechanism is the one this plan now adopts, and the reason-classification fact behind it is real
+  (12 reasons, measured above).
+
+**Consequence: PR 1 does not proceed independently.** Phase 0 re-checks #7879 first. If it has landed
+the harness fix, PR 1 shrinks to whatever remains — likely only closing #7886 against it. If it has
+not, PR 1 ships the verdict gate, which is the same mechanism, so the two converge rather than
+conflict. What PR 1 must **not** do is ship the walk-alignment fix into a file another open PR is
+rewriting with a better one.
 
 **What this means under lefthook, so nobody "fixes" the count later.** At the lefthook depth the
 corrected gate reports `E2E=no` and `skip()`s seven labels; `skip()` increments neither counter, so
@@ -282,7 +341,7 @@ green with the fleet split across two destinations.
 **Site 1 has two credential paths, and the issue names one.** The ingest bearer at `:516` gets the
 equality pin plus transport confinement — `--disable` first, `--noproxy '*'`, `--proto '=https'` —
 scoped to that call only, because the registry leg defaults to `http://127.0.0.1:5000` and
-`--proto '=https'` would break both production and the harness. The **netrc path** at `:179`/`:194`
+`--proto '=https'` would break both production and the harness. The **netrc path** — the `printf .. machine %s .. > "$NETRC"` write and the `--netrc-file "$NETRC"` read inside `http_get()` —
 gets the same treatment on its own terms: `REGISTRY_HOST` is derived from an env-settable URL and
 lands in the netrc's `machine` line, so the registry destination needs its own validation before the
 netrc is written. The refusal exits non-zero here: no boot depends on it.
@@ -436,7 +495,7 @@ in one.
 | Unit | Scope | Paths | Rationale |
 |---|---|---|---|
 | **PR 0** | `--disable` + `--noproxy '*'` into the four sweep-only `scripts/` files, plus the xtrace preamble each needs | `scripts/**` | Lands the named single-user-incident vector (`betterstack-query.sh`) **first**, with no new machinery. Depends on nothing. |
-| **PR 1** | #7886 fix + its guard | `.claude/hooks/**` | Merges before PR 2 so PR 2's commits are authored through a green pre-commit gate. |
+| **PR 1** | #7886 fix + its guard | `.claude/hooks/**` | Merges before PR 2 so PR 2's commits are authored through a green pre-commit gate. **Scope depends on PR #7879** — OPEN, WIP, same file, same mechanism — settled at Phase 0 step 5. |
 | **PR 2** | #7873 site 1 (both credential paths) + Rule D + the inverted seam + the parity assertion | `scripts/**`, `tests/scripts/**`, `.github/workflows/ci.yml`, `model.c4` | The guard that keeps PR 0's sites honest. |
 | **Track D** | #7867 — escalate, run, record, discriminate | none, or ADR/C4 on the branch taken | Runs outside the PR chain, first in wall-clock. Not a PR: on three of four branches it is zero code. Its conditional docs edit folds into whichever PR is in flight when the verdict lands. |
 | **Deferred** | #7873 sites 2/3 transport flags | `apps/web-platform/infra/**` | Rides a window opened for another reason. |
@@ -459,6 +518,14 @@ cycles.** If the session's budget expires mid-chain, what must already have ship
    the drawdown is scoped before the first commit rather than discovered by CI.
 4. Measure this runner's base distance to `claude` (`/proc` walk) so the depth harness targets
    `MAX_WALK_HOPS` hops from the hook's frame rather than a hardcoded number.
+5. **Re-check PR #7879's state.** It is OPEN and WIP on `.claude/hooks/memory-backstop.test.sh`,
+   taking the verdict-gate mechanism this plan adopts. If it has landed, PR 1 shrinks accordingly and
+   #7886 may close against it; if it has not, PR 1 ships the same mechanism so the two converge.
+   PR 1's scope is settled here, not mid-implementation.
+6. Check whether the planned `#7886` guard suite will be floor-bearing. If so, it must be added to
+   `PROMOTED_FILES` in `scripts/guard-vacuity-floor.test.sh` in the same PR — `.claude/hooks/` is in
+   that guard's `DEFERRED_DIRS` and `MAX_DEFERRED=47` is shrink-only, so leaving it deferred reddens
+   CI. This is the second unscoped CI blocker the deepen pass found, alongside the xtrace drawdown.
 
 #### Phase 1 — PR 0 (the sweep)
 
@@ -472,16 +539,24 @@ cycles.** If the session's budget expires mid-chain, what must already have ship
 
 #### Phase 2 — PR 1 (#7886)
 
+0. **Re-check PR #7879 first.** It is OPEN, WIP, on the same file, and taking the verdict-gate
+   mechanism. If it has landed the harness fix, PR 1 shrinks to whatever remains — verify #7886 is
+   actually fixed on `origin` and close it against #7879 rather than re-fixing it. Steps 1-6 assume
+   it has not landed.
 1. **RED first**: a development-time depth harness that uses a **real fork per level**, asserts its
    own achieved depth against `/proc`, and shows today's `FAILED 1 (passed 46)` at the boundary.
-2. Seed the gate's walk from **`$BASHPID`**; read the budget from the **sourced** `MAX_WALK_HOPS`;
-   add the `CLAUDE_CODE_EXECPATH` identity branch.
-3. Add the static guard: the walk's origin PID **differs from** the test's `$$` **and** its `PPid`
-   **equals** it — asserted on values, because "a fork was spawned" is satisfied by the no-op. Pin all
-   three hook-exec sites.
-4. Comment on #7208 recording that `MAX_WALK_HOPS` is not raisable-for-benefit, with the evidence.
-5. Verify across the depth range: none reports `FAILED`; the boundary depth reports a green,
-   honestly-skipped 47; one beyond it still skips the arm. The harness stays a development tool.
+2. Replace the gate's independent walk with a **verdict read**: run the hook, take its `outcome` and
+   `reason`, and classify per the table in *Proposed Solution* §1 — 5 defect reasons FAIL, the
+   environment reasons and the two deliberate ones SKIP.
+3. Derive the reason set **from the hook's source**, not a list in the test, so a reason added to the
+   hook without a classification reddens the guard.
+4. Add the static guard (Guard 2) over that enumeration and classification.
+5. Comment on #7208 recording that `MAX_WALK_HOPS` is not raisable-for-benefit, with the evidence.
+6. If the new guard suite is floor-bearing, add it to `PROMOTED_FILES` in
+   `scripts/guard-vacuity-floor.test.sh` — `.claude/hooks/` sits in that guard's `DEFERRED_DIRS` and
+   `MAX_DEFERRED=47` is shrink-only, so leaving it merely deferred reddens CI.
+7. Verify across the depth range: none reports `FAILED`; the boundary depth reports a green,
+   honestly-skipped result; one beyond it still skips the arm. The harness stays a development tool.
 
 #### Phase 3 — Track D (#7867), first in wall-clock terms
 
@@ -522,7 +597,9 @@ cycles.** If the session's budget expires mid-chain, what must already have ship
 
 | Approach | Verdict |
 |---|---|
-| **#7886: T8 declares itself SKIPPED when the hook reports `claude_pid_not_found`** | **Rejected on evidence.** At the reproducing depth a Claude PID *is* discoverable; skipping on `outcome != applied` would make T8 unable to redden for a genuine defect. |
+| **#7886: T8 declares itself SKIPPED on a bare `outcome != "applied"`, unclassified** | **Rejected.** The hook has 12 decline reasons and 5 of them are genuine defects; collapsing them all to a skip makes T8 unable to redden. |
+| **#7886: T8 gates on the hook's verdict with the reasons CLASSIFIED** | **ADOPTED at deepen — this reverses the draft.** The draft rejected "gate on outcome" without distinguishing the unclassified form (above) from the reason-aware one, and so rejected the better design along with the worse. Asking the hook for its verdict *deletes* the second walk instead of aligning it, which removes the defect class rather than managing it; the skip/fail classification is what preserves P6. This is also the mechanism PR #7879 is already taking on the same file. |
+| **#7886: align the two walks (`$BASHPID` + sourced `MAX_WALK_HOPS`)** | **Demoted to fallback.** Correct and measured, but it keeps two independent walks one frame apart and spends a guard keeping them synchronized. Used only if the verdict gate cannot be adopted. |
 | **#7886: raise `MAX_WALK_HOPS`** | **Retired, not deferred.** The hook is registered only as a `SessionStart` hook, where it runs 1–2 hops from `claude`; deeper trees are covered by cgroup inheritance. Raising it buys nothing in production. |
 | **#7886: "walk from a spawned child"** (the draft's own wording) | **Rejected as a no-op** — `$$` survives subshells; only `$BASHPID` moves. |
 | **#7886: perturb depth with nested `bash -c`** | **Rejected as a no-op** — measured: two nested levels add one hop, not two, because the outer `exec`s into the inner. Use a real fork and verify the achieved depth. |
@@ -725,36 +802,39 @@ guard green over its own target population on the repo-wide run.
 | H4 | **Must-PASS:** a compliant member using `--config` with `noproxy = "*"` in the file and `--disable` first on argv, with three non-URL options following `--config`. | GREEN — the constraint is no second URL **operand**, not "nothing after `--config`" |
 | H5 | **Must-PASS:** a POSIX `[ … ]` pin in a `#!/bin/sh` member. | GREEN — the dash sites cannot use `[[ … ]]` |
 
-### Guard 2 — the E2E gate reaches exactly as far as the hook
+### Guard 2 — every decline reason is classified, and the defect reasons still fail
 
-**Property.** The E2E precondition gate in `.claude/hooks/memory-backstop.test.sh` reaches exactly as
-far up the process ancestry as `discover_claude_pid` will reach from the frame the hook actually runs
-in — so the gate can never green-light a case the hook is structurally unable to satisfy.
+**Property.** `.claude/hooks/memory-backstop.test.sh` never asserts an adoption the hook was
+structurally unable to perform, **and** never converts a real adoption defect into a skip. Every one
+of the hook's decline reasons is classified as skip-or-fail; none is unhandled, and none is collapsed
+into a blanket "not applied ⇒ skip".
 
-**Assembly.** The gate's walk and the PID it seeds from; `discover_claude_pid` and `MAX_WALK_HOPS`;
-**all three** sites where the test execs the hook; and the depth harness's own achieved-depth check.
-The chokepoint is the **frame offset** — not the numeric budget, and not the *presence of a fork*: a
-subshell that still seeds `_p=$$` is a fork and a no-op. The guard asserts the **origin PID value**
-(`origin != $$` of the test, and `PPid(origin) == $$`). It is **static**: it reads the sites and spawns
-nothing, so it costs the pre-commit gate no processes.
+**Assembly.** The set of decline reasons the hook can emit — enumerated **from the hook's source**
+(`reason="…"` assignments in `memory-backstop.sh`), never from a list maintained in the test — and the
+gate's classification of each. The chokepoint is the enumeration: a reason added to the hook with no
+classification in the test must fail the guard, which is what stops the set drifting. Also in the
+assembly: the depth harness's own achieved-depth check, since a harness that inserts no hops cannot
+exercise any of it. The guard is **static** — it reads both files and spawns nothing, so it costs the
+pre-commit gate no processes.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Seed the gate's walk from `$$` instead of `$BASHPID` — including inside a subshell (the no-op). | RED |
-| 2 | Replace the sourced `MAX_WALK_HOPS` with a literal budget in the gate. | RED |
-| 3 | Add a hook-exec site the guard does not pin, or deepen one of the three by a fork. | RED |
-| 4 | Remove the `CLAUDE_CODE_EXECPATH` identity branch from the gate while the hook keeps it. | RED |
-| 5 | Make the gate skip unconditionally (`E2E=no` always) — the vacuous "fix". | RED — where a Claude PID *is* reachable from the hook's frame, T8 must execute, not skip |
+| 1 | Add a new `reason="…"` to the hook without classifying it in the test. | RED — the enumeration is the chokepoint; an unclassified reason must not default to either arm |
+| 2 | Move a defect reason (`adoption_unverified`, `scope_caps_unverified`, `fleet_caps_unverified`, `cap_out_of_range`, `pid_reuse_disambiguated`) from the FAIL class to the SKIP class. | RED — this is the vacuity the draft's blanket-outcome objection was really about |
+| 3 | Move a legitimate skip (`disabled`, `concurrent_apply`) into the FAIL class. | RED — the pre-commit gate would then redden on a deliberate opt-out, which is #7886 all over again |
+| 4 | Collapse the classification to a single `outcome != "applied" ⇒ skip`. | RED — indistinguishable from mutation 2 for all five defect reasons at once |
+| 5 | Neuter the guard's own dispatch so it enumerates zero reasons and exits 0. | RED — absolute floor on reasons-classified, reported with `printf >&2` + `exit 1` directly (ADR-193) |
 | 6 | Replace the depth harness's real forks with nested `bash -c`, which adds no hop. | RED — the harness must verify its **achieved** depth, or its floor is satisfiable by a no-op |
+| 7 | *(fallback design only)* Seed the gate's walk from `$$` instead of `$BASHPID`, including inside a subshell. | RED — asserted on the origin **PID value** (`origin != $$`, `PPid(origin) == $$`), because "a fork was spawned" is satisfied by the no-op |
 
 **Harness rows:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| H1 | Change the assertion from the origin PID relationship to "the file mentions a subshell". | RED — the no-op satisfies the weaker form; this row encodes the draft's own defect |
-| H2 | **Must-PASS:** the walker seeded via an equivalent single-fork form that still moves the PID. | GREEN — the contract is the frame offset, not one spelling |
+| H1 | Change the assertion from "every reason is classified" to "the file mentions each reason somewhere". | RED — a mention is not a classification, and the weaker form is satisfied by a comment |
+| H2 | **Must-PASS:** the classification expressed as a case statement rather than an associative array. | GREEN — the contract is the total classification, not one spelling |
 
 The repo-wide `scripts/guard-vacuity-floor.test.sh` already constructs neuter-dispatch mutants for
 every tracked `*.test.sh`, so neither guard needs its own copy of that row.
@@ -947,15 +1027,27 @@ slice-boundary and debugging-order criteria were cut — a diff asserting its ow
   the `✗ T8 real hook did not apply (outcome='skipped' reason='claude_pid_not_found')` line is absent.
   No absolute case count is asserted: it depends on ambient machine state (the `LIVE` gate needs a
   user systemd bus, which CI lacks) and on how many assertions the suite carries.
-- **A3.** The gate's walk origin satisfies `origin != $$` **and** `PPid(origin) == $$`, asserted on the
-  PID values. A subshell that still seeds `_p=$$` must fail this.
-- **A4.** The gate's budget resolves to the **sourced** `MAX_WALK_HOPS`; changing that constant changes
-  the gate's reach with no second edit.
-- **A5.** All three hook-exec sites are pinned; adding an unpinned fourth reddens the guard.
-- **A6.** Guard 2 scores 6/6 mutation rows RED, plus harness rows 1/1 RED (H1) and 1/1 must-PASS
-  GREEN (H2). Each RED is asserted on the failure-message anchor, not a bare non-zero exit.
+- **A3.** Every `reason="…"` the hook can emit is classified skip-or-fail by the test, and the
+  classification is derived from the hook's source rather than a list maintained in the test. Adding
+  an unclassified reason to the hook reddens the guard.
+- **A4.** The five defect reasons (`adoption_unverified`, `cap_out_of_range`, `fleet_caps_unverified`,
+  `pid_reuse_disambiguated`, `scope_caps_unverified`) still **FAIL**, and `disabled` /
+  `concurrent_apply` **SKIP**. This is the criterion that keeps T8 meaningful per #7886's own
+  requirement, and it is what the blanket `outcome != "applied" ⇒ skip` form would have lost.
+- **A5.** Guard 2 scores 7/7 mutation rows RED (row 7 applies only if the fallback walk-alignment
+  design is used), plus harness rows 1/1 RED and 1/1 must-PASS GREEN. Each RED is asserted on the
+  failure-message anchor, not a bare non-zero exit.
+- **A6.** PR #7879's state was re-checked before PR 1 was authored, and PR 1's scope reflects it:
+  if #7879 landed the harness fix, PR 1 carries only what remains; if not, PR 1 ships the same
+  verdict-gate mechanism so the two converge. PR 1 does **not** ship the walk-alignment fix into a
+  file #7879 is rewriting with the verdict gate.
 - **A7.** #7208 carries a comment recording that `MAX_WALK_HOPS` is not raisable-for-benefit, with the
   SessionStart-registration and cgroup-inheritance evidence.
+- **A8.** If the new guard suite is floor-bearing, it is added to `PROMOTED_FILES` in
+  `scripts/guard-vacuity-floor.test.sh` — `.claude/hooks/` is in that guard's `DEFERRED_DIRS`, and
+  `MAX_DEFERRED=47` is a **shrink-only** ratchet, so an unpromoted floor-bearing suite reddens it.
+  Precedent for promotion exists (`monitor-supersede-guard.test.sh`,
+  `incident-sandbox-coverage.test.sh`).
 
 ### PR 2 — #7873 site 1 + Rule D
 
@@ -1063,6 +1155,8 @@ slice-boundary and debugging-order criteria were cut — a diff asserting its ow
 | Landing Rule D as advisory only. | `ci.yml`'s `lint-bot-statuses` job is advisory (absent from `scripts/required-checks.txt`); the blocking arm is the existing `scripts/test-all.sh` registration under the required `test` job. |
 | Deferring sites 2/3 leaves two known-vulnerable host scripts, and web-2 will not receive the fix even when they land. | Both are root-only-reachable and stay baselined; the drift half is enforced CI-side; the web-2 gap has its own tracking issue rather than being covered by a green guard. |
 | A deferred host edit ships a fail-stop refusal and darks a detector. | The semantics are specified here, mutation row 12 enforces fall-through, Test Scenario 11 exercises it. |
+| **PR #7879 lands the same harness fix first, or lands it differently.** It is OPEN, WIP, on the same file, with the same mechanism, and it does **not** close #7886. | Phase 0 step 5 settles PR 1's scope against #7879's actual state before a line is written, and this plan adopts #7879's mechanism so the two converge rather than conflict. |
+| **The new `#7886` guard suite trips `guard-vacuity-floor.test.sh`'s `MAX_DEFERRED=47` shrink-only ratchet.** `.claude/hooks/` is in that guard's `DEFERRED_DIRS` and its population is `git ls-files '*.test.sh'`. | Phase 0 step 6 decides promotion up front; AC A8 asserts it. Precedent exists (`monitor-supersede-guard.test.sh`, `incident-sandbox-coverage.test.sh`). |
 | #7208 lands a conflicting change. | PR 1 touches only the test; the #7208 comment records what this plan settled. |
 | The #7867 probe returns `UNKNOWN`, or does not run at all (exit 78). | The diagnosis order is fixed and the credential rung pre-cleared; the fifth branch covers not-a-verdict; `DARK` runs once, not in a loop. |
 | The sweeper posts a verdict for the same window first. | Phase 3 step 2 re-reads issue state; D8 asserts no contradicting second verdict. |
@@ -1073,7 +1167,7 @@ slice-boundary and debugging-order criteria were cut — a diff asserting its ow
 ## References
 
 - Issues: [#7867](https://github.com/jikig-ai/soleur/issues/7867), [#7873](https://github.com/jikig-ai/soleur/issues/7873), [#7886](https://github.com/jikig-ai/soleur/issues/7886); context [#7855](https://github.com/jikig-ai/soleur/issues/7855), [#7811](https://github.com/jikig-ai/soleur/issues/7811), [#7208](https://github.com/jikig-ai/soleur/issues/7208), [#7409](https://github.com/jikig-ai/soleur/issues/7409), [#7502](https://github.com/jikig-ai/soleur/issues/7502), [#7776](https://github.com/jikig-ai/soleur/issues/7776), [#7807](https://github.com/jikig-ai/soleur/issues/7807), PR [#7856](https://github.com/jikig-ai/soleur/pull/7856).
-- ADRs: `ADR-172`, `ADR-180`, `ADR-192`, `ADR-193`, `ADR-197`, `ADR-198` (its `**Mint** — POST /api/v2/sources` list item, not a heading).
+- ADRs: `ADR-172`, `ADR-180`, `ADR-192`, `ADR-193`, `ADR-198` (its `**Mint** — POST /api/v2/sources` list item, not a heading), `ADR-202` (the carried self-refusal — the xtrace/credential rule).
 - Guard templates: `scripts/lint-shell-trace-credential-refusal.py` (the lint Rule D extends) and `scripts/lint-supabase-deprecated-endpoints.sh` (the quantifier inversion).
 - Transport idiom: `scripts/supabase-logs-query.sh`, header "HOST PIN — NO ENV OVERRIDE".
 - Legal: `knowledge-base/legal/article-30-register.md` PA-8 TOM (g); `docs/legal/data-protection-disclosure.md`.
