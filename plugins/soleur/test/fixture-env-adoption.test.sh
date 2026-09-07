@@ -446,12 +446,12 @@ readonly B_FLOOR=10
 if (( A_N >= A_FLOOR )); then
   pass "derivation A floor: $A_N mutating git-spawn sites (>= $A_FLOOR)"
 else
-  fail "derivation A floor: only $A_N mutating git-spawn sites (< $A_FLOOR) — the spawn-shape extractor matched (almost) nothing; every set assertion below is vacuous"
+  printf '[FLOOR] %s\n' "derivation A floor: only $A_N mutating git-spawn sites (< $A_FLOOR) — the spawn-shape extractor matched (almost) nothing; every set assertion below is vacuous" >&2; exit 1
 fi
 if (( B_N >= B_FLOOR )); then
   pass "derivation B floor: $B_N helper call sites (>= $B_FLOOR)"
 else
-  fail "derivation B floor: only $B_N helper call sites (< $B_FLOOR) — the helper-call extractor matched (almost) nothing; every set assertion below is vacuous"
+  printf '[FLOOR] %s\n' "derivation B floor: only $B_N helper call sites (< $B_FLOOR) — the helper-call extractor matched (almost) nothing; every set assertion below is vacuous" >&2; exit 1
 fi
 
 # The two derivations must not be the same query wearing two hats. Equal cardinality is the
@@ -528,7 +528,7 @@ mapfile -t GIT_LOCATION_VARS_EXPECTED < <(
       "$SCRIPT_DIR/lib/git-fixture-env.ts" | grep -oE '"GIT_[A-Z_]+"' | tr -d '"' | sort
 )
 if (( ${#GIT_LOCATION_VARS_EXPECTED[@]} < 9 )); then
-  fail "GIT_LOCATION_VARS derivation yielded only ${#GIT_LOCATION_VARS_EXPECTED[@]} names (expected >= 9) — the waiver coverage measurement below would be meaningless"
+  printf '[FLOOR] %s\n' "GIT_LOCATION_VARS derivation yielded only ${#GIT_LOCATION_VARS_EXPECTED[@]} names (expected >= 9) — the waiver coverage measurement below would be meaningless" >&2; exit 1
 fi
 
 _waiver_scrub_count() { # <file> -> how many GIT_LOCATION_VARS it scrubs
@@ -557,7 +557,7 @@ readonly WAIVER_SCRUB_FLOOR=19
 if (( waiver_scrub_total >= WAIVER_SCRUB_FLOOR )); then
   pass "waiver scrub coverage $waiver_scrub_total name-scrubs across ${#WAIVED[@]} files (floor $WAIVER_SCRUB_FLOOR; raise it when a waiver widens)"
 else
-  fail "waiver scrub coverage FELL to $waiver_scrub_total (floor $WAIVER_SCRUB_FLOOR) — a waived file narrowed its scrub, which is how a partial exemption becomes a blanket one"
+  printf '[FLOOR] %s\n' "waiver scrub coverage FELL to $waiver_scrub_total (floor $WAIVER_SCRUB_FLOOR) — a waived file narrowed its scrub, which is how a partial exemption becomes a blanket one" >&2; exit 1
 fi
 # The waiver must be load-bearing: at least some of it must actually be suppressing a difference-set
 # member. A waiver list that suppresses nothing is decoration, and decoration is what a reviewer
@@ -569,7 +569,7 @@ done
 if (( waived_in_diff >= 2 )); then
   pass "waiver list is load-bearing: $waived_in_diff of ${#WAIVED[@]} entries are suppressing a live difference-set member"
 else
-  fail "waiver list suppresses only $waived_in_diff member(s) — it has stopped doing work; re-derive it or delete it"
+  printf '[FLOOR] %s\n' "waiver list suppresses only $waived_in_diff member(s) — it has stopped doing work; re-derive it or delete it" >&2; exit 1
 fi
 
 # --- assertion 3: no stale deferred entry (the ratchet) ---------------------------------------------
@@ -601,11 +601,15 @@ for f in $(git ls-files "${SHELL_ROOTS[@]}" 2>/dev/null \
     fi
   done < <(_strip_shell_calls "$f" | grep -nE "$SHELL_HELPER_CALL_RE" 2>/dev/null)
 done
-readonly CALL_SITE_FLOOR=10
+# Plain assignment, NOT `readonly`: guard-vacuity-floor's build_mutant widens backward over
+# contiguous SIMPLE assignments to carry a floor's threshold into the mutant, and
+# `readonly X=N` does not match that shape — the mutant then dies unbound and scores
+# CONSTRUCTION rather than FIRES, which is an untested floor wearing a passing colour.
+CALL_SITE_FLOOR=10
 if (( call_sites >= CALL_SITE_FLOOR )); then
   pass "return-check derivation floor: $call_sites shell git_fixture_env call sites (>= $CALL_SITE_FLOOR)"
 else
-  fail "return-check derivation floor: only $call_sites shell call sites (< $CALL_SITE_FLOOR) — the call-site extractor matched (almost) nothing, so the check below is vacuous"
+  printf '[FLOOR] %s\n' "return-check derivation floor: only $call_sites shell call sites (< $CALL_SITE_FLOOR) — the call-site extractor matched (almost) nothing, so the check below is vacuous" >&2; exit 1
 fi
 if [[ -z "$unchecked" ]]; then
   pass "all $call_sites shell git_fixture_env call sites check the return value"
@@ -712,7 +716,7 @@ _c_control() {
   if (( must_flag == 1 && must_pass == 1 )); then
     pass "derivation C control: an env-less spawn is flagged AND an env-bound spawn is not"
   else
-    fail "derivation C control FAILED (flags-unprotected=$must_flag accepts-protected=$must_pass) -- the predicate pair no longer discriminates, so the partial-conversion assertion is vacuous whatever it reports"
+    printf '[FLOOR] %s\n' "derivation C control FAILED (flags-unprotected=$must_flag accepts-protected=$must_pass) -- the predicate pair no longer discriminates, so the partial-conversion assertion is vacuous whatever it reports" >&2; exit 1
   fi
 }
 _a_control() {
@@ -731,7 +735,7 @@ _a_control() {
   if (( a == 1 && b == 1 && c == 1 )); then
     pass "derivation A control: a read+mutate line is mutating, and a read-only line still is not"
   else
-    fail "derivation A control FAILED (read-only-quiet=$a mixed-flagged=$b mutating-flagged=$c) -- the line classifier no longer discriminates, so derivation A is vacuous whatever it reports"
+    printf '[FLOOR] %s\n' "derivation A control FAILED (read-only-quiet=$a mixed-flagged=$b mutating-flagged=$c) -- the line classifier no longer discriminates, so derivation A is vacuous whatever it reports" >&2; exit 1
   fi
 }
 _a_control
@@ -743,9 +747,9 @@ rm -f "$_C_COUNTS"
 readonly C_FILE_FLOOR=8
 readonly C_SPAWN_FLOOR=20
 if (( _C_FILES_SCANNED < C_FILE_FLOOR )); then
-  fail "derivation C scanned only $_C_FILES_SCANNED code files (floor $C_FILE_FLOOR) -- its population collapsed, so the partial-conversion assertion below is vacuous"
+  printf '[FLOOR] %s\n' "derivation C scanned only $_C_FILES_SCANNED code files (floor $C_FILE_FLOOR) -- its population collapsed, so the partial-conversion assertion below is vacuous" >&2; exit 1
 elif (( _C_SPAWNS_SCANNED < C_SPAWN_FLOOR )); then
-  fail "derivation C examined only $_C_SPAWNS_SCANNED direct spawn sites (floor $C_SPAWN_FLOOR) -- CODE_DIRECT_SPAWN_RE matches (almost) nothing, so a partial conversion cannot be seen"
+  printf '[FLOOR] %s\n' "derivation C examined only $_C_SPAWNS_SCANNED direct spawn sites (floor $C_SPAWN_FLOOR) -- CODE_DIRECT_SPAWN_RE matches (almost) nothing, so a partial conversion cannot be seen" >&2; exit 1
 else
   pass "derivation C scanned $_C_FILES_SCANNED files / $_C_SPAWNS_SCANNED spawn sites (floors $C_FILE_FLOOR / $C_SPAWN_FLOOR)"
 fi
@@ -762,7 +766,11 @@ printf '\n=== %d passed, %d failed, %d assertions ===\n' "$PASS" "$FAIL" "$ASSER
 # Assertion-count floor. Reported with printf and exit, NEVER through fail() — this backstops fail()
 # and the counters it maintains (ADR-193). Deleting the body of any loop above leaves the counters
 # untouched and this guard would otherwise read "0 failed" over a tree it never examined.
-readonly MIN_ASSERTIONS=22
+# Plain assignment, NOT `readonly`: guard-vacuity-floor's build_mutant widens backward over
+# contiguous SIMPLE assignments to carry a floor's threshold into the mutant, and
+# `readonly X=N` does not match that shape — the mutant then dies unbound and scores
+# CONSTRUCTION rather than FIRES, which is an untested floor wearing a passing colour.
+MIN_ASSERTIONS=22
 if (( ASSERTIONS < MIN_ASSERTIONS )); then
   printf '\nFATAL: only %d assertions ran (expected >= %d).\n' "$ASSERTIONS" "$MIN_ASSERTIONS" >&2
   printf 'A guard that reports "0 failed" after running almost nothing is worse than no guard.\n' >&2
