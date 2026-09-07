@@ -956,7 +956,6 @@ creation
 credential
 credential-boundary
 credential-exfil
-credential-forwarding
 credential-handling
 credential-handoff
 credential-helper
@@ -3982,7 +3981,6 @@ verdict
 verdict-cache
 verification
 verification-decay
-verification-defects
 verification-discipline
 verification-gate
 verification-grep
