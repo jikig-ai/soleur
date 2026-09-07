@@ -21,7 +21,7 @@
 #
 # Why the FILED query looks the way it does
 # -----------------------------------------
-# Four independently-measured defects each make a BLOCKING gate silently
+# Five independently-measured defects each make a BLOCKING gate silently
 # always-pass — which is strictly worse than the advisory surface it replaces,
 # because it also carries the authority of having passed:
 #   1. `--search` returns EMPTY cross-repo under a GitHub App / action token.
@@ -29,9 +29,32 @@
 #   3. The `(Ref|Closes|Fixes) #N` keyword filter matches only ~40% of real
 #      filings; a bare `#N` mention is the common shape.
 #   4. `--label deferred-scope-out` covers only ~8% of what PRs actually file.
+#   5. (#7759) The FILED query asks the ISSUE side only, so a filing that cites
+#      the ORIGINATING ISSUE rather than the PR is invisible: `Filing:`
+#      under-counts and the gate passes net-positive. Measured live twice — PR
+#      #7702 read `Filing: 0 / Net: -1 / PASS` and, once its three filings named
+#      the PR, `Filing: 3 / Net: +2 / BLOCKED`; PR #7841 reproduced it.
+#      Remedy: a SECOND attribution arm reading the PR own body. An issue counts
+#      when it postdates the PR AND (its body cites #N — unchanged — OR its
+#      number is on the PR `Filed:`/`Tracks:`/`Refs:` line). Every OTHER post-PR
+#      number the body mentions is REPORTED as a possible unattributed filing
+#      and counted toward nothing. Widening the match to issues citing an issue
+#      the PR closes was rejected: attribution would run transitively through a
+#      third party, so a sibling PR filings would count against this one.
+#      Counting bare `#N` was rejected on measurement over 300 PRs — it
+#      attributes 9 issues to two different PRs each and flips 25 (8.3%) from
+#      PASS to BLOCK with an unmeasured false-positive rate. See ADR-206.
 # So: no --search, --limit 500, --state all, no label filter, bare-#N matching,
-# and a client-side full-ISO createdAt comparison (never `cut -c1-10`, which
-# collapses same-day precision).
+# a client-side full-ISO createdAt comparison (never `cut -c1-10`, which
+# collapses same-day precision), and both attribution arms above.
+#
+# One interaction worth stating because it collapses an ADR-155 conjunct: a
+# `Tracks #N` line now BOTH admits a row into FILED and satisfies exemption
+# condition 4 (the companion). The four conjuncts are no longer independent.
+# Condition 2 — the human-gated `[mandates-filing]` corpus edit — still bounds
+# the blast radius, and the interaction is deliberate rather than incidental:
+# before it, the exemption was INERT, because 0 of 33 whole-line `Mandated-By:`
+# issues cite a PR, so none had ever been a FILED candidate at all.
 #
 # Exits: the general override, and the narrow mandated-filing exemption
 # ---------------------------------------------------------------------

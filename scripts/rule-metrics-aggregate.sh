@@ -431,6 +431,20 @@ report=$(jq -n \
           # conditions: "could not read the corpus" vs "read it, nothing tagged".
           # The second is expected rollout noise and should decay to 0; the
           # first should always be 0.
+          # #7759. Same write-only trap as the two below, and named here for the
+          # same reason: orphan_rule_ids filters the whole `net-issue-flow`
+          # prefix, so a new id under it reaches this file through NO other key.
+          # They answer two different questions and must not be merged:
+          # `body_attributed` counts runs where a filing was countable ONLY
+          # because the PR declared it — i.e. how often the pre-#7759 gate would
+          # have under-counted — and should be non-zero if the fix is load-bearing.
+          # `unattributed_reported` counts runs naming a post-PR number the body
+          # never declared; it is the residual blind spot, and a rising value
+          # means producers are drifting away from the declared line.
+          gate_body_attributed_count:
+            (($counts["net-issue-flow-body-attributed"].applied_count // 0)),
+          gate_unattributed_reported_count:
+            (($counts["net-issue-flow-unattributed-reported"].warn_count // 0)),
           gate_corpus_unreadable_warn_count:
             (($counts["net-issue-flow-mandated-filing-corpus-unreadable"].warn_count // 0)),
           gate_zero_tagged_warn_count:

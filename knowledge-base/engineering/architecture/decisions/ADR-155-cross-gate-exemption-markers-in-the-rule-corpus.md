@@ -247,3 +247,37 @@ than applied, with the operator's direction kept as the default. Both are in
   the operator's direction said "at minimum" both rules. Untagging is a one-line corpus edit under
   the same ack gate. The decisive measurement — what fraction of recently filed issues would satisfy
   `Mandated-By` + `Refs` + OPEN — was never taken; the query is recorded in DC-1.
+
+## Amendment — 2026-09-07 (#7759)
+
+**The exemption recorded above was INERT from the day it shipped, and this amendment records the
+measurement, the revival, and one consequence that is now different.** Appended rather than
+edited: the original reasoning stands as written, and what changed is a fact about the world it
+assumed.
+
+**Measured.** Applying the gate's own whole-line predicate — `^[ \t\r]*[Mm]andated-[Bb]y:` —
+across the issue corpus yields **33** issues. Classifying every `#N` they cite as issue-vs-PR by
+range membership gives **0 of 33 citing any PR**.
+
+That is decisive, because the exemption is computed only over rows that already reached `FILED`,
+and before #7759 a row reached `FILED` only by citing the PR in its own body. An issue that cites
+no PR was never a candidate. **The four conditions were therefore never evaluated on a real
+issue, and the exemption had never fired.** DC-1 above notes that the decisive measurement "was
+never taken"; this is that measurement, and it says the mechanism was dead on arrival rather than
+merely unused.
+
+**Revived by ADR-206.** The declared-filing arm admits an issue whose number appears on the PR's
+`Filed:`/`Tracks:`/`Refs:` line regardless of what the issue body cites, so `Mandated-By:` issues
+now become FILED candidates and the four conditions are evaluated for the first time.
+
+**One conjunct collapses, and it is priced rather than ignored.** A `Tracks #N` line now BOTH
+admits the row into `FILED` and satisfies condition 4 (the companion). The four conditions are no
+longer independent: condition 4 is implied by the admission for every row admitted via that
+route. Condition 2 — the human-gated `[mandates-filing]` corpus edit under the ADR-092 ack gate —
+still bounds the blast radius, and it remains the conjunct that makes the vocabulary closed. The
+"not unforgeable" caveat in the original text is unchanged and still applies.
+
+**DC-1 is unaffected as a decision** but its framing shifts: the question of whether
+`wg-when-deferring-a-capability-create-a` should carry the marker was previously argued against a
+mechanism that could not fire. It can now, so the argument is live for the first time. No corpus
+edit is made here.

@@ -105,22 +105,22 @@ never inside `$( )`.
 
 ## Phase 7 — Documentation
 
-- [ ] 7.1 Extend the gate header's "Why the FILED query looks the way it does" with the fifth defect and
+- [x] 7.1 Extend the gate header's "Why the FILED query looks the way it does" with the fifth defect and
       its remedy, and record that `Tracks #N` now both admits a row and satisfies exemption condition 4.
-- [ ] 7.2 Author `ADR-206-attribute-a-prs-filings-by-the-prs-own-body.md`: the declared/reported split;
+- [x] 7.2 Author `ADR-206-attribute-a-prs-filings-by-the-prs-own-body.md`: the declared/reported split;
       the first-party rationale **and its limit** (a mention is not a filing claim) with the 300-PR
       measurement; `## Alternatives Considered` carrying the sixteen-site producer sweep, the transitive
       widening, keyword-anchoring on free prose, and bare-`#N` counting, each with the measurement that
       rejected it; the supersession of the 2026-09-03 plan §PR 4; the ADR-155 conjunct collapse; the
       `Tracks #NNNN` cite-an-existing-issue interaction and why it self-neutralises; and
       `Known adjacent gaps` for the `/review` `Ref #N` probe.
-- [ ] 7.3 Amend ADR-155 with `## Amendment — 2026-09-07 (#7759)` recording the measured inertness
+- [x] 7.3 Amend ADR-155 with `## Amendment — 2026-09-07 (#7759)` recording the measured inertness
       (0 of 33 whole-line `Mandated-By:` issues cite a PR), the revival, and the conjunct collapse. An
       ADR-only note in ADR-206 would leave ADR-155 silently contradicted.
-- [ ] 7.4 On any ADR renumber, sweep
+- [x] 7.4 On any ADR renumber, sweep
       `grep -rn 'ADR-206' knowledge-base/project/{plans,specs}/feat-one-shot-7759-*/` in the **same**
       edit — this file carried a stale ordinal after the 205→206 move and the sweep is what caught it.
-- [ ] 7.5 Add named aggregator fields in `scripts/rule-metrics-aggregate.sh` for both new ids. The
+- [x] 7.5 Add named aggregator fields in `scripts/rule-metrics-aggregate.sh` for both new ids. The
       rollup reads ids by **exact key** and its orphan gate filters the whole `net-issue-flow` prefix, so
       a new id is otherwise write-only telemetry — a mistake that file already documents happening once.
 
