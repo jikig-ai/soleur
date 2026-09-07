@@ -233,9 +233,15 @@ the corrections above; the measurement they would have called for is the one
 §Steps now declines to prescribe, so neither leaves an open action.
 
 1. **Annual review** — cadence-based, next due 2027-05. *Not fired.*
-2. **`apps/web-platform/infra/cloud-init.yml` change** — fires when the
-   `daemon.json` block is edited (anchor on the `"log-driver": "json-file"`
-   line, not a line number). *Not fired.*
+2. **`apps/web-platform/infra/cloud-init.yml` change** — **RE-SCOPED
+   2026-09-07 (#6474).** This previously fired on edits to the `daemon.json`
+   block (anchor: the `"log-driver": "json-file"` line). PA-8 §(f) has now
+   retracted that json-file cap as non-governing for this container, so a
+   trigger watching it guards a surface the register says is irrelevant here —
+   which is the same Art. 5(2) defect this runbook's own §Re-verification
+   triggers preamble is about, one step earlier. It now fires on any change to
+   the **`docker run --log-driver` / `--log-opt` invocation** in the same file
+   (anchor on the `--log-driver journald` line). *Not fired since re-scoping.*
 3. **Off-host log shipper introduction** — fires when any of `promtail`,
    `vector`, `fluent`, `filebeat`, `rsyslog` is added to the infra.
    **FIRED 2026-06-02** — Vector, `[sources.app_container_journald]` (#4786).
@@ -248,7 +254,26 @@ the corrections above; the measurement they would have called for is the one
    is undefined for this container, and the wrong mechanism in PA-8 §(f) is
    named there for a register PR to correct.
 
-The trigger list is **closed** — adding a fifth trigger requires updating
+5. **`apps/web-platform/infra/journald-soleur.conf` change** — **NEW
+   2026-09-07 (#6474).** Fires on any change to the journald caps (anchor on the
+   `SystemMaxUse=` line). This is the file that actually governs the bound PA-8
+   §(f) records, and until now no trigger watched it: the register cited a
+   mechanism (`json-file`, 30 MB) whose watcher was trigger 2, while the real
+   mechanism had none. *Not fired.*
+6. **Better Stack source `logs_retention` change** — fires on any change to a
+   source's configured retention. **FIRED 2026-09-04** (#7772), discharged: both
+   sources read 90 days and §(f) records it.
+7. **New source on Better Stack team `520508`** — fires on creation of any
+   further source. *Not fired.*
+
+**Triggers 6 and 7 were added to PA-8 §(f) by the 2026-09-04 (#7772) bracket
+without the paired runbook update the closure clause below requires.** They are
+folded in here on 2026-09-07 (#6474) so the two lists agree; the closure clause
+was already breached when this PR found it, and leaving §(f) at seven triggers
+while this list stood at four would have shipped prose asserting a lockstep that
+did not hold.
+
+The trigger list is **closed** — adding an eighth trigger requires updating
 the PA8 §(f) row and this runbook in the same PR.
 
 ### Steps
