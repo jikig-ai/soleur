@@ -46,3 +46,46 @@
 - inngest-cutover environment required reviewers = [deruelle] (NON-EMPTY; no auto-approve).
 - No secret name in soleur-inngest/prd collides with a CUTOVER_* fixture seam -> #7761 latent, not active.
 - ci.yml on main last 3 runs 2332s/2143s/2438s (under the 3000s await-ci ceiling; today's peak 3366s).
+
+## Review + QA Phase (2026-09-07)
+
+- Panel: 7 agents, report-only (>3 concurrent share one worktree, so the lead owned every edit).
+  Substituted observability-coverage-reviewer and a structural-enumeration seat for
+  agent-native-reviewer and performance-oracle — no user-facing surface, no economics claim.
+- Deterministic gates ran FIRST per the guard-shaped-PR rule: shellcheck (2 hits, both mine, both
+  mutation-verified load-bearing), validate-infra-templates (caught a render break I introduced),
+  semgrep deliberately skipped (vacuous on a bash-only diff).
+
+### Findings — all fixed inline, none filed (NET 0 issues)
+
+- P0 the probe could never PASS: EXPECTED_FLAG was `rolled-back`, live flag is `aborted`.
+- P0 no assert() dispatcher self-test: `if eval` -> `if true` gave 163/163 with real defects.
+- P0 no global floor: deleting the Guard A block reported 149/149 OK.
+- P1 `armed` was capped on the only channel CI has (the sweeper provisions no Doppler token).
+- P1 Guard D blind to `cat <<A > f`, `{ cat <<B; } > f`, `tee f <<C`, trailing-comment forms.
+- P1 exemption scoped by NAME not SITE; body read only at the first occurrence.
+- P1 a tag pinned to another tag's bytes passed 161/161; the comment I wrote claimed otherwise.
+- P1 five false claims in prose (exposure window, Guard B's binding, an unbuilt apply-path arm,
+  two ADR twins, and the operator-facing Guard 2 remediation).
+- P2 Guard A ran bare `git` (process CWD) where AC6 in the same file uses `git -C "$SCRIPT_DIR"`.
+
+### Verification state at ship
+
+- bootstrap 163/163, inngest 305/305, follow-through 53/53, zot-pull 9/9 killed, dark-gate 115/115.
+- validate-infra-templates rc=0; apply-web-platform-infra.yml YAML parses.
+- AC5 re-derived by command: run 34159532201, headSha == the tag's commit, exactly one signing-line
+  digest, equal to the pin at all four sites.
+- Guard A: 10 carriers, 0 drifted at vinngest-v1.1.26 after 10 further commits.
+- `scripts` TEST_GROUP shard NOT run as a shard (CAPACITY_CONTENDED throughout). Its only relevance
+  is the follow-through suite, run directly and green; no sibling pins the strings this PR changed.
+  CI's required `test` context runs it.
+
+### Known, and stated rather than left implicit
+
+- `infra-validation` is NOT a required status check: only the suites' REGISTRATION is
+  merge-blocking (via test-infra-suite-registration.sh in the required
+  `Bash fixture tests for guard scripts` context). Every red these three guards can produce is
+  advisory at PR time today. That is a standing gap, not something this PR introduces.
+- The hermetic residual: a digest that is well-formed, agreed across all four sites, and simply
+  wrong. Guard B row6 catches the tag-moved-without-digest shape; AC5 is the only control on the
+  rest. The apply-path live arm the plan listed was never built, and the plan now says so.
