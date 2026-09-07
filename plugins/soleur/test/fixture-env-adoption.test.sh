@@ -566,9 +566,19 @@ fi
 
 # --- the out-of-scope shell root: counted, printed, ratcheted ----------------------------------------
 # NOT part of the difference set above, and NOT hidden. Phase 2 did not cover plugins/soleur/test's
-# shell suites; ~20 of them `git init` a fixture and never call the builder. They source
-# test-helpers.sh, so the #7833 tripwire IS armed for them (they cannot run under an inherited
-# git-location environment) — but the builder's ceiling, identity and config hermeticity are absent.
+# shell suites; ~20 of them `git init` a fixture and never call the builder. The builder's ceiling,
+# identity and config hermeticity are absent for all of them.
+#
+# THE ARMING CLAIM IS DERIVED, NOT ASSERTED. This block used to state flatly that they "source
+# test-helpers.sh, so the #7833 tripwire IS armed for them". That was FALSE for SEVEN of the twenty,
+# which is the population the sentence existed to reassure the reader about -- including
+# fixture-cd-containment, whose mutating spawn is a cwd-relative `git commit` with no `-C`, the
+# exact shape an inherited GIT_DIR overrides. So the guard printed a mitigation for the members
+# that did not have it.
+#
+# Anchored on an EXECUTABLE source line, never a mention: fixture-dir-operand-assert.test.sh names
+# test-helpers.sh twice in prose and sources it zero times, so `grep -c test-helpers.sh` calls it
+# armed (cq-assert-anchor-not-bare-token, and the error this comment is the fix for).
 # Recorded as a ceiling on the count, so the number can only go down. A count ceiling is swap-blind
 # by construction; that is a stated limitation, not an oversight — closing it means bringing this
 # root into scope, which is a conversion PR, not a guard change.
@@ -582,10 +592,31 @@ for f in $(git ls-files "${OUT_OF_SCOPE_SHELL_ROOTS[@]}" 2>/dev/null \
   done < <(_strip_shell_data "$f" | grep -E "$SHELL_SPAWN_RE" 2>/dev/null | grep -vE '^[[:space:]]*#')
 done
 OUT_N=$(printf '%s' "$OUT_SET" | grep -c . || true)
+# An EXECUTABLE source statement, not a mention anywhere in the file.
+_sources_test_helpers() {
+  grep -qE '^[[:space:]]*(source|\.)[[:space:]]+[^#]*test-helpers\.sh' "$1"
+}
+OUT_UNARMED=""
+while IFS= read -r _f; do
+  [[ -z "$_f" ]] && continue
+  _sources_test_helpers "$_f" || OUT_UNARMED+="$_f"$'\n'
+done <<< "$OUT_SET"
+OUT_UNARMED_N=$(printf '%s' "$OUT_UNARMED" | grep -c . || true)
 printf -- '\n--- OUT OF SCOPE, counted and ratcheted: plugins/soleur/test shell suites that\n'
-printf -- '    mutate git without the builder (%d; tripwire armed via test-helpers.sh) ---\n' "$OUT_N"
-printf '%s' "$OUT_SET" | sed 's/^/    /'
+printf -- '    mutate git without the builder (%d; %d of them ALSO lack the #7833 tripwire) ---\n' \
+  "$OUT_N" "$OUT_UNARMED_N"
+while IFS= read -r _f; do
+  [[ -z "$_f" ]] && continue
+  if _sources_test_helpers "$_f"; then printf '    %s\n' "$_f"
+  else printf '    %s   [NO tripwire: does not source test-helpers.sh]\n' "$_f"; fi
+done <<< "$OUT_SET"
 printf '\n'
+readonly OUT_UNARMED_CEILING=7
+if (( OUT_UNARMED_N <= OUT_UNARMED_CEILING )); then
+  pass "out-of-scope suites with NO tripwire: $OUT_UNARMED_N <= ceiling $OUT_UNARMED_CEILING (ratchet)"
+else
+  fail "out-of-scope suites with NO tripwire: $OUT_UNARMED_N EXCEEDS ceiling $OUT_UNARMED_CEILING — a new plugins/soleur/test shell suite mutates git with neither the builder NOR test-helpers.sh, so an inherited GIT_DIR retargets it at every layer"
+fi
 readonly OUT_CEILING=20
 if (( OUT_N <= OUT_CEILING )); then
   pass "out-of-scope unconverted count $OUT_N <= ceiling $OUT_CEILING (ratchet: lower the ceiling when you convert one)"

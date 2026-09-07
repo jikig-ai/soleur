@@ -64,6 +64,14 @@ shell_list() {
   sed -n '/^readonly GIT_LOCATION_VARS=(/,/^)/p' "$SCRIPT_DIR/lib/git-fixture-env.sh" \
     | grep -vE '^readonly ' | grep -oE '\bGIT_[A-Z_]+\b' | sort -u
 }
+# tests/conftest.py carries a SIXTH copy. Its own docstring said "enforced by
+# git-env-list-parity.test.sh" -- this file -- which contained no reference to conftest at all, so
+# the claim of enforcement was the only enforcement. Every pytest suite in the repo imports this
+# module for its tripwire, so a drifted copy here silently narrows what python-side runs refuse.
+conftest_list() {
+  sed -n '/^_GIT_LOCATION_VARS = (/,/^)/p' \
+      "$REPO_ROOT/tests/conftest.py" | grep -oE '"GIT_[A-Z_]+"' | tr -d '"' | sort
+}
 guard_list() {
   sed -n '/^readonly REQUIRED_SCRUB_VARS=(/,/^)/p' \
       "$SCRIPT_DIR/hook-git-env-coverage.test.sh" | grep -oE '\bGIT_[A-Z_]+\b' | sort -u
@@ -76,7 +84,7 @@ scrub_list() {
     | head -1 | grep -oE '\bGIT_[A-Z_]+\b' | sort -u
 }
 
-TS="$(ts_list)"; PY="$(py_list)"; SH="$(shell_list)"; GD="$(guard_list)"
+TS="$(ts_list)"; PY="$(py_list)"; SH="$(shell_list)"; GD="$(guard_list)"; CF="$(conftest_list)"
 N=$(printf '%s\n' "$TS" | grep -c .)
 
 # Non-vacuity: if any derivation returns empty, every set-equality below passes for the wrong
@@ -86,7 +94,7 @@ if (( N >= 9 )); then
 else
   bad "TS GIT_LOCATION_VARS derived only $N names — the extraction broke or the list shrank"
 fi
-for pair in "PY:$PY" "SHELL:$SH" "GUARD:$GD"; do
+for pair in "PY:$PY" "SHELL:$SH" "GUARD:$GD" "CONFTEST:$CF"; do
   name="${pair%%:*}"; val="${pair#*:}"
   if [[ -n "$val" ]]; then ok "$name derivation is non-empty"; else bad "$name derivation returned NOTHING"; fi
 done
@@ -104,6 +112,7 @@ cmp_set() {
 cmp_set "python  _git_fixture_env.py" "$TS" "$PY"
 cmp_set "shell   lib/git-fixture-env.sh" "$TS" "$SH"
 cmp_set "guard   REQUIRED_SCRUB_VARS" "$TS" "$GD"
+cmp_set "python  tests/conftest.py" "$TS" "$CF"
 
 printf '\n=== the scrub sites remove everything the tripwire refuses ===\n'
 # The asymmetry that matters: a variable the tripwire REFUSES but a scrub does not REMOVE makes the
