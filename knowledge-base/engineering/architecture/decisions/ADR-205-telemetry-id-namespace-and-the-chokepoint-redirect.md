@@ -31,15 +31,22 @@ shape — a per-call-site sweep, applied three times, leaking three times.
 ## Decision
 
 > **A section prefix (`hr`, `wg`, `cq`, `rf`, `pdr`, `cm`) is a CLAIM to
-> membership in the AGENTS corpus. An identifier that carries one and is neither
-> a current rule nor a deliberately retired one is an orphan; an identifier that
-> carries none is hook telemetry and is outside the corpus by construction.**
+> membership in the AGENTS corpus. An identifier that carries one is an orphan unless it is a
+> current rule, a deliberately RETIRED one, or one that was NEVER ADMITTED (tier-gated out under
+> `cq-agents-md-tier-gate`); an identifier that carries none is hook telemetry and is outside the
+> corpus by construction.**
 >
 > **Test telemetry is redirected at the RUNNER CHOKEPOINT — the code that runs
 > before a runner runs a test — never at the call site, and never by teaching
 > production code to detect tests.**
 
 ## Consequences
+
+**The third exemption is stated in the blockquote deliberately.** An earlier draft said only
+"neither current nor retired", which the shipped gate contradicts: it carries one exact exemption for
+`cq-pencil-collapse-auto-recover`. A reader reconciling the code to that blockquote would delete the
+exemption for consistency and return the gate to `rc=5`. The blockquote is the part that gets quoted
+forward, so it has to carry all three cases.
 
 ### The namespace rule replaces an enumeration with a predicate
 
@@ -109,11 +116,43 @@ mechanism, and read by the test.** Two independent derivations of one fact are
 free to disagree, and the disagreement surfaces as a failure attributed to
 whichever side is cheaper to blame.
 
+## Deviation from AP-025, recorded
+
+`principles-register.md` AP-025 says: *"Where a hazard is a property of runtime STATE, enforce it
+with a self-refusal the artifact CARRIES ... not with a boundary interceptor that must enumerate the
+ways to REACH that state. A state predicate is complete by construction; a list of ways to reach it
+cannot be proven complete."*
+
+This decision chooses the enumerated-entry-point form and explicitly rejects the
+artifact-carries-refusal form. The deviation is deliberate: AP-025's premise is that a state
+predicate is complete by construction, and the predicate here would be *"am I a test?"* — which is
+not decidable from inside a hook, and whose false positives darken REAL operator telemetry. That is
+the one failure this system cannot tolerate, since the ledger is read as evidence.
+
+The cost of the deviation is real and is stated in Consequences: the enumeration is a static
+derivation with a named, ratcheted outside set, not total coverage.
+
+## Downstream: the marker-capture ingress widened
+
+The namespace decision's largest downstream effect is not in the aggregator. `_valid_rule()` in
+`.claude/hooks/rule-incident-marker-capture.sh` previously admitted five reserved prefixes plus one
+exact id; under this decision it admits any shape-valid id LACKING a section prefix, from a
+contributor-writable marker. `knowledge-base/project/rule-metrics.json` is committed, so that file's
+key namespace went from effectively closed to open.
+
+That bound is narrower than it first appears and narrower than the hook's own header claimed — see
+the Verification section for the ids that must stay rejected because the aggregator reads them into
+NAMED summary fields.
+
 ## Verification
 
 - Orphan gate: `rc=5`/23 → `rc=0`/0; injected non-retired prefixed id → `rc=5`.
 - Ledger: `gdpr-gate-self-test.test.sh` 8 rows/run → **0**, suite still 13/13.
 - Ancestry: RED at lefthook depth → GREEN; mutation battery `killed=12 survived=0`.
+- **Coverage is a ratcheted static derivation with a named outside set, NOT total coverage.**
+  `incident-sandbox-coverage.test.sh` prints that set and floors it. Stating the five chokepoints
+  without that caveat would apply a weaker standard to this ADR than the ADR applies to the
+  name-grep it replaces.
 - Chokepoints: each of the five produces an absolute root on a bare invocation;
   the vitest arm verified to reach worker children under both `pool: "forks"` and
   `WEBPLAT_TEST_USE_THREADS=1`.

@@ -80,7 +80,7 @@ predicate its mirrors follow. Do not reorder.
       non-degenerate before sourcing (elevated-privilege context).
 - [x] 3.6 Add the 9-var `unset` to `.github/scripts/test/run-all.sh` as the **first**
       line-start-anchored `unset GIT_` in the file.
-- [ ] 3.7 Create `plugins/soleur/test/fixture-env-adoption.test.sh` — two derivations (git-spawn
+- [x] 3.7 Create `plugins/soleur/test/fixture-env-adoption.test.sh` — two derivations (git-spawn
       sites by invocation shape; helper-call sites), each with a non-empty floor, difference set
       empty **and printed**, plus a declared waiver list for the six `workspace*`/`mu1-integration`
       suites and `agent-ready-git-worktree.test.ts`. Register it.
@@ -129,8 +129,13 @@ predicate its mirrors follow. Do not reorder.
       with no section prefix", and change its companion assertion in
       `rule-incident-marker-capture.test.sh` from per-prefix `startswith("<p>")` greps to a
       shared-regex check.
-- [x] 5.5 Handle the five mis-prefixed `cq-` hook ids per task 1.8: rename the emitter literals where
-      permitted, exact-exempt only where the immutability rule binds. Record which and why.
+- [x] 5.5 Handle the five mis-prefixed `cq-` hook ids per task 1.8. **Closed on a DIFFERENT basis
+      than this line states.** Four are RETIRED and are exempted by clause 2. The fifth,
+      `cq-pencil-collapse-auto-recover`, carries one exact exemption — and NOT because "the
+      immutability rule binds" (T1.8 established it does not bind emitter literals). The real reason
+      is that five rows carrying that id sit in the `.gz` archives the aggregator merges, so deleting
+      the exemption at rename time returns the gate to `rc=5`. It is a two-step change whose second
+      step has a real precondition; deferred as #7889 item 7.
 - [x] 5.6 Regenerate `knowledge-base/project/rule-metrics.json` **as its own commit**, with the
       `--dry-run` diff for the PR body.
 

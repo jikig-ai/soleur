@@ -41,9 +41,24 @@ PASS=0; FAIL=0; ASSERTIONS=0
 printf '  [ok]   instrument self-test cleared (both counters moved)\n'
 PASS=1; ASSERTIONS=1
 
+# One owning EXIT trap for every fixture this suite allocates (ADR-129 rule (c)).
+#
+# ONE parent directory, removed by one trap -- NOT an array of fixture paths appended by mkfixture.
+# `mkfixture` is called as `F="$(mkfixture)"`, and command substitution runs the function in a
+# SUBSHELL: an array append there is discarded, so an array-based trap frees nothing while looking
+# exactly like it works. Measured: it left all 6 directories behind.
+#
+# Measured before any trap existed: 7 call sites, no trap, no `rm` anywhere in the file -- 6 leaked
+# directories and ~416 KB per full-gate run, into a machine-global 4 GiB tmpfs shared by every
+# parallel worktree.
+_FIXTURE_ROOT="$(mktemp -d "$TMPDIR/gfe-shell.XXXXXXXX")" || {
+  printf '[FATAL] mktemp -d failed; harness cannot set up\n' >&2; exit 2; }
+# Guarded on the shape this function itself creates, so the trap cannot be aimed elsewhere.
+trap '[[ -n "${_FIXTURE_ROOT:-}" && "$_FIXTURE_ROOT" == "$TMPDIR"/gfe-shell.* ]] && rm -rf "$_FIXTURE_ROOT"' EXIT
+
 mkfixture() {
   local d
-  d="$(mktemp -d "$TMPDIR/gfe-shell.XXXXXXXX")" || {
+  d="$(mktemp -d "$_FIXTURE_ROOT/fx.XXXXXXXX")" || {
     printf '[FATAL] mktemp -d failed; harness cannot set up\n' >&2; exit 2; }
   mkdir -p "$d/repo" || { printf '[FATAL] mkdir failed in %s\n' "$d" >&2; exit 2; }
   printf '%s' "$d/repo"

@@ -65,21 +65,46 @@ unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY G
 # walks up to the operator real .claude/.rule-incidents.jsonl. An EMPTY value reads as unset to that
 # same function while still looking "set" to any static check for the variable name, which is the
 # shape that let two previous per-call-site sweeps report clean while they leaked.
-if [ -z "${INCIDENTS_REPO_ROOT:-}" ]; then
-  _soleur_inc_sb="$(mktemp -d -t soleur-inc-XXXXXX 2>/dev/null || true)"
-  case "${_soleur_inc_sb:-}" in
-    /?*) mkdir -p "$_soleur_inc_sb/.claude" 2>/dev/null || true
-         export INCIDENTS_REPO_ROOT="$_soleur_inc_sb"
-         export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_inc_sb" ;;
-    *)   printf "FATAL: could not create an incident-telemetry sandbox (got %s).\\n" \
-           "${_soleur_inc_sb:-<empty>}" >&2
-         printf "  Refusing to run: an unset INCIDENTS_REPO_ROOT points test telemetry at the\\n" >&2
-         printf "  operator real .claude/.rule-incidents.jsonl. Check free space on %s.\\n" \
-           "${TMPDIR:-/tmp}" >&2
-         exit 1 ;;
-  esac
-  unset _soleur_inc_sb
-fi
+# Validate an INHERITED root too, not only one we mint. `[ -z ]` alone lets a NON-ABSOLUTE value
+# through, and `_incidents_repo_root()` returns any non-empty value verbatim -- so
+# `INCIDENTS_REPO_ROOT=.` resolves against the HOOK's cwd, i.e. the operator's real ledger for any
+# hook spawned at the checkout root, while every static check for the variable's name reports it
+# set. The TS and Python siblings both require an absolute path; these shell arms did not.
+case "${INCIDENTS_REPO_ROOT:-}" in
+  /?*) : ;;
+  "")  _soleur_sb="$(mktemp -d -t soleur-inc-XXXXXX 2>&1)" || {
+         printf "FATAL: could not create an incident-telemetry sandbox: %s\n" "${_soleur_sb}" >&2
+         printf "  Refusing to run: an unset INCIDENTS_REPO_ROOT points test telemetry at the\n" >&2
+         printf "  operator real .claude/.rule-incidents.jsonl.\n" >&2
+         exit 1
+       }
+       case "${_soleur_sb:-}" in
+         /?*) : ;;
+         *)   printf "FATAL: mktemp produced a non-absolute sandbox path: %s\n" \
+                "${_soleur_sb:-<empty>}" >&2; exit 1 ;;
+       esac
+       # FAIL LOUD, not `|| true`: emit_incident drops a row WITHOUT a sentinel when its parent dir
+       # is missing, so on a full tmpfs every emit is silently discarded.
+       mkdir -p "$_soleur_sb/.claude" || {
+         printf "FATAL: could not create %s/.claude\n" "$_soleur_sb" >&2; exit 1
+       }
+       export INCIDENTS_REPO_ROOT="$_soleur_sb"
+       export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_sb"
+       # Own it (ADR-129 rule (c)), COMPOSED with any EXIT trap already installed.
+       _soleur_prior=$(trap -p EXIT | sed -E "s/^trap -- '(.*)' EXIT$/\1/")
+       if [ -n "$_soleur_prior" ]; then
+         # shellcheck disable=SC2064
+         trap "$_soleur_prior; rm -rf '$_soleur_sb'" EXIT
+       else
+         # shellcheck disable=SC2064
+         trap "rm -rf '$_soleur_sb'" EXIT
+       fi
+       unset _soleur_prior _soleur_sb ;;
+  *)   printf "FATAL: inherited INCIDENTS_REPO_ROOT is not absolute: %s\n" \
+         "$INCIDENTS_REPO_ROOT" >&2
+       printf "  A relative root resolves against each hook's cwd.\n" >&2
+       exit 1 ;;
+esac
 
 DIR=$(cd "$(dirname "$0")" && pwd)
 FAIL=0

@@ -27,7 +27,10 @@ Two recoverable, both resolved before the phase returned:
   chokepoints that would have exported a test marker already export `INCIDENTS_REPO_ROOT` directly,
   so the `incidents.sh` tripwire (issue suggestion 3) was cut. This also keeps test-awareness out of
   production hook code. Three reviewers converged on it independently.
-- **#7853 aggregator orphan gate — one predicate replaces nine exemption stanzas.** All 105 AGENTS
+- **#7853 aggregator orphan gate — one predicate plus a retirement lookup replaces nine exemption
+  stanzas, and ONE exact exemption survives.** (Corrected: the original wording said "one predicate",
+  which measurement falsified — see measurements.md Correction. `cq-pencil-collapse-auto-recover` is
+  tier-gated out of AGENTS.md, never retired, and live.) All 105 AGENTS
   ids carry a section prefix, so the gate asks "does this claim to be a corpus rule?" rather than
   maintaining a list. The registry + drift lint the first draft proposed were killed. The issue
   understated this arm 22x: 23 orphans, 22 with live emitters, not one.

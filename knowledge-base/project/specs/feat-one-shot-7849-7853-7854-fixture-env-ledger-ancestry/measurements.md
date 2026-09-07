@@ -127,6 +127,14 @@ it cannot exempt a live corpus rule.
 
 ### A-2 — task 5.5's premise is wrong, and its prescribed remedy is unavailable
 
+> **SUPERSEDED 2026-09-07 by the Correction below.** Every count and consequence in this subsection
+> is wrong in the same way A-1 was, and for the same reason — it partitioned the aggregator's
+> already-filtered OUTPUT. There are FIVE section-prefixed non-corpus ids, not three; the
+> discriminator is two clauses PLUS one exact exemption, not two clauses; and task 5.5's rename work
+> is DEFERRED (#7889 item 7), not retired. Read the Correction before relying on anything here.
+> Left in place unedited because a dated record is append-only and the superseded reading is the
+> evidence for why the correction was needed.
+
 The task list says "the five mis-prefixed `cq-` hook ids … rename the emitter literals where
 permitted". Measured: there are **three**, not five, and renaming is not the right treatment.
 Per A-1 they are retired rules, and `cq-rule-ids-are-immutable` states plainly that
@@ -183,7 +191,8 @@ the two `.gz` archives that Phase 3.5 explicitly does not touch.
 
 ## Correction to A-1 — 2026-09-07 (Phase 4 implementation)
 
-**A-1's "there is no fourth category" is WRONG, and the original task-list count was right.**
+**A-1's "there is no fourth category" is WRONG, and so is everything A-2 derived from it. The
+original task-list count was right.**
 Appended rather than edited, per the append-only rule for dated records: the superseded reading is
 the evidence for why the correction was needed.
 
