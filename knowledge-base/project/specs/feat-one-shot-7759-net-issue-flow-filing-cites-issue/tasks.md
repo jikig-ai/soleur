@@ -47,28 +47,28 @@ never inside `$( )`.
 
 `plugins/soleur/skills/ship/scripts/net-issue-flow.sh`.
 
-- [ ] 2.1 Derive both sets **inside the existing `jq` pass** from `$pb`. Pass `--arg closing "$CLOSING_NUMS"`.
+- [x] 2.1 Derive both sets **inside the existing `jq` pass** from `$pb`. Pass `--arg closing "$CLOSING_NUMS"`.
       **Do NOT build them in bash** — `grep -oE … | jq … || _fail_open` under `set -uo pipefail` makes
       grep's no-match exit 1 fail the gate OPEN on every PR whose body names no issue, and turns the
       deliberately fail-closed unbalanced-fence path into a fail-open. Both measured.
-- [ ] 2.2 Use the **lookbehind** `(?<![0-9A-Za-z])#([0-9]+)`, not a consuming boundary group — the
+- [x] 2.2 Use the **lookbehind** `(?<![0-9A-Za-z])#([0-9]+)`, not a consuming boundary group — the
       consuming form drops the second member of `#1#2`. Measured.
-- [ ] 2.3 `DECLARED` = numbers on lines matching `^[ \t\r]*(Filed|Tracks|Refs):?[ \t]+#[0-9]`, minus
+- [x] 2.3 `DECLARED` = numbers on lines matching `^[ \t\r]*(Filed|Tracks|Refs):?[ \t]+#[0-9]`, minus
       close targets and the PR's own number. This is the only set that counts.
-- [ ] 2.4 `UNATTRIBUTED` = all other post-PR body references, minus `DECLARED`. Reported only; must
+- [x] 2.4 `UNATTRIBUTED` = all other post-PR body references, minus `DECLARED`. Reported only; must
       touch neither `FILED`, `EXEMPT` nor `NET`.
-- [ ] 2.5 Widen the `select` as a **sibling disjunction** over the same array (body cites PR **or**
+- [x] 2.5 Widen the `select` as a **sibling disjunction** over the same array (body cites PR **or**
       `$declared` contains the number), keeping the `createdAt` guard as a separate conjunct.
-- [ ] 2.6 Row becomes `[number, verdict, attribution, detail]`; consumer
+- [x] 2.6 Row becomes `[number, verdict, attribution, detail]`; consumer
       `read -r _num _verdict _attr _detail`. Free-text `detail` stays **last**. Update the
       `_emit_as "net-issue-flow-mandated-filing--${_detail}"` safety comment: with the field misordered,
       `_detail` becomes `pr-body` and every exemption is silently re-grouped under
       `net-issue-flow-mandated-filing--pr-body` — still `[a-z0-9-]`-shaped, still past the orphan filter.
-- [ ] 2.7 Add the `Attributed:` line (derived from the **rows actually counted**, never from the set —
+- [x] 2.7 Add the `Attributed:` line (derived from the **rows actually counted**, never from the set —
       otherwise the report and the count desynchronise) and the `Possible unattributed filings:` line.
-- [ ] 2.8 Emit `net-issue-flow-body-attributed` (`applied`) only when the declared arm fired, and a
+- [x] 2.8 Emit `net-issue-flow-body-attributed` (`applied`) only when the declared arm fired, and a
       distinct id for the conservation report.
-- [ ] 2.9 Do not touch: the `gh issue list` argv, the `NET > 0` threshold, the override marker, the awk
+- [x] 2.9 Do not touch: the `gh issue list` argv, the `NET > 0` threshold, the override marker, the awk
       fence-strip, the merge-base corpus read, or the `Filing:`-keeps-its-true-count contract.
 
 ## Phase 3 — Producer: the declared line in `/ship`

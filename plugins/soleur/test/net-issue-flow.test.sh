@@ -1005,10 +1005,12 @@ else
   fail "R3 expected a 'possible unattributed filing' line; got: $(tr '\n' '|' < "$WORK/out")"
 fi
 cases=$((cases + 1))
-if grep -qE 'Net:[[:space:]]*0' "$WORK/out"; then
+# `%+d`, so a zero prints as `+0` — an unsigned `0` here would never match and
+# the case would red against a correct gate.
+if grep -qE 'Net:[[:space:]]*\+0' "$WORK/out"; then
   pass "R3 the reported-only number does not move NET"
 else
-  fail "R3 expected 'Net: 0'; got: $(tr '\n' '|' < "$WORK/out")"
+  fail "R3 expected 'Net: +0'; got: $(tr '\n' '|' < "$WORK/out")"
 fi
 
 printf '\n'

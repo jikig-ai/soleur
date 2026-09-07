@@ -258,6 +258,7 @@ GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
   --arg pr "$PR_NUMBER" \
   --arg since "$PR_CREATED_AT" \
   --arg prbody "$PR_BODY" \
+  --arg closing "$CLOSING_NUMS" \
   --argjson ok "$MANDATING_JSON" '
   # Fenced blocks are stripped from BOTH corpora before matching. An UNBALANCED
   # fence yields the empty string, so nothing can match and the issue fails
@@ -281,10 +282,51 @@ GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
     | map(select(test("^[ \t\r]*[Mm]andated-[Bb]y:[ \t\r]*[A-Za-z0-9-]+[ \t\r]*$")))
     | map(capture("[Mm]andated-[Bb]y:[ \t\r]*(?<id>[A-Za-z0-9-]+)").id | ascii_downcase);
 
+  # --- #7759: the DECLARED filing set, derived from the PR own body -------
+  #
+  # Both sets are derived HERE, inside the pass that already receives $prbody —
+  # never in bash. A bash form (`grep -oE … | jq … || _fail_open`) fails the gate
+  # OPEN under `set -uo pipefail` on every PR whose body names no issue, because
+  # grep exits 1 on no-match; measured at 46 of 300 PRs. It would also invert the
+  # deliberately fail-CLOSED unbalanced-fence path into a fail-open.
+  #
+  # LOOKBEHIND, not a consuming boundary group: `(^|[^0-9A-Za-z])` consumes the
+  # separator, so `#1#2` yields only [1] — the second member of every adjacent
+  # pair is dropped. Measured.
+  def refs: [ scan("(?<![0-9A-Za-z])#([0-9]+)") | .[0] | tonumber ];
+
   ($prbody | sf) as $pb
+  | ($closing | split("\n") | map(select(length > 0) | tonumber)) as $closenums
+  | ($pr | tonumber) as $prnum
+
+  # DECLARED — the only set that COUNTS. A whole-line assertion of the filing
+  # relationship, produced by /ship Phase 6, not inferred from prose. Close
+  # targets and the PR number itself are removed: a PR does not file what it
+  # closes, and #N inside PR N is a self-reference.
+  | ( [ $pb | split("\n")[]
+        | select(test("^[ \t\r]*(Filed|Tracks|Refs):?[ \t]+#[0-9]"))
+        | refs[] ]
+      | unique | map(select(. != $prnum)) | map(select(IN($closenums[]) | not)) ) as $declared
+
+  # UNATTRIBUTED — every OTHER post-PR number the body mentions. Reported, never
+  # counted: it moves neither FILED, EXEMPT nor NET. This is the blind spot made
+  # self-reporting rather than silent, without giving prose any authority.
+  | ( ($pb | refs) | unique
+      | map(select(. != $prnum))
+      | map(select(IN($closenums[]) | not))
+      | map(select(IN($declared[]) | not)) ) as $bodyonly
+
   | [ .[]
       | select((.createdAt // "") >= $since)
-      | select((.body // "") | test("(^|[^0-9A-Za-z])#" + $pr + "([^0-9]|$)"))
+      # SIBLING DISJUNCTION over the same array, with the createdAt guard kept
+      # as its own conjunct above. The body-cites-PR arm is unchanged.
+      | select(
+            ((.body // "") | test("(^|[^0-9A-Za-z])#" + $pr + "([^0-9]|$)"))
+          # `.number | IN($declared[])`, NOT `$declared | index(.number)`:
+          # the pipe re-binds `.` to $declared, so `.number` would index an
+          # ARRAY with a string and abort the whole pass into _fail_open.
+          or (.number | IN($declared[]))
+        )
     ]
   | unique_by(.number) | sort_by(.number)
   | map(
@@ -306,12 +348,22 @@ GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
             then "PR body has no Tracks/Refs #" + ($i.number | tostring) + " companion"
           else "" end
         ) as $why
+      # FOUR fields now. `attribution` goes BEFORE `detail` because detail is
+      # FREE TEXT and must stay last — a rejected row detail contains spaces,
+      # and @tsv + `read` would otherwise shift every later field.
       | [ ($i.number | tostring),
           (if $why == "" then "exempt" else "rejected" end),
+          (if (($declared | index($i.number)) != null)
+              and (((.body // "") | test("(^|[^0-9A-Za-z])#" + $pr + "([^0-9]|$)")) | not)
+           then "pr-body" else "issue-body" end),
           (if $why == "" then $c[0] else $why end) ]
       | @tsv
     )
-  | .[]' 2>/dev/null)" \
+  | .[],
+    # Trailing sentinel row carrying the report-only set. Consumed by the loop
+    # below and never counted — `_num` is non-numeric so it cannot be mistaken
+    # for an issue row.
+    ("__UNATTRIBUTED__\t" + ($bodyonly | map(tostring) | join(" ")) + "\t-\t-")' 2>/dev/null)" \
   || _fail_open "could not parse issue list"
 
 FILED=0
@@ -319,10 +371,23 @@ EXEMPT=0
 FILED_NUMS=""
 EXEMPT_DETAIL=""
 REJECTED_DETAIL=""
-while IFS=$'\t' read -r _num _verdict _detail; do
+ATTRIBUTED_NUMS=""
+UNATTRIBUTED_NUMS=""
+while IFS=$'\t' read -r _num _verdict _attr _detail; do
   [[ -z "$_num" ]] && continue
+  # The report-only sentinel. Non-numeric by construction so it can never be
+  # mistaken for an issue row, and handled BEFORE the FILED increment so it
+  # cannot touch the count.
+  if [[ "$_num" == "__UNATTRIBUTED__" ]]; then
+    UNATTRIBUTED_NUMS="$_verdict"
+    continue
+  fi
   FILED=$((FILED + 1))
   FILED_NUMS+="$_num "
+  # Derived from the rows ACTUALLY COUNTED, never from $declared — otherwise the
+  # report and the count can desynchronise and the line becomes a second claim
+  # rather than a view of the first.
+  [[ "$_attr" == "pr-body" ]] && ATTRIBUTED_NUMS+="$_num "
   if [[ "$_verdict" == "exempt" ]]; then
     EXEMPT=$((EXEMPT + 1))
     EXEMPT_DETAIL+="#${_num} via ${_detail}; "
@@ -358,6 +423,19 @@ fi
 printf '  Closing: %s  (%s)\n' "$CLOSING" "$(_fmt "$CLOSING_NUMS")"
 printf '  Filing:  %s  (%s)\n' "$FILED" "$(_fmt "$FILED_NUMS")"
 printf '  Exempt:  %s  (%s)\n' "$EXEMPT" "$(_fmt_pairs "$EXEMPT_DETAIL")"
+# #7759: attribution provenance, and the report-only residual.
+if [[ -n "$ATTRIBUTED_NUMS" ]]; then
+  printf '  Attributed: %s  (via the PR declared filing line; these cite the issue, not the PR)\n' \
+    "$(_fmt "$ATTRIBUTED_NUMS")"
+  _emit_as net-issue-flow-body-attributed applied \
+    "declared-arm fired pr=${PR_NUMBER} issues=$(printf '%s' "$ATTRIBUTED_NUMS" | tr -s ' ' ',' | sed 's/,$//')"
+fi
+if [[ -n "$UNATTRIBUTED_NUMS" ]]; then
+  printf '  Possible unattributed filings: %s  (reported only — not counted, does not move Net)\n' \
+    "$(_fmt "$UNATTRIBUTED_NUMS")"
+  _emit_as net-issue-flow-unattributed-reported warn \
+    "post-PR numbers in body but not declared pr=${PR_NUMBER} issues=$(printf '%s' "$UNATTRIBUTED_NUMS" | tr -s ' ' ',' | sed 's/,$//')"
+fi
 if [[ -n "$REJECTED_DETAIL" ]]; then
   printf '  Rejected: %s\n' "$(_fmt_pairs "$REJECTED_DETAIL")"
 fi
