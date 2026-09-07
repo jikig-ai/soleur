@@ -73,6 +73,25 @@ predicate its mirrors follow. Do not reorder.
 - [x] 3.3.1 **Pair every conversion with a ledger reconciliation in the same commit.** Sourcing the
       helper brings a suite inside a chokepoint, so its emitter invocations are redirected;
       `test_hook_emissions.sh` asserts on emitted rows and sets no root today.
+
+      > **Corrected 2026-09-07 (review CQ3).** "Sourcing the helper redirects the emitter" is true
+      > for `plugins/soleur/test/test-helpers.sh`, which carries the fail-loud
+      > `INCIDENTS_REPO_ROOT` block, and FALSE for `plugins/soleur/test/lib/git-fixture-env.sh`,
+      > which carries the tripwire and the fixture-env builder and no telemetry redirect at all.
+      > Six suites converted by this PR source only the lib:
+      > `test-check-settings-integrity.sh`, `test-infra-suite-registration-mutations.sh`,
+      > `workspaces-luks-loopback.test.sh`, `test_openhands_guardrails.sh`,
+      > `test-weakness-miner.sh`, `test-lint-supabase-deprecated-endpoints.sh`.
+      >
+      > MEASURED, all six run back to back against the operator ledger: **rc=0 each, delta 0 rows**.
+      > The gap is latent, not leaking — those suites drive scripts and linters, not incident-
+      > emitting hooks. So it is recorded here rather than closed by wiring the sandbox into the
+      > git-fixture-env chokepoint: `test-incident-sandbox.sh` is NOT idempotent (it mints a new
+      > root unconditionally on every source), so sourcing it from a file that `test-helpers.sh`
+      > itself sources would re-point `SOLEUR_TEST_INCIDENT_ROOT` mid-suite and break the suites
+      > that read their own emitted rows back. Making it idempotent is a change to a helper 19
+      > suites share, which is not a thing to do for a measured-zero leak at the end of this PR.
+      > Tracked in #7889.
 - [x] 3.4 Convert `.github/scripts/test/test-check-settings-integrity.sh` and
       `test-infra-suite-registration-mutations.sh`.
 - [x] 3.5 Route `apps/web-platform/infra/workspaces-luks-loopback.test.sh`'s `mk_repo()` through
