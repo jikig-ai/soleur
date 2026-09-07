@@ -18,6 +18,7 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { INDIVIDUAL_CLA_DOC_PATH } from "./cla-evidence/cla-doc-path";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { buildBackfillPayloads, BackfillSchemaMismatchError } from "./cla-evidence/backfill";
@@ -55,7 +56,7 @@ function readClaJson(): ClaJson & { schema_version: "1.0" } {
 }
 
 function resolveDocSha(repoRoot: string, createdAt: string): { sha: string; contentSha256: string; preExisted?: boolean } {
-  const pathArg = "docs/legal/individual-cla.md";
+  const pathArg = INDIVIDUAL_CLA_DOC_PATH;
   const log = spawnSync(
     "git",
     ["log", `--until=${createdAt}`, "-1", "--format=%H", "--", pathArg],
