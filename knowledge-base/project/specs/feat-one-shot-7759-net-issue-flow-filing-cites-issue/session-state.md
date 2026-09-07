@@ -91,3 +91,40 @@ What WAS run, all green:
 | `check-adr-ordinals.sh` | pass |
 | AC-G3 `gh issue list` argv | byte-identical to `origin/main` |
 | AC-G9 hook diff | empty |
+
+## Review Phase — panel coverage
+
+Spawned 9 lenses. Two died on an Anthropic **session limit** (HTTP 429, resets 18:50
+Europe/Paris) with no findings delivered:
+
+| Lens | Status |
+| --- | --- |
+| code-simplicity-reviewer (design pass) | returned |
+| architecture-strategist (design pass) | returned |
+| security-sentinel | returned |
+| general-purpose (structural-enumeration seat) | returned |
+| test-design-reviewer | in flight at time of writing |
+| pattern-recognition-specialist | in flight at time of writing |
+| data-integrity-guardian | in flight at time of writing |
+| code-quality-analyst | **DIED — session limit, 0 findings** |
+| git-history-analyzer | **DIED — session limit, 0 findings** |
+
+`performance-oracle` was deliberately replaced by the structural-enumeration seat
+(guard-shaped PR; no economics claim in the design). `agent-native-reviewer`,
+`semgrep-sast` (bash-only diff — vacuous by construction, `shellcheck` substituted and
+clean) and `user-impact-reviewer` (threshold is `aggregate pattern`, not
+`single-user incident`) were not applicable.
+
+**What the two dead lenses were assigned, and what is therefore NOT covered.**
+`code-quality-analyst` owned prose-accuracy sweep of every causal/universal claim the
+diff adds. `git-history-analyzer` owned verification of the diff's empirical claims:
+the "~300 PRs" measurement, the "sixteen filing sites / 11 emit no PR number / 5
+mutually incompatible shapes" count, the ADR-155 "33 issues, 0 of 33 cite a PR"
+re-measurement, and the #7702 / #7841 motivating stories.
+
+The lead independently falsified four of the prose claims by hand (ADR-155's "range
+membership" and "for every row admitted via that route"; the `$bodyonly` "post-PR"
+comment; the suite's conservation-check comment) and verified the `/work`-files-before-
+`gh pr create` timing at `work/SKILL.md:1146`. That is partial substitution, not
+equivalent coverage: **the four empirical counts above remain UNVERIFIED**, and the
+review trailer records the panel as degraded.
