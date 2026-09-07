@@ -99,7 +99,7 @@ export function fixtureCeiling(fixtureDir: string): string {
  *   default of `tmpdir()` yields a ceiling of `"/"`, which git ignores, so every caller that
  *   omitted the argument would silently lose the ceiling while the code read as if it had one.
  */
-export function gitFixtureEnv(fixtureDir: string): Record<string, string> {
+export function gitFixtureEnv(fixtureDir: string): NodeJS.ProcessEnv {
   const ceiling = fixtureCeiling(fixtureDir);
   const physical = existsSync(resolve(fixtureDir))
     ? realpathSync(resolve(fixtureDir))
@@ -140,7 +140,17 @@ export function gitFixtureEnv(fixtureDir: string): Record<string, string> {
   // Non-GIT_ execution vectors the sweep cannot see by shape.
   for (const key of NON_GIT_SCRUBBED_VARS) delete env[key];
 
-  return env;
+  // ONE cast, here, rather than one per call site.
+  //
+  // This repo augments `NodeJS.ProcessEnv` to require `NODE_ENV`, which is the right contract for
+  // READING `process.env` and the wrong one for an env handed to a CHILD: a child environment is
+  // legitimately partial. Returning the structural `Record<string, string>` pushed that mismatch
+  // onto every caller passing the result as `env:`, which under #7849 went from one call site to
+  // a dozen -- so the cast moved to the definition, where the reason can be stated once.
+  //
+  // The value is not in fact missing NODE_ENV: `gitCleanEnv()` sweeps by PREFIX, so every
+  // non-`GIT_` variable the parent holds is carried through.
+  return env as NodeJS.ProcessEnv;
 }
 
 /**
@@ -155,17 +165,8 @@ export function gitFixture(fixtureDir: string): (args: string[]) => string {
   return (args: string[]): string =>
     execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
       cwd: fixtureDir,
-      // The cast is about the TYPE, not the value. This repo augments
-      // `NodeJS.ProcessEnv` to require `NODE_ENV`, which is the right contract for
-      // READING `process.env` and the wrong one for an env handed to a child: a
-      // child's environment is legitimately partial. The value here is not missing
-      // NODE_ENV in practice — `gitCleanEnv()` sweeps by PREFIX, so every non-`GIT_`
-      // variable the parent holds (NODE_ENV included) is carried through — so
-      // widening the declared return type instead would move the same error rather
-      // than fix it. Caught by CI's `Type-check web-platform`, not locally: the
-      // lefthook `web-platform-typecheck` step is staged-file-globbed and reports
-      // `(skip) no matching staged files` for a diff that touches this file only.
-      env: env as NodeJS.ProcessEnv,
+      // `gitFixtureEnv` already returns `NodeJS.ProcessEnv`; see the cast there for why.
+      env,
       encoding: "utf8",
     });
 }

@@ -30,17 +30,25 @@ vi.mock("../server/observability", async (importOriginal) => ({
 }));
 
 import { atomicGitConfig } from "../server/git-config-atomic";
+// #7849: the fixture git environment comes from the shared helper. The runtime tripwire stops
+// git being POINTED elsewhere; it does not stop git WALKING UP into an enclosing repository
+// from the fixture, neutralise the developer own config, or supply an identity.
+import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 const made: string[] = [];
 function freshRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "gitcfg-atomic-"));
   made.push(dir);
-  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: "pipe" });
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: "pipe", env: gitFixtureEnv(dir) });
   return dir;
 }
 function cfg(dir: string, key: string): string | null {
   try {
-    return execFileSync("git", ["config", "--get", key], { cwd: dir, stdio: "pipe" })
+    return execFileSync("git", ["config", "--get", key], {
+      cwd: dir,
+      stdio: "pipe",
+      env: gitFixtureEnv(dir),
+    })
       .toString()
       .trim();
   } catch {
@@ -73,7 +81,11 @@ describe("atomicGitConfig", () => {
   test("other pre-existing config keys survive the write (cp-first invariant)", () => {
     const dir = freshRepo();
     // Pre-seed an unrelated key; the empty-temp bug would drop it.
-    execFileSync("git", ["config", "core.someflag", "sentinel-x"], { cwd: dir, stdio: "pipe" });
+    execFileSync("git", ["config", "core.someflag", "sentinel-x"], {
+      cwd: dir,
+      stdio: "pipe",
+      env: gitFixtureEnv(dir),
+    });
     atomicGitConfig(dir, ["config", "user.email", "owner@example.com"]);
     expect(cfg(dir, "user.email")).toBe("owner@example.com");
     expect(cfg(dir, "core.someflag")).toBe("sentinel-x"); // NOT dropped

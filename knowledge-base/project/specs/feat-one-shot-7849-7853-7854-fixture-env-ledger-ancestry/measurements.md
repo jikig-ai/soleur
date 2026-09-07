@@ -178,3 +178,42 @@ unchanged (`gh pr merge 123`: 109 active / 143 merged; `lib/auth/foo.ts`: 0 ever
 Phase 3.5 quarantine target is still 109 rows in the active file with archives untouched — **not
 the 143 the task list names**, which is the merged-corpus figure and includes 34 rows sitting in
 the two `.gz` archives that Phase 3.5 explicitly does not touch.
+
+---
+
+## Correction to A-1 — 2026-09-07 (Phase 4 implementation)
+
+**A-1's "there is no fourth category" is WRONG, and the original task-list count was right.**
+Appended rather than edited, per the append-only rule for dated records: the superseded reading is
+the evidence for why the correction was needed.
+
+A-1 partitioned the **23 ids the aggregator REPORTED**. That output is already filtered by the nine
+exemption stanzas the Phase 4 work removes, so two section-prefixed ids were invisible to it —
+measuring the post-filter population and describing it as the corpus. Over the full merged corpus
+(19,025 rows) there are **five** section-prefixed non-AGENTS ids, which is the count task 5.5 named:
+
+| id | retired? | disposition |
+|---|---|---|
+| `cq-docs-cli-verification` | yes | clause 2 exempts |
+| `cq-never-skip-hooks` | yes | clause 2 exempts |
+| `cq-when-lefthook-hangs-in-a-worktree-60s` | yes | clause 2 exempts |
+| `cq-before-calling-mcp-pencil-open-document` | yes | clause 2 exempts |
+| **`cq-pencil-collapse-auto-recover`** | **no** | **needs an explicit exemption** |
+
+The fifth is the one that matters. It is not retired and never was, because it was never *in*
+AGENTS.md — it is tier-gated out under `cq-agents-md-tier-gate`. It is live, with 5 rows across the
+archives, emitted by `.claude/hooks/pencil-collapse-guard.sh` (#4859). So a rule can carry a section
+prefix and legitimately be absent from the corpus for a **third** reason A-1 did not enumerate:
+never admitted, rather than admitted-then-retired.
+
+Shipping the pure two-clause predicate A-1 proposed would therefore have left the gate at `rc=5`.
+The shipped gate keeps one residual exact exemption for that id, commented with this measurement.
+
+**The durable repair** is renaming that emitter literal to an unprefixed id — permitted, since T1.8
+established that `cq-rule-ids-are-immutable` binds AGENTS.md `[id: …]` tags and not emitter
+literals. It lives outside this change's scope and is filed as a deferral.
+
+**The methodological error, recorded because it is the reusable part:** A-1 derived a population
+from a tool's *output* when the tool's job is to filter that population. The re-derivation had to
+run against the raw corpus. This is the "verify a measurement at the granularity you will CLAIM it"
+rule — A-1 claimed a property of the corpus while measuring a property of the report.
