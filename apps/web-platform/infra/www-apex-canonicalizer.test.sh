@@ -69,6 +69,7 @@ PAGES_TF="$SCRIPT_DIR/cf-pages.tf"
 REDIR_TF="$SCRIPT_DIR/seo-bulk-redirects.tf"
 DEPLOY_WF="$REPO_ROOT/.github/workflows/deploy-docs.yml"
 CNAME_FILE="$REPO_ROOT/plugins/soleur/docs/CNAME"
+UPTIME_TF="$SCRIPT_DIR/uptime-alerts.tf"
 
 PASS=0
 FAIL=0
@@ -453,6 +454,84 @@ fi
 verdict "$cname_rc" "plugins/soleur/docs/CNAME is the apex, not www; found ${cname_got}"
 
 # ---------------------------------------------------------------------------------------
+# GUARD 1 — the RUNTIME alarm for the 301 (#7798)
+# ---------------------------------------------------------------------------------------
+#
+# Everything above asserts the redirect is DECLARED correctly. This section asserts the
+# thing that notices when the declaration stops producing the behaviour — and it exists
+# because the alarm that used to hold that role never worked.
+#
+# `sentry_uptime_monitor.soleur_www` asserted `equals 301` on https://www.soleur.ai/.
+# Sentry's uptime checker always follows 3xx and evaluates assertions against the FINAL
+# response, so it compared `equals 301` to the apex's 200 and failed every check it ever
+# ran. Measured 2026-09-07: 10/10 checks `failure`/`failure_incident`, every row
+# `httpStatusCode 301`, `assertionFailureData` naming the `equals 301` assertion.
+#
+# The property moved to `betteruptime_monitor.soleur_www_redirect`, because Better Stack
+# is the only vendor in the stack that can express it (`follow_redirects = false`). These
+# cases pin the four tokens that make that monitor mean something. Each is a single-token
+# edit away from restoring a defect class this repo has now shipped twice.
+#
+# BLOCK-SCOPED, never a whole-file grep. `uptime-alerts.tf` contains two monitors that
+# legitimately set `follow_redirects = true`, so a file-level grep for the value we want is
+# satisfied by a neighbouring resource — that is the concrete way this guard goes vacuous.
+WWW_MON="$(hcl_block betteruptime_monitor soleur_www_redirect "$UPTIME_TF")"
+
+# M3 — the guard's own dispatch. A guard that passes when its subject is ABSENT asserts
+# nothing at all, and the extractor returns an empty string for a renamed or deleted block.
+# Assert the extraction succeeded BEFORE reading any attribute out of it, so "block gone"
+# reports as itself rather than as four confusing attribute mismatches.
+mon_present=1
+if [[ -n "$WWW_MON" ]]; then mon_present=0; fi
+verdict "$mon_present" "betteruptime_monitor.soleur_www_redirect is declared in uptime-alerts.tf (the www 301 has a runtime alarm at all)"
+
+# M1 — the single token that separates this monitor from the broken one. With
+# follow_redirects = true the probe resolves to the apex 200 and [301] can never match.
+# Better Stack independently refuses that combination at create time (measured: HTTP 422
+# "Cannot follow redirects when expecting a 3xx status code"), so this is belt and braces —
+# but it fails the PR instead of failing a production apply, which is the point.
+eq_case 'false' "$(attr follow_redirects "$WWW_MON")" \
+  "soleur_www_redirect does NOT follow redirects (else it asserts against the apex 200 — the #7798 defect)"
+
+# M2 — the exact list, not a 3xx class: a 302/307/308 is a different canonicalization
+# contract, and admitting a 2xx would admit the precise state the monitor exists to catch.
+# Whitespace-normalised so the contract is about VALUES, not formatting (harness row H2).
+eq_case '[301]' "$(tr -d '[:space:]' <<<"$(attr expected_status_codes "$WWW_MON")")" \
+  "soleur_www_redirect expects exactly [301] (not a widened 3xx class, and never a 2xx)"
+
+# Phase 0 finding, not in the original design. `remember_cookies` is `computed` in the
+# pinned provider, so OMITTING it sends nothing and the API default (true) applies — and
+# Better Stack rejects the create: HTTP 422 "Cannot keep cookies when redirecting when
+# expecting a 3xx status code". Measured against the live API on 2026-09-07. Without this
+# attribute the resource does not apply at all, so it is pinned like the rest.
+eq_case 'false' "$(attr remember_cookies "$WWW_MON")" \
+  "soleur_www_redirect sets remember_cookies = false (required by the vendor for a 3xx expectation)"
+
+# M5 — a `count` gate would leave the resource reading correct while provisioning NOTHING.
+# No attribute-VALUE assertion can catch that, so it is asserted as an absence.
+eq_case '0' "$(count_matches '^[[:space:]]*count[[:space:]]*=' "$WWW_MON")" \
+  "soleur_www_redirect carries no count gate (a gated monitor is declared and never created)"
+
+# M6 — the ONLY operator-facing string on this resource: betteruptime_monitor has no
+# `description` field, so pronounceable_name is what lands in the incident email subject.
+# Empty means the alert is titled by the vendor's URL default; equal to a sibling's means
+# the two www alarms are indistinguishable in an inbox. Both are observability defects even
+# though the monitor still functions, so distinctness is asserted against the siblings
+# actually present in the file rather than against a remembered list.
+WWW_PN="$(unquote "$(attr pronounceable_name "$WWW_MON")")"
+SIBLING_PNS="$(strip_comments "$UPTIME_TF" | awk '
+  /^resource[[:space:]]+"betteruptime_monitor"[[:space:]]+"/ {
+    rn = $0; sub(/^.*"betteruptime_monitor"[[:space:]]+"/, "", rn); sub(/".*$/, "", rn)
+  }
+  rn != "soleur_www_redirect" && /^[[:space:]]*pronounceable_name[[:space:]]*=/ {
+    v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); gsub(/"/, "", v); sub(/[[:space:]]+$/, "", v); print v
+  }
+')"
+pn_rc=1
+if [[ -n "$WWW_PN" ]] && ! grep -qxF "$WWW_PN" <<<"$SIBLING_PNS"; then pn_rc=0; fi
+verdict "$pn_rc" "soleur_www_redirect has a pronounceable_name distinct from every sibling monitor; found [${WWW_PN}]"
+
+# ---------------------------------------------------------------------------------------
 # ANTI-VACUITY FLOOR AND ACCOUNTING (AP-023 / ADR-193)
 # ---------------------------------------------------------------------------------------
 #
@@ -471,9 +550,9 @@ printf '\n'
 # pages_domain pair is replaced by a single absence assertion, so the count is one
 # lower. Bump the matching arm deliberately when you add a case.
 if [[ -n "$DOM_APEX" || -n "$DOM_WWW" ]]; then
-  EXPECTED_CASES=24   # PR3 onward: the two pages_domain couplings are live
+  EXPECTED_CASES=30   # PR3 onward: the two pages_domain couplings are live, + 6 Guard 1 (#7798)
 else
-  EXPECTED_CASES=23   # PR1/PR2: one absence assertion stands in for that pair
+  EXPECTED_CASES=29   # PR1/PR2: one absence assertion stands in for that pair, + 6 Guard 1 (#7798)
 fi
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[FATAL] vacuity floor: %d assertion cases executed, expected exactly %d — a case was deleted, skipped, or added without updating EXPECTED_CASES\n' \
