@@ -35,8 +35,30 @@ trap 'rm -rf "$WORK"' EXIT
 
 # --- harness setup must ABORT, never continue. A sandbox that half-built
 # --- produces confident wrong verdicts about the SUT rather than a missing one.
-git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" \
-  || { echo "harness: could not read the ICLA ledger" >&2; exit 2; }
+# The ledger lives on an orphan branch the upstream CLA action maintains, NOT in
+# this checkout's history. `actions/checkout` is single-branch by default, so
+# `origin/cla-signatures` is simply ABSENT in any job that has not asked for it
+# — measured: `fatal: invalid object name 'origin/cla-signatures'`, the whole
+# suite dead in 8 ms on CI run 34123093118.
+#
+# This is the SAME defect that was fixed in the vitest sibling
+# (apps/web-platform/test/cla-evidence/roster-entry-gate.test.ts) earlier in
+# this PR, and it survived here because that suite ran in a job which happened
+# to have the ref while this one did not run in CI at all. Fixing the symptom in
+# one of two suites that share a dependency leaves the other armed.
+#
+# One shallow fetch of exactly this ref, then re-try. A genuine unavailability
+# still ABORTS — "could not read the reference set" must never degrade to an
+# empty ledger, which would pass every account.
+if ! git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null; then
+  git fetch --depth=1 -q origin \
+    '+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures' 2>/dev/null
+  git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null \
+    || { echo "harness: could not read the ICLA ledger at origin/cla-signatures, even after a" >&2
+         echo "         shallow fetch. That branch is maintained by the upstream CLA action;" >&2
+         echo "         without it the reference set is unavailable and no verdict is possible." >&2
+         exit 2; }
+fi
 [[ -s "$WORK/ledger.json" ]] || { echo "harness: ledger empty" >&2; exit 2; }
 # The SUT resolves the roster validator through this binary. Without it EVERY
 # invocation dies at ccla-add.sh's own operator-fault exit 2, and the suite

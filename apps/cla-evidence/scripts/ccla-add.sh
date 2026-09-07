@@ -203,8 +203,18 @@ trap cleanup EXIT
 if [[ -z "$LEDGER_FILE" ]]; then
   LEDGER_FILE="$(mktemp -t ccla-ledger.XXXXXXXX.json)"
   TMP_FILES+=("$LEDGER_FILE")
+  # Fetch the ref rather than telling the operator to. `hr-never-label-any-step-as-manual-without`
+  # applies to a one-line `git fetch` as much as to anything larger: the script
+  # knows the exact refspec, so making the operator type it is an invented step.
+  # The three sibling consumers (validate-roster.ts, roster-entry-gate.test.ts,
+  # the shell harness) all recover it the same way; this was the last one that
+  # did not.
   if ! git show "origin/cla-signatures:signatures/cla.json" > "$LEDGER_FILE" 2>/dev/null; then
-    die "could not read origin/cla-signatures:signatures/cla.json — fetch the branch first"
+    git fetch --depth=1 -q origin \
+      '+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures' 2>/dev/null
+  fi
+  if ! git show "origin/cla-signatures:signatures/cla.json" > "$LEDGER_FILE" 2>/dev/null; then
+    die "could not read origin/cla-signatures:signatures/cla.json, even after a shallow fetch. That branch is maintained by the upstream CLA action; without it the ICLA signature ledger is unavailable and contribution-triggered entry cannot be evaluated" 2
   fi
 fi
 [[ -s "$LEDGER_FILE" ]] || die "ICLA signature ledger is empty or unreadable at $LEDGER_FILE"
