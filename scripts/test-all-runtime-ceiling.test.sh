@@ -62,7 +62,15 @@ build_sandbox() {
   local out="$1" arm="$2" mutation="$3"
   mkdir -p "$(dirname "$out")/lib" || return 2
   cp "$RUNNER" "$out" || return 2
-  for f in test-relevance-paths.sh repo-write-boundary.sh test-contention.sh; do
+  # The boundary lib is copied on its OWN line rather than folded into the loop
+  # below. scripts/lib/repo-write-boundary.test.sh arm 28 anchors on a literal
+  # `cp ... repo-write-boundary.sh` precisely so a relocator cannot satisfy it
+  # with prose, and a loop spelling is invisible to that anchor — this sandbox
+  # was carrying the lib while reading as though it did not. Being visible in
+  # the form the guard reads is the fix; widening a guard written narrow on
+  # purpose is not.
+  cp "$REPO_ROOT/scripts/lib/repo-write-boundary.sh" "$(dirname "$out")/lib/" || return 2
+  for f in test-relevance-paths.sh test-contention.sh; do
     cp "$REPO_ROOT/scripts/lib/$f" "$(dirname "$out")/lib/" || return 2
   done
   python3 - "$out" "$arm" "$mutation" "$FIXTURES" <<'PY'
