@@ -940,6 +940,149 @@ R7_ASSERTIONS=$(( TOTAL - R7_BEFORE ))
 assert "Row7 anti-vacuity: the section ran its full inventory (expected 7, ran $R7_ASSERTIONS)" \
   "(( R7_ASSERTIONS == 7 ))"
 
+
+# =========================================================================================
+# Guard A (#7695) — carrier coherence: the pinned tag's tree IS this tree's carriers
+# =========================================================================================
+# PROPERTY. Every file the image bakes is byte-identical, at the PINNED tag, to HEAD's copy.
+#
+# WHY THIS GUARD IS THE DURABLE ONE. The image is a CONTENT CARRIER: an edit to a baked file
+# reaches the host only if the image was built from a commit that already contained it. Merge
+# A (#7778) added the probe_schema=3 emitter to inngest-bootstrap.sh and bumped no pin, so the
+# live host has run pre-emitter bytes ever since. This guard makes that state RED instead of
+# silent.
+#
+# HERMETIC AND GIT-ONLY. No network, no registry auth, no new binary — `git show <tag>:<path>`
+# against the working copy. deploy-script-tests checks out with fetch-depth: 0 and
+# fetch-tags: true, so the tag is present. A live registry re-resolution CANNOT run here:
+# `crane` is not provisioned in this job and adding it would red every PR permanently. The
+# live arm lives on the apply path, which already holds GHCR credentials.
+#
+# WHAT IT PROVES, AND THE THREE RESIDUALS IT DOES NOT CLOSE. Soundness chain: pinned digest
+# (immutable bytes) <- the build run of tag T <- the git tree at tag T <- byte-identical to
+# HEAD's carriers. That binds TAG->SOURCE, never the registry bytes. Residuals, all requiring
+# repo write: (1) a default workflow_dispatch re-runs docker build and re-pushes the same tag,
+# so the tag's GHCR digest MOVES (only mirror_only cannot move it); (2) git tags are mutable
+# and no ruleset here protects them; (3) actions/checkout resolves a bare ref: to a remote
+# BRANCH before a tag, so a branch named vinngest-vX.Y.Z would build from the branch head.
+# Cosign is NOT a mitigation: the workflow's own header says the signature is "not a provenance
+# claim any consumer verifies", and the inngest deploy branch never calls verification.
+GUARDA_BEFORE="$TOTAL"
+GA_WF="$SCRIPT_DIR/../../../.github/workflows/build-inngest-bootstrap-image.yml"
+assert "GuardA: the build workflow is readable" "[[ -r '$GA_WF' ]]"
+
+# Repo paths come from the `cp` STAGING lines, which carry real paths. Deriving from COPY
+# would smuggle in an unstated apps/web-platform/infra/ prefix assumption.
+GA_CP_PATHS=$(grep -oE '^[[:space:]]*cp apps/web-platform/infra/[A-Za-z0-9._-]+ ' "$GA_WF" 2>/dev/null | awk '{print $2}' | sort -u || true)
+# Baked basenames come from the COPY lines, parsed STRICTLY: exactly two operands. A third
+# field (a --chmod flag, a second source) is a form the extractor must not silently accept.
+GA_COPY_NAMES=$(grep -E '^[[:space:]]*COPY [^ ]+ [^ ]+[[:space:]]*$' "$GA_WF" 2>/dev/null | awk '{print $2}' | sort -u || true)
+# Counted PERMISSIVELY. This is the load-bearing line: any COPY form the strict pattern cannot
+# read shows up as "parsed 9 of 10" and REDS, rather than reporting ten-of-ten while quietly
+# guarding one file fewer. An extractor that counted only what it could parse is structurally
+# unable to report its own blindness.
+GA_TOTAL_COPY=$(grep -cE '^[[:space:]]*COPY ' "$GA_WF" 2>/dev/null || true)
+GA_N_COPY=$(printf '%s\n' "$GA_COPY_NAMES" | grep -c . || true)
+GA_N_CP=$(printf '%s\n' "$GA_CP_PATHS" | grep -c . || true)
+assert "GuardA dispatch: every COPY form parsed (parsed $GA_N_COPY of $GA_TOTAL_COPY)" \
+  "(( GA_TOTAL_COPY > 0 && GA_N_COPY == GA_TOTAL_COPY ))"
+assert "GuardA dispatch: cp/COPY cardinality agrees ($GA_N_CP staged vs $GA_TOTAL_COPY baked)" \
+  "(( GA_N_CP == GA_TOTAL_COPY ))"
+# Same FILES, not merely the same count — a swap keeps cardinality intact.
+GA_CP_BASES=$(printf '%s\n' "$GA_CP_PATHS" | xargs -n1 basename 2>/dev/null | sort -u || true)
+assert "GuardA: the staged set and the baked set name the SAME files" \
+  "[[ \"\$(printf '%s\n' \"\$GA_CP_BASES\")\" == \"\$(printf '%s\n' \"\$GA_COPY_NAMES\")\" ]]"
+
+# The tag is read from the pin literal, so the guard FOLLOWS the pin rather than a hardcoded
+# version. A hardcoded tag would drift silently the first time the pin moved.
+GA_PIN_TAG=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$SCRIPT_DIR/cloud-init-inngest.yml" 2>/dev/null | head -1 | sed 's/.*://' || true)
+assert "GuardA: the pinned tag was read from the pin literal (found '$GA_PIN_TAG')" \
+  "[[ '$GA_PIN_TAG' =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]"
+GA_TAG_REF="vinngest-$GA_PIN_TAG"
+# Row 4: an unresolvable tag REDS naming itself. "Nothing to compare, pass" is the failure
+# mode this row exists to make impossible — an unfetched tag and a nonexistent one take the
+# same git show path and are one row deliberately.
+git rev-parse -q --verify "refs/tags/$GA_TAG_REF^{commit}" >/dev/null 2>&1 && GA_TAG_OK=1 || GA_TAG_OK=0
+assert "GuardA: the pinned tag $GA_TAG_REF resolves in git (never 'nothing to compare, pass')" \
+  "(( GA_TAG_OK == 1 ))"
+
+# The comparison. CONTENT-ONLY: mtime and mode are permitted to differ (H2) — a guard that
+# reds on mtime is a guard nobody keeps. Second-member-after-a-compliant-first is the failure
+# this repo actually had, so the loop never stops at the first file.
+GA_COMPARED=0
+GA_DRIFTED=""
+if (( GA_TAG_OK == 1 )); then
+  while IFS= read -r _p; do
+    [[ -n "$_p" ]] || continue
+    GA_COMPARED=$((GA_COMPARED + 1))
+    if ! git show "$GA_TAG_REF:$_p" 2>/dev/null | diff -q - "$SCRIPT_DIR/../../../$_p" >/dev/null 2>&1; then
+      GA_DRIFTED="$GA_DRIFTED $(basename "$_p")"
+    fi
+  done <<< "$GA_CP_PATHS"
+fi
+assert "GuardA: every baked carrier is byte-identical at $GA_TAG_REF (drifted:${GA_DRIFTED:- none})" \
+  "[[ -z '$GA_DRIFTED' ]]"
+# H1 (must-RED, mutates the SUITE): hollowing the comparison to return success must still red.
+# An exact cross-derived count is what sees it; a >= 1 floor would not.
+assert "GuardA anti-vacuity: compared exactly the cross-derived carrier set ($GA_COMPARED of $GA_TOTAL_COPY)" \
+  "(( GA_COMPARED == GA_TOTAL_COPY ))"
+
+GUARDA_ASSERTIONS=$(( TOTAL - GUARDA_BEFORE ))
+assert "GuardA anti-vacuity: the section ran its full inventory (expected 8, ran $GUARDA_ASSERTIONS)" \
+  "(( GUARDA_ASSERTIONS == 8 ))"
+
+# =========================================================================================
+# Guard D (#7695) — quoted delimiters on generated artifacts
+# =========================================================================================
+# PROPERTY. Every heredoc that writes a generated host artifact uses a NON-EXPANDING
+# delimiter, so no value in its body can be interpolated or executed at render time.
+#
+# ASSEMBLY covers all four write forms (cat >, cat >>, tee, { ...; } >) and all three
+# unquoted delimiter shapes (<<WORD, <<-WORD, << WORD). Both widenings are deliberate: today
+# every site is the `cat >` form with <<WORD, so a narrower assembly would be accurate now and
+# silently narrower than its own property the first time someone writes tee or <<-.
+#
+# SCOPED TO THIS ONE FILE. The build workflow's Dockerfile heredoc is legitimately unquoted --
+# it must expand ${INNGEST_VERSION} -- so a repo-wide rule reds the build on day one.
+GUARDD_BEFORE="$TOTAL"
+GD_SRC="$SCRIPT_DIR/inngest-bootstrap.sh"
+assert "GuardD: the bootstrap script is readable" "[[ -r '$GD_SRC' ]]"
+# Row 5 / own dispatch: an EXACT count. A pattern that matched nothing must RED reporting
+# "0 heredocs found", never certify a scan that inspected nothing.
+GD_ALL=$(grep -cE "(cat|tee)[[:space:]]+>>?[^<]*<<-?[[:space:]]*'?[A-Za-z_]" "$GD_SRC" 2>/dev/null || true)
+assert "GuardD dispatch: the heredoc scan found the full inventory (found $GD_ALL)" \
+  "(( GD_ALL == 10 ))"
+# Rows 1-3: the unquoted set. Row 2 (an unquoted delimiter AFTER several compliant ones) is
+# why this counts every match rather than inspecting the first.
+GD_UNQ_NAMES=$(grep -oE "<<-?[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*$" "$GD_SRC" 2>/dev/null | sed -E "s/^<<-?[[:space:]]*//; s/[[:space:]]*$//" | sort -u || true)
+GD_UNQ_COUNT=$(printf '%s\n' "$GD_UNQ_NAMES" | grep -c . || true)
+assert "GuardD: exactly one unquoted delimiter remains (found $GD_UNQ_COUNT: ${GD_UNQ_NAMES:-none})" \
+  "(( GD_UNQ_COUNT == 1 ))"
+# THE ONE EXEMPTION, identified by NAME rather than by line. A line-anchored exemption breaks
+# on any refactor that moves the write, turning an unrelated edit into a red suite.
+#
+# WHY DOPPLEREOF STAYS UNQUOTED, AND WHY "FIXING" IT WOULD BE A REGRESSION. It is unquoted
+# deliberately, to interpolate $TOKEN and $DOPPLER_PROJECT into the env file. It is wrapped in
+# ( umask 0137 && cat > ... ) precisely so the Doppler token never lands in a world-readable
+# file even momentarily. A sentinel rewrite writes a temp file and renames it, destroying that
+# guarantee -- it would regress CWE-732 to fix nothing. Do not "fix" this.
+assert "GuardD: the sole unquoted delimiter is the named exemption (DOPPLEREOF)" \
+  "[[ '$(printf '%s' "$GD_UNQ_NAMES" | tr -d '[:space:]')' == 'DOPPLEREOF' ]]"
+# Row 4: the exemption grants "may interpolate", NEVER "may execute". The content assertion is
+# what keeps it honest and stops it widening silently if that body later gains a backtick.
+GD_EXEMPT_BODY=$(awk '/<<DOPPLEREOF$/{f=1;next} f&&/^DOPPLEREOF$/{exit} f' "$GD_SRC" 2>/dev/null || true)
+GD_EXEC_CHARS=$(printf '%s' "$GD_EXEMPT_BODY" | grep -cE '`|\$\(' || true)
+assert "GuardD: the exempt body can interpolate but NOT execute (no backtick, no \$( ) )" \
+  "(( GD_EXEC_CHARS == 0 ))"
+# H2 (must-PASS, non-canonical): the exempt write itself -- unquoted, the opposite of every
+# other delimiter in the file -- must PASS. A real permitted difference, not a fixture.
+assert "GuardD H2: the exempt DOPPLEREOF write is present and permitted" \
+  "(( \$(grep -cF 'cat > /etc/default/inngest-server <<DOPPLEREOF' '$GD_SRC' || true) == 1 ))"
+
+GUARDD_ASSERTIONS=$(( TOTAL - GUARDD_BEFORE ))
+assert "GuardD anti-vacuity: the section ran its full inventory (expected 6, ran $GUARDD_ASSERTIONS)" \
+  "(( GUARDD_ASSERTIONS == 6 ))"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="
 if (( FAIL > 0 )); then
