@@ -7,22 +7,26 @@ also_addresses: [6474, 7851, 7787]
 pr: 7881
 attestation-authority: clo
 status: SIGNED-OFF (CLO-agent-attested and re-issued, Soleur-as-tenant-zero v1)
-disposition: "RE-ISSUED SIGNED-OFF 2026-09-07. The disposition as first issued was BLOCKED on B1 + B2 with R1, R2 and R3 required before merge; B1, B2 and R2 are cleared on the working tree, verified in lockstep across both surfaces. R1 (mirror-drift ratchet), R3 (this file's own register waiver) and R4 (the SHA re-pin, which the B1/B2 edits made stale) remain required before merge and are engineering steps, not legal ones. Superseded, not deleted — see §Discharge on re-issue."
+disposition: "RE-ISSUED SIGNED-OFF (second re-issue, 2026-09-07). Nothing outstanding. Issue 1 was BLOCKED on B1 + B2 with R1-R3 required; issue 2 cleared B1, B2, R2 and added R4. Issue 3 — this one — records the #7787 promotion as FIRED and discharges R1, R3 and R4, all five legal gates green. Superseded, not deleted — see §Discharge on re-issue and §Second re-issue."
 signed_off_at: 2026-09-07
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the operator retains an optional veto)"
 blocking_findings: []
 blocking_findings_cleared: [B1, B2]
-required_before_merge: [R1, R3, R4]
-required_before_merge_cleared: [R2]
+required_before_merge: []
+required_before_merge_cleared: [R1, R2, R3, R4]
+disposition_history: "BLOCKED (issue 1, vs 1959995d8) -> SIGNED-OFF with R1/R3/R4 outstanding (issue 2) -> SIGNED-OFF, nothing outstanding (issue 3, after the #7787 promotion landed in-PR). The branch was history-amended between issues 2 and 3; issue 3 was re-measured against the amended tree, not carried over."
 tier_classification: "Tier 1 — a material factual correction to three PUBLISHED notice documents plus their three Eleventy mirrors. Three previously-published statements are retracted as statements about the platform as it runs today (the off-host-shipping denial in five phrasings, the 30 MB json-file retention bound, and the `under processor-DPA terms` ground for the no-notification conclusion), and one recipient relationship is disclosed for the first time (the user-serving application container's WARN-and-above pino stream, shipping since 2026-06-02). All five CI gates over `docs/legal/**` ARE engaged. Recorded per `knowledge-base/legal/tc-version-bump-policy.md` §Non-T&C legal docs step 4, for Art. 30 register and counsel-review-ledger purposes."
-semver: "No `TC_VERSION` bump, and `docs/legal/terms-and-conditions.md` is untouched. The eight non-T&C notice documents carry no version constant and no acceptance ledger; the SHA-refresh contract is what applies. It was honoured at `1959995d8` (gate verified green there); the B1/B2 re-issue edits made the pin stale again, which is R4 — the pin must be refreshed once more before merge."
+semver: "No `TC_VERSION` bump, and `docs/legal/terms-and-conditions.md` is untouched. The eight non-T&C notice documents carry no version constant and no acceptance ledger; the SHA-refresh contract is what applies. It was honoured at `1959995d8`, went stale on the B1/B2 re-issue edits (R4), and is green again at the third issue."
 brand_survival_threshold: single-user incident
-written_against: "the diff as landed on `feat-one-shot-7874-7786-6474-7787-runbook-ssh-legal-registers` at `1959995d8`, re-derived from `git log -p origin/main..HEAD`, and re-read against the working tree at re-issue. Every implementation-detail claim in the corrected prose was checked against the migration/IaC/test body rather than against the PR description — see §How this was verified. Four of the five gates were run locally; their results are recorded, including the two that are red."
-fired_re_evaluation_triggers: []
+written_against: "the branch diff, re-derived from `git log -p origin/main..HEAD` at each of three issues. The branch was history-amended between the second and third (the promotion commit is `684956438`, formerly `b0be4c02e`); the third issue re-measured rather than inherited. Every implementation-detail claim in the corrected prose was checked against the IaC/test body rather than against the PR description or the coordinator's summary — see §How this was verified and §Second re-issue. All five gates were run locally at the third issue; all five are green."
+fired_re_evaluation_triggers:
+  - "`Promotion of scripts/lint-legal-registers.sh from advisory to blocking (#7787) — the gate's scope changes what the register's completeness claim is worth.` FIRED in-PR at commit `684956438`, verified: `--advisory` is gone from the `run_suite` line in `scripts/test-all.sh`, the rc=2 asymmetry is retained, and the gate exits 0 with 7/7 on this tree. It is carried in THREE audit files (`2026-09-counsel-review-7717.md`, `2026-09-03-clo-attestation-7717-art-33-5-register.md`, `2026-09-counsel-review-7791.md`); this attestation is the discharge record for all three. Disposition: the #7717 counsel review SURVIVES — see §Second re-issue ruling 1."
 declined_re_evaluation_triggers:
-  - "`Promotion of scripts/lint-legal-registers.sh from advisory to blocking (#7787) — the gate's scope changes what the register's completeness claim is worth.` (from `knowledge-base/legal/audits/2026-09-counsel-review-7717.md`). Put to this review as FIRED. Ruled NOT FIRED on the diff: `scripts/lint-legal-registers.sh` is not in this PR's changed-file set, `scripts/test-all.sh` still reads `run_suite \"scripts/lint-legal-registers-live\" bash scripts/lint-legal-registers.sh --advisory`, the block above that line still reads `ADVISORY FOR ONE MERGE CYCLE (#7717)`, and #7787 is OPEN. The trigger stays ARMED. See §The #7787 trigger."
+  - "SUPERSEDED. At the first and second issue this trigger was recorded here as NOT FIRED, on grounds that were correct against `1959995d8` and are no longer true. Left standing as the record of what was measured then; the live disposition is the FIRED entry above."
 re_evaluation_triggers:
-  - "Promotion of `scripts/lint-legal-registers.sh` from advisory to blocking (#7787). Carried forward from the #7717 counsel review UNDISCHARGED — this PR did not perform it. Whichever PR deletes the `--advisory` flag fires it, and both this attestation and the #7717 review must be re-read then."
+  - "Any NEW `NOT_TRANSCRIBED` waiver added to `scripts/lint-legal-registers.sh`. Post-promotion a waiver is the only way to clear a red required check over a legal register, so every waiver is now authored under schedule pressure. A waiver is a counsel ruling on the Art. 33(5) inclusion predicate, not a build fix; each one needs a CLO read before it lands. This is the accountability risk the promotion creates and it is the one I would watch first."
+  - "Any widening or narrowing of `DETERMINATION_PATTERN` in `scripts/lint-legal-registers.sh`. It is a citation regex; #7717 B1 ruled the inclusion predicate SUBSTANTIVE, not citational. The gate therefore enforces a strict subset of the predicate counsel ruled, and a green check now invites the inference that the register is complete. Changing the pattern changes the size of that gap."
+  - "#7465 landing (the `Last Updated` changelog split). Until it does, the header date on these three documents deliberately does not track the document — see §Second re-issue ruling 3. Once the line is no longer a 26-32 KB changelog, the date must resume tracking, and the floating-correction-note pattern must stop."
   - "Execution of a Better Stack Art. 28(3) instrument, or the recording on #7529 of the specific published vendor terms relied on as the `other legal act`. The Art. 33/34 no-notification conclusion attested here is grounded on three limbs that deliberately exclude a processor DPA; if one is executed, limb (1) and the §2.3(m) ground paragraph both change."
   - "A written vendor statement of the physical processing location and of EEA-only support access for `data_region eu-central-1a` (#7825). That upgrades limb (2) from establishment-plus-contract inference to evidence."
   - "Any change to the Vector `app_container_journald` source's severity filter (`level_int >= 40`), or to where the `userIdHash` is computed for that stream. Limb (3) — pseudonymisation in the application before egress — rests on a measurement, not on a config invariant, and a filter widening changes the data categories every one of these six documents describes."
@@ -42,6 +46,12 @@ operator — a non-lawyer founder — is not the sign-off authority for it.
 
 **Overall disposition: BLOCKED.**
 
+> **RE-ISSUED TWICE, 2026-09-07. Live status is SIGNED-OFF with nothing outstanding.** Read the
+> `Overall disposition: BLOCKED` line above, the B1 / B2 sections, the §"ruled NOT FIRED" section
+> and §Required before merge (as issued) as the record of the FIRST issue. The second re-issue
+> cleared B1, B2 and R2; the third — §Second re-issue — records the #7787 promotion as FIRED and
+> discharges R1, R3 and R4. The paragraph below is the second re-issue's marker, kept verbatim.
+>
 > **RE-ISSUED SIGNED-OFF 2026-09-07 — read the line above, and the B1 / B2 sections below, as of
 > first issue.** The frontmatter now reads `SIGNED-OFF`. The `Overall disposition: BLOCKED` line
 > immediately above and the two blocking-finding sections describe the disposition **as issued
@@ -93,7 +103,15 @@ a new instrument, or an operator decision.
 > issued against `1959995d8`. A13 is unchanged and is not a re-issue item — the trigger did not
 > fire then and has not fired since.
 
-## The #7787 trigger — put to this review as FIRED, ruled NOT FIRED
+## The #7787 trigger — put to this review as FIRED, ruled NOT FIRED (as issued; SUPERSEDED)
+
+> **SUPERSEDED at the third issue. The trigger has now FIRED, inside this same PR.** The ruling
+> below was correct against commit `1959995d8` and is left standing verbatim as the record of what
+> was measured then — including the sentence "this PR did not perform it", which is now false about
+> the PR this attestation attests. Do not read it as live status; the live disposition is
+> §Second re-issue ruling 1. It is retained rather than rewritten for the same reason the B1/B2
+> sections are: a finding that was true when written is evidence, and silently correcting it is
+> the half-applied-replacement defect this whole document is about.
 
 `knowledge-base/legal/audits/2026-09-counsel-review-7717.md` carries, verbatim, the
 re-evaluation trigger:
@@ -385,6 +403,18 @@ themselves invalidated, and the mirror-drift ratchet (R1). R3 is unchanged.
   the `REQUIRED`-list widening that lets the probe tell a **correction** from a **deletion** is the
   right instinct: deleting the parenthetical would otherwise have passed.
 
+- **C5 — the shared correction note under-summarises the DPD, added at the third issue.** The
+  bold `**Corrected September 7, 2026 (#7786 / #6474).**` note is byte-identical across all six
+  surfaces, which is right for the drift ratchet and right for the two documents whose corrections
+  it does describe. But the Data Protection Disclosure retracted a **third** statement the note is
+  silent on: the "under processor-DPA terms" ground for the Art. 33/34 no-notification conclusion,
+  which is #7851's first row and the most consequential single retraction in this PR. A reader
+  tracking #7851 who reads the DPD's correction note will not learn it was addressed. Non-blocking
+  — the re-grounding is disclosed at length in §2.3(m) itself, and the note is a summary rather
+  than a changelog — but the DPD's note should carry a sentence naming it. Filed to #7892 rather
+  than fixed here, because a per-document note breaks the byte-identity that keeps these six lines
+  out of the drift set, and that trade is #7465's to make, not mine.
+
 ## How this was verified
 
 Every implementation-detail claim in the corrected prose was checked against the code, not against
@@ -443,29 +473,182 @@ it was honoured.
 are engineering artifacts with no legal limb; A11 and A12 are the only parts of that work this
 attestation reaches.
 
+## Second re-issue — the #7787 promotion, and four rulings put to me
+
+The promotion landed inside this PR at commit `684956438` (the branch was history-amended; it was
+`b0be4c02e` when it was reported to me). Verified against the diff rather than the summary:
+`--advisory` is deleted from `run_suite "scripts/lint-legal-registers-live"` in
+`scripts/test-all.sh`; the `--advisory` parse arm, its `--help` string and the `--advisory`
+assertions in `lint-legal-registers.test.sh` all survive, so the rc=2 asymmetry is intact;
+`audits/2026-09-counsel-review-7717.md` is absent from the branch diff and its §"The advisory
+window's disclosure" prose stands unedited; `breach-register.md` now states the gate is
+**BLOCKING as of 2026-09-07** in both places it previously called it advisory. All five legal
+gates exit 0, re-measured on the amended tree: T&C SHA, corpus-truth probe, scope-block placement,
+mirror-drift ratchet, and the register lint at `7 assertion(s), 0 failed (registers=4 rows=5
+produced=15 waived=11 waiver-parity=ok)`.
+
+**The trigger is FIRED and DISCHARGED here.** It is carried in three audit files — the #7717
+counsel review, the #7717 CLO attestation, and the #7791 counsel review. This attestation is the
+discharge record for all three, so that the discharge exists whether or not anyone appends to them.
+
+### Ruling 1 — what the promotion changes, and whether #7717 survives
+
+**What it changes.** The register's completeness claim is assertion (c): every determination-shaped
+file under `audits/**` is either cited in the breach register's canonical-source column or carries
+a committed waiver with a reason and a citing issue. Under `--advisory` that claim was *measured
+and reported* but not *enforced* — a finding printed a warning and the PR merged. Blocking converts
+it from a statement about diligence into a control: the register cannot become incomplete without
+the required `test` context refusing. For an Art. 33(5) register — whose entire purpose is to let a
+supervisory authority verify determinations concluding that **no** notification was required — that
+is a real upgrade in Art. 5(2) evidential weight. Before, the answer to "how do you know the
+register is complete?" was "we look". Now it is "the build will not go green otherwise", and that
+is demonstrable in the sense Art. 5(2) means.
+
+**Three limits, stated because a green check is exactly the kind of thing that gets over-read.**
+
+1. **It enforces coverage, not correctness.** Every waiver is still a human ruling. A genuine
+   determination waived on a bad ground passes 7/7. That is not hypothetical: #7717's own B1
+   finding was precisely a determination sitting outside the index on a ground that did not survive
+   the predicate it was measured against, and a blocking gate would not have caught it. What is now
+   enforced is that nothing is *silently* omitted — not that what is omitted was rightly omitted.
+2. **The producer is citational; the predicate is not.** `DETERMINATION_PATTERN` is a literal regex
+   over `Art. 33` / `4(12)` / `33(5)`. #7717 B1 ruled in terms that limb 2 of the inclusion
+   predicate is **substantive, not citational** — "it does not become one by quoting the article
+   number, and it does not stop being one by omitting it". So the gate enforces a strict subset of
+   the predicate counsel ruled, and a determination drafted without those tokens is invisible to it.
+   The promotion does not narrow that gap; it makes mistaking the gate for the predicate more
+   tempting.
+3. **The blast radius is now a legal-artifact pressure, not just an engineering one.** The suite
+   scans a fixed file array plus the whole `audits/**` tree, never the diff, and sits in the
+   required `test` context for every PR. So the fastest way to clear a red build is to add a
+   waiver — and a waiver is a counsel ruling on the Art. 33(5) predicate. That incentive is new,
+   and it is the thing I would watch first. It is recorded as a re-evaluation trigger above:
+   **every new `NOT_TRANSCRIBED` entry is a CLO ruling, not a build fix.**
+
+**Does the #7717 counsel review survive? YES, and it does not need re-reading.** Its three holdings
+were the 4-indexed/3-waived method and set (Ruling 1), `controller:` rather than `processor:` as the
+capacity the register is kept in (Ruling 2), and the substantive inclusion predicate (B1). **None of
+them turns on the gate's enforcement level.** The promotion changes what happens when the predicate
+is breached; it does not touch the predicate, the capacity, or the set as ruled. The trigger's own
+wording — "the gate's scope changes what the register's completeness claim is worth" — is answered
+by the paragraph above: the claim is worth more, for the reason given, subject to the three limits.
+
+What the promotion *does* raise is the stakes on the waiver **set**, which has grown from four at
+review time to eleven, so I have read the seven added since — see ruling 2. That is the re-read the
+trigger actually earns, and it is done here rather than deferred.
+
+### Ruling 2 — the seven waivers added since #7717 signed. All UPHELD
+
+| Waiver | Ground | Ruling |
+|---|---|---|
+| `2026-09-counsel-review-7717.md` | Review OF this register; quotes Art. 4(12)/33(5) to rule on the predicate, assesses no fact pattern | **UPHELD.** Pre-blessed by #7717 itself: "every future counsel review of this register needs the same waiver — a known cost of scoping the producer to `audits/**`, not a defect" |
+| `2026-09-03-clo-attestation-7717-art-33-5-register.md` | CLO attestation OF this register | **UPHELD**, same pre-blessed class |
+| `2026-09-counsel-review-7791.md` | Counsel review of that attestation | **UPHELD**, same class |
+| `2026-09-counsel-review-7625.md` | Cites Art. 4(12) only to record the NEGATIVE — an Art. 30(1) record-keeping incompleteness is not a breach; nothing destroyed, lost, altered or disclosed | **UPHELD.** The #7440 shape, which #7717 expressly upheld |
+| `2026-09-03-clo-review-7622-pa7-r2-evidence-layer.md` | Transcribes a prior review's §(d) finding; the Art. 4(12) citation is quoted history, the matter an Art. 30 Recipients-cell omission over processing contractually covered throughout | **UPHELD.** Quoted history is not a determination — the same reasoning that upheld the #5103 waiver |
+| `2026-09-04-betterstack-source-split-7772.md` | Matches only by ruling one out; prospective PA-8 amendment, same recipient/team/cluster, and no data has flowed — the `soleur-git-data` server was never provisioned | **UPHELD.** Squarely the #7440 shape, and stronger: limb 1 fails twice over |
+| `2026-09-07-clo-attestation-7786-off-host-log-claims.md` (this file) | Quotes Art. 4(12)/33 only to record that the Better Stack role addition was not a breach; a determination that no event occurred, about a disclosed processing change | **UPHELD** — and I flag that I am ruling on my own file. The ground is not a fresh judgement: it is the #7440 precedent #7717 already upheld, applied to a file with the same shape. My R3 predicted this waiver and stated this reason before the waiver was written; the text that landed matches it |
+
+Waiver parity is 11/11 and the indexed and waived sets are disjoint, both machine-checked.
+
+### Ruling 3 — the unchanged `Last Updated` date. ACCEPTED, and it is NOT the R2 case
+
+You asked whether an unchanged date on a document corrected today is a misstatement of its own
+status, "the same reasoning as your R2". **It is not, and the distinction is the whole point.**
+
+R2 was an **affirmative false statement**: six documents told the reader their disclosure was
+"pending CLO/counsel review" *after* the review had been performed. The document asserted something
+about itself that was untrue.
+
+Here the header date is **unchanged and true** — August 9, 2026 is genuinely the date of the entry
+that follows it, because in this corpus `Last Updated:` is not a status field but the head of an
+append-only changelog whose entries run backwards. The September 7 correction is disclosed on a new
+line, bold, dated, naming both issues, in the position of highest prominence in the document —
+immediately below the header and ahead of §1. Verified byte-identical across all six surfaces
+(`md5` of the note line matches canonical to mirror in all three pairs).
+
+And the note **self-discloses the very thing you were worried about**:
+
+> *(The `Last Updated` date above is deliberately unchanged: that line differs between this document
+> and its published mirror for historical reasons tracked at #7465, and editing it would deepen that
+> divergence rather than reduce it.)*
+
+That converts a silent staleness into a disclosed one. Art. 12(1) asks that information be concise,
+transparent, intelligible and easily accessible; there is no statutory duty to stamp a revision
+date at all. A reader can see what changed, when, and why the header reads as it does. The
+`tc-version-bump-policy` CLO sign-off item 4 — "the 'Last Updated:' line accurately summarises the
+substantive delta" — I read as **satisfied in substance** by the adjacent note, and I record that
+reading so the next reviewer is not left inferring it.
+
+I also record that your two rejected options were rejected correctly. Byte parity on a 26-32 KB
+line diverging by ~1,000 words of interleaved history is #7465's work, not this PR's; and
+`SOLEUR_LEGAL_DRIFT_ACCEPT` with no per-PR home would have been a **permanent** waiver on a
+required check bought to solve a one-PR problem — the worst of the three.
+
+**One limit, and it is a decay path rather than a defect.** This pattern must not become the
+standing mechanism. Each future correction adds another floating note and the header date drifts
+further from the document. It is sound for one correction that cannot touch the drifting line; it
+is not a substitute for #7465. Recorded as a re-evaluation trigger: when #7465 lands, the date
+resumes tracking the document and the floating-note pattern stops.
+
+### Ruling 4 — you were right not to rewrite `audits/2026-09-counsel-review-7717.md`, with one qualification
+
+**Agreed on the body prose.** Audit files are append-only records of what was true when written.
+Line 254's "The advisory window's disclosure" was accurate on 2026-09-03 and rewriting it would
+have destroyed evidence to tidy a tense. This whole document is built on that principle — its own
+BLOCKED disposition and its own "ruled NOT FIRED" section are left standing for exactly the same
+reason, and the second of those is now false about this PR.
+
+**The qualification, and it is a real one.** Frontmatter `re_evaluation_triggers:` is **not**
+narrative record — it is a live control surface, the thing a future reader consults to learn what
+is still armed. A fired trigger left sitting in a live list with no disposition is how a trigger
+gets treated as permanently armed, or re-fired years later by someone who cannot tell. The fix is
+not a rewrite: it is an **append**, which the append-only rule permits and which #7717 itself
+already established when its re-issue added a standing marker rather than editing the body.
+
+**Directed, and filed to #7892 rather than done here** — this attestation is my only permitted
+write: append a `discharged_re_evaluation_triggers:` entry to each of the three audit files
+carrying this trigger (`2026-09-counsel-review-7717.md`, `2026-09-03-clo-attestation-7717-art-33-5-register.md`,
+`2026-09-counsel-review-7791.md`), each pointing at this attestation as the discharge record. Body
+prose in all three stays verbatim. Until that lands, this document is the discharge record, which
+is why ruling 1 says so in terms.
+
+### Your probe caught its own author
+
+Worth recording, because it is the strongest evidence in this PR that the instrument works. After
+writing the correction note announcing the retirement of the "30 MB" claim, `probe-legal-corpus-truth`
+returned CORPUS-FALSE — because the note announcing the retirement contained the literal `30 MB`.
+That is C3 in this attestation's own corrections list, where I flagged the bare literal as
+over-broad and liable to red on a legitimate future use. It fired within the hour, on the author,
+on a sentence that was arguably legitimate use. I am **not** upgrading C3 to a defect: an
+over-tight guard that catches its author is behaving better than a loose one that catches nobody,
+and the corpus now carries zero occurrences of `30 MB` across all six documents. C3's
+recommendation stands as a refinement for the unit arm at #7892, not as a fix required here.
+
 ## Remaining before merge
 
-The legal sign-off is given. Three items are outstanding, none of them a legal question, and each
-is a red or soon-red gate rather than a matter of judgement:
+**Nothing.** All four items are discharged, re-measured on the amended tree rather than accepted on
+report:
 
-1. **R4 — re-pin `apps/web-platform/lib/legal/legal-doc-shas.ts`.** NEW at re-issue, and caused by
-   the B1/B2 fixes themselves. `bash apps/web-platform/scripts/check-tc-document-sha.sh` now exits
-   1 with three errors — `data-protection-disclosure`, `gdpr-policy` and `privacy-policy` each
-   "content changed but `LEGAL_DOC_SHAS[...]` is stale". The SHA-refresh contract at
-   `knowledge-base/legal/tc-version-bump-policy.md` §Non-T&C legal docs is unconditional: every
-   canonical edit is paired with the refresh in the same PR. It was honoured at `1959995d8` and is
-   now stale again. Re-pin last, after any further prose edit.
-2. **R1 — the mirror-drift ratchet.** Still exit 1, still confined to the six `**Last Updated:**`
-   lines, still no growth in drift count (4→4, 52→52, 18→18). Either set
-   `SOLEUR_LEGAL_DRIFT_ACCEPT` with a reason naming this attestation, or bring those six lines to
-   byte parity — the better outcome, since it lowers the baseline.
-3. **R3 — the `NOT_TRANSCRIBED` waiver for this file** in `scripts/lint-legal-registers.sh`.
-   Advisory today; a red required check the day #7787 lands.
+| Item | State |
+|---|---|
+| **R1** — mirror-drift ratchet | **DISCHARGED.** `lint-legal-mirror-drift-baseline.sh --base origin/main` rc=0. Solved by the gate's own third option — the drifting line left untouched, all nine date bumps reverted byte-exact, the correction on a new byte-identical line that never enters the drift set. No `SOLEUR_LEGAL_DRIFT_ACCEPT`, no permanent waiver. See ruling 3 |
+| **R2** — the six DRAFT markers | **DISCHARGED** at the second issue; zero occurrences remain |
+| **R3** — this file's register waiver | **DISCHARGED.** `NOT_TRANSCRIBED` entry plus its §Excluded records parity row; waiver parity 11/11, sets disjoint, lint 7/7 rc=0. Ruled UPHELD at ruling 2 |
+| **R4** — the SHA re-pin | **DISCHARGED.** `check-tc-document-sha.sh` rc=0 |
 
-After R4, re-run all five: `check-tc-document-sha.sh`, `probe-legal-corpus-truth.sh`,
-`lint-legal-scope-block-placement.sh`, `lint-legal-mirror-drift-baseline.sh`, and
-`legal-doc-consistency.test.ts`. A green run on those five is **not** evidence that the prose is
-true — that is the #7349 lesson, and it is the reason this attestation exists alongside them.
+All five legal gates green on the tree as it stands: T&C SHA, mirror-drift ratchet, register lint
+(7/7, `produced=15 waived=11 waiver-parity=ok`), corpus-truth probe (6 documents), scope-block
+placement.
 
-No further CLO review is required for this PR unless the published prose changes again. If it
-does, the changed limb comes back here; the discharged artifacts do not.
+**The disposition does not change. This attestation is SIGNED-OFF, and the promotion does not
+falsify it** — it fires a trigger this document was already carrying, and the trigger is discharged
+above rather than left open. Holding the PR is not warranted.
+
+A green run on those five is still not evidence that the prose is true. That is the #7349 lesson,
+it is why this attestation exists alongside them, and it is now more load-bearing than it was
+yesterday: after the promotion, five of the five green checks over this corpus measure agreement,
+coverage and pinning — and none of them reads a sentence.
+
+No further CLO review is required for this PR unless the published prose changes again. If it does,
+the changed limb comes back here; the discharged artifacts do not.
