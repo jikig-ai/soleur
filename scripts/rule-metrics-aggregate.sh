@@ -391,6 +391,23 @@ report=$(jq -n \
             | map(select(.bypass_count > 0))
             | length),
           orphan_rule_ids: $orphan_ids,
+          # Every id the namespace rule EXEMPTS from the orphan gate, with its fire count.
+          #
+          # Without this the change traded a gate for a blind spot. Before #7853, a new hook
+          # telemetry id made this script exit 5, and that exit is where an author met the
+          # LOAD-BEARING PAIR warning above and added a replacement readout. The namespace predicate
+          # removes that forcing function, and an unprefixed id reaches NO other field of this file:
+          # `rules[]` is built from AGENTS.md only, so `monitor-supersede`, `cost-of-filing-*` and
+          # `net-issue-flow*` were measured appearing ZERO times in the committed artifact.
+          #
+          # So the exempt namespace is no longer GATED, but it is still VISIBLE — a flood or a new
+          # emitter shows up in the committed diff instead of being silently absorbed by a ledger
+          # that rotates at 5 MB.
+          non_corpus_counts: (
+            $counts
+            | with_entries(select(.key | test("^(hr|wg|cq|rf|pdr|cm)-") | not))
+            | with_entries(.value = (.value.fire_count // 0))
+          ),
           # Gate-exemption readout (ADR-156). The net-issue-flow mandated-filing
           # exemption is justified by ATTRIBUTION — being able to see which rule
           # is being cited, how often, and whether the citing PRs look like

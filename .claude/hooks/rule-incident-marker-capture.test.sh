@@ -104,6 +104,26 @@ assert "2b: unprefixed id is accepted, unattributed, and invisible to the orphan
   '[[ "$(rows)" == "1" && "$(last_rule)" == "attacker-invented-marker" && "$rc" == "0" ]]' \
   "the unprefixed acceptance path changed without the aggregator predicate changing (rows=$(rows) rule=$(last_rule) rc=$rc)"
 
+# --- 2c. The bound has a CARVE-OUT, and it is the half that was stated wrongly ------
+# The three prefixes the aggregator reads into NAMED SUMMARY FIELDS of the COMMITTED
+# rule-metrics.json (`grep 'startswith(' scripts/rule-metrics-aggregate.sh`) must be REJECTED here.
+# Accepting one lets a contributor-writable marker forge an attacker-chosen key into a tracked file
+# AND fire a false ADR-156/157/162 alarm claiming the ugrep shim was not neutralised and a hook ran
+# with guards disarmed. Demonstrated end-to-end on the `gh pr checkout` review path before this
+# carve-out existed; 2b's "no consumer reads it" bound was false for exactly these three.
+for _forge in grep-rewrite-disarm hook-input-unparseable net-issue-flow-mandated-filing--x; do
+  rc=$(drive "echo 'SOLEUR_RULE_APPLIED rule=${_forge} note=forge'")
+  assert "2c: reserved analytics prefix is REJECTED: ${_forge}" \
+    '[[ "$(rows)" == "0" && "$rc" == "0" ]]' \
+    "a marker forged a NAMED summary field of the committed rule-metrics.json (id=${_forge} rows=$(rows) rc=$rc)"
+done
+
+# And the carve-out must not swallow legitimate unprefixed hook telemetry.
+rc=$(drive "echo 'SOLEUR_RULE_APPLIED rule=monitor-supersede note=legit'")
+assert "2c: a legitimate unprefixed hook id is still accepted (the carve-out is not a blanket)" \
+  '[[ "$(rows)" == "1" && "$(last_rule)" == "monitor-supersede" ]]' \
+  "the reserved-prefix carve-out over-matched and rejected ordinary hook telemetry (rows=$(rows) rule=$(last_rule))"
+
 # --- 3. Shape rejection: uppercase / overlong / path-shaped ids ---------------------
 bad=0
 for id in 'Rule-With-Caps' '../../etc/passwd' 'x' 'rule;id'; do
