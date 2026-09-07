@@ -82,6 +82,23 @@
 #       [--out <path>] [--cloud-init <path>] [--window '30 DAY'] [--verify-only]
 set -uo pipefail
 
+# REFUSE TO RUN UNDER xtrace WITH A LIVE CREDENTIAL BOUND (#7797 / #7858).
+#
+# This capture binds FOUR credentials — the shared and git-data ingest tokens, the warehouse read
+# password, and the Sentry read token — and its output is published into a GitHub Actions log and
+# quoted into the rehearsal's job summary. A `set -x` above it would trace all four. The rule
+# arrived on main from #7858 while this branch was in flight; editing this file forfeits its
+# baseline grandfathering, which is correct: the moment to add the refusal is when the file is
+# being changed anyway.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}${BETTERSTACK_QUERY_PASSWORD:+x}${GIT_DATA_BETTERSTACK_LOGS_TOKEN:+x}${SENTRY_ISSUE_RO_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # A TERMINAL SENTINEL, PRINTED ON EVERY EXIT PATH. The workflow wraps this script in
 # `doppler run`, which exits 1 on ITS OWN failures (measured: a bad token, and a bad
 # project/config, both give rc=1) — the same code this script uses for FAIL. Without a

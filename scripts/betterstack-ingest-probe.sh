@@ -29,6 +29,22 @@
 # These mirror scripts/zot-restart-loop-alarm.sh's contract so a caller can propagate directly.
 
 set -uo pipefail
+
+# REFUSE TO RUN UNDER xtrace WITH A LIVE CREDENTIAL BOUND (#7797 / #7858).
+#
+# This probe forwards `Authorization: Bearer $BETTERSTACK_LOGS_TOKEN` to an ingest endpoint, so a
+# `set -x` anywhere above it would trace the write credential into this job's output. The rule
+# arrived on main from #7858 while this branch was in flight; touching this file forfeits its
+# baseline grandfathering, which is the correct behaviour — a credential-binding script being
+# edited is exactly when the refusal should be added.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 export LC_ALL=C
 
 : "${BETTERSTACK_INGEST_URL:=https://s2457081.eu-fsn-3.betterstackdata.com/}"
