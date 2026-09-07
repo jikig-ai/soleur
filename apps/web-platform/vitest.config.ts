@@ -36,6 +36,11 @@ export default defineConfig({
     // Inherits to both `unit` and `component` projects via `extends: true`.
     testTimeout: 16_000,
     hookTimeout: 20_000,
+    // Guard 3 (#7833): abort the run if vitest STARTED holding an inherited git-location
+    // environment. Registered here rather than in each project's `setupFiles` because those
+    // re-execute per test file under `isolate: true` (measured: 1114 executions, ~1.7s wall), while
+    // the property is about the process that inherited the env — which is this one.
+    globalSetup: ["./test/global-setup-git-tripwire.ts"],
     projects: [
       {
         extends: true,
