@@ -19,14 +19,20 @@ import { join } from "node:path";
 import {
   ContributionTriggeredEntryError,
   assertContributionTriggeredEntry,
+  COVERAGE_MAP_NOTICE_EPOCH,
 } from "@/scripts/cla-evidence/roster-entry-gate";
 import { validateRosterRecord } from "@/scripts/cla-evidence/schema";
 
 const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
 const ROSTER_REL = "apps/cla-evidence/roster/ccla-roster.json";
 
-const ledger = (ids: number[]) => ({
-  signedContributors: ids.map((id) => ({ name: `user-${id}`, id })),
+/** Signed AFTER the coverage-map notice existed — the ordinary case. */
+const AFTER_NOTICE = "2026-10-01T00:00:00Z";
+/** Signed BEFORE it existed — cannot have been informed by signing. */
+const BEFORE_NOTICE = "2026-05-04T13:13:53Z";
+
+const ledger = (ids: number[], created_at: string = AFTER_NOTICE) => ({
+  signedContributors: ids.map((id) => ({ name: `user-${id}`, id, created_at })),
 });
 
 const rosterWith = (repIds: number[][]) => ({
@@ -216,10 +222,50 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
     expect(() => assertContributionTriggeredEntry(rosterWith([[NEVER_SIGNED]]), realLedger)).toThrow(
       ContributionTriggeredEntryError,
     );
-    // And the far side: a row whose id IS in the real ledger passes, so the arm
-    // above is refusing on the signature, not on the shape of a real ledger.
+    // The far side has MOVED, and that is the finding rather than a regression.
+    // Every account in today's real ledger signed before the coverage-map
+    // notice existed, so none may be rostered — and the refusal must name the
+    // TEMPORAL reason, not read as "they never signed". Asserting the message
+    // is what separates the two, since both throw the same error type.
     const signedId = realLedger.signedContributors[0].id;
-    expect(assertContributionTriggeredEntry(rosterWith([[signedId]]), realLedger)).toBe(1);
+    let msg = "";
+    try {
+      assertContributionTriggeredEntry(rosterWith([[signedId]]), realLedger);
+      throw new Error("expected a refusal for a pre-notice signer");
+    } catch (e) {
+      msg = e instanceof Error ? e.message : String(e);
+    }
+    expect(msg).toContain("coverage-map notice existed");
+    expect(msg).not.toContain("have no Individual CLA signature");
+  });
+
+  it("the temporal half: signed AFTER the notice passes, BEFORE is refused, unknown fails closed", () => {
+    const id = 54279;
+    // must-PASS — membership plus a timestamp at/after the epoch.
+    expect(assertContributionTriggeredEntry(rosterWith([[id]]), ledger([id], AFTER_NOTICE))).toBe(1);
+
+    // must-FAIL — signed before the notice paragraph existed.
+    expect(() =>
+      assertContributionTriggeredEntry(rosterWith([[id]]), ledger([id], BEFORE_NOTICE)),
+    ).toThrow(ContributionTriggeredEntryError);
+
+    // must-FAIL, fail-CLOSED — "we cannot tell when" is not "late enough".
+    // This is the direction that silently admits, so it gets its own row.
+    const noTimestamp = { signedContributors: [{ name: `user-${id}`, id }] };
+    expect(() => assertContributionTriggeredEntry(rosterWith([[id]]), noTimestamp)).toThrow(
+      ContributionTriggeredEntryError,
+    );
+    const malformed = { signedContributors: [{ name: `user-${id}`, id, created_at: "soon" }] };
+    expect(() => assertContributionTriggeredEntry(rosterWith([[id]]), malformed)).toThrow(
+      ContributionTriggeredEntryError,
+    );
+  });
+
+  it("the epoch is a real ISO instant, not a placeholder a comparison would silently pass", () => {
+    expect(Number.isFinite(Date.parse(COVERAGE_MAP_NOTICE_EPOCH))).toBe(true);
+    // A NaN epoch makes every `t < epoch` false, so the whole temporal half
+    // would vanish while every other row here stayed green.
+    expect(COVERAGE_MAP_NOTICE_EPOCH).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
   it("the tracked roster is schema-valid and every id in it has signed the ICLA", () => {

@@ -34,6 +34,18 @@ trap 'rm -rf "$WORK"' EXIT
 git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" \
   || { echo "harness: could not read the ICLA ledger" >&2; exit 2; }
 [[ -s "$WORK/ledger.json" ]] || { echo "harness: ledger empty" >&2; exit 2; }
+# Keep the REAL timestamps for the pre-notice arm below, then SYNTHESIZE the
+# working fixture by rewriting `created_at` past the coverage-map notice epoch.
+# The ids stay real because the id-keyed arms depend on them; only the temporal
+# dimension is controlled, which is the one under test here
+# (cq-test-fixtures-synthesized-only).
+cp "$WORK/ledger.json" "$WORK/ledger-real-timestamps.json"
+jq '.signedContributors |= map(.created_at = "2026-10-01T00:00:00Z")' \
+  "$WORK/ledger-real-timestamps.json" > "$WORK/ledger.json" \
+  || { echo "harness: could not synthesize the post-notice ledger" >&2; exit 2; }
+jq -e '.signedContributors | length > 0 and all(.created_at == "2026-10-01T00:00:00Z")' \
+  "$WORK/ledger.json" >/dev/null \
+  || { echo "harness: synthesized ledger did not take" >&2; exit 2; }
 printf '{\n  "schema_version": "1.0",\n  "organizations": []\n}\n' > "$WORK/roster.json" \
   || { echo "harness: could not write roster fixture" >&2; exit 2; }
 
@@ -177,6 +189,22 @@ grep -q 'refusing to run under xtrace' <<<"$out_x" \
 rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0001; true)
 [[ "$rc" != "78" ]] && pass "without xtrace the refusal does NOT fire (it is state-gated, not unconditional)" \
   || fail "the script refuses even without -x — the guard is unconditional"
+
+# --- The TEMPORAL half of contribution-triggered entry, on the write path.
+# --- Membership is not the property the Art. 13 claim rests on; WHEN the
+# --- signature was made is. Both accounts in the real ledger signed before the
+# --- coverage-map notice existed, so the real timestamps are the fixture here.
+rc=$(CCLA_ADD_DRY_RUN=1 CCLA_ADD_LEDGER="$WORK/ledger-real-timestamps.json" \
+     CCLA_ADD_ROSTER="$WORK/roster.json" CCLA_ADD_ID_MAP='{"deruelle":54279}' \
+     bash "$SCRIPT" "${add_args[@]}" --login deruelle > "$WORK/out.txt" 2> "$WORK/err.txt"; echo $?)
+[[ "$rc" == "4" ]] && pass "an account that signed BEFORE the notice existed is refused on the write path" \
+  || fail "pre-notice signer accepted by the write path (rc=$rc)"
+grep -q 'coverage-map notice existed' "$WORK/err.txt" \
+  && pass "the refusal names the TEMPORAL ground, not a missing signature" \
+  || fail "pre-notice refusal does not name the notice epoch"
+! grep -q 'have no Individual CLA signature' "$WORK/err.txt" \
+  && pass "a pre-notice signer is NOT misreported as never having signed" \
+  || fail "pre-notice signer misreported as unsigned"
 
 # --- V12: rc=3 is a DOCUMENTED exit code in this script's header and appears
 # --- nowhere in the suite. A mutation hardcoding the validator's passthrough to
@@ -332,7 +360,7 @@ echo "Total: $passes passed, $fails failed"
 # assertion could be deleted and the run stayed green and silent — the floor
 # only fires when TWO go. `guard-vacuity-floor.test.sh` verifies that floors
 # FIRE, never that they are tight, so nothing else catches the slack.
-MIN_ASSERTIONS=37
+MIN_ASSERTIONS=40
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

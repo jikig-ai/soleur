@@ -1,0 +1,553 @@
+---
+title: "Counsel review audit — #3210 / PR #7828 (the Corporate CLA coverage map, re-reviewed after the origin/main merge moved PA-7 under it)"
+type: counsel-review
+date: 2026-09-07
+issue: 3210
+pr: 7828
+attestation-authority: clo
+status: BLOCKED (CLO-agent-reviewed, Soleur-as-tenant-zero v1)
+disposition: "BLOCKED — three findings must be discharged before merge, none of them in the Art. 30 register and none of them a re-litigation of the 2026-09-04 ruling. B1: the pre-signature bot comment tells a contributor that who they work for is theirs to disclose or not, and does not tell them that the Corporate CLA route it recommends publishes exactly that association, permanently, in a public file. B2: contribution-triggered entry is enforced on membership of the ICLA ledger and not on WHEN the signature was made, so the two accounts that signed before the Art. 13 notice existed (deruelle 54279, 2026-02-27; Elvalio 92384917, 2026-05-04) can be written to the roster while four documents state unconditionally that every person in the map was informed here at signing. B3: `cla.yml` and `CONTRIBUTING.md` both state that a pull request carries a visible \"CCLA in progress — maintainer action, not yours\" state; no label, check or workflow step produces it. Three further defects were found and CORRECTED in this review (see §Corrections applied). Everything else reviewed is sound, including the whole `removed_at` surface, which is the failure mode the request most wanted caught and which is clean at eleven sites."
+blocking_findings:
+  - "B1 — .github/workflows/cla.yml `custom-notsigned-prcomment` + CONTRIBUTING.md: privacy expectation set in the wrong direction immediately before signing."
+  - "B2 — roster-entry-gate.ts + ccla-add.sh: contribution-triggered entry does not distinguish a signature made before the ICLA §0 coverage-map notice existed; the residual population is exactly two, enumerable today."
+  - "B3 — .github/workflows/cla.yml + CONTRIBUTING.md: the \"CCLA in progress\" state is asserted and not implemented (plan AC19 unmet, task 1.3 ticked without it)."
+required_before_merge:
+  - "B1: one sentence in the bot comment and its CONTRIBUTING.md counterpart naming the publication consequence, linking ICLA §0."
+  - "B2: either gate on the ICLA signature date / signed doc hash in BOTH roster-entry-gate.ts and ccla-add.sh, or record a named, enumerated residual plus a direct-notice operator step, and qualify the four unconditional sentences."
+  - "B3: implement the state, or reword both surfaces to what actually happens."
+attests:
+  - knowledge-base/legal/article-30-register.md (PA-7, all nine rows, as re-grafted onto main)
+  - knowledge-base/legal/ccla-register.md
+  - knowledge-base/legal/compliance-posture.md (Proton AG row)
+  - docs/legal/corporate-cla.md
+  - docs/legal/individual-cla.md
+  - docs/legal/gdpr-policy.md (§3.4 third balancing test, §5.3b)
+  - docs/legal/privacy-policy.md (§4.5, §10)
+  - docs/legal/data-protection-disclosure.md (§2.3(d), §2.3(n), §6.4)
+  - apps/web-platform/scripts/cla-evidence/schema.ts
+  - apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts
+  - apps/cla-evidence/scripts/ccla-add.sh
+  - .github/workflows/cla.yml
+  - CONTRIBUTING.md
+carve_outs:
+  - "NOT REOPENED — the 2026-09-04 ruling (B1-c, the permanent identity-field prohibition, encrypted-drive custody, amendment B1-c-2). Re-read in full at the start of this review and applied, not re-litigated."
+  - "NOT ATTESTED — whether indefinite retention of the employer↔account association is proportionate under Art. 5(1)(e) on a non-erasable surface. Open at #7668 and correctly recorded as open at nine sites."
+  - "NOT ATTESTED — the outbound correspondence leg to Pakistan. PA-7 §(e) records it as an OPEN ITEM tracked at #7846, no such transfer has occurred, and the reply is unsent."
+  - "NOT ATTESTED — the Art. 28(3) instrument covering Proton AG. It does not exist; the corpus says so in three places and asserts nothing else. #7845."
+  - "NOT ATTESTED — the merits of the Supabase importer-identity divergence (#7670), untouched here."
+related:
+  - knowledge-base/legal/audits/2026-09-04-clo-ruling-ccla-register-siting-and-coverage-map-basis-3210.md
+  - knowledge-base/legal/audits/2026-09-counsel-review-7625.md
+  - knowledge-base/legal/article-30-register.md
+  - knowledge-base/engineering/architecture/decisions/ADR-201-corporate-cla-is-a-repo-tracked-roster-not-an-allowlist-entry.md
+re_evaluation_triggers:
+  - "First arms-length (non-Jikigai-affiliate) corporate representative written to the roster — the Soleur-as-tenant-zero posture grounding a v1 internal attestation ends there."
+  - "First counterparty that is a sole trader or trades under a natural person's name — amendment B1-c-2 has still never been exercised, and `docs/legal/corporate-cla.md` §0 states the rule for the register index and for the closing 'What is published' paragraph but not inside the coverage-map bullet (Finding O-3)."
+  - "More than ten organisations on the register, or the first instrument that must be jointly auditable — the B1-b refusal at n=1 does not generalise."
+  - "Any proposal to reinstate an identity field in a tracked file — that re-opens the 2026-09-04 ruling rather than changing a schema."
+  - "Adoption of an Art. 5(1)(e) retention ceiling at #7668, or lapse/suspension/annulment of the EC adequacy decision for Switzerland."
+  - "Any change to the ICLA §0 coverage-map paragraph — B2's residual population is defined by reference to the version of that paragraph, so a further amendment creates a further cohort."
+---
+
+> **DRAFT — This document was generated by AI and requires professional legal review before use. It does not constitute legal advice.**
+
+# Counsel review audit — #3210 / PR #7828
+
+## Scope and method
+
+The 2026-09-04 CLO ruling (`2026-09-04-clo-ruling-ccla-register-siting-and-coverage-map-basis-3210.md`,
+APPROVED, disposition DISCHARGED) settled siting (B1-c: the register is an INDEX, the executed
+instrument is the EVIDENCE), the permanent prohibition on identity fields, custody on the encrypted
+operator drive, and amendment B1-c-2. **That ruling is applied here and is not re-litigated.**
+
+What is reviewed here is what changed *after* it: `origin/main` moved — #7625 and #7803 rewrote five
+PA-7 rows, including replacing `Special categories | None.` with a full Art. 9 analysis and splitting
+the Art. 6(1)(f) balancing to record a non-signer commenter capture failing on necessity — and the
+#3210 annotations were re-grafted **on top of** that newer text. A re-graft is exactly the operation
+that produces prose which agrees with itself and disagrees with the record, so the method was:
+
+1. Read PA-7 in the working tree as it now stands, all nine rows, not the diff. The diff does not
+   show the row a reader will read.
+2. Read every cross-referenced surface end to end: both CLA instruments, GDPR Policy §3.4 and §5.3b,
+   Privacy Policy §4.5 and §10, DPD §2.3(d)/(n) and §6.4, `ccla-register.md`, `compliance-posture.md`.
+3. Check every implementation-detail claim against the implementation — `schema.ts`,
+   `roster-entry-gate.ts`, `validate-roster.ts`, `ccla-add.sh`, `roster-entry-gate.test.ts`,
+   `roster-schema.test.ts`, `cla.yml`, `cla-evidence.yml`, `CONTRIBUTING.md` — because prose
+   hallucinated against the code is the known drift class of PR #4353 / #4558.
+4. Run all five `docs/legal/**` gates plus `lint-legal-registers.sh`, and then **read the prose
+   anyway**, because per #7349 all five gates compare the two surfaces against each other and none
+   asks whether the agreed text is true.
+
+## Per-artifact verdicts
+
+| Artifact | Verdict |
+|---|---|
+| `knowledge-base/legal/article-30-register.md` PA-7 (nine rows, re-grafted) | **APPROVED as corrected.** One false sentence found in §(e) and one under-inclusive enumeration in §(c); both corrected in this review (§Corrections applied). The restated Lawful-basis opening is accurate — see Q1. |
+| `docs/legal/gdpr-policy.md` §3.4 third balancing test | **APPROVED.** The governing record. Substantively the strongest document in the set: it carries the sole-trader rule for the map, states erasure-impossibility as a premise rather than a mitigation, and refuses to rest any limb on retractability. |
+| `docs/legal/gdpr-policy.md` §5.3b | **APPROVED.** Article-by-article, and the Art. 17 subsection states the negative (17(3)(b) unavailable) rather than leaving an impression that the ground is held. |
+| `docs/legal/privacy-policy.md` §4.5 / §10 | **APPROVED SUBJECT TO B2.** The field enumeration is the most complete in the corpus. "You are told before any record about you exists" is the sentence B2 bites on. |
+| `docs/legal/data-protection-disclosure.md` §2.3(d)/(n), §6.4 | **APPROVED.** §2.3(n)'s scoping note ("this clause read 'For each signature…' while §2.3(d) described a single record type. It now describes two, and only the first reaches this archive") is precisely the kind of correction the #7349 lesson exists to produce. |
+| `docs/legal/corporate-cla.md` | **APPROVED.** §0's two-answer erasure passage is correct and is the one place the corpus refuses to offer a single procedure that covers neither surface. One symmetry observation at O-3. |
+| `docs/legal/individual-cla.md` §0 | **APPROVED SUBJECT TO B2.** The new paragraph is the Art. 13 notice the whole design rests on. Its "We tell You this here, at the moment You sign" is the second sentence B2 bites on. |
+| `knowledge-base/legal/ccla-register.md` | **APPROVED.** Schema carries no identity field, states the prohibition as permanent rather than gated, and carries the sole-trader rule. |
+| `knowledge-base/legal/compliance-posture.md` Proton AG row | **APPROVED as corrected.** Characterisation right (Q2); one citation corrected. |
+| `apps/web-platform/scripts/cla-evidence/schema.ts` | **APPROVED.** `.strict()` at all four levels, `legal_name` nullable, `login` bounded at 39, no free-text field, and the reason each of those holds is in the file. |
+| `apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts` + tests | **BLOCKED — B2.** The gate is well built (refuses an unusable reference set rather than degrading to an empty one, collects every offender, and the suite cross-checks the *tracked* roster against the *real* ledger with a working anti-vacuity arm). What it does not test is *when* the signature was made. |
+| `apps/cla-evidence/scripts/ccla-add.sh` | **BLOCKED — B2** (same gap, write side). Otherwise the strongest script in this PR: test seams refused off the dry-run path, absolute-path resolution, withdrawal dates never rewritten, ids resolved numerically rather than by login. |
+| `.github/workflows/cla.yml` `custom-notsigned-prcomment` | **BLOCKED — B1 and B3.** |
+| `CONTRIBUTING.md` | **BLOCKED — B1 and B3.** The CCLA §5 coverage statement itself is accurate (Q-extra below). |
+
+## The five questions asked, answered
+
+### Q1 — Do the re-grafted PA-7 rows state anything false after the merge?
+
+**One sentence, in §(e), now corrected. §(d)'s "unchanged by THIS LIMB" is true. The restated
+Lawful-basis opening is accurate.**
+
+**§(d) — true.** Limb (i) now reads "…**no new processor and no new third-country transfer arises**,
+and §(e) is unchanged by THIS LIMB (limb (iii) below adds a Swiss processor — see §(e))." Checked
+against the cell it sits in: limb (i) is the coverage map, which engages no processor beyond GitHub
+Inc and adds no third country; limb (iii) is Proton AG, which does. The scoping is correct and the
+cross-reference resolves.
+
+**§(e) — the correction made §(e) false, and that is the one falsehood in the row.** §(e)'s
+2026-09-04 amendment, limb (ii), opened: *"§(d) added Proton AG as a processor … and stated that §(e)
+was unchanged by that amendment. That statement is correct as to the coverage map and incomplete as
+to Proton AG, and is corrected here rather than left standing."* §(d) as it now stands says no such
+thing — it says the opposite, scoping the statement to its own limb (i) and pointing here. A cell
+was describing a sibling cell inaccurately, and "corrected here rather than left standing" described
+correcting text that no longer stands. **Restated during this review** (§Corrections applied, F-a).
+
+**The Lawful-basis restatement — accurate, verified clause by clause.** It reads: *"limbs (i)-(iv)
+above are true of the SIGNER. The #7625 correction above already records that they do not reach the
+non-signer commenter capture; they equally do not reach a CORPORATE REPRESENTATIVE…"*
+
+- *"limbs (i)-(iv) above are true of the SIGNER"* — matches the cell's own opening, which scopes the
+  balancing to "shapes (1) and (2) **where the actor is a signer**".
+- *"The #7625 correction above already records that they do not reach the non-signer commenter
+  capture"* — the #7625 block does record exactly that: "the balancing is split: it holds for signers
+  and is unavailable for the non-signer capture recorded at §(c), where it fails on necessity", and
+  the body carries the same finding under the heading "**The balancing test does not reach the
+  non-signer capture.**" The restatement uses #7625's own verb. **It does not misdescribe #7625's
+  finding.**
+- *"they equally do not reach a CORPORATE REPRESENTATIVE"* — true, and the sentence then names which
+  limbs fail and why (i: the representative discloses nothing by the signatory's act; iii: the
+  representative is not present at the signing event). Recorded as observation **O-1** only because
+  "equally" glosses two different failure modes — necessity for the commenter, limbs (i)/(iii) for
+  the representative — which the sentence then distinguishes, so it misleads no reader who finishes it.
+
+**One further defect found in the same row and corrected:** §(c) `Categories of personal data`
+enumerated the roster narrower than the notice published to the data subject (F-c below).
+
+### Q2 — Is the Proton AG characterisation right?
+
+**Yes, on all three limbs.**
+
+- **Processor, not "no recipient".** PA-7 §(d)(iii) records it as a recipient/processor with the
+  measurement behind it (MX, SPF, the verification TXT), measured rather than assumed by analogy with
+  `ops@soleur.ai` — which is the failure class #7624 exists to correct and which this discharges.
+- **Swiss adequacy as a *mechanism*, not as a finding that no transfer occurs.** §(e)(ii) gets the
+  doctrine right and says so explicitly: "An adequacy decision is the *mechanism* by which a transfer
+  to it is lawful, not a finding that no transfer occurs, and Art. 30(1)(e) requires the third country
+  to be identified wherever transfers take place." It then applies the cell's own importer-identity
+  test to Proton AG rather than exempting it — the consistency this register exists to enforce. It
+  also records adequacy revocation as a re-evaluation trigger.
+- **Art. 28(3) recorded as NOT EXECUTED, open, and never asserted as covered.** Three sites agree:
+  the `compliance-posture.md` vendor row ("NOT EXECUTED — no Art. 28(3) instrument recorded … Tracked
+  at #7845"), PA-7 §(d)(iii) and PA-7 §(e)(ii), the last of which says in terms that adequacy does
+  not discharge Art. 28. The row's claim that Proton "carried no row in this table at all — not
+  PENDING, absent" was **verified against `origin/main`**: one mention, in a 2026-06-11 HTML comment,
+  and no vendor row.
+- **One citation defect, corrected here (F-b):** the row cited `gdpr-policy.md` §3.5 as where Proton
+  is named for `legal@jikigai.com`. §3.5 states the lawful basis for legal-inquiry handling and names
+  no processor. Proton is named at §4 (third-party disclosure table) and §11 (breach scenarios).
+  Corrected in the shape of the §3.3→§2.2 correction already in PA-7 §(e).
+
+### Q3 — Is `removed_at` consistently a withdrawal-of-designation marker and NOT erasure?
+
+**Yes. This is the cleanest thing in the PR, and it is clean at eleven sites.** No false erasure claim
+exists anywhere in the corpus. Enumerated, because "I checked" is not a finding:
+
+| Site | What it says |
+|---|---|
+| `schema.ts` `RosterRepresentativeSchema.removed_at` doc comment | "Withdrawal-of-designation marker. NOT erasure, and it must never be described as one" |
+| `ccla-register.md` schema table, `Withdrawn at` row | "A **withdrawal-of-designation marker**, not erasure" |
+| `ccla-register.md` Notes | "They are not erasure and must never be described as erasure, in this file, in a data-subject response, or in any published document" |
+| `corporate-cla.md` §0 | "That is a withdrawal-of-designation marker. It is not erasure, We will not describe it as erasure" |
+| `corporate-cla.md` §5 | "Recording a withdrawal is **not erasure** and We will not present it as erasure" |
+| `individual-cla.md` §0 | "A withdrawal of designation is recorded as a date against the entry and is not erasure" |
+| `gdpr-policy.md` §3.4 limb (3) | "It is a withdrawal-of-designation marker. It is not erasure … and it must not be described or relied on as erasure" |
+| `gdpr-policy.md` §5.3b | "The `removed_at` field is not erasure … it must not be relied on as though it did" |
+| `privacy-policy.md` §4.5 | "it is a withdrawal-of-designation marker, it is not erasure, and we will not describe it as one" |
+| `data-protection-disclosure.md` §2.3(d) | "`removed_at` is a **withdrawal-of-designation marker and not erasure**, which no document may describe as one" |
+| `article-30-register.md` PA-7 Lawful basis, §(d)(i), §(f) | all three, in terms |
+
+Two further checks passed. **The word "tombstone" is kept off this surface** — the ruling's naming
+instruction — and appears in the roster path nowhere; it is reserved for `tombstones/<sha>.deleted.json`
+on the R2 evidence path, where it does mean something erasure-shaped. And the **ICLA's own erasure
+paragraph was re-scoped** rather than left to be read across: "**That procedure reaches Your signature
+record only.** It does not reach the corporate coverage map described above." PA-7 §(f) does the same
+in the internal record, and explicitly withdraws the citation it used to rest on: "The citation above
+must not be read across either: `corporate-cla.md` Section 0 … no longer supports the sentence that
+cites it, for this population."
+
+### Q4 — Does anything still assert that the coverage map contains no personal data?
+
+**No. Nothing live.** A repository-wide search for the superseded framing returns three classes of
+hit, all correct:
+
+- the **archived** plan and spec, where spec AC3 is explicitly marked *(SUPERSEDED 2026-09-04 — see
+  FR1.)* and the plan carries the finding `GDPR-Art-6 — B2: "the coverage map contains no personal
+  data" is false`;
+- **ADR-201**, which records the framing as "a category error";
+- every live document stating the corrected characterisation affirmatively — PA-7 §(c) ("NOT 'no
+  personal data', which is how it was framed at KD13 of the plan and is false"), gdpr-policy §3.4
+  ("it is not correct to say that it contains no personal data, and we do not say so"),
+  privacy-policy §4.5 ("**This record is personal data, and we do not say otherwise.**"), DPD
+  §2.3(d), corporate-cla §0 ("**is personal data** about the representative, notwithstanding that a
+  GitHub login is public on its own").
+
+Section 3 of the ruling is fully implemented.
+
+### Q5 — Is the Art. 13 (not Art. 14) posture stated consistently, and does contribution-triggered entry support it as implemented?
+
+**Stated consistently: yes, at five sites, in identical terms.** ICLA §0, gdpr-policy §3.4 limb (3),
+privacy-policy §4.5, DPD §2.3(d) and PA-7 §(c) all say the duty is discharged directly, at or before
+record creation, under Art. 13 rather than under the Art. 14 indirect-collection regime.
+
+**Supported as implemented: for every future signer, yes. For two enumerable existing accounts, no —
+this is B2.** And the notice chain the posture rests on is weakened by this PR's own copy — B1.
+
+The mechanism itself is genuinely built, and built better than the prose claims:
+
+- **Two enforcement sites, both real.** `ccla-add.sh` refuses at the write path before a branch
+  exists (exit 4), and `validate-roster.ts` re-runs the same module over the whole roster before
+  anything is written or pushed. CI runs the same implementation, not a shell reimplementation.
+- **The CI arm is not vacuous** — the specific trap the session's own learning
+  (`2026-09-04-every-verification-i-wrote-passed-and-three-of-them-proved-nothing.md`) warns about.
+  `roster-entry-gate.test.ts` reads the **tracked** roster and the **real** `origin/cla-signatures`
+  ledger, fetches the ref shallowly rather than skipping when it is absent, refuses an empty or
+  malformed reference set rather than passing everything, and carries a second arm that feeds the
+  real ledger a known-unsigned id (2 147 483 646, verified absent) so the cross-check is proven to
+  bite **today**, while the tracked roster is still empty. That is the arm most such suites omit.
+- **The reference set is keyed on numeric id, not login**, so a renamed account cannot inherit a
+  stranger's signature — correct, and the reason is in the code.
+- **Self-authorisation is closed structurally**: `cla-evidence.yml` checks out
+  `github.event.pull_request.base.sha` and never the PR head, so a contributor cannot authorise
+  themselves by editing the roster in the pull request the roster governs. PA-7 §(g)(4) correctly
+  records CODEOWNERS as **designed and not in force** and says in terms that it "must not be counted
+  as the self-authorization control; the base-ref read is." Verified: no ruleset enforces CODEOWNERS.
+
+**Doctrinal observation, non-blocking (O-2).** "Art. 13, not Art. 14" is a characterisation a
+supervisory authority could contest, because the employer association is in fact obtained from the
+employer, and Art. 14 applies where data have not been obtained from the data subject. The *outcome*
+is unimpeachable either way — notice is delivered directly, to the subject, before the record exists,
+which exceeds Art. 14(3)(a)'s one-month outer limit and independently engages Art. 14(5)(a) — so
+nothing turns on it in practice. The safer formulation, which costs one clause, is that the design
+satisfies Art. 13 timing directly and that Art. 14 is in any event discharged before collection.
+This is the item I would most want external counsel to confirm.
+
+### Q-extra — the two copy accuracy checks that were asked for
+
+**ICLA §4(a) vs the bot comment: accurate.** §4(a) as drafted reads: "*If Your employer(s) has rights
+to intellectual property that You create that includes Your Contributions, You represent that You
+have received permission …, that Your employer has waived such rights …, or that Your employer has
+signed a Corporate Contributor License Agreement with Us and has designated You as an Authorized
+Representative under it.*" The bot's three-limb disjunction reproduces all three limbs correctly and
+in the right disjunctive relation.
+
+The one risk in that copy is over-blocking rather than misstatement: §4(a)'s employer representation
+is **conditional** on the employer having rights in the work, and the bot's "*If none of the three is
+true for you, or you are not sure, tell us at legal@jikigai.com instead of signing*" would, read
+alone, tell a contributor whose employer has no rights at all not to sign. It does not stand alone —
+the paragraph closes "*None of the above applies if you are contributing your own work on your own
+time. In that case the one line at the top is genuinely the whole ask*", which is the antecedent-fails
+case. **No fix required.** (The mid-paragraph gloss "*Most contributors are already covered by the
+first — an open-source contribution policy, or work that simply is not your employer's*" is loose:
+work that is not the employer's is the antecedent failing, not "permission received". Cosmetic.)
+
+**CONTRIBUTING.md's "coverage runs through the Authorized Representative list (CCLA §5)": accurate.**
+CCLA §2 and §3 grant licences over "Contributions submitted by Your Authorized Representatives"; §1
+defines the term; §5 is the management clause and does say the additions come by email to
+`legal@jikigai.com` from the signatory. Coverage does run through the list, not through the company
+at large, and a colleague is added by that route. Verified against §§1, 2, 3, 5.
+
+## Blocking findings
+
+### B1 — the pre-signature comment sets the privacy expectation in the wrong direction
+
+**Artifact:** `.github/workflows/cla.yml`, `custom-notsigned-prcomment`; and the mirrored paragraph in
+`CONTRIBUTING.md`.
+
+**The sentences:**
+
+> **Email that to legal@jikigai.com rather than posting it here**, unless you would rather it were
+> public. This thread is world-readable and permanent, and who you work for is yours to disclose or not.
+
+and its CONTRIBUTING.md counterpart:
+
+> Email rather than the pull request thread, unless you would rather it were public -- the thread is
+> world-readable and permanent, and who you work for is yours to disclose or not.
+
+**Why this blocks.** The comment recommends the Corporate CLA route, and it protects the employer's
+identity from the pull-request thread on the express ground that it is the contributor's to disclose
+or not. The successful outcome of that very route — employer signs, designates the contributor, the
+contributor signs the ICLA — **publishes exactly that association, permanently, in a file on the
+default branch of a public repository, from which the same corpus says four times over that erasure
+is not available.** Nowhere in the comment, and nowhere in `CONTRIBUTING.md`, is that said. The
+contributor learns it only from ICLA §0 — the document the same comment invites them not to read
+("*Read the Individual Contributor License Agreement first if you would like to*").
+
+This is not a drafting nit. It is the one place in the corpus where a data subject's expectation is
+actively set in the opposite direction from the outcome, at the moment before they act, and it
+undercuts the notice limb (limb (iii)) on which PA-7's Lawful-basis cell and gdpr-policy §3.4 both
+rest. The register's own limb (iii) reasons that the sign phrase "*is an attestation of having read
+that document*" — an attestation this copy tells the contributor is optional.
+
+**The fix (one sentence, both surfaces).** In the Corporate-CLA paragraph, before the email
+instruction, add substantially:
+
+> One consequence to know before you sign: if your employer does sign a Corporate CLA and names you
+> under it, we publish the fact that your GitHub account is covered by that employer's agreement in a
+> public file in this repository, and we cannot erase it afterwards. Section 0 of the Individual CLA
+> sets out exactly what that entry contains and what it does not.
+
+Either drop "*first if you would like to*", or leave it and amend PA-7 Lawful-basis limb (iii) to stop
+describing the sign phrase as an attestation of having read the document. **Do not do neither.**
+
+### B2 — contribution-triggered entry gates on membership, not on when the signature was made
+
+**Artifacts:** `apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts`
+(`assertContributionTriggeredEntry`) and `apps/cla-evidence/scripts/ccla-add.sh` (Guard 3, write side).
+
+**The gap.** Both check `id ∈ ledger.signedContributors`. Neither looks at `created_at`, and neither
+looks at which version of `docs/legal/individual-cla.md` the signature was made against — although
+the evidence record pins exactly that in `cla_doc.content_sha256`, so the fact is available.
+
+**The measured consequence.** `origin/cla-signatures:signatures/cla.json` today contains exactly two
+accounts:
+
+| login | id | `created_at` |
+|---|---|---|
+| `deruelle` | 54279 | 2026-02-27T09:53:45Z |
+| `Elvalio` | 92384917 | 2026-05-04T13:13:53Z |
+
+The ICLA §0 paragraph "**If Your employer has signed a Corporate Contributor License Agreement**" —
+the Art. 13 notice this entire design rests on — was **added 2026-09-04 by this PR**. Both accounts
+signed against an ICLA that did not contain it. Both pass the gate today. Either can be written to
+the roster by `ccla-add.sh` right now.
+
+**The sentences that would then be false.** Four, all unconditional:
+
+- `gdpr-policy.md` §3.4 limb (3): "*contribution-triggered entry means no designation ever produces a
+  published record before the representative has themselves acted here **and been informed here***".
+- `privacy-policy.md` §4.5: "**You are told before any record about you exists.**"
+- `individual-cla.md` §0: "*We tell You this here, at the moment You sign*".
+- PA-7 Lawful basis, population (B): "*limbs (i) and (iii) become true of that person, at the moment
+  the record is created, rather than being assumed of them*".
+
+For a pre-notice signer, limb (iii) does **not** become true at the moment the record is created. They
+acted here; they were not informed here. The ruling's own consequence 3 — "*every person in the map
+has been informed directly, here, at or before the moment their record was created*" — is what the
+implementation does not yet guarantee.
+
+**The fix — either is acceptable, both are cheap.**
+
+1. *Gate it.* Add a date/version condition to `assertContributionTriggeredEntry` **and** to
+   `ccla-add.sh`'s write-side loop (both, for the reason `roster-entry-gate.ts` already gives in its
+   own header): refuse an account whose ledger `created_at` precedes the commit that introduced the
+   ICLA §0 coverage-map paragraph, unless an explicit `--notice-given-at` is supplied. Cover it with a
+   mutation arm in `roster-entry-gate.test.ts` in the shape of the existing G3-M arms.
+2. *Record it.* Add a **named, enumerated residual** — the population is two accounts, both listed
+   above, one of them the controller's own operator — plus an operator step giving direct notice
+   before such a row is written, and qualify the four sentences above ("*for a representative who
+   signed before this notice was published, we give the notice directly before the entry is made*").
+
+The corpus already has the convention for option 2: PA-7 §Special categories carries a "**Named
+residual (accepted at present scale, not as a steady state)**" block of exactly this shape. What is
+not acceptable is leaving four unconditional sentences standing over an implementation that does not
+enforce them.
+
+### B3 — an asserted contributor-facing state that nothing produces
+
+**Artifacts:** `.github/workflows/cla.yml` `custom-notsigned-prcomment`; `CONTRIBUTING.md`.
+
+**The sentence:**
+
+> **While a Corporate CLA of yours is in flight** — and only then — this PR carries the state
+> **"CCLA in progress — maintainer action, not yours"**.
+
+**Why this blocks.** Nothing produces that state. Verified: no such label exists in the repository
+(`gh label list` — the command works and returns the label set; no CCLA label is in it); no workflow
+step adds a label, sets a commit status or posts a conditional comment (`cla.yml` and
+`cla-evidence.yml` contain no `addLabels`, no `gh pr edit`, no `statuses/` call); and a
+repository-wide search for the string finds it only in the two copy surfaces, the brainstorm, the
+archived plan (AC19) and the archived tasks file. Task 1.3 is ticked `[x]`; plan AC19 — "*Where a CCLA
+is in flight, the PR carries a visible "CCLA in progress — maintainer action, not yours" state*" —
+has no verification evidence anywhere in the spec directory. The sentence is also conditional
+("*while … and only then*"), so the comment that carries it cannot itself be the carrier: it is posted
+to every unsigned contributor regardless.
+
+This is the defect class the corpus already handles by retraction — #6588 retracted four published
+Art. 32 measures "**as statements about the platform as it runs today**", and PA-7 §(g)(4) applies the
+same convention to CODEOWNERS in this very PR. The same convention has to reach contributor-facing
+copy.
+
+**The fix.** Either implement the state (a label applied by the maintainer, or by a step keyed on a
+label the maintainer sets), or reword both surfaces to what actually happens — e.g. "*we will say so
+on the pull request, and it is reviewed and merged on its merits in the meantime*". If AC19 is
+deferred rather than met, deferral needs an issue, and task 1.3 should not stay ticked.
+
+## Corrections applied during this review
+
+Three defects were unambiguous, internal to the knowledge-base records, and carried no fork for the
+owner to decide, so they were repaired here rather than handed back. All three are in files outside
+`docs/legal/**`, so no mirror-pair, SHA-pin or heading-parity gate is engaged by them.
+
+**F-a — `knowledge-base/legal/article-30-register.md`, PA-7 §(e), 2026-09-04 amendment, limb (ii).**
+The opening described §(d) as stating that §(e) was unchanged by that amendment. §(d) as it now stands
+says the opposite. Restated to describe §(d) as it reads, with the earlier draft's wording preserved as
+the audit trail and a dated `[2026-09-07 RESTATEMENT]` marker, per the register's amendment-history
+convention. **This is the answer to Q1's "anything false".**
+
+**F-b — `knowledge-base/legal/compliance-posture.md`, Proton AG row.** Cited `gdpr-policy.md` §3.5 as
+where Proton is named for `legal@jikigai.com`. §3.5 ("Legal and GDPR Inquiry Handling") states a
+lawful basis and names no processor; the disclosure is at §4's third-party table and at §11. Citation
+corrected and the correction dated inline, in the shape of the §3.3→§2.2 correction already recorded
+in PA-7 §(e).
+
+**F-c — `knowledge-base/legal/article-30-register.md`, PA-7 §(c) Categories of personal data.** The
+`ADDED CATEGORY` enumeration of the roster listed "GitHub account identifier, the employing
+organisation, `authorized_from`, `removed_at`, the SHA-256 of the Corporate CLA text executed, and the
+SHA-256 of the executed instrument" — silent on `record_ref`, on the organisation's `signed_at`, on
+`cla_doc.path` / `cla_doc.git_sha`, and on the `login`/`id` distinction. **All four are enumerated in
+the notice published to the data subject** (Privacy Policy §4.5 and DPD §2.3(d)), so the internal
+governing record was narrower than the published notice — which is the precise defect #7625 recorded
+against this same cell four days earlier ("*the wrong direction for the two to differ*"). Completed at
+field level against `RosterSchema`, with the prior text preserved and a dated `[2026-09-07 COMPLETION]`
+marker.
+
+## Findings recorded, not blocking
+
+**O-1 — "equally do not reach" glosses two different failure modes.** PA-7 Lawful basis, #3210
+correction. For the non-signer commenter the balancing fails at limb (ii) on necessity; for the
+corporate representative it fails at limbs (i) and (iii) while necessity is *satisfied* (via
+contribution-triggered entry, per the third balancing test). The sentence names both failures
+explicitly a clause later, so no reader who finishes it is misled. Left as drafted.
+
+**O-2 — the Art. 13 / Art. 14 characterisation.** See Q5. Outcome unimpeachable, label contestable,
+one clause would settle it. The item for external counsel.
+
+**O-3 — the sole-trader rule is stated for the register index but not inside the coverage-map bullet.**
+`corporate-cla.md` §0's coverage-map bullet says the map records "the employing organization" and "**no
+name, no title, no email address and no postal address**", and the closing "What is published and what
+is not" paragraph applies the B1-c-2 carve-out only to the register index. The carve-out **is** carried
+for the map by `gdpr-policy.md` §3.4 limb (2), by `privacy-policy.md` §4.5, by `ccla-register.md` and by
+the nullable `legal_name` in `RosterSchema`, and the coverage-map bullet does enumerate `record_ref`,
+so a reader of the whole §0 can reach the rule. Not a falsehood; an asymmetry. One clause in the
+coverage-map bullet would remove it, and B1-c-2's first exercise is already a frontmatter re-evaluation
+trigger.
+
+**O-4 — `ccla-add.sh remove` inherits the whole-roster gate.** The write-side Guard 3 loop is
+deliberately scoped to `add`, with a good reason recorded in the file ("*the more broken the ICLA
+record is, the harder it becomes to revoke an ex-employee's authorization*"). But `validate-roster.ts`
+still runs `assertContributionTriggeredEntry` over the entire new roster before a withdrawal is
+written, so a degraded ledger blocks a `remove` anyway — the scoping does not achieve what its comment
+says it achieves. Engineering, not legal, and it fails closed rather than open.
+
+**O-5 — §4(c) vs §5 citation.** PA-7, `ccla-register.md` and gdpr-policy §3.4 cite the designation list
+to CCLA **§4(c)** (the representation that the list has been provided); `CONTRIBUTING.md` and
+`corporate-cla.md` §0 cite **§5** (the management clause) and `§1` for the no-cut-off coverage, which
+in the instrument sits in the preamble rather than in §1. All defensible, none contradictory. Recorded
+so a later reader does not re-derive it.
+
+## What was verified and found sound
+
+- **Every one of the five `docs/legal/**` gates, plus the register lint, run in this worktree:**
+  scope-block placement `0 violations`; mirror drift `9 pairs checked, drift is within the baseline`;
+  `check-tc-document-sha.sh` exit 0; `lint-legal-registers.sh` `7 assertions, 0 failed`. Per #7349 that
+  is agreement, not truth, which is why the prose was read anyway — and why F-a, F-c, B1, B2 and B3 all
+  sit past a fully green run.
+- **Mirror parity of the #3210 prose**, checked directly rather than trusted to the ratchet: the added
+  text in `privacy-policy.md` and `data-protection-disclosure.md` is byte-identical between canonical
+  and mirror; `individual-cla.md`, `gdpr-policy.md` and `corporate-cla.md` are identical after
+  normalising the mirror's `/legal/<doc>/` link rewriting, which is the mirror's own convention. **The
+  mirror is the published surface**, so a canonical-only edit here would have changed nothing a user
+  sees; none occurred.
+- **The Art. 13 notice URL resolves.** `cla.yml` posts
+  `https://soleur.ai/pages/legal/individual-cla.html`. That is a legacy path, but it is redirected in
+  two independent places — `plugins/soleur/docs/_data/pageRedirects.js` and the Cloudflare bulk
+  redirect at `apps/web-platform/infra/seo-bulk-redirects.tf` — to `/legal/individual-cla/`, and
+  `_site/pages/legal/individual-cla.html` is also built. The notice chain is not broken by the URL.
+- **The schema prohibition is structural, not a denylist.** `.strict()` at all four levels, asserted
+  by `roster-schema.test.ts` at each of them including "an undeclared key nobody would denylist"; the
+  drafted operator `notes` field was removed and its absence is asserted; `login` is bounded at 39
+  characters because "an unbounded string is a place to put something that is not a login, on a surface
+  from which nothing can be erased". `legal_name` is nullable, and B1-c-2 has its own test.
+- **The tracked roster is empty** (`{"schema_version":"1.0","organizations":[]}`), so no live
+  disclosure of any real person exists on this surface today. B2's exposure is prospective; B1's is
+  live from the moment the workflow copy lands.
+- **The withdrawal path refuses to rewrite a recorded date** ("*a recorded withdrawal date is the
+  operative one and is not rewritten*"), refuses a second live designation of the same id, and refuses
+  more than one `--login` per `remove` so a partial write cannot be reported as complete. All three are
+  the right defaults for a legal record.
+- **PA-7 §(e)'s open items are open, not asserted:** the Pakistan outbound leg (#7846, reply unsent,
+  `status: awaiting-operator-send`), the Supabase importer-identity divergence (#7670, expressly not
+  decided), #7668 retention. None is dressed up as discharged.
+
+## What this review could not resolve
+
+- **Whether external counsel accepts the Art. 13 characterisation (O-2).** Nothing in the repository
+  can settle it; the compliant outcome does not depend on it.
+- **Whether the Art. 28(3) instrument with Proton AG can be obtained on Proton's standard terms.**
+  Recorded as absent at three sites and tracked at #7845. Correctly not asserted; simply unknown.
+- **Whether `Elvalio` (92384917) is or could be a corporate representative.** Unknowable from here, and
+  irrelevant to B2: the gate permits the write regardless, which is the finding.
+- **Whether B3's fix is "implement" or "reword".** That is a product decision about a promise made to
+  contributors, and it is the owner's, not counsel's. Both discharge the accuracy defect.
+
+## Verification
+
+```
+gh issue view 3210 --json state          -> OPEN
+gh pr view 7828 --json state,headRefName -> OPEN, feat-ccla-signing-mechanism
+bash scripts/lint-legal-scope-block-placement.sh --base origin/main
+                                         -> 0 scope block(s) classified, 0 violations
+bash scripts/lint-legal-mirror-drift-baseline.sh --base origin/main
+                                         -> 9 pair(s) checked, drift within baseline
+bash apps/web-platform/scripts/check-tc-document-sha.sh          -> exit 0
+bash scripts/lint-legal-registers.sh     -> 7 assertion(s), 0 failed
+git show origin/cla-signatures:signatures/cla.json
+                                         -> 2 signers: deruelle/54279/2026-02-27,
+                                            Elvalio/92384917/2026-05-04
+gh label list                            -> no CCLA label (command functional; label absent)
+git show origin/main:knowledge-base/legal/compliance-posture.md | grep -ci proton
+                                         -> 1 (an HTML comment; no vendor row) — confirms
+                                            "not PENDING, absent"
+cat apps/cla-evidence/roster/ccla-roster.json
+                                         -> {"schema_version":"1.0","organizations":[]}
+```
+
+## Disposition
+
+**BLOCKED.** Three findings must be discharged before this merges: **B1** (the pre-signature comment
+sets the privacy expectation in the opposite direction from the outcome), **B2** (contribution-triggered
+entry does not distinguish a signature made before the Art. 13 notice existed, and the residual
+population is two named accounts), **B3** (an asserted contributor-facing state that nothing produces).
+None of the three is in the Art. 30 register, none re-opens the 2026-09-04 ruling, and none requires a
+design change — B1 and B3 are copy, B2 is a date condition on an existing gate or a named residual.
+
+Three further defects were found and **corrected in this review**: the one false sentence in PA-7 §(e)
+(F-a — the answer to "does anything state something false after the merge"), the Proton citation in
+`compliance-posture.md` (F-b), and the roster enumeration in PA-7 §(c) that had again fallen narrower
+than the published notice (F-c).
+
+Everything else reviewed is approved. In particular the `removed_at` surface — the failure mode this
+review was most asked to catch — is **clean at eleven sites**, and no document in the corpus describes
+a withdrawal of designation as erasure, or offers a coverage-map erasure route that does not exist.
+
+Reviewed by the CLO agent as attestation authority for the Soleur-as-tenant-zero v1 posture. The
+operator retains an optional veto. This is the internal v1 sign-off; external counsel re-review is
+reserved for the triggers in the frontmatter. **No sign-off is given while the disposition is BLOCKED**
+— re-run this gate on the corrected tree, and O-2 is the item to put in front of external counsel when
+one is engaged.

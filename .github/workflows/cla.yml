@@ -71,9 +71,11 @@ jobs:
 
             **Email that to legal@jikigai.com rather than posting it here**, unless you would rather it were public. This thread is world-readable and permanent, and who you work for is yours to disclose or not.
 
+            **What happens if that Corporate CLA is signed.** Once your employer executes one and names you under it, we publish an entry linking your GitHub account to that organisation in a public file in this repository (`apps/cla-evidence/roster/ccla-roster.json`). It carries no name, no email and no postal address — but the account-to-employer association is itself personal data about you, it is created only at or after you sign the line above, and once written it is copied into every clone and fork and **cannot be erased**. Section 0 of the Individual CLA is the full notice, and it is worth reading before you sign rather than after.
+
             One thing we do have to ask you, because signing says it on your behalf. Section 4(a) of the Individual CLA is a representation about your employer's position: that your employer has given you permission to contribute, **or** has waived its rights in this work, **or** has signed a Corporate CLA naming you. Most contributors are already covered by the first — an open-source contribution policy, or work that simply is not your employer's. **If none of the three is true for you, or you are not sure, tell us at legal@jikigai.com instead of signing** — you need not say why on this thread. We will sort the Corporate CLA out first and come back to you. Signing is quick precisely because it is a real statement, and we would rather wait than have you make one that is not accurate.
 
-            **While a Corporate CLA of yours is in flight** — and only then — this PR carries the state **"CCLA in progress — maintainer action, not yours"**. It is reviewed and merged on its merits in the meantime; that paperwork is ours to finish, and any delay in it is ours rather than a request for anything further from you.
+            **While a Corporate CLA of yours is in flight**, your pull request is reviewed and merged on its merits exactly as any other. That paperwork is ours to finish and any delay in it is ours; nothing further is being asked of you, and the corporate side never gates your merge.
 
             None of the above applies if you are contributing your own work on your own time. In that case the one line at the top is genuinely the whole ask.
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
