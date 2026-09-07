@@ -2,8 +2,8 @@
 title: "Two live API tokens printed into an agent transcript by `bash -x`"
 date: 2026-09-04
 incident_pr: "#7797"
-incident_window: "2026-09-03 ~15:30Z (single command); exposure persists while the credentials remain valid"
-recovery_at: "n/a — not yet recovered; both credentials are still live"
+incident_window: "2026-09-03 ~15:30Z (single command); Better Stack exposure ended 2026-09-03T20:10Z, Sentry exposure persists"
+recovery_at: "partial — BETTERSTACK_API_TOKEN_READONLY rotated 2026-09-03T20:10Z; SENTRY_AUTH_TOKEN still live"
 suspected_change: "none — no change caused this; `bash -x` on a bearer-carrying script is the standing hazard"
 brand_survival_threshold: aggregate pattern
 status: ongoing
@@ -45,6 +45,12 @@ this one are still valid**. Rotation is a credential-entry gate (it requires an
 authenticated Sentry session to mint a replacement) and is the operator's to
 perform; it is tracked on #7797, which stays open for exactly that reason.
 
+> **Superseded 2026-09-07 (#7797):** "both credentials are still valid" was
+> **already false when this PIR was written**. `BETTERSTACK_API_TOKEN_READONLY`
+> had been rotated on 2026-09-03T20:10Z — nineteen hours before — and the leaked
+> value verified dead. Only `SENTRY_AUTH_TOKEN` remains live (re-verified
+> 2026-09-07: `GET /api/0/organizations/` → 200). See the Addendum below.
+
 ## Symptom
 
 Two live third-party API tokens rendered in cleartext in a session transcript.
@@ -54,7 +60,7 @@ not an availability one, which is precisely why nothing alarmed.
 ## Incident Timeline
 
 - **Start time (detected):** 2026-09-03T15:33:16Z (issue #7797 filed)
-- **End time (recovered):** not yet — credentials still live
+- **End time (recovered):** partial — Better Stack 2026-09-03T20:10Z; Sentry outstanding
 - **Duration (MTTR):** open
 
 | Actor | Time (UTC) | Action |
@@ -62,13 +68,15 @@ not an availability one, which is precisely why nothing alarmed.
 | human | 2026-09-03 ~15:30 | Ran `cutover-verify.sh` under `bash -x` to debug a failing guard; both bearer tokens printed into the transcript. |
 | human | 2026-09-03T15:33Z | Detected on sight and filed #7797 as `priority/p0-critical` / `type/security`. |
 | agent | 2026-09-03 | `cutover-verify.sh` given a self-refusal — the first script in the repo to carry one. |
+| agent | 2026-09-03T20:10Z | **Better Stack half rotated and verified dead.** Replacement minted via Playwright dashboard automation, parity proved on all three consumer surfaces, written to Doppler `soleur/prd_terraform` over stdin, leaked token `63419` deleted; it then returned 401 on all three. Not operator-only after all. Recorded in [this comment](https://github.com/jikig-ai/soleur/issues/7797#issuecomment-3253440461) — the 401 is that comment's report, not a measurement this PIR can reproduce (the leaked value is deliberately unrecoverable). |
 | agent | 2026-09-04 | ADR-202 recorded; commit-time lint built; 22 further scripts remediated. |
 | agent | 2026-09-04 | Review found the guard narrower than its own property in nine ways; all fixed. |
-| human | pending | Rotate both credentials into Doppler `soleur/prd` and `soleur/prd_terraform`. |
+| human | pending | Rotate `SENTRY_AUTH_TOKEN` — the remaining half, a genuine credential-entry gate. |
 
 ## Participants and Systems Involved
 
-Operator (detection, rotation), Claude Code (remediation), Sentry and Better
+Operator (detection, and the pending Sentry rotation), Claude Code
+(remediation, and the Better Stack rotation), Sentry and Better
 Stack (credential issuers), Doppler `soleur/prd_terraform` (credential store).
 
 ## Detection (+ MTTD)
@@ -92,14 +100,24 @@ user — a routine debugging reflex on a credential-carrying script.
 
 ## Resolution
 
-Not yet resolved. The *recurrence* path is closed (see below); the *exposure* is
-not, and will not be until both tokens are rotated.
+Partially resolved. The *recurrence* path is closed (see below). The Better Stack
+half of the *exposure* is closed — rotated 2026-09-03T20:10Z, leaked value revoked.
+The Sentry half is open and will be until `SENTRY_AUTH_TOKEN` is rotated.
 
 ## Recovery verification
 
-Pending. Recovery is verified when a Sentry API call using the old
-`SENTRY_AUTH_TOKEN` returns 401 and the Doppler values in both `soleur/prd` and
-`soleur/prd_terraform` are the replacements.
+Better Stack: **done** — the leaked token returns 401 on all three consumer
+surfaces (2026-09-03).
+
+Sentry: pending. Recovery is verified when a Sentry API call using the old
+`SENTRY_AUTH_TOKEN` returns 401 and the Doppler value in **`soleur/prd_terraform`**
+is the replacement. Only that config is in scope: `BETTERSTACK_API_TOKEN_READONLY`
+exists solely in `prd_terraform`, and while `SENTRY_AUTH_TOKEN` is present in both
+`prd` and `prd_terraform` the two hold *different* tokens — verified by equality
+comparison only, with no value, length or digest recorded. The leaked one is the
+`prd_terraform` value, which is what #7797 records as the source. An earlier
+revision of this section said "both `soleur/prd` and `soleur/prd_terraform`",
+which would send the operator to rotate an uninvolved credential.
 
 ---
 
@@ -127,9 +145,10 @@ Pending. Recovery is verified when a Sentry API call using the old
 
 ### Services Impacted
 
-None degraded. The blast radius is the *capability* the two tokens confer:
+None degraded. The blast radius was the *capability* the two tokens confer:
 Sentry org read/write via a user auth token, and Better Stack read-only API
-access. No evidence of use by any third party.
+access. The Better Stack half was retired on 2026-09-03; the Sentry capability
+remains exposed. No evidence of use by any third party.
 
 ### Customer Impact (by role)
 
@@ -184,6 +203,63 @@ review.
 
 | Issue | Action | Status |
 |---|---|---|
-| #7797 | Rotate `SENTRY_AUTH_TOKEN` and `BETTERSTACK_API_TOKEN_READONLY` into Doppler `soleur/prd` and `soleur/prd_terraform`; verify the old Sentry token returns 401. Operator-only (credential-entry gate). | open |
+| #7797 | Rotate `SENTRY_AUTH_TOKEN` in Doppler `soleur/prd_terraform`; verify the old token returns 401. Operator-only (credential-entry gate — established by a Playwright attempt reaching the login form at `sentry.io/settings/account/api/auth-tokens/`, per `hr-never-label-any-step-as-manual-without`; an API 403 is explicitly NOT operator-only evidence and the #7797 thread already retracted that inference). Better Stack was already rotated 2026-09-03. | open |
 | #7842 | Build the complements the lint cannot reach: the PreToolUse hook for uncommitted `bash -c` and the CI `run:`-body form lint. | open |
 | #7843 | Sweep 61 scripts / 108 call sites from argv bearer tokens to `curl --config -`; a traced parent leaks a callee's argv even when the callee's own preamble is clean. | open |
+
+## Addendum — 2026-09-07 (#7797)
+
+**This PIR shipped with a false claim about its own subject.** It stated that
+both exposed credentials were still valid. `BETTERSTACK_API_TOKEN_READONLY` had
+already been rotated on **2026-09-03T20:10Z** — the leaked token
+(`heartbeat-live-reconcile (read-only)`, id `63419`) deleted and reported
+returning 401 on all three consumer surfaces, in a comment on #7797.
+
+An earlier revision of this addendum said the rotation preceded this document by
+"nineteen hours", derived from the `date: 2026-09-04` frontmatter. That is not
+verifiable: the only in-repo timestamp for this file is its squash commit,
+`2026-09-06T15:19:14Z` (`git log --diff-filter=A`), which is **67 hours** after
+the rotation. Asserting an interval from a hand-written frontmatter date, inside
+an addendum whose subject is restating unverified claims, was the same error one
+level down. What is verifiable is the ORDER: the rotation happened first, and
+this document contradicted it.
+
+Doppler activity shows *a* `prd_terraform` secret updated at 20:07:19Z, three
+minutes before that comment. It does not name the secret, so it is consistent
+with the rotation rather than corroboration of it.
+
+**Corrected state, re-measured 2026-09-07 (HTTP status only; no value printed):**
+
+| Credential | State |
+|---|---|
+| `BETTERSTACK_API_TOKEN_READONLY` | rotated 2026-09-03; leaked value revoked (401) |
+| `SENTRY_AUTH_TOKEN` (`prd_terraform`) | **still live** — `GET /api/0/organizations/` → 200 |
+
+One credential remains exposed, not two.
+
+**How the error happened, because it is the same one this incident is about.**
+The claim was carried forward from the issue's *opening* body — written at
+15:33Z on 2026-09-03, before the rotation — and never re-checked against the
+thread that had already superseded it. Every later restatement (the PR body, the
+post-merge verification comment, this PIR) inherited it, and each restatement
+made it look better-established. That is precisely the failure mode recorded in
+this PR's own learning file as *"a framing INHERITED from a sibling artifact,
+pasted into a context whose premise you never re-checked"* — committed here
+against the very issue that documents it. The operator caught it; no gate did.
+
+**What would have caught it:** one `gh issue view 7797 --json comments` before
+asserting a credential's liveness. A credential's state is not a property of the
+issue that reported it — it is live infrastructure, and the only honest source is
+a probe or the rotation record, never the opening description. The check is
+cheaper than the correction sweep it prevents: correcting it took nine edits in
+this file plus a retraction comment on #7797 and an edit to PR #7858's body —
+and the first pass at those nine missed three of them.
+
+**Also corrected by that record:** the remediation note assumed the Better Stack
+half was an operator dashboard trip. It was not — an agent minted the
+replacement via Playwright automation, proved old-vs-new parity on three
+surfaces, wrote to Doppler over stdin, and deleted the old token. Only the Sentry
+half is a genuine credential-entry gate, and the 2026-09-03 record proposes
+retiring even that by migrating the ~8 `scripts/followthroughs/*.sh` consumers
+off the *user* auth token onto an org-level Internal Integration (ADR-031's
+`iac-terraform-prd` shape), which would make the next rotation agent-doable.
