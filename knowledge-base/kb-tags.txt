@@ -144,6 +144,7 @@ adr-149
 adr-151
 adr-155
 adr-166
+adr-181
 adr-193
 adr-194
 adr-corpus
@@ -385,6 +386,7 @@ backfill-migration
 background-tasks
 backlog
 backtick
+backticks
 badge
 bail-early
 baked-scripts
@@ -951,6 +953,7 @@ creation
 credential
 credential-boundary
 credential-exfil
+credential-forwarding
 credential-handling
 credential-handoff
 credential-helper
@@ -1334,6 +1337,7 @@ error-handling
 error-mapping
 esbuild
 escape-hatch
+escape-testing
 escaping
 eslint
 esm
@@ -1612,6 +1616,7 @@ git-data
 git-data-api
 git-diff
 git-env-vars
+git-environment
 git-fsck
 git-grep
 git-history
@@ -3475,6 +3480,7 @@ source-vs-symptom
 sourcing-decision
 space
 spacing
+span-replacement
 spawn
 spawn-env
 spawn_subagent
@@ -3969,6 +3975,7 @@ verdict
 verdict-cache
 verification
 verification-decay
+verification-defects
 verification-discipline
 verification-gate
 verification-grep

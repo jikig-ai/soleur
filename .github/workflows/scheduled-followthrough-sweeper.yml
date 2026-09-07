@@ -78,6 +78,22 @@ jobs:
           # above (ClickHouse); this is the account-wide uptime API token. Fail-safe TRANSIENT
           # (never a false PASS/close) if unset.
           BETTERSTACK_API_TOKEN: ${{ secrets.BETTERSTACK_API_TOKEN }}
+          # #7855 betterstack-roundtrip-latency-7855.sh — the INGEST (write) credential for the
+          # git-data source (2734275). That probe writes a marker and reads it back, which is the
+          # only way to tell an ACKNOWLEDGEMENT from STORAGE. Distinct from both sets above — QUERY_* are ClickHouse
+          # read creds and API_TOKEN is the uptime API; this is a write token scoped to a source.
+          #
+          # ONLY the git-data token is wired, and the SHARED source's BETTERSTACK_LOGS_TOKEN is
+          # deliberately absent. NOT because nothing reads it — `git-data-rung2-evidence-capture.sh`
+          # reads it as a fallback — but because withholding it makes Rule 2 hold by CAPABILITY
+          # here rather than only by a string comparison: a job that does not hold the shared
+          # source's write credential cannot land a marker there whatever its code says, and a
+          # marker there would manufacture the very liveness the rung-2 capture consults as its
+          # control, at the gate authorising a host's birth.
+          #
+          # Unset resolves to "" and the probe reports ROUNDTRIP_UNKNOWN (exit 3 = TRANSIENT),
+          # never a false PASS and never a FAIL blaming the vendor for our own missing credential.
+          GIT_DATA_BETTERSTACK_LOGS_TOKEN: ${{ secrets.GIT_DATA_BETTERSTACK_LOGS_TOKEN }}
           # #6168 autovacuum-thrash-6168.sh — read-only pg_stat_all_tables query
           # against prod via the Supabase Management API (soak gate for PR #6164).
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}

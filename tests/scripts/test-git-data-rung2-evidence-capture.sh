@@ -327,8 +327,16 @@ if [[ "$rc" -eq 2 ]]; then pass "zero foreign rows + an UNREACHABLE source => TR
   fail "zero foreign rows + an UNREACHABLE source => TRANSIENT" "$rc" "$out"; fi
 
 # AND THE INSTRUMENT ITSELF MUST FAIL CLOSED. An absent probe is "cannot tell", never "fine".
-BETTERSTACK_INGEST_PROBE="$TMP/no-such-probe.sh" \
-  out="$(run_sut --out "$TMP/evidence-noprobe.env")"; rc=$?
+#
+# THE ASSIGNMENT GOES INSIDE THE SUBSHELL (#7855, found at ship). `VAR=x out="$(...)"` is an
+# ASSIGNMENT LIST, not a command with an environment prefix — bash assigns both names in THIS
+# shell, and since BETTERSTACK_INGEST_PROBE is exported above, the export persisted. Every later
+# arm that reached the probe leg therefore ran against a probe that does not exist, and the
+# `make_probe 0` on the next line rewrote a file nothing read any more. Measured: that made
+# GUARD1/H3b vacuous — it passed on "the ingest probe is unreadable", not on the property it
+# names, and the identical input against a READABLE acknowledging probe exits 0 and writes
+# RUNG2_BOOT_REHEARSAL=PASS.
+out="$(BETTERSTACK_INGEST_PROBE="$TMP/no-such-probe.sh" run_sut --out "$TMP/evidence-noprobe.env")"; rc=$?
 if [[ "$rc" -eq 2 ]]; then pass "zero foreign rows + an UNREADABLE probe => TRANSIENT, not a verdict"; else
   fail "zero foreign rows + an UNREADABLE probe => TRANSIENT, not a verdict" "$rc" "$out"; fi
 make_probe 0
@@ -981,12 +989,270 @@ else
   fail "ARM 24: a fatal outside the newest-50 window still FAILs, and writes no evidence file" "$rc" "$out"
 fi
 
-_ran=$((passes + fails))
-if [[ "$_ran" -lt 62 ]]; then
-  fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 56. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+# ── GUARD 1 (#7855): the capture never names a cause it did not measure ───────────
+#
+# Run 33888071954 printed, twenty times:
+#   "TRANSIENT: the Better Stack query transport exited 22 (unreachable or unauthorised)."
+# Neither cause was measured. The transport was reachable and the credential was valid — the
+# read failed because the SOURCE'S TABLE DOES NOT EXIST, which Better Stack creates lazily on
+# the first stored row. Measured live on 2026-09-04, and re-measured while writing these arms:
+#
+#   remote(t520508_soleur_git_data_prd_logs)            -> rc 22, Code: 701 CLUSTER_DOESNT_EXIST
+#   s3Cluster(primary, t520508_soleur_git_data_prd_s3)  -> rc 22, Code: 669 NAMED_COLLECTION_DOESNT_EXIST
+#   remote(t520508_soleur_inngest_vector_prd_3_logs)    -> rc 0,  {"n":0}
+#
+# The hot and archive arms fail with DIFFERENT codes, so a classifier keyed on either string is
+# half a classifier. The CONTROL READ is the discriminator; the codes ride along as the reason.
+#
+# The three states below are the whole property. Only the middle one is about the rehearsal
+# host, and before this change all three printed the same sentence.
+export G1_MODE_FILE="$TMP/g1-mode"
+cat > "$TMP/g1-stub.sh" <<'G1STUB'
+#!/usr/bin/env bash
+mode="$(cat "$G1_MODE_FILE" 2>/dev/null || echo dark)"
+# Mode 2 (flag form) is the control read bs_absence_classify performs. It is answered on
+# BEHALF OF WHATEVER $BS_TABLE NAMES — which is what makes mutation 4 detectable: the capture
+# exports BS_TABLE=<git-data> process-wide, so a classify call that does not override it reads
+# the ABSENT target and can only ever answer TRANSPORT_FAIL.
+if [[ "${1:-}" == --* ]]; then
+  if [[ "${BS_TABLE:-}" != t520508_soleur_inngest_vector_prd_3_logs ]]; then
+    echo "curl: (22) The requested URL returned error: 500" >&2
+    exit 22
+  fi
+  case "$mode" in
+    dark) exit 0 ;;
+    live) printf '{"dt":"2026-09-04 12:00:00","raw":"{}"}\n'; exit 0 ;;
+    fail) echo "connection refused" >&2; exit 7 ;;
+  esac
+fi
+# Mode 1: the git-data target read, transcribed from the live 2026-09-04 response.
+echo "curl: (22) The requested URL returned error: 500" >&2
+echo '{"exception":"Code: 701. DB::Exception: Requested cluster '"'"'t520508_soleur_git_data_prd_logs'"'"' not found. (CLUSTER_DOESNT_EXIST)"}'
+exit 22
+G1STUB
+chmod +x "$TMP/g1-stub.sh"
+_g1_mode() { printf '%s' "$1" > "$G1_MODE_FILE"; cp "$TMP/g1-stub.sh" "$STUB"; }
+
+# ARM 25 — the state run 33888071954 was actually in. The target read fails; the control read
+# answers and the warehouse holds nothing from ANY producer. That is #7811, not a git-data fact.
+_g1_mode dark
+out="$(run_sut --out "$TMP/evidence-g1-dark.env")"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"DARK FOR EVERY PRODUCER"* ]]; then
+  pass "GUARD1/1: target read fails + control dark => names the warehouse, not the host"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 62)\n' "$_ran"
+  fail "GUARD1/1: target read fails + control dark => names the warehouse, not the host" "$rc" "$out"
+fi
+if [[ "$out" != *"unreachable or unauthorised"* ]]; then
+  pass "GUARD1/1: the two unmeasured causes are gone from the dark arm"
+else
+  fail "GUARD1/1: the two unmeasured causes are gone from the dark arm" "$rc" "$out"
+fi
+# The vendor code is carried as the REASON. It must be present (a reader has to know what
+# failed) and it must not be the decision — ARM 26 proves the decision actually moved.
+if [[ "$out" == *"CLUSTER_DOESNT_EXIST"* ]]; then
+  pass "GUARD1/1: the ClickHouse code rides along as the reason"
+else
+  fail "GUARD1/1: the ClickHouse code rides along as the reason" "$rc" "$out"
+fi
+
+# ARM 26 — the only state that is about this source. The warehouse is demonstrably storing rows
+# from other producers, and this source's table still does not exist: nothing has ever been
+# stored to it, or it is misaddressed. It does NOT license blaming the producer (H1).
+#
+# THIS ARM IS ALSO THE MUTATION-4 DETECTOR. Delete the BS_TABLE override on the classify call
+# and the control read is pointed at the absent target, so it can only answer TRANSPORT_FAIL —
+# this arm goes red while the rest of the suite stays green.
+_g1_mode live
+out="$(run_sut --out "$TMP/evidence-g1-live.env")"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"NEVER STORED A ROW"* ]]; then
+  pass "GUARD1/2: target read fails + control LIVE => names this source, not the warehouse"
+else
+  fail "GUARD1/2: target read fails + control LIVE => names this source, not the warehouse" "$rc" "$out"
+fi
+if [[ "$out" != *"DARK FOR EVERY PRODUCER"* && "$out" != *"unreachable or unauthorised"* ]]; then
+  pass "GUARD1/2: does not borrow the dark-warehouse sentence or the unmeasured causes"
+else
+  fail "GUARD1/2: does not borrow the dark-warehouse sentence or the unmeasured causes" "$rc" "$out"
+fi
+# A misaddressed source produces this identical pair, so the arm must not assert the host failed.
+if [[ "$out" != *"the rehearsal host failed"* && "$out" != *"producer is at fault"* ]]; then
+  pass "GUARD1/2: declines to blame the producer — a misaddressed source looks identical"
+else
+  fail "GUARD1/2: declines to blame the producer — a misaddressed source looks identical" "$rc" "$out"
+fi
+
+# ARM 27 — both reads failed. Nothing was learned about anything.
+_g1_mode fail
+out="$(run_sut --out "$TMP/evidence-g1-fail.env")"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"CONTROL READ ALSO FAILED"* ]]; then
+  pass "GUARD1/3: both reads fail => names the instrument"
+else
+  fail "GUARD1/3: both reads fail => names the instrument" "$rc" "$out"
+fi
+if [[ "$out" != *"DARK FOR EVERY PRODUCER"* && "$out" != *"NEVER STORED A ROW"* ]]; then
+  pass "GUARD1/3: an unusable instrument is not read as either substantive state"
+else
+  fail "GUARD1/3: an unusable instrument is not read as either substantive state" "$rc" "$out"
+fi
+
+# ── GUARD 1 harness rows ─────────────────────────────────────────────────────────
+#
+# H3: a must-PASS NON-CANONICAL input. Without it the matrix cannot detect a guard that rejects
+# everything — every arm above is a failure fixture, so a stub refusing all input would satisfy
+# them all. The PASS path (anchor answering with foreign-host rows) is that input, and it must
+# still hold with the new arm in place.
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
+out="$(run_sut --out "$TMP/evidence-g1-h3.env")"; rc=$?
+if [[ "$rc" -eq 0 ]]; then
+  pass "GUARD1/H3: the normal path is untouched by the new arm (must-PASS non-canonical)"
+else
+  fail "GUARD1/H3: the normal path is untouched by the new arm (must-PASS non-canonical)" "$rc" "$out"
+fi
+
+# H3b (Guard 2 row 4, asserted from the CONSUMER's side): ANCHOR_SQL's foreign-host predicate is
+# `host_name != '' AND host_name != '<this host>'`, so ANY row carrying a host_name is
+# foreign-host liveness for this capture. That is why the round-trip marker carries no host_name
+# key at all — and a row without one must not satisfy this anchor.
+#
+# ASSERTED ON THE ANCHOR'S OWN LINE, NOT ON rc (#7855, corrected at ship). rc cannot observe this
+# property: when the anchor yields no foreign-host liveness the capture consults the ingest probe
+# and, on an ACKNOWLEDGED source with a clean boot_complete, still exits 0 by design. The arm
+# previously read `rc -ne 0` and passed only because ARM 4b had leaked BETTERSTACK_INGEST_PROBE
+# to a nonexistent path, so the run died on an unreadable instrument — a green arm measuring the
+# harness. With that leak fixed, the identical input exits 0, and the property is visible exactly
+# where the capture reports it.
+ANCHOR_MARKER="$TMP/anchor-marker.jsonl"
+printf '{"dt":"2026-09-04 12:00:00","host":""}\n' > "$ANCHOR_MARKER"
+make_stub "$STUB" "$ANCHOR_MARKER" "$HOSTROWS"
+out="$(run_sut --out "$TMP/evidence-g1-marker.env")"; rc=$?
+if grep -q 'anchor: no foreign-host rows' <<<"$out"; then
+  pass "GUARD1/H3b: a row with no host_name does not read as foreign-host liveness"
+else
+  fail "GUARD1/H3b: a row with no host_name does not read as foreign-host liveness" "$rc" "$out"
+fi
+
+# ── GUARD1/H4: rc 0 IS NOT AN ANSWER (#7855, found at ship) ──────────────────────
+#
+# `betterstack-query.sh` runs curl with `--fail-with-body`, which returns 0 for an HTTP 200 whose
+# body is a ClickHouse MID-STREAM EXCEPTION. Every read in the capture was gated on that rc
+# alone. Reproduced before the fix, on the FATAL read: the body carries no `"level":"fatal"`, so
+# the FAIL arm did not fire, and the script wrote RUNG2_BOOT_REHEARSAL=PASS — a host cleared for
+# birth on a fatal check that never ran, while the evidence file's own header claims "CLEAN = a
+# fatal read returned zero rows".
+#
+# One arm per read, because they are three independent call sites and a fix applied to one says
+# nothing about the other two. MUTATION for each: delete that read's `_require_answer` call.
+CH_EXC='Code: 241. DB::Exception: Memory limit (for query) exceeded: would use 9.31 GiB. (MEMORY_LIMIT_EXCEEDED)'
+make_exc_stub() {  # $1=which marker answers with an HTTP-200-carrying-an-error
+  cat > "$STUB" <<EXCSTUB
+#!/usr/bin/env bash
+sql="\$1"
+if printf '%s' "\$sql" | grep -q '$1'; then
+  echo "$CH_EXC"
+  exit 0
+elif printf '%s' "\$sql" | grep -q '__ANCHOR__'; then
+  cat "$ANCHOR_LIVE"
+elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
+  : > /dev/null
+elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
+  cat "$HOSTROWS"
+else
+  echo "STUB: unrecognised query shape" >&2; exit 3
+fi
+EXCSTUB
+  chmod +x "$STUB"
+}
+
+for _which in __ANCHOR__ __HOSTROWS__ __FATALROWS__; do
+  make_exc_stub "$_which"
+  _exc_out="$TMP/evidence-exc-${_which//_/}.env"
+  rm -f "$_exc_out"
+  out="$(run_sut --out "$_exc_out")"; rc=$?
+  if [[ "$rc" -eq 2 && ! -f "$_exc_out" ]]; then
+    pass "GUARD1/H4 ${_which}: an HTTP 200 carrying a ClickHouse error is TRANSIENT, not a result set"
+  else
+    fail "GUARD1/H4 ${_which}: an HTTP 200 carrying a ClickHouse error is TRANSIENT, not a result set" \
+         "rc=$rc evidence_written=$([[ -f "$_exc_out" ]] && echo yes || echo no)" "$out"
+  fi
+done
+
+# And the FATAL read specifically must never be read as a clean bill — the arm that reproduced
+# as a PASS. Asserted on the operator-facing text, not only on rc.
+make_exc_stub __FATALROWS__
+out="$(run_sut --out "$TMP/evidence-exc-fatal2.env")"; rc=$?
+if grep -q 'not a result set' <<<"$out" && ! grep -q 'RUNG2_BOOT_REHEARSAL=PASS' <<<"$out"; then
+  pass "GUARD1/H4b: the unbounded fatal query answering with an error names it, and does not PASS"
+else
+  fail "GUARD1/H4b: the unbounded fatal query answering with an error names it, and does not PASS" "$rc" "$out"
+fi
+
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
+
+# ── GUARD 1 arm enumerator ───────────────────────────────────────────────────────
+#
+# The property is about EVERY arm that turns a failed read into operator-facing text, not only
+# the one this issue fixed. The chokepoint is transient(), so the population is its call sites.
+#
+# ANCHORED ON THE CALL SHAPE, not on `transient(`: that pattern matches only the DEFINITION, so
+# an enumerator keyed on it would report one arm forever and could never see a new one. The plan
+# named `transient(` as shorthand for the chokepoint; the assembly it describes is the call sites.
+# ANCHORED ON THE CALL SHAPE for the ARM COUNT, but the PHRASE scan runs over the whole file's
+# non-comment lines. Measured: the previous form grepped only lines matching `^\s*transient `,
+# i.e. the FIRST line of each call — and all three arms this issue adds are multi-line
+# continuations, so a cause-naming phrase on a continuation line scored ZERO. The guard was
+# narrower than the property it names, which is the defect class this whole PR is about.
+#
+# COMMENTS ARE STRIPPED FIRST. The capture documents the retired phrase in prose explaining why
+# it was wrong, so a raw whole-file grep matches that comment and fails a correct file — the
+# collision that always arises when a task requires both "assert X absent" and "document X".
+_g1_arms=$(grep -cE '^[[:space:]]*transient ' "$SUT")
+_g1_bad=$(grep -vE '^[[:space:]]*#' "$SUT" | grep -cE 'unreachable or unauthorised' || true)
+if [[ "$_g1_bad" -eq 0 ]]; then
+  pass "GUARD1/enum: no executable line names a cause the run did not measure (${_g1_arms} transient arms)"
+else
+  fail "GUARD1/enum: ${_g1_bad} executable line(s) name an unmeasured cause"
+fi
+# ANTI-VACUITY FLOOR FOR THE ENUMERATOR ITSELF (mutation 6). Change either pattern to a token
+# present nowhere and the scan reports "0 arms" and passes. The floor fires on its own emptiness.
+# It reports with printf + exit, NEVER through fail() — a floor routed through the helper it
+# backstops cannot witness that helper being disarmed (ADR-193, AP-023).
+if [[ "$_g1_arms" -lt 6 ]]; then
+  printf '  FAIL GUARD1/enum floor: only %s transient() arms enumerated (floor 6) — the pattern matched nothing.\n' "$_g1_arms" >&2
+  exit 1
+fi
+
+# INSTRUMENT SELF-TEST, before any verdict is read. Drives BOTH helpers once and requires each
+# counter AND the ledger to move. A floor that sums passes+fails cannot witness a fail() that
+# routes its count into passes, and a ledger check cannot witness a fail() whose append was
+# removed -- this catches both, and it reports directly rather than through the helpers it tests.
+_canary_p=$passes _canary_f=$fails _canary_l=${#FAILURES[@]}
+pass "instrument self-test: pass() moves its counter"
+fail "instrument self-test: fail() moves its counter (EXPECTED, retracted)"
+if [[ "$passes" -ne $((_canary_p + 1)) || "$fails" -ne $((_canary_f + 1)) || "${#FAILURES[@]}" -ne $((_canary_l + 1)) ]]; then
+  printf '  FAIL INSTRUMENT: pass/fail/ledger did not all move (p=%s->%s f=%s->%s ledger=%s->%s). This suite cannot certify anything.\n' \
+    "$_canary_p" "$passes" "$_canary_f" "$fails" "$_canary_l" "${#FAILURES[@]}" >&2
+  exit 1
+fi
+fails=$((fails - 1)); unset 'FAILURES[${#FAILURES[@]}-1]'
+printf '  ok   instrument self-test: pass(), fail() and the ledger all moved (control retracted)\n'
+
+_ran=$((passes + fails))
+# FLOOR = main's 62 + the 11 assertions #7855 adds (GUARD1 arms 25-27, two harness rows, the
+# enumerator). Stated as a derivation rather than a bare literal because a sibling PR raising
+# the base silently invalidates a copied number — re-read `git show origin/main:<this file>`
+# at ship rather than trusting this comment's arithmetic.
+#
+# The message's own figure is interpolated from the same variable the test uses. It previously
+# read "floor is 56" against a `-lt 62` test — a floor whose report contradicted its own
+# predicate, which is the shape that makes a drifting number invisible.
+_FLOOR=74  # 73 + the instrument self-test above
+if [[ "$_ran" -lt "$_FLOOR" ]]; then
+  # REPORTS DIRECTLY, never through fail(): a floor that increments the counter a disarmed fail()
+  # owns cannot witness that fail() being disarmed (ADR-193, AP-023).
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is %s. Arms were deleted, skipped, or the suite exited early.\n' "$_ran" "$_FLOOR" >&2
+  exit 1
+else
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor %s)\n' "$_ran" "$_FLOOR"
 fi
 
 # LEDGER RECONCILIATION. A stalled append or a stalled counter each break this; neither is
