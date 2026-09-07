@@ -42,6 +42,21 @@
 # de.sentry.io, then reads .links.regionUrl from the response body.
 # Refs #3147. Source PR #3127. Precedent: configure-sentry-alerts.sh.
 
+
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${SENTRY_API_TOKEN:+x}${SENTRY_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (SENTRY_API_TOKEN, SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 set -euo pipefail
 
 # --- Argument parsing ----------------------------------------------------

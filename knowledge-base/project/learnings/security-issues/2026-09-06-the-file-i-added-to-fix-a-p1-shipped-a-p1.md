@@ -19,7 +19,7 @@ synced_to: [review, work, compound]
 
 ## Problem
 
-#7855: the rung-2 rehearsal could not reach a verdict because every read against the git-data
+Issue #7855: the rung-2 rehearsal could not reach a verdict because every read against the git-data
 Better Stack source returned `CLUSTER_DOESNT_EXIST`, and the capture reported that twenty times as
 *"the Better Stack query transport exited 22 (unreachable or unauthorised)"* — naming two causes the
 run had not measured. The fix was small and the diagnosis was right.
@@ -109,7 +109,78 @@ The `-s` means *skip this check when nothing was written* — exactly backwards.
 nothing was POSTed, so the readback must find nothing. With the `-s` in place, deleting `--data-raw`
 from the POST entirely still passed. Caught by the mutation battery, not by reading.
 
-## Key insight
+### 4. A fourth round, at ship, found the same class one layer down — including in the fixes above
+
+The two review rounds ended, both sign-offs were recorded, and the `/ship` Phase 5.5 completeness
+consult then found **five more defects, two of them P1**, in the code those rounds had just
+approved. The reviewer's own verdict — *"there is no path from a failed or unread warehouse query
+to the evidence-file writer"* — was **false**, and I had already published it in the PR body.
+
+`scripts/betterstack-query.sh` runs `curl --fail-with-body`, which returns **0** for an HTTP 200
+whose body is a ClickHouse mid-stream exception. Every read in the capture was gated on that rc
+alone:
+
+```bash
+fatal_out="$(_run_query "$FATAL_SQL")"; fatal_rc=$?
+if [[ "$fatal_rc" -ne 0 ]]; then
+  transient "... an unanswered fatal query is NOT a clean bill."
+fi
+...
+if grep -q '"level":"fatal"' <<<"$fatal_out"; then   # an exception body contains no such string
+```
+
+Reproduced end to end: with the fatal read answering
+`Code: 241. DB::Exception: Memory limit (for query) exceeded (MEMORY_LIMIT_EXCEEDED)` at rc 0, the
+capture wrote **`RUNG2_BOOT_REHEARSAL=PASS`** — a host cleared for birth on a fatal check that never
+ran, while the evidence file's own header says *"CLEAN = a fatal read returned zero rows."*
+
+Two details make this the sharpest instance in this file:
+
+- **The comment beside the gate states the correct invariant.** It says an unanswered fatal query is
+  not a clean bill. The code then measures the transport's rc, which is not whether the query was
+  answered. Prose and predicate disagreed, and the prose is what every reviewer read.
+- **The right predicate already existed, in this PR, three files away.** `bs_absence_response_is_answer`
+  discriminates on line shape precisely because a mid-stream exception arrives as a bare line — and
+  the capture used it for its *control* leg while its own three reads went unguarded. The library
+  was `source`d **inside** the anchor-failed branch: reachable only from the one path that cannot
+  need it.
+
+The same rc-only gate was in the round-trip probe's `_read_ever_answered`, whose comment block
+describes §2 above in full and then keys on `_read_rc` — so §2's fix was incomplete, through the
+other door, in the paragraph that explains §2.
+
+And the guard-audits-the-guard problem recurred a third time: `GUARD1/H3b`, the arm asserting the
+Rule-1 property that `user-impact-reviewer` had just signed off, was **vacuous**. An earlier arm
+wrote
+
+```bash
+BETTERSTACK_INGEST_PROBE="$TMP/no-such-probe.sh" \
+  out="$(run_sut ...)"; rc=$?
+```
+
+which is an **assignment list, not a command prefix** — bash assigns both names in the current
+shell, and since that variable was `export`ed at the top of the suite, every later arm reaching the
+probe leg ran against a probe that does not exist. H3b passed on *"the ingest probe is unreadable"*.
+Measured: with a readable probe, H3b's identical input exits **0** and writes `PASS`.
+
+## Key insight (revised after the ship round)
+
+The original insight below still holds. What this fourth round adds is sharper and worse:
+
+**A comment that states the invariant correctly is the most effective camouflage a wrong predicate
+can have.** Three separate reviews — two panels and a targeted user-impact pass — read
+*"an unanswered fatal query is NOT a clean bill"* directly above `if [[ "$fatal_rc" -ne 0 ]]`, and
+none asked whether `rc == 0` means *answered*. The prose was doing the reviewing.
+
+So the litmus per guard is now two questions, and the second is the one that was missing:
+
+1. What does this guard's PASSING state look like, and is it distinguishable from the guard being
+   broken, inverted, or never reached?
+2. **Does the value it tests actually carry the property its comment claims?** Name the API that
+   produces that value and read its contract — `--fail-with-body` is documented to return 0 on a
+   200, and one `man` line falsifies the whole arm.
+
+## Key insight (original)
 
 **On a fix PR, review the new ASSERTIONS before the new code.** The fix is written while holding the
 defect in mind, so its verification inherits the defect's framing — and the guard written to close a
@@ -130,6 +201,16 @@ guard being broken, inverted, or never reached?*
   health licenses nothing about yours.
 - **A negated precondition on a guard is usually inverted.** `if [[ -s "$evidence" ]]` around a check
   means "skip when there is no evidence", which is the case the check exists for.
+- **An exit code is not an answer.** Before gating on `rc`, read the transport's contract: `curl
+  --fail-with-body` returns 0 for an HTTP 200 carrying an application-level error, so every
+  `rc == 0` branch downstream of it needs a SHAPE check on the body. This repo already ships one
+  (`bs_absence_response_is_answer`); the defect was that it was `source`d inside the branch that
+  could not need it. Source shared predicates at top level, so the reachable set is not an accident
+  of where the fix happened to land.
+- **`VAR=x cmd` is a prefix; `VAR=x out="$(cmd)"` is an assignment list.** The second assigns in the
+  CURRENT shell and, if the name is exported, silently reconfigures every later arm in the file. It
+  reads identically to the first. Grep a suite for `^[A-Z_]*=.* out="\$(` before trusting any arm
+  that follows one.
 - **Run the cheap deterministic gates before the agent panel.** On this PR `shellcheck` found the
   highest-severity defect of one round (`_rt_host` referenced but not assigned after the parser was
   replaced — under `set -u` that aborts both the STORED and NOT_STORED paths). Reading missed it and

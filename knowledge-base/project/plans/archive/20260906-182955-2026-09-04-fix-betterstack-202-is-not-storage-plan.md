@@ -815,8 +815,20 @@ its no-`*)`-arm `case`).
    suite red. This is the mutation that would silently restore today's behaviour.
 4. The run-33888071954 fixture produces exactly one dark-warehouse sentence naming #7811, and its
    output contains no occurrence of `unreachable or unauthorised`.
-5. The token from #7811 is gone from the live tree:
-   `grep -rl 'INGEST_ACCEPTING' scripts/ tests/ .github/ | wc -l` returns `0`.
+5. The token from #7811 is gone from the live tree.
+   **Corrected at ship (2026-09-06): the asserted command is
+   `grep -rnE 'emit[[:space:]]+"INGEST_ACCEPTING"' scripts/ .github/` returning nothing** — i.e. no
+   code EMITS the token. The original form below was falsified by this PR's own diff and is kept so
+   the reason stays legible.
+
+   ~~`grep -rl 'INGEST_ACCEPTING' scripts/ tests/ .github/ | wc -l` returns `0`.~~ Measured at ship:
+   it returns **2**, and both files are correct. The surviving occurrences are the comment in
+   `scripts/betterstack-ingest-probe.sh` explaining *why* the name was the finding, and five lines in
+   `tests/scripts/test-betterstack-ingest-probe.sh` — four of them prose, the fifth the assertion
+   `grep -qE 'emit[[:space:]]+"INGEST_ACCEPTING"'` that enforces this very AC. This is the
+   forbid-plus-document collision `cq-assert-anchor-not-bare-token` names: a task that requires both
+   "assert X absent" and "document X" cannot be checked by a bare-token grep, because the
+   documentation is a match. It bit three times in this session, and it bit this AC too.
    **Note the form:** `grep -c 'INGEST_ACCEPTING' scripts/` — an earlier draft's shape — exits 2 with
    *"Is a directory"* and prints `0`, so a naive "returns 0" check passes *because the command
    errored*. Measured before this AC was frozen. `knowledge-base/` is excluded: ADR-192 quotes the old
@@ -847,10 +859,26 @@ its no-`*)`-arm `case`).
     credential into a job that runs every registered follow-through, for zero consumers, is the exact
     thing the probe's Rule 2 exists to prevent. The AC asserted the wrong variable and would have been
     satisfied by a diff that made the codebase worse.
-13. **Scope boundary:** the diff changes zero Better Stack ingest-URL literals.
-    `git diff origin/main -- . | grep -E '^[+-].*betterstackdata\.com'` returns nothing **except** the
-    test fixtures added by AC7, which are synthetic (`evil.com`, `attacker.example.org`) or the two
-    real endpoints asserted as still-accepted.
+13. **Scope boundary:** the diff repoints zero Better Stack ingest endpoints.
+    **Corrected at ship (2026-09-06.)** The original form grepped the whole diff for
+    `betterstackdata\.com` and expected nothing but AC7's synthetic fixtures. Measured, that grep
+    returns **64** lines, almost all of them prose in the ADR, the plan, the learning and the
+    post-mortem — documents whose subject is a destination-matching bug, so they necessarily quote
+    destinations. What the AC is actually about is whether any endpoint was REPOINTED. Measured, and
+    this is what is asserted:
+
+    - `.github/workflows/scheduled-zot-restart-loop.yml` — the pager that files and re-probes #7811,
+      and the one place a changed default would make that issue's own evidence non-comparable:
+      **0** literal changes.
+    - `scripts/followthroughs/git-data-rung2-evidence-capture.sh` loses the inline literal
+      `https://s2734275.eu-central-1a.betterstackdata.com/`, and `scripts/lib/betterstack-sources.sh`
+      gains `BS_GIT_DATA_INGEST_URL="https://s${BS_GIT_DATA_SOURCE_ID}.eu-central-1a.betterstackdata.com/"`
+      with `BS_GIT_DATA_SOURCE_ID="2734275"`. Resolved and compared: **byte-identical to the value it
+      replaces.** The literal was single-sourced, not changed — which is the fix, not a scope breach.
+    - `scripts/betterstack-ingest-probe.sh`'s changes are to the destination *pattern*
+      (`https://*.betterstackdata.com/*` → an extracted-authority match against `*.betterstackdata.com`),
+      which is the subject of this PR, not an endpoint.
+
 14. **Scope boundary:**
     `git diff --name-only origin/main | grep -cE 'cloud-init-git-data\.yml|scripts/betterstack-query\.sh|scripts/lib/betterstack-absence\.sh|scripts/zot-restart-loop-alarm\.sh'`
     returns 0.

@@ -3,7 +3,8 @@
 #
 # THE QUESTION NO OTHER INSTRUMENT IN THIS REPO ASKS. `scripts/betterstack-ingest-probe.sh`
 # establishes that the write endpoint ACKNOWLEDGES a batch; it posts an empty one by design and
-# has nothing to read back. During the 27-hour window of #7811 it printed a 2xx on every run
+# has nothing to read back. Throughout the ~31 hours #7811 was open (2026-09-03 20:55Z -> 2026-09-05 04:02Z,
+# measured) it printed a 2xx on every run
 # while the warehouse stored nothing at all. An acknowledgement is not storage, and only a
 # readback can tell them apart: write a marker, then read it out again.
 #
@@ -109,6 +110,23 @@
 # cq-test-fixtures-synthesized-only: no live response is captured into this file.
 
 set -uo pipefail
+
+# REFUSE TO RUN UNDER xtrace WITH A LIVE CREDENTIAL BOUND (#7797, and #7855's own subject).
+#
+# This script binds an ingest WRITE token and the warehouse read credential in the same process
+# — the AP-024 limb this probe waives rather than satisfies — so a `set -x` anywhere above it
+# would trace both into whatever collects this job's output. The sweeper publishes probe stdout
+# verbatim into a public GitHub issue comment, which is precisely the surface that must never
+# receive a token. `case "$-" in *x*)` tests whether tracing is ON rather than enumerating the
+# eight ways to turn it on, two of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${GIT_DATA_BETTERSTACK_LOGS_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 export LC_ALL=C
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -142,6 +160,8 @@ RT_POLL_INTERVAL_S="${BETTERSTACK_ROUNDTRIP_POLL_S:-10}"
 # the capture's control rather than restated alongside it (see that file's header).
 # shellcheck source=../../lib/betterstack-sources.sh
 source "${REPO_ROOT}/scripts/lib/betterstack-sources.sh"
+# shellcheck source=../../lib/betterstack-absence.sh
+source "${REPO_ROOT}/scripts/lib/betterstack-absence.sh"
 
 RT_INGEST_URL="${GIT_DATA_BETTERSTACK_INGEST_URL:-$BS_GIT_DATA_INGEST_URL}"
 RT_TABLE="$BS_GIT_DATA_TABLE"
@@ -280,20 +300,51 @@ _read_rc=0
 # ROUNDTRIP_NOT_STORED: a public vendor data-loss accusation derived from a query that never
 # ran. That is the AP-021 defect this issue exists to remove, reintroduced in its own fix.
 _read_ever_answered=0
+_undecodable_rows=0
 _last_read_err=""
 while :; do
   _elapsed=$(( $(date -u +%s) - _t0 ))
   [[ "$_elapsed" -ge "$RT_DEADLINE_S" ]] && break
   sleep "$RT_POLL_INTERVAL_S"
   _out="$(rt_read)"; _read_rc=$?
+  #
+  # rc 0 IS NOT AN ANSWER, AND THAT IS THE SAME DOOR P1-B CAME THROUGH (#7855, found at ship).
+  # The paragraph above is right about WHY this gate exists and was wrong about WHAT it measures:
+  # it keyed on the transport rc alone, and `betterstack-query.sh` runs curl `--fail-with-body`,
+  # which returns 0 for an HTTP 200 carrying a ClickHouse mid-stream exception. Measured: a
+  # readback answering `Code: 241. DB::Exception: ...` with rc 0 set `_read_ever_answered=1`, the
+  # marker was of course not found in it, the CONTROL source (a different, healthy table) then
+  # answered LIVE, and this script emitted ROUNDTRIP_NOT_STORED — exit 1, a public vendor
+  # data-loss accusation off a query that never ran. That is the defect the archive-arm fix
+  # removed, reached through the other door. The control leg below already applied this lesson
+  # via `bs_absence_classify`; the readback one screen up did not.
+  if ! bs_absence_response_is_answer "$_out"; then
+    _last_read_err="$(printf '%s\n' "$_out" | tail -3 | tr '\n' ' ')"
+    _read_rc="${_read_rc}(http-200-carrying-an-error)"
+    continue
+  fi
   if [[ "$_read_rc" -ne 0 ]]; then
     _last_read_err="$(printf '%s\n' "$_out" | tail -3 | tr '\n' ' ')"
   fi
   if [[ "$_read_rc" -eq 0 ]]; then
     _read_ever_answered=1
+    # ROWS CAME BACK AND *NONE OF THEM DECODED* — narrower than "rows came back", deliberately.
+    # A row that decodes cleanly but carries ANOTHER run's marker is a correct non-observation and
+    # must still reach NOT_STORED; only a row we cannot decode at all is evidence about the
+    # SCHEMA rather than about storage. Recomputed each poll (not OR-ed) so the value describes
+    # the last answer, which is the one the verdict is about.
+    if [[ -n "${_out//[[:space:]]/}" ]]; then
+      if printf '%s\n' "$_out" \
+         | jq -e 'select(.raw != null) | .raw | (try fromjson catch empty) | select(.message != null)' \
+         >/dev/null 2>&1; then
+        _undecodable_rows=0
+      else
+        _undecodable_rows=1
+      fi
+    fi
     # FIELD ANCHOR, not a line grep. `raw` is a JSON string containing a JSON document.
     if printf '%s\n' "$_out" \
-       | jq -e --arg m "$RT_MARKER" 'select(.raw != null) | .raw | fromjson
+       | jq -e --arg m "$RT_MARKER" 'select(.raw != null) | .raw | (try fromjson catch empty)
                                      | select(.message != null and (.message | startswith($m)))' \
        >/dev/null 2>&1; then
       _observed="$_out"
@@ -321,6 +372,22 @@ if [[ "$_read_ever_answered" -eq 0 ]]; then
   exit 3
 fi
 
+# ROWS CAME BACK FOR THIS MARKER AND THE ANCHOR NEVER DECODED (#7855, found at ship).
+#
+# The `raw LIKE '%marker%'` prefilter matched, so the row is almost certainly ours — but
+# `jq ... .raw | fromjson | .message` never resolved it. The stored schema for this source is
+# INFERRED, not verified: `dt`/`raw`/`_row_type`/`ingest_time` were checked against a
+# `vector`-platform table and source 2734275 is `http` platform. If `raw` is not a JSON document,
+# or the payload sits under a key other than `message`, `_observed` stays empty and every path
+# below leads to the control consult — which, with a healthy control, publishes
+# ROUNDTRIP_NOT_STORED. That would accuse the vendor of losing a row we had just read back.
+#
+# A schema we have not verified must degrade to UNKNOWN, exactly like a read that did not answer.
+if [[ "$_undecodable_rows" -eq 1 ]]; then
+  emit "ROUNDTRIP_UNKNOWN" "the readback returned row(s) matching this run's marker but the message anchor did not decode from \`raw\` in ${_elapsed}s; this source is http-platform and its stored schema is INFERRED, so the likeliest reading is a schema mismatch (raw not a JSON document, or the payload under a key other than 'message') and NOT a storage failure. Refusing to convert an undecoded row into a vendor accusation"
+  exit 3
+fi
+
 # Not observed, and the readback DID work at least once. The reason decides the verdict, and it is
 # the same composed reading the rung-2 capture uses: ask a source that is NOT this one whether the
 # warehouse is storing anything.
@@ -338,8 +405,7 @@ fi
 # Reusing it also collapses a duplicated `--since 6h`, which had to stay in sync with
 # `BS_CONTROL_WINDOW`'s default by hand, and makes both composed readings in this PR the same
 # mechanism — which is what makes the ADR-192 amendment true rather than aspirational.
-# shellcheck source=../../lib/betterstack-absence.sh
-source "${REPO_ROOT}/scripts/lib/betterstack-absence.sh"
+# (sourced at top level, beside betterstack-sources.sh — the poll loop needs it too.)
 
 _ctl_token="$(
   BS_TABLE="$RT_CONTROL_TABLE" \

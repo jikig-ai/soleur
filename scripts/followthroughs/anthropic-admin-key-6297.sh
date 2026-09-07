@@ -24,6 +24,22 @@
 # counter is derived from GitHub's own comment history, not an in-process var.
 set -uo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
+# expansion, so a credential is printed the moment it is used. The test below
+# covers EVERY credential this file references and uses `${VAR:+x}`, which is
+# non-emptiness WITHOUT expanding the value -- `${VAR:-}` would print it here.
+# Tracing stays available with the credentials unset, so this refuses a leak
+# without blocking a debugging session.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}${GH_TOKEN:+x}${SENTRY_AUTH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to run under xtrace with a live credential set (BETTERSTACK_QUERY_PASSWORD, GH_TOKEN, SENTRY_AUTH_TOKEN). Unset it to trace safely (see #7797).
+' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 ISSUE=6297
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo ".")
 QUERY="$REPO_ROOT/scripts/betterstack-query.sh"

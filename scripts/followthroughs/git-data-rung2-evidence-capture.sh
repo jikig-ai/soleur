@@ -579,8 +579,45 @@ _run_query() {  # $1 = sql ; prints rows, returns the transport's rc
   bash "$QUERY" "$1" 2>&1
 }
 
+# ── AN rc OF 0 IS NOT AN ANSWER (#7855, found at ship) ────────────────────────────
+#
+# `betterstack-query.sh` runs curl with `--fail-with-body`, which returns 0 for an HTTP 200
+# whose body is a ClickHouse MID-STREAM EXCEPTION. Every read below was gated on the rc alone,
+# so such a response was consumed as a result set. Measured, on this script, before the fix:
+# a `__FATALROWS__` read answering
+#
+#     Code: 241. DB::Exception: Memory limit (for query) exceeded ... (MEMORY_LIMIT_EXCEEDED)
+#
+# with rc 0 contains no `"level":"fatal"`, so the FAIL arm did not fire, and the run wrote
+# `RUNG2_BOOT_REHEARSAL=PASS` — a host cleared for birth on a fatal check that never ran. The
+# evidence file's own header says "CLEAN = a fatal read returned zero rows"; it returned an
+# exception. That is the silence-is-health defect this route exists to end, one layer below
+# where the route was looking, and it is the same class as the transport-rc misreading that
+# opened #7855.
+#
+# The predicate already existed for exactly this: `bs_absence_response_is_answer` discriminates
+# on line SHAPE, because every legitimate row of all three queries here begins `{"dt":` (`dt` is
+# the first selected column of ANCHOR_SQL, HOST_SQL and FATAL_SQL) while an exception arrives as
+# a bare line outside the JSONEachRow stream. It was reachable only from inside the
+# anchor-failed arm, which is the one path that cannot need it. Sourced at top level now.
+#
+# shellcheck source=../lib/betterstack-absence.sh
+source "${REPO_ROOT}/scripts/lib/betterstack-absence.sh"
+
+_require_answer() {  # $1 = the read's output ; $2 = which read, for the operator
+  bs_absence_response_is_answer "$1" && return 0
+  transient "TRANSIENT: the ${2} query returned rc=0, but its body is not a result set — it is a" \
+            "ClickHouse error delivered inside an HTTP 200, which curl reports as success." \
+            "NO VERDICT: an unread query is not an empty one, and reading it as empty is how a" \
+            "fatal check that never ran becomes a PASS. Body follows (carried, not the decision):" \
+            "$(printf '%s\n' "$1" | tail -5)"
+}
+
 # ── ARTIFACT 1: the source-liveness anchor ────────────────────────────────────────
 anchor_out="$(_run_query "$ANCHOR_SQL")"; anchor_rc=$?
+# An `if`, not `[[ ... ]] && ...`: a trailing `&&` whose left side is false makes the compound
+# return 1, which `set -e` reads as a failure of the script rather than of the test.
+if [[ "$anchor_rc" -eq 0 ]]; then _require_answer "$anchor_out" "source-liveness anchor"; fi
 #
 # (#7855) A FAILED READ IS THREE STATES, AND ONLY ONE OF THEM IS ABOUT THIS HOST.
 #
@@ -614,8 +651,7 @@ anchor_out="$(_run_query "$ANCHOR_SQL")"; anchor_rc=$?
 # `if/if` with no `else`, one `case` with no `*)` — so a new token would fall through both into
 # the live-channel path. See ADR-192.
 if [[ "$anchor_rc" -ne 0 ]]; then
-  # shellcheck source=../lib/betterstack-absence.sh
-  source "${REPO_ROOT}/scripts/lib/betterstack-absence.sh"
+  # (the absence library is sourced at top level, beside _require_answer)
 
   # PIN THE CONTROL TO A DIFFERENT SOURCE, AND PIN THE TRANSPORT TO THIS SCRIPT'S OWN.
   #
@@ -659,9 +695,28 @@ if [[ "$anchor_rc" -ne 0 ]]; then
 
   case "$_ctl_token" in
     LIVE)
-      transient "TRANSIENT: this source's table does not exist — NEVER STORED A ROW. The control source is answering and carrying rows, so the warehouse is up; this source has stored nothing, or the table name is wrong. No verdict about ${HOST_NAME}: a misaddressed source and a host that never shipped look identical from here." \
-                "Target read exited ${anchor_rc}. Reason follows (carried, not the decision):" \
-                "$_anchor_tail"
+      # A LIVE CONTROL DOES NOT ESTABLISH *WHY* THE TARGET READ FAILED (#7855, found at ship).
+      #
+      # The control leg rules out an unusable instrument and an unusable credential, and nothing
+      # else. It cannot separate "the target's table does not exist" from "the target query failed
+      # for its own reason" — and the target read is the heavier query of the two: it UNIONs
+      # `s3Cluster(primary, $BS_TABLE_S3)`, whose named collection answered 669
+      # NAMED_COLLECTION_DOESNT_EXIST for this very source on 2026-09-04, and a UNION ALL fails if
+      # EITHER arm fails. That is the same measurement that made the round-trip probe drop its
+      # archive arm. So the strong sentence is emitted ONLY when the vendor's own reason says the
+      # thing does not exist; otherwise the arm reports what it has and names no cause.
+      #
+      # This matters beyond tidiness: the rehearsal workflow branches on `NEVER STORED A ROW` and
+      # tells the operator "a re-dispatch is warranted" — a paid host spun up on a query error.
+      if grep -qE 'CLUSTER_DOESNT_EXIST|NAMED_COLLECTION_DOESNT_EXIST|UNKNOWN_TABLE' <<<"$_anchor_tail"; then
+        transient "TRANSIENT: this source's table does not exist — NEVER STORED A ROW. The control source is answering and carrying rows, so the warehouse is up; this source has stored nothing, or the table name is wrong. No verdict about ${HOST_NAME}: a misaddressed source and a host that never shipped look identical from here." \
+                  "Target read exited ${anchor_rc}. Reason follows (carried, and it is what selected this reading):" \
+                  "$_anchor_tail"
+      else
+        transient "TRANSIENT: the target read FAILED FOR A REASON THE CONTROL CANNOT EXPLAIN. The control source is answering and carrying rows, so the transport and the credential both work — but the target read did not fail with a table-absence code, so this run does NOT know that this source has stored nothing. Read the vendor's reason below before concluding anything; a re-dispatch on this reading would be a host spun up on a query error." \
+                  "Target read exited ${anchor_rc}. Reason follows (carried, and it is NOT a table-absence code):" \
+                  "$_anchor_tail"
+      fi
       ;;
     INGEST_DARK)
       # THE HONEST LIMIT OF THIS STATE, recorded rather than papered over. A control read that
@@ -770,6 +825,7 @@ if [[ "$host_rc" -ne 0 ]]; then
   transient "TRANSIENT: the host-rows query exited ${host_rc} after the anchor succeeded. No verdict." \
             "$(printf '%s\n' "$host_out" | tail -5)"
 fi
+_require_answer "$host_out" "host-rows"
 
 # ── ARTIFACT 2b: every FATAL this host reported, unbounded by row chatter ─────────
 # Separate query, deliberately. See FATAL_SQL. A transport failure here is TRANSIENT for the
@@ -781,6 +837,7 @@ if [[ "$fatal_rc" -ne 0 ]]; then
             "an unanswered fatal query is NOT a clean bill." \
             "$(printf '%s\n' "$fatal_out" | tail -5)"
 fi
+_require_answer "$fatal_out" "unbounded fatal"
 
 # ── ARTIFACT 3: the FAIL arms ─────────────────────────────────────────────────────
 #

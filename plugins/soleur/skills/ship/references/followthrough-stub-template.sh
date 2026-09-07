@@ -16,6 +16,30 @@
 
 set -uo pipefail
 
+# REFUSE TO RUN UNDER XTRACE (#7797). A probe receives its secrets from the
+# sweeper's env, and tracing echoes commands AFTER expansion -- so a credential
+# leaks the moment it is used, and the sweeper posts probe output into a public
+# issue comment. Unconditional is the safe default for a scaffold, because the
+# template cannot know which credentials this probe will end up reading.
+#
+# If your probe INHERITS a known, fixed set of credentials, you may narrow this
+# to a hatch that keeps the script traceable when they are unset:
+#
+#   case "$-" in
+#     *x*)
+#       if [ -n "${YOUR_TOKEN:+x}" ]; then   # `:+x` -- `:-` would PRINT the value
+#         printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+#         exit 78
+#       fi
+#       ;;
+#   esac
+#
+# Keep it directly below `set ...`: `scripts/lint-shell-trace-credential-refusal.py`
+# requires the refusal in the prologue, before any command that could be traced.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this probe handles live credentials and -x would print them (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # soleur:followthrough-stub v1
 
 # TODO: replace this block with the verification body.

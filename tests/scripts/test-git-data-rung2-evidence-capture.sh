@@ -327,8 +327,16 @@ if [[ "$rc" -eq 2 ]]; then pass "zero foreign rows + an UNREACHABLE source => TR
   fail "zero foreign rows + an UNREACHABLE source => TRANSIENT" "$rc" "$out"; fi
 
 # AND THE INSTRUMENT ITSELF MUST FAIL CLOSED. An absent probe is "cannot tell", never "fine".
-BETTERSTACK_INGEST_PROBE="$TMP/no-such-probe.sh" \
-  out="$(run_sut --out "$TMP/evidence-noprobe.env")"; rc=$?
+#
+# THE ASSIGNMENT GOES INSIDE THE SUBSHELL (#7855, found at ship). `VAR=x out="$(...)"` is an
+# ASSIGNMENT LIST, not a command with an environment prefix — bash assigns both names in THIS
+# shell, and since BETTERSTACK_INGEST_PROBE is exported above, the export persisted. Every later
+# arm that reached the probe leg therefore ran against a probe that does not exist, and the
+# `make_probe 0` on the next line rewrote a file nothing read any more. Measured: that made
+# GUARD1/H3b vacuous — it passed on "the ingest probe is unreadable", not on the property it
+# names, and the identical input against a READABLE acknowledging probe exits 0 and writes
+# RUNG2_BOOT_REHEARSAL=PASS.
+out="$(BETTERSTACK_INGEST_PROBE="$TMP/no-such-probe.sh" run_sut --out "$TMP/evidence-noprobe.env")"; rc=$?
 if [[ "$rc" -eq 2 ]]; then pass "zero foreign rows + an UNREADABLE probe => TRANSIENT, not a verdict"; else
   fail "zero foreign rows + an UNREADABLE probe => TRANSIENT, not a verdict" "$rc" "$out"; fi
 make_probe 0
@@ -1105,15 +1113,80 @@ fi
 # `host_name != '' AND host_name != '<this host>'`, so ANY row carrying a host_name is
 # foreign-host liveness for this capture. That is why the round-trip marker carries no host_name
 # key at all — and a row without one must not satisfy this anchor.
+#
+# ASSERTED ON THE ANCHOR'S OWN LINE, NOT ON rc (#7855, corrected at ship). rc cannot observe this
+# property: when the anchor yields no foreign-host liveness the capture consults the ingest probe
+# and, on an ACKNOWLEDGED source with a clean boot_complete, still exits 0 by design. The arm
+# previously read `rc -ne 0` and passed only because ARM 4b had leaked BETTERSTACK_INGEST_PROBE
+# to a nonexistent path, so the run died on an unreadable instrument — a green arm measuring the
+# harness. With that leak fixed, the identical input exits 0, and the property is visible exactly
+# where the capture reports it.
 ANCHOR_MARKER="$TMP/anchor-marker.jsonl"
 printf '{"dt":"2026-09-04 12:00:00","host":""}\n' > "$ANCHOR_MARKER"
 make_stub "$STUB" "$ANCHOR_MARKER" "$HOSTROWS"
 out="$(run_sut --out "$TMP/evidence-g1-marker.env")"; rc=$?
-if [[ "$rc" -ne 0 ]]; then
+if grep -q 'anchor: no foreign-host rows' <<<"$out"; then
   pass "GUARD1/H3b: a row with no host_name does not read as foreign-host liveness"
 else
   fail "GUARD1/H3b: a row with no host_name does not read as foreign-host liveness" "$rc" "$out"
 fi
+
+# ── GUARD1/H4: rc 0 IS NOT AN ANSWER (#7855, found at ship) ──────────────────────
+#
+# `betterstack-query.sh` runs curl with `--fail-with-body`, which returns 0 for an HTTP 200 whose
+# body is a ClickHouse MID-STREAM EXCEPTION. Every read in the capture was gated on that rc
+# alone. Reproduced before the fix, on the FATAL read: the body carries no `"level":"fatal"`, so
+# the FAIL arm did not fire, and the script wrote RUNG2_BOOT_REHEARSAL=PASS — a host cleared for
+# birth on a fatal check that never ran, while the evidence file's own header claims "CLEAN = a
+# fatal read returned zero rows".
+#
+# One arm per read, because they are three independent call sites and a fix applied to one says
+# nothing about the other two. MUTATION for each: delete that read's `_require_answer` call.
+CH_EXC='Code: 241. DB::Exception: Memory limit (for query) exceeded: would use 9.31 GiB. (MEMORY_LIMIT_EXCEEDED)'
+make_exc_stub() {  # $1=which marker answers with an HTTP-200-carrying-an-error
+  cat > "$STUB" <<EXCSTUB
+#!/usr/bin/env bash
+sql="\$1"
+if printf '%s' "\$sql" | grep -q '$1'; then
+  echo "$CH_EXC"
+  exit 0
+elif printf '%s' "\$sql" | grep -q '__ANCHOR__'; then
+  cat "$ANCHOR_LIVE"
+elif printf '%s' "\$sql" | grep -q '__FATALROWS__'; then
+  : > /dev/null
+elif printf '%s' "\$sql" | grep -q '__HOSTROWS__'; then
+  cat "$HOSTROWS"
+else
+  echo "STUB: unrecognised query shape" >&2; exit 3
+fi
+EXCSTUB
+  chmod +x "$STUB"
+}
+
+for _which in __ANCHOR__ __HOSTROWS__ __FATALROWS__; do
+  make_exc_stub "$_which"
+  _exc_out="$TMP/evidence-exc-${_which//_/}.env"
+  rm -f "$_exc_out"
+  out="$(run_sut --out "$_exc_out")"; rc=$?
+  if [[ "$rc" -eq 2 && ! -f "$_exc_out" ]]; then
+    pass "GUARD1/H4 ${_which}: an HTTP 200 carrying a ClickHouse error is TRANSIENT, not a result set"
+  else
+    fail "GUARD1/H4 ${_which}: an HTTP 200 carrying a ClickHouse error is TRANSIENT, not a result set" \
+         "rc=$rc evidence_written=$([[ -f "$_exc_out" ]] && echo yes || echo no)" "$out"
+  fi
+done
+
+# And the FATAL read specifically must never be read as a clean bill — the arm that reproduced
+# as a PASS. Asserted on the operator-facing text, not only on rc.
+make_exc_stub __FATALROWS__
+out="$(run_sut --out "$TMP/evidence-exc-fatal2.env")"; rc=$?
+if grep -q 'not a result set' <<<"$out" && ! grep -q 'RUNG2_BOOT_REHEARSAL=PASS' <<<"$out"; then
+  pass "GUARD1/H4b: the unbounded fatal query answering with an error names it, and does not PASS"
+else
+  fail "GUARD1/H4b: the unbounded fatal query answering with an error names it, and does not PASS" "$rc" "$out"
+fi
+
+make_stub "$STUB" "$ANCHOR_LIVE" "$HOSTROWS"
 
 # ── GUARD 1 arm enumerator ───────────────────────────────────────────────────────
 #

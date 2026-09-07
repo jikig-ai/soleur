@@ -129,6 +129,19 @@ case "${STUB_READBACK:-empty}" in
   one)   [[ -n "$marker" ]] || { echo "stub: no marker in SQL" >&2; exit 9; }; row "$marker"; exit 0 ;;
   two)   [[ -n "$marker" ]] || { echo "stub: no marker in SQL" >&2; exit 9; }; row "$marker"; row "$marker"; exit 0 ;;
   other) row "SOLEUR_BS_ROUNDTRIP_7855_SOMEONE_ELSES_RUN"; exit 0 ;;
+  # HTTP 200 CARRYING A CLICKHOUSE ERROR. `curl --fail-with-body` reports rc 0 for this, so a
+  # readback gate keyed on the rc alone consumes it as a result set. Modelled as the vendor
+  # actually delivers it: a BARE line, outside the JSONEachRow stream, on a successful exit.
+  exception) echo "Code: 241. DB::Exception: Memory limit (for query) exceeded: would use 9.31 GiB. (MEMORY_LIMIT_EXCEEDED)"; exit 0 ;;
+  # A ROW THIS RUN'S MARKER MATCHED, WHOSE `raw` IS NOT A JSON DOCUMENT. The stored schema for
+  # this source is INFERRED (`http` platform, verified against a `vector`-platform table), so
+  # this is the shape a schema mismatch actually takes: the SQL `LIKE` prefilter matches, the
+  # jq field anchor does not resolve.
+  undecodable) [[ -n "$marker" ]] || { echo "stub: no marker in SQL" >&2; exit 9; }
+             python3 -c 'import json,sys
+print(json.dumps({"dt":"2026-09-04 12:00:05","ingest_time":"2026-09-04 12:00:22",
+                  "raw":"message=" + sys.argv[1] + " source=betterstack-roundtrip-latency-7855"}))' "$marker"
+             exit 0 ;;
 esac
 QS
 chmod +x "$QSTUB"
@@ -165,6 +178,28 @@ echo "--- GUARD 2: no acknowledgement produces a storage verdict ---"
 STUB_HTTP_CODE=202 STUB_READBACK=empty STUB_CONTROL=live DEADLINE_OVERRIDE=18 \
   assert_rt "202 + empty readback + LIVE control → the vendor acknowledged a write it did not store" \
             "ROUNDTRIP_NOT_STORED" 1
+
+# ROW 2a (#7855, found at ship) — THE SAME DOOR P1-B CAME THROUGH.
+# `_read_ever_answered` existed to stop a readback that never ran from becoming a vendor
+# accusation, and it keyed on the transport rc alone. An HTTP 200 carrying a ClickHouse
+# exception is rc 0, so it set the flag, the marker was of course absent, the LIVE control
+# decided, and this emitted ROUNDTRIP_NOT_STORED — exit 1, published to a public tracker — off
+# a query that never ran. MUTATION that must drive this red: revert the gate to
+# `if [[ "$_read_rc" -eq 0 ]]; then _read_ever_answered=1`, i.e. drop the
+# `bs_absence_response_is_answer` call. Measured: without the fix this arm returns
+# ROUNDTRIP_NOT_STORED rc=1.
+STUB_HTTP_CODE=202 STUB_READBACK=exception STUB_CONTROL=live DEADLINE_OVERRIDE=18 \
+  assert_rt "202 + a readback answering HTTP-200-with-a-ClickHouse-error + LIVE control → unknown, never an accusation" \
+            "ROUNDTRIP_UNKNOWN" 3
+
+# ROW 2b (#7855, found at ship) — AN UNDECODED ROW IS NOT A MISSING ROW.
+# The `raw LIKE '%marker%'` prefilter matched, so the row is ours; the jq anchor did not resolve
+# it, because this source's stored schema is inferred rather than verified. Before the fix
+# `_observed` stayed empty and control reached the LIVE arm, publishing NOT_STORED about a row
+# we had just read back. MUTATION: delete the `_rows_for_marker` arm → ROUNDTRIP_NOT_STORED rc=1.
+STUB_HTTP_CODE=202 STUB_READBACK=undecodable STUB_CONTROL=live DEADLINE_OVERRIDE=18 \
+  assert_rt "202 + a marker-matching row whose raw does not decode + LIVE control → unknown (schema), never an accusation" \
+            "ROUNDTRIP_UNKNOWN" 3
 
 # The marker actually coming back is the only path to a stored verdict.
 STUB_HTTP_CODE=202 STUB_READBACK=one STUB_CONTROL=live \

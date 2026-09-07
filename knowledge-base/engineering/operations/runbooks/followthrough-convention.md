@@ -19,6 +19,7 @@ verification passes — no human revisit required.
    - Exit 0 = PASS (close-criteria met → sweeper closes the issue)
    - Exit 1 = FAIL (criteria not met → sweeper comments, leaves open)
    - Any other exit = TRANSIENT (network failure, timeout → sweeper retries next sweep)
+   - **Exit 78 = refused to run under shell tracing** (`EX_CONFIG`, #7797). It lands in the TRANSIENT bucket above, which is the fail-safe direction — never a false PASS — but it is a *configuration* signal, not a network one: the probe declined because tracing was on while a live credential was in scope. Re-run with the credential unset to trace safely. A probe stuck reporting 78 every sweep is a caller enabling `-x`, not a flaky dependency.
    - The script may print human-readable output to stdout/stderr; the sweeper captures the last 4 KB and posts it as a comment.
    - The script must be deterministic in its exit semantics: do not exit 0 on partial success.
    - **Never gate the exit code on `: "${VAR:?msg}"`.** Under a non-interactive shell that word-expansion aborts with status **1** (= FAIL in this contract), so a trailing `|| { echo TRANSIENT; exit 2; }` is dead code and an unprovisioned/empty secret reports FAIL instead of TRANSIENT. Use `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT: ..." >&2; exit 2; fi`. **Enforced mechanically by `scripts/lint-followthrough-varq-ban.sh`** (registered in `scripts/test-all.sh`, merge-blocking `test-scripts` shard; #6757) — a banned form on any executable probe line reddens CI. Accept both `200` AND `201` from the Supabase Management query endpoint (`/database/query` returns 201). Verified in `scripts/followthroughs/autovacuum-thrash-6168.sh` (PR #6164) — see `knowledge-base/project/learnings/best-practices/2026-07-07-followthrough-and-shape-gate-silent-falseness.md`.
@@ -124,7 +125,6 @@ merge timestamp; its directive declares `secrets=GH_TOKEN`).
 - **Manual run**: `gh workflow run scheduled-followthrough-sweeper.yml`
 - **Dry run**: `gh workflow run scheduled-followthrough-sweeper.yml -f dry_run=true`
 - **First user**: #3859 (Sentry cron monitor check-in receipts after #3849 rotation)
-
 
 ## The positive control must be impossible for the OLD artifact (#7220, 2026-08-04)
 
