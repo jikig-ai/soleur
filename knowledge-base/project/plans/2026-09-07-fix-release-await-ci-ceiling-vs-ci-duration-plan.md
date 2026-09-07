@@ -590,7 +590,7 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-208-ci-declared-budget-bounds-deploy-gate.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-208-deploy-gate-measures-its-own-gated-quantity.md`
   (ordinal provisional).
 - Guard 1 suite (shard totality) and Guard 2 suite (CI budget bounded by `CEILING_S`).
 
@@ -766,3 +766,34 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
 - Closes #7902. Ref #5806 (updated and re-armed, deliberately not closed).
 - #5795 / PR #5051, #5052 — the `await-ci` lineage this plan preserves rather than replaces.
 - ADR-133 (sequentiality and CI exemptions), ADR-181 (relevance-decline accounting).
+
+## Correction (2026-09-07, post-review)
+
+Three claims in this plan were falsified during review and are superseded. The plan is a
+point-in-time artifact and is not rewritten in place; this stanza is the correction of record.
+
+1. **"Runner dispatch delay p50 1.4 / p90 12.4 / max 21.0 min."** Re-derived from the GitHub API,
+   real job dispatch is ~1 SECOND and every job in a run starts within ~15s of the others. Those
+   gaps are `ci.yml`'s OWN `concurrency` group serialising each main push behind its
+   predecessor's `test` job — four consecutive runs started +1s after the prior run's `test`
+   completed; runs created after the group drained started in ~1s. Dispatch is per-RUN, not
+   per-leg, so the argument that extra legs each add a dispatch draw is withdrawn. Every
+   occurrence of the 1.4/12.4/21.0 figures in this document inherits this correction.
+
+2. **The K table and "K=4 is worse than K=3."** Both were simulated on `main`'s 374-suite order.
+   This branch changes the registered suite set, and K=3's slowest leg swung 15.09 -> 20.70 ->
+   15.09 minutes purely from adding and removing two files. The shipping figure is 15.09 min on
+   the 375-suite `LC_ALL=C` order; K=4 measuring worse is a property of THIS suite set, not of K.
+   Re-simulate before touching K.
+
+3. **Guard 2 and its ADR.** The plan's Guard Contract specifies a guard asserting
+   `max(closure ceilings) + test's own <= CEILING_S/60`. It was built, mutation-proven at 10/10,
+   and then DELETED on a CTO ruling: declared job ceilings bound execution only, so the
+   arithmetic omits the queue term of correction 1 and is green on configurations the gate cannot
+   absorb — and no headroom factor repairs a missing term. It is replaced by a `::warning::` at
+   0.7 x CEILING_S inside `await-ci`, which measures the gated quantity itself, queue included.
+   ADR-208 is rewritten accordingly and records the rejection so it is not re-proposed.
+
+Also corrected: measured per-leg install overhead is 0.52 min (not ~1.5), and `test-scripts`
+ships `timeout-minutes: 60` (not 30) because one suite on its path declares a 2,500,000 ms
+fail-safe budget and a silent bound must never fire before a loud one.

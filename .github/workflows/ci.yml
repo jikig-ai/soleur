@@ -741,8 +741,9 @@ jobs:
   # the matrix outcome — failure on any shard fails the whole job.
   test-webplat:
     runs-on: ubuntu-latest
-    # Declared for Guard 2 (#7902): CI's contribution to the deploy gate must be a bounded,
-    # DECLARED budget. Sized ~4x the measured p90 (5.51 min) for this job's slowest leg.
+    # Bounds a HUNG job (#7902). Sized ~5x the measured p90 (4.37 min) for this job's slowest
+    # leg, and no suite on this path declares a per-suite budget, so it cannot fire before a
+    # loud bound. An absent value would read as GitHub's 360-minute default.
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -789,8 +790,8 @@ jobs:
 
   test-bun:
     runs-on: ubuntu-latest
-    # Declared for Guard 2 (#7902). Measured p90 is under 2 min; 20 is deliberate slack for a
-    # cold runner, still far under what the gate can absorb.
+    # Bounds a HUNG job (#7902). Measured p90 under 2 min; 20 is deliberate slack for a cold
+    # runner. No suite on this path declares a per-suite budget.
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -825,29 +826,60 @@ jobs:
     #
     # K=3 IS DERIVED, NOT ASSUMED. Per-suite durations were taken from that run's own job log
     # (the runner prints `--- <label> ---` at each suite start and Actions timestamps every
-    # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order:
+    # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order.
     #
-    #   K=2 -> 22.01   K=3 -> 15.11   K=4 -> 16.37   K=5 -> 10.25   K=6 -> 9.99   K=8 -> 12.50
+    # MEASURED on the 375-suite `LC_ALL=C` registration order as of this commit — slowest-leg
+    # minutes, group total 35.25 min:
     #
-    # SLOWEST-LEG MINUTES, AND IT IS NOT MONOTONIC IN K: K=4 is WORSE than K=3 because the two
-    # dominant suites land on one leg mod 4, and K=8 is worse than K=6. Anyone raising K must
-    # re-run that simulation rather than assuming more legs are faster.
+    #   K=2 -> 24.30   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
+    #
+    # K=4 measures worse than K=3 here. That is NOT a property of K: it is a property of THIS
+    # suite set. Adding two suites and removing one swung K=3 between 15.09 and 20.70 minutes
+    # during this PR's own review, purely from ordinal position. Any change to the registered
+    # suite set invalidates this table — RE-SIMULATE before touching K. Making leg composition
+    # an owned fact rather than a positional accident (LPT over a checked-in duration table) is
+    # tracked as a follow-up, not shipped here.
     #
     # The floor no K can beat is the longest single suite —
     # `tests/scripts/registry-gate-mutation-battery` at 8.14 min, 23% of the group on its own.
-    # K=3 lands 15.11 min against a 3600s (60 min) gate ceiling: ~4x margin. Past K=3 the
-    # binding term stops being execution and becomes DISPATCH (measured run-creation to
-    # job-start: p50 1.4, p90 12.4, max 21.0 min), so each extra leg buys shrinking execution
-    # time while adding a draw from a pool that is already the pipeline's contended resource,
-    # plus another ~1.5 min of gitleaks/likec4/bun install overhead.
+    # K=3 lands 15.09 min (+0.52 min measured per-leg install overhead) against a 3600s gate
+    # ceiling. Extra legs are nearly free in runner-minutes, but they consume peak runner
+    # concurrency — the same pool the concurrency-key follow-up will need — so the smallest
+    # qualifying K wins.
+    #
+    # NOTE ON DISPATCH, corrected during review: real job dispatch is ~1 SECOND and is
+    # per-RUN, not per-leg. The 6-21 minute gaps between run creation and job start are
+    # ci.yml's OWN `concurrency` group (below) serialising each main push behind its
+    # predecessor's `test` job. An earlier revision of this comment attributed them to
+    # runner-pool contention and used that to argue against larger K; that was wrong and the
+    # argument is withdrawn. Extra legs add no dispatch penalty.
     strategy:
       fail-fast: false
       matrix:
         shard: ["1/3", "2/3", "3/3"]
-    # Declared so Guard 2 can bound CI's contribution to the deploy gate. Sized ~2x the
-    # measured 15.11 min slowest leg; an absent value would read as GitHub's 360-minute
-    # default, which no deploy gate can absorb.
-    timeout-minutes: 30
+    # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
+    #
+    # Three bounds sit on this leg. Two are loud: the per-suite budget at
+    # `scripts/test-all.sh:599` (`tests/scripts/registry-gate-mutation-battery` -> 2500000 ms
+    # = 41.67 min, which reports itself), and `await-ci`'s CEILING_S (3600s, emits an
+    # `::error::`). GitHub's `timeout-minutes` is the third and it is SILENT — a job-kill
+    # produces no annotation at all. So it is the last resort by construction and must sit
+    # strictly above every loud bound on its path:
+    #
+    #   rest-of-leg 6.95 min + that suite's declared 41.67 min = 48.62 min
+    #   x1.2 (the same convention sizing await-ci's timeout-minutes over CEILING_S) = 58.3
+    #   -> 60
+    #
+    # An earlier revision of this PR set 30, sized against the leg's NOMINAL 15.09 min. That
+    # was a new silent-kill path: the same battery measures 14.3-27.9 min and its own budget
+    # comment notes load alone moves it 1.9x, so a healthy slow run would have been killed
+    # with no diagnostic — #7902's failure mode relocated from the deploy gate into CI and
+    # made silent. Do NOT lower this to fit a leg estimate, and do NOT lower the 2500000 ms
+    # budget to fit this: that is a fail-safe sized ~1.5x its own measured max.
+    #
+    # This does not bound the deploy gate and is not trying to — see ADR-208. Its job is
+    # capping a hung leg at 1 hour instead of GitHub's 6-hour default.
+    timeout-minutes: 60
     # No setup-node — bash + python3 + a stock node (with npm) ship on
     # ubuntu-latest by default, and the one `node --test` entry in the
     # scripts group (scripts/md-to-mrkdwn.test.mjs) runs on the stock
@@ -971,12 +1003,6 @@ jobs:
       - name: Guard 1 — shard-totality mutation battery (control + every row must drive it RED)
         run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh
 
-      # Guard 2 rides in this job for the same two reasons: its battery mutates ci.yml and
-      # web-platform-release.yml in place, and the guard reads across BOTH workflows, so it is
-      # not a member of any one shard's subject matter.
-      - name: Guard 2 — CI-budget mutation battery (control + every row must drive it RED)
-        run: bash plugins/soleur/test/ci-budget-bounded-mutations.sh
-
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
   grok-fidelity:
@@ -1025,10 +1051,8 @@ jobs:
     needs: [test-webplat, test-bun, test-scripts]
     if: always()
     runs-on: ubuntu-latest
-    # Declared for Guard 2 (#7902). This job only reads three `needs.*.result` strings —
-    # measured p50 0.05 min — but it MUST carry a ceiling: Guard 2 reads an absent
-    # timeout-minutes as GitHub's 360-minute default, and the aggregator sits on the deploy
-    # gate's critical path after the shards.
+    # Bounds a HUNG job (#7902). This job only reads three `needs.*.result` strings (measured
+    # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
     #
     # Everything below this line is byte-unchanged from before the shard (#7902 AC5): the
     # `needs:` list, the `if:`, and the aggregation loop are untouched, which is what proves

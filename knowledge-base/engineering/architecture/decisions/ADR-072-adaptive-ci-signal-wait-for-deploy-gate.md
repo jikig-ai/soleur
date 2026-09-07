@@ -102,6 +102,11 @@ has a cliff at whatever ceiling is chosen; adaptive **widens and defers** that c
 ≈50m, only while CI is provably alive) rather than removing it. Removing it entirely is
 option 3.
 
+> **Superseded 2026-09-07 (#7902):** the cliff is now ≈60m — `CEILING_S` was raised
+> 3000s → 3600s. This sentence sits outside the amended Decision item 4, so the append-only
+> amendment below does not reach it; the figure is corrected here rather than in place, per
+> the append-only discipline for dated records.
+
 Load-bearing invariants a future maintainer MUST preserve (each silently reintroduces a bug if
 dropped):
 
@@ -197,6 +202,10 @@ gate would compare an un-CI'd SHA against itself and pass. It would also permane
 `live-verify` (whose `if:` ends `github.event_name == 'push'`). Today's failure is a blocked
 deploy; that one is an unverified deploy reporting success.
 
-**New coupling.** [ADR-208](./ADR-208-ci-declared-budget-bounds-deploy-gate.md) makes CI's
-contribution to this gate a declared, mechanically bounded budget, so the ceiling cannot be
-silently outgrown a third time.
+**New coupling.** [ADR-208](./ADR-208-deploy-gate-measures-its-own-gated-quantity.md) records that the gated quantity is
+time-to-`test` and that it decomposes into `concurrency queue + critical-path execution` — the
+queue being ci.yml's own serialisation of main pushes, which is usually the larger term. It
+therefore bounds this gate by MEASURING that quantity (a `::warning::` at 0.7 x CEILING_S in the
+loop below) rather than by arithmetic over declared CI job ceilings, which it considered and
+rejected: declared ceilings bound execution only, so such arithmetic is green on configurations
+this gate cannot absorb.

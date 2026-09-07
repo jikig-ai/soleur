@@ -188,6 +188,12 @@ jobs:
           status=missing; conclusion=none
           reconcile_used=0
           warned_900=0
+          # Soft ceiling (#7902) — DERIVED from CEILING_S, never restated, so the two cannot
+          # drift apart. Deliberately no literal here either: writing the current product into
+          # the comment reintroduces, in prose, exactly the restated-value drift the derivation
+          # exists to remove.
+          warned_soft=0
+          soft_ceiling_s=$(( CEILING_S * 7 / 10 ))
           start_epoch=$(date +%s)
           total_budget=$((MAX_ATTEMPTS + RECONCILE_ATTEMPTS))
           for attempt in $(seq 1 "$total_budget"); do
@@ -195,6 +201,16 @@ jobs:
             if [ "$elapsed" -gt 900 ] && [ "$warned_900" = "0" ]; then
               echo "::warning::await-ci has waited past 900s (elapsed_s=$elapsed) for CI on $SHA — CI is under contention; the adaptive gate keeps waiting while the ci.yml run is alive (#5795)."
               warned_900=1
+            fi
+            # EARLY WARNING at 70% of the ceiling (#7902). This is the mechanism that catches
+            # the #7902 creep class, and it is here rather than in CI on purpose: it measures
+            # the quantity the gate actually gates — time-to-`test` — which INCLUDES ci.yml's
+            # own concurrency queue. Declared job ceilings in ci.yml bound execution only, so
+            # arithmetic over them is green on configurations this gate cannot absorb; that
+            # approach was tried and rejected (see ADR-208).
+            if [ "$elapsed" -ge "$soft_ceiling_s" ] && [ "$warned_soft" = "0" ]; then
+              echo "::warning::await-ci has passed 70% of its ceiling for $SHA (elapsed_s=$elapsed, soft_ceiling_s=$soft_ceiling_s, CEILING_S=$CEILING_S). This measures time-to-'test' INCLUDING the ci.yml concurrency queue. Sustained hits mean CI has outgrown the deploy gate — raise CEILING_S (moving DRIFT_SUSTAINED_THRESHOLD_MIN first) or shorten CI, before this becomes a fail-closed deploy."
+              warned_soft=1
             fi
             # ── TOP OF LOOP: read the `test` check-run verdict FIRST (AC2). ──
             # var-based (NOT piped-into-grep) to avoid set -e + pipe fragility;

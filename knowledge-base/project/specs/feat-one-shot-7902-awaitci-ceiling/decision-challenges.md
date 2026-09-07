@@ -66,3 +66,15 @@ the plan's conclusions. Recorded because they are the kind of error that is invi
    imperative `run_suite` statements and ~24 name no path at all. The partition now keys on the
    `run_suite` label and runs round-robin at that chokepoint — which also made totality and
    determinism structural rather than asserted, deleting an entire guard from the plan.
+
+## Correction (2026-09-07, post-review)
+
+DC-1's "Residual the plan does not hide" paragraph attributes the 1.4 / 12.4 / 21.0 minute
+figures to runner dispatch across matrix legs. That is wrong. Re-derived from the API, real
+dispatch is ~1 second and is per-RUN; those gaps are `ci.yml`'s own `concurrency` group
+serialising each main push behind its predecessor's `test` job. Sharding therefore does not
+multiply a dispatch draw, and the raised ceiling is not what absorbs it — the queue is a separate
+term, now recorded in ADR-208 and filed as a follow-up.
+
+DC-1's measured distribution ("max 56.1 min") is also superseded: re-measured over 25 runs, the
+gated metric is p50 35.2 / p90 54.0 / p100 57.4 min.

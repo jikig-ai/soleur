@@ -213,7 +213,7 @@
 - [ADR-202: Enforce a runtime-STATE hazard with a self-refusal the artifact carries, gated at commit time](engineering/architecture/decisions/ADR-202-enforce-runtime-state-hazards-with-a-carried-self-refusal.md)
 - [ADR-203 — A weekly cron may advance a compliance attestation on the default branch, gated on a comparison it performed in the same run](engineering/architecture/decisions/ADR-203-cron-write-access-for-a-compliance-attestation.md)
 - [ADR-204 — redirect-health moves to Better Stack, because Sentry cannot express it](engineering/architecture/decisions/ADR-204-redirect-health-moves-to-better-stack-because-sentry-cannot-express-it.md)
-- [CI's contribution to the deploy gate is a declared, bounded budget](engineering/architecture/decisions/ADR-208-ci-declared-budget-bounds-deploy-gate.md)
+- [The deploy gate is bounded by measuring its own gated quantity, not by arithmetic over declared CI budgets](engineering/architecture/decisions/ADR-208-deploy-gate-measures-its-own-gated-quantity.md)
 - [Architecture Diagrams — LikeC4 C4 Model](engineering/architecture/diagrams/README.md)
 - [Soleur Platform — C4 Model](engineering/architecture/diagrams/c4-model.md)
 - [Domain Model & Business Rules Register](engineering/architecture/domain-model.md)
