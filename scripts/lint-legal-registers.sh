@@ -10,8 +10,10 @@
 # This header claimed "nothing structurally lints knowledge-base/legal/** ... the first
 # corpus-level gate over that tree" until review falsified both halves -- the runbooks ARE
 # scanned, and the six-site figure measured 3. The narrower claim is the true one and is the
-# load-bearing one. Being first over the registers is why it lands ADVISORY (see --advisory
+# load-bearing one. Being first over the registers is why it LANDED advisory (see --advisory
 # below) rather than straight onto the one required context that cannot be un-required.
+# PROMOTED TO BLOCKING 2026-09-07 (#7787, PR #7881) after one merge cycle measured clean. The
+# flag survives as a supported mode; what changed is that test-all.sh no longer passes it.
 #
 # THREE ASSERTIONS.
 #
@@ -88,9 +90,11 @@ while [[ $# -gt 0 ]]; do
     # claimed until self-review falsified it: `scripts/lint-infra-no-human-steps.py` already
     # scans `knowledge-base/legal/runbooks` via its SCAN_DIRS. No lint covered the registers.
     # Its scope was DESIGNED rather than measured. One cycle
-    # advisory measures it; promotion is then deleting this flag at the `run_suite` call site
-    # in scripts/test-all.sh, with evidence behind it. PROMOTION TRIGGER: one green merge cycle
-    # with no unexplained finding. Tracked at #7787 with its checklist -- a follow-up with a
+    # advisory measured it, and the flag was DELETED from the `run_suite` call site in
+    # scripts/test-all.sh on 2026-09-07 (#7787, PR #7881) with that evidence behind it: zero
+    # findings across the window, two substantive legal amendments inside it. This arm is kept
+    # deliberately -- it is how the mode is exercised by the unit suite, and the rc=2 carve-out
+    # below is the asymmetry the promotion did NOT change. Tracked at #7787 with its checklist -- a follow-up with a
     # trigger, not a hope.
     --advisory) ADVISORY=1; shift ;;
     -h|--help)  echo "usage: lint-legal-registers.sh [--advisory]"; exit 0 ;;

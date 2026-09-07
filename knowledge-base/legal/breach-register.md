@@ -90,10 +90,13 @@ exists to serve.
 Files that are determination-shaped under the CI guard's pinned pattern but fall outside this
 predicate are **not silently dropped**: each carries a committed `NOT_TRANSCRIBED` waiver with
 a reason, listed under §Excluded records below and checked by
-`scripts/lint-legal-registers.sh`, which is registered in `scripts/test-all.sh` and lands
-**advisory for one merge cycle** (#7787): for that window a finding is reported as a warning and
-does not block, while a fail-closed refusal still does. The control is real and its enforcement
-level is stated rather than implied.
+`scripts/lint-legal-registers.sh`, which is registered in `scripts/test-all.sh` and is
+**BLOCKING** as of 2026-09-07 (#7787): a finding fails the required `test` context. It landed
+advisory for one merge cycle and was promoted on measured evidence -- zero findings across that
+window, including two substantive legal amendments. The rc=2 asymmetry is unchanged by the
+promotion: an "I cannot decide" was always a hard failure and still is, which is what keeps a
+broken corpus distinguishable from a clean one. The control is real and its enforcement level is
+stated rather than implied.
 
 ## Provenance — why this file is dated 2026-09-03
 
@@ -169,7 +172,7 @@ as the standing rule for the next row. The machine-readable waiver list lives in
 - **Canonical-source column format (machine-readable — do not restyle).** The last column
   carries exactly one repo-relative path, backtick-delimited, and nothing else.
   `scripts/lint-legal-registers.sh` strips the backticks and resolves the path against the
-  working tree; a row whose pointer does not resolve is an assertion failure — which, for the advisory window (#7787), is reported as a warning and does **not** block, while a fail-closed refusal blocks throughout. Stated precisely because this is the bullet a maintainer reads before restyling the column. A determination register
+  working tree; a row whose pointer does not resolve is an assertion failure — which, since the 2026-09-07 promotion to blocking (#7787), **fails the required `test` context**. During the preceding advisory window it was reported as a warning and did not block; a fail-closed refusal (rc=2) blocked throughout and still does, and that asymmetry is what the promotion deliberately left untouched. Stated precisely because this is the bullet a maintainer reads before restyling the column. A determination register
   whose pointers rot is worse than none.
 - **Verified 2026-09-04 (#7791) — the 2026-05-15 row's accountability residual is recorded on a
   ground that is now spent, and the surviving ground is narrower.** That row's evidentiary cell
