@@ -215,8 +215,13 @@ two-primitive separation.
 
 ## Flow 2 — PA8 §(f) retention pin (one-time measurement)
 
-The Article 30 register PA8 §(f) claims **30 MB rolling per container**
-(structural cap from `apps/web-platform/infra/cloud-init.yml` (the `"log-driver": "json-file"` daemon.json block)). There
+The Article 30 register PA8 §(f) **no longer claims 30 MB rolling per
+container** — that figure was retracted as *misattributed* on 2026-09-07 (#6474):
+it is the Docker daemon default from the `daemon.json` block in
+`apps/web-platform/infra/cloud-init.yml`, and it governs other containers, not
+this one, which runs under `--log-driver journald`. §(f) now records the
+journald bound (`SystemMaxUse=1G`, host-wide and shared with every unit, further
+shortened by `SystemKeepFree=2G`). There
 is no MB → days conversion to record: a capacity-bounded ring buffer has no
 envisaged time limit, because its duration is a function of instantaneous
 emission rate. Art. 30 PA-8 §(f) records the **mechanism** rather than a
@@ -240,8 +245,15 @@ the corrections above; the measurement they would have called for is the one
    trigger watching it guards a surface the register says is irrelevant here —
    which is the same Art. 5(2) defect this runbook's own §Re-verification
    triggers preamble is about, one step earlier. It now fires on any change to
-   the **`docker run --log-driver` / `--log-opt` invocation** in the same file
-   (anchor on the `--log-driver journald` line). *Not fired since re-scoping.*
+   the **`docker run --log-driver` / `--log-opt` invocation** at **any** of its
+   three sites: `apps/web-platform/infra/cloud-init.yml` (host birth) and
+   `apps/web-platform/infra/ci-deploy.sh` (TWO sites — the per-deploy path that
+   starts the live container on every merge). Anchoring on `cloud-init.yml`
+   alone, as the first re-scope did, reproduces the original miss one file over:
+   fresh hosts would keep journald while the live production container silently
+   fell back to the json-file daemon default, and nothing would fire.
+   `apps/web-platform/infra/vector.toml` already recorded that both files start
+   the container. *Not fired since re-scoping.*
 3. **Off-host log shipper introduction** — fires when any of `promtail`,
    `vector`, `fluent`, `filebeat`, `rsyslog` is added to the infra.
    **FIRED 2026-06-02** — Vector, `[sources.app_container_journald]` (#4786).
@@ -322,12 +334,14 @@ matches `CONTAINER_NAME = ["soleur-web-platform"]` and ships the WARN+ subset of
 this very container's stdout to Better Stack. Flow 1 above now depends on exactly
 that.
 
-**PA-8 §(f)'s recorded mechanism is also wrong for this container, and that is
-tracked rather than fixed here.** §(f) and this runbook both still describe a
-"30 MB rolling per container" `json-file` cap (`max-size 10m` × `max-file 3`).
-That cap governs the daemon default, not this container: under `--log-driver
-journald` its retention is journald's `SystemMaxUse`/`SystemKeepFree`, shared
-with every other unit on the host. §(f)'s *disposition* — `NOT RECORDED`, on the
+**PA-8 §(f)'s recorded mechanism WAS wrong for this container; it was corrected
+on 2026-09-07 (#6474), and this paragraph is kept as the record of what was
+wrong.** §(f) and this runbook both used to describe a "30 MB rolling per
+container" `json-file` cap (`max-size 10m` × `max-file 3`). That cap governs the
+daemon default, not this container: under `--log-driver journald` its retention
+is journald's `SystemMaxUse`/`SystemKeepFree`, shared with every other unit on
+the host. §(f) now records the journald bound, and this runbook's Flow 2 above
+was corrected in the same change. §(f)'s *disposition* — `NOT RECORDED`, on the
 ground that a capacity-bounded buffer has no envisaged time limit — survives the
 correction, because journald is also capacity-bounded. The wrong mechanism is a
 register edit, out of scope for a runbook PR, and is tracked at **#6474**.
