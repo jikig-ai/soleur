@@ -9,7 +9,8 @@ symptoms:
   - "a destination glob accepted https://evil.com/?x=.betterstackdata.com/"
 root_cause: guard_narrower_than_the_property_it_names
 severity: critical
-tags: [credential-forwarding, guard-vacuity, ap-021, mutation-testing, verification-defects]
+tags: [credential-forwarding, guard-vacuity, ap-021, mutation-testing, verification-defects,
+  shell, pipefail, self-match, silent-fallback]
 issue: 7855
 pr: 7856
 synced_to: [review, work, compound]
@@ -269,6 +270,98 @@ guard being broken, inverted, or never reached?*
   `playwright` MCP disconnected mid-session. Worked around with the `gh` CLI; no impact on output.
 - **A Python slice left a dangling `fi`**, and one edit dropped an `anchor_out=` assignment.
   **Prevention:** `bash -n` after every structural edit — both were caught that way within seconds.
+
+### Post-compound: five session errors, plus two findings that are not errors
+
+These occurred AFTER `/compound` ran, during ship and postmerge, so they are appended rather than
+folded above. Four of the five are the same shape — **a command failed, the failure was swallowed, and I acted
+confidently on the wrong answer.** Every one was caught by a contradiction in the output.
+
+**Corrected at review, because the first draft of this sentence was itself the defect it describes.**
+It read "none was caught by an exit code", and two of the five bullets falsify that: `gh` exits **1**
+on the bad flag and `git commit -F <missing>` exits **128**, both with an explanatory stderr line. The
+accurate split is that **three of the five produced no usable exit code, and two produced a perfectly
+good one that nobody read** — which is the sharper lesson, because it means the remedy differs by
+bullet: the first three need a different construct, the last two only needed me to look.
+
+- **`curl -sf … | jq` reported success on a failed fetch.** A pipeline's exit status is its LAST
+  command's, and `jq` exits 0 on empty input, so `curl … | jq … || echo FAILED` can never print
+  FAILED. **Prevention:** capture the body and the code in the command itself
+  (`curl -sS -w '\n__HTTP__%{http_code}'`) and branch on that, or set `pipefail` — never let `||`
+  guard a pipeline whose tail swallows the status. The prescription is not new — see
+  `best-practices/2026-05-29-http-verification-gates-must-check-status-not-just-transport.md`. What
+  the corpus did not already have is the mechanism: **`jq` exits 0 on empty input**, so the `||` can
+  never fire.
+- **`doppler secrets get X 2>/dev/null || echo "<guess>"` sent me to the wrong host.**
+  `PRODUCTION_URL` existed; the fetch failed for an unrelated reason, stderr was discarded, and the
+  fallback produced a plausible-looking URL that 404'd behind a Cloudflare challenge. I nearly
+  reported production unhealthy. **Prevention:** a `||` fallback on a secret lookup must print WHY
+  it fell back; a silent default converts a fetch failure into a wrong fact. Same class as
+  `integration-issues/2026-04-03-doppler-not-installed-env-fallback-outage.md`, and the shell-side
+  extension of `cq-silent-fallback-must-mirror-to-sentry`.
+- **`gh pr checks --jq --arg n "$r"` was rejected outright, and I read its empty stdout as data.**
+  `gh` does not forward `--arg` to jq — its `--jq` is an embedded gojq, not a shell-out, and the repo
+  already documents this for `gh issue list`. **The first draft of this bullet said `$n` was "unbound
+  so every `select` returned empty"; that is wrong in both halves and was corrected at review.**
+  Measured: the invocation exits **1** with `accepts at most 1 arg(s), received 4`, and an undefined
+  jq variable is a COMPILE error (`$n is not defined`, exit 3), never a filter that matches nothing.
+  So this was a loud failure whose status I discarded — the loop consumed empty stdout and reported
+  all 24 required contexts "absent" while the bucket summary said 74 passing. **Prevention:** check
+  the exit status of a `gh` call before using its output, and fetch once with `--json` then run `jq`
+  as a separate process where `--arg` is yours to pass. Already documented at
+  `2026-04-15-gh-jq-does-not-forward-arg-to-jq.md` and in `review/SKILL.md`; the recurrence vector is
+  the same as the `pkill` one — typed from memory in an ad-hoc loop.
+- **`pkill -f 'run-registered-suites'` killed its own observers.** Three background waiters had that
+  string in their command lines, so the pattern matched the watchers along with the target. This is
+  the same self-matching failure as the `git stash list` hook trip and the bare-token greps: **a
+  pattern that appears in the text of the thing observing it.** Corrected at review: the `git stash`
+  hook trips do NOT belong in this enumeration — there a GUARD scanned a submitted command and
+  matched a read-only verb inside it, which is a false positive, not self-observation. The genuine
+  members are the bare-token greps (four, counting the one below) and this. And "N times in one
+  session" understates it corpus-wide: **31 learning files mention `pkill -f`**, the class is
+  documented in `work/SKILL.md` and `git-worktree/SKILL.md`, and a sanctioned replacement already
+  ships as `plugins/soleur/scripts/lib/proc.sh` (`list_runs` / `kill_mine`, which resolve ownership
+  via `/proc/<pid>/cwd` and exclude self plus ancestry). It kept recurring because the command is
+  typed from memory. **So this PR stops writing it down and gates it:**
+  `.claude/hooks/pkill-self-match-guard.sh` denies `pkill -f` / `pgrep -f` at the Bash tool boundary
+  and points at the helpers.
+  **Prevention: capture the PID at spawn and kill that.** It is the only option immune to the class,
+  because it names the process instead of describing it.
+
+  **Do NOT reach for a narrower pattern.** This bullet's first draft prescribed
+  `pkill -f '^bash .*run-registered-suites\.sh'`, and review falsified it by reproduction: `pkill -f`
+  matches an unanchored regex against the WHOLE JOINED COMMAND LINE, so `^` anchors at the start of
+  that string, not at the start of an argv slot. A watcher spawned as
+  `bash -c '…run-registered-suites.sh…'` — exactly how the waiters in this incident were spawned —
+  starts with a `bash` token and contains the script name, so it satisfies the "narrowed" pattern as
+  fully as the target. The narrowing excludes only non-`bash` matchers and does nothing about the
+  self-matching class. Prescribing it was the class recurring inside the paragraph describing it.
+- **The scratchpad was deleted mid-session at the date rollover**, taking the commit-message file
+  with it, so `git commit -F` failed — loudly, at exit 128, `could not read log file`. Recovered by
+  re-reading the PR body from GitHub. **It then happened a SECOND time**, while writing up this very
+  bullet, which is why the prevention below is a rule and not a caution.
+  **Prevention: assert `[[ -s "$f" ]]` immediately before using it.** That is the load-bearing half
+  and is sufficient alone. **Relocating the file is NOT a fix**, and the first draft of this bullet
+  over-claimed that it was: writing under `"$(git rev-parse --git-dir)"` survives a `/tmp` sweep, but
+  `worktree-manager.sh cleanup-merged` removes that gitdir and runs at EVERY session start, so it
+  only substitutes one auto-deleting location for another. Use it for a within-session artifact if
+  convenient; never treat it as durable, and never write such a file under the WORKING tree —
+  `git add -A` appears in two skills and a commit-message file is not gitignored.
+
+One finding that is not a session error but surfaced from the same runs: the pre-commit gate itself
+goes red for environmental reasons. `.claude/hooks/memory-backstop.test.sh` reports
+`FAILED 1 (passed 46)` under lefthook and `PASSED 54` standalone, on the same tree, failing on
+`reason='claude_pid_not_found'` — the Claude PID is not discoverable inside lefthook's process tree.
+Nothing in this PR touches that hook or its test. Filed as #7886, because a gate that fails for
+reasons unrelated to the diff is how a real failure in that gate later gets waved through.
+
+And one more that is not an error but is worth the same shelf space: **a bare-token grep matched its own
+documentation for the FOURTH time**, inside the postmerge content check — `grep -c
+'_BS_SOURCES_LIB_LOADED'` returned 1 against a file whose whole point is that the guard is gone,
+because the comment explaining the removal names the variable. Anchoring on the executable form
+(`^\s*\[\[ -n "\$\{…`) returned 0, correctly. `cq-assert-anchor-not-bare-token` is the rule; the
+observation here is that knowing the rule is not sufficient, because the collision reappears in
+whatever new place you next write a verification.
 
 ## Related
 
