@@ -57,6 +57,30 @@ set -uo pipefail
 # guard would report a scrub gap that does not exist.
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE GIT_TEMPLATE_DIR GIT_EXEC_PATH
 
+# Incident-telemetry sandbox belt (#7853). The five chokepoints already export this; a runner is
+# the outer boundary, so it sets a default for anything they do not reach -- a suite invoked from a
+# third cwd, or one whose runtime loads no preload.
+#
+# Fail-loud, and both conditions matter. An UNSET root is not a degraded sandbox: `_incidents_repo_root()`
+# walks up to the operator real .claude/.rule-incidents.jsonl. An EMPTY value reads as unset to that
+# same function while still looking "set" to any static check for the variable name, which is the
+# shape that let two previous per-call-site sweeps report clean while they leaked.
+if [ -z "${INCIDENTS_REPO_ROOT:-}" ]; then
+  _soleur_inc_sb="$(mktemp -d -t soleur-inc-XXXXXX 2>/dev/null || true)"
+  case "${_soleur_inc_sb:-}" in
+    /?*) mkdir -p "$_soleur_inc_sb/.claude" 2>/dev/null || true
+         export INCIDENTS_REPO_ROOT="$_soleur_inc_sb"
+         export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_inc_sb" ;;
+    *)   printf "FATAL: could not create an incident-telemetry sandbox (got %s).\\n" \
+           "${_soleur_inc_sb:-<empty>}" >&2
+         printf "  Refusing to run: an unset INCIDENTS_REPO_ROOT points test telemetry at the\\n" >&2
+         printf "  operator real .claude/.rule-incidents.jsonl. Check free space on %s.\\n" \
+           "${TMPDIR:-/tmp}" >&2
+         exit 1 ;;
+  esac
+  unset _soleur_inc_sb
+fi
+
 DIR=$(cd "$(dirname "$0")" && pwd)
 FAIL=0
 RAN=0

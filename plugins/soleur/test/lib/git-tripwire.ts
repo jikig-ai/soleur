@@ -19,6 +19,7 @@
 // codes, so an aborted run is attributable at a glance.
 
 import { GIT_LOCATION_VARS } from "./git-fixture-env";
+import { ensureIncidentSandbox } from "./incident-sandbox";
 
 export const GIT_TRIPWIRE_EXIT_CODE = 97;
 
@@ -97,3 +98,8 @@ export function assertNoInheritedGitLocation(runner: string): void {
 assertNoInheritedGitLocation(
   typeof (globalThis as { Bun?: unknown }).Bun !== "undefined" ? "bun test" : "vitest",
 );
+
+// Redirect incident telemetry at the same chokepoint (#7853). Ordered AFTER the tripwire on
+// purpose: the tripwire's job is to abort a runner started under a broken environment, and a run
+// that is going to abort should not first create a scratch directory nobody will clean up.
+ensureIncidentSandbox();

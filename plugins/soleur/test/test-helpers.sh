@@ -15,6 +15,37 @@ set -euo pipefail
 # shellcheck source=./lib/git-fixture-env.sh
 source "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/git-fixture-env.sh"
 
+# --- Incident-telemetry sandbox (#7853) --------------------------------------------------------
+# The shell arm of the same chokepoint. A suite sourcing these helpers can spawn a hook or a gate
+# script, and those emit through `.claude/hooks/lib/incidents.sh`, which resolves its sink by
+# walking up to the REAL repository unless INCIDENTS_REPO_ROOT says otherwise. Three suites were
+# measured writing fabricated rows into the operator ledger that way.
+#
+# Non-destructive: a root already chosen -- by the suite, by test-incident-sandbox.sh, or by an
+# outer runner -- wins. Absent one, a scratch root is created here so a DIRECTLY invoked suite is
+# covered, which is the spelling all three measured leaks occurred under.
+if [[ -z "${INCIDENTS_REPO_ROOT:-}" ]]; then
+  _soleur_th_sb="$(mktemp -d -t soleur-inc-XXXXXX 2>/dev/null || true)"
+  case "${_soleur_th_sb:-}" in
+    /?*)
+      mkdir -p "$_soleur_th_sb/.claude" 2>/dev/null || true
+      export INCIDENTS_REPO_ROOT="$_soleur_th_sb"
+      # Second name, so a suite can read back the rows its own emitter wrote without knowing this
+      # file internals.
+      export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_th_sb"
+      ;;
+    *)
+      printf 'FATAL: test-helpers.sh could not create an incident-telemetry sandbox (got %s).\n' \
+        "${_soleur_th_sb:-<empty>}" >&2
+      printf '  Refusing to continue: an unset INCIDENTS_REPO_ROOT points telemetry at the\n' >&2
+      printf '  operator real .claude/.rule-incidents.jsonl. Check free space on %s.\n' \
+        "${TMPDIR:-/tmp}" >&2
+      exit 1
+      ;;
+  esac
+  unset _soleur_th_sb
+fi
+
 PASS=0
 FAIL=0
 SKIPPED=0

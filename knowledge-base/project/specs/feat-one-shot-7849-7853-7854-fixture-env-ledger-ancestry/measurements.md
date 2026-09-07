@@ -217,3 +217,69 @@ literals. It lives outside this change's scope and is filed as a deferral.
 from a tool's *output* when the tool's job is to filter that population. The re-derivation had to
 run against the raw corpus. This is the "verify a measurement at the granularity you will CLAIM it"
 rule — A-1 claimed a property of the corpus while measuring a property of the report.
+
+---
+
+## Addendum — 2026-09-07 (Phase 3 chokepoints)
+
+### A-5 — task 1.6 answered: a globalSetup export DOES reach vitest workers
+
+The one Phase 0 probe the plan left unmeasured. Wired `ensureIncidentSandbox()` into
+`apps/web-platform/test/global-setup-git-tripwire.ts` and asserted from inside a worker that both
+`INCIDENTS_REPO_ROOT` and `SOLEUR_TEST_INCIDENT_ROOT` arrive absolute:
+
+| pool | result |
+|---|---|
+| default (`pool: "forks"`) | 1 passed |
+| `WEBPLAT_TEST_USE_THREADS=1` | 1 passed |
+
+vitest forks its workers AFTER globalSetup, so the write lands in the parent image they inherit.
+**The `test.env` fallback the task named is therefore not needed**, and `setupFiles` — which the
+task explicitly forbade — is not reached for.
+
+### A-6 — the five chokepoints, and what each one measures
+
+| # | chokepoint | mechanism |
+|---|---|---|
+| 1 | `bunfig.toml` preload | `git-tripwire.ts` imports `incident-sandbox.ts`; fires on import |
+| 2 | `plugins/soleur/bunfig.toml` preload | same module, cwd-scoped |
+| 3 | `apps/web-platform/vitest.config.ts` globalSetup | `ensureIncidentSandbox()` (A-5) |
+| 4 | `plugins/soleur/test/test-helpers.sh` | inline, non-destructive |
+| 5 | `tests/scripts/_git_fixture_env.py` import | `ensure_incident_sandbox()` — the IMPORT is the chokepoint under `python3 -m unittest`, which loads no conftest |
+
+Verified 1, 3, 4 and 5 each produce an absolute root on a bare invocation. All four spellings are
+non-destructive: a root already chosen by a suite or an outer runner wins.
+
+The TS module EXPORTS rather than failing, which is the opposite of the git tripwire's choice at
+the same five points. The asymmetry is deliberate and stated in its header: an inherited
+git-location environment is a broken ENTRY POINT someone must fix, whereas an unset telemetry sink
+is the DEFAULT everywhere outside a test — there is no entry point to name, so there is nothing to
+fail loudly about, only a default to set.
+
+### A-7 — the fail-open in the canonical bash helper
+
+`.claude/hooks/lib/test-incident-sandbox.sh`, which **48 suites already source**, returned 0 from
+BOTH its `mktemp` and its `mkdir` on failure, leaving `INCIDENTS_REPO_ROOT` unset — which is not a
+degraded sandbox but the operator's real ledger. Now aborts, and separately refuses an empty or
+non-absolute path. Verified: `TMPDIR=/nonexistent` now exits 1 with a named message instead of
+proceeding. This is Guard 3 row M5 / AC7.
+
+### A-8 — Phase 3.5 quarantine, executed
+
+Run under the emitter's own `flock -x` on the ledger inode, rewriting in place with `cat >` rather
+than a `mv`, because swapping the inode out from under a concurrent writer is exactly what the lock
+exists to prevent.
+
+```
+ledger before=1491  matched=109  after=1382  removed=109
+quarantine now holds 109 rows
+residual fabricated rows in the active ledger: 0
+```
+
+Every removed row is preserved at `.claude/.rule-incidents-synthetic-quarantine.jsonl` (gitignored,
+appended never overwritten), so this is reversible with a single `cat`. Archives untouched as the
+task requires: they still carry 3 and 31 fabricated rows respectively, which is the 34-row
+remainder of the 143 merged-corpus figure recorded in A-4.
+
+**`knowledge-base/project/rule-metrics.json` must be regenerated AFTER this**, not before — the
+Phase 4 regeneration ran against the pre-quarantine ledger.
