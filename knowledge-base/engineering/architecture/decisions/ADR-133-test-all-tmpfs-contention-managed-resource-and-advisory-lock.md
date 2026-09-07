@@ -480,3 +480,55 @@ wedged holder — that is #7537, and the raised budget makes reaping *more* valu
 is why `--capacity` — which enumerates the running worktrees on demand — ships alongside. And local developer tooling has no
 remote alert target, so a permanently-degraded probe on a hardened `/proc` is caught by loudness
 (`CAPACITY_UNKNOWN` on every run) rather than by telemetry.
+
+## Addendum — 2026-09-06 (#7869): the holder's own runtime is bounded, and stale-holder detection stays rejected
+
+`## Alternatives Considered` rejects **"Implement stale-holder detection on the
+lock"** as dead code. That rejection **stands, and was re-measured here**: a
+waiter using `_acquire_lock_impl`'s exact shape (`exec {fd}>>`, then
+`flock -w`) against a *live* holder returned `rc=1` at exactly its timeout, and
+`flock` releases automatically once the last fd holder dies. A dead pid holding
+the lock remains unreachable, so code defending it would still be dead code.
+
+**What it does not quantify over is a holder that is ALIVE but has no consumer.**
+#7869 measured one: a run whose session had gone away kept working through its
+suite list for **1d22h** (72 of 369 suites), holding the lock the whole time,
+with a second orphan from the same worktree found ~1h later. `flock` was
+behaving exactly as designed — the holder was live. The gap is not in the lock.
+
+Two consequences, and neither is stale-holder detection:
+
+1. **The dominant harm was the sibling count, not the lock.** An orphaned run is
+   still a running `test-all.sh`, so `tc_preamble` counted it as a live sibling
+   and the #7553 refusal rejected every later full-gate run on the box with
+   exit 4 — capacity pinned at zero. The rows the single `/proc` walk already
+   emits carry each sibling's measured elapsed seconds, so siblings past a
+   ceiling are now excluded from that count at the single `sibs=` derivation.
+   This kills nothing and needs no consent boundary.
+2. **The holder bounds its own runtime.** Past `TC_RUNTIME_CEILING_S` the runner
+   starts no further suite and exits 3 (UNRESOLVED). It **returns at suite
+   entry rather than exiting mid-suite**, because the lock fd is inherited by
+   suite children and the only teardown reaching them is a process-group
+   signal — whose group leader under lefthook's pre-commit is `git commit`.
+
+**No ownership discriminator was adopted, and that is a finding rather than an
+omission.** Every candidate resolves, on this project's documented topology, to
+a process that OUTLIVES the session: `$PPID` under lefthook is `git`; a
+top-ancestor-below-the-subreaper walk reaches the terminal emulator; no session
+identifier is exposed to the process. A healthy run and an orphaned one resolve
+identically, so such a guard could never fire. A wall-clock bound needs no
+discriminator — the same resolution `is_lease_active` reached for leases after a
+bare pid-liveness read deleted two live worktrees (#5454): the time bound is the
+authority, and every term fails toward keeping the run alive.
+
+The ceiling is sized on contended ELAPSED RUNTIME — not on the uncontended baseline, and
+not on hold times. This ADR's baseline is ~2700 s uncontended; its **2026-08-11** addendum
+records **3775 / 5787 / 5763 s** for three runs executing *concurrently*, and the 2026-08-19
+addendum corrects an earlier draft that had called those "observed sibling holds": they are
+elapsed-at-probe readings, and at most one of the three held the lock. That correction stands
+and is not re-litigated here — it mattered because `TC_LOCK_TIMEOUT` is about *holding*. It
+does not diminish the figures for THIS knob, whose operand is elapsed runtime, so 5787 s is a
+sound reading of how long a healthy run can be executing under contention and a ceiling below
+it would curtail live work. 14400 s is ~2.5x that reading; because `_RUN_START_EPOCH` is
+stamped before `tc_acquire`, up to 3600 s of queueing is charged against it, leaving ~10800 s
+of execution budget (~1.87x). It sits ~11.5x below the 46 h orphan.
