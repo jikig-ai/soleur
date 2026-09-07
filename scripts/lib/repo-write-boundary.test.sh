@@ -1095,7 +1095,36 @@ if (( elsewhere_rc != 0 )) && grep -qE '^manifest'$'\t''wt'$'\t''not-measured$' 
 else
   fail "elsewhere fails open (rc=$elsewhere_rc): wt row='$(grep -E '^manifest'$'\t''wt' <<<"$STATE_OUT" | tr '\n' '|')'"
 fi
-MIN_ASSERTIONS=51
+# --- 52. MUST-PASS: the partition does not depend on TAG OBJECT TYPE ----------------------------
+# The Guard Contract's must-PASS row. Arms 45-49 all create LIGHTWEIGHT tags, so a classifier that
+# somehow keyed on object type would pass every one of them. An annotated tag is a real git object
+# with its own sha, and `show-ref --tags` reports THAT sha rather than the commit's — so it is a
+# different value flowing through the same `bsha`/`asha` compare, and a severity partition must not
+# turn on it. Release tooling produces annotated tags routinely, which is the population this whole
+# softening exists for.
+#
+# `-m` makes it annotated; `pgit` pins GLOBAL/SYSTEM config empty so the operator's
+# `tag.forceSignAnnotated` cannot turn this into a signing failure that reads as a SUT regression.
+ck
+p=$(sibling_probe tagannot) || exit 2
+state "$p"; before="$STATE_OUT"
+pgit -C "$p" tag -a v9.9.7 -m 'annotated release'
+require_tag "$p" v9.9.7 "the object-type independence of the created-tag partition"
+if [[ "$(pgit -C "$p" cat-file -t "$(pgit -C "$p" rev-parse refs/tags/v9.9.7)")" != "tag" ]]; then
+  printf '[FATAL] fixture setup failed: refs/tags/v9.9.7 is not an annotated tag object.\n' >&2
+  printf '        This arm measures nothing unless the tag is annotated rather than lightweight.\n' >&2
+  exit 1
+fi
+state "$p"; after="$STATE_OUT"
+verdict=$(classify_in "$p" "$before" "$after")
+if grep -qE '^REPORT[[:space:]]+refs.*refs/tags/v9\.9\.7 \(tag\) was created$' <<<"$verdict" \
+   && ! grep -qE '^FATAL' <<<"$verdict"; then
+  pass "an ANNOTATED tag created under a sibling is REPORT too (the partition is object-type blind)"
+else
+  fail "annotated-tag partition wrong: '$(printf '%s' "$verdict" | tr '\n' '|' | cut -c1-220)'"
+fi
+
+MIN_ASSERTIONS=52
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS} — arms were deleted or neutered" >&2
   exit 1
