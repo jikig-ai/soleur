@@ -425,6 +425,45 @@ describe("gdpr-gate runtime staleness banner (FR6, AC6a-d)", () => {
     expect(exitCode).toBe(0);
   });
 
+  // The 90-day boundary had a population of ONE, all on the firing side, so
+  // nothing asserted POSTURE_FAIL is ABSENT at any age. Measured during #7710
+  // review: moving the threshold from `> 90` to `> 31` — which emits
+  // "compliance/critical posture row required" 60 days early on every
+  // month-old corpus — survived the entire battery, and the one `> 90` mutant
+  // that was caught was caught only incidentally, because the POSTURE_FAIL
+  // string happens to contain the substring "days stale".
+  test("between the thresholds: warn banner fires, POSTURE_FAIL does NOT", () => {
+    const notice = makeNoticeAt(60);
+    const { stdout, exitCode } = runHook({ NOTICE_FILE: notice });
+    expect(stdout).toMatch(/gdpr-gate rules 60 days stale/);
+    expect(stdout).not.toMatch(/POSTURE_FAIL/);
+    expect(exitCode).toBe(0);
+  });
+
+  test("just below the POSTURE_FAIL threshold: still no POSTURE_FAIL", () => {
+    const { stdout } = runHook({ NOTICE_FILE: makeNoticeAt(90) });
+    expect(stdout).toMatch(/days stale/);
+    expect(stdout).not.toMatch(/POSTURE_FAIL/);
+  });
+
+  test("just above the POSTURE_FAIL threshold: POSTURE_FAIL fires", () => {
+    const { stdout } = runHook({ NOTICE_FILE: makeNoticeAt(91) });
+    expect(stdout).toMatch(/POSTURE_FAIL/);
+  });
+
+  // The warn threshold needs the same two-sided treatment.
+  test("just below the warn threshold: no staleness banner at all", () => {
+    const { stdout } = runHook({ NOTICE_FILE: makeNoticeAt(30) });
+    expect(stdout).not.toMatch(/days stale/);
+    expect(stdout).not.toMatch(/POSTURE_FAIL/);
+  });
+
+  test("just above the warn threshold: banner fires, POSTURE_FAIL does not", () => {
+    const { stdout } = runHook({ NOTICE_FILE: makeNoticeAt(31) });
+    expect(stdout).toMatch(/31 days stale/);
+    expect(stdout).not.toMatch(/POSTURE_FAIL/);
+  });
+
   test("(AC6c) NOTICE missing → days_stale=999, banner + POSTURE_FAIL fire, exit 0", () => {
     const { stdout, exitCode } = runHook({
       NOTICE_FILE: "/nonexistent/path/NOTICE",
@@ -577,4 +616,125 @@ describe("gdpr-gate legacy archive (AC-PROMOTE-2)", () => {
     expect(firstLine).toMatch(/Archived v1 prose-shape/);
     expect(firstLine).toMatch(/v3/);
   });
+});
+
+describe("gdpr-gate scan-completion line (Guard 2, #7710)", () => {
+  // Property: on every invocation where a zero-match scan is reachable, the
+  // output distinguishes "the scan ran and matched nothing" from "the scan
+  // did not run".
+  //
+  // Before #7710 those two states were byte-identical. On a corpus >90 days
+  // stale the gate printed a staleness banner and a POSTURE_FAIL and NOTHING
+  // ELSE, so a reader saw two lines about the rule corpus and no evidence any
+  // diff had been examined — which is exactly what the issue reporter saw. A
+  // gate whose failing output is indistinguishable from its passing output is
+  // not a gate.
+  //
+  // The line carries COUNTS ONLY. Path names on stdout would leak
+  // third-party-content path structure into a customer's terminal
+  // (hr-third-party-content-grep-on-undertaking; #7331 is the live scar). The
+  // existing path-naming breadcrumb stays on stderr, where it already was.
+  function runGate(
+    args: string[],
+    env: Record<string, string> = {},
+  ): { stdout: string; stderr: string; exitCode: number } {
+    const result = spawnSync("bash", [HOOK_SH, ...args], {
+      env: { ...process.env, GH_TOKEN: "", GITHUB_TOKEN: "", ...env },
+      encoding: "utf8",
+    });
+    return {
+      stdout: result.stdout || "",
+      stderr: result.stderr || "",
+      exitCode: result.status ?? -1,
+    };
+  }
+
+  const SCAN_LINE = /gdpr-gate: path scan complete — (\d+) examined, (\d+) matched/;
+
+  test("fires on a zero-match scan — the state the property forbids being silent about", () => {
+    const { stdout, exitCode } = runGate(["README.md"]);
+    const m = stdout.match(SCAN_LINE);
+    expect(m).not.toBeNull();
+    expect(m![1]).toBe("1");
+    expect(m![2]).toBe("0");
+    expect(exitCode).toBe(0);
+  });
+
+  test("reports what the loop measured, not constants (second member)", () => {
+    // Three paths, two matching, with the NON-matching one ordered first so a
+    // implementation that reports the first result rather than the totals is
+    // caught.
+    const { stdout } = runGate([
+      "README.md",
+      "apps/web-platform/lib/auth/session.ts",
+      "apps/web-platform/supabase/migrations/001_x.sql",
+    ]);
+    const m = stdout.match(SCAN_LINE);
+    expect(m).not.toBeNull();
+    expect(m![1]).toBe("3");
+    expect(m![2]).toBe("2");
+  });
+
+  test("carries no path names — counts only", () => {
+    const { stdout } = runGate([
+      "apps/web-platform/lib/auth/session.ts",
+      "README.md",
+    ]);
+    const line = stdout.split("\n").find((l) => SCAN_LINE.test(l));
+    expect(line).toBeDefined();
+    expect(line).not.toMatch(/session\.ts/);
+    expect(line).not.toMatch(/README/);
+    expect(line).not.toMatch(/apps\/web-platform/);
+    expect(line).not.toMatch(/\//);
+  });
+
+  test("is independent of corpus freshness — no staleness vocabulary in the line", () => {
+    // The line must be emitted, and identical, whether the corpus is fresh or
+    // >90 days stale. That independence IS the property: the scan's evidence
+    // must not be entangled with the rule corpus's age.
+    const fresh = makeNoticeForScan(0);
+    const rotten = makeNoticeForScan(95);
+
+    const a = runGate(["README.md"], { NOTICE_FILE: fresh });
+    const b = runGate(["README.md"], { NOTICE_FILE: rotten });
+
+    const lineA = a.stdout.split("\n").find((l) => SCAN_LINE.test(l));
+    const lineB = b.stdout.split("\n").find((l) => SCAN_LINE.test(l));
+
+    expect(lineA).toBeDefined();
+    expect(lineB).toBeDefined();
+    expect(lineA).toBe(lineB);
+
+    // The line itself must carry neither banner vocabulary, or the existing
+    // negative assertions in this file would be satisfied by it and could no
+    // longer witness a regression in the banners.
+    expect(lineA).not.toMatch(/days stale/);
+    expect(lineA).not.toMatch(/POSTURE_FAIL/);
+
+    // And the rotten run must still carry BOTH banners: adding the scan line
+    // must not have displaced them.
+    expect(b.stdout).toMatch(/days stale/);
+    expect(b.stdout).toMatch(/POSTURE_FAIL/);
+    expect(b.exitCode).toBe(0);
+  });
+
+  test("goes to stdout, not stderr — agent runtimes swallow stderr", () => {
+    const { stdout, stderr } = runGate(["apps/web-platform/lib/auth/x.ts"]);
+    expect(stdout).toMatch(SCAN_LINE);
+    expect(stderr).not.toMatch(SCAN_LINE);
+    // The path-naming breadcrumb stays on stderr and keeps naming paths.
+    expect(stderr).toMatch(/regulated-data path touched/);
+  });
+
+  function makeNoticeForScan(daysAgo: number): string {
+    const date = new Date(Date.now() - daysAgo * 86_400_000);
+    const iso = date.toISOString().slice(0, 10);
+    const tmp = mkdtempSync(join(tmpdir(), "gdpr-gate-scan-notice-"));
+    const path = join(tmp, "NOTICE");
+    writeFileSync(
+      path,
+      `---\nupstream: github.com/test/synth\npinned-commit: ${"0".repeat(40)}\nlast-verified: ${iso}\nregistry: knowledge-base/engineering/policies/content-vendoring.md\nlifted-files:\n  - path: references/dummy.md\n    upstream-path: pii/dummy.md\n    upstream-blob-sha: ${"0".repeat(40)}\n    local-blob-sha: ${"0".repeat(40)}\n    status: active\n---\n\n# NOTICE (test fixture)\n`,
+    );
+    return path;
+  }
 });
