@@ -24,9 +24,10 @@
 # other. A later PR that adds a cron monitor legitimately plans a create, and a
 # permanent version of this assertion would red it. So the discriminator is the
 # presence of adoption rows: a plan with zero forgets and zero imports is not an
-# adoption and this exits 0 with an explicit message. Once #7826 removes the
-# import{}/removed{} blocks, every plan takes that branch and the assertion is
-# inert by construction rather than by being deleted.
+# adoption and this exits 0 with an explicit message. #7826 removed the
+# import{}/removed{} blocks on 2026-09-06, so every plan now takes that branch and
+# this assertion is inert by construction rather than by being deleted. It is kept
+# deliberately: it is the thing that would fire if adoption rows ever reappeared.
 #
 # ── WHY `expected` IS A NUMBER AND NOT DERIVED FROM CONFIG ─────────────────
 # It cannot be derived from the plan: post-adoption the config still declares 27
