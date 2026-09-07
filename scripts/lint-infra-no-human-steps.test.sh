@@ -51,6 +51,33 @@ run_case() {
 }
 
 # ---------------------------------------------------------------------------
+# DISPATCHER POSITIVE CONTROL (#7874 review). Everything below is observed
+# THROUGH pass()/fail(), so no mutation of the SUT can detect those helpers
+# going silent. Measured: rewriting fail() to keep `TOTAL=$((TOTAL + 1))` and
+# drop `FAIL=$((FAIL + 1))` reported `PASS=22 FAIL=0 TOTAL=58`, exit 0, against
+# a DELIBERATELY BROKEN scanner -- CI green having asserted nothing. MIN_CASES
+# cannot see it because TOTAL still moves, and `PASS -eq TOTAL` alone cannot see
+# the sibling mutation that short-circuits run_case's oracle (both counters then
+# move together).
+#
+# This drives BOTH helpers once and asserts BOTH counters moved, then restores
+# them so the run's real accounting is untouched. It is the only construction
+# that proves the failure path is wired -- in a passing run it is otherwise dead
+# code that has never executed.
+_p0=$PASS; _f0=$FAIL; _t0=$TOTAL
+_selftest_clean="$(mkcase <<'EOF'
+# Clean fixture, no infra step
+EOF
+)"
+run_case "SELFTEST positive control (expected PASS)" 0 "$_selftest_clean"
+run_case "SELFTEST negative control (expected FAIL)" 99 "$_selftest_clean"
+if [[ "$PASS" -ne $((_p0 + 1)) || "$FAIL" -ne $((_f0 + 1)) ]]; then
+  echo "GUARD FAIL: the assertion dispatcher is not wired -- pass() moved PASS by $((PASS - _p0)) (expected 1) and fail() moved FAIL by $((FAIL - _f0)) (expected 1). Every assertion below is unobservable." >&2
+  exit 2
+fi
+PASS=$_p0; FAIL=$_f0; TOTAL=$_t0
+
+# ---------------------------------------------------------------------------
 # Baseline model cases.
 # ---------------------------------------------------------------------------
 
@@ -804,6 +831,101 @@ EOF
 )"
 run_case "F28 'Last resort diagnosis' (no hyphen) does NOT carve" 1 "$f"
 
+# F29 — MUTATION ROW 7b, THE ARM F27 DOES NOT REACH. F27 pairs two CARVE
+# headings, which takes the `if _is_carve_heading(title)` branch. The `elif`
+# that CLEARS the state is only reached by a carve heading followed by a
+# NON-carve heading — the shape both real runbooks actually have
+# (`### Last-resort diagnosis …` → `## Capture for the PR / Incident Record` in
+# ssh-fail2ban-unban.md; `→ ## Prevention` in admin-ip-drift.md). Deleting
+# `carve_last_resort = False` from that elif left the suite 58/0 GREEN and
+# leaked the carve to end-of-file on the real corpus (measured: appending a
+# fenced host-login under a trailing `## Extra recovery` in a copy of
+# ssh-fail2ban-unban.md went rc=1 pristine → rc=0 mutant).
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Last-resort diagnosis
+
+Nothing fenced here.
+
+## Capture for the PR
+
+```bash
+ssh root@203.0.113.10 'systemctl restart sshd'
+```
+EOF
+)"
+run_case "F29 carve is CLEARED by a following non-carve heading" 1 "$f"
+
+# F30 — FIXTURE SHAPE: indented fences. Every F22-F28 fixture opens its fence at
+# column 0, so `FENCE_RE`'s `^\s*` is untested and narrowing it to `^` survives.
+# Indented fences are live in the corpus (tenant-offboarding.md uses 3-space
+# fences under numbered steps) and the SUT's own docstring illustrates the #7286
+# defect with one.
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Last-resort diagnosis
+
+2. **Check the service:**
+
+   ```bash
+   ssh root@203.0.113.10 'systemctl status sshd'
+   ```
+EOF
+)"
+run_case "F30 indented fence under a last-resort heading PASSES" 0 "$f"
+
+# F31 — the same shape on the must-FLAG side. Without this, narrowing FENCE_RE
+# is invisible in BOTH directions: F30 alone cannot tell "the carve reached it"
+# from "the fence never opened, so the line was scanned as prose and matched
+# nothing".
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Resolved
+
+2. **Check the service:**
+
+   ```bash
+   ssh root@203.0.113.10 'systemctl status sshd'
+   ```
+EOF
+)"
+run_case "F31 indented fenced host-login under Resolved still FAILS" 1 "$f"
+
+# F32 — the `~~~` fence alternation, untested in either direction.
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Last-resort diagnosis
+
+~~~bash
+ssh root@203.0.113.10 'hostname'
+~~~
+EOF
+)"
+run_case "F32 tilde-fenced host-login under a last-resort heading PASSES" 0 "$f"
+
+# F33-F35 — CARDINALITY of the sanctioned heading set. F28 pins ONE negative
+# literal (the no-hyphen form). Nothing pinned that the set has exactly one
+# member, so widening the regex to `Last-resort diagnosis|Troubleshooting|Debugging`
+# survived. `hr-no-ssh-fallback-in-runbooks` names ONE section; these convert
+# that single-literal contract into a bounded set by rejecting the near-misses.
+for _h in "Troubleshooting" "Debugging" "Last-resort recovery"; do
+  f="$(mkcase <<EOF
+# Runbook
+
+## ${_h}
+
+\`\`\`bash
+ssh root@203.0.113.10 'hostname'
+\`\`\`
+EOF
+)"
+  run_case "F33-35 '## ${_h}' does NOT carve (heading set is exactly one member)" 1 "$f"
+done
+
 # F21 — #7286 review (CodeQL py/redos, high). F19's first fix widened HOST_LOGIN_RE with an
 # ALTERNATION whose branches overlapped (`-` was in both classes), so a token starting with `-`
 # matched either way and the engine explored exponentially many partitionings before failing.
@@ -858,11 +980,19 @@ fi
 # to strengthen it. Second-order limit, recorded rather than fixed: TOTAL is
 # incremented by both pass() and fail(), so this detects a DELETED case but
 # never a NEUTERED one; asserting the sorted set of case names would.
-MIN_CASES=58
+MIN_CASES=65
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
   echo "GUARD FAIL: ran ${TOTAL} assertions, expected >= ${MIN_CASES}" >&2
+  exit 2
+fi
+# CONSERVATION, not just absence-of-failure. `FAIL -eq 0` alone is satisfied by a
+# fail() that stopped incrementing FAIL while TOTAL kept moving; requiring
+# PASS + FAIL to reconcile against TOTAL means silencing the verdict costs a
+# visible discrepancy rather than a quiet zero.
+if [[ $((PASS + FAIL)) -ne "$TOTAL" ]]; then
+  echo "GUARD FAIL: PASS(${PASS}) + FAIL(${FAIL}) != TOTAL(${TOTAL}) -- an assertion helper is not accounting." >&2
   exit 2
 fi
 [[ "$FAIL" -eq 0 ]]
