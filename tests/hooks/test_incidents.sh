@@ -22,9 +22,18 @@ _report() {
 }
 
 _with_fake_repo() {
-  # Create a fake repo root mirroring .claude/hooks/lib layout, copy the lib
-  # into it, cd there, and export INCIDENTS_REPO_ROOT so emit_incident writes
-  # its jsonl under the tmp dir instead of the real repo.
+  # Create a fake repo root mirroring the .claude/hooks/lib layout and copy the lib into it.
+  #
+  # Isolation here is BY LIB-COPY, not by an environment variable. This comment used to claim the
+  # helper exports INCIDENTS_REPO_ROOT; it never has. `_incidents_repo_root()` falls back to walking
+  # three directories up from `${BASH_SOURCE[0]}` -- the location of the lib being SOURCED -- so
+  # sourcing the COPY under $tmp resolves the sink to $tmp/.claude/ without any variable being set.
+  #
+  # That distinction is load-bearing for anyone reading this as a precedent: it is the one isolation
+  # mechanism here that does NOT generalise. A suite that execs a hook or a gate script rather than
+  # sourcing a copied lib gets the REAL root, which is how three suites came to write fabricated
+  # rows into the operator ledger (#7853). Those use the sandbox export instead; see
+  # .claude/hooks/lib/test-incident-sandbox.sh.
   local tmp
   tmp=$(mktemp -d)
   mkdir -p "$tmp/.claude/hooks/lib"

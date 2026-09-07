@@ -162,7 +162,7 @@ predicate its mirrors follow. Do not reorder.
 
 ## 7. Documentation, ADR, C4, deferrals (plan Phase 6)
 
-- [ ] 7.1 Write `ADR-204` — **one** decision (the telemetry-id namespace contract plus the chokepoint
+- [ ] 7.1 Write `ADR-205` — **one** decision (the telemetry-id namespace contract plus the chokepoint
       redirect). Re-derive the ordinal across every `origin/*` ref immediately before merge; on
       renumber, sweep this branch's plan, tasks and specs in the same edit.
 - [ ] 7.2 Add the one-clause Hook Engine amendment to

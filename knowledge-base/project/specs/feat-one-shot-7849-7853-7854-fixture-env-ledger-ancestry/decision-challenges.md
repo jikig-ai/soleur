@@ -40,7 +40,7 @@ lifts out cleanly and the PR then carries `Closes #7849`, `Closes #7854` and `Re
 service, data-model, or technology boundary") and the DHH reviewer ("two header comments are not an
 architecture decision record"); the code-simplicity reviewer said "scope down" rather than "cut".
 
-**Resolution.** ADR-204 is kept with **one** decision instead of two. The surviving invariant — that
+**Resolution.** ADR-205 is kept with **one** decision instead of two. The surviving invariant — that
 an incident-ledger rule id declares its namespace by prefix, and that hook telemetry must therefore
 not carry an AGENTS.md section prefix — is genuinely cross-cutting, is a contract every future hook
 author must honour, and today exists only as a comment inside a jq program. The second decision

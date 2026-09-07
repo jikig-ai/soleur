@@ -93,7 +93,7 @@ from `scripts/test-all.sh:2019`) is in **neither**, and carries no scrub.
 
 ## M-7 — ADR ordinal
 
-Max `ADR-<n>` claimed across every `origin/*` ref at plan time: **203**. ADR-204 is provisional and
+Max `ADR-<n>` claimed across every `origin/*` ref at plan time: **203**. ADR-205 is provisional and
 must be re-derived immediately before merge.
 
 ---

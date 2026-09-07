@@ -692,7 +692,7 @@ reject; a mutation living in the repo's existing hand-run battery is not.
 
 ### Phase 6 — Documentation, ADR, C4 and deferrals
 
-6.1 Write `ADR-204` (ordinal **provisional**), one decision.
+6.1 Write `ADR-205` (ordinal **provisional**), one decision.
 6.2 Add the one-clause C4 amendment to the Hook Engine container description; run
 `c4-code-syntax.test.ts` and `c4-render.test.ts`.
 6.3 Correct the false comment in `tests/hooks/test_incidents.sh`.
@@ -733,7 +733,7 @@ the five mis-prefixed emitters (Phase 4.5) · `knowledge-base/project/rule-metri
 | `plugins/soleur/test/lib/git-fixture-env.sh` | the shell chokepoint: one array, the tripwire, `git_fixture_env` |
 | `plugins/soleur/test/git-fixture-env-shell.test.sh` | its suite — the producer for AC2 and Guard 1 M3/M4 |
 | `plugins/soleur/test/fixture-env-adoption.test.sh` | the Phase 2.7 static adoption guard |
-| `knowledge-base/engineering/architecture/decisions/ADR-204-*.md` | the telemetry-id namespace contract |
+| `knowledge-base/engineering/architecture/decisions/ADR-205-*.md` | the telemetry-id namespace contract |
 | `knowledge-base/project/specs/<branch>/measurements.md` | Phase 0 baselines *(written)* |
 | `knowledge-base/project/specs/<branch>/decision-challenges.md` | the panel's scope challenge and its resolution *(written)* |
 
@@ -839,7 +839,7 @@ not for the old block's absence.
 the repo root declares no `workspaces` field.)* The C4 suites `c4-code-syntax.test.ts` and
 `c4-render.test.ts` pass.
 
-**AC22** `ADR-204-*.md` exists; its ordinal is re-verified free across every `origin/*` ref
+**AC22** `ADR-205-*.md` exists; its ordinal is re-verified free across every `origin/*` ref
 immediately before merge; no artifact under `specs/<branch>/` or this plan retains a superseded
 ordinal.
 
@@ -925,7 +925,7 @@ one event, rather than a host-side re-derivation that cannot see the hook's star
 
 ## Architecture Decision (ADR/C4)
 
-**ADR-204 (provisional ordinal), one decision** — *"A telemetry rule id declares its namespace by
+**ADR-205 (provisional ordinal), one decision** — *"A telemetry rule id declares its namespace by
 prefix, and test telemetry is redirected at the runtime chokepoint."*
 
 The first draft carried two decisions; two reviewers argued for none. Scoped to one, which is where
