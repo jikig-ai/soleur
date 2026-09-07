@@ -193,6 +193,15 @@
         ]
       },
       {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pkill-self-match-guard.sh"
+          }
+        ]
+      },
+      {
         "matcher": "Monitor",
         "hooks": [
           {
