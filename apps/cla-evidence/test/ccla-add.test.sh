@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
-# ccla-add.test.sh — collected by scripts/test-all.sh via the existing
-# apps/cla-evidence/scripts/*.test.sh glob (the same one that collects
-# sentinel-pr.test.sh).
+# ccla-add.test.sh — registered EXPLICITLY in scripts/test-all.sh under
+# `want_webplat`, not by a glob. It lives in apps/cla-evidence/test/ rather than
+# beside the script it tests because apps/cla-evidence/scripts/ is a SUITE_GLOBS
+# entry, and matching both that glob and an explicit registration is the
+# double-coverage `lint-orphan-test-suites.sh` refuses. The shard is not a
+# preference: this suite needs apps/web-platform/node_modules/.bin/tsx, which
+# the `test-scripts` job does not install.
 #
 # Covers the write-side half of Guard 3 (contribution-triggered entry) and the
 # documented exit-code contract. The mutation arm at the end is the one that
@@ -34,6 +38,19 @@ trap 'rm -rf "$WORK"' EXIT
 git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" \
   || { echo "harness: could not read the ICLA ledger" >&2; exit 2; }
 [[ -s "$WORK/ledger.json" ]] || { echo "harness: ledger empty" >&2; exit 2; }
+# The SUT resolves the roster validator through this binary. Without it EVERY
+# invocation dies at ccla-add.sh's own operator-fault exit 2, and the suite
+# reports ~23 assertion failures that all look like defects in the script —
+# measured on CI run 34117976566, where this ran in the `test-scripts` shard,
+# which installs no npm dependencies. Named here so the next occurrence says
+# WHY in one line instead of as a wall of rc=2. Fail loud, never skip: the
+# repo's convention for a missing dependency (see inspect.test.sh and jq).
+[[ -x apps/web-platform/node_modules/.bin/tsx ]] || {
+  echo "harness: apps/web-platform/node_modules/.bin/tsx is missing — this suite needs the" >&2
+  echo "         web-platform toolchain and must run in the TEST_GROUP=webplat shard." >&2
+  echo "         Locally: npm ci --prefix apps/web-platform" >&2
+  exit 2
+}
 # Keep the REAL timestamps for the pre-notice arm below, then SYNTHESIZE the
 # working fixture by rewriting `created_at` past the coverage-map notice epoch.
 # The ids stay real because the id-keyed arms depend on them; only the temporal

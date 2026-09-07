@@ -11,7 +11,7 @@
 // surface from which nothing can be erased.
 //
 // Rows G3-M1..G3-M4 each drive this suite RED. G3-M5 (the write-side half in
-// ccla-add.sh) is covered by apps/cla-evidence/scripts/ccla-add.test.sh.
+// ccla-add.sh) is covered by apps/cla-evidence/test/ccla-add.test.sh.
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
