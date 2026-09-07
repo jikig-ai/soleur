@@ -1408,17 +1408,40 @@ if want_scripts; then
   run_suite "scripts/tenant-dpa-register-guard-unit" bash scripts/tenant-dpa-register-guard.test.sh
   run_suite "scripts/tenant-dpa-register-guard-live" bash scripts/tenant-dpa-register-guard.sh count-signed
   run_suite "scripts/lint-legal-registers-unit" bash scripts/lint-legal-registers.test.sh
-  # ADVISORY FOR ONE MERGE CYCLE (#7717). The live arm is the first lint over the legal
-  # REGISTER FILES (not over knowledge-base/legal/** -- lint-infra-no-human-steps.py already
-  # scans legal/runbooks; no lint covered the registers). Its scope was DESIGNED rather than
-  # measured. --advisory reports
-  # findings as warnings and exits 0; it does NOT downgrade a fail-closed refusal (rc=2), which
-  # is what keeps "I could not decide" distinguishable from "nothing to report".
-  # PROMOTION: delete the --advisory flag on the next line. Trigger: one green merge cycle with
-  # no unexplained finding. Tracked at #7787, which carries the full promotion checklist. The
-  # unit arm above is blocking from the start -- a guard's own tests have no reason to be
-  # advisory.
-  run_suite "scripts/lint-legal-registers-live" bash scripts/lint-legal-registers.sh --advisory
+  # DELIBERATELY LIVE-ONLY (#7786). probe-legal-corpus-truth.sh has no `*.test.sh`
+  # sibling, so lint-orphan-test-suites.sh does not require one; the unit arm with a
+  # mutation matrix is owned by the follow-up filed at #7892. Registered here
+  # rather than deferred because until now the probe was referenced ONLY by its own
+  # docstring and its wrapper's exec -- it guarded nothing. It is what stops the
+  # corrected off-host-log and journald-retention claims silently returning after
+  # merge, which no other gate in this file can see: the mirror, SHA and parity gates
+  # all assert AGREEMENT between a document and its mirror, and a claim that is
+  # consistently wrong on both sides passes every one of them.
+  run_suite "scripts/probe-legal-corpus-truth-live" bash scripts/probe-legal-corpus-truth.sh
+  # BLOCKING as of 2026-09-07 (#7787, PR #7881). Promoted from advisory after one merge cycle;
+  # the comment it replaced said "PROMOTION: delete the --advisory flag on the next line", which
+  # would have become a false instruction the moment the flag was gone.
+  #
+  # EVIDENCE FOR THE PROMOTION, measured rather than assumed:
+  #   - zero `::warning::lint-legal-registers` across the last 8 `main` CI runs, read from the
+  #     run logs, not inferred from their conclusions;
+  #   - `bash scripts/lint-legal-registers.sh` exits 0 on the promoting tree, 7/7 assertions;
+  #   - two substantive legal amendments (#7803, #7838) landed inside the advisory window with no
+  #     finding, so the register-scoped token predicate needed neither widening nor narrowing
+  #     before promotion -- which was a precondition, not a nice-to-have.
+  #
+  # THE ASYMMETRY IS DELIBERATELY RETAINED AND MUST NOT BE "SIMPLIFIED AWAY". Under --advisory a
+  # FINDING was a warning, but an "I cannot decide" (rc=2) stayed a hard failure. Promotion
+  # removes the first half only. The `--advisory` parse arm, its --help string and the three
+  # rc=2 assertions in lint-legal-registers.test.sh all stay: they pin that asymmetry, which is
+  # what keeps a broken corpus distinguishable from a clean one.
+  #
+  # WHAT PROMOTION CHANGES ABOUT BLAST RADIUS -- stated because "the flag only affects this
+  # invocation" is true of argv passthrough and false of the gate's reach. This suite sits in the
+  # `scripts` shard, which the required `test` context depends on for EVERY PR, and it scans a
+  # fixed 4-file array plus the whole audits/ tree -- never the diff. After promotion, drift on
+  # main reds every open PR and the merge queue, not only PRs touching the registers.
+  run_suite "scripts/lint-legal-registers-live" bash scripts/lint-legal-registers.sh
   # WIRED HERE, NOT IN .github/ (#7717). check-pa-22.sh was written to guard the PA-22 register
   # entry and then ran in ZERO runners -- one of the five documented instances in
   # 2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md. Wiring it
