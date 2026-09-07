@@ -672,6 +672,138 @@ EOF
 )"
 run_case "F20 ssh:// URLs and flagless ssh mentions stay clean (F19 did not over-widen)" 0 "$f"
 
+# ---------------------------------------------------------------------------
+# F22-F28 — Guard 1 (#7874). The `Last-resort diagnosis` carve must reach a
+# FENCED host-login line, and must reach ONLY that heading.
+#
+# Before #7874 the carve was unreachable for the one form these findings take:
+# scan_text handles a fence at step 3 and `continue`s before the carve check at
+# step 5, so a fenced `ssh root@host` flagged under EVERY heading. The hard rule
+# hr-no-ssh-fallback-in-runbooks names a "Last-resort diagnosis" section as the
+# sanctioned home for SSH-class steps, so the section NAME is the contract and
+# these cases pin it.
+#
+# F22/F23 were RED before the fix. F24-F28 were GREEN before it and exist to
+# stop the fix OVER-suppressing — without them, mutation rows 2, 3, 6 and 7 of
+# the Guard 1 matrix are all GREEN against a broken implementation.
+# ---------------------------------------------------------------------------
+
+# F22 — CANONICAL. A fenced host-login under `## Last-resort diagnosis` PASSES.
+# This is the case the whole phase exists for; RED before the carve reached fences.
+f="$(mkcase <<'EOF'
+# Unban runbook
+
+## Last-resort diagnosis (SSH channel) — Step 6: confirm SSH is restored
+
+```bash
+ssh root@203.0.113.10 'hostname'
+```
+EOF
+)"
+run_case "F22 fenced host-login under a last-resort heading PASSES" 0 "$f"
+
+# F23 — HARNESS ROW (b). Must-PASS, non-canonical: level 4, suffixed title,
+# deeper than the surrounding `##`. Pins prefix-match + any-level + suffix
+# tolerance in one case that is NOT the canonical fixture, so a fix that
+# hardcodes `## ` or an exact title still reds here.
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Recovery
+
+#### Last-resort diagnosis — read-only
+
+```bash
+ssh root@203.0.113.10 'systemctl status sshd'
+```
+EOF
+)"
+run_case "F23 level-4 suffixed last-resort heading still carves" 0 "$f"
+
+# F24 (F-a) — MUTATION ROW 2. The carve is heading-SCOPED: a fenced host-login
+# under the sibling `## Resolved` arm must still FAIL. Making
+# _is_last_resort_heading match the `Resolved` arm is GREEN across all 51
+# pre-existing cases — nothing today asserts a carve fixture at all.
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Resolved
+
+```bash
+ssh root@203.0.113.10 'hostname'
+```
+EOF
+)"
+run_case "F24 fenced host-login under Resolved still FAILS (carve stays scoped)" 1 "$f"
+
+# F25 (F-b) — MUTATION ROW 3. The PROSE arm must keep consulting the carve.
+# Realizes as hoisting the host-login detection above `if carve: continue`;
+# that mutation is invisible to every other case in this file.
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Last-resort diagnosis
+
+The operator runs ssh root@203.0.113.10 to confirm the host answers.
+EOF
+)"
+run_case "F25 prose host-login under a last-resort heading PASSES" 0 "$f"
+
+# F26 (F-c) — MUTATION ROW 6. Ignore-region handling must stay ordered BEFORE
+# fence handling. This is also the direct regression test for the class (b)
+# transcript suppressions and the class (a)/(c) regions this PR adds: moving the
+# in_ignore check past the `if in_fence:` block flips this 0->1 while the rest
+# of the harness stays green.
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Symptom
+
+<!-- lint-infra-ignore start: pasted failure transcript, not a prescribed step; owner #7874 -->
+```text
+$ ssh root@203.0.113.10 'hostname'
+ssh: connect to host 203.0.113.10 port 22: Connection timed out
+```
+<!-- lint-infra-ignore end -->
+EOF
+)"
+run_case "F26 ignore-region-wrapped fenced host-login PASSES" 0 "$f"
+
+# F27 — MUTATION ROW 7, THE STATE MACHINE. `## Last-resort diagnosis` followed
+# by an equal-level `## Resolved` takes the `if _is_carve_heading` branch, which
+# SKIPS the `elif` that clears the carve. The obvious `carve_last_resort |= ...`
+# form passes F24 (row 2 tests the predicate) and FAILS here — this is the only
+# case that separates ASSIGN from OR.
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Last-resort diagnosis
+
+Nothing fenced here.
+
+## Resolved
+
+```bash
+ssh root@203.0.113.10 'hostname'
+```
+EOF
+)"
+run_case "F27 carve does not leak across an adjacent carve heading" 1 "$f"
+
+# F28 — MUTATION ROW 5. The literal is the contract: `Last resort diagnosis`
+# (no hyphen) must NOT carve. Pins the exact section name the hard rule names.
+f="$(mkcase <<'EOF'
+# Runbook
+
+## Last resort diagnosis
+
+```bash
+ssh root@203.0.113.10 'hostname'
+```
+EOF
+)"
+run_case "F28 'Last resort diagnosis' (no hyphen) does NOT carve" 1 "$f"
+
 # F21 — #7286 review (CodeQL py/redos, high). F19's first fix widened HOST_LOGIN_RE with an
 # ALTERNATION whose branches overlapped (`-` was in both classes), so a token starting with `-`
 # matched either way and the engine explored exponentially many partitionings before failing.
@@ -719,7 +851,14 @@ fi
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=51
+# EXACTLY PINNED, not a slack floor: this equals the suite's actual TOTAL, so
+# deleting any case reds immediately. Raised 51 -> 58 by #7874 in the same edit
+# that added F22-F28 — adding cases without raising it would have handed the
+# floor 7 lines of slack and disarmed harness row (a) by the very change meant
+# to strengthen it. Second-order limit, recorded rather than fixed: TOTAL is
+# incremented by both pass() and fail(), so this detects a DELETED case but
+# never a NEUTERED one; asserting the sorted set of case names would.
+MIN_CASES=58
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
