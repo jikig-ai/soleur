@@ -79,7 +79,14 @@ PAGES_REL="$INFRA_REL/cf-pages.tf"
 REDIR_REL="$INFRA_REL/seo-bulk-redirects.tf"
 WF_REL=".github/workflows/deploy-docs.yml"
 CNAME_REL="plugins/soleur/docs/CNAME"
-NEEDED=("$GUARD_REL" "$DNS_REL" "$PAGES_REL" "$REDIR_REL" "$WF_REL" "$CNAME_REL")
+# uptime-alerts.tf joined the list at #7798, when the guard gained the Guard 1 cases that
+# assert betteruptime_monitor.soleur_www_redirect's load-bearing attributes. Omitting it did
+# NOT produce a subtle wrong answer: the baseline check below caught it as a HARNESS ABORT,
+# which is the property this harness was written to have. Re-derive this list from the guard
+# when it changes, never from memory:
+#   $ grep -nE 'REPO_ROOT|SCRIPT_DIR' www-apex-canonicalizer.test.sh
+UPTIME_REL="$INFRA_REL/uptime-alerts.tf"
+NEEDED=("$GUARD_REL" "$DNS_REL" "$PAGES_REL" "$REDIR_REL" "$WF_REL" "$CNAME_REL" "$UPTIME_REL")
 
 for rel in "${NEEDED[@]}"; do
   mkdir -p "$SANDBOX/$(dirname "$rel")" || die "could not create sandbox dir for $rel"
