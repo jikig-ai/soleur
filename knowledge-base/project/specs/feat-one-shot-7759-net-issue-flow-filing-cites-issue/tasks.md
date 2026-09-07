@@ -13,14 +13,14 @@ Phase 5 (floor ratchet) must follow Phases 1–4, because it reads the post-chan
 
 ## Phase 0 — Preconditions
 
-- [ ] 0.1 Confirm baseline: `bash plugins/soleur/test/net-issue-flow.test.sh` prints
+- [x] 0.1 Confirm baseline: `bash plugins/soleur/test/net-issue-flow.test.sh` prints
       `ALL PASS (84 assertions)` and `MIN_ASSERTIONS=84`.
-- [ ] 0.2 Stage a pristine pre-change gate for the AC-G4 differential:
+- [x] 0.2 Stage a pristine pre-change gate for the AC-G4 differential:
       `git show origin/main:plugins/soleur/skills/ship/scripts/net-issue-flow.sh` to a temp path, then
       **`chmod +x`** it (the suite's `[[ ! -x "$GATE" ]]` check exits 1 before any case runs, and that
       RED is indistinguishable from the defect being present). Do NOT use `git stash`
       (`hr-never-git-stash-in-worktrees`).
-- [ ] 0.3 Re-derive the ADR ordinal with **both** probes — `git ls-tree` across all `origin/*` refs AND
+- [x] 0.3 Re-derive the ADR ordinal with **both** probes — `git ls-tree` across all `origin/*` refs AND
       `git log --all --oneline | grep ADR-<n>`. ADR-205 is free under the first and **claimed** under the
       second (commit `e6d6ec8c5`, unmerged branch), which is why the plan uses **ADR-206**.
 
@@ -29,18 +29,18 @@ Phase 5 (floor ratchet) must follow Phases 1–4, because it reads the post-chan
 Every assertion call site carries its own `cases=$((cases + 1))` — never inside `pass()`/`fail()`,
 never inside `$( )`.
 
-- [ ] 1.0 **Add the injection seam first.** Change the hardcoded
+- [x] 1.0 **Add the injection seam first.** Change the hardcoded
       `GATE="$REPO_ROOT/plugins/soleur/skills/ship/scripts/net-issue-flow.sh"` to
       `GATE="${NET_ISSUE_FLOW_GATE:-$REPO_ROOT/…}"`, and assert the **unset** default resolves to the
       shipped path — otherwise a stray env var silently redirects the suite, a fail-open in the harness.
-- [ ] 1.1 **R1** — issue cites the originating issue; PR body carries `Filed: #<issue>` →
+- [x] 1.1 **R1** — issue cites the originating issue; PR body carries `Filed: #<issue>` →
       expect `Filing: 1`, `exit 1`.
-- [ ] 1.2 **R2** — body-attributed issue with `Mandated-By:` + `state: "OPEN"` + `Tracks #N` in the PR
+- [x] 1.2 **R2** — body-attributed issue with `Mandated-By:` + `state: "OPEN"` + `Tracks #N` in the PR
       body → expect counted **and** `exempt`, with `Filing:` unreduced.
-- [ ] 1.3 **R3** — the always-emitted block carries the declared line's numbers, and separately a
+- [x] 1.3 **R3** — the always-emitted block carries the declared line's numbers, and separately a
       `possible unattributed filing` line for a prose-only mention; the prose number must NOT appear in
       `Filing:` or affect `NET`.
-- [ ] 1.4 Confirm every new case is RED against the pre-change gate staged in 0.2, keying on the named
+- [x] 1.4 Confirm every new case is RED against the pre-change gate staged in 0.2, keying on the named
       `FAIL <label>` lines — **not** on the suite's exit status.
 
 ## Phase 2 — GREEN: the gate change

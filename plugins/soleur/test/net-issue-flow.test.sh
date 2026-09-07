@@ -20,7 +20,25 @@ export LC_ALL=C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-GATE="$REPO_ROOT/plugins/soleur/skills/ship/scripts/net-issue-flow.sh"
+# INJECTION SEAM. AC-G4 runs a real differential against the pre-change gate, so
+# the suite must be able to point at another copy. The DEFAULT is asserted below:
+# without that assertion a stray `NET_ISSUE_FLOW_GATE` in the environment silently
+# redirects every case, which is a fail-open in the harness itself — the suite
+# would report on a file nobody chose.
+GATE_DEFAULT="$REPO_ROOT/plugins/soleur/skills/ship/scripts/net-issue-flow.sh"
+GATE="${NET_ISSUE_FLOW_GATE:-$GATE_DEFAULT}"
+
+# RUNNING THE AC-G4 DIFFERENTIAL: the pre-change gate must be staged somewhere,
+# and the gate resolves its incidents lib as `dirname "$BASH_SOURCE"/../../../../..`
+# — five levels up — so a copy at any other depth silently emits NO telemetry and
+# three ledger assertions fail for a reason that has nothing to do with the
+# property under test. Measured: 10 failures instead of 7. The gate honours
+# CLAUDE_PROJECT_DIR first, so set it:
+#
+#   CLAUDE_PROJECT_DIR="$PWD" NET_ISSUE_FLOW_GATE=<pristine-copy> bash <this file>
+#
+# Without it the differential is not a differential — it is two files disagreeing
+# about where the repo is.
 
 fails=0
 # `passes` exists for the anti-vacuity floor at the bottom. Before it, pass()
@@ -890,6 +908,108 @@ for needle in "Fix inline" "Close something" "Override" "gate-override: net-issu
   if grep -qF -- "$needle" "$HOOK_GATE"; then pass "hook remedy needle survives FR8: $needle"
   else fail "FR8 removed a needle the hook suite pins: $needle"; fi
 done
+
+printf '\n'
+
+# ===========================================================================
+# #7759 — a filing that cites the ISSUE instead of the PR must still be counted
+# when the PR's own body DECLARES it.
+#
+# RED against the pre-change gate. AC-G4 verifies that through the $GATE seam,
+# keyed on the named FAIL lines rather than on the suite's exit status — a suite
+# exiting 1 for an unrelated reason would otherwise read as a successful RED.
+# ===========================================================================
+
+# --- Seam default -----------------------------------------------------------
+# Asserted because the seam is itself a fail-open if it is not: a stray
+# NET_ISSUE_FLOW_GATE in the environment would silently redirect every case
+# above, and the suite would report on a file nobody chose.
+cases=$((cases + 1))
+if [[ "$GATE_DEFAULT" == "$REPO_ROOT/plugins/soleur/skills/ship/scripts/net-issue-flow.sh" ]]; then
+  pass "GATE default resolves to the shipped gate path"
+else
+  fail "GATE default resolved to '$GATE_DEFAULT'"
+fi
+
+# --- R1: the motivating case ------------------------------------------------
+# The issue cites the ORIGINATING ISSUE (#7652), never the PR (999). Before this
+# change the gate saw Filing: 0 and PASSED. The PR body declares it.
+PR_BODY_FILE="$WORK/body-r1"; export PR_BODY_FILE
+ISSUE_LIST_FILE="$WORK/issues-r1"; export ISSUE_LIST_FILE
+{
+  printf 'Some PR that closes nothing and files one.\n'
+  printf '\n'
+  printf 'Filed: #7708\n'
+} > "$PR_BODY_FILE"
+printf '%s\n' '[{"number":7708,"body":"Follow-up from #7652 work. Cites the ISSUE, not the PR.","createdAt":"2026-07-20T12:00:00Z","state":"OPEN"}]' > "$ISSUE_LIST_FILE"
+run_gate
+cases=$((cases + 1))
+if grep -qE 'Filing:[[:space:]]*1' "$WORK/out"; then
+  pass "R1 declared filing that cites the ISSUE is counted (Filing: 1)"
+else
+  fail "R1 expected 'Filing: 1'; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+cases=$((cases + 1))
+if [[ "$CASE_RC" -eq 1 ]]; then pass "R1 net-positive after attribution BLOCKS (exit 1)"
+else fail "R1 expected exit 1, got $CASE_RC"; fi
+
+# --- R2: a body-attributed issue is still eligible for the ADR-155 exemption -
+# Measured: 0 of 33 whole-line Mandated-By: issues cite a PR, so before this
+# change none was ever a FILED candidate and the exemption could not fire.
+PR_BODY_FILE="$WORK/body-r2"; export PR_BODY_FILE
+ISSUE_LIST_FILE="$WORK/issues-r2"; export ISSUE_LIST_FILE
+{
+  printf 'Some PR that closes nothing and files one mandated tracker.\n'
+  printf '\n'
+  printf 'Filed: #7709\n'
+  printf 'Tracks #7709\n'
+} > "$PR_BODY_FILE"
+printf '%s\n' '[{"number":7709,"body":"Operator step deferred.\nMandated-By: wg-block-pr-ready-on-undeferred-operator-steps\n","createdAt":"2026-07-20T12:00:00Z","state":"OPEN"}]' > "$ISSUE_LIST_FILE"
+run_gate
+cases=$((cases + 1))
+if grep -qE 'Filing:[[:space:]]*1' "$WORK/out"; then
+  pass "R2 body-attributed issue keeps its TRUE Filing: count"
+else
+  fail "R2 expected 'Filing: 1'; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+cases=$((cases + 1))
+if grep -qiE 'Exempt:[[:space:]]*1' "$WORK/out"; then
+  pass "R2 body-attributed issue reaches the ADR-155 exemption (Exempt: 1)"
+else
+  fail "R2 expected 'Exempt: 1'; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+
+# --- R3: the conservation report, and that it is REPORT-ONLY ----------------
+# A prose-only mention must be NAMED but must move neither Filing: nor Net:.
+PR_BODY_FILE="$WORK/body-r3"; export PR_BODY_FILE
+ISSUE_LIST_FILE="$WORK/issues-r3"; export ISSUE_LIST_FILE
+{
+  printf 'Closes #7652\n'
+  printf '\n'
+  printf 'Filed: #7710\n'
+  printf '\n'
+  printf 'Incidentally this also relates to #7711 in passing.\n'
+} > "$PR_BODY_FILE"
+printf '%s\n' '[{"number":7710,"body":"Declared filing citing #7652.","createdAt":"2026-07-20T12:00:00Z","state":"OPEN"},{"number":7711,"body":"Mentioned in prose only; cites #7652.","createdAt":"2026-07-20T12:00:00Z","state":"OPEN"}]' > "$ISSUE_LIST_FILE"
+run_gate
+cases=$((cases + 1))
+if grep -qE 'Filing:[[:space:]]*1' "$WORK/out"; then
+  pass "R3 prose-only mention is NOT counted (Filing: 1, not 2)"
+else
+  fail "R3 expected 'Filing: 1'; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+cases=$((cases + 1))
+if grep -qiE 'possible unattributed filing' "$WORK/out"; then
+  pass "R3 prose-only mention is REPORTED as a possible unattributed filing"
+else
+  fail "R3 expected a 'possible unattributed filing' line; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+cases=$((cases + 1))
+if grep -qE 'Net:[[:space:]]*0' "$WORK/out"; then
+  pass "R3 the reported-only number does not move NET"
+else
+  fail "R3 expected 'Net: 0'; got: $(tr '\n' '|' < "$WORK/out")"
+fi
 
 printf '\n'
 
