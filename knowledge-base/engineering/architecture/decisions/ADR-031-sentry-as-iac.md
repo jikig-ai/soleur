@@ -837,8 +837,12 @@ removed, and removing one whose address was never imported would have converted 
 planned CREATE colliding with the live rule. That is why the removal was hard-gated as #7826
 rather than tidied up in the same PR.
 
-> **[2026-09-06 — #7826]** The 27 pairs have been removed and the root IS now reproducible
-> from zero: no block in `issue-alerts.tf` pins a live instance id any more. The gate was
+> **[2026-09-06 — #7826]** The 27 pairs have been removed: no block in `issue-alerts.tf`
+> pins a live instance id any more, so the adoption blocks no longer stand between this root
+> and a from-zero rebuild. Stated narrowly on purpose — `sentry_issue_alert.auth_per_user_loop`
+> still carries `conditions_v2 = []` / `filters_v2 = []` with a placeholder `actions_v2`, so a
+> from-zero apply would create THAT rule inert. That is a separate, pre-existing
+> non-reproducibility in the same file and #7826 does not discharge it. The gate was
 > discharged by measurement on `main`, not by elapsed time — 27 `sentry_alert` addresses in
 > state forming an exact 1:1 with the 27 resource labels, the surviving `sentry_issue_alert`
 > set disjoint from all 27 `removed{}` from-labels (the limb that rules out a silently-failed

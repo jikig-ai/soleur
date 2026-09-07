@@ -4,7 +4,7 @@ date: 2026-09-06
 slug: chore-sentry-adoption-cleanup
 branch: feat-one-shot-7826-sentry-adoption-cleanup
 issue: 7826
-closes: [7826, 7829, 7834]
+closes: [7826, 7834]
 lane: cross-domain
 type: chore
 priority: p2-medium
@@ -235,24 +235,34 @@ In addition to the table under `## Research Insights`.
 | #7829: `NoOne` on `byok_cap_exceeded` may be a defect — "pages no one" | The **outcome** is real; the **defect** framing is not. It is a documented, deliberate severity split. | **No config change.** Record the verification in-file and on the issue. See §"#7829 resolves against the change". |
 | The `NoOne` intent is documented "twice" in `issue-alerts.tf` | **Once.** The `NoOne`-semantics comment sits above `sentry_issue_alert.git_data_boot_warning` — a different rule, a different family, landed later (#7805). It documents the house pattern, not this rule's intent. #7829 already cites it. | The load-bearing evidence is the single Rule 1 / Rule 2 comment plus M3. Stated accurately below; AC6 must not repeat the mis-citation. |
 
-### #7829 resolves against the change
+### #7829 does NOT resolve here — it stays open, and the reason changed at review
 
-The brief asked to verify the premise before editing. Two limbs, resolving differently:
+The brief asked to verify the premise before editing. Two limbs:
 
 - **Limb 1 — no ownership rule — TRUE.** M3: the ownership endpoint returns HTTP 200 with
-  `"raw":null` and `"schema":null`, against a passing control probe on the project itself. So
-  `target_type = "issue_owners"` resolves to nobody and `fallthrough_type` alone decides delivery.
-- **Limb 2 — therefore a defect — FALSE.** The comment directly above the resource is one half of a
-  numbered pair: *"Rule 1 — GDPR Art. 33 breach … **Highest urgency**: tight frequency + notify
-  ActiveMembers fallthrough"* versus *"Rule 2 — BYOK delegation cap exceeded (hourly | daily).
-  **Lower urgency**: wider frequency + quieter `NoOne` fallthrough."* The severity split is the
-  design, stated at the resource, contrasted against the one rule of the pair that *is* meant to page.
+  `"raw":null` / `"schema":null`, against a passing control probe. `issue_owners` resolves to
+  nobody, so `fallthrough_type` alone decides delivery.
+- **Limb 2 — the `NoOne` was typed on purpose — TRUE.** The Rule 1 / Rule 2 comment directly
+  above the resource is an explicit severity split against `byok_art_33_breach`.
 
-Flipping to `ActiveMembers` would override a recorded decision and start paging the founder on every
-spend-cap breach. **The deliverable is a verification record in two places** — the `.tf` (for the next
-reader of the file) and a closing comment on #7829 (for the next triager, who will never open the
-`.tf`). M3 is dated because it decays: adding a Sentry ownership rule later moots `NoOne` in the
-other direction.
+**Both limbs hold and they do not answer #7829.** An earlier revision of this plan concluded
+from them that a cap breach is "dashboard-only BY CHOICE" and closed the issue on that basis.
+Review dissented, correctly: #7829 asked *does a cap breach page nobody*, and the evidence
+answers *was the `NoOne` deliberate*. Closing on the second permanently answers the first in a
+committed file, for a question it never asked.
+
+What the review measured, which neither limb reaches: in migration 084,
+`check_and_record_byok_delegation_use` raises `hourly_cap_exceeded` / `daily_cap_exceeded`
+**before** its `INSERT INTO public.audit_byok_use`, while its siblings `consent_withdrawn` and
+`expired` insert first and raise after — the house rule migration 061 states as *"accounting is
+sacred"*. So on a cap breach no audit row is written although the provider was already charged,
+and `v_hourly_spent` (a SUM over those rows) never advances, so the window is stuck. This rule is
+the only route out of that state and its `trigger_conditions` is `first_seen_event` alone.
+
+**Disposition:** the `.tf` note records the measurement AND the enforcement gap, and explicitly
+says not to close #7829 on the routing evidence. `closes:` carries 7826 and 7834 only. The
+fallthrough value is unchanged and AC6 proves it — flipping it would page on every breach without
+restoring the ledger row, which is the part that costs the grantor money.
 
 ## User-Brand Impact
 

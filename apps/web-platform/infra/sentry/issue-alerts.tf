@@ -29,15 +29,19 @@
 # `removed{}` (forget the `sentry_issue_alert` address without destroying the
 # live object) and `import{}` (adopt the same live object at the `sentry_alert`
 # address). All 54 blocks landed in one merge, did their job at apply time, and
-# have now been deleted: each pinned a hardcoded live instance id, so while they
-# remained this root could not be rebuilt from an empty state — a DR rebuild or
+# have now been deleted. The 27 `import{}` blocks each pinned a hardcoded live
+# instance id (the `removed{}` blocks named a Terraform address, not an id), so
+# while they remained this root could not be rebuilt from an empty state — a DR rebuild or
 # a second Sentry org would have tried to import ids that do not exist there and
 # failed rather than creating the rules.
 #
 # WHERE THE ADOPTED IDS LIVE NOW. The `import{}` blocks were the last committed
 # record of which live Sentry object each address adopted. That mapping now
 # exists in exactly two places: Terraform state, and the committed capture named
-# under AUTHORING SOURCE below. It is not recoverable from this file.
+# under AUTHORING SOURCE above. Recovery is a two-step join, and both halves are
+# committed: that capture maps live id -> live rule NAME, and each
+# `resource "sentry_alert" "<label>"` block below carries its `name`. Neither half
+# needs Terraform state.
 #
 # The removal was gated, not assumed. Measured on `main` 2026-09-06, all three
 # limbs: 27 `sentry_alert` addresses in state forming an exact 1:1 with the 27
@@ -85,10 +89,16 @@
 # `container_restart_burst` and `disk_io_wal_concentration`. That is consistent
 # across all three runs and is not a sort bug.
 #
-# A CLEAN PLAN IS NOT EVIDENCE THE DEPRECATION LIFTED. The two survivors still
+# A CLEAN PLAN IS NOT EVIDENCE THE DEPRECATION LIFTED. All THREE survivors still
 # read through the deprecated endpoint, so a green plan may simply mean it ran
 # outside a brownout window. The brownout retry in apply-sentry-infra.yml STAYS
-# until zero `sentry_issue_alert` resources remain (Phase 3.4, blocked on 950).
+# until zero `sentry_issue_alert` resources remain. Phase 3.4 is only PARTLY
+# blocked on 950: that upstream issue blocks `auth_per_user_loop` and
+# `sandbox_startup_failure`, whose `event_unique_user_frequency_count` trigger the
+# pinned provider cannot express. `git_data_boot_warning` uses `event_frequency`,
+# which `sentry_alert.trigger_conditions` already expresses in 11 of the 27 blocks
+# below — it is migratable today, and stays only because it landed after the
+# adoption capture was taken.
 
 data "sentry_project_issue_stream_monitor" "web_platform" {
   organization = var.sentry_org
@@ -97,8 +107,11 @@ data "sentry_project_issue_stream_monitor" "web_platform" {
 }
 
 # --------------------------------------------------------------------------
-# The two rules that CANNOT migrate: event_unique_user_frequency_count is
-# absent from trigger_conditions at v0.15.7 (upstream issue 950).
+# The THREE surviving `sentry_issue_alert` resources. Two CANNOT migrate:
+# event_unique_user_frequency_count is absent from trigger_conditions at v0.15.7
+# (upstream issue 950). The third, `git_data_boot_warning`, CAN — it uses
+# `event_frequency` and is unblocked; it stays only because it post-dates the
+# adoption capture. Do not read this banner as "all three are blocked".
 # --------------------------------------------------------------------------
 
 resource "sentry_issue_alert" "auth_per_user_loop" {
@@ -523,24 +536,41 @@ resource "sentry_alert" "byok_art_33_breach" {
 # feature=byok-delegations AND op ∈ {hourly-cap-exceeded, daily-cap-exceeded}
 # via a single `in` match (comma-separated; `in` confirmed in beta2 schema).
 #
-# VERIFIED DELIBERATE (#7829, measured 2026-09-06) — do not "fix" this to
-# ActiveMembers without a fresh decision. #7829 asked whether this rule, the
-# only one of the 27 with `fallthrough_type = "NoOne"`, pages nobody. It does,
-# and that is the design:
-#   - The premise holds. GET https://<host>/api/0/projects/<org>/web-platform/ownership/
-#     returns HTTP 200 with `"raw":null` and `"schema":null` — no ownership rule
-#     exists — against a passing control probe on .../projects/<org>/web-platform/
-#     (HTTP 200), so the null is a real absence, not a wrong-project or auth
-#     artifact. `issue_owners` therefore resolves to nobody and `fallthrough_type`
-#     alone decides delivery.
-#   - The intent is recorded directly above: this is Rule 2 of a numbered pair.
-#     Rule 1 (`byok_art_33_breach`) is "Highest urgency: tight frequency + notify
-#     ActiveMembers fallthrough"; Rule 2 is "Lower urgency: wider frequency +
-#     quieter `NoOne` fallthrough". A cap breach is dashboard-only BY CHOICE.
-# The measurement is dated because it decays in one direction: adding a Sentry
-# ownership rule later would make `issue_owners` resolve, at which point
-# `NoOne` stops being the thing that decides delivery. Re-measure before relying
-# on this note past that change.
+# #7829 IS NOT SETTLED BY THIS FILE. Read the whole note before changing the
+# line below, in either direction.
+#
+# WHAT WAS MEASURED (2026-09-06). The project has NO Sentry ownership rule:
+# GET /api/0/projects/<org>/web-platform/ownership/ returns HTTP 200 with
+# `"raw":null` and `"schema":null`, against a passing control probe on
+# .../projects/<org>/web-platform/ (also 200), so the null is a real absence and
+# not a wrong-project or auth artifact. `issue_owners` therefore resolves to
+# nobody, and `fallthrough_type` alone decides delivery. Re-measure before
+# relying on this: adding an ownership rule makes `issue_owners` resolve, at
+# which point `NoOne` stops being what decides delivery.
+#
+# WHAT THAT DOES AND DOES NOT ANSWER. It establishes that the `NoOne` above was
+# TYPED ON PURPOSE — see the Rule 1 / Rule 2 severity split in the comment
+# directly above this one, which is the authority for that and is not restated
+# here. It does NOT establish that a cap breach reaching nobody is acceptable,
+# which is what #7829 actually asked.
+#
+# THE PART THAT IS NOT A ROUTING QUESTION. In migration 084,
+# `check_and_record_byok_delegation_use` raises `hourly_cap_exceeded` and
+# `daily_cap_exceeded` BEFORE its `INSERT INTO public.audit_byok_use`, while its
+# siblings `consent_withdrawn` and `expired` insert first and raise after —
+# migration 061 states the house rule they follow ("accounting is sacred"). So on
+# a cap breach no audit row is written, even though the provider has already been
+# charged (`persistTurnCost` runs after `messages.create`). `v_hourly_spent` is a
+# SUM over those rows, so the window numerator does not advance either: every
+# later turn in the window also exceeds, also raises, also writes nothing. This
+# rule is the only route out of that state, and `trigger_conditions` here is
+# `first_seen_event` alone — no `reappeared_event`/`regression_event`, unlike
+# Rule 1 — so even the issue-stream entry is a single first-seen row.
+#
+# #7829 STAYS OPEN against that enforcement gap. Do not close it on the routing
+# evidence above. Flipping `fallthrough_type` here would page on every breach
+# without fixing the missing ledger row, which is the part that costs the
+# grantor money.
 resource "sentry_alert" "byok_cap_exceeded" {
   organization      = var.sentry_org
   name              = "byok-cap-exceeded"

@@ -80,6 +80,10 @@ export async function cronSentryAlertDriftHandler({
           repo: REPO_NAME,
           workflow_id: WORKFLOW_FILE,
           ref: "main",
+          // Load-bearing: the workflow's Sentry check-in is gated on this, so a
+          // manual `gh workflow run` cannot forge the liveness signal while THIS
+          // dispatcher is dead. Mirrors cron-supabase-advisor-scan.ts.
+          inputs: { source: "inngest" },
         },
       );
     });

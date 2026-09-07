@@ -10,7 +10,7 @@
 #
 # WHY NOT ADD apps/web-platform/infra/sentry TO scheduled-terraform-drift.yml's
 # MATRIX INSTEAD. That leg would plan the FULL ROOT, which still refreshes the
-# two surviving `sentry_issue_alert` resources through Sentry's deprecated
+# three surviving `sentry_issue_alert` resources through Sentry's deprecated
 # alert-rule endpoint — with none of apply-sentry-infra.yml's brownout retry. It
 # would go red on Sentry's brownout calendar rather than on drift, which is how a
 # probe gets muted. This workflow makes ONE read-only GET against the
@@ -29,12 +29,13 @@
 # missed check-in inside the 60-minute margin opens a Sentry issue at
 # `failure_issue_threshold = 1`.
 #
-# WHAT THE CHECK-IN DOES AND DOES NOT PROVE. It proves a run HAPPENED in the
-# window — not that the SCHEDULED dispatch is what caused it. This function
-# declares both `{ cron: "15 7 * * *" }` and a manual-trigger event, and the
-# workflow is `workflow_dispatch`-triggered, so any manual fire inside the
-# window satisfies the monitor for that day. That is inherent to heartbeat
-# monitors; it is stated here rather than left as an implied guarantee.
+# WHAT THE CHECK-IN PROVES. That an INNGEST-DISPATCHED run reached its terminal
+# step. It is gated on `github.event.inputs.source == 'inngest'`, so a manual
+# `gh workflow run` — which this header advertises two paragraphs down — posts
+# NOTHING and cannot satisfy the margin on the scheduler's behalf. An earlier
+# revision of this paragraph called that hole "inherent to heartbeat monitors";
+# it is not, it is inherent to UNGATED ones, and the sibling whose margin this
+# monitor copies had carried the gate all along.
 #
 # WHAT IS COVERED IN THE INTERIM: scheduler liveness, via
 # `cron-inngest-cron-watchdog` and the `EXPECTED_CRON_FUNCTIONS` parity manifest
@@ -58,6 +59,13 @@ name: Sentry Alert Drift Detection
 
 on:
   workflow_dispatch:
+    inputs:
+      source:
+        description: >-
+          Who dispatched this run. The Sentry check-in fires ONLY for `inngest`,
+          so a manual smoke test cannot forge liveness — see the check-in step.
+        required: false
+        default: manual
 
 concurrency:
   group: sentry-alert-drift
@@ -99,6 +107,14 @@ jobs:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          # Pinned empty, deliberately. sentry-alert-live-fidelity.sh supports a
+          # SENTRY_FIXTURE_RULES self-comparison mode that exits 0 and prints
+          # `PASS (FIXTURE — not live)`. This step branches only on rc and the
+          # FAILED marker, so a fixture run would reach verdict=clean — which now
+          # posts an affirmative `ok` heartbeat AND fires the auto-close step
+          # whose own comment exists to stop "a false all-clear ... auto-closing a
+          # live drift issue". The script's header names this reachability path.
+          SENTRY_FIXTURE_RULES: ""
         run: |
           set -uo pipefail
           # rc captured on its OWN LINE, before any pipe. `probe | tee` would
@@ -324,7 +340,21 @@ jobs:
       # health. `steps.file_drift.outputs.filed` is a POSITIVE signal, not the
       # step's outcome: the filer exits 1 on every drift run by design.
       - name: Sentry check-in (final)
-        if: always()
+        # SOURCE-GATED, and that is load-bearing. This workflow is
+        # `workflow_dispatch`-only and its header advertises `gh workflow run` as
+        # the manual test gesture — so an ungated check-in lets ONE manual run per
+        # day satisfy the 60-minute margin while the Inngest dispatcher is dead for
+        # weeks, forging exactly the liveness this monitor exists to prove.
+        # `scheduled-supabase-advisor-scan.yml` — the analogue this monitor's
+        # margin is copied from — carries the same gate for the same stated reason.
+        #
+        # `!cancelled()`: a cancelled run made no statement. Under bare `always()`
+        # a Stop click or the `timeout-minutes: 10` ceiling leaves `verdict` unset,
+        # the allowlist falls to `error`, and `failure_issue_threshold = 1` opens a
+        # Sentry issue for a run that was never unhealthy. Written as
+        # `always() && !cancelled()` rather than bare `!cancelled()` so the
+        # cohort-wide contains-`always()` assertion still binds this step.
+        if: always() && !cancelled() && github.event.inputs.source == 'inngest'
         continue-on-error: true
         uses: ./.github/actions/sentry-heartbeat
         with:

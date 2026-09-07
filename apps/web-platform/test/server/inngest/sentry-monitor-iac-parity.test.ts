@@ -273,7 +273,11 @@ describe("Sentry cron-monitor IaC parity", () => {
 // siblings that legitimately carry `always() && <extra>`.
 // ---------------------------------------------------------------------------
 
-const HEARTBEAT_USES = "uses: ./.github/actions/sentry-heartbeat";
+// Tolerant of an optional quote, mirroring the `monitor-slug` regex above whose
+// own comment calls an intolerant version "the exact class this guard exists to
+// prevent". Measured: quoting the path removed a whole workflow from the cohort
+// with the suite still green.
+const HEARTBEAT_USES_RE = /uses:\s*"?\.\/\.github\/actions\/sentry-heartbeat"?/;
 
 type HeartbeatStep = {
   file: string;
@@ -284,6 +288,13 @@ type HeartbeatStep = {
   isLastInJob: boolean;
   statusStepIds: string[];
   idsBefore: Set<string>;
+  // The DESTINATION and the raw expression. Without these the guard asserts the
+  // step's shape while saying nothing about which monitor it feeds or what it
+  // computes — measured: deleting `monitor-slug:`, re-pointing it at another
+  // monitor, inverting the allowlist to a denylist, and typoing the output name
+  // all left the suite 14/14 green.
+  monitorSlug: string | null;
+  statusExpr: string | null;
 };
 
 // Indentation-based walk. Keyed on the composite action PATH, never the bare
@@ -295,7 +306,7 @@ function heartbeatSteps(): HeartbeatStep[] {
   for (const file of readdirSync(WORKFLOWS_DIR)) {
     if (!file.endsWith(".yml") && !file.endsWith(".yaml")) continue;
     const src = readFileSync(join(WORKFLOWS_DIR, file), "utf-8");
-    if (!src.includes(HEARTBEAT_USES)) continue;
+    if (!HEARTBEAT_USES_RE.test(src)) continue;
     const lines = src.split("\n");
 
     let job = "<none>";
@@ -309,7 +320,13 @@ function heartbeatSteps(): HeartbeatStep[] {
         jobBoundaries.push(i);
         job = l.trim().replace(/:$/, "");
       }
-      if (/^ {6}- /.test(l)) stepStarts.push({ line: i, job });
+      // Indent-tolerant, not hardcoded to six spaces: a 4-space step list is
+      // ordinary YAML, and a `^ {6}- ` literal made such a file contribute ZERO
+      // steps while still containing the action — total invisibility at green.
+      // Anchored on the keys a step can legally open with so a `- ` inside a
+      // `with:`/`env:` block cannot register as a step start.
+      if (/^\s{2,}- (name|uses|id|if|with|env|run|continue-on-error|timeout-minutes|working-directory|shell):/.test(l))
+        stepStarts.push({ line: i, job });
     }
 
     for (let s = 0; s < stepStarts.length; s++) {
@@ -318,7 +335,7 @@ function heartbeatSteps(): HeartbeatStep[] {
       const nextJob = jobBoundaries.find((b) => b > stepStart) ?? lines.length;
       const end = Math.min(nextStep, nextJob);
       const block = lines.slice(stepStart, end).join("\n");
-      if (!block.includes(HEARTBEAT_USES)) continue;
+      if (!HEARTBEAT_USES_RE.test(block)) continue;
 
       // Last in its job iff no further step start precedes the next job boundary.
       const isLastInJob = nextStep >= nextJob;
@@ -344,7 +361,11 @@ function heartbeatSteps(): HeartbeatStep[] {
         if (idM) idsBefore.add(idM[1]);
       }
 
+      const slugM = block.match(/^\s*monitor-slug:\s*"?([a-z0-9-]+)"?\s*(?:#.*)?$/m);
+
       out.push({
+        monitorSlug: slugM ? slugM[1] : null,
+        statusExpr: statusM ? statusM[1] : null,
         file,
         job: stepStarts[s].job,
         name: nameM ? nameM[1] : null,
@@ -360,13 +381,49 @@ function heartbeatSteps(): HeartbeatStep[] {
 }
 
 describe("Sentry heartbeat step shape (#7834)", () => {
+  it("the cohort is exactly the set of workflows carrying the action (no silent drop)", () => {
+    // THE closure check. Every other assertion here quantifies over whatever the
+    // walk returned, so a walk that stops seeing a member reports no offenders
+    // for it forever. Derive the population a SECOND way — a plain file-level
+    // regex — and require the two to agree. Measured before this existed:
+    // dropping two files from the walk, and adding a 4-space-indented workflow
+    // carrying three defects, both left the suite fully green.
+    const withAction = readdirSync(WORKFLOWS_DIR)
+      .filter((f) => /\.ya?ml$/.test(f))
+      .filter((f) => HEARTBEAT_USES_RE.test(readFileSync(join(WORKFLOWS_DIR, f), "utf-8")))
+      .sort();
+    const inCohort = [...new Set(heartbeatSteps().map((s) => s.file))].sort();
+    expect(inCohort).toEqual(withAction);
+  });
+
   it("discovers the known heartbeat-step cohort (anti-vacuity)", () => {
     const steps = heartbeatSteps();
-    // Measured 2026-09-06: 11 steps across 10 workflows. A floor, not a pin, so
-    // adding a heartbeat never reds this — but a walk that silently stops
-    // finding them does.
-    expect(steps.length).toBeGreaterThanOrEqual(10);
+    // Measured 2026-09-06 ON THIS BRANCH: 12 steps across 11 workflows
+    // (scheduled-terraform-drift.yml carries two). An earlier revision of this
+    // comment said 11/10 — the PRE-change tree — which left the floor two units
+    // slack instead of one, and a floor is an anti-vacuity counter, so an
+    // off-by-one in the comment is an off-by-one in the guard.
+    expect(steps.length).toBeGreaterThanOrEqual(12);
     expect(steps.map((s) => s.file)).toContain("scheduled-terraform-drift.yml");
+  });
+
+  it("cohort-wide: every heartbeat step names a monitor-slug", () => {
+    const bad = heartbeatSteps()
+      .filter((s) => !s.monitorSlug)
+      .map((s) => `${s.file}:${s.job}`);
+    expect(bad).toEqual([]);
+  });
+
+  it("scheduled-terraform-drift's drift-check heartbeat is NOT terminal (must-FAIL fixture)", () => {
+    // The natural negative that makes `isLastInJob` unwritable as a constant.
+    // Without it the field had a must-PASS fixture and no must-FAIL one, so
+    // `const isLastInJob = true` passed the whole suite while terminality — the
+    // property this block exists to pin — was unasserted.
+    const s = heartbeatSteps().find(
+      (x) => x.file === "scheduled-terraform-drift.yml" && x.job === "drift-check",
+    );
+    expect(s).toBeDefined();
+    expect(s!.isLastInJob).toBe(false);
   });
 
   it("cohort-wide: every heartbeat step carries continue-on-error: true", () => {
@@ -407,5 +464,27 @@ describe("Sentry heartbeat step shape (#7834)", () => {
     expect(steps[0].name).toBe("Sentry check-in (final)");
     expect(steps[0].isLastInJob).toBe(true);
     expect(steps[0].statusStepIds).toContain("probe");
+
+    // WHERE it checks in. `statusStepIds` captures the step id and discards
+    // everything else, so the assertion above is satisfied by any expression
+    // that merely mentions the step. Measured: deleting `monitor-slug:` and
+    // re-pointing it at `scheduled-terraform-drift` both left the suite green —
+    // the second is worse than silence, because it keeps another workflow's
+    // monitor alive after that workflow dies.
+    expect(steps[0].monitorSlug).toBe("scheduled-sentry-alert-drift");
+
+    // WHAT it computes. Three measured mutants passed `toContain("probe")`:
+    // an `!= 'unavailable'` denylist (which this workflow's own comment says
+    // must never be written, and which also deletes the backstop), a
+    // `&& 'ok' || 'ok'` that can never report error, and a one-character typo
+    // of the OUTPUT name (the id half was asserted, the name half was not).
+    const expr = steps[0].statusExpr ?? "";
+    expect(expr).toMatch(/steps\.probe\.outputs\.verdict\s*==\s*'clean'/);
+    expect(expr).toMatch(/steps\.probe\.outputs\.verdict\s*==\s*'drift'/);
+    expect(expr).toMatch(/steps\.file_drift\.outputs\.filed\s*==\s*'true'/);
+    // Allowlist, never denylist — the mechanical form of the comment above the step.
+    expect(expr).not.toMatch(/steps\.\w+\.outputs\.\w+\s*!=/);
+    // It must be able to reach BOTH arms.
+    expect(expr).toMatch(/&&\s*'ok'\s*\|\|\s*'error'/);
   });
 });
