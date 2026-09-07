@@ -508,13 +508,21 @@ REQUIRED_RUNNERS=(
   # registers are ungated with no signal anywhere. That is precisely the shape this list's own
   # header describes, applied to a guard whose subject is silent omission.
   "scripts/lint-legal-registers.sh"
+  # Added #7786, for the identical reason one entry up. The corpus-truth probe is what
+  # stops a retired false claim returning to the published legal corpus after merge, and
+  # it is the ONLY gate that can see that class: every other legal gate asserts AGREEMENT
+  # between a document and its mirror, so a claim that is consistently wrong on both sides
+  # clears all of them. Without this entry, deleting its `run_suite` line from test-all.sh
+  # un-gates the corpus with no signal anywhere -- a one-line disarm on a guard whose
+  # subject is a silently-false published statement.
+  "scripts/probe-legal-corpus-truth.sh"
 )
 # FLOOR. `RELEVANCE_ARRAYS` got a derived floor and this list, the same shape, got none --
 # `REQUIRED_RUNNERS=()` exited 0 printing `orphan test suites: none` over zero checks. Absolute and
 # hand-ratcheted: unlike the gate count there is nothing in the runner to derive it from, and the
 # set only ever grows.
-if (( ${#REQUIRED_RUNNERS[@]} < 6 )); then
-  echo "ERROR: REQUIRED_RUNNERS has ${#REQUIRED_RUNNERS[@]} entries, expected >= 6 -- an emptied or trimmed list makes every runner-registration check below pass over nothing." >&2
+if (( ${#REQUIRED_RUNNERS[@]} < 7 )); then
+  echo "ERROR: REQUIRED_RUNNERS has ${#REQUIRED_RUNNERS[@]} entries, expected >= 7 -- an emptied or trimmed list makes every runner-registration check below pass over nothing." >&2
   fails=$((fails + 1))
 fi
 for r in ${REQUIRED_RUNNERS[@]+"${REQUIRED_RUNNERS[@]}"}; do

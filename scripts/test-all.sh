@@ -1320,6 +1320,16 @@ if want_scripts; then
   run_suite "scripts/tenant-dpa-register-guard-unit" bash scripts/tenant-dpa-register-guard.test.sh
   run_suite "scripts/tenant-dpa-register-guard-live" bash scripts/tenant-dpa-register-guard.sh count-signed
   run_suite "scripts/lint-legal-registers-unit" bash scripts/lint-legal-registers.test.sh
+  # DELIBERATELY LIVE-ONLY (#7786). probe-legal-corpus-truth.sh has no `*.test.sh`
+  # sibling, so lint-orphan-test-suites.sh does not require one; the unit arm with a
+  # mutation matrix is owned by the follow-up filed at Phase 8.2. Registered here
+  # rather than deferred because until now the probe was referenced ONLY by its own
+  # docstring and its wrapper's exec -- it guarded nothing. It is what stops the
+  # corrected off-host-log and journald-retention claims silently returning after
+  # merge, which no other gate in this file can see: the mirror, SHA and parity gates
+  # all assert AGREEMENT between a document and its mirror, and a claim that is
+  # consistently wrong on both sides passes every one of them.
+  run_suite "scripts/probe-legal-corpus-truth-live" bash scripts/probe-legal-corpus-truth.sh
   # ADVISORY FOR ONE MERGE CYCLE (#7717). The live arm is the first lint over the legal
   # REGISTER FILES (not over knowledge-base/legal/** -- lint-infra-no-human-steps.py already
   # scans legal/runbooks; no lint covered the registers). Its scope was DESIGNED rather than
