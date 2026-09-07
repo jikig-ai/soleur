@@ -159,6 +159,59 @@ if [[ "${1:-}" == "--capacity" ]]; then
   exit 0
 fi
 
+# --- Shard partition: --enumerate and SCRIPTS_SHARD (#7902) --------------------------------
+#
+# Parsed HERE, under the same discipline as --print-suite-globs and --capacity above: BEFORE
+# the TMPDIR export, the bare-repo guard, TEST_GROUP validation, and above all before
+# tc_acquire. The shard-totality guard invokes this runner once per leg to enumerate that
+# leg's ASSIGNED registrations, and it runs INSIDE the advisory lock a real gate run holds —
+# so an enumerate path that blocked on that lock would deadlock the gate on itself, exactly as
+# the --print-suite-globs path would.
+#
+# --enumerate is SHIFTED off argv so the group is still read positionally below
+# (`bash scripts/test-all.sh --enumerate scripts`), keeping one argv convention.
+_ENUMERATE=0
+if [[ "${1:-}" == "--enumerate" ]]; then
+  _ENUMERATE=1
+  shift
+fi
+
+# SCRIPTS_SHARD=k/N partitions the group across CI matrix legs.
+#
+# UNSET runs the full group. SET-BUT-MALFORMED — including empty or whitespace-only — FAILS
+# CLOSED with exit 2, following the TEST_GROUP validation precedent below.
+#
+# The unset-vs-set-empty distinction is deliberate and is the SAFE direction.
+# `SCRIPTS_SHARD: ${{ matrix.shard }}` always resolves to a non-empty value, so an EMPTY value
+# under CI means the interpolation broke — a renamed matrix key, a dropped `env:`. Treating
+# that as "unset" would make the leg silently re-run the WHOLE group and report green, which
+# is the "a leg lost its env" failure this partition must not have. Falling back to running
+# NOTHING would be worse still: a required check green over zero coverage.
+#
+# `${SCRIPTS_SHARD+x}`, not `${SCRIPTS_SHARD:-}`, is what distinguishes unset from set-empty.
+_SHARD_K=0
+_SHARD_N=0
+if [[ -n "${SCRIPTS_SHARD+x}" ]]; then
+  _shard_raw="${SCRIPTS_SHARD//[[:space:]]/}"
+  if [[ ! "$_shard_raw" =~ ^([0-9]+)/([0-9]+)$ ]]; then
+    echo "ERROR: SCRIPTS_SHARD must be k/N with 1 <= k <= N (got: '${SCRIPTS_SHARD}')." >&2
+    echo "       Unset it to run the full group. A malformed value is never inferred: it fails" >&2
+    echo "       closed rather than silently running everything or nothing." >&2
+    exit 2
+  fi
+  _SHARD_K=$(( 10#${BASH_REMATCH[1]} ))
+  _SHARD_N=$(( 10#${BASH_REMATCH[2]} ))
+  if (( _SHARD_N < 1 || _SHARD_K < 1 || _SHARD_K > _SHARD_N )); then
+    echo "ERROR: SCRIPTS_SHARD must be k/N with 1 <= k <= N (got: '${SCRIPTS_SHARD}')." >&2
+    echo "       Unset it to run the full group. A malformed value is never inferred: it fails" >&2
+    echo "       closed rather than silently running everything or nothing." >&2
+    exit 2
+  fi
+  # Echoed so a leg's resolved assignment is readable in its own CI log, and so the guard can
+  # assert N DISTINCT values across N legs — which is what detects a leg that lost its env.
+  echo "[shard] SCRIPTS_SHARD resolved k/N = ${_SHARD_K}/${_SHARD_N}"
+fi
+
 # Default TMPDIR to /var/tmp (disk-backed) rather than /tmp.
 #
 # /tmp on this machine class is a ~4 GiB SHARED tmpfs, and parallel worktrees are this
@@ -441,7 +494,11 @@ esac
 # It fires HERE — after TEST_GROUP is validated so the message can name it, but before
 # tc_acquire and before the first suite — so a refused run costs nothing and never takes the
 # advisory lock that a legitimate sibling run is queued on.
-if [[ "${SOLEUR_SUBAGENT:-}" == "1" && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
+# `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
+# full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
+# NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not
+# run from a spawned agent at all.
+if (( _ENUMERATE == 0 )) && [[ "${SOLEUR_SUBAGENT:-}" == "1" && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
   echo "ERROR: refusing a full-gate run — SOLEUR_SUBAGENT=1 is set (TEST_GROUP=$TEST_GROUP)." >&2
   echo "" >&2
   echo "Spawned agents run only the suites targeting the files they were given. Concurrent" >&2
@@ -548,8 +605,59 @@ _suite_budget_ms() {
 # is not a suite that passed, and the denominator must still account for it.
 skipped=0
 
+# --- Shard selection at the registration chokepoint (#7902) --------------------------------
+#
+# run_suite() and skip_suite() are the two chokepoints every group registration passes through,
+# and EXACTLY ONE of them is called per registration site. A filter placed at both, BEFORE each
+# increments `suites`, therefore partitions the group with no registration reachable twice and
+# none reachable zero times. Totality is STRUCTURAL, not asserted: registration order is static
+# source order, so a given registration receives the same ordinal on every leg.
+#
+# ROUND-ROBIN OVER THE ORDINAL, not a hash over the suite path. ~198 registrations in this file
+# are hand-written imperative statements and ~24 name no bash path at all (`python3 -m
+# unittest`, `node --test`), so there is no path to hash. Round-robin also balances better than
+# a hash: neighbouring registrations land on different legs, and this file groups slow suites
+# together.
+#
+# A NON-SELECTION IS NOT A DECLINE. It must not increment `suites`, must not increment
+# `skipped`, and must not reach the runtime-ceiling accounting below. A suite this leg was
+# never asked to run is not coverage this leg failed to obtain; counting it as one would either
+# push every leg to ADR-181's exit 3 (UNRESOLVED) or restate the "green over a battery that
+# never ran" defect ADR-181 exists to have closed.
+#
+# WHICH leg a given suite lands on is LOCALE-DEPENDENT; that it lands on exactly one is not.
+# The ordinal comes from registration order, and the glob loop's order is shell glob expansion,
+# which collates per LC_COLLATE — measured 2026-09-07, a `_`-prefixed filename sorts differently
+# under en_US.UTF-8 than under the runners' C locale, and the two orders diverge from index 185.
+# This is not a correctness problem: totality and disjointness are properties of "every
+# registration passes the chokepoint exactly once", which holds under ANY order, and the guard
+# verifies them on whatever locale it runs under. All legs of one matrix share a runner image
+# and therefore a collation, so assignments cannot disagree WITHIN a run. What it does mean is
+# that a leg's membership is not portable between machines, so any future balance tuning must be
+# derived from CI's order (C), never from a developer's.
+_shard_ordinal=0
+_shard_assigned=0
+
+_shard_selects() {
+  _shard_ordinal=$(( _shard_ordinal + 1 ))
+  if (( _SHARD_N > 0 )) && (( (_shard_ordinal - 1) % _SHARD_N != _SHARD_K - 1 )); then
+    return 1
+  fi
+  _shard_assigned=$(( _shard_assigned + 1 ))
+  return 0
+}
+
+# Sentinel-prefixed so a consumer can extract the registration list from a stdout stream that
+# also carries banners and interstitial prose. A bare label line would be indistinguishable
+# from the surrounding noise.
+_shard_enumerate_emit() {
+  printf 'SUITE_REGISTRATION\t%s\n' "$1"
+}
+
 run_suite() {
   local label="$1"; shift
+  _shard_selects || return 0
+  if (( _ENUMERATE == 1 )); then _shard_enumerate_emit "$label"; return 0; fi
   suites=$((suites + 1))
   # --- Runtime ceiling (#7869) ---------------------------------------------
   #
@@ -709,6 +817,11 @@ run_suite() {
 # $2 = machine-readable reason  $3 = the exact command that re-runs it
 skip_suite() {
   local label="$1" reason="$2" rerun="$3"
+  # The IDENTICAL filter run_suite carries, for the reason stated at _shard_selects: both
+  # functions increment `suites`, so filtering only one makes per-leg denominators and the
+  # epilogue's decline accounting disagree about how many registrations the leg owned.
+  _shard_selects || return 0
+  if (( _ENUMERATE == 1 )); then _shard_enumerate_emit "$label"; return 0; fi
   suites=$((suites + 1))
   skipped=$((skipped + 1))
   echo ""
@@ -907,8 +1020,15 @@ fi
 # Contention preamble — emitted before the first `--- <suite> ---` line so a
 # contended run is self-identifying and a false RED is never again diagnosed
 # as a regression (AC1/AC2).
-tc_preamble
-_TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
+# NOT under --enumerate. tc_preamble is a full /proc walk (one awk per pid — MEASURED at 5.7s
+# of an 8.2s enumerate pass, i.e. 70% of it) whose entire output is a capacity and contention
+# verdict about running suites. An enumerate pass starts none and takes no lock, so every
+# reading it produces is inapplicable, and the shard-totality guard invokes this path K+1 times
+# per run. Skipping it takes that guard from 83s to ~25s.
+if (( _ENUMERATE == 0 )); then
+  tc_preamble
+  _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
+fi
 
 # Orphaned-PROCESS probe (#7537), emitted with the contention banners because it
 # answers the same question they do — "is something else on this box eating the
@@ -984,7 +1104,12 @@ tc_capacity_line >&2
 # returns 77/0 and 118/0, because the stamp is exactly what makes an inherited count inert.
 # tc_preamble stamps TC_SIBLING_RUN_COUNT_PID with its own $$ and does not export it, so an
 # inherited count carries no stamp and cannot refuse.
-if [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${TC_SIBLING_RUN_COUNT_PID:-}" == "$$" \
+# Exempt under --enumerate for the same reason as the SOLEUR_SUBAGENT refusal above: an
+# enumerate pass runs no suite, so it cannot contend with the sibling this refusal protects.
+# Leaving it in force would make the shard-totality guard fail whenever any sibling gate ran,
+# i.e. a guard whose colour depended on another worktree.
+if (( _ENUMERATE == 0 )) \
+   && [[ "${TC_SIBLING_RUN_COUNT:-0}" -gt 0 && "${TC_SIBLING_RUN_COUNT_PID:-}" == "$$" \
       && "${SOLEUR_ALLOW_FULL_GATE:-}" != "1" ]]; then
   echo "ERROR: refusing a full-gate run — ${TC_SIBLING_RUN_COUNT} sibling full-gate run(s) already in flight (TEST_GROUP=$TEST_GROUP)." >&2
   echo "" >&2
@@ -1097,7 +1222,12 @@ _repo_boundary_exit_note() {
 }
 trap '_repo_boundary_exit_note' EXIT
 
-tc_acquire "test-all"
+# NOT under --enumerate. The shard-totality guard runs this path from inside a gate run that
+# already holds this lock; blocking here would deadlock the gate on itself. An enumerate pass
+# executes no suite, so it needs no serialization.
+if (( _ENUMERATE == 0 )); then
+  tc_acquire "test-all"
+fi
 
 # AFTER tc_acquire, deliberately. A run that queued behind a sibling can wait up
 # to TC_LOCK_TIMEOUT (3600 s) here, so a reading taken before the wait describes a
@@ -2165,6 +2295,22 @@ if want_scripts; then
     skip_suite ".github/scripts/test/run-all.sh" "relevance" \
       "bash .github/scripts/test/run-all.sh"
   fi
+fi
+
+# --- Enumerate mode terminates HERE, after the last registration site (#7902) --------------
+#
+# Every registration has now passed the chokepoint, so the leg's assigned label list is
+# complete. Nothing below this point concerns enumeration: the epilogue, the repo-write
+# boundary delta and the summary all describe a run that EXECUTED suites, and this one
+# executed none.
+#
+# The EXIT trap is cleared first: its note reports "the boundary check did not run", which is
+# true and meaningless on a path that started no suite, and would read as a warning about a
+# clean enumerate pass.
+if (( _ENUMERATE == 1 )); then
+  echo "[shard] enumerate complete: ${_shard_assigned} registration(s) assigned of ${_shard_ordinal} walked (k/N=${_SHARD_K}/${_SHARD_N})" >&2
+  trap - EXIT
+  exit 0
 fi
 
 _emit_bytes_probe "__run_boundary_end__"

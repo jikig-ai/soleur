@@ -12,11 +12,11 @@ silently runs a subset).
 
 ## Phase 0: Derive K from data that already exists
 
-- [ ] 0.1 Pull `TEST_TIMING_LOG` from one full scripts-group run. Report the per-suite duration
+- [x] 0.1 Pull `TEST_TIMING_LOG` from one full scripts-group run. Report the per-suite duration
       distribution and name the single longest suite — that value is the floor no K can beat.
       Known: `tests/scripts/registry-gate-mutation-battery` carries a 2,500,000 ms budget with
       measured runs of 860,692 ms and 1,675,430 ms, and is relevance-gated.
-- [ ] 0.2 Choose K against the measured tail. K=3 is provisional, not an acceptance criterion.
+- [x] 0.2 Choose K against the measured tail. K=3 is provisional, not an acceptance criterion.
 - [x] 0.3 Record the baseline gated metric — time-to-`test` p50 34.1 / p90 49.6 / max 56.1 min.
 - [x] 0.4 Confirm the ADR-133 CI exemptions still hold (advisory lock and runtime ceiling both
       short-circuit under `CI`). Verified at plan time; re-confirm before relying on it.
@@ -36,41 +36,41 @@ silently runs a subset).
 
 ## Phase 2: Round-robin partition at the `run_suite` chokepoint
 
-- [ ] 2.1 Write the Guard 1 (shard totality) suite **before** the partition, from the plan's
+- [x] 2.1 Write the Guard 1 (shard totality) suite **before** the partition, from the plan's
       eight-row mutation matrix, including row 6 (the K=1 tautology stub) and row 8 (malformed
       value). Each mutation must be line-range-scoped with its placement asserted.
-- [ ] 2.2 Add an **enumerate mode** to `scripts/test-all.sh` that records registrations without
+- [x] 2.2 Add an **enumerate mode** to `scripts/test-all.sh` that records registrations without
       executing them, handled in the same early block as `--print-suite-globs` — before `TMPDIR`
       export, the bare-repo guard, `TEST_GROUP` validation and `tc_acquire`. A path that blocks on
       the advisory lock deadlocks the gate on itself.
-- [ ] 2.3 Add `SCRIPTS_SHARD=k/N`. Filter inside `run_suite()` **before** `suites=$((suites + 1))`,
+- [x] 2.3 Add `SCRIPTS_SHARD=k/N`. Filter inside `run_suite()` **before** `suites=$((suites + 1))`,
       and mirror the identical filter into `skip_suite()` — both increment `suites`.
-- [ ] 2.4 Partition round-robin on the registration counter, keyed on the `run_suite` **label**.
+- [x] 2.4 Partition round-robin on the registration counter, keyed on the `run_suite` **label**.
       Not a hash over the suite path: ~198 registrations are hand-written and ~24 name no path.
-- [ ] 2.5 A shard non-selection must not increment `skipped`, must not reach `_ceiling_declined`
+- [x] 2.5 A shard non-selection must not increment `skipped`, must not reach `_ceiling_declined`
       accounting, and must not push the leg toward ADR-181's `exit 3`.
-- [ ] 2.6 Malformed `SCRIPTS_SHARD` (`0/3`, `4/3`, `1/0`, `abc`, empty) exits `2`, following the
+- [x] 2.6 Malformed `SCRIPTS_SHARD` (`0/3`, `4/3`, `1/0`, `abc`, empty) exits `2`, following the
       `TEST_GROUP` validation precedent. Never a silent full-group or empty run.
-- [ ] 2.7 Unset/empty runs the full group. The filter keys on `SCRIPTS_SHARD` presence, never on
+- [x] 2.7 Unset/empty runs the full group. The filter keys on `SCRIPTS_SHARD` presence, never on
       `TEST_GROUP == scripts`.
-- [ ] 2.8 `scripts/lint-orphan-test-suites.sh`: `env -u TEST_GROUP` → `env -u TEST_GROUP -u
+- [x] 2.8 `scripts/lint-orphan-test-suites.sh`: `env -u TEST_GROUP` → `env -u TEST_GROUP -u
       SCRIPTS_SHARD`; widen the matching assertion in its companion suite.
-- [ ] 2.9 Drive Guard 1 GREEN against the real tree, with its reference set derived by static
+- [x] 2.9 Drive Guard 1 GREEN against the real tree, with its reference set derived by static
       `run_suite` extraction + `--print-suite-globs` — never by calling the partition with K=1.
 
 ## Phase 3: Matrix the job
 
-- [ ] 3.1 Add `strategy: {fail-fast: false, matrix: {shard: [...]}}` to `ci.yml`'s `test-scripts`;
+- [x] 3.1 Add `strategy: {fail-fast: false, matrix: {shard: [...]}}` to `ci.yml`'s `test-scripts`;
       pass `SCRIPTS_SHARD: ${{ matrix.shard }}` via `env:`. Comment why the group stays positional.
-- [ ] 3.2 Keep the job key literally `test-scripts`; no leg may carry `continue-on-error`.
-- [ ] 3.3 Each leg echoes its resolved `k/N`; assert N distinct values across N legs so a leg that
+- [x] 3.2 Keep the job key literally `test-scripts`; no leg may carry `continue-on-error`.
+- [x] 3.3 Each leg echoes its resolved `k/N`; assert N distinct values across N legs so a leg that
       lost its `env:` is detected rather than passing green on the full group.
-- [ ] 3.4 Keep every leg's runtime profile identical — same gitleaks and likec4 pins, no
+- [x] 3.4 Keep every leg's runtime profile identical — same gitleaks and likec4 pins, no
       `setup-node`/`setup-bun` version pin.
-- [ ] 3.5 Re-run `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` (its extractor anchors
+- [x] 3.5 Re-run `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` (its extractor anchors
       on 2-space keys and `strategy:` is indented 4 spaces — verify, do not assume) and
       `plugins/soleur/test/required-checks-canonical-parity.test.sh`.
-- [ ] 3.6 Confirm the `test:` job block is byte-unchanged and `scripts/required-checks.txt` is
+- [x] 3.6 Confirm the `test:` job block is byte-unchanged and `scripts/required-checks.txt` is
       unmodified.
 
 ## Phase 4: Guard 2 — CI's declared budget is bounded by the gate
@@ -86,10 +86,10 @@ silently runs a subset).
 
 ## Phase 5: Guard placement in CI
 
-- [ ] 5.1 Run Guard 1 from a job that can observe **all** legs — a non-sharded job invoking the
+- [x] 5.1 Run Guard 1 from a job that can observe **all** legs — a non-sharded job invoking the
       enumerate mode K times, or a join job over per-leg artifacts. A guard inside one leg cannot
       see a cross-leg union.
-- [ ] 5.2 Assert the enumerate mode and the executing pass emit identical label sequences with
+- [x] 5.2 Assert the enumerate mode and the executing pass emit identical label sequences with
       `SCRIPTS_SHARD` unset.
 
 ## Phase 6: Architecture records

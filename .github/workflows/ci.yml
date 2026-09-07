@@ -741,6 +741,9 @@ jobs:
   # the matrix outcome — failure on any shard fails the whole job.
   test-webplat:
     runs-on: ubuntu-latest
+    # Declared for Guard 2 (#7902): CI's contribution to the deploy gate must be a bounded,
+    # DECLARED budget. Sized ~4x the measured p90 (5.51 min) for this job's slowest leg.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -786,6 +789,9 @@ jobs:
 
   test-bun:
     runs-on: ubuntu-latest
+    # Declared for Guard 2 (#7902). Measured p90 is under 2 min; 20 is deliberate slack for a
+    # cold runner, still far under what the gate can absorb.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -813,6 +819,35 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
+    # MATRIX SHARDED (#7902). This job was ~90% of CI's wall clock and CI's wall clock had
+    # outgrown web-platform-release.yml's await-ci ceiling, so every deploy was fail-closing on
+    # a healthy build. Measured on run 34152496134: 35.25 min across 374 registered suites.
+    #
+    # K=3 IS DERIVED, NOT ASSUMED. Per-suite durations were taken from that run's own job log
+    # (the runner prints `--- <label> ---` at each suite start and Actions timestamps every
+    # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order:
+    #
+    #   K=2 -> 22.01   K=3 -> 15.11   K=4 -> 16.37   K=5 -> 10.25   K=6 -> 9.99   K=8 -> 12.50
+    #
+    # SLOWEST-LEG MINUTES, AND IT IS NOT MONOTONIC IN K: K=4 is WORSE than K=3 because the two
+    # dominant suites land on one leg mod 4, and K=8 is worse than K=6. Anyone raising K must
+    # re-run that simulation rather than assuming more legs are faster.
+    #
+    # The floor no K can beat is the longest single suite —
+    # `tests/scripts/registry-gate-mutation-battery` at 8.14 min, 23% of the group on its own.
+    # K=3 lands 15.11 min against a 3600s (60 min) gate ceiling: ~4x margin. Past K=3 the
+    # binding term stops being execution and becomes DISPATCH (measured run-creation to
+    # job-start: p50 1.4, p90 12.4, max 21.0 min), so each extra leg buys shrinking execution
+    # time while adding a draw from a pool that is already the pipeline's contended resource,
+    # plus another ~1.5 min of gitleaks/likec4/bun install overhead.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+    # Declared so Guard 2 can bound CI's contribution to the deploy gate. Sized ~2x the
+    # measured 15.11 min slowest leg; an absent value would read as GitHub's 360-minute
+    # default, which no deploy gate can absorb.
+    timeout-minutes: 30
     # No setup-node — bash + python3 + a stock node (with npm) ship on
     # ubuntu-latest by default, and the one `node --test` entry in the
     # scripts group (scripts/md-to-mrkdwn.test.mjs) runs on the stock
@@ -850,6 +885,15 @@ jobs:
     env:
       GITLEAKS_VERSION: "8.24.2"
       GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
+      # The group is still passed POSITIONALLY to the runner (`bash scripts/test-all.sh
+      # scripts`), while the shard arrives through the environment. Two mechanisms side by
+      # side, deliberately: TEST_GROUP selects WHICH suites exist for this job, SCRIPTS_SHARD
+      # selects WHICH SLICE of them this leg owns. Folding the shard into the positional
+      # argument would overload one channel with two independent decisions.
+      #
+      # An EMPTY value here (a renamed matrix key, a dropped env:) makes the runner exit 2
+      # rather than silently running the whole group and reporting green.
+      SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
       # fetch-depth: 0 — scripts/lint-trap-tempfile-ownership.py scopes rule (c) to
       # lines added vs the merge base against origin/main. The default shallow
@@ -890,6 +934,35 @@ jobs:
         run: bash scripts/test-all.sh scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # #7902 — Guard 1's mutation battery, in its OWN job.
+  #
+  # Two reasons it cannot live in the scripts group with the suite it guards:
+  #
+  #  1. It mutates `scripts/test-all.sh` in place. Registered as a scripts-group suite it would
+  #     do that while the parent `test-all.sh` was mid-run, and bash reads a script incrementally
+  #     by byte offset — the parent can go on to execute edited bytes. The failures that produces
+  #     look like ordinary test results.
+  #  2. AC14: a guard running INSIDE one matrix leg is a poor place to assert a CROSS-LEG union.
+  #     Guard 1 does drive its own enumerate children and is correct there (verified with
+  #     SCRIPTS_SHARD set), but a non-sharded job removes the question entirely.
+  #
+  # NOT added to `test`'s needs-closure: it is a guard on the partition's correctness, not a
+  # shard of the suite, and folding it in would put its ~3.5 min on the deploy gate's critical
+  # path for no gain. It gates the PR on its own.
+  shard-totality-mutations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Guard 1 — shard totality (the guard itself, unmutated)
+        run: bash plugins/soleur/test/scripts-shard-totality.test.sh
+
+      - name: Guard 1 — mutation battery (every row must drive the guard RED)
+        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
@@ -939,6 +1012,15 @@ jobs:
     needs: [test-webplat, test-bun, test-scripts]
     if: always()
     runs-on: ubuntu-latest
+    # Declared for Guard 2 (#7902). This job only reads three `needs.*.result` strings —
+    # measured p50 0.05 min — but it MUST carry a ceiling: Guard 2 reads an absent
+    # timeout-minutes as GitHub's 360-minute default, and the aggregator sits on the deploy
+    # gate's critical path after the shards.
+    #
+    # Everything below this line is byte-unchanged from before the shard (#7902 AC5): the
+    # `needs:` list, the `if:`, and the aggregation loop are untouched, which is what proves
+    # matrix legs roll up into ONE `needs.test-scripts.result` with no aggregator edit.
+    timeout-minutes: 10
     steps:
       - name: Aggregate shard results
         env:

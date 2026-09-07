@@ -216,8 +216,17 @@ sed -nE 's/^[[:space:]]*run_suite[[:space:]].*[[:space:]]bash[[:space:]]+"?([A-Z
 #
 # Clearing it makes the fail-closed path unconditional — independent of whatever the caller's
 # environment happens to hold, which is the only form of "fail closed" worth the name.
+# `-u SCRIPTS_SHARD` (#7902) is the same argument one variable further out. CI now sets
+# SCRIPTS_SHARD=k/N as a JOB-level env on the sharded scripts leg, so it is in the environment
+# of every step and every child — this linter included, and its runner invocation with it.
+#
+# Stated honestly: this is defence in depth TODAY, not a live bug. The `--print-suite-globs`
+# handler returns before the runner's SCRIPTS_SHARD block is reached, so a malformed inherited
+# value cannot currently reach the exit-2 path and a valid one changes nothing. What the clear
+# buys is that the guarantee stops depending on the ORDER of two blocks in a 2400-line file —
+# the same reason `-u TEST_GROUP` is here rather than trusting the caller.
 globs_rc=0
-env -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
+env -u TEST_GROUP -u SCRIPTS_SHARD SOLEUR_DISABLE_SESSION_STATE=1 bash "$RUNNER" --print-suite-globs > "$WORK/globs" 2>/dev/null || globs_rc=$?
 globs_n=$(wc -l < "$WORK/globs" | tr -d ' ')
 if (( globs_rc != 0 )) || (( globs_n < 1 )); then
   echo "ERROR: 'bash scripts/test-all.sh --print-suite-globs' exited ${globs_rc} and printed ${globs_n} pattern(s) -- this linter derives the auto-discovery surface from that flag, so without it every glob-registered suite would be reported as an orphan. Restore the flag rather than re-copying the patterns here." >&2
