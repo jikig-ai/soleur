@@ -57,15 +57,27 @@ jobs:
           # entry like `Soleur Agent`. See #5520 (the PR that exposed the null-login gap).
           allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot],soleur-ai[bot]"
           custom-notsigned-prcomment: |
-            Thank you for your contribution! Before we can accept it, you need to sign our [Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html).
+            Thank you for your contribution! One thing is needed before we can merge it.
 
-            **Why?** Soleur uses a Business Source License (BSL 1.1) and supports dual licensing. The CLA ensures Jikigai has the rights needed to maintain and distribute your contribution under all applicable licenses, while you retain your copyright.
-
-            **How to sign:** Comment on this PR with the following text:
+            **Comment this line on this PR, and the check goes green:**
 
             > I have read the CLA Document and I hereby sign the CLA
 
-            If your employer owns your work, please ask them to sign the [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) by contacting legal@jikigai.com.
+            That is the whole ask, it takes a few seconds, and it is the only thing this check is waiting on. You sign once and never again. Read the [Individual Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html) first if you would like to.
+
+            **Why?** Soleur uses a Business Source License (BSL 1.1) and supports dual licensing. The CLA ensures Jikigai has the rights needed to maintain and distribute your contribution under all applicable licenses, while you retain your copyright.
+
+            **If your employer owns your work** (common under a full-time employment contract), a [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) is also needed — **and chasing it is the maintainer's job, not yours.** You do not have to approach your employer's legal team. Send us your employer's name and we will approach them; we aim to reply within **3 business days**.
+
+            **Email that to legal@jikigai.com rather than posting it here**, unless you would rather it were public. This thread is world-readable and permanent, and who you work for is yours to disclose or not.
+
+            **What happens if that Corporate CLA is signed.** Once your employer executes one and names you under it, we publish an entry linking your GitHub account to that organisation in a public file in this repository (`apps/cla-evidence/roster/ccla-roster.json`). It carries no name, no email and no postal address — but the account-to-employer association is itself personal data about you, it is created only at or after you sign the line above, and once written it is copied into every clone and fork and **cannot be erased**. Section 0 of the Individual CLA is the full notice, and it is worth reading before you sign rather than after.
+
+            One thing we do have to ask you, because signing says it on your behalf. Section 4(a) of the Individual CLA is a representation about your employer's position: that your employer has given you permission to contribute, **or** has waived its rights in this work, **or** has signed a Corporate CLA naming you. Most contributors are already covered by the first — an open-source contribution policy, or work that simply is not your employer's. **If none of the three is true for you, or you are not sure, tell us at legal@jikigai.com instead of signing** — you need not say why on this thread. We will sort the Corporate CLA out first and come back to you. Signing is quick precisely because it is a real statement, and we would rather wait than have you make one that is not accurate.
+
+            **While a Corporate CLA of yours is in flight**, your pull request is reviewed and merged on its merits exactly as any other. That paperwork is ours to finish and any delay in it is ours; nothing further is being asked of you, and the corporate side never gates your merge.
+
+            None of the above applies if you are contributing your own work on your own time. In that case the one line at the top is genuinely the whole ask.
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
           custom-allsigned-prcomment: "All contributors have signed the CLA. Thank you!"
           lock-pullrequest-aftermerge: false
