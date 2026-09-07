@@ -328,6 +328,7 @@ asserted-vs-measured
 assertion
 assertion-drift
 assertion-floor
+assertions
 async
 async-await
 async-context
@@ -370,6 +371,7 @@ auto-coercion
 auto-fill
 auto-merge
 auto-revert
+autofix
 automation
 automation-claims
 automation-priority
@@ -682,6 +684,7 @@ ci/plausible-analytics
 ci/weekly-analytics
 citation-discipline
 citation-drift
+citation-integrity
 citation-rot
 citation-verification
 citations
@@ -922,6 +925,7 @@ cookie-injection
 cookies
 copy
 copywriter
+corpus-correction
 correction-discipline
 correction-pr
 correction-sweep
@@ -1075,6 +1079,7 @@ defensive-coding
 defer
 defer-vs-ship
 deferral
+deferral-triggers
 deferral-vs-legal-floor
 deferred
 deferred-artifact
@@ -1914,6 +1919,7 @@ issue-body-drift
 issue-body-staleness
 issue-deduplication
 issue-filing
+issue-hygiene
 issue-tracking
 issue-triage
 issue-verification
@@ -2136,6 +2142,7 @@ merge-livelock
 merge-pr
 merge-queue
 merge-ref
+merge-strategy
 merge-time-timebomb
 merge-time-verification
 message
@@ -2856,6 +2863,7 @@ rail
 ralph-loop
 ratchet
 ratcheted-guards
+ratchets
 rate-limit
 rate-limit-loop
 rate-limiting
@@ -3818,6 +3826,7 @@ tooling
 tooling / workflow-infra
 tooling-bug
 tooling-evaluation
+tooling-traps
 toolmcp
 tools
 touch-swipe
@@ -3893,6 +3902,7 @@ update-ref
 upload
 upsert
 uptime-monitor
+uptime-monitoring
 url-concatenation
 url-validation
 usage-limit
@@ -3953,6 +3963,7 @@ vector-expansion
 vendor
 vendor-api
 vendor-cli
+vendor-contracts
 vendor-cost
 vendor-evaluation
 vendor-key

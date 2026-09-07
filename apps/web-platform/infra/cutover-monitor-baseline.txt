@@ -6,8 +6,29 @@
 #
 # Regenerate: bash cutover-verify.sh --capture-monitor-baseline cutover-monitor-baseline.txt
 # Captured 2026-09-03T15:31:58Z
+#
+# AMENDED 2026-09-07 (#7798), one row, deliberately not a re-capture.
+#
+# `soleur-ai-www` was renamed to `soleur-ai-www-reachability` AND retargeted from
+# an unsatisfiable `equals 301` to a 2xx assertion. Three options for its row, and
+# only one is honest:
+#   - leave `soleur-ai-www`      -> the name no longer matches SENTRY_MONITORS, the
+#                                   lookup finds nothing, base_state is EMPTY, and
+#                                   CUT8 scores REGRESSION -> FAIL -> under the T+20
+#                                   rule an operator merges the rollback of a
+#                                   perfectly healthy cutover. Fails UNSAFE.
+#   - rename, keep `unhealthy`   -> scores every later failure `pre-existing`, which
+#                                   MASKS a genuinely new one.
+#   - rename, mark `unknown`     -> what is actually true. This capture predates both
+#                                   the rename and the retarget, so it never measured
+#                                   THIS monitor. `unknown` routes to the read path's
+#                                   own fail-safe arm: not a regression, not a pass,
+#                                   reported UNREACHABLE.
+#
+# Superseded by the post-merge re-capture (tasks.md 6.5) once the monitor reports
+# healthy; until then this row is the conservative placeholder, not a measurement.
 soleur-ai-apex	healthy
-soleur-ai-www	unhealthy
+soleur-ai-www-reachability	unknown
 soleur-ai-changelog-deep	healthy
 soleur-ai-acme-carveout-probe	healthy
 soleur dot ai apex	healthy

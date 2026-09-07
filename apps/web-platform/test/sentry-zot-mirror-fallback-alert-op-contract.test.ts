@@ -139,7 +139,7 @@ const observability = readFileSync(join(here, "../server/observability.ts"), "ut
 // Nested HCL braces are indented, so a column-0 `\n}` is unambiguously the resource's own.
 function _scopeHeader(name: string): number {
   // The file now legitimately holds BOTH types: 27 rules adopted as
-  // `sentry_alert` in #7650 Phase 2, and 2 that stay `sentry_issue_alert`
+  // `sentry_alert` in #7650 Phase 2, and 3 that stay `sentry_issue_alert`
   // because the pinned provider cannot express their
   // `event_unique_user_frequency_count` trigger. `sandbox_startup_failure` is
   // one of those two and shares this helper, so hardcoding either type makes

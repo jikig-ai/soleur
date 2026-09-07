@@ -46,13 +46,28 @@ jobs:
     env:
       REPO_FULL: ${{ github.repository }}
       RUN_ID: ${{ github.run_id }}
+      # The CLA document this workflow evidences. Its ONE definition is
+      # `INDIVIDUAL_CLA_DOC_PATH` in
+      # apps/web-platform/scripts/cla-evidence/cla-doc-path.ts, and the literal
+      # here is pinned to it by a guard
+      # (apps/web-platform/test/cla-evidence/cla-doc-path.test.ts) in the same
+      # shape as the Guard 1 allowlist pin: the drift is caught by a test that
+      # reads BOTH artifacts, not by resolving the value at run time.
+      #
+      # An earlier revision ran `tsx cla-doc-path.ts` here and wrote the result
+      # to $GITHUB_ENV. That put a Node install, an npm ci and a new `exit 1`
+      # on the critical path of a REQUIRED check, in a `pull_request_target`
+      # job, to compute a constant — and it bought nothing a guard does not
+      # buy, because a wrong literal is a code change either way and a guard
+      # catches it before merge rather than at run time.
+      CLA_DOC_PATH: docs/legal/individual-cla.md
     steps:
       # Base ref only — never check out PR head under pull_request_target.
       - name: Checkout base ref
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
-          fetch-depth: 0 # need history for `git show <baseSha>:docs/legal/individual-cla.md`
+          fetch-depth: 0 # need history for the base-SHA `git show` of the CLA document
 
       - name: Setup Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
@@ -125,7 +140,7 @@ jobs:
         run: |
           set -euo pipefail
           base_sha="${BASE_SHA:-HEAD}"
-          content_sha=$(git show "${base_sha}:docs/legal/individual-cla.md" | sha256sum | awk '{print $1}')
+          content_sha=$(git show "${base_sha}:${CLA_DOC_PATH}" | sha256sum | awk '{print $1}')
           echo "doc_git_sha=${base_sha}" >> "$GITHUB_OUTPUT"
           echo "doc_content_sha256=${content_sha}" >> "$GITHUB_OUTPUT"
 
@@ -214,5 +229,5 @@ jobs:
           # The R2 record itself is content-addressed at signatures/<sha>.json,
           # but the sha is not predictable from the contributor's view (depends
           # on workflow_run_id), so we don't promise a specific bucket key.
-          body="Recorded: signed against \`docs/legal/individual-cla.md\` at SHA \`$DOC_GIT_SHA\` (content \`sha256:$DOC_CONTENT_SHA256\`). Verify with \`git show $DOC_GIT_SHA:docs/legal/individual-cla.md | sha256sum\`. The evidence record is archived off-site under a Cloudflare R2 Lock Rule (age-based, 10-year write-once floor; retention is indefinite) and retrievable via \`bash apps/cla-evidence/scripts/inspect-evidence.sh by-pr $PR_NUMBER\` (operator-only, see retrieval runbook)."
+          body="Recorded: signed against \`${CLA_DOC_PATH}\` at SHA \`$DOC_GIT_SHA\` (content \`sha256:$DOC_CONTENT_SHA256\`). Verify with \`git show $DOC_GIT_SHA:${CLA_DOC_PATH} | sha256sum\`. The evidence record is archived off-site under a Cloudflare R2 Lock Rule (age-based, 10-year write-once floor; retention is indefinite) and retrievable via \`bash apps/cla-evidence/scripts/inspect-evidence.sh by-pr $PR_NUMBER\` (operator-only, see retrieval runbook)."
           gh api "repos/$REPO_FULL/issues/$PR_NUMBER/comments" -X POST -f body="$body"
