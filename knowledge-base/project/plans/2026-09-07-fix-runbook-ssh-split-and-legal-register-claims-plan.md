@@ -37,6 +37,47 @@ No `spec.md` exists for this branch (the pipeline entered at `plan`), so `lane:`
 
 ---
 
+## Enhancement Summary
+
+**Deepened 2026-09-07.** Panels: 7 plan-review agents (DHH, Kieran, code-simplicity,
+architecture-strategist, spec-flow-analyzer, CTO devex, CPO) + a scoped strong-model consult;
+then 5 deepen agents (observability-coverage-reviewer, git-history-analyzer,
+legal-compliance-auditor, test-design-reviewer, network-outage deep-dive). All halt gates
+(4.6 user-brand, 4.7 observability, 4.8 PAT, 4.9 wireframe, 4.10 encryption, 4.11 guard contract)
+pass; 4.5 and 4.7 telemetry emitted. Citation verification: **56/56 confirmed** — no fabricated or
+retired rule ID, ADR, PR, SHA, label or milestone.
+
+**Five claims in earlier drafts of this plan were measured FALSE and are retracted in place.**
+That is the enhancement worth recording, because each would have shipped:
+
+1. *"The ship hook is a second consumer of the heading."* Its `last-resort` grep sits behind two
+   early exits on **added** lines; this PR adds no `SSH_RE`-matching line, so it never fires.
+2. *"Pseudonymised at the VRL boundary."* A production record pulled 2026-09-07 carries
+   `pii_scrub_applied: "drop_userdata+string"` — no `+structured`. The HMAC transform
+   short-circuits; the hash is computed in the application's pino logger. This would have
+   published a misattribution of the same class the PR exists to retire, one clause away.
+3. *"The lint harness has no case-count floor."* `MIN_CASES=51` exists and is exactly pinned. The
+   real hazard is the inverse — adding cases without raising it disarms the floor.
+4. *"`CORRECTION_NOTE` matches the register's bracket form."* It does not, and the probe never
+   reads `knowledge-base/legal/` at all.
+5. *"#7851 tracks the 'paid-tier default' retention statement."* Zero live instances in the
+   published copies (#7772 discharged them); the only one is in the DPA template, outside #7851's
+   scope. Deferring it would have left it tracked by nothing.
+
+**Two defects were found in the plan's own new machinery**, both measured GREEN as originally
+specified: the Phase 0 carve leaks across an adjacent `Resolved` heading (fixed: assign, not OR),
+and the anti-vacuity floor `checked == len(SURFACES) * len(DOCS)` is satisfied by `DOCS = []` at
+`0 == 0` (fixed: absolute literals). Five of Guard 1's six mutation rows were GREEN against the
+real 51-case harness; three named fixtures now close them.
+
+**Scope grew on evidence, not appetite:** a third `30 MB` site in the register (§(b)(vi)) and a
+fourth wrong date inside §(f) itself; a second `gdpr-policy.md` occurrence carrying none of the
+retired literals; the §2.3(m) dual-enumeration collision across six citing sites; seven DPA-template
+sites; `model.likec4.json`; and a `re_evaluation_triggers` entry in a signed-off counsel review that
+Phase 6 fires and nothing discharged.
+
+---
+
 ## Research Reconciliation — Issue Claims vs. Codebase
 
 Only the rows that **changed the plan's shape**. Each was measured, not inferred.
@@ -232,10 +273,28 @@ see the hazard in `## Research Reconciliation`'s final row.
    last-resort headings exist), but Phase 1 creates the first two. Guard 1 row 7 pins it.
 3. In the in-fence branch, gate the host-login exception:
    `if HOST_LOGIN_RE.search(raw) and not carve_last_resort:`.
-4. Extend `scripts/lint-infra-no-human-steps.test.sh` with the fixtures in `## Guard Contract`
-   Guard 1 — including the must-PASS non-canonical case and the two harness rows. The harness has
-   **no case-count floor** today; add one, because a floor a single deletion disarms is not a floor.
-5. Leave the `Resolved` arm, the ignore-region ordering and every other behaviour untouched.
+4. Extend `scripts/lint-infra-no-human-steps.test.sh` with the fixtures Guard 1 names — including
+   the three currently-missing ones, without which five of its six mutation rows are GREEN.
+5. **Raise `MIN_CASES` to the new exact total in the same edit.** An earlier draft of this plan
+   claimed "the harness has no case-count floor today; add one". **That was false** — the floor is
+   at `scripts/lint-infra-no-human-steps.test.sh`, `MIN_CASES=51`, and it is *exactly* pinned
+   (measured `PASS=51 FAIL=0 TOTAL=51`), so deleting a case reds right now. Retracted here as an
+   `hr-verify-repo-capability-claim-before-assert` miss in the plan's own prose.
+
+   The real hazard is the opposite: adding k cases and leaving `51` alone gives the floor k lines
+   of slack and **disarms harness row (a) by the very edit meant to strengthen it**. Set it to the
+   new exact `TOTAL`, with a comment that the value is exactly pinned, not a slack floor. Note the
+   second-order limit: `TOTAL` is incremented by both `pass()` and `fail()`, so the floor detects a
+   *deleted* case but never a *neutered* one — asserting the sorted set of case names would, and is
+   the better shape if the floor is ever revisited.
+6. Leave the `Resolved` arm, the ignore-region ordering and every other behaviour untouched.
+7. **Pin the two predicates together.** After 0.1 the literal `Last-resort diagnosis` lives in
+   both `_is_carve_heading` and `_is_last_resort_heading`. Derive one from the other, or assert
+   they agree — nothing else does.
+8. **Make full-scan mode fail-closed.** With zero collected files `main()` prints
+   `OK … 0 scanned file(s)` and exits 0. Guard 1's dispatch row is unreachable through `run_case`
+   (every case passes an explicit positional path, and `main()` short-circuits on `if args.paths:`),
+   so the durable fix is in the SUT: zero collected files in full-scan mode exits 2.
 
 Blast radius is measured at zero: no `Last-resort diagnosis` heading exists in the corpus.
 
@@ -352,10 +411,10 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
 | File | off-host sites | 30 MB sites |
 |---|---|---|
 | `docs/legal/data-protection-disclosure.md` | 2 (§2.3(m)(i) + Retention limb) | 1 (§2.3(m)) |
-| `docs/legal/gdpr-policy.md` | 1 (§3.7) | 0 |
+| `docs/legal/gdpr-policy.md` | **2** (§3.7 — the second carries NO retired literal, see below) | 0 |
 | `docs/legal/privacy-policy.md` | 1 (§5.10) | 1 (§5.14) |
 | `plugins/soleur/docs/pages/legal/data-protection-disclosure.md` | 2 | 1 |
-| `plugins/soleur/docs/pages/legal/gdpr-policy.md` | 1 | 0 |
+| `plugins/soleur/docs/pages/legal/gdpr-policy.md` | **2** | 0 |
 | `plugins/soleur/docs/pages/legal/privacy-policy.md` | 1 | 1 |
 
 1. **Framing: affirmative, one sentence, register language.** The minimal framing (delete the
@@ -366,11 +425,28 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
    disclosed nowhere. Deleting the parenthetical converts a self-announcing contradiction into a
    silent omission, which is strictly worse.
 2. Replacement content: the container runs under the journald log driver; on-host retention is
-   journald-governed at `SystemMaxUse=1G`, **shared with every unit on the host**, floored by
-   `SystemKeepFree=2G`. (This also retires "rolling **Docker** log buffer", false independently
-   of the off-host clause.) The `level >= 40` subset of the user-serving application container's
-   logs has shipped to Better Stack Logs since **2026-06-02 (PR #4786)**; host journald and
-   `host_metrics` since 2026-05-21 (PR #4279); retention there is 90 days.
+   journald-governed, bounded by `min(SystemMaxUse=1G, free space − SystemKeepFree=2G)` and
+   **shared with every unit on the host**. (This also retires "rolling **Docker** log buffer",
+   false independently of the off-host clause.)
+
+   **Do not write "floored by `SystemKeepFree=2G`".** That inverts the control: the config file
+   states it plainly — journald *stops writing* when free space drops below 2 GB, and it
+   *"overrides SystemMaxUse when disk is tight"*. It can only **shorten** retention, driven by
+   unrelated disk usage; a data subject would read "floored" as a guaranteed minimum. Publishing
+   that would be a fresh misleading retention statement inside the clause being corrected.
+
+   **Say that the on-host journal retains ALL levels.** Only the `level >= 40` subset egresses;
+   the config file's own comment records the distinction. Stating only the egress filter would
+   let a reader conclude it bounds what is retained anywhere.
+
+   **Say that the 1 GB cap is shared.** Because it is host-wide, the record cannot express a
+   limit "for the different categories of data" at all — this container's window is a function of
+   other units' emission. Stating that explicitly is what stops `SystemMaxUse=1G` being read as a
+   per-stream bound, i.e. the same class of error being retracted.
+
+   The `level >= 40` subset of the user-serving application container's logs has shipped to
+   Better Stack Logs since **2026-06-02 (PR #4786)**; host journald and `host_metrics` since
+   2026-05-21 (PR #4279); retention there is 90 days.
 3. **Attribute the pseudonymisation to the APPLICATION, not to Vector — this was measured live
    and the obvious framing is false.** A production record pulled 2026-09-07 via
    `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep userIdHash`
@@ -411,8 +487,13 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
    numbering — `privacy-policy.md` §5.14 ("the heartbeat surface disclosed in … §2.3(m)(i) …
    carries no personal data"), the register's Better Stack vendor row, and `gdpr-policy.md` §3.7.
    Rewriting outer (i) into an affirmative shipping clause makes those pointers **newly false**.
-   Renumber the outer pair to `(A)`/`(B)`, leave the inner `(i)`/`(ii)` alone, and sweep the
-   three citing sites plus their mirrors.
+   Renumber the outer pair to `(A)`/`(B)`, leave the inner `(i)`/`(ii)` alone, and sweep **six**
+   citing sites (an earlier draft said three): `privacy-policy.md` §5.14 + mirror,
+   `gdpr-policy.md` §3.7 + mirror, the register's Better Stack vendor row, **the register's PA8
+   §(d)** ("recorded in DPD §2.3(m)(i)"), **`compliance-posture.md`** ("recorded in DPD
+   §2.3(m)(i)"), and **the DPA template's Schedule 2 reconciliation note** ("disclosed in DPD
+   §2.3(m)(ii)"). `compliance-posture.md` is one of the four files the promoted lint scans, so a
+   stale pointer there is also a Phase 6 hazard.
 
 5c. **`gdpr-policy.md` §3.7 routes the reader to `DPD §4.2` for processors, and §4.2 has no
    Better Stack row.** After the edit §3.7 affirmatively discloses off-host shipping and still
@@ -421,13 +502,27 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
    reconciliation gap, so adding one row is the smaller change.
 
 5d. **`knowledge-base/legal/data-processing-agreement-template.md`** — a customer-facing
-   contract carrying the same false mechanism: Schedule 4 item 12 ("Pino structured logs
-   (**Hetzner Docker rolling buffer**)"), item 11 ("post-2026-05-21 #4279" — the wrong date for
-   the application stream), and item 9 / §8.3 pointing at DPD §2.3(m). Correct all four.
+   contract carrying the same false mechanism. **Seven sites, not four:** Schedule 4 item 12
+   ("Pino structured logs (**Hetzner Docker rolling buffer**)"), item 11 ("post-2026-05-21 #4279"
+   — the wrong date for the application stream), and item 9 plus §8.3 pointing at DPD §2.3(m).
+   Then three more that no issue's scope reaches.
+   **Schedule 2's "Operational telemetry" retention cell** reads "90 days (Sentry) + Hetzner
+   rolling buffer + Better Stack paid-tier default"; without it, after this PR Schedule 4 says
+   journald while Schedule 2 still says "Hetzner rolling buffer" — a contradiction **inside one
+   customer-facing contract, newly created by this PR** — and it is the only live "paid-tier
+   default" instance in the repo (see `## Open Code-Review Overlap`).
+   **The Schedule 2 reconciliation note** says the DPD §4.2 vendor-table refresh "is a
+   pre-existing reconciliation gap, tracked for the next legal-doc consistency sweep"; Phase 3.5c
+   closes that gap, so the note becomes false on merge, and the plan cites this very note as its
+   *justification* for 5c — it must retire it in the same commit.
+   **Schedule 4 item 16** — "Sentry + Better Stack detection mediated by `userIdHash`
+   pseudonymisation" — is the blanket claim Phase 3.3 forbids in the published corpus; apply the
+   same scoping here.
 6. Carry `[DRAFT — pending CLO/counsel review per #7786]` markers on the edited clauses. `/ship`
    Phase 5.5 strips them on DISCHARGED; they are what makes the gate's draft-marker arm fire
    deterministically rather than depending on the threshold arm alone.
-7. `Last Updated` moves in **six places** — `apps/web-platform/test/legal-doc-consistency.test.ts`
+7. `Last Updated` moves in **nine places** (an earlier draft said six): 3 canonical body lines,
+   3 mirror hero `<p>` lines, 3 mirror body lines — `apps/web-platform/test/legal-doc-consistency.test.ts`
    compares heading sequence plus `**Last Updated:**` parity across the mirror hero `<p>` and the
    body line.
 8. Refresh `LEGAL_DOC_SHAS["data-protection-disclosure"]`, `["gdpr-policy"]`,
@@ -438,7 +533,16 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
    drifted document turns a required check red on arrival. Correct
    `knowledge-base/legal/tc-version-bump-policy.md` §"Body-equivalence scope (interim)", which is
    stale against the shipped array.
-10. Correct `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`
+10. **Add an operational-log retention entry to the two sections a reader actually consults for
+    "how long".** `docs/legal/privacy-policy.md` §7 (Data Retention) and
+    `docs/legal/gdpr-policy.md` §8.5 (Third-Party Retention) carry **no** operational-log or
+    telemetry entry today — §8.5 names Anthropic, GitHub and R2 only. This PR newly puts a 90-day
+    off-host window into §5.10/§5.14/§3.7, and the bump policy's Tier 1 list names *"new retention
+    period"* explicitly, so a retention section that omits the period the PR just classified is
+    internally inconsistent. One sentence each, cross-referencing §5.10/§5.14 and §3.7 — the
+    wider per-processor retention rebuild (aligning §7's category axis with §5's processor axis,
+    adding Sentry) is properly separate and goes to Phase 8.8.
+11. Correct `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md`
     (`**Container log retention moved to journald.**` bullet): it says the explicit `SystemMaxUse`
     sizing "is tracked as a follow-up infra task" — that follow-up landed in PR #4800. It asserts
     the wrong bound in the opposite direction from the register.
@@ -462,7 +566,10 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
      But "where possible" is not a licence for "we did not look": the discharge is lawful only
      where the record states why no limit exists, **what bound does govern**, and the unblocking
      condition. It currently gets the middle one wrong — which is why the cell is not presently a
-     valid discharge.
+     valid discharge. **Deliver all three.** The only unblocking condition in the cell today
+     belongs to the *Better Stack* limb, which #7772 has since DISCHARGED at 90 days, so the
+     on-host limb would otherwise ship failing the plan's own stated test: either prescribe an
+     unblocking condition for it or state in-cell that none exists and why.
    - **Re-anchor to executable evidence** (`cq-cite-content-anchor-not-line-number`):
      `apps/web-platform/infra/journald-config.test.sh` → the assertion `assert "SystemMaxUse=1G"`
      with condition `grep -qE '^SystemMaxUse=1G$' '$DROPIN'`, under the block heading
@@ -472,6 +579,9 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
    - **Do not produce an observed-volume figure.** §(f) warns "the mechanism is the durable record
      and a single day's rate is not". No MB/day measurement exists in the repo; the only committed
      figure is ~101,000 rows/day, which is rows on a different plane.
+   - **Correct the wrong date inside §(f) itself** — the Better Stack limb reads "off-host copy,
+     post-PR #4279". For the application-container stream the date is #4786 / 2026-06-02. It sits
+     in the very cell being rewritten and would otherwise ship un-amended beside the correction.
    - **Correct the THIRD site: PA8 §(b) Purposes, limb (vi)** — "Off-host long-tail operational
      log aggregation (Better Stack Logs, post-PR #4279) for diagnostic recall beyond the 30 MB
      Hetzner Docker json-file buffer **in §(f)**". Bare prose, outside §(f) and outside any
@@ -491,6 +601,12 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
    FIRED/discharged per its existing convention). Otherwise this PR leaves the runbook at 5 and
    §(f) at 7 while committing prose that asserts the lockstep held. The AC asserts **list
    parity**, not the presence of one trigger.
+
+   **Re-scope trigger 2 in the same edit.** It anchors on `cloud-init.yml`'s `daemon.json` block
+   (the `"log-driver": "json-file"` line) — the mechanism this very PR retracts as non-governing.
+   A closed trigger list whose second entry watches a surface the register has just declared
+   irrelevant is the Art. 5(2) defect Phase 4.4 is filing, reproduced two steps earlier. Either
+   re-point it at the `docker run --log-driver` invocation or mark it superseded by trigger 5.
 3. Lockstep the runbook's two descriptions of the register's claim with the corrected §(f).
 4. `knowledge-base/legal/compliance-posture.md` `## Active Compliance Items` — the
    trigger-that-did-not-operate row. Trigger 2 anchors on the `daemon.json` block and **did not
@@ -503,7 +619,26 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
    file the promoted lint scans, and restating the text would rot three files instead of two on
    the next trigger edit. The defect itself is not repaired here; Phase 8.6 owns it.
 5. CLO attestation to `knowledge-base/legal/audits/` — per-artifact verdict plus
-   DISCHARGED/BLOCKED disposition. **Auto-routed via the `clo` agent, never an operator task.**
+   DISCHARGED/BLOCKED disposition, and a `tier_classification:` frontmatter field declaring
+   **Tier 1** (peer precedent: `2026-09-04-betterstack-source-split-7772.md`,
+   `2026-08-counsel-review-7440.md`). **Auto-routed via the `clo` agent, never an operator task.**
+
+   **It must also discharge a re-evaluation trigger this PR fires.**
+   `knowledge-base/legal/audits/2026-09-counsel-review-7717.md` frontmatter lists, verbatim:
+
+   > `- "Promotion of scripts/lint-legal-registers.sh from advisory to blocking (#7787) — the gate's scope changes what the register's completeness claim is worth."`
+
+   **Phase 6 IS that promotion.** A signed-off counsel review names this PR's own terminal commit
+   as its re-evaluation condition, and nothing else in the plan discharges it. The attestation
+   must record the trigger as FIRED, state what the promotion changes about the register's
+   completeness claim, and dispose of it — otherwise Phase 6 silently invalidates the standing
+   review it depends on. This is the strongest available objection to Phase 6 and it is closed
+   here rather than left for a reviewer to find.
+
+   Note also that the bump policy's "counsel-review ledger" has **no artifact in the repo**
+   (`git grep -l 'counsel-review-ledger'` returns only the policy and planning docs). The
+   `audits/` tree is the ledger; say so in the attestation rather than leaving the policy
+   implying a file that does not exist.
 6. **Waiver pair, in the same commit as the attestation.** The attestation's subject matter is a
    bullet whose own text names the Article 33 breach-notification timeline, and Phase 3.5's
    re-grounding says "no Art. 4(12) event" — so it matches `DETERMINATION_PATTERN`
@@ -516,18 +651,35 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
 
 ### Phase 5 — durability: wire the corpus-truth probe, and pre-empt the gate it would trip
 
-1. `scripts/probe_legal_corpus_truth.py` — append to `FORBIDDEN` the **four** retired phrasings:
+1. `scripts/probe_legal_corpus_truth.py` — append to `FORBIDDEN` the **five** retired phrasings:
    `no off-host log shipping is configured`, `no off-host copies`,
-   `30 MB Hetzner Docker json-file rolling buffer`, and **`rolling Docker log buffer`** (Phase 3.2
-   retires that wording too; omitting it lets the exact phrase this PR removes come straight back).
+   `30 MB Hetzner Docker json-file rolling buffer`, `rolling Docker log buffer` (Phase 3.2 retires
+   that wording too), and **`fixed-capacity Hetzner-local rolling buffer`**.
+
+   That fifth entry is load-bearing and was nearly missed. `docs/legal/gdpr-policy.md` §3.7 states
+   the false mechanism **twice**, and the second occurrence — *"pino stdout retained in the
+   fixed-capacity Hetzner-local rolling buffer (see DPD §2.3(m) and §4.2)"* — carries **none** of
+   the other four literals. Measured: `grep -o 'Hetzner-local rolling buffer' | wc -l` returns 2
+   for that file and its mirror, 1 for every other. Without this entry the second occurrence is
+   invisible to AC11's regex, to AC12's `30 MB` grep, and to the durability guard, so P5 would not
+   hold for it. This is the same "the claim appears twice in the cell" defect the plan caught in
+   PA8 §(f) and had not applied to the published corpus.
 1b. **Promote `REQUIRED` from a single string to a list, and add the affirmative anchor.** Today
    `REQUIRED = "EU-US Data Privacy Framework"` — the Chapter V safeguard, unrelated to log
    shipping. With only `FORBIDDEN` extended, the new property is guarded by **absence alone**:
    deleting the clause wholesale passes. That is precisely the framing CPO rejected on the facts.
    Add an affirmative anchor (the Better Stack recipient naming plus the 2026-06-02 date) so the
    probe can tell a correction from a deletion, and iterate `REQUIRED` in the same loop.
-2. **Add the anti-vacuity floor.** Count the documents actually examined, assert
-   `checked == len(SURFACES) * len(DOCS)`, and **print the count** beside `CORPUS-OK`. Today the
+2. **Add the anti-vacuity floor — with ABSOLUTE literals, not an expression over the constants
+   being mutated.** Count the documents actually examined, assert
+   `checked >= MIN_SURFACES * MIN_DOCS` with `MIN_SURFACES = 2` and `MIN_DOCS = 3` as
+   hand-ratcheted literals, and **print the count** beside `CORPUS-OK`.
+
+   **The obvious form is vacuous and was measured so.** `checked == len(SURFACES) * len(DOCS)` is
+   satisfied by `DOCS = []` — `0 == 0` — and prints `CORPUS-OK (0 document(s) examined)` at rc=0.
+   That is exactly the shape of the learning cited two lines below, reproduced inside the floor
+   meant to prevent it. The repo already uses the absolute form three times: `MIN_TRACKED_SUITES`,
+   `MIN_CHECKS`, `MIN_CASES`. Today the
    probe prints `CORPUS-OK` on zero checks; wiring a vacuous-pass guard as blocking would ship the
    defect this repo has already documented five times
    (`2026-07-16-a-gate-that-proves-it-cannot-fail-open-shipped-its-own-proof-unwired.md`).
@@ -615,6 +767,13 @@ volunteered.
    application container's pino stream, which is the highest-sensitivity payload on that source.
    That is the one description a reader consults for PII reasoning. One clause, same commit.
 
+3. **Regenerate `model.likec4.json` in the same commit.**
+   `plugins/soleur/test/c4-model-freshness.test.sh` renders the `.c4` sources and **byte-diffs**
+   the committed JSON, and that JSON embeds the edge description verbatim. It is also what
+   `apps/web-platform/app/api/kb/c4/[...path]/route.ts` serves to users — so editing only
+   `model.c4` both reds the freshness test and leaves the *user-visible* diagram still
+   under-describing the flow, which is the exact P7 property this phase exists for.
+
 **Recorded, not fixed:** the model records this egress only at the host layer — there is no
 relationship from any application container to `betterstack`, so a reader of the container view
 cannot see that application-level logs leave the boundary. That is the same gap one abstraction
@@ -695,9 +854,15 @@ Recorded by subject rather than label:
 - **#7851** — owns the three published statements describing an executed Art. 28(3) instrument.
   **Partially folded in, deliberately:** Phase 3.5 discharges the first ("under processor-DPA
   terms" in §2.3(m)) because leaving a known-false assertion beside a corrected clause in the same
-  bullet is not an option. The other two — §5.14's "SCCs incorporated" and both copies' "Better
-  Stack paid-tier default" retention — are **explicitly out of scope** and remain #7851's. The PR
-  body must say so, and must not use `Closes #7851`.
+  bullet is not an option. §5.14's "SCCs incorporated" is
+  **explicitly out of scope** and remains #7851's; the PR body must say so and must not use
+  `Closes #7851`. **The third statement is NOT tracked by anyone, and an earlier draft of this
+  plan said it was.** Measured: `git grep -rn 'paid-tier default' -- docs/ plugins/soleur/docs/`
+  returns **zero** — #7772 already discharged it in the published copies (both now read
+  `**Retention:** **90 days**`). The only live instance is
+  `knowledge-base/legal/data-processing-agreement-template.md` Schedule 2, which #7851's
+  published-copy scope does not reach. Phase 3.5d folds it in. Deferring it to #7851 would have
+  left a reviewer believing it was tracked when nothing tracked it.
 - **#7529 / #7825** — the Better Stack Art. 28(3) gap that Phase 3 makes more visible.
   **Acknowledged:** both stay OPEN with a 2026-11-13 re-evaluation; this PR must not read as
   closing them.
@@ -724,7 +889,9 @@ and the three mirrors under `plugins/soleur/docs/pages/legal/`;
 `knowledge-base/legal/breach-register.md` (`§Excluded records` parity rows),
 `knowledge-base/legal/compliance-posture.md`.
 
-**Architecture:** `knowledge-base/engineering/architecture/diagrams/model.c4`.
+**Architecture:** `knowledge-base/engineering/architecture/diagrams/model.c4` and the committed
+`model.likec4.json` it renders to (byte-diffed by `c4-model-freshness.test.sh`, and served to
+users by the KB C4 route).
 
 ## Files to Create
 
@@ -813,16 +980,30 @@ single predicate the state derives from; the `Resolved` arm must remain unable t
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Delete `and not carve_last_resort` from the in-fence arm | RED — the suppression stops working |
-| 2 | Make `_is_last_resort_heading` also match the `Resolved` arm, then place a fenced host-login under `## Resolved` | RED — over-suppression; the carve must stay heading-scoped |
-| 3 | Add a **third** signal-setting arm that bypasses the carve state, after arms 1 and 2 are compliant | RED — second member after a compliant first |
-| 4 | **Guard's own dispatch:** make path collection return `[]` so the run reports `0 scanned file(s)` and exits 0 | RED — assert a `scanned >= N` floor and that the count is printed |
+| 2 | Make `_is_last_resort_heading` also match the `Resolved` arm, then place a fenced host-login under `## Resolved` | RED via `F-a` — over-suppression; the carve must stay heading-scoped. Measured GREEN without `F-a` |
+| 3 | Add a **third** signal-setting arm that bypasses the carve state — concretely: hoist the host-login detection above `if carve: continue` — after arms 1 and 2 are compliant | RED via `F-b`. Second member after a compliant first; without `F-b` this row has no runnable form and reports the baseline |
+| 4 | **Guard's own dispatch:** make path collection return `[]` so the run reports `0 scanned file(s)` | RED — but **not reachable through `run_case`**, which always passes an explicit positional path. Closed by Phase 0.8 making full-scan mode exit 2 on zero collected files, which is durable rather than one-shot |
 | 5 | Change the literal to `Last resort diagnosis` (no hyphen) | RED — pins the section-name contract |
-| 6 | Move the `in_ignore` check to after fence handling | RED — pins the ordering the class (a)/(c) regions depend on |
+| 6 | Move the `in_ignore` check to after fence handling | RED via `F-c` — pins the ordering the class (a)/(c) regions depend on. Measured GREEN without `F-c` |
 | 7 | **Adjacency:** `## Last-resort diagnosis` → `## Resolved` (equal level) → a fenced host-login line under `## Resolved` | RED — the carve must not leak across an adjacent carve heading. Row 2 tests the predicate; only this row tests the STATE MACHINE, and the obvious `carve_last_resort \|= …` form passes row 2 while failing this one |
 
-**Harness rows.** (a) Delete row 1's case from `scripts/lint-infra-no-human-steps.test.sh` and
-require the suite's case-count floor to fail — the harness has no floor today, so Phase 0.4 builds
-one. (b) **Must-PASS, non-canonical:** a fenced host-login line under
+**Three fixtures the suite lacks, named here because without them rows 2, 3 and 6 are GREEN — I
+measured all three against the real 51-case harness, which stays `PASS=51 FAIL=0` under every one
+of those mutants:**
+
+- `F-a` — fenced host-login under `## Resolved` → **rc=1**. Catches row 2. Nothing today asserts a
+  carve fixture at all.
+- `F-b` — **prose** host-login under a `Last-resort diagnosis` heading → **rc=0**. Catches row 3,
+  whose realization (the host-login arm hoisted above `if carve: continue`) is otherwise invisible
+  to all 51 cases.
+- `F-c` — an ignore-region-wrapped fence containing a host-login → **rc=0**. Catches row 6, and it
+  is the direct regression test for **Phase 1.2's own suppression**, which exists nowhere today.
+  Measured: moving the `in_ignore` check past the `if in_fence:` block flips this 0→1 while the
+  harness stays green.
+
+**Harness rows.** (a) Delete `F-a` and require the suite's floor to fail — see Phase 0.5 for why
+that requires *raising* `MIN_CASES` to the new exact total rather than adding a floor.
+(b) **Must-PASS, non-canonical:** a fenced host-login line under
 `#### Last-resort diagnosis — read-only` (level 4, suffixed, deeper than the surrounding `##`)
 must PASS at rc=0, pinning prefix-match + any-level + suffix tolerance in one case that is not the
 canonical fixture.
@@ -885,9 +1066,12 @@ there is no sibling to keep consistent.
 **Harness rows.** (a) Delete the three `--advisory` assertions from
 `scripts/lint-legal-registers.test.sh` and require the unit arm to fail — they are the only thing
 pinning the rc=2 asymmetry once the flag leaves `test-all.sh`, so they must not be reaped as dead.
+**This requires tightening the floor in the same edit:** that suite runs 36 assertions against
+`MIN_ASSERTIONS=34` — two lines of slack. Deleting all three reds (33 < 34), but deleting **two**,
+including the rc=2 asymmetry case the plan calls load-bearing, leaves 34 and passes. Pin it to 36.
 (b) **Must-PASS, non-canonical:** a register whose only unresolved marker sits inside an
-inline-code span — the inline-code-span escape hatch `article-30-register.md` already relies
-on for its #7717 withdrawal bracket — must PASS at rc=0.
+inline-code span. Recorded honestly: this case **already exists** in that suite, so it is a
+standing regression test rather than new evidence this PR adds.
 
 ---
 
@@ -1017,18 +1201,27 @@ which is exactly the shape of an agent shell in a worktree.
   `OK … 0 scanned file(s)` and exits 0.
 - **AC2.** The gate's own CI invocation, not a reconstruction of its inputs:
   `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` exits 0, and its
-  scanned count is ≥ the number of changed `.md` files under the five `SCAN_DIRS`.
+  scanned count **equals** the number of changed `.md` files under the five `SCAN_DIRS` — the
+  changed set *is* that set, so `≥` is weaker than the property.
 - **AC3.** Whole-corpus non-regression: run the lint over every file in `SCAN_DIRS` on `main` and
-  on `HEAD`, capture both **finding sets** to files, and `diff` them. The difference must be
-  exactly the 10 lines named in #7874 — nothing else appears or disappears. A count is not
+  on `HEAD`, capture both **finding sets** to files, **normalise each entry to `file` + finding text
+  (dropping the line number)**, and `diff` them. The difference must be exactly the 10 findings
+  named in #7874 — nothing else appears or disappears. The whole-corpus baseline is **529
+  findings** and Phase 1 shifts line numbers inside the edited files, so a raw `file:line:` diff is
+  noisy by construction; record the expected delta as a committed fixture rather than prose. A count is not
   sufficient; Phase 0 changes suppression semantics corpus-wide. **The `HEAD` set is computed over
   a superset that includes this PR's three new files under `SCAN_DIRS`** (the plan,
   `tasks.md`, `decision-challenges.md`), so a finding in one of them reads as a finding, not as
   "something else appeared".
 - **AC4.** `git diff "$(git merge-base origin/main HEAD)" -- <each of the three runbooks> | grep '^-[^-]'`
-  returns **only** the two renamed subsection heading lines, enumerated in the PR body. No other
-  line is removed or reworded. (An editor reflow of a line adjacent to an inserted marker would
-  show here for a non-substantive reason — re-wrap by hand rather than weakening the criterion.)
+  returns **exactly five** lines: the two renamed subsection headings, plus the three prose lines
+  carrying an inline class-(a) marker pair — each of which must reappear on the `+` side
+  **byte-identical modulo the inserted marker**. Enumerated in the PR body.
+
+  A same-line marker splices into the existing prose line, so a correct implementation renders it
+  as one `-` plus one `+`; an earlier draft of this AC said "only the two renamed lines" and would
+  have failed a correct implementation. (An editor reflow of a neighbouring line would also show
+  here — re-wrap by hand rather than weakening the criterion.)
 - **AC5.** **Two** runbooks — `admin-ip-drift.md` and `ssh-fail2ban-unban.md` — contain a heading
   matching `^#+[[:space:]]+Last-resort diagnosis\b` (ERE intervals such as `#{1,6}` are silently
   literal on BusyBox awk and older mawk, which would make an awk extraction empty and any
@@ -1036,14 +1229,17 @@ which is exactly the shape of an agent shell in a worktree.
   deliberately has **no** such heading — it is provisioning debt, not a last-resort diagnosis —
   and the PR body records that its section-name contract stays knowingly unsatisfied pending the
   Phase-2 deferral issue.
-- **AC6.** Every suppression this PR adds is bounded by an asserted number, so later growth shows
-  up as a diff rather than as invisible absorption. Assert by counting lines between each
-  `lint-infra-ignore start` and its matching `end`, and lines between each renamed carve heading
-  and the next heading of equal-or-higher level: the class-(a) markers are inline and same-line
-  (**≤ 6** suppressed lines total in `admin-ip-drift.md`, including the `## Symptom` fence); the
-  class-(c) grok region and each of the two renamed carve sections each carry their own recorded
-  line count. This is what stops one region from silently covering `## Diagnosis` and both
-  Recovery sections.
+- **AC6.** Every suppression this PR adds is bounded **per region**, so later growth shows up as a
+  diff on an asserted number rather than as invisible absorption. **Per-region, not a total** — a
+  total is not derivable (the `## Symptom` fence alone is 4 lines, so three same-line markers plus
+  that fence is 7 inclusive or 4 exclusive, and neither is the "6" an earlier draft asserted).
+
+  State the counting rule as the `awk` that computes it (inclusive span from each
+  `lint-infra-ignore start` to its matching `end`), and assert **every** region's span is ≤ 6
+  lines. Bound the two renamed **carve** sections the same way — the carve is the *larger*
+  suppressor, since it hides every future addition to the section, and an earlier draft bounded
+  only the regions. This is what stops one suppression from silently covering `## Diagnosis` and
+  both Recovery sections.
 - **AC6b.** After the edit, `grep -niE 'last.resort'` over each runbook returns only sites whose
   sense is disambiguated **in the line itself or the line immediately below it**. There are three
   senses in play — the SSH probe (the renamed sections), the noVNC recovery *channel*
@@ -1102,9 +1298,11 @@ which is exactly the shape of an agent shell in a worktree.
 - **AC15.** **List parity, not one trigger.** The runbook's `### Re-verification triggers`
   numbered list and PA8 §(f)'s `**Re-verification triggers:**` clause enumerate the *same set*:
   the four originals, the fifth (`journald-soleur.conf`), and the two #7772 per-source triggers
-  that §(f) already carries and the runbook never received. Assert set equality by grepping both
-  files at HEAD — not with `git log -- A B`, a union filter that cannot see an asymmetric commit,
-  and not by checking for the fifth trigger alone, which passes over the pre-existing breach.
+  that §(f) already carries and the runbook never received. Give both sites a stable token (`RVT-1`…`RVT-7`) and assert
+  `comm -3` over the extracted token sets is empty — without an extraction rule, comparing a
+  numbered markdown list against an inline `**Re-verification triggers:**` clause degrades to a
+  human read. Not `git log -- A B`, a union filter that cannot see an asymmetric commit; and not a
+  check for the fifth trigger alone, which passes over the pre-existing breach.
 - **AC16.** `sha256sum docs/legal/{data-protection-disclosure,gdpr-policy,privacy-policy}.md`
   matches the three refreshed literals in `apps/web-platform/lib/legal/legal-doc-shas.ts`, and
   `bash apps/web-platform/scripts/check-tc-document-sha.sh` exits 0. That script is deliberately
@@ -1141,8 +1339,12 @@ which is exactly the shape of an agent shell in a worktree.
   returns **0**, and `grep -n 'PROMOTION: delete the --advisory flag' scripts/test-all.sh` returns
   nothing.
 - **AC21.** `bash scripts/lint-legal-registers.sh` exits 0 and its summary line matches
-  `7 assertion(s), 0 failed` with `waiver-parity=ok` and `produced`/`waived` each **incremented by
-  the number of new `audits/` files this PR lands** (baseline `produced=14 waived=10`). Run over
+  `7 assertion(s), 0 failed` with `waiver-parity=ok`, `waived` incremented by the number of
+  waivers added, and `produced` incremented by **the number of new `audits/` files that match
+  `DETERMINATION_PATTERN`** — derived by running that pattern over the new files, not by counting
+  them. (Baseline `produced=14 waived=10`. A counsel-review file that does not quote Art. 4(12) or
+  Art. 33 leaves `produced` at 14 while `waived` moves, and an AC that assumed both increment
+  together would red a correct tree.) Run over
   the tree as this PR leaves it — **after the Phase 4.5 attestation and any `/ship` Phase 5.5
   counsel-review file are committed** (predicate (b) requires cited paths be git-*tracked*, so an
   unstaged file reds rather than warns), and **before PR-ready**. This is the criterion that stops

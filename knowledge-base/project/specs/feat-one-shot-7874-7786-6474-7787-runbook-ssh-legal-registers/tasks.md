@@ -22,9 +22,15 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
       carve. Guard 1 row 7 pins this.
 - [ ] 0.3 Gate the in-fence host-login exception:
       `if HOST_LOGIN_RE.search(raw) and not carve_last_resort:`.
-- [ ] 0.4 Add Guard 1's fixtures to `scripts/lint-infra-no-human-steps.test.sh`, including the
-      must-PASS non-canonical case (level-4, suffixed heading) and both harness rows.
-- [ ] 0.5 Add a case-count floor to that harness — it has none today.
+- [ ] 0.4 Add Guard 1's fixtures to `scripts/lint-infra-no-human-steps.test.sh`: F-a (fenced
+      host-login under `## Resolved` -> rc=1), F-b (PROSE host-login under a last-resort heading
+      -> rc=0), F-c (ignore-region-wrapped fence with a host-login -> rc=0), plus the must-PASS
+      level-4 suffixed-heading case. Without F-a/F-b/F-c, rows 2/3/6 are GREEN.
+- [ ] 0.5 RAISE `MIN_CASES` (currently 51, exactly pinned) to the new exact TOTAL in the same
+      edit. The harness DOES have a floor; adding cases without raising it gives it slack and
+      disarms harness row (a).
+- [ ] 0.7 Pin `_is_carve_heading` and `_is_last_resort_heading` to the same literal.
+- [ ] 0.8 Make full-scan mode fail-closed: zero collected files exits 2, not `OK ... 0 scanned`.
 - [ ] 0.6 Capture the `main` baseline finding set over all `SCAN_DIRS` before any runbook edit
       (needed by AC3).
 
@@ -61,8 +67,9 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
 
 - [ ] 3.1 Renumber §2.3(m)'s outer `(i)`/`(ii)` to `(A)`/`(B)`; leave the inner Better Stack
       `(i)`/`(ii)` alone.
-- [ ] 3.2 Sweep the three sites citing the inner numbering (+ mirrors): `privacy-policy.md`
-      §5.14, the register's Better Stack vendor row, `gdpr-policy.md` §3.7.
+- [ ] 3.2 Sweep the SIX sites citing the inner numbering: `privacy-policy.md` §5.14 + mirror,
+      `gdpr-policy.md` §3.7 + mirror, the register's Better Stack vendor row, register PA8 §(d),
+      `compliance-posture.md`, and the DPA template's Schedule 2 note.
 - [ ] 3.3 Retire the off-host claim in all six files with the affirmative one-sentence
       replacement; retire "rolling Docker log buffer"; carry both dates (2026-06-02 / #4786 for
       the application stream, 2026-05-21 / #4279 for the host plane).
@@ -75,10 +82,14 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
       untouched. Do NOT touch #7851's other two statements.
 - [ ] 3.7 Sweep `AC15 of PR #4293` → **#7529** at all four sites.
 - [ ] 3.8 Add a Better Stack row to DPD §4.2 (or repoint `gdpr-policy.md` §3.7).
-- [ ] 3.9 (plan Phase 3.5d) Correct `data-processing-agreement-template.md` Schedule 4 items 9/11/12 and §8.3.
+- [ ] 3.9 (plan Phase 3.5d) Correct `data-processing-agreement-template.md` — SEVEN sites:
+      Schedule 4 items 9/11/12/16, §8.3, Schedule 2's retention cell, and the Schedule 2
+      reconciliation note that 3.5c falsifies.
+- [ ] 3.13 Add a one-line operational-log retention entry to `privacy-policy.md` §7 and
+      `gdpr-policy.md` §8.5.
 - [ ] 3.10 Correct `betterstack-log-query.md`'s "tracked as a follow-up infra task" bullet.
 - [ ] 3.11 Carry `[DRAFT — pending CLO/counsel review per #7786]` markers on edited clauses.
-- [ ] 3.12 Bump `Last Updated` in six places; refresh three `LEGAL_DOC_SHAS` literals; correct
+- [ ] 3.12 Bump `Last Updated` in NINE places (3 canonical body + 3 mirror hero + 3 mirror body); refresh three `LEGAL_DOC_SHAS` literals; correct
       `tc-version-bump-policy.md` §"Body-equivalence scope". Do NOT enrol the three docs in
       `BODY_EQUIVALENCE_DOCS`. Do NOT bump `TC_VERSION`.
 
@@ -87,24 +98,31 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
 - [ ] 4.1 PA8 §(f) additive dated bracket: retract the misattribution at both §(f) sites, state
       the redirect (#4786 → #4800) and the gap window, preserve `NOT RECORDED`, re-anchor to
       `assert "SystemMaxUse=1G"` + the `infra-validation.yml` step name. No volume figure.
-- [ ] 4.2 Correct the THIRD site: PA8 §(b) limb (vi) — figure and the `post-PR #4279` date.
+- [ ] 4.2 Correct the THIRD site: PA8 §(b) limb (vi) — figure and the `post-PR #4279` date — AND
+      the wrong date inside §(f)'s own Better Stack limb.
 - [ ] 4.3 Bring both trigger lists to PARITY: add trigger 5 (`journald-soleur.conf`) to each,
-      and fold #7772's two per-source triggers into the runbook's numbered list.
+      fold #7772's two per-source triggers into the runbook's numbered list, and RE-SCOPE trigger
+      2 (it anchors on the json-file daemon block this PR retracts as non-governing).
 - [ ] 4.4 Lockstep `recover-userid-from-pino-stdout.md`'s two descriptions of the register claim.
 - [ ] 4.5 Add the `compliance-posture.md` Active Items row; anchor on trigger numbering, not
       trigger text.
-- [ ] 4.6 CLO attestation via the `clo` agent to `knowledge-base/legal/audits/`.
+- [ ] 4.6 CLO attestation via the `clo` agent, with `tier_classification: Tier 1`, AND
+      discharging the `re_evaluation_triggers` entry in `2026-09-counsel-review-7717.md` that
+      names the #7787 promotion — Phase 6 fires it.
 - [ ] 4.7 In the SAME commit: add the attestation's `NOT_TRANSCRIBED` waiver (with a citing
       `#NNNN`) to `scripts/lint-legal-registers.sh` AND its `## Excluded records` parity row in
       `knowledge-base/legal/breach-register.md`.
 
 ## Phase 5 — durability
 
-- [ ] 5.1 Extend `FORBIDDEN` with the four retired phrasings (including
-      `rolling Docker log buffer`).
+- [ ] 5.1 Extend `FORBIDDEN` with the FIVE retired phrasings — including
+      `rolling Docker log buffer` AND `fixed-capacity Hetzner-local rolling buffer` (the second
+      gdpr-policy occurrence carries none of the other literals).
 - [ ] 5.2 Promote `REQUIRED` to a list; add the affirmative Better Stack anchor so deletion
       cannot pass.
-- [ ] 5.3 (plan Phase 5.2) Add the checked-count floor; print the count beside `CORPUS-OK`.
+- [ ] 5.3 (plan Phase 5.2) Add the checked-count floor using ABSOLUTE literals
+      (`MIN_SURFACES=2`, `MIN_DOCS=3`, `checked >= 6`) — never `== len(SURFACES)*len(DOCS)`,
+      which `DOCS=[]` satisfies at 0==0. Print the count beside `CORPUS-OK`.
 - [ ] 5.4 (plan Phase 5.3) Register `run_suite "scripts/probe-legal-corpus-truth-live"` in `scripts/test-all.sh`
       with the deviation comment naming Phase 8.2 as the unit-arm owner.
 - [ ] 5.4b (plan Phase 5.3b) Add `"scripts/probe-legal-corpus-truth.sh"` to `REQUIRED_RUNNERS`
@@ -128,6 +146,8 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
 - [ ] 7.2 Amend the `betterstack` element description to name the application container's
       pino WARN+ stream.
 - [ ] 7.3 Add one clause to `inngest -> betterstack` saying what it does not carry.
+- [ ] 7.4 Regenerate `model.likec4.json` (c4-model-freshness.test.sh byte-diffs it; the KB C4
+      route serves it to users).
 
 ## Phase 8 — follow-ups (file, do not inline)
 
@@ -138,6 +158,9 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
 - [ ] 8.5 `harvest-debt` cannot see in-place deferrals in `*.md`.
 - [ ] 8.6 Make a re-verification trigger actually fire (the Art. 5(2) defect).
 - [ ] 8.7 Model the application → Better Stack relationship in C4.
+- [ ] 8.8 Rebuild the retention sections per processor.
+- [ ] 8.9 Name Better Stack + Sentry in the International Data Transfers sections.
+- [ ] 8.10 Bring the DPA template inside the corpus-truth probe's scope, or own the gap.
 
 ## Verification
 
