@@ -49,6 +49,26 @@ assert() {
   fi
 }
 
+# INSTRUMENT SELF-TEST (#7695). `assert` is the single point through which every claim in this
+# file is dispatched. A vacuity audit neutered it -- `if eval "$condition"` -> `if true` -- and all
+# 163 assertions passed with a summary byte-identical to green, WITH real defects present. No
+# assertion here can catch that, because every assertion is downstream of it; and all five section
+# floors (Guard 1, Row7, GuardA, GuardB, GuardD) are themselves `assert` calls, so one edit
+# disarms the helper and every backstop at once. The bucket-swap variant
+# (`fail() { PASS=$((PASS+1)); }`) is worse still: FAIL rows print on screen while the summary
+# says 0 failed.
+#
+# So prove the dispatcher discriminates in BOTH directions, then reset. Reported with printf +
+# exit (ADR-193), never through the helper it backstops. Both sibling suites already carry this.
+assert "instrument self-test: a true condition must pass" "true" >/dev/null
+assert "instrument self-test: a false condition must fail" "false" >/dev/null
+if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 || "$TOTAL" -ne 2 ]]; then
+  printf 'FATAL: assertion dispatcher is broken (PASS=%s FAIL=%s TOTAL=%s, expected 1/1/2).\n' \
+    "$PASS" "$FAIL" "$TOTAL" >&2
+  exit 1
+fi
+PASS=0; FAIL=0; TOTAL=0
+
 echo "=== cloud-init Inngest bootstrap (#4118 Tier 1) tests ==="
 echo ""
 
@@ -1242,6 +1262,19 @@ assert "GuardD H2: the exempt DOPPLEREOF write is present and permitted" \
 GUARDD_ASSERTIONS=$(( TOTAL - GUARDD_BEFORE ))
 assert "GuardD anti-vacuity: the section ran its full inventory (expected 11, ran $GUARDD_ASSERTIONS)" \
   "(( GUARDD_ASSERTIONS == 11 ))"
+
+# ASSERTION-COUNT FLOOR (#7695). The five SECTION floors live INSIDE their sections, so deleting
+# a whole section deletes its own floor: a vacuity audit removed the entire Guard A block and this
+# suite reported `149/149 passed`, exit 0 -- and removed Guard A AND Guard D for `137/137 passed`.
+# The zot-pull mutation battery does not backstop it either (it still reported 9/9 killed with
+# Guard A gone). Reported with printf + exit (ADR-193), never through `assert`. Raise in lockstep;
+# this is the exact count from a green run, with no slack -- slack is attack budget.
+BOOTSTRAP_MIN_ASSERTIONS=163
+if [[ "$TOTAL" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
+  printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
+    "$TOTAL" "$BOOTSTRAP_MIN_ASSERTIONS" >&2
+  exit 1
+fi
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

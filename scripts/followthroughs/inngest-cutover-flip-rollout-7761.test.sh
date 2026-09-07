@@ -454,7 +454,11 @@ rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$
   && pass "still says which verdict was suppressed" || fail "suppressed verdict not reported: $(probe_out)"
 
 echo "TEST: #7695 CONTROL — the SAME fixture with a SUPPLIED boundary still FAILs stale_image"
-rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$(_ts '-90 minutes')" FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
+# -70m, NOT -90m: D4 DERIVES its boundary from the probe row at -70m, so a -90m supplied
+# boundary moves TWO variables at once and the pair stops isolating provenance. Measured: a cap
+# re-keyed from provenance to boundary AGE passed all five pair assertions under the -90m form.
+# With both arms at -70m the pair kills that mutant itself.
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$(_ts '-70 minutes')" FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
 [[ "$rc" == "1" ]] && pass "exit 1 under a supplied boundary — the FAIL arm is intact" \
   || fail "expected 1, got $rc: $(probe_out)"
 [[ "$(probe_out)" == *"stale_image"* ]] && pass "names stale_image (the rule was scoped, not weakened)" \
