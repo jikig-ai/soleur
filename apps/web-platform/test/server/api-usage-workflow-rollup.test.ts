@@ -358,6 +358,17 @@ describe("loadApiUsageForUser — per-workflow rollup", () => {
       "unrouted",
     ]);
     expect(result!.byWorkflow).toHaveLength(8);
+
+    // The headline must come from the `is_total` row even though it arrives at
+    // index 1 here, NOT from `workflowData[0]` (which is the "work" bucket at
+    // 1.000000). Without this pair of assertions the whole suite passes against
+    // a loader that reads `rows[0]`: T1 pins the headline but seeds `is_total`
+    // first, and this test seeds it second but only checked ordering -- so the
+    // two fixtures between them left the sourcing unpinned. Mutation-verified:
+    // swapping the `.find()` for `[0]` reds exactly here.
+    expect(result!.mtdTotalUsd).toBe(20);
+    expect(result!.mtdCount).toBe(30);
+
     // No raw slug survives into the rendered label column.
     for (const row of result!.byWorkflow!) {
       expect(row.label).not.toMatch(/[._-]/);
