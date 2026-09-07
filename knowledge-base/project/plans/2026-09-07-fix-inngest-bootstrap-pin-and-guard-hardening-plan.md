@@ -277,7 +277,7 @@ undelivered.
 **If this leaks, the user's data is exposed via** the generated heartbeat unit file, into which the
 renderer wrote `doppler secrets` stdout for the `soleur-inngest/prd` config. That config carries
 `INNGEST_REDIS_PASSWORD`, and the write sets no `umask` — unlike its sibling env-file write, which
-is wrapped in `( umask 0137 && … )`. Exposure window bounded 2026-07-16 → 2026-08-20. Whether the
+is wrapped in `( umask 0137 && … )`. Exposure window opened 2026-07-16 and is **STILL OPEN**: 2026-08-20 is when the PIN was set, not when exposure ended. `git show vinngest-v1.1.25:...inngest-bootstrap.sh` still carries the unquoted delimiter and all five executing spans, and v1.1.25 is the image the host runs today, so the defective renderer fires on every bootstrap invocation. It closes only when a host replace delivers v1.1.26. Whether the
 rendered table carried values or only names is **UNMEASURED** and moves to the tracked issue; the
 decisive negative that must not be re-derived under pressure is that `INNGEST_REDIS_LUKS_KEY` did
 not exist during that window (`inngest-redis-luks.tf` first committed 2026-09-04), so the passphrase
@@ -756,7 +756,7 @@ at_rest:
               which uses ( umask 0137 && … )
     defends_against: after this plan, nothing needs defending — the delimiter is quoted, the
                      substitution cannot execute, and the file no longer receives doppler stdout
-    does_not_defend: the historical exposure already written during 2026-07-16 → 2026-08-20. That
+    does_not_defend: the exposure written since 2026-07-16, which is STILL LIVE on the running image. That
                      moves to the tracked type/security issue, not to this change
     disclosed_as: to be determined by that issue; the disposition is not pre-selected
 
@@ -1129,8 +1129,8 @@ Each is out of scope by instruction or is tracked; none is silently deferred.
 
 **Follow-on work, each needing a tracking issue filed in Phase 5.3:**
 
-1. **The historical credential exposure** (`type/security`). Carries H3, its bounded window
-   2026-07-16 → 2026-08-20, the decisive negative that `INNGEST_REDIS_LUKS_KEY` did not exist during
+1. **The historical credential exposure** (`type/security`). Carries H3, its window (opened
+   2026-07-16, still open until a host replace delivers v1.1.26), the decisive negative that `INNGEST_REDIS_LUKS_KEY` did not exist during
    it, and the hard deadline: Better Stack source 2457081 retains 90 days, so the 2026-08-20 boot
    ages out **2026-11-18**, after which the off-host-propagation question is permanently unanswerable.
 2. **A carrier-coherence preflight for the inngest host**, generalising
@@ -1183,8 +1183,8 @@ material across a privilege boundary the design deliberately maintains. ADR-198'
 sharpens it — `BETTERSTACK_LOGS_TOKEN` passes (write-only ingest ceiling) while
 `INNGEST_REDIS_PASSWORD` fails outright: read/write against the store holding user prompts and agent
 output. Two facts are carried into the tracked issue rather than left to be re-derived under
-pressure: the window is **bounded** (2026-07-16 → 2026-08-20), and `INNGEST_REDIS_LUKS_KEY` **did not
-exist** during it. Rotation of that password and the LUKS key rides the gated recut, never a
+pressure: the window opened 2026-07-16 and is **still open** on the running image (it closes at the host
+replace, not at the pin bump), and `INNGEST_REDIS_LUKS_KEY` **did not exist** during it. Rotation of that password and the LUKS key rides the gated recut, never a
 standalone action.
 
 **One finding is materially changed by this revision.** The prior plan treated the #7761 seam as an

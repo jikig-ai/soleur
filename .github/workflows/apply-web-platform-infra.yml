@@ -238,7 +238,10 @@ on:
           next boot cuts it to LUKS. Needs `confirm=RECUT-INNGEST-VOLUME` +
           `expected_inngest_volume_id`, and it REFUSES unless the host is measured dark and the
           store measured empty — the expected verdict until the host is replaced is
-          `stale_schema`, which means "replace the host first", not "retry".
+          `stale_schema`, which means "replace the host first WITH A PIN THAT CARRIES THE
+          EMITTER", not "retry". A replace alone does NOT clear it: the emitter is baked into the
+          OCI image and reaches the host through the digest literal in user_data, so a replace on
+          an unbumped pin re-delivers the same bytes (#7695; ADR-199 amendment 2026-09-07).
           git-data-host-create BIRTHS the never-provisioned git-data store; additive-only,
           needs `confirm=BIRTH-GIT-DATA`. HELD BY TWO MECHANICAL GATES: the sentinel
           interlock released as of #6982 (the host now has an off-host emitter), but the
@@ -2313,7 +2316,7 @@ jobs:
               --cutover-flag "$FLAG" \
               --diagnostic-boot "$DBOOT" > "$VERDICT_FILE"; then
             VERDICT="$(tail -1 "$VERDICT_FILE" 2>/dev/null)"
-            echo "::error::inngest-volume-recut REFUSED by Guard 2 — verdict=${VERDICT:-unreadable}. The recut is not authorized and NOTHING has been planned or changed. Read the verdict token against tests/scripts/lib/inngest-host-dark-gate.sh's predicate table: stale_schema = the host still runs the pre-probe_schema=3 renderer, so REPLACE THE HOST FIRST (apply_target=inngest-host-replace) — this is the expected verdict until then. store_populated = the store holds keys; the destructive path is refused outright and ADR-142's preserve-and-copy is the only lawful route. mount_mismatch = /mnt/data is not on the pinned device, so the emptiness measured is about the wrong object. silent / unreadable = nothing was measured; a gate that cannot see the host must never conclude the host is dark. followthrough_7674 = the host does not serve yet, and a recut before that is strictly counterproductive."
+            echo "::error::inngest-volume-recut REFUSED by Guard 2 — verdict=${VERDICT:-unreadable}. The recut is not authorized and NOTHING has been planned or changed. Read the verdict token against tests/scripts/lib/inngest-host-dark-gate.sh's predicate table: stale_schema = the host still runs the pre-probe_schema=3 renderer. REPLACE THE HOST FIRST (apply_target=inngest-host-replace) — BUT ONLY IF THE PINNED DIGEST ALREADY CARRIES THE EMITTER: the emitter is baked into the OCI image and reaches the host through the digest literal in user_data, NOT through cloud-init, so a replace on an unbumped pin re-delivers the same bytes and this verdict does not clear (#7695; ADR-199 amendment 2026-09-07). Confirm with: git show \$(grep -oE 'soleur-inngest-bootstrap:v[0-9.]+' apps/web-platform/infra/cloud-init-inngest.yml | head -1 | sed 's/.*:/vinngest-/'):apps/web-platform/infra/inngest-bootstrap.sh | grep -c probe_schema=3 — a 0 means replacing will not help. store_populated = the store holds keys; the destructive path is refused outright and ADR-142's preserve-and-copy is the only lawful route. mount_mismatch = /mnt/data is not on the pinned device, so the emptiness measured is about the wrong object. silent / unreadable = nothing was measured; a gate that cannot see the host must never conclude the host is dark. followthrough_7674 = the host does not serve yet, and a recut before that is strictly counterproductive."
             exit 1
           fi
           echo "Guard 2: dark — host measured not-serving and store measured empty on one row from the current boot, with all four dispatch-time re-reads agreeing."

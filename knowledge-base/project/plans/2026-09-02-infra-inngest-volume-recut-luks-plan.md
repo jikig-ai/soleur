@@ -354,7 +354,7 @@ ADR-142's `## Decision`. Small.
 > is **199**. The ordinal above has been advanced (the plan declared it provisional and instructed
 > exactly this re-derivation); the original measurement is preserved in this note rather than
 > overwritten, and the full record is in `## Addendum — 2026-09-03 (#7695, Merge B as delivered)`.
-
+>
 > *No-SSH authorized clearance of the inngest monotonic flush latch, bounded by a measured
 > empty-store precondition.*
 
@@ -373,6 +373,7 @@ a `-replace` is a property of the bytes and is not. So the plan does not assert 
 empty — it **builds the channel that can say**, and makes the answer a precondition.
 
 Also recorded in the new ADR:
+
 - The measured Better Stack **retention floor (~20 days)**, retiring ADR-100's "retention against a
   365d window is UNMEASURED" with a number and the command that produced it.
 - That `L`'s polarity **inverts** between `op=arm` (L≥1 ⇒ REFUSE) and `op=resume` (L≥1 ⇒ G2
@@ -508,8 +509,9 @@ scope regex is `\.tf$|supabase/migrations/.*\.sql$|cloud-init.*\.ya?ml$|docker-c
 and this PR touches both `.tf` and `cloud-init-inngest.yml`. It shells out to
 `scripts/lint-encryption-posture.py --repo-sweep` and relays the exit code; the check does **not**
 reimplement the logic, so the only way to pass is to satisfy the linter's structural resolution:
-the attachment's `volume_id` must **literally** reference the volume resource, a `random_password`
-+ `doppler_secret` pair must be **co-located in the same file**, a real `luksFormat`/`luksOpen`
+the attachment's `volume_id` must **literally** reference the volume resource, a
+`random_password` + `doppler_secret` pair must be **co-located in the same file**, a real
+`luksFormat`/`luksOpen`
 apparatus must resolve to the named mapper, and mount evidence must exist for that mapper.
 
 Two ledger-hygiene items carried from the legal review:
@@ -987,6 +989,15 @@ That is not executable: `inngest_host_replace_gate` refuses any plan touching
 a split, and **not** widening that gate — it has no reviewer gate, no typed confirm and no id-pin,
 so widening it would create a completely unguarded second recut path in the same PR that builds
 five guard layers.
+
+> **Superseded in part 2026-09-07 (#7695).** Every step below that expects
+> `apply_target=inngest-host-replace` to deliver the `probe_schema` emitter carries a false
+> premise. The emitter is baked into the OCI image and reaches the host through the digest literal
+> in `user_data`, NOT through cloud-init — so a replace on an unbumped pin re-delivers the same
+> bytes. Merge A as specified here ("no `.tf` change, no cloud-init LUKS block") is therefore
+> undeliverable: it needs a pin bump, which is a cloud-init change. #7695 cut tag
+> `vinngest-v1.1.26` and re-pinned all four sites; the `stale_schema` rows below, and the
+> post-merge AC expecting a `probe_schema=2` row, should be read against that.
 
 **Merge A — the read channel only.** `inngest-bootstrap.sh` probe extension. **No `.tf` change, no
 cloud-init LUKS block**, so `inngest_host_replace_gate`'s three-address allow-set is satisfied
