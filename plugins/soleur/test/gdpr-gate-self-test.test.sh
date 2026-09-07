@@ -28,6 +28,36 @@ GH_STUB_DIR="$FIXTURE_DIR/gh-stub"
 # emit. Asserted in Case A; absence asserted in Case B.
 BANNER_LITERAL='ℹ gdpr-gate: operator-attested mode (no GH_TOKEN available — cron-run timestamp unverified, falling back to NOTICE last-verified)'
 
+# --- Instrument self-test -----------------------------------------------
+# Drive BOTH assertion helpers and refuse to continue unless both counters
+# moved. An assertion-COUNT floor cannot do this job: a stub of the form
+# `assert_eq() { PASS=$((PASS+1)); }` still increments, so the floor is
+# satisfied by construction. Measured during #7710 review: neutering the
+# helpers in THIS suite printed "Passed: 8 / ALL TESTS PASSED", exit 0, with
+# every banner, staleness and scan-line assertion silently dropped — and this
+# is the suite `gdpr-gate-self-test.yml` runs as a blocking gate.
+#
+# Reported via printf + exit 1, never through the helper it backstops (ADR-193).
+_selftest() {
+  local p0="$PASS" f0="$FAIL"
+  assert_eq       "x" "x"   "instrument self-test — assert_eq records a pass"
+  assert_eq       "x" "y"   "instrument self-test — assert_eq records a failure (EXPECTED FAIL above)"
+  assert_contains "xy" "x"  "instrument self-test — assert_contains records a pass"
+  assert_contains "xy" "zz" "instrument self-test — assert_contains records a failure (EXPECTED FAIL above)"
+  if (( PASS != p0 + 2 )); then
+    printf "INSTRUMENT SELF-TEST FAILED: helpers recorded %s passes, expected 2.\\n" "$((PASS - p0))" >&2
+    exit 1
+  fi
+  if (( FAIL != f0 + 2 )); then
+    printf "INSTRUMENT SELF-TEST FAILED: helpers recorded %s failures, expected 2.\\n" "$((FAIL - f0))" >&2
+    printf "A helper that cannot fail certifies nothing.\\n" >&2
+    exit 1
+  fi
+  PASS="$p0"; FAIL="$f0"
+  printf "  (instrument self-test OK)\\n"
+}
+_selftest
+echo ""
 echo "=== gdpr-gate self-test ==="
 echo ""
 
@@ -57,6 +87,31 @@ if grep -qF "$BANNER_LITERAL" "$SKILL_MD"; then
   PASS=$((PASS + 1))
 else
   echo "  FAIL: banner literal drifted between gdpr-gate-self-test.test.sh and SKILL.md"
+  FAIL=$((FAIL + 1))
+fi
+
+# Workflow-filename parity. NOTICE_PARSER_SRC was declared for this check in
+# #3541 and the check was never written, so the variable sat unused for
+# months (shellcheck SC2034) while the drift it names went unguarded —
+# a captured-but-never-asserted verdict.
+#
+# The literal `scheduled-content-vendor-drift.yml` is a DEAD workflow name
+# (the job moved to Inngest in #4483; see #7255). It survives deliberately in
+# both sites, each explaining that the probe it belongs to is inert. This
+# assertion pins them together: whoever revives the cron-run-stale binding
+# must update the parser AND the doc, or this fails loud instead of leaving
+# one of them asserting a defence that is not running.
+DEAD_WORKFLOW_LITERAL='scheduled-content-vendor-drift.yml'
+parser_hits=$(grep -cF "$DEAD_WORKFLOW_LITERAL" "$NOTICE_PARSER_SRC" || true)
+skill_hits=$(grep -cF "$DEAD_WORKFLOW_LITERAL" "$SKILL_MD" || true)
+if [[ "$parser_hits" -gt 0 && "$skill_hits" -gt 0 ]]; then
+  echo "  PASS: dead-workflow literal documented in BOTH the parser ($parser_hits) and SKILL.md ($skill_hits)"
+  PASS=$((PASS + 1))
+elif [[ "$parser_hits" -eq 0 && "$skill_hits" -eq 0 ]]; then
+  echo "  PASS: dead-workflow literal retired from both the parser and SKILL.md"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: dead-workflow literal drifted — parser=$parser_hits SKILL.md=$skill_hits (one site was updated without the other; see #7255)"
   FAIL=$((FAIL + 1))
 fi
 
@@ -120,4 +175,60 @@ fi
 assert_eq "0" "$CASE_B_RC" "Case B: gate exits 0 (advisory contract)"
 echo ""
 
-print_results
+# --- Case C: scan-completion line, matched and unmatched (Guard 2, #7710) ---
+# This case is the one the Observability block names as the detection route
+# for "the scan-completion line stops being emitted": this suite is run by
+# .github/workflows/gdpr-gate-self-test.yml on every change under
+# skills/gdpr-gate/scripts/** and weekly.
+#
+# The line must fire on the ZERO-MATCH scan as well as the matched one. That
+# is the whole property: before #7710, a scan that examined paths and matched
+# none produced no output, so it was byte-identical to a gate that never ran.
+# The fixture NOTICE here is >90 days stale, so this also pins that the line
+# is emitted ALONGSIDE the staleness banners rather than instead of them.
+echo "Case C: scan-completion line reports what the loop measured"
+
+set +e
+CASE_C_OUT=$(NOTICE_FILE="$FIXTURE_NOTICE" GH_TOKEN="" GITHUB_TOKEN="" \
+  bash "$GATE" "README.md" "docs/x.md" 2>/dev/null)
+CASE_C_RC=$?
+set -e
+assert_contains "$CASE_C_OUT" "gdpr-gate: path scan complete — 2 examined, 0 matched" \
+  "Case C: zero-match scan still reports it ran (2 examined, 0 matched)"
+assert_eq "0" "$CASE_C_RC" "Case C: gate exits 0 on a zero-match scan"
+
+# Matched case, with the non-matching path ordered FIRST so an implementation
+# reporting the first result rather than the totals is caught.
+set +e
+CASE_C2_OUT=$(NOTICE_FILE="$FIXTURE_NOTICE" GH_TOKEN="" GITHUB_TOKEN="" \
+  bash "$GATE" "README.md" "$CASE_A_PATH" "apps/web-platform/supabase/migrations/001_x.sql" 2>/dev/null)
+set -e
+assert_contains "$CASE_C2_OUT" "gdpr-gate: path scan complete — 3 examined, 2 matched" \
+  "Case C: mixed scan reports totals (3 examined, 2 matched), not the first result"
+
+# Counts only. The line reaches a customer terminal; the stderr breadcrumb is
+# where path names belong (hr-third-party-content-grep-on-undertaking).
+SCAN_LINE=$(printf '%s\n' "$CASE_C2_OUT" | grep 'path scan complete' || true)
+if [[ -n "$SCAN_LINE" && "$SCAN_LINE" != *"/"* ]]; then
+  echo "  PASS: Case C: scan line carries no path separators (counts only)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: Case C: scan line leaked a path: $SCAN_LINE"
+  FAIL=$((FAIL + 1))
+fi
+
+# Independent of corpus freshness: neither banner token may appear in the line.
+if [[ "$SCAN_LINE" != *"days stale"* && "$SCAN_LINE" != *"POSTURE_FAIL"* ]]; then
+  echo "  PASS: Case C: scan line carries no staleness vocabulary"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: Case C: scan line entangled with the staleness banners: $SCAN_LINE"
+  FAIL=$((FAIL + 1))
+fi
+
+# And the stale-corpus banners must STILL be present on this same run — the
+# scan line is additive, not a replacement.
+assert_contains "$CASE_C2_OUT" "POSTURE_FAIL:" "Case C: POSTURE_FAIL still present alongside the scan line"
+echo ""
+
+print_results 20

@@ -144,6 +144,7 @@ adr-149
 adr-151
 adr-155
 adr-166
+adr-181
 adr-193
 adr-194
 adr-corpus
@@ -3479,6 +3480,7 @@ source-vs-symptom
 sourcing-decision
 space
 spacing
+span-replacement
 spawn
 spawn-env
 spawn_subagent
