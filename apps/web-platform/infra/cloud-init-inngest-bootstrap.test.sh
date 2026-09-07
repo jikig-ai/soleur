@@ -959,17 +959,20 @@ if git -C "$SCRIPT_DIR" rev-parse -q --verify origin/main >/dev/null 2>&1; then
 fi
 GB_HEAD_PIN="$(grep -ohE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' \
   "$SCRIPT_DIR/cloud-init-inngest.yml" 2>/dev/null | head -1 || true)"
-if [[ -z "$GB_BASE_PIN" || -z "$GB_HEAD_PIN" ]]; then
-  assert "GuardB row6: SKIPPED — no comparable base pin (base='${GB_BASE_PIN:-none}'); reported, not passed silently" \
-    "true"
-else
-  GB_BASE_TAG="${GB_BASE_PIN%%@*}"; GB_BASE_DIG="${GB_BASE_PIN##*@}"
-  GB_HEAD_TAG="${GB_HEAD_PIN%%@*}"; GB_HEAD_DIG="${GB_HEAD_PIN##*@}"
-  assert "GuardB row6: the tag moved ($GB_BASE_TAG -> $GB_HEAD_TAG) only alongside a moved digest" \
-    "[[ '$GB_BASE_TAG' == '$GB_HEAD_TAG' || '$GB_BASE_DIG' != '$GB_HEAD_DIG' ]]"
-  assert "GuardB row6: the digest moved only alongside a moved tag (a re-pushed tag must be re-tagged)" \
-    "[[ '$GB_BASE_DIG' == '$GB_HEAD_DIG' || '$GB_BASE_TAG' != '$GB_HEAD_TAG' ]]"
-fi
+# THE ASSERTION COUNT MUST NOT DEPEND ON THE ENVIRONMENT. An earlier revision put the
+# no-comparable-base case in its own branch emitting ONE assert where the live path emits TWO --
+# so in the zot-pull mutation sandbox (a throwaway `git init` repo with no `origin/main`) the
+# section ran 8 instead of 9, both anti-vacuity floors redded, and the battery's BASELINE went
+# red. That turns a real verdict into the unresolved class and is exactly what an exact floor
+# cannot tolerate. So: always two asserts, with unavailability carried as a VALUE in the message
+# and short-circuited inside the condition, never as a different arm.
+GB_ROW6_NOTE="base=${GB_BASE_PIN:-UNAVAILABLE} head=${GB_HEAD_PIN:-UNAVAILABLE}"
+GB_BASE_TAG="${GB_BASE_PIN%%@*}"; GB_BASE_DIG="${GB_BASE_PIN##*@}"
+GB_HEAD_TAG="${GB_HEAD_PIN%%@*}"; GB_HEAD_DIG="${GB_HEAD_PIN##*@}"
+assert "GuardB row6: the tag moved only alongside a moved digest [$GB_ROW6_NOTE]" \
+  "[[ -z '$GB_BASE_PIN' || -z '$GB_HEAD_PIN' ]] || [[ '$GB_BASE_TAG' == '$GB_HEAD_TAG' || '$GB_BASE_DIG' != '$GB_HEAD_DIG' ]]"
+assert "GuardB row6: the digest moved only alongside a moved tag [$GB_ROW6_NOTE]" \
+  "[[ -z '$GB_BASE_PIN' || -z '$GB_HEAD_PIN' ]] || [[ '$GB_BASE_DIG' == '$GB_HEAD_DIG' || '$GB_BASE_TAG' != '$GB_HEAD_TAG' ]]"
 
 # GUARD B'S OWN ANTI-VACUITY FLOOR. Previously these asserts were pooled into the ZG span's
 # floor of 47, of which only 7 belong to Guard B -- so deleting a Guard B assert and adding an
