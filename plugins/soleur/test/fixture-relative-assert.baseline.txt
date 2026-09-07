@@ -332,6 +332,7 @@
 7	scripts/test-all-capacity-signal.test.sh
 1	scripts/test-all-infra-coverage-notice.test.sh
 3	scripts/test-all-killed-classification.test.sh
+1	scripts/test-all-runtime-ceiling.test.sh
 1	scripts/test-all.sh
 5	scripts/test-contention.test.sh
 4	scripts/test-content-publisher.sh
