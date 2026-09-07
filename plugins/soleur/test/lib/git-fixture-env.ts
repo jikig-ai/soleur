@@ -124,6 +124,17 @@ export function gitFixtureEnv(fixtureDir: string): Record<string, string> {
     GIT_AUTHOR_EMAIL: "fixture@example.com",
     GIT_COMMITTER_NAME: "Soleur Fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.com",
+    // Signing, as a config OVERRIDE rather than a global replacement. GIT_CONFIG_GLOBAL=/dev/null
+    // and GIT_CONFIG_NOSYSTEM=1 above do NOT reach a REPO-LOCAL `commit.gpgsign=true`, so a fixture
+    // that has one fails `gpg failed to sign the data`. GIT_CONFIG_COUNT entries are applied as
+    // command-line `-c` overrides, which outrank repo-local config.
+    //
+    // This lived only in `gitFixture()` until #7849. That was a latent gap, not a stylistic split:
+    // every suite converted under #7849 calls THIS builder directly and never constructs the
+    // wrapper, so the protection was absent for exactly the callers being added.
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "commit.gpgsign",
+    GIT_CONFIG_VALUE_0: "false",
   });
 
   // Non-GIT_ execution vectors the sweep cannot see by shape.
@@ -135,9 +146,9 @@ export function gitFixtureEnv(fixtureDir: string): Record<string, string> {
 /**
  * A `git` runner bound to one fixture directory, already carrying {@link gitFixtureEnv}.
  *
- * Commit signing is disabled explicitly: a developer with `commit.gpgsign=true` would otherwise have
- * every fixture commit fail, and GIT_CONFIG_GLOBAL=/dev/null does not cover a repo-local setting
- * inherited via a template.
+ * The `-c commit.gpgsign=false` is now redundant with the GIT_CONFIG_COUNT override in
+ * {@link gitFixtureEnv} and is kept as a belt: it costs nothing and makes the intent readable at the
+ * call site. See that override for why the config globals alone are insufficient.
  */
 export function gitFixture(fixtureDir: string): (args: string[]) => string {
   const env = gitFixtureEnv(fixtureDir);
