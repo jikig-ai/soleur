@@ -327,6 +327,7 @@ asserted-vs-measured
 assertion
 assertion-drift
 assertion-floor
+assertions
 async
 async-await
 async-context
@@ -3891,6 +3892,7 @@ update-ref
 upload
 upsert
 uptime-monitor
+uptime-monitoring
 url-concatenation
 url-validation
 usage-limit
@@ -3951,6 +3953,7 @@ vector-expansion
 vendor
 vendor-api
 vendor-cli
+vendor-contracts
 vendor-cost
 vendor-evaluation
 vendor-key
