@@ -1,4 +1,9 @@
 {
   "record_byok_use_and_check_cap": ["FOR UPDATE", "v_tripped := FOUND"],
-  "check_and_record_byok_delegation_use": ["FOR UPDATE", "hourly_cap_exceeded", "daily_cap_exceeded"]
+  "check_and_record_byok_delegation_use": [
+    "FOR UPDATE",
+    "INSERT INTO public.audit_byok_use (",
+    "refusal_reason := 'hourly_cap_exceeded'",
+    "refusal_reason := 'daily_cap_exceeded'"
+  ]
 }

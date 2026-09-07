@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
-// Migration-shape test for 136_byok_cap_breach_audit_row.sql (#7829).
+// Migration-shape test for 137_byok_cap_breach_audit_row.sql (#7829).
 //
 // OFFLINE TRIPWIRE ONLY — explicitly NOT the proof. Reachability (does a row
 // actually exist after a refusal?) is proven by the live tenant-integration
@@ -20,11 +20,11 @@ import path from "node:path";
 
 const MIGRATION_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/136_byok_cap_breach_audit_row.sql",
+  "../../supabase/migrations/137_byok_cap_breach_audit_row.sql",
 );
 const DOWN_PATH = path.join(
   __dirname,
-  "../../supabase/migrations/136_byok_cap_breach_audit_row.down.sql",
+  "../../supabase/migrations/137_byok_cap_breach_audit_row.down.sql",
 );
 
 const sql = readFileSync(MIGRATION_PATH, "utf8");
@@ -51,7 +51,7 @@ const REFUSAL_REASONS = [
   "daily_cap_exceeded",
 ] as const;
 
-describe("migration 136_byok_cap_breach_audit_row", () => {
+describe("migration 137_byok_cap_breach_audit_row", () => {
   describe("AC1 — migration pair exists and is transactional", () => {
     it("both files are wrapped BEGIN;/COMMIT;", () => {
       expect(executable).toMatch(/^\s*BEGIN;/m);

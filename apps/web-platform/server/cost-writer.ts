@@ -9,9 +9,10 @@
 //      existing `write_byok_audit` RPC (migration 037).
 //   2b. BYOK Delegations PR-A (#4232) — when `delegationId` is set,
 //      route the audit through the merged atomic RPC
-//      `check_and_record_byok_delegation_use` (migration 064) which
-//      performs grace + expired + hourly + daily cap checks under a
-//      single FOR UPDATE row lock before INSERTing the audit row.
+//      `check_and_record_byok_delegation_use` (migration 064, converted
+//      to a return-status contract by migration 137) which performs
+//      grace + consent + expired + hourly + daily checks under a single
+//      FOR UPDATE row lock and INSERTs the audit row on EVERY outcome.
 //   3. Fan out a `usage_update` WS event to the client (widened with
 //      cache tokens).
 //   4. Mirror all silent fallbacks to Sentry per
@@ -31,7 +32,9 @@ import {
   type ClaudeCostSource,
 } from "@/server/claude-cost-marker";
 import {
+  type ByokDelegationError,
   ByokDelegationRevokedError,
+  ByokDelegationConsentWithdrawnError,
   ByokDelegationExpiredError,
   ByokDelegationHourlyCapError,
   ByokDelegationDailyCapError,
@@ -43,6 +46,149 @@ const log = createChildLogger("cost-writer");
 let _supabase: ReturnType<typeof createServiceClient> | null = null;
 function supabase() {
   return (_supabase ??= createServiceClient());
+}
+
+// ─── Delegated-turn refusal contract (migration 137, #7829) ─────────────
+//
+// `check_and_record_byok_delegation_use` signals a refusal by RETURNING a
+// reason, never by raising one. Refusal had to stop being an exception
+// because an unhandled plpgsql RAISE aborts its own transaction and discards
+// the `audit_byok_use` row the branch inserted immediately before it — which
+// is why NO refusal has ever been ledgered, including the three branches that
+// visibly INSERT first. `refusal_reason === null` means the turn was admitted
+// and the grantor-attributed row was written.
+//
+// This union IS the contract. Coupling a TS error hierarchy to a plpgsql
+// RAISE message substring was the leaky abstraction underneath the bug: the
+// refusal had no typed carrier, so its only carrier was an exception, and the
+// exception is what destroyed the row.
+//
+// Underscored literals — these are the `audit_byok_use.attribution_shift_reason`
+// column values, NOT the hyphenated Sentry `op` slugs. Migration 064
+// establishes that only `cross-tenant` is hyphenated; do not harmonise the two
+// vocabularies (mig 137 §1).
+type ByokRefusalReason =
+  | "revoked_post_grace"
+  | "consent_withdrawn"
+  | "expired"
+  | "hourly_cap_exceeded"
+  | "daily_cap_exceeded";
+
+/**
+ * Refusal reason → the ADR-040 D10 error class and the Sentry `op` slug. The
+ * `op` values are the hyphenated slugs the `byok_cap_exceeded` issue-alert rule
+ * filters on (`apps/web-platform/infra/sentry/issue-alerts.tf`) — they are
+ * deliberately NOT the underscored SQL literals.
+ */
+const REFUSAL_DISPATCH: Record<
+  ByokRefusalReason,
+  { op: string; error: (delegationId: string) => ByokDelegationError }
+> = {
+  revoked_post_grace: {
+    op: "revoke-past-grace",
+    error: (id) => new ByokDelegationRevokedError(id),
+  },
+  consent_withdrawn: {
+    op: "consent-withdrawn",
+    error: (id) => new ByokDelegationConsentWithdrawnError(id),
+  },
+  expired: {
+    op: "expired",
+    error: (id) => new ByokDelegationExpiredError(id),
+  },
+  hourly_cap_exceeded: {
+    op: "hourly-cap-exceeded",
+    error: (id) => new ByokDelegationHourlyCapError(id),
+  },
+  daily_cap_exceeded: {
+    op: "daily-cap-exceeded",
+    error: (id) => new ByokDelegationDailyCapError(id),
+  },
+};
+
+/**
+ * Normalise the RPC payload to the returned `refusal_reason`, or null when the
+ * turn was admitted.
+ *
+ * `RETURNS TABLE(refusal_reason text)` declares a SINGLE output column, so
+ * PostgreSQL collapses the return type to `SETOF text` rather than a composite
+ * (a one-element TABLE is one OUT parameter). Depending on the PostgREST /
+ * supabase-js pair that reaches us as a bare scalar, an array of scalars, or an
+ * array of single-key rows. Normalise all three rather than pin one — the same
+ * defence `byok-cap-rpc.ts` already applies to the two-column sibling RPC.
+ *
+ * Exercised end-to-end against the live shape by
+ * `test/server/byok-delegation.atomicity.tenant-isolation.test.ts`, which
+ * mirrors this function (keep the two in sync); the shape matrix itself is
+ * pinned offline in `test/server/cost-writer.test.ts`.
+ */
+/**
+ * The RPC's reply, classified. `admitted` is established POSITIVELY — it is
+ * never the fallback for a shape we failed to parse.
+ *
+ * `RETURNS TABLE(refusal_reason text)` is a single OUT parameter, so Postgres
+ * collapses the return to `SETOF text` rather than a composite, and which of
+ * `"x"` / `["x"]` / `[{refusal_reason:"x"}]` reaches us depends on the
+ * PostgREST/client pair. All three are accepted. Anything else is
+ * `unreadable`, NOT admitted: reading an unparsed shape as "the turn was
+ * fine" would silence every refusal on this path, which is precisely the
+ * silent-ledger failure #7829 exists to remove. Fail closed and page.
+ */
+export type RefusalRead =
+  | { kind: "admitted" }
+  | { kind: "refused"; reason: string }
+  | { kind: "unreadable"; detail: string };
+
+function readCell(cell: unknown): RefusalRead {
+  // An explicit SQL NULL in the one column IS the admitted signal.
+  if (cell === null) return { kind: "admitted" };
+  if (typeof cell === "string") return { kind: "refused", reason: cell };
+  if (typeof cell === "object" && "refusal_reason" in cell) {
+    const value = (cell as { refusal_reason: unknown }).refusal_reason;
+    if (value === null) return { kind: "admitted" };
+    if (typeof value === "string") return { kind: "refused", reason: value };
+    return { kind: "unreadable", detail: `refusal_reason is ${typeof value}` };
+  }
+  return { kind: "unreadable", detail: `row is ${typeof cell}` };
+}
+
+export function readRefusalReason(data: unknown): RefusalRead {
+  // The function returns exactly one row on every path, so "no row at all"
+  // is a broken contract, not an admission.
+  if (data === undefined) return { kind: "unreadable", detail: "data is undefined" };
+  if (Array.isArray(data)) {
+    if (data.length !== 1) {
+      return { kind: "unreadable", detail: `expected 1 row, got ${data.length}` };
+    }
+    return readCell(data[0]);
+  }
+  if (data === null) return { kind: "unreadable", detail: "data is null" };
+  return readCell(data);
+}
+
+/**
+ * Did the refusal actually persist its ledger row?
+ *
+ * The plan's highest-probability post-merge failure mode is "136 applies but
+ * writes no row" — and it is INVISIBLE without this read-back, because the
+ * Sentry event and the pino line derive from the refusal, which fires whether
+ * or not the INSERT survived. Surfaced as a `ledger_row_written` Sentry tag so
+ * the indistinguishable event becomes a decisive one with no issue-alerts.tf
+ * change. Never throws: an unreadable ledger reports "unknown" rather than
+ * masking the refusal it is annotating.
+ */
+async function ledgerRowWrittenTag(invocationId: string): Promise<string> {
+  try {
+    const { data, error } = await supabase()
+      .from("audit_byok_use")
+      .select("invocation_id")
+      .eq("invocation_id", invocationId)
+      .maybeSingle();
+    if (error) return "unknown";
+    return data ? "true" : "false";
+  } catch {
+    return "unknown";
+  }
 }
 
 // SDK exposes nullable cache fields per
@@ -182,12 +328,21 @@ export function persistTurnCost(
   const unitCostCents = Math.round(costDelta * 100);
 
   if (delegation) {
-    // (2b) Delegated path — merged atomic RPC. SQLSTATE P0001 with a
-    // `^byok_delegations:<reason>` message maps to sibling errors
-    // (see ByokDelegationError hierarchy in byok-resolver.ts). The
-    // RPC itself writes the audit row with `attribution_shift_reason`
-    // set on post-grace / expired paths; cap-exceeded raises WITHOUT
-    // a row.
+    // (2b) Delegated path — merged atomic RPC.
+    //
+    // Since migration 137 a REFUSAL IS A RETURNED VALUE, not an exception:
+    // `data` carries `refusal_reason`, and every refusal branch has already
+    // committed its `audit_byok_use` row (attributed to the grantee, carrying
+    // `attribution_shift_reason`) inside the same FOR UPDATE lock before
+    // returning. `refusal_reason === null` means the turn was admitted and the
+    // grantor-attributed row was written.
+    //
+    // `error` is now reserved for the branches that still RAISE, and those are
+    // caller bugs or anonymised state rather than accounted refusals — no
+    // provider call is attributable to a delegation that does not resolve, so
+    // no ledger row is owed: 22023 (null args), P0002 (delegation not found),
+    // P0001 `byok_delegations:anonymised`, and 42501
+    // `byok_delegations:caller_not_grantee` (the mig-136 caller identity pin).
     supabase()
       .rpc("check_and_record_byok_delegation_use", {
         p_delegation_id: delegation.delegationId,
@@ -197,35 +352,87 @@ export function persistTurnCost(
         p_caller_user_id: delegation.callerUserId,
         p_agent_role: leaderId,
       })
-      .then(({ error }) => {
-        if (!error) return;
-        const message = error.message ?? "";
+      .then(async ({ data, error }) => {
         const baseExtra = {
           conversationId,
           delegationId: delegation.delegationId,
           totalTokens,
           costCents: unitCostCents,
         };
-        if (message.includes("byok_delegations:revoked_post_grace")) {
-          reportSilentFallback(
-            new ByokDelegationRevokedError(delegation.delegationId),
-            { feature: "byok-delegations", op: "revoke-past-grace", extra: baseExtra },
+
+        if (!error) {
+          // Admitted, or refused-and-ledgered. Read the typed discriminator.
+          const read = readRefusalReason(data);
+          if (read.kind === "unreadable") {
+            // Fail CLOSED. We cannot tell admitted from refused, so we must
+            // not assume the benign one.
+            log.error(
+              { conversationId, userId, delegationId: delegation.delegationId, detail: read.detail },
+              "Unreadable delegation RPC reply shape — refusal reporting is not trustworthy",
+            );
+            reportSilentFallback(
+              new Error(
+                `check_and_record_byok_delegation_use returned an unreadable reply (${read.detail})`,
+              ),
+              {
+                feature: "byok-delegations",
+                op: "unreadable-refusal-shape",
+                tags: { ledger_row_written: await ledgerRowWrittenTag(invocationId) },
+                extra: baseExtra,
+              },
+            );
+            return;
+          }
+          if (read.kind === "admitted") return;
+          const reason = read.reason;
+          const dispatch = REFUSAL_DISPATCH[reason as ByokRefusalReason];
+          if (!dispatch) {
+            // A migration added a refusal reason this build does not know.
+            // Fail LOUD rather than folding it into `merged-rpc-failure`,
+            // which is what silently swallowed `consent_withdrawn` until
+            // #7829 gave the refusals a typed contract.
+            log.error(
+              { conversationId, userId, delegationId: delegation.delegationId, reason },
+              "Unrecognised delegation refusal_reason",
+            );
+            reportSilentFallback(
+              new Error(
+                `check_and_record_byok_delegation_use returned unrecognised refusal_reason "${reason}"`,
+              ),
+              {
+                feature: "byok-delegations",
+                op: "unknown-refusal-reason",
+                extra: baseExtra,
+              },
+            );
+            return;
+          }
+          reportSilentFallback(dispatch.error(delegation.delegationId), {
+            feature: "byok-delegations",
+            op: dispatch.op,
+            tags: { ledger_row_written: await ledgerRowWrittenTag(invocationId) },
+            extra: baseExtra,
+          });
+          return;
+        }
+
+        const message = error.message ?? "";
+        if (message.includes("byok_delegations:caller_not_grantee")) {
+          // 42501, added by mig 137. `founder_id` on a refusal row is now a
+          // durable BILLING assertion that enters the named user's DSAR
+          // export, so the RPC refuses to book one caller's refusal against
+          // another's identity. Reaching here is a caller bug in
+          // `byok-lease`/`byok-resolver`, not a user-visible refusal;
+          // `pg_code:42501` discriminates it in Sentry.
+          log.error(
+            { err: error, conversationId, userId, delegationId: delegation.delegationId },
+            "Delegation RPC rejected caller: p_caller_user_id is not the grantee",
           );
-        } else if (message.includes("byok_delegations:expired")) {
-          reportSilentFallback(
-            new ByokDelegationExpiredError(delegation.delegationId),
-            { feature: "byok-delegations", op: "expired", extra: baseExtra },
-          );
-        } else if (message.includes("byok_delegations:hourly_cap_exceeded")) {
-          reportSilentFallback(
-            new ByokDelegationHourlyCapError(delegation.delegationId),
-            { feature: "byok-delegations", op: "hourly-cap-exceeded", extra: baseExtra },
-          );
-        } else if (message.includes("byok_delegations:daily_cap_exceeded")) {
-          reportSilentFallback(
-            new ByokDelegationDailyCapError(delegation.delegationId),
-            { feature: "byok-delegations", op: "daily-cap-exceeded", extra: baseExtra },
-          );
+          reportSilentFallback(error, {
+            feature: "byok-delegations",
+            op: "caller-not-grantee",
+            extra: baseExtra,
+          });
         } else if (message.includes("byok_delegations:cross-tenant:")) {
           // GDPR Art. 33 breach surface: the grantee used the grantor's BYOK
           // key from outside the grantor's workspace. Route through
@@ -268,6 +475,17 @@ export function persistTurnCost(
             extra: baseExtra,
           });
         }
+      })
+      // The handler is now async (the `ledger_row_written` read-back), so a
+      // throw inside it would surface as an unhandled rejection on a
+      // fire-and-forget path. Terminate the chain explicitly. Two-arg `.then`
+      // rather than `.catch` because PostgrestBuilder types its `.then` as
+      // returning `PromiseLike<void>`, which declares no `.catch`.
+      .then(undefined, (err: unknown) => {
+        log.error(
+          { err, conversationId, userId, delegationId: delegation.delegationId },
+          "Delegation cost-write handler threw",
+        );
       });
   } else {
     // (2a) Solo path — existing migration-037 RPC (extended to 6 args

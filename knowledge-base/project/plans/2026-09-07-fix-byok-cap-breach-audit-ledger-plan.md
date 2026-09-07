@@ -306,7 +306,7 @@ inversion, a learning amendment and ADR work.
 | **PR-0** (spike, no merge) | The Phase 0 probes: live-body `pg_get_functiondef` drift diff, the live CHECK definition, and the two B3 distribution queries. Output is a paragraph appended here. | Everything downstream is unwritable until B3's arm is confirmed against real data. |
 | **PR-1** (ship first, independent) | `server/byok-delegation-ui-resolver.ts` — the non-existent `cost_cents` column and the discarded PostgREST errors. | ~15 lines, no migration, no fork dependency, and it is a **precondition** for the attribution shift: without it the charged party has no working spend surface at all. |
 | **PR-2** (lands before PR-3) | B3 + B4: unit semantics across `084`, `061`, `121`, and an ADR-041 amendment. | Founder-wide cap-arithmetic decision. It changes what every existing cap test *means* and needs its own migration and test matrix. |
-| **PR-3** (#7829 proper) | Migration 136 as the return-status conversion; A5 caller-id guard; A6 index; A8 column comment; the `084.down.sql` repair; **new ADR-205**; the `K → N` test inversion; the learning amendment; `cost-writer.ts`; PA-23 limbs (c)/(g). | The actual issue. |
+| **PR-3** (#7829 proper) | Migration 137 as the return-status conversion; A5 caller-id guard; A6 index; A8 column comment; the `084.down.sql` repair; **new ADR-207**; the `K → N` test inversion; the learning amendment; `cost-writer.ts`; PA-23 limbs (c)/(g). | The actual issue. |
 | **PR-4** (parallel, lands after PR-3) | DPD §2.3(w) paired edit + SHA re-pin + the retention reconciliation. | Pre-existing corpus defects with an independent trigger; a blocking `lint-legal-registers.sh` should not red-gate a SQL migration. Same shape as #7881. |
 
 **Cut from this plan entirely** (file, do not fold): the side-letter version-bump
@@ -328,15 +328,15 @@ information.
 
 | Path | Change |
 |---|---|
-| `apps/web-platform/supabase/migrations/136_byok_cap_breach_audit_row.sql` | **new** — widen the CHECK; `DROP` + `CREATE` the RPC returning a refusal reason; all five refusal branches INSERT and return. |
-| `apps/web-platform/supabase/migrations/136_byok_cap_breach_audit_row.down.sql` | **new** — restore the 084 body; **leave the CHECK widened**. |
-| `apps/web-platform/test/supabase-migrations/136-byok-cap-breach-audit-row.test.ts` | **new** — offline shape tripwire. |
+| `apps/web-platform/supabase/migrations/137_byok_cap_breach_audit_row.sql` | **new** — widen the CHECK; `DROP` + `CREATE` the RPC returning a refusal reason; all five refusal branches INSERT and return. |
+| `apps/web-platform/supabase/migrations/137_byok_cap_breach_audit_row.down.sql` | **new** — restore the 084 body; **leave the CHECK widened**. |
+| `apps/web-platform/test/supabase-migrations/137-byok-cap-breach-audit-row.test.ts` | **new** — offline shape tripwire. |
 | `apps/web-platform/server/cost-writer.ts` | Read `data` instead of matching `error.message`; construct the ADR-040 D10 error classes from the typed discriminator. Rewrite the comment `cap-exceeded raises WITHOUT a row.` **Add the missing `consent_withdrawn` branch** — there is none today, so consent-withdrawal refusals already fall into the else-arm as `op=merged-rpc-failure`. |
 | `apps/web-platform/test/server/byok-delegation.atomicity.tenant-isolation.test.ts` | Partition the invariant (below), add cases, re-anchor the line-number citations. |
 | `apps/web-platform/supabase/migrations/121_byok_cap_trip_from_found.sql` *(or an accepted-outcome model)* | Add `AND delegation_id IS NULL` to the founder SUM, or document the grantee lockout as tested. |
 | `apps/web-platform/test/supabase-migrations/byok-rpc-markers.json` | The three pinned markers include the RAISE strings; under the return-status shape they survive only if the returned reason literals are spelled identically. **Phase 3 asserted this constraint without noticing it is one.** Reconcile, and add an INSERT-shaped marker. |
 | `apps/web-platform/supabase/migrations/084_byok_delegation_withdrawals.down.sql` | Repair the unrunnable narrow. Safe: `.down.sql` is skipped by the runner and not sha-tracked. |
-| `knowledge-base/engineering/architecture/decisions/ADR-205-*.md` | **new** — see below. |
+| `knowledge-base/engineering/architecture/decisions/ADR-207-*.md` | **new** — see below. |
 | `knowledge-base/project/learnings/best-practices/2026-07-03-live-cap-rpc-test-aged-seed-daily-isolation-and-audit-equals-K.md` | Amend Key Insight #2. |
 | `knowledge-base/legal/article-30-register.md` | PA-23 limbs (c) and (g). |
 | `apps/web-platform/supabase/migrations/066_*.sql` comment | `founder_id` "Owner of the BYOK invocation" plus the "aggregate on `workspace_id`" guidance — both wrong for cap rows, where `workspace_id` is the grantor's and `founder_id` the grantee's. |
@@ -346,8 +346,11 @@ instruction); `084_byok_delegation_withdrawals.sql` (forward-only).
 
 ## Architecture Decision (ADR/C4)
 
-**New ADR-205** (ordinal verified free against `origin/main` — highest present is
-ADR-204; re-verify before merge, `/ship`'s collision gate is authoritative).
+**New ADR-207** (was drafted here as ADR-205, when ADR-204 was the ceiling on
+`origin/main`. Re-derived at authoring time with `max + 1` per `/ship`'s collision
+gate, which is authoritative: `origin/main` now tops out at **ADR-206**, so this
+is **ADR-207**. ADR-205 is left as an unfilled hole — "next free" is `max + 1`,
+never the lowest unused ordinal. Re-verify again before merge).
 
 Amending ADR-045 is insufficient. Under the chosen mechanism the change
 **corrects a false factual claim** in ADR-045 §2 (*"the turn raises and the audit
@@ -358,7 +361,7 @@ error taxonomy sourced from a return value, not a message substring), and
 precedent is decisive: ADR-045 is itself a *sibling* to ADR-040 for exactly this
 shape — a new decision about the same RPC — not an amendment to it.
 
-ADR-205 records: the plpgsql rollback finding; the return-status decision with the
+ADR-207 records: the plpgsql rollback finding; the return-status decision with the
 mig-121 precedent; the two rejected alternatives with the reasons above; the
 SUM-inclusion ruling; the attribution ruling with all four corrected trade-offs;
 and that the `audit == K` invariant becomes a partition.
@@ -492,7 +495,7 @@ self-diagnosis pattern; `auditRowsFor` must select `founder_id`,
 - **AC9** `git grep -c 'cap-exceeded raises WITHOUT' apps/web-platform/server/cost-writer.ts`
   returns 0; a `consent_withdrawn` branch exists.
 - **AC10** the `audit == K` learning carries an amendment naming #7829 and 136.
-- **AC11** `ADR-205-*.md` exists; the ordinal is re-verified against `origin/main`.
+- **AC11** `ADR-207-*.md` exists; the ordinal is re-verified against `origin/main`.
 - **AC12** `git diff origin/main -- apps/web-platform/infra/sentry/` is empty
   **except** a comment-only correction: the tf comment's *"So on a cap breach no
   audit row is written… the window numerator does not advance either"* becomes

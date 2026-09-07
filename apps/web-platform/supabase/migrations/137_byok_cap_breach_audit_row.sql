@@ -1,4 +1,4 @@
--- 136_byok_cap_breach_audit_row.sql
+-- 137_byok_cap_breach_audit_row.sql
 -- fix(byok): a refusal must persist its audit row (#7829).
 --
 -- LAWFUL_BASIS: Art. 6(1)(b) — billing accounting for a delegated key.
@@ -46,7 +46,7 @@
 --
 -- SCOPE NOTE: this migration does NOT change the cap arithmetic. The
 -- unit_cost_cents / token_count unit defect is tracked separately and is
--- deliberately untouched here. See ADR-205.
+-- deliberately untouched here. See ADR-207.
 
 BEGIN;
 
@@ -357,6 +357,35 @@ REVOKE ALL ON FUNCTION public.record_byok_use_and_check_cap(uuid, uuid, uuid, te
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.record_byok_use_and_check_cap(uuid, uuid, uuid, text, int, int)
   TO service_role;
+
+-- =====================================================================
+-- 4. Correct the founder_id column comment (mig 066 is forward-only)
+-- =====================================================================
+-- 066's comment calls founder_id "Owner of the BYOK invocation" and advises
+-- aggregating on workspace_id. Both are wrong for the rows section 2 now
+-- writes: on a refused delegated turn founder_id is the GRANTEE while
+-- workspace_id stays the GRANTOR-scoped delegation workspace, so the two
+-- columns name DIFFERENT parties on exactly those rows.
+
+COMMENT ON COLUMN public.audit_byok_use.founder_id IS
+  'The party CHARGED for the invocation - not necessarily the owner of the key '
+  'it ran on. On a non-delegated row (delegation_id IS NULL) the two coincide. '
+  'On a delegated row they can differ: an ADMITTED delegated turn '
+  '(delegation_id IS NOT NULL, attribution_shift_reason IS NULL) carries the '
+  'GRANTOR (the key owner); a REFUSED delegated turn (attribution_shift_reason '
+  'IS NOT NULL - revoked_post_grace, expired, consent_withdrawn, '
+  'hourly_cap_exceeded, daily_cap_exceeded; mig 137, #7829) carries the '
+  'GRANTEE, because cost follows the party who continued past the boundary '
+  '(ADR-045, ADR-207). workspace_id stays the GRANTOR-scoped delegation '
+  'workspace on both, so on those rows founder_id and workspace_id name '
+  'DIFFERENT parties. NULL after Art. 17 anonymisation (SET NULL cascade from '
+  'public.users delete, mig 065 Part 2). AGGREGATION: neither column is a safe '
+  'key on its own. For full historical cost coverage despite NULL founder_id, '
+  'aggregate on workspace_id - but that books a grantee-attributed refusal into '
+  'the GRANTOR''s workspace, so any PER-USER rollup must key on founder_id and '
+  'discriminate delegated rows with delegation_id / attribution_shift_reason. '
+  'NULL-founder rows are still present in the WORM ledger but have no live user '
+  'FK.';
 
 COMMIT;
 

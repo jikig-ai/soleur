@@ -56,9 +56,9 @@ Brand-survival threshold: single-user incident. CPO sign-off required before /wo
 - [ ] 3.1 RED first: partition the live invariant (`IS NULL` rows == K summing to
       CAP_CENTS; reason rows == N-K), add T5b (heterogeneous cost — the only shape
       that discriminates include-vs-exclude), fix T7's positive control, add T8/T9.
-- [ ] 3.2 RED: offline tripwire `136-byok-cap-breach-audit-row.test.ts`; anchor T3
+- [ ] 3.2 RED: offline tripwire `137-byok-cap-breach-audit-row.test.ts`; anchor T3
       on `INTO v_hourly_spent`, not the comment the strip deletes.
-- [ ] 3.3 `136_byok_cap_breach_audit_row.sql`: widen the CHECK; `DROP` + `CREATE`
+- [ ] 3.3 `137_byok_cap_breach_audit_row.sql`: widen the CHECK; `DROP` + `CREATE`
       the RPC returning a refusal reason; all five refusal branches INSERT + return.
       Keep SECURITY DEFINER, `SET search_path = public, pg_temp`, `FOR UPDATE`.
 - [ ] 3.4 Add the `p_caller_user_id` vs `v_row.grantee_user_id` guard.
@@ -74,7 +74,7 @@ Brand-survival threshold: single-user incident. CPO sign-off required before /wo
 - [ ] 3.11 Re-create `audit_byok_use_delegation_ts_idx` or record the measured scan
       cost (no `CONCURRENTLY` — the runner wraps each file in a transaction).
 - [ ] 3.12 `066` column comment on `founder_id` (both sentences).
-- [ ] 3.13 Write ADR-205; re-verify the ordinal against `origin/main` before merge.
+- [ ] 3.13 Write ADR-207 (re-derived `max + 1` on `origin/main`, which now tops out at ADR-206; was planned as ADR-205); re-verify the ordinal against `origin/main` before merge.
 - [ ] 3.14 Amend the `audit == K` learning.
 - [ ] 3.15 Art. 30 register PA-23 limbs (c) and (g).
 - [ ] 3.16 `bash plugins/soleur/test/c4-count-parity.test.sh` green.

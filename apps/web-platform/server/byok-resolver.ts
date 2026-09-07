@@ -46,6 +46,7 @@ const log = createChildLogger("byok-resolver");
 
 export type ByokDelegationErrorReason =
   | "revoked_post_grace"
+  | "consent_withdrawn"
   | "expired"
   | "hourly_cap_exceeded"
   | "daily_cap_exceeded"
@@ -69,6 +70,29 @@ export class ByokDelegationRevokedError extends ByokDelegationError {
   constructor(delegationId?: string, workspaceIdHash?: string) {
     super("BYOK delegation revoked past 60s grace window", delegationId, workspaceIdHash);
     this.name = "ByokDelegationRevokedError";
+  }
+}
+
+/**
+ * Per-turn consent re-gate (#4625 / mig 084 §7): the grantee withdrew consent
+ * mid-run, so the turn is refused and DEBITED TO THE GRANTEE. Added by #7829
+ * — before mig 137 this reason had no TS sibling at all, so every
+ * consent-withdrawal refusal landed in cost-writer's catch-all as
+ * `op=merged-rpc-failure`, destroying that slug's distinctness.
+ *
+ * REPORT-ONLY today. The only construction site is `cost-writer.ts`, which
+ * hands it to `reportSilentFallback` and never throws it. Adding a throw site
+ * puts `delegation_consent_withdrawn` on the WS wire via ws-handler's
+ * `delegation_${err.reason}` cast, which then needs the matching triple:
+ * `lib/types.ts` WSErrorCode, `lib/ws-zod-schemas.ts` enum, and a copy entry in
+ * `components/chat/delegation-error-card.tsx` (which renders null for an
+ * unknown code).
+ */
+export class ByokDelegationConsentWithdrawnError extends ByokDelegationError {
+  public readonly reason = "consent_withdrawn" as const;
+  constructor(delegationId?: string, workspaceIdHash?: string) {
+    super("BYOK delegation consent withdrawn mid-run", delegationId, workspaceIdHash);
+    this.name = "ByokDelegationConsentWithdrawnError";
   }
 }
 
