@@ -122,6 +122,32 @@ rc="$(rc_of "$LINT" "$FIX/violation-xtrace-spelling-below.sh")"
 [ "$rc" = "1" ] && pass "Rule B: 'set -o xtrace' spelling below preamble is reported" \
   || fail "Rule B xtrace spelling should report rc=1, got rc=$rc"
 
+# --- Rule D: one fixture per LIMB, ALONE (#7873) ------------------------------
+# Each fixture is compliant on every other limb, so a verdict can only be
+# attributed to the limb it violates. A fixture breaking two limbs at once would
+# make both rows pass while either check was dead.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-no-disable.sh")"
+[ "$rc" = "1" ] && pass "Rule D: credentialed curl without --disable is reported" \
+  || fail "Rule D no-disable should report rc=1, got rc=$rc"
+
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-no-noproxy.sh")"
+[ "$rc" = "1" ] && pass "Rule D: credentialed curl without --noproxy '*' is reported" \
+  || fail "Rule D no-noproxy should report rc=1, got rc=$rc"
+
+# POSITION, not presence. A presence-only check passes this fixture, and curl has
+# already read ~/.curlrc by the time a late --disable is parsed -- so the flag is
+# there and buys nothing. This is the row that makes the check mean what it says.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-disable-not-first.sh")"
+[ "$rc" = "1" ] && pass "Rule D: --disable present but NOT first is still reported" \
+  || fail "Rule D disable-not-first should report rc=1, got rc=$rc"
+
+# MUST-PASS. The flags are first at RUNTIME though the curl line names none of
+# them. Without this row the rule can be "fixed" into a false positive on every
+# array-built call site and the suite stays green -- measured on zot-inventory.sh.
+rc="$(rc_of "$LINT" "$FIX/compliant-ruled-array.sh")"
+[ "$rc" = "0" ] && pass "Rule D: array-built curl with the flags first PASSES (no false positive)" \
+  || fail "Rule D array-built compliant should pass, got rc=$rc"
+
 # --- SECRET_SIGNALS: one fixture per class, ALONE ----------------------------
 for c in doppler-get capture gh-auth; do
   rc="$(rc_of "$LINT" "$FIX/violation-signal-$c.sh")"
@@ -235,7 +261,7 @@ if not m:
 open(sys.argv[2], "w", encoding="utf-8").write(
     "#!/usr/bin/env bash\nset -uo pipefail\n\n"
     + m.group(1)
-    + '\n\ncurl -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true\n'
+    + '\n\ncurl --disable --noproxy \'*\' -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true\n'
 )
 PY
 then
@@ -344,7 +370,7 @@ mutate_row 'M3 Rule B: xtrace spelling dropped from TRACE_TOKENS' \
   "$FIX/violation-xtrace-spelling-below.sh" 1 0
 
 mutate_row 'M4 Rule B skipped entirely' \
-  's/violations \+= check_rule_b\(/violations += [] and check_rule_b(/' \
+  's/abc \+= check_rule_b\(/abc += [] and check_rule_b(/' \
   "$FIX/violation-trace-below-preamble.sh" 1 0
 
 # M6 needs its own expected pair: the fail-closed arm moves 2 -> 0, and NEITHER
@@ -359,6 +385,33 @@ mutate_row 'M6 fail-closed: unparseable treated as clean' \
 mutate_row 'M8 unenumerable: indirect arm dropped' \
   's/if INDIRECT_RE\.search\(body\) and not referenced_credentials\(lines\):/if False:/' \
   "$FIX/violation-indirect-conditional-hatch.sh" 1 0
+
+# --- Rule D mutation rows: the GUARD's own operands ---------------------------
+# Every row above mutates a FIXTURE and confirms Rule D reds. These mutate the
+# RULE and confirm it does not silently WIDEN -- a guard that accepts everything
+# is indistinguishable from a healthy run.
+mutate_row 'D1 Rule D: --disable check degenerated to always-match' \
+  's/CURL_DISABLE_FIRST = re\.compile\(r"[^"]*"\)/CURL_DISABLE_FIRST = re.compile(r"")/' \
+  "$FIX/violation-ruled-no-disable.sh" 1 0
+
+mutate_row 'D2 Rule D: --noproxy check degenerated to always-match' \
+  's/CURL_NOPROXY = re\.compile\(r"[^"]*"\)/CURL_NOPROXY = re.compile(r"")/' \
+  "$FIX/violation-ruled-no-noproxy.sh" 1 0
+
+mutate_row 'D3 Rule D skipped entirely' \
+  's/    d = check_rule_d\(/    d = [] and check_rule_d(/' \
+  "$FIX/violation-ruled-no-disable.sh" 1 0
+
+# The credential classifier is Rule D's scope gate: narrow it and the rule goes
+# green over the population it was written for, which is exactly how a baseline
+# shared with A/B/C would have neutered it.
+# The fixture's credential reaches curl ONLY on stdin, so SECRET_SIGNALS cannot
+# see it in argv either -- narrowing this one channel is the whole difference
+# between reporting the site and waving it through. A row scored against an
+# already-compliant fixture would read 0 -> 0 and prove nothing.
+mutate_row 'D4 Rule D: credential classifier narrowed (stdin-header channel dropped)' \
+  's/CURL_STDIN_HEADER = re\.compile\(r"[^"]*"\)/CURL_STDIN_HEADER = re.compile(r"(?!x)x")/' \
+  "$FIX/violation-ruled-stdin-header.sh" 1 0
 
 # --- H1: the floor must fail via a DIRECT exit, not through the helpers -------
 # H1: assert the floor by DRIVING it, not by grepping for its name -- the old

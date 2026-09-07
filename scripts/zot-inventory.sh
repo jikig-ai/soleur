@@ -76,6 +76,19 @@ set -uo pipefail
 # performs no filename globbing of its own, so turning it off costs nothing.
 set -f
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output. `case "$-" in *x*)`
+# tests whether tracing is ON rather than enumerating the eight ways to turn it on, two
+# of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}${ZOT_PULL_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Locale-pinned: every numeric shape gate below uses [[ =~ ]] with [0-9], and under a UTF-8
 # locale bash's collation makes the FULLWIDTH digits match that class.
 export LC_ALL=C
@@ -88,7 +101,10 @@ readonly MARKER_SCHEMA=1
 readonly MANIFEST_ACCEPT='application/vnd.oci.image.manifest.v1+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json'
 
 REGISTRY_URL="${ZOT_INVENTORY_REGISTRY_URL:-http://127.0.0.1:5000}"
-INGEST_URL="${ZOT_INVENTORY_INGEST_URL:-https://s2457081.eu-fsn-3.betterstackdata.com/}"
+# (#7873) ONE literal governs both the default and the pin below. Two copies would
+# be a drift seam, and the suite's source-mutation seam could only rewrite one of them.
+readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
+INGEST_URL="${ZOT_INVENTORY_INGEST_URL:-$INGEST_URL_PINNED}"
 RETRIES="${ZOT_INVENTORY_RETRIES:-3}"
 RETRY_SLEEP_S="${ZOT_INVENTORY_RETRY_SLEEP_S:-2}"
 MAX_PAGES="${ZOT_INVENTORY_MAX_PAGES:-50}"
@@ -175,6 +191,18 @@ trap 'rm -rf "$SCRATCH"' EXIT
 chmod 700 "$SCRATCH"
 
 REGISTRY_HOST="$(printf '%s' "$REGISTRY_URL" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')"
+# (#7873) The pull credential is written into the netrc `machine` line, and
+# REGISTRY_HOST derives from an env-settable URL with no validation -- so anything
+# that can set ZOT_INVENTORY_REGISTRY_URL could name the machine this token is
+# offered to. Validate BEFORE the netrc exists, not before the request.
+#
+# The pin is LOOPBACK, not one literal: zot runs on this host and the port varies
+# legitimately (the default is :5000; the suite's listeners bind ephemeral ports).
+# An exact-equality pin would be a pin on the port, which is not the property.
+case "$REGISTRY_HOST" in
+  127.0.0.1|localhost|::1|'[::1]') : ;;
+  *) die "refusing to write the pull credential into a netrc for non-loopback host '${REGISTRY_HOST}' (ZOT_INVENTORY_REGISTRY_URL must name the local registry)" 2 ;;
+esac
 NETRC="$SCRATCH/netrc"
 printf 'machine %s\nlogin %s\npassword %s\n' "$REGISTRY_HOST" "$ZOT_PULL_USER" "$ZOT_PULL_TOKEN" > "$NETRC"
 chmod 600 "$NETRC"
@@ -191,6 +219,10 @@ http_get() {  # $1 url, $2 accept (may be empty). Sets HTTP_CODE/HTTP_BODY/HTTP_
   HTTP_BODY="$(mktemp "$SCRATCH/body.XXXXXX")"
   HTTP_HDR="$(mktemp "$SCRATCH/hdr.XXXXXX")"
   local -a args=(
+    # (#7873) --disable must be FIRST: it aborts ~/.curlrc parsing, and by the time a
+    # later flag is read the file has already been honoured. --noproxy '*' closes the
+    # ALL_PROXY/HTTPS_PROXY redirect, which a host pin does not.
+    --disable --noproxy '*'
     --silent --show-error
     --netrc-file "$NETRC"
     --request GET
@@ -503,6 +535,13 @@ emit_and_exit() {  # $1 outcome, $2 reason
   # pretty-printed body puts literal newlines inside the shipped payload.
   jq -c -Rn --arg m "$line" '{message:$m}' > "$payload" || die "could not build the ingest payload." 2
 
+  # (#7873) The ingest bearer is about to be written into a config file whose `url`
+  # comes from an env-settable variable validated by nothing. Pin it to the one
+  # destination this credential belongs to. Exit non-zero: no boot depends on this.
+  if [ "$INGEST_URL" != "$INGEST_URL_PINNED" ]; then
+    die "refusing to forward the Better Stack ingest credential to unpinned destination '${INGEST_URL}' (expected '${INGEST_URL_PINNED}')" 2
+  fi
+
   local conf="$SCRATCH/ingest.conf"
   {
     printf 'url = "%s"\n' "$INGEST_URL"
@@ -513,7 +552,7 @@ emit_and_exit() {  # $1 outcome, $2 reason
   chmod 600 "$conf"
 
   local ingest_code rc
-  ingest_code="$(curl --silent --show-error --request POST --config "$conf" \
+  ingest_code="$(curl --disable --noproxy '*' --silent --show-error --request POST --config "$conf" \
     --max-time "$HTTP_TIMEOUT_S" --output /dev/null --write-out '%{http_code}' 2>>"$SCRATCH/curl.err")"
   rc=$?
   if [[ $rc -ne 0 && -z "$ingest_code" ]]; then ingest_code="000"; fi

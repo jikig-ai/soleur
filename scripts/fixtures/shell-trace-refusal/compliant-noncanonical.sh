@@ -14,4 +14,4 @@ esac
 
 readonly ENDPOINT="https://example.invalid/"
 printf 'header = "Authorization: Bearer %s"\n' "${BETTERSTACK_API_TOKEN_READONLY}" \
-  | curl -sS --config - "$ENDPOINT" || true
+  | curl --disable --noproxy '*' -sS --config - "$ENDPOINT" || true
