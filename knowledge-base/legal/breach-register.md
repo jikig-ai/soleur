@@ -90,10 +90,13 @@ exists to serve.
 Files that are determination-shaped under the CI guard's pinned pattern but fall outside this
 predicate are **not silently dropped**: each carries a committed `NOT_TRANSCRIBED` waiver with
 a reason, listed under §Excluded records below and checked by
-`scripts/lint-legal-registers.sh`, which is registered in `scripts/test-all.sh` and lands
-**advisory for one merge cycle** (#7787): for that window a finding is reported as a warning and
-does not block, while a fail-closed refusal still does. The control is real and its enforcement
-level is stated rather than implied.
+`scripts/lint-legal-registers.sh`, which is registered in `scripts/test-all.sh` and is
+**BLOCKING** as of 2026-09-07 (#7787): a finding fails the required `test` context. It landed
+advisory for one merge cycle and was promoted on measured evidence -- zero findings across that
+window, including two substantive legal amendments. The rc=2 asymmetry is unchanged by the
+promotion: an "I cannot decide" was always a hard failure and still is, which is what keeps a
+broken corpus distinguishable from a clean one. The control is real and its enforcement level is
+stated rather than implied.
 
 ## Provenance — why this file is dated 2026-09-03
 
@@ -155,6 +158,7 @@ as the standing rule for the next row. The machine-readable waiver list lives in
 | `knowledge-base/legal/audits/2026-06-counsel-review-5103.md` | No event and no determination: the sole `Art. 33` occurrence verifies the accuracy of a statutory-deadline catalog entry, not a fact pattern. A regex false positive (#7717) |
 | `knowledge-base/legal/audits/2026-08-counsel-review-7440.md` | Express Art. 4(12) assessment, but of a **prospective** PA-8 amendment with no fact pattern — nothing was destroyed, lost, altered or disclosed. There is no breach documentation to index, and a row would dilute the register with routine change approvals (#7717) |
 | `knowledge-base/legal/audits/2026-05-17-sentry-ingest-window-auth-users-audit.md` | Not a determination of its own, and the ground is **held, not pending**: this file is evidence *inside* an already-indexed determination. Its frontmatter classifies it `art-30-5-accountability-evidence` and its `incident_pir` names the very post-mortem the 2026-05-16 row indexes; what it records is a population count. Indexing it would enter one incident twice. Its match on the producer is a filing-posture reference ("CNIL Art 33 filing posture per brainstorm Decision #10"), not a fact pattern assessed against Art. 4(12) — true, but the thinner of the two grounds. Ruled 2026-09-03 (#7717, §B1/§A9), attested 2026-09-04 (#7791) |
+| `knowledge-base/legal/audits/2026-09-07-clo-attestation-7786-off-host-log-claims.md` | Not a determination: the **CLO attestation of PR #7881** (#7786 / #6474), produced under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12) and Art. 33 only to record that the Better Stack log-aggregation role addition was NOT an Art. 4(12) personal-data breach and therefore triggered no Art. 33/34 notification -- a determination that NO event occurred, about a disclosed processing change rather than about a fact pattern. Indexing it would put a non-event in a breach register. Cited #7786 |
 | `knowledge-base/legal/audits/2026-09-03-clo-attestation-7717-art-33-5-register.md` | Not a determination: the **CLO attestation of this register** (#7791), attested 2026-09-04 under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12) and Art. 33(5) in order to rule on the register's representation of each indexed determination, and so matches the producer pattern, but it assesses no fact pattern and records no controller determination of its own. Same disposition as `audits/2026-09-counsel-review-7717.md`; every future attestation of this register needs the same waiver — a known cost of scoping the producer to `audits/**`, not a defect (#7791, #7717) |
 | `knowledge-base/legal/audits/2026-09-counsel-review-7717.md` | Not a determination: the **counsel review of this register**, added 2026-09-03 under the ship Phase 5.5 gate. It quotes Art. 4(12) and Art. 33(5) throughout in order to rule on the predicate, and so matches the producer pattern, but it assesses no fact pattern and records no controller determination. Every future counsel review of this register will need the same waiver — that is a known cost of scoping the producer to `audits/**`, not a defect (#7717) |
 | `knowledge-base/legal/audits/2026-09-counsel-review-7625.md` | Not a determination: the **counsel review for the Art. 30 PA-7 amendment** (#7625), added 2026-09-04 under the ship Phase 5.5 gate. It cites Art. 4(12) only to record the *negative* — that an Art. 30(1) record-keeping incompleteness is not a personal-data breach and triggers no Art. 33/34 duty — and assesses no fact pattern: nothing was destroyed, lost, altered or disclosed. Same disposition as the #7440 row above: assessed and outside the inclusion predicate (#7717) |
@@ -169,7 +173,7 @@ as the standing rule for the next row. The machine-readable waiver list lives in
 - **Canonical-source column format (machine-readable — do not restyle).** The last column
   carries exactly one repo-relative path, backtick-delimited, and nothing else.
   `scripts/lint-legal-registers.sh` strips the backticks and resolves the path against the
-  working tree; a row whose pointer does not resolve is an assertion failure — which, for the advisory window (#7787), is reported as a warning and does **not** block, while a fail-closed refusal blocks throughout. Stated precisely because this is the bullet a maintainer reads before restyling the column. A determination register
+  working tree; a row whose pointer does not resolve is an assertion failure — which, since the 2026-09-07 promotion to blocking (#7787), **fails the required `test` context**. During the preceding advisory window it was reported as a warning and did not block; a fail-closed refusal (rc=2) blocked throughout and still does, and that asymmetry is what the promotion deliberately left untouched. Stated precisely because this is the bullet a maintainer reads before restyling the column. A determination register
   whose pointers rot is worse than none.
 - **Verified 2026-09-04 (#7791) — the 2026-05-15 row's accountability residual is recorded on a
   ground that is now spent, and the surviving ground is narrower.** That row's evidentiary cell

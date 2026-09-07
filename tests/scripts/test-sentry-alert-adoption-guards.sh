@@ -179,11 +179,13 @@ t_a5_replace_red() {
   local rc; rc=$(_rc bash "$TRIPWIRE" "$f")
   local msg; msg=$(_err bash "$TRIPWIRE" "$f")
   # Anchored on the FINDING LINE, not the bare name. The tripwire's static error
-  # prose says "Only two sentry_issue_alert resources may exist
-  # (auth_per_user_loop, sandbox_startup_failure)" on EVERY failure, so a bare
-  # `grep -q auth_per_user_loop` was satisfied by the boilerplate — a mutation
-  # that stopped naming the offending address left this row green. Verified by
-  # the review's mutation battery.
+  # prose names all three survivors (auth_per_user_loop, sandbox_startup_failure,
+  # git_data_boot_warning) on EVERY failure, so a bare `grep -q auth_per_user_loop`
+  # is satisfied by the boilerplate — a mutation that drops the real finding line
+  # would still pass. #7826 WIDENED that boilerplate from two names to three, so
+  # the trap is armed for `git_data_boot_warning` too: any future assertion that
+  # greps the tripwire's output for a bare resource name is vacuous. Anchor on the
+  # finding line's shape instead.
   if [[ "$rc" -eq 1 ]] && grep -qE 'sentry_issue_alert\.auth_per_user_loop actions=' <<<"$msg"; then
     _report "A5 a create_before_destroy REPLACE on sentry_issue_alert REDs (index, not ==)" ok
   else
