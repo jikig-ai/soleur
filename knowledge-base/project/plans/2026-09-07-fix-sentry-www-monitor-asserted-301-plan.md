@@ -18,6 +18,77 @@ requires_cpo_signoff: false
 > Engineering to be the only relevant domain; the frontmatter value stays
 > fail-closed regardless.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-07 · **Gates run:** 4.5 (skip — no SSH/network symptom
+and no SSH-provisioned resource in the apply set), 4.55 (skip — no serving-surface
+downtime), 4.6 ✓, 4.7 ✓, 4.8 ✓, 4.9 (skip — no UI surface), 4.10 ✓, 4.11 ✓.
+
+### What deepening changed
+
+1. **The design was replaced, not decorated.** The first design — an hourly GitHub
+   Actions probe check-ing in to a new Sentry cron monitor — was cut for one
+   Terraform resource on an already-wired Better Stack root. It is better on MTTD
+   (~20 min vs ~2 h) *and* strictly smaller: no workflow, no script, no cron
+   monitor, no test battery, and zero C4 count-parity clauses touched.
+2. **A P0 apply-path defect was found and fixed.** The web-platform root is
+   `-target=`-scoped, not full-root; the new monitor needs an allow-list line or it
+   is declared and never applied.
+3. **An accepted ADR (ADR-194) makes two claims this change falsifies** — found
+   only because a reviewer grepped the corpus this plan's own consumer sweep had
+   excluded.
+4. **The central claim is now falsified before merge, not after.** Phase 0's
+   transient probe (`confirmation_period = 0`, create → observe → delete) gates
+   everything, and AC24 was rewritten because the original could not fail inside
+   the confirmation window.
+5. **The alerting path gained a destination.** Better Stack has no `description`
+   field, so the alarm carries `pronounceable_name` plus a new runbook — but
+   `sentry_uptime_monitor` *does* have one, documented as used in the resulting
+   issue, so the Sentry half now explains itself to the operator.
+
+### Verification performed at deepen time
+
+All live, none recalled: Better Stack monitor/heartbeat counts via API (3 and 9 —
+refuting the pooled-quota concern and correcting this plan's own earlier
+arithmetic); every prescribed provider attribute checked against the pinned
+`0.20.17` docs; all 9 cited AGENTS rule IDs confirmed active; all 15 cited issue
+and PR numbers resolved, with `#4929`/`#6074` additionally confirmed to touch the
+Sentry monitor files their citation claims; `action-required` and `code-review`
+labels confirmed to exist; ADR-204 re-confirmed free across all 71 `origin/*` refs
+after a fresh fetch.
+
+### Round-1 realism passes (Phase 4.45)
+
+Both passes earned their place, which is the argument for running them *after* a
+heavy revision rather than instead of one:
+
+- **Verify-the-negative** confirmed 9 of 10 load-bearing negative claims against
+  vendor source and repo code, and **contradicted one**: the stale-claim sweep was
+  narrower than a repo-wide grep including `knowledge-base/`. Resolved by splitting
+  AC14 into live-guidance (corrected) and point-in-time records (deliberately not),
+  with the discriminator stated — *does the file assert a present-tense guarantee a
+  reader would act on?* — which is why one learning is corrected and two are not.
+- **Post-edit self-audit** found four artefacts of the revision itself: a surviving
+  "the C4 parity suite will red" bullet from the cut design that directly
+  contradicted the adopted design's own analysis; three Risks-table citations still
+  pointing at pre-renumbering AC numbers; a `~18 min` MTTD figure left over from
+  `confirmation_period = 900`; and three Observability-block references to the
+  Sentry monitor's pre-rename name. All four were invisible to every earlier
+  reviewer because they were *created* by applying the earlier reviews.
+
+### Errors this plan made and corrected in flight
+
+Recorded rather than quietly fixed, because each is an instance of a class the
+repo's own Sharp Edges warn about:
+
+- Concluded no `-target=` coverage guard existed after reading only the first
+  `describe` block of a 250 KB test file — the truncated-existence-check class.
+- Ran the consumer sweep with `':!knowledge-base'`, excluding the corpus most
+  likely to carry an architectural claim, and so missed ADR-194.
+- Counted Better Stack quota from `.tf` declarations rather than live state, and
+  missed an unmanaged monitor entirely.
+- Cited a paid-tier-gated block as an "established pattern" when it has never run.
+
 ## Overview
 
 The Sentry uptime monitor guarding `https://www.soleur.ai/` sits in a sustained
@@ -307,18 +378,20 @@ this plan.
 - **Guard suites.** `apps/web-platform/scripts/sentry-monitors-audit.sh` and
   `scripts/sentry-monitor-binding-gate.sh` are scoped to `sentry_cron_monitor` /
   `sentry_alert` respectively and do not quantify over `sentry_uptime_monitor`.
-- **`plugins/soleur/test/c4-count-parity.test.sh` is the orphan suite that will
-  red.** It parity-gates four numeric clauses in `model.c4`'s `github -> sentry`
-  edge against live derivations: C1 workflows containing `actions/sentry-heartbeat`,
-  C2 those with a `schedule:` key, C3 those without, C4
-  `grep -cF 'resource "sentry_cron_monitor"' cron-monitors.tf` (plus a derived
-  webapp-slug count = C4 − C1). Adding one scheduled heartbeat workflow and one
-  cron monitor moves C1, C2, C4 and the derived count. Its filename stem contains
-  neither "sentry" nor "uptime", so a diff-scoped test run would not reach it.
-- **Reusable check-in path.** `.github/actions/sentry-heartbeat` posts a single
-  `ok|error` Sentry Crons heartbeat; callers pair it with
-  `continue-on-error: true` so a Sentry blip never reds an otherwise-green probe.
-  `scheduled-realtime-probe.yml` is the closest shape to copy.
+- **`plugins/soleur/test/c4-count-parity.test.sh` is the orphan suite the REJECTED
+  design would have red.** It parity-gates seven numeric clauses in `model.c4`
+  (C1–C6 on the `github -> sentry` edge, C7 on `github -> resend`) against live
+  derivations — heartbeat workflows, those with a `schedule:` key, those without,
+  `grep -cF 'resource "sentry_cron_monitor"' cron-monitors.tf`, the GitHub-side and
+  webapp-side slug splits, and Resend emitters. Its filename stem contains neither
+  "sentry" nor "uptime", so a diff-scoped run does not reach it.
+
+  **The adopted design moves none of them**, because it adds no workflow, no cron
+  monitor and no heartbeat emitter — see `## Architecture Decision` → C4 views.
+  This bullet is retained rather than deleted because the *reason* the suite is
+  quiet here is a property of the design choice, not an accident: the rejected
+  scheduled-probe design would have moved C1, C2, C4, C5 and C6, and would have
+  had to find this suite by name to know it.
 - **Deploy-window interaction.** `deploy-docs.yml` pauses and resumes
   `soleur-ai-www` around the Pages publish because a rebuild transiently makes
   www serve its own 200 instead of the 301 (#4596, Option A). Note the dates:
@@ -593,7 +666,7 @@ liveness_signal:
   configured_in: apps/web-platform/infra/uptime-alerts.tf
 error_reporting:
   destination: Better Stack incident (primary) and, for the reachability half,
-               the Sentry uptime downtime issue on soleur_www
+               the Sentry uptime downtime issue on soleur_www_reachability
   fail_loud: true — an unreachable www fails BOTH vendors independently, which is
              the vendor-isolation property this root exists for. Neither can
              suppress the other.
@@ -611,7 +684,7 @@ failure_modes:
     alert_route: same
   - mode: www unreachable entirely (NXDOMAIN, TLS failure, 5xx, connect timeout)
     detection: TWO independent vendors — Better Stack sees a non-301, and
-               sentry_uptime_monitor.soleur_www (retargeted to 2xx, 300s interval,
+               sentry_uptime_monitor.soleur_www_reachability (2xx, 300s interval,
                downtime_threshold 3) fails at ~15 min
     alert_route: Better Stack incident + Sentry downtime issue
   - mode: the monitor itself goes vacuous — a future edit flips follow_redirects
@@ -630,7 +703,7 @@ failure_modes:
     alert_route: CI red at PR time only
 logs:
   where: Better Stack incident timeline and per-check history for the monitor;
-         Sentry uptime check records for soleur_www
+         Sentry uptime check records for soleur_www_reachability
   retention: Better Stack free-tier retention; Sentry event retention on the
              web-platform project
 discoverability_test:
@@ -661,12 +734,28 @@ single-sourced. The mode must return before the script's credentialed paths so t
 
 ### Operator-facing naming and the runbook
 
-`betteruptime_monitor` exposes **no `description` or `note` field** (verified
-against the pinned provider's argument list) — `pronounceable_name` is the only
-operator-facing string, and it is what lands in the incident email subject. Both
-existing monitors set it (`"soleur dot ai apex"`, `"soleur app dashboard"`); an
-earlier draft of this plan omitted it entirely, which would have left the alert
-titled by the vendor's URL default.
+The two vendors differ in how much they let an alert say, and the plan uses each
+to its limit rather than treating them the same:
+
+- **Better Stack exposes no `description` or `note` field** (verified against the
+  pinned provider's argument list) — `pronounceable_name` is the only
+  operator-facing string, and it is what lands in the incident email subject. Both
+  existing monitors set it (`"soleur dot ai apex"`, `"soleur app dashboard"`); an
+  earlier draft of this plan omitted it entirely, which would have left the alert
+  titled by the vendor's URL default.
+- **Sentry's `sentry_uptime_monitor` DOES expose `description`**, documented at the
+  pinned tag as *"A description of the monitor. **Will be used in the resulting
+  issue.**"* — so it reaches the operator, not just a reader of the `.tf`. The
+  `soleur_acme_probe` block in the same file already exploits this with a long
+  explanatory description, and that is the precedent to follow.
+
+So the renamed Sentry monitor **gains a `description`** stating that it guards www
+*reachability only*, that redirect-health lives on
+`betteruptime_monitor.soleur_www_redirect` (`"soleur dot ai www redirect 301"`),
+and pointing at the runbook and ADR-204. This is the single highest-leverage line
+in the change for the spec-flow finding that the paging path ends at a name in an
+inbox: on the Sentry half it no longer does. It costs one attribute and follows an
+in-file precedent.
 
 After this plan www is watched by two alarms meaning different things, so the
 names must disambiguate in an inbox at a glance:
@@ -827,6 +916,12 @@ does not, and ADR-204 says so explicitly.
   `sentry_uptime_monitor.soleur_www` as covering a canonical-host flip. Re-verify
   and repoint; the claim is about a config-drift class, so it may need only a
   pointer change rather than a rewrite.
+- `knowledge-base/project/learnings/2026-06-12-gsc-duplicate-canonical-on-www-variant-is-benign-consolidation.md`
+  — makes the same claim in the same words as the skill above (*"a uniform
+  `site.url`→www flip stays covered by `sentry_uptime_monitor.soleur_www` (the
+  live 301 monitor)"*), and a **learning is live guidance**, not a historical
+  record: `learnings-researcher` reads this corpus as current fact on every plan.
+  Repoint it at the Better Stack monitor.
 - `knowledge-base/engineering/architecture/diagrams/model.c4` — the `betterstack`
   element's monitor enumeration.
 - **`knowledge-base/engineering/architecture/decisions/ADR-194-*.md` — an ACCEPTED
@@ -1006,11 +1101,21 @@ than the ~2 h of the rejected scheduled-probe design.
 Comment each load-bearing attribute inline with why it is load-bearing, and cite
 the runbook and ADR-204.
 
-### Phase 3 — Retarget the Sentry monitor
+### Phase 3 — Retarget, rename, and describe the Sentry monitor
 
-Swap `soleur_www.assertion_json` to `local.uptime_assertion_2xx` and rewrite the
-comments to state the narrowed scope and point at the Better Stack monitor and
-ADR-204.
+1. Swap `assertion_json` to `local.uptime_assertion_2xx`.
+2. Rename the resource to `sentry_uptime_monitor.soleur_www_reachability` and its
+   `name` to `"soleur-ai-www-reachability"`; update `SENTRY_MONITORS` in
+   `cutover-verify.sh` in the same commit (AC13).
+3. **Add a `description`.** It reaches the operator — the provider documents it as
+   used in the resulting issue — so write it for the person reading the alert, not
+   the person reading the Terraform: what this monitor now guards (www
+   reachability), what it explicitly does **not** (the 301 itself), which monitor
+   does (`betteruptime_monitor.soleur_www_redirect` /
+   `"soleur dot ai www redirect 301"`), and the runbook path. Follow the
+   `soleur_acme_probe` precedent in the same file for tone and length.
+4. Rewrite the resource comment and the `WHY FOUR MONITORS` header bullet 2 to
+   match, citing the runbook and ADR-204.
 
 ### Phase 4 — The deploy-docs bracket
 
@@ -1141,12 +1246,37 @@ scoped to the addresses this PR touches.
     `name` on the renamed Sentry resource. (If they diverge, CUT8 reports `unknown`
     and `--capture-monitor-baseline` refuses to write — it fails safe, but this AC
     catches it before that.)
-14. No file outside `**/archive/**` and this plan's own artifacts still asserts that
-    `sentry_uptime_monitor.soleur_www` guards the 301 — verified by grepping the
-    claim's **content anchor**, not the bare monitor name, which legitimately still
-    appears. Covers `dns.tf` (both sites), `www-apex-canonicalizer.test.sh` (both),
-    `uptime-alerts.tf`, `seo-aeo/SKILL.md`, `cutover-verify.sh`'s CUT8 message, and
-    **ADR-194**'s two now-false passages — while its 526 passage is unchanged.
+14. No **live-guidance** file still asserts that `sentry_uptime_monitor.soleur_www`
+    guards the 301 — verified by grepping the claim's **content anchor**, not the
+    bare monitor name, which legitimately still appears. A repo-wide sweep
+    (explicitly **including** `knowledge-base/`, whose earlier exclusion is what hid
+    ADR-194) returns ~30 files. They split into two classes, and the AC asserts the
+    **split by enumerated file**, never a total count — a count is precisely the
+    brittle anchor `cq-assert-anchor-not-bare-token` warns against, and it would go
+    stale the next time any document mentions the monitor:
+
+    - **Corrected (live guidance — these seven files):** `dns.tf` (both sites),
+      `www-apex-canonicalizer.test.sh` (both), `uptime-alerts.tf`,
+      `cutover-verify.sh`'s CUT8 message, `plugins/soleur/skills/seo-aeo/SKILL.md`,
+      `knowledge-base/project/learnings/2026-06-12-gsc-duplicate-canonical-…md`, and
+      **ADR-194**'s two now-false passages — while ADR-194's 526 passage, which
+      stays true under a 2xx assertion, is deliberately untouched.
+    - **Deliberately not corrected (point-in-time records):** other features' merged
+      plans under `knowledge-base/project/plans/`, their specs and
+      `session-state.md` files under `knowledge-base/project/specs/`, the
+      `cloudflare-pages-cutover.md` runbook (which narrates the #7798 incident
+      rather than asserting an ongoing guarantee), the generated `INDEX.md`, and two
+      of the three matching learnings — `2026-05-29-plan-mandated-compound-selector…`
+      (a selector-discipline lesson that merely uses the monitor name in an example)
+      and `2026-07-17-unmanaged-is-not-dead…` (a measurement table with a date on
+      it). These record what was true when they were written; rewriting them
+      falsifies the historical record, exactly as the convention carving out a
+      feature's own migration artifacts requires. The AC asserts this set is
+      untouched, so "I fixed them all" and "I missed some" stay distinguishable.
+
+      The discriminator between the classes is **not** the directory: it is whether
+      the file asserts a *present-tense guarantee* a reader would act on. That is
+      why one learning is corrected and two are not.
 15. The `fixtures/dns.tf.pr4a-baseline` disposition decided in Phase 0 is visible in
     the diff: either edited, or explicitly listed as a deliberate carve-out with its
     reason. Silence is not an acceptable outcome for it.
@@ -1155,6 +1285,10 @@ scoped to the addresses this PR touches.
     untestable, which is otherwise an invitation to skip it.)*
 17. The runbook `www-redirect-alarm.md` exists, and every corrected comment cites
     both it and the sibling monitor by Terraform address **and** `pronounceable_name`.
+17b. `sentry_uptime_monitor.soleur_www_reachability` carries a non-empty
+    `description` that names the Better Stack monitor and the runbook — the field
+    the provider documents as "used in the resulting issue", i.e. the one string on
+    the Sentry side that reaches the operator rather than a reader of the `.tf`.
 18. `ADR-204-*.md` exists at `status: accepted`, records that redirect-target-health
     is now **single-vendor**, and its ordinal is re-derived free across all `origin/*`
     refs at ship time.
@@ -1255,14 +1389,14 @@ exception: none — no plaintext store and no disabled certificate verification 
 
 | Risk | Mitigation |
 |---|---|
-| **The `follow_redirects = false` + `expected_status_codes = [301]` combination is taken from vendor documentation, not measured against production** | This is the plan's one un-measured load-bearing claim, and it is called out rather than buried. Three independent supports: the pinned tag's own docs (both arguments quoted verbatim above); `expected_status_code` is already used in-repo; and **the repo's own `app` monitor corroborates the redirect semantics** — its comment reads *"follow_redirects = true: app.soleur.ai/ 307s to /login for an unauthenticated probe, so the monitor succeeds only if the full chain / -> 307 -> /login -> 200 returns 200"*, which is only a meaningful thing to write if `follow_redirects = false` would instead have surfaced the **307** to the check. That is precisely the semantics this plan depends on, reasoned from a sibling resource in the same file. AC18 still converts the claim to a measurement post-apply, and AC19 makes failure loud rather than silent |
-| **The bad outcome of that risk is epistemic, not functional** — if Better Stack turns out vacuous, we hold a green monitor that proves nothing | Worth stating plainly, because it bounds the downside: the Sentry monitor is *already* 100% failing, and a permanently-red monitor cannot signal a new failure, so retargeting it to 2xx forfeits no working detection — it strictly adds reachability coverage that does not exist today. The genuine harm in the bad branch is the false all-clear, which is why AC18 is a measurement rather than an assumption and AC19 escalates on silence |
+| **The `follow_redirects = false` + `expected_status_codes = [301]` combination is taken from vendor documentation, not measured against production** | This is the plan's one un-measured load-bearing claim, and it is called out rather than buried. Three independent supports: the pinned tag's own docs (both arguments quoted verbatim above); `expected_status_code` is already used in-repo; and **the repo's own `app` monitor corroborates the redirect semantics** — its comment reads *"follow_redirects = true: app.soleur.ai/ 307s to /login for an unauthenticated probe, so the monitor succeeds only if the full chain / -> 307 -> /login -> 200 returns 200"*, which is only a meaningful thing to write if `follow_redirects = false` would instead have surfaced the **307** to the check. That is precisely the semantics this plan depends on, reasoned from a sibling resource in the same file. AC23/AC24 still convert the claim to a measurement post-apply, and AC25 makes failure loud rather than silent |
+| **The bad outcome of that risk is epistemic, not functional** — if Better Stack turns out vacuous, we hold a green monitor that proves nothing | Worth stating plainly, because it bounds the downside: the Sentry monitor is *already* 100% failing, and a permanently-red monitor cannot signal a new failure, so retargeting it to 2xx forfeits no working detection — it strictly adds reachability coverage that does not exist today. The genuine harm in the bad branch is the false all-clear, which is why AC24 is a measurement rather than an assumption and AC25 escalates on silence |
 | **The new monitor false-fires during a docs-deploy window** (www transiently serves its own 200 during a Pages rebuild, ~15 min observed) | `confirmation_period = 1200` absorbs it without pausing anything, with ~5 min margin over the single observed 15-min window (900 would have had exactly zero). The symmetric cost — the same timer bounds real-regression MTTD at ~20 min — is stated in Phase 2 rather than buried. Deliberately *not* solved by a CI pause/resume bracket — that mechanism's stranding hazard is what Phase 4 removes |
 | **Retargeting `soleur_www` to 2xx weakens it silently**, and a future reader sees green and infers the redirect is healthy | The precise trap already documented one resource away on `soleur_acme_probe`. The comment must state what is no longer guarded; ADR-204 records it; and the property is not merely dropped — it moves to a named monitor |
 | **The Camp B acceptance in `dns.tf` was resting on a bound that never existed** | Corrected in the same PR rather than left to a follow-up, and the correction is why the design targets minutes rather than hours |
 | **Better Stack's role expands beyond "vendor isolation"** | Amended deliberately and recorded in ADR-204, not done silently. The amendment is narrow: properties Sentry structurally cannot express |
 | **Free-tier monitor cap** | 2 of 10 in use; this is the 3rd. Re-asserted live in Phase 0 before the block is written |
-| **`Closes #7798` auto-closes at merge, before post-merge verification** | AC19 makes the failure loud: an `action-required` issue is filed if the monitors have not gone green within an hour, rather than the closure standing on an unverified apply |
+| **`Closes #7798` auto-closes at merge, before post-merge verification** | AC25 makes the failure loud: containment runs and an `action-required` issue is filed if the monitors have not gone green, rather than the closure standing on an unverified apply |
 | **ADR ordinal collision** | Provisional; re-derived across all 71 origin refs at ship time, with a sweep of the full artifact set if it moves |
 | **The bad branch leaves a second permanently-red monitor mailing indefinitely**, with #7798 already auto-closed at merge | The single most important mitigation in this plan: the Phase 0 falsification probe runs **before any code is written**, so the branch is taken pre-merge in the ordinary case. If it is somehow reached post-merge anyway, AC25 is an explicit containment sequence — pause the monitor, revert the retarget, file `action-required`, re-open #7798 — rather than an implicit "someone will notice" |
 | **A red #5566 coverage guard is "fixed" via `OPERATOR_APPLIED_EXCLUSIONS`** instead of the `-target=` list, turning CI green while the monitor is never applied | AC5b asserts both halves. This is the specific wrong-remedy the architecture review predicted, on the exact monitor the plan exists to make effective |
@@ -1276,7 +1410,7 @@ exception: none — no plaintext store and no disabled certificate verification 
 | Recreate / `-replace` the monitor (the issue's fallback) | Reproduces byte-identical config against an unsatisfiable assertion; also unreachable, since `assertion_json` is an in-place attribute in the pinned provider |
 | `op_header_check` asserting the `Location` header in Sentry | Header ops read the **terminal** response, which is the apex's 200 and carries no `Location` |
 | Assert `equals 200` on www in Sentry and call it redirect-health | Passes equally when www serves its own 200 — the exact regression under guard. Vacuous |
-| **A scheduled GHA probe check-ing in to a new Sentry cron monitor** (this plan's own first design) | Rejected at CTO review on minimality and MTTD. It cost a workflow, a script, a cron monitor, a test battery and five C4 parity clauses, and delivered ~2h detection — which would have quietly widened the `dns.tf` Camp B acceptance from "one monitor interval" to two hours. Better Stack delivers ~18 min in one Terraform resource |
+| **A scheduled GHA probe check-ing in to a new Sentry cron monitor** (this plan's own first design) | Rejected at CTO review on minimality and MTTD. It cost a workflow, a script, a cron monitor, a test battery and five C4 parity clauses, and delivered ~2h detection — which would have quietly widened the `dns.tf` Camp B acceptance from "one monitor interval" to two hours. Better Stack delivers ~20 min in one Terraform resource |
 | Delete `sentry_uptime_monitor.soleur_www` outright | Better Stack carries no www monitor today, so deleting would leave www with **zero** reachability coverage from any vendor — losing DNS/TLS/5xx detection on a distinct CNAME surface, not just the already-lost redirect-health. Also costs an `[ack-destroy]`, a `SENTRY_MONITORS` edit and a baseline edit |
 | Inngest-dispatch the probe for tighter cadence (ADR-033) | GHA `schedule:` jitter is minutes; the rejected design's MTTD was dominated by its 1-hour interval, not jitter. Moot once the design is vendor-side |
 | Build the runtime target/origin assertion anyway | See Residual Gap — disproportionate to a threat the declared-config gate blocks on the only path Terraform owns. Tracked, with a named re-evaluation trigger |

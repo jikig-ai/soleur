@@ -70,10 +70,16 @@ start Phase 1 until it returns a verdict.
 - [ ] 3.1 Swap `assertion_json` to `local.uptime_assertion_2xx`.
 - [ ] 3.2 Rename the resource to `sentry_uptime_monitor.soleur_www_reachability`
       and its `name` to `"soleur-ai-www-reachability"`.
-- [ ] 3.3 Rewrite the resource comment and the `WHY FOUR MONITORS` header bullet
+- [ ] 3.3 **Add a `description`** to the renamed resource. The provider documents
+      it as "used in the resulting issue", so it reaches the operator — write it
+      for the alert reader: what it guards (www reachability), what it does not
+      (the 301), which monitor does (`betteruptime_monitor.soleur_www_redirect` /
+      `"soleur dot ai www redirect 301"`), and the runbook path. Follow the
+      `soleur_acme_probe` precedent in the same file.
+- [ ] 3.4 Rewrite the resource comment and the `WHY FOUR MONITORS` header bullet
       2 — state plainly what is and is not guarded now, in the voice the adjacent
       `soleur_acme_probe` comment uses.
-- [ ] 3.4 Update `SENTRY_MONITORS` in `cutover-verify.sh` to the new name, plus
+- [ ] 3.5 Update `SENTRY_MONITORS` in `cutover-verify.sh` to the new name, plus
       its two surrounding comments and the stale CUT8 PASS message.
 
 ## Phase 4 — The deploy-docs bracket
