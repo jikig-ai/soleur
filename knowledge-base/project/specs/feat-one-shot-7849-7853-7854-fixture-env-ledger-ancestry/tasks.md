@@ -10,26 +10,26 @@ predicate its mirrors follow. Do not reorder.
 
 ## 1. Setup — measure before changing (plan Phase 0)
 
-- [ ] 1.1 Run `INCIDENTS_REPO_ROOT=<main checkout> bash scripts/rule-metrics-aggregate.sh --dry-run`
+- [x] 1.1 Run `INCIDENTS_REPO_ROOT=<main checkout> bash scripts/rule-metrics-aggregate.sh --dry-run`
       read-only; record rc and the orphan id list verbatim into `measurements.md`.
-- [ ] 1.2 Re-derive the orphan set under the proposed predicate
+- [x] 1.2 Re-derive the orphan set under the proposed predicate
       (`test("^(hr|wg|cq|rf|pdr|cm)-")`) over the raw merged corpus. **Reconcile against 1.1** — the
       panel's independent derivation gave 30-before/5-after, this plan's gave 23-before. Proceed on
       neither number alone.
-- [ ] 1.3 Record fabricated-row counts by the two fixture markers (`gh pr merge 123`,
+- [x] 1.3 Record fabricated-row counts by the two fixture markers (`gh pr merge 123`,
       `apps/web-platform/lib/auth/foo.ts`) over active + both `.gz` archives. Baseline 143 / 0.
-- [ ] 1.4 Confirm the one-hop ancestry delta with the `measurements.md` M-4 probe.
-- [ ] 1.5 Confirm the five chokepoint registrations at their content anchors, and **measure each
+- [x] 1.4 Confirm the one-hop ancestry delta with the `measurements.md` M-4 probe.
+- [x] 1.5 Confirm the five chokepoint registrations at their content anchors, and **measure each
       one's reach**: how many `.claude/hooks/*.test.sh`, `tests/**` and `.github/scripts/test/*.sh`
       suites pass through one. Planning reads: 6/46, 2/84, 0/13. These become Guard 3's outside-set
       floor.
-- [ ] 1.6 Probe whether an env export in vitest `globalSetup` reaches worker children under **both**
+- [x] 1.6 Probe whether an env export in vitest `globalSetup` reaches worker children under **both**
       `pool: "forks"` and `WEBPLAT_TEST_USE_THREADS=1`. Fallback is `test.env` — never `setupFiles`.
-- [ ] 1.7 Read `git-env-list-parity.test.sh` in full (four extractors, three comparisons, one
+- [x] 1.7 Read `git-env-list-parity.test.sh` in full (four extractors, three comparisons, one
       hardcoded three-file scrub loop).
-- [ ] 1.8 Establish `cq-rule-ids-are-immutable`'s scope: does it bind hook-telemetry emitter
+- [x] 1.8 Establish `cq-rule-ids-are-immutable`'s scope: does it bind hook-telemetry emitter
       literals, or only `[id: …]` tags in AGENTS.md? Decides task 5.5.
-- [ ] 1.9 Enumerate every `.github/workflows/**` `run:` step matching
+- [x] 1.9 Enumerate every `.github/workflows/**` `run:` step matching
       `hook-git-env-coverage.test.sh`'s `RUNNER_RE`. Known: `skill-security-scan-corpus.yml`,
       `tenant-integration.yml`.
 

@@ -95,3 +95,86 @@ from `scripts/test-all.sh:2019`) is in **neither**, and carries no scrub.
 
 Max `ADR-<n>` claimed across every `origin/*` ref at plan time: **203**. ADR-204 is provisional and
 must be re-derived immediately before merge.
+
+---
+
+## Addendum — 2026-09-07 (work Phase 1 re-derivation)
+
+Re-ran M-1/M-2/M-3 at work-start rather than trusting the plan-time readings
+(`work/SKILL.md` §"Plan-quoted numbers are preconditions to verify"). The plan's readings hold;
+one task-list premise does not.
+
+### A-1 — M-1 reproduces exactly, and the orphan partition is sharper than recorded
+
+`INCIDENTS_REPO_ROOT=<main checkout> bash scripts/rule-metrics-aggregate.sh --dry-run` → `rc=5`,
+the same 23 ids, `Dropped 77 malformed line(s) … (kept 18946)`.
+
+Classifying all 23 on both axes the Phase 4 predicate cares about:
+
+| Class | Count | Disposition under `test("^(hr\|wg\|cq\|rf\|pdr\|cm)-")` |
+|---|---|---|
+| No section prefix | 20 | dropped — never claimed corpus membership |
+| Section-prefixed **and retired** | 3 | **survives the predicate** |
+| Section-prefixed and not retired | **0** | — |
+
+The three survivors are `cq-docs-cli-verification`, `cq-never-skip-hooks`,
+`cq-when-lefthook-hangs-in-a-worktree-60s`, and **all three are present in
+`scripts/retired-rule-ids.txt`**. There is no fourth category: every section-prefixed orphan in
+this corpus is a deliberately-retired rule whose hook emitter literal was never updated.
+
+Independently confirmed the predicate is safe: **0 of 105** AGENTS ids lack a section prefix, so
+it cannot exempt a live corpus rule.
+
+### A-2 — task 5.5's premise is wrong, and its prescribed remedy is unavailable
+
+The task list says "the five mis-prefixed `cq-` hook ids … rename the emitter literals where
+permitted". Measured: there are **three**, not five, and renaming is not the right treatment.
+Per A-1 they are retired rules, and `cq-rule-ids-are-immutable` states plainly that
+**"reintroducing a retired ID is linter-rejected"** — so they cannot be renamed back into the
+corpus, and renaming them to fresh ids would churn three hooks plus their suites while destroying
+the provenance link to the retirement record.
+
+**T1.8 resolved:** `cq-rule-ids-are-immutable` binds *"Rule IDs on AGENTS.md rules"*, enforced by
+`scripts/lint-rule-ids.py` over `[id: …]` tags. It does **not** bind hook-telemetry emitter
+literals. Renaming an emitter is therefore permitted — it is simply the wrong repair here.
+
+**Consequence for Phase 4:** the discriminator is two clauses, not one. An id is an orphan when it
+claims corpus membership (section prefix) **and** is neither current nor deliberately retired.
+This keeps task 5.3 intact — an injected `cq-<fake>` that is not retired still exits `rc=5` — and
+it retires task 5.5's rename work entirely.
+
+### A-3 — the #7853 leak is live, and reproduces at exactly the filed shape
+
+The plan records that the gdpr-gate rows rotated out of the ledger (M-2), which is true and could
+be misread as the defect being gone. It is not. Driving the suite with the sink pinned to this
+worktree:
+
+```
+CLAUDE_PROJECT_DIR="$PWD" bash plugins/soleur/test/gdpr-gate-self-test.test.sh   # rc=0, 13 passed
+```
+
+appended **8 rows**, matching #7853's filed breakdown exactly:
+
+| rule_id | event_type | rows |
+|---|---|---|
+| `gdpr-gate-staleness` | `warn` | 2 |
+| `gdpr-gate-staleness` | `deny` | 2 |
+| `hr-gdpr-gate-on-regulated-data-surfaces` | `applied` | 2 |
+| `gdpr-gate-cron-binding` | `min-wins` | 1 |
+| `gdpr-gate-cron-binding` | `unavailable` | 1 |
+
+The real ledger stayed at 1484 lines throughout, which is the same fact M-3 records: the redirect
+works, and nothing but the missing export stands between the suite and the operator's state.
+
+**Why the rows are absent from the real ledger despite a live leak:** `gdpr-gate.sh` resolves its
+sink as `${CLAUDE_PROJECT_DIR:-<script location walked up five>}`, so a run from a worktree lands
+in *that worktree's* `.claude/`. Recent runs have been from worktrees. The operator's checkout is
+hit whenever the suite runs from it — which is exactly the session shape #7853 was filed from.
+
+### A-4 — ledger drift since plan time (expected; recorded so later readings reconcile)
+
+Active ledger: **1086 → 1484 lines** over the intervening hours. The fabricated-marker counts are
+unchanged (`gh pr merge 123`: 109 active / 143 merged; `lib/auth/foo.ts`: 0 everywhere), so the
+Phase 3.5 quarantine target is still 109 rows in the active file with archives untouched — **not
+the 143 the task list names**, which is the merged-corpus figure and includes 34 rows sitting in
+the two `.gz` archives that Phase 3.5 explicitly does not touch.
