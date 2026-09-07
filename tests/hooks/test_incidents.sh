@@ -21,6 +21,23 @@ _report() {
   fi
 }
 
+# THIS SUITE MUST NOT INHERIT INCIDENTS_REPO_ROOT, and it is the one hook suite for which that is
+# true. Every case here copies lib/incidents.sh under a fresh $tmp and asserts the sink resolves to
+# $tmp/.claude/ -- which is `_incidents_repo_root()`'s BASH_SOURCE fallback, the exact behaviour
+# under test. But that function reads INCIDENTS_REPO_ROOT FIRST and returns it, so any inherited
+# value shadows the fallback and every write lands somewhere else.
+#
+# That is not hypothetical: since #7849 the runner chokepoints export the variable for the whole
+# run, so under `scripts/test-all.sh` this suite went RED at five assertions ("file empty or
+# missing", "concurrency ... got 0", "BASH_SOURCE resolves repo root ... file=") while passing
+# standalone. Isolation by lib-copy and isolation by env-var are not additive here -- the second
+# DEFEATS the first.
+#
+# Unsetting is safe rather than a hole: with no variable set, the fallback resolves from the copied
+# lib's own path, which is under $tmp for every case in this file. Nothing here sources or execs a
+# lib outside $tmp, so no case can reach the operator's real ledger.
+unset INCIDENTS_REPO_ROOT
+
 _with_fake_repo() {
   # Create a fake repo root mirroring the .claude/hooks/lib layout and copy the lib into it.
   #
