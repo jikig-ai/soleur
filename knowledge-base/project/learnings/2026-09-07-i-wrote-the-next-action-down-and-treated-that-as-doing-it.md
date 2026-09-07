@@ -44,10 +44,10 @@ intent that should have executed it.** The tell is that the stopping point never
 feels like a stop: it feels like a clean handoff, because the summary is
 accurate, the state is genuinely good, and the next step is genuinely stated.
 
-The skill corpus already names the shape — `review/SKILL.md` §6 says *"'CI is
+The skill corpus already names the shape — `review/SKILL.md` §6 *Exit Gate* says *"'CI is
 running' is NOT a handoff"* and *"the deferral does not announce itself as one —
 it reads as a status report with a clean summary, so nothing feels skipped."*
-Reading that rule did not prevent it, twice, in a session whose subject was
+Reading that rule did not prevent it, five times, in a session whose subject was
 inherited claims that nobody re-checked.
 
 ## Solution
@@ -136,7 +136,7 @@ that, rather than for the feeling of having handled it.
 
 ## Session Errors
 
-- **Ended two turns on a stated next action without executing it.** The operator
+- **Ended five turns on a stated next action without executing it.** The operator
   asked "why did you stop" five times, three of them inside the turns building
   the guard against it. **Prevention:** a turn whose last paragraph
   names an action must contain that action's tool call; a future-tense
@@ -169,6 +169,17 @@ that, rather than for the feeling of having handled it.
   stalled until noticed manually. **Prevention:** when rewriting a working
   mechanism, diff the new one against the properties the old one had — the loss
   is silent by construction.
+- **Corrected the stale count in one site of four and called the correction
+  done.** The commit existed only to fix `twice` → `five times`; it changed the
+  narrative and left the Session Errors bullet reading *"Ended two turns"* above
+  its own evidence saying five, plus a second `twice` in the Root cause section.
+  Two review seats found it independently. This is the file's own thesis
+  reproduced inside the correction for it — and the reason it survived is
+  identical: I searched for the phrasing I remembered writing rather than for
+  the number's subject. **Prevention:** after correcting a fact, grep the
+  SUBJECT (here: every count of the instances) and read every hit, then re-read
+  the corrected passages end-to-end. A residual-zero count for the old *string*
+  is evidence about that string and never about the claim.
 
 ## Related
 
@@ -177,3 +188,7 @@ that, rather than for the feeling of having handled it.
 - [the CLO determination it produced](../../legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md)
 - [i shipped the defect class my guard existed to forbid](2026-09-04-i-shipped-the-defect-class-my-guard-existed-to-forbid.md)
   — the same session's earlier learning; this one is its behavioural sibling.
+- [one-shot stops on the review summary as a pseudo-handoff](2026-05-07-one-shot-stops-on-review-summary-as-pseudo-handoff.md)
+  — the nearest prior art for this class. Its root cause is structural (a
+  missing continuation gate between one-shot steps); this one's is cognitive.
+  Both produce a turn that reads as a clean handoff and is not one.
