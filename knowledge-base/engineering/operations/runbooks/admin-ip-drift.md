@@ -18,10 +18,12 @@ Operator SSH to `soleur-web-platform` hangs or resets, AND the server-side
 time window. This distinguishes admin-IP drift from the fail2ban lockout
 class documented in `ssh-fail2ban-unban.md`.
 
+<!-- lint-infra-ignore start: pasted failure transcript, not a prescribed step. This is the reader's entry-point discriminator that routes between this runbook and ssh-fail2ban-unban.md; it cannot be renamed or moved. Class (b-transcript), owner #7874. -->
 ```text
 $ ssh root@135.181.45.178 'hostname'
 kex_exchange_identification: read: Connection reset by peer
 ```
+<!-- lint-infra-ignore end -->
 
 If the reset is accompanied by sshd journal entries for the operator IP
 (login attempts, banner exchange, auth failures), this is NOT admin-IP
@@ -34,7 +36,7 @@ allow-list.
 
 `apps/web-platform/infra/firewall.tf` scopes port-22 ingress to the CIDRs
 in `var.admin_ips`, hydrated from `Doppler prd_terraform/ADMIN_IPS` at
-apply time. When the operator's ISP-assigned egress IP rotates (router
+apply time. When the operator's ISP-assigned egress IP rotates (router<!-- lint-infra-ignore start: FALSE POSITIVE, class (a) -- owner #6806 (negation-context / possessive-actor). Possessive actor in a CAUSAL sentence about the operator's ISP -- describes why drift happens, prescribes nothing. The marker exists ONLY because the scanner reads whole files while selecting paths, so touching this file surfaces every latent finding in it. Prose is unchanged. REMOVE IT IN THE SAME PR that narrows the lint's producer, or this file reds. --><!-- lint-infra-ignore end -->
 reboot, NAT remapping, travel to a different network) and `ADMIN_IPS`
 has not been refreshed, the new packet is dropped by the firewall. sshd
 never sees the SYN.
@@ -170,14 +172,57 @@ dependency graph. Safe here because the change is confined to a single
 firewall resource, but run a full `terraform plan` in a follow-up to
 confirm no drift elsewhere.
 
-### Step R3 -- Verify
+### Last-resort diagnosis (SSH channel, after the no-SSH probes) -- Step R3: confirm SSH is restored
+
+This is the terminal verification of the recovery above, not an entry point --
+do not start here. Reach it only after Steps R1-R2 have run.
+
+**The authoritative verification of THIS recovery is the no-SSH one, and it is
+in the fence below.** Admin-IP drift is an L3 firewall condition: the packet
+never reaches sshd (see `## Root Cause`), so what the recovery changed is
+`var.admin_ips` -> the Hetzner firewall `source_ips`. `hcloud firewall describe`
+reads that back directly, and re-running `## Diagnosis` Steps 1, 3 and 4 --
+`curl ifconfig.me`, `doppler secrets get ADMIN_IPS`, `hcloud firewall describe`
+-- re-establishes both invariants without touching SSH at all.
+
+**A second no-SSH read answers "is the channel open?" without authenticating:**
+an L4 banner probe (`bash -c '</dev/tcp/<ip>/22'`, or `nc -z -w5 <ip> 22`) opens
+a TCP connection and reads the SSH banner. It discriminates the three states
+these runbooks separate -- no SYN-ACK/timeout means a firewall drop (this
+runbook); connection established then reset at the banner means fail2ban/sshd
+(`ssh-fail2ban-unban.md`); an `SSH-2.0-OpenSSH_...` banner means the channel is
+open. It is the same class of off-host read as the `curl ifconfig.me` already
+sanctioned in `## Diagnosis` Step 1.
+
+What the `ssh -vvv` below adds over both is narrower than it looks: it confirms
+**end-to-end key authentication**, which no off-host read can. That is why it is
+sanctioned under `hr-no-ssh-fallback-in-runbooks` -- not because no no-SSH read
+exists. It is a convenience confirmation, and it is last.
+
+**Observability layer:** the `hcloud` API and the L4 banner probe (operator
+machine). Layers 1-6 do NOT cover this: `apps/web-platform/infra/vector.toml`
+Source 2 (`system_journald`) ships `PRIORITY 0-2` only, and sshd/fail2ban auth
+lines are PRIORITY 4-6, so the sshd-journal discriminator both runbooks route on
+is readable only from the host console.
+
+Distinct from the `# Last-resort fallback:` curl service in `## Diagnosis`
+Step 1, which is an L3 egress-IP probe and has nothing to do with this section.
+
+Distinct from the `# Last-resort fallback:` curl service in `## Diagnosis`
+Step 1, which is an L3 egress-IP probe and has nothing to do with this section.
 
 ```bash
-# Operator machine:
-ssh -vvv root@135.181.45.178 'hostname'
-
-# From operator with Hetzner CLI auth:
+# 1. AUTHORITATIVE, no SSH -- did the firewall actually take the new CIDR?
 hcloud firewall describe soleur-web-platform | grep -A1 'port: "22"'
+
+# 2. No SSH, no authentication -- is the channel open? Reads the banner only.
+#    timeout/no SYN-ACK = still firewalled; reset at banner = fail2ban (see
+#    ssh-fail2ban-unban.md); SSH-2.0-OpenSSH_... = open.
+timeout 5 bash -c 'cat </dev/tcp/135.181.45.178/22' | head -1
+
+# 3. Convenience only -- confirms end-to-end KEY AUTH, which the reads above
+#    cannot. Everything before this point has already determined the outcome.
+ssh -vvv root@135.181.45.178 'hostname'
 ```
 
 SSH should succeed on first try. The firewall rule's source_ips should
@@ -207,7 +252,7 @@ hotspot + one travel/coworking).
 - **Doppler write succeeds but `terraform apply` forgotten:** A silent
   drift the other direction -- Doppler has the new CIDR but the firewall
   does not. The skill explicitly prompts for `terraform apply` and
-  refuses to mark itself "done" until the operator confirms they ran
+  refuses to mark itself "done" until the operator confirms they ran<!-- lint-infra-ignore start: FALSE POSITIVE, class (a) -- owner #6806 (negation-context / possessive-actor). Describes what the AUTOMATION refuses to do; the operator is the object of a confirmation, not the actor of an infra step. The marker exists ONLY because the scanner reads whole files while selecting paths, so touching this file surfaces every latent finding in it. Prose is unchanged. REMOVE IT IN THE SAME PR that narrows the lint's producer, or this file reds. --><!-- lint-infra-ignore end -->
   it. A scheduled daily drift check (deferred, tracked separately)
   catches this class within 24 hours.
 - **Audit trail:** Doppler logs every secret mutation by token identity.
@@ -224,7 +269,7 @@ hotspot + one travel/coworking).
   `doppler secrets set` in the `prd_terraform` config. Per AGENTS.md
   `hr-menu-option-ack-not-prod-write-auth`, destructive writes against
   shared prod require per-command go-ahead.
-- Do NOT SSH into the host to "fix" the firewall live. The firewall
+- Do NOT SSH into the host to "fix" the firewall live. The firewall<!-- lint-infra-ignore start: FALSE POSITIVE, class (a) -- owner #6806 (negation-context / possessive-actor). NEGATION context -- the runbook FORBIDS the very action the lint flags it for. Suppressing a prohibition is the clearest false positive in the class. The marker exists ONLY because the scanner reads whole files while selecting paths, so touching this file surfaces every latent finding in it. Prose is unchanged. REMOVE IT IN THE SAME PR that narrows the lint's producer, or this file reds. --><!-- lint-infra-ignore end -->
   lives in Terraform; changes go through `terraform apply`, not
   `iptables`/`nftables` edits on the host. Per AGENTS.md
   `hr-all-infrastructure-provisioning-servers`, SSH is read-only

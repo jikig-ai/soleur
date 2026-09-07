@@ -79,7 +79,22 @@ PAGES_REL="$INFRA_REL/cf-pages.tf"
 REDIR_REL="$INFRA_REL/seo-bulk-redirects.tf"
 WF_REL=".github/workflows/deploy-docs.yml"
 CNAME_REL="plugins/soleur/docs/CNAME"
-NEEDED=("$GUARD_REL" "$DNS_REL" "$PAGES_REL" "$REDIR_REL" "$WF_REL" "$CNAME_REL")
+# uptime-alerts.tf joined the list at #7798, when the guard gained the Guard 1 cases that
+# assert betteruptime_monitor.soleur_www_redirect's load-bearing attributes. Omitting it did
+# NOT produce a subtle wrong answer: the baseline check below caught it as a HARNESS ABORT,
+# which is the property this harness was written to have. Re-derive this list from the guard
+# when it changes, never from memory:
+#   $ grep -nE 'REPO_ROOT|SCRIPT_DIR' www-apex-canonicalizer.test.sh
+UPTIME_REL="$INFRA_REL/uptime-alerts.tf"
+# SENTRY_REL and CUTOVER_REL joined at #7798 review, when Guard 1 gained the
+# SENTRY_MONITORS <-> resource-name cross-read. Omitting them did NOT produce a subtle
+# wrong answer: the baseline check below caught it as a HARNESS ABORT, which is the
+# property this harness was written to have. Third time it has caught a stale NEEDED
+# list on this branch. Re-derive from the guard whenever it changes, never from memory:
+#   $ grep -nE 'REPO_ROOT|SCRIPT_DIR' www-apex-canonicalizer.test.sh
+SENTRY_REL="$INFRA_REL/sentry/uptime-monitors.tf"
+CUTOVER_REL="$INFRA_REL/cutover-verify.sh"
+NEEDED=("$GUARD_REL" "$DNS_REL" "$PAGES_REL" "$REDIR_REL" "$WF_REL" "$CNAME_REL" "$UPTIME_REL" "$SENTRY_REL" "$CUTOVER_REL")
 
 for rel in "${NEEDED[@]}"; do
   mkdir -p "$SANDBOX/$(dirname "$rel")" || die "could not create sandbox dir for $rel"
@@ -128,6 +143,8 @@ PAGES = "apps/web-platform/infra/cf-pages.tf"
 REDIR = "apps/web-platform/infra/seo-bulk-redirects.tf"
 GUARD = "apps/web-platform/infra/www-apex-canonicalizer.test.sh"
 WF    = ".github/workflows/deploy-docs.yml"
+UPTIME = "apps/web-platform/infra/uptime-alerts.tf"
+SENTRY = "apps/web-platform/infra/sentry/uptime-monitors.tf"
 
 ROOT = sys.argv[2]
 def path(rel): return os.path.join(ROOT, rel)
@@ -345,10 +362,109 @@ def m10():
     wr(DNS, t.replace(old, 'content = "jikig-ai.github.io"'))
 
 
+# =========================================================================================
+# GUARD 1 (#7798) — the www-redirect ALARM. Added at review: the guard gained seven cases
+# and this battery had ZERO rows touching uptime-alerts.tf, so the whole section's evidence
+# lived in a markdown file. Committed here because an uncommitted battery is a claim.
+#
+# Each row is a ONE-TOKEN edit that leaves the alarm declared and reading correct.
+# =========================================================================================
+
+def _sub(rel, old, new, why):
+    t = rd(rel)
+    assert t.count(old) == 1, "%s: %s (found %d)" % (rel, why, t.count(old))
+    wr(rel, t.replace(old, new, 1))
+
+
+# W2: repoint the probe at the apex. no-follow + [301] against a URL that serves 200 —
+#     #7798 verbatim, an alarm that cannot pass.
+def w_url():
+    _sub(UPTIME, '\n  url                = "https://www.soleur.ai/"',
+                 '\n  url                = "https://soleur.ai/"', "www url anchor")
+
+
+# W3: `status` is 2xx-only. The status-code list goes inert and the monitor reports GREEN
+#     exactly when www serves the site instead of redirecting. FAILS OPEN.
+def w_type():
+    _sub(UPTIME, 'monitor_type       = "expected_status_code"',
+                 'monitor_type       = "status"', "monitor_type anchor")
+
+
+# W7: the #7798 STATE in one token — declared, applied, checking nothing.
+def w_paused():
+    _sub(UPTIME, '\n  verify_ssl = true\n  paused     = false\n}\n\n# Conditional escalation policy',
+                 '\n  verify_ssl = true\n  paused     = true\n}\n\n# Conditional escalation policy', "paused anchor")
+
+
+# W8: free tier => policy_id null => email is the ONLY channel. Disarm it and an incident
+#     opens that nobody is told about.
+def w_armed():
+    _sub(UPTIME, '\n  email = true\n  call  = false\n  sms   = false\n  push  = false\n\n  team_name = "Your team"\n\n  # Follows the file convention',
+                 '\n  email = false\n  call  = false\n  sms   = false\n  push  = false\n\n  team_name = "Your team"\n\n  # Follows the file convention', "channel block anchor")
+
+
+# W9: dns.tf's Camp B acceptance is re-grounded on this exact bound and says not to widen
+#     it without revisiting the ruling. Nothing enforced that before this case.
+def w_conf():
+    _sub(UPTIME, "  confirmation_period = 1200", "  confirmation_period = 86400", "confirmation_period anchor")
+
+
+# W10: `for_each = {}` is the same defect as `count = 0`, other keyword. The file's own
+#      betteruptime_policy is count-gated on that flag, so it is the idiomatic next edit.
+def w_foreach():
+    _sub(UPTIME, "  monitor_type       = \"expected_status_code\"",
+                 "  for_each = var.betterstack_paid_tier ? toset([\"x\"]) : toset([])\n  monitor_type       = \"expected_status_code\"", "for_each insert anchor")
+
+
+# W11: ignore_changes stops the pinned attributes converging — the guard keeps reading them
+#      out of a file Terraform was told to ignore. ONE-LINE form deliberately: the anchored
+#      regex missed exactly this, and the row is what caught it.
+def w_ignore():
+    # Anchored on the block-TERMINAL text: `verify_ssl = true / paused = false / }` ends
+    # all three monitors in this file, so the short form is not unique and `_sub`'s
+    # count==1 assert (correctly) refuses it.
+    _sub(UPTIME, "\n  verify_ssl = true\n  paused     = false\n}\n\n# Conditional escalation policy",
+                 "\n  verify_ssl = true\n  paused     = false\n\n  lifecycle { ignore_changes = [follow_redirects] }\n}\n\n# Conditional escalation policy",
+                 "lifecycle insert anchor")
+
+
+# W14: the SENTRY_MONITORS <-> resource-name coupling. Two magic strings, no compiler.
+def w_sentry_name():
+    _sub(SENTRY, 'name         = "soleur-ai-www-reachability"',
+                 'name         = "soleur-ai-www-renamed-again"', "sentry name anchor")
+
+
+# W15: the pause bracket, REWORDED and carrying the Sentry credential back. The first draft
+#      of the absence assertion pinned the deleted step's exact spelling and passed this.
+def w_pause_reworded():
+    _sub(WF, "      - name: Probe www\u2192apex 301",
+             "      - name: Disable the www monitor for the publish window\n"
+             "        id: suppress_www\n"
+             "        env:\n"
+             "          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}\n"
+             "        run: |\n"
+             "          echo reworded\n"
+             "      - name: Probe www\u2192apex 301", "probe step anchor")
+
+
+# G-uptime-fmt: the FAR SIDE. Before attr_list this was a FALSE POSITIVE — `attr` read the
+# first physical line, so a terraform fmt-legal multi-line list returned a bare `[`. Every
+# other Guard 1 row is must-trip; without this one nothing catches the guard becoming too
+# aggressive on this file.
+def g_uptime_fmt():
+    _sub(UPTIME, "  expected_status_codes = [301]",
+                 "  expected_status_codes = [\n    301,\n  ]", "status codes anchor")
+    _sub(UPTIME, "  follow_redirects = false", "  follow_redirects   =    false", "follow_redirects anchor")
+
+
 ROWS = {
     "M1": m1, "M2": m2, "M3": m3, "M4": m4, "M4b": m4b, "M5a": m5a, "M5b": m5b,
     "M6": m6, "M7a": m7a, "M7b": m7b, "M8": m8, "M9": m9, "M10": m10, "H1": h1,
     "G-stage": g_stage, "G-pinned": g_pinned, "G-unpinned": g_unpinned, "H2": h2,
+    "W-url": w_url, "W-type": w_type, "W-paused": w_paused, "W-armed": w_armed,
+    "W-conf": w_conf, "W-foreach": w_foreach, "W-ignore": w_ignore,
+    "W-sentry-name": w_sentry_name, "W-pause-reworded": w_pause_reworded,
+    "G-uptime-fmt": g_uptime_fmt,
 }
 
 row = sys.argv[1]
@@ -479,13 +595,28 @@ case_row M10 kill "www record matches the cf-pages stage" ""
 case_row M8  kill "vacuity floor" ""
 case_row H1  kill "vacuity floor" ""
 
+# --- GUARD 1 (#7798): the www-redirect alarm ---------------------------------------------
+# Nine kills + one far-side green. Before these, uptime-alerts.tf was copied into the
+# sandbox and mutated by nothing: replacing the entire Guard 1 section with tautologies
+# left this battery reporting 18/18.
+case_row G-uptime-fmt     green ""                                  "a terraform fmt-legal multi-line status-code list is accepted"
+case_row W-url            kill "probes www, not some other host"    ""
+case_row W-type           kill "monitor_type=expected_status_code"  ""
+case_row W-paused         kill "is not paused"                      ""
+case_row W-armed          kill "notification channel armed"         ""
+case_row W-conf           kill "confirmation_period = 1200"         ""
+case_row W-foreach        kill "no count/for_each gate"             ""
+case_row W-ignore         kill "no lifecycle ignore_changes"        ""
+case_row W-sentry-name    kill "SENTRY_MONITORS matches"            ""
+case_row W-pause-reworded kill "no SENTRY_* secret"                 ""
+
 # ---------------------------------------------------------------------------------------
 # An exact row cardinality, reported directly and NOT through this battery's own PASS/FAIL
 # accounting: a battery whose rows were deleted prints `0/0 mutants killed` and exits 0,
 # which is the vacuity class this file exists to close, one level up. Bump it deliberately
 # when you add a row.
 # ---------------------------------------------------------------------------------------
-EXPECTED_ROWS=18
+EXPECTED_ROWS=28
 if [[ "$TOTAL" -ne "$EXPECTED_ROWS" ]]; then
   printf '[FATAL] battery cardinality: %d rows executed, expected exactly %d — a row was deleted, skipped, or added without updating EXPECTED_ROWS\n' \
     "$TOTAL" "$EXPECTED_ROWS" >&2

@@ -175,6 +175,7 @@ Cost-model R&D line: update only when status is `active` (not pre-order).
 
 Fresh Robot host has **no** repo checkout. Copy the script from a machine that has this tree, then run as root:
 
+<!-- lint-infra-ignore start: REAL AUTOMATION DEBT, class (c) -- tracked by #7882. These are PROVISIONING steps reaching a host through an operator shell, which hr-all-infrastructure-provisioning-servers forbids; that rule BINDS here. (hr-fresh-host-provisioning-reachable-from-terraform-apply does NOT bind -- it is scoped to prod services under apps/<app>/infra/.) Deferred, not sanctioned: the target is a Robot dedicated GEX44 provisioned by installimage, so no cloud-init or terraform apply channel exists to route these through yet. Remediation candidates and the re-evaluation trigger are on #7882. This region is a DEFERRAL MARKER, not a verdict -- do NOT read it as sanction, and re-triage it when remediating. Deliberately NOT framed as a "Last-resort diagnosis": this is provisioning, not a diagnostic, and reframing it that way would be gaming the gate. -->
 ```bash
 # From a soleur checkout that contains scripts/dogfood/grok-gpu-bootstrap.sh
 # <!-- verified: 2026-07-17 source: scripts/dogfood/grok-gpu-bootstrap.sh -->
@@ -187,6 +188,7 @@ ssh root@${GEX_IP} 'bash /tmp/grok-gpu-bootstrap.sh --model <exact-ollama-tag> -
 # Later re-runs can use the cloned tree:
 # ssh root@${GEX_IP} 'bash /home/dogfood/soleur/scripts/dogfood/grok-gpu-bootstrap.sh'
 ```
+<!-- lint-infra-ignore end -->
 
 Idempotent: NVIDIA detect → install `ss`/iproute2 → Ollama with `OLLAMA_HOST=127.0.0.1:11434` → **fail closed** if `ss` missing or public bind → Grok CLI → config.toml → shallow clone `/home/dogfood/soleur` → optional pull.
 

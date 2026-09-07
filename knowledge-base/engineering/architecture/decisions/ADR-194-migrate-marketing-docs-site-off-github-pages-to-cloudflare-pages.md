@@ -11,7 +11,6 @@ brand_survival_threshold: single-user incident
 
 # Migrate the marketing/docs site off GitHub Pages to Cloudflare Pages
 
-
 > **Amended 2026-09-02 (PR2) — the publish verb is not swapped; both origins
 > publish through the cutover window, and the sequence grows a fifth PR.**
 >
@@ -47,12 +46,11 @@ brand_survival_threshold: single-user incident
 > PF7 / D3 item 3(b) is **retired by construction** and was not measured; see the
 > plan's D3 supersession note.
 
-
 ## Status
 
 **ACCEPTED** — 2026-08-20. Written to support a decision; the operator took it on
-the evidence recorded below. The mitigation it supersedes (`ssl = "full"`, PR
-#7584) is live and the site is healthy, so the migration proceeds without time
+the evidence recorded below. The mitigation it supersedes (`ssl = "full"`,
+PR #7584) is live and the site is healthy, so the migration proceeds without time
 pressure — and `ssl = "full"` stays in place until the migration is verified
 live. Implementation is tracked in issue #7640.
 
@@ -294,6 +292,15 @@ CNAME file, and the 301) and would need rewriting, since its premise becomes
 false. Runtime drift is guarded by `sentry_uptime_monitor.soleur_www`, which
 keeps working unchanged because the asserted URL does not move.
 
+> **Amended 2026-09-07 (#7798, ADR-204).** That sentence was false when written,
+> and not because of the migration. `sentry_uptime_monitor.soleur_www` was never
+> "working": its `equals 301` assertion is unsatisfiable, since Sentry's uptime
+> checker always follows 3xx and evaluates against the final response — so it was
+> comparing 301 to the apex's 200 and failing every check. Runtime drift of the
+> 301 is guarded by `betteruptime_monitor.soleur_www_redirect`
+> (`follow_redirects = false`); the Sentry monitor is retargeted to 2xx and
+> renamed `soleur_www_reachability`.
+
 ### What gets deleted
 
 - `cron-gh-pages-cert-reissue.ts` (~1,700 lines) + `cron-gh-pages-cert-reissue.test.ts`
@@ -462,8 +469,14 @@ Two implementation choices inside (iii), both deliberate:
   The divergence buys a better failure mode: if the redirect ever stops firing, www serves the
   site (duplicate content, already covered by the apex `<link rel="canonical">` and the
   canonical-host build gate) instead of a hard Cloudflare 522 on an HSTS-preloaded host. Both
-  are caught by `sentry_uptime_monitor.soleur_www` within one confirmation interval, so
-  detection is a wash and the severity is not.
+  are caught by `betteruptime_monitor.soleur_www_redirect` (~23 min: 180 s cadence + 1200 s
+  confirmation), so detection is comparable and the severity is not.
+
+  > **Amended 2026-09-07 (#7798, ADR-204).** This named
+  > `sentry_uptime_monitor.soleur_www` "within one confirmation interval". That monitor
+  > caught neither outcome: `equals 301` cannot be true on a URL Sentry follows to a 200,
+  > so it had failed continuously since the assertion landed. "Detection is a wash" is
+  > true again only because the property moved to a vendor that can express it.
 
 Not reconsidered here, because the migration does not touch them: Rule 10, its ACME carve-out
 clause, `always_use_https = "off"`, and the `ssl = "full"` Configuration Rule.
@@ -536,8 +549,16 @@ resources rather than assumed:
 | Probe | Cadence | Threshold | Time to page |
 |---|---|---|---|
 | `sentry_uptime_monitor.soleur_apex` | 300s | `downtime_threshold = 3` | ~15 min |
-| `sentry_uptime_monitor.soleur_www` | 300s | `downtime_threshold = 3` | ~15 min |
+| `sentry_uptime_monitor.soleur_www_reachability` | 300s | `downtime_threshold = 3` | ~15 min |
 | `betteruptime_monitor.soleur_apex` | 180s | `confirmation_period = 60` | ~4 min |
+
+> **Amended 2026-09-07 (#7798, ADR-204).** This table is presented as "read from the
+> resources rather than assumed", and one of its three rows was inert for the whole period
+> it describes: `sentry_uptime_monitor.soleur_www` (row 2, renamed here to
+> `soleur_www_reachability`) asserted `equals 301` on a redirecting URL, which Sentry cannot
+> satisfy. Its "~15 min" was never delivered. The row is accurate NOW, under the 2xx
+> retarget. The 526 conclusion above is unaffected — a 2xx assertion fails on a 526 exactly
+> as the old one would have — which is why that passage is deliberately left standing.
 
 An earlier draft of this amendment said "within one check interval … 180s cadence" for all three.
 That was wrong twice over — only BetterStack runs at 180s, and no probe *alerts* within one
