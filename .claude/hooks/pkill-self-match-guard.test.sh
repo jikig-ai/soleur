@@ -28,7 +28,7 @@ fail() { VERDICTS+=("FAIL"); printf '  FAIL %s\n' "$1"; }
 run_case() {
   local name="$1" cmd="$2" want="$3" out got
   out="$(jq -nc --arg c "$cmd" '{tool_name:"Bash", tool_input:{command:$c}}' | bash "$HOOK" 2>/dev/null || true)"
-  if printf '%s' "$out" | grep -q '"permissionDecision"[[:space:]]*:[[:space:]]*"deny"'; then got=deny; else got=allow; fi
+  if grep -q '"permissionDecision"[[:space:]]*:[[:space:]]*"deny"' <<<"$out"; then got=deny; else got=allow; fi
   [[ "$got" == "$want" ]] && pass "$name (=$want)" || fail "$name — wanted $want got $got"
 }
 

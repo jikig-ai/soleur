@@ -55,11 +55,15 @@ CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null |
 
 # Does the command use pkill/pgrep with -f? Match the flag in any bundled form
 # (-f, -af, -fl) and as a separate token.
-if ! printf '%s' "$CMD" | grep -qE "\b(pkill|pgrep)\b[^|;&]*[[:space:]]-[a-zA-Z]*f" 2>/dev/null; then
+# HERESTRING, deliberately (#6992 / #7024, enforced by
+# .claude/hooks/grep-q-pipe-guard.test.sh). `grep -q` exits on its first match,
+# so a piped producer can die on SIGPIPE — and in a policy gate that reads as
+# "no match", i.e. fail-OPEN. A herestring has no producer to kill.
+if ! grep -qE "\b(pkill|pgrep)\b[^|;&]*[[:space:]]-[a-zA-Z]*f" <<<"$CMD" 2>/dev/null; then
   exit 0
 fi
 
-TOOL_USED="$(printf '%s' "$CMD" | grep -oE '\b(pkill|pgrep)\b' 2>/dev/null | head -1 || echo "pkill")"
+TOOL_USED="$(grep -oE '\b(pkill|pgrep)\b' <<<"$CMD" 2>/dev/null | head -1 || echo "pkill")"
 
 reason="BLOCKED: \`${TOOL_USED} -f\` is self-matching here. \`-f\` matches the pattern against the FULL COMMAND LINE of every process, and the Bash tool runs your command as \`bash -c '<the whole command>'\` — so the invoking wrapper's own argv contains your pattern. pkill/pgrep exclude only their own pid, never the parent or a sibling watcher.
 
