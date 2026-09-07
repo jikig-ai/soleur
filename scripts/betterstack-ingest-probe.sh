@@ -29,6 +29,22 @@
 # These mirror scripts/zot-restart-loop-alarm.sh's contract so a caller can propagate directly.
 
 set -uo pipefail
+
+# REFUSE TO RUN UNDER xtrace WITH A LIVE CREDENTIAL BOUND (#7797 / #7858).
+#
+# This probe forwards `Authorization: Bearer $BETTERSTACK_LOGS_TOKEN` to an ingest endpoint, so a
+# `set -x` anywhere above it would trace the write credential into this job's output. The rule
+# arrived on main from #7858 while this branch was in flight; touching this file forfeits its
+# baseline grandfathering, which is the correct behaviour — a credential-binding script being
+# edited is exactly when the refusal should be added.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 export LC_ALL=C
 
 : "${BETTERSTACK_INGEST_URL:=https://s2457081.eu-fsn-3.betterstackdata.com/}"
@@ -49,10 +65,43 @@ fi
 # is hypothetical — the same variable name is already exported into host environments elsewhere
 # in this repo, so an http:// value would put the ingest token on the wire in cleartext. No `-L`,
 # so a 30x cannot forward the header either.
-case "$BETTERSTACK_INGEST_URL" in
-  https://*.betterstackdata.com/*) : ;;
+#
+# (#7855) MATCH THE AUTHORITY, NOT THE WHOLE URL. This was
+# `case "$BETTERSTACK_INGEST_URL" in https://*.betterstackdata.com/*)`, and a shell glob's `*`
+# crosses `/` and `?` — so the leading wildcard swallowed the entire authority and the vendor
+# name only had to appear SOMEWHERE later in the string. Measured against that pattern on
+# 2026-09-04:
+#
+#   https://evil.com/?x=.betterstackdata.com/              -> ACCEPTED
+#   https://attacker.example.org/a/.betterstackdata.com/x  -> ACCEPTED
+#
+# The scheme anchor was sound; the host anchor was decorative. Both URLs would have put a live
+# bearer ingest token on an attacker-controlled host. The fix extracts the authority first, so
+# every wildcard below is confined to a string that cannot contain a path, a query or a
+# fragment.
+_bs_rest="${BETTERSTACK_INGEST_URL#https://}"
+if [[ "$_bs_rest" == "$BETTERSTACK_INGEST_URL" ]]; then
+  # No https:// prefix was removed, so the scheme is not https.
+  emit "INGEST_PROBE_UNCONFIGURED" "-" "BETTERSTACK_INGEST_URL is not an https:// URL; refusing to forward the ingest credential to it"
+  exit 2
+fi
+_bs_auth="${_bs_rest%%/*}"      # cut the path
+_bs_auth="${_bs_auth%%\?*}"     # and a query on an authority-only URL
+_bs_auth="${_bs_auth%%#*}"      # and a fragment
+# Userinfo is the third way to put a vendor-looking string to the LEFT of the real host
+# (`https://s1.betterstackdata.com@evil.com/` resolves to evil.com). This probe never needs
+# credentials in the URL, so the whole component is refused rather than parsed around.
+if [[ "$_bs_auth" == *"@"* ]]; then
+  emit "INGEST_PROBE_UNCONFIGURED" "-" "BETTERSTACK_INGEST_URL carries userinfo, which puts the real host after an @; refusing to forward the ingest credential to it"
+  exit 2
+fi
+_bs_host="${_bs_auth%%:*}"      # drop an explicit port
+# The leading dot is load-bearing: without it `notbetterstackdata.com` — a registrable lookalike
+# — would satisfy a bare suffix match.
+case "$_bs_host" in
+  *.betterstackdata.com) : ;;
   *)
-    emit "INGEST_PROBE_UNCONFIGURED" "-" "BETTERSTACK_INGEST_URL is not an https betterstackdata.com endpoint; refusing to forward the ingest credential to it"
+    emit "INGEST_PROBE_UNCONFIGURED" "-" "BETTERSTACK_INGEST_URL host '${_bs_host}' is not a betterstackdata.com endpoint; refusing to forward the ingest credential to it"
     exit 2
     ;;
 esac
@@ -76,7 +125,18 @@ fi
 
 case "$http" in
   2*)
-    emit "INGEST_ACCEPTING" "$http" "the write endpoint accepted an empty batch"
+    # (#7855) THE NAME IS THE FINDING. This read `INGEST_ACCEPTING`, and that token was printed
+    # verbatim with http=202 for the whole 27-hour window of #7811 — an issue titled "Better
+    # Stack is accepting no writes". The endpoint acknowledged every batch and stored none of
+    # them, so the only word in the verdict was the one thing the run had not established.
+    #
+    # A 2xx from this endpoint means the request was ACKNOWLEDGED. Storage is a separate claim
+    # and this probe cannot make it: it posts an empty batch by design (see the header — a
+    # writing probe would satisfy the absence alarm's any-row control forever), so there is
+    # nothing for it to read back. The instrument that CAN establish storage is
+    # scripts/followthroughs/betterstack-roundtrip-latency-7855.sh, which writes a marker and
+    # reads it out again.
+    emit "INGEST_ACKNOWLEDGED" "$http" "the write endpoint acknowledged an empty batch; this establishes reachability and credential validity ONLY — it does NOT establish that any row was stored, which needs a readback (scripts/followthroughs/betterstack-roundtrip-latency-7855.sh)"
     exit 0
     ;;
   402)
