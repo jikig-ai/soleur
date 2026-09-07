@@ -118,30 +118,30 @@ Lane: `cross-domain` — no `spec.md` exists for this branch, so the lane defaul
 
 ## Phase 3 — UI
 
-- [ ] **3.1** Extend the copy spec if any string is still missing; every user-facing string
+- [x] **3.1** Extend the copy spec if any string is still missing; every user-facing string
       comes from `knowledge-base/project/specs/feat-restore-byok-usage-dashboard/copy.md`
       §§11-17. Nothing authored inline in the TSX.
-- [ ] **3.2** `test/components/settings/api-usage-breakdown.test.tsx` (RED) — the four
+- [x] **3.2** `test/components/settings/api-usage-breakdown.test.tsx` (RED) — the four
       suppression states, the no-raw-slug assertion, the disclosure-always-renders assertion,
       and the rendered-text footnote assertions.
-- [ ] **3.3** `components/settings/api-usage-section.tsx`:
-  - [ ] **3.3.1** The breakdown block between the MTD summary and the conversation list, per
+- [x] **3.3** `components/settings/api-usage-section.tsx`:
+  - [x] **3.3.1** The breakdown block between the MTD summary and the conversation list, per
         `workflow-cost-breakdown.pen`: proportional bars **scaled to the largest bucket**, not
         the total; rows show label, total, count, and average per conversation.
-  - [ ] **3.3.2** The four-state suppression matrix. Legacy-only gets its own explanatory line
+  - [x] **3.3.2** The four-state suppression matrix. Legacy-only gets its own explanatory line
         (a *different* message from "only one workflow"); every other single-bucket or
         zero-MTD-with-history case renders **nothing**; `null` renders one unavailable line in
         a muted inset — **red stays reserved** for the section-wide failure.
-  - [ ] **3.3.3** Largest-remainder allocation so displayed parts sum to the displayed whole; a
+  - [x] **3.3.3** Largest-remainder allocation so displayed parts sum to the displayed whole; a
         non-zero amount below display precision renders `<$0.0001`, never `$0.0000`.
-  - [ ] **3.3.4** The attribution disclosure, rendering whenever the breakdown renders — not
+  - [x] **3.3.4** The attribution disclosure, rendering whenever the breakdown renders — not
         behind a tooltip, not conditional on bucket count. Mechanism with a worked
         `plan → work` example; no hedge words.
-  - [ ] **3.3.5** Scope the cross-check footnote: `match to the cent` stays **byte-unchanged**;
+  - [x] **3.3.5** Scope the cross-check footnote: `match to the cent` stays **byte-unchanged**;
         add the sentence enumerating what the Console can confirm; and fix the existing hedge
         to `under-report`. Assert on rendered output — a source grep for `may under-reflect` is
         vacuous because the JSX splits it across `:142-143`.
-  - [ ] **3.3.6** The "what is a workflow?" tooltip attaches to the **breakdown block header**,
+  - [x] **3.3.6** The "what is a workflow?" tooltip attaches to the **breakdown block header**,
         not the section header (which already carries three of a different family).
 
 ## Phase 4 — Verify
