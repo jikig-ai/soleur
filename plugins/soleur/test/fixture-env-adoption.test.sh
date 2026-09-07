@@ -187,6 +187,31 @@ _strip_code_data() { sed -E "s/'[^']*\"[^']*'//g; s/\`[^\`]*\"[^\`]*\`//g" "$1";
 # is all the classifier reads, survives; a whole `"… git commit …"` argument does not.
 _strip_shell_data() { sed -E 's/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g' "$1"; }
 
+# The return-check (assertion 4) needs to find CALLS, and `_strip_shell_data` is the wrong tool for
+# that: deleting EVERY double-quoted span deletes the call itself in the two commonest checked
+# forms. Measured against the sed above:
+#     eval "$(git_fixture_env "$d")"            ->  eval $d
+#     out="$(git_fixture_env "$d")" || exit 1   ->  out=$d || exit 1
+# Both lose the call name entirely, so an unchecked call in either form was invisible to the very
+# assertion that exists to find it -- a false NEGATIVE, the direction that matters. And comments
+# were not stripped at all, so a commented-out call counted as a live call site and was reported
+# unchecked, inflating the floor that certifies the check is non-vacuous.
+#
+# A command substitution inside double quotes is CODE, not data, so double-quoted spans are NOT
+# stripped here at all. Two reasons. First, sed cannot pair quotes: a rule that removes spans
+# "containing no $" matched the ` || setup_die ` BETWEEN two quoted arguments and spliced a real,
+# properly-checked call into an unrecognisable one -- measured on
+# test-infra-suite-registration-mutations.sh:89, reported as unchecked when its own line ends in
+# `|| setup_die`. Second, stripping them is unnecessary: SHELL_HELPER_CALL_RE anchors the call to a
+# statement boundary (^, ;, &, |, backtick, $(), and prose inside a string is preceded by a quote,
+# which is not one. So: drop single-quoted literals (no expansion is possible inside them) and drop
+# comment lines.
+_strip_shell_calls() {
+  # Comment lines are BLANKED, not deleted: the failure message reports file:line, and dropping
+  # lines here would renumber every call site below the first comment.
+  sed -E "s/'[^']*'//g; s/^[[:space:]]*#.*\$//" "$1"
+}
+
 # A LINE is mutating iff none of its own tokens is in the READ allowlist. Classified PER LINE and
 # the file admitted if ANY line is mutating — never pooled per file. Pooling was the first
 # implementation and it was wrong in the fail-OPEN direction: `test/pre-merge-rebase.test.ts` spawns
@@ -510,7 +535,7 @@ for f in $(git ls-files "${SHELL_ROOTS[@]}" 2>/dev/null \
     if [[ "$body" != *"||"* && "$body" != *"&&"* && ! "$body" =~ ^[[:space:]]*(if|while|until)[[:space:]] ]]; then
       unchecked+="$f:$ln"$'\n'
     fi
-  done < <(_strip_shell_data "$f" | grep -nE "$SHELL_HELPER_CALL_RE" 2>/dev/null)
+  done < <(_strip_shell_calls "$f" | grep -nE "$SHELL_HELPER_CALL_RE" 2>/dev/null)
 done
 readonly CALL_SITE_FLOOR=10
 if (( call_sites >= CALL_SITE_FLOOR )); then

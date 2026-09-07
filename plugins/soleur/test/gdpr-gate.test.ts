@@ -5,21 +5,19 @@ import {
   readdirSync,
   statSync,
   mkdtempSync,
+  mkdirSync,
   writeFileSync,
 } from "node:fs";
 import { resolve, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join as joinPath } from "node:path";
 
 // #7853: this suite drives the REAL gdpr-gate.sh, which emits gdpr-gate-staleness,
 // gdpr-gate-cron-binding and hr-gdpr-gate-on-regulated-data-surfaces rows on every run. Without a
 // sandbox they land in the operator's live .claude/.rule-incidents.jsonl, which compound reads as
 // deviation evidence and rule-metrics-aggregate.sh rolls into a COMMITTED artifact.
-const INCIDENT_SANDBOX = mkdtempSync(joinPath(tmpdir(), "gdpr-gate-incidents-"));
-mkdirSync(joinPath(INCIDENT_SANDBOX, ".claude"), { recursive: true });
+const INCIDENT_SANDBOX = mkdtempSync(join(tmpdir(), "gdpr-gate-incidents-"));
+mkdirSync(join(INCIDENT_SANDBOX, ".claude"), { recursive: true });
 process.env.INCIDENTS_REPO_ROOT = INCIDENT_SANDBOX;
 process.env.SOLEUR_TEST_INCIDENT_ROOT = INCIDENT_SANDBOX;
 

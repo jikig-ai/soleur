@@ -226,7 +226,13 @@ describe("Guard 1 — fixture git writes are contained under a hostile inherited
       "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
       "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE", "GIT_TEMPLATE_DIR", "GIT_EXEC_PATH",
       "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
-      "GIT_EXTERNAL_DIFF", "GIT_PROXY_COMMAND", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY0",
+      "GIT_EXTERNAL_DIFF", "GIT_PROXY_COMMAND", "GIT_CONFIG_COUNT",
+      // git spells these with an underscore before the index. `GIT_CONFIG_KEY0` is kept
+      // deliberately -- it is NOT a real git variable, so it only exercises the prefix sweep --
+      // but the two REAL keys must be injected under their real names, or the "the inherited
+      // value must not survive" loop below compares against a value that was never set and two
+      // of its three assertions pass vacuously.
+      "GIT_CONFIG_KEY0", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
       "GIT_CONFIG_PARAMETERS", "GIT_TRACE", "GIT_TRACE2", "GIT_TRACE_CURL", "GIT_ATTR_SOURCE",
       "GIT_ALLOW_PROTOCOL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_DATE",
     ];
