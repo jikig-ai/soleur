@@ -47,7 +47,7 @@ function showLedgerRef(): string {
     fatal(
       `could not read ${LEDGER_REF}: ${msg(e)}. That branch is maintained by the upstream CLA action ` +
         "and is absent from a shallow single-branch clone — fetch it with " +
-        "`git fetch origin +refs/heads/cla-signatures:refs/remotes/origin/cla-signatures`, " +
+        "`git fetch --no-tags origin +refs/heads/cla-signatures:refs/remotes/origin/cla-signatures`, " +
         "or pass a ledger path explicitly.",
     );
   }

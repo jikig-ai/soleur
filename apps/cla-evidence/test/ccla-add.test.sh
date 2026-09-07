@@ -51,7 +51,9 @@ trap 'rm -rf "$WORK"' EXIT
 # still ABORTS — "could not read the reference set" must never degrade to an
 # empty ledger, which would pass every account.
 if ! git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null; then
-  git fetch --depth=1 -q origin \
+  # --no-tags is load-bearing, not tidiness: `git fetch` auto-follows tags, and the gate runner samples the repo's refs as a read-only boundary — a plain fetch wrote 157 tags and tripped [FATAL] A SUITE WROTE TO THE LIVE REPOSITORY on CI run 34123093118.
+  # Measured: plain fetch creates tags, --no-tags creates none and still fetches the ref.
+  git fetch --no-tags --depth=1 -q origin \
     '+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures' 2>/dev/null
   git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null \
     || { echo "harness: could not read the ICLA ledger at origin/cla-signatures, even after a" >&2

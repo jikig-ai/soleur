@@ -210,7 +210,9 @@ if [[ -z "$LEDGER_FILE" ]]; then
   # the shell harness) all recover it the same way; this was the last one that
   # did not.
   if ! git show "origin/cla-signatures:signatures/cla.json" > "$LEDGER_FILE" 2>/dev/null; then
-    git fetch --depth=1 -q origin \
+    # --no-tags: `git fetch` auto-follows tags, and writing 157 of them into the
+    # caller's repository to read one JSON file is a side effect nobody asked for.
+    git fetch --no-tags --depth=1 -q origin \
       '+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures' 2>/dev/null
   fi
   if ! git show "origin/cla-signatures:signatures/cla.json" > "$LEDGER_FILE" 2>/dev/null; then

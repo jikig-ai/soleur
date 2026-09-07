@@ -201,7 +201,11 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
       // Missing locally. One shallow fetch of exactly this ref.
       execFileSync(
         "git",
-        ["fetch", "--depth=1", "origin", "+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures"],
+        // `--no-tags` is load-bearing: `git fetch` auto-follows tags, and the
+        // gate runner samples the repo's refs as a read-only boundary — a plain
+        // fetch wrote 157 tags and tripped "[FATAL] A SUITE WROTE TO THE LIVE
+        // REPOSITORY" on CI run 34123093118.
+        ["fetch", "--no-tags", "--depth=1", "origin", "+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures"],
         { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
       );
       return JSON.parse(show());
