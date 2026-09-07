@@ -299,6 +299,11 @@ readonly CODE_DIRECT_SPAWN_RE='\b(execFileSync|execSync|spawnSync|execFile|spawn
 # floor below would read 0 on every run and fire on a healthy tree. Measured -- it did exactly that.
 _C_COUNTS="$(mktemp "$TMPDIR/g5-c-counts.XXXXXXXX")" || {
   printf '[FATAL] mktemp failed for derivation C counters\n' >&2; exit 2; }
+# ADR-129: the allocation needs an OWNING trap, not just the `rm -f` further down. Between this
+# line and that one the script can die -- a floor can `exit 1`, an assertion helper can abort --
+# and the counters file then survives in $TMPDIR. This file installs no other EXIT trap, so a
+# plain one is correct here rather than a composed one.
+trap 'rm -f "$_C_COUNTS"' EXIT
 printf '0 0\n' > "$_C_COUNTS"
 _c_bump() { # $1=files delta  $2=spawns delta
   local f sp; read -r f sp < "$_C_COUNTS"
@@ -661,7 +666,13 @@ if (( OUT_UNARMED_N <= OUT_UNARMED_CEILING )); then
 else
   fail "out-of-scope suites with NO tripwire: $OUT_UNARMED_N EXCEEDS ceiling $OUT_UNARMED_CEILING — a new plugins/soleur/test shell suite mutates git with neither the builder NOR test-helpers.sh, so an inherited GIT_DIR retargets it at every layer"
 fi
-readonly OUT_CEILING=20
+# 20 -> 22 on 2026-09-07. Both additions arrived from main while this branch was open and neither
+# is in this PR's diff: plugins/soleur/test/gdpr-gate-glob-liveness.test.sh and
+# plugins/soleur/test/vendor-pin-integrity.test.sh. Raised rather than converted because this root
+# is out of scope by construction (see the header) -- converting it is the conversion PR this
+# ceiling exists to force, not a drive-by on someone else's new suite. Both source test-helpers.sh,
+# so the tripwire IS armed for them and the separate no-tripwire ceiling below stays at 7.
+readonly OUT_CEILING=22
 if (( OUT_N <= OUT_CEILING )); then
   pass "out-of-scope unconverted count $OUT_N <= ceiling $OUT_CEILING (ratchet: lower the ceiling when you convert one)"
 else

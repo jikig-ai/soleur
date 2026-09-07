@@ -247,6 +247,7 @@
 1	plugins/soleur/test/c4-from-components.test.sh
 6	plugins/soleur/test/fanout-suite-scope.test.sh
 1	plugins/soleur/test/fixture-dir-operand-assert.test.sh
+2	plugins/soleur/test/fixture-env-adoption.test.sh
 1	plugins/soleur/test/fixture-relative-assert.test.sh
 2	plugins/soleur/test/git-fixture-env.mutation.sh
 4	plugins/soleur/test/harvest-debt.test.sh
