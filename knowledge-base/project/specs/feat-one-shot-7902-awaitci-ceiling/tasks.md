@@ -94,15 +94,15 @@ silently runs a subset).
 
 ## Phase 6: Architecture records
 
-- [ ] 6.1 Re-derive the next free ADR ordinal across **every** `origin/*` ref (205 and 206 are
+- [x] 6.1 Re-derive the next free ADR ordinal across **every** `origin/*` ref (205 and 206 are
       claimed on pushed branches; a `main`-scoped probe is wrong). Author
       `ADR-<n>-ci-declared-budget-bounds-deploy-gate.md`, `status: accepted`.
-- [ ] 6.2 Amend ADR-072 — **amend, not supersede**. Add the re-measurement, record that item 4's
+- [x] 6.2 Amend ADR-072 — **amend, not supersede**. Add the re-measurement, record that item 4's
       sizing premise was stated in run-wall-clock terms (a quantity the gate does not measure), and
       correct the option-1 record.
-- [ ] 6.3 Update #5806 with the evaluation outcome, the fourteen scoping findings, and the re-armed
+- [x] 6.3 Update #5806 with the evaluation outcome, the fourteen scoping findings, and the re-armed
       criterion keyed to time-to-`test`. Do **not** close it.
-- [ ] 6.4 If the ordinal moved, sweep `knowledge-base/project/{plans,specs}/` for the old number.
+- [x] 6.4 If the ordinal moved, sweep `knowledge-base/project/{plans,specs}/` for the old number.
 
 ## Phase 7: Ship
 

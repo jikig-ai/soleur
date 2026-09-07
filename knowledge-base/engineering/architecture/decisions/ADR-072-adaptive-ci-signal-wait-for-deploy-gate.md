@@ -150,3 +150,53 @@ dropped):
 
 Cross-reference: ADR-078 (raised-ceiling named-trade-off ADR precedent); ADR-011 (the
 fail-closed-gate discipline this extends).
+
+## Amendment — 2026-09-07 (#7902)
+
+**This ADR is AMENDED, not superseded.** Decision items 1-3, 5 and 6 stand unchanged, as do the
+fail-closed posture and every named invariant. Only item 4's *sizing premise* is falsified.
+
+**What was wrong.** Item 4 sized `CEILING_S=3000s` "above the observed p100 CI-under-contention
+duration (~28m, measured 2026-06-30 over the last 50 main ci.yml runs)". That figure is stated in
+**run wall-clock** terms — a quantity this gate does not measure. `await-ci` polls the `test`
+**check-run** and exits 0 the moment it concludes, so the gated quantity is **time-to-`test`**.
+The two happen to coincide today only because `test-scripts` is the tail of the run; they diverge
+precisely when that is fixed. Sizing a gate in a quantity it does not observe is the durable
+lesson here, and it is why the replacement constant is expressed in the gated metric.
+
+**Re-measurement (2026-09-07, last 25 completed push runs on `main`, time-to-`test` = the `test`
+job's `completed_at` minus the run's `created_at`):** p50 35.2m, p90 54.0m, p100 57.4m, with
+4/25 at or above 50m. The 3000s ceiling had been crossed twice in a row on healthy builds
+(elapsed 3005s and 3002s), blocking every web-platform deploy fail-closed.
+
+**What changed.**
+
+- `CEILING_S` 3000 -> **3600** (60m), sized above the re-measured p100 of 57.4m.
+- `MAX_ATTEMPTS` 300 -> **360**, which item 4 named as "the loop's iteration backstop". This is
+  not cosmetic: the loop runs `seq 1 $((MAX_ATTEMPTS + RECONCILE_ATTEMPTS))` and falls through on
+  exhaustion to a fail-closed error reporting `total_budget * INTERVAL_S`. Left at 300, loop
+  exhaustion would have become the binding bound at ~3060s — the raise would have bought 60
+  seconds instead of 10 minutes while item 4's own "the elapsed ceiling is primary" claim
+  silently became false.
+- `timeout-minutes` 60 -> **72**, preserving item 4's `timeout-minutes >= 1.2 x CEILING_S`
+  invariant exactly (4320 = 1.2 x 3600).
+- `scripts/prod-version-drift-check.sh`'s `DRIFT_SUSTAINED_THRESHOLD_MIN` 195 -> **207**, moved
+  FIRST because its B9 assertion is `threshold >= critical path`.
+
+**Correction to the record on Alternative 1.** This ADR rejected "just raise the ceiling" on the
+grounds that it was a pure deferral. That rejection was made *pre-adaptive-wait* and no longer
+stands on that ground: with the adaptive wait in place a raise is bounded by CI-run liveness
+rather than open-ended. The raise is nonetheless NOT shipped alone here — the same PR shards
+`test-scripts`, which is what stops the new ceiling being spent. A raise alone would have
+repeated a pattern this repo has already lived twice.
+
+**Option 3 (`workflow_run`) remains deferred on #5806, and the reason has changed.** It is no
+longer "not yet needed"; it is that the swap carries a demonstrated **fail-open**: under
+`workflow_run`, `github.sha` resolves to the default-branch tip, so the #3409 `EXPECTED_SHA`
+gate would compare an un-CI'd SHA against itself and pass. It would also permanently `skip`
+`live-verify` (whose `if:` ends `github.event_name == 'push'`). Today's failure is a blocked
+deploy; that one is an unverified deploy reporting success.
+
+**New coupling.** [ADR-208](./ADR-208-ci-declared-budget-bounds-deploy-gate.md) makes CI's
+contribution to this gate a declared, mechanically bounded budget, so the ceiling cannot be
+silently outgrown a third time.

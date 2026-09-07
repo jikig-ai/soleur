@@ -374,7 +374,9 @@ Amend ADR-072, author the new ADR, update and re-arm #5806. See below.
 
 ### ADR
 
-- **Create ADR-207** (ordinal **provisional**; 205 and 206 are claimed on pushed branches, so a
+- **Create ADR-208** (ordinal RESOLVED at implementation time; the plan's provisional 207 was
+  claimed mid-session by `origin/feat-one-shot-7795-tag-shared-store-softening`, which is exactly
+  why the plan said to re-derive across every `origin/*` ref rather than a `main`-scoped probe; a
   `main`-scoped probe is wrong — derive across every `origin/*` ref and re-derive before merge) —
   *"CI's contribution to the deploy gate is a declared, bounded budget."* The decision is the new
   cross-file coupling and its invariant: the declared ceilings of `test`'s closure must sum under
@@ -588,7 +590,7 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-207-ci-declared-budget-bounds-deploy-gate.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-208-ci-declared-budget-bounds-deploy-gate.md`
   (ordinal provisional).
 - Guard 1 suite (shard totality) and Guard 2 suite (CI budget bounded by `CEILING_S`).
 
@@ -637,7 +639,7 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
 - [ ] AC18 — `bash plugins/soleur/test/c4-count-parity.test.sh` passes (10/10).
 - [ ] AC19 — `actionlint` is clean on both edited workflows and each edited `run:` snippet passes
       `bash -c` extraction. `bash -n` is **not** run against workflow YAML.
-- [ ] AC20 — ADR-207 exists with `status: accepted`; ADR-072 is **amended, not superseded** (its
+- [x] AC20 — ADR-208 exists with `status: accepted`; ADR-072 is **amended, not superseded** (its
       `status:` stays `accepted`), carries the re-measurement, and records that item 4's premise was
       stated in run-wall-clock terms — a quantity the gate does not measure.
 - [ ] AC21 — the ADR ordinal is free across every `origin/*` ref, re-verified immediately before
