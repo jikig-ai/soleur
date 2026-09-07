@@ -51,6 +51,19 @@
 # Output: JSONEachRow (one JSON object per line) on stdout. Errors to stderr.
 set -uo pipefail
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output. `case "$-" in *x*)`
+# tests whether tracing is ON rather than enumerating the eight ways to turn it on, two
+# of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Credential guard. These are Doppler-managed secrets that must be INJECTED into
 # the env — this script does not read Doppler itself. A bare-shell run (no
 # `doppler run` wrapper) trips this. The message is deliberately explicit that the
@@ -114,7 +127,7 @@ export BS_TABLE_S3="${BS_TABLE_S3:-${BS_TABLE%_logs}_s3}"
 
 run_sql() {
   # $1 = SQL. Credentials via Basic auth; never echoed.
-  curl -sS --fail-with-body --max-time 60 \
+  curl --disable --noproxy '*' -sS --fail-with-body --max-time 60 \
     -u "${BETTERSTACK_QUERY_USERNAME}:${BETTERSTACK_QUERY_PASSWORD}" \
     -H 'Content-type: plain/text' \
     -X POST "https://${BETTERSTACK_QUERY_HOST}?output_format_pretty_row_numbers=0" \

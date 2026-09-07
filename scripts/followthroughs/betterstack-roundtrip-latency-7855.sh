@@ -240,7 +240,7 @@ RT_PAYLOAD="$(printf '[{"message":"%s","source":"betterstack-roundtrip-latency-7
 
 _t0="$(date -u +%s)"
 rc=0
-http="$(curl -sS -m 20 --proto '=https' -o /dev/null -w '%{http_code}' \
+http="$(curl --disable --noproxy '*' -sS -m 20 --proto '=https' -o /dev/null -w '%{http_code}' \
   -H "Authorization: Bearer ${GIT_DATA_BETTERSTACK_LOGS_TOKEN}" \
   -H 'Content-Type: application/json' \
   "$RT_INGEST_URL" \

@@ -112,7 +112,7 @@ esac
 # The empty batch is the whole point — see the header. Keep it literal so the test's source
 # grep can pin it.
 rc=0
-http="$(curl -sS -m "$TIMEOUT" --proto '=https' -o /dev/null -w '%{http_code}' \
+http="$(curl --disable --noproxy '*' -sS -m "$TIMEOUT" --proto '=https' -o /dev/null -w '%{http_code}' \
   -H "Authorization: Bearer ${BETTERSTACK_LOGS_TOKEN}" \
   -H 'Content-Type: application/json' \
   "$BETTERSTACK_INGEST_URL" \
