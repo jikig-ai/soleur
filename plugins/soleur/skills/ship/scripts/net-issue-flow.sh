@@ -143,6 +143,8 @@ fi
 # written into the prefix is unreadable by construction. See ADR-155 (b).
 # Every id here keeps the `net-issue-flow` prefix, which rule-metrics-aggregate.sh
 # already exempts from the orphan gate.
+_NIF_TMP=()
+
 _emit_as() {
   if declare -F emit_incident >/dev/null 2>&1; then
     emit_incident "$1" "$2" "$3" || true
@@ -299,10 +301,24 @@ ISSUES_JSON="$(gh issue list --state all --limit 500 --json number,body,createdA
 # ONE jq pass over the ~2 MB payload. A per-issue subprocess loop for the
 # fence-strip measured >=1.7 s of fork overhead alone against ~1.0 s for this;
 # the gate's total budget is what the hook's timeout has to clear.
+# The PR body goes to jq via --rawfile, NOT --arg. Linux caps a single argv
+# element at MAX_ARG_STRLEN (32 * PAGESIZE = 131072 bytes on this host, measured:
+# 131000 bytes runs, 131072 exits 126 "Argument list too long"). Past that jq is
+# never exec-ed, the capture fails, and control lands on _fail_open -- which
+# prints TRANSIENT and exits 0. A PR author padding their own body past the cap
+# therefore turned this BLOCKING gate into an unconditional PASS, indistinguishable
+# in telemetry from a real GitHub outage. That is a sixth member of the
+# always-pass family this file header enumerates, and it sat on the very jq call
+# the declared-filing arm was added to. A file has no such cap.
+_PRBODY_FILE="$(mktemp -t net-issue-flow-prbody.XXXXXXXX)"
+_NIF_TMP+=("$_PRBODY_FILE")
+trap 'rm -f -- "${_NIF_TMP[@]}"' EXIT
+printf '%s' "$PR_BODY" > "$_PRBODY_FILE"
+
 GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
   --arg pr "$PR_NUMBER" \
   --arg since "$PR_CREATED_AT" \
-  --arg prbody "$PR_BODY" \
+  --rawfile prbody "$_PRBODY_FILE" \
   --arg closing "$CLOSING_NUMS" \
   --argjson ok "$MANDATING_JSON" '
   # Fenced blocks are stripped from BOTH corpora before matching. An UNBALANCED

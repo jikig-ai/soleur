@@ -1227,6 +1227,109 @@ fi
 printf '\n'
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# R8-R14: the #7896 review round. Every case here is a shape that was measured
+# WRONG against the shipped gate before the fix, so each one can be driven RED by
+# reverting its own fix -- none is a restatement of a case above.
+#
+# Fixture DIRECTION is deliberate: R10 and R11 sit on the "the matcher is too
+# AGGRESSIVE" side, which the original R1-R7 set had no member of at all. A suite
+# whose fixtures all assert must-match cannot see a widening.
+# ---------------------------------------------------------------------------
+_r() { # $1=body  $2=issues
+  PR_BODY_FILE="$WORK/r89"; export PR_BODY_FILE
+  ISSUE_LIST_FILE="$WORK/r89i"; export ISSUE_LIST_FILE
+  printf '%b' "$1" > "$PR_BODY_FILE"; printf '%s\n' "$2" > "$ISSUE_LIST_FILE"
+  run_gate
+}
+_PLAIN='[{"number":7001,"body":"Follow-up filed during this work; cites no PR.","createdAt":"2026-07-20T12:00:00Z","state":"OPEN"}]'
+_MAND='[{"number":7001,"body":"Operator step deferred.\nMandated-By: wg-block-pr-ready-on-undeferred-operator-steps\n","createdAt":"2026-07-20T12:00:00Z","state":"OPEN"}]'
+
+# R8 -- an unbalanced fence must ABORT, not silently delete the declared arm.
+# Before: one unclosed ``` yielded `Filing: 0 / Net: +0 / PASS` with no residual
+# line and no telemetry, because sf returns "" and $declared is the only arm that
+# can see a filing citing the originating issue.
+_r 'Work.\n\n```bash\ncode\n\nFiled: #7001\n' "$_PLAIN"
+cases=$((cases + 1))
+if [[ "$CASE_RC" -eq 1 ]] && grep -qE 'unbalanced code fence' "$WORK/out"; then
+  pass "R8 an unbalanced PR-body fence aborts instead of emptying the declared arm"
+else
+  fail "R8 expected an unbalanced-fence abort; rc=$CASE_RC out=$(tr '\n' '|' < "$WORK/out")"
+fi
+
+# R9 -- Filed: + Closes on the SAME number must not cancel to a credit.
+# Before: `Closing: 1 / Filing: 0 / Net: -1 / PASS` -- one line bought two units.
+_r 'Work.\n\nFiled: #7001\nCloses #7001\n' "$_PLAIN"
+cases=$((cases + 1))
+if grep -qE '^  Filing:[[:space:]]+1\b' "$WORK/out" && grep -qE '^  Net:[[:space:]]+\+0\b' "$WORK/out"; then
+  pass "R9 a number on both Filed: and Closes stays in BOTH terms (Net +0, not -1)"
+else
+  fail "R9 expected Filing: 1 / Net: +0; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+cases=$((cases + 1))
+if grep -qE '^  Contradictory:.*#7001' "$WORK/out"; then
+  pass "R9 the contradiction is surfaced, not silently netted"
+else
+  fail "R9 expected a Contradictory: line; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+
+# R10 (DIRECTION: too aggressive) -- a prose `Refs:` line must NOT declare.
+# Measured on a real line on main: `Refs: #6588, #6897, #6604, #6570. Prior
+# decision: #6918` admitted FIVE issues as this PR filings under the old
+# `(Filed|Tracks|Refs):?` alternation, including the one labelled Prior decision.
+_r 'Work.\n\nRefs: #7001 (prior decision), #7002\n' "$_PLAIN"
+cases=$((cases + 1))
+if grep -qE '^  Filing:[[:space:]]+0\b' "$WORK/out"; then
+  pass "R10 a prose Refs: line declares nothing (P4: no sibling over-attribution)"
+else
+  fail "R10 a Refs: line still declares; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+
+# R11 (DIRECTION: too aggressive) -- the keyword must be line-initial, so an
+# ordinary sentence containing it cannot declare.
+_r 'Work.\n\nWe filed: #7001 during an unrelated sweep last week.\n' "$_PLAIN"
+cases=$((cases + 1))
+if grep -qE '^  Filing:[[:space:]]+0\b' "$WORK/out"; then
+  pass "R11 mid-sentence 'filed:' declares nothing"
+else
+  fail "R11 mid-sentence prose declared; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+
+# R12 -- the producer shapes an author actually writes. Before: all three were
+# silently advisory while ship/SKILL.md carry-forward grep reported them present.
+for _shape in '- Filed: #7001' '**Filed:** #7001' 'FILED: #7001'; do
+  _r "Work.\n\n${_shape}\n" "$_PLAIN"
+  cases=$((cases + 1))
+  if grep -qE '^  Filing:[[:space:]]+1\b' "$WORK/out"; then
+    pass "R12 producer shape counts: ${_shape}"
+  else
+    fail "R12 producer shape dropped: ${_shape}; got: $(tr '\n' '|' < "$WORK/out")"
+  fi
+done
+
+# R13 -- `Filed: #N` must reach the ADR-155 exemption. Before this was the ONE
+# shape that admitted a mandated filing to FILED and then denied it the
+# exemption, rejecting with "PR body has no Tracks/Refs #N companion" over a body
+# that declared #N verbatim -- and the printed remediation looped.
+_r 'Work.\n\nFiled: #7001\n' "$_MAND"
+cases=$((cases + 1))
+if grep -qE '^  Exempt:[[:space:]]+1\b' "$WORK/out" && [[ "$CASE_RC" -eq 0 ]]; then
+  pass "R13 a mandated filing declared ONLY on the Filed: line is exempt"
+else
+  fail "R13 expected Exempt: 1 / exit 0; rc=$CASE_RC out=$(tr '\n' '|' < "$WORK/out")"
+fi
+
+# R14 -- a declaration the gate cannot honour must be NAMED. Before, a declared
+# number with no matching row was dropped from FILED and suppressed from the
+# residual too, so it appeared nowhere: the silent case the arm exists to end.
+_r 'Work.\n\nFiled: #4242\n' "$_PLAIN"
+cases=$((cases + 1))
+if grep -qE '^  Undelivered declarations:.*#4242' "$WORK/out"; then
+  pass "R14 a declaration with no matching issue is reported, not silently dropped"
+else
+  fail "R14 expected an Undelivered declarations line; got: $(tr '\n' '|' < "$WORK/out")"
+fi
+
 # ACCOUNTING CONSERVATION. Deliberately placed BEFORE the floor: this is the arm
 # that catches a NEUTERED verdict helper, and the floor cannot. `cases` keeps its
 # full value when fail() is a no-op, so the floor stays green while the verdicts
@@ -1268,7 +1371,7 @@ fi
 # conservation check above: routing it through fail() puts the floor inside the
 # thing it is meant to police.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=104
+MIN_ASSERTIONS=114
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2
