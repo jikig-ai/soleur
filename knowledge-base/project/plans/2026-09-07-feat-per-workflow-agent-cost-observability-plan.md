@@ -13,6 +13,61 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-07 · **Halt gates:** 4.6, 4.7, 4.8, 4.9, 4.10, 4.11 all pass
+(`lint-guard-contract.py` exit 0; every cited AGENTS rule id resolves active; every cited
+`knowledge-base/` path resolves; `lint-infra-no-human-steps.py` clean).
+
+This plan was written, then reviewed by twelve independent passes — CTO, CFO, CLO, CPO,
+spec-flow-analyzer, ux-design-lead, copywriter, the GDPR gate, a `model: fable` scoped
+advisor, code-simplicity, architecture-strategist and Kieran. The review did not decorate
+it; it **changed the design three times and shrank the deliverable by two thirds**.
+
+### What the review changed
+
+1. **Three premises were falsified and corrected**, each by more than one reviewer
+   independently: `active_workflow` is write-once (not last-write-wins), exporting
+   `SENTINEL_UNROUTED` would break a pinned test, and — the largest — the ADR-108 log
+   marker was a 90-day lossy copy of a source Postgres already holds exactly and forever.
+2. **The marker half was cut in full**, taking 12 of 17 edited files with it. The operator's
+   fleet-wide question is one documented SQL query over the same two columns. The Cut List
+   records that this survived the Phase 0.6b minimality gate and seven domain reviews
+   because the gate was applied to the *issue's* proposed mechanisms and not to the plan's
+   own.
+3. **The single-snapshot guarantee was scoped to the wrong pair of numbers.** The draft
+   still called `sum_user_mtd_cost` in parallel, so headline and buckets would have arrived
+   from two transactions — reintroducing, one layer up, the exact race the finance review
+   had blocked. The fallback is now sequential.
+4. **Two acceptance criteria were unsatisfiable as written** and one was vacuous: `proacl`
+   always lists the function owner; a source grep for the footnote hedge returns `0` on the
+   *unfixed* file because JSX splits it across a line break; and an absence-grep over a spec
+   section hits the section's own rationale.
+5. **Four existing test files break** on the loader change and are now tasks, not cleanup —
+   none appeared in any earlier draft's file list.
+
+### What was verified by execution rather than inspection
+
+The `ROLLUP` aggregate was run on live Postgres 17.6 and on PG16: `GROUPING()` over a
+`CASE` is legal, the bucket expression can never be NULL (so it cannot collide with the
+super-aggregate row), the zero-row case returns exactly one `is_total` row, and the parts
+summed to the whole exactly on a fixture spanning two months. The `sum_user_mtd_cost`
+signature was diffed against migration 027 so `CREATE OR REPLACE` provably creates no
+overload.
+
+### Reviewer corrections that were themselves wrong
+
+Three were rejected after checking: `apps/web-platform/bunfig.toml` really does carry
+`pathIgnorePatterns = ["**"]` (the reviewer read the *root* bunfig, a different file), and
+two line citations this plan already had right. Reviewer output was verified before
+acceptance, not merged on trust.
+
+### Open items carried to the operator
+
+Five User-Challenges are recorded in `decision-challenges.md` rather than silently applied —
+most importantly that this PR should **not** close #1055, because per-agent attribution is
+not delivered and is not derivable from the SDK frame that carries the money.
+
 ## Overview
 
 Per-turn LLM cost capture, per-conversation aggregation, and a per-user month-to-date
@@ -418,10 +473,23 @@ body-identical — only `search_path` changes — so there is nothing to roll ba
 exists to fix. `loadForwardCorpus` excludes `.down.sql`, so nothing would have reddened
 (architecture P2-3, Kieran P2).
 
-**Ordering is in SQL, not TS** — `GROUPING(b.bucket) DESC` puts the total row first, then
-total descending, then bucket name ascending as the tiebreak. Stated because the plan
-elsewhere forbids arithmetic in TS, and a reader would otherwise have to guess which layer
-sorts (architecture P2-8).
+**Ordering is emitted in SQL and re-asserted in TS.** `GROUPING(b.bucket) DESC` puts the
+total row first, then total descending, then bucket name ascending as the tiebreak.
+
+The SQL ordering is *reliable here but not formally guaranteed to the caller*, and the plan
+should not pretend otherwise. A `LANGUAGE sql` set-returning function whose body the planner
+**inlines** loses its internal `ORDER BY`; inlining is what would break this. It cannot
+happen for this function — Postgres does not inline `SECURITY DEFINER` functions — so the
+emitted order is preserved in practice, and the in-function `ORDER BY` also makes the
+operator's direct `psql` use (Phase 5.1) pleasant. But PostgREST issues
+`SELECT * FROM fn(...)` with no outer `ORDER BY`, and relying on a set-returning function's
+emission order is a convention, not a contract.
+
+So the loader **sorts the returned rows defensively** before rendering. This is not the
+"never sum in JS" prohibition (2.6): that rule is about float accumulation across NUMERIC
+values, and sorting ≤ 8 already-coerced rows accumulates nothing. Same reasoning licenses
+computing `avgUsd = totalUsd / count` in TS — a single per-row division of server-computed
+exact values, never a running total.
 
 `ROLLUP(x)` is exactly `GROUPING SETS ((x), ())`; the shorter form is used because it lets
 the bucket be named once and drops the outer `CASE … GROUPING(CASE …)` wrapper. **Verified

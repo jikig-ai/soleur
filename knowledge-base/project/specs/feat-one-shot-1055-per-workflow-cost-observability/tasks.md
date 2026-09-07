@@ -95,6 +95,12 @@ Lane: `cross-domain` — no `spec.md` exists for this branch, so the lane defaul
   - [ ] **2.4.5** `reportSilentFallback` with `op: "mtd-by-workflow"` — a tag value that exists
         nowhere else. Do not fold it into `op: "loadApiUsageForUser"`.
   - [ ] **2.4.6** Coerce NUMERIC-as-string with `Number(...)` at the boundary. **Never sum in JS.**
+  - [ ] **2.4.6a** Sort the returned rows **defensively in TS** before rendering, and compute
+        `avgUsd = totalUsd / count` per row. The function emits an `ORDER BY` and
+        `SECURITY DEFINER` blocks planner inlining (so the order does hold), but PostgREST
+        issues `SELECT * FROM fn(...)` with no outer `ORDER BY` — emission order is a
+        convention, not a contract. Sorting ≤ 8 coerced rows and dividing per row accumulate
+        nothing, so neither violates 2.4.6.
   - [ ] **2.4.7** Do **not** add `active_workflow` to the list SELECT and do **not** add
         `workflowLabel` to `ApiUsageRow` — cut at review: it buys no listed property and would
         put the raw `__unrouted__` sentinel into TS, breaking the containment invariant.
