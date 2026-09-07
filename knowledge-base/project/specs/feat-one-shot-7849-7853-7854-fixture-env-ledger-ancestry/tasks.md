@@ -37,10 +37,16 @@ predicate its mirrors follow. Do not reorder.
 
 - [ ] 2.1 Create `plugins/soleur/test/lib/git-fixture-env.sh`: **one** `GIT_LOCATION_VARS` array read
       by both the tripwire loop (moved verbatim from `test-helpers.sh`, escape and announcement
-      byte-for-byte) and `git_fixture_env <dir>`. No `git_fixture` wrapper.
+      byte-for-byte) and `git_fixture_env <dir>`. No `git_fixture` wrapper — but see 2.1.2.
 - [ ] 2.1.1 The ceiling refuses `/`, non-absolute, and any path containing `:` — and **exports
       nothing before it validates**. A partial env is the silent degradation this file exists to
       prevent.
+- [ ] 2.1.2 **Signing must still be neutralised** (deepen-plan D-1, measured): config globals do NOT
+      reach a repo-local `commit.gpgsign=true` — the commit fails with `gpg failed to sign the data`.
+      The builder exports `GIT_CONFIG_COUNT=1` / `GIT_CONFIG_KEY_0=commit.gpgsign` /
+      `GIT_CONFIG_VALUE_0=false` (measured to override the repo-local value), set as overrides
+      **after** the prefix sweep. **Apply the same three to the TS `gitFixtureEnv()`** — every suite
+      task 3.2 converts calls it without `gitFixture()`, so they have no signing protection today.
 - [ ] 2.2 Create `plugins/soleur/test/git-fixture-env-shell.test.sh` (producer for AC2 and Guard 1
       M3/M4). Register in `scripts/test-all.sh` as `run_suite "<label>" bash <path>` — **path last,
       after `bash`**.
@@ -84,11 +90,17 @@ predicate its mirrors follow. Do not reorder.
 - [ ] 4.1 Sandbox the three leaks by exporting, not per-call: `gdpr-gate-self-test.test.sh` (create a
       `mktemp -d`, export before Case A), `gdpr-gate.test.ts` (`beforeAll` **and** the `spawnSync`
       env), `test/pre-merge-rebase.test.ts` (the shared `Bun.spawn` env object).
+- [ ] 4.1.1 Follow `.claude/hooks/lib/test-incident-sandbox.sh`'s shape (deepen-plan D-6): `mkdir -p
+      "$d/.claude"`, export the path a **second** time as `SOLEUR_TEST_INCIDENT_ROOT` so a suite can
+      read back its own emitted rows (this is what makes 3.3.1 a two-line change), and **compose**
+      the EXIT trap rather than clobbering it. Do **not** redirect `CLAUDE_PROJECT_DIR` alongside the
+      sink — that helper's header records the measured harm.
 - [ ] 4.2 Add the fail-loud sandbox export to the five chokepoints: derive
       `${INCIDENTS_REPO_ROOT:-$(mktemp -d)}`, **assert non-empty and absolute**, abort with a named
       message otherwise. An empty value reads as unset and silently restores the real sink.
 - [ ] 4.3 Add the same export as a belt at `scripts/test-all.sh` and `.github/scripts/test/run-all.sh`
-      (the latter carries **no `set` line at all**, so the guard is load-bearing there).
+      (the latter carries `set -uo pipefail` but **no `-e`** — deepen-plan D-3 — so a failing
+      `mktemp` does not abort it and the guard is load-bearing there).
 - [ ] 4.4 Verify `INCIDENTS_REPO_ROOT` survives `gitFixtureEnv()` / `git_fixture_env`, and assert it
       in a test rather than relying on `gitCleanEnv()`'s prefix sweep being read correctly.
 - [ ] 4.5 Verify `tests/scripts/test-rule-metrics-aggregate.sh`,
@@ -136,10 +148,16 @@ predicate its mirrors follow. Do not reorder.
 - [ ] 6.5 Invoke the hook with `CLAUDE_PROJECT_DIR` at a scratch dir and **`CLAUDE_CODE_EXECPATH`
       unset** — the first stops the nag stamp landing in the real checkout, the second removes the
       predicate that would adopt a `node` ancestor under an npm-global install.
+- [ ] 6.5.1 **Read the log line back from that same scratch path** (deepen-plan D-2). `_repo_root()`
+      derives BOTH `log_file` and `stamp_file` from `CLAUDE_PROJECT_DIR`, while the e2e arm today
+      reads `.claude/.memory-backstop.jsonl` relative to CWD — redirecting without moving the read
+      makes the new gate parse a stale line from the real checkout's previous run.
 - [ ] 6.6 Extend the synthetic `/proc` fixture: 10-process chain, non-zero at hop 9, zero at hop 8,
       **plus a negative case** for a generic-interpreter `CLAUDE_CODE_EXECPATH`.
-- [ ] 6.7 Register the `MAX_WALK_HOPS` mutation in
-      `.claude/hooks/memory-backstop-mutation-battery.sh` (it exists and is registered in no runner).
+- [ ] 6.7 Add the `MAX_WALK_HOPS` mutation row to
+      `.claude/hooks/memory-backstop-mutation-battery.sh`. **Do NOT register the battery in
+      `scripts/test-all.sh`** (deepen-plan D-5): ADR-161 keeps it out of CI's glob deliberately — it
+      needs a live user bus. AC19 asserts the row exists and passes when the battery is run by hand.
 - [ ] 6.8 Post the one-line note on issue #7208.
 
 ## 7. Documentation, ADR, C4, deferrals (plan Phase 6)

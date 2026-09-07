@@ -13,6 +13,33 @@ brand_survival_threshold: none
 requires_cpo_signoff: false
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-07
+**Gates run:** 4.4 precedent-diff, 4.45 verify-the-negative + post-edit self-audit, 4.6 user-brand
+impact, 4.7 observability, 4.8 PAT-shaped variable, 4.9 UI wireframe, 4.10 encryption posture,
+4.11 guard contract. All halts pass.
+
+### Key improvements
+
+1. **A cut was reversed on measurement.** The first revision cut the `git_fixture` wrapper on the
+   claim that config globals make `commit.gpgsign` unreachable. Measured false — and the fix is
+   better than either the wrapper or the cut (D-1).
+2. **A gate that would have read the wrong file.** Phase 5's `CLAUDE_PROJECT_DIR` redirect moves the
+   hook's log, but the suite reads it relative to CWD (D-2).
+3. **Three factual claims corrected** against the tree: `run-all.sh`'s `set` line, the ledger's
+   rotation trigger, and the mutation battery's deliberate absence from CI (D-3, D-4, D-5).
+4. **The canonical sibling was adopted** rather than paraphrased: `test-incident-sandbox.sh` already
+   solves the read-back problem Phase 2.3.1 raises, and already records why redirecting
+   `CLAUDE_PROJECT_DIR` is harmful (D-6).
+
+### New considerations discovered
+
+- Adding the signing override to `gitFixtureEnv()` closes a **latent gap in the existing TS helper**:
+  every suite that calls `gitFixtureEnv()` without `gitFixture()` has no signing protection today.
+- The post-edit self-audit found **zero** stale references to the five cut mechanisms — every mention
+  is inside the Cut List, Alternatives, or a Sharp Edge that deliberately narrates the cut.
+
 ## Overview
 
 Three defects sit in the same neighbourhood — test fixtures and git hooks — and ship together in one
@@ -95,9 +122,9 @@ finding is recorded in the Cut List and the Domain Review.
 | **The same marker exported by the *chokepoints*, plus a refusal branch in `emit_incident`** | P4 | **the same chokepoints exporting `INCIDENTS_REPO_ROOT` directly** | **CUT (DHH P0-2, code-simplicity #6, strong-model consult — independent convergence).** If the chokepoint is the right place for the marker, the marker was never needed. Identical failure mode (a scrubbed env loses either), so it buys no coverage the redirect does not, and it puts test-awareness inside production hook code whose failure mode is silently darkened real telemetry. **Also falsified on its own terms** (spec-flow P0-1): its justification claimed the coverage guard "requires every shell suite to source `test-helpers.sh`" — measured, the guard greps for `test-incident-sandbox.sh`, and only 6 of 46 `.claude/hooks/*.test.sh`, 2 of 84 `tests/**`, and 0 of 13 `.github/scripts/test/` suites source `test-helpers.sh` at all |
 | **A hand-maintained `hook-telemetry-rule-ids.txt` registry** | P5, P6 | **the AGENTS.md section-prefix invariant**, already stated in the aggregator's own `te-` comment | **CUT (DHH P0-1, code-simplicity #8).** Measured: **all 105** `[id: …]` tags carry one of `hr\|wg\|cq\|rf\|pdr\|cm`, zero exceptions — one predicate replaces nine stanzas *and* the registry. Independently killed by Kieran P0-5: several emitters build ids at runtime (`hook-input-${reason_key}`, `"$MATCHED_RULE"`, `"$_bypass_rid"`, `net-issue-flow-mandated-filing--<n>`), so an exact-id registry enumerates an open set — the shape this plan rejects the tenth stanza for |
 | **An emitter↔registry drift lint** | P6 | — | **CUT.** Dies with the registry; under the predicate P6 holds **by construction**. Also unbuildable as drafted (Kieran P0-4): **8 hooks** emit through a bare-token `emit <id>` wrapper alias, so an `emit_incident "<literal>"` grep would red on its own registry the day it landed |
-| **A committed quarantine script plus its own suite** | **none** | — | **CUT (DHH P1-2, code-simplicity #7).** Satisfies no property; the data is gitignored, operator-local and self-expiring (measured: the rows #7853 filed against rotated to zero unaided) |
+| **A committed quarantine script plus its own suite** | **none** | — | **CUT (DHH P1-2, code-simplicity #7).** Satisfies no property; the data is gitignored and operator-local, and the rows #7853 filed against have already rotated out unaided. **Corrected at deepen-plan (D-4):** rotation is opportunistic at write time on a 5 MB size or 30-day age threshold, never on a calendar, so the expiry is real but unscheduled — which is a reason not to ship permanent machinery for it, not a reason to rely on it |
 | **A new declared `test-entry-points.txt`** | P1 at `run-all.sh` | **the parity test's existing scrub loop** | **CUT (code-simplicity #2).** A `.txt` rots identically — neither detects a *newly added* entry point. The existing loop already carries a floor |
-| The `git_fixture` shell wrapper | — | the builder's own `GIT_CONFIG_NOSYSTEM` + `GIT_CONFIG_GLOBAL=/dev/null` | **CUT.** Its only job was `-c commit.gpgsign=false`, defending a config the line above made unreachable |
+| The `git_fixture` shell wrapper | signing-proof fixture commits | — | **CUT, BUT ITS JOB IS NOT.** The draft's justification was **measured false at deepen-plan** (see Deepen-Plan Findings D-1): a repo-local `commit.gpgsign=true` survives `GIT_CONFIG_NOSYSTEM=1` + `GIT_CONFIG_GLOBAL=/dev/null` and the commit fails — which is what `git-fixture-env.ts`'s own comment already says. The wrapper is replaced, not dropped: **the builder exports `GIT_CONFIG_COUNT=1` / `GIT_CONFIG_KEY_0=commit.gpgsign` / `GIT_CONFIG_VALUE_0=false`**, verified to override a repo-local setting. One calling convention (plain `git -C`), and it closes a latent gap in the TS helper too |
 | A fourth parity derivation | P2, P3 | the existing parity test | **CUT.** One array read by both consumers keeps the shell side a single derivation. *(Kieran P1-6: the parity test already has **four** extractors and **three** comparisons — the cut is right, the draft's arithmetic was not.)* |
 | A new shell fixture-env builder itself | P2, P3 in shell | **nothing** — `test-helpers.sh` is a tripwire, not a builder | **KEPT** |
 
@@ -146,8 +173,8 @@ worktree is a file appearing where none existed**, so containment must assert ex
 line count, and must derive the path the way `emit_incident` does.
 
 **An empty `INCIDENTS_REPO_ROOT` reads as unset** (spec-flow P0-3). `_incidents_repo_root()` gates on
-`[[ -n … ]]`, and `.github/scripts/test/run-all.sh` carries **no `set` line at all** — so a failing
-`mktemp -d` yields `""`, indistinguishable from unset, and the whole battery writes the operator's
+`[[ -n … ]]`, and `.github/scripts/test/run-all.sh` carries `set -uo pipefail` — **no `-e`** — so a failing
+`mktemp -d` does not abort the script and yields `""`, indistinguishable from unset, and the whole battery writes the operator's
 real ledger with no signal. The redirect must be asserted non-empty and absolute, and must abort the
 entry point on failure — the same fail-loud posture `fixtureCeiling()` already takes.
 
@@ -226,6 +253,75 @@ No `plugins/soleur/skills/*/SKILL.md` `description:` edit is candidate or finali
 
 ---
 
+## Deepen-Plan Findings
+
+Six corrections from the Phase 4.4 precedent-diff and Phase 4.45 realism passes. Each is folded into
+the phase it corrects; they are collected here so a reviewer can see what the deepen pass changed.
+
+**D-1 — the `git_fixture` cut was wrong, and the replacement is better than the wrapper.**
+The first revision cut the wrapper on the reasoning that `GIT_CONFIG_NOSYSTEM=1` +
+`GIT_CONFIG_GLOBAL=/dev/null` make any `commit.gpgsign` setting unreachable. **Measured false.**
+Against a fixture carrying a repo-local `commit.gpgsign=true`, under exactly those two variables plus
+a pinned identity, the commit fails:
+
+```text
+error: gpg failed to sign the data:
+gpg: Fatal: can't create directory '/nonexistent/.gnupg': No such file or directory
+fatal: failed to write commit object
+```
+
+`git-fixture-env.ts`'s own comment already said so — *"`GIT_CONFIG_GLOBAL=/dev/null` does not cover a
+repo-local setting inherited via a template"* — and the file's `GIT_TEMPLATE_DIR` history records a
+measured incident where a template wrote executable content into a fixture. The replacement, measured
+working: export `GIT_CONFIG_COUNT=1` / `GIT_CONFIG_KEY_0=commit.gpgsign` / `GIT_CONFIG_VALUE_0=false`
+from the builder. These have `-c` precedence, so they beat the repo-local value, and they keep **one**
+calling convention rather than two. Apply them to the **TS** `gitFixtureEnv()` as well: every suite
+Phase 2.2 converts calls `gitFixtureEnv()` without `gitFixture()`, so they inherit no signing
+protection today — this closes a latent gap rather than merely preserving one.
+
+**D-2 — Phase 5's gate would have read the wrong file.** `_repo_root()` reads `CLAUDE_PROJECT_DIR`,
+and **both** the hook's `log_file` and its `stamp_file` derive from it — while the e2e arm reads
+`.claude/.memory-backstop.jsonl` **relative to CWD**. Pointing the project dir at scratch without
+moving the read makes the new gate parse a stale line from the real checkout's previous run.
+
+**D-3 — `.github/scripts/test/run-all.sh` does have a `set` line.** It carries `set -uo pipefail`;
+the draft said "no `set` line at all". The substance survives and is what matters: there is **no
+`-e`**, so a failing `mktemp -d` does not abort the script and yields an empty value that
+`_incidents_repo_root()` reads as unset.
+
+**D-4 — the ledger does not rotate monthly.** Rotation is opportunistic at write time on a 5 MB size
+**or** 30-day age threshold; since every append refreshes mtime, the realistic trigger under active
+use is the size threshold at unpredictable cadence. The `%Y-%m` in the archive name is a naming
+convention, not a schedule. The quarantine cut still stands — but on the ground that a one-time
+cleanup does not need committed machinery, not on a reliable monthly expiry.
+
+**D-5 — the mutation battery is deliberately outside CI.** ADR-161: *"Run by hand (needs a live bus);
+deliberately not `*.test.sh` so CI's auto-glob does not pick it up."* The draft's instruction to
+register it in `scripts/test-all.sh` would have contradicted that decision. The `MAX_WALK_HOPS` row
+goes into the battery; AC19 asserts the row exists and passes when the battery is run.
+
+**D-6 — adopt `test-incident-sandbox.sh`, do not paraphrase it.** It is the canonical sibling for the
+chokepoint redirect and already solves two things this plan raises independently: it exports the
+sandbox path a second time so a suite can assert on the rows its emitter wrote (which is what makes
+task 3.3.1's `test_hook_emissions.sh` reconciliation a two-line change), and its header records the
+**measured harm** of redirecting `CLAUDE_PROJECT_DIR` alongside the sink — an earlier revision did,
+and it flipped `new-scheduled-cron-prefer-inngest.sh` from allow to deny by hiding a file that exists
+on `origin/main`.
+
+**Verified-and-held.** The same pass confirmed six claims the plan rests on: `emit_incident` creates
+its `.claude/` parent; `gitCleanEnv()`'s prefix sweep carries `INCIDENTS_REPO_ROOT` through; all 105
+`[id: …]` tags in both `AGENTS.md` and `AGENTS.rules.md` carry one of the six section prefixes;
+`_incidents_repo_root()` treats an empty value as unset; all six mutating call sites in
+`memory-backstop.sh` sit below the identity gate, so a `claude_pid_not_found` decline mutates no
+cgroup state; and `tests/scripts/test_rule_id_regex_parity.py` imports no `_git_fixture_env` while
+`python3 -m unittest` loads no `conftest.py`.
+
+**Post-edit self-audit:** zero stale references to the five cut mechanisms. Every mention of
+`SOLEUR_IN_TEST_RUN`, `hook-telemetry-rule-ids.txt`, `test-entry-points.txt`, the quarantine script or
+"Layer 3" sits inside the Cut List, the Alternatives table, or a Sharp Edge that narrates the cut.
+
+---
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim | Reality (measured 2026-09-07) | Plan response |
@@ -275,9 +371,12 @@ that data (the committed quarantine file was cut); it adds one temp-directory si
 Nothing is committed, transmitted, or widened in audience.
 
 **Brand-survival threshold:** `none`.
-*Reason (sensitive-path scope-out bullet):* the diff touches no schema, migration, auth flow, API
-route or `.sql` file; every changed surface is a test harness, a git hook, or a local telemetry sink
-whose blast radius is the operator's own workstation.
+
+- `threshold: none, reason: the only sensitive-path match is
+  apps/web-platform/infra/workspaces-luks-loopback.test.sh, which is a TEST SUITE that happens to
+  live under infra/ — no .tf file, no provisioned resource, no schema, migration, auth flow, API
+  route or .sql file changes anywhere in this diff, and every changed surface is a test harness, a
+  git hook, or a local telemetry sink whose blast radius is the operator's own workstation.`
 
 ---
 
@@ -328,9 +427,16 @@ path containing `:`), `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `G
 `XDG_CONFIG_HOME=<fixture>/.soleur-fixture-xdg`, `GIT_TERMINAL_PROMPT=0`, and the synthesized
 identity.
 
-  **One array, not two.** **No `git_fixture` wrapper** — `GIT_CONFIG_NOSYSTEM` +
-  `GIT_CONFIG_GLOBAL=/dev/null` already make `commit.gpgsign` unreachable; suites keep calling plain
-  `git -C "$dir"`, one calling convention.
+  **One array, not two.** **No `git_fixture` wrapper — but signing must still be neutralised.**
+  Measured at deepen-plan (D-1): `GIT_CONFIG_NOSYSTEM` + `GIT_CONFIG_GLOBAL=/dev/null` do **not**
+  reach a repo-local `commit.gpgsign=true`, and a developer carrying one gets
+  `error: gpg failed to sign the data` on every fixture commit. So the builder additionally exports
+  `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=commit.gpgsign`, `GIT_CONFIG_VALUE_0=false` — measured to
+  override the repo-local value — which keeps one calling convention (plain `git -C "$dir"`) instead
+  of a wrapper. **Apply the same three variables to `gitFixtureEnv()` in the TS helper**: every suite
+  Phase 2.2 converts calls `gitFixtureEnv()` *without* `gitFixture()`, so today they inherit no
+  signing protection at all. These three are `GIT_`-prefixed, so they must be set as overrides
+  **after** the prefix sweep, exactly as `GIT_CONFIG_NOSYSTEM` already is.
 
   **The failure path must not silently degrade.** Because the helper must not impose `set -e` on its
   caller, a bare `return 1` at a call site that does not check it leaves the suite running `git` with
@@ -420,9 +526,23 @@ case "$sb" in /?*) ;; *) <abort with a named message> ;; esac
 export INCIDENTS_REPO_ROOT="$sb"
 ```
 
+  **Follow `.claude/hooks/lib/test-incident-sandbox.sh`, the canonical sibling** (Phase 4.4
+  precedent-diff): it `mkdir -p "$d/.claude"` rather than relying on `emit_incident` to create it,
+  exports the sandbox path a **second** time as `SOLEUR_TEST_INCIDENT_ROOT` so a suite can read back
+  the rows its emitter wrote, and **composes** the EXIT-trap cleanup with any trap the suite already
+  installed rather than clobbering it. The second export is what makes task 3.3.1 tractable:
+  `tests/hooks/test_hook_emissions.sh` asserts on emitted rows, and re-pointing it at
+  `$SOLEUR_TEST_INCIDENT_ROOT` is a two-line change rather than a redesign. Reuse the helper's
+  convention; do not invent a parallel one.
+
+  **Do NOT redirect `CLAUDE_PROJECT_DIR` as part of this.** That helper's header records the
+  measured harm: an earlier revision exported it too, and pointing it at an empty temp dir made
+  `new-scheduled-cron-prefer-inngest.sh` unable to see a file on `origin/main`, flipping an allow
+  case to deny. Redirect the telemetry sink, not the repo.
+
   Non-empty and absolute are both asserted, and failure **aborts the entry point** — `run-all.sh`
-  carries no `set` line at all, so an unguarded `mktemp` failure yields `""`, which
-  `_incidents_repo_root()` reads as unset and silently restores the real sink. `emit_incident`
+  carries `set -uo pipefail` but **no `-e`**, so an unguarded `mktemp` failure does not abort and
+  yields `""`, which `_incidents_repo_root()` reads as unset and silently restores the real sink. `emit_incident`
   already `mkdir -p`s the `.claude/` parent, so the root needs no pre-seeding.
 
   **This is the whole containment mechanism.** It reaches a directly-invoked suite — the spelling all
@@ -530,11 +650,22 @@ and leaks no busctl job object path (both legitimate on the skip path — a **co
   the reason verbatim in the skip message plus the remedy: *"run the suite standalone to exercise
   this arm; the hook runs one process deeper than this suite, so at lefthook depth claude sits
   outside its 8-hop limit."*
-- **Invoke with `CLAUDE_PROJECT_DIR` pointed at scratch and `CLAUDE_CODE_EXECPATH` unset.** The
-  scratch project dir stops `_maybe_never_worked` writing its one-shot nag stamp into the real
-  checkout; unsetting the execpath removes the one predicate that, under an npm-global install
-  resolving to a generic interpreter, would let the hook scope a `node` ancestor and up to 256
-  descendants on a box with a shallower tree than the author's.
+- **Invoke with `CLAUDE_PROJECT_DIR` pointed at scratch and `CLAUDE_CODE_EXECPATH` unset — and read
+  the log line back from that same scratch path.** Deepen-plan finding D-2: `_repo_root()` reads
+  `CLAUDE_PROJECT_DIR`, and **both** `log_file` and `stamp_file` derive from it, while the e2e arm
+  today does `tail -1 ".claude/.memory-backstop.jsonl"` **relative to CWD**. Redirecting the project
+  dir without moving the read would make the new gate parse a stale line from the real checkout's
+  previous run — a gate reading the wrong file, which is precisely the class this phase exists to
+  close. The suite already has the pattern for this: its fixture cases read
+  `"$ld/.claude/.memory-backstop.jsonl"` from a local dir. The scratch dir also stops
+  `_maybe_never_worked` writing its one-shot nag stamp into the real checkout. Unsetting the execpath
+  removes the one predicate that, under an npm-global install resolving to a generic interpreter,
+  would let the hook scope a `node` ancestor and up to 256 descendants on a box with a shallower tree
+  than the author's.
+
+  Note this is a **deliberate exception** to the "do not redirect `CLAUDE_PROJECT_DIR`" rule stated
+  in Phase 3.2: there it would change what a hook can see on `origin/main`; here the hook reads it
+  only to locate its own log and stamp, and moving those is the point.
 
   **This is Option 1; Option 2 is rejected on measurement.** The comment defends independence so the
   gate "cannot be satisfied by the same code it is gating" — sound for a *correctness* gate. This is
@@ -549,9 +680,13 @@ predicate no fixture currently covers.
 
 5.5 **Do not raise `MAX_WALK_HOPS`.**
 
-5.6 **Register `MAX_WALK_HOPS` in `memory-backstop-mutation-battery.sh`** — it exists, is registered
-in no runner, and is the durable owner for AC14's row. A mutation recorded once in a PR body and
-never re-run is the shape this plan's cited learnings reject.
+5.6 **Add the `MAX_WALK_HOPS` row to `.claude/hooks/memory-backstop-mutation-battery.sh`** — it
+exists and is the durable owner for AC19's mutation. **Do NOT register it in `scripts/test-all.sh`:**
+ADR-161 records that it is *deliberately* not named `*.test.sh` so CI's auto-glob does not pick it
+up, because it needs a live user bus and takes ~2 minutes. The row therefore lives in a hand-run
+battery, and AC19 asserts it is *present and passing when the battery is run*, not that CI gates it.
+A mutation recorded once in a PR body and never re-run is the shape this plan's cited learnings
+reject; a mutation living in the repo's existing hand-run battery is not.
 
 5.7 Add a one-line note to issue #7208.
 
@@ -691,8 +826,10 @@ checkout after a suite run.
 with claude at hop 9, zero at hop 8, and non-zero for a generic-interpreter `CLAUDE_CODE_EXECPATH`.
 *(An AC keyed on the suite's real ancestry depth is not reproducible.)*
 
-**AC19** `MAX_WALK_HOPS` 8 → 9 flips the hop-9 case, exercised by
-`.claude/hooks/memory-backstop-mutation-battery.sh` rather than by a one-off `/work` run.
+**AC19** `MAX_WALK_HOPS` 8 → 9 flips the hop-9 case, exercised by the row added to
+`.claude/hooks/memory-backstop-mutation-battery.sh` and run by hand during `/work` (the battery needs
+a live user bus and is deliberately outside CI's glob per ADR-161 — the AC asserts the row exists and
+passes, not that CI gates it).
 
 **AC20** `git grep -n 'for _hop in' .claude/hooks/memory-backstop.test.sh` returns nothing, **and**
 the rationale comment has been rewritten — asserted by grepping for the new measured-reason wording,
@@ -762,7 +899,9 @@ failure_modes:
 logs:
   where: ".claude/.memory-backstop.jsonl (per-run hook outcome+reason); the incident ledger at BOTH
           resolved roots (operator-local, gitignored); scripts/test-all.sh stdout/stderr"
-  retention: "the incident ledger rotates monthly to .claude/.rule-incidents-YYYY-MM.jsonl.gz; the
+  retention: "the incident ledger rotates OPPORTUNISTICALLY at write time on a 5 MB size or 30-day age
+              threshold (never on a calendar) to .claude/.rule-incidents-YYYY-MM.jsonl.gz -- the %Y-%m
+              stamp is a naming convention, not a schedule; the
               memory-backstop log is append-only and operator-local"
 discoverability_test:
   command: "bash scripts/rule-metrics-aggregate.sh --dry-run"
@@ -1167,7 +1306,7 @@ it separate.
 | **#7853** — tag `skill-security-scan` in AGENTS.md | 1 of 22; blocked by the tier gate and the budget |
 | **#7853** — a tenth prefix glob | A glob exempts every future id under its prefix unreviewed |
 | **#7853** — delete the fabricated rows outright | A write-boundary fix must not itself be an unannounced destructive write to operator telemetry |
-| **#7853** — a committed quarantine script with its own suite | Permanent machinery for a one-time cleanup of a gitignored, self-expiring file |
+| **#7853** — a committed quarantine script with its own suite | Permanent machinery for a one-time cleanup of a gitignored, operator-local file that already rotates out on its own (opportunistically, at 5 MB or 30 days — not monthly) |
 | **#7849** — a new declared entry-point list file | A `.txt` rots identically; the parity loop already carries a floor |
 | **#7849** — a fourth parity derivation | One array read by both consumers keeps the shell side a single derivation |
 | **#7849** — a `git_fixture` wrapper for `-c commit.gpgsign=false` | The builder's config globals already make that setting unreachable |
@@ -1250,8 +1389,9 @@ Each gets a GitHub issue at Phase 6.4, milestone `Post-MVP / Later`, labels `def
   comparison undefined.
 
 - **An empty `INCIDENTS_REPO_ROOT` is indistinguishable from unset** (`[[ -n … ]]`), and
-  `.github/scripts/test/run-all.sh` carries **no `set` line at all**. An unguarded `mktemp -d`
-  failure silently restores the real sink for the whole battery.
+  `.github/scripts/test/run-all.sh` carries `set -uo pipefail` but **no `-e`** (deepen-plan D-3
+  corrected an earlier "no `set` line at all"). An unguarded `mktemp -d` failure therefore does not
+  abort the script; it yields `""` and silently restores the real sink for the whole battery.
 
 - **The chokepoint set is not universal.** bun resolves `bunfig.toml` from the invocation cwd;
   `python3 -m unittest` does not load `conftest.py`; 40 of 46 hook suites do not source
