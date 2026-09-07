@@ -840,6 +840,61 @@ DED_DISTINCT_PINS=$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' 
 assert "dedicated-host pin-consistency: both refs (IREF + ZIREF) present and share one tag (found $DED_PIN_REF_COUNT refs, $DED_DISTINCT_PINS distinct)" \
   "(( DED_PIN_REF_COUNT == 2 && DED_DISTINCT_PINS == 1 ))"
 
+# --- Guard B (#7695): tag<->digest binding across EVERY pin site -------------------------
+# The block above pins the two DEDICATED-host legs. It could not see `cloud-init.yml`, whose
+# two sites were TAG-ONLY -- the silent-downgrade state that let #7630 pin a v1.1.25 tag to
+# v1.1.24's bytes. This extension quantifies over all four sites in one sweep.
+#
+# WHAT THIS GUARD DOES AND DOES NOT PROVE. It proves cross-site AGREEMENT: one tag, one
+# digest, no tag-only site. Agreement alone would pass on four CONSISTENTLY WRONG digests.
+# The correctness half is carried by Guard A (the pinned tag's tree IS HEAD's carriers) and
+# by AC5 (the digest was read by command from the run that signed it). The three are sound
+# only together; none of them is sufficient alone. See `## Guard Contract` row B6.
+#
+# Test fixtures are excluded by an EXPLICIT include-list, never by happening not to match:
+# `cloud-init-inngest-zot-pull-mutation.test.sh` pins a deliberately stale
+# v1.1.24@sha256:6cdaa63d... as a NEGATIVE CONTROL, and a sweep that "helpfully" updates it
+# destroys the control.
+GB_SITES_FILE="$(mktemp -t inngest-pin-sites-XXXXXX.txt)"
+grep -rhoE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+(@sha256:[0-9a-f]{64})?' \
+  --include='cloud-init.yml' --include='cloud-init-inngest.yml' \
+  "$SCRIPT_DIR" > "$GB_SITES_FILE" 2>/dev/null || true
+GB_SITE_COUNT=$(grep -c . "$GB_SITES_FILE" || true)
+# Row 5 / own dispatch: an EXACT count, not `> 0`. A sweep pointed at a directory with no
+# pins, or one that silently stopped parsing a site, must RED rather than certify the
+# smaller job it still managed to do.
+assert "GuardB dispatch: the pin sweep found all 4 sites (found $GB_SITE_COUNT)" \
+  "(( GB_SITE_COUNT == 4 ))"
+# Row 4: a site carrying a tag but no digest is the silent downgrade. Counted directly.
+GB_TAG_ONLY=$(grep -cE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+$' "$GB_SITES_FILE" || true)
+assert "GuardB: no pin site is tag-only (found $GB_TAG_ONLY tag-only site(s))" \
+  "(( GB_TAG_ONLY == 0 ))"
+# Rows 1-3: one tag and one digest across every site. Distinctness catches a partial bump at
+# ANY site, including a second site after a compliant first.
+GB_DISTINCT_TAGS=$(grep -oE ':v[0-9]+\.[0-9]+\.[0-9]+' "$GB_SITES_FILE" | sort -u | wc -l || true)
+GB_DISTINCT_DIGESTS=$(grep -oE 'sha256:[0-9a-f]{64}' "$GB_SITES_FILE" | sort -u | wc -l || true)
+GB_DIGEST_COUNT=$(grep -coE 'sha256:[0-9a-f]{64}' "$GB_SITES_FILE" || true)
+assert "GuardB: every pin site names the SAME tag ($GB_DISTINCT_TAGS distinct)" \
+  "(( GB_DISTINCT_TAGS == 1 ))"
+assert "GuardB: every pin site carries a digest ($GB_DIGEST_COUNT of $GB_SITE_COUNT)" \
+  "(( GB_DIGEST_COUNT == GB_SITE_COUNT ))"
+assert "GuardB: every pin site names the SAME digest ($GB_DISTINCT_DIGESTS distinct)" \
+  "(( GB_DISTINCT_DIGESTS == 1 ))"
+# H2 (must-PASS, non-canonical): the ZIREF legs' differing quoting and registry prefix
+# ("$ZOT_EP/..." and "$ZURL/...") versus IREF's bare ghcr.io/... is a PERMITTED difference --
+# the sweep matches from `soleur-inngest-bootstrap:` rightward, so prefix and quoting are out
+# of scope by construction. It is the tag and the digest that must not differ.
+GB_PREFIX_SHAPES=$(grep -rhoE '(ghcr\.io|\$ZOT_EP|\$ZURL)/jikig-ai/soleur-inngest-bootstrap:' \
+  --include='cloud-init.yml' --include='cloud-init-inngest.yml' "$SCRIPT_DIR" 2>/dev/null | sort -u | wc -l || true)
+assert "GuardB H2: differing registry prefixes across legs are permitted, not flagged ($GB_PREFIX_SHAPES shapes)" \
+  "(( GB_PREFIX_SHAPES >= 2 ))"
+# The negative control must stay stale. Asserted POSITIVELY so that "helpfully" bumping it
+# reds here rather than silently removing the only fixture that proves the sweep discriminates.
+GB_NEGCTL="$SCRIPT_DIR/cloud-init-inngest-zot-pull-mutation.test.sh"
+assert "GuardB: the deliberately-stale negative control is untouched by the sweep" \
+  "[[ ! -f '$GB_NEGCTL' ]] || (( \$(grep -cF 'soleur-inngest-bootstrap:v1.1.24@sha256:' '$GB_NEGCTL' || true) >= 1 ))"
+rm -f "$GB_SITES_FILE"
+
 # --- Guard 1 anti-vacuity FLOOR: the section's own assertion count ------------------------
 # Row6 above floors the guard's INPUTS. Nothing floored its ASSERTIONS, so deleting every
 # `assert` in this section left the suite exit 0 with a clean summary — the headline claim
@@ -847,8 +902,8 @@ assert "dedicated-host pin-consistency: both refs (IREF + ZIREF) present and sha
 # slack is attack budget, and one derived from what it guards descends with it. When you add an
 # assertion here, bump this number in the same edit — that is the point, not friction.
 ZG_SECTION_ASSERTIONS=$(( TOTAL - ZG_TOTAL_BEFORE ))
-assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 40, ran $ZG_SECTION_ASSERTIONS)" \
-  "(( ZG_SECTION_ASSERTIONS == 40 ))"
+assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 47, ran $ZG_SECTION_ASSERTIONS)" \
+  "(( ZG_SECTION_ASSERTIONS == 47 ))"
 
 # --- Row 7: a failed bootstrap must say WHY, on the one channel that still works -----------
 # The failure that kills the bootstrap also kills Vector, which is installed BY the bootstrap. So
