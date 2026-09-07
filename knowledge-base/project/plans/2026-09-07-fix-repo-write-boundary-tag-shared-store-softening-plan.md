@@ -711,8 +711,13 @@ All criteria are pre-merge; this plan has no post-merge steps.
     `knowledge-base/project/specs/<branch>/spec.md` in §Notes and the provisional ADR filename, which are
     excluded by name from the check. (Plan v1's version of this AC was self-falsifying — its own command flagged
     the spec path the plan itself states does not exist — Kieran P1.)
-15. Two tracking issues exist and are linked in the PR body: the author-removal sweep and the graft residual
-    (§Non-Goals), each carrying its re-evaluation trigger.
+15. **Three** tracking issues exist and are linked in the PR body, each carrying its re-evaluation
+    trigger: **#7917** the battery tag-author sweep, **#7918** the graft residual, **#7919** the
+    manifest-driven renderer + per-suite snapshotting. This AC said "two" while §Non-Goals said
+    three; the count is reconciled to three here. The mandated `code-simplicity-reviewer` CONCUR
+    gate DISSENTED on folding the last two into one tracker — they share no code, no surface and no
+    trigger, so a merged tracker's first trigger would reopen an issue whose other half is stale and
+    cannot be closed. Net issue flow for this PR: closing 1, filing 3, **net +2**.
 16. The new ADR exists, its ordinal was re-derived against all `origin/*` refs immediately before merge, and no
     other artifact in this branch cites a stale ordinal:
     `grep -rn 'ADR-<chosen>' knowledge-base/project/{plans,specs}/` resolves consistently.
@@ -791,20 +796,27 @@ Actions cron, ADR-033) is not applicable — the repo has 54 `cron-*` Inngest fu
 Three tracking issues, all created in the same PR and linked from its body (AC15), each with an explicit
 re-evaluation **trigger** rather than an open date:
 
-1. **The battery tag-author sweep.** Assert that no `git fetch` reachable from `scripts/test-all.sh` writes tags
-   into the live repository. Root set **derived from `scripts/test-all.sh --print-suite-globs` (`:96`)**, never
+1. **The battery tag-author sweep — filed as #7917.** Assert that no `git fetch` reachable from
+   `scripts/test-all.sh` writes tags into the live repository. **Correction applied at /work:** this plan
+   prescribed deriving the root set from `scripts/test-all.sh --print-suite-globs` alone, and that
+   prescription is itself incomplete in the same way it was written to fix. Measured: the globs return 9
+   entries and `scripts/*.test.sh` is deliberately NOT among them — the runner registers 77 such suites by
+   hand — and `tests/scripts/` appears in neither. The root set is `SUITE_GLOBS` **union** the explicit
+   `run_suite` registrations. Root set derived, never
    hand-typed — plan v1's hand-typed roots omitted `plugins/soleur/test/`, `plugins/soleur/skills/*/test/`,
    `plugins/soleur/scripts/` and `.claude/hooks/`, which carry at least ten bare live-repo fetches including
    `worktree-manager.sh:2731`. Build it **RED first** (observe it name every offending site before fixing any),
    give it its own assertion counter rather than sharing `MIN_ASSERTIONS`, and make its AC use `-B2` so it can
    actually see exemption comments, which sit on preceding lines. *Trigger: immediately — this is the residual
    that bounds §Defense Relaxation Analysis.*
-2. **The `git-data-client.ts:244` graft residual.** On a shared store this plan's softening blinds the one
+2. **The `git-data-client.ts:244` graft residual — filed as #7918.** On a shared store this plan's softening blinds the one
    escape shape where a forced `+refs/soleur/worktrees/<id>/tags/*:refs/tags/*` graft creates tags in the live
    repo under a cwd escape, and the heads half of that refspec is invisible to `--heads --tags`. *Trigger: the
    next change to `ensure-workspace-repo` or the graft call site, or any recurrence of the #7553/#7652 class.*
 3. **Per-suite snapshotting** (Option 3) and **widening to a fifth `refs/remotes/**` dimension** (the sharper
-   discriminator), blocked on `repo_boundary_render_not_inspected`'s hardcoded heredoc. *Trigger: the next time
+   discriminator), blocked on `repo_boundary_render_not_inspected`'s hardcoded heredoc — **filed as #7919**.
+   Narrowed at /work: the function's opening loop ALREADY derives from `repo_boundary_manifest()`, and only
+   the trailing `cat <<'EOF'` is a literal — so the blocker is a small self-contained fix, not a rewrite. *Trigger: the next time
    any dimension needs a fourth exemption from the FATAL class, implement real per-suite attribution instead of
    adding the exemption.*
 
