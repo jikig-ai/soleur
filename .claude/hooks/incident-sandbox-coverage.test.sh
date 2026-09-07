@@ -239,7 +239,21 @@ printf '\n'
 # static parity reader that never spawns its subject, and a same-basename script under
 # `.openhands/`. They are LEFT IN rather than special-cased, because every carve-out is a place a
 # real member can hide, and because a ceiling of 4 reds on the fifth member either way.
-OUTSIDE_CEILING=4
+# Ratcheted 4 -> 3 when the one TRUE POSITIVE this guard found was fixed:
+# apps/web-platform/infra/supabase-advisor/scan-workflow.test.sh piped fixture content through
+# .claude/hooks/new-scheduled-cron-prefer-inngest.sh with no chokepoint on its path -- invoked
+# directly by infra-validation.yml, no bun preload, no vitest globalSetup, no test-helpers.sh. It
+# now sources the sandbox helper.
+#
+# The three remaining members are all OVER-COUNTS, verified individually rather than assumed:
+#   scripts/test-jaccard-duplicates.sh        - a static parity reader, spawns nothing
+#   tests/hooks/test_drop_sentinel_parity.sh  - a touched fixture stub, not the real emitter
+#   tests/hooks/test_openhands_guardrails.sh  - drives .openhands/hooks/guardrails.sh, which
+#                                               contains ZERO emit_incident references; it matched
+#                                               only on a basename shared with the .claude/ hook
+# They are deliberately NOT carved out. Every carve-out is a place a real member can hide, and a
+# ceiling of 3 reds on the fourth either way.
+OUTSIDE_CEILING=3
 rc=1; [ "$n_out" -le "$OUTSIDE_CEILING" ] && rc=0
 verdict "$rc" "the outside set has not grown ($n_out, ceiling $OUTSIDE_CEILING)"
 
