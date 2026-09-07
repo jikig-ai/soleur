@@ -31,10 +31,32 @@ import sys
 # Case-insensitive, both Corrected/Updated, ISO or word dates, ref optional.
 _DATE = r"(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[A-Z][a-z]+ [0-9]{1,2}, [0-9]{4})"
 CORRECTION_NOTE = re.compile(
-    r"\*+\(?(?:Corrected|Updated)\s+" + _DATE + r"[^)*]*\)?\*+"      # inline note forms
+    # Bold lead-in marker followed by UNBOLDED prose, consumed to the end of its
+    # paragraph. This shape is the one this file's own comment previously claimed to
+    # handle and did not: `[^)*]*` cannot cross the `)` in `(#7786 / #6474)`, so the
+    # closing `**` was never reached. It leads the correction paragraph in all six
+    # published documents, and a correction written in it that QUOTES the wording it
+    # retracts -- the house convention -- would otherwise red this blocking gate on a
+    # corpus that is more honest than the one that passes. Bounded by the blank line, so
+    # it cannot over-consume the way the unbounded span did.
+    r"\*\*(?:Corrected|Updated)\s+" + _DATE + r"[^\n]*(?:\n(?!\s*\n)[^\n]*)*"
+    r"|\*+\(?(?:Corrected|Updated)\s+" + _DATE + r"[^)*]*\)?\*+"      # inline note forms
     r"|\*\((?:Corrected|Updated)\s+" + _DATE + r".*?\)\*"            # spanning note form
     r"|\*\*\[" + _DATE + r"\s+CORRECTION\b.*?\]\*\*",             # register bracket form
     re.S | re.IGNORECASE,
+)
+
+# EXECUTABLE, not prose. The list above shipped claiming five "measured shapes actually
+# present in the corpus" while one of them -- the bold form this very PR adds to all six
+# documents -- did not match. A comment asserting a property of a regex is a comment that
+# has not been tested; this turns each documented shape into a startup assertion, so the
+# next shape added to the list is checked by construction rather than by the author's eye.
+DOCUMENTED_NOTE_SHAPES = (
+    "*(Corrected 2026-08-20, ref #7624: prior wording)*",
+    "*(corrected June 11, 2026: prior wording)*",
+    "**Corrected September 7, 2026 (#7786 / #6474).** prior wording",
+    "*(Updated 2026-09-07, #7786: prior wording)*",
+    "**[2026-09-07 CORRECTION (#6474). prior wording]**",
 )
 
 SURFACES = {
@@ -96,13 +118,13 @@ FORBIDDEN = [
 FORBIDDEN_PATTERNS = [
     re.compile(
         r"(?:30\s*(?:MB|megabytes?)|max-size\s*=?\s*10m)"
-        r"[^.]{0,120}?"
+        r"[^.\n|]{0,120}?"
         r"(?:json-file|rolling buffer|rolling per container|per container)",
         re.IGNORECASE,
     ),
     re.compile(
         r"(?:json-file|rolling buffer|rolling per container)"
-        r"[^.]{0,120}?"
+        r"[^.\n|]{0,120}?"
         r"(?:30\s*(?:MB|megabytes?)|max-size\s*=?\s*10m)",
         re.IGNORECASE,
     ),
@@ -121,7 +143,7 @@ MIN_DOCS = 3
 # printed `CORPUS-OK (6 document(s) examined)` at rc=0 -- six documents examined against
 # nothing. Absolute, hand-ratcheted, and set to the current exact counts: the lists only
 # ever grow, and slack in a floor is narrowing budget rather than safety margin.
-MIN_FORBIDDEN = 8
+MIN_FORBIDDEN = 9
 MIN_REQUIRED = 3
 
 # An empty or near-empty REQUIRED entry is FAIL-OPEN, and asymmetrically so: `"" in text`
@@ -162,6 +184,18 @@ def _strip_correction_notes(raw: str, where: str, failures: list[str]) -> str:
 
 
 def main() -> int:
+    unmatched = [sh for sh in DOCUMENTED_NOTE_SHAPES if not CORRECTION_NOTE.search(sh)]
+    if unmatched:
+        print(
+            "PROBE-CANNOT-RUN: CORRECTION_NOTE does not match "
+            f"{len(unmatched)} of {len(DOCUMENTED_NOTE_SHAPES)} documented correction "
+            f"shape(s): {unmatched!r}. A shape the corpus uses but this regex misses is "
+            "never stripped, so a correction quoting the wording it retracts reds this "
+            "gate on a corpus that is correct.",
+            file=sys.stderr,
+        )
+        return 2
+
     failures: list[str] = []
     # A SET of (surface, doc) pairs, not a counter. A plain counter is satisfied by a
     # DUPLICATE member (DOCS = [privacy, privacy, gdpr] still reaches 6) and so cannot

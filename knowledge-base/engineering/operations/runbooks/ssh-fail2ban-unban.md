@@ -123,10 +123,41 @@ restarts.
 ### Last-resort diagnosis (SSH channel -- not the noVNC channel of last resort) -- Step 6: confirm SSH is restored
 
 This is the terminal verification of the recovery above, not an entry point --
-do not start here. Reach it only after Steps 1-5 have run and the no-SSH probes
-are exhausted, per `hr-no-ssh-fallback-in-runbooks`. Attempting SSH is the only
-way to confirm SSH works, which is why this step is sanctioned rather than
-replaced: there is no no-SSH read path for "is the SSH channel open?".
+do not start here. Reach it only after Steps 1-5 have run.
+
+**Say what is true about the preceding steps: they are noVNC console commands,
+not no-SSH probes.** Steps 1-5 run inside a Hetzner Cloud Console session --
+that is a different LOGIN CHANNEL, not an off-host read path. This runbook
+prescribes no off-host read before this point, and that is a gap rather than a
+design.
+
+**Probe before you authenticate.** An L4 banner probe
+(`bash -c '</dev/tcp/<ip>/22'`, or `nc -z -w5 <ip> 22`) opens TCP and reads the
+SSH banner without offering credentials. It tells you whether the unban took --
+a reset at the banner means the jail is still active, an `SSH-2.0-OpenSSH_...`
+banner means it cleared -- and it is the same class of off-host read as
+`curl ifconfig.me` in the sibling runbook.
+
+**This matters for safety, not just for rule compliance.** `## Root Cause`
+records `maxretry` rejections inside one `findtime` window tripping the `[sshd]`
+jail, with `bantime.increment = true` and no `bantime.maxtime` cap. A failed
+`ssh` attempt **feeds that counter**. If the unban did not take -- wrong IP, or
+the recidive jail already escalated -- retrying `ssh` here RE-ARMS the ban the
+operator just cleared, at a longer bantime, quite possibly after the noVNC tab
+is closed. The banner probe does not authenticate and does not feed the jail.
+
+So: probe first, attempt `ssh` **once**, and if it fails do NOT retry -- re-open
+the noVNC console and go to `## If This Runbook Does Not Work`. What the `ssh`
+attempt adds over the banner probe is confirmation of end-to-end key
+authentication, which no off-host read can give; that is the narrow ground on
+which it is sanctioned under `hr-no-ssh-fallback-in-runbooks`.
+
+**Observability layer:** L4 banner probe (operator machine) + the noVNC console.
+Layers 1-6 do NOT cover this: `apps/web-platform/infra/vector.toml` Source 2
+(`system_journald`) ships `PRIORITY 0-2` only and Source 4 carries no `sshd` or
+`fail2ban` tag, so the sshd-journal signal this runbook routes on is readable
+only from the host console. Widening that filter is a log-quota decision, not a
+free win -- tracked rather than assumed.
 
 **"Last resort" here names the SSH _probe_, not the recovery _channel_.** This
 runbook's channel of last resort is the Hetzner Cloud Console (noVNC) named in
@@ -136,6 +167,15 @@ escalation path is `## If This Runbook Does Not Work` -- not another SSH attempt
 Back on the operator laptop:
 
 ```bash
+# 1. No authentication -- does the channel answer? Reads the banner only, and
+#    CANNOT feed the fail2ban maxretry counter.
+#    reset/timeout = still banned; SSH-2.0-OpenSSH_... = the unban took.
+timeout 5 bash -c 'cat </dev/tcp/135.181.45.178/22' | head -1
+
+# 2. ONE attempt, only if the banner came back. Confirms end-to-end key auth.
+#    If this fails, do NOT retry -- each failure feeds maxretry and can re-arm
+#    the ban at a longer bantime. Re-open noVNC and see
+#    `## If This Runbook Does Not Work`.
 ssh -vvv root@135.181.45.178 'hostname'
 ```
 

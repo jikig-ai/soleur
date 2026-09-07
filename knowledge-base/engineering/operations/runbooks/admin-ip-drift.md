@@ -175,20 +175,54 @@ confirm no drift elsewhere.
 ### Last-resort diagnosis (SSH channel, after the no-SSH probes) -- Step R3: confirm SSH is restored
 
 This is the terminal verification of the recovery above, not an entry point --
-do not start here. Reach it only after Steps R1-R2 have run and the no-SSH
-probes are exhausted, per `hr-no-ssh-fallback-in-runbooks`. Attempting SSH is
-the only way to confirm SSH works, which is why this step is sanctioned rather
-than replaced: there is no no-SSH read path for "is the SSH channel open?".
+do not start here. Reach it only after Steps R1-R2 have run.
+
+**The authoritative verification of THIS recovery is the no-SSH one, and it is
+in the fence below.** Admin-IP drift is an L3 firewall condition: the packet
+never reaches sshd (see `## Root Cause`), so what the recovery changed is
+`var.admin_ips` -> the Hetzner firewall `source_ips`. `hcloud firewall describe`
+reads that back directly, and re-running `## Diagnosis` Steps 1, 3 and 4 --
+`curl ifconfig.me`, `doppler secrets get ADMIN_IPS`, `hcloud firewall describe`
+-- re-establishes both invariants without touching SSH at all.
+
+**A second no-SSH read answers "is the channel open?" without authenticating:**
+an L4 banner probe (`bash -c '</dev/tcp/<ip>/22'`, or `nc -z -w5 <ip> 22`) opens
+a TCP connection and reads the SSH banner. It discriminates the three states
+these runbooks separate -- no SYN-ACK/timeout means a firewall drop (this
+runbook); connection established then reset at the banner means fail2ban/sshd
+(`ssh-fail2ban-unban.md`); an `SSH-2.0-OpenSSH_...` banner means the channel is
+open. It is the same class of off-host read as the `curl ifconfig.me` already
+sanctioned in `## Diagnosis` Step 1.
+
+What the `ssh -vvv` below adds over both is narrower than it looks: it confirms
+**end-to-end key authentication**, which no off-host read can. That is why it is
+sanctioned under `hr-no-ssh-fallback-in-runbooks` -- not because no no-SSH read
+exists. It is a convenience confirmation, and it is last.
+
+**Observability layer:** the `hcloud` API and the L4 banner probe (operator
+machine). Layers 1-6 do NOT cover this: `apps/web-platform/infra/vector.toml`
+Source 2 (`system_journald`) ships `PRIORITY 0-2` only, and sshd/fail2ban auth
+lines are PRIORITY 4-6, so the sshd-journal discriminator both runbooks route on
+is readable only from the host console.
+
+Distinct from the `# Last-resort fallback:` curl service in `## Diagnosis`
+Step 1, which is an L3 egress-IP probe and has nothing to do with this section.
 
 Distinct from the `# Last-resort fallback:` curl service in `## Diagnosis`
 Step 1, which is an L3 egress-IP probe and has nothing to do with this section.
 
 ```bash
-# Operator machine:
-ssh -vvv root@135.181.45.178 'hostname'
-
-# From operator with Hetzner CLI auth:
+# 1. AUTHORITATIVE, no SSH -- did the firewall actually take the new CIDR?
 hcloud firewall describe soleur-web-platform | grep -A1 'port: "22"'
+
+# 2. No SSH, no authentication -- is the channel open? Reads the banner only.
+#    timeout/no SYN-ACK = still firewalled; reset at banner = fail2ban (see
+#    ssh-fail2ban-unban.md); SSH-2.0-OpenSSH_... = open.
+timeout 5 bash -c 'cat </dev/tcp/135.181.45.178/22' | head -1
+
+# 3. Convenience only -- confirms end-to-end KEY AUTH, which the reads above
+#    cannot. Everything before this point has already determined the outcome.
+ssh -vvv root@135.181.45.178 'hostname'
 ```
 
 SSH should succeed on first try. The firewall rule's source_ips should

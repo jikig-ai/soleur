@@ -354,7 +354,7 @@ The following data may be processed by third-party services when users interact 
 | Customer email, subscription metadata | Stripe (via Web Platform Checkout) | Payment processing (card data handled by Stripe, never reaches Jikigai) |
 | User workspaces, encrypted API keys | Hetzner (via Web Platform hosting) | Infrastructure hosting for workspace environments |
 | IP addresses, request headers | Cloudflare (via `app.soleur.ai` proxy) | CDN/proxy and DDoS protection |
-| Pseudonymous `userIdHash`, conversation IDs, request metadata, error stack traces (WARN and above) | Better Stack s.r.o. (via the Vector log-shipping agent) | Off-host operational log aggregation and breach detection |
+| Pseudonymous `userIdHash`, conversation IDs, request metadata, error stack traces (WARN and above; **plus any non-JSON line, such as a crash trace, at any severity** -- see §3.7) | Better Stack s.r.o. (via the Vector log-shipping agent) | Off-host operational log aggregation and breach detection |
 
 Users are responsible for reviewing the privacy policies of these third-party services.
 
