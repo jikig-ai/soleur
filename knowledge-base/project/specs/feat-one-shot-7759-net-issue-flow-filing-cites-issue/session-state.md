@@ -1,0 +1,57 @@
+# Session State
+
+## Plan Phase
+
+- Plan file: knowledge-base/project/plans/2026-09-07-fix-net-issue-flow-filing-cites-issue-plan.md
+- Status: complete
+- Plan artifact: complete (selector=branch)
+- Scope verified: only `plans/`, `specs/`, and the generated `INDEX.md` changed — plan-only mandate respected.
+- Collision re-probe after planning: plan targets `closes: [7759]`, the same ref cleared at Step 0a.5. No new target discovered, so no re-probe was required.
+
+### Errors
+
+1. markdownlint MD038 on the first plan commit (code span with a trailing space) — fixed, recommitted.
+2. **A fail-open defect in the plan's own first-draft code**, found by probing and confirmed by two
+   agents: `grep -oE … | jq … || _fail_open` under the gate's `set -uo pipefail` makes grep's
+   no-match exit 1 fail the gate OPEN for every PR whose body names no issue (measured 46/300 PRs),
+   and converts the deliberately fail-CLOSED unbalanced-fence path into a fail-open. Designed out by
+   deriving the sets inside the existing `jq` pass. Notable: the plan's own draft reproduced the
+   defect family the plan exists to fix.
+3. A stale ADR ordinal in `tasks.md` after a 205→206 renumber — caught by the plan's own prescribed
+   sweep, i.e. the sweep caught the failure it exists to catch.
+
+### Decisions
+
+- **The design fork is resolved as NEITHER issue option in its stated form.** The gate COUNTS only a
+  declared `Filed:`/`Tracks:`/`Refs:` line in the PR body, and REPORTS-without-counting every other
+  post-PR number the body mentions. Widening the match (option 2) attributes transitively through a
+  third party and breaks stated property P4. The Source-line sweep (option 1) is rejected at 16
+  filing sites (11 emit no PR number; 5 mutually incompatible citation shapes) but ADOPTED at one —
+  `/ship` Phase 6's body template — where producer and gate ship in the same skill.
+- **Bare-`#N` counting was drafted then rejected on measurement over 300 PRs:** it attributes 9
+  issues to two PRs each and flips 25 PRs (8.3%) PASS→BLOCK with an unmeasured false-positive rate.
+- **Consequence to carry into review:** for PRs predating the producer, the blind spot becomes
+  SELF-REPORTING rather than closed. That is a deliberate trade (fail-visible over fail-open), and
+  it is the thing to challenge if the reviewer disagrees.
+- **A second, independent defect folded in:** ADR-155's mandated-filing exemption is inert — 0 of 33
+  whole-line `Mandated-By:` issues cite a PR, so none has ever been a FILED candidate. The fix
+  revives it; ADR-155 gets an amendment because its recorded consequences are falsified.
+- **The PreToolUse hook needs no change** (verified, not assumed): it delegates and re-implements no
+  query logic. The four pinned call-shape properties survive because the `gh issue list` argv is
+  byte-identical — plus a NEW assertion pinning the `--json` field list, since dropping `createdAt`
+  is an uncovered always-pass path.
+- ADR-206, not 205: 205 reads free under a tree-scan of origin refs but is claimed on an unmerged
+  branch, visible only to `git log --all`.
+
+### Components Invoked
+
+`soleur:plan` → `soleur:deepen-plan`; agents: general-purpose ×2, architecture-strategist,
+code-simplicity-reviewer, test-design-reviewer, silent-failure-hunter, spec-flow-analyzer,
+git-history-analyzer. Gates: deepen-plan 4.5–4.11. Lints: lint-guard-contract.py,
+lint-infra-no-human-steps.py, markdownlint, gitleaks.
+
+### Verification note (parent)
+
+The parent re-probed two load-bearing claims. The `0 of 33` figure is correct under the gate's own
+whole-line predicate; a parent probe returning 37/37 was asking a different question ("contains any
+`#N`") and the plan had already documented 37 as the loose count. No correction needed.
