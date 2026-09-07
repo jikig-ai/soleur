@@ -17,24 +17,38 @@ not be re-described as closing it.
 All edits in `scripts/lib/repo-write-boundary.test.sh`. Use the existing `sibling_probe()` / `new_probe()` /
 `state()` / `classify_in()` helpers; never mock `_repo_boundary_branches_elsewhere`.
 
-- [ ] 1.1 Every arm that writes a tag carries `-c tag.gpgSign=false` (plus `-c tag.forceSignAnnotated=false`
-      where it creates a lightweight tag), and hard-fails fixture setup with a named message the way arm 36
-      does at `:649-651`. The global gitconfig forces signed/annotated tags.
+- [ ] 1.0 **Add a `pgit()` fixture-git wrapper** running under `GIT_CONFIG_GLOBAL=/dev/null
+      GIT_CONFIG_SYSTEM=/dev/null`, and route all new arms through it. `state()`/`classify_in()` already pin
+      those; the *fixture mutations* do not, which is why arm 36 needs `-c tag.gpgSign=false`. Arms 47/48 create
+      commits and would break on any machine with global commit signing. **Do NOT** set `commit.gpgsign=false`
+      in `new_probe` — arm 4 writes exactly that key as its fixture and would go vacuous.
+- [ ] 1.1 Each arm hard-fails fixture setup with a named message the way arm 36 does at `:649-651`, rather than
+      falling through to a misleading assertion failure. Note `tag.forceSignAnnotated` governs **annotated**
+      tags — it is the must-PASS annotated-tag case that needs it, not the lightweight one.
 - [ ] 1.2 Every new assertion is **end-anchored** (`\(tag\) was created$`). Un-anchored, it prefix-matches
       today's `was created or moved` and passes vacuously pre-fix. This is the difference between a real RED
       and a fake one.
 - [ ] 1.3 **Tighten arm 36 in place** (do not add a twin): assertion becomes
       `^FATAL[[:space:]]+refs.*probe-tag \(tag\) was created$` on its existing no-sibling `new_probe` fixture.
-- [ ] 1.4 **Arm 45** — sibling + tag created ⇒ exactly one `^REPORT[[:space:]]+refs.*\(tag\) was created$` and
-      zero `^FATAL`. Assert the line is *present*, never merely that FATAL is absent. **Fails today.**
-- [ ] 1.5 **Arm 46** — sibling + tag deleted ⇒ `^FATAL[[:space:]]+refs.*was DELETED`. Closes a real gap: no arm
-      exercises tag deletion today.
+- [ ] 1.4 **Arm 45** — sibling + tag created, collision-free name ⇒ exactly one
+      `^REPORT[[:space:]]+refs.*\(tag\) was created$` and zero `^FATAL`. Assert the line is *present*, never
+      merely that FATAL is absent. **Fails today.**
+- [ ] 1.5 **Arm 46** — sibling + tag deleted ⇒ `^FATAL[[:space:]]+refs.*probe-tag.*DELETED`, copying arm 40's
+      anchor shape at `:774` (named ref + scoped negative). A bare `^FATAL[[:space:]]+refs` matches the sibling
+      branch line and passes vacuously. Closes a real gap: no arm exercises tag deletion today.
 - [ ] 1.6 **Arm 47** — sibling + one created and one moved tag in the same run ⇒ exactly one `REPORT` and one
       `FATAL`, each naming its own tag. **Fails today.**
 - [ ] 1.7 **Arm 48** — sibling + tag created **and** default branch moved in the same run ⇒ two `REPORT`, zero
-      `FATAL`. This is the measured incident shape (the bot merge moved `main` and published `v3.258.3`).
-      **Fails today.**
-- [ ] 1.8 Raise `MIN_ASSERTIONS` 44 → 49 (`:851`).
+      `FATAL` (scope the negative to `^FATAL[[:space:]]+refs`). This is the measured incident shape (the bot
+      merge moved `main` and published `v3.258.3`). **Fails today.**
+- [ ] 1.7b **Arm 49 — the collision guard.** Sibling + a created tag named `origin/main` ⇒ `FATAL`; and one
+      named `$default_branch` ⇒ `FATAL`. `refs/tags/<n>` resolves ahead of `refs/heads/<n>` and
+      `refs/remotes/<n>`, and `test-all.sh:780`/`:794` plus `/work`, `/qa`, `/ship` all resolve the bare
+      `origin/main`. Without this arm the softening lets a pure creation silently rescope every later gate.
+- [ ] 1.7c **Arm 50 — the epilogue wiring.** Drive the sandboxed runner the way arms 23/24/26 do; assert a
+      REPORT-only run exits 0 and a FATAL run exits 1. Every other arm asserts classifier stdout only, while
+      property P1 is about the exit code and the Guard Contract's Assembly claims `test-all.sh:2217`/`:2406`.
+- [ ] 1.8 Raise `MIN_ASSERTIONS` 44 → 50 (`:851`).
 - [ ] 1.9 Confirm arm 43 is untouched and still green after the Phase 2 change.
 
 ## Phase 2 — GREEN: the classifier
@@ -42,7 +56,16 @@ All edits in `scripts/lib/repo-write-boundary.test.sh`. Use the existing `siblin
 All edits in `scripts/lib/repo-write-boundary.sh`.
 
 - [ ] 2.1 Split the `refs/tags/*)` arm of the created-or-moved loop (`:506-507`) on `bsha`:
-      created + `shared_store` ⇒ `REPORT`; created without ⇒ `FATAL`; moved ⇒ `FATAL`.
+      created + `shared_store` + collision-free ⇒ `REPORT`; created without `shared_store` ⇒ `FATAL`;
+      moved ⇒ `FATAL`. Mirror the canonical `"refs/heads/$default_branch")` arm at `:510-515` (same
+      `if [[ -n "$shared_store" ]]` test, same REPORT/FATAL ordering, same naming of the producing shape).
+- [ ] 2.1b **The collision guard.** Keep `FATAL` when the tag's short name equals `own_short` (`:382`), equals
+      `$default_branch` (`:372`), appears in `elsewhere` (`:380`), or contains a `/`. Costs nothing: 3054 tags
+      in this repo, zero contain a `/`, none is named `main`/`master`/`HEAD`/`origin`.
+- [ ] 2.1c **Fail-closed input.** In `_repo_boundary_branches_elsewhere` (`:302`), change
+      `|| here=""` to `|| return 1`. As written, an unreadable toplevel makes every branch read as `elsewhere`
+      and manufactures `shared_store=1`. `_repo_state:270` already routes a non-zero return to
+      `wt: not-measured`, which arm 44 proves withholds the softening.
 - [ ] 2.2 Emit distinct details `(tag) was created` / `(tag) was moved`. Leave the three non-tag
       `created or moved` strings at `:519`, `:521`, `:523` alone — they are out of scope.
 - [ ] 2.3 Leave the deleted loop's `refs/tags/*|"$own_branch")` arm (`:489`) unchanged.
@@ -55,13 +78,18 @@ All edits in `scripts/lib/repo-write-boundary.sh`.
       laundered pass); the `git-data-client.ts:244` graft residual; and that `-z "$bsha"` means *absent from
       the BEFORE measurement*, not *did not exist*.
 
-## Phase 3 — remove the one battery-reachable author we can close cheaply
+## Phase 3 — remove the two battery-reachable tag authors we can close cheaply
 
-- [ ] 3.1 Verify no downstream consumer of `scripts/plugin-delivery-canary.sh:335` needs tags (the fetch exists
-      only to make `$sha` available to `git archive`), then add `--no-tags`.
-- [ ] 3.2 **Arm 49** asserts that flag is present.
-- [ ] 3.3 Do **not** touch `lint-migration-fk-preconditions.sh` or `run-migrations.sh` — verified not
-      battery-reachable, and the latter is release-path code.
+- [ ] 3.1 `scripts/plugin-delivery-canary.sh:335` — confirm no downstream consumer needs tags (the fetch exists
+      only to make `$sha` available to `git archive`), then add `--no-tags`. Assert it in
+      `plugin-delivery-canary.test.sh` (its own counter), anchored on the specific fetch command.
+- [ ] 3.2 `apps/web-platform/scripts/run-migrations.sh:200` — same. Battery-reachable via
+      `run-migrations-schema-probe.test.sh`, which copies the script to a tmp dir and runs it **without `cd`**,
+      so the unconditional fetch hits the live repo. Assert it in that suite (its own counter).
+- [ ] 3.3 Do **not** touch `lint-migration-fk-preconditions.sh` — its fetch is gated behind `--from-pr-diff`,
+      which only `.github/workflows/tenant-integration.yml:145` passes; genuinely not battery-reachable.
+- [ ] 3.4 Do **not** put either assertion in `repo-write-boundary.test.sh` — sharing its `MIN_ASSERTIONS` is the
+      shape this plan cut Guard 2 for.
 
 ## Phase 4 — the ADR
 
@@ -81,7 +109,7 @@ All edits in `scripts/lib/repo-write-boundary.sh`.
 - [ ] 5.2 Add the precision note to
       `knowledge-base/project/learnings/2026-08-27-i-committed-the-defect-class-i-was-closing-eleven-times.md`
       where it says arms 42-43 stop sibling presence laundering "a tag" — arm 43 tests a tag **move**.
-- [ ] 5.3 `bash scripts/lib/repo-write-boundary.test.sh` — `0 failed`, floor 49.
+- [ ] 5.3 `bash scripts/lib/repo-write-boundary.test.sh` — `0 failed`, floor 50.
 - [ ] 5.4 `bash scripts/guard-vacuity-floor.test.sh`
 - [ ] 5.5 `bash scripts/plugin-delivery-canary.test.sh`
 - [ ] 5.6 `bash plugins/soleur/test/c4-count-parity.test.sh`

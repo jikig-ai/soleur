@@ -186,7 +186,8 @@ and `scripts/guard-vacuity-floor.test.sh` matched **zero** bodies. **None.**
 | Option 1: soften "created **or moved**" tags | A fetch cannot move a local tag (Probe 1). The move half buys no property and costs test arm 43. | Adopt a **narrower** Option 1: **create-only**. |
 | Option 2: `git ls-remote --tags origin` discriminates fetched from authored | It discriminates the **wrong property**. `scripts/plugin-delivery-canary.sh:335` fetches with tag auto-follow, so a tag this run authored would also be "on origin" and would launder. It also re-derives a classification input after the window closes. | **Reject**, with this reason recorded. |
 | "Keep tags FATAL on the fail-closed no-sibling path (CI), which is where a suite-created tag would matter" | Correct, and sharper than stated: `scripts/plugin-delivery-canary.sh:335` is a real in-battery author. | Keep FATAL **and** remove the author (see Phase 3). |
-| *(plan v1's own claim)* "the sweep found two more live-repo fetch sites, so fix all three" | **Over-reached, corrected at plan-review.** `lint-migration-fk-preconditions.sh:102` fetches only under `--from-pr-diff`, which its own `.test.sh` never passes and only `.github/workflows/tenant-integration.yml:145` does; `run-migrations.sh:200` is release-path with no test invoking it. Neither is battery-reachable, and reachability — not "is a live-repo fetch" — is the property that matters. | Scope the fix to the one battery-reachable author. |
+| *(plan v1's own claim)* "the sweep found two more live-repo fetch sites, so fix all three" | **Half right, and the wrong half was mine.** `lint-migration-fk-preconditions.sh:102` genuinely is *not* battery-reachable — its fetch is gated behind `--from-pr-diff`, which its own `.test.sh` never passes and only `.github/workflows/tenant-integration.yml:145` does. But `run-migrations.sh:200` **is** reachable and my "no test invokes it" evidence was a **`head -5`-truncated grep** — the exact latent-false-negative the plan skill warns about for absence claims. | Drop `lint-migration-fk-preconditions.sh`; **restore `run-migrations.sh` to scope**. |
+| *(plan v2's own claim)* "`run-migrations.sh:200` is release-path with no test invoking it" | **Refuted by measurement.** `apps/web-platform/scripts/run-migrations-schema-probe.test.sh` matches `SUITE_GLOBS` (`test-all.sh:88`) and runs under `TEST_GROUP=scripts`/`all` — the exact group this plan's own Phase 5 invokes. It copies the real script to a tmp dir and runs it four times (`:109,:134,:164,:224`) **without `cd`-ing**, so the unconditional `git fetch --quiet origin main` at `:200` runs with the **live repo as cwd**. Executed at plan time: the run created `/tmp/run-migrations-fetch.err`, proving the code path fires. | A **third** battery-reachable live-repo fetch, and one that auto-follows tags. In scope for Phase 3. |
 | *(plan v1's own claim)* "after Phase 3 no in-battery path can create a tag" | **Refuted at plan-review (spec-flow P0).** The hand-typed sweep roots omitted `plugins/soleur/test/`, `plugins/soleur/skills/*/test/`, `plugins/soleur/scripts/`, `.claude/hooks/` — including `worktree-manager.sh:2731`, the very fetch this plan names as the tag author, which 15 battery suites drive. | Do **not** claim the author set is closed. State the residual honestly, and defer the real sweep with its root set derived from `scripts/test-all.sh --print-suite-globs` (`:96`) rather than hand-typed. |
 
 ## User-Brand Impact
@@ -215,9 +216,35 @@ measurement, no new input, no network:
 
 | Tag event | `shared_store` set (sibling worktrees) | no `shared_store` (CI, single-worktree) |
 |---|---|---|
-| **created** | `REPORT` — **the only cell that changes** | `FATAL` |
+| **created**, collision-free name | `REPORT` — **the only cell that changes** | `FATAL` |
+| **created**, name collides (below) | `FATAL` | `FATAL` |
 | **moved** | `FATAL` | `FATAL` |
 | **deleted** | `FATAL` | `FATAL` |
+
+### The name-collision guard (added at deepen-plan; security-sentinel P1, verified live)
+
+A tag **creation** alone reaches move-grade harm, without moving anything, because
+`refs/tags/<n>` resolves **before** `refs/heads/<n>` and `refs/remotes/<n>` in gitrevisions. Measured at
+plan time on a throwaway repo — creating a tag literally named `origin/main` while leaving the real
+remote-tracking ref untouched:
+
+```
+real origin/main   = a5a6179
+planted tag        = 3219116
+git rev-parse origin/main -> 3219116  (exit 0)      # the tag wins; warning only
+git rev-parse origin/main...HEAD                     # resolves via the tag: YES
+```
+
+That is not academic here: `scripts/test-all.sh:780` and `:794`, and the `/work`, `/qa` and `/ship` gates,
+all scope against the **bare** name `origin/main...HEAD`. A softened creation would silently rescope every
+subsequent gate to attacker-chosen content with the exit code unchanged.
+
+**So the CREATED arm stays FATAL when the tag's short name** equals `own_short`, equals `$default_branch`,
+appears in `elsewhere`, **or contains a `/`**. Only the collision-free remainder is softened.
+
+**This costs nothing.** Measured on this repo: **3054 tags, zero contain a `/`**, and none is named `main`,
+`master`, `HEAD` or `origin` — real release tags are `v3.262.3` / `web-v0.261.4` shaped. Every input the guard
+needs is already in scope at the arm (`own_short` `:382`, `default_branch` `:372`, `elsewhere` `:380`).
 
 Why the create/move line is the right one, in one sentence each:
 
@@ -233,8 +260,13 @@ Why the create/move line is the right one, in one sentence each:
    classifies as **created** → softened on a machine with siblings. It runs with `{ cwd: workspacePath }`, so
    reaching the live repo requires a cwd escape of the #7553/#7652 class; the *heads* half of that refspec
    targets `refs/remotes/git-data/*`, which `--heads --tags` does not measure at all, so the tag arm is the
-   only detector for that shape. **Residual, recorded and tracked** (§Non-Goals): on a shared store this
-   softening blinds that one escape shape. It is not closed by this plan and must not be claimed as closed.
+   only detector for that shape. **Bounded harder than plan v1 stated** (security-sentinel P2):
+   `gitWithPrivateKeyAuth` is mocked in the battery (`apps/web-platform/test/git-data-client.test.ts:19`,
+   `ensure-workspace-repo.test.ts:84`), and this guard runs **only** inside `scripts/test-all.sh` — it never
+   watches the production server path where the graft actually executes. So it is a narrow residual, not an
+   escape the softening admits, and it does **not** block this change. Tracked in §Non-Goals; the collision
+   guard above independently blocks the highest-harm instance of it (a grafted peer tag whose name contains a
+   `/`, which every `refs/soleur/worktrees/<id>/tags/*` graft target does).
 4. **Every way the *discriminator* can be wrong is fail-closed.** A `+refs/tags/*` refspec, `fetch --force --tags`,
    or `fetch.pruneTags=true` would let a sibling move or delete a tag; on such a machine this design yields a
    *false FATAL* — today's failure mode, rarer — and never a laundered pass. Verified on this machine: git
@@ -289,20 +321,40 @@ Both residuals are tracked in §Non-Goals with an explicit trigger. Removing one
   the incompleteness that left tags at full strength.
 - `scripts/lib/repo-write-boundary.test.sh` — **tighten** arm 36's assertion in place (presence → presence +
   `FATAL` + end-anchored `was created$`), leave arm 43 **verbatim**, add arms 45-49 (below), raise
-  `MIN_ASSERTIONS` 44 → 49.
+  `MIN_ASSERTIONS` 44 → 50.
 - `scripts/plugin-delivery-canary.sh` — `--no-tags` on the live-repo fetch at `:335`.
+- `apps/web-platform/scripts/run-migrations.sh` — `--no-tags` on the live-repo fetch at `:200`. Battery-reachable
+  via `run-migrations-schema-probe.test.sh` (measured, above). The fetch exists only to refresh `origin/main`
+  for the unmerged-apply gate, so tags are not wanted; confirm no downstream consumer needs them.
+- `scripts/lib/repo-write-boundary.sh` (second edit, security-sentinel Q5) — `_repo_boundary_branches_elsewhere`
+  at `:302` does `here="$(git rev-parse --show-toplevel 2>/dev/null)" || here=""`, and the loop's
+  `[[ -n "$here" && ... ]] ||` then emits **every** branch — including our own — as `elsewhere`, setting
+  `shared_store=1`. That is **fail-open in the lib**, saved today only by a caller-side bare-repo guard 900
+  lines away at `test-all.sh:236-240`. Change to `|| return 1`: `_repo_state:270` already routes a non-zero
+  return to `wt: not-measured`, which arm 44 proves withholds the softening. One line, fail-closed, and it
+  matters more now because this change adds a new consumer of `shared_store`.
 - `knowledge-base/engineering/architecture/decisions/ADR-<next>-repo-write-boundary-harm-partition.md` — **new**;
   see §Architecture Decision.
 - `knowledge-base/project/learnings/2026-08-27-i-committed-the-defect-class-i-was-closing-eleven-times.md` —
   one-line precision note at the line reading *"arms 42-43 exist so that sibling presence can never launder
   HEAD, our own branch, or a tag"*: arm 43 tests a tag **move**, which still cannot be laundered.
 
-**Deliberately not edited.** `knowledge-base/project/plans/archive/20260827-143501-*` and
+## Files Deliberately NOT Edited
+
+Kept out of `## Files to Edit` so a path extraction over that section cannot read them as targets.
+
+`knowledge-base/project/plans/archive/20260827-143501-*` and
 `knowledge-base/project/specs/archive/20260827-163448-*` are point-in-time migration records that must keep
 stating the residual as it was accepted then (the `**/archive/**` carve-out convention).
-`apps/web-platform/scripts/lint-migration-fk-preconditions.sh` and `run-migrations.sh` are **out of scope**:
-neither fetch is battery-reachable (verified above), and `run-migrations.sh` is release-path code that must not
-ride a test-gate PR (DHH P0).
+`apps/web-platform/scripts/lint-migration-fk-preconditions.sh` is **out of scope**: its fetch is gated behind
+`--from-pr-diff`, which only `.github/workflows/tenant-integration.yml:145` passes and its own `.test.sh` never
+does, so it is genuinely not battery-reachable.
+
+`run-migrations.sh` was out of scope in plan v2 on DHH's P0 ("release-path code must not ride a test-gate PR")
+and is now **back in scope**, because the premise that put it out was refuted by measurement (§Research
+Reconciliation). DHH's underlying concern stands and is answered rather than dismissed: the edit is a single
+`--no-tags` flag on a fetch whose only purpose is refreshing `origin/main`, it changes no migration logic, and
+`run-migrations-schema-probe.test.sh` covers the file in the same battery.
 
 ## Files to Create
 
@@ -330,21 +382,46 @@ gitconfig forces signed/annotated tags, which arm 36's comment already documents
   asserts only that `probe-tag` appears. Tighten to `^FATAL[[:space:]]+refs.*probe-tag \(tag\) was created$`.
   This is a strictly *stronger* assertion on an existing arm, and it delivers the no-sibling fail-closed control
   without a twin arm (DHH P1).
-- **Arm 45** sibling + tag **created** ⇒ `REPORT`, end-anchored. *Fails today.* The RED that motivates the change.
-- **Arm 46** sibling + tag **deleted** ⇒ `FATAL`. Closes a real coverage gap — **no arm exercises tag deletion at
-  all** (`grep` for `tag -d`/`--delete` in the suite → 0 hits). Passes today, non-vacuously (the DELETED detail
-  string is unaffected by Phase 2).
+**Fixture hermeticity — fix at the seam, not per arm** (test-design P0-2). `state()` / `classify_in()` pin
+`GIT_CONFIG_GLOBAL=/dev/null`, but the **fixture mutations do not** — which is exactly why arm 36 needs
+`-c tag.gpgSign=false`. Arms 47/48 create commits, so on any machine with global commit signing they break.
+Add a `pgit()` wrapper running fixture git under `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null`
+and route the new arms through it, rather than copying `-c` flags five times. **Do NOT** set
+`commit.gpgsign=false` inside `new_probe`: arm 4 writes exactly that key as its fixture and would go vacuous.
+Note also that plan v1's parenthetical was inverted — `tag.forceSignAnnotated` governs **annotated** tags, so
+it is the Guard Contract's must-PASS *annotated-tag* row that is left unguarded without the wrapper.
+
+- **Arm 45** sibling + tag **created**, collision-free name ⇒ `REPORT`, end-anchored. *Fails today.* The RED
+  that motivates the change.
+- **Arm 46** sibling + tag **deleted** ⇒ `FATAL`. Closes a real coverage gap — **no arm exercises tag deletion
+  at all** (`grep` for `tag -d`/`--delete` in the suite → 0 hits). Passes today and after, non-vacuously.
+  **Copy arm 40's anchor shape** (`:774`): `grep -qE '^FATAL[[:space:]]+refs.*probe-tag.*DELETED' && ! grep -qE
+  '^FATAL[[:space:]]+refs.*<other>'`. A bare `^FATAL[[:space:]]+refs` would match the sibling branch line and
+  pass vacuously (test-design Q4).
 - **Arm 47** sibling + **two** tag deltas in one run (one created, one moved) ⇒ one `REPORT` **and** one `FATAL`
   in the same verdict, each naming its own tag. *Fails today.* Pins that the partition is per-ref and cannot
   stop at the first member.
 - **Arm 48** sibling + a tag created **and** the default branch moved in the same run ⇒ two `REPORT` lines and
   **zero** `FATAL`. *Fails today.* This is the **measured incident shape**: the bot merge that published
   `v3.258.3` also moved `main`, and arms 45-47 are tags-only, so without this arm the actual reported scenario
-  is never exercised end-to-end (spec-flow P1).
+  is never exercised end-to-end (spec-flow P1). Scope the negative to `^FATAL[[:space:]]+refs`, so an unrelated
+  dimension cannot flip it.
+- **Arm 49 — the collision guard.** Sibling + a created tag named `origin/main` (contains `/`) ⇒ `FATAL`; and a
+  created tag whose name equals `$default_branch` ⇒ `FATAL`. *Fails today* in the sense that it fails against
+  the Phase-2 code unless the collision guard is implemented — it is the arm that makes §The Change's
+  collision guard real rather than prose.
+- **Arm 50 — the epilogue wiring** (test-design P0-1, observability finding 3). Every other arm asserts
+  `repo_boundary_classify` **stdout**, but property P1 is about the run's **exit code**, and the Guard Contract's
+  Assembly quantifies over `test-all.sh:2217`/`:2406` — coverage no arm currently buys. A mutation making the
+  epilogue count REPORT lines into `failed` passes arms 45-49 green. Drive the sandboxed runner the way arms
+  23/24/26 already do and assert a REPORT-only run exits 0 while a FATAL run exits 1. (Arm 27 asserts only that
+  the exit contract *documents* the REPORT class — not that it behaves that way.)
 
-Raise `MIN_ASSERTIONS` 44 → 49 (four new arms plus the Phase 3 arm below). **Assert the floor and `0 failed`,
-not a hardcoded pass count** — plan v1 hardcoded the count in three places and was already off by one
-(Kieran P1, simplicity).
+Raise `MIN_ASSERTIONS` 44 → 50. **Assert the floor and `0 failed`, not a hardcoded pass count** — plan v1
+hardcoded the count in three places and was already off by one (Kieran P1, simplicity). Note honestly that
+`MIN_ASSERTIONS` is a **deletion** detector, not a **weakening** detector (test-design P1-4): weakening arm 45
+back to `grep -q probe-tag` still passes, still counts, and conservation still balances. The mutation matrix is
+what catches that, and it runs at author time — this is a known limit of the floor, not a claim against it.
 
 **Cut at plan-review, with reasons:** the `wt`-unmeasured arm (arm 44 already pins that property at the
 `shared_store`/`elsewhere` level the new arm reads, and the reorder mutation still reddens via arms 35 and 44 —
@@ -373,15 +450,26 @@ incident shape it would tell a non-technical founder to delete a real release ta
 block already states the class and names the ref. Recorded as an accepted divergence from CPO condition 1 in
 §Domain Review rather than silently dropped; a correct event-keyed disposition is deferred with the sweep.
 
-### Phase 3 — remove the one battery-reachable tag author we can close cheaply
+### Phase 3 — remove the two battery-reachable tag authors we can close cheaply
 
-Add `--no-tags` to `scripts/plugin-delivery-canary.sh:335` (verify no downstream consumer needs tags — the fetch
-exists only to make `$sha` available to `git archive`), and add **arm 49** asserting that flag is present.
+Add `--no-tags` to both, after confirming neither has a downstream consumer that needs tags:
+
+- `scripts/plugin-delivery-canary.sh:335` — the fetch exists only to make `$sha` available to `git archive`.
+- `apps/web-platform/scripts/run-migrations.sh:200` — the fetch exists only to refresh `origin/main` for the
+  unmerged-apply gate.
+
+Assert both in **`plugin-delivery-canary.test.sh` and `run-migrations-schema-probe.test.sh` respectively**, each
+of which has its own independent assertion counter — **not** in `repo-write-boundary.test.sh`. Putting a
+source-grep arm under the classifier's `MIN_ASSERTIONS` would reintroduce the exact shared-floor shape this plan
+cut Guard 2 for (test-design P1-3). Anchor each assertion on the specific fetch command, not a bare `--no-tags`
+grep, which would pass if the flag landed on any other fetch in the file.
+
 In-repo precedent: `apps/cla-evidence/scripts/ccla-add.sh:213-215` — *"`git fetch` auto-follows tags, and writing
 157 of them into the caller's repository to read one JSON file is a side effect nobody asked for"* — and
 `scripts/lib/legal-base-ref.sh:55`.
 
-This removes **one** known author. It does not close the class; see §Defense Relaxation Analysis and §Non-Goals.
+This removes **two** known authors. It does not close the class — `worktree-manager.sh:2731` and the rest of the
+`plugins/` and `.claude/hooks/` fetch population remain. See §Defense Relaxation Analysis and §Non-Goals.
 
 **Cut at plan-review — the structural sweep guard (plan v1 Guard 2 / Phase 4).** Its hand-typed root set omitted
 the battery globs that carry most live-repo fetches, so it could have gone green with its own property false
@@ -406,9 +494,15 @@ Write the ADR named in §Architecture Decision.
 ### Guard 1 — the refs/tags harm partition
 
 **Property.** A `refs/tags/*` delta observed between the two boundary samples is classified `REPORT` **only**
-when it is a *creation* **and** the BEFORE snapshot measured at least one sibling worktree; every other tag
-delta — any move, any deletion, and any creation on a checkout with no sibling — is `FATAL` and drives the
-runner's exit 1; and no tag delta is ever silent.
+when all three hold: it is a *creation*; the BEFORE snapshot measured at least one sibling worktree; and the
+tag's short name collides with nothing that git resolves ahead of it — not `own_short`, not `$default_branch`,
+not a member of `elsewhere`, and containing no `/`. Every other tag delta — any move, any deletion, any creation
+on a checkout with no sibling, and any creation whose name could shadow a branch or remote-tracking ref — is
+`FATAL`, increments `failed`, and drives the runner's `exit 1`. No tag delta is ever silent.
+
+The two detail strings `(tag) was created` and `(tag) was moved` are **part of this contract, not output
+formatting**: they are what arms 45/47/48 discriminate on, so renaming them silently weakens the arms while
+preserving the partition (test-design Q2). A change to either is a contract change.
 
 **Assembly.** The property quantifies over the single chokepoint `repo_boundary_classify` in
 `scripts/lib/repo-write-boundary.sh` and everything that feeds or consumes its verdict: the created-or-moved
@@ -432,15 +526,18 @@ There is exactly one classifier and one consumer; both are named here.
 | **Reorder / lifetime:** compute `elsewhere` at classify time (`_repo_boundary_branches_elsewhere`) instead of reading the BEFORE snapshot's `wt` family | Arms 35 and 44 must go RED. The property is about the measurement *window*: a suite running `git worktree add -b probe` mid-run would manufacture the siblings that soften its own tag write. A delete-only battery cannot see this — only a row that moves *when* the input is read can. |
 | **Second member:** `break` out of the created-or-moved loop after the first classified ref | Arm 47 (two tag deltas in one run) must go RED; a partition that stops at the first member is the defect, not a partial fix. |
 | **Cross-dimension:** classify tags only when the refs delta contains *nothing else* | Arm 48 must go RED. The measured incident moved `main` **and** created a tag in the same run; a tags-only reading of the arm passes every tags-only fixture while failing the real shape. |
-| **Own dispatch:** make `repo_boundary_classify` `return 0` before the refs block, or make `_repo_boundary_dim_refs` drop `--tags` | Arms 36, 43, 45-48 must go RED and the suite must fail its `MIN_ASSERTIONS` floor, rather than reporting "nothing changed, all clean" and exiting 0. |
+| **Own dispatch:** make `repo_boundary_classify` `return 0` before the refs block, or make `_repo_boundary_dim_refs` drop `--tags` | Arms 36, 43, 45-50 must go RED and the suite must fail its `MIN_ASSERTIONS` floor, rather than reporting "nothing changed, all clean" and exiting 0. |
 | **Vacuous-RED:** write the new assertions un-anchored (`was created` rather than `was created$`) | Arms 45/47/48 must FAIL to distinguish pre- and post-fix output, because `was created` prefix-matches today's `was created or moved`. The anchor is what makes the RED real (Kieran P2). |
+| **Collision guard:** drop any one of the four collision conjuncts (`own_short`, `$default_branch`, `elsewhere` membership, contains `/`) | Arm 49 must go RED. A created tag named `origin/main` shadows the remote-tracking ref in gitrevisions — verified live — and `test-all.sh:780`/`:794` plus the `/work`, `/qa` and `/ship` gates all resolve that bare name, so dropping a conjunct silently rescopes every downstream gate. |
+| **Exit-code wiring:** make the epilogue count REPORT lines into `failed` (`test-all.sh:2217`) | Arm 50 must go RED. Arms 45-49 assert classifier stdout only and all stay green under this mutation, while property P1 — "does not change the run's exit code" — is false. |
+| **Fail-open input:** revert `_repo_boundary_branches_elsewhere`'s `here` read to `|| here=""` | A bare-repo / unreadable-toplevel fixture must go RED. With `here=""` every branch reads as `elsewhere`, so `shared_store=1` is manufactured and the softening applies where no sibling exists. |
 
 **Harness rows.**
 
 | Harness edit (the SUITE, not the guard) | Required outcome |
 |---|---|
 | Neuter arm 45's fixture so no tag is created, leaving the verdict empty | Must be RED. The arm must assert it *observed* a `refs/tags/probe-tag` classification line, not merely that no `FATAL` appeared — an absence-only assertion passes on an empty verdict. |
-| Delete arms 45-48 outright | Must be RED via the `MIN_ASSERTIONS` floor (44 → 49) and the `passes+fails == asserted` conservation check at `:719`. |
+| Delete arms 45-50 outright | Must be RED via the `MIN_ASSERTIONS` floor (44 → 50) and the `passes+fails == asserted` conservation check at `:719`. |
 | Drop `-c tag.gpgSign=false` from a new arm | Must be RED **legibly**, not environment-dependently: the global gitconfig forces signed/annotated tags, so a bare `git tag` fails fixture setup. Each arm must hard-fail setup with a named message the way arm 36 does at `:649-651`, never fall through to a misleading assertion failure (spec-flow P1). |
 | **Must-PASS, non-canonical:** an *annotated* tag created under a sibling; and a tag created under a sibling whose name contains a `/` (`refs/tags/rel/1.0`) | Must PASS as `REPORT`. The contract permits both; field-exact matching (`awk '$2==n'`) already handles the `/` case, and a severity partition must not depend on tag object type. |
 
@@ -449,6 +546,19 @@ There is exactly one classifier and one consumer; both are named here.
 The strict Phase 2.9 trigger set (`apps/*/server`, `apps/*/src`, `apps/*/infra`, `plugins/*/scripts`, or new
 infrastructure) does **not** match `scripts/lib/`, and this plan introduces no production surface. The block is
 supplied anyway because the deliverable is a guard whose failure mode is silence.
+
+**Layer citation (`hr-observability-layer-citation`), stated rather than left implicit.** Layers 1-6 are
+**N/A** — there is no server surface, no route, no Inngest function, no cron, no host. Layer 7 (code executing
+on a customer's self-hosted CLI) is **N/A** here too: this classifier runs under `scripts/test-all.sh`, which is
+this repo's own dev/CI gate, not a `plugins/` artifact shipped to a customer. The covering channel is the
+**synchronous runner exit code plus the CI job log** — a layer-6 analogue. Every `alert_route` below resolves to
+that channel; where it does not, the mode says so explicitly.
+
+**Probe honesty.** `discoverability_test.command` exercises the *library*, while `liveness_signal` is the
+*epilogue and exit code*. Arms 21/22 already pin part of the consumer wiring (the lib is sourced above
+`tc_acquire`; exactly two `_repo_state` call sites), and new **arm 50** closes the rest by asserting a
+REPORT-only run exits 0 and a FATAL run exits 1 — without it the probe could pass green while the FATAL→`failed`
+→`exit 1` chain is severed (observability review P2, test-design P0-1).
 
 ```yaml
 liveness_signal:
@@ -483,6 +593,15 @@ failure_modes:
     detection: MIN_ASSERTIONS=50 inside the suite, plus the MIN_FIRING_SUITES=38 population ratchet at
         scripts/guard-vacuity-floor.test.sh:630, which counts this suite as a firing suite
     alert_route: same
+  - mode: THE ACCEPTED RESIDUAL ITSELF — a real suite-authored tag creation goes unpunished under
+        `shared_store`. Declared as its own mode because the five modes above are all guard-REGRESSION modes,
+        and this is the one live-failure mode the plan actually accepts (observability review P1).
+    detection: a runtime signal DOES exist and must not be described as absent — the
+        `[REPORT] A SHARED store changed…` block at test-all.sh:2247 names the ref, and the summary
+        observation field at :2334 counts it
+    alert_route: NO exit code, human read only. This is the honest limit: the signal is printed, never
+        actioned. The review path is §Non-Goals issue 1 (the battery tag-author sweep), whose trigger is
+        immediate for exactly this reason.
   - mode: a future git version or fetch config makes a fetch clobber an existing tag, falsifying the
         create/move discriminator
     detection: none by test — deliberately so. The failure direction is a FALSE FATAL (§The Change item 4), so
@@ -495,7 +614,7 @@ logs:
 discoverability_test:
   command: bash scripts/lib/repo-write-boundary.test.sh
   expected_output: exit 0, final line of the form `repo-write-boundary.test.sh: <N> passed, 0 failed, <N>
-        assertion(s) executed (floor 49)` with N >= 49 — the floor and `0 failed` are the assertion, not a
+        assertion(s) executed (floor 50)` with N >= 50 — the floor and `0 failed` are the assertion, not a
         hardcoded pass count
 ```
 
@@ -532,7 +651,7 @@ elsewhere — Kieran P2) — is prescribed as AC12 to back that conclusion with 
 All criteria are pre-merge; this plan has no post-merge steps.
 
 1. `bash scripts/lib/repo-write-boundary.test.sh` exits 0, its final line reports `0 failed`, and its passed
-   count is `>= 49` with the printed floor equal to `49`. (Assert the floor and zero failures, **not** a
+   count is `>= 50` with the printed floor equal to `50`. (Assert the floor and zero failures, **not** a
    hardcoded pass count — plan v1 hardcoded it in three places and was already off by one.)
 2. Arm 43 is unchanged: extracting its body from both revisions and diffing is empty —
    `diff <(git show origin/main:scripts/lib/repo-write-boundary.test.sh | sed -n '/--- 43\./,/--- 44\./p')
@@ -555,8 +674,16 @@ All criteria are pre-merge; this plan has no post-merge steps.
    `grep -c 'created or moved' scripts/lib/repo-write-boundary.sh` returns `3` — the three non-tag arms at
    `:519`, `:521`, `:523` are deliberately untouched. (Plan v1 demanded `0` repo-wide, which is unsatisfiable
    without out-of-scope edits: the literal appears 4 times, only one of which is the tag arm — Kieran + spec-flow P0.)
-9. `scripts/plugin-delivery-canary.sh:335` carries `--no-tags`, asserted by arm 49; `bash
-   scripts/plugin-delivery-canary.test.sh` exits 0.
+9. A sibling fixture + a created tag named `origin/main` yields `^FATAL`, and so does one whose name equals
+   `$default_branch` (arm 49 — the collision guard). Neither yields a `REPORT`.
+9b. A REPORT-only run of the sandboxed runner exits **0**; a run with a FATAL exits **1** (arm 50 — the
+   epilogue wiring the Guard Contract's Assembly claims).
+9c. `scripts/plugin-delivery-canary.sh:335` and `apps/web-platform/scripts/run-migrations.sh:200` both carry
+   `--no-tags`, each asserted in its **own** suite (`plugin-delivery-canary.test.sh`,
+   `run-migrations-schema-probe.test.sh`) anchored on the specific fetch command, not a bare flag grep. Both
+   suites exit 0.
+9d. `_repo_boundary_branches_elsewhere` fails **closed**: with `git rev-parse --show-toplevel` unreadable it
+   returns non-zero, `_repo_state` records `wt: not-measured`, and the softening is withheld (the arm-44 path).
 10. The comment at the `shared_store` block no longer contains `tags too, since sibling traffic does not
     routinely move them`, and the new arm's comment records all four of: `worktree-manager.sh:2731`; the
     fail-closed asymmetry; the `git-data-client.ts:244` graft residual; and the `-z "$bsha"` =
@@ -590,7 +717,7 @@ Acceptance Criteria above.
 | T4 | Re-derive `elsewhere` at classify time | arms 35 + 44 RED |
 | T5 | `break` after the first classified ref | arm 47 RED |
 | T6 | Classify tags only when the refs delta is tags-only | arm 48 RED (the measured incident shape) |
-| T7 | `return 0` before the refs block in `repo_boundary_classify` | arms 36, 43, 45-48 RED + `MIN_ASSERTIONS` floor RED |
+| T7 | `return 0` before the refs block in `repo_boundary_classify` | arms 36, 43, 45-50 RED + `MIN_ASSERTIONS` floor RED |
 | T8 | Drop `--tags` from `_repo_boundary_dim_refs` | arms 36, 45-48 RED |
 | T9 | Write the new assertions un-anchored (`was created`, no `$`) | arms 45/47/48 pass pre-fix ⇒ the harness is vacuous; the anchored form is what makes RED real |
 | T10 | Strip `--no-tags` from `plugin-delivery-canary.sh:335` | arm 49 RED |
@@ -598,13 +725,38 @@ Acceptance Criteria above.
 | T12 | Drop `-c tag.gpgSign=false` from a new arm | fixture setup hard-fails with a named message, not a misleading assertion failure |
 | T13 | *(must-PASS)* annotated tag, and a tag named `rel/1.0`, both created under a sibling | `REPORT`, suite green |
 
+## Precedent Diff (deepen-plan Phase 4.4)
+
+The pattern-bound behaviour here is a `shared_store`-gated arm inside `repo_boundary_classify`'s
+created-or-moved `case`. **Precedent exists in the same `case` statement** — the
+`"refs/heads/$default_branch")` arm at `:510-515` is the canonical form, so the new arm must mirror it rather
+than invent a shape:
+
+```bash
+          "refs/heads/$default_branch")                     # <- the precedent
+            if [[ -n "$shared_store" ]]; then
+              printf 'REPORT\trefs\t%s is the default branch and it moved (the sibling `git pull` shape)\n' "$name"
+            else
+              printf 'FATAL\trefs\t%s is the default branch and it moved\n' "$name"
+            fi ;;
+```
+
+Diff against the planned tag arm: **same** `if [[ -n "$shared_store" ]]` test, **same** REPORT/FATAL ordering,
+**same** convention of naming the producing shape in the REPORT detail (`the sibling git pull shape` →
+`the fetched-release-tag shape`). The **only** structural addition is the `-z "$bsha"` conjunct, which the
+default arm at `:516-524` has no need for because heads legitimately move under sibling traffic while tags do
+not. No novel pattern is introduced.
+
+Also checked: the plan introduces no scheduled job, so the Phase 4.4 scheduled-work sub-gate (Inngest vs GH
+Actions cron, ADR-033) is not applicable — the repo has 54 `cron-*` Inngest functions and this plan adds none.
+
 ## Risks & Mitigations
 
 | Risk | Mitigation |
 |---|---|
-| An operator's git config (`+refs/tags/*` refspec, `fetch --force --tags`, `fetch.pruneTags=true`) lets a sibling move or delete a tag, so "moves are never sibling-routine" is false on that machine. | Fail-closed by construction: the result is a *false FATAL* — today's behaviour, rarer — never a laundered pass. Recorded in the arm comment (AC11). Verified absent on this machine: git 2.53.0, no `tagOpt`, no `fetch.prune*`, `remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*`. |
+| An operator's git config (`+refs/tags/*` refspec, `fetch --force --tags`, `fetch.pruneTags=true`) lets a sibling move or delete a tag, so "moves are never sibling-routine" is false on that machine. | Fail-closed by construction: the result is a *false FATAL* — today's behaviour, rarer — never a laundered pass. Recorded in the arm comment (AC10). Verified absent on this machine: git 2.53.0, no `tagOpt`, no `fetch.prune*`, `remote.origin.fetch = +refs/heads/*:refs/remotes/origin/*`. |
 | `--no-tags` on a fetch whose downstream consumer needs tags. | Phase 3 requires per-site confirmation before the flag is added, with a declared exemption as the alternative. `run-migrations.sh:200` is the one to check first — it runs in the release path, not only the battery. |
-| Changing the detail string breaks an existing assertion. | AC2 + AC10. Arm 43's regex was checked against the new `… (tag) was moved` output at plan time: the literal `(tag)` supplies the trailing `tag` its pattern needs. |
+| Changing the detail string breaks an existing assertion. | AC2 + AC8. Arm 43's regex was checked against the new `… (tag) was moved` output at plan time: the literal `(tag)` supplies the trailing `tag` its pattern needs. |
 | `scripts/plugin-delivery-canary.test.sh` asserts on the canary's exact fetch invocation. | Its fetch-related assertions are about which *sha* was fetched (`net/pin` rows), not the flag list; Phase 5 re-runs that suite regardless. |
 | This is the third softening of this guard; a fourth would make the soft class the default. | Deferral filed with an explicit **trigger**, not open-ended (CPO condition 3), **and** the new ADR carries an exemption ledger so the fourth request is visibly the fourth. |
 | Reviewers read the archived #7652 residual as current precedent. | Phase 2b records the reversal at the new arm; the archived artifacts stay untouched as point-in-time records. |
@@ -710,20 +862,20 @@ spec-flow-analyzer. **Nine findings applied; the plan shrank materially and thre
 | **P0** (Kieran, spec-flow) — AC10 unsatisfiable: `grep -c 'created or moved'` is 4, only one of which is the tag arm | mechanical | AC8 rewritten to assert line 507 specifically and `3` repo-wide |
 | **P1** (Kieran) — AC1 arm arithmetic off by one; the count was hardcoded in three places | mechanical | Assert the floor and `0 failed`, never a hardcoded pass count |
 | **P1** (Kieran) — AC2 could not scope a diff to an arm body and was non-empty by construction | mechanical | Rewritten as a `sed`-extracted range diff, scoped to arm 43 only |
-| **P1** (Kieran) — AC15 self-falsifying: its own command flagged the spec path the plan states does not exist | mechanical | Exclusions named explicitly |
+| **P1** (Kieran) — AC14 self-falsifying: its own command flagged the spec path the plan states does not exist | mechanical | Exclusions named explicitly |
 | **P2** (Kieran) — `was created` prefix-matches today's `was created or moved`, so unanchored new arms pass vacuously pre-fix | mechanical | End-anchoring made a stated requirement, a mutation-matrix row, and T9 |
 | **P1** (spec-flow) — the measured incident (tag created **and** `main` moved) was never exercised; new arms were tags-only. Arms also lacked arm 36's `-c tag.gpgSign=false` fixture guard | mechanical | Arm 48 added; the gpgSign guard made a requirement and a harness row |
 | **P1** (spec-flow) — Phase 2c not implementable and harmful as specified | mechanical | Cut, with the divergence from CPO condition 1 recorded above |
 | **P1** (architecture) — the deferral's stated reason was mechanically wrong (`render_inspected` iterates manifest rows) | mechanical | Restated on the real blocker: `render_not_inspected`'s hardcoded heredoc |
 | **P1** (architecture) — advisory: file one ADR recording the partition + an exemption ledger | taste → accepted | §Architecture Decision now files one |
 | **P0** (DHH) — Guard 2 / Phase 3 are a separate concern; `run-migrations.sh` is release-path code that must not ride a test-gate PR | taste → accepted | Scope cut to the one battery-reachable author; the other two sites verified **not** battery-reachable and dropped |
-| **P1** (DHH, simplicity) — arms 46/48/50 redundant or testing git rather than this code | taste → accepted | Arm 46 folded into a tightened arm 36; the `wt`-withheld and fetch-fixture arms cut |
+| **P1** (DHH, simplicity) — three of plan v1's proposed arms were redundant, or tested git rather than this code | taste → accepted | v1's no-sibling-create arm folded into a **tightened arm 36**; v1's `wt`-withheld arm and v1's fetch-based git-semantics arm **cut**. Note the numbering: v2's live arms 46 and 48 are *different, new* arms (tag deletion; the tag + default-branch incident shape) and are unaffected by this row |
 | **P2** (DHH) — the `single-user incident` threshold is ceremony for a local dev-gate tweak | taste → **rejected, with reason** | The threshold is what convened the escalated panel that found the P0s above, including a false claim that would have shipped a laundering shape. It paid for itself. |
 
 ### Scoped advisor consult (Phase 4.5, `model: fable`)
 
 Verdict: approach sound, and **every way the discriminator can be wrong is fail-closed**. Three findings folded
-in: (a) the config asymmetry now stated explicitly in the arm comment (AC11) — *"the plan's strongest
+in: (a) the config asymmetry now stated explicitly in the arm comment (AC10) — *"the plan's strongest
 justification, currently only implicit"*; (b) a stronger reason to reject Option 2 — origin-existence does not
 discriminate *author*, since the canary's auto-following fetch would make this run's own write "on origin";
 (c) pin the measured git behaviour with a **fetch-based** fixture rather than `git tag` — *subsequently cut by
