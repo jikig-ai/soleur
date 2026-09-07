@@ -55,3 +55,39 @@ lint-infra-no-human-steps.py, markdownlint, gitleaks.
 The parent re-probed two load-bearing claims. The `0 of 33` figure is correct under the gate's own
 whole-line predicate; a parent probe returning 37/37 was asking a different question ("contains any
 `#N`") and the plan had already documented 37 as the loose count. No correction needed.
+
+## Work Phase
+
+- Status: complete — all 41 plan tasks checked.
+
+### Phase 2 §9 exit gate — REAPED, not red
+
+The `scripts` and `bun` shards were launched sequentially and killed for low memory before either
+finished. Classified as a harness reap on the runner's own three-way contract: **no rc entries, no
+terminal `=== N/M suites passed ===` marker, zero `[FAIL]` lines** in either log. Not a verdict
+about this diff.
+
+Conditions: `--capacity` reported `CAPACITY_CONTENDED reason=sibling_runs measured_runs=3`, `/tmp`
+at 1633 MB against a 1024 MB floor, and memory reached 2 GB available. Ownership was resolved
+before touching anything — every surviving `test-all.sh` belongs to a foreign worktree (7826,
+7849, 7874), so there were no orphans of mine to reap and none of those were mine to kill.
+
+Not retried: a fourth attempt would reap again and would degrade three other sessions' runs for a
+signal CI reproduces on clean runners. CI's required `test` context runs the same shards on the PR
+head and is the merge gate.
+
+What WAS run, all green:
+
+| Check | Result |
+|---|---|
+| `net-issue-flow.test.sh` | 104 assertions ALL PASS |
+| Mutation matrix M1–M8 | 8/8 RED, no survivors |
+| Harness rows H2, H3 | both fire, both restored |
+| `rule-metrics-aggregate` ×2 suites | rc=0 |
+| 6 bun suites pinning `ship/SKILL.md` | 77 pass, 0 fail |
+| `concurrent-ship`, `ship-followthrough-directive` | rc=0 |
+| shellcheck (3 changed shell files) | clean |
+| markdownlint | parity with `origin/main` (16 pre-existing in `ship/SKILL.md`, 0 added) |
+| `check-adr-ordinals.sh` | pass |
+| AC-G3 `gh issue list` argv | byte-identical to `origin/main` |
+| AC-G9 hook diff | empty |
