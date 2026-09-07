@@ -97,9 +97,18 @@ the branch had to be rebuilt and force-pushed.
 
 To confirm the Sentry token was still live I ran
 `GET /api/0/organizations/` under it. That call **is a use of the token**, so it
-overwrote the token's `lastUsed` timestamp with a controller access — and that
-scalar was the one instrument capable of refuting third-party use during an
-unresolved Art. 4(12) breach determination.
+overwrote the token's last-used timestamp with a controller access, during an
+unresolved Art. 4(12) breach determination that depends on it. Both merged
+artifacts record the damage: the CLO determination calls it "a real,
+self-inflicted degradation of the instrument", and the post-mortem's action row
+carries it into the operator's ordered steps.
+
+Precisely what it cost, since overstating this would repeat the session's other
+defect: that scalar can still *refute* "no third-party use" and can only weakly
+*support* it, so the probe degraded rather than destroyed it. It is not the only
+instrument — the org audit log covers the write limb, and vendor escalation
+remains if both come back thin — but it is the only one that touches the **read**
+limb, which the audit log does not record.
 
 Nothing warned, because the probe was cheap, correct, and answered the question
 asked. The question not asked was *what does observing this consume?*
@@ -117,7 +126,9 @@ Every failure here shares one shape: **an action that felt like it discharged an
 obligation, and did not.** Writing the next step felt like taking it. Caveating
 a broken tool felt like not relying on it. Deriving a measurement felt safer than
 quoting a value. Probing liveness felt like gathering evidence rather than
-spending it. Documenting a residual felt like closing it.
+spending it. Documenting a residual felt like closing it — the hook ships with
+six named residuals, and writing them down is not the same as having narrowed
+any of them.
 
 The guard built in response is itself the strongest evidence for the pattern.
 Four review seats found **twelve** defects in it, every P1 in the guard rather
@@ -142,8 +153,9 @@ that, rather than for the feeling of having handled it.
   names an action must contain that action's tool call; a future-tense
   first-person verb about in-session work is not a valid closing sentence.
 - **Reused a `comm` invocation after documenting it as malformed**, and acted
-  briefly on its wrong output. **Prevention:** fix or delete a broken instrument
-  at the moment of discovery; a written caveat is not a guard.
+  briefly on its wrong output. **Prevention:** delete the invocation at the
+  moment of discovery — not annotate it. A caveat is not a guard, and the next
+  reader of the scrollback (me, ten minutes later) sees the command, not the note.
 - **Published the character lengths of a live credential** in a public repo to
   support a claim, breaching the file's own header rule; required a branch
   rebuild and force-push. **Prevention:** a derived measurement of a secret is
@@ -151,13 +163,17 @@ that, rather than for the feeling of having handled it.
   nothing.
 - **Probed a live credential during an unresolved breach determination**,
   overwriting the `lastUsed` timestamp that determination depended on.
-  **Prevention:** ask whether a probe writes to the evidence before running it;
-  read the incident runbook before the incident's own instruments.
+  **Prevention:** during an open incident, no
+  command touches the affected credential until `breach-access-log-investigation.md`
+  has been read — it is the artifact that says which instruments are evidence.
+  The general form: before a read-only-looking probe, name the field it updates.
 - **Instructed the operator to rotate the credential** for the whole session
   without having read `breach-access-log-investigation.md`, which makes the
   access investigation blocking and prior to remediation. Rotation would have
-  destroyed the evidence. **Prevention:** for any remediation of a security
-  incident, read the governing runbook before prescribing the action, not after.
+  destroyed the evidence. **Prevention:** the runbook that governs a
+  remediation is a precondition of prescribing it, not a citation added afterwards.
+  For this class the governing artifact is named in the incident's own post-mortem
+  action row — read that row before writing the instruction.
 - **Asserted "both credentials are still live" across three artifacts** from an
   in-thread claim that was true when written and superseded four hours later in
   the same thread. **Prevention:** a credential's liveness is a property of live
@@ -166,9 +182,10 @@ that, rather than for the feeling of having handled it.
   that reads most authoritative. Fully documented in the corrected post-mortem
   and its addendum.
 - **Dropped the BEHIND auto-sync branch when re-arming a poll**, so the branch
-  stalled until noticed manually. **Prevention:** when rewriting a working
-  mechanism, diff the new one against the properties the old one had — the loss
-  is silent by construction.
+  stalled until noticed manually. **Prevention:** before replacing a working
+  mechanism, write its properties down as a list, then check the replacement
+  against that list. Undocumented, the properties exist only in the old
+  invocation, so rewriting it is what erases the checklist.
 - **Corrected the stale count in one site of four and called the correction
   done.** The commit existed only to fix `twice` → `five times`; it changed the
   narrative and left the Session Errors bullet reading *"Ended two turns"* above
