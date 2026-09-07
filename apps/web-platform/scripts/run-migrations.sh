@@ -197,7 +197,12 @@ fi
 # Refresh origin/main once so the unmerged-apply gate below (issue #4241)
 # reads a current `git ls-tree`. Tolerate offline; emit a visible warning so
 # a stale ref does not silently route every file through the ack-bypass path.
-if ! git fetch --quiet origin main 2>/tmp/run-migrations-fetch.err; then
+# `--no-tags` (#7795): this fetch has no `git -C`, so it runs against whatever CWD the caller
+# has — and `run-migrations-schema-probe.test.sh` copies this script to a tmp dir and runs it
+# WITHOUT cd-ing, so under the battery it fetches into the live repository. A bare fetch
+# auto-follows tags, which the repo-write boundary classifies as a suite writing `refs/tags/**`.
+# The unmerged-apply gate below reads `git ls-tree origin/main`; it wants no tags.
+if ! git fetch --quiet --no-tags origin main 2>/tmp/run-migrations-fetch.err; then
   echo "::warning::git fetch origin main failed (see /tmp/run-migrations-fetch.err); unmerged-apply gate may produce false positives."
 fi
 

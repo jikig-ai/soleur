@@ -331,8 +331,15 @@ materialize_reference() { # <sha> -> prints the plugin subdir on success
   # freshness conjunct can still report staleness instead of the whole run
   # collapsing into `reference_unreadable` — which would report the canary as
   # broken in exactly the case it is supposed to catch.
+  #
+  # `--no-tags` is load-bearing, not tidiness (#7795). `$root` is the LIVE repository
+  # (`git rev-parse --show-toplevel` above), and a bare `git fetch` auto-follows tags — so this
+  # line is a path by which a suite of the running battery writes `refs/tags/**` into the
+  # operator's own repo. The repo-write boundary classifies exactly that, and on a checkout with
+  # no sibling worktree it is a FATAL the gate is right to raise. Nothing downstream wants tags:
+  # the fetch exists only to make `$sha` reachable for the `git archive` below.
   if ! git -C "$root" cat-file -e "${sha}^{commit}" 2>/dev/null; then
-    git -C "$root" fetch --depth 1 origin "$sha" >/dev/null 2>&1 || return 1
+    git -C "$root" fetch --no-tags --depth 1 origin "$sha" >/dev/null 2>&1 || return 1
   fi
 
   mkdir -p "$dest" || return 1
