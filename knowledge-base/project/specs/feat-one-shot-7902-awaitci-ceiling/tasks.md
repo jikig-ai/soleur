@@ -17,21 +17,21 @@ silently runs a subset).
       Known: `tests/scripts/registry-gate-mutation-battery` carries a 2,500,000 ms budget with
       measured runs of 860,692 ms and 1,675,430 ms, and is relevance-gated.
 - [ ] 0.2 Choose K against the measured tail. K=3 is provisional, not an acceptance criterion.
-- [ ] 0.3 Record the baseline gated metric — time-to-`test` p50 34.1 / p90 49.6 / max 56.1 min.
-- [ ] 0.4 Confirm the ADR-133 CI exemptions still hold (advisory lock and runtime ceiling both
+- [x] 0.3 Record the baseline gated metric — time-to-`test` p50 34.1 / p90 49.6 / max 56.1 min.
+- [x] 0.4 Confirm the ADR-133 CI exemptions still hold (advisory lock and runtime ceiling both
       short-circuit under `CI`). Verified at plan time; re-confirm before relying on it.
 
 ## Phase 1: Bounded ceiling raise — the deterministic unblock
 
-- [ ] 1.1 `scripts/prod-version-drift-check.sh`: `DRIFT_SUSTAINED_THRESHOLD_MIN` 195 → 207, and
+- [x] 1.1 `scripts/prod-version-drift-check.sh`: `DRIFT_SUSTAINED_THRESHOLD_MIN` 195 → 207, and
       update the derivation comment so the arithmetic matches the ceilings. **This lands first.**
-- [ ] 1.2 `.github/workflows/web-platform-release.yml`: `CEILING_S` 3000 → 3600 and `await-ci`
+- [x] 1.2 `.github/workflows/web-platform-release.yml`: `CEILING_S` 3000 → 3600 and `await-ci`
       `timeout-minutes` 60 → 72, preserving ADR-072 invariant #7 (`timeout-minutes ≥ 1.2 ×
       CEILING_S`) and the wall-clock-keyed ceiling.
-- [ ] 1.3 Update the anti-regression comment to name what the new ceiling bounds — CI liveness,
+- [x] 1.3 Update the anti-regression comment to name what the new ceiling bounds — CI liveness,
       sized above the measured max of 56.1 min, not above p50.
-- [ ] 1.4 `bash scripts/prod-version-drift-check.test.sh` green, B9 included.
-- [ ] 1.5 Confirm nothing else in `web-platform-release.yml` changed — `await-ci`'s polling logic,
+- [x] 1.4 `bash scripts/prod-version-drift-check.test.sh` green, B9 included.
+- [x] 1.5 Confirm nothing else in `web-platform-release.yml` changed — `await-ci`'s polling logic,
       `notify-gated`, and the `migrate`/`deploy` wiring are untouched.
 
 ## Phase 2: Round-robin partition at the `run_suite` chokepoint
