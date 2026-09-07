@@ -26,34 +26,82 @@ export interface SignatureLedger {
   signedContributors: ReadonlyArray<{ id: number; name?: string; created_at?: string }>;
 }
 
-/**
- * The moment the coverage-map notice existed in the Individual CLA (§ 0).
- *
- * Membership of the ledger is NOT the property the Art. 13 posture rests on.
- * The claim four documents make is that the person was told **at the moment
- * they signed** — and someone who signed before that paragraph existed was
- * not. Both accounts in the ledger today are in exactly that position
- * (54279 signed 2026-02-27, 92384917 signed 2026-05-04); rostering either
- * would make Privacy Policy § 4.5's unconditional "You are told before any
- * record about you exists" false about a real person.
- *
- * The value is a deliberate FLOOR, not the notice's exact landing time, which
- * is this PR's merge commit and is unknowable while the code is being written.
- * The two directions are not symmetric: an epoch set too EARLY admits someone
- * who was never told (unrecoverable, on a surface with no erasure), while one
- * set too LATE refuses someone who was (recoverable — they re-sign, or the
- * operator records direct notice). So it is set strictly after the merge
- * window and may be lowered later against the merge commit's own date.
- */
-export const COVERAGE_MAP_NOTICE_EPOCH = "2026-09-08T00:00:00Z";
+// A static import, NOT `require`: this module is ESM, and `require` resolved
+// fine under vitest's interop while throwing `require is not defined` under
+// `tsx` — which is the runtime the write path (`ccla-add.sh`) actually uses.
+// The import is side-effect free, so the module stays pure to import.
+import { execFileSync } from "node:child_process";
 
 /**
- * Accounts that signed BEFORE the notice existed and have since been given it
- * directly, each with the register entry recording that. Empty by design: an
- * id belongs here only once the direct notice is a matter of record, never to
- * unblock a write. Adding one without the citation is the defect this set
- * exists to make visible rather than to permit.
+ * The path and the sentence that together locate the coverage-map notice.
+ *
+ * The ANCHOR is a phrase that exists only in the § 0 paragraph this feature
+ * adds, so `git log -S` over it returns the commit that introduced the notice.
  */
+export const NOTICE_DOC = "docs/legal/individual-cla.md";
+export const NOTICE_ANCHOR = "public corporate coverage map";
+
+/**
+ * When the coverage-map notice became true of the repository, DERIVED from git.
+ *
+ * This was a hardcoded constant and that was wrong, for a reason worth keeping:
+ * the moment being described is created by merging the very commit that would
+ * declare it, so no literal written before the merge can name it. A floor set
+ * before the merge date silently degrades this gate to membership-only for
+ * everyone who signs in the gap — the same vacuity as an unparseable epoch,
+ * reached by the calendar instead of by an edit, and in the direction that
+ * cannot be undone once a row is published. A floor set after it refuses people
+ * who WERE noticed, and their only escape would be a `DIRECT_NOTICE_GIVEN`
+ * entry asserting a direct notice that never happened.
+ *
+ * `git log -S<anchor>` over the ICLA returns the commit that ADDED the
+ * paragraph; a squash merge rewrites that commit to the merge itself, so this
+ * resolves to the exact moment the notice landed on the default branch and
+ * keeps resolving correctly afterwards. Both directions close permanently and
+ * without anyone remembering to lower a number.
+ *
+ * Fails CLOSED: an unresolvable epoch refuses every account rather than
+ * admitting them, because "we cannot establish when the notice existed" is not
+ * "it existed early enough".
+ */
+export function resolveCoverageMapNoticeEpoch(repoRoot?: string): string {
+  let out = "";
+  try {
+    // NOTICE_DOC is repo-root-relative, so the lookup must run from the root —
+    // never from the caller's CWD. A pathspec that matches nothing yields an
+    // empty log, which is indistinguishable from "the notice was never added"
+    // and would take the fail-closed path for the wrong reason.
+    const root =
+      repoRoot ??
+      execFileSync("git", ["rev-parse", "--show-toplevel"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    out = execFileSync(
+      "git",
+      ["log", "-S", NOTICE_ANCHOR, "--format=%aI", "--", NOTICE_DOC],
+      { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+  } catch (e) {
+    throw new ContributionTriggeredEntryError(
+      `could not derive the coverage-map notice epoch from git history of ${NOTICE_DOC}: ` +
+        `${e instanceof Error ? e.message : String(e)}. Refusing every account rather than ` +
+        "assuming the notice predates them.",
+    );
+  }
+  // Oldest line = the commit that INTRODUCED the paragraph.
+  const lines = out.split("\n").map((l) => l.trim()).filter(Boolean);
+  const introduced = lines[lines.length - 1];
+  if (!introduced || !Number.isFinite(Date.parse(introduced))) {
+    throw new ContributionTriggeredEntryError(
+      `the coverage-map notice anchor ${JSON.stringify(NOTICE_ANCHOR)} was not found in the git ` +
+        `history of ${NOTICE_DOC}. Either the notice is absent or the anchor was reworded; ` +
+        "refusing every account until the epoch can be established.",
+    );
+  }
+  return introduced;
+}
+
 export const DIRECT_NOTICE_GIVEN: ReadonlyArray<{ id: number; register_ref: string }> = [];
 
 interface RosterLike {
@@ -75,6 +123,8 @@ interface RosterLike {
 export function assertContributionTriggeredEntry(
   roster: RosterLike,
   ledger: SignatureLedger,
+  /** Injectable for tests; derived from git history by default. */
+  noticeEpoch: string = resolveCoverageMapNoticeEpoch(),
 ): number {
   // A check whose reference set is unreadable passes everything. Refuse
   // outright rather than degrading to an empty set.
@@ -118,10 +168,12 @@ export function assertContributionTriggeredEntry(
   // Membership alone does not carry the Art. 13 claim; WHEN the signature was
   // made does. Checked after the membership half so an account with no
   // signature at all is reported as unsigned rather than as un-noticed.
-  const epoch = Date.parse(COVERAGE_MAP_NOTICE_EPOCH);
+  const epoch = Date.parse(noticeEpoch);
   const noticedDirectly = new Set(DIRECT_NOTICE_GIVEN.map((d) => d.id));
   const signedAt = new Map(
-    ledger.signedContributors.map((c) => [c.id, c?.created_at] as const),
+    // O-8: `c?.id`, matching the membership half. `c.id` on a null ledger entry
+    // throws a bare TypeError (exit 1), losing the documented exit-4 contract.
+    ledger.signedContributors.map((c) => [c?.id, c?.created_at] as const),
   );
 
   const preNotice: string[] = [];
@@ -140,7 +192,8 @@ export function assertContributionTriggeredEntry(
   if (preNotice.length > 0) {
     throw new ContributionTriggeredEntryError(
       `${preNotice.length} roster account(s) signed the ICLA BEFORE the coverage-map notice ` +
-        `existed (epoch ${COVERAGE_MAP_NOTICE_EPOCH}): ${preNotice.join("; ")}. ` +
+        `existed (epoch ${noticeEpoch}, derived from git history of ${NOTICE_DOC}): ` +
+        `${preNotice.join("; ")}. ` +
         "Their signature cannot have informed them of a publication the document did not yet " +
         "describe, so writing them would falsify the Art. 13 claim the roster rests on. " +
         "Give the notice directly, record it in knowledge-base/legal/ccla-register.md, then add " +

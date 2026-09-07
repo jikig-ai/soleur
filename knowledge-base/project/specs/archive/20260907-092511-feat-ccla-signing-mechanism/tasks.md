@@ -35,6 +35,7 @@ plan review and are reflected throughout: the `cla-evidence.yml` roster-verifica
 - [x] 1.2. Same three changes in `CONTRIBUTING.md`.
 - [x] 1.3. Add the in-flight state ("CCLA in progress — maintainer action, not yours") — the
       brainstorm's third minimum-fix item, dropped by the spec.
+  - **[2026-09-07] NOT MET.** No label, check or workflow step ever produced this state. The assertion was REMOVED from `.github/workflows/cla.yml` and `CONTRIBUTING.md` by b91e5a83d rather than the mechanism being built. Left ticked and appended to rather than rewritten, per the append-never-rewrite convention for a dated record. See `knowledge-base/legal/audits/2026-09-counsel-review-3210.md` §B3.
 - [ ] 1.4. Reply to Convergence: request a named signatory with title and an individually-
       attributable mailbox, plus the §5 notice-delivery confirmation the ruling now requires.
   **BLOCKED ON AN EXTERNAL PARTY + OPERATOR AUTHORISATION — tracked at #7846.** The draft is committed at

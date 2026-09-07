@@ -797,6 +797,7 @@ reworded — they are noted where removed so the deletion is auditable.
 - **AC19.** Where a CCLA is in flight, the PR carries a visible *"CCLA in progress — maintainer
   action, not yours"* state. Carried from the brainstorm's third minimum-fix item, which the spec
   dropped silently, and which is the state Convergence's contributor is in now.
+  - **[2026-09-07] NOT MET.** No label, check or workflow step ever produced this state. The assertion was REMOVED from `.github/workflows/cla.yml` and `CONTRIBUTING.md` by b91e5a83d rather than the mechanism being built. Left ticked and appended to rather than rewritten, per the append-never-rewrite convention for a dated record. See `knowledge-base/legal/audits/2026-09-counsel-review-3210.md` §B3.
 - **AC20.** `CCLA_ADD_DRY_RUN=1 bash apps/cla-evidence/scripts/ccla-add.sh …` resolves logins to
   numeric ids, refuses an id absent from the ICLA ledger, emits a schema-valid roster, and opens no
   PR. This is the plan's counterpart to spec AC7, which previously had none.

@@ -14,12 +14,15 @@
 // ccla-add.sh) is covered by apps/cla-evidence/scripts/ccla-add.test.sh.
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ContributionTriggeredEntryError,
   assertContributionTriggeredEntry,
-  COVERAGE_MAP_NOTICE_EPOCH,
+  resolveCoverageMapNoticeEpoch,
+  NOTICE_ANCHOR,
+  NOTICE_DOC,
 } from "@/scripts/cla-evidence/roster-entry-gate";
 import { validateRosterRecord } from "@/scripts/cla-evidence/schema";
 
@@ -34,6 +37,13 @@ const BEFORE_NOTICE = "2026-05-04T13:13:53Z";
 const ledger = (ids: number[], created_at: string = AFTER_NOTICE) => ({
   signedContributors: ids.map((id) => ({ name: `user-${id}`, id, created_at })),
 });
+
+/**
+ * A fixed epoch for the CONTROLLED arms. The real epoch is derived from git, so
+ * injecting here keeps those rows pure and keeps them from drifting the day the
+ * notice commit is rewritten by a squash merge.
+ */
+const EPOCH = "2026-09-04T13:06:16+02:00";
 
 const rosterWith = (repIds: number[][]) => ({
   schema_version: "1.0",
@@ -242,30 +252,115 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
   it("the temporal half: signed AFTER the notice passes, BEFORE is refused, unknown fails closed", () => {
     const id = 54279;
     // must-PASS — membership plus a timestamp at/after the epoch.
-    expect(assertContributionTriggeredEntry(rosterWith([[id]]), ledger([id], AFTER_NOTICE))).toBe(1);
+    expect(assertContributionTriggeredEntry(rosterWith([[id]]), ledger([id], AFTER_NOTICE), EPOCH)).toBe(1);
 
     // must-FAIL — signed before the notice paragraph existed.
     expect(() =>
-      assertContributionTriggeredEntry(rosterWith([[id]]), ledger([id], BEFORE_NOTICE)),
+      assertContributionTriggeredEntry(rosterWith([[id]]), ledger([id], BEFORE_NOTICE), EPOCH),
     ).toThrow(ContributionTriggeredEntryError);
 
     // must-FAIL, fail-CLOSED — "we cannot tell when" is not "late enough".
     // This is the direction that silently admits, so it gets its own row.
     const noTimestamp = { signedContributors: [{ name: `user-${id}`, id }] };
-    expect(() => assertContributionTriggeredEntry(rosterWith([[id]]), noTimestamp)).toThrow(
+    expect(() => assertContributionTriggeredEntry(rosterWith([[id]]), noTimestamp, EPOCH)).toThrow(
       ContributionTriggeredEntryError,
     );
     const malformed = { signedContributors: [{ name: `user-${id}`, id, created_at: "soon" }] };
-    expect(() => assertContributionTriggeredEntry(rosterWith([[id]]), malformed)).toThrow(
+    expect(() => assertContributionTriggeredEntry(rosterWith([[id]]), malformed, EPOCH)).toThrow(
       ContributionTriggeredEntryError,
     );
   });
 
-  it("the epoch is a real ISO instant, not a placeholder a comparison would silently pass", () => {
-    expect(Number.isFinite(Date.parse(COVERAGE_MAP_NOTICE_EPOCH))).toBe(true);
-    // A NaN epoch makes every `t < epoch` false, so the whole temporal half
-    // would vanish while every other row here stayed green.
-    expect(COVERAGE_MAP_NOTICE_EPOCH).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  // The epoch was a hardcoded constant and that was the defect: the moment it
+  // names is CREATED by merging the commit that declares it, so any literal
+  // written beforehand is wrong in one of two directions — and the direction
+  // that admits an un-noticed account cannot be undone. These rows assert the
+  // derivation, not a value.
+  it("the notice epoch is DERIVED from git history, and is a real instant", () => {
+    const epoch = resolveCoverageMapNoticeEpoch(repoRoot);
+    expect(Number.isFinite(Date.parse(epoch))).toBe(true);
+  });
+
+  // The tracked document has exactly ONE commit touching the anchor today, so
+  // "oldest" and "newest" are the same value there and an assertion against the
+  // real repo cannot tell them apart — a 1-of-1 quantification. Taking the
+  // NEWEST match would walk the epoch forward on every later edit to the ICLA
+  // and begin refusing people who were properly noticed, so the distinction has
+  // to be instantiated somewhere. This builds a throwaway repo where the anchor
+  // is touched twice, which is the only place the two answers disagree.
+  it("resolves to the commit that INTRODUCED the anchor, not the most recent one touching it", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "notice-epoch-"));
+    try {
+      const git = (...args: string[]) =>
+        execFileSync("git", args, { cwd: tmp, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      git("init", "-q");
+      git("config", "user.email", "t@example.com");
+      git("config", "user.name", "t");
+      mkdirSync(join(tmp, "docs", "legal"), { recursive: true });
+      const doc = join(tmp, NOTICE_DOC);
+
+      writeFileSync(doc, `intro\nthe ${NOTICE_ANCHOR} is described here\n`);
+      git("add", "-A");
+      git("commit", "-q", "-m", "add the notice", "--date", "2026-01-01T00:00:00+00:00");
+
+      writeFileSync(doc, `intro\nthe ${NOTICE_ANCHOR} is described here, twice: ${NOTICE_ANCHOR}\n`);
+      git("add", "-A");
+      git("commit", "-q", "-m", "touch the anchor again", "--date", "2026-06-01T00:00:00+00:00");
+
+      const all = git("log", "-S", NOTICE_ANCHOR, "--format=%aI", "--", NOTICE_DOC)
+        .trim()
+        .split("\n")
+        .map((l) => l.trim())
+        .filter(Boolean);
+      // Guard the fixture itself: if the second commit did not register as an
+      // anchor change, this row silently reverts to the 1-of-1 case it exists
+      // to escape.
+      expect(all.length).toBe(2);
+
+      const resolved = resolveCoverageMapNoticeEpoch(tmp);
+      expect(Date.parse(resolved)).toBe(Date.parse("2026-01-01T00:00:00+00:00"));
+      expect(Date.parse(resolved)).not.toBe(Date.parse("2026-06-01T00:00:00+00:00"));
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("the anchor still exists in the document it claims to locate", () => {
+    // If the § 0 paragraph is reworded without updating NOTICE_ANCHOR, the
+    // derivation stops finding it. That must REFUSE, not silently pass — so
+    // this row pins the coupling that makes the fail-closed path reachable.
+    const doc = readFileSync(join(repoRoot, NOTICE_DOC), "utf8");
+    expect(doc).toContain(NOTICE_ANCHOR);
+  });
+
+  it("an unresolvable epoch REFUSES rather than admitting everyone", () => {
+    // Fail-closed is the whole safety argument: "we cannot establish when the
+    // notice existed" must never read as "it existed early enough".
+    // Two DIFFERENT unresolvable shapes, because they take different branches
+    // and only one of them was reachable before: a path where git itself fails,
+    // and a healthy repo where the ANCHOR is simply absent. The second is the
+    // one that fires if the § 0 paragraph is ever reworded, and a permissive
+    // return there would hand every account an epoch of 1970.
+    expect(() => resolveCoverageMapNoticeEpoch("/nonexistent-repo-path-for-this-test")).toThrow(
+      ContributionTriggeredEntryError,
+    );
+
+    const tmp = mkdtempSync(join(tmpdir(), "notice-anchor-absent-"));
+    try {
+      const git = (...args: string[]) =>
+        execFileSync("git", args, { cwd: tmp, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+      git("init", "-q");
+      git("config", "user.email", "t@example.com");
+      git("config", "user.name", "t");
+      mkdirSync(join(tmp, "docs", "legal"), { recursive: true });
+      // The document exists and has history — it just never carried the anchor.
+      writeFileSync(join(tmp, NOTICE_DOC), "an individual CLA with no coverage-map paragraph\n");
+      git("add", "-A");
+      git("commit", "-q", "-m", "icla without the notice");
+      expect(() => resolveCoverageMapNoticeEpoch(tmp)).toThrow(ContributionTriggeredEntryError);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("the tracked roster is schema-valid and every id in it has signed the ICLA", () => {

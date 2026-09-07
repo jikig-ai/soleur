@@ -6,15 +6,19 @@ issue: 3210
 pr: 7828
 attestation-authority: clo
 status: BLOCKED (CLO-agent-reviewed, Soleur-as-tenant-zero v1)
-disposition: "BLOCKED — three findings must be discharged before merge, none of them in the Art. 30 register and none of them a re-litigation of the 2026-09-04 ruling. B1: the pre-signature bot comment tells a contributor that who they work for is theirs to disclose or not, and does not tell them that the Corporate CLA route it recommends publishes exactly that association, permanently, in a public file. B2: contribution-triggered entry is enforced on membership of the ICLA ledger and not on WHEN the signature was made, so the two accounts that signed before the Art. 13 notice existed (deruelle 54279, 2026-02-27; Elvalio 92384917, 2026-05-04) can be written to the roster while four documents state unconditionally that every person in the map was informed here at signing. B3: `cla.yml` and `CONTRIBUTING.md` both state that a pull request carries a visible \"CCLA in progress — maintainer action, not yours\" state; no label, check or workflow step produces it. Three further defects were found and CORRECTED in this review (see §Corrections applied). Everything else reviewed is sound, including the whole `removed_at` surface, which is the failure mode the request most wanted caught and which is clean at eleven sites."
+date_reviewed: 2026-09-07
+rounds:
+  - "Round 1 (2026-09-07, pre-b91e5a83d) — three blockers raised: B1 privacy expectation, B2 temporal gap, B3 unimplemented state. Three defects corrected in review (F-a, F-b, F-c)."
+  - "Round 2 (2026-09-07, commit b91e5a83d) — B1 DISCHARGED, B3 DISCHARGED. B2's design DISCHARGED; B2's epoch instrument REFUSED, and re-raised as B2-a."
+disposition: "BLOCKED — one finding open. B1 and B3 are DISCHARGED in full. B2's remedy is right in every part I asked for — it fails closed on an absent or unparseable timestamp, it names the temporal ground and the suite proves the message does not read as \"never signed\", it covers both sites through the shared validator rather than a shell copy (correct, and I would have refused a second copy), and DIRECT_NOTICE_GIVEN is empty and typed. What I cannot discharge is the INSTRUMENT: `COVERAGE_MAP_NOTICE_EPOCH = \"2026-09-08T00:00:00Z\"` is a floor only by assumption about a merge that has not happened, and the assumption is asserted nowhere. Both failure directions were reproduced against the shipped code: a signature at 2026-09-09 is ACCEPTED (merge slips past the constant -> the gate silently reverts to membership-only, which is the unrecoverable direction), and a signature at 2026-09-07T18:00Z is REFUSED (a same-day post-merge signer who WAS noticed — which lands on Convergence's contributor, the first intended user, whose only escape is a DIRECT_NOTICE_GIVEN entry that would be false). The notice's introducing commit is 696f24ebb, discoverable by `git log -S`, so the derived instrument is reachable. Answering the question as asked: 2026-09-08 is not defensible, a hardcoded floor is not the right instrument, and the ICLA content hash is the semantically correct pin but is NOT reachable from the ledger. Derive it from git."
 blocking_findings:
-  - "B1 — .github/workflows/cla.yml `custom-notsigned-prcomment` + CONTRIBUTING.md: privacy expectation set in the wrong direction immediately before signing."
-  - "B2 — roster-entry-gate.ts + ccla-add.sh: contribution-triggered entry does not distinguish a signature made before the ICLA §0 coverage-map notice existed; the residual population is exactly two, enumerable today."
-  - "B3 — .github/workflows/cla.yml + CONTRIBUTING.md: the \"CCLA in progress\" state is asserted and not implemented (plan AC19 unmet, task 1.3 ticked without it)."
+  - "B2-a — apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts: COVERAGE_MAP_NOTICE_EPOCH is a hardcoded constant whose floor property depends on an unowned post-merge edit and on the merge landing within ~14 hours of the review. Both failure directions demonstrated empirically."
+discharged_findings:
+  - "B1 — DISCHARGED by b91e5a83d. The publication consequence is now stated in the comment BODY, before the sign line, which is stronger than the link-following it replaces."
+  - "B3 — DISCHARGED by b91e5a83d. The claim was removed rather than a label built to justify it, which is the right direction."
+  - "B2 (design) — DISCHARGED. Fail-closed, message separation, both sites via the shared validator, typed residual set. Only the epoch instrument is refused."
 required_before_merge:
-  - "B1: one sentence in the bot comment and its CONTRIBUTING.md counterpart naming the publication consequence, linking ICLA §0."
-  - "B2: either gate on the ICLA signature date / signed doc hash in BOTH roster-entry-gate.ts and ccla-add.sh, or record a named, enumerated residual plus a direct-notice operator step, and qualify the four unconditional sentences."
-  - "B3: implement the state, or reword both surfaces to what actually happens."
+  - "B2-a: derive the epoch from the commit that introduced the ICLA §0 coverage-map paragraph (`git log -S` over that paragraph, oldest match, commit date), failing CLOSED if it cannot be resolved. If the constant is kept instead, it needs BOTH a suite arm asserting it is not earlier than that commit's date (closes the admit direction) AND an owned, issue-tracked post-merge lowering to the merge date (closes the false-refusal direction) — the constant alone closes neither."
 attests:
   - knowledge-base/legal/article-30-register.md (PA-7, all nine rows, as re-grafted onto main)
   - knowledge-base/legal/ccla-register.md
@@ -47,6 +51,7 @@ re_evaluation_triggers:
   - "Any proposal to reinstate an identity field in a tracked file — that re-opens the 2026-09-04 ruling rather than changing a schema."
   - "Adoption of an Art. 5(1)(e) retention ceiling at #7668, or lapse/suspension/annulment of the EC adequacy decision for Switzerland."
   - "Any change to the ICLA §0 coverage-map paragraph — B2's residual population is defined by reference to the version of that paragraph, so a further amendment creates a further cohort."
+  - "THE FIRST ENTRY ADDED TO `DIRECT_NOTICE_GIVEN`. The set is the named-residual remedy and nothing validates its `register_ref` — an empty string unblocks a write exactly as a real citation does (O-9). Harden it before the first use, not after."
 ---
 
 > **DRAFT — This document was generated by AI and requires professional legal review before use. It does not constitute legal advice.**
@@ -273,6 +278,10 @@ defines the term; §5 is the management clause and does say the additions come b
 at large, and a colleague is added by that route. Verified against §§1, 2, 3, 5.
 
 ## Blocking findings
+
+> **Round 1, preserved unaltered as the audit trail.** B1 and B3 were DISCHARGED and B2 was
+> partially discharged by commit b91e5a83d; §Re-review below is the current record and this
+> section must not be read as a description of the tree as it now stands.
 
 ### B1 — the pre-signature comment sets the privacy expectation in the wrong direction
 
@@ -528,26 +537,235 @@ cat apps/cla-evidence/roster/ccla-roster.json
                                          -> {"schema_version":"1.0","organizations":[]}
 ```
 
+## Re-review — commit b91e5a83d (2026-09-07)
+
+Everything below was checked against the shipped code and the shipped copy, not against the commit
+message. The commit message is accurate in every claim I tested; three of its claims I tested by
+running them rather than reading them, and one of those produced the finding that keeps this BLOCKED.
+
+### B1 — DISCHARGED
+
+The new paragraph does what I asked and slightly more. The consequence is now stated **in the comment
+body**, before the sign line, rather than left behind a link:
+
+> **What happens if that Corporate CLA is signed.** Once your employer executes one and names you
+> under it, we publish an entry linking your GitHub account to that organisation in a public file in
+> this repository … the account-to-employer association is itself personal data about you, it is
+> created only at or after you sign the line above, and once written it is copied into every clone and
+> fork and **cannot be erased**. Section 0 of the Individual CLA is the full notice, and it is worth
+> reading before you sign rather than after.
+
+Checked clause by clause against the artifact and the corpus, because "does not overstate what the
+roster holds" was the question asked:
+
+- *"an entry linking your GitHub account to that organisation"* — matches `RosterRepresentativeSchema`
+  plus `RosterOrganizationSchema.legal_name`. Not overstated.
+- *"carries no name, no email and no postal address"* — matches the corpus formula used at ICLA §0,
+  corporate-cla §0, privacy-policy §4.5 and DPD §2.3(d), all of which read the "no name" as being about
+  the representative's identity fields. It drops "no title" from the standard four; a simplification,
+  not an overstatement. The sole-trader asymmetry at **O-3** is unchanged and is unaffected by this.
+- *"is itself personal data about you"* — matches the corrected Art. 4(1) framing exactly, and does not
+  slip back toward the KD13 category error.
+- *"created only at or after you sign the line above"* — true, and as of this commit actually enforced
+  in both directions rather than only on membership.
+- *"copied into every clone and fork and cannot be erased"* — matches gdpr-policy §5.3b and
+  privacy-policy §4.5. Correctly does **not** offer `removed_at` as a remedy.
+
+**Nothing is overstated and nothing is understated.** This is a stronger discharge than the one I
+specified: I asked for the consequence to be named; putting it in the comment body rather than behind
+the ICLA link means the corporate-representative population is informed by the comment itself, which
+is what limb (iii) of PA-7's Lawful-basis cell needs and what the link alone could not guarantee.
+
+The sub-item I attached to B1 — the surviving *"Read the Individual Contributor License Agreement
+first if you would like to"* against a sign phrase that reads "I have read the CLA Document" — is
+**downgraded to observation O-6, not carried as a blocker**, and I want to be explicit that this is a
+reassessment rather than a softening. It no longer carries blocking weight for two reasons that did
+not hold before this commit: the disclosure that mattered moved *into* the comment, so the notice no
+longer depends on the link being followed; and Art. 13 requires information to be **provided**, not
+proof that it was read, so limb (iii) — whose claim is that the signer "is informed before signing"
+via the comment and §0 — is not falsified. The sign phrase remains an attestation; the copy merely
+declines to insist on the reading behind it. See O-6 for the one-clause close.
+
+### B3 — DISCHARGED
+
+Both surfaces now read *"While a Corporate CLA of yours is in flight, your pull request is reviewed and
+merged on its merits exactly as any other … the corporate side never gates your merge."* Verified true:
+the only merge-gating check on the CLA path is `license/cla`, which tests the **Individual** signature;
+no workflow, ruleset or check keys on the Corporate CLA or on the roster's contents for a contributor's
+own pull request. **Removing the claim rather than building a label to justify it is the right call** —
+it is the #6588 convention applied to contributor-facing copy, and the same convention this PR already
+applies to CODEOWNERS at PA-7 §(g)(4).
+
+### B2 — design DISCHARGED, instrument REFUSED (re-raised as B2-a)
+
+Everything I asked for is present, and the parts I asked to check rather than take on trust all hold.
+
+| Property asked for | Verified how | Result |
+|---|---|---|
+| Fails CLOSED on absent or unparseable `created_at` | read the code (`Number.isFinite` on a `Date.parse`, `Number.NaN` for a non-string) and ran both arms | **holds** |
+| Refusal names the temporal ground, never reads as "no signature" | the message, plus the suite's `expect(msg).not.toContain("have no Individual CLA signature")` — an assertion on the *negative*, which is the one that actually separates two throws of the same error type | **holds** |
+| Membership checked before temporality | code order plus its comment; an unsigned account is still reported as unsigned | **holds** |
+| Both sites, without a second implementation | `ccla-add.sh` runs `validate-roster.ts`, which calls this module, **before** it creates a branch, commits or pushes; the shell suite's new arm asserts rc=4 and greps the temporal message | **holds — and refusing to hand-write a shell copy was correct.** A second copy is the drift the shared implementation exists to prevent, and the write path still refuses *before anything is written*, which is the property B2 actually required. This is not "insufficient for both sites"; it is the better construction of both sites. |
+| `DIRECT_NOTICE_GIVEN` is a residual, not a bypass | empty, typed `{id, register_ref}`, documented | **holds as far as types go** — see O-9 for what is not enforced |
+| The epoch parses | the suite's own arm | **holds** |
+| The epoch is a FLOOR | — | **does not hold. This is B2-a.** |
+
+The suite asserts the epoch *parses*. Nothing asserts it is **not earlier than the moment the notice
+actually landed**, which is the only property that makes it a floor. Reproduced against the shipped
+module, in this worktree:
+
+```
+A  created_at 2026-09-09T10:00:00Z  ->  ACCEPTED  (1 account checked)
+B  created_at 2026-09-07T18:00:00Z  ->  REFUSED   ("signed … before the notice existed")
+C  ledger [null, {...}]             ->  TypeError: Cannot read properties of null (reading 'id')
+   epoch = 2026-09-08T00:00:00Z ; wall clock at review = 2026-09-07T10:01Z
+```
+
+**Row A is the finding.** If this pull request merges after 2026-09-08T00:00Z — and it is 2026-09-07,
+after two review rounds, with the merge not yet done — then anyone signing between the constant and the
+merge signed *without* the notice and is **admitted**. The gate silently reverts to membership-only for
+that window, which is the exact property B2 exists to prevent, in the exact direction the code's own
+comment calls unrecoverable ("*too early admits someone who was never told, on a surface with no
+erasure*"). It is also the same failure shape as the fourth mutant that was killed — an epoch value that
+makes the comparison vacuous — reached by the calendar instead of by an edit, and with no test to catch
+it because the suite checks the *format* of the constant and not its *relation to the notice*.
+
+**Row B is the cost of the constant in the other direction, and it lands on the first real user.**
+A contributor who signs the same day this merges is refused although they were properly noticed. That
+is Convergence's contributor (plan task 1.5, still open, blocked on a third party). Their only escape
+is a `DIRECT_NOTICE_GIVEN` entry — a set reserved for people who signed *before* the notice and were
+given it directly — so using it for someone who signed *after* the notice would put a false statement
+in the register citation the set demands. The comment anticipates this and answers it with "*may be
+lowered later against the merge commit's own date*": an unowned manual post-merge edit, with no issue,
+no gate and no forcing function, which is what `wg-block-pr-ready-on-undeferred-operator-steps` exists
+to stop.
+
+**Answering the two questions as asked.**
+
+- **Is 2026-09-08 defensible?** No. It is defensible only for the fourteen hours in which the merge
+  beats it, and nothing in the artifact makes that condition visible if it fails.
+- **Is a hardcoded floor the right instrument at all?** No. A constant cannot express "the moment the
+  notice landed" because that moment is created by the act of merging the constant.
+- **Should it be pinned to the ICLA's content hash instead?** That is the semantically correct pin and
+  it is **not reachable**. The reference set this gate reads is
+  `origin/cla-signatures:signatures/cla.json`, whose records carry `{name, id, comment_id, created_at,
+  repoId, pullRequestNo}` and no document hash. `cla_doc.content_sha256` exists only in the R2 evidence
+  record, which needs Doppler `prd_cla` credentials and is unreadable from a fork pull request's CI job.
+  Recorded so this is not re-derived later.
+- **Should it be lowered against the merge commit after the fact?** Only as half of a two-part remedy,
+  and only if it is owned. On its own it closes row B and leaves row A open until someone remembers.
+
+**The fix I would take (one function, no new reference set).** Derive the epoch from the repository at
+check time: `git log -S` over the ICLA §0 coverage-map paragraph, oldest match, that commit's date.
+On this branch it resolves to `696f24ebb 2026-09-04T13:06:16+02:00` — verified — and a squash-merge
+rewrites that date to the merge date, which is precisely the instant the notice became true of `main`.
+Both directions then close automatically and permanently: no false refusal of a same-day signer, and no
+silent hole if the merge slips. Fail **closed** if the commit cannot be resolved (a shallow clone), in
+the shape the ledger fetch already uses in `roster-entry-gate.test.ts`.
+
+**The minimum I would accept instead**, if the constant is kept: a suite arm asserting
+`Date.parse(COVERAGE_MAP_NOTICE_EPOCH) >= <introducing commit date>` — which closes row A by turning a
+silent hole into a red build — **plus** an issue owning the post-merge lowering, which closes row B.
+Both, not either. The constant alone closes neither.
+
+## Ruling on the archived plan and tasks (AC19 / task 1.3)
+
+**In scope for this audit, and the answer is: record it and annotate the archive; do not rewrite the
+tick.**
+
+Taking the archive out of scope because the claim is off the live surfaces would be right if archives
+here were inert. They are not — they are consulted as evidence of what was done and when, which is the
+very function this feature exists to serve for licence grants. An archived tasks file that says `[x]`
+against "*Add the in-flight state*", and an AC19 that asserts "*the PR carries a visible 'CCLA in
+progress — maintainer action, not yours' state*", will be read by the next auditor as evidence that a
+mechanism was built. None was. That is a false record of the same shape as the ones this corpus spends
+its amendment blocks correcting.
+
+But the corpus convention is equally clear that a historical record is **appended to, never rewritten**
+— #6588's retractions, PA-7's `[CORRECTION]` / `[WIDENING]` blocks, and §(g)(4)'s "designed, not in
+force" all preserve the superseded text as the audit trail. So:
+
+1. **Do not un-tick task 1.3 and do not delete AC19.** Append one dated line to each:
+   *"[2026-09-07] NOT MET. No label, check or workflow step ever produced this state; the assertion was
+   removed from `cla.yml` and `CONTRIBUTING.md` by b91e5a83d rather than the mechanism built. See
+   `knowledge-base/legal/audits/2026-09-counsel-review-3210.md` §B3."*
+2. **The generalisable defect belongs in the learnings**, and it is a sharper instance of the one this
+   session already captured at
+   `knowledge-base/project/learnings/2026-09-04-every-verification-i-wrote-passed-and-three-of-them-proved-nothing.md`:
+   AC18, next door, verifies its copy claims by grepping for the sentences *and* asserting a byte
+   offset; AC19 asserts a **user-visible state** and was closed with no evidence at all. The rule worth
+   writing down is that **an AC asserting a state a user can see must be verified against the mechanism
+   that produces it, never against the prose that describes it** — greppable prose is what makes such an
+   AC feel verified while nothing checks it.
+3. This is **not** a merge blocker. It is a record correction, and it is listed under
+   `required_before_merge` nowhere.
+
+## Findings added in round 2
+
+**O-6 — the surviving "first if you would like to".** `.github/workflows/cla.yml` still invites the
+contributor not to read the document whose §0 the sign phrase attests they have read. Downgraded from
+part of B1 for the reasons at §B1 above. One-clause close: make it read "*worth reading before you
+sign*", matching the sentence the same comment now uses two paragraphs later, so the comment does not
+say both things.
+
+**O-7 — the `covered: false` annotation, B3's weaker sibling.** `corporate-cla.md` §5 ("*a first
+Contribution may be annotated as not yet covered*") and `ccla-register.md` Notes ("*A first pull request
+may therefore be annotated `covered: false`*") describe an annotation that no mechanism produces —
+the same family as B3. **Not raised as a blocker**, and the distinction is real rather than convenient:
+both are hedged ("may be annotated"), neither asserts that a pull request *carries* a state, and the
+consequence each draws — that it is "a delay in an annotation, not a condition on the Contribution" —
+is true whether or not anything ever annotates anything. A maintainer saying so on the thread satisfies
+both sentences. Recorded so the next reader does not have to re-derive why one was blocked and two were
+not.
+
+**O-8 — `assertContributionTriggeredEntry` crashes untyped on a null ledger entry.** The membership
+half uses `c?.id`; the temporal half's `signedAt` map uses `c.id`, so a `null` in `signedContributors`
+throws a `TypeError` instead of `ContributionTriggeredEntryError` — reproduced (row C above). It fails
+**closed**, and through `validate-roster.ts` it surfaces as exit 1 rather than the documented exit 4, so
+the consequence is a confusing exit code, not a bypass. One character (`c?.id`) closes it.
+
+**O-9 — `DIRECT_NOTICE_GIVEN.register_ref` is typed but never validated.** An entry with
+`register_ref: ""` unblocks a write exactly as a real citation does. The doc comment says a citation is
+required and says that adding one without it "*is the defect this set exists to make visible rather than
+to permit*" — but nothing makes it visible. Non-blocking **because the set is empty and any addition is
+a reviewed code change**, and because hardening an unused set is not worth holding a merge for. It is
+carried instead as a frontmatter re-evaluation trigger, to fire before the first entry: assert the ref
+matches `^CCLA-[0-9]{4,}$` and that the cited row exists in `ccla-register.md`, in the shape of the
+anti-vacuity arm this suite already has.
+
 ## Disposition
 
-**BLOCKED.** Three findings must be discharged before this merges: **B1** (the pre-signature comment
-sets the privacy expectation in the opposite direction from the outcome), **B2** (contribution-triggered
-entry does not distinguish a signature made before the Art. 13 notice existed, and the residual
-population is two named accounts), **B3** (an asserted contributor-facing state that nothing produces).
-None of the three is in the Art. 30 register, none re-opens the 2026-09-04 ruling, and none requires a
-design change — B1 and B3 are copy, B2 is a date condition on an existing gate or a named residual.
+**BLOCKED — one finding open: B2-a.**
 
-Three further defects were found and **corrected in this review**: the one false sentence in PA-7 §(e)
-(F-a — the answer to "does anything state something false after the merge"), the Proton citation in
-`compliance-posture.md` (F-b), and the roster enumeration in PA-7 §(c) that had again fallen narrower
-than the published notice (F-c).
+**B1 and B3 are DISCHARGED**, and both were discharged better than I specified: B1 moved the disclosure
+into the comment body rather than merely pointing at it, and B3 removed a claim rather than building a
+mechanism to make a sentence true.
 
-Everything else reviewed is approved. In particular the `removed_at` surface — the failure mode this
-review was most asked to catch — is **clean at eleven sites**, and no document in the corpus describes
-a withdrawal of designation as erasure, or offers a coverage-map erasure route that does not exist.
+**B2's remedy is right in every part I asked to be checked** — fail-closed on an unknown timestamp,
+a refusal that names the temporal ground with the suite asserting the *negative* that separates it from
+"never signed", both enforcement sites covered through one implementation (correctly; I would have
+refused a hand-written shell copy), a typed and empty residual set, and a suite that killed the
+vacuity mutant. The design is sound and is not re-opened by this round.
+
+**What is not discharged is the epoch's instrument.** `COVERAGE_MAP_NOTICE_EPOCH = "2026-09-08T00:00:00Z"`
+is a floor only if this pull request merges within the fourteen hours after this review, and nothing in
+the artifact asserts that condition or notices when it fails. Both failure directions were reproduced
+against the shipped module: a 2026-09-09 signature is ACCEPTED, and a same-day post-merge signature is
+REFUSED. The first is the unrecoverable direction the code's own comment names; the second lands on the
+first contributor this feature was built to serve. The remedy is one derivation — `git log -S` over the
+ICLA §0 paragraph, which resolves today to `696f24ebb 2026-09-04T13:06:16+02:00` — or, if the constant
+is kept, a suite arm pinning it to that commit's date *and* an owned issue for the post-merge lowering.
+
+Pinning to the ICLA content hash, which is the semantically correct instrument, is **not available**:
+the ledger this gate reads carries no document hash, and the record that does is behind operator
+credentials a fork pull request's CI cannot hold.
+
+Separately and not blocking: the archived AC19 / task 1.3 should be **annotated, not rewritten**, per
+§Ruling above.
 
 Reviewed by the CLO agent as attestation authority for the Soleur-as-tenant-zero v1 posture. The
-operator retains an optional veto. This is the internal v1 sign-off; external counsel re-review is
-reserved for the triggers in the frontmatter. **No sign-off is given while the disposition is BLOCKED**
-— re-run this gate on the corrected tree, and O-2 is the item to put in front of external counsel when
-one is engaged.
+operator retains an optional veto. **No sign-off is given while the disposition is BLOCKED** — the
+`status:` field stays `BLOCKED` and becomes
+`SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)` only when B2-a is closed and this gate is
+re-run against the corrected tree. O-2 remains the item to put in front of external counsel when one
+is engaged.
