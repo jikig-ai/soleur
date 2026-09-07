@@ -397,10 +397,19 @@ else
   # The "detection is a wash" half of this was FALSE until #7798 and is corrected here rather
   # than deleted, because it is the justification the dns.tf Camp B ruling leans on.
   # sentry_uptime_monitor.soleur_www was said to assert `equals 301` and page on EITHER
-  # outcome; it asserted that and paged on NEITHER, having failed 100% of its checks since
-  # the assertion landed. Detection is a wash NOW: betteruptime_monitor.soleur_www_redirect
-  # catches the serves-the-site outcome in ~20 min, and the 522 fails both the Better Stack
-  # monitor and sentry_uptime_monitor.soleur_www_reachability independently.
+  # outcome; it asserted that and paged on NEITHER, because Sentry follows 3xx and grades
+  # the final response, so `equals 301` was unsatisfiable on this URL.
+  #
+  # And "a wash" is still not quite right, so state the asymmetry rather than repeating a
+  # clause whose head was replaced. The two outcomes are now on DIFFERENT timers:
+  #   - www serves its own 200 (the outcome Camp B chose): Better Stack only, ~23 min
+  #     (180 s cadence + 1200 s confirmation).
+  #   - a hard 522 (the outcome Camp B rejected): Better Stack AND
+  #     sentry_uptime_monitor.soleur_www_reachability, ~15 min.
+  # So the chosen failure mode is detected ~8 min SLOWER than the rejected one. The ruling
+  # still holds -- it turns on which failure is preferable to a user, not on latency, and
+  # stale content beats a 522 on an HSTS-preloaded host at either number -- but it holds
+  # for that reason, not because detection is equal.
   #
   # This arm previously accepted ONLY type A ("proxied A, black-hole behind the Bulk
   # Redirect") — residue of the recipe D1 rejected, contradicting ADR-194, D1, R6 and PF9

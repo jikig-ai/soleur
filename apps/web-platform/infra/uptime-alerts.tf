@@ -221,7 +221,8 @@ resource "betteruptime_monitor" "soleur_www_redirect" {
   # rebuild running slightly long would open a false incident on the very class
   # this setting exists to absorb. 1200 buys ~5 min of margin. The cost is
   # symmetric and is stated rather than buried: the same timer bounds real
-  # regression detection, so worst-case MTTD is ~20 min. That replaces a bound
+  # regression detection. Worst case ADDS the cadence: up to 180 s to observe the
+  # first failure, then the 1200 s window = 1380 s, ~23 min. That replaces a bound
   # dns.tf's Camp B ruling assumed was "one monitor interval" and which was in
   # fact never delivering anything, the assertion behind it having never passed.
   confirmation_period = 1200
@@ -352,7 +353,9 @@ resource "betteruptime_team_member" "ops" {
 # The post-mortem scenario this policy was meant to alert on — 526 origin
 # cert validation failures — is already covered by:
 #   - `sentry_uptime_monitor.soleur_apex` (5-min interval, 3-fail trip)
-#   - `sentry_uptime_monitor.soleur_www`
+#   - `sentry_uptime_monitor.soleur_www_reachability` (renamed at #7798; it was
+#     `soleur_www` and asserted `equals 301`, which it could never satisfy -- so
+#     read this row as covering 526 only since the 2xx retarget)
 #   - `sentry_uptime_monitor.soleur_acme_probe` (ACME-carve-out regression alarm)
 #   - `betteruptime_monitor.soleur_apex` (3-min multi-region, vendor-isolated)
 # A 526 either fails the TLS handshake or returns a 5xx — both fire the

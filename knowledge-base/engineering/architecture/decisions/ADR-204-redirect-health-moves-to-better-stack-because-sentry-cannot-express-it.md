@@ -1,10 +1,29 @@
+---
+title: "ADR-204 — redirect-health moves to Better Stack, because Sentry cannot express it"
+status: accepted
+date: 2026-09-07
+tags: [observability, uptime-monitoring, sentry, better-stack, terraform, redirects, single-vendor]
+related_adrs: [ADR-194, ADR-175]
+related_runbooks:
+  - knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
+---
+
 # ADR-204: Redirect-health moves to Better Stack, because Sentry cannot express it
 
 - **Status:** Accepted
 - **Date:** 2026-09-07
 - **Issue:** [#7798](https://github.com/jikig-ai/soleur/issues/7798)
-- **Ordinal note:** re-derived across all 71 `origin/*` refs, not `origin/main`
-  alone — the corpus topped out at ADR-203.
+- **Ordinal note:** re-derived across all **74** `origin/*` refs, not `origin/main`
+  alone — the corpus topped out at ADR-203. Re-derive again at ship: the ref count
+  moves, and this note is the kind of number that rots silently (it read 71 when
+  first written, hours earlier).
+
+## Related
+
+- Amends [ADR-194](./ADR-194-migrate-marketing-docs-site-off-github-pages-to-cloudflare-pages.md)
+  in two places (its third, 526-related passage is deliberately untouched — a 2xx
+  assertion fails on a 526 exactly as the old one would have).
+- Operator destination: [the www-redirect alarm runbook](../../operations/runbooks/www-redirect-alarm.md).
 
 ## Context
 
@@ -146,6 +165,20 @@ assertion is deliberately not built here. Re-evaluation trigger: any evidence of
 Cloudflare-side change reaching production without a Terraform apply. Tracked on
 [#7883](https://github.com/jikig-ai/soleur/issues/7883).
 
+### Intermittent failure is not covered, and that is an assumption, not a measurement
+
+`confirmation_period = 1200` opens an incident only on **sustained** failure, and
+`recovery_period = 60` is shorter than the 180 s cadence. So a redirect that fails
+on *some* fraction of checks — partial edge propagation, a regional Bulk Redirect
+fault — plausibly dismisses the pending incident on every green check and never
+opens one, at any duration.
+
+Stated as an assumption because it was not measured: the Phase 0 harness (a
+transient monitor at `confirmation_period = 0`, created, observed and deleted) can
+answer it, but doing so needs a URL that flaps on demand, which we do not have.
+Confidence is moderate, not high. **Re-evaluation trigger:** any observed www
+redirect fault that the alarm did not report.
+
 Separately, the Better Stack workspace holds an **unmanaged** fourth monitor
 (`app.soleur.ai/health`, id 4226366) that is not declared in any root — found only
 because the free-tier quota was measured live rather than counted from `.tf`
@@ -154,12 +187,18 @@ blocks. Tracked on [#7884](https://github.com/jikig-ai/soleur/issues/7884).
 ## Consequences
 
 - The www 301 has a working alarm for the first time since the assertion landed.
-- `dns.tf`'s Camp B acceptance has a real bound (~20 min) for the first time. Do
-  not widen `confirmation_period` without revisiting that ruling.
-- Worst-case detection of a genuine regression is ~20 min rather than ~15, because
-  the same timer that absorbs the deploy window bounds real detection. Stated
-  rather than buried; 900s was rejected as having exactly zero margin over the
-  observed 15-minute rebuild window.
+- `dns.tf`'s Camp B acceptance has a real bound (~23 min) for the first time. Do
+  not widen `confirmation_period` without revisiting that ruling — and the value is
+  now pinned by `www-apex-canonicalizer.test.sh`, so that sentence cannot rot.
+- Worst-case detection of a genuine regression is **~23 min** — up to one 180 s
+  check interval to observe the first failure, plus the 1200 s confirmation window
+  (1380 s). Not "~20 min rather than ~15": the prior bound was not 15 minutes, it
+  was UNBOUNDED, because the assertion supplying it could not fire. Comparing the
+  two as though both were delivered would restate the very claim this ADR retracts.
+  The cadence term is additive and is easy to drop — this ADR did drop it in draft;
+  the repo's own precedent grades `soleur_apex`'s 180 + 60 as "~4 min".
+  900 s was rejected as having exactly zero margin over the observed 15-minute
+  rebuild window.
 - `deploy-docs.yml` no longer holds a Sentry credential of any kind — `jq` and
   every `SENTRY_*` secret were used only by the removed steps.
 - Better Stack usage goes to 4 monitors of 10 on the free tier. No recurring cost:

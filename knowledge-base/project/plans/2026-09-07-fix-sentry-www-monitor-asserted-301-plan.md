@@ -18,6 +18,27 @@ requires_cpo_signoff: false
 > Engineering to be the only relevant domain; the frontmatter value stays
 > fail-closed regardless.
 
+## Corrections applied at review (2026-09-07)
+
+Ten review agents. The design survived; three classes of claim in this document did
+not, and they are corrected in place below rather than left for the next reader.
+
+1. **"Update-only, no `[ack-destroy]` needed" was a category error.** `RequiresReplace`
+   governs ATTRIBUTE changes at a fixed address. This plan also renames the resource's
+   ADDRESS, which Terraform plans as a delete + a create regardless of provider schema.
+   Measured through this repo's own `destroy-guard-filter-sentry.jq`:
+   `resource_deletes: 1, resource_creates: 1`. A `moved {}` block was added; with it,
+   `0 to add, 0 to change, 0 to destroy`, and ACs 3 and 4 hold as written.
+2. **The guard pinned the wrong attribute set.** `follow_redirects`,
+   `expected_status_codes` and `remember_cookies` are all refused by Better Stack at
+   create time (HTTP 422), so those cases duplicated a vendor-enforced invariant while
+   every un-backstopped attribute went unasserted. Ten one-line edits were measured to
+   leave the suite green while killing the alarm — `url`, `monitor_type` and `paused`
+   among them. Guard 1 now pins the alarm's subject.
+3. **"Failed 100% of its checks for 101 days" is a 10-sample measurement stated as a
+   101-day universal.** The structural claim ("cannot pass") is sound and load-bearing;
+   the census was never taken. Corrected wherever it was propagated.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-09-07 · **Gates run:** 4.5 (skip — no SSH/network symptom
@@ -372,7 +393,10 @@ this plan.
   asterisk and a space,
   breaking the anchor). Per `tests/scripts/lib/destroy-guard-filter-sentry.jq`, a
   REPLACE serialises as `["delete","create"]` and trips the gate; a pure
-  `["update"]` does not. **The design below is update-only and needs no ack.**
+  `["update"]` does not. **The design below is update-only and needs no ack — but ONLY
+  because of the `moved {}` block added at review.** Without it the rename is an address
+  change, which is a delete + create whatever the provider schema says, and the gate
+  correctly blocks. See Corrections #1.
 - **Create gate.** `scripts/sentry-create-gate.sh` is diff-matched: a create
   explained by a `resource` block the same PR adds passes silently.
 - **Guard suites.** `apps/web-platform/scripts/sentry-monitors-audit.sh` and
@@ -610,6 +634,9 @@ wrong remedy cannot pass.
 Plan shape is **one create (Better Stack) and one update (Sentry), zero deletes
 and zero replaces**:
 
+- The Sentry change is an address MOVE plus an in-place update. The `moved {}` block is
+  load-bearing: without it this is a delete + create and the gate blocks the PR
+  (measured: `resource_deletes: 1, resource_creates: 1`). With it —
 - The Sentry update does not trip `[ack-destroy]` —
   `tests/scripts/lib/destroy-guard-filter-sentry.jq` counts only
   `index("delete")`, and a pure `["update"]` is neither a delete nor a create.
@@ -973,8 +1000,20 @@ renamed to say what they now assert:
 - Sentry `name`: `"soleur-ai-www"` → `"soleur-ai-www-reachability"`
 
 `name` is an in-place attribute in the pinned provider (only `organization` and
-`project` carry `RequiresReplace`), so this is still update-only and still needs no
-`[ack-destroy]`. Full consumer list, derived by
+`project` carry `RequiresReplace`) — **but that is about the ATTRIBUTE and does not
+license the rename.** Renaming the Terraform ADDRESS is a delete + create whatever the
+schema says, so this needs a `moved {}` block:
+
+```hcl
+moved {
+  from = sentry_uptime_monitor.soleur_www
+  to   = sentry_uptime_monitor.soleur_www_reachability
+}
+```
+
+With the block the plan is update-only and needs no `[ack-destroy]`. Without it the
+`sentry-destroy-required` gate blocks the PR, and acked it would destroy the live
+detector and its check history. Precedent: `dns.tf`, `placement-group.tf`. Full consumer list, derived by
 `git grep -n 'soleur-ai-www' 'sentry_uptime_monitor\.soleur_www'` rather than
 recalled — every one is already in this plan's edit set, which is what makes the
 rename cheap:
@@ -1224,9 +1263,12 @@ scoped to the addresses this PR touches.
 **Guards and suites**
 
 7. `apps/web-platform/infra/www-apex-canonicalizer.test.sh` passes with **both**
-   `EXPECTED_CASES` arms bumped by the number of cases added, and each of M1–M6 and
-   H1, applied one at a time, drives it red; H2 passes. Recorded as an explicit
-   7-red / 1-pass tally in the PR body.
+   `EXPECTED_CASES` arms bumped (24/23 → 41/40). **AMENDED AT REVIEW:** the case set grew
+   from 7 to 17, ids are W1..Wn (the sibling battery already owns M1..M10 for unrelated
+   rows), and the evidence is no longer a PR-body tally — it is committed rows in
+   `www-apex-canonicalizer-mutation.test.sh` (18 → 28), because an uncommitted battery is
+   a claim. Nine kills plus a far-side green proving a `terraform fmt`-legal multi-line
+   list is ACCEPTED; before `attr_list` that was a false positive.
 8. `bash apps/web-platform/infra/cutover-verify.sh --check-www-redirect` exits 0 and
    prints its PASS line, and the mode is listed in the script's `usage()`. *(A live
    probe: it can be flipped by a genuine production outage rather than by this diff.
@@ -1260,6 +1302,14 @@ scoped to the addresses this PR touches.
     brittle anchor `cq-assert-anchor-not-bare-token` warns against, and it would go
     stale the next time any document mentions the monitor:
 
+    - **AMENDED AT REVIEW:** the sweep anchored on one phrasing of the claim and missed
+      two live-guidance files: the `best-practices` fuse learning
+      `2026-05-29-uptime-monitor-fuse-must-tolerate-self-inflicted-deploy-windows.md`
+      (which PRESCRIBES the pause/resume bracket this PR deletes and CI now blocks), and
+      `runbooks/cloudflare-pages-cutover.md` (which carries the refuted diagnosis at the
+      T+20 decision point). Both amended. A third, `seo-aeo/SKILL.md`, was corrected the
+      WRONG way — the claim was repointed at the new monitor when neither monitor covers
+      a uniform `site.url` flip; it is now retired rather than renamed.
     - **Corrected (live guidance — these seven files):** `dns.tf` (both sites),
       `www-apex-canonicalizer.test.sh` (both), `uptime-alerts.tf`,
       `cutover-verify.sh`'s CUT8 message, `plugins/soleur/skills/seo-aeo/SKILL.md`,
@@ -1288,8 +1338,11 @@ scoped to the addresses this PR touches.
 16. `model.c4`'s `betterstack` element description names the new monitor. *(No test
     enforces this — it is asserted here precisely because the plan flagged it as
     untestable, which is otherwise an invitation to skip it.)*
-17. The runbook `www-redirect-alarm.md` exists, and every corrected comment cites
-    both it and the sibling monitor by Terraform address **and** `pronounceable_name`.
+17. The runbook `www-redirect-alarm.md` exists. **AMENDED AT REVIEW:** "every corrected
+    comment" was not literally met at five sites and was scoped wrong — what matters is
+    the strings that reach a HUMAN, not every comment a reader of the `.tf` might land
+    on. The operator-facing set is what is asserted: the Sentry `description` (AC17b),
+    the `pronounceable_name`, and the retained `::warning::` in `deploy-docs.yml`.
 17b. `sentry_uptime_monitor.soleur_www_reachability` carries a non-empty
     `description` that names the Better Stack monitor and the runbook — the field
     the provider documents as "used in the resulting issue", i.e. the one string on

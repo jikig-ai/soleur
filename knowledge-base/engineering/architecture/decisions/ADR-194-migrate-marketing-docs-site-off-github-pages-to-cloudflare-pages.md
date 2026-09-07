@@ -469,8 +469,8 @@ Two implementation choices inside (iii), both deliberate:
   The divergence buys a better failure mode: if the redirect ever stops firing, www serves the
   site (duplicate content, already covered by the apex `<link rel="canonical">` and the
   canonical-host build gate) instead of a hard Cloudflare 522 on an HSTS-preloaded host. Both
-  are caught by `betteruptime_monitor.soleur_www_redirect` within its confirmation window
-  (~20 min), so detection is a wash and the severity is not.
+  are caught by `betteruptime_monitor.soleur_www_redirect` (~23 min: 180 s cadence + 1200 s
+  confirmation), so detection is comparable and the severity is not.
 
   > **Amended 2026-09-07 (#7798, ADR-204).** This named
   > `sentry_uptime_monitor.soleur_www` "within one confirmation interval". That monitor
@@ -551,6 +551,14 @@ resources rather than assumed:
 | `sentry_uptime_monitor.soleur_apex` | 300s | `downtime_threshold = 3` | ~15 min |
 | `sentry_uptime_monitor.soleur_www_reachability` | 300s | `downtime_threshold = 3` | ~15 min |
 | `betteruptime_monitor.soleur_apex` | 180s | `confirmation_period = 60` | ~4 min |
+
+> **Amended 2026-09-07 (#7798, ADR-204).** This table is presented as "read from the
+> resources rather than assumed", and one of its three rows was inert for the whole period
+> it describes: `sentry_uptime_monitor.soleur_www` (row 2, renamed here to
+> `soleur_www_reachability`) asserted `equals 301` on a redirecting URL, which Sentry cannot
+> satisfy. Its "~15 min" was never delivered. The row is accurate NOW, under the 2xx
+> retarget. The 526 conclusion above is unaffected — a 2xx assertion fails on a 526 exactly
+> as the old one would have — which is why that passage is deliberately left standing.
 
 An earlier draft of this amendment said "within one check interval … 180s cadence" for all three.
 That was wrong twice over — only BetterStack runs at 180s, and no probe *alerts* within one

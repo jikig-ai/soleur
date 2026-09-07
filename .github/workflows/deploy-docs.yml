@@ -208,9 +208,11 @@ jobs:
           retention-days: 14
 
       # The uptime-monitor pause/resume bracket that used to sit here was removed
-      # at #7798, along with every Sentry credential this workflow carried. (Its
-      # step names are deliberately not quoted: www-apex-canonicalizer.test.sh
-      # asserts their ABSENCE from this file, and a body-grep sees comments too.) It existed to hide a deploy-window false page: during a
+      # at #7798, along with every Sentry credential this workflow carried. (The old
+      # step names are deliberately not quoted here. NOT for the reason first given --
+      # the guard comment-strips before matching, so a comment could never have
+      # satisfied it. The real reason is AC12, whose literal command is a RAW `grep`
+      # over this file with no stripping: quoting the names would fail it.) It existed to hide a deploy-window false page: during a
       # rebuild www transiently serves its own 200, which failed the monitor's
       # `equals 301` assertion. That assertion is gone — the monitor asserts 2xx
       # reachability now, and a transient 200 PASSES it — so the suppression has
@@ -228,7 +230,6 @@ jobs:
       # betteruptime_monitor.soleur_www_redirect (uptime-alerts.tf) — a timer, not
       # a mutation, so CI touches no vendor state and nothing can be stranded.
 
-      # SINGLE-PUBLISH: Cloudflare Pages only (ADR-194 PR5, AC33).
       # SINGLE-PUBLISH: Cloudflare Pages only (ADR-194 PR5, AC33).
       #
       # The GitHub Pages leg — its three `actions/*-pages*` steps, its deployment
@@ -422,14 +423,24 @@ jobs:
       # RETAINED at #7798 while the pause/resume half of this step was deleted.
       # It is the only per-deploy, immediate confirmation that the www→apex 301
       # survived THIS deploy: without it a deploy-caused regression waits out the
-      # Better Stack confirmation window (~20 min) instead of surfacing in the run
+      # Better Stack confirmation window (~23 min) instead of surfacing in the run
       # that caused it.
       #
+      # `if: always()` is RETAINED, and the reason it was nearly dropped was wrong.
+      # It did two jobs and only one belonged to the resume half: it ALSO guaranteed
+      # the probe ran on FAILURE paths. Without it the step inherits the implicit
+      # `success()` and is skipped whenever an earlier step in this job fails —
+      # including the publish-verdict gate above, whose own error text says a failing
+      # leg is EXPECTED during a documented rollback. That is exactly the run in which
+      # you most want to know whether www still 301s, and it is the run in which this
+      # step would have gone silent while the comment above called it "the only
+      # per-deploy confirmation".
+      #
       # It makes no API mutation and holds no credentials, so it cannot strand
-      # anything — which is why `if: always()` went with the resume. Its only
-      # purpose was "never leave the monitor paused", and nothing is paused now.
-      # Warning-only by design: a docs deploy must not fail on a propagation lag.
+      # anything; warning-only by design, so a docs deploy never fails on a
+      # propagation lag. Running it on every path costs nothing.
       - name: Probe www→apex 301
+        if: always()
         run: |
           set -uo pipefail
           # Propagation grace + confirming probe (best-effort; never fail the deploy).
@@ -450,5 +461,5 @@ jobs:
           if [[ "$confirmed" -eq 1 ]]; then
             echo "www→apex 301 confirmed."
           else
-            echo "::warning::www did not return 301 within probe cap (last observed code: ${code}). A last code of \"000\" means every probe failed to get any response — that is a runner/network fault, NOT a www→apex redirect regression; any other code is the redirect actually being wrong. If this is real, betteruptime_monitor.soleur_www_redirect (\"soleur dot ai www redirect 301\") pages within ~20 min; runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md"
+            echo "::warning::www did not return 301 within probe cap (last observed code: ${code}). A last code of \"000\" means every probe failed to get any response — that is a runner/network fault, NOT a www→apex redirect regression; any other code is the redirect actually being wrong. If this is real, betteruptime_monitor.soleur_www_redirect (\"soleur dot ai www redirect 301\") pages within ~23 min; runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md"
           fi

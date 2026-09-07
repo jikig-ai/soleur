@@ -42,15 +42,20 @@ direction and would make every page emit a redirecting canonical site-wide.
 `<link rel="canonical">` absolute-host equals the sitemap's single `<loc>` host
 (derived, not a second literal pin). This is the per-page sibling of the existing
 sitemap host-axis gate. It catches a *page-template* regression emitting a
-redirecting/other-host canonical; a *uniform* `site.url`→www flip stays covered by
-`betteruptime_monitor.soleur_www_redirect` (the live 301 alarm, `uptime-alerts.tf`).
+redirecting/other-host canonical; a *uniform* `site.url`→www flip is covered by
+**no uptime monitor at all** — see the correction below.
 
 > **Corrected 2026-09-07 (#7798).** This line named
-> `sentry_uptime_monitor.soleur_www` as "the live 301 monitor". It was not one.
-> It asserted `equals 301` against a URL that redirects, and Sentry follows 3xx
-> and grades the final response — so it failed every check it ever ran and could
-> not have covered anything. The property now lives on Better Stack, which can be
-> told not to follow. See ADR-204.
+> `sentry_uptime_monitor.soleur_www` as "the live 301 monitor". It was not one:
+> it asserted `equals 301` against a URL that redirects, and Sentry follows 3xx
+> and grades the final response, so the assertion was unsatisfiable.
+>
+> Repointing it at the replacement alarm would have been the same error twice. A
+> uniform `site.url` flip changes the canonical tags the site EMITS and leaves the
+> Cloudflare Bulk Redirect alone, so `betteruptime_monitor.soleur_www_redirect`
+> still observes a 301 and stays green — it does not cover this either. The
+> per-page gate above catches a template regression; a uniform flip is caught at
+> review. See ADR-204.
 
 ## Key Insight
 

@@ -210,7 +210,7 @@
 - [ADR-199 — destroying a state volume is authorized by a MEASURED empty store on a dark host, never by an intent to destroy it](engineering/architecture/decisions/ADR-199-destructive-clearance-requires-a-measured-empty-store-and-a-dark-host.md)
 - [ADR-200 — Art. 33(5) breach documentation is a distinct register, discharged by an index rather than by transcription](engineering/architecture/decisions/ADR-200-art-33-5-documentation-is-a-distinct-register-discharged-by-an-index.md)
 - [ADR-202: Enforce a runtime-STATE hazard with a self-refusal the artifact carries, gated at commit time](engineering/architecture/decisions/ADR-202-enforce-runtime-state-hazards-with-a-carried-self-refusal.md)
-- [ADR-204: Redirect-health moves to Better Stack, because Sentry cannot express it](engineering/architecture/decisions/ADR-204-redirect-health-moves-to-better-stack-because-sentry-cannot-express-it.md)
+- [ADR-204 — redirect-health moves to Better Stack, because Sentry cannot express it](engineering/architecture/decisions/ADR-204-redirect-health-moves-to-better-stack-because-sentry-cannot-express-it.md)
 - [Architecture Diagrams — LikeC4 C4 Model](engineering/architecture/diagrams/README.md)
 - [Soleur Platform — C4 Model](engineering/architecture/diagrams/c4-model.md)
 - [Domain Model & Business Rules Register](engineering/architecture/domain-model.md)

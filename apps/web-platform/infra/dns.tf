@@ -323,13 +323,19 @@ resource "cloudflare_record" "protonmail_dkim_3" {
 #
 #   CORRECTED at #7798 -- "for one monitor interval" was resting on nothing. The
 #   monitor that bound it, sentry_uptime_monitor.soleur_www, asserted `equals 301`
-#   and failed 100% of its checks from the day the assertion landed, so it could
-#   not signal a transition into this state. The accepted bound was not "one
-#   interval"; it was UNBOUNDED, and this ruling was made on the strength of an
-#   alarm that had never fired. The bound is real now:
+#   on a URL that redirects -- which Sentry CANNOT satisfy, because it follows 3xx
+#   and grades the final response. So it could not signal a transition into this
+#   state. (Structural. The measurement behind it is narrower: 10/10 most recent
+#   checks failing on 2026-09-07.) The accepted bound was not "one interval"; it
+#   was UNBOUNDED, and this ruling was made on an alarm that could not fire. The
+#   bound is real now:
 #   betteruptime_monitor.soleur_www_redirect is 180s cadence with a 1200s
-#   confirmation window, i.e. ~20 min worst case. Read the acceptance as ~20 min,
-#   and do not widen it without revisiting this ruling. ADR-204 and
+#   confirmation window. Worst case is the two ADDED -- up to one interval to
+#   observe the first failure, then the confirmation window -- i.e. 180 + 1200 =
+#   1380 s, ~23 min. (The repo's own precedent grades soleur_apex's 180 + 60 as
+#   "~4 min", the same arithmetic.) Read the acceptance as ~23 min. The value is
+#   pinned by www-apex-canonicalizer.test.sh so this sentence cannot go stale
+#   silently; do not widen it without revisiting this ruling. ADR-204 and
 #   knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md.
 
 # THE TWO-MERGE CONTRACT (#7640, ADR-194 D5). Read this before editing either block.

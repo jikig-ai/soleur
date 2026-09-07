@@ -27,7 +27,7 @@ them in an inbox.
 
 | Alert name | Vendor | Means | Time to page |
 |---|---|---|---|
-| `soleur dot ai www redirect 301` | Better Stack | www stopped 301-ing to the apex. The site is UP; canonicalization is broken. | ~20 min (180s cadence, 1200s confirmation) |
+| `soleur dot ai www redirect 301` | Better Stack | www stopped 301-ing to the apex. The site is UP; canonicalization is broken. | ~23 min (up to 180s to observe + 1200s confirmation) |
 | `soleur-ai-www-reachability` | Sentry | www is unreachable, TLS-broken, or 5xx. | ~15 min (300s interval, 3 failures) |
 
 They are independent. Both firing at once means www is down; only the first
@@ -63,7 +63,21 @@ its checks (#7798, ADR-204).
    | `302` / `307` / `308` | Something re-created the redirect with the wrong status. Search engines treat these differently from a 301. |
    | `522` / `526` / timeout | Not a redirect problem. This is a reachability failure; `soleur-ai-www-reachability` should be firing too. |
 
-3. **A deploy in the last ~20 minutes is the most likely benign cause.** During a
+3. **Read the alarm's own state, not just the URL.** Step 1 answers "what does www
+   return now"; it does not answer "is the alarm still firing, or am I chasing a
+   stale page". Same selector `cutover-verify.sh` uses:
+
+   ```bash
+   curl -sS -H "Authorization: Bearer $(doppler secrets get BETTERSTACK_API_TOKEN_READONLY --plain -p soleur -c prd_terraform)" \
+     https://uptime.betterstack.com/api/v2/monitors \
+   | jq -r '.data[] | select(.attributes.pronounceable_name=="soleur dot ai www redirect 301") | .attributes | {status, last_checked_at}'
+   ```
+
+   This one DOES need a credential, unlike step 1. Note the vendor exposes the
+   monitor's status but not the response code the failing check observed — recover
+   that by re-running step 1, not from the API.
+
+4. **A deploy in the last ~25 minutes is the most likely benign cause.** During a
    Cloudflare Pages rebuild, www transiently serves its own 200 (~15 min
    observed). `confirmation_period = 1200` exists to absorb exactly that, so a
    page during a rebuild means the window was exceeded, not that the window is
@@ -95,16 +109,41 @@ The declared config is guarded at PR time by
 in the Terraform is unlikely — the usual cause is a change made **outside**
 Terraform (a dashboard edit, or an account-level Bulk Redirect touched by hand).
 
-1. `cd apps/web-platform/infra && terraform plan` and look for drift on
-   `cloudflare_list.www_canonical` or `cloudflare_ruleset.bulk_redirects`.
+1. **Read the scheduled drift run — do not plan by hand.**
+
+   ```bash
+   gh run list --workflow=scheduled-terraform-drift.yml -L 3
+   gh run view <run-id> --log | grep -A5 'cloudflare_list.www_canonical\|cloudflare_ruleset.bulk_redirects'
+   ```
+
+   That job already plans this root on a schedule, with the credentials it needs.
+   A local plan is deliberately NOT offered here: the root has an R2 backend and
+   reads ~12 `TF_VAR_*` from Doppler, so it is a credentialed operation, and
+   `hr-no-ssh-fallback-in-runbooks` / the no-human-infra-steps gate both say the
+   answer comes from CI. If the scheduled run is stale, dispatch it rather than
+   reproducing it locally:
+
+   ```bash
+   gh workflow run scheduled-terraform-drift.yml
+   ```
+
 2. If there is drift, apply it — merge to `main` and let
    `apply-web-platform-infra.yml` converge. Do not hand-apply.
-3. If there is **no** drift and www still does not 301, the redirect is being
-   overridden by something not in this root. Check for a Page Rule or a
-   Configuration Rule added via the dashboard, and record what you find on #7798's
-   successor — a Cloudflare-side change reaching production without a Terraform
-   apply is the named re-evaluation trigger for building a runtime target
-   assertion (ADR-204, Residual Gap).
+3. If there is **no** drift and www still does not 301, something outside this root
+   is overriding it. Do NOT go and look in the dashboard — pull the live rulesets
+   instead (`hr-no-dashboard-eyeball-pull-data-yourself`). The read-only,
+   GET-only entrypoint audit already exists and covers the exact phase that carries
+   the www 301 (`accounts/<acct>/rulesets/phases/http_request_redirect/entrypoint`):
+
+   ```bash
+   gh workflow run apply-web-platform-infra.yml -f apply_target=entrypoint-audit
+   ```
+
+   See `knowledge-base/engineering/operations/runbooks/cloudflare-whole-list-entrypoint-audit.md`.
+
+   Any finding here belongs on [#7883](https://github.com/jikig-ai/soleur/issues/7883).
+   That issue's re-evaluation trigger is evidence of a Cloudflare-side change reaching
+   production out-of-band, which is exactly what this step surfaces.
 
 ## What this alarm does NOT cover
 
