@@ -9,7 +9,7 @@ files the `action-required` issue.
 
 **Class:** user-challenge (a binding domain-leader instruction the plan does not follow literally)
 **Raised by:** `soleur:legal:clo`, plan Phase 2.5 domain review, 2026-09-07
-**Surface:** `scripts/followthroughs/ccla-representative-icla-<TRACKER>.sh`
+**Surface:** `scripts/followthroughs/ccla-representative-icla-7922.sh`
 
 **The instruction.** CLO P4 directs that the probe call the exported
 `resolveCoverageMapNoticeEpoch()` in `apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts`
@@ -159,3 +159,59 @@ design already insists on.
 **What is asked at review.** Confirm that report-only is preferred to an auto-close that measurement
 shows will latch on the first unrelated signature. The alternative — reintroducing account precision
 so the close is trustworthy — is foreclosed by P9 and the CLO's finding P1.
+
+---
+
+## DC-5 — a THIRD exit code (5 = ACTION), added at /work
+
+**Class:** taste (user-legible) — it changes what the operator sees daily
+**Raised by:** implementation, 2026-09-07
+**Surface:** `scripts/followthroughs/ccla-representative-icla-7922.sh`
+
+The plan's exit table and its own exit-contract block CONTRADICTED each other: the
+block refused exit 0 as the sweeper's close verb, and the table three paragraphs
+later still mapped `count >= 1` to `0`. Resolving it in favour of the block left
+NOT YET and ACTION sharing exit 2.
+
+That is not survivable. `sweep-followthroughs.sh` renders `TRANSIENT (exit $rc, …)`
+in the comment HEADING and folds the body behind a `<details>`. With one code the
+tracker would carry a byte-identical heading every day for months — including on
+the day the count moved — and the operator would have to expand a fold they had
+already learned to ignore. That is the same silent-never-notice the whole issue
+exists to remove, reached by a different route.
+
+**Decision:** 2 = NOT YET, 5 = ACTION, 3 = CANNOT ESTABLISH. The sweeper treats
+every code other than 0 and 1 as TRANSIENT, so 5 is inert to the substrate and
+legible to the operator. The plan's table has been corrected rather than quietly
+followed.
+
+**If the operator disagrees:** collapsing 5 into 2 is a one-line change in the
+probe and two arms in its suite. The cost is that the daily comment stops
+distinguishing "still waiting" from "go and look".
+
+---
+
+## DC-6 — three deferrals, and one that was NOT deferred
+
+**Class:** mechanical (scope), recorded because the boundary is arguable
+**Raised by:** implementation, 2026-09-07
+
+Filed rather than fixed here:
+
+- **#7923** — sweeper comment de-duplication, a per-probe timeout, and the
+  ungated `gh issue edit --add-label` enrolment path. Substrate shared by all 80
+  probes; the timeout in particular changes execution semantics for every one of
+  them and needs its own runtime measurement first.
+- **#7924** — `repo-write-boundary` does not sample `.git/shallow`. Changing what
+  a guard used by every suite samples needs a sweep of current offenders first
+  (`ccla-add.sh` is one, and its `--depth=1` is load-bearing there).
+- **#7925** — the roster has no correction affordance for a wrong landed value.
+  **CLO decision, and the trigger is the first roster row, not a date**: the
+  schema is `.strict()` and `organizations` is `[]` today, so it is free now and
+  a migration over published rows afterwards.
+
+NOT deferred, because this PR made it worse: the sweeper listed open trackers
+with `--limit 50` against 51 live ones, newest-first, so the oldest was silently
+never swept. Enrolling #7922 would have made it two. Fixed inline, with a
+truncation detector — raising the number alone would only move the silent
+failure.

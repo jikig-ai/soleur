@@ -372,7 +372,18 @@ four states with no operator remedy read as "not mine" rather than as jargon:
 | roster missing or unparseable | 3 |
 | any network call exceeds `timeout 30` | 3 |
 | count == 0 | 2 — `NOT YET: <n> signature(s) checked against epoch <e>; none is at-or-after it and uncovered.` |
-| count >= 1 | 0 — `PASS: <count> signature(s) satisfy the temporal gate and are covered by no live roster row (epoch <e>). This is NOT authority to record: the executed instrument's §4(c) designation list on the encrypted drive is the authority for WHICH account to record.` |
+| count >= 1 | **5** — `ACTION: <count> signature(s) satisfy the temporal gate and are covered by no roster row (epoch <e>; <n> entr(ies) checked).` plus the line naming the executed instrument's § 4(c) designation list as the authority for WHICH account to record. |
+
+**The `0` in the row above was a leftover from the pre-notify-only draft and is
+corrected here.** It contradicted the exit-contract block three paragraphs up,
+which already refused exit 0. Resolved at /work in favour of a THIRD code rather
+than folding ACTION into 2: `sweep-followthroughs.sh:487` renders
+`TRANSIENT (exit $rc, …)` in the comment HEADING and folds the body behind a
+`<details>`, so the exit code is the only signal the operator sees unexpanded.
+One code for both measured outcomes would post a byte-identical heading every
+day forever — including the day the answer changed, which is the silent
+never-notice this probe exists to remove. The sweeper treats every code other
+than 0 and 1 as TRANSIENT, so 5 is inert to it and legible to the operator.
 
 Every `CANNOT ESTABLISH` is a statement about **us**, never about the counterparty. The `NOT YET`
 line carries the count of signatures *checked*, so "0 uncovered" and "0 examined" cannot render
@@ -776,12 +787,14 @@ internals, so a future third arm is covered without editing the assertion.
 | 5 | Accept a relative path (drop the `/*` check) | RED — the relative-path arm no longer returns 64 |
 | 6 | Compare the resolved path to `$REPO_ROOT` without `realpath` | RED — the symlink-into-repo arm passes custody when it must be refused |
 | 7 | Interpolate the resolved path into the `gh pr create --body` string | RED — the **source-level** span assertion fails (the runtime path is unreachable under the suite's unconditional dry-run, so this is asserted by grepping the two spans, not by executing them) |
+| 8 | **Added at /work.** `sha256sum "$RESOLVED"` instead of `sha256sum < "$RESOLVED"` | RED on the backslash-basename fixture — GNU sha256sum prefixes its line with `\`, the awk fields shift, and the result is not 64 hex. Paired with a must-PASS on an ordinary basename, so the row isolates the hazard rather than reddening for any reason. No listed row covered the argv/stdin hazard the design devotes a paragraph to. |
+| 9 | **Added at /work.** Delete the mutual-exclusion block | RED — both flags together are silently accepted and one wins. P4/FR2 had no row. |
 
 **Harness rows:**
 
 | # | Edit to the SUITE | Expected |
 |---|---|---|
-| H1 | Delete any two assertions without lowering `MIN_ASSERTIONS` | RED — the floor fires with `ANTI-VACUITY` |
+| H1 | Delete any **one** assertion without lowering `MIN_ASSERTIONS` | RED — the floor fires with `ANTI-VACUITY`. Corrected at /work: the floor is set to the measured total with ZERO slack, so it fires on one, not two. |
 | H2 | Drop the `rc == 0` precondition from the agreement arm, then apply mutation 1 in a form making both arms exit 64 | RED — the arm must not compare two empty outputs; this is the vacuity it exists to avoid |
 | H3 | **must-PASS, non-canonical:** a second fixture with different bytes and length | PASS |
 | H4 | **must-PASS, non-canonical:** a fixture whose basename is a synthesized organisation name | PASS, and that string appears in neither the roster nor stdout |
@@ -810,15 +823,15 @@ covers by asserting absence in the union of streams while driving the stubs' fai
 | 2 | Drop `--first-parent` | RED on the **merge-commit** fixture (it would NOT redden against the live single-match repo — measured) |
 | 3 | Replace `%cI` with `%aI` | RED on the **rebase-replay** fixture |
 | 4 | Take the newest match instead of the oldest | RED on the **two-touch** fixture |
-| 5 | Drop `--format='%H %cI'` back to `%cI` | RED — control B has no SHA to resolve and the grafted fixture is no longer refused |
+| 5 | Drop `--format='%H %cI'` back to `%cI` | **RESTATED at /work — the original expectation was backwards.** Without `%H` both `${line%% *}` and `${line#* }` return the WHOLE string, so the SHA assertion fails and the probe refuses on EVERY fixture, including the healthy one where the baseline reports a verdict. Asserted as: rc=3 on the one-touch fixture, with the SHA-shape reason, where the baseline is rc=2. Still discriminating, just not via the graft. |
 | 6 | Remove the emptiness check on the derived line | RED — the reworded-anchor fixture yields an empty epoch and exits 0 or 2 instead of 3 |
 | 7 | Delete control B | RED — the grafted fixture derives a false epoch instead of exiting 3 |
 | 8 | **Guard's own dispatch:** `exit 0` before any operand is read | RED — the unusable-ledger arm and the count==0 arm both fail |
 | 9 | Drop the roster term from the `jq` predicate | RED — the fixture whose only post-epoch signer is already a live representative exits 0 when it must exit 2 |
-| 10 | Treat a withdrawn (`removed_at != null`) row as covering | RED — the withdrawn-designation fixture exits 2 when it must exit 0 |
+| 10 | **INVERTED at /work.** Add `select(.removed_at == null)`, i.e. treat a withdrawn row as NOT covering | RED — the withdrawn fixture reports ACTION where the baseline reports NOT YET. The original row predated the decision to narrow "covered" to live-OR-withdrawn: a live-only term leaves a withdrawn representative's id uncovered forever, so the count latches at >= 1 and the probe's only signal is destroyed. |
 | 11 | Default an unparseable `created_at` to 0 instead of refusing | RED — the malformed-timestamp fixture exits 0 or 2 when it must exit 3 |
-| 12 | Remove `2>/dev/null` from the `date` call | RED — the malformed-timestamp fixture's value appears in the captured stream |
-| 13 | Move the ledger fetch **before** the epoch derivation | RED — the fetch flips `.git/shallow` in the fixture's common dir and the derivation then returns the graft |
+| 12 | **RESTATED at /work.** Remove the `wellformed` guard AND the evaluation's `2>/dev/null` | RED — the malformed value appears in the captured stream. Measured: jq's PARSE error carries only a line and column and echoes nothing, so the original row could not fire; it is jq's RUNTIME error (`fromdateiso8601`) that prints the offending value. Both the counted predicate and the suppression are mutated, because either alone leaves the other holding. |
+| 13 | Move the ledger fetch **before** the epoch derivation | **CONVERTED at /work to a SOURCE-ORDER assertion, with a known-positive control.** Once `--depth=1` is gone the fetch no longer flips the fixture to shallow, so an execution-order mutation has no observable left and the behavioural row could not fire. Stating it as source order is honest; keeping the behavioural row would have been a row that cannot redden. |
 | 14 | Drop `--no-tags` from the ledger fetch | RED — the tag-carrying-origin fixture shows tags created in the sandbox |
 
 **Harness rows:**
