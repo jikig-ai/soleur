@@ -86,10 +86,13 @@ apps/web-platform/server/ws-handler.ts
 # (:55 conversations SELECT, :79 messages SELECT) migrated in PR-C §2.2.
 apps/web-platform/server/api-messages.ts
 
-# PERMANENT — sum_user_mtd_cost RPC is REVOKE EXECUTE FROM authenticated
-# (migration 027:68). Per-row `WHERE user_id = uid` + RPC call must stay
-# service-role; a tenant-JWT call would 42501 silently. The 1 tenant
-# data site (:96 conversations SELECT) migrated in PR-C §2.3.
+# PERMANENT — TWO RPCs are REVOKE EXECUTE FROM authenticated and must stay
+# service-role: `sum_user_mtd_cost` (migration 027:68) and its per-workflow
+# partition `sum_user_mtd_cost_by_workflow` (migration 136, #1055), which is
+# the loader's happy-path aggregate with the former kept as its sequential
+# fallback. Both filter `WHERE user_id = uid`; a tenant-JWT call to either
+# would 42501 silently. The 1 tenant data site (:96 conversations SELECT)
+# migrated in PR-C §2.3.
 apps/web-platform/server/api-usage.ts
 
 # ── Account / process-level helpers (unchanged by PR-C / PR-D) ───────
