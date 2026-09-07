@@ -192,17 +192,36 @@ chmod 700 "$SCRATCH"
 
 REGISTRY_HOST="$(printf '%s' "$REGISTRY_URL" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')"
 # (#7873) The pull credential is written into the netrc `machine` line, and
-# REGISTRY_HOST derives from an env-settable URL with no validation -- so anything
-# that can set ZOT_INVENTORY_REGISTRY_URL could name the machine this token is
-# offered to. Validate BEFORE the netrc exists, not before the request.
+# REGISTRY_URL is env-settable with no validation -- so anything that can set
+# ZOT_INVENTORY_REGISTRY_URL could name the machine this token is offered to.
+# Validate BEFORE the netrc exists, not before the request.
 #
-# The pin is LOOPBACK, not one literal: zot runs on this host and the port varies
-# legitimately (the default is :5000; the suite's listeners bind ephemeral ports).
-# An exact-equality pin would be a pin on the port, which is not the property.
-case "$REGISTRY_HOST" in
-  127.0.0.1|localhost|::1|'[::1]') : ;;
-  *) die "refusing to write the pull credential into a netrc for non-loopback host '${REGISTRY_HOST}' (ZOT_INVENTORY_REGISTRY_URL must name the local registry)" 2 ;;
-esac
+# ALLOWLIST THE WHOLE URL, NOT THE PARSED HOST. An earlier revision matched
+# against REGISTRY_HOST above, which is a hand-parsed derivative: the sed cuts at
+# the FIRST `:` or `/`, so `http://127.0.0.1:5000@evil.example/` yields the host
+# `127.0.0.1`, passes the allowlist, and the sweep then talks to `evil.example`.
+# The credential does not leak there (curl matches netrc on the REAL host and
+# finds no `machine evil.example`), but the guard's own stated property is
+# violated and the next reader would reasonably read it as a destination pin.
+# ADR-199 commitment 2: allowlist the permitted VALUE, never parse the hostile one.
+#
+# The shape is LOOPBACK, not one literal: zot runs on this host and the port
+# varies legitimately (the default is :5000; the suite's listeners bind ephemeral
+# ports). An exact-equality pin would be a pin on the port, not the property.
+# Anything unrecognised REFUSES -- an allowlist fails closed on every alternate
+# loopback spelling (127.1, 2130706433, 0.0.0.0, a trailing dot, IPv6-mapped),
+# which is the safe direction.
+# A REAL REGEX, NOT A `case` GLOB. The first attempt at this pin used
+# `http://127.0.0.1:[0-9]*` and was bypassed by the very input it was written for:
+# a shell glob's `*` matches ANYTHING, so `[0-9]*` reads as "a digit followed by
+# anything" and `http://127.0.0.1:5000@evil.example/` matched. Measured, not
+# reasoned about -- the both-directions probe is what caught it.
+#
+# `(:[0-9]+)?` here is anchored on both sides by the ERE, so a port is digits and
+# nothing else, and anything after it must begin `/`. Userinfo (`@`) cannot appear.
+if [[ ! "$REGISTRY_URL" =~ ^https?://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?(/.*)?$ ]]; then
+  die "refusing to write the pull credential into a netrc for non-loopback registry '${REGISTRY_URL}' (ZOT_INVENTORY_REGISTRY_URL must name the local registry)" 2
+fi
 NETRC="$SCRATCH/netrc"
 printf 'machine %s\nlogin %s\npassword %s\n' "$REGISTRY_HOST" "$ZOT_PULL_USER" "$ZOT_PULL_TOKEN" > "$NETRC"
 chmod 600 "$NETRC"

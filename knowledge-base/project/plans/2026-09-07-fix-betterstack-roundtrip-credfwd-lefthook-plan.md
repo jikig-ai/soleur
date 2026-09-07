@@ -40,7 +40,8 @@ settles PR 1's scope against #7879 at Phase 0 rather than mid-implementation.
 is promoted in the same PR.
 
 **Six smaller corrections**, each measured: the lint has **no ratchet** to inherit (only `--census`
-and `--write-baseline`; the four `.highwater` files live elsewhere), so Rule D adds one; Phase 0 cited
+and `--write-baseline`; the four `.highwater` files live elsewhere). **Rule D does NOT add one —
+cut at review as subsumed.** Phase 0 cited
 a classifier that does not exist yet, so it now *defines* the token set before censusing with it; the
 `expect_field` count is **73**, not 74; the plan claimed "9 ADR ordinals" while citing 6; `ADR-197`
 was mis-attributed as the shell-trace credential refusal (that is **ADR-202**); and two line citations
@@ -387,11 +388,16 @@ have shipped a vacuous guard.**
    `baseline = set() if (args.changed or args.paths)`, so a touched file must satisfy every rule
    including D. The vacuity is confined to the repo-wide sweep, which is exactly where the ratchet
    and the visibility live.
-2. **There is no ratchet.** The lint has `--census` and `--write-baseline`; it has no `.highwater`
-   file. Four exist in the repo (`lint-supabase-deprecated-endpoints`, `lint-diagnosis-claims`,
-   `lint-trap-tempfile-ownership`, `alarm-issue-filing-guard`), all one integer plus a provenance
-   header, and the offender-counting ones ratchet **down**. Rule D adds its own on that model, plus
-   the `--check-highwater` flag to read it.
+2. ~~**There is no ratchet.**~~ **CUT AT REVIEW (2026-09-07).** A ratchet was built and then
+   removed: it is **strictly subsumed** by the repo-wide run. Suppression is `if rel not in supp`,
+   so a NEW offender is by definition absent from the baseline, its violations are reported, and
+   `scripts/lint-shell-trace-credential-refusal-repo` already exits 1 — `--check-highwater` could
+   not fire without that suite having fired first. Verified by measurement, not argument: removing
+   a transport flag from `betterstack-query.sh` made the plain repo-wide run `rc=1`.
+   The precedent it was copied from (`lint-trap-tempfile-ownership`) is scoped to ADDED LINES and
+   carries NO enumerated baseline, which is what makes a population count load-bearing there and
+   redundant here. Copying a mechanism because four siblings have one is how a precedent becomes a
+   requirement. Two review agents converged on this independently.
 
 The classifier covers `-u` as well as `--user`, plus `--header @-`, `--netrc`/`--netrc-file`,
 `--oauth2-bearer`, `--proxy-user` and `-E`. The `*.sh` boundary and `CURL_BIN` are stated exclusions.
@@ -974,7 +980,7 @@ named alongside the explicit no-data-loss statement (C5).
 - `tests/scripts/test-zot-inventory.sh` — the inverted `mutate_sub` direction; the proxy case.
 - `scripts/lint-shell-trace-credential-refusal.py` — Rule D (`check_rule_d`, mirroring the existing
   `check_rule_a`/`b`/`c` shape), the widened classifier, **per-rule baseline granularity**, a
-  `--check-highwater` flag, and the six-declaration parity assertion.
+  ~~`--check-highwater` flag~~ (CUT at review — subsumed), and the parity assertion, whose population is DERIVED from the tree rather than the six files listed here (measured at review: **twelve** declaring files across **two** deliberate sources).
 - `scripts/lint-shell-trace-credential-refusal.test.sh` — the mutation and harness rows.
 - `knowledge-base/engineering/architecture/diagrams/model.c4` — the `github -> betterstack` edge text.
 
@@ -992,8 +998,9 @@ named alongside the explicit no-data-loss statement (C5).
 - `scripts/lint-shell-trace-credential-refusal.rule-d.baseline.txt` — Rule D's **own** grandfathered
   population, generated from the Phase 0 census. Distinct from the existing shared
   `…baseline.txt`, which is per-file and rule-agnostic and already contains all seven target sites.
-- `scripts/lint-shell-trace-credential-refusal.rule-d.highwater` — one integer plus a provenance
-  header, mirroring the four existing `.highwater` files; offender-counting, so it ratchets **down**.
+- ~~`scripts/lint-shell-trace-credential-refusal.rule-d.highwater`~~ — **NOT CREATED. Cut at
+  review**: strictly subsumed by the repo-wide run (a new offender is absent from the baseline, so
+  its violations are reported and the run exits 1). Verified by measurement.
 - The static hop-frame guard for `#7886` and its depth harness. Home: `.claude/hooks/*.test.sh`, which
   **is** in `scripts/test-all.sh`'s `SUITE_GLOBS` — so no `run_suite` line is needed and the
   orphan-suite risk does not arise. (`scripts/*.test.sh` is **not** in that array, and `tests/scripts/`
@@ -1038,7 +1045,10 @@ The `#7208` `MAX_WALK_HOPS` note travels with it (see §Collision).
 - **B3.** Rule D reads a **Rule-D-scoped** baseline, not the lint's shared per-file one. Demonstrated
   by a fixture: a file present in the shared baseline for an A/B/C violation still fails Rule D on the
   repo-wide run. Without this, all seven target sites are exempt and the guard is vacuous.
-- **B3b.** A `.highwater` ratchet exists for Rule D, mirroring the four in `scripts/`; it fails when
+- ~~**B3b.**~~ **WITHDRAWN at review.** The criterion named a MECHANISM ("mirroring the four in
+  `scripts/`") rather than a property, which is how a copied precedent becomes a requirement. The
+  property it was reaching for — the deferred population cannot grow silently — is already delivered
+  by the baseline. Superseded text: a `.highwater` ratchet exists for Rule D; it fails when
   the count rises and passes when it falls.
 - **B4.** Rule D's mutation matrix scores 13/13 RED; harness rows 2/2 RED and 3/3 GREEN.
 - **B5.** `scripts/zot-inventory.sh` is **not** in Rule D's baseline — both its credential paths

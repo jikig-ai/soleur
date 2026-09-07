@@ -178,8 +178,6 @@ jobs:
         run: python3 scripts/lint-trap-tempfile-ownership.py --check-highwater
       - name: shell-trace credential refusal (#7797)
         run: python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main
-      - name: Ratchet the credential-forwarding population (Rule D, #7873)
-        run: python3 scripts/lint-shell-trace-credential-refusal.py --check-highwater
       - name: Lint orphan test suites (every tracked *.test.sh must be registered)
         run: bash scripts/lint-orphan-test-suites.sh
       # Supabase Management API deprecation + host-pin assembly guard.

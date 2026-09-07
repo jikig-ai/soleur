@@ -141,6 +141,15 @@ rc="$(rc_of "$LINT" "$FIX/violation-ruled-disable-not-first.sh")"
 [ "$rc" = "1" ] && pass "Rule D: --disable present but NOT first is still reported" \
   || fail "Rule D disable-not-first should report rc=1, got rc=$rc"
 
+# The `--config` channel: BOTH credential and destination live in a file the curl
+# line does not name. Without a fixture here, `_inline_config_file` had no
+# coverage at all -- and a review pass recommended deleting it as "measured zero
+# impact", which was true of the FIXED tree and false of the regression it exists
+# to catch (removing zot-inventory.sh's pin goes from detected to invisible).
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-config-file.sh")"
+[ "$rc" = "1" ] && pass "Rule D: a --config file's env-settable destination is reported" \
+  || fail "Rule D config-file destination should report rc=1, got rc=$rc"
+
 # MUST-PASS. The flags are first at RUNTIME though the curl line names none of
 # them. Without this row the rule can be "fixed" into a false positive on every
 # array-built call site and the suite stays green -- measured on zot-inventory.sh.
@@ -387,6 +396,13 @@ mutate_row 'M8 unenumerable: indirect arm dropped' \
   "$FIX/violation-indirect-conditional-hatch.sh" 1 0
 
 # --- Rule D mutation rows: the GUARD's own operands ---------------------------
+# D5 mutates the config-file resolution specifically. It is the one Rule D helper
+# whose deletion looks free on a healthy tree: every verdict is unchanged until a
+# destination pin regresses, which is exactly when it is needed.
+mutate_row 'D5 Rule D: --config file resolution removed' \
+  's/^(\s*)cmd = _inline_config_file\(cmd, lines\)$/${1}pass/m' \
+  "$FIX/violation-ruled-config-file.sh" 1 0
+
 # Every row above mutates a FIXTURE and confirms Rule D reds. These mutate the
 # RULE and confirm it does not silently WIDEN -- a guard that accepts everything
 # is indistinguishable from a healthy run.
@@ -398,8 +414,12 @@ mutate_row 'D2 Rule D: --noproxy check degenerated to always-match' \
   's/CURL_NOPROXY = re\.compile\(r"[^"]*"\)/CURL_NOPROXY = re.compile(r"")/' \
   "$FIX/violation-ruled-no-noproxy.sh" 1 0
 
+# Anchored on the ASSIGNMENT, not on the expression's exact text. The first
+# version pinned `    d = check_rule_d(` including its indentation, so adding a
+# scope guard to that line made the sed a no-op -- and a mutation that does not
+# land reports the BASELINE, which is indistinguishable from a pass.
 mutate_row 'D3 Rule D skipped entirely' \
-  's/    d = check_rule_d\(/    d = [] and check_rule_d(/' \
+  's/^(\s*)d = [^\n]*check_rule_d[^\n]*$/${1}d = []/m' \
   "$FIX/violation-ruled-no-disable.sh" 1 0
 
 # The credential classifier is Rule D's scope gate: narrow it and the rule goes

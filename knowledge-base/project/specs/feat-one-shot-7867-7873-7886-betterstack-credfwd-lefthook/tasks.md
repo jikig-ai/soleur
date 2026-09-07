@@ -180,13 +180,14 @@ branch. The transfer is recorded as a comment on #7886, and #7879 must add `Clos
       green over exactly the population it was written for, on the repo-wide run that is the blocking
       arm. Create `scripts/lint-shell-trace-credential-refusal.rule-d.baseline.txt`, generated from
       0.2's census. (`--changed` mode is unaffected — it bypasses the baseline entirely.)
-- [x] 2.g2 **Add a ratchet — the lint has none.** It carries `--census` and `--write-baseline` only.
-      Create `scripts/lint-shell-trace-credential-refusal.rule-d.highwater` (one integer + provenance
-      header) mirroring the four existing `.highwater` files in `scripts/`; offender-counting, so it
-      ratchets **down**. Add the `--check-highwater` flag to read it.
-- [x] 2.h Add the **six-declaration** parity assertion: `zot-registry.tf`, `cloud-init-inngest.yml`,
-      `vector.toml`, `registry-userdata-budget.sh`, `zot-inventory.sh`, `betterstack-ingest-probe.sh`.
-      Three of six would go green with the fleet split across two destinations.
+- [x] 2.g2 ~~Add a ratchet~~ **CUT at review — strictly subsumed by the repo-wide run; see the plan.** It carries `--census` and `--write-baseline` only.
+      ~~Create a `.highwater` mirroring the four existing ones; add `--check-highwater`.~~ Built,
+      then REMOVED at review: the repo-wide run already reports a new offender (it is not in the
+      baseline), so the ratchet could not fire without that suite firing first.
+- [x] 2.h Add the parity assertion. **The plan's six-file list was wrong and is not what shipped:**
+      a repo-wide grep finds **twelve** declaring files across **two** deliberate sources
+      (`s2457081` and the git-data `s2734275`), so the shipped suite DERIVES its population and
+      partitions by source id. A hand-list would have modelled one source as the whole fleet.
 - [x] 2.i **DONE — both stay baselined; the classifier was NOT narrowed to exclude them.** — Keep the baseline **honest**: `arm-heartbeats.sh` and `cutover-verify.sh` are real members
       under `apps/web-platform/infra/**` this cycle does not fix. Baseline them; do **not** narrow the
       classifier to exclude them.

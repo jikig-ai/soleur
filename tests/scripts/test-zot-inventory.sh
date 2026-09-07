@@ -1071,7 +1071,7 @@ fi
 echo "== 1.1.13 EXFIL — the netrc pull credential is confined to loopback =="
 dedup_fixture
 run_inv "$INV" ZOT_INVENTORY_REGISTRY_URL="http://attacker.example.org:5000"
-if grep -qF 'refusing to write the pull credential into a netrc for non-loopback host' "$ERR"; then
+if grep -qF 'refusing to write the pull credential into a netrc for non-loopback registry' "$ERR"; then
   pass "a non-loopback registry URL is refused BEFORE the netrc is written"
 else
   fail "EXFIL: a non-loopback registry URL was not refused" "rc=${RC} err=$(tail -2 "$ERR" | tr '\n' ' ')"
