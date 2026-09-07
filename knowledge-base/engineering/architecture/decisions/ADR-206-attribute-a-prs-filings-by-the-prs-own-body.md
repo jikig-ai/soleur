@@ -60,6 +60,23 @@ relevance, and the two are measurably different. Over 300 PRs, counting bare `#N
 | Issues attributed to **two different PRs** (so at least one is wrong) | **9** |
 | PRs flipping PASS → BLOCK | **25 / 300 (8.3%)**, unmeasured false-positive share |
 
+**Independently replicated 2026-09-07 (#7896 review), 60 most-recent merged PRs against the
+500-issue window.** The lens assigned to verify this table died on a quota, so it was re-run by
+hand. The *conclusion* holds; the *rates* are sample-dependent and should not be quoted as
+constants:
+
+| Measurement | ADR (300 PRs) | Replication (60 PRs) |
+|---|---|---|
+| PRs where a bare-`#N` arm adds attributions | 56/300 (18.7%) | 20/60 (33%) |
+| Attributions added | 122 | 65 |
+| Issues attributed to two different PRs | 9 | 1 |
+
+The replication is denser in cross-references (a more recent, more interlinked window), which is
+why the per-PR rates are higher. What matters is that the failure mode reproduces with a named
+instance: **issue #7869 is attributed to both PR #7838 and PR #7840**, so at least one attribution
+is wrong. That is P4 violated under bare-`#N` counting, on live data, independent of the original
+sample.
+
 P4 — *"a sibling PR's filings are never counted against this PR"* — is a stated guard property,
 and under bare-`#N` counting it is measurably false. The conservation line keeps the information
 without giving prose authority: the blind spot becomes **self-reporting** rather than silent.
