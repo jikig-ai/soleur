@@ -225,7 +225,22 @@ _line_is_mutating() { # stdin: one line's candidate tokens
 # Code: the tokens of a spawn line are its quoted string literals.
 _code_line_tokens() { grep -oE "${_Q}[^\"'\`]*${_Q}" <<<"$1" | tr -d "\"'\`"; }
 # Shell: the whitespace-separated words of the command starting at `git`, up to the next separator.
-_shell_line_tokens() { grep -oE "$SHELL_SPAWN_RE[^;&|\`)]*" <<<"$1" | tr ' \t' '\n\n'; }
+# Emits ONE RECORD PER COMMAND, because a line may hold several. Classifying a whole line at once
+# is the same fail-OPEN the file-level note above describes, one level down: `git status && git
+# commit -m x` pools `status` with `commit`, the read verb wins the whole line, and the commit
+# becomes invisible to the derivation that exists to notice it. grep -oE already yields one match
+# per command; the previous form flattened them into a single token stream.
+_shell_line_commands() { grep -oE "$SHELL_SPAWN_RE[^;&|\`)]*" <<<"$1"; }
+_shell_cmd_tokens() { tr ' \t' '\n\n' <<<"$1"; }
+# A LINE is mutating iff ANY ONE of its commands is.
+_shell_line_is_mutating() {
+  local _c
+  while IFS= read -r _c; do
+    [[ -z "$_c" ]] && continue
+    if _line_is_mutating <<<"$(_shell_cmd_tokens "$_c")"; then return 0; fi
+  done < <(_shell_line_commands "$1")
+  return 1
+}
 
 derive_A() {
   local f line
@@ -240,7 +255,7 @@ derive_A() {
              | grep -E '/(([^/]*\.test\.sh)|(test[-_][^/]*\.sh))$'); do
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
-      if _line_is_mutating <<<"$(_shell_line_tokens "$line")"; then printf '%s\n' "$f"; break; fi
+      if _shell_line_is_mutating "$line"; then printf '%s\n' "$f"; break; fi
     done < <(_strip_shell_data "$f" | grep -E "$SHELL_SPAWN_RE" 2>/dev/null \
              | grep -vE '^[[:space:]]*#')
   done
@@ -563,7 +578,7 @@ for f in $(git ls-files "${OUT_OF_SCOPE_SHELL_ROOTS[@]}" 2>/dev/null \
   [[ "$(_strip_shell_data "$f" | grep -cE "$SHELL_HELPER_CALL_RE")" != 0 ]] && continue
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
-    if _line_is_mutating <<<"$(_shell_line_tokens "$line")"; then OUT_SET+="$f"$'\n'; break; fi
+    if _shell_line_is_mutating "$line"; then OUT_SET+="$f"$'\n'; break; fi
   done < <(_strip_shell_data "$f" | grep -E "$SHELL_SPAWN_RE" 2>/dev/null | grep -vE '^[[:space:]]*#')
 done
 OUT_N=$(printf '%s' "$OUT_SET" | grep -c . || true)
@@ -614,6 +629,27 @@ _c_control() {
     fail "derivation C control FAILED (flags-unprotected=$must_flag accepts-protected=$must_pass) -- the predicate pair no longer discriminates, so the partial-conversion assertion is vacuous whatever it reports"
   fi
 }
+_a_control() {
+  # Drives the per-COMMAND classifier over the three shapes that separate it from the per-LINE one
+  # it replaced. The middle case is the whole point: under per-line pooling the read verb `status`
+  # suppressed the `commit` beside it, so a mutating line classified read-only -- the same fail-OPEN
+  # recorded above for per-FILE pooling, one level down. Both directions are driven, because a
+  # classifier that answers "mutating" to everything satisfies the first two arms alone.
+  local read_only='  git -C "$d" status --short'
+  local mixed='  git -C "$d" status --short && git -C "$d" commit -m x'
+  local mutating='  git -C "$d" init -q'
+  local a=0 b=0 c=0
+  _shell_line_is_mutating "$read_only" || a=1      # must NOT be mutating
+  _shell_line_is_mutating "$mixed"     && b=1      # MUST be mutating (the regression case)
+  _shell_line_is_mutating "$mutating"  && c=1      # must be mutating
+  if (( a == 1 && b == 1 && c == 1 )); then
+    pass "derivation A control: a read+mutate line is mutating, and a read-only line still is not"
+  else
+    fail "derivation A control FAILED (read-only-quiet=$a mixed-flagged=$b mutating-flagged=$c) -- the line classifier no longer discriminates, so derivation A is vacuous whatever it reports"
+  fi
+}
+_a_control
+
 _c_control
 
 read -r _C_FILES_SCANNED _C_SPAWNS_SCANNED < "$_C_COUNTS"
