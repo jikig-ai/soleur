@@ -254,6 +254,23 @@ and logged like any other, and the sequencing is a property of the gates rather 
                                            replaced and born raw
     4. apply_target=inngest-host-replace   a fresh FIRST boot; ARM 3 luksFormats the raw device
 
+> **Amended 2026-09-07 (#7695) — step 2 carried a false premise, and it closed this interlock's own
+> escape hatch.** Step 2 says the replace makes the boot emit `probe_schema=3`. That does not follow
+> from a replace: the emitter lives in `inngest-bootstrap.sh`, which is **baked into the OCI image**
+> and reaches the host only through the digest literal in `user_data` — not through cloud-init. So
+> while the pin predates the emitter, step 2 boots the *pinned* image, `probe_schema` is absent,
+> Guard 2 keeps verdicting `stale_schema`, and step 3 is unreachable. Measured on the live host the
+> same day: the hourly probe row carries `image_ref=…:v1.1.25@sha256:f23a2a0d…` and **no
+> `probe_schema` field at all**, on a host whose pin was set 2026-08-20 while the emitter merged
+> 2026-09-04.
+>
+> **Added precondition, before step 2:** the pinned digest must name an image built from a tree that
+> already contains the emitter. This is now enforced hermetically rather than remembered — Guard A in
+> `cloud-init-inngest-bootstrap.test.sh` compares every baked carrier against `git show <pinned
+> tag>:<path>` and reds when they diverge, which is exactly the state that produced this correction
+> (six of ten carriers had drifted). The original step 2 text is left standing above so the premise
+> this amendment corrects remains legible.
+
 Run 4 is not optional and was named nowhere. Both the success and the failure paths now name
 it, with the reason, and the suite greps the superseded wording so a partial revert reddens.
 
