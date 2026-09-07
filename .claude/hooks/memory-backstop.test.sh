@@ -110,11 +110,48 @@ trap teardown EXIT INT TERM HUP
 newtmp() {
   local __var=$1 __d
   __d=$(mktemp -d -t membackstop.XXXXXXXX) || return 1
+  # `mktemp -d -t` is only absolute when TMPDIR is. This file exports
+  # TMPDIR="${TMPDIR:-/var/tmp}", which DEFAULTS an unset TMPDIR but passes an
+  # inherited relative one straight through -- and every fixture in this suite is
+  # rooted here, so one relative TMPDIR aims 22 `rm -rf`/redirect/`cp` operands at
+  # a CWD-relative tree. Validating at the chokepoint covers all eleven callers;
+  # the alternative is a guard at each of the 22 write sites, which is the form
+  # that drifts. Refuse rather than repair: a fixture root we cannot prove is a
+  # test we must not run.
+  case "$__d" in
+    /*) : ;;
+    *) printf 'newtmp: refusing a non-absolute fixture root %q (TMPDIR=%q)\n' \
+         "$__d" "${TMPDIR-}" >&2; return 1 ;;
+  esac
   TMPDIRS+=("$__d")
   printf -v "$__var" '%s' "$__d"
 }
 
 echo "memory-backstop: hook contract, fail-open branches, tree adoption, cap enforcement"
+
+# --------------------------------------------- newtmp refuses a relative root
+# Drives the chokepoint directly rather than asserting about its text. Measured
+# on this machine: `TMPDIR=reltmp mktemp -d -t membackstop.XXXXXXXX` returns
+# `reltmp/membackstop.DN0hD7to` with rc=0 -- mktemp does not object, so nothing
+# below newtmp would either. Both directions are pinned: a relative TMPDIR must
+# be REFUSED, and the ordinary absolute case must still SUCCEED, because a
+# chokepoint that refuses everything passes the first arm alone.
+_nt_probe=$(
+  cd "$(mktemp -d)" && mkdir -p reltmp && TMPDIR=reltmp
+  export TMPDIR
+  newtmp _nt_v >/dev/null 2>&1 && printf 'accepted:%s' "$_nt_v" || printf 'refused'
+)
+if [[ "$_nt_probe" == refused ]]; then
+  pass "newtmp refuses a fixture root made relative by an inherited TMPDIR"
+else
+  fail "newtmp ACCEPTED a relative fixture root ($_nt_probe) -- every write below it is CWD-relative"
+fi
+if newtmp _nt_ok && [[ "${_nt_ok:-}" == /* ]]; then
+  pass "newtmp still returns an absolute root in the ordinary case"
+else
+  fail "newtmp rejected a normal allocation (root=${_nt_ok:-unset}) -- the guard is over-broad"
+fi
+unset _nt_probe _nt_v _nt_ok
 
 if [[ ! -f "$HOOK" ]]; then
   fail "$HOOK does not exist"
