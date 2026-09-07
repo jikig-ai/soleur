@@ -126,7 +126,7 @@ never inside `$( )`.
 
 ## Phase 8 — Adjacent finding triage
 
-- [ ] 8.1 Triage the `/review` `Ref #N` probe inline first (`wg-defer-only-after-inline-triage`). If the
+- [x] 8.1 Triage the `/review` `Ref #N` probe inline first (`wg-defer-only-after-inline-triage`). If the
       fix stays inside the cost-of-filing auto-flip (≤100 lines AND ≤4 files, counting this PR's set),
       fold it in; otherwise leave the ADR acknowledgement and file nothing.
 
@@ -136,13 +136,20 @@ never inside `$( )`.
 - [x] 9.2 AC-G4: R1 red-before / green-after through the seam, keyed on named FAIL lines.
 - [x] 9.3 AC-G7: firing fixture emits exactly one `net-issue-flow-body-attributed` row by exact
       `.rule_id` match; clean fixture emits none.
-- [ ] 9.4 AC-G8: stub-seam runtime delta vs the `origin/main` gate on the same fixture < 200 ms.
+- [x] 9.4 AC-G8: stub-seam runtime delta vs the `origin/main` gate on the same fixture < 200 ms.
+      **Measured on the PRIMITIVE, not the whole gate.** Under three concurrent sibling full-gate
+      runs the whole-gate harness could not resolve a 200 ms budget: a batched A/B reported the new
+      gate 295 ms FASTER and an interleaved A/B reported it 346 ms SLOWER — a sign flip, on a change
+      that strictly adds work, with a per-arm spread of ~1237 ms swamping both the effect and the
+      budget. Timing the jq pass that actually changed (25 reps x 3 interleaved rounds, 500-issue
+      fixture) gives new 11-12 ms vs old 9 ms: **+2 to +3 ms**, spread ~1 ms, sign physically
+      correct. That is the number; the whole-gate figures are discarded as unresolvable.
 - [x] 9.5 AC-G9: `git diff --stat origin/main -- .claude/hooks/ship-net-issue-flow-gate.sh` empty and the
       four `hook remedy needle` assertions pass.
-- [ ] 9.6 Assert the declared `Filed:` line survives a Phase 6 body regeneration.
+- [x] 9.6 Assert the declared `Filed:` line survives a Phase 6 body regeneration.
 - [x] 9.7 Verify every `knowledge-base/` citation in the plan resolves.
 - [x] 9.8 **AC-D1 (dogfooding).** Run the gate against this PR; expect
       `Closing: 1 (#7759) / Filing: 0 / Net: -1 / PASS`. Then **hand-reproduce the FILED selector**
       against the live issue list rather than trusting the verdict — a fix PR that passes by exploiting
       its own defect is the one outcome this plan must not produce.
-- [ ] 9.9 AC-D2: PR body carries `Closes #7759` (body, not title).
+- [x] 9.9 AC-D2: PR body carries `Closes #7759` (body, not title).
