@@ -32,10 +32,32 @@
 # back the rows its hook emitted (assert on telemetry) without knowing this
 # file's internals.
 
+# FAIL LOUD, never open (#7853 / AC7). Both setup steps below used to `return 0` on failure, which
+# left INCIDENTS_REPO_ROOT unset -- and an unset root is not a degraded sandbox, it is the
+# OPERATOR'S REAL LEDGER. The failure direction of a write-boundary guard must be refusal, not
+# silent restoration of the thing it guards. `mktemp` failing is also not hypothetical here: /tmp is
+# a machine-global 4 GiB tmpfs shared by every parallel worktree.
+#
+# The empty-value case is called out separately because it is the one that reads as safe: an empty
+# INCIDENTS_REPO_ROOT is indistinguishable from unset to `_incidents_repo_root()`, so exporting one
+# would restore the real sink while every static check for the variable's NAME reported clean.
 _soleur_test_incident_sandbox_init() {
   local d
-  d=$(mktemp -d -t soleur-inc-XXXXXX) || return 0
-  mkdir -p "$d/.claude" 2>/dev/null || return 0
+  if ! d=$(mktemp -d -t soleur-inc-XXXXXX) || [ -z "$d" ]; then
+    printf 'FATAL: test-incident-sandbox could not create a sandbox (mktemp failed or returned empty).\n' >&2
+    printf '  Refusing to continue: an unset INCIDENTS_REPO_ROOT points telemetry at the\n' >&2
+    printf '  operator real .claude/.rule-incidents.jsonl. Check free space on %s.\n' "${TMPDIR:-/tmp}" >&2
+    exit 1
+  fi
+  if [ "${d#/}" = "$d" ]; then
+    printf 'FATAL: test-incident-sandbox got a non-absolute sandbox path: %s\n' "$d" >&2
+    exit 1
+  fi
+  if ! mkdir -p "$d/.claude" 2>/dev/null; then
+    printf 'FATAL: test-incident-sandbox could not create %s/.claude\n' "$d" >&2
+    printf '  Refusing to continue rather than falling back to the operator real ledger.\n' >&2
+    exit 1
+  fi
   export INCIDENTS_REPO_ROOT="$d"
   export SOLEUR_TEST_INCIDENT_ROOT="$d"
 

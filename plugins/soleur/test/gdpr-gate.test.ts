@@ -10,6 +10,18 @@ import {
 import { resolve, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
+
+// #7853: this suite drives the REAL gdpr-gate.sh, which emits gdpr-gate-staleness,
+// gdpr-gate-cron-binding and hr-gdpr-gate-on-regulated-data-surfaces rows on every run. Without a
+// sandbox they land in the operator's live .claude/.rule-incidents.jsonl, which compound reads as
+// deviation evidence and rule-metrics-aggregate.sh rolls into a COMMITTED artifact.
+const INCIDENT_SANDBOX = mkdtempSync(joinPath(tmpdir(), "gdpr-gate-incidents-"));
+mkdirSync(joinPath(INCIDENT_SANDBOX, ".claude"), { recursive: true });
+process.env.INCIDENTS_REPO_ROOT = INCIDENT_SANDBOX;
+process.env.SOLEUR_TEST_INCIDENT_ROOT = INCIDENT_SANDBOX;
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 const SKILL_DIR = resolve(REPO_ROOT, "plugins/soleur/skills/gdpr-gate");
@@ -399,6 +411,12 @@ describe("gdpr-gate runtime staleness banner (FR6, AC6a-d)", () => {
         ...process.env,
         GH_TOKEN: "",
         GITHUB_TOKEN: "",
+        // Incident telemetry goes to a sandbox, not the operator's ledger (#7853). Set on the
+        // spawn env AND in beforeAll: the spread above is evaluated per call, so a caller passing
+        // its own `env` cannot silently drop it, and the beforeAll covers any emitter reached
+        // outside this helper.
+        INCIDENTS_REPO_ROOT: INCIDENT_SANDBOX,
+        SOLEUR_TEST_INCIDENT_ROOT: INCIDENT_SANDBOX,
         ...env,
       },
       encoding: "utf8",
