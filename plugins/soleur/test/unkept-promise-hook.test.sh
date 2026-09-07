@@ -29,7 +29,14 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 # times it has been run before. Measured: two consecutive runs of the identical
 # tree gave 23/0 and then 3 failures. Three runs of an UNCHANGED tree giving
 # different results is a harness defect, never a re-run to repeat.
+# BOTH variables, because the hook prefers XDG_RUNTIME_DIR over TMPDIR. An
+# earlier revision of this suite redirected only TMPDIR; the hook's hostile-/tmp
+# hardening then made XDG_RUNTIME_DIR the effective base, state leaked through
+# the real per-user runtime dir, and three runs of an UNCHANGED tree gave
+# 27/0, 27/0, then 18/9. Whatever the hook may read as its base, the suite must
+# redirect.
 export TMPDIR="$WORK"
+export XDG_RUNTIME_DIR="$WORK"
 
 PASS=0; FAIL=0
 FAILURES=()   # append-only: a conservation check on counters alone is silenced
@@ -126,6 +133,37 @@ b=$(jq -n --arg m "Let me now write the plan." --arg s "tc-b" '{last_assistant_m
 [ "$a" = "$b" ] && [ "$a" = "block" ] && pass "verdict identical with and without tool_calls present" \
   || fail "tool_calls presence changed the verdict ($a vs $b) -- hook must not depend on it"
 
+echo "=== hostile /tmp: the state dir must be refused, not followed ==="
+# The counter must persist between turns, so the path is necessarily
+# predictable. On a shared machine that is a real primitive: `mkdir -p` succeeds
+# THROUGH a symlink (measured), turning the counter write into a file-clobber at
+# an attacker-chosen path, and a pre-seeded counter silently disables the guard.
+_atk=$(mktemp -d); _victim=$(mktemp -d)
+ln -s "$_victim" "$_atk/soleur-unkept-promise"
+_out=$(jq -n '{last_assistant_message:"Let me now do it.",session_id:"atk"}' \
+       | XDG_RUNTIME_DIR= TMPDIR="$_atk" bash "$HOOK" 2>/dev/null); _rc=$?
+[ "$_rc" = "0" ] && pass "symlinked state dir -> fails open (rc=0)" \
+  || fail "symlinked state dir must fail open, got rc=$_rc"
+[ "$(ls -A "$_victim" | wc -l)" = "0" ] \
+  && pass "symlinked state dir -> NOTHING written to the symlink target" \
+  || fail "wrote into the symlink target -- file-clobber primitive is live"
+rm -rf "$_atk" "$_victim"
+
+# A pre-seeded counter owned by ANOTHER user would disable the guard. We cannot
+# create a foreign-owned file in an unprivileged test, so pin the two mechanical
+# properties that make that unreachable: the dir is created 0700, and the hook
+# refuses a state dir it does not own.
+_perm=$(mktemp -d)
+jq -n '{last_assistant_message:"Let me now do it.",session_id:"perm"}' \
+  | XDG_RUNTIME_DIR= TMPDIR="$_perm" bash "$HOOK" >/dev/null 2>&1
+_mode=$(stat -c '%a' "$_perm/soleur-unkept-promise" 2>/dev/null || echo "missing")
+[ "$_mode" = "700" ] && pass "state dir created mode 0700 (no other-user writes)" \
+  || fail "state dir mode is $_mode, want 700"
+grep -q '\-O "\$STATE_DIR"' "$HOOK" \
+  && pass "hook refuses a state dir it does not own (-O check present)" \
+  || fail "no ownership check on the state dir"
+rm -rf "$_perm"
+
 echo "=== stand-down after repeated firing (false-positive bound) ==="
 S="standdown"
 r1=$(jq -n --arg m "Let me now do it." --arg s "$S" '{last_assistant_message:$m,session_id:$s}' | bash "$HOOK" 2>/dev/null | jq -r '.decision // "none"' 2>/dev/null || true); r1=${r1:-none}
@@ -153,7 +191,7 @@ printf '%s' "$body" | jq -e '.reason | test("in THIS turn")' >/dev/null 2>&1 \
 # --- assertion floor: emitted DIRECTLY, never through the helpers it backstops
 # Derived from a MEASURED green run (23), never from expectation -- an
 # aspirational floor fails a correct suite and gets lowered until it is inert.
-MIN_ASSERTIONS=23
+MIN_ASSERTIONS=27
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 if [ "${#FAILURES[@]}" -gt 0 ]; then

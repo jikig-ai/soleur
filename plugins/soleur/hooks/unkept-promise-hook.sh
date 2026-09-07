@@ -70,9 +70,41 @@ SESSION_ID=$(printf '%s' "$HOOK_INPUT" | jq -r '.session_id // "nosession"' 2>/d
 # Sanitise: the value lands in a filename.
 SESSION_ID=$(printf '%s' "$SESSION_ID" | tr -cd '[:alnum:]._-'); SESSION_ID=${SESSION_ID:-nosession}
 
-STATE_DIR="${TMPDIR:-/tmp}/soleur-unkept-promise"
-mkdir -p "$STATE_DIR" 2>/dev/null || exit 0
+# ---------------------------------------------------------------------------
+# STATE DIRECTORY -- hostile-/tmp safe.
+#
+# The stand-down counter has to persist BETWEEN turns, so `mktemp -d` per
+# invocation is not available and the path is necessarily predictable. On a
+# shared machine with a world-writable /tmp that is two real primitives:
+#
+#   * `mkdir -p` SUCCEEDS THROUGH A SYMLINK (measured), so a pre-created
+#     /tmp/soleur-unkept-promise -> /somewhere/else turns the counter write into
+#     a file-clobber at an attacker-chosen path;
+#   * a pre-seeded <session>.count silently disables the guard, which for a
+#     security-adjacent workflow control is the worse of the two.
+#
+# Prefer XDG_RUNTIME_DIR (per-user, mode 0700, not shared) and fall back to
+# TMPDIR. Then REFUSE unless the directory is a real directory, not a symlink,
+# and owned by us. Fail OPEN on refusal -- this hook must never be the reason a
+# session cannot end.
+# ---------------------------------------------------------------------------
+STATE_BASE="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}"
+STATE_DIR="${STATE_BASE}/soleur-unkept-promise"
+# Not `mkdir -p -m 700`: with -p the mode applies only to the DEEPEST directory
+# created (SC2174), so a created parent would keep the default umask. The base
+# is expected to exist already, so create just the leaf with an explicit mode.
+if [[ ! -d "$STATE_DIR" ]]; then
+  mkdir -m 700 "$STATE_DIR" 2>/dev/null || exit 0
+fi
+# `-d` follows symlinks, so the `! -L` arm is what rejects a pre-created
+# symlink; `-O` rejects a directory planted by another user.
+[[ -d "$STATE_DIR" && ! -L "$STATE_DIR" && -O "$STATE_DIR" ]] || exit 0
+chmod 700 "$STATE_DIR" 2>/dev/null || true
 COUNTER_FILE="${STATE_DIR}/${SESSION_ID}.count"
+# A counter file that is a symlink or not ours is refused the same way.
+if [[ -e "$COUNTER_FILE" || -L "$COUNTER_FILE" ]]; then
+  [[ -f "$COUNTER_FILE" && ! -L "$COUNTER_FILE" && -O "$COUNTER_FILE" ]] || exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # ESCAPE HATCH -- declaring a stop is always legal; stopping SILENTLY is not.
