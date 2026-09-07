@@ -13,40 +13,68 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
-## Overview
+## Enhancement Summary
+
+**Deepened on:** 2026-09-07. Four reviewers (architecture-strategist, test-design-reviewer,
+code-simplicity-reviewer, spec-flow-analyzer) plus a CTO ruling and a strong-model consult.
 
 Spec lacks valid lane: — defaulted to cross-domain (TR2 fail-closed).
 
-The `await-ci` job in the Web Platform Release workflow starts alongside `ci.yml` on the merge
-SHA and polls for CI to conclude, bounded by a 3000s (50 minute) wall-clock ceiling. `ci.yml` on
-main has outgrown that bound, so the gate reaches its ceiling and fail-closes on runs where CI is
-healthy but slow. The gate's fail-closed posture is correct and is not the defect.
+**Two reversals, both driven by measurement rather than argument:**
 
-Measurement shows the duration is not diffuse: **one unsharded job, `test-scripts`, is 89.6% of
-CI wall clock at p50**, and a single step inside it is 98.3% of that job. This plan shards that
-job and puts a declared ceiling on every job that can block a deploy, so CI duration is a bounded,
-observable budget rather than an unbounded quantity that silently consumed a downstream gate.
+1. The plan originally chose ADR-072's option 3 (`workflow_run`). A CTO ruling and per-job
+   measurement overturned it: `test-scripts` is 89.6% of CI wall clock, and option 3 carries a
+   demonstrated **fail-open** (`EXPECTED_SHA` would self-certify an un-CI'd tree). Option 3 stays
+   deferred on #5806, now scoped with fourteen findings it did not previously carry.
+2. Review then found the revised plan **measured the wrong quantity** and, on the strength of it,
+   a **bounded ceiling raise was wrongly excluded**. Both are corrected below.
+
+**Key corrections folded in:** the gated metric is time-to-`test`-conclusion, not run wall clock
+(measured equal today, but only because `test-scripts` is the tail — the two diverge precisely when
+this plan succeeds); the partition keys on the `run_suite` **label**, since ~198 suites are
+hand-registered and 24 have no path at all; round-robin at the `run_suite` chokepoint makes totality
+and determinism structural, deleting a whole guard; relevance-gated suites (ADR-181) mean Guard 1
+must quantify over **assigned**, not executed; and `TC_RUNTIME_CEILING_S` needed no change at all.
+
+## Overview
+
+The `await-ci` job in the Web Platform Release workflow polls for `ci.yml`'s `test` aggregator
+check-run on the merge SHA, fail-closing once a 3000s (50 minute) wall-clock ceiling elapses. CI has
+outgrown that bound, so the gate now fail-closes on healthy-but-slow runs and every web-platform
+deploy is skipped. The fail-closed posture is correct and is not the defect.
+
+The plan does two things, in this order: it **raises the ceiling by a bounded amount** so production
+is unblocked deterministically at merge, and it **removes the cause** by sharding the one job that
+accounts for ~90% of CI wall clock, so the raised ceiling stays comfortable rather than being spent.
 
 ## Problem Statement
 
-`await-ci` and `ci.yml` both start from the same push to main, and `await-ci` gets **essentially
-no head start** — measured delta between `await-ci` job start and the corresponding `ci.yml` run
-creation is +3s to +511s (p50 ≈ +22s) across 30 runs. Its 50-minute budget therefore has to cover
-`ci.yml`'s *entire* wall clock, including `ci.yml`'s own runner queue. When CI exceeds 50 minutes,
-the gate fail-closes and the deploy is skipped.
+`await-ci` starts with essentially no head start on `ci.yml` — measured delta between its job start
+and the `ci.yml` run creation is +3s to +511s (p50 ≈ +22s) across 30 runs — so its 50-minute budget
+must cover CI's entire wall clock including CI's own runner queue.
 
-**ci.yml wall clock on main** (`gh api .../workflows/ci.yml/runs?branch=main&event=push`, n=40,
-window 2026-09-03 → 2026-09-07):
+**The gated quantity is time-to-`test`-conclusion, not run wall clock.** `await-ci` polls
+`commits/<sha>/check-runs` for the check named `test` and `exit 0`s the moment it concludes
+success (`web-platform-release.yml`, the `if [ "$status" = "completed" ]` arm). `test` needs only
+`[test-webplat, test-bun, test-scripts]`. Jobs outside that closure — `e2e`, `lockfile-sync`,
+`critical-css-gate`, `web-platform-build`, `grok-fidelity` — can never delay the gate.
 
-| statistic | value |
-|---|---|
-| p50 | 34.27 min |
-| p90 | 51.77 min |
-| p95 | 54.12 min |
-| max | 57.40 min |
-| runs ≥ 50 min | **5 / 40 (12%)** |
+Measured over the 22 most recent completed push runs on main
+(`gh api repos/jikig-ai/soleur/actions/workflows/ci.yml/runs?branch=main&event=push&per_page=40`,
+then `runs/<id>/jobs`):
 
-**Where the time goes** (per-job, n=29 completed runs):
+| statistic | run wall clock | **time-to-`test` (the gated metric)** |
+|---|---|---|
+| p50 | 34.1 min | **34.1 min** |
+| p90 | 49.7 min | **49.6 min** |
+| max | 56.1 min | **56.1 min** |
+| runs ≥ 50 min | 3 / 22 | **3 / 22** |
+
+The two are equal to within 0.1 min in **22 of 22 runs** — but that equivalence is a *finding, not
+an assumption*, and it holds only because `test-scripts` is the tail. It will break the moment this
+plan works, and it breaks in the favourable direction (see the residual section).
+
+**Where the time goes** (per-job, n=29):
 
 | job | p50 | p90 | max |
 |---|---|---|---|
@@ -57,47 +85,97 @@ window 2026-09-03 → 2026-09-07):
 | all 18 other jobs | ≤ 2.00 | — | ≤ 17.62 |
 | test (aggregator) | 0.05 | 0.07 | 0.08 |
 
-`test-scripts` is **7.0x** the next-longest job and is the last job to finish in 10/10 spot-checked
-runs. `ci.yml`'s DAG is almost flat — only two `needs` edges exist in 1113 lines — so the critical
-path is simply `run created → runner dispatch → test-scripts → test`, measured at **99.8% of wall
-clock at p50**. Inside `test-scripts`, the single step `bash scripts/test-all.sh scripts` is
-**p50 98.31%** of the job (fixed overhead: a measured ~0.45 min of checkout + gitleaks + likec4 +
-bun setup). That step is one monolithic `run:` with no internal parallelism, executing the scripts
-group's suites sequentially, while `test-webplat` already runs a 2-way matrix.
+`test-scripts` is 7.0x the next-longest job, is the last to finish in 10/10 spot-checked runs, and a
+single step inside it (`bash scripts/test-all.sh scripts`) is **p50 98.31%** of the job. Fixed
+per-job overhead measures ~0.45 min.
 
-**Both observed failures are the ceiling, not a test.** Release runs `34141449046` (b551bdc1a) and
-`33866770160` (b576e4ab7) failed `await-ci` at **50.13** and **50.20** minutes — the 3000s ceiling
-exactly. They are the only two runs above 42.3 minutes; there is no organic failure mode here, only
-a step function at 50 minutes. Notably `33866770160` failed while its `ci.yml` run **succeeded** in
-57.40 minutes — a pure false negative, a healthy commit blocked from production.
+**Runner dispatch is the second term, and it is large.** `test-scripts`'s dispatch delay (run
+creation → job start) measures **p50 1.4 min, p90 12.4 min, max 21.0 min**. That gap explains the
+failures: `test-scripts` maxes at 38.98 min, yet the two failed gates sat at **50.13** and **50.20**
+minutes — the 3000s ceiling exactly. They are the only two runs above 42.3 min; there is no organic
+failure mode, only a step function at 50 minutes. Release run `33866770160` failed while its CI run
+**succeeded** in 57.40 min — a healthy commit blocked from production.
+
+## Research Insights
+
+**Measurement provenance.** `gh run list --workflow=ci.yml --branch=main --event=push` returned a
+**stale index** (August runs). Every number here comes from the
+`gh api .../workflows/ci.yml/runs?branch=main&event=push&per_page=40` form over 2026-09-03 →
+2026-09-07, with per-job timings from `runs/<id>/jobs`. Re-derive with the API form.
+
+**Established by reading code, not assumed:**
+
+- `await-ci` gates on the `test` **check-run**, never on the ci.yml run conclusion — so the gated
+  metric is time-to-`test`, and jobs outside `test`'s closure are irrelevant to it.
+- The required check is the aggregator `test`. `test-scripts` appears nowhere in
+  `scripts/required-checks.txt` nor in
+  `scripts/ci-required-ruleset-canonical-required-status-checks.json`. `test-webplat` **already**
+  carries `strategy:` and renders as `test-webplat (1/2)`, and `test` reads its rolled-up result
+  today — so matrixing a shard is proven safe in this repo.
+- The `test` aggregator is a colon-delimited loop over three `needs.<shard>.result` values. Matrix
+  legs roll into one result; **no aggregator edit is needed**.
+- **The scripts group is overwhelmingly hand-registered.** `scripts/test-all.sh` carries ~198
+  imperative `run_suite` calls across three `want_scripts` blocks; exactly **one** registration is
+  glob-driven (`run_suite "$f" bash "$f"` inside the `SUITE_GLOBS` loop, expanding to ~188 files).
+  Roughly 24 registrations have no bash path at all (`python3 -m unittest …`, `node --test …`), so
+  **there is no "suite path" to hash** — the stable key is the `run_suite` **label**, which is the
+  `TEST_TIMING_LOG` key and is unique across all registrations.
+- **The chokepoint is `run_suite()`**, which increments `suites` on entry. Its sibling `skip_suite()`
+  also increments `suites`. Any partition filter must sit at both, or per-leg denominators diverge.
+- **Relevance gating is real and large.** `_diff_touches` and `SOLEUR_INCIDENT_SKIP` decline suites
+  via `skip_suite`, so *executed ⊊ registered* even in an unsharded run.
+  `tests/scripts/registry-gate-mutation-battery` carries a **2,500,000 ms budget** with measured
+  runs of 860,692 ms and 1,675,430 ms, and its own header calls it "about 32% of a full local run" —
+  it is declined on most commits, and whichever leg owns it is ≥14 min alone when it is not.
+- **ADR-133 needs no change — verified, not assumed.** `tc_acquire` short-circuits with
+  `LOCK_SKIPPED_CI: CI is set; matrix shards are already isolated.` and the runtime ceiling resolves
+  to `_CEILING_S=0` under `CI`, with an inline comment naming matrix shards as the reason. An earlier
+  draft proposed scaling `TC_RUNTIME_CEILING_S` per leg; reading the code showed the work was
+  unnecessary and would have tightened only *local* runs, which the constant's own header warns
+  against.
+- **B9 margin is exactly zero.** `max(release 60, await-ci 60) + migrate 30 + verify-migrations 15 +
+  deploy 90 = 195`, and `DRIFT_SUSTAINED_THRESHOLD_MIN=195`. Any ceiling raise moves B9.
+- `scripts/lint-orphan-test-suites.sh` already proves every tracked `*.test.sh` is registered with
+  some runner across six surfaces, and invokes the runner as
+  `env -u TEST_GROUP … bash "$RUNNER" --print-suite-globs`. It must not inherit `SCRIPTS_SHARD`.
+- Only `lint-webplat` declares `timeout-minutes` in `ci.yml`. `ci.yml` has exactly **two** `needs:`
+  edges, so `test`'s closure is exactly four jobs — not the ~23 an earlier draft implied.
+
+**Shard-balance feasibility.** The glob-discovered set alone is 192 files
+(`plugins/soleur/test/` 80, `.claude/hooks/` 48, `plugins/soleur/skills/*/test/` 29, others 35),
+plus ~186 hand-registered entries — roughly 374 suites. K=3 puts ~125 on each leg, ample granularity
+*except* for the one dominant relevance-gated battery noted above, which is why K is derived from
+measured timings in Phase 0 rather than assumed.
+
+**Premise validation** is in `## Premise Validation`; the Property and Cut lists are in
+`## Mechanism Minimality Gate`; the option-3 reversal is in
+`knowledge-base/project/specs/feat-one-shot-7902-awaitci-ceiling/decision-challenges.md`.
 
 ## Research Reconciliation — Spec vs. Codebase
 
 | Claim | Reality (measured/verified) | Plan response |
 |---|---|---|
-| ci.yml "climbed to 50–54 min" | Confirmed, slightly worse: p90 51.77, p95 54.12, max 57.40; 5/40 ≥ 50 min | Adopted |
-| `test-scripts` is the long pole; registry batteries dominate | **Confirmed and stronger than claimed**: p50 89.6% of wall clock, 99.8% of the critical path, last to finish 10/10; one step is 98.3% of the job | Promoted from "unverified premise" to the plan's primary target |
-| Option 3 (`workflow_run`) "removes the class" | It removes the *ceiling*, but leaves main's CI at ~57 min and carries a **fail-open** hazard (below). It is also already tracked by OPEN issue #5806 | **Deferred**, with #5806 updated and re-armed — see the decision record |
-| Option 1 (raise the ceiling) is cheap | It is **not free**: ADR-072 pins `timeout-minutes ≥ 1.2 × CEILING_S`, and `prod-version-drift-check.test.sh` B9 computes `max(release 60, await-ci 60) + migrate 30 + verify-migrations 15 + deploy 90 = 195`, **exactly equal** to `DRIFT_SUSTAINED_THRESHOLD_MIN=195` — zero margin. Raising the ceiling reds B9 until the prod drift alerter is made less sensitive | Rejected as the primary fix; any future raise is data-gated and must move the threshold first |
-| Only the ceiling constant needs changing | False. Sharding touches `scripts/test-all.sh`, an awk-based job-block parser, a 3-site gitleaks pin parity assertion, and ADR-133's contention lock | All enumerated in Files to Edit |
-| `test-scripts` can be parallelised in-process | **False.** ADR-133 makes `test-all.sh` sequential deliberately (tmpfs contention plus a Bun FPE crash, managed by an advisory lock). A **job matrix** — separate runners, each still sequential internally — is the only safe shape | Design constrained to a matrix |
+| ci.yml "climbed to 50–54 min" | Confirmed: p90 49.6, max 56.1 on the gated metric; 3/22 ≥ 50 min | Adopted |
+| `test-scripts` is the long pole | **Confirmed and stronger**: 89.6% of wall at p50, last to finish 10/10, one step 98.3% of the job | Primary target |
+| Option 3 "removes the class" | Removes the ceiling, but leaves CI at ~56 min and carries a fail-open `EXPECTED_SHA` hazard | Deferred to #5806 with 14 scoping findings |
+| Option 1 (raise ceiling) is a pure deferral | **Partly wrong.** It is a deferral *as the only fix*, but its cost is 12 min of drift latency on a probe whose own measured tick interval is 61–243 min. Excluding it left production blocked on a probabilistic fix | **Bundled**, bounded, in the safe order |
+| Partition by hashing the suite path | **Impossible**: ~198 suites are hand-registered and ~24 have no path | Round-robin at the `run_suite` chokepoint, keyed on label |
+| Guard totality = executed suites | **Wrong**: relevance gating makes executed ⊊ registered even unsharded, so the guard would red on nearly every commit | Quantify over **assigned**; assert executed = assigned − declines per leg |
+| `TC_RUNTIME_CEILING_S` needs scaling | **False**: CI-exempt by design | Cut entirely |
+| Post-shard tail set by `critical-css-gate` / `lockfile-sync` | **False**: neither is in `test`'s closure, so neither can delay the gate | Residual restated on the real mechanism (dispatch draws) |
 
 ## Premise Validation
 
-- **#7902** — `OPEN`, `closedByPullRequestsReferences: []`. Labels `priority/p1-high`, `type/bug`,
-  `domain/engineering`; milestone *Phase 4: Validate + Scale*.
-- **ADR-072** — exists, `status: accepted`, read in full. Its option 3 is the issue's option 3.
-- **#5806** — `OPEN`, the ADR-072 option-3 tracking issue. Its re-evaluation criteria *did* fire
-  (a real event exceeded the 50m ceiling). Evaluating them is what this plan does; the outcome is
-  that the fired criteria pointed at a cause the criteria themselves did not anticipate — an
-  unsharded job, not irreducible CI cost. #5806 is updated and re-armed rather than executed.
-- **ADR-133** — governs `test-all.sh`'s deliberate sequentiality and the `TC_RUNTIME_CEILING_S`
-  contention lock. Directly constrains the sharding design.
-- **Own capability claims, verified by reading rather than asserted:** the `test` aggregator is a
-  single colon-delimited loop over three `needs.<shard>.result` values, so matrix legs rolling into
-  one job result need **no** aggregator edit; `test-webplat` shards via `VITEST_SHARD` forwarded to
-  `vitest --shard`, which is **native runner sharding the scripts group does not have**; only
-  `lint-webplat` declares `timeout-minutes` in `ci.yml`.
+- **#7902** — `OPEN`, no closing PR. `priority/p1-high`, `type/bug`, `domain/engineering`.
+- **ADR-072** — `status: accepted`, read in full. Its option 3 is the issue's option 3.
+- **#5806** — `OPEN`, the option-3 tracking issue. Its re-evaluation criteria fired; evaluating them
+  is what this plan does, and the outcome is that they pointed at a cause they did not anticipate.
+- **ADR-133 / ADR-181** — govern `test-all.sh`'s sequentiality, CI exemptions, and relevance-decline
+  accounting. Both directly constrain the partition.
+- **ADR ordinal** — 204 is highest on `origin/main`, but **205 and 206 are claimed on pushed
+  branches** (`origin/feat-one-shot-7849-…-fixture-env-ledger-ancestry` and
+  `origin/feat-one-shot-7759-net-issue-flow-filing-cites-issue`). A `main`-scoped probe reports 205
+  free and is wrong. Derive across every `origin/*` ref, and re-derive before merge.
 
 ## Mechanism Minimality Gate
 
@@ -105,582 +183,544 @@ a step function at 50 minutes. Notably `33866770160` failed while its `ci.yml` r
 
 1. A merge that passes CI reaches production without a human intervening.
 2. A merge that fails CI never reaches production (fail-closed preserved).
-3. Production deploys the SHA that CI actually validated.
-4. CI duration is bounded, and growth becomes visible before it consumes a downstream gate.
+3. Production deploys the SHA that CI validated.
+4. CI's contribution to the deploy gate is bounded, and growth is visible before it consumes the gate.
 5. The mechanism does not silently re-break as the suite count grows.
 
 **Cut List:**
 
 | Mechanism | Property | Already covered by | Disposition |
 |---|---|---|---|
-| Swap the release trigger to `workflow_run` | P1, P3 | P3 is already held by the `#3409 build_sha` gate (`EXPECTED_SHA`); the swap would *break* it (below) | **Cut from this PR**; stays deferred in #5806 |
-| Raise `CEILING_S` | P1 (temporarily) | Nothing — and it costs drift-alert sensitivity via B9's zero margin | **Cut** as primary; data-gated later |
-| A new "deploy gated" alerting channel | P4 | `notify-gated` already exists and is **retained unchanged** — this plan does not touch the release workflow, so the sub-minute push signal is preserved rather than traded for the slower probes | **Cut** — nothing new is built |
+| Swap the release trigger to `workflow_run` | P1, P3 | P3 is held by the `#3409` `EXPECTED_SHA` gate, which the swap would break | **Cut**; deferred to #5806 |
 | A superseded-SHA guard on `deploy` | P3 | `EXPECTED_SHA` already holds it | **Cut** (also rejected by ADR-072 review) |
-| In-process parallelism inside `test-all.sh` | P4 | — | **Cut** — ADR-133 forbids it |
+| A new "deploy gated" alerting channel | P4 | `notify-gated` exists and is retained unchanged — this plan does not touch the release job graph | **Cut** |
+| **Shard-determinism guard** | P5 | Round-robin at the `run_suite` counter is deterministic *by construction* (registration order is static source order) | **Cut** — the guard existed only because an earlier draft chose a hash |
+| Scale `TC_RUNTIME_CEILING_S` | P4 | Already CI-exempt | **Cut** |
+| `--list-shard-coverage` public flag | P4 | `TEST_TIMING_LOG` already records `label<TAB>elapsed_ms` for every suite including declines | **Cut** |
+| Hash-mod-N partition | P5 | Round-robin at the chokepoint is total by construction *and* balances better | **Cut** |
 | Per-job change detection in ci.yml | P4 | The workflow is already path-filtered | **Cut** |
 
-One mechanism survives: **reduce the quantity the ceiling reacts to, and bound it.**
+Two mechanisms survive: **bound the gate's budget**, and **reduce the quantity it reacts to**.
 
 ## Proposed Solution
 
-1. **Shard `test-scripts` into a job matrix**, mirroring the `strategy.matrix` pattern
-   `test-webplat` already uses. Matrix legs roll up into a single `needs.test-scripts.result`, so
-   the `test` aggregator is untouched and the required-check name is unchanged.
-2. **Declare `timeout-minutes` on every `ci.yml` job that can block a deploy.** Today exactly one
-   job of ~23 declares a ceiling; the rest inherit GitHub's 360-minute default, which is why CI
-   duration could grow unboundedly until it silently ate a downstream gate. A declared budget turns
-   growth into a red check instead of a production outage.
-3. **Leave the `await-ci` gate, its ceiling, and `notify-gated` exactly as they are.** Sharding
-   moves the distribution far under the existing ceiling; changing the gate in the same PR would
-   couple a mechanical, pre-merge-testable change to a topology change that cannot be tested before
-   merge.
+1. **Raise the ceiling by a bounded amount, in the safe order.** `DRIFT_SUSTAINED_THRESHOLD_MIN`
+   195 → 207 first, then `CEILING_S` 3000 → 3600, then `await-ci` `timeout-minutes` 60 → 72
+   (ADR-072's `timeout-minutes ≥ 1.2 × CEILING_S`). This deterministically clears today's measured
+   max of 56.1 min and unblocks production at merge rather than probabilistically at AC-time.
+2. **Shard `test-scripts` into a job matrix**, partitioned round-robin at the `run_suite`
+   chokepoint. This is what makes the raised ceiling stay comfortable instead of being spent.
+3. **Bound CI's contribution to the gate mechanically** — assert that the declared ceilings of
+   `test`'s closure sum under `CEILING_S`, so the failure class cannot silently recur.
+4. **Leave the release job graph otherwise untouched** — `await-ci`'s logic, `notify-gated`,
+   `migrate`/`deploy` wiring all unchanged.
 
 ### Architecture Decision
 
-**Chosen: option 2 — shard the long pole and declare CI's duration budget.**
+**Chosen: option 2 (shard the long pole) + a bounded option 1 (raise the ceiling), together.**
 
-**This reverses the plan's own provisional call.** The plan initially selected option 3 on the
-strength of ADR-072 having named it "the structural fix" and #5806's re-evaluation criteria having
-fired. Two independent measurements and a CTO review overturned that. The reversal is recorded here
-rather than quietly applied, because the reasoning is the deliverable.
+**This reverses the plan's own provisional call twice**, and both reversals are recorded rather than
+quietly applied.
 
-**Why option 3 is not the fix now:**
+**Why not option 3 (`workflow_run`).** ADR-072 named it the structural fix and #5806's re-evaluation
+criteria fired, so it was the first choice. It was rejected on evidence:
 
-- **It has a demonstrated fail-open mode that is worse than the current outage.** The `deploy` job
-  sets `EXPECTED_SHA: ${{ github.sha }}` (`web-platform-release.yml:767`) and compares it against
-  the deployed `/health` `build_sha` — the #3409 gate that exists precisely to catch "right semver,
-  wrong source tree". Under `workflow_run`, `github.sha` is the **default-branch tip**, not the SHA
-  CI validated. `reusable-release.yml`'s `BUILD_SHA` and this `EXPECTED_SHA` would *both* resolve
-  to main-tip, so they would **match each other while both being the un-CI'd SHA**. The gate would
-  report itself verified on exactly the tree it was built to catch. Today's failure is a blocked
-  deploy; that failure is an unverified deploy reporting success.
-- **It makes the drift alerter silently wrong.** B8/B9 parse only `web-platform-release.yml` and
-  its callee — never `ci.yml`. Under `workflow_run`, ci.yml's ~57 minutes joins the serial critical
-  path but stays invisible to the formula, so B9 stays green while the true bound grows by an hour.
-  Correcting it costs a permanent ~90-minute loss of drift-alert sensitivity.
-- **It cannot be exercised before merge** (`workflow_dispatch` resolves the workflow file from the
-  default branch only), it touches a workflow shared with `version-bump-and-release.yml`, and it
-  adds a measured ~8.5 min p50 to time-to-prod by serialising build behind CI.
-- **Above all, it does not make CI faster.** It stops the deploy from *noticing* a 57-minute CI
-  while every PR and every merge keeps paying it.
+- **It has a fail-open mode worse than the current outage.** The deploy job sets
+  `EXPECTED_SHA: ${{ github.sha }}` and compares it to prod's `/health` `build_sha` — the #3409 gate
+  for "right semver, wrong source tree". Under `workflow_run`, `github.sha` is the default-branch
+  tip, so `EXPECTED_SHA` and the image's `BUILD_SHA` would **match each other while both being the
+  un-CI'd SHA**. Today's failure is a blocked deploy; that one is an unverified deploy reporting
+  success.
+- **It silently disarms `live-verify`**, whose `if:` ends `github.event_name == 'push'` — a
+  *blocking* dark-launch gate that would become permanently `skipped`, taking its Sentry emission
+  and the #5463 soak's denominator with it.
+- **A CI re-run would ship a release.** `types: [completed]` fires on `gh run rerun`, and
+  `reusable-release.yml` has no already-released-this-SHA short-circuit.
+- **It leaves CI at ~56 minutes**, which every PR and merge keeps paying.
 
-**Why option 2 is the fix:** it removes the actual quantity. Projected K-shard wall clock, modelled
-as `0.45 + (test_scripts − 0.45)/K` against the measured distribution:
+**Why option 2 alone was not enough.** The first revision shipped sharding and explicitly declined
+the ceiling raise, arguing it would spend drift-alert sensitivity. Review established the true cost:
+`crit` moves 195 → 207, i.e. **12 minutes**, against a drift probe whose own header records measured
+scheduled intervals of 61–243 minutes. Twelve minutes is inside that probe's granularity. Set
+against leaving production blocked on a fix that is untestable pre-merge, the trade was inverted.
+The ceiling raise is three integers, verifiable by inspection, and covers today's entire measured
+distribution.
 
-| | baseline | K=2 | K=3 | K=4 |
-|---|---|---|---|---|
-| wall p50 | 35.72 | 18.08 | **13.18** | 10.37 |
-| wall p90 | 53.20 | 36.40 | **33.42** | 31.12 |
-| saved p50 | — | 15.27 | **20.19** | 21.92 |
+**Why the pair, in this order.** The raise is the deterministic unblock; the shard is what stops it
+becoming the next incident. Shipping the raise alone repeats the pattern this repo has already
+lived twice (`2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`). Shipping the
+shard alone leaves production blocked until a post-merge measurement confirms it worked.
 
-**K=3 is chosen.** Returns fall off sharply after it (K=2→3 buys 4.9 min at p50; K=3→4 buys only
-2.8 min), and every additional leg adds a runner slot to a pool that measurement shows is already
-contended.
+**K is derived, not assumed.** An earlier revision fixed K=3 from a p50 table while its own risk row
+said to choose K against the tail. `TEST_TIMING_LOG` has been recording per-suite `elapsed_ms` all
+along, and one suite (`registry-gate-mutation-battery`, measured 860s–1675s) alone floors whichever
+leg owns it. Phase 0 pulls that log and picks K against the measured tail; K=3 is the provisional
+starting point, not an acceptance criterion.
 
-**Honest residual — this plan does not claim to eliminate the cliff.** In the four most
-runner-starved runs, sharding saves 0–13 minutes *regardless of K*, because a different job
-(`critical-css-gate` at 49.12 min, `lockfile-sync` at 40.52 min) becomes the new tail purely from
-dispatch queueing, and projected wall **max stays ~53 min even at K=4** — still above the 50-minute
-ceiling. So option 2 makes the failure rare rather than impossible. Removing the cliff entirely is
-option 3, correctly implemented, which is why #5806 stays open and re-armed rather than closed.
-Phase 3's declared ceilings are what will make the residual visible if it recurs.
-
-**Option 1 (raise the ceiling) is deliberately not bundled.** It is available and cheap in
-isolation, but B9's margin is exactly zero today, so any raise must first loosen the prod drift
-alerter. Spending that sensitivity now — before measuring the post-shard distribution — would be
-paying a permanent cost for a tail this PR is about to shrink. It is data-gated instead: if
-post-shard p100 on main exceeds 60% of `CEILING_S`, raise the threshold first, then the ceilings.
+**Residual, restated correctly.** The earlier revision claimed `critical-css-gate` (49.1 min) and
+`lockfile-sync` (40.5 min) would become the new tail and hold wall max near 53 min. That was wrong:
+**neither is in `test`'s closure**, so neither can delay the gate. Post-shard, run wall clock and
+time-to-`test` will *diverge*, and only the latter matters — so sharding helps the gate more than
+the wall-clock projection suggested. The real residual is different and smaller: `test` waits on the
+**maximum dispatch draw** across its legs, and K=3 turns one draw for `test-scripts` into three
+(the run already takes a max over four draws today, so the marginal change is 4 → 6, not 1 → 3).
+With measured dispatch p50 1.4 / p90 12.4 / max 21.0 min and a projected ~11-minute leg, a
+pessimistic post-shard time-to-`test` lands near 30 min against a 60-minute ceiling. That is the
+margin the raise exists to guarantee and the shard exists to preserve.
 
 ## Technical Approach
 
 ### Architecture
 
 ```
-BEFORE                                   AFTER (K=3)
-  test-scripts  ~30 min (1 runner) ────┐   test-scripts (1/3) ~10 min ─┐
-  test-webplat 1/2, 2/2  ~4 min        │   test-scripts (2/3) ~10 min  ├─> test
-  test-bun, e2e, +18 jobs  ≤2 min      ├─> test-scripts (3/3) ~10 min ─┤   (aggregator
-                                        │   test-webplat 1/2, 2/2       │    unchanged:
-  critical path = dispatch              │   test-bun, e2e, +18 jobs     │    one result
-    + test-scripts + test = 99.8%       ┘                               ┘    per shard)
-  wall p50 35.7 / p90 53.2                 wall p50 13.2 / p90 33.4
+BEFORE                                    AFTER
+  test-scripts  ~30 min, 1 dispatch draw    test-scripts (1/K) ┐
+  test-webplat 1/2, 2/2  ~4 min             test-scripts (2/K) ├─> test
+  test-bun  ~1 min                          test-scripts (3/K) ┤    (aggregator
+                                            test-webplat 1/2,2/2│     unchanged)
+  time-to-test p50 34.1 / p90 49.6 / max 56.1                  ┘
+  ceiling 3000s ..................... crossed
+                                            time-to-test ~11 min + max dispatch draw
+                                            ceiling 3600s ..... comfortable
 ```
-
-The `await-ci` gate, `CEILING_S`, `notify-gated`, and the whole release topology are **unchanged**.
 
 ### Implementation Phases
 
-Contract before consumer: the shard-selection mechanism lands in `test-all.sh` with its totality
-guard **before** `ci.yml` starts calling it with a shard argument, so no phase leaves a state where
-CI silently runs a subset.
+Contract before consumer, and unblock before optimise.
 
-#### Phase 1: Deterministic, total shard partition in `scripts/test-all.sh`
+#### Phase 0: Derive K from data that already exists
 
-- Add a `SCRIPTS_SHARD` env var of the form `k/N` (mirroring the existing `VITEST_SHARD` naming and
-  its shell-injection-safe `env:`-passing convention, `test-all.sh:1896-1935`).
-- Partition the scripts group by a **deterministic total function** over the suite path — a stable
-  hash modulo N — not a checked-in balance manifest, which can drift out of sync with the suite
-  list. Determinism matters independently of totality: if a suite can move between legs across
-  runs, a flake becomes unattributable.
-- Unset or empty `SCRIPTS_SHARD` must run the full group, so local invocation and
-  `main-health-monitor.yml`'s `TEST_GROUP=all` path are unchanged.
-- Emit the executed suite list per leg so the totality guard (Guard 1) can assert on it.
-- Lower `TC_RUNTIME_CEILING_S` (`scripts/lib/test-contention.sh:101`, currently 14400s)
-  proportionally for a sharded leg, since ADR-133's 2700s baseline describes a full uncontended
-  gate, not one leg of it.
+- Pull `TEST_TIMING_LOG` from one full scripts-group run. Report the per-suite duration
+  distribution and the single longest suite — that value is the floor no K can beat.
+- Choose K against the tail. K=3 is provisional.
+- Record the baseline gated metric (time-to-`test` p50 34.1 / p90 49.6 / max 56.1).
 
-#### Phase 2: Matrix the `test-scripts` job
+#### Phase 1: Bounded ceiling raise (the deterministic unblock), in the safe order
 
-- Add `strategy: {fail-fast: false, matrix: {shard: ["1/3","2/3","3/3"]}}` to `ci.yml`'s
-  `test-scripts` job and pass `SCRIPTS_SHARD: ${{ matrix.shard }}` via `env:`.
-- The job **name must stay `test-scripts`** so the `test` aggregator's `needs.test-scripts.result`
-  and the required-check contract are untouched.
-- Every leg keeps the identical runtime profile: the same gitleaks and likec4 installs at the same
-  pins, and no `setup-node`/`setup-bun` version pin — 47 `.claude/hooks/*.test.sh` suites and
-  others carry comments asserting "the test-scripts CI shard has no bun and no node", so that
-  profile is load-bearing and must be identical across legs.
-- Re-verify `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh`'s job-block extractor
-  (`awk '/^  test-scripts:/{f=1} f&&/^  [a-z][a-z0-9-]*:$/&&!/^  test-scripts:/{exit} f'`) still
-  bounds the block correctly once `strategy:` is present. It must be re-run, not assumed.
-- Re-verify `plugins/soleur/test/required-checks-canonical-parity.test.sh`'s gitleaks pin-parity
-  assertion across its install sites now that one site is a matrix.
+- `scripts/prod-version-drift-check.sh`: `DRIFT_SUSTAINED_THRESHOLD_MIN` 195 → 207, updating the
+  derivation comment so the arithmetic in the file matches the ceilings in the file.
+- `.github/workflows/web-platform-release.yml`: `CEILING_S` 3000 → 3600 and `await-ci`
+  `timeout-minutes` 60 → 72, preserving ADR-072's `timeout-minutes ≥ 1.2 × CEILING_S` invariant and
+  its wall-clock-keyed ceiling. Name what the new ceiling bounds, per
+  `2026-05-05-defense-relaxation-must-name-new-ceiling.md`: it bounds *CI liveness*, and it is
+  sized above the measured max of 56.1 min — not above p50.
+- Order is load-bearing: the threshold must move **before** the ceilings, or B9 reds in between.
 
-#### Phase 3: Declare `timeout-minutes` on deploy-critical ci.yml jobs
+#### Phase 2: Round-robin partition at the `run_suite` chokepoint
 
-- Declare an explicit ceiling on `test-scripts` (per leg), `test-webplat`, `test-bun`, `test`, and
-  every other job with a `needs`-path into `test`.
-- Size each ceiling above the **measured post-shard p100** with named headroom, not above p50 — a
-  ceiling that kills a slow-but-healthy leg fail-closes the deploy for a new reason, which is the
-  defect this plan is fixing, reintroduced one layer down.
-- This is the missing feedback loop: CI duration becomes a declared budget whose growth reddens a
-  check, instead of an unbounded quantity discovered by a production outage.
+- Add `SCRIPTS_SHARD=k/N`. Filter inside `run_suite()` **before** `suites=$((suites + 1))`, and
+  mirror the identical filter into `skip_suite()` — both increment `suites`, so filtering only one
+  makes per-leg denominators and the epilogue's decline accounting disagree.
+- Partition **round-robin on the registration counter** (`(( (n - 1) % N == k - 1 ))`), keyed on the
+  `run_suite` **label**. This is total and deterministic *by construction*: every suite passes the
+  chokepoint exactly once, and registration order is static source order. It also balances better
+  than a hash, which cannot be steered by the timing data Phase 0 produces.
+- A shard non-selection is **not** a relevance decline and **not** a runtime-ceiling decline: it must
+  not increment `skipped`, must not reach the `_ceiling_declined` accounting, and must not push the
+  leg toward ADR-181's `exit 3 (UNRESOLVED)`. State this explicitly — getting it wrong either makes
+  every leg exit 3 or reproduces the defect ADR-181 closed.
+- Malformed `SCRIPTS_SHARD` (`0/3`, `4/3`, `1/0`, `abc`, empty) **fails closed with exit 2**,
+  following the existing `TEST_GROUP` validation precedent. Falling back to the full group would
+  hide the bug; falling back to empty is the green-on-zero-coverage catastrophe.
+- Unset/empty runs the full group, so local runs, lefthook, `work`/`ship`, and
+  `main-health-monitor.yml`'s `TEST_GROUP=all` are unaffected. The filter keys on `SCRIPTS_SHARD`
+  presence, never on `TEST_GROUP == scripts`.
+- Add an **enumerate mode** that records registrations without executing them, handled in the same
+  early block as `--print-suite-globs` (before `TMPDIR` export, the bare-repo guard, `TEST_GROUP`
+  validation and `tc_acquire` — a path that blocks on the advisory lock deadlocks the gate on
+  itself). Guard 1 consumes it.
+- `scripts/lint-orphan-test-suites.sh` invokes the runner and runs *inside* the scripts group, so it
+  would inherit an exported `SCRIPTS_SHARD`. Extend its `env -u TEST_GROUP` to
+  `env -u TEST_GROUP -u SCRIPTS_SHARD` and widen the matching assertion in its companion suite.
+
+#### Phase 3: Matrix the job
+
+- Add `strategy: {fail-fast: false, matrix: {shard: [...]}}` to `ci.yml`'s `test-scripts`; pass
+  `SCRIPTS_SHARD: ${{ matrix.shard }}` via `env:`. Note the group is still passed **positionally**
+  (`bash scripts/test-all.sh scripts`) — the two mechanisms sit side by side; comment why.
+- Keep the job key literally `test-scripts` so `needs.test-scripts.result` and the required-check
+  contract are untouched.
+- No leg may carry `continue-on-error`, which would make the rolled-up result report success while
+  a leg failed.
+- Keep every leg's runtime profile identical — same gitleaks and likec4 pins, no
+  `setup-node`/`setup-bun` version pin (many suites assert the shard has no bun and no node).
+- Re-run `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh`: its extractor anchors on
+  2-space `^  [a-z…]:$` and `strategy:` is indented 4 spaces, so it should survive — verify rather than
+  assume. Re-run `required-checks-canonical-parity.test.sh` for gitleaks pin parity now that one
+  install site is a matrix.
 
 #### Phase 4: Guards
 
-Implement Guards 1–3 (contracts below). Guard 1 — shard totality — is the highest-risk deliverable
-in this plan and is written before the partition it guards.
+Implement Guards 1 and 2 (contracts below), written before the code they guard.
 
 #### Phase 5: Architecture records
 
-- Amend ADR-072; author the new ADR; update and re-arm #5806. See `## Architecture Decision
-  (ADR/C4)`.
+Amend ADR-072, author the new ADR, update and re-arm #5806. See below.
 
 ## Alternative Approaches Considered
 
 | Approach | Verdict | Why |
 |---|---|---|
-| Trigger release off `workflow_run` on ci.yml (option 3) | **Deferred to #5806** | Fail-open `EXPECTED_SHA` hazard; drift formula blind to ci.yml; untestable pre-merge; touches a shared workflow; +8.5 min time-to-prod; leaves CI at 57 min |
-| Raise `CEILING_S` (option 1) | Rejected as primary; data-gated later | B9 margin is exactly zero, so a raise costs prod-drift sensitivity; re-breaks on the same trajectory |
-| In-process parallelism inside `test-all.sh` | Rejected | ADR-133: tmpfs contention + a Bun FPE crash make within-runner parallelism unsafe |
-| K=4 or higher sharding | Rejected | K=3→4 buys only 2.8 min at p50 while adding a runner slot to an already-contended pool |
-| Checked-in shard balance manifest | Rejected | Drifts silently out of sync with the suite list; a deterministic total function cannot |
-| Delete `await-ci` and rely on branch protection | Rejected | Branch protection gates the merge, not the deploy; ADR-072 invariant #2 requires the `test` check-run to authorise the cutover |
+| `workflow_run` trigger (option 3) | Deferred to #5806 | Fail-open `EXPECTED_SHA`; disarms `live-verify`; CI re-run would ship a release; untestable pre-merge; leaves CI at 56 min |
+| Ceiling raise **alone** | Rejected | A pure deferral; this repo has raised-and-rebroken ceilings twice |
+| Sharding **alone** | Rejected | Leaves production blocked until a post-merge measurement confirms it worked |
+| Hash-mod-N over suite path | Rejected | ~198 suites are hand-registered and ~24 have no path; and a hash cannot be steered by measured durations |
+| Checked-in shard balance manifest | Rejected for **totality**, available for **balance** | Totality must be structural; a timing table may inform ordering, where staleness costs minutes, never coverage |
+| In-process parallelism in `test-all.sh` | Rejected | ADR-133: tmpfs contention + a Bun FPE crash |
+| A shard-determinism guard | Cut | Round-robin at the chokepoint is deterministic by construction |
+| K=4+ | Rejected pending Phase 0 | Each leg adds a dispatch draw to a pool measurement shows is contended |
 
 ## Architecture Decision (ADR/C4)
 
 ### ADR
 
-- **Create ADR-207** (ordinal **provisional**). 204 is the highest on `origin/main`, but 205 and
-  206 are each already claimed on a pushed branch — `origin/feat-one-shot-7849-...-fixture-env-ledger-ancestry`
-  holds ADR-205 and `origin/feat-one-shot-7759-net-issue-flow-filing-cites-issue` holds ADR-206.
-  A probe scoped to `origin/main` (or to the local tree) reports 205 as free and is wrong; the
-  ordinal must be derived across **every** `origin/*` ref, and re-derived immediately before merge
-  because `main` moves under a long session —
-  *"CI wall-clock is a declared budget: shard the long pole, bound every deploy-critical job."*
-  This is a genuine architecture decision: it establishes a new coupling between `ci.yml`'s
-  declared ceilings and the release gate's viability, and it records the shard-totality invariant
-  that makes a sharded required check trustworthy.
-- **Amend ADR-072 — amend, not supersede.** Nothing in its Decision is reversed: the adaptive wait
-  and the fail-closed posture stand and are retained by this plan. What is falsified is Decision
-  item 4's *sizing premise* ("sized above the observed p100 CI-under-contention duration (~28m,
-  measured 2026-06-30)"). Add the dated re-measurement (p50 34.27 / p90 51.77 / p95 54.12 / max
-  57.40, 5 of 40 at or over the ceiling) and a consequence recording that the ceiling's validity
-  depended on a CI duration that nothing was bounding. Correct the record on option 1: its
-  rejection was pre-adaptive-wait and no longer stands on that ground — it now fails on the B9
-  coupling instead.
-- **Update #5806, do not close or execute it.** Record that criteria 1 and 3 fired, were evaluated,
-  and the outcome was *root cause was an unsharded job, not irreducible CI cost*. Re-arm with a
-  criterion that survives this fix: *post-shard ci.yml p100 on main exceeds 60% of `CEILING_S`*. A
-  criterion that fires and is then silently not acted on becomes noise; recording the evaluation is
-  what keeps it credible.
-
-  This plan's research produced a substantially better scoping of that deferred work than #5806
-  currently carries. Record all of it on the issue, so the eventual implementation starts from a
-  complete record rather than rediscovering it:
-
-  1. **Fail-open `build_sha` gate.** Under `workflow_run`, `github.sha` is the default-branch tip,
-     so `reusable-release.yml`'s `BUILD_SHA` and the deploy job's `EXPECTED_SHA` would match each
-     other while both being the un-CI'd SHA — the #3409 gate would self-certify the exact wrong
-     tree it exists to catch.
-  2. **Out-of-order deploy is a silent prod rollback.** CI duration varies 22–57 min, so for merges
-     A then B, CI(B) can complete before CI(A). Under `push` the newest run won; under
-     `workflow_run` each completion fires independently, so release(A) can run *after* release(B)
-     and roll production back to A **with a green pipeline and a correctly-labelled SHA**. Format
-     validation of `head_sha` does not catch this — it validates the SHA's shape, not its position.
-     The fix is an ancestry check in the resolve step (fetch the deployed `build_sha`, then
-     `git merge-base --is-ancestor $DEPLOYED $HEAD_SHA`, **skip** rather than fail when false) plus
-     a `concurrency` group on the deploy path with `cancel-in-progress: false` so two survivors
-     serialise. ADR-072 named out-of-order risk generically; this is the concrete mechanism.
-  3. **`github.sha` is not the whole surface.** A grep for it misses the env-var forms
-     `$GITHUB_SHA` / `$GITHUB_REF` / `$GITHUB_REF_NAME` in shell steps and scripts;
-     `docker/metadata-action`'s `type=sha` and the `org.opencontainers.image.revision` label, which
-     read `context.sha` implicitly; any release-tracking step naming a release by commit; and
-     `concurrency: ${{ github.ref }}`, which under `workflow_run` resolves to the default branch for
-     every run and would collapse all releases into one group. The structural fix that covers all of
-     them: derive `resolved_sha` from `git rev-parse HEAD` **after** checkout and assert it equals
-     the requested ref, fail-closed — then anything reading the tree is correct by construction.
-  4. **Convert `await-ci`, do not delete it.** The right shape turns it from a poller into a fast
-     verifier that still asserts the `test` check-run `conclusion == success` for the resolved SHA,
-     returning in seconds. That preserves ADR-072 invariant #2 (the workflow-run `.conclusion` must
-     never authorise the cutover) and keeps B8e's pinned needs-closure and the drift formula's shape
-     intact.
-  5. **Keep a gated notification, in conclusion-based form.** `types: [completed]` fires on
-     `failure` and `cancelled` too, so a job gated on
-     `github.event.workflow_run.conclusion != 'success'` gives a *better* signal than today's
-     `notify-gated` — it also covers CI-failed-on-main, which the timeout never did. Deleting it and
-     relying on the */30 drift probe and the 6-hourly monitor would be a detection-latency
-     regression on the exact failure mode being redesigned.
-  6. **`workflow_run` has no `paths` filter**, so the `on.push` denylist disappears. Decide
-     explicitly whether docs/KB-only commits start a (no-op) release run or whether the filter is
-     reimplemented in the resolve step; do not let it fall out by accident.
-  7. **Recursion is not a risk.** No commit is pushed to main — tags materialise via the Releases
-     API — and `branches: [main]` excludes tag pushes; cosign's `COSIGN_IDENTITY_REGEXP` pin on
-     `reusable-release.yml@refs/heads/main` is preserved under `workflow_run`.
-  8. **It cannot be verified pre-merge**, so the resolve logic must live in a committed, locally
-     testable script rather than inline YAML.
-  9. **`live-verify` silently disarms.** Its `if:` ends `&& github.event_name == 'push'`
-     (`web-platform-release.yml:918`), which is never true under `workflow_run`, so the **blocking**
-     dark-launch gate becomes permanently `skipped`, its per-run Sentry emission drops to zero, and
-     `scripts/watch-live-verify-pass.sh` never observes a PASS again. The obvious fix is a trap:
-     switching to `!= 'workflow_dispatch'` leaves the job's `BEFORE_SHA: ${{ github.event.before }}`
-     undefined under `workflow_run`, so the compare API 404s and the gate goes *vacuous-but-green*,
-     which is worse than skipped. Both the `if:` and the compare endpoints must change.
-  10. **A CI re-run would ship a production release.** `types: [completed]` fires on every
-      completion including a `gh run rerun` of an existing main CI run and a `workflow_dispatch` of
-      `ci.yml`. `reusable-release.yml` has no "already released this SHA" short-circuit — it mints
-      the next patch version — so clicking "re-run" would cut a new semver, run migrations and swap
-      the container. The resolve step must additionally require
-      `workflow_run.event == 'push'` and `workflow_run.run_attempt == 1`.
-  11. **Four jobs check out the wrong tree.** `migrate`, `verify-migrations`,
-      `verify-doppler-secrets` and `deploy` all use a bare `actions/checkout` with no `ref:`, which
-      under `workflow_run` resolves to main tip. Migrations would be applied from a newer tree than
-      the image being deployed. Threading `ref` into `reusable-release.yml` alone does not cover
-      them.
-  12. **`release-outcome` must gain the new job.** It lists `await-ci`/`notify-gated` in `needs:`
-      and its own header warns that omitting a job fails silently. Without rewiring, a resolve step
-      that fail-closes on a malformed SHA leaves every downstream job `skipped`, and the outcome
-      classifier reports "no alert" — the one guaranteed fail-closed path would be the one with no
-      notification.
-  13. **The gate's semantics silently widen.** `await-ci` polls only the `test` aggregator
-      check-run; `workflow_run.conclusion` is the **run-level** conclusion, so `e2e`,
-      `lockfile-sync`, `critical-css-gate` and every advisory job would begin blocking production.
-      That may be desirable, but it is a decision to name, not a side effect to inherit.
-  14. **Also stale on that path:** `plugins/soleur/skills/ship/SKILL.md`'s admin-merge hatch
-      (documented entirely in terms of `await-ci` timing out), the learning
-      `2026-06-29-admin-merge-skips-deploy-via-await-ci-gate.md`, the dispatch input comment at
-      `web-platform-release.yml:47`, and `gh release create` at `reusable-release.yml:385`, which
-      has no `--target` and would tag main tip rather than the built SHA.
+- **Create ADR-207** (ordinal **provisional**; 205 and 206 are claimed on pushed branches, so a
+  `main`-scoped probe is wrong — derive across every `origin/*` ref and re-derive before merge) —
+  *"CI's contribution to the deploy gate is a declared, bounded budget."* The decision is the new
+  cross-file coupling and its invariant: the declared ceilings of `test`'s closure must sum under
+  `CEILING_S`, so the gate cannot be silently outgrown again.
+- **Amend ADR-072 — amend, not supersede.** Its Decision items 1–3, 5, 6 and all its named
+  invariants survive; only item 4's *sizing premise* ("sized above the observed p100 … ~28m,
+  measured 2026-06-30") is falsified. Record the re-measurement, the new ceiling, and — the durable
+  lesson — that the original premise was itself stated in **run wall-clock** terms, a quantity the
+  gate does not measure. Correct the record on option 1: its rejection was pre-adaptive-wait and no
+  longer stands on that ground.
+- **Update #5806, do not close it.** Record that criteria 1 and 3 fired and were evaluated, with the
+  outcome *root cause was an unsharded job, not irreducible CI cost*. Re-arm with a criterion keyed
+  to the **gated metric**: *post-shard time-to-`test` p100 on main exceeds 60% of `CEILING_S`*. The
+  fourteen scoping findings this plan's research produced — the `EXPECTED_SHA` fail-open, the
+  out-of-order prod-rollback, the `live-verify` disarm and its `github.event.before` trap, the CI
+  re-run release, the four bare checkouts, the `release-outcome` rewiring, the gate widening from
+  the `test` check-run to the whole run conclusion, the `github.sha`-equivalent surfaces
+  (`$GITHUB_SHA`, `docker/metadata-action` `type=sha`, `concurrency: github.ref`), the
+  verifier-not-deletion shape, the missing `gh release create --target`, the stale ship-skill and
+  learning docs, the absent `paths` filter, and the non-recursion confirmation — belong **on the
+  issue**, not duplicated here.
 
 ### C4 views
 
-Checked against all three files —
-`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}` — by enumerating the
-change's actors, systems, containers and relationships rather than grepping for the feature's noun:
+Checked against all three of
+`knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}` by enumerating
+actors, systems, containers and access relationships rather than grepping the feature's noun:
 
-- **External human actors:** none added or removed; the change is internal to CI.
-- **External systems:** none added. The set this pipeline touches (`github`, `ghcr`,
-  `zotRegistry`, `sigstore`, `resend`, `sentry`, `betterstack`, `hetzner`, `tunnel`) is unchanged —
-  only the internal job layout of one workflow changes, which the model does not resolve below the
-  `github` system boundary.
+- **External human actors:** none added or removed — the change is machine-to-machine within CI.
+- **External systems:** none added; the set this pipeline touches is unchanged. Only the internal
+  job layout of one workflow and two integer constants change, below the `github` system boundary.
 - **Containers / data stores:** none added or removed.
 - **Access relationships:** unchanged in actor, direction and technology.
-- **Edges re-read for continued truth:** `model.c4:431` (`github -> webapp`, the drift probe
-  "alerting only on staleness sustained past one release cycle") stays accurate — this plan does
-  **not** change `DRIFT_SUSTAINED_THRESHOLD_MIN`, precisely because it does not touch the release
-  topology. `model.c4:617` (`github -> sentry`) is unaffected: `ci.yml` uses no `sentry-heartbeat`
-  composite.
-- **Derived cardinalities:** `bash plugins/soleur/test/c4-count-parity.test.sh` was run at plan time
-  and passed **10/10**. The gated counts are sentry-heartbeat emitters (11 workflows / 6 schedule /
-  5 dispatch), cron monitors (56 / 12 / 44) and Resend emitters (13). Verified:
-  `grep -rln actions/sentry-heartbeat .github/workflows/` returns 11 files and **`ci.yml` is not
-  among them**, so adding matrix legs and job timeouts moves no gated count. Re-run in AC.
+- **Edges re-read for continued truth:** `model.c4` `github -> webapp` describes the drift probe as
+  "alerting only on staleness sustained past one release cycle". Phase 1 lengthens that cycle by 12
+  minutes; the prose carries no number, so it stays accurate — confirm the wording during
+  implementation. `github -> sentry` is unaffected: `ci.yml` uses no `sentry-heartbeat` composite.
+- **Derived cardinalities:** `bash plugins/soleur/test/c4-count-parity.test.sh` passed **10/10** at
+  plan time. Gated counts are sentry-heartbeat emitters (11/6/5), cron monitors (56/12/44) and
+  Resend emitters (13). Verified: `grep -rln actions/sentry-heartbeat .github/workflows/` returns 11
+  files and **`ci.yml` is not among them**; no gated count moves. Re-run in AC.
 
-**Conclusion: no `.c4` edit is required**, on the enumeration above plus a green count-parity run.
+**Conclusion: no `.c4` edit is required**, on the enumeration above plus a green parity run.
 
 ### Sequencing
 
-Both records are authored in this plan's own PR; nothing is deferred behind a soak.
+Both records ship in this PR; nothing is deferred behind a soak.
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** a required CI check that reports green while
-  silently running only a subset of the suite — so a regression reaches `app.soleur.ai` with a
-  green pipeline. This is the shard-totality failure mode, and it is strictly worse than the
-  current blocked-deploy state, which is why Guard 1 is the plan's highest-priority deliverable.
-- **If this leaks, the user's data is exposed via:** no new data path is created; the change is
-  confined to CI test partitioning. The residual exposure is indirect — a dropped suite could be
-  one of the security or credential-path gates that run in the scripts group, so untested
-  data-handling code could ship behind a green check.
+- **If this lands broken, the user experiences:** a required CI check reporting green while running
+  only a subset of the suite — a regression reaching `app.soleur.ai` behind a green pipeline. This
+  is the shard-totality failure mode, and it is strictly worse than today's blocked deploy, which is
+  why Guard 1 is the plan's highest-priority deliverable and why the partition is made total by
+  construction rather than by assertion alone.
+- **If this leaks, the user's data is exposed via:** no new data path is created. The residual
+  exposure is indirect — the scripts group contains security and credential-path gates, so a dropped
+  suite could let untested data-handling code ship behind a green check.
 - **Brand-survival threshold:** `single-user incident`
-
-A single regression reaching the single production host behind a falsely-green required check is a
-user-visible incident on its own, without needing an aggregate pattern.
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: "the required `test` aggregator check-run on every push and PR, now backed by declared per-job timeout-minutes so a duration regression reddens a check instead of silently consuming the deploy gate; plus scheduled-prod-version-drift.yml (*/30) reading prod /health build_sha"
-  cadence: "per push and per pull_request for CI; every 30 minutes for the prod drift probe"
-  alert_target: "GitHub required-check failure on the offending PR; Sentry cron monitor -> operator email for the drift probe; main-health-monitor.yml files a P1 ci/main-broken issue"
-  configured_in: ".github/workflows/ci.yml, .github/workflows/scheduled-prod-version-drift.yml, .github/workflows/main-health-monitor.yml"
+  what: "the required `test` aggregator check-run on every push and PR — the same check-run await-ci gates on — backed by declared per-job ceilings whose sum is asserted under CEILING_S; plus scheduled-prod-version-drift.yml reading prod /health build_sha"
+  cadence: "per push and per pull_request for CI; nominally every 30 minutes for the drift probe (measured delivered interval 61-243 min)"
+  alert_target: "GitHub required-check failure on the offending PR; Sentry cron monitor -> operator email for the drift probe; main-health-monitor.yml files a P1 ci/main-broken issue; notify-gated posts to Slack on a fail-closed await-ci"
+  configured_in: ".github/workflows/ci.yml, .github/workflows/web-platform-release.yml, .github/workflows/scheduled-prod-version-drift.yml, scripts/prod-version-drift-check.sh"
 
 error_reporting:
   destination: "GitHub Actions check-run status for CI; Sentry cron monitors for the scheduled probes"
-  fail_loud: "a matrix leg exceeding its declared timeout-minutes is recorded by GitHub as `cancelled` and reddens the `test` aggregator, which is a required check; main-health-monitor's filer treats success|failure|cancelled|skipped exhaustively so a timeout files a tracker rather than reading as idle"
+  fail_loud: "await-ci emits an ::error:: naming the elapsed seconds and the ceiling before fail-closing, and notify-gated converts that into a Slack push; prod-version-drift-check.sh reports prod build_sha lagging past DRIFT_SUSTAINED_THRESHOLD_MIN"
 
 failure_modes:
-  - mode: "a shard partition silently drops suites, so the required `test` check passes on a subset"
-    detection: "Guard 1 (shard totality) diffs the union of the legs' executed suite lists against the unsharded discovery set and fails CI on any difference"
+  - mode: "a shard partition drops suites, so the required `test` check passes on a subset"
+    detection: "Guard 1 compares the union of the legs' ASSIGNED registrations against an independently derived registration set, in CI against the real tree"
     alert_route: "required `test` check fails on the offending PR"
-  - mode: "ci.yml duration grows again until it re-approaches the 3000s await-ci ceiling"
-    detection: "the declared per-job timeout-minutes from Phase 3 redden the job at a bound well under the ceiling; the re-armed #5806 criterion (post-shard p100 > 60% of CEILING_S) is the escalation trigger"
-    alert_route: "required check failure; #5806 re-evaluation"
-  - mode: "a matrix leg drifts to a different runtime profile (gains node/bun, or a different gitleaks pin)"
-    detection: "required-checks-canonical-parity.test.sh asserts gitleaks pin parity across install sites; scripts-shard-runtime-coverage.test.sh asserts the shard's runtime profile"
+  - mode: "a leg loses its SCRIPTS_SHARD env and silently runs the full group, hiding the benefit while still reporting green"
+    detection: "each leg echoes its resolved k/N and the guard asserts N distinct values across N legs; malformed or absent values fail closed with exit 2 under CI"
     alert_route: "required `test` check fails on the offending PR"
-  - mode: "a deploy ships a different tree than CI validated"
-    detection: "the pre-existing #3409 build_sha gate compares the deployed /health build_sha against EXPECTED_SHA and errors on mismatch; unchanged by this plan"
-    alert_route: "deploy job fails; notify-gated posts to Slack on a fail-closed await-ci"
+  - mode: "CI's declared budget grows back past what the deploy gate can absorb"
+    detection: "Guard 2 asserts max(declared ceilings of test's needs-closure) + test's own ceiling <= CEILING_S/60, reading CEILING_S from web-platform-release.yml rather than restating it"
+    alert_route: "required `test` check fails at the moment of divergence, not at the next deploy"
+  - mode: "ci.yml exceeds the raised ceiling anyway, on a runner-starved run"
+    detection: "await-ci emits its wall-clock ::error:: and notify-gated posts to Slack; the re-armed #5806 criterion is keyed to post-shard time-to-test p100"
+    alert_route: "Slack push + red required job, within one release cycle"
 
 logs:
-  where: "GitHub Actions run logs per matrix leg; Sentry cron monitor check-in history"
+  where: "GitHub Actions run logs per matrix leg; TEST_TIMING_LOG per run for per-suite durations; Sentry cron monitor check-in history"
   retention: "GitHub Actions logs 90 days; Sentry per project retention"
 
 discoverability_test:
-  command: "bash scripts/test-all.sh --list-shard-coverage"
-  expected_output: "the union of the K shard suite lists, printed with a final line stating the union size equals the unsharded scripts-group discovery count, and exit status 0"
+  command: "curl -fsS https://app.soleur.ai/health"
+  expected_output: "HTTP 200 with a JSON body whose build_sha is a 40-hex commit present in origin/main's history — i.e. production is running a commit CI validated"
 ```
 
 ## Guard Contract
 
 ### Guard 1 — Shard totality
 
-**Property.** The union of the suites executed across all `test-scripts` matrix legs is exactly
-equal to the set of suites `test-all.sh` discovers for the `scripts` group unsharded — no suite is
-dropped, and none is executed twice.
+**Property.** Every suite registered for the scripts group is **assigned to exactly one** matrix
+leg, so the union of the legs' assigned sets equals the full registration set with no gaps and no
+duplicates.
 
-**Assembly.** The chokepoint is the shard-selection function in `scripts/test-all.sh` through which
-every scripts-group suite must pass before it can run. The guard quantifies over the *discovery
-set* — computed by the same discovery code path the unsharded run uses — not over a hand-listed
-inventory of suite names, because members drift on every added suite while the discovery call site
-does not. It must compare the union across **all K legs** against that set, in both directions
-(missing and duplicated), for arbitrary K rather than a hardcoded 3.
+**Assembly.** The chokepoint is `run_suite()` in `scripts/test-all.sh` — every scripts-group suite
+passes through it exactly once — together with its sibling `skip_suite()`, which shares the `suites`
+counter and must carry the identical filter. The guard quantifies over the **registration set**
+produced by the new enumerate mode, keyed on the `run_suite` **label** (unique across all
+registrations, and already the `TEST_TIMING_LOG` key) rather than on a path, because ~198
+registrations are hand-written imperative statements and ~24 name no path at all.
 
-**Mutation matrix:**
+The property is over **assigned**, never **executed**: ADR-181 relevance gating means executed ⊊
+registered even in an unsharded run, so an executed-set comparison would red on nearly every commit.
+Per-leg, the guard separately asserts `executed = assigned − declines`, with each decline carrying
+its recorded reason.
 
-| # | Mutation | Expected |
-|---|---|---|
-| 1 | Make the partition drop a suite (e.g. an off-by-one so index `N-1` maps to no leg) | RED |
-| 2 | Make the shard-selection function return an empty set for every leg — a guard reporting "0 checked" and exiting 0 is vacuous | RED |
-| 3 | Add a **second** new suite to the scripts group after a compliant first, and have the partition assign it to no leg | RED |
-| 4 | Make two legs both claim the same suite (double execution, so the union is right but the multiset is not) | RED |
-| 5 | Change K in `ci.yml` from 3 to 4 without the partition honouring N — legs 1..3 run and leg 4 is empty | RED |
-
-**Harness rows:** deleting the union-comparison assertion while leaving the guard's iteration in
-place must drive the suite RED. Must-PASS non-canonical input: a **different valid K** (for example
-K=2 or K=5) with a correct partition must PASS — the contract requires totality for any K, not
-only for the K currently configured in `ci.yml`.
-
-### Guard 2 — Shard determinism
-
-**Property.** A given suite path maps to the same leg index on every run for a fixed K, so a
-failure is attributable to a stable leg and a flake cannot migrate between legs.
-
-**Assembly.** The same shard-selection function as Guard 1. The guard quantifies over the whole
-discovery set, invoking the mapping repeatedly within a run and across a simulated re-run, rather
-than sampling one suite — a mapping that is stable for the first suite and unstable for a later one
-is the defect this exists to catch.
+**The reference set must be derived independently of the partition.** Deriving it by invoking the
+partition with `K=1` makes the union comparison true by construction for any partition that is a
+function of the enumeration — the guard would then be a checksum, green on exactly the dropped-suite
+case it exists to catch. It is derived instead by static extraction of `run_suite` registrations
+plus `--print-suite-globs` expansion, mirroring the extractor
+`scripts/lint-orphan-test-suites.sh` already implements. That existing lint proves a suite is
+**registered with some runner**; Guard 1 proves a registered suite is **assigned to exactly one
+leg**. The two are adjacent and neither subsumes the other.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Seed the partition from anything run-varying (`$RANDOM`, timestamp, `readdir` order) | RED |
-| 2 | Make the mapping function unreachable so the guard evaluates zero suites yet exits 0 | RED |
-| 3 | Make the mapping stable for the first suite but run-varying for a **second** one | RED |
-| 4 | Make the mapping depend on the leg's own index rather than only on the suite path and K | RED |
+| 1 | Off-by-one in the partition so one registration maps to no leg | RED |
+| 2 | Make the enumerate mode return nothing — a guard reporting "0 checked" and exiting 0 is vacuous | RED |
+| 3 | Add a **second** registration after a compliant first and assign it to no leg | RED |
+| 4 | Make two legs both claim the same label (union correct, multiset wrong) | RED |
+| 5 | Set `ci.yml`'s leg count to 2 while the partition still computes mod 3 — leg 3's suites run nowhere and both surviving legs are green | RED |
+| 6 | Derive the reference set by calling the partition with `K=1` (the tautology stub) — rows 1/3/5 must not silently pass | RED |
+| 7 | Filter in `run_suite` but not in `skip_suite`, so per-leg denominators diverge | RED |
+| 8 | Malformed `SCRIPTS_SHARD` (`0/3`, `4/3`, `1/0`, `abc`) falls back to running nothing | RED |
 
-**Harness rows:** removing the repeat-invocation loop so the guard compares a value against itself
-must drive the suite RED. Must-PASS non-canonical input: reordering the discovery output must still
-PASS, since the mapping is defined over the suite path, not over discovery order.
+**Harness rows.** Deleting the union-comparison assertion while leaving the guard's iteration must
+drive the suite RED. Each mutation must be **line-range-scoped to the target block and its placement
+asserted** — `scripts/test-all.sh` is ~2400 lines with ~198 near-identical `run_suite` lines, so a
+file-wide `sed` without `/g` silently rewrites a different group's suite and the guard reports a
+baseline that is indistinguishable from a pass. Must-PASS non-canonical inputs: a **different valid
+K** must PASS (totality is required for any K, not only the configured one), and a **reordered
+registration set** must PASS.
 
-### Guard 3 — Deploy-critical ci.yml jobs declare a timeout
+### Guard 2 — CI's declared budget is bounded by the deploy gate's ceiling
 
-**Property.** Every `ci.yml` job on the `needs`-path into the `test` aggregator declares an
-explicit `timeout-minutes`, so CI's contribution to the deploy gate has a declared bound rather
-than inheriting GitHub's 360-minute default.
+**Property.** The declared execution ceilings of `test`'s `needs`-closure, plus `test`'s own,
+sum under the deploy gate's `CEILING_S` — so CI cannot be grown past what the gate can absorb
+without a check going red at the moment of divergence.
 
-**Assembly.** The chokepoint is the `needs` graph of `.github/workflows/ci.yml` resolved backwards
-from the `test` job. Membership is **recomputed from the graph**, not hand-listed, so a newly added
-shard or a newly added `needs` edge is covered without editing the guard.
+**Assembly.** Two files, resolved rather than restated: the `needs`-closure of `test` recomputed
+from `.github/workflows/ci.yml`'s graph (today exactly `test-webplat`, `test-bun`, `test-scripts`,
+`test`, plus the matrix legs), and `CEILING_S` read out of
+`.github/workflows/web-platform-release.yml`. This mirrors the resolve-don't-hardcode discipline B8
+already applies to the callee release ceiling. A **pinned closure string** accompanies the derived
+walk — B8e's shape — because a guard that derives membership from the graph is definitionally green
+after a graph edit, and the graph edit is exactly how a job leaves the guarded set while still
+gating the deploy.
+
+This guard replaces an earlier "every job declares a timeout" formulation, which was satisfiable by
+declaring `timeout-minutes: 360` — GitHub's own default, i.e. today's behaviour written down.
+Presence without a bound is not a budget.
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Remove `timeout-minutes` from `test-scripts` | RED |
+| 1 | Remove `timeout-minutes` from `test-scripts` (absence must read as the 360 default, not as zero) | RED |
 | 2 | Make the graph walk return an empty job set — reporting "0 checked" and exiting 0 is vacuous | RED |
-| 3 | Add a **second** job to `test`'s `needs` without a `timeout-minutes`, after a compliant first | RED |
-| 4 | Set `timeout-minutes` to an empty or non-numeric value | RED |
-| 5 | Delete a `needs` edge so a job silently leaves the guarded set while still gating the deploy | RED |
+| 3 | Add a **second** job to `test`'s `needs` after a compliant first, without a ceiling | RED |
+| 4 | Raise a closure ceiling so the sum exceeds `CEILING_S/60` | RED |
+| 5 | Lower `CEILING_S` in `web-platform-release.yml` without lowering the closure ceilings | RED |
+| 6 | Remove a `needs` edge so a job leaves the derived set while still gating the deploy — the pinned closure string must catch it | RED |
+| 7 | Replace the resolved `CEILING_S` read with a hardcoded literal that drifts from the workflow | RED |
 
-**Harness rows:** deleting the per-job assertion while keeping the iteration must drive the suite
-RED. Must-PASS non-canonical input: a job declaring a *different* valid timeout from its siblings
-must PASS — the contract requires a declaration, not a particular value.
+**Harness rows.** Deleting the sum comparison while keeping the per-job iteration must drive the
+suite RED. Must-PASS non-canonical input: raising a closure ceiling **and** `CEILING_S` together, by
+different amounts, must PASS — the contract permits any sum under the ceiling, not a specific set of
+values.
 
 ## Open Code-Review Overlap
 
-None. `gh issue list --label code-review --state open --limit 200` returned 63 open issues; none of
-their bodies reference `.github/workflows/ci.yml`, `scripts/test-all.sh`,
-`scripts/lib/test-contention.sh`, `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh`,
-`plugins/soleur/test/required-checks-canonical-parity.test.sh`, or `ADR-072`.
+None. `gh issue list --label code-review --state open --limit 200` returned 63 open issues; none
+reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.yml`,
+`scripts/test-all.sh`, `scripts/prod-version-drift-check.sh`,
+`scripts/prod-version-drift-check.test.sh`, `scripts/lint-orphan-test-suites.sh`, or `ADR-072`.
 
 ## Files to Edit
 
-- `scripts/test-all.sh` — add the `SCRIPTS_SHARD` partition over the scripts group; emit the
-  per-leg suite list; add the `--list-shard-coverage` reporting path.
-- `.github/workflows/ci.yml` — matrix the `test-scripts` job (K=3), pass `SCRIPTS_SHARD` via `env:`,
-  declare `timeout-minutes` on the deploy-critical jobs.
-- `scripts/lib/test-contention.sh` — scale `TC_RUNTIME_CEILING_S` for a sharded leg.
+- `scripts/prod-version-drift-check.sh` — `DRIFT_SUSTAINED_THRESHOLD_MIN` 195 → 207 and its
+  derivation comment.
+- `.github/workflows/web-platform-release.yml` — `CEILING_S` 3000 → 3600, `await-ci`
+  `timeout-minutes` 60 → 72, and the anti-regression comment naming what the new ceiling bounds.
+  Nothing else in this file changes.
+- `scripts/test-all.sh` — `SCRIPTS_SHARD` round-robin filter in `run_suite` and `skip_suite`;
+  enumerate mode in the early pre-side-effect block; malformed-value validation.
+- `.github/workflows/ci.yml` — matrix on `test-scripts`; declared `timeout-minutes` on `test`'s
+  closure.
+- `scripts/lint-orphan-test-suites.sh` — `env -u TEST_GROUP -u SCRIPTS_SHARD`.
+- `scripts/lint-orphan-test-suites.test.sh` — widen the assertion that pins that invocation.
 - `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` — re-verify the job-block extractor
-  against a job that now carries `strategy:`; extend to assert profile identity across legs.
+  against a job carrying `strategy:`; assert profile identity across legs.
 - `plugins/soleur/test/required-checks-canonical-parity.test.sh` — gitleaks pin parity with one
   install site now a matrix.
+- `scripts/prod-version-drift-check.test.sh` — B9 must stay green with the new threshold and
+  ceilings; B8e's pinned closure is unchanged (no release job is added or removed).
 - `knowledge-base/engineering/architecture/decisions/ADR-072-adaptive-ci-signal-wait-for-deploy-gate.md`
-  — amend the sizing premise, add the re-measurement, correct the option-1 record.
+  — amend.
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-207-ci-wallclock-declared-budget.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-207-ci-declared-budget-bounds-deploy-gate.md`
   (ordinal provisional).
-- Guard 1 + Guard 2 suite (shard totality and determinism).
-- Guard 3 suite (deploy-critical job timeout declarations).
+- Guard 1 suite (shard totality) and Guard 2 suite (CI budget bounded by `CEILING_S`).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `ci.yml`'s `test-scripts` job declares `strategy.matrix.shard` with 3 legs and
-      `fail-fast: false`, and the job key is still literally `test-scripts`.
-- [ ] AC2 — the `test` aggregator is **unmodified**: `git diff origin/main -- .github/workflows/ci.yml`
-      shows no change within the `test:` job block, proving matrix legs roll into one result.
-- [ ] AC3 — `scripts/required-checks.txt` is unmodified, proving the required-check contract is
-      untouched.
-- [ ] AC4 — Guard 1 drives RED on each of its five mutation-matrix rows, and PASSes on a valid
-      K other than 3.
-- [ ] AC5 — Guard 2 drives RED on each of its four mutation-matrix rows, and PASSes on a reordered
-      discovery set.
-- [ ] AC6 — Guard 3 drives RED on each of its five mutation-matrix rows, and PASSes on a sibling
-      job declaring a different valid timeout.
-- [ ] AC7 — the union of the three legs' executed suite lists equals the unsharded scripts-group
-      discovery set, asserted by Guard 1 in CI against the real tree — not only against fixtures.
-- [ ] AC8 — `SCRIPTS_SHARD` unset runs the full scripts group unchanged, so
-      `bash scripts/test-all.sh scripts` locally and `TEST_GROUP=all` in `main-health-monitor.yml`
-      behave exactly as before.
-- [ ] AC9 — `bash plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` passes, with its awk
-      job-block extractor re-verified against the now-`strategy:`-bearing job.
-- [ ] AC10 — `bash plugins/soleur/test/required-checks-canonical-parity.test.sh` passes; the
-      gitleaks version+SHA256 pin is identical across every install site including each matrix leg.
-- [ ] AC11 — every `ci.yml` job with a `needs`-path into `test` declares `timeout-minutes`, each
-      sized above the measured post-shard p100 with headroom stated in an inline comment.
-- [ ] AC12 — `await-ci` is unchanged: `git diff origin/main -- .github/workflows/web-platform-release.yml`
-      is empty, and `CEILING_S` is still `3000`.
-- [ ] AC13 — `scripts/prod-version-drift-check.sh` and its test suite are unmodified, and
-      `bash scripts/prod-version-drift-check.test.sh` still passes — proving the drift alerter's
-      sensitivity was not spent.
-- [ ] AC14 — `bash plugins/soleur/test/c4-count-parity.test.sh` passes (10/10).
-- [ ] AC15 — `actionlint` is clean on `.github/workflows/ci.yml`, and each edited `run:` snippet
-      passes `bash -c` extraction. `bash -n` is **not** run against a workflow YAML file.
-- [ ] AC16 — ADR-207 exists with `status: accepted`; ADR-072 carries the dated re-measurement and
-      the corrected option-1 record and is **amended, not superseded** (its `status:` stays
-      `accepted`).
-- [ ] AC17 — the ADR ordinal is free across every `origin/*` ref, re-verified immediately before
+- [ ] AC1 — `CEILING_S` is `3600`, `await-ci` `timeout-minutes` is `72`, and
+      `timeout-minutes*60 >= 1.2 * CEILING_S` holds (ADR-072 invariant #7).
+- [ ] AC2 — `DRIFT_SUSTAINED_THRESHOLD_MIN` is `207`, and `bash scripts/prod-version-drift-check.test.sh`
+      passes with B9 green — proving the threshold moved before/with the ceilings, never after.
+- [ ] AC3 — `await-ci`'s polling logic, `notify-gated`, and the `migrate`/`deploy` `needs`/`if`
+      wiring are otherwise unchanged: the diff on `web-platform-release.yml` touches only the two
+      constants and their comment.
+- [ ] AC4 — `ci.yml`'s `test-scripts` declares `strategy.matrix` with `fail-fast: false`, the job
+      key is still literally `test-scripts`, and no leg carries `continue-on-error`.
+- [ ] AC5 — the `test:` job block is byte-unchanged (`git diff origin/main` shows no change within
+      it), proving matrix legs roll into one result.
+- [ ] AC6 — `scripts/required-checks.txt` is unmodified; `grep -c '^test-scripts$'` is `0` and
+      `grep -c '^test$'` is `1`. GitHub renders a matrix leg as `test-scripts (1/3)`, so this is
+      what makes matrixing safe for branch protection.
+- [ ] AC7 — K is justified in the plan/PR by the Phase 0 `TEST_TIMING_LOG` measurement, naming the
+      longest single suite (the floor no K can beat).
+- [ ] AC8 — `SCRIPTS_SHARD` unset runs the full group: `bash scripts/test-all.sh scripts` locally
+      and `TEST_GROUP=all` in `main-health-monitor.yml` behave exactly as before.
+- [ ] AC9 — malformed `SCRIPTS_SHARD` (`0/3`, `4/3`, `1/0`, `abc`, empty-after-trim) exits `2`,
+      following the `TEST_GROUP` validation precedent — never a silent full-group or empty run.
+- [ ] AC10 — each leg echoes its resolved `k/N`, and the values across legs are N distinct entries;
+      a leg that lost its `env:` is detected rather than passing green on the full group.
+- [ ] AC11 — the enumerate mode and the executing pass emit **identical label sequences** with
+      `SCRIPTS_SHARD` unset. Without this the enumerate pass and the partition can agree while
+      neither matches what CI runs.
+- [ ] AC12 — Guard 1 drives RED on each of its eight mutation rows, each mutation line-range-scoped
+      with its placement asserted, and PASSes on both declared non-canonical inputs.
+- [ ] AC13 — Guard 2 drives RED on each of its seven mutation rows and PASSes on its declared
+      non-canonical input.
+- [ ] AC14 — Guard 1 runs in CI against the real tree from a job that can observe **all** legs
+      (a non-sharded job invoking the enumerate mode K times, or a join job over uploaded per-leg
+      artifacts) — a guard running inside one leg cannot see a cross-leg union.
+- [ ] AC15 — a shard non-selection does not increment `skipped`, does not reach `_ceiling_declined`
+      accounting, and does not push a leg to ADR-181's `exit 3`.
+- [ ] AC16 — `bash scripts/lint-orphan-test-suites.test.sh` passes with the widened
+      `env -u TEST_GROUP -u SCRIPTS_SHARD` assertion.
+- [ ] AC17 — `bash plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` and
+      `bash plugins/soleur/test/required-checks-canonical-parity.test.sh` pass.
+- [ ] AC18 — `bash plugins/soleur/test/c4-count-parity.test.sh` passes (10/10).
+- [ ] AC19 — `actionlint` is clean on both edited workflows and each edited `run:` snippet passes
+      `bash -c` extraction. `bash -n` is **not** run against workflow YAML.
+- [ ] AC20 — ADR-207 exists with `status: accepted`; ADR-072 is **amended, not superseded** (its
+      `status:` stays `accepted`), carries the re-measurement, and records that item 4's premise was
+      stated in run-wall-clock terms — a quantity the gate does not measure.
+- [ ] AC21 — the ADR ordinal is free across every `origin/*` ref, re-verified immediately before
       merge; if renumbered, `grep -rn 'ADR-<old>' knowledge-base/project/{plans,specs}/` finds no
       stale reference in this feature's own artifacts.
-- [ ] AC18 — #5806 is updated with the evaluation outcome and re-armed with the post-shard
-      criterion, and is **not** closed.
-- [ ] AC19 — `python3 scripts/lint-guard-contract.py` resolves all three guard entries against the
-      shipped guards; `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`
-      is clean.
-- [ ] AC20 — the PR body uses `Closes #7902` and `Ref #5806` (never `Closes #5806`).
+- [ ] AC22 — #5806 is updated with the evaluation outcome, the fourteen scoping findings, and the
+      re-armed criterion keyed to **time-to-`test`**, and is **not** closed.
+- [ ] AC23 — `python3 scripts/lint-guard-contract.py` resolves both guard entries;
+      `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` is clean.
+- [ ] AC24 — the PR body uses `Closes #7902` and `Ref #5806` (never `Closes #5806`).
 
 ### Post-merge (automated)
 
-- [ ] AC21 — the first `ci.yml` run on main after merge completes with all three `test-scripts`
-      legs green, and measured wall clock is materially below the pre-merge p50 of 34.27 min.
-      Verified with `gh run view <id> --json jobs`.
-- [ ] AC22 — a deploy of current `main` is dispatched to unblock production via
+- [ ] AC25 — the first `ci.yml` run on main after merge completes with all legs green, and
+      **time-to-`test`** (the `test` job's `completed_at` minus the run's `created_at`) is below
+      25 min, evaluated over the first 3 runs rather than one — a single dispatch-starved run
+      legitimately exceeds any single-run bound. Verified via
+      `gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs`.
+- [ ] AC26 — a deploy of current `main` is dispatched via
       `gh workflow run web-platform-release.yml -f bump_type=patch`, and
-      `curl -fsS https://app.soleur.ai/health` subsequently reports a `build_sha` matching the
-      deployed commit. This is a `gh`-CLI step the ship phase runs, not a handoff.
-- [ ] AC23 — post-shard p100 over the following 10 main runs is recorded on #5806, and the re-armed
-      criterion (p100 > 60% of `CEILING_S`) is evaluated against it.
+      `curl -fsS https://app.soleur.ai/health` reports a `build_sha` matching the deployed commit.
+      A `gh`-CLI step the ship phase runs, not a handoff.
+- [ ] AC27 — post-shard time-to-`test` p100 over the following 10 main runs is recorded on #5806 and
+      the re-armed criterion evaluated against it. This is a soak, tracked on the issue.
 
 ## Test Scenarios
 
 ### Acceptance Tests (RED phase targets)
 
-- Given `SCRIPTS_SHARD=1/3`, when `test-all.sh scripts` runs, then it executes a strict subset of
-  the discovery set and prints exactly that subset.
-- Given all three legs' printed subsets, when unioned, then the result equals the unsharded
-  discovery set with no duplicates.
-- Given `SCRIPTS_SHARD` unset, when `test-all.sh scripts` runs, then it executes the full group.
-- Given the same suite path and K, when the mapping is invoked twice, then it yields the same leg.
-- Given a `ci.yml` job on the `needs`-path into `test` with no `timeout-minutes`, when Guard 3
-  runs, then it fails.
+- Given `SCRIPTS_SHARD=1/3`, when `test-all.sh scripts` runs, then it executes a strict subset and
+  emits exactly that subset's labels.
+- Given all legs' emitted label sets, when unioned, then the result equals the independently derived
+  registration set, with no duplicates.
+- Given `SCRIPTS_SHARD` unset, when `test-all.sh scripts` runs, then it executes the full group and
+  emits the same label sequence as the enumerate mode.
+- Given `SCRIPTS_SHARD=4/3`, when the runner starts, then it exits `2` without running any suite.
+- Given a relevance-declined suite, when its leg runs, then the suite is counted as assigned,
+  reported as declined with its reason, and the leg does not exit `3` on that account.
+- Given a closure ceiling raised past `CEILING_S/60`, when Guard 2 runs, then it fails.
 
 ### Regression Tests
 
-- Given the b551bdc1a shape — a CI run that took 51.6 min — when the sharded pipeline runs the same
-  tree, then wall clock lands under the 3000s ceiling and `await-ci` concludes success.
-- Given `test-scripts` fails in leg 2 only, when the `test` aggregator evaluates, then
+- Given the b551bdc1a shape — time-to-`test` of 51.6 min — when the raised ceiling is in effect,
+  then `await-ci` concludes success rather than fail-closing at 50 min.
+- Given `test-scripts` failing in one leg only, when the aggregator evaluates, then
   `needs.test-scripts.result` is not `success` and the required check fails.
-- Given ADR-133's contention lock, when three legs run on separate runners, then each leg remains
-  internally sequential and no in-runner parallelism is introduced.
+- Given a leg whose `SCRIPTS_SHARD` env was dropped, when it runs the full group, then the distinct
+  `k/N` assertion fails rather than the run reporting green.
 
 ### Edge Cases
 
 - Given a newly added scripts-group suite, when CI runs, then it is assigned to exactly one leg and
-  Guard 1 stays green without any manifest edit.
-- Given K changed from 3 to 4 in `ci.yml`, when Guard 1 runs, then totality holds for K=4.
-- Given a runner-starved run where dispatch queueing dominates, when CI completes, then wall clock
-  may still approach the ceiling — the named residual, escalated via the re-armed #5806 criterion.
+  Guard 1 stays green with no manifest edit.
+- Given `ci.yml` reduced from 3 legs to 2 while the partition still computes mod 3, when Guard 1
+  runs, then it fails on the orphaned leg's suites.
+- Given a runner-starved run, when dispatch delays a leg by ~21 min, then time-to-`test` still lands
+  well under the 3600s ceiling — the margin the raise exists to provide.
 
 ## Risk Analysis & Mitigation
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| Shard partition silently drops suites → required check green on a subset | **High** — worse than the current outage | Guard 1, written before the partition, asserting totality against real discovery in CI (AC7), not fixtures |
-| A single suite longer than a leg's target makes K ineffective | Medium | Measure the per-suite duration distribution before fixing K; if one suite exceeds ~8 min, choose K against the tail, not the mean |
-| Matrix leg drifts to a different runtime profile | Medium | Profile identity asserted by the shard-runtime-coverage and pin-parity suites (AC9, AC10) |
-| Residual: runner starvation still pushes wall clock near the ceiling | Medium | Named explicitly, not papered over; Phase 3's declared ceilings make it visible; #5806 re-armed with a post-shard criterion |
-| ADR-133 contention semantics violated by parallel legs | Medium | Matrix only (separate runners, sequential within); `TC_RUNTIME_CEILING_S` scaled per leg |
-| Adding 2 runner slots to an already-contended pool | Low | K=3 chosen over K=4 partly for this reason; net runner-minutes are roughly unchanged while wall clock falls |
-| awk job-block extractor breaks on the new `strategy:` key | Low | Re-run rather than assumed (AC9) |
+| Shard partition drops suites → required check green on a subset | **High** | Totality is structural (round-robin at the chokepoint), *and* Guard 1 asserts it against an independently derived reference set in CI against the real tree (AC12, AC14) |
+| Guard 1's reference set derived from the partition itself → tautology | **High** | Explicit mutation row 6; reference derived by static extraction + `--print-suite-globs` |
+| A leg silently runs the full group after losing its env | Medium | Distinct `k/N` assertion across legs (AC10); malformed values fail closed (AC9) |
+| One dominant suite floors a leg regardless of K | Medium | Phase 0 derives K from `TEST_TIMING_LOG` and names the longest suite; `registry-gate-mutation-battery` measures 860s–1675s and is relevance-gated |
+| K legs add dispatch draws to a contended pool | Medium | Measured dispatch p50 1.4 / p90 12.4 / max 21.0; the run already takes a max over four draws, so the change is 4→6; the raised ceiling absorbs it |
+| Ceiling raise costs drift-alert sensitivity | Low | Bounded to 12 min, inside the probe's own measured 61–243 min delivery interval; threshold moves first |
+| Relevance gating breaks the totality property | **Retired by design** | Guard 1 quantifies over assigned, not executed; per-leg `executed = assigned − declines` |
+| ADR-133 contention violated by parallel legs | **Retired by verification** | Both mechanisms already short-circuit under `CI` — `LOCK_SKIPPED_CI: … matrix shards are already isolated.` |
+| Matrix breaks branch protection | **Retired by verification** | Required check is `test`; `test-webplat` already ships a matrix and rolls up correctly today |
 
 ## Deferred Work (tracking issues required)
 
-- **#5806 — deploy off `workflow_run` (ADR-072 option 3).** Stays open, updated with the
-  `EXPECTED_SHA` fail-open finding, the verifier-not-deletion shape, the drift-formula blindness,
-  and the non-recursion confirmation; re-armed with the post-shard p100 criterion.
-- **Raise `CEILING_S`** — only if the re-armed criterion fires. Must move
-  `DRIFT_SUSTAINED_THRESHOLD_MIN` first (B9 has zero margin today), then `CEILING_S`, then
-  `timeout-minutes` at ≥ 1.2 × `CEILING_S`.
-- **Runner-pool contention** — measurement shows max concurrency of 4–17 across runs and that
-  runner availability, not the DAG, sets the spread. Worth its own issue now that the DAG's long
-  pole is removed.
+- **#5806 — deploy off `workflow_run` (ADR-072 option 3).** Stays open, updated with the fourteen
+  scoping findings and re-armed with the time-to-`test` criterion.
+- **Runner-pool contention.** Max concurrency measures 4–17 across runs; dispatch delay reaches
+  21 min. Worth its own issue now the DAG's long pole is removed. Verified: no open issue covers it
+  (`gh issue list --search "CI duration slow runner contention shard"` is empty), and the labels it
+  needs exist — `domain/engineering`, `type/chore`, `priority/p2-medium`, `priority/p3-low`.
+- **Aggregator diagnosis honesty.** `test`'s output is `echo "$shard: $result"`, so a
+  budget-exceeded leg and a cancelled-by-superseding-push leg render identically as
+  `test-scripts: cancelled`. Worth a step-level branch that names the measured cause.
 - **`plugins/soleur/test/worktree-manager-porcelain-sigpipe.test.sh` flakiness** — named in #7902 as
   context only, explicitly out of scope; file separately if it recurs.
 
@@ -688,37 +728,39 @@ their bodies reference `.github/workflows/ci.yml`, `scripts/test-all.sh`,
 
 ### Internal References
 
-- `.github/workflows/ci.yml` — `test-scripts` (unsharded long pole), `test-webplat`
-  (`strategy.matrix.shard` pattern to mirror), `test` (colon-delimited aggregator, one result per
-  shard), `lint-webplat` (the only job declaring `timeout-minutes`).
-- `.github/workflows/web-platform-release.yml` — `await-ci` and `CEILING_S: "3000"`;
-  `EXPECTED_SHA: ${{ github.sha }}` at the deploy job's #3409 `build_sha` gate; `notify-gated`.
-- `scripts/test-all.sh` — `TEST_GROUP` partitioning; `VITEST_SHARD` forwarding convention.
-- `scripts/lib/test-contention.sh` — ADR-133's advisory lock and `TC_RUNTIME_CEILING_S`.
-- `scripts/prod-version-drift-check.sh` / `.test.sh` — `DRIFT_SUSTAINED_THRESHOLD_MIN=195`, B8b
-  parity, B8e topology pin, B9 threshold safety (zero margin today).
-- `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh`,
-  `plugins/soleur/test/required-checks-canonical-parity.test.sh` — the two suites coupled to the
-  shard's shape and pins.
+- `.github/workflows/ci.yml` — `test-scripts` (the long pole), `test-webplat`
+  (`strategy.matrix.shard` precedent), `test` (colon-delimited aggregator), `lint-webplat` (the only
+  job declaring `timeout-minutes`); exactly two `needs:` edges.
+- `.github/workflows/web-platform-release.yml` — `await-ci`'s `test`-check-run poll and `exit 0`;
+  `CEILING_S: "3000"`; `EXPECTED_SHA: ${{ github.sha }}` (the #3409 gate); `notify-gated`.
+- `scripts/test-all.sh` — `run_suite()`/`skip_suite()` (the chokepoint pair, both incrementing
+  `suites`), `SUITE_GLOBS`, `--print-suite-globs`'s pre-side-effect handling, the
+  `registry-gate-mutation-battery` budget.
+- `scripts/lib/test-contention.sh` — ADR-133's advisory lock and `TC_RUNTIME_CEILING_S`, both
+  CI-exempt.
+- `scripts/prod-version-drift-check.sh` / `.test.sh` — `DRIFT_SUSTAINED_THRESHOLD_MIN`, B8b parity,
+  B8e closure pin, B9 threshold safety.
+- `scripts/lint-orphan-test-suites.sh` — the registration-set extractor Guard 1 reuses.
 - `knowledge-base/engineering/architecture/decisions/ADR-072-adaptive-ci-signal-wait-for-deploy-gate.md`.
 
 ### Institutional Learnings
 
-- `knowledge-base/project/learnings/2026-05-05-defense-relaxation-must-name-new-ceiling.md` — why a
-  bare ceiling raise is a deferral rather than a defense.
+- `knowledge-base/project/learnings/2026-05-05-defense-relaxation-must-name-new-ceiling.md` — the
+  raise names what the new ceiling bounds.
 - `knowledge-base/project/learnings/best-practices/2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`
-  — the documented pattern of ceilings raised and re-broken.
+  — why a raise alone would re-break.
 - `knowledge-base/project/learnings/best-practices/2026-06-30-adaptive-ci-poll-gate-wall-clock-ceiling-not-attempt-count.md`
-  — the gate this plan deliberately leaves intact, and why its wall-clock keying is load-bearing.
+  — the gate this plan preserves, and why wall-clock keying is load-bearing.
+- `knowledge-base/project/learnings/2026-08-13-every-guard-i-shipped-was-satisfiable-by-a-guard-that-asserts-nothing.md`
+  — the tautology row and the harness rows exist because of this.
 - `knowledge-base/project/learnings/2026-08-17-the-lint-that-was-meant-to-make-the-class-mechanical-was-never-pointed-at-the-repo.md`
-  — a green test of a gate is not a green gate; Guard 1 must run against the real tree (AC7).
+  — AC14 exists because a green test of a gate is not a green gate.
 - `knowledge-base/project/learnings/security-issues/2026-07-01-two-stage-privileged-workflow-split-and-its-review-traps.md`
-  — `workflow_run` traps, recorded on #5806 for the deferred work.
-- `knowledge-base/project/learnings/integration-issues/2026-04-21-workflow-dispatch-requires-default-branch.md`
-  — why option 3 cannot be verified pre-merge.
+  and `knowledge-base/project/learnings/integration-issues/2026-04-21-workflow-dispatch-requires-default-branch.md`
+  — `workflow_run` traps, recorded on #5806.
 
 ### Related Work
 
 - Closes #7902. Ref #5806 (updated and re-armed, deliberately not closed).
 - #5795 / PR #5051, #5052 — the `await-ci` lineage this plan preserves rather than replaces.
-- ADR-133 — the sequentiality constraint that forces a matrix rather than in-process parallelism.
+- ADR-133 (sequentiality and CI exemptions), ADR-181 (relevance-decline accounting).

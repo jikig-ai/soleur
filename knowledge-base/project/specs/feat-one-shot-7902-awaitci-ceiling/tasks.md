@@ -2,93 +2,121 @@
 
 Plan: `knowledge-base/project/plans/2026-09-07-fix-release-await-ci-ceiling-vs-ci-duration-plan.md`
 
-Decision: shard the long-pole `test-scripts` job and declare a CI duration budget (option 2).
-The `await-ci` gate, `CEILING_S=3000`, `notify-gated` and the whole release topology are
-**deliberately untouched**. Option 3 (`workflow_run`) stays deferred on #5806.
+Decision: **bounded ceiling raise + shard the long pole**, together. The raise is the deterministic
+unblock; the shard is what stops the raised ceiling becoming the next incident. Option 3
+(`workflow_run`) stays deferred on #5806.
 
-Phase order is load-bearing: the shard mechanism and its totality guard land **before** `ci.yml`
-calls it with a shard argument, so no commit leaves CI silently running a subset.
+Order is load-bearing twice over: the drift threshold moves **before** the ceilings (or B9 reds in
+between), and the partition + its guard land **before** `ci.yml` calls with a shard argument (or CI
+silently runs a subset).
 
-## Phase 0: Preconditions
+## Phase 0: Derive K from data that already exists
 
-- [ ] 0.1 Measure the per-suite duration distribution for the scripts group. If any single suite
-      exceeds ~8 min, choose K against the tail rather than the mean before committing to K=3.
-- [ ] 0.2 Re-read `scripts/lib/test-contention.sh` and ADR-133 to confirm the advisory-lock
-      semantics a per-leg run must preserve.
-- [ ] 0.3 Record the pre-change baseline (ci.yml wall p50 34.27 / p90 51.77 / max 57.40) so
-      Phase 3's ceilings and AC21 have a reference point.
+- [ ] 0.1 Pull `TEST_TIMING_LOG` from one full scripts-group run. Report the per-suite duration
+      distribution and name the single longest suite — that value is the floor no K can beat.
+      Known: `tests/scripts/registry-gate-mutation-battery` carries a 2,500,000 ms budget with
+      measured runs of 860,692 ms and 1,675,430 ms, and is relevance-gated.
+- [ ] 0.2 Choose K against the measured tail. K=3 is provisional, not an acceptance criterion.
+- [ ] 0.3 Record the baseline gated metric — time-to-`test` p50 34.1 / p90 49.6 / max 56.1 min.
+- [ ] 0.4 Confirm the ADR-133 CI exemptions still hold (advisory lock and runtime ceiling both
+      short-circuit under `CI`). Verified at plan time; re-confirm before relying on it.
 
-## Phase 1: Deterministic, total shard partition (contract first)
+## Phase 1: Bounded ceiling raise — the deterministic unblock
 
-- [ ] 1.1 Write the Guard 1 (shard totality) suite **before** the partition exists, from the
-      plan's mutation matrix — 5 RED rows plus the harness rows, parameterised over K.
-- [ ] 1.2 Write the Guard 2 (shard determinism) suite, likewise from the matrix.
-- [ ] 1.3 Add `SCRIPTS_SHARD=k/N` support to `scripts/test-all.sh`, partitioning the scripts group
-      by a stable hash of the suite path modulo N. Unset/empty must run the full group.
-- [ ] 1.4 Emit the per-leg executed suite list, and add the `--list-shard-coverage` reporting path
-      used by the plan's `discoverability_test`.
-- [ ] 1.5 Scale `TC_RUNTIME_CEILING_S` in `scripts/lib/test-contention.sh` for a sharded leg.
-- [ ] 1.6 Drive Guards 1 and 2 GREEN against the real discovery set, not fixtures.
+- [ ] 1.1 `scripts/prod-version-drift-check.sh`: `DRIFT_SUSTAINED_THRESHOLD_MIN` 195 → 207, and
+      update the derivation comment so the arithmetic matches the ceilings. **This lands first.**
+- [ ] 1.2 `.github/workflows/web-platform-release.yml`: `CEILING_S` 3000 → 3600 and `await-ci`
+      `timeout-minutes` 60 → 72, preserving ADR-072 invariant #7 (`timeout-minutes ≥ 1.2 ×
+      CEILING_S`) and the wall-clock-keyed ceiling.
+- [ ] 1.3 Update the anti-regression comment to name what the new ceiling bounds — CI liveness,
+      sized above the measured max of 56.1 min, not above p50.
+- [ ] 1.4 `bash scripts/prod-version-drift-check.test.sh` green, B9 included.
+- [ ] 1.5 Confirm nothing else in `web-platform-release.yml` changed — `await-ci`'s polling logic,
+      `notify-gated`, and the `migrate`/`deploy` wiring are untouched.
 
-## Phase 2: Matrix the test-scripts job
+## Phase 2: Round-robin partition at the `run_suite` chokepoint
 
-- [ ] 2.1 Add `strategy: {fail-fast: false, matrix: {shard: ["1/3","2/3","3/3"]}}` to `ci.yml`'s
-      `test-scripts` job; pass `SCRIPTS_SHARD: ${{ matrix.shard }}` via `env:`.
-- [ ] 2.2 Keep the job key literally `test-scripts` so `needs.test-scripts.result` and the
-      required-check contract are unchanged. Confirm the `test` aggregator block is untouched.
-- [ ] 2.3 Keep every leg's runtime profile identical — same gitleaks and likec4 pins, no
-      `setup-node`/`setup-bun` version pin (47+ suites assert the shard has no bun and no node).
-- [ ] 2.4 Re-run `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` and fix its awk
-      job-block extractor if `strategy:` breaks the bound. Do not assume it survives.
-- [ ] 2.5 Re-run `plugins/soleur/test/required-checks-canonical-parity.test.sh` for gitleaks pin
-      parity with one install site now a matrix.
+- [ ] 2.1 Write the Guard 1 (shard totality) suite **before** the partition, from the plan's
+      eight-row mutation matrix, including row 6 (the K=1 tautology stub) and row 8 (malformed
+      value). Each mutation must be line-range-scoped with its placement asserted.
+- [ ] 2.2 Add an **enumerate mode** to `scripts/test-all.sh` that records registrations without
+      executing them, handled in the same early block as `--print-suite-globs` — before `TMPDIR`
+      export, the bare-repo guard, `TEST_GROUP` validation and `tc_acquire`. A path that blocks on
+      the advisory lock deadlocks the gate on itself.
+- [ ] 2.3 Add `SCRIPTS_SHARD=k/N`. Filter inside `run_suite()` **before** `suites=$((suites + 1))`,
+      and mirror the identical filter into `skip_suite()` — both increment `suites`.
+- [ ] 2.4 Partition round-robin on the registration counter, keyed on the `run_suite` **label**.
+      Not a hash over the suite path: ~198 registrations are hand-written and ~24 name no path.
+- [ ] 2.5 A shard non-selection must not increment `skipped`, must not reach `_ceiling_declined`
+      accounting, and must not push the leg toward ADR-181's `exit 3`.
+- [ ] 2.6 Malformed `SCRIPTS_SHARD` (`0/3`, `4/3`, `1/0`, `abc`, empty) exits `2`, following the
+      `TEST_GROUP` validation precedent. Never a silent full-group or empty run.
+- [ ] 2.7 Unset/empty runs the full group. The filter keys on `SCRIPTS_SHARD` presence, never on
+      `TEST_GROUP == scripts`.
+- [ ] 2.8 `scripts/lint-orphan-test-suites.sh`: `env -u TEST_GROUP` → `env -u TEST_GROUP -u
+      SCRIPTS_SHARD`; widen the matching assertion in its companion suite.
+- [ ] 2.9 Drive Guard 1 GREEN against the real tree, with its reference set derived by static
+      `run_suite` extraction + `--print-suite-globs` — never by calling the partition with K=1.
 
-## Phase 3: Declare the CI duration budget
+## Phase 3: Matrix the job
 
-- [ ] 3.1 Write the Guard 3 suite (deploy-critical jobs declare a timeout) from its mutation
-      matrix, recomputing membership from the `needs` graph rather than a hand-listed set.
-- [ ] 3.2 Declare `timeout-minutes` on `test-scripts` (per leg), `test-webplat`, `test-bun`,
-      `test`, and every job with a `needs`-path into `test`.
-- [ ] 3.3 Size each ceiling above the measured post-shard p100 with the headroom stated in an
-      inline comment. A ceiling that kills a slow-but-healthy leg reintroduces this bug one layer
-      down.
-- [ ] 3.4 Drive Guard 3 GREEN against the real workflow.
+- [ ] 3.1 Add `strategy: {fail-fast: false, matrix: {shard: [...]}}` to `ci.yml`'s `test-scripts`;
+      pass `SCRIPTS_SHARD: ${{ matrix.shard }}` via `env:`. Comment why the group stays positional.
+- [ ] 3.2 Keep the job key literally `test-scripts`; no leg may carry `continue-on-error`.
+- [ ] 3.3 Each leg echoes its resolved `k/N`; assert N distinct values across N legs so a leg that
+      lost its `env:` is detected rather than passing green on the full group.
+- [ ] 3.4 Keep every leg's runtime profile identical — same gitleaks and likec4 pins, no
+      `setup-node`/`setup-bun` version pin.
+- [ ] 3.5 Re-run `plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` (its extractor anchors
+      on 2-space keys and `strategy:` is indented 4 spaces — verify, do not assume) and
+      `plugins/soleur/test/required-checks-canonical-parity.test.sh`.
+- [ ] 3.6 Confirm the `test:` job block is byte-unchanged and `scripts/required-checks.txt` is
+      unmodified.
 
-## Phase 4: Verify nothing else moved
+## Phase 4: Guard 2 — CI's declared budget is bounded by the gate
 
-- [ ] 4.1 Assert `git diff origin/main -- .github/workflows/web-platform-release.yml` is empty and
-      `CEILING_S` is still `3000`.
-- [ ] 4.2 Assert `scripts/prod-version-drift-check.sh` and its test suite are unmodified, and the
-      suite still passes — the drift alerter's sensitivity must not be spent.
-- [ ] 4.3 Run `bash plugins/soleur/test/c4-count-parity.test.sh` (expect 10/10).
-- [ ] 4.4 Run `actionlint` on `.github/workflows/ci.yml`; extract each edited `run:` snippet
-      through `bash -c`. Do **not** run `bash -n` against workflow YAML.
-- [ ] 4.5 Confirm `SCRIPTS_SHARD` unset still runs the full group, so local runs and
-      `main-health-monitor.yml`'s `TEST_GROUP=all` path are unchanged.
+- [ ] 4.1 Write the Guard 2 suite from its seven-row mutation matrix.
+- [ ] 4.2 Declare `timeout-minutes` on `test`'s `needs`-closure (today exactly `test-webplat`,
+      `test-bun`, `test-scripts`, `test`, plus the legs), sized above the measured post-shard p100
+      with headroom stated inline.
+- [ ] 4.3 Assert `max(closure ceilings) + test's own <= CEILING_S/60`, reading `CEILING_S` out of
+      `web-platform-release.yml` rather than restating it, with a **pinned closure string** (B8e's
+      shape) so a graph edit reds.
+- [ ] 4.4 Drive Guard 2 GREEN.
 
-## Phase 5: Architecture records
+## Phase 5: Guard placement in CI
 
-- [ ] 5.1 Re-derive the next free ADR ordinal across **every** `origin/*` ref (205 and 206 are
+- [ ] 5.1 Run Guard 1 from a job that can observe **all** legs — a non-sharded job invoking the
+      enumerate mode K times, or a join job over per-leg artifacts. A guard inside one leg cannot
+      see a cross-leg union.
+- [ ] 5.2 Assert the enumerate mode and the executing pass emit identical label sequences with
+      `SCRIPTS_SHARD` unset.
+
+## Phase 6: Architecture records
+
+- [ ] 6.1 Re-derive the next free ADR ordinal across **every** `origin/*` ref (205 and 206 are
       claimed on pushed branches; a `main`-scoped probe is wrong). Author
-      `ADR-<n>-ci-wallclock-declared-budget.md`, `status: accepted`.
-- [ ] 5.2 Amend ADR-072 — **amend, not supersede**. Add the dated re-measurement, record that
-      Decision item 4's sizing premise is falsified, and correct the option-1 record (its
-      rejection was pre-adaptive-wait; it now fails on the B9 coupling).
-- [ ] 5.3 Update #5806 with the evaluation outcome, the fourteen scoping findings, and the
-      re-armed criterion (post-shard p100 > 60% of `CEILING_S`). Do **not** close it.
-- [ ] 5.4 If the ordinal moved, sweep `knowledge-base/project/{plans,specs}/` for the old number.
+      `ADR-<n>-ci-declared-budget-bounds-deploy-gate.md`, `status: accepted`.
+- [ ] 6.2 Amend ADR-072 — **amend, not supersede**. Add the re-measurement, record that item 4's
+      sizing premise was stated in run-wall-clock terms (a quantity the gate does not measure), and
+      correct the option-1 record.
+- [ ] 6.3 Update #5806 with the evaluation outcome, the fourteen scoping findings, and the re-armed
+      criterion keyed to time-to-`test`. Do **not** close it.
+- [ ] 6.4 If the ordinal moved, sweep `knowledge-base/project/{plans,specs}/` for the old number.
 
-## Phase 6: Ship
+## Phase 7: Ship
 
-- [ ] 6.1 Run `python3 scripts/lint-guard-contract.py` and
+- [ ] 7.1 `python3 scripts/lint-guard-contract.py` and
       `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main`.
-- [ ] 6.2 Full battery at the `/ship` checkpoint.
-- [ ] 6.3 PR body uses `Closes #7902` and `Ref #5806` — never `Closes #5806`.
-- [ ] 6.4 Render `decision-challenges.md` (DC-1, the option-2-over-option-3 reversal) into the PR
-      body and file it as an `action-required` issue.
-- [ ] 6.5 Post-merge: verify the first main `ci.yml` run has three green `test-scripts` legs and a
-      materially reduced wall clock (AC21).
-- [ ] 6.6 Post-merge: `gh workflow run web-platform-release.yml -f bump_type=patch` to unblock
-      production, then `curl -fsS https://app.soleur.ai/health` and confirm `build_sha` (AC22).
-- [ ] 6.7 Post-merge: record post-shard p100 over the following 10 main runs on #5806 and evaluate
-      the re-armed criterion (AC23).
+- [ ] 7.2 `actionlint` on both edited workflows; `bash -c` extraction on edited `run:` snippets.
+      Never `bash -n` against workflow YAML.
+- [ ] 7.3 `bash plugins/soleur/test/c4-count-parity.test.sh` (expect 10/10).
+- [ ] 7.4 Full battery at the `/ship` checkpoint.
+- [ ] 7.5 PR body uses `Closes #7902` and `Ref #5806` — never `Closes #5806`.
+- [ ] 7.6 Render `decision-challenges.md` (DC-1) into the PR body and file it as an
+      `action-required` issue.
+- [ ] 7.7 File the deferred issues: runner-pool contention, and aggregator diagnosis honesty.
+- [ ] 7.8 Post-merge: time-to-`test` below 25 min over the first 3 main runs (AC25).
+- [ ] 7.9 Post-merge: `gh workflow run web-platform-release.yml -f bump_type=patch`, then
+      `curl -fsS https://app.soleur.ai/health` and confirm `build_sha` (AC26).
+- [ ] 7.10 Post-merge: record post-shard time-to-`test` p100 over 10 runs on #5806 (AC27).
