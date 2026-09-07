@@ -127,6 +127,33 @@ annotating a wrong verdict rather than correcting it — the shape the gate's ow
 
 ## Known adjacent gaps
 
+**A filing that predates the PR is outside the window even when declared.** FILED is computed only
+over issues with `createdAt >= <PR createdAt>`, and that conjunct is applied to BOTH arms — so a
+number on the `Filed:` line whose issue was created before the PR row existed is not counted. This
+is not hypothetical: `/brainstorm` files deferrals (`brainstorm/SKILL.md`, the
+`Deferred from #<parent-issue>` shape) and a standalone `/plan` files trackers, and both routinely
+run before any PR exists. Within `/one-shot` the draft PR is created at Step 0c, *before* Steps 1-2 planning, so
+filings from that path are inside the window; the exposure is the pre-PR routes.
+
+The recency conjunct is deliberate and should stay — without it any old issue number on the line
+would count. What changed in the #7896 review is that such a declaration is no longer **silent**.
+It used to be dropped from `Filing:` and simultaneously suppressed from the residual line (which
+subtracted `$declared` unconditionally), so it appeared nowhere at all. It is now named on
+`Undelivered declarations:` with the reason it could not be honoured. The gate still passes; the
+operator can now see why.
+
+**`Closes #<nonexistent>` still credits a close.** CLOSING is the one term in
+`NET = FILED - EXEMPT - CLOSING` never validated against the fetched issue list. Word-boundary and
+self-reference fail-opens were closed in the #7896 review, but existence is not checked, because
+checking it against the 500-row window would false-block a legitimate close of an older issue or
+one in another repo. The safe form is a report, not an arithmetic change.
+
+**Enforcement is client-side.** The blocking surface is a PreToolUse hook on `gh pr ready` /
+`gh pr merge`; the PR body is read at that instant and is editable afterwards, and merges that do
+not go through a local Bash call (the web UI, a merge queue, `--auto` completing later) never
+invoke it at all. The durable form is a required check re-running on `pull_request: [edited,
+synchronize]`. That is a separate piece of work and is not claimed here.
+
 - **`/review`'s `Ref #N` probe** uses a different, keyword-anchored predicate over issue bodies to
   find review-origin issues. It has the mirror-image exposure and is NOT fixed here — a different
   gate, a different corpus, and folding it in would put an unmeasured change inside a PR whose
