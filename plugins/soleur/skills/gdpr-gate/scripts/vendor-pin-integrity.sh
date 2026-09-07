@@ -3,8 +3,15 @@
 #
 # For each file argument: compute `git hash-object --no-filters` against the
 # working-tree contents and compare to the blob-sha pinned in NOTICE
-# frontmatter. Exit 1 on any mismatch (or on a staged file that is not in
-# the NOTICE registry — silent local addition).
+# frontmatter. Exit 1 on any mismatch (or on a staged file that is in neither
+# NOTICE registry — silent local addition).
+#
+# NOTE the script iterates only over its ARGUMENTS and never walks the tree,
+# so it cannot detect a reference file that is absent from both registries
+# unless lefthook happens to stage it. The symmetric-difference property
+# (disk(references/**) == lifted-files U soleur-authored) is bought by
+# plugins/soleur/test/vendor-pin-integrity.test.sh, which does walk. That is
+# the chokepoint; this script is not (#7710).
 #
 # `--no-filters` is load-bearing per TR1: skips gitattributes line-ending
 # conversion that would otherwise diverge from upstream blob SHAs on
@@ -79,13 +86,41 @@ if (( VERIFY_UPSTREAM )); then
 fi
 
 # Build expected map (rel_path → blob-sha) from NOTICE.
+#
+# TWO registries feed this map, with the same record shape and opposite
+# provenance (#7710):
+#   lifted-files    — upstream-derived, pinned against goSprinto MIT content.
+#   soleur-authored — written from scratch for this plugin, no upstream.
+# Both are tamper-checked identically; only the ORIGIN map below differs, and
+# it exists so a mismatch names the list the file actually belongs to. Before
+# #7710 only `lifted-files` was consulted, so every Soleur-authored reference
+# file was rejected as a "silent local addition" and could not be committed
+# without `--no-verify` — which blocked the documented v2->v3 lifecycle of
+# `legal-consent.md`.
 declare -A EXPECTED=()
+declare -A ORIGIN=()
 while IFS= read -r line; do
   [[ -z "$line" ]] && continue
   rel_path="${line%%:*}"
   sha="${line##*:}"
   EXPECTED["$SKILL_PREFIX/$rel_path"]="$sha"
+  ORIGIN["$SKILL_PREFIX/$rel_path"]="lifted-files"
 done < <(bash "$PARSER" lifted-files)
+
+while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  rel_path="${line%%:*}"
+  sha="${line##*:}"
+  # A path in BOTH registries is a provenance falsification, not a duplicate
+  # pin: it would attest MIT provenance for Soleur's own writing. Refuse
+  # rather than let one map silently win.
+  if [[ -n "${EXPECTED["$SKILL_PREFIX/$rel_path"]:-}" ]]; then
+    echo "vendor-pin-integrity: $SKILL_PREFIX/$rel_path appears in BOTH lifted-files and soleur-authored — provenance is ambiguous; a file is upstream-derived or Soleur-authored, never both." >&2
+    exit 1
+  fi
+  EXPECTED["$SKILL_PREFIX/$rel_path"]="$sha"
+  ORIGIN["$SKILL_PREFIX/$rel_path"]="soleur-authored"
+done < <(bash "$PARSER" soleur-authored)
 
 mismatches=0
 for f in "$@"; do
@@ -109,7 +144,7 @@ for f in "$@"; do
 
   expected="${EXPECTED[$rel]:-}"
   if [[ -z "$expected" ]]; then
-    echo "vendor-pin-integrity: $rel is staged but not in NOTICE lifted-files — silent local addition? Update NOTICE registry or remove the file." >&2
+    echo "vendor-pin-integrity: $rel is staged but appears in neither NOTICE lifted-files nor soleur-authored — silent local addition? Add it to lifted-files if it is vendored from upstream, or to soleur-authored if it is written for this plugin, or remove the file." >&2
     mismatches=$((mismatches + 1))
     continue
   fi
@@ -122,7 +157,17 @@ for f in "$@"; do
 
   actual="$(git hash-object --no-filters "$REPO_ROOT/$rel")"
   if [[ "$actual" != "$expected" ]]; then
-    echo "vendor-pin-integrity: BLOB SHA mismatch on $rel (expected $expected, got $actual). Either revert the local edit or run the vendor-drift workflow to bump NOTICE." >&2
+    # Name the list the file belongs to AND a mechanism that exists. The
+    # previous text sent a blocked contributor to "the vendor-drift
+    # workflow", deleted in #4483 — the only exit offered at the moment
+    # their commit is refused, and a dead end.
+    origin="${ORIGIN[$rel]:-lifted-files}"
+    echo "vendor-pin-integrity: BLOB SHA mismatch on $rel (registry $origin: expected $expected, got $actual)." >&2
+    if [[ "$origin" == "soleur-authored" ]]; then
+      echo "  This file is Soleur-authored, so editing it is expected. Update its local-blob-sha in the soleur-authored block of $SKILL_PREFIX/NOTICE to: $actual" >&2
+    else
+      echo "  This file is vendored from upstream. Either revert the local edit, or — if this is a deliberate re-vendor — update its local-blob-sha in the lifted-files block of $SKILL_PREFIX/NOTICE to: $actual and record the upstream delta in the NOTICE table." >&2
+    fi
     mismatches=$((mismatches + 1))
   fi
 done
