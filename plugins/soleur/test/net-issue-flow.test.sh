@@ -1066,6 +1066,29 @@ else
   fail "R4 expected both #7720 and #7721 on Attributed:; got: $(tr '\n' '|' < "$WORK/out")"
 fi
 
+# --- R7: an EMPTY residual must print NO line, not a malformed one ------------
+# Regression for the @tsv empty-field collapse. Tab is IFS-whitespace, so an
+# empty numbers field shifted every later field left and the gate printed a
+# literal `Possible unattributed filings: #-`. Found by dogfooding, not by any
+# fixture — every other case here has a non-empty residual.
+PR_BODY_FILE="$WORK/body-r7"; export PR_BODY_FILE
+ISSUE_LIST_FILE="$WORK/issues-r7"; export ISSUE_LIST_FILE
+printf 'A PR body that mentions no issue numbers at all.\n' > "$PR_BODY_FILE"
+printf '%s\n' '[]' > "$ISSUE_LIST_FILE"
+run_gate
+cases=$((cases + 1))
+if ! grep -qE 'Possible unattributed filings' "$WORK/out"; then
+  pass "R7 empty residual prints NO unattributed line"
+else
+  fail "R7 printed an unattributed line for an empty residual: $(tr '\n' '|' < "$WORK/out")"
+fi
+cases=$((cases + 1))
+if ! grep -qE '#-' "$WORK/out"; then
+  pass "R7 never prints a malformed '#-' number"
+else
+  fail "R7 emitted a malformed '#-': $(tr '\n' '|' < "$WORK/out")"
+fi
+
 # --- R5 (M8): a filed-then-CLOSED issue is STILL a filing ---------------------
 # THE ESCAPE ROW. Conjoining `state == "OPEN"` onto the declared disjunct
 # satisfies every other row in the matrix while violating the property — which
@@ -1168,7 +1191,7 @@ fi
 # conservation check above: routing it through fail() puts the floor inside the
 # thing it is meant to police.
 # ---------------------------------------------------------------------------
-MIN_ASSERTIONS=102
+MIN_ASSERTIONS=104
 if [[ "$cases" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$cases" "$MIN_ASSERTIONS" >&2

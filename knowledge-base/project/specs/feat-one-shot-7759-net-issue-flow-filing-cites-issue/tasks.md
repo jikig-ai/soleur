@@ -132,16 +132,16 @@ never inside `$( )`.
 
 ## Phase 9 — Verification
 
-- [ ] 9.1 AC-G1..AC-G3: suite green, `MIN_ASSERTIONS` exact, `gh issue list` argv byte-unchanged.
-- [ ] 9.2 AC-G4: R1 red-before / green-after through the seam, keyed on named FAIL lines.
-- [ ] 9.3 AC-G7: firing fixture emits exactly one `net-issue-flow-body-attributed` row by exact
+- [x] 9.1 AC-G1..AC-G3: suite green, `MIN_ASSERTIONS` exact, `gh issue list` argv byte-unchanged.
+- [x] 9.2 AC-G4: R1 red-before / green-after through the seam, keyed on named FAIL lines.
+- [x] 9.3 AC-G7: firing fixture emits exactly one `net-issue-flow-body-attributed` row by exact
       `.rule_id` match; clean fixture emits none.
 - [ ] 9.4 AC-G8: stub-seam runtime delta vs the `origin/main` gate on the same fixture < 200 ms.
-- [ ] 9.5 AC-G9: `git diff --stat origin/main -- .claude/hooks/ship-net-issue-flow-gate.sh` empty and the
+- [x] 9.5 AC-G9: `git diff --stat origin/main -- .claude/hooks/ship-net-issue-flow-gate.sh` empty and the
       four `hook remedy needle` assertions pass.
 - [ ] 9.6 Assert the declared `Filed:` line survives a Phase 6 body regeneration.
-- [ ] 9.7 Verify every `knowledge-base/` citation in the plan resolves.
-- [ ] 9.8 **AC-D1 (dogfooding).** Run the gate against this PR; expect
+- [x] 9.7 Verify every `knowledge-base/` citation in the plan resolves.
+- [x] 9.8 **AC-D1 (dogfooding).** Run the gate against this PR; expect
       `Closing: 1 (#7759) / Filing: 0 / Net: -1 / PASS`. Then **hand-reproduce the FILED selector**
       against the live issue list rather than trusting the verdict — a fix PR that passes by exploiting
       its own defect is the one outcome this plan must not produce.

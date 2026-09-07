@@ -386,7 +386,16 @@ GATE_ROWS="$(printf '%s' "$ISSUES_JSON" | jq -r \
     # Trailing sentinel row carrying the report-only set. Consumed by the loop
     # below and never counted — `_num` is non-numeric so it cannot be mistaken
     # for an issue row.
-    ("__UNATTRIBUTED__\t" + ($bodyonly | map(tostring) | join(" ")) + "\t-\t-")' 2>/dev/null)" \
+    # SENTINEL the numbers field, never emit it empty. Tab is IFS-WHITESPACE, so
+    # `read -r a b c d` COLLAPSES an empty middle field and every later field
+    # shifts left — with an empty $bodyonly the row became `__UNATTRIBUTED__ - -`
+    # and the consumer read "-" as the number list, printing a literal
+    # `Possible unattributed filings: #-`. Found by running this gate against its
+    # own PR; no fixture had an empty residual.
+    ("__UNATTRIBUTED__\t"
+     + (if ($bodyonly | length) == 0 then "NONE"
+        else ($bodyonly | map(tostring) | join(" ")) end)
+     + "\t-\t-")' 2>/dev/null)" \
   || _fail_open "could not parse issue list"
 
 FILED=0
@@ -402,7 +411,7 @@ while IFS=$'\t' read -r _num _verdict _attr _detail; do
   # mistaken for an issue row, and handled BEFORE the FILED increment so it
   # cannot touch the count.
   if [[ "$_num" == "__UNATTRIBUTED__" ]]; then
-    UNATTRIBUTED_NUMS="$_verdict"
+    [[ "$_verdict" == "NONE" ]] || UNATTRIBUTED_NUMS="$_verdict"
     continue
   fi
   FILED=$((FILED + 1))
