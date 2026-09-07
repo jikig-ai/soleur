@@ -53,7 +53,7 @@ Only the rows that **changed the plan's shape**. Each was measured, not inferred
 | 7874(c): "reach the host via cloud-init / Terraform" | **Unavailable today.** The target is the Phase-2 **Robot dedicated GEX44** — the runbook states "not Cloud/`hcloud`", "**Not** Cloud TF birth". Robot uses `installimage`, not cloud-init; `git ls-files '*.tf'` shows no root for grok/GEX. | Defer with a tracked issue. `hr-all-infrastructure-provisioning-servers` **binds** (real debt); `hr-fresh-host-provisioning-reachable-from-terraform-apply` does **not** (not a prod service under `apps/<app>/infra/`). |
 | 7786: "four files" | **Six.** `docs/legal/privacy-policy.md` (§5.10) and its mirror carry the same claim and are in no issue's scope. Verified: `grep -rn 'no off-host'` → 6 files. | Fold both in. |
 | 7786: "live since 2026-05-21" | **Two streams.** `f08ac4c46` (2026-05-21, #4279) shipped **host** journald + host_metrics. `223364c14` (2026-06-02, #4786) added `[sources.app_container_journald]` matching `CONTAINER_NAME = ["soleur-web-platform"]` — the **application container's** stdout, which is what the stale clause is about. | The replacement clause carries **2026-06-02 (#4786)** for the application stream, 2026-05-21 (#4279) for the host plane. |
-| 7786: "do NOT caveat the Better Stack disclosure" | Honoured for the **conclusion**. But §2.3(m)(ii) contains a **falsified ground** — "under processor-DPA terms" — while the register and `compliance-posture.md` record Better Stack as "NOT EXECUTED — no Art. 28(3) instrument recorded". The register's 2026-09-03 correction (#7717) **assigns that published sentence to #7786's scope**. | Re-ground on the register's three limbs (no Art. 4(12) event; intra-EU CZ → `eu-central-1a`; pseudonymised at the VRL boundary). The conclusion is untouched. |
+| 7786: "do NOT caveat the Better Stack disclosure" | Honoured for the **conclusion**. But §2.3(m)(ii) contains a **falsified ground** — "under processor-DPA terms" — while the register and `compliance-posture.md` record Better Stack as "NOT EXECUTED — no Art. 28(3) instrument recorded". The register's 2026-09-03 correction (#7717) **assigns that published sentence to #7786's scope**. | Re-ground on the register's three limbs (no Art. 4(12) event; intra-EU CZ → `eu-central-1a`; payload pseudonymised in the application before egress). The conclusion is untouched. |
 | 6474: scope is the register | The same false mechanism is **in the published corpus**: `docs/legal/data-protection-disclosure.md` §2.3(m) and `docs/legal/privacy-policy.md` §5.14 both say "30 MB Hetzner Docker json-file rolling buffer", plus both mirrors. Verified: `grep -rn '30 MB'` → 4 files. | #6474 and #7786 cannot be separated. Same phase. |
 | 6474(1): "correct §(f)" | Live, and **worse than filed**: the claim appears **twice** in the cell — the opening clause *and* "The **mechanism is the record**: 30 MB rolling per container". The 2026-09-03 correction rested the whole Art. 30(1)(f) discharge on it. Its anchor `cloud-init.yml:303-310` is already rotted (the block is ~458-461). | Correct both sites; re-anchor to an executable assertion. |
 | 7787: promotion trigger | **Discharged with margin.** 14/14 green `test-scripts` runs on `main` since the gate landed (`5d8a12736`, 2026-09-04); **zero** `::warning::lint-legal-registers` ever emitted, across two substantive legal amendments (#7803, #7838). Replaying predicate (a) over all 12 legal-corpus commits since 2026-06-01: 4 post-gate → 0 hits; 7 pre-gate → 1 hit each, and that hit was a **true positive** fixed by #7782. | Promote. No scope change is a precondition. |
@@ -130,18 +130,29 @@ suppression means something different: **class (a)** (a false positive owned by 
 
 The gate fired on `SSH`/`firewall`/`unreachable`/`handshake` and
 `hr-ssh-diagnosis-verify-firewall` telemetry was emitted. This plan edits the runbooks that
-encode the diagnosis rather than diagnosing a live outage, so the checklist applies as three
-**constraints on the edit**, not as a probe set:
+*encode* the L3→L7 diagnosis rather than diagnosing a live outage, so the four layers are
+dispositioned against **the edit's change surface**. Per the checklist's own rule,
+"obvious"/"unlikely" without an artifact is not a valid opt-out — each row carries one.
 
-1. **L3 before L7.** `admin-ip-drift.md` `## Diagnosis` Steps 1–4 (egress IP → Doppler →
-   `hcloud firewall describe` → diff) must stay ahead of every L7 step. The runbook states the
-   ordering itself and cites the rule.
-2. **The `## Symptom` transcript is the routing discriminator** — its next paragraph sends the
-   reader to `ssh-fail2ban-unban.md` on the presence of sshd journal entries. It cannot move or
-   be reworded.
-3. **Step 6 of 6 cannot be relocated** in `ssh-fail2ban-unban.md`.
+| Layer | Disposition | Artifact |
+|---|---|---|
+| **L3 — firewall allow-list** | **Preserved, verified.** No prescribed edit touches `admin-ip-drift.md` `## Diagnosis` (egress IP → Doppler → `hcloud firewall describe` → diff). | The lint's finding lines are `admin-ip-drift.md:22,37,177,210,227` and `ssh-fail2ban-unban.md:23,126` — **every edit site is outside `## Diagnosis`**. A rename-only simulation clears 177 alone; 210 and 227 still flag, proving the carve terminates at `## Prevention` and does not bleed into `## Sharp Edges` / `## Do NOT`. |
+| **L3 — DNS / routing** | **Opt-out with artifact.** Neither runbook resolves a hostname on the SSH path — the host is addressed as a literal IP at every step, so there is no resolver hop for the edit to reorder and the edit adds none. | `grep -nE '135\.181\.45\.178\|soleur\.ai'` over both runbooks: six literal-IP sites on the SSH path, one hostname site (`## Symptom`'s "HTTPS 200 on `app.soleur.ai`"), and that site is prose **below** the wrapped fence, outside every edit. |
+| **L7 — TLS / proxy** | **Opt-out with artifact.** The change surface is two markdown files; no HTTPS path is modified. | The cross-layer discriminator ("host is otherwise reachable: `hcloud server list` shows `running`, HTTPS 200 on …") sits below the ` ```text ` fence the Phase 1.2 region wraps; verified byte-identical after a simulated edit. |
+| **L7 — application (sshd journal)** | **Preserved, verified.** The journal-absence signal is the load-bearing routing discriminator and is untouched in both files. | The three inline markers land at `## Root Cause`, `## Sharp Edges` and `## Do NOT` — none in `## Symptom` or `## Diagnosis`. |
 
-Only "suppress and reframe in place" satisfies all three. Relocation is ruled out on evidence.
+**Ordering discipline survives.** `admin-ip-drift.md` `## Diagnosis` states it in its own words
+("L3 (firewall) must be cleared before any L7 (sshd, fail2ban) hypothesis is considered. This
+ordering is enforced by AGENTS.md `hr-ssh-diagnosis-verify-firewall`"), carries the fall-through
+to `ssh-fail2ban-unban.md`, and that runbook carries the reverse pointer. All four carriers are
+prose outside every wrapped fence and every marker.
+
+**Blast radius of Phase 0, measured corpus-wide:** a before/after finding-set diff over all 9,562
+tracked `*.md` files is **0 lines**.
+
+**Constraints this yields on the edit** — the only shape that satisfies all four layers is
+*suppress and reframe in place*: the `## Symptom` transcript is the discriminator and cannot move
+or be reworded; Step 6 of 6 cannot be relocated. Relocation is ruled out on evidence, not taste.
 
 ---
 
@@ -209,8 +220,16 @@ see the hazard in `## Research Reconciliation`'s final row.
 1. Split `_is_carve_heading` into two predicates, or have it report which arm matched: add
    `_is_last_resort_heading(title)` carrying the existing `Last-resort diagnosis` regex verbatim.
    `_is_carve_heading` keeps both arms so the `Resolved` behaviour is unchanged.
-2. Track `carve_last_resort` alongside `carve` / `carve_level`, set only by the last-resort arm
-   and cleared by the same `level <= carve_level` rule.
+2. Track `carve_last_resort` alongside `carve` / `carve_level`. **Assign, never OR** — set it
+   with `carve_last_resort = _is_last_resort_heading(title)` *inside* the
+   `if _is_carve_heading(title):` branch, and clear it in the `elif`.
+
+   **This is load-bearing and the obvious form is wrong.** The existing clearing rule lives only
+   in the `elif`, which is skipped whenever the *next* heading is itself a carve heading. So the
+   sequence `## Last-resort diagnosis` → `## Resolved` (equal or shallower level) takes the `if`
+   branch, resets `carve_level`, and would leave `carve_last_resort` still true — silently
+   suppressing a fenced host-login line under `## Resolved`. Not reachable today (zero
+   last-resort headings exist), but Phase 1 creates the first two. Guard 1 row 7 pins it.
 3. In the in-fence branch, gate the host-login exception:
    `if HOST_LOGIN_RE.search(raw) and not carve_last_resort:`.
 4. Extend `scripts/lint-infra-no-human-steps.test.sh` with the fixtures in `## Guard Contract`
@@ -226,25 +245,52 @@ Files: `knowledge-base/engineering/operations/runbooks/admin-ip-drift.md`,
 `.../ssh-fail2ban-unban.md`.
 
 1. **Class (b-probe) — no ignore region needed once Phase 0 lands.** Rename the two enclosing
-   subsection titles so the carve reaches the fenced probes, in place, with no content moved:
-   - `### Step R3 -- Verify` → `### Last-resort diagnosis — Step R3: verify SSH is restored`
+   subsection titles so the carve reaches the fenced probes, in place, with no content moved.
+   **The disambiguation must reach the HEADING, not only the prose below it** — the misreading
+   happens at the heading (table of contents, skim, `grep -i 'last.resort'`):
+
+   - `### Step R3 -- Verify` →
+     `### Last-resort diagnosis (SSH channel, after the no-SSH probes) — Step R3: confirm SSH is restored`
    - `### Step 6: Verify from the operator machine` →
-     `### Last-resort diagnosis — Step 6: verify from the operator machine`
+     `### Last-resort diagnosis (SSH channel — not the noVNC channel of last resort) — Step 6: confirm SSH is restored`
 
-   The title must **begin** with `Last-resort diagnosis` (prefix-anchored after
-   decoration-stripping). These are the **only two removed lines** in the whole runbook diff.
+   The title must **begin** with `Last-resort diagnosis`; the parenthetical is verified safe
+   against the real predicate (prefix-anchored `re.match` with a trailing `\b`, decoration
+   stripped), and it matches the existing house convention — `inngest-server.md` and
+   `oauth-probe-failure.md` both write *"Last-resort diagnosis (on-host, only if the HTTP route
+   is itself down):"*. These are the **only two removed lines** in the whole runbook diff.
+
    This also removes the need to split `admin-ip-drift.md`'s Step R3 fence: the carve covers the
-   whole section, so the `hcloud firewall describe` line beside the probe is not suppressed by a
-   region that would also hide future additions.
+   whole section (bounded by `## Prevention`, measured), so the `hcloud firewall describe` line
+   beside the probe is not hidden by a region that would also absorb future additions.
 
-   Each renamed section gains one reader-visible sentence carrying the rule's "after 3 tries"
-   precondition, naming the no-SSH probes to exhaust first, and — in `ssh-fail2ban-unban.md` —
-   distinguishing this from that runbook's pre-existing *"Channel of last resort: Hetzner Cloud
-   Console (noVNC)"* header, so the document does not end up with two unrelated senses of "last
-   resort". Neither section is moved, so the L3→L7 order and the numbered procedures are intact,
-   and no new competing entry point is created (this is why no separate `## Last-resort
-   diagnosis` section is appended — an appended section would have no reader path into it and
-   would duplicate `## If This Runbook Does Not Work`, which already serves that role).
+   **The collision is directional, and there are three senses — not two.**
+   `ssh-fail2ban-unban.md` declares *"Channel of last resort: Hetzner Cloud Console (noVNC
+   in-browser)"* about the **whole procedure**, whose premise is that SSH is down. The renamed
+   Step 6 is the one step that **is** SSH, from the operator laptop. A heading-skimming reader
+   would get "when all else fails, try SSH from your laptop" — the inversion of the runbook's
+   premise — and be routed away from `## If This Runbook Does Not Work`, the document's actual
+   terminal section. A third sense already exists in the sibling file: `admin-ip-drift.md`
+   carries `# Last-resort fallback:` inside `## Diagnosis` Step 1's curl chain (the third
+   IP-echo service), which is an L3 probe, not an SSH step.
+
+   Each renamed section therefore gains a reader-visible sentence that **opens by naming the
+   section terminal**, before it carries the precondition:
+
+   > *This is the terminal verification of the recovery above, not an entry point — do not start
+   > here. Reach it only after Steps 1–N have run and the no-SSH probes are exhausted, per
+   > `hr-no-ssh-fallback-in-runbooks`.*
+
+   plus, in `ssh-fail2ban-unban.md`: *"last resort" here names the SSH **probe**, not the
+   recovery **channel** — the channel of last resort is the noVNC console named in the header,
+   and the escalation path when this runbook fails is `## If This Runbook Does Not Work`*;
+   plus, in `admin-ip-drift.md`: *distinct from the `# Last-resort fallback:` curl service in
+   `## Diagnosis` Step 1, which is an L3 probe.*
+
+   Neither section moves, so the L3→L7 order and both numbered procedures stay intact, and no
+   new `##`-level entry point is created. No separate `## Last-resort diagnosis` section is
+   appended: it would have no reader path into it and would duplicate
+   `## If This Runbook Does Not Work`, which already serves that role.
 2. **Class (b-transcript)** — the two `## Symptom` fences. Pasted failure transcripts, not steps;
    the `## Symptom` heading cannot be renamed because it is the reader's entry point and the
    discriminator that routes between the two runbooks. Wrap each **fence** in a
@@ -325,16 +371,30 @@ File: `knowledge-base/engineering/operations/runbooks/grok-build-hetzner-dogfood
    of the off-host clause.) The `level >= 40` subset of the user-serving application container's
    logs has shipped to Better Stack Logs since **2026-06-02 (PR #4786)**; host journald and
    `host_metrics` since 2026-05-21 (PR #4279); retention there is 90 days.
-3. **Scope the pseudonymisation claim to the Vector paths.** The register records the
-   `soleur-registry` direct zot shipper as traversing no Vector and computing no `userIdHash`. A
-   blanket claim would be freshly false.
+3. **Attribute the pseudonymisation to the APPLICATION, not to Vector — this was measured live
+   and the obvious framing is false.** A production record pulled 2026-09-07 via
+   `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep userIdHash`
+   carries `source_kind: "app_container"`, pino `level: 50`, an intact `userIdHash`, and the tag
+   `pii_scrub_applied: "drop_userdata+string"` — **no `+structured`**.
+   `[transforms.pii_scrub_structured]` short-circuits on `if !exists(parsed_obj.userIdHash)`, so
+   the HMAC stage never runs on this stream: the hash is computed **in the application's pino
+   logger, before the line reaches journald**. Vector contributes the Art. 9 key drop and the
+   string backstop, and is a no-op HMAC backstop here.
+
+   So "pseudonymised at the VRL boundary" is not wrong about raw-`userId` lines — **it does not
+   govern this stream**, which is precisely the "governs other containers, not this one" shape
+   this PR exists to retire. Publishing it as a ground for the no-Art. 4(12) conclusion would
+   reproduce the defect one clause away from its correction. Ground it on what the live tag
+   proves. The register's carve-out still applies separately: the `soleur-registry` direct zot
+   shipper traverses no Vector and computes no `userIdHash` at all.
 4. **No correction bracket on a published page.** Dated `**[… CORRECTION …]**` brackets are the
    register's convention. Published pages get currently-true statements plus a `Last Updated`
    bump; the audit trail goes in the register (Phase 4).
 5. Correct the Better Stack limb's three defects: date + emitting unit; the falsified ground
    "under processor-DPA terms" (re-grounded on the register's three limbs — no Art. 4(12) event,
-   intra-EU CZ → `eu-central-1a`, pseudonymised at the VRL boundary; the no-notification
-   **conclusion** is untouched); and the stale `AC15 of PR #4293` pointer, whose escalation is
+   intra-EU CZ → `eu-central-1a`, and the payload pseudonymised in the application before
+   egress per Phase 3.3 — NOT "at the VRL boundary"; the no-notification **conclusion** is
+   untouched); and the stale `AC15 of PR #4293` pointer, whose escalation is
    now **#7529**. **That pointer is live at four sites, not two** — DPD and its mirror, plus
    `docs/legal/privacy-policy.md` §5.14 and its mirror. Sweep all four.
 
@@ -700,7 +760,7 @@ failure_modes:
     detection: "scripts/probe_legal_corpus_truth.py FORBIDDEN arm over both surfaces x three documents, wired blocking in scripts/test-all.sh by Phase 5.3"
     alert_route: "CORPUS-FALSE on stderr, rc=1, red on the required `test` context"
   - mode: "The corpus-truth probe passes while examining nothing"
-    detection: "the checked-count floor added in Phase 5.2; the count is printed beside CORPUS-OK"
+    detection: "the checked-count floor added in Phase 5.2 (the run_suite wiring is Phase 5.3); the count is printed beside CORPUS-OK"
     alert_route: "rc=1 before any FORBIDDEN comparison is trusted"
   - mode: "An unresolved marker lands in a legal register"
     detection: "scripts/lint-legal-registers.sh predicate (a) over the fixed 4-file REGISTER_FILES list"
@@ -710,10 +770,13 @@ failure_modes:
     alert_route: "::error::lint-legal-registers: only N assertion(s) ran, expected >= 7"
   - mode: "A new host-login step is added to a runbook outside a sanctioned section"
     detection: "scripts/lint-infra-no-human-steps.py, lefthook pre-commit + the CI --changed step"
-    alert_route: "commit blocked locally; lint-bot-statuses reds in CI"
+    alert_route: "commit blocked locally by lefthook (the only blocking arm); lint-bot-statuses annotates in CI but is NOT in scripts/required-checks.txt and does not block merge. Layer 6 — GitHub Actions run log, gh run view --log --job"
   - mode: "An SSH probe is suppressed by an ignore region with no last-resort framing"
     detection: "not covered — regions remain heading-agnostic after Phase 0"
     alert_route: "Phase 8.1; recorded as a known gap rather than claimed as covered"
+  - mode: "A section is RENAMED into the Last-resort diagnosis carve to suppress a host-login line that has no last-resort framing"
+    detection: "not covered by any standing check — Phase 0 opens this as a SECOND and cheaper suppression channel than the ignore region, and unlike a region (AC7) a carve heading carries no rationale or owning-issue requirement. Detected in THIS PR only by AC3's one-shot whole-corpus finding-set diff"
+    alert_route: "Phase 8.1, alongside the heading-agnostic-region gap; both are the same missing control — suppression that names no owner"
 
 logs:
   where: "GitHub Actions run logs for the test-scripts job — gh run view <id> --log --job <jobid>; no host logs are produced or consumed by this change"
@@ -755,6 +818,7 @@ single predicate the state derives from; the `Resolved` arm must remain unable t
 | 4 | **Guard's own dispatch:** make path collection return `[]` so the run reports `0 scanned file(s)` and exits 0 | RED — assert a `scanned >= N` floor and that the count is printed |
 | 5 | Change the literal to `Last resort diagnosis` (no hyphen) | RED — pins the section-name contract |
 | 6 | Move the `in_ignore` check to after fence handling | RED — pins the ordering the class (a)/(c) regions depend on |
+| 7 | **Adjacency:** `## Last-resort diagnosis` → `## Resolved` (equal level) → a fenced host-login line under `## Resolved` | RED — the carve must not leak across an adjacent carve heading. Row 2 tests the predicate; only this row tests the STATE MACHINE, and the obvious `carve_last_resort \|= …` form passes row 2 while failing this one |
 
 **Harness rows.** (a) Delete row 1's case from `scripts/lint-infra-no-human-steps.test.sh` and
 require the suite's case-count floor to fail — the harness has no floor today, so Phase 0.4 builds
@@ -972,11 +1036,21 @@ which is exactly the shape of an agent shell in a worktree.
   deliberately has **no** such heading — it is provisioning debt, not a last-resort diagnosis —
   and the PR body records that its section-name contract stays knowingly unsatisfied pending the
   Phase-2 deferral issue.
-- **AC6.** The class-(a) markers are inline and same-line, and the total suppressed line count in
-  `admin-ip-drift.md` is **≤ 6** (three findings, each on its own line, plus the `## Symptom`
-  fence). Assert by counting lines between each `lint-infra-ignore start` and its matching `end`.
-  This is what stops a single region from silently covering `## Diagnosis` and both Recovery
-  sections.
+- **AC6.** Every suppression this PR adds is bounded by an asserted number, so later growth shows
+  up as a diff rather than as invisible absorption. Assert by counting lines between each
+  `lint-infra-ignore start` and its matching `end`, and lines between each renamed carve heading
+  and the next heading of equal-or-higher level: the class-(a) markers are inline and same-line
+  (**≤ 6** suppressed lines total in `admin-ip-drift.md`, including the `## Symptom` fence); the
+  class-(c) grok region and each of the two renamed carve sections each carry their own recorded
+  line count. This is what stops one region from silently covering `## Diagnosis` and both
+  Recovery sections.
+- **AC6b.** After the edit, `grep -niE 'last.resort'` over each runbook returns only sites whose
+  sense is disambiguated **in the line itself or the line immediately below it**. There are three
+  senses in play — the SSH probe (the renamed sections), the noVNC recovery *channel*
+  (`ssh-fail2ban-unban.md`'s header), and the third IP-echo curl service (`admin-ip-drift.md`
+  `## Diagnosis` Step 1) — and a drafting pass that drops the disambiguation would leave the
+  heading reading as an entry point. This is the criterion that keeps the heading honest; AC5
+  pins only the regex.
 - **AC7.** Every ignore marker added by this PR carries a rationale naming its disposition class
   and owning issue — **on the start marker or the following line, either shape accepted**. The
   class-(a) markers cite **#6806** with the same-PR removal instruction; the class-(c) region
@@ -1090,7 +1164,12 @@ which is exactly the shape of an agent shell in a worktree.
 - **AC25.** The PR body carries the (a)/(b)/(c) three-way split as a table, each row naming its
   finding lines, its disposition, its owning issue, and — for (b) — the two sub-classes
   (transcript vs. probe), so a future reader cannot mistake (b) for (c). It also states that
-  #7851 keeps two of its three statements, and that #7529/#7825 remain open.
+  #7851 keeps two of its three statements, and that #7529/#7825 remain open. **And it states,
+  per rename, why a terminal VERIFICATION step legitimately carries a "diagnosis" heading** —
+  naming the enumerated no-SSH steps that precede it. Phase 2 applies the gaming-the-gate test to
+  reject exactly this move for the grok runbook; without the justification on the record, a
+  future author could cite these two renames as precedent for renaming an operative section into
+  the carve.
 - **AC26.** Every `knowledge-base/` path cited in the plan and PR body resolves:
   `grep -oE 'knowledge-base/[A-Za-z0-9/_.-]+\.md' <file> | sort -u | xargs -I{} bash -c '[[ -f "{}" ]] || echo "BROKEN: {}"'`
   prints nothing.

@@ -16,8 +16,10 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
 - [ ] 0.1 Add `_is_last_resort_heading(title)` carrying the existing `Last-resort diagnosis`
       regex verbatim; leave `_is_carve_heading`'s two arms unchanged so `Resolved` behaviour
       is untouched.
-- [ ] 0.2 Track `carve_last_resort` alongside `carve` / `carve_level`, set only by the
-      last-resort arm, cleared by the same `level <= carve_level` rule.
+- [ ] 0.2 Track `carve_last_resort`. ASSIGN inside the `if _is_carve_heading` branch
+      (`carve_last_resort = _is_last_resort_heading(title)`), clear in the `elif`. Do NOT OR it:
+      a `## Last-resort diagnosis` → `## Resolved` adjacency skips the `elif` and would leak the
+      carve. Guard 1 row 7 pins this.
 - [ ] 0.3 Gate the in-fence host-login exception:
       `if HOST_LOGIN_RE.search(raw) and not carve_last_resort:`.
 - [ ] 0.4 Add Guard 1's fixtures to `scripts/lint-infra-no-human-steps.test.sh`, including the
@@ -28,14 +30,17 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
 
 ## Phase 1 — the two SSH-diagnosis runbooks
 
-- [ ] 1.1 Rename `### Step R3 -- Verify` → `### Last-resort diagnosis — Step R3: verify SSH is
-      restored` (`admin-ip-drift.md`). Title must BEGIN with the literal.
-- [ ] 1.2 Rename `### Step 6: Verify from the operator machine` → `### Last-resort diagnosis —
-      Step 6: verify from the operator machine` (`ssh-fail2ban-unban.md`).
-- [ ] 1.3 Add one reader-visible sentence per renamed section: the "after 3 tries" precondition,
-      the no-SSH probes to exhaust first, and — in `ssh-fail2ban-unban.md` — a line
-      distinguishing this from its "Channel of last resort: Hetzner Cloud Console (noVNC)"
-      header.
+- [ ] 1.1 Rename `### Step R3 -- Verify` → `### Last-resort diagnosis (SSH channel, after the
+      no-SSH probes) — Step R3: confirm SSH is restored` (`admin-ip-drift.md`). Title must BEGIN
+      with the literal; the parenthetical is regex-safe and matches house convention.
+- [ ] 1.2 Rename `### Step 6: Verify from the operator machine` → `### Last-resort diagnosis
+      (SSH channel — not the noVNC channel of last resort) — Step 6: confirm SSH is restored`
+      (`ssh-fail2ban-unban.md`).
+- [ ] 1.3 Add the reader-visible sentence per renamed section. It must OPEN by naming the
+      section terminal ("not an entry point — do not start here"), then carry the precondition
+      and the no-SSH probes. Plus the per-file disambiguation: `ssh-fail2ban-unban.md` (probe vs
+      the noVNC channel of last resort; escalation is `## If This Runbook Does Not Work`) and
+      `admin-ip-drift.md` (distinct from `# Last-resort fallback:` in Diagnosis Step 1).
 - [ ] 1.4 Wrap each `## Symptom` fence in a `lint-infra-ignore` region (block markers are safe
       around a fence), rationale on the start marker, class (b-transcript), owner #7874.
 - [ ] 1.5 Add three INLINE SAME-LINE markers (plan Phase 1.3) for the class-(a) prose findings in
@@ -62,8 +67,10 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
       replacement; retire "rolling Docker log buffer"; carry both dates (2026-06-02 / #4786 for
       the application stream, 2026-05-21 / #4279 for the host plane).
 - [ ] 3.4 Retire the 30 MB claim in the four files that carry it.
-- [ ] 3.5 Scope the pseudonymisation claim to the Vector paths (the `soleur-registry` shipper
-      computes no `userIdHash`).
+- [ ] 3.5 Attribute pseudonymisation to the APPLICATION (pino), not to Vector. Measured live:
+      the shipped record carries `pii_scrub_applied: "drop_userdata+string"` — no `+structured`,
+      because the HMAC transform short-circuits on `if !exists(parsed_obj.userIdHash)`. Keep the
+      separate `soleur-registry` carve-out (no Vector, no `userIdHash` at all).
 - [ ] 3.6 Re-ground "under processor-DPA terms" on the register's three limbs; conclusion
       untouched. Do NOT touch #7851's other two statements.
 - [ ] 3.7 Sweep `AC15 of PR #4293` → **#7529** at all four sites.
@@ -134,8 +141,8 @@ Phase 0 must land before Phase 1 (the renames depend on the carve reaching fence
 
 ## Verification
 
-- [ ] V1 Acceptance criteria AC1–AC26 (see the plan). AC3, AC6, AC15, AC18b, AC21 and AC22 are
-      the ones that catch this PR's specific failure modes.
+- [ ] V1 Acceptance criteria AC1–AC26 (see the plan). AC3, AC6, AC6b, AC15, AC18b, AC21 and
+      AC22 are the ones that catch this PR's specific failure modes.
 - [ ] V2 `bash scripts/test-all.sh` green. Prefix vitest invocations with
       `env -u GIT_DIR -u GIT_WORK_TREE`.
 - [ ] V3 Every diff assertion uses `git diff "$(git merge-base origin/main HEAD)"`.
