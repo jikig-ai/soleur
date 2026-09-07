@@ -2,103 +2,104 @@
 
 Plan: `knowledge-base/project/plans/2026-09-07-fix-byok-cap-breach-audit-ledger-plan.md`
 
-Lane: cross-domain (no spec.md existed at plan time — fail-closed default, TR2).
+Lane: cross-domain (no spec.md at plan time — fail-closed default, TR2).
 Brand-survival threshold: single-user incident. CPO sign-off required before /work.
 
-> **Phase 1 is a hard gate.** It can re-scope or invalidate the rest of this file.
-> Do not start Phase 2 until 1.1 is settled empirically.
+> **This is four PRs, not one.** Seven review agents converged on the split.
+> PR-0 is a read-only spike whose output can still re-scope PR-3.
+> Do not start PR-3 until PR-0 and PR-2 have landed.
 
-## Phase 1 — Preconditions and premise settlement (no writes)
+## PR-0 — Spike (read-only, no merge)
 
-- [ ] 1.1 Settle the blocking premise: does an unhandled `RAISE EXCEPTION` discard
-      the preceding `INSERT` on the three sibling refusal branches? Probe dev with
-      a real RPC call, then read the row from a **separate connection and new
-      transaction**. Not `BEGIN; …; ROLLBACK;`.
-- [ ] 1.2 Historical corroboration: `SELECT attribution_shift_reason, count(*)
-      FROM public.audit_byok_use WHERE attribution_shift_reason IS NOT NULL
-      GROUP BY 1;` — and check Sentry for `op=revoke-past-grace` / `op=expired`
-      before treating a zero as decisive.
-- [ ] 1.3 If the premise is confirmed false, STOP and re-plan around the
-      architectural fork (return-a-refusal vs autonomous transaction vs
-      caller-side record). Do not proceed with "INSERT before RAISE".
-- [ ] 1.4 Settle B3: is `unit_cost_cents` a per-turn total or a per-token rate?
-      Decide whether to fix the writer or the SUM expressions. Blocking.
-- [ ] 1.5 Capture the live function body via `pg_get_functiondef` and diff against
-      084's source. Stop on divergence (rogue dev-migration precedent).
-- [ ] 1.6 Read the live CHECK constraint definition.
-- [ ] 1.7 Read the scope-boundary comment in `infra/sentry/issue-alerts.tf`.
-- [ ] 1.8 Resolve the side-letter fork mechanically (flag state + prd read-only
-      count of live arms-length pairs + the counsel-review trigger).
-- [ ] 1.9 Reconcile the three-way retention contradiction before writing headers.
-- [ ] 1.10 Confirm 136 is still the next free migration number vs `origin/main`.
+- [ ] 0.1 Diff the live function body against 084's source:
+      `pg_get_functiondef('public.check_and_record_byok_delegation_use(uuid,uuid,int,int,uuid,text)'::regprocedure)`.
+      Stop and re-plan on divergence (2026-07-02 rogue dev-migration precedent).
+- [ ] 0.2 Confirm the plpgsql rollback finding empirically on dev: drive a sibling
+      refusal branch, then read the row from a **separate connection and new
+      transaction**. Never `BEGIN; SELECT rpc(...); ROLLBACK;` — that shape cannot
+      distinguish which rollback discarded the row.
+- [ ] 0.3 Read the live CHECK: `pg_get_constraintdef` for
+      `audit_byok_use_attribution_shift_reason_check`.
+- [ ] 0.4 Settle B3 against real data (read-only, prd) — the two distribution
+      queries in the plan's Decision 3. If `median_cents` is tens and
+      `median_tokens` thousands, the column is a turn total and the product readers
+      are wrong.
+- [ ] 0.5 Append the findings to the plan as a Phase-0 results paragraph.
 
-## Phase 2 — RED (failing tests first)
+## PR-1 — Grantor spend surface (ship first, independent)
 
-- [ ] 2.1 Primary/behavioural: edit
-      `test/server/byok-delegation.atomicity.tenant-isolation.test.ts` to the
-      post-fix invariants — row visible from a fresh connection; window SUM grown
-      by the refused turn's cost; `audit == N` not `K`; summed spend
-      `N x COST_CENTS` not `CAP_CENTS`.
-- [ ] 2.2 Add T6 (below/at/above cap, strict `>` proof), T7 (one row per refusal),
-      T8 (daily branch via `ts = now() - 2h` aged seed), T9 (attribution).
-- [ ] 2.3 Secondary/textual tripwire: create
-      `test/supabase-migrations/136-byok-cap-breach-audit-row.test.ts`.
-- [ ] 2.4 Confirm both fail for the right reason, not a fixture error.
+- [ ] 1.1 `server/byok-delegation-ui-resolver.ts`: replace the non-existent
+      `cost_cents` column. Derive the expression from the RPC's window expression,
+      not a bare rename.
+- [ ] 1.2 Sweep all **eight** unmirrored Supabase reads in that file (two
+      `cost_cents`, two `error`-bound-then-discarded, four that never bind `error`).
+      Route each through `reportSilentFallback` (`cq-silent-fallback-must-mirror-to-sentry`).
+- [ ] 1.3 Add a degraded UI state — a Sentry mirror alone still shows the grantor a
+      confident `$0.00` on a money surface.
+- [ ] 1.4 Re-check `wg-ui-feature-requires-pen-wireframe` — this changes a
+      user-visible billing figure on two components.
 
-## Phase 3 — GREEN (the migration)
+## PR-2 — Unit semantics (lands before PR-3)
 
-- [ ] 3.1 Write `136_byok_cap_breach_audit_row.sql` — header with #7829,
-      LAWFUL_BASIS and RETENTION; widen the CHECK; redefine the RPC.
-- [ ] 3.2 Derive the body from the Phase 1.5 `pg_get_functiondef` output, not from
-      084 source text. Keep SECURITY DEFINER, `SET search_path = public, pg_temp`,
-      `FOR UPDATE`; re-issue REVOKE/GRANT verbatim.
-- [ ] 3.3 Cast the cost product to `bigint` (B4 overflow).
-- [ ] 3.4 Add the `p_caller_user_id` vs `v_row.grantee_user_id` guard (A5).
-- [ ] 3.5 Add the allowed-diff test: 136's body differs from 084's only in the
-      intended hunks.
-- [ ] 3.6 Write `136_..._down.sql` — restore the 084 body; **do not narrow the
-      CHECK** (B5, Art. 17 cascade).
-- [ ] 3.7 Decide on re-creating `audit_byok_use_delegation_ts_idx` (A6).
+- [ ] 2.1 Fix the **readers**, not the writer: `084`, `061`, `121` sum
+      `token_count * unit_cost_cents` while two production consumers already read
+      the column bare and correctly.
+- [ ] 2.2 Fix all four B4 overflow sites (the `DECLARE` product, the product inside
+      each `SUM`, each `::int` cast of the SUM result).
+- [ ] 2.3 Add the T10 production-shaped-payload live test — the fixture's
+      `COST_CENTS = 100 // 10 x 10` inverts production and is why B3 survived.
+- [ ] 2.4 Amend ADR-041 (Layer 1 arithmetic).
+- [ ] 2.5 State the 24h mixed-unit deploy window explicitly.
 
-## Phase 4 — Coupled surfaces
+## PR-3 — #7829 proper
 
-- [ ] 4.1 Confirm `byok-rpc-body-markers.test.ts` resolves from 136 and all three
-      markers survive; decide on a fourth INSERT-shaped marker.
-- [ ] 4.2 `git grep -n 'check_and_record_byok_delegation_use' -- apps/web-platform`
-      and sweep every call site and test.
-- [ ] 4.3 Rewrite the false comment in `server/cost-writer.ts`.
-- [ ] 4.4 Fix `server/byok-delegation-ui-resolver.ts` (`cost_cents` ->
-      `unit_cost_cents`, mirror the discarded errors) (B6).
-- [ ] 4.5 Fix `084_byok_delegation_withdrawals.down.sql` (A4).
-- [ ] 4.6 Update the `066` column comment on `founder_id` (A8).
-- [ ] 4.7 Amend the `audit == K` learning file.
-- [ ] 4.8 Amend ADR-045 (correction + extension, per the CLO advisory).
+- [ ] 3.1 RED first: partition the live invariant (`IS NULL` rows == K summing to
+      CAP_CENTS; reason rows == N-K), add T5b (heterogeneous cost — the only shape
+      that discriminates include-vs-exclude), fix T7's positive control, add T8/T9.
+- [ ] 3.2 RED: offline tripwire `136-byok-cap-breach-audit-row.test.ts`; anchor T3
+      on `INTO v_hourly_spent`, not the comment the strip deletes.
+- [ ] 3.3 `136_byok_cap_breach_audit_row.sql`: widen the CHECK; `DROP` + `CREATE`
+      the RPC returning a refusal reason; all five refusal branches INSERT + return.
+      Keep SECURITY DEFINER, `SET search_path = public, pg_temp`, `FOR UPDATE`.
+- [ ] 3.4 Add the `p_caller_user_id` vs `v_row.grantee_user_id` guard.
+- [ ] 3.5 `136_..._down.sql`: restore the 084 body; **do not narrow the CHECK**.
+- [ ] 3.6 AC-DOWN: actually execute the down migration against dev.
+- [ ] 3.7 `cost-writer.ts`: read `data` not `error.message`; add the missing
+      `consent_withdrawn` branch; add the `ledger_row_written` tag; fix the comment.
+- [ ] 3.8 Decide `121`'s SUM: add `AND delegation_id IS NULL`, or model the
+      grantee-lockout as a tested accepted outcome. Not optional.
+- [ ] 3.9 Reconcile `byok-rpc-markers.json` — the pinned markers include the RAISE
+      strings and silently constrain the new shape.
+- [ ] 3.10 Repair `084_byok_delegation_withdrawals.down.sql`.
+- [ ] 3.11 Re-create `audit_byok_use_delegation_ts_idx` or record the measured scan
+      cost (no `CONCURRENTLY` — the runner wraps each file in a transaction).
+- [ ] 3.12 `066` column comment on `founder_id` (both sentences).
+- [ ] 3.13 Write ADR-205; re-verify the ordinal against `origin/main` before merge.
+- [ ] 3.14 Amend the `audit == K` learning.
+- [ ] 3.15 Art. 30 register PA-23 limbs (c) and (g).
+- [ ] 3.16 `bash plugins/soleur/test/c4-count-parity.test.sh` green.
+- [ ] 3.17 AC12: the comment-only correction to `issue-alerts.tf` (its claim
+      becomes false when 136 lands). No routing change.
+- [ ] 3.18 `git grep audit_byok_use_owner_select` — clear the stale live-policy
+      comment in `app/(dashboard)/dashboard/audit/page.tsx`.
 
-## Phase 5 — Legal corpus
+## PR-4 — Legal corpus (parallel, lands after PR-3)
 
-- [ ] 5.1 Amend Art. 30 register PA-23 limbs (c) and (g).
-- [ ] 5.2 Generalise DPD 2.3(w) on canonical + mirror; re-pin
-      `lib/legal/legal-doc-shas.ts`.
-- [ ] 5.3 Run `bash scripts/lint-legal-registers.sh` green (blocking since #7881).
-- [ ] 5.4 Side-letter amendment if Phase 1.8 found a live arms-length pair.
-- [ ] 5.5 Run `/soleur:gdpr-gate` on the diff (A9, required gate).
-- [ ] 5.6 Verify the audit viewer / DSAR bundle render `attribution_shift_reason`
-      beside cost; fix inline or file.
+- [ ] 4.1 DPD 2.3(w) paired edit (canonical + mirror); re-pin `legal-doc-shas.ts`.
+- [ ] 4.2 Reconcile the three-way retention contradiction (PA-13 12mo / PA-22 90d /
+      PA-23 + DPD 7y) and the absent `pg_cron` sweep.
+- [ ] 4.3 `bash scripts/lint-legal-registers.sh` green (blocking since #7881).
+- [ ] 4.4 Re-run the CLO GDPR question against the real mig-059 policy
+      `audit_byok_use_workspace_member_select` — the original ruling assumed an
+      owner-keyed policy that has not existed since mig 059.
+- [ ] 4.5 Run `/soleur:gdpr-gate` on the diff.
 
-## Phase 6 — Architecture artifacts
+## Cross-cutting
 
-- [ ] 6.1 Read all three `.c4` files and record the actor/system/relationship
-      enumeration behind the "no C4 impact" conclusion.
-- [ ] 6.2 Run `bash plugins/soleur/test/c4-count-parity.test.sh` green.
-
-## Phase 7 — Verify and ship
-
-- [ ] 7.1 Offline suite + `./node_modules/.bin/tsc --noEmit` from
-      `apps/web-platform`.
-- [ ] 7.2 Live suite: `TENANT_INTEGRATION_TEST=1` against dev.
-- [ ] 7.3 Verify AC13 (`git diff origin/main -- apps/web-platform/infra/sentry/`
-      is empty) and AC14.
-- [ ] 7.4 File tracking issues for every deferred item (pre-call enforcement gate;
-      grantor RLS visibility; anything else deferred).
-- [ ] 7.5 PR body states plainly: this is an accounting fix; the cap enforced
-      nothing before and enforces nothing after. No backfill is possible.
+- [ ] X.1 File tracking issues (not prose): pre-call enforcement gate; grantor-facing
+      breach signal; the derived `invocation_id` key; the dev-only drift probe's prd
+      blind spot; side-letter version bump deferral.
+- [ ] X.2 Re-run the Engineering and Legal domain reviews after PR-0 — both were
+      conducted against the stale RLS premise and the unsettled B3 arm.
+- [ ] X.3 PR bodies state plainly: this is an accounting fix; the delegation cap
+      enforced nothing before and enforces nothing after. No backfill is possible.
