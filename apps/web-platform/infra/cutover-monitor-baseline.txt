@@ -5,30 +5,28 @@
 # anything — and the T+20 rule turns any CUT8 failure into a rollback.
 #
 # Regenerate: bash cutover-verify.sh --capture-monitor-baseline cutover-monitor-baseline.txt
-# Captured 2026-09-03T15:31:58Z
+#             (needs credentials: run it under `doppler run -p soleur -c prd_terraform --`,
+#             or every row captures `unknown` and the script refuses to write a
+#             partial baseline. That refusal is the design working, not a fault.)
 #
-# AMENDED 2026-09-07 (#7798), one row, deliberately not a re-capture.
+# RE-CAPTURED 2026-09-07T18:51:57Z (#7798, tasks.md 6.5) — this is now a real
+# measurement of every row, superseding the placeholder described below.
 #
-# `soleur-ai-www` was renamed to `soleur-ai-www-reachability` AND retargeted from
-# an unsatisfiable `equals 301` to a 2xx assertion. Three options for its row, and
-# only one is honest:
-#   - leave `soleur-ai-www`      -> the name no longer matches SENTRY_MONITORS, the
-#                                   lookup finds nothing, base_state is EMPTY, and
-#                                   CUT8 scores REGRESSION -> FAIL -> under the T+20
-#                                   rule an operator merges the rollback of a
-#                                   perfectly healthy cutover. Fails UNSAFE.
-#   - rename, keep `unhealthy`   -> scores every later failure `pre-existing`, which
-#                                   MASKS a genuinely new one.
-#   - rename, mark `unknown`     -> what is actually true. This capture predates both
-#                                   the rename and the retarget, so it never measured
-#                                   THIS monitor. `unknown` routes to the read path's
-#                                   own fail-safe arm: not a regression, not a pass,
-#                                   reported UNREACHABLE.
+# The superseded state, kept because it explains why one row read `unknown`:
+# PR #7878 renamed `soleur-ai-www` to `soleur-ai-www-reachability` AND retargeted
+# it from an unsatisfiable `equals 301` to a 2xx assertion. The prior capture
+# predated both, so it had never measured THAT monitor, and the row was set to
+# `unknown` — the read path's own fail-safe arm (not a regression, not a pass,
+# reported UNREACHABLE). The alternatives both failed: leaving `soleur-ai-www`
+# would stop matching SENTRY_MONITORS, score EMPTY -> REGRESSION, and roll back a
+# healthy cutover; renaming while keeping `unhealthy` would score every later
+# failure as pre-existing and MASK a genuinely new one.
 #
-# Superseded by the post-merge re-capture (tasks.md 6.5) once the monitor reports
-# healthy; until then this row is the conservative placeholder, not a measurement.
+# That placeholder is now discharged: post-merge verification confirmed the
+# renamed monitor at uptimeStatus 1 with its most recent check `success`, and
+# WEB-PLATFORM-11 resolved, so this capture measures it for real.
 soleur-ai-apex	healthy
-soleur-ai-www-reachability	unknown
+soleur-ai-www-reachability	healthy
 soleur-ai-changelog-deep	healthy
 soleur-ai-acme-carveout-probe	healthy
 soleur dot ai apex	healthy

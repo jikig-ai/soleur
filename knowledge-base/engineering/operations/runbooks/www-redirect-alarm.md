@@ -77,6 +77,40 @@ its checks (#7798, ADR-204).
    monitor's status but not the response code the failing check observed — recover
    that by re-running step 1, not from the API.
 
+   **The Sentry half — `soleur-ai-www-reachability` — is a different vendor, a
+   different host and a different path shape.** Three details are load-bearing and
+   each returns `404` on its own if you get it wrong, which reads exactly like
+   "no such monitor" rather than "wrong URL":
+
+   - the host is **`de.sentry.io`** (EU region), not `sentry.io`;
+   - the org slug is **`jikigai-eu`** (`doppler secrets get SENTRY_ORG`), not `soleur`;
+   - per-check rows live under the **project**, not the organization —
+     `organizations/<org>/uptime/<id>/checks/` is a 404.
+
+   ```bash
+   # 1. resolve the monitor id (organization-scoped; this one IS org-scoped)
+   MON=$(doppler run -p soleur -c prd_terraform --command '
+     curl -sS -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+       "https://de.sentry.io/api/0/organizations/jikigai-eu/uptime/"' \
+     | jq -r '.[] | select(.name=="soleur-ai-www-reachability") | .id')
+
+   # 2. read the check rows (PROJECT-scoped)
+   doppler run -p soleur -c prd_terraform --command "
+     curl -sS -H \"Authorization: Bearer \$SENTRY_AUTH_TOKEN\" \
+       'https://de.sentry.io/api/0/projects/jikigai-eu/web-platform/uptime/$MON/checks/?statsPeriod=24h'" \
+     | jq -r '.[] | "\(.timestamp[0:19])  \(.checkStatus)  http=\(.httpStatusCode)"'
+   ```
+
+   Unlike Better Stack, Sentry DOES expose the observed status code per check —
+   and it is the code of the **first hop**, while the assertion is graded against
+   the **terminal** response. That distinction is the whole of #7798: rows reading
+   `failure ... http=301` are not a contradiction, they are a `301` first hop whose
+   followed terminal `200` failed an `equals 301` assertion. If you ever see that
+   shape again, the assertion is wrong, not the redirect.
+
+   To resolve the alarm issue by short-id:
+   `https://de.sentry.io/api/0/organizations/jikigai-eu/shortids/WEB-PLATFORM-11/`
+
 4. **A deploy in the last ~25 minutes is the most likely benign cause.** During a
    Cloudflare Pages rebuild, www transiently serves its own 200 (~15 min
    observed). `confirmation_period = 1200` exists to absorb exactly that, so a
