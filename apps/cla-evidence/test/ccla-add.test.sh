@@ -1,0 +1,410 @@
+#!/usr/bin/env bash
+# ccla-add.test.sh — registered EXPLICITLY in scripts/test-all.sh under
+# `want_webplat`, not by a glob. It lives in apps/cla-evidence/test/ rather than
+# beside the script it tests because apps/cla-evidence/scripts/ is a SUITE_GLOBS
+# entry, and matching both that glob and an explicit registration is the
+# double-coverage `lint-orphan-test-suites.sh` refuses. The shard is not a
+# preference: this suite needs apps/web-platform/node_modules/.bin/tsx, which
+# the `test-scripts` job does not install.
+#
+# Covers the write-side half of Guard 3 (contribution-triggered entry) and the
+# documented exit-code contract. The mutation arm at the end is the one that
+# matters: it deletes the ledger check from a COPY of the script and asserts
+# the copy then accepts an account that has not signed the ICLA. Without that,
+# every other case here would pass just as happily against a script whose check
+# does nothing.
+
+set -uo pipefail
+
+# Sandbox harnesses build trees under TMPDIR. /tmp is a machine-global tmpfs
+# shared with parallel worktrees; a direct invocation of this suite would
+# otherwise inherit it and its verdicts would depend on another session's disk.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+SCRIPT="$REPO_ROOT/apps/cla-evidence/scripts/ccla-add.sh"
+SHA64="cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
+passes=0
+fails=0
+pass() { passes=$((passes + 1)); echo "[ok]   $1"; }
+fail() { fails=$((fails + 1)); echo "[FAIL] $1"; }
+
+WORK="$(mktemp -d -t ccla-add-test.XXXXXXXX)" || { echo "harness: mktemp -d failed" >&2; exit 2; }
+trap 'rm -rf "$WORK"' EXIT
+
+# --- harness setup must ABORT, never continue. A sandbox that half-built
+# --- produces confident wrong verdicts about the SUT rather than a missing one.
+# The ledger lives on an orphan branch the upstream CLA action maintains, NOT in
+# this checkout's history. `actions/checkout` is single-branch by default, so
+# `origin/cla-signatures` is simply ABSENT in any job that has not asked for it
+# — measured: `fatal: invalid object name 'origin/cla-signatures'`, the whole
+# suite dead in 8 ms on CI run 34123093118.
+#
+# This is the SAME defect that was fixed in the vitest sibling
+# (apps/web-platform/test/cla-evidence/roster-entry-gate.test.ts) earlier in
+# this PR, and it survived here because that suite ran in a job which happened
+# to have the ref while this one did not run in CI at all. Fixing the symptom in
+# one of two suites that share a dependency leaves the other armed.
+#
+# One shallow fetch of exactly this ref, then re-try. A genuine unavailability
+# still ABORTS — "could not read the reference set" must never degrade to an
+# empty ledger, which would pass every account.
+if ! git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null; then
+  # --no-tags is load-bearing, not tidiness: `git fetch` auto-follows tags, and the gate runner samples the repo's refs as a read-only boundary — a plain fetch wrote 157 tags and tripped [FATAL] A SUITE WROTE TO THE LIVE REPOSITORY on CI run 34123093118.
+  # Measured: plain fetch creates tags, --no-tags creates none and still fetches the ref.
+  git fetch --no-tags --depth=1 -q origin \
+    '+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures' 2>/dev/null
+  git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null \
+    || { echo "harness: could not read the ICLA ledger at origin/cla-signatures, even after a" >&2
+         echo "         shallow fetch. That branch is maintained by the upstream CLA action;" >&2
+         echo "         without it the reference set is unavailable and no verdict is possible." >&2
+         exit 2; }
+fi
+[[ -s "$WORK/ledger.json" ]] || { echo "harness: ledger empty" >&2; exit 2; }
+# The SUT resolves the roster validator through this binary. Without it EVERY
+# invocation dies at ccla-add.sh's own operator-fault exit 2, and the suite
+# reports ~23 assertion failures that all look like defects in the script —
+# measured on CI run 34117976566, where this ran in the `test-scripts` shard,
+# which installs no npm dependencies. Named here so the next occurrence says
+# WHY in one line instead of as a wall of rc=2. Fail loud, never skip: the
+# repo's convention for a missing dependency (see inspect.test.sh and jq).
+[[ -x apps/web-platform/node_modules/.bin/tsx ]] || {
+  echo "harness: apps/web-platform/node_modules/.bin/tsx is missing — this suite needs the" >&2
+  echo "         web-platform toolchain and must run in the TEST_GROUP=webplat shard." >&2
+  echo "         Locally: npm ci --prefix apps/web-platform" >&2
+  exit 2
+}
+# Keep the REAL timestamps for the pre-notice arm below, then SYNTHESIZE the
+# working fixture by rewriting `created_at` past the coverage-map notice epoch.
+# The ids stay real because the id-keyed arms depend on them; only the temporal
+# dimension is controlled, which is the one under test here
+# (cq-test-fixtures-synthesized-only).
+cp "$WORK/ledger.json" "$WORK/ledger-real-timestamps.json"
+jq '.signedContributors |= map(.created_at = "2026-10-01T00:00:00Z")' \
+  "$WORK/ledger-real-timestamps.json" > "$WORK/ledger.json" \
+  || { echo "harness: could not synthesize the post-notice ledger" >&2; exit 2; }
+jq -e '.signedContributors | length > 0 and all(.created_at == "2026-10-01T00:00:00Z")' \
+  "$WORK/ledger.json" >/dev/null \
+  || { echo "harness: synthesized ledger did not take" >&2; exit 2; }
+printf '{\n  "schema_version": "1.0",\n  "organizations": []\n}\n' > "$WORK/roster.json" \
+  || { echo "harness: could not write roster fixture" >&2; exit 2; }
+
+# Run the SUT (or a mutant) in dry-run with stubbed id resolution.
+# $1 = script path, $2 = id map JSON, rest = argv.
+run_sut() {
+  local script="$1" idmap="$2"; shift 2
+  CCLA_ADD_DRY_RUN=1 \
+  CCLA_ADD_LEDGER="$WORK/ledger.json" \
+  CCLA_ADD_ROSTER="$WORK/roster.json" \
+  CCLA_ADD_ID_MAP="$idmap" \
+    bash "$script" "$@" > "$WORK/out.txt" 2> "$WORK/err.txt"
+  echo $?
+}
+
+add_args=(add --record-ref CCLA-0001 --org "Convergence SARL"
+          --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z
+          --instrument-sha256 "$SHA64")
+
+# --- instrument self-test: drive both counters once, and refuse to continue
+# --- unless both actually moved. A suite whose pass/fail helpers are inert
+# --- reports a clean run having asserted nothing.
+pass "instrument self-test (pass path)"
+fail "instrument self-test (fail path — EXPECTED, discounted below)"
+if [[ "$passes" -ne 1 || "$fails" -ne 1 ]]; then
+  printf 'harness: instrument self-test did not move both counters (passes=%s fails=%s)\n' "$passes" "$fails" >&2
+  exit 2
+fi
+passes=0; fails=0
+echo "--- instrument verified; counters reset ---"
+
+# ---------------------------------------------------------------------------
+# Exit-code contract
+# ---------------------------------------------------------------------------
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${add_args[@]}" --login deruelle)
+[[ "$rc" == "0" ]] && pass "signed account is accepted (rc=0)" || fail "signed account: expected rc=0, got $rc"
+grep -q '"id": 54279' "$WORK/out.txt" \
+  && pass "login resolved to its numeric id in the emitted roster" \
+  || fail "emitted roster does not carry the resolved numeric id"
+grep -q 'no PR opened' "$WORK/err.txt" \
+  && pass "dry run opens no PR" || fail "dry run did not report that it opened no PR"
+# stdout is the emitted roster ALONE — a caller must be able to pipe it to jq
+# without first stripping banners with sed.
+jq -e . "$WORK/out.txt" >/dev/null 2>&1 \
+  && pass "dry-run stdout is parseable JSON, diagnostics kept on stderr" \
+  || fail "dry-run stdout is not parseable JSON — a diagnostic is interleaved with the roster"
+
+# --- V4: the LOOSENING probe. The script's own security rationale is that the
+# --- ledger is keyed on numeric id and never on login, "because a login can be
+# --- renamed and reused, an id cannot". Every other fixture makes login, ledger
+# --- name and id agree, so `select(.id == $id)` -> `select(.name == $l)` passed
+# --- the whole suite. The tightening direction cannot see it either — the TS
+# --- validator catches that case downstream and still returns 4. Only a renamed
+# --- account whose ID IS SIGNED discriminates: it must be ACCEPTED.
+rc=$(run_sut "$SCRIPT" '{"newhandle":54279}' add --record-ref CCLA-0007 --org "Renamed Ltd" \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 "$SHA64" --login newhandle)
+[[ "$rc" == "0" ]] && pass "renamed account whose id has signed is ACCEPTED (ledger is id-keyed)" \
+  || fail "renamed-but-signed account rejected — the ledger lookup is keyed on login, not id (rc=$rc)"
+
+rc=$(run_sut "$SCRIPT" '{"stranger":999999}' add --record-ref CCLA-0002 --org "Nobody Ltd" \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 "$SHA64" --login stranger)
+[[ "$rc" == "4" ]] && pass "unsigned account refused with the entry-gate code (rc=4)" \
+  || fail "unsigned account: expected rc=4, got $rc"
+grep -q 'have not signed the Individual CLA' "$WORK/err.txt" \
+  && pass "refusal names the reason" || fail "refusal message does not name the reason"
+grep -q '999999' "$WORK/err.txt" \
+  && pass "refusal names the offending id" || fail "refusal does not name the offending id"
+
+# Two unsigned accounts: must not stop at the first (row G3-M2).
+rc=$(run_sut "$SCRIPT" '{"a":999998,"b":999999}' add --record-ref CCLA-0003 --org "Nobody Ltd" \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 "$SHA64" --login a --login b)
+[[ "$rc" == "4" ]] && pass "two unsigned accounts refused" || fail "two unsigned: expected rc=4, got $rc"
+grep -q '2 account' "$WORK/err.txt" \
+  && pass "both offenders reported, not just the first" \
+  || fail "refusal stopped at the first offender"
+
+# One signed + one unsigned: the valid first member must not mask the second.
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279,"b":999999}' add --record-ref CCLA-0004 --org "Mixed Ltd" \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 "$SHA64" --login deruelle --login b)
+[[ "$rc" == "4" ]] && pass "an unsigned account after a valid one is still refused" \
+  || fail "mixed batch: expected rc=4, got $rc"
+
+# Usage errors.
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref NOPE --org X \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 "$SHA64" --login deruelle)
+[[ "$rc" == "64" ]] && pass "malformed --record-ref rejected (rc=64)" || fail "bad record-ref: got $rc"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0005 --org X \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z --login deruelle)
+[[ "$rc" == "64" ]] && pass "missing --instrument-sha256 rejected (rc=64)" || fail "missing sha: got $rc"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0006 --org X --sole-trader \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 "$SHA64" --login deruelle)
+[[ "$rc" == "64" ]] && pass "--org and --sole-trader are mutually exclusive (rc=64)" || fail "org+sole-trader: got $rc"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0007 \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 "$SHA64" --login deruelle)
+[[ "$rc" == "64" ]] && pass "neither --org nor --sole-trader rejected (rc=64)" || fail "no org: got $rc"
+
+# Sole trader: legal_name is published as null (CLO amendment B1-c-2).
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0008 --sole-trader \
+  --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+  --instrument-sha256 "$SHA64" --login deruelle)
+[[ "$rc" == "0" ]] && pass "--sole-trader accepted (rc=0)" || fail "sole-trader: expected rc=0, got $rc"
+grep -q '"legal_name": null' "$WORK/out.txt" \
+  && pass "sole trader publishes a null legal_name, not the person's name" \
+  || fail "sole trader did not publish a null legal_name"
+
+# The roster carries no identity field, by construction (.strict()).
+if grep -qE '"(signatory_name|email|corporate_email|title|address)"' "$WORK/out.txt"; then
+  fail "emitted roster carries a prohibited identity field"
+else
+  pass "emitted roster carries no prohibited identity field"
+fi
+
+# Dry run must not touch the roster on disk.
+if [[ "$(jq -c '.organizations' "$WORK/roster.json")" == "[]" ]]; then
+  pass "dry run left the roster on disk untouched"
+else
+  fail "dry run mutated the roster on disk"
+fi
+
+# --- AP-025 / #7797: the xtrace self-refusal. This script binds a live
+# --- credential (`gh auth`), and under `-x` bash echoes every expanded word.
+# --- Asserted on BOTH the exit code and the refusal text, and paired with a
+# --- must-PASS: a script that refused unconditionally would satisfy the
+# --- negative arm alone while being completely broken.
+out_x=$(bash -x "$SCRIPT" add --record-ref CCLA-0001 2>&1); rc=$?
+[[ "$rc" == "78" ]] && pass "refuses to run under xtrace with the documented code (rc=78)" \
+  || fail "xtrace refusal: expected rc=78, got $rc"
+grep -q 'refusing to run under xtrace' <<<"$out_x" \
+  && pass "the xtrace refusal names the hazard" || fail "xtrace refusal message missing"
+# must-PASS: WITHOUT -x the same argv reaches the ordinary usage path, not 78.
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0001; true)
+[[ "$rc" != "78" ]] && pass "without xtrace the refusal does NOT fire (it is state-gated, not unconditional)" \
+  || fail "the script refuses even without -x — the guard is unconditional"
+
+# --- The TEMPORAL half of contribution-triggered entry, on the write path.
+# --- Membership is not the property the Art. 13 claim rests on; WHEN the
+# --- signature was made is. Both accounts in the real ledger signed before the
+# --- coverage-map notice existed, so the real timestamps are the fixture here.
+rc=$(CCLA_ADD_DRY_RUN=1 CCLA_ADD_LEDGER="$WORK/ledger-real-timestamps.json" \
+     CCLA_ADD_ROSTER="$WORK/roster.json" CCLA_ADD_ID_MAP='{"deruelle":54279}' \
+     bash "$SCRIPT" "${add_args[@]}" --login deruelle > "$WORK/out.txt" 2> "$WORK/err.txt"; echo $?)
+[[ "$rc" == "4" ]] && pass "an account that signed BEFORE the notice existed is refused on the write path" \
+  || fail "pre-notice signer accepted by the write path (rc=$rc)"
+grep -q 'coverage-map notice existed' "$WORK/err.txt" \
+  && pass "the refusal names the TEMPORAL ground, not a missing signature" \
+  || fail "pre-notice refusal does not name the notice epoch"
+! grep -q 'have no Individual CLA signature' "$WORK/err.txt" \
+  && pass "a pre-notice signer is NOT misreported as never having signed" \
+  || fail "pre-notice signer misreported as unsigned"
+
+# --- V12: rc=3 is a DOCUMENTED exit code in this script's header and appears
+# --- nowhere in the suite. A mutation hardcoding the validator's passthrough to
+# --- 2 ships green without it. Seed a roster the schema refuses.
+printf '{\n  "schema_version": "2.0",\n  "organizations": []\n}\n' > "$WORK/roster.json"
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${add_args[@]}" --login deruelle)
+[[ "$rc" == "3" ]] && pass "schema-invalid roster refused with the documented code (rc=3)" \
+  || fail "schema-invalid roster: expected rc=3, got $rc"
+grep -q 'roster record invalid' "$WORK/err.txt" \
+  && pass "rc=3 refusal names schema validation, not the entry gate" \
+  || fail "rc=3 refusal does not name schema validation"
+printf '{\n  "schema_version": "1.0",\n  "organizations": []\n}\n' > "$WORK/roster.json"
+
+# --- An UNPARSEABLE ledger must be reported as an unusable reference set, never
+# --- as a finding about a person. "Could not measure" and "measured bad" are
+# --- different verdicts and the second one sends the operator to ask a
+# --- contributor to re-sign for no reason.
+printf '<!DOCTYPE html><html>gateway error</html>' > "$WORK/garbage-ledger.json"
+rc=$(CCLA_ADD_DRY_RUN=1 CCLA_ADD_LEDGER="$WORK/garbage-ledger.json" \
+     CCLA_ADD_ROSTER="$WORK/roster.json" CCLA_ADD_ID_MAP='{"deruelle":54279}' \
+     bash "$SCRIPT" "${add_args[@]}" --login deruelle > "$WORK/out.txt" 2> "$WORK/err.txt"; echo $?)
+[[ "$rc" == "2" ]] && pass "unparseable ledger refused as an operator fault (rc=2)" \
+  || fail "unparseable ledger: expected rc=2, got $rc"
+grep -q 'UNUSABLE' "$WORK/err.txt" && ! grep -q 'have not signed' "$WORK/err.txt" \
+  && pass "unparseable ledger is NOT reported as an unsigned contributor" \
+  || fail "unparseable ledger reported as a finding about a person"
+
+# A caller-supplied ledger must survive the script's own cleanup trap.
+[[ -s "$WORK/ledger.json" ]] && pass "caller-supplied ledger not deleted by the cleanup trap" \
+  || fail "cleanup trap deleted the caller's ledger"
+
+# --- remove path (withdrawal of designation) --------------------------------
+# --- V5: TWO representatives, not one. At cardinality 1 "stamped the designated
+# --- account" and "stamped EVERY account" are the same observation, so
+# --- `map(if .login == $login then .removed_at = $at else . end)` ->
+# --- `map(.removed_at = $at)` passed the whole suite — silently withdrawing
+# --- designation from every representative of the organisation, in a legal
+# --- record.
+run_sut "$SCRIPT" '{"deruelle":54279,"colleague":92384917}' "${add_args[@]}" \
+  --login deruelle --login colleague >/dev/null
+cp "$WORK/out.txt" "$WORK/populated.json"
+if jq -e . "$WORK/populated.json" >/dev/null 2>&1; then
+  cp "$WORK/populated.json" "$WORK/roster.json"
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-0001 --login deruelle \
+    --withdrawn-at 2026-09-05T00:00:00Z)
+  [[ "$rc" == "0" ]] && pass "remove path records a withdrawal (rc=0)" || fail "remove: expected rc=0, got $rc"
+  jq -e --arg l deruelle '[.organizations[].representatives[] | select(.login == $l)]
+        | length == 1 and .[0].removed_at == "2026-09-05T00:00:00Z"' "$WORK/out.txt" >/dev/null \
+    && pass "withdrawal marker written to the designated account" \
+    || fail "withdrawal marker not written"
+  jq -e --arg l colleague '[.organizations[].representatives[] | select(.login == $l)]
+        | length == 1 and .[0].removed_at == null' "$WORK/out.txt" >/dev/null \
+    && pass "the OTHER representative of the same organisation is untouched" \
+    || fail "withdrawal stamped a representative it was not asked to withdraw"
+  # Capture the withdrawn roster HERE, while out.txt still holds it. The probes
+  # below deliberately fail, and a failed run leaves out.txt empty — reading it
+  # afterwards seeds every later arm with an unparseable roster and reports the
+  # harness's own ordering bug as a defect in the SUT.
+  cp "$WORK/out.txt" "$WORK/withdrawn.json"
+
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-9999 --login deruelle \
+    --withdrawn-at 2026-09-05T00:00:00Z)
+  [[ "$rc" != "0" ]] && pass "remove against an unknown record_ref fails" || fail "remove accepted an unknown record_ref"
+
+  # A recorded withdrawal date is the legally operative one. Re-running `remove`
+  # must NOT move it forward — the record of when a designation ended is the
+  # thing this file exists to hold.
+  cp "$WORK/withdrawn.json" "$WORK/roster.json"
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-0001 --login deruelle \
+    --withdrawn-at 2026-09-30T00:00:00Z)
+  [[ "$rc" == "2" ]] && pass "re-withdrawing an already-withdrawn account is refused (rc=2, not jq's own code)" \
+    || fail "re-withdrawal accepted — the operative withdrawal date was rewritten"
+  grep -q 'already withdrawn' "$WORK/err.txt" \
+    && pass "re-withdrawal refusal names the date already on file" \
+    || fail "re-withdrawal refusal does not say what is already recorded"
+
+  # A live designation of the same id must not be appended a second time under a
+  # different record_ref: two live rows make "who vouches for this contributor"
+  # unanswerable from the record. A WITHDRAWN row must not block it — that is
+  # how a person moves between employers.
+  cp "$WORK/populated.json" "$WORK/roster.json"
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0055 --org "Second Employer SAS" \
+    --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+    --instrument-sha256 "$SHA64" --login deruelle)
+  [[ "$rc" == "2" ]] && pass "a second LIVE designation of the same id is refused (rc=2, not jq's own code)" \
+    || fail "the same id was designated live under two organisations"
+  cp "$WORK/withdrawn.json" "$WORK/roster.json"
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' add --record-ref CCLA-0055 --org "Second Employer SAS" \
+    --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+    --instrument-sha256 "$SHA64" --login deruelle)
+  [[ "$rc" == "0" ]] && pass "re-designation after a withdrawal is ACCEPTED (changing employer)" \
+    || fail "a withdrawn designation blocked a legitimate re-designation (rc=$rc)"
+  printf '{\n  "schema_version": "1.0",\n  "organizations": []\n}\n' > "$WORK/roster.json"
+  printf '{\n  "schema_version": "1.0",\n  "organizations": []\n}\n' > "$WORK/roster.json"
+else
+  fail "harness: could not recover the emitted roster for the remove path"
+fi
+
+# ---------------------------------------------------------------------------
+# MUTATION — row G3-M5. Delete the ledger check from a COPY and confirm the
+# copy then ACCEPTS an unsigned account. This is what proves the check in the
+# real script is load-bearing rather than decorative.
+# ---------------------------------------------------------------------------
+MUTANT="$WORK/ccla-add.mutant.sh"
+cp "$SCRIPT" "$MUTANT" || { echo "harness: could not copy the SUT" >&2; exit 2; }
+python3 - "$MUTANT" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+start = s.index("MISSING=()")
+end = s.index("# ---- build the new roster")
+mutated = s[:start] + s[end:]
+assert mutated != s, "mutation did not change the file"
+open(p, "w").write(mutated)
+PY
+if [[ $? -ne 0 ]]; then
+  fail "harness: could not apply the G3-M5 mutation"
+else
+  # Assert the mutation actually LANDED — a mutation that did not apply
+  # reports the baseline, which is indistinguishable from a pass.
+  if diff -q "$SCRIPT" "$MUTANT" >/dev/null; then
+    fail "harness: G3-M5 mutant is byte-identical to the SUT"
+  else
+    pass "G3-M5 mutation landed (mutant differs from the SUT)"
+    rc=$(run_sut "$MUTANT" '{"stranger":999999}' add --record-ref CCLA-0002 --org "Nobody Ltd" \
+      --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z \
+      --instrument-sha256 "$SHA64" --login stranger)
+    # The exit code CANNOT discriminate here, and that is the finding: with the
+    # write-side check deleted the validator still refuses, also with rc=4,
+    # because the two sites are genuinely redundant. Defense in depth is the
+    # design — so the mutation is proved on the PRODUCER of the refusal, not on
+    # its code. Baseline refuses at the write path, before anything is built;
+    # the mutant gets as far as the validator.
+    mutant_err="$(cat "$WORK/err.txt")"
+    if [[ "$rc" != "4" ]]; then
+      fail "G3-M5: the mutant did not refuse at all (rc=$rc) — expected the validator to still catch it"
+    elif grep -q 'refusing to write:' <<<"$mutant_err"; then
+      fail "G3-M5: the mutant still refused at the WRITE path — the deleted block was not the check"
+    elif grep -q 'does not validate' <<<"$mutant_err"; then
+      pass "G3-M5: deleting the write-side check moves the refusal to the validator (both sites are load-bearing)"
+    else
+      fail "G3-M5: mutant refused for an unrecognised reason: ${mutant_err:0:120}"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+echo "---"
+echo "Total: $passes passed, $fails failed"
+# Assertion floor, reported with printf + exit rather than through fail(),
+# which is the helper it exists to backstop.
+# TIGHT, not a lower bound with slack. At 22 against 23 actual assertions, one
+# assertion could be deleted and the run stayed green and silent — the floor
+# only fires when TWO go. `guard-vacuity-floor.test.sh` verifies that floors
+# FIRE, never that they are tight, so nothing else catches the slack.
+MIN_ASSERTIONS=40
+if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
+[[ "$fails" -eq 0 ]] || exit 1
+exit 0

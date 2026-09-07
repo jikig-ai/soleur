@@ -30,3 +30,26 @@ export function isAllowlistBypass(
   if (dbId === GITHUB_ACTIONS_BOT_DB_ID) return false;
   return allowlist.includes(login);
 }
+
+/**
+ * Parse the `allowlist:` line out of a `.github/workflows/cla.yml` document.
+ *
+ * PURE by design, and living here rather than in `build-bypass.ts`, so a guard
+ * can drive it against the REAL tracked workflow file. `build-bypass.ts` fuses
+ * the file read, this expression and a `process.exit(1)` into one function, so
+ * importing it to reach the regex kills the test worker instead of failing an
+ * assertion — which is why the #7597 class (a format-breaking hand-edit that
+ * passes unit tests and then reds a required check for every open PR in the
+ * repository) was invisible to the suite.
+ *
+ * Quoted scalar form only, matching the tracked file. Returns `null` — never a
+ * partial or empty list — when the line is absent or not in that form, so the
+ * caller decides how loud to be. A `null` here means "the allowlist could not
+ * be read", NOT "the allowlist is empty"; conflating those is how a parse
+ * failure becomes a silent bypass.
+ */
+export function parseAllowlistLine(yml: string): string[] | null {
+  const m = yml.match(/^\s*allowlist:\s*["']([^"']+)["']\s*$/m);
+  if (!m) return null;
+  return parseAllowlistFromYaml(m[1]);
+}

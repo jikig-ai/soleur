@@ -45,11 +45,19 @@ Before `git push` under Grok Build, run `bash plugins/soleur/scripts/grok-pre-pu
 
 Before your first pull request can be merged, you must sign the [Individual Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html) (CLA). The CLA bot will prompt you automatically on your first PR.
 
+**How it works:** Comment `I have read the CLA Document and I hereby sign the CLA` on your first PR. The CLA bot records your signature and the check passes. That is the whole ask, and you only need to sign once.
+
 **What does the CLA do?** You keep your copyright. Jikigai gets a license to use, distribute, and relicense your contribution -- this is needed because Soleur uses a [Business Source License](LICENSE) with dual licensing.
 
-**If your employer owns your work** (common with full-time employment contracts), ask them to sign the [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) by emailing legal@jikigai.com.
+**If your employer owns your work** (common with full-time employment contracts), a [Corporate CLA](https://soleur.ai/pages/legal/corporate-cla.html) is also needed -- **and chasing it is the maintainer's job, not yours.** Do not hold your pull request back on it, and do not approach your employer's legal team yourself. Send us your employer's name at <legal@jikigai.com> and we will approach them; we aim to reply within **3 business days**. Email rather than the pull request thread, unless you would rather it were public -- the thread is world-readable and permanent, and who you work for is yours to disclose or not.
 
-**How it works:** Comment `I have read the CLA Document and I hereby sign the CLA` on your first PR. The CLA bot will record your signature and the check will pass. You only need to sign once.
+**What happens if that Corporate CLA is signed.** Once your employer executes one and names you under it, we publish an entry linking your GitHub account to that organisation in a public file in this repository (`apps/cla-evidence/roster/ccla-roster.json`). It carries no name, no email and no postal address -- but the account-to-employer association is itself personal data about you, it is created only at or after you sign the Individual CLA, and once written it is copied into every clone and fork and **cannot be erased**. [Section 0 of the Individual CLA](https://soleur.ai/pages/legal/individual-cla.html) is the full notice; it is worth reading before you sign rather than after.
+
+One thing we do have to ask you, because signing says it on your behalf. Section 4(a) of the Individual CLA is a representation about your employer's position: that your employer has given you permission to contribute, **or** has waived its rights in this work, **or** has signed a Corporate CLA naming you as an Authorized Representative. Most contributors are already covered by the first. **If none of the three is true for you, or you are not sure, tell us at <legal@jikigai.com> instead of signing** -- you need not say why on the pull request. We will sort the Corporate CLA out first and come back to you. We would rather wait than have you make a statement that is not accurate.
+
+While a Corporate CLA **of yours** is in flight, your pull request is reviewed and merged on its merits exactly as any other: that paperwork is what we owe your employer, not a task assigned to you, and the corporate side never gates your merge. None of this applies if you are contributing your own work on your own time; then the individual CLA is the whole ask.
+
+**What one Corporate CLA covers.** No employer ever signs a second one -- but coverage runs through the list of Authorized Representatives held with it, not through the company as a whole. A colleague is covered once your employer adds them to that list (Corporate CLA [Section 5](https://soleur.ai/pages/legal/corporate-cla.html)), which is an email to <legal@jikigai.com> from the signatory, and again our job to chase rather than yours. Each colleague also signs the Individual CLA once, on their own first pull request.
 
 ## Submitting Changes
 
