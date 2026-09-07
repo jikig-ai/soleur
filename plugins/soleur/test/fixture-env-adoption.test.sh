@@ -499,17 +499,61 @@ fi
 
 # --- assertion 2: the waiver is non-vacuous and has not rotted --------------------------------------
 # Two independent ways a waiver list goes bad: it names a file that no longer exists (dead entry),
-# or it names a file that never had the property the waiver claims (blanket exemption). Both checked
-# — the second on the `process.env` deletion shape, which is the whole justification for the waiver.
+# or it names a file that never had the property the waiver claims (blanket exemption). Both checked.
+#
+# THE SECOND CHECK USED TO BE SATISFIED BY ANY ONE PATTERN, so a file scrubbing GIT_DIR alone
+# cleared a waiver whose justification is stated as the git-location family -- NINE names. Measured
+# when that was noticed: six of the seven waivers scrub 3 of 9 (GIT_DIR, GIT_WORK_TREE,
+# GIT_INDEX_FILE) and agent-ready-git-worktree scrubs 1 of 9. None scrubs the family. That is the
+# identical hand-listed-subset defect this PR exists to end, and it is the one
+# hook-git-env-coverage.test.sh's own header records as recurring -- so a rot-check that cannot
+# distinguish a 3-name scrub from a 9-name one is the exact rot it claims to prevent.
+#
+# Now MEASURED per name against GIT_LOCATION_VARS, printed, and ratcheted on the total. The floor
+# is the measured present-day total, not the aspirational 63: this assertion's job is to stop the
+# number falling silently, and raising these seven files to the full family is a conversion, not a
+# guard change (they are vitest suites, so vitest.config.ts's globalSetup tripwire is their real
+# containment -- a stronger guarantee than the partial self-scrub the waiver text leans on).
+# DERIVED from the TS source of truth, never a seventh inline copy -- six copies of this list
+# already exist and the parity suite exists because they drift. If the extraction ever yields
+# nothing, the floor below cannot be met and the assertion fails loudly rather than passing on an
+# empty family.
+mapfile -t GIT_LOCATION_VARS_EXPECTED < <(
+  sed -n '/^export const GIT_LOCATION_VARS = \[/,/^\] as const;/p' \
+      "$SCRIPT_DIR/lib/git-fixture-env.ts" | grep -oE '"GIT_[A-Z_]+"' | tr -d '"' | sort
+)
+if (( ${#GIT_LOCATION_VARS_EXPECTED[@]} < 9 )); then
+  fail "GIT_LOCATION_VARS derivation yielded only ${#GIT_LOCATION_VARS_EXPECTED[@]} names (expected >= 9) — the waiver coverage measurement below would be meaningless"
+fi
+
+_waiver_scrub_count() { # <file> -> how many GIT_LOCATION_VARS it scrubs
+  local f="$1" v n=0
+  for v in "${GIT_LOCATION_VARS_EXPECTED[@]}"; do
+    grep -qE "delete[[:space:]]+process\.env\.$v\b|process\.env\.$v[[:space:]]*=" "$f" 2>/dev/null \
+      && n=$((n+1))
+  done
+  printf '%d' "$n"
+}
+waiver_scrub_total=0
 for w in "${WAIVED[@]}"; do
   if [[ ! -f "$w" ]]; then
     fail "waived file does not exist: $w — delete the entry or fix the path"
-  elif [[ "$(grep -cE 'delete[[:space:]]+process\.env\.GIT_[A-Z_]+|process\.env\.GIT_CEILING_DIRECTORIES[[:space:]]*=|process\.env\.GIT_DIR[[:space:]]*=' "$w")" == 0 ]]; then
+    continue
+  fi
+  _n="$(_waiver_scrub_count "$w")"
+  waiver_scrub_total=$((waiver_scrub_total + _n))
+  if (( _n == 0 )); then
     fail "waived file carries no process.env git-scrub: $w — the waiver's stated justification is false for it"
   else
-    pass "waiver justified by a real process.env git-scrub: $w"
+    pass "waiver justified by a real process.env git-scrub: $w ($_n/${#GIT_LOCATION_VARS_EXPECTED[@]} git-location names)"
   fi
 done
+readonly WAIVER_SCRUB_FLOOR=19
+if (( waiver_scrub_total >= WAIVER_SCRUB_FLOOR )); then
+  pass "waiver scrub coverage $waiver_scrub_total name-scrubs across ${#WAIVED[@]} files (floor $WAIVER_SCRUB_FLOOR; raise it when a waiver widens)"
+else
+  fail "waiver scrub coverage FELL to $waiver_scrub_total (floor $WAIVER_SCRUB_FLOOR) — a waived file narrowed its scrub, which is how a partial exemption becomes a blanket one"
+fi
 # The waiver must be load-bearing: at least some of it must actually be suppressing a difference-set
 # member. A waiver list that suppresses nothing is decoration, and decoration is what a reviewer
 # reads as coverage. (Harness row H2 asserts these PASS; this asserts they are being exercised.)
