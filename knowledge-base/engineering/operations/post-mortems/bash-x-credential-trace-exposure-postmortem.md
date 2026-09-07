@@ -226,7 +226,10 @@ this document contradicted it.
 
 Doppler activity shows *a* `prd_terraform` secret updated at 20:07:19Z, three
 minutes before that comment. It does not name the secret, so it is consistent
-with the rotation rather than corroboration of it.
+with the rotation rather than corroboration of it. Note that 20:10Z — propagated
+through `recovery_at`, `incident_window`, the timeline and the Resolution
+section — is the time the rotation was **reported**, not measured; the Doppler
+write at 20:07:19Z is the nearest thing to an event time on record.
 
 **Corrected state, re-measured 2026-09-07 (HTTP status only; no value printed):**
 
@@ -238,28 +241,48 @@ with the rotation rather than corroboration of it.
 One credential remains exposed, not two.
 
 **How the error happened, because it is the same one this incident is about.**
-The claim was carried forward from the issue's *opening* body — written at
-15:33Z on 2026-09-03, before the rotation — and never re-checked against the
-thread that had already superseded it. Every later restatement (the PR body, the
-post-merge verification comment, this PIR) inherited it, and each restatement
-made it look better-established. That is precisely the failure mode recorded in
-this PR's own learning file as *"a framing INHERITED from a sibling artifact,
-pasted into a context whose premise you never re-checked"* — committed here
-against the very issue that documents it. The operator caught it; no gate did.
+The literal ancestor is a **thread comment**, 2026-09-03T16:16:34Z: *"Both
+tokens remain live until then."* True when written, superseded four hours later
+by the 20:10Z rotation record in the same thread. So the mechanism is not "the
+opening description was trusted over the thread" — an earlier revision of this
+addendum said that, and it is wrong. It is narrower and harder to catch: an
+in-thread claim was inherited and the **later** in-thread record that superseded
+it was never re-read. Restatements followed in #7858's PR body and its
+post-merge verification comment, each making it look better-established. (This
+PIR is dated 2026-09-04 and so precedes the post-merge comment; an earlier
+revision listed them as a single escalating sequence, which the timestamps do
+not support.)
+
+That failure mode is recorded by name in
+`plugins/soleur/skills/compound/SKILL.md` — *"a framing INHERITED from a sibling
+artifact, pasted into a context whose premise you never re-checked"* — whose
+gate is to name the falsifying command for every causal claim a diff adds.
+`plugins/soleur/skills/review/SKILL.md` names **a credential's liveness** as a
+highest-yield target for that same check.
+
+So the honest finding is **not** "no gate existed". Two did, correctly worded,
+and neither ran on #7858. The one hard rule that is mechanically checkable here,
+`hr-before-asserting-github-issue-status`, mandates `gh issue view --json state`
+— issue STATE, not comments — so it would not have caught a liveness claim even
+if it had fired. Widening it to cover credential-liveness assertions is the
+follow-up this incident actually earns; a learning is not a fix.
 
 **What would have caught it:** one `gh issue view 7797 --json comments` before
 asserting a credential's liveness. A credential's state is not a property of the
 issue that reported it — it is live infrastructure, and the only honest source is
 a probe or the rotation record, never the opening description. The check is
-cheaper than the correction sweep it prevents: correcting it took nine edits in
-this file plus a retraction comment on #7797 and an edit to PR #7858's body —
-and the first pass at those nine missed three of them.
+cheaper than the correction sweep it prevents: correcting it took eleven edits
+in this file, a retraction comment on #7797, and a correction banner on #7858's
+merged PR body — and the first pass missed three of the in-file blocks, which a
+review round then found.
 
 **Also corrected by that record:** the remediation note assumed the Better Stack
 half was an operator dashboard trip. It was not — an agent minted the
 replacement via Playwright automation, proved old-vs-new parity on three
 surfaces, wrote to Doppler over stdin, and deleted the old token. Only the Sentry
 half is a genuine credential-entry gate, and the 2026-09-03 record proposes
-retiring even that by migrating the ~8 `scripts/followthroughs/*.sh` consumers
+retiring even that by migrating the 14 `scripts/followthroughs/*.sh` consumers (16 including test
+files; only 3 declare the credential through a `secrets=` directive) —
+re-measured here, since ~8 was inherited from the 2026-09-03 comment
 off the *user* auth token onto an org-level Internal Integration (ADR-031's
 `iac-terraform-prd` shape), which would make the next rotation agent-doable.
