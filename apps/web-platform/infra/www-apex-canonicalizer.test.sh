@@ -77,6 +77,8 @@ REDIR_TF="$SCRIPT_DIR/seo-bulk-redirects.tf"
 DEPLOY_WF="$REPO_ROOT/.github/workflows/deploy-docs.yml"
 CNAME_FILE="$REPO_ROOT/plugins/soleur/docs/CNAME"
 UPTIME_TF="$SCRIPT_DIR/uptime-alerts.tf"
+SENTRY_TF="$SCRIPT_DIR/sentry/uptime-monitors.tf"
+DEPLOY_SENTRY_ARRAY_SRC="$SCRIPT_DIR/cutover-verify.sh"
 
 PASS=0
 FAIL=0
@@ -159,6 +161,26 @@ attr() { # <key> <blocktext>
       sub("^[[:space:]]*" k "[[:space:]]*=[[:space:]]*", "")
       sub("[[:space:]]+$", "")
       print; seen = 1
+    }
+  ' <<<"$2"
+}
+
+# A bracketed list, whitespace-normalised, whether it is written on one line or
+# spread across several. `attr` returns the FIRST PHYSICAL LINE after the `=`, so a
+# `terraform fmt`-legal `expected_status_codes = [\n    301,\n  ]` reads back as a
+# bare `[` and the assertion FALSE-FAILS on a semantically identical file. That is a
+# false positive waiting for an innocent reformat, and the M2 case's own claim to be
+# "whitespace-normalised so the contract is about VALUES, not formatting" was untrue
+# until this existed. Trailing commas are dropped so `[301,]` == `[301]`.
+attr_list() { # <key> <blocktext>
+  awk -v k="$1" '
+    !done && $0 ~ "^[[:space:]]*" k "[[:space:]]*=" {
+      sub("^[[:space:]]*" k "[[:space:]]*=[[:space:]]*", "")
+      buf = $0
+      while (buf !~ /\]/ && (getline nxt) > 0) { buf = buf nxt }
+      gsub(/[[:space:]]/, "", buf)
+      sub(/,\]$/, "]", buf)
+      print buf; done = 1
     }
   ' <<<"$2"
 }
@@ -477,99 +499,180 @@ verdict "$cname_rc" "plugins/soleur/docs/CNAME is the apex, not www; found ${cna
 #
 # `sentry_uptime_monitor.soleur_www` asserted `equals 301` on https://www.soleur.ai/.
 # Sentry's uptime checker always follows 3xx and evaluates assertions against the FINAL
-# response, so it compared `equals 301` to the apex's 200 and failed every check it ever
-# ran. Measured 2026-09-07: 10/10 checks `failure`/`failure_incident`, every row
-# `httpStatusCode 301`, `assertionFailureData` naming the `equals 301` assertion.
+# response, so it graded `equals 301` against the apex's 200 — an assertion it cannot
+# satisfy. Measured 2026-09-07: the 10 most recent checks were 10/10 failing.
 #
 # The property moved to `betteruptime_monitor.soleur_www_redirect` — operator-facing name
 # "soleur dot ai www redirect 301" — because Better Stack is the only vendor in the stack
-# that can express it (`follow_redirects = false`). These cases pin the tokens that make
-# that monitor mean something. Each is a single-token edit away from restoring a defect
-# class this repo has now shipped twice.
+# that can express it (`follow_redirects = false`).
 #
-# Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
-# Rationale: ADR-204.
+# WHAT THESE CASES PIN, AND WHY THAT SET CHANGED AT REVIEW. The first draft pinned
+# `follow_redirects`, `expected_status_codes` and `remember_cookies` — and Better Stack
+# REFUSES all three wrong combinations at create time with HTTP 422, so those cases were
+# belt-and-braces over a vendor-enforced invariant. Meanwhile every attribute with NO
+# vendor backstop was unasserted, and ten one-line edits were measured to leave the suite
+# fully green while silently killing the alarm. Two of them reproduce #7798 exactly:
+#   - `url` repointed at the apex  -> no-follow + [301] against a 200: fails forever.
+#   - `monitor_type = "status"`    -> the status-code list goes inert and the monitor
+#                                     reports GREEN precisely when www serves the site
+#                                     instead of redirecting. Fails OPEN.
+# and a third, `paused = true`, reproduces the #7798 STATE: declared correctly, checking
+# nothing, reporting nothing. The set below is derived from "what can make this alarm
+# ineffective", not from "what was I just looking at".
 #
 # BLOCK-SCOPED, never a whole-file grep. `uptime-alerts.tf` contains two monitors that
 # legitimately set `follow_redirects = true`, so a file-level grep for the value we want is
 # satisfied by a neighbouring resource — that is the concrete way this guard goes vacuous.
+#
+# Case ids are W1..Wn. They are deliberately NOT M-numbered: www-apex-canonicalizer-mutation.test.sh
+# already owns M1..M10 for the redirect-chain rows, and two disjoint numbering spaces across
+# a guard and its own battery is a reader trap.
+#
+# Runbook: knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
+# Rationale: ADR-204.
 WWW_MON="$(hcl_block betteruptime_monitor soleur_www_redirect "$UPTIME_TF")"
 
-# M3 — the guard's own dispatch. A guard that passes when its subject is ABSENT asserts
+# W1 — the guard's own dispatch. A guard that passes when its subject is ABSENT asserts
 # nothing at all, and the extractor returns an empty string for a renamed or deleted block.
 # Assert the extraction succeeded BEFORE reading any attribute out of it, so "block gone"
-# reports as itself rather than as four confusing attribute mismatches.
+# reports as itself rather than as a spray of confusing attribute mismatches.
 mon_present=1
 if [[ -n "$WWW_MON" ]]; then mon_present=0; fi
 verdict "$mon_present" "betteruptime_monitor.soleur_www_redirect is declared in uptime-alerts.tf (the www 301 has a runtime alarm at all)"
 
-# M1 — the single token that separates this monitor from the broken one. With
-# follow_redirects = true the probe resolves to the apex 200 and [301] can never match.
-# Better Stack independently refuses that combination at create time (measured: HTTP 422
-# "Cannot follow redirects when expecting a 3xx status code"), so this is belt and braces —
-# but it fails the PR instead of failing a production apply, which is the point.
+# W2 — THE SUBJECT. Repointing this at the apex leaves every other assertion true while the
+# monitor watches a URL that never 301s. Vendor-unenforced; nothing else catches it.
+eq_case 'https://www.soleur.ai/' "$(unquote "$(attr url "$WWW_MON")")" \
+  "soleur_www_redirect probes www, not some other host (repointing it reproduces #7798)"
+
+# W3 — the type that makes the status-code list mean anything. `status` is 2xx-only, so this
+# mutation is the FAIL-OPEN one: the monitor goes green exactly when www stops redirecting.
+eq_case 'expected_status_code' "$(unquote "$(attr monitor_type "$WWW_MON")")" \
+  "soleur_www_redirect is monitor_type=expected_status_code (status is 2xx-only and cannot express a 301)"
+
+# W4 — the single token that separates this monitor from the broken one. Better Stack also
+# refuses it at create time (422), so this fails the PR rather than a production apply.
 eq_case 'false' "$(attr follow_redirects "$WWW_MON")" \
   "soleur_www_redirect does NOT follow redirects (else it asserts against the apex 200 — the #7798 defect)"
 
-# M2 — the exact list, not a 3xx class: a 302/307/308 is a different canonicalization
-# contract, and admitting a 2xx would admit the precise state the monitor exists to catch.
-# Whitespace-normalised so the contract is about VALUES, not formatting (harness row H2).
-eq_case '[301]' "$(tr -d '[:space:]' <<<"$(attr expected_status_codes "$WWW_MON")")" \
+# W5 — exact list, not a 3xx class: a 302/307/308 is a different canonicalization contract,
+# and admitting a 2xx admits the exact state this monitor exists to catch. Read via attr_list
+# so a fmt-legal multi-line list is accepted (values, not formatting).
+eq_case '[301]' "$(attr_list expected_status_codes "$WWW_MON")" \
   "soleur_www_redirect expects exactly [301] (not a widened 3xx class, and never a 2xx)"
 
-# Phase 0 finding, not in the original design. `remember_cookies` is `computed` in the
-# pinned provider, so OMITTING it sends nothing and the API default (true) applies — and
-# Better Stack rejects the create: HTTP 422 "Cannot keep cookies when redirecting when
-# expecting a 3xx status code". Measured against the live API on 2026-09-07. Without this
-# attribute the resource does not apply at all, so it is pinned like the rest.
+# W6 — Phase 0 finding. `remember_cookies` is `computed` in the pinned provider, so OMITTING
+# it sends nothing, the API default (true) applies, and Better Stack REFUSES the create:
+# HTTP 422 "Cannot keep cookies when redirecting when expecting a 3xx status code".
 eq_case 'false' "$(attr remember_cookies "$WWW_MON")" \
   "soleur_www_redirect sets remember_cookies = false (required by the vendor for a 3xx expectation)"
 
-# M5 — a `count` gate would leave the resource reading correct while provisioning NOTHING.
-# No attribute-VALUE assertion can catch that, so it is asserted as an absence.
-eq_case '0' "$(count_matches '^[[:space:]]*count[[:space:]]*=' "$WWW_MON")" \
-  "soleur_www_redirect carries no count gate (a gated monitor is declared and never created)"
+# W7 — a monitor that is not checking is indistinguishable from one with nothing to report.
+# This is the #7798 STATE in one token, and no vendor call rejects it.
+eq_case 'false' "$(attr paused "$WWW_MON")" \
+  "soleur_www_redirect is not paused (a paused monitor is declared, applied, and silent)"
 
-# M6 — the ONLY operator-facing string on this resource: betteruptime_monitor has no
+# W8 — delivery. Under the free tier `policy_id` is null, so `email` is the ONLY channel:
+# an incident opens and nobody is told. Assert at least one channel is armed rather than
+# pinning `email` specifically, so a future paid-tier route does not false-fail.
+armed_rc=1
+for _ch in email call sms push; do
+  [[ "$(attr "$_ch" "$WWW_MON")" == "true" ]] && armed_rc=0
+done
+verdict "$armed_rc" "soleur_www_redirect has at least one notification channel armed (an incident nobody is told about is not an alarm)"
+
+# W9 — the timer dns.tf's Camp B ruling was re-grounded on. That block says "do not widen it
+# without revisiting this ruling"; before this case, nothing enforced it.
+eq_case '1200' "$(attr confirmation_period "$WWW_MON")" \
+  "soleur_www_redirect keeps confirmation_period = 1200 (dns.tf's Camp B acceptance is re-grounded on this exact bound)"
+
+# W10 — a gate would leave the resource reading correct while provisioning NOTHING. Both
+# keywords: `for_each = {}` is the same defect as `count = 0`, and the file's own
+# betteruptime_policy is count-gated on the paid-tier flag, so it is the locally idiomatic
+# next edit. Asserted as an absence, because no attribute-VALUE check can catch it.
+eq_case '0' "$(count_matches '^[[:space:]]*(count|for_each)[[:space:]]*=' "$WWW_MON")" \
+  "soleur_www_redirect carries no count/for_each gate (a gated monitor is declared and never created)"
+
+# W11 — `ignore_changes` would stop the pinned attributes converging: the guard keeps reading
+# them out of a file Terraform has been told to ignore. This file already contains two
+# `ignore_changes` precedents, so a reader has an in-file invitation.
+# NOT line-anchored, deliberately: `lifecycle { ignore_changes = [...] }` written on
+# ONE line is legal HCL and evaded the anchored form — caught by this guard's own
+# mutation battery (W11 survived until this widened). The block is comment-stripped
+# before it gets here, so a bare `ignore_changes =` token can only be the attribute.
+eq_case '0' "$(count_matches 'ignore_changes[[:space:]]*=' "$WWW_MON")" \
+  "soleur_www_redirect has no lifecycle ignore_changes (ignored attributes stop converging while still reading correct)"
+
+# W12 — the ONLY operator-facing string on this resource: betteruptime_monitor has no
 # `description` field, so pronounceable_name is what lands in the incident email subject.
-# Empty means the alert is titled by the vendor's URL default; equal to a sibling's means
-# the two www alarms are indistinguishable in an inbox. Both are observability defects even
-# though the monitor still functions, so distinctness is asserted against the siblings
-# actually present in the file rather than against a remembered list.
+# Empty means the alert is titled by the vendor's URL default; equal to a sibling's means the
+# two www alarms are indistinguishable in an inbox.
+#
+# The sibling set is derived from the file rather than remembered — and its NON-EMPTINESS is
+# asserted, because `grep -qxF` against an empty set cannot fail, which would make the
+# distinctness half vacuous the moment the siblings lose their names. `rn` is reset at EVERY
+# resource header, not only at betteruptime_monitor ones, so a pronounceable_name on a later
+# resource of another type is not misattributed to this block.
 WWW_PN="$(unquote "$(attr pronounceable_name "$WWW_MON")")"
 SIBLING_PNS="$(strip_comments "$UPTIME_TF" | awk '
-  /^resource[[:space:]]+"betteruptime_monitor"[[:space:]]+"/ {
-    rn = $0; sub(/^.*"betteruptime_monitor"[[:space:]]+"/, "", rn); sub(/".*$/, "", rn)
+  /^resource[[:space:]]+"/ {
+    rn = ""
+    if ($0 ~ /^resource[[:space:]]+"betteruptime_monitor"[[:space:]]+"/) {
+      rn = $0; sub(/^.*"betteruptime_monitor"[[:space:]]+"/, "", rn); sub(/".*$/, "", rn)
+    }
   }
-  rn != "soleur_www_redirect" && /^[[:space:]]*pronounceable_name[[:space:]]*=/ {
+  rn != "" && rn != "soleur_www_redirect" && /^[[:space:]]*pronounceable_name[[:space:]]*=/ {
     v = $0; sub(/^[^=]*=[[:space:]]*/, "", v); gsub(/"/, "", v); sub(/[[:space:]]+$/, "", v); print v
   }
 ')"
+sib_n="$(printf '%s\n' "$SIBLING_PNS" | grep -c . || true)"
+eq_case '2' "$sib_n" \
+  "the sibling pronounceable_name set is non-empty (distinctness over an empty set is vacuous); found ${sib_n}"
+
 pn_rc=1
 if [[ -n "$WWW_PN" ]] && ! grep -qxF "$WWW_PN" <<<"$SIBLING_PNS"; then pn_rc=0; fi
 verdict "$pn_rc" "soleur_www_redirect has a pronounceable_name distinct from every sibling monitor; found [${WWW_PN}]"
 
-# The bracket must not come back. deploy-docs.yml used to PAUSE the Sentry www
-# monitor around each publish and resume it afterwards, to hide a deploy-window
-# false page under the old `equals 301` assertion. Two reasons that must stay
-# gone, and neither is visible from the workflow alone:
+# W14 — cross-read: cutover-verify.sh's SENTRY_MONITORS array must name exactly the Sentry
+# uptime monitors that are declared. Added at #7798 REVIEW, because a comment in
+# cutover-verify.sh already claimed this guard performed this check and it did not — a
+# correctness claim resting on a gate that did not exist, which is the defect class this
+# whole PR is about. The two are magic strings in HCL and bash with no compiler between them,
+# and the #7798 rename moved one of them.
+SENTRY_NAMES="$(strip_comments "$SENTRY_TF" \
+  | awk '/^[[:space:]]*name[[:space:]]*=/ { v=$0; sub(/^[^=]*=[[:space:]]*/,"",v); gsub(/"/,"",v); sub(/[[:space:]]+$/,"",v); print v }' \
+  | sort -u | paste -sd',' -)"
+ARRAY_NAMES="$(strip_comments "$DEPLOY_SENTRY_ARRAY_SRC" \
+  | awk '/^SENTRY_MONITORS=\(/ { v=$0; sub(/^SENTRY_MONITORS=\(/,"",v); sub(/\).*$/,"",v); print v }' \
+  | tr ' ' '\n' | grep -v '^$' | sort -u | paste -sd',' -)"
+# Both operands non-empty, or the equality is the vacuous "" == "" this case exists
+# to avoid. Asserted rather than assumed: a broken extractor on BOTH sides passes.
+sentry_n="$(printf '%s' "$SENTRY_NAMES" | tr ',' '\n' | grep -c . || true)"
+eq_case '4' "$sentry_n" \
+  "the sentry_uptime_monitor name set extracted non-vacuously (found ${sentry_n})"
+eq_case "$SENTRY_NAMES" "$ARRAY_NAMES" \
+  "cutover-verify.sh SENTRY_MONITORS matches the sentry_uptime_monitor name set byte-for-byte"
+
+# W15/W16 — the bracket must not come back, asserted on the PROPERTY rather than on the
+# deleted step's spelling. deploy-docs.yml used to PAUSE the Sentry www monitor around each
+# publish and resume it after, to hide a deploy-window false page under the old `equals 301`
+# assertion. Two reasons that must stay gone:
 #
-#   1. A failed resume left the monitor paged-off, and the bracket's own comment
-#      recorded that the next apply-sentry-infra.yml run was NOT a guaranteed
-#      self-heal.
-#   2. Pausing halts checks, so Sentry RESOLVED the standing downtime issue on
-#      every docs deploy and opened a fresh one after — silently laundering the
-#      alarm's own failure record. That is why #7798's event counts and
-#      first-seen dates never reconciled across readings.
+#   1. A failed resume left the monitor paged-off, and the bracket's own comment recorded
+#      that the next apply-sentry-infra.yml run was NOT a guaranteed self-heal.
+#   2. Pausing halts checks, so Sentry resolves the open downtime issue and a fresh one opens
+#      after — laundering the alarm's own failure record. The timestamps supporting that
+#      reading are in the #7798 spec's phase-0-measurements.md; it is an inference from the
+#      correlation, not a directly observed vendor behaviour.
 #
-# Nothing else guards the removal, so a future "restore the deploy-window
-# suppression" PR would reintroduce both. The deploy window is absorbed by
-# confirmation_period = 1200 on the Better Stack monitor instead — a timer, not
-# a mutation. Asserted on the syntactic step-id/name anchors, and this file
-# therefore never quotes them in prose (cq-assert-anchor-not-bare-token).
-DEPLOY_MUTATIONS="$(count_matches '^[[:space:]]*(id:[[:space:]]*pause_www_monitor|-[[:space:]]*name:.*[Pp]ause .*uptime monitor)' "$DEPLOY_TXT")"
-eq_case '0' "$DEPLOY_MUTATIONS" \
-  "deploy-docs.yml declares no uptime-monitor pause/resume step (a failed resume strands the monitor paged-off, and pausing launders the incident record)"
+# ANCHORED ON THE CAPABILITY, NOT THE WORDING. The first draft matched the two literal
+# strings the deleted steps happened to use, and a reworded reintroduction — carrying the
+# credential back — passed cleanly. These two assert what the bracket NEEDED: a Sentry
+# credential in this workflow, and a mutating call to the monitor API.
+eq_case '0' "$(count_matches 'secrets\.SENTRY_' "$DEPLOY_TXT")" \
+  "deploy-docs.yml references no SENTRY_* secret (the pause/resume bracket cannot return without one)"
+eq_case '0' "$(count_matches '(detectors/|uptime\.betterstack\.com).*(-X[[:space:]]*(PUT|PATCH|POST)|enabled|paused)|-X[[:space:]]*(PUT|PATCH)[^\n]*(detectors/|monitors/)' "$DEPLOY_TXT")" \
+  "deploy-docs.yml makes no monitor-mutating API call (CI must not toggle vendor alarm state)"
 
 # ---------------------------------------------------------------------------------------
 # ANTI-VACUITY FLOOR AND ACCOUNTING (AP-023 / ADR-193)
@@ -590,9 +693,9 @@ printf '\n'
 # pages_domain pair is replaced by a single absence assertion, so the count is one
 # lower. Bump the matching arm deliberately when you add a case.
 if [[ -n "$DOM_APEX" || -n "$DOM_WWW" ]]; then
-  EXPECTED_CASES=31   # PR3 onward: the two pages_domain couplings are live, + 7 Guard 1 (#7798)
+  EXPECTED_CASES=41   # PR3 onward: the two pages_domain couplings are live, + 17 Guard 1 (#7798)
 else
-  EXPECTED_CASES=30   # PR1/PR2: one absence assertion stands in for that pair, + 7 Guard 1 (#7798)
+  EXPECTED_CASES=40   # PR1/PR2: one absence assertion stands in for that pair, + 17 Guard 1 (#7798)
 fi
 if [[ "$CASES" -ne "$EXPECTED_CASES" ]]; then
   printf '[FATAL] vacuity floor: %d assertion cases executed, expected exactly %d — a case was deleted, skipped, or added without updating EXPECTED_CASES\n' \

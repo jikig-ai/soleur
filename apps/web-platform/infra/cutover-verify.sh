@@ -156,6 +156,24 @@ capture_baseline() { # <out>
 }
 
 # ---------------------------------------------------------------------------------------
+# AUTH HEADER VIA STDIN, NEVER ARGV. A `-H "Authorization: Bearer $TOK"` sits in
+# /proc/<pid>/cmdline and `ps` for the life of the request. `curl --config -`
+# reads the header from stdin, so the token never appears in an argument list.
+curl_auth() { # <bearer> <url...>
+  local tok="$1"; shift
+  printf 'header = "Authorization: Bearer %s"\n' "$tok" \
+    | curl -sS --max-time "$CURL_MAX_TIME" --config - "$@"
+}
+
+# HOISTED at #7798. `probe_monitor_health` CALLS this, and the
+# `--capture-monitor-baseline` arm calls that, from the mode dispatch below --
+# which sits ABOVE where this function used to be defined. Bash resolves a
+# function at call time, so `curl_auth` did not exist yet at that call site: the
+# `command not found` was swallowed by the probe's own `2>/dev/null`, every
+# monitor resolved `unknown`, and the capture refused to write. It failed SAFE,
+# and it meant --capture-monitor-baseline could never succeed at all. Verified by
+# probe: `declare -F curl_auth` at the call site printed NO before this move.
+
 # ---------------------------------------------------------------------------------------
 # MONITOR HEALTH — one probe, used by CUT8 and by --capture-monitor-baseline
 # ---------------------------------------------------------------------------------------
@@ -174,9 +192,17 @@ capture_baseline() { # <out>
 # Byte-identical to the `name` on each sentry_uptime_monitor resource in
 # sentry/uptime-monitors.tf. `soleur-ai-www` became `soleur-ai-www-reachability`
 # at #7798 when it was retargeted from an unsatisfiable `equals 301` to 2xx.
-# If this array and a resource `name` ever diverge, CUT8 reports that monitor
-# `unknown` and --capture-monitor-baseline REFUSES to write -- it fails safe,
-# but www-apex-canonicalizer.test.sh catches the divergence at PR time first.
+# If this array and a resource `name` ever diverge, www-apex-canonicalizer.test.sh
+# fails at PR time -- it cross-reads sentry/uptime-monitors.tf and asserts every
+# `name` here appears there and vice versa. That assertion was ADDED at #7798
+# review; until then this comment claimed it and no such check existed anywhere,
+# which is the same defect class this file's CUT8 header describes.
+#
+# Runtime behaviour if one ever slips past: a name in this array with no live
+# monitor resolves `unknown`, which CUT8 routes to UNREACHABLE (never PASS) and
+# --capture-monitor-baseline refuses to write. Note the OTHER direction is NOT
+# fail-safe: a monitor whose baseline ROW is missing scores as a REGRESSION, not
+# as unknown -- see the CUT8 block below.
 SENTRY_MONITORS=(soleur-ai-apex soleur-ai-www-reachability soleur-ai-changelog-deep soleur-ai-acme-carveout-probe)
 BETTERSTACK_MONITOR="${CUTOVER_BETTERSTACK_MONITOR:-soleur dot ai apex}"
 
@@ -316,15 +342,6 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 CUTOVER_TMPDIR="$(mktemp -d -t cutover-verify.XXXXXXXX)" || {
   printf '[FATAL] could not create a scratch directory\n' >&2; exit 2; }
 trap 'rm -rf "$CUTOVER_TMPDIR"' EXIT INT TERM HUP
-
-# AUTH HEADER VIA STDIN, NEVER ARGV. A `-H "Authorization: Bearer $TOK"` sits in
-# /proc/<pid>/cmdline and `ps` for the life of the request. `curl --config -`
-# reads the header from stdin, so the token never appears in an argument list.
-curl_auth() { # <bearer> <url...>
-  local tok="$1"; shift
-  printf 'header = "Authorization: Bearer %s"\n' "$tok" \
-    | curl -sS --max-time "$CURL_MAX_TIME" --config - "$@"
-}
 
 fetch() { # <url> -> "code<TAB>headers<TAB>body" via globals; rc 1 on transport failure
   local url="$1" sep
