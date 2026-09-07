@@ -1026,7 +1026,7 @@ runcmd:
     # MUTABLE tag: anything able to re-point this tag between the build and a host replace
     # would have served a different root shell script, and nothing on this path would have
     # noticed. The comment above the GHCR bake used to claim a signature check covered this; it
-    # did not, and the image IS cosign-signed (the build workflow signs ${IMAGE}@${DIGEST} keyless and fails closed); what the signature does NOT buy is verification on this path, because ci-deploy.sh never calls verify_image_signature on the inngest branch.
+    # did not, and the image IS cosign-signed (the build workflow signs the image by digest, keyless, and fails closed); what the signature does NOT buy is verification on this path, because ci-deploy.sh never calls verify_image_signature on the inngest branch.
     #
     # BOTH halves are load-bearing. The `@sha256:` is the actual control — docker resolves by
     # digest and ignores the tag, so these are immutable bytes. The `:vX.Y.Z` tag is retained
