@@ -180,7 +180,7 @@ out="$(env FLIP_ROLLOUT_QUERY_BIN="$(make_stub "$f")" \
 # #7695: with nothing supplied the probe now DERIVES. With no probe row carrying the pinned
 # digest there is nothing to derive FROM, so the honest reason is boundary_underivable — still
 # exit 2, still "nothing was measured", never a pass.
-[[ "$out" == *"boundary_underivable"* ]] && pass "names boundary_underivable as the reason" || fail "reason not named: $out"
+[[ "$out" == *"probe_channel_dark"* ]] && pass "names probe_channel_dark (no probe row at all)" || fail "reason not named: $out"
 
 # --- 2. an unparseable boundary must not widen to 'any time' -------------------------------
 echo "TEST: an unparseable boundary is TRANSIENT, not silently widened"
@@ -426,7 +426,7 @@ f="$WORK/rows-derive-foreign"
 rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
 [[ "$rc" == "2" ]] && pass "exit 2 when only a foreign host carries the pinned digest" \
   || fail "expected 2, got $rc: $(probe_out)"
-[[ "$(probe_out)" == *"boundary_underivable"* ]] && pass "names boundary_underivable" \
+[[ "$(probe_out)" == *"probe_channel_dark"* ]] && pass "names probe_channel_dark (the foreign row is filtered out, so no row survives)" \
   || fail "reason not named: $(probe_out)"
 
 # --- D4/D5: THE PROVENANCE CONTROL PAIR -------------------------------------------------------
@@ -473,7 +473,40 @@ rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER="$BOUNDARY" FLIP_ROLLOUT_
   && pass "no derivation ran when a boundary was supplied" || fail "derived despite a supplied boundary: $(probe_out)"
 
 
-MIN_ASSERTIONS=44
+
+# --- D7: the LIVE terminal flag is `aborted`, and it must PASS ---------------------------------
+# #7695 P0. Measured 2026-09-07: INNGEST_CUTOVER_FLIP reads `aborted` and the host emits
+# {"reason":"noop-aborted","flag":"aborted"} every 30s. Matching only `rolled-back` made post_ok 0
+# forever AND made the drift selector match every row, so the probe could never PASS -- the same
+# permanent silent no-op the header exists to retire, wearing a different reason string.
+# This fixture is RED against the pre-fix probe.
+echo "TEST: #7695 the live terminal flag 'aborted' is accepted, not read as drift"
+f="$WORK/rows-aborted"
+{ row aborted noop-aborted "$POST_A"
+  row aborted noop-aborted "$POST_B"; } > "$f"
+rc="$(run_probe "$(make_stub "$f")")"
+[[ "$rc" == "0" ]] && pass "exit 0 on two guard-stamped 'aborted' markers" || fail "expected 0, got $rc: $(probe_out)"
+[[ "$(probe_out)" != *"flag_drift"* ]] && pass "'aborted' is not reported as drift" || fail "aborted read as drift: $(probe_out)"
+
+# --- D8: `armed` is UNCAPPED even under a derived boundary -------------------------------------
+# #7695 P1. The derived cap exists because an inferred boundary can misattribute a PRE-replace
+# event. `armed` is never a resting state, so it is an alarm regardless of when the replace
+# happened -- and the sweeper provisions no Doppler token, so if this arm were capped the FLUSHALL
+# alarm would be reachable only on a channel that does not exist in CI.
+echo "TEST: #7695 an 'armed' row FAILs even under a DERIVED boundary (uncapped)"
+f="$WORK/rows-armed-derived"
+{
+  probe_row "$(_ck '-70 minutes')" "ghcr.io/jikig-ai/soleur-inngest-bootstrap:v9.9.9@${PIN_DIGEST}"
+  row aborted noop-aborted "$(_ts '-40 minutes')"
+  row armed armed "$(_ts '-20 minutes')"
+} > "$f"
+rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$PIN_FIXTURE")"
+[[ "$rc" == "1" ]] && pass "exit 1 (not the capped 2) on an armed row under derived provenance" \
+  || fail "expected 1, got $rc: $(probe_out)"
+[[ "$(probe_out)" == *"cutover_armed"* ]] && pass "names cutover_armed" || fail "reason not named: $(probe_out)"
+[[ "$(probe_out)" == *"FLUSHALL"* ]] && pass "names the FLUSHALL consequence" || fail "consequence not named: $(probe_out)"
+
+MIN_ASSERTIONS=49
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.

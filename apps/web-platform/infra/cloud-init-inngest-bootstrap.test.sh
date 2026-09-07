@@ -851,7 +851,8 @@ assert "dedicated-host pin-consistency: both refs (IREF + ZIREF) present and sha
 # by AC5 (the digest was read by command from the run that signed it). The three are sound
 # only together; none of them is sufficient alone. See `## Guard Contract` row B6.
 #
-# Test fixtures are excluded by an EXPLICIT include-list, never by happening not to match:
+# Test fixtures fall outside the swept population; see the note below on exactly how, and on
+# which assertion is the actual control:
 # `cloud-init-inngest-zot-pull-mutation.test.sh` pins a deliberately stale
 # v1.1.24@sha256:6cdaa63d... as a NEGATIVE CONTROL, and a sweep that "helpfully" updates it
 # destroys the control.
@@ -863,11 +864,17 @@ GB_BEFORE="$TOTAL"
 # added cloud-init-inngest-worker.yml pinned to v1.1.19 produced zero delta). Four sibling
 # cloud-init-*.yml already exist in this directory.
 #
-# So sweep the GLOB and derive the expected count from what was swept. The negative-control
-# fixture is still protected -- but by an explicit EXCLUDE, which is a rule, rather than by a
-# filename list that happens not to reach it: cloud-init-inngest-zot-pull-mutation.test.sh pins
-# a deliberately stale v1.1.24@sha256:6cdaa63d... and a sweep that "helpfully" updates it
-# destroys the control.
+# So sweep the GLOB and derive the expected count from what was swept.
+#
+# HOW THE NEGATIVE CONTROL IS PROTECTED, STATED ACCURATELY. An earlier revision of this comment
+# claimed an "explicit EXCLUDE, which is a rule" -- there is NO --exclude in this guard, and
+# crediting a control that is not in the code is worse than crediting none, because the next
+# reader who adds a `cloud-init-*.yml` fixture with a deliberately stale pin will trust a rule
+# that does not exist. What actually keeps cloud-init-inngest-zot-pull-mutation.test.sh (pinning
+# a deliberately stale v1.1.24@sha256:6cdaa63d...) out of the population is that a `.test.sh`
+# cannot match the `cloud-init*.yml` glob. That is weak on its own, so the real guarantee is the
+# POSITIVE assertion at the end of this block: it reds if the stale pin is ever "helpfully"
+# updated, which is the failure that would destroy the control.
 GB_SITES_FILE="$(mktemp -t inngest-pin-sites-XXXXXX.txt)"
 GB_FILES="$(grep -rlE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' \
              --include='cloud-init*.yml' "$SCRIPT_DIR" 2>/dev/null | sort -u || true)"
@@ -910,13 +917,47 @@ assert "GuardB: the deliberately-stale negative control is untouched by the swee
   "[[ ! -f '$GB_NEGCTL' ]] || (( \$(grep -cF 'soleur-inngest-bootstrap:v1.1.24@sha256:' '$GB_NEGCTL' || true) >= 1 ))"
 rm -f "$GB_SITES_FILE"
 
+# --- GuardB row 6 (#7695): the tag MOVED but the digest DID NOT --------------------------------
+# THE MEASURED BYPASS THIS CLOSES. Guard A resolves the pinned TAG and compares its tree to HEAD;
+# Guard B compares the four sites to EACH OTHER. So writing `v1.1.26@sha256:<v1.1.25's digest>` at
+# all four sites satisfies both -- one tag, one digest, no tag-only site, and the tag's tree IS
+# HEAD's carriers -- while the host boots the OLD bytes. Measured on this branch: 161/161 green.
+# That is the #7630 shape verbatim, and it is the shape an operator produces by bumping the tag
+# and forgetting to re-resolve the digest.
+#
+# Binding a digest to a tag needs a registry read, which no PR-gating job here can do. But the
+# DEFECT is hermetically detectable: if this branch moves the tag relative to the merge base and
+# leaves the digest untouched, that is the bug, and git can see it.
+#
+# origin/main is a moving ref. Post-merge it carries this same pin, so old == new and the check
+# becomes a no-op rather than inverting -- the safe direction. If it is unresolvable the row
+# SKIPs loudly rather than passing silently: "could not compare" must not read as "compared".
+GB_BASE_PIN=""
+if git -C "$SCRIPT_DIR" rev-parse -q --verify origin/main >/dev/null 2>&1; then
+  GB_BASE_PIN="$(git -C "$SCRIPT_DIR" show origin/main:apps/web-platform/infra/cloud-init-inngest.yml 2>/dev/null \
+    | grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' | head -1 || true)"
+fi
+GB_HEAD_PIN="$(grep -ohE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+@sha256:[0-9a-f]{64}' \
+  "$SCRIPT_DIR/cloud-init-inngest.yml" 2>/dev/null | head -1 || true)"
+if [[ -z "$GB_BASE_PIN" || -z "$GB_HEAD_PIN" ]]; then
+  assert "GuardB row6: SKIPPED — no comparable base pin (base='${GB_BASE_PIN:-none}'); reported, not passed silently" \
+    "true"
+else
+  GB_BASE_TAG="${GB_BASE_PIN%%@*}"; GB_BASE_DIG="${GB_BASE_PIN##*@}"
+  GB_HEAD_TAG="${GB_HEAD_PIN%%@*}"; GB_HEAD_DIG="${GB_HEAD_PIN##*@}"
+  assert "GuardB row6: the tag moved ($GB_BASE_TAG -> $GB_HEAD_TAG) only alongside a moved digest" \
+    "[[ '$GB_BASE_TAG' == '$GB_HEAD_TAG' || '$GB_BASE_DIG' != '$GB_HEAD_DIG' ]]"
+  assert "GuardB row6: the digest moved only alongside a moved tag (a re-pushed tag must be re-tagged)" \
+    "[[ '$GB_BASE_DIG' == '$GB_HEAD_DIG' || '$GB_BASE_TAG' != '$GB_HEAD_TAG' ]]"
+fi
+
 # GUARD B'S OWN ANTI-VACUITY FLOOR. Previously these asserts were pooled into the ZG span's
 # floor of 47, of which only 7 belong to Guard B -- so deleting a Guard B assert and adding an
 # unrelated filler anywhere in that 266-line span kept the floor green while a real production
 # RED vanished. Measured. A floor that spans two unrelated inventories is fungible between them.
 GUARDB_ASSERTIONS=$(( TOTAL - GB_BEFORE ))
-assert "GuardB anti-vacuity: the section ran its full inventory (expected 7, ran $GUARDB_ASSERTIONS)" \
-  "(( GUARDB_ASSERTIONS == 7 ))"
+assert "GuardB anti-vacuity: the section ran its full inventory (expected 9, ran $GUARDB_ASSERTIONS)" \
+  "(( GUARDB_ASSERTIONS == 9 ))"
 
 # --- Guard 1 anti-vacuity FLOOR: the section's own assertion count ------------------------
 # Row6 above floors the guard's INPUTS. Nothing floored its ASSERTIONS, so deleting every
@@ -925,8 +966,8 @@ assert "GuardB anti-vacuity: the section ran its full inventory (expected 7, ran
 # slack is attack budget, and one derived from what it guards descends with it. When you add an
 # assertion here, bump this number in the same edit — that is the point, not friction.
 ZG_SECTION_ASSERTIONS=$(( TOTAL - ZG_TOTAL_BEFORE ))
-assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 48, ran $ZG_SECTION_ASSERTIONS)" \
-  "(( ZG_SECTION_ASSERTIONS == 48 ))"
+assert "Guard 1 anti-vacuity: the section ran its full assertion inventory (expected 50, ran $ZG_SECTION_ASSERTIONS)" \
+  "(( ZG_SECTION_ASSERTIONS == 50 ))"
 
 # --- Row 7: a failed bootstrap must say WHY, on the one channel that still works -----------
 # The failure that kills the bootstrap also kills Vector, which is installed BY the bootstrap. So
@@ -1029,7 +1070,11 @@ GA_TAG_REF="vinngest-$GA_PIN_TAG"
 # Row 4: an unresolvable tag REDS naming itself. "Nothing to compare, pass" is the failure
 # mode this row exists to make impossible — an unfetched tag and a nonexistent one take the
 # same git show path and are one row deliberately.
-git rev-parse -q --verify "refs/tags/$GA_TAG_REF^{commit}" >/dev/null 2>&1 && GA_TAG_OK=1 || GA_TAG_OK=0
+# `git -C "$SCRIPT_DIR"`, NOT bare `git`: AC6 in this same file was deliberately hardened this way,
+# and Guard A was not. Bare git resolves against the PROCESS CWD while the working-copy comparand
+# is SCRIPT_DIR-relative, so a CWD/SCRIPT_DIR split silently pairs one repo's tag blobs with
+# another tree's files and reports eleven greens assembled from two different trees.
+git -C "$SCRIPT_DIR" rev-parse -q --verify "refs/tags/$GA_TAG_REF^{commit}" >/dev/null 2>&1 && GA_TAG_OK=1 || GA_TAG_OK=0
 assert "GuardA: the pinned tag $GA_TAG_REF resolves in git (never 'nothing to compare, pass')" \
   "(( GA_TAG_OK == 1 ))"
 
@@ -1064,7 +1109,7 @@ if (( GA_TAG_OK == 1 )); then
   _ga_tmp="$(mktemp -t guarda-blob-XXXXXX)"
   while IFS= read -r _p; do
     [[ -n "$_p" ]] || continue
-    if ! git show "$GA_TAG_REF:$_p" > "$_ga_tmp" 2>/dev/null; then
+    if ! git -C "$SCRIPT_DIR" show "$GA_TAG_REF:$_p" > "$_ga_tmp" 2>/dev/null; then
       GA_UNRESOLVED="$GA_UNRESOLVED $(basename "$_p")"
       continue
     fi
@@ -1123,18 +1168,43 @@ GD_SRC="$SCRIPT_DIR/inngest-bootstrap.sh"
 assert "GuardD: the bootstrap script is readable" "[[ -r '$GD_SRC' ]]"
 # Row 5 / own dispatch: an EXACT count. A pattern that matched nothing must RED reporting
 # "0 heredocs found", never certify a scan that inspected nothing.
-GD_SCAN="$(sed 's/<<</\x01/g' "$GD_SRC" 2>/dev/null \
+# THE PERMISSIVE/STRICT SPLIT, and why Guard D needs it as much as Guard A does. An earlier
+# revision used ONE regex as both census and classifier, so a delimiter the alternation cannot
+# read was subtracted from the inventory AND from the population in the same stroke -- it did not
+# red, it disappeared. Measured: `cat > /usr/local/bin/soleur-injected.sh <<7EOF` with `$(id -un)`
+# in the body is a live, expanding, root-executed render-time substitution, and it left all eight
+# Guard D asserts green with the dispatch still reporting "found 10". A digit-initial delimiter is
+# valid bash and is invisible to `[A-Za-z_][A-Za-z0-9_]*`.
+#
+# So count the OPERATOR permissively and parse the DELIMITER strictly, exactly as Guard A counts
+# `COPY` permissively and parses its operands strictly. Any form the classifier cannot read now
+# surfaces as "parsed 10 of 11" and reds.
+GD_SRC_NOHERE="$(sed 's/<<</\x01/g' "$GD_SRC" 2>/dev/null || true)"
+GD_ALL_PERMISSIVE=$(printf '%s\n' "$GD_SRC_NOHERE" | grep -coE '<<-?' || true)
+GD_SCAN="$(printf '%s\n' "$GD_SRC_NOHERE" \
            | grep -oE "<<-?[[:space:]]*(\"[^\"]*\"|'[^']*'|[A-Za-z_][A-Za-z0-9_]*)" || true)"
 GD_ALL=$(printf '%s\n' "$GD_SCAN" | grep -c . || true)
+assert "GuardD dispatch: the operator count is a positive integer (got '$GD_ALL_PERMISSIVE')" \
+  "[[ '$GD_ALL_PERMISSIVE' =~ ^[0-9]+$ ]] && (( GD_ALL_PERMISSIVE > 0 ))"
+assert "GuardD dispatch: every heredoc operator parsed (parsed $GD_ALL of $GD_ALL_PERMISSIVE)" \
+  "(( GD_ALL == GD_ALL_PERMISSIVE ))"
 assert "GuardD dispatch: the heredoc scan found the full inventory (found $GD_ALL)" \
   "(( GD_ALL == 10 ))"
 # Rows 1-3: the unquoted set. Row 2 (an unquoted delimiter AFTER several compliant ones) is
 # why this counts every match rather than inspecting the first.
 # Unquoted == the delimiter carries neither ' nor ". Derived from the SAME scan as the
 # dispatch, so the two can never disagree about what was inspected.
+# SITES, NOT NAMES. `sort -u` collapsed two unquoted heredocs sharing a delimiter into one
+# member, so a SECOND `<<DOPPLEREOF` kept the count at 1, kept the name-based exemption satisfied,
+# and redirected the content assertion below onto the FIRST body -- letting a live `$(id -un)` sit
+# in the real /etc/default/inngest-server heredoc with every Guard D assert green. Measured.
+# Count occurrences; dedupe only for the human-readable message.
+GD_UNQ_SITES=$(printf '%s\n' "$GD_SCAN" | grep -vE "['\"]" | grep -c . || true)
 GD_UNQ_NAMES=$(printf '%s\n' "$GD_SCAN" | grep -vE "['\"]" | sed -E "s/^<<-?[[:space:]]*//" | grep -E '.' | sort -u || true)
 GD_UNQ_COUNT=$(printf '%s\n' "$GD_UNQ_NAMES" | grep -c . || true)
-assert "GuardD: exactly one unquoted delimiter remains (found $GD_UNQ_COUNT: ${GD_UNQ_NAMES:-none})" \
+assert "GuardD: exactly one unquoted heredoc SITE remains (found $GD_UNQ_SITES)" \
+  "(( GD_UNQ_SITES == 1 ))"
+assert "GuardD: exactly one unquoted delimiter NAME remains (found $GD_UNQ_COUNT: ${GD_UNQ_NAMES:-none})" \
   "(( GD_UNQ_COUNT == 1 ))"
 # THE ONE EXEMPTION, identified by NAME rather than by line. A line-anchored exemption breaks
 # on any refactor that moves the write, turning an unrelated edit into a red suite.
@@ -1148,6 +1218,11 @@ assert "GuardD: the sole unquoted delimiter is the named exemption (DOPPLEREOF)"
   "[[ '$(printf '%s' "$GD_UNQ_NAMES" | tr -d '[:space:]')' == 'DOPPLEREOF' ]]"
 # Row 4: the exemption grants "may interpolate", NEVER "may execute". The content assertion is
 # what keeps it honest and stops it widening silently if that body later gains a backtick.
+# The awk below stops at the FIRST DOPPLEREOF body, so it is only a statement about "the"
+# exemption while exactly one exists. Pin that first.
+GD_EXEMPT_SITES=$(grep -cE '<<-?DOPPLEREOF([[:space:]]|$)' "$GD_SRC" 2>/dev/null || true)
+assert "GuardD: the exemption is a single site, so the body assertion cannot be redirected (found $GD_EXEMPT_SITES)" \
+  "(( GD_EXEMPT_SITES == 1 ))"
 GD_EXEMPT_BODY=$(awk '/<<-?DOPPLEREOF([[:space:]]|$)/{f=1;next} f&&/^[[:space:]]*DOPPLEREOF[[:space:]]*$/{exit} f' "$GD_SRC" 2>/dev/null || true)
 GD_EXEMPT_LINES=$(printf '%s\n' "$GD_EXEMPT_BODY" | grep -c . || true)
 # FLOOR THE EXTRACTION BEFORE COUNTING IN IT. Measured: rewriting the exemption as `<<-DOPPLEREOF`
@@ -1165,8 +1240,8 @@ assert "GuardD H2: the exempt DOPPLEREOF write is present and permitted" \
   "(( \$(grep -cF 'cat > /etc/default/inngest-server <<DOPPLEREOF' '$GD_SRC' || true) == 1 ))"
 
 GUARDD_ASSERTIONS=$(( TOTAL - GUARDD_BEFORE ))
-assert "GuardD anti-vacuity: the section ran its full inventory (expected 7, ran $GUARDD_ASSERTIONS)" \
-  "(( GUARDD_ASSERTIONS == 7 ))"
+assert "GuardD anti-vacuity: the section ran its full inventory (expected 11, ran $GUARDD_ASSERTIONS)" \
+  "(( GUARDD_ASSERTIONS == 11 ))"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed ==="

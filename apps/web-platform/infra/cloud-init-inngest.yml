@@ -1023,13 +1023,13 @@ runcmd:
     # DIGEST-PINNED (plan CF-2). What follows this line is `docker pull` -> `docker create`/`cp`
     # -> `bash inngest-bootstrap.sh` EXECUTED AS ROOT on the sole scheduler. Until this pin, the
     # only integrity control on that root-executed payload was GHCR's TLS + authn against a
-    # MUTABLE tag: anything able to re-point :v1.1.24 between the build and a host replace
+    # MUTABLE tag: anything able to re-point this tag between the build and a host replace
     # would have served a different root shell script, and nothing on this path would have
     # noticed. The comment above the GHCR bake used to claim a signature check covered this; it
-    # did not, and the image is not signed at all (see that correction).
+    # did not, and the image IS cosign-signed (the build workflow signs ${IMAGE}@${DIGEST} keyless and fails closed); what the signature does NOT buy is verification on this path, because ci-deploy.sh never calls verify_image_signature on the inngest branch.
     #
     # BOTH halves are load-bearing. The `@sha256:` is the actual control — docker resolves by
-    # digest and ignores the tag, so these are immutable bytes. The `:v1.1.24` is retained
+    # digest and ignores the tag, so these are immutable bytes. The `:vX.Y.Z` tag is retained
     # because the pin-drift guard (cloud-init-inngest-bootstrap.test.sh AC6/AC6b) matches
     # `soleur-inngest-bootstrap:vX.Y.Z` and compares it to the semver-max published
     # vinngest-v* git tag; dropping the tag would silently disarm that guard, which is the
@@ -1040,12 +1040,21 @@ runcmd:
     # return exactly one value (two means a retry moved the digest; zero means signing did not
     # complete — both are halts). Run 34159532201, tag vinngest-v1.1.26.
     #
-    # "Bumping the tag without re-resolving the digest" is no longer merely discouraged, which is
-    # what this comment used to say while the failure stayed available: Guard B now asserts every
-    # pin site carries a digest and that all sites agree, and Guard A compares every baked carrier
-    # against `git show <pinned tag>:<path>` — so a tag pinned to another tag's bytes reds the
-    # suite instead of shipping silently. That recurrence had already happened twice (#7630, and
-    # the v1.1.25-tag-on-v1.1.24-bytes case this paragraph used to describe).
+    # BUMPING THE TAG WITHOUT RE-RESOLVING THIS DIGEST GIVES YOU A NEW TAG PINNED TO THE OLD
+    # TAG'S BYTES. That warning is the original one and it is restored deliberately: a revision of
+    # this comment replaced it with a reassurance that the guards catch it, and that reassurance
+    # was FALSE — measured, writing v1.1.26@sha256:<v1.1.25's digest> at all four sites left the
+    # suite 161/161 green, because Guard A resolves the TAG (whose tree does match HEAD) and
+    # Guard B compares the four sites to EACH OTHER. Deleting a true warning and installing a
+    # false one, at the exact line an operator reads while making that mistake, is worse than
+    # saying nothing.
+    #
+    # What IS now enforced, precisely: Guard B row6 reds when this branch moves the tag relative
+    # to the merge base while leaving the digest untouched — the #7630 shape, caught hermetically.
+    # What is NOT enforced: binding this digest to these bytes needs a registry read, and no
+    # PR-gating job here can perform one. On the hermetic side AC5 is the sole control — the
+    # digest was read BY COMMAND from the run that signed it, never typed. The pin has exactly one
+    # consumer (a host create/replace), so a wrong digest costs delayed detection, not an incident.
     IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.26@sha256:cba7c11fb029f80a19a4212474936e79c90205986f5d5e03dfe2219c52053385
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # --- #7462 (ADR-096): resolve the effective ref ONCE, zot-primary ---------------------
