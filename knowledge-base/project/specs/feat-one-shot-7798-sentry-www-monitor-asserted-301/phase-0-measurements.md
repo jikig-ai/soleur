@@ -152,3 +152,55 @@ no change.
 `apps/web-platform/infra/www-apex-canonicalizer.test.sh` → `OK: 24/24`, exit 0.
 The live arm is `EXPECTED_CASES=24`; both arms must still be bumped together.
 123 `.test.sh` steps are registered in `infra-validation.yml`.
+
+## Phase 1.4 — mutation battery (AC7)
+
+Run against pristine copies with restore verified byte-identical afterwards. The
+unmutated control ran FIRST (green — a red baseline would void every row), and
+each row asserted the mutation had landed before reading a verdict.
+
+**16 rows: 15 RED-expected all red, 1 PASS-expected green.**
+
+| # | Mutation | Want | Got |
+|---|---|---|---|
+| M1 | `follow_redirects` false → true | RED | RED |
+| M2 | `expected_status_codes` `[301]` → `[301, 200]` | RED | RED |
+| M3 | rename the resource so the extractor finds nothing | RED | RED |
+| M4a | codes wrong, `follow_redirects` still correct | RED | RED |
+| M4b | `follow_redirects` wrong, codes still correct | RED | RED |
+| M5 | add a `count` gate | RED | RED |
+| M6a | `pronounceable_name` collides with the apex sibling | RED | RED |
+| M6b | `pronounceable_name` deleted | RED | RED |
+| M7 | `remember_cookies` false → true | RED | RED |
+| M8 | re-add the pause/resume bracket to `deploy-docs.yml` | RED | RED |
+| H1a | neuter `pass()` | RED | RED |
+| H1b | neuter `fail()` **while a real defect is present** | RED | RED |
+| H2 | reformat only — inner spaces in the list, realigned `=` | **PASS** | **PASS** |
+| FLOOR | revert the `EXPECTED_CASES` bump | RED | RED |
+| OPERAND | degenerate `UPTIME_TF` to empty | RED | RED |
+| OPERAND2 | point `UPTIME_TF` at a nonexistent file | RED | RED |
+
+### Two rows were wrong on the first pass, and both were MY errors, not the guard's
+
+**M1/M4b first read as SURVIVED.** The mutation had landed — in the *header
+comment* at `uptime-alerts.tf:38`, which quotes `follow_redirects = false` in
+prose, not in the config at line 198. The suite strips comments before asserting,
+so it correctly ignored it. Re-anchored on the config line (newline + exactly two
+spaces + the assignment, which a `#`-prefixed line cannot match) and both go red.
+The false survivor is incidentally a positive result for the comment-stripper.
+
+**H1b (`fail()` neutered alone) is an EQUIVALENT mutant, not a gap.** On an
+all-green suite `fail` is never called, so neutering it changes nothing. It is
+only meaningful compounded with a real defect — which is the state the
+`PASS + FAIL == CASES` identity exists to catch — and it reds there.
+
+### Axes NOT edited, stated plainly
+
+- **Population growth.** The guard is scoped to one named resource, so a
+  *second*, non-compliant `betteruptime_monitor` added to the file is not caught
+  by it. That is deliberate (Guard 1's stated property is about this resource),
+  and the repo-wide coverage question is `terraform-target-parity.test.ts`'s.
+- **Demotion.** No prose-conditionality axis applies: every assertion reads a
+  `.tf` value, not a prescription.
+- **Authority/root input.** The extractor's own `awk` program is not mutated,
+  only its operands (OPERAND/OPERAND2 cover the path input).
