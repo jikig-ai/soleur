@@ -270,6 +270,56 @@ guard being broken, inverted, or never reached?*
 - **A Python slice left a dangling `fi`**, and one edit dropped an `anchor_out=` assignment.
   **Prevention:** `bash -n` after every structural edit — both were caught that way within seconds.
 
+### Post-compound: five more, and four are one defect class
+
+These occurred AFTER `/compound` ran, during ship and postmerge, so they are appended rather than
+folded above. Four of the five are the same shape — **a command failed, the failure was swallowed,
+and I acted confidently on the wrong answer.** None was caught by an exit code; every one was caught
+by a contradiction in the output. That is the same class as this PR's subject, in the verification
+of the fix for it.
+
+- **`curl -sf … | jq` reported success on a failed fetch.** A pipeline's exit status is its LAST
+  command's, and `jq` exits 0 on empty input, so `curl … | jq … || echo FAILED` can never print
+  FAILED. **Prevention:** capture the body and the code in the command itself
+  (`curl -sS -w '\n__HTTP__%{http_code}'`) and branch on that, or set `pipefail` — never let `||`
+  guard a pipeline whose tail swallows the status.
+- **`doppler secrets get X 2>/dev/null || echo "<guess>"` sent me to the wrong host.**
+  `PRODUCTION_URL` existed; the fetch failed for an unrelated reason, stderr was discarded, and the
+  fallback produced a plausible-looking URL that 404'd behind a Cloudflare challenge. I nearly
+  reported production unhealthy. **Prevention:** a `||` fallback on a secret lookup must print WHY
+  it fell back; a silent default converts a fetch failure into a wrong fact.
+- **`gh pr checks --jq --arg n "$r"` silently matched nothing.** `gh` does not forward `--arg` to
+  jq — the repo already documents this for `gh issue list` — so `$n` was unbound and every `select`
+  returned empty. The loop reported all 24 required contexts "absent" while the bucket summary said
+  74 passing. **Prevention:** fetch once with `--json`, then run `jq` as a separate process where
+  `--arg` is yours to pass.
+- **`pkill -f 'run-registered-suites'` killed its own observers.** Three background waiters had that
+  string in their command lines, so the pattern matched the watchers along with the target. This is
+  the same self-matching failure as the `git stash list` hook trip and the bare-token greps: **a
+  pattern that appears in the text of the thing observing it.** It has now bitten four times in one
+  session across three different tools. **Prevention:** narrow to the executable
+  (`pkill -f '^bash .*run-registered-suites\.sh'`), or capture the PID at spawn and kill that.
+- **The scratchpad was deleted mid-session at the date rollover**, taking the commit-message file
+  with it, so `git commit -F` failed with no message. Recovered by re-reading the PR body from
+  GitHub. **Prevention:** for a file a later command depends on, assert `[[ -s "$f" ]]` immediately
+  before using it, and keep long-lived artifacts (commit messages, run logs) under the worktree's
+  gitdir rather than `/tmp`.
+
+One finding that is not a session error but surfaced from the same runs: the pre-commit gate itself
+goes red for environmental reasons. `.claude/hooks/memory-backstop.test.sh` reports
+`FAILED 1 (passed 46)` under lefthook and `PASSED 54` standalone, on the same tree, failing on
+`reason='claude_pid_not_found'` — the Claude PID is not discoverable inside lefthook's process tree.
+Nothing in this PR touches that hook or its test. Filed as #7886, because a gate that fails for
+reasons unrelated to the diff is how a real failure in that gate later gets waved through.
+
+And one more that is not an error but is worth the same shelf space: **a bare-token grep matched its own
+documentation for the FOURTH time**, inside the postmerge content check — `grep -c
+'_BS_SOURCES_LIB_LOADED'` returned 1 against a file whose whole point is that the guard is gone,
+because the comment explaining the removal names the variable. Anchoring on the executable form
+(`^\s*\[\[ -n "\$\{…`) returned 0, correctly. `cq-assert-anchor-not-bare-token` is the rule; the
+observation here is that knowing the rule is not sufficient, because the collision reappears in
+whatever new place you next write a verification.
+
 ## Related
 
 - `knowledge-base/project/learnings/2026-09-04-three-review-rounds-each-found-defects-in-the-last-rounds-fixes.md`
