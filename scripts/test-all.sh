@@ -1322,7 +1322,7 @@ if want_scripts; then
   run_suite "scripts/lint-legal-registers-unit" bash scripts/lint-legal-registers.test.sh
   # DELIBERATELY LIVE-ONLY (#7786). probe-legal-corpus-truth.sh has no `*.test.sh`
   # sibling, so lint-orphan-test-suites.sh does not require one; the unit arm with a
-  # mutation matrix is owned by the follow-up filed at Phase 8.2. Registered here
+  # mutation matrix is owned by the follow-up filed at #7892. Registered here
   # rather than deferred because until now the probe was referenced ONLY by its own
   # docstring and its wrapper's exec -- it guarded nothing. It is what stops the
   # corrected off-host-log and journald-retention claims silently returning after
