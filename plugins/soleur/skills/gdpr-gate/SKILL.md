@@ -292,7 +292,7 @@ follow-up gets its own review and merge.
   which drives the real lefthook binary over the real `lefthook.yml` with a
   regulated path staged. This repo has shipped the dead-glob trap twice; gobwas
   `**` matches 1+ intermediate directories, never 0+.
-- **`references/*.md` in the `vendor-pin-integrity` glob covers the whole
+- **The `vendor-pin-integrity` glob's `*.md` entry under the references directory covers the whole
   subtree**, because lefthook's gobwas `*` crosses `/`. Measured on lefthook
   2.1.6: `refs/*.md` matches both depth-1 and depth-2; `refs/**/*.md` matches
   depth-2 only (that is the `**` behaviour the repo's 2026-03-21 gobwas

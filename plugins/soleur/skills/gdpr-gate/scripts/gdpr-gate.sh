@@ -26,6 +26,21 @@
 
 set -euo pipefail
 
+# Refuse to run under `set -x` while a live credential is in the environment
+# (#7797). An xtrace of this script echoes every expansion, and the token would
+# land in whatever captured that trace — a CI log, a `bash -x` debugging
+# session, a pasted transcript. Placed immediately after `set` so nothing
+# credential-bearing executes ahead of it.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}${GITHUB_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+
 # REPO_ROOT was REMOVED here (#7450 round-2 review). After `NOTICE_PARSER` moved to
 # $BASH_SOURCE-relative resolution it had ZERO remaining expansions, leaving a bare
 # `git rev-parse --show-toplevel` as the only statement in this file that could abort the
