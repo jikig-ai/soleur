@@ -79,12 +79,30 @@ assert "1: in-corpus rule id emits exactly one row" \
   '[[ "$(rows)" == "1" && "$(last_rule)" == "cq-write-failing-tests-before" && "$rc" == "0" ]]' \
   "expected 1 row for an in-corpus rule (rows=$(rows) rule=$(last_rule) rc=$rc)"
 
-# --- 2. THE SECURITY CASE: an id absent from the closed corpus is REJECTED ----------
+# --- 2. THE SECURITY CASE: a FORGED rule id is REJECTED ----------------------------
 # This is the contributor-injection fixture. Deleting the corpus check makes it pass.
-rc=$(drive "echo 'SOLEUR_RULE_APPLIED rule=attacker-invented-rule note=arbitrary'")
-assert "2: rule id absent from the AGENTS.rules.md corpus is rejected (and the hook still exits 0)" \
+#
+# The id carries a section prefix deliberately (#7853). What the closed corpus buys is
+# that an attacker cannot land a row ATTRIBUTED TO A RULE — a `cq-`-prefixed id claims
+# corpus membership, so it must be in AGENTS.rules.md. The fixture used to read
+# `attacker-invented-rule`, which claims nothing; case 2b below pins what happens to that
+# shape now, so the two cases together state the boundary instead of blurring it.
+rc=$(drive "echo 'SOLEUR_RULE_APPLIED rule=cq-attacker-invented-rule note=arbitrary'")
+assert "2: forged section-prefixed rule id absent from AGENTS.rules.md is rejected (and the hook still exits 0)" \
   '[[ "$(rows)" == "0" && "$rc" == "0" ]]' \
-  "an uncorpused rule id landed a row — the closed-corpus check is not holding (rows=$(rows) rc=$rc)"
+  "a forged in-corpus-looking rule id landed a row — the closed-corpus check is not holding (rows=$(rows) rc=$rc)"
+
+# --- 2b. The DECLARED bound of the #7853 widening ----------------------------------
+# An id with no section prefix never claimed to be a rule, so it is accepted here and
+# ignored structurally by the aggregator orphan gate. This is a widening of what a
+# contributor-writable marker can land, and it is asserted rather than glossed: the worst
+# case is an UNATTRIBUTED row whose note is sanitised and capped. If this case ever needs
+# to flip to a rejection, the aggregator predicate must change in the same edit or the two
+# sides drift again — which is the whole failure this pair replaced.
+rc=$(drive "echo 'SOLEUR_RULE_APPLIED rule=attacker-invented-marker note=arbitrary'")
+assert "2b: unprefixed id is accepted, unattributed, and invisible to the orphan gate (declared bound)" \
+  '[[ "$(rows)" == "1" && "$(last_rule)" == "attacker-invented-marker" && "$rc" == "0" ]]' \
+  "the unprefixed acceptance path changed without the aggregator predicate changing (rows=$(rows) rule=$(last_rule) rc=$rc)"
 
 # --- 3. Shape rejection: uppercase / overlong / path-shaped ids ---------------------
 bad=0
@@ -105,17 +123,30 @@ assert "4: reserved synthetic prefixes accepted (te-, gdpr-gate-, cost-of-filing
   '[[ "$bad" -eq 0 ]]' \
   "${bad}/4 reserved synthetic ids were rejected — they would fail the aggregator orphan-gate as orphans"
 
-# --- 5. The reserved list MIRRORS the aggregator's orphan-gate exemptions -----------
-# An id accepted here but not exempt there fails that gate; drift between the two is
-# invisible from either side alone.
+# --- 5. The hook and the aggregator SHARE ONE section-prefix regex -----------------
+# An id accepted here but treated as an orphan there fails that gate; drift between the
+# two is invisible from either side alone. This used to enumerate the aggregator per
+# exemption prefix — `grep -qF 'startswith("te-")'` and friends — which only ever pinned
+# the stanzas that happened to be listed, and had to be edited every time a hook was
+# added. Both sides now key on ONE regex, so one grep pins the whole contract (#7853).
 AGG="${REPO_ROOT}/scripts/rule-metrics-aggregate.sh"
+SHARED_PREFIX_RE='^(hr|wg|cq|rf|pdr|cm)-'
 missing=""
-for p in 'te-' 'gdpr-gate-' 'context-reviewed-'; do
-  grep -qF "startswith(\"${p}\")" "${AGG}" 2>/dev/null || missing="${missing} ${p}"
-done
-assert "5: reserved prefixes still exempt in rule-metrics-aggregate.sh" \
+grep -qF "${SHARED_PREFIX_RE}" "${HOOK}" 2>/dev/null || missing="${missing} hook"
+grep -qF "${SHARED_PREFIX_RE}" "${AGG}"  2>/dev/null || missing="${missing} aggregator"
+assert "5: hook and aggregator share the section-prefix regex ${SHARED_PREFIX_RE} verbatim" \
   '[[ -z "${missing}" ]]' \
-  "prefixes accepted by the hook but no longer exempt in the aggregator:${missing}"
+  "the shared section-prefix regex is missing from:${missing} — the two sides can now disagree about what an orphan is"
+
+# --- 5b. The aggregator carries NO per-prefix exemption stanzas --------------------
+# The nine `startswith()` exemption stanzas are what the shared regex replaced. Three
+# `startswith(` calls remain in that file and all three are unrelated analytics selectors
+# (hook_input_faults, grep_rewrite_faults, net-issue-flow-mandated-filing--). A fourth is
+# the shape of the maintenance burden coming back.
+sw_count="$(grep -c 'startswith(' "${AGG}" 2>/dev/null)" || sw_count=0
+assert "5b: rule-metrics-aggregate.sh carries exactly 3 startswith( calls (analytics only, no exemption stanzas)" \
+  '[[ "${sw_count}" == "3" ]]' \
+  "expected 3 startswith( calls in the aggregator, found ${sw_count} — an exemption stanza was reintroduced"
 
 # --- 6. Note sanitisation strips shell/JSON metacharacters -------------------------
 drive "echo 'SOLEUR_RULE_APPLIED rule=cq-write-failing-tests-before note=drop\$(id)me\`x\`'" >/dev/null
@@ -227,7 +258,7 @@ fi
 #
 # Zero headroom against the current count, so any deletion is loud. Ratchet when adding cases,
 # and read a floor failure on an otherwise-green run as "you added cases, update this number".
-HOOK_MIN_ASSERTIONS=10
+HOOK_MIN_ASSERTIONS=12
 if (( CASES < HOOK_MIN_ASSERTIONS )); then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran, expected >= %d.\n' \
     "$CASES" "$HOOK_MIN_ASSERTIONS" >&2
