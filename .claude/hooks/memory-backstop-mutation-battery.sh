@@ -329,5 +329,73 @@ for arm in baseline mutant; do
 done
 echo
 
+# ---------------------------------------------------------------- M8
+echo "== M8: move MAX_WALK_HOPS — the identity walk's traversal limit (#7854) =="
+# This row is the durable owner of the mutation behind the memory-backstop
+# suite's T5b cases. It lives HERE and not in scripts/test-all.sh's glob for the
+# reason stated at the top of this file (ADR-161): the battery needs a live user
+# bus and takes ~2 minutes, so it is deliberately not named *.test.sh.
+#
+# Unlike every other row it needs no systemd at all — discover_claude_pid is a
+# pure function over a /proc-shaped directory — so it is a FUNCTION-level arm,
+# sourced in a fresh `bash -c` per mutant (the hook declares MAX_WALK_HOPS
+# readonly; two sources in one shell would abort on the second).
+#
+# The suite's e2e arm can no longer pin this number: it asks the hook for its own
+# verdict rather than re-deriving one, and a test run's real ancestry depth is
+# not reproducible (measured: hop 3 standalone, hop 9 under lefthook). Synthetic
+# is the only shape in which "8, not 7 and not 9" is the same claim everywhere.
+HOPFX=$(mktemp -d -t hopfx.XXXXXXXX) || exit 2
+mkdir -p "$HOPFX/proc/100"
+printf 'Name:\tinit\nPid:\t100\nPPid:\t0\n' > "$HOPFX/proc/100/status"
+for i in $(seq 1 10); do
+  pid=$((900 + i)); ppid=$((900 + i + 1)); (( i == 10 )) && ppid=100
+  mkdir -p "$HOPFX/proc/$pid"
+  printf 'Name:\tsh\nPid:\t%s\nPPid:\t%s\n' "$pid" "$ppid" > "$HOPFX/proc/$pid/status"
+  printf 'sh\n' > "$HOPFX/proc/$pid/comm"
+done
+
+# Echoes "found" or "notfound" for <hook> with claude planted at <hop> in the chain.
+walk_verdict() { # <hook> <hop>
+  local hook=$1 hop=$2 i out
+  for i in $(seq 1 10); do printf 'sh\n' > "$HOPFX/proc/$((900 + i))/comm"; done
+  printf 'claude\n' > "$HOPFX/proc/$((900 + hop))/comm"
+  out=$(bash -c 'set -uo pipefail
+                 unset CLAUDE_CODE_EXECPATH
+                 # shellcheck source=/dev/null
+                 source "$1" >/dev/null 2>&1
+                 discover_claude_pid 901 "$2/proc" >/dev/null 2>&1 && echo found || echo notfound' \
+        _ "$hook" "$HOPFX" 2>/dev/null)
+  echo "${out:-ERROR}"
+}
+
+# POSITIVE CONTROL, same discipline as the baseline above: if the unmutated hook
+# does not already draw the line between hop 8 and hop 9, both mutants below
+# read back whatever it does and report SURVIVED against a good hook.
+h=$(mk_mutant) || exit 2
+b8=$(walk_verdict "$h" 8); b9=$(walk_verdict "$h" 9)
+if [[ "$b8" != "found" || "$b9" != "notfound" ]]; then
+  echo "SETUP FAIL: unmutated walk gives hop8=$b8 hop9=$b9, expected found/notfound" >&2
+  echo "  the boundary is not where the mutants assume — every verdict below would be meaningless" >&2
+  rm -rf "$HOPFX"; exit 2
+fi
+echo "  positive control OK: unmutated walk reaches hop 8 and stops before hop 9"
+
+# M8a — raising the limit lets the walk reach one hop TOO FAR. This is the
+# mutation that would have made #7854 invisible: a hook that walked to 9 would
+# have agreed with the old suite's independent walk by accident.
+h=$(mk_mutant) || exit 2
+perl -0pi -e 's/^readonly MAX_WALK_HOPS=8$/readonly MAX_WALK_HOPS=9/m' "$h"
+mutated_or_die "$h" 'readonly MAX_WALK_HOPS=9'
+report "M8a-walk-hops-9" "T5b hop-9 case (synthetic /proc)" "notfound" "$(walk_verdict "$h" 9)"
+
+# M8b — lowering it drops a hop the walk must still reach.
+h=$(mk_mutant) || exit 2
+perl -0pi -e 's/^readonly MAX_WALK_HOPS=8$/readonly MAX_WALK_HOPS=7/m' "$h"
+mutated_or_die "$h" 'readonly MAX_WALK_HOPS=7'
+report "M8b-walk-hops-7" "T5b hop-8 case (synthetic /proc)" "found" "$(walk_verdict "$h" 8)"
+rm -rf "$HOPFX"
+echo
+
 echo "killed=$killed survived=$survived"
 [[ "$survived" -eq 0 ]] || exit 1
