@@ -204,7 +204,18 @@ curl_auth() { # <bearer> <url...>
 # fail-safe: a monitor whose baseline ROW is missing scores as a REGRESSION, not
 # as unknown -- see the CUT8 block below.
 SENTRY_MONITORS=(soleur-ai-apex soleur-ai-www-reachability soleur-ai-changelog-deep soleur-ai-acme-carveout-probe)
-BETTERSTACK_MONITOR="${CUTOVER_BETTERSTACK_MONITOR:-soleur dot ai apex}"
+# An ARRAY, not a scalar (#7798). Until then CUT8 watched the apex monitor only,
+# so when #7878 retargeted the Sentry www monitor to 2xx and moved redirect-health
+# to betteruptime_monitor.soleur_www_redirect, the redirect property left CUT8's
+# coverage entirely -- and an all-healthy baseline read as complete coverage.
+# CUTOVER_BETTERSTACK_MONITOR overrides the FIRST entry only, preserving the
+# pre-existing env seam. A monitor added here MUST also gain a baseline row in the
+# same change (a row-less monitor scores REGRESSION, not unknown -- see above);
+# --capture-monitor-baseline emits one per array member, so re-capture together.
+BETTERSTACK_MONITORS=(
+  "${CUTOVER_BETTERSTACK_MONITOR:-soleur dot ai apex}"
+  "soleur dot ai www redirect 301"
+)
 
 probe_monitor_health() {
   local mon_json name mid proj checks total bad bs_json bs_status
@@ -253,18 +264,21 @@ probe_monitor_health() {
     for name in "${SENTRY_MONITORS[@]}"; do printf '%s\tunknown\n' "$name"; done
   fi
 
-  # The fifth monitor is a DIFFERENT VENDOR (BetterStack), not a fifth Sentry row.
+  # These are a DIFFERENT VENDOR (BetterStack), not extra Sentry rows. One list
+  # fetch serves every member; a per-member fetch would just re-read the same page.
   local bs_token="${BETTERSTACK_API_TOKEN_READONLY:-${BETTERSTACK_API_TOKEN:-}}"
   if [[ -n "$bs_token" ]]; then
     bs_json="$(curl_auth "$bs_token" \
         "https://uptime.betterstack.com/api/v2/monitors" 2>/dev/null)" || bs_json=""
-    bs_status="$(printf '%s' "$bs_json" | jq -r --arg n "$BETTERSTACK_MONITOR" \
-        '.data[]? | select((.attributes.pronounceable_name // "") == $n) | .attributes.status' 2>/dev/null | head -1)"
-    if   [[ -z "$bs_status" ]];      then printf '%s\tunknown\n'   "$BETTERSTACK_MONITOR"
-    elif [[ "$bs_status" == "up" ]]; then printf '%s\thealthy\n'   "$BETTERSTACK_MONITOR"
-    else                                  printf '%s\tunhealthy\n' "$BETTERSTACK_MONITOR"; fi
+    for name in "${BETTERSTACK_MONITORS[@]}"; do
+      bs_status="$(printf '%s' "$bs_json" | jq -r --arg n "$name" \
+          '.data[]? | select((.attributes.pronounceable_name // "") == $n) | .attributes.status' 2>/dev/null | head -1)"
+      if   [[ -z "$bs_status" ]];      then printf '%s\tunknown\n'   "$name"
+      elif [[ "$bs_status" == "up" ]]; then printf '%s\thealthy\n'   "$name"
+      else                                  printf '%s\tunhealthy\n' "$name"; fi
+    done
   else
-    printf '%s\tunknown\n' "$BETTERSTACK_MONITOR"
+    for name in "${BETTERSTACK_MONITORS[@]}"; do printf '%s\tunknown\n' "$name"; done
   fi
 }
 
@@ -290,13 +304,21 @@ case "$MODE" in
       exit 2
     fi
     {
-      printf '# CUT8 monitor-health baseline — captured BEFORE the apex cutover (#7640 PR4b).\n'
+      printf '# CUT8 monitor-health baseline (introduced #7640 PR4b). GENERATED FILE.\n'
       printf '#\n'
       printf '# CUT8 compares against this rather than demanding absolute green, because a\n'
       printf '# monitor that was ALREADY red cannot be evidence that the cutover broke\n'
       printf '# anything — and the T+20 rule turns any CUT8 failure into a rollback.\n'
       printf '#\n'
-      printf '# Regenerate: bash cutover-verify.sh --capture-monitor-baseline %s\n' "$2"
+      printf '# EVERY line here is rewritten by the command below -- hand-edits do not\n'
+      printf '# survive a re-capture. Rationale belongs in the runbook, not in this header:\n'
+      printf '# knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md\n'
+      printf '#\n'
+      printf '# Regenerate (from the repo root, needs credentials):\n'
+      printf '#   doppler run -p soleur -c prd_terraform -- \\\n'
+      printf '#     bash apps/web-platform/infra/cutover-verify.sh \\\n'
+      printf '#       --capture-monitor-baseline apps/web-platform/infra/cutover-monitor-baseline.txt\n'
+      printf '# Uncredentialed, every row captures `unknown` and the write is REFUSED.\n'
       printf '# Captured %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       printf '%s\n' "$mb"
     } > "$2"
@@ -529,7 +551,7 @@ fi
 # itself fail the cutover; one healthy at baseline and unhealthy now is a
 # REGRESSION and fails. With no baseline the check falls back to absolute, which
 # is the conservative direction.
-CUT8_TOTAL=$(( ${#SENTRY_MONITORS[@]} + 1 ))
+CUT8_TOTAL=$(( ${#SENTRY_MONITORS[@]} + ${#BETTERSTACK_MONITORS[@]} ))
 MON_NOW="$(probe_monitor_health)"
 cut8_ok=0; cut8_fail=0; cut8_unreach=0; regressions=0; preexisting=0
 while IFS=$'\t' read -r mname mstate; do
