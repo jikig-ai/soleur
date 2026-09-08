@@ -58,9 +58,10 @@
 # Tracker directive (goes in the issue body):
 #   <!-- soleur:followthrough script=scripts/followthroughs/zot-last-err-redact-7500.sh earliest=2026-09-09T00:00:00Z secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->
 #
-# Set SOLEUR_FT_BASELINE_BOOT to the boot_id observed at merge (it is on every SOLEUR_ZOT_DISK
-# row). Without it the probe reports delivery state UNKNOWN rather than asserting a state it
-# cannot measure, and the FAIL branch above is unreachable.
+# The merge-time boot_id is baked in as BASELINE_AT_MERGE (see the comment at that assignment for
+# why it cannot be passed through the environment). SOLEUR_FT_BASELINE_BOOT still overrides it.
+# With neither, the probe reports delivery state UNKNOWN rather than asserting a state it cannot
+# measure -- and the delivered-and-leaking FAIL branch is unreachable.
 
 set -uo pipefail
 
@@ -138,16 +139,26 @@ LEAKY="$(printf '%s\n' "$TIER4_ROWS" | sed -n 's/.* zot_last_err=//p' | grep -cE
 # else says the new producer is running. `boot_id` is that something -- it is on every row, and
 # a replace necessarily produces a new one.
 #
-# SOLEUR_FT_BASELINE_BOOT is the boot_id observed at merge. When it is absent the probe reports
-# an UNKNOWN delivery state rather than asserting "NOT YET DELIVERED", because asserting a
-# delivery state it cannot measure is exactly the unmeasured claim this whole change removes.
+# The merge-time boot_id decides delivery. It is baked in below rather than read from the
+# environment; with neither it nor an override present the probe reports an UNKNOWN delivery state
+# rather than asserting "NOT YET DELIVERED", because asserting a delivery state it cannot measure
+# is exactly the unmeasured claim this whole change removes.
 # TRUSTED REGION. boot_id decides DELIVERY, so a crafted tail carrying ` boot_id=FORGED`
 # would otherwise win the greedy match, select the delivered branch, and close this tracker
 # while Phase B had never been applied -- asserting a control is live on a host never replaced.
 # The tail is cut first, exactly as zot_trusted_region does. LEAKY below still reads the tail,
 # which is correct: that is the untrusted content it exists to measure.
 NEWEST_BOOT="$(printf '%s\n' "$DECODED" | sed 's/ zot_last_err=.*//' | sed -n 's/.* boot_id=\([^ ]*\).*/\1/p' | tail -1)"
-BASELINE="${SOLEUR_FT_BASELINE_BOOT:-}"
+# BAKED IN, not passed. sweep-followthroughs.sh runs every probe under `env -i` with only the
+# names declared in the directive's `secrets=`, so an exported SOLEUR_FT_BASELINE_BOOT is stripped
+# before this script starts. Reading it from the environment alone therefore left BASELINE empty on
+# every scheduled run, which made the delivered-and-leaking FAIL branch above unreachable -- a
+# guard that could not fire. The constant is the boot_id measured on the live host immediately
+# before merge (2026-09-08: 100 of 100 SOLEUR_ZOT_DISK rows in a 24h window carried this single
+# value, read from the trusted region). The env var is still honoured first so an operator can
+# override it without editing this file.
+BASELINE_AT_MERGE=d0107f1f-834b-4acc-bd5a-00e53b61d835
+BASELINE="${SOLEUR_FT_BASELINE_BOOT:-$BASELINE_AT_MERGE}"
 
 if [[ -n "$BASELINE" && -n "$NEWEST_BOOT" && "$NEWEST_BOOT" != "$BASELINE" ]]; then
   # DELIVERED: the host has been replaced since merge. Now the leak check is a real verdict,
@@ -173,12 +184,17 @@ if [[ "$LEAKY" -gt 0 ]]; then
   exit 2
 fi
 
+# Reachable only if BASELINE_AT_MERGE is ever blanked (`:-` already treats an empty override as
+# unset, so the override alone cannot produce this state). Kept deliberately: the failure it
+# guards against is a future edit emptying the constant, which would otherwise send every run
+# down the NOT-YET-DELIVERED branch above and assert a delivery state with nothing measuring it.
 if [[ -z "$BASELINE" ]]; then
   echo "TRANSIENT: delivery state UNKNOWN — $TIER4_N tier-4 row(s) carry no header content," >&2
   echo "           which is what BOTH a delivered-and-working gate and a quiet pre-delivery" >&2
-  echo "           window look like. Set SOLEUR_FT_BASELINE_BOOT to the boot_id observed at" >&2
-  echo "           merge (it is on every SOLEUR_ZOT_DISK row) to make this gradeable. Reporting" >&2
-  echo "           UNKNOWN rather than asserting a delivery state this probe cannot measure." >&2
+  echo "           window look like. BASELINE_AT_MERGE is empty and no SOLEUR_FT_BASELINE_BOOT" >&2
+  echo "           override was given; restore the merge-time boot_id (it is on every" >&2
+  echo "           SOLEUR_ZOT_DISK row) to make this gradeable. Reporting UNKNOWN rather than" >&2
+  echo "           asserting a delivery state this probe cannot measure." >&2
   exit 2
 fi
 
