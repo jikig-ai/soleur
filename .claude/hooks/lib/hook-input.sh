@@ -94,6 +94,11 @@ HOOK_INPUT_RESPONDER="guardrails"
 # Separator is RS (U+001E), emitted as a jq escape. NOT NUL: jq drops NUL from
 # input string values and cannot emit it from a literal (measured), so a
 # NUL-delimited design silently truncates.
+# The record separator, in ONE place. The jq program emits it as the \u001e
+# escape and the splitter below consumes this variable; they are the same byte
+# and a drift between them would silently change the field count.
+_HOOK_INPUT_RS=$'\x1e'
+
 _HOOK_INPUT_JQ='
 # d maps ONLY null (absent) to "". It must not use the // operator: in jq that
 # is a FALSY-alternative, so a JSON false would be rewritten to "" before the
@@ -108,9 +113,22 @@ def d(f): (try f catch {}) | if . == null then "" else . end;
 def fp: (try (if (.tool_input | has("file_path")) and (.tool_input.file_path != null)
               then .tool_input.file_path else .tool_input.notebook_path end)
          catch {}) | if . == null then "" else . end;
-[ d(.tool_input.command), d(.tool_name), d(.cwd), d(.session_id), fp ]
-| (if all(type == "string") then "ok" else "bad" end), "\u001e",
-  (.[] | (if type == "string" then . else "" end), "\u001e")
+# THE ROOT MUST BE AN OBJECT, and this is checked BEFORE the accessors rather
+# than left to the type assertion below. A JSON null root reaches every accessor
+# as null, d() maps null to "", all five results are strings, so the program
+# said "ok" and the caller was handed a fully-parsed envelope with EVERY field
+# empty - rc 0, no incident row, no ask, and every anchored guard matching an
+# empty command. That is a silent total disarm, and it is the one shape that
+# produced it. A scalar or array root already failed (the accessors raise and
+# catch {} yields a non-string), but it failed as "bad", which reports the
+# payload as having a non-string FIELD when the real fault is the document.
+if type != "object" then
+  "nonobject", "\u001e", (range(5) | ("", "\u001e"))
+else
+  [ d(.tool_input.command), d(.tool_name), d(.cwd), d(.session_id), fp ]
+  | (if all(type == "string") then "ok" else "bad" end), "\u001e",
+    (.[] | (if type == "string" then . else "" end), "\u001e")
+end
 '
 
 # --- hook_parse_input <json> ------------------------------------------------
@@ -144,10 +162,54 @@ hook_parse_input() {
   # carry garnish. jq's EXIT CODE already makes the only distinction that
   # matters, and with exactly one constant program in this file there is no
   # second program the stderr text could disambiguate between.
-  local raw jq_rc=0
-  raw="$(printf '%s' "$input" | jq -j "$_HOOK_INPUT_JQ" 2>/dev/null; printf 'X')"
-  jq_rc=${PIPESTATUS[1]:-0}
+  # THE RETURN CODE IS CARRIED OUT IN THE OUTPUT, because it cannot be read
+  # afterwards. The previous form was:
+  #
+  #     raw="$(printf ... | jq ...; printf 'X')"
+  #     jq_rc=${PIPESTATUS[1]:-0}
+  #
+  # PIPESTATUS on that second line describes the ASSIGNMENT, not the pipeline
+  # inside the substitution. Measured on bash 5.3.9 it is `(0)` with LENGTH 1,
+  # so `PIPESTATUS[1]` was always unset, `:-0` always fired, and jq_rc was
+  # unconditionally 0 - which made the `jq_rc == 3` arm below dead code and
+  # collapsed empty stdin (rc 0), a malformed document (rc 5) and OUR OWN
+  # PROGRAM FAILING TO COMPILE (rc 3) into one reason. The comment above
+  # described a discriminator the code never read (#7275).
+  #
+  # `|| _hi_rc=$?` rather than `; _hi_rc=$?`: as the right operand of `||` the
+  # pipeline is exempt from errexit BY THE SHELL GRAMMAR, so this holds whether
+  # or not a caller has `shopt -s inherit_errexit`. (Measured both ways; without
+  # inherit_errexit `$-` inside the substitution does not even carry `e`, but
+  # relying on that would make correctness a property of the caller's shopts.)
+  #
+  # The sentinel `printf` stays LAST so the substitution's own status is 0 -
+  # under `set -euo pipefail` a non-zero final status kills the hook at the
+  # assignment, which is the silent disarm this file exists to end.
+  local raw jq_rc body
+  raw="$(_hi_rc=0
+         printf '%s' "$input" | jq -j "$_HOOK_INPUT_JQ" 2>/dev/null || _hi_rc=$?
+         printf '%s%dX' "$_HOOK_INPUT_RS" "$_hi_rc")"
   raw=${raw%X}
+
+  # STRIP BEFORE THE SPLIT. Appending the rc as a further RS-delimited field and
+  # splitting afterwards is the obvious alternative and it is wrong twice: the
+  # happy path becomes SEVEN fields, and - because the appended field is always
+  # present - the zero-field arm becomes structurally unreachable, so every
+  # payload fault would be misreported as `internal`. That is the exact inverse
+  # of the defect being fixed here.
+  jq_rc=${raw##*"$_HOOK_INPUT_RS"}
+  body=${raw%"$_HOOK_INPUT_RS"*}
+
+  # A trailing field that is not a return code means the append or the strip
+  # above has been broken by a later edit. It is OURS, never a payload class -
+  # blaming the model for our own broken strip is the same collapse this change
+  # exists to close. No input can reach this: the rc is printed with `%d`, so it
+  # is numeric by construction. It is driven from the mutation battery, which
+  # can perturb the file, rather than from a contract case that cannot.
+  if [[ ! $jq_rc =~ ^[0-9]+$ ]]; then
+    HOOK_INPUT_REASON="internal:rc"
+    return 1
+  fi
 
   # Split on RS. The window between `set -f` and its restore is exactly these
   # few lines and contains no `return`, so no rc path can leak the modified
@@ -169,9 +231,9 @@ hook_parse_input() {
   local _hi_oldifs=${IFS-}
   case "$-" in *f*) _hi_hadf=1 ;; esac
   set -f
-  IFS=$'\x1e'
+  IFS=$_HOOK_INPUT_RS
   # shellcheck disable=SC2206  # deliberate IFS word-split on RS; globbing is off
-  local -a _hi_s=($raw)
+  local -a _hi_s=($body)
   if (( _hi_hadifs )); then IFS=$_hi_oldifs; else unset IFS; fi
   (( _hi_hadf )) || set +f
 
@@ -181,6 +243,20 @@ hook_parse_input() {
   # anyway, purely to tell "we shipped a broken hook" apart from "the model sent
   # junk" — collapsing those two is how a broken gate hides as a bad payload.
   local n=${#_hi_s[@]}
+
+  # OUR FAULT IS CHECKED FIRST. jq rc 3 means the program in this file did not
+  # COMPILE, which also emits nothing - so it reaches the zero-field arm too. If
+  # the count were tested first, a broken hook would be reported as the model
+  # having sent junk, which is precisely the collapse that lets a broken gate
+  # hide behind a plausible payload class. Measured on jq 1.8.1:
+  #   rc 3 - our program failed to compile (ours)
+  #   rc 5 - the document is invalid: malformed, truncated, lone surrogate
+  #   rc 0 with no output - empty stdin
+  if (( jq_rc == 3 )); then
+    HOOK_INPUT_REASON="internal:rc3"
+    return 1
+  fi
+
   if (( n != 6 )); then
     if (( n > 6 )); then
       # A value carried the separator and raised the record count. The program
@@ -188,22 +264,41 @@ hook_parse_input() {
       # structurally detectable rather than a silent desync.
       HOOK_INPUT_REASON="separator"
     elif (( n == 0 )); then
-      # This is where jq's exit code earns its keep. Measured on jq 1.8.1:
-      #   rc 3 — OUR program failed to COMPILE. A hook shipped with a bad
-      #          expression is our bug and must never be reported as the model
-      #          having sent junk; that collapse is how a broken gate hides.
-      #   rc 5 — the DOCUMENT is invalid (malformed, truncated, lone surrogate).
-      #   rc 0 with no output — empty stdin.
-      if (( jq_rc == 3 )); then
-        HOOK_INPUT_REASON="internal"
+      # The two payload classes the old code could not tell apart. `empty` is
+      # nobody's fault - there was no document. `baddoc` is a document jq
+      # rejected, which is the one that means the model sent junk.
+      if (( jq_rc == 0 )); then
+        HOOK_INPUT_REASON="empty"
       else
-        HOOK_INPUT_REASON="unparseable"
+        HOOK_INPUT_REASON="baddoc"
       fi
     else
       # 1..5 records from a constant program means OUR program is broken, or jq
-      # died mid-stream. Never blamed on the payload.
-      HOOK_INPUT_REASON="internal"
+      # died mid-stream. Never blamed on the payload. Kept DISTINCT from the
+      # rc-3 arm: a single `internal` would let this branch satisfy any
+      # assertion about internal faults while the rc-3 arm stayed dead, which is
+      # the state this change is repairing.
+      HOOK_INPUT_REASON="internal:count"
     fi
+    return 1
+  fi
+
+  # A COMPLETE RECORD IS NOT A SUCCESSFUL PARSE. A valid envelope followed by
+  # trailing garbage emits all six slots AND exits 5: jq produced the record,
+  # then rejected the rest of the document. The old code tested only the count,
+  # so this returned 0 and the hook ran its guards against a document jq had
+  # already refused. An unclassified non-zero rc is a fault-suppression channel.
+  if (( jq_rc != 0 )); then
+    HOOK_INPUT_REASON="baddoc"
+    return 1
+  fi
+
+  if [[ ${_hi_s[0]} == "nonobject" ]]; then
+    # The document parsed but its root is not an object, so no contracted field
+    # could exist. Distinct from `nonstring`, which is an object whose FIELD is
+    # of the wrong type - conflating them reports a field fault for a document
+    # that never had fields.
+    HOOK_INPUT_REASON="nonobject"
     return 1
   fi
 
@@ -250,16 +345,16 @@ hook_input_report() {
 
   if declare -f emit_incident >/dev/null 2>&1; then
     emit_incident "hook-input-${reason_key}" "warn" \
-      "PreToolUse hook input could not be parsed; guards did not run" \
+      "PreToolUse hook input was not usable; guards did not run" \
       "hook=${HOOK_INPUT_HOOK} reason=${reason}" \
       "PreToolUse" "hook_self_fault"
   fi
 
   if declare -f headless_or_stderr >/dev/null 2>&1; then
     SOLEUR_HOOK_NAME="$HOOK_INPUT_HOOK" headless_or_stderr warn \
-      "hook input unparseable (${reason}) — guards did NOT run for this call"
+      "hook input not usable (${reason}) — guards did NOT run for this call"
   else
-    echo "[${HOOK_INPUT_HOOK}] hook input unparseable (${reason}) — guards did NOT run for this call" >&2
+    echo "[${HOOK_INPUT_HOOK}] hook input not usable (${reason}) — guards did NOT run for this call" >&2
   fi
   return 0
 }

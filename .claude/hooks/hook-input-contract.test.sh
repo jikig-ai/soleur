@@ -1325,8 +1325,174 @@ a13_source_hygiene
 a15_shell_state_hygiene
 a16_exit_codes
 a17_value_fidelity
+# ===========================================================================
+# A19 — the reason enum DISCRIMINATES (#7275).
+# ===========================================================================
+# Before this section the classifier read `jq_rc=${PIPESTATUS[1]:-0}` on the
+# line AFTER `raw="$( … )"`. PIPESTATUS there describes the ASSIGNMENT, not the
+# pipeline inside the substitution: measured on bash 5.3.9 it is `(0)` with
+# length 1, so `PIPESTATUS[1]` is unset, `:-0` fires, and jq_rc was
+# unconditionally 0. The `if (( jq_rc == 3 ))` arm was therefore DEAD CODE and
+# every zero-field outcome — empty stdin (jq rc 0), a malformed document (rc 5)
+# and OUR OWN PROGRAM FAILING TO COMPILE (rc 3) — was labelled `unparseable`.
+#
+# That last collapse is the one the file's own comment forbids in as many
+# words: "a hook shipped with a bad expression is our bug and must never be
+# reported as the model having sent junk; that collapse is how a broken gate
+# hides". The comment described a discriminator the code never read.
+#
+# These cases are the discriminator. Each asserts a reason that the pre-fix
+# implementation CANNOT produce, so all of them were observed RED first.
+a19_reason_classification() {
+  local helper="$SCRIPT_DIR/lib/hook-input.sh"
+
+  # One subshell per payload: hook_parse_input sets globals, so cases must not
+  # share a shell or a later reason overwrites an earlier one.
+  _a19_reason() {
+    bash -c '
+      source "'"$helper"'"
+      hook_parse_input "$1" >/dev/null 2>&1
+      printf "%s" "${HOOK_INPUT_REASON:-<empty>}"
+    ' _ "$1" 2>/dev/null
+  }
+  _a19_rc() {
+    bash -c '
+      source "'"$helper"'"
+      hook_parse_input "$1" >/dev/null 2>&1; printf "%d" "$?"
+    ' _ "$1" 2>/dev/null
+  }
+
+  local happy nonobj
+  happy="$(jq -nc '{tool_name:"Bash", tool_input:{command:"ls"}, cwd:"/w", session_id:"s"}')"
+
+  # --- the two payload classes the issue names, now distinguishable ---------
+  # Empty stdin: jq exits 0 having emitted nothing. Not the model's fault and
+  # not ours — there was simply no document.
+  want "A19a empty stdin"                 "empty"           "$(_a19_reason '')"
+  # A document jq rejects: rc 5. THIS is "the model sent junk".
+  want "A19b malformed document"          "baddoc"          "$(_a19_reason 'garbage {{')"
+
+  # --- the collapse that hid a broken gate ---------------------------------
+  # A valid envelope followed by trailing garbage yields a COMPLETE 6-field
+  # record AND rc 5. The pre-fix code checked only the field count, so this
+  # returned 0 and the hook ran with its guards armed off a document jq had
+  # already rejected. A fault that reaches the happy path is a suppression
+  # channel, not a parse success.
+  want "A19c valid envelope + trailing garbage" "baddoc"    "$(_a19_reason "$happy JUNK")"
+  want "A19c-rc  … and it must NOT return 0"    "1"         "$(_a19_rc "$happy JUNK")"
+
+  # --- the silent full disarm ----------------------------------------------
+  # A JSON `null` root parses cleanly, every accessor yields null, `d()` maps
+  # null to "", all five are strings, so the program said "ok" and the function
+  # returned 0 with EVERY field empty. No incident row, no ask, and every
+  # anchored guard sees an empty command. The root must be an object.
+  nonobj='null'
+  want "A19d null root is not an object"  "nonobject"       "$(_a19_reason "$nonobj")"
+  want "A19d-rc … and it must NOT return 0" "1"             "$(_a19_rc "$nonobj")"
+  want "A19e scalar root"                 "nonobject"       "$(_a19_reason '"a string"')"
+  want "A19f array root"                  "nonobject"       "$(_a19_reason '[1,2]')"
+
+  # --- the happy path is undisturbed ---------------------------------------
+  want "A19g happy still parses"          "0"               "$(_a19_rc "$happy")"
+  want "A19h happy sets no reason"        "<empty>"         "$(_a19_reason "$happy")"
+
+  # --- pre-existing classes must not regress -------------------------------
+  # A value carrying an RS raises the record count. Still `separator`. Every RS in
+  # this section is written as a \u001e ESCAPE in the jq program, never as a raw
+  # byte: a literal control character is invisible in a diff and in most editors,
+  # and jq expands the escape to exactly the byte the splitter sees.
+  local forged
+  forged="$(jq -nc '{tool_name:"Bash", tool_input:{command:"a\u001eb"}, cwd:"/w", session_id:"s"}')"
+  want "A19i forged separator"            "separator"       "$(_a19_reason "$forged")"
+  # A non-string contracted field. Still `nonstring`, NOT nonobject: the root
+  # IS an object here, which is what keeps the two classes disjoint.
+  want "A19j non-string field"            "nonstring"       "$(_a19_reason "$ARRAY_STASH")"
+
+  unset -f _a19_reason _a19_rc
+}
+
+# ===========================================================================
+# A20 — the `internal` arms are REACHABLE and DISTINGUISHABLE (#7275).
+# ===========================================================================
+# The rc-3 arm is the one that was dead. Asserting only "some internal reason
+# appears" would let the count branch satisfy the assertion while the rc-3 arm
+# stayed unreachable — which is the exact state this PR is repairing — so the
+# two arms carry distinct reasons and each gets its own positive control.
+#
+# rc 3 cannot be produced through the public entry point: the program is a
+# constant in the file. It is driven by sourcing the helper and overriding
+# `_HOOK_INPUT_JQ` with an uncompilable program, which is a POSITIVE CONTROL
+# proving the arm can fire — not a test of a caller-reachable input.
+a20_internal_arms() {
+  local helper="$SCRIPT_DIR/lib/hook-input.sh"
+
+  local rc3
+  rc3="$(bash -c '
+      source "'"$helper"'"
+      _HOOK_INPUT_JQ="((("        # does not compile → jq exits 3
+      hook_parse_input "{\"tool_name\":\"Bash\"}" >/dev/null 2>&1
+      printf "%s" "${HOOK_INPUT_REASON:-<empty>}"
+    ' 2>/dev/null)"
+  want "A20a our own program failing to compile" "internal:rc3" "$rc3"
+
+  # A partial record: the program emits fewer slots than the contract. jq exits
+  # 0, so the rc signal says nothing and only the count can classify it.
+  local partial
+  partial="$(bash -c '
+      source "'"$helper"'"
+      _HOOK_INPUT_JQ='"'"'"ok", "\u001e", "only-one", "\u001e"'"'"'
+      hook_parse_input "{\"tool_name\":\"Bash\"}" >/dev/null 2>&1
+      printf "%s" "${HOOK_INPUT_REASON:-<empty>}"
+    ' 2>/dev/null)"
+  want "A20b partial record from our program"    "internal:count" "$partial"
+
+  # The two arms must not collapse into one another.
+  if [[ "$rc3" != "$partial" ]]; then
+    ok "A20c the two internal arms are distinguishable"
+  else
+    bad "A20c internal arms collapsed" "both reported: $rc3"
+  fi
+
+  # NOTE: there is deliberately no A20d here. The `internal:rc` arm guards a
+  # trailing field that is not a return code, and that is UNREACHABLE BY ANY
+  # PAYLOAD — the rc is appended by this file as `%d`, so it is numeric by
+  # construction. The only thing that can break it is a future edit to the
+  # append or the strip, which no input can simulate. It is therefore driven
+  # from the mutation battery (M7/M8), where the file itself can be perturbed,
+  # rather than asserted here against an input that cannot produce it.
+}
+
+# ===========================================================================
+# A21 — every producible reason still emits PARSEABLE ask JSON.
+# ===========================================================================
+# Claude Code silently ignores a malformed hook envelope, so a reason string
+# that breaks the JSON would run the tool with neither a prompt nor guards —
+# strictly worse than the fault being reported. The new reasons carry a colon,
+# which is why this is asserted rather than assumed.
+a21_ask_json_parses() {
+  local helper="$SCRIPT_DIR/lib/hook-input.sh" r out
+  for r in empty baddoc nonobject nonstring separator jq_missing \
+           internal:rc3 internal:count internal:rc; do
+    out="$(bash -c '
+        source "'"$helper"'"
+        HOOK_INPUT_REASON="$1"
+        hook_input_emit_ask probe 2>/dev/null
+      ' _ "$r" 2>/dev/null)"
+    if [[ -z "$out" ]]; then
+      bad "A21 no ask JSON emitted for reason '$r'"
+    elif jq empty <<<"$out" 2>/dev/null; then
+      ok "A21 ask JSON parses for reason '$r'"
+    else
+      bad "A21 ask JSON is malformed for reason '$r'" "$out"
+    fi
+  done
+}
+
 a18_inscope_closure
 a18b_rewriter_contract
+a19_reason_classification
+a20_internal_arms
+a21_ask_json_parses
 
 summary
 

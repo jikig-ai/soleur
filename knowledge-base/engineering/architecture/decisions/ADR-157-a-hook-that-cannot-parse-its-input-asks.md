@@ -57,6 +57,28 @@ silently, and it never denies.**
 value carrying the field separator, an unparseable or truncated document, a lone surrogate, an
 oversize payload, `jq` missing, or our own jq program broken.
 
+> **Errata — 2026-09-08 (#7275).** This decision is unchanged; one factual claim in it was not.
+> The list above is correct about the OUTCOME — every one of those inputs did reach `ask` — but it
+> implied the classifier could tell them apart, and it could not. `hook_parse_input` read jq's
+> return code as `${PIPESTATUS[1]:-0}` on the line after the command substitution, where
+> `PIPESTATUS` describes the assignment rather than the pipeline inside it. Measured on bash 5.3.9
+> that array is `(0)` with length 1, so the read was unconditionally `0`, the `jq_rc == 3` branch
+> was dead code, and empty stdin, a rejected document and **our own jq program failing to compile**
+> were all recorded as `unparseable`. The row this ADR most cared about keeping separate — "our own
+> jq program broken" — was the one being reported as the model having sent junk.
+>
+> Two further gaps the same defect concealed: a JSON `null` root satisfied every accessor, produced
+> five empty strings and returned 0 (a silent total disarm, no incident row, no ask); and a valid
+> envelope followed by trailing garbage emitted a complete six-field record while jq exited 5, which
+> the count-only check accepted as a successful parse.
+>
+> #7275 carries the return code out of the substitution in the output and strips it before the
+> split, requires an object root, and splits the enum into `empty` / `baddoc` / `nonobject` and
+> `internal:rc3` / `internal:count` / `internal:rc`. No decision here is amended and no new ordinal
+> is claimed — the posture question this ADR left open (whether `hook_input_should_ask` should be
+> unconditional for hooks gating destructive operations) remains open and is deferred with its
+> measured objections recorded on #7275.
+
 `ask` is what makes the rest of the design collapse to something small. It is not `deny`: the
 operator can approve and proceed, so nothing bricks — which was the *only* reason fail-open was
 needed. Once `ask` covers every failure, the size cap has no denial-of-service left to mitigate, the

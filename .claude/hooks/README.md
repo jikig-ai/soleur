@@ -70,9 +70,27 @@ CMD="$HOOK_CMD"          # also: HOOK_TOOL_NAME HOOK_CWD HOOK_SESSION_ID HOOK_FI
 
 `hook_parse_input` returns 0 only when the document parses **and** every
 contracted field is a string; the values are then byte-exact. Any other outcome
-returns 1 and classifies via `HOOK_INPUT_REASON` (`nonstring`, `unparseable`,
-`separator`, `jq_missing`, `internal`). **The return code is normative; the
-reason is diagnostic.**
+returns 1 and classifies via `HOOK_INPUT_REASON`. **The return code is
+normative; the reason is diagnostic.** The enum:
+
+| reason | meaning | whose fault |
+|---|---|---|
+| `empty` | jq exited 0 having emitted nothing — there was no document | nobody's |
+| `baddoc` | jq rejected the document (rc 5): malformed, truncated, lone surrogate. Also raised when a COMPLETE record is emitted and jq still exits non-zero — a valid envelope followed by trailing garbage | the payload |
+| `nonobject` | the document parsed but its root is not an object, so no contracted field could exist | the payload |
+| `nonstring` | the root IS an object but a contracted field is not a string — the attack signature | the payload |
+| `separator` | a value carried the record separator and raised the field count | the payload |
+| `jq_missing` | `jq` is not on PATH | the environment |
+| `internal:rc3` | **our** jq program failed to compile | ours |
+| `internal:count` | our program emitted a partial record, or jq died mid-stream | ours |
+| `internal:rc` | the return code carried out of the substitution was not numeric — the append or the strip has been broken by an edit | ours |
+
+`empty` and `baddoc` were a single `unparseable` until #7275, and `internal:*`
+was a single `internal` whose rc-3 arm was unreachable. Both splits exist so a
+BROKEN HOOK is never reported as the model having sent junk — that collapse is
+how a broken gate hides behind a plausible payload class. The `internal:` prefix
+is deliberate: `hook_input_report` keys telemetry on `${reason%%:*}`, so the
+detail rides along without creating new aggregation keys.
 
 Four rules, each of which was a real defect in #7164:
 
@@ -257,9 +275,12 @@ The three mirrors (`guardrails.sh`, `pre-merge-rebase.sh`,
 this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
 different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask` and no kill
 switch). What each reason class does there is decided in
-[ADR-165][adr165] — `nonstring`, `separator` and `unparseable` deny;
-`jq_missing` and `internal` fail **open, loudly**, because the repair for a
-missing `jq` is itself a tool call that a deny would also block.
+[ADR-165][adr165] — the payload classes (`nonstring`, `separator`, and the
+three that #7275 split out of `unparseable`: `empty`, `baddoc`, `nonobject`) deny; `jq_missing` and the
+`internal:*` classes fail **open, loudly**, because the repair for a missing
+`jq` is itself a tool call that a deny would also block. Those hooks keep their
+own in-place assertion and do not consume this enum, so the #7275 split changed
+their behaviour not at all.
 
 This is an in-place decision, not an unexamined gap. Convergence onto the shared
 extractor would buy DRY and three jq forks down to one on a non-primary harness,

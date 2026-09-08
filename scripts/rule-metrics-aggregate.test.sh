@@ -757,9 +757,12 @@ t23_grep_rewrite_disarm_zero_is_silent() {
 t18_hook_input_fault_count_and_stderr() {
   local root metrics stderr exit_code=0
   root=$(make_fixture_repo)
-  write_event "$root" "hook-input-nonstring"   "warn" "2026-08-02T10:00:00Z"
-  write_event "$root" "hook-input-nonstring"   "warn" "2026-08-02T10:00:01Z"
-  write_event "$root" "hook-input-unparseable" "warn" "2026-08-02T10:00:02Z"
+  write_event "$root" "hook-input-nonstring" "warn" "2026-08-02T10:00:00Z"
+  write_event "$root" "hook-input-nonstring" "warn" "2026-08-02T10:00:01Z"
+  # `baddoc` is one of the reasons #7275 split out of the retired `unparseable`.
+  # It is used here deliberately: the selectors match by PREFIX, so this case is
+  # what demonstrates a NEW reason id aggregating with no aggregator change.
+  write_event "$root" "hook-input-baddoc" "warn" "2026-08-02T10:00:02Z"
 
   stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
   assert_eq "T18 run still exits 0" "0" "$exit_code"
@@ -769,8 +772,8 @@ t18_hook_input_fault_count_and_stderr() {
     "$(jq -r '.summary.hook_input_fault_count' < "$metrics")"
   assert_eq "T18 per-reason breakdown: nonstring" "2" \
     "$(jq -r '.summary.hook_input_fault_reasons.nonstring' < "$metrics")"
-  assert_eq "T18 per-reason breakdown: unparseable" "1" \
-    "$(jq -r '.summary.hook_input_fault_reasons.unparseable' < "$metrics")"
+  assert_eq "T18 per-reason breakdown: baddoc" "1" \
+    "$(jq -r '.summary.hook_input_fault_reasons.baddoc' < "$metrics")"
 
   # The operator-visible half. Without this line the counter is JSON nobody reads.
   local warned="no"
