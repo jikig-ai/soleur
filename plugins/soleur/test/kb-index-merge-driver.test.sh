@@ -161,7 +161,14 @@ cp "$WORK/t19/O" "$WORK/t19/A"; cp "$WORK/t19/O" "$WORK/t19/B"
 p_rc=0
 bash "$DRIVER" "$WORK/t19/O" "$WORK/t19/A" "$WORK/t19/B" some/other/file.md >/dev/null 2>&1 || p_rc=$?
 assert_eq "1" "$([[ "$p_rc" -ne 0 ]] && echo 1 || echo 0)" "T19: driver refuses a foreign %P"
-assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t19/A" || true)" "T19: refusal writes the sentinel"
+# THE REFUSAL MUST NOT WRITE. An earlier revision asserted the opposite, and that
+# assertion pinned a real defect: git writes %A into the working tree even when a
+# driver exits non-zero, so writing the sentinel on a path this driver does not
+# own PERFORMS the denial of service the %P check exists to prevent. One
+# committed `* merge=kb-index` line would then have every merge in every worktree
+# prepend a text line to every file, corrupting binaries with a UTF-8 prefix.
+assert_eq "0" "$(grep -c '^<<<<<<< kb-index' "$WORK/t19/A" || true)" "T19: the refusal does NOT write to a path this driver does not own"
+assert_eq "" "$(diff "$WORK/t19/O" "$WORK/t19/A" || echo DIFFERS)" "T19: the refused file is left byte-identical"
 
 echo "=== T18/AC25: a row escaping knowledge-base/ is rejected even though it round-trips ==="
 mkdir -p "$WORK/t18"
@@ -393,4 +400,4 @@ if [[ "$ac17_rc" -ne 0 ]]; then
 fi
 assert_eq "0" "$ac17_rc" "AC17: the committed INDEX.md/kb-tags.txt/kb-categories.txt match a fresh generation"
 
-print_results 59
+print_results 60

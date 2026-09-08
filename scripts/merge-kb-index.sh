@@ -50,11 +50,15 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=scripts/lib/kb-index-render.sh
-source "$SCRIPT_DIR/lib/kb-index-render.sh"
 
 readonly EXPECTED_PATH="knowledge-base/INDEX.md"
-readonly SENTINEL='<<<<<<< kb-index: merge driver could not resolve — re-run the merge after fixing registration'
+# The marker's PREFIX is fixed (so `grep -c '^<<<<<<< kb-index'` stays an exact-count
+# assertion and `guardrails:block-conflict-markers` keeps matching its seven `<`),
+# but the REASON is appended per failure. A fixed string asserting one specific
+# cause is worse than none: most failures here are not registration problems, and
+# on the ERR-trap path there is no stderr at all, so a reader was being handed a
+# confident wrong diagnosis as the only durable artifact.
+readonly SENTINEL_PREFIX='<<<<<<< kb-index: merge driver could not resolve'
 # Far above any real row (the longest in a 6,432-row corpus is ~200 bytes). This
 # is a memory bound on adversarial input, not a format rule.
 readonly MAX_LINE_BYTES=8192
@@ -62,6 +66,7 @@ readonly MAX_LINE_BYTES=8192
 O="${1:-}"; A="${2:-}"; B="${3:-}"; P="${4:-}"
 
 write_sentinel() {
+  local reason="${1:-unhandled failure (no diagnostic captured)}"
   [[ -n "$A" && -f "$A" ]] || return 0
   # IDEMPOTENT ON THE FILE, NOT ON A SHELL VARIABLE. `set -E` propagates the ERR
   # trap into COMMAND SUBSTITUTIONS, so a failure inside `$( )` -- e.g. the
@@ -72,7 +77,7 @@ write_sentinel() {
   # Only the file crosses that boundary, so the file is what we test.
   local first=""
   IFS= read -r first < "$A" 2>/dev/null || true
-  if [[ "$first" == "<<<<<<< kb-index"* ]]; then return 0; fi
+  if [[ "$first" == "$SENTINEL_PREFIX"* ]]; then return 0; fi
   # SCRATCH FILE BESIDE %A, DELIBERATELY NOT mktemp. The sentinel's whole job is
   # to be written on the paths where something has already gone wrong, and one
   # of those paths is a broken TMPDIR -- which is exactly when `mktemp` also
@@ -83,7 +88,12 @@ write_sentinel() {
   local tmp="$A.kbi-sentinel.$$"
   # PREPENDED, so a human opening the file sees it first, and kept to a single
   # line so AC6's `grep -c '^<<<<<<< kb-index'` is an exact-count assertion.
-  if { printf '%s\n' "$SENTINEL"; cat "$A"; } > "$tmp" 2>/dev/null; then
+  # `rm -f` first: the redirect FOLLOWS a symlink, so a pre-planted
+  # `$A.kbi-sentinel.<pid>` would have this write land on its target and `mv`
+  # would then replace %A with the link. Unlinking removes the link, not the file
+  # it points at.
+  rm -f "$tmp" 2>/dev/null || true
+  if { printf '%s (%s)\n' "$SENTINEL_PREFIX" "$reason"; cat "$A"; } > "$tmp" 2>/dev/null; then
     mv -f "$tmp" "$A" 2>/dev/null || rm -f "$tmp" 2>/dev/null || true
   else
     rm -f "$tmp" 2>/dev/null || true
@@ -101,7 +111,7 @@ write_sentinel() {
 # ever reaching a hand-placed sentinel write. That reproduces the markerless
 # conflict described above, specifically on the adversarial-input paths this
 # design must assume are reachable. So the trap is installed BEFORE any parsing.
-trap 'write_sentinel; exit 1' ERR
+trap 'write_sentinel "unhandled failure at line $LINENO: ${BASH_COMMAND}"; exit 1' ERR
 
 WORKDIR=""
 cleanup() { [[ -n "$WORKDIR" && -d "$WORKDIR" ]] && rm -rf "$WORKDIR"; return 0; }
@@ -109,7 +119,19 @@ trap cleanup EXIT INT TERM HUP
 
 die() {
   printf 'merge-kb-index: %s\n' "$1" >&2
-  write_sentinel
+  write_sentinel "$1"
+  exit 1
+}
+
+# REFUSE IS NOT DIE, AND THE DIFFERENCE IS LOAD-BEARING. When %P is a path this
+# driver does not own, writing the sentinel would PERFORM the denial of service
+# the %P check exists to prevent: git writes %A into the working tree even when a
+# driver exits non-zero, so one committed `* merge=kb-index` line would have every
+# merge in every worktree prepend a text line to every file -- corrupting binaries
+# with a UTF-8 prefix. Measured before this was split out. The sentinel is
+# meaningful only for the one path this driver owns.
+refuse() {
+  printf 'merge-kb-index: %s\n' "$1" >&2
   exit 1
 }
 
@@ -120,7 +142,30 @@ die() {
 # unrelated content as index rows and spray conflicts repo-wide. Not an RCE
 # vector — the driver COMMAND comes only from local config, never from
 # .gitattributes — but a cheap denial-of-service lever, closed in one line.
-[[ "$P" == "$EXPECTED_PATH" ]] || die "refusing to run on '$P'; this driver only handles $EXPECTED_PATH"
+# SOURCED HERE, BELOW THE TRAP, NOT AT THE TOP. A `source` of a missing or
+# unreadable file exits under `set -e`; with the source above the trap that exit
+# happened before any handler existed, so a partial cherry-pick or revert that
+# took the driver without its render lib produced rc=1 with NO sentinel -- a %A
+# that reads as cleanly merged. Measured. Every failure path claim in this file
+# is only true from the line the trap is installed onward, so nothing that can
+# fail may precede it.
+# GUARDED EXPLICITLY, because moving it below the trap is NECESSARY BUT NOT
+# SUFFICIENT: measured, bash does NOT run an ERR trap for a failed `source` --
+# it exits immediately under `set -e` with the handler installed and unreached.
+# So the ordering fix alone still produced rc=1 with no sentinel. The `|| die`
+# is what actually closes it.
+#
+# The third arm mirrors `scripts/test-all.sh`'s own staleness check on
+# `repo-write-boundary.sh`: a library that LOADS but does not define what it
+# promises is a narrower failure beneath a full-width claim, and it would
+# otherwise surface as an unbound-command error deep inside validation.
+_RENDER_LIB="$SCRIPT_DIR/lib/kb-index-render.sh"
+[[ -r "$_RENDER_LIB" ]] || die "render library missing or unreadable at $_RENDER_LIB"
+# shellcheck source=scripts/lib/kb-index-render.sh
+source "$_RENDER_LIB" || die "render library at $_RENDER_LIB failed to load"
+declare -F kb_render_index >/dev/null || die "render library at $_RENDER_LIB is STALE: kb_render_index is undefined"
+
+[[ "$P" == "$EXPECTED_PATH" ]] || refuse "refusing to run on '$P'; this driver only handles $EXPECTED_PATH (no sentinel written: this driver does not own that path)"
 [[ -f "$O" && -f "$A" && -f "$B" ]] || die "expected three readable input files (%O %A %B)"
 
 WORKDIR="$(mktemp -d)"
@@ -222,6 +267,18 @@ declare -A have_base=() have_ours=() have_theirs=()
 read_map() {
   local tsv="$1" which="$2" rel title
   while IFS=$'\t' read -r rel title; do
+    # A REPEATED rel IS SILENT ROW LOSS, and round-trip validation cannot see it:
+    # two rows for one rel re-render byte-identically, so the input is "canonical"
+    # while the map collapses them last-wins. Measured: 2 rows in, 1 out, header
+    # 2 -> 1, exit 0. That is the exact defect this driver exists to prevent, and
+    # it is reachable from any index a previous UNREGISTERED merge line-merged.
+    # Refusing here is consistent with the two branches below that decline to pick
+    # between competing titles.
+    case "$which" in
+      base)   [[ -z "${have_base[$rel]:-}"   ]] || die "duplicate row for '$rel' in the ancestor index" ;;
+      ours)   [[ -z "${have_ours[$rel]:-}"   ]] || die "duplicate row for '$rel' in our index" ;;
+      theirs) [[ -z "${have_theirs[$rel]:-}" ]] || die "duplicate row for '$rel' in their index" ;;
+    esac
     case "$which" in
       base)   base["$rel"]="$title";   have_base["$rel"]=1 ;;
       ours)   ours["$rel"]="$title";   have_ours["$rel"]=1 ;;

@@ -71,6 +71,18 @@ F="$WORK/fx";  mkdir -p "$F" || exit 2
 
 PRISTINE_DRIVER="$WORK/driver.pristine"
 PRISTINE_RENDER="$WORK/render.pristine"
+# THE PRISTINE COPY IS ONLY MEANINGFUL FROM A CLEAN TREE. `restore verified
+# clean` proves the run was idempotent against whatever was on disk at LAUNCH --
+# so if the tree was already dirty, the battery faithfully restores the dirty
+# state and reports success. Measured during review: a reviewer's own loosened
+# driver was captured as pristine and restored to, with the battery green.
+if ! git -C "$REPO_ROOT" diff --quiet -- \
+       scripts/merge-kb-index.sh scripts/lib/kb-index-render.sh 2>/dev/null; then
+  printf 'FATAL: working tree is dirty for the files this battery mutates.\n' >&2
+  printf '       The pristine copy would capture uncommitted edits and "restore verified clean"\n' >&2
+  printf '       would certify them. Commit or stash first.\n' >&2
+  exit 2
+fi
 cp "$DRIVER" "$PRISTINE_DRIVER" || { printf 'FATAL: cp driver failed\n' >&2; exit 2; }
 cp "$RENDER" "$PRISTINE_RENDER" || { printf 'FATAL: cp renderer failed\n' >&2; exit 2; }
 
@@ -106,7 +118,16 @@ mk "$F/re.A"   "$(printf 'engineering/alpha.md\tOurs')"
 mk "$F/re.B"   "$(printf 'engineering/alpha.md\tTheirs')"
 mk "$F/two.A"  "$A_ROW" "$(printf 'engineering/new.md\tOurNew')"
 mk "$F/two.B"  "$A_ROW" "$(printf 'engineering/new.md\tTheirNew')"
+# THREE fixtures, on three DIRECTIONS of the containment transform. `../../.env`
+# alone is the one shape insensitive to BOTH loosenings of `case "/$rel/"`:
+# dropping the leading slash still catches it (it holds an interior `/../`), and
+# so does dropping the trailing one. Measured: with only that fixture, the
+# one-character mutation `case "/$rel/"` -> `case "$rel/"` accepts `../.env` and
+# `../secrets` with all four suites green. A first-position and a final-position
+# `..` bracket the transform instead of sitting inside it.
 mk "$F/esc.B"  "$A_ROW" "$(printf '../../.env\tEscape')"
+mk "$F/escLead.B" "$A_ROW" "$(printf '../.env\tLeadingEscape')"
+mk "$F/escTail.B" "$A_ROW" "$(printf 'engineering/..\tTrailingEscape')"
 mk "$F/abs.B"  "$A_ROW" "$(printf '/etc/passwd\tAbsolute')"
 # A corrupt ancestor: a header count that no row set can produce.
 sed 's/^> Total files: .*/> Total files: 99/' "$F/base.O" > "$F/corrupt.O"
@@ -150,10 +171,17 @@ probe() {
   cmp -s "$a" "$F/want" || probe_fail "P1 merged output is not the canonical render"
 
   # P2 — a foreign %P is refused, loudly.
+  # The refusal must exit non-zero AND leave the file untouched. Writing a
+  # sentinel here would PERFORM the denial of service the %P check prevents: git
+  # writes %A into the working tree even on a non-zero driver exit, so one
+  # committed `* merge=kb-index` line would prepend a text line to every file in
+  # every merge, corrupting binaries with a UTF-8 prefix. An earlier revision of
+  # this property asserted the opposite and pinned that defect.
   out="$(run_driver "$F/base.O" "$F/add.A" "$F/add.B" some/other/path.md)"
   read -r rc sc a <<<"$out"
   [[ "$rc" != 0 ]] || probe_fail "P2 a foreign %P should be refused"
-  [[ "$sc" == 1 ]] || probe_fail "P2 refusal should write exactly one sentinel (got $sc)"
+  [[ "$sc" == 0 ]] || probe_fail "P2 the refusal must NOT write to a path this driver does not own (got $sc)"
+  cmp -s "$a" "$F/add.A" || probe_fail "P2 the refused file must be left byte-identical"
 
   # P3 — a corrupt input fails round-trip validation, loudly.
   out="$(run_driver "$F/corrupt.O" "$F/add.A" "$F/add.B" knowledge-base/INDEX.md)"
@@ -162,10 +190,13 @@ probe() {
   [[ "$sc" == 1 ]] || probe_fail "P3 rejection should write exactly one sentinel (got $sc)"
 
   # P4 — a rel escaping knowledge-base/ is rejected even though it round-trips.
-  out="$(run_driver "$F/base.O" "$F/add.A" "$F/esc.B" knowledge-base/INDEX.md)"
-  read -r rc sc a <<<"$out"
-  [[ "$rc" != 0 ]] || probe_fail "P4 a ../ escaping rel should be rejected"
-  [[ "$sc" == 1 ]] || probe_fail "P4 rejection should write exactly one sentinel (got $sc)"
+  local esc
+  for esc in esc escLead escTail; do
+    out="$(run_driver "$F/base.O" "$F/add.A" "$F/${esc}.B" knowledge-base/INDEX.md)"
+    read -r rc sc a <<<"$out"
+    [[ "$rc" != 0 ]] || probe_fail "P4[$esc] an escaping rel should be rejected"
+    [[ "$sc" == 1 ]] || probe_fail "P4[$esc] rejection should write exactly one sentinel (got $sc)"
+  done
 
   # P5 — an absolute rel is rejected.
   out="$(run_driver "$F/base.O" "$F/add.A" "$F/abs.B" knowledge-base/INDEX.md)"
@@ -302,13 +333,13 @@ apply() {
 
 # --- mutators (quoted heredocs disable every bash expansion inside) ------------
 
-cat > "$M/G1.py" <<'PY'
+cat > "$M/G1.py" <<'MUT'
 import sys
 p = sys.argv[1]; s = open(p).read()
-old = '[[ "$P" == "$EXPECTED_PATH" ]] || die'
+old = '[[ "$P" == "$EXPECTED_PATH" ]] || refuse'
 assert old in s, "G1 anchor missing"
-open(p, "w").write(s.replace(old, '[[ "$P" == "$P" ]] || die', 1))
-PY
+open(p, 'w').write(s.replace(old, '[[ "$P" == "$P" ]] || refuse', 1))
+MUT
 
 cat > "$M/G2.py" <<'PY'
 import sys
@@ -363,25 +394,26 @@ new = '''      else
 open(p, "w").write(s.replace(old, new, 1))
 PY
 
-cat > "$M/G7.py" <<'PY'
+cat > "$M/G7.py" <<'MUT'
 import sys
 p = sys.argv[1]; s = open(p).read()
-old = "trap 'write_sentinel; exit 1' ERR"
+old = "trap 'write_sentinel"
 assert old in s, "G7 anchor missing"
-# The trap is the MECHANISM; removing it must expose the unhandled paths that a
-# hand-placed sentinel write cannot reach. The `die` call sites are left intact,
-# which is precisely what makes this row discriminating rather than redundant.
-open(p, "w").write(s.replace(old, "trap - ERR", 1))
-PY
+# The trap is the MECHANISM; removing it must expose the unhandled paths a
+# hand-placed sentinel write cannot reach. Every `die` call site stays intact,
+# which is what makes this row discriminating rather than redundant.
+i = s.index(old); j = s.index("' ERR", i) + len("' ERR")
+open(p, 'w').write(s[:i] + "trap - ERR" + s[j:])
+MUT
 
 cat > "$M/G8.py" <<'MUT'
 import sys
 p = sys.argv[1]; s = open(p).read()
-old = 'write_sentinel() {\n  [[ -n "$A" && -f "$A" ]] || return 0'
+old = 'write_sentinel() {\n  local reason='
 assert old in s, "G8 anchor missing"
-# Neuter the sentinel writer to a no-op while leaving every caller intact, so
-# only the WRITE is removed and not the failure detection around it.
-open(p, 'w').write(s.replace(old, 'write_sentinel() {\n  return 0\n  [[ -n "$A" && -f "$A" ]] || return 0', 1))
+# Neuter the sentinel WRITER to a no-op while leaving every caller intact, so
+# only the write is removed and not the failure detection around it.
+open(p, 'w').write(s.replace(old, 'write_sentinel() {\n  return 0\n  local reason=', 1))
 MUT
 
 cat > "$M/G9.py" <<'PY'
