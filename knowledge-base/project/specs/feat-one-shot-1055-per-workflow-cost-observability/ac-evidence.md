@@ -174,3 +174,35 @@ the suite re-measured the unmutated baseline. A mutation that does not land repo
 baseline, and that is indistinguishable from a pass. The rerun above asserts the mutation
 landed (by reading `proacl` back and checking for `authenticated=X`) **before** trusting any
 verdict, and aborts rather than reporting if it did not.
+
+## Addendum — 2026-09-08, post-review re-apply
+
+Review found that 136 re-created `sum_user_mtd_cost` with **no REVOKE trio**
+(security-sentinel F1, data-integrity P3 — two agents, one gap). The REVOKEs
+were added and the migration re-applied to dev inside one transaction, with
+`_schema_migrations.content_sha` reconciled in the same statement:
+
+| | value |
+|---|---|
+| sha at first apply | `ee5ef2f34798ba80d36bedea4f1ff4226d5d001e` |
+| sha after the fix | `c60357e0a250af7e00f1df11a74024c6afab8994` |
+| tracked sha now | `c60357e0a250af7e00f1df11a74024c6afab8994` |
+
+Post-re-apply live state, both functions:
+
+| proname | proacl | proconfig |
+|---|---|---|
+| `sum_user_mtd_cost` | `{postgres=X/postgres,service_role=X/postgres}` | `{"search_path=public, pg_temp"}` |
+| `sum_user_mtd_cost_by_workflow` | `{postgres=X/postgres,service_role=X/postgres}` | `{"search_path=public, pg_temp"}` |
+
+AC5b re-run green after the re-apply.
+
+**Why the original live check could not have caught this.** The `proacl` read is
+only takeable on a database where 027 has already applied — which is precisely
+the state in which a missing REVOKE on a `CREATE OR REPLACE` is invisible, since
+REPLACE preserves the existing ACL. The defect is reachable only on a *first*
+create (a `db reset` against a squashed baseline postdating 027, a fresh project
+bootstrapped from `db diff`, or a `DROP FUNCTION` during incident recovery
+followed by forward-only replay), where Postgres default-grants EXECUTE to
+PUBLIC. Live verification and static assertion cover different states here, and
+the static one was the load-bearing half.
