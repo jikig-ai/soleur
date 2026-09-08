@@ -9,7 +9,7 @@ brand_survival_threshold: none
 This plan records decisions the operator already made. It changes no runtime
 behaviour and is deployed to production like any other docs change.
 
-### Network-Outage Deep-Dive determination (Phase 4.5)
+## Network-Outage Deep-Dive determination (Phase 4.5)
 
 The trigger substrings (`ssh`, `unreachable`, `timeout`) appear in this plan only
 inside a resource identifier and inside quoted rationale about a pre-existing

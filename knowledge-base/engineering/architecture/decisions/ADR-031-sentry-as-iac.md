@@ -620,7 +620,9 @@ rules payload. It did not fail to survive the migration — it never matched, so
 flagged every monitor in the org since it shipped. The classes are rebound onto the routing
 graph that actually exists:
 
-    monitor  <--(slug)--  cron detector  --(workflowIds)-->  workflow
+```text
+monitor  <--(slug)--  cron detector  --(workflowIds)-->  workflow
+```
 
 Class A is now a **count plus a machine-checked invariant**, `class_a_count ==
 cron_detector_count`, asserted in the suite rather than stated here. A literal baseline (55

@@ -9,14 +9,14 @@
 
 | slug | name | type | schedule |
 |---|---|---|---|
-| scheduled-terraform-drift | scheduled-terraform-drift | 0 6,18 * * * |  |
-| scheduled-oauth-probe | scheduled-oauth-probe | */15 * * * * |  |
-| scheduled-github-app-drift-guard | scheduled-github-app-drift-guard | 0 * * * * |  |
-| scheduled-skill-freshness | scheduled-skill-freshness | 0 2 1 * * |  |
-| scheduled-community-monitor | scheduled-community-monitor | 0 8 * * * |  |
-| scheduled-daily-triage | scheduled-daily-triage | 0 4 * * * |  |
-| scheduled-realtime-probe | scheduled-realtime-probe | 0 7 * * * |  |
-| scheduled-content-vendor-drift | scheduled-content-vendor-drift | 17 11 * * MON |  |
+| scheduled-terraform-drift | scheduled-terraform-drift | `0 6,18 * * *` |  |
+| scheduled-oauth-probe | scheduled-oauth-probe | `*/15 * * * *` |  |
+| scheduled-github-app-drift-guard | scheduled-github-app-drift-guard | `0 * * * *` |  |
+| scheduled-skill-freshness | scheduled-skill-freshness | `0 2 1 * *` |  |
+| scheduled-community-monitor | scheduled-community-monitor | `0 8 * * *` |  |
+| scheduled-daily-triage | scheduled-daily-triage | `0 4 * * *` |  |
+| scheduled-realtime-probe | scheduled-realtime-probe | `0 7 * * *` |  |
+| scheduled-content-vendor-drift | scheduled-content-vendor-drift | `17 11 * * MON` |  |
 
 ## Alert Rules
 

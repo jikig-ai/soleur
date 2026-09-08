@@ -19,7 +19,7 @@
 **If user just invoked skill without context:**
 → Ask what they want to build
 
-### Using AskUserQuestion
+## Using AskUserQuestion
 
 Ask 2-4 domain-specific questions based on actual gaps. Each question should:
 

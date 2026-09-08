@@ -30,7 +30,7 @@ repository secrets and OIDC trust relationships.
 
 ---
 
-### Step 0 — Tenant DPA signed + counter-signed
+## Step 0 — Tenant DPA signed + counter-signed
 
 **Action**: Sign + counter-sign the tenant's Data Processing Agreement.
 The DPA names Hetzner + Cloudflare + Doppler + GitHub as authorized

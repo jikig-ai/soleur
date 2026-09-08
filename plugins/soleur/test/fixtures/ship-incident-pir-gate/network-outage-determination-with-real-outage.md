@@ -6,7 +6,7 @@ brand_survival_threshold: single-user incident
 
 # fix: restore chat message persistence
 
-### Network-Outage Deep-Dive determination (Phase 4.5)
+## Network-Outage Deep-Dive determination (Phase 4.5)
 
 L3 firewall and L3 DNS/routing were checked and are not implicated.
 
