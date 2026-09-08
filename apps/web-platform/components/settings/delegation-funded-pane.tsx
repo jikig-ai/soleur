@@ -15,8 +15,12 @@ export function DelegationFundedPane({ workspaceId, flagEnabled }: DelegationFun
   return <FundedPaneInner workspaceId={workspaceId} />;
 }
 
-function formatUsd(cents: number): string {
-  return `$${(cents / 100).toFixed(2)}`;
+// `null` = the spend read failed (#7829). A billing surface must never render
+// an unknown figure as a confident `$0.00`; an em dash plus the section-level
+// notice below is the honest state. Same treatment as `formatLastRun`'s "—" for
+// "no run yet", so the degraded cell is visually consistent with the pane.
+function formatUsd(cents: number | null): string {
+  return cents === null ? "—" : `$${(cents / 100).toFixed(2)}`;
 }
 
 function formatLastRun(lastInvocationAt: GrantorDelegation["lastInvocationAt"]): string {
@@ -57,6 +61,10 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
   if (loading) return null;
   if (delegations.length === 0) return null;
 
+  // The resolver nulls every spend field together (one read feeds all three),
+  // so one flag covers the whole pane.
+  const spendUnavailable = delegations.some((d) => d.todaySpentCents === null);
+
   return (
     <section className="mt-8 rounded-lg border border-soleur-border-default">
       <div className="border-b border-soleur-border-default px-6 py-4">
@@ -64,6 +72,12 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
         <p className="mt-0.5 text-xs text-soleur-text-muted">
           Members running on your API key via BYOK delegation.
         </p>
+        {spendUnavailable && (
+          <p className="mt-2 text-xs text-soleur-accent-gold-text" role="status">
+            Spend figures are temporarily unavailable — the amounts below are
+            unknown, not zero. Your caps still apply. Try again shortly.
+          </p>
+        )}
       </div>
       {isMobile ? (
         <div className="space-y-3 p-3">

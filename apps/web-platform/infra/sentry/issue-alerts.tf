@@ -537,7 +537,9 @@ resource "sentry_alert" "byok_art_33_breach" {
 # via a single `in` match (comma-separated; `in` confirmed in beta2 schema).
 #
 # #7829 IS NOT SETTLED BY THIS FILE. Read the whole note before changing the
-# line below, in either direction.
+# line below, in either direction. The ledger half of #7829 was fixed elsewhere
+# (migration 137); the routing half below was never part of that fix and is
+# still undecided.
 #
 # WHAT WAS MEASURED (2026-09-06). The project has NO Sentry ownership rule:
 # GET /api/0/projects/<org>/web-platform/ownership/ returns HTTP 200 with
@@ -554,23 +556,48 @@ resource "sentry_alert" "byok_art_33_breach" {
 # here. It does NOT establish that a cap breach reaching nobody is acceptable,
 # which is what #7829 actually asked.
 #
-# THE PART THAT IS NOT A ROUTING QUESTION. In migration 084,
-# `check_and_record_byok_delegation_use` raises `hourly_cap_exceeded` and
-# `daily_cap_exceeded` BEFORE its `INSERT INTO public.audit_byok_use`, while its
-# siblings `consent_withdrawn` and `expired` insert first and raise after —
-# migration 061 states the house rule they follow ("accounting is sacred"). So on
-# a cap breach no audit row is written, even though the provider has already been
-# charged (`persistTurnCost` runs after `messages.create`). `v_hourly_spent` is a
-# SUM over those rows, so the window numerator does not advance either: every
-# later turn in the window also exceeds, also raises, also writes nothing. This
-# rule is the only route out of that state, and `trigger_conditions` here is
-# `first_seen_event` alone — no `reappeared_event`/`regression_event`, unlike
-# Rule 1 — so even the issue-stream entry is a single first-seen row.
+# THE PART THAT WAS NOT A ROUTING QUESTION — FIXED 2026-09-07 BY MIGRATION 137
+# (#7829). This paragraph previously asserted that "on a cap breach no audit row
+# is written" and that "the window numerator does not advance either". BOTH ARE
+# NOW FALSE, and the text is corrected rather than deleted so the next reader can
+# see what changed and why the routing line below did not change with it.
 #
-# #7829 STAYS OPEN against that enforcement gap. Do not close it on the routing
-# evidence above. Flipping `fallthrough_type` here would page on every breach
-# without fixing the missing ledger row, which is the part that costs the
-# grantor money.
+# What was true under migration 084: `check_and_record_byok_delegation_use`
+# signalled every refusal with an unhandled plpgsql `RAISE EXCEPTION`. That aborts
+# the function's own transaction and discards the `INSERT INTO
+# public.audit_byok_use` made in it — so no refusal branch persisted a row, not
+# even `consent_withdrawn` and `expired`, which insert before raising and
+# therefore looked correct. The defect was five branches, not two. Meanwhile the
+# provider had already been charged (`persistTurnCost` runs after
+# `messages.create`), and `v_hourly_spent` is a SUM over exactly the rows that
+# were not written, so the window numerator never advanced.
+#
+# What is true under migration 137: refusal is a RETURNED value, not an
+# exception. All five refusal branches persist their `audit_byok_use` row inside
+# the same `FOR UPDATE` lock and then return the reason. THE LEDGER ROW IS
+# WRITTEN, and BOTH CAP WINDOWS COUNT IT — the SUMs are deliberately unfiltered on
+# `attribution_shift_reason`, because the money has already moved and excluding it
+# would freeze the numerator and leak the cap. Cap rows are attributed to the
+# grantee (`founder_id` = caller); see ADR-208.
+#
+# What migration 137 did NOT do, so that nothing here is read as more than it is:
+# the delegation cap enforced nothing before it and enforces nothing after it.
+# The RPC is a post-hoc recorder and the caller is fire-and-forget, so a refusal
+# still does not stop the turn. 137 is an accounting fix. A preventative pre-call
+# gate is filed separately.
+#
+# Unchanged by any of the above: `trigger_conditions` here is `first_seen_event`
+# alone — no `reappeared_event`/`regression_event`, unlike Rule 1 — so the
+# issue-stream entry is a single first-seen row for all time. This is a PULL
+# surface, not a delivery.
+#
+# THE ROUTING QUESTION REMAINS OPEN AND IS A SEPARATE DECISION. Do not treat
+# #7829's closure as authority to flip it: 137 fixed the ledger, and the ledger
+# was never what `fallthrough_type` controls. The question this rule still cannot
+# answer is the one #7829 actually asked — whether a cap breach reaching nobody is
+# acceptable. DO NOT FLIP `fallthrough_type` HERE, and do not touch this rule, on
+# the strength of the migration or of the routing evidence above; that change
+# needs its own decision, on its own evidence, and is filed on its own terms.
 resource "sentry_alert" "byok_cap_exceeded" {
   organization      = var.sentry_org
   name              = "byok-cap-exceeded"

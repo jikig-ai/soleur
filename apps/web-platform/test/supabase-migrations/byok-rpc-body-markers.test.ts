@@ -18,16 +18,30 @@ import path from "node:path";
  * Per-function marker map (NOT a flat set — #5920 Research Reconciliation):
  *   - record_byok_use_and_check_cap  → the cap RPC; `v_tripped := FOUND` is the
  *     #5917 fix marker (mig 121) and exists ONLY here.
- *   - check_and_record_byok_delegation_use → the delegation RPC (mig 084); caps
- *     via `RAISE EXCEPTION 'byok_delegations:hourly_cap_exceeded'/'…daily…'` and
- *     its own row `FOR UPDATE`. A flat marker set would false-fire this RPC.
+ *   - check_and_record_byok_delegation_use → the delegation RPC (mig 084,
+ *     redefined by mig 137); its own row `FOR UPDATE`, the audit INSERT that
+ *     every branch owes, and the two cap `refusal_reason` assignments. A flat
+ *     marker set would false-fire this RPC.
+ *
+ * #7829 reconciliation — the cap markers used to be the bare reason literals,
+ * pinned there because mig 084 signalled a cap breach by RAISEing them. Mig 137
+ * converts refusal from an exception to a RETURNED value (an unhandled plpgsql
+ * RAISE rolls back the audit row the branch just inserted), so the bare literals
+ * would now be satisfied by the INSERT's column value alone even if the return
+ * were dropped. They are pinned as `refusal_reason := '<reason>'` instead, and
+ * the INSERT-shaped marker guards the row itself — the whole point of #7829.
  *
  * Marker-resolution rules (each mirrors a learning cited in the plan):
- *   - Anchor the definer-finder to `CREATE OR REPLACE FUNCTION public.<fn>(`
+ *   - Anchor the definer-finder to `CREATE [OR REPLACE] FUNCTION public.<fn>(`
  *     (2026-06-19-sql-function-body-parser-must-anchor-to-create-not-bare-function):
- *     a bare `FUNCTION public.<fn>` also matches REVOKE/GRANT/COMMENT lines.
- *   - Pick the HIGHEST-numbered defining migration (a `CREATE OR REPLACE` in a
- *     later migration supersedes an earlier body).
+ *     a bare `FUNCTION public.<fn>` also matches REVOKE/GRANT/COMMENT lines,
+ *     and `DROP FUNCTION IF EXISTS public.<fn>(` must not be mistaken for a
+ *     definition. `OR REPLACE` is OPTIONAL: a RETURN-TYPE change cannot use
+ *     `CREATE OR REPLACE`, so mig 137 is a `DROP` + bare `CREATE`. Requiring
+ *     `OR REPLACE` silently resolved the SUPERSEDED 084 body and left the map
+ *     guarding a function that no longer exists (#7829).
+ *   - Pick the HIGHEST-numbered defining migration (a later `CREATE` supersedes
+ *     an earlier body).
  *   - Extract only that ONE function's definition (signature → matching
  *     dollar-quote close) so a marker in a SIBLING function in the same file
  *     cannot satisfy the assertion — this mirrors the live probe surface, which
@@ -53,13 +67,18 @@ function migrationNumber(filename: string): number {
 }
 
 /**
- * Extract the single `CREATE OR REPLACE FUNCTION public.<fn>(...)` definition
+ * Extract the single `CREATE [OR REPLACE] FUNCTION public.<fn>(...)` definition
  * — signature through the matching dollar-quote close — from a migration body.
  * Returns null if this file does not define <fn>.
+ *
+ * `OR REPLACE` is optional on purpose: a return-type change is illegal under
+ * `CREATE OR REPLACE`, so such a migration is `DROP FUNCTION IF EXISTS` + a
+ * bare `CREATE FUNCTION` (mig 137). `CREATE` stays mandatory so DROP / REVOKE /
+ * GRANT / COMMENT lines naming the same function can never match.
  */
 function extractFunctionDef(sql: string, fn: string): string | null {
   const createRe = new RegExp(
-    `CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+public\\.${fn}\\s*\\(`,
+    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+public\\.${fn}\\s*\\(`,
   );
   const createMatch = createRe.exec(sql);
   if (!createMatch) return null;
@@ -132,6 +151,44 @@ describe("byok RPC body-marker map (source-side structural guard)", () => {
   it("throws fail-loud when no migration defines the function", () => {
     expect(() => resolveFunctionDef("totally_missing_rpc_zzz")).toThrow(
       /no migration defines/,
+    );
+  });
+
+  it("extractFunctionDef accepts a bare CREATE FUNCTION (return-type change; #7829)", () => {
+    // A return-type change cannot use CREATE OR REPLACE, so mig 137 is
+    // `DROP FUNCTION IF EXISTS` + `CREATE FUNCTION`. An `OR REPLACE`-only
+    // anchor skipped it and silently resolved the superseded 084 body — the
+    // map would have gone on guarding a function that no longer exists.
+    const synthetic = `
+DROP FUNCTION IF EXISTS public.fn_c(uuid);
+CREATE FUNCTION public.fn_c(x uuid) RETURNS TABLE(reason text) LANGUAGE sql AS $$
+  SELECT 'NEW_SHAPE_MARKER';
+$$;`;
+    const def = extractFunctionDef(synthetic, "fn_c");
+    expect(def).not.toBeNull();
+    expect(def).toContain("NEW_SHAPE_MARKER");
+    // The DROP line precedes the CREATE and must not become the slice start.
+    expect(def!.startsWith("CREATE FUNCTION")).toBe(true);
+  });
+
+  it("extractFunctionDef does not treat DROP/REVOKE/GRANT/COMMENT as a definition", () => {
+    const synthetic = `
+DROP FUNCTION IF EXISTS public.fn_d(uuid);
+REVOKE ALL ON FUNCTION public.fn_d(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.fn_d(uuid) TO service_role;
+COMMENT ON FUNCTION public.fn_d(uuid) IS 'no body here';`;
+    expect(extractFunctionDef(synthetic, "fn_d")).toBeNull();
+  });
+
+  it("resolves the delegation RPC to the return-status body, not the superseded RAISE body", () => {
+    // Behavioural pin for the reconciliation above: whichever migration wins,
+    // the resolved body must signal a cap refusal by RETURNING it. A body that
+    // still RAISEs the cap reason is the pre-#7829 shape, whose INSERT the
+    // RAISE rolls back.
+    const def = resolveFunctionDef("check_and_record_byok_delegation_use");
+    expect(def).toContain("RETURNS TABLE(refusal_reason text)");
+    expect(def).not.toMatch(
+      /RAISE\s+EXCEPTION\s+'byok_delegations:(hourly|daily)_cap_exceeded/,
     );
   });
 
