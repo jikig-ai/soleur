@@ -394,19 +394,20 @@ write_files:
       HDR_KEEP='["content-type","content-length","accept","accept-encoding","user-agent","host","connection","range","docker-distribution-api-version"]'
       redact() {
         local line="$1" out
+        command -v jq >/dev/null 2>&1 || return 1
         if printf '%s' "$line" | jq -e 'type == "object" or type == "array"' >/dev/null 2>&1; then
           out="$(printf '%s' "$line" | jq -c --argjson keep "$HDR_KEEP" '
       def r: if type=="array" then ["REDACTED"] else "REDACTED" end;
       def scrub: with_entries((.key|ascii_downcase) as $k | if ($keep|index($k)) then . else .value|=r end);
       walk(if type=="object" then with_entries((.key|ascii_downcase) as $k
       | if $k=="headers" then (if (.value|type)=="object" then .value|=scrub else error("nonobj headers") end)
-      elif $k=="authorization" then .value|=r else . end) else . end)' 2>/dev/null)" || return 1
+      elif ($k|test("^(authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token)$")) then .value|=r else . end) else . end)' 2>/dev/null)" || return 1
           [ -n "$out" ] || return 1
           printf '%s' "$out"
           return 0
         fi
         out="$(printf '%s' "$line" | sed -E \
-          -e "s/(\"?)($CRED_HDRS)(\"?[[:space:]]*:[[:space:]]*)[^,}]*/\1\2\3REDACTED/gI")"
+          -e "s/(\"?)($CRED_HDRS)(\"?[[:space:]]*:[[:space:]]*)[^}]*/\1\2\3REDACTED/gI")"
         if printf '%s' "$out" | grep -qiE "($CRED_HDRS)\"?[[:space:]]*:[[:space:]]*[^R[:space:]]" ; then
           return 1
         fi
@@ -922,13 +923,14 @@ write_files:
       # splits. So the backstop redacts the bare/quoted/bracketed forms AND refuses any residual.
       redact() {
         local line="$1" out
+        command -v jq >/dev/null 2>&1 || return 1
         if printf '%s' "$line" | jq -e 'type == "object" or type == "array"' >/dev/null 2>&1; then
           out="$(printf '%s' "$line" | jq -c --argjson keep "$HDR_KEEP" '
       def r: if type=="array" then ["REDACTED"] else "REDACTED" end;
       def scrub: with_entries((.key|ascii_downcase) as $k | if ($keep|index($k)) then . else .value|=r end);
       walk(if type=="object" then with_entries((.key|ascii_downcase) as $k
       | if $k=="headers" then (if (.value|type)=="object" then .value|=scrub else error("nonobj headers") end)
-      elif $k=="authorization" then .value|=r else . end) else . end)' 2>/dev/null)" || {
+      elif ($k|test("^(authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token)$")) then .value|=r else . end) else . end)' 2>/dev/null)" || {
             echo "[zot-log-shipper] FATAL: redaction failed on a JSON row; dropped rather than shipped" >&2
             return 1
           }
@@ -950,7 +952,7 @@ write_files:
         # because a truncated fragment has neither. That over-redacts the tail of a bare
         # plaintext line; on a credential-bearing line that is the safe direction.
         out="$(printf '%s' "$line" | sed -E \
-          -e "s/(\"?)($CRED_HDRS)(\"?[[:space:]]*:[[:space:]]*)[^,}]*/\1\2\3REDACTED/gI")"
+          -e "s/(\"?)($CRED_HDRS)(\"?[[:space:]]*:[[:space:]]*)[^}]*/\1\2\3REDACTED/gI")"
         # REFUSE ANY RESIDUAL. If a credential-bearing header name still carries anything other
         # than REDACTED, this redactor did not understand the line and must not ship it.
         # `[^R[:space:]]` excludes the space, not just R: with `[^R]` alone the regex backtracks

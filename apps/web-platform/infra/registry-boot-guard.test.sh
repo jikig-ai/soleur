@@ -332,7 +332,6 @@ assert "R3: local.registry_arch derivation is oriented correctly (catches an INV
   "[ \"\$(p_registry_arch_derivation '$SCRIPT_DIR/zot-registry.tf')\" = 1 ]"
 
 echo ""
-echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 # --- #7500: the two redact() copies, and the tier tag -------------------------------------
 # THE DRIFT CHECK BETWEEN THE TWO redact() COPIES.
 #
@@ -395,8 +394,31 @@ assert "#7500 the suppressed tier is a FLAT enum member, not a colon-qualified f
   "grep -qF 'ZOT_ERR_SRC=suppressed' '$CI' && ! grep -qF 'fallback:suppressed' '$CI'"
 
 # The tier gate must degrade CLOSED -- never fall back to the raw line when jq is unavailable.
+# Scoped to the tier-gate REGION. `command -v jq` also occurs in the log-shipper block ~450
+# lines below, so a file-wide grep stayed green after deleting the tier gate's own guard.
 assert "#7500 the tier-4 message extraction is jq-gated (degrade closed)" \
-  "grep -qF 'command -v jq' '$CI'"
+  "grep -A6 'ZOT_ERR_SRC\" = fallback' '$CI' | grep -qF 'command -v jq'"
+
+# --- POSITIVE CONTROL: assert() must still be able to REJECT --------------------------------
+# The floor below counts that assertions RAN. It cannot see a rewritten assert() that always
+# records a pass -- measured, that one edit yields 101 "passes", satisfies the floor, and exits
+# 0 with no condition evaluated. This drives the helper BOTH ways and requires both counters to
+# move. Reported with printf + exit, never through assert(), so the edit that disarms the
+# helper cannot also disarm its control.
+_ctl_p="$PASS"; _ctl_f="$FAIL"
+assert "control: a true condition passes" "true"    >/dev/null 2>&1
+assert "control: a false condition fails" "false"   >/dev/null 2>&1
+if [ "$PASS" -ne "$((_ctl_p + 1))" ] || [ "$FAIL" -ne "$((_ctl_f + 1))" ]; then
+  printf 'FATAL: assert() did not move both counters (pass %s->%s, fail %s->%s).\n' \
+    "$_ctl_p" "$PASS" "$_ctl_f" "$FAIL" >&2
+  printf '       A helper that always passes satisfies every floor in this file.\n' >&2
+  exit 1
+fi
+PASS="$_ctl_p"; FAIL="$_ctl_f"
+echo "  PASS: control — assert() records both a pass and a failure"
+PASS=$((PASS + 1))
+
+echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
 
 # ANTI-VACUITY FLOOR. The gate below reads FAIL only, so anything that stops assertions from
 # RUNNING passes it: neutering assert() to a no-op was measured to print "0 passed, 0 failed"

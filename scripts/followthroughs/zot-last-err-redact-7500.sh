@@ -141,7 +141,12 @@ LEAKY="$(printf '%s\n' "$TIER4_ROWS" | sed -n 's/.* zot_last_err=//p' | grep -cE
 # SOLEUR_FT_BASELINE_BOOT is the boot_id observed at merge. When it is absent the probe reports
 # an UNKNOWN delivery state rather than asserting "NOT YET DELIVERED", because asserting a
 # delivery state it cannot measure is exactly the unmeasured claim this whole change removes.
-NEWEST_BOOT="$(printf '%s\n' "$DECODED" | sed -n 's/.* boot_id=\([^ ]*\).*/\1/p' | tail -1)"
+# TRUSTED REGION. boot_id decides DELIVERY, so a crafted tail carrying ` boot_id=FORGED`
+# would otherwise win the greedy match, select the delivered branch, and close this tracker
+# while Phase B had never been applied -- asserting a control is live on a host never replaced.
+# The tail is cut first, exactly as zot_trusted_region does. LEAKY below still reads the tail,
+# which is correct: that is the untrusted content it exists to measure.
+NEWEST_BOOT="$(printf '%s\n' "$DECODED" | sed 's/ zot_last_err=.*//' | sed -n 's/.* boot_id=\([^ ]*\).*/\1/p' | tail -1)"
 BASELINE="${SOLEUR_FT_BASELINE_BOOT:-}"
 
 if [[ -n "$BASELINE" && -n "$NEWEST_BOOT" && "$NEWEST_BOOT" != "$BASELINE" ]]; then
@@ -174,6 +179,18 @@ if [[ -z "$BASELINE" ]]; then
   echo "           window look like. Set SOLEUR_FT_BASELINE_BOOT to the boot_id observed at" >&2
   echo "           merge (it is on every SOLEUR_ZOT_DISK row) to make this gradeable. Reporting" >&2
   echo "           UNKNOWN rather than asserting a delivery state this probe cannot measure." >&2
+  exit 2
+fi
+
+# BASELINE is set and the boot_id has NOT moved: the host was never replaced, so Phase B
+# cannot be in force. This was previously the fall-through to the terminal PASS below, which
+# reported "producer delivered ... the tier gate is in force" for an un-replaced host whose
+# window merely happened to be clean -- the exact false-close this probe exists to prevent.
+if [[ -n "$BASELINE" && "$NEWEST_BOOT" == "$BASELINE" ]]; then
+  echo "TRANSIENT: NOT YET DELIVERED — boot_id is still the merge-time baseline ($BASELINE)," >&2
+  echo "           so no registry-host-replace has fired and Phase B cannot be in force." >&2
+  echo "           $TIER4_N tier-4 row(s) carried no header content, which is the expected" >&2
+  echo "           reading for a quiet window and is NOT evidence of delivery." >&2
   exit 2
 fi
 

@@ -186,6 +186,9 @@ assert_emit() {
 
 # --- Fixtures ------------------------------------------------------------------------------
 # zot emits zerolog JSON, one object per line, under --log-driver journald.
+# Tier-4 shaped (level:info matches no tier 1-3). Used by G1-6b below to prove the TIER GATE
+# withholds an unanticipated header -- a distinct property from G1-2's allowlist check, which
+# needs a tier-2 fixture to reach redact() at all.
 JSON_XSECRET='{"level":"info","message":"HTTP API","headers":{"X-Secret":["UNANTICIPATED-VALUE"],"Content-Type":["application/json"]},"clientIP":"10.0.1.9"}'
 JSON_COOKIE='{"level":"error","message":"PatchBlobUpload i/o timeout","headers":{"Cookie":["session=COOKIE-SECRET"]},"clientIP":"10.0.1.9"}'
 PANIC_LINE='panic: runtime error: invalid memory address'
@@ -221,8 +224,19 @@ JSON_NONOBJ='{"level":"error","message":"boom","headers":"NOT-AN-OBJECT-RC1-TRIG
 # fixture whose lines straddle two tiers silently shrinks to one line and every downstream
 # "the header was masked" assertion passes because the header was never sampled. This control
 # is the reason G1-2b/G1-2c mean anything.
-tier1_of() { grep -aE 'panic:|fatal error|\[signal SIG|runtime error' <<<"$1" | head -n 4; }
-tier2_of() { grep -aE '"level":"(error|fatal)"|level:(error|fatal)|level=(error|fatal)' <<<"$1" | head -n 3; }
+# DERIVED FROM THE SUT, not copied. An earlier revision hardcoded the producer's tier regexes
+# here, which made the control a shadow re-implementation: it validated the fixture against the
+# TEST's model of tier selection while the producer is what decides. Measured — dropping
+# `|runtime error` from the producer's tier-1 grep alone left this suite 29/29 green with the
+# needle no longer in the sample at all, so G1-2b passed because nothing was there rather than
+# because anything masked it. Extracting the pattern from $RAW makes producer drift red it.
+_tier_re() { sed -n "s/.*grep -a$2E '\([^']*\)'.*/\1/p" "$RAW" | sed -n "$1p"; }
+TIER1_RE="$(_tier_re 1 '')"
+TIER2_RE="$(_tier_re 2 '')"
+assert "T1 tier-1 selector was extracted from the producer" "[[ -n '$TIER1_RE' ]]"
+assert "T1 tier-2 selector was extracted from the producer" "[[ -n '$TIER2_RE' ]]"
+tier1_of() { grep -aE "$TIER1_RE" <<<"$1" | head -n 4; }
+tier2_of() { grep -aE "$TIER2_RE" <<<"$1" | head -n 3; }
 assert "G1-fixture MIXED_BLOB is >1 line AFTER tier-1 selection" \
   "[[ \$(tier1_of \"\$MIXED_BLOB\" | wc -l) -ge 2 ]]"
 assert "G1-fixture MIXED_BLOB still carries the needle after tier-1 selection" \
@@ -237,8 +251,14 @@ echo "=== Guard 1 — producer-side redaction of the diagnostic sample (#7500) =
 # --- Row 2: the ALLOWLIST property — an unanticipated header name is masked ----------------
 # A Cookie fixture CANNOT discriminate here: Cookie is on the denylist, so a denylist-only
 # implementation passes it. That is the defect this plan already made once, caught at review.
-assert_emit "G1-2 unanticipated header masked (allowlist, single-line JSON)" \
-  "$JSON_XSECRET" absent "UNANTICIPATED-VALUE"
+# TIER-2 shaped, deliberately. The earlier fixture was `"level":"info"`, so it matched no
+# tier 1-3, fell to tier 4, and was withheld by the TIER GATE -- the row passed against a
+# program with no redaction in it, measuring what G1-6 already measures.
+JSON_XSECRET_T2='{"level":"error","message":"PatchBlobUpload i/o timeout","headers":{"X-Secret":["UNANTICIPATED-VALUE"],"Content-Type":["application/json"]}}'
+assert_emit "G1-2 unanticipated header masked (allowlist, single-line JSON at tier 2)" \
+  "$JSON_XSECRET_T2" absent "UNANTICIPATED-VALUE"
+assert_emit "G1-2 the same line's ALLOWLISTED content survives (not a blanket drop)" \
+  "$JSON_XSECRET_T2" present "PatchBlobUpload"
 
 # --- Row 2b: the SAME fixture as a MIXED multi-line blob -----------------------------------
 assert_emit "G1-2b unanticipated header masked in a MIXED multi-line blob (per-line)" \
@@ -262,6 +282,10 @@ assert_emit "G1-4 RC=1 leaves NO residual of the input" \
 
 # --- Row 6: the tier gate — a tier-4 sample must not ship its raw line ----------------------
 assert_emit "G1-6 tier-4 raw header line does not ship" "$TIER4_HEADERS" absent "TIER4-SECRET"
+# X-Secret is on NEITHER list, so this row discriminates the tier gate from the denylist --
+# a Cookie fixture cannot, because the denylist would mask it even with the gate deleted.
+assert_emit "G1-6b tier-4 withholds an UNANTICIPATED header too (gate, not denylist)" \
+  "$JSON_XSECRET" absent "UNANTICIPATED-VALUE"
 
 # --- Row 7: degrade CLOSED without jq ------------------------------------------------------
 # Unspecified degradation here would restore ~100% of the measured exposure while the ADR
@@ -307,8 +331,12 @@ assert "G1-s a per-line loop applies redact() (arity, not just presence)" \
   "grep -qE '^[[:space:]]*redact_sample_lines\(\) \{' '$RAW'"
 assert "G1-s the per-line helper is actually CALLED" \
   "grep -qE 'redact_sample_lines[[:space:]]+' '$RAW'"
+# -eq, not -ge. The name claims "exactly ONE" and the operator said "at least one", so a
+# second competing degrade branch left the suite green -- the single-carrier invariant this
+# file and the boot guard both claim to protect was unasserted. Counted on the comment-stripped
+# program so the rationale above it cannot inflate the total.
 assert "G1-s exactly ONE degrade branch funnels all three RC=1 paths" \
-  "[[ \$(grep -cE 'REDACTION_FAILED' '$RAW') -ge 1 ]]"
+  "[[ \$(grep -cE '^[[:space:]]*ZOT_ERR_RAW=REDACTION_FAILED\$' '$HB') -eq 1 ]]"
 # The tier must NOT be overloaded with the redaction outcome: the sentinel in the field is the
 # single carrier, and a second one on zot_last_err_src would be two carriers for one fact.
 assert "G1-s the degrade path does NOT re-tag the tier" \
@@ -331,7 +359,7 @@ if [[ "${#_v_pass}" -ne "$PASS" || "${#_v_fail}" -ne "$FAIL" ]]; then
 fi
 
 # Anti-vacuity floor — printf + exit, never through fail() (ADR-193).
-EXPECTED_MIN=29
+EXPECTED_MIN=33
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s).\n' "$CASES" "$EXPECTED_MIN" >&2
   exit 1

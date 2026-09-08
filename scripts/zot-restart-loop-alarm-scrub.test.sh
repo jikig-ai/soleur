@@ -109,6 +109,7 @@ USED_assert_cause_masks=0
 USED_assert_cause_contains=0
 USED_assert_struct=0
 USED_assert_field_nonempty=0
+USED_assert_absent=0
 
 pass() { PASS=$((PASS + 1)); VERDICTS="${VERDICTS}P"; printf 'ok   - %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); VERDICTS="${VERDICTS}F"; printf 'FAIL - %s\n' "$1" >&2; }
@@ -183,6 +184,23 @@ assert_field_nonempty() {
     pass "$name ($field=$val)"
   else
     fail "$name: $field absent or empty — the block did not ride this exit path"
+  fi
+}
+
+# assert_absent <name> <file> <ere> -- asserts ZERO matches, and can actually fail.
+# Kept separate from assert_struct on purpose: a `>=` helper given a floor of 0 is a tautology,
+# and that shape is invisible on the page (it reads `ok - ... (matches=0 >= 0)`).
+assert_absent() {
+  USED_assert_absent=$((USED_assert_absent + 1))
+  CASES=$((CASES + 1))
+  local name="$1" file="$2" ere="$3" n
+  n="$(LC_ALL=C grep -cE -- "$ere" "$file" 2>/dev/null || true)"
+  [[ -n "$n" ]] || n=0
+  if [[ "$n" -eq 0 ]]; then
+    pass "$name (0 matches)"
+  else
+    fail "$name: expected 0 matches of /$ere/ in $(basename "$file"), got $n:"
+    LC_ALL=C grep -nE -- "$ere" "$file" | head -5 | sed 's/^/         /' >&2
   fi
 }
 
@@ -264,6 +282,15 @@ assert_cause_masks "G2-5 second of two" ZOT_ALARM_CAUSE "BBB-SECOND-SECRET"
 # --- Row 5b: the other two denylist members, so the class is covered not sampled ------------
 reset_fix; crash_loop_fixture "$HDRS_PROXY"
 assert_cause_masks "G2-5b proxy-authorization" ZOT_ALARM_CAUSE "PROXY-SECRET"
+# The row above cannot distinguish "proxy-authorization is on the denylist" from
+# "authorization is", because the latter matches the former as an unanchored substring:
+# removing the member left the fixture green. This pins the member itself.
+CASES=$((CASES + 1)); USED_assert_struct=$((USED_assert_struct + 1))
+if LC_ALL=C grep -qE "SCRUB_CRED_HDRS=.*\\|proxy-authorization\\|" "$CHECKER"; then
+  pass "G2-5c proxy-authorization is a distinct denylist member, not a substring match"
+else
+  fail "G2-5c proxy-authorization is absent from SCRUB_CRED_HDRS — G2-5b would still pass via the 'authorization' substring"
+fi
 reset_fix; crash_loop_fixture "$HDRS_PROXY"
 assert_cause_masks "G2-5b x-amz-security-token" ZOT_ALARM_CAUSE "AMZ-SECRET-TOKEN"
 
@@ -323,19 +350,37 @@ assert_struct "G2-2 one emit primitive routes every published field" "$CHECKER" 
 # companion above, so "the scrub was deleted" and "the scrub is blanket" are distinguishable.
 # NOTHING BYPASSES THE PRIMITIVE. This is the assertion that makes emit_field equivalent to a
 # blanket scrub: a future arm that echoes a field directly would ship it unscrubbed, so the
-# absence is asserted rather than trusted. Anchored on the emit shape, not a bare token.
-assert_struct "G2-2b no published field bypasses emit_field" "$CHECKER" '^[[:space:]]*echo "(ZOT|NIC)_ALARM_' 0
+# ABSENCE assertion -- a distinct helper, because `assert_struct` compares `n -ge min` and
+# `n -ge 0` is TRUE FOR EVERY n. The previous form of this line could not fail: inserting a
+# literal `echo "ZOT_ALARM_LEAK=$CAUSE"` bypass raised the count to 1 and it still reported ok.
+# The comment above it claimed "the absence is asserted rather than trusted"; it was trusted.
+# The pattern is also widened beyond `echo` + two key prefixes, which would not have caught the
+# very case that comment names (a future arm using printf, or a different key).
+assert_absent "G2-2b no published field bypasses emit_field" "$CHECKER" \
+  '^[[:space:]]*(echo|printf)[[:space:]]+.?(ZOT|NIC)_ALARM_[A-Z_]*='
 
 # --- The credential denylist is byte-identical across FILES ---------------------------------
 # The boot guard asserts the two cloud-init copies match each other; nothing related the sink
 # copy to them. Anchored on the canonical-source files, per the documented fallback for
 # literals that cross a .sh/.yml boundary where no shared file can exist.
-CRED_UNIQ="$(LC_ALL=C grep -hoE "^[[:space:]]*(SCRUB_)?CRED_HDRS='[^']*'" "$CHECKER" "$CI_TEMPLATE" | sed "s/.*=//" | sort -u | wc -l)"
+# CARDINALITY **and** uniqueness. Uniqueness alone could not tell "all copies agree" from
+# "the copies I happened to find agree": changing the sink's definition to double quotes drops
+# it out of this grep, leaving the two cloud-init copies compared against each other and G2-4
+# still reporting ok -- having never read the sink at all. (measured)
+CRED_ALL="$(LC_ALL=C grep -hoE "^[[:space:]]*(SCRUB_)?CRED_HDRS=.[^\"']*." "$CHECKER" "$CI_TEMPLATE" || true)"
+CRED_N="$(printf '%s\n' "$CRED_ALL" | grep -c . || true)"; [[ -n "$CRED_N" ]] || CRED_N=0
+CRED_UNIQ="$(printf '%s\n' "$CRED_ALL" | sed "s/.*=.//" | sort -u | grep -c . || true)"; [[ -n "$CRED_UNIQ" ]] || CRED_UNIQ=0
+CASES=$((CASES + 1)); USED_assert_struct=$((USED_assert_struct + 1))
+if [[ "$CRED_N" == "3" ]]; then
+  pass "G2-4a all THREE denylist copies are in the comparison (sink + both producer copies)"
+else
+  fail "G2-4a expected 3 CRED_HDRS definitions across the sink and the template, found $CRED_N — a copy dropped out of the grep's view"
+fi
 CASES=$((CASES + 1)); USED_assert_struct=$((USED_assert_struct + 1))
 if [[ "$CRED_UNIQ" == "1" ]]; then
-  pass "G2-4 the credential denylist is byte-identical across the sink and both producer copies"
+  pass "G2-4b the credential denylist is byte-identical across all three copies"
 else
-  fail "G2-4 denylist drift: $CRED_UNIQ distinct values across zot-restart-loop-alarm.sh and cloud-init-registry.yml"
+  fail "G2-4b denylist drift: $CRED_UNIQ distinct values across zot-restart-loop-alarm.sh and cloud-init-registry.yml"
 fi
 
 # --- Tier provenance (#7500 task 2.5/2.7) --------------------------------------------------
@@ -390,10 +435,27 @@ assert_cause_masks "G2-6 a redaction failure is not framed as an absence of evid
 reset_fix; oom_fixture
 assert_cause_contains "G2-7 em-dashes in authored prose survive the scrub" ZOT_ALARM_CAUSE "—"
 
+# --- G2-8: FORGED fields in the untrusted tail (the class three agents converged on) --------
+# Every fixture above carries an honest tail. These carry a HOSTILE one: the sample itself
+# contains ` zot_last_err_src=` / ` zot_last_err=` / ` NIC_ALARM_VERDICT=`. Before the fix the
+# consumers' greedy `.*` bound to the LAST occurrence, so attacker text won over the real field.
+FORGED_TIER='{level:info,message:HTTP API,headers:{user-agent:[x zot_last_err_src=panic ]}}'
+FORGED_SENTINEL='{level:info,message:HTTP API,headers:{user-agent:[x zot_last_err=REDACTION_FAILED ]}}'
+
+reset_fix; crash_loop_fixture_src "fallback" "$FORGED_TIER"
+assert_cause_masks "G2-8 a forged tier in the tail cannot relabel the sample" \
+  ZOT_ALARM_CAUSE "tier=panic"
+reset_fix; crash_loop_fixture_src "fallback" "$FORGED_TIER"
+assert_cause_contains "G2-8 the REAL tier is reported instead" ZOT_ALARM_CAUSE "tier=fallback"
+
+reset_fix; crash_loop_fixture_src "fallback" "$FORGED_SENTINEL"
+assert_cause_masks "G2-8 a forged sentinel cannot claim the fail-safe fired" \
+  ZOT_ALARM_CAUSE "fail-safe firing"
+
 # --- Row 6 / harness (a): the guard's own dispatch ------------------------------------------
 # A suite whose helpers were never called reports 0 passed / 0 failed and exits 0 — which is
 # byte-identical to a healthy run. These counters make "the loop ran" observable.
-for _w in assert_cause_masks assert_cause_contains assert_struct assert_field_nonempty; do
+for _w in assert_cause_masks assert_cause_contains assert_struct assert_field_nonempty assert_absent; do
   _u="USED_${_w}"
   if [[ "${!_u}" -lt 1 ]]; then
     printf '\n[FATAL] harness: %s was never dispatched — a wrapper that does not run asserts nothing.\n' "$_w" >&2
@@ -413,7 +475,7 @@ fi
 
 # Anti-vacuity floor. Reported with printf + exit, NEVER through fail() — a floor that calls the
 # helper it backstops is disarmed by the same edit that disarms the helper (ADR-193).
-EXPECTED_MIN=26
+EXPECTED_MIN=31
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s) — a case was silently skipped.\n' \
     "$CASES" "$EXPECTED_MIN" >&2

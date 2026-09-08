@@ -606,10 +606,20 @@ if [[ "$has_137" == true || "$climb_fire" == true || "$max_oom5m" -gt 0 ]]; then
     # ONE row, then both fields off it. Two independent greps could straddle two events and
     # label one sample with another's provenance.
     err_row="$(printf '%s\n' "$MAIN" | grep -F "boot_id=$NEWEST_BOOT" | tail -1)"
-    last_err="$(printf '%s\n' "$err_row" | sed -n 's/.* zot_last_err=//p' | sed 's/"}$//')"
-    # ` zot_last_err=` cannot match inside ` zot_last_err_src=` (the next byte is `_`, not `=`),
-    # so the greedy prefix above still lands on the real field.
-    err_src="$(printf '%s\n' "$err_row" | sed -n 's/.* zot_last_err_src=\([^ ]*\).*/\1/p')"
+    # FIRST occurrence, not last. `sed -n 's/.* zot_last_err=//p'` has a leading greedy `.*`,
+    # so it bound to the LAST match -- and zot_last_err is the final, free-text field, so a
+    # crafted log tail containing ` zot_last_err=REDACTION_FAILED` won over the real field and
+    # forged the fail-safe framing on a PUBLIC issue. awk splits on the first separator and
+    # rejoins the remainder, so injected copies stay inside the value where they belong.
+    last_err="$(awk -v FS=' zot_last_err=' 'NR==1 && NF>1 { s=$2; for (i=3; i<=NF; i++) s=s FS $i; print s }' <<<"$err_row" | sed 's/"}$//')"
+    # THE TIER IS A TRUSTED FIELD, so it must be read from the TRUSTED REGION -- the discipline
+    # scripts/lib/zot-telemetry-parse.sh exists to enforce, and which this arm did not apply.
+    # The tail is cut FIRST (at its first occurrence), exactly as zot_trusted_region does;
+    # otherwise a crafted tail carrying ` zot_last_err_src=panic ` won the greedy match and the
+    # alarm published a routine HTTP line as "a matched diagnostic line" -- the ADR-166 defect
+    # this label exists to prevent, reintroduced by the label. Measured before the fix: the
+    # greedy form returned `panic`, the bounded form `fallback`.
+    err_src="$(printf '%s\n' "$err_row" | sed 's/ zot_last_err=.*//' | sed -n 's/.* zot_last_err_src=\([^ ]*\).*/\1/p')"
     # Redaction failure is read from the SENTINEL in the field the consumer already reads --
     # not from a second carrier on the tier, which would be two carriers for one fact.
     # PREFIX glob, not `==`. The extracted tail keeps JSON-envelope residue (measured:
