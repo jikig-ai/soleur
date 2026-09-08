@@ -507,6 +507,25 @@ esac
 # It fires HERE — after TEST_GROUP is validated so the message can name it, but before
 # tc_acquire and before the first suite — so a refused run costs nothing and never takes the
 # advisory lock that a legitimate sibling run is queued on.
+# SCRIPTS_SHARD IS SCOPED TO THE SCRIPTS GROUP, AND SAYS SO LOUDLY (#7902 review).
+#
+# `_shard_selects` sits at the chokepoint, so it is group-agnostic by construction — with the
+# variable set and any other TEST_GROUP it partitions that group too. Measured before this guard
+# existed: `TEST_GROUP=bun SCRIPTS_SHARD=2/3` silently ran 7 of ~21 registrations, and
+# `TEST_GROUP=infra` hit the zero-assignment refusal with a message about the scripts count that
+# made no sense for infra.
+#
+# CI is unaffected either way — the variable is bound only on ci.yml's test-scripts job, which
+# passes `scripts` positionally. This is for the developer who exports it once and then runs a
+# different group: an explicit refusal beats both a confusing exit 2 and a silently sharded gate.
+if [[ -n "${SCRIPTS_SHARD+x}" && "$TEST_GROUP" != "scripts" ]]; then
+  echo "ERROR: SCRIPTS_SHARD is set but TEST_GROUP is '$TEST_GROUP'." >&2
+  echo "       The partition is scoped to the scripts group; applying it to another group would" >&2
+  echo "       silently run a fraction of that group and report success. Unset SCRIPTS_SHARD, or" >&2
+  echo "       run the scripts group." >&2
+  exit 2
+fi
+
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
 # NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not
