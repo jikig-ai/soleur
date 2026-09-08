@@ -31,7 +31,7 @@ const FEATURE = "byok-delegations";
  * have replaced a permanent $0.00 with a figure that disagrees with the cap
  * that actually refuses the turn.
  *
- * CORRECTED WITH MIGRATION 137 (#7829, ADR-207 Decision 3). `cost-writer.ts`
+ * CORRECTED WITH MIGRATION 137 (#7829, ADR-208 Decision 3). `cost-writer.ts`
  * puts the WHOLE TURN's cost into `unit_cost_cents`
  * (`Math.round(costDelta * 100)`), so the product over-counted by a factor of
  * `token_count` — enough to trip any real cap on the first turn. Migration 137
@@ -41,7 +41,7 @@ const FEATURE = "byok-delegations";
  *
  * The founder-wide instances (061, 121) still multiply and remain tracked as
  * #7920. They govern a DIFFERENT accumulator, so this pane is unaffected by
- * them; see ADR-207 Decision 3 for why the two carry different formulas until
+ * them; see ADR-208 Decision 3 for why the two carry different formulas until
  * that lands.
  */
 function rowCostCents(row: { token_count: number; unit_cost_cents: number }): number {

@@ -108,7 +108,7 @@ const K = CAP_CENTS / COST_CENTS; // = 5 calls admitted before the boundary trip
 
 const DAILY_CEILING = 1_000_000; // table CHECK upper bound; "never trips" sentinel
 
-// Per-call RPC token args. Migration 137 (ADR-207 Decision 3) made the window
+// Per-call RPC token args. Migration 137 (ADR-208 Decision 3) made the window
 // `SUM(au.unit_cost_cents)` and the per-turn increment
 // `v_this_cost := p_unit_cost_cents`, so `unit_cost_cents` carries the WHOLE
 // TURN's cost and `token_count` does NOT enter the arithmetic at all — it is
@@ -180,7 +180,7 @@ function readRefusalReasonLive(data: unknown): string | null {
 function spendOf(rows: AuditRow[]): number {
   // Mirrors migration 137's corrected delegation windows: SUM(unit_cost_cents).
   // `unit_cost_cents` holds the WHOLE TURN's cost, so the old product was
-  // cents-times-tokens (ADR-207 Decision 3).
+  // cents-times-tokens (ADR-208 Decision 3).
   return rows.reduce((sum, r) => sum + r.unit_cost_cents, 0);
 }
 
@@ -384,7 +384,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // N must exceed K, else the concurrency partition expects ≤0 refusals and
       // proves nothing (localized guard, like the multiple check above).
       expect(N, "N must exceed K to exercise the cap boundary").toBeGreaterThan(K);
-      // ADR-207 Decision 3, pinned in both directions. The equality alone is not
+      // ADR-208 Decision 3, pinned in both directions. The equality alone is not
       // enough: it would still hold if someone reintroduced the product with
       // TOKEN_COUNT === 1, so assert that the OLD product does NOT equal the
       // cost and that TOKEN_COUNT is big enough for the difference to bite.
@@ -576,7 +576,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           `refused row carries the cap reason${diag}`,
         ).toBe(HOURLY_REASON);
         expect(
-          // The row's cost IS `unit_cost_cents` (ADR-207 Decision 3) — the same
+          // The row's cost IS `unit_cost_cents` (ADR-208 Decision 3) — the same
           // expression migration 137's windows sum. Reading the retired product
           // here would report 10x the real spend on a billing assertion.
           refusalRow!.unit_cost_cents,

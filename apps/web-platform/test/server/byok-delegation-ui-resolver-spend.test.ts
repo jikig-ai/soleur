@@ -214,7 +214,7 @@ const AUDIT_ROWS = [
 // SUM(au.unit_cost_cents) — unit_cost_cents holds the whole turn's cost, so the
 // old product was cents-times-tokens and tripped any real cap on the first
 // turn. The pane's figure and the cap that refuses the turn must not disagree,
-// so if one moves the other moves with it (ADR-207 Decision 3).
+// so if one moves the other moves with it (ADR-208 Decision 3).
 const rpcWindowSum = (rows: typeof AUDIT_ROWS) =>
   rows.reduce((acc, r) => acc + r.unit_cost_cents, 0);
 

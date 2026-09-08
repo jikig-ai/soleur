@@ -578,7 +578,7 @@ resource "sentry_alert" "byok_art_33_breach" {
 # WRITTEN, and BOTH CAP WINDOWS COUNT IT — the SUMs are deliberately unfiltered on
 # `attribution_shift_reason`, because the money has already moved and excluding it
 # would freeze the numerator and leak the cap. Cap rows are attributed to the
-# grantee (`founder_id` = caller); see ADR-207.
+# grantee (`founder_id` = caller); see ADR-208.
 #
 # What migration 137 did NOT do, so that nothing here is read as more than it is:
 # the delegation cap enforced nothing before it and enforces nothing after it.

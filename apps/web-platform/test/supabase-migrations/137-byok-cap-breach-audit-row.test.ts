@@ -224,7 +224,7 @@ describe("migration 137_byok_cap_breach_audit_row", () => {
     );
   });
 
-  describe("Decision 3 (ADR-207) — the delegation windows carry CORRECTED unit semantics", () => {
+  describe("Decision 3 (ADR-208) — the delegation windows carry CORRECTED unit semantics", () => {
     // unit_cost_cents holds the WHOLE TURN's cost, so `token_count * unit_cost_cents`
     // is cents-times-tokens and trips any real cap on the first turn. Shipping that
     // would mis-attribute founder_id on 100% of delegated rows in a WORM table.

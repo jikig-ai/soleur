@@ -55,7 +55,7 @@
 -- #7829's remit. The founder-wide instances of the same expression
 -- (migrations 061 and 121, ADR-041 Layer 1) are deliberately UNTOUCHED and
 -- remain tracked separately, so the delegation accumulator and the founder
--- accumulator carry different formulas until that lands. Recorded in ADR-207.
+-- accumulator carry different formulas until that lands. Recorded in ADR-208.
 
 BEGIN;
 
@@ -313,7 +313,7 @@ COMMENT ON FUNCTION public.check_and_record_byok_delegation_use(uuid, uuid, int,
 --
 -- Body is 121's verbatim except for that filter. The token_count product
 -- HERE is deliberately left ALONE and is the DEFECT held pending the
--- founder-wide fix -- not the correct form. See ADR-207 Decision 3.
+-- founder-wide fix -- not the correct form. See ADR-208 Decision 3.
 
 CREATE OR REPLACE FUNCTION public.record_byok_use_and_check_cap(
   p_invocation_id   uuid,
@@ -396,7 +396,7 @@ COMMENT ON COLUMN public.audit_byok_use.founder_id IS
   'IS NOT NULL - revoked_post_grace, expired, consent_withdrawn, '
   'hourly_cap_exceeded, daily_cap_exceeded; mig 137, #7829) carries the '
   'GRANTEE, because cost follows the party who continued past the boundary '
-  '(ADR-045, ADR-207). workspace_id stays the GRANTOR-scoped delegation '
+  '(ADR-045, ADR-208). workspace_id stays the GRANTOR-scoped delegation '
   'workspace on both, so on those rows founder_id and workspace_id name '
   'DIFFERENT parties. NULL after Art. 17 anonymisation (SET NULL cascade from '
   'public.users delete, mig 065 Part 2). AGGREGATION: neither column is a safe '

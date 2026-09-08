@@ -117,7 +117,7 @@ Insights **#1** (aged-seed the daily window at `ts = now() − 2h`) and **#3**
 (the strict-`>` boundary needs the exactly-`== cap` call to PASS) are unaffected
 by 137 and still apply verbatim.
 
-See [ADR-207](../../../engineering/architecture/decisions/ADR-207-a-delegation-refusal-returns-its-reason-because-a-raise-discards-the-audit-row.md)
+See [ADR-208](../../../engineering/architecture/decisions/ADR-208-a-delegation-refusal-returns-its-reason-because-a-raise-discards-the-audit-row.md)
 for the decision and the rejected alternatives.
 
 ## Session Errors

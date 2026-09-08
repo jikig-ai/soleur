@@ -7,19 +7,19 @@ pr: 7914
 status: SIGNED-OFF (CLO-agent-reviewed, Soleur-as-tenant-zero v1)
 signed_off_at: 2026-09-08
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; the operator retains an optional veto)"
-disposition: "DISCHARGED — condition met. One artifact in scope (the PA-23 (c)/(g) amendment). The single mandatory correction (F1) has LANDED in this PR: limb (g) measure (9) named a SQL predicate (`AND delegation_id IS NULL`) that migration 137 and ADR-207 explicitly REJECTED, and now names the shipped filter `AND attribution_shift_reason IS NULL` with the rejection recorded. The two recommended findings (F2 co-member recipients, F3 `invocation_id`) were applied in the same edit. Verified against the shipped code, not against the plan: migration 137 line 357 is the filter, and the verify sentinel at `supabase/verify/137_byok_cap_breach_audit_row.sql` line 61 asserts it."
+disposition: "DISCHARGED — condition met. One artifact in scope (the PA-23 (c)/(g) amendment). The single mandatory correction (F1) has LANDED in this PR: limb (g) measure (9) named a SQL predicate (`AND delegation_id IS NULL`) that migration 137 and ADR-208 explicitly REJECTED, and now names the shipped filter `AND attribution_shift_reason IS NULL` with the rejection recorded. The two recommended findings (F2 co-member recipients, F3 `invocation_id`) were applied in the same edit. Verified against the shipped code, not against the plan: migration 137 line 357 is the filter, and the verify sentinel at `supabase/verify/137_byok_cap_breach_audit_row.sql` line 61 asserts it."
 condition_discharged_at: 2026-09-08
-condition_discharged_by: "Applied in-PR before merge; a repo-wide sweep for the same claim found every other occurrence correctly describing `AND delegation_id IS NULL` as the rejected option (ADR-207, the migration header, the shape tripwire), so the register was the only site asserting it as shipped."
+condition_discharged_by: "Applied in-PR before merge; a repo-wide sweep for the same claim found every other occurrence correctly describing `AND delegation_id IS NULL` as the rejected option (ADR-208, the migration header, the shape tripwire), so the register was the only site asserting it as shipped."
 blocking_findings: []
 required_before_merge_DISCHARGED:
-  - "F1 (mandatory) — correct PA-23 limb (g) measure (9): `AND delegation_id IS NULL` → `AND attribution_shift_reason IS NULL`, with the rejection of the former recorded. Evidence: `apps/web-platform/supabase/migrations/137_byok_cap_breach_audit_row.sql` §3 body and header comment; ADR-207 §'Rejected: `AND delegation_id IS NULL` on the founder SUM'."
+  - "F1 (mandatory) — correct PA-23 limb (g) measure (9): `AND delegation_id IS NULL` → `AND attribution_shift_reason IS NULL`, with the rejection of the former recorded. Evidence: `apps/web-platform/supabase/migrations/137_byok_cap_breach_audit_row.sql` §3 body and header comment; ADR-208 §'Rejected: `AND delegation_id IS NULL` on the founder SUM'."
 recommended_before_merge_APPLIED:
   - "F2 — amend limb (d) Recipients to name workspace co-members. The RLS policy `audit_byok_use_workspace_member_select` (mig 059) makes a GRANTEE-attributed charge record readable by every co-member, and mig 137 is the first time such a record exists. Limb (d) currently names only Anthropic PBC and Supabase Inc. The sibling PA-24 already treats co-members as a recipient category."
   - "F3 — add `invocation_id` to the limb (c) column enumeration (it is written on every refusal INSERT and is the row's uniqueness key)."
 attests:
   - knowledge-base/legal/article-30-register.md (PA-23 limbs (c) and (g) only)
 carve_outs:
-  - "NOT ATTESTED — the engineering mechanism. The return-status conversion, the attribution rule (ADR-045 / ADR-207), and the founder-SUM filter choice are settled decisions reviewed here only for whether the register describes them truthfully."
+  - "NOT ATTESTED — the engineering mechanism. The return-status conversion, the attribution rule (ADR-045 / ADR-208), and the founder-SUM filter choice are settled decisions reviewed here only for whether the register describes them truthfully."
   - "NOT ATTESTED — the DSAR bundle question (issue #7926). No determination is made here on whether the grantor's Art. 15 export must regain the refused turns; the register records the shift as a consequence and that is lawful as a record."
   - "NOT ATTESTED — the pre-existing legal-corpus defects at issue #7921 (DPD §2.3(w); the three-way audit_byok_use retention contradiction across PA-13 / PA-16 / PA-23; the stale-RLS-derived ruling). Ruled pre-existing and separable at §Q6."
   - "NOT PROMOTED — the register's `status: draft-requires-counsel-review` at line 10. External counsel promotes it."
@@ -30,7 +30,7 @@ re_evaluation_triggers:
   - "Resolution of #7921's retention contradiction — PA-23 (f)'s 7-year figure is attested only as unchanged-by-this-PR, not as correct."
   - "Any data subject outside the EEA/UK, or in a regulated industry."
 related:
-  - knowledge-base/engineering/architecture/decisions/ADR-207-a-delegation-refusal-returns-its-reason-because-a-raise-discards-the-audit-row.md
+  - knowledge-base/engineering/architecture/decisions/ADR-208-a-delegation-refusal-returns-its-reason-because-a-raise-discards-the-audit-row.md
   - apps/web-platform/supabase/migrations/137_byok_cap_breach_audit_row.sql
   - apps/web-platform/server/dsar-export-allowlist.ts
   - apps/web-platform/supabase/migrations/059_workspace_keyed_rls_sweep.sql
@@ -168,7 +168,7 @@ PA-23 limb (g), measure (9) as drafted:
 The shipped filter is `AND attribution_shift_reason IS NULL`
 (`137_byok_cap_breach_audit_row.sql` §3, and asserted by
 `supabase/verify/137_byok_cap_breach_audit_row.sql`). `AND delegation_id IS NULL`
-is the alternative the migration header and ADR-207 record as **rejected as
+is the alternative the migration header and ADR-208 record as **rejected as
 over-broad**. A register that names a rejected predicate as a technical measure
 in force asserts a control that does not exist — the drift class of PR #4353
 and PR #4558. The stated *effect* of the measure is correct; only the predicate

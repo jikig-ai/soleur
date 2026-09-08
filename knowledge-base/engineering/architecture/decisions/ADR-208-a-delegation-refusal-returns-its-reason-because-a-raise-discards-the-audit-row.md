@@ -1,12 +1,12 @@
 ---
-title: "ADR-207 — A delegation refusal returns its reason, because a RAISE discards the audit row it was meant to write"
+title: "ADR-208 — A delegation refusal returns its reason, because a RAISE discards the audit row it was meant to write"
 status: accepted
 date: 2026-09-07
 tags: [byok, byok-delegations, postgres, plpgsql, audit-ledger, accounting, worm, gdpr, art-30]
 related_adrs: [ADR-040, ADR-041, ADR-045]
 ---
 
-# ADR-207 — A delegation refusal returns its reason, because a RAISE discards the audit row
+# ADR-208 — A delegation refusal returns its reason, because a RAISE discards the audit row
 
 ## Status
 
@@ -15,7 +15,7 @@ Accepted 2026-09-07 ([#7829](https://github.com/jikig-ai/soleur/issues/7829)).
 - **Ordinal note:** re-derived at authoring time with `max + 1` over
   `origin/main`, not a presence check. `origin/main` topped out at **ADR-206**
   (`ADR-206-attribute-a-prs-filings-by-the-prs-own-body.md`), so this is
-  **ADR-207**. ADR-205 is an unfilled hole — the plan for #7829 reserved it when
+  **ADR-208**. ADR-205 is an unfilled hole — the plan for #7829 reserved it when
   ADR-204 was the ceiling, and a sibling that also planned 205 landed as 206
   instead. The hole is deliberately left unfilled: the ship gate defines "next
   free" as `max + 1`, never the lowest unused ordinal, and back-filling would put

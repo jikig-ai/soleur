@@ -42,7 +42,7 @@ SELECT 'attribution_shift_reason_check_admits_five',
                  LIKE '%hourly_cap_exceeded%daily_cap_exceeded%' THEN 0 ELSE 1 END::int
 UNION ALL
 
--- (4) The delegation windows carry the CORRECTED unit semantics (ADR-207
+-- (4) The delegation windows carry the CORRECTED unit semantics (ADR-208
 --     Decision 3). unit_cost_cents is a whole-turn total, so the product form
 --     trips any real cap on the first turn and attributes 100% of delegated
 --     rows to the wrong billing party, permanently, in a WORM table.

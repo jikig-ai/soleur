@@ -74,7 +74,7 @@ Brand-survival threshold: single-user incident. CPO sign-off required before /wo
 - [ ] 3.11 Re-create `audit_byok_use_delegation_ts_idx` or record the measured scan
       cost (no `CONCURRENTLY` — the runner wraps each file in a transaction).
 - [ ] 3.12 `066` column comment on `founder_id` (both sentences).
-- [ ] 3.13 Write ADR-207 (re-derived `max + 1` on `origin/main`, which now tops out at ADR-206; was planned as ADR-205); re-verify the ordinal against `origin/main` before merge.
+- [ ] 3.13 Write ADR-208 (re-derived `max + 1` on `origin/main`, which now tops out at ADR-206; was planned as ADR-205); re-verify the ordinal against `origin/main` before merge.
 - [ ] 3.14 Amend the `audit == K` learning.
 - [ ] 3.15 Art. 30 register PA-23 limbs (c) and (g).
 - [ ] 3.16 `bash plugins/soleur/test/c4-count-parity.test.sh` green.
