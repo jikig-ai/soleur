@@ -20,7 +20,7 @@ workflow references the file, and `plugins/soleur/lib/kb-coverage.ts` already na
 warning for exactly this shape".
 
 **What the challenge costs, which the reviewers did not price.** `git worktree add` does not copy
-ignored files, so every one of the ~14 worktrees would start with no index at all, and the
+ignored files, so every one of the 37 linked worktrees (measured; the "~14" figure in the cited 2026-08-09 learning is stale) would start with no index at all, and the
 regeneration would have to run from a `SessionStart` hook whose matcher fires on `startup|resume|clear|compact`
 — a 9.9 s tax on every compaction. The KB browser at `apps/web-platform/app/(dashboard)/dashboard/kb/`
 lists whatever the connected repo contains, so an untracked index simply stops appearing there
