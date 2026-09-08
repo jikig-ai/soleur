@@ -1,6 +1,7 @@
 # Session State
 
 ## Plan Phase
+
 - Plan file: knowledge-base/project/plans/2026-09-07-chore-ccla-instrument-file-and-icla-signature-watch-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
@@ -13,7 +14,9 @@
   target, so no additional `gh` probe was required.
 
 ### Errors
+
 None blocking. Three notes carried forward from planning:
+
 - The `#7909`-suggested filename `ccla-<counterparty>-<issue>.sh` was changed to
   `ccla-representative-icla-<TRACKER>.sh` — the counterparty's sole-trader status
   is unknown until the instrument arrives, and a natural-person legal name in a
@@ -24,6 +27,7 @@ None blocking. Three notes carried forward from planning:
   before commit.
 
 ### Decisions
+
 - Nine plan claims were falsified by measurement and corrected. The worst: the
   prototyped `jq` predicate returned PASS on an unreadable coverage map
   (`count=1 rc=0`) because a process substitution's exit status is invisible — a
@@ -44,6 +48,7 @@ None blocking. Three notes carried forward from planning:
   plausible.
 
 ### Components Invoked
+
 `soleur:plan` -> `soleur:plan-review` -> `soleur:deepen-plan`; agents: `Explore`,
 `soleur:legal:clo`, `soleur:engineering:cto` (x2), `dhh-rails-reviewer`,
 `kieran-rails-reviewer`, `code-simplicity-reviewer`, `architecture-strategist`,
