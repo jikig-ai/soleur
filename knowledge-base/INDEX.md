@@ -2462,6 +2462,7 @@
 - [My instruments reported green while measuring nothing](project/learnings/2026-09-07-my-instruments-reported-green-while-measuring-nothing.md)
 - [The class recurred three days later, and four of the instruments I checked my own work with were broken](project/learnings/2026-09-07-the-class-recurred-in-three-days-and-every-instrument-was-broken.md)
 - [The guard I wrote died on the case it was written to catch](project/learnings/2026-09-07-the-guard-i-wrote-died-on-the-case-it-was-written-to-catch.md)
+- [Every guard I added to a vacuity gate could not fail, and my battery certified them](project/learnings/2026-09-08-every-guard-i-added-to-the-gate-could-not-fail.md)
 - [Git Ref Format Validation Requires Multi-Check Approach](project/learnings/best-practices/2026-04-11-git-ref-format-multi-check-validation.md)
 - [Pure Reducer Extraction Requires Companion-State Migration](project/learnings/best-practices/2026-04-14-pure-reducer-extraction-requires-companion-state-migration.md)
 - [Negative-Space Tests Must Follow Extracted Enforcement Logic](project/learnings/best-practices/2026-04-15-negative-space-tests-must-follow-extracted-logic.md)

@@ -176,3 +176,29 @@ on this project, that rule fires and pages nobody.
   **narrowing-is-not-anchoring** corollary.
 - `2026-06-15-id-shape-guard-test-fixture-blast-radius-and-syntactic-sast.md` — SAST
   vacuity, adjacent.
+
+
+## Addendum — 2026-09-08 (#7466): the strip this file prescribes is defeated two ways
+
+Measured on bun 1.3.11 and 1.3.14 while fixing a gate whose anchored greps could not
+cross a coloured summary line. The `sed -r 's/\x1b\[[0-9;]*m//g'` form prescribed above
+is correct for the case it was written against and fails on two axes:
+
+1. **`\x1b` is a GNU sed extension.** BSD/macOS sed matches the literal characters
+   `x1b` instead, so the strip is a silent no-op there — it removes nothing and reports
+   nothing. Build the escape with `ESC=$(printf '\033')` and interpolate it.
+2. **An SGR-only class (`\[[0-9;]*m`) is defeated by any non-SGR escape.** Measured, each
+   of these survives it and then breaks an anchored parse: a colon-separated SGR
+   (`ESC [ 3 8 : 2 : … m`), a two-byte DECSC (`ESC 7`, no `[` at all), and a charset
+   designator (`ESC ( B`). The ECMA-48 form covers all three —
+   `-e "s|${ESC}\[[0-?]*[ -/]*[@-~]||g" -e "s|${ESC}[ -/]*[0-~]||g"` — where the classes
+   are ECMA-48's parameter, intermediate and final byte ranges, and the second rule
+   catches every two-byte escape. Pin `LC_ALL=C`: the ranges are locale-dependent
+   without it. Use `|` as the delimiter, not `/` — an escaped `/` inside a bracket
+   expression turns the class into 0x20-0x5C and eats real text.
+
+Also verified there: `tr '\r' '\n'` must TRANSLATE rather than delete, or overwritten
+text concatenates onto the summary line and the anchor misses again.
+
+Reference implementation: `plugins/soleur/test/preflight-check10-suite-integrity.test.sh`
+› `strip_ansi`.
