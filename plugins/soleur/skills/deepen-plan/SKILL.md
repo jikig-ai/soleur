@@ -441,7 +441,7 @@ If absent, HALT with:
 > Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan that ships production
 > code or infrastructure must declare its observability surface before deepen-plan proceeds.
 
-**Step 3 — Validate field values.** Extract the section body (between `^## Observability` and the next `^## ` heading). For each of the 5 required top-level fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), reject if ANY of:
+**Step 3 — Validate field values.** Extract the section body (between `^## Observability` and the next `^## ` heading). For each of the 5 required top-level fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), reject if ANY of: <!-- markdownlint-disable-line MD038 -->
 
 - **Field key absent** — `grep -qE "^\s*<field>:" <body>` returns no match.
 - **Field value is a placeholder** — the field-value line (case-insensitive) matches `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\s*$` (anchored — distinguish "field is exactly this string" from "prose contains this string"). Also reject `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\b` — trailing whitespace + extra text still counts as a placeholder.
@@ -546,7 +546,7 @@ If absent, HALT with:
 > See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the schema.
 > Every new store or connection must declare a design-time encryption posture before deepen-plan proceeds.
 
-**Step 3 — Validate field values.** Extract the section body (between `^## Encryption Posture` and the next `^## ` heading). For each `at_rest` entry (`mechanism`, `evidence`, `defends_against`, `does_not_defend`, `disclosed_as`, `live_verification`) and each `in_transit` entry (`tls`, `cert_verification`, `does_not_defend`, `disclosed_as`), reject if ANY of:
+**Step 3 — Validate field values.** Extract the section body (between `^## Encryption Posture` and the next `^## ` heading). For each `at_rest` entry (`mechanism`, `evidence`, `defends_against`, `does_not_defend`, `disclosed_as`, `live_verification`) and each `in_transit` entry (`tls`, `cert_verification`, `does_not_defend`, `disclosed_as`), reject if ANY of: <!-- markdownlint-disable-line MD038 -->
 
 - **Field key absent or empty** — the field is required by the schema (`encryption-posture-ledger.schema.json`, repo-root `scripts/`) and either has no key or matches `^\s*<field>:\s*(TODO|TBD|N/A|placeholder)\s*$`.
 - **`mechanism` (or `at_rest` prose) matches the boilerplate ban-list** — case-insensitive: `provider handles`, `handled by the provider`, `encrypted by default` with no named attestation, `supports TLS`. These describe the absence of a posture, not a posture.

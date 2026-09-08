@@ -69,6 +69,12 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ## Current State (2026-08-11)
 
+<!-- markdownlint-disable MD038 -->
+<!-- #7927: MD038 on this table is cosmetic. Verified with the repo's own markdown-it:
+     every span here renders with no edge space (CommonMark strips a single leading and
+     trailing space), except one where the leading space is the point -- the cell
+     documents a string that is APPENDED, so its space is content. A disable-line comment
+     cannot be used: GFM discards anything past a row's closing pipe. -->
 | Dimension | Status |
 |-----------|--------|
 | Financial posture | Product COGS **$223.39/mo, break-even 5 users** at $49/mo. All-in burn **$643.24/mo** (includes ~$419.85/mo R&D: Claude Code Max seats + GitHub Copilot), **break-even 14 users**. Gross margin at 50 users: ~91% vs COGS, ~73% all-in. BYOK eliminates per-user LLM cost (load-bearing architectural commitment). Figures reconciled 2026-07-26 against [finance/cost-model.md](../finance/cost-model.md)`@2026-07-17` (subtotal + break-even tables, not a review note); the prior `~$81/mo / 2 users` was anchored 2026-04-23 and understated COGS ~2.75×. |
@@ -80,6 +86,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | Post-MVP / Later | counts are not frozen here — derive them from the milestone itself: `gh api repos/jikig-ai/soleur/milestones --paginate -q '.[] | select(.title=="Post-MVP / Later") | "open=\(.open_issues) closed=\(.closed_issues)"'`. (The search/issues API lags the milestone counters and its `is:issue` filter never matched this title.) (+5 competitive-parity bets CP1-CP5 vs Viktor, intake 2026-05-30) |
 | Beta users | **1.** Alpha tester #1 (Skouer) onboarded 2026-08-06 on the self-hosted CLI plugin — row 4.1 recruitment underway. Record: [validation/2026-08-06-alpha-onboarding-motion-start.md](validation/2026-08-06-alpha-onboarding-motion-start.md); per-tester runbook: [alpha-tester-onboarding.md](../engineering/operations/runbooks/alpha-tester-onboarding.md). Recruitment mix: 1 Claude-Code user / 0 non-CC (#1439 requires ≥3 of 10 non-CC). |
 | Pricing gates passed | 0 of 5 |
+<!-- markdownlint-enable MD038 -->
 
 ---
 

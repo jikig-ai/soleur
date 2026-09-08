@@ -148,12 +148,12 @@ The 2026-08-16 break was invisible on `main` because `pull_request_target` does 
 push, so every post-merge run showed `skipped`. #7566 merged green and broke every downstream
 PR.
 
-`scripts/lint-workflow-install-sites.sh` clause 3 asserts that any step invoking `bun ` is
+`scripts/lint-workflow-install-sites.sh` clause 3 asserts that any step invoking `bun ` is <!-- markdownlint-disable-line MD038 -->
 preceded by a `setup-bun` step in the same job — which is exactly the #7566 defect. **It did not
 catch it.** Measured by restoring the broken file and re-running: `scanned 83 workflow file(s)
 … OK`.
 
-The cause was the recurring one: the clause named the property *"any step invoking `bun `"* but
+The cause was the recurring one: the clause named the property *"any step invoking `bun `"* but <!-- markdownlint-disable-line MD038 -->
 matched only two **positions** — a `run:` line, and a line whose first token is `bun`. The
 broken call site was `payload=$(bun run …)`, a command substitution, which is neither.
 

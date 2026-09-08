@@ -392,7 +392,7 @@ registered as a required status context.
 The plan asserted that `[ack-destroy]` "must sit in the merge commit, authored in GitHub's
 squash UI — the author cannot pre-stage it from the branch." That is **false for this repo**:
 `squash_merge_commit_message = COMMIT_MESSAGES`, so the squash body is composed from the
-branch commit messages — each commit's SUBJECT prefixed `* `, its BODY lines carried verbatim
+branch commit messages — each commit's SUBJECT prefixed `* `, its BODY lines carried verbatim <!-- markdownlint-disable-line MD038 -->
 (verified against merged commit `105799dbd`). An `[ack-destroy]` on its own line in a commit
 **body** therefore reaches the merge commit line-anchored and satisfies the apply gate; the
 same literal used as a commit **subject** becomes `* [ack-destroy]` and does not.

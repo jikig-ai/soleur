@@ -762,6 +762,7 @@ drafted string is reworded** — a reworded string with an un-updated grep is a 
 
 Let `C=docs/legal` and `M=plugins/soleur/docs/pages/legal`.
 
+<!-- markdownlint-disable MD038 -->
 | # | Binding edit | Block | Positive check (passes only if the edit landed) | Surfaces |
 |---|---|---|---|---|
 | 1 | gdpr §3.14 exists | D1-a | `grep -c '^### 3.14 Operator-assisted sessions and repository access granted to Jikigai' $C/gdpr-policy.md` → `1` | [C][M] |
@@ -806,6 +807,7 @@ Let `C=docs/legal` and `M=plugins/soleur/docs/pages/legal`.
 | 38 | privacy §4.2 — the agreement is scoped to the Processor limb only | Adj. B | `grep -c 'it is not what makes our own product-learning use lawful' $C/privacy-policy.md` → `1` **and** `grep -c 'agreeing a written agreement' $C/privacy-policy.md` → `0` (the repetition is gone) | [C][M] |
 | 39 | The attestation file cited by the C5 row **exists** | Adj. C | `test -f knowledge-base/legal/audits/2026-08-09-clo-attestation-7347-operator-assisted-scope.md` → exit 0. The C5 row cites this path; a merged row citing a non-existent document is a dangling citation in the compliance record. **This row must pass before merge, not before PR-ready.** | knowledge-base only |
 | 37 | `LEGAL_DOC_SHAS` repinned after the final prose byte | all | `apps/web-platform/lib/legal/legal-doc-shas.ts` literals match the on-disk files; `tc-document-sha-guard` exits 0; `cd apps/web-platform && ./node_modules/.bin/vitest run test/legal-doc-consistency.test.ts` is green (grep the log for `FAIL`/`× ` — a background runner has reported exit 0 with a real failure) | repo |
+<!-- markdownlint-enable MD038 -->
 
 **Do-not list for the implementer** (prohibitions, which are *supplementary* to the table above and
 never a substitute for it): do not change `gdpr-policy.md` §10's "eleven processing activities" (A6,

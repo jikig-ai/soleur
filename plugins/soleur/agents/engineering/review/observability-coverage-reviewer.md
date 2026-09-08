@@ -112,7 +112,7 @@ The durable rule: **for a blind surface, ship the structured in-surface probe wh
 
 ### Step 5: Runbook no-SSH check (`hr-no-ssh-fallback-in-runbooks`)
 
-For each modified or added runbook, find the section under a heading matching `(What to do|Triage|Diagnosis|Debug)`. The FIRST debug step bullet must NOT match `^[\s\-\*0-9.]*\`?(ssh|docker exec|journalctl.*-f|systemctl (restart|stop)|kill|systemd-run)`. SSH-class commands are allowed ONLY under a heading containing `last-resort` / `emergency only` / `when all else fails`, AFTER at least three no-SSH steps. Violations = **P1 finding**.
+For each modified or added runbook, find the section under a heading matching `(What to do|Triage|Diagnosis|Debug)`. The FIRST debug step bullet must NOT match ``^[\s\-\*0-9.]*`?(ssh|docker exec|journalctl.*-f|systemctl (restart|stop)|kill|systemd-run)``. SSH-class commands are allowed ONLY under a heading containing `last-resort` / `emergency only` / `when all else fails`, AFTER at least three no-SSH steps. Violations = **P1 finding**.
 
 Also verify **verb-completeness**, not just the first-step check: a runbook claiming no-SSH must have a webhook verb + pinned sudoers grant for EVERY host mutation it performs (quiesce/stop/disable AND enable/start, not just deploy/restart). An existing verb for a *different* mutation does not make the cutover no-SSH; a re-arm/reverse op must use `enable` (restores the `[Install]` symlink `disable` removed), never `restart`. A missing verb for any performed mutation = **P1 finding** (#6178).
 

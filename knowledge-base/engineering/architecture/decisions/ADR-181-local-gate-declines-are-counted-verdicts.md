@@ -74,18 +74,18 @@ lists live in `scripts/lib/test-relevance-paths.sh` as declarations only — no 
 effects — and are sourced by `test-all.sh` and by `scripts/lint-orphan-test-suites.sh`.
 
 > **PARTLY SUPERSEDED 2026-08-13 (#7402).** The scope described below — "any `scripts/*.test.sh`
-> appearing after the `run_suite ` token" — is no longer accurate: `lint-orphan-test-suites.sh`
+> appearing after the `run_suite ` token" — is no longer accurate: `lint-orphan-test-suites.sh` <!-- markdownlint-disable-line MD038 -->
 > now walks EVERY tracked `*.test.sh` repo-wide and extracts from COMMAND position, not from any
-> token following `run_suite `. **The rule itself still holds and is still load-bearing** (a path
+> token following `run_suite `. **The rule itself still holds and is still load-bearing** (a path <!-- markdownlint-disable-line MD038 -->
 > literal on a `run_suite` line can still satisfy registration for a different suite than the one
 > executed); only the stated mechanism is out of date. Body left intact, per the append-only
 > convention for dated records.
 
 - **No path literal may appear on a `run_suite` line.** `lint-orphan-test-suites.sh`'s per-suite
-  anchor is satisfied by any `scripts/*.test.sh` appearing after the `run_suite ` token, so an
+  anchor is satisfied by any `scripts/*.test.sh` appearing after the `run_suite ` token, so an <!-- markdownlint-disable-line MD038 -->
   inline predicate list would satisfy the registration check for a **different** suite than the
   one executed — and deleting that suite's real registration would still report `orphan test
-  suites: none`. `skip_suite ` cannot match `^[[:space:]]*run_suite `, so the sibling helper is
+  suites: none`. `skip_suite ` cannot match `^[[:space:]]*run_suite `, so the sibling helper is <!-- markdownlint-disable-line MD038 -->
   invisible to that anchor by construction.
 - **Each array contains its own battery file.** That single element makes new-target drift
   self-correcting: a commit teaching a battery to mutate something new necessarily edits the
@@ -122,7 +122,7 @@ the scripts shard — which is exactly why the CI bypass must reach them and not
   `run_suite` line false-match the orphan linter's per-suite anchor (above), so a predicate path
   could register a suite that was never executed. The reasoning was already written twenty lines
   away in that linter, where `REQUIRED_RUNNERS` anchors on the **command** rather than the label.
-- **A `run_suite_if_relevant` wrapper** — REJECTED. Breaks the literal `run_suite ` token the
+- **A `run_suite_if_relevant` wrapper** — REJECTED. Breaks the literal `run_suite ` token the <!-- markdownlint-disable-line MD038 -->
   linter anchors on, disarming registration detection for the wrapped suites.
 - **Keeping the `if`-around-`run_suite` shape** — REJECTED. That shape *is* the denominator drift;
   generalising it would have spread the defect to two more suites.

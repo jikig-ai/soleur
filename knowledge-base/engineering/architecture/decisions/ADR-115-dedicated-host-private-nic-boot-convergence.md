@@ -300,7 +300,7 @@ The field set discriminates every competing hypothesis in **one** event:
 | `nic_ok = true && reboot_count > 0` | The race is real and the guard healed it — the **advisory** branch. |
 
 `zot_last_err` carries that exact name and is **trailing** because
-`scripts/lib/zot-telemetry-parse.sh:27` strips the **literal** ` zot_last_err=` to bound the
+`scripts/lib/zot-telemetry-parse.sh:27` strips the **literal** ` zot_last_err=` to bound the <!-- markdownlint-disable-line MD038 -->
 trusted region; a `last_err=` would silently never be stripped and the spoof guard would never
 fire. `host` is deliberately absent — the immutable replace reuses the Terraform hostname, so
 `boot_id` is what separates old-host from new-host events.

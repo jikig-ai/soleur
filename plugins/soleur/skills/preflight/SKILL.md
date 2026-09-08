@@ -634,7 +634,7 @@ grep -nE 'Buffer\.from\([^)]*"base64url"' <files> \
   | grep -vE '`[^`]*Buffer\.from\([^`]*"base64url"[^`]*`'
 ```
 
-The first filter drops single-line `// ...` comments and JSDoc `* ...` lines. The second drops backtick-quoted references inside markdown-style code spans (which can occur in TSDoc/JSDoc bodies that don't start with `* `). The remaining matches are real call sites.
+The first filter drops single-line `// ...` comments and JSDoc `* ...` lines. The second drops backtick-quoted references inside markdown-style code spans (which can occur in TSDoc/JSDoc bodies that don't start with `* `). The remaining matches are real call sites. <!-- markdownlint-disable-line MD038 -->
 
 If output is non-empty, **FAIL** with a per-file listing: "Node-only encoding `base64url` in client-bundle path `<file>:<line>`. Replace with browser-safe `atob` + `base64.padEnd(...)` per `apps/web-platform/lib/supabase/validate-anon-key.ts` post-fix pattern, OR move the file behind a `lib/server/` boundary if it does not need the client bundle."
 
@@ -1482,4 +1482,4 @@ Preflight validation passed. Return control to the calling orchestrator.
 - **`git ls-files --error-unmatch` is not a review oracle.** It interrogates the **PR-head index** — the attacker's own branch — and preflight runs *before* merge. "Tracked" and "reviewed" are different properties. That is why the program-path rule here is a pure string rule and the sandbox, not a tracking check, is what contains the script.
 - **The shell-active reject does not bound a folded command.** Folding joins with a space, so a folded scalar has no `;`/`|`/`$()` by construction and passes the reject automatically — it can append *arguments* but never chain a command. That makes fold safer than block for injection, but it also means no token in that reject set constrains what a folded command *is*. Reasoning "the reject will catch it" about a folded command is reasoning about the wrong gate; the verb allowlist and the sandbox are the gates that apply.
 - **`bash -c "$CMD"` stdout always ends in `\n`.** The matcher MUST normalize trailing newlines (via `sanitize()` or `${var%$'\n'}`) before substring comparison, or `expected_output: 200` fails when production correctly emits `200\n`.
-- **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose.
+- **The `\b` word-boundary trap.** Bash `[[ $x =~ \bssh \b ]]` matches `ssh ` only when whitespace is on BOTH sides; trailing-EOF or trailing-newline `ssh ` does NOT match. Always use `(^|[[:space:]])ssh([[:space:]]|$)` — the canonical Check 10 reject form — when checking for `ssh ` in operator-facing prose. <!-- markdownlint-disable-line MD038 -->

@@ -214,10 +214,10 @@ mv: cannot move '.git/config.soleur-tmp.4' to '.git/config': Device or resource 
 
 2. **The fatal path was telemetry-blind (the meta-bug).** The `worktree wedge:` give-up was
    emitted ONLY via `headless_or_stderr` → a per-PID logfile the PostToolUse
-   `git-lock-marker-telemetry` scanner never reads, AND its `[error] ` prefix failed
+   `git-lock-marker-telemetry` scanner never reads, AND its `[error] ` prefix failed <!-- markdownlint-disable-line MD038 -->
    `MARKER_RE`'s `^worktree wedge:` anchor. So the wedge fired every run yet showed **zero
    events/30d** — which is why four prior fixes (07-01 → 07-07) never converged. Fix: a bare
-   stdout `echo` at every give-up + `MARKER_RE`/`WEDGE_RE` now tolerate the `[error] ` prefix
+   stdout `echo` at every give-up + `MARKER_RE`/`WEDGE_RE` now tolerate the `[error] ` prefix <!-- markdownlint-disable-line MD038 -->
    and allowlist `SOLEUR_GIT_CONFIG_TARGET_MASKED`, `SOLEUR_GIT_CONFIG_MASK_SKIP`,
    `SOLEUR_FEATURE_PUSH_FAILED`, `NO_GIT_REPOSITORY`.
 

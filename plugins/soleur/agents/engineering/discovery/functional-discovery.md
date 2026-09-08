@@ -129,7 +129,7 @@ Before installing, validate:
 2. **Required fields present** -- `name` and `description` must exist in frontmatter
 3. **Size check** -- content must be under 100KB
 4. **No path traversal** -- no `../` in any frontmatter field values
-5. **No executable code blocks** -- warn (but don't block) if content contains ```bash or ```sh blocks with destructive commands (`rm -rf`, `curl | bash`, etc.)
+5. **No executable code blocks** -- warn (but don't block) if content contains ```` ```bash ```` or ```` ```sh ```` blocks with destructive commands (`rm -rf`, `curl | bash`, etc.)
 
 If validation fails, skip with a message: "Artifact [name] failed validation: [reason]. Skipping."
 
