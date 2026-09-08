@@ -301,8 +301,14 @@ restore
 # --- Anti-vacuity floor -----------------------------------------------------------
 # Reported with printf + exit, NEVER through fail(): a floor that calls the helper it
 # backstops is disarmed by the same edit that disarms the helper (ADR-193).
-MIN_CASES=12
 printf '\n=== markdown-lint.test.sh: %s passed, %s failed (%s cases) ===\n' "$passes" "$fails" "$cases"
+# The threshold is declared IMMEDIATELY above its `if`, with nothing between them.
+# guard-vacuity-floor.test.sh builds a mutant by slicing from the `if` to its `fi` and
+# walking BACKWARD over adjacent bare assignments to bind the constants; any other
+# statement in between stops that walk, the mutant dies on `set -u` with the threshold
+# unbound, and a fully compliant floor is reported as a construction failure rather
+# than as covered. Measured: this floor joined that uncovered set until the printf moved.
+MIN_CASES=12
 if (( cases < MIN_CASES )); then
   printf 'ERROR: only %s cases ran, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$cases" "$MIN_CASES" >&2
   exit 1
