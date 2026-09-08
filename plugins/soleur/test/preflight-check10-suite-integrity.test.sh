@@ -105,7 +105,158 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# --- Parser for bun's summary counters (#7466) ------------------------------
+# bun writes its summary block with ANSI colour, so a grep anchored at
+# `^[[:space:]]*` cannot reach the digits: the line begins with an ESC. The four
+# counter greps were anchored and `expect() calls` was not, which is why a
+# coloured run reported `pass=0` alongside `expect=539` — one asymmetry, one
+# cause. The parse therefore runs over a STRIPPED copy, produced here.
+#
+# ESC is built with printf, NOT the `\x1b` sed escape: `\x1b` is a GNU sed
+# extension and BSD sed matches the literal characters `x1b` instead.
+ESC=$(printf '\033')
+
+strip_ansi() {                  # <path> -> stripped text on stdout
+  cat "$1"                      # SCAFFOLD (Phase 1a): pass-through, no strip yet.
+}
+
+# parse_bun_summary is the SOLE PRODUCER of counter values: it echoes them and one
+# `read` binds them, so no counter can enter this gate by another path. It assigns
+# nothing in the caller's scope — a function that wrote back would be silently lost
+# when reached through a pipe (a subshell), and the loss mimics the very bug this
+# fixes. Its internals are named `plain`/`v`/`out`, never `n_*`.
+#
+# It reads its input EXACTLY ONCE. Fixtures arrive as process substitutions, which
+# are PIPES: measured, a parser stripping once per counter returns `122 - - - -` for
+# every fixture while the live path (a real, re-readable file) returns all five, so
+# the self-checks and the live run would disagree in a way that looks exactly like
+# the defect being fixed.
+#
+# `-` marks an unread field. An empty field would collapse under `read`'s default
+# IFS and shift every later field one position left.
+parse_bun_summary() {           # <path> -> "pass fail skip todo expect"
+  local plain v out
+  plain="$(strip_ansi "$1")"
+  v="$(grep -oE '^[[:space:]]*([0-9]+) pass' <<<"$plain" | grep -oE '[0-9]+' | tail -1)"
+  out="${v:--}"
+  v="$(grep -oE '^[[:space:]]*([0-9]+) fail' <<<"$plain" | grep -oE '[0-9]+' | tail -1)"
+  out="$out ${v:--}"
+  v="$(grep -oE '^[[:space:]]*([0-9]+) skip' <<<"$plain" | grep -oE '[0-9]+' | tail -1)"
+  out="$out ${v:--}"
+  # bun classifies `todo` SEPARATELY from `skip`, so a suite suppressed via
+  # `.todoIf(...)` reported 0 skip and this gate called it "no tests skipped at
+  # runtime". Parsing it is what makes the whole suppression family visible by
+  # MEASUREMENT rather than by source pattern-matching.
+  v="$(grep -oE '^[[:space:]]*([0-9]+) todo' <<<"$plain" | grep -oE '[0-9]+' | tail -1)"
+  out="$out ${v:--}"
+  v="$(grep -oE '([0-9]+) expect\(\) calls' <<<"$plain" | grep -oE '^[0-9]+' | tail -1)"
+  out="$out ${v:--}"
+  printf '%s\n' "$out"
+}
+
+# summary_measured is the SOLE decision site for "was this summary read at all".
+# `expect` is deliberately NOT an input: bun omits `expect() calls` when the count
+# is zero, so requiring it would report the all-skip run — the flagship suppression
+# case this gate exists to catch — as an unparseable summary and suppress the
+# `coverage silently removed` diagnosis. `pass` and `fail` are the only counters bun
+# prints unconditionally.
+summary_measured() {            # exit 0 iff $1 and $2 are both integers
+  [[ "$1" =~ ^[0-9]+$ ]]        # SCAFFOLD (Phase 1a): ignores $2 — today's fail-open.
+}
+
 echo "=== preflight Check 10 suite integrity ==="
+
+# --- 0. Parser self-test ----------------------------------------------------
+# Runs BEFORE the live run so a broken parser is NAMED rather than surfacing only as
+# a confusing "0 tests passed". It does not short-circuit: fail() records a verdict
+# and returns, so the live `bun test` still executes.
+declare -F strip_ansi parse_bun_summary summary_measured >/dev/null \
+  || { printf '\n[FATAL] parser symbols absent — a missing function would read as a wrong answer.\n' >&2; exit 1; }
+
+# `cases` moves inside these wrappers, unconditionally, BEFORE the pass/fail branch —
+# never inside pass()/fail(), which is what keeps the conservation identity at the
+# bottom of this file non-tautological.
+assert_parse() {                # <label> <expected tuple> <path>
+  cases=$((cases + 1))
+  local got
+  got="$(parse_bun_summary "$3")"
+  if [[ "$got" == "$2" ]]; then
+    pass "$1"
+  else
+    fail "$1 — parsed [$got], expected [$2]"
+  fi
+}
+
+assert_measured() {             # <label> <pass> <fail> <true|false>
+  cases=$((cases + 1))
+  local got=false
+  summary_measured "$2" "$3" && got=true
+  if [[ "$got" == "$4" ]]; then
+    pass "$1"
+  else
+    fail "$1 — summary_measured($2, $3) returned $got, expected $4"
+  fi
+}
+
+# S1 — plain text, deliberately NOT the all-green canonical shape. Its first line is
+# the no-over-strip control: a stripper whose bracket class is too wide eats it.
+assert_parse "S1 plain summary parses all five counters" "122 3 1 2 514" \
+  <(printf '  at foo (/src/a.ts:10:5) expected [1;2] arr[0]a\n 122 pass\n 3 fail\n 1 skip\n 2 todo\n 514 expect() calls\n')
+
+# S2a/S2b — REAL bytes captured from bun 1.3.11 with FORCE_COLOR=1, pasted from
+# `cat -v`. Colour placement is VALUE-DEPENDENT, so one coloured fixture cannot
+# represent bun's output: a non-zero counter is `^[[0m^[[32m 132 pass^[[0m` (ESC
+# first), a zero `pass` is ` 0 pass^[[0m` (space first), and `skip` is
+# ` ^[[0m^[[33m2 skip^[[0m` (space, then ESC, then the digits).
+assert_parse "S2a coloured non-zero summary parses (real bun 1.3.11 bytes)" "132 0 - - 539" \
+  <(printf '%s[0m%s[32m 132 pass%s[0m\n%s[0m%s[2m 0 fail%s[0m\n 539 expect() calls\n' \
+      "$ESC" "$ESC" "$ESC" "$ESC" "$ESC" "$ESC")
+
+# S2b — the all-skip run: the case this gate exists to catch. bun prints NO
+# `expect() calls` line at all here (measured: grep -c => 0), which is why
+# summary_measured must not require it.
+assert_parse "S2b coloured all-skip summary parses (no expect() line at all)" "0 0 2 - -" \
+  <(printf ' 0 pass%s[0m\n %s[0m%s[33m2 skip%s[0m\n%s[0m%s[2m 0 fail%s[0m\n' \
+      "$ESC" "$ESC" "$ESC" "$ESC" "$ESC" "$ESC" "$ESC")
+
+# S3 — escapes an SGR-only strip does not reach: a COLON-separated SGR, a two-byte
+# DECSC (`ESC 7`, no `[`), and a charset designator (`ESC ( B`). Each one survives a
+# narrow strip and is then a hard RED on a healthy tree — the cries-wolf mode that
+# gets a gate bypassed.
+assert_parse "S3 colon-SGR, DECSC and charset escapes are stripped" "122 3 1 - -" \
+  <(printf '%s[38:2:0:255:0m 122 pass%s[0m\n%s7 3 fail\n%s(B 1 skip\n' "$ESC" "$ESC" "$ESC" "$ESC")
+
+# S4 — a decoy: `999 expect() calls` MID-LINE in a stack frame, and a `pass` token
+# that is not a counter. Nothing here is a summary block, so nothing may be read.
+assert_parse "S4 mid-log decoys are not read as the summary" "- - - - -" \
+  <(printf '  at bar (/src/b.ts:1:1) 999 expect() calls\n  running 42 pass-through checks\n')
+
+# V1-V4 — the predicate. V1 cannot distinguish which member was dropped (it is false
+# under either single-member edit); V2 is the sole detector for `fail` and V3 the sole
+# detector for `pass`, so the pair NAMES the omission. V4 is the true case: without it
+# a predicate stuck at false would score green.
+assert_measured "V1 neither counter read is UNMEASURED" "-" "-" false
+assert_measured "V2 pass read, fail unread is UNMEASURED" "122" "-" false
+assert_measured "V3 fail read, pass unread is UNMEASURED" "-" "0" false
+assert_measured "V4 both counters read is MEASURED" "122" "0" true
+
+# N2 — instrument self-test. Every check above is scored by one comparator; a
+# comparator stubbed to always call pass() would leave this whole section green and
+# the conservation identity intact (a stub still records one verdict per counted
+# check). So drive it once with an expectation that MUST fail and require FAIL to
+# move by exactly one. Its output is discarded and its counters are restored, so the
+# probe records no verdict of its own — the row below is the verdict.
+_pb=$PASS; _fb=$FAIL; _cb=$cases
+assert_parse "instrument probe (its FAIL is expected and discarded)" "9 9 9 9 9" \
+  <(printf ' 1 pass\n 0 fail\n') >/dev/null
+_fd=$((FAIL - _fb)); _pd=$((PASS - _pb))
+PASS=$_pb; FAIL=$_fb; cases=$_cb
+cases=$((cases + 1))
+if [[ "$_fd" -eq 1 && "$_pd" -eq 0 ]]; then
+  pass "N2 instrument self-test: a wrong expectation moves FAIL by exactly 1"
+else
+  fail "N2 instrument self-test: a wrong expectation moved FAIL by $_fd and PASS by $_pd (expected 1 and 0) — the comparator is not scoring"
+fi
 
 # --- 1. No suppressed tests -------------------------------------------------
 # `.skip`/`.only`/`.todo` silently remove coverage while the runner still exits 0.
@@ -257,29 +408,35 @@ else
   pass "bun test exited 0"
 fi
 
-# `N pass` / `N fail` / `N expect() calls` come from bun's summary block.
-n_pass=$(grep -oE '^[[:space:]]*([0-9]+) pass' "$LOG" | grep -oE '[0-9]+' | tail -1)
-n_fail=$(grep -oE '^[[:space:]]*([0-9]+) fail' "$LOG" | grep -oE '[0-9]+' | tail -1)
-n_skip=$(grep -oE '^[[:space:]]*([0-9]+) skip' "$LOG" | grep -oE '[0-9]+' | tail -1)
-# bun classifies `todo` SEPARATELY from `skip`, so a suite suppressed via
-# `.todoIf(...)` reported 0 skip and this gate called it "no tests skipped at
-# runtime". Parsing it here is what makes the whole suppression family visible by
-# MEASUREMENT rather than by source pattern-matching — the source grep above can
-# always be out-spelled, this cannot. Absent from bun's summary when zero, so it
-# legitimately defaults to 0 (unlike pass/expect, whose absence means UNMEASURED).
-n_todo=$(grep -oE '^[[:space:]]*([0-9]+) todo' "$LOG" | grep -oE '[0-9]+' | tail -1)
-n_expect=$(grep -oE '([0-9]+) expect\(\) calls' "$LOG" | grep -oE '^[0-9]+' | tail -1)
+# The counters come from bun's summary block, through the single producer/binder
+# pair defined at the top of this file. ONE `read` is the only way a counter enters
+# this gate.
+read -r n_pass n_fail n_skip n_todo n_expect <<<"$(parse_bun_summary "$LOG")"
+
 # An UNPARSED summary must not read as "measured zero". Without this, a run that
 # never produced a summary block still printed "[ok] no tests skipped at runtime".
-if [[ -z "${n_pass:-}" || -z "${n_expect:-}" ]]; then
-  # Counted INSIDE the arm: this block has no else, so a `cases` increment ahead of the `if`
-  # would count a check on the happy path that records no verdict, and the conservation check
-  # at the bottom would fire on the harness rather than on the product.
-  cases=$((cases + 1))
+cases=$((cases + 1))
+if summary_measured "$n_pass" "$n_fail"; then
+  pass "bun's summary block parsed"
+else
   fail "could not parse bun's summary block — treating as UNMEASURED, not as zero (log: $LOG)"
   KEEP_LOG=1
 fi
 : "${n_pass:=0}" "${n_fail:=0}" "${n_skip:=0}" "${n_todo:=0}" "${n_expect:=0}"
+
+# N1 — every counter must be an INTEGER by the time anything compares it. A `-`
+# reaching `[[ "-" -gt 0 ]]` prints one arithmetic error to stderr and returns
+# FALSE, so the arm below would print `[ok] no tests skipped` on a comparison that
+# errored, and a SUT floor would silently stop firing. Measured: `""` is fail-CLOSED
+# at those comparisons and `-` is fail-OPEN, so introducing the sentinel flips the
+# polarity of every unguarded comparison.
+cases=$((cases + 1))
+if [[ "$n_pass" =~ ^[0-9]+$ && "$n_fail" =~ ^[0-9]+$ && "$n_skip" =~ ^[0-9]+$ \
+   && "$n_todo" =~ ^[0-9]+$ && "$n_expect" =~ ^[0-9]+$ ]]; then
+  pass "every counter is an integer at the point of comparison"
+else
+  fail "a counter is not an integer at the point of comparison (pass=$n_pass fail=$n_fail skip=$n_skip todo=$n_todo expect=$n_expect) — a '-' here is fail-OPEN"
+fi
 
 echo "  (measured: pass=$n_pass fail=$n_fail skip=$n_skip todo=$n_todo expect=$n_expect)"
 
