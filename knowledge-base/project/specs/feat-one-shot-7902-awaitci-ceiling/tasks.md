@@ -115,7 +115,7 @@ silently runs a subset).
 - [ ] 7.5 PR body uses `Closes #7902` and `Ref #5806` — never `Closes #5806`.
 - [ ] 7.6 Render `decision-challenges.md` (DC-1) into the PR body and file it as an
       `action-required` issue.
-- [ ] 7.7 File the deferred issues: runner-pool contention, and aggregator diagnosis honesty.
+- [ ] 7.7 File the deferred issue. NOTE: "runner-pool contention" was the WRONG attribution — see the Correction stanza; filed as #7931 covering the ci.yml concurrency key, aggregator diagnosis honesty, and matrix-leg balance.
 - [ ] 7.8 Post-merge: time-to-`test` below 25 min over the first 3 main runs (AC25).
 - [ ] 7.9 Post-merge: `gh workflow run web-platform-release.yml -f bump_type=patch`, then
       `curl -fsS https://app.soleur.ai/health` and confirm `build_sha` (AC26).

@@ -460,7 +460,7 @@ failure_modes:
   - mode: "CI's declared budget grows back past what the deploy gate can absorb"
     detection: "Guard 2 asserts max(declared ceilings of test's needs-closure) + test's own ceiling <= CEILING_S/60, reading CEILING_S from web-platform-release.yml rather than restating it"
     alert_route: "required `test` check fails at the moment of divergence, not at the next deploy"
-  - mode: "ci.yml exceeds the raised ceiling anyway, on a runner-starved run"
+  - mode: "ci.yml exceeds the raised ceiling anyway, on a queue-delayed run (mechanism corrected — see the Correction stanza)"
     detection: "await-ci emits its wall-clock ::error:: and notify-gated posts to Slack; the re-armed #5806 criterion is keyed to post-shard time-to-test p100"
     alert_route: "Slack push + red required job, within one release cycle"
 
@@ -655,7 +655,7 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
 
 - [ ] AC25 — the first `ci.yml` run on main after merge completes with all legs green, and
       **time-to-`test`** (the `test` job's `completed_at` minus the run's `created_at`) is below
-      25 min, evaluated over the first 3 runs rather than one — a single dispatch-starved run
+      25 min, evaluated over the first 3 runs rather than one — a single queue-delayed run (mechanism corrected — see the Correction stanza)
       legitimately exceeds any single-run bound. Verified via
       `gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs`.
 - [ ] AC26 — a deploy of current `main` is dispatched via
@@ -695,8 +695,11 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
   Guard 1 stays green with no manifest edit.
 - Given `ci.yml` reduced from 3 legs to 2 while the partition still computes mod 3, when Guard 1
   runs, then it fails on the orphaned leg's suites.
-- Given a runner-starved run, when dispatch delays a leg by ~21 min, then time-to-`test` still lands
-  well under the 3600s ceiling — the margin the raise exists to provide.
+- Given a run queued behind its predecessor on ci.yml's concurrency group (measured 6-21 min), when
+  that queue is added to the post-shard critical path, then time-to-`test` still lands under the
+  3600s ceiling — the margin the raise exists to provide. (Mechanism corrected: see the Correction
+  stanza. The original wording said "dispatch delays a leg", which does not happen — the queue is
+  per-RUN and delays every job in it equally.)
 
 ## Risk Analysis & Mitigation
 

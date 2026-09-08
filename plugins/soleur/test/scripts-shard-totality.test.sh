@@ -283,7 +283,12 @@ done
 # than refusing. `''` is included deliberately: `SCRIPTS_SHARD: ${{ matrix.shard }}` resolving
 # empty is the realistic CI shape of "the env broke".
 _mal_ok=1
-for bad in "0/3" "4/3" "1/0" "abc" "" "   " "3/" "/3" "1/3/2"; do
+# `１/３` is FULLWIDTH digits (U+FF11 / U+FF13), deliberately. `[0-9]` inside `[[ =~ ]]` is
+# collation-dependent and matches them under a UTF-8 locale; `10#` then throws a fatal
+# arithmetic error that aborts the enclosing if-compound and resumes AFTER it at status 0, so
+# k/N keep their initial 0 and the leg silently runs the FULL group. An all-ASCII fixture list
+# cannot see that class, which is why this row exists.
+for bad in "0/3" "4/3" "1/0" "abc" "" "   " "3/" "/3" "1/3/2" "１/３"; do
   env SCRIPTS_SHARD="$bad" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
     bash "$RUNNER" --enumerate scripts >/dev/null 2>&1
   _rc=$?
@@ -294,6 +299,42 @@ for bad in "0/3" "4/3" "1/0" "abc" "" "   " "3/" "/3" "1/3/2"; do
 done
 if (( _mal_ok == 1 )); then
   pass "every malformed SCRIPTS_SHARD spec fails closed with exit 2"
+fi
+
+# --- A syntactically VALID spec that owns nothing must also fail closed -----------------------
+#
+# The malformed list above covers SYNTAX. This covers SEMANTICS: any k beyond the registration
+# count passes every syntactic check and matches no ordinal, so the leg runs nothing and the
+# executing path exits 0 having reported "0/0 suites passed" — a green required check over zero
+# coverage, reachable through the environment rather than the matrix literal.
+#
+# DERIVED from REF_N, never a literal: a hardcoded bound stops being out-of-range the moment
+# anyone registers another suite, and the fixture would rot silently into a no-op.
+# ASSERT THE MESSAGE, NOT THE EXIT CODE. Both refusals exit 2, so rc cannot say WHICH fired —
+# and they are not independent: with the validator's length bound reverted, an over-long spec
+# clears the validator and is caught by the zero-assignment refusal instead, at the same rc.
+# Only the message separates them, so only the message can pin each one.
+_over=$(( REF_N + 1 ))
+_over_err=$(env SCRIPTS_SHARD="${_over}/${_over}" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate scripts 2>&1 >/dev/null || true)
+if grep -qF 'assigned 0 of' <<<"$_over_err"; then
+  pass "a valid-but-empty assignment (${_over}/${_over}, beyond ${REF_N} registrations) is refused by the zero-assignment check"
+else
+  fail "SCRIPTS_SHARD=${_over}/${_over} was not refused by the zero-assignment check (got: ${_over_err:-<no output>}). It is syntactically valid and matches NO ordinal, so the leg owns nothing — on the executing path that reports '0/0 suites passed' and exits 0, making the required 'test' check green over ZERO coverage."
+fi
+
+# The validator's length bound, pinned LOCALE-INDEPENDENTLY. A fullwidth-digit fixture cannot do
+# this job on CI: `[0-9]` matches U+FF11 only under en_US.UTF-8 and REJECTS it under C and
+# C.UTF-8, and GitHub runners set LANG=C.UTF-8 — so such a fixture would pass there under BOTH
+# the correct and the reverted implementation, i.e. for the wrong reason, with every fixture on
+# one side of the property. An over-long ASCII run discriminates everywhere.
+_long="1234567890/1234567890"
+_long_err=$(env SCRIPTS_SHARD="$_long" TEST_GROUP=scripts SOLEUR_DISABLE_SESSION_STATE=1 \
+  bash "$RUNNER" --enumerate scripts 2>&1 >/dev/null || true)
+if grep -qF 'must be k/N' <<<"$_long_err"; then
+  pass "an over-long digit run is refused by the VALIDATOR (its length bound is load-bearing)"
+else
+  fail "SCRIPTS_SHARD=$_long was not refused by the validator (got: ${_long_err:-<no output>}). An unbounded digit class overflows 64-bit arithmetic, so a wrapped k/N pair passes the range check and matches no ordinal."
 fi
 
 # --- Unset runs the full group ---------------------------------------------------------------
@@ -309,7 +350,7 @@ fi
 #
 # Reported with printf + exit 1, NEVER through fail() — the helper this floor exists to
 # backstop is exactly the thing one edit disarms (ADR-193).
-MIN_ROWS=13
+MIN_ROWS=15
 TOTAL=$(( PASS + FAIL ))
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The suite did not run to completion, so its verdict is not evidence.\n' "$TOTAL" "$MIN_ROWS" >&2

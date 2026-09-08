@@ -115,8 +115,16 @@ jobs:
     # attempt-count ceiling could be out-raced by API latency stretching each
     # iteration; #5795 review P3). Do NOT lower without re-reading ADR-072.
     timeout-minutes: 72
+    # Surfaced so the soft-ceiling breach has a CONSUMER (#7902). A `::warning::` that only
+    # lands in a green run's log is read by nobody — this repo's operator is non-technical and
+    # does not open CI logs — so an early-warning signal with no route is decorative, which is
+    # the defect class this PR exists to remove rather than reproduce.
+    outputs:
+      soft_breach: ${{ steps.await.outputs.soft_breach }}
+      soft_elapsed_s: ${{ steps.await.outputs.soft_elapsed_s }}
     steps:
       - name: Wait for CI test check-run on this SHA
+        id: await
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -210,6 +218,10 @@ jobs:
             # approach was tried and rejected (see ADR-208).
             if [ "$elapsed" -ge "$soft_ceiling_s" ] && [ "$warned_soft" = "0" ]; then
               echo "::warning::await-ci has passed 70% of its ceiling for $SHA (elapsed_s=$elapsed, soft_ceiling_s=$soft_ceiling_s, CEILING_S=$CEILING_S). This measures time-to-'test' INCLUDING the ci.yml concurrency queue. Sustained hits mean CI has outgrown the deploy gate — raise CEILING_S (moving DRIFT_SUSTAINED_THRESHOLD_MIN first) or shorten CI, before this becomes a fail-closed deploy."
+              # Written HERE, not at exit: the loop leaves via `exit 0` on the success path, and
+              # the runner reads $GITHUB_OUTPUT after the step ends regardless of exit path.
+              echo "soft_breach=true" >> "$GITHUB_OUTPUT"
+              echo "soft_elapsed_s=$elapsed" >> "$GITHUB_OUTPUT"
               warned_soft=1
             fi
             # ── TOP OF LOOP: read the `test` check-run verdict FIRST (AC2). ──
@@ -1194,6 +1206,45 @@ jobs:
   # an operator-visible PUSH notification on the existing release Slack channel.
   # (Fully gating the "released!" announcement on deploy-success touches the
   # shared reusable-release.yml — deferred to the option-3 issue.)
+  # THE CONSUMER for await-ci's soft-ceiling breach (#7902). Without this the `::warning::` and
+  # the job output are decorative: this repo's operator is non-technical and does not read CI
+  # logs, so a signal with no route is the defect class #7902 exists to remove, not to reproduce.
+  #
+  # Deliberately a SEPARATE job from notify-gated rather than a widened `if:` on it: that job's
+  # message is written for the fail-closed case, and this fires on a SUCCESSFUL gate. Same
+  # webhook, same continue-on-error posture — a notification hiccup must never redden a release
+  # whose deploy is proceeding normally.
+  notify-slow-ci:
+    needs: [release, await-ci]
+    # `success` is load-bearing: this reports a gate that PASSED while approaching its ceiling.
+    # The fail-closed case is notify-gated's. `== 'true'` compares against a non-numeric literal,
+    # so an unset output cannot coerce into a match the way `== '0'` would.
+    if: always() && needs.await-ci.result == 'success' && needs.await-ci.outputs.soft_breach == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post slow-CI early warning to Slack
+        continue-on-error: true
+        env:
+          SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
+          SHA: ${{ github.sha }}
+          ELAPSED_S: ${{ needs.await-ci.outputs.soft_elapsed_s }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::No Slack webhook URL configured, skipping slow-CI notification"
+            exit 0
+          fi
+          echo "::add-mask::$WEBHOOK"
+          SHORT_SHA="${SHA:0:12}"
+          # Slack mrkdwn: *single asterisk* is bold and backticks are literal code-spans, not
+          # command substitution — same single-quoted printf format notify-gated uses below.
+          # shellcheck disable=SC2016  # single-quoted printf format: backticks are literal markdown
+          MESSAGE=$(printf '*:hourglass: CI is approaching the deploy gate ceiling*\n\nThe deploy for `%s` went through, but CI took %ss against a 3600s ceiling — past 70%%%% of the budget. This measures time-to-CI-green INCLUDING the queue where main pushes wait behind each other. If this keeps appearing, CI has outgrown the gate and deploys will start failing closed (that was #7902).\n\n%s' \
+            "$SHORT_SHA" "$ELAPSED_S" "$RUN_URL")
+          printf '%s' "$MESSAGE" | jq -Rs '{text: .}' \
+            | curl -sS -X POST -H 'Content-Type: application/json' -d @- "$WEBHOOK" >/dev/null
+
   notify-gated:
     needs: [release, await-ci]
     if: always() && needs.await-ci.result == 'failure'

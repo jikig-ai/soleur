@@ -193,7 +193,20 @@ _SHARD_K=0
 _SHARD_N=0
 if [[ -n "${SCRIPTS_SHARD+x}" ]]; then
   _shard_raw="${SCRIPTS_SHARD//[[:space:]]/}"
-  if [[ ! "$_shard_raw" =~ ^([0-9]+)/([0-9]+)$ ]]; then
+  # The digits are ENUMERATED rather than ranged, and bounded to 9, for two measured reasons.
+  #
+  # (a) `[0-9]` inside `[[ =~ ]]` is COLLATION-dependent: under en_US.UTF-8 it matches U+FF11
+  #     FULLWIDTH DIGIT ONE. `10#１` is then a fatal arithmetic-expansion error, and bash aborts
+  #     the enclosing `if…fi` compound and RESUMES AFTER `fi` with status 0 — `set -uo pipefail`
+  #     does not fire, the range check below never runs, and _SHARD_K/_SHARD_N keep their initial
+  #     0, which `_shard_selects` reads as "not sharding" and runs the FULL group. Measured:
+  #     a fullwidth-digit spec printed `k/N=0/0` and assigned all 375 registrations. A validator
+  #     whose whole contract is `exit 2` must not have a fall-through, even a safe-direction one.
+  #     An explicit `[0123456789]` cannot be widened by collation; `LC_ALL=C` is NOT usable here
+  #     because `[[` is a shell keyword, not a command, so it takes no env prefix.
+  # (b) an unbounded run overflows 64-bit: `10#99999999999999999999` wraps, so `1 <= k <= N`
+  #     holds for a pair that matches no ordinal.
+  if [[ ! "$_shard_raw" =~ ^([0123456789]{1,9})/([0123456789]{1,9})$ ]]; then
     echo "ERROR: SCRIPTS_SHARD must be k/N with 1 <= k <= N (got: '${SCRIPTS_SHARD}')." >&2
     echo "       Unset it to run the full group. A malformed value is never inferred: it fails" >&2
     echo "       closed rather than silently running everything or nothing." >&2
@@ -635,6 +648,11 @@ skipped=0
 # and therefore a collation, so assignments cannot disagree WITHIN a run. What it does mean is
 # that a leg's membership is not portable between machines, so any future balance tuning must be
 # derived from CI's order (C), never from a developer's.
+# SCOPE NOTE: this filter lives at the chokepoint, so it is GROUP-AGNOSTIC — with SCRIPTS_SHARD
+# set and TEST_GROUP=all it would partition the webplat/bun/infra registrations too. That is not
+# reachable today (the variable is bound only on ci.yml's test-scripts job, and
+# main-health-monitor.yml's TEST_GROUP=all run does not set it), and the name says `SCRIPTS_`
+# for that reason. Anyone binding it more widely must revisit this.
 _shard_ordinal=0
 _shard_assigned=0
 
@@ -1025,10 +1043,23 @@ fi
 # verdict about running suites. An enumerate pass starts none and takes no lock, so every
 # reading it produces is inapplicable, and the shard-totality guard invokes this path K+1 times
 # per run. Skipping it takes that guard from 83s to ~25s.
-if (( _ENUMERATE == 0 )); then
-  tc_preamble
-  _TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
+#
+# EXPRESSED AS A FUNCTION REDEFINITION, NOT AN `if` AROUND THE CALL — the call must stay at
+# COLUMN 0. `scripts/test-all-killed-classification.test.sh` and
+# `scripts/test-all-runtime-ceiling.test.sh` build their sandboxes by neutering this call with
+# a `^tc_preamble` column-anchored `re.sub`, and unlike every neighbouring edit in those
+# builders that substitution is NOT wrapped in their `sub_once()` assert — so indenting it makes
+# both silently substitute nothing. Measured: the anchor matched 1 on origin/main and 0 once
+# indented. The cost is not merely the ~5.7s walk per sandbox arm: killed-classification clears
+# SOLEUR_ALLOW_FULL_GATE, so a live tc_preamble re-arms the sibling refusal INSIDE its
+# sandboxes and their colour becomes a function of whether another gate run is in flight on the
+# box. Same class as the splice-boundary and column-0-anchor breakages below.
+if (( _ENUMERATE == 1 )); then
+  tc_preamble() { :; }
+  tc_tmp_entry_count() { printf '0\n'; }
 fi
+tc_preamble
+_TC_RUN_START_ENTRIES=$(tc_tmp_entry_count)
 
 # Orphaned-PROCESS probe (#7537), emitted with the contention banners because it
 # answers the same question they do — "is something else on this box eating the
@@ -2323,6 +2354,29 @@ if want_scripts; then
     skip_suite ".github/scripts/test/run-all.sh" "relevance" \
       "bash .github/scripts/test/run-all.sh"
   fi
+fi
+
+# --- A LEG THAT OWNS NOTHING IS A FAIL, NOT A PASS (#7902) ----------------------------------
+#
+# Placed after the last registration site so it sees the final ordinal count, and BEFORE the
+# enumerate terminator so it covers the enumerate and executing paths alike.
+#
+# The validator above rejects only SYNTACTIC malformation. Any `k/N` with k greater than the
+# registration count is well-formed, in range, and matches no ordinal — measured, `376/376`
+# assigns 0 of 375 and the executing path then prints `=== 0/0 suites passed ===` and exits 0,
+# so `needs.test-scripts.result` is `success` and the required `test` check is GREEN over ZERO
+# coverage. That is exactly the outcome the validator's own comment claims is prevented
+# ("Falling back to running NOTHING would be worse still"), reachable through the environment
+# rather than through the matrix literal — and SCRIPTS_SHARD is a job-level `env:` inherited by
+# every step and child in that job, which is why this PR also had to clear it in
+# scripts/lint-orphan-test-suites.sh.
+#
+# Bounding N does not cover it: 376/376 is inside every bound. Only counting the assignment does.
+if (( _SHARD_N > 0 && _shard_assigned == 0 )); then
+  echo "ERROR: SCRIPTS_SHARD=${_SHARD_K}/${_SHARD_N} assigned 0 of ${_shard_ordinal} registrations." >&2
+  echo "       A leg that owns nothing would report success having run nothing. Refusing." >&2
+  echo "       k must be <= the registration count; N must not exceed it either." >&2
+  exit 2
 fi
 
 # --- Enumerate mode terminates HERE, after the last registration site (#7902) --------------

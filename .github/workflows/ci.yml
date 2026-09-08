@@ -831,7 +831,14 @@ jobs:
     # MEASURED on the 375-suite `LC_ALL=C` registration order as of this commit — slowest-leg
     # minutes, group total 35.25 min:
     #
-    #   K=2 -> 24.30   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
+    #   K=2 -> 21.91   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
+    #
+    # HOW TO RE-DERIVE (a table nobody can reproduce is not evidence): take a real test-scripts
+    # job log, keep only the `--- <label> ---` marks whose label appears in
+    # `bash scripts/test-all.sh --enumerate scripts`, and attribute each mark's span to the NEXT
+    # REGISTERED mark — folding nested child-runner marks into their parent. Sanity check: the
+    # attributed total must equal the job's wall clock (35.25 vs 35.77 min here). Attributing
+    # per-mark instead under-counts every suite that wraps a nested runner.
     #
     # K=4 measures worse than K=3 here. That is NOT a property of K: it is a property of THIS
     # suite set. Adding two suites and removing one swung K=3 between 15.09 and 20.70 minutes
@@ -859,14 +866,23 @@ jobs:
         shard: ["1/3", "2/3", "3/3"]
     # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
     #
-    # Three bounds sit on this leg. Two are loud: the per-suite budget at
-    # `scripts/test-all.sh:599` (`tests/scripts/registry-gate-mutation-battery` -> 2500000 ms
-    # = 41.67 min, which reports itself), and `await-ci`'s CEILING_S (3600s, emits an
-    # `::error::`). GitHub's `timeout-minutes` is the third and it is SILENT — a job-kill
-    # produces no annotation at all. So it is the last resort by construction and must sit
-    # strictly above every loud bound on its path:
+    # CORRECTED during review. An earlier revision claimed three bounds sit on this leg, "two of
+    # them loud". That was false in both particulars, and 60 is right for a different reason:
     #
-    #   rest-of-leg 6.95 min + that suite's declared 41.67 min = 48.62 min
+    #   * the per-suite budget in `_suite_budget_ms` is ADVISORY. The runner says so in terms —
+    #     "A budget NEVER changes a suite's status or the runner's exit code" — and its only
+    #     consumer emits a `[budget]` line AFTER the suite has finished. It reports; it cannot fire.
+    #   * `TC_RUNTIME_CEILING_S`, the one real in-runner bound, is explicitly DISABLED under CI.
+    #   * `await-ci`'s CEILING_S bounds a job in a DIFFERENT workflow. A long leg makes THAT job
+    #     fail-close (the #7902 symptom); it does not bound this leg.
+    #
+    # So `timeout-minutes` is the ONLY bound on a CI leg and it is SILENT — a job-kill produces no
+    # annotation. It must therefore sit above the repo's own DECLARED EXPECTATION for the work on
+    # this leg (that advisory budget), because a silent kill below a duration the repo itself
+    # calls legitimate is indistinguishable from a hang:
+    #
+    #   rest-of-leg 6.95 min + that suite's declared budget (41.67 min, itself ~1.5x its own
+    #     measured max) = 48.62 min
     #   x1.2 (the same convention sizing await-ci's timeout-minutes over CEILING_S) = 58.3
     #   -> 60
     #
@@ -875,7 +891,8 @@ jobs:
     # comment notes load alone moves it 1.9x, so a healthy slow run would have been killed
     # with no diagnostic — #7902's failure mode relocated from the deploy gate into CI and
     # made silent. Do NOT lower this to fit a leg estimate, and do NOT lower the 2500000 ms
-    # budget to fit this: that is a fail-safe sized ~1.5x its own measured max.
+    # budget to fit this: it is the repo's stated expectation for that suite, and shrinking it to
+    # fit an unrelated cap re-creates this trap one layer down.
     #
     # This does not bound the deploy gate and is not trying to — see ADR-208. Its job is
     # capping a hung leg at 1 hour instead of GitHub's 6-hour default.
@@ -923,8 +940,11 @@ jobs:
       # selects WHICH SLICE of them this leg owns. Folding the shard into the positional
       # argument would overload one channel with two independent decisions.
       #
-      # An EMPTY value here (a renamed matrix key, a dropped env:) makes the runner exit 2
-      # rather than silently running the whole group and reporting green.
+      # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
+      # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
+      # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
+      # all three legs would run all 375 suites and all report green. Guard 1 reads ci.yml's
+      # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
       # fetch-depth: 0 — scripts/lint-trap-tempfile-ownership.py scopes rule (c) to
@@ -980,8 +1000,19 @@ jobs:
   #     SCRIPTS_SHARD set), but a non-sharded job removes the question entirely.
   #
   # NOT added to `test`'s needs-closure: it is a guard on the partition's correctness, not a
-  # shard of the suite, and folding it in would put its ~3.5 min on the deploy gate's critical
-  # path for no gain. It gates the PR on its own.
+  # shard of the suite, and folding it in would put its runtime on the deploy gate's critical
+  # path for no gain.
+  #
+  # HONEST SCOPE: this job is NOT a required check. It is absent from
+  # infra/github/ruleset-ci-required.tf's contexts and from scripts/required-checks.txt, so a
+  # red here is VISIBLE on the PR but does not block merge. An earlier revision of this comment
+  # claimed "it gates the PR on its own", which was false.
+  #
+  # What IS gated: the guard itself. plugins/soleur/test/scripts-shard-totality.test.sh is
+  # glob-discovered into the scripts group, so it runs inside a leg of the required
+  # test-scripts -> test chain. Un-gated is the PROOF that the guard is non-vacuous. Promoting
+  # this context is a ruleset + canonical-JSON + synthetic-check-fabrication change and is
+  # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
     runs-on: ubuntu-latest
     timeout-minutes: 20

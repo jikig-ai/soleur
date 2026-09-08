@@ -67,6 +67,29 @@ restore_all() {
 # poison every later suite in the same run.
 trap 'restore_all; rm -rf "$WORK"' EXIT
 
+# REFUSE TO RUN ON A DIRTY TARGET (#7902 review). This battery mutates tracked files in place and
+# restores them from a pristine copy taken at ITS start — so a concurrent edit to any target is
+# silently REVERTED when it exits, with no error and no diff. That is not hypothetical: it ate a
+# set of guard fixtures during this PR's own review, and the loss is invisible until something
+# downstream reports a stale row count.
+#
+# In CI the checkout is exclusive and clean, so this never fires. Locally it is the difference
+# between a safe run and silent data loss. Override deliberately with SHARD_BATTERY_ALLOW_DIRTY=1
+# if you are certain the pending changes are yours and disposable.
+if [[ "${SHARD_BATTERY_ALLOW_DIRTY:-}" != "1" ]]; then
+  _dirty=$(cd "$REPO_ROOT" && git status --porcelain -- \
+    scripts/test-all.sh \
+    .github/workflows/ci.yml \
+    plugins/soleur/test/scripts-shard-totality.test.sh 2>/dev/null || true)
+  if [[ -n "${_dirty//[[:space:]]/}" ]]; then
+    echo "REFUSING: this battery mutates and then RESTORES its targets, which would discard the" >&2
+    echo "          uncommitted changes below. Commit or stash them first, or set" >&2
+    echo "          SHARD_BATTERY_ALLOW_DIRTY=1 if they are disposable." >&2
+    printf '%s\n' "$_dirty" >&2
+    exit 2
+  fi
+fi
+
 echo "=== Guard 1 mutation battery (#7902 AC12) ==="
 
 # --- Instrument self-test (ADR-193) ---------------------------------------------------------
@@ -283,18 +306,36 @@ else
   fail "ROW6 — could not apply the tautology stub: $(cat "$WORK/muterr")"
 fi
 
+# --- Row 9: a syntactically VALID spec that owns nothing -----------------------------------
+# k beyond the registration count passes every syntactic check and matches no ordinal. Without
+# the post-registration refusal the executing path prints "0/0 suites passed" and exits 0, i.e.
+# the required check is green over zero coverage.
+row "ROW9" "$RUNNER" \
+  'if (( _SHARD_N > 0 && _shard_assigned == 0 )); then' \
+  'if false; then' \
+  RED "a leg assigned 0 registrations is accepted instead of refused"
+
+# --- Row 10: collation widens the digit class -------------------------------------------------
+# `[0-9]` in `[[ =~ ]]` matches fullwidth digits under a UTF-8 collation; `10#` then throws a
+# fatal arithmetic error that ABORTS the if-compound and resumes after `fi` with status 0, so
+# k/N keep their initial 0 and the leg silently runs the FULL group.
+row "ROW10" "$RUNNER" \
+  '^([0123456789]{1,9})/([0123456789]{1,9})$' \
+  '^([0-9]+)/([0-9]+)$' \
+  RED "the digit class is ranged rather than enumerated (collation-widened, unbounded)"
+
 # --- MUST-PASS non-canonical input ------------------------------------------------------------
 # Raising a leg's ceiling AND keeping the partition intact must NOT red the guard: it is a
 # totality guard, not a performance guard.
 row "MUSTPASS" "$CI_YML" \
-  '    timeout-minutes: 30
+  '    timeout-minutes: 60
     # No setup-node' \
-  '    timeout-minutes: 29
+  '    timeout-minutes: 59
     # No setup-node' \
   GREEN "an unrelated ceiling edit that changes no assignment"
 
 # --- ASSERTION FLOOR ---------------------------------------------------------------------------
-MIN_ROWS=10
+MIN_ROWS=12
 TOTAL=$(( PASS + FAIL ))
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The battery did not run to completion.\n' "$TOTAL" "$MIN_ROWS" >&2
@@ -302,7 +343,7 @@ if (( TOTAL < MIN_ROWS )); then
 fi
 
 echo ""
-echo "scripts-shard-totality-mutations.test.sh: $TOTAL rows, $PASS passed, $FAIL failed"
+echo "scripts-shard-totality-mutations.sh: $TOTAL rows, $PASS passed, $FAIL failed"
 if (( FAIL > 0 )); then
   exit 1
 fi

@@ -185,8 +185,9 @@ job's `completed_at` minus the run's `created_at`):** p50 35.2m, p90 54.0m, p100
   silently became false.
 - `timeout-minutes` 60 -> **72**, preserving item 4's `timeout-minutes >= 1.2 x CEILING_S`
   invariant exactly (4320 = 1.2 x 3600).
-- `scripts/prod-version-drift-check.sh`'s `DRIFT_SUSTAINED_THRESHOLD_MIN` 195 -> **207**, moved
-  FIRST because its B9 assertion is `threshold >= critical path`.
+- `scripts/prod-version-drift-check.sh`'s `DRIFT_SUSTAINED_THRESHOLD_MIN` 195 -> **207**. Its B9
+  assertion is `threshold >= critical path`, so the two must not land in separate commits; they
+  ship together in one, with the threshold ahead of the ceilings in file order.
 
 **Correction to the record on Alternative 1.** This ADR rejected "just raise the ceiling" on the
 grounds that it was a pure deferral. That rejection was made *pre-adaptive-wait* and no longer

@@ -71,9 +71,11 @@ PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':
 #
 # 195 -> 207 (#7902). `await-ci`'s timeout-minutes moved 60 -> 72 when its in-bash CEILING_S was
 # raised 3000 -> 3600 to clear a measured time-to-`test` p100 of 57.4 min. This constant moves
-# FIRST, in its own commit, because B9 asserts threshold >= critical path: raising the ceiling
-# while this still read 195 would red B9 in between. The cost is 12 minutes of drift-alert
-# latency, which sits inside this probe's own measured 61-243 minute delivery interval.
+# FIRST IN FILE ORDER within that single commit — not in a separate commit, as an earlier
+# revision of this comment claimed — because B9 asserts threshold >= critical path. Landing both
+# in one commit is what keeps B9 from ever being red; a two-commit split would red it in between.
+# The cost is 12 minutes of drift-alert latency, which sits inside this probe's own measured
+# 61-243 minute delivery interval.
 # (verify-doppler-secrets, 10 min, also runs in parallel and is dominated.)
 #
 # SCOPE (#7160): those ceilings bound EXECUTION only. This constant is compared against an age
