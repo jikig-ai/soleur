@@ -115,17 +115,31 @@ assert_eq "0" "$(grep -vE '^[[:space:]]*#' "$INSTALL" | grep -cE 'extensions\.wo
   "AC9: no worktree-config setter appears in the script's CODE"
 assert_eq "" "$(cfg "$R" extensions.worktreeConfig)" "AC9: extensions.worktreeConfig is still unset after registration"
 # Porcelain only: the script must never rewrite .git/config as a file.
-assert_eq "0" "$(grep -cE '>[[:space:]]*"?\$?[A-Za-z_]*(GIT_DIR|\.git)/config' "$INSTALL" || true)" \
-  "AC9: the script never redirects output over .git/config"
+# COMMENT-STRIPPED, like its sibling four lines above. Without it a correct
+# script that merely DOCUMENTS the rule ("never write the config by hand, e.g.
+# `printf ... > .git/config`") false-FAILS — the same collision, in the same
+# file, treated two different ways.
+assert_eq "0" "$(grep -vE '^[[:space:]]*#' "$INSTALL" | grep -cE '>[[:space:]]*"?\$?[A-Za-z_]*(GIT_DIR|\.git)/config' || true)" \
+  "AC9: no redirect over .git/config appears in the script's CODE"
 
 echo "=== AC10: a held config.lock never blocks the session ==="
 R2="$(new_repo locked)"
 : > "$R2/.git/config.lock"
 lock_rc=0
 lock_err="$( ( cd "$R2" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash "$INSTALL" ) 2>&1 >/dev/null )" || lock_rc=$?
+lock_out_json="$( ( cd "$R2" && GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash "$INSTALL" ) 2>/dev/null )" || true
 assert_eq "0" "$lock_rc" "AC10: exits 0 even though the config could not be written"
 assert_contains "$lock_err" "install-kb-merge-driver" "AC10: a diagnostic reaches stderr"
 assert_eq "" "$(cfg "$R2" "$KEY")" "AC10: and it honestly did not register"
+# A PARTIAL registration is worse than none. `merge.kb-index.name` with no
+# `.driver` does not fall back to git's text merge — git refuses outright with
+# `fatal: custom merge driver kb-index lacks command line` (exit 128) and writes
+# nothing, in every worktree sharing the config. An earlier revision wrote both
+# keys unconditionally, so a lock released between them produced exactly that.
+assert_eq "" "$(cfg "$R2" merge.kb-index.name)" \
+  "AC10c: a failed registration leaves NO half-written name key (that state wedges every merge at exit 128)"
+assert_eq "1" "$(printf '%s' "$lock_out_json" | grep -c '^{' || true)" \
+  "AC10d: the failure path emits at most one JSON document (a hook's stdout takes one object, not NDJSON)"
 rm -f "$R2/.git/config.lock"
 
 echo "=== AC10b: outside a git repository is not an error ==="
@@ -220,4 +234,4 @@ if (( FAIL != _pc_f + 1 )); then
 fi
 PASS=$_pc_p; FAIL=$_pc_f
 
-print_results 33
+print_results 35

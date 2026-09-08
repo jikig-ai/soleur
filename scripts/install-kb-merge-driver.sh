@@ -3,7 +3,8 @@
 #
 # Idempotent, silent when already correct, and BEST-EFFORT BY DESIGN: it must
 # never block a session start or a dependency install. Every failure path exits
-# 0 with a diagnostic on stderr.
+# 0 with a diagnostic on stderr AND, once, as a `systemMessage` on stdout --
+# stderr alone is DISCARDED for an exit-0 hook.
 #
 # THE STORED VALUE IS A RELATIVE COMMAND, NOT AN ABSOLUTE PATH. Measured: git
 # invokes a merge driver with CWD at the working-tree root even when `git merge`
@@ -45,16 +46,28 @@ NAME_VALUE='knowledge-base index: three-way merge over generated rows'
 # the one sink this repo has already recorded as non-functional, in the sibling
 # `.claude/hooks/supabase-loopback-warn.sh`, whose header documents exactly this
 # defect. stderr is kept as a second sink for the interactive `npm install` case.
+# ACCUMULATE, EMIT ONCE. A hook's stdout carries ONE JSON object; printing a
+# second `{"systemMessage":…}` produces NDJSON, which the parser does not accept
+# and which can discard the first message. The failure path calls note() twice
+# (three times with the multivar branch), so emitting per call was wrong.
+_NOTES=""
 note() {
   printf 'install-kb-merge-driver: %s\n' "$1" >&2
+  _NOTES="${_NOTES:+$_NOTES; }$1"
+}
+
+emit_notes() {
+  [[ -n "$_NOTES" ]] || return 0
   if command -v jq >/dev/null 2>&1; then
-    jq -n --arg m "install-kb-merge-driver: $1" '{systemMessage:$m}' 2>/dev/null || true
+    jq -n --arg m "install-kb-merge-driver: $_NOTES" '{systemMessage:$m}' 2>/dev/null || true
   fi
+  return 0
 }
 
 # Not a git repository (a tarball export, a docs-only checkout) is not an error.
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   note "not inside a git repository; nothing to register"
+  emit_notes
   exit 0
 fi
 
@@ -88,9 +101,29 @@ set_key() {
   return 1
 }
 
+# ORDER AND CONDITIONALITY ARE LOAD-BEARING, and getting this wrong INVERTS the
+# script's contract. A `merge.kb-index.name` with no `.driver` does not degrade
+# to git's silent text-merge fallback -- git REFUSES to merge at all:
+#
+#     fatal: custom merge driver kb-index lacks command line.   (exit 128)
+#
+# with nothing written to the working tree. Measured. Because the key lives in
+# the SHARED bare-repo config, that state hard-wedges every merge in every linked
+# worktree until someone finds the half-written key. An earlier revision ran both
+# writes unconditionally, so a lock released between them -- the exact concurrent
+# SessionStart shape this script is designed for -- produced it.
+#
+# The inverse (`.driver` with no `.name`) is harmless: git merges normally and
+# only loses a cosmetic label. So the driver is written FIRST and the name only
+# if it succeeded; on failure any stale name is removed, because a leftover from
+# a previous partial run is the same wedge.
 rc=0
-set_key "$KEY" "$VALUE" || rc=1
-set_key "$NAME_KEY" "$NAME_VALUE" || rc=1
+if set_key "$KEY" "$VALUE"; then
+  set_key "$NAME_KEY" "$NAME_VALUE" || true   # cosmetic; never worth failing on
+else
+  rc=1
+  git config --unset-all "$NAME_KEY" 2>/dev/null || true
+fi
 
 if [[ "$rc" -ne 0 ]]; then
   # Do NOT name a cause this run did not measure. The previous text asserted
@@ -99,6 +132,8 @@ if [[ "$rc" -ne 0 ]]; then
   note "could not write $KEY; the driver is NOT registered in this checkout (causes: .git/config.lock held, a read-only config, or a value this script could not replace)"
   note "re-run: bash scripts/install-kb-merge-driver.sh"
 fi
+
+emit_notes
 
 # Always 0: a registration failure must never block a session start or an
 # `npm install`. CI's `generate-kb-index.sh --check` is what makes an

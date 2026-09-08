@@ -204,7 +204,9 @@ assert_eq "1" "$(printf '%s' "$_sent_line" | grep -cE '^<{7}[^<]' || true)" \
 # dropped in a merge resolution.
 assert_eq "2" "$(grep -cE '^\s*run_suite .*(kb-index-check-guard|merge-kb-index-driver)\.mutation\.sh' "$REPO_ROOT/scripts/test-all.sh" || true)" \
   "AC15b: both mutation batteries are registered in test-all.sh"
-assert_eq "0" "$(grep -c 'Total files:' "$GEN" || true)" "AC13: the header literal lives only in the render helper"
+# Comment-stripped: a correct generator that DOCUMENTS where the header comes from would
+# otherwise false-fail this — the same collision the three fixed instances above carry.
+assert_eq "0" "$(grep -vE '^[[:space:]]*#' "$GEN" | grep -c 'Total files:' || true)" "AC13: the header literal appears nowhere in the generator's CODE"
 # ANCHORED ON THE CALL SHAPE, NOT THE BARE TOKEN. A `grep -c 'eval'` here
 # false-FAILS on the driver's own comment explaining that it uses no eval --
 # the exact collision cq-assert-anchor-not-bare-token describes, and it fired on
@@ -400,9 +402,16 @@ assert_eq "union" "$(ca knowledge-base/kb-categories.txt)" "AC12: kb-categories.
 assert_eq "unspecified" "$(ca plugins/soleur/knowledge-base/INDEX.md)" "AC12: the hand-maintained plugin mirror is untouched"
 
 echo "=== AC18/AC19/AC20/AC26: the surrounding wiring ==="
-assert_eq "0" "$(grep -c 'After merge conflicts on INDEX.md, regenerate' "$GEN" || true)"   "AC20: the generator no longer prescribes the hand-run remedy"
+assert_eq "0" "$(grep -vE '^[[:space:]]*#[^!]' "$GEN" | grep -c 'After merge conflicts on INDEX.md, regenerate' || true)"   "AC20: the generator no longer prescribes the hand-run remedy"
 assert_eq "1" "$([[ "$(grep -c 'merge-kb-index.sh' "$GEN" || true)" -ge 1 ]] && echo 1 || echo 0)"   "AC20: the replacement names the driver"
-assert_eq "1" "$([[ "$(grep -c 'kb-tags.txt' "$REPO_ROOT/lefthook.yml" || true)" -ge 1 ]] && echo 1 || echo 0)"   "AC18: the lefthook stanza stages the facet files"
+# ANCHORED ON THE `run:` LINE. `grep -c 'kb-tags.txt' lefthook.yml >= 1` is satisfied by a
+# COMMENT — and this is the assertion for the behaviour this PR changes, so it failed OPEN:
+# reverting the stanza to main's `git add knowledge-base/INDEX.md` while a comment still
+# named the file left it PASSING (measured). Fourth instance of the anchor class here, and
+# the only one in the dangerous direction. Trailing comments are stripped because the
+# first attempt at this fix — anchoring on the `run:` line — was ALSO satisfiable: the
+# comment naming the files sits INLINE on that very line, so it matched anyway.
+assert_eq "1" "$(grep -E '^[[:space:]]*run:' "$REPO_ROOT/lefthook.yml" | sed 's/#.*//' | grep -cE 'git add.*kb-tags[.]txt.*kb-categories[.]txt' || true)"   "AC18: the lefthook run: line STAGES all three artifacts (trailing comments stripped)"
 assert_eq "1" "$([[ "$(grep -c 'knowledge-base/INDEX.md' "$REPO_ROOT/plugins/soleur/skills/merge-pr/SKILL.md" || true)" -ge 1 ]] && echo 1 || echo 0)"   "AC19: merge-pr routing names the index explicitly"
 # ANCHORED ON THE ROW SYNTAX, not the basename. A bare-basename count reads 4
 # here because the block's own comment explains WHY merge-kb-index.sh needs a
