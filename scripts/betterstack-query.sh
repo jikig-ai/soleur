@@ -51,6 +51,30 @@
 # Output: JSONEachRow (one JSON object per line) on stdout. Errors to stderr.
 set -uo pipefail
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output. `case "$-" in *x*)`
+# tests whether tracing is ON rather than enumerating the eight ways to turn it on, two
+# of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
+# (#7873) Same argument as scripts/zot-inventory.sh's prologue, applied to the
+# credential the plan calls its headline: `--disable` closes ~/.curlrc and
+# `--noproxy '*'` closes the proxy vars, but neither touches the env that
+# subverts TLS ITSELF. SSLKEYLOGFILE writes the session keys and the CA vars
+# substitute the trust store, so the actor who can set BETTERSTACK_QUERY_HOST can
+# read this Basic-auth credential off the wire with every other guard intact.
+# It was an asymmetry that this line lived only in zot-inventory.sh while the
+# higher-value credential went without.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 # Credential guard. These are Doppler-managed secrets that must be INJECTED into
 # the env — this script does not read Doppler itself. A bare-shell run (no
 # `doppler run` wrapper) trips this. The message is deliberately explicit that the
@@ -108,13 +132,43 @@ export BS_TABLE="${BS_TABLE:-t520508_soleur_inngest_vector_prd_3_logs}"
 # silently ignored, and the caller gets rows from the DEFAULT archive with no error, because
 # the derived name exists and the query succeeds. That is this script's own headline bug
 # (asks for X, gets Y, exit 0) reintroduced one level down.
+# (#7873) BETTERSTACK_QUERY_HOST is interpolated into `https://${HOST}?...` and
+# carries Basic auth, so a value containing userinfo or a path re-points the
+# credential: `real.host@evil.example` resolves to evil.example, and
+# `evil.example/x?` puts the query on an attacker path. The non-empty check above
+# is not a destination validation.
+#
+# This is a SHAPE check, not an equality pin, and deliberately so: ~12 suites
+# drive this script through a `BETTERSTACK_QUERY_HOST=` seam (measured values:
+# stub, h, x, dummy-host, synthetic.example.invalid, 127.0.0.1, empty) and
+# pinning the vendor host would send synthetic credentials at the real warehouse
+# from CI. A bare hostname (optionally with a port) is what the vendor connection
+# is; a URL is not.
+#
+# READ THE RESIDUAL PLAINLY, because a shape check is easy to mis-read as a pin:
+# a BARE hostname that is not the vendor's still passes every arm above.
+# `BETTERSTACK_QUERY_HOST=attacker.example` is accepted, and run_sql then sends
+# Basic auth to it preemptively on the first request. What this check closes is
+# the userinfo/path/scheme family (`real.host@evil.example`, `evil.example/x?`);
+# what it does NOT close is a substituted bare host. Closing that needs a
+# `*.betterstackdata.com` allowlist plus an explicit opt-in seam in each of those
+# ~12 suites -- a 13-file change with its own verification, tracked on #7898
+# rather than folded into the PR that added this check.
+case "$BETTERSTACK_QUERY_HOST" in
+  *[[:cntrl:]]*|*@*|*/*|*\?*|*\#*|*:*:*|"")
+    printf 'betterstack-query.sh: refusing to send credentials to a malformed BETTERSTACK_QUERY_HOST (expected a bare host[:port], got %s characters of something else)\n' \
+      "${#BETTERSTACK_QUERY_HOST}" >&2
+    exit 2
+    ;;
+esac
+
 S3_EXPLICIT=0
 [[ -n "${BS_TABLE_S3:-}" ]] && S3_EXPLICIT=1
 export BS_TABLE_S3="${BS_TABLE_S3:-${BS_TABLE%_logs}_s3}"
 
 run_sql() {
   # $1 = SQL. Credentials via Basic auth; never echoed.
-  curl -sS --fail-with-body --max-time 60 \
+  curl --disable --noproxy '*' -sS --fail-with-body --max-time 60 \
     -u "${BETTERSTACK_QUERY_USERNAME}:${BETTERSTACK_QUERY_PASSWORD}" \
     -H 'Content-type: plain/text' \
     -X POST "https://${BETTERSTACK_QUERY_HOST}?output_format_pretty_row_numbers=0" \
