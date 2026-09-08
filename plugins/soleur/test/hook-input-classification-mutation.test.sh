@@ -10,28 +10,49 @@
 # claiming to guard against it, so this one is named into the glob that already
 # exists: gated on arrival, with no edit to `test-all.sh`.
 #
+# IT RUNS IN A SANDBOX, AND THAT IS NOT A STYLE CHOICE
+# ----------------------------------------------------
+# The first revision of this file mutated `.claude/hooks/lib/hook-input.sh` IN
+# THE WORKING TREE. That file is sourced by 22 hooks, 19 of which fire on every
+# Bash tool call. Measured: ~11 s per contract run x 12 rows = a ~140-second
+# window per invocation during which the live guard library was deliberately
+# broken - including the row that removes the object-root check, i.e. the
+# silent-total-disarm this change exists to close. `trap ... EXIT INT TERM HUP`
+# does not cover SIGKILL, and `scripts/test-all.sh` ships a `[KILLED]` taxonomy
+# precisely because suites on this box do get signal-killed; an OOM inside that
+# window left the tracked file mutated with a dirty `git status` as the only
+# evidence. Naming the file into SUITE_GLOBS made it worse, not better: the two
+# ungated siblings only ran when someone chose to.
+#
+# The contract suite resolves the library through `BASH_SOURCE`, so a copied
+# tree runs correctly. Everything below happens inside $WORK; the real tree is
+# read once and never written.
+#
 # WHAT A MUTATION BATTERY DOES AND DOES NOT PROVE
 # -----------------------------------------------
 # It proves the contract suite can DETECT a given perturbation. It says nothing
-# about whether the set of perturbations is the right one, so the axes are named
-# below — and the ones NOT edited are named too. Counting rows instead of axes
-# is how a battery of one shape reports twelve.
+# about whether the set of perturbations is the right one. Count AXES, not rows:
+# a previous revision of this file banked two rows (M7, M10) that were measured
+# to be the SAME mutant - both degenerated the parser to "always return 1", and
+# both reddened the identical 22 assertions.
 #
-# Axes edited here:
-#   1. the rc-capture mechanism        M1, M7, M8
-#   2. strip-vs-split ORDER            M2
-#   3. the jq program's root contract  M3
-#   4. fault classification ORDER      M5
-#   5. reason-value mapping            M6, M9
-#   6. complete record + non-zero rc   M4
-#   7. the guard's OWN operand         M10 (degenerate separator — asks whether
-#                                      the guard silently WIDENS, which every
-#                                      other row is structurally unable to see)
-#   8. the harness itself              C2 (dispatch neutering)
+# Axes edited here, one row each unless noted:
+#   1. rc capture           C1 (never captured), C2 (never leaves the subshell)
+#   2. rc POLARITY          P1 (every non-zero rc blamed on the payload)
+#   3. jq root contract     R1
+#   4. classification order O1
+#   5. reason mapping       M1 (internal arms collapsed), M2 (empty/baddoc swap)
+#   6. complete record+rc   F1
+#   7. field-count boundary B1 (the `n > 6` guard widened)
+#   8. multi-document arm   D1
+#   9. THE HARNESS ITSELF   H1 (want() cannot fail), H2 (bad() cannot count)
+#
+# Thirteen rows: one control plus twelve mutations across those nine axes.
 #
 # Axes deliberately NOT edited, so the claim is bounded: the jq program's
-# per-field `d()`/`fp()` semantics (owned by the #7164 contract cases), the
-# IFS / `set -f` save-restore window, and `hook_input_emit_ask`'s envelope shape.
+# per-field `d()`/`fp()` semantics (owned by the #7164 cases), the IFS / `set -f`
+# save-restore window, and `hook_input_emit_ask`'s envelope shape. A review pass
+# drove all three and confirmed the existing suite covers them.
 set -uo pipefail
 
 # /tmp is a machine-global 4 GiB tmpfs shared by every worktree on this box, and
@@ -41,36 +62,37 @@ set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-SUT="$REPO_ROOT/.claude/hooks/lib/hook-input.sh"
-SUITE="$REPO_ROOT/.claude/hooks/hook-input-contract.test.sh"
-
-[[ -r "$SUT"   ]] || { echo "FATAL: SUT not readable: $SUT" >&2; exit 2; }
-[[ -r "$SUITE" ]] || { echo "FATAL: contract suite not readable: $SUITE" >&2; exit 2; }
 command -v jq      >/dev/null 2>&1 || { echo "SKIP: jq missing — battery cannot run";      exit 0; }
 command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing — battery cannot run"; exit 0; }
+command -v git     >/dev/null 2>&1 || { echo "SKIP: git missing — cannot build the sandbox"; exit 0; }
 
 WORK="$(mktemp -d "${TMPDIR%/}/hookmut.XXXXXXXX")" || { echo "FATAL: mktemp failed" >&2; exit 2; }
-PRISTINE="$WORK/pristine.sh"
-SUITE_PRISTINE="$WORK/suite-pristine.sh"
-cp "$SUT"   "$PRISTINE"       || { echo "FATAL: could not snapshot the SUT"   >&2; exit 2; }
-cp "$SUITE" "$SUITE_PRISTINE" || { echo "FATAL: could not snapshot the suite" >&2; exit 2; }
-
-cleanup() {
-  # Restore from the PRISTINE COPY, never `git checkout --`. Checkout restores
-  # to HEAD, which during a fix-in-flight is a DIFFERENT file from the one under
-  # test: a battery that does that reverts the fix on row 1 and then scores the
-  # DEFECT against itself for every row after, reporting SURVIVED while
-  # measuring a file that no longer contains the thing under test.
-  cp "$PRISTINE"       "$SUT"   2>/dev/null || true
-  cp "$SUITE_PRISTINE" "$SUITE" 2>/dev/null || true
-  rm -rf "$WORK" 2>/dev/null || true
-}
+cleanup() { rm -rf "$WORK" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM HUP
 
+# --- build the sandbox ------------------------------------------------------
+# Working-tree contents of every TRACKED file, so an in-flight fix is under test
+# rather than whatever HEAD happens to hold. A setup failure ABORTS: a harness
+# that cannot build its sandbox must not degrade into scoring the previous row.
+if ! ( cd "$REPO_ROOT" && git ls-files -z | tar --null -T - -cf - ) 2>/dev/null | tar -x -C "$WORK" 2>/dev/null; then
+  echo "FATAL: could not populate the sandbox from tracked files" >&2; exit 2
+fi
+SUT="$WORK/.claude/hooks/lib/hook-input.sh"
+SUITE="$WORK/.claude/hooks/hook-input-contract.test.sh"
+[[ -r "$SUT" && -r "$SUITE" ]] || { echo "FATAL: sandbox is missing the SUT or the suite" >&2; exit 2; }
+
+PRISTINE_SUT="$WORK/.pristine-sut"
+PRISTINE_SUITE="$WORK/.pristine-suite"
+cp "$SUT" "$PRISTINE_SUT"     || { echo "FATAL: could not snapshot the SUT" >&2; exit 2; }
+cp "$SUITE" "$PRISTINE_SUITE" || { echo "FATAL: could not snapshot the suite" >&2; exit 2; }
+
 PASS=0; FAIL=0; ROWS=0
+# `fail()` writes to an APPEND-ONLY ledger as well as incrementing, so the final
+# verdict does not rest on a counter one edit can silence.
+LEDGER="$WORK/.failures"; : > "$LEDGER"
 pass() { PASS=$((PASS+1)); echo "PASS: $1"; }
-fail() { FAIL=$((FAIL+1)); echo "FAIL: $1"; shift; local l; for l in "$@"; do echo "    $l"; done; }
-restore() { cp "$PRISTINE" "$SUT"; }
+fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" | tee -a "$LEDGER"; shift; local l; for l in "$@"; do echo "    $l"; done; }
+restore() { cp "$PRISTINE_SUT" "$SUT"; cp "$PRISTINE_SUITE" "$SUITE"; }
 
 # run_suite <logfile> -> prints the suite's rc
 # ANSI is stripped before anything is read: a coloured summary makes a
@@ -78,208 +100,207 @@ restore() { cp "$PRISTINE" "$SUT"; }
 # as killed-or-survived arbitrarily while the run still looks complete.
 run_suite() {
   local log="$1" rc=0
-  bash "$SUITE" > "$log" 2>&1 || rc=$?
+  ( cd "$WORK" && bash "$SUITE" ) > "$log" 2>&1 || rc=$?
   sed -i -r 's/\x1B\[[0-9;]*[mGKHF]//g' "$log" 2>/dev/null || true
   printf '%d' "$rc"
 }
 
-# patch <file> <old> <new> — anchors travel as ARGV, never interpolated into
-# the program text, so a shell metacharacter in an anchor cannot rewrite it.
+# patch <file> <old> <new> — anchors travel as ARGV, never interpolated into the
+# program text, and the anchor must occur EXACTLY ONCE. Presence alone is not
+# enough: `replace(..., 1)` takes the first match, and in this repo the first
+# match of a code anchor is routinely the COMMENT that documents it three lines
+# above. That lands the mutation on prose, changes bytes (so a file-level
+# "did it land" check passes), leaves the suite green, and reports SURVIVED.
 patch() {
   python3 -c '
 import sys, io
 path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
 s = io.open(path, encoding="utf-8").read()
-if old not in s:
+n = s.count(old)
+if n == 0:
     sys.stderr.write("anchor missing\n"); sys.exit(3)
+if n != 1:
+    sys.stderr.write("anchor is AMBIGUOUS (%d occurrences) — first-match would be arbitrary\n" % n)
+    sys.exit(4)
 io.open(path, "w", encoding="utf-8").write(s.replace(old, new, 1))
 ' "$1" "$2" "$3"
 }
 
-# mutate <id> <old> <new> — apply, and PROVE it landed.
-# A mutation that does not land leaves the BASELINE in place, and a baseline run
-# is a measurement of nothing that reads exactly like a result.
+# mutate <id> <file> <old> <new> — apply, and PROVE it landed.
 mutate() {
-  local id="$1" old="$2" new="$3"
+  local id="$1" file="$2" old="$3" new="$4"
   restore
-  if ! patch "$SUT" "$old" "$new"; then
-    fail "$id — anchor missing; the mutation never applied"
-    restore; return 1
-  fi
-  if cmp -s "$PRISTINE" "$SUT"; then
-    fail "$id — MUTATION DID NOT LAND (file byte-identical to pristine)"
+  if ! patch "$file" "$old" "$new"; then
+    fail "$id — anchor missing or ambiguous; the mutation never applied"
     restore; return 1
   fi
   return 0
 }
 
-# expect_red <id> <description>
+# expect_red <id> <assertion-pattern> <description>
+# Routing on `rc != 0` ALONE credits a kill to whatever reddened — including a
+# mutant that merely crashes the suite, or a blast-radius mutant that breaks the
+# parser for every input. A row must show that the assertion it NAMES failed.
 expect_red() {
-  # Declared in two statements deliberately: `local a="$1" b="$a"` references a
-  # name the SAME `local` is still declaring, which under `set -u` is an
-  # unbound-variable abort rather than the obvious left-to-right read.
-  local id="$1" desc="$2" rc
-  local log="$WORK/$id.log"
+  local id="$1" want_pat="$2" desc="$3" rc log fails
+  log="$WORK/$id.log"
   ROWS=$((ROWS+1))
   rc="$(run_suite "$log")"
-  if [[ "$rc" != "0" ]]; then
-    pass "$id killed — $desc"
-  else
+  if [[ "$rc" == "0" ]]; then
     fail "$id SURVIVED — $desc" \
          "the contract suite stayed GREEN with this mutation applied" \
          "log: $log" \
          "a survivor is EITHER a fixture gap OR an equivalent mutant — decide which and record it"
+    restore; return
   fi
+  if ! grep -E '^(FAIL|FATAL)' "$log" | grep -qE "$want_pat"; then
+    fails="$(grep -cE '^FAIL' "$log" || true)"
+    fail "$id reddened, but NOT on the property it names — $desc" \
+         "expected a FAIL/FATAL line matching: $want_pat" \
+         "got $fails failing assertion(s); first few:" \
+         "$(grep -E '^(FAIL|FATAL)' "$log" | head -3 | tr '\n' '|')" \
+         "a row credited to the wrong assertion measures the SUT being alive, not the property"
+    restore; return
+  fi
+  pass "$id killed by its named assertion — $desc"
   restore
 }
 
 # ---------------------------------------------------------------------------
-# C1 — THE CONTROL. Read this before any row below: an empty or red control
-# voids every result that follows, because each mutant is then scored against a
-# broken oracle.
+# CONTROL. An empty or red control voids every result below, because each mutant
+# is then scored against a broken oracle.
 # ---------------------------------------------------------------------------
 ROWS=$((ROWS+1))
 control_log="$WORK/control.log"
 control_rc="$(run_suite "$control_log")"
 if [[ "$control_rc" != "0" ]]; then
   echo "FATAL: CONTROL IS RED (rc=$control_rc) — every mutation result below would be void." >&2
-  grep -E '^FAIL' "$control_log" | head -20 >&2
+  grep -E '^(FAIL|FATAL)' "$control_log" | head -20 >&2
   exit 2
 fi
 control_summary="$(grep -oE 'hook-input-contract: [0-9]+/[0-9]+ pass' "$control_log" | head -1)"
 if [[ -z "$control_summary" ]]; then
   echo "FATAL: the control summary line could not be read — the EXTRACTION is broken, not the SUT." >&2
-  echo "       (A battery whose parser returns empty scores every row arbitrarily.)" >&2
   exit 2
 fi
-pass "C1 control green, summary readable — $control_summary"
+pass "CONTROL green in the sandbox, summary readable — $control_summary"
 
-# ---------------------------------------------------------------------------
-# THE FLOOR — revert this change's own thesis. If the suite does not redden
-# here, nothing below it means anything.
-# ---------------------------------------------------------------------------
-if mutate M1 \
-  '  jq_rc=${raw##*"$_HOOK_INPUT_RS"}' \
-  '  jq_rc=0  # M1'; then
-  expect_red M1 "rc forced back to a constant 0 (the pre-#7275 behaviour)"
+# --- axis 1: the rc capture ------------------------------------------------
+if mutate C1 "$SUT" \
+  '         exit "$_hi_rc")" || jq_rc=$?' \
+  '         exit "$_hi_rc")" || true'; then
+  expect_red C1 'A20e|A19b' "the rc is never captured (the pre-#7275 blindness)"
 fi
 
-# Axis: strip-vs-split ORDER.
-if mutate M2 \
-  '  body=${raw%"$_HOOK_INPUT_RS"*}' \
-  '  body=$raw  # M2'; then
-  expect_red M2 "rc left in the body, so the happy path carries an extra field"
+if mutate C2 "$SUT" \
+  '         exit "$_hi_rc")"' \
+  '         exit 0)"'; then
+  expect_red C2 'A20e|A19b' "the rc never leaves the subshell"
 fi
 
-# Axis: the jq program's root contract.
-if mutate M3 \
-  'if type != "object" then' \
-  'if false then'; then
-  expect_red M3 "object-root requirement removed — a null root silently disarms"
-fi
-
-# Axis: a COMPLETE record plus a non-zero rc.
-if mutate M4 \
+# --- axis 2: rc POLARITY (the review finding this file exists to pin) -------
+if mutate P1 "$SUT" \
+  '  if (( jq_rc == 5 )); then
+    rc_fault="payload"' \
   '  if (( jq_rc != 0 )); then
+    rc_fault="payload"'; then
+  expect_red P1 'A20e rc (2|3|126|137)' "every non-zero rc blamed on the payload — #7275's collapse, one code over"
+fi
+
+# --- axis 3: the jq program's root contract --------------------------------
+if mutate R1 "$SUT" 'if type != "object" then' 'if false then'; then
+  expect_red R1 'A19d|A19e|A19f' "object-root requirement removed — a null root silently disarms"
+fi
+
+# --- axis 4: classification ORDER (ours before theirs) ---------------------
+if mutate O1 "$SUT" \
+  '  if [[ $rc_fault == "ours" ]]; then
+    HOOK_INPUT_REASON="internal:rc${jq_rc}"
+    return 1
+  fi' \
+  '  : # O1'; then
+  expect_red O1 'A20a|A20e rc (2|3|126|137)' "our-fault check no longer runs first"
+fi
+
+# --- axis 5: reason mapping -------------------------------------------------
+if mutate M1 "$SUT" 'HOOK_INPUT_REASON="internal:count"' 'HOOK_INPUT_REASON="internal:rc3"'; then
+  expect_red M1 'A20b|A20c' "the two internal arms collapsed onto one value"
+fi
+
+if mutate M2 "$SUT" \
+  '      if [[ $rc_fault == "payload" ]]; then
+        HOOK_INPUT_REASON="baddoc"
+      else
+        HOOK_INPUT_REASON="empty"
+      fi' \
+  '      if [[ $rc_fault == "payload" ]]; then
+        HOOK_INPUT_REASON="empty"
+      else
+        HOOK_INPUT_REASON="baddoc"
+      fi'; then
+  expect_red M2 'A19a|A19b' "empty/baddoc mapping inverted"
+fi
+
+# --- axis 6: a COMPLETE record plus a non-zero rc --------------------------
+if mutate F1 "$SUT" \
+  '  if [[ $rc_fault == "payload" ]]; then
     HOOK_INPUT_REASON="baddoc"
     return 1
-  fi' \
-  '  : # M4'; then
-  expect_red M4 "valid envelope + trailing garbage accepted as a clean parse"
-fi
-
-# Axis: fault classification ORDER (ours before theirs).
-if mutate M5 \
-  '  if (( jq_rc == 3 )); then
-    HOOK_INPUT_REASON="internal:rc3"
-    return 1
-  fi' \
-  '  : # M5'; then
-  expect_red M5 "rc-3 no longer checked first — a broken program reads as a bad payload"
-fi
-
-# Axis: reason-value mapping.
-if mutate M6 \
-  'HOOK_INPUT_REASON="internal:count"' \
-  'HOOK_INPUT_REASON="internal:rc3"'; then
-  expect_red M6 "the two internal arms collapsed onto one value"
-fi
-
-if mutate M9 \
-  '      if (( jq_rc == 0 )); then
-        HOOK_INPUT_REASON="empty"
-      else
-        HOOK_INPUT_REASON="baddoc"
-      fi' \
-  '      if (( jq_rc == 0 )); then
-        HOOK_INPUT_REASON="baddoc"
-      else
-        HOOK_INPUT_REASON="empty"
-      fi'; then
-  expect_red M9 "empty/baddoc mapping inverted"
-fi
-
-# Axis: the rc-capture mechanism itself.
-if mutate M7 \
-  '         printf '"'"'%s%dX'"'"' "$_HOOK_INPUT_RS" "$_hi_rc")"' \
-  '         printf '"'"'X'"'"')"  # M7'; then
-  expect_red M7 "the rc append deleted — nothing carries jq's status out of the subshell"
-fi
-
-if mutate M8 \
-  ' || _hi_rc=$?' \
-  '  # M8'; then
-  expect_red M8 "jq status discarded, so _hi_rc stays 0 whatever jq did"
-fi
-
-# Axis: THE GUARD'S OWN OPERAND. Every row above mutates the SUT and asks
-# whether the guard REDDENS. This one degenerates an operand the guard
-# interpolates and asks whether it silently WIDENS — a guard that accepts
-# everything is indistinguishable from a healthy run by exit code alone.
-if mutate M10 \
-  "_HOOK_INPUT_RS=\$'\\x1e'" \
-  '_HOOK_INPUT_RS=""  # M10'; then
-  expect_red M10 "separator degenerated to the empty string"
-fi
-
-# ---------------------------------------------------------------------------
-# C2 — THE HARNESS AXIS. Every row above is conditional on the contract suite's
-# failure path actually being able to fail, and nothing else here checks that.
-# Neuter the FAIL counter, re-apply M1, and report what actually happens.
-# ---------------------------------------------------------------------------
-ROWS=$((ROWS+1))
-if ! patch "$SUITE" 'bad() { FAIL=$((FAIL + 1));' 'bad() { FAIL=$((FAIL + 0));'; then
-  fail "C2 — harness anchor missing; the dispatch axis was not measured"
-else
-  if mutate C2 \
-    '  jq_rc=${raw##*"$_HOOK_INPUT_RS"}' \
-    '  jq_rc=0  # C2'; then
-    ROWS=$((ROWS-1))   # mutate() does not count a row; expect_* does
-    c2_log="$WORK/C2.log"
-    c2_rc="$(run_suite "$c2_log")"
-    ROWS=$((ROWS+1))
-    if [[ "$c2_rc" != "0" ]]; then
-      pass "C2 harness axis — the suite still reddens with its FAIL counter neutered, so a SECOND independent gate (the assertion floor) carries the verdict"
-    else
-      pass "C2 harness axis — neutering the FAIL counter does hide a real regression, confirming that counter is load-bearing and must not be weakened"
-    fi
   fi
+
+  if [[ ${_hi_s[0]} == "nonobject" ]]; then' \
+  '  if [[ ${_hi_s[0]} == "nonobject" ]]; then'; then
+  expect_red F1 'A19c' "valid envelope + trailing garbage accepted as a clean parse"
 fi
-cp "$SUITE_PRISTINE" "$SUITE"
-restore
+
+# --- axis 7: the field-count boundary --------------------------------------
+# The previous revision's "does the guard WIDEN" row degenerated the separator
+# to "" and tripped a guard BEFORE the split, so it never reached the boundary
+# at all. This widens the boundary itself, which is what that axis claimed.
+if mutate B1 "$SUT" '    if (( n > 6 )); then' '    if (( n > 7 )); then'; then
+  expect_red B1 'A19i|A19-rc separator' "the forged-separator boundary widened by one"
+fi
+
+# --- axis 8: the multi-document arm ----------------------------------------
+if mutate D1 "$SUT" '      if (( n % 6 == 0 )) && [[ -z $rc_fault ]]; then' '      if false; then'; then
+  expect_red D1 'A19k' "concatenated documents reported as a forged separator"
+fi
+
+# --- axis 9: THE HARNESS ITSELF --------------------------------------------
+# Every row above is scored THROUGH the contract suite's helpers. These two ask
+# whether those helpers can fail at all. H1 is the one a previous revision could
+# not see: it neutered bad()'s COUNTER, which is the single edit that leaves
+# ok() and TOTAL intact, so `want()` — the single point of failure for 90 of the
+# suite's assertions — went unmutated. Measured on the previous revision:
+# `want(){ ok "$1 → $3"; }` produced a byte-identical `95/95 pass`, exit 0.
+if mutate H1 "$SUITE" \
+  'want(){ if [[ "$2" == "$3" ]]; then ok "$1 → $3"; else bad "$1" "want: $2" "got:  $3"; fi; }' \
+  'want(){ ok "$1 → $3"; }'; then
+  expect_red H1 'FATAL: want\(\) DID NOT FAIL' "want() can no longer fail — must be caught by the suite's own helper self-test"
+fi
+
+if mutate H2 "$SUITE" 'bad() { FAIL=$((FAIL + 1));' 'bad() { FAIL=$((FAIL + 0));'; then
+  expect_red H2 'FATAL: want\(\) DID NOT FAIL|only [0-9]+ assertions ran' \
+    "bad() can no longer count — must be caught by the self-test or the floor"
+fi
 
 # ---------------------------------------------------------------------------
-# Assertion accounting. A floor that shares a lifetime with what it guards is
-# not a floor, so this counts ROWS EXECUTED and reconciles against the number
-# this file DEFINES. Deleting a row is then visible, where a bare `FAIL == 0`
-# check reports success for a file whose rows were all removed.
+# Accounting. The verdict reads an APPEND-ONLY ledger as well as the counter, so
+# silencing the verdict means deleting evidence rather than moving a number; and
+# ROWS is reconciled against the number of rows this file DEFINES, so a deleted
+# row is visible where a bare `FAIL == 0` reports success for an empty file.
 # ---------------------------------------------------------------------------
-EXPECTED_ROWS=12
+EXPECTED_ROWS=13
+ledger_lines="$(wc -l < "$LEDGER" | tr -d ' ')"
 echo
 echo "=== hook-input-classification-mutation: $PASS pass, $FAIL fail, $ROWS/$EXPECTED_ROWS rows ==="
 if (( ROWS != EXPECTED_ROWS )); then
   printf 'FAIL: %d rows executed but %d are defined — rows were skipped or deleted\n' "$ROWS" "$EXPECTED_ROWS"
   exit 1
 fi
-(( FAIL == 0 )) || exit 1
+if (( FAIL != ledger_lines )); then
+  printf 'FAIL: counter says %d failures, ledger holds %d — the accounting disagrees with itself\n' "$FAIL" "$ledger_lines"
+  exit 1
+fi
+(( FAIL == 0 && ledger_lines == 0 )) || exit 1
 exit 0

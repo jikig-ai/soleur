@@ -4,7 +4,8 @@ date: 2026-09-08
 slug: fix-shell-git-env-scrub-and-hook-fault-diagnosis
 branch: feat-one-shot-7822-7275-shell-git-env-scrub-hook-fault-diag
 issue: 7822
-closes: 7822, 7275, 7835
+closes: 7822, 7835
+# #7275 is deliberately NOT in `closes:` — see the PR 1 row below.
 type: fix
 classification: test-infrastructure, hook-observability
 lane: cross-domain
@@ -192,7 +193,13 @@ review time.
 
 | PR | Contents | Risk |
 |---|---|---|
-| **1** | Phases B1–B2: repair the discriminator and split the enum it discriminates on, with the byte-exactness gate. `Closes #7275`. | **High.** The library is sourced by 24 non-test hooks, 19 firing per Bash tool call (`hook-input.sh` states the 19 and why: #7165 registered `grep-rewrite.sh` on the Bash matcher). |
+| **1** | Phases B1–B2: repair the discriminator and split the enum it discriminates on, with the byte-exactness gate. **`Ref #7275`, NOT `Closes`** — see below. | **High.** The library is sourced by **22** non-test hooks, 19 firing per Bash tool call (`hook-input.sh` states the 19 and why: #7165 registered `grep-rewrite.sh` on the Bash matcher). The 22 is measured; an earlier revision of this plan said 24, and that figure was carried into a commit message before anyone counted. |
+
+**Why `Ref` and not `Closes` on #7275.** This plan's own text says the type vector and the signal
+consumer are deferred, i.e. #7275's Asks 1 (second half) and 3 remain open. `Closes` auto-closes on
+merge, and the deferred consumer would lose its only tracking anchor — producing exactly the
+"a signal nobody consumes" outcome #7275 was filed about. The issue stays open behind a follow-up
+that carries the remaining asks.
 | **2** | Phases A1–A3: the vacuity repairs, the five-file sweep, the containment regression test. `Closes #7822 #7835`. | Low |
 
 B1 and B2 ship together because splitting them would land a correctly-read return code that nothing
@@ -636,7 +643,11 @@ the baseline is red, mirroring `git-fixture-env.mutation.sh`.
 liveness_signal:
   what: summary.hook_input_fault_count plus its per-reason breakdown in knowledge-base/project/rule-metrics.json
   cadence: every local /compound run (ADR-091 local-producer model)
-  alert_target: the aggregator's WARNING line, which already renders the breakdown (measured)
+  operator_surface: the aggregator's WARNING line, which already renders the breakdown (measured)
+  alert_target: NONE — nothing escalates on a non-zero count, verified by execution (exit 0
+    on four seeded faults). Renamed from `alert_target` because that field name is one a
+    reader trusts, and naming a stderr line as an alert target overstates it. Deferred to
+    the #7275 Ask-3 consumer follow-up.
   configured_in: scripts/rule-metrics-aggregate.sh
 error_reporting:
   destination: .claude/.rule-incidents.jsonl (local), rolled into the committed rule-metrics.json
@@ -659,19 +670,44 @@ logs:
     it is the most plausible explanation for R8 (zero hook_self_fault rows retained anywhere).
     Claiming "monthly archives" here would restate the very fiction the plan is correcting.
 discoverability_test:
-  command: bash scripts/rule-metrics-aggregate.sh
+  command: bash scripts/hook-input-fault-discoverability-probe.sh
   expected_output: |
-    Run against a sandboxed INCIDENTS_REPO_ROOT seeded with one synthetic hook-input-baddoc row,
-    it exits 0 and prints a WARNING line naming the fault count and the per-reason breakdown —
-    i.e. the operator-visible path from "a guard was disarmed" to "someone can read it".
-    A C4 parity run was the earlier value here and was a category error: it demonstrates nothing
-    about whether a hook_self_fault is discoverable.
+    `OK: a disarmed-guard fault is discoverable — WARNING: 4 PreToolUse hook input-contract
+    fault(s) ... [baddoc=1 empty=1 nonobject=1 internal=1]`, exit 0.
+
+    The probe SEEDS ITS OWN sandboxed INCIDENTS_REPO_ROOT, one row per payload class, and asserts
+    both that the operator-visible line exists and that the per-reason breakdown DISCRIMINATES.
+    Two earlier values here were vacuous and are recorded so neither is reinstated:
+
+      * a C4 parity run — a category error; it demonstrates nothing about whether a
+        hook_self_fault is discoverable;
+      * `bash scripts/rule-metrics-aggregate.sh` bare — measured to exit 0 with NO warning and NO
+        breakdown against an unseeded root, which is what a fresh checkout and any CI sandbox is.
+        Preflight Check 10 executes the `command`, not this prose, so naming the precondition here
+        while omitting it from the command meant the gate passed without exercising the path. The
+        bare form also wrote rule-metrics.json into the working tree.
+
+    Non-vacuity controls, both measured against the real emitter: silencing the WARNING line fails
+    the probe on "no operator-visible WARNING line"; collapsing the per-reason breakdown while
+    keeping the line fails it on "the breakdown does not name baddoc".
 ```
 
 The `hook_self_fault` signal is an **observability-layer 7** concern: it originates in the shell hook
 surface that executes on a contributor's own machine, where no server-side telemetry reaches. The
 committed metric is the only channel crossing that boundary, which is why the deferred consumer reads
-the committed artifact rather than adding a remote sink. Until that consumer lands, **P8 is not
+the committed artifact rather than adding a remote sink.
+
+**And the committed metric carries the HEAD of the reason only.** `hook_input_report` keys telemetry
+on `${reason%%:*}`, so `internal:rc3`, `internal:rc2` and `internal:count` all aggregate as
+`hook-input-internal`; the discriminating suffix survives in `command_snippet` inside the gitignored
+`.claude/.rule-incidents.jsonl`, which the aggregator never reads. So the three-way `internal` split
+— half of what this change buys — is legible in the in-session `ask` prompt and in the local JSONL,
+and NOT in the durable artifact. That is a real gap in layer 7's marker/artifact pairing, it is not
+closed here, and it belongs to the same deferred consumer: surfacing the suffix means teaching the
+aggregator to parse `reason=` out of `command_snippet`, which is a behavioural change to the script
+that gates `/compound` and is deliberately out of scope for a fix to the classifier. Recorded rather
+than glossed, because an Observability block that claimed the durable half carried the same fields
+as the synchronous half would be precisely the defect class this plan is about. Until that consumer lands, **P8 is not
 delivered by this plan** — the WARNING line fires only inside a local `/compound` run, so a
 contributor who goes a fortnight without one runs a fortnight of calls with no out-of-session notice.
 Saying so is the point; an Observability block that implied otherwise would be the same defect class.

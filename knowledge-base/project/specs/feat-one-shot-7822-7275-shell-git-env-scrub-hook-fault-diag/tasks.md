@@ -27,7 +27,7 @@ brand_survival_threshold: single-user incident
 
 ---
 
-## PR 1 — the classifier (Phases B1–B2). `Closes #7275`
+## PR 1 — the classifier (Phases B1–B2). `Ref #7275` (NOT `Closes`: Asks 2 and 3 are deferred)
 
 ### 1.1 Repair the discriminator (B1)
 

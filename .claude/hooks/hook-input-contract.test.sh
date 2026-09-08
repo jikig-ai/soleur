@@ -80,6 +80,60 @@ export SOLEUR_SESSION_STATE_ROOT="$HIC_TMPROOT/session-state"
 ok()  { PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); echo "PASS: $1"; }
 bad() { FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1)); echo "FAIL: $1"; shift; local l; for l in "$@"; do echo "  $l"; done; }
 want(){ if [[ "$2" == "$3" ]]; then ok "$1 → $3"; else bad "$1" "want: $2" "got:  $3"; fi; }
+
+# --- THE HELPERS MUST BE ABLE TO FAIL --------------------------------------
+# `want()` is the single point of failure for 90 of the 95 assertions below,
+# and BOTH existing gates are structurally blind to it:
+#
+#   * MIN_ASSERTIONS counts TOTAL, and TOTAL is incremented INSIDE ok()/bad() -
+#     so the floor is dispatched through the very helpers it backstops. A
+#     `want(){ ok "$1 → $3"; }` keeps TOTAL at 95 and the floor never looks.
+#   * the mutation battery's harness row neuters bad()'s FAIL counter, which is
+#     the one edit that leaves ok() AND TOTAL intact.
+#
+# Measured against a full tree copy: with the comparison dropped from want(),
+# the suite prints `95/95 pass` and exits 0 - byte-indistinguishable from a
+# healthy run - while six of the battery's ten rows silently survive.
+#
+# So drive the helpers ONCE, before any case, and check both counters moved.
+# This reports with printf + exit and NEVER through ok()/bad(), because a gate
+# dispatched through the thing it guards is disarmed by the same one-line edit.
+_hi_assert_helpers_can_fail() {
+  local p0=$PASS f0=$FAIL t0=$TOTAL out sink
+  # Output goes to a FILE, not a command substitution: `out=$(want ...)` runs
+  # want() in a SUBSHELL, so its counter increments never reach this scope and
+  # the self-test reads p1 == p0 for a perfectly healthy helper. (Measured, on
+  # the first draft of this very function.)
+  sink="$(mktemp -t hook-input-selftest.XXXXXXXX)"
+  want "__selftest_match__" X X >"$sink" 2>&1
+  local p1=$PASS f1=$FAIL
+  want "__selftest_mismatch__" X Y >>"$sink" 2>&1
+  local p2=$PASS f2=$FAIL
+  out="$(cat "$sink")"; rm -f "$sink"
+  # Unwind: the self-test must not appear in the suite's own accounting.
+  PASS=$p0; FAIL=$f0; TOTAL=$t0
+  if (( p1 != p0 + 1 )); then
+    printf 'FATAL: want() did not record a PASS on a matching pair — the suite cannot report success honestly.\n' >&2
+    exit 2
+  fi
+  if (( f2 != f1 + 1 )); then
+    printf 'FATAL: want() DID NOT FAIL on a mismatching pair. Every assertion below is vacuous and the summary line is a lie.\n' >&2
+    exit 2
+  fi
+  # A mismatch must not ALSO count a pass. Without this, `want(){ ok ...; bad ...; }`
+  # — which both fails and passes — satisfies the two checks above while making
+  # every verdict meaningless in the other direction. (shellcheck flagged p2 as
+  # captured-and-unused, which was the tell that this arm was missing.)
+  if (( p2 != p1 )); then
+    printf 'FATAL: want() recorded a PASS for a MISMATCHING pair — it reports both outcomes at once.\n' >&2
+    exit 2
+  fi
+  if [[ "$out" != *"__selftest_mismatch__"* ]]; then
+    printf 'FATAL: want() recorded a FAIL but printed nothing — the operator-visible half is gone.\n' >&2
+    exit 2
+  fi
+}
+_hi_assert_helpers_can_fail
 # A skip is NOT a pass. It increments neither PASS nor TOTAL — inflating the
 # pass count with unrun assertions is the thing being fixed — but it is counted
 # and surfaced in the summary so "48 here, 49 there" is legible instead of
@@ -265,7 +319,7 @@ a18b_rewriter_contract() {
 
   want "A18b rewriters source the helper FAIL-HARD" "" "${fail_soft[*]-}"
   want "A18b rewriters run a real parse gate" "" "${no_gate[*]-}"
-  want "A18b rewriters exit 0 on unparseable, happy and jq-missing" "" "${bad_rc[*]-}"
+  want "A18b rewriters exit 0 on baddoc, happy and jq-missing" "" "${bad_rc[*]-}"
   want "A18b rewriters RECORD the fault (silent exit 0 is defect 2)" "" "${unrecorded[*]-}"
 }
 
@@ -347,7 +401,7 @@ ARRAY_STASH="$(jq -nc '{tool_name:"Bash", tool_input:{command:["git","stash"]}}'
 # A benign, fully-parseable envelope: every contracted field a string, no guard
 # tripped. The HAPPY class for A16.
 HAPPY_PAYLOAD="$(jq -nc '{tool_name:"Bash", tool_input:{command:"echo hello"}, cwd:"/w", session_id:"s"}')"
-# A document jq rejects outright (n == 0 → reason `unparseable`), distinct from
+# A document jq rejects outright (n == 0, jq rc 5 → reason `baddoc`), distinct from
 # the ARRAY_STASH `nonstring` class so A16 and the Phase-2 loop cover disjoint
 # ground rather than duplicating one class across 40 invocations.
 MALFORMED_PAYLOAD='garbage {{'
@@ -558,7 +612,7 @@ STUB
     if [[ -n "$rids" ]] && grep -qE '^hook-input-' <<<"$rids"; then :
     else unrecorded+=("$hook"); fi
 
-    # (iii) rc 0 on the fault path. A16 covers the unparseable, happy and
+    # (iii) rc 0 on the fault path. A16 covers the baddoc, happy and
     # jq_missing classes; this covers `nonstring` without a 21st invocation.
     [[ "$rc" == "0" ]] || nonzero+=("$hook → rc $rc")
 
@@ -1051,7 +1105,7 @@ a16_exit_codes() {
   want "A16 control: rc_for observes a NON-zero rc" "2" \
     "$(rc_for "$probe" '{}')"
 
-  # --- class 1: unparseable (jq rejects the document; n == 0) ---------------
+  # --- class 1: baddoc (jq rejects the document; n == 0, rc 5) --------------
   offenders=()
   for hook in "${INSCOPE21[@]}"; do
     rc="$(rc_for "$hook" "$MALFORMED_PAYLOAD")"
@@ -1060,7 +1114,7 @@ a16_exit_codes() {
   if (( ${#offenders[@]} == 0 )); then
     ok "A16 all ${#INSCOPE21[@]} in-scope hooks exit 0 on an UNPARSEABLE envelope"
   else
-    bad "A16 hook(s) exited non-zero on an unparseable envelope — stdout JSON is discarded" "${offenders[@]}"
+    bad "A16 hook(s) exited non-zero on a rejected envelope — stdout JSON is discarded" "${offenders[@]}"
   fi
 
   # --- class 2: happy (every contracted field a string) --------------------
@@ -1396,6 +1450,16 @@ a19_reason_classification() {
   want "A19g happy still parses"          "0"               "$(_a19_rc "$happy")"
   want "A19h happy sets no reason"        "<empty>"         "$(_a19_reason "$happy")"
 
+  # --- jq is a STREAM processor -------------------------------------------
+  # Two concatenated documents run the constant program twice and emit 12 slots
+  # with rc 0. An earlier revision reported that as `separator`, whose meaning
+  # is "a value carried the record separator" - naming a cause that did not
+  # occur, in a change whose whole thesis is that the reason must name the
+  # cause. An exact multiple of 6 with a clean rc is unforgeable from inside one
+  # document, because injecting a separator only ever ADDS fields.
+  want "A19k two documents"               "multidoc"        "$(_a19_reason "$happy $happy")"
+  want "A19k-rc … and it must NOT return 0" "1"             "$(_a19_rc "$happy $happy")"
+
   # --- pre-existing classes must not regress -------------------------------
   # A value carrying an RS raises the record count. Still `separator`. Every RS in
   # this section is written as a \u001e ESCAPE in the jq program, never as a raw
@@ -1407,6 +1471,19 @@ a19_reason_classification() {
   # A non-string contracted field. Still `nonstring`, NOT nonobject: the root
   # IS an object here, which is what keeps the two classes disjoint.
   want "A19j non-string field"            "nonstring"       "$(_a19_reason "$ARRAY_STASH")"
+
+  # THE RETURN CODE IS NORMATIVE; the reason is diagnostic. Every case above
+  # pins a reason STRING, and a review pass measured that loosening `return 1`
+  # to `return 0` in the count block is caught ENTIRELY by pre-existing
+  # end-to-end cases - not one of this section's own assertions reddens. So each
+  # class gets an explicit rc companion; without them this section pins
+  # diagnostics and inherits its normative coverage from elsewhere.
+  want "A19-rc empty"          "1" "$(_a19_rc '')"
+  want "A19-rc baddoc"         "1" "$(_a19_rc 'garbage {{')"
+  want "A19-rc scalar root"    "1" "$(_a19_rc '"a string"')"
+  want "A19-rc array root"     "1" "$(_a19_rc '[1,2]')"
+  want "A19-rc separator"      "1" "$(_a19_rc "$forged")"
+  want "A19-rc nonstring"      "1" "$(_a19_rc "$ARRAY_STASH")"
 
   unset -f _a19_reason _a19_rc
 }
@@ -1453,13 +1530,37 @@ a20_internal_arms() {
     bad "A20c internal arms collapsed" "both reported: $rc3"
   fi
 
-  # NOTE: there is deliberately no A20d here. The `internal:rc` arm guards a
-  # trailing field that is not a return code, and that is UNREACHABLE BY ANY
-  # PAYLOAD — the rc is appended by this file as `%d`, so it is numeric by
-  # construction. The only thing that can break it is a future edit to the
-  # append or the strip, which no input can simulate. It is therefore driven
-  # from the mutation battery (M7/M8), where the file itself can be perturbed,
-  # rather than asserted here against an input that cannot produce it.
+  # --- WHOSE FAULT IS A NON-ZERO RETURN CODE? ------------------------------
+  # rc 5 is the ONLY jq code meaning "the document is bad". An earlier revision
+  # of this change enumerated OUR faults (rc 3) and let the residue default to
+  # `baddoc`, so a usage error, an exec failure and an OOM kill were all
+  # reported as the model having sent junk - reproducing #7275's own collapse
+  # one code over. Driven with a jq stub because no payload can make the real jq
+  # exit 2 or 137, which is exactly why this needed a positive control.
+  _a20_stub_rc() {
+    local code="$1" shim
+    shim="$(mktemp -d -t hook-input-jqstub.XXXXXXXX)"
+    printf '#!/usr/bin/env bash\ncat >/dev/null 2>&1 || true\nexit %s\n' "$code" > "$shim/jq"
+    chmod +x "$shim/jq"
+    PATH="$shim:$PATH" bash -c '
+      source "'"$helper"'"
+      hook_parse_input "{\"tool_name\":\"Bash\"}" >/dev/null 2>&1
+      printf "%s" "${HOOK_INPUT_REASON:-<empty>}"
+    ' 2>/dev/null
+    rm -rf "$shim"
+  }
+  want "A20e rc 5 is the payload"          "baddoc"          "$(_a20_stub_rc 5)"
+  want "A20e rc 3 is ours"                 "internal:rc3"    "$(_a20_stub_rc 3)"
+  want "A20e rc 2 (usage/system) is ours"  "internal:rc2"    "$(_a20_stub_rc 2)"
+  want "A20e rc 126 (exec failure) is ours" "internal:rc126" "$(_a20_stub_rc 126)"
+  want "A20e rc 137 (OOM kill) is ours"    "internal:rc137"  "$(_a20_stub_rc 137)"
+  unset -f _a20_stub_rc
+
+  # NOTE: there is deliberately no A20d here. An earlier revision carried jq's
+  # rc out INSIDE the output as a trailing field and needed an `internal:rc`
+  # tripwire for a non-numeric one. That carrier is gone - the rc now comes back
+  # as the substitution's own exit status - so the tripwire, and the arm no
+  # payload could reach, went with it.
 }
 
 # ===========================================================================
@@ -1471,8 +1572,8 @@ a20_internal_arms() {
 # which is why this is asserted rather than assumed.
 a21_ask_json_parses() {
   local helper="$SCRIPT_DIR/lib/hook-input.sh" r out
-  for r in empty baddoc nonobject nonstring separator jq_missing \
-           internal:rc3 internal:count internal:rc; do
+  for r in empty baddoc nonobject nonstring separator multidoc jq_missing \
+           internal:rc3 internal:rc2 internal:rc137 internal:count; do
     out="$(bash -c '
         source "'"$helper"'"
         HOOK_INPUT_REASON="$1"
@@ -1480,10 +1581,23 @@ a21_ask_json_parses() {
       ' _ "$r" 2>/dev/null)"
     if [[ -z "$out" ]]; then
       bad "A21 no ask JSON emitted for reason '$r'"
-    elif jq empty <<<"$out" 2>/dev/null; then
-      ok "A21 ask JSON parses for reason '$r'"
-    else
+    elif ! jq empty <<<"$out" 2>/dev/null; then
       bad "A21 ask JSON is malformed for reason '$r'" "$out"
+    else
+      # Parsing is necessary and NOT sufficient. The file's own header records
+      # that Claude Code silently IGNORES an envelope missing `hookEventName`,
+      # so a test asserting only that the JSON parses would pass while the tool
+      # ran with neither a prompt nor guards. Assert the two keys that make the
+      # envelope actionable.
+      local ev dec
+      ev="$(jq -r '.hookSpecificOutput.hookEventName // "<missing>"' <<<"$out")"
+      dec="$(jq -r '.hookSpecificOutput.permissionDecision // "<missing>"' <<<"$out")"
+      if [[ "$ev" == "PreToolUse" && "$dec" == "ask" ]]; then
+        ok "A21 ask envelope is actionable for reason '$r'"
+      else
+        bad "A21 ask envelope would be IGNORED for reason '$r'" \
+            "hookEventName: $ev" "permissionDecision: $dec"
+      fi
     fi
   done
 }
@@ -1505,11 +1619,21 @@ summary
 # conditional on them running.
 #
 # A FLOOR, not equality: the count is developer-incremented, so `-eq` would turn
-# every legitimately-added assertion into a spurious failure. Derived from a
-# green run, deliberately a little below it so ordinary growth does not trip it.
-# Mirrors the MIN_SUITES idiom in .github/scripts/test/run-all.sh, which exists
-# for exactly this reason.
-MIN_ASSERTIONS=60
+# every legitimately-added assertion into a spurious failure. Mirrors the
+# MIN_SUITES idiom in .github/scripts/test/run-all.sh.
+#
+# SET TO THE FULL CURRENT COUNT, and ratcheted upward with the suite. It sat at
+# 60 against a 95-assertion suite, and a review pass measured what that 35 of
+# slack bought an attacker: all 24 assertions added by #7275 could be
+# undispatched and the floor still did not fire (71/71, exit 0). Slack under a
+# floor is attack budget, not padding.
+#
+# NOTE what this floor can and cannot see. It counts TOTAL, which ok()/bad()
+# increment — so it detects assertions that never RAN, and is structurally blind
+# to helpers that ran and lied. That second class is covered by
+# _hi_assert_helpers_can_fail at the top of this file, which reports with
+# printf + exit rather than through the helpers it guards.
+MIN_ASSERTIONS=110
 if (( TOTAL < MIN_ASSERTIONS )); then
   echo "FAIL: only $TOTAL assertions ran (floor $MIN_ASSERTIONS) — the suite reported success having asserted almost nothing" >&2
   exit 1

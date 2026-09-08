@@ -72,12 +72,34 @@ oversize payload, `jq` missing, or our own jq program broken.
 > envelope followed by trailing garbage emitted a complete six-field record while jq exited 5, which
 > the count-only check accepted as a successful parse.
 >
-> #7275 carries the return code out of the substitution in the output and strips it before the
-> split, requires an object root, and splits the enum into `empty` / `baddoc` / `nonobject` and
-> `internal:rc3` / `internal:count` / `internal:rc`. No decision here is amended and no new ordinal
-> is claimed — the posture question this ADR left open (whether `hook_input_should_ask` should be
-> unconditional for hooks gating destructive operations) remains open and is deferred with its
-> measured objections recorded on #7275.
+> #7275 recovers the return code as the command substitution's own EXIT STATUS (`exit "$_hi_rc"`
+> inside it, `|| jq_rc=$?` on the assignment), requires an object root, and splits the enum into
+> `empty` / `baddoc` / `nonobject` / `multidoc` and `internal:rc<N>` / `internal:count`. No decision
+> here is amended and no new ordinal is claimed — the posture question this ADR left open (whether
+> `hook_input_should_ask` should be unconditional for hooks gating destructive operations) remains
+> open and is deferred with its measured objections recorded on #7275.
+>
+> Three corrections review forced, recorded because each was this errata's own defect class
+> reintroduced by its own fix. (1) An intermediate revision carried the rc out INSIDE the output as
+> a trailing field and stripped it before the split; that was sound but co-mingled a control value
+> into a stream the payload partly controls, where the exit status carries the same information
+> with no such argument required. (2) `baddoc` is reached on jq **rc 5 only** — the intermediate
+> revision let every other non-zero code default to it, so a usage error (rc 2) and an OOM kill
+> (137) were reported as the model having sent junk, which is this errata's subject one code over.
+> (3) jq stream-processes concatenated documents, so `{...} {...}` emits an exact multiple of six
+> slots with rc 0; that is now `multidoc` rather than `separator`, which named a cause that had not
+> occurred.
+>
+> **Known and deliberately NOT closed:** an empty object `{}` reaches five empty strings and
+> returns 0 — the same observable state as the `null` root above. `A4` in the contract suite
+> asserts that absence, null and empty are legitimate and must still pass, and a minimal
+> Read-shaped payload is all-empty by the same measure, so closing it means overturning a tested
+> decision. NOT tracked separately, and deliberately so: a CONCUR gate rejected the scope-out
+> filing on the grounds that the reviewer named one approach rather than two and explicitly
+> de-escalated ("I am not claiming an exploit"), and that one envelope serializes one tool call — so
+> `{}` means the model supplied no command and there is nothing for a guard to match. The reasoning
+> is recorded at the `SCOPE` block in `_HOOK_INPUT_JQ` instead, where the next person to touch the
+> predicate will read it. Coverage strictly increased; no payload became more dangerous.
 
 `ask` is what makes the rest of the design collapse to something small. It is not `deny`: the
 operator can approve and proceed, so nothing bricks — which was the *only* reason fail-open was
