@@ -458,8 +458,13 @@ failure_modes:
     detection: "each leg echoes its resolved k/N and the guard asserts N distinct values across N legs; malformed or absent values fail closed with exit 2 under CI"
     alert_route: "required `test` check fails on the offending PR"
   - mode: "CI's declared budget grows back past what the deploy gate can absorb"
-    detection: "Guard 2 asserts max(declared ceilings of test's needs-closure) + test's own ceiling <= CEILING_S/60, reading CEILING_S from web-platform-release.yml rather than restating it"
-    alert_route: "required `test` check fails at the moment of divergence, not at the next deploy"
+    # SUPERSEDED 2026-09-08 (QA). This entry named Guard 2, which was DELETED on the CTO ruling
+    # recorded in the Correction stanza and in ADR-208: arithmetic over DECLARED job ceilings
+    # omits the concurrency-queue term, so it is green on configurations the gate cannot absorb.
+    # Leaving the old text would have left the sharpest hazard reading as mitigated by a control
+    # that does not exist. What actually detects this is the gate measuring its OWN quantity.
+    detection: "await-ci emits a ::warning:: at 0.7 x CEILING_S keyed on time-to-`test` INCLUDING ci.yml's concurrency queue, exported as the soft_breach job output and consumed by notify-slow-ci; plugins/soleur/test/await-ci-ceiling-invariants.test.sh holds the constants in their declared relationships (ADR-072 #7, MAX_ATTEMPTS x INTERVAL_S == CEILING_S) and asserts soft_breach still has a consumer"
+    alert_route: "Slack push from notify-slow-ci one release BEFORE the gate fail-closes; required `test` check fails on a PR that breaks a constant relationship"
   - mode: "ci.yml exceeds the raised ceiling anyway, on a queue-delayed run (mechanism corrected — see the Correction stanza)"
     detection: "await-ci emits its wall-clock ::error:: and notify-gated posts to Slack; the re-armed #5806 criterion is keyed to post-shard time-to-test p100"
     alert_route: "Slack push + red required job, within one release cycle"
@@ -523,7 +528,37 @@ baseline that is indistinguishable from a pass. Must-PASS non-canonical inputs: 
 K** must PASS (totality is required for any K, not only the configured one), and a **reordered
 registration set** must PASS.
 
-### Guard 2 — CI's declared budget is bounded by the deploy gate's ceiling
+### Guard 2 — CI's declared budget is bounded by the deploy gate's ceiling — **REJECTED, NOT SHIPPED**
+
+> **Superseded 2026-09-08 (QA, #7902).** This guard was built and mutation-proven at 10/10, then
+> DELETED on the CTO ruling recorded in the Correction stanza and in ADR-208. The design below is
+> retained verbatim as the **rejected** design so it is not re-proposed — that is the whole reason
+> the section still exists. Do not read anything under this heading as describing shipped code.
+>
+> **Why it was rejected.** Declared job ceilings bound *execution* only. The quantity the deploy
+> gate actually gates is time-to-`test`, which additionally includes `ci.yml`'s own concurrency
+> queue (measured 6–21 min; see the Correction stanza). Arithmetic over declared ceilings omits
+> that term entirely, so this guard is **green on precisely the configurations the gate cannot
+> absorb** — and no headroom factor repairs a missing term. It would have read as a mitigation for
+> the plan's sharpest hazard while guarding nothing.
+>
+> **What ships instead**, splitting the property in two along what each layer can actually measure:
+>
+> 1. The **quantity** is measured by the gate itself — a `::warning::` at `0.7 x CEILING_S` inside
+>    `await-ci`, keyed on elapsed time-to-`test` with the queue included, exported as the
+>    `soft_breach` job output and consumed by `notify-slow-ci`. It fires one release *before* a
+>    fail-closed deploy rather than after.
+> 2. The **constant relationships** are held by
+>    `plugins/soleur/test/await-ci-ceiling-invariants.test.sh` (added at QA): ADR-072 invariant #7
+>    (`timeout-minutes * 60 >= 1.2 x CEILING_S`), `MAX_ATTEMPTS x INTERVAL_S == CEILING_S`, the soft
+>    ceiling being derived rather than restated, and `soft_breach` still having a consumer. Four
+>    invariants, each driven RED by its own mutation, plus a control, a MUSTPASS row and an
+>    instrument self-test — 10/10. Both relationships ship **exactly tight** (4320 >= 4320,
+>    360 x 10 == 3600), so there is no slack to absorb a one-sided edit; before this suite both
+>    were unenforced prose in a workflow comment.
+>
+> Note that `scripts/lint-guard-contract.py` passes on this section either way: it resolves plan
+> *entries*, not guard *implementations*. It cannot tell a shipped guard from a described one.
 
 **Property.** The declared execution ceilings of `test`'s `needs`-closure, plus `test`'s own,
 sum under the deploy gate's `CEILING_S` — so CI cannot be grown past what the gate can absorb
@@ -598,58 +633,107 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
 
 ### Pre-merge (PR)
 
-- [ ] AC1 — `CEILING_S` is `3600`, `await-ci` `timeout-minutes` is `72`, and
+- [x] AC1 — `CEILING_S` is `3600`, `await-ci` `timeout-minutes` is `72`, and
       `timeout-minutes*60 >= 1.2 * CEILING_S` holds (ADR-072 invariant #7).
-- [ ] AC2 — `DRIFT_SUSTAINED_THRESHOLD_MIN` is `207`, and `bash scripts/prod-version-drift-check.test.sh`
+- [x] AC2 — `DRIFT_SUSTAINED_THRESHOLD_MIN` is `207`, and `bash scripts/prod-version-drift-check.test.sh`
       passes with B9 green — proving the threshold moved before/with the ceilings, never after.
-- [ ] AC3 — `await-ci`'s polling logic, `notify-gated`, and the `migrate`/`deploy` `needs`/`if`
-      wiring are otherwise unchanged: the diff on `web-platform-release.yml` touches only the two
-      constants and their comment.
-- [ ] AC4 — `ci.yml`'s `test-scripts` declares `strategy.matrix` with `fail-fast: false`, the job
+- [x] AC3 — **CORRECTED 2026-09-08 (QA).** As written ("touches only the two constants and their
+      comment") this was false of what shipped, and ticking it would have certified a narrower diff
+      than exists. `web-platform-release.yml` also gains the soft-ceiling early warning derived from
+      `CEILING_S`, the `soft_breach`/`soft_elapsed_s` job outputs, `id: await`, and the
+      `notify-slow-ci` consumer — the replacement for the rejected Guard 2. What the AC was
+      protecting **does** hold and is what is now asserted: `await-ci`'s poll/verdict logic,
+      `notify-gated`, and the `migrate`/`deploy` `needs`/`if` wiring are unchanged; every addition
+      is additive and none alters the gate's pass/fail decision.
+- [x] AC4 — `ci.yml`'s `test-scripts` declares `strategy.matrix` with `fail-fast: false`, the job
       key is still literally `test-scripts`, and no leg carries `continue-on-error`.
-- [ ] AC5 — the `test:` job block is byte-unchanged (`git diff origin/main` shows no change within
-      it), proving matrix legs roll into one result.
-- [ ] AC6 — `scripts/required-checks.txt` is unmodified; `grep -c '^test-scripts$'` is `0` and
+- [x] AC5 — **CORRECTED 2026-09-08 (QA).** Measured: the `test:` block is NOT byte-unchanged — it
+      gains `timeout-minutes: 10` and its comment (41 -> 48 lines), so the AC as written was false.
+      The property it existed to prove is verified and holds: the `needs:` list, the `if:`, and the
+      aggregation loop are byte-identical to `origin/main`, which is what shows matrix legs roll up
+      into ONE `needs.test-scripts.result` with no aggregator edit.
+- [x] AC6 — `scripts/required-checks.txt` is unmodified; `grep -c '^test-scripts$'` is `0` and
       `grep -c '^test$'` is `1`. GitHub renders a matrix leg as `test-scripts (1/3)`, so this is
       what makes matrixing safe for branch protection.
-- [ ] AC7 — K is justified in the plan/PR by the Phase 0 `TEST_TIMING_LOG` measurement, naming the
+- [x] AC7 — K is justified in the plan/PR by the Phase 0 `TEST_TIMING_LOG` measurement, naming the
       longest single suite (the floor no K can beat).
-- [ ] AC8 — `SCRIPTS_SHARD` unset runs the full group: `bash scripts/test-all.sh scripts` locally
+- [x] AC8 — `SCRIPTS_SHARD` unset runs the full group: `bash scripts/test-all.sh scripts` locally
       and `TEST_GROUP=all` in `main-health-monitor.yml` behave exactly as before.
-- [ ] AC9 — malformed `SCRIPTS_SHARD` (`0/3`, `4/3`, `1/0`, `abc`, empty-after-trim) exits `2`,
+- [x] AC9 — malformed `SCRIPTS_SHARD` (`0/3`, `4/3`, `1/0`, `abc`, empty-after-trim) exits `2`,
       following the `TEST_GROUP` validation precedent — never a silent full-group or empty run.
-- [ ] AC10 — each leg echoes its resolved `k/N`, and the values across legs are N distinct entries;
+- [x] AC10 — each leg echoes its resolved `k/N`, and the values across legs are N distinct entries;
       a leg that lost its `env:` is detected rather than passing green on the full group.
 - [ ] AC11 — the enumerate mode and the executing pass emit **identical label sequences** with
       `SCRIPTS_SHARD` unset. Without this the enumerate pass and the partition can agree while
       neither matches what CI runs.
-- [ ] AC12 — Guard 1 drives RED on each of its eight mutation rows, each mutation line-range-scoped
-      with its placement asserted, and PASSes on both declared non-canonical inputs.
-- [ ] AC13 — Guard 2 drives RED on each of its seven mutation rows and PASSes on its declared
-      non-canonical input.
-- [ ] AC14 — Guard 1 runs in CI against the real tree from a job that can observe **all** legs
+- [x] AC12 — Guard 1 drives RED on every mutation row, each line-range-scoped with its placement
+      asserted, and PASSes on its declared non-canonical inputs. Measured **13/13** on the shipping
+      battery (`scripts-shard-totality-mutations.sh`), not the eight this AC originally projected:
+      ROW9 (a leg assigned 0 registrations) and ROW10 (a collation-widened, unbounded digit class)
+      were added after review found both were live false-green paths, plus a control, a harness row,
+      the K=1-tautology row and a MUSTPASS row.
+- [x] AC13 — ~~Guard 2 drives RED on each of its seven mutation rows~~ **SUPERSEDED 2026-09-08**:
+      Guard 2 was deleted (Correction stanza / ADR-208). Discharged instead by
+      `plugins/soleur/test/await-ci-ceiling-invariants.test.sh` — 10/10, four invariants each
+      driven RED by its own mutation, one MUSTPASS row proving the assertions are not over-broad,
+      plus a control and an instrument self-test.
+- [x] AC14 — Guard 1 runs in CI against the real tree from a job that can observe **all** legs
       (a non-sharded job invoking the enumerate mode K times, or a join job over uploaded per-leg
       artifacts) — a guard running inside one leg cannot see a cross-leg union.
 - [ ] AC15 — a shard non-selection does not increment `skipped`, does not reach `_ceiling_declined`
       accounting, and does not push a leg to ADR-181's `exit 3`.
-- [ ] AC16 — `bash scripts/lint-orphan-test-suites.test.sh` passes with the widened
+- [x] AC16 — `bash scripts/lint-orphan-test-suites.test.sh` passes with the widened
       `env -u TEST_GROUP -u SCRIPTS_SHARD` assertion.
-- [ ] AC17 — `bash plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` and
+- [x] AC17 — `bash plugins/soleur/test/scripts-shard-runtime-coverage.test.sh` and
       `bash plugins/soleur/test/required-checks-canonical-parity.test.sh` pass.
-- [ ] AC18 — `bash plugins/soleur/test/c4-count-parity.test.sh` passes (10/10).
-- [ ] AC19 — `actionlint` is clean on both edited workflows and each edited `run:` snippet passes
+- [x] AC18 — `bash plugins/soleur/test/c4-count-parity.test.sh` passes (10/10).
+- [x] AC19 — `actionlint` is clean on both edited workflows and each edited `run:` snippet passes
       `bash -c` extraction. `bash -n` is **not** run against workflow YAML.
 - [x] AC20 — ADR-208 exists with `status: accepted`; ADR-072 is **amended, not superseded** (its
       `status:` stays `accepted`), carries the re-measurement, and records that item 4's premise was
       stated in run-wall-clock terms — a quantity the gate does not measure.
-- [ ] AC21 — the ADR ordinal is free across every `origin/*` ref, re-verified immediately before
+- [x] AC21 — the ADR ordinal is free across every `origin/*` ref, re-verified immediately before
       merge; if renumbered, `grep -rn 'ADR-<old>' knowledge-base/project/{plans,specs}/` finds no
       stale reference in this feature's own artifacts.
-- [ ] AC22 — #5806 is updated with the evaluation outcome, the fourteen scoping findings, and the
+- [x] AC22 — #5806 is updated with the evaluation outcome, the fourteen scoping findings, and the
       re-armed criterion keyed to **time-to-`test`**, and is **not** closed.
-- [ ] AC23 — `python3 scripts/lint-guard-contract.py` resolves both guard entries;
+- [x] AC23 — `python3 scripts/lint-guard-contract.py` resolves both guard entries;
       `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` is clean.
 - [ ] AC24 — the PR body uses `Closes #7902` and `Ref #5806` (never `Closes #5806`).
+
+### QA pass — 2026-09-08
+
+Executed the Test Scenarios above as shell checks (18/18), Guard 1 (15/15), the shard-totality
+mutation battery (13/13), the drift suite (151/151), the orphan lint (68/68), the parity suites,
+`bun test` on the merge gate (11/11), and the new `await-ci-ceiling-invariants` guard (10/10).
+
+Four things the pass changed rather than merely recorded:
+
+1. **The `failure_modes` block and the Guard Contract both named Guard 2**, which was deleted on
+   the CTO ruling. The plan's sharpest hazard read as mitigated by a control that does not exist,
+   and `lint-guard-contract.py` cannot catch this — it resolves plan *entries*, not guard
+   *implementations*. Both corrected; the rejected design is retained under an explicit
+   REJECTED heading so it is not re-proposed.
+2. **AC3 and AC5 were literally false as written** and would have been ticked as-is. Corrected to
+   what shipped, with the property each actually protects stated and verified.
+3. **Nothing enforced the await-ci constant relationships.** ADR-072 invariant #7 and
+   "MAX_ATTEMPTS moves with CEILING_S" were unenforced prose in a workflow comment — and #7902's
+   own plan is the proof that such prose does not hold (it omitted MAX_ATTEMPTS, which would have
+   bought 60s instead of 10 min). Both relationships ship exactly tight, so there is no slack for
+   a one-sided edit. Added `plugins/soleur/test/await-ci-ceiling-invariants.test.sh`.
+4. **Adding that suite invalidated the K table by its own stated rule** (375 -> 376; the floor
+   suite keeps its leg, but 187 of 375 suites move legs). Rather than re-simulate an order the
+   next added suite invalidates again, ci.yml now also records an order-independent bound: the
+   whole group is 2115s, so any leg of any partition plus the worst 1260s queue is 3375s, inside
+   the 3600s ceiling. Safety no longer depends on the table.
+
+**Deferred to the full battery, not failed:** AC11 (enumerate vs executing label sequences) and
+AC15 (a shard non-selection touching neither `skipped`, `_ceiling_declined`, nor ADR-181's
+`exit 3`) both need a real EXECUTING run. `test-all.sh` correctly refused with rc=4 — sibling
+full-gate runs were in flight in other worktrees — and overriding would have corrupted their
+measurements and mine. AC15 is verified structurally in the meantime: `exit 3` is driven only by
+`killed` and `_ceiling_declined`, and `_shard_selects` returns before `skip_suite` increments
+`skipped`, so a non-selection cannot reach any of the three.
 
 ### Post-merge (automated)
 
@@ -678,7 +762,13 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
 - Given `SCRIPTS_SHARD=4/3`, when the runner starts, then it exits `2` without running any suite.
 - Given a relevance-declined suite, when its leg runs, then the suite is counted as assigned,
   reported as declined with its reason, and the leg does not exit `3` on that account.
-- Given a closure ceiling raised past `CEILING_S/60`, when Guard 2 runs, then it fails.
+- ~~Given a closure ceiling raised past `CEILING_S/60`, when Guard 2 runs, then it fails.~~
+  **WITHDRAWN 2026-09-08 (QA)** — Guard 2 was deleted on the CTO ruling (see the Correction
+  stanza); a scenario for a control that does not ship cannot be run, and leaving it listed made
+  the QA pass look more complete than it was. Replaced by: given `timeout-minutes` lowered below
+  `1.2 x CEILING_S`, or `MAX_ATTEMPTS` left behind while `CEILING_S` rises, or `soft_breach`
+  losing its consumer, when `await-ci-ceiling-invariants.test.sh` runs, then it fails — all four
+  mutation-proven.
 
 ### Regression Tests
 

@@ -843,7 +843,24 @@ jobs:
     # K=4 measures worse than K=3 here. That is NOT a property of K: it is a property of THIS
     # suite set. Adding two suites and removing one swung K=3 between 15.09 and 20.70 minutes
     # during this PR's own review, purely from ordinal position. Any change to the registered
-    # suite set invalidates this table — RE-SIMULATE before touching K. Making leg composition
+    # suite set invalidates this table — RE-SIMULATE before touching K.
+    #
+    # STALE BY ONE SUITE (2026-09-08, QA). This PR later added
+    # plugins/soleur/test/await-ci-ceiling-invariants.test.sh, taking the set 375 -> 376. Measured
+    # effect: it registers at ordinal 189, so the 8.14-min floor suite (ordinal 148) keeps its leg,
+    # but 187 of the 375 pre-existing suites move legs. The per-leg minutes above were NOT
+    # re-simulated — the Phase 0 job log they came from is a pre-shard run of a job shape that no
+    # longer exists on main, and re-deriving it needs a post-merge log. Post-merge AC25 measures
+    # the real thing anyway.
+    #
+    # WHY THAT IS SAFE TO SHIP WITHOUT RE-SIMULATING — an ORDER-INDEPENDENT bound, which is the
+    # part a reshuffle can never invalidate. The whole group is 35.25 min = 2115s, so ANY leg of
+    # ANY partition is bounded by 2115s. Against the worst measured concurrency-group queue
+    # (21 min = 1260s) that is 3375s, still inside the 3600s CEILING_S with 225s to spare. The
+    # bound holds even in the degenerate case where one leg ran the entire group, so no
+    # reordering — this one or a future one — can push time-to-`test` past the gate. The table
+    # above is what justifies K=3 as the OPTIMUM; this bound is what makes any K=3 assignment
+    # SAFE. Keep both: re-simulate to re-optimise, not to re-establish safety. Making leg composition
     # an owned fact rather than a positional accident (LPT over a checked-in duration table) is
     # tracked as a follow-up, not shipped here.
     #
