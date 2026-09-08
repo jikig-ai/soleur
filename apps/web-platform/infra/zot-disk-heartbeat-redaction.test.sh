@@ -278,8 +278,8 @@ assert_emit "G1-7 tier-4 degrades CLOSED when jq is unavailable" \
 # produced no log output to sample", which is false in exactly this path, on a public issue.
 # That is an unmeasured causal claim newly created by the change that exists to remove them.
 # The tier tag must distinguish suppressed-by-us from nothing-to-see.
-assert_emit "G1-8 a suppressed tier-4 sample is tagged suppressed, not none" \
-  "$TIER4_HEADERS" present "zot_last_err_src=fallback:suppressed" PATH="$NOJQ:/usr/bin:/bin"
+assert_emit "G1-8 a suppressed tier-4 sample is tagged suppressed, not none (flat enum, no colon grammar)" \
+  "$TIER4_HEADERS" present "zot_last_err_src=suppressed" PATH="$NOJQ:/usr/bin:/bin"
 assert_emit "G1-8 a suppressed sample does NOT claim the tier was none" \
   "$TIER4_HEADERS" absent "zot_last_err_src=none" PATH="$NOJQ:/usr/bin:/bin"
 
@@ -309,6 +309,10 @@ assert "G1-s the per-line helper is actually CALLED" \
   "grep -qE 'redact_sample_lines[[:space:]]+' '$RAW'"
 assert "G1-s exactly ONE degrade branch funnels all three RC=1 paths" \
   "[[ \$(grep -cE 'REDACTION_FAILED' '$RAW') -ge 1 ]]"
+# The tier must NOT be overloaded with the redaction outcome: the sentinel in the field is the
+# single carrier, and a second one on zot_last_err_src would be two carriers for one fact.
+assert "G1-s the degrade path does NOT re-tag the tier" \
+  "! grep -qE 'ZOT_ERR_SRC=.*redact_failed' '$RAW'"
 
 # --- Row 8 / harness (a): the guard's own dispatch ------------------------------------------
 for _w in assert assert_emit; do
@@ -327,7 +331,7 @@ if [[ "${#_v_pass}" -ne "$PASS" || "${#_v_fail}" -ne "$FAIL" ]]; then
 fi
 
 # Anti-vacuity floor — printf + exit, never through fail() (ADR-193).
-EXPECTED_MIN=28
+EXPECTED_MIN=29
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s).\n' "$CASES" "$EXPECTED_MIN" >&2
   exit 1

@@ -74,6 +74,15 @@ isolation guard never trips.
 
 ### 3. A direct host POST bypasses VRL redaction, so the shipper owns its own sanitizer
 
+**[SCOPE MARKER added 2026-09-08 (#7500).** "The shipper" is literal. The sibling
+`SOLEUR_ZOT_DISK` reporter POSTs to the same Better Stack source from a *different* host script
+and was never covered by this sanitizer or by `redact()`. Read every redaction claim in this
+section as scoped to `zot-log-shipper.sh`; the gap is closed by
+[ADR-211](ADR-211-zot-last-err-redaction-at-the-producer-and-the-sink.md). Placed here, at the
+claim, rather than only in the amendment at the end of this ADR — a reader arriving mid-file via
+a cross-reference (the modal arrival for a redaction question) never reaches a remote
+amendment.**]**
+
 This is ADR-172 §1's reasoning applied to a host-side emitter. Two DIFFERENT jobs, deliberately
 named apart because conflating them is how dead rules get restored later believing they were safety:
 

@@ -390,9 +390,6 @@ write_files:
       # function bodies -- byte-equality would force this copy to emit `[zot-log-shipper]`-tagged
       # stderr into a channel with no reader, i.e. a gate dictating dead code.
       #
-      # NOTE the divergent shell options: the shipper opens `set -uo pipefail`, this script
-      # `set -u`. Do NOT "fix" that. Adding pipefail here turns the `head -c 300` below into
-      # rc 141 (SIGPIPE) and silently empties the field.
       CRED_HDRS='authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token'
       HDR_KEEP='["content-type","content-length","accept","accept-encoding","user-agent","host","connection","range","docker-distribution-api-version"]'
       redact() {
@@ -463,7 +460,7 @@ write_files:
         # one path where that sentence is false, which is an unmeasured causal claim created by
         # the very change that exists to remove them. Reached whenever jq is absent or the tier-4
         # lines carry no extractable `message` (plain `docker logs` text).
-        if [ -z "$_msgs" ] && [ -n "$ZOT_ERR_RAW" ]; then ZOT_ERR_SRC=fallback:suppressed; fi
+        if [ -z "$_msgs" ] && [ -n "$ZOT_ERR_RAW" ]; then ZOT_ERR_SRC=suppressed; fi
         ZOT_ERR_RAW="$_msgs"
       fi
 
@@ -474,16 +471,18 @@ write_files:
       # The row still ships. It carries ~26 other fields -- pcent, fs_size_gb, zot_restarts,
       # oom_kills_5m, boot_id -- and dropping all of them to withhold one free-text sample would
       # destroy the disk-pressure signal precisely when it is most needed. Degrade the FIELD.
+      # The tier is NOT re-tagged here. `REDACTION_FAILED` is a sentinel in the field the
+      # consumer already reads, so a second carrier on zot_last_err_src would be two carriers
+      # for one fact -- and the tier stays truthful about which tier produced the sample.
       if ! ZOT_ERR_RAW="$(redact_sample_lines "$ZOT_ERR_RAW")"; then
         ZOT_ERR_RAW=REDACTION_FAILED
-        ZOT_ERR_SRC="$ZOT_ERR_SRC:redact_failed"
       fi
       # head -c, NOT tail -c. A Go panic puts `panic: <msg>` on the FIRST line and the frame
       # offsets after it; tail -c keeps the offsets and discards the only part that names the
       # cause. Measured: the 2026-08-04 15:00:02Z sample reached Better Stack carrying only
       # `...scheduler.go:143 +0x265 created by ...poolWorker in goroutine 32` — the panic header
       # had already been truncated away by exactly this bug.
-      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\' | head -c 300); [ -n "$ZOT_LAST_ERR" ] || { ZOT_LAST_ERR=none; case "$ZOT_ERR_SRC" in *:*) : ;; *) ZOT_ERR_SRC=none ;; esac; }
+      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\'); ZOT_LAST_ERR="$${ZOT_LAST_ERR:0:300}"; [ -n "$ZOT_LAST_ERR" ] || { ZOT_LAST_ERR=none; case "$ZOT_ERR_SRC" in suppressed) : ;; *) ZOT_ERR_SRC=none ;; esac; }
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown

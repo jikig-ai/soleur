@@ -132,60 +132,77 @@ NIC_VERDICT=""
 NIC_CAUSE=""
 NIC_DETAIL=""
 
-# --- Sink-side credential scrub before PUBLIC publication (#7500, Guard 2) ----------------
-# scheduled-zot-restart-loop.yml publishes ZOT_ALARM_CAUSE= into a GitHub issue on a PUBLIC
+# --- Sink-side credential scrub before PUBLIC publication (#7500, ADR-211 Layer 2) --------
+# scheduled-zot-restart-loop.yml publishes this block into a GitHub issue on a PUBLIC
 # repository. Measured on #7272 (2026-09-08): of 100 comments, 36 carried a `headers` object
 # and 13 a `clientIP`. No credential leaked -- but only because zot masks `Authorization`
-# upstream, which is a VENDOR DEFAULT this repository does not control. Nothing here masked
-# `Cookie`, `X-Api-Key`, `Proxy-Authorization` or `X-Amz-Security-Token`.
+# upstream, a VENDOR DEFAULT this repository does not control. Nothing here masked `Cookie`,
+# `X-Api-Key`, `Proxy-Authorization` or `X-Amz-Security-Token`.
 #
-# THIS IS A DENYLIST, PERMANENTLY, AND THAT IS DELIBERATE. By the time text reaches this
-# script the producer's `tr -d '"\\'` has destroyed the JSON, so the structural ALLOWLIST
-# that `redact()` applies in zot-log-shipper.sh cannot be reconstructed at this layer -- an
-# unanticipated header name survives it. That limit is asserted as a measured fact in
-# scripts/zot-restart-loop-alarm-scrub.test.sh (case G2-3b) rather than left to be discovered,
-# and it is closed at the PRODUCER, where the structure still exists. Do NOT describe this
-# layer with allowlist language in an ADR or an Art. 30 entry.
+# SUBORDINATE, NEVER COVERAGE-BEARING. The producer (ADR-211 Layer 1) is the authoritative
+# control: it is the only control on the warehouse egress, and once delivered its allowlist
+# strictly dominates this denylist on the zot_last_err field. This layer is the sole control
+# during the unbounded window before the next registry-host-replace -- on the worse, public,
+# non-retractable egress -- and a backstop against producer regression thereafter. It does not
+# guard a channel the producer cannot reach; it guards the same channel EARLIER.
 #
-# SCRUB_CRED_HDRS is byte-identical to CRED_HDRS in apps/web-platform/infra/cloud-init-registry.yml.
+# DENYLIST for as long as the producer ships the sample quote-stripped. That is a
+# payload-integrity choice (ADR-184 §3), not a law -- an unanticipated header name survives
+# here, asserted as a measured fact by zot-restart-loop-alarm-scrub.test.sh case G2-3b, and
+# closed at the producer where the structure still exists.
+#
+# SCRUB_CRED_HDRS is byte-identical to CRED_HDRS in
+# apps/web-platform/infra/cloud-init-registry.yml (both copies), asserted by that suite.
 SCRUB_CRED_HDRS='authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token'
-# Length bound, DERIVED not chosen: the longest static arm in this file measures 546 B and the
-# producer caps `zot_last_err` at 300 B, so the worst legitimate value is ~846 B. 1200 leaves
-# headroom for a future arm while still bounding a pathological input.
-SCRUB_MAXLEN=1200
 
 scrub_public() {
   local s="$1"
-  # Normalise FIRST. Collapsing whitespace and dropping non-printable bytes lets the masking
-  # regex below express its value class without having to match tabs or newlines -- and a
-  # multi-line value would otherwise let sed's line orientation mask only the first line.
-  s="$(LC_ALL=C tr '\n\r\t' '   ' <<<"$s" | LC_ALL=C tr -cd '\40-\176')"
+  # Normalise ONLY what can break the wire or forge a log line. An earlier revision used
+  # `tr -cd '\40-\176'`, which is correct for HOST-DERIVED bytes and wrong here: this
+  # chokepoint's payload is ~95% AUTHORED prose, and the ASCII-only strip silently deleted
+  # every em-dash from operator-facing text on the public issue (measured). This is the
+  # character class the sibling workflow already uses for exactly this problem.
+  s="$(printf '%s' "$s" | LC_ALL=C tr '\n\r\t' '   ' | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177')"
+  s="$(sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g' <<<"$s")"
   # Mask every credential-bearing header value, in both renderings the quote-free warehouse
-  # text can take: the zerolog map form `Name:[value]` and the bare form `Name: value`. The
-  # `g` flag is load-bearing -- a second credential header after a compliant first must also
-  # be masked (case G2-5). `I` is a GNU extension, already relied on by redact().
-  s="$(LC_ALL=C sed -E "s/(${SCRUB_CRED_HDRS})([[:space:]]*:[[:space:]]*)(\[[^]]*\]|[^], }]*)/\1\2REDACTED/gI" <<<"$s")"
-  printf '%s' "${s:0:${SCRUB_MAXLEN}}"
+  # text can take: the zerolog map form `Name:[value]` and the bare form `Name: value`. `g` is
+  # load-bearing (a second credential header after a compliant first, case G2-5); `I` is a GNU
+  # extension already relied on by the producer's redact().
+  LC_ALL=C sed -E "s/(${SCRUB_CRED_HDRS})([[:space:]]*:[[:space:]]*)(\[[^]]*\]|[^], }]*)/\1\2REDACTED/gI" <<<"$s"
 }
+
+# emit_field <KEY> <value> -- the ONE primitive every published field goes through.
+#
+# Not a blanket scrub over the assembled block: scrub_public collapses newlines (it must, or
+# attacker-controlled text in the log tail could forge a `ZOT_ALARM_VERDICT=` line), and a
+# newline is exactly what separates one field from the next. Blanket scrubbing the block
+# therefore flattens it to a single line and every consumer's `^KEY=` parse returns empty --
+# measured, not reasoned about.
+#
+# Not a per-call-site scrub either: enumerating fields is the AP-025 anti-pattern, and a fifth
+# echoed field in a future arm would ship unscrubbed. Routing every field through ONE primitive
+# gets the coverage of the blanket form while preserving the block's structure, and the
+# "nothing bypasses it" assertion below is what keeps it honest.
+emit_field() { printf '%s=%s\n' "$1" "$(scrub_public "$2")"; }
 
 emit_and_exit() {
   # $1 = exit code. Prints the machine-readable verdict block (the workflow greps
   # ZOT_ALARM_VERDICT= + ZOT_ALARM_CAUSE=) then exits with the contract code.
   local code="$1"
   echo "=== ZOT RESTART-LOOP ALARM ==="
-  echo "ZOT_ALARM_VERDICT=${VERDICT}"
-  echo "ZOT_ALARM_EXIT=${code}"
-  echo "ZOT_ALARM_WINDOW=${WINDOW}"
-  echo "ZOT_ALARM_CLIMB_N=${CLIMB_N}"
-  [[ -n "$DETAIL" ]] && echo "ZOT_ALARM_DETAIL=$(scrub_public "$DETAIL")"
-  echo "ZOT_ALARM_CAUSE=$(scrub_public "${CAUSE:-n/a}")"
+  emit_field ZOT_ALARM_VERDICT "${VERDICT}"
+  emit_field ZOT_ALARM_EXIT "${code}"
+  emit_field ZOT_ALARM_WINDOW "${WINDOW}"
+  emit_field ZOT_ALARM_CLIMB_N "${CLIMB_N}"
+  [[ -n "$DETAIL" ]] && emit_field ZOT_ALARM_DETAIL "${DETAIL}"
+  emit_field ZOT_ALARM_CAUSE "${CAUSE:-n/a}"
   # The NIC block rides EVERY exit path — that is the whole point (see above).
   # R24 FAIL-OPEN FIX: an unset NIC_VERDICT means evaluate_nic never ran or died before
   # assigning. Defaulting that to the non-alarming TRANSIENT is invisible to every
   # emptiness test in this file; UNEVALUATED is loud and cannot be mistaken for health.
-  echo "NIC_ALARM_VERDICT=${NIC_VERDICT:-UNEVALUATED}"
-  [[ -n "$NIC_DETAIL" ]] && echo "NIC_ALARM_DETAIL=$(scrub_public "$NIC_DETAIL")"
-  echo "NIC_ALARM_CAUSE=$(scrub_public "${NIC_CAUSE:-n/a}")"
+  emit_field NIC_ALARM_VERDICT "${NIC_VERDICT:-UNEVALUATED}"
+  [[ -n "$NIC_DETAIL" ]] && emit_field NIC_ALARM_DETAIL "${NIC_DETAIL}"
+  emit_field NIC_ALARM_CAUSE "${NIC_CAUSE:-n/a}"
   echo "=============================="
   exit "$code"
 }
@@ -593,6 +610,15 @@ if [[ "$has_137" == true || "$climb_fire" == true || "$max_oom5m" -gt 0 ]]; then
     # ` zot_last_err=` cannot match inside ` zot_last_err_src=` (the next byte is `_`, not `=`),
     # so the greedy prefix above still lands on the real field.
     err_src="$(printf '%s\n' "$err_row" | sed -n 's/.* zot_last_err_src=\([^ ]*\).*/\1/p')"
+    # Redaction failure is read from the SENTINEL in the field the consumer already reads --
+    # not from a second carrier on the tier, which would be two carriers for one fact.
+    # PREFIX glob, not `==`. The extracted tail keeps JSON-envelope residue (measured:
+    # `REDACTION_FAILED\"}`), so an exact comparison never matches and this whole branch would
+    # be dead code in production while reading as live. Caught only because the consumer-side
+    # fixtures for this vocabulary were added; it was invisible to every other gate.
+    if [[ "$last_err" == REDACTION_FAILED* ]]; then
+      tail_claim="the sample could not be redacted and was withheld AT THE PRODUCER (tier=${err_src:-unknown}); no tail is available -- this is the fail-safe firing, not an absence of evidence"
+    else
     case "${err_src:-}" in
       panic|error|warn)
         tail_claim="zot_last_err tail (tier=${err_src}, a matched diagnostic line): ${last_err:-none}" ;;
@@ -600,18 +626,17 @@ if [[ "$has_137" == true || "$climb_fire" == true || "$max_oom5m" -gt 0 ]]; then
         tail_claim="tier=fallback: NO diagnostic line matched, so this is a routine log tail that names NO cause -- do not read it as one (ADR-166): ${last_err:-none}" ;;
       none)
         tail_claim="tier=none: zot produced no log output to sample" ;;
-      fallback:suppressed)
+      suppressed)
         # SUPPRESSED, not silent. zot DID produce output; the producer's tier gate withheld it
         # because no diagnostic `message` could be extracted. Saying "zot produced no log output"
         # here would be an unmeasured claim (ADR-166) published to a public issue.
-        tail_claim="tier=fallback:suppressed: zot produced output but it was a routine tail with no extractable message, so the producer withheld it -- this is the gate working, NOT an absence of logs" ;;
-      *redact_failed)
-        tail_claim="tier=${err_src}: the sample could not be redacted and was withheld AT THE PRODUCER, so no tail is available -- this is the fail-safe firing, not an absence of evidence" ;;
+        tail_claim="tier=suppressed: zot produced output but it was a routine tail with no extractable message, so the producer withheld it -- this is the gate working, NOT an absence of logs" ;;
       "")
         tail_claim="zot_last_err tail, PROVENANCE UNKNOWN -- this row carries no zot_last_err_src, so it predates the tier-tagging emitter and the sample may be routine output rather than a diagnostic: ${last_err:-none}" ;;
       *)
         tail_claim="zot_last_err tail (tier=${err_src}, unrecognised by this checker -- treat the provenance as unverified): ${last_err:-none}" ;;
     esac
+    fi
     CAUSE="non-OOM crash-loop — zot_restarts climbed across >= ${CLIMB_N} consecutive events; ${tail_claim}. NEXT (read-only, no SSH, no host change): dispatch registry-zot-inventory.yml to measure what is actually on the store volume before reaching for a destroy — this alarm's own SOLEUR_ZOT_DISK source has no per-path breakdown"
   fi
   DETAIL="newest boot_id=${NEWEST_BOOT}: 137=${has_137} climb_run=${max_run}(>=${CLIMB_N}?${climb_fire}) oom_kills_5m_peak=${max_oom5m}"

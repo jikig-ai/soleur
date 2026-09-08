@@ -31,7 +31,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECKER="$SCRIPT_DIR/zot-restart-loop-alarm.sh"
-WORKFLOW="$(cd "$SCRIPT_DIR/.." && pwd)/.github/workflows/scheduled-zot-restart-loop.yml"
+CI_TEMPLATE="$(cd "$SCRIPT_DIR/.." && pwd)/apps/web-platform/infra/cloud-init-registry.yml"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -90,6 +90,8 @@ ALREADY_REDACTED='{level:info,message:HTTP API,headers:{Authorization:REDACTED C
 # the scope-limit section exists to prevent, so it is pinned here rather than left to be found.
 HDRS_BARE_SPACED='level:info message:HTTP API Cookie: BARE-FIRST BARE-SECOND-SURVIVES clientIP:10.0.1.30'
 PANIC_TIER1='panic: runtime error: invalid memory address [signal SIGSEGV] goroutine 42'
+# Tier-4 shaped sample for the suppressed-vs-silent rows (G2-6).
+TIER4_HEADERS='{level:info,message:HTTP API,headers:{Cookie:[session=TIER4-SECRET]},clientIP:10.0.1.30}'
 
 # zline_src <dt> <boot> <restarts> <exit_code> <oom5m> <oomkilled> <src> <lasterr>
 # As zline, but carries zot_last_err_src -- the tier tag the producer already emits
@@ -311,12 +313,30 @@ assert_field_nonempty "G2-nic cause rides the crash-loop exit path" NIC_ALARM_CA
 # the scrub must be applied inside emit_and_exit, so a NEW arm assigning CAUSE is covered by
 # construction. Anchored on the function-call shape, never a bare token that a comment can carry.
 assert_struct "G2-1 scrub helper defined" "$CHECKER" '^scrub_public\(\) \{' 1
-assert_struct "G2-2 scrub applied at the emit chokepoint" "$CHECKER" '\$\(scrub_public ' 4
+# BLANKET, not per-field. Anchored on the call WITH its argument at line start -- a bare
+# `scrub_public` token is satisfied by the comments explaining it. The previous form of this
+# suite's workflow assertion was exactly that bare-token grep, and deleting the code it
+# guarded left it green on two comment matches (cq-assert-anchor-not-bare-token).
+assert_struct "G2-2 one emit primitive routes every published field" "$CHECKER" '^emit_field\(\) \{' 1
+# Per-field enumeration must NOT come back: it is the AP-025 anti-pattern, and a fifth echoed
+# field in a future arm would ship unscrubbed. Asserted as an absence with a positive
+# companion above, so "the scrub was deleted" and "the scrub is blanket" are distinguishable.
+# NOTHING BYPASSES THE PRIMITIVE. This is the assertion that makes emit_field equivalent to a
+# blanket scrub: a future arm that echoes a field directly would ship it unscrubbed, so the
+# absence is asserted rather than trusted. Anchored on the emit shape, not a bare token.
+assert_struct "G2-2b no published field bypasses emit_field" "$CHECKER" '^[[:space:]]*echo "(ZOT|NIC)_ALARM_' 0
 
-# --- Row 4: the workflow publication boundary ----------------------------------------------
-# AP-025: the script chokepoint protects one consumer of stdout; the workflow is a SECOND
-# producer into $out. Both layers, or the property is only half true.
-assert_struct "G2-4 workflow boundary scrubs before publication" "$WORKFLOW" 'scrub_public|SCRUB_CRED_HDRS' 1
+# --- The credential denylist is byte-identical across FILES ---------------------------------
+# The boot guard asserts the two cloud-init copies match each other; nothing related the sink
+# copy to them. Anchored on the canonical-source files, per the documented fallback for
+# literals that cross a .sh/.yml boundary where no shared file can exist.
+CRED_UNIQ="$(LC_ALL=C grep -hoE "^[[:space:]]*(SCRUB_)?CRED_HDRS='[^']*'" "$CHECKER" "$CI_TEMPLATE" | sed "s/.*=//" | sort -u | wc -l)"
+CASES=$((CASES + 1)); USED_assert_struct=$((USED_assert_struct + 1))
+if [[ "$CRED_UNIQ" == "1" ]]; then
+  pass "G2-4 the credential denylist is byte-identical across the sink and both producer copies"
+else
+  fail "G2-4 denylist drift: $CRED_UNIQ distinct values across zot-restart-loop-alarm.sh and cloud-init-registry.yml"
+fi
 
 # --- Tier provenance (#7500 task 2.5/2.7) --------------------------------------------------
 # ADR-166: never name an unmeasured cause. The producer already tags which of its four tiers
@@ -344,6 +364,32 @@ assert_cause_contains "G2-legacy row declares unknown provenance" ZOT_ALARM_CAUS
 reset_fix; crash_loop_fixture "$PANIC_TIER1"
 assert_cause_contains "G2-legacy row still carries the tail" ZOT_ALARM_CAUSE "panic:"
 
+# --- G2-6: the vocabulary this PR ADDS, at the CONSUMER ------------------------------------
+# Both members had zero coverage in either suite: deleting either `case` arm from the checker
+# left everything green. They are the PR's headline ADR-166 correctness claim, so they are the
+# arms that most needed pinning.
+reset_fix; crash_loop_fixture_src "suppressed" "$TIER4_HEADERS"
+assert_cause_contains "G2-6 a suppressed sample is reported as suppressed, not silent" \
+  ZOT_ALARM_CAUSE "tier=suppressed"
+reset_fix; crash_loop_fixture_src "suppressed" "$TIER4_HEADERS"
+assert_cause_masks "G2-6 a suppressed sample does not claim zot produced nothing" \
+  ZOT_ALARM_CAUSE "produced no log output"
+
+# The redaction-failure path is read from the SENTINEL in the field, not a second tier carrier.
+reset_fix; crash_loop_fixture_src "error" "REDACTION_FAILED"
+assert_cause_contains "G2-6 REDACTION_FAILED is reported as the fail-safe firing" \
+  ZOT_ALARM_CAUSE "fail-safe firing"
+reset_fix; crash_loop_fixture_src "error" "REDACTION_FAILED"
+assert_cause_masks "G2-6 a redaction failure is not framed as an absence of evidence" \
+  ZOT_ALARM_CAUSE "a matched diagnostic line"
+
+# --- G2-7: the scrub must not corrupt AUTHORED prose ---------------------------------------
+# An earlier revision normalised with `tr -cd '\40-\176'`, which deleted every em-dash from
+# operator-facing text on the PUBLIC issue. Correct for host-derived bytes, wrong at a
+# chokepoint whose payload is mostly authored.
+reset_fix; oom_fixture
+assert_cause_contains "G2-7 em-dashes in authored prose survive the scrub" ZOT_ALARM_CAUSE "—"
+
 # --- Row 6 / harness (a): the guard's own dispatch ------------------------------------------
 # A suite whose helpers were never called reports 0 passed / 0 failed and exits 0 — which is
 # byte-identical to a healthy run. These counters make "the loop ran" observable.
@@ -367,7 +413,7 @@ fi
 
 # Anti-vacuity floor. Reported with printf + exit, NEVER through fail() — a floor that calls the
 # helper it backstops is disarmed by the same edit that disarms the helper (ADR-193).
-EXPECTED_MIN=20
+EXPECTED_MIN=26
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s) — a case was silently skipped.\n' \
     "$CASES" "$EXPECTED_MIN" >&2

@@ -106,7 +106,7 @@ than trading against it.
 | **2. Accept as a bounded residual** | Rejected | The bound is a vendor default (`zot` masking `Authorization`) plus an ingress topology, neither of which this repository controls. A residual whose bound is somebody else's default is not bounded. |
 | **3. A narrower header-shaped scrub at the producer** | Rejected **at the producer**, adopted **at the sink** | A substring scrub is necessarily a *denylist*, so an unanticipated header name survives it. At the producer the JSON structure still exists, so an allowlist is available and is strictly better. At the sink the structure is already gone (see the scope limit below), so a denylist is the *only* thing available there — which is why option 3 is the right answer at layer 2 and the wrong one at layer 1. |
 | **4 (adopted). Share `redact()` per line, discard the drop semantics** | **Adopted** | Buys the allowlist property at the producer AND keeps the disk signal. |
-| **5 (adopted, additional). Tier gate suppressing tier 4** | **Adopted** | Best ratio on offer: tier 4 produced ~100% of the measured header exposure and named a cause **zero** times in 21 hours. Suppressing it removes most of the exposure and loses nothing measurable. |
+| **5 (adopted, additional). Tier gate suppressing tier 4** | **Adopted** | Best ratio on offer: tier 4 produced ~100% of the measured header exposure and named a cause **zero** times in 21 hours. *(That window is outside the warehouse's hot table, so the derivation is not re-runnable from here — it is cited from the plan's Research Insights rather than from a live query, and a reader should treat it as a recorded measurement, not a reproducible one.)* Suppressing it removes most of the exposure and loses nothing measurable. |
 
 **Cost was not a decision input, and the issue's framing of it was wrong twice.** The issue cites
 "ADR-185: 8,000 B headroom … 13,136 B stored". Measured at implementation: 13,692 B stored
@@ -115,6 +115,26 @@ the budget is `REGISTRY_GZIP_BUDGET = 20_000`. The change measured **13,692 → 
 leaving 5,900 B. Note also that the plan's own estimate for this option was +64 B, so the real
 cost is ~6× the estimate and still not close to binding. The dominant cost is `ForceNew`, which
 every option pays identically.
+
+### An option the plan never enumerated, surfaced at review and declined
+
+The plan framed the producer-side sharing question as a binary — duplicate the function, or
+`source` a shared file at runtime — and correctly rejected the second (a broken `source` on a
+cloud-init-only host fails silently and is repairable only by a destructive replace). Review
+pointed out a third option the file itself uses eleven times: this cloud-init is rendered by
+`templatefile()`, so the function body could be a terraform `local` interpolated into **both**
+`write_files` blocks. The rendered host still carries two independent copies, so the silent-
+`source` objection does not apply, and drift becomes impossible by construction rather than
+caught by a gate.
+
+**Declined for this change, and the reasoning is recorded rather than the conclusion.** The two
+design reviewers disagreed: the simplicity lens recommended the interpolation and deleting the
+drift gate; the architecture lens independently read the same gate and endorsed the current
+boundary, on the grounds that rejecting body byte-equality (because it would dictate dead
+`[zot-log-shipper]`-tagged stderr) is a correct call. Given that split, on a boot-critical file
+whose failure mode is an unbootable host repairable only by replace, the change is not worth
+making inside a security fix. It is a real option and should be evaluated on its own; the drift
+gate is what makes deferring it safe.
 
 ## Scope limit — what this does NOT claim
 
@@ -131,9 +151,13 @@ Art. 30 register cites it:
   undocumented limit is exactly what this section exists to prevent. Pinned by
   `scripts/zot-restart-loop-alarm-scrub.test.sh` case `G2-3c`, which asserts the residual
   **survives**, so the boundary is measured rather than discovered.
-- **The sink layer is a DENYLIST, permanently.** By the time text reaches the alarm, the
-  producer's `tr -d '"\\'` has destroyed the JSON, so the structural allowlist cannot be
-  reconstructed there. An unanticipated header name **survives** the sink scrub. This is asserted
+- **The sink layer is a DENYLIST for as long as the producer ships the sample quote-stripped.**
+  By the time text reaches the alarm, the producer's `tr -d '"\\'` has destroyed the JSON, so
+  the structural allowlist cannot be reconstructed there. **[CORRECTED — an earlier draft said
+  "permanently". That overclaims: the quote strip is a payload-integrity *choice* (ADR-184 §3),
+  changeable at the next replace, not a law. Recording it as permanent would foreclose an option
+  this ADR never evaluated — e.g. a producer that JSON-escapes the tail instead of stripping
+  quotes, which would let the sink recover the allowlist.]** An unanticipated header name **survives** the sink scrub. This is asserted
   as a measured fact by `scripts/zot-restart-loop-alarm-scrub.test.sh` (case `G2-3b`) rather than
   left for a regulator to discover. **Do not describe the sink layer with allowlist language.**
 - **Delivery state:** the producer half is **inert until the next `registry-host-replace`**. The
@@ -143,9 +167,22 @@ Art. 30 register cites it:
 
 ## Consequences
 
-- Two controls guarding **disjoint egresses**: the producer covers the Better Stack warehouse,
-  which the sink never touches; the sink covers the public GitHub issue, which the producer
-  reaches only after a replace. Neither substitutes for the other at any point in time.
+- **[CORRECTED at review — an earlier draft of this bullet said the two controls guard
+  "disjoint egresses" and that "neither substitutes for the other at any point in time". That is
+  false in one direction, and it becomes false at exactly the moment the producer lands.]** The
+  two controls sit at different points on **one** path, not on two disjoint egresses — the
+  sink's input *is* the producer's output. The correct framing is authoritative/subordinate
+  (AP-018), not mirrored:
+  - The **producer is authoritative.** It is the only control on the warehouse egress, and once
+    delivered its allowlist strictly dominates the sink's denylist on this field — even the
+    producer's *non-JSON* branch is broader on the value side (`[^,}]*` runs to the comma or
+    brace, where the sink stops at a space; that is the `G2-3c` limit recorded above).
+  - The **sink is subordinate and never coverage-bearing.** It is the sole control during the
+    unbounded window before the next replace — on the worse, public, non-retractable egress —
+    and a backstop against producer regression or a replace shipping a divergent template
+    thereafter. The producer substitutes for the sink after delivery; the sink never substitutes
+    for the producer, because the warehouse egress is upstream of it.
+  This framing survives the delivery event. The earlier one silently became false at it.
 - They are **not** mirrored controls at one threshold (the shape
   `2026-05-06-defense-in-depth-…` warns about). An earlier draft argued the sink also uniquely
   covers pre-fix rows inside the alarm's 3-hour window; that was **falsified** and withdrawn —
@@ -153,7 +190,12 @@ Art. 30 register cites it:
   boot, so pre-fix rows are unreachable by construction the instant the producer half exists.
   Recorded rather than deleted, because a wrong recorded reason is the failure mode a decision
   record is supposed to prevent.
-- **Strongest re-evaluation trigger:** `hcloud_firewall.registry` currently carries zero inbound
+- **Primary re-evaluation trigger: the next `registry-host-replace`.** That is the event that
+  flips Layer 1 from inert to live, the event every legal record in this change is dated
+  against, and — unlike the firewall change below — the one that is going to happen. Tracked at
+  #7960. **[An earlier draft named the firewall as "the strongest trigger", which ranked a
+  hypothetical above a scheduled certainty.]**
+- **Severity-escalation trigger:** `hcloud_firewall.registry` currently carries zero inbound
   rules; ingress is intra-`10.0.1.0/24` plus a Cloudflare tunnel. Any change admitting public
   ingress raises the severity of this decision **and** converts `clientIP` into Art. 4(1)
   personal data on a path this ADR explicitly does not redact.

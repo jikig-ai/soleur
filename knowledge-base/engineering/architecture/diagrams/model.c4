@@ -16,9 +16,6 @@ model {
     description "Vendors, regulators, and counsel emailing the operator address. Their statutory/operational mail is the email-triage inbox's inbound source."
   }
 
-  // External actor — an involuntary third-party data subject whose conversation
-  // PII the operator captures in the beta-CRM (ADR-102 / mig 126). The operator
-  // is the controller; the beta tester never touches the store directly.
   // External actor — ANYONE ON THE INTERNET reading a public GitHub issue (#7500).
   // Modelled because the restart-loop alarm PUBLISHES host log output into an issue on a
   // PUBLIC repository, which is an egress this model carried no edge for at all: the two
@@ -31,6 +28,9 @@ model {
     description "Any unauthenticated reader of the public jikig-ai/soleur GitHub repository. Receives whatever automation publishes into issue bodies and comments. Not a data subject relationship — a PUBLICATION surface, and the one egress in this model that cannot be retracted once written."
   }
 
+  // External actor — an involuntary third-party data subject whose conversation
+  // PII the operator captures in the beta-CRM (ADR-102 / mig 126). The operator
+  // is the controller; the beta tester never touches the store directly.
   betaContact = actor "Beta Tester / Prospect" {
     #external
     description "A beta tester or prospect the operator is in sales/product conversations with. The origin of the third-party contact + conversation PII captured in the owner-private beta-CRM (beta_contacts / interview_notes). An involuntary data subject (Art. 14); no direct access to the store."
@@ -616,7 +616,7 @@ model {
   // zot's own container log. This edge was missing entirely, so the model described the
   // warehouse path (redacted, private) and not the public one (permanent, world-readable).
   // Both layers of the scrub (ADR-211) exist to bound what crosses THIS edge.
-  github -> publicReader "Publishes the zot restart-loop alarm verdict into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer."
+  github -> publicReader "Publishes the zot restart-loop alarm verdict into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer (ADR-211 Layer 1 — INERT until the next registry-host-replace, so this edge is currently guarded by the denylist alone)."
   // ---- Sentry — the LARGER of two alerting planes (#6436, ADR-031) --------
   // Three emitters + a paging exit. It is NOT the only exit: `betterstack` pages
   // independently (see its edge to founder) — that second source exists so a Sentry

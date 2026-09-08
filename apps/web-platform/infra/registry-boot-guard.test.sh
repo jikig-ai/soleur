@@ -386,8 +386,13 @@ assert "#7500 the per-line redaction precedes the sanitizer (post-sanitizer, the
 # The degrade path -- one branch, and it must not overload the tier enum.
 assert "#7500 a single degrade branch sets the REDACTION_FAILED placeholder" \
   "grep -qF 'ZOT_ERR_RAW=REDACTION_FAILED' '$CI'"
-assert "#7500 the degrade path tags the tier as <tier>:redact_failed, not a new bare enum value" \
-  "grep -qF 'ZOT_ERR_SRC:redact_failed' '$CI'"
+# The tier is NOT re-tagged on redaction failure -- REDACTION_FAILED in the field is the single
+# carrier. A second carrier on zot_last_err_src would be two carriers for one fact, and it also
+# introduced a colon grammar for what is now a flat enum member.
+assert "#7500 the degrade path does NOT overload the tier enum" \
+  "! grep -qE 'ZOT_ERR_SRC=.*redact_failed' '$CI'"
+assert "#7500 the suppressed tier is a FLAT enum member, not a colon-qualified form" \
+  "grep -qF 'ZOT_ERR_SRC=suppressed' '$CI' && ! grep -qF 'fallback:suppressed' '$CI'"
 
 # The tier gate must degrade CLOSED -- never fall back to the raw line when jq is unavailable.
 assert "#7500 the tier-4 message extraction is jq-gated (degrade closed)" \
@@ -400,7 +405,7 @@ assert "#7500 the tier-4 message extraction is jq-gated (degrade closed)" \
 # Set to the full count at the time of writing; raise it in lockstep, never lower it to pass.
 # 88 before #7500; this PR adds 12 (the two-copy drift check, the order pins and the
 # degrade/tier-tag assertions). Measured, not tallied by hand.
-MIN_ASSERTIONS=100
+MIN_ASSERTIONS=101
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2
