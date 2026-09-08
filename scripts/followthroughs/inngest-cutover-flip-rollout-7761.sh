@@ -354,22 +354,40 @@ if [[ "$BOUNDARY_PROVENANCE" == "derived" ]]; then
   # so a colocated web host would emit rows carrying the pinned digest. Dormant today
   # (web_colocate_inngest defaults false), latent tomorrow.
   mine_dt() {
-    local window="$1" term="$2" rows qrc
+    local window="$1" term="$2" rows qrc out jrc
     rows="$("$QUERY" --since "$window" --grep "$term" --limit "$DERIVE_LIMIT" 2>/dev/null)"; qrc=$?
     if [[ "$qrc" -ne 0 ]]; then printf '__QUERY_FAILED__%s' "$qrc"; return 0; fi
-    printf '%s\n' "$rows" \
+    # `(fromjson?) as $row`, PARENTHESISED. `fromjson? as $row` is a SYNTAX ERROR in jq 1.7.x --
+    # the grammar did not accept a postfix `?` immediately before `as` until 1.8 -- and GitHub's
+    # runners ship 1.7. Reproduced locally against a downloaded jq-1.7.1: the whole filter fails to
+    # COMPILE, `2>/dev/null` ate the error, the pipeline yielded nothing, and the caller reported
+    # `probe_channel_dark` -- "the host emitted no rows at all". So on every jq<1.8 host the entire
+    # derived-boundary arm was a permanent silent no-op that ACCUSED THE HOST, which is precisely
+    # the class this probe's header exists to retire. Sibling mine() spells the same thing with a
+    # PIPE (`fromjson? | .raw?`), which is why only the derivation broke.
+    # A compile error is not a data condition. Route a jq failure to its own marker so it can never
+    # again be read as silence from the host.
+    out="$(printf '%s\n' "$rows" \
       | jq -R -r --arg h "$FLIP_HOST" --arg hn "$FLIP_HOST_NAME" \
-           'fromjson? as $row
+           '(fromjson?) as $row
             | ($row.raw? | fromjson?) as $m
             | select($m != null)
             | select($m.host == $h and $m.host_name == $hn)
-            | "\($row.dt)\t\($m.message // "")"' 2>/dev/null
+            | "\($row.dt)\t\($m.message // "")"' 2>/dev/null)"; jrc=$?
+    if [[ "$jrc" -ne 0 ]]; then printf '__DECODE_FAILED__%s' "$jrc"; return 0; fi
+    printf '%s' "$out"
   }
   DERIVE_ROWS="$(mine_dt "$DERIVE_WINDOW" "SOLEUR_INNGEST_SERVER_PROBE")"
   case "$DERIVE_ROWS" in
     __QUERY_FAILED__*)
       echo "TRANSIENT: reason=query_failed rc=${DERIVE_ROWS#__QUERY_FAILED__} — the read path did" >&2
       echo "           not answer, so no boundary could be derived. Nothing was measured." >&2
+      exit 2 ;;
+    __DECODE_FAILED__*)
+      echo "TRANSIENT: reason=row_decode_failed rc=${DERIVE_ROWS#__DECODE_FAILED__} jq=$(jq --version 2>/dev/null || echo unknown)" >&2
+      echo "           — jq did not decode the rows, so NOTHING was measured about the host. This is" >&2
+      echo "           a defect in this probe or its environment, NOT a statement about the rollout;" >&2
+      echo "           reporting it as a dark channel would accuse the host of the probe's own fault." >&2
       exit 2 ;;
   esac
   # Field-isolate image_ref from the decoded message rather than substring-matching the row

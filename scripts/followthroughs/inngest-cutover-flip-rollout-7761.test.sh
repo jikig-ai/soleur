@@ -543,7 +543,22 @@ rc="$(run_probe "$(make_stub "$f")" FLIP_ROLLOUT_AFTER= FLIP_ROLLOUT_PIN_FILE="$
 [[ "$(probe_out)" == *"observed=sha256:bbbb"* ]] && pass "reports the OBSERVED digest alongside the pinned one" \
   || fail "observed digest not reported: $(probe_out)"
 
-MIN_ASSERTIONS=53
+# --- D9: the jq filters must COMPILE on jq 1.7, which is what CI and the sweeper ship ---------
+# #7695. `fromjson? as $row` is a SYNTAX ERROR in jq 1.7.x (the grammar rejects a postfix `?`
+# immediately before `as`; 1.8 relaxed it). The probe carried exactly that, `2>/dev/null` ate the
+# compile error, and the derived-boundary arm silently reported `probe_channel_dark` -- accusing
+# the host of emitting nothing -- on EVERY jq<1.8 machine. Locally invisible on jq 1.8.1; red in
+# CI. Reproduced by running this suite against a downloaded jq-1.7.1: 43/53 with 10 such FAILs.
+#
+# A grep, not a version probe: the runner's own jq is 1.8 as often as not, so asserting on
+# behaviour here would pass on the machine that cannot see the bug. This pins the SHAPE.
+echo "TEST: #7695 no jq filter uses the jq-1.8-only \`? as \$var\` form"
+_jq_as_hits="$(grep -nE '\? as \$' "$TARGET" | grep -v '^[[:space:]]*#' | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+[[ -z "$_jq_as_hits" ]] \
+  && pass "no bare '? as \$' in $TARGET (jq 1.7 would fail to COMPILE it, silently)" \
+  || fail "jq-1.8-only '? as \$' form found — parenthesise it as '(expr?) as \$v': $_jq_as_hits"
+
+MIN_ASSERTIONS=54
 if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
   # printf + exit, NOT fail() (ADR-193): routing the floor through the counter it exists to
   # protect means one edit disarms both. See the instrument self-test at the top.
