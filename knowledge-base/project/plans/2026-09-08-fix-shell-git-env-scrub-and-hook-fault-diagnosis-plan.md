@@ -30,13 +30,13 @@ and the case stays green while proving nothing.
 The second (#7275) is that when a PreToolUse hook cannot parse its stdin it records the fault and
 runs the tool call with its guards disarmed, and the recorded reason cannot distinguish the causes.
 
-Both premises survived validation; neither survived unchanged. The corrections are the substance of
-this plan rather than footnotes to it, and two of them shrank the work by an order of magnitude:
+Both premises survived validation; neither survived unchanged. The corrections shrank the work
+substantially, and they are the substance of this plan rather than footnotes to it:
 
 - The shell scrub wrapper #7822 proposes was **already considered and explicitly cut** by the merged
   #7833 plan, and the sweep it implies is **already tracked as #7849** — where it is not merely
-  deferred but has a *named exit condition*. Measured against that condition, the sweep this plan
-  owes is **three files**, not the twenty-five the issue's framing implies.
+  deferred but has a *named exit condition*. Measured against that condition the sweep this plan
+  owes is five files, not the twenty-five the issue's framing implies.
 - The classifier defect in #7275 is **deeper than the issue states**. The issue reads the `else`
   branch as collapsing two causes. Measured here, the variable that branch switches on is never
   populated: `PIPESTATUS` does not survive the command substitution it is read after, so `jq_rc` is
@@ -44,63 +44,50 @@ this plan rather than footnotes to it, and two of them shrank the work by an ord
   `unparseable`. The file's comment that "jq's exit code already makes the only distinction that
   matters" describes a discriminator the code never reads.
 
-This plan repairs that discriminator, splits the reason enum onto it, brings the telemetry into
-conformance with a decision ADR-157 already made, and closes the shell containment gap along the
-line the repository has already chosen — without rebuilding what was cut or re-doing what is owned.
+A five-agent review then cut a third of what remained. Two proposed guards were removed — one whose
+verdict certified "contained **or** refuses to run", the other whose ratchet could not detect the
+regression it named — and the review's most valuable finding was that the containment regression
+test, as first drafted, would have gone green by aborting before it tested anything.
 
 ## Research Insights
 
-### Premise Validation (Phase 0.6)
+### Premise validation (Phase 0.6)
 
-| Premise (as given) | Verified? | Finding |
+| Premise (as given) | Verdict | Finding |
 |---|---|---|
 | #7822 and #7275 are open and unresolved | **Holds** | Both `OPEN`, no closing PR references. |
-| TS half of #7822 shipped: `plugins/soleur/test/lib/git-clean-env.ts` | **Holds, and is superseded** | It exists, but has since been succeeded by `plugins/soleur/test/lib/git-fixture-env.ts`, which adds a discovery ceiling, config hardening, identity pinning and a non-`GIT_`-prefixed execution-vector list. The reference design is `git-fixture-env.ts`. |
-| The shell half is untouched | **Refuted in part** | A shell tier exists: `plugins/soleur/test/test-helpers.sh` carries a fail-loud **tripwire** (`exit 97`) over nine git-location variables, sourced by 47 suites. Three entry points already `unset` the same nine. What does not exist is a shell *scrub helper* — and the #7833 plan cut that deliberately. |
-| jq rc 5 and rc 0 both fall through the same `else` | **Holds, and understates it** | The return code is never read at all. See R6. |
-| `rule-metrics-aggregate.sh` exits non-zero after writing | **Holds; the id list has drifted** | Reproduced at exit 5 against a copy of the live log. 12 orphan ids now, not the 7 the issue lists. |
-| ADR-194 cleanup and the ship Incident-PIR gate are out of scope | **Respected** | Neither is touched, planned, or referenced as work. |
+| TS half of #7822 shipped via `plugins/soleur/test/lib/git-clean-env.ts` | **Holds, superseded** | Succeeded by `git-fixture-env.ts`, which adds a discovery ceiling, config hardening, identity pinning and a non-`GIT_`-prefixed execution-vector list. That is the reference design. |
+| The shell half is untouched | **Refuted in part** | A shell tier exists: `plugins/soleur/test/test-helpers.sh` carries a fail-loud **tripwire** (`exit 97`), and three entry points already `unset` a nine-name list. What does not exist is a shell *scrub helper* — cut deliberately by the #7833 plan. |
+| jq rc 5 and rc 0 fall through the same `else` | **Holds, understates it** | The return code is never read at all (R6). |
+| `rule-metrics-aggregate.sh` exits non-zero after writing | **Holds; list drifted** | Reproduced at exit 5. Twelve orphan ids now, not the seven the issue lists. |
+| ADR-194 cleanup and the ship Incident-PIR gate are out of scope | **Respected** | Neither is touched or referenced as work. |
 
-Cited-mechanism check against the ADR corpus found four binding decisions: **ADR-156** (hook stdin is
-model-controlled and untrusted), **ADR-157** (a hook that cannot parse its input asks), **ADR-165**
-(posture splits by *reason class*), **ADR-193** (anti-vacuity floor contract), plus **ADR-091**
-(rule metrics have a local producer). The merged plan
+Binding decisions found in the ADR corpus: **ADR-156** (hook stdin is model-controlled and
+untrusted), **ADR-157** (a hook that cannot parse its input asks), **ADR-165** (posture splits by
+*reason class*), **ADR-193** (anti-vacuity floor contract), **ADR-091** (rule metrics have a local
+producer). The merged plan
 `knowledge-base/project/plans/archive/20260904-163540-2026-09-04-fix-test-fixture-git-env-scrub-plan.md`
 is the governing prior art for the #7822 half.
 
-### Property List (Phase 0.6b)
+### Do not build these
 
-- **P1** A shell fixture's `git` write lands in the fixture repository, never in the caller's.
-- **P2** A case that asserts "there is no repository here" observes the absence of a repository.
-- **P3** Containment adoption does not regress: the uncovered set never grows.
-- **P4** Containment is demonstrable under a hostile environment, not merely believed.
-- **P5** When a hook's guards are disarmed, the record names the cause and its owner.
-- **P6** When a contracted field has the wrong JSON type, the record names the shape, never content.
-- **P7** A hook gating a destructive or infrastructure operation does not silently skip its guards.
-- **P8** A non-zero `hook_self_fault` count over a window reaches someone.
-- **P9** The aggregator writes its metric without leaving a rejected artifact behind.
+Each was proposed by an issue or an earlier draft, and each is removed with a reason. This list
+exists so the next pass does not re-derive them.
 
-### Cut List (Phase 0.6b)
+| Mechanism | Why not |
+|---|---|
+| `env -u GIT_DIR … -u GIT_OBJECT_DIRECTORY`, as literally specified in #7822 | A six-name list where the repo already deploys a **nine**-name list at all three entry points (`scripts/test-all.sh:232`). Adopting it verbatim *reduces* coverage: it omits `GIT_TEMPLATE_DIR`, and `git-fixture-env.ts` records a measurement where an inherited `GIT_TEMPLATE_DIR` made `git init` copy a hook that the fixture's own commit then **executed**. |
+| A canonical shell `git-fixture-env.sh` body | Cut by name in the #7833 plan: *"`test-all.sh` + the tripwire already cover every shell suite; a second byte-for-byte canonical body beside `assert_fixture_dir()` is the drift this plan exists to end."* Not reversed here. |
+| A lint over every test file that spawns git | Same plan cut the file-scale design in favour of guarding entry points: *"26 `run:` lines … plus 2 files under `scripts/hooks/` … against ~900 files for the cut design."* |
+| A per-file containment guard over "shell suites that create a git fixture" | Cut at CTO review as **unsound**, not merely redundant: its verdict would conflate two properties (the tripwire *aborts*, it does not contain); its assembly would be a regex heuristic — three defensible predicates returned 42, 45 and 47 members for the same question — and every recorded recurrence (#1090, 2026-04-03 ×2, #7833) entered through an **entry point**, never a test file. |
+| A monotone adoption ratchet replacing it | Cut at the following review round. After the sweep the baseline is 0, and `live <= 0` cannot detect the regression the ratchet names: raising a committed baseline from 0 to 5 leaves `0 <= 5` green. Its stated assembly was also self-contradictory — a committed integer is not "both sides computed by the same enumeration in the same run" — and it arrived with no mutation battery, in a plan that folds in #7942 precisely because ungated batteries are the defect. |
+| Repo-wide conversion of 25–39 suites | Belongs to #7849; a sweep of near-identical diffs is the rubber-stamp review #7849 itself gave as reason (c) for deferring. |
+| A new incident-row field for the type vector | `hook_input_report` already computes `reason_key="${reason%%:*}"` so "an `internal:<jq stderr>` detail stays out of the aggregation key". The channel exists, is commented, and is unused. |
+| A new escalation channel | `summary.hook_input_fault_count` and its `WARNING:` line already exist. The gap is a consumer, and that consumer is deferred (see §Deferral). |
+| A new `AGENTS.md` rule | Cannot land: `scripts/lint-agents-rule-budget.py` reports `B_ALWAYS=46000 >= 44000` — at the ratchet. |
+| A static "the jq program compiles" assertion | Proposed at CTO review, cut at the next: AC1 drives real stdin through the real function, and a non-compiling `_HOOK_INPUT_JQ` fails AC1, AC5 and every hook on the first Bash call. The claim that it was "the only thing that catches `internal` before it ships" was false. |
 
-| Proposed mechanism | Property | Disposition |
-|---|---|---|
-| `env -u GIT_DIR … -u GIT_OBJECT_DIRECTORY`, as literally specified in #7822 | P1 | **CUT.** A six-name list, where the repository already deploys a **nine**-name list at all three entry points (`scripts/test-all.sh:232`). Adopting it verbatim would *reduce* coverage — it omits `GIT_TEMPLATE_DIR`, and `git-fixture-env.ts` records a measurement showing an inherited `GIT_TEMPLATE_DIR` makes `git init` copy a hook that the fixture's own commit then **executes**. |
-| A canonical shell `git-fixture-env.sh` body | P1 | **CUT — already cut upstream**, by name, in the #7833 plan: *"`test-all.sh` + the tripwire already cover every shell suite; a second byte-for-byte canonical body beside `assert_fixture_dir()` is the drift this plan exists to end."* Not reversed here. |
-| A lint over every test file that spawns git | P3 | **CUT as scoped.** The same plan cut the file-scale design in favour of guarding entry points: *"26 `run:` lines … plus 2 files under `scripts/hooks/` … against ~900 files for the cut design."* |
-| A **per-file** containment guard over "shell suites that create a git fixture" | P3 | **CUT — unsound, not merely redundant.** Three reasons, from the CTO review: (i) its verdict would conflate two different properties, since the tripwire *aborts* rather than contains, and a guard certifying "contained **or** refuses to run" certifies neither; (ii) its assembly would be a regex heuristic wearing ADR-193's clothes — two defensible predicates over the same property returned 41 and 66 members, and the wider one conscripts non-test scripts such as `scripts/learning-retrieval-bench.sh`; (iii) every recorded recurrence (#1090, 2026-04-03 ×2, #7833) entered through an **entry point**, never a test file, so it would guard a class with zero incidents. Replaced by the ratchet below. |
-| A **monotone adoption ratchet** on the uncovered count | P3 | **KEEP.** One committed integer, asserted non-increasing. Stable under predicate drift — a drifting predicate moves both sides of the comparison — with no per-file verdict and no false conscription. |
-| Repo-wide conversion of 25–39 suites | P1 | **CUT — belongs to #7849**, and a sweep of near-identical diffs is the rubber-stamp review #7849 gave as its own reason (c) for deferring. |
-| Tripwire adoption for the suites inside #7849's *named exit condition* | P1, P3 | **KEEP — measured at 3 files.** See below. |
-| Positive non-repo preconditions in the vacuity cases | P2 | **KEEP.** No layer covers this: an env scrub only makes those cases accidentally-green-for-the-right-reason. The assertion must evidence its own premise. |
-| A shell regression test under a hostile env | P4 | **KEEP.** Guard 1 does this for TS only. |
-| Capture the `HOOK_INPUT_REASON` value | P5 | **KEEP — but the prerequisite is repairing the discriminator**, which no proposal names. |
-| Record the JSON *type* of each field | P6 | **KEEP; a conformance gap, not a new decision.** ADR-157 already decided it: *"Telemetry carries no payload content. Field name, JSON type, and length."* |
-| A new incident-row field for the type vector | P6 | **CUT.** `hook_input_report` already computes `reason_key="${reason%%:*}"` so "an `internal:<jq stderr>` detail stays out of the aggregation key". The channel exists, is commented, and is unused. |
-| Unconditional `hook_input_should_ask` for destructive hooks | P7 | **KEEP as a decision, re-axed onto the reason class** per ADR-165. |
-| A new escalation channel | P8 | **CUT.** `summary.hook_input_fault_count` and its `WARNING:` line already exist. The gap is a consumer. |
-| A new `AGENTS.md` rule | — | **CUT, and it cannot land.** `scripts/lint-agents-rule-budget.py` reports `B_ALWAYS=46000 >= 44000` — at the ratchet. |
-
-### The sweep is #7849's own exit condition, and it is three files
+### The sweep is #7849's own exit condition
 
 The brief framed the sweep as residual work on #7822. It is not: it is the *named exit condition*
 of issue #7849, whose re-evaluation trigger 2 reads, verbatim:
@@ -110,23 +97,21 @@ of issue #7849, whose re-evaluation trigger 2 reads, verbatim:
 > 41 of 73 suites source it). At that point Guard 3's shell arm becomes a true chokepoint and this
 > issue can be closed as unnecessary.
 
-Measured today: **81** suites match that glob and **47** source `test-helpers.sh` — adoption has
-risen from 41/73. Of the 34 that do not, exactly **three** create a git fixture *and* issue a git
-write verb:
+**Pin the predicate, because the count moved three times during planning.** 81 suites match the
+glob. "How many source `test-helpers.sh`" returned 42, 45 and 47 under three defensible readings —
+which is the evidence that killed the per-file guard, and is why no number here is ratcheted into
+CI. The sweep set is every suite matching the glob that creates a git fixture, issues a git write
+verb, and carries none of: a `source` of `test-helpers.sh`, an `exit 97` tripwire, or a `GIT_`
+prefix scrub. Measured that way it is **five**:
 
 - `plugins/soleur/test/gitleaks-merge-commit.test.sh`
 - `plugins/soleur/test/harvest-debt.test.sh`
 - `plugins/soleur/test/roadmap-reconcile.test.sh`
+- `plugins/soleur/test/fixture-dir-operand-assert.test.sh` — the meta-gate for the *operand* class
+  (#7652), carrying no protection against the *environment* class
+- `plugins/soleur/test/proc.test.sh` — which also earns a vacuity entry below
 
-That is the whole mechanical sweep this plan owes. Everything wider stays with #7849, with the
-measured counts written into it.
-
-### Value-Proposition Measurement (Phase 0.6c)
-
-Correctness, not cost, so this gate does not bind. The number worth pinning is the **ratchet
-baseline**, because it is the artifact that must not drift: the count of `plugins/soleur/test/*.test.sh`
-suites that create a git fixture, issue a git write verb, and carry neither the tripwire nor a
-prefix scrub. Measured **3** today, and the ratchet asserts it never rises.
+`/work` re-derives with that exact predicate rather than trusting this list.
 
 ### Applicable institutional learnings
 
@@ -137,47 +122,40 @@ prefix scrub. Measured **3** today, and the ratchet asserts it never rises.
   eventually be re-derived wrongly, and prose does not stop that."*
 - `knowledge-base/engineering/architecture/decisions/ADR-193-anti-vacuity-floor-contract.md`
   — a floor reports via `printf >&2` + `exit 1` directly, never through the suite's own verdict
-  helpers; the population is **derived, never listed**. Binding on Guard 5 and the ratchet.
+  helpers; the case counter increments at the **call site**, never inside `$( )`, or conservation
+  becomes a tautology that stays green under the fault it exists to catch.
 - `knowledge-base/engineering/operations/post-mortems/fixture-git-env-live-repo-write-postmortem.md`
   — the incident record for the branch-tip rewrite.
 
-### Related issues and PRs
-
-`#7822`, `#7835` (sibling, open, better measured), `#7849` (open; owns the wider sweep, and this plan
-advances its exit condition rather than pre-empting it), `#7833` (closed by the merged plan that
-built the current layering), `#7275`, `#7164` (shipped the detector), `#7942` (open code-review; see
-§Open Code-Review Overlap).
-
 ## Research Reconciliation — Spec vs. Codebase
 
-| Claim (from the issues / the brief) | Codebase reality | Plan response |
+| Claim | Codebase reality | Plan response |
 |---|---|---|
-| **R1.** #7822 lists 10 of "~25" shell suites. | Two defensible predicates over the same property return **41** and **66** members. The spread is the finding: no per-file predicate here is canonical. | Report both readings. Do not build a guard whose verdict depends on which predicate is chosen. |
-| **R2.** "The shell half is untouched." | A tripwire (47 suites) and three entry-point scrubs exist. | Reframe from "build the shell half" to "advance the adoption that is already underway". |
-| **R3.** The shell scrub wrapper is the suggested fix. | The #7833 plan **cut** exactly that, by name. | Do not build it. |
-| **R4.** A lint over test files is the only thing that stops recurrence. | The chosen mechanism guards **entry points**; every recorded recurrence entered through one. | Ship a non-increasing adoption ratchet, not a per-file lint. |
-| **R5.** The TS half is done. | Two of the eight files #7835 names are converted; twelve TS test files still create a git fixture with no `gitFixtureEnv`. | **Acknowledge, do not fold in.** #7849 owns this; recorded so it is not silently dropped (AC15). |
-| **R6.** The jq classifier collapses rc 5 and rc 0. | It never reads a return code. `raw="$( … \| jq … ; printf 'X')"` then `jq_rc=${PIPESTATUS[1]:-0}`: the pipeline runs in a subshell, the parent's `PIPESTATUS` is `(0)` with length 1, so `jq_rc` is **always 0** and the `jq_rc == 3` arm is unreachable. Measured on bash 5.3.9 / jq 1.8.1; independently re-derived at CTO review. | Repair the discriminator **first and alone**; the split is inert without it. |
-| **R7.** jq rc 5 means the document is invalid. | Confirmed directly: `''`→0, `garbage {{`→5, `{"a":"x"`→5, `[1,2,3]`→5, compile error→3. | Map rc 0-with-no-output → `empty`, rc 5 → `baddoc`, rc 3 → `internal`. |
-| **R8.** The 7 faults/day are current. | **Zero** `hook_self_fault` rows exist in the retained log or either archive; the 2026-08 archive is not retained. | Do not claim a rate. The fix is forward-looking, and the evidence loss is itself an argument for P8. |
-| **R9.** The orphan gate lists 7 ids. | **12** now. Seven are hook-emitted, three are rule-shaped and in no registry, and `scripts/retired-rule-ids.txt` is **not consulted** by the aggregator. | Fix the gate's notion of *known*, not the list — which drifts by construction. Deferred; see §Deferral. |
-| **R10.** The gate's harm is a rejected aggregate in the tree. | It also short-circuits **before rotation**, so an orphan starves rotation of the shared telemetry sink — plausibly contributing to R8. | Carry into the deferred issue as part of the defect. |
-| **R11.** `hook_self_fault` comes from `hook-input.sh`. | Also `context-reviewed-gate.sh`, `grep-rewrite.sh` and `prod-write-defer-gate.sh` — the last **denies** (fail-closed). | The consumer must count the `kind`, not the `hook-input-` prefix. The `prod-write-defer-gate` precedent is evidence for §Architecture Decision. |
-| **R12.** Splitting the enum needs an aggregator change. | **Measured false.** A log containing only `hook-input-empty` and `hook-input-baddoc` runs to exit 0 with `orphan_rule_ids == []` and `hook_input_fault_count == 2`, and the existing WARNING line already renders `[empty=1 baddoc=1]`. | No aggregator edit for the split. The diagnostic surface appears for free. |
-| **R13.** The C4 count-parity suite is missing. | It exists at `plugins/soleur/test/c4-count-parity.test.sh` — the earlier `apps/web-platform/test/` path was wrong. | Path resolved at plan time; no lookup handed to `/work`. |
+| **R1.** #7822 lists 10 of "~25" shell suites. | Three defensible predicates over the same property return different populations (42/45/47 adoption; 41 vs 66 candidates). | Report the spread as the finding. Never ratchet a number derived from a non-canonical predicate. |
+| **R2.** "The shell half is untouched." | A tripwire and three entry-point scrubs exist. | Advance the adoption already underway; do not build a parallel mechanism. |
+| **R3.** The shell scrub wrapper is the suggested fix. | The #7833 plan cut exactly that, by name. | Do not build it. |
+| **R4.** A lint is the only thing that stops recurrence. | The chosen mechanism guards entry points; every recorded recurrence entered through one. | No new lint. The sweep plus the vacuity repairs are the deliverable. |
+| **R5.** The TS half is done. | Two of the eight files #7835 names are converted; twelve TS test files still create a git fixture with no `gitFixtureEnv`. | Acknowledge, do not fold in — #7849 owns it. |
+| **R6.** The jq classifier collapses rc 5 and rc 0. | It never reads a return code. `raw="$( … \| jq … ; printf 'X')"` then `jq_rc=${PIPESTATUS[1]:-0}`: the pipeline runs in a subshell, the parent's `PIPESTATUS` is `(0)` with length 1, so `jq_rc` is **always 0** and the `jq_rc == 3` arm is unreachable. Measured on bash 5.3.9 / jq 1.8.1; independently re-derived at CTO review. | Repair the discriminator first and alone. |
+| **R7.** jq rc 5 means the document is invalid. | Confirmed directly: `''`→0, `garbage {{`→5, `{"a":"x"`→5, `[1,2,3]`→5, compile error→3. | rc 0-with-no-output → `empty`; rc 5 → `baddoc`; rc 3 and other non-zero → `internal`. |
+| **R8.** The 7 faults/day are current. | **Zero** `hook_self_fault` rows exist in the retained log or either archive; the 2026-08 archive is not retained. | Do not claim a rate. The fix is forward-looking, and the evidence loss argues for the deferred consumer. |
+| **R9.** The orphan gate lists 7 ids. | **12** now. Seven hook-emitted, three rule-shaped and in no registry, and `scripts/retired-rule-ids.txt` is **not consulted** by the aggregator. | Deferred; see §Deferral. |
+| **R10.** Its harm is a rejected aggregate in the tree. | It also short-circuits **before rotation**, so an orphan starves rotation of the shared telemetry sink — plausibly contributing to R8. | Carried into the deferred issue. |
+| **R11.** `hook_self_fault` comes from `hook-input.sh`. | Also `context-reviewed-gate.sh`, `grep-rewrite.sh` and `prod-write-defer-gate.sh`. **An earlier draft claimed the last of these already denies on a hook-input parse fault, and that is false** — on the envelope-parse axis it fails open exactly like every other hook; its `deny_self_fault()` covers a different fault class (its own decision inputs) under a different `rule_id`. There is therefore **no existing narrowing** of ADR-157 on the `.claude` side. | The deferred consumer counts the `kind`, which is a **rename** of `hook_input_fault_count`'s meaning, not a widening of the existing metric — recorded as such. And the deferred ask-posture work must argue its case on the merits, with no phantom precedent: a false citation propagates further than a missing one. |
+| **R12.** Splitting the enum needs an aggregator change. | **Measured false.** A log carrying only `hook-input-empty` and `hook-input-baddoc` runs to exit 0 with `orphan_rule_ids == []` and `hook_input_fault_count == 2`, and the existing WARNING line already renders `[empty=1 baddoc=1]`. | No aggregator edit. The diagnostic surface appears for free. |
+| **R13.** `.claude/hooks/*.test.sh` suites are tripwire-protected. | **False.** `grep -c 'exit 97'` returns 0 across all of them. Several carry an inline `assert_fixture_dir()`, which guards an empty or relative `-C` operand (#7652) and says nothing about an inherited `GIT_DIR`. | The remedy for hooks suites is the positive precondition, not a cross-tree `source`. |
+| **R14.** The C4 count-parity suite is missing. | It exists at `plugins/soleur/test/c4-count-parity.test.sh`. | Path resolved at plan time. |
 
 ## Open Code-Review Overlap
 
 **#7942** — *"Two mutation batteries in `plugins/soleur/test/` are named `*.mutation.sh` and run in no
-gate"* — matches `scripts/test-all.sh` in this plan's edit list. The batteries are
-`git-fixture-env.mutation.sh` and `hook-git-env-coverage.mutation.sh`: the batteries for the guards
-this work builds behind.
+gate"* — matches `scripts/test-all.sh` in this plan's edit list.
 
-**Disposition: fold in.** This plan adds a mutation battery of its own, and ADR-193 requires one.
-Shipping it into the same ungated hole would reproduce the defect being closed, and Guard 5's
-contract would be unverified. `Closes #7942` joins PR 3's body. Verified: `SUITE_GLOBS` carries
-`plugins/soleur/test/*.test.sh` (`scripts/test-all.sh:78`), which is why `.test.sh` files need no
-registration and `*.mutation.sh` — which does not match that glob — is exactly the hole.
+**Disposition: fold in.** This plan adds a mutation battery, and ADR-193 requires one. Shipping it
+into the same ungated hole would reproduce the defect being closed. `Closes #7942` joins PR 2's body.
+Verified: `SUITE_GLOBS` carries `plugins/soleur/test/*.test.sh` (`scripts/test-all.sh:78`), so
+`.test.sh` files need no registration and `*.mutation.sh` — which does not match that glob — is
+exactly the hole.
 
 No other open code-review issue matches any planned path.
 
@@ -188,101 +166,156 @@ tip and truncates their index — the damage recorded in
 `knowledge-base/engineering/operations/post-mortems/fixture-git-env-live-repo-write-postmortem.md`
 (16 stray commits, index cut from ~14,000 entries to 2) — or, from the riskier half, a corrupted
 `HOOK_FILE_PATH` in the library every PreToolUse hook parses through, which would misroute or
-silently disarm guards on every Bash tool call.
+silently disarm guards on every Bash tool call, including the ones that block commits to main, block
+`rm -rf`, and gate prod writes.
 
-**If this leaks, the user's workflow is exposed via:** the type vector written to
+**If this leaks, the user's workflow is exposed via:** the reason string written to
 `.claude/.rule-incidents.jsonl` and rolled into the committed `rule-metrics.json`. Hook stdin is
-model-controlled and may carry credentials in a `Bash` command string. The vector carries **only**
-members of jq's closed type set (`string`, `number`, `boolean`, `array`, `object`, `null`) — never a
-value, and never a length that could act as an oracle. Enforced structurally, since the jq program
-emits bad-path values empty by construction, and asserted by AC13.
+model-controlled and may carry credentials in a `Bash` command string. The reason carries only enum
+heads from a closed set — never a field value, and never a length that could act as an oracle. This
+is enforced structurally, since the jq program emits bad-path values empty by construction, and
+asserted by AC10.
 
 **Brand-survival threshold:** single-user incident
 
 CPO sign-off is required at plan time before `/work` begins; `user-impact-reviewer` is invoked at
 review time.
 
-## Delivery shape — three PRs
-
-The riskiest change is small and sits under everything else, so it ships alone. This is the CTO
-review's recommendation, adopted.
+## Delivery shape — two PRs
 
 | PR | Contents | Risk |
 |---|---|---|
-| **1** | Phase B1 only — repair the discriminator, plus the byte-exactness and static-compile assertions. | **High.** The library is sourced by ~30 hooks, ~19 firing per Bash tool call. |
-| **2** | Phases B2–B4: the enum split, the type vector, the ask posture, the new ADR + ADR-157 errata + ADR-165 row split, hooks README, the C4 sentence. `Closes #7275`. | Medium |
-| **3** | Phases A1–A4: vacuity repairs, the three-file tripwire adoption, the ratchet, the shell regression test, mutation-battery registration. `Closes #7822 #7835 #7942`. | Low |
+| **1** | Phases B1–B2: repair the discriminator and split the enum it discriminates on, with the byte-exactness gate. `Closes #7275`. | **High.** The library is sourced by 24 non-test hooks, 19 firing per Bash tool call (`hook-input.sh` states the 19 and why: #7165 registered `grep-rewrite.sh` on the Bash matcher). |
+| **2** | Phases A1–A4: the vacuity repairs, the five-file sweep, the containment regression test, mutation-battery registration. `Closes #7822 #7835 #7942`. | Low |
 
-`hook-input.sh` is why PR 1 is alone: ADR-157's own core argument is that a persistent fault there is
-unrecoverable *because the repair is itself a Bash call*. That argument applies to this change.
+B1 and B2 ship together because splitting them would land a correctly-read return code that nothing
+consumes. They ship *apart from everything else* because ADR-157's own core argument is that a
+persistent fault in this library is unrecoverable — the repair is itself a Bash call — and that
+argument applies to this change.
+
+**Two things this ordering costs, stated rather than left to be inferred.** First, the twice-realized
+index truncation stays live through PR 1: the five uncontained suites and the seven vacuity-bearing
+suites are exactly as they are today until PR 2 merges. That is the right trade — B1 is the only
+change that could brick a session, and the containment gap is the pre-existing status quo, not a
+regression this plan introduces — but it is a real window and it should be visible in the PR body.
+Second, the PRs share no files, so the dependency is ordering only: PR 2's battery registration must
+cover PR 1's battery, which is why the battery is created at a path PR 2's assertion reaches.
 
 ## Implementation Phases
 
 ### Phase 0 — preconditions (measure; do not assume)
 
-1. Re-run the `PIPESTATUS`-through-command-substitution probe and paste the table into PR 1. If
-   `jq_rc` is not always 0 on the machine of record, **stop**: R6 has not reproduced.
-2. Re-run the jq return-code table against the installed jq and paste it.
-3. Re-derive the ratchet baseline (currently 3) and the `plugins/soleur/test/*.test.sh` adoption
-   count (currently 47/81). If either has moved, the sweep list and the baseline move with it.
-4. Re-run the aggregator against a **copy** of the live log under `INCIDENTS_REPO_ROOT` and record
-   the exit code and orphan list. Never against the real repo root — it writes before it rejects.
-5. Confirm #7849, #7942 and #7835 are still open.
+1. Re-run the `PIPESTATUS`-through-command-substitution probe. If `jq_rc` is not always 0 on the
+   machine of record, **stop** — R6 has not reproduced and the design must be re-derived.
+2. Re-derive the sweep set with the pinned predicate. If membership moved again, the sweep moves.
+3. Re-run the aggregator against a **copy** of the live incidents log under `INCIDENTS_REPO_ROOT`.
+   Never the real repo root — it writes before it rejects.
 
-### Phase B1 — repair the discriminator (PR 1, alone)
+### Phase B1 — repair the discriminator (PR 1)
 
 `jq_rc` is always 0. Capture the return code **inside** the command substitution and carry it out in
-the captured text, preserving the trailing-separator/sentinel pair the file documents as load-bearing.
-No temporary file: the file rejects one on the hot path, and that reasoning stands.
+the captured text. No temporary file: the file rejects one on the hot path, and that reasoning stands.
 
 **Use `$?`, not `PIPESTATUS`, inside the substitution.** jq is the last element of the pipeline, so
 `$?` after it *is* jq's status. `PIPESTATUS[1]` would work today but encodes a positional invariant
 that breaks silently the day anyone appends a filter.
 
-**The return code is subordinate to the slot count.** A payload value containing U+001E emits a
-**raw RS byte** through jq — reproduced at consult, where a two-slot program produced four separators
-— so anything appended after the last separator is forgeable by the payload. The fix is precedence,
-not escaping:
+**Strip the return code before the split, not after.** This is prescribed rather than left to
+`/work`, because the obvious alternative is measurably broken. Appending the return code after the
+program's trailing separator and then splitting makes the happy path yield **seven** fields instead
+of six, and — worse — makes the captured text never empty, so the zero-field arm where Phase B2 puts
+the entire `empty` / `baddoc` split becomes **structurally unreachable**. Control would fall to the
+`1..n-1` arm, whose comment reads *"means OUR program is broken … Never blamed on the payload"*, and
+every model-sent junk payload would be recorded as `internal` — the exact inverse of the defect being
+fixed.
 
-1. Strip the sentinel, split on RS, and **check the slot count first**.
-2. Count correct → success. The return code is 0 by construction and is never read.
-3. Count wrong → only now read the trailing digits as the return code, requiring `^[0-9]+$`.
+The shape that avoids both, measured end to end (RS below is U+001E):
 
-A forged RS byte can then only break the count, which is *already* a fault (`separator`), and can
-never make a real failure look like success. This preserves the file's correct statement that the
-slot count — not jq's exit code — is the normative parse-failure detector.
+```bash
+raw="$( { printf '%s' "$input" | jq -j "$_HOOK_INPUT_JQ" 2>/dev/null; \
+          printf '\036%s' "$?"; printf 'X'; } )"
+raw=${raw%X}
+jq_rc=${raw##*$'\036'}   # after the LAST RS — ours, appended after jq exited
+body=${raw%$'\036'*}     # jq's output, its own trailing separator intact
+# split $body — the six-field contract is untouched, and n == 0 stays reachable
+```
 
-**The corruption hazard this phase must not ship.** If the return code lands on the wrong side of the
-sentinel it appends to `_hi_s[5]`, i.e. `HOOK_FILE_PATH`. The record count stays exactly 6, so a
-slot-count assertion **passes while every hook's `HOOK_FILE_PATH` is silently corrupted on the happy
-path**. AC5 exists solely to close this, and it is why PR 1 ships alone.
+Measured on bash 5.3.9 / jq 1.8.1, against this exact shape, rather than argued:
+
+| Payload | fields | rc | classification |
+|---|---|---|---|
+| happy envelope | **6** | 0 | success — the existing contract is unchanged |
+| empty stdin | **0** | 0 | `empty` — the zero-field arm stays reachable |
+| `garbage {{` | **0** | 5 | `baddoc` |
+| `command` carrying an escaped RS | **7** | 0 | `separator`, and the rc is still read correctly |
+| valid envelope **followed by** trailing garbage | 6 | **5** | see below |
+
+Byte-exactness held on every shape AC4 names, and the whole probe ran under `set -euo pipefail`.
+
+**State the true invariant, not a plausible one.** An earlier draft justified reading the count
+first by claiming anything after the last separator is "forgeable by the payload". That is false:
+the return code is written by `printf` *after* jq has exited, in the same subshell, so it is
+unconditionally the final bytes, and a payload can only *inflate* the field count, never append past
+the rc. The count is read first for a different and better reason — a forged separator then degrades
+to `separator`, an already-loud fault, instead of shifting a value into the rc position. A rule
+defended by a wrong reason is the shape the next reader simplifies away, which is how the dead
+`jq_rc` branch survived for the life of this file.
+
+**Two silent-success holes must close here, or P7 is false as written.** Both are pre-existing, and
+both were found by measurement rather than reading:
+
+- **A JSON `null` root parses as success with all five fields empty.** `null | .tool_input.command`
+  yields `null`, which `d()` maps to `""`, so a null root escapes the `catch {}` that handles the
+  other four non-object roots. `hook_parse_input` returns **0**, every guard keyed on `HOOK_CMD` or
+  `HOOK_FILE_PATH` no-ops, and no incident row and no `ask` are produced. ADR-157 enumerates a
+  non-object root under "anything else ⇒ ask". Require `type == "object"` on the root before the
+  accessors, and add a contract case per non-object root.
+- **A complete first record block followed by trailing garbage yields a correct count with rc 5.**
+  Measured above. The return code must therefore be classified even when the count is right, as its
+  own diagnostic class — the values are byte-exact so the guards may still run, but leaving it
+  unclassified gives a payload a way to suppress the fault signal on every call, which is the very
+  channel the deferred consumer is built on.
+
+**Two further rules the code must state.** A trailing field failing `^[0-9]+$` is **never** a success
+and is classified `internal` — collapsing it onto a payload class is the "broken gate hides as a bad
+payload" failure this phase exists to end. And **the last command inside the substitution must be the
+sentinel `printf`**: under `set -euo pipefail`, which several sourcing hooks use, a non-zero final
+status kills the shell at the assignment, printing nothing and letting the tool proceed. That is
+defect 2 reintroduced one line above where every test points.
+
+**The corruption hazard this phase must not ship.** If the return code lands inside the field body it
+appends to the last field — `HOOK_FILE_PATH` — while the count stays at six, so a count assertion
+passes while every hook's `HOOK_FILE_PATH` is silently corrupted. The worst consumer is the **empty**
+slot, not a populated one: `no-memory-write.sh` and `kb-domain-allowlist-guard.sh` both resolve
+`TARGET="${HOOK_FILE_PATH:-$HOOK_CMD}"`, so an empty slot becoming `"0"` kills the `:-` fallback and
+both guards inspect the literal `0` instead of the command — on every Bash call, with rc 0 and six
+fields, so nothing anywhere reports it. AC4's envelope set is chosen to close exactly this.
 
 Replace the comment *"jq's EXIT CODE already makes the only distinction that matters"*: it is the
 artifact that let the dead branch survive review for the life of the file.
 
-### Phase B2 — split the reason enum (PR 2)
+### Phase B2 — split the reason enum (PR 1)
 
 | Condition | Reason | Owner | Reachable in production? |
 |---|---|---|---|
-| rc 0, no output | `empty` | the caller sent nothing | **yes** |
-| rc 5 | `baddoc` | the payload is not valid JSON | **yes** |
-| rc 3 | `internal` | our program failed to compile | **no — by construction** |
-| any other non-zero | `internal` | never blamed on the payload | only under a broken jq |
+| expected count, rc 0 | — (success) | — | yes |
+| zero fields, rc 0 | `empty` | the caller sent nothing | **yes** |
+| zero fields, rc 5 | `baddoc` | the payload is not valid JSON | **yes** |
+| zero fields, rc 3 | `internal:rc3` | our program failed to compile | **no — by construction** |
+| 1..n-1 fields | `internal:count` | our program is broken mid-stream | no |
 
-**`internal` ships as a documented defensive default, not as a peer the suite pretends to exercise.**
-rc 3 is a jq *compile* error, and with one constant program plus the exactly-one-`jq` contract
-assertion, no production input reaches it. Asserting it as a reachable runtime member would reproduce
-the dead-code shape this work removes. It is exercised only in the mutation battery, which breaks the
-program deliberately.
+**The two `internal` arms must be distinguishable, and this is not cosmetic.** A broken
+`_HOOK_INPUT_JQ` emits nothing, so after B1 the captured text is the return-code digits alone and
+the split yields **one** field, not zero — which lands in the pre-existing "our program is broken"
+arm and assigns `internal` *without ever consulting the return code*. A mutation row asserting
+"break the program → reason is `internal`" would therefore pass while the rc-3 arm this plan exists
+to repair stayed dead. Emitting `internal:rc3` versus `internal:count` is what makes that row
+discriminate, and the battery carries a positive control proving the rc-3 arm is reachable at all.
 
-**Add a static compile assertion regardless** — a contract-test case asserting `_HOOK_INPUT_JQ`
-compiles. A compile failure is a build-time property of a constant program, and catching it once in
-CI is strictly better than discovering it once per production session. It is the only thing that
-catches `internal` before it ships.
-
-Rule ids become `hook-input-empty` / `hook-input-baddoc`. **Measured:** a log containing only those
-two runs the aggregator to exit 0 with `orphan_rule_ids == []` and `hook_input_fault_count == 2`, and
-the existing WARNING line already renders the split:
+The reason head is unchanged for the aggregation key, because `hook_input_report` already strips at
+the first colon. Rule ids become `hook-input-empty`, `hook-input-baddoc`, `hook-input-internal`.
+**Measured:** a log carrying the new ids runs the aggregator to exit 0 with `orphan_rule_ids == []`
+and `hook_input_fault_count == 2`, and the existing WARNING line already renders the breakdown:
 
 ```
 WARNING: 2 PreToolUse hook input-contract fault(s) — a hook could not parse its stdin
@@ -291,247 +324,312 @@ and ran with guards disarmed [empty=1 baddoc=1].
 
 No aggregator edit is required, and the diagnostic surface #7275 asks for appears for free.
 
-### Phase B3 — the type vector (ADR-157 conformance, PR 2)
+### Phase A1 — the vacuity repairs (PR 2)
 
-Extend the single jq program so the status token carries the shape on the bad path — `ok`, or
-`bad:<type>,<type>,<type>,<type>,<type>` over the five contracted slots. The record count stays at
-exactly **6**, so the slot-count detector, the field-order contract and the exactly-one-`jq`
-assertion are untouched.
+This is the semantic half, and it is the part no other layer covers: an entry-point scrub only makes
+these cases accidentally-green-for-the-right-reason. Each case that asserts "no repository here"
+gains a precondition that evidences its own premise.
 
-The vector rides into telemetry through the existing detail-suffix channel: `HOOK_INPUT_REASON`
-becomes `nonstring:string,array,null,string,null`, `hook_input_report` already strips at the first
-colon for the aggregation key, and `command_snippet` already carries the full reason. Types only.
+**The precondition needs a positive control, or it inherits the defect it fixes.** A bare "`git
+rev-parse --git-dir` must fail" is satisfied by `git` missing from PATH, by the directory not
+existing, and by a permission error — all while the case is as vacuous as before. The assertion is
+therefore three-part, run **under the subject's own environment and working directory**: the same
+command must *succeed* in a known repository, must *fail* in the fixture directory, and the failure
+text must name `not a git repository`.
 
-### Phase B4 — the ask posture, decided on the reason axis (PR 2)
+**Do not batch by remedy — the mechanisms differ.** Two suites need something other than repo-ness:
 
-Scope unconditional escalation to the intersection of the model-controlled reason classes and the
-hooks that gate destructive or infrastructure operations. `jq_missing` is excluded on ADR-157's
-self-referential-repair argument; `internal` fails open loudly because it is our bug.
-
-### Phase A1 — the adoption ratchet (PR 3)
-
-Replace the per-file guard with a monotone ratchet: one committed integer recording the number of
-`plugins/soleur/test/*.test.sh` suites that create a git fixture, issue a git write verb, and carry
-neither the tripwire nor a prefix scrub. The guard asserts the live count is **not greater** than the
-baseline, and fails closed if its enumeration yields zero members.
-
-It is stable under predicate drift because a drifting predicate moves both sides of the comparison,
-it issues no per-file verdict, and it conscripts nothing.
-
-### Phase A2 — adopt the tripwire in the three measured suites (PR 3)
-
-`gitleaks-merge-commit.test.sh`, `harvest-debt.test.sh`, `roadmap-reconcile.test.sh` — the exact
-members of #7849's named exit condition that create a git fixture. Drop the baseline to 0 and record
-the new adoption count in #7849.
-
-### Phase A3 — make the vacuity cases prove their own premise (PR 3)
-
-The tripwire prevents the inversion but does not make the assertion self-evidencing; a scrub only
-makes these cases accidentally-green-for-the-right-reason. Each case that asserts "no repository
-here" gains a positive precondition — `git rev-parse --git-dir` must **fail** in the fixture
-directory — before the subject is invoked, so the case fails loudly rather than silently changing
-subject.
-
-| Suite | Vacuity |
+| Suite | Vacuity, and what the precondition must actually assert |
 |---|---|
-| `.claude/hooks/guardrails.test.sh` | **whole-suite, and the one that cannot wait.** `decision_of()` runs the hook from a `mktemp -d` CWD precisely so branch resolution comes back empty and the orthogonal block-commit-on-main gate no-ops — isolation added by #5192 after these fixtures passed on a feature branch and failed on main-CI. An inherited `GIT_DIR` restores branch resolution, the isolation is void, and the suite's result becomes branch-dependent again: the exact regression the comment says it prevents. |
-| `.claude/hooks/session-rules-loader.test.sh` | four discrete non-repo fixtures (T13, T23, T30, T31) |
-| `scripts/check-pa-22.test.sh` | self-documented: *"A sandbox that is not a git repo makes the SUT resolve to the REAL worktree, which would both void the case and read the live corpus."* |
-| `scripts/lint-legal-registers.test.sh` | one operand case plus twelve dependent red-arms |
-| `scripts/skill-security-scan-step-body.test.sh` | the root-commit arm, where `HEAD^1` would resolve against the caller's real HEAD |
-| `apps/web-platform/infra/workspaces-luks-loopback.test.sh` | the `fatal:`-shape fsck arms |
+| `.claude/hooks/guardrails.test.sh` | **Whole-suite, and the one that cannot wait.** `decision_of()` runs the hook from a `mktemp -d` CWD precisely so **branch resolution comes back empty** and the orthogonal block-commit-on-main gate no-ops — isolation added by #5192 after these fixtures passed on a feature branch and failed on main-CI. Repo-ness is neither necessary nor sufficient for that: a detached HEAD in a real repository also yields an empty branch. The precondition asserts the **branch resolution is empty**, and that the gate is observed to no-op. |
+| `scripts/skill-security-scan-step-body.test.sh` | The root-commit arm asserts `HEAD^1` cannot resolve. Under an inherited `GIT_DIR` it resolves against the caller's real HEAD. The precondition asserts **`HEAD^1` is unresolvable**, not that the directory is not a repository. |
+| `.claude/hooks/session-rules-loader.test.sh` | Four discrete non-repo fixtures (T13, T23, T30, T31). Repo-ness precondition applies. |
+| `scripts/check-pa-22.test.sh` | Self-documented: *"A sandbox that is not a git repo makes the SUT resolve to the REAL worktree, which would both void the case and read the live corpus."* Prefer asserting the SUT's own resolution names the fixture. |
+| `scripts/lint-legal-registers.test.sh` | One operand case plus twelve dependent red-arms. |
+| `apps/web-platform/infra/workspaces-luks-loopback.test.sh` | The `fatal:`-shape fsck arms. |
+| `plugins/soleur/test/proc.test.sh` | Surfaced late, by the citation audit rather than by the vacuity sweep — which is the point. It opens `NOGIT="$(mktemp -d -t proc-nogit…)"` as a deliberately non-git directory, in a suite three earlier passes classified only by its git-write shape. |
 
 `apps/web-platform/test/ci/service-role-allowlist-gate.test.sh` is a **distinct shape** — it
-deliberately mutates the *live* index with `git add -f` and has no fixture repo, so under a hostile
-env its cleanup `git rm --cached -f` may not undo what it did. Handle it individually; do not batch it.
+deliberately mutates the *live* index with `git add -f` and has no fixture repository, so under a
+hostile environment its `git rm --cached -f` cleanup may not undo what it did. Handle it
+individually; do not batch it.
 
-### Phase A4 — the shell containment regression test (PR 3)
+For `.claude/hooks/` suites the remedy is the precondition and nothing else. Per R13 no suite there
+carries the tripwire, the 42 files that source `test-helpers.sh` live almost entirely under
+`plugins/soleur/test/`, and the established pattern in the hooks tree is an inline byte-pinned copy
+rather than a cross-tree `source` that would drag in an assertion framework those suites do not use.
 
-The shell counterpart of Guard 1: build a victim repository, set a hostile `GIT_DIR` and
-`GIT_INDEX_FILE`, drive a swept suite through a **child process** started under that environment,
-and assert the victim's HEAD, ref set and staged-file list are unchanged **as a triple**. The triple
-is required: with `GIT_DIR` scrubbed, an absolute `GIT_INDEX_FILE` still retargets `git add` while
-HEAD stays put.
+### Phase A2 — adopt the tripwire in the five measured suites (PR 2)
 
-### Phase A5 — register the mutation batteries (PR 3, closes #7942)
+The members of #7849's named exit condition. **Sourcing is not purely additive** and the diff must
+account for it: `test-helpers.sh` carries `set -euo pipefail` and a `PASS`/`FAIL`/`SKIPPED` harness,
+while `gitleaks-merge-commit.test.sh` and `harvest-debt.test.sh` run `set -uo pipefail` (no `-e`) and
+`harvest-debt.test.sh` defines no counters at all. Adopting the helper changes failure semantics in
+at least two of the five; verify each still passes rather than assuming the source line is inert.
 
-Register every `plugins/soleur/test/*.mutation.sh` into `scripts/test-all.sh`, and assert the
-registered set equals the tracked set so the next battery cannot enter the same hole.
+Record the new adoption count in #7849. This is adoption bookkeeping that advances #7849's exit
+condition — it is not containment, because under the only runner that reaches these suites the
+entry-point scrub has already removed every variable the tripwire would fire on.
+
+### Phase A3 — the containment regression test (PR 2)
+
+The shell counterpart of Guard 1, and the one test here that can reproduce the incident it closes.
+
+**The oracle must include the child's exit code, or the test is false-green.** A swept suite sources
+`test-helpers.sh`, so under a hostile `GIT_DIR` the tripwire fires and the child exits 97 *before
+running any git write*. The victim is then trivially unchanged and the test passes — and it keeps
+passing if an entry point's `unset` is removed, which is the single most likely real regression.
+Asserting only the victim's state certifies "contained **or** refuses to run", which is precisely the
+reasoning that got the per-file guard cut.
+
+Two arms, therefore:
+
+- **Refusal arm.** Tripwire armed, hostile environment set: assert the child exits **97**.
+- **Containment arm.** Tripwire disarmed via `SOLEUR_GIT_TRIPWIRE_ALLOW=1`, hostile environment set:
+  assert the child exits **0** *and* the victim's HEAD, ref set and staged-file list are unchanged.
+  This is the arm where the scrub is actually under test.
+
+The victim's three observables are compared as a triple, not HEAD alone: with `GIT_DIR` scrubbed an
+absolute `GIT_INDEX_FILE` still retargets `git add` while HEAD stays put. The victim path passes an
+`assert_fixture_dir`-class operand guard, and the hostile `GIT_DIR` must never resolve under `$PWD`.
+
+### Phase A4 — register the mutation batteries (PR 2, closes #7942)
+
+Register every tracked `*.mutation.sh` in `scripts/test-all.sh` — **repo-wide, derived from
+`git ls-files '*.mutation.sh'`, not scoped to one directory.** Batteries already exist outside
+`plugins/soleur/test/`, and `scripts/lint-orphan-test-suites.sh` states the principle this plan must
+not violate in the very PR that cites it: the producer is the whole repo, because *"every
+directory-scoped version of it has eventually been outgrown by a suite added one directory over"*.
+
+**State the mechanism, because `SUITE_GLOBS` is not obviously the right home.** That array is
+consumed by `lint-orphan-test-suites.sh`, which diffs it against `git ls-files '*.test.sh'`, and its
+own comment rejects a glob matching nothing. A `*.mutation.sh` entry matches zero `*.test.sh` files
+by construction, so A4 must either extend the linter's producer to a second suffix or register
+batteries through a separate mechanism — and say which. Then assert the
+registered set equals the tracked set so the next battery cannot enter the same hole. Bring
+`*.mutation.sh` into `scripts/guard-vacuity-floor.test.sh`'s derived population as well — that guard
+derives from tracked `*.test.sh`, so the batteries sit outside it, and leaving them there would
+reproduce this plan's own defect class one layer up.
 
 ## Deferral (`wg-defer-only-after-inline-triage`)
 
 **The `rule-metrics-aggregate.sh` orphan gate (R9, R10) is deferred to a new tracking issue**, filed
-in the same pass. Triaged inline, not dropped: it is reproduced, well-diagnosed, and its remedy is
-specified below. It is deferred because it belongs to **none** of #7822, #7835 or #7275 — it is a
-different subsystem, reworking its notion of "known" is the fiddliest work in the plan, and it is the
-change most likely to mask a real orphan if rushed alongside a hook-library repair.
+in the same pass. Triaged inline, not dropped: it is reproduced, diagnosed, and its remedy is
+specified. It is deferred because it belongs to none of #7822, #7835 or #7275 — a different
+subsystem, whose notion of "known" is the fiddliest work in scope and the change most likely to mask
+a real orphan if rushed alongside a hook-library repair.
 
-The issue must carry: reject **before** the write (today it writes, then exits 5, then never reaches
-rotation — so an orphan starves rotation of the shared telemetry sink); derive "known" from the
-three authorities rather than an accreting per-prefix allowlist (`AGENTS.md` ids, plus
-`scripts/retired-rule-ids.txt` which the aggregator does not consult at all, plus hook-declared ids);
-preserve the documented load-bearing pair, whereby an exclusion that removes an id from
+The issue carries: reject **before** the write (today it writes, exits 5, and never reaches
+rotation — so an orphan starves rotation of the shared telemetry sink); derive "known" from the three
+authorities rather than an accreting per-prefix allowlist (`AGENTS.md` ids, plus
+`scripts/retired-rule-ids.txt` which the aggregator does not consult at all, plus hook-declared
+ids); preserve the documented load-bearing pair, whereby an exclusion that removes an id from
 `orphan_rule_ids` must not remove its only readout; and the 12 measured orphan ids.
 
-**Phase B6 (consume the signal) is deferred with it, and its design must change.** As a hard CI gate
-it is unclearable by CI: ADR-091 makes the producer local, so any contributor whose local hooks
+**The signal consumer (#7275 Ask 3) is deferred with it, and its design must change.** As a hard CI
+gate it is unclearable by CI: ADR-091 makes the producer local, so any contributor whose local hooks
 faulted once commits a red metric and `main` stays red until someone runs `/compound` locally. It
 must be a threshold-and-delta signal that files an issue, or it must name who clears it and how.
 Recording this now prevents it being built the wrong way later.
+
+**The type vector (#7275 Ask 1, second half) is deferred to the same issue.** `HOOK_INPUT_REASON`
+already names the class (`nonstring`); the vector adds a `:string,array,null,…` suffix. It would
+require editing `_HOOK_INPUT_JQ` — the constant program whose fragility is the entire reason PR 1
+ships alone — for a path that has fired **zero** times in the retained log (R8). ADR-157 does decide
+that telemetry carries the type, so this is a real conformance gap; it is conformance debt on an
+unfired path rather than a defect, and it is cheaper and safer once the classifier below it is sound.
+See `decision-challenges.md` — this diverges from the stated scope and the operator should see it.
 
 ## Files to Create
 
 | Path | Why |
 |---|---|
-| `plugins/soleur/test/shell-fixture-containment.test.sh` | Phase A1's ratchet, and Phase A4's hostile-environment regression case. |
-| `.claude/hooks/lib/hook-input-classification.mutation.sh` | Guard 5's mutation battery, driving the real `hook_parse_input`. |
+| `plugins/soleur/test/shell-fixture-containment.test.sh` | Phase A3's two-arm regression test. Auto-registers via `SUITE_GLOBS`. |
+| `plugins/soleur/test/hook-input-classification.mutation.sh` | The Guard mutation battery, driving the real `hook_parse_input`. **Deliberately under `plugins/soleur/test/`, not beside the library it exercises** — an earlier draft placed it at `.claude/hooks/lib/`, outside the `plugins/soleur/test/*.mutation.sh` glob Phase A4 registers, so the plan's own battery would have escaped the very gate it adds to close #7942. |
 
 ## Files to Edit
 
 | Path | Why |
 |---|---|
-| `.claude/hooks/lib/hook-input.sh` | B1–B4. |
-| `.claude/hooks/hook-input-contract.test.sh` | Guard 5's assertions; byte-exactness; the static compile assertion. |
-| `.claude/hooks/README.md` | The reason enum and the posture table. |
-| `scripts/test-all.sh` | A5: register every `*.mutation.sh`. **The new `.test.sh` needs no registration** — `SUITE_GLOBS` already carries `plugins/soleur/test/*.test.sh` (`scripts/test-all.sh:78`), and the array's own comment warns that a second copy of the list is the mutation it exists to catch. `*.mutation.sh` does not match that glob, which is precisely #7942. |
-| `plugins/soleur/test/{gitleaks-merge-commit,harvest-debt,roadmap-reconcile}.test.sh` | A2: adopt the tripwire. |
-| The six vacuity-bearing suites listed in A3, plus `service-role-allowlist-gate.test.sh` individually | A3. |
-| `knowledge-base/engineering/architecture/decisions/ADR-157-a-hook-that-cannot-parse-its-input-asks.md` | **Errata only** — correct its factual claim that the exit-code distinction is made. |
-| `knowledge-base/engineering/architecture/decisions/ADR-165-what-ask-means-on-a-harness-with-no-ask-state.md` | The `unparseable` row splits into `empty` and `baddoc`. |
-| `knowledge-base/engineering/architecture/diagrams/model.c4` | The `hooks` container description asserts a uniform ADR-157 posture that B4 falsifies. |
+| `.claude/hooks/lib/hook-input.sh` | B1–B2. |
+| `.claude/hooks/hook-input-contract.test.sh` | The new reason heads, the field-count convention, byte-exactness. |
+| `.claude/hooks/README.md` | The reason enum. |
+| `scripts/test-all.sh` | A4: register every `*.mutation.sh`. The new `.test.sh` needs no registration — `SUITE_GLOBS` already carries `plugins/soleur/test/*.test.sh` (`scripts/test-all.sh:78`), and the array's own comment warns that a second copy of the list is the mutation it exists to catch. |
+| `scripts/guard-vacuity-floor.test.sh` | A4: bring `*.mutation.sh` into the derived population. |
+| `scripts/rule-metrics-aggregate.sh`, `scripts/rule-metrics-aggregate.test.sh` | AC12, **documentation only**: the inline enum roster and the `hook-input-unparseable` fixture name an enum member this plan retires. No behavioural change; the orphan gate stays deferred. |
+| The five sweep suites (Phase A2) | Adopt the tripwire. |
+| The seven vacuity-bearing suites plus `service-role-allowlist-gate.test.sh` (Phase A1) | Preconditions. |
+| `knowledge-base/engineering/architecture/decisions/ADR-157-…md` | **Errata only** — correct its factual claim that the exit-code distinction is made. |
 
 `plugins/soleur/test/test-helpers.sh`, `lefthook.yml`, `scripts/hooks/pre-push`,
-`plugins/soleur/test/lib/git-fixture-env.ts` and `scripts/rule-metrics-aggregate.sh` are **not**
-edited: the first four are prior art this plan builds behind, and the fifth is deferred above.
+and `plugins/soleur/test/lib/git-fixture-env.ts` are **not** edited — they are prior art this plan
+builds behind.
+
+`scripts/rule-metrics-aggregate.sh` and its test **are** edited, for documentation only (AC12): the
+script carries an inline enum roster naming `hook-input-unparseable`, and the test writes a fixture
+by that id. Retiring the id without touching either would leave the enum's only cross-subsystem
+documentation describing an enum that no longer exists — the same doc-rot the ADR-157 errata fixes.
+Its **behaviour** is untouched, and its orphan gate stays deferred.
+
+Because the ask posture is deferred with the type vector, **no new ADR is claimed** and the
+ordinal-collision class does not arise. ADR-157 receives a factual correction, not a decision change.
 
 ## Acceptance Criteria
 
-### Pre-merge — PR 1 (B1)
+### PR 1 (B1–B2)
 
 1. **AC1 (the discriminator is real, driven through stdin).** Two cases injected as *stdin*, not by
    stubbing jq — the exactly-one-`jq` contract forbids a second invocation, so the fault must be
    induced at the payload: empty stdin observes rc 0, a truncated document (`{"a":"x"`) observes
-   rc 5. **Both must fail against the pre-B1 code**, and the PR body carries before/after readings.
-   Shipping B1 without this reproduces the original defect class — a discriminator nobody reads.
-2. **AC2 (precedence holds under a forged separator).** A payload whose `tool_input.command` contains
-   a literal U+001E yields `separator` — never a success, and never a forged return code. The slot
-   count is read before the trailing digits, and the digits are accepted only against `^[0-9]+$`.
-3. **AC3 (the slot contract is intact).** The happy path emits exactly 6 records, field order
-   unchanged, and the existing exactly-one-`jq` assertion still passes.
-4. **AC4 (the static compile assertion exists).** A contract-test case asserts `_HOOK_INPUT_JQ`
-   compiles, and fails when a token in it is broken.
-5. **AC5 (byte-exactness — the corruption gate).** For a fixed happy-path envelope, all five of
-   `HOOK_CMD`, `HOOK_TOOL_NAME`, `HOOK_CWD`, `HOOK_SESSION_ID` and `HOOK_FILE_PATH` are
-   byte-identical pre- and post-B1, **including a value with a trailing newline and a value ending
-   in the literal `X`**. The `X` case is the one a naive `${raw%X}` strip breaks, and AC3 cannot see
-   this failure because the record count stays 6.
+   rc 5. **Both must fail against the pre-B1 code**, with before/after readings in the PR body.
+2. **AC2 (the zero-field arm stays reachable).** Empty stdin and `garbage {{` both produce **zero**
+   fields after the return code is stripped, and are classified `empty` and `baddoc` respectively.
+   This is the assertion that catches the strip-after-split design, in which the captured text is
+   never empty, the zero-field arm is dead, and every payload fault is misreported as `internal`.
+3. **AC3 (the six-field contract is unchanged).** A happy-path envelope yields exactly **6** fields
+   after the strip — the same number as before B1 — with field order unchanged and the existing
+   exactly-one-`jq` assertion still passing.
+4. **AC4 (byte-exactness — the corruption gate).** For happy-path envelopes all five published
+   globals are byte-identical pre- and post-B1. Each shape targets a distinct failure of the *new*
+   return-code strip, not only the old sentinel strip:
+   - `file_path` = `/tmp/aX` — breaks a naive `${raw%X}`.
+   - `file_path` = `/tmp/f1` — a value **ending in a digit**, which an over-eager `${raw%[0-9]}`
+     truncates.
+   - `command` = `5` — a value that is **entirely digits**.
+   - `command` = `ls\n` — a trailing newline, which the separator/sentinel pair shields and which B1
+     inserts new content beside.
+   - **an absent `file_path`, so slot 5 is empty.** This is the highest-value shape and the one an
+     earlier draft omitted: `no-memory-write.sh` and `kb-domain-allowlist-guard.sh` both resolve
+     `TARGET="${HOOK_FILE_PATH:-$HOOK_CMD}"`, so an empty slot becoming `"0"` kills the `:-` fallback
+     and both guards silently inspect `0` instead of the command, on every Bash call, with rc 0 and
+     six fields. Assert `HOOK_FILE_PATH` is byte-identically **empty**, and assert both guards still
+     resolve `TARGET` to the command on that payload.
+   - a payload carrying **both** an `X`-terminated value and an escaped RS, so the strip and the
+     forge are exercised together rather than only apart.
+5. **AC5 (a forged separator cannot manufacture a return code).** A `command` carrying an escaped RS
+   yields seven fields and is classified `separator`; the return code is still read correctly,
+   because it is appended after jq exits and is unconditionally the final bytes. A *raw* unescaped RS
+   is invalid JSON and takes the zero-field arm instead — both shapes are asserted, since they take
+   different arms.
+6. **AC6 (a non-object root is never a silent success).** Each of `null`, `5`, `"str"`, `[1,2,3]` and
+   `true` as the document root produces rc 1 and a classified reason. `null` is the load-bearing
+   case: today it returns **0** with all five fields empty, so every guard no-ops with no incident
+   row and no `ask` — which falsifies P7 and ADR-157's own enumeration of "a non-object root ⇒ ask".
+7. **AC7 (a return code is classified even when the count is right).** A valid envelope followed by
+   trailing garbage yields six fields with rc 5. It is recorded as its own diagnostic class rather
+   than discarded — otherwise a payload can suppress the fault signal on every call while the guards
+   run normally.
+8. **AC8 (a non-numeric trailing field is never a success).** It is classified `internal`, never
+   `unparseable` or `baddoc`: blaming the payload for our own broken output is the collapse this
+   phase exists to end.
+9. **AC9 (the library survives `set -euo pipefail`).** `hook_parse_input` is driven from a harness
+   running `set -euo pipefail` and **returns** on every fault path rather than killing the shell.
+   The contract test asserts the last command inside the command substitution is the sentinel
+   `printf`, which is what keeps the assignment's exit status zero.
+10. **AC10 (the enum splits on the reachable members).** Empty stdin yields `empty`; `garbage {{`
+    yields `baddoc`; the two are distinguishable by `rule_id`.
+11. **AC11 (the two `internal` arms discriminate).** A deliberately broken `_HOOK_INPUT_JQ` is
+    reported as `internal:rc3`, distinguishable from the `internal:count` produced when the program
+    emits a partial record block. A positive control proves the rc-3 arm is reachable. Without the
+    pair, a "break the program → reason is `internal`" assertion passes via the count branch while
+    the repaired discriminator stays unproven.
+12. **AC12 (the aggregator is undisturbed).** A log carrying the new ids runs to exit 0 with
+    `orphan_rule_ids == []`, and the WARNING line renders the per-reason breakdown. The aggregator's
+    inline enum roster and its `hook-input-unparseable` test fixture are updated in the same PR, so
+    the enum's only cross-subsystem documentation does not describe an enum that no longer exists.
 
-### Pre-merge — PR 2 (B2–B4)
+### PR 2 (A1–A4)
 
-6. **AC6 (the enum splits on the reachable members).** Empty stdin yields `empty`; `garbage {{`
-   yields `baddoc`; the two are distinguishable by `rule_id`. `internal` is asserted only in the
-   mutation battery.
-7. **AC7 (no reason is unclassified).** Every producible `HOOK_INPUT_REASON` is a member of the
-   documented enum; a value outside it fails the contract test.
-8. **AC8 (the type vector names the shape).** An array `tool_input.command` yields a reason whose
-   detail suffix names `array` in slot 1, and `rule_id` remains `hook-input-nonstring`.
-9. **AC9 (the aggregator is undisturbed).** A log carrying the new ids runs to exit 0 with
-   `orphan_rule_ids == []`, and the WARNING line renders the per-reason breakdown.
-10. **AC10 (the decision is recorded).** A new ADR exists declaring `Extends: ADR-156, ADR-157,
-    ADR-165` and `Supersedes: nothing`; ADR-157 carries an errata note only; ADR-165's `unparseable`
-    row is split. The ordinal is re-verified against every `origin/*` ref immediately before merge.
-
-### Pre-merge — PR 3 (A1–A5)
-
-11. **AC11 (the ratchet holds and is not vacuous).** The guard reports its examined count, asserts
-    the uncovered count is not greater than the committed baseline, and **fails closed when its
-    enumeration yields zero members**.
-12. **AC12 (the sweep is complete against its own predicate).** The three named suites source
-    `test-helpers.sh`, and the baseline is updated to the new measured value in the same commit. The
-    predicate is pinned in the guard, so the count is falsifiable rather than a claim.
-13. **AC13 (types, never content).** A payload whose `tool_input.command` is
-    `["curl","-H","Authorization: Bearer sk-LEAKCANARY"]` produces no occurrence of `LEAKCANARY`
-    anywhere in `.rule-incidents.jsonl`, stdout or stderr, while the reason still names `array`.
-    (Verified in PR 2's battery and re-asserted here against the committed metric.)
-14. **AC14 (containment is demonstrated).** The A4 regression test drives a swept suite under a
-    hostile `GIT_DIR` + `GIT_INDEX_FILE` and the victim's HEAD, refs and staged list are unchanged.
-15. **AC15 (vacuity is repaired).** Each named case asserts non-repo-ness as a precondition and fails
-    when that precondition does not hold. `guardrails.test.sh` is included.
-16. **AC16 (the batteries run).** Every tracked `plugins/soleur/test/*.mutation.sh` is reached by
-    `scripts/test-all.sh`, and the registered set equals the tracked set.
-17. **AC17 (deferrals stay owned).** #7849 remains open and carries the updated adoption count and
-    the twelve measured TS files; the new orphan-gate issue exists and carries R9, R10 and the B6
-    design note; #7835 is closed only if its shell half is met, with its TS half re-pointed at #7849.
-18. **AC18 (no rule-budget regression).** `scripts/lint-agents-rule-budget.py` reports a `B_ALWAYS`
-    no larger than the pre-change reading. No new rule is added.
+13. **AC13 (the sweep is complete against a pinned predicate).** The five named suites source
+    `test-helpers.sh` and each still passes — the `set -e` and counter-harness changes are verified,
+    not assumed, since `test-helpers.sh` carries `set -euo pipefail` and a `PASS`/`FAIL` harness that
+    two of the five do not currently use. The predicate is written into the PR body so the count is
+    falsifiable.
+14. **AC14 (containment is demonstrated, and refusal is not mistaken for it).** The A3 test's
+    **refusal arm** asserts the child exits 97; its **containment arm**, run under
+    `SOLEUR_GIT_TRIPWIRE_ALLOW=1`, asserts the child exits 0 *and* the victim's HEAD, refs and staged
+    list are unchanged. A version asserting only the victim state must be shown to pass with an
+    entry-point `unset` removed — that is the false-green this AC exists to exclude.
+15. **AC15 (vacuity is repaired, with a positive control).** Each named case asserts, under the
+    subject's own environment and working directory, that the probe *succeeds* in a known repository
+    and *fails* in the fixture directory with text naming `not a git repository`. A bare non-zero
+    exit is insufficient — it is satisfied by `git` missing, by the directory not existing, and by a
+    permission error. `guardrails.test.sh` instead asserts branch resolution is empty and the
+    block-commit-on-main gate is observed to no-op; `skill-security-scan-step-body.test.sh` asserts
+    `HEAD^1` is unresolvable. Each fails when its precondition does not hold, including under a
+    hostile `GIT_DIR`.
+16. **AC16 (telemetry carries no payload content, proven not sampled).** A canary
+    `["curl","-H","Authorization: Bearer sk-LEAKCANARY"]` produces no occurrence of `LEAKCANARY` in
+    `.rule-incidents.jsonl`, its rotated archive, stdout, stderr, or the `permissionDecisionReason`
+    envelope — **paired with a positive control** asserting the run *did* write a
+    `hook-input-nonstring` row, so the absence is evidence rather than silence. Canaries are placed
+    in slot 1 and slot 5 (the only branching accessor) and as an object *key*, and a `baddoc` arm
+    covers the one class where payload bytes exist near a sink at all: jq's stderr, which is why
+    `2>/dev/null` on the jq call is itself contract and not tidiness.
+17. **AC17 (the emitted envelope is always valid JSON).** `hook_input_emit_ask`'s stdout parses
+    under `jq empty` for every producible reason. The reason is interpolated into a JSON string
+    literal by `printf`, so a reason that ever stops being a closed-enum value could break the
+    envelope — and a malformed envelope is silently ignored by Claude Code, meaning the tool runs
+    with neither a prompt nor guards.
+18. **AC18 (the batteries run, and are themselves guarded).** Every tracked `*.mutation.sh` in the
+    repository — not merely those under `plugins/soleur/test/` — is reached by `scripts/test-all.sh`,
+    the registered set equals the tracked set derived from `git ls-files '*.mutation.sh'`, and
+    `*.mutation.sh` is inside `scripts/guard-vacuity-floor.test.sh`'s derived population.
 
 ### Post-merge (operator)
 
-None. Every criterion is verifiable in-session or in CI. The rate signal in R8 cannot be re-measured
-until faults recur; that is what the deferred consumer exists to surface, and it is not an operator
-step.
+None. Every criterion is verifiable in-session or in CI.
 
 ## Guard Contract
 
-### Guard 4 — shell containment adoption ratchet
+One guard ships. The two earlier candidates were cut — see §Do not build these.
 
-**Property.** The number of `plugins/soleur/test/*.test.sh` suites that create a git fixture, issue a
-git write verb, and carry neither the tripwire nor a prefix scrub never rises above a committed
-baseline.
-
-**Assembly.** The comparison, not a per-file verdict. Both sides are computed by the *same*
-enumeration in the *same* run, which is what makes the guard stable under predicate drift: a
-predicate that widens moves the live count and the baseline together, and only a genuine regression
-separates them. The chokepoint is that single enumeration; there is exactly one, and the guard fails
-closed if it yields zero members.
-
-**Mutation matrix.**
-
-| # | Mutation | Must redden because |
-|---|---|---|
-| M1 | Remove `test-helpers.sh` from one swept suite | the uncovered count rises above the baseline — the regression the ratchet exists to catch |
-| M2 | Add a **new** fixture-creating suite with no containment | the guard must judge members it never saw; a check that stops at the known set is the defect class |
-| M3 | Raise the committed baseline without changing any suite | the baseline is a ratchet, not a dial; only a drop may be committed |
-| M4 | Make the enumeration return zero members | **the guard's own dispatch** — "0 examined, exit 0" is vacuous |
-| M5 | Compare against a hard-coded literal instead of the live enumeration | both sides must come from one enumeration, or drift silently passes |
-| M6 | Compute the baseline side *after* the sweep mutates the tree | a ratchet is a property about **order**: the baseline is the committed prior value, and reading it post-mutation makes every regression self-approving. A delete-only battery would never test this |
-
-**Harness rows.**
-
-| # | Edit | Expectation |
-|---|---|---|
-| H1 | Neuter the suite's verdict helper | the floor must still fail — it reports via `printf >&2` + `exit 1` directly (ADR-193) |
-| H2 | Make the enumeration succeed but every predicate return false | conservation (`passes + fails == cases`) fails first |
-| H3 | **Must-PASS, non-canonical:** a suite using the inline tripwire copy rather than sourcing `test-helpers.sh` | the contract permits both spellings; a guard accepting only the canonical one rejects everything else |
-
-### Guard 5 — hook-input reason classification
+### Guard — hook-input reason classification
 
 **Property.** For every distinguishable failure of the hook-input parse, the recorded reason names
-the cause and attributes it to the correct owner — our program, the caller, or the payload — and the
-happy path's five field values are unchanged byte-for-byte.
+the cause and attributes it to the correct owner — our program, the caller, or the payload — and no
+input reaches a silent success, and the happy path's five field values are unchanged byte-for-byte.
 
-**Assembly.** Every `return 1` path in `hook_parse_input`, plus the happy path, reached through the
-real function rather than a re-implementation. The chokepoint is `hook_parse_input`; the guard drives
-it, never a copy of its logic.
+**Assembly.** Every `return 1` path in `hook_parse_input`, plus the happy path and the non-object
+roots, reached through the real function rather than a re-implementation. The chokepoint is
+`hook_parse_input`; the battery drives it and never a copy of its logic.
+
+**Mutant scoping is part of the contract, not an implementation detail.** `hook-input.sh` carries
+**two byte-identical `HOOK_INPUT_REASON="internal"` assignments** — one in the zero-field arm, one in
+the partial-block arm — and the token `unparseable` appears once as a classifier assignment and twice
+more inside log strings in `hook_input_report`. A file-wide `sed` without `/g` rewrites the first
+match; with `/g` it rewrites log text rather than the classifier. Every mutant is therefore
+**line-range scoped to the arm under test, with its placement asserted** — `cmp` proving the file
+changed proves nothing about where. The battery runs an unmutated GREEN control first and aborts if
+the baseline is red, mirroring `git-fixture-env.mutation.sh`.
 
 **Mutation matrix.**
 
 | # | Mutation | Must redden because |
 |---|---|---|
-| M1 | Restore `jq_rc=${PIPESTATUS[1]:-0}` after the substitution | this is the shipped defect, and today **nothing** reddens on it — the single most valuable assertion in this plan |
-| M2 | Map rc 5 to `internal` | a payload fault attributed to us hides a real payload class |
-| M3 | Break a token in `_HOOK_INPUT_JQ` | the static compile assertion must fail, and the runtime reason must be `internal` — never `unparseable` |
-| M4 | Emit the field **value** instead of its type in the detail suffix | the secrecy property must never regress |
-| M5 | Move the return code to the wrong side of the sentinel | `HOOK_FILE_PATH` gains trailing digits while the record count stays 6 — the corruption AC3 cannot see |
-| M6 | Return 0 records but exit before assigning a reason | **the guard's own dispatch** — an unset reason must not read as a pass |
+| M1 | **Replace** the in-substitution capture with `jq_rc=${PIPESTATUS[1]:-0}` after the substitution | this is the shipped defect, and today nothing reddens on it. Specified as a scoped block replacement, never an appended line — appended, it is a dead assignment and the mutant reports the baseline |
+| M2 | Strip the return code **after** the split instead of before | the happy path becomes seven fields and the zero-field arm goes dead, so `empty` and `baddoc` become unreachable and every payload fault reads `internal`. This is the design error the phase exists to avoid, and no earlier draft had a row for it |
+| M3 | Map rc 5 to `internal:rc3` | a payload fault attributed to us hides a real payload class |
+| M4 | Collapse `internal:rc3` and `internal:count` to a bare `internal` | the two arms stop discriminating and M1's repair becomes unprovable — the count branch would satisfy a bare-`internal` assertion while the rc-3 arm stayed dead |
+| M5 | Remove the root `type == "object"` requirement | a `null` root returns 0 with all fields empty and every guard no-ops silently — the one input shape that produces no reason at all |
+| M6 | Invert the order: read the trailing digits **before** the field count | a forged separator could then shift a value into the return-code position |
+| M7 | Loosen the digit guard from `^[0-9]+$` to `^[0-9]*$` | an empty match satisfies the guard and a non-numeric tail is read as a return code |
+| M8 | Move the return code inside the field body | the last field gains trailing digits while the count stays at six — the corruption AC3 cannot see, and whose worst consumer is the *empty* slot |
+| M9 | Reorder the substitution so the sentinel `printf` is not last | under `set -euo pipefail` the assignment's non-zero status kills the hook, which prints nothing and lets the tool proceed |
+| M10 | Drop the trailing separator alone, then the sentinel alone | the file documents these as a load-bearing **pair**; removing either in isolation is invisible without a row per member |
+| M11 | Remove the `command -v jq` arm | `jq_missing` is a documented enum member; without a row it has no coverage at all |
+| M12 | Return zero fields but exit before assigning a reason | **the guard's own dispatch** — an unset reason must not read as a pass |
 
 **Harness rows.**
 
 | # | Edit | Expectation |
 |---|---|---|
-| H1 | Replace the driver's call to `hook_parse_input` with a stub returning a canned reason | must redden: the guard must exercise the real function |
-| H2 | Assert only on the reason **head**, ignoring the detail suffix | must redden: M4 and the type-vector loss both survive a head-only assertion |
-| H3 | **Must-PASS, non-canonical:** a valid envelope with a `null` `file_path` and an absent `session_id` | absence and empty are legitimate per ADR-156; the guard must not treat them as faults |
+| H1 | Replace the driver's call to `hook_parse_input` with a stub returning a canned reason | must redden: the battery must exercise the real function |
+| H2 | Assert only on the reason **head**, ignoring the detail suffix | must redden: M4 survives a head-only assertion |
+| H3 | Delete the canary's **positive control** (the assertion that a `hook-input-nonstring` row was written) | must redden: without it the absence assertion passes when the harness never delivered the payload at all |
+| H4 | Move the case-counter increment **inside** the verdict helpers | must redden: ADR-193 §2 — an increment inside both helpers makes `passes + fails == cases` a tautology that stays green under the exact fault it exists to catch. The increment lives at the call site and never inside `$( )` |
+| H5 | Neuter the battery's verdict helper | the floor must still fail — it reports via `printf >&2` + `exit 1` directly (ADR-193 §1) |
+| H6 | **Must-PASS, non-canonical:** a valid envelope with a `null` `file_path` and an absent `session_id` | absence and empty are legitimate per ADR-156, and `d()` maps both to the empty string, so the battery must not treat either as a fault |
 
 ## Observability
 
@@ -539,81 +637,76 @@ it, never a copy of its logic.
 liveness_signal:
   what: summary.hook_input_fault_count plus its per-reason breakdown in knowledge-base/project/rule-metrics.json
   cadence: every local /compound run (ADR-091 local-producer model)
-  alert_target: the aggregator's WARNING line today; a threshold-and-delta consumer in the deferred issue
+  alert_target: the aggregator's WARNING line, which already renders the breakdown (measured)
   configured_in: scripts/rule-metrics-aggregate.sh
 error_reporting:
   destination: .claude/.rule-incidents.jsonl (local), rolled into the committed rule-metrics.json
   fail_loud: yes — hook_input_report writes the incident and a stderr line on every fault path
 failure_modes:
   - mode: a hook parses nothing and runs with guards disarmed
-    detection: an incident row whose rule_id names the split reason (hook-input-empty / -baddoc / -nonstring)
-    alert_route: the aggregator WARNING line, which already renders the breakdown (measured)
-  - mode: the classifier itself is broken and every fault reads alike
-    detection: Guard 5 M1 — the shipped defect drives the guard red
+    detection: an incident row whose rule_id names the split reason (hook-input-empty / -baddoc / -internal / -nonstring)
+    alert_route: the aggregator WARNING line
+  - mode: the classifier is broken and every fault reads alike
+    detection: the mutation battery's M1 and M2 rows
     alert_route: CI, on every PR touching the hook lib
-  - mode: the return code corrupts HOOK_FILE_PATH on the happy path
-    detection: AC5 byte-exactness, including a value ending in the literal X
-    alert_route: CI, PR 1
-  - mode: containment adoption regresses
-    detection: Guard 4, against a committed baseline
-    alert_route: CI, plus lefthook pre-commit via test-all.sh
+  - mode: a non-object root disarms every guard with no record at all
+    detection: AC6 — the one shape that today produces no reason
+    alert_route: CI
 logs:
-  where: .claude/.rule-incidents.jsonl, rotated to .claude/.rule-incidents-YYYY-MM.jsonl.gz
-  retention: monthly archives; note R8 — the 2026-08 archive is absent, which is why the August
-    evidence for this very issue could not be re-read, and R10 names a mechanism that would explain it
+  where: .claude/.rule-incidents.jsonl, intended to rotate to .claude/.rule-incidents-YYYY-MM.jsonl.gz
+  retention: DEGRADED, and this plan does not fix it. Rotation runs AFTER the orphan gate's exit 5
+    in scripts/rule-metrics-aggregate.sh, and R9 measures 12 live orphans — so rotation is currently
+    short-circuited on this repository and no archive is being produced. That is R10, deferred, and
+    it is the most plausible explanation for R8 (zero hook_self_fault rows retained anywhere).
+    Claiming "monthly archives" here would restate the very fiction the plan is correcting.
 discoverability_test:
-  command: bash plugins/soleur/test/c4-count-parity.test.sh
-  expected_output: exits 0, reporting count parity between model.c4 and the derived cardinalities
+  command: bash scripts/rule-metrics-aggregate.sh
+  expected_output: |
+    Run against a sandboxed INCIDENTS_REPO_ROOT seeded with one synthetic hook-input-baddoc row,
+    it exits 0 and prints a WARNING line naming the fault count and the per-reason breakdown —
+    i.e. the operator-visible path from "a guard was disarmed" to "someone can read it".
+    A C4 parity run was the earlier value here and was a category error: it demonstrates nothing
+    about whether a hook_self_fault is discoverable.
 ```
 
 The `hook_self_fault` signal is an **observability-layer 7** concern: it originates in the shell hook
 surface that executes on a contributor's own machine, where no server-side telemetry reaches. The
 committed metric is the only channel crossing that boundary, which is why the deferred consumer reads
-the committed artifact rather than adding a remote sink.
+the committed artifact rather than adding a remote sink. Until that consumer lands, **P8 is not
+delivered by this plan** — the WARNING line fires only inside a local `/compound` run, so a
+contributor who goes a fortnight without one runs a fortnight of calls with no out-of-session notice.
+Saying so is the point; an Observability block that implied otherwise would be the same defect class.
 
 ## Architecture Decision (ADR/C4)
 
-### ADR
+**No new ADR, and no decision change.** The ask-posture work — the only part of this plan that would
+have altered a recorded decision — is deferred alongside the type vector, so nothing here narrows
+ADR-157's posture and no ordinal is claimed. ADR-157 receives an **errata note only**, correcting its
+factual claim that the exit-code distinction is being made; that is a correction, not a decision, and
+it belongs in place.
 
-**Write a new ADR that extends; do not amend ADR-157 in place.** The repository's precedent for
-exactly this move is ADR-165, which narrowed ADR-157's posture on the reason-class axis and did it as
-a new record declaring `Extends: ADR-156, ADR-157` / `Supersedes: nothing`. ADR-156 itself carries
-that it "must never be superseded, it may be extended." Editing an Accepted ADR's decision in place
-destroys the record of what was decided, when, and on what evidence.
-
-The split:
-
-- **New ADR (Extends ADR-156, ADR-157, ADR-165).** Reason-class-scoped unconditional escalation for
-  hooks gating destructive or infrastructure operations, with `jq_missing` excluded on ADR-157's
-  self-referential-repair argument and `internal` failing open loudly because it is our bug. It cites
-  `prod-write-defer-gate.sh` — which already emits `hook_self_fault` and **denies** — as an existing,
-  unrecorded narrowing of the blanket rejection.
-- **Errata on ADR-157 only.** Correct its factual claim that the exit-code distinction is being made.
-  A correction, not a decision change, and it belongs in place.
-
-**An ordinal is therefore claimed, and the collision class does apply.** ADR-157's own header records
-a 156→157 renumber from exactly this collision. Enumerate across every `origin/*` ref — not
-`origin/main` — and **re-run the probe immediately before merge**. When renumbering, sweep this
-plan, `tasks.md` and any AC naming the ordinal in the same edit.
+When the deferred work lands it must follow ADR-165's precedent — a **new** record declaring
+`Extends: ADR-156, ADR-157` and `Supersedes: nothing`, never an in-place amendment, because ADR-156
+carries that it "must never be superseded, it may be extended". The deferred issue records that, so
+the next pass does not amend in place.
 
 ### C4 views
 
 Checked against all three of `knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}`.
 
-**Enumeration performed.** External human actors: none added or changed — no correspondent, reviewer
-or recipient enters the system. External systems/vendors: none — no inbound webhook, outbound API or
-third-party store. Containers and data stores touched: the `hooks` container ("Hook Engine") and the
-local incidents log, both already modelled. Actor↔surface access relationships: unchanged; no
-ownership or sharing boundary moves.
+**Enumeration performed.** External human actors: none added or changed. External systems/vendors:
+none — no inbound webhook, outbound API or third-party store. Containers and data stores touched: the
+`hooks` container and the local incidents log, both already modelled. Actor↔surface access
+relationships: unchanged.
 
-**One edit is required, and it is a correctness fix rather than an addition.** The `hooks` container
+**No C4 edit is required, and this is a change from an earlier draft.** The `hooks` container
 description asserts the ADR-157 posture as uniform and confines the split-by-reason-class to the
-`.openhands` side. Phase B4 makes the split apply on the `.claude` side too, falsifying that
-sentence.
+`.openhands` side. That sentence would have been falsified by the ask-posture change — which is now
+deferred — so the description remains accurate. The deferred issue carries the C4 edit with the work
+that makes it necessary.
 
 **Cardinality parity.** This change adds no monitor, workflow or heartbeat, so it moves no derived
-cardinality — but that is asserted, not assumed, by running `plugins/soleur/test/c4-count-parity.test.sh`
-(located at plan time; the earlier `apps/web-platform/test/` path was wrong) and requiring it green.
+cardinality — asserted, not assumed, by running `plugins/soleur/test/c4-count-parity.test.sh`.
 
 ## Domain Review
 
@@ -622,16 +715,33 @@ cardinality — but that is asserted, not assumed, by running `plugins/soleur/te
 ### Engineering
 
 **Status:** reviewed
-**Assessment:** The CTO review independently re-derived the `jq_rc` defect and confirmed it, and
-materially reshaped the plan. It cut the per-file containment guard as unsound — the tripwire aborts
-rather than contains, so a guard certifying "contained or refuses to run" certifies neither; its
-assembly would be a regex heuristic, evidenced by two defensible predicates returning 41 and 66
-members; and every recorded recurrence entered through an entry point, not a test file. It replaced
-that with the adoption ratchet. It found the `HOOK_FILE_PATH` corruption hole that a slot-count
-assertion cannot see (now AC5), required the B1 split, corrected the ADR strategy from in-place
-amendment to a new extending record, and identified that the deferred CI consumer would be unclearable
-by CI under ADR-091's local-producer model. It also corrected the brief's framing: the sweep is the
-named exit condition of #7849 rather than a violation of its deferral. All findings are adopted.
+**Assessment:** A CTO consult, a scoped strong-model consult and a six-agent panel (architecture,
+test-design, security, simplicity, citation-audit, user-impact) independently re-derived the `jq_rc`
+defect and reshaped the plan substantially.
+
+*Cut across the rounds:* a per-file containment guard (unsound — the tripwire aborts rather than
+contains, and its assembly was a regex heuristic whose defensible spellings returned 41 vs 66
+members); its replacement adoption ratchet (at baseline 0, `live <= baseline` cannot detect the
+regression it names, and its assembly contradicted itself); a static compile assertion (already
+covered by AC1); the type vector and the ask posture (deferred — both acquired concrete defects and
+both edit the hot path); a whole `## Test Scenarios` section that was the mutation matrices restated.
+
+*Found and fixed:* that carrying the return code after the split would make the zero-field arm
+**structurally unreachable**, so every payload fault would be misreported as `internal` — the exact
+inverse of the defect being repaired; that a JSON `null` root parses as a **silent success** with all
+five fields empty, disarming every guard with no record at all; that a complete record block followed
+by trailing garbage yields a correct count with rc 5, giving a payload a way to suppress the fault
+signal; that the `HOOK_FILE_PATH` corruption a count assertion cannot see has its worst consumer in
+the *empty* slot, where it kills the `:-` fallback in two live guards; that `set -euo pipefail`
+requires the sentinel `printf` to remain the last command in the substitution; that the containment
+regression test as first drafted would have gone green by aborting on the tripwire before testing
+anything, and stayed green with an entry-point scrub removed; that the vacuity precondition had three
+vacuity modes of its own; that the plan's own mutation battery sat outside the glob it added to close issue
+7942; and that a precedent the ADR was to cite (`prod-write-defer-gate.sh` denying on a parse fault)
+does not exist on that axis.
+
+All findings are adopted. The measurements the panel re-ran reproduced exactly; the defects clustered
+where the plan had stopped measuring and started arguing.
 
 ### Product/UX Gate
 
@@ -642,34 +752,12 @@ matches no path under `components/**`, `app/**/page.tsx` or `app/**/layout.tsx`.
 
 | Risk | Mitigation |
 |---|---|
-| B1 changes the parse path in a library sourced by ~30 hooks, ~19 firing per Bash tool call, where a persistent fault is unrecoverable because the repair is itself a Bash call. | B1 ships **alone** as PR 1, with AC5's byte-exactness gate — including the value ending in `X` — and the full contract battery green before anything else is touched. |
-| The return code lands on the wrong side of the sentinel and corrupts `HOOK_FILE_PATH` while the record count stays 6. | Exactly AC5. This is the failure a slot-count assertion structurally cannot see, and it is why the byte-exactness case names the `X`-terminated value. |
-| A payload forges an RS byte and manufactures a return code. | Precedence: the slot count is read first, and a forged separator can only produce `separator`, which is already a fault. Asserted by AC2. |
-| Shipping `internal` as a peer enum member reproduces the dead-code shape being removed. | It ships as a documented defensive default, exercised only in the mutation battery, with a static compile assertion catching the real condition at build time. |
-| A containment guard over a drifting per-file predicate conscripts unrelated scripts and ratchets an unstable number into CI. | The ratchet compares two counts from one enumeration; drift moves both sides. No per-file verdict is issued. |
-| Splitting the reason enum could orphan new rule ids. | **Measured false** (R12): exit 0, `orphan_rule_ids == []`, breakdown rendered. Re-asserted by AC9. |
-| #7822, #7835 and #7849 overlap; closing the wrong one loses the TS residual. | AC17 makes each disposition explicit and writes the measured counts into #7849 rather than leaving them implied. |
-| The orphan-gate rework could mask a real orphan. | Deferred to its own issue with its remedy specified, rather than rushed alongside a hook-library repair. |
+| PR 1 changes the parse path in a library sourced by 24 non-test hooks, 19 firing per Bash tool call, where a persistent fault is unrecoverable because the repair is itself a Bash call. | It ships apart from all other work, behind AC4's byte-exactness matrix and the full contract battery. |
+| The field-count convention is ambiguous, so claims about what a count assertion can see are unverifiable. | AC3 requires the number to be written into the file and asserted, before any claim rests on it. |
+| A mutation row passes for the wrong reason and certifies a dead discriminator. | AC5 and M3: the two `internal` arms are distinguishable, with a positive control proving rc-3 is reachable. |
+| The containment test goes green by refusing to run. | AC9's two arms, with the child's exit code in the oracle, and an explicit demonstration that the single-arm version passes with a scrub removed. |
+| The vacuity precondition is satisfied by `git` being absent or the directory missing. | AC11's positive control: succeed in a known repo, fail in the fixture with matching text, under the subject's own environment. |
+| Sourcing `test-helpers.sh` changes failure semantics in suites that do not use `set -e` or its counters. | AC8 verifies each swept suite still passes rather than assuming the source line is inert. |
+| A guard's own battery escapes the gate that guards batteries. | The battery is placed inside the registered glob, and A4 brings `*.mutation.sh` into the vacuity floor's derived population. |
+| Deferring the type vector and the consumer leaves #7275's Asks 1 and 3 partly open. | Both are written into the deferred issue with their designs, and surfaced to the operator in `decision-challenges.md` rather than quietly dropped. |
 | The plan cannot demonstrate the 7-faults/day rate. | Stated as R8 rather than papered over, and kept visible in the PR body because #7275's title asserts it. |
-
-## Test Scenarios
-
-Every scenario is of the shape *mutation → guard reddens*, because the deliverable is guards.
-
-1. Restore `jq_rc=${PIPESTATUS[1]:-0}` after the substitution → Guard 5 M1 reddens.
-2. Move the return code to the wrong side of the sentinel → Guard 5 M5 reddens on a happy-path
-   envelope whose `file_path` ends in `X`, while the record count stays 6.
-3. Break a token in `_HOOK_INPUT_JQ` → the static compile assertion fails and the runtime reason is
-   `internal`, not `unparseable`.
-4. Feed empty stdin → `empty`; feed `garbage {{` → `baddoc`; the two produce different `rule_id`s.
-5. Feed a `tool_input.command` value containing a literal U+001E → `separator`, never a success.
-6. Feed an array `tool_input.command` carrying a canary secret → the reason names `array`, and the
-   canary appears in no output or log.
-7. Remove `test-helpers.sh` from a swept suite → Guard 4 M1 reddens.
-8. Raise the committed baseline with no suite change → Guard 4 M3 reddens.
-9. Make Guard 4's enumeration return zero members → Guard 4 M4 reddens rather than exiting 0.
-10. Drive a swept suite under hostile `GIT_DIR` + `GIT_INDEX_FILE` → the victim's HEAD, refs and
-    staged list are unchanged as a triple.
-11. Run `guardrails.test.sh` under a hostile env → it aborts on the tripwire rather than silently
-    restoring branch resolution and voiding its own isolation.
-12. Remove a `*.mutation.sh` from the runner registration → the A5 assertion reddens.
