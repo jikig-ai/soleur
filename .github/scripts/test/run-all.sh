@@ -92,32 +92,25 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_sb"
        # Own it (ADR-129 rule (c)), COMPOSED with any EXIT trap already installed.
        #
-       # `trap -p` prints a RE-EXECUTABLE command whose body carries bash's OWN quoting, so an
-       # embedded single quote comes back as the four-character sequence '\' . Stripping the
-       # outer quotes with sed and re-wrapping the remainder in double quotes leaves those escapes
-       # unbalanced. Measured: a prior trap containing `echo "bye '"` produced
-       #   test-helpers.sh: exit trap: line 1: unexpected EOF while looking for matching `''
-       # and the suite exited 2 AFTER printing ALL TESTS PASSED -- a broken trap ALSO never runs,
-       # so the sandbox it was installed to remove leaks.
-       #
-       # Assigning bash's quoted form back through `eval` round-trips it exactly, and the trap
-       # strings below are then FIXED text with nothing interpolated into them.
+       # Unescaped with PARAMETER EXPANSION, never `eval`. `trap -p` emits the body single-quoted
+       # with a literal quote as the four-character sequence '\'' ; stripping the outer quotes and
+       # re-wrapping in double quotes leaves those unbalanced and makes the composed trap a SYNTAX
+       # ERROR, which then never runs and leaks the sandbox. `eval` would round-trip it, but
+       # ADR-156 forbids eval under .claude/hooks and the sibling copy of this block lives there —
+       # one pattern across all three sites beats two spellings of the same fix.
        _soleur_prior_body=""
        _soleur_prior_raw="$(trap -p EXIT)"
        if [ -n "$_soleur_prior_raw" ]; then
          _soleur_s="${_soleur_prior_raw#trap -- }"
          _soleur_s="${_soleur_s% EXIT}"
-         eval "_soleur_prior_body=$_soleur_s"
+         _soleur_s="${_soleur_s#\'}"
+         _soleur_s="${_soleur_s%\'}"
+         _soleur_prior_body="${_soleur_s//\'\\\'\'/\'}"
        fi
        _SOLEUR_SB_OWNED="$_soleur_sb"
        _soleur_sb_cleanup() { [ -n "${_SOLEUR_SB_OWNED:-}" ] && rm -rf "$_SOLEUR_SB_OWNED"; return 0; }
-       if [ -n "$_soleur_prior_body" ]; then
-         eval "_soleur_prior_exit() { $_soleur_prior_body
-}"
-         trap '_soleur_prior_exit; _soleur_sb_cleanup' EXIT
-       else
-         trap '_soleur_sb_cleanup' EXIT
-       fi
+       # shellcheck disable=SC2064
+       trap "${_soleur_prior_body:+$_soleur_prior_body; }_soleur_sb_cleanup" EXIT
        unset _soleur_prior_raw _soleur_s _soleur_prior_body _soleur_sb ;;
   *)   printf "FATAL: inherited INCIDENTS_REPO_ROOT is not absolute: %s\n" \
          "$INCIDENTS_REPO_ROOT" >&2

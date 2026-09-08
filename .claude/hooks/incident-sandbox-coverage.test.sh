@@ -225,8 +225,15 @@ for c in "${PRELOAD_FILES[@]}"; do
   fi
   verdict "$rc" "preload registers the arming module: $c"
 done
-rc=1; [ "$ok_chokepoints" -eq "${#CHOKEPOINTS[@]}" ] && rc=0
-verdict "$rc" "every chokepoint carries the export ($ok_chokepoints/${#CHOKEPOINTS[@]})"
+# `ok_chokepoints` is incremented by BOTH loops above, so the total is the two arrays summed.
+# This read `${#CHOKEPOINTS[@]}` — an array that is never defined anywhere in this file, left over
+# from the rename to CHOKEPOINT_FILES/PRELOAD_FILES. Under `set -u` that expansion ABORTS the
+# command, so `verdict` was never called: the assertion did not fail, it silently CEASED TO EXIST,
+# while MIN_CASES below still read 22 because the floor was set after the arm was already broken.
+# The error went to stderr, which is why local runs looked green.
+_chokepoint_total=$(( ${#CHOKEPOINT_FILES[@]} + ${#PRELOAD_FILES[@]} ))
+rc=1; [ "$ok_chokepoints" -eq "$_chokepoint_total" ] && rc=0
+verdict "$rc" "every chokepoint carries the export ($ok_chokepoints/$_chokepoint_total)"
 
 # --- E. THE OUTSIDE SET ------------------------------------------------------
 # Preload/globalSetup coverage is DERIVED: a config's declared entry file must itself reach
@@ -406,7 +413,7 @@ rm -rf "$_tc_probe"
 unset _tc_probe _tc_out _tc_rc _tc_sb
 
 printf '\n'
-MIN_CASES=22
+MIN_CASES=23
 if [ "$CASES" -lt "$MIN_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$CASES" "$MIN_CASES" >&2; exit 1
 fi

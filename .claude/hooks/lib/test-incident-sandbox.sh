@@ -65,30 +65,33 @@ _soleur_test_incident_sandbox_init() {
   # clobbering it. A suite that installs its own trap AFTER sourcing this will
   # still win — that only leaks one small tmpdir, never a real-ledger write,
   # so the failure direction is tidiness rather than correctness.
-  # `trap -p` prints a RE-EXECUTABLE command whose body carries bash's OWN quoting, so an embedded
-  # single quote returns as '\' . The previous form stripped the outer quotes with sed and
-  # re-wrapped the rest in double quotes, which leaves those escapes unbalanced and makes the new
-  # trap a SYNTAX ERROR. That is not only noise on exit: a trap that fails to parse never runs, so
-  # the sandbox this function exists to remove is leaked. Measured on this machine: 971 stale
-  # soleur-inc-* directories.
+  # `trap -p` prints a RE-EXECUTABLE command whose body carries bash's OWN quoting: the body is
+  # single-quoted, and a literal single quote inside it is emitted as the four-character sequence
+  # '\'' . The previous form stripped the outer quotes with sed and re-wrapped the remainder in
+  # double quotes, which leaves those escapes unbalanced and makes the composed trap a SYNTAX
+  # ERROR. A trap that fails to parse never runs, so the sandbox this function exists to remove is
+  # leaked.
   #
-  # Assigning bash's quoted form back through `eval` round-trips it exactly, and the trap strings
-  # below are then FIXED text with nothing interpolated.
+  # UNESCAPED WITH PARAMETER EXPANSION, NOT `eval`. ADR-156 forbids `eval` anywhere under
+  # .claude/hooks — hook stdin is untrusted and hook-input-contract.test.sh arm A1 enforces it
+  # across the whole tree, this lib included. An earlier revision of this fix used `eval` to
+  # round-trip the quoting and A1 caught it (2 offenders). The allow-list there covers exactly one
+  # fd-close idiom in session-state.sh and widening it for convenience would be the wrong trade.
+  #
+  # `trap "<text>"` is still how the composed trap is installed, which is what the ORIGINAL code
+  # did and what keeps `$VAR` inside the prior body expanding at FIRE time rather than now.
   local prior_raw prior_body="" s
   prior_raw="$(trap -p EXIT)"
   if [ -n "$prior_raw" ]; then
     s="${prior_raw#trap -- }"
     s="${s% EXIT}"
-    eval "prior_body=$s"
+    s="${s#\'}"
+    s="${s%\'}"
+    prior_body="${s//\'\\\'\'/\'}"
   fi
   _SOLEUR_INC_SB_OWNED="$d"
   _soleur_inc_sb_cleanup() { [ -n "${_SOLEUR_INC_SB_OWNED:-}" ] && rm -rf "$_SOLEUR_INC_SB_OWNED"; return 0; }
-  if [ -n "$prior_body" ]; then
-    eval "_soleur_inc_prior_exit() { $prior_body
-}"
-    trap '_soleur_inc_prior_exit; _soleur_inc_sb_cleanup' EXIT
-  else
-    trap '_soleur_inc_sb_cleanup' EXIT
-  fi
+  # shellcheck disable=SC2064
+  trap "${prior_body:+$prior_body; }_soleur_inc_sb_cleanup" EXIT
 }
 _soleur_test_incident_sandbox_init
