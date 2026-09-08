@@ -43,6 +43,19 @@
 # which costs production nothing.
 set -uo pipefail
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output. `case "$-" in *x*)`
+# tests whether tracing is ON rather than enumerating the eight ways to turn it on, two
+# of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${SUPABASE_ACCESS_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=scripts/lib/strip-log-injection.sh
@@ -107,14 +120,14 @@ identity_ok=0
 # stderr is dropped so a curl diagnostic cannot echo the URL back.
 api_get() {
   printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" |
-    curl --silent --show-error --max-time 30 \
+    curl --disable --noproxy '*' --silent --show-error --max-time 30 \
       --header @- \
       --write-out $'\n%{http_code}' --url "$1" 2>/dev/null
 }
 
 api_query() {
   printf 'Authorization: Bearer %s' "$SUPABASE_ACCESS_TOKEN" |
-    curl --silent --show-error --max-time 30 \
+    curl --disable --noproxy '*' --silent --show-error --max-time 30 \
       --request POST \
       --header @- \
       --header "Content-Type: application/json" \
