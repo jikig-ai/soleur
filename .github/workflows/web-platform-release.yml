@@ -122,6 +122,11 @@ jobs:
     outputs:
       soft_breach: ${{ steps.await.outputs.soft_breach }}
       soft_elapsed_s: ${{ steps.await.outputs.soft_elapsed_s }}
+      # Exported so the notifier can DERIVE the numbers it reports instead of restating them, and
+      # so the fail-closed case has a channel that can tell "the gate gave up" from "tests failed".
+      ceiling_breach: ${{ steps.await.outputs.ceiling_breach }}
+      final_elapsed_s: ${{ steps.await.outputs.final_elapsed_s }}
+      ceiling_s: ${{ steps.await.outputs.ceiling_s }}
     steps:
       - name: Wait for CI test check-run on this SHA
         id: await
@@ -204,6 +209,10 @@ jobs:
           soft_ceiling_s=$(( CEILING_S * 7 / 10 ))
           start_epoch=$(date +%s)
           total_budget=$((MAX_ATTEMPTS + RECONCILE_ATTEMPTS))
+          # Publish the ceiling so every downstream message DERIVES it. A consumer that restates
+          # `3600` goes silently wrong on the next raise — which is the drift the soft ceiling's own
+          # derivation exists to remove, and which the Slack body did anyway (#7902 review).
+          echo "ceiling_s=$CEILING_S" >> "${GITHUB_OUTPUT:-/dev/null}"
           for attempt in $(seq 1 "$total_budget"); do
             elapsed=$(( $(date +%s) - start_epoch ))
             if [ "$elapsed" -gt 900 ] && [ "$warned_900" = "0" ]; then
@@ -220,9 +229,27 @@ jobs:
               echo "::warning::await-ci has passed 70% of its ceiling for $SHA (elapsed_s=$elapsed, soft_ceiling_s=$soft_ceiling_s, CEILING_S=$CEILING_S). This measures time-to-'test' INCLUDING the ci.yml concurrency queue. Sustained hits mean CI has outgrown the deploy gate — raise CEILING_S (moving DRIFT_SUSTAINED_THRESHOLD_MIN first) or shorten CI, before this becomes a fail-closed deploy."
               # Written HERE, not at exit: the loop leaves via `exit 0` on the success path, and
               # the runner reads $GITHUB_OUTPUT after the step ends regardless of exit path.
-              echo "soft_breach=true" >> "$GITHUB_OUTPUT"
-              echo "soft_elapsed_s=$elapsed" >> "$GITHUB_OUTPUT"
+              echo "soft_breach=true" >> "${GITHUB_OUTPUT:-/dev/null}"
+              echo "soft_elapsed_s=$elapsed" >> "${GITHUB_OUTPUT:-/dev/null}"
               warned_soft=1
+            fi
+            # HARD CEILING, EVALUATED AT THE TOP (#7902 review, P1).
+            #
+            # This check used to live inside the `run_status != completed` branch, ~50 lines below
+            # — which both `gh api` failure arms skip via `sleep; continue`. So a degraded token, a
+            # rate limit, or a GitHub API blip spun the loop WITHOUT ever testing elapsed, until
+            # either loop exhaustion or the `timeout-minutes` hard-kill, and the hard-kill emits no
+            # annotation at all. The comment below the old site claimed the opposite ("fires before
+            # the timeout-minutes hard-kill ... regardless of per-iteration gh-api latency"); that
+            # was true of latency and false of failure. Evaluating it here makes it unconditional.
+            if [ "$elapsed" -ge "$CEILING_S" ]; then
+              {
+                echo "soft_breach=${warned_soft:+true}"
+                echo "ceiling_breach=true"
+                echo "final_elapsed_s=$elapsed"
+              } >> "${GITHUB_OUTPUT:-/dev/null}"
+              echo "::error::Timed out after ${elapsed}s (ceiling ${CEILING_S}s) waiting for CI on $SHA — blocking deploy (fail-closed). This is the GATE giving up, NOT a test failure: CI may still be running and may still go green. See ADR-072."
+              exit 1
             fi
             # ── TOP OF LOOP: read the `test` check-run verdict FIRST (AC2). ──
             # var-based (NOT piped-into-grep) to avoid set -e + pipe fragility;
@@ -269,10 +296,9 @@ jobs:
             if [ "$run_status" != "completed" ]; then
               # CI run is alive (queued/in_progress/waiting/requested/pending) or
               # not-yet-registered — keep waiting, bounded by the WALL-CLOCK ceiling.
-              # Keying on `elapsed` (not attempt count) guarantees this diagnostic
-              # fires before the timeout-minutes hard-kill even when per-iteration
-              # gh-api latency stretches each loop iteration past INTERVAL_S
-              # (#5795 review P3).
+              # Redundant since #7902's review hoisted the same check to the TOP of the loop
+              # (where no `continue` arm can skip it). Kept as a second net; if it ever fires
+              # before the hoisted one, the hoisted one has been moved or removed.
               if [ "$elapsed" -ge "$CEILING_S" ]; then
                 echo "::error::Timed out after ${elapsed}s (ceiling ${CEILING_S}s) while the ci.yml run for $SHA was still '$run_status' — blocking deploy (fail-closed). CI exceeded the adaptive ceiling; see ADR-072."
                 exit 1
@@ -1217,10 +1243,14 @@ jobs:
   notify-slow-ci:
     needs: [release, await-ci]
     # `success` is load-bearing: this reports a gate that PASSED while approaching its ceiling.
-    # The fail-closed case is notify-gated's. `== 'true'` compares against a non-numeric literal,
-    # so an unset output cannot coerce into a match the way `== '0'` would.
+    # The fail-closed case is notify-gated's — and notify-gated now receives the breach outputs so
+    # it can say WHICH happened (#7902 review, P1: it previously told the operator "CI did not go
+    # green" on a run where CI went green 12 minutes later).
     if: always() && needs.await-ci.result == 'success' && needs.await-ci.outputs.soft_breach == 'true'
     runs-on: ubuntu-latest
+    # Bounds a hung POST. Absent, this inherits GitHub's 360-minute default, in a PR whose subject
+    # is that a silent bound is worse than a loud one.
+    timeout-minutes: 5
     steps:
       - name: Post slow-CI early warning to Slack
         continue-on-error: true
@@ -1228,6 +1258,7 @@ jobs:
           SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
           SHA: ${{ github.sha }}
           ELAPSED_S: ${{ needs.await-ci.outputs.soft_elapsed_s }}
+          CEILING_S: ${{ needs.await-ci.outputs.ceiling_s }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
@@ -1237,13 +1268,31 @@ jobs:
           fi
           echo "::add-mask::$WEBHOOK"
           SHORT_SHA="${SHA:0:12}"
+          # DERIVED, not restated (#7902 review, P2). The ceiling and the percentage both come from
+          # the gate's own outputs; hardcoding `3600s` and `70%` here is exactly the drift the soft
+          # ceiling's derivation exists to remove, and it went silently wrong on the next raise.
+          CEIL="${CEILING_S:-unknown}"
+          if [ "$CEIL" != "unknown" ] && [ "$ELAPSED_S" -gt 0 ] 2>/dev/null; then
+            PCT=$(( ELAPSED_S * 100 / CEIL ))
+          else
+            PCT="?"
+          fi
           # Slack mrkdwn: *single asterisk* is bold and backticks are literal code-spans, not
           # command substitution — same single-quoted printf format notify-gated uses below.
+          # NOTE the escaping: this is a SHELL printf, so a literal percent is `%%`, not `%%%%`
+          # (the four-percent form is the GitHub-annotation idiom and rendered "70%%" here).
           # shellcheck disable=SC2016  # single-quoted printf format: backticks are literal markdown
-          MESSAGE=$(printf '*:hourglass: CI is approaching the deploy gate ceiling*\n\nThe deploy for `%s` went through, but CI took %ss against a 3600s ceiling — past 70%%%% of the budget. This measures time-to-CI-green INCLUDING the queue where main pushes wait behind each other. If this keeps appearing, CI has outgrown the gate and deploys will start failing closed (that was #7902).\n\n%s' \
-            "$SHORT_SHA" "$ELAPSED_S" "$RUN_URL")
-          printf '%s' "$MESSAGE" | jq -Rs '{text: .}' \
-            | curl -sS -X POST -H 'Content-Type: application/json' -d @- "$WEBHOOK" >/dev/null
+          MESSAGE=$(printf '*:hourglass: CI is approaching the deploy gate ceiling*\n\nThe deploy gate for `%s` passed, but CI first crossed the warning line at %ss against a %ss ceiling (~%s%% of the budget). This measures time-to-CI-green INCLUDING the queue where main pushes wait for runners. If this keeps appearing, CI has outgrown the gate and deploys will start failing closed (that was #7902).\n\n%s' \
+            "$SHORT_SHA" "$ELAPSED_S" "$CEIL" "$PCT" "$RUN_URL")
+          # --max-time and an explicit status check, matching notify-gated below. Without them a
+          # rotated webhook or a Slack 5xx exits 0 and the ONLY early-warning route is lost as
+          # silently as the ::warning:: it exists to escalate.
+          HTTP_CODE=$(printf '%s' "$MESSAGE" | jq -Rs '{text: ., unfurl_links: false}' \
+            | curl -sS -X POST -H 'Content-Type: application/json' -d @- \
+                --max-time 15 -o /dev/null -w '%{http_code}' "$WEBHOOK" || echo "000")
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::warning::slow-CI Slack notification failed (HTTP $HTTP_CODE) — the early warning did not reach the operator"
+          fi
 
   notify-gated:
     needs: [release, await-ci]
@@ -1258,6 +1307,8 @@ jobs:
           SLACK_RELEASES_WEBHOOK_URL: ${{ secrets.SLACK_RELEASES_WEBHOOK_URL }}
           SHA: ${{ github.sha }}
           VERSION: ${{ needs.release.outputs.version }}
+          CEILING_BREACH: ${{ needs.await-ci.outputs.ceiling_breach }}
+          FINAL_ELAPSED_S: ${{ needs.await-ci.outputs.final_elapsed_s }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           WEBHOOK="${SLACK_RELEASES_WEBHOOK_URL:-}"
@@ -1273,7 +1324,19 @@ jobs:
           # code-spans (no command substitution intended). SHA/version/run-url are
           # trusted GitHub contexts injected via env (no untrusted-input interp).
           # shellcheck disable=SC2016  # single-quoted printf format: backticks are literal markdown, not command substitution
-          MESSAGE=$(printf '*:no_entry: Web Platform deploy GATED — prod NOT updated*\n\nCI did not go green for %s`%s`, so the prod cutover was blocked (fail-closed) and production is still on the previous build. Inspect the await-ci job, then re-run the release once CI is green for this SHA.\n\n%s' \
+          # WHICH failure this was is not something this job can assume (#7902 review, P1). The
+          # gate fail-closes for two materially different reasons: CI reported a non-success
+          # verdict, or the gate hit its own ceiling while CI was still running. Measured on run
+          # 34214305370, the second happened and this message asserted the first — CI concluded
+          # SUCCESS twelve minutes after the gate gave up. `ceiling_breach` distinguishes them.
+          if [ "${CEILING_BREACH:-}" = "true" ]; then
+            CAUSE=$(printf 'the deploy gate gave up after %ss while CI was STILL RUNNING — this is the gate timing out, not a test failure. CI may well have gone green afterwards; check the ci.yml run for this SHA before assuming a regression. If this recurs, CI has outgrown the gate (that is #7902)' "${FINAL_ELAPSED_S:-?}")
+          else
+            CAUSE='CI did not go green'
+          fi
+          # shellcheck disable=SC2016  # single-quoted printf format: backticks are literal markdown
+          MESSAGE=$(printf '*:no_entry: Web Platform deploy GATED — prod NOT updated*\n\n%s for %s`%s`, so the prod cutover was blocked (fail-closed) and production is still on the previous build. Inspect the await-ci job, then re-run the release once CI is green for this SHA.\n\n%s' \
+            "$CAUSE" \
             "$VER_LABEL" "$SHORT_SHA" "$RUN_URL")
           # shellcheck disable=SC2016  # $text is a jq variable, not a shell expansion
           PAYLOAD=$(jq -n --arg text "$MESSAGE" '{text: $text, unfurl_links: false}')
@@ -1336,6 +1399,7 @@ jobs:
       - deploy
       - live-verify
       - notify-gated
+      - notify-slow-ci
     if: always()
     runs-on: ubuntu-latest
     permissions:

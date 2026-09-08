@@ -286,13 +286,28 @@ if mutate "$GUARD" "$_taut_old" "$_taut_new" 2>"$WORK/muterr"; then
     fail "ROW6 — tautology stub did not land; this row measured nothing."
     cp "$PRISTINE_GUARD" "$GUARD"
   else
-    mutate "$RUNNER" \
+    # ROW6 is the ONLY row that calls `mutate` directly instead of through row(), so it must
+    # re-do row()'s two safety checks by hand (#7902 review, P2). Without them: a drifted anchor
+    # makes `mutate` exit non-zero, its stderr is swallowed, the runner is left UNMUTATED, the
+    # tautology reference trivially returns 0, and the row prints PASS for "the mutation did not
+    # apply" — the exact false-green this file's own header (`A mutation that did not land reports
+    # the BASELINE, which is indistinguishable from a survivor`) exists to forbid. The anchor is
+    # byte-identical to ROW3's, so drift breaks both: ROW3 loudly, ROW6 silently.
+    _row6_ok=1
+    if ! mutate "$RUNNER" \
       '  run_suite "scripts/test-all-runtime-ceiling" bash scripts/test-all-runtime-ceiling.test.sh' \
       '  if false; then
     run_suite "MUTANT_ROW6_UNREACHABLE" bash /dev/null
   fi
-  run_suite "scripts/test-all-runtime-ceiling" bash scripts/test-all-runtime-ceiling.test.sh' \
-      2>/dev/null
+  run_suite "scripts/test-all-runtime-ceiling" bash scripts/test-all-runtime-ceiling.test.sh'; then
+      _row6_ok=0
+    fi
+    if cmp -s "$PRISTINE_RUNNER" "$RUNNER"; then _row6_ok=0; fi
+    if (( _row6_ok == 0 )); then
+      fail "ROW6 — the tautology mutation did not land (anchor drifted?); this row measured nothing."
+      cp "$PRISTINE_GUARD" "$GUARD"; cp "$PRISTINE_RUNNER" "$RUNNER"
+      _taut_rc=-1
+    else
     _taut_rc=$(guard_rc)
     cp "$PRISTINE_GUARD" "$GUARD"
     cp "$PRISTINE_RUNNER" "$RUNNER"
@@ -300,6 +315,7 @@ if mutate "$GUARD" "$_taut_old" "$_taut_new" 2>"$WORK/muterr"; then
       pass "ROW6 — a K=1 tautology reference is BLIND to the ROW3 dropped registration (exit 0) while the real reference catches it. The independent derivation is load-bearing, not decorative."
     else
       fail "ROW6 — the tautology reference ALSO caught the dropped registration. Either the stub did not take effect, or the reference derivation is not what makes this guard work — in which case the guard's central design claim is unsupported and must be re-argued."
+    fi
     fi
   fi
 else

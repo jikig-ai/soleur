@@ -185,6 +185,30 @@ else
 fi
 
 if (( LEGS_N >= 1 )); then
+  # ROW: the matrix VALUES must actually be WIRED to the runner (#7902 review, P1).
+  #
+  # Every other row here reads ci.yml's `strategy.matrix.shard` literals. That is a claim about what
+  # the matrix DECLARES, and says nothing about what the leg RECEIVES. The wire is one line —
+  # `SCRIPTS_SHARD: ${{ matrix.shard }}` — and replacing it with a literal (`SCRIPTS_SHARD: "1/3"`)
+  # leaves every declared value untouched: measured, all 15 rows stayed green while all three legs
+  # ran leg 1's registrations and 250 of 376 ran NOWHERE, behind a green required `test`. That is
+  # verbatim the catastrophe this file's header says it prevents.
+  #
+  # The extractor above cannot see it either: its awk matches lowercase /shard:/, and the binding
+  # reads SCRIPTS_SHARD: — a near-miss anchor collision. So this row greps the job block directly,
+  # anchored on the interpolation rather than the key, because only the interpolation carries the
+  # per-leg value.
+  _wire=$(awk '
+    /^  test-scripts:$/ { inj=1; next }
+    inj && /^  [A-Za-z0-9_-]+:$/ { exit }
+    inj { print }
+  ' "$CI_YML" | grep -cE '^[[:space:]]*SCRIPTS_SHARD:[[:space:]]*\$\{\{[[:space:]]*matrix\.shard[[:space:]]*\}\}[[:space:]]*$' || true)
+  if [[ "$_wire" == "1" ]]; then
+    pass "the matrix is WIRED: test-scripts binds SCRIPTS_SHARD to \${{ matrix.shard }} exactly once"
+  else
+    fail "the matrix->env wire is missing or not an interpolation ($_wire matches). A literal or absent SCRIPTS_SHARD makes every leg run the same (or the full) set while all leg values stay declared and every other row here stays green."
+  fi
+
   # ROW: every declared leg must resolve to a distinct k, and all must share one N.
   # This is what detects a leg that lost its env or a hand-edited duplicate.
   declare -a _ks=() _ns=()
@@ -350,7 +374,7 @@ fi
 #
 # Reported with printf + exit 1, NEVER through fail() — the helper this floor exists to
 # backstop is exactly the thing one edit disarms (ADR-193).
-MIN_ROWS=15
+MIN_ROWS=16
 TOTAL=$(( PASS + FAIL ))
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The suite did not run to completion, so its verdict is not evidence.\n' "$TOTAL" "$MIN_ROWS" >&2
@@ -359,7 +383,9 @@ fi
 
 echo ""
 echo "scripts-shard-totality.test.sh: $TOTAL rows, $PASS passed, $FAIL failed"
+# VERDICT IS REPORTED THE WAY THE FLOOR IS (#7902 review, P2).
 if (( FAIL > 0 )); then
+  printf 'VERDICT: %d of %d rows FAILED — this suite is RED.\n' "$FAIL" "$TOTAL" >&2
   exit 1
 fi
 echo "All tests passed"

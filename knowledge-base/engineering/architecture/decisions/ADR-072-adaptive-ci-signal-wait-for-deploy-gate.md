@@ -102,7 +102,7 @@ has a cliff at whatever ceiling is chosen; adaptive **widens and defers** that c
 ≈50m, only while CI is provably alive) rather than removing it. Removing it entirely is
 option 3.
 
-> **Superseded 2026-09-07 (#7902):** the cliff is now ≈60m — `CEILING_S` was raised
+> **Corrected in place 2026-09-07 (#7902):** the cliff is now ≈60m — `CEILING_S` was raised
 > 3000s → 3600s. This sentence sits outside the amended Decision item 4, so the append-only
 > amendment below does not reach it; the figure is corrected here rather than in place, per
 > the append-only discipline for dated records.
@@ -176,7 +176,16 @@ job's `completed_at` minus the run's `created_at`):** p50 35.2m, p90 54.0m, p100
 
 **What changed.**
 
-- `CEILING_S` 3000 -> **3600** (60m), sized above the re-measured p100 of 57.4m.
+- `CEILING_S` 3000 -> **3600** (60m), sized above the p100 of 57.4m measured at plan time.
+
+> **Corrected 2026-09-08 (#7902 QA round 2).** That sizing no longer holds. Re-measured over the
+> 25 most recent completed `main` push runs: p50 35.4m, p90 54.0m, **p100 69.3m**. Run
+> 34214304922 fail-closed a healthy build on 2026-09-08 — CI concluded `success` twelve minutes
+> after the gate gave up — at a duration `CEILING_S=3600` would also have missed. So the raise
+> clears the p50/p90 mass deterministically and does NOT clear the observed tail; the shard is
+> what must, and AC25 measures whether it did. Do not read "sized above the p100" as a standing
+> property: it is a statement about a window, and the window moves.
+
 - `MAX_ATTEMPTS` 300 -> **360**, which item 4 named as "the loop's iteration backstop". This is
   not cosmetic: the loop runs `seq 1 $((MAX_ATTEMPTS + RECONCILE_ATTEMPTS))` and falls through on
   exhaustion to a fail-closed error reporting `total_budget * INTERVAL_S`. Left at 300, loop

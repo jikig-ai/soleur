@@ -79,11 +79,24 @@ one.**
 
 `timeout-minutes` is retained on `test`'s closure for that narrow purpose only, and explicitly
 not as a bound on the gate. Sizing rule: GitHub's `timeout-minutes` produces **no annotation** on
-a kill, so it is the last resort and must sit strictly above every loud bound on its path — the
-per-suite budgets declared in `scripts/test-all.sh` and `await-ci`'s own `CEILING_S`. Concretely
-`test-scripts` carries 60 min because one suite on its path declares a 2,500,000 ms (41.67 min)
-fail-safe budget; a 30-minute ceiling sized against the leg's nominal 15.09 min would have made a
-healthy slow run die with no diagnostic — #7902's failure mode relocated into CI and made silent.
+a kill, so it is the last resort and must sit strictly above whatever else can stop the job first.
+
+> **Corrected 2026-09-08 (#7902 QA round 2).** An earlier revision of this paragraph named that
+> "every loud bound on its path — the per-suite budgets declared in `scripts/test-all.sh` and
+> `await-ci`'s own `CEILING_S`", and called the 2,500,000 ms budget a *fail-safe*. Both halves are
+> wrong, and `ci.yml`'s own comment had already been corrected to say so:
+>
+> - The per-suite budget is **advisory**. `scripts/test-all.sh` states it verbatim — *"A budget
+>   NEVER changes a suite's status or the runner's exit code."* It reports; it cannot fire, so it
+>   is not a bound of any kind, loud or otherwise.
+> - `CEILING_S` bounds a job in a **different workflow**. It does not bound a CI leg, so
+>   `timeout-minutes` is in fact the *only* bound on that leg.
+>
+> The sizing CONCLUSION is unchanged and still right — `test-scripts` carries 60 min so that a
+> healthy slow run cannot be killed silently — but the reason is that the leg's own declared
+> budget describes a legitimately long run, not that it is a bound the timeout must clear. This
+> ADR outlives the workflow comment, so leaving the retracted version here would hand the next
+> reader the erratum.
 
 ## Consequences
 

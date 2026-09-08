@@ -828,7 +828,7 @@ jobs:
     # (the runner prints `--- <label> ---` at each suite start and Actions timestamps every
     # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order.
     #
-    # MEASURED on the 375-suite `LC_ALL=C` registration order as of this commit — slowest-leg
+    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 376; see the STALE stanza) — slowest-leg
     # minutes, group total 35.25 min:
     #
     #   K=2 -> 21.91   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
@@ -853,30 +853,73 @@ jobs:
     # longer exists on main, and re-deriving it needs a post-merge log. Post-merge AC25 measures
     # the real thing anyway.
     #
-    # WHY THAT IS SAFE TO SHIP WITHOUT RE-SIMULATING — an ORDER-INDEPENDENT bound, which is the
-    # part a reshuffle can never invalidate. The whole group is 35.25 min = 2115s, so ANY leg of
-    # ANY partition is bounded by 2115s. Against the worst measured concurrency-group queue
-    # (21 min = 1260s) that is 3375s, still inside the 3600s CEILING_S with 225s to spare. The
-    # bound holds even in the degenerate case where one leg ran the entire group, so no
-    # reordering — this one or a future one — can push time-to-`test` past the gate. The table
-    # above is what justifies K=3 as the OPTIMUM; this bound is what makes any K=3 assignment
-    # SAFE. Keep both: re-simulate to re-optimise, not to re-establish safety. Making leg composition
-    # an owned fact rather than a positional accident (LPT over a checked-in duration table) is
-    # tracked as a follow-up, not shipped here.
+    # AN EARLIER REVISION CLAIMED AN ORDER-INDEPENDENT SAFETY BOUND HERE. IT WAS WRONG — the
+    # retraction is kept because the argument is tempting and someone will rebuild it.
+    #
+    # It read: the group is 35.25 min = 2115s, so any leg of any partition is bounded by 2115s;
+    # plus the worst measured queue (1260s) that is 3375s, inside the 3600s ceiling with 225s to
+    # spare; therefore no reordering can push time-to-`test` past the gate. All three premises are
+    # wrong, measured over the same 25-run window:
+    #
+    #   * 2115s is ONE SAMPLE, not a bound. Max observed `test-scripts` duration is 2339s.
+    #   * 1260s is not the worst queue. Two runs in the window queued 1345s and 1433s.
+    #   * The sum OMITS A TERM. Time-to-`test` also includes the `test` aggregator's own runner
+    #     wait, measured at 619s on run 34214304922 and absent from the arithmetic entirely.
+    #
+    # Worst-case with the measured maxima: 2339 + 1433 + 619 = 4391s, well past 3600s. Composing a
+    # worst-case leg with a mid-case queue does not yield a bound, and calling the result "225s to
+    # spare" was fiction. There is no order-independent bound under this ceiling on current data.
+    #
+    # What actually makes the raise safe is narrower and worth stating plainly: the shard cuts the
+    # LEG term (the only term this PR controls), the soft-ceiling warning measures the real
+    # quantity every release, and AC25 checks the result post-merge over the first three runs. If
+    # AC25 misses, the answer is a larger K or a shorter CI — not a bigger ceiling. Making leg
+    # composition an owned fact rather than a positional accident (LPT over a checked-in duration
+    # table) is tracked as a follow-up, not shipped here.
     #
     # The floor no K can beat is the longest single suite —
     # `tests/scripts/registry-gate-mutation-battery` at 8.14 min, 23% of the group on its own.
-    # K=3 lands 15.09 min (+0.52 min measured per-leg install overhead) against a 3600s gate
-    # ceiling. Extra legs are nearly free in runner-minutes, but they consume peak runner
-    # concurrency — the same pool the concurrency-key follow-up will need — so the smallest
-    # qualifying K wins.
+    # K=3 landed 15.09 min on the 374-suite order this table was simulated over. On the 376-suite
+    # order that actually ships it does NOT: re-simulated at review time, K=3 is 20.73 min and both
+    # K=4 (18.02) and K=5 (10.77) beat it, so the "K=3 is the optimum" conclusion above does not
+    # hold for this tree and is retracted. K=3 remains SAFE (totality holds for any K, and the
+    # order-independent bound below covers the wall clock); it is simply no longer known-optimal.
+    # Re-simulate before treating any K as chosen — the method above is reproducible from the
+    # archived job log in about two minutes, and "needs a post-merge log" (claimed in an earlier
+    # revision of this comment) is not true: the pre-shard log is exactly what the method consumes.
+    # Extra legs are not free — see the retracted dispatch note below; they draw on the same runner
+    # pool whose availability produces the multi-minute staggers.
     #
-    # NOTE ON DISPATCH, corrected during review: real job dispatch is ~1 SECOND and is
-    # per-RUN, not per-leg. The 6-21 minute gaps between run creation and job start are
-    # ci.yml's OWN `concurrency` group (below) serialising each main push behind its
-    # predecessor's `test` job. An earlier revision of this comment attributed them to
-    # runner-pool contention and used that to argue against larger K; that was wrong and the
-    # argument is withdrawn. Extra legs add no dispatch penalty.
+    # NOTE ON DISPATCH — RETRACTED TWICE; READ THIS BEFORE RE-DERIVING IT.
+    #
+    # Revision 1 said the multi-minute gaps between run creation and job start were runner-pool
+    # contention, and used that to argue against larger K.
+    # Revision 2 "corrected" that to: dispatch is ~1s and per-RUN, the gaps are this file's own
+    # `concurrency` group serialising each main push behind its predecessor's `test`, so extra
+    # legs add no dispatch penalty.
+    #
+    # REVISION 2 IS FALSE, and revision 1 was closer. Measured 2026-09-08 on run 34214304922
+    # (`gh api .../runs/<id>/jobs`, start offsets from the run's `created_at`):
+    #
+    #     +   1s  plugin-root-propagation-gate      <- 2 jobs get a runner immediately
+    #     +   1s  sandbox-canary-capture-gate
+    #     + 441s  lint-conversations-update-callsites
+    #     + 621s  credential-path-guard
+    #     +1346s  test-scripts
+    #     +1397s  critical-css-gate
+    #
+    # Those jobs have NO `needs`, so a concurrency gate releases them together — a group release
+    # starts every one of them at the same instant. They stagger across 23 MINUTES inside one run,
+    # which a queue cannot produce. And the group was EMPTY: the predecessor run finished
+    # 2026-09-07T22:03:12Z, this run was created 2026-09-08T10:13:35Z, a 12h10m gap. Separately
+    # `test` — whose start is gated only by its `needs` — waited 619s after its last need
+    # concluded, which is runner wait by definition.
+    #
+    # So the gaps are runner availability, extra legs DO draw on that pool, and the withdrawal of
+    # revision 1's argument is itself withdrawn. What remains genuinely unresolved is how much the
+    # queue contributes on a busy day; do not replace this note with a third confident mechanism
+    # without measuring the start SPREAD within a single run, which is what falsifies the queue
+    # explanation in one command.
     strategy:
       fail-fast: false
       matrix:
@@ -960,7 +1003,7 @@ jobs:
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
       # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
       # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # all three legs would run all 375 suites and all report green. Guard 1 reads ci.yml's
+      # all three legs would run all 376 suites and all report green. Guard 1 reads ci.yml's
       # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
@@ -1038,13 +1081,13 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ONLY the batteries are invoked here, never the two guards directly, and that is a
+      # ONLY the battery are invoked here, never the guard directly, and that is a
       # constraint imposed by scripts/lint-orphan-test-suites.sh rather than a preference: both
       # guards are already registered by glob discovery into the scripts group, and a second
       # explicit registration here makes them "covered by more than one surface" — a union in
       # which de-registering from either side is a silent no-op. The lint fails on exactly that.
       #
-      # Coverage is not lost. Each battery's CONTROL row runs its guard UNMUTATED before any
+      # Coverage is not lost. The battery's CONTROL row runs its guard UNMUTATED before any
       # mutation and aborts the battery outright if it is not green, so this job still exercises
       # both guards against the real tree — which is what AC14 asks for: a cross-leg union
       # asserted from a job that is not itself a leg.

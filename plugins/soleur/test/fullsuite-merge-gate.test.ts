@@ -122,7 +122,13 @@ function invocationLines(region: string): string[] {
  * failure message ("prescribes no test-all.sh invocation at all") would have
  * been false rather than triggered.
  */
-const QUERY_FLAGS = ["--capacity", "--print-suite-globs"] as const;
+// `--enumerate` (#7902) walks every registration and exits 0 having started NO suite — the same
+// shape as `--capacity` (#7545), which is why that flag is here. Omitting it let a Phase 4
+// invocation of `bash scripts/test-all.sh --enumerate all` satisfy every CEILING assertion AND the
+// "at least one invocation actually RUNS the battery" floor while running nothing: measured 11
+// pass / 0 fail. That is the defect this file memorializes, reintroduced by the PR that added the
+// flag. Any future query-mode flag belongs here the moment it is added.
+const QUERY_FLAGS = ["--capacity", "--print-suite-globs", "--enumerate"] as const;
 function isQueryInvocation(line: string): boolean {
   return QUERY_FLAGS.some((f) => line.includes(f));
 }

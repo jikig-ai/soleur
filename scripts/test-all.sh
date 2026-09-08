@@ -526,6 +526,31 @@ if [[ -n "${SCRIPTS_SHARD+x}" && "$TEST_GROUP" != "scripts" ]]; then
   exit 2
 fi
 
+# THE CARRIER IS CONSUMED HERE, AND MUST NOT BE INHERITED (#7902 review, P1).
+#
+# `SCRIPTS_SHARD` arrives as a JOB-LEVEL `env:` on ci.yml's test-scripts job, so it is in the
+# environment of every step AND every descendant process. Four suites registered INTO the scripts
+# group spawn a sandboxed copy of this runner with `TEST_GROUP=all` — they would inherit the
+# variable, hit the refusal directly above, and exit 2 inside every arm. Measured on
+# scripts/test-all-runtime-ceiling.test.sh: 23 passed / 0 failed unset, 8 passed / 15 FAILED with
+# SCRIPTS_SHARD=1/3. Two of three legs red => test-scripts red => the required `test` check red.
+#
+# The decision is already made: `_SHARD_K` and `_SHARD_N` hold it, and nothing below reads the
+# variable again (the zero-assignment refusal reports the parsed integers, not the raw value). So
+# unset the carrier and let the parsed values speak. This is one edit at the point of coupling
+# rather than `env -u SCRIPTS_SHARD` at N call sites, because the next suite that spawns this
+# runner would otherwise have to remember — and the four that exist did not.
+#
+# It also closes a second hole for free: the sandbox builders splice out everything between
+# `tc_acquire` and the epilogue, which is where the zero-assignment refusal lives. A sandbox could
+# therefore carry the shard FILTER without the REFUSAL and print `0/0 suites passed` at exit 0.
+# With the carrier gone, a sandbox is never sharded at all.
+#
+# Placement is load-bearing: AFTER the group-scope refusal above (which reads
+# `${SCRIPTS_SHARD+x}`), never after the parse block — unsetting earlier makes that refusal dead
+# code and reopens the silently-sharded-wrong-group case it exists to catch.
+unset SCRIPTS_SHARD
+
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
 # NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not

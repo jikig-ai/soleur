@@ -30,7 +30,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 REL="$ROOT/.github/workflows/web-platform-release.yml"
 [[ -f "$REL" ]] || { echo "FATAL: missing $REL" >&2; exit 2; }
 
-W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
+W="$(mktemp -d)" || { printf 'FATAL: mktemp -d failed — every mutation row would score against a copy that was never made.\n' >&2; exit 9; }
+[[ -d "$W" && -w "$W" ]] || { printf 'FATAL: scratch dir %s is not a writable directory.\n' "$W" >&2; exit 9; }
+trap 'rm -rf "$W"' EXIT
 PASS=0; FAIL=0
 pass() { PASS=$(( PASS + 1 )); echo "  PASS: $1"; }
 fail() { FAIL=$(( FAIL + 1 )); echo "  FAIL: $1"; }
@@ -53,12 +55,20 @@ PASS=0; FAIL=0
 # matches the START line, so the range collapses to a single line and every downstream grep reads
 # an empty haystack — which fails OPEN, since "no match" and "no input" are indistinguishable to
 # grep. Measured on this very file while building this suite. Hence an explicit flag.
-job_block() {  # $1 = workflow path, $2 = job key
+#
+# THE `grep -v` IS THE LOAD-BEARING HALF (#7902 review, P1). i3 and i4 grep this block for source
+# constructs, and a whole-line comment is bytes in the file exactly like code is. Un-stripped, the
+# comment that DOCUMENTS the soft ceiling satisfies the assertion ABOUT the soft ceiling: measured,
+# deleting the entire early-warning block :219-226 while leaving one comment that mentions
+# `soft_breach=true` left this suite at 11 rows / 11 passed / exit 0 — the mechanism gone, the
+# guard green. Stripping at EXTRACTION rather than per-predicate is deliberate: a future predicate
+# inherits the immunity instead of having to remember it (cq-assert-anchor-not-bare-token).
+job_block() {  # $1 = workflow path, $2 = job key — COMMENT-STRIPPED (see below)
   awk -v job="$2" '
     $0 ~ "^  " job ":$" { inb=1; print; next }
     inb && /^  [a-zA-Z0-9_-]+:$/ { exit }
     inb { print }
-  ' "$1"
+  ' "$1" | grep -v '^[[:space:]]*#'
 }
 
 # Every reader takes the FILE as an argument so the mutation rows below can point the identical
@@ -79,13 +89,31 @@ i1_timeout_over_ceiling() {  # ADR-072 invariant #7
   (( t * 60 * 10 >= 12 * c ))
 }
 i2_attempts_track_ceiling() {  # the loop's iteration backstop must not bind before the ceiling
+  # `>=`, not `==` (#7902 review, P2). The property is "the iteration backstop does not bind before
+  # the elapsed ceiling"; raising MAX_ATTEMPTS alone moves the backstop FURTHER from binding, which
+  # is strictly safer and which an `==` predicate reds while blaming the test.
   local f="$1" c m i; c=$(envval "$f" CEILING_S); m=$(envval "$f" MAX_ATTEMPTS); i=$(envval "$f" INTERVAL_S)
   [[ -n "$c" && -n "$m" && -n "$i" ]] || return 2
-  (( m * i == c ))
+  (( m * i >= c ))
 }
 i3_soft_ceiling_is_derived() {  # derived from CEILING_S, never restated as a literal
   local f="$1"
   job_block "$f" await-ci | grep -qE 'soft_ceiling_s=\$\(\([[:space:]]*CEILING_S[[:space:]]*\*'
+}
+i3b_soft_ceiling_fires_before_the_ceiling() {
+  # SHAPE IS NOT MAGNITUDE (#7902 review, P1). i3 reads the derivation's FORM and never its
+  # multiplier, so `CEILING_S * 99 / 10` — one token — leaves i3 green while soft_ceiling_s becomes
+  # 35640s, unreachable inside a 3600s gate: the warning never fires, soft_breach is never emitted,
+  # notify-slow-ci never runs, and the whole early-warning mechanism is dead at 11/11 green. The
+  # property is a RANGE: the warning must be able to fire, and must fire strictly before the gate.
+  local f="$1" c n d soft
+  c=$(envval "$f" CEILING_S); [[ -n "$c" ]] || return 2
+  n=$(job_block "$f" await-ci | sed -nE 's/.*soft_ceiling_s=\$\(\([[:space:]]*CEILING_S[[:space:]]*\*[[:space:]]*([0-9]+)[[:space:]]*\/[[:space:]]*([0-9]+).*/\1 \2/p' | head -1)
+  [[ -n "$n" ]] || return 2
+  d=${n#* }; n=${n%% *}
+  (( d > 0 )) || return 2
+  soft=$(( c * n / d ))
+  (( soft > 0 && soft < c ))
 }
 i4_soft_breach_has_consumer() {  # an output nothing reads is a warning that never arrives
   local f="$1"
@@ -125,6 +153,7 @@ echo "  read: CEILING_S=$C MAX_ATTEMPTS=$M INTERVAL_S=$I RECONCILE_ATTEMPTS=$R t
 check i1_timeout_over_ceiling      "$REL" "I1 — ADR-072 #7: timeout-minutes*60 ($(( T * 60 ))s) >= 1.2 x CEILING_S ($(( 12 * C / 10 ))s)"
 check i2_attempts_track_ceiling    "$REL" "I2 — MAX_ATTEMPTS x INTERVAL_S ($(( M * I ))s) == CEILING_S (${C}s), so the loop backstop never binds before the elapsed ceiling"
 check i3_soft_ceiling_is_derived   "$REL" "I3 — the soft ceiling is DERIVED from CEILING_S, not restated as a literal"
+check i3b_soft_ceiling_fires_before_the_ceiling "$REL" "I3b — the soft ceiling is in range: 0 < soft < CEILING_S, so the warning can actually fire"
 check i4_soft_breach_has_consumer  "$REL" "I4 — soft_breach is emitted, exported as a job output, AND read by a consumer job"
 
 # --- MUTATION ROWS ---------------------------------------------------------------------------
@@ -140,7 +169,12 @@ fi
 
 mutate_row() {  # $1 = predicate  $2 = sed program  $3 = description
   local pred="$1" prog="$2" desc="$3" cp="$W/mut.yml"
-  cp "$REL" "$cp"
+  # A cp that did not happen leaves a stale or absent file; the predicate then scores something
+  # other than the mutation and the row's verdict is noise wearing a result's clothes.
+  if ! cp "$REL" "$cp"; then
+    fail "MUTATION '$desc' — could not stage the sandbox copy; this row measured nothing."
+    return
+  fi
   sed -i -E "$prog" "$cp"
   if cmp -s "$REL" "$cp"; then
     fail "MUTATION '$desc' — the edit changed NOTHING; this row tested an unmutated file"
@@ -165,6 +199,37 @@ mutate_row i3_soft_ceiling_is_derived \
   's/soft_ceiling_s=\$\(\( CEILING_S \* 7 \/ 10 \)\)/soft_ceiling_s=2520/' \
   "the soft ceiling restated as a literal instead of derived"
 
+mutate_row i3b_soft_ceiling_fires_before_the_ceiling \
+  's/soft_ceiling_s=\$\(\( CEILING_S \* 7 \/ 10 \)\)/soft_ceiling_s=$(( CEILING_S * 99 \/ 10 ))/' \
+  "the soft-ceiling multiplier pushed above 1 — the warning can never fire inside the gate"
+
+# A COMMENT IS NOT CODE. This row is the negative control for the extraction strip: it appends a
+# comment that mentions both constructs i3/i4 grep for, and asserts they are NOT satisfied by it.
+_cmt_cp="$W/comment-only.yml"
+cp "$REL" "$_cmt_cp"
+python3 - "$_cmt_cp" <<'PYEOF'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+# Replace the real emit with a COMMENT carrying the same token. Anchored on the assignment plus
+# its redirect-open so it cannot match the hoisted ceiling block's `soft_breach=${warned_soft:+…}`.
+pat = re.compile(r'^([ \t]*)echo "soft_breach=true" >> "\$\{GITHUB_OUTPUT[^\n]*\n', re.M)
+s2, n = pat.subn(lambda m: f'{m.group(1)}# removed; documented as soft_breach=true for the next reader\n', s, count=1)
+# A FIXTURE THAT DID NOT APPLY REPORTS A FALSE RESULT IN BOTH DIRECTIONS. Fail loudly instead.
+if n != 1:
+    sys.stderr.write(f'FIXTURE-DID-NOT-LAND: expected 1 substitution, made {n}\n')
+    sys.exit(3)
+open(p, 'w').write(s2)
+PYEOF
+_cmt_rc=$?
+if (( _cmt_rc != 0 )); then
+  fail "COMMENT-ONLY — the fixture did not land (rc=$_cmt_rc); this row tested nothing. Re-anchor it."
+elif i4_soft_breach_has_consumer "$_cmt_cp"; then
+  fail "COMMENT-ONLY — i4 was satisfied by a comment mentioning soft_breach=true; the strip is not working"
+else
+  pass "COMMENT-ONLY — a comment mentioning soft_breach=true does NOT satisfy i4 (extraction strips comments)"
+fi
+
 mutate_row i4_soft_breach_has_consumer \
   's/needs\.await-ci\.outputs\.soft_breach/needs.await-ci.outputs.absent_key/' \
   "the consumer job stops reading soft_breach — the warning is emitted and never arrives"
@@ -185,7 +250,7 @@ mutate_row_muststay i1_timeout_over_ceiling \
 # Reported with printf + exit, NEVER through fail() — a floor that calls the very helper it
 # backstops is disarmed by the same one-token edit it exists to catch.
 TOTAL=$(( PASS + FAIL ))
-MIN_ROWS=11
+MIN_ROWS=14
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The suite did not run to completion, so its verdict is not evidence.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1
@@ -193,5 +258,12 @@ fi
 
 echo ""
 echo "await-ci-ceiling-invariants.test.sh: $TOTAL rows, $PASS passed, $FAIL failed"
-if (( FAIL > 0 )); then exit 1; fi
+# VERDICT IS REPORTED THE WAY THE FLOOR IS (#7902 review, P2): printf + an explicit exit,
+# never through the helper it backstops. A one-token edit to this line (`exit 1` -> `exit 0`)
+# is otherwise invisible — the assertion-count floor above counts ROWS, and both pass() and
+# fail() increment the same total, so a suite printing FAIL lines still exits 0.
+if (( FAIL > 0 )); then
+  printf 'VERDICT: %d of %d rows FAILED — this suite is RED.\n' "$FAIL" "$TOTAL" >&2
+  exit 1
+fi
 echo "All tests passed"

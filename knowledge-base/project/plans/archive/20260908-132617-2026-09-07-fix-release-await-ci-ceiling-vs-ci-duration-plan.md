@@ -206,12 +206,27 @@ Two mechanisms survive: **bound the gate's budget**, and **reduce the quantity i
 
 1. **Raise the ceiling by a bounded amount, in the safe order.** `DRIFT_SUSTAINED_THRESHOLD_MIN`
    195 → 207 first, then `CEILING_S` 3000 → 3600, then `await-ci` `timeout-minutes` 60 → 72
-   (ADR-072's `timeout-minutes ≥ 1.2 × CEILING_S`). This deterministically clears today's measured
-   max of 56.1 min and unblocks production at merge rather than probabilistically at AC-time.
+   (ADR-072's `timeout-minutes ≥ 1.2 × CEILING_S`).
+   **CORRECTED 2026-09-08 (QA round 2):** "deterministically clears today's measured max" was true
+   of the window measured at plan time (max 56.1 min) and is FALSE now. Re-measured over the 25
+   most recent completed `main` push runs: p50 35.4m, p90 54.0m, **p100 69.3m** — and run
+   34214304922 fail-closed a healthy build on 2026-09-08 at a duration the 3600s ceiling would
+   also have missed (CI concluded `success` 12 minutes after the gate gave up). So the raise alone
+   does NOT clear the observed tail; the SHARD is what has to, and its effect is measured
+   post-merge by AC25. The raise remains correct as the deterministic unblock for the p50/p90 mass
+   — it is simply not sufficient on its own, which the plan previously claimed.
 2. **Shard `test-scripts` into a job matrix**, partitioned round-robin at the `run_suite`
    chokepoint. This is what makes the raised ceiling stay comfortable instead of being spent.
-3. **Bound CI's contribution to the gate mechanically** — assert that the declared ceilings of
-   `test`'s closure sum under `CEILING_S`, so the failure class cannot silently recur.
+3. ~~**Bound CI's contribution to the gate mechanically** — assert that the declared ceilings of
+   `test`'s closure sum under `CEILING_S`, so the failure class cannot silently recur.~~
+   **WITHDRAWN 2026-09-08 (QA round 2).** This is Guard 2, deleted on the CTO ruling recorded in
+   the Correction stanza and ADR-208: declared ceilings bound execution only, so the arithmetic
+   omits the queue and is green on configurations the gate cannot absorb. The failure class is
+   instead caught by measuring the gated quantity — `await-ci`'s soft-ceiling warning at
+   0.7 x CEILING_S, with `notify-slow-ci` as its consumer. **Fourth** instance of this stale
+   citation found in this document; the first two were caught in QA round 1, the third and fourth
+   only once the sweep was re-indexed by the PROPERTY ("ceilings summed under CEILING_S") instead
+   of the NAME ("Guard 2").
 4. **Leave the release job graph otherwise untouched** — `await-ci`'s logic, `notify-gated`,
    `migrate`/`deploy` wiring all unchanged.
 
@@ -441,7 +456,13 @@ Both records ship in this PR; nothing is deferred behind a soak.
 
 ```yaml
 liveness_signal:
-  what: "the required `test` aggregator check-run on every push and PR — the same check-run await-ci gates on — backed by declared per-job ceilings whose sum is asserted under CEILING_S; plus scheduled-prod-version-drift.yml reading prod /health build_sha"
+  # CORRECTED 2026-09-08 (QA round 2): this said "backed by declared per-job ceilings whose sum is
+  # asserted under CEILING_S" — that is Guard 2's property, and Guard 2 was deleted (see the
+  # Correction stanza and ADR-208). THIRD instance of the same defect in this one document; the
+  # first two were caught in QA round 1 and this one was missed because the sweep was indexed by
+  # the phrase "Guard 2" rather than by the PROPERTY it asserted. Index a correction sweep by the
+  # claim, never by the name.
+  what: "the required `test` aggregator check-run on every push and PR — the same check-run await-ci gates on; plus scheduled-prod-version-drift.yml reading prod /health build_sha. No guard sums declared per-job ceilings against CEILING_S — that approach was built and rejected (ADR-208); the ceiling is instead measured directly by await-ci's own soft-ceiling warning."
   cadence: "per push and per pull_request for CI; nominally every 30 minutes for the drift probe (measured delivered interval 61-243 min)"
   alert_target: "GitHub required-check failure on the offending PR; Sentry cron monitor -> operator email for the drift probe; main-health-monitor.yml files a P1 ci/main-broken issue; notify-gated posts to Slack on a fail-closed await-ci"
   configured_in: ".github/workflows/ci.yml, .github/workflows/web-platform-release.yml, .github/workflows/scheduled-prod-version-drift.yml, scripts/prod-version-drift-check.sh"
@@ -674,7 +695,7 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
       the K=1-tautology row and a MUSTPASS row.
 - [x] AC13 — ~~Guard 2 drives RED on each of its seven mutation rows~~ **SUPERSEDED 2026-09-08**:
       Guard 2 was deleted (Correction stanza / ADR-208). Discharged instead by
-      `plugins/soleur/test/await-ci-ceiling-invariants.test.sh` — 10/10, four invariants each
+      `plugins/soleur/test/await-ci-ceiling-invariants.test.sh` — 14/14, four invariants each
       driven RED by its own mutation, one MUSTPASS row proving the assertions are not over-broad,
       plus a control and an instrument self-test.
 - [x] AC14 — Guard 1 runs in CI against the real tree from a job that can observe **all** legs
@@ -722,10 +743,13 @@ Four things the pass changed rather than merely recorded:
    bought 60s instead of 10 min). Both relationships ship exactly tight, so there is no slack for
    a one-sided edit. Added `plugins/soleur/test/await-ci-ceiling-invariants.test.sh`.
 4. **Adding that suite invalidated the K table by its own stated rule** (375 -> 376; the floor
-   suite keeps its leg, but 187 of 375 suites move legs). Rather than re-simulate an order the
-   next added suite invalidates again, ci.yml now also records an order-independent bound: the
-   whole group is 2115s, so any leg of any partition plus the worst 1260s queue is 3375s, inside
-   the 3600s ceiling. Safety no longer depends on the table.
+   suite keeps its leg, but 187 of 375 suites move legs). My first fix recorded an
+   "order-independent bound" instead of re-simulating — and the review round refuted all three of
+   its premises (2115s is one sample not a bound; 1260s is not the worst queue, 1433s was observed;
+   and it omits the `test` aggregator's own 619s runner wait). Worst case on measured maxima is
+   4391s, past the ceiling. The bound is retracted in all three places it was written, and the K=3
+   optimality claim with it: re-simulated on the shipped 376 order, K=3 is 20.73 min and K=4/K=5
+   both beat it. K=3 remains safe (totality holds for any K); it is no longer known-optimal.
 
 **Deferred to the full battery, not failed:** AC11 (enumerate vs executing label sequences) and
 AC15 (a shard non-selection touching neither `skipped`, `_ceiling_declined`, nor ADR-181's

@@ -45,7 +45,7 @@ Two other places still cited it as live:
 So the hazard read as **mitigated by a control that does not exist** — and it read that way in the
 one document a reviewer consults to decide whether the hazard is mitigated.
 
-`scripts/lint-guard-contract.py` passed throughout, at exit 0 over 30 guard entries. It is not
+`scripts/lint-guard-contract.py` passed throughout, at exit 0 over 28 guard entries. It is not
 broken. It resolves plan **entries** — it has no notion of whether a described guard was ever
 implemented, and cannot acquire one cheaply. A green lint here means "the section parses", which
 is a sentence about the document and never about the tree.
@@ -143,17 +143,21 @@ a shared one, on the reasoning that a cross-file source makes one suite's failur
 another's. That is a considered trade — do not "fix" it into a shared lib without re-opening it.
 The importable unit here is the *sanity row*, not the extractor.
 
-**For the invalidated table.** Do not re-simulate an order that the next added suite invalidates
-again. Record an **order-independent bound** alongside the optimisation table:
+**For the invalidated table — and the fix that was itself wrong.** My first instinct was to avoid
+re-simulating (the next added suite invalidates the order again) and instead record an
+*order-independent bound*: the group is 2115s, so any leg of any partition is bounded by 2115s;
+plus the worst measured queue (1260s) that is 3375s, inside the 3600s ceiling.
 
-> The whole group is 35.25 min = 2115s, so ANY leg of ANY partition is bounded by 2115s. Against
-> the worst measured concurrency-group queue (1260s) that is 3375s, inside the 3600s `CEILING_S`.
-> The bound holds even where one leg ran the entire group.
+**Review refuted all three premises.** 2115s is one sample, not a bound (max observed 2339s);
+1260s is not the worst queue (1433s observed); and the sum omits the `test` aggregator's own runner
+wait, measured at 619s. Worst case with measured maxima is 4391s — past the ceiling. Composing a
+worst-case leg with a mid-case queue is not a bound, and the "225s to spare" I wrote was fiction.
 
-The table now justifies K=3 as *optimal*; the bound is what makes any K=3 assignment *safe*.
-Re-simulate to re-optimise, never to re-establish safety.
+That is the sharper version of this learning's own thesis: I replaced a stale *measurement* with a
+confident *derivation* and never checked the derivation's premises. A stale number announces itself
+eventually; a wrong bound reads as the thing that makes re-measuring unnecessary.
 
-**Also added** `plugins/soleur/test/await-ci-ceiling-invariants.test.sh` (11/11): ADR-072
+**Also added** `plugins/soleur/test/await-ci-ceiling-invariants.test.sh` (14/14): ADR-072
 invariant #7, `MAX_ATTEMPTS x INTERVAL_S == CEILING_S`, the soft ceiling derived not restated, and
 `soft_breach` still having a consumer. Before it, all four were unenforced prose in a workflow
 comment reading "do NOT lower CEILING_S, MAX_ATTEMPTS, or timeout-minutes without re-reading
