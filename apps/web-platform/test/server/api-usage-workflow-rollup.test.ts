@@ -2,7 +2,7 @@
  * Phase 2.3 (#1055) — `loadApiUsageForUser`'s per-workflow rollup arm.
  *
  * Scenarios T1-T3 and T6-T10 from the plan
- * (`knowledge-base/project/plans/2026-09-07-feat-per-workflow-agent-cost-observability-plan.md`).
+ * (`knowledge-base/project/plans/20260908-094911-2026-09-07-feat-per-workflow-agent-cost-observability-plan.md (archived under knowledge-base/project/plans/archive/)`).
  *
  * SCOPE LIMIT, stated so nobody reads more into a green run than is there:
  * these tests mock the Supabase client, so they CANNOT prove `Σ buckets =

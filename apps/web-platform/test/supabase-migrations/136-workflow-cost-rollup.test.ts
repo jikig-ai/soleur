@@ -13,7 +13,7 @@ import path from "node:path";
 // this migration's own header comments, so a bare-token grep would pass
 // vacuously against prose while the real statement drifted.
 //
-// Plan: 2026-09-07-feat-per-workflow-agent-cost-observability-plan.md Phase 1.
+// Plan: 20260908-094911-2026-09-07-feat-per-workflow-agent-cost-observability-plan.md (archived under knowledge-base/project/plans/archive/) Phase 1.
 
 const MIGRATIONS_DIR = path.join(__dirname, "../../supabase/migrations");
 const MIGRATION_PATH = path.join(
