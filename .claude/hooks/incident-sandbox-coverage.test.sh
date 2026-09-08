@@ -367,8 +367,46 @@ case "$out" in
 esac
 verdict "$rc" "with mktemp failing the helper aborts loudly instead of restoring the real sink"
 
+# --- trap composition survives a prior trap containing a single quote -------------------------
+# `trap -p` prints the body in bash's OWN quoting, so an embedded single quote returns as the
+# four-character sequence '\'' . Stripping the outer quotes with sed and re-wrapping in double
+# quotes leaves those escapes unbalanced, and the resulting trap is a SYNTAX ERROR.
+#
+# MEASURED harm, before the fix: gdpr-gate-self-test.test.sh exited 2 having printed "ALL TESTS
+# PASSED", on both the with-token and without-token CI paths.
+#
+# All three arms are kept, but only the PRIOR-TRAP arm is known to discriminate: driving this suite
+# against the old composition reddens "the PRIOR trap still runs" and leaves the other two GREEN --
+# in that probe the malformed string still removed the sandbox and still exited 0. So the leak arm
+# is a REGRESSION GUARD, not evidence: the 971 stale soleur-inc- directories found on this machine
+# are consistent with a trap that never runs, but this probe does not demonstrate that link, and
+# the connection is recorded as unproven in #7889 rather than asserted here.
+_tc_probe="$(mktemp -d -t tccheck-XXXXXX)"
+cat > "$_tc_probe/suite.sh" <<'PROBE'
+#!/usr/bin/env bash
+set -uo pipefail
+# a PRIOR trap whose body contains a single quote -- the shape that broke composition
+trap 'printf "prior-ran bye'"'"'
+"' EXIT
+source "$REPO_UNDER_TEST/plugins/soleur/test/test-helpers.sh" 2>/dev/null || exit 90
+printf 'SB=%s
+' "${SOLEUR_TEST_INCIDENT_ROOT:-<unset>}"
+PROBE
+_tc_out="$(cd "$REPO" && env REPO_UNDER_TEST="$REPO" bash "$_tc_probe/suite.sh" 2>&1)"
+_tc_rc=$?
+_tc_sb="$(printf '%s' "$_tc_out" | sed -n 's/^SB=//p')"
+
+verdict "$([ "$_tc_rc" -eq 0 ] && echo 0 || echo 1)" \
+  "composing over a prior trap with a single quote exits 0 (got rc=$_tc_rc)"
+verdict "$(printf '%s' "$_tc_out" | grep -q 'prior-ran' && echo 0 || echo 1)" \
+  "the PRIOR trap still runs after composition (not clobbered)"
+verdict "$([ -n "$_tc_sb" ] && [ ! -d "$_tc_sb" ] && echo 0 || echo 1)" \
+  "the sandbox is actually REMOVED — a trap that fails to parse never runs, and leaks it"
+rm -rf "$_tc_probe"
+unset _tc_probe _tc_out _tc_rc _tc_sb
+
 printf '\n'
-MIN_CASES=19
+MIN_CASES=22
 if [ "$CASES" -lt "$MIN_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$CASES" "$MIN_CASES" >&2; exit 1
 fi

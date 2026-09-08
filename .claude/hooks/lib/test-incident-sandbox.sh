@@ -65,14 +65,30 @@ _soleur_test_incident_sandbox_init() {
   # clobbering it. A suite that installs its own trap AFTER sourcing this will
   # still win — that only leaks one small tmpdir, never a real-ledger write,
   # so the failure direction is tidiness rather than correctness.
-  local prior
-  prior=$(trap -p EXIT | sed -E "s/^trap -- '(.*)' EXIT$/\1/")
-  if [ -n "$prior" ] && [ "$prior" != "$(trap -p EXIT)" ]; then
-    # shellcheck disable=SC2064
-    trap "$prior; rm -rf '$d'" EXIT
+  # `trap -p` prints a RE-EXECUTABLE command whose body carries bash's OWN quoting, so an embedded
+  # single quote returns as '\' . The previous form stripped the outer quotes with sed and
+  # re-wrapped the rest in double quotes, which leaves those escapes unbalanced and makes the new
+  # trap a SYNTAX ERROR. That is not only noise on exit: a trap that fails to parse never runs, so
+  # the sandbox this function exists to remove is leaked. Measured on this machine: 971 stale
+  # soleur-inc-* directories.
+  #
+  # Assigning bash's quoted form back through `eval` round-trips it exactly, and the trap strings
+  # below are then FIXED text with nothing interpolated.
+  local prior_raw prior_body="" s
+  prior_raw="$(trap -p EXIT)"
+  if [ -n "$prior_raw" ]; then
+    s="${prior_raw#trap -- }"
+    s="${s% EXIT}"
+    eval "prior_body=$s"
+  fi
+  _SOLEUR_INC_SB_OWNED="$d"
+  _soleur_inc_sb_cleanup() { [ -n "${_SOLEUR_INC_SB_OWNED:-}" ] && rm -rf "$_SOLEUR_INC_SB_OWNED"; return 0; }
+  if [ -n "$prior_body" ]; then
+    eval "_soleur_inc_prior_exit() { $prior_body
+}"
+    trap '_soleur_inc_prior_exit; _soleur_inc_sb_cleanup' EXIT
   else
-    # shellcheck disable=SC2064
-    trap "rm -rf '$d'" EXIT
+    trap '_soleur_inc_sb_cleanup' EXIT
   fi
 }
 _soleur_test_incident_sandbox_init
