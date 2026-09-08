@@ -15,25 +15,89 @@ triggers: []
 **fleet-wide** counterpart to the per-user breakdown in Settings → API Usage.
 
 ```bash
-doppler run -p soleur -c prd -- psql "$DATABASE_URL"
-```
-
-```sql
--- Per-workflow spend, all users, any window. Exact and durable -- this is the
--- source the per-user settings breakdown partitions, not a copy of it.
-SELECT COALESCE(active_workflow, 'legacy') AS bucket,
+doppler run -p soleur -c prd -- bash -c 'psql "${DATABASE_URL_POOLER:-$DATABASE_URL}" \
+  --no-psqlrc -tAq --set ON_ERROR_STOP=1 -c "
+SELECT COALESCE(active_workflow, '"'"'legacy'"'"') AS bucket,
        count(*)            AS conversations,
        sum(total_cost_usd) AS usd
   FROM conversations
  WHERE total_cost_usd > 0
-   AND created_at >= '<since>'
+   AND created_at >= date_trunc('"'"'month'"'"', now() AT TIME ZONE '"'"'UTC'"'"')
  GROUP BY 1
- ORDER BY 3 DESC;
+ ORDER BY 3 DESC;"
 ```
 
-Replace `<since>` with the window you want (`date_trunc('month', now())` for month-to-date).
-The invocation mechanism is the one `apps/web-platform/scripts/run-migrations.sh` already
-documents. **No SSH** (`hr-no-ssh-fallback-in-runbooks`).
+Three details in that invocation are load-bearing, and all three were wrong in the first
+version of this runbook (caught by the agent-native review on #7916):
+
+- **`bash -c '...'` with SINGLE quotes.** `doppler run -- psql "$DATABASE_URL"` expands
+  `$DATABASE_URL` in the INVOKING shell, before Doppler injects anything. That shell does not
+  have it (verified: unset), so the command reduces to `psql ""` -- an empty conninfo, which
+  libpq silently resolves to a local socket and `$USER` database. You do not get an error that
+  says "wrong database"; you get a connection to the wrong one. Single quotes defer expansion
+  until Doppler has injected.
+- **`${DATABASE_URL_POOLER:-$DATABASE_URL}`.** Every script in this repo resolves the pooler
+  first (`run-migrations.sh`, `run-verify.sh`, `preflight-schema-vs-ledger.sh`); the direct URL
+  fails on an IPv6-less runner. `hr-no-dashboard-eyeball-pull-data-yourself` names the pooler
+  variable specifically.
+- **`-c "<query>"`, not a bare `psql`.** A bare `psql` opens an interactive REPL, which blocks
+  an agent on stdin until its tool timeout. `hr-no-ssh-fallback-in-runbooks` forbids an
+  interactive in-host step as a primary debug action, not merely `ssh` -- and
+  `scripts/lint-infra-no-human-steps.py` does not match bare interactive `psql`, so CI will not
+  catch a regression here. Keep the `-c`.
+
+Swap the `date_trunc` for any window you want. `AT TIME ZONE 'UTC'` is deliberate: the UI
+computes its window with `Date.UTC(...)` in `computeMonthStartIso`, while a bare
+`date_trunc('month', now())` evaluates in the session's `TimeZone` GUC. Supabase defaults to
+UTC so the two agree today, but pinning it keeps them agreeing.
+
+## Per-user spend — the question the UI answers
+
+The RPC behind Settings → API Usage is `service_role`-only, so an agent holding a user session
+cannot call it. This is the same aggregate, runnable directly:
+
+```bash
+doppler run -p soleur -c prd -- bash -c 'psql "${DATABASE_URL_POOLER:-$DATABASE_URL}" \
+  --no-psqlrc -tAq --set ON_ERROR_STOP=1 -c "
+SELECT CASE
+         WHEN active_workflow IS NULL          THEN '"'"'legacy'"'"'
+         WHEN active_workflow = '"'"'__unrouted__'"'"' THEN '"'"'unrouted'"'"'
+         ELSE active_workflow END AS bucket,
+       count(*)            AS conversations,
+       sum(total_cost_usd) AS usd
+  FROM conversations
+ WHERE user_id = '"'"'<user-uuid>'"'"'
+   AND total_cost_usd > 0
+   AND created_at >= date_trunc('"'"'month'"'"', now() AT TIME ZONE '"'"'UTC'"'"')
+ GROUP BY 1
+ ORDER BY 3 DESC;"'
+```
+
+The `CASE` is the same normalisation migration 136 applies, so these bucket keys match what the
+UI groups by. Note the figures are RAW: the screen renders largest-remainder **allocated**
+values, so a bucket can differ from the screen by one display unit, and this query will show
+`0.000400` where the UI shows `<$0.0001`. The raw number is the better answer for a machine;
+they are not in conflict.
+
+## Bucket key → the label the user sees
+
+Users speak in labels; every machine-reachable surface carries keys. The map is
+`apps/web-platform/lib/messages/workflow-copy.ts` (`WORKFLOW_COPY`), reproduced here so an
+agent answering "the planning one is eating my budget" can find the row:
+
+| key | label on screen |
+|---|---|
+| `one-shot` | Idea to shipped |
+| `brainstorm` | Exploring an idea |
+| `plan` | Planning the work |
+| `work` | Doing the work |
+| `review` | Reviewing the code |
+| `drain-labeled-backlog` | Clearing the backlog |
+| `unrouted` | No workflow started |
+| `legacy` | Before workflow tracking |
+
+If this table and `workflow-copy.ts` disagree, the TS module wins -- it carries the
+`satisfies Record<WorkflowBucket, WorkflowCopy>` rail.
 
 ## Why this is not the same query the UI runs
 

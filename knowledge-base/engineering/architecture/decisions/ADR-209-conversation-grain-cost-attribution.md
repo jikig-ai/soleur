@@ -13,8 +13,10 @@
 
 `conversations` already carries both halves of a per-workflow cost breakdown: `total_cost_usd`
 (column added by `017_conversation_cost_tracking.sql`, incremented per turn by
-`042_increment_conversation_cost_v2.sql`; migration 027 is only the per-user SUM RPC this ADR
-repins) and `active_workflow` (migration 032, written once by the routing layer). They sit **on the same row**. Nothing consumed them together.
+`042_increment_conversation_cost_v2.sql`; migration 027 adds the per-user SUM RPC this ADR
+repins, and also recreates `idx_conversations_user_cost` — 017, 027 and 041 each DROP and
+CREATE that index, so the LIVE definition is 041's, verified on dev) and `active_workflow`
+(migration 032, written once by the routing layer). They sit **on the same row**. Nothing consumed them together.
 
 Issue #1055 asked for "per-workflow, per-agent, per-user cost observability" and was filed
 against a codebase that has since shipped most of the capture layer. Of its three motivating
