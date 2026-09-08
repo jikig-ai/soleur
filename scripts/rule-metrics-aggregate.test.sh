@@ -302,6 +302,17 @@ t6_te_prefix_not_orphan() {
   # suite AT THIS LINE and the assert below never names the problem — a die is
   # indistinguishable from an unrelated crash. Not `|| printf '0'`: grep already
   # printed "0", so that yields "00".
+  #
+  # But `|| true` swallows grep's rc 2 (file missing/unreadable) as well as its
+  # rc 1, and on rc 2 grep prints NOTHING — so the capture is empty rather than
+  # "0". `assert_eq` still fails on that, which is why this is a diagnostic
+  # tightening and not a vacuity hole; without the existence check the failure
+  # reads as "expected 1, got ''" and blames the aggregator for a missing
+  # fixture. Name the real cause first.
+  [ -r "$root/.claude/.rule-incidents.jsonl" ] || {
+    assert_eq "T6 FIXTURE BROKEN — incidents log readable" "readable" "unreadable: $root/.claude/.rule-incidents.jsonl"
+    rm -rf "$root"; return
+  }
   te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl" || true)
   assert_eq "T6 te-subagent-overshoot fired" "1" "$te_count"
   rm -rf "$root"
@@ -551,9 +562,15 @@ t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen() {
 
   # Generator cardinality: an under-filled generator makes every assert below vacuous.
   local srclines
-  # Same `|| true` reasoning as T6. It matters more here: this assert IS the
-  # anti-vacuity check ("an under-filled generator makes every assert below
-  # vacuous"), so dying instead of failing loses the one message that says so.
+  # Same `|| true` reasoning as T6, including its rc-2 caveat. It matters more
+  # here: this assert IS the anti-vacuity check ("an under-filled generator
+  # makes every assert below vacuous"), so dying instead of failing loses the
+  # one message that says so — and an unreadable AGENTS.md must not be reported
+  # as an under-filled generator.
+  [ -r "$root/AGENTS.md" ] || {
+    assert_eq "T16 FIXTURE BROKEN — generated AGENTS.md readable" "readable" "unreadable: $root/AGENTS.md"
+    rm -rf "$root"; return
+  }
   srclines=$(grep -c '^- Synthesized aggregator fixture bullet ' "$root/AGENTS.md" || true)
   assert_eq "T16 fixture generator emitted $rows rule bullets" "$rows" "$srclines"
 
