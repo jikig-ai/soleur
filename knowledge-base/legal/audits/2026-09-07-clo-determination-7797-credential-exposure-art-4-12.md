@@ -6,14 +6,14 @@ issue: 7797
 pr: 7891
 attestation-authority: clo
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
-disposition: PROVISIONAL — no Art. 33 duty, no Art. 34 duty, on one open evidentiary limb
+disposition: PROVISIONAL — no Art. 33 duty, no Art. 34 duty. The evidentiary limb was RUN 2026-09-08: integrity CLEAN, confidentiality INCONCLUSIVE. See the 2026-09-08 addendum.
 signed_off_at: 2026-09-07
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
 awareness_anchor: "2026-09-03T15:33:16Z"
 art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "not due — 72h from the awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. A BREACH finding on the open limb starts a FRESH 72h from awareness of that finding."
-open_limbs: "Sentry token last-used timestamp and org audit log not yet pulled; the Art. 33(1) likelihood limb therefore rests on an assertion."
+open_limbs: "RUN 2026-09-08. Org audit log pulled: integrity/write limb CLEAN. The token last-used timestamp DOES NOT EXIST as an instrument (no such field on any Sentry surface for personal tokens), so the confidentiality/read limb is INCONCLUSIVE and cannot be closed by that route. Only vendor support remains."
 tier_classification: "Tier 1 — an internal determination record. No public document is edited, no right is narrowed, no processing added. The mirror/SHA/heading gates are NOT engaged."
 semver: "No TC_VERSION bump."
 ---
@@ -180,3 +180,77 @@ softer CLEAN.
   exposure → the volume and severity limbs change materially.
 - External counsel re-review is reserved for these triggers, not for routine
   review. All output here is draft material.
+
+## Addendum — 2026-09-08 (#7797): the open limb, run
+
+Append-only. The body above stands as the determination made on 2026-09-07 on the
+evidence then available. This section records what measurement returned, and
+withdraws one statement made above.
+
+### The instrument named in "The open limb" does not exist
+
+Step 1 above requires capturing the token's **last-used timestamp**, "before
+deleting the token", because "deletion destroys the datum". Measured against the
+live product on 2026-09-08 under an authenticated session:
+
+**Sentry exposes no last-used field for personal tokens on any surface.** The
+token list shows Token / Created On / Scopes; the Edit view shows Name / masked
+Token / Scopes; and `GET /api/0/api-tokens/` returns 200 under session auth with
+the complete field set `application, dateCreated, expiresAt, id, name, scopes,
+state, tokenLastCharacters`. There is no `dateLastUsed` or equivalent. The
+org-token surface holds zero tokens and is not an alternative source.
+
+The 403-under-bearer observation recorded above was correct. The inference that a
+session would therefore reveal the scalar was not — the session reveals the same
+field set, and it does not include one.
+
+**Withdrawn:** the statement that *"the 2026-09-07 liveness probe performed while
+preparing this determination has already overwritten the scalar with a controller
+use — a real, self-inflicted degradation of the instrument"*. There is no scalar
+to overwrite, so no degradation occurred. That sentence was a self-criticism
+entered into a signed record without verifying that its subject existed.
+
+### Consequence for the ordering constraint
+
+The requirement that the access investigation be *"blocking and prior to
+remediation"* rests, for the confidentiality limb, on an instrument that
+remediation would destroy. Since no such instrument exists, **rotation was never
+in fact gated by it**. The credential remained live for approximately four days
+nine hours longer than the evidence required.
+
+The integrity limb's instrument — the org audit log — is unaffected by rotation
+and could have been pulled at any time.
+
+### Verdict on the limb
+
+`GET /api/0/organizations/jikigai-eu/audit-logs/` under the session. Returned
+page spans 2026-09-03T15:18:39Z → 2026-09-07T17:59:51Z; the oldest row precedes
+the 15:30Z cutoff, so the incident window is covered with no pagination gap. 96
+entries in-window, all attributable to the Terraform IaC proxy service user
+performing detector/monitor/rule edits on our own resources from GitHub Actions
+runner ranges. No unknown principal.
+
+- **Integrity / write limb: CLEAN**, on full-window coverage and a single known actor.
+- **Confidentiality / read limb: INCONCLUSIVE**, permanently by this route: audit
+  logs do not record reads and no last-used instrument exists.
+
+Per §Re-evaluation triggers, this is neither the BREACH path nor the CLEAN path.
+It is the third outcome the determination itself anticipated, so
+`art_33_determination_status` **does not** drop "provisional". The Art. 33(1)
+likelihood limb no longer rests on an assertion about writes — the audit log
+answers that — but the read limb rests on the absence of an instrument rather
+than on evidence of no access.
+
+### Severity refinement
+
+The Type and Capability rows above state the token carried "org read **and
+write**". That was correct. The token in fact carried **admin** — `org:admin`,
+`event:admin`, `project:admin`, `team:admin`, `org:integrations` — which reaches
+member management, integrations and project deletion. This sharpens the integrity
+limb the determination already engaged; it does not reverse it. The Art. 4(12)
+severity assessment should be read against the admin scope set.
+
+### Remediation
+
+The leaked token (id `6680231`) was revoked 2026-09-08T10:34Z and replaced. Full
+detail in the post-mortem's 2026-09-08 addendum.

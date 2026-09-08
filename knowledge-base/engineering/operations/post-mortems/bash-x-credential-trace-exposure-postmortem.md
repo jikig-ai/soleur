@@ -2,18 +2,18 @@
 title: "Two live API tokens printed into an agent transcript by `bash -x`"
 date: 2026-09-04
 incident_pr: "#7797"
-incident_window: "2026-09-03 ~15:30Z (single command); Better Stack exposure ended 2026-09-03T20:10Z, Sentry exposure persists"
-recovery_at: "partial — BETTERSTACK_API_TOKEN_READONLY rotated 2026-09-03T20:10Z; SENTRY_AUTH_TOKEN still live"
+incident_window: "2026-09-03 ~15:30Z (single command); Better Stack exposure ended 2026-09-03T20:10Z; Sentry exposure ended 2026-09-08T10:34Z (~4d19h)"
+recovery_at: "complete — BETTERSTACK_API_TOKEN_READONLY rotated 2026-09-03T20:10Z; SENTRY_AUTH_TOKEN rotated and leaked token revoked 2026-09-08T10:34Z"
 suspected_change: "none — no change caused this; `bash -x` on a bearer-carrying script is the standing hazard"
 brand_survival_threshold: aggregate pattern
-status: ongoing
+status: remediated (determination still provisional — see the 2026-09-08 addendum)
 triggers:
   - operator ran a credential-carrying script under `bash -x` to debug a failing guard
 art_33_triggered: false
 art_34_triggered: false
 art_33_deadline: "not due — 72h from the 2026-09-03T15:33:16Z awareness anchor computes to 2026-09-06T15:33:16Z, but no Art. 33 duty arose, so nothing fell due at that instant. If the open evidentiary limb resolves to BREACH, a fresh 72h runs from awareness of THAT finding, not retroactively from this anchor."
 art_33_determination: "knowledge-base/legal/audits/2026-09-07-clo-determination-7797-credential-exposure-art-4-12.md"
-art_33_determination_status: "provisional — one open evidentiary limb (Sentry last-used + org audit log not yet pulled)"
+art_33_determination_status: "provisional — the evidentiary limb was RUN 2026-09-08: integrity/write CLEAN (audit log, full window coverage, single known actor); confidentiality/read INCONCLUSIVE (no last-used instrument exists on this surface, see addendum finding 1)"
 ---
 
 ## Actor key
@@ -378,3 +378,102 @@ files; only 3 declare the credential through a `secrets=` directive) —
 re-measured here, since ~8 was inherited from the 2026-09-03 comment
 off the *user* auth token onto an org-level Internal Integration (ADR-031's
 `iac-terraform-prd` shape), which would make the next rotation agent-doable.
+
+## Addendum — 2026-09-08 (#7797): remediation complete, and two corrections to this record
+
+Append-only. Nothing above is rewritten; this section supersedes the parts it
+names. Frontmatter state was updated in place, because a corrected body sitting
+above a stale machine-readable field is the failure mode that rule exists to stop.
+
+### Remediation — the Sentry half is closed
+
+Executed by the agent under an operator-cleared browser session. No credential
+value entered the agent session.
+
+| Step | Result |
+|---|---|
+| Replacement minted | `terraform-apply-sentry-iac-prd-2026-09-08`, id `8741628`, `****083d` — HTTP 201, same 16 scopes |
+| Replacement verified | `GET /organizations/jikigai-eu/` → HTTP 200 |
+| Written to Doppler `soleur/prd_terraform` | piped over stdin (never in argv); trailing characters confirmed |
+| Prod value verified | HTTP 200 |
+| Leaked token `6680231` (`****1f49`) revoked | HTTP 204 |
+| Revocation confirmed | account token list no longer contains it |
+| Plaintext working copy | `shred -u -n 3` |
+
+**Exposure window: 2026-09-03T15:30Z → 2026-09-08T10:34Z, ~4 days 19 hours.**
+
+Deviation from the runbook, recorded rather than elided: the step "verify the old
+value returns 401" could not be run as written, because Doppler was overwritten
+before the old value was captured. The substitute is stronger — the token was
+deleted server-side and is absent from the account list, so it cannot
+authenticate at all — but the check as specified was skipped. Before revoking,
+all seven Doppler configs in project `soleur` and every secret in
+`prd_terraform` were scanned for the old value; none held it.
+
+### Finding 1 — the blocking instrument does not exist. **This withdraws a self-criticism made above.**
+
+The remediation sequence in the action row above is ordered around capturing the
+token's **last-used timestamp** before deletion, "because deletion destroys the
+datum". Measured 2026-09-08: **Sentry exposes no such field for personal tokens,
+on any surface.**
+
+- Token list page columns: Token, Created On, Scopes. No last-used.
+- Per-token Edit view: Name, masked Token, Scopes. Nothing else.
+- `GET /api/0/api-tokens/` under **session** auth returns 200 (the documented 403
+  is bearer-auth-only, which was correct) and its complete field set is
+  `application, dateCreated, expiresAt, id, name, scopes, state,
+  tokenLastCharacters`. No `dateLastUsed`/`lastUsed`/`last_used`.
+- The org-token surface holds zero tokens, so it is not an alternative source.
+
+Two consequences:
+
+1. **Rotation was never actually blocked.** The gate that held it for four days
+   was a field that does not exist. The ordering constraint was vacuous.
+2. **The claim that the 2026-09-07 liveness probe "already overwrote the scalar
+   with a controller use — a real, self-inflicted degradation of the instrument"
+   is withdrawn.** There is no scalar; nothing was degraded. That self-criticism
+   was written into a signed determination without verifying the field existed —
+   the same defect class this document already records twice.
+
+### Finding 2 — the scope class was understated (and my first write-up of this was itself wrong)
+
+This record's capability row says the token carried "org read **and write**",
+and the CLO determination says the same and engages the integrity limb on it.
+**Both were right about writes.** The refinement is that the token actually
+carried **admin**: `org:admin`, `event:admin`, `project:admin`, `team:admin`,
+plus `org:integrations` — materially more than write, reaching member
+management, integrations and project deletion.
+
+Recorded as a third correction of my own in this incident: the 2026-09-08 issue
+comment first asserted that both records "characterise it as read-scoped". That
+was false and was written without reading the capability rows. The genuinely
+false site is `plugins/soleur/skills/postmerge/SKILL.md`, which called
+`SENTRY_AUTH_TOKEN` **read-only** and claimed it lacks `event:read`; it carried
+`event:admin` and `event:read`. Corrected in the same PR as this addendum.
+
+### Finding 3 — the access investigation was run
+
+`GET /api/0/organizations/jikigai-eu/audit-logs/` under the session. The returned
+page spans 2026-09-03T15:18:39Z → 2026-09-07T17:59:51Z; the oldest row **precedes
+the 15:30Z incident cutoff**, so the window is covered with no pagination gap.
+
+96 entries in the window. Every one is the same actor — the Terraform IaC proxy
+service user — performing `detector.edit/add`, `monitor.add`,
+`uptime_monitor.edit` and `rule.create/edit` against our own resources, from
+Azure ranges consistent with GitHub Actions runners. No unknown principal, no
+unexpected event type.
+
+- **Integrity / write limb: CLEAN.**
+- **Confidentiality / read limb: INCONCLUSIVE.** Audit logs do not record reads,
+  and finding 1 removes the instrument that was meant to address this. Only
+  vendor support could resolve it further.
+
+This is the outcome the determination predicted as its honest expectation — now
+evidenced rather than anticipated. It is **not** the CLEAN path that would let
+`art_33_determination_status` drop "provisional".
+
+### Still open
+
+The ADR-031 migration is undone — the org-token surface is empty, so this
+credential class is still a personal token and the next rotation is still gated
+at an interactive login. That remains the durable fix.

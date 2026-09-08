@@ -11,6 +11,7 @@ description: "This skill should be used when verifying a merged PR deployed corr
 Invoke via **Claude:** `soleur:postmerge <PR>` | **Grok:** `/postmerge <PR>`.
 
 **Polling CI / health checks without asking the operator:**
+
 - **Claude Code:** Monitor tool for Phase 2 main CI and Phase 3 health retries.
 - **Grok Build:** AwaitShell with `pattern` (`completed success`, `postmerge verification complete`) or Shell with `block_until_ms`.
 
@@ -164,7 +165,9 @@ A merged-and-deployed fix can pass every gate above and still not work — the d
 
 **Run only when** the PR body or linked issue names a specific Sentry issue (a `*.sentry.io/issues/<id>` URL, a `SENTRY-<SHORTID>`, or a `Closes #N` whose issue references one). If no Sentry issue is identified, skip silently — there is no error to measure.
 
-**Prerequisites:** same `SENTRY_AUTH_TOKEN` resolution as Phase 3.5 for the aggregate Discover count. **The single-issue GET below, however, requires the write-scoped `SENTRY_ISSUE_RW_TOKEN`** — the `/organizations/<org>/issues/<id>/` endpoint returns `403` on the read-only `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` (they carry Discover/ingest scope, not `event:read` on the issue resource). Using the read token here makes the `curl -sfS` GET exit non-zero, leaving `ISSUE_JSON` empty → `ISSUE_STOPPED` stuck `false` → auto-resolve never fires. Resolve the RW token first; if it is absent, skip this phase (warn) since the GET cannot succeed without it.
+**Prerequisites:** same `SENTRY_AUTH_TOKEN` resolution as Phase 3.5. Prefer `SENTRY_ISSUE_RW_TOKEN` when present; fall back to `SENTRY_AUTH_TOKEN`, and only skip the phase when **neither** resolves.
+
+> **Corrected 2026-09-08 (#7797).** This block previously asserted that the > `/organizations/<org>/issues/<id>/` endpoint *"returns `403` on the **read-only** > `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` (they carry Discover/ingest scope, not `event:read` on the issue > resource)"*, and told the phase to skip whenever the RW token was absent. **Both halves were false.** > Measured against prod on 2026-09-08: `SENTRY_AUTH_TOKEN` carries `event:admin` and `event:read` (it is > not read-only — it held org/project/team **admin**), and `GET /organizations/jikigai-eu/issues/<id>/` > under it returns **HTTP 200**, not 403. The cost of the error was silent: every run without > `SENTRY_ISSUE_RW_TOKEN` skipped fix-efficacy verification on a premise that never held, while the token > it already had would have worked. Establish a capability by calling it, not by restating what a token is > assumed to be. Only the GET was re-measured; the resolving **PUT** is still written to require the > write-scoped token and has not been re-tested under `SENTRY_AUTH_TOKEN`.
 
 ```bash
 # ISSUE_ID = the Sentry issue short-id or numeric id from the PR/issue body
@@ -317,8 +320,8 @@ Branch on eligibility, then on whether the draft is already on `main`:
 
   > Eligible PR #N had no feature-tweet draft on `main` (the `/ship` pre-merge
   > bundle was skipped). Generated a catch-up draft — commit it to `main` via a
-  > follow-up PR so `content-publisher.sh` can drain it, then set `publish_date`
-  > + `status: scheduled` once the deploy is confirmed.
+  > follow-up PR so `content-publisher.sh` can drain it, then set both
+  > `publish_date` and `status: scheduled` once the deploy is confirmed.
 
 **Multi-PR contract (explicit v1):** one tweet per eligible PR, using postmerge's
 single bound PR number. If a deploy bundled multiple PRs, only the bound PR is
