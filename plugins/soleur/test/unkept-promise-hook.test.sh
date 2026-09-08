@@ -163,21 +163,48 @@ printf '%s' "$body" | jq -e '.reason | test("in THIS turn")' >/dev/null 2>&1 \
   && pass "reason states the required action" || fail "reason does not state the action"
 
 # Floor emitted DIRECTLY, never through the helpers it backstops.
-MIN_ASSERTIONS=31   # MEASURED from a green run (never an expected value)
-                    # in this file and wrong both times; always re-measure.
+# Every threshold below is MEASURED from a green run, never an expected
+# value -- set from an expectation twice in this file and wrong both times.
+# Each literal sits immediately above its own `if` so it binds inside the
+# vacuity guard's mutant slice (see the note on the coverage floor below).
 # A count of assertions cannot see a harness that stopped invoking the SUT:
 # `expect() { pass "$2"; }` keeps every counter moving and runs the hook zero
 # times. Assert the INVOCATIONS the rows must have produced.
+#
+# TWO CONSTRAINTS, BOTH LEARNED FROM `scripts/guard-vacuity-floor.test.sh`, which
+# slices each floor into a mutant with every helper name neutered (via
+# `command_not_found_handle`) and every COUNTER zeroed, then requires the floor
+# to still exit non-zero.
+#
+#   1. NEITHER SIDE MAY BE A COUNTER. This compared INVOCATIONS against
+#      EXPECT_ROWS -- both incremented by the harness -- so zeroing both made
+#      `0 -lt 0` false: the floor exited 0 and certified a run that asserted
+#      nothing. Each threshold is now a LITERAL.
+#   2. THE THRESHOLD MUST BIND IN THE SLICE. The mutant widens BACKWARD only
+#      over contiguous simple assignments, so a literal parked above a comment
+#      or a command substitution is unbound under `set -u`; the mutant then dies
+#      before reaching the floor and is scored "not constructible" rather than
+#      firing -- which moves the guard's construction-failure ratchet instead of
+#      its firing count. Hence each threshold sits IMMEDIATELY above its own
+#      `if`, with nothing in between.
 INVOCATIONS=$(wc -l < "$INVOCATION_LOG" 2>/dev/null | tr -d ' ')
 INVOCATIONS=${INVOCATIONS:-0}
-if [ "$INVOCATIONS" -lt "$EXPECT_ROWS" ]; then
-  printf '[FATAL] coverage: %s expect rows produced only %s SUT invocations -- the harness is not running the hook\n' \
-    "$EXPECT_ROWS" "$INVOCATIONS" >&2
+MIN_INVOCATIONS=24
+if [ "$INVOCATIONS" -lt "$MIN_INVOCATIONS" ]; then
+  printf '[FATAL] coverage: %s SUT invocations, floor is %s -- the harness is not running the hook\n' \
+    "$INVOCATIONS" "$MIN_INVOCATIONS" >&2
+  exit 1
+fi
+MIN_EXPECT_ROWS=20
+if [ "$EXPECT_ROWS" -lt "$MIN_EXPECT_ROWS" ]; then
+  printf '[FATAL] coverage: %s expect rows, floor is %s -- rows were removed\n' \
+    "$EXPECT_ROWS" "$MIN_EXPECT_ROWS" >&2
   exit 1
 fi
 echo ""
-echo "=== $PASS passed, $FAIL failed ==="
+echo "=== $PASS passed, $FAIL failed ($INVOCATIONS SUT invocations, $EXPECT_ROWS expect rows) ==="
 [ "${#FAILURES[@]}" -gt 0 ] && printf 'FAILED: %s\n' "${FAILURES[@]}" >&2
+MIN_ASSERTIONS=31
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: ran %s, expected >= %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
