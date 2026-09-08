@@ -148,7 +148,7 @@ row it genuinely lacked.
   reaching for a hooks flag.
 - **The loopback fix's REPLACEMENT was bypassed by the same input.** A shell
   `case` glob's `*` matches anything, so `[0-9]*` reads as "a digit then
-  anything" and `http://127.0.0.1:5000@evil.example/` matched. Recovery:
+  anything" and `http://127.0.0.1:5000@evil.test/` matched. Recovery:
   anchored ERE. **Prevention:** probe a destination guard in BOTH directions
   before believing it; a glob is not a regex.
 - **Linter crash read as "0 findings, clean"** (tuple built before the inliners
