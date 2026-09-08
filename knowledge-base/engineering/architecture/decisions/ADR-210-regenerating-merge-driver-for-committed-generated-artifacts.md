@@ -75,8 +75,14 @@ resolved.**
    both the generator and the driver. Nothing outside the generator may re-implement row
    eligibility (ADR-174).
 
-5. **Every failure path writes a conflict-marker sentinel, via an `ERR` trap installed before
-   any parsing.** A hand-placed write at each `exit 1` is not sufficient: under
+5. **Every failure path THAT OWNS `%A` writes a conflict-marker sentinel, via an `ERR` trap
+   installed before any parsing — and before anything that can fail, including the `source` of
+   the render library, which bash exits on without running an ERR trap at all.** The qualifier
+   is load-bearing rather than hedging: `refuse()` is a deliberate non-writing path, because on a
+   `%P` this driver does not own, writing the sentinel would PERFORM the denial of service the
+   `%P` check exists to prevent (git writes `%A` into the working tree even on a non-zero driver
+   exit, so one committed `* merge=kb-index` line would prepend a line to every file in every
+   merge, binaries included — measured). A hand-placed write at each `exit 1` is not sufficient: under
    `set -euo pipefail` an unhandled failure terminates the script without reaching one, which
    reproduces the markerless-conflict problem one level down and specifically on the
    adversarial-input paths this design must assume are reachable.
@@ -113,15 +119,27 @@ resolved.**
   doing something else would pass every check here. The controls are the script's size, its
   review, explicit `CODEOWNERS` rows, and the fact that a modified driver does not execute until
   a merge *after* the one that brought it in.
-- **The row-set merge is not equivalent to regenerating in three cases**, all named in the
-  driver's own header: rename-plus-edit across branches, a generator rule change on one branch,
-  and a future title source outside the file. `--check` is what catches them; the driver makes
+- **The row-set merge is not equivalent to regenerating in four cases**, all named in the
+  driver's own header: rename-plus-edit across branches; a generator rule change on one branch; a
+  future title source outside the file; and — the most reachable of the four — a STALE index on
+  one side, which is indistinguishable from a deliberate deletion. The house workflow in
+  `2026-06-04-kb-index-regen-bundles-stale-drift-prefer-surgical-edit.md` prescribes hand-editing
+  rows out of `INDEX.md`, and #7401 records `main` having been stale by thousands of rows, so
+  this is routine rather than exotic. All four are caught downstream by `--check`; none is caught
+  at merge time, which is the honest boundary of a set merge. `--check` is what catches them; the driver makes
   the common case correct and conflict-free, and the guard makes the uncommon case loud.
 - **A brand-new clone whose very first action is a merge has no driver.** That merge line-merges
   silently. `--check` catches the result at the first push. No mechanism in git closes this
   window and this ADR does not claim one does.
-- **`merge=union` may leave the facet files unsorted or duplicated** until the next generator
-  run. Their only consumer cannot observe either.
+- **`merge=union` leaves the facet files unsorted or duplicated after any two-sided merge, and
+  `--check` reds on that.** `kb-search`'s `grep -Fxq` cannot observe it, but this ADR's own guard
+  compares byte for byte, and nothing regenerates in between — a union merge resolves cleanly, so
+  `git merge` auto-commits and fires `pre-merge-commit`, which lefthook does not define. So the
+  cost is a recurring, LOUD, one-command CI red rather than silent corruption. An earlier draft
+  said "their only consumer cannot observe either", which was wrong in both halves: there are
+  three content consumers (`kb-search`, `compound-capture`, and the dashboard KB file viewer),
+  and the consumer that matters most is this change's own gate. The remedy is written into
+  `merge-pr/SKILL.md` beside the INDEX.md guidance.
 - **The `.gitattributes` file now exists**, which unblocks the `rule-metrics.json` entry a
   2026-07-06 plan deferred. Adding that entry is not in scope here.
 

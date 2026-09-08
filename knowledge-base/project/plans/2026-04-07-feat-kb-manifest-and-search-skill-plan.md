@@ -101,6 +101,13 @@ Known constraint: lefthook hangs in worktrees >60s — the script must complete 
 
 **learnings-researcher integration:** Update the agent's instructions to check INDEX.md first for file discovery, then fall back to direct grep for content matching. This is an instruction update to `plugins/soleur/agents/engineering/research/learnings-researcher.md`.
 
+> **Superseded 2026-09-08 (#7935, ADR-210):** the `.gitattributes` prohibition below is
+> REVERSED. `knowledge-base/INDEX.md` now carries a `merge=kb-index` driver and the two facet
+> files carry `merge=union`; the hand-run regeneration remedy is what failed three times on PR
+> #7896, silently dropping rows on every `--theirs` resolve. The `--help` text this paragraph
+> asks for has been replaced accordingly. See
+> [ADR-210](../../engineering/architecture/decisions/ADR-210-regenerating-merge-driver-for-committed-generated-artifacts.md).
+
 **Merge conflicts:** INDEX.md is a generated file. Do not use `.gitattributes` merge strategies. After any merge that conflicts on INDEX.md, regenerate by running `bash scripts/generate-kb-index.sh`. Document this in the script's `--help` output.
 
 ## Acceptance Criteria

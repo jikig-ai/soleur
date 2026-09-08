@@ -31,7 +31,11 @@
 # catches all three. The driver makes the common case (both sides only added
 # files) correct and conflict-free; the guard makes the uncommon case loud.
 #
-# EVERY FAILURE PATH WRITES A SENTINEL. Measured: when a merge driver exits
+# EVERY FAILURE PATH THAT OWNS %A WRITES A SENTINEL — and the qualifier is not
+# hedging, it is the whole rule. `refuse()` below is a deliberate exception: on a
+# %P this driver does not own, writing would PERFORM the denial of service the
+# %P check prevents. A second, unreachable-via-git exception is a missing %A,
+# where there is nothing to write into. Measured: when a merge driver exits
 # non-zero, git reports `CONFLICT (content)`, marks the path `UU`, leaves ours
 # content in place — and writes NO conflict markers. The file reads as clean, so
 # `guardrails:block-conflict-markers` never fires and the repo's own merge-pr
@@ -59,8 +63,11 @@ readonly EXPECTED_PATH="knowledge-base/INDEX.md"
 # on the ERR-trap path there is no stderr at all, so a reader was being handed a
 # confident wrong diagnosis as the only durable artifact.
 readonly SENTINEL_PREFIX='<<<<<<< kb-index: merge driver could not resolve'
-# Far above any real row (the longest in a 6,432-row corpus is ~200 bytes). This
-# is a memory bound on adversarial input, not a format rule.
+# Far above any real row. Measured on this repo's corpus 2026-09-08: 6,434 rows,
+# longest 365 bytes —
+#   awk '/^- \[/{n=length($0); if(n>m)m=n} END{print m}' knowledge-base/INDEX.md
+# A memory bound on adversarial input, not a format rule. NOTE ${#line} counts
+# CHARACTERS, not bytes, in a UTF-8 locale; the bound is generous either way.
 readonly MAX_LINE_BYTES=8192
 
 O="${1:-}"; A="${2:-}"; B="${3:-}"; P="${4:-}"

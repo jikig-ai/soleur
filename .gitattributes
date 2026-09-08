@@ -18,11 +18,26 @@
 # -- so scripts/generate-kb-index.sh --check is what makes that case loud.
 knowledge-base/INDEX.md merge=kb-index
 
-# The facet files are flat sorted lists with no derived header, and their only
-# content consumer validates with `grep -Fxq` -- an exact-line check indifferent
-# to ordering and duplicates. git's built-in union therefore satisfies the real
-# contract with zero code and, being built in, no unregistered-failure mode at
-# all. The next generator run restores canonical ordering.
+# The facet files are flat sorted lists with no derived header. `kb-search`, the
+# consumer that reads their CONTENT for validation, uses `grep -Fxq` -- an
+# exact-line check indifferent to ordering and duplicates -- so union preserves
+# every property it needs, with zero code and no unregistered-failure mode.
+#
+# BUT UNION OUTPUT IS NOT CANONICAL, AND THIS REPO NOW HAS A CONSUMER THAT CARES.
+# Union concatenates the ours hunk then the theirs hunk; the generator writes
+# through `LC_ALL=C sort -u`. Measured: base {alpha,beta}, ours adds `zeta`,
+# theirs adds `charlie` -> union yields alpha,beta,zeta,charlie, which no
+# generator run produces. `scripts/generate-kb-index.sh --check` compares byte
+# for byte and is gated in CI, so a two-sided facet merge leaves CI RED until
+# someone re-runs the generator.
+#
+# Nothing regenerates in between: a union merge resolves cleanly, so `git merge`
+# auto-commits and fires `pre-merge-commit`, and lefthook defines only
+# `pre-commit` and `pre-push`. This is a real, recurring, LOUD cost -- no rows are
+# lost -- and it is the honest price of using a built-in here. The remedy is one
+# command and is written down in merge-pr/SKILL.md next to the INDEX.md guidance:
+#
+#   bash scripts/generate-kb-index.sh && git add knowledge-base/kb-*.txt
 knowledge-base/kb-tags.txt merge=union
 knowledge-base/kb-categories.txt merge=union
 

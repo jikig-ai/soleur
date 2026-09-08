@@ -189,3 +189,7 @@
 /scripts/merge-kb-index.sh                              @deruelle
 /scripts/lib/kb-index-render.sh                         @deruelle
 /scripts/install-kb-merge-driver.sh                     @deruelle
+# .gitattributes decides WHICH paths reach a merge driver, so it is the lever that
+# governs the surface the three rows above describe — a single line there can point
+# any path at any driver. It had only the blanket `*` rule.
+/.gitattributes                                         @deruelle
