@@ -2346,6 +2346,7 @@ observability-coupling
 observability-tests
 oci
 oci-image
+oci-pin
 octokit
 off-host-verify
 offline-harness
