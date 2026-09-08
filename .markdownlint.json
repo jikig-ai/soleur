@@ -39,6 +39,16 @@
   // COUNT, which the sweep now asserts is unchanged per file.
   "MD018": false,
 
+  // MD028 (no-blanks-blockquote) disabled by #7927. The corpus uses consecutive
+  // callouts -- two `>` blocks separated by a blank line -- as a deliberate documentation
+  // idiom, and CommonMark renders that as TWO separate blockquotes, which is exactly what
+  // the author means. Verified with the repo's own markdown-it: the pattern produces
+  // blockquote count 2, not one quote with a hole in it. The rule exists because SOME
+  // renderers merge them; ours does not. All 54 hits are that idiom, so satisfying the
+  // rule would mean inserting 54 separator comments that make the source uglier and change
+  // nothing about the output.
+  "MD028": false,
+
   "MD026": false,
   "MD029": false,
   "MD033": false,
