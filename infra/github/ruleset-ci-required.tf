@@ -143,7 +143,7 @@ resource "github_repository_ruleset" "ci_required" {
       # were in the PR that tripped over them, so a changed-files gate would
       # reproduce the blind spot it exists to close.
       required_check {
-        context        = "markdown-lint (repo-wide)"
+        context        = "markdown-lint"
         integration_id = var.actions_integration_id
       }
 

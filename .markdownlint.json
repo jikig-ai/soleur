@@ -34,9 +34,13 @@
   // inserted around it. The tell was 18 NEW MD001 heading-increment errors appearing in a
   // sweep that was supposed to be whitespace-only.
   //
-  // A word-sequence check does NOT catch this: inserting a space after `#` merges and
-  // splits nothing, so the tokens are identical. The guard that catches it is heading
-  // COUNT, which the sweep now asserts is unchanged per file.
+  // A word-sequence check did NOT catch this: inserting a space after `#` merges and
+  // splits nothing, so the tokens are identical. What caught it was comparing HEADING
+  // COUNT per file against the pre-sweep tree -- a one-off verification run while
+  // preparing this change, NOT a standing guard. Nothing in the repository asserts
+  // heading count today. Stated in the past tense deliberately: an earlier revision of
+  // this comment described it as a live safety net, which would have told the next
+  // person disabling a destructive rule that they were covered when they are not.
   "MD018": false,
 
   // MD028 (no-blanks-blockquote) disabled by #7927. The corpus uses consecutive

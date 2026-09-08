@@ -626,7 +626,7 @@ t_rsc_order_insensitive() {
 # tracked doc from reintroducing a resolvable credential-file path; its bot-PR
 # synthetic is EARNED in the composite action's Phase-4 ceiling, not
 # fabricated-but-unreachable, because its SCAN_DIRS intersects ALLOWED_PATHS);
-# bumped 22->23 by #7927 (markdown-lint (repo-wide) — the always-run whole-corpus
+# bumped 22->23 by #7927 (markdown-lint — the always-run whole-corpus
 # Markdown gate. Its bot-PR synthetic is sound-by-UNREACHABILITY, not earned: the
 # swept set is 1,345 files and its intersection with the composite action's
 # ALLOWED_PATHS is 0 — weakness-digest.md sits under the knowledge-base/project/

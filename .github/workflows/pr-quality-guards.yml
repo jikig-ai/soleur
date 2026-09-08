@@ -3,12 +3,18 @@ name: PR quality guards (#2905)
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  # Merge queue (#5780). Only `guard-script-fixture-tests` is a required
-  # context on ruleset 14145388 and it has NO PR-event dependency, so it runs
-  # cleanly on the gh-readonly-queue/main/* temp ref. Every OTHER job here is a
-  # PR-quality gate keyed on `github.event.pull_request.*` (PR number, diff,
-  # opt-out label) that has no meaning on a merge candidate — each is gated to
-  # `pull_request` below so it does not run (and spuriously error) on merge_group.
+  # Merge queue (#5780, second required context added by #7927). TWO jobs here are
+  # required contexts on ruleset 14145388 — `guard-script-fixture-tests` and
+  # `markdown-lint` — and NEITHER has a PR-event dependency, so both run cleanly on
+  # the gh-readonly-queue/main/* temp ref. Every OTHER job is a PR-quality gate keyed
+  # on `github.event.pull_request.*` (PR number, diff, opt-out label) that has no
+  # meaning on a merge candidate — each is gated to `pull_request` below so it does
+  # not run (and spuriously error) on merge_group.
+  #
+  # DO NOT add an `if:` to either required job. This comment used to say only ONE job
+  # here was required; an author following that would gate the new one to
+  # `pull_request` and the merge queue would sit pending forever, which is the exact
+  # failure its own comment says it is avoiding. Check this list before adding an `if:`.
   merge_group:
 
 permissions:
@@ -354,7 +360,7 @@ jobs:
   # `npm ci` because the script refuses to run an unpinned binary -- resolving the
   # latest release per invocation is the drift defect #7927 exists to close.
   markdown-lint:
-    name: markdown-lint (repo-wide)
+    name: markdown-lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

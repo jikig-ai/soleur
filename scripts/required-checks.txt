@@ -68,7 +68,7 @@ rename-guard (allowlist destinations)
 waiver discipline (issue:#NNN trailer)
 Bash fixture tests for guard scripts
 
-# markdown-lint (repo-wide) — pr-quality-guards.yml (#7927).
+# markdown-lint — pr-quality-guards.yml (#7927).
 #
 # THIS IS A CONTENT-SCOPED GATE, so the auto-fabrication guard above applies and
 # the exemption is by UNREACHABILITY, derived rather than asserted. The bot-PR
@@ -83,9 +83,15 @@ Bash fixture tests for guard scripts
 # intersection with ALLOWED_PATHS is 0. A bot PR therefore cannot change a file
 # this gate inspects, so the synthetic green cannot mask a real failure.
 #
-# If ALLOWED_PATHS ever gains a path inside the swept set, this entry stops being
-# sound and the gate must move to the action's Phase-4 preflight instead.
-markdown-lint (repo-wide)
+# THE TRIPWIRE IS BROADER THAN THE SWEPT SET. This entry stops being sound if
+# ALLOWED_PATHS ever gains ANY path this gate READS -- which is not only the 1,345
+# swept *.md, but also .markdownlintignore, .markdownlint.json, package.json,
+# package-lock.json, .nvmrc and scripts/markdown-lint.sh. None of those is "inside the
+# swept set", so a bot allowlisted to edit .markdownlintignore (plausible: auto-
+# excluding a noisy directory) would leave a narrower tripwire silent while destroying
+# the soundness argument entirely. On any such change, move the gate to the action's
+# Phase-4 preflight instead of widening this note.
+markdown-lint
 
 # ci.yml correctness gate jobs (#6049 completed the drift). adr-ordinals was
 # live-required but absent from the IaC + canonical JSON until #6049.

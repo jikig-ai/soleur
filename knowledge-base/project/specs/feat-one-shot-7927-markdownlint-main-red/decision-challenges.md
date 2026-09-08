@@ -83,3 +83,33 @@ the caller's CWD — is what the row now proves, and it proves it positively.
 
 **What would change the answer.** The script gaining any CWD-relative path, at which point the
 failing assertion becomes reachable and should be restored.
+
+## 5. MD018 and MD028 retired beyond AC 14's scope lock (implementation, measured)
+
+**AC 14 is the plan's scope lock on rule changes.** It reads: "The only `.markdownlint.json`
+change is the MD025 and MD001 disable; MD038, MD052, MD034, MD032, MD012, MD022, MD031,
+**MD028**, MD037, MD046, MD051 and MD055 all remain enabled."
+
+**The shipped config disables MD028 — which that AC enumerates by name as remaining enabled —
+and MD018, which no AC covers.** Recorded here because AC 14 was broken in the one direction it
+named, and §3 above records MD001 while these two were left in the config comments and a commit
+message only.
+
+**Neither is a taste call, and MD018's is not even a coverage call.** Its `--fix` is
+DESTRUCTIVE on this corpus: all 106 hits are prose (105 `#<digits>` issue references, one
+`#testing` channel), CommonMark already treats them as paragraphs because ATX headings require
+the space, and a `--fix` pass converted 106 of them into real H1 headings across 78 files. The
+rule has no true positive here to preserve, and leaving a rule enabled whose only offer is a
+destructive fix is worse than turning it off. MD028's 54 hits are consecutive callouts that
+render as two blockquotes — verified through the repo's own markdown-it — so the rule flags
+markup that is already correct.
+
+**Decided: keep both retirements, and record the AC breach rather than quietly satisfying a
+looser reading of it.** The alternative — reverting to satisfy AC 14 literally — would either
+re-admit a destructive fix or leave 160 permanent errors in a corpus this PR exists to bring to
+zero. Amending an AC after measurement is legitimate; silently outrunning it is not, which is
+why this section exists.
+
+**What would change the answer.** A true positive for either rule anywhere in the swept corpus.
+Both were measured at zero, and MD001 — proposed for removal in the same bundle and KEPT — is
+the control showing the line is drawn on evidence rather than on convenience.

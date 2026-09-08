@@ -96,7 +96,14 @@ if [[ "$MODE" == "--repo-sweep" ]]; then
   # not an equality: a new top-level directory of documentation is a normal event and
   # must not red the gate, whereas an expected root going missing means the walk
   # stopped covering it. Measured from this producer's own output, not from memory.
-  EXPECTED_ROOTS=(.claude .github apps docs knowledge-base plugins scripts tests)
+  # Measured 2026-09-08 against this producer: these 11 roots hold 1,325 of the 1,345
+  # swept files. The earlier 8-root set held 1,136, leaving 209 outside the assertion
+  # against a floor slack of 145 -- so dropping .grok/ (67) and .openhands/ (63) would
+  # have passed BOTH guards at 1,215 files, which is exactly the narrowing this
+  # assertion exists to catch. The 20 files still uncovered live in roots of 1-5 files
+  # each (spike, infra, .gemini, test) whose last .md can legitimately be deleted; the
+  # count floor is their only cover, and that is a deliberate trade, not an oversight.
+  EXPECTED_ROOTS=(.claude .gemini .github .grok .openhands apps docs knowledge-base plugins scripts todos)
   actual_roots="$(printf '%s\0' "${FILES[@]}" | cut -z -d/ -f1 | tr '\0' '\n' | LC_ALL=C sort -u)"
   missing=""
   for r in "${EXPECTED_ROOTS[@]}"; do
@@ -107,14 +114,22 @@ if [[ "$MODE" == "--repo-sweep" ]]; then
 elif [[ -n "$MODE" ]]; then
   # --- Explicit paths (the lefthook hook passes {staged_files}) ---------------------
   #
-  # Filtered through the SAME exclusion as the sweep, so the hook and CI cannot
-  # disagree about which files are in scope.
+  # Filtered through the same exclusion as the sweep. NOT for scope agreement -- the
+  # linter honours .markdownlintignore for explicit paths on its own, so that would
+  # hold anyway. This exists for the MESSAGE: when every passed path is excluded the
+  # bare CLI takes its help() branch and dumps 20 lines of usage at exit 0, and since
+  # knowledge-base/project/ is 8,235 of 9,627 tracked *.md, the all-excluded case is
+  # the COMMON one here -- every plan/spec/learning commit would print that dump.
   declare -A IN_SCOPE=()
   while IFS= read -r -d '' f; do IN_SCOPE["$f"]=1; done < <(scope_nul)
   for arg in "$@"; do
     [[ -n "${IN_SCOPE[$arg]:-}" ]] && FILES+=("$arg")
   done
   if (( ${#FILES[@]} == 0 )); then
+    # No anti-vacuity floor here, deliberately: the hook passes whatever is staged, and
+    # "nothing staged is in scope" is the ordinary case, not a degraded one. The floor
+    # belongs to sweep mode, where an empty set IS the failure. The cost is that a
+    # broken producer reads green locally until the next CI sweep.
     echo "markdown-lint: none of the $# given path(s) are in scope (excluded by .markdownlintignore, or not tracked *.md) -- nothing to lint."
     exit 0
   fi
@@ -127,7 +142,19 @@ fi
 # Capture rather than pipe: `cmd | tail` reports the PIPE's status and destroys the
 # evidence in the same stroke.
 set +e
-output="$(printf '%s\0' "${FILES[@]}" | xargs -0 "$BIN" --config "$CONFIG" 2>&1)"
+# --ignore-path /dev/null makes git the SOLE interpreter of scope. Without it the
+# linter reads .markdownlintignore ITSELF and silently drops explicitly-passed paths,
+# so scope is declared once and INTERPRETED TWICE -- by git's gitignore engine in
+# scope_nul() and again by the npm `ignore` package in here. The two disagree on POSIX
+# classes ([[:alpha:]], which git supports and `ignore` does not), escaped leading
+# characters, and mid-pattern **. Measured: with `sub/` ignored, `markdownlint clean.md
+# sub/red.md` exits 0 and prints nothing; with this flag it reports the error.
+#
+# That divergence would defeat both guards above, because they count ${#FILES[@]} --
+# the PRE-filter set. The script would print "N file(s) clean" having linted fewer
+# than N, and exit 0. A floor placed upstream of a filter it must guard is the
+# vacuity class this whole file exists to close.
+output="$(printf '%s\0' "${FILES[@]}" | xargs -0 "$BIN" --config "$CONFIG" --ignore-path /dev/null 2>&1)"
 rc=$?
 set -e
 
@@ -137,7 +164,9 @@ if (( rc == 0 )); then
 fi
 
 printf '%s\n' "$output"
-cat >&2 <<'REMEDIATION'
+# Same stream as the findings above: `--repo-sweep > log` must not separate a
+# finding from the block that says how to fix it.
+cat <<'REMEDIATION'
 
 --------------------------------------------------------------------------------
 markdownlint failed. What to do:

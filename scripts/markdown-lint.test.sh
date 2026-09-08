@@ -48,8 +48,14 @@ PRISTINE="$(mktemp -d "$TMPDIR/mdlint-pristine.XXXXXXXX")" || die "mktemp failed
 cleanup() { rm -rf "$SANDBOX" "$PRISTINE"; }
 trap cleanup EXIT INT TERM HUP
 
-# Roots the SUT asserts it reaches. Kept in sync with EXPECTED_ROOTS in the SUT.
-ROOTS=(.claude .github apps docs knowledge-base plugins scripts tests)
+# DERIVED from the SUT, never restated. A hand-kept copy is the stale-snapshot class
+# this repo names explicitly: the two would drift silently and the sandbox would stop
+# covering the roots the guard actually asserts.
+mapfile -t ROOTS < <(
+  sed -n 's/^[[:space:]]*EXPECTED_ROOTS=(\(.*\))[[:space:]]*$/\1/p' "$REPO_ROOT/$SUT_REL" | tr ' ' '\n'
+)
+(( ${#ROOTS[@]} >= 8 )) || die "derived ${#ROOTS[@]} roots from the SUT; the extraction is broken"
+
 
 build_sandbox() {
   local d="$1" i=0 r
@@ -62,12 +68,13 @@ build_sandbox() {
   printf 'ignored-corpus/\n' > "$d/.markdownlintignore"
 
   # A clean synthesized corpus, spread over every asserted root, sized above the SUT's
-  # floor. 200 per root x 8 roots = 1600. Sized so M4 can drop a WHOLE root (-200)
-  # and still sit above MIN_SWEPT_FILES=1200 -- at 170/root the drop landed at 1190,
-  # so M4 tripped the FLOOR and never reached the roots assertion it exists to test.
+  # floor. 150 per root x 11 derived roots = 1650. Sized so M4 can drop a WHOLE root
+  # (-150) and still sit above MIN_SWEPT_FILES=1200 -- an earlier 170x8 sizing put the
+  # drop at 1190, so M4 tripped the FLOOR and never reached the roots assertion it
+  # exists to test. Re-derive this product whenever the root set or the floor moves.
   for r in "${ROOTS[@]}"; do
     mkdir -p "$d/$r/docs" || die "sandbox mkdir $r failed"
-    for ((i=0; i<200; i++)); do
+    for ((i=0; i<150; i++)); do
       printf '# Title %s\n\nBody text for %s number %s.\n' "$i" "$r" "$i" \
         > "$d/$r/docs/doc-$i.md" || die "sandbox fixture write failed"
     done
@@ -236,10 +243,26 @@ call_sites() { # <root-dir>
   done < <(
     { [[ -f "$base/lefthook.yml" ]] && printf '%s\n' "$base/lefthook.yml"
       find "$base/.github" -name '*.yml' -o -name '*.yaml' 2>/dev/null
-      find "$base/scripts" -name '*.sh' 2>/dev/null; } | sort -u
+      find "$base/scripts" -name '*.sh' 2>/dev/null
+      # package.json is the single likeliest home for a second invoker (a "lint:md"
+      # script entry), and plugins/ ships executables to customers. Omitting them made
+      # M7b non-vacuous only WITHIN a population that excluded the obvious next site.
+      find "$base/plugins" -name '*.sh' 2>/dev/null; } | sort -u
   )
 }
-real_hits="$(call_sites "$REPO_ROOT")"
+# package.json is scanned through its `scripts` block ALONE. A whole-file grep matches
+# the devDependencies pin -- a DECLARATION this PR adds deliberately -- and reports the
+# manifest as a second invoker. Only a script entry can actually invoke anything.
+pkg_hits=""
+if [[ -f "$REPO_ROOT/package.json" ]] && python3 -c "
+import json,sys,re
+d=json.load(open(sys.argv[1]))
+v=' '.join(str(x) for x in (d.get('scripts') or {}).values())
+sys.exit(0 if re.search(r'markdownlint-cli|[.]bin/markdownlint|npx[^|]*markdownlint', v) else 1)
+" "$REPO_ROOT/package.json" 2>/dev/null; then
+  pkg_hits="$REPO_ROOT/package.json"
+fi
+real_hits="$(printf '%s\n%s\n' "$(call_sites "$REPO_ROOT")" "$pkg_hits" | grep -v '^[[:space:]]*$' || true)"
 if [[ -z "$real_hits" ]]; then
   pass "M7a -- the real repository has exactly one invoker"
 else
@@ -253,6 +276,34 @@ if [[ -n "$(call_sites "$SANDBOX")" ]]; then
 else
   fail "M7b -- the call-site check could not see an injected second invoker"
 fi
+# M7c: the package.json arm must be able to FIRE. Without this it is a check whose
+# passing state is indistinguishable from a check that cannot run -- and it currently
+# passes on a manifest that DOES name the binary, which is exactly the shape that hides
+# a dead predicate.
+pkg_probe() { python3 -c "
+import json,sys,re
+d=json.load(open(sys.argv[1]))
+v=' '.join(str(x) for x in (d.get('scripts') or {}).values())
+sys.exit(0 if re.search(r'markdownlint-cli|[.]bin/markdownlint|npx[^|]*markdownlint', v) else 1)
+" "$1"; }
+pj="$(mktemp "$TMPDIR/mdlint-pkg.XXXXXXXX.json")" || die "mktemp failed"
+python3 -c "
+import json,sys
+json.dump({'devDependencies':{'markdownlint-cli':'0.49.1'},'scripts':{'test':'bash x.sh'}}, open(sys.argv[1],'w'))
+" "$pj"
+pkg_probe "$pj" && decl_fires=0 || decl_fires=1
+python3 -c "
+import json,sys
+json.dump({'scripts':{'lint:md':'npx markdownlint-cli .'}}, open(sys.argv[1],'w'))
+" "$pj"
+pkg_probe "$pj" && inv_fires=0 || inv_fires=1
+rm -f "$pj"
+if (( decl_fires == 1 && inv_fires == 0 )); then
+  pass "M7c -- the package.json arm ignores a dependency DECLARATION and fires on a script INVOCATION"
+else
+  fail "M7c -- expected declaration=no-fire invocation=fire; got decl=$decl_fires inv=$inv_fires"
+fi
+
 restore
 
 # --- H1: SUT replaced by a no-op --------------------------------------------------
@@ -296,6 +347,37 @@ fi
 printf '#NoSpace\n\n\n\nText.\n' > "$SANDBOX/docs/docs/red.md"
 ( cd "$SANDBOX" && git add -A >/dev/null 2>&1 )
 assert_red "E2 -- an in-scope red path fails in explicit mode" "docs/docs/red.md"
+restore
+
+# --- H4: git is the SOLE scope interpreter -----------------------------------------
+# The linter reads .markdownlintignore ITSELF and silently drops explicitly-passed
+# paths, so without --ignore-path /dev/null the scope is interpreted TWICE and the
+# guards above (which count the PRE-filter set) would certify files the linter never
+# read. Two arms: the flag is in the invocation, and the flag CHANGES the verdict.
+printf 'H4 sole scope interpreter\n'
+
+# (a) The SUT passes it. Anchored on the comment-STRIPPED source: the block explaining
+#     this flag names it in prose, so a bare grep would match its own rationale.
+if sed 's/#.*//' "$REPO_ROOT/$SUT_REL" | grep -qE '^[^#]*xargs -0 .*--ignore-path /dev/null'; then
+  pass "H4a -- the sweep invocation passes --ignore-path /dev/null"
+else
+  fail "H4a -- the sweep invocation does not pass --ignore-path /dev/null"
+fi
+
+# (b) It is load-bearing, not decoration. Same binary, same red file, same ignore file:
+#     with the flag the error is reported, without it the file is silently dropped.
+h4="$(mktemp -d "$TMPDIR/mdlint-h4.XXXXXXXX")" || die "mktemp failed"
+mkdir -p "$h4/sub"
+printf '#NoSpace\n\n\n\nText.\n' > "$h4/sub/red.md"
+printf 'sub/\n' > "$h4/.markdownlintignore"
+( cd "$h4" && "$REPO_ROOT/node_modules/.bin/markdownlint" --ignore-path /dev/null sub/red.md >/dev/null 2>&1 ); with_flag=$?
+( cd "$h4" && "$REPO_ROOT/node_modules/.bin/markdownlint" sub/red.md >/dev/null 2>&1 ); without_flag=$?
+rm -rf "$h4"
+if (( with_flag != 0 && without_flag == 0 )); then
+  pass "H4b -- the flag is load-bearing (red file: caught with it, silently dropped without)"
+else
+  fail "H4b -- expected with=non-zero without=0; got with=$with_flag without=$without_flag"
+fi
 restore
 
 # --- Anti-vacuity floor -----------------------------------------------------------
