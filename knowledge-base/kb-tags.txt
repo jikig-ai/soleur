@@ -3538,6 +3538,7 @@ stale-claims
 stale-clone
 stale-comment-sweep
 stale-comments
+stale-constants
 stale-context
 stale-count
 stale-counts
