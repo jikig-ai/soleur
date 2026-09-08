@@ -571,10 +571,12 @@ discoverability_test:
   expected_output: "every row returns bad=0 (8 checks: return type, no cap RAISE,
         five-value CHECK, corrected window arithmetic, founder filter, and the
         three privilege assertions)"
-  credentials_required: "Doppler soleur/<env> DATABASE_URL_POOLER. This is the
-        same file the release pipeline's verify-migrations job runs post-apply,
-        so the on-demand probe and the CI gate are the same artifact — there is
-        no second thing to drift."
+  # INLINE, deliberately. Check 10 reads this sub-field with a flat awk over the
+  # KEY LINE, so a multi-line value extracts as a truncated fragment and preflight
+  # then prints that half-sentence to the operator as "the declared scope" — which
+  # defeats the reviewability the SKIP-DECLARED terminal exists for. Measured: the
+  # previous wrapped form extracted as `"Doppler soleur/<env> DATABASE_URL_POOLER. This is the`.
+  credentials_required: "Doppler soleur/<env> DATABASE_URL_POOLER — the probe is psql against the deployed catalogue, and the RPC is service_role-only so no unauthenticated caller can read the function definition, the CHECK, or the window arithmetic it asserts. Same artifact the release pipeline's verify-migrations job runs post-apply, so the on-demand probe and the CI gate cannot drift apart."
 ```
 
 **Why the discoverability_test changed.** The first draft declared a `vitest` run.

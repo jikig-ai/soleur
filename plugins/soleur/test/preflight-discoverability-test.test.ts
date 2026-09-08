@@ -2209,7 +2209,31 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `BETTERSTACK_QUERY_*` and has no unauthenticated substitute. Not a leftover template comment
   // and not a stray line outside the sub-block, which are the two cases this instruction says to
   // DELETE rather than baseline.
-  const BASELINE_DECLARED_PROBES = 8;
+  // 8 -> 9 (#7829). Confirmed against this assertion's own instruction BEFORE the number
+  // moved — the two cases it says to DELETE rather than baseline are a leftover template
+  // comment and a stray line outside the sub-block, and this is neither:
+  //   1. PLACEMENT — a correctly-indented child of `discoverability_test:` in
+  //      `plans/archive/20260908-094935-fix-byok-cap-breach-audit-ledger-plan.md`, verified
+  //      by running Check 10's own sub-block-scoped awk against it, not a whole-file grep.
+  //      It is deliberately an INLINE scalar for the #7565 reason, and that mattered here:
+  //      the value was first written wrapped across four lines, and the flat key-line reader
+  //      extracted `"Doppler soleur/<env> DATABASE_URL_POOLER. This is the` — a truncated
+  //      half-sentence with an unbalanced quote. It still COUNTED as a declaration, so the
+  //      waiver applied while preflight printed that fragment to the operator as "the
+  //      declared scope", which defeats the reviewability SKIP-DECLARED exists for. Inlining
+  //      it is what makes the printed scope the whole scope.
+  //   2. TRUTH — the probe is `psql "$DATABASE_URL_POOLER" -f
+  //      apps/web-platform/supabase/verify/137_byok_cap_breach_audit_row.sql`, committed in
+  //      the same PR and the SAME file the release pipeline's verify-migrations job runs
+  //      post-apply, so the on-demand probe and the CI gate cannot drift apart.
+  //   3. NO SUBSTITUTE — the property is a claim about the DEPLOYED catalogue (the RPC's
+  //      return type, the absence of a cap RAISE, the widened CHECK, the corrected window
+  //      arithmetic, the founder filter). A Supabase project exposes no unauthenticated read
+  //      of function definitions or constraints, and the RPC itself is service_role-only —
+  //      `authenticated` cannot execute it — so an anon probe cannot even call it, let alone
+  //      assert its body. Also a database query, not a host login, so the no-SSH requirement
+  //      in `hr-observability-as-plan-quality-gate` is satisfied.
+  const BASELINE_DECLARED_PROBES = 9;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
