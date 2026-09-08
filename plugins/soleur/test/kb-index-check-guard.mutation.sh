@@ -59,10 +59,10 @@ readonly SCRIPT_DIR
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)" || exit 2
 readonly REPO_ROOT
 
-GEN="$REPO_ROOT/scripts/generate-kb-index.sh"
-RENDER="$REPO_ROOT/scripts/lib/kb-index-render.sh"
-[[ -f "$GEN" ]]    || { printf 'FATAL: generator missing at %s\n' "$GEN" >&2; exit 2; }
-[[ -f "$RENDER" ]] || { printf 'FATAL: renderer missing at %s\n' "$RENDER" >&2; exit 2; }
+TRACKED_GEN="$REPO_ROOT/scripts/generate-kb-index.sh"
+TRACKED_RENDER="$REPO_ROOT/scripts/lib/kb-index-render.sh"
+[[ -f "$TRACKED_GEN" ]]    || { printf 'FATAL: generator missing at %s\n' "$TRACKED_GEN" >&2; exit 2; }
+[[ -f "$TRACKED_RENDER" ]] || { printf 'FATAL: renderer missing at %s\n' "$TRACKED_RENDER" >&2; exit 2; }
 
 WORK="$(mktemp -d -t g1kb.XXXXXXXX)" || exit 2
 case "$WORK" in
@@ -75,6 +75,23 @@ M="$WORK/mut"; mkdir -p "$M" || exit 2
 
 PRISTINE_GEN="$WORK/gen.pristine"
 PRISTINE_RENDER="$WORK/render.pristine"
+# MUTATE A COPY, NEVER THE TRACKED FILE. An earlier revision mutated
+# `scripts/generate-kb-index.sh` in place -- the generator lefthook invokes on
+# every commit touching knowledge-base/. Measured during review: a concurrent
+# `--check` in this worktree returned a false "kb index artifacts are fresh"
+# against a knowingly-stale file, because the generator was on disk mid-mutation
+# with its failure branch neutered. The trap covers EXIT/INT/TERM/HUP; it cannot
+# cover a SIGKILL, an OOM, or a concurrent reader.
+#
+# The copy replicates the directory shape: the generator sources
+# `$SCRIPT_DIR/lib/kb-index-render.sh`, and `--check` re-execs `"$0" --out`.
+SUT="$WORK/sut"
+mkdir -p "$SUT/lib" || exit 2
+GEN="$SUT/generate-kb-index.sh"
+RENDER="$SUT/lib/kb-index-render.sh"
+cp "$TRACKED_GEN" "$GEN"        || { printf 'FATAL: cp generator failed\n' >&2; exit 2; }
+cp "$TRACKED_RENDER" "$RENDER"  || { printf 'FATAL: cp renderer failed\n' >&2; exit 2; }
+chmod +x "$GEN"                 || { printf 'FATAL: chmod generator failed\n' >&2; exit 2; }
 cp "$GEN" "$PRISTINE_GEN"       || { printf 'FATAL: cp generator failed\n' >&2; exit 2; }
 cp "$RENDER" "$PRISTINE_RENDER" || { printf 'FATAL: cp renderer failed\n' >&2; exit 2; }
 restore() {
@@ -90,6 +107,7 @@ restore() {
 PRISTINE_TREE="$WORK/pristine"
 mkdir -p "$PRISTINE_TREE/lib" || exit 2
 cp "$PRISTINE_GEN"    "$PRISTINE_TREE/generate-kb-index.sh" || exit 2
+chmod +x "$PRISTINE_TREE/generate-kb-index.sh" || exit 2
 cp "$PRISTINE_RENDER" "$PRISTINE_TREE/lib/kb-index-render.sh" || exit 2
 PRISTINE_RUNNABLE="$PRISTINE_TREE/generate-kb-index.sh"
 trap 'restore; rm -rf "$WORK"' EXIT INT TERM HUP
@@ -397,6 +415,6 @@ if ! diff -q "$PRISTINE_GEN" "$GEN" >/dev/null 2>&1 \
   printf 'FLOOR: restore did not return the tree to pristine\n' >&2
   exit 1
 fi
-printf '  restore verified clean\n'
+printf '  restore verified clean (copies under %s; the tracked files were never written)\n' "$SUT" 
 if (( FAIL > 0 )); then exit 1; fi
 exit 0

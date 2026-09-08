@@ -54,10 +54,10 @@ readonly SCRIPT_DIR
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)" || exit 2
 readonly REPO_ROOT
 
-DRIVER="$REPO_ROOT/scripts/merge-kb-index.sh"
-RENDER="$REPO_ROOT/scripts/lib/kb-index-render.sh"
-[[ -f "$DRIVER" ]] || { printf 'FATAL: driver missing at %s\n' "$DRIVER" >&2; exit 2; }
-[[ -f "$RENDER" ]] || { printf 'FATAL: renderer missing at %s\n' "$RENDER" >&2; exit 2; }
+TRACKED_DRIVER="$REPO_ROOT/scripts/merge-kb-index.sh"
+TRACKED_RENDER="$REPO_ROOT/scripts/lib/kb-index-render.sh"
+[[ -f "$TRACKED_DRIVER" ]] || { printf 'FATAL: driver missing at %s\n' "$TRACKED_DRIVER" >&2; exit 2; }
+[[ -f "$TRACKED_RENDER" ]] || { printf 'FATAL: renderer missing at %s\n' "$TRACKED_RENDER" >&2; exit 2; }
 
 WORK="$(mktemp -d -t g2mut.XXXXXXXX)" || exit 2
 case "$WORK" in
@@ -71,18 +71,28 @@ F="$WORK/fx";  mkdir -p "$F" || exit 2
 
 PRISTINE_DRIVER="$WORK/driver.pristine"
 PRISTINE_RENDER="$WORK/render.pristine"
-# THE PRISTINE COPY IS ONLY MEANINGFUL FROM A CLEAN TREE. `restore verified
-# clean` proves the run was idempotent against whatever was on disk at LAUNCH --
-# so if the tree was already dirty, the battery faithfully restores the dirty
-# state and reports success. Measured during review: a reviewer's own loosened
-# driver was captured as pristine and restored to, with the battery green.
-if ! git -C "$REPO_ROOT" diff --quiet -- \
-       scripts/merge-kb-index.sh scripts/lib/kb-index-render.sh 2>/dev/null; then
-  printf 'FATAL: working tree is dirty for the files this battery mutates.\n' >&2
-  printf '       The pristine copy would capture uncommitted edits and "restore verified clean"\n' >&2
-  printf '       would certify them. Commit or stash first.\n' >&2
-  exit 2
-fi
+# MUTATE A COPY, NEVER THE TRACKED FILE.
+#
+# An earlier revision mutated `scripts/merge-kb-index.sh` in place -- the driver
+# that is REGISTERED in the shared bare-repo config and therefore live in every
+# linked worktree on this machine. Two consequences, one of them measured during
+# review: a concurrent `--check` in this worktree returned a false "kb index
+# artifacts are fresh" against a knowingly-stale file, because the generator was
+# on disk mid-mutation; and a SIGKILL or OOM between apply and restore would
+# leave a neutered driver armed fleet-wide, reintroducing precisely the
+# markerless-conflict defect this PR exists to close. The EXIT/INT/TERM/HUP trap
+# cannot cover either case.
+#
+# The copy replicates the directory shape because the driver resolves its
+# renderer through `$(dirname "${BASH_SOURCE[0]}")/lib/` -- a flat copy would
+# fail to source and every row would report a spurious RED that is a
+# missing-file crash rather than a caught defect.
+SUT="$WORK/sut"
+mkdir -p "$SUT/lib" || exit 2
+DRIVER="$SUT/merge-kb-index.sh"
+RENDER="$SUT/lib/kb-index-render.sh"
+cp "$TRACKED_DRIVER" "$DRIVER" || { printf 'FATAL: cp driver failed\n' >&2; exit 2; }
+cp "$TRACKED_RENDER" "$RENDER" || { printf 'FATAL: cp renderer failed\n' >&2; exit 2; }
 cp "$DRIVER" "$PRISTINE_DRIVER" || { printf 'FATAL: cp driver failed\n' >&2; exit 2; }
 cp "$RENDER" "$PRISTINE_RENDER" || { printf 'FATAL: cp renderer failed\n' >&2; exit 2; }
 
@@ -525,6 +535,6 @@ if ! diff -q "$PRISTINE_DRIVER" "$DRIVER" >/dev/null 2>&1 \
   printf 'FLOOR: restore did not return the tree to pristine\n' >&2
   exit 1
 fi
-printf '  restore verified clean\n'
+printf '  restore verified clean (copies under %s; the tracked files were never written)\n' "$SUT" 
 if (( FAIL > 0 )); then exit 1; fi
 exit 0

@@ -205,6 +205,22 @@ parse_index() {
     body="${body%)}"
     [[ "$body" == *"](" ]] && die "malformed row (empty rel) in $src"
     [[ "$body" == *"]("* ]] || die "malformed row (no ]( separator) in $src"
+    # EXACTLY ONE UNESCAPED `](`, or the title/rel split is ambiguous.
+    #
+    # Splitting on the LAST `](` silently mis-keys a crafted row: for
+    # `- [Weird](x/x/a](x/b.md)` it yields title="Weird](x/x/a", rel="x/b.md",
+    # and that re-renders BYTE-IDENTICALLY — so round-trip validation is a fixed
+    # point over the misparse and cannot see it. The duplicate-rel guard catches
+    # it only when the mis-key happens to collide with a real row.
+    #
+    # The discriminator is escaping, not position: the generator escapes EVERY
+    # `]` inside a title (`title="${title//]/\\]}"`), so the one `](` that is
+    # not preceded by a backslash is by construction the separator. Dropping the
+    # escaped ones first is what keeps a legitimate `- [a\](b](c.md)` valid.
+    _probe="${body//\\]/}"
+    _seps=0
+    while [[ "$_probe" == *"]("* ]]; do _probe="${_probe#*](}"; _seps=$((_seps + 1)); done
+    (( _seps == 1 )) || die "row has $_seps unescaped '](' separators (expected 1); the title/rel split is ambiguous in $src"
     # Split on the LAST `](`: a title may legitimately contain `](`-free
     # brackets, and anchoring on the last occurrence is what the renderer's
     # own output shape guarantees.
