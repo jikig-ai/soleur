@@ -506,7 +506,19 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    auto-syncs; recovery was a renumber to 115. See
    `knowledge-base/project/learnings/workflow-patterns/2026-06-30-migration-number-collision-mid-pipeline.md`.
 
-   **Tracking row in the SAME transaction as the migration body.**
+   **The collision set includes the shared DEV DATABASE, not just `origin/main`.** The
+   check above greps `origin/main`, and a sibling branch's migration is invisible there
+   until it merges — but it is fully visible in dev's `_schema_migrations`, because the
+   sibling session APPLIED it. Query all three sources and take the union: `origin/main`,
+   every worktree's `supabase/migrations/`, and
+   `SELECT filename FROM public._schema_migrations ORDER BY filename DESC LIMIT 5` over
+   Doppler `DATABASE_URL_POOLER`. **Why:** #7829 — `136` was free on `origin/main` and
+   already applied to dev by a sibling; the collision surfaced only when a live probe for
+   an unrelated question happened to list the applied set, after the number had been
+   written into a function body (which Postgres stores in `prosrc`), an Article 30
+   register cell, and 38 prose sites.
+
+**Tracking row in the SAME transaction as the migration body.**
    The project's canonical `apps/web-platform/scripts/run-migrations.sh`
    writes `INSERT INTO public._schema_migrations (filename, content_sha)
    VALUES ('<basename>', '<git-hash-object>')` in the same transaction
