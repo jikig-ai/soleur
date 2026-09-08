@@ -241,6 +241,12 @@ escalates instead of reporting TRANSIENT forever.
 > fired, so the rider had no vehicle left. Delivery came from a dedicated replace instead; see
 > *Amendment 2026-08-12* at the end of this ADR. The 90-day horizon never elapsed.]**
 
+**Scope pointer (added 2026-09-08, #7500).** The sanitizer and `redact()` described in this
+ADR are the **shipper's**. They were never on the sibling `SOLEUR_ZOT_DISK` reporter's path,
+which POSTs to the same warehouse source from a different host script. That gap is closed by
+[ADR-211](ADR-211-zot-last-err-redaction-at-the-producer-and-the-sink.md); read any statement
+here about redaction as scoped to `zot-log-shipper.sh`.
+
 ## Alternatives Considered
 
 | Alternative | Verdict | Reason |
@@ -248,6 +254,7 @@ escalates instead of reporting TRANSIENT forever.
 | **Install a Vector agent** (the issue's literal framing) | **Rejected** | §2 — the shared config deletes the top-level `message` key that IS zerolog's log text. Supporting: quota, boot-time download on the sole pull path, lockstep, `user_data` budget. The pepper argument is retracted as false. |
 | A trimmed registry-specific Vector config | **Rejected** | Dodges the `message` deletion but keeps the boot-time download on the sole pull path and adds a second config to hold in lockstep |
 | Widen the reporter's `zot_last_err` field | **Rejected** | Stays a 5-minute sampler — the defect itself. A wider field raises the lower bound without producing a count |
+| REDACT the reporter's `zot_last_err` field | **Deferred to [ADR-211](ADR-211-zot-last-err-redaction-at-the-producer-and-the-sink.md)** | A different question from the row above, and not one this ADR asked. This ADR decided how the SHIPPER carries logs; whether the sibling `SOLEUR_ZOT_DISK` reporter redacts its diagnostic sample was raised by the counsel review on PR #7444 and settled in ADR-211 (#7500) |
 | Ship from CI, extending ADR-172's inventory lever | **Rejected** | CI reaches only the read-only `/v2/` surface; container logs are unreachable from a runner |
 | Grant `delete` / edit `/etc/zot/config.json` | **Rejected, out of scope** | The write-surface deadlock ADR-172 §3 declines to pretend around |
 | **A `Restart=always` streaming daemon** (this change's first implementation) | **Rejected** | Buys seconds-latency no consumer of this channel can spend — the disk reporter is 5-min, the liveness feeder 60s against a 90s deadline, the probe reads warehouse windows of 12+ min — and pays with the host's first always-on unit on the fleet's sole image-pull path, a host with no in-place execution path and an OOM restart-loop history (#6288). The trade is not latency-vs-complexity but latency-vs-**reversibility**: every daemon failure mode is repairable only by an operator-authorized destructive replace. Measured, not hypothesised — one wrong `ExecStart` path (`/usr/bin/doppler`, which this template never creates) made it a permanent 5s restart loop shipping nothing, and the local `systemd-analyze verify` gate passed it because it resolved against the runner's filesystem. Under cron that same defect is one failed tick per five minutes. The `MemoryMax`/`CPUQuota`/`IOWeight` containment offered in exchange was independently disproven: `IOWeight` is a no-op without BFQ and sits on the wrong cgroup, `RuntimeMaxUse=64M` **raises** the volatile ceiling it was meant to lower, and every cap magnitude survives mutation |
