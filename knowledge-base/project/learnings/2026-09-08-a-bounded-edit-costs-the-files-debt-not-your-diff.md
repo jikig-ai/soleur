@@ -49,10 +49,19 @@ done
 echo "$dirty of $tot"   # 38 of 95
 ```
 
-**38 of 95** skill files cannot be staged without first clearing someone else's
-debt. `work/SKILL.md` 12, `ship/SKILL.md` 16, `plan/SKILL.md` 5. The four open
-per-file issues (#7817, #7832, #7837, #7957) read as separate incidents; they are
-samples of a corpus-wide condition, which is what #7927 tracks.
+**39 of 95** skill files cannot be staged without first clearing someone else's
+debt. `work/SKILL.md` 12, `ship/SKILL.md` 16, `merge-pr/SKILL.md` 9,
+`plan/SKILL.md` 5. The four open per-file issues (#7817, #7832, #7837, #7957)
+read as separate incidents; they are samples of a corpus-wide condition, which is
+what #7927 tracks.
+
+**That figure is pinned to `origin/main` at `57c47c890`, and the pinning is the
+point.** Three readings of it were taken during this session — 37, 38 and 39 —
+and all three were correct at the moment they ran. They differ because they
+measured a tree I was actively repairing: each of `ship/SKILL.md` and
+`merge-pr/SKILL.md` leaves the dirty set as this PR clears it. A corpus census
+taken against a working tree is a measurement of the author's progress, not of
+the corpus. Take it against a named ref.
 
 ## Solution
 
@@ -108,18 +117,19 @@ a commit.
   offender populations and one `git log` counted 12 intervening commits, which
   turned a guess into a measurement. **Prevention:** a causal sentence in a PR
   body is a claim; name the command that would falsify it and run it — the same
-  rule as [[2026-09-08-i-grepped-the-config-for-a-gate-that-lives-in-a-test]].
+  rule as the sibling learning that lands with #7935.
 - **Inherited a stale measurement from the issue.** #7937 cites `test-scripts` at
   27 min from run `34163673236` (2026-09-07); re-measuring over the five most
   recent completed `main` runs gave 34/36/36/35/36 min. The figure moved 27 → 35
   in a day, so the file now carries the derivation command instead of the number
   alone. **Prevention:** re-derive an inherited measurement at the granularity
-  you are about to assert it.
+  you are about to assert it — and pin it to a ref, not to your own working tree.
 
 ## Related
 
 - #7927 — the class tracker; this session's corpus measurement was added there
   rather than filed as a new issue.
-- [`2026-09-08-i-grepped-the-config-for-a-gate-that-lives-in-a-test.md`](2026-09-08-i-grepped-the-config-for-a-gate-that-lives-in-a-test.md)
-  — same session, same shape one level over: a cost paid because a cheap
-  measurement was skipped in favour of an inference.
+- `2026-09-08-i-grepped-the-config-for-a-gate-that-lives-in-a-test.md` — same
+  session, same shape one level over: a cost paid because a cheap measurement was
+  skipped in favour of an inference. **Not yet on `main`** — it lands with #7935
+  (PR #7938), so this reference is deliberately not a link until that merges.
