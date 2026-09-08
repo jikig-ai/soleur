@@ -36,6 +36,18 @@
 # drives the enumerate mode K times and can therefore observe a cross-leg union.
 #
 # set -u, not -e: accumulate-then-exit.
+# repo-write-boundary-sandbox: not-needed
+#
+# This battery relocates scripts/test-all.sh (it snapshots the pristine runner and restores it
+# around each mutation), which is what makes scripts/lib/repo-write-boundary.test.sh enumerate it.
+# It does NOT need the boundary lib, because it never drives the runner down a path that can write
+# to the repo: every invocation goes through Guard 1, which calls `test-all.sh --enumerate`, and
+# that mode returns at the enumerate terminator BEFORE the repo-write-boundary epilogue and starts
+# no suite at all. The only writes this file performs are its own `cp` snapshot/restore of the
+# runner, which the EXIT trap reverses and which the dirty-tree refusal at the top makes visible.
+#
+# If a future row ever runs the runner in EXECUTING mode, this declaration is wrong: copy
+# scripts/lib/repo-write-boundary.sh into the sandbox instead of carrying this marker.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -124,7 +136,19 @@ PY
 
 # Run the guard and report its exit code. The guard is the SUT here.
 guard_rc() {
-  bash "$GUARD" > "$WORK/guard_out" 2>&1
+  # `env -u CI` IS LOAD-BEARING (#7902 review round 2, found by CI itself).
+  #
+  # Under CI the relevance gate's bypass is an UNCONDITIONAL early return, so a decline is
+  # unreachable and `skip_suite` is never invoked — the runner takes the `run_suite` arm at every
+  # relevance-gated site. ROW7's mutation removes the shard filter from `skip_suite`, so in that
+  # environment it edits a function nobody calls: the guard stays GREEN and the row reports
+  # SURVIVOR. Measured — the battery was 13/13 locally and 12/13 on the runner, failing on ROW7
+  # alone, which is the signature of a fixture that cannot reach the code it mutates.
+  #
+  # Clearing CI here makes declines reachable, so both registration arms are exercised and every
+  # row scores against the richer population. It does not weaken the other rows: they mutate the
+  # partition itself, which is arm-independent.
+  env -u CI bash "$GUARD" > "$WORK/guard_out" 2>&1
   echo $?
 }
 
