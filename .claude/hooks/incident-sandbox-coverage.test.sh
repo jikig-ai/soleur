@@ -395,6 +395,12 @@ set -uo pipefail
 # a PRIOR trap whose body contains a single quote -- the shape that broke composition
 trap 'printf "prior-ran bye'"'"'
 "' EXIT
+# The OWNED case must be forced. Under the gate this suite runs inside an outer test-all.sh that
+# has already exported INCIDENTS_REPO_ROOT, and test-helpers.sh then HONOURS that root and
+# allocates nothing -- so there is no sandbox of its own to remove. Asserting removal in that state
+# asserts the opposite of the invariant (see test-all.sh: freeing an outer runner's sandbox
+# mid-run would re-point every later suite at the operator's real ledger).
+unset INCIDENTS_REPO_ROOT SOLEUR_TEST_INCIDENT_ROOT
 source "$REPO_UNDER_TEST/plugins/soleur/test/test-helpers.sh" 2>/dev/null || exit 90
 printf 'SB=%s
 ' "${SOLEUR_TEST_INCIDENT_ROOT:-<unset>}"
@@ -409,11 +415,34 @@ verdict "$(printf '%s' "$_tc_out" | grep -q 'prior-ran' && echo 0 || echo 1)" \
   "the PRIOR trap still runs after composition (not clobbered)"
 verdict "$([ -n "$_tc_sb" ] && [ ! -d "$_tc_sb" ] && echo 0 || echo 1)" \
   "the sandbox is actually REMOVED — a trap that fails to parse never runs, and leaks it"
+
+# The other direction, and the one CI actually exposed: with an INHERITED root the helper must
+# allocate nothing and must NOT remove the outer runner's sandbox. Before this arm existed, the
+# removal assertion above simply failed under the gate and read as a broken trap; the real
+# behaviour was correct and the assertion was wrong.
+_ti_outer="$(mktemp -d -t tcouter-XXXXXX)"; mkdir -p "$_ti_outer/.claude"
+_ti_probe="$(mktemp -d -t tcinh-XXXXXX)"
+cat > "$_ti_probe/suite.sh" <<'PROBE2'
+#!/usr/bin/env bash
+set -uo pipefail
+source "$REPO_UNDER_TEST/plugins/soleur/test/test-helpers.sh" 2>/dev/null || exit 90
+printf 'ROOT=%s\n' "${INCIDENTS_REPO_ROOT:-<unset>}"
+PROBE2
+_ti_out="$(cd "$REPO" && env REPO_UNDER_TEST="$REPO" INCIDENTS_REPO_ROOT="$_ti_outer" \
+            SOLEUR_TEST_INCIDENT_ROOT="$_ti_outer" bash "$_ti_probe/suite.sh" 2>&1)"
+_ti_root="$(printf '%s' "$_ti_out" | sed -n 's/^ROOT=//p')"
+verdict "$([ "$_ti_root" = "$_ti_outer" ] && echo 0 || echo 1)" \
+  "an INHERITED root is honoured, not replaced (got ${_ti_root:-<none>})"
+verdict "$([ -d "$_ti_outer" ] && echo 0 || echo 1)" \
+  "the OUTER runner's sandbox survives the inner suite's exit (freeing it would re-point later suites at the real ledger)"
+rm -rf "$_ti_probe" "$_ti_outer"
+unset _ti_probe _ti_out _ti_root _ti_outer
+
 rm -rf "$_tc_probe"
 unset _tc_probe _tc_out _tc_rc _tc_sb
 
 printf '\n'
-MIN_CASES=23
+MIN_CASES=25
 if [ "$CASES" -lt "$MIN_CASES" ]; then
   printf '[FATAL] vacuity floor: %d cases executed, expected at least %d\n' "$CASES" "$MIN_CASES" >&2; exit 1
 fi
