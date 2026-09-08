@@ -150,7 +150,12 @@ printf 'placeholder\n' > "$R4/nested/deeper/keep.txt"
 printf '# Alpha\n' > "$R4/knowledge-base/engineering/alpha.md"
 printf '# Beta\n'  > "$R4/knowledge-base/project/beta.md"
 gen4() { KB_DIR="$R4/knowledge-base" bash "$GEN" >/dev/null 2>&1; }
-g4() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R4" -c user.email=t@t -c user.name=t -c commit.gpgsign=false "$@"; }
+# `assert_fixture_dir` is NOT optional here. This helper was a copy of fx_git
+# with that line removed, in a suite whose own header explains that a bug here
+# disarms every lefthook gate across every worktree at once. `git -C ""` does not
+# error — it operates on the CURRENT directory, which under TEST_GROUP=scripts is
+# the developer's live worktree.
+g4() { assert_fixture_dir "$R4"; GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R4" -c user.email=t@t -c user.name=t -c commit.gpgsign=false "$@"; }
 gen4
 printf 'knowledge-base/INDEX.md merge=kb-index\n' > "$R4/.gitattributes"
 g4 add -A; g4 commit -q -m base
@@ -173,9 +178,30 @@ assert_eq "1" "$(grep -c 'project/delta\.md' "$I4" || true)" "T11: the trunk row
 assert_eq "0" "$(grep -c '^<<<<<<< kb-index' "$I4" || true)" "T11: no sentinel — the relative path resolved"
 
 echo "=== AC11: both registration surfaces are wired ==="
-assert_eq "1" "$([[ "$(grep -c 'install-kb-merge-driver' "$REPO_ROOT/package.json" || true)" -ge 1 ]] && echo 1 || echo 0)" \
-  "AC11: package.json wires the registration script"
-assert_eq "1" "$([[ "$(grep -c 'install-kb-merge-driver' "$REPO_ROOT/.claude/settings.json" || true)" -ge 1 ]] && echo 1 || echo 0)" \
-  "AC11: SessionStart wires the registration script"
+# STRUCTURAL, NOT A SUBSTRING COUNT. `grep -c '<name>' >= 1` over a whole file
+# asserts existence while its MESSAGE claims placement, and the presence
+# direction is the dangerous one: any non-load-bearing occurrence keeps it green.
+# Measured — re-homing the command out of SessionStart onto a PostToolUse matcher
+# that never fires left this suite at 29/29 ALL TESTS PASSED with the driver
+# registered on no real session. Nothing else in the repo asserts this matcher.
+assert_eq "1" "$(jq -r '[.scripts.prepare // "" | select(test("install-kb-merge-driver"))] | length' "$REPO_ROOT/package.json")" \
+  "AC11: package.json's prepare script (not merely the file) invokes the registrar"
+assert_eq "1" "$(jq -r '[.hooks.SessionStart[]? | select((.matcher // "") | test("startup")) | .hooks[]? | select(.type == "command") | select(.command | test("install-kb-merge-driver"))] | length' "$REPO_ROOT/.claude/settings.json")" \
+  "AC11: the registrar is a SessionStart command hook on a matcher that includes startup"
 
-print_results 28
+# ASSERTION-HELPER POSITIVE CONTROL — see the twin in kb-index-merge-driver.test.sh.
+# The floor counts PASS+FAIL+SKIPPED, so it discriminates dispatch and not
+# verdict: neutering assert_eq's comparison to `if true` reports a full green
+# byte-identically to a real pass, and no floor value can see it.
+_pc_p="$PASS"; _pc_f="$FAIL"
+assert_eq "control" "control" "positive control: assert_eq can PASS"
+assert_eq "control" "MISMATCH-EXPECTED" "positive control: assert_eq can FAIL (this FAIL line is expected)"
+if (( PASS != _pc_p + 1 )); then
+  printf 'POSITIVE CONTROL BROKEN: PASS moved %d -> %d, expected exactly +1.\n' "$_pc_p" "$PASS" >&2; exit 1
+fi
+if (( FAIL != _pc_f + 1 )); then
+  printf 'POSITIVE CONTROL BROKEN: FAIL moved %d -> %d, expected exactly +1.\n' "$_pc_f" "$FAIL" >&2; exit 1
+fi
+PASS=$_pc_p; FAIL=$_pc_f
+
+print_results 29
