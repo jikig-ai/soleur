@@ -233,6 +233,7 @@ animation
 anomaly-detection
 anon
 anon-key
+ansi
 anthropic
 anthropic-api
 anti-priming
