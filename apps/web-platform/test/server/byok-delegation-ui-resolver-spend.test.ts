@@ -134,7 +134,7 @@ type Chain = Record<string, ReturnType<typeof vi.fn>> & {
  */
 function makeChain(result: Result): Chain {
   const obj = {} as Chain;
-  for (const m of ["select", "eq", "in", "is", "gte", "order", "limit"]) {
+  for (const m of ["select", "eq", "in", "is", "gte", "order", "limit", "range"]) {
     (obj as Record<string, unknown>)[m] = vi.fn(() => obj);
   }
   (obj as Record<string, unknown>).maybeSingle = vi.fn(async () => result);
@@ -452,5 +452,90 @@ describe("resolveGranteeAcceptanceStatus — both reads are mirrored", () => {
     const ops = mockReportSilentFallback.mock.calls.map((c) => (c[1] as { op?: string }).op);
     expect(ops).toContain("resolveGranteeAcceptanceStatus.acceptance");
     expect(ops).toContain("resolveGranteeAcceptanceStatus.withdrawal");
+  });
+});
+
+
+// ─── PostgREST truncation: a short page must not render as a real figure ─────
+//
+// `max_rows = 1000` (`apps/web-platform/supabase/config.toml`) truncates with
+// HTTP 200 and a NULL error, so an unpaginated read yields a CONFIDENT
+// UNDER-COUNT — the same class as the $0.00 these tests were written for, only
+// wearing the shape of a success. It is NEWLY reachable: while the select named
+// `cost_cents` every read 42703'd and the degraded path always fired.
+describe("resolveGrantorDelegations — spend read paging", () => {
+  /** A chain that hands back a different page per await, like a real range scan. */
+  function makePagedChain(pages: Result[]): Chain {
+    const obj = {} as Chain;
+    for (const m of ["select", "eq", "in", "is", "gte", "order", "limit", "range"]) {
+      (obj as Record<string, unknown>)[m] = vi.fn(() => obj);
+    }
+    let i = 0;
+    obj.then = (onFulfilled, onRejected) => {
+      const page = pages[Math.min(i, pages.length - 1)];
+      i += 1;
+      return Promise.resolve(page).then(onFulfilled, onRejected);
+    };
+    return obj;
+  }
+
+  const row = (n: number) => ({
+    delegation_id: "d1",
+    token_count: 7,
+    unit_cost_cents: 1,
+    ts: isoAgo(n % 20),
+  });
+  const FULL_PAGE = Array.from({ length: 1000 }, (_, i) => row(i));
+
+  function primeWithAudit(auditChain: Chain) {
+    const others: Record<string, Chain> = {
+      byok_delegations: makeChain(OK(DELEGATIONS)),
+      users: makeChain(OK(USERS)),
+    };
+    mockFrom.mockImplementation((table: string) => {
+      if (table === "audit_byok_use") return auditChain;
+      const c = others[table];
+      if (!c) throw new Error(`unexpected from(${table})`);
+      return c;
+    });
+    return auditChain;
+  }
+
+  it("pages past max_rows instead of summing only the first page", async () => {
+    const audit = primeWithAudit(
+      makePagedChain([OK(FULL_PAGE), OK([row(1), row(2), row(3)])]),
+    );
+
+    const rows = await resolveGrantorDelegations("grantor-1", "ws-1", "org-1", IDENTITY);
+    const d1 = rows.find((r) => r.id === "d1");
+
+    // 1000 + 3 rows at 1 cent each. An unpaginated read reports 1000 and looks fine.
+    expect(d1?.mtdSpentCents, "every page is summed, not just the first").toBe(1003);
+    expect(audit.range).toHaveBeenNthCalledWith(1, 0, 999);
+    expect(audit.range).toHaveBeenNthCalledWith(2, 1000, 1999);
+    // Without a stable total order, `.range` is not a window and pages can
+    // repeat or skip rows — the sum would then be wrong in either direction.
+    expect(audit.order, "paging needs a unique total order").toHaveBeenCalledWith(
+      "id",
+      { ascending: true },
+    );
+  });
+
+  it("degrades to unavailable — never a short number — when the page bound is hit", async () => {
+    // Every page comes back full, so the scan never terminates naturally.
+    const audit = primeWithAudit(makePagedChain([OK(FULL_PAGE)]));
+
+    const rows = await resolveGrantorDelegations("grantor-1", "ws-1", "org-1", IDENTITY);
+    const d1 = rows.find((r) => r.id === "d1");
+
+    expect(d1?.mtdSpentCents, "an honest unknown, not a number we know is short").toBeNull();
+    expect(d1?.todaySpentCents).toBeNull();
+    expect(d1?.capRemainingCents).toBeNull();
+
+    const ops = mockReportSilentFallback.mock.calls.map((c) => (c[1] as { op?: string }).op);
+    expect(ops, "the operator hears about it").toContain(
+      "resolveGrantorDelegations.audit-spend",
+    );
+    expect(audit.range.mock.calls.length, "bounded — it does not page forever").toBe(50);
   });
 });

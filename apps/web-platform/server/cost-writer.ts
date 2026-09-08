@@ -227,6 +227,16 @@ function annotateLedger(
   extra: Record<string, unknown>,
 ): void {
   void ledgerRowWrittenTag(invocationId, ctx).then((tag) => {
+    // CONSIDERED AND REJECTED (#7914 ship consult): suppressing the `true`
+    // verdict to keep a routine outcome out of the error stream. It does not
+    // apply here. `annotateLedger` is reached ONLY from a refusal branch — a
+    // cap breach or a revoked/expired/withdrawn delegation — so the verdict
+    // annotates an event that is already exceptional; it is not one-per-turn
+    // and cannot bury anything. Emitting on every outcome also keeps the
+    // positive confirmation robust under Sentry sampling, where inferring
+    // health from the ABSENCE of a sibling event is not: a dropped `false`
+    // event would read as a healthy ledger. That inversion is the failure this
+    // whole PR exists to remove, so the verdict is stated, never inferred.
     reportSilentFallback(new Error(`byok ledger verdict for ${op}: ${tag}`), {
       feature: "byok-delegations",
       op: `${op}.ledger`,

@@ -62,7 +62,9 @@ BEGIN;
 -- =====================================================================
 -- 1. Widen the attribution_shift_reason CHECK to admit the cap reasons
 -- =====================================================================
--- Underscores, matching the four existing values. NOT the hyphenated
+-- Underscores, matching the three existing values ('revoked_post_grace',
+-- 'expired', 'consent_withdrawn' -- see 084's
+-- audit_byok_use_attribution_shift_reason_check). NOT the hyphenated
 -- Sentry `op` slugs -- migration 064 establishes that only `cross-tenant`
 -- is hyphenated, and harmonising the two vocabularies is out of scope.
 --

@@ -59,6 +59,48 @@ interface AuditSpendRow {
   ts: string;
 }
 
+/**
+ * PostgREST caps every response at `max_rows` (1000 —
+ * `apps/web-platform/supabase/config.toml`). A truncated page comes back as
+ * HTTP 200 with a NULL error, so an unpaginated spend read renders a confident
+ * UNDER-COUNT rather than an error: exactly the "false number on a billing
+ * surface" class this module exists to remove, wearing the shape of a success.
+ *
+ * It is newly reachable. Before #7829 the select named a `cost_cents` column
+ * that has never existed, so every read 42703'd and the degraded path always
+ * fired; now the read succeeds and can silently come up short. Migration 137
+ * also raises the row rate, because a REFUSED delegated turn now writes a row
+ * where it previously wrote none.
+ *
+ * `.order("id")` is load-bearing, not cosmetic: `.range()` over an unordered
+ * result is not a stable window, so pages could repeat or skip rows and the sum
+ * would be wrong in either direction. `id` is the table's uuid primary key
+ * (`037_audit_byok_use.sql`), so it is a unique total order.
+ */
+const AUDIT_PAGE_ROWS = 1000;
+/**
+ * 50k rows. Past this we stop paging and report the spend as UNAVAILABLE — an
+ * honest "unknown" beats a number we already know is short. Reaching it at all
+ * would mean a single grantor billed >50k delegated turns in one month, which
+ * is itself worth the Sentry event.
+ */
+const AUDIT_MAX_PAGES = 50;
+
+async function readAllAuditRows<T>(
+  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+): Promise<{ rows: T[] | null; error: unknown; truncated: boolean }> {
+  const all: T[] = [];
+  for (let i = 0; i < AUDIT_MAX_PAGES; i++) {
+    const from = i * AUDIT_PAGE_ROWS;
+    const { data, error } = await page(from, from + AUDIT_PAGE_ROWS - 1);
+    if (error) return { rows: null, error, truncated: false };
+    if (!data) return { rows: null, error: null, truncated: false };
+    all.push(...data);
+    if (data.length < AUDIT_PAGE_ROWS) return { rows: all, error: null, truncated: false };
+  }
+  return { rows: all, error: null, truncated: true };
+}
+
 export interface GrantorDelegation {
   id: string;
   granteeUserId: string;
@@ -174,12 +216,17 @@ export async function resolveGrantorDelegations(
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
   const delegationIds = delegations.map((d: { id: string }) => d.id);
-  const { data: auditRows, error: auditError } = await service
-    .from("audit_byok_use")
-    // The two columns the cap RPC multiplies — see rowCostCents.
-    .select("delegation_id, token_count, unit_cost_cents, ts")
-    .in("delegation_id", delegationIds)
-    .gte("ts", monthStart);
+  const { rows: auditRows, error: auditError, truncated: auditTruncated } =
+    await readAllAuditRows<AuditSpendRow>((from, to) =>
+      service
+        .from("audit_byok_use")
+        // The two columns the cap RPC multiplies — see rowCostCents.
+        .select("delegation_id, token_count, unit_cost_cents, ts")
+        .in("delegation_id", delegationIds)
+        .gte("ts", monthStart)
+        .order("id", { ascending: true })
+        .range(from, to),
+    );
 
   if (auditError) {
     reportSilentFallback(auditError, {
@@ -198,7 +245,15 @@ export async function resolveGrantorDelegations(
   // Degraded when the spend is unknown. Propagated as `null` rather than 0 so
   // the pane can say "unavailable" instead of asserting the grantee spent
   // nothing and the whole cap is still free.
-  const spendUnavailable = Boolean(auditError) || !auditRows;
+  if (auditTruncated) {
+    reportSilentFallback(null, {
+      feature: FEATURE,
+      op: "resolveGrantorDelegations.audit-spend",
+      message: `audit_byok_use spend read exceeded ${AUDIT_MAX_PAGES * AUDIT_PAGE_ROWS} rows; reporting spend as unavailable rather than short`,
+      extra: { userId, workspaceId, delegationCount: delegationIds.length },
+    });
+  }
+  const spendUnavailable = Boolean(auditError) || !auditRows || auditTruncated;
 
   const todaySpend = new Map<string, number>();
   const mtdSpend = new Map<string, number>();
@@ -293,12 +348,17 @@ export async function resolveGranteeDelegation(
   const now = new Date();
   const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 
-  const { data: auditRows, error: auditError } = await service
-    .from("audit_byok_use")
-    // The two columns the cap RPC multiplies — see rowCostCents.
-    .select("token_count, unit_cost_cents, ts")
-    .eq("delegation_id", delegation.id as string)
-    .gte("ts", twentyFourHoursAgo);
+  const { rows: auditRows, error: auditError, truncated: auditTruncated } =
+    await readAllAuditRows<AuditSpendRow>((from, to) =>
+      service
+        .from("audit_byok_use")
+        // The two columns the cap RPC multiplies — see rowCostCents.
+        .select("token_count, unit_cost_cents, ts")
+        .eq("delegation_id", delegation.id as string)
+        .gte("ts", twentyFourHoursAgo)
+        .order("id", { ascending: true })
+        .range(from, to),
+    );
 
   if (auditError) {
     reportSilentFallback(auditError, {
@@ -314,7 +374,15 @@ export async function resolveGranteeDelegation(
       extra: { userId, workspaceId, delegationId: delegation.id as string },
     });
   }
-  const spendUnavailable = Boolean(auditError) || !auditRows;
+  if (auditTruncated) {
+    reportSilentFallback(null, {
+      feature: FEATURE,
+      op: "resolveGranteeDelegation.audit-spend",
+      message: `audit_byok_use spend read exceeded ${AUDIT_MAX_PAGES * AUDIT_PAGE_ROWS} rows; reporting spend as unavailable rather than short`,
+      extra: { userId, workspaceId, delegationId: delegation.id as string },
+    });
+  }
+  const spendUnavailable = Boolean(auditError) || !auditRows || auditTruncated;
 
   let todaySpent = 0;
   let lastTs: string | null = null;
