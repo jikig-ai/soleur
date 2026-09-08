@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-04T15:30:02Z",
+  "generated_at": "2026-09-08T10:16:19Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -1359,12 +1359,12 @@
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 2,
+      "applied_count": 3,
       "warn_count": 0,
-      "fire_count": 2,
+      "fire_count": 3,
       "prevented_errors": 0,
-      "last_hit": "2026-09-04T10:56:49Z",
-      "first_seen": "2026-09-04T10:56:49Z",
+      "last_hit": "2026-09-08T09:55:34Z",
+      "first_seen": "2026-09-08T09:55:34Z",
       "rule_text_prefix": ""
     }
   ],
