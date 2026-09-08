@@ -1126,12 +1126,17 @@ jobs:
           SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
           # SENTRY_PROJECT dropped 2026-08-19 (#7590): the script's fetch is now
           # org-scoped and the variable has no consumer there.
+        # `if: always()` for the same reason as the fidelity probe below: a FAILED
+        # apply is when "is byok-art-33-breach still live?" most needs answering,
+        # and an implicit success() is what stopped it being asked. Read-only.
+        if: always()
         run: |
           set -euo pipefail
           which jq >/dev/null 2>&1 || sudo apt-get install -y jq
           bash apps/web-platform/scripts/assert-byok-rules-exist.sh
 
-      - name: AC17 — state holds 27 sentry_alert + 2 sentry_issue_alert, no orphan
+      - name: AC17 — terraform state list matches the declared .tf (no orphan)
+        id: ac17
         # AUTOMATED, because the alternative was an operator task nobody can do.
         # AC17 is the check that decides whether a failed apply was PARTIAL, and
         # the failure issue named it as such — while `terraform state list` needs
@@ -1143,7 +1148,8 @@ jobs:
         # the run summary so the answer is READ rather than reproduced.
         #
         # `if: always()` — a FAILED apply is exactly when this matters. On a
-        # partial adoption the counts will not be 27/2, and that is the signal.
+        # partial adoption state and config name different addresses, and that
+        # is the signal.
         if: always()
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -1158,19 +1164,97 @@ jobs:
             echo "::error::AC17: could not read terraform state; the partial-apply question is UNANSWERED for this run."
             exit 1
           fi
-          n_alert=$(grep -c '^sentry_alert\.'       <<<"$addrs"); [[ -n "$n_alert" ]] || n_alert=0
-          n_issue=$(grep -c '^sentry_issue_alert\.' <<<"$addrs"); [[ -n "$n_issue" ]] || n_issue=0
+          # `grep` exits 1 on NO MATCH (2 on a missing operand), Actions runs this
+          # block as `bash -e {0}` so errexit is INHERITED, and the `set -o pipefail`
+          # above promotes either into a pipeline's status. An unbracketed
+          # `x=$(grep ...)` therefore KILLS this step on the zero case — which is
+          # the case every line below exists to handle. Measured before this
+          # bracket landed: a genuine partial adoption whose state happened to hold
+          # no `sentry_issue_alert` exited 1 having printed NOTHING — no summary
+          # table, no annotation — and the `if: failure()` filer then opened a p1
+          # saying "assume a partial write" with nothing naming why. Same bracket,
+          # same reason, as the post-apply capture step above. `tests/scripts/
+          # test-sentry-full-root-apply.sh` T13 is the gate for this class; its
+          # window was widened to the `VAR=$(...)` shape in the same change,
+          # because it had only ever matched the bare-command-then-`rc=$?` shape
+          # and so was blind to all four of these lines. The rescues are written
+          # INLINE at each site rather than behind a `_lines()` helper on purpose:
+          # a helper moves the `grep` out of the shape T13 inspects, so the guard
+          # would report clean because it could no longer see the command, not
+          # because the command was safe. Measured — that exact helper survived
+          # T13 with the rescue stripped.
+
+          # ADDRESS SETS, not counts. A count comparison is blind to a one-for-one
+          # swap: a declared rule missing from state plus an orphan left behind
+          # nets to zero and reports PASS. Measured against these very bytes before
+          # the change — config declaring `sentry_alert.a` against a state holding
+          # `sentry_alert.zzz_orphan` scored rc=0 with a summary table printing
+          # `1 | 1` as evidence of health. This step is named "no orphan" and the
+          # failure filer promises "with no orphan"; until now neither was true,
+          # and the address most likely to sit on the wrong side of such a swap is
+          # `byok_art_33_breach`.
+          #
+          # Both anchors are `^`-anchored at column 0, which `terraform fmt`
+          # normalises to (enforced in infra-validation.yml). Shapes outside that
+          # window — a `.tf.json`, a `count`/`for_each` block, an `override.tf`, a
+          # column-0 heredoc or `/* */` block comment — now surface as a NAMED
+          # divergence rather than a silent pass or an off-by-N count, so they
+          # fail loud and self-diagnose. Resources inside a `module` block are
+          # invisible to BOTH sides (the glob is non-recursive; state renders them
+          # `module.x.sentry_alert.y`), so this root deliberately declares none.
+          declared=$( { grep -h -oE '^resource "(sentry_alert|sentry_issue_alert)" "[^"]+"' ./*.tf 2>/dev/null || true; } \
+                      | sed -E 's/^resource "([^"]+)" "([^"]+)"$/\1.\2/' | LC_ALL=C sort )
+          observed=$( { grep -E '^sentry_(issue_)?alert\.' <<<"$addrs" || true; } | LC_ALL=C sort )
+
+          n_alert=$(   { grep -cE '^sentry_alert\.'       <<<"$observed" || true; } )
+          n_issue=$(   { grep -cE '^sentry_issue_alert\.' <<<"$observed" || true; } )
+          exp_alert=$( { grep -cE '^sentry_alert\.'       <<<"$declared" || true; } )
+          exp_issue=$( { grep -cE '^sentry_issue_alert\.' <<<"$declared" || true; } )
+
+          # DERIVED FROM THE CONFIG, not hardcoded. The first version of this step
+          # asserted a literal `2` surviving `sentry_issue_alert` resources, and it
+          # was wrong the moment it was written, not stale: `git_data_boot_warning`
+          # landed in 0f39b7aa2 (PR #7805, Refs #7772) two days BEFORE the commit
+          # that wrote the `2`, whose own message counts three while its gate
+          # asserts two. On its first real run the gate failed a correct apply,
+          # called 27+3 "the partial-adoption signal", and filed a p1 telling the
+          # operator to assume a partial write.
+          #
+          # A gate that cries partial-adoption on a healthy apply is worse than no
+          # gate: it is the false alarm that teaches an operator to skip the one
+          # message that means the 27 paging rules really are half-moved. And the
+          # defect is the class this whole change is about — a number invented at
+          # authoring time, in a file whose contents move underneath it.
+          #
+          # So both expectations now come from the `.tf` this run applied from.
+          # They are NOT assumed to have produced the state: that they can
+          # disagree is the whole premise of this check, which is why it runs
+          # `if: always()` even when the apply never got that far.
+          #
+          # Non-vacuity. A broken anchor derives an EMPTY declared set, which would
+          # make set-equality trivially satisfiable by an empty state. `sentry_alert`
+          # is the family this root exists to manage, so zero of them is never a
+          # legitimate reading. `exp_issue` deliberately has NO floor: zero
+          # surviving `sentry_issue_alert` is the #7650 end state and must stay a
+          # GREEN outcome, not a red one.
+          if [[ "$exp_alert" -lt 1 ]]; then
+            echo "::error::AC17: derived 0 sentry_alert resources from the .tf in $(pwd) — the anchor broke, not the state. Refusing to report a verdict."
+            exit 1
+          fi
+
+          missing=$(LC_ALL=C comm -23 <(printf '%s\n' "$declared") <(printf '%s\n' "$observed") | grep -v '^$' || true)
+          orphan=$( LC_ALL=C comm -13 <(printf '%s\n' "$declared") <(printf '%s\n' "$observed") | grep -v '^$' || true)
           {
             echo "### AC17 — Sentry alert addresses in state"
             echo ""
-            echo "| type | count | expected |"
+            echo "| type | in state | declared in .tf |"
             echo "|---|---|---|"
-            echo "| \`sentry_alert.\` | ${n_alert} | 27 |"
-            echo "| \`sentry_issue_alert.\` | ${n_issue} | 2 |"
+            echo "| \`sentry_alert.\` | ${n_alert} | ${exp_alert} |"
+            echo "| \`sentry_issue_alert.\` | ${n_issue} | ${exp_issue} |"
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "AC17: state holds ${n_alert} sentry_alert and ${n_issue} sentry_issue_alert address(es)"
-          if [[ "$n_alert" -ne 27 || "$n_issue" -ne 2 ]]; then
-            echo "::error::AC17 FAILED: expected 27 sentry_alert and 2 sentry_issue_alert addresses in state, found ${n_alert} and ${n_issue}. This is the partial-adoption signal: some of the 27 moved and some did not. Re-run THIS job (not a workflow_dispatch — it carries no head_commit.message and so cannot supply the [ack-destroy]); the adoption assert will report how many pairs remain."
+          echo "AC17: state holds ${n_alert} sentry_alert and ${n_issue} sentry_issue_alert address(es); the .tf declares ${exp_alert} and ${exp_issue}"
+          if [[ -n "$missing" || -n "$orphan" ]]; then
+            echo "::error::AC17 FAILED: state and config name different addresses, which after an apply means the apply did not fully land. DECLARED BUT ABSENT FROM STATE: ${missing:-<none>}. IN STATE BUT NOT DECLARED (orphan): ${orphan:-<none>}. Re-run THIS job (not a workflow_dispatch — it carries no head_commit.message and so cannot supply the [ack-destroy]); the adoption assert will report how many pairs remain."
             exit 1
           fi
 
@@ -1187,8 +1271,20 @@ jobs:
         #
         # Uses the same three secrets as the step above, already present in this
         # job. Read-only: one GET against the NON-deprecated org workflows
-        # endpoint, so it adds no exposure to the brownout the two survivors
+        # endpoint, so it adds no exposure to the brownout the surviving
         # still refresh through.
+        # `if: always()` — AC17 above is `always()` and exits 1 on a disagreement,
+        # which under an implicit `success()` would SKIP this step at exactly the
+        # moment it matters most. Measured on run 34149741385: AC17 red, this step
+        # `skipped`, so the one probe that reads all 27 rules field-by-field never
+        # ran on the apply whose state was in question. The file already makes this
+        # argument for the post-apply capture step ("steps below inherit an implicit
+        # success(), so failing here would suppress the two probes that assert
+        # byok-art-33-breach is live") — AC17 sits between them and did the same
+        # thing to this one. Read-only against Sentry's org workflows endpoint, so
+        # running it after a failed apply costs one GET and answers the question the
+        # failure raises.
+        if: always()
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_IAC_AUTH_TOKEN }}
           SENTRY_API_HOST: ${{ secrets.SENTRY_API_HOST }}
@@ -1240,7 +1336,7 @@ jobs:
         # paging state. A failure here can mean a HALF-APPLIED adoption: some of
         # the 27 rules moved to their `sentry_alert` address and the rest did
         # not, which no later plan describes as an emergency and which AC17
-        # (`terraform state list` shows 27 + 2, no orphan) is the check for.
+        # (`terraform state list` against the declared `.tf`) is the check for.
         # Until this step existed, that outcome's only trace was a red run in a
         # workflow list.
         if: failure()
@@ -1276,9 +1372,9 @@ jobs:
             printf -- '3. **Do NOT revert.** A revert re-adds the `sentry_issue_alert` blocks for addresses that are no longer in state and removes the `sentry_alert` blocks for addresses that now are, which plans as a destroy of live paging rules.\n'
             printf -- '4. **Do NOT restore state from a backup.** The forensics artifacts on this run are for reading, not for writing back; a state restore re-asserts management over addresses whose live objects have already moved.\n\n'
             printf '### If the failure was a Sentry 410\n\n'
-            printf 'The two surviving `sentry_issue_alert` resources still refresh through the deprecated alert-rule endpoint, which Sentry serves under brownouts. The plan step retries for exactly this. An exhausted retry means the brownout window is now wider than the budget, or the family is fully retired; in both cases the fix is to finish the migration, not to raise the attempt count.\n\n'
+            printf 'The surviving `sentry_issue_alert` resources still refresh through the deprecated alert-rule endpoint, which Sentry serves under brownouts. The plan step retries for exactly this. An exhausted retry means the brownout window is now wider than the budget, or the family is fully retired; in both cases the fix is to finish the migration, not to raise the attempt count.\n\n'
             printf '### The check that decides whether this is an emergency\n\n'
-            printf 'AC17: `terraform state list` for this root must show 27 `sentry_alert.` and 2 `sentry_issue_alert.` addresses, with no orphan. Anything else is a partial adoption and the highest-priority thing in the repo — `byok-art-33-breach` is among the 27, and its silence stops the GDPR Art. 33 72-hour clock from ever starting.\n'
+            printf 'AC17 compares `terraform state list` for this root against the addresses the `.tf` declares, and this run'"'"'s step summary prints both. Any address declared but absent from state, or present in state but undeclared (an orphan), is a partial adoption and the highest-priority thing in the repo — `byok-art-33-breach` is among the adopted rules, and its silence stops the GDPR Art. 33 72-hour clock from ever starting. Do NOT compare against a remembered count: the expected numbers are derived per-run, and a literal in a runbook is exactly what made this check cry wolf before.\n'
           } > "$BODY_FILE"
 
           # Dedupe by LABEL, not `--search`: the search API can return empty
