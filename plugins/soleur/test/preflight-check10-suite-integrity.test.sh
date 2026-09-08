@@ -92,6 +92,7 @@ cases=0
 # NEUTERED helper (verdict lost), which is a different mutation from a MISROUTED
 # one (verdict recorded against the wrong counter).
 VERDICTS=""
+USED_assert_parse=0; USED_assert_measured=0; USED_probe_wrapper=0
 pass() { PASS=$((PASS + 1)); VERDICTS="${VERDICTS}P"; printf '  [ok] %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); VERDICTS="${VERDICTS}F"; printf '  [FAIL] %s\n' "$1"; }
 
@@ -291,6 +292,7 @@ declare -F strip_ansi parse_bun_summary summary_measured >/dev/null \
 # never inside pass()/fail(), which is what keeps the conservation identity at the
 # bottom of this file non-tautological.
 assert_parse() {                # <label> <expected tuple> <path>
+  USED_assert_parse=$((USED_assert_parse + 1))
   cases=$((cases + 1))
   local got
   got="$(parse_bun_summary "$3")"
@@ -302,6 +304,7 @@ assert_parse() {                # <label> <expected tuple> <path>
 }
 
 assert_measured() {             # <label> <pass> <fail> <true|false>
+  USED_assert_measured=$((USED_assert_measured + 1))
   cases=$((cases + 1))
   local got=false
   summary_measured "$2" "$3" && got=true
@@ -405,6 +408,7 @@ assert_measured "V4 both counters read is MEASURED" "122" "0" true
 # scripts/guard-vacuity-floor.test.sh's floor_lines_of(), whose construction
 # budget is at zero headroom.
 _probe_wrapper() {              # <label> <wrapper-invocation...>
+  USED_probe_wrapper=$((USED_probe_wrapper + 1))
   local label="$1"; shift
   local _pb=$PASS _fb=$FAIL _cb=$cases _vb="$VERDICTS"
   "$@" >/dev/null
@@ -741,6 +745,24 @@ cases=$((cases + 1))
 pass "assertion count $n_expect >= floor $MIN_ASSERTIONS"
 
 # (the EXIT trap removes $LOG)
+
+# --- Harness dispatch -------------------------------------------------------
+# Every wrapper defined in this file must actually RUN. Measured at runtime, not
+# grepped: an earlier revision of this check counted call sites textually and
+# scored the DEFINITION line as one, so deleting all four `assert_measured`
+# invocations left it satisfied — the vacuity class this file exists to police,
+# inside the guard written to police it. A block replacement in this file's own
+# history really did leave `assert_measured` defined and invoked zero times, and
+# the calls vanished together with their `cases` increments, so the conservation
+# identity stayed consistent and nothing named the cause.
+for _w in assert_parse assert_measured probe_wrapper; do
+  _u="USED_${_w}"
+  if [[ "${!_u}" -lt 1 ]]; then
+    printf '\n[FATAL] harness: %s was never dispatched — a wrapper that does not run asserts nothing.\n' "$_w" >&2
+    echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
+    exit 1
+  fi
+done
 
 # THE GATE'S OWN ANTI-VACUITY FLOOR. Every control above routes through pass()/fail(),
 # so both are a single point of silence: neutering them to no-ops printed
