@@ -27,9 +27,27 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AGG="$REPO_ROOT/scripts/rule-metrics-aggregate.sh"
 [[ -x "$AGG" || -r "$AGG" ]] || { echo "FATAL: aggregator not found at $AGG" >&2; exit 2; }
 
+# P1b (#7708): `mktemp -d` inherits TMPDIR, so a RELATIVE TMPDIR yields a relative
+# root — after which the trap's `rm -rf` resolves against whatever directory the
+# probe happens to be standing in when it fires. The body is a byte-exact COPY of
+# the canonical definition in plugins/soleur/test/test-helpers.sh, whose equality
+# fixture-dir-operand-assert.test.sh asserts; do not reword it here alone. It is
+# copied rather than sourced because this is a production script, not a suite.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 export TMPDIR="${TMPDIR:-/var/tmp}"
 ROOT="$(mktemp -d "${TMPDIR%/}/hookfault-probe.XXXXXXXX")" || { echo "FATAL: mktemp failed" >&2; exit 2; }
-trap 'rm -rf "$ROOT" 2>/dev/null || true' EXIT INT TERM HUP
+assert_fixture_dir "$ROOT"
+trap 'assert_fixture_dir "$ROOT"; rm -rf "$ROOT" 2>/dev/null || true' EXIT INT TERM HUP
 
 mkdir -p "$ROOT/.claude" "$ROOT/knowledge-base/project" || { echo "FATAL: could not build the fixture root" >&2; exit 2; }
 # The aggregator parses the rule corpus and ABORTS if it yields zero rules, so

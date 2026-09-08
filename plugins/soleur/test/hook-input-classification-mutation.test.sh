@@ -66,8 +66,25 @@ command -v jq      >/dev/null 2>&1 || { echo "SKIP: jq missing — battery canno
 command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing — battery cannot run"; exit 0; }
 command -v git     >/dev/null 2>&1 || { echo "SKIP: git missing — cannot build the sandbox"; exit 0; }
 
+# P1b (#7708): `mktemp -d` inherits TMPDIR, and a RELATIVE TMPDIR yields a relative
+# root — after which the `rm -rf` below resolves against whatever directory the trap
+# happens to fire in. The body is a byte-exact COPY of the canonical definition in
+# plugins/soleur/test/test-helpers.sh; fixture-dir-operand-assert.test.sh asserts the
+# equality, so do not reword it here alone.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 WORK="$(mktemp -d "${TMPDIR%/}/hookmut.XXXXXXXX")" || { echo "FATAL: mktemp failed" >&2; exit 2; }
-cleanup() { rm -rf "$WORK" 2>/dev/null || true; }
+assert_fixture_dir "$WORK"
+cleanup() { assert_fixture_dir "$WORK"; rm -rf "$WORK" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM HUP
 
 # --- build the sandbox ------------------------------------------------------
@@ -92,7 +109,7 @@ PASS=0; FAIL=0; ROWS=0
 LEDGER="$WORK/.failures"; : > "$LEDGER"
 pass() { PASS=$((PASS+1)); echo "PASS: $1"; }
 fail() { FAIL=$((FAIL+1)); echo "FAIL: $1" | tee -a "$LEDGER"; shift; local l; for l in "$@"; do echo "    $l"; done; }
-restore() { cp "$PRISTINE_SUT" "$SUT"; cp "$PRISTINE_SUITE" "$SUITE"; }
+restore() { assert_fixture_dir "$SUT"; assert_fixture_dir "$SUITE"; cp "$PRISTINE_SUT" "$SUT"; cp "$PRISTINE_SUITE" "$SUITE"; }
 
 # run_suite <logfile> -> prints the suite's rc
 # ANSI is stripped before anything is read: a coloured summary makes a
@@ -100,6 +117,7 @@ restore() { cp "$PRISTINE_SUT" "$SUT"; cp "$PRISTINE_SUITE" "$SUITE"; }
 # as killed-or-survived arbitrarily while the run still looks complete.
 run_suite() {
   local log="$1" rc=0
+  assert_fixture_dir "$log"
   ( cd "$WORK" && bash "$SUITE" ) > "$log" 2>&1 || rc=$?
   sed -i -r 's/\x1B\[[0-9;]*[mGKHF]//g' "$log" 2>/dev/null || true
   printf '%d' "$rc"
