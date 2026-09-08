@@ -207,9 +207,15 @@ criterion about the *predicate's input domain*. The CONCUR gate rejected it corr
 same surface.
 
 **Claimed "24 hooks" without measuring** — the figure came from the plan and went into a
-commit message. Measured: 22 source the library. **Prevention:** the repo already says
-plan-quoted numbers are preconditions; this one was prose, and prose got no such
-treatment.
+commit message. Measured: 22 source the library. Correcting the commit message did not
+correct the claim: at ship time a grep for the SUBJECT (`[0-9]+ (non-test )?hooks` across
+the whole changed set, not for the remembered wording) still found the stale 24 in two
+artifacts — the plan's own Risks table and `decision-challenges.md` — one of them the file
+the figure was originally read out of. **Prevention:** the repo already says plan-quoted
+numbers are preconditions; this one was prose, and prose got no such treatment. And a
+measurement correction is not done when the site you noticed is fixed — sweep the subject
+across the diff's whole file set, because the number's own source document is the site most
+likely to still be asserting it.
 
 **A mutation helper built Python source by `sed` substitution** — fragile against any
 metacharacter in an anchor. Rewritten to pass anchors as argv before it broke.

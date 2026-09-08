@@ -60,7 +60,7 @@ concrete defects under review, and both edit the hot path.
 **What the plan does instead.** PR 1 repairs the hook-input classifier alone; PR 2 does the shell
 containment work.
 
-**Why.** `.claude/hooks/lib/hook-input.sh` is sourced by 24 non-test hooks, 19 firing on every Bash
+**Why.** `.claude/hooks/lib/hook-input.sh` is sourced by 22 non-test hooks, 19 firing on every Bash
 tool call. ADR-157's core argument is that a persistent fault there is unrecoverable *because the
 repair is itself a Bash call*, and that applies to this change. The repair also activates a branch
 that has never executed and carries a corruption mode where the return code lands in the last field —

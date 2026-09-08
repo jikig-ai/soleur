@@ -787,7 +787,7 @@ matches no path under `components/**`, `app/**/page.tsx` or `app/**/layout.tsx`.
 
 | Risk | Mitigation |
 |---|---|
-| PR 1 changes the parse path in a library sourced by 24 non-test hooks, 19 firing per Bash tool call, where a persistent fault is unrecoverable because the repair is itself a Bash call. | It ships apart from all other work, behind AC4's byte-exactness matrix and the full contract battery. |
+| PR 1 changes the parse path in a library sourced by 22 non-test hooks, 19 firing per Bash tool call, where a persistent fault is unrecoverable because the repair is itself a Bash call. | It ships apart from all other work, behind AC4's byte-exactness matrix and the full contract battery. |
 | The field-count convention is ambiguous, so claims about what a count assertion can see are unverifiable. | AC3 requires the number to be written into the file and asserted, before any claim rests on it. |
 | A mutation row passes for the wrong reason and certifies a dead discriminator. | AC5 and M3: the two `internal` arms are distinguishable, with a positive control proving rc-3 is reachable. |
 | The containment test goes green by refusing to run. | AC9's two arms, with the child's exit code in the oracle, and an explicit demonstration that the single-arm version passes with a scrub removed. |
