@@ -149,8 +149,19 @@ assert "heartbeat unit uses doppler run --config prd with NO --project (#6555)" 
   "[[ -n \"\$HEARTBEAT_BLOCK\" ]] && printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE 'run --config prd' && ! printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.*--project'"
 assert "heartbeat unit ExecStart is exactly one line" \
   "[[ \$(printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -c '^ExecStart=') -eq 1 ]]"
+# #7695: the heredoc that renders this unit is now QUOTED, so the two values it needs arrive by
+# sentinel + `sed -i` (the house pattern) instead of by interpolation. This assertion is re-keyed
+# onto the rendered SHAPE rather than the pre-render spelling -- and the substitution itself is
+# asserted below, so the end-state invariant ("ExecStart wraps the heartbeat script under doppler
+# run --config prd") is still pinned rather than merely relocated.
+# Herestring, not a pipe: this file runs under pipefail, where `producer | grep -q` takes SIGPIPE
+# on an early match and fails the pipeline even though grep matched.
 assert "heartbeat unit ExecStart wraps HEARTBEAT_SCRIPT under doppler run --config prd" \
-  "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qE '^ExecStart=.* run --config prd -- \\\$\\{HEARTBEAT_SCRIPT\\}'"
+  "grep -qE '^ExecStart=@@DOPPLER_BIN@@ run --config prd -- @@HEARTBEAT_SCRIPT@@\$' <<<\"\$HEARTBEAT_BLOCK\""
+assert "the heartbeat sentinels are substituted after the heredoc (so the unit is not shipped with @@)" \
+  "(( \$(grep -cE 's\\|@@DOPPLER_BIN@@\\|.*s\\|@@HEARTBEAT_SCRIPT@@\\|' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
+assert "the render refuses to install a unit still carrying an unsubstituted sentinel" \
+  "(( \$(grep -cF 'still carries an unsubstituted sentinel' '$SCRIPT_DIR/inngest-bootstrap.sh' || true) >= 1 ))"
 assert "heartbeat unit reads EnvironmentFile=/etc/default/inngest-server (project delivery, #6555)" \
   "printf '%s\n' \"\$HEARTBEAT_BLOCK\" | grep -qxF 'EnvironmentFile=/etc/default/inngest-server'"
 assert "DOPPLER_PROJECT is exported (so inngest-redis-bootstrap.sh inherits it), default soleur" \
@@ -1864,10 +1875,15 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # + exit (ADR-193), never through `assert`/`fail`: a floor that dispatches through the helper
 # it backstops dies with the same edit that disarms the helper. Raise in lockstep when adding
 # assertions; the value is the exact count from a green run, with no slack.
-INNGEST_MIN_ASSERTIONS=303
-if [[ "$TOTAL" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
+# #7695 review: was 303 against a 305 green run -- two assertions of slack, and the comment
+# claimed none. Deleting the two tail assertions (the V4 identity guard and the ack-list arity
+# check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
+# TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
+# reporting exit 0. 7761's floor already had this shape.
+INNGEST_MIN_ASSERTIONS=305
+if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
-    "$TOTAL" "$INNGEST_MIN_ASSERTIONS" >&2
+    "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
   exit 1
 fi
 
