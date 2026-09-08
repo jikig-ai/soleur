@@ -31,29 +31,46 @@ import {
 const BUCKETS = Object.keys(WORKFLOW_COPY) as WorkflowBucket[];
 
 describe("WORKFLOW_COPY content shape", () => {
+  // TWO floors, because they cover DIFFERENT axes and the plan's G2/H1 rows
+  // assumed one covered both.
+  //
+  //   G2 — the enumeration returns zero members. Caught here: every `test.each`
+  //        would silently register zero cases.
+  //   H1 — the enumeration is fine but an assertion BODY is emptied. NOT caught
+  //        here, and measured: deleting the body of the non-empty-label test
+  //        left the suite at 53 passed / exit 0. A member-count floor cannot
+  //        see an empty body; only an assertion-count floor can.
+  //
+  // So each looped case declares `expect.assertions(n)` below. Vitest then
+  // fails a case that runs no assertion, which is the mutation H1 describes.
   test("the map is non-empty (dispatch floor — a zero-member loop must never pass silently)", () => {
     expect(BUCKETS.length).toBeGreaterThanOrEqual(8);
   });
 
   test.each(BUCKETS)("%s has a non-empty label", (b) => {
+    expect.assertions(1);
     expect(WORKFLOW_COPY[b].label.trim().length).toBeGreaterThan(0);
   });
 
   test.each(BUCKETS)(`%s label ≤ ${WORKFLOW_LABEL_MAX} chars`, (b) => {
+    expect.assertions(1);
     expect(WORKFLOW_COPY[b].label.length).toBeLessThanOrEqual(
       WORKFLOW_LABEL_MAX,
     );
   });
 
   test.each(BUCKETS)("%s label leaks no raw-slug characters", (b) => {
+    expect.assertions(1);
     expect(WORKFLOW_COPY[b].label).not.toMatch(/[._-]/);
   });
 
   test.each(BUCKETS)("%s label is not the wire value restated", (b) => {
+    expect.assertions(1);
     expect(WORKFLOW_COPY[b].label).not.toBe(b);
   });
 
   test.each(BUCKETS)("%s label carries no sentinel underscores", (b) => {
+    expect.assertions(1);
     expect(WORKFLOW_COPY[b].label).not.toContain("__");
   });
 
