@@ -48,6 +48,25 @@ fail() {
   return 0
 }
 
+# POSITIVE CONTROL (ADR-193). Drive BOTH helpers once and refuse to continue
+# unless BOTH counters move. The assertion floor at the end sums passes+fails and
+# is therefore dominated by `passes`, so neutering `fail()` alone -- one token,
+# `fails + 1` -> `fails + 0` -- disarmed every negative assertion in the suite
+# and reported `147 passed, 0 failed`, rc 0. A floor that witnesses one helper is
+# not a floor. Reported with printf + exit directly, never through the helpers it
+# backstops.
+_cp=$passes
+_cf=$fails
+pass 'self-check: pass() increments (expected)'
+fail 'self-check: fail() increments (EXPECTED, not a defect)'
+if [ $((passes - _cp)) -ne 1 ] || [ $((fails - _cf)) -ne 1 ]; then
+  printf '[FATAL] test-zot-inventory: verdict helpers are not counting (pass delta %s, fail delta %s)\n' \
+    "$((passes - _cp))" "$((fails - _cf))" >&2
+  exit 1
+fi
+passes=$_cp
+fails=$_cf
+
 # A skip is not a pass, and under CI it is not even a skip.
 _skip() {
   if [ "${CI:-}" = "true" ]; then
@@ -364,6 +383,34 @@ REGISTRY_URL="http://127.0.0.1:5000"
 INGEST_URL="http://127.0.0.1:${ING_PORT}/"
 CANARY_URL="http://127.0.0.1:${CAN_PORT}/"
 
+# (#7873) THE SEAM IS INVERTED, AND THE DIRECTION IS THE WHOLE POINT.
+#
+# Before: every ordinary case ran the REAL script with a loopback
+# ZOT_INVENTORY_INGEST_URL injected, and `inv-exfil` mutated the pinned literal to a
+# canary and asserted the canary RECEIVED the request. That encoded "this script has
+# no destination confinement" as a GREEN property -- the suite asserted the defect.
+#
+# After: ordinary cases run INV_RUN, a source copy whose pinned literal is rewritten
+# to the loopback fixture, so the injected env value MATCHES the copy's pin and all
+# ~79 assertions keep working against a real listener. `inv-exfil` runs the PRISTINE
+# script with a canary URL and asserts REFUSAL.
+#
+# A source mutation is not an env carve-out: the shipped script has no branch that
+# accepts a foreign destination, so this does not reopen the hole it is testing.
+INV_RUN="$TMP/inv-loopback"
+python3 - "$INV" "$INV_RUN" "$INGEST_URL" <<'PY' || { echo "test-zot-inventory: SETUP FAIL -- could not build the loopback run copy" >&2; exit 2; }
+import sys
+src, dst, loopback = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(src).read()
+old = 'readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"'
+if s.count(old) != 1:
+    sys.stderr.write("expected exactly one pinned-literal declaration, found %d\n" % s.count(old))
+    sys.exit(3)
+open(dst, "w").write(s.replace(old, 'readonly INGEST_URL_PINNED="%s"' % loopback))
+PY
+chmod +x "$INV_RUN"
+bash -n "$INV_RUN" || { echo "test-zot-inventory: SETUP FAIL -- loopback run copy does not parse" >&2; exit 2; }
+
 # ---------------------------------------------------------------------------------
 # Fixtures.
 # ---------------------------------------------------------------------------------
@@ -460,7 +507,7 @@ fx = {
 PY
 }
 dedup_fixture
-run_inv "$INV"
+run_inv "$INV_RUN"
 if [ "$RC" -eq 0 ]; then pass "dedup sweep exits 0"; else fail "dedup sweep rc=$RC" "$(tail -5 "$ERR")"; fi
 expect_field unique_blobs 7 "dedup"
 expect_field manifest_referenced_bytes 3526 "dedup"
@@ -507,7 +554,7 @@ fx = {
   "referrers_default": {"code": 200, "manifests": []},
 }
 PY
-run_inv "$INV" ZOT_INVENTORY_REPO_FLOOR=1
+run_inv "$INV_RUN" ZOT_INVENTORY_REPO_FLOOR=1
 expect_field unique_blobs 7 "index recursion"
 expect_field manifest_referenced_bytes 2641 "index recursion"
 # 4, not 6: the shared child is fetched once. A non-memoizing recursion fetches it under
@@ -524,7 +571,7 @@ fx["fail_always"] = ["manifest:R_b/t1"]
 fx["generation"] += 100
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 if [ "$RC" -eq 1 ]; then pass "partial sweep exits 1"; else fail "partial sweep rc=$RC (want 1)" "$(tail -3 "$ERR")"; fi
 expect_field manifest_errors 1 "partial"
 expect_field enumeration_complete false "partial"
@@ -540,7 +587,7 @@ fx["catalog_code"] = 403
 fx["generation"] += 200
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field reason catalog_unreadable "catalog non-2xx"
 expect_field outcome failed "catalog non-2xx"
 expect_field catalog_errors 1 "catalog non-2xx"
@@ -550,7 +597,7 @@ echo "== 1.1.4b / V2 — catalog 2xx-EMPTY and catalog UNDERCOUNT =="
 write_fixture <<'PY'
 fx = {"catalog": [{"repositories": [], "next": None}], "tags": {}, "manifests": {}}
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field reason catalog_empty "catalog 2xx-empty"
 expect_field enumeration_complete false "catalog 2xx-empty"
 # The whole point: a permissions failure that returns 200 [] must NOT be dressed up as a
@@ -573,7 +620,7 @@ fx = {
   "referrers_default": {"code": 200, "manifests": []},
 }
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field reason catalog_undercount "catalog below the measured floor of 2"
 expect_field enumeration_complete false "catalog undercount"
 expect_field repos 1 "catalog undercount"
@@ -588,12 +635,12 @@ fx["catalog"] = [{"repositories": ["R_a", "R_b"], "next": 1},
 fx["generation"] += 300
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV" ZOT_INVENTORY_MAX_PAGES=1
+run_inv "$INV_RUN" ZOT_INVENTORY_MAX_PAGES=1
 expect_field enumeration_complete false "unfollowed Link"
 expect_field reason link_unfollowed "unfollowed Link"
 # Positive control for the same fixture: with the page budget raised, the Link IS followed
 # and completeness is restored. Without this, "always false" would pass the arm above.
-run_inv "$INV" ZOT_INVENTORY_MAX_PAGES=10
+run_inv "$INV_RUN" ZOT_INVENTORY_MAX_PAGES=10
 expect_field enumeration_complete true "a FOLLOWED Link restores completeness"
 
 echo "== 1.1.4d / A4b — a NON-ROOTED Link target is refused AND counted =="
@@ -611,7 +658,7 @@ fx["catalog"] = [{"repositories": ["R_a", "R_b"],
 fx["generation"] += 310
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field enumeration_complete false "a refused Link target is an INCOMPLETE sweep"
 expect_field reason link_unfollowed "a refused Link target must reach the reason vocabulary"
 expect_field link_unfollowed 1 "the refusal must be COUNTED, not merely printed"
@@ -636,7 +683,7 @@ fx["tags"]["R_a"] = {"pages": [{"tags": ["t1"], "next": 1},
 fx["generation"] += 320
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field repos 2 "catalog page 2 contributes its repositories"
 expect_field tags 3 "tags/list page 2 contributes its tags"
 expect_field unique_blobs 7 "paginated sweep sees every blob the single-page sweep sees"
@@ -656,7 +703,7 @@ fx["manifests"]["R_a/t1"]["raw_body"] = '{"schemaVersion":2,"layers":[{"digest":
 fx["generation"] += 330
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field manifest_errors 1 "an unparseable 200 body counts as a manifest error"
 expect_field enumeration_complete false "an unparseable manifest makes the sweep incomplete"
 expect_field reason manifest_incomplete "an unparseable manifest reaches the reason vocabulary"
@@ -675,7 +722,7 @@ fx["tags"]["R_b"] = {"pages": [{"tags": [], "next": None}]}
 fx["generation"] += 340
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field outcome partial "a zero-tag sweep must NOT report outcome=ok"
 expect_field reason enumeration_yielded_nothing "a zero-tag sweep names itself in the vocabulary"
 expect_field enumeration_complete false "a zero-tag sweep is incomplete"
@@ -702,7 +749,7 @@ PY
 # SECONDS past 1, which would trip before ANY manifest was fetched and make the
 # "carries what it measured" assertion below vacuous. 3 clears setup; the ~4 s of retry sleeps
 # on R_a/t2 then carries it over.
-run_inv "$INV" ZOT_INVENTORY_DEADLINE_S=3 ZOT_INVENTORY_RETRY_SLEEP_S=2
+run_inv "$INV_RUN" ZOT_INVENTORY_DEADLINE_S=3 ZOT_INVENTORY_RETRY_SLEEP_S=2
 expect_field reason sweep_deadline_exceeded "the deadline names itself in the vocabulary"
 expect_field outcome partial "a deadline-tripped sweep is partial, never ok"
 expect_field enumeration_complete false "a deadline-tripped sweep is incomplete"
@@ -721,7 +768,7 @@ fx["fail_always"] = ["tags:R_b"]
 fx["generation"] += 400
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field tag_list_errors 1 "tag-list failure"
 expect_field repos 2 "tag-list failure"
 expect_field repos_enumerated 1 "tag-list failure"
@@ -737,7 +784,7 @@ fx["fail_once"] = ["manifest:R_b/t1", "tags:R_a", "catalog"]
 fx["generation"] += 500
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field enumeration_complete true "transient failures that succeed on retry"
 expect_field manifest_errors 0 "retry positive control"
 expect_field tag_list_errors 0 "retry positive control"
@@ -747,7 +794,7 @@ expect_field manifest_referenced_bytes 3526 "retry positive control preserves th
 
 echo "== 1.2a / B2 — origin reachability is adjudicated BEFORE the catalog =="
 dedup_fixture
-run_inv "$INV" ZOT_INVENTORY_REGISTRY_URL="http://127.0.0.1:1"
+run_inv "$INV_RUN" ZOT_INVENTORY_REGISTRY_URL="http://127.0.0.1:1"
 expect_field reason origin_unreachable "dead origin"
 expect_field outcome failed "dead origin"
 expect_field origin_verdict dial_failed "dead origin"
@@ -756,7 +803,7 @@ if [ "$(field reason)" = "catalog_unreadable" ]; then
 else
   pass "catalog_unreadable is not claimed before the origin is proven to answer"
 fi
-run_inv "$INV"
+run_inv "$INV_RUN"
 expect_field origin_verdict answered "live origin"
 
 echo "== 0.3 — referrer coverage is a first-class input to enumeration_complete =="
@@ -779,7 +826,7 @@ fx = {
   "referrers_default": {"code": 200, "manifests": []},
 }
 PY
-run_inv "$INV" ZOT_INVENTORY_REPO_FLOOR=1
+run_inv "$INV_RUN" ZOT_INVENTORY_REPO_FLOOR=1
 # Referrers are INVISIBLE to tags/list, so their bytes are counted only if the referrers
 # API is actually walked. 400+10+100+876+20+300 = 1706 over 6 unique digests.
 expect_field unique_blobs 6 "referrer bytes are counted"
@@ -794,27 +841,27 @@ fx["fail_always"] = ["referrers:" + list(fx["referrers"].keys())[0]]
 fx["generation"] += 600
 json.dump(fx, open(sys.argv[1], "w"))
 PY
-run_inv "$INV" ZOT_INVENTORY_REPO_FLOOR=1
+run_inv "$INV_RUN" ZOT_INVENTORY_REPO_FLOOR=1
 expect_field referrer_errors 1 "a referrers read that fails after retry"
 expect_field enumeration_complete false "referrer coverage is a first-class completeness input"
 expect_field reason referrer_incomplete "referrer failure"
 
 echo "== E8 — restart straddle, and E9 — the stale-disk arm is degraded, not partial =="
 dedup_fixture
-run_inv "$INV" ZOT_RESTARTS_AT_END=15641
+run_inv "$INV_RUN" ZOT_RESTARTS_AT_END=15641
 expect_field outcome partial "restart straddle"
 expect_field reason restart_during_sweep "restart straddle"
 if [ "$RC" -eq 1 ]; then pass "restart straddle exits 1"; else fail "restart straddle rc=$RC (want 1)"; fi
 
 dedup_fixture
-run_inv "$INV" ZOT_DISK_SAMPLE_AGE_S=99999
+run_inv "$INV_RUN" ZOT_DISK_SAMPLE_AGE_S=99999
 expect_field outcome degraded "stale disk sample"
 expect_field reason disk_sample_stale "stale disk sample"
 if [ "$RC" -eq 0 ]; then pass "the stale-disk arm is exit 0 (degraded), not exit 1"; else fail "stale-disk arm rc=$RC (want 0)"; fi
 
 echo "== A2/A3 — the delta is an upper bound with a stated error bar =="
 dedup_fixture
-run_inv "$INV"
+run_inv "$INV_RUN"
 FS_USED="$(field fs_used_gb)"
 DELTA="$(field delta_gb)"
 if [ "$FS_USED" = "59.00" ]; then pass "fs_used_gb = fs_size_gb x pcent/100 (59.00)"
@@ -835,7 +882,7 @@ fi
 
 echo "== 1.1.7 / F3 — verb confinement at the wire =="
 dedup_fixture
-run_inv "$INV"
+run_inv "$INV_RUN"
 # MINIMUM CARDINALITY FIRST. Zero recorded requests satisfies "every request was a GET",
 # and zero is exactly what an early exit produces.
 n_req="$(grep -cE '.' "$REQLOG" || true)"
@@ -951,18 +998,18 @@ fi
 
 echo "== 1.1.11 — no-stub emitter =="
 dedup_fixture
-run_inv "$INV" BETTERSTACK_LOGS_TOKEN=
+run_inv "$INV_RUN" BETTERSTACK_LOGS_TOKEN=
 if [ "$RC" -ne 0 ]; then pass "an unset ingest token fails loudly"; else fail "an unset ingest token exited 0 — a silent skip"; fi
 if [ "$(grep -cE '.' "$INGEST_REQ" || true)" -eq 0 ]; then pass "no ingest attempt was made without a token"; else fail "an ingest request was made with no token"; fi
 if grep -qiE 'BETTERSTACK_LOGS_TOKEN' "$ERR"; then pass "the failure names the missing variable"; else fail "the failure does not name BETTERSTACK_LOGS_TOKEN" "$(cat "$ERR")"; fi
 
 echo "== 1.1.12 / D7 — ZOT_PUSH_* self-enforcement at entry =="
 dedup_fixture
-run_inv "$INV" ZOT_PUSH_USER=pusher
+run_inv "$INV_RUN" ZOT_PUSH_USER=pusher
 if [ "$RC" -ne 0 ]; then pass "ZOT_PUSH_USER populated -> non-zero exit"; else fail "ZOT_PUSH_USER populated and the script ran"; fi
 if [ "$(grep -cE '.' "$REQLOG" || true)" -eq 0 ]; then pass "the entry guard fires BEFORE any request is issued"; else fail "requests were issued despite ZOT_PUSH_USER being set"; fi
 dedup_fixture
-run_inv "$INV" ZOT_PUSH_TOKEN=secret
+run_inv "$INV_RUN" ZOT_PUSH_TOKEN=secret
 if [ "$RC" -ne 0 ]; then pass "ZOT_PUSH_TOKEN populated -> non-zero exit"; else fail "ZOT_PUSH_TOKEN populated and the script ran"; fi
 
 echo "== AP-022 — errexit is provably clear at every rc capture =="
@@ -984,7 +1031,7 @@ fi
 # are a dash SYNTAX error, so `sh -n` would report every mutant as unparseable.
 # ---------------------------------------------------------------------------------
 mutate_del() {  # <dst-basename> <marker-substring>
-  python3 - "$INV" "$TMP/$1" "$2" <<'PY' || return 1
+  python3 - "$INV_RUN" "$TMP/$1" "$2" <<'PY' || return 1
 import sys
 src, dst, marker = sys.argv[1], sys.argv[2], sys.argv[3]
 lines = open(src).read().split("\n")
@@ -997,7 +1044,7 @@ PY
   bash -n "$TMP/$1" 2>/dev/null || { echo "mutant $1 does not parse" >&2; return 1; }
 }
 mutate_sub() {  # <dst-basename> <old-substring> <new-substring>
-  python3 - "$INV" "$TMP/$1" "$2" "$3" <<'PY' || return 1
+  python3 - "$INV_RUN" "$TMP/$1" "$2" "$3" <<'PY' || return 1
 import sys
 src, dst, old, new = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 s = open(src).read()
@@ -1022,19 +1069,31 @@ else
   fail "MUTATION(dedup) did not land — the digest-keyed accumulation site was not found"
 fi
 
-echo "== 1.1.13 MUTATION — an exfil URL must break egress confinement =="
-if mutate_sub inv-exfil '"${ZOT_INVENTORY_INGEST_URL:-https://s2457081.eu-fsn-3.betterstackdata.com/}"' "\"$CANARY_URL\""; then
-  dedup_fixture
-  run_inv "$TMP/inv-exfil"
-  n_can="$(grep -cE '.' "$CANARY_REQ" || true)"
-  n_ing="$(grep -cE '.' "$INGEST_REQ" || true)"
-  if [ "${n_can:-0}" -ge 1 ] && [ "${n_ing:-0}" -eq 0 ]; then
-    pass "the exfil mutant reaches the canary and starves the pinned ingest — 1.1.8 is load-bearing"
-  else
-    fail "MUTATION(exfil) changed no observable destination" "canary=${n_can} ingest=${n_ing}"
-  fi
+echo "== 1.1.13 EXFIL — the PRISTINE script must REFUSE a foreign ingest destination =="
+# (#7873) INVERTED. This case previously asserted that an exfil mutant SUCCEEDED in
+# reaching the canary, which encoded "zot-inventory has no destination confinement"
+# as a passing property -- the suite certified the defect. It now runs the shipped
+# script unmutated, hands it a canary URL through the very env var the issue names,
+# and requires a refusal.
+dedup_fixture
+run_inv "$INV" ZOT_INVENTORY_INGEST_URL="$CANARY_URL"
+n_can="$(grep -cE '.' "$CANARY_REQ" || true)"
+# Zero canary requests is necessary and NOT sufficient: a `set -u` crash before the
+# post also sends nothing and also exits non-zero. Anchor on the refusal's own text
+# so the assertion cannot be satisfied by an unrelated failure.
+if [ "${n_can:-0}" -eq 0 ] && grep -qF 'refusing to forward the Better Stack ingest credential' "$ERR"; then
+  pass "the pristine script refuses a foreign ZOT_INVENTORY_INGEST_URL and sends the canary nothing"
 else
-  fail "MUTATION(exfil) did not land — the pinned ingest URL literal was not found"
+  fail "EXFIL: a foreign ingest URL was not refused" "canary=${n_can} rc=${RC} err=$(tail -2 "$ERR" | tr '\n' ' ')"
+fi
+
+echo "== 1.1.13 EXFIL — the netrc pull credential is confined to loopback =="
+dedup_fixture
+run_inv "$INV" ZOT_INVENTORY_REGISTRY_URL="http://attacker.example.org:5000"
+if grep -qF 'refusing to write the pull credential into a netrc for non-loopback registry' "$ERR"; then
+  pass "a non-loopback registry URL is refused BEFORE the netrc is written"
+else
+  fail "EXFIL: a non-loopback registry URL was not refused" "rc=${RC} err=$(tail -2 "$ERR" | tr '\n' ' ')"
 fi
 
 echo "== 1.1.13 MUTATION — a write verb must be visible at the wire =="
