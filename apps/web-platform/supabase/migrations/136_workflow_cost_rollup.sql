@@ -97,3 +97,25 @@ AS $$
     FROM public.conversations
    WHERE user_id = uid AND total_cost_usd > 0 AND created_at >= since;
 $$;
+
+-- The REVOKE trio is NOT redundant with 027's, and omitting it here was a real
+-- security gap (caught at review). 027's own header states the rule: "on FIRST
+-- create Postgres grants EXECUTE to PUBLIC by default. The REVOKE statements
+-- below MUST run on every apply -- treating them as 'cleanup' after the CREATE
+-- is a real security gap."
+--
+-- 136 is now a SECOND file that can create this function. CREATE OR REPLACE
+-- preserves the ACL only when the function already exists; on any apply where
+-- it is ABSENT -- a `db reset` against a squashed baseline postdating 027, a
+-- fresh project bootstrapped from `db diff` output, or a DROP FUNCTION during
+-- incident recovery followed by forward-only replay -- the REPLACE becomes a
+-- first CREATE and PUBLIC gets EXECUTE on a function returning any user's
+-- month-to-date spend.
+--
+-- A live `proacl` read cannot catch this: it can only be taken on a database
+-- where 027 has already applied, which is precisely the state in which the
+-- omission is invisible.
+REVOKE EXECUTE ON FUNCTION public.sum_user_mtd_cost(UUID, TIMESTAMPTZ) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION public.sum_user_mtd_cost(UUID, TIMESTAMPTZ) FROM authenticated;
+REVOKE EXECUTE ON FUNCTION public.sum_user_mtd_cost(UUID, TIMESTAMPTZ) FROM anon;
+GRANT  EXECUTE ON FUNCTION public.sum_user_mtd_cost(UUID, TIMESTAMPTZ) TO   service_role;

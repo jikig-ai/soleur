@@ -157,7 +157,9 @@ function UsageBody({
         Figures come straight from the Anthropic SDK response. Cross-check
         any conversation in your Anthropic Console under Usage — the numbers
         will match to the cent. The Console has no workflow dimension, so it
-        can confirm the total and each conversation, not the split.
+        can confirm each conversation, not the split. Its monthly total will
+        also differ: this page groups a conversation into the month it
+        STARTED, while the Console groups spend by the day it was incurred.
         Conversations from before 2026-05-12 under-report cache-read tokens;
         newer ones capture all three input tiers.
       </p>
@@ -255,40 +257,85 @@ function formatBucketUsd(n: number): string {
 }
 
 /**
- * Largest-remainder (Hare quota) allocation of the headline's cents across the
- * buckets, so the DISPLAYED parts sum to the DISPLAYED whole.
+ * The grain `formatUsd` will actually render `totalUsd` at, as units per dollar.
+ *
+ * `formatUsd` switches precision at $0.01 (4dp below, 2dp above), so a single
+ * fixed grain cannot match it. Allocating in whole cents against a headline
+ * rendered at 4dp is what let a $0.0090 total display rows summing to $0.0150.
+ */
+function displayUnitsPerDollar(totalUsd: number): number {
+  return totalUsd > 0 && totalUsd < 0.01 ? 1e4 : 100;
+}
+
+/**
+ * The headline's value in display units, PARSED BACK OUT of the rendered
+ * string.
+ *
+ * This is the load-bearing part. Recomputing the target as
+ * `Math.round(totalUsd * 100)` is a DIFFERENT rounding function from the
+ * `toFixed(2)` the headline renders with, and the two disagree on exact
+ * midpoints: `0.615` gives `Math.round` 62 and `toFixed(2)` "$0.61", so the
+ * rows summed to a cent more than the headline directly beneath copy promising
+ * they match. Deriving the target from `formatUsd`'s own output makes the
+ * invariant structural rather than coincidental — the two cannot drift, because
+ * there is only one formatter.
+ */
+function headlineDisplayUnits(totalUsd: number, unitsPerDollar: number): number {
+  const rendered = formatUsd(totalUsd);
+  const parsed = Number(rendered.replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.round(parsed * unitsPerDollar);
+}
+
+/**
+ * Largest-remainder (Hare quota) allocation of the headline's display units
+ * across the buckets, so the DISPLAYED parts sum to the DISPLAYED whole.
  *
  * Rounding each bucket independently is a real failure on data with no race at
  * all: eight buckets can each round down and leave ~$0.045 of visible
  * discrepancy beneath a "match to the cent" promise. The NUMERIC partition is
- * exact SQL-side (AC1/AC2); this only reconciles what 2dp rendering discards.
+ * exact SQL-side (AC1/AC2); this only reconciles what rendering discards.
  *
- * Returns integer cents, index-aligned with `values`.
+ * Returns integer display units, index-aligned with `values`.
  */
-function allocateDisplayCents(values: number[], totalUsd: number): number[] {
-  // Scale through 1e6 before dropping to cents: `8.12 * 100` is
+function allocateDisplayUnits(
+  values: number[],
+  totalUsd: number,
+  unitsPerDollar: number,
+): number[] {
+  // Scale through 1e6 before dropping to display units: `8.12 * 100` is
   // 811.9999999999999 in binary floating point, which would floor to 811 and
-  // hand a cent back to the wrong bucket.
-  const exact = values.map((v) => (v > 0 ? Math.round(v * 1e6) / 1e4 : 0));
-  const cents = exact.map((e) => Math.floor(e));
-  const allocated = cents.reduce((a, b) => a + b, 0);
-  const residue = Math.round(totalUsd * 100) - allocated;
+  // hand a unit back to the wrong bucket. `totalUsd` goes through the same
+  // scaling via `headlineDisplayUnits` -> `formatUsd`, so both sides of the
+  // residue are computed at one grain.
+  const exact = values.map((v) =>
+    v > 0 ? (Math.round(v * 1e6) / 1e6) * unitsPerDollar : 0,
+  );
+  const units = exact.map((e) => Math.floor(e));
+  const allocated = units.reduce((a, b) => a + b, 0);
+  const residue = headlineDisplayUnits(totalUsd, unitsPerDollar) - allocated;
 
   // A negative residue means the buckets already display for more than the
   // headline — only reachable if the partition invariant broke upstream. Floors
   // under-state rather than over-state; never invent a subtraction here.
-  if (residue <= 0) return cents;
+  //
+  // This early return is EQUIVALENT to falling through: the loop below is
+  // `k < residue`, which does not iterate for residue <= 0. It is kept as an
+  // explicit statement of intent, not because deleting it changes a verdict —
+  // mutation-verified. Saying so here so the next reader does not spend a
+  // round trying to write the fixture that kills it.
+  if (residue <= 0) return units;
 
   const byRemainder = exact
-    .map((e, i) => ({ i, remainder: e - cents[i] }))
+    .map((e, i) => ({ i, remainder: e - units[i] }))
     // Ties resolve by the caller's order, which the loader already fixed as
     // (total desc, bucket name asc) — so the allocation is deterministic.
     .sort((a, b) => b.remainder - a.remainder || a.i - b.i);
 
   for (let k = 0; k < residue && k < byRemainder.length; k += 1) {
-    cents[byRemainder[k].i] += 1;
+    units[byRemainder[k].i] += 1;
   }
-  return cents;
+  return units;
 }
 
 function BreakdownHeader() {
@@ -367,9 +414,11 @@ function WorkflowBreakdown({
   if (buckets.length < 2) return null;
 
   const maxTotal = Math.max(...buckets.map((b) => b.totalUsd));
-  const cents = allocateDisplayCents(
+  const unitsPerDollar = displayUnitsPerDollar(mtdTotalUsd);
+  const units = allocateDisplayUnits(
     buckets.map((b) => b.totalUsd),
     mtdTotalUsd,
+    unitsPerDollar,
   );
 
   return (
@@ -382,10 +431,31 @@ function WorkflowBreakdown({
 
       <ul className="mt-3 space-y-2">
         {buckets.map((b, i) => {
-          // A bucket allocated zero cents still holds real money (it is under
-          // $0.01, not zero) — show its own figure at 4dp rather than the
-          // allocated $0.00.
-          const displayUsd = cents[i] > 0 ? cents[i] / 100 : b.totalUsd;
+          // EVERY bucket renders from its allocation. The previous raw-value
+          // fallback for a zero-allocated bucket escaped the allocation
+          // entirely, so the column stopped summing to the headline by
+          // construction; a sub-cent total then displayed rows totalling ~67%
+          // more than the headline. A bucket holding real money but allocated
+          // zero units renders `<$0.0001` via formatBucketUsd rather than a
+          // bare $0.00 — honest about being non-zero without breaking the sum.
+          const displayUsd = units[i] / unitsPerDollar;
+          // A bucket holding real money but allocated ZERO units is below the
+          // precision THIS PANEL IS DISPLAYING AT, which is not a fixed
+          // threshold: the headline renders at 2dp above $0.01 and 4dp below
+          // it, so the marker has to track the same grain. Saying `<$0.0001`
+          // for a bucket holding $0.0004 under a cents-grain headline would be
+          // simply false.
+          //
+          // It cannot render its exact figure either: the headline shows $8.12,
+          // so the rows must sum to 812 cents, and a row printing $0.0004
+          // alongside $8.12 sums to $8.1204 — breaking "Nothing is left out"
+          // in the other direction. Grain-relative floor keeps the sum exact
+          // AND never shows $0.00 for real spend (plan 3.3.3).
+          const floorMarker = unitsPerDollar === 100 ? "<$0.01" : "<$0.0001";
+          const displayLabel =
+            units[i] === 0 && b.totalUsd > 0
+              ? floorMarker
+              : formatBucketUsd(displayUsd);
           const percent = Math.max(
             maxTotal > 0 ? (b.totalUsd / maxTotal) * 100 : 0,
             BAR_MIN_PERCENT,
@@ -412,7 +482,7 @@ function WorkflowBreakdown({
                 data-testid="workflow-bucket-total"
                 className="min-w-[72px] flex-none text-right text-sm font-medium tabular-nums text-soleur-text-primary"
               >
-                {formatBucketUsd(displayUsd)}
+                {displayLabel}
               </span>
               <span className="min-w-[150px] flex-none text-xs text-soleur-text-muted">
                 {/*
@@ -432,7 +502,11 @@ function WorkflowBreakdown({
 
       {/*
         Copy §14, load-bearing (CFO F7). Renders whenever the breakdown renders
-        — not behind a tooltip, not conditional on bucket count. The lock is
+        — not behind a tooltip, and unconditional for every state that shows
+        per-bucket figures. (It sits below the `buckets.length < 2` guard, so
+        it does not render for the suppressed states — which show no per-bucket
+        figures to misattribute. The earlier wording, "not conditional on
+        bucket count", described the intent and not the control flow.) The lock is
         first-writer-wins (`soleur-go-runner.ts` gates on
         `state.currentWorkflow === null`), so a conversation that began in
         Planning and carried on into Doing bills ENTIRELY to Planning. The

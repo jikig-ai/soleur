@@ -351,7 +351,66 @@ describe("ApiUsageSection — per-workflow cost breakdown (#1055)", () => {
       expect(amounts).toEqual(["$0.34", "$0.33", "$0.33"]);
     });
 
-    test("a non-zero amount below display precision renders <$0.0001, NEVER $0.0000", async () => {
+    // REVIEW FIX (two agents converged). The three cases above all use totals
+    // where `Math.round(total * 100)` and `total.toFixed(2)` happen to AGREE,
+    // so they could not see the allocator targeting a different rounding
+    // function from the one that renders the headline. These two straddle an
+    // exact midpoint, where the two disagree.
+    test("straddle: 0.615 — allocator target must follow the RENDERED headline", async () => {
+      const container = await renderSection({
+        mtdTotalUsd: 0.615,
+        mtdCount: 2,
+        byWorkflow: [
+          bucket("review", LABEL.review, 0.41, 1),
+          bucket("plan", LABEL.plan, 0.205, 1),
+        ],
+      });
+      const text = sectionText(container);
+      const amounts = Array.from(
+        container.querySelectorAll<HTMLElement>(
+          '[data-testid="workflow-bucket-total"]',
+        ),
+      ).map((el) => el.textContent ?? "");
+      // toFixed(2) renders $0.61; Math.round(0.615*100) is 62. Targeting the
+      // latter handed out a cent the headline does not show, so the rows
+      // summed to $0.62 four lines above "the numbers will match to the cent".
+      expect(text).toContain("$0.61");
+      const centsSum = amounts.reduce(
+        (a, v) => a + Math.round(Number(v.replace(/[^0-9.]/g, "")) * 100),
+        0,
+      );
+      expect(centsSum).toBe(61);
+    });
+
+    test("sub-cent total: rows sum to the 4dp headline, not to whole cents", async () => {
+      const container = await renderSection({
+        mtdTotalUsd: 0.009,
+        mtdCount: 3,
+        byWorkflow: [
+          bucket("review", LABEL.review, 0.004, 1),
+          bucket("plan", LABEL.plan, 0.004, 1),
+          bucket("work", LABEL.work, 0.001, 1),
+        ],
+      });
+      const text = sectionText(container);
+      const amounts = Array.from(
+        container.querySelectorAll<HTMLElement>(
+          '[data-testid="workflow-bucket-total"]',
+        ),
+      ).map((el) => el.textContent ?? "");
+      // formatUsd renders a sub-cent total at 4dp ($0.0090), but the allocator
+      // worked in whole CENTS: one bucket took a full cent ($0.01) while the
+      // rest printed raw 4dp values, so the rows displayed $0.0150 — 67% over
+      // the headline — under "Nothing is left out".
+      expect(text).toContain("$0.0090");
+      const unitsSum = amounts.reduce(
+        (a, v) => a + Math.round(Number(v.replace(/[^0-9.]/g, "")) * 1e4),
+        0,
+      );
+      expect(unitsSum).toBe(90);
+    });
+
+    test("a non-zero amount below display precision renders a floor marker for THAT grain, NEVER $0.0000", async () => {
       const container = await renderSection({
         mtdTotalUsd: 8.12,
         mtdCount: 15,
@@ -362,10 +421,32 @@ describe("ApiUsageSection — per-workflow cost breakdown (#1055)", () => {
       });
 
       const text = sectionText(container);
-      expect(text).toContain("<$0.0001");
+      // The headline is $8.12 — cents grain — so the marker is "<$0.01".
+      // ("<$0.0001" is also true of this particular bucket, but the marker
+      // states what is below the precision ON SCREEN, and pinning the 4dp
+      // literal here is what let the cents-grain case render a false one for a
+      // $0.0004 bucket. See the sibling ABOVE-4dp test.)
+      expect(text).toContain("<$0.01");
       // Rendering real money as zero is the defect this rule exists to stop.
       expect(text).not.toContain("$0.0000");
       expect(text).not.toContain("$0.00 ");
+    });
+
+    test("the floor marker follows the grain: sub-cent total uses the 4dp marker", async () => {
+      const container = await renderSection({
+        mtdTotalUsd: 0.005,
+        mtdCount: 3,
+        byWorkflow: [
+          bucket("work", LABEL.work, 0.005, 2),
+          bucket("unrouted", LABEL.unrouted, 0.00003, 1),
+        ],
+      });
+
+      const text = sectionText(container);
+      // Headline renders 4dp here ($0.0050), so the floor is one 1e-4 unit.
+      expect(text).toContain("<$0.0001");
+      expect(text).not.toContain("<$0.01");
+      expect(text).not.toContain("$0.0000");
     });
 
     test("a sub-cent bucket ABOVE 4dp precision renders its real figure, not the floor marker", async () => {
@@ -379,8 +460,19 @@ describe("ApiUsageSection — per-workflow cost breakdown (#1055)", () => {
       });
 
       const text = sectionText(container);
-      expect(text).toContain("$0.0004");
-      expect(text).not.toContain("<$0.0001");
+      // UPDATED AT REVIEW. This previously expected the literal "$0.0004".
+      // That expectation encoded the defect: the headline renders $8.12, so
+      // the rows must sum to 812 cents, and a row printing $0.0004 next to
+      // $8.12 sums to $8.1204 — the parts out-running the whole, directly
+      // under "Nothing is left out".
+      //
+      // The bucket still holds real money and must never read $0.00, so it
+      // renders the floor marker for the grain currently on screen. At cents
+      // grain that is "<$0.01" — "<$0.0001" would be a false statement about a
+      // bucket holding $0.0004.
+      expect(text).toContain("<$0.01");
+      expect(text).not.toContain("$0.0000");
+      expect(text).toContain("$8.12 in April");
     });
   });
 
@@ -453,9 +545,25 @@ describe("ApiUsageSection — per-workflow cost breakdown (#1055)", () => {
     });
 
     test("adds the sentence enumerating what the Console CAN confirm", async () => {
-      expect(await footnoteText()).toContain(
-        "The Console has no workflow dimension, so it can confirm the total and each conversation, not the split.",
+      // CORRECTED AT REVIEW. The original sentence claimed the Console "can
+      // confirm the total". It cannot: this page's month groups a conversation
+      // by when it STARTED (`created_at >= since` in both RPCs), while the
+      // Console groups spend by the day it was INCURRED. A conversation opened
+      // 2026-08-28 that burns $50 on 2026-09-05 is absent from this page's
+      // September total and present in the Console's — ordinary use on a
+      // product where one conversation spans days. The old copy told the user
+      // to read that difference as Soleur being wrong.
+      //
+      // Per-conversation cross-check still holds, so the promise is narrowed
+      // rather than dropped, and the window semantics are stated outright.
+      const text = await footnoteText();
+      expect(text).toContain(
+        "it can confirm each conversation, not the split",
       );
+      expect(text).toContain("groups a conversation into the month it");
+      expect(text).toContain("STARTED");
+      // The superseded over-claim must not survive anywhere in the footnote.
+      expect(text).not.toContain("can confirm the total and each conversation");
     });
 
     test("the hedge is corrected to `under-report`", async () => {

@@ -39,6 +39,11 @@ const sql = readFileSync(MIGRATION_PATH, "utf8");
  * yield a one-char "body" against which every `.not.toMatch()` passes. A body
  * that cannot be located is a test defect and must throw, not degrade.
  */
+/** Strip `--` line comments. Every assertion over SQL must run on this. */
+function stripSqlComments(sqlText: string): string {
+  return sqlText.replace(/--[^\n]*/g, "");
+}
+
 function functionBody(source: string, fnName: string): string {
   const startRe = new RegExp(
     `CREATE\\s+OR\\s+REPLACE\\s+FUNCTION\\s+public\\.${fnName}\\b`,
@@ -65,8 +70,18 @@ describe("migration 136_workflow_cost_rollup", () => {
   // --- 1.2.1 -- the CASE arms -----------------------------------------------
 
   it("maps exactly {legacy, unrouted} in the CASE THEN arms", () => {
-    const body = functionBody(sql, NEW_FN);
+    // Comment-stripped. Collecting from the RAW body was a live false-match:
+    // a mutant changing `THEN 'legacy'` to `THEN NULL` while adding a comment
+    // line that merely QUOTES the original arm passed 20/20. That mutant is
+    // fatal -- legacy rows would emit bucket = NULL, colliding with the ROLLUP
+    // super-aggregate, and the loader's `typeof r.bucket === "string"` filter
+    // then silently drops that money under a "Nothing is left out" promise.
+    // The file header claimed this guard; only two of the three tests had it.
+    const body = stripSqlComments(functionBody(sql, NEW_FN));
     const thens = [...body.matchAll(/\bTHEN\s+'([^']*)'/gi)].map((m) => m[1]);
+    // The CASE must have no NULL-yielding arm at all: `bucket IS NULL` is the
+    // ROLLUP super-aggregate's own signal and must stay unambiguous.
+    expect(body).not.toMatch(/\bTHEN\s+NULL\b/i);
     // Exactly two mapped literals, no more: a third arm would be a bucket the
     // loader's copy map does not know about.
     expect(thens).toEqual(["legacy", "unrouted"]);
@@ -134,6 +149,32 @@ describe("migration 136_workflow_cost_rollup", () => {
     expect(body).not.toMatch(/date_trunc\s*\(\s*'month'/i);
   });
 
+  // --- the WHERE predicate: tenant scope and window ------------------------
+  //
+  // Neither of these was asserted, and both mutants passed 20/20:
+  //   `WHERE c.user_id = uid` -> `WHERE TRUE`   (cross-tenant read from a
+  //      SECURITY DEFINER function -- the grant tests cannot see it, because
+  //      the grant chain stays intact and it is the BODY that leaks)
+  //   delete `AND c.created_at >= since`        (MTD silently becomes all-time)
+  // The window test below only asserted `date_trunc` was ABSENT, which a
+  // deletion satisfies trivially.
+
+  it("scopes rows to the requesting user (a cross-tenant read is a body defect, not a grant defect)", () => {
+    const body = stripSqlComments(functionBody(sql, NEW_FN));
+    expect(body).toMatch(/WHERE\s+c\.user_id\s*=\s*uid\b/i);
+    expect(body).not.toMatch(/WHERE\s+TRUE\b/i);
+  });
+
+  it("bounds rows by the caller-supplied window", () => {
+    const body = stripSqlComments(functionBody(sql, NEW_FN));
+    expect(body).toMatch(/AND\s+c\.created_at\s*>=\s*since\b/i);
+  });
+
+  it("counts only costed conversations", () => {
+    const body = stripSqlComments(functionBody(sql, NEW_FN));
+    expect(body).toMatch(/AND\s+c\.total_cost_usd\s*>\s*0\b/i);
+  });
+
   // --- 1.2.5 -- the sentinel pin (Guard 1 / AC15) ---------------------------
 
   it("pins the '__unrouted__' literal to SENTINEL_UNROUTED in conversation-routing.ts", () => {
@@ -155,28 +196,57 @@ describe("migration 136_workflow_cost_rollup", () => {
 
   // --- grants ----------------------------------------------------------------
 
-  it("revokes from PUBLIC, authenticated and anon, and grants only service_role", () => {
-    for (const role of ["PUBLIC", "authenticated", "anon"]) {
+  // Loops BOTH functions, not just the new one. Migration 027's own header
+  // states the rule: "on FIRST create Postgres grants EXECUTE to PUBLIC by
+  // default. The REVOKE statements below MUST run on every apply -- treating
+  // them as 'cleanup' after the CREATE is a real security gap." Because 136
+  // re-creates `sum_user_mtd_cost` via CREATE OR REPLACE, it owns that rule
+  // too: on any apply where the function is ABSENT (a `db reset` against a
+  // squashed baseline postdating 027, a fresh project bootstrapped from
+  // `db diff`, or a DROP during incident recovery followed by forward-only
+  // replay) the REPLACE becomes a first CREATE and PUBLIC gets EXECUTE.
+  //
+  // This assertion previously ran over NEW_FN only, which is why the omission
+  // shipped -- and a live `proacl` read could not catch it either, since dev
+  // had 027 already applied, the one state in which it is invisible.
+  it.each([NEW_FN, "sum_user_mtd_cost"])(
+    "revokes %s from PUBLIC, authenticated and anon, and grants only service_role",
+    (fn) => {
+      for (const role of ["PUBLIC", "authenticated", "anon"]) {
+        expect(
+          sql,
+          `${fn} must REVOKE EXECUTE FROM ${role} in this migration`,
+        ).toMatch(
+          new RegExp(
+            `REVOKE\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${fn}\\s*\\([^)]*\\)[^;]*FROM\\s+${role}\\b`,
+            "i",
+          ),
+        );
+      }
       expect(sql).toMatch(
         new RegExp(
-          `REVOKE\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${NEW_FN}[^;]*FROM\\s+${role}\\b`,
+          `GRANT\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${fn}\\s*\\([^)]*\\)[^;]*TO\\s+service_role\\b`,
           "i",
         ),
       );
-    }
-    expect(sql).toMatch(
-      new RegExp(
-        `GRANT\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${NEW_FN}[^;]*TO\\s+service_role\\b`,
-        "i",
-      ),
-    );
-    // No broader grant may follow.
-    expect(sql).not.toMatch(
-      new RegExp(
-        `GRANT\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${NEW_FN}[^;]*TO\\s+(authenticated|anon|PUBLIC)\\b`,
-        "i",
-      ),
-    );
+      // No broader grant may follow.
+      expect(sql).not.toMatch(
+        new RegExp(
+          `GRANT\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${fn}\\s*\\([^)]*\\)[^;]*TO\\s+(authenticated|anon|PUBLIC)\\b`,
+          "i",
+        ),
+      );
+    },
+  );
+
+  it("contains no blanket schema-wide grant", () => {
+    // The per-function negative grant regex anchors on `public.<fn>`, so a
+    // trailing `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO
+    // authenticated;` slipped past it (and past migration-rpc-grants.test.ts,
+    // which has no ALL FUNCTIONS rule either).
+    const code = stripSqlComments(sql);
+    expect(code).not.toMatch(/GRANT[^;]*ON\s+ALL\s+FUNCTIONS\s+IN\s+SCHEMA/i);
+    expect(code).not.toMatch(/GRANT[^;]*ON\s+ALL\s+TABLES\s+IN\s+SCHEMA/i);
   });
 
   it("is SECURITY DEFINER and STABLE", () => {

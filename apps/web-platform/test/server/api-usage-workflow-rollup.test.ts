@@ -376,6 +376,96 @@ describe("loadApiUsageForUser — per-workflow rollup", () => {
   });
 
   // ── T8 ────────────────────────────────────────────────────────────────
+  // --- REVIEW: fixture-shape gaps found by mutation --------------------------
+  //
+  // Each of these mutants passed the whole suite before. They are FIXTURE
+  // gaps, not assertion gaps: the producer can emit these shapes and no
+  // fixture instantiated them.
+
+  test("an unmapped bucket renders its raw key AND mirrors to Sentry", async () => {
+    // Mutant: deleting the entire `workflow-bucket-unmapped` block passed
+    // 115/115. `workflow-copy.test.ts` covers the LABEL fallback but nothing
+    // covered the Sentry mirror that `cq-silent-fallback-must-mirror-to-sentry`
+    // requires. Reachable on a partial deploy: migration 032's CHECK enum can
+    // widen ahead of the bundle (`drain-prs` is the named candidate).
+    routeRpc({
+      [ROLLUP_FN]: () =>
+        mockRpcResult([
+          totalRow("3.000000", 3),
+          bucketRow("plan", "2.000000", 2),
+          bucketRow("drain-prs", "1.000000", 1),
+        ]),
+    });
+
+    const result = await loadApiUsageForUser(VALID_UUID);
+
+    // The row is KEPT — dropping it would lose money under "Nothing is left out".
+    expect(result!.byWorkflow!.map((r) => r.bucket)).toContain("drain-prs");
+    expect(mockReport).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({
+        op: "workflow-bucket-unmapped",
+        extra: expect.objectContaining({ bucket: "drain-prs" }),
+      }),
+    );
+  });
+
+  test("a bucket with zero conversations yields avgUsd 0, never NaN", async () => {
+    // Mutant: `count > 0 ? totalUsd / count : 0` -> `totalUsd / count` passed
+    // 39/39. No fixture had n = 0, so NaN reached the UI untested.
+    routeRpc({
+      [ROLLUP_FN]: () =>
+        mockRpcResult([
+          totalRow("1.000000", 1),
+          bucketRow("plan", "1.000000", 1),
+          bucketRow("work", "0.000000", 0),
+        ]),
+    });
+
+    const result = await loadApiUsageForUser(VALID_UUID);
+    const work = result!.byWorkflow!.find((r) => r.bucket === "work")!;
+    expect(work.avgUsd).toBe(0);
+    expect(Number.isNaN(work.avgUsd)).toBe(false);
+  });
+
+  test("the headline comes from is_total even when the buckets do NOT sum to it", async () => {
+    // Mutants M3b/M4/M5: re-deriving the headline in JS (summing buckets), or
+    // finding the total row via `bucket === null` instead of `is_total`, or
+    // falling back to `workflowData[0]`, ALL passed. Every fixture satisfied
+    // Sigma(buckets) == is_total for MONEY, so nothing separated the two
+    // signals. Here they deliberately disagree: a JS re-derivation yields 2.00
+    // and the is_total row says 5.00.
+    routeRpc({
+      [ROLLUP_FN]: () =>
+        mockRpcResult([
+          bucketRow("plan", "1.000000", 1),
+          totalRow("5.000000", 9),
+          bucketRow("work", "1.000000", 1),
+        ]),
+    });
+
+    const result = await loadApiUsageForUser(VALID_UUID);
+    expect(result!.mtdTotalUsd).toBe(5);
+    expect(result!.mtdCount).toBe(9);
+  });
+
+  test("an is_total row carrying a NON-null bucket is still the headline", async () => {
+    // Pins that the discriminator is `is_total`, not `bucket === null`.
+    routeRpc({
+      [ROLLUP_FN]: () =>
+        mockRpcResult([
+          { bucket: "legacy", total: "7.000000", n: 4, is_total: true },
+          bucketRow("plan", "1.000000", 1),
+        ]),
+    });
+
+    const result = await loadApiUsageForUser(VALID_UUID);
+    expect(result!.mtdTotalUsd).toBe(7);
+    expect(result!.mtdCount).toBe(4);
+    // ...and it is not ALSO rendered as a bucket.
+    expect(result!.byWorkflow!.map((r) => r.bucket)).toEqual(["plan"]);
+  });
+
   test("T8: conversations SELECT errors — whole-section null preserved", async () => {
     useList([], { message: "boom" });
     routeRpc({

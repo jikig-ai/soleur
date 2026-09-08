@@ -202,7 +202,23 @@ appended:
 
 **Now (sentences 1 + 2 unchanged except `row` → `conversation`; sentence 3 new):**
 
-`Figures come straight from the Anthropic SDK response. Cross-check any conversation in your Anthropic Console under Usage — the numbers will match to the cent. The Console has no workflow dimension, so it can confirm the total and each conversation, not the split.` (264)
+`Figures come straight from the Anthropic SDK response. Cross-check any conversation in your Anthropic Console under Usage — the numbers will match to the cent. The Console has no workflow dimension, so it can confirm each conversation, not the split. Its monthly total will also differ: this page groups a conversation into the month it STARTED, while the Console groups spend by the day it was incurred.` (390)
+
+> **Corrected at review, 2026-09-08 (#1055).** The sentence above previously read
+> "...so it can confirm **the total and** each conversation, not the split." That was
+> false in a way that pointed the user at the wrong culprit. Both RPCs filter
+> `created_at >= since`, so this page's month contains conversations that *started*
+> in it; the Anthropic Console groups spend by the day it was *incurred*. A
+> conversation opened 2026-08-28 that burns $50 on 2026-09-05 is absent from this
+> page's September total and present in the Console's — ordinary use on a product
+> where one `one-shot` conversation spans days. The old copy invited the user to
+> read that difference as Soleur under-reporting their spend.
+>
+> The per-conversation cross-check is unaffected, so the promise is narrowed rather
+> than dropped, and the window semantics are now stated outright instead of being
+> a silent premise. The window itself is NOT changed here: it is pre-existing
+> (migration 027) and changing it would move a number users already see — tracked
+> separately as #7929.
 
 Diff is two words changed and one sentence added:
 
