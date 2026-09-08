@@ -68,6 +68,15 @@ if [[ "$PASS" -ne 1 || "$FAIL" -ne 1 || "$TOTAL" -ne 2 ]]; then
   exit 1
 fi
 PASS=0; FAIL=0; TOTAL=0
+# COND_ASSERTIONS CONTRACT. Four blocks in this suite are gated on a tool being installed
+# (`dash`, `visudo`, `terraform`, and `cloud-init` nested inside terraform), so they contribute
+# assertions on some hosts and none on others. Every such block is bracketed by
+#   _COND_BEFORE=$TOTAL   ...   COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
+# and the end-of-run floor subtracts the accumulator, so it measures only what EVERY environment
+# runs. Add a new tool-gated block => bracket it the same way, or the floor becomes host-dependent
+# again. Do NOT replace this with a per-tool constant: that is the same defect with more places
+# to forget.
+COND_ASSERTIONS=0
 
 echo "=== cloud-init Inngest bootstrap (#4118 Tier 1) tests ==="
 echo ""
@@ -151,11 +160,13 @@ awk '
 
 assert "extracted snippet is non-empty" "[[ -s '$SNIPPET_FILE' ]]"
 assert "snippet passes bash -n"         "bash -n '$SNIPPET_FILE'"
+_COND_BEFORE=$TOTAL
 if command -v dash >/dev/null 2>&1; then
   assert "snippet passes dash -n (POSIX portability)" "dash -n '$SNIPPET_FILE'"
 else
   echo "  SKIP: dash not installed (POSIX portability check skipped — CI will exercise it)"
 fi
+COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 
 # --- AC3: YAML round-trip (raw source, templatefile directives stripped) ---
 # #6178: cloud-init.yml now carries col-0 `%{ if web_colocate_inngest ~}` / `%{ endif ~}`
@@ -199,11 +210,13 @@ assert "deploy-inngest-bootstrap.sudoers exists"         "[[ -s '$SUDOERS_SRC' ]
 assert "cloud-init inline block is non-empty"            "[[ -n \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "sudoers source and cloud-init inline match"      "[[ \"\$SUDOERS_CONTENT_ONLY\" == \"\$CLOUD_INIT_SUDOERS\" ]]"
 assert "ci-deploy.sh invokes the sudoers-pinned path"    "grep -qE '/usr/bin/bash /tmp/inngest-extract/inngest-bootstrap.sh' '$SCRIPT_DIR/ci-deploy.sh'"
+_COND_BEFORE=$TOTAL
 if command -v visudo >/dev/null 2>&1; then
   assert "sudoers source parses via visudo -cf"          "visudo -cf '$SUDOERS_SRC' >/dev/null"
 else
   echo "  SKIP: visudo not installed locally — CI will exercise the validation step"
 fi
+COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 
 # --- #6178 no-SSH web-host quiesce/enable grants (INNGEST_QUIESCE + INNGEST_ENABLE) ---
 # The dedicated-host cutover 2.2 gap: operators have no SSH, so `op=quiesce-web`
@@ -353,7 +366,11 @@ assert "web_colocate_inngest declared type = bool (load-bearing string→bool co
 # when terraform is absent — CI's deploy-script-tests job supplies it via setup-terraform.
 echo ""
 echo "--- AC7: web_colocate_inngest gate — terraform render authority ---"
+# ENVIRONMENT-CONDITIONAL BLOCK (see the COND_ASSERTIONS contract near the top of this file).
+_COND_BEFORE=$TOTAL
+TF_AVAILABLE=0
 if command -v terraform >/dev/null 2>&1; then
+  TF_AVAILABLE=1
   RENDER_SCRATCH=$(mktemp -d)
   # Render the web cloud-init into $2. $1 = web_colocate_inngest; $3 = web_tunnel_connector
   # (defaults true = web-1, the connector host, so AC7's call sites stay two-arg).
@@ -584,6 +601,8 @@ PY
 else
   echo "  SKIP: terraform not installed (render authority skipped — CI deploy-script-tests provides it via setup-terraform)"
 fi
+
+COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 
 echo ""
 echo "--- The cosign correction comment must itself be true (#6617 / plan CF-2) ---"
@@ -1270,12 +1289,22 @@ assert "GuardD anti-vacuity: the section ran its full inventory (expected 11, ra
 # a whole section deletes its own floor: a vacuity audit removed the entire Guard A block and this
 # suite reported `149/149 passed`, exit 0 -- and removed Guard A AND Guard D for `137/137 passed`.
 # The zot-pull mutation battery does not backstop it either (it still reported 9/9 killed with
-# Guard A gone). Reported with printf + exit (ADR-193), never through `assert`. Raise in lockstep;
-# this is the exact count from a green run, with no slack -- slack is attack budget.
-BOOTSTRAP_MIN_ASSERTIONS=163
-if [[ "$TOTAL" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
-  printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
-    "$TOTAL" "$BOOTSTRAP_MIN_ASSERTIONS" >&2
+# Guard A gone). Reported with printf + exit (ADR-193), never through `assert`.
+#
+# THE FLOOR COUNTS UNCONDITIONAL ASSERTIONS ONLY. It was a flat `TOTAL >= 163`, which is the
+# environment-varying-count defect this same PR fixed in Guard B row6 and then reintroduced here:
+# four blocks in this file are gated on a tool being installed (`dash`, `visudo`, `terraform`,
+# and `cloud-init` nested inside terraform), so TOTAL is a property of the HOST as much as of the
+# suite. Measured: 164 with the full toolchain, 126 with terraform hidden and nothing else
+# changed, 124 in /ship Check 10's bwrap sandbox (no terraform, no visudo) -- all three green
+# suites, two of them failing a flat floor for a reason that has nothing to do with the code.
+# Subtracting the measured conditional deltas makes the floor invariant WITHOUT hardcoding a
+# per-tool number for each arm, which would only relocate the same defect.
+UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
+BOOTSTRAP_MIN_ASSERTIONS=123
+if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
+  printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
+    "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2
   exit 1
 fi
 
@@ -1286,3 +1315,10 @@ if (( FAIL > 0 )); then
   exit 1
 fi
 echo "OK"
+# Machine-readable success sentinel, printed ONLY on a fully green run and NOWHERE else in this
+# file. `/ship` preflight Check 10 substring-matches the plan's `expected_output` against this
+# suite's stdout, and every candidate token already present fails one of two ways: `163/163
+# passed` is host-dependent (163 with the full toolchain, 125 without terraform), and a bare `OK`
+# is not success-specific -- measured, it appears twice in a FAILING run ("composite form OK" in
+# a section header, and inside GHCR_READ_TOKEN). Keep this line unique and keep it last.
+echo "BOOTSTRAP_SUITE_OK unconditional=$UNCONDITIONAL_ASSERTIONS floor=$BOOTSTRAP_MIN_ASSERTIONS total=$TOTAL"

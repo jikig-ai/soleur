@@ -259,6 +259,9 @@ every body for each path in `## Files to Edit`. Zero matches.
 
 ## User-Brand Impact
 
+- **Brand-survival threshold:** `single-user incident` — a single user's in-flight job
+  payloads sit in the Redis AOF on the host this change delivers to.
+
 **If this lands broken, the user experiences — nothing.** That is measured, not assumed. Their
 scheduled work keeps running: app dispatch goes to the co-located scheduler
 (`INNGEST_BASE_URL=http://host.docker.internal:8288`), crons fired at 19:17:01, 19:00:13 and
@@ -708,10 +711,14 @@ logs:
 
 discoverability_test:
   command: bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
-  expected_output: >
-    PASS lines for Guard A naming every carrier file compared against the pinned tag, for Guard B
-    across all four pin sites, and for Guard D including its named exemption; the assertion-count
-    floor satisfied at its new value; and a final summary reporting 0 failed.
+  expected_output: "BOOTSTRAP_SUITE_OK"
+  # A sentinel the suite prints ONLY on a fully green run, and nowhere else in the file.
+  # Not a tautology: reaching it requires every assertion to pass AND the unconditional-assertion
+  # floor to hold, so a deleted guard section reds it (mutation-proven — removing Guard A gives
+  # `111 unconditional ... expected >= 123`, exit 1, sentinel absent).
+  # The two obvious alternatives were measured and rejected: `163/163 passed` is HOST-dependent
+  # (163 with the full toolchain, 125 with terraform absent), and a bare `OK` appears twice in a
+  # FAILING run, so substring-matching it would pass on failure.
 ```
 
 The wiring property is fully hermetic, so no `credentials_required` declaration is made. The *live*
