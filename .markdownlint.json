@@ -1,7 +1,25 @@
 {
+  // Rules disabled for this corpus. markdownlint reads this file as JSONC, so the
+  // reasoning lives next to the decision rather than in a commit nobody re-reads.
   "MD013": false,
   "MD024": false,
-  "MD025": { "front_matter_title": "" },
+
+  // MD025 (multiple top-level headings) disabled by #7927. 10 errors across 9 files.
+  // The argument is COHERENCE, not volume: MD041 (first line must be a top-level
+  // heading) is already off, so the corpus does not promise that a document opens with
+  // one H1 -- and enforcing "at most one H1" over documents that need not begin with an
+  // H1 at all polices a structure nothing else asserts. The two rules are a pair; keeping
+  // one without the other is arbitrary. Post-mortems and audits legitimately carry
+  // several top-level sections.
+  //
+  // MD001 (heading-increment) was proposed for removal alongside it and is DELIBERATELY
+  // KEPT. The plan bundled the two on a measured "116 errors" figure; re-measured at the
+  // gate, MD025 and MD001 together are 15 (10 + 5), so volume never justified either
+  // removal. MD001 has no MD041-style coherence argument -- a heading that jumps h2 to h4
+  // is a real document-structure defect -- and 5 sites is a cheap fix, not a rule to
+  // switch off. Fixed by hand instead.
+  "MD025": false,
+
   "MD026": false,
   "MD029": false,
   "MD033": false,

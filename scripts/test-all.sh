@@ -1159,6 +1159,14 @@ if want_scripts; then
   run_suite "scripts/lint-agents-enforcement-tags-live" python3 scripts/lint-agents-enforcement-tags.py AGENTS.md AGENTS.rules.md
   run_suite "scripts/lint-agents-enforcement-tags-unit" bash scripts/lint-agents-enforcement-tags.test.sh
   run_suite "scripts/lint-infra-no-human-steps" bash scripts/lint-infra-no-human-steps.test.sh
+  # markdownlint's guard (#7927). Registered EXPLICITLY for the reason spelled out
+  # just below: `scripts/*.test.sh` is not in SUITE_GLOBS, so nothing discovers it.
+  #
+  # UNIT ONLY, exactly ONE line. The repo-wide sweep runs in its own CI job, not here:
+  # a `-live` line would put a 1,345-file lint inside every shard of the required
+  # `test` context, and the orphan linter treats a suite carrying BOTH a run_suite
+  # line and a workflow `run:` step as double coverage.
+  run_suite "scripts/markdown-lint-unit" bash scripts/markdown-lint.test.sh
   # Supabase Management API deprecation + host-pin assembly guard, and the
   # retained-log helper. Registered EXPLICITLY because neither directory is in
   # SUITE_GLOBS: `--print-suite-globs` lists `scripts/lib/*.test.sh` but not

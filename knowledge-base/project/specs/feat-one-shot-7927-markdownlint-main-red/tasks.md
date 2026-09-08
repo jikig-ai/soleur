@@ -41,19 +41,19 @@ has nothing to run.
 
 ## Phase 3 — The guard's suite
 
-- [ ] 3.1 Create `scripts/markdown-lint.test.sh` covering M1-M7 and H1-H3 from the plan's
+- [x] 3.1 Create `scripts/markdown-lint.test.sh` covering M1-M7 and H1-H3 from the plan's
       Guard Contract, emitting one result line per row.
-- [ ] 3.2 Implement the call-site check as a NEGATIVE grep for a markdownlint binary token
+- [x] 3.2 Implement the call-site check as a NEGATIVE grep for a markdownlint binary token
       across `lefthook.yml`, `.github/**` and `scripts/**`, excluding the script itself. Not a
       count.
-- [ ] 3.3 Register with exactly one explicit `run_suite` line in `scripts/test-all.sh`. Do not
+- [x] 3.3 Register with exactly one explicit `run_suite` line in `scripts/test-all.sh`. Do not
       add a workflow step as well.
-- [ ] 3.4 Confirm `bash scripts/lint-orphan-test-suites.sh` reports zero orphans and no
+- [x] 3.4 Confirm `bash scripts/lint-orphan-test-suites.sh` reports zero orphans and no
       double coverage.
 
 ## Phase 4 — Content-safe sweep
 
-- [ ] 4.1 Disable MD025 and MD001 in `.markdownlint.json`, with a comment naming the count and
+- [x] 4.1 Disable MD025 and MD001 in `.markdownlint.json`, with a comment naming the count and
       the MD041 coherence argument. No other rule change.
 - [x] 4.2 (pulled forward into Phase 2 — the script's floor and roots assertion are
       measured against this scope, so the two must land together) Add `knowledge-base/project/` to `.markdownlintignore`, with a comment naming the
