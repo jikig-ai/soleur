@@ -98,7 +98,7 @@ second function was the newly-risky one. Fixed by making the grant assertion
   asserted one mechanism covered both. Driven, it did not — 53 tests passed with the
   body deleted. Closed with `expect.assertions(n)`.
 - `cq-pg-security-definer-search-path-pin-pg-temp` — the rule the repin satisfies.
-- `knowledge-base/project/specs/feat-one-shot-1055-per-workflow-cost-observability/ac-evidence.md`
+- `knowledge-base/project/specs/archive/20260908-114856-feat-one-shot-1055-per-workflow-cost-observability/ac-evidence.md`
   — the AC record, including the addendum explaining this gap.
 
 ## Session Errors

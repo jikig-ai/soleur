@@ -12,8 +12,9 @@
 ## Context
 
 `conversations` already carries both halves of a per-workflow cost breakdown: `total_cost_usd`
-(migration 027, incremented per turn) and `active_workflow` (migration 032, written once by the
-routing layer). They sit **on the same row**. Nothing consumed them together.
+(column added by `017_conversation_cost_tracking.sql`, incremented per turn by
+`042_increment_conversation_cost_v2.sql`; migration 027 is only the per-user SUM RPC this ADR
+repins) and `active_workflow` (migration 032, written once by the routing layer). They sit **on the same row**. Nothing consumed them together.
 
 Issue #1055 asked for "per-workflow, per-agent, per-user cost observability" and was filed
 against a codebase that has since shipped most of the capture layer. Of its three motivating
@@ -78,8 +79,22 @@ retained for symmetry with the adjacent `sum_user_mtd_cost` it sits beside and r
 
 This is stated explicitly so a future reader does not infer the definer bit is load-bearing
 and build a policy on it. The load-bearing part is the grant: `REVOKE` from `PUBLIC`,
-`authenticated` and `anon`, `GRANT` to `service_role` only — verified live
-(`{postgres=X/postgres,service_role=X/postgres}`), not merely asserted in migration text.
+`authenticated` and `anon`, `GRANT` to `service_role` only — verified live on dev after
+migration 136 applied, for **both** functions (`{postgres=X/postgres,service_role=X/postgres}`
+with `search_path=public, pg_temp`), not merely asserted in migration text.
+
+**"Redundant" describes the BENEFIT, not the RISK, and the distinction is the whole reason
+the grant matters.** Because the function is `SECURITY DEFINER`, a future `GRANT EXECUTE …
+TO authenticated` converts a parameterised `uid` into a full cross-tenant read — any
+authenticated caller could pass any user id. Under `SECURITY INVOKER` the same mistake would
+be contained by RLS. So the grant is not defence-in-depth here; it is the **only**
+containment, which is why migration 136 ships the REVOKE trio for both functions and why
+`test/server/api-usage.tenant-isolation.test.ts` carries a committed regression test that
+reddens when the grant widens (mutation-verified against live dev: granting to
+`authenticated` fails the suite, revoking restores it).
+
+Do not cite the "strictly redundant" sentence when relaxing the grant. It says the definer
+bit buys nothing extra; it does not say the grant is optional.
 
 The same migration repins `sum_user_mtd_cost` to `search_path = public, pg_temp`, which
 migration 027 predates. That repin was **unenforceable on its own**: `migration-rpc-grants`
@@ -93,8 +108,18 @@ enforced, is absent" class, one layer down.
   and leader grain is a constant on the dominant path. #1055 stays open for it; this PR uses
   `Ref`, not `Closes`.
 - The breakdown is a read-only partition of an existing number. It cannot disagree with the
-  headline, because both come from one statement.
-- Adding a workflow to the migration-032 CHECK enum (e.g. `drain-prs`) now has a second
-  consumer: the bucket label map's `satisfies` rail will fail to compile until the new key is
-  given copy. That is the intended direction — a new bucket should not reach a user as a raw
-  slug.
+  headline, because both come from one statement. Note the narrower scope of that guarantee:
+  the conversation LIST is fetched by a separate query in the same `Promise.allSettled` batch,
+  so list-vs-headline consistency is unchanged by this work and was never snapshot-guaranteed.
+  The "match to the cent" copy governs the breakdown against the headline, which is exactly
+  the pair this design makes atomic.
+- Adding a workflow now has a second consumer — but the compile break comes from widening
+  **`WorkflowName`** (`server/conversation-routing.ts`), not from the CHECK enum. Those are
+  three hand-maintained lists (the SQL CHECK, the TS union, and the file-parse test that pins
+  the SQL side), and widening the SQL alone compiles clean and lands the raw slug in the UI
+  via `workflowLabel`'s fallback. The `satisfies Record<WorkflowBucket, WorkflowCopy>` rail
+  fires only once `WorkflowName` moves. That is still the intended direction — a new bucket
+  should not reach a user as a raw slug — but the rail is one hop further away than a reader
+  would assume, and the fallback path is mirrored to Sentry (`op:
+  "workflow-bucket-unmapped"`) precisely because the compile break is not guaranteed to
+  happen first.

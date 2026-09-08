@@ -1,4 +1,5 @@
 ---
+title: "Runbook: Fleet-wide per-workflow spend"
 category: observability
 tags: [supabase, cost, byok, workflow, psql, fleet-wide]
 date: 2026-09-07

@@ -17,9 +17,19 @@ So the fixture is **synthesized inside the verification transaction and rolled b
 calls share one snapshot, and `cq-ac-must-not-depend-on-concurrent-sessions`: nothing
 persists, and no concurrent writer can land between the two reads.
 
-Fixture: 60 in-month conversations cycling all 7 buckets (`NULL`, `__unrouted__`, and the five
-named workflows) — above `MAX_USAGE_ROWS` (50) — **plus** 5 prior-month conversations at
+Fixture: 60 in-month conversations cycling 7 buckets (`NULL`, `__unrouted__`, and five of the
+six named workflows) — above `MAX_USAGE_ROWS` (50) — **plus** 5 prior-month conversations at
 $99.00 each, which exist solely to prove the window predicate excludes them.
+
+> **Corrected 2026-09-08 (#7916 review):** this said "all 7 buckets", which over-claims. There
+> are **eight** possible buckets (NULL + seven enum values); the fixture exercises seven and
+> omits `drain-labeled-backlog`, which is why it is absent from the AC4 table below. The AC
+> being evidenced is that ROLLUP emits one row per present bucket plus a super-aggregate — a
+> property of the GROUP BY, indifferent to WHICH buckets are present — so seven distinct
+> buckets discharge it and the eighth would add no discriminating power. Recorded because
+> "all" invites a reader to treat the table as an enum-coverage check, which it is not; the
+> enum's completeness is pinned separately by the migration-shape test's synthetic-key
+> collision assertion against migration 032.
 
 ## AC5 — live grants
 

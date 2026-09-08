@@ -94,3 +94,12 @@ CHECK (active_workflow IS NULL OR active_workflow = ANY (ARRAY[
 
 Seven permitted non-null values plus NULL. The migration's `CASE` maps NULL → `legacy` and
 `__unrouted__` → `unrouted`, passing the remaining five through unmodified.
+
+> **Corrected 2026-09-08 (#7916 review):** the remaining count is **six**, not five —
+> `one-shot`, `brainstorm`, `plan`, `work`, `review`, `drain-labeled-backlog`. Seven non-null
+> enum values minus the one sentinel leaves six, and the enum quoted directly above this
+> paragraph is the arithmetic. The original sentence is left in place because it is a dated
+> reading; only the count was wrong, and the mapping it describes is right. Nothing downstream
+> consumed the number — the migration's `CASE` has no per-workflow arm, it passes through
+> whatever is not NULL and not the sentinel — so this is a transcription error in the record,
+> not a defect in the shipped function.

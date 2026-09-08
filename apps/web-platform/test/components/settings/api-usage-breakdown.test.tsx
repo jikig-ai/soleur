@@ -480,7 +480,14 @@ describe("ApiUsageSection — per-workflow cost breakdown (#1055)", () => {
     const NOTE =
       "Every conversation counts under the first workflow it started. One that began in Planning the work and carried on into Doing the work counts entirely under Planning the work.";
 
-    test("renders with the breakdown — not behind a tooltip, not conditional on bucket count", async () => {
+    // NOT "not conditional on bucket count" — the earlier name. The disclosure
+    // sits below the `buckets.length < 2` guard, so it is conditional on
+    // exactly that. What it is unconditional ON is the breakdown: wherever
+    // per-bucket figures render, the sentence explaining how they are
+    // attributed renders too, in prose rather than behind a tooltip. The
+    // suppressed states show no figures to misattribute. Naming the guard the
+    // test does not cross was the drift; the component concedes it too.
+    test("renders wherever the breakdown does — as prose, not behind a tooltip", async () => {
       for (const byWorkflow of [
         [bucket("work", LABEL.work, 8.12, 14), bucket("plan", LABEL.plan, 1.55, 4)],
         [

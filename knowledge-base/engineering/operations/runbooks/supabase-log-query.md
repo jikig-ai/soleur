@@ -1,4 +1,5 @@
 ---
+title: "Runbook: Supabase platform log queries"
 category: observability
 tags: [supabase, logs, clickhouse, management-api, coverage-verdict, dsar, gdpr]
 date: 2026-08-26

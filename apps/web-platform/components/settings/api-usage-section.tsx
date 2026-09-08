@@ -7,6 +7,7 @@ import {
   type ApiUsageRow,
   type WorkflowCostRow,
 } from "@/server/api-usage";
+import { WORKFLOW_COPY } from "@/lib/messages/workflow-copy";
 import { ApiUsageRetryButton } from "./api-usage-retry-button";
 import { ApiUsageInfoTooltip } from "./api-usage-info-tooltip";
 
@@ -263,8 +264,32 @@ function formatBucketUsd(n: number): string {
  * fixed grain cannot match it. Allocating in whole cents against a headline
  * rendered at 4dp is what let a $0.0090 total display rows summing to $0.0150.
  */
-function displayUnitsPerDollar(totalUsd: number): number {
-  return totalUsd > 0 && totalUsd < 0.01 ? 1e4 : 100;
+/**
+ * The display grain, as one record rather than three coupled expressions.
+ *
+ * This was previously `unitsPerDollar` alone, with the floor marker
+ * reverse-inferred at the render site as `unitsPerDollar === 100 ? "<$0.01"
+ * : "<$0.0001"`. That inference is only correct while exactly two grains
+ * exist: adding a third would silently fall through to the 4dp marker and
+ * render a false statement about a bucket. Returning the marker WITH the
+ * grain makes that unrepresentable.
+ *
+ * `CENTS_CEILING` is the same threshold `formatUsd` switches on
+ * (`server/api-usage.ts`), which is why the two must move together — the
+ * allocator targets what the headline RENDERS, so a grain the formatter does
+ * not share would reintroduce the parts-vs-whole mismatch this replaced.
+ */
+const CENTS_CEILING = 0.01;
+
+interface DisplayGrain {
+  unitsPerDollar: number;
+  floorMarker: string;
+}
+
+function displayGrain(totalUsd: number): DisplayGrain {
+  return totalUsd > 0 && totalUsd < CENTS_CEILING
+    ? { unitsPerDollar: 1e4, floorMarker: "<$0.0001" }
+    : { unitsPerDollar: 100, floorMarker: "<$0.01" };
 }
 
 /**
@@ -414,7 +439,7 @@ function WorkflowBreakdown({
   if (buckets.length < 2) return null;
 
   const maxTotal = Math.max(...buckets.map((b) => b.totalUsd));
-  const unitsPerDollar = displayUnitsPerDollar(mtdTotalUsd);
+  const { unitsPerDollar, floorMarker } = displayGrain(mtdTotalUsd);
   const units = allocateDisplayUnits(
     buckets.map((b) => b.totalUsd),
     mtdTotalUsd,
@@ -451,7 +476,6 @@ function WorkflowBreakdown({
           // alongside $8.12 sums to $8.1204 — breaking "Nothing is left out"
           // in the other direction. Grain-relative floor keeps the sum exact
           // AND never shows $0.00 for real spend (plan 3.3.3).
-          const floorMarker = unitsPerDollar === 100 ? "<$0.01" : "<$0.0001";
           const displayLabel =
             units[i] === 0 && b.totalUsd > 0
               ? floorMarker
@@ -508,15 +532,22 @@ function WorkflowBreakdown({
         figures to misattribute. The earlier wording, "not conditional on
         bucket count", described the intent and not the control flow.) The lock is
         first-writer-wins (`soleur-go-runner.ts` gates on
-        `state.currentWorkflow === null`), so a conversation that began in
-        Planning and carried on into Doing bills ENTIRELY to Planning. The
+        `state.currentWorkflow === null`), so a conversation that began in one
+        workflow and carried on into another bills ENTIRELY to the first. The
         worked example is the disclosure: "first workflow it started" alone
         reads as a harmless implementation detail.
+
+        The two workflow names in that sentence are read from `WORKFLOW_COPY`
+        rather than typed as literals. They are the SAME strings the rows above
+        render, and the example only lands if the reader can find those exact
+        labels in the table -- transcribing them here would let a copy change
+        silently break the correspondence the example depends on.
       */}
       <p className="mt-3 text-xs text-soleur-text-muted">
         Every conversation counts under the first workflow it started. One that
-        began in Planning the work and carried on into Doing the work counts
-        entirely under Planning the work.
+        began in {WORKFLOW_COPY.plan.label} and carried on into{" "}
+        {WORKFLOW_COPY.work.label} counts entirely under{" "}
+        {WORKFLOW_COPY.plan.label}.
       </p>
     </div>
   );

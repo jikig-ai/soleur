@@ -281,12 +281,50 @@ export async function loadApiUsageForUser(
   // snapshot. Never `[0]` (emission order is a convention, see below) and
   // never a second query (that is the race this design exists to close).
   const totalRow = workflowData.find((r) => r.is_total === true);
+
+  // A ROLLUP always emits its super-aggregate, so an absent is_total row means
+  // the response SHAPE drifted (a migration replaced the function, PostgREST
+  // changed its envelope) -- not that the user spent nothing. The previous
+  // `?? 0` rendered $0.00 above a non-empty conversation list with nothing
+  // mirrored: a wrong money figure presented as a real one, which on a BYOK
+  // surface is the single-user incident this plan's threshold names.
+  //
+  // The sibling `?? 0` guards below are DIFFERENT and stay: those coerce a
+  // NUMERIC field that is genuinely absent-or-null on a legitimately empty
+  // result, and 0 is the right answer there. This one guards a row that must
+  // exist.
+  if (workflowData.length > 0 && totalRow === undefined) {
+    reportSilentFallback(null, {
+      feature: "api-usage",
+      op: "mtd-by-workflow-no-total-row",
+      extra: { rows: workflowData.length },
+    });
+    return null;
+  }
+
   const mtdTotalUsd = Number(totalRow?.total ?? 0);
   const mtdCount = Number(totalRow?.n ?? 0);
 
   // Coerce at the boundary; never sum in JS. The sum invariant is asserted
   // SQL-side on NUMERIC (AC1/AC2) — TS only renders server-computed values.
   // Sorting ≤ 8 already-coerced rows and dividing per row accumulate nothing.
+  // A non-total row whose `bucket` is not a string cannot be rendered, and
+  // dropping it silently loses money under a "Nothing is left out" promise.
+  // The CASE in migration 136 can never produce one (its IS NULL arm returns
+  // 'legacy' first), so this is response-shape drift, not data -- mirror it
+  // rather than discarding it quietly. Sibling of the unmapped-bucket mirror
+  // below; `cq-silent-fallback-must-mirror-to-sentry`.
+  const droppedRows = workflowData.filter(
+    (r) => r.is_total !== true && typeof r.bucket !== "string",
+  );
+  if (droppedRows.length > 0) {
+    reportSilentFallback(null, {
+      feature: "api-usage",
+      op: "mtd-by-workflow-nonstring-bucket",
+      extra: { dropped: droppedRows.length },
+    });
+  }
+
   const byWorkflow: WorkflowCostRow[] = workflowData
     .filter(
       (r): r is WorkflowSumRow & { bucket: string } =>
@@ -312,6 +350,15 @@ export async function loadApiUsageForUser(
         label: workflowLabel(r.bucket),
         totalUsd,
         count,
+        // Mean of the RAW total, deliberately not of the largest-remainder
+        // allocated display value. `avgUsd * count` may therefore differ from
+        // the rendered bucket total by a cent. That is correct and must not be
+        // "fixed": allocation exists so the displayed PARTS sum to the
+        // displayed WHOLE, which is the only summation the copy promises
+        // ("match to the cent" governs breakdown vs headline). An average
+        // computed from allocated units would be the mean of a rounding
+        // artefact rather than of the spend, and would drift as buckets are
+        // added or removed without any underlying money changing.
         avgUsd: count > 0 ? totalUsd / count : 0,
       };
     })

@@ -149,6 +149,26 @@ describe("migration 136_workflow_cost_rollup", () => {
     expect(body).not.toMatch(/date_trunc\s*\(\s*'month'/i);
   });
 
+  it("the synthetic bucket keys cannot collide with a real workflow name", () => {
+    // `legacy` and `unrouted` are minted into the SAME string space as raw
+    // `active_workflow` values. Nothing in migration 032 forbids a future
+    // enum entry literally named `legacy` -- if one landed, real spend would
+    // merge silently into the unattributed bucket AND `WorkflowBucket` would
+    // collapse the union with no type error, because the synthetic key is
+    // already a member. This asserts the CHECK enum stays disjoint from them.
+    const chk = readFileSync(
+      path.join(MIGRATIONS_DIR, "032_conversation_workflow_state.sql"),
+      "utf8",
+    );
+    const code = stripSqlComments(chk);
+    for (const synthetic of ["legacy", "unrouted"]) {
+      expect(
+        code,
+        `migration 032's CHECK enum must not contain '${synthetic}' — it is a synthetic bucket key minted by 136`,
+      ).not.toMatch(new RegExp(`'${synthetic}'`, "i"));
+    }
+  });
+
   // --- the WHERE predicate: tenant scope and window ------------------------
   //
   // Neither of these was asserted, and both mutants passed 20/20:
@@ -233,6 +253,22 @@ describe("migration 136_workflow_cost_rollup", () => {
       expect(sql).not.toMatch(
         new RegExp(
           `GRANT\\s+EXECUTE\\s+ON\\s+FUNCTION\\s+public\\.${fn}\\s*\\([^)]*\\)[^;]*TO\\s+(authenticated|anon|PUBLIC)\\b`,
+          "i",
+        ),
+      );
+    },
+  );
+
+  // 046/052/054/064/066 all pin a COMMENT; this migration asserted none. The
+  // gap matters for the SAME reason the REVOKE trio does: on a first CREATE
+  // there is no prior comment to preserve, so 027's is lost exactly where the
+  // REVOKE block is load-bearing.
+  it.each([NEW_FN, "sum_user_mtd_cost"])(
+    "issues COMMENT ON FUNCTION for %s",
+    (fn) => {
+      expect(sql).toMatch(
+        new RegExp(
+          `COMMENT\\s+ON\\s+FUNCTION\\s+public\\.${fn}\\s*\\([^)]*\\)\\s+IS`,
           "i",
         ),
       );

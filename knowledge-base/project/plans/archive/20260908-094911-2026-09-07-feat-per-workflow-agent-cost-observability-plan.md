@@ -1493,3 +1493,67 @@ row.
 - **Do not touch the legal mirrors.** `plugins/soleur/docs/pages/legal/gdpr-policy.md` is
   ~11 KB adrift and `lint-legal-mirror-drift-baseline.sh` is a ratchet: in-place edits of an
   already-drifting line fail.
+
+---
+
+## Addendum — 2026-09-08 (#7916 review)
+
+This plan was archived unamended while five of its statements had been
+deliberately superseded during implementation. The shipped code is what it is on
+purpose in every case below; what was missing was the reconciliation. Recorded
+here rather than edited in place, because a plan is a dated record of what was
+intended and the divergence is the interesting part.
+
+**AC12 / task 3.3.3 — the floor marker is grain-relative, not the literal
+`<$0.0001`.** The AC required that literal "in every case". Shipped
+`api-usage-section.tsx` renders `<$0.01` at cents grain and `<$0.0001` only at
+the finer grain, chosen by `displayGrain()`. The AC as written is not satisfiable
+by the shipped design and should be read as superseded: `<$0.0001` next to a
+column rendered in cents asserts a precision the column does not have, so the
+literal would have been *false on the page*. The invariant the AC was protecting —
+a non-zero amount never renders as `$0.00`/`$0.0000` — holds, and is what the
+component tests assert.
+
+**AC11 / task 3.3.4 — "not conditional on bucket count" described intent, not
+control flow.** The disclosure sits below `if (buckets.length < 2) return null;`,
+so it is conditional on exactly that. It is unconditional on the thing that
+matters: wherever per-bucket figures render, so does the sentence explaining how
+they are attributed — as prose, not behind a tooltip. The suppressed states show
+no figures to misattribute. The component comment and the component test were
+corrected to say this; the plan and `tasks.md` were not, until now.
+
+**AC18 / task 5.2 — three consolidated trackers, not eight issues.** The eight
+rows in the Phase 5.2 table were discharged as: #7928 (drain-prs enum, usage-row
+linking), #7929 (the R4 created-vs-spent window, filed standalone because a
+headline money figure that means something other than what it says is a defect,
+not a follow-up), #7930 (both legal-corpus items). Per-agent attribution stays
+on #1055 itself, which is why the PR says `Ref` and not `Closes`. Turn-grain
+attribution and the cc-path `model: null` shape were deliberately NOT filed —
+both are plan Non-Goals with no observable re-evaluation trigger, and filing them
+would have parked them indefinitely. Eight rows, eight dispositions, three new
+issues: this is the net-issue-flow gate working, not a shortfall. AC18's literal
+count is superseded; its intent (every deferral has a home and a trigger) is met.
+
+**Task 5.1 — the fleet query went to a new sibling runbook.** The task named
+`supabase-log-query.md`. Shipped created
+`knowledge-base/engineering/operations/runbooks/workflow-cost-query.md` instead,
+because the two answer different questions through different mechanisms (platform
+logs via the Management API vs. application tables via `psql`), and folding a cost
+query into the log-query runbook would have invited exactly the wrong tool. Each
+runbook now cross-references the other and says why they are separate. Neither
+file appears in this plan's Files-to-Create or Files-to-Edit.
+
+**Sharp Edge H1 — the dispatch floor did not do what this plan predicted.** The
+plan claims at §H1 that a `BUCKETS.length >= 8` member-count floor reds an
+emptied assertion body. Driven, it did not: 53 tests passed with the body
+deleted. A member count and an assertion body are different axes, and the plan
+asserted one mechanism covered both. Closed in code with `expect.assertions(n)`
+in `test/messages/workflow-copy.test.ts`. Written up in
+`knowledge-base/project/learnings/2026-09-08-my-live-verification-could-only-run-where-the-defect-was-invisible.md`.
+
+**On the checkbox state below.** `tasks.md` was archived with most boxes
+unticked, including tasks whose output is demonstrably in the tree (the
+migration, the loader, the ADR). The tick state was not maintained during
+implementation and is not evidence of anything. The authoritative record of what
+was verified is `ac-evidence.md` in the archived spec directory, which carries
+the measured result for each acceptance criterion.

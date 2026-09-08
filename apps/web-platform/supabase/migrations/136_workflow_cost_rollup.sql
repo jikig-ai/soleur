@@ -33,9 +33,21 @@
 -- No index is created, so the no-CONCURRENTLY convention is satisfied vacuously.
 -- `idx_conversations_user_cost` does not include `active_workflow`, so this
 -- aggregate takes a heap fetch over one user's costed conversations for one month.
--- That trade is deliberate: the index write would land on every turn forever to
--- speed a per-page-render read. NOTE there are TWO migrations numbered 041 -- cite
--- the filename, not the number. FORWARD-ONLY; rollback in the paired .down.sql.
+--
+-- CORRECTED AT REVIEW. This previously justified that as "the index write would
+-- land on every turn forever". It ALREADY does. `increment_conversation_cost`
+-- (042_increment_conversation_cost_v2.sql) UPDATEs `total_cost_usd` on every turn,
+-- and that column is BOTH an INCLUDE column of `idx_conversations_user_cost` and
+-- its partial-index predicate (`WHERE total_cost_usd > 0`) -- a predicate column
+-- blocks HOT, so a fresh index tuple is written per turn today. The marginal cost
+-- of adding `active_workflow` is index TUPLE WIDTH (~21 bytes worst case; one
+-- null-bitmap bit in the common NULL case), not a new write. The decision to omit
+-- it still stands on YAGNI -- the read is bounded to one user and one month, 10-100
+-- rows for a realistic user -- but the original reasoning overstated the saving and
+-- would have misled whoever reconsidered it next.
+--
+-- NOTE there are TWO migrations numbered 041 -- cite the filename, not the number.
+-- FORWARD-ONLY; rollback in the paired .down.sql.
 
 CREATE OR REPLACE FUNCTION public.sum_user_mtd_cost_by_workflow(
   uid   UUID,
@@ -115,6 +127,14 @@ $$;
 -- A live `proacl` read cannot catch this: it can only be taken on a database
 -- where 027 has already applied, which is precisely the state in which the
 -- omission is invisible.
+-- Re-issued for the SAME reason as the REVOKE trio below: on a first CREATE
+-- there is no prior COMMENT to preserve, and 027's is lost precisely in the
+-- scenario that block exists for. Text is 027's verbatim.
+COMMENT ON FUNCTION public.sum_user_mtd_cost(UUID, TIMESTAMPTZ) IS
+  'Service-role-only MTD cost aggregate for the BYOK usage dashboard. '
+  'End users MUST NOT call this directly; see server/api-usage.ts. '
+  'Issue #2478.';
+
 REVOKE EXECUTE ON FUNCTION public.sum_user_mtd_cost(UUID, TIMESTAMPTZ) FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION public.sum_user_mtd_cost(UUID, TIMESTAMPTZ) FROM authenticated;
 REVOKE EXECUTE ON FUNCTION public.sum_user_mtd_cost(UUID, TIMESTAMPTZ) FROM anon;
