@@ -489,6 +489,26 @@ cmp -s "$WORK/if-a.err" "$WORK/if-b.err" \
   && fail "the two flags emit identical stderr — the instrument diagnostic is missing" \
   || pass "stderr transcripts DIFFER while stdout is identical (diagnostics stay off stdout)"
 
+# FR7b: the PASTE-SAFE half. The runbook tells the operator to put provenance in
+# the pull request; the diagnostic above cannot be that line, because the
+# resolved path may itself BE a legal name and a PR body is public and
+# permanent. So the script emits a second line carrying everything that makes
+# provenance reviewable and nothing that identifies anyone -- and the absence of
+# the path is the assertion, not a property of the line's wording.
+_prov="$(grep '^provenance:' "$WORK/if-a.err" || true)"
+[[ -n "$_prov" ]] \
+  && pass "a paste-safe 'provenance:' line is emitted (the runbook promises one)" \
+  || fail "no 'provenance:' line on stderr — the runbook tells the operator to paste one"
+grep -q "$if_digest" <<<"$_prov" \
+  && pass "the provenance line carries the computed hash" \
+  || fail "the provenance line does not carry the computed hash"
+grep -qE 'bytes=[0-9]+' <<<"$_prov" && grep -q 'mtime=' <<<"$_prov" \
+  && pass "the provenance line carries size and mtime (a re-export differs in both)" \
+  || fail "the provenance line is missing size or mtime — pasting it would prove nothing"
+grep -qF "$WORK" <<<"$_prov" \
+  && fail "the provenance line carries the resolved path — pasting it into a public PR is the leak this line exists to avoid" \
+  || pass "the provenance line carries NO path (paste-safe)"
+
 # --- FR2/FR3/FR4/FR5/FR6: the refusal arms, each with its OWN message -------
 rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0101 \
   --instrument-file "$WORK/instrument.bin" --instrument-sha256 "$SHA64" --login deruelle)
@@ -599,23 +619,73 @@ fi
 # green. Measured twice: once from the awk pattern, then again from the comment
 # written to explain the first one. Anchor on `^git commit --quiet --file`
 # instead, and describe the hazard without spelling it.
+# Two literal identifiers is a claim about NAMES, and the script owns the names.
+# Aliasing the value into a third variable -- `PROVENANCE_NOTE=$RESOLVED_INSTRUMENT`
+# -- puts the path in the PR body with every arm green. So derive the forbidden
+# set instead: seed it with the two the argument arrives in, then close it under
+# assignment until it stops growing. Any variable assigned from a tainted one is
+# tainted, however it is spelled.
+fr8_taint_re() {
+  local file="$1" re='INSTRUMENT_FILE|RESOLVED_INSTRUMENT' line lhs rhs added round
+  for round in 1 2 3 4 5 6 7 8; do
+    added=""
+    while IFS= read -r line; do
+      lhs="${line%%=*}"; lhs="${lhs##*[[:space:]]}"
+      [[ "$lhs" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+      rhs="${line#*=}"
+      grep -qE "$re" <<<"$rhs" || continue
+      grep -qE "(^|\|)${lhs}(\||\$)" <<<"$re" && continue
+      re="$re|$lhs"; added=1
+    done <<<"$(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "$file")"
+    [[ -n "$added" ]] || break
+  done
+  printf '%s' "$re"
+}
+
+# INSTRUMENT SELF-TEST for the extractor, before anything relies on it. A
+# fixpoint that silently found nothing would make all three absence checks below
+# pass for the wrong reason, and the alias is exactly what they exist to catch.
+fr8_probe="$WORK/fr8-taint-probe.sh"
+printf '%s\n' 'PROVENANCE_NOTE="$RESOLVED_INSTRUMENT"' 'SECOND_HOP="$PROVENANCE_NOTE"' > "$fr8_probe"
+fr8_probe_re="$(fr8_taint_re "$fr8_probe")"
+grep -qE '(^|\|)PROVENANCE_NOTE(\||$)' <<<"$fr8_probe_re" \
+  && pass "FR8 instrument: the taint fixpoint follows a one-hop alias" \
+  || fail "FR8 instrument: the taint fixpoint missed a one-hop alias — every FR8 absence check below is vacuous"
+grep -qE '(^|\|)SECOND_HOP(\||$)' <<<"$fr8_probe_re" \
+  && pass "FR8 instrument: the taint fixpoint follows a two-hop alias (it iterates, it does not scan once)" \
+  || fail "FR8 instrument: the taint fixpoint stopped after one hop"
+
+FR8_TAINT="$(fr8_taint_re "$SCRIPT")"
+
 if_commit_span=$(awk '/^git commit --quiet --file/,/^COMMITEOF$/' "$SCRIPT")
 if_prbody_span=$(awk '/^if ! gh pr create --repo/,/^Ref #3210\."; then$/' "$SCRIPT")
+# The THIRD publishing site, and the one no span covered: the branch name is
+# pushed to a public remote and becomes the PR's head ref, so it is as published
+# as the body. Appending a basename here leaked the path with 96/96 green.
+if_branch_span=$(grep -E '^BRANCH=' "$SCRIPT")
 grep -q 'RECORD_REF' <<<"$if_commit_span" \
   && pass "FR8 control: the commit-heredoc span was actually extracted (it carries RECORD_REF)" \
   || fail "FR8 control: the commit-heredoc awk range extracted nothing — the absence check below would be vacuous"
 grep -q 'LOGINS' <<<"$if_prbody_span" \
   && pass "FR8 control: the PR-body span was actually extracted (it carries LOGINS)" \
   || fail "FR8 control: the PR-body awk range extracted nothing — the absence check below would be vacuous"
-if grep -qE 'INSTRUMENT_FILE|RESOLVED_INSTRUMENT' <<<"$if_commit_span"; then
+grep -q 'RECORD_REF' <<<"$if_branch_span" \
+  && pass "FR8 control: the branch-name span was actually extracted (it carries RECORD_REF)" \
+  || fail "FR8 control: the branch-name grep matched nothing — the absence check below would be vacuous"
+if grep -qE "$FR8_TAINT" <<<"$if_commit_span"; then
   fail "FR8: the instrument path reaches the commit message"
 else
   pass "FR8: the instrument path reaches no commit message"
 fi
-if grep -qE 'INSTRUMENT_FILE|RESOLVED_INSTRUMENT' <<<"$if_prbody_span"; then
+if grep -qE "$FR8_TAINT" <<<"$if_prbody_span"; then
   fail "FR8: the instrument path reaches the PR body"
 else
   pass "FR8: the instrument path reaches no PR body"
+fi
+if grep -qE "$FR8_TAINT" <<<"$if_branch_span"; then
+  fail "FR8: the instrument path reaches the pushed branch name"
+else
+  pass "FR8: the instrument path reaches no pushed branch name"
 fi
 
 # --- the organisation-named fixture leaks nothing (Guard 1 H4, must-PASS) ---
@@ -865,7 +935,7 @@ echo "Total: $passes passed, $fails failed"
 # assertion could be deleted and the run stayed green and silent — the floor
 # only fires when TWO go. `guard-vacuity-floor.test.sh` verifies that floors
 # FIRE, never that they are tight, so nothing else catches the slack.
-MIN_ASSERTIONS=96
+MIN_ASSERTIONS=104
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

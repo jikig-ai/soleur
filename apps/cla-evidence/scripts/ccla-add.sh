@@ -183,7 +183,16 @@ for l in "${LOGINS[@]}"; do
   [[ "$l" =~ $login_re ]] || die "invalid GitHub login: $l" 64
 done
 [[ -f "$ROSTER" ]] || die "roster not found at $ROSTER"
-command -v jq >/dev/null 2>&1 || die "jq is required"
+# Preflight EVERY external binary the instrument path uses, not just jq. Without
+# this a missing `realpath` fails the `realpath -e` line and reports rc 64 -- a
+# USAGE error naming the operator's path -- for a broken toolchain. That is the
+# measured-bad-for-could-not-measure collapse the -e/-f split four screens down
+# exists to refuse, reintroduced at the top of the same script. rc 2, matching
+# the runbook's pre-flight row.
+for _bin in jq realpath sha256sum stat date; do
+  command -v "$_bin" >/dev/null 2>&1 \
+    || die "$_bin is required and is not on PATH -- this is a toolchain problem, not a problem with the arguments you passed" 2
+done
 [[ -x "$TSX" ]] || die "tsx not found at $TSX — run 'npm ci' in apps/web-platform"
 
 if [[ "$MODE" == "add" ]]; then
@@ -243,11 +252,24 @@ if [[ "$MODE" == "add" ]]; then
     # tell. Size and mtime are what make that reviewable: a re-export of the
     # same instrument differs in both. stderr, because stdout carries the
     # emitted roster on a dry run.
-    _isize="$(wc -c < "$RESOLVED_INSTRUMENT" | tr -d '[:space:]')"
-    _imtime="$(date -u -r "$RESOLVED_INSTRUMENT" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    # ONE stat, not a wc plus a date: two extra opens are two extra chances to
+    # describe a different state of the file than the one that was hashed.
+    _istat="$(stat -c '%s %Y' -- "$RESOLVED_INSTRUMENT" 2>/dev/null || echo 'unknown unknown')"
+    _isize="${_istat%% *}"
+    _imtime="${_istat##* }"
+    [[ "$_imtime" == "unknown" ]] \
+      || _imtime="$(date -u -d "@$_imtime" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
     printf 'instrument file: %s bytes=%s mtime=%s sha256=%s\n' \
       "$RESOLVED_INSTRUMENT" "$_isize" "$_imtime" "$INSTRUMENT_SHA" >&2
     printf 'CHECK THIS IS THE RIGHT INSTRUMENT: this script proves the hash matches the file, never that the file is the one that was executed.\n' >&2
+    # The PASTE-SAFE half. The runbook asks the operator to put provenance in the
+    # pull request; the line above cannot be that line, because the resolved path
+    # may itself BE a legal name and a pull request body is public and permanent
+    # -- the same reason nothing else about the counterparty is published here.
+    # Everything that makes provenance reviewable (a re-export differs in size
+    # and mtime) survives dropping the path.
+    printf 'provenance: bytes=%s mtime=%s sha256=%s  # paste THIS line into the pull request, not the one above\n' \
+      "$_isize" "$_imtime" "$INSTRUMENT_SHA" >&2
   fi
   # LOAD-BEARING for both arms, and the reason it is not written as two checks.
   # It is the single chokepoint every value of INSTRUMENT_SHA passes before it
