@@ -2457,6 +2457,7 @@
 - [Every instrument I built to check my own work could not tell 'clean' from 'never ran](project/learnings/2026-09-07-every-instrument-i-built-to-check-my-own-work-could-not-tell-clean-from-never-ran.md)
 - [Every defect the panel found was in the verification, and then I shipped two more of the same class while fixing them](project/learnings/2026-09-07-i-committed-the-defect-class-i-was-reviewing-for.md)
 - [i widened the sentence and left its clauses behind](project/learnings/2026-09-07-i-widened-the-sentence-and-left-its-clauses-behind.md)
+- [I wrote the next action down and treated that as doing it](project/learnings/2026-09-07-i-wrote-the-next-action-down-and-treated-that-as-doing-it.md)
 - [my guard pinned the three attributes the vendor already refuses](project/learnings/2026-09-07-my-guard-pinned-the-three-attributes-the-vendor-already-refuses.md)
 - [My instruments reported green while measuring nothing](project/learnings/2026-09-07-my-instruments-reported-green-while-measuring-nothing.md)
 - [The guard I wrote died on the case it was written to catch](project/learnings/2026-09-07-the-guard-i-wrote-died-on-the-case-it-was-written-to-catch.md)
