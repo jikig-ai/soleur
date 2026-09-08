@@ -165,22 +165,27 @@ A merged-and-deployed fix can pass every gate above and still not work — the d
 
 **Run only when** the PR body or linked issue names a specific Sentry issue (a `*.sentry.io/issues/<id>` URL, a `SENTRY-<SHORTID>`, or a `Closes #N` whose issue references one). If no Sentry issue is identified, skip silently — there is no error to measure.
 
-**Prerequisites:** same `SENTRY_AUTH_TOKEN` resolution as Phase 3.5. Prefer `SENTRY_ISSUE_RW_TOKEN` when present; fall back to `SENTRY_AUTH_TOKEN`, and only skip the phase when **neither** resolves.
+**Prerequisites:** same `SENTRY_AUTH_TOKEN` resolution as Phase 3.5 for the aggregate Discover count. **The single-issue GET below, however, requires the write-scoped `SENTRY_ISSUE_RW_TOKEN`** — the `/organizations/<org>/issues/<id>/` endpoint returns `403` on the `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` resolved from Doppler `soleur/prd` (they carry Discover/ingest scope, not `event:read` on the issue resource). Using that token here makes the `curl -sfS` GET exit non-zero, leaving `ISSUE_JSON` empty → `ISSUE_STOPPED` stuck `false` → auto-resolve never fires. Resolve the RW token first; if it is absent, skip this phase (warn) since the GET cannot succeed without it.
 
-> **Corrected 2026-09-08 (#7797).** This block previously asserted that the
-> `/organizations/<org>/issues/<id>/` endpoint *"returns `403` on the **read-only**
-> `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` (they carry Discover/ingest scope, not
-> `event:read` on the issue resource)"*, and told the phase to skip whenever the
-> RW token was absent. **Both halves were false.** Measured against prod on
-> 2026-09-08: `SENTRY_AUTH_TOKEN` carried `event:admin` and `event:read` (it was
-> not read-only — it held org/project/team **admin**), and
-> `GET /organizations/<org>/issues/<id>/` under it returned **HTTP 200**, not 403.
-> The cost was silent: every run without `SENTRY_ISSUE_RW_TOKEN` skipped
-> fix-efficacy verification on a premise that never held, while the token it
-> already had would have worked. Establish a capability by calling it, not by
-> restating what a token is assumed to be. Only the **GET** was re-measured; the
-> resolving **PUT** is still gated on the write-scoped token and has not been
-> re-tested under `SENTRY_AUTH_TOKEN`.
+> **Clarified 2026-09-08 (#7797) — `SENTRY_AUTH_TOKEN` names TWO different
+> tokens, and only one of them 403s here.** An earlier revision of this
+> block was "corrected" on the premise that the 403 claim above was false. That
+> correction was withdrawn: it generalised a measurement taken on the
+> `soleur/prd_terraform` token onto the `soleur/prd` token this phase actually
+> resolves. Both measured 2026-09-08 against
+> `GET /organizations/<org>/issues/<id>/`:
+>
+> - `soleur/prd` `SENTRY_AUTH_TOKEN` (what the code below reads) → **403**. The
+>   requirement above is correct and stays.
+> - `soleur/prd_terraform` `SENTRY_AUTH_TOKEN` (the #7797 leaked credential, a
+>   personal token carrying org/project/team **admin**) → **200**.
+>
+> They are two different tokens sharing one variable name — the post-mortem
+> records this explicitly. Do not treat a capability measured on one as evidence
+> about the other, and do not widen this GET to an admin-scoped token: the
+> least-privilege credential for it is `SENTRY_ISSUE_RO_TOKEN`
+> (`event:read`, `org:read`, Doppler `soleur/prd`), and [scripts/sentry-issue.sh](../../../../scripts/sentry-issue.sh)
+> already implements the RO → RW ladder for this same URL.
 
 ```bash
 # ISSUE_ID = the Sentry issue short-id or numeric id from the PR/issue body
@@ -188,23 +193,19 @@ A merged-and-deployed fix can pass every gate above and still not work — the d
 # committer date (Phase 1 recorded the merge SHA) — the reference point for
 # "did the error stop firing post-deploy?".
 DEPLOY_TS=$(git show -s --format=%cI "<merge-commit-sha-from-phase-1>")
-# Two tokens, two jobs (corrected 2026-09-08, #7797):
-#   SENTRY_RW_TOKEN   — required for the auto-resolve PUT below.
-#   SENTRY_GET_TOKEN  — used for the single-issue GET. Prefer the RW token, but
-#                       FALL BACK to SENTRY_AUTH_TOKEN, which was measured
-#                       returning 200 on this endpoint. The previous revision
-#                       skipped the whole phase without the RW token, on the
-#                       false premise that read tokens 403 here.
+# The single-issue endpoint needs the write-scoped token: the soleur/prd
+# SENTRY_AUTH_TOKEN 403s here (re-measured 2026-09-08, #7797 — the *prd_terraform*
+# token of the same name returns 200, but it is a DIFFERENT credential and is not
+# what this line resolves). Reused by the auto-resolve PUT below, so resolve it
+# once. Absent -> skip phase. Least-privilege alternative if this is ever widened:
+# SENTRY_ISSUE_RO_TOKEN (event:read, org:read), never SENTRY_AUTH_TOKEN.
 SENTRY_RW_TOKEN=$(doppler secrets get SENTRY_ISSUE_RW_TOKEN -p soleur -c prd --plain 2>/dev/null || true)
-SENTRY_GET_TOKEN="${SENTRY_RW_TOKEN:-$SENTRY_TOKEN}"
-if [[ -z "$SENTRY_GET_TOKEN" ]]; then
-  echo "WARNING: neither SENTRY_ISSUE_RW_TOKEN nor SENTRY_AUTH_TOKEN resolved — cannot read the issue. Skipping error-count delta + auto-resolve."
-elif [[ -z "$SENTRY_RW_TOKEN" ]]; then
-  echo "NOTE: SENTRY_ISSUE_RW_TOKEN not set — reading the issue with SENTRY_AUTH_TOKEN. The delta still runs; only the auto-resolve PUT is skipped."
+if [[ -z "$SENTRY_RW_TOKEN" ]]; then
+  echo "WARNING: SENTRY_ISSUE_RW_TOKEN not set — cannot read the issue (the prd SENTRY_AUTH_TOKEN 403s on /issues/<id>/). Skipping error-count delta + auto-resolve."
 fi
 # Query the issue; capture the response so the auto-resolve guard below can
 # read status + lastSeen without a second GET.
-ISSUE_JSON=$(curl -sfS -H "Authorization: Bearer ${SENTRY_GET_TOKEN}" \
+ISSUE_JSON=$(curl -sfS -H "Authorization: Bearer ${SENTRY_RW_TOKEN}" \
   "https://${API_HOST}/api/0/organizations/${SENTRY_ORG}/issues/${ISSUE_ID}/")
 echo "$ISSUE_JSON" | jq '{shortId, status, count, lastSeen}'
 ISSUE_STATUS=$(echo "$ISSUE_JSON" | jq -r '.status')
@@ -229,7 +230,7 @@ Interpretation (all outcomes are **WARN-only — never a merge blocker**):
 - `lastSeen` is after the deploy timestamp (`ISSUE_STOPPED=false`): "WARNING: Sentry issue `<shortId>` is still firing after the deploy (lastSeen <ts>). The fix may be ineffective or the root cause may differ from the diagnosis — recommend re-opening for investigation rather than closing." Report `STILL-FIRING` and surface it prominently in the Phase 7 report. **Never auto-resolve in this branch.**
 - Sentry API unreachable / issue not found / non-200: warn and report `SKIPPED`.
 
-**Auto-resolve (expected-good-outcome branch only).** When the GET above shows the error has stopped firing (`lastSeen` older than the deploy **or** `status` already `resolved`/`ignored`) **and** the issue is not already `resolved`, PUT `status:"resolved"` so the historical issue leaves the active list automatically. This is written to require the dedicated write-scoped token, and **still is** — resolve a separate token and skip when it is absent, rather than falling back. *Corrected 2026-09-08 (#7797): the stated REASON was false. `SENTRY_AUTH_TOKEN` carried `event:write` and `event:admin`, so "the read tokens lack them" was never true. The PUT was not re-measured under it, so the conservative gate is kept — but it is kept as an untested precaution, not as a documented 403.*
+**Auto-resolve (expected-good-outcome branch only).** When the GET above shows the error has stopped firing (`lastSeen` older than the deploy **or** `status` already `resolved`/`ignored`) **and** the issue is not already `resolved`, PUT `status:"resolved"` so the historical issue leaves the active list automatically. This requires a dedicated write-scoped token — the `SENTRY_AUTH_TOKEN`/`SENTRY_API_TOKEN` read tokens resolved from `soleur/prd` lack `event:write`/`event:admin` and return 403 on the write endpoint, so resolve a separate token and **skip (do NOT fall back to a read token)** when it is absent:
 
 ```bash
 # SENTRY_RW_TOKEN was already resolved in Phase 3.6 above (the issue GET needs
@@ -543,7 +544,7 @@ Feature-tweet draft: <path + "flip publish_date + status: scheduled to publish" 
 |---------------------|----------|
 | No production URL | Skip health check with warning |
 | No `SENTRY_AUTH_TOKEN` | Skip Sentry cron monitor check AND error-count delta with warning |
-| No `SENTRY_ISSUE_RW_TOKEN` | Still run the error-count delta, reading the issue with `SENTRY_AUTH_TOKEN` (measured 200 on this endpoint, #7797); skip only the auto-resolve PUT and recommend manual resolution. Skip the whole phase only when NEITHER token resolves |
+| No `SENTRY_ISSUE_RW_TOKEN` | Skip the entire error-count-delta + auto-resolve phase (the single-issue GET 403s on the `prd` `SENTRY_AUTH_TOKEN`, re-measured 2026-09-08); recommend manual resolution as today |
 | Sentry API unreachable | Skip Sentry cron monitor check with warning |
 | No Sentry issue identified in PR/linked issue | Skip error-count delta silently (nothing to measure) |
 | Sentry issue not found via API | Skip error-count delta with warning |

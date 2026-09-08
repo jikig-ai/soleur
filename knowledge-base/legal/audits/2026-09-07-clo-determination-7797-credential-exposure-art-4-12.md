@@ -7,6 +7,7 @@ pr: 7891
 attestation-authority: clo
 status: SIGNED-OFF (CLO-agent-attested, Soleur-as-tenant-zero v1)
 disposition: PROVISIONAL — no Art. 33 duty, no Art. 34 duty. The evidentiary limb was RUN 2026-09-08: integrity CLEAN, confidentiality INCONCLUSIVE. See the 2026-09-08 addendum.
+disposition_history: "SIGNED-OFF PROVISIONAL 2026-09-07 on one open evidentiary limb -> limb RUN 2026-09-08 (#7797): integrity CLEAN, confidentiality INCONCLUSIVE, one instrument found not to exist -> still PROVISIONAL, verdict unchanged, sign-off stands as determined and signed. Annotation only; see the 2026-09-08 addendum."
 signed_off_at: 2026-09-07
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
 awareness_anchor: "2026-09-03T15:33:16Z"
@@ -193,12 +194,18 @@ Step 1 above requires capturing the token's **last-used timestamp**, "before
 deleting the token", because "deletion destroys the datum". Measured against the
 live product on 2026-09-08 under an authenticated session:
 
-**Sentry exposes no last-used field for personal tokens on any surface.** The
-token list shows Token / Created On / Scopes; the Edit view shows Name / masked
-Token / Scopes; and `GET /api/0/api-tokens/` returns 200 under session auth with
-the complete field set `application, dateCreated, expiresAt, id, name, scopes,
-state, tokenLastCharacters`. There is no `dateLastUsed` or equivalent. The
-org-token surface holds zero tokens and is not an alternative source.
+**No last-used field is exposed on any surface reachable to the controller.**
+The token list shows Token / Created On / Scopes; the Edit view shows Name /
+masked Token / Scopes; and `GET /api/0/api-tokens/` returns 200 under session
+auth with the field set `application, dateCreated, expiresAt, id, name, scopes,
+state, tokenLastCharacters` — no `dateLastUsed` or equivalent. The org-token
+surface holds zero tokens, so it could not be tested and is evidence of no data
+rather than of no field.
+
+Scope of that finding, stated because an Art. 32 "reasonable steps to
+investigate" question turns on exactly this distinction: it establishes that the
+**controller could not gather** the datum, not that no such datum exists
+vendor-side.
 
 The 403-under-bearer observation recorded above was correct. The inference that a
 session would therefore reveal the scalar was not — the session reveals the same
@@ -214,9 +221,14 @@ entered into a signed record without verifying that its subject existed.
 
 The requirement that the access investigation be *"blocking and prior to
 remediation"* rests, for the confidentiality limb, on an instrument that
-remediation would destroy. Since no such instrument exists, **rotation was never
-in fact gated by it**. The credential remained live for approximately four days
-nine hours longer than the evidence required.
+remediation would destroy. Since no such instrument exists, **the confidentiality
+limb of that constraint could not have been satisfied**. The credential was live
+2026-09-03T15:30Z → 2026-09-08T10:34Z, approximately **4 days 19 hours** — the
+single figure of record, matching the post-mortem. An earlier draft of this
+addendum said "four days nine hours", derived from nothing and ten hours adrift;
+it is withdrawn. Not all of that delay is attributable to the phantom instrument:
+rotation was also gated on an operator-cleared browser session, which is a real
+gate.
 
 The integrity limb's instrument — the org audit log — is unaffected by rotation
 and could have been pulled at any time.
@@ -231,11 +243,19 @@ performing detector/monitor/rule edits on our own resources from GitHub Actions
 runner ranges. No unknown principal.
 
 - **Integrity / write limb: CLEAN**, on full-window coverage and a single known actor.
-- **Confidentiality / read limb: INCONCLUSIVE**, permanently by this route: audit
-  logs do not record reads and no last-used instrument exists.
+- **Confidentiality / read limb: INCONCLUSIVE.** Unresolvable by the two
+  instruments this determination named — audit logs do not record reads, and no
+  last-used field is reachable. It is **unattempted, not impossible**: vendor
+  support (step 3) has not been tried. Recorded risk: the action row ordered
+  escalation *before* deletion, and the token was revoked first, which may have
+  reduced what the vendor can still answer.
 
-Per §Re-evaluation triggers, this is neither the BREACH path nor the CLEAN path.
-It is the third outcome the determination itself anticipated, so
+This is neither the BREACH path nor the CLEAN path. §Re-evaluation triggers
+enumerates only those two and therefore has **no branch for the outcome that
+occurred**; the third outcome was anticipated in §The open limb ("Honest
+expectation: **INCONCLUSIVE on confidentiality, capable of CLEAN on
+integrity**"). Append-only forbids editing the trigger list in place, so the gap
+is recorded here rather than patched there. Accordingly,
 `art_33_determination_status` **does not** drop "provisional". The Art. 33(1)
 likelihood limb no longer rests on an assertion about writes — the audit log
 answers that — but the read limb rests on the absence of an instrument rather
@@ -250,7 +270,16 @@ member management, integrations and project deletion. This sharpens the integrit
 limb the determination already engaged; it does not reverse it. The Art. 4(12)
 severity assessment should be read against the admin scope set.
 
+### The one route that could still close this limb
+
+Step 3 of §The open limb — **vendor support** — is now the only instrument left,
+and its trigger condition ("if (1)–(2) come back thin") is met. It is tracked at
+**#7945** so that this record does not sit PROVISIONAL behind a step nothing
+prompts anyone to take. Precedent for the ask is the 2026-05-16 determination,
+where Sentry confirmed in writing which principal performed audit-log actions.
+
 ### Remediation
 
 The leaked token (id `6680231`) was revoked 2026-09-08T10:34Z and replaced. Full
-detail in the post-mortem's 2026-09-08 addendum.
+detail in the post-mortem's 2026-09-08 addendum — deliberately not restated here,
+per this corpus's single-source rule.

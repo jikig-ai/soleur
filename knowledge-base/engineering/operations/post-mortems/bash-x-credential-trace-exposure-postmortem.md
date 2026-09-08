@@ -6,7 +6,7 @@ incident_window: "2026-09-03 ~15:30Z (single command); Better Stack exposure end
 recovery_at: "complete — BETTERSTACK_API_TOKEN_READONLY rotated 2026-09-03T20:10Z; SENTRY_AUTH_TOKEN rotated and leaked token revoked 2026-09-08T10:34Z"
 suspected_change: "none — no change caused this; `bash -x` on a bearer-carrying script is the standing hazard"
 brand_survival_threshold: aggregate pattern
-status: remediated (determination still provisional — see the 2026-09-08 addendum)
+status: unresolved but ended
 triggers:
   - operator ran a credential-carrying script under `bash -x` to debug a failing guard
 art_33_triggered: false
@@ -299,6 +299,18 @@ review.
 | #7842 | Build the complements the lint cannot reach: the PreToolUse hook for uncommitted `bash -c` and the CI `run:`-body form lint. | open |
 | #7843 | Sweep 61 scripts / 108 call sites from argv bearer tokens to `curl --config -`; a traced parent leaks a callee's argv even when the callee's own preamble is clean. | open |
 
+> **Superseded 2026-09-08 (#7797):** the `#7797` row above is left as written
+> and is **no longer the instruction to follow**. Step (1) — capture the
+> last-used timestamp, and *"Record that the 2026-09-07 liveness probe has
+> **already overwritten** this scalar"* — names a field that does not exist on
+> any surface reachable to the controller, so it cannot be performed and the
+> ordering it imposed on step (4) was not a real constraint. Step (2) was
+> **done** 2026-09-08: integrity limb CLEAN. Step (3) returned **INCONCLUSIVE**
+> on the read limb. Step (4) is **done**: revoked and replaced 2026-09-08T10:34Z.
+> The escalation to vendor support, which the row places last, is now the only
+> remaining instrument and is tracked at **#7945**. Full reasoning in the
+> 2026-09-08 addendum below.
+
 ## Addendum — 2026-09-07 (#7797)
 
 **This PIR shipped with a false claim about its own subject.** It stated that
@@ -387,8 +399,17 @@ above a stale machine-readable field is the failure mode that rule exists to sto
 
 ### Remediation — the Sentry half is closed
 
-Executed by the agent under an operator-cleared browser session. No credential
-value entered the agent session.
+Executed by the agent under an operator-cleared browser session.
+
+Stated precisely, because this document's whole subject is the difference between
+a value existing and a value being rendered: **no credential value was rendered
+into the agent transcript, placed in a process argument list, or committed.** A
+plaintext copy of the *new* token did exist briefly — written by the browser to a
+`chmod 600` file at the repository root (untracked; the enclosing checkout is
+bare, so no `git add` path existed), piped to Doppler over stdin, then destroyed
+with `shred -u -n 3`. The pre-revocation scan of the other Doppler configs
+compared each value's **last four characters** against the `1f49` suffix Sentry
+itself displays; the old secret was never re-read.
 
 | Step | Result |
 |---|---|
@@ -414,8 +435,10 @@ all seven Doppler configs in project `soleur` and every secret in
 
 The remediation sequence in the action row above is ordered around capturing the
 token's **last-used timestamp** before deletion, "because deletion destroys the
-datum". Measured 2026-09-08: **Sentry exposes no such field for personal tokens,
-on any surface.**
+datum". Measured 2026-09-08: **no last-used field is exposed on any surface
+reachable to the controller.** Enumerated below rather than asserted globally —
+this records what could be gathered, not proof that no such datum exists
+vendor-side.
 
 - Token list page columns: Token, Created On, Scopes. No last-used.
 - Per-token Edit view: Name, masked Token, Scopes. Nothing else.
@@ -427,8 +450,11 @@ on any surface.**
 
 Two consequences:
 
-1. **Rotation was never actually blocked.** The gate that held it for four days
-   was a field that does not exist. The ordering constraint was vacuous.
+1. **The confidentiality limb of the ordering constraint was vacuous** — ordered
+   around a field that does not exist. The integrity limb was not: the audit log
+   is unaffected by rotation and could have been pulled at any time. Rotation was
+   additionally gated on an operator-cleared browser session, which is a real
+   gate, so the delay is not attributable to the phantom instrument alone.
 2. **Withdrawn — this document's own action row, and the determination's.** The
    action row above says *"Record that the 2026-09-07 liveness probe has
    **already overwritten** this scalar with a controller use, degrading the
@@ -449,18 +475,45 @@ carried **admin**: `org:admin`, `event:admin`, `project:admin`, `team:admin`,
 plus `org:integrations` — materially more than write, reaching member
 management, integrations and project deletion.
 
-Recorded as a third correction of my own in this incident: the 2026-09-08 issue
-comment first asserted that both records "characterise it as read-scoped". That
-was false and was written without reading the capability rows. The genuinely
-false site is `plugins/soleur/skills/postmerge/SKILL.md`, which called
-`SENTRY_AUTH_TOKEN` **read-only** and claimed it lacks `event:read`; it carried
-`event:admin` and `event:read`. Corrected in the same PR as this addendum.
+Two corrections of my own belong here, both made while writing this addendum.
+
+**(i)** The 2026-09-08 issue comment first asserted that both records
+"characterise it as read-scoped". False, and written without reading the
+capability rows above.
+
+**(ii)** I then named `plugins/soleur/skills/postmerge/SKILL.md` as "the
+genuinely false site" for calling `SENTRY_AUTH_TOKEN` read-only, and edited it to
+add a fallback. **That was also wrong, and it was the more dangerous error.**
+`SENTRY_AUTH_TOKEN` names **two different credentials** — a fact this document
+already warns about at §Recovery verification. Measured 2026-09-08 against
+`GET /organizations/<org>/issues/<id>/`:
+
+| Doppler location | Result |
+|---|---|
+| `soleur/prd` — what the postmerge phase actually resolves | **403** |
+| `soleur/prd_terraform` — the leaked personal token, org/project/team admin | **200** |
+
+The skill's claim was **correct for the credential it reads**. I measured the
+other one and generalised across the very boundary this document flags as one
+that "would send the operator to rotate an uninvolved credential". The edit was
+reverted; the skill now names the Doppler config in its claim and records both
+measurements. Had it shipped, the phase would have 403'd in production.
+
+That is three corrections of mine inside one incident, all the same shape:
+asserting what a credential or a document does, instead of calling it or reading
+it.
 
 ### Finding 3 — the access investigation was run
 
 `GET /api/0/organizations/jikigai-eu/audit-logs/` under the session. The returned
 page spans 2026-09-03T15:18:39Z → 2026-09-07T17:59:51Z; the oldest row **precedes
 the 15:30Z incident cutoff**, so the window is covered with no pagination gap.
+
+Pulled 2026-09-08, **before** revocation at 10:34Z. Window requested:
+2026-09-03T15:30Z → present. Window actually returned: 2026-09-03T15:18:39Z →
+2026-09-07T17:59:51Z, single page, no gap at the start (the oldest row precedes
+the cutoff). The final ~16.5h of the exposure window simply contains no audit
+entries rather than having been excluded.
 
 96 entries in the window. Every one is the same actor — the Terraform IaC proxy
 service user — performing `detector.edit/add`, `monitor.add`,
