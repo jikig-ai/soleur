@@ -11,7 +11,7 @@ const { rpcSpy, sendToClientSpy, maybeSingleSpy } = vi.hoisted(() => ({
   rpcSpy: vi.fn(
     // Return type widened to the error union AND to `data` so per-test
     // mockImplementation can return an RPC error (e.g. the cross-tenant P0001
-    // path, #4364) or a mig-136 refusal payload (#7829) without tripping
+    // path, #4364) or a mig-137 refusal payload (#7829) without tripping
     // TS2345 — the default value stays a clean admit.
     async (
       _name: string,
@@ -37,7 +37,16 @@ vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     rpc: rpcSpy,
     from: () => ({
-      select: () => ({ eq: () => ({ maybeSingle: maybeSingleSpy }) }),
+      // `abortSignal` is part of the real chain (the read-back is bounded so a
+      // stalled connection cannot outlive the turn it annotates). A mock that
+      // omits it makes every read-back THROW and report "unknown" — which
+      // reads exactly like a working fail-safe, so the omission is silent.
+      select: () => ({
+        eq: () => ({
+          abortSignal: () => ({ maybeSingle: maybeSingleSpy }),
+          maybeSingle: maybeSingleSpy,
+        }),
+      }),
     }),
   }),
 }));
@@ -290,7 +299,10 @@ describe("persistTurnCost — delegated refusal is a RETURNED value, not an exce
   // The handler awaits the `audit_byok_use` read-back, so a single microtask
   // drain is no longer enough to settle it.
   async function flush(): Promise<void> {
-    for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r));
+    // Deep enough to drain the `<op>.ledger` annotation too: that verdict is a
+    // SECOND async hop by design (C1 — it must not gate the mandatory event),
+    // so a shallower flush sees the refusal and not its annotation.
+    for (let i = 0; i < 12; i++) await new Promise((r) => setImmediate(r));
   }
 
   function runDelegatedTurn(): void {
@@ -339,38 +351,30 @@ describe("persistTurnCost — delegated refusal is a RETURNED value, not an exce
       .mock.calls.find((c) => (c[1] as { op?: string })?.op === op);
   }
 
-  describe("readRefusalReason classifies every PostgREST shape, and fails CLOSED", () => {
-    // `RETURNS TABLE(refusal_reason text)` is a SINGLE output column, so
-    // PostgreSQL collapses it to SETOF text. Which of these three shapes
-    // reaches supabase-js is a PostgREST/client-version detail; none of them
-    // may be read as "admitted".
-    it.each([
-      ["array of rows", [{ refusal_reason: "hourly_cap_exceeded" }]],
-      ["array of scalars", ["hourly_cap_exceeded"]],
-      ["bare scalar", "hourly_cap_exceeded"],
-      ["single row object", { refusal_reason: "hourly_cap_exceeded" }],
-    ])("reads a refusal from %s", (_label, payload) => {
-      expect(readRefusalReason(payload)).toEqual({
+  describe("readRefusalReason pins the MEASURED shape and fails CLOSED", () => {
+    // Measured 2026-09-07 against dev PostgREST with supabase-js 2.99.2, using a
+    // throwaway function of the identical return signature:
+    //   refused  -> [{"refusal_reason":"hourly_cap_exceeded"}]
+    //   admitted -> [{"refusal_reason":null}]
+    it("reads a refusal from the measured shape", () => {
+      expect(readRefusalReason([{ refusal_reason: "hourly_cap_exceeded" }])).toEqual({
         kind: "refused",
         reason: "hourly_cap_exceeded",
       });
     });
-
-    // Admission is established POSITIVELY: the RPC returned its one row and
-    // the column in it was SQL NULL. Nothing weaker counts.
-    it.each([
-      ["array of one null row", [{ refusal_reason: null }]],
-      ["array of one null scalar", [null]],
-      ["bare null row object", { refusal_reason: null }],
-    ])("admits on %s", (_label, payload) => {
-      expect(readRefusalReason(payload)).toEqual({ kind: "admitted" });
+    it("admits on the measured shape", () => {
+      expect(readRefusalReason([{ refusal_reason: null }])).toEqual({ kind: "admitted" });
+    });
+    it("accepts the array-of-scalar variant symmetrically, both directions", () => {
+      expect(readRefusalReason(["expired"])).toEqual({ kind: "refused", reason: "expired" });
+      expect(readRefusalReason([null])).toEqual({ kind: "admitted" });
     });
 
-    // THE FAIL-CLOSED PROPERTY. Each of these previously read as "admitted",
-    // which would silence EVERY refusal on this path if the client/PostgREST
-    // pair ever produced one of them — reinstating, through the reporting
-    // layer, the exact silent-ledger failure #7829 exists to remove.
-    // A shape we cannot parse is never an admission.
+    // THE FAIL-CLOSED PROPERTY. Each of these previously read as admitted (or,
+    // for the bare scalar, asymmetrically as a refusal while its own admitted
+    // counterpart read as unreadable). A shape we cannot parse is never an
+    // admission — reading one as "the turn was fine" silences every refusal on
+    // this path, reinstating the failure #7829 exists to remove.
     it.each([
       ["no reply at all (undefined)", undefined],
       ["a null reply (the RPC always returns one row)", null],
@@ -379,13 +383,64 @@ describe("persistTurnCost — delegated refusal is a RETURNED value, not an exce
       ["a non-string reason", [{ refusal_reason: 42 }]],
       ["a row of the wrong type", [7]],
       ["an object without the column", [{ something_else: "x" }]],
+      ["a BARE scalar (not an array) — dead shape, rejected symmetrically", "hourly_cap_exceeded"],
+      ["a BARE object (not an array)", { refusal_reason: "expired" }],
     ])("is UNREADABLE, not admitted, on %s", (_label, payload) => {
-      const read = readRefusalReason(payload);
-      expect(read.kind, `must not read as admitted: ${JSON.stringify(payload)}`).toBe(
-        "unreadable",
-      );
+      expect(readRefusalReason(payload).kind).toBe("unreadable");
+    });
+
+    it("names the offending column keys so the event is actionable", () => {
+      const read = readRefusalReason([{ something_else: "x", and_another: 1 }]);
+      expect(read.kind).toBe("unreadable");
+      expect((read as { detail: string }).detail).toContain("something_else");
     });
   });
+
+  it("the mandatory refusal event does NOT carry the ledger verdict (C1)", async () => {
+    // Structural pin for the un-gating. The verdict is a SEPARATE `<op>.ledger`
+    // event emitted after the mandatory one. An earlier revision awaited the
+    // read-back INSIDE the tags object of the mandatory event, sequencing the
+    // breach report behind an optional, untimed round-trip whose failure modes
+    // are CORRELATED with it — a database that just failed to write the row is
+    // the one that will not answer. On a degraded DB the breach was then never
+    // reported at all: #7829's silent failure, relocated into the report path.
+    // If the verdict ever reappears on the mandatory event, the gating is back.
+    mockRpcResult({ data: [{ refusal_reason: "daily_cap_exceeded" }] });
+    runDelegatedTurn();
+    await flush();
+
+    const mandatory = fallbackCall("daily-cap-exceeded");
+    expect(mandatory, "the refusal itself is reported").toBeDefined();
+    expect(
+      (mandatory![1] as { tags?: Record<string, unknown> }).tags?.ledger_row_written,
+      "the verdict must not be a tag on the mandatory event — that is the gating shape",
+    ).toBeUndefined();
+    expect(fallbackCall("daily-cap-exceeded.ledger"), "verdict emitted separately").toBeDefined();
+  });
+
+  it.each([
+    ["hourly_cap_exceeded", "hourly-cap-exceeded"],
+    ["daily_cap_exceeded", "daily-cap-exceeded"],
+    ["consent_withdrawn", "consent-withdrawn"],
+    ["expired", "expired"],
+    ["revoked_post_grace", "revoke-past-grace"],
+  ])(
+    "a LEGACY RAISE contract for %s still routes to its own slug (migration skew)",
+    async (reason, op) => {
+      // The release workflow migrates BEFORE the rollout, so the app is behind
+      // the function for the whole window — and after 137.down.sql it is ahead
+      // of it. Without the shim all five collapse into merged-rpc-failure and
+      // the cap alert simply stops existing.
+      // The shim discriminates on the RAISE sentinel in the message.
+      mockRpcResult({ error: { message: `byok_delegations:${reason}` } });
+      runDelegatedTurn();
+      await flush();
+
+      const call = fallbackCall(op);
+      expect(call, `${op} routed on the legacy contract`).toBeDefined();
+      expect(call![1]).toMatchObject({ tags: { rpc_contract: "raise-legacy" } });
+    },
+  );
 
   it("an unreadable reply pages instead of passing silently", async () => {
     mockRpcResult({ data: [{ something_else: "x" }] });
@@ -438,13 +493,17 @@ describe("persistTurnCost — delegated refusal is a RETURNED value, not an exce
     runDelegatedTurn();
     await flush();
 
-    expect(fallbackCall("hourly-cap-exceeded")![1]).toMatchObject({
+    expect(
+      fallbackCall("hourly-cap-exceeded"),
+      "the MANDATORY refusal event is emitted regardless of the read-back",
+    ).toBeDefined();
+    expect(fallbackCall("hourly-cap-exceeded.ledger")![1]).toMatchObject({
       tags: { ledger_row_written: "true" },
     });
   });
 
   it("tags ledger_row_written=false when the refusal wrote no row (the inert-fix mode)", async () => {
-    // The highest-probability post-merge failure state: 136 applies, the
+    // The highest-probability post-merge failure state: 137 applies, the
     // refusal fires, and the INSERT is still discarded. Without this tag the
     // Sentry event is byte-identical to the healthy one.
     maybeSingleSpy.mockResolvedValue({ data: null, error: null });
@@ -452,7 +511,8 @@ describe("persistTurnCost — delegated refusal is a RETURNED value, not an exce
     runDelegatedTurn();
     await flush();
 
-    expect(fallbackCall("daily-cap-exceeded")![1]).toMatchObject({
+    expect(fallbackCall("daily-cap-exceeded"), "refusal reported").toBeDefined();
+    expect(fallbackCall("daily-cap-exceeded.ledger")![1]).toMatchObject({
       tags: { ledger_row_written: "false" },
     });
   });
@@ -463,7 +523,8 @@ describe("persistTurnCost — delegated refusal is a RETURNED value, not an exce
     runDelegatedTurn();
     await flush();
 
-    expect(fallbackCall("expired")![1]).toMatchObject({
+    expect(fallbackCall("expired"), "refusal reported").toBeDefined();
+    expect(fallbackCall("expired.ledger")![1]).toMatchObject({
       tags: { ledger_row_written: "unknown" },
     });
   });
