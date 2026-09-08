@@ -300,10 +300,23 @@ pre-commit:
         echo "Move to knowledge-base/project/ before committing:" >&2
         echo "  knowledge-base/{brainstorms,learnings,plans,specs}/ -> knowledge-base/project/{brainstorms,learnings,plans,specs}/" >&2
         exit 1
+    # DUAL GLOB, and both arms are load-bearing (#7935). lefthook uses gobwas
+    # semantics where `**` requires at least ONE intermediate directory, so the
+    # single `knowledge-base/**/*.md` arm has NEVER matched knowledge-base/INDEX.md
+    # itself -- it sits at depth 1. Measured against lefthook 2.1.6: with only
+    # INDEX.md staged, the single-glob form printed `(skip) no matching staged
+    # files` and the command never ran, while the dual form executed. That is
+    # exactly the merge-resolution commit shape where regeneration matters most.
+    # See 2026-03-21-lefthook-gobwas-glob-double-star.md.
+    #
+    # The `git add` covers all THREE generated artifacts: one generator run
+    # rewrites all three, and staging only INDEX.md left kb-categories.txt a
+    # month stale on disk, committed only when some unrelated change happened to
+    # sweep it up.
     generate-kb-index:
       priority: 10
-      glob: "knowledge-base/**/*.md"
-      run: bash scripts/generate-kb-index.sh && git add knowledge-base/INDEX.md
+      glob: ["knowledge-base/*.md", "knowledge-base/**/*.md"]
+      run: bash scripts/generate-kb-index.sh && git add knowledge-base/INDEX.md knowledge-base/kb-tags.txt knowledge-base/kb-categories.txt
     # Auto-regenerate the compiled LikeC4 model whenever a .c4 source is staged,
     # then re-stage it — mirrors the generate-kb-index precedent above (its
     # priority 10 + `run: <script> && git add <generated-file>` shape). NOTE the

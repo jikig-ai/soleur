@@ -16,21 +16,25 @@ description: "This skill should be used when merging a feature branch to main wi
 Detect the current environment and record the starting state for rollback. Run these commands separately and store the results:
 
 1. Get current branch name:
+
 ```bash
 git rev-parse --abbrev-ref HEAD
 ```
 
 2. Get current commit SHA (this is the rollback point):
+
 ```bash
 git rev-parse HEAD
 ```
 
 3. Get current working directory path (worktree path):
+
 ```bash
 pwd
 ```
 
 4. Get the main repo root (first path from worktree list output):
+
 ```bash
 git worktree list
 ```
@@ -140,6 +144,12 @@ For each conflicted file, apply the appropriate resolution strategy:
 
 **Generated artifacts (3.2b).** A generated file has no authorial intent to preserve, so 3.3 does not apply to it: hand-picking hunks produces an artifact that matches neither side's source and that no generator would emit. Resolve by discarding both sides and regenerating from the merged source. Known members and their owning generators: `knowledge-base/engineering/architecture/diagrams/model.likec4.json` → [regenerate-c4-model.sh](../../../../scripts/regenerate-c4-model.sh) (verify with [c4-model-freshness.test.sh](../../test/c4-model-freshness.test.sh), which is exactly the in-sync assertion), and `knowledge-base/project/rule-metrics.json` → [rule-metrics-aggregate.sh](../../../../scripts/rule-metrics-aggregate.sh). Lockfiles follow the same shape with a pinned toolchain — see [drain-prs/SKILL.md](../drain-prs/SKILL.md) §6(a).
 
+**The three generated knowledge-base artifacts are members of 3.2b, and the generic 3.2b remedy is WRONG for them.** `knowledge-base/INDEX.md`, `knowledge-base/kb-tags.txt` and `knowledge-base/kb-categories.txt` are all emitted by [generate-kb-index.sh](../../../../scripts/generate-kb-index.sh), but "take `--theirs`, then re-run the owning generator" drops rows for these three: regenerating runs against **one side's** file set, which never contains the knowledge-base files the other side added. That is the exact silent row-drop #7935 records — it discarded an ADR index entry three separate times on PR #7896, caught only by an ad-hoc `grep -c` after each resolve.
+
+`INDEX.md` is resolved instead by the `merge=kb-index` driver in the root `.gitattributes` ([merge-kb-index.sh](../../../../scripts/merge-kb-index.sh)); the two facet files use git's built-in `merge=union`. **If any of the three ever presents as conflicted, the remedy is to fix the driver's registration (`bash scripts/install-kb-merge-driver.sh`) and re-run the merge — never side-pick, and never hand-edit.**
+
+**Do not go looking for conflict markers on these paths.** When a merge driver exits non-zero git marks the path `UU`, leaves ours content in place, and writes **no markers of its own** — so the file reads as cleanly merged and 3.3's first instruction ("read the file with conflict markers") leads straight to `git add` of a wrong index. The driver writes its own `<<<<<<< kb-index:` sentinel line precisely so that failure is visible and trips `guardrails:block-conflict-markers`. A conflicted index with **no** sentinel means the driver never ran at all: it is unregistered.
+
 **For README.md (accept feature branch):**
 
 ```bash
@@ -164,6 +174,7 @@ echo "ours=$ours theirs=$theirs"  # echo the paths: the Read/Write steps below n
 - `:3:` is "theirs" (main)
 
 Read both files. Reconstruct the complete CHANGELOG:
+
 - Keep the file header (title, description, links)
 - Merge version entries in descending version order
 - If the feature branch has a draft entry, keep it

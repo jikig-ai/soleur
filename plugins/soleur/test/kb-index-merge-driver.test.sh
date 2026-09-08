@@ -1,0 +1,362 @@
+#!/usr/bin/env bash
+#
+# Functional suite for the knowledge-base index merge driver (#7935).
+#
+# WHAT THIS SUITE IS FOR. `knowledge-base/INDEX.md` is a committed generated
+# artifact. Without a merge driver git merges it as prose, and the reflex
+# resolution (`git checkout --theirs`) takes one side's copy whole — silently
+# discarding the rows the other side added. That dropped the ADR-206 row three
+# times on PR #7896. Every assertion below is made against a REAL `git merge`
+# in a throwaway repository, never against a reading of the driver's source:
+# the defect this closes is invisible to source inspection by construction.
+#
+# SEAM. This file holds the FUNCTIONAL scenarios. The two mutation batteries
+# (`kb-index-check-guard.mutation.sh`, `merge-kb-index-driver.mutation.sh`) hold
+# the "can each guard be driven red" question. That split is the one
+# `scripts/test-all.sh` already documents for every guard-with-battery pair in
+# the tree: bundling them makes a red run ambiguous between "a scenario broke"
+# and "a guard stopped being enforceable".
+#
+# KB_DIR IS PINNED ON EVERY GENERATOR CALL. `generate-kb-index.sh` defaults
+# KB_DIR to the real 6,432-file tree, which costs ~9.9s per call (M9). An
+# omitted pin would silently add minutes of real-corpus work to CI with nothing
+# in the suite that would notice.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$SCRIPT_DIR/test-helpers.sh"
+
+GEN="$REPO_ROOT/scripts/generate-kb-index.sh"
+DRIVER="$REPO_ROOT/scripts/merge-kb-index.sh"
+RENDER_LIB="$REPO_ROOT/scripts/lib/kb-index-render.sh"
+
+# `/tmp` is a machine-global 4 GiB tmpfs shared by every worktree on this box; a
+# direct invocation of this suite (the documented inner loop) would otherwise
+# inherit it while the runners default to /var/tmp.
+export TMPDIR="${TMPDIR:-/var/tmp}"
+
+WORK=""
+cleanup() { [[ -n "$WORK" && -d "$WORK" ]] && rm -rf "$WORK"; return 0; }
+trap cleanup EXIT INT TERM HUP
+
+WORK="$(mktemp -d -t kbmerge.XXXXXXXX)"
+assert_fixture_dir "$WORK"
+
+# --- fixture plumbing --------------------------------------------------------
+# Hermetic git: no global/system config reaches these repos, so a developer's
+# `merge.kb-index.driver` (which this very PR installs) cannot leak in and make
+# the UNREGISTERED cases vacuously pass. That is not hypothetical — after this
+# PR merges, every machine running the suite has the key set.
+fx_git() {
+  local dir="$1"; shift
+  assert_fixture_dir "$dir"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+    git -C "$dir" -c user.email=t@t -c user.name=t -c commit.gpgsign=false "$@"
+}
+
+# Build a throwaway repo carrying a small knowledge-base corpus.
+# `-b trunk`, never `main`: the commit-on-main guardrail blocks fixture commits
+# (precedent: plugins/soleur/test/gitleaks-merge-commit.test.sh).
+new_repo() {
+  local name="$1"
+  local dir="$WORK/$name"
+  mkdir -p "$dir/knowledge-base/engineering" "$dir/knowledge-base/project"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git init -q -b trunk "$dir"
+  printf '# Alpha\n' > "$dir/knowledge-base/engineering/alpha.md"
+  printf '# Beta\n'  > "$dir/knowledge-base/project/beta.md"
+  gen "$dir"
+  fx_git "$dir" add -A
+  fx_git "$dir" commit -q -m base
+  printf '%s' "$dir"
+}
+
+# The ONLY sanctioned way to produce an index in this suite.
+gen() { KB_DIR="$1/knowledge-base" bash "$GEN" >/dev/null 2>&1; }
+
+register_driver() {
+  fx_git "$1" config merge.kb-index.driver "bash $DRIVER %O %A %B %P"
+  printf 'knowledge-base/INDEX.md merge=kb-index\n' > "$1/.gitattributes"
+  printf 'knowledge-base/kb-tags.txt merge=union\n' >> "$1/.gitattributes"
+  printf 'knowledge-base/kb-categories.txt merge=union\n' >> "$1/.gitattributes"
+  fx_git "$1" add .gitattributes
+  fx_git "$1" commit -q -m attrs
+}
+
+idx() { printf '%s' "$1/knowledge-base/INDEX.md"; }
+
+row_count()   { grep -c '^- \[' "$1" || true; }
+header_count() { sed -n 's/^> Total files: \([0-9][0-9]*\)$/\1/p' "$1"; }
+
+# A fresh generation of the SAME tree, produced off to the side so the
+# comparison never mutates the artifact under test.
+fresh_of() {
+  local dir="$1"
+  local out="$WORK/fresh.$$.$RANDOM"
+  mkdir -p "$out"
+  cp -r "$dir/knowledge-base" "$out/knowledge-base"
+  rm -f "$out/knowledge-base/INDEX.md"
+  KB_DIR="$out/knowledge-base" bash "$GEN" >/dev/null 2>&1
+  printf '%s' "$out/knowledge-base/INDEX.md"
+}
+
+echo "=== T1/AC1-AC4: two branches each add a file, real merge, driver registered ==="
+R="$(new_repo t1)"
+register_driver "$R"
+fx_git "$R" checkout -q -b side-a
+printf '# Gamma\n' > "$R/knowledge-base/engineering/gamma.md"; gen "$R"
+fx_git "$R" add -A; fx_git "$R" commit -q -m a
+fx_git "$R" checkout -q trunk
+fx_git "$R" checkout -q -b side-b
+printf '# Delta\n' > "$R/knowledge-base/project/delta.md"; gen "$R"
+fx_git "$R" add -A; fx_git "$R" commit -q -m b
+fx_git "$R" checkout -q trunk
+merge_rc=0
+fx_git "$R" merge -q --no-ff -m merge side-a >/dev/null 2>&1 || merge_rc=$?
+fx_git "$R" merge --no-ff -m merge2 side-b >/dev/null 2>&1 || merge_rc=$?
+assert_eq "0" "$merge_rc" "T1: merge of both sides completes without conflict"
+I="$(idx "$R")"
+assert_eq "1" "$(grep -c 'engineering/gamma\.md' "$I" || true)" "AC1: side-a's row survives the merge"
+assert_eq "1" "$(grep -c 'project/delta\.md' "$I" || true)" "AC1: side-b's row survives the merge"
+assert_eq "$(row_count "$I")" "$(header_count "$I")" "AC4: header count equals the row count"
+assert_eq "3" "$(fx_git "$R" rev-list --parents -1 HEAD | wc -w | tr -d ' ')" "AC3: a genuine two-parent merge, not a fast-forward"
+assert_eq "" "$(diff "$I" "$(fresh_of "$R")" || echo DIFFERS)" "AC2: merged index is byte-identical to a fresh generation"
+
+echo "=== T2/AC5: the same scenario UNREGISTERED is caught ==="
+R2="$(new_repo t2)"
+fx_git "$R2" checkout -q -b side-a
+printf '# Gamma\n' > "$R2/knowledge-base/engineering/gamma.md"; gen "$R2"
+fx_git "$R2" add -A; fx_git "$R2" commit -q -m a
+fx_git "$R2" checkout -q trunk
+printf '# Delta\n' > "$R2/knowledge-base/project/delta.md"; gen "$R2"
+fx_git "$R2" add -A; fx_git "$R2" commit -q -m b
+fx_git "$R2" merge --no-ff -m m side-a >/dev/null 2>&1 || true
+# Whatever git produced here (a conflict left in the tree, or a clean line-merge
+# that lies about the count), the property is the same: it is NOT what the
+# generator would emit, and --check must say so.
+I2="$(idx "$R2")"
+unreg_differs=DIFFERS
+diff -q "$I2" "$(fresh_of "$R2")" >/dev/null 2>&1 && unreg_differs=SAME
+assert_eq "DIFFERS" "$unreg_differs" "AC5: an unregistered merge does not match a fresh generation"
+chk_rc=0
+KB_DIR="$R2/knowledge-base" bash "$GEN" --check >/dev/null 2>&1 || chk_rc=$?
+assert_eq "1" "$([[ "$chk_rc" -ne 0 ]] && echo 1 || echo 0)" "AC5: --check exits non-zero on the unregistered result"
+
+echo "=== T6/AC6: a corrupt ancestor produces a LOUD failure, not a clean-looking file ==="
+mkdir -p "$WORK/t6"
+printf '# Knowledge Base Index\n\n> Auto-generated by `scripts/generate-kb-index.sh`. Do not edit manually.\n> Total files: 99\n\n## engineering\n\n- [Alpha](engineering/alpha.md)\n' > "$WORK/t6/O"
+cp "$WORK/t6/O" "$WORK/t6/A"; cp "$WORK/t6/O" "$WORK/t6/B"
+d_rc=0
+bash "$DRIVER" "$WORK/t6/O" "$WORK/t6/A" "$WORK/t6/B" knowledge-base/INDEX.md >/dev/null 2>&1 || d_rc=$?
+assert_eq "1" "$([[ "$d_rc" -ne 0 ]] && echo 1 || echo 0)" "T6: driver exits non-zero on a corrupt ancestor"
+assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t6/A" || true)" "AC6: the sentinel conflict marker is written exactly once"
+
+echo "=== T19/AC25: the driver refuses any path but knowledge-base/INDEX.md ==="
+mkdir -p "$WORK/t19"
+printf '# Knowledge Base Index\n\n> Auto-generated by `scripts/generate-kb-index.sh`. Do not edit manually.\n> Total files: 1\n\n## engineering\n\n- [Alpha](engineering/alpha.md)\n' > "$WORK/t19/O"
+cp "$WORK/t19/O" "$WORK/t19/A"; cp "$WORK/t19/O" "$WORK/t19/B"
+p_rc=0
+bash "$DRIVER" "$WORK/t19/O" "$WORK/t19/A" "$WORK/t19/B" some/other/file.md >/dev/null 2>&1 || p_rc=$?
+assert_eq "1" "$([[ "$p_rc" -ne 0 ]] && echo 1 || echo 0)" "T19: driver refuses a foreign %P"
+assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t19/A" || true)" "T19: refusal writes the sentinel"
+
+echo "=== T18/AC25: a row escaping knowledge-base/ is rejected even though it round-trips ==="
+mkdir -p "$WORK/t18"
+printf '# Knowledge Base Index\n\n> Auto-generated by `scripts/generate-kb-index.sh`. Do not edit manually.\n> Total files: 1\n\n## engineering\n\n- [Alpha](engineering/alpha.md)\n' > "$WORK/t18/O"
+cp "$WORK/t18/O" "$WORK/t18/A"
+printf '# Knowledge Base Index\n\n> Auto-generated by `scripts/generate-kb-index.sh`. Do not edit manually.\n> Total files: 2\n\n## ..\n\n- [Note](../../.env)\n\n## engineering\n\n- [Alpha](engineering/alpha.md)\n' > "$WORK/t18/B"
+c_rc=0
+bash "$DRIVER" "$WORK/t18/O" "$WORK/t18/A" "$WORK/t18/B" knowledge-base/INDEX.md >/dev/null 2>&1 || c_rc=$?
+assert_eq "1" "$([[ "$c_rc" -ne 0 ]] && echo 1 || echo 0)" "T18: a ../ escaping rel is rejected"
+assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t18/A" || true)" "T18: rejection writes the sentinel"
+
+echo "=== AC13/AC24: render parity and an inert parser ==="
+assert_file_exists "$RENDER_LIB" "AC13: the shared render helper exists"
+assert_eq "0" "$(grep -c 'Total files:' "$GEN" || true)" "AC13: the header literal lives only in the render helper"
+# ANCHORED ON THE CALL SHAPE, NOT THE BARE TOKEN. A `grep -c 'eval'` here
+# false-FAILS on the driver's own comment explaining that it uses no eval --
+# the exact collision cq-assert-anchor-not-bare-token describes, and it fired on
+# the first run of this suite. `eval` is a builtin, so a real call sits at a
+# command position: start of line, or after a separator.
+assert_eq "0" "$(grep -cE '(^|[;&|(]|&&|\|\|)[[:space:]]*eval[[:space:]]' "$DRIVER" || true)" \
+  "AC24: the driver makes no call to eval"
+
+echo "=== T21/AC24: a hostile title round-trips as inert text ==="
+mkdir -p "$WORK/t21"
+HOSTILE='Danger $(id) `whoami` ; rm -rf / '"'"'quote'"'"''
+mkdir -p "$WORK/t21/repo/knowledge-base/engineering"
+printf -- '---\ntitle: "%s"\n---\n' "$HOSTILE" > "$WORK/t21/repo/knowledge-base/engineering/hostile.md"
+KB_DIR="$WORK/t21/repo/knowledge-base" bash "$GEN" >/dev/null 2>&1
+HI="$WORK/t21/repo/knowledge-base/INDEX.md"
+assert_eq "1" "$(grep -cF '$(id)' "$HI" || true)" "T21: the hostile title reaches the index verbatim (the premise)"
+cp "$HI" "$WORK/t21/O"; cp "$HI" "$WORK/t21/A"; cp "$HI" "$WORK/t21/B"
+h_rc=0
+bash "$DRIVER" "$WORK/t21/O" "$WORK/t21/A" "$WORK/t21/B" knowledge-base/INDEX.md >/dev/null 2>&1 || h_rc=$?
+assert_eq "0" "$h_rc" "T21: the driver resolves a hostile-title index without error"
+assert_eq "" "$(diff "$HI" "$WORK/t21/A" || echo DIFFERS)" "T21: the hostile row round-trips byte-identically; nothing executed"
+
+echo "=== T20: the same rel added on BOTH sides with different titles ==="
+mkdir -p "$WORK/t20"
+mk_index() {
+  # $1 = out path, remaining args = rel<TAB>title rows
+  local out="$1"; shift
+  local tsv="$WORK/t20/tsv.$$"
+  : > "$tsv"
+  local r
+  for r in "$@"; do printf '%s\n' "$r" >> "$tsv"; done
+  LC_ALL=C sort -o "$tsv" "$tsv"
+  ( source "$RENDER_LIB"; kb_render_index "$tsv" ) > "$out"
+  rm -f "$tsv"
+}
+mk_index "$WORK/t20/O" "$(printf 'engineering/alpha.md\tAlpha')"
+mk_index "$WORK/t20/A" "$(printf 'engineering/alpha.md\tAlpha')" "$(printf 'engineering/new.md\tOurTitle')"
+mk_index "$WORK/t20/B" "$(printf 'engineering/alpha.md\tAlpha')" "$(printf 'engineering/new.md\tTheirTitle')"
+t20_rc=0
+bash "$DRIVER" "$WORK/t20/O" "$WORK/t20/A" "$WORK/t20/B" knowledge-base/INDEX.md >/dev/null 2>&1 || t20_rc=$?
+assert_eq "1" "$([[ "$t20_rc" -ne 0 ]] && echo 1 || echo 0)" "T20: a two-sided add with differing titles refuses rather than picking one"
+assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t20/A" || true)" "T20: the refusal writes the sentinel"
+
+echo "=== T4: both sides retitle the same file differently ==="
+mkdir -p "$WORK/t4"
+mk4() { local out="$1" title="$2" tsv="$WORK/t4/tsv"; printf 'engineering/alpha.md\t%s\n' "$title" > "$tsv"; ( source "$RENDER_LIB"; kb_render_index "$tsv" ) > "$out"; }
+mk4 "$WORK/t4/O" "Base"; mk4 "$WORK/t4/A" "Ours"; mk4 "$WORK/t4/B" "Theirs"
+t4_rc=0
+bash "$DRIVER" "$WORK/t4/O" "$WORK/t4/A" "$WORK/t4/B" knowledge-base/INDEX.md >/dev/null 2>&1 || t4_rc=$?
+assert_eq "1" "$([[ "$t4_rc" -ne 0 ]] && echo 1 || echo 0)" "T4: a two-sided retitle refuses rather than picking one"
+assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t4/A" || true)" "T4: the refusal writes the sentinel"
+
+echo "=== T4b: a ONE-sided retitle takes the changed side ==="
+mk4 "$WORK/t4/O2" "Base"; mk4 "$WORK/t4/A2" "Base"; mk4 "$WORK/t4/B2" "Renamed"
+bash "$DRIVER" "$WORK/t4/O2" "$WORK/t4/A2" "$WORK/t4/B2" knowledge-base/INDEX.md >/dev/null 2>&1
+assert_eq "1" "$(grep -c 'Renamed' "$WORK/t4/A2" || true)" "T4b: the one changed title wins"
+
+echo "=== T3: one side adds a file, the other deletes a different one ==="
+R3="$(new_repo t3)"
+register_driver "$R3"
+fx_git "$R3" checkout -q -b add-side
+printf '# Gamma\n' > "$R3/knowledge-base/engineering/gamma.md"; gen "$R3"
+fx_git "$R3" add -A; fx_git "$R3" commit -q -m add
+fx_git "$R3" checkout -q trunk
+rm "$R3/knowledge-base/project/beta.md"; gen "$R3"
+fx_git "$R3" add -A; fx_git "$R3" commit -q -m del
+t3_rc=0
+fx_git "$R3" merge --no-ff -m m add-side >/dev/null 2>&1 || t3_rc=$?
+I3="$(idx "$R3")"
+assert_eq "0" "$t3_rc" "T3: add-vs-delete merges cleanly"
+assert_eq "1" "$(grep -c 'engineering/gamma\.md' "$I3" || true)" "T3: the addition is present"
+assert_eq "0" "$(grep -c 'project/beta\.md' "$I3" || true)" "T3: the deletion is NOT resurrected"
+assert_eq "" "$(diff "$I3" "$(fresh_of "$R3")" || echo DIFFERS)" "T3: still byte-identical to a fresh generation"
+
+echo "=== T5: one side unchanged -- run PAIRED so 'the driver ran' is distinguishable ==="
+# With the driver unset, plain git also resolves this input cleanly, so a single
+# run proves nothing. The pair is what makes it evidence.
+for mode in registered unset; do
+  R5="$(new_repo "t5-$mode")"
+  [[ "$mode" == registered ]] && register_driver "$R5"
+  fx_git "$R5" checkout -q -b quiet
+  fx_git "$R5" checkout -q trunk
+  printf '# Gamma\n' > "$R5/knowledge-base/engineering/gamma.md"; gen "$R5"
+  fx_git "$R5" add -A; fx_git "$R5" commit -q -m change
+  r5_rc=0
+  fx_git "$R5" merge --no-ff -m m quiet >/dev/null 2>&1 || r5_rc=$?
+  assert_eq "0" "$r5_rc" "T5[$mode]: an unchanged side never over-conflicts"
+  assert_eq "1" "$(grep -c 'engineering/gamma\.md' "$(idx "$R5")" || true)" "T5[$mode]: the changed side's row is present"
+done
+
+echo "=== T7/T8: the facet files union rather than side-picking ==="
+R7="$(new_repo t7)"
+register_driver "$R7"
+mklearn() { mkdir -p "$1/knowledge-base/project/learnings"; printf -- '---\ntags: [%s]\ncategory: %s\n---\n# L\n' "$2" "$3" > "$1/knowledge-base/project/learnings/$4.md"; }
+fx_git "$R7" checkout -q -b tag-a
+mklearn "$R7" "alpha-tag" "alpha-cat" la; gen "$R7"
+fx_git "$R7" add -A; fx_git "$R7" commit -q -m ta
+fx_git "$R7" checkout -q trunk
+mklearn "$R7" "beta-tag" "beta-cat" lb; gen "$R7"
+fx_git "$R7" add -A; fx_git "$R7" commit -q -m tb
+fx_git "$R7" merge --no-ff -m m tag-a >/dev/null 2>&1 || true
+assert_eq "1" "$(grep -cx 'alpha-tag' "$R7/knowledge-base/kb-tags.txt" || true)" "T7: side-a's tag survives the union merge"
+assert_eq "1" "$(grep -cx 'beta-tag' "$R7/knowledge-base/kb-tags.txt" || true)" "T7: side-b's tag survives the union merge"
+assert_eq "1" "$(grep -cx 'alpha-cat' "$R7/knowledge-base/kb-categories.txt" || true)" "T8: side-a's category survives"
+assert_eq "1" "$(grep -cx 'beta-cat' "$R7/knowledge-base/kb-categories.txt" || true)" "T8: side-b's category survives"
+
+echo "=== T12: the driver fires for rebase, not only merge ==="
+R12="$(new_repo t12)"
+register_driver "$R12"
+fx_git "$R12" checkout -q -b topic
+printf '# Gamma\n' > "$R12/knowledge-base/engineering/gamma.md"; gen "$R12"
+fx_git "$R12" add -A; fx_git "$R12" commit -q -m topic
+fx_git "$R12" checkout -q trunk
+printf '# Delta\n' > "$R12/knowledge-base/project/delta.md"; gen "$R12"
+fx_git "$R12" add -A; fx_git "$R12" commit -q -m trunkside
+fx_git "$R12" checkout -q topic
+t12_rc=0
+fx_git "$R12" rebase trunk >/dev/null 2>&1 || t12_rc=$?
+assert_eq "0" "$t12_rc" "T12: rebase completes without conflict"
+I12="$(idx "$R12")"
+assert_eq "1" "$(grep -c 'engineering/gamma\.md' "$I12" || true)" "T12: the topic row survives the rebase"
+assert_eq "1" "$(grep -c 'project/delta\.md' "$I12" || true)" "T12: the trunk row survives the rebase"
+
+echo "=== T13: the refs/pull/N/merge shape -- equal additions line-merge to a wrong count ==="
+# Both sides add the SAME NUMBER of files, so both write identical count text and
+# git merges the line cleanly to a value that is wrong by construction. Rows
+# union in; nothing is lost; --check is red. Pinned so a future reader does not
+# rediscover this as a mystery: it is a true positive on the artifact, and the
+# only fix is to re-sync the branch.
+R13="$(new_repo t13)"
+fx_git "$R13" checkout -q -b s1
+printf '# G\n' > "$R13/knowledge-base/engineering/g.md"; gen "$R13"
+fx_git "$R13" add -A; fx_git "$R13" commit -q -m s1
+fx_git "$R13" checkout -q trunk
+printf '# D\n' > "$R13/knowledge-base/project/d.md"; gen "$R13"
+fx_git "$R13" add -A; fx_git "$R13" commit -q -m s2
+fx_git "$R13" merge --no-ff -m m s1 >/dev/null 2>&1 || true
+I13="$(idx "$R13")"
+assert_eq "1" "$(grep -c 'engineering/g\.md' "$I13" || true)" "T13: rows union in even without the driver"
+assert_eq "1" "$(grep -c 'project/d\.md' "$I13" || true)" "T13: both rows present"
+t13_hdr="$(header_count "$I13")"; t13_rows="$(row_count "$I13")"
+assert_eq "1" "$([[ "$t13_hdr" != "$t13_rows" ]] && echo 1 || echo 0)" "T13: the header count is wrong with no conflict and no marker"
+t13_chk=0
+KB_DIR="$R13/knowledge-base" bash "$GEN" --check >/dev/null 2>&1 || t13_chk=$?
+assert_eq "1" "$([[ "$t13_chk" -ne 0 ]] && echo 1 || echo 0)" "T13: --check catches it"
+
+echo "=== T16: an UNHANDLED shell error still writes the sentinel (the ERR trap) ==="
+# A row whose physical length exceeds the cap trips the guarded path; a NUL byte
+# trips read(1) itself. Both must end with a visible sentinel rather than a file
+# that reads as cleanly merged.
+mkdir -p "$WORK/t16"
+mk4b() { local out="$1" tsv="$WORK/t16/tsv"; printf 'engineering/alpha.md\tAlpha\n' > "$tsv"; ( source "$RENDER_LIB"; kb_render_index "$tsv" ) > "$out"; }
+mk4b "$WORK/t16/O"; mk4b "$WORK/t16/A"; mk4b "$WORK/t16/B"
+{ printf -- '- ['; head -c 9000 /dev/zero | tr '\0' 'x'; printf '](engineering/huge.md)\n'; } >> "$WORK/t16/B"
+t16_rc=0
+bash "$DRIVER" "$WORK/t16/O" "$WORK/t16/A" "$WORK/t16/B" knowledge-base/INDEX.md >/dev/null 2>&1 || t16_rc=$?
+assert_eq "1" "$([[ "$t16_rc" -ne 0 ]] && echo 1 || echo 0)" "T16: an over-long row fails closed"
+assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t16/A" || true)" "T16: the sentinel is written on the unhandled path"
+
+echo "=== T14: the Guard 3 GIT_* tripwire aborts a leaked fixture ==="
+t14_rc=0
+GIT_DIR=/tmp/leaked bash -c 'source "$1/test-helpers.sh"' _ "$SCRIPT_DIR" >/dev/null 2>&1 || t14_rc=$?
+assert_eq "97" "$t14_rc" "T14: an inherited GIT_DIR aborts with exit 97"
+
+echo "=== AC12/T9: .gitattributes routes exactly the three generated paths ==="
+ca() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$REPO_ROOT" check-attr merge -- "$1" | sed 's/.*: //'; }
+assert_eq "kb-index" "$(ca knowledge-base/INDEX.md)" "AC12: INDEX.md routes to the kb-index driver"
+assert_eq "union" "$(ca knowledge-base/kb-tags.txt)" "AC12: kb-tags.txt routes to union"
+assert_eq "union" "$(ca knowledge-base/kb-categories.txt)" "AC12: kb-categories.txt routes to union"
+assert_eq "unspecified" "$(ca plugins/soleur/knowledge-base/INDEX.md)" "AC12: the hand-maintained plugin mirror is untouched"
+
+echo "=== AC18/AC19/AC20/AC26: the surrounding wiring ==="
+assert_eq "0" "$(grep -c 'After merge conflicts on INDEX.md, regenerate' "$GEN" || true)"   "AC20: the generator no longer prescribes the hand-run remedy"
+assert_eq "1" "$([[ "$(grep -c 'merge-kb-index.sh' "$GEN" || true)" -ge 1 ]] && echo 1 || echo 0)"   "AC20: the replacement names the driver"
+assert_eq "1" "$([[ "$(grep -c 'kb-tags.txt' "$REPO_ROOT/lefthook.yml" || true)" -ge 1 ]] && echo 1 || echo 0)"   "AC18: the lefthook stanza stages the facet files"
+assert_eq "1" "$([[ "$(grep -c 'knowledge-base/INDEX.md' "$REPO_ROOT/plugins/soleur/skills/merge-pr/SKILL.md" || true)" -ge 1 ]] && echo 1 || echo 0)"   "AC19: merge-pr routing names the index explicitly"
+# ANCHORED ON THE ROW SYNTAX, not the basename. A bare-basename count reads 4
+# here because the block's own comment explains WHY merge-kb-index.sh needs a
+# row -- the second instance of cq-assert-anchor-not-bare-token in this one
+# change (the first was AC24's `eval`). A CODEOWNERS row is a leading `/path`
+# followed by an `@owner`; a comment line starts with `#` and cannot match.
+assert_eq "3" "$(grep -cE '^/scripts/(merge-kb-index|lib/kb-index-render|install-kb-merge-driver)[.]sh[[:space:]]+@' "$REPO_ROOT/.github/CODEOWNERS" || true)" "AC26: all three gate-critical scripts carry CODEOWNERS rows"
+
+print_results 54
