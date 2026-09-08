@@ -8,12 +8,12 @@ has nothing to run.
 
 ## Phase 1 — Root cause
 
-- [ ] 1.1 Locate the two escaped-backtick spans in `plugins/soleur/skills/work/SKILL.md` by
+- [x] 1.1 Locate the two escaped-backtick spans in `plugins/soleur/skills/work/SKILL.md` by
       content anchor: `against an UNTYPED client`, and the one containing the literal-backtick
       grep in the commit-message trap bullet. Both anchors verified unique.
-- [ ] 1.2 Replace each with an outer double-backtick run, padding spaces, and real inner
+- [x] 1.2 Replace each with an outer double-backtick run, padding spaces, and real inner
       backticks. No backslashes.
-- [ ] 1.3 Decide the four deliberate-space MD038 sites individually — anchors
+- [x] 1.3 Decide the four deliberate-space MD038 sites individually — anchors
       `optional`/`prefix` in the drift-guard bullet, `never single-space`, and two on the
       `Legal-doc edits have TWO independent mirror gates` line. Inline disable-line comment or
       the outer-delimiter idiom; never delete the illustrated space.
