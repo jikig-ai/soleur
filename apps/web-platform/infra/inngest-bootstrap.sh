@@ -25,6 +25,15 @@
 
 set -euo pipefail
 
+# #7797: this script runs as root under cloud-init and handles live Doppler credentials, so `-x`
+# would print them into the cloud-init log. Unconditional refusal, not the credential-conditional
+# form used by read-only probes: by the time this runs the credentials are always present, and
+# this file's own post-mortem is about secret material reaching a world-readable file
+# (knowledge-base/engineering/operations/post-mortems/inngest-heartbeat-unit-heredoc-root-substitution-postmortem.md).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # These two variables are templated by the OCI image build OR cloud-init
 # substitution. Default-to-empty triggers loud failure at runtime check.
 INNGEST_CLI_VERSION="${INNGEST_CLI_VERSION:-}"

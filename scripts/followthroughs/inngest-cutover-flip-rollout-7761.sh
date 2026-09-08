@@ -91,6 +91,18 @@
 #                  query/decode failure. Nothing was measured; this is never an all-clear.
 set -uo pipefail
 
+# #7797: this probe binds BETTERSTACK_QUERY_PASSWORD, and `-x` would print it. Refuse to run
+# traced while the credential is actually set — the conditional form, because tracing a run with
+# no credential provisioned is a legitimate way to debug the TRANSIENT arm.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${FLIP_ROLLOUT_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"
 AFTER_FILE="${FLIP_ROLLOUT_AFTER_FILE:-$REPO_ROOT/scripts/followthroughs/inngest-cutover-flip-rollout-7761.after}"

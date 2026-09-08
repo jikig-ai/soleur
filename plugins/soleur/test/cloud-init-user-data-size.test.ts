@@ -140,7 +140,20 @@ const HETZNER_CAP = 32_768;
 //
 // Measured render 24,320; 24,500 keeps the KB-scale re-inlining tripwire (a ~1.5 KB blob → ~25.8 KB
 // still trips it) and stays ~8.3 KB below HETZNER_CAP.
-const WEB_GZIP_BUDGET = 24_500;
+//
+// #7695 raise: +56 B, from digest-binding the two `soleur-inngest-bootstrap` pin sites in
+// cloud-init.yml. They were TAG-ONLY, which left an internal-registry supply-chain hole open; each
+// `@sha256:<64 hex>` costs 71 source bytes and ~28 B gzipped. This is the opposite of the class the
+// budget guards — it is a bounded, one-time, security-motivated addition, not a re-inlined blob —
+// and a ~1.5 KB blob still trips the raised value at ~26.2 KB.
+//
+// SET FROM THE CI MEASUREMENT (24,556), NOT THE LOCAL ONE (24,524). The two differ by 32 B — gzip
+// output is not byte-identical across zlib builds — and the local figure is the LOWER of the two,
+// so a budget derived from it reds in CI on the very next run. Re-derive from a CI failure line,
+// never from a local run, whenever this is raised again.
+// Measured render 24,556 (CI); 24,740 keeps ~184 B of headroom, the same margin the 24,500 raise
+// used, and stays ~8.0 KB below HETZNER_CAP.
+const WEB_GZIP_BUDGET = 24_740;
 const WEB_GZIP_FLOOR = 10_000;
 // git-data base64gzip'd budget (#5927). Measured base64gzip output ~21,929 B; the 28,000 B
 // budget leaves ~6 KB headroom over that — loose enough for Go(terraform)-vs-node(zlib) header/
