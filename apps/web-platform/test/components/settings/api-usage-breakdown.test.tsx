@@ -83,6 +83,18 @@ interface UsageFixture {
   byWorkflow: WorkflowCostRow[] | null;
 }
 
+// window-assembly: renderSection — the closure assertions below
+// (`expect(amounts).toEqual([...])`) read bucket totals through the DOM query
+// `[data-testid="workflow-bucket-total"]`. That selector is the window, and it
+// is asserted complete against ONE thing: the count of buckets passed into this
+// helper's `byWorkflow` fixture. `bucketAmounts()` enforces that equality
+// before returning, so a bucket that rendered its total WITHOUT the testid, or
+// outside the queried container, fails loudly instead of shrinking the list
+// the assertion then matches exactly.
+//
+// What this does NOT establish: that the rendered figure came from the
+// allocator rather than a raw passthrough. `formatBucketUsd` is exercised for
+// that separately. The window is complete against bucket COUNT, not provenance.
 async function renderSection(usage: UsageFixture) {
   mockLoad.mockResolvedValueOnce({
     rows: [conversation("c1", usage.mtdTotalUsd)],
@@ -91,6 +103,20 @@ async function renderSection(usage: UsageFixture) {
   const element = await ApiUsageSection({ userId: VALID_UUID });
   const { container } = render(element);
   return container;
+}
+
+/**
+ * Bucket totals as displayed, refusing to return a window narrower than the
+ * fixture it stands for. Without the count check a `toEqual([...])` over this
+ * list pins only what the selector happened to span -- the exact shape
+ * `scripts/lint-window-closure-assertion.py` exists to catch.
+ */
+function bucketAmounts(container: HTMLElement, expectedBuckets: number): string[] {
+  const nodes = Array.from(
+    container.querySelectorAll<HTMLElement>('[data-testid="workflow-bucket-total"]'),
+  );
+  expect(nodes).toHaveLength(expectedBuckets);
+  return nodes.map((el) => el.textContent ?? "");
 }
 
 function sectionText(container: HTMLElement): string {
@@ -320,11 +346,7 @@ describe("ApiUsageSection — per-workflow cost breakdown (#1055)", () => {
       // Naive per-row rounding yields $0.33 + $0.33 + $0.33 = $0.99 against a
       // $1.00 headline. Largest-remainder gives the odd cent to the largest
       // fractional remainder: $0.34 + $0.33 + $0.33 = $1.00.
-      const amounts = Array.from(
-        container.querySelectorAll<HTMLElement>(
-          '[data-testid="workflow-bucket-total"]',
-        ),
-      ).map((el) => el.textContent ?? "");
+      const amounts = bucketAmounts(container, 3);
       expect(amounts).toEqual(["$0.34", "$0.33", "$0.33"]);
       expect(text).toContain("$1.00 in April");
     });
@@ -343,11 +365,7 @@ describe("ApiUsageSection — per-workflow cost breakdown (#1055)", () => {
       // Naive per-row rounding yields $0.34 + $0.34 + $0.33 = $1.01 against a
       // $1.00 headline — an over-run, and the direction a `Math.round` per row
       // gets wrong. Only one bucket may take the odd cent.
-      const amounts = Array.from(
-        container.querySelectorAll<HTMLElement>(
-          '[data-testid="workflow-bucket-total"]',
-        ),
-      ).map((el) => el.textContent ?? "");
+      const amounts = bucketAmounts(container, 3);
       expect(amounts).toEqual(["$0.34", "$0.33", "$0.33"]);
     });
 
