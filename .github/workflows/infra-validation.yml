@@ -1320,6 +1320,14 @@ jobs:
       - name: Run zot container-log shipper tests (#7440 — envelope, cap exemption, cursor durability)
         run: bash apps/web-platform/infra/zot-log-shipper.test.sh
 
+      # Guard 1 (#7500). The heartbeat's producer-side redaction. Registered HERE, not only in
+      # test-all.sh: run-registered-suites.sh derives its list from the `run: bash …` steps in
+      # THIS file, so a suite added only to test-all.sh executes in zero runners -- green and
+      # invisible. Needs only bash + jq; no terraform, cloud-init, docker, network or root
+      # (it extracts the block from the template and drives it against synthesized PATH stubs).
+      - name: Run zot disk-heartbeat redaction tests (#7500 — per-line redact, tier gate, degrade-closed)
+        run: bash apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
+
       # Guard 3 (#7555). Needs bash + python3 + terraform (the render) + docker (the pinned
       # digest adjudicates the config), all of which this job already provides — terraform via
       # the setup-terraform step above, docker via the runner. It renders the user_data and

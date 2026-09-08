@@ -374,6 +374,103 @@ write_files:
       # a crash loop — naming a cause nobody measured (ADR-166), which is the defect this whole
       # change exists to remove. zot_last_err_src says which tier produced the text.
       if [ -z "$ZOT_ERR_RAW" ]; then ZOT_ERR_RAW=$(docker logs --tail 3 zot 2>&1); ZOT_ERR_SRC=fallback; fi
+
+      # (2e) #7500 -- REDACT THE SAMPLE BEFORE IT LEAVES THE HOST.
+      #
+      # ZOT_LAST_ERR is a <=300-char slice of zot's own log output, POSTed straight to Better
+      # Stack. On tier 4 it is routinely an info-level `HTTP API` row carrying the full headers
+      # object. zot self-masks Authorization; it does NOT mask Cookie, X-Api-Key, or any header
+      # this codebase has not anticipated. The allowlist built for the log-shipper protected a
+      # SIBLING path to the same warehouse source and never this one.
+      #
+      # CRED_HDRS and HDR_KEEP are BYTE-IDENTICAL to the copies in zot-log-shipper.sh below.
+      # That is asserted by registry-boot-guard.test.sh, which anchors on the jq program's
+      # the jq scrub program's leading definition (exactly 2 occurrences, matched at line start
+      # so this very sentence cannot be counted) rather than on byte-equality of the
+      # function bodies -- byte-equality would force this copy to emit `[zot-log-shipper]`-tagged
+      # stderr into a channel with no reader, i.e. a gate dictating dead code.
+      #
+      # NOTE the divergent shell options: the shipper opens `set -uo pipefail`, this script
+      # `set -u`. Do NOT "fix" that. Adding pipefail here turns the `head -c 300` below into
+      # rc 141 (SIGPIPE) and silently empties the field.
+      CRED_HDRS='authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token'
+      HDR_KEEP='["content-type","content-length","accept","accept-encoding","user-agent","host","connection","range","docker-distribution-api-version"]'
+      redact() {
+        local line="$1" out
+        if printf '%s' "$line" | jq -e 'type == "object" or type == "array"' >/dev/null 2>&1; then
+          out="$(printf '%s' "$line" | jq -c --argjson keep "$HDR_KEEP" '
+      def r: if type=="array" then ["REDACTED"] else "REDACTED" end;
+      def scrub: with_entries((.key|ascii_downcase) as $k | if ($keep|index($k)) then . else .value|=r end);
+      walk(if type=="object" then with_entries((.key|ascii_downcase) as $k
+      | if $k=="headers" then (if (.value|type)=="object" then .value|=scrub else error("nonobj headers") end)
+      elif $k=="authorization" then .value|=r else . end) else . end)' 2>/dev/null)" || return 1
+          [ -n "$out" ] || return 1
+          printf '%s' "$out"
+          return 0
+        fi
+        out="$(printf '%s' "$line" | sed -E \
+          -e "s/(\"?)($CRED_HDRS)(\"?[[:space:]]*:[[:space:]]*)[^,}]*/\1\2\3REDACTED/gI")"
+        if printf '%s' "$out" | grep -qiE "($CRED_HDRS)\"?[[:space:]]*:[[:space:]]*[^R[:space:]]" ; then
+          return 1
+        fi
+        printf '%s' "$out"
+      }
+
+      # PER LINE, and both halves are load-bearing -- both were MEASURED, not reasoned about.
+      # Applied to the whole multi-line blob, `redact` takes its non-JSON DENYLIST branch (a blob
+      # is not valid JSON) and an unanticipated header leaves in the clear at RC=0. Applied AFTER
+      # the sanitizer, `tr -d '"\\'` has already removed the quotes, so the JSON branch can never
+      # fire and the same denylist backstop is all that remains. Per line, before the sanitizer.
+      # HERE-STRING, not a heredoc. Two reasons, both hard requirements. (1) This block is a
+      # YAML literal scalar indented six spaces; a heredoc terminator must sit at column 0, which
+      # ENDS the block and makes cloud-init reject the whole user-data. (2) `<<<` redirects
+      # without forking, so the loop body runs in the current shell and _acc survives -- a
+      # `printf | while` pipeline would build the accumulator inside a subshell and discard it.
+      redact_sample_lines() {
+        local _in="$1" _l _r _acc="" _rc=0
+        while IFS= read -r _l; do
+          [ -n "$_l" ] || continue
+          # $'\n' rather than a literal newline inside the quotes: a wrapped string would put
+          # a bare `"` at column 0, which ends this YAML literal block exactly as a heredoc
+          # terminator would.
+          if _r="$(redact "$_l")"; then _acc="$_acc$_r"$'\n'
+          else _rc=1; break
+          fi
+        done <<< "$_in"
+        [ "$_rc" -eq 0 ] || return 1
+        printf '%s' "$_acc"
+      }
+
+      # TIER GATE -- first in the chain, before redaction and before the sanitizer.
+      # Tier 4 is a plain `docker logs --tail 3`: measured over a 21-hour crash loop it produced
+      # ~100% of the header-bearing samples and ~0% of the diagnostic value (every one an
+      # HTTP-session or gc/info line; none named a cause). Emit only the parsed `message`.
+      # DEGRADES CLOSED: with jq absent or failing, the extraction yields nothing and the field
+      # becomes `none`. It must never fall back to the raw line -- that would restore ~100% of
+      # the measured exposure while the record claims the gate removed it.
+      if [ "$ZOT_ERR_SRC" = fallback ]; then
+        _msgs=""
+        if command -v jq >/dev/null 2>&1; then
+          while IFS= read -r _l; do
+            [ -n "$_l" ] || continue
+            _m="$(printf '%s' "$_l" | jq -r 'if type=="object" and has("message") then .message else empty end' 2>/dev/null)"
+            [ -n "$_m" ] && _msgs="$_msgs$_m"$'\n'
+          done <<< "$ZOT_ERR_RAW"
+        fi
+        ZOT_ERR_RAW="$_msgs"
+      fi
+
+      # ONE degrade branch, so all three RC=1 paths (nonobj headers, residual refusal, empty
+      # output) funnel through a single handler BY CONSTRUCTION. Writing three handlers is what
+      # would make three mutation rows necessary; do not.
+      #
+      # The row still ships. It carries ~26 other fields -- pcent, fs_size_gb, zot_restarts,
+      # oom_kills_5m, boot_id -- and dropping all of them to withhold one free-text sample would
+      # destroy the disk-pressure signal precisely when it is most needed. Degrade the FIELD.
+      if ! ZOT_ERR_RAW="$(redact_sample_lines "$ZOT_ERR_RAW")"; then
+        ZOT_ERR_RAW=REDACTION_FAILED
+        ZOT_ERR_SRC="$ZOT_ERR_SRC:redact_failed"
+      fi
       # head -c, NOT tail -c. A Go panic puts `panic: <msg>` on the FIRST line and the frame
       # offsets after it; tail -c keeps the offsets and discards the only part that names the
       # cause. Measured: the 2026-08-04 15:00:02Z sample reached Better Stack carrying only

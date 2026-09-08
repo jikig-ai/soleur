@@ -333,12 +333,74 @@ assert "R3: local.registry_arch derivation is oriented correctly (catches an INV
 
 echo ""
 echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
+# --- #7500: the two redact() copies, and the tier tag -------------------------------------
+# THE DRIFT CHECK BETWEEN THE TWO redact() COPIES.
+#
+# NOT byte-equality of the function bodies. That was considered and cut: all three FATAL
+# messages inside the shipper's redact() hardcode a "[zot-log-shipper]" tag, so byte-equality
+# would force the heartbeat copy to emit mis-tagged stderr into a channel with no reader (no
+# `| logger` on that cron, no MTA, no SSH). A gate that dictates dead code is the gate
+# distorting the design.
+#
+# Anchor on the jq program and on the CONSTANTS instead -- which covers MORE than a body
+# comparison would, because HDR_KEEP *is* the allowlist and a body-only gate would let it drift
+# while staying green.
+# ANCHORED AT LINE START, which a comment cannot satisfy -- every comment in this template
+# begins with `#`. The first draft of this line used `grep -cF` on the bare string and counted
+# THREE: the two real definitions plus the sentence above explaining the check. A count is
+# evidence about a file, never about a branch (cq-assert-anchor-not-bare-token).
+SCRUB_ANCHORS=$(grep -cE '^[[:space:]]*def scrub: with_entries' "$CI")
+assert "#7500 the jq scrub program appears in exactly 2 copies (shipper + heartbeat)" \
+  "[[ '$SCRUB_ANCHORS' == '2' ]]"
+
+CRED_N=$(grep -cE "^[[:space:]]*CRED_HDRS='" "$CI")
+KEEP_N=$(grep -cE '^[[:space:]]*HDR_KEEP=' "$CI")
+assert "#7500 CRED_HDRS is defined exactly twice" "[[ '$CRED_N' == '2' ]]"
+assert "#7500 HDR_KEEP is defined exactly twice" "[[ '$KEEP_N' == '2' ]]"
+
+# BYTE-IDENTICAL, not merely present. HDR_KEEP is the allowlist; a silent divergence between
+# the two copies is precisely the drift this replaces byte-equality to catch.
+CRED_UNIQ=$(grep -E "^[[:space:]]*CRED_HDRS='" "$CI" | sed 's/^[[:space:]]*//' | sort -u | wc -l)
+KEEP_UNIQ=$(grep -E '^[[:space:]]*HDR_KEEP=' "$CI" | sed 's/^[[:space:]]*//' | sort -u | wc -l)
+assert "#7500 the two CRED_HDRS copies are byte-identical" "[[ '$CRED_UNIQ' == '1' ]]"
+assert "#7500 the two HDR_KEEP copies are byte-identical" "[[ '$KEEP_UNIQ' == '1' ]]"
+
+# The call sites differ in ARITY by design -- the shipper redacts per journal line, the
+# heartbeat per line of the sample -- so any gate inferring behavioural equivalence from text
+# identity would be a proxy. Assert the heartbeat's per-line loop exists instead.
+assert "#7500 the heartbeat applies redact() PER LINE (arity, not text identity)" \
+  "grep -qE '^[[:space:]]*redact_sample_lines\(\) \{' '$CI'"
+assert "#7500 the per-line helper is called from the sample chain" \
+  "grep -qE 'redact_sample_lines \"' '$CI'"
+
+# ORDER: the tier gate runs before redaction, which runs before the sanitizer. Behaviour pins
+# this in zot-disk-heartbeat-redaction.test.sh; this is the cheap structural companion.
+GATE_LN=$(grep -n 'ZOT_ERR_SRC" = fallback' "$CI" | head -1 | cut -d: -f1)
+REDACT_LN=$(grep -n 'redact_sample_lines "\$ZOT_ERR_RAW"' "$CI" | head -1 | cut -d: -f1)
+SANITIZE_LN=$(grep -n '^[[:space:]]*ZOT_LAST_ERR=\$(printf' "$CI" | head -1 | cut -d: -f1)
+assert "#7500 tier gate precedes the per-line redaction" \
+  "[[ -n '$GATE_LN' && -n '$REDACT_LN' && '$GATE_LN' -lt '$REDACT_LN' ]]"
+assert "#7500 the per-line redaction precedes the sanitizer (post-sanitizer, the JSON branch cannot fire)" \
+  "[[ -n '$REDACT_LN' && -n '$SANITIZE_LN' && '$REDACT_LN' -lt '$SANITIZE_LN' ]]"
+
+# The degrade path -- one branch, and it must not overload the tier enum.
+assert "#7500 a single degrade branch sets the REDACTION_FAILED placeholder" \
+  "grep -qF 'ZOT_ERR_RAW=REDACTION_FAILED' '$CI'"
+assert "#7500 the degrade path tags the tier as <tier>:redact_failed, not a new bare enum value" \
+  "grep -qF 'ZOT_ERR_SRC:redact_failed' '$CI'"
+
+# The tier gate must degrade CLOSED -- never fall back to the raw line when jq is unavailable.
+assert "#7500 the tier-4 message extraction is jq-gated (degrade closed)" \
+  "grep -qF 'command -v jq' '$CI'"
+
 # ANTI-VACUITY FLOOR. The gate below reads FAIL only, so anything that stops assertions from
 # RUNNING passes it: neutering assert() to a no-op was measured to print "0 passed, 0 failed"
 # and exit 0, and this suite is a REQUIRED check (infra-validation.yml). Deleting a whole block
 # is the same class. A FLOOR, not equality — a new assertion must never be a spurious failure.
 # Set to the full count at the time of writing; raise it in lockstep, never lower it to pass.
-MIN_ASSERTIONS=88
+# 88 before #7500; this PR adds 12 (the two-copy drift check, the order pins and the
+# degrade/tier-tag assertions). Measured, not tallied by hand.
+MIN_ASSERTIONS=100
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2
