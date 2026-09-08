@@ -180,7 +180,7 @@ drift), plus `PIN_REF_COUNT == 2 && DISTINCT_PINS == 1` per file. Empty tag set 
 visible SKIP locally.
 
 The prior plan retired it, claiming it would otherwise red `main` permanently. That is wrong. After
-merge the pin reads v1.1.26 and the newest tag is `vinngest-v1.1.26`, so `main` is green. The only
+merge the pin reads v1.1.27 and the newest tag is `vinngest-v1.1.27`, so `main` is green. The only
 red interval is **inside this PR**, between the tag-push commit and the pin-bump commit — an
 ordinary RED-first interval. Keeping the check preserves coverage and deletes the prior plan's one
 net-negative-diff change, its red-window risk row, and the redness half of UC-1.
@@ -280,7 +280,7 @@ undelivered.
 **If this leaks, the user's data is exposed via** the generated heartbeat unit file, into which the
 renderer wrote `doppler secrets` stdout for the `soleur-inngest/prd` config. That config carries
 `INNGEST_REDIS_PASSWORD`, and the write sets no `umask` — unlike its sibling env-file write, which
-is wrapped in `( umask 0137 && … )`. Exposure window opened 2026-07-16 and is **STILL OPEN**: 2026-08-20 is when the PIN was set, not when exposure ended. `git show vinngest-v1.1.25:...inngest-bootstrap.sh` still carries the unquoted delimiter and all five executing spans, and v1.1.25 is the image the host runs today, so the defective renderer fires on every bootstrap invocation. It closes only when a host replace delivers v1.1.26. Whether the
+is wrapped in `( umask 0137 && … )`. Exposure window opened 2026-07-16 and is **STILL OPEN**: 2026-08-20 is when the PIN was set, not when exposure ended. `git show vinngest-v1.1.25:...inngest-bootstrap.sh` still carries the unquoted delimiter and all five executing spans, and v1.1.25 is the image the host runs today, so the defective renderer fires on every bootstrap invocation. It closes only when a host replace delivers v1.1.27. Whether the
 rendered table carried values or only names is **UNMEASURED** and moves to the tracked issue; the
 decisive negative that must not be re-derived under pressure is that `INNGEST_REDIS_LUKS_KEY` did
 not exist during that window (`inngest-redis-luks.tf` first committed 2026-09-04), so the passphrase
@@ -343,7 +343,7 @@ mutation, which is what makes authorship precede consumption by construction.
 
 ### Phase 0 — Preconditions (no writes)
 
-0.1 Confirm `vinngest-v1.1.26` is unclaimed across every `origin/*` ref, not only `origin/main`
+0.1 Confirm `vinngest-v1.1.27` is unclaimed across every `origin/*` ref, not only `origin/main`
     (tags currently run v1.1.18 … v1.1.25). **Check for a same-named BRANCH, not only a tag** —
     `actions/checkout` resolves a bare `ref:` to a remote branch before a tag, so a branch of that
     name would subvert the build (Guard A residual 3). A tag listing alone does not answer this.
@@ -380,7 +380,7 @@ mutation, which is what makes authorship precede consumption by construction.
 2.1 **Freeze first, tag second.** Drive review to green on every carrier file *before* the tag is
     pushed, then land no further carrier edit. Tagging ahead of review makes every review finding on
     a baked file force a fresh tag and rebuild.
-2.2 Push tag `vinngest-v1.1.26` at the frozen commit. The build triggers on
+2.2 Push tag `vinngest-v1.1.27` at the frozen commit. The build triggers on
     `push: tags: ['vinngest-v*.*.*']`, publishes to GHCR, cosign-signs `${IMAGE}@${DIGEST}` keyless,
     and mirrors to zot.
 
@@ -400,7 +400,7 @@ the build workflow leaves this PR's edit set entirely.
     `--json`; `docker buildx imagetools inspect --help` → `--format`). Nothing here is recalled.
 
 ```bash
-TAG=vinngest-v1.1.26
+TAG=vinngest-v1.1.27
 IMAGE=ghcr.io/jikig-ai/soleur-inngest-bootstrap
 
 # The run id for THIS tag's build. -w pins the workflow, -b the tag ref, so a
@@ -433,7 +433,7 @@ the tag was re-pointed (residual 2). Both require re-cutting the tag, not pickin
     That premise was false — the cosign step also echoes `Signed ${IMAGE}@${DIGEST}` to stdout — and
     the signing line is the better anchor besides: it names the digest that was actually signed,
     rather than one recomputed afterwards.
-3.2 Bump all four pin sites to `v1.1.26@sha256:<digest>`, adding the digest to `cloud-init.yml`'s two
+3.2 Bump all four pin sites to `v1.1.27@sha256:<digest>`, adding the digest to `cloud-init.yml`'s two
     sites. Guards A and B go green — and green **only** against these values.
 3.3 Verify the deliberately-stale negative-control fixture in
     `cloud-init-inngest-zot-pull-mutation.test.sh` (content anchor
@@ -1017,14 +1017,14 @@ is a command whose output decides it.
 
 ### Pre-merge (PR)
 
-- **AC1** For every path in the build workflow's `COPY` list, `git show vinngest-v1.1.26:<path>` is
+- **AC1** For every path in the build workflow's `COPY` list, `git show vinngest-v1.1.27:<path>` is
   byte-identical to HEAD's copy. Asserted by Guard A, and the per-file output is pasted into the PR
   body — not a summary count.
 - **AC2** The same comparison against `vinngest-v1.1.25` is RED for at least
   `inngest-bootstrap.sh` and `inngest-cutover-flip.sh`, demonstrating the guard detects the defect
   that motivated it. Measured baseline: `probe_schema=3` → 0 at v1.1.25 and 3 at HEAD; `GUARD_REV`
   → 0 at v1.1.25 and 2 at HEAD.
-- **AC3** `git show vinngest-v1.1.26:apps/web-platform/infra/inngest-cutover-flip.sh | grep -c 'GUARD_REV="7761"'`
+- **AC3** `git show vinngest-v1.1.27:apps/web-platform/infra/inngest-cutover-flip.sh | grep -c 'GUARD_REV="7761"'`
   is non-zero. This is the in-PR half of #7761's delivery: the new tag's tree carries the stamp the
   follow-through looks for.
 - **AC4** All four pin sites carry the same tag and the same 64-hex digest, and
@@ -1137,7 +1137,7 @@ Each is out of scope by instruction or is tracked; none is silently deferred.
 **Follow-on work, each needing a tracking issue filed in Phase 5.3:**
 
 1. **The historical credential exposure** (`type/security`). Carries H3, its window (opened
-   2026-07-16, still open until a host replace delivers v1.1.26), the decisive negative that `INNGEST_REDIS_LUKS_KEY` did not exist during
+   2026-07-16, still open until a host replace delivers v1.1.27), the decisive negative that `INNGEST_REDIS_LUKS_KEY` did not exist during
    it, and the hard deadline: Better Stack source 2457081 retains 90 days, so the 2026-08-20 boot
    ages out **2026-11-18**, after which the off-host-propagation question is permanently unanswerable.
 2. **A carrier-coherence preflight for the inngest host**, generalising
@@ -1260,3 +1260,31 @@ rather than silently actioned; `ship` Phase 6 renders them into the PR body and 
 `action-required` issue. Both were narrowed by this revision — UC-1's redness argument is dead
 (Correction 4) leaving only tag reachability, and UC-2 is largely resolved because the never-executed
 on-host code is now cut.
+
+### Revision — 2026-09-08: the tag was re-cut to `vinngest-v1.1.27`
+
+`vinngest-v1.1.26` was invalidated during ship, by this plan's own mechanism working correctly.
+
+`lint-shell-trace-credential-refusal` (#7797) landed on `main` while this branch was open. It
+requires an xtrace refusal in any script binding a live credential and scans CHANGED files only,
+so touching `inngest-bootstrap.sh` made it this PR's to fix. That file is a **baked carrier**, so
+the edit broke tag/tree coherence and Guard A reported `drifted: inngest-bootstrap.sh` against
+v1.1.26 — which is precisely what Guard A exists to do, and the reason the tag had to be re-cut
+rather than the mismatch shipping silently.
+
+- New tag `vinngest-v1.1.27` at `d2761a876`, built by run **34215920283**.
+- Digest `sha256:6b89bc83031790b63ec21a970c10b98b8206bb5d7b3276f8b9477a42adafa8a4`, read from that
+  run's `Signed …@…` line — AC5 re-derived by command: `headSha` equals the tag's commit, and the
+  run emits exactly ONE distinct signing-line digest.
+- All four pin sites re-pointed. Guard A green: 10 carriers, 0 drifted at v1.1.27.
+
+**Forward-looking references to v1.1.26 in this plan were updated; historical ones were not.** The
+mutation-row measurement (`v1.1.26@sha256:<v1.1.25's digest>` passing both hermetic guards) and the
+generic tag-mutability hazard note are dated records of what was measured and stay as written, per
+the append-only rule for dated records.
+
+**This is the second time UC-1's provenance argument has had teeth.** The decision challenge noted
+that a squash merge never places the tagged branch commit into `main`, so `git show <tag>:<path>`
+depends on a commit that survives only as a tag. One PR has now cost two tag cuts. The operator's
+one-PR shape stands; this is recorded as evidence for the next time the question comes up, not as a
+reversal.
