@@ -189,6 +189,14 @@ const GIT_DATA_FLOOR = 3_000;
 // keeps the KB-scale re-inlining tripwire; the FLOOR is non-vacuity — a model that stopped
 // substituting real values, or a strip that ate the entire payload, gzips to near-nothing and
 // fails loudly here rather than at a dark host.
+// (#7695) The inngest pair. Same Hetzner-cap class as the registry arm directly below, and the
+// arm that DID NOT EXIST when it was needed: `000fa471` (#7778, 2026-09-04) took the inngest
+// render from 31,124 B to 40,964 B, 8 KB past the cap, and it shipped. Nothing caught it for five
+// days because `hcloud_server.inngest` has no `ignore_changes = [user_data]`, so an over-cap
+// payload only ARMS a replace. The first dispatched replace destroyed the host and could not
+// recreate it. Stripped render measures 10,632 B, so the budget brackets it with real headroom.
+const INNGEST_GZIP_BUDGET = 18_000;
+const INNGEST_GZIP_FLOOR = 4_000;
 const REGISTRY_GZIP_BUDGET = 20_000;
 const REGISTRY_GZIP_FLOOR = 4_000;
 
@@ -473,6 +481,56 @@ function stripHclLineComments(src: string): string {
 // So the size test below derives its input from THIS predicate rather than assuming the strip is
 // applied: unwire the strip and the modelled payload is the un-stripped one, which exceeds the
 // cap and reds the cap assertion. The guard now fails for the reason the host would.
+function inngestStripRegex(tfSrc: string): RegExp {
+  // Same uniqueness requirement as the registry extractor: comments stripped first, and a single
+  // match required, so a commented historical note cannot shadow the live local.
+  const src = stripHclLineComments(tfSrc);
+  const all = [...src.matchAll(/inngest_rationale_strip\s*=\s*"((?:[^"\\]|\\.)*)"/g)];
+  if (all.length === 0) {
+    throw new Error("local.inngest_rationale_strip not found in inngest-host.tf");
+  }
+  if (all.length > 1) {
+    throw new Error(
+      `local.inngest_rationale_strip is defined ${all.length} times in inngest-host.tf; expected exactly one`,
+    );
+  }
+  let body = all[0][1];
+  if (!body.startsWith("/") || !body.endsWith("/")) {
+    throw new Error(
+      `inngest_rationale_strip must be a slash-delimited terraform regex literal, got: ${body}`,
+    );
+  }
+  body = body.slice(1, -1);
+  if (!body.startsWith("(?m)")) {
+    throw new Error(`inngest_rationale_strip must be multiline-anchored ((?m)), got: ${body}`);
+  }
+  // `g` only — never `m`. See toNewlineOnlyMultiline for why.
+  return new RegExp(toNewlineOnlyMultiline(body.slice("(?m)".length)), "g");
+}
+
+function inngestStripIsApplied(tfSrc: string): boolean {
+  // Paren-match the user_data expression and require the local to appear INSIDE it. Mirrors
+  // registryStripIsApplied: an orphaned local (replace() dropped) or an inlined literal (local
+  // kept as decoration) both leave the payload unstripped, and both are one-edit reverts.
+  const marker = 'user_data = base64gzip(';
+  const open = tfSrc.indexOf(marker);
+  if (open === -1) return false;
+  let depth = 0;
+  let end = -1;
+  for (let i = open + marker.length - 1; i < tfSrc.length; i++) {
+    if (tfSrc[i] === "(") depth++;
+    else if (tfSrc[i] === ")") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end === -1) return false;
+  return /local\.inngest_rationale_strip/.test(tfSrc.slice(open, end + 1));
+}
+
 function registryStripIsApplied(tfSrc: string): boolean {
   const src = stripHclLineComments(tfSrc);
   const anchor = /user_data\s*=\s*base64gzip\(\s*replace\(\s*templatefile\(/.exec(src);
@@ -587,6 +645,7 @@ const gitDataTf = readFileSync(
   "utf8",
 );
 const registryTf = readFileSync(join(INFRA, "zot-registry.tf"), "utf8");
+const inngestTf = readFileSync(join(INFRA, "inngest-host.tf"), "utf8");
 const cloudInit = readFileSync(join(INFRA, "cloud-init.yml"), "utf8");
 const bootstrap = readFileSync(join(INFRA, "soleur-host-bootstrap.sh"), "utf8");
 const dockerfile = readFileSync(DOCKERFILE, "utf8");
@@ -658,6 +717,50 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     //     and the expression an engineer would most plausibly reach for is git-data's, which
     //     deletes `#cloud-config`.
     expect(registryStripIsApplied(registryTf)).toBe(true);
+  });
+
+  test("inngest host base64gzip'd user_data is under the Hetzner cap (#7695)", () => {
+    // THE ARM THAT DID NOT EXIST. On 2026-09-08 an `inngest-host-replace` dispatch destroyed
+    // hcloud_server.inngest and then failed to recreate it:
+    //   Error: invalid input in field 'user_data' [Length must be between 0 and 32768]
+    // The destroy-guard and the stock preflight both PASSED — they grade the plan's SHAPE and the
+    // DC's stock; neither weighs the payload. This is the same defect the registry arm below
+    // records for #7278, on a host that never received the same guard.
+    //
+    // The strip is modelled ONLY if the render applies it, so unwiring the `replace()` reds this
+    // at the cap exactly as the host would fail.
+    const applied = inngestStripIsApplied(inngestTf);
+    const size = renderedGzipB64LenStripped(
+      "cloud-init-inngest.yml",
+      inngestTf,
+      applied ? inngestStripRegex(inngestTf) : null,
+    );
+    expect(size).toBeLessThan(HETZNER_CAP);
+    expect(size).toBeLessThan(INNGEST_GZIP_BUDGET);
+    expect(size).toBeGreaterThan(INNGEST_GZIP_FLOOR); // non-vacuity
+  });
+
+  test("inngest user_data applies the strip through the shared local (#7695)", () => {
+    // Pins the same two one-edit reverts the registry arm pins: drop the `replace()` wrapper and
+    // orphan the local, or keep `replace()` with an INLINE literal and leave the local as
+    // decoration. Either leaves the payload unstripped and the host un-creatable.
+    expect(inngestStripIsApplied(inngestTf)).toBe(true);
+  });
+
+  test("inngest strip preserves #cloud-config and eats no YAML (#7695)", () => {
+    // `#cloud-config` IS the document — a strip that eats it boots the host dark, which is the
+    // one failure this whole mechanism must not introduce while fixing a size problem. The regex
+    // requires `#` + space/tab, so the header (no space) survives. Asserted, not assumed.
+    const re = inngestStripRegex(inngestTf);
+    const src = readFileSync(join(INFRA, "cloud-init-inngest.yml"), "utf8");
+    const out = src.replace(re, "");
+    expect(out.split("\n")[0].trim()).toBe("#cloud-config");
+    const kept = new Set(out.split("\n"));
+    const eatenNonComments = src
+      .split("\n")
+      .filter((l) => !kept.has(l))
+      .filter((l) => !/^[ \t]*#([ \t]|$)/.test(l));
+    expect(eatenNonComments).toEqual([]);
   });
 
   test("registry strip removes ONLY comments — no YAML content is eaten (#7278)", () => {

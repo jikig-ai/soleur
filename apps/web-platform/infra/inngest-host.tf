@@ -270,6 +270,14 @@ resource "doppler_service_token" "inngest" {
 }
 
 # ---------------- The dedicated Inngest host ----------------
+locals {
+  # Whole-comment-line strip applied to the inngest cloud-init render before gzip. `#` must be
+  # followed by a space or tab, so `#cloud-config` survives. Identical shape to
+  # local.registry_rationale_strip (zot-registry.tf) — deliberately a SEPARATE local rather than a
+  # shared one, so a future change to one host's strip cannot silently retune another's payload.
+  inngest_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"
+}
+
 resource "hcloud_server" "inngest" {
   name        = "soleur-inngest"
   server_type = var.inngest_server_type # arch derived in locals (cax*→arm64 / cpx*→amd64); a singleton scheduler, not throughput-bound
@@ -290,7 +298,25 @@ resource "hcloud_server" "inngest" {
   # base64gzip-first (git-data.tf / ADR-080 #5927): wrap the whole render so the shell
   # payload compresses under Hetzner's 32,768-byte user_data cap. Hetzner base64-decodes →
   # gzip magic → cloud-init auto-gunzips → byte-identical #cloud-config (DataSourceHetzner).
-  user_data = base64gzip(templatefile("${path.module}/cloud-init-inngest.yml", {
+  #
+  # ...AND STRIP THE RATIONALE PROSE FIRST (#7695). base64gzip alone was NOT enough and had
+  # silently stopped being enough: `000fa471` (#7778, 2026-09-04) took this render from 31,124 B
+  # to 40,964 B — 8 KB PAST the cap — and nothing noticed for five days, because
+  # `hcloud_server.inngest` carries no `ignore_changes = [user_data]`, so an over-cap payload only
+  # ARMS a replace and does not fire one. The first dispatched replace after that (2026-09-08)
+  # destroyed the host and could not recreate it: `invalid input in field 'user_data' [Length must
+  # be between 0 and 32768]`. The destroy-guard and the stock preflight both PASSED — they grade
+  # the plan's SHAPE and the DC's stock, and neither weighs the payload.
+  #
+  # Same three-stage chain as zot-registry.tf and modules/git-data-userdata: render → strip whole
+  # comment lines → gzip. The regex requires `#` + space/tab, so `#cloud-config` (no space) is
+  # preserved — that header is the document, and eating it boots the host dark. Measured on the
+  # file this landed with: 41,896 B → 10,632 B, i.e. 22,136 B of headroom, with 61,102 B of prose
+  # removed and ZERO non-comment lines touched.
+  #
+  # Prose in a .tmpl that rides in user_data is NOT free; prose in .tf is. Keep the rationale — it
+  # just stops being shipped to the host.
+  user_data = base64gzip(replace(templatefile("${path.module}/cloud-init-inngest.yml", {
     # Mount the Redis AOF volume by its specific id (by-id pattern). Known at plan time;
     # the attachment is a separate resource.
     inngest_volume_id = hcloud_volume.inngest_redis.id
@@ -393,7 +419,7 @@ resource "hcloud_server" "inngest" {
     # pre-Doppler fallback). Retrievable via the host metadata API — acceptable for an ingest-only
     # logs token on a deny-all host given the diagnosability it buys (weigh before widening use).
     betterstack_logs_token = var.betterstack_logs_token
-  }))
+  }), local.inngest_rationale_strip, ""))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
   # and omitting it preserves a clean replace-to-reprovision path (git-data.tf / zot-registry.tf
