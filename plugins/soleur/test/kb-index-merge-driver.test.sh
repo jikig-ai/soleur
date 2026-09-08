@@ -370,4 +370,27 @@ assert_eq "1" "$([[ "$(grep -c 'knowledge-base/INDEX.md' "$REPO_ROOT/plugins/sol
 # followed by an `@owner`; a comment line starts with `#` and cannot match.
 assert_eq "3" "$(grep -cE '^/scripts/(merge-kb-index|lib/kb-index-render|install-kb-merge-driver)[.]sh[[:space:]]+@' "$REPO_ROOT/.github/CODEOWNERS" || true)" "AC26: all three gate-critical scripts carry CODEOWNERS rows"
 
-print_results 58
+echo "=== AC17: the COMMITTED artifacts are fresh — the guard's only real-tree caller ==="
+# THIS IS THE WIRING, NOT A NICETY. Every other --check invocation in this suite
+# is KB_DIR-pinned to a fixture, which exercises the guard's LOGIC and asserts
+# nothing about the repository. Without this case `generate-kb-index.sh --check`
+# has no caller against the real tree at all: it would be reachable only by hand,
+# and "I ran it once while writing the PR" is a claim, not a gate. Since git
+# gives NO signal when .gitattributes names an unregistered merge driver, that
+# would leave the silent-line-merge case — the one this whole change exists to
+# close — caught by nothing.
+#
+# COST IS DELIBERATE AND BOUNDED. This is the ONE call in the entire suite
+# permitted to run against the real ~6,400-file corpus (~10s); every other call
+# pins KB_DIR at a fixture of ten files or fewer, because an omitted pin would
+# silently add minutes per run with nothing here that would notice.
+ac17_rc=0
+ac17_out="$(cd "$REPO_ROOT" && bash "$GEN" --check 2>&1)" || ac17_rc=$?
+if [[ "$ac17_rc" -ne 0 ]]; then
+  # Print the diff: a bare "stale" verdict sends the reader to re-derive what
+  # this run already computed.
+  printf '%s\n' "$ac17_out" | head -40 >&2
+fi
+assert_eq "0" "$ac17_rc" "AC17: the committed INDEX.md/kb-tags.txt/kb-categories.txt match a fresh generation"
+
+print_results 59

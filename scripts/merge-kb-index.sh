@@ -39,7 +39,15 @@
 # of a wrong index. That is the very row-drop this driver exists to close, one
 # level down. The sentinel below is what makes the failure visible.
 
-set -euo pipefail
+# `-E` (errtrace) IS LOAD-BEARING AND IS NOT STYLE. Without it bash does NOT run
+# an ERR trap for a failure inside a shell FUNCTION, command substitution or
+# subshell -- and every line of this driver's parsing, validation and rendering
+# runs inside a function. Measured on the real driver: injecting one unhandled
+# failure into `parse_index` produced `rc=1` with ZERO sentinel lines, i.e. a %A
+# that reads as cleanly merged after a failure, which is verbatim the defect the
+# trap below exists to prevent. Dropping the `E` silently reverts this file's
+# central safety claim.
+set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/kb-index-render.sh
@@ -53,11 +61,18 @@ readonly MAX_LINE_BYTES=8192
 
 O="${1:-}"; A="${2:-}"; B="${3:-}"; P="${4:-}"
 
-_sentinel_written=0
 write_sentinel() {
-  (( _sentinel_written == 0 )) || return 0
-  _sentinel_written=1
   [[ -n "$A" && -f "$A" ]] || return 0
+  # IDEMPOTENT ON THE FILE, NOT ON A SHELL VARIABLE. `set -E` propagates the ERR
+  # trap into COMMAND SUBSTITUTIONS, so a failure inside `$( )` -- e.g. the
+  # `WORKDIR="$(mktemp -d)"` below on a broken TMPDIR -- runs this function once
+  # in the SUBSHELL, where its variable writes die with the subshell, and then
+  # again in the parent when the assignment fails. A `_sentinel_written` flag
+  # therefore reads 0 both times and the marker is written TWICE (measured).
+  # Only the file crosses that boundary, so the file is what we test.
+  local first=""
+  IFS= read -r first < "$A" 2>/dev/null || true
+  if [[ "$first" == "<<<<<<< kb-index"* ]]; then return 0; fi
   # SCRATCH FILE BESIDE %A, DELIBERATELY NOT mktemp. The sentinel's whole job is
   # to be written on the paths where something has already gone wrong, and one
   # of those paths is a broken TMPDIR -- which is exactly when `mktemp` also
@@ -77,6 +92,8 @@ write_sentinel() {
 }
 
 # THE TRAP IS THE MECHANISM; the explicit die() calls are defence in depth.
+# It is only a mechanism because of the `-E` above: an ERR trap without errtrace
+# does not fire inside functions, which is where all of this code runs.
 #
 # Under `set -euo pipefail` an UNHANDLED failure — an awk crash on adversarial
 # input, an unbound variable, a read failure on an embedded NUL, disk-full while

@@ -38,6 +38,7 @@
 #   G10 LC_ALL=C sort dropped from the merged render .... RED
 #   G11 renderer drift: kb-index-render.sh header edited  RED
 #   G12 the 8 KB physical-line cap removed ............... RED
+#   G13 `set -E` dropped — ERR trap no longer covers functions  RED
 #   H1  the probe's own failure counter is neutered ..... RED (harness self-test)
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -222,6 +223,40 @@ probe() {
   sc10="$(grep -c '^<<<<<<< kb-index' "$a10" 2>/dev/null || true)"
   [[ "${sc10:-0}" == 1 ]] || probe_fail "P10 the ERR trap should still write the sentinel (got ${sc10:-0})"
 
+  # P12 — an unhandled failure INSIDE A FUNCTION still writes the sentinel.
+  #
+  # A DIFFERENT PROPERTY FROM P10, AND THE DISTINCTION IS THE WHOLE POINT. P10's
+  # trigger (a broken TMPDIR killing `mktemp -d`) sits at the driver's TOP LEVEL,
+  # where bash runs an ERR trap whether or not errtrace is set. Every line of the
+  # driver's parsing, validation and rendering runs inside a FUNCTION, where an
+  # ERR trap fires ONLY under `set -E`. So P10 passes with or without the `E`,
+  # and without this property the G13 mutation below survives — which is exactly
+  # what happened: the driver shipped without `-E`, and an unhandled failure in
+  # `parse_index` produced rc=1 with ZERO sentinel lines, reproducing inside its
+  # own fix the markerless-conflict defect the trap exists to prevent.
+  #
+  # The trigger is an input that passes the driver's `-f` test and then fails the
+  # `<` redirect inside parse_index. The precondition is VERIFIED, not assumed:
+  # if the harness can still read the file (running as root, or a filesystem that
+  # ignores the mode) the property is not exercisable here, and it says so
+  # loudly rather than reporting clean over an unmeasured axis.
+  local unreadable="$WORK/unreadable.$RANDOM"
+  cp "$F/add.B" "$unreadable"
+  chmod 000 "$unreadable" 2>/dev/null || true
+  if head -c 1 "$unreadable" >/dev/null 2>&1; then
+    probe_fail "P12 NOT EXERCISABLE — the fixture stayed readable (root?); the errtrace axis is UNMEASURED"
+  else
+    local a12="$WORK/A.fnscope.$RANDOM"
+    cp "$F/add.A" "$a12"
+    local rc12=0
+    bash "$DRIVER" "$F/base.O" "$a12" "$unreadable" knowledge-base/INDEX.md >/dev/null 2>&1 || rc12=$?
+    [[ "$rc12" != 0 ]] || probe_fail "P12 an unreadable input should fail closed"
+    local sc12
+    sc12="$(grep -c '^<<<<<<< kb-index' "$a12" 2>/dev/null || true)"
+    [[ "${sc12:-0}" == 1 ]] || probe_fail "P12 a FUNCTION-SCOPE unhandled failure must still write the sentinel (got ${sc12:-0}) — is errtrace set?"
+  fi
+  chmod 644 "$unreadable" 2>/dev/null || true
+
   (( PROBE_FAIL == 0 ))
 }
 
@@ -339,13 +374,15 @@ assert old in s, "G7 anchor missing"
 open(p, "w").write(s.replace(old, "trap - ERR", 1))
 PY
 
-cat > "$M/G8.py" <<'PY'
+cat > "$M/G8.py" <<'MUT'
 import sys
 p = sys.argv[1]; s = open(p).read()
-old = "  (( _sentinel_written == 0 )) || return 0"
+old = 'write_sentinel() {\n  [[ -n "$A" && -f "$A" ]] || return 0'
 assert old in s, "G8 anchor missing"
-open(p, "w").write(s.replace(old, "  return 0\n  (( _sentinel_written == 0 )) || return 0", 1))
-PY
+# Neuter the sentinel writer to a no-op while leaving every caller intact, so
+# only the WRITE is removed and not the failure detection around it.
+open(p, 'w').write(s.replace(old, 'write_sentinel() {\n  return 0\n  [[ -n "$A" && -f "$A" ]] || return 0', 1))
+MUT
 
 cat > "$M/G9.py" <<'PY'
 import sys
@@ -395,6 +432,17 @@ assert old in s, "G12 anchor missing"
 open(p, 'w').write(s.replace(old, '    (( 1 )) || die', 1))
 MUT
 
+cat > "$M/G13.py" <<'MUT'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = 'set -Eeuo pipefail'
+assert old in s, "G13 anchor missing"
+# Drop errtrace ONLY. Every `die` call site stays intact, so the only thing this
+# can break is the ERR trap's reach into functions -- which is precisely why the
+# trap is the mechanism and the `die` calls are defence in depth.
+open(p, 'w').write(s.replace(old, 'set -euo pipefail', 1))
+MUT
+
 cat > "$M/H1.py" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
@@ -419,6 +467,7 @@ apply G8  "$DRIVER" RED 'the sentinel writer is neutered to a no-op'
 apply G9  "$DRIVER" RED 'a row deleted on one side is resurrected'
 apply G10 "$DRIVER" RED 'LC_ALL=C sort dropped — rows emit in hash order'
 apply G12 "$DRIVER" RED 'the 8 KB physical-line cap is removed'
+apply G13 "$DRIVER" RED 'errtrace dropped — the ERR trap stops reaching functions'
 
 printf '=== shared-renderer drift ===\n'
 apply G11 "$RENDER" RED 'the renderer header changes while the driver stays pristine'
@@ -434,7 +483,7 @@ for r in "${RESULTS[@]}"; do printf '    %s\n' "$r"; done
 # Reported by direct printf and its OWN exit, never through the FAIL counter the
 # rows above increment: a floor that shares a lifetime with what it guards is
 # not a floor.
-EXPECTED_ROWS=13
+EXPECTED_ROWS=14
 if (( PASS + FAIL != EXPECTED_ROWS )); then
   printf 'FLOOR: ran %d rows, expected %d\n' "$((PASS+FAIL))" "$EXPECTED_ROWS" >&2
   exit 1
