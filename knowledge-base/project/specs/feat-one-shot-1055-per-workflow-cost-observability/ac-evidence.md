@@ -100,9 +100,9 @@ and proves nothing; this is what distinguishes a measurement from a tautology.
 
 ---
 
-# Phase 4 — Verification (2026-09-08)
+## Phase 4 — Verification (2026-09-08)
 
-## 4.1 / 4.2 — typecheck and suites
+### 4.1 / 4.2 — typecheck and suites
 
 - `./node_modules/.bin/tsc --noEmit` → **rc=0** (pinned binary, not `npx`).
 - `./node_modules/.bin/vitest run` over all 8 touched suites → **rc=0, 143 passed**:
@@ -110,7 +110,7 @@ and proves nothing; this is what distinguishes a measurement from a tautology.
   `api-usage-workflow-rollup`, `api-usage`, `api-usage-parity`, `api-usage-section`,
   `api-usage-breakdown`.
 
-## 4.3 — full battery: NOT run, and why
+### 4.3 — full battery: NOT run, and why
 
 `bash scripts/test-all.sh --capacity` reported **`CAPACITY_CONTENDED`**:
 `measured_runs=2 measured_suites=1`, `tmp_avail_mb=1243` against `tmp_floor_mb=1024`. Two
@@ -133,11 +133,11 @@ over every symbol this branch changed (`sum_user_mtd_cost_by_workflow`, `sum_use
 The merge gate is unaffected: CI's required `test` context runs the same shards on the PR head
 independently of anything done locally (ADR-183).
 
-## 4.4 — `c4-count-parity`
+### 4.4 — `c4-count-parity`
 
 `bash plugins/soleur/test/c4-count-parity.test.sh` → **rc=0, Passed: 10, Failed: 0**.
 
-## 4.5 — AC walk
+### 4.5 — AC walk
 
 | AC | Check | Result |
 |---|---|---|
@@ -153,7 +153,7 @@ distinguish an explanation of the invariant from a violation of it. The check ab
 comments first, and the type itself (`WorkflowBucket = WorkflowName | "unrouted" | "legacy"`)
 admits only normalised keys.
 
-## AC5b — proven non-vacuous against dev
+### AC5b — proven non-vacuous against dev
 
 The tenant-JWT denial suite is opt-in (`TENANT_INTEGRATION_TEST=1`) and passes 5/5 against
 dev. A denial test that would also pass against a *widened* grant proves nothing, so it was
