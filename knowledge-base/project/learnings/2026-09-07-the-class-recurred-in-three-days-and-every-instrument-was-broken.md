@@ -194,58 +194,55 @@ row it genuinely lacked.
 
 ## Addendum — 2026-09-08 (#7894 ship)
 
-Six more errors, all AFTER `/compound` had already run, so none of them reached the
-body above. Five are instrument failures, which is the same headline one level on:
-the fix was fine, the things measuring it were not.
+`/compound` runs before `/ship`, so an error the ship pipeline itself produces cannot reach
+the learning that pipeline writes. Five are recorded here. Two are recurrences of a
+prevention that already existed — under this file's own rule, that is the finding.
 
-**1. A "positive control" that measured argparse.** I checked my two new fixtures were
-detected by running `lint-...py --paths <file>`. `--paths` is not a flag — paths are
-positional — so every fixture returned `rc=2` and I read seven `rc=2`s as
-"DETECTED". The negative control is what exposed it: the compliant fixtures returned
-`rc=2` as well, and a guard that reports a violation on a clean file is not a guard.
-**A positive control that cannot distinguish its own CLI error from a finding is not a
-control.** Assert the OUTPUT shape, not just a non-zero exit.
+**1. The prevention existed, I ran the instrument it names, and I read past the field.**
+`2026-09-08-every-guard-i-added-to-the-gate-could-not-fail.md` #10 — merged to `main` the
+same day, PR #7934 — says to run `test-all.sh --capacity`, which reports `tmp_avail_mb`
+against its floor in ~3 s, and to write long-lived logs to `/var/tmp`. I ran that exact
+command four times this session; it printed `tmp_avail_mb=1633`, `3549`, `2615`, `2231`.
+Each time I read `reason=sibling_runs` and acted on contention. A battery then ran 11 h 50 m
+— 16x its own 42-minute budget — and the cause was ALSO `ENOSPC` on a shared 4 GB tmpfs,
+which one `df` names in a second. **A banner is not a measurement until you read the field
+that could falsify you.** Not "I did not know": I invoked the right instrument and read only
+the field that agreed with the hypothesis I arrived with.
 
-**2. The instrument went silent and I nearly read it as calm.** A `/tmp` cleaner deleted
-the session scratchpad mid-run, taking `mergemsg.txt` with it. `git commit -F` reads the
-message file AFTER the hooks finish, so a 12-hour battery would have run to completion
-and then died on a missing file. What surfaced it was a progress check returning EMPTY
-where it had returned hook names minutes earlier — absence of output, not an error.
-**Prevention:** never keep a long-running command's inputs in `/tmp`; and treat "the
-field that used to be populated is now empty" as a failure signal, not a quiet period.
+**2. The same prevention, in its other half — and a signal made of absence.** A `/tmp`
+cleaner removed the scratchpad holding a running `git commit -F` message file. `git commit
+-F` reads that file AFTER the hooks, so the battery would have run to completion and then
+died having committed nothing. `/var/tmp` was the documented remedy. What is new is the
+signal SHAPE: a progress field that had been populated came back empty. Every instrument in
+the body above produced a WRONG value; this one produced NO value, and silence reads as
+calm. **Treat a field that used to be populated and is now empty as a failure signal.**
 
-**3. Eleven hours attributed to the wrong cause.** A mutation battery ran 16x over its
-own documented budget and I called it contention. It was ALSO `ENOSPC` — `/tmp` is a 4GB
-tmpfs shared by every concurrent battery, and mutants were timing out on failing writes.
-Proven by re-running the identical hook with a disk-backed `TMPDIR`: RED to green, no
-code change. **A plausible cause that explains the symptom is not the measured cause.**
-`df` costs nothing; I reached for it eleven hours late.
+**3. Two instruments whose broken output was shaped like a result.** `--paths` is not a flag
+of `lint-shell-trace-credential-refusal.py` — paths are positional — so seven fixtures
+returned argparse's `rc=2` and I recorded seven detections. The NEGATIVE control exposed it:
+the compliant fixtures returned `rc=2` as well, and a guard that reports a violation on a
+clean file is not a guard. **Assert the output SHAPE, not merely a non-zero exit** — the
+inverse of Session Error 3 above, and one rule with it. Separately, a POSIX `[:space:]`
+class inside a **Python** regex is a bracket expression, not a class: `[[:space:]]` silently
+requires a literal `]`, and the `--config` channel it guarded went dark with the suite green.
 
-**4. Three fail-opens in the guard this PR shipped to close that exact class.** Found by
-two review agents at the ship gate, not by me: the destination limb gated on the
-variable's NAME (`$SINK` scored compliant), `env_settable` missed the bare
-`VAR="$OTHER"` assignment, and the netrc pin admitted `localhost`, which `HOSTALIASES`
-can re-point. Then fixing the first took three attempts, each caught by a FIXTURE rather
-than by reading: I scanned the whole pipeline (an upstream `printf` argument read as a
-curl operand), then the segment fix blinded the `--config` channel, then my config-key
-regex used a POSIX `[:space:]` class inside a Python regex — which silently requires a
-literal `]` and matched nothing.
+**4. A close-keyword survives negation.** A commit body recorded that a sibling PR did *not*
+close an issue that PR owns. GitHub's parser ignores the negation, and a squash merge
+prefills its body from the branch's commit messages — so merging would have closed an issue
+belonging to another PR. The scanner caught it; my reading of that message had not. The
+literal is deliberately not reproduced here. Precision worth carrying: this holds for the
+DEFAULT prefilled squash body, and a merge that supplies `--body-file` never lands the
+branch bodies at all.
 
-**5. The negation trap, caught only because the scanner exists.** A commit body read
-"it does not close #7886". GitHub's parser ignores negation and squash-merges read
-commit messages, so merging would have closed an issue another PR owns. The scanner
-caught it; my own reading of that message had not.
-
-**6. A corpus guard I could not have failed locally.** CI's `lint fixture content` went
-red on MY learning file: the exfil probe's URL carries userinfo, and a `<port>@<host>`
-substring parses as an email. (It cannot be quoted here — writing the literal re-trips
-the check, which this addendum did on its first draft.) Lefthook runs it on
-`{staged_files}`; the file was staged two syncs earlier, so no later local commit
-re-linted it. CI globs the whole tree. **This is the diff-vs-corpus asymmetry the body
-above already names, found inside the document that names it.**
-
-**The through-line, sharper than the original headline:** every one of these was a case
-where I had a reading and the reading was not a measurement. The exit code that was
-argparse. The silence that was deletion. The contention that was also a full disk. The
-guard that was green because it could not see. In each, the correction cost seconds
-(`df`, `--help`, one fixture) and the delay cost hours.
+**5. Correcting this addendum's own first draft.** It claimed "a corpus guard I could not
+have failed locally". That is false, and the true cause is worse. `lint-fixture-content`
+runs under lefthook, `knowledge-base/project/learnings/*.md` is in its glob, and it exits 1
+on this file as first committed — measured. It did not run because the commit that added the
+file used `LEFTHOOK=0` (Session Error 4 above, taken for lock contention). **A hook bypass
+has a long tail:** after it, every later commit's staged set excluded the file, so nothing
+re-linted it locally for the rest of the PR. CI caught it because an ordinary
+`pull_request` run lints the PR's CUMULATIVE diff (`BASE..HEAD`), which still contained it —
+a per-commit-vs-per-PR scope asymmetry, **not** the corpus asymmetry the body names. Second
+correction: the offending shape is not unquotable. `<port>@<host>` matches `REAL_EMAIL`, but
+only trips when the host ALSO fails `ALLOWED_EMAIL_HOSTS`; the fix was moving the host to one
+`.+\.test` admits, not removing the shape.
