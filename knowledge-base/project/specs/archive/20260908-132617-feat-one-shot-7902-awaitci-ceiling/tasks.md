@@ -1,6 +1,6 @@
 # Tasks — fix: await-ci ceiling vs ci.yml duration (#7902)
 
-Plan: `knowledge-base/project/plans/2026-09-07-fix-release-await-ci-ceiling-vs-ci-duration-plan.md`
+Plan: `knowledge-base/project/plans/archive/20260908-132617-2026-09-07-fix-release-await-ci-ceiling-vs-ci-duration-plan.md`
 
 Decision: **bounded ceiling raise + shard the long pole**, together. The raise is the deterministic
 unblock; the shard is what stops the raised ceiling becoming the next incident. Option 3

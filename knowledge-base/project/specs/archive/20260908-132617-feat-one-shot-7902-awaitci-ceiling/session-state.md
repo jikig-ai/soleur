@@ -2,7 +2,7 @@
 
 ## Plan Phase
 
-- Plan file: knowledge-base/project/plans/2026-09-07-fix-release-await-ci-ceiling-vs-ci-duration-plan.md
+- Plan file: knowledge-base/project/plans/archive/20260908-132617-2026-09-07-fix-release-await-ci-ceiling-vs-ci-duration-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
 

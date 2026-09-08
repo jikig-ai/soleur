@@ -12,7 +12,7 @@ tags:
   - shard
   - deploy-gate
 related:
-  - knowledge-base/project/plans/2026-09-07-fix-release-await-ci-ceiling-vs-ci-duration-plan.md
+  - knowledge-base/project/plans/archive/20260908-132617-2026-09-07-fix-release-await-ci-ceiling-vs-ci-duration-plan.md
   - knowledge-base/engineering/architecture/decisions/ADR-208-deploy-gate-measures-its-own-gated-quantity.md
   - knowledge-base/project/learnings/2026-05-15-plan-ac-verification-commands-awk-self-match-and-marker-conjunction.md
   - knowledge-base/project/learnings/2026-09-07-every-instrument-i-built-to-check-my-own-work-could-not-tell-clean-from-never-ran.md
