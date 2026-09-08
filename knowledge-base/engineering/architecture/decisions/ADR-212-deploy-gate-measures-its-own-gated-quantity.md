@@ -4,7 +4,7 @@ status: accepted
 date: 2026-09-07
 ---
 
-# ADR-208: The deploy gate is bounded by measuring its own gated quantity
+# ADR-212: The deploy gate is bounded by measuring its own gated quantity
 
 - **Deciders:** Jean (operator), CTO agent (binding ruling on three forks), review panel
   (code-simplicity-reviewer, architecture-strategist, performance-oracle)

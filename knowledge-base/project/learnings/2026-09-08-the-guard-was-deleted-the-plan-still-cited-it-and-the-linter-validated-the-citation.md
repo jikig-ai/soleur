@@ -13,7 +13,7 @@ tags:
   - deploy-gate
 related:
   - knowledge-base/project/plans/archive/20260908-132617-2026-09-07-fix-release-await-ci-ceiling-vs-ci-duration-plan.md
-  - knowledge-base/engineering/architecture/decisions/ADR-208-deploy-gate-measures-its-own-gated-quantity.md
+  - knowledge-base/engineering/architecture/decisions/ADR-212-deploy-gate-measures-its-own-gated-quantity.md
   - knowledge-base/project/learnings/2026-05-15-plan-ac-verification-commands-awk-self-match-and-marker-conjunction.md
   - knowledge-base/project/learnings/2026-09-07-every-instrument-i-built-to-check-my-own-work-could-not-tell-clean-from-never-ran.md
   - knowledge-base/project/learnings/2026-09-04-a-learning-two-working-copies-and-it-still-got-re-derived-wrong.md
@@ -33,7 +33,7 @@ adjacent to what the claim asserted.**
 Mid-implementation, Guard 2 ("CI's declared budget is bounded by the deploy gate's ceiling") was
 built, mutation-proven at 10/10, and then **deleted** on a CTO ruling: arithmetic over *declared*
 job ceilings omits the concurrency-queue term, so the guard is green on exactly the configurations
-the gate cannot absorb. The deletion was recorded in a Correction stanza and in ADR-208.
+the gate cannot absorb. The deletion was recorded in a Correction stanza and in ADR-212.
 
 Two other places still cited it as live:
 

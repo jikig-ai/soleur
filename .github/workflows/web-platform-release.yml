@@ -224,7 +224,7 @@ jobs:
             # the quantity the gate actually gates — time-to-`test` — which INCLUDES ci.yml's
             # own concurrency queue. Declared job ceilings in ci.yml bound execution only, so
             # arithmetic over them is green on configurations this gate cannot absorb; that
-            # approach was tried and rejected (see ADR-208).
+            # approach was tried and rejected (see ADR-212).
             if [ "$elapsed" -ge "$soft_ceiling_s" ] && [ "$warned_soft" = "0" ]; then
               echo "::warning::await-ci has passed 70% of its ceiling for $SHA (elapsed_s=$elapsed, soft_ceiling_s=$soft_ceiling_s, CEILING_S=$CEILING_S). This measures time-to-'test' INCLUDING the ci.yml concurrency queue. Sustained hits mean CI has outgrown the deploy gate — raise CEILING_S (moving DRIFT_SUSTAINED_THRESHOLD_MIN first) or shorten CI, before this becomes a fail-closed deploy."
               # Written HERE, not at exit: the loop leaves via `exit 0` on the success path, and

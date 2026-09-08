@@ -954,7 +954,7 @@ jobs:
     # budget to fit this: it is the repo's stated expectation for that suite, and shrinking it to
     # fit an unrelated cap re-creates this trap one layer down.
     #
-    # This does not bound the deploy gate and is not trying to — see ADR-208. Its job is
+    # This does not bound the deploy gate and is not trying to — see ADR-212. Its job is
     # capping a hung leg at 1 hour instead of GitHub's 6-hour default.
     timeout-minutes: 60
     # No setup-node — bash + python3 + a stock node (with npm) ship on

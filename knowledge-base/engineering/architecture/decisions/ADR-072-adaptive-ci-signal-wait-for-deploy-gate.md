@@ -212,7 +212,7 @@ gate would compare an un-CI'd SHA against itself and pass. It would also permane
 `live-verify` (whose `if:` ends `github.event_name == 'push'`). Today's failure is a blocked
 deploy; that one is an unverified deploy reporting success.
 
-**New coupling.** [ADR-208](./ADR-208-deploy-gate-measures-its-own-gated-quantity.md) records that the gated quantity is
+**New coupling.** [ADR-212](./ADR-212-deploy-gate-measures-its-own-gated-quantity.md) records that the gated quantity is
 time-to-`test` and that it decomposes into `concurrency queue + critical-path execution` — the
 queue being ci.yml's own serialisation of main pushes, which is usually the larger term. It
 therefore bounds this gate by MEASURING that quantity (a `::warning::` at 0.7 x CEILING_S in the

@@ -220,7 +220,7 @@ Two mechanisms survive: **bound the gate's budget**, and **reduce the quantity i
 3. ~~**Bound CI's contribution to the gate mechanically** — assert that the declared ceilings of
    `test`'s closure sum under `CEILING_S`, so the failure class cannot silently recur.~~
    **WITHDRAWN 2026-09-08 (QA round 2).** This is Guard 2, deleted on the CTO ruling recorded in
-   the Correction stanza and ADR-208: declared ceilings bound execution only, so the arithmetic
+   the Correction stanza and ADR-212: declared ceilings bound execution only, so the arithmetic
    omits the queue and is green on configurations the gate cannot absorb. The failure class is
    instead caught by measuring the gated quantity — `await-ci`'s soft-ceiling warning at
    0.7 x CEILING_S, with `notify-slow-ci` as its consumer. **Fourth** instance of this stale
@@ -389,7 +389,12 @@ Amend ADR-072, author the new ADR, update and re-arm #5806. See below.
 
 ### ADR
 
-- **Create ADR-208** (ordinal RESOLVED at implementation time; the plan's provisional 207 was
+- **Create ADR-212** (ordinal resolved TWICE: the plan's provisional 207 was taken, 208 was then
+  claimed at implementation time, and 208 was taken AGAIN by a sibling that landed on `main` during
+  this PR's Phase 7 — caught by the post-sync `check-adr-ordinals` re-check, which is the only
+  thing standing between that collision and a red `main`, since `adr-ordinals` is not a required
+  check. Renumbered 208 -> 212 (209-211 were also claimed on other origin refs). The plan's
+  provisional 207 was
   claimed mid-session by `origin/feat-one-shot-7795-tag-shared-store-softening`, which is exactly
   why the plan said to re-derive across every `origin/*` ref rather than a `main`-scoped probe; a
   `main`-scoped probe is wrong — derive across every `origin/*` ref and re-derive before merge) —
@@ -458,11 +463,11 @@ Both records ship in this PR; nothing is deferred behind a soak.
 liveness_signal:
   # CORRECTED 2026-09-08 (QA round 2): this said "backed by declared per-job ceilings whose sum is
   # asserted under CEILING_S" — that is Guard 2's property, and Guard 2 was deleted (see the
-  # Correction stanza and ADR-208). THIRD instance of the same defect in this one document; the
+  # Correction stanza and ADR-212). THIRD instance of the same defect in this one document; the
   # first two were caught in QA round 1 and this one was missed because the sweep was indexed by
   # the phrase "Guard 2" rather than by the PROPERTY it asserted. Index a correction sweep by the
   # claim, never by the name.
-  what: "the required `test` aggregator check-run on every push and PR — the same check-run await-ci gates on; plus scheduled-prod-version-drift.yml reading prod /health build_sha. No guard sums declared per-job ceilings against CEILING_S — that approach was built and rejected (ADR-208); the ceiling is instead measured directly by await-ci's own soft-ceiling warning."
+  what: "the required `test` aggregator check-run on every push and PR — the same check-run await-ci gates on; plus scheduled-prod-version-drift.yml reading prod /health build_sha. No guard sums declared per-job ceilings against CEILING_S — that approach was built and rejected (ADR-212); the ceiling is instead measured directly by await-ci's own soft-ceiling warning."
   cadence: "per push and per pull_request for CI; nominally every 30 minutes for the drift probe (measured delivered interval 61-243 min)"
   alert_target: "GitHub required-check failure on the offending PR; Sentry cron monitor -> operator email for the drift probe; main-health-monitor.yml files a P1 ci/main-broken issue; notify-gated posts to Slack on a fail-closed await-ci"
   configured_in: ".github/workflows/ci.yml, .github/workflows/web-platform-release.yml, .github/workflows/scheduled-prod-version-drift.yml, scripts/prod-version-drift-check.sh"
@@ -480,7 +485,7 @@ failure_modes:
     alert_route: "required `test` check fails on the offending PR"
   - mode: "CI's declared budget grows back past what the deploy gate can absorb"
     # SUPERSEDED 2026-09-08 (QA). This entry named Guard 2, which was DELETED on the CTO ruling
-    # recorded in the Correction stanza and in ADR-208: arithmetic over DECLARED job ceilings
+    # recorded in the Correction stanza and in ADR-212: arithmetic over DECLARED job ceilings
     # omits the concurrency-queue term, so it is green on configurations the gate cannot absorb.
     # Leaving the old text would have left the sharpest hazard reading as mitigated by a control
     # that does not exist. What actually detects this is the gate measuring its OWN quantity.
@@ -552,7 +557,7 @@ registration set** must PASS.
 ### Guard 2 — CI's declared budget is bounded by the deploy gate's ceiling — **REJECTED, NOT SHIPPED**
 
 > **Superseded 2026-09-08 (QA, #7902).** This guard was built and mutation-proven at 10/10, then
-> DELETED on the CTO ruling recorded in the Correction stanza and in ADR-208. The design below is
+> DELETED on the CTO ruling recorded in the Correction stanza and in ADR-212. The design below is
 > retained verbatim as the **rejected** design so it is not re-proposed — that is the whole reason
 > the section still exists. Do not read anything under this heading as describing shipped code.
 >
@@ -646,7 +651,7 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
 
 ## Files to Create
 
-- `knowledge-base/engineering/architecture/decisions/ADR-208-deploy-gate-measures-its-own-gated-quantity.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-212-deploy-gate-measures-its-own-gated-quantity.md`
   (ordinal provisional).
 - Guard 1 suite (shard totality) and Guard 2 suite (CI budget bounded by `CEILING_S`).
 
@@ -694,7 +699,7 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
       were added after review found both were live false-green paths, plus a control, a harness row,
       the K=1-tautology row and a MUSTPASS row.
 - [x] AC13 — ~~Guard 2 drives RED on each of its seven mutation rows~~ **SUPERSEDED 2026-09-08**:
-      Guard 2 was deleted (Correction stanza / ADR-208). Discharged instead by
+      Guard 2 was deleted (Correction stanza / ADR-212). Discharged instead by
       `plugins/soleur/test/await-ci-ceiling-invariants.test.sh` — 14/14, four invariants each
       driven RED by its own mutation, one MUSTPASS row proving the assertions are not over-broad,
       plus a control and an instrument self-test.
@@ -710,7 +715,7 @@ reference `.github/workflows/ci.yml`, `.github/workflows/web-platform-release.ym
 - [x] AC18 — `bash plugins/soleur/test/c4-count-parity.test.sh` passes (10/10).
 - [x] AC19 — `actionlint` is clean on both edited workflows and each edited `run:` snippet passes
       `bash -c` extraction. `bash -n` is **not** run against workflow YAML.
-- [x] AC20 — ADR-208 exists with `status: accepted`; ADR-072 is **amended, not superseded** (its
+- [x] AC20 — ADR-212 exists with `status: accepted`; ADR-072 is **amended, not superseded** (its
       `status:` stays `accepted`), carries the re-measurement, and records that item 4's premise was
       stated in run-wall-clock terms — a quantity the gate does not measure.
 - [x] AC21 — the ADR ordinal is free across every `origin/*` ref, re-verified immediately before
@@ -919,7 +924,7 @@ point-in-time artifact and is not rewritten in place; this stanza is the correct
    arithmetic omits the queue term of correction 1 and is green on configurations the gate cannot
    absorb — and no headroom factor repairs a missing term. It is replaced by a `::warning::` at
    0.7 x CEILING_S inside `await-ci`, which measures the gated quantity itself, queue included.
-   ADR-208 is rewritten accordingly and records the rejection so it is not re-proposed.
+   ADR-212 is rewritten accordingly and records the rejection so it is not re-proposed.
 
 Also corrected: measured per-leg install overhead is 0.52 min (not ~1.5), and `test-scripts`
 ships `timeout-minutes: 60` (not 30) because one suite on its path declares a 2,500,000 ms

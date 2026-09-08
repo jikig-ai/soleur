@@ -281,6 +281,7 @@
 23	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 1	scripts/followthroughs/git-data-rung2-evidence-capture.sh
 1	scripts/followthroughs/infra-config-activation-7220.test.sh
+1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.sh
 1	scripts/followthroughs/t5-skip-persistence-bound-7510.test.sh
 2	scripts/followthroughs/zot-soak-6122.test.sh
