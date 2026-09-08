@@ -26,7 +26,10 @@
 # the PRE-edit title; (2) a generator rule change on one branch (eligibility,
 # title extraction, escaping) leaves the other side's rows rendered under the
 # old rules; (3) a future title source outside the file itself. This is exactly
-# why the CI guard is `generate-kb-index.sh --check` — a regeneration diff — and
+# why the CI guard is `generate-kb-index.sh --check` — a regeneration diff whose only
+# real-tree caller is the AC17 case in plugins/soleur/test/kb-index-merge-driver.test.sh,
+# reached via SUITE_GLOBS in scripts/test-all.sh (there is no step for it in
+# .github/workflows/ or lefthook.yml, so grepping those three files finds nothing) — and
 # not a structural lint: only re-running the generator over the merged tree
 # catches all three. The driver makes the common case (both sides only added
 # files) correct and conflict-free; the guard makes the uncommon case loud.
@@ -63,7 +66,7 @@ readonly EXPECTED_PATH="knowledge-base/INDEX.md"
 # on the ERR-trap path there is no stderr at all, so a reader was being handed a
 # confident wrong diagnosis as the only durable artifact.
 readonly SENTINEL_PREFIX='<<<<<<< kb-index: merge driver could not resolve'
-# Far above any real row. Measured on this repo's corpus 2026-09-08: 6,434 rows,
+# Far above any real row. Measured on this repo's corpus 2026-09-08: 6,439 rows,
 # longest 365 bytes —
 #   awk '/^- \[/{n=length($0); if(n>m)m=n} END{print m}' knowledge-base/INDEX.md
 # A memory bound on adversarial input, not a format rule. NOTE ${#line} counts
@@ -214,10 +217,15 @@ parse_index() {
     [[ "$body" == *"]("* ]] || die "malformed row (no ]( separator) in $src"
     # EXACTLY ONE UNESCAPED `](`, or the title/rel split is ambiguous.
     #
-    # Splitting on the LAST `](` silently mis-keys a crafted row: for
-    # `- [Weird](x/x/a](x/b.md)` it yields title="Weird](x/x/a", rel="x/b.md",
-    # and that re-renders BYTE-IDENTICALLY — so round-trip validation is a fixed
-    # point over the misparse and cannot see it. The duplicate-rel guard catches
+    # Splitting on the LAST `](` silently mis-keys a crafted row, and the row has
+    # to keep its DOMAIN for round-trip to be blind to it. Measured: for
+    # `- [Weird](x/x/a](x/b.md)` the mis-keyed rel `x/b.md` makes the renderer
+    # emit a `## x` heading the input does not carry, so round-trip catches it and
+    # this guard is not what fires. The real fixed point keeps the domain:
+    # `- [Weird](engineering/x](engineering/z.md)` yields title="Weird](engineering/x",
+    # rel="engineering/z.md", re-renders BYTE-IDENTICALLY, and is invisible to
+    # round-trip. That is the row T6 and the battery's corrupt.O now carry; the
+    # earlier example made both fixtures score a guard they never reached. The duplicate-rel guard catches
     # it only when the mis-key happens to collide with a real row.
     #
     # The discriminator is escaping, not position: the generator escapes EVERY
@@ -264,17 +272,60 @@ parse_index() {
 # still fails here, which is the property this check was added for. Only the
 # digits are exempt, because repairing a stale count is precisely what the driver
 # is for: its OUTPUT always carries the count derived from the merged rows.
+# The replacement is a byte no valid index can contain, so the masked form is not
+# itself an accepted header shape. `<derived>` was, and that made a file whose
+# header literally read `> Total files: <derived>` round-trip clean.
+_MASK_SENTINEL=$'> Total files: \001masked'
 _mask_derived_count() {
-  sed 's/^> Total files: [0-9][0-9]*$/> Total files: <derived>/' "$1"
+  # WRITES TO A FILE, NEVER A PROCESS SUBSTITUTION. `cmp` cannot see a process
+  # substitution's exit status, and `set -E` does NOT propagate the ERR trap into
+  # one (measured: it does into `$( )` and into a plain `( )`, but not `<( )`).
+  # With `sed` absent or failing, both streams came back empty, `cmp -s` compared
+  # nothing to nothing and returned 0, and round-trip validation passed for ALL
+  # THREE inputs with the driver exiting 0 -- fail-OPEN, in the one function whose
+  # design premise is fail-closed, and directly contradicting this file's own
+  # "every failure path that owns %A writes a sentinel". Redirecting puts the
+  # failure back under `|| die`.
+  sed "s/^> Total files: [0-9][0-9]*\$/${_MASK_SENTINEL}/" "$1"
+}
+
+# THE OVERCOUNT DIRECTION IS NOT STALENESS, IT IS ROW LOSS -- REFUSE IT.
+#
+# The mask exempts the derived count so a historical blob does not block an
+# ordinary merge. But it exempts it in BOTH directions, and the two directions
+# are not the same event:
+#
+#   header < body  an UNDERCOUNT. main's generator counted `${#all_files[@]}`
+#                  from the find pass while emitting rows from another, so this
+#                  is the measured historical bug (68b0e6d79, 8094a685d). It
+#                  cannot be fixed retroactively and must be tolerated.
+#   header > body  an OVERCOUNT. No generator run produces one. It is the
+#                  fingerprint of rows removed by hand while the count line
+#                  survived -- which is exactly what a `git checkout --theirs` or
+#                  a hand-stripped conflict leaves behind, and exactly how the
+#                  ADR-206 row was dropped three times on PR #7896.
+#
+# Measured before this guard existed: ours = one row with a header saying 2,
+# theirs = that row plus two more. The merge resolved rc=0, wrote no sentinel,
+# and SILENTLY DROPPED the row -- the defect this whole change exists to prevent,
+# reintroduced by its own fix. Refusing the overcount closes it while leaving the
+# undercount tolerated, which is the asymmetry the two directions actually have.
+validate_count_not_overstated() {
+  local src="$1" tsv="$2" declared rows
+  declared="$(sed -n 's/^> Total files: \([0-9][0-9]*\)$/\1/p' "$src" | head -n 1)"
+  [[ -n "$declared" ]] || return 0
+  rows="$(wc -l < "$tsv")"; rows="${rows//[[:space:]]/}"
+  (( declared <= rows )) || die "index at $src declares $declared rows but carries $rows: rows were removed while the count line survived, which no generator produces"
 }
 
 validate_roundtrip() {
-  local src="$1" tsv="$2" rendered="$WORKDIR/rt.$$"
+  local src="$1" tsv="$2" rendered="$WORKDIR/rt.$$" m_rt="$WORKDIR/m.rt.$$" m_src="$WORKDIR/m.src.$$"
   kb_render_index "$tsv" > "$rendered"
-  if ! cmp -s <(_mask_derived_count "$rendered") <(_mask_derived_count "$src"); then
-    die "round-trip validation failed for $src (not a canonical generated index)"
-  fi
-  rm -f "$rendered"
+  _mask_derived_count "$rendered" > "$m_rt"  || die "round-trip mask failed for $rendered"
+  _mask_derived_count "$src"      > "$m_src" || die "round-trip mask failed for $src"
+  cmp -s "$m_rt" "$m_src" || die "round-trip validation failed for $src (not a canonical generated index)"
+  validate_count_not_overstated "$src" "$tsv"
+  rm -f "$rendered" "$m_rt" "$m_src"
 }
 
 # --- 3. Containment: a rel is a path the consumers will follow ----------------

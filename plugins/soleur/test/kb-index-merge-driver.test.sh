@@ -18,7 +18,7 @@
 # and "a guard stopped being enforceable".
 #
 # KB_DIR IS PINNED ON EVERY GENERATOR CALL. `generate-kb-index.sh` defaults
-# KB_DIR to the real tree, which costs seconds per call (6,434 files; 6.7s measured 2026-09-08). An
+# KB_DIR to the real tree, which costs seconds per call (6,439 files; 6.7s measured 2026-09-08). An
 # omitted pin would silently add minutes of real-corpus work to CI with nothing
 # in the suite that would notice.
 
@@ -157,7 +157,6 @@ mkdir -p "$WORK/t6"
 mk_render() { local out="$1"; shift; local tsv="$WORK/.mkr.$$"; : > "$tsv"
   local r; for r in "$@"; do printf '%s\n' "$r" >> "$tsv"; done
   LC_ALL=C sort -o "$tsv" "$tsv"; ( source "$RENDER_LIB"; kb_render_index "$tsv" ) > "$out"; rm -f "$tsv"; }
-mk_render "$WORK/t6/O" "$(printf 'engineering/alpha.md\tAlpha')"
 # THE CORRUPTION IS A ROW, NOT THE DERIVED COUNT — and it was the count until
 # T22 was written. `> Total files: 99` is not a corrupt ancestor in any sense the
 # driver cares about: the count is a function of the rows, the driver never reads
@@ -165,9 +164,13 @@ mk_render "$WORK/t6/O" "$(printf 'engineering/alpha.md\tAlpha')"
 # over-strict behaviour that made the driver refuse this PR's own first sync
 # against a perfectly parseable ancestor (see T22). What a corrupt ancestor
 # actually means is a row the parser cannot key unambiguously, so that is what
-# this case now injects: a second unescaped `](` makes the title/rel split
-# ambiguous, which is the misparse round-trip validation exists to stop.
-printf -- '- [Weird](x/x/a](x/b.md)\n' >> "$WORK/t6/O"
+# this case now injects. AND IT HAS TO KEEP THE DOMAIN. The first attempt used
+# `- [Weird](x/x/a](x/b.md)`, whose mis-keyed rel `x/b.md` makes the renderer emit
+# a `## x` heading the fixture does not carry — so ROUND-TRIP caught it and
+# neutering the separator guard changed no assertion in either suite. Measured
+# both ways. A same-domain row is the true round-trip fixed point: it re-renders
+# byte-identically, so the separator count is the only thing that can see it.
+mk_render "$WORK/t6/O" "$(printf 'engineering/alpha.md\tAlpha')" "$(printf 'engineering/z.md\tWeird](engineering/x')"
 cp "$WORK/t6/O" "$WORK/t6/A"; cp "$WORK/t6/O" "$WORK/t6/B"
 d_rc=0
 bash "$DRIVER" "$WORK/t6/O" "$WORK/t6/A" "$WORK/t6/B" knowledge-base/INDEX.md >/dev/null 2>&1 || d_rc=$?
@@ -418,8 +421,16 @@ assert_eq "union" "$(ca knowledge-base/kb-categories.txt)" "AC12: kb-categories.
 assert_eq "unspecified" "$(ca plugins/soleur/knowledge-base/INDEX.md)" "AC12: the hand-maintained plugin mirror is untouched"
 
 echo "=== AC18/AC19/AC20/AC26: the surrounding wiring ==="
-assert_eq "0" "$(grep -vE '^[[:space:]]*#[^!]' "$GEN" | grep -c 'After merge conflicts on INDEX.md, regenerate' || true)"   "AC20: the generator no longer prescribes the hand-run remedy"
-assert_eq "1" "$([[ "$(grep -c 'merge-kb-index.sh' "$GEN" || true)" -ge 1 ]] && echo 1 || echo 0)"   "AC20: the replacement names the driver"
+# NOT COMMENT-STRIPPED, and that is the whole point of this row. The prescription
+# only ever LIVED in a comment, so stripping comments first made the assertion
+# unfalsifiable: restoring the removed line verbatim leaves it green. Measured.
+# The comment-strip that makes AC13 and AC18 correct makes this one vacuous.
+assert_eq "0" "$(grep -c 'After merge conflicts on INDEX.md, regenerate' "$GEN" || true)"   "AC20: the generator no longer prescribes the hand-run remedy"
+# ANCHORED ON THE GUIDANCE SENTENCE, not the basename. `grep -c merge-kb-index.sh
+# >= 1` is satisfied by an unrelated architecture note elsewhere in the file, so
+# deleting the whole replacement block left this green — the seventh instance of
+# cq-assert-anchor-not-bare-token on this branch.
+assert_eq "1" "$(grep -c 'never resolve it by taking one side' "$GEN" || true)"   "AC20: the replacement names the driver and the rule"
 # ANCHORED ON THE `run:` LINE. `grep -c 'kb-tags.txt' lefthook.yml >= 1` is satisfied by a
 # COMMENT — and this is the assertion for the behaviour this PR changes, so it failed OPEN:
 # reverting the stanza to main's `git add knowledge-base/INDEX.md` while a comment still
@@ -460,9 +471,17 @@ register_driver "$R22"
 # the committed file then amend, so the stale value is what git hands the driver
 # as %O rather than something the working tree can quietly regenerate away.
 I22="$(idx "$R22")"
-sed -i 's/^> Total files: \([0-9][0-9]*\)$/> Total files: 999/' "$I22"
+# UNDERCOUNT, not 999. The measured historical blobs are header = body - 1
+# (68b0e6d79: 6430/6431; 8094a685d: 6432/6433) because main's generator counted
+# the find pass while emitting rows from another. An OVERCOUNT is a different
+# event entirely -- rows removed while the count line survived -- and the driver
+# now refuses it (AC29 below). A fixture using 999 modelled the direction that
+# must FAIL while asserting the one that must pass.
+sed -i 's/^> Total files: \([0-9][0-9]*\)$/> Total files: 1/' "$I22"
 fx_git "$R22" add -A; fx_git "$R22" commit -q --amend --no-edit
-assert_eq "999" "$(header_count "$I22")" "T22: the ancestor really does carry a stale count"
+assert_eq "1" "$(header_count "$I22")" "T22: the ancestor really does carry a stale count"
+assert_eq "1" "$([[ "$(header_count "$I22")" -lt "$(row_count "$I22")" ]] && echo 1 || echo 0)" \
+  "T22: and it is an UNDERCOUNT — the direction history actually produces"
 fx_git "$R22" checkout -q -b side-a
 printf '# Gamma\n' > "$R22/knowledge-base/engineering/gamma.md"; gen "$R22"
 fx_git "$R22" add -A; fx_git "$R22" commit -q -m a
@@ -481,6 +500,28 @@ assert_eq "$(row_count "$I22")" "$(header_count "$I22")" "AC27: the OUTPUT's cou
 # ancestor's header LINE is reshaped rather than merely stale. A mask that
 # tolerated the whole line (or the whole header block) would pass this too, and
 # would stop pinning the renderer's byte-identity to the generator's.
+# ---------------------------------------------------------------------------
+# AC29 — AN OVERCOUNT IS ROW LOSS, AND IT MUST REFUSE. On a LIVE side, not the
+# ancestor: this is the shape a hand-stripped conflict leaves behind, and it is
+# how the ADR-206 row was dropped three times on PR #7896.
+#
+# Measured before the guard existed: ours = one row with a header saying two,
+# theirs = that row plus two more. The merge resolved rc=0, wrote no sentinel,
+# and silently dropped the row — this change's own mask reintroducing the exact
+# defect the change exists to prevent. Every other stale-count case in both
+# suites corrupts the ANCESTOR, so none of them could see it.
+echo "=== AC29: an overcount on a live side is row loss, and refuses ==="
+mkdir -p "$WORK/ac29"
+mk_render "$WORK/ac29/O" "$(printf 'engineering/alpha.md\tAlpha')" "$(printf 'engineering/gamma.md\tGamma')"
+mk_render "$WORK/ac29/A" "$(printf 'engineering/alpha.md\tAlpha')"
+sed -i 's/^> Total files: 1$/> Total files: 2/' "$WORK/ac29/A"
+mk_render "$WORK/ac29/B" "$(printf 'engineering/alpha.md\tAlpha')" "$(printf 'engineering/gamma.md\tGamma')" "$(printf 'project/beta.md\tBeta')"
+ac29_rc=0
+bash "$DRIVER" "$WORK/ac29/O" "$WORK/ac29/A" "$WORK/ac29/B" knowledge-base/INDEX.md >/dev/null 2>&1 || ac29_rc=$?
+assert_eq "1" "$([[ "$ac29_rc" -ne 0 ]] && echo 1 || echo 0)" "AC29: an overcount on the ours side refuses"
+assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/ac29/A" || true)" "AC29: and writes exactly one sentinel naming the cause"
+assert_eq "1" "$(grep -c 'rows were removed while the count line survived' "$WORK/ac29/A" || true)" "AC29: the sentinel names row loss, not a generic mismatch"
+
 echo "=== AC28: only the numeral is exempt, not the header line ==="
 R23="$(new_repo t23)"
 register_driver "$R23"
@@ -510,7 +551,7 @@ echo "=== AC17: the COMMITTED artifacts are fresh — the guard's only real-tree
 # close — caught by nothing.
 #
 # COST IS DELIBERATE AND BOUNDED. This is the ONE call in the entire suite
-# permitted to run against the real corpus (6,434 rows; 6.7s measured 2026-09-08); every other call
+# permitted to run against the real corpus (6,439 rows; 6.7s measured 2026-09-08); every other call
 # pins KB_DIR at a fixture of ten files or fewer, because an omitted pin would
 # silently add minutes per run with nothing here that would notice.
 ac17_rc=0
@@ -554,4 +595,4 @@ fi
 PASS=$_pc_pass_before
 FAIL=$_pc_fail_before
 
-print_results 74
+print_results 78

@@ -20,7 +20,7 @@
 # catches all of them.
 #
 # EVERY GENERATOR CALL PINS KB_DIR AT A FIXTURE. The generator defaults KB_DIR
-# to the real tree (6,434 files; `bash scripts/generate-kb-index.sh --check` measured 6.7s on 2026-09-08); this battery makes on the order
+# to the real tree (6,439 files; `bash scripts/generate-kb-index.sh --check` measured 6.7s on 2026-09-08); this battery makes on the order
 # of thirty calls, so an omitted pin would silently add minutes with nothing in
 # the run that would notice.
 #

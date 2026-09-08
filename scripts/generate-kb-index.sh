@@ -219,11 +219,24 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
 # xargs child leaves knowledge-base/INDEX.md destroyed on disk (measured: 156
 # bytes -> 8 bytes of partial output). lefthook runs this generator on every
 # commit touching knowledge-base/, so that window is routine.
+# UNLINK BEFORE REDIRECTING. A redirect FOLLOWS an existing symlink, so a
+# pre-planted `<artifact>.tmp.<pid>` pointing anywhere writable makes this write
+# through it and the following `mv -f` then replaces the tracked artifact with a
+# symlink. scripts/merge-kb-index.sh documents this exact class for its own
+# scratch file and applies the same remedy; measured here before the fix, the
+# tracked artifact became a symlink to the planted target.
 _index_tmp="$INDEX_FILE.tmp.$$"
+rm -f "$_index_tmp"
 kb_render_index "$tmpfile" > "$_index_tmp"
 mv -f "$_index_tmp" "$INDEX_FILE"
 
-echo "Generated $INDEX_FILE ($total files indexed)"
+# DERIVED FROM THE ARTIFACT, not from `${#all_files[@]}`. That second derivation
+# is the exact mechanism behind main's off-by-one headers -- the find pass and
+# the row pass can disagree -- and this echo was the last place it survived after
+# kb-index-render.sh started deriving the header from the row count. AC13 cannot
+# see it: it greps for `Total files:`, which this line does not contain.
+_indexed="$(grep -c '^- \[' "$INDEX_FILE" || true)"
+echo "Generated $INDEX_FILE ($_indexed files indexed)"
 
 # ---------------------------------------------------------------------------
 # Facet extraction: emit kb-tags.txt and kb-categories.txt from learnings/.
@@ -324,6 +337,7 @@ if [[ -d "$LEARNINGS_DIR" ]]; then
   # Split the tagged stream into two sorted, unique artifacts.
   # `grep ... || true` avoids set -e tripping when a facet type has no entries.
   # Same atomic-publish contract as the index above.
+  rm -f "$TAGS_FILE.tmp.$$" "$CATEGORIES_FILE.tmp.$$"   # see the unlink note above
   { grep $'^tag\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE.tmp.$$"
   mv -f "$TAGS_FILE.tmp.$$" "$TAGS_FILE"
   { grep $'^cat\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$CATEGORIES_FILE.tmp.$$"

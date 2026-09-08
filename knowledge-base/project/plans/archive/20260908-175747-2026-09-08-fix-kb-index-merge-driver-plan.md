@@ -12,6 +12,23 @@ domain: engineering
 brand_survival_threshold: none
 ---
 
+> **Superseded in part, 2026-09-08 (#7935).** Implementation falsified four rows of this plan. They
+> are left standing rather than edited, because a dated record is append-only.
+>
+> - **T6, and mutation rows G2-1 / G2-2** specify that corrupting an index's `> Total files:` count
+>   makes the driver exit non-zero and write a sentinel. In that direction it no longer does. The
+>   count is derived, the driver recomputes it, and an ancestor is a historical commit by
+>   construction — two of the last twelve commits touching INDEX.md on `main` carry a header that
+>   disagrees with their own body, so validating it refused ordinary merges. An **overcount** still
+>   refuses, because rows removed while the count line survived is row loss rather than staleness.
+>   See ADR-210's 2026-09-08 addendum.
+> - **G2-3**'s stated discriminator ("the suite must catch G2-2") therefore names a case that no
+>   longer exists.
+> - **AC14** says the driver battery "exits 0 with all 13 rows scored ok"; it is 17 (G1-G16 + H1).
+>   The rows added after this plan was written are G14 (the mask is not deletable), G15 (the
+>   ambiguous-separator guard, which until its fixture kept its domain was covered by nothing), and
+>   G16 (the overcount guard).
+
 ## Overview
 
 `knowledge-base/INDEX.md` is a committed, generated artifact with no `.gitattributes` entry, so git

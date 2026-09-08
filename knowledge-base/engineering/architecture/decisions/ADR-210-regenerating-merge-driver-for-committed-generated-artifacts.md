@@ -65,7 +65,15 @@ resolved.**
    hook's `git add` is discarded. **The driver's only inputs are the three files git hands it.**
 
 3. **Validation is by round trip, not by checklist.** Each input is parsed, re-rendered through
-   the shared renderer, and byte-compared against itself. This is strictly stronger than a list
+   the shared renderer, and byte-compared against itself, with ONE field exempt: the derived
+   `> Total files:` numeral. That exemption is not cosmetic and it is why this sentence was
+   rewritten after implementation — an ancestor is a historical commit by construction, and
+   two of the last twelve commits touching INDEX.md on `main` carry a header that disagrees
+   with their own body, so validating the numeral refused ordinary merges. The exemption is
+   one-directional in effect: an UNDERCOUNT (the measured historical generator bug) is
+   tolerated, an OVERCOUNT is refused, because rows removed while the count line survived is
+   row loss rather than staleness and no generator produces it. Everything else is still
+   byte-compared. This is strictly stronger than a list
    of structural assertions: it makes a misparse impossible to act on, and it re-pins the shared
    renderer's byte-identity with the generator on *every merge* rather than only in a parity
    test. All three inputs are validated, the ancestor included — it is the base of the set
@@ -119,7 +127,7 @@ resolved.**
   doing something else would pass every check here. The controls are the script's size, its
   review, explicit `CODEOWNERS` rows, and the fact that a modified driver does not execute until
   a merge *after* the one that brought it in.
-- **The row-set merge is not equivalent to regenerating in four cases**, all named in the
+- **The row-set merge is not equivalent to regenerating in four cases**, three of them named in the
   driver's own header: rename-plus-edit across branches; a generator rule change on one branch; a
   future title source outside the file; and — the most reachable of the four — a STALE index on
   one side, which is indistinguishable from a deliberate deletion. The house workflow in
@@ -156,3 +164,40 @@ resolved.**
 | A lefthook `pre-commit` registration stanza | Fires *after* the merge it would arm; and the shared config means one surface registers fleet-wide. |
 | Stop committing the generated artifacts entirely | Coherent, and two reviewers converged on it — recorded as a challenge rather than adopted. It is materially larger than #7935 scopes: `git worktree add` does not copy ignored files, so every worktree would start with no index and pay a ~10s regeneration, and five skills and agents grep the committed file. See the branch's `decision-challenges.md`. |
 | Leave registration as a documented command | The target user is non-technical; a manual step is not a mechanism. |
+
+## Addendum — 2026-09-08 (#7935)
+
+Written after implementation, because three decisions were made *after* this ADR was drafted and
+the record read as though they had not been.
+
+**The derived count is exempt from round-trip validation, asymmetrically.** Decision 3 above is
+rewritten accordingly. Alternatives considered and rejected at that point, none of which appear in
+the table above:
+
+| Alternative | Rejected because |
+|---|---|
+| Drop `> Total files:` from the artifact entirely | The renderer already derives it from the row count, so the disagreement class is closed going forward. Removing a field five skills read to solve a history problem is disproportionate. |
+| Do not validate the ancestor at all | `%O` feeds `have_base`, so a misparse there flips add-vs-delete for a whole row set. Validating it is load-bearing; exempting one derived field is the narrow cut. |
+| Backfill the stale counts in history | Rewrites published history to satisfy a guard. Never worth it. |
+
+**Consequence not previously recorded: this driver is now a repairer where §7 describes a
+detector.** §7 rejects `merge=union` for INDEX.md on the ground that a header disagreeing with its
+body is the signature of a silent line-merge. Before the exemption the driver refused on that
+signature; now it repairs it, and its output always carries the count derived from the merged rows.
+Repair is the better outcome, but a reader of §7 should not infer that a stale header still
+surfaces as a conflict. What it does surface as is a `--check` diff.
+
+**The overcount direction stays loud, and that is the load-bearing half.** Measured while
+implementing: with the exemption applied in both directions, a live side whose rows had been
+stripped by hand while its count line survived merged cleanly, wrote no sentinel, and dropped the
+row — this change reintroducing, through its own fix, the defect it exists to prevent. The driver
+now refuses when a declared count exceeds the rows actually present.
+
+**The residual registration window is wider than the fresh-clone case named above.** It is the
+union of: (1) a fresh clone whose first action is a merge; (2) a session already in flight when
+`.claude/settings.json` changes — `SessionStart` fired under the old settings, so the hook arms only
+at the next `startup|resume|clear|compact`, which is precisely the window this change itself sat in;
+(3) a checkout that never runs an install, so the `prepare` surface never fires; and (4) a silent
+registration failure. `--check` is what closes all four downstream, and its only real-tree caller is
+the `AC17` case in `plugins/soleur/test/kb-index-merge-driver.test.sh`, reached through `SUITE_GLOBS`
+in `scripts/test-all.sh` — there is no step for it in `.github/workflows/` or `lefthook.yml`.

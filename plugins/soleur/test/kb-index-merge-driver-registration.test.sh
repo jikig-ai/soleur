@@ -134,8 +134,16 @@ assert_eq "" "$(cfg "$R" extensions.worktreeConfig)" "AC9: extensions.worktreeCo
 # script that merely DOCUMENTS the rule ("never write the config by hand, e.g.
 # `printf ... > .git/config`") false-FAILS — the same collision, in the same
 # file, treated two different ways.
-assert_eq "0" "$(grep -vE '^[[:space:]]*#' "$INSTALL" | grep -cE '>[[:space:]]*"?\$?[A-Za-z_]*(GIT_DIR|\.git)/config' || true)" \
-  "AC9: no redirect over .git/config appears in the script's CODE"
+# `[A-Za-z_]*` CANNOT CROSS A SLASH OR A BRACE, and that made this assertion miss
+# five of seven realistic spellings. Measured by inserting each as live code and
+# re-running: `> "$repo/.git/config"`, `> "$R4/.git/config"`, `> ./.git/config`,
+# `> "${GIT_DIR}/config"` and `sed -i … "$GIT_DIR/config"` all read 0 — the
+# assertion PASSED with a live redirect in the file. The class is any write whose
+# operand ends in a git config path, however the prefix is spelled, so the prefix
+# is now `[^|;&]*` (anything up to a pipeline or list separator) and `sed -i` is
+# covered alongside the redirect.
+assert_eq "0" "$(grep -vE '^[[:space:]]*#' "$INSTALL" | grep -cE '(>>?[[:space:]]*|sed[[:space:]]+-i[^|;&]*)[^|;&]*(GIT_DIR\}?|\.git)/config' || true)" \
+  "AC9: no redirect or in-place edit over .git/config appears in the script's CODE"
 
 echo "=== AC10: a held config.lock never blocks the session ==="
 R2="$(new_repo locked)"

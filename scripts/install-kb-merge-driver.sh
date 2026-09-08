@@ -65,7 +65,15 @@ note() {
 
 emit_notes() {
   [[ -n "$_NOTES" ]] || return 0
-  if command -v jq >/dev/null 2>&1; then
+  # NOT GUARDED ON `command -v jq` ANY MORE. This file's own header states that
+  # every failure path reports "once, as a `systemMessage` on stdout -- stderr
+  # alone is DISCARDED for an exit-0 hook". A `command -v` guard made that
+  # universal conditional on a tool that may be absent, so on a machine without
+  # jq a failed registration went FULLY silent through the one channel the header
+  # calls the only working one. The sibling `.claude/hooks/memory-backstop.sh`
+  # calls jq unguarded; this was the deviation. `|| true` still keeps the hook
+  # from ever blocking a session.
+  if true; then
     jq -n --arg m "install-kb-merge-driver: $_NOTES" '{systemMessage:$m}' 2>/dev/null || true
   fi
   return 0
@@ -143,7 +151,7 @@ fi
 emit_notes
 
 # Always 0: a registration failure must never block a session start or an
-# `npm install`. CI's `generate-kb-index.sh --check` is what makes an
+# `npm install`. CI's `generate-kb-index.sh --check` (its only real-tree caller is the `AC17` case in plugins/soleur/test/kb-index-merge-driver.test.sh, reached via SUITE_GLOBS in scripts/test-all.sh — there is no step for it in .github/workflows/ or lefthook.yml) is what makes an
 # unregistered driver loud, because git itself gives no signal at all when
 # .gitattributes names a driver that is not registered -- it silently falls back
 # to the default text merge.

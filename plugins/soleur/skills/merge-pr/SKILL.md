@@ -167,7 +167,7 @@ git config --get merge.kb-index.driver   # empty => unregistered; run the instal
 ls -l scripts/merge-kb-index.sh scripts/lib/kb-index-render.sh   # missing => a tree problem, not a config one
 ```
 
-**A `kb-tags.txt` / `kb-categories.txt` merge never conflicts and can still leave CI red.** Those two use git's built-in `merge=union`, whose output is not sorted the way the generator writes it, and nothing regenerates between a clean auto-committing merge and CI. If `generate-kb-index.sh --check` reds on a facet file after a merge, that is expected and the fix is one command:
+**A `kb-tags.txt` / `kb-categories.txt` merge never conflicts and can still leave CI red** — red via the `AC17` case in `plugins/soleur/test/kb-index-merge-driver.test.sh`, which is `--check`'s only real-tree caller and reaches CI through `SUITE_GLOBS`; there is no step for it in `.github/workflows/` or `lefthook.yml`, so grepping those finds nothing.** Those two use git's built-in `merge=union`, whose output is not sorted the way the generator writes it, and nothing regenerates between a clean auto-committing merge and CI. If `generate-kb-index.sh --check` reds on a facet file after a merge, that is expected and the fix is one command:
 
 ```bash
 bash scripts/generate-kb-index.sh && git add knowledge-base/kb-tags.txt knowledge-base/kb-categories.txt

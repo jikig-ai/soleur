@@ -40,6 +40,8 @@
 #   G12 the 8 KB physical-line cap removed ............... RED
 #   G13 `set -E` dropped — ERR trap no longer covers functions  RED
 #   G14 the derived-count mask removed from round-trip  RED
+#   G15 the ambiguous-separator guard removed .......... RED (needs P3's same-domain fixture)
+#   G16 the overcount guard removed .................... RED (needs P15)
 #   H1  the probe's own failure counter is neutered ..... RED (harness self-test)
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -147,14 +149,25 @@ mk "$F/abs.B"  "$A_ROW" "$(printf '/etc/passwd\tAbsolute')"
 # and its output recomputes it. Pinning a refusal on it made the driver refuse
 # ordinary merges whose ancestor happened to carry a stale numeral -- including
 # this PR's own first sync. See the stale.O fixture below, P13, and G14.
-cp "$F/base.O" "$F/corrupt.O"
-printf -- '- [Weird](x/x/a](x/b.md)\n' >> "$F/corrupt.O"
+# THE ROW MUST KEEP ITS DOMAIN or this fixture scores the wrong guard. Measured:
+# `- [Weird](x/x/a](x/b.md)` mis-keys to rel `x/b.md`, whose `## x` heading the
+# input lacks, so ROUND-TRIP catches it — and neutering `(( _seps == 1 ))`
+# changed no assertion in either suite. A same-domain row re-renders
+# byte-identically and is invisible to round-trip, so the separator count is the
+# only guard that can see it. That is what G15 now drives.
+mk "$F/corrupt.O" "$A_ROW" "$(printf 'engineering/z.md\tWeird](engineering/x')"
 # A STALE ancestor, which is a different thing from a corrupt one: every row is
 # intact and parseable, only the derived numeral is wrong. Measured on
 # origin/main 2026-09-08, two of the last twelve commits touching INDEX.md carry
 # exactly this (68b0e6d79 header 6430 / body 6431; 8094a685d 6432 / 6433), and an
 # ancestor is a historical commit by construction.
-sed 's/^> Total files: .*/> Total files: 99/' "$F/base.O" > "$F/stale.O"
+sed 's/^> Total files: .*/> Total files: 1/' "$F/base.O" > "$F/stale.O"
+# An OVERCOUNT on a LIVE side: rows removed while the count line survived. No
+# generator produces it; it is what a hand-stripped conflict leaves behind, and
+# it is how the ADR-206 row was dropped three times on PR #7896. Distinct from
+# stale.O in direction and in verdict — stale.O must resolve, this must refuse.
+mk "$F/over.A" "$A_ROW"
+sed -i 's/^> Total files: 1$/> Total files: 9/' "$F/over.A"
 # A STRAY NON-ROW LINE — the fixture that round-trip validation, and NOTHING
 # else, can see. Every other guard inspects rows: the parser skips a line that
 # is not `- [`, so containment, the separator count, the dup-rel check and the
@@ -243,6 +256,15 @@ probe() {
   [[ "$rc" == 0 ]] || probe_fail "P13 a stale ancestor count should still resolve (got rc=$rc)"
   [[ "$sc" == 0 ]] || probe_fail "P13 a stale ancestor count must write no sentinel (got $sc)"
   cmp -s "$a" "$F/want" || probe_fail "P13 the stale-ancestor merge is not the canonical render"
+
+  # P15 — an OVERCOUNT on a live side is REFUSED. The direction stale.O does not
+  # cover: P13 proves an undercount resolves, and without this a driver that
+  # exempted the count in BOTH directions passes every count row while silently
+  # dropping the removed row.
+  out="$(run_driver "$F/base.O" "$F/over.A" "$F/add.B" knowledge-base/INDEX.md)"
+  read -r rc sc a <<<"$out"
+  [[ "$rc" != 0 ]] || probe_fail "P15 an overcount on a live side should be refused (got rc=$rc)"
+  [[ "$sc" == 1 ]] || probe_fail "P15 the refusal should write exactly one sentinel (got $sc)"
 
   # P4 — a rel escaping knowledge-base/ is rejected even though it round-trips.
   local esc
@@ -408,14 +430,11 @@ MUT
 cat > "$M/G2.py" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-# ANCHORED ON THE `if !` DISPATCH, NOT ON A `cmp ... || die` ONE-LINER. The
-# original anchor was that one-liner; when validate_roundtrip grew the
-# derived-count mask the line changed shape, the mutator stopped landing, and
-# the row reported the BASELINE -- caught here only because this battery
-# asserts landing separately from the verdict.
-old = """  if ! cmp -s <(_mask_derived_count "$rendered") <(_mask_derived_count "$src"); then
-    die "round-trip validation failed for $src (not a canonical generated index)"
-  fi"""
+# ANCHORED ON THE `cmp … || die` DISPATCH. This anchor has now moved twice — once
+# when validate_roundtrip grew the derived-count mask, once when it stopped using
+# process substitution — and BOTH times the mutator silently stopped landing and
+# the row reported the BASELINE. Only this battery's landing assertion caught it.
+old = '  cmp -s "$m_rt" "$m_src" || die "round-trip validation failed for $src (not a canonical generated index)"'
 assert old in s, "G2 anchor missing"
 open(p, "w").write(s.replace(old, '  : # round-trip validation removed', 1))
 PY
@@ -514,16 +533,56 @@ assert old in s, "G10 anchor missing"
 open(p, "w").write(s.replace(old, "done > \"$OUT_TSV\"", 1))
 PY
 
+cat > "$M/G15.py" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "    (( _seps == 1 )) || die"
+assert old in s, "G15 anchor missing"
+# THE SEPARATOR GUARD. Until corrupt.O kept its domain this row could not exist:
+# every ambiguous fixture in the tree was also caught by round-trip, so deleting
+# this guard changed no verdict anywhere.
+open(p, "w").write(s.replace(old, "    (( 1 )) || die", 1))
+PY
+
+cat > "$M/G16.py" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "  (( declared <= rows )) || die"
+assert old in s, "G16 anchor missing"
+# THE OVERCOUNT GUARD. Removing it restores the silent row drop the mask
+# introduced -- P15 goes red, every other row stays green.
+open(p, "w").write(s.replace(old, "  (( 1 )) || die", 1))
+PY
+
 cat > "$M/G14.py" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-old = "  sed 's/^> Total files: [0-9][0-9]*$/> Total files: <derived>/' \"$1\""
+old = '  sed "s/^> Total files: [0-9][0-9]*\\$/${_MASK_SENTINEL}/" "$1"'
 assert old in s, "G14 anchor missing"
-# THE MASK REMOVED. Round-trip validation goes back to byte-comparing the whole
-# file, so a stale derived count in the ancestor refuses the merge again (P13),
-# while every other property still holds -- which is why this row exists: the
-# regression it guards is invisible to all thirteen other rows.
-open(p, "w").write(s.replace(old, "  cat \"$1\"", 1))
+# THE MASK REMOVED. Round-trip goes back to byte-comparing the whole file, so a
+# stale ancestor numeral refuses again (P13), while every other property holds.
+open(p, "w").write(s.replace(old, '  cat "$1"', 1))
+PY
+
+cat > "$M/G15.py" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "    (( _seps == 1 )) || die"
+assert old in s, "G15 anchor missing"
+# THE SEPARATOR GUARD. Until corrupt.O kept its domain this row could not exist:
+# every ambiguous fixture in the tree was also caught by round-trip, so deleting
+# this guard changed no verdict anywhere.
+open(p, "w").write(s.replace(old, "    (( 1 )) || die", 1))
+PY
+
+cat > "$M/G16.py" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "  (( declared <= rows )) || die"
+assert old in s, "G16 anchor missing"
+# THE OVERCOUNT GUARD. Removing it restores the silent row drop the mask
+# introduced -- P15 goes red, every other row stays green.
+open(p, "w").write(s.replace(old, "  (( 1 )) || die", 1))
 PY
 
 cat > "$M/G11.py" <<'PY'
@@ -584,6 +643,8 @@ apply G10 "$DRIVER" RED 'LC_ALL=C sort dropped — rows emit in hash order'
 apply G12 "$DRIVER" RED 'the 8 KB physical-line cap is removed'
 apply G13 "$DRIVER" RED 'errtrace dropped — the ERR trap stops reaching functions'
 apply G14 "$DRIVER" RED 'the derived-count mask removed — a stale ancestor numeral refuses again'
+apply G15 "$DRIVER" RED 'the ambiguous-separator guard removed — a mis-keyed row is accepted silently'
+apply G16 "$DRIVER" RED 'the overcount guard removed — a live side loses a row silently'
 
 printf '=== shared-renderer drift ===\n'
 apply G11 "$RENDER" RED 'the renderer header changes while the driver stays pristine'
@@ -599,7 +660,7 @@ for r in "${RESULTS[@]}"; do printf '    %s\n' "$r"; done
 # Reported by direct printf and its OWN exit, never through the FAIL counter the
 # rows above increment: a floor that shares a lifetime with what it guards is
 # not a floor.
-EXPECTED_ROWS=15
+EXPECTED_ROWS=17
 if (( PASS + FAIL != EXPECTED_ROWS )); then
   printf 'FLOOR: ran %d rows, expected %d\n' "$((PASS+FAIL))" "$EXPECTED_ROWS" >&2
   exit 1

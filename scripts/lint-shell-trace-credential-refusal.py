@@ -85,7 +85,14 @@ SIGNAL_GH_AUTH = r"gh auth token"
 #
 # `${!arr[@]}` AND `${!arr[*]}` ARE EXCLUDED, and they are a different construct
 # entirely. `${!name}` yields a VALUE chosen at runtime; `${!arr[@]}` yields the
-# array's KEYS, which are variable/index names and never a secret -- and it is
+# array's KEYS. Be precise about why that is safe, because the obvious reason is
+# wrong: an ASSOCIATIVE array's key is an arbitrary string, so a key CAN be a
+# secret and `echo "${!m[@]}"` will print it under trace (measured). What makes
+# the construct safe is that it does not BIND a credential -- whatever line put
+# the secret into that key is itself a binding line, and catching binding lines
+# is what SECRET_SIGNALS is for. In the `for` form this tree actually uses, bash
+# traces the word list UNEXPANDED (`+ for k in "${!seen[@]}"`), so even that
+# case emits nothing. And it is
 # the only way bash can iterate an associative array, so every script that uses
 # one was in scope. The bare `\$\{!` spelling flagged scripts/merge-kb-index.sh
 # (#7935) for `for rel in "${!merged[@]}"`, a loop over knowledge-base row paths,
