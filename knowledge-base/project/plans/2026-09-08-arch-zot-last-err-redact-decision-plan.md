@@ -637,46 +637,36 @@ exception:
 
 ## Observability
 
-```yaml
-liveness_signal:
-  what: the SOLEUR_ZOT_DISK row itself — 27 fields including zot_last_err_src
-  cadence: every 5 minutes
-  alert_target: Better Stack Logs source 2457081; absence alarms via the 900s
-    betteruptime disk heartbeat and via scheduled-zot-restart-loop.yml's telemetry-silent arm
-  configured_in: apps/web-platform/infra/cloud-init-registry.yml (/etc/cron.d/zot-disk-heartbeat)
-error_reporting:
-  destination: the row itself. A redaction failure is reported IN-BAND as
-    zot_last_err_src=redact_failed, queryable off-box with betterstack-query.sh — mirroring the
-    shipper's own reason=redact_failed drop bucket.
-  fail_loud: yes — a distinct enum value, never folded into an existing one. The row is still
-    delivered, so the failure is observable rather than being reported by absence.
-failure_modes:
-  - mode: redact() cannot structurally redact a sample (non-object headers)
-    detection: count of rows with zot_last_err_src=redact_failed over a window
-    alert_route: scheduled-zot-restart-loop.yml already reads this source; a sustained non-zero
-      count is a follow-through probe, not a page
-  - mode: jq absent on the host (packages: is documented non-fatal)
-    detection: redact() falls to the sed backstop automatically; observable as the absence of
-      structural redaction on a JSON sample in the readback probe
-    alert_route: the readback probe's assertion; degrades in the SAFE direction by construction
-  - mode: the scrub is INERT — present but matching nothing (the #7440 class: "redaction that is
-      nominally present and actually inert" because it was anchored on the wrong shape)
-    detection: CI mutation battery, not runtime. This is the failure runtime cannot see.
-    alert_route: the guard contract below; a red mutation row blocks the PR
-  - mode: the sink-side scrub is bypassed by a NEW CAUSE-building arm added later
-    detection: the guard asserts at the emit_and_exit() chokepoint, so a new arm is covered by
-      construction rather than by having been enumerated
-    alert_route: CI
-logs:
-  where: journald on the host (the cron pipes through logger); GitHub Actions run logs; the
-    Better Stack rows themselves
-  retention: Better Stack 90 days (measured, #7772); journald per the host's journald.conf.d
-    drop-in; GitHub issues PERMANENT and not retractable
-discoverability_test:
-  command: bash apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
-  expected_output: "ALL TESTS PASSED" with a non-zero assertion count and the mutation battery
-    reporting every row RED against a GREEN baseline
-```
+**[CORRECTED at review (2026-09-08). The block below originally specified detection keyed on
+`zot_last_err_src=redact_failed`. That enum value is NOT emitted by the shipped code — the
+redaction outcome is carried by the `REDACTION_FAILED` sentinel in `zot_last_err` instead, and
+`registry-boot-guard.test.sh` actively asserts the tier is never overloaded with it. A monitor
+counting `redact_failed` rows would have returned 0 forever while reading as coverage. The
+block also omitted `suppressed`, which is the one new enum member this change actually ships.
+Rewritten against the carriers that exist.]**
+
+There are exactly two off-host channels for this host. It has no Sentry SDK, no Vector agent,
+and no SSH for debugging, so the canonical layer list does not reach it:
+
+- **R1 — the `SOLEUR_ZOT_DISK` row.** A direct `curl` POST from `zot-disk-heartbeat.sh` to the
+  Better Stack Logs source, every 5 minutes. An in-band field carrier, not one of the seven
+  layers.
+- **R2 — the Actions run log, `::error::` annotations, and the public issue body** of
+  `scheduled-zot-restart-loop.yml`, every 30 minutes.
+
+| new failure mode | carrier | channel |
+|---|---|---|
+| `redact()` returns 1 (any of three causes) | `zot_last_err=REDACTION_FAILED` | R1, and R2 via the non-OOM crash-loop arm |
+| tier gate withheld a sample | `zot_last_err_src=suppressed` | R1, R2 |
+| zot produced nothing to sample | `zot_last_err_src=none` | R1, R2 |
+| sink scrub masked a credential | none — by design, masking is silent | — |
+
+**Known gap, recorded rather than claimed closed.** The three `redact()` failure causes
+(non-object `headers`, residual refusal, empty jq output) share one sentinel, so off-box they
+are indistinguishable although their remedies differ. The single-handler design is correct;
+the single *signal* is a limitation. Nothing currently alarms on `REDACTION_FAILED` either, so
+a host emitting it continuously would be visible only to a reader who went looking. Both are
+tracked with the delivery follow-through at #7960 rather than asserted as solved here.
 
 ## Guard Contract
 

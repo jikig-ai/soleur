@@ -1,6 +1,6 @@
 ---
 title: "ADR-211 — zot_last_err is redacted at the producer AND scrubbed at the sink, and the tier decides whether it is a cause at all"
-status: accepted
+status: adopting
 date: 2026-09-08
 tags: [registry, zot, redaction, observability, gdpr, public-egress, cloud-init, adr-166]
 related_adrs: [ADR-096, ADR-166, ADR-172, ADR-184, ADR-185]
@@ -9,7 +9,13 @@ related_issues: [7500, 7444, 7440, 7272, 7530, 7055]
 
 # ADR-211: `zot_last_err` is redacted at the producer AND scrubbed at the sink
 
-- **Status:** Accepted
+- **Status:** Adopting — the SINK half (Layer 2) is in force at merge; the PRODUCER half
+  (Layer 1) is inert until the next `registry-host-replace` (ADR-096: the host is
+  cloud-init-only). It flips to Accepted when the follow-through at #7960 reads a redacted
+  sample back out of the warehouse. **[CORRECTED at review — this shipped as `Accepted`, which
+  the plan and `tasks.md` both explicitly forbade for exactly this reason. `status:` is the
+  most machine-readable in-force signal in the corpus, so asserting it early is the same
+  overclaim this ADR exists to remove, in the one field a reader is most likely to trust.]**
 - **Date:** 2026-09-08
 - **Issue:** [#7500](https://github.com/jikig-ai/soleur/issues/7500)
 - **Referred from:** the CLO counsel-review gate on PR #7444
