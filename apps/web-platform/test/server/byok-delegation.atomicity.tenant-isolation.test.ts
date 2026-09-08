@@ -101,18 +101,25 @@ function requireEnv(name: string): string {
 // of the per-call cost; otherwise the `== cap` boundary call lands at a
 // cumulative value the strict-`>` proof never exercises. Enforced via
 // `expect(CAP_CENTS % COST_CENTS).toBe(0)` in beforeAll.
-const COST_CENTS = 100; // p_token_count=10 × p_unit_cost_cents=10
+const COST_CENTS = 100; // the WHOLE TURN's cost, carried in unit_cost_cents alone
 const CAP_CENTS = 500;
 const N = 10;
 const K = CAP_CENTS / COST_CENTS; // = 5 calls admitted before the boundary trips
 
 const DAILY_CEILING = 1_000_000; // table CHECK upper bound; "never trips" sentinel
 
-// Per-call RPC token args producing exactly COST_CENTS. `token_count` is held
-// fixed and `unit_cost_cents` varied, so a heterogeneous-cost scenario stays
-// exact (the RPC's cost expression is `p_token_count * p_unit_cost_cents`).
+// Per-call RPC token args. Migration 137 (ADR-207 Decision 3) made the window
+// `SUM(au.unit_cost_cents)` and the per-turn increment
+// `v_this_cost := p_unit_cost_cents`, so `unit_cost_cents` carries the WHOLE
+// TURN's cost and `token_count` does NOT enter the arithmetic at all — it is
+// ledger metadata. Production agrees: `cost-writer.ts` writes
+// `Math.round(costDelta * 100)` into `unit_cost_cents`.
+//
+// TOKEN_COUNT is deliberately > 1 and deliberately NOT a factor of the cost, so
+// a regression to the old `p_token_count * p_unit_cost_cents` product is
+// DETECTABLE here rather than silently rescaling every boundary in this file.
 const TOKEN_COUNT = 10;
-const UNIT_COST_CENTS = 10;
+const UNIT_COST_CENTS = COST_CENTS;
 
 /** The five values migration 137's widened CHECK admits, plus NULL. */
 const HOURLY_REASON = "hourly_cap_exceeded";
@@ -282,13 +289,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       role: string,
       opts: { costCents?: number; invocationId?: string } = {},
     ): Promise<UseResult> {
+      // `unit_cost_cents` IS the turn cost since migration 137 — no division by
+      // TOKEN_COUNT. The previous form sent `costCents / TOKEN_COUNT`, which
+      // made every call cost a tenth of what each assertion in this file
+      // claimed, so no cap boundary was ever reached.
       const costCents = opts.costCents ?? COST_CENTS;
-      if (costCents % TOKEN_COUNT !== 0) {
-        throw new Error(
-          `recordUse: costCents ${costCents} must be a multiple of TOKEN_COUNT ${TOKEN_COUNT} ` +
-            "(the RPC's cost is p_token_count * p_unit_cost_cents)",
-        );
-      }
       const invocationId = opts.invocationId ?? randomUUID();
       const { data, error } = await service.rpc(
         "check_and_record_byok_delegation_use",
@@ -296,7 +301,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           p_delegation_id: delegationId,
           p_invocation_id: invocationId,
           p_token_count: TOKEN_COUNT,
-          p_unit_cost_cents: costCents / TOKEN_COUNT,
+          p_unit_cost_cents: costCents,
           p_caller_user_id: callerUserId,
           p_agent_role: role,
         },
@@ -379,11 +384,19 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       // N must exceed K, else the concurrency partition expects ≤0 refusals and
       // proves nothing (localized guard, like the multiple check above).
       expect(N, "N must exceed K to exercise the cap boundary").toBeGreaterThan(K);
-      // Every cost this file uses must be expressible as TOKEN_COUNT × an int.
-      for (const cost of [COST_CENTS, 2 * COST_CENTS]) {
-        expect(cost % TOKEN_COUNT, `cost ${cost} divisible by TOKEN_COUNT`).toBe(0);
-      }
-      expect(TOKEN_COUNT * UNIT_COST_CENTS, "COST_CENTS derivation").toBe(COST_CENTS);
+      // ADR-207 Decision 3, pinned in both directions. The equality alone is not
+      // enough: it would still hold if someone reintroduced the product with
+      // TOKEN_COUNT === 1, so assert that the OLD product does NOT equal the
+      // cost and that TOKEN_COUNT is big enough for the difference to bite.
+      expect(UNIT_COST_CENTS, "one call costs unit_cost_cents alone").toBe(COST_CENTS);
+      expect(
+        TOKEN_COUNT,
+        "TOKEN_COUNT must exceed 1 or a product regression is invisible here",
+      ).toBeGreaterThan(1);
+      expect(
+        TOKEN_COUNT * UNIT_COST_CENTS,
+        "the retired `token_count * unit_cost_cents` product must NOT equal the turn cost",
+      ).not.toBe(COST_CENTS);
 
       const url = requireEnv("SUPABASE_URL");
       const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
@@ -563,7 +576,10 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           `refused row carries the cap reason${diag}`,
         ).toBe(HOURLY_REASON);
         expect(
-          refusalRow!.token_count * refusalRow!.unit_cost_cents,
+          // The row's cost IS `unit_cost_cents` (ADR-207 Decision 3) — the same
+          // expression migration 137's windows sum. Reading the retired product
+          // here would report 10x the real spend on a billing assertion.
+          refusalRow!.unit_cost_cents,
           `refused row records the REAL spend (${COST_CENTS}) — money already moved${diag}`,
         ).toBe(COST_CENTS);
       },
@@ -616,7 +632,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           doubleCost.refusalReason !== HOURLY_REASON ||
           probe.refusalReason !== HOURLY_REASON ||
           !refusedRow ||
-          refusedRow.token_count * refusedRow.unit_cost_cents !== 2 * COST_CENTS;
+          refusedRow.unit_cost_cents !== 2 * COST_CENTS;
         const diag = await diagIf(willFail);
 
         fills.forEach((r, i) => {
@@ -634,7 +650,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           `the refused 2×COST call ledgered its row${diag}`,
         ).toBeDefined();
         expect(
-          refusedRow!.token_count * refusedRow!.unit_cost_cents,
+          refusedRow!.unit_cost_cents,
           `the refused row carries its FULL ${2 * COST_CENTS}c cost${diag}`,
         ).toBe(2 * COST_CENTS);
 
