@@ -191,3 +191,58 @@ row it genuinely lacked.
   — the same class, three days earlier. This file deliberately does not restate it.
 - `2026-09-04-a-10-of-10-mutation-score-and-ten-escapes-it-could-not-see.md`
 - Tracker `#7898` — the structural map of what Rule D still cannot see.
+
+## Addendum — 2026-09-08 (#7894 ship)
+
+`/compound` runs before `/ship`, so an error the ship pipeline itself produces cannot reach
+the learning that pipeline writes. Five are recorded here. Two are recurrences of a
+prevention that already existed — under this file's own rule, that is the finding.
+
+**1. The prevention existed, I ran the instrument it names, and I read past the field.**
+`2026-09-08-every-guard-i-added-to-the-gate-could-not-fail.md` #10 — merged to `main` the
+same day, PR #7934 — says to run `test-all.sh --capacity`, which reports `tmp_avail_mb`
+against its floor in ~3 s, and to write long-lived logs to `/var/tmp`. I ran that exact
+command four times this session; it printed `tmp_avail_mb=1633`, `3549`, `2615`, `2231`.
+Each time I read `reason=sibling_runs` and acted on contention. A battery then ran 11 h 50 m
+— 16x its own 42-minute budget — and the cause was ALSO `ENOSPC` on a shared 4 GB tmpfs,
+which one `df` names in a second. **A banner is not a measurement until you read the field
+that could falsify you.** Not "I did not know": I invoked the right instrument and read only
+the field that agreed with the hypothesis I arrived with.
+
+**2. The same prevention, in its other half — and a signal made of absence.** A `/tmp`
+cleaner removed the scratchpad holding a running `git commit -F` message file. `git commit
+-F` reads that file AFTER the hooks, so the battery would have run to completion and then
+died having committed nothing. `/var/tmp` was the documented remedy. What is new is the
+signal SHAPE: a progress field that had been populated came back empty. Every instrument in
+the body above produced a WRONG value; this one produced NO value, and silence reads as
+calm. **Treat a field that used to be populated and is now empty as a failure signal.**
+
+**3. Two instruments whose broken output was shaped like a result.** `--paths` is not a flag
+of `lint-shell-trace-credential-refusal.py` — paths are positional — so seven fixtures
+returned argparse's `rc=2` and I recorded seven detections. The NEGATIVE control exposed it:
+the compliant fixtures returned `rc=2` as well, and a guard that reports a violation on a
+clean file is not a guard. **Assert the output SHAPE, not merely a non-zero exit** — the
+inverse of Session Error 3 above, and one rule with it. Separately, a POSIX `[:space:]`
+class inside a **Python** regex is a bracket expression, not a class: `[[:space:]]` silently
+requires a literal `]`, and the `--config` channel it guarded went dark with the suite green.
+
+**4. A close-keyword survives negation.** A commit body recorded that a sibling PR did *not*
+close an issue that PR owns. GitHub's parser ignores the negation, and a squash merge
+prefills its body from the branch's commit messages — so merging would have closed an issue
+belonging to another PR. The scanner caught it; my reading of that message had not. The
+literal is deliberately not reproduced here. Precision worth carrying: this holds for the
+DEFAULT prefilled squash body, and a merge that supplies `--body-file` never lands the
+branch bodies at all.
+
+**5. Correcting this addendum's own first draft.** It claimed "a corpus guard I could not
+have failed locally". That is false, and the true cause is worse. `lint-fixture-content`
+runs under lefthook, `knowledge-base/project/learnings/*.md` is in its glob, and it exits 1
+on this file as first committed — measured. It did not run because the commit that added the
+file used `LEFTHOOK=0` (Session Error 4 above, taken for lock contention). **A hook bypass
+has a long tail:** after it, every later commit's staged set excluded the file, so nothing
+re-linted it locally for the rest of the PR. CI caught it because an ordinary
+`pull_request` run lints the PR's CUMULATIVE diff (`BASE..HEAD`), which still contained it —
+a per-commit-vs-per-PR scope asymmetry, **not** the corpus asymmetry the body names. Second
+correction: the offending shape is not unquotable. `<port>@<host>` matches `REAL_EMAIL`, but
+only trips when the host ALSO fails `ALLOWED_EMAIL_HOSTS`; the fix was moving the host to one
+`.+\.test` admits, not removing the shape.
