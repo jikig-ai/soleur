@@ -116,8 +116,14 @@ fail() { FAIL=$((FAIL + 1)); VERDICTS="${VERDICTS}F"; printf 'FAIL - %s\n' "$1" 
 # suite already owns the rc/verdict contract. Conflating them would make a scrub regression and a
 # verdict regression indistinguishable.
 run_alarm() {
-  local rc=0 out
-  out="$(ZOT_BQ_OVERRIDE="$STUB" bash "$CHECKER" 2>&1)" || rc=$?
+  local out
+  # `|| true`, NOT a captured-and-discarded rc. The checker exits non-zero BY CONTRACT (a FIRE
+  # is rc=1), so the call must not abort the suite -- but capturing a verdict nothing reads is
+  # an assertion defect wearing a comment: shellcheck flags it SC2034, and it reads as though
+  # the exit code were being checked when it is not. The rc/verdict contract belongs to
+  # zot-restart-loop-alarm.test.sh; this suite owns what gets PRINTED. A checker that dies
+  # before emitting is still caught here, by the empty-field branch in assert_cause_masks.
+  out="$(ZOT_BQ_OVERRIDE="$STUB" bash "$CHECKER" 2>&1)" || true
   printf '%s' "$out"
 }
 
