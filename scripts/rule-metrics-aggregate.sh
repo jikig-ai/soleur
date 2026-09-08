@@ -431,6 +431,30 @@ report=$(jq -n \
           # conditions: "could not read the corpus" vs "read it, nothing tagged".
           # The second is expected rollout noise and should decay to 0; the
           # first should always be 0.
+          # #7759. Same write-only trap as the two below, and named here for the
+          # same reason: orphan_rule_ids filters the whole `net-issue-flow`
+          # prefix, so a new id under it reaches this file through NO other key.
+          # They answer two different questions and must not be merged:
+          # `body_attributed` counts runs where a filing was countable ONLY
+          # because the PR declared it — i.e. how often the pre-#7759 gate would
+          # have under-counted — and should be non-zero if the fix is load-bearing.
+          # `undelivered_declaration` counts runs where the PR declared a number
+          # the gate could NOT match to an issue in range. It replaces an earlier
+          # `unattributed_reported` field which counted every issue number a body
+          # happened to mention: that set never joined the issue array, so it had
+          # no recency filter and no exclusion of rows already counted, it fired
+          # on ~87% of PRs, and it therefore sat at ceiling and could not rise
+          # informatively. This one is bounded by what the PR actually declared.
+          # `contradictory_declaration` counts runs where a number appeared on
+          # BOTH the Filed: line and a close keyword; it should be 0.
+          gate_body_attributed_count:
+            (($counts["net-issue-flow-body-attributed"].applied_count // 0)),
+          gate_undelivered_declaration_count:
+            (($counts["net-issue-flow-undelivered-declaration"].warn_count // 0)),
+          gate_contradictory_declaration_count:
+            (($counts["net-issue-flow-contradictory-declaration"].warn_count // 0)),
+          gate_unbalanced_fence_count:
+            (($counts["net-issue-flow-unbalanced-fence"].deny_count // 0)),
           gate_corpus_unreadable_warn_count:
             (($counts["net-issue-flow-mandated-filing-corpus-unreadable"].warn_count // 0)),
           gate_zero_tagged_warn_count:
