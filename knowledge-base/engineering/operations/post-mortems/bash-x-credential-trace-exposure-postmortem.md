@@ -429,11 +429,16 @@ Two consequences:
 
 1. **Rotation was never actually blocked.** The gate that held it for four days
    was a field that does not exist. The ordering constraint was vacuous.
-2. **The claim that the 2026-09-07 liveness probe "already overwrote the scalar
-   with a controller use — a real, self-inflicted degradation of the instrument"
-   is withdrawn.** There is no scalar; nothing was degraded. That self-criticism
-   was written into a signed determination without verifying the field existed —
-   the same defect class this document already records twice.
+2. **Withdrawn — this document's own action row, and the determination's.** The
+   action row above says *"Record that the 2026-09-07 liveness probe has
+   **already overwritten** this scalar with a controller use, degrading the
+   instrument."* The determination puts it more strongly: *"The 2026-09-07
+   liveness probe performed while preparing this determination has already
+   overwritten the scalar with a controller use — a real, self-inflicted
+   degradation of the instrument."* Both are withdrawn: there is no scalar, so
+   nothing was overwritten and nothing was degraded. The self-criticism was
+   written into a signed determination without anyone verifying that the field
+   it named existed — the same defect class this document already records twice.
 
 ### Finding 2 — the scope class was understated (and my first write-up of this was itself wrong)
 
