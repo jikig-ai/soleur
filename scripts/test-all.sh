@@ -1360,6 +1360,22 @@ if want_scripts; then
   # Registered explicitly for the same reason as its neighbours: scripts/*.test.sh is
   # NOT auto-globbed, so an unregistered suite silently never gates.
   run_suite "scripts/ship-incident-pir-gate-mutations" bash scripts/ship-incident-pir-gate-mutation.test.sh
+  # The two knowledge-base merge-driver batteries (#7935). Registered EXPLICITLY
+  # and for a reason the SUITE_GLOBS list makes easy to miss: the globs cover
+  # `plugins/soleur/test/*.test.sh`, and these files end in `.mutation.sh`, so
+  # they are auto-discovered by NOTHING -- including scripts/lint-orphan-test-suites.sh,
+  # which walks only `*.test.sh` and therefore reports zero orphans while an
+  # unregistered battery gates nothing at all. Measured 17s + 6s.
+  #
+  # Guard 1 is the one that carries the fail-open case: git emits no signal
+  # whatsoever when .gitattributes names an unregistered merge driver, so
+  # `generate-kb-index.sh --check` is the only thing between a silently
+  # line-merged index and main. Guard 2 proves the driver's own validation loop
+  # can be driven red. Both mutate their subject IN PLACE against a pristine
+  # copy and assert the restore afterwards, so a killed run is detectable rather
+  # than silent.
+  run_suite "plugins/soleur/kb-index-check-guard-mutations" bash plugins/soleur/test/kb-index-check-guard.mutation.sh
+  run_suite "plugins/soleur/merge-kb-index-driver-mutations" bash plugins/soleur/test/merge-kb-index-driver.mutation.sh
   # The fstab ceiling applier. Every case drives a FIXTURE fstab through the
   # RAISE_TMPFS_FSTAB seam — the real /etc/fstab is never read or written, because a
   # test that touched it could leave the machine unbootable. Registered explicitly for

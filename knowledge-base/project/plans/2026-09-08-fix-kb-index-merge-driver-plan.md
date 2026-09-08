@@ -705,9 +705,15 @@ surface.*
     header literal (`grep -c 'Total files:' scripts/generate-kb-index.sh` returns 0 — the literal now
     lives only in `scripts/lib/kb-index-render.sh`).
 14. **AC14 — the mutation batteries run and score every row.**
-    `bash plugins/soleur/test/kb-index-check-guard.mutation.sh` exits 0 with all 14 rows scored `ok`,
-    and `bash plugins/soleur/test/merge-kb-index-driver.mutation.sh` exits 0 with all 12 rows scored
-    `ok`. Either file failing its own `EXPECTED_ROWS` check fails AC14. Each battery runs a green
+    `bash plugins/soleur/test/kb-index-check-guard.mutation.sh` exits 0 with all **12** rows scored
+    `ok`, and `bash plugins/soleur/test/merge-kb-index-driver.mutation.sh` exits 0 with all **13**
+    rows scored `ok`. (The 14/12 split written at plan time was an estimate made before the code
+    existed; these are the rows the implementation actually admits. Both files carry their real
+    count in `EXPECTED_ROWS`, which is the binding number.) Both are registered explicitly in
+    `scripts/test-all.sh` under `want_scripts`: `SUITE_GLOBS` covers
+    `plugins/soleur/test/*.test.sh` and these end in `.mutation.sh`, so nothing auto-discovers
+    them — including `lint-orphan-test-suites.sh`, which walks only `*.test.sh` and would report
+    zero orphans while an unregistered battery gated nothing. Either file failing its own `EXPECTED_ROWS` check fails AC14. Each battery runs a green
     unmutated control first, asserts every mutation *landed* before scoring it, and reports a
     row-count shortfall by direct `printf >&2; exit 1` rather than through the `FAIL` counter. Each
     file also carries a `# MUTATION MATRIX` header comment recording the observed verdicts, per
