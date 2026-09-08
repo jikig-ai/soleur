@@ -50,6 +50,21 @@ cfg() {
   GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
     git -C "$dir" config --get "$key" 2>/dev/null || true
 }
+# EVERY raw `git -C <dir> config` in this file routes through here, and the
+# fixture-dir-operand guard is what established that it has to. It flagged seven
+# inline call sites that bypassed `cfg`/`run_install` to pass their own flags
+# (`--get-all`, `--add`, `--unset`, `--list`), each one a write-or-read against a
+# directory derived from a command substitution that nothing had asserted was a
+# fixture. That is the same hazard the `g4` comment below records: `git -C ""`
+# does not error, it operates on the CURRENT directory, which under
+# TEST_GROUP=scripts is the developer's live worktree — and this suite's whole
+# subject is a config key that arms a merge driver across every linked worktree
+# at once. The guard was right; these were not asserted.
+gcfg() {
+  local dir="$1"; shift
+  assert_fixture_dir "$dir"
+  GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$dir" config "$@"
+}
 new_repo() {
   local dir="$WORK/$1"
   mkdir -p "$dir"
@@ -67,7 +82,7 @@ assert_eq "0" "$rc1" "AC7: first run exits 0"
 assert_eq "0" "$rc2" "AC7: second run exits 0"
 assert_eq "$v1" "$v2" "AC7: the value is unchanged by a second run"
 assert_eq "1" "$([[ -n "$v1" ]] && echo 1 || echo 0)" "AC7: the key is actually set"
-assert_eq "1" "$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R" config --get-all "$KEY" | wc -l | tr -d ' ')" \
+assert_eq "1" "$(gcfg "$R" --get-all "$KEY" | wc -l | tr -d ' ')" \
   "AC7: exactly one value is stored, not a multivar accumulation"
 # A run against an already-correct config must perform NO write. Observed via
 # the config file's mtime rather than asserted in prose.
@@ -76,7 +91,7 @@ before="$(stat -c %Y "$R/.git/config")"
 run_install "$R" >/dev/null 2>&1
 after="$(stat -c %Y "$R/.git/config")"
 assert_eq "$before" "$after" "AC7: an already-correct config is not rewritten"
-GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R" config --unset "$KEY"
+gcfg "$R" --unset "$KEY"
 assert_eq "" "$(cfg "$R" "$KEY")" "T10: the key is gone after --unset"
 run_install "$R" >/dev/null 2>&1
 assert_eq "$v1" "$(cfg "$R" "$KEY")" "T10: a later run restores the deleted key"
@@ -88,12 +103,12 @@ echo "=== AC7b: a MULTI-VALUED key is converged, not reported as already-correct
 # multivar instead of replacing it. Both directions left the key unconverged with
 # the script exiting 0 and its diagnostic blaming config.lock.
 R1B="$(new_repo multivar)"
-GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R1B" config --add "$KEY" 'bash scripts/merge-kb-index.sh %O %A %B %P'
-GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R1B" config --add "$KEY" 'echo NOT-THE-DRIVER'
+gcfg "$R1B" --add "$KEY" 'bash scripts/merge-kb-index.sh %O %A %B %P'
+gcfg "$R1B" --add "$KEY" 'echo NOT-THE-DRIVER'
 assert_eq "echo NOT-THE-DRIVER" "$(cfg "$R1B" "$KEY")" "AC7b: precondition — the wrong value is the live one"
 mv_rc=0; run_install "$R1B" >/dev/null 2>&1 || mv_rc=$?
 assert_eq "0" "$mv_rc" "AC7b: the installer exits 0 on a multivar"
-assert_eq "1" "$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R1B" config --get-all "$KEY" | wc -l | tr -d ' ')" \
+assert_eq "1" "$(gcfg "$R1B" --get-all "$KEY" | wc -l | tr -d ' ')" \
   "AC7b: the key is collapsed to exactly one value"
 assert_eq "$v1" "$(cfg "$R1B" "$KEY")" "AC7b: and the surviving value is the correct one"
 
@@ -161,11 +176,11 @@ done
 par_fail=0
 for p in "${pids[@]}"; do wait "$p" || par_fail=1; done
 assert_eq "0" "$par_fail" "T17: every parallel run exits 0"
-assert_eq "1" "$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R3" config --get-all "$KEY" | wc -l | tr -d ' ')" \
+assert_eq "1" "$(gcfg "$R3" --get-all "$KEY" | wc -l | tr -d ' ')" \
   "T17: the parallel runs converge on exactly one value"
 assert_eq "$v1" "$(cfg "$R3" "$KEY")" "T17: and it is the correct value"
 cfg_rc=0
-GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R3" config --list >/dev/null 2>&1 || cfg_rc=$?
+gcfg "$R3" --list >/dev/null 2>&1 || cfg_rc=$?
 assert_eq "0" "$cfg_rc" "T17: the config file is not corrupt"
 
 echo "=== T11/AC8: the relative command resolves when git merges from a SUBDIRECTORY ==="
