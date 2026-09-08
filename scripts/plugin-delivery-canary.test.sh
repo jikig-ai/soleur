@@ -1042,6 +1042,25 @@ rm -rf "$r" "$r2" "$r3"
 # Minimum-cardinality vacuity guard. If the fixture builder or the seam silently
 # stopped producing cases, every row above would vanish and this suite would
 # exit 0 having asserted nothing.
+# --- #7795: the LIVE-REPO fetch must not auto-follow tags ------------------------------------
+# ANCHORED ON THE FETCH COMMAND, never on a bare `--no-tags` grep: the flag landing on any other
+# fetch in this file would satisfy a bare grep while this site kept writing refs/tags/** into the
+# operator's own repository. `$root` is `git rev-parse --show-toplevel`, i.e. the LIVE repo, and a
+# fetch without the flag auto-follows tags — which `scripts/lib/repo-write-boundary.sh` classifies
+# as a suite writing to the repository, correctly and FATALly on any checkout with no sibling
+# worktree. Both counts are asserted, so ADDING a second unflagged live-repo fetch reddens this
+# too; a one-sided "the good line exists" check could not see that. The flag pattern is
+# ORDER-INDEPENDENT: pinning `--no-tags --depth 1` in that sequence asserts SPELLING, and a
+# behaviour-preserving reorder would redden it (#7795 review).
+cases=$((cases + 1))
+_nt_all=$({ grep -cE 'git -C "\$root" fetch ' "$CANARY" || true; })
+_nt_ok=$({ grep -cE 'git -C "\$root" fetch( --[a-z-]+( [0-9]+)?)* --no-tags( --[a-z-]+( [0-9]+)?)* origin "\$sha"' "$CANARY" || true; })
+if [[ "$_nt_all" == "1" && "$_nt_ok" == "1" ]]; then
+  pass "the live-repo (\$root) fetch passes --no-tags, so a canary run cannot write refs/tags/**"
+else
+  fail "live-repo fetch not --no-tags-scoped (live-repo fetch sites=$_nt_all, flagged=$_nt_ok; both must be 1)"
+fi
+
 # ---------------------------------------------------------------------------
 #
 # THE FLOOR DOES NOT ROUTE THROUGH `fail`, AND THAT IS THE WHOLE POINT.
@@ -1052,8 +1071,8 @@ rm -rf "$r" "$r2" "$r3"
 # exits 0. A floor enforced through the suspect cannot witness the suspect. Report
 # and exit DIRECTLY. Proven by scripts/guard-vacuity-floor.test.sh, which neuters
 # `fail` and asserts the floor still exits non-zero.
-if [[ "$cases" -lt 121 ]]; then
-  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 121.\n' "$cases" >&2
+if [[ "$cases" -lt 122 ]]; then
+  printf '\n[FATAL] vacuity guard: only %d assertions ran; expected >= 122.\n' "$cases" >&2
   printf 'Either assertions were deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
   printf 'Total: %d passed, %d failed (%d assertions)\n' "$passes" "$fails" "$cases"
   exit 1
