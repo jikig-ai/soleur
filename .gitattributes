@@ -16,6 +16,13 @@
 # package.json `prepare` lifecycle script. Git gives NO signal when a driver
 # named here is unregistered -- it silently falls back to the default text merge
 # -- so scripts/generate-kb-index.sh --check is what makes that case loud.
+#
+# THAT GUARD'S CI CALLER IS NAMED HERE ON PURPOSE. `--check` is invoked against
+# the real tree from the `AC17` case in plugins/soleur/test/kb-index-merge-driver.test.sh,
+# which reaches the `test-scripts` job through SUITE_GLOBS in scripts/test-all.sh --
+# not from any step in .github/workflows/ or lefthook.yml. Grepping those three
+# files for `--check` returns nothing, which reads exactly like "the gate does not
+# exist"; it cost one wrong conclusion during this change's own review.
 knowledge-base/INDEX.md merge=kb-index
 
 # The facet files are flat sorted lists with no derived header. `kb-search`, the
