@@ -6,7 +6,12 @@ import { DelegationAcceptanceModal } from "@/components/settings/delegation-acce
 
 export interface DelegationBannerProps {
   grantorDisplayName: string;
-  todaySpentCents: number;
+  /**
+   * `null` = the spend read failed (#7829). Renders as an explicit "spend
+   * unavailable" rather than `$0.00 of $X today`, which would tell the grantee
+   * their funded budget is untouched when it may be nearly exhausted.
+   */
+  todaySpentCents: number | null;
   dailyCapCents: number;
   hourlyCapCents: number | null;
   delegationId: string;
@@ -96,10 +101,17 @@ export function DelegationBanner({
         Running on {grantorDisplayName}&apos;s key
       </span>
       <span className="text-soleur-text-muted">—</span>
-      <span>
-        ${(todaySpentCents / 100).toFixed(2)} of $
-        {(dailyCapCents / 100).toFixed(0)} today
-      </span>
+      {todaySpentCents === null ? (
+        <span className="text-soleur-text-muted">
+          Today&apos;s spend is unavailable — unknown, not $0.00. Your $
+          {(dailyCapCents / 100).toFixed(0)} daily cap still applies.
+        </span>
+      ) : (
+        <span>
+          ${(todaySpentCents / 100).toFixed(2)} of $
+          {(dailyCapCents / 100).toFixed(0)} today
+        </span>
+      )}
       <button
         type="button"
         onClick={() => setOpen(true)}
