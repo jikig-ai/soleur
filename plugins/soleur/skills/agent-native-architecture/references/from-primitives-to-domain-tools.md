@@ -3,6 +3,7 @@ Start with pure primitives: bash, file operations, basic storage. This proves th
 </overview>
 
 <start_with_primitives>
+
 ## Start with Pure Primitives
 
 Begin every agent-native system with the most atomic tools possible:
@@ -39,9 +40,11 @@ When processing feedback:
 4. If importance >= 4, create a notification file in data/alerts/
 `;
 ```
+
 </start_with_primitives>
 
 <when_to_add_domain_tools>
+
 ## When to Add Domain Tools
 
 As patterns emerge, you'll want to add domain-specific tools. This is good—but do it deliberately.
@@ -104,9 +107,11 @@ tool("get_book_with_content", { bookId: z.string() }, async ({ bookId }) => {
   return { text: JSON.stringify({ book, fullText, intro }) };
 });
 ```
+
 </when_to_add_domain_tools>
 
 <the_rule>
+
 ## The Rule for Domain Tools
 
 **Domain tools should represent one conceptual action from the user's perspective.**
@@ -146,6 +151,7 @@ Ask: "Who is making the decision here?"
 </the_rule>
 
 <keep_primitives_available>
+
 ## Keep Primitives Available
 
 **Domain tools are shortcuts, not gates.**
@@ -177,6 +183,7 @@ Gating (making domain tool the only way) is appropriate for:
 </keep_primitives_available>
 
 <graduating_to_code>
+
 ## Graduating to Code
 
 Some operations will need to move from agent-orchestrated to optimized code for performance or reliability.
@@ -200,6 +207,7 @@ Stage 3: For hot paths, implement in optimized code
 ### Example Progression
 
 **Stage 1: Pure primitives**
+
 ```markdown
 Prompt: "When user asks for a summary, read all notes in /notes,
         analyze them, and write a summary to /summaries/{date}.md"
@@ -209,6 +217,7 @@ Time: 30 seconds, 50k tokens
 ```
 
 **Stage 2: Domain tool**
+
 ```typescript
 tool("get_all_notes", {}, async () => {
   const notes = await readAllNotesFromDirectory();
@@ -220,6 +229,7 @@ tool("get_all_notes", {}, async () => {
 ```
 
 **Stage 3: Optimized code**
+
 ```typescript
 tool("generate_weekly_summary", {}, async () => {
   // Entire operation in code for hot path
@@ -244,6 +254,7 @@ Graduation is about efficiency. **Parity still holds.** The agent doesn't lose c
 </graduating_to_code>
 
 <decision_framework>
+
 ## Decision Framework
 
 ### Should I Add a Domain Tool?
@@ -281,6 +292,7 @@ Graduation is about efficiency. **Parity still holds.** The agent doesn't lose c
 ### Feedback Processing Evolution
 
 **Stage 1: Primitives only**
+
 ```typescript
 tools: [read_file, write_file, bash]
 prompt: "Store feedback in data/feedback.json, notify if important"
@@ -288,6 +300,7 @@ prompt: "Store feedback in data/feedback.json, notify if important"
 ```
 
 **Stage 2: Domain tools for vocabulary**
+
 ```typescript
 tools: [
   store_feedback,      // Anchors "feedback" concept with proper structure
@@ -300,6 +313,7 @@ prompt: "Store feedback using store_feedback. Notify if importance >= 4."
 ```
 
 **Stage 3: Graduated hot path**
+
 ```typescript
 tools: [
   process_feedback_batch,  // Optimized for high-volume processing
@@ -314,6 +328,7 @@ tools: [
 ### When NOT to Add Domain Tools
 
 **Don't add a domain tool just to make things "cleaner":**
+
 ```typescript
 // Unnecessary - agent can compose primitives
 tool("organize_files_by_date", ...)  // Just use move_file + judgment
@@ -323,6 +338,7 @@ tool("decide_file_importance", ...)  // This is prompt territory
 ```
 
 **Don't add a domain tool if behavior might change:**
+
 ```typescript
 // Bad - locked into code
 tool("generate_standard_report", ...)  // What if report format evolves?
@@ -331,28 +347,33 @@ tool("generate_standard_report", ...)  // What if report format evolves?
 prompt: "Generate a report covering X, Y, Z. Format for readability."
 // Can adjust format by editing prompt
 ```
+
 </examples>
 
 <checklist>
 ## Checklist: Primitives to Domain Tools
 
 ### Starting Out
+
 - [ ] Begin with pure primitives (read, write, list, bash)
 - [ ] Write behavior in prompts, not tool logic
 - [ ] Let patterns emerge from actual usage
 
 ### Adding Domain Tools
+
 - [ ] Clear reason: vocabulary anchoring, guardrails, or efficiency
 - [ ] Tool represents one conceptual action
 - [ ] Judgment stays in prompts, not tool code
 - [ ] Primitives remain available alongside domain tools
 
 ### Graduating to Code
+
 - [ ] Hot path identified (frequent, latency-sensitive, or expensive)
 - [ ] Optimized version doesn't remove agent capability
 - [ ] Fallback to primitives for edge cases still works
 
 ### Gating Decisions
+
 - [ ] Specific reason for each gate (security, integrity, audit)
 - [ ] Default is open access
 - [ ] Gates are conscious decisions, not defaults

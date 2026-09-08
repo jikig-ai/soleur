@@ -297,7 +297,6 @@ printable-ASCII pass this ADR already pins.
 > The message literals this ADR freezes are unchanged. #7460 adds a NEW emit
 > (`stage:betterstack_ingest`) and new tags; it renames nothing.
 
-
 Sentry is unconditional from the **baked** DSN. Better Stack fires only when
 `BETTERSTACK_LOGS_TOKEN` is present in the environment — true **only** under `doppler run`.
 So *"early stages and fatals are Sentry-only; boot-completion and gc faults are both"* falls

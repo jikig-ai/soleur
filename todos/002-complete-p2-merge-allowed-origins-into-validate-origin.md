@@ -20,7 +20,9 @@ dependencies: []
 ## Proposed Solutions
 
 ### Option A: Inline into validate-origin.ts (Recommended)
+
 Move the Set constants and `getAllowedOrigins()` into `validate-origin.ts`. Update `resolve-origin.ts` to import from `validate-origin.ts`. Delete `allowed-origins.ts` and `allowed-origins.test.ts`.
+
 - **Pros:** -2 files, -21 LOC, simpler dependency graph
 - **Cons:** `validate-origin.ts` grows by 3 lines
 - **Effort:** Small

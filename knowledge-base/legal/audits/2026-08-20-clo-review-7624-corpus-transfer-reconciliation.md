@@ -338,4 +338,3 @@ substitute for external counsel, which is reserved for the audit frontmatter's r
 triggers (first arms-length user, EEA-out, regulated industry). Per #7349: **every replacement
 above must be read as prose against the register before it ships — two byte-identical copies of a
 wrong sentence pass all five gates.**
-

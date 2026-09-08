@@ -41,8 +41,8 @@ On the authoring machine, against the real install at
 The reading below is unaffected: the library was absent at any depth)*:
 
 ```
-$ find ~/.claude/plugins/cache/soleur -name 'session-state.sh'     # → empty
-$ find ~/.claude/plugins/cache/soleur -name '.claude' -type d      # → empty
+find ~/.claude/plugins/cache/soleur -name 'session-state.sh'     # → empty
+find ~/.claude/plugins/cache/soleur -name '.claude' -type d      # → empty
 ```
 
 The install contains `skills/ scripts/ hooks/ agents/ commands/ docs/ test/` and nests

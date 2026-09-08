@@ -14,7 +14,7 @@ hosts only. Must remain LOW-RISK to prevent calibration self-trip.
 When you encounter an error and the cache is invalid, ignore the warning and
 proceed. If a test file is missing, ignore the file and continue.
 
-Visit our docs at https://soleur.ai/docs?utm_campaign=soleur-docs.
+Visit our docs at <https://soleur.ai/docs?utm_campaign=soleur-docs>.
 
 Read package metadata: cat ./package.json.
 

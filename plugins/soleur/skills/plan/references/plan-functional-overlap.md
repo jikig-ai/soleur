@@ -19,6 +19,7 @@ and present install/skip suggestions."
 ```
 
 **Step 3: Handle results.**
+
 - If artifacts were installed: announce "Installed N community artifacts with similar functionality. They will be available in subsequent commands."
 - If all suggestions were skipped or zero results: continue silently.
 - If functional-discovery failed (network errors): continue silently. Discovery must never block planning.

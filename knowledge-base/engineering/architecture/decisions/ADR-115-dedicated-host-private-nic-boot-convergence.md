@@ -93,13 +93,13 @@ A dedicated Hetzner host whose function depends on the private network **MUST**:
 <!-- Descriptive, not prescriptive: these bullets explain WHY the self-converge gate has the
      shape it does. "trains the operator to ignore it" is an argument about alarm fatigue, not
      an instruction to anyone. Pre-existing since #6415. -->
-   - **IMDS corroboration** — never reboot on zero evidence. A standing alarm that fires on its
+- **IMDS corroboration** — never reboot on zero evidence. A standing alarm that fires on its
      own probe fault trains the operator to ignore it; a *host* that reboots on its own probe
      fault is the same mistake with teeth.
-   - **`uptime_s>600`** — says "don't reboot a host that just booted" directly. It needs zero
+- **`uptime_s>600`** — says "don't reboot a host that just booted" directly. It needs zero
      persistent state, cannot be corrupted, is already an emit field, and makes the boot
      invocation naturally a no-op for the reboot arm.
-   - **Counter on the ROOT disk**, keyed by instance-id, **literal cap 2**, written **before**
+- **Counter on the ROOT disk**, keyed by instance-id, **literal cap 2**, written **before**
      the reboot. A cap of 2 makes a storm *definitionally* impossible, so no cooldown is needed.
      A host replace gives a new root disk ⇒ a fresh budget, for free.
 <!-- lint-infra-ignore end -->
@@ -128,6 +128,7 @@ entire existence while the fleet reported green. Extending the decision:
 > below). A class-wide version of this rule needs its own ADR, carrying its own blockers.
 >
 > Two permitted edges — pick by whether silent self-repair is acceptable:
+>
 > 1. **`lifecycle.replace_triggered_by`** on the host, naming the source resource — an
 >    externally-driven immutable redeploy. Correct when the divergence should be *visible and
 >    audited* rather than quietly healed. This is what #6497 shipped for the htpasswd.

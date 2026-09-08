@@ -195,14 +195,17 @@ A `401` here is a **healthy** result: it is zot's own auth challenge
   > healthy on `:5000`. Reverting to GHCR-primary here would **mask** that: it stops the failing
   > pulls, so the fleet looks fine while the registry stays broken. That is the 14-day shape.
   > One query, no SSH:
+>
   > ```
   > doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
   >   --since 3h --grep SOLEUR_PRIVATE_NIC --limit 20
   > ```
+>
   > `nic_ok=false` ⇒ this is a NIC fault, **not** a zot fault: re-dispatch
   > `registry-host-replace` instead of reverting. A **down container gives connection
   > *refused*; an unconfigured NIC gives *timeout* + ping loss** — that distinguisher is what
   > made #6400 look like "zot mysteriously down".
+
 - Any Phase-5 retirement step (5.3 fallback-branch removal) is discovered premature.
 
 Note: a *single* transient `ghcr-fallback` is self-healing — the host already fell back to GHCR
@@ -237,6 +240,7 @@ doppler secrets get ZOT_REGISTRY_URL --plain --project soleur --config prd 2>/de
 ```
 
 Effect, with no further action:
+
 - **Rolling deploys** (`ci-deploy.sh`): the next `deploy` webhook resolves `ZOT_REGISTRY_URL`
   empty → `ZOT_ACTIVE=0` → the unchanged private-GHCR pull. No fallback attempt, no probe.
 - **Fresh boots** (cloud-init/bootstrap): the seed/app/inngest blocks resolve the URL empty →
@@ -289,6 +293,7 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
     **without** = the probe missed → chase the probe (#6416 / #6288).
 - **The soak gate can now FAIL for three reasons, not one** (#6462). If you are here because
   `zot-soak-6122.sh` failed, read its message before assuming a fallback occurred:
+
   | Message | Means | Do |
   |---|---|---|
   | `FAIL: N fallback event(s)` | a host really was GHCR-served | this runbook — triage by signal, above |
@@ -296,6 +301,7 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   | `FAIL(blocked)` / `FAIL(blocker-closed-but-condition-unmet)` | the soak's criteria hold, but #6500 (the dedicated inngest host: GHCR-only, fail-closed, invisible to these queries) is still open — or was closed while the code still shows no zot path | do NOT revert zot, and do NOT close #6500 to clear it. Fix the inngest host |
   Only the first row is a zot problem. The other two are the gate refusing to authorize an
   irreversible PAT revoke on evidence it does not have — that is the gate working.
+
 - **Alert rule** — `sentry_issue_alert.zot_mirror_fallback_rate`, APPLY-CREATED and live now
   (it is **not** armed at cutover; `zot-gate-degraded` emits pre-flip today). It pages on the
   **first** event matching any of the FIVE signals: `registry:{"ghcr-fallback",

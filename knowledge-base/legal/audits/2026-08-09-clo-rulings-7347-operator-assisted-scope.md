@@ -740,6 +740,7 @@ pointed at the same string, and the prohibition reported the untouched string as
 the omission as compliance. A prohibition sweep cannot detect an omission.
 
 **Rules for using this table.**
+
 1. Every check must be run from the repository root and must pass **before** PR-ready.
 2. Checks marked **[C]** run against `docs/legal/`; checks marked **[M]** run against
    `plugins/soleur/docs/pages/legal/`. Where both are listed, **both must pass** — a canonical-only

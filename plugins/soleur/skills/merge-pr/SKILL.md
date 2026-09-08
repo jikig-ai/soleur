@@ -16,21 +16,25 @@ description: "This skill should be used when merging a feature branch to main wi
 Detect the current environment and record the starting state for rollback. Run these commands separately and store the results:
 
 1. Get current branch name:
+
 ```bash
 git rev-parse --abbrev-ref HEAD
 ```
 
 2. Get current commit SHA (this is the rollback point):
+
 ```bash
 git rev-parse HEAD
 ```
 
 3. Get current working directory path (worktree path):
+
 ```bash
 pwd
 ```
 
 4. Get the main repo root (first path from worktree list output):
+
 ```bash
 git worktree list
 ```
@@ -164,6 +168,7 @@ echo "ours=$ours theirs=$theirs"  # echo the paths: the Read/Write steps below n
 - `:3:` is "theirs" (main)
 
 Read both files. Reconstruct the complete CHANGELOG:
+
 - Keep the file header (title, description, links)
 - Merge version entries in descending version order
 - If the feature branch has a draft entry, keep it

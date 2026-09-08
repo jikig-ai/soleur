@@ -9,6 +9,7 @@ date: 2026-05-16
 Operations runbook for the off-site CLA evidence archive (`soleur-cla-evidence` R2 bucket, R2 Lock Rules age-based retention with a 10-year floor providing write-once-read-many (WORM) semantics). The bucket carries a `WEUR` location hint, which is a placement preference and **not** a jurisdictional restriction -- the bucket sits on Cloudflare's default, non-EU-tier jurisdiction, and custody by Cloudflare, Inc. (US) is a third-country transfer under Chapter V safeguarded by DPF + SCCs + CBPR (Art. 30 PA-7 §(e)). Covers IP-dispute response, DMCA notice handling, GDPR Article 17 erasure requests, and contributor-revocation flows.
 
 **Cross-references:**
+
 - Architecture: `apps/cla-evidence/infra/` (Terraform) + `apps/cla-evidence/scripts/` (helpers) + `.github/workflows/cla-evidence.yml` (sidecar) + `.github/workflows/cla-evidence-timestamp.yml` (monthly RFC 3161).
 - Legal posture: [Privacy Policy §4.5 + §5.11](/docs/legal/privacy-policy.md), [DPD §2.3(d)+(n)](/docs/legal/data-protection-disclosure.md), [GDPR Policy §3.4](/docs/legal/gdpr-policy.md), CLA preambles §0.
 - Adjacent runbook: [cloudflare-service-token-rotation.md](./cloudflare-service-token-rotation.md) (sibling read-token workflow for the Web Platform CDN tokens).
@@ -401,6 +402,7 @@ The audit log captures: API token ID used, operation (Read/Write/Delete + Bypass
 The monthly cron (`cla-evidence-timestamp.yml`) files a tracking issue per failed month (Kieran F9). If three consecutive monthly issues remain open, switch to a paid RFC 3161 TSA:
 
 **Options (per plan):**
+
 - **DigiCert** — RFC 3161 service, requires a DigiCert account + paid TSA endpoint. Approximate cost: $10-20/timestamp at low volume.
 - **GlobalSign** — RFC 3161 service, requires GlobalSign account. Comparable cost.
 

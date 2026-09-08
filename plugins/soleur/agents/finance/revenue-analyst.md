@@ -23,6 +23,7 @@ Revenue analysis specialist. Track, model, and forecast company-level revenue fr
 ## Output Format
 
 Revenue analyses should include:
+
 1. Summary dashboard with key metrics (MRR/ARR, growth rate, churn)
 2. Revenue breakdown by segment or product line
 3. Forecast with confidence intervals or scenario ranges

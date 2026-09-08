@@ -115,6 +115,7 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 ```
 
 **Rules:**
+
 - Omit any section that has zero entries (do not show empty tables).
 - If zero files were found in Phase 1, write: `No content files found in distribution-content/.`
 - The `last_updated` frontmatter field uses today's date in YYYY-MM-DD format.

@@ -11,6 +11,7 @@ Find community agents and skills that functionally overlap with a feature being 
 ## Input
 
 The spawning command provides:
+
 - `feature_description`: text describing the feature being planned
 
 Use the feature description as the search term for registry queries.
@@ -83,6 +84,7 @@ Filter out any results whose name matches an already-installed artifact.
 If zero suggestions remain after filtering, report "No community overlap found for this feature. Continuing." and return.
 
 Present up to 5 suggestions using the AskUserQuestion tool. For each suggestion, show:
+
 - Name and source (registry + author/namespace)
 - Trust tier indicator (Anthropic / Verified)
 - Description (first 200 characters)

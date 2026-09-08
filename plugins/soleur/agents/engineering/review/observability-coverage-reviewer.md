@@ -27,6 +27,7 @@ You verify that every new surface is debuggable from a keyboard without SSH or `
 ### Step 1: Diff inventory
 
 Run `git diff origin/main...HEAD --name-only` and partition into:
+
 - **Inngest functions**: any file under `apps/web-platform/server/inngest/functions/cron-*.ts` or `*-on-*.ts`
 - **Server routes / handlers**: `app/api/**/route.ts`, `server/**/*.ts`
 - **Infra**: `apps/**/infra/**` (Terraform, systemd, cloud-init, bootstrap shell)

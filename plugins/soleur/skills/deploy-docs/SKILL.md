@@ -55,6 +55,7 @@ Deployment is automated via `.github/workflows/deploy-docs.yml`:
 - **Manual:** Go to Actions > "Deploy Documentation to Cloudflare Pages" > "Run workflow"
 
 The workflow:
+
 1. Checks out the repo
 2. Installs Node.js 20 and npm dependencies
 3. Runs `npx @11ty/eleventy` to build

@@ -544,9 +544,11 @@ Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
   PR #3800 after an 18-day dry-run review). Match → emit `kind: "defer_requested"`,
   append `.claude/logs/approvals.jsonl` row, return the wrapped defer
   envelope:
+
   ```json
   {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer","permissionDecisionReason":"..."}}
   ```
+
   CC pauses the session silently; the resume hint
   (`claude --resume <session_id>`) is emitted to stderr so the operator can
   see it. See `DEFER-DECISION-PAYLOAD-SHAPE.md` for the empirical decision
@@ -744,8 +746,6 @@ Not denial overrides, documented elsewhere in this file: `SOLEUR_DEFER_DRYRUN`
 kill-switches), `SOLEUR_GREP_REWRITE_OBSERVE` (grep-rewrite observe-only soak),
 `SOLEUR_DISABLE_MEMORY_BACKSTOP` (memory backstop — see below),
 `SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
-
-
 
 ## Memory backstop (ADR-162, #7166)
 

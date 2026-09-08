@@ -5,6 +5,7 @@ This is the logical extension of "whatever the developer can do, the agent can d
 </overview>
 
 <why_self_modification>
+
 ## Why Self-Modification?
 
 Traditional software is static—it does what you wrote, nothing more. Self-modifying agents can:
@@ -21,23 +22,27 @@ The agent becomes a living system that improves over time, not frozen code.
 ## What Self-Modification Enables
 
 **Code modification:**
+
 - Read and understand source files
 - Write fixes and new features
 - Commit and push to version control
 - Trigger builds and verify they pass
 
 **Prompt evolution:**
+
 - Edit the system prompt based on feedback
 - Add new features as prompt sections
 - Refine judgment criteria that aren't working
 
 **Infrastructure control:**
+
 - Pull latest code from upstream
 - Merge from other branches/instances
 - Restart after changes
 - Roll back if something breaks
 
 **Site/output generation:**
+
 - Generate and maintain websites
 - Create documentation
 - Build dashboards from data
@@ -49,6 +54,7 @@ The agent becomes a living system that improves over time, not frozen code.
 Self-modification is powerful. It needs safety mechanisms.
 
 **Approval gates for code changes:**
+
 ```typescript
 tool("write_file", async ({ path, content }) => {
   if (isCodeFile(path)) {
@@ -64,6 +70,7 @@ tool("write_file", async ({ path, content }) => {
 ```
 
 **Auto-commit before changes:**
+
 ```typescript
 tool("self_deploy", async () => {
   // Save current state first
@@ -82,6 +89,7 @@ tool("self_deploy", async () => {
 ```
 
 **Build verification:**
+
 ```typescript
 // Don't restart unless build passes
 try {
@@ -94,6 +102,7 @@ try {
 ```
 
 **Health checks after restart:**
+
 ```typescript
 tool("health_check", async () => {
   const uptime = process.uptime();
@@ -110,18 +119,22 @@ tool("health_check", async () => {
   };
 });
 ```
+
 </guardrails>
 
 <git_architecture>
+
 ## Git-Based Self-Modification
 
 Use git as the foundation for self-modification. It provides:
+
 - Version history (rollback capability)
 - Branching (experiment safely)
 - Merge (sync with other instances)
 - Push/pull (deploy and collaborate)
 
 **Essential git tools:**
+
 ```typescript
 tool("status", "Show git status", {}, ...);
 tool("diff", "Show file changes", { path: z.string().optional() }, ...);
@@ -133,6 +146,7 @@ tool("rollback", "Revert recent commits", { commits: z.number() }, ...);
 ```
 
 **Multi-instance architecture:**
+
 ```
 main                      # Shared code
 ├── instance/bot-a       # Instance A's branch
@@ -141,6 +155,7 @@ main                      # Shared code
 ```
 
 Each instance can:
+
 - Pull updates from main
 - Push improvements back to main (via PR)
 - Sync features from other instances
@@ -148,6 +163,7 @@ Each instance can:
 </git_architecture>
 
 <prompt_evolution>
+
 ## Self-Modifying Prompts
 
 The system prompt is a file the agent can read and write.
@@ -161,6 +177,7 @@ tool("write_file", ...);  // Can write to src/prompts/system.md (with approval)
 ```
 
 **System prompt as living document:**
+
 ```markdown
 ## Feedback Processing
 
@@ -174,6 +191,7 @@ When someone shares feedback:
 ```
 
 The agent can:
+
 - Add notes to itself
 - Refine judgment criteria
 - Add new feature sections
@@ -181,15 +199,18 @@ The agent can:
 </prompt_evolution>
 
 <when_to_use>
+
 ## When to Implement Self-Modification
 
 **Good candidates:**
+
 - Long-running autonomous agents
 - Agents that need to adapt to feedback
 - Systems where behavior evolution is valuable
 - Internal tools where rapid iteration matters
 
 **Not necessary for:**
+
 - Simple single-task agents
 - Highly regulated environments
 - Systems where behavior must be auditable
@@ -199,6 +220,7 @@ Start with a non-self-modifying prompt-native agent. Add self-modification when 
 </when_to_use>
 
 <example_tools>
+
 ## Complete Self-Modification Toolset
 
 ```typescript
@@ -246,12 +268,14 @@ const gitMcpServer = createSdkMcpServer({
   ],
 });
 ```
+
 </example_tools>
 
 <checklist>
 ## Self-Modification Checklist
 
 Before enabling self-modification:
+
 - [ ] Git-based version control set up
 - [ ] Approval gates for code changes
 - [ ] Build verification before restart
@@ -260,6 +284,7 @@ Before enabling self-modification:
 - [ ] Instance identity configured
 
 When implementing:
+
 - [ ] Agent can read all project files
 - [ ] Agent can write files (with appropriate approval)
 - [ ] Agent can commit and push

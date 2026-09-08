@@ -95,9 +95,11 @@ For detailed API reference, see [REFERENCE.md](REFERENCE.md).
 ## Requirements
 
 Packages must be installed:
+
 ```bash
 pip install pypdf pdfplumber
 ```
+
 ```
 
 ## Restricting Tool Access
@@ -111,6 +113,7 @@ allowed-tools: Read, Grep, Glob
 ```
 
 Benefits:
+
 - Read-only Skills that shouldn't modify files
 - Limited scope for specific tasks
 - Security-sensitive workflows

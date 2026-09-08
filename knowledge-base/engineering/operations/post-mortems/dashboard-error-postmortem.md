@@ -297,12 +297,14 @@ regression PR #3017 fixed.
 
 - **New release tag:** `web-v0.58.2` (commit `92e8b3d5`, PR #3017 — `fix(supabase): browser-safe JWT decode + preflight Check 9 + Layer 2 promotion`). The `tag: "v0.58.2"` value in the deploy-status JSON below is the same release; the deploy harness emits the bare version (no `web-` prefix) while GitHub Releases uses the `web-v0.58.2` form.
 - **Canary swap log line (from prod journald, 2026-04-28 22:37:08Z):**
+
   ```
   Canary OK
   Canary passed, swapping to production...
   Deploy succeeded
   deploy-status: {"start_ts":1777415797,"end_ts":1777415828,"exit_code":0,"reason":"ok","tag":"v0.58.2"}
   ```
+
   (`exit_code: 0, reason: ok` is the equivalent of `final_write_state 0 "ok"` in this deploy harness.)
 - **Playwright screenshot:** [`screenshots/3015/dashboard-redirect-login.png`](screenshots/3015/dashboard-redirect-login.png) — `/dashboard` redirects to `/login`, which renders cleanly. No `data-error-boundary=` marker in HTML, no "Something went wrong / unexpected error" body text, zero console errors/warnings. (Unauthenticated check, as permitted by the plan; signed-in render verification is the D2 follow-up.)
 - **Re-run of Phase 1 step 1.3 — script FAILED (false negative); manual decode SUBSTITUTED and PASSED:** The shipped script `apps/web-platform/infra/canary-bundle-claim-check.sh` returned `no JWT found in login chunk` and exited 1. This is a **false negative**, not a regression: PR #3017's `validate-anon-key.ts` byte change reshuffled webpack's content-hashed chunks so that the inlined JWT now lives in a shared async chunk (`/_next/static/chunks/8237-323358398e5e7317.js`) instead of `app/(auth)/login/page-*.js`. The script's hardcoded path filter no longer matches. As a manual substitute for the script's assertions, the JWT was extracted from the new chunk and decoded directly: payload `{"iss":"supabase","ref":"ifsccnjhymdmidffkzhl","role":"anon","iat":1773675703,"exp":2089251703}` — passes all four canonical assertions (3-segment shape, `iss=supabase`, `role=anon`, ref matches `^[a-z0-9]{20}$` and has no placeholder prefix from the denylist). The script-broadening fix (and a separately discovered missing volume mount that has caused Layer 3 to be silently skipped on every deploy since #3014) is tracked as **#3033**.

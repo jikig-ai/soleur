@@ -3,6 +3,7 @@ Files are the universal interface for agent-native applications. Agents are natu
 </overview>
 
 <why_files>
+
 ## Why Files
 
 Agents are naturally good at files. Claude Code works because bash + filesystem is the most battle-tested agent interface. When building agent-native apps, lean into this.
@@ -29,6 +30,7 @@ The filesystem gives you hierarchy for free. `/projects/acme/notes/` is self-doc
 </why_files>
 
 <file_organization>
+
 ## File Organization Patterns
 
 > **Needs validation:** These conventions are one approach that's worked so far, not a prescription. Better solutions should be considered.
@@ -88,6 +90,7 @@ Documents/
 </file_organization>
 
 <context_md_pattern>
+
 ## The context.md Pattern
 
 A file the agent reads at the start of each session and updates as it learns:
@@ -148,6 +151,7 @@ Reading assistant for the Every app.
 </context_md_pattern>
 
 <files_vs_database>
+
 ## Files vs. Database
 
 > **Needs validation:** This framing is informed by mobile development. For web apps, the tradeoffs are different.
@@ -179,9 +183,11 @@ Files (agent workspace):
 Database (UI queries):
   research_index: { bookId, path, title, createdAt }
 ```
+
 </files_vs_database>
 
 <conflict_model>
+
 ## Conflict Model
 
 If agents and users write to the same files, you need a conflict model.
@@ -211,6 +217,7 @@ This is simple but can lose changes.
 **For files agents write frequently (logs, status):** Last-write-wins is fine. Conflicts are rare.
 
 **For files users edit (profiles, notes):** Consider explicit handling:
+
 - Agent checks modification time before overwriting
 - Or keep agent output separate from user-editable content
 - Or use append-only pattern
@@ -239,6 +246,7 @@ you should preserve.
 
 If a file has been modified since you last wrote it, ask before overwriting.
 ```
+
 </conflict_model>
 
 <examples>
@@ -278,23 +286,27 @@ Documents/
 ## Files as Universal Interface Checklist
 
 ### Organization
+
 - [ ] Entity-scoped directories (`{type}/{id}/`)
 - [ ] Consistent naming conventions
 - [ ] Ephemeral vs durable separation
 - [ ] Markdown for human content, JSON for structured data
 
 ### context.md
+
 - [ ] Agent reads context at session start
 - [ ] Agent updates context when learning
 - [ ] Includes: identity, user knowledge, what exists, guidelines
 - [ ] Persists across sessions
 
 ### Conflict Handling
+
 - [ ] Conflict model defined (last-write-wins, check-before-write, etc.)
 - [ ] Agent guidance in system prompt
 - [ ] iCloud conflict monitoring (if applicable)
 
 ### Integration
+
 - [ ] UI observes file changes (or shared service)
 - [ ] Agent can read user edits
 - [ ] User can inspect agent output

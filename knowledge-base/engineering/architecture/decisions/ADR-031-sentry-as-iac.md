@@ -90,6 +90,7 @@ inferring ownership from any HTTP status.
   drop + serial re-import sequence. The `de.sentry.io` and `eu.sentry.io`
   regional hosts are reserved for slug-less endpoints (`/users/me/`, `/auth/*`)
   per the API row above.
+
 - **Audit script `api_host`** (`apps/web-platform/scripts/sentry-monitors-audit.sh`)
   region-probe loop MUST include `eu.sentry.io` (and prefer it over `sentry.io`
   for EU-resident orgs) — `de.sentry.io` will return 404 for every API call.
@@ -745,7 +746,6 @@ Three corrections to what this paragraph said when first written, all measured:
 
 Within that scope it no longer surfaces months later as an intermittent red.
 
-
 **Amendment (2026-09-04, #7650 Phase 2) — 27 of the 29 alert rules move to `sentry_alert`;
 `forget` enters the destroy gate's vocabulary; the AP-001 deviation shrinks 4 → 1.**
 
@@ -855,7 +855,6 @@ rather than tidied up in the same PR.
 `scripts/sentry-alert-live-fidelity.sh` diffs all 27 against the committed capture on a daily
 Inngest-dispatched schedule and as a post-apply step. It covers what a clean plan cannot: a
 rule that exists, plans clean, and matches nothing.
-
 
 ## Consequences
 

@@ -4,6 +4,7 @@
 ## When This Layer Loads
 
 Auto-trigger inline when Claude is about to generate:
+
 - Any REST route handler or controller action
 - Any GraphQL resolver, query, or mutation
 - Any serializer, DTO, or response shaping code
@@ -18,6 +19,7 @@ Also loads during full repo scan.
 ## AP-01: Full Object Returned in API Response
 
 What to grep:
+
 ```
 res.json(user)
 res.json(req.user)
@@ -30,12 +32,14 @@ serialize(user)        (check what fields are included)
 ```
 
 Flag when:
+
 - Full model object returned without field selection
 - `password_hash`, `ssn`, `api_key`, or sensitive fields in response
 - `SELECT *` used in query that feeds into response
 - Serializer includes all fields by default
 
 Fix pattern:
+
 ```javascript
 // Wrong
 app.get('/api/profile', auth, async (req, res) => {
@@ -63,6 +67,7 @@ Regulation: CCPA, HIPAA (minimum necessary), GLBA
 ## AP-02: Missing Ownership Check (IDOR)
 
 What to grep:
+
 ```
 req.params.id
 req.params.userId
@@ -74,6 +79,7 @@ User.find(params[:id])
 ```
 
 Flag when:
+
 - Record fetched by ID from URL param without verifying requester owns it
 - No check that `req.user.id === record.userId`
 - Admin check missing — non-admins can access any record by guessing ID
@@ -83,6 +89,7 @@ user access any other user's PII by changing the ID in the URL.
 `/api/users/123/profile` → change to `/api/users/124/profile` → other user's data.
 
 Fix pattern:
+
 ```javascript
 // Wrong
 app.get('/api/users/:id', auth, async (req, res) => {
@@ -108,6 +115,7 @@ Regulation: CCPA, HIPAA, FTC Act
 ## AP-03: GraphQL Introspection Enabled in Production
 
 What to grep:
+
 ```
 introspection:
 introspection: true
@@ -118,6 +126,7 @@ makeExecutableSchema(
 ```
 
 Flag when:
+
 - `introspection: true` set unconditionally
 - No environment check before enabling introspection
 - No query depth limiting (allows deeply nested queries to extract data)
@@ -127,6 +136,7 @@ field name, and relationship — to anyone who can reach the endpoint.
 This reveals your PII field names and data structure to attackers.
 
 Fix pattern:
+
 ```javascript
 // Wrong
 const server = new ApolloServer({
@@ -158,6 +168,7 @@ Regulation: FTC Act, CCPA (data exposure risk)
 ## AP-04: Bulk Endpoint Returns All Records Without Scoping
 
 What to grep:
+
 ```
 User.findAll()
 User.all
@@ -169,12 +180,14 @@ Model.objects.all()
 ```
 
 Flag when:
+
 - Endpoint returns all users/records without auth scoping
 - No `WHERE user_id = ?` limiting results to requester's own data
 - Admin list endpoints accessible without admin role check
 - No pagination (allows full data extraction in one call)
 
 Fix pattern:
+
 ```javascript
 // Wrong
 app.get('/api/users', auth, async (req, res) => {
@@ -209,6 +222,7 @@ Regulation: CCPA, HIPAA, FTC Act
 ## AP-05: PII Returned in Error Messages
 
 What to grep:
+
 ```
 `User ${email} not found`
 `Email ${req.body.email} already exists`
@@ -219,11 +233,13 @@ res.status(404).json({ message: `User ${
 ```
 
 Flag when:
+
 - Email or username confirmed in error response (account enumeration)
 - PII reflected back in error messages
 - Database error messages forwarded to client (may contain field values)
 
 Fix pattern:
+
 ```javascript
 // Wrong
 if (!user) {
@@ -251,6 +267,7 @@ Regulation: CCPA, FTC Act, HIPAA
 ## AP-06: Rate Limiting Missing on Auth / PII Endpoints
 
 What to grep:
+
 ```
 app.post('/login'
 app.post('/forgot-password'
@@ -260,12 +277,14 @@ app.post('/api/verify'
 ```
 
 Flag when:
+
 - Login endpoint has no rate limiting (brute force risk)
 - Password reset endpoint has no rate limiting (enumeration risk)
 - PII lookup endpoints have no rate limiting (scraping risk)
 - No `express-rate-limit`, `rack-attack`, `django-ratelimit`, or equivalent
 
 Fix pattern:
+
 ```javascript
 // Add to auth-sensitive routes
 import rateLimit from 'express-rate-limit'
@@ -290,6 +309,7 @@ Regulation: FTC Act, PCI-DSS, HIPAA
 ## AP-07: CORS Misconfiguration
 
 What to grep:
+
 ```
 origin: '*'
 origin: true
@@ -301,6 +321,7 @@ config.allow_origins = ["*"]  (FastAPI)
 ```
 
 Flag when:
+
 - `origin: '*'` on any API that handles authenticated requests
 - `origin: true` (reflects any origin) on credentialed endpoints
 - No `credentials: true` check alongside wildcard origin
@@ -312,6 +333,7 @@ their data, performing actions. One of the most common misconfigurations
 that leads to data exposure.
 
 Fix pattern:
+
 ```javascript
 // Wrong
 app.use(cors({ origin: '*' }))  // allows any domain

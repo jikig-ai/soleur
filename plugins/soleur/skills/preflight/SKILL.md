@@ -760,7 +760,9 @@ instead of regex-scraping this prose. That file is authoritative; the TypeScript
   ```bash
   curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://app.soleur.ai/api/inngest
   ```
+
   Expected output: `200` (or `401` with HMAC challenge). Anything else = absent.
+
 ```
 
 Detection: find the first `discoverability_test` line in the Observability block; from that point, locate the first fenced code block — its contents are the command. Then locate the first line matching `^[[:space:]]*Expected output:` (case-insensitive) — its value is the expected.

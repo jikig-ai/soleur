@@ -353,7 +353,6 @@ Mutation-proven in both directions.
 grok-dogfood host still render `base64gzip(templatefile(...))` with no arm in
 `cloud-init-user-data-size.test.ts`. Under cap today; on the same unguarded trajectory.
 
-
 ---
 
 ## Amendment — 2026-08-20 (#7613): a THIRD strip exists, in the test suite, and it is not this one

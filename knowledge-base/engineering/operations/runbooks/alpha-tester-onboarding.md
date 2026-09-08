@@ -290,7 +290,7 @@ the cohort on superseded terms.
 >
 > What changed, in plain terms: <TC_BUMP_METADATA.substantiveChange>.
 >
-> The full terms are at https://soleur.ai/legal/terms-and-conditions/. Nothing you need to do —
+> The full terms are at <https://soleur.ai/legal/terms-and-conditions/>. Nothing you need to do —
 > continuing to use Soleur means the updated terms apply. If anything in them does not work for
 > you, reply and tell me; I would rather hear it than not.
 >

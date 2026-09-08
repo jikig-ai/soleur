@@ -20,6 +20,25 @@
   // switch off. Fixed by hand instead.
   "MD025": false,
 
+  // MD018 (no-missing-space-atx) disabled by #7927, and this one is not a style call --
+  // its FIX IS DESTRUCTIVE on this corpus. The rule assumes a line starting `#Text` is a
+  // heading someone forgot the space in. Here it is prose: an issue reference (`#5913`)
+  // or a channel (`#testing`) that happens to begin a wrapped line. CommonMark agrees
+  // with the prose reading -- ATX headings REQUIRE the space, so `#5913` is already a
+  // paragraph and there is nothing to repair.
+  //
+  // Measured, not supposed: all 106 hits in the swept corpus are prose, 105 of them
+  // `#<digits>`. A --fix pass ran with only MD037/038/049/050 withheld and converted 106
+  // of them into real headings across 78 files, silently turning sentence fragments into
+  // H1s -- one mid-sentence continuation line became a top-level heading with blank lines
+  // inserted around it. The tell was 18 NEW MD001 heading-increment errors appearing in a
+  // sweep that was supposed to be whitespace-only.
+  //
+  // A word-sequence check does NOT catch this: inserting a space after `#` merges and
+  // splits nothing, so the tokens are identical. The guard that catches it is heading
+  // COUNT, which the sweep now asserts is unchanged per file.
+  "MD018": false,
+
   "MD026": false,
   "MD029": false,
   "MD033": false,

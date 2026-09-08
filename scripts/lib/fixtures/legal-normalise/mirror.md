@@ -18,13 +18,12 @@ This section applies to the Plugin only. For the Web Platform, see Section 4.3 b
 - **(a)** A limb with a [privacy link](/legal/privacy-policy/).
 - **(b)** A limb citing [the disclaimer](/legal/disclaimer/).
 
-
 Body text after a deliberate double blank line.
 
 Soleur ships {{ stats.agents }} AI agents and {{ stats.skills }} skills across {{ stats.departments }} domains.
 ({{ agents.departmentList }})
 
-Visit (https://www.soleur.ai) or read [https://www.soleur.ai] for detail.
+Visit (<https://www.soleur.ai>) or read [https://www.soleur.ai] for detail.
 
 | Column | Value |
 |---|---|

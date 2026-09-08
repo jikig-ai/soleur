@@ -13,6 +13,7 @@ Filed as **Condition D1** of the CLO ruling at
 [`knowledge-base/legal/audits/2026-08-17-clo-ruling-cla-evidence-admin-bypass-7597.md`](../../../legal/audits/2026-08-17-clo-ruling-cla-evidence-admin-bypass-7597.md).
 
 **Cross-references:**
+
 - Executable preflight: [`scripts/preflight-required-check-bypass.sh`](../../../../scripts/preflight-required-check-bypass.sh)
 - Detection guard: [`scripts/lint-workflow-install-sites.sh`](../../../../scripts/lint-workflow-install-sites.sh) clause 3
 - Adjacent runbook: [cla-signature-evidence-retrieval.md](./cla-signature-evidence-retrieval.md)

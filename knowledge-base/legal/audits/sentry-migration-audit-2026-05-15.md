@@ -41,7 +41,7 @@ _Class A (monitor without paired routing alert):_
 
 ## DPA evidence
 
-Vendor DPA: https://sentry.io/legal/dpa/
+Vendor DPA: <https://sentry.io/legal/dpa/>
 Article 30 register entry: knowledge-base/legal/article-30-register.md (PA8).
 
 <!-- ids: ["484097"] -->

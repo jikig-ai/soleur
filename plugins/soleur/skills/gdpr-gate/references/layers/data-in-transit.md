@@ -4,6 +4,7 @@
 ## When This Layer Loads
 
 Auto-trigger inline when Claude is about to generate:
+
 - Any `fetch`, `axios`, `requests`, `http` or similar HTTP client code
 - Any middleware, interceptor, or request/response logger
 - Any webhook handler or inbound HTTP endpoint
@@ -18,6 +19,7 @@ Also loads during full repo scan.
 ## T-01: PII in URL Query Parameters
 
 What to grep:
+
 ```
 ?email=
 ?phone=
@@ -33,11 +35,13 @@ request.GET['email']
 ```
 
 Flag when:
+
 - PII passed as query parameter in any HTTP call
 - Auth tokens in query strings: `?token=abc123`, `?api_key=xyz`
 - Email used as query param for lookup: `/verify?email=john@doe.com`
 
 Why it matters: Query parameters appear in:
+
 - Server access logs (stored indefinitely by default)
 - Browser history
 - HTTP Referer headers sent to third parties
@@ -45,6 +49,7 @@ Why it matters: Query parameters appear in:
 - Analytics tools that capture full URLs
 
 Fix pattern:
+
 ```javascript
 // Wrong
 await fetch(`/api/users?email=${email}&dob=${dob}`)
@@ -69,6 +74,7 @@ Regulation: CCPA, HIPAA, PCI-DSS
 ## T-02: Hardcoded HTTP (Not HTTPS) for Internal Calls
 
 What to grep:
+
 ```
 http://          (in fetch, axios, requests, etc — not localhost)
 'http://api.
@@ -82,6 +88,7 @@ RestClient.get('http://
 ```
 
 Flag when:
+
 - Internal service-to-service calls over HTTP (not HTTPS)
 - Hardcoded `http://` to non-localhost URLs in API clients
 - Database connection strings using unencrypted protocol
@@ -89,6 +96,7 @@ Flag when:
 Note: `http://localhost` is acceptable in development. Flag all others.
 
 Fix pattern:
+
 ```javascript
 // Wrong
 const response = await axios.get('http://user-service.internal/api/users')
@@ -107,6 +115,7 @@ Regulation: HIPAA (transmission security), PCI-DSS, GLBA
 ## T-03: Webhook Signature Not Verified
 
 What to grep:
+
 ```
 app.post('/webhook'
 router.post('/webhook'
@@ -117,6 +126,7 @@ stripe.webhooks.      (check if constructEvent is used)
 ```
 
 Flag when:
+
 - Webhook endpoint processes payload without verifying signature
 - No `x-signature`, `x-hub-signature`, or vendor-specific header check
 - Signature present but not validated before payload is processed
@@ -125,6 +135,7 @@ Why it matters: Unverified webhooks allow anyone to POST fake events
 to your endpoint — including fake payment confirmations or user data.
 
 Fix pattern:
+
 ```javascript
 // Wrong
 app.post('/webhook/stripe', express.json(), async (req, res) => {
@@ -155,6 +166,7 @@ Regulation: PCI-DSS, FTC Act
 ## T-04: PII in HTTP Headers (Non-Auth)
 
 What to grep:
+
 ```
 req.headers['x-user-email'
 res.setHeader('x-user-
@@ -164,6 +176,7 @@ headers: { 'x-email':
 ```
 
 Flag when:
+
 - PII passed in custom HTTP headers between services
 - Full user object serialized into a custom header
 - Email, phone, or SSN in a forwarded header
@@ -172,6 +185,7 @@ Why it matters: Headers appear in proxy logs, CDN logs, and load balancer logs.
 Custom headers with PII create unintended log exposure across your infrastructure.
 
 Fix pattern:
+
 ```javascript
 // Wrong
 await fetch('/api/process', {
@@ -198,6 +212,7 @@ Regulation: CCPA, HIPAA
 ## T-05: Sensitive Data in Request Logging Middleware
 
 What to grep:
+
 ```
 morgan(
 app.use(logger(
@@ -209,11 +224,13 @@ rack middleware
 ```
 
 Flag when:
+
 - Request logging middleware logs full request body
 - No body sanitization before logging
 - Response body logged (may contain PII from DB)
 
 Fix pattern:
+
 ```javascript
 // Wrong
 app.use(morgan('combined'))  // logs full URL including query params with PII
@@ -245,6 +262,7 @@ Regulation: CCPA, HIPAA, PCI-DSS
 ## T-06: HTTPS Not Enforced
 
 What to grep:
+
 ```
 http://             (non-localhost hardcoded URLs in server config)
 HSTS
@@ -256,6 +274,7 @@ SECURE_SSL_REDIRECT (Django)
 ```
 
 Flag when:
+
 - No HSTS header configured in production middleware
 - No HTTP → HTTPS redirect middleware
 - `http://` hardcoded in allowed origins or callback URLs
@@ -263,6 +282,7 @@ Flag when:
 - Django `SECURE_SSL_REDIRECT = False` or not set
 
 Fix pattern:
+
 ```javascript
 // Wrong — no HTTPS enforcement
 app.use(helmet())  // helmet defaults don't include HSTS
@@ -309,6 +329,7 @@ Regulation: HIPAA (transmission security), PCI-DSS, GLBA
 EU extension (not in upstream Sprinto). Chapter V (Articles 44-49) restricts personal-data transfers outside the EEA / countries lacking an adequacy decision.
 
 What to grep:
+
 ```
 fetch("https://api.<vendor>.com/...
 process.env.STRIPE_API_KEY
@@ -319,6 +340,7 @@ new <Vendor>Client(...)
 ```
 
 Flag when:
+
 - A new third-party vendor environment variable or SDK is introduced AND the vendor's data-processing locale is outside the EEA AND the vendor is not present in `knowledge-base/legal/compliance-posture.md` Vendor DPAs
 - A request handler forwards request bodies, headers, or any user-derived field to a non-EEA endpoint
 

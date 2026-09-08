@@ -157,7 +157,6 @@ v4→v5 schema drift already documented as pending.
 > That route is therefore held by a mechanical birth-readiness interlock until an emitter
 > ships (#6982).
 
-
 - Web-host birth is reachable from CI, closing the
   `hr-fresh-host-provisioning-reachable-from-terraform-apply` violation for web hosts.
 - Adding a key to `var.web_hosts` still HALTs every subsequent merge until the host is born —

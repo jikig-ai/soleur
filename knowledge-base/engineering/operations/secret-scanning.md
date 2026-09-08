@@ -573,7 +573,7 @@ a re-enrollment on next login.
 
 ### `SUPABASE_ACCESS_TOKEN` (CLI / `sbp_`)
 
-1. https://supabase.com/dashboard/account/tokens → revoke compromised token.
+1. <https://supabase.com/dashboard/account/tokens> → revoke compromised token.
 2. Generate new token; update Doppler `prd_terraform` (used by Terraform
    provider) AND any local `~/.zshrc` exports.
 3. Re-run any in-flight `terraform apply` that may have authenticated with
@@ -581,7 +581,7 @@ a re-enrollment on next login.
 
 ### `ANTHROPIC_API_KEY`
 
-1. https://console.anthropic.com → API Keys → revoke + regenerate.
+1. <https://console.anthropic.com> → API Keys → revoke + regenerate.
 2. Update Doppler `prd` AND `dev` (separate keys per env if possible).
 3. No re-deploy needed — server reads at request time.
 
@@ -596,7 +596,7 @@ a re-enrollment on next login.
 
 ### `GITHUB_APP_PRIVATE_KEY`
 
-1. https://github.com/settings/apps/<app> → Private keys → generate new.
+1. <https://github.com/settings/apps/><app> → Private keys → generate new.
 2. Update Doppler `prd`.
 3. **All installations re-authenticate.** The old private key is still
    accepted by GitHub for ~ 5 minutes; after that, every active
@@ -608,12 +608,12 @@ a re-enrollment on next login.
 
 | Token | Where to rotate | Notes |
 |---|---|---|
-| `RESEND_API_KEY` | https://resend.com/api-keys | No re-deploy; reads at request time |
-| `CF_API_TOKEN_PURGE` | https://dash.cloudflare.com/profile/api-tokens | Scoped to cache-purge; rotate + update Doppler |
-| `SENTRY_*` (DSN, auth-token) | https://sentry.io → Settings → Auth Tokens / Project DSNs | DSN is public-by-design; auth-token rotation needs CI re-deploy |
-| `GOOGLE_CLIENT_SECRET` | https://console.cloud.google.com → APIs & Services → Credentials | OAuth flow re-auth; no token invalidation |
-| `GITHUB_CLIENT_SECRET` | https://github.com/settings/applications/<id> | Same as above |
-| `BUTTONDOWN_API_KEY` | https://buttondown.email/settings/programming | Newsletter integration only |
+| `RESEND_API_KEY` | <https://resend.com/api-keys> | No re-deploy; reads at request time |
+| `CF_API_TOKEN_PURGE` | <https://dash.cloudflare.com/profile/api-tokens> | Scoped to cache-purge; rotate + update Doppler |
+| `SENTRY_*` (DSN, auth-token) | <https://sentry.io> → Settings → Auth Tokens / Project DSNs | DSN is public-by-design; auth-token rotation needs CI re-deploy |
+| `GOOGLE_CLIENT_SECRET` | <https://console.cloud.google.com> → APIs & Services → Credentials | OAuth flow re-auth; no token invalidation |
+| `GITHUB_CLIENT_SECRET` | <https://github.com/settings/applications/><id> | Same as above |
+| `BUTTONDOWN_API_KEY` | <https://buttondown.email/settings/programming> | Newsletter integration only |
 | `VAPID_PRIVATE_KEY` | regenerate keypair, redeploy server, push subscriptions re-register | Web-push subscribers need to re-subscribe |
 | `DISCORD_OPS_WEBHOOK_URL` | Discord channel → Edit Webhook → Regenerate URL | Internal-only |
 | `DATABASE_URL` password | Supabase dashboard → Database → Connection pooler → reset password | Coordinate with deploy |
@@ -819,10 +819,12 @@ To upgrade:
    with `targetRules = [...]`. Migrating to v8.25+ would let us collapse 13
    per-rule allowlist blocks into one. Worth doing on the next bump.
 2. Fetch the new SHA256 from the release's `checksums.txt`:
+
    ```bash
    curl -sL https://github.com/gitleaks/gitleaks/releases/download/v<NEW>/gitleaks_<NEW>_checksums.txt \
      | grep linux_x64.tar.gz
    ```
+
 3. Update `GITLEAKS_VERSION` and `GITLEAKS_SHA256` in `.github/workflows/secret-scan.yml`.
 4. Verify the smoke-test matrix still passes on the bump PR.
 5. Update the version pin reference in this runbook's frontmatter.

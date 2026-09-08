@@ -24,6 +24,7 @@ PR #438 proposes adding instant meta-refresh redirect detection to the SEO valid
 #### Finding: NO COMMAND INJECTION VULNERABILITIES
 
 **Analysis:**
+
 - The grep pattern is hardcoded in the script, not derived from user input or environment variables
 - File paths come from the find command with -print0 null delimiter (safe from filename injection)
 - File variables are always quoted in grep calls
@@ -40,11 +41,13 @@ PR #438 proposes adding instant meta-refresh redirect detection to the SEO valid
 The grep regex is hardcoded in the script and is not derived from HTML content, filenames, or any untrusted source. The pattern itself cannot be injected.
 
 **Pattern Analysis:**
+
 - Only matches double-quoted attributes (not single quotes or unquoted)
 - Only matches content="0" (instant refresh), not content="5" (delayed refresh)
 - Requires exact attribute names (case-insensitive, but hyphenated correctly)
 
 **Pattern Bypass Test Results:**
+
 - MATCH: Standard instant redirect
 - MATCH: Bare refresh
 - CORRECT: Delayed redirect (content="5") does not match
@@ -64,33 +67,39 @@ The grep regex is hardcoded in the script and is not derived from HTML content, 
 An attacker could create a page with both an instant meta-refresh redirect (content="0") AND arbitrary content. The validator would skip all four SEO checks for that page, allowing malicious content to be served.
 
 **Why This Occurs:**
+
 - The validator checks for the meta-refresh pattern at the HTML level
 - If matched, it skips the page entirely with a continue statement
 - It does NOT check if the page has additional content beyond the redirect
 
 **Can This Happen in Practice?**
+
 - YES, but UNLIKELY for legitimate use cases
 - An instant meta-refresh (0ms) leaves no human-readable content visible
 - Most developers use HTTP-level redirects (301/302), not HTML meta-refresh
 - The only case in this codebase is articles.njk, which is a pure redirect
 
 **Google's Behavior:**
+
 - Treats content="0" meta-refresh as a permanent 301 redirect
 - Follows the redirect and indexes the destination page only
 - If Google sees malicious content on the source page, it would flag the site
 
 **Real-World Risk:**
+
 - MEDIUM: Attacker with commit access could inject malware
 - LOW: External attackers cannot create files (validation runs on CI-built output)
 - NEGLIGIBLE: Users visiting the page see the redirect immediately without seeing malicious content
 
 **Current Mitigations in PR Plan:**
+
 1. Logging: Each skipped page is logged with a PASS message visible in CI logs
 2. Scope Limitation: Instant redirects are rare
 3. Design Guidance: Future redirect pages should use HTTP 301
 4. Risk Documentation: Plan explicitly documents this as an acceptable trade-off
 
 **Verdict:** ACCEPTABLE with documented risk and visible logging
+
 - Degenerate case is unlikely in practice
 - Mitigation (logging skipped pages) is implemented
 - Risk is owned and acknowledged in the plan
@@ -102,6 +111,7 @@ An attacker could create a page with both an instant meta-refresh redirect (cont
 #### Finding: CORRECT DESIGN (delayed redirects still validated)
 
 Test Results:
+
 - Instant redirect: Matched, skipped (CORRECT)
 - Bare refresh: Matched, skipped (CORRECT)
 - Delayed redirect: NOT matched, validated (CORRECT)
@@ -116,6 +126,7 @@ Edge cases are acceptable given codebase constraints. Eleventy's HTML output is 
 ### 5. Test Coverage Analysis
 
 **Proposed Tests (from plan):**
+
 1. Instant redirect should be skipped (exit 0, shows skip message)
 2. Delayed redirect should still be validated (exit 1, missing metadata)
 
@@ -147,6 +158,7 @@ Tests cover main cases. Degenerate case is documented, not tested (correct choic
 ### 7. Input Validation Audit
 
 **Input Sources:**
+
 1. SITE_DIR parameter - properly quoted, find is safe
 2. File paths from find - null-delimited, safely quoted
 3. File content (HTML) - searched with grep, no execution
@@ -170,6 +182,7 @@ Tests cover main cases. Degenerate case is documented, not tested (correct choic
 ## Findings Summary
 
 ### HIGH CONFIDENCE SAFE:
+
 - No command injection vulnerabilities
 - No regex injection vulnerabilities
 - Input validation is correct
@@ -177,11 +190,13 @@ Tests cover main cases. Degenerate case is documented, not tested (correct choic
 - Pattern correctly excludes delayed redirects
 
 ### MEDIUM RISK (DOCUMENTED AND ACCEPTED):
+
 - Degenerate case: instant redirect + hidden content bypasses validation
   - Mitigation: Logged and visible for manual review
   - Design trade-off: Acceptable per plan documentation
 
 ### DESIGN STRENGTHS:
+
 - Boundary-case testing (delayed redirects)
 - Visible logging for all skipped pages
 - Clear documentation of risk and trade-offs
@@ -213,12 +228,14 @@ CLEAR TO MERGE once test cases are implemented and pass
 PR #438 is SAFE for production with one known, documented, and mitigated degenerate case.
 
 **Severity: MEDIUM (acceptable trade-off)**
+
 - No exploitable command injection vectors
 - Regex pattern is correctly designed and hardcoded
 - Degenerate case is unlikely in practice
 - Risk is visible via logging and documented in plan
 
 **Recommendation: APPROVE** once:
+
 1. Test cases are implemented
 2. All tests pass
 3. Manual integration test confirms proper behavior

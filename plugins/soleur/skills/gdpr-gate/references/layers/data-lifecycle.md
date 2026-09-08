@@ -4,6 +4,7 @@
 ## When This Layer Loads
 
 Auto-trigger inline when Claude is about to generate:
+
 - Any delete, destroy, or remove function on user/customer records
 - Any anonymization or scrubbing function
 - Any data export or portability endpoint
@@ -19,6 +20,7 @@ Also loads during full repo scan.
 ## DL-01: No Hard-Delete Path (Soft-Delete Only)
 
 What to grep:
+
 ```
 deleted_at
 paranoid:        (Sequelize paranoid, Rails acts_as_paranoid)
@@ -29,6 +31,7 @@ is_active: false (as substitute for deletion)
 ```
 
 Flag when:
+
 - Model has `deleted_at` but no corresponding hard-delete function
 - ORM paranoid/soft-delete mode with no escape hatch
 - `is_deleted` flag set but record stays in DB indefinitely
@@ -39,6 +42,7 @@ records. Soft-delete alone is not sufficient — data is still in the database,
 still in backups, and still exposed in a breach.
 
 Fix pattern:
+
 ```javascript
 // Wrong — soft delete only, no hard delete
 async function deleteUser(userId) {
@@ -76,6 +80,7 @@ Regulation: CCPA (right to erasure), HIPAA
 ## DL-02: Deletion Doesn't Cascade to Related Tables
 
 What to grep:
+
 ```
 User.destroy(
 User.delete(
@@ -85,6 +90,7 @@ await user.remove()
 ```
 
 Flag when:
+
 - User deleted from `users` table but related records remain
 - No cascade delete on foreign keys
 - PII orphaned in: `orders`, `addresses`, `payment_methods`, `audit_logs`,
@@ -95,6 +101,7 @@ Why it matters: Deleting the user row leaves PII scattered across the database.
 A CCPA deletion request must remove data from ALL tables, not just `users`.
 
 Fix pattern:
+
 ```javascript
 // Wrong
 async function deleteUser(userId) {
@@ -132,6 +139,7 @@ Regulation: CCPA, HIPAA
 ## DL-03: Anonymization That Doesn't Actually Anonymize
 
 What to grep:
+
 ```
 anonymize(
 anonymise(
@@ -142,6 +150,7 @@ null             (setting fields to null as "anonymization")
 ```
 
 Flag when:
+
 - "Anonymization" only nulls out name/email but keeps DOB + zip + gender (re-identifiable combo)
 - Email replaced with `[deleted]` but user_id kept linked to other tables
 - IP addresses kept after "anonymization"
@@ -152,6 +161,7 @@ of cases (Latanya Sweeney). Nulling name and email while keeping these fields
 is not anonymization — it's pseudonymization at best.
 
 Fix pattern:
+
 ```javascript
 // Wrong — leaves re-identifiable combination
 async function anonymizeUser(userId) {
@@ -185,6 +195,7 @@ Regulation: CCPA, HIPAA, FTC Act
 EU rewrite (upstream framed CCPA-only). GDPR Art. 20 grants the data subject the right to receive personal data in a "structured, commonly used and machine-readable format" and to transmit it to another controller. CCPA grants a parallel right under §1798.110/.130. Both apply.
 
 What to grep:
+
 ```
 export_user_data
 download_my_data
@@ -195,6 +206,7 @@ portability
 ```
 
 Flag when:
+
 - No data export endpoint or function exists in the codebase
 - Export function exists but omits tables (check it covers all PII tables — see DL-02 cascade audit)
 - Export format is not machine-readable (Art. 20 + CCPA both require structured format)
@@ -203,6 +215,7 @@ Flag when:
 Why it matters: GDPR Art. 20 is enforceable independently of Art. 15 access requests. CCPA aligns. Without an automatable export endpoint, every DSAR becomes a manual SQL job — and the gate at FR4.3 (`GDPR-Art-17`) cannot verify deletability without evidence of complete enumeration first.
 
 Fix pattern:
+
 ```javascript
 // Minimum viable GDPR Art. 20 + CCPA data export
 app.get('/api/account/export', auth, async (req, res) => {
@@ -239,6 +252,7 @@ Regulation: GDPR Art. 20 (right to data portability), GDPR Art. 15 (right of acc
 ## DL-05: No Retention Policy Enforcement in Code
 
 What to grep:
+
 ```
 created_at         (check if old records are ever purged)
 expires_at         (check if expiry is actually enforced)
@@ -250,12 +264,14 @@ celery             (check for cleanup tasks)
 ```
 
 Flag when:
+
 - PII tables have no cleanup job or scheduled purge
 - `expires_at` field exists but no code actually checks or enforces it
 - Session table grows unboundedly (no cleanup of expired sessions)
 - Audit logs accumulate forever with no retention limit
 
 Fix pattern:
+
 ```javascript
 // Retention enforcement job (run nightly via cron/Sidekiq/Celery)
 async function enforceRetentionPolicies() {
@@ -294,6 +310,7 @@ Regulation: CCPA, HIPAA, GLBA
 ## DL-06: PII in Database Backups Without Encryption
 
 What to grep:
+
 ```
 pg_dump
 mysqldump
@@ -305,12 +322,14 @@ s3.upload          (near backup-related code)
 ```
 
 Flag when:
+
 - Backup scripts run without encryption flag
 - Backup files uploaded to S3 without server-side encryption
 - Backup destination is publicly accessible bucket
 - No TTL/lifecycle policy on backup files (kept indefinitely)
 
 Fix pattern:
+
 ```bash
 # Wrong
 pg_dump mydb > backup.sql

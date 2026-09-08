@@ -125,9 +125,11 @@ column-addition class.
 Run all four (no SSH, no dashboard):
 
 1. **Audit script** — flags inline insert/upsert omissions hard (exit 1):
+
    ```bash
    doppler run -p soleur -c prd -- bash apps/web-platform/scripts/audit-not-null-column-insert-coverage.sh
    ```
+
 2. **Resolve every `REVIEW (helper-indirected)` line by hand** — the script
    cannot follow `const t = client.from("x"); … t.insert({…})` (the createShare
    blind spot). Open each named file and confirm the column is set.

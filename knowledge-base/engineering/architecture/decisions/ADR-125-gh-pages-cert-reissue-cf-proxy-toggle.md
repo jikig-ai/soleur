@@ -168,7 +168,7 @@ coordination and self-heal auto-invoke are **deferred to v2** (#6677).
 - **Residual race (v1, accepted):** during the ~5–15 min DNS-only window, live `proxied=false`
   diverges from Terraform-declared `proxied=true`. **Two racers, both fail closed:** (1) the
   mutating `apply-web-platform-infra.yml` push-apply DOES `-target` `cloudflare_record.github_pages`
-  + `.www` (`.github/workflows/apply-web-platform-infra.yml:343-345`) and fires on any push to
+  - `.www` (`.github/workflows/apply-web-platform-infra.yml:343-345`) and fires on any push to
   `main` touching `infra/**`, so an infra PR merging mid-window would auto-apply `proxied=true` and
   collapse the DNS-only window before the cert validates; (2) the drift racer
   (`cron-terraform-drift`, `0 6,18 * * *`) at most spuriously pages `infra-drift` (no auto-apply).

@@ -4,6 +4,7 @@
 ## When This Layer Loads
 
 Auto-trigger inline when Claude is about to generate:
+
 - A seed file or database seeder
 - A test factory or fixture file
 - A test helper that creates user records
@@ -17,6 +18,7 @@ Also loads during full repo scan.
 ## TS-01: Real PII in Seed Files
 
 What to grep:
+
 ```
 seeds/
 db/seeds/
@@ -27,6 +29,7 @@ faker          (check if it's actually used — or real data hardcoded)
 ```
 
 Flag when:
+
 - Real email addresses: anything that isn't `@example.com` or `@test.com`
 - Real phone numbers: anything matching `\d{3}[-.\s]\d{3}[-.\s]\d{4}` that isn't `555-0100`–`555-0199`
 - Real SSNs: anything matching `\d{3}-\d{2}-\d{4}` that isn't `000-00-0000`
@@ -39,6 +42,7 @@ real user data in your repo history — accessible to every developer,
 contractor, and anyone who clones the repo.
 
 Fix pattern:
+
 ```javascript
 // Wrong
 await User.create({
@@ -71,6 +75,7 @@ Regulation: CCPA (any real user data), HIPAA (health seed data)
 ## TS-02: Real PII in Test Fixtures / Factories
 
 What to grep:
+
 ```
 fixtures/
 spec/fixtures/
@@ -84,11 +89,13 @@ create(:user,
 ```
 
 Flag when:
+
 - Factory default values use real-format PII (real-looking SSNs, emails, phones)
 - Fixture YAML files contain real email addresses
 - `create(:user, email: 'real@gmail.com')` in test files
 
 Fix pattern:
+
 ```ruby
 # Wrong (FactoryBot)
 FactoryBot.define do
@@ -132,6 +139,7 @@ Regulation: CCPA, HIPAA
 ## TS-03: PII in Test Output / Snapshot Files
 
 What to grep:
+
 ```
 __snapshots__/
 *.snap
@@ -142,6 +150,7 @@ fixtures/vcr/
 ```
 
 Flag when:
+
 - Snapshot files contain email, phone, name, SSN, or health data
 - VCR/cassette recordings contain real API responses with PII
 - Test output logs contain PII from real or realistic test data
@@ -150,6 +159,7 @@ Why it matters: Snapshot files are committed to git and updated automatically.
 If tests run against realistic data, PII ends up in `.snap` files silently.
 
 Fix pattern:
+
 ```javascript
 // In snapshot — flag if you see:
 // "email": "john@gmail.com"  ← real-looking email in snapshot
@@ -176,6 +186,7 @@ Regulation: CCPA, HIPAA
 ## TS-04: Tests Running Against Production Data
 
 What to grep:
+
 ```
 DATABASE_URL=postgres://prod
 process.env.DATABASE_URL    (check what it points to in test env)
@@ -184,11 +195,13 @@ NODE_ENV=production         (in test config)
 ```
 
 Flag when:
+
 - Test configuration points to production database URL
 - No separate test database configured
 - Environment variable fallback could resolve to production in CI
 
 Fix pattern:
+
 ```javascript
 // Wrong — in test config or .env.test
 DATABASE_URL=postgres://user:pass@prod-db.company.com/mydb
@@ -211,6 +224,7 @@ Regulation: CCPA, HIPAA (PHI exposure to dev/test environments)
 ## TS-05: PII Logged During Test Runs
 
 What to grep:
+
 ```
 console.log(         (in test files themselves)
 puts                 (in Ruby test files)
@@ -219,11 +233,13 @@ logger.             (if test env logging is verbose)
 ```
 
 Flag when:
+
 - Test files log user objects, API responses, or PII field values
 - Test helpers print sensitive data for debugging
 - CI log output captures PII (check if logs are stored/accessible)
 
 Fix pattern:
+
 ```javascript
 // Wrong
 it('creates a user', async () => {

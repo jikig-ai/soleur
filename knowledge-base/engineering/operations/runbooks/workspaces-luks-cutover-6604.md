@@ -106,7 +106,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    > this section:
    >
    > 1. **A failure finds you.** A failing scheduled run files a `ci/luks-verify` issue whose title
-   >    names its class, and `drift`/`readiness` additionally page ops@jikigai.com by email. You do
+   >    names its class, and `drift`/`readiness` additionally page <ops@jikigai.com> by email. You do
    >    not have to watch a dashboard — `hr-no-dashboard-eyeball-pull-data-yourself`.
    > 2. **Read the `outcome_class` column below FIRST, then the reason.** The class is the workflow's
    >    own machine-readable verdict and it answers the only question that governs your next move:
