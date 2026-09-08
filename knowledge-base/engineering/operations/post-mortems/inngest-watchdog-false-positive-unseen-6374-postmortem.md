@@ -134,7 +134,7 @@ A heartbeat was emitted to a Sentry monitor slug that did not exist in IaC (page
 
 ## Action Items & Follow-ups
 
-_No action items — incident fully resolved in the source PR with no residual work._
+*No action items — incident fully resolved in the source PR with no residual work.*
 
 ## Residual vector — #6407 (functions-query transient)
 

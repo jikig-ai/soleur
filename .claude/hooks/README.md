@@ -365,7 +365,7 @@ Per-process env overrides:
 | `LOG_ROTATION_SIZE_BYTES` | 5242880 | Size threshold in bytes |
 | `LOG_ROTATION_AGE_DAYS` | 30 | Age threshold in days |
 | `LOG_ROTATION_FLOCK_TIMEOUT_S` | 5 | flock acquire timeout (seconds) |
-| `LOG_ROTATION_DISABLE` | _(unset)_ | Set to `1` to short-circuit all rotation |
+| `LOG_ROTATION_DISABLE` | *(unset)* | Set to `1` to short-circuit all rotation |
 | `LOG_ROTATION_UNIQ_SUFFIX` | `$(date +%H%M%S%N)` | Test-only collision suffix override |
 
 On archive-write failure (disk full, permission denied), the helper preserves

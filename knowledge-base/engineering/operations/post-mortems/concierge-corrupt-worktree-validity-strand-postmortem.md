@@ -128,4 +128,4 @@ A readiness gate checked presence where it needed validity, and the short-circui
 
 ## Action Items & Follow-ups
 
-_No action items — incident fully resolved in the source PR with no residual work._
+*No action items — incident fully resolved in the source PR with no residual work.*
