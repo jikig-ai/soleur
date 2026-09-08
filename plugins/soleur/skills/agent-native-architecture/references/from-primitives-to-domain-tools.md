@@ -284,6 +284,7 @@ Graduation is about efficiency. **Parity still holds.** The agent doesn't lose c
 | Must this operation maintain data integrity? | Gate appropriately |
 | Is there an audit/compliance requirement? | Gate appropriately |
 | Is it just "safer" with no specific risk? | Keep primitives available |
+
 </decision_framework>
 
 <examples>

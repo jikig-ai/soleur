@@ -148,6 +148,7 @@ Reading assistant for the Every app.
 | Recent Activity | Context for continuity |
 | My Guidelines | Learned rules and constraints |
 | Current State | Session status, pending items |
+
 </context_md_pattern>
 
 <files_vs_database>

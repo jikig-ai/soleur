@@ -299,6 +299,7 @@ armed today; `zot-gate-degraded` emits pre-flip, so there is nothing to arm at c
   | `FAIL: N fallback event(s)` | a host really was GHCR-served | this runbook — triage by signal, above |
   | `FAIL(no-freshboot-evidence)` | **zero fallbacks AND zero zot-served fresh boots** — the fleet is UNOBSERVED, not clean. `cloud-init.yml` is `ignore_changes`-pinned, so the beacon only ships on a rebuild | do NOT revert zot. Recreate a web host inside the window, or wait — the fleet recreates ~1.3×/day |
   | `FAIL(blocked)` / `FAIL(blocker-closed-but-condition-unmet)` | the soak's criteria hold, but #6500 (the dedicated inngest host: GHCR-only, fail-closed, invisible to these queries) is still open — or was closed while the code still shows no zot path | do NOT revert zot, and do NOT close #6500 to clear it. Fix the inngest host |
+
   Only the first row is a zot problem. The other two are the gate refusing to authorize an
   irreversible PAT revoke on evidence it does not have — that is the gate working.
 

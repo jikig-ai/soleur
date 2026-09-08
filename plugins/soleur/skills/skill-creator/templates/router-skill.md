@@ -72,6 +72,7 @@ All in `workflows/`:
 | {{first-workflow}}.md | {{purpose}} |
 | {{second-workflow}}.md | {{purpose}} |
 | {{third-workflow}}.md | {{purpose}} |
+
 </workflows_index>
 
 <success_criteria>

@@ -67,6 +67,7 @@ document.addEventListener("turbo:morph-element", (event) => {
 | Pagination breaking | Use turbo frames with `refresh: :morph` |
 | Flickering on replace | Switch to morph instead of replace |
 | localStorage loss | Listen to `turbo:morph-element`, restore state |
+
 </turbo_morphing>
 
 <turbo_frames>

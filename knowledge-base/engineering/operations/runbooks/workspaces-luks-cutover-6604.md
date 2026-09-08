@@ -162,6 +162,7 @@ forever — which the escrow proof + off-host header backup exist to prevent.
    | --- | --- | --- | --- |
    | `probe rc=0` + verdict line, `workspace_count >= expected` | `pass` | Healthy and certified | None |
    | Verdict line **ABSENT**, run otherwise green | `unavailable` | The assert never ran (flag lost). Proves **nothing** | Treat as FAILED. Re-dispatch; if it recurs, the flag delivery is broken |
+
    Exit-code map: `1` = at-rest LUKS drift · `3` = readiness/inventory · `255` = SSH transport ·
    `127` = bundle/command not found. (`3`, not `2` — bash reserves `2` for its own syntax errors.)
    The two TRANSPORT/TOOLING codes prove nothing about the volume in either direction.
