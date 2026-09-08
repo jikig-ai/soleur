@@ -81,6 +81,22 @@ assert_eq "" "$(cfg "$R" "$KEY")" "T10: the key is gone after --unset"
 run_install "$R" >/dev/null 2>&1
 assert_eq "$v1" "$(cfg "$R" "$KEY")" "T10: a later run restores the deleted key"
 
+echo "=== AC7b: a MULTI-VALUED key is converged, not reported as already-correct ==="
+# git resolves merge.<name>.driver to the LAST value, and `--get` also returns the
+# last — so a config carrying two entries could report "already correct" while a
+# different command was live, and a plain `git config <key> <value>` ERRORS on a
+# multivar instead of replacing it. Both directions left the key unconverged with
+# the script exiting 0 and its diagnostic blaming config.lock.
+R1B="$(new_repo multivar)"
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R1B" config --add "$KEY" 'bash scripts/merge-kb-index.sh %O %A %B %P'
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R1B" config --add "$KEY" 'echo NOT-THE-DRIVER'
+assert_eq "echo NOT-THE-DRIVER" "$(cfg "$R1B" "$KEY")" "AC7b: precondition — the wrong value is the live one"
+mv_rc=0; run_install "$R1B" >/dev/null 2>&1 || mv_rc=$?
+assert_eq "0" "$mv_rc" "AC7b: the installer exits 0 on a multivar"
+assert_eq "1" "$(GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -C "$R1B" config --get-all "$KEY" | wc -l | tr -d ' ')" \
+  "AC7b: the key is collapsed to exactly one value"
+assert_eq "$v1" "$(cfg "$R1B" "$KEY")" "AC7b: and the surviving value is the correct one"
+
 echo "=== AC8: the stored value is worktree-portable, with no absolute path ==="
 assert_eq "0" "$(printf '%s' "$v1" | grep -c '^/' || true)" "AC8: the stored value does not begin with an absolute path"
 assert_eq "0" "$(printf '%s' "$v1" | grep -cE '(^| )/[A-Za-z]' || true)" "AC8: no absolute path appears anywhere in the value"
@@ -204,4 +220,4 @@ if (( FAIL != _pc_f + 1 )); then
 fi
 PASS=$_pc_p; FAIL=$_pc_f
 
-print_results 29
+print_results 33

@@ -81,10 +81,22 @@ if [[ "$CHECK" == 1 ]]; then
   _check_dir="$(mktemp -d)"
   trap 'rm -rf "$_check_dir"' EXIT
   "$0" --out "$_check_dir" >/dev/null
+  # CAPPED, and on ONE stream. `diff -u` was both the gate and the diagnostic,
+  # uncapped and on stdout while the ERROR line went to stderr — so a stale index
+  # emitted unbounded interleaved output (measured: 295 lines for a 280-row
+  # drift; issue #7401 records main being stale by 3,711 rows, which is ~4.5k
+  # lines). That is hr-never-run-commands-with-unbounded-output in the guard the
+  # design designates as the last thing between a line-merged index and main.
+  # The c4 precedent this flag is modelled on gates on `cmp -s` and caps its
+  # diagnostic at `head -20`.
   _check_rc=0
+  _check_cap=40
   for _f in INDEX.md kb-tags.txt kb-categories.txt; do
-    if ! diff -u "$KB_DIR/$_f" "$_check_dir/$_f"; then
-      echo "ERROR: $KB_DIR/$_f differs from a fresh generation." >&2
+    if ! cmp -s "$KB_DIR/$_f" "$_check_dir/$_f"; then
+      {
+        echo "ERROR: $KB_DIR/$_f differs from a fresh generation (first $_check_cap diff lines):"
+        diff -u "$KB_DIR/$_f" "$_check_dir/$_f" | head -n "$_check_cap"
+      } >&2
       _check_rc=1
     fi
   done
@@ -194,7 +206,15 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
 # scripts/merge-kb-index.sh must emit byte-identical content from git's three
 # merge inputs. A second copy here would drift, and the drift would be invisible
 # -- both files would still look like an index.
-kb_render_index "$tmpfile" > "$INDEX_FILE"
+# PUBLISHED ATOMICALLY, mirroring regenerate-c4-model.sh's `--out` contract
+# rather than only its flag shape. A bare `> "$INDEX_FILE"` truncates the TRACKED
+# artifact before the renderer runs, so a SIGINT, a full disk, or an OOM-killed
+# xargs child leaves knowledge-base/INDEX.md destroyed on disk (measured: 156
+# bytes -> 8 bytes of partial output). lefthook runs this generator on every
+# commit touching knowledge-base/, so that window is routine.
+_index_tmp="$INDEX_FILE.tmp.$$"
+kb_render_index "$tmpfile" > "$_index_tmp"
+mv -f "$_index_tmp" "$INDEX_FILE"
 
 echo "Generated $INDEX_FILE ($total files indexed)"
 
@@ -296,8 +316,11 @@ if [[ -d "$LEARNINGS_DIR" ]]; then
 
   # Split the tagged stream into two sorted, unique artifacts.
   # `grep ... || true` avoids set -e tripping when a facet type has no entries.
-  { grep $'^tag\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE"
-  { grep $'^cat\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$CATEGORIES_FILE"
+  # Same atomic-publish contract as the index above.
+  { grep $'^tag\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE.tmp.$$"
+  mv -f "$TAGS_FILE.tmp.$$" "$TAGS_FILE"
+  { grep $'^cat\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$CATEGORIES_FILE.tmp.$$"
+  mv -f "$CATEGORIES_FILE.tmp.$$" "$CATEGORIES_FILE"
 
   tag_count=$(wc -l < "$TAGS_FILE" | tr -d '[:space:]')
   cat_count=$(wc -l < "$CATEGORIES_FILE" | tr -d '[:space:]')

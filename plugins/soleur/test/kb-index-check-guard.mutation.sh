@@ -36,7 +36,15 @@
 #   C9  --out writes only INDEX.md, leaving stale facets .. RED
 #   C10 the renderer's header line drifts ................. RED
 #   C11 the row-eligibility predicate drifts (archive/) ... RED (needs Q9)
-#   H1  the probe's corruption step is neutered ........... RED (harness self-test)
+#   H1  facet extraction gutted: a fresh generation must differ  RED
+#
+# AXIS DISCLOSURE. Every row above perturbs SUT SOURCE CONTENT; that is one axis,
+# not twelve. This battery does NOT edit fixture shape, fixture direction, the
+# harness's own dispatch, or set cardinality. An earlier revision of this header
+# claimed H1 neutered "the probe's corruption step" and scaffolded a
+# NEUTER_CORRUPTION flag for it that nothing ever set — five inert guards, one
+# carrying an `A || B && C` precedence bug that would have misfired had it ever
+# been wired. The flag is gone and the claim now matches what H1 does.
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 set -uo pipefail
@@ -88,7 +96,6 @@ trap 'restore; rm -rf "$WORK"' EXIT INT TERM HUP
 
 # A fresh fixture corpus per probe call: the probe MUTATES artifacts, so a
 # shared corpus would leak one property's corruption into the next.
-NEUTER_CORRUPTION=0   # flipped only by the H1 harness self-test
 build_corpus() {
   local kb="$1"
   rm -rf "$kb"
@@ -131,24 +138,25 @@ probe() {
   # Q2 — a row DELETED from the index is caught. This is the shape the
   # unregistered driver produces: a side-picked resolve that drops rows.
   build_corpus "$kb"
-  (( NEUTER_CORRUPTION )) || grep -v 'project/beta\.md' "$kb/INDEX.md" > "$kb/INDEX.md.t" && mv "$kb/INDEX.md.t" "$kb/INDEX.md"
+  grep -v 'project/beta\.md' "$kb/INDEX.md" > "$kb/INDEX.md.t"
+  mv "$kb/INDEX.md.t" "$kb/INDEX.md"
   check "$kb" && probe_fail "Q2 a dropped index row should be caught"
 
   # Q3 — a LYING header count is caught with every row still present. This is
   # the failure the default text merge produces when both sides add the same
   # NUMBER of files: identical count text, a clean line-merge, no marker.
   build_corpus "$kb"
-  (( NEUTER_CORRUPTION )) || sed -i 's/^> Total files: .*/> Total files: 999/' "$kb/INDEX.md"
+  sed -i 's/^> Total files: .*/> Total files: 999/' "$kb/INDEX.md"
   check "$kb" && probe_fail "Q3 a wrong header count should be caught"
 
   # Q4 — a stale kb-tags.txt is caught.
   build_corpus "$kb"
-  (( NEUTER_CORRUPTION )) || printf 'ghost-tag\n' >> "$kb/kb-tags.txt"
+  printf 'ghost-tag\n' >> "$kb/kb-tags.txt"
   check "$kb" && probe_fail "Q4 a stale kb-tags.txt should be caught"
 
   # Q5 — a stale kb-categories.txt is caught.
   build_corpus "$kb"
-  (( NEUTER_CORRUPTION )) || printf 'ghost-cat\n' >> "$kb/kb-categories.txt"
+  printf 'ghost-cat\n' >> "$kb/kb-categories.txt"
   check "$kb" && probe_fail "Q5 a stale kb-categories.txt should be caught"
 
   # Q6 — TITLE DRIFT is caught: the file set is unchanged and every row is
@@ -161,7 +169,7 @@ probe() {
   # Q7 — --check must not MUTATE the tracked artifacts. A check that regenerates
   # in place reports clean forever and destroys the evidence it was asked about.
   build_corpus "$kb"
-  (( NEUTER_CORRUPTION )) || sed -i 's/^> Total files: .*/> Total files: 999/' "$kb/INDEX.md"
+  sed -i 's/^> Total files: .*/> Total files: 999/' "$kb/INDEX.md"
   local before after
   before="$(cat "$kb/INDEX.md")"
   check "$kb" >/dev/null 2>&1
