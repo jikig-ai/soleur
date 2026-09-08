@@ -566,7 +566,7 @@ from a service-account credential to end users. It has **not** occurred (measure
 masking held, and no `Cookie`/`X-Api-Key` was ever present), but the mechanism that would carry it
 fired twenty times.
 
-**Brand-survival threshold:** `single-user incident` — ruled by the CPO, on the ladder's own text
+- **Brand-survival threshold:** `single-user incident` — ruled by the CPO, on the ladder's own text
 rather than on a probability estimate. `none` requires "no credential surface", which is false by
 construction here; `aggregate pattern` describes realized repeated impact **and** is a gate
 downgrade (it adds no CPO sign-off and `user-impact-reviewer` exits immediately on it). Full
@@ -660,6 +660,26 @@ and no SSH for debugging, so the canonical layer list does not reach it:
 | tier gate withheld a sample | `zot_last_err_src=suppressed` | R1, R2 |
 | zot produced nothing to sample | `zot_last_err_src=none` | R1, R2 |
 | sink scrub masked a credential | none — by design, masking is silent | — |
+
+**Discoverability test.** The property an operator must be able to confirm without SSH is that
+**R2 — the public issue channel this change scrubs — is readable and enumerable with no credentials
+at all**, because that is exactly the surface the sink layer protects and exactly how an outsider
+would read it:
+
+```yaml
+discoverability_test:
+  command: curl -fsS -o /dev/null -w "%{http_code}" --max-time 10 https://api.github.com/repos/jikig-ai/soleur/issues/7272
+  expected_output: "200"
+```
+
+Stated honestly, because a probe that overclaims is worse than none: this verifies the **channel**,
+not the **redaction**. Redaction correctness is settled pre-merge by
+`zot-restart-loop-alarm-scrub.test.sh` (31 assertions) and
+`zot-disk-heartbeat-redaction.test.sh` (33, with 14 measured RED before the fix); producer
+**delivery** is graded post-merge by the #7960 follow-through. R1 (the Better Stack row) has no
+unauthenticated form, so it is deliberately NOT the probe here — declaring
+`credentials_required` for it would waive execution and verify nothing, whereas this command runs
+and returns a real answer. Measured 2026-09-08 inside the preflight bwrap sandbox: `200`, rc=0.
 
 **Known gap, recorded rather than claimed closed.** The three `redact()` failure causes
 (non-object `headers`, residual refusal, empty jq output) share one sentinel, so off-box they
