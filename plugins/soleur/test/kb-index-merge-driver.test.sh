@@ -323,17 +323,28 @@ KB_DIR="$R13/knowledge-base" bash "$GEN" --check >/dev/null 2>&1 || t13_chk=$?
 assert_eq "1" "$([[ "$t13_chk" -ne 0 ]] && echo 1 || echo 0)" "T13: --check catches it"
 
 echo "=== T16: an UNHANDLED shell error still writes the sentinel (the ERR trap) ==="
-# A row whose physical length exceeds the cap trips the guarded path; a NUL byte
-# trips read(1) itself. Both must end with a visible sentinel rather than a file
-# that reads as cleanly merged.
+# THE DISTINCTION IS LOAD-BEARING AND WAS INITIALLY GOT WRONG HERE. An over-long
+# row trips an explicit `die`, which writes the sentinel BY HAND -- so it proves
+# nothing about the ERR trap, and the trap survived its own mutation row while
+# this case was the only thing claiming to cover it. The trap exists for the
+# paths with no `die` on them: an unbound variable, an awk crash on adversarial
+# input, disk-full while writing %A. A broken TMPDIR kills the driver at its
+# `mktemp -d`, before any validation runs, which is that shape exactly.
 mkdir -p "$WORK/t16"
 mk4b() { local out="$1" tsv="$WORK/t16/tsv"; printf 'engineering/alpha.md\tAlpha\n' > "$tsv"; ( source "$RENDER_LIB"; kb_render_index "$tsv" ) > "$out"; }
 mk4b "$WORK/t16/O"; mk4b "$WORK/t16/A"; mk4b "$WORK/t16/B"
 { printf -- '- ['; head -c 9000 /dev/zero | tr '\0' 'x'; printf '](engineering/huge.md)\n'; } >> "$WORK/t16/B"
 t16_rc=0
 bash "$DRIVER" "$WORK/t16/O" "$WORK/t16/A" "$WORK/t16/B" knowledge-base/INDEX.md >/dev/null 2>&1 || t16_rc=$?
-assert_eq "1" "$([[ "$t16_rc" -ne 0 ]] && echo 1 || echo 0)" "T16: an over-long row fails closed"
-assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t16/A" || true)" "T16: the sentinel is written on the unhandled path"
+assert_eq "1" "$([[ "$t16_rc" -ne 0 ]] && echo 1 || echo 0)" "T16: an over-long row fails closed (the HANDLED path)"
+assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t16/A" || true)" "T16: the handled path writes the sentinel"
+# The genuinely unhandled path: nothing on it calls die.
+mk4b "$WORK/t16/A2"
+t16u_rc=0
+TMPDIR="$WORK/t16/definitely-not-a-directory" bash "$DRIVER" \
+  "$WORK/t16/O" "$WORK/t16/A2" "$WORK/t16/B" knowledge-base/INDEX.md >/dev/null 2>&1 || t16u_rc=$?
+assert_eq "1" "$([[ "$t16u_rc" -ne 0 ]] && echo 1 || echo 0)" "T16: an UNHANDLED failure exits non-zero"
+assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t16/A2" || true)" "T16: the ERR trap writes the sentinel where no die exists"
 
 echo "=== T14: the Guard 3 GIT_* tripwire aborts a leaked fixture ==="
 t14_rc=0
@@ -359,4 +370,4 @@ assert_eq "1" "$([[ "$(grep -c 'knowledge-base/INDEX.md' "$REPO_ROOT/plugins/sol
 # followed by an `@owner`; a comment line starts with `#` and cannot match.
 assert_eq "3" "$(grep -cE '^/scripts/(merge-kb-index|lib/kb-index-render|install-kb-merge-driver)[.]sh[[:space:]]+@' "$REPO_ROOT/.github/CODEOWNERS" || true)" "AC26: all three gate-critical scripts carry CODEOWNERS rows"
 
-print_results 54
+print_results 58

@@ -58,8 +58,14 @@ write_sentinel() {
   (( _sentinel_written == 0 )) || return 0
   _sentinel_written=1
   [[ -n "$A" && -f "$A" ]] || return 0
-  local tmp
-  tmp="$(mktemp 2>/dev/null)" || return 0
+  # SCRATCH FILE BESIDE %A, DELIBERATELY NOT mktemp. The sentinel's whole job is
+  # to be written on the paths where something has already gone wrong, and one
+  # of those paths is a broken TMPDIR -- which is exactly when `mktemp` also
+  # fails. A sentinel writer that depends on mktemp is silent in the case it
+  # exists for. %A's directory is writable by definition: git just wrote %A into
+  # it. Found by this file's own mutation battery (row G7), which survived until
+  # the mktemp dependency was removed.
+  local tmp="$A.kbi-sentinel.$$"
   # PREPENDED, so a human opening the file sees it first, and kept to a single
   # line so AC6's `grep -c '^<<<<<<< kb-index'` is an exact-count assertion.
   if { printf '%s\n' "$SENTINEL"; cat "$A"; } > "$tmp" 2>/dev/null; then
@@ -120,10 +126,16 @@ parse_index() {
   : > "$out"
   local line body title rel
   while IFS= read -r line || [[ -n "$line" ]]; do
-    # `read -r` does not strip CR. An untreated CRLF leaves a stray \r inside
-    # rel, which splits the rel-keyed set arithmetic into spurious duplicate
-    # rows whenever only one side has CRLF endings.
-    line="${line%$'\r'}"
+    # NO CR STRIPPING HERE, DELIBERATELY. An earlier revision stripped a trailing
+    # \r on the theory that a CRLF side would otherwise split the rel-keyed set
+    # into spurious duplicate rows. Measured: it cannot. Round-trip validation
+    # below re-renders every parsed row with LF endings and byte-compares
+    # against the input, so a CRLF file fails validation and raises a conflict
+    # before the set arithmetic ever runs -- with the strip line present OR
+    # absent. The line changed only which error message appeared, never an
+    # outcome, and its own mutation row survived because of that. A guard that
+    # cannot change an outcome but reads as protective is worse than no guard.
+    # CRLF is not a canonical generated index; failing closed on it is correct.
     (( ${#line} <= MAX_LINE_BYTES )) || die "input line exceeds ${MAX_LINE_BYTES} bytes in $src"
     [[ "$line" == "- ["* ]] || continue
     [[ "$line" == *")" ]] || die "malformed row (no closing paren) in $src"
