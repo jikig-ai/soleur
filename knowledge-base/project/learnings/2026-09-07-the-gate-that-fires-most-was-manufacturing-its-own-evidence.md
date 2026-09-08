@@ -65,6 +65,58 @@ zero times. That is `cq-assert-anchor-not-bare-token`, committed live while veri
 about anchors. The rule is not hard to remember; it is hard to remember *while doing something
 else*.
 
+## Addendum — 2026-09-08: the instrument reported the wrong process, and CI caught what I could not
+
+Two more instances of the same shape, both found after the write-up above, both worse than what it
+describes — because here the thing that was wrong was the *measurement itself*.
+
+**My sweep harness never measured the suites.** For hours I reported suite results as:
+
+```bash
+timeout 1800 bash "$s" >/dev/null 2>&1
+printf '  %-52s rc=%s\n' "$(basename "$s")" "$?"
+```
+
+Bash expands arguments left to right, so `$(basename …)` runs *before* `$?` is read: every number
+I printed was basename's exit status, which is always 0. Demonstrated with a function returning 7 —
+`rc=0` under that form, `rc=7` when the status is captured first. Every "rc=0 each" I reported from
+that pattern was void, and I repeated it across several sweeps and stated it as verification in a
+PR body.
+
+The tell was there and I walked past it: `gdpr-gate-self-test.test.sh` printed **"ALL TESTS PASSED"
+and exited 2**. A suite whose own summary disagrees with its exit code is a broken instrument, not
+a passing suite.
+
+**What it was hiding.** `trap -p` prints a re-executable command whose body carries bash's own
+quoting, so an embedded single quote returns as `'\''`. The sandbox block strips the outer quotes
+with `sed` and re-wraps the remainder in double quotes — which leaves those escapes unbalanced and
+makes the composed trap a syntax error:
+
+```
+test-helpers.sh: exit trap: line 1: unexpected EOF while looking for matching `''
+```
+
+Three files carried it; one predates this branch. The fix is to stop re-parsing the quoting at all:
+`trap -p`'s output round-trips exactly through `eval`, and the trap string then holds fixed text
+with nothing interpolated.
+
+**The general lesson is about where verification comes from.** I had run those suites perhaps
+twenty times locally and never once seen the failure, because my harness could not report one. CI
+saw it on the first try. When a local check and a clean-room check disagree, the local one is the
+suspect — and a local harness you wrote yourself in the same session is the *prime* suspect.
+
+Corollary for reporting: I published "10 affected shell suites: rc=0 each" into a PR body on the
+strength of that harness. A measurement's provenance is part of the claim. If the number came from
+a one-liner improvised minutes earlier, it has not been verified — it has been asserted with extra
+steps.
+
+**And the honest bound on the fix.** Driving the repaired composition against the old broken one
+reddens only ONE of the three new assertions: in that probe the malformed trap still removed the
+sandbox and still exited 0. So the "971 leaked directories" I attributed to this bug are
+*consistent* with it and not demonstrated by it. That link is recorded as unproven in #7889 rather
+than claimed — which is the same discipline the body of this learning asks for, applied to the
+learning's own follow-up.
+
 ## Prevention
 
 - **A detector must be driven, never inspected.** Every fix here ships a mutation that makes
