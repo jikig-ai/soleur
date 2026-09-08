@@ -233,6 +233,7 @@ animation
 anomaly-detection
 anon
 anon-key
+ansi
 anthropic
 anthropic-api
 anti-priming
@@ -957,6 +958,7 @@ creation
 credential
 credential-boundary
 credential-exfil
+credential-forwarding
 credential-handling
 credential-handoff
 credential-helper
@@ -1885,6 +1887,7 @@ installation-token
 instrument-error
 instrument-verification
 instrumentation
+instruments
 integration
 integration-design
 integration-id
@@ -3746,6 +3749,7 @@ test-runner
 test-scope
 test-scripts
 test-seams
+test-sharding
 test-tooling
 test-vacuity
 test-wiring

@@ -1,34 +1,22 @@
-# CUT8 monitor-health baseline — captured BEFORE the apex cutover (#7640 PR4b).
+# CUT8 monitor-health baseline (introduced #7640 PR4b). GENERATED FILE.
 #
 # CUT8 compares against this rather than demanding absolute green, because a
 # monitor that was ALREADY red cannot be evidence that the cutover broke
 # anything — and the T+20 rule turns any CUT8 failure into a rollback.
 #
-# Regenerate: bash cutover-verify.sh --capture-monitor-baseline cutover-monitor-baseline.txt
-# Captured 2026-09-03T15:31:58Z
+# EVERY line here is rewritten by the command below -- hand-edits do not
+# survive a re-capture. Rationale belongs in the runbook, not in this header:
+# knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
 #
-# AMENDED 2026-09-07 (#7798), one row, deliberately not a re-capture.
-#
-# `soleur-ai-www` was renamed to `soleur-ai-www-reachability` AND retargeted from
-# an unsatisfiable `equals 301` to a 2xx assertion. Three options for its row, and
-# only one is honest:
-#   - leave `soleur-ai-www`      -> the name no longer matches SENTRY_MONITORS, the
-#                                   lookup finds nothing, base_state is EMPTY, and
-#                                   CUT8 scores REGRESSION -> FAIL -> under the T+20
-#                                   rule an operator merges the rollback of a
-#                                   perfectly healthy cutover. Fails UNSAFE.
-#   - rename, keep `unhealthy`   -> scores every later failure `pre-existing`, which
-#                                   MASKS a genuinely new one.
-#   - rename, mark `unknown`     -> what is actually true. This capture predates both
-#                                   the rename and the retarget, so it never measured
-#                                   THIS monitor. `unknown` routes to the read path's
-#                                   own fail-safe arm: not a regression, not a pass,
-#                                   reported UNREACHABLE.
-#
-# Superseded by the post-merge re-capture (tasks.md 6.5) once the monitor reports
-# healthy; until then this row is the conservative placeholder, not a measurement.
+# Regenerate (from the repo root, needs credentials):
+#   doppler run -p soleur -c prd_terraform -- \
+#     bash apps/web-platform/infra/cutover-verify.sh \
+#       --capture-monitor-baseline apps/web-platform/infra/cutover-monitor-baseline.txt
+# Uncredentialed, every row captures `unknown` and the write is REFUSED.
+# Captured 2026-09-07T19:04:59Z
 soleur-ai-apex	healthy
-soleur-ai-www-reachability	unknown
+soleur-ai-www-reachability	healthy
 soleur-ai-changelog-deep	healthy
 soleur-ai-acme-carveout-probe	healthy
 soleur dot ai apex	healthy
+soleur dot ai www redirect 301	healthy
