@@ -63,7 +63,7 @@ stands on §3 (correctness), the BYOK-credential-path defect, and surface mismat
 operator half economics is weakened but survives, because §2 caps the reachable benefit —
 including the rate-limit benefit — at 2–3%.
 
-### 2. Mechanics — the compressible surface is ~2–3% of our tokens
+### 2. Mechanics — the compressible surface is ~2–3% of our conversation BYTES
 
 Measured independently over 42 local transcripts, 44,620 assistant messages
 (`~/.claude/projects/…/*.jsonl`, verified twice — once by the CTO agent, once directly):
@@ -85,7 +85,7 @@ Three compounding reasons the reachable share is tiny:
   byte-identical.
 - **Our payload is prose.** `knowledge-base/` is 1.75 MB of markdown; the four skill bodies a
   one-shot run loads (`plan`+`work`+`review`+`ship`) are 1.14 MB ≈ 286k tokens of English.
-  Prose is precisely the class Headroom itself says compresses least.
+  Prose is precisely the class Headroom itself says compresses least — **vendor-sourced and NOT independently verified**, and §3b could not test it because the prose model never installed. This leg of the ceiling is the weakest one; the verdict does not rest on it (condition 2 is conclusive alone).
 
 Theoretical ceiling ≈ 0.291 (tool_result share of content bytes) × 0.551 (share of those bytes in payloads ≥2 kB, i.e. the only ones Headroom targets) × 0.35 (its own claimed reduction on prose) ≈ **5.6%** of conversation bytes; realistic
 **2–3%**. Against that, any perturbation near the cache prefix costs a full 2× re-write of
@@ -128,6 +128,8 @@ median 3,353 B, p90 8,124 B). Payloads were replayed inside a realistic agent co
 | Falsification condition | Threshold | Measured | Verdict |
 |---|---|---|---|
 | Token reduction | > 15% | **6.69%** (2,816,205 → 2,627,824) | **FAIL** |
+
+**Both figures below are POST-CORRECTION.** The first pilot reported 0.00% (suppressing defaults) and the first divergence probe reported 118 losses (capturing-group bug, 20x undercount). Session Errors 1 and 2 record both. A future session re-running criterion 2 is comparing against the corrected run, not the broken one.
 
 Read 6.69% as a CEILING, not a whole-stream figure. The corpus is payloads **≥2 kB** — roughly the top decile of §2's own distribution (median 410 B, p90 2,350 B), i.e. the most compressible slice there is. Whole-stream reduction would be materially lower. This strengthens the NO-GO rather than weakening it, and re-evaluation criterion 2 reuses the same ≥2 kB denominator so a future run's number stays comparable.
 | Gate divergence | zero | **244 of 581 modified payloads lose ≥1 gate-relevant literal** | **FAIL** |
@@ -224,7 +226,7 @@ with no support org.
   user's credential, for the user's purposes creates no Art. 28 relationship. No register row.
   Do not over-claim one.
 - **Apache-2.0:** §4 obligations trigger on distribution, not use. **Depend; do not vendor.**
-- **Supply chain:** 242 days old, 63% of commits from one contributor, sits in both the auth
+- **Supply chain:** 242 days old, with commit history concentrated in a single contributor (eyeballed from the contributor graph, not measured — do not re-cite as a ratio), sits in both the auth
   path and the full content path. Stars are not a control.
 
 ## Key Decisions
@@ -323,5 +325,41 @@ required if ever bundled.
 
 ## Session Errors
 
-None. The prior-art sweep, the premise probes, and the independent re-derivation of the
-subagent's cache-read figure (98.17% vs. the reported 98.2%) all held.
+**An earlier version of this section said "None." That was false, and the falsity mattered:
+this is a document whose entire claim to authority is that it MEASURED something, and its two
+measuring instruments were both broken before they were right.** Corrected below.
+
+1. **The first pilot measured nothing and reported 0.00%.** It returned "0 of 40 payloads
+   modified", which reads as "the tool does nothing" — a result that would have produced the
+   same NO-GO for the wrong reason. Cause: the library defaults `compress_user_messages=False`
+   and `protect_recent=4`, so a single-message fixture is protected by construction.
+   **Recovery:** inspected the effective config object rather than believing the number;
+   rebuilt the fixture as a realistic multi-turn conversation. **Prevention:** when a tool
+   reports "no effect", read its effective configuration before reporting the figure — a
+   no-op default is far likelier than a no-op tool.
+
+2. **The divergence probe undercounted by 20x, in the direction that would have flipped the
+   verdict.** `re.findall` with a CAPTURING group returns the group, not the match, so
+   `file:line` losses came back as **118** when the true figure is **2,367**. 118 might have
+   read as tolerable; 2,367 is the single most damning number in this document.
+   **Recovery:** re-ran with non-capturing groups before the figure propagated.
+   **Prevention:** use `(?:…)` whenever the whole match is wanted, and drive every measuring
+   instrument against a known-positive AND a known-negative before trusting its output.
+
+3. **The economics argument was overstated in two directions and corrected by the operator.**
+   "$0 marginal cost" is true of a flat invoice and false of the constraint that binds (rate
+   limits), and it does not transfer to BYOK users at all. See §1. An operator correction of a
+   load-bearing argument is a session error under `wg-every-session-error-must-produce-either`,
+   and recording it as "None" is how the corrected position gets quietly re-derived later.
+
+4. **`pip install "headroom-ai[ml]"` exited 0 having installed nothing** (pip skips extras when
+   the base package is satisfied), so the prose model silently went unexercised; the forced
+   retry then pulled the full CUDA toolkit and OOM-killed three background tasks.
+   **Prevention:** assert the extra's module imports rather than trusting pip's exit code.
+
+5. **The reproduction scaffold was deleted.** See §3b — `run_eval.py` and `divergence.py` were
+   removed while reclaiming a full tmpfs on the false reasoning that "the conclusions are
+   already committed", when this PR was still empty.
+
+What DID hold: the prior-art sweep, the premise probes, and the independent re-derivation of
+the subagent's cache-read figure (98.17% vs the reported 98.2%).

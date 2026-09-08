@@ -90,4 +90,4 @@ open, legitimate user-value objective.** A future session must not read this NO-
 
 The evaluation surfaced that Soleur has **no token-usage baseline** — the CFO's P0 from the
 2026-04-13 token-optimization brainstorm was never executed. That is the actual prerequisite
-for this and every future token-cost decision. Tracked separately.
+for this and every future token-cost decision. Tracked by **#1055** (per-workflow/per-agent cost observability), **#6297** and **#5692**. No new issue filed — the measurement gap this evaluation surfaced is exactly what those three already cover.
