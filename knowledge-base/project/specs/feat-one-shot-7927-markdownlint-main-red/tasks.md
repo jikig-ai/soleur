@@ -58,34 +58,34 @@ has nothing to run.
 - [x] 4.2 (pulled forward into Phase 2 — the script's floor and roots assertion are
       measured against this scope, so the two must land together) Add `knowledge-base/project/` to `.markdownlintignore`, with a comment naming the
       blocking linter and the measured file and error counts.
-- [ ] 4.3 Run `--fix` with MD037, MD038, MD049 and MD050 withheld, three passes, over the
+- [x] 4.3 Run `--fix` with MD037, MD038, MD049 and MD050 withheld, three passes, over the
       in-scope set. Commit alone.
-- [ ] 4.4 Before touching anything under `.grok/`, `.openhands/` or `.gemini/`, determine
+- [x] 4.4 Before touching anything under `.grok/`, `.openhands/` or `.gemini/`, determine
       whether it is generated (start at `plugins/soleur/scripts/sync-grok-agent-compat.ts`).
       Fix the source and regenerate rather than the copy.
-- [ ] 4.5 Resolve the four withheld rules by hand, per site.
-- [ ] 4.6 Resolve the remaining residual by hand. MD052 are broken reference links — fix, never
+- [x] 4.5 Resolve the four withheld rules by hand, per site.
+- [x] 4.6 Resolve the remaining residual by hand. MD052 are broken reference links — fix, never
       suppress.
-- [ ] 4.7 Fold in `knowledge-base/product/roadmap.md` (#7832),
+- [x] 4.7 Fold in `knowledge-base/product/roadmap.md` (#7832),
       `knowledge-base/legal/article-30-register.md` (#7817 Part 2),
       `plugins/soleur/skills/dhh-rails-style/SKILL.md` (#2685),
       `apps/web-platform/infra/sentry/README.md`.
 
 ## Phase 5 — Legal corpus, by hand
 
-- [ ] 5.1 Convert the 12 bare addresses to autolinks across the 5 canonical documents and the
+- [x] 5.1 Convert the 12 bare addresses to autolinks across the 5 canonical documents and the
       5 mirrors, identically. Includes two section headings — `privacy-policy.md` §4.13 and
       `gdpr-policy.md` §3.10.
-- [ ] 5.2 For the four sites on `**Last Updated:**` lines, change the bracketing only. No
+- [x] 5.2 For the four sites on `**Last Updated:**` lines, change the bracketing only. No
       wording, date, amendment note, version bump or re-consent.
-- [ ] 5.3 MD032 on the two CLA documents, canonical only — the mirrors already carry the
+- [x] 5.3 MD032 on the two CLA documents, canonical only — the mirrors already carry the
       blockquote blank line.
-- [ ] 5.4 Re-pin 7 entries in `apps/web-platform/lib/legal/legal-doc-shas.ts`.
+- [x] 5.4 Re-pin 7 entries in `apps/web-platform/lib/legal/legal-doc-shas.ts`.
       `TC_DOCUMENT_SHA` stays untouched.
-- [ ] 5.5 Run `scripts/lint-legal-mirror-drift-baseline.sh`. Four sites sit on already-drifting
+- [x] 5.5 Run `scripts/lint-legal-mirror-drift-baseline.sh`. Four sites sit on already-drifting
       lines; use the script's documented `SOLEUR_LEGAL_DRIFT_ACCEPT` escape with a reason naming
       #7927, the byte-identical rendered text, and the pending resync.
-- [ ] 5.6 Run `scripts/lint-legal-scope-block-placement.sh` and
+- [x] 5.6 Run `scripts/lint-legal-scope-block-placement.sh` and
       `apps/web-platform/scripts/check-tc-document-sha.sh`.
 
 ## Phase 6 — CI wiring
