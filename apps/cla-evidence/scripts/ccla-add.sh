@@ -195,6 +195,18 @@ for _bin in jq realpath sha256sum stat date; do
 done
 [[ -x "$TSX" ]] || die "tsx not found at $TSX — run 'npm ci' in apps/web-platform"
 
+# Refuse the instrument flags OUTSIDE `add`, rather than accepting and ignoring
+# them. `remove` records the end of a designation and writes no hash, so
+# `--instrument-file` there is either a misremembered command line or an operator
+# who believes they are amending a hash. Both deserve a message; silence tells
+# them the write did what they meant.
+if [[ "$MODE" != "add" ]]; then
+  [[ -z "$INSTRUMENT_FILE" ]] \
+    || die "--instrument-file is only meaningful for \`add\`; \`$MODE\` records no instrument hash. If you meant to correct a landed hash, there is no mode for that -- see #7925." 64
+  [[ -z "$INSTRUMENT_SHA" ]] \
+    || die "--instrument-sha256 is only meaningful for \`add\`; \`$MODE\` records no instrument hash. If you meant to correct a landed hash, there is no mode for that -- see #7925." 64
+fi
+
 if [[ "$MODE" == "add" ]]; then
   [[ -n "$SIGNED_AT" ]] || die "--signed-at is required" 64
   [[ -n "$AUTHORIZED_FROM" ]] || die "--authorized-from is required" 64
@@ -344,19 +356,57 @@ jq -e 'type == "object" and (.signedContributors | type) == "array"' "$LEDGER_FI
 # inherit a stranger's signature.
 declare -a IDS=()
 for login in "${LOGINS[@]}"; do
+  created=""
   if [[ -n "${CCLA_ADD_ID_MAP:-}" ]]; then
-    id="$(jq -r --arg l "$login" '.[$l] // empty' <<<"$CCLA_ADD_ID_MAP")"
+    # Two accepted shapes. A bare number is the legacy form and carries no
+    # created_at, so the handle-reuse check below is SKIPPED for it -- said out
+    # loud rather than silently, because a skipped check that prints nothing is
+    # indistinguishable from a passing one.
+    id="$(jq -r --arg l "$login" '(.[$l] | if type == "object" then .id else . end) // empty' <<<"$CCLA_ADD_ID_MAP")"
+    created="$(jq -r --arg l "$login" '(.[$l] | if type == "object" then (.created_at // empty) else empty end) // empty' <<<"$CCLA_ADD_ID_MAP")"
   else
     command -v gh >/dev/null 2>&1 || die "gh CLI is required to resolve logins to numeric ids"
-    id=""
-    if ! id="$(gh api "/users/${login}" --jq .id 2>/dev/null)"; then
+    _u=""
+    if ! _u="$(gh api "/users/${login}" --jq '[.id, .created_at] | @tsv' 2>/dev/null)"; then
       die "could not resolve GitHub login to a numeric id: $login"
     fi
+    id="${_u%%$'\t'*}"
+    created="${_u#*$'\t'}"
+    [[ "$created" == "$id" ]] && created=""
   fi
   [[ "$id" =~ ^[0-9]+$ ]] || die "resolved id for $login is not numeric: '${id}'"
+  # THE HANDLE-REUSE CHECK. GitHub releases a deleted account's login for
+  # re-registration. The designation list names USERNAMES; the roster stores
+  # IDS; and the operator reading the instrument cannot see that the handle
+  # changed hands. An account created AFTER the grant took effect cannot be the
+  # account the counterparty designated, so this is decidable and is refused.
+  #
+  # It is NECESSARY AND NOT SUFFICIENT, and the message says so: a long-lived
+  # account that later took a freed handle passes it. It removes the cheapest
+  # failure, not the failure class -- the current designation list is still the
+  # authority (runbook s 10.1).
+  reuse_checked=0
+  if [[ "$MODE" == "add" && -n "$created" && -n "$AUTHORIZED_FROM" ]]; then
+    reuse_checked=1
+    _c_e="$(date -u -d "$created" +%s 2>/dev/null || echo "")"
+    _a_e="$(date -u -d "$AUTHORIZED_FROM" +%s 2>/dev/null || echo "")"
+    if [[ -z "$_c_e" || -z "$_a_e" ]]; then
+      die "could not compare the account creation date ($created) with --authorized-from ($AUTHORIZED_FROM) -- refusing rather than recording an unchecked designation" 2
+    fi
+    if (( _c_e > _a_e )); then
+      die "$login was created at $created, AFTER --authorized-from $AUTHORIZED_FROM. GitHub releases a deleted account's login for re-registration, so this handle may not be the account the counterparty designated -- and a roster row is permanent and world-readable. Check the counterparty's CURRENT designation list (instrument s 4(c) as amended by any s 5 notice) before retrying. This check is necessary and NOT sufficient: an older account that later took a freed handle would pass it." 2
+    fi
+  fi
   # stderr: stdout carries the emitted roster on a dry run, and a caller must be
   # able to pipe it to jq without reconstructing the document with sed.
-  echo "resolved ${login} -> ${id}" >&2
+  # The line asserts only what was actually done. Claiming "not created after
+  # --authorized-from" whenever a date happened to be available would assert a
+  # comparison on the `remove` path, where none is made.
+  if [[ "$reuse_checked" == "1" ]]; then
+    echo "resolved ${login} -> ${id} (created ${created}; not created after --authorized-from)" >&2
+  else
+    echo "resolved ${login} -> ${id} (the handle-reuse check was NOT run — no creation date, or no --authorized-from to compare against)" >&2
+  fi
   IDS+=("$id")
 done
 

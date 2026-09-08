@@ -30,6 +30,22 @@
 # narrow one, because the next person adding a pipeline stage reads it as
 # licence.
 #
+# RETIREMENT. This probe dies with #7922 -- the tracker closes by hand when the
+# roster row is recorded -- and every one of these goes with it or needs editing.
+# Listed here so the deletion is one read rather than a suite reddening for
+# someone who has never seen this file:
+#   scripts/followthroughs/ccla-representative-icla-7922.test.sh   (delete)
+#   scripts/followthroughs/ccla-representative-icla-7922.acknowledged (delete)
+#   scripts/ccla-icla-watch-discoverability.sh                     (delete)
+#   scripts/bootstrap-ccla-watch-7922.sh                           (delete)
+#   scripts/test-all.sh                                            (drop the run_suite line and the note above it)
+#   plugins/soleur/test/fixture-relative-assert.baseline.txt       (drop the row)
+#   .github/workflows/scheduled-followthrough-sweeper.yml          (fetch-depth: 0 exists FOR this probe -- re-justify or revert)
+#   apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts    (back-pointer comment)
+#   knowledge-base/.../runbooks/cla-signature-evidence-retrieval.md (section 10.6)
+#   knowledge-base/.../runbooks/followthrough-convention.md        (named as the first user of exit codes 2/3/5)
+#   knowledge-base/project/plans/2026-09-07-chore-ccla-...-plan.md (discoverability_test)
+#
 # That is a constraint rather than a courtesy: `scripts/sweep-followthroughs.sh`
 # captures this script's output with `2>&1` and republishes it into a public
 # comment on #7922 every single sweep — near-verbatim: the sweeper neutralises

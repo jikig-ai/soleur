@@ -2250,21 +2250,22 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   //      `authenticated` cannot execute it — so an anon probe cannot even call it, let alone
   //      assert its body. Also a database query, not a host login, so the no-SSH requirement
   //      in `hr-observability-as-plan-quality-gate` is satisfied.
-  // 10 -> 11 (#7909/#7910). RENUMBERED AT MERGE for the same reason as the
-  // entry above: #7829 landed its own adoption on main while this branch was open. Confirmed against this assertion's own instruction
-  // BEFORE the number moved: the new declaration is in
-  // `2026-09-07-chore-ccla-instrument-file-and-icla-signature-watch-plan.md`, it
-  // sits INSIDE that plan's `discoverability_test:` sub-block, and it is genuine
-  // — the probe's `--print-epoch` reads only local git history and needs nothing,
-  // and the value says exactly that while naming the one thing that is NOT
-  // credential-free: the verdict path's `git fetch`, which uses whatever
-  // credential the checkout persisted into `.git/config`. That distinction is
-  // load-bearing rather than decorative, because the same PR sets
-  // `persist-credentials: false` on the sweeper's checkout and had to measure the
-  // anonymous fetch first. Not a leftover template comment and not a stray line
-  // outside the sub-block, which are the two cases this instruction says to
-  // DELETE rather than baseline.
-  const BASELINE_DECLARED_PROBES = 11;
+  // 10 -> 11 -> 10 (#7909/#7910). The increment was WITHDRAWN in the same PR that
+  // made it, and the reason is worth keeping: the declaration was accurate about
+  // credentials and still the wrong field. `--print-epoch` reads only local git
+  // history and needs nothing, so there was nothing to waive -- but declaring it
+  // made Check 10 skip WITHOUT EXECUTING, and the plan it waived claimed the
+  // probe "exits 0" for a command that exits 2. A person caught that; the gate
+  // that exists to catch it had been told not to look. The probe now reaches
+  // Check 10 through `scripts/ccla-icla-watch-discoverability.sh`, which asserts
+  // the exit-2 invariant instead of waiving it.
+  //
+  // The general shape: a `credentials_required` value can be TRUE and still be
+  // the wrong field, because the question it answers is not "does this need a
+  // credential" but "is there no unauthenticated probe of the same property".
+  //
+  // The 10 that remains is #7873's and #7829's, untouched by this PR.
+  const BASELINE_DECLARED_PROBES = 10;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

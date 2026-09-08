@@ -733,9 +733,21 @@ logs:
   retention: "Actions logs 90 days (repo default); issue comments indefinitely"
 
 discoverability_test:
-  command: "bash scripts/followthroughs/ccla-representative-icla-7922.sh --print-epoch"
-  expected_output: "prints exactly the line 2026-09-07T15:16:45Z and exits 2. Measured in this checkout: main history is intact (rev-list --count HEAD = 3496; .git/shallow holds one SHA, the cla-signatures tip), so the success branch is pinnable and the earlier 'or a CANNOT ESTABLISH line otherwise' phrasing was satisfied by both branches and therefore asserted nothing. NOTE: 7922 must be substituted (Phase 4 step 2 / task 4.10) before preflight Check 10 executes this, or it fails on a nonexistent path. CORRECTED at /work: this said `exits 0`, which is false for what shipped. The probe's invariant is that it NEVER returns 0 or 1 on ANY path -- 0 is the sweeper's close verb and 1 its FAIL/reopen trigger -- and --print-epoch is inside that invariant rather than exempt from it, because a blanket rule is cheaper to verify and impossible to regress into. It exits 2."
-  credentials_required: "none for --print-epoch, which performs no fetch. Accurate scope: the probe declares no secrets= and holds no credential in its environment; the verdict path's `git fetch` uses whatever credential the checkout persisted in .git/config, which is why Phase 5 decides persist-credentials explicitly."
+  command: "bash scripts/ccla-icla-watch-discoverability.sh"
+  expected_output: "EPOCH-OK 2026-09-07T15:16:45Z"
+  # NO `credentials_required`. The earlier draft carried one, and that is how a plan
+  # claiming the probe `exits 0` for a command that exits 2 reached review with the gate
+  # green: the declaration makes Check 10 SKIP WITHOUT EXECUTING, so the error was caught
+  # by a person rather than by the gate that exists to catch it. Nothing here needs a
+  # credential -- `--print-epoch` derives the epoch from local git history and returns
+  # before any fetch -- so there was nothing to waive.
+  #
+  # Check 10 reaches PASS only on rc == 0, and the probe NEVER exits 0 on any path (0 is
+  # the sweeper close verb). `scripts/ccla-icla-watch-discoverability.sh`, committed in
+  # this PR, inverts that once and ASSERTS the invariant rather than waiving it: the probe
+  # must exit 2 AND print one ISO-8601 UTC epoch. Both halves matter -- a probe that
+  # REFUSED would also "not exit 0", so a bare rc check would pass on a derivation that
+  # could not run at all. Measured in this checkout: `EPOCH-OK 2026-09-07T15:16:45Z`, rc 0.
 ```
 
 ## Encryption Posture

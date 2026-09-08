@@ -71,9 +71,18 @@ export const NOTICE_ANCHOR = "public corporate coverage map";
  * re-derives the same moment in bash, because that probe runs under `env -i` on
  * a CI runner with no node toolchain. Its companion suite asserts the two agree
  * BYTE FOR BYTE across a family of synthetic repositories (one-touch,
- * two-touch, merge, rebase-replay, squash), so editing `--first-parent`, `%cI`,
- * the oldest-match rule or the `--` separator here reddens a suite two
- * directories away. That is deliberate — the alternative is the two drifting
+ * two-touch, merge, rebase-replay, squash), so editing `--first-parent`, `%cI`
+ * or the oldest-match rule here reddens a suite two directories away.
+ *
+ * The `--` separator is pinned by its own fixture rather than by that family,
+ * and the distinction is worth stating because the obvious fixture does not
+ * cover it: git applies a trailing pathspec with or without `--`, so a decoy
+ * anchor in a second path proves only that the path SCOPE is honoured. What
+ * `--` guards is AMBIGUITY, and the fixture creates it directly — a branch
+ * named exactly `docs/legal/individual-cla.md`, which git creates without
+ * complaint. Without the separator git then exits 128 (`both revision and
+ * filename`) and this function throws. Measured both ways: dropping `--` here
+ * turns that arm red; before the fixture existed it was green. That is deliberate — the alternative is the two drifting
  * apart silently, with the merge gate and the operator's watch disagreeing
  * about when the notice existed — but it is worth knowing before you change the
  * argv array below.

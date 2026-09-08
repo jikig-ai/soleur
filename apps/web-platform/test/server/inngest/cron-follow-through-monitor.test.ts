@@ -670,7 +670,7 @@ describe("cron-follow-through-monitor — T9 Guard C not-planned close semantics
   });
 });
 
-describe("cron-follow-through-monitor — T10 sweeper-owned trackers are excluded (#7910)", () => {
+describe("cron-follow-through-monitor — T10 sweeper-owned trackers keep their SLA observer but are never closed here (#7910)", () => {
   // An issue carrying a `soleur:followthrough` directive is owned by
   // scripts/sweep-followthroughs.sh, which polls it daily with its own close
   // semantics. This monitor's Guard C closes as `not planned` at 30 business
@@ -683,33 +683,59 @@ describe("cron-follow-through-monitor — T10 sweeper-owned trackers are exclude
   // Asserted on the prompt text, which is the strongest guard available: the
   // agent cannot be executed in-suite.
 
-  it("T10a: the listing step filters out issues whose body carries the directive", async () => {
+  const listingStep = (prompt: string) => {
+    const from = prompt.indexOf("1. List open follow-through issues");
+    const to = prompt.indexOf("2. If zero issues are found");
+    // Both anchors must resolve to a real, ordered span. `slice` silently
+    // accepts -1 and returns the whole prompt, which would make every
+    // containment assertion below true of some OTHER step.
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    return prompt.slice(from, to);
+  };
+
+  it("T10a: the listing step TAGS sweeper-owned issues rather than dropping them", async () => {
     const { FOLLOW_THROUGH_PROMPT } = await import(
       "@/server/inngest/functions/cron-follow-through-monitor"
     );
-    const listing = FOLLOW_THROUGH_PROMPT.slice(
-      FOLLOW_THROUGH_PROMPT.indexOf("1. List open follow-through issues"),
-      FOLLOW_THROUGH_PROMPT.indexOf("2. If zero issues are found"),
-    );
-    // Known-positive control: the slice really is the listing step. Without it
-    // an anchor drift would make every assertion below vacuously true.
+    const listing = listingStep(FOLLOW_THROUGH_PROMPT);
+    // Known-positive control: the slice really is the listing step.
     expect(listing).toContain("gh issue list --label follow-through --state open");
     expect(listing).toContain("soleur:followthrough");
-    expect(listing).toContain("| not)");
+    // The tag is what step 3 branches on.
+    expect(listing).toContain("sweeperOwned");
+    // THE REGRESSION DIRECTION, asserted as an absence. The first version of
+    // this rule filtered the issues out of the listing entirely (`| not)`),
+    // which removed Guard B's SLA observation along with Guard C's close and
+    // left a long-running legal tracker with one observer.
+    expect(listing).not.toContain("| not)");
   });
 
-  it("T10b: the exclusion states WHY, so it is not deleted as redundant with sla_business_days", async () => {
+  it("T10b: the rationale scopes the rule to CLOSING, and says Guard B survives", async () => {
     const { FOLLOW_THROUGH_PROMPT } = await import(
       "@/server/inngest/functions/cron-follow-through-monitor"
     );
-    const listing = FOLLOW_THROUGH_PROMPT.slice(
-      FOLLOW_THROUGH_PROMPT.indexOf("1. List open follow-through issues"),
-      FOLLOW_THROUGH_PROMPT.indexOf("2. If zero issues are found"),
-    );
+    const listing = listingStep(FOLLOW_THROUGH_PROMPT);
     expect(listing).toContain("not planned");
+    expect(listing).toContain("Guard B is not part of that conflict");
     // sla_business_days reaches Guard B only; Guard C's 30 days is a constant in
-    // this prompt. A future reader who believes otherwise would delete the
-    // exclusion as redundant.
+    // this prompt. A future reader who believes otherwise would delete the rule
+    // as redundant.
     expect(listing).toContain("does not reach Guard C");
+  });
+
+  it("T10c: step 3 forbids BOTH close paths for a sweeper-owned issue, and only those", async () => {
+    const { FOLLOW_THROUGH_PROMPT } = await import(
+      "@/server/inngest/functions/cron-follow-through-monitor"
+    );
+    const from = FOLLOW_THROUGH_PROMPT.indexOf("   c2. IF the issue is SWEEPER-OWNED");
+    const to = FOLLOW_THROUGH_PROMPT.indexOf("   d. Take action based on result");
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const rule = FOLLOW_THROUGH_PROMPT.slice(from, to);
+    expect(rule).toContain("Guard A and Guard C are");
+    expect(rule).toContain("FORBIDDEN");
+    expect(rule).toContain("never close it");
+    expect(rule).toContain("Guard B still applies");
   });
 });

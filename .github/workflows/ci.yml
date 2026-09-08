@@ -750,7 +750,18 @@ jobs:
       matrix:
         shard: ["1/2", "2/2"]
     steps:
+      # fetch-depth: 0 is LOAD-BEARING for this shard, not hygiene. The CLA
+      # roster's entry gate is temporal: an account enters only if its Individual
+      # CLA signature is dated at or after a notice epoch DERIVED FROM GIT
+      # (`git log --first-parent -S<anchor>`, oldest match). On the default
+      # depth-1 checkout that derivation silently returns HEAD's own commit date
+      # -- a plausible ISO timestamp that is simply wrong, and wrong in the
+      # direction that refuses everyone. The live assertion is shape-only
+      # (`Number.isFinite(Date.parse(epoch))`), so it cannot see the difference,
+      # and the roster is empty today, so nothing else can either.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2

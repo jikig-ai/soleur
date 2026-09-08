@@ -112,23 +112,34 @@ predicates and SLA status.
 
 ## Instructions
 
-1. List open follow-through issues, EXCLUDING any whose body carries a
-   ${"`"}soleur:followthrough${"`"} directive:
-   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author --jq '[.[] | select((.body // "") | test("soleur:followthrough") | not)]'${"`"}
+1. List open follow-through issues:
+   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author${"`"}
 
-   The exclusion is load-bearing, not an optimisation. An issue carrying that
-   directive is owned by ${"`"}scripts/sweep-followthroughs.sh${"`"}, which polls it
-   daily on its own cadence and has its OWN close semantics — and the two
-   systems disagree in the one direction that cannot be undone. This monitor's
-   Guard C closes as ${"`"}not planned${"`"} after 30 business days, and
-   ${"`"}sweep-followthroughs.sh${"`"} filters NOT_PLANNED out of its closed set, so a
-   sweeper-owned tracker closed here becomes invisible to BOTH systems while it
-   is still legitimately waiting. Two pollers with different body formats and
-   opposite close rules on one issue is the defect; this line is the fix.
+   An issue whose body carries a ${"`"}soleur:followthrough${"`"} directive is
+   SWEEPER-OWNED: ${"`"}scripts/sweep-followthroughs.sh${"`"} polls it daily on its own
+   cadence, with its own body format and its own close semantics. Mark those
+   issues as you list them — step 3 treats them differently.
+
+   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author --jq '[.[] | . + {sweeperOwned: (((.body // "") | test("soleur:followthrough")))}]'${"`"}
+
+   WHAT SWEEPER-OWNED CHANGES, AND WHAT IT DOES NOT. It removes exactly the two
+   CLOSING transitions and nothing else. The conflict between the two systems is
+   about closing, and only about closing: this monitor's Guard C closes as
+   ${"`"}not planned${"`"} after 30 business days, and ${"`"}sweep-followthroughs.sh${"`"}
+   filters NOT_PLANNED out of its closed set — so a sweeper-owned tracker closed
+   here becomes invisible to BOTH systems while it is still legitimately waiting,
+   and that is not undoable by either poller.
+
+   Guard B is not part of that conflict. It applies a label and posts one comment;
+   it closes nothing, and the sweeper has no SLA notion of its own. An earlier
+   draft of this rule dropped sweeper-owned issues from the LISTING altogether,
+   which removed Guard B along with Guard C and left a long-running legal tracker
+   with a single observer. Excluding the whole issue was over-broad for the defect
+   it was fixing.
 
    Note that ${"`"}sla_business_days${"`"} does not reach Guard C — that 30-day bound is
    a constant in this prompt — so a ${"`"}## Verification${"`"} block cannot substitute
-   for the exclusion above.
+   for the sweeper-owned rule below.
 
 2. If zero issues are found, output "No open follow-through issues." and stop.
 
@@ -150,6 +161,11 @@ predicates and SLA status.
         "Pre-Validated Predicate Results" section below for the results.
         Do NOT re-execute any network requests. Use the pre-computed
         PASSED/FAILED/BLOCKED status directly.
+
+   c2. IF the issue is SWEEPER-OWNED (step 1), then Guard A and Guard C are
+      FORBIDDEN for it: never close it, and never post a "Verified:" or a
+      give-up comment on it. Guard B still applies in full. The sweeper closes
+      its own trackers, or a human does.
 
    d. Take action based on result. ONLY comment on STATE TRANSITIONS
       (do NOT add daily "still pending" comments). For EACH state transition,

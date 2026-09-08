@@ -554,8 +554,9 @@ else
       ros_tsv="$(jq -r '.organizations[] | [.record_ref, .executed_instrument_sha256] | @tsv' "$CCLA_ROSTER" 2>/dev/null)" \
         || { fail "(f) the coverage map could not be projected to (record_ref, hash) rows -- a row is missing those keys or carries a non-scalar. The join was NOT evaluated; this is NOT a finding that the stores agree."; ros_tsv=""; }
 
-      missing=0; mismatched=0; joined=0; seen=0; dupes_in_roster=0
+      missing=0; mismatched=0; joined=0; seen=0; dupes_in_roster=0; shared_hashes=0
       declare -A _roster_refs=()
+      declare -A _roster_hashes=()
       while IFS= read -r ros_line; do
         [[ -n "$ros_line" ]] || continue
         seen=$((seen + 1))
@@ -571,6 +572,20 @@ else
         fi
         [[ -n "${_roster_refs[$ros_ref]:-}" ]] && dupes_in_roster=$((dupes_in_roster + 1))
         _roster_refs[$ros_ref]=1
+        # SHARED-INSTRUMENT check. Distinct counterparties cannot have executed
+        # the same bytes, so two record_refs carrying one hash is a SELECTION
+        # error -- the operator passed the wrong file. `--instrument-file` makes
+        # that the likelier remaining mistake, because it closes transcription
+        # error and cannot close selection error: the wrong file is hashed
+        # perfectly and nothing downstream can tell. Skip the empty hash so a
+        # projection gap is reported once, by `missing`, not twice.
+        if [[ -n "$ros_hash" ]]; then
+          if [[ -n "${_roster_hashes[$ros_hash]:-}" ]]; then
+            shared_hashes=$((shared_hashes + 1))
+          else
+            _roster_hashes[$ros_hash]="$ros_ref"
+          fi
+        fi
         reg_hash="${_reg_hash_by_ref[$ros_ref]:-}"
         if [[ -z "$reg_hash" ]]; then
           missing=$((missing + 1))
@@ -602,6 +617,12 @@ else
         fail "(f) $dupes_in_roster duplicated record_ref(s) in the coverage map -- two published rows claiming one executed instrument. The register side is already checked for this; the roster was not."
       fi
 
+      if [[ "$shared_hashes" -eq 0 ]]; then
+        pass "(f) no two coverage-map rows share an executed-instrument hash"
+      else
+        fail "(f) $shared_hashes coverage-map row(s) share an executed-instrument hash with another row. Two counterparties cannot have executed the same bytes, so this is a SELECTION error -- the wrong file was passed to --instrument-file and hashed correctly. Re-hash each instrument on the encrypted operator drive and check which row names the wrong one; do not assume it is the newer."
+      fi
+
       if [[ $missing -eq 0 ]]; then
         pass "(f) every coverage-map record_ref appears exactly once in the CCLA register (joined $joined of $n_orgs)"
       else
@@ -629,7 +650,13 @@ echo "lint-legal-registers: ${checks} assertion(s), ${fails} failed \
 
 # Assertion floor. Reported with printf + exit rather than through fail(), which is the helper
 # it backstops (ADR-193): a floor that calls the function one edit disarms is not a floor.
-MIN_CHECKS=11  # 7 -> 11: block (f)'s four register/roster join assertions (#7909)
+# 7 -> 11 (#7909): block (f)'s register/roster join assertions. ELEVEN, not the
+# fifteen the block can emit: the join's own arms are inside the `n_orgs > 0`
+# branch and do not run while the coverage map is empty, which it is today. A
+# floor set to the maximum would red the live tree on every PR; a floor set to
+# the LIVE count is what this is. Raise it in the same commit as the first
+# coverage-map row, to the count measured on that tree.
+MIN_CHECKS=11
 if [[ $checks -lt $MIN_CHECKS ]]; then
   printf '::error::lint-legal-registers: only %d assertion(s) ran, expected >= %d -- the gate was disarmed, not satisfied\n' \
     "$checks" "$MIN_CHECKS" >&2

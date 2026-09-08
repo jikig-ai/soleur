@@ -142,6 +142,27 @@ PY
 }
 
 run_in() { ( cd "$1" && bash scripts/lint-legal-registers.sh >/dev/null 2>&1 ); echo $?; }
+# Same run, keeping the OUTPUT. Six rejection arms asserted `rc == 1` and nothing
+# else, so replacing a conditional with an unconditional `pass` kept them green
+# while the guard printed an affirmative finding it had not made. `$LINT_OUT`
+# holds the transcript of the last `run_out`.
+LINT_OUT="$SANDBOX_ROOT/last-run.txt"
+run_out() { ( cd "$1" && bash scripts/lint-legal-registers.sh >"$LINT_OUT" 2>&1 ); echo $?; }
+# A rejection arm, asserted on BOTH halves: the code, and the reason. `$3` is a
+# substring of the message the guard must print -- not of the message it must
+# not, because an absence is satisfied by silence.
+reject_because() { # name dir reason_substring
+  local got; got="$(run_out "$2")"
+  if [[ "$got" != "1" ]]; then
+    fail "$1: expected rc=1, got rc=$got"
+    return
+  fi
+  if grep -qF -- "$3" "$LINT_OUT"; then
+    pass "$1 (rc=1, and the message names it)"
+  else
+    fail "$1: rc=1 but no message contained '$3' -- the refusal may be for another reason: $(grep -m1 '^::error\|^\[FAIL\]' "$LINT_OUT" | head -c 160)"
+  fi
+}
 
 expect() { # name expected_rc dir
   local got; got="$(run_in "$3")"
@@ -391,9 +412,8 @@ else fail "(f) an agreeing joined pair was rejected (rc=$r)"; fi
 
 D="$(mkcorpus)" || exit 2
 ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" "$(roster_one CCLA-0001 "$HASH_B")"
-r="$(run_in "$D")"
-if [[ "$r" == "1" ]]; then pass "(f) a joined pair whose Instrument hash DISAGREES is rejected"
-else fail "(f) a disagreeing Instrument hash was accepted (rc=$r)"; fi
+reject_because "(f) a joined pair whose Instrument hash DISAGREES is rejected" "$D" \
+  "disagree on Instrument hash"
 
 # THE ASYMMETRY, and the arm most likely to be got wrong. A register row with no
 # roster row is the ORDINARY interim state: the register row is written when the
@@ -409,30 +429,26 @@ else fail "(f) the asymmetry was violated: a register row awaiting its roster ro
 
 D="$(mkcorpus)" || exit 2
 ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" "$(roster_one CCLA-0009 "$HASH_A")"
-r="$(run_in "$D")"
-if [[ "$r" == "1" ]]; then pass "(f) a coverage-map record_ref absent from the register is rejected"
-else fail "(f) a roster row with no register row was accepted (rc=$r)"; fi
+reject_because "(f) a coverage-map record_ref absent from the register is rejected" "$D" \
+  "have no matching CCLA register row"
 
 # record_ref integrity BEFORE the hash check: a duplicated or malformed ref
 # produces an EMPTY join, which would otherwise pass in exactly the scenario the
 # check exists for.
 D="$(mkcorpus)" || exit 2
 ccla_fixture "$D" "$(printf '| CCLA-0001 | A SARL | %s | %s | yes | 2099-01-01 | |\n| CCLA-0001 | B SARL | %s | %s | yes | 2099-01-02 | |' "$HASH_A" "$HASH_A" "$HASH_A" "$HASH_B")" "$(roster_one CCLA-0001 "$HASH_A")"
-r="$(run_in "$D")"
-if [[ "$r" == "1" ]]; then pass "(f) a DUPLICATED register Record ref is rejected (the join would otherwise be ambiguous)"
-else fail "(f) a duplicated Record ref was accepted (rc=$r)"; fi
+reject_because "(f) a DUPLICATED register Record ref is rejected (the join would otherwise be ambiguous)" "$D" \
+  "duplicated Record ref(s) in the CCLA register"
 
 D="$(mkcorpus)" || exit 2
 ccla_fixture "$D" "| NOT-A-REF | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" '{"schema_version":"1.0","organizations":[]}'
-r="$(run_in "$D")"
-if [[ "$r" == "1" ]]; then pass "(f) a MALFORMED register Record ref is rejected"
-else fail "(f) a malformed Record ref was accepted (rc=$r)"; fi
+reject_because "(f) a MALFORMED register Record ref is rejected" "$D" \
+  "that is not CCLA-NNNN"
 
 D="$(mkcorpus)" || exit 2
 ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | not-64-hex | yes | 2099-01-01 | |" '{"schema_version":"1.0","organizations":[]}'
-r="$(run_in "$D")"
-if [[ "$r" == "1" ]]; then pass "(f) a register Instrument hash that is not 64 lowercase hex is rejected"
-else fail "(f) a malformed Instrument hash was accepted (rc=$r)"; fi
+reject_because "(f) a register Instrument hash that is not 64 lowercase hex is rejected" "$D" \
+  "not 64 lowercase hex"
 
 # The empty state must report itself as UNEXERCISED, not as agreement. A silent
 # pass here is the vacuity this block was written to avoid.
@@ -538,7 +554,51 @@ fi
 
 echo "passed: $((checks - fails)) failed: $fails total: $checks"
 
-MIN_ASSERTIONS=51  # 34 -> 51: block (f)'s join arms, plus the review-driven fail-closed arms (#7909)
+# --- TD7: the CCLA register is actually IN the generic register scans --------
+# #7909 added `knowledge-base/legal/ccla-register.md` to REGISTER_FILES, and
+# nothing sampled it: deleting those lines left the suite fully green, because
+# every other arm drives block (f), which reads the file by its own path
+# variable. Asserted BEHAVIOURALLY -- plant a marker block (a) must find, in
+# that file and in no other.
+D="$(mkcorpus)" || exit 2
+python3 - "$D/knowledge-base/legal/ccla-register.md" <<'PYEOF'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+assert "No markers here." in s
+open(p, "w").write(s.replace("No markers here.", "TODO decide the correction affordance"))
+PYEOF
+grep -q 'TODO decide' "$D/knowledge-base/legal/ccla-register.md" \
+  && pass "TD7 control: the marker landed in the sandbox CCLA register" \
+  || fail "TD7 control: the marker was not written — the arm below would be vacuous"
+reject_because "TD7 a marker in the CCLA register is caught by the (a) token scan (the file IS scanned)" "$D" \
+  "unresolved marker in knowledge-base/legal/ccla-register.md"
+
+# --- DI-F7: two counterparties cannot have executed the same bytes -----------
+# `--instrument-file` closes transcription error and cannot close SELECTION
+# error: the wrong file is hashed perfectly. A shared hash across two record_refs
+# is the observable trace of that, and nothing refused it.
+roster_two_hashes() { # $1=hash for CCLA-0001  $2=hash for CCLA-0002
+  printf '{"schema_version":"1.0","organizations":[{"legal_name":"First Ltd","record_ref":"CCLA-0001","signed_at":"2099-01-01T00:00:00Z","cla_doc":{"path":"docs/legal/corporate-cla.md","git_sha":"deadbee","content_sha256":"%s"},"executed_instrument_sha256":"%s","representatives":[]},{"legal_name":"Second Ltd","record_ref":"CCLA-0002","signed_at":"2099-01-02T00:00:00Z","cla_doc":{"path":"docs/legal/corporate-cla.md","git_sha":"deadbee","content_sha256":"%s"},"executed_instrument_sha256":"%s","representatives":[]}]}' \
+    "$HASH_A" "$1" "$HASH_A" "$2"
+}
+two_reg() { # $1=hash for CCLA-0001  $2=hash for CCLA-0002
+  printf '| CCLA-0001 | First Ltd | %s | %s | yes | 2099-01-01 | |\n| CCLA-0002 | Second Ltd | %s | %s | yes | 2099-01-02 | |' \
+    "$HASH_A" "$1" "$HASH_A" "$2"
+}
+
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "$(two_reg "$HASH_A" "$HASH_B")" "$(roster_two_hashes "$HASH_A" "$HASH_B")"
+r="$(run_in "$D")"
+if [[ "$r" == "0" ]]; then pass "DI-F7 must-PASS: two counterparties with DISTINCT instrument hashes are accepted"
+else fail "DI-F7: two distinct counterparties were rejected (rc=$r) — the arm below would prove nothing"; fi
+
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "$(two_reg "$HASH_A" "$HASH_A")" "$(roster_two_hashes "$HASH_A" "$HASH_A")"
+reject_because "DI-F7 two coverage-map rows sharing one executed-instrument hash are REFUSED" "$D" \
+  "share an executed-instrument hash"
+
+MIN_ASSERTIONS=55  # 34 -> 55: block (f) join arms, the review-driven fail-closed arms, the reason-substring conversion, TD7 and DI-F7 (#7909)
 if [[ $checks -lt $MIN_ASSERTIONS ]]; then
   printf '::error::lint-legal-registers.test.sh: only %d assertion(s) ran, expected >= %d\n' \
     "$checks" "$MIN_ASSERTIONS" >&2

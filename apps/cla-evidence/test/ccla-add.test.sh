@@ -51,7 +51,7 @@ trap 'rm -rf "$WORK"' EXIT
 # still ABORTS — "could not read the reference set" must never degrade to an
 # empty ledger, which would pass every account.
 if ! git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null; then
-  # --no-tags is load-bearing, not tidiness: `git fetch` auto-follows tags, and the gate runner samples the repo's refs as a read-only boundary — a plain fetch wrote 157 tags and tripped [FATAL] A SUITE WROTE TO THE LIVE REPOSITORY on CI run 34123093118.
+  # --no-tags is load-bearing, not tidiness: `git fetch` auto-follows tags, and the gate runner samples the repo's refs as a read-only boundary — a plain fetch wrote 157 tags and tripped [FATAL] A SUITE WROTE TO THE LIVE REPOSITORY on CI run 34123093118. 157 is what that run measured, not the current scale -- the repo carries far more tags now, so the flag matters more than it did, not less.
   # Measured: plain fetch creates tags, --no-tags creates none and still fetches the ref.
   git fetch --no-tags --depth=1 -q origin \
     '+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures' 2>/dev/null
@@ -102,7 +102,7 @@ run_sut() {
   echo $?
 }
 
-add_args=(add --record-ref CCLA-0001 --org "Convergence SARL"
+add_args=(add --record-ref CCLA-0001 --org "Example Fixture Co"
           --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z
           --instrument-sha256 "$SHA64")
 
@@ -308,7 +308,32 @@ if jq -e . "$WORK/populated.json" >/dev/null 2>&1; then
 
   rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-9999 --login deruelle \
     --withdrawn-at 2026-09-05T00:00:00Z)
-  [[ "$rc" != "0" ]] && pass "remove against an unknown record_ref fails" || fail "remove accepted an unknown record_ref"
+  # rc==2, not rc!=0. Every sibling arm here pins the code; `!= 0` also accepts
+  # jq's own 5, a usage 64, or a preflight failure, so it would stay green on a
+  # refusal for an entirely different reason.
+  [[ "$rc" == "2" ]] && pass "remove against an unknown record_ref is refused (rc=2)" \
+    || fail "remove against an unknown record_ref: expected rc=2, got $rc"
+  grep -q 'no such record_ref' "$WORK/err.txt" \
+    && pass "the unknown-record_ref refusal names the reason" \
+    || fail "the unknown-record_ref refusal does not name its cause: $(head -c 140 "$WORK/err.txt")"
+
+  # CQ10: the instrument flags are meaningless outside `add` and were silently
+  # accepted and ignored. Silence tells an operator who believes they are
+  # amending a landed hash that the write did what they meant.
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-0001 --login deruelle \
+    --withdrawn-at 2026-09-05T00:00:00Z --instrument-sha256 "$SHA64")
+  [[ "$rc" == "64" ]] && pass "--instrument-sha256 outside \`add\` is REFUSED (rc=64), not ignored" \
+    || fail "--instrument-sha256 on the remove path: expected rc=64, got $rc"
+  grep -q 'only meaningful for' "$WORK/err.txt" \
+    && pass "the outside-add refusal says the flag is meaningful only for add" \
+    || fail "the outside-add refusal does not explain itself: $(head -c 140 "$WORK/err.txt")"
+  grep -q '7925' "$WORK/err.txt" \
+    && pass "the outside-add refusal points at the open correction-affordance decision" \
+    || fail "the outside-add refusal leaves an operator trying to amend a hash with nowhere to go"
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-0001 --login deruelle \
+    --withdrawn-at 2026-09-05T00:00:00Z --instrument-file /nonexistent/x.pdf)
+  [[ "$rc" == "64" ]] && pass "--instrument-file outside \`add\` is REFUSED before the path is even resolved" \
+    || fail "--instrument-file on the remove path: expected rc=64, got $rc"
 
   # A recorded withdrawal date is the legally operative one. Re-running `remove`
   # must NOT move it forward — the record of when a designation ended is the
@@ -411,7 +436,7 @@ chmod 000 "$WORK/unreadable.bin"
 mkdir -p "$WORK/adir"
 ln -sf "$WORK/instrument.bin" "$WORK/link-outside.bin"
 ln -sf "$REPO_ROOT/README.md" "$WORK/link-inside.bin"
-printf 'org-named fixture\n' > "$WORK/Convergence SARL executed CCLA.pdf"
+printf 'org-named fixture\n' > "$WORK/Example Fixture Co executed CCLA.pdf"
 # GNU sha256sum PREFIXES its output line with a backslash when the filename
 # contains a backslash or a newline, which shifts the awk fields and yields a
 # hash that is not 64 hex. `sha256sum < "$f"` reads stdin and prints no
@@ -598,6 +623,54 @@ else
   fail "backslash basename: rc=$rc and/or the recorded hash is wrong — sha256sum is being passed the path as argv"
 fi
 
+# --- U6: the handle-reuse check (created_at vs --authorized-from) -----------
+# GitHub releases a deleted account's login for re-registration. The designation
+# list names USERNAMES, the roster stores IDS, and the operator reading the
+# instrument cannot see that the handle changed hands. An account created AFTER
+# the grant took effect cannot be the account that was designated.
+#
+# The id map's OBJECT shape is what carries a creation date; the bare-number
+# shape (every other fixture in this file) carries none and SKIPS the check. So
+# the skip is asserted too — a check that silently does not run and a check that
+# passes print the same thing otherwise.
+u6_map_before='{"deruelle":{"id":54279,"created_at":"2020-01-01T00:00:00Z"}}'
+u6_map_after='{"deruelle":{"id":54279,"created_at":"2026-09-05T00:00:00Z"}}'
+u6_map_bad='{"deruelle":{"id":54279,"created_at":"not-a-date"}}'
+
+rc=$(run_sut "$SCRIPT" "$u6_map_before" "${add_args[@]}" --login deruelle)
+[[ "$rc" == "0" ]] \
+  && pass "U6 must-PASS: an account created BEFORE --authorized-from is recorded (rc=0)" \
+  || fail "U6: a legitimately older account was refused (rc=$rc): $(head -c 160 "$WORK/err.txt")"
+grep -q 'not created after --authorized-from' "$WORK/err.txt" \
+  && pass "U6: the resolution line says the handle-reuse check actually RAN" \
+  || fail "U6: nothing on stderr distinguishes a check that ran from one that was skipped"
+
+rc=$(run_sut "$SCRIPT" "$u6_map_after" "${add_args[@]}" --login deruelle)
+[[ "$rc" == "2" ]] \
+  && pass "U6: an account created AFTER --authorized-from is REFUSED (rc=2)" \
+  || fail "U6: expected rc=2 for a post-grant account, got $rc"
+grep -q 'created at 2026-09-05T00:00:00Z, AFTER --authorized-from' "$WORK/err.txt" \
+  && pass "U6: the refusal names both dates, so the operator can see which is wrong" \
+  || fail "U6: the refusal does not name the two dates: $(head -c 200 "$WORK/err.txt")"
+grep -q 'necessary and NOT sufficient' "$WORK/err.txt" \
+  && pass "U6: the refusal states the check is necessary and not sufficient" \
+  || fail "U6: the refusal overclaims — it does not say an older account taking a freed handle passes"
+grep -qE 'roster\.json' "$WORK/out.txt" 2>/dev/null && fail "U6: the refusal still emitted a roster" \
+  || pass "U6: nothing was emitted on the refusal path"
+
+rc=$(run_sut "$SCRIPT" "$u6_map_bad" "${add_args[@]}" --login deruelle)
+[[ "$rc" == "2" ]] \
+  && pass "U6: an UNPARSEABLE creation date refuses (rc=2) rather than skipping the check" \
+  || fail "U6: a bad creation date did not refuse (rc=$rc) — could-not-measure read as measured-good"
+grep -q 'could not compare the account creation date' "$WORK/err.txt" \
+  && pass "U6: the unparseable-date refusal is its OWN message, not the reuse message" \
+  || fail "U6: the unparseable-date case collapses into another refusal's wording"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${add_args[@]}" --login deruelle)
+[[ "$rc" == "0" ]] && grep -q 'the handle-reuse check was NOT run' "$WORK/err.txt" \
+  && pass "U6: the legacy id-map shape SKIPS the check and SAYS SO on stderr" \
+  || fail "U6: a skipped check is silent (rc=$rc) — indistinguishable from a passing one"
+
 # --- FR8: the resolved path reaches no published artifact -------------------
 # The instrument's filename plausibly carries a legal name, which is exactly
 # what --sole-trader exists to keep off-repo. The RUNTIME paths (the commit
@@ -690,8 +763,8 @@ fi
 
 # --- the organisation-named fixture leaks nothing (Guard 1 H4, must-PASS) ---
 rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0111 \
-  --instrument-file "$WORK/Convergence SARL executed CCLA.pdf" --login deruelle)
-if [[ "$rc" == "0" ]] && ! grep -q 'Convergence SARL executed' "$WORK/out.txt"; then
+  --instrument-file "$WORK/Example Fixture Co executed CCLA.pdf" --login deruelle)
+if [[ "$rc" == "0" ]] && ! grep -q 'Example Fixture Co executed' "$WORK/out.txt"; then
   pass "an organisation-named instrument basename never reaches the roster or stdout"
 else
   fail "organisation-named fixture: rc=$rc, or the basename leaked into stdout"
@@ -935,7 +1008,7 @@ echo "Total: $passes passed, $fails failed"
 # assertion could be deleted and the run stayed green and silent — the floor
 # only fires when TWO go. `guard-vacuity-floor.test.sh` verifies that floors
 # FIRE, never that they are tight, so nothing else catches the slack.
-MIN_ASSERTIONS=104
+MIN_ASSERTIONS=118
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

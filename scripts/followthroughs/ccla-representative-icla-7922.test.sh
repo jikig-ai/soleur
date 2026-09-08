@@ -954,9 +954,17 @@ if m_landed "H5 (probe constant repointed to a different anchor)"; then
   # ...and the UNCHANGED probe must refuse there, or H5 proves nothing.
   rc=$(run_any "$PROBE" "$H5/repo")
   cases=$((cases + 1))
+  # The reason matters here as much as the code. This is the ONE exit-3 arm that
+  # pinned only the number, and it is a CONTROL -- so any other refusal on that
+  # fixture (a missing binary, an unreadable roster) satisfied it and quietly
+  # decoupled it from the anchor it exists to prove.
   [[ "$rc" == "3" ]] \
     && pass "H5 control: the unmodified probe REFUSES on that fixture, so the arm above is not vacuous" \
     || fail "H5 control: the unmodified probe did not refuse (rc=$rc)"
+  cases=$((cases + 1))
+  grep -q 'anchor' "$OUT" \
+    && pass "H5 control: that refusal is about the ANCHOR, not some unrelated fault" \
+    || fail "H5 control: the refusal does not mention the anchor — it may be refusing for another reason: $(head -c 160 "$OUT")"
 fi
 
 
@@ -1134,6 +1142,19 @@ gcommit "$DEC/repo" "2026-03-01T00:00:00Z" "2026-03-01T00:00:00Z" "decoy: anchor
 write_doc "$DEC/repo" 1
 g -C "$DEC/repo" add -A
 gcommit "$DEC/repo" "$D_ANCHOR" "$D_ANCHOR" "introduce the coverage-map notice"
+# AND MAKE THE `--` ITSELF LOAD-BEARING. A decoy in a second path proves the
+# pathspec is APPLIED; it does not exercise what `--` actually guards, because
+# git still treats a trailing non-revision argument as a path without it.
+# Measured: deleting `--` from either implementation left this fixture green.
+# What `--` guards is AMBIGUITY -- a ref whose name equals the path -- and git
+# creates such a ref without complaint, so this is reachable, not contrived:
+#   fatal: ambiguous argument 'docs/legal/individual-cla.md': both revision and filename
+# rc=128, which both implementations then report as a refusal.
+g -C "$DEC/repo" branch "$DOC_REL"
+cases=$((cases + 1))
+g -C "$DEC/repo" rev-parse --verify --quiet "refs/heads/$DOC_REL" >/dev/null \
+  && pass "pathspec fixture control: a ref named exactly \`$DOC_REL\` exists, so the -- separator is now load-bearing" \
+  || fail "pathspec fixture control: could not create the ambiguous ref — the -- arms below would prove only scoping"
 dec_scoped=$(g -C "$DEC/repo" log --first-parent -S"$ANCHOR" --format=%cI -- "$DOC_REL" | tail -1)
 dec_unscoped=$(g -C "$DEC/repo" log --first-parent -S"$ANCHOR" --format=%cI | tail -1)
 cases=$((cases + 1))
@@ -1146,6 +1167,25 @@ cases=$((cases + 1))
 [[ "$rc" == "2" && "$(cat "$OUT")" == "$dec_scoped" ]] \
   && pass "the probe honours the -- pathspec (derives $dec_scoped, not the decoy's $dec_unscoped)" \
   || fail "the probe ignored the pathspec: got '$(cat "$OUT")', expected $dec_scoped"
+
+# AND THE TYPESCRIPT AUTHORITY, on the same fixture. The parity family above is
+# built before this fixture exists, so `--` was pinned on the bash side only --
+# while `roster-entry-gate.ts` tells its reader that editing the separator THERE
+# reddens a suite two directories away. That was false: every parity fixture
+# writes the anchor into exactly one path, so the TS `--` could be deleted with
+# all five arms green. This arm is what makes the comment true.
+if [[ -x "$TSX" ]]; then
+  {
+    printf 'import {resolveCoverageMapNoticeEpoch} from %s;\n' "\"$GATE_TS\""
+    printf 'try{console.log(resolveCoverageMapNoticeEpoch(%s));}catch(e){console.log("THREW");}\n' \
+      "\"$DEC/repo\""
+  } > "$WORK/parity-decoy.ts"
+  dec_ts="$("$TSX" "$WORK/parity-decoy.ts" 2>"$WORK/parity-decoy.err" || echo RUNFAIL)"
+  cases=$((cases + 1))
+  [[ "$dec_ts" == "$dec_scoped" ]] \
+    && pass "the TypeScript authority honours the -- pathspec too (derives $dec_ts)" \
+    || fail "the TS authority ignored the pathspec: got '$dec_ts', expected $dec_scoped ($(head -c 160 "$WORK/parity-decoy.err"))"
+fi
 
 # ---------------------------------------------------------------------------
 echo "---"
@@ -1161,7 +1201,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
 fi
 # Assertion floor, reported with printf + exit rather than through fail(), which
 # is the helper it exists to backstop.
-MIN_ASSERTIONS=92
+MIN_ASSERTIONS=95
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

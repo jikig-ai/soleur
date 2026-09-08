@@ -1668,7 +1668,9 @@ if want_scripts; then
   # EVIDENCE FOR THE PROMOTION, measured rather than assumed:
   #   - zero `::warning::lint-legal-registers` across the last 8 `main` CI runs, read from the
   #     run logs, not inferred from their conclusions;
-  #   - `bash scripts/lint-legal-registers.sh` exits 0 on the promoting tree, 7/7 assertions;
+  #   - `bash scripts/lint-legal-registers.sh` exits 0 on the promoting tree, 7/7 assertions
+  #     [reading forward: 11/11 as of #7909, which added block (f). The 7 is the measurement
+  #     this promotion decision rested on and stays as written];
   #   - two substantive legal amendments (#7803, #7838) landed inside the advisory window with no
   #     finding, so the register-scoped token predicate needed neither widening nor narrowing
   #     before promotion -- which was a precondition, not a nice-to-have.
@@ -1682,7 +1684,8 @@ if want_scripts; then
   # WHAT PROMOTION CHANGES ABOUT BLAST RADIUS -- stated because "the flag only affects this
   # invocation" is true of argv passthrough and false of the gate's reach. This suite sits in the
   # `scripts` shard, which the required `test` context depends on for EVERY PR, and it scans a
-  # fixed 4-file array plus the whole audits/ tree -- never the diff. After promotion, drift on
+  # fixed 5-file array (4 at promotion; #7909 added the CCLA register) plus the whole
+  # audits/ tree -- never the diff. After promotion, drift on
   # main reds every open PR and the merge queue, not only PRs touching the registers.
   run_suite "scripts/lint-legal-registers-live" bash scripts/lint-legal-registers.sh
   # WIRED HERE, NOT IN .github/ (#7717). check-pa-22.sh was written to guard the PA-22 register

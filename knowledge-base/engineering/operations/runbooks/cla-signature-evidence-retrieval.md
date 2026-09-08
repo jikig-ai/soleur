@@ -493,11 +493,14 @@ signing anything.
    a real person.
 
    The list names usernames while the roster stores numeric ids, and a released
-   handle re-registered by a stranger binds the stranger. `created_at <
-   --authorized-from` is **necessary and not sufficient** — a long-lived account
-   that later took a freed handle passes it — so treat a pass as the absence of
-   the cheapest failure, not as proof of identity. Record in the pull request
-   that you did this check.
+   handle re-registered by a stranger binds the stranger. The script now refuses
+   an account whose `created_at` is later than `--authorized-from` (exit 2) — it
+   fetches the date with the id, so you do not check it by hand. That check is
+   **necessary and not sufficient**: a long-lived account that later took a
+   freed handle passes it. Treat a pass as the absence of the cheapest failure,
+   not as proof of identity, and read the `resolved <login> -> <id> (created
+   ...)` line — it says explicitly when the check could not run. Record in the
+   pull request that you compared against the current designation list.
 6. Do **not** compute the instrument hash by hand for the coverage map. Pass the
    file to the script with
    `--instrument-file /absolute/path/on/the/encrypted/drive`, and it hashes the
@@ -568,7 +571,7 @@ about erasure reaches a data subject.
 | Code | Meaning |
 |---|---|
 | 0 | Written (pull request opened), or dry-run emitted |
-| 2 | Pre-flight failure — `gh` unavailable or unauthenticated, dirty working tree, unreadable ledger, or an `--instrument-file` that resolves **inside** this repository (custody: the instrument is held off-repo) |
+| 2 | Pre-flight failure — `gh` unavailable or unauthenticated, a required binary (`jq`, `realpath`, `sha256sum`, `stat`, `date`) missing from `PATH`, dirty working tree, unreadable ledger, an `--instrument-file` that resolves **inside** this repository (custody: the instrument is held off-repo), or an account whose `created_at` is later than `--authorized-from` (handle reuse — see § 10.1 step 5) |
 | 3 | The roster failed schema validation; nothing was written |
 | 4 | An account has not signed the Individual CLA; nothing was written |
 | 64 | Usage error — including both instrument flags together, neither of them, a relative `--instrument-file`, or one that is missing, a directory, empty or unreadable (each with its own message) |
