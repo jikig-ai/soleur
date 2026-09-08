@@ -12,6 +12,39 @@ domain: engineering
 brand_survival_threshold: aggregate pattern
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-08 · **Halt gates:** 4.6 pass, 4.7 pass, 4.8 pass, 4.9 skip (no UI
+surface), 4.10 skip (no store or connection), 4.11 pass (`lint-guard-contract.py` green,
+2 entries). **Reviewers:** DHH, code-simplicity, Kieran, spec-flow-analyzer,
+architecture-strategist, plus a scoped strong-model consult and a CTO domain assessment.
+
+**Key improvements from the deepen pass**
+
+1. **The direct predecessor learning was missing and is now the anchor.** #7393 / PR #7397 —
+   the work that built this file — supplies the question every mutation row answers ("what is
+   the cheapest edit that breaks the property this guard NAMES, while leaving it GREEN?") and
+   the deletion-direction, absolute-floor and apply-it-to-itself rules the matrix follows.
+2. **The severity of D2 is now stated correctly.** The fail-open does not merely make one row
+   untrustworthy — it un-does the specific mechanism #7397 added (counting `skip`/`todo` to
+   close the suppression family *by measurement*), leaving only the source grep that the same
+   learning documents as out-spellable.
+3. **Every citation resolved live:** 5 AGENTS rule IDs all active (none retired or
+   fabricated), 2 ADRs exist, issue #7466 OPEN with the cited title, every `knowledge-base/`
+   path present.
+4. **A fourth false negative caught and narrowed.** "Nothing greps this file's output" is
+   false (a learning quotes one of its strings); restated as "no *executable* consumer".
+
+**New considerations discovered**
+
+- Verified-negative sweep: the plan asserted four universal negatives; **four were wrong**
+  (the "only" ANSI filter — five sites; "zero" sibling parsers — one; "no learning covers
+  ANSI" — three; "nothing greps the output" — one prose hit). All corrected, and the pattern
+  is recorded as a Sharp Edge.
+- The corpus vacuity guard's `floor_lines_of` matches only `-lt`/`-le`/`-ge` threshold
+  shapes, so the new boolean unmeasured FATAL is **not** covered by it — recorded rather than
+  assumed.
+
 ## Overview
 
 The suite-integrity gate that backstops preflight Check 10 reads its verdict out of
@@ -58,6 +91,15 @@ zero test count — one asymmetry, one cause.
 ```
 
 The skip/todo arm carries the identical mechanism on the adjacent line.
+
+**What D2 actually costs.** The predecessor work (#7393 / PR #7397) added the `todo` and `skip`
+counters for one stated reason: *"measure work, not source shape, wherever a measurement
+exists"* — `describe.todoIf(true)` had removed four tests while the source-pattern grep stayed
+green and the gate printed `no tests skipped at runtime`. Parsing bun's counts closed that whole
+family **by measurement**, because the source grep "could always be out-spelled". When the parse
+fails open, that measurement silently reverts to nothing and the out-spellable source grep is
+the only surviving control — so D2 does not merely make one row untrustworthy, it un-does the
+specific mechanism the predecessor added to close the suppression family.
 
 **D3 — the unanchored counter reads non-summary text.** Measured:
 `grep -coE '([0-9]+) expect\(\) calls'` returns **1** against
@@ -202,9 +244,12 @@ Cut before research; ‡ cut or reversed at plan-review:
   manually-run harness. An earlier draft claimed zero siblings; corrected. **Deliverable:**
   file a `code-review` follow-up issue for D3 in that file rather than widening this PR
   (`wg-when-deferring-a-capability-create-a`).
-- Nothing greps this file's terminal line (verified: `could not parse bun`, `measured: pass=`,
-  `no tests skipped`, `suite integrity` have zero consumers outside the file), so its output
-  format is free to change — but this plan does not change it, to keep that true.
+- **No executable consumer greps this file's output.** `git grep -lF` over each of
+  `could not parse bun`, `measured: pass=`, `no tests skipped`, `suite integrity` and
+  `bun's summary reports` returns no matcher outside the file itself; the single external hit
+  is prose in the predecessor learning, not a matcher. So the output format is free to change
+  — but this plan does not change it, to keep that true. (Stated as "no executable consumer"
+  rather than "nothing greps": the broader negative is false.)
 - **`scripts/guard-vacuity-floor.test.sh` already covers this file** (ADR-193 Decision #5 —
   the population is derived by shape). Baseline measured: `Total: 23 passed, 0 failed`,
   exit 0, `MIN_CONSERVING=33` against a current 43, so no ratchet there moves. Its **ARM 10d**
@@ -245,6 +290,7 @@ Cut before research; ‡ cut or reversed at plan-review:
 
 | Learning | Rule |
 |---|---|
+| `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md` | **The direct predecessor** (#7393 / PR #7397 — the work that built this very file). Supplies the question every row of the Guard Contract below answers: *"what is the cheapest edit that breaks the property this guard NAMES, while leaving the guard GREEN?"* Also: **close the deletion direction** (every presence-style assertion stays green when the thing is deleted — hence M1, M7, M10, M12 and M14 are all deletions); **a floor indexed to its own input is not a floor**, and *"slack between a floor and the measured value is not padding — it is the budget an attacker spends"* (hence `MIN_CHECKS` ratchets to the measured value with none); and **an anti-vacuity control needs the same reasoning applied to itself** (hence the own-dispatch rows) |
 | `knowledge-base/project/learnings/2026-08-05-every-green-signal-certified-something-other-than-what-it-claimed.md` | A guard whose default on a missing measurement is "pass" is fail-open; a comment asserting fail-closed does not make it so |
 | `knowledge-base/project/learnings/2026-08-10-six-times-a-check-certified-something-other-than-what-it-named.md` | "A green suite is evidence about the fixture before it is evidence about the code." The revert-the-fix arm is the only proof a check *can* go red |
 | `knowledge-base/project/learnings/best-practices/2026-07-03-pass-is-not-proof-three-vacuous-green-traps-in-infra-verification.md` | Ask "what would make this pass without the thing under test being true?" |
