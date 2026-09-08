@@ -312,7 +312,19 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # `-lt` over `passes + fails`, so a neutered assertion machinery drives it to 0 and the floor
 # FIRES — and it carries an instrument self-test that exits 1 on a neutered helper before the
 # floor is even reached.
-PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh)$'
+# `apps/web-platform/scripts/run-migrations-schema-probe.test.sh` added by #7795 — the suite gained
+# its FIRST anti-vacuity floor there, which is what put it in this population at all. PROMOTED, not
+# deferred, and not by raising MAX_DEFERRED: this gate's own FAIL message says "do NOT raise this
+# number", and its ledger is shrink-only, so deferring a suite that meets the covered bar would grow
+# a set that is only allowed to shrink — the outcome this ratchet exists to prevent. Promoting the
+# FILE is the narrower of the two prescribed moves; `apps/web-platform/scripts/` stays deferred.
+# Measured before promotion, on the as-written suite: control GREEN (5/5); `pass()` neutered to a
+# no-op -> floor FIRES (`only 0 assertion(s) passed; expected >= 5`, exit 1); the #7795 arm deleted
+# -> floor FIRES (`only 4`, exit 1); and the ADR-193 case, `fail()` neutered WITH a genuine defect
+# present (`--no-tags` stripped from run-migrations.sh) -> still exit 1, because the floor is emitted
+# by `printf` + `exit 1` and never routed through the `fail()` it backstops. Its bound is a literal
+# adjacent to the test, so it is mutant-CONSTRUCTIBLE.
+PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"
