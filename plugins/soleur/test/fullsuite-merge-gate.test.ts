@@ -137,6 +137,23 @@ function shardTokensOn(line: string): string[] {
   }
   const positional = line.match(/scripts\/test-all\.sh\s+([A-Za-z]+)/);
   if (positional && (SHARDS as readonly string[]).includes(positional[1])) found.push(positional[1]);
+
+  // #7936 — a THIRD way to select a subset, added by #7902: SCRIPTS_SHARD=k/N partitions
+  // round-robin at the run_suite chokepoint, WITHIN a group. Neither branch above can see it:
+  // the `/` and digits fail the positional `[A-Za-z]+`, and it is not a TEST_GROUP prefix. Left
+  // unrecognised, `SCRIPTS_SHARD=1/3 TEST_GROUP=all bash scripts/test-all.sh` would satisfy every
+  // CEILING assertion here while running a third of the battery — the merge gate reporting the
+  // full suite pinned at /ship over a strict subset.
+  //
+  // Matched on the `_SHARD=` SUFFIX, not the one literal name. The selector this catches today is
+  // SCRIPTS_SHARD; the point of the gate is to notice the NEXT one too, which by construction
+  // nobody will remember to add here. A name-list would be wrong the moment a second partition
+  // lands — the same reason `SHARDS` is compared against rather than restated.
+  const shardEnv = line.match(/\b([A-Z][A-Z0-9_]*_SHARD)=([^\s"']+)/g) ?? [];
+  for (const e of shardEnv) {
+    const [name, value] = e.split("=");
+    found.push(`${name}=${value}`);
+  }
   return found;
 }
 
@@ -163,6 +180,25 @@ describe("CEILING — /ship Phase 4 runs the battery unsharded", () => {
         `ship Phase 4 must run the FULL battery; sharded invocation: ${line.trim()}`,
       ).toEqual([]);
     }
+  });
+
+  test("shardTokensOn sees a *_SHARD= selector, not only TEST_GROUP and positional (#7936)", () => {
+    // Without this row the #7936 branch is deletable at full green: every real Phase 4 line is
+    // unsharded, so nothing in the suite exercises the new detection. Both directions, because a
+    // matcher that flags everything would also pass a one-directional check.
+    expect(
+      shardTokensOn("SCRIPTS_SHARD=1/3 TEST_GROUP=all bash scripts/test-all.sh"),
+      "a *_SHARD= env selector must be reported as sharding, or the CEILING pin is satisfiable " +
+        "by a run that executes a strict subset of the battery",
+    ).not.toEqual([]);
+    expect(
+      shardTokensOn("FUTURE_SHARD=2/5 TEST_GROUP=all bash scripts/test-all.sh"),
+      "the suffix match must catch a future partition selector, not just today's name",
+    ).not.toEqual([]);
+    expect(
+      shardTokensOn("TEST_GROUP=all bash scripts/test-all.sh"),
+      "an unsharded full-battery invocation must NOT be reported as sharded",
+    ).toEqual([]);
   });
 
   test("Phase 4's prescription is imperative, not conditional", () => {
