@@ -63,21 +63,39 @@ PASS=0; FAIL=0
 # `soft_breach=true` left this suite at 11 rows / 11 passed / exit 0 — the mechanism gone, the
 # guard green. Stripping at EXTRACTION rather than per-predicate is deliberate: a future predicate
 # inherits the immunity instead of having to remember it (cq-assert-anchor-not-bare-token).
-job_block() {  # $1 = workflow path, $2 = job key — COMMENT-STRIPPED (see below)
+# NEVER PIPE THIS INTO `grep -q` (#7902 review; the #6178 class). Under `set -o pipefail` a
+# `producer | grep -q` reports 141 when grep exits on its first match and the producer takes
+# SIGPIPE — so the `if` takes the ELSE branch on a MATCH. Adding the comment-strip stage turned
+# that latent race into a reproducible CI failure: every predicate below reported UNMEASURABLE
+# with `grep: write error: Broken pipe` on the runner while passing locally.
+#
+# The fix is topological, not a `|| true`: materialise the stripped block ONCE into a file and
+# have every predicate read the FILE. No pipes, no race, and a future predicate inherits it.
+job_block_file() {  # $1 = workflow path, $2 = job key, $3 = destination file
   awk -v job="$2" '
     $0 ~ "^  " job ":$" { inb=1; print; next }
     inb && /^  [a-zA-Z0-9_-]+:$/ { exit }
     inb { print }
-  ' "$1" | grep -v '^[[:space:]]*#'
+  ' "$1" > "$3.raw"
+  grep -v '^[[:space:]]*#' "$3.raw" > "$3" || true
+  rm -f "$3.raw"
+}
+# Cached per (file) so the predicates below stay one-liners. Callers pass the workflow path.
+job_block() {  # $1 = workflow path, $2 = job key -> prints the COMMENT-STRIPPED block
+  local dst="$W/blk.$(printf '%s' "$1$2" | cksum | cut -d' ' -f1)"
+  [[ -s "$dst" ]] || job_block_file "$1" "$2" "$dst"
+  cat "$dst"
 }
 
 # Every reader takes the FILE as an argument so the mutation rows below can point the identical
 # assertions at a mutated copy. An assertion that reads a global cannot be driven red.
 envval() {  # $1 = file, $2 = env key — matched at its own indent, anchored, first hit
-  job_block "$1" await-ci | grep -oE "^[[:space:]]+$2:[[:space:]]*\"?[0-9]+" | grep -oE '[0-9]+$' | head -1
+  local blk="$W/ev.$$"; job_block_file "$1" await-ci "$blk"
+  grep -oE "^[[:space:]]+$2:[[:space:]]*\"?[0-9]+" "$blk" | grep -oE '[0-9]+$' | head -1
 }
 timeoutval() {  # $1 = file — await-ci's own job-level timeout-minutes
-  job_block "$1" await-ci | grep -oE '^[[:space:]]+timeout-minutes:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1
+  local blk="$W/tv.$$"; job_block_file "$1" await-ci "$blk"
+  grep -oE '^[[:space:]]+timeout-minutes:[[:space:]]*[0-9]+' "$blk" | grep -oE '[0-9]+$' | head -1
 }
 
 # --- The four invariants, each a predicate over a FILE (0 = holds, 1 = violated) -------------
@@ -98,7 +116,8 @@ i2_attempts_track_ceiling() {  # the loop's iteration backstop must not bind bef
 }
 i3_soft_ceiling_is_derived() {  # derived from CEILING_S, never restated as a literal
   local f="$1"
-  job_block "$f" await-ci | grep -qE 'soft_ceiling_s=\$\(\([[:space:]]*CEILING_S[[:space:]]*\*'
+  local blk="$W/p3.$$"; job_block_file "$f" await-ci "$blk"
+  grep -qE 'soft_ceiling_s=\$\(\([[:space:]]*CEILING_S[[:space:]]*\*' "$blk"
 }
 i3b_soft_ceiling_fires_before_the_ceiling() {
   # SHAPE IS NOT MAGNITUDE (#7902 review, P1). i3 reads the derivation's FORM and never its
@@ -108,7 +127,8 @@ i3b_soft_ceiling_fires_before_the_ceiling() {
   # property is a RANGE: the warning must be able to fire, and must fire strictly before the gate.
   local f="$1" c n d soft
   c=$(envval "$f" CEILING_S); [[ -n "$c" ]] || return 2
-  n=$(job_block "$f" await-ci | sed -nE 's/.*soft_ceiling_s=\$\(\([[:space:]]*CEILING_S[[:space:]]*\*[[:space:]]*([0-9]+)[[:space:]]*\/[[:space:]]*([0-9]+).*/\1 \2/p' | head -1)
+  local blk="$W/p3b.$$"; job_block_file "$f" await-ci "$blk"
+  n=$(sed -nE 's/.*soft_ceiling_s=\$\(\([[:space:]]*CEILING_S[[:space:]]*\*[[:space:]]*([0-9]+)[[:space:]]*\/[[:space:]]*([0-9]+).*/\1 \2/p' "$blk" | head -1)
   [[ -n "$n" ]] || return 2
   d=${n#* }; n=${n%% *}
   (( d > 0 )) || return 2
@@ -117,7 +137,8 @@ i3b_soft_ceiling_fires_before_the_ceiling() {
 }
 i4_soft_breach_has_consumer() {  # an output nothing reads is a warning that never arrives
   local f="$1"
-  job_block "$f" await-ci | grep -q 'soft_breach=true' \
+  local blk="$W/p4.$$"; job_block_file "$f" await-ci "$blk"
+  grep -q 'soft_breach=true' "$blk" \
     && grep -qE '^[[:space:]]+soft_breach:[[:space:]]*\$\{\{[[:space:]]*steps\.' "$f" \
     && grep -qE "needs\.await-ci\.outputs\.soft_breach" "$f"
 }
@@ -138,8 +159,9 @@ check() {  # $1 = predicate, $2 = file, $3 = description — reports, never exit
 # (Sibling suites deliberately DUPLICATE this extractor rather than source a shared one — see
 # terraform-drift-step-order.test.sh, which explains that a cross-file source makes one suite's
 # failure look like another's. Keep the copy; keep the sanity row with it.)
-_blk_lines=$(job_block "$REL" await-ci | wc -l)
-if (( _blk_lines > 1 )) && job_block "$REL" await-ci | grep -q '^  await-ci:$'; then
+job_block_file "$REL" await-ci "$W/extract.blk"
+_blk_lines=$(wc -l < "$W/extract.blk")
+if (( _blk_lines > 1 )) && grep -q '^  await-ci:$' "$W/extract.blk"; then
   pass "EXTRACTION — the await-ci job block is $_blk_lines lines and starts at its own key"
 else
   fail "EXTRACTION — job_block returned $_blk_lines line(s); every invariant below would be scored against an empty haystack"
