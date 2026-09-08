@@ -10,6 +10,7 @@
     "@11ty/eleventy": "^3.1.5",
     "@11ty/eleventy-plugin-rss": "^2.0.4",
     "markdown-it": "^14.2.0",
+    "markdownlint-cli": "0.49.1",
     "yaml": "^2.8.2"
   },
   "overrides": {
@@ -17,6 +18,9 @@
     "gray-matter": {
       "js-yaml": "^3.15.1"
     },
-    "brace-expansion": "^1.1.16"
+    "brace-expansion": "^1.1.16",
+    "markdownlint-cli": {
+      "brace-expansion": "^5.0.8"
+    }
   }
 }

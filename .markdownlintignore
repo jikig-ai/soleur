@@ -1,2 +1,13 @@
 knowledge-base/marketing/distribution-content/
 knowledge-base/INDEX.md
+
+# knowledge-base/project/ (#7927): 8,231 tracked *.md carrying 29,200 of the repo's
+# 32,356 errors. Excluded as a scope decision, not a taste one: 208 of these files
+# already fail scripts/lint-infra-no-human-steps.py, which is a pre-commit hook, so a
+# sweep that restages them cannot be committed without the LEFTHOOK_EXCLUDE bypass this
+# issue exists to remove. They are session artifacts -- plans, specs, learnings -- read
+# by agents and never rendered, so rendering rules buy nothing here. Because the hook
+# and the CI job both derive their file set from THIS file, the exclusion also stops
+# those 8,231 files blocking a contributor's local `git merge origin/main`, which is
+# the operation #7927 was filed about.
+knowledge-base/project/
