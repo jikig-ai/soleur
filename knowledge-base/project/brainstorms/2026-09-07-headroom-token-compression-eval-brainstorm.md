@@ -6,7 +6,7 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 tags: [token-cost, context-engineering, external-tool-eval, vendor-review]
 related_adrs: [ADR-151, ADR-056, ADR-041, ADR-155]
-related_issues: []
+related_issues: [1055, 6297, 5692, 7055]
 ---
 
 # Headroom — token-compression layer evaluation
@@ -87,7 +87,7 @@ Three compounding reasons the reachable share is tiny:
   one-shot run loads (`plan`+`work`+`review`+`ship`) are 1.14 MB ≈ 286k tokens of English.
   Prose is precisely the class Headroom itself says compresses least.
 
-Theoretical ceiling ≈ 0.291 × 0.551 × 0.35 ≈ **5.6%** of conversation bytes; realistic
+Theoretical ceiling ≈ 0.291 (tool_result share of content bytes) × 0.551 (share of those bytes in payloads ≥2 kB, i.e. the only ones Headroom targets) × 0.35 (its own claimed reduction on prose) ≈ **5.6%** of conversation bytes; realistic
 **2–3%**. Against that, any perturbation near the cache prefix costs a full 2× re-write of
 ~11.5k tokens. Break-even is roughly one cache invalidation per two turns.
 
@@ -102,7 +102,7 @@ manufacture false negatives in exactly the gates written to prevent false negati
 | `hr-third-party-content-grep-on-undertaking` | A missed grep hit ships a privacy violation. |
 | `hr-type-widening-cross-consumer-grep` | A dropped call site is a silent widening bug. |
 | `cq-assert-anchor-not-bare-token`, `cq-cite-content-anchor-not-line-number` | Convention-only, **no gate enforces them** — nothing downstream catches the miss. |
-| `eval-harness/scripts/extract-block.cjs` | `indexOf()` on `<!-- eval-gate:block:*:start -->` across 65 sites; one rewritten comment → fail-closed throw or wrong projection. |
+| `eval-harness/scripts/extract-block.cjs` | `indexOf()` on `<!-- eval-gate:block:*:start -->` across **25 files** (67 marker occurrences repo-wide, this document included); one rewritten comment → fail-closed throw or wrong projection. |
 
 **CCR retrieval does not mitigate this — it relocates it.** Retrieval is model-initiated, and
 the failure mode is an agent *confident it already has the answer*. A compressor that makes an
@@ -128,6 +128,8 @@ median 3,353 B, p90 8,124 B). Payloads were replayed inside a realistic agent co
 | Falsification condition | Threshold | Measured | Verdict |
 |---|---|---|---|
 | Token reduction | > 15% | **6.69%** (2,816,205 → 2,627,824) | **FAIL** |
+
+Read 6.69% as a CEILING, not a whole-stream figure. The corpus is payloads **≥2 kB** — roughly the top decile of §2's own distribution (median 410 B, p90 2,350 B), i.e. the most compressible slice there is. Whole-stream reduction would be materially lower. This strengthens the NO-GO rather than weakening it, and re-evaluation criterion 2 reuses the same ≥2 kB denominator so a future run's number stays comparable.
 | Gate divergence | zero | **244 of 581 modified payloads lose ≥1 gate-relevant literal** | **FAIL** |
 
 581/2,252 payloads (25.8%) were modified at all. Losses among the modified set:
@@ -167,8 +169,19 @@ Two honest caveats, neither of which rescues the verdict:
   damage is not universal. It is, however, concentrated exactly on `file:line` citations —
   the single most common evidence form in our review and verification loops.
 
-Reproduction artifacts: `/tmp/…/scratchpad/hr-eval/` (`run_eval.py`, `divergence.py`, corpus).
-Not committed — transcript-derived payloads contain operator paths and session content.
+Reproduction artifacts: **destroyed, and this is a real cost to criterion 2.** The corpus was
+never committable — transcript-derived payloads carry operator paths and session content. But
+`run_eval.py` and `divergence.py` carried no transcript content and SHOULD have been committed:
+they are the replay scaffold (the `compress_user_messages`/`protect_recent` construction, the
+`cl100k_base` counting, the gate-literal regex set). They were deleted mid-session while
+reclaiming a full tmpfs, on the reasoning that "the conclusions are already committed" — which
+was false twice over: this PR was still empty at that moment, and the conclusions are not the
+scaffold.
+
+Consequence, stated so nobody discovers it later: a future run of criterion 2 must
+REBUILD the harness from §3b's prose rather than re-execute it, so its percentage is not
+guaranteed byte-comparable with this run's 6.69%. The denominator (payloads ≥2 kB) and the
+literal set are both specified above precisely to make that rebuild faithful.
 
 ### 4. `headroom learn` — separable, and must stay unused
 
@@ -183,11 +196,11 @@ and `scripts/lint-rule-bodies.py`'s WORM ack manifest. Separable only by never r
 Structural, not ergonomic. Per `roadmap.md`, the product pivoted plugin-first → **cloud-first**:
 end users run agents in a **server-side sandbox** (`apps/web-platform/server/agent-runner.ts`,
 Agent SDK). There is no local machine in the loop — no `~/.claude.json`, no port, no `uv`.
-`business-validation.md:48` records that most founders interviewed do not use Claude Code at
+`knowledge-base/product/business-validation.md` records, under the Claude-Code-familiarity finding, that most founders interviewed do not use Claude Code at
 all and want a visual UI.
 
 The only way to insert Headroom on that surface is `ANTHROPIC_BASE_URL` → a sidecar proxy
-inside the sandbox. That is currently **unset anywhere in the codebase** (verified), and it
+inside the sandbox. That is currently **set nowhere in any configuration** (verified; the only repo-wide grep hits are prose -- a learning file describing a mock, and this document), and it
 would place a third-party proxy in the **BYOK credential path**, where users' own Anthropic
 keys flow. It would also desynchronise ADR-041's fail-closed cap accounting (which counts
 tokens for a hard spend cap) from the bill the user actually receives. That is a
@@ -206,7 +219,7 @@ with no support org.
   with a saved claude.ai login remaining the active credential. Headroom's shape is a
   *documented* configuration. Guardrail: if it ever strips or forges the OAuth capability in
   `anthropic-beta` to keep subscription sessions alive, that crosses into §3 circumvention.
-- **Not a sub-processor.** `article-30-register.md:747` (Posture A, re-keyed 2026-08-06 /#7331
+- **Not a sub-processor.** `knowledge-base/legal/article-30-register.md`, the Posture A "Related documents" block (Posture A, re-keyed 2026-08-06 /#7331
   onto *whose credential effects the processing*): software on the user's machine, under the
   user's credential, for the user's purposes creates no Art. 28 relationship. No register row.
   Do not over-claim one.
@@ -218,7 +231,7 @@ with no support org.
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | **Do not adopt Headroom for Soleur dev usage.** | Reachable surface 2–3% (caps both the dollar and the rate-limit benefit); correctness risk to verbatim-grep gates is unbounded. Flat Max 20x means the benefit is throughput, not money — but 2–3% does not move throughput either. |
+| 1 | **Do not adopt Headroom for Soleur dev usage.** | Reachable surface 2–3% (caps both the dollar and the rate-limit benefit); correctness risk to verbatim-grep gates is real and not reducible to zero by CCR retrieval (§3b bounded it: 244/581 modified payloads, 2,367 citation losses, two literal classes at zero -- "unbounded" was the pre-measurement wording and §3b superseded it). Flat Max 20x means the benefit is throughput, not money — but 2–3% does not move throughput either. |
 | 2 | **Do not recommend, bundle, or automate it for Soleur users.** | Users have no local agent — cloud sandbox. Proxy insertion would sit in the BYOK credential path and desync ADR-041 cap accounting. **Not** rejected on cost grounds: BYOK users pay real dollars per token, so the operator's "$0 marginal" fact does not apply to them. |
 | 2b | **BYOK token reduction remains an open, legitimate user-value goal** — just not via a third-party proxy in the credential path. | Corrected 2026-09-07: users are billed on their own key, so reducing their token spend is real money saved for them. The rejection is of *this mechanism*, not of the goal. Any future work here must measure the sandbox's own traffic profile rather than extrapolating from operator transcripts. |
 | 3 | **`headroom learn` is never run against this repo**, in any pilot. | Trips the 46,000 B ratchet; bypasses the tier gate, immutable rule IDs, and the WORM ack manifest. |
@@ -228,10 +241,22 @@ with no support org.
 
 ## Re-evaluation criteria (ALL must hold)
 
-1. Soleur has metered per-token spend that is material — i.e. `api-spend-ledger.jsonl` is
-   non-empty and monthly spend exceeds a threshold worth optimising; **and**
-2. a measured offline run over archived `tool_result` payloads ≥2 kB shows **>15% reduction**
-   **and zero divergence** across `extract-block.cjs` plus the four grep-based gates in §3; **and**
+1. Soleur has metered per-token spend that is material — `api-spend-ledger.jsonl` is non-empty
+   **and** metered spend exceeds **US$200/month for two consecutive months**. The figure is
+   deliberately concrete: an earlier draft said "a threshold worth optimising", which a future
+   reader cannot certify or fail. $200/mo is roughly one Max 20x seat, i.e. the point at which
+   metered spend stops being noise against the subscription we already pay; **and**
+2. a measured offline run over archived `tool_result` payloads **≥2 kB** (the same denominator
+   as §3b, so the numbers stay comparable) shows **>15% reduction AND zero divergence** across
+   this enumerated set — **three** grep-discharged gates plus one marker parser:
+   - `hr-verify-repo-capability-claim-before-assert`
+   - `hr-third-party-content-grep-on-undertaking`
+   - `hr-type-widening-cross-consumer-grep`
+   - `extract-block.cjs` (`indexOf` on `<!-- eval-gate:block:* -->` markers)
+
+   An earlier draft said "the four grep-based gates in §3". §3's table has five rows and one
+   pair is annotated *convention-only, no gate enforces them* — so "four" was unresolvable.
+   Enumerated here so the criterion can actually be executed; **and**
 3. compression can be confined to tool output that no gate greps, or the gates are made
    compression-safe first.
 
