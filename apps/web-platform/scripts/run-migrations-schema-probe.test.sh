@@ -234,6 +234,41 @@ else
 fi
 
 # ------------------------------------------------------------------------
+# --- #7795: the origin/main refresh must not auto-follow tags ------------
+# This suite is why the assertion lives HERE. It copies run-migrations.sh
+# into a tmp tree and runs it WITHOUT cd-ing (four times), so the script's
+# un-`-C`'d `git fetch` executes with the LIVE repository as cwd — making
+# this suite itself a battery-reachable author of refs/tags/**, which
+# scripts/lib/repo-write-boundary.sh classifies as a suite writing to the
+# operator's repo. Anchored on the whole fetch command, not a bare
+# `--no-tags` grep: the flag landing on some other fetch would satisfy that
+# while this site kept auto-following tags. Both counts are asserted, so a
+# second unflagged fetch reddens this as well.
+_nt_all=$({ grep -cE '^[[:space:]]*(if ! )?git fetch ' "$RUNNER" || true; })
+_nt_ok=$({ grep -cE '^if ! git fetch( --[a-z-]+)* --no-tags( --[a-z-]+)* origin main ' "$RUNNER" || true; })
+if [[ "$_nt_all" == "1" && "$_nt_ok" == "1" ]]; then
+  pass "the origin/main refresh passes --no-tags (cannot write refs/tags/** into the live repo)"
+else
+  fail "fetch not --no-tags-scoped (fetch sites=$_nt_all, flagged=$_nt_ok; both must be 1)"
+fi
+
+# ------------------------------------------------------------------------
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
+
+# VACUITY FLOOR, reported DIRECTLY rather than through fail() (ADR-193): a
+# floor enforced through the helper it backstops cannot witness that helper
+# being neutered. Derived as the as-written case count, so deleting any arm
+# — including the #7795 one above, which is a single line of source-grep and
+# therefore the easiest to lose in an edit — reddens instead of shrinking
+# the suite silently.
+# Gated on assertions EXECUTED, not on PASS alone: keyed on PASS, one genuinely FAILING arm trips
+# this first and reports "an arm was deleted or short-circuited" for a real defect, which is the
+# wrong haystack to hand an operator (#7795 review). Deleted and failed are now distinguishable.
+if [[ $((PASS + FAIL)) -lt 5 ]]; then
+  printf '\n[FATAL] vacuity guard: only %d assertion(s) EXECUTED; expected >= 5.\n' "$((PASS + FAIL))" >&2
+  printf '        An arm was deleted or short-circuited, or the floor needs a deliberate bump.\n' >&2
+  exit 1
+fi
+
 [[ "$FAIL" == "0" ]] || exit 1
