@@ -41,8 +41,11 @@
 # Read ADR-031 §Amendment 2026-08-19 (#7590) before acting on the paragraph
 # above.
 terraform {
-  # Raised 1.6 -> 1.9 by #7650 Phase 2. `issue-alerts.tf` now uses `removed`
-  # blocks carrying `lifecycle { destroy = false }`.
+  # Raised 1.6 -> 1.9 by #7650 Phase 2, when `issue-alerts.tf` USED `removed`
+  # blocks carrying `lifecycle { destroy = false }`. #7826 deleted those blocks on
+  # 2026-09-06, so the original reason no longer applies to anything in this root.
+  # The floor STAYS anyway — see the CONSERVATIVE OVER-STRICTNESS note below; do
+  # not lower it on the grounds that no `removed` block remains.
   #
   # CORRECTED at review time. An earlier version of this comment said that on a
   # Terraform without that option "a `removed` block plans a DESTROY" of 27 live

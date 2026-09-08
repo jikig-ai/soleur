@@ -10,8 +10,10 @@
 # This header claimed "nothing structurally lints knowledge-base/legal/** ... the first
 # corpus-level gate over that tree" until review falsified both halves -- the runbooks ARE
 # scanned, and the six-site figure measured 3. The narrower claim is the true one and is the
-# load-bearing one. Being first over the registers is why it lands ADVISORY (see --advisory
+# load-bearing one. Being first over the registers is why it LANDED advisory (see --advisory
 # below) rather than straight onto the one required context that cannot be un-required.
+# PROMOTED TO BLOCKING 2026-09-07 (#7787, PR #7881) after one merge cycle measured clean. The
+# flag survives as a supported mode; what changed is that test-all.sh no longer passes it.
 #
 # THREE ASSERTIONS.
 #
@@ -88,9 +90,11 @@ while [[ $# -gt 0 ]]; do
     # claimed until self-review falsified it: `scripts/lint-infra-no-human-steps.py` already
     # scans `knowledge-base/legal/runbooks` via its SCAN_DIRS. No lint covered the registers.
     # Its scope was DESIGNED rather than measured. One cycle
-    # advisory measures it; promotion is then deleting this flag at the `run_suite` call site
-    # in scripts/test-all.sh, with evidence behind it. PROMOTION TRIGGER: one green merge cycle
-    # with no unexplained finding. Tracked at #7787 with its checklist -- a follow-up with a
+    # advisory measured it, and the flag was DELETED from the `run_suite` call site in
+    # scripts/test-all.sh on 2026-09-07 (#7787, PR #7881) with that evidence behind it: zero
+    # findings across the window, two substantive legal amendments inside it. This arm is kept
+    # deliberately -- it is how the mode is exercised by the unit suite, and the rc=2 carve-out
+    # below is the asymmetry the promotion did NOT change. Tracked at #7787 with its checklist -- a follow-up with a
     # trigger, not a hope.
     --advisory) ADVISORY=1; shift ;;
     -h|--help)  echo "usage: lint-legal-registers.sh [--advisory]"; exit 0 ;;
@@ -159,6 +163,7 @@ NOT_TRANSCRIBED=(
   "knowledge-base/legal/audits/2026-09-03-clo-review-7622-pa7-r2-evidence-layer.md | Not a determination: a retrospective record, written 2026-09-03, of the 2026-08-20 CLO review of PR #7622. It matches the producer because it transcribes that review's §(d) finding, which cites Art. 4(12) to conclude the omission was NOT a breach. The Art. 4(12) citation is quoted history, and the underlying matter was an Art. 30 Recipients-cell omission over processing that was contractually covered throughout (#7717)"
   "knowledge-base/legal/audits/2026-09-counsel-review-7791.md | Not a determination: the COUNSEL REVIEW of the CLO attestation of this register (#7791 / PR #7838), signed 2026-09-06 under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12) and Art. 33(5) in order to rule on the attestation, on the re-issued 2026-09-03 review and on the deletion of the superseded implementation record, and so matches the producer pattern, but it assesses no fact pattern and records no controller determination of its own. Same disposition as the audits/2026-09-counsel-review-7717.md and audits/2026-09-03-clo-attestation-7717-art-33-5-register.md rows; every future review or attestation of this register needs the same waiver -- a known cost of scoping the producer to audits/**, not a defect (#7791, #7717)"
   "knowledge-base/legal/audits/2026-09-04-betterstack-source-split-7772.md | Not a determination, and it matches only by RULING ONE OUT: the CLO ruling on the #7772 Better Stack Logs source split states in terms that no Art. 33/34 assessment arises, because the split is a re-partitioning of one processor's storage (same recipient, same team, same cluster) and because NO DATA HAS FLOWED to the new source -- the soleur-git-data server has never been provisioned. Prospective PA-8 amendment with no fact pattern and no event; same disposition and same reasoning as the 2026-08-counsel-review-7440.md waiver two entries above. Citing #7772."
+  "knowledge-base/legal/audits/2026-09-07-clo-attestation-7786-off-host-log-claims.md | Not a determination: the **CLO attestation of PR #7881** (#7786 / #6474), produced under the ship Phase 5.5 Counsel-Review CLO-Attestation Gate. It quotes Art. 4(12) and Art. 33 only to record that the Better Stack log-aggregation role addition was NOT an Art. 4(12) personal-data breach and therefore triggered no Art. 33/34 notification -- a determination that NO event occurred, about a disclosed processing change rather than about a fact pattern. Indexing it would put a non-event in a breach register. Cited #7786"
 )
 
 # The one indexed determination that lives outside the producer's scope. Asserted literally

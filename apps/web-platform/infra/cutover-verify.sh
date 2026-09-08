@@ -64,6 +64,11 @@ usage:
   cutover-verify.sh --expected-sha <sha>      run CUT0'-CUT9
   cutover-verify.sh --capture-baseline <path>         write the CUT9 MX/TXT fixture from live DNS
   cutover-verify.sh --capture-monitor-baseline <path> write the CUT8 monitor-health baseline
+  cutover-verify.sh --check-www-redirect      assert www 301s to the apex, and nothing else
+
+  --check-www-redirect is the one-command reproduction the www-redirect alarm's
+  runbook points at. It needs NO credentials: it returns before any token is
+  read, so anyone can run it from anywhere against the public URL.
 
   Exit codes: 0 all assertions passed; 1 an assertion FAILED (the rollback path);
   2 nothing failed but something was UNREACHABLE (re-run); 64 usage error.
@@ -151,6 +156,24 @@ capture_baseline() { # <out>
 }
 
 # ---------------------------------------------------------------------------------------
+# AUTH HEADER VIA STDIN, NEVER ARGV. A `-H "Authorization: Bearer $TOK"` sits in
+# /proc/<pid>/cmdline and `ps` for the life of the request. `curl --config -`
+# reads the header from stdin, so the token never appears in an argument list.
+curl_auth() { # <bearer> <url...>
+  local tok="$1"; shift
+  printf 'header = "Authorization: Bearer %s"\n' "$tok" \
+    | curl -sS --max-time "$CURL_MAX_TIME" --config - "$@"
+}
+
+# HOISTED at #7798. `probe_monitor_health` CALLS this, and the
+# `--capture-monitor-baseline` arm calls that, from the mode dispatch below --
+# which sits ABOVE where this function used to be defined. Bash resolves a
+# function at call time, so `curl_auth` did not exist yet at that call site: the
+# `command not found` was swallowed by the probe's own `2>/dev/null`, every
+# monitor resolved `unknown`, and the capture refused to write. It failed SAFE,
+# and it meant --capture-monitor-baseline could never succeed at all. Verified by
+# probe: `declare -F curl_auth` at the call site printed NO before this move.
+
 # ---------------------------------------------------------------------------------------
 # MONITOR HEALTH — one probe, used by CUT8 and by --capture-monitor-baseline
 # ---------------------------------------------------------------------------------------
@@ -166,8 +189,33 @@ capture_baseline() { # <out>
 #
 # Emits one `name<TAB>healthy|unhealthy|unknown` row per monitor. `unknown` is
 # never folded into either of the other two.
-SENTRY_MONITORS=(soleur-ai-apex soleur-ai-www soleur-ai-changelog-deep soleur-ai-acme-carveout-probe)
-BETTERSTACK_MONITOR="${CUTOVER_BETTERSTACK_MONITOR:-soleur dot ai apex}"
+# Byte-identical to the `name` on each sentry_uptime_monitor resource in
+# sentry/uptime-monitors.tf. `soleur-ai-www` became `soleur-ai-www-reachability`
+# at #7798 when it was retargeted from an unsatisfiable `equals 301` to 2xx.
+# If this array and a resource `name` ever diverge, www-apex-canonicalizer.test.sh
+# fails at PR time -- it cross-reads sentry/uptime-monitors.tf and asserts every
+# `name` here appears there and vice versa. That assertion was ADDED at #7798
+# review; until then this comment claimed it and no such check existed anywhere,
+# which is the same defect class this file's CUT8 header describes.
+#
+# Runtime behaviour if one ever slips past: a name in this array with no live
+# monitor resolves `unknown`, which CUT8 routes to UNREACHABLE (never PASS) and
+# --capture-monitor-baseline refuses to write. Note the OTHER direction is NOT
+# fail-safe: a monitor whose baseline ROW is missing scores as a REGRESSION, not
+# as unknown -- see the CUT8 block below.
+SENTRY_MONITORS=(soleur-ai-apex soleur-ai-www-reachability soleur-ai-changelog-deep soleur-ai-acme-carveout-probe)
+# An ARRAY, not a scalar (#7798). Until then CUT8 watched the apex monitor only,
+# so when #7878 retargeted the Sentry www monitor to 2xx and moved redirect-health
+# to betteruptime_monitor.soleur_www_redirect, the redirect property left CUT8's
+# coverage entirely -- and an all-healthy baseline read as complete coverage.
+# CUTOVER_BETTERSTACK_MONITOR overrides the FIRST entry only, preserving the
+# pre-existing env seam. A monitor added here MUST also gain a baseline row in the
+# same change (a row-less monitor scores REGRESSION, not unknown -- see above);
+# --capture-monitor-baseline emits one per array member, so re-capture together.
+BETTERSTACK_MONITORS=(
+  "${CUTOVER_BETTERSTACK_MONITOR:-soleur dot ai apex}"
+  "soleur dot ai www redirect 301"
+)
 
 probe_monitor_health() {
   local mon_json name mid proj checks total bad bs_json bs_status
@@ -216,18 +264,21 @@ probe_monitor_health() {
     for name in "${SENTRY_MONITORS[@]}"; do printf '%s\tunknown\n' "$name"; done
   fi
 
-  # The fifth monitor is a DIFFERENT VENDOR (BetterStack), not a fifth Sentry row.
+  # These are a DIFFERENT VENDOR (BetterStack), not extra Sentry rows. One list
+  # fetch serves every member; a per-member fetch would just re-read the same page.
   local bs_token="${BETTERSTACK_API_TOKEN_READONLY:-${BETTERSTACK_API_TOKEN:-}}"
   if [[ -n "$bs_token" ]]; then
     bs_json="$(curl_auth "$bs_token" \
         "https://uptime.betterstack.com/api/v2/monitors" 2>/dev/null)" || bs_json=""
-    bs_status="$(printf '%s' "$bs_json" | jq -r --arg n "$BETTERSTACK_MONITOR" \
-        '.data[]? | select((.attributes.pronounceable_name // "") == $n) | .attributes.status' 2>/dev/null | head -1)"
-    if   [[ -z "$bs_status" ]];      then printf '%s\tunknown\n'   "$BETTERSTACK_MONITOR"
-    elif [[ "$bs_status" == "up" ]]; then printf '%s\thealthy\n'   "$BETTERSTACK_MONITOR"
-    else                                  printf '%s\tunhealthy\n' "$BETTERSTACK_MONITOR"; fi
+    for name in "${BETTERSTACK_MONITORS[@]}"; do
+      bs_status="$(printf '%s' "$bs_json" | jq -r --arg n "$name" \
+          '.data[]? | select((.attributes.pronounceable_name // "") == $n) | .attributes.status' 2>/dev/null | head -1)"
+      if   [[ -z "$bs_status" ]];      then printf '%s\tunknown\n'   "$name"
+      elif [[ "$bs_status" == "up" ]]; then printf '%s\thealthy\n'   "$name"
+      else                                  printf '%s\tunhealthy\n' "$name"; fi
+    done
   else
-    printf '%s\tunknown\n' "$BETTERSTACK_MONITOR"
+    for name in "${BETTERSTACK_MONITORS[@]}"; do printf '%s\tunknown\n' "$name"; done
   fi
 }
 
@@ -253,27 +304,43 @@ case "$MODE" in
       exit 2
     fi
     {
-      printf '# CUT8 monitor-health baseline — captured BEFORE the apex cutover (#7640 PR4b).\n'
+      printf '# CUT8 monitor-health baseline (introduced #7640 PR4b). GENERATED FILE.\n'
       printf '#\n'
       printf '# CUT8 compares against this rather than demanding absolute green, because a\n'
       printf '# monitor that was ALREADY red cannot be evidence that the cutover broke\n'
       printf '# anything — and the T+20 rule turns any CUT8 failure into a rollback.\n'
       printf '#\n'
-      printf '# Regenerate: bash cutover-verify.sh --capture-monitor-baseline %s\n' "$2"
+      printf '# EVERY line here is rewritten by the command below -- hand-edits do not\n'
+      printf '# survive a re-capture. Rationale belongs in the runbook, not in this header:\n'
+      printf '# knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md\n'
+      printf '#\n'
+      printf '# Regenerate (from the repo root, needs credentials):\n'
+      printf '#   doppler run -p soleur -c prd_terraform -- \\\n'
+      printf '#     bash apps/web-platform/infra/cutover-verify.sh \\\n'
+      printf '#       --capture-monitor-baseline apps/web-platform/infra/cutover-monitor-baseline.txt\n'
+      printf '# Uncredentialed, every row captures `unknown` and the write is REFUSED.\n'
       printf '# Captured %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
       printf '%s\n' "$mb"
     } > "$2"
     printf 'wrote %s\n' "$2"
     exit 0 ;;
   --expected-sha)     [[ $# -eq 2 ]] || usage; EXPECTED_SHA="$2" ;;
+  # Takes no argument, so the arity check is `-eq 1`, not `-eq 2`. Dispatched
+  # further down rather than here because it reuses `check_redirect`, which
+  # needs `fetch` and the origin-marker list; see the early exit below.
+  --check-www-redirect) [[ $# -eq 1 ]] || usage; CHECK_WWW_ONLY=1 ;;
   *) usage ;;
 esac
 
-[[ -n "${EXPECTED_SHA:-}" ]] || usage
+[[ -n "${EXPECTED_SHA:-}" || -n "${CHECK_WWW_ONLY:-}" ]] || usage
 
 # Print every resolved input. Seven env seams can change what this run measures,
 # and the T+20 decision is read off this output — a verdict that does not say
 # what it graded against is not reproducible.
+if [[ -n "${CHECK_WWW_ONLY:-}" ]]; then
+printf '\ncutover-verify --check-www-redirect (www->apex 301; #7798)\n'
+printf '  apex=%s max_time=%s\n\n' "$APEX" "$CURL_MAX_TIME"
+else
 printf '\ncutover-verify (ADR-194 apex cutover)\n'
 printf '  apex=%s expected_sha=%s resolver=%s max_time=%s\n' "$APEX" "$EXPECTED_SHA" "$RESOLVER" "$CURL_MAX_TIME"
 printf '  mx_txt_baseline=%s (sha256 %s)\n' "$BASELINE" \
@@ -281,6 +348,7 @@ printf '  mx_txt_baseline=%s (sha256 %s)\n' "$BASELINE" \
 printf '  monitor_baseline=%s (sha256 %s)\n' "$MONITOR_BASELINE" \
   "$( [[ -r "$MONITOR_BASELINE" ]] && sha256sum "$MONITOR_BASELINE" 2>/dev/null | cut -c1-12 || echo '<unreadable>')"
 printf '  redirect_source=%s since=%s\n\n' "${CUTOVER_REDIR_TF:-$SCRIPT_DIR/seo-bulk-redirects.tf}" "${CUTOVER_SINCE:-<unbounded>}"
+fi
 
 # Fetch headers+body once per URL. `HTTPCODE=` is emitted by -w so an empty
 # response is distinguishable from a 200 with no body.
@@ -296,15 +364,6 @@ export TMPDIR="${TMPDIR:-/var/tmp}"
 CUTOVER_TMPDIR="$(mktemp -d -t cutover-verify.XXXXXXXX)" || {
   printf '[FATAL] could not create a scratch directory\n' >&2; exit 2; }
 trap 'rm -rf "$CUTOVER_TMPDIR"' EXIT INT TERM HUP
-
-# AUTH HEADER VIA STDIN, NEVER ARGV. A `-H "Authorization: Bearer $TOK"` sits in
-# /proc/<pid>/cmdline and `ps` for the life of the request. `curl --config -`
-# reads the header from stdin, so the token never appears in an argument list.
-curl_auth() { # <bearer> <url...>
-  local tok="$1"; shift
-  printf 'header = "Authorization: Bearer %s"\n' "$tok" \
-    | curl -sS --max-time "$CURL_MAX_TIME" --config - "$@"
-}
 
 fetch() { # <url> -> "code<TAB>headers<TAB>body" via globals; rc 1 on transport failure
   local url="$1" sep
@@ -324,6 +383,42 @@ fetch() { # <url> -> "code<TAB>headers<TAB>body" via globals; rc 1 on transport 
 # shellcheck source=apps/web-platform/infra/apex-origin-markers.sh
 . "$SCRIPT_DIR/apex-origin-markers.sh"
 GH_MARKERS="$APEX_GH_ORIGIN_MARKERS"
+
+# Defined HERE, above the first credentialed path, so `--check-www-redirect` can
+# reuse it verbatim. The CUT3/CUT4 call sites are unchanged and still live with
+# the rest of the cutover assertions further down.
+check_redirect() { # <id> <from-url> <want-location>
+  local id="$1" from="$2" want="$3" loc
+  if ! fetch "$from"; then row "$id" UNREACHABLE "transport failure fetching $from"; return; fi
+  if [[ "$FETCH_CODE" != "301" ]]; then
+    row "$id" FAIL "$from returned HTTP ${FETCH_CODE:-<none>}, want 301"; return
+  fi
+  loc="$(grep -i '^location:' <<<"$FETCH_HEADERS" | head -1 | sed 's/^[Ll]ocation:[[:space:]]*//' | tr -d '\r')"
+  if [[ "$loc" != "$want" ]]; then
+    row "$id" FAIL "$from -> '$loc', want '$want'"; return
+  fi
+  if grep -qiE "$GH_MARKERS" <<<"$FETCH_HEADERS"; then
+    row "$id" FAIL "$from 301s correctly but still carries a GitHub/Fastly origin marker"; return
+  fi
+  row "$id" PASS "$from -> $loc"
+}
+
+# --- --check-www-redirect: the runbook's one-command reproduction (#7798) --------------
+#
+# The www 301 has a runtime alarm again (betteruptime_monitor.soleur_www_redirect,
+# "soleur dot ai www redirect 301"). This is what you run by hand when it pages.
+#
+# It exits HERE, before `probe_monitor_health` or anything else reads a token, so
+# the "no credentials required" claim in the runbook is literally true rather
+# than merely usually true: the mode asserts a public URL and nothing else.
+if [[ -n "${CHECK_WWW_ONLY:-}" ]]; then
+  check_redirect CUT3 "https://www.${APEX}/" "https://${APEX}/"
+  if   [[ "$FAILED" -gt 0 ]]; then printf '\nFAILED\n';      exit 1
+  elif [[ "$UNREACH" -gt 0 ]]; then printf '\nUNREACHABLE\n'; exit 2
+  fi
+  printf '\nPASS\n'
+  exit 0
+fi
 
 # --- CUT0': the apex serves the build the Pages project holds --------------------------
 if fetch "https://${APEX}/version.txt?cb=${NONCE}"; then
@@ -375,21 +470,6 @@ else
 fi
 
 # --- CUT3 / CUT4: www canonicalization, WITHOUT following the redirect ------------------
-check_redirect() { # <id> <from-url> <want-location>
-  local id="$1" from="$2" want="$3" loc
-  if ! fetch "$from"; then row "$id" UNREACHABLE "transport failure fetching $from"; return; fi
-  if [[ "$FETCH_CODE" != "301" ]]; then
-    row "$id" FAIL "$from returned HTTP ${FETCH_CODE:-<none>}, want 301"; return
-  fi
-  loc="$(grep -i '^location:' <<<"$FETCH_HEADERS" | head -1 | sed 's/^[Ll]ocation:[[:space:]]*//' | tr -d '\r')"
-  if [[ "$loc" != "$want" ]]; then
-    row "$id" FAIL "$from -> '$loc', want '$want'"; return
-  fi
-  if grep -qiE "$GH_MARKERS" <<<"$FETCH_HEADERS"; then
-    row "$id" FAIL "$from 301s correctly but still carries a GitHub/Fastly origin marker"; return
-  fi
-  row "$id" PASS "$from -> $loc"
-}
 check_redirect CUT3 "https://www.${APEX}/" "https://${APEX}/"
 # Path preservation, not a bare-apex collapse — the failure this separates from
 # CUT3 is a redirect that sends every www path to the apex root.
@@ -453,19 +533,25 @@ fi
 #
 # REGRESSION, NOT ABSOLUTE HEALTH — and the distinction decides a destroy.
 # CUT8 as specified reads "all five monitors green". Measured 2026-09-03, BEFORE
-# this cutover, `soleur-ai-www` is in an active failure incident: it records its
-# CORRECT 301 as a failure because the `equals 301` assertion declared in
-# `sentry/uptime-monitors.tf` is not live on the monitor. Read absolutely, CUT8
-# can therefore never pass, and the T+20 rule ("on any failure, merge the
-# rollback") would roll back a perfectly healthy cutover on the strength of a
-# defect that predates it. A pre-existing red monitor is not evidence that the
-# cutover broke anything.
+# this cutover, `soleur-ai-www` was in a permanent failure incident, recording
+# its CORRECT 301 as a failure. Read absolutely, CUT8 could therefore never
+# pass, and the T+20 rule ("on any failure, merge the rollback") would roll back
+# a perfectly healthy cutover on the strength of a defect that predates it. A
+# pre-existing red monitor is not evidence that the cutover broke anything.
+#
+# The DIAGNOSIS in that paragraph was wrong and #7798 corrected it: the declared
+# assertion WAS live on the monitor, byte-identical. `equals 301` is simply
+# unsatisfiable on a URL that redirects, because Sentry follows 3xx and grades
+# the final response. The monitor is now `soleur-ai-www-reachability` asserting
+# 2xx, so it can be green; redirect-health moved to Better Stack. The
+# baseline-comparison logic below is retained regardless — it is the right shape
+# for ANY pre-existing red, and this cutover is not the last one.
 #
 # So: a monitor already unhealthy at baseline is reported loudly and does not by
 # itself fail the cutover; one healthy at baseline and unhealthy now is a
 # REGRESSION and fails. With no baseline the check falls back to absolute, which
 # is the conservative direction.
-CUT8_TOTAL=$(( ${#SENTRY_MONITORS[@]} + 1 ))
+CUT8_TOTAL=$(( ${#SENTRY_MONITORS[@]} + ${#BETTERSTACK_MONITORS[@]} ))
 MON_NOW="$(probe_monitor_health)"
 cut8_ok=0; cut8_fail=0; cut8_unreach=0; regressions=0; preexisting=0
 while IFS=$'\t' read -r mname mstate; do
@@ -499,7 +585,7 @@ done <<< "$MON_NOW"
 
 if   [[ "$regressions" -gt 0 ]];  then row CUT8 FAIL "$regressions of $CUT8_TOTAL monitor(s) REGRESSED since the pre-cutover baseline"
 elif [[ "$cut8_unreach" -gt 0 ]]; then row CUT8 UNREACHABLE "$cut8_unreach of $CUT8_TOTAL monitors could not be verified (this is not a pass)"
-elif [[ "$preexisting" -gt 0 ]];  then row CUT8 PASS "no monitor regressed; $preexisting pre-existing failure(s) carried — named above. If soleur-ai-www is among them its 301 is still covered in-band by CUT3/CUT4 (#7798)"
+elif [[ "$preexisting" -gt 0 ]];  then row CUT8 PASS "no monitor regressed; $preexisting pre-existing failure(s) carried — named above"
 else row CUT8 PASS "all $CUT8_TOTAL monitors healthy"
 fi
 

@@ -215,8 +215,13 @@ two-primitive separation.
 
 ## Flow 2 — PA8 §(f) retention pin (one-time measurement)
 
-The Article 30 register PA8 §(f) claims **30 MB rolling per container**
-(structural cap from `apps/web-platform/infra/cloud-init.yml` (the `"log-driver": "json-file"` daemon.json block)). There
+The Article 30 register PA8 §(f) **no longer claims 30 MB rolling per
+container** — that figure was retracted as *misattributed* on 2026-09-07 (#6474):
+it is the Docker daemon default from the `daemon.json` block in
+`apps/web-platform/infra/cloud-init.yml`, and it governs other containers, not
+this one, which runs under `--log-driver journald`. §(f) now records the
+journald bound (`SystemMaxUse=1G`, host-wide and shared with every unit, further
+shortened by `SystemKeepFree=2G`). There
 is no MB → days conversion to record: a capacity-bounded ring buffer has no
 envisaged time limit, because its duration is a function of instantaneous
 emission rate. Art. 30 PA-8 §(f) records the **mechanism** rather than a
@@ -233,9 +238,22 @@ the corrections above; the measurement they would have called for is the one
 §Steps now declines to prescribe, so neither leaves an open action.
 
 1. **Annual review** — cadence-based, next due 2027-05. *Not fired.*
-2. **`apps/web-platform/infra/cloud-init.yml` change** — fires when the
-   `daemon.json` block is edited (anchor on the `"log-driver": "json-file"`
-   line, not a line number). *Not fired.*
+2. **`apps/web-platform/infra/cloud-init.yml` change** — **RE-SCOPED
+   2026-09-07 (#6474).** This previously fired on edits to the `daemon.json`
+   block (anchor: the `"log-driver": "json-file"` line). PA-8 §(f) has now
+   retracted that json-file cap as non-governing for this container, so a
+   trigger watching it guards a surface the register says is irrelevant here —
+   which is the same Art. 5(2) defect this runbook's own §Re-verification
+   triggers preamble is about, one step earlier. It now fires on any change to
+   the **`docker run --log-driver` / `--log-opt` invocation** at **any** of its
+   three sites: `apps/web-platform/infra/cloud-init.yml` (host birth) and
+   `apps/web-platform/infra/ci-deploy.sh` (TWO sites — the per-deploy path that
+   starts the live container on every merge). Anchoring on `cloud-init.yml`
+   alone, as the first re-scope did, reproduces the original miss one file over:
+   fresh hosts would keep journald while the live production container silently
+   fell back to the json-file daemon default, and nothing would fire.
+   `apps/web-platform/infra/vector.toml` already recorded that both files start
+   the container. *Not fired since re-scoping.*
 3. **Off-host log shipper introduction** — fires when any of `promtail`,
    `vector`, `fluent`, `filebeat`, `rsyslog` is added to the infra.
    **FIRED 2026-06-02** — Vector, `[sources.app_container_journald]` (#4786).
@@ -248,7 +266,26 @@ the corrections above; the measurement they would have called for is the one
    is undefined for this container, and the wrong mechanism in PA-8 §(f) is
    named there for a register PR to correct.
 
-The trigger list is **closed** — adding a fifth trigger requires updating
+5. **`apps/web-platform/infra/journald-soleur.conf` change** — **NEW
+   2026-09-07 (#6474).** Fires on any change to the journald caps (anchor on the
+   `SystemMaxUse=` line). This is the file that actually governs the bound PA-8
+   §(f) records, and until now no trigger watched it: the register cited a
+   mechanism (`json-file`, 30 MB) whose watcher was trigger 2, while the real
+   mechanism had none. *Not fired.*
+6. **Better Stack source `logs_retention` change** — fires on any change to a
+   source's configured retention. **FIRED 2026-09-04** (#7772), discharged: both
+   sources read 90 days and §(f) records it.
+7. **New source on Better Stack team `520508`** — fires on creation of any
+   further source. *Not fired.*
+
+**Triggers 6 and 7 were added to PA-8 §(f) by the 2026-09-04 (#7772) bracket
+without the paired runbook update the closure clause below requires.** They are
+folded in here on 2026-09-07 (#6474) so the two lists agree; the closure clause
+was already breached when this PR found it, and leaving §(f) at seven triggers
+while this list stood at four would have shipped prose asserting a lockstep that
+did not hold.
+
+The trigger list is **closed** — adding an eighth trigger requires updating
 the PA8 §(f) row and this runbook in the same PR.
 
 ### Steps
@@ -297,12 +334,14 @@ matches `CONTAINER_NAME = ["soleur-web-platform"]` and ships the WARN+ subset of
 this very container's stdout to Better Stack. Flow 1 above now depends on exactly
 that.
 
-**PA-8 §(f)'s recorded mechanism is also wrong for this container, and that is
-tracked rather than fixed here.** §(f) and this runbook both still describe a
-"30 MB rolling per container" `json-file` cap (`max-size 10m` × `max-file 3`).
-That cap governs the daemon default, not this container: under `--log-driver
-journald` its retention is journald's `SystemMaxUse`/`SystemKeepFree`, shared
-with every other unit on the host. §(f)'s *disposition* — `NOT RECORDED`, on the
+**PA-8 §(f)'s recorded mechanism WAS wrong for this container; it was corrected
+on 2026-09-07 (#6474), and this paragraph is kept as the record of what was
+wrong.** §(f) and this runbook both used to describe a "30 MB rolling per
+container" `json-file` cap (`max-size 10m` × `max-file 3`). That cap governs the
+daemon default, not this container: under `--log-driver journald` its retention
+is journald's `SystemMaxUse`/`SystemKeepFree`, shared with every other unit on
+the host. §(f) now records the journald bound, and this runbook's Flow 2 above
+was corrected in the same change. §(f)'s *disposition* — `NOT RECORDED`, on the
 ground that a capacity-bounded buffer has no envisaged time limit — survives the
 correction, because journald is also capacity-bounded. The wrong mechanism is a
 register edit, out of scope for a runbook PR, and is tracked at **#6474**.

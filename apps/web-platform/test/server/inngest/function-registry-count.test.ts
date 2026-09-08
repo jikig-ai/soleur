@@ -108,6 +108,18 @@ const NON_INNGEST_MONITORS = new Set([
   // sentry-heartbeat step pings the check-in; there is no Inngest cron function, so
   // it maps to no SENTRY_MONITOR_SLUG — same class as scheduled-terraform-drift.
   "scheduled-heartbeat-reconcile",
+  // #7834: GHA-fired executor (scheduled-sentry-alert-drift.yml) posts the terminal
+  // heartbeat; cron-sentry-alert-drift.ts only DISPATCHES the workflow and declares no
+  // SENTRY_MONITOR_SLUG (the probe runs in the ephemeral runner, not the app process), so
+  // this monitor maps to no Inngest slug — same class as main-health-monitor and
+  // scheduled-supabase-advisor-scan.
+  //
+  // Declaring a SENTRY_MONITOR_SLUG in the dispatcher instead would be actively WRONG, not
+  // merely off-convention: that const is consumed by postSentryHeartbeat in the app process,
+  // so a dispatcher check-in would satisfy the monitor on "the dispatch was accepted" — which
+  // is precisely and only the failure mode #7834 exists to catch. The guard would then be
+  // green exactly when the thing it watches is broken.
+  "scheduled-sentry-alert-drift",
   // #3366: GHA-fired executor (scheduled-supabase-advisor-scan.yml) posts the
   // heartbeat at the end of the run; the cron-supabase-advisor-scan.ts
   // dispatcher declares no SENTRY_MONITOR_SLUG (it only dispatches and holds no

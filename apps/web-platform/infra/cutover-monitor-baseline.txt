@@ -1,13 +1,22 @@
-# CUT8 monitor-health baseline — captured BEFORE the apex cutover (#7640 PR4b).
+# CUT8 monitor-health baseline (introduced #7640 PR4b). GENERATED FILE.
 #
 # CUT8 compares against this rather than demanding absolute green, because a
 # monitor that was ALREADY red cannot be evidence that the cutover broke
 # anything — and the T+20 rule turns any CUT8 failure into a rollback.
 #
-# Regenerate: bash cutover-verify.sh --capture-monitor-baseline cutover-monitor-baseline.txt
-# Captured 2026-09-03T15:31:58Z
+# EVERY line here is rewritten by the command below -- hand-edits do not
+# survive a re-capture. Rationale belongs in the runbook, not in this header:
+# knowledge-base/engineering/operations/runbooks/www-redirect-alarm.md
+#
+# Regenerate (from the repo root, needs credentials):
+#   doppler run -p soleur -c prd_terraform -- \
+#     bash apps/web-platform/infra/cutover-verify.sh \
+#       --capture-monitor-baseline apps/web-platform/infra/cutover-monitor-baseline.txt
+# Uncredentialed, every row captures `unknown` and the write is REFUSED.
+# Captured 2026-09-07T19:04:59Z
 soleur-ai-apex	healthy
-soleur-ai-www	unhealthy
+soleur-ai-www-reachability	healthy
 soleur-ai-changelog-deep	healthy
 soleur-ai-acme-carveout-probe	healthy
 soleur dot ai apex	healthy
+soleur dot ai www redirect 301	healthy

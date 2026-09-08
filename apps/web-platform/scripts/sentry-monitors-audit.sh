@@ -992,7 +992,7 @@ done < "$class_c_out"
 # resource's `name`. Every `sentry_cron_monitor` in this root already sets a
 # kebab-case `name`, so slugification is the identity and `name` == live slug
 # — re-verified 2026-08-19 against the live org and the tf root:
-# 55 `resource "sentry_cron_monitor"` blocks, 55 `name =` attributes, 55 live
+# 56 `resource "sentry_cron_monitor"` blocks, 56 `name =` attributes, 56 live
 # monitors, exact set match in both directions. (This comment read 49 until
 # #7590; the figure had gone stale while still reading as "verified", which is
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
@@ -1325,7 +1325,7 @@ out_file="${out_dir}/sentry-migration-audit-${date_iso}.md"
   #
   # It existed to feed a first-time `terraform import` of issue-alert rules.
   # That adoption is complete — since #7650 Phase 2 it is 27 `sentry_alert`
-  # plus 2 `sentry_issue_alert` resources against a full-root plan, not 29
+  # plus 3 `sentry_issue_alert` resources against a full-root plan, not 29
   # `sentry_issue_alert` — so the manifest has no live consumer, and its README
   # runbook was stale by 25 resources. Repointing it at the workflows endpoint would
   # have been worse than deleting it: workflow ids and rule ids are DISJOINT
