@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-08T09:34:19Z",
+  "generated_at": "2026-09-08T10:16:19Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -796,6 +796,19 @@
       "rule_text_prefix": ""
     },
     {
+      "id": "hr-when-a-command-exits-non-zero-or-prints",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
       "id": "hr-when-a-plan-specifies-relative-paths-e-g",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -914,6 +927,19 @@
     },
     {
       "id": "rf-before-spawning-review-agents-push-the",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1329,58 +1355,28 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "rf-never-skip-qa-review-before-merging",
-      "section": "Review & Feedback",
-      "hit_count": 2,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 2,
-      "prevented_errors": 2,
-      "last_hit": "2026-09-04T08:38:48Z",
-      "first_seen": "2026-09-04T08:38:46Z",
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-gdpr-gate-on-regulated-data-surfaces",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
-      "applied_count": 4,
+      "applied_count": 3,
       "warn_count": 0,
-      "fire_count": 4,
+      "fire_count": 3,
       "prevented_errors": 0,
-      "last_hit": "2026-09-04T09:21:01Z",
-      "first_seen": "2026-09-04T08:46:48Z",
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "hr-when-a-command-exits-non-zero-or-prints",
-      "section": "Hard Rules",
-      "hit_count": 4,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 4,
-      "prevented_errors": 4,
-      "last_hit": "2026-09-04T08:38:49Z",
-      "first_seen": "2026-09-04T08:38:47Z",
+      "last_hit": "2026-09-08T09:55:34Z",
+      "first_seen": "2026-09-08T09:55:34Z",
       "rule_text_prefix": ""
     }
   ],
   "summary": {
     "total_rules_tagged": 105,
-    "rules_unused_over_8w": 102,
+    "rules_unused_over_8w": 104,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "gate_exemptions": [],
     "gate_override_count": 0,
     "gate_timeout_warn_count": 0,
     "gate_failopen_warn_count": 0,
-    "gate_body_attributed_count": 0,
-    "gate_undelivered_declaration_count": 0,
-    "gate_contradictory_declaration_count": 0,
-    "gate_unbalanced_fence_count": 0,
     "gate_corpus_unreadable_warn_count": 0,
     "gate_zero_tagged_warn_count": 0,
     "drops_jq_fail_count": 0,
