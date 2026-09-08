@@ -300,10 +300,10 @@ MUT
 cat > "$M/C7.py" <<'MUT'
 import sys
 p = sys.argv[1]; s = open(p).read()
-old = '''    if ! diff -u "$KB_DIR/$_f" "$_check_dir/$_f"; then'''
+old = 'if ! cmp -s "$KB_DIR/$_f" "$_check_dir/$_f"; then'
 assert old in s, "C7 anchor missing"
 # Compare the committed artifact against ITSELF -- vacuously clean.
-open(p, 'w').write(s.replace(old, '    if ! diff -u "$KB_DIR/$_f" "$KB_DIR/$_f"; then', 1))
+open(p, 'w').write(s.replace(old, 'if ! cmp -s "$KB_DIR/$_f" "$KB_DIR/$_f"; then', 1))
 MUT
 
 cat > "$M/C8.py" <<'MUT'
@@ -353,13 +353,12 @@ MUT
 cat > "$M/H1.py" <<'MUT'
 import sys
 p = sys.argv[1]; s = open(p).read()
-# HARNESS SELF-TEST. Deleting the generator's whole facet-extraction arm makes a
-# fresh generation differ from any previously-committed one. A probe that still
-# reports GREEN here is not comparing anything, and every row above it would be
-# meaningless.
-old = '  { grep $\'^tag\\t\' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE"'
+# HARNESS SELF-TEST. Gut the generator's facet-extraction arm so a fresh
+# generation must differ from any previously-committed one. A probe still
+# reporting GREEN here is comparing nothing, and every row above it is void.
+old = '  { grep $\'^tag\\t\' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE.tmp.$$"'
 assert old in s, "H1 anchor missing"
-open(p, 'w').write(s.replace(old, '  : > "$TAGS_FILE"', 1))
+open(p, 'w').write(s.replace(old, '  : > "$TAGS_FILE.tmp.$$"', 1))
 MUT
 
 printf '=== --check dispatch and comparison set ===\n'

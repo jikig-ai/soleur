@@ -95,7 +95,14 @@ if [[ "$CHECK" == 1 ]]; then
     if ! cmp -s "$KB_DIR/$_f" "$_check_dir/$_f"; then
       {
         echo "ERROR: $KB_DIR/$_f differs from a fresh generation (first $_check_cap diff lines):"
-        diff -u "$KB_DIR/$_f" "$_check_dir/$_f" | head -n "$_check_cap"
+        # `|| true` is load-bearing: `diff` exits 1 when files differ — which is
+        # the whole reason we are here — and under `pipefail` that status
+        # survives `head`, so `set -e` killed the script mid-diagnostic before
+        # `_check_rc=1` was ever reached. The guard still exited non-zero, so it
+        # LOOKED correct, while the remediation line never printed and the two
+        # mutation rows pinning that exit path went vacuous. Caught by this
+        # change's own battery (C1/C2 SURVIVED).
+        diff -u "$KB_DIR/$_f" "$_check_dir/$_f" | head -n "$_check_cap" || true
       } >&2
       _check_rc=1
     fi
