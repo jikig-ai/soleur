@@ -105,3 +105,35 @@ Work target: `plugins/soleur/test/preflight-check10-suite-integrity.test.sh`
       is defeated by a non-SGR CSI).
 - [ ] 6.3 PR body carries `Closes #7466`, the Phase 3 RED/GREEN table, and every mutation
       verdict.
+
+## Phase 7 — Review round (2026-09-08, nine agents)
+
+- [x] 7.1 P1 (security): the parse trusted every byte of `$LOG`. Two measured forgeries —
+      a pre-block `console.log(" 999999 expect() calls")` clearing MIN_ASSERTIONS on 132
+      assertion-free tests, and a post-terminator append via the fd 1 every spawned child
+      inherits. Bounded the parse to bun's own summary block.
+- [x] 7.2 P1 (security): `^[0-9]+$` admits `08`, which bash reads as octal and which then
+      made every comparison return false — all three floors bypassed. `10#` at the producer
+      plus a length cap (2^63 wrapped negative through the same regex).
+- [x] 7.3 P1 (observability): skip/todo/expect absence was an INFERENCE. Added the
+      `pass+fail+skip+todo == ran` reconciliation off bun's unconditional `Ran N` line.
+- [x] 7.4 P1 (test-design): a MISROUTED `fail()` conserved the sum and shipped exit 0.
+      Added the append-only `VERDICTS` transcript and a routing check that reads it.
+- [x] 7.5 P1 (test-design): `assert_measured` had no instrument probe; stubbing it plus
+      restoring the predicate fail-open shipped #7466 itself at 25/25. Added N3.
+- [x] 7.6 P1 (architecture): the counter set was restated at five hand-maintained sites.
+      Derived from one `COUNTERS` list.
+- [x] 7.7 P2: check dispatch made path-invariant (29 both branches), so an unparsed summary
+      no longer trips the anti-vacuity floor and blames the harness.
+- [x] 7.8 P2: `$LOG` retained on the skip/todo arm and both floors; T1 asserts the strip at
+      text level; `FORCE_COLOR=1` on the live run so CI exercises the strip.
+- [x] 7.9 P2: MIN_TESTS/MIN_ASSERTIONS ratcheted 131->132 / 537->539 per this file's own rule.
+- [x] 7.10 P2: falsified prose corrected — the sentinel's `read`-collapse justification, the
+      plan's out-of-branch structural claim, "13 of the 25" (measured: 13 of 29), the
+      `discoverability_test` anchor, and mutation-verdicts' claim that
+      `guard-vacuity-floor.test.sh` covers the verdict helpers (it does not).
+- [x] 7.11 P2: #7942 amended — third consumer, the ADR-193 incompatibility of
+      `test-helpers.sh`, an over-reached universal, and the divergent `strip_ansi`.
+- [ ] 7.12 DEFERRED: a fixture-identity manifest (row name + fixture digest), so a fixture
+      cannot be swapped with its name and slot intact. T1 closes the escape-bearing case;
+      the general mechanism is larger than this PR.

@@ -150,8 +150,20 @@ strip_ansi() {                  # <path> -> stripped text on stdout
     | LC_ALL=C sed -e "s|${ESC}\[[0-?]*[ -/]*[@-~]||g" -e "s|${ESC}[ -/]*[0-~]||g"
 }
 
-# parse_bun_summary is the SOLE PRODUCER of counter values: it echoes them and one
-# `read` binds them, so no counter can enter this gate by another path. It assigns
+# Do NOT "simplify" this file by sourcing plugins/soleur/test/test-helpers.sh.
+# That harness increments PASS/FAIL INSIDE its assert helpers and its floor reads
+# PASS+FAIL+SKIPPED — a floor read off the suspect, which is what ADR-193
+# Decision #1 forbids and what AP-023 was registered to stop. File-local here is
+# the correct architecture, not a deferral. `strip_ansi` is the one genuinely
+# hoistable piece, and a divergent copy already exists at
+# plugins/soleur/skills/git-worktree/test/orphan-reaper-honest-count.test.sh
+# carrying both defects this one documents; that convergence is tracked in #7942.
+#
+# parse_bun_summary is the SOLE PRODUCER of PARSED counter values: it echoes them
+# and one `read` binds them, so no parsed counter can enter this gate by another
+# path. (Precisely: the normalisation loop below is a second WRITER to three of
+# the variables, via indirect assignment — it writes only the constant 0, only
+# inside the measured branch. A grep for `n_pass=` will not show it.) It assigns
 # nothing in the caller's scope — a function that wrote back would be silently lost
 # when reached through a pipe (a subshell), and the loss mimics the very bug this
 # fixes. Its internals are named `plain`/`v`/`out`, never `n_*`.
@@ -162,8 +174,15 @@ strip_ansi() {                  # <path> -> stripped text on stdout
 # the self-checks and the live run would disagree in a way that looks exactly like
 # the defect being fixed.
 #
-# `-` marks an unread field. An empty field would collapse under `read`'s default
-# IFS and shift every later field one position left.
+# `-` marks an unread field. NOT because the empty string cannot work — an
+# `IFS`-delimited join preserves empty fields exactly (measured: `IFS='|' read`
+# on `122||1||514` binds all five), so the "read would collapse it" reason an
+# earlier revision gave here was false. The real trade, found by mutation M11:
+# against a non-empty `-`, a reflexively re-added `: "${n_fail:=0}"` — the exact
+# #7466 shape — CANNOT fire, so that regression is unspellable rather than merely
+# asserted against. The cost is that `-` is fail-OPEN at every arithmetic
+# comparison where `""` was fail-CLOSED, which is why the normalisation loop and
+# the per-floor integer gates below are load-bearing rather than defensive.
 # Reduce a parsed digit-run to an integer bash can compare, or to `-`.
 #
 # `^[0-9]+$` is NOT an integer guard for `[[ ]]`. Arithmetic evaluation reads a

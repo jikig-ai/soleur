@@ -608,8 +608,11 @@ no `source`, no `eval` and no other writeback.
 
 **Assembly.** `summary_measured` is the sole decision site; all three reporting arms and both
 SUT floors sit inside its `if`. Structurally, an unread counter is literally `-` — the
-defaults that used to manufacture a zero are deleted — so a future arm added outside the
-branch cannot read a plausible number. Arm-level behaviour is exercised by running mutated
+defaults that used to manufacture a zero are deleted. **Superseded 2026-09-08 (review):** the
+sentence continued "so a future arm added outside the branch cannot read a plausible number",
+which is FALSE and was measured so — at `[[ "$v" -gt 0 \]\]` both `""` and `-` return false and
+both print `[ok]`, so a misplaced arm is fail-open under either vocabulary. The sentinel buys
+protection against a re-added `${x:=0}` default (M11), not against an out-of-branch arm. Arm-level behaviour is exercised by running mutated
 **copies** end to end (M8, M10, M14), not by an injection seam.
 
 **Mutation matrix.** Every row is run against a copy in `$TMPDIR`, never the tracked file.
@@ -665,10 +668,19 @@ logs:
   retention: CI job retention; local logs live in $TMPDIR until the EXIT trap removes them
 discoverability_test:
   command: bash plugins/soleur/test/preflight-check10-suite-integrity.test.sh
-  expected_output: "0 failed"
+  expected_output: ", 0 failed ("
 ```
 
-`expected_output` is a substring that survives the `MIN_CHECKS` ratchet on purpose — a
+`expected_output` is `, 0 failed (` rather than the bare `0 failed`, which is a substring of
+`10 failed`. **No substring can do this job alone, and this block should not pretend otherwise.**
+Measured over both failure shapes: a run whose failures are recorded VERDICTS prints a non-zero
+count, so `, 0 failed (` rejects it but `[ok] assertion count` still matches (the run reaches the
+end); a run with zero recorded failures that dies on a SUT floor prints
+`=== 28 passed, 0 failed (28 checks) ===` and exits 1, which `, 0 failed (` matches and
+`[ok] assertion count` rejects (the floor FATALs first). The two candidates are complementary and
+each is blind where the other sees. **`$DT_RC == 0` is the authority**; the substring is a
+secondary sanity check, and the tighter of the two on the common shape is kept. It carries no
+count, so it survives the `MIN_CHECKS` ratchet — a
 hardcoded count would be stale the next time a check is added, and the run is the authority
 for the number. Check 10 is path-gated and **skips this diff** (measured), so this block is
 documentation rather than an executed probe here.

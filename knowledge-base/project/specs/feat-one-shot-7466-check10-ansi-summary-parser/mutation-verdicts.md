@@ -34,9 +34,9 @@ that is supposed to stay GREEN. It was rebuilt with one quoted script per row.
 | M9 | predicate drops `pass`, keeps `fail` | V3 **RED**; V1 and V2 green. The asymmetry NAMES which member was dropped — V1 is `- -` and stays false under either single-member edit, so it cannot distinguish them |
 | M10 | `-`→0 normalisation deleted | N1 **RED** (`pass=132 fail=0 skip=- todo=- expect=539`) and stderr carries **2** `arithmetic syntax error` lines. Without both signals this mutation is invisible: the arm prints `[ok]` and a SUT floor silently stops firing |
 | M11 | a `: "${n_fail:=0}"` default restored ahead of the branch | **SURVIVED — and it is EQUIVALENT, not a fixture gap.** Under M1 the measured line still reads `fail=-`: the sentinel is never the empty string, so a parameter-expansion default can no longer manufacture a zero. That is the design property, demonstrated rather than asserted |
-| M11b | the same default in the form that CAN fire (`[[ "$n_fail" == "-" ]] && n_fail=0`) | measured line reads `pass=- fail=0` instead of `fail=-` -> **AC17 RED**. It also trips AC13a, so two independent assertions catch it |
+| M11b | the same default in the form that CAN fire (`[[ "$n_fail" == "-" ]] && n_fail=0`) | measured line reads `pass=- fail=0` instead of `fail=-` -> **AC17 RED**. It also trips AC13, so two independent assertions catch it |
 | M12 | the four predicate self-checks deleted | `[FATAL] anti-vacuity floor: only 21 check(s) dispatched, floor is 25`, exit 1 |
-| M14 | the pass-floor's own `if ! [[ … =~ ^[0-9]+$ ]]` arm deleted, on a copy carrying M1, under `FORCE_COLOR=1` | **still exit 1** — but through the anti-vacuity floor (`only 24 checks`), not the floor that should have caught it, and it prints **2 false `[ok]` floor rows** on the way (`[ok] test count -`). That is precisely the fail-OPEN the arm exists to remove: `[[ "-" -lt 131 ]]` errors and returns false, so control falls through to a green verdict on a count nobody read |
+| M14 | the pass-floor's own `if ! [[ … =~ ^[0-9]+$ ]]` arm deleted, on a copy carrying M1, under `FORCE_COLOR=1` | **still exit 1** — but through the anti-vacuity floor (`only 24 checks`), not the floor that should have caught it, and it prints **one false `[ok]` floor row** on the way (`[ok] test count -`; the sibling `[ok] assertion count 539` is true, that counter having genuinely been read). That is precisely the fail-OPEN the arm exists to remove: `[[ "-" -lt 131 ]]` errors and returns false, so control falls through to a green verdict on a count nobody read |
 
 ## Harness rows
 
@@ -64,6 +64,29 @@ where the real file printed exactly that `[ok]` line directly beneath
 
 Stated plainly, because a battery's value is the number of distinct things it perturbs:
 no row edits bun itself (a real summary-format change is caught by the predicate, not by
-the fixtures — that is what `summary_measured` going false is for), none edits `pass()`
-or `fail()` (already covered by `scripts/guard-vacuity-floor.test.sh`, run green here),
+the fixtures — that is what `summary_measured` going false is for), none edits `pass()` or `fail()`,
 and none edits the manifest or suppression sections, which this change does not touch.
+
+
+## Addendum — 2026-09-08, after review
+
+Three claims in the section above were falsified by the review panel, and the axes
+they excused are where the P1s were:
+
+- **"`pass()`/`fail()` are already covered by `scripts/guard-vacuity-floor.test.sh`"
+  is FALSE.** That guard constructs a NEUTERED helper (the verdict is lost, so
+  conservation fires). A MISROUTED helper — `fail() { PASS=$((PASS + 1)); … }` —
+  conserves the sum and moves `cases` normally. Measured: the guard reports
+  `23 passed, 0 failed` and names this file zero times while the gate prints
+  `[FAIL]` lines and exits 0. Closed by the append-only `VERDICTS` transcript and
+  a routing check that reads it rather than the sum.
+- **The battery mutated one comparator, not both.** `assert_measured` owned four
+  verdicts with nothing proving it could reject; stubbing it plus restoring the
+  predicate fail-open shipped #7466 itself at a clean 25/25. Closed by N3.
+- **M14's "2 false `[ok]` rows" was one.** Corrected inline above.
+
+Axes the review added and this battery never touched: dispatch (both wrappers),
+fixture identity (a fixture can be swapped with its name and slot intact — closed
+by T1's text-level assertion), fixture shape (no terminator, CR, coloured todo,
+skip+todo together), and the log's own trustworthiness, which is where the two
+security P1s lived.
