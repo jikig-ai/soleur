@@ -122,6 +122,72 @@ rc="$(rc_of "$LINT" "$FIX/violation-xtrace-spelling-below.sh")"
 [ "$rc" = "1" ] && pass "Rule B: 'set -o xtrace' spelling below preamble is reported" \
   || fail "Rule B xtrace spelling should report rc=1, got rc=$rc"
 
+# --- Rule D: one fixture per LIMB, ALONE (#7873) ------------------------------
+# Each fixture is compliant on every other limb, so a verdict can only be
+# attributed to the limb it violates. A fixture breaking two limbs at once would
+# make both rows pass while either check was dead.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-no-disable.sh")"
+[ "$rc" = "1" ] && pass "Rule D: credentialed curl without --disable is reported" \
+  || fail "Rule D no-disable should report rc=1, got rc=$rc"
+
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-no-noproxy.sh")"
+[ "$rc" = "1" ] && pass "Rule D: credentialed curl without --noproxy '*' is reported" \
+  || fail "Rule D no-noproxy should report rc=1, got rc=$rc"
+
+# POSITION, not presence. A presence-only check passes this fixture, and curl has
+# already read ~/.curlrc by the time a late --disable is parsed -- so the flag is
+# there and buys nothing. This is the row that makes the check mean what it says.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-disable-not-first.sh")"
+[ "$rc" = "1" ] && pass "Rule D: --disable present but NOT first is still reported" \
+  || fail "Rule D disable-not-first should report rc=1, got rc=$rc"
+
+# --- Rule D: the DESTINATION-PIN limb, both directions ------------------------
+# This limb had ZERO fixtures in either direction, so eight independent mutations
+# of it survived at full green -- including making `_adjudicated` return False
+# unconditionally, and widening the `case` arm back to bare `*`.
+rc="$(rc_of "$LINT" "$FIX/compliant-ruled-pinned-destination.sh")"
+[ "$rc" = "0" ] && pass "Rule D: an adjudicated env-settable destination PASSES (must-pass direction)" \
+  || fail "Rule D pinned-destination should pass, got rc=$rc"
+
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-vacuous-case-pin.sh")"
+[ "$rc" = "1" ] && pass "Rule D: a \`case\` whose only arm is bare \`*\` is not a pin" \
+  || fail "Rule D vacuous-case pin should report rc=1, got rc=$rc"
+
+# The RHS class once contained `$`, so comparing the destination against another
+# env-settable variable counted as adjudicated -- a second env var redirected the
+# credential with the pin intact.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-indirect-pin.sh")"
+[ "$rc" = "1" ] && pass "Rule D: comparison against another env-settable variable is not a pin" \
+  || fail "Rule D indirect pin should report rc=1, got rc=$rc"
+
+# The `--config` channel: BOTH credential and destination live in a file the curl
+# line does not name. Without a fixture here, `_inline_config_file` had no
+# coverage at all -- and a review pass recommended deleting it as "measured zero
+# impact", which was true of the FIXED tree and false of the regression it exists
+# to catch (removing zot-inventory.sh's pin goes from detected to invisible).
+# Two shapes the FIRST cut of the destination limb scored as fully compliant.
+# Both are transport-confined and credentialed; only the pin is missing, and in
+# each case the limb could not see it -- once because of the variable's NAME,
+# once because the assignment carried no default.
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-unnamed-destination.sh")"
+[ "$rc" = "1" ] && pass "Rule D: destination named \$SINK (no URL/HOST token in the name) is reported" \
+  || fail "Rule D: unnamed destination should report rc=1, got rc=$rc"
+
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-bare-assignment-pin.sh")"
+[ "$rc" = "1" ] && pass "Rule D: destination assigned bare from another variable is reported" \
+  || fail "Rule D: bare-assignment destination should report rc=1, got rc=$rc"
+
+rc="$(rc_of "$LINT" "$FIX/violation-ruled-config-file.sh")"
+[ "$rc" = "1" ] && pass "Rule D: a --config file's env-settable destination is reported" \
+  || fail "Rule D config-file destination should report rc=1, got rc=$rc"
+
+# MUST-PASS. The flags are first at RUNTIME though the curl line names none of
+# them. Without this row the rule can be "fixed" into a false positive on every
+# array-built call site and the suite stays green -- measured on zot-inventory.sh.
+rc="$(rc_of "$LINT" "$FIX/compliant-ruled-array.sh")"
+[ "$rc" = "0" ] && pass "Rule D: array-built curl with the flags first PASSES (no false positive)" \
+  || fail "Rule D array-built compliant should pass, got rc=$rc"
+
 # --- SECRET_SIGNALS: one fixture per class, ALONE ----------------------------
 for c in doppler-get capture gh-auth; do
   rc="$(rc_of "$LINT" "$FIX/violation-signal-$c.sh")"
@@ -186,7 +252,7 @@ rc="$(rc_of "$LINT" --write-baseline "$FIX/compliant-canonical.sh")"
 _tpl="$REPO_ROOT/plugins/soleur/skills/ship/references/followthrough-stub-template.sh"
 if [ -f "$_tpl" ]; then
   cp "$_tpl" "$WORK/fx/probe-scaffolded.sh"
-  printf 'TOK="$SENTRY_AUTH_TOKEN"\ncurl -H "Authorization: Bearer $TOK" https://example.invalid >/dev/null 2>&1 || true\n' \
+  printf 'TOK="$SENTRY_AUTH_TOKEN"\ncurl --disable --noproxy '"'"'*'"'"' -H "Authorization: Bearer $TOK" https://example.invalid >/dev/null 2>&1 || true\n' \
     >> "$WORK/fx/probe-scaffolded.sh"
   rc="$(rc_of "$LINT" "$WORK/fx/probe-scaffolded.sh")"
   [ "$rc" = "0" ] && pass "a probe scaffolded from the stub template passes the lint" \
@@ -235,7 +301,7 @@ if not m:
 open(sys.argv[2], "w", encoding="utf-8").write(
     "#!/usr/bin/env bash\nset -uo pipefail\n\n"
     + m.group(1)
-    + '\n\ncurl -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true\n'
+    + '\n\ncurl --disable --noproxy \'*\' -sS -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" https://example.invalid/ || true\n'
 )
 PY
 then
@@ -344,7 +410,7 @@ mutate_row 'M3 Rule B: xtrace spelling dropped from TRACE_TOKENS' \
   "$FIX/violation-xtrace-spelling-below.sh" 1 0
 
 mutate_row 'M4 Rule B skipped entirely' \
-  's/violations \+= check_rule_b\(/violations += [] and check_rule_b(/' \
+  's/abc \+= check_rule_b\(/abc += [] and check_rule_b(/' \
   "$FIX/violation-trace-below-preamble.sh" 1 0
 
 # M6 needs its own expected pair: the fail-closed arm moves 2 -> 0, and NEITHER
@@ -359,6 +425,66 @@ mutate_row 'M6 fail-closed: unparseable treated as clean' \
 mutate_row 'M8 unenumerable: indirect arm dropped' \
   's/if INDIRECT_RE\.search\(body\) and not referenced_credentials\(lines\):/if False:/' \
   "$FIX/violation-indirect-conditional-hatch.sh" 1 0
+
+# --- Rule D mutation rows: the GUARD's own operands ---------------------------
+# Anchored on the CONDITION KEYWORD, not on the full expression. Pinning the
+# exact `if _pin_re(var).search(body):` text meant that adding a second disjunct
+# to that line made the sed a no-op -- and a mutation that does not land reports
+# the baseline, which is indistinguishable from a pass. Same coupling as D3.
+mutate_row 'D6 Rule D: destination adjudication disabled' \
+  's/^(\s*)if _pin_re\(var\)[^\n]*$/${1}if False:/m' \
+  "$FIX/compliant-ruled-pinned-destination.sh" 0 1
+
+mutate_row 'D7 Rule D: pin accepts a variable RHS again (the `$` back in the class)' \
+  's/\[A-Za-z0-9_\.\/:-\]/[A-Za-z0-9\$_.\/:-]/' \
+  "$FIX/violation-ruled-indirect-pin.sh" 1 0
+
+# D5 mutates the config-file resolution specifically. It is the one Rule D helper
+# whose deletion looks free on a healthy tree: every verdict is unchanged until a
+# destination pin regresses, which is exactly when it is needed.
+mutate_row 'D5 Rule D: --config file resolution removed' \
+  's/^(\s*)cmd = _inline_config_file\(cmd, lines\)$/${1}pass/m' \
+  "$FIX/violation-ruled-config-file.sh" 1 0
+
+# D8/D9 mutate the two fail-OPENs the ship-gate consult found in this rule's own
+# operands. Both were live: each mutant is the code as first written.
+mutate_row 'D8 Rule D: destination limb gated on the variable NAME again' \
+  's/if var not in dest_vars:/if not re.search(r"(?:URL|URI|ENDPOINT|HOST)\\b", var):/' \
+  "$FIX/violation-ruled-unnamed-destination.sh" 1 0
+
+mutate_row 'D9 Rule D: bare-assignment spelling dropped from env_settable' \
+  's/^BARE_ASSIGN_RHS = .*$/BARE_ASSIGN_RHS = r"ZZZNEVERMATCHES"/m' \
+  "$FIX/violation-ruled-bare-assignment-pin.sh" 1 0
+
+# Every row above mutates a FIXTURE and confirms Rule D reds. These mutate the
+# RULE and confirm it does not silently WIDEN -- a guard that accepts everything
+# is indistinguishable from a healthy run.
+mutate_row 'D1 Rule D: --disable check degenerated to always-match' \
+  's/CURL_DISABLE_FIRST = re\.compile\(r"[^"]*"\)/CURL_DISABLE_FIRST = re.compile(r"")/' \
+  "$FIX/violation-ruled-no-disable.sh" 1 0
+
+mutate_row 'D2 Rule D: --noproxy check degenerated to always-match' \
+  's/CURL_NOPROXY = re\.compile\(r"[^"]*"\)/CURL_NOPROXY = re.compile(r"")/' \
+  "$FIX/violation-ruled-no-noproxy.sh" 1 0
+
+# Anchored on the ASSIGNMENT, not on the expression's exact text. The first
+# version pinned `    d = check_rule_d(` including its indentation, so adding a
+# scope guard to that line made the sed a no-op -- and a mutation that does not
+# land reports the BASELINE, which is indistinguishable from a pass.
+mutate_row 'D3 Rule D skipped entirely' \
+  's/^(\s*)d = [^\n]*check_rule_d[^\n]*$/${1}d = []/m' \
+  "$FIX/violation-ruled-no-disable.sh" 1 0
+
+# The credential classifier is Rule D's scope gate: narrow it and the rule goes
+# green over the population it was written for, which is exactly how a baseline
+# shared with A/B/C would have neutered it.
+# The fixture's credential reaches curl ONLY on stdin, so SECRET_SIGNALS cannot
+# see it in argv either -- narrowing this one channel is the whole difference
+# between reporting the site and waving it through. A row scored against an
+# already-compliant fixture would read 0 -> 0 and prove nothing.
+mutate_row 'D4 Rule D: credential classifier narrowed (stdin-header channel dropped)' \
+  's/CURL_STDIN_HEADER = re\.compile\(r"[^"]*"\)/CURL_STDIN_HEADER = re.compile(r"(?!x)x")/' \
+  "$FIX/violation-ruled-stdin-header.sh" 1 0
 
 # --- H1: the floor must fail via a DIRECT exit, not through the helpers -------
 # H1: assert the floor by DRIVING it, not by grepping for its name -- the old
@@ -382,7 +508,7 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Absolute floor, recorded from a MEASURED green run (never from expectation --
 # that was wrong three times in sibling PR #7806). Reported with printf + exit 1
 # directly, never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=39
+MIN_ASSERTIONS=43
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
