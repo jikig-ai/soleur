@@ -97,3 +97,80 @@ and proves nothing; this is what distinguishes a measurement from a tautology.
   `cq-ac-must-not-depend-on-concurrent-sessions`.
 - **AC5b** (tenant-JWT `42501` denial) is a committed regression test in
   `test/server/api-usage.tenant-isolation.test.ts`, not a transcript.
+
+---
+
+# Phase 4 — Verification (2026-09-08)
+
+## 4.1 / 4.2 — typecheck and suites
+
+- `./node_modules/.bin/tsc --noEmit` → **rc=0** (pinned binary, not `npx`).
+- `./node_modules/.bin/vitest run` over all 8 touched suites → **rc=0, 143 passed**:
+  `136-workflow-cost-rollup`, `migration-rpc-grants`, `workflow-copy`,
+  `api-usage-workflow-rollup`, `api-usage`, `api-usage-parity`, `api-usage-section`,
+  `api-usage-breakdown`.
+
+## 4.3 — full battery: NOT run, and why
+
+`bash scripts/test-all.sh --capacity` reported **`CAPACITY_CONTENDED`**:
+`measured_runs=2 measured_suites=1`, `tmp_avail_mb=1243` against `tmp_floor_mb=1024`. Two
+sibling full-gate runs were in flight from *other* worktrees
+(`feat-one-shot-7909-…`, `feat-one-shot-7867-…`), and this box had already OOM-killed three
+background tasks earlier in the session.
+
+Launching a third battery would have produced a result not attributable to this diff. Rather
+than run it and reason around the noise, the **specific value 4.3 offers — orphan-suite
+discovery** — was obtained directly:
+
+```
+git grep -l "<symbol>" -- '*.test.ts' '*.test.tsx' '*.test.sh' 'tests/'
+```
+
+over every symbol this branch changed (`sum_user_mtd_cost_by_workflow`, `sum_user_mtd_cost`,
+`LEGACY_SEARCH_PATH_NO_PG_TEMP`, `byWorkflow`, `workflow-copy`, `workflowLabel`,
+`136_workflow_cost_rollup`). **Every suite returned is in the 8 already run — no orphans.**
+
+The merge gate is unaffected: CI's required `test` context runs the same shards on the PR head
+independently of anything done locally (ADR-183).
+
+## 4.4 — `c4-count-parity`
+
+`bash plugins/soleur/test/c4-count-parity.test.sh` → **rc=0, Passed: 10, Failed: 0**.
+
+## 4.5 — AC walk
+
+| AC | Check | Result |
+|---|---|---|
+| AC15 | exactly one `'__unrouted__'` literal in the function body | **1** |
+| — | sentinel containment: `__unrouted__` in *executable* code across `workflow-copy.ts`, `api-usage-section.tsx`, `api-usage.ts` | **0 / 0 / 0** |
+| AC19 | ADR exists, anchored on filename | `ADR-209-conversation-grain-cost-attribution.md` |
+| — | `op: "mtd-by-workflow"` is unique | **1** |
+
+The sentinel-containment check is worth a note. A bare `git grep '__unrouted__'` returns two
+hits in `workflow-copy.ts` — both in **comments** explaining the normalisation. That is the
+comment-prose false-match class (`cq-assert-anchor-not-bare-token`): the bare grep cannot
+distinguish an explanation of the invariant from a violation of it. The check above strips
+comments first, and the type itself (`WorkflowBucket = WorkflowName | "unrouted" | "legacy"`)
+admits only normalised keys.
+
+## AC5b — proven non-vacuous against dev
+
+The tenant-JWT denial suite is opt-in (`TENANT_INTEGRATION_TEST=1`) and passes 5/5 against
+dev. A denial test that would also pass against a *widened* grant proves nothing, so it was
+mutation-tested on live dev:
+
+| step | `proacl` | suite |
+|---|---|---|
+| baseline | `{postgres=X/postgres,service_role=X/postgres}` | 5 passed |
+| `GRANT EXECUTE … TO authenticated` — **mutation confirmed landed** | `…,authenticated=X/postgres` | **1 failed / 4 passed** (`expected null not to be null`) |
+| `REVOKE EXECUTE … FROM authenticated` | `{postgres=X/postgres,service_role=X/postgres}` | 5 passed |
+
+Dev was returned to the exact AC5 literal and re-verified green.
+
+**A methodology note, because the first attempt produced a false result.** The initial run
+reported `SURVIVED` — which would have read as "AC5b is vacuous". It was not: `/tmp` had been
+swept between turns, so the helper script no longer existed, the `GRANT` never executed, and
+the suite re-measured the unmutated baseline. A mutation that does not land reports the
+baseline, and that is indistinguishable from a pass. The rerun above asserts the mutation
+landed (by reading `proacl` back and checking for `authenticated=X`) **before** trusting any
+verdict, and aborts rather than reporting if it did not.
