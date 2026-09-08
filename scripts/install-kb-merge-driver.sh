@@ -6,7 +6,7 @@
 # 0 with a diagnostic on stderr AND, once, as a `systemMessage` on stdout --
 # stderr alone is DISCARDED for an exit-0 hook.
 #
-# THE STORED VALUE IS A RELATIVE COMMAND, NOT AN ABSOLUTE PATH. Measured: git
+# THE STORED DRIVER_COMMAND IS A RELATIVE COMMAND, NOT AN ABSOLUTE PATH. Measured: git
 # invokes a merge driver with CWD at the working-tree root even when `git merge`
 # runs from a subdirectory, so `bash scripts/merge-kb-index.sh %O %A %B %P` is
 # correct in every worktree with nothing baked in. This matters here more than
@@ -34,9 +34,16 @@
 
 set -uo pipefail
 
-KEY="merge.kb-index.driver"
-VALUE='bash scripts/merge-kb-index.sh %O %A %B %P'
-NAME_KEY="merge.kb-index.name"
+# NAMED `_CONFIG`, NOT `_KEY`. These are git-config key PATHS, but in this repo
+# a `_KEY` suffix is reserved vocabulary: scripts/lint-shell-trace-credential-refusal.py
+# classifies any `${…_KEY}` expansion as binding a live credential and requires an xtrace
+# refusal. `$NAME_CONFIG` tripped it, and the two ways out — a refusal stanza saying this
+# script handles a credential, or a baseline entry saying it is a known violation — are
+# both false statements about a script that touches no secret. Renaming makes the
+# classifier's reading correct instead of suppressed.
+DRIVER_CONFIG="merge.kb-index.driver"
+DRIVER_COMMAND='bash scripts/merge-kb-index.sh %O %A %B %P'
+NAME_CONFIG="merge.kb-index.name"
 NAME_VALUE='knowledge-base index: three-way merge over generated rows'
 
 # OUTPUT CHANNEL (load-bearing). `systemMessage` on STDOUT is the operator-visible
@@ -118,18 +125,18 @@ set_key() {
 # if it succeeded; on failure any stale name is removed, because a leftover from
 # a previous partial run is the same wedge.
 rc=0
-if set_key "$KEY" "$VALUE"; then
-  set_key "$NAME_KEY" "$NAME_VALUE" || true   # cosmetic; never worth failing on
+if set_key "$DRIVER_CONFIG" "$DRIVER_COMMAND"; then
+  set_key "$NAME_CONFIG" "$NAME_VALUE" || true   # cosmetic; never worth failing on
 else
   rc=1
-  git config --unset-all "$NAME_KEY" 2>/dev/null || true
+  git config --unset-all "$NAME_CONFIG" 2>/dev/null || true
 fi
 
 if [[ "$rc" -ne 0 ]]; then
   # Do NOT name a cause this run did not measure. The previous text asserted
   # config.lock contention on every failure, which sent a reader down a lock
   # path for a multivar or a permissions problem.
-  note "could not write $KEY; the driver is NOT registered in this checkout (causes: .git/config.lock held, a read-only config, or a value this script could not replace)"
+  note "could not write $DRIVER_CONFIG; the driver is NOT registered in this checkout (causes: .git/config.lock held, a read-only config, or a value this script could not replace)"
   note "re-run: bash scripts/install-kb-merge-driver.sh"
 fi
 

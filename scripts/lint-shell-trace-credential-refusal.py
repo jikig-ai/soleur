@@ -82,7 +82,21 @@ SIGNAL_GH_AUTH = r"gh auth token"
 # materialises every declared secret of every probe through exactly this form
 # (`env_args+=("$name=${!name}")`) and was out of scope until this class existed
 # -- the one process concentrating the whole credential surface, declared clean.
-SIGNAL_INDIRECT = r"\$\{!"
+#
+# `${!arr[@]}` AND `${!arr[*]}` ARE EXCLUDED, and they are a different construct
+# entirely. `${!name}` yields a VALUE chosen at runtime; `${!arr[@]}` yields the
+# array's KEYS, which are variable/index names and never a secret -- and it is
+# the only way bash can iterate an associative array, so every script that uses
+# one was in scope. The bare `\$\{!` spelling flagged scripts/merge-kb-index.sh
+# (#7935) for `for rel in "${!merged[@]}"`, a loop over knowledge-base row paths,
+# in a script that binds no credential at all. Both ways out of that -- an xtrace
+# refusal announcing a credential the script does not have, or a baseline entry
+# calling it a known violation -- write a false statement into the tree, which is
+# the exact failure `_inline_arrays` and `_adjudicated` below were each written
+# to avoid: a false positive teaches its reader to baseline files that are
+# already correct. `${!prefix@}` / `${!prefix*}` (name listing) stay IN scope --
+# conservative, and no script here uses them.
+SIGNAL_INDIRECT = r"\$\{!(?![A-Za-z_][A-Za-z0-9_]*\[[@*]\]\})"
 
 SECRET_SIGNALS = [
     re.compile(SIGNAL_EXPANSION),
