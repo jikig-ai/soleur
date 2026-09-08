@@ -10,8 +10,21 @@ tags: [instruments, verification, secrets, corrections, evidence]
 
 ## Problem
 
-A P0 credential exposure sat un-remediated for four days behind a blocking gate,
-and the gate was built on a field that does not exist.
+A P0 credential exposure stayed live for 4 days 19 hours. Part of that was held
+by a blocking gate built on a field that does not exist.
+
+**How much of it, measured — because the first draft of this file asserted "four
+days behind a blocking gate" without addressing the gate's lifetime, and a review
+seat caught it:**
+
+| | |
+|---|---|
+| Exposure window | 2026-09-03T15:30Z → 2026-09-08T10:34Z = **115h** |
+| Gate existed | entered the record at `c774f2317`, 2026-09-07T14:30Z → **20h** |
+| Gate's share | **~17%** |
+
+For the first ~3.9 days there was no gate. The P0 was simply not worked. Two
+distinct failures, and the loud one is not the larger one.
 
 The remediation sequence read: *capture the token's last-used timestamp before
 deleting it, because deletion destroys the datum.* Everything downstream was
@@ -56,7 +69,16 @@ the pipeline.
 | Doppler location | Result |
 |---|---|
 | `soleur/prd` — what that phase actually resolves | **403** |
-| `soleur/prd_terraform` — the leaked personal token | **200** |
+| `soleur/prd_terraform` — the leaked personal token, org/project/team admin | **200** |
+
+**This table is a diagnosis, not a recipe.** Do not reach for `prd_terraform`
+because it is the one that returns 200 — it is a *personal* token (the ADR-031
+migration is still open, #7946) and its replacement was re-minted at the same 16
+admin scopes. The sanctioned instruments for this endpoint are
+`SENTRY_ISSUE_RO_TOKEN` (`event:read`, `org:read`) and `SENTRY_ISSUE_RW_TOKEN`;
+`scripts/sentry-issue.sh` implements the RO → RW ladder. Falling back to a
+broader token because it works is the same move this file's correction 2 records
+as the P1.
 
 The skill was right about the credential it reads. I measured the other one. Had
 it shipped, the phase would have 403'd in production — a correction that breaks
@@ -75,7 +97,11 @@ config, or account, the name is not the subject — the resolved instance is.
 1. Claimed the post-mortem and the determination both characterise the token as
    "read-scoped". Both say "org read **and write**", and the determination
    engages the integrity limb on it. Asserted from the shape of the documents
-   without reading their capability rows.
+   without reading their capability rows. **And "read and write" is itself
+   understated** — the token carried **admin** (`org:admin`, `event:admin`,
+   `project:admin`, `team:admin`, `org:integrations`), which is why the Art. 4(12)
+   severity assessment is explicitly reopened rather than settled. A first draft
+   of this file stopped at "read and write" and had to be corrected again.
 2. Named `postmerge/SKILL.md` as "the genuinely false site" and edited it. The
    credential-boundary error above.
 3. Corrected the prose of that skill while leaving the code below it enacting the
@@ -98,6 +124,15 @@ more precise. Nothing about "snapshot the page" looks credential-adjacent.
 
 Same shape as the rest: I used an instrument without asking what it renders.
 Filed as #7947.
+
+**The response half, which the first draft omitted.** Prevention is not the whole
+duty: a credential rendered into a transcript must be treated as exposed —
+rotated, and the transcript plus any snapshot file the MCP server wrote to disk
+handled as compromised. Worth stating because the asymmetry otherwise teaches
+badly: the API token in this incident got a P0, a breach-register row, an Art. 33
+analysis and a 115h clock, while a live password rendered into a transcript got a
+tooling issue. A future reader hitting the same event should not conclude that
+filing a guard is the response.
 
 ## Key insight
 
@@ -167,6 +202,15 @@ a document. Names resolve. Resolve them before asserting about them.
 - **Rendered a password into the transcript by snapshotting a login page.**
   **Prevention:** screenshot, never accessibility-snapshot, any page carrying a
   password input. Tracked as #7947.
+- **This file's own first draft committed the defect it documents.** It claimed
+  "four days behind a blocking gate" — a property of the gate asserted without
+  addressing the gate. Measured: the gate existed 20h of a 115h window (~17%),
+  and the first draft also stopped its scope correction at "read and write" when
+  the token was admin. Both caught by a review seat, not by me.
+  **Prevention:** a claim about duration, lifetime or share is a measurement;
+  `git log -S` the text into existence and compute the interval before asserting
+  it. Apply this to your own narrative with the same force as to a document you
+  are correcting — the narrative is where it feels least necessary.
 - **Reported a push as successful when it had not happened** — the exit code came
   from a `grep` that filtered the output away, not from the push.
   **Prevention:** never read a pipeline's exit status as the first command's;
