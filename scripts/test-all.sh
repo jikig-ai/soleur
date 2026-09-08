@@ -1355,6 +1355,18 @@ _repo_boundary_exit_note() {
 # silently re-point every later suite at the operator's real ledger.
 _soleur_inc_cleanup() {
   [[ -n "${_soleur_inc_owned:-}" && "$_soleur_inc_owned" == */soleur-inc-* ]] && rm -rf "$_soleur_inc_owned"
+  # `return 0` is LOAD-BEARING, not tidiness. When the root was INHERITED,
+  # _soleur_inc_owned is unset, so the `[[ ]] && rm` compound above returns 1 --
+  # and this function is the LAST command of the EXIT trap. Under `set -e`
+  # (line 2) that becomes the SCRIPT's exit status, so a fully successful run
+  # exits 1. Measured:
+  #     set -euo pipefail, owned UNSET -> rc=1
+  #     set -euo pipefail, owned SET   -> rc=0
+  # The inherited case is exactly the nested one -- any suite that drives
+  # test-all.sh as its subject inherits the outer run's root -- so every such
+  # suite saw rc=1 on a green run. That is what reddened
+  # test-all-runtime-ceiling and test-all-killed-classification.
+  return 0
 }
 trap '_repo_boundary_exit_note; _soleur_inc_cleanup' EXIT
 
