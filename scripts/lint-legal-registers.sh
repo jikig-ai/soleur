@@ -470,18 +470,31 @@ else
         print
       }' "$CCLA_REGISTER")"
 
+    # The hash is bound to its ref HERE, in the one pass that already parses
+    # every register row, instead of re-scanning `$reg_rows` per roster org with
+    # a second awk. That re-scan is what needed the awk field-rebuild warning
+    # (assigning to `$2` rebuilds `$0` with OFS, so a later -F'|' read takes the
+    # wrong column); binding once deletes the hazard rather than documenting it.
+    declare -A _reg_hash_by_ref=()
     reg_refs=""; reg_hash_bad=0; reg_ref_bad=0; n_reg=0
     while IFS= read -r line; do
       [[ -n "$line" ]] || continue
       n_reg=$((n_reg + 1))
       r_ref="$(printf '%s' "$line"  | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}')"
       r_hash="$(printf '%s' "$line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $5); print $5}')"
+      # First wins, so a duplicated ref cannot silently change which hash the
+      # join compares; the duplicate itself is reported by its own assertion.
+      [[ -n "${_reg_hash_by_ref[$r_ref]:-}" ]] || _reg_hash_by_ref[$r_ref]="$r_hash"
       [[ "$r_ref"  =~ ^CCLA-[0-9]{4,}$   ]] || reg_ref_bad=$((reg_ref_bad + 1))
       [[ "$r_hash" =~ ^[0-9a-f]{64}$     ]] || reg_hash_bad=$((reg_hash_bad + 1))
       reg_refs+="$r_ref"$'\n'
     done <<< "$reg_rows"
 
-    if [[ $reg_ref_bad -eq 0 ]]; then
+    if [[ "$n_reg" -eq 0 ]]; then
+      # Distinguish "checked and clean" from "there was nothing to check", the
+      # same three-state honesty the roster-empty branch below gets.
+      pass "(f) NOT YET EXERCISED: the CCLA register holds 0 counterparty rows, so its Record-ref and Instrument-hash shape checks had nothing to examine. This is not a verified agreement."
+    elif [[ $reg_ref_bad -eq 0 ]]; then
       pass "(f) every CCLA register Record ref matches CCLA-NNNN ($n_reg row(s))"
     else
       fail "(f) $reg_ref_bad CCLA register row(s) carry a Record ref that is not CCLA-NNNN -- a malformed ref produces an EMPTY join below, which passes for the wrong reason"
@@ -508,9 +521,19 @@ else
       fail "(f) $reg_hash_bad CCLA register row(s) carry an Instrument hash that is not 64 lowercase hex"
     fi
 
-    n_orgs="$(jq -r '[.organizations[]?] | length' "$CCLA_ROSTER" 2>/dev/null || echo INVALID)"
+    # NO `?`. `.organizations[]?` turns "not an array" into "zero elements",
+    # which renders as the reassuring NOT YET EXERCISED branch below -- the same
+    # broken-vs-empty collapse `ccla-add.sh` already documents removing from its
+    # own ledger query. A roster that is not shaped like a roster must refuse.
+    n_orgs="$(jq -r '[.organizations[]] | length' "$CCLA_ROSTER" 2>/dev/null || echo INVALID)"
     if [[ ! "$n_orgs" =~ ^[0-9]+$ ]]; then
-      fail "(f) the coverage map at $CCLA_ROSTER is not readable as JSON -- the join could NOT be evaluated"
+      fail "(f) the coverage map at $CCLA_ROSTER is not readable as JSON, or its .organizations is not an array -- the join could NOT be evaluated. This is NOT a finding that the stores agree."
+    elif [[ "$n_reg" -eq 0 && "$n_orgs" -gt 0 ]]; then
+      # The register table parsed to nothing while the roster holds rows. That is
+      # the PARSER or the heading, never the data -- and saying "add the missing
+      # row" here would send the operator to append a duplicate to a public,
+      # unerasable record.
+      fail "(f) the CCLA register table parsed to ZERO rows while the coverage map holds $n_orgs organisation(s). This is the '## Register' heading or the table shape, NOT missing data -- do NOT add rows. Check that the heading and its pipe-delimited header row are intact."
     elif [[ "$n_orgs" -eq 0 ]]; then
       # THREE-STATE, and this is the state that matters most today. Both sides
       # are empty, so a silent `pass` here would report agreement while
@@ -518,29 +541,71 @@ else
       # the first time on the day it actually matters. Say so instead.
       pass "(f) NOT YET EXERCISED: the coverage map holds 0 organisations, so the register/roster join has no rows to compare (register rows: $n_reg). This is not a verified agreement."
     else
-      missing=0; mismatched=0; joined=0
-      while IFS=$'\t' read -r ros_ref ros_hash; do
-        [[ -n "$ros_ref" ]] || continue
-        # `ref` is a LOCAL, not `$2`. Assigning to a field makes awk rebuild `$0`
-        # using OFS (a space), so the pipe delimiters are gone by the time the
-        # line is re-parsed with -F'|' below and the hash is read from the wrong
-        # column -- which renders as "these two agreeing values disagree".
-        reg_line="$(printf '%s\n' "$reg_rows" | awk -F'|' -v r="$ros_ref" '
-          { ref = $2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", ref); if (ref == r) print }')"
-        n_hit="$(printf '%s' "$reg_line" | grep -c . || true)"
-        if [[ "$n_hit" -ne 1 ]]; then
+      # MATERIALISED AND STATUS-CHECKED, never a process substitution.
+      #
+      # `done < <(jq ...)` hides the producer's exit status from BOTH `set -e`
+      # and `pipefail`. If that jq aborts mid-stream -- a record_ref that is an
+      # object, so `@tsv` refuses the row -- the loop simply stops, `missing`
+      # stays 0, and BOTH join assertions pass over rows nobody read. Measured:
+      # `{"organizations":[5,{...}]}` gave n_orgs=2 joined=0 missing=0 PASS.
+      # This is the identical defect the probe two directories away spends a
+      # paragraph documenting; it was reproduced here by three reviewers.
+      ros_tsv=""
+      ros_tsv="$(jq -r '.organizations[] | [.record_ref, .executed_instrument_sha256] | @tsv' "$CCLA_ROSTER" 2>/dev/null)" \
+        || { fail "(f) the coverage map could not be projected to (record_ref, hash) rows -- a row is missing those keys or carries a non-scalar. The join was NOT evaluated; this is NOT a finding that the stores agree."; ros_tsv=""; }
+
+      missing=0; mismatched=0; joined=0; seen=0; dupes_in_roster=0
+      declare -A _roster_refs=()
+      while IFS= read -r ros_line; do
+        [[ -n "$ros_line" ]] || continue
+        seen=$((seen + 1))
+        # Split on the FIRST tab explicitly. `IFS=$'\t' read -r a b` treats tab
+        # as IFS WHITESPACE, so an empty first field is silently collapsed and
+        # the HASH lands in `ros_ref` -- which then reports "add the missing
+        # register row" for a ref that does not exist.
+        ros_ref="${ros_line%%$'\t'*}"
+        ros_hash="${ros_line#*$'\t'}"
+        if [[ -z "$ros_ref" ]]; then
+          missing=$((missing + 1))
+          continue
+        fi
+        [[ -n "${_roster_refs[$ros_ref]:-}" ]] && dupes_in_roster=$((dupes_in_roster + 1))
+        _roster_refs[$ros_ref]=1
+        reg_hash="${_reg_hash_by_ref[$ros_ref]:-}"
+        if [[ -z "$reg_hash" ]]; then
           missing=$((missing + 1))
           continue
         fi
         joined=$((joined + 1))
-        reg_hash="$(printf '%s' "$reg_line" | awk -F'|' '{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $5); print $5}')"
         [[ "$reg_hash" == "$ros_hash" ]] || mismatched=$((mismatched + 1))
-      done < <(jq -r '.organizations[]? | [.record_ref, .executed_instrument_sha256] | @tsv' "$CCLA_ROSTER" 2>/dev/null)
+      done <<< "$ros_tsv"
+
+      # TOTALITY, and it is a SECOND control rather than an independent one --
+      # stated because the difference is measurable and a future reader should
+      # not have to re-derive it. When the projection above succeeds jq emits
+      # exactly one line per organisation, so `seen == n_orgs` cannot fail; this
+      # exists as the backstop for the projection's own `|| fail` being removed.
+      # Mutation-measured: deleting THIS check alone leaves the suite green (the
+      # explicit failure catches it), deleting the explicit failure alone leaves
+      # it green (this catches it), and deleting BOTH reddens the fail-open arm.
+      # So the pair is load-bearing and neither half is individually pinned --
+      # which is the correct reading of defence in depth, not two guards.
+      if [[ "$seen" -eq "$n_orgs" ]]; then
+        pass "(f) the join read all $n_orgs coverage-map row(s)"
+      else
+        fail "(f) the join read only $seen of $n_orgs coverage-map rows -- the map could not be read through. This is NOT a finding that the stores agree."
+      fi
+
+      if [[ "$dupes_in_roster" -eq 0 ]]; then
+        pass "(f) coverage-map record_refs are unique across organisations"
+      else
+        fail "(f) $dupes_in_roster duplicated record_ref(s) in the coverage map -- two published rows claiming one executed instrument. The register side is already checked for this; the roster was not."
+      fi
 
       if [[ $missing -eq 0 ]]; then
         pass "(f) every coverage-map record_ref appears exactly once in the CCLA register (joined $joined of $n_orgs)"
       else
-        fail "(f) $missing coverage-map record_ref(s) appear other than exactly once in the CCLA register. The register row is written when the INSTRUMENT is executed and must already exist; add the missing row from the instrument on the encrypted drive."
+        fail "(f) $missing coverage-map record_ref(s) have no matching CCLA register row. The register row is written when the INSTRUMENT is executed and should already exist, so the usual cause is a missing register row -- but check the Record ref spelling on BOTH sides before adding anything, because appending a duplicate to a public unerasable record is worse than the gap."
       fi
 
       if [[ $mismatched -eq 0 ]]; then

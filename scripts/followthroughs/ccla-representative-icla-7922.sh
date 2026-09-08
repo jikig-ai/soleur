@@ -18,22 +18,41 @@
 # failure paths of its subprocesses, which is where the real leak lives:
 # `date -u -d "$bad"` prints `date: invalid date '<value>'` and `jq` echoes the
 # offending ledger content in its parse errors. So the rule here is not "the
-# probe's own echoes are careful"; it is that EVERY external command's stderr is
-# suppressed and replaced by a line this file authored. `git` alone would
-# otherwise relay a hostile origin's sideband verbatim as `remote: <text>`.
+# probe's own echoes are careful"; it is that every external command which can
+# see LEDGER, ROSTER or REMOTE bytes has its stderr suppressed and replaced by a
+# line this file authored. `git` alone would otherwise relay a hostile origin's
+# sideband verbatim as `remote: <text>`.
+#
+# The scope is deliberate and it IS the whole claim. A few commands here read
+# only git-log output, this repository's own `docs/legal/individual-cla.md`, or
+# a `mktemp` path, and are not redirected. An earlier revision asserted "EVERY
+# external command", which was false — and a false invariant is worse than a
+# narrow one, because the next person adding a pipeline stage reads it as
+# licence.
 #
 # That is a constraint rather than a courtesy: `scripts/sweep-followthroughs.sh`
-# captures this script's output with `2>&1` and republishes it VERBATIM into a
-# public comment on #7922 every single sweep. Malformedness is therefore
+# captures this script's output with `2>&1` and republishes it into a public
+# comment on #7922 every single sweep — near-verbatim: the sweeper neutralises
+# an HTML-comment opener and collapses long backtick runs so a probe cannot
+# forge its control markers or break out of the code fence, and alters nothing
+# else. Treat every byte written here as published. Malformedness is therefore
 # reported as a COUNTED PREDICATE — a number — and never as a caught exception
 # carrying the value that caused it.
 #
-# The tracker itself names no counterparty and no person either, and that is
-# load-bearing rather than tidy. The ledger this probe measures is public and
-# git-versioned, so a dated public transition sitting next to an organisation's
-# name is a JOIN, not a hint: a reader could diff `signatures/cla.json` at that
-# date and recover the account that moved the count. An opaque tracker makes the
-# join yield nothing.
+# The tracker names no counterparty and no person, and that is worth having —
+# but it is a COST INCREASE, not a barrier, and this file must not claim
+# otherwise. The ledger this probe measures is public and git-versioned, so a
+# dated public transition next to an organisation's name would be a JOIN: a
+# reader could diff `signatures/cla.json` at that date and recover the account
+# that moved the count. An opaque tracker removes that element from the TRACKER.
+#
+# It does NOT remove it from the corpus. The first counterparty is named, with
+# its city, country and registration identifiers, in
+# `knowledge-base/legal/drafts/2026-09-04-convergence-ccla-reply.md` on the
+# default branch, and a public issue records that one counterparty is in flight.
+# A reader holding those needs only the DATE, and this tracker is where the date
+# is. So the residual is recorded rather than assumed away: what opacity buys is
+# that the tracker ALONE yields nothing, not that nothing can be joined.
 #
 # ── EXIT CONTRACT — NOTIFY-ONLY ──────────────────────────────────────────────
 #   0  NEVER TAKEN. Exit 0 is the sweeper's CLOSE verb, and this probe cannot
@@ -97,7 +116,18 @@
 # `scripts/bootstrap-ccla-watch-7922.sh`, because the sweeper resolves
 # `script=` against the DEFAULT BRANCH — a label applied before this file lands
 # there yields a daily "script missing" line nobody reads.
-set -euo pipefail
+# ── WHY `-uo` AND NOT `-euo` ─────────────────────────────────────────────────
+# 66 of the 68 probes here use `set -uo pipefail`, including both of the ones
+# this file is modelled on, and the reason is specific rather than stylistic.
+# Under `-e` any unguarded non-zero command aborts with bash's own status, which
+# for most failures is **1** — and 1 is the sweeper's FAIL verb AND its reopen
+# trigger on a closed issue. So `-e` hands this file a path to the one exit code
+# its contract says it must never take, reachable by adding any future unguarded
+# command. Without `-e`, a failure surfaces only as a code this file chose.
+# Every failure path below is explicitly `||`-guarded, and the companion suite
+# asserts `rc` is never 0 or 1 across the whole fixture family rather than
+# leaving that invariant as prose.
+set -uo pipefail
 
 # The authority for both constants is
 # `apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts`
@@ -108,6 +138,8 @@ set -euo pipefail
 NOTICE_DOC="docs/legal/individual-cla.md"
 NOTICE_ANCHOR="public corporate coverage map"
 ROSTER_REL="apps/cla-evidence/roster/ccla-roster.json"
+# The acknowledged floor (see the verdict block at the bottom of this file).
+ACK_FILE_REL="scripts/followthroughs/ccla-representative-icla-7922.acknowledged"
 LEDGER_BRANCH="cla-signatures"
 LEDGER_PATH="signatures/cla.json"
 NET_TIMEOUT=30
@@ -136,6 +168,17 @@ case "${1:-}" in
   *)             usage ;;
 esac
 [[ $# -le 1 ]] || usage
+
+# A MISSING BINARY IS NOT A BROKEN LEDGER. Without this, `jq` absent from the
+# sweeper's pinned FHS PATH fails the shape check below and reports "the ICLA
+# signature ledger is UNUSABLE" — publicly blaming a shared upstream artifact
+# for a fault on our side. That is the measured-bad-for-could-not-measure
+# collapse this file exists to refuse, and `ccla-add.sh` already preflights jq
+# for the same reason.
+for _bin in git jq date timeout sha256sum; do
+  command -v "$_bin" >/dev/null 2>&1 \
+    || cannot_establish "the tool '${_bin}' is not on this probe's PATH, so the measurement could not be attempted. This is NOT a finding about the ledger, the coverage map or any account. Operator: no action — engineering fault, file it." 3
+done
 
 REPO_ROOT=""
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" \
@@ -190,8 +233,19 @@ EPOCH_PARENT="$(git rev-parse --verify --quiet "${EPOCH_SHA}^" 2>/dev/null)" || 
 # `git show` on a path that did not exist at the parent is a legitimate empty
 # answer (the commit added the file), not an error — so a failure degrades to
 # the empty string rather than to a refusal.
+# ABSENT-AT-PARENT and COULD-NOT-READ are different facts, and collapsing them
+# fails OPEN. `N_PARENT` computes to 0 for an empty document, and 0 is control
+# B's SUCCESS value — so a corrupt pack, a blobless partial clone with no
+# network, or any other real read failure would silently PASS the one control
+# whose entire job is catching a wrong epoch. Ask git which case this is.
 PARENT_DOC=""
-PARENT_DOC="$(git show "${EPOCH_PARENT}:${NOTICE_DOC}" 2>/dev/null)" || PARENT_DOC=""
+if git cat-file -e "${EPOCH_PARENT}:${NOTICE_DOC}" 2>/dev/null; then
+  PARENT_DOC="$(git show "${EPOCH_PARENT}:${NOTICE_DOC}" 2>/dev/null)" \
+    || cannot_establish "the parent of the notice commit carries ${NOTICE_DOC} but it could not be read, so the anchor-introduction control could not be evaluated. Operator: no action — engineering fault, file it." 3
+else
+  # The legitimate case: the commit ADDED the file, so the parent has no copy.
+  PARENT_DOC=""
+fi
 ANCHOR_DOC=""
 ANCHOR_DOC="$(git show "${EPOCH_SHA}:${NOTICE_DOC}" 2>/dev/null)" \
   || cannot_establish "could not read ${NOTICE_DOC} at the commit that introduced the notice. Operator: no action — engineering fault, file it." 3
@@ -249,6 +303,7 @@ git show "origin/${LEDGER_BRANCH}:${LEDGER_PATH}" > "$LEDGER_FILE" 2>/dev/null \
 jq -e 'type == "object" and (.signedContributors | type) == "array"' "$LEDGER_FILE" >/dev/null 2>&1 \
   || cannot_establish "the ICLA signature ledger is UNUSABLE — it is not a JSON object carrying a signedContributors array. This is NOT a finding about any account. Operator: no action — engineering fault, file it." 3
 
+ACK_FILE="$REPO_ROOT/$ACK_FILE_REL"
 ROSTER="$REPO_ROOT/$ROSTER_REL"
 [[ -f "$ROSTER" ]] \
   || cannot_establish "the coverage map is missing at ${ROSTER_REL}. Operator: no action — engineering fault, file it." 3
@@ -286,7 +341,14 @@ COUNTS="$(jq -r --argjson epoch "$EPOCH_S" --argjson r "$ROSTER_IDS" '
     and (.created_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"));
   (.signedContributors | length) as $total
   | ([ .signedContributors[] | select(wellformed | not) ] | length) as $bad
-  | ([ .signedContributors[]
+  # LAST-WINS ON A DUPLICATE ID, because that is what the merge gate does:
+  # `roster-entry-gate.ts` builds `new Map(signedContributors.map(c => [c.id,
+  # c.created_at]))`, and a Map keeps the LAST entry for a repeated key. Read
+  # existentially instead, a duplicated id whose post-epoch entry precedes its
+  # pre-epoch one makes this probe say ACTION while the gate then refuses the
+  # write — the unexplained write-path refusal this file exists to prevent.
+  | (.signedContributors | group_by(.id) | map(.[-1])) as $latest
+  | ([ $latest[]
        | select(wellformed)
        | select((.created_at | fromdateiso8601) >= $epoch)
        # `.id` is BOUND FIRST. Written as `select(($r | index(.id)) == null)`
@@ -314,16 +376,45 @@ read -r N_TOTAL N_BAD N_HITS <<<"$COUNTS"
 (( N_BAD == 0 )) \
   || cannot_establish "${N_BAD} ledger entr(ies) carry no parseable created_at, so the temporal gate cannot be evaluated for them. This is NOT a finding about any account. Operator: no action — engineering fault, file it." 3
 
-if (( N_HITS >= 1 )); then
-  printf 'ACTION: %s signature(s) satisfy the temporal gate and are covered by no roster row (epoch %s; %s entr(ies) checked).\n' \
-    "$N_HITS" "$EPOCH_ISO" "$N_TOTAL"
-  printf 'This is NOT authority to record a row. The executed instrument holds the designation list, off-repo on the encrypted operator drive, and that list is the authority for WHICH account to record. Operator: open the instrument, match its designation list, then run ccla-add.sh and close #7922 by hand.\n'
+# ── THE ACKNOWLEDGED FLOOR: WHY A BARE `N_HITS >= 1` WOULD LATCH ────────────
+# This is the same never-notice the exit contract above refuses exit 0 to
+# avoid, one exit code over, and refusing the close verb does NOT remove it.
+#
+# The predicate is "post-epoch and not in the coverage map". The epoch is
+# recent and every contributor to this repository signs the ICLA, so the first
+# UNRELATED person to sign after it satisfies the predicate — and satisfies it
+# permanently, because they are not a corporate representative and never will
+# be rostered. A bare `N_HITS >= 1` would therefore emit ACTION every day
+# forever from that moment, with a count that only grows, and the sweeper's
+# heading would be byte-identical on the one day a designated representative
+# actually signs. That is a level-triggered signal on a monotone quantity,
+# which is another way of spelling "no signal".
+#
+# So the comparison is against an ACKNOWLEDGED FLOOR, making it edge-triggered:
+# ACTION fires only when the count EXCEEDS what the operator has already
+# triaged. The floor lives in git — the same place the rest of this design
+# keeps its state — so the probe needs no credential and no write access to
+# read it, and advancing it is a reviewable one-line pull request rather than a
+# click. The file is absent until the first triage, which reads as 0.
+ACK_FLOOR=0
+if [[ -f "$ACK_FILE" ]]; then
+  ACK_FLOOR="$(tr -d '[:space:]' < "$ACK_FILE" 2>/dev/null)" || ACK_FLOOR=""
+  [[ "$ACK_FLOOR" =~ ^[0-9]+$ ]] \
+    || cannot_establish "the acknowledged-floor file ${ACK_FILE_REL} does not contain a plain integer, so a triaged count cannot be distinguished from a new one. Refusing rather than defaulting it to 0, which would re-fire on everything already triaged. Operator: correct that file to a single integer." 3
+fi
+
+if (( N_HITS > ACK_FLOOR )); then
+  printf 'ACTION: %s signature(s) satisfy the temporal gate and are covered by no roster row (epoch %s; %s entr(ies) checked; %s already triaged).\n' \
+    "$N_HITS" "$EPOCH_ISO" "$N_TOTAL" "$ACK_FLOOR"
+  printf 'This is NOT authority to record a row. The authority is the counterparty CURRENT designation list -- the executed instrument section 4(c) list AS AMENDED by any section 5 change notice on file -- held off-repo on the encrypted operator drive. Operator: work through runbook section 10.1 before recording anything.\n'
+  printf 'If none of these signatures is a designated representative, this was an unrelated signer: raise the count in %s to %s in a pull request, which is how you tell this probe you have looked.\n' \
+    "$ACK_FILE_REL" "$N_HITS"
   exit 5
 fi
 
-# The CHECKED count is carried so that "0 uncovered" and "0 examined" cannot
-# render identically — an empty ledger and a fully-covered one are different
-# facts with different remedies.
-printf 'NOT YET: %s signature(s) checked against epoch %s; none is at-or-after it and uncovered by the coverage map.\n' \
-  "$N_TOTAL" "$EPOCH_ISO"
+# BOTH counts are carried. "0 uncovered", "0 examined" and "all already
+# triaged" are three different facts with three different remedies, and a line
+# carrying only one number cannot tell them apart.
+printf 'NOT YET: %s signature(s) checked against epoch %s; %s uncovered post-epoch signature(s), %s already triaged.\n' \
+  "$N_TOTAL" "$EPOCH_ISO" "$N_HITS" "$ACK_FLOOR"
 exit 2

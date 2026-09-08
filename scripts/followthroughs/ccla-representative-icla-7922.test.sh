@@ -217,11 +217,34 @@ build_fixture() {
 # $1 = repo dir, rest = probe argv. Runs under `env -i`, as the sweeper does.
 # PATH and HOME are what the sweeper passes; TMPDIR is added so the probe's own
 # scratch lands beside this sandbox rather than on the shared /tmp tmpfs.
+# THE INVARIANT, ENFORCED ON EVERY RUN RATHER THAN LEFT AS PROSE. exit 0 is the
+# sweeper's CLOSE verb on a legal tracker and exit 1 its FAIL-and-reopen
+# trigger; the probe header says it takes neither on any path, and nothing
+# asserted it. Folding the check in here means every existing and future arm
+# enforces it for free across the whole fixture family.
+assert_never_close_verb() {
+  if [[ "$1" == "0" || "$1" == "1" ]]; then
+    cases=$((cases + 1))
+    fail "INVARIANT: the probe returned rc=$1 ($2) — 0 is the sweeper's close verb and 1 its reopen trigger; neither may EVER be taken"
+  fi
+}
+
+# GIT_CONFIG_* pinned for the SAME reason the fixture builder pins them: without
+# it the developer's ~/.gitconfig (url.insteadOf, fetch.prune, core.hooksPath,
+# remote.origin.tagOpt) is an uncontrolled operand of every measurement, so the
+# FR16 tag arm and the QG10 shallow arm become machine-dependent. The builder
+# got this right; the measurement did not.
 run_probe() {
   local d="$1"; shift
   local rc=0
   ( cd "$d" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" \
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
       bash "$PROBE" "$@" ) > "$OUT" 2> "$ERR" || rc=$?
+  # >&2 is load-bearing: this helper reports through fail(), which writes to
+  # STDOUT, and run_probe's stdout IS the returned rc. Without the redirect the
+  # violation text is spliced into the value every caller compares against, so
+  # the arm still reddens but every message downstream is garbled.
+  assert_never_close_verb "$rc" "run_probe $*" >&2
   echo "$rc"
 }
 # MATERIALISED into a string, never piped into `grep -q`. Under `pipefail` a
@@ -560,6 +583,7 @@ run_any() { # $1=probe $2=repo-dir, rest = argv
   local pr="$1" d="$2"; shift 2
   local rc=0
   ( cd "$d" && env -i PATH="$PATH" HOME="$HOME" TMPDIR="$TMPDIR" \
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
       bash "$pr" "$@" ) > "$OUT" 2> "$ERR" || rc=$?
   echo "$rc"
 }
@@ -809,10 +833,10 @@ p=sys.argv[1]; s=open(p).read()
 old='(( N_BAD == 0 )) \\\n  || cannot_establish'
 assert s.count(old)==1
 s=s.replace(old,'true \\\n  || cannot_establish')
-old2="""  | ([ .signedContributors[]
+old2="""  | ([ $latest[]
        | select(wellformed)"""
 assert s.count(old2)==1
-s=s.replace(old2,"""  | ([ .signedContributors[]
+s=s.replace(old2,"""  | ([ $latest[]
        | select(wellformed or true)
        | .created_at |= (if (. | type) == "string" and (. | test("^[0-9]{4}")) then . else "1970-01-01T00:00:00Z" end)""")
 open(p,"w").write(s)
@@ -935,6 +959,194 @@ if m_landed "H5 (probe constant repointed to a different anchor)"; then
     || fail "H5 control: the unmodified probe did not refuse (rc=$rc)"
 fi
 
+
+# ===========================================================================
+# Arms added after multi-agent review. Each closes a property the suite
+# ASSERTED IN PROSE and did not pin — every one was proven survivable against
+# this suite by mutating a sandbox copy.
+# ===========================================================================
+
+# --- G2-M13, REBUILT. The old form grepped BARE TOKENS out of an UN-STRIPPED
+# --- haystack, on a file that is ~180 lines of comment before its first
+# --- statement and whose header is titled "ORDERING IS LOAD-BEARING". Proven:
+# --- inserting ONE comment line naming the derivation command, then moving the
+# --- fetch above the real derivation, made the row PASS while the regression it
+# --- exists to catch landed green. Strip comments, and anchor on constructs a
+# --- `#`-prefixed line cannot produce.
+m13_src="$(grep -vE '^[[:space:]]*#' "$PROBE")"
+m13_deriv=$(grep -nE '^EPOCH_RAW="\$\(timeout' <<<"$m13_src" | head -1 | cut -d: -f1)
+m13_fetch=$(grep -nE '^timeout "\$NET_TIMEOUT" git -c gc\.auto=0 fetch' <<<"$m13_src" | head -1 | cut -d: -f1)
+cases=$((cases + 1))
+[[ "$m13_deriv" =~ ^[0-9]+$ && "$m13_fetch" =~ ^[0-9]+$ ]] \
+  && pass "G2-M13 control: both statements located in the COMMENT-STRIPPED source (lines $m13_deriv and $m13_fetch)" \
+  || fail "G2-M13 control: could not locate the derivation and/or the fetch after stripping comments — the order assertion below would be vacuous"
+cases=$((cases + 1))
+[[ "$m13_deriv" =~ ^[0-9]+$ && "$m13_fetch" =~ ^[0-9]+$ && "$m13_deriv" -lt "$m13_fetch" ]] \
+  && pass "G2-M13: the epoch derivation precedes the ledger fetch in EXECUTABLE source order" \
+  || fail "G2-M13: the ledger fetch precedes the epoch derivation (deriv=$m13_deriv fetch=$m13_fetch)"
+# ...and the anchors must be immune to the comment class that defeated the old
+# form. A comment naming both commands must not move either line number.
+m13_probe_decoy="$WORK/probe.m13decoy.sh"
+{ printf '#!/usr/bin/env bash\n'
+  printf '# EPOCH_RAW="$(timeout ... git log --first-parent -S ...)" -- prose naming it\n'
+  printf '# timeout "$NET_TIMEOUT" git -c gc.auto=0 fetch --no-tags ... -- prose naming it\n'
+  tail -n +2 "$PROBE"; } > "$m13_probe_decoy"
+d2_src="$(grep -vE '^[[:space:]]*#' "$m13_probe_decoy")"
+d2_deriv=$(grep -nE '^EPOCH_RAW="\$\(timeout' <<<"$d2_src" | head -1 | cut -d: -f1)
+d2_fetch=$(grep -nE '^timeout "\$NET_TIMEOUT" git -c gc\.auto=0 fetch' <<<"$d2_src" | head -1 | cut -d: -f1)
+cases=$((cases + 1))
+[[ "$d2_deriv" == "$m13_deriv" && "$d2_fetch" == "$m13_fetch" ]] \
+  && pass "G2-M13: comments naming BOTH commands do not move either anchor (the class that re-armed the old row)" \
+  || fail "G2-M13: a comment moved an anchor (deriv $m13_deriv->$d2_deriv, fetch $m13_fetch->$d2_fetch) — the row is comment-defeatable again"
+
+# --- FR14, MECHANICAL. The old arm grepped 'Operator:' in ONE leftover $OUT,
+# --- i.e. it proved 1 of 24 refusal paths. Assert over the FILE instead: every
+# --- cannot_establish call site carries an addressee tag.
+fr14_total=$(grep -c 'cannot_establish "' "$PROBE" || true)
+fr14_tagged=$(grep -c 'cannot_establish "[^"]*Operator:' "$PROBE" || true)
+cases=$((cases + 1))
+[[ "$fr14_total" -ge 20 ]] \
+  && pass "FR14 control: the probe carries $fr14_total cannot_establish call sites (a non-trivial population)" \
+  || fail "FR14 control: only $fr14_total cannot_establish sites found — the assertion below would be near-vacuous"
+cases=$((cases + 1))
+[[ "$fr14_total" == "$fr14_tagged" ]] \
+  && pass "FR14: ALL $fr14_total refusal messages end in an addressee tag, not just the one a leftover run left behind" \
+  || fail "FR14: $((fr14_total - fr14_tagged)) of $fr14_total cannot_establish messages carry no 'Operator:' tag"
+
+# --- THE ACKNOWLEDGED FLOOR: the signal must be EDGE-triggered ---------------
+# Without this the first unrelated post-epoch signer latches ACTION forever and
+# the probe is byte-identical on the day a representative actually signs.
+set_ledger "$D1" "$(ledger_of "111:$TS_PRE" "222:$TS_POST")" >/dev/null 2>&1
+write_roster "$D1/repo" "$ROSTER_EMPTY"
+printf '0\n' > "$D1/repo/scripts/followthroughs/ccla-representative-icla-7922.acknowledged" 2>/dev/null \
+  || { mkdir -p "$D1/repo/scripts/followthroughs" && printf '0\n' > "$D1/repo/scripts/followthroughs/ccla-representative-icla-7922.acknowledged"; }
+rc=$(run_probe "$F1")
+cases=$((cases + 1))
+[[ "$rc" == "5" ]] && pass "ack-floor 0: one uncovered post-epoch signature still reports ACTION" \
+  || fail "ack-floor 0: expected rc=5, got $rc — $(head -c 140 "$OUT")"
+printf '1\n' > "$D1/repo/scripts/followthroughs/ccla-representative-icla-7922.acknowledged"
+rc=$(run_probe "$F1")
+cases=$((cases + 1))
+[[ "$rc" == "2" ]] \
+  && pass "ack-floor 1: the SAME uncovered signature, once triaged, reports NOT YET — the signal is edge-triggered, not latched" \
+  || fail "ack-floor 1: a triaged count still reports ACTION (rc=$rc) — the latch is not closed"
+cases=$((cases + 1))
+grep -q '1 already triaged' "$OUT" \
+  && pass "the NOT YET line reports the triaged floor, so 'nothing found' and 'all already seen' cannot render alike" \
+  || fail "NOT YET line does not carry the triaged floor: $(head -c 140 "$OUT")"
+# ...and a SECOND, NEW signature must break through the floor.
+set_ledger "$D1" "$(ledger_of "111:$TS_PRE" "222:$TS_POST" "333:$TS_POST")" >/dev/null 2>&1
+rc=$(run_probe "$F1")
+cases=$((cases + 1))
+[[ "$rc" == "5" ]] \
+  && pass "ack-floor 1 + a NEW signature: reports ACTION again — the floor suppresses the triaged, not the novel" \
+  || fail "ack-floor: a new uncovered signature above the floor did not report ACTION (rc=$rc)"
+cases=$((cases + 1))
+grep -q 'ACTION: 2 signature' "$OUT" \
+  && pass "the ACTION line carries the REAL count (2), not a constant" \
+  || fail "ACTION line does not carry the real count: $(head -c 140 "$OUT")"
+cases=$((cases + 1))
+grep -qE 'ACTION: 2 signature\(s\).*3 entr\(ies\) checked' "$OUT" \
+  && pass "the ACTION line carries the CHECKED count too (3), so hits and examined cannot render alike" \
+  || fail "ACTION line does not carry the checked count: $(head -c 160 "$OUT")"
+# A malformed floor file must REFUSE, never silently default to 0 (which would
+# re-fire everything already triaged).
+printf 'not-a-number\n' > "$D1/repo/scripts/followthroughs/ccla-representative-icla-7922.acknowledged"
+rc=$(run_probe "$F1")
+cases=$((cases + 1))
+[[ "$rc" == "3" ]] && pass "a malformed acknowledged-floor file REFUSES (rc=3) rather than defaulting to 0" \
+  || fail "malformed ack floor: expected rc=3, got $rc"
+cases=$((cases + 1))
+grep -q 'CANNOT ESTABLISH: the acknowledged-floor file' "$OUT" \
+  && pass "the malformed-floor refusal names the file and the reason" \
+  || fail "malformed-floor refusal does not name its cause: $(head -c 140 "$OUT")"
+rm -f "$D1/repo/scripts/followthroughs/ccla-representative-icla-7922.acknowledged"
+
+# --- FR15 ON THE VERDICT BRANCHES. The old arms asserted the no-naming
+# --- property only on the exit-3 path. Publishing every ledger login on the
+# --- ACTION line — the line that actually reaches the public comment on the one
+# --- day the answer changes — was 73/73 green.
+set_ledger "$D1" "$(ledger_of "111:$TS_PRE" "222:$TS_POST")" >/dev/null 2>&1
+rc=$(run_probe "$F1")
+cases=$((cases + 1))
+if [[ "$rc" == "5" ]] && ! grep -qE 'fixture-login-|Fixture Person|2026-07-01' <<<"$(both)"; then
+  pass "FR15 on the ACTION branch: no login, name or individual timestamp reaches either stream"
+else
+  fail "FR15: the ACTION branch leaked a ledger identifier or timestamp (rc=$rc)"
+fi
+set_ledger "$D1" "$(ledger_of "111:$TS_PRE" "222:$TS_PRE")" >/dev/null 2>&1
+rc=$(run_probe "$F1")
+cases=$((cases + 1))
+if [[ "$rc" == "2" ]] && ! grep -qE 'fixture-login-|Fixture Person|2026-05-01' <<<"$(both)"; then
+  pass "FR15 on the NOT YET branch: no login, name or individual timestamp reaches either stream"
+else
+  fail "FR15: the NOT YET branch leaked a ledger identifier or timestamp (rc=$rc)"
+fi
+
+# --- ROSTER CARDINALITY. Every roster fixture held ONE org with ONE
+# --- representative, so a first-only read (`.organizations[0]?...[0]?`) was
+# --- behaviourally invisible. Cover the SECOND member of both dimensions.
+roster_two() { # two orgs, the second holding two representatives
+  printf '{"schema_version":"1.0","organizations":[{"legal_name":"First Ltd","record_ref":"CCLA-0001","representatives":[{"id":111,"login":"fixture-login-111","authorized_from":"%s","removed_at":null}]},{"legal_name":"Second Ltd","record_ref":"CCLA-0002","representatives":[{"id":222,"login":"fixture-login-222","authorized_from":"%s","removed_at":null},{"id":333,"login":"fixture-login-333","authorized_from":"%s","removed_at":null}]}]}' \
+    "$D_ANCHOR" "$D_ANCHOR" "$D_ANCHOR"
+}
+set_ledger "$D1" "$(ledger_of "333:$TS_POST")" >/dev/null 2>&1
+write_roster "$D1/repo" "$(roster_two)"
+rc=$(run_probe "$F1")
+cases=$((cases + 1))
+[[ "$rc" == "2" ]] \
+  && pass "roster cardinality: a signer in the SECOND org's SECOND representative is covered — the read is not first-only" \
+  || fail "roster cardinality: a second-org/second-representative signer read as uncovered (rc=$rc) — the roster read is truncated"
+write_roster "$D1/repo" "$ROSTER_EMPTY"
+
+# --- DUPLICATE ID: last-wins, matching the merge gate ------------------------
+# The gate builds a Map keyed on id, so a repeated id keeps its LAST entry.
+# Read existentially, a duplicated id whose post-epoch entry precedes its
+# pre-epoch one makes this probe say ACTION while the gate refuses the write.
+set_ledger "$D1" '{"signedContributors":[{"id":777,"login":"fixture-login-777","name":"Fixture Person 777","created_at":"2026-07-01T00:00:00Z"},{"id":777,"login":"fixture-login-777","name":"Fixture Person 777","created_at":"2026-05-01T00:00:00Z"}]}' >/dev/null 2>&1
+rc=$(run_probe "$F1")
+cases=$((cases + 1))
+[[ "$rc" == "2" ]] \
+  && pass "duplicate id: the LAST entry wins, matching the merge gate's Map semantics (rc=2)" \
+  || fail "duplicate id: read existentially (rc=$rc) — the probe would say ACTION where the gate refuses the write"
+
+# --- THE `--` PATHSPEC. Deleting it left all five parity arms green, because
+# --- every fixture wrote the anchor into exactly ONE path. Plant a decoy in a
+# --- SECOND path with an EARLIER date, so the pathspec is load-bearing.
+# The decoy must be an ANCESTOR of the anchor commit, not a descendant: the
+# derivation takes the OLDEST match, so a decoy committed AFTER the anchor is
+# never selected and the fixture silently stops discriminating. (Measured: built
+# the other way round, scoped and unscoped returned the same date and the
+# dependent arm passed vacuously — which is what the control arm above is for.)
+DEC="$WORK/decoy"
+mkdir -p "$DEC/repo"
+g -C "$DEC/repo" init -q
+g init --bare -q "$DEC/origin.git"
+g -C "$DEC/repo" remote add origin "$DEC/origin.git"
+write_doc "$DEC/repo" 0
+write_roster "$DEC/repo" "$ROSTER_EMPTY"
+g -C "$DEC/repo" add -A
+gcommit "$DEC/repo" "$D_BASE" "$D_BASE" "base: no anchor yet"
+mkdir -p "$DEC/repo/docs/legal"
+printf 'A decoy carrying the %s in another file.\n' "$ANCHOR" > "$DEC/repo/docs/legal/decoy.md"
+g -C "$DEC/repo" add -A
+gcommit "$DEC/repo" "2026-03-01T00:00:00Z" "2026-03-01T00:00:00Z" "decoy: anchor in a SECOND path, EARLIER"
+write_doc "$DEC/repo" 1
+g -C "$DEC/repo" add -A
+gcommit "$DEC/repo" "$D_ANCHOR" "$D_ANCHOR" "introduce the coverage-map notice"
+dec_scoped=$(g -C "$DEC/repo" log --first-parent -S"$ANCHOR" --format=%cI -- "$DOC_REL" | tail -1)
+dec_unscoped=$(g -C "$DEC/repo" log --first-parent -S"$ANCHOR" --format=%cI | tail -1)
+cases=$((cases + 1))
+[[ -n "$dec_scoped" && "$dec_scoped" != "$dec_unscoped" ]] \
+  && pass "pathspec fixture: scoped and unscoped pickaxes DISAGREE ($dec_scoped vs $dec_unscoped) — the -- separator is now load-bearing" \
+  || fail "pathspec fixture does not discriminate (scoped=$dec_scoped unscoped=$dec_unscoped)"
+set_ledger "$DEC" "$(ledger_of "111:$TS_PRE")" >/dev/null 2>&1
+rc=$(run_probe "$DEC/repo" --print-epoch)
+cases=$((cases + 1))
+[[ "$rc" == "2" && "$(cat "$OUT")" == "$dec_scoped" ]] \
+  && pass "the probe honours the -- pathspec (derives $dec_scoped, not the decoy's $dec_unscoped)" \
+  || fail "the probe ignored the pathspec: got '$(cat "$OUT")', expected $dec_scoped"
+
 # ---------------------------------------------------------------------------
 echo "---"
 echo "Total: $passes passed, $fails failed ($cases cases)"
@@ -949,7 +1161,7 @@ if [[ $((passes + fails)) -ne "$cases" ]]; then
 fi
 # Assertion floor, reported with printf + exit rather than through fail(), which
 # is the helper it exists to backstop.
-MIN_ASSERTIONS=73
+MIN_ASSERTIONS=92
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

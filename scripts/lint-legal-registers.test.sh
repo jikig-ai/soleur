@@ -451,9 +451,94 @@ fi
 
 # ---------------------------------------------------------------------------------------
 echo
+
+# ---------------------------------------------------------------------------
+# Arms added after review. Each closes a property the suite asserted in prose
+# and did not pin; every one was proven survivable against this suite.
+# ---------------------------------------------------------------------------
+
+# A rejection arm that asserts only `rc == 1` cannot tell WHICH block failed --
+# the guard exits 1 for any failing assertion. Proven: replacing the whole
+# uniqueness conditional with an unconditional `pass` left this suite 44/44
+# green, because the duplicate fixture still exited 1 through the `missing` arm
+# while the guard simultaneously printed the FALSE line "Record refs are
+# unique". Assert the reason, the same discipline the probe suite already uses.
+run_msg() { ( cd "$1" && bash scripts/lint-legal-registers.sh 2>&1 || true ); }
+
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "$(printf '| CCLA-0001 | A SARL | %s | %s | yes | 2099-01-01 | |\n| CCLA-0001 | B SARL | %s | %s | yes | 2099-01-02 | |' "$HASH_A" "$HASH_A" "$HASH_A" "$HASH_B")" "$(roster_one CCLA-0001 "$HASH_A")"
+_m="$(run_msg "$D")"
+if grep -q 'duplicated Record ref' <<<"$_m"; then
+  pass "(f) a duplicated register Record ref is rejected BY the uniqueness check, named in the message"
+else
+  fail "(f) the duplicate was not attributed to the uniqueness check: $(head -c 160 <<<"$_m")"
+fi
+if grep -q 'Record refs are unique' <<<"$_m"; then
+  fail "(f) the guard printed 'Record refs are unique' while rejecting a duplicate"
+else
+  pass "(f) the guard does not simultaneously claim uniqueness while rejecting a duplicate"
+fi
+
+# THE FAIL-OPEN, closed. A roster jq can `length` but cannot project: a
+# non-object element makes `@tsv` refuse the row. Measured before the fix:
+# n_orgs=2 joined=0 missing=0 -> both join assertions PASS over rows nobody read.
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| CCLA-0009 | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" '{"schema_version":"1.0","organizations":[5,{"record_ref":"CCLA-0009","executed_instrument_sha256":"'"$HASH_A"'"}]}'
+r="$(run_in "$D")"; _m="$(run_msg "$D")"
+if [[ "$r" == "1" ]] && grep -qE 'could not be projected|read only .* of .* coverage-map rows' <<<"$_m"; then
+  pass "(f) a roster jq CAN length but CANNOT project is a refusal, not agreement (the process-substitution fail-open)"
+else
+  fail "(f) an unprojectable roster did not refuse (rc=$r): $(head -c 200 <<<"$_m")"
+fi
+
+# `.organizations` not an array must refuse, not render as "0 organisations".
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" '{"schema_version":"1.0","organizations":"not-an-array"}'
+r="$(run_in "$D")"; _m="$(run_msg "$D")"
+if [[ "$r" == "1" ]] && grep -q 'not an array' <<<"$_m"; then
+  pass "(f) .organizations that is not an array REFUSES rather than reporting NOT YET EXERCISED"
+else
+  fail "(f) a non-array .organizations was accepted (rc=$r): $(head -c 200 <<<"$_m")"
+fi
+
+# Roster-side uniqueness. The register side was checked and the roster was not;
+# measured, two orgs sharing one record_ref passed fully green.
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" \
+  '{"schema_version":"1.0","organizations":[{"record_ref":"CCLA-0001","executed_instrument_sha256":"'"$HASH_A"'"},{"record_ref":"CCLA-0001","executed_instrument_sha256":"'"$HASH_A"'"}]}'
+r="$(run_in "$D")"; _m="$(run_msg "$D")"
+if [[ "$r" == "1" ]] && grep -q 'duplicated record_ref(s) in the coverage map' <<<"$_m"; then
+  pass "(f) two coverage-map rows claiming ONE executed instrument are rejected"
+else
+  fail "(f) a duplicated roster record_ref was accepted (rc=$r): $(head -c 200 <<<"$_m")"
+fi
+
+# A broken `## Register` anchor must not be reported as missing DATA -- the old
+# message sent the operator to append a duplicate to an unerasable record.
+D="$(mkcorpus)" || exit 2
+ccla_fixture "$D" "| CCLA-0001 | Synthetic SARL | $HASH_A | $HASH_A | yes | 2099-01-01 | |" "$(roster_one CCLA-0001 "$HASH_A")"
+sed -i 's/^## Register$/### Register/' "$D/knowledge-base/legal/ccla-register.md"
+r="$(run_in "$D")"; _m="$(run_msg "$D")"
+if [[ "$r" == "1" ]] && grep -q 'parsed to ZERO rows' <<<"$_m" && ! grep -q 'add the missing row' <<<"$_m"; then
+  pass "(f) a broken register heading is reported as a PARSER fault, and does not tell the operator to add rows"
+else
+  fail "(f) a broken register heading was misreported (rc=$r): $(head -c 200 <<<"$_m")"
+fi
+
+# TD7: the PR's own REGISTER_FILES addition was unsampled -- deleting the three
+# new lines left the suite 44/44 green. Fixture a marker into the new member so
+# the generic scans actually see it.
+D="$(mkcorpus)" || exit 2
+_n_before="$( ( cd "$D" && bash scripts/lint-legal-registers.sh 2>&1 || true ) | grep -c 'registers=5' )"
+if [[ "$_n_before" -ge 1 ]]; then
+  pass "(f) ccla-register.md is inside REGISTER_FILES (the scan reports 5 registers, not 4)"
+else
+  fail "(f) ccla-register.md is not being scanned as a register -- the REGISTER_FILES addition is unsampled"
+fi
+
 echo "passed: $((checks - fails)) failed: $fails total: $checks"
 
-MIN_ASSERTIONS=44  # 34 -> 44: block (f)'s register/roster join arms (#7909)
+MIN_ASSERTIONS=51  # 34 -> 51: block (f)'s join arms, plus the review-driven fail-closed arms (#7909)
 if [[ $checks -lt $MIN_ASSERTIONS ]]; then
   printf '::error::lint-legal-registers.test.sh: only %d assertion(s) ran, expected >= %d\n' \
     "$checks" "$MIN_ASSERTIONS" >&2
