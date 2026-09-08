@@ -52,6 +52,17 @@ files); the cost came from three habits below, each of which multiplies.
    "bun shard rc=0 (2419/0)"; that shard was RED, reddened by a commit made after the claim. See `knowledge-base/project/learnings/2026-08-10-a-guard-that-cannot-be-driven-red-is-vacuous-four-rounds-four-instances.md`.
 5. **Bound every command's output.** `git grep` over a tree containing generated JSON returns
    megabytes on one "line": use `':!*.json'`, `--name-only`, `| cut -c1-200`.
+6a. **A fan-out agent in a SHARED worktree is write-only — the lead commits.** Two
+   agents holding one `.git/index.lock` deadlock, and the failure does not look like a
+   deadlock: `git commit` simply never returns while lefthook runs, so it reads as a slow
+   gate. Worse, killing the wrapper leaves the suite runs it spawned ORPHANED and still
+   consuming the machine — resolve those by each process's own working directory before
+   signalling anything. Give fan-out briefs an explicit "run no git write commands"
+   constraint and apply every result yourself from one known SHA. This is the *committer*
+   half of the reader-side contamination note in `review/SKILL.md` §Sharp Edges. **Why:**
+   #7829 — a PR-1 agent was told to commit while the lead committed; ~20 minutes lost to a
+   lock neither side owned, plus three orphaned full-gate runs.
+
 6. **Delegate wide reads to a subagent** (`cm-delegate-verbose-exploration…`) — keep the
    conclusion, not the file dumps.
 7. **Poll with a bounded, anchored pattern — on the marker's SHAPE, plus the rc file.** Match
