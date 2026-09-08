@@ -104,6 +104,6 @@ has nothing to run.
 
 ## Phase 7 — Prove it can fail
 
-- [ ] 7.1 Execute M1-M7 and H1-H3 against the built gate; record observed result per row.
-- [ ] 7.2 Confirm every acceptance criterion in the plan, by the command it names.
+- [x] 7.1 Execute M1-M7 and H1-H3 against the built gate; record observed result per row.
+- [x] 7.2 Confirm every acceptance criterion in the plan, by the command it names.
 - [ ] 7.3 File the two deferral issues named in the plan, with their measured figures.

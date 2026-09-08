@@ -361,7 +361,10 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version-file: .nvmrc
-      - name: Install pinned markdownlint-cli
+      # Named without the binary's own token on purpose: the single-invoker guard
+      # in scripts/markdown-lint.test.sh greps command position, and a step NAME
+      # carrying the literal reads to it exactly like a second call site.
+      - name: Install the pinned linter
         run: npm ci --ignore-scripts
       - name: Lint the tracked Markdown corpus
         run: bash scripts/markdown-lint.sh --repo-sweep
