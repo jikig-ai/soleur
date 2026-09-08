@@ -175,7 +175,7 @@ If Step 1 found nothing, check for review commit patterns (both legacy and new f
 git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findings|^[a-f0-9]+ review(\([^)]*\))?: )" || true
 ```
 
-The `^[a-f0-9]+ review(\(scope\))?:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`. The optional `(scope)` group is load-bearing: this repo writes conventional commits, so review fixes land as `review(6178): …`, which a bare `review: ` regex does NOT match — the signal then reads "review never ran" on a branch where it did. Measured on PR #6933: all three signals were empty after a 7-agent review with four `review(6178):` commits on the branch. The `Reviewed-By-Soleur:` trailer remains the primary signal; this fallback should not false-negative.
+The `^[a-f0-9]+ review(\(scope\))?:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`. The optional `(scope)` group is load-bearing: this repo writes conventional commits, so review fixes land as `review(6178): …`, which a bare `review:`-plus-space regex does NOT match — the signal then reads "review never ran" on a branch where it did. Measured on PR #6933: all three signals were empty after a 7-agent review with four `review(6178):` commits on the branch. The `Reviewed-By-Soleur:` trailer remains the primary signal; this fallback should not false-negative.
 
 If that returns nothing, check for the durable review trailer:
 
@@ -1458,6 +1458,8 @@ fi
 
 **Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** — a stale tracking ref re-introduces the silent-miss class this gate exists to prevent, so the hook denies and prompts the operator to fetch manually. See rule `wg-ship-push-before-merge` in `AGENTS.rules.md` for the canonical contract.
 
+**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait, which is dead time you are already spending. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set at the worst possible moment: the PR is one check from merging, and the cycle it restarts is gated by a single job that runs ~9x longer than any other (see the escape hatch below for the measured figure and its derivation). **Why:** #7896 burned ~6 full CI cycles, one of them because a correct-but-late ADR commit landed at 65 of 67 checks — the change was known-needed earlier in the session, and moving it into the review wait would have cost nothing.
+
 **Hook ordering** matters: the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json) so any auto-sync push performed by the rebase hook has updated the upstream tracking ref before this gate counts unpushed commits. `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces the ordering invariant — keep it green if either hook moves.
 
 ## Phase 6: Push and Create PR
@@ -1501,6 +1503,7 @@ Match the SHAPE (a close verb + an ordering word), not the canonical phrasing. T
 ### Auto-Close Keyword Pre-Creation Scan (#3407)
 
 Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body AND the branch's commit messages for unintentional auto-close-keyword + #N references. Two traps to know:
+
 - **Markdown-blind:** matches inside checkboxes, code blocks, blockquotes, and prose all auto-close (`#3185` was closed twice in three days — first via PR title `(Closes #N after fire)` in #3200, then via body checkbox `- [ ] Post-merge: close #N` in #3402).
 - **Negation-blind + commit-message surface:** GitHub's parser ignores negation, so `Does not close #N` still closes #N. And on a **squash merge** (this repo's default) the squash commit is built from the **branch commit messages**, which the parser reads on merge — so a keyword in a commit body auto-closes even when the PR body is clean. That gap closed #5463 twice (a negated body in #5519, then a negated commit message `Does not close #5463` in #5564). ALWAYS scan commit messages, not just the PR body.
 
@@ -2034,7 +2037,21 @@ The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological c
 
 **ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` is not a required check, so the collision does NOT block the queued auto-merge — it surfaces only as RED CI on `main` post-squash (PR #5945 → hotfix #5952). Whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.
 
-**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` is merging PRs faster than this PR's ~8-minute CI cycle, the auto-sync loop livelocks: every `git merge origin/main` push bumps the head ref, re-triggers the full required-check set, and `main` moves again before the checks settle — so the branch is never `CLEAN`-at-current-`main` and GitHub's queued auto-merge never fires (learning `2026-06-02-auto-merge-livelock-fast-moving-main.md`, surfaced on PR #4774). At the 6-sync cap, if this change has **zero conflict surface** (a docs/skill edit, an additive file, anything that cannot semantically conflict with what's landing on `main`), the up-to-date requirement is *purely procedural* and can be bypassed deterministically:
+**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` is merging PRs faster than this PR's CI cycle, the auto-sync loop livelocks: every `git merge origin/main` push bumps the head ref, re-triggers the full required-check set, and `main` moves again before the checks settle — so the branch is never `CLEAN`-at-current-`main` and GitHub's queued auto-merge never fires (learning `2026-06-02-auto-merge-livelock-fast-moving-main.md`, surfaced on PR #4774). **That cycle is ~35 minutes, not the ~8 this paragraph used to claim, so the livelock is close to structural rather than exceptional.** Measured 2026-09-08 over the five most recent completed `main` CI runs: `test-scripts` took 34/36/36/35/36 min while the next-longest job took 4 min (7 min once). Re-derive rather than trust it — the figure moved 27 -> 35 in a single day, and #7907 shards this job:
+
+```bash
+for id in $(gh run list --branch main --workflow CI --limit 5 --status completed \
+             --json databaseId --jq '.[].databaseId'); do
+  gh api --paginate "repos/$GH_REPO/actions/runs/$id/jobs" --jq '[.jobs[]
+    | select(.completed_at != null)
+    | {n: .name, m: (((.completed_at|fromdateiso8601) - (.started_at|fromdateiso8601))/60|floor)}]
+    | sort_by(-.m) | .[0:2] | map("\(.n)=\(.m)m") | join(" ")'
+done
+```
+
+**Trigger it at 2 consecutive DIRTY/BEHIND syncs whose ONLY conflict surface is a generated file, not at the 6-sync cap.** Six syncs is roughly three hours at that cycle time and is far past the point of diagnosis; a generated-file-only conflict surface already IS the "zero conflict surface" precondition below, so reading it at sync 2 narrows nothing — it just makes the existing precondition detectable before the budget is spent. The trigger names a CLASS, so it outlives any one file: #7935's merge driver removes `knowledge-base/INDEX.md` from that class without emptying it. **Why:** #7896 rode the normal path through ~4 cycles before anyone reached for this hatch, on a change whose only repeated conflict was a generated index.
+
+At that trigger or at the 6-sync cap, if this change has **zero conflict surface** (a docs/skill edit, an additive file, anything that cannot semantically conflict with what's landing on `main`), the up-to-date requirement is *purely procedural* and can be bypassed deterministically:
 
 1. **Stop auto-syncing.** The loop has already capped itself; do not hand-roll more `git merge origin/main` pushes (that is the livelock).
 2. **Confirm required checks are green on the CURRENT SHA** — `gh pr checks <N>` must show no required check in a `pending` or `fail` bucket (the canonical poll loop reads this via `gh pr checks --json name,bucket`). `--admin` bypasses ONLY the up-to-date gate, **NOT** the checks; merging with a red or pending required check ships unverified code.
@@ -2113,10 +2130,12 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
 4. **If `fix_attempt_count == 0`:** Increment `fix_attempt_count`. Attempt autonomous fix:
 
    a. If the failure is in tests or lint: invoke `skill: soleur:test-fix-loop` to diagnose, fix, and commit. After test-fix-loop completes, push and re-queue auto-merge:
+
       ```bash
       git push
       gh pr merge <number> --squash --auto
       ```
+
       Note: `gh pr reopen` is NOT needed — when auto-merge is cancelled due to CI failure, the PR remains OPEN. Re-queuing auto-merge is sufficient.
 
    b. If the failure is in a flaky or unrelated check (not reproducible locally): **Headless mode:** abort. **Interactive mode:** ask whether to wait for a re-run or abort.
@@ -2287,7 +2306,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **CI-verified migration skip.** Before creating the issue, grep the item description for a migration filename (`NNN_*.sql`). If one is matched AND a sibling verify file exists at `apps/web-platform/supabase/verify/<filename>`, skip creating the follow-through — the `verify-migrations` job in `web-platform-release.yml` will run the sentinels and auto-close any existing issue referencing that filename. Log: "Skip: [item] — CI verify covers <filename>". This prevents the #2826/#2827 pattern (one apply issue + one sentinel issue per data-backfill migration) from regenerating on future PRs.
 
-   **Migration filename anchor.** If the item description mentions any migration filename OR a bare migration number (e.g. "migration 031") AND no sibling verify file exists yet (so we're still creating the issue), prepend a `**Migration file:** \`NNN_full_stem.sql\`` line to the body below the `<ITEM_DESCRIPTION>` paragraph. The `verify-migrations` auto-close job matches on both the full filename AND the stem (`NNN_full_stem`) — having either in the body ensures auto-close works once a verify file is later added. Bare `NNN` alone is not enough to match.
+   **Migration filename anchor.** If the item description mentions any migration filename OR a bare migration number (e.g. "migration 031") AND no sibling verify file exists yet (so we're still creating the issue), prepend a ``**Migration file:** `NNN_full_stem.sql` `` line to the body below the `<ITEM_DESCRIPTION>` paragraph. The `verify-migrations` auto-close job matches on both the full filename AND the stem (`NNN_full_stem`) — having either in the body ensures auto-close works once a verify file is later added. Bare `NNN` alone is not enough to match.
 
    **Callback URL audit anchor.** If the item description matches BOTH a callback/redirect signal `/(callback URL|redirect_uri)/i` AND a GitHub-OAuth signal `/(GitHub App|OAuth App|Iv23|client_id)/i` (case-insensitive), this is a callback-URL-class follow-through. The two-signal AND prevents false-positives on unrelated docs/copy issues that happen to mention "GitHub App" once in passing. Closure requires more than a "looks fixed in dashboard" comment — issue #1784 was closed without a verified second remediation, and the same symptom recurred in #3183. Append the **Callback URL closure gate** block (below) to the issue body, and instruct any closer that the closing comment MUST contain ALL THREE of:
    1. The verbatim `redirect_uri` value(s) verified — paste each registered callback URL byte-for-byte.
@@ -2373,6 +2392,8 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    **Step 3.5.B — Choose a verification pattern.** Default to automated per
    `hr-no-dashboard-eyeball-pull-data-yourself`:
 
+<!-- markdownlint-disable MD007 -- these bullets are CONTINUATION content inside a numbered step, so they align with the step's own 3-space indent. MD007 measures against a top-level list and reads that correct alignment as wrong; re-indenting to satisfy it would misalign them from the block they belong to. -->
+
    - **HTTP probe** (canary, status page): `curl -sS -o /dev/null -w '%{http_code}' "$URL" | grep -q '^200$' && exit 0 || exit 1`
    - **DNS probe**: `dig +short +time=5 +tries=2 TXT example.com | grep -qF "$EXPECTED" && exit 0 || exit 1`
    - **SQL probe** (Supabase prd): scaffold via `/soleur:schedule --once` so the workflow brings its own Doppler env; the follow-through script then queries the workflow run status via `gh run list --workflow <name>.yml --status success`.
@@ -2382,6 +2403,8 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
      **The `authorAssociation` filter is mandatory, not stylistic.** This repo is PUBLIC with issues open, and a probe's exit code makes the sweeper close the tracker — so an unfiltered `.comments[].body` accepts a verdict from any authenticated GitHub user, and the sweeper's own PASS comment then disables the reopen guard that would have caught it. Three further requirements follow from the same fact: anchor with `\b` (`RESULT: PASSing on this for now` matched a bare `^RESULT: PASS`); never echo the matched line unredacted (the sweeper posts probe stdout back as a comment, which the next run re-reads as a verdict, latching the issue unclosable); and hardcode the tracker number rather than self-locating by searching issues for the probe's own filename (issue search matches COMMENT bodies as well as issue bodies, and taking the first hit is relevance-ordered, so the probe can be pointed at another issue while the sweeper closes this one). **Why:** #7448 — all four probes written against the earlier form were forgeable; see the reference implementation linked above.
    - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
    - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
+
+<!-- markdownlint-enable MD007 -->
 
    Bare "operator manually checks" with NO scripted gate is non-compliant with
    `hr-no-dashboard-eyeball-pull-data-yourself` AND `wg-pm-class-followthrough-for-operator-dogfood`
@@ -2419,6 +2442,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    ```
 
    Assert that:
+
    1. `script` extracted is non-empty AND, after `realpath -m --relative-to=$REPO_ROOT`
       canonicalization, points under the [scripts/followthroughs/](../../../../scripts/followthroughs/)
       root. Use realpath rather than a bare prefix-match — a path that uses `..` traversal
@@ -2433,6 +2457,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
         *) fail "script '$script_path' escapes scripts/followthroughs/ root" ;;
       esac
       ```
+
    2. `earliest` extracted parses cleanly via `date -u -d "$earliest" +%s`,
    3. The referenced script path exists on disk and is executable.
 
@@ -2533,8 +2558,12 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
 3.8. **Chain to postmerge verification (CONTINUATION GATE — MUST complete before Step 4).** After release workflows pass and migration verification completes, invoke postmerge to verify production health, Sentry cron monitors, and file freshness:
 
+<!-- markdownlint-disable MD007 -- these bullets are CONTINUATION content inside a numbered step, so they align with the step's own 3-space indent. MD007 measures against a top-level list and reads that correct alignment as wrong; re-indenting to satisfy it would misalign them from the block they belong to. -->
+
    - **Claude Code:** `skill: soleur:postmerge <PR-number>`
    - **Grok Build:** `/postmerge <PR-number>`
+
+<!-- markdownlint-enable MD007 -->
 
    **Do NOT ask the operator** whether to run postmerge or monitor deploy — invoke it in the same turn.
 
