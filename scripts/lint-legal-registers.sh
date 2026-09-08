@@ -487,7 +487,15 @@ else
       fail "(f) $reg_ref_bad CCLA register row(s) carry a Record ref that is not CCLA-NNNN -- a malformed ref produces an EMPTY join below, which passes for the wrong reason"
     fi
 
-    n_dupe="$(printf '%s' "$reg_refs" | grep -c . >/dev/null 2>&1 && printf '%s\n' "$reg_refs" | sed '/^$/d' | sort | uniq -d | sed '/^$/d' | wc -l || echo 0)"
+    # NOT `... | grep -c . || echo 0`: `grep -c` PRINTS `0` and EXITS 1 on no
+    # match, so the `||` appends a SECOND value and the variable ends up holding
+    # two lines. Materialise the duplicate list, then branch on emptiness.
+    _dupe_list="$(printf '%s\n' "$reg_refs" | sed '/^$/d' | sort | uniq -d)"
+    if [[ -z "$_dupe_list" ]]; then
+      n_dupe=0
+    else
+      n_dupe="$(printf '%s\n' "$_dupe_list" | wc -l | tr -d '[:space:]')"
+    fi
     if [[ "$n_dupe" -eq 0 ]]; then
       pass "(f) CCLA register Record refs are unique"
     else

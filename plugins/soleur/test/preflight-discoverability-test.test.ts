@@ -2250,7 +2250,21 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   //      `authenticated` cannot execute it — so an anon probe cannot even call it, let alone
   //      assert its body. Also a database query, not a host login, so the no-SSH requirement
   //      in `hr-observability-as-plan-quality-gate` is satisfied.
-  const BASELINE_DECLARED_PROBES = 10;
+  // 10 -> 11 (#7909/#7910). RENUMBERED AT MERGE for the same reason as the
+  // entry above: #7829 landed its own adoption on main while this branch was open. Confirmed against this assertion's own instruction
+  // BEFORE the number moved: the new declaration is in
+  // `2026-09-07-chore-ccla-instrument-file-and-icla-signature-watch-plan.md`, it
+  // sits INSIDE that plan's `discoverability_test:` sub-block, and it is genuine
+  // — the probe's `--print-epoch` reads only local git history and needs nothing,
+  // and the value says exactly that while naming the one thing that is NOT
+  // credential-free: the verdict path's `git fetch`, which uses whatever
+  // credential the checkout persisted into `.git/config`. That distinction is
+  // load-bearing rather than decorative, because the same PR sets
+  // `persist-credentials: false` on the sweeper's checkout and had to measure the
+  // anonymous fetch first. Not a leftover template comment and not a stray line
+  // outside the sub-block, which are the two cases this instruction says to
+  // DELETE rather than baseline.
+  const BASELINE_DECLARED_PROBES = 11;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
