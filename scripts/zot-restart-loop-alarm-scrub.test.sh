@@ -86,6 +86,16 @@ HDRS_PROXY='{level:info,message:HTTP API,headers:{Proxy-Authorization:[Basic PRO
 ALREADY_REDACTED='{level:info,message:HTTP API,headers:{Authorization:REDACTED Cookie:REDACTED}}'
 PANIC_TIER1='panic: runtime error: invalid memory address [signal SIGSEGV] goroutine 42'
 
+# zline_src <dt> <boot> <restarts> <exit_code> <oom5m> <oomkilled> <src> <lasterr>
+# As zline, but carries zot_last_err_src -- the tier tag the producer already emits
+# (cloud-init-registry.yml). Field ORDER mirrors the real emitter: zot_last_err_src sits before
+# boot_id, and zot_last_err stays LAST because it is the only free-text field and the parser's
+# trusted-region strip cuts from it.
+zline_src() {
+  printf '{"dt":"%s","raw":"{\\"message\\":\\"SOLEUR_ZOT_DISK pcent=1 zot_restarts=%s ping_rc=0 mem_total_mb=7751 zot_anon_mb=35 zot_oom_kills=0 state_status=running oom_killed=%s exit_code=%s oom_kills_5m=%s zot_last_err_src=%s boot_id=%s host=soleur-registry zot_last_err=%s\\"}"}\n' \
+    "$1" "$3" "$6" "$4" "$5" "$7" "$2" "$8"
+}
+
 PASS=0; FAIL=0; CASES=0
 VERDICTS=""
 USED_assert_cause_masks=0
@@ -198,6 +208,18 @@ crash_loop_fixture() {
   export ZOT_FIX_LOOKBACK="$f"
 }
 
+# crash_loop_fixture_src <src> <sample>: as crash_loop_fixture, with the tier tag present.
+crash_loop_fixture_src() {
+  local src="$1" sample="$2" f="$TMP/main.json"
+  {
+    zline_src "2026-09-08T10:00:00Z" "$BOOT_NEW" 1 0 0 false "$src" "$sample"
+    zline_src "2026-09-08T10:05:00Z" "$BOOT_NEW" 2 0 0 false "$src" "$sample"
+    zline_src "2026-09-08T10:10:00Z" "$BOOT_NEW" 3 0 0 false "$src" "$sample"
+  } > "$f"
+  export ZOT_FIX_MAIN="$f"
+  export ZOT_FIX_LOOKBACK="$f"
+}
+
 # oom_fixture: exit_code=137 -> an OOM arm, whose CAUSE is static text + trusted numerics.
 # oom_kills_5m=0 is LOAD-BEARING: with a non-zero value the FIRST arm fires ("host/kernel OOM
 # — exit_code=137 AND oom_kills_5m=N") and the assertion below, which names the THIRD arm's
@@ -277,6 +299,32 @@ assert_struct "G2-2 scrub applied at the emit chokepoint" "$CHECKER" '\$\(scrub_
 # producer into $out. Both layers, or the property is only half true.
 assert_struct "G2-4 workflow boundary scrubs before publication" "$WORKFLOW" 'scrub_public|SCRUB_CRED_HDRS' 1
 
+# --- Tier provenance (#7500 task 2.5/2.7) --------------------------------------------------
+# ADR-166: never name an unmeasured cause. The producer already tags which of its four tiers
+# produced the sample, but nothing rendered that tag -- so a tier-4 `fallback` sample (a routine
+# HTTP/gc line that names NO cause) was published in the same "zot_last_err tail:" framing as a
+# tier-1 panic. The workflow parses only ^ZOT_ALARM_CAUSE=, so the tag has to travel INSIDE it.
+
+# A matched diagnostic line may be presented as diagnostic.
+reset_fix; crash_loop_fixture_src "panic" "$PANIC_TIER1"
+assert_cause_contains "G2-tier1 names its tier" ZOT_ALARM_CAUSE "tier=panic"
+
+# A tier-4 fallback sample must NOT be framed as a cause. This is the ~100%-of-exposure,
+# ~0%-of-value tier the plan measured over a 21-hour crash loop.
+reset_fix; crash_loop_fixture_src "fallback" "$HDRS_COOKIE"
+assert_cause_contains "G2-tier4 refuses to present a fallback sample as a cause" \
+  ZOT_ALARM_CAUSE "names NO cause"
+
+# LEGACY ROWS -- the rule, recorded rather than left implicit. A row with no zot_last_err_src
+# (a pre-#7247 emitter) is a THIRD state, not a missing fourth. Fail-open would present an
+# unknown-provenance tail as a cause, which is the ADR-166 defect this change removes;
+# fail-closed would discard a tail that may be the only evidence available. Neither: show the
+# tail and say the provenance is unknown.
+reset_fix; crash_loop_fixture "$PANIC_TIER1"
+assert_cause_contains "G2-legacy row declares unknown provenance" ZOT_ALARM_CAUSE "PROVENANCE UNKNOWN"
+reset_fix; crash_loop_fixture "$PANIC_TIER1"
+assert_cause_contains "G2-legacy row still carries the tail" ZOT_ALARM_CAUSE "panic:"
+
 # --- Row 6 / harness (a): the guard's own dispatch ------------------------------------------
 # A suite whose helpers were never called reports 0 passed / 0 failed and exits 0 — which is
 # byte-identical to a healthy run. These counters make "the loop ran" observable.
@@ -300,7 +348,7 @@ fi
 
 # Anti-vacuity floor. Reported with printf + exit, NEVER through fail() — a floor that calls the
 # helper it backstops is disarmed by the same edit that disarms the helper (ADR-193).
-EXPECTED_MIN=14
+EXPECTED_MIN=18
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s) — a case was silently skipped.\n' \
     "$CASES" "$EXPECTED_MIN" >&2

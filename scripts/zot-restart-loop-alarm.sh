@@ -567,7 +567,16 @@ if [[ "$has_137" == true || "$climb_fire" == true || "$max_oom5m" -gt 0 ]]; then
   elif [[ "$max_oom5m" -gt 0 ]]; then
     CAUSE="kernel OOM-killer fired in-window — oom_kills_5m=${max_oom5m}"
   else
-    # Pure condition-B climb, no OOM signal → non-OOM crash-loop; surface the redacted log tail.
+    # Pure condition-B climb, no OOM signal → non-OOM crash-loop; surface the log tail, scrubbed
+    # at emit_and_exit() and LABELLED WITH ITS TIER.
+    #
+    # The tier label is not decoration (#7500). The producer selects zot_last_err from four
+    # tiers and tier 4 (`fallback`) is a plain `docker logs --tail 3` -- a routine HTTP/gc line
+    # that names no cause at all. Measured over a 21-hour crash loop, tier 4 produced ~100% of
+    # the header-bearing samples and ~0% of the diagnostic value. Publishing that in the same
+    # "zot_last_err tail:" framing as a tier-1 panic is exactly the ADR-166 defect -- naming a
+    # cause nobody measured -- on a PUBLIC issue. So the tier decides the FRAMING, not just the
+    # text, and both fields are read from ONE row so they cannot describe different events.
     #
     # NEXT ACTION, not a cause (#7278/ADR-172). This arm is reached only when the OOM decode did
     # NOT fire, i.e. the loop is non-OOM, and the most common non-OOM shape measured on this host
@@ -577,8 +586,28 @@ if [[ "$has_137" == true || "$climb_fire" == true || "$max_oom5m" -gt 0 ]]; then
     # naming an unmeasured cause, so this stays within ADR-166 / lint-diagnosis-claims.sh.
     # Deliberately scoped to THIS arm: the OOM arms above have a different failure class and a
     # different remedy, and the NIC arms are a different stream entirely.
-    last_err="$(printf '%s\n' "$MAIN" | grep -F "boot_id=$NEWEST_BOOT" | tail -1 | sed -n 's/.* zot_last_err=//p' | sed 's/"}$//')"
-    CAUSE="non-OOM crash-loop — zot_restarts climbed across >= ${CLIMB_N} consecutive events; zot_last_err tail: ${last_err:-none}. NEXT (read-only, no SSH, no host change): dispatch registry-zot-inventory.yml to measure what is actually on the store volume before reaching for a destroy — this alarm's own SOLEUR_ZOT_DISK source has no per-path breakdown"
+    # ONE row, then both fields off it. Two independent greps could straddle two events and
+    # label one sample with another's provenance.
+    err_row="$(printf '%s\n' "$MAIN" | grep -F "boot_id=$NEWEST_BOOT" | tail -1)"
+    last_err="$(printf '%s\n' "$err_row" | sed -n 's/.* zot_last_err=//p' | sed 's/"}$//')"
+    # ` zot_last_err=` cannot match inside ` zot_last_err_src=` (the next byte is `_`, not `=`),
+    # so the greedy prefix above still lands on the real field.
+    err_src="$(printf '%s\n' "$err_row" | sed -n 's/.* zot_last_err_src=\([^ ]*\).*/\1/p')"
+    case "${err_src:-}" in
+      panic|error|warn)
+        tail_claim="zot_last_err tail (tier=${err_src}, a matched diagnostic line): ${last_err:-none}" ;;
+      fallback)
+        tail_claim="tier=fallback: NO diagnostic line matched, so this is a routine log tail that names NO cause -- do not read it as one (ADR-166): ${last_err:-none}" ;;
+      none)
+        tail_claim="tier=none: zot produced no log output to sample" ;;
+      *redact_failed)
+        tail_claim="tier=${err_src}: the sample could not be redacted and was withheld AT THE PRODUCER, so no tail is available -- this is the fail-safe firing, not an absence of evidence" ;;
+      "")
+        tail_claim="zot_last_err tail, PROVENANCE UNKNOWN -- this row carries no zot_last_err_src, so it predates the tier-tagging emitter and the sample may be routine output rather than a diagnostic: ${last_err:-none}" ;;
+      *)
+        tail_claim="zot_last_err tail (tier=${err_src}, unrecognised by this checker -- treat the provenance as unverified): ${last_err:-none}" ;;
+    esac
+    CAUSE="non-OOM crash-loop — zot_restarts climbed across >= ${CLIMB_N} consecutive events; ${tail_claim}. NEXT (read-only, no SSH, no host change): dispatch registry-zot-inventory.yml to measure what is actually on the store volume before reaching for a destroy — this alarm's own SOLEUR_ZOT_DISK source has no per-path breakdown"
   fi
   DETAIL="newest boot_id=${NEWEST_BOOT}: 137=${has_137} climb_run=${max_run}(>=${CLIMB_N}?${climb_fire}) oom_kills_5m_peak=${max_oom5m}"
   emit_and_exit 1
