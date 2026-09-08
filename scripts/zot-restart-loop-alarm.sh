@@ -132,6 +132,42 @@ NIC_VERDICT=""
 NIC_CAUSE=""
 NIC_DETAIL=""
 
+# --- Sink-side credential scrub before PUBLIC publication (#7500, Guard 2) ----------------
+# scheduled-zot-restart-loop.yml publishes ZOT_ALARM_CAUSE= into a GitHub issue on a PUBLIC
+# repository. Measured on #7272 (2026-09-08): of 100 comments, 36 carried a `headers` object
+# and 13 a `clientIP`. No credential leaked -- but only because zot masks `Authorization`
+# upstream, which is a VENDOR DEFAULT this repository does not control. Nothing here masked
+# `Cookie`, `X-Api-Key`, `Proxy-Authorization` or `X-Amz-Security-Token`.
+#
+# THIS IS A DENYLIST, PERMANENTLY, AND THAT IS DELIBERATE. By the time text reaches this
+# script the producer's `tr -d '"\\'` has destroyed the JSON, so the structural ALLOWLIST
+# that `redact()` applies in zot-log-shipper.sh cannot be reconstructed at this layer -- an
+# unanticipated header name survives it. That limit is asserted as a measured fact in
+# scripts/zot-restart-loop-alarm-scrub.test.sh (case G2-3b) rather than left to be discovered,
+# and it is closed at the PRODUCER, where the structure still exists. Do NOT describe this
+# layer with allowlist language in an ADR or an Art. 30 entry.
+#
+# SCRUB_CRED_HDRS is byte-identical to CRED_HDRS in apps/web-platform/infra/cloud-init-registry.yml.
+SCRUB_CRED_HDRS='authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token'
+# Length bound, DERIVED not chosen: the longest static arm in this file measures 546 B and the
+# producer caps `zot_last_err` at 300 B, so the worst legitimate value is ~846 B. 1200 leaves
+# headroom for a future arm while still bounding a pathological input.
+SCRUB_MAXLEN=1200
+
+scrub_public() {
+  local s="$1"
+  # Normalise FIRST. Collapsing whitespace and dropping non-printable bytes lets the masking
+  # regex below express its value class without having to match tabs or newlines -- and a
+  # multi-line value would otherwise let sed's line orientation mask only the first line.
+  s="$(LC_ALL=C tr '\n\r\t' '   ' <<<"$s" | LC_ALL=C tr -cd '\40-\176')"
+  # Mask every credential-bearing header value, in both renderings the quote-free warehouse
+  # text can take: the zerolog map form `Name:[value]` and the bare form `Name: value`. The
+  # `g` flag is load-bearing -- a second credential header after a compliant first must also
+  # be masked (case G2-5). `I` is a GNU extension, already relied on by redact().
+  s="$(LC_ALL=C sed -E "s/(${SCRUB_CRED_HDRS})([[:space:]]*:[[:space:]]*)(\[[^]]*\]|[^], }]*)/\1\2REDACTED/gI" <<<"$s")"
+  printf '%s' "${s:0:${SCRUB_MAXLEN}}"
+}
+
 emit_and_exit() {
   # $1 = exit code. Prints the machine-readable verdict block (the workflow greps
   # ZOT_ALARM_VERDICT= + ZOT_ALARM_CAUSE=) then exits with the contract code.
@@ -141,15 +177,15 @@ emit_and_exit() {
   echo "ZOT_ALARM_EXIT=${code}"
   echo "ZOT_ALARM_WINDOW=${WINDOW}"
   echo "ZOT_ALARM_CLIMB_N=${CLIMB_N}"
-  [[ -n "$DETAIL" ]] && echo "ZOT_ALARM_DETAIL=${DETAIL}"
-  echo "ZOT_ALARM_CAUSE=${CAUSE:-n/a}"
+  [[ -n "$DETAIL" ]] && echo "ZOT_ALARM_DETAIL=$(scrub_public "$DETAIL")"
+  echo "ZOT_ALARM_CAUSE=$(scrub_public "${CAUSE:-n/a}")"
   # The NIC block rides EVERY exit path — that is the whole point (see above).
   # R24 FAIL-OPEN FIX: an unset NIC_VERDICT means evaluate_nic never ran or died before
   # assigning. Defaulting that to the non-alarming TRANSIENT is invisible to every
   # emptiness test in this file; UNEVALUATED is loud and cannot be mistaken for health.
   echo "NIC_ALARM_VERDICT=${NIC_VERDICT:-UNEVALUATED}"
-  [[ -n "$NIC_DETAIL" ]] && echo "NIC_ALARM_DETAIL=${NIC_DETAIL}"
-  echo "NIC_ALARM_CAUSE=${NIC_CAUSE:-n/a}"
+  [[ -n "$NIC_DETAIL" ]] && echo "NIC_ALARM_DETAIL=$(scrub_public "$NIC_DETAIL")"
+  echo "NIC_ALARM_CAUSE=$(scrub_public "${NIC_CAUSE:-n/a}")"
   echo "=============================="
   exit "$code"
 }

@@ -102,6 +102,29 @@ jobs:
           # in this file), so capturing rc cannot disarm a downstream failure gate.
           rc=0
           out="$(bash scripts/zot-restart-loop-alarm.sh 2>&1)" || rc=$?
+
+          # --- Credential scrub at the PUBLICATION boundary (#7500, Guard 2 layer 2) -----------
+          # AP-025: the checker's own emit_and_exit() scrub protects ONE consumer of its stdout.
+          # This step is a SECOND producer into the run log and into $GITHUB_OUTPUT, and it
+          # captures STDERR (2>&1) -- a channel emit_and_exit() never touches, and one that can
+          # carry a raw warehouse row when betterstack-query.sh fails. Scrubbing $out here covers
+          # the run log and everything derived from it below, by construction.
+          #
+          # DENYLIST, permanently, and deliberately so: the producer's `tr -d` has already
+          # destroyed the JSON by this point, so the structural allowlist in zot-log-shipper.sh
+          # cannot be reconstructed here. See the checker's scrub_public() header. Do NOT describe
+          # this layer with allowlist language.
+          #
+          # SCRUB_CRED_HDRS is byte-identical to the checker's and to CRED_HDRS in
+          # apps/web-platform/infra/cloud-init-registry.yml.
+          SCRUB_CRED_HDRS='authorization|cookie|x-api-key|proxy-authorization|x-amz-security-token'
+          scrub_public() {
+            # sed is line-oriented, which is what we want: applied to the multi-line $out it
+            # masks EVERY line, not just the first.
+            LC_ALL=C sed -E "s/(${SCRUB_CRED_HDRS})([[:space:]]*:[[:space:]]*)(\[[^]]*\]|[^], }]*)/\1\2REDACTED/gI" <<<"$1"
+          }
+          out="$(scrub_public "$out")"
+
           printf '%s\n' "$out"
 
           verdict="$(printf '%s\n' "$out" | grep -oE 'ZOT_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
