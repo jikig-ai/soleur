@@ -21,7 +21,9 @@ brand_survival_threshold: single-user incident
       scrub). The count moved three times during planning — do not trust the plan's list.
 - [ ] 0.4 Re-run `scripts/rule-metrics-aggregate.sh` against a **copy** of the live incidents log
       under `INCIDENTS_REPO_ROOT`. Never the real repo root — it writes before it rejects.
-- [ ] 0.5 Confirm #7849, #7942 and #7835 are still open.
+- [ ] 0.5 Confirm #7849 and #7835 are still open. (#7942 is OUT OF SCOPE — see session-state.md
+      §Scope decision. Also confirm PR #7879 is still open; if it has merged, re-check whether the
+      A1/A2 sets moved before editing.)
 
 ---
 
@@ -76,9 +78,11 @@ brand_survival_threshold: single-user incident
 
 ### 1.3 Mutation battery
 
-- [ ] 1.3.1 Create `plugins/soleur/test/hook-input-classification.mutation.sh` covering M1–M12 and
-      H1–H6 from the plan's Guard Contract. **Not** under `.claude/hooks/lib/` — that path is outside
-      the glob PR 2 registers, so the battery would escape the gate that closes #7942.
+- [ ] 1.3.1 Create `plugins/soleur/test/hook-input-classification-mutation.test.sh` covering M1–M12
+      and H1–H6 from the plan's Guard Contract. Note the name: `*-mutation.test.sh`, **not**
+      `*.mutation.sh` — the former is already matched by `SUITE_GLOBS`' `plugins/soleur/test/*.test.sh`
+      so it is gated on arrival with no edit to `scripts/test-all.sh`; the latter is the ungated hole.
+      **Not** under `.claude/hooks/lib/` either — that path is outside the glob entirely.
 - [ ] 1.3.2 Scope every mutant to a **line range** with its placement asserted. The file carries two
       byte-identical `HOOK_INPUT_REASON="internal"` assignments and three occurrences of
       `unparseable` (one classifier, two log strings); a file-wide `sed` hits the wrong one.
@@ -87,7 +91,7 @@ brand_survival_threshold: single-user incident
 
 ---
 
-## PR 2 — shell containment (Phases A1–A4). `Closes #7822 #7835 #7942`
+## PR 2 — shell containment (Phases A1–A3). `Closes #7822 #7835`
 
 ### 2.1 Vacuity repairs (the semantic half — do this first)
 
@@ -106,7 +110,8 @@ EACCES.
 - [ ] 2.1.4 `scripts/check-pa-22.test.sh` — prefer asserting the SUT's own resolution names the
       fixture.
 - [ ] 2.1.5 `scripts/lint-legal-registers.test.sh` — the operand case + 12 dependent red-arms.
-- [ ] 2.1.6 `apps/web-platform/infra/workspaces-luks-loopback.test.sh` — the `fatal:` fsck arms.
+- [ ] 2.1.6 ~~`apps/web-platform/infra/workspaces-luks-loopback.test.sh`~~ — **DROPPED.** Open PR
+      #7879 edits this file; leave it to that PR. Do not touch it.
 - [ ] 2.1.7 `plugins/soleur/test/proc.test.sh` — the `NOGIT="$(mktemp -d)"` case.
 - [ ] 2.1.8 `apps/web-platform/test/ci/service-role-allowlist-gate.test.sh` — **handle
       individually.** It mutates the live index with `git add -f` and has no fixture repo, so under
@@ -138,15 +143,15 @@ EACCES.
 - [ ] 2.3.5 Victim path passes an `assert_fixture_dir`-class operand guard; the hostile `GIT_DIR`
       must never resolve under `$PWD`.
 
-### 2.4 Register the mutation batteries (A4, closes #7942)
+### 2.4 CUT — mutation-battery registration (was A4, #7942)
 
-- [ ] 2.4.1 Register every tracked `*.mutation.sh` **repo-wide**, derived from
-      `git ls-files '*.mutation.sh'` — batteries already exist outside `plugins/soleur/test/`.
-- [ ] 2.4.2 State the mechanism: `SUITE_GLOBS` is diffed by `lint-orphan-test-suites.sh` against
-      `git ls-files '*.test.sh'`, and its comment rejects a glob matching nothing. Either extend the
-      linter's producer to a second suffix or register batteries separately — and say which.
-- [ ] 2.4.3 Assert the registered set equals the tracked set.
-- [ ] 2.4.4 Bring `*.mutation.sh` into `scripts/guard-vacuity-floor.test.sh`'s derived population.
+- [x] 2.4.1 **CUT.** `scripts/test-all.sh` and `plugins/soleur/test/test-helpers.sh` are edited by
+      open PR #7879; this PR must not contend for them. #7942 stays open on its own trigger.
+- [ ] 2.4.2 Instead, create the new battery as
+      `plugins/soleur/test/hook-input-classification-mutation.test.sh` so the existing
+      `plugins/soleur/test/*.test.sh` glob gates it with **no** edit to `scripts/test-all.sh`.
+- [ ] 2.4.3 Assert the PR's diff touches neither `scripts/test-all.sh` nor
+      `plugins/soleur/test/test-helpers.sh`.
 
 ### 2.5 Deferrals stay owned
 

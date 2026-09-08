@@ -4,7 +4,7 @@ date: 2026-09-08
 slug: fix-shell-git-env-scrub-and-hook-fault-diagnosis
 branch: feat-one-shot-7822-7275-shell-git-env-scrub-hook-fault-diag
 issue: 7822
-closes: 7822, 7275, 7835, 7942
+closes: 7822, 7275, 7835
 type: fix
 classification: test-infrastructure, hook-observability
 lane: cross-domain
@@ -80,7 +80,7 @@ exists so the next pass does not re-derive them.
 | A canonical shell `git-fixture-env.sh` body | Cut by name in the #7833 plan: *"`test-all.sh` + the tripwire already cover every shell suite; a second byte-for-byte canonical body beside `assert_fixture_dir()` is the drift this plan exists to end."* Not reversed here. |
 | A lint over every test file that spawns git | Same plan cut the file-scale design in favour of guarding entry points: *"26 `run:` lines … plus 2 files under `scripts/hooks/` … against ~900 files for the cut design."* |
 | A per-file containment guard over "shell suites that create a git fixture" | Cut at CTO review as **unsound**, not merely redundant: its verdict would conflate two properties (the tripwire *aborts*, it does not contain); its assembly would be a regex heuristic — three defensible predicates returned 42, 45 and 47 members for the same question — and every recorded recurrence (#1090, 2026-04-03 ×2, #7833) entered through an **entry point**, never a test file. |
-| A monotone adoption ratchet replacing it | Cut at the following review round. After the sweep the baseline is 0, and `live <= 0` cannot detect the regression the ratchet names: raising a committed baseline from 0 to 5 leaves `0 <= 5` green. Its stated assembly was also self-contradictory — a committed integer is not "both sides computed by the same enumeration in the same run" — and it arrived with no mutation battery, in a plan that folds in #7942 precisely because ungated batteries are the defect. |
+| A monotone adoption ratchet replacing it | Cut at the following review round. After the sweep the baseline is 0, and `live <= 0` cannot detect the regression the ratchet names: raising a committed baseline from 0 to 5 leaves `0 <= 5` green. Its stated assembly was also self-contradictory — a committed integer is not "both sides computed by the same enumeration in the same run" — and it arrived with no mutation battery, in a plan that treats ungated batteries as the defect (#7942 itself is not folded in — see the scope amendment). |
 | Repo-wide conversion of 25–39 suites | Belongs to #7849; a sweep of near-identical diffs is the rubber-stamp review #7849 itself gave as reason (c) for deferring. |
 | A new incident-row field for the type vector | `hook_input_report` already computes `reason_key="${reason%%:*}"` so "an `internal:<jq stderr>` detail stays out of the aggregation key". The channel exists, is commented, and is unused. |
 | A new escalation channel | `summary.hook_input_fault_count` and its `WARNING:` line already exist. The gap is a consumer, and that consumer is deferred (see §Deferral). |
@@ -151,11 +151,18 @@ prefix scrub. Measured that way it is **five**:
 **#7942** — *"Two mutation batteries in `plugins/soleur/test/` are named `*.mutation.sh` and run in no
 gate"* — matches `scripts/test-all.sh` in this plan's edit list.
 
-**Disposition: fold in.** This plan adds a mutation battery, and ADR-193 requires one. Shipping it
-into the same ungated hole would reproduce the defect being closed. `Closes #7942` joins PR 2's body.
-Verified: `SUITE_GLOBS` carries `plugins/soleur/test/*.test.sh` (`scripts/test-all.sh:78`), so
-`.test.sh` files need no registration and `*.mutation.sh` — which does not match that glob — is
-exactly the hole.
+**Disposition: NOT folded in — scope amendment, see `../specs/feat-one-shot-7822-7275-shell-git-env-scrub-hook-fault-diag/session-state.md` §Scope decision.**
+Issue #7942's work edits `scripts/test-all.sh` and `plugins/soleur/test/test-helpers.sh`, both of which
+are already being edited by **open** PR #7879 (closes #7849/#7853/#7854) in a live sibling worktree.
+Folding it in here would put this PR into a three-file conflict with that session. #7942 stays open
+on its own trigger and is picked up after #7879 lands.
+
+The reason A4 existed still binds, and is satisfied without it: this plan adds a mutation battery,
+ADR-193 requires one, and shipping it ungated would reproduce the very defect #7942 names. So the
+battery is **named into the already-registered convention** instead of registering a new suffix —
+`*-mutation.test.sh`, which `SUITE_GLOBS` already matches via `plugins/soleur/test/*.test.sh`
+(`scripts/test-all.sh:78`). Zero edits to `test-all.sh`; the battery is gated on arrival. This is
+also the convention #7942 itself documents as universal in this repo.
 
 No other open code-review issue matches any planned path.
 
@@ -186,7 +193,7 @@ review time.
 | PR | Contents | Risk |
 |---|---|---|
 | **1** | Phases B1–B2: repair the discriminator and split the enum it discriminates on, with the byte-exactness gate. `Closes #7275`. | **High.** The library is sourced by 24 non-test hooks, 19 firing per Bash tool call (`hook-input.sh` states the 19 and why: #7165 registered `grep-rewrite.sh` on the Bash matcher). |
-| **2** | Phases A1–A4: the vacuity repairs, the five-file sweep, the containment regression test, mutation-battery registration. `Closes #7822 #7835 #7942`. | Low |
+| **2** | Phases A1–A3: the vacuity repairs, the five-file sweep, the containment regression test. `Closes #7822 #7835`. | Low |
 
 B1 and B2 ship together because splitting them would land a correctly-read return code that nothing
 consumes. They ship *apart from everything else* because ADR-157's own core argument is that a
@@ -346,7 +353,6 @@ text must name `not a git repository`.
 | `.claude/hooks/session-rules-loader.test.sh` | Four discrete non-repo fixtures (T13, T23, T30, T31). Repo-ness precondition applies. |
 | `scripts/check-pa-22.test.sh` | Self-documented: *"A sandbox that is not a git repo makes the SUT resolve to the REAL worktree, which would both void the case and read the live corpus."* Prefer asserting the SUT's own resolution names the fixture. |
 | `scripts/lint-legal-registers.test.sh` | One operand case plus twelve dependent red-arms. |
-| `apps/web-platform/infra/workspaces-luks-loopback.test.sh` | The `fatal:`-shape fsck arms. |
 | `plugins/soleur/test/proc.test.sh` | Surfaced late, by the citation audit rather than by the vacuity sweep — which is the point. It opens `NOGIT="$(mktemp -d -t proc-nogit…)"` as a deliberately non-git directory, in a suite three earlier passes classified only by its git-write shape. |
 
 `apps/web-platform/test/ci/service-role-allowlist-gate.test.sh` is a **distinct shape** — it
@@ -393,23 +399,17 @@ The victim's three observables are compared as a triple, not HEAD alone: with `G
 absolute `GIT_INDEX_FILE` still retargets `git add` while HEAD stays put. The victim path passes an
 `assert_fixture_dir`-class operand guard, and the hostile `GIT_DIR` must never resolve under `$PWD`.
 
-### Phase A4 — register the mutation batteries (PR 2, closes #7942)
+### Phase A4 — CUT (scope amendment)
 
-Register every tracked `*.mutation.sh` in `scripts/test-all.sh` — **repo-wide, derived from
-`git ls-files '*.mutation.sh'`, not scoped to one directory.** Batteries already exist outside
-`plugins/soleur/test/`, and `scripts/lint-orphan-test-suites.sh` states the principle this plan must
-not violate in the very PR that cites it: the producer is the whole repo, because *"every
-directory-scoped version of it has eventually been outgrown by a suite added one directory over"*.
+Registering every tracked `*.mutation.sh` in `scripts/test-all.sh` was this plan's way of closing
+issue #7942. It is **cut**: `scripts/test-all.sh` is being edited by open PR #7879, and this plan must not
+contend for it. See `../specs/feat-one-shot-7822-7275-shell-git-env-scrub-hook-fault-diag/session-state.md`
+§Scope decision.
 
-**State the mechanism, because `SUITE_GLOBS` is not obviously the right home.** That array is
-consumed by `lint-orphan-test-suites.sh`, which diffs it against `git ls-files '*.test.sh'`, and its
-own comment rejects a glob matching nothing. A `*.mutation.sh` entry matches zero `*.test.sh` files
-by construction, so A4 must either extend the linter's producer to a second suffix or register
-batteries through a separate mechanism — and say which. Then assert the
-registered set equals the tracked set so the next battery cannot enter the same hole. Bring
-`*.mutation.sh` into `scripts/guard-vacuity-floor.test.sh`'s derived population as well — that guard
-derives from tracked `*.test.sh`, so the batteries sit outside it, and leaving them there would
-reproduce this plan's own defect class one layer up.
+The obligation A4 discharged — *this plan's own battery must not ship ungated* — is met by naming,
+not registration: the battery is created as `hook-input-classification-mutation.test.sh`, already
+matched by `SUITE_GLOBS`' `plugins/soleur/test/*.test.sh`. The two pre-existing `*.mutation.sh`
+batteries stay unregistered and stay #7942's, under its own trigger.
 
 ## Deferral (`wg-defer-only-after-inline-triage`)
 
@@ -445,7 +445,7 @@ See `decision-challenges.md` — this diverges from the stated scope and the ope
 | Path | Why |
 |---|---|
 | `plugins/soleur/test/shell-fixture-containment.test.sh` | Phase A3's two-arm regression test. Auto-registers via `SUITE_GLOBS`. |
-| `plugins/soleur/test/hook-input-classification.mutation.sh` | The Guard mutation battery, driving the real `hook_parse_input`. **Deliberately under `plugins/soleur/test/`, not beside the library it exercises** — an earlier draft placed it at `.claude/hooks/lib/`, outside the `plugins/soleur/test/*.mutation.sh` glob Phase A4 registers, so the plan's own battery would have escaped the very gate it adds to close #7942. |
+| `plugins/soleur/test/hook-input-classification-mutation.test.sh` | The Guard mutation battery, driving the real `hook_parse_input`. **Named `*-mutation.test.sh`, not `*.mutation.sh`** — the former is matched by `SUITE_GLOBS`' existing `plugins/soleur/test/*.test.sh` (`scripts/test-all.sh:78`) and so is gated on arrival with no registration edit; the latter is the ungated hole #7942 exists to close. **Deliberately under `plugins/soleur/test/`, not beside the library it exercises** — at `.claude/hooks/lib/` it would fall outside that glob entirely. |
 
 ## Files to Edit
 
@@ -454,14 +454,12 @@ See `decision-challenges.md` — this diverges from the stated scope and the ope
 | `.claude/hooks/lib/hook-input.sh` | B1–B2. |
 | `.claude/hooks/hook-input-contract.test.sh` | The new reason heads, the field-count convention, byte-exactness. |
 | `.claude/hooks/README.md` | The reason enum. |
-| `scripts/test-all.sh` | A4: register every `*.mutation.sh`. The new `.test.sh` needs no registration — `SUITE_GLOBS` already carries `plugins/soleur/test/*.test.sh` (`scripts/test-all.sh:78`), and the array's own comment warns that a second copy of the list is the mutation it exists to catch. |
-| `scripts/guard-vacuity-floor.test.sh` | A4: bring `*.mutation.sh` into the derived population. |
 | `scripts/rule-metrics-aggregate.sh`, `scripts/rule-metrics-aggregate.test.sh` | AC12, **documentation only**: the inline enum roster and the `hook-input-unparseable` fixture name an enum member this plan retires. No behavioural change; the orphan gate stays deferred. |
 | The five sweep suites (Phase A2) | Adopt the tripwire. |
 | The seven vacuity-bearing suites plus `service-role-allowlist-gate.test.sh` (Phase A1) | Preconditions. |
 | `knowledge-base/engineering/architecture/decisions/ADR-157-…md` | **Errata only** — correct its factual claim that the exit-code distinction is made. |
 
-`plugins/soleur/test/test-helpers.sh`, `lefthook.yml`, `scripts/hooks/pre-push`,
+`plugins/soleur/test/test-helpers.sh`, `scripts/test-all.sh`, `lefthook.yml`, `scripts/hooks/pre-push`,
 and `plugins/soleur/test/lib/git-fixture-env.ts` are **not** edited — they are prior art this plan
 builds behind.
 
@@ -538,7 +536,7 @@ ordinal-collision class does not arise. ADR-157 receives a factual correction, n
     inline enum roster and its `hook-input-unparseable` test fixture are updated in the same PR, so
     the enum's only cross-subsystem documentation does not describe an enum that no longer exists.
 
-### PR 2 (A1–A4)
+### PR 2 (A1–A3)
 
 13. **AC13 (the sweep is complete against a pinned predicate).** The five named suites source
     `test-helpers.sh` and each still passes — the `set -e` and counter-harness changes are verified,
@@ -571,10 +569,11 @@ ordinal-collision class does not arise. ADR-157 receives a factual correction, n
     literal by `printf`, so a reason that ever stops being a closed-enum value could break the
     envelope — and a malformed envelope is silently ignored by Claude Code, meaning the tool runs
     with neither a prompt nor guards.
-18. **AC18 (the batteries run, and are themselves guarded).** Every tracked `*.mutation.sh` in the
-    repository — not merely those under `plugins/soleur/test/` — is reached by `scripts/test-all.sh`,
-    the registered set equals the tracked set derived from `git ls-files '*.mutation.sh'`, and
-    `*.mutation.sh` is inside `scripts/guard-vacuity-floor.test.sh`'s derived population.
+18. **AC18 (this plan's own battery is gated on arrival).** The new battery is tracked at
+    `plugins/soleur/test/hook-input-classification-mutation.test.sh` and is reached by
+    `scripts/test-all.sh` **through the existing `plugins/soleur/test/*.test.sh` glob, with no edit
+    to `scripts/test-all.sh` in this PR's diff.** Assert both: the suite appears in a `test-all.sh`
+    run, and `git diff` touches neither `scripts/test-all.sh` nor `plugins/soleur/test/test-helpers.sh`.
 
 ### Post-merge (operator)
 
