@@ -761,11 +761,21 @@ measurements and mine. AC15 is verified structurally in the meantime: `exit 3` i
 
 ### Post-merge (automated)
 
-- [ ] AC25 — the first `ci.yml` run on main after merge completes with all legs green, and
-      **time-to-`test`** (the `test` job's `completed_at` minus the run's `created_at`) is below
-      25 min, evaluated over the first 3 runs rather than one — a single queue-delayed run (mechanism corrected — see the Correction stanza)
-      legitimately exceeds any single-run bound. Verified via
-      `gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs`.
+- [ ] AC25 — **RE-DERIVED 2026-09-08 (QA round 2). The original form was not satisfiable by this
+      change.** It required time-to-`test` below 25 min over the first 3 runs; but time-to-`test`
+      is `queue + slowest leg + aggregator dispatch`, and the shard controls only the LEG. Measured
+      terms: queue 0.0/22.4/23.9 min, aggregator dispatch 0.1-10.3 min, post-shard leg 20.73 min.
+      Of the six combinations of the measured extremes, exactly ONE lands under 25 min — so the
+      original AC passes only when the box happens to be quiet, and would have been failed-and-
+      waved-through on any busy day. Split into what this PR controls and what it merely observes:
+  - [ ] **AC25a (gated — the shard's own effect):** the slowest `test-scripts` leg completes in
+        under 25 min on each of the first 3 `main` runs. This is the quantity the K table predicts
+        and the only term the shard moves. Verified via
+        `gh api repos/jikig-ai/soleur/actions/runs/<id>/jobs`, taking `max` over the three legs of
+        `completed_at - started_at`.
+  - [ ] **AC25b (observed, not gated):** record time-to-`test` for the same 3 runs and confirm the
+        `soft_breach` warning fired on none of them. A breach here is a signal about the QUEUE, not
+        about the shard, and its remedy is #7931 (leg balance / queue), not a bigger ceiling.
 - [ ] AC26 — a deploy of current `main` is dispatched via
       `gh workflow run web-platform-release.yml -f bump_type=patch`, and
       `curl -fsS https://app.soleur.ai/health` reports a `build_sha` matching the deployed commit.
