@@ -1023,23 +1023,39 @@ runcmd:
     # DIGEST-PINNED (plan CF-2). What follows this line is `docker pull` -> `docker create`/`cp`
     # -> `bash inngest-bootstrap.sh` EXECUTED AS ROOT on the sole scheduler. Until this pin, the
     # only integrity control on that root-executed payload was GHCR's TLS + authn against a
-    # MUTABLE tag: anything able to re-point :v1.1.24 between the build and a host replace
+    # MUTABLE tag: anything able to re-point this tag between the build and a host replace
     # would have served a different root shell script, and nothing on this path would have
     # noticed. The comment above the GHCR bake used to claim a signature check covered this; it
-    # did not, and the image is not signed at all (see that correction).
+    # did not, and the image IS cosign-signed (the build workflow signs the image by digest, keyless, and fails closed); what the signature does NOT buy is verification on this path, because ci-deploy.sh never calls verify_image_signature on the inngest branch.
     #
     # BOTH halves are load-bearing. The `@sha256:` is the actual control — docker resolves by
-    # digest and ignores the tag, so these are immutable bytes. The `:v1.1.24` is retained
+    # digest and ignores the tag, so these are immutable bytes. The `:vX.Y.Z` tag is retained
     # because the pin-drift guard (cloud-init-inngest-bootstrap.test.sh AC6/AC6b) matches
     # `soleur-inngest-bootstrap:vX.Y.Z` and compares it to the semver-max published
     # vinngest-v* git tag; dropping the tag would silently disarm that guard, which is the
     # #6536 failure (a stale pin rebuilding the dark host pre-fix) all over again.
     #
-    # Digest verified from three independent sources before pinning: `docker buildx imagetools
-    # inspect`, the build-inngest-bootstrap-image.yml push log for run 29694156854, and the
-    # GitHub packages API. Bumping the tag WITHOUT re-resolving this digest gives you a
-    # v1.1.25 tag pinned to v1.1.24's bytes — silently, since the drift guard only reads tags.
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:f23a2a0d730d353b146d0f0675d192237c732df5c32e30cb59d16b4424faba49
+    # Digest read BY COMMAND from the run that SIGNED it — never transcribed, never eyeballed:
+    # `gh run view <run> --log | grep -oE "Signed <image>@sha256:[0-9a-f]{64}"`, asserted to
+    # return exactly one value (two means a retry moved the digest; zero means signing did not
+    # complete — both are halts). Run 34159532201, tag vinngest-v1.1.26.
+    #
+    # BUMPING THE TAG WITHOUT RE-RESOLVING THIS DIGEST GIVES YOU A NEW TAG PINNED TO THE OLD
+    # TAG'S BYTES. That warning is the original one and it is restored deliberately: a revision of
+    # this comment replaced it with a reassurance that the guards catch it, and that reassurance
+    # was FALSE — measured, writing v1.1.26@sha256:<v1.1.25's digest> at all four sites left the
+    # suite 161/161 green, because Guard A resolves the TAG (whose tree does match HEAD) and
+    # Guard B compares the four sites to EACH OTHER. Deleting a true warning and installing a
+    # false one, at the exact line an operator reads while making that mistake, is worse than
+    # saying nothing.
+    #
+    # What IS now enforced, precisely: Guard B row6 reds when this branch moves the tag relative
+    # to the merge base while leaving the digest untouched — the #7630 shape, caught hermetically.
+    # What is NOT enforced: binding this digest to these bytes needs a registry read, and no
+    # PR-gating job here can perform one. On the hermetic side AC5 is the sole control — the
+    # digest was read BY COMMAND from the run that signed it, never typed. The pin has exactly one
+    # consumer (a host create/replace), so a wrong digest costs delayed detection, not an incident.
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.27@sha256:6b89bc83031790b63ec21a970c10b98b8206bb5d7b3276f8b9477a42adafa8a4
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # --- #7462 (ADR-096): resolve the effective ref ONCE, zot-primary ---------------------
     # THE DEFECT THIS CLOSES. Every other pull site in the fleet was flipped to prefer the
@@ -1083,7 +1099,7 @@ runcmd:
     . /etc/default/soleur-zot-read 2>/dev/null || true
     ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
     if [ -n "$ZOT_EP" ]; then
-      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.25@sha256:f23a2a0d730d353b146d0f0675d192237c732df5c32e30cb59d16b4424faba49"
+      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.27@sha256:6b89bc83031790b63ec21a970c10b98b8206bb5d7b3276f8b9477a42adafa8a4"
       /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
       set +e
       install -m 600 /dev/null /var/log/inngest-zot-pull.log

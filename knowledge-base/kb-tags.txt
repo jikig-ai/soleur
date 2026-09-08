@@ -930,6 +930,7 @@ corpus-correction
 correction-discipline
 correction-pr
 correction-sweep
+corrections
 cosign
 cost-attribution
 cost-caps
@@ -2346,6 +2347,7 @@ observability-coupling
 observability-tests
 oci
 oci-image
+oci-pin
 octokit
 off-host-verify
 offline-harness
@@ -3537,6 +3539,7 @@ stale-claims
 stale-clone
 stale-comment-sweep
 stale-comments
+stale-constants
 stale-context
 stale-count
 stale-counts

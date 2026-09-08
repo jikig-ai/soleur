@@ -69,7 +69,11 @@
 #   unreadable    — the read path failed, or a field did not parse. Nothing about the host was
 #                   measured; retry.
 #   stale_schema  — the host is emitting, but from a pre-probe_schema=3 renderer. ACTIONABLE:
-#                   replace the host first. This is the EXPECTED verdict for every dispatch until
+#                   replace the host first WITH A PIN THAT CARRIES THE EMITTER -- a replace on an
+#                   unbumped pin re-delivers the same bytes, because the emitter is baked into the
+#                   OCI image and reaches the host via the digest literal in user_data, not via
+#                   cloud-init (#7695; ADR-199 amendment 2026-09-07). This is the EXPECTED verdict
+#                   for every dispatch until
 #                   the host is replaced, and collapsing it into `unreadable` would tell the
 #                   operator to retry forever against a host that can never satisfy the gate.
 # This gate therefore reuses that script's host-conjunction QUERY FILTER (the two-field envelope
