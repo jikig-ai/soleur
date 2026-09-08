@@ -10,13 +10,15 @@ interface DelegationToggleProps {
   delegation?: {
     id: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
     active: boolean;
   } | null;
   delegationToMe?: {
     grantorDisplayName: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
   } | null;
   isSelf: boolean;
   flagEnabled: boolean;
@@ -80,7 +82,8 @@ function OwnerDelegationControl({
   delegation: {
     id: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
     active: boolean;
   } | null;
 }) {
@@ -198,8 +201,10 @@ function OwnerDelegationControl({
       {active && delegation && !editingCap && (
         <>
           <span className="text-xs text-soleur-text-muted">
-            ${(delegation.todaySpentCents / 100).toFixed(2)}/
-            ${(displayCapCents / 100).toFixed(0)}
+            {delegation.todaySpentCents === null
+              ? "spend unknown"
+              : `$${(delegation.todaySpentCents / 100).toFixed(2)}`}
+            /${(displayCapCents / 100).toFixed(0)}
           </span>
           <button
             type="button"

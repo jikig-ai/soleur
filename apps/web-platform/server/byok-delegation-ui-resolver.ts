@@ -31,16 +31,24 @@ const FEATURE = "byok-delegations";
  * have replaced a permanent $0.00 with a figure that disagrees with the cap
  * that actually refuses the turn.
  *
- * KNOWN, SEPARATE DEFECT — #7920. `server/cost-writer.ts` puts the WHOLE TURN's
- * cost into `unit_cost_cents` (`Math.round(costDelta * 100)`), so this product
- * over-counts by a factor of `token_count`. That is deliberately NOT corrected
- * here: the three cap SUMs (084 hourly, 084 daily, 121 founder) multiply the
- * same way, and correcting only the display side would desynchronise the pane
- * from the live cap — a new lie in place of the old one. When #7920 is settled,
- * this expression and those SUMs move together.
+ * CORRECTED WITH MIGRATION 137 (#7829, ADR-207 Decision 3). `cost-writer.ts`
+ * puts the WHOLE TURN's cost into `unit_cost_cents`
+ * (`Math.round(costDelta * 100)`), so the product over-counted by a factor of
+ * `token_count` — enough to trip any real cap on the first turn. Migration 137
+ * corrects its OWN two delegation windows to `SUM(au.unit_cost_cents)`, and
+ * this expression moves WITH them: the whole point of deriving the pane's
+ * figure from the RPC's window expression is that the two must not disagree.
+ *
+ * The founder-wide instances (061, 121) still multiply and remain tracked as
+ * #7920. They govern a DIFFERENT accumulator, so this pane is unaffected by
+ * them; see ADR-207 Decision 3 for why the two carry different formulas until
+ * that lands.
  */
 function rowCostCents(row: { token_count: number; unit_cost_cents: number }): number {
-  return row.token_count * row.unit_cost_cents;
+  // `token_count` is intentionally unread — kept in the row type because the
+  // column is still selected and #7920 may re-introduce a dependency on it.
+  void row.token_count;
+  return row.unit_cost_cents;
 }
 
 /** Rows the spend windows read. `ts`, `token_count`, `unit_cost_cents` are all NOT NULL (037). */
@@ -96,6 +104,15 @@ export interface AcceptanceStatus {
   /** True when a consent withdrawal post-dates the latest acceptance
    * (Art. 7(3)). Non-terminal: a later re-acceptance clears it. */
   withdrawn: boolean;
+  /**
+   * True when the withdrawal read FAILED, so `withdrawn` is not trustworthy.
+   * Without this, a read failure coalesced to `withdrawn: false` — the
+   * fail-OPEN direction on an Art. 7(3) signal, rendering every grantee who
+   * withdrew consent as still consenting and making their own withdrawal
+   * disappear from a consent surface. Callers must not assert consent while
+   * this is true.
+   */
+  withdrawnUnknown: boolean;
   withdrawnAt: string | null;
 }
 
@@ -250,10 +267,17 @@ export async function resolveGranteeDelegation(
     .from("users")
     .select("email")
     .eq("id", delegation.grantor_user_id as string)
-    .single();
+    .maybeSingle();
 
   // Non-fatal: the banner falls back to "Unknown". Mirrored because the banner
   // naming the wrong party is itself a user-visible defect on a billing surface.
+  //
+  // `.maybeSingle()`, NOT `.single()`: after the grantor exercises Art. 17 the
+  // users row is gone (065 cascade), and `.single()` answers PGRST116 on zero
+  // rows. That is an EXPECTED, permanent state, so `.single()` made every
+  // render of the grantee's banner emit an error-severity event tagged
+  // `feature=byok-delegations` — the tag both byok_cap_exceeded and
+  // byok_art_33_breach filter on. A routine state must not bury the alarms.
   if (grantorError) {
     reportSilentFallback(grantorError, {
       feature: FEATURE,
@@ -345,8 +369,9 @@ export async function resolveGranteeAcceptanceStatus(
     .limit(1)
     .maybeSingle();
 
-  // A failed read is returned as `withdrawn: false` — the fail-OPEN direction on
-  // an Art. 7(3) signal, so it must never be silent.
+  // A failed read must NOT be laundered into `withdrawn: false`: that is the
+  // fail-OPEN direction on an Art. 7(3) signal. Surfaced as `withdrawnUnknown`
+  // so a caller cannot assert consent it did not establish.
   if (withdrawalError) {
     reportSilentFallback(withdrawalError, {
       feature: FEATURE,
@@ -363,6 +388,9 @@ export async function resolveGranteeAcceptanceStatus(
   // withdrawal wins the tie).
   const withdrawn =
     withdrawnAt !== null && (acceptedAt === null || withdrawnAt >= acceptedAt);
+  // Non-null iff the read succeeded. A caller seeing `withdrawnUnknown` must
+  // treat `withdrawn` as UNESTABLISHED rather than false.
+  const withdrawnUnknown = Boolean(withdrawalError);
 
   if (!data) {
     return {
@@ -371,6 +399,7 @@ export async function resolveGranteeAcceptanceStatus(
       sideLetterVersion: null,
       currentVersion: BYOK_SIDE_LETTER_VERSION,
       withdrawn,
+      withdrawnUnknown,
       withdrawnAt,
     };
   }
@@ -381,6 +410,7 @@ export async function resolveGranteeAcceptanceStatus(
     sideLetterVersion: data.side_letter_version as string,
     currentVersion: BYOK_SIDE_LETTER_VERSION,
     withdrawn,
+    withdrawnUnknown,
     withdrawnAt,
   };
 }

@@ -210,8 +210,13 @@ const AUDIT_ROWS = [
 ];
 
 // The cap RPC's own arithmetic (084, `INTO v_daily_spent`).
+// Mirrors migration 137's delegation windows EXACTLY. 137 corrected them to
+// SUM(au.unit_cost_cents) — unit_cost_cents holds the whole turn's cost, so the
+// old product was cents-times-tokens and tripped any real cap on the first
+// turn. The pane's figure and the cap that refuses the turn must not disagree,
+// so if one moves the other moves with it (ADR-207 Decision 3).
 const rpcWindowSum = (rows: typeof AUDIT_ROWS) =>
-  rows.reduce((acc, r) => acc + r.token_count * r.unit_cost_cents, 0);
+  rows.reduce((acc, r) => acc + r.unit_cost_cents, 0);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -240,7 +245,7 @@ describe("resolveGrantorDelegations — audit_byok_use spend", () => {
     expect(asked).toContain("unit_cost_cents");
   });
 
-  it("sums token_count × unit_cost_cents — the cap RPC's window expression", async () => {
+  it("sums unit_cost_cents — migration 137's corrected window expression", async () => {
     primeTables({
       byok_delegations: OK(DELEGATIONS),
       users: OK(USERS),
@@ -251,9 +256,9 @@ describe("resolveGrantorDelegations — audit_byok_use spend", () => {
     const d1 = rows.find((r) => r.id === "d1")!;
     const d2 = rows.find((r) => r.id === "d2")!;
 
-    const d1Today = rpcWindowSum([AUDIT_ROWS[0]]); // 24_000
-    const d1Mtd = rpcWindowSum([AUDIT_ROWS[0], AUDIT_ROWS[1]]); // 24_100
-    const d2Today = rpcWindowSum([AUDIT_ROWS[2]]); // 20
+    const d1Today = rpcWindowSum([AUDIT_ROWS[0]]); 
+    const d1Mtd = rpcWindowSum([AUDIT_ROWS[0], AUDIT_ROWS[1]]); 
+    const d2Today = rpcWindowSum([AUDIT_ROWS[2]]); 
 
     expect(d1.todaySpentCents).toBe(d1Today);
     expect(d1.mtdSpentCents).toBe(d1Mtd);
@@ -328,6 +333,29 @@ describe("resolveGrantorDelegations — audit_byok_use spend", () => {
   });
 });
 
+  it("SCOPES the audit read to this grantor's own delegations and to the month", async () => {
+    // The chain mock resolves to the canned result whatever the filters are, so
+    // nothing here fails on its own — these assertions ARE the coverage.
+    // Without them, deleting `.in("delegation_id", ...)` stays green while the
+    // query pulls every tenant's audit rows into memory (the per-delegation map
+    // lookups keep every other assertion passing), and deleting `.gte("ts", ...)`
+    // silently turns MTD into all-time on an unbounded read.
+    const chains = primeTables({
+      byok_delegations: OK(DELEGATIONS),
+      users: OK(USERS),
+      audit_byok_use: OK(AUDIT_ROWS),
+    });
+
+    await resolveGrantorDelegations("grantor-1", "ws-1", "org-1", IDENTITY);
+
+    const audit = chains.audit_byok_use;
+    expect(audit.in, "tenant-isolation filter is applied").toHaveBeenCalledWith(
+      "delegation_id",
+      expect.arrayContaining(["d1", "d2"]),
+    );
+    expect(audit.gte, "month window is applied").toHaveBeenCalledWith("ts", expect.any(String));
+  });
+
 describe("resolveGranteeDelegation — audit_byok_use spend", () => {
   const GRANTEE_DELEGATION = {
     id: "d1",
@@ -355,7 +383,7 @@ describe("resolveGranteeDelegation — audit_byok_use spend", () => {
     expect(asked).toContain("unit_cost_cents");
   });
 
-  it("sums token_count × unit_cost_cents over the rolling 24h window", async () => {
+  it("sums unit_cost_cents over the rolling 24h window", async () => {
     primeTables({
       byok_delegations: OK(GRANTEE_DELEGATION),
       users: OK({ email: "owner@example.com" }),

@@ -104,7 +104,7 @@ export function DelegationBanner({
       {todaySpentCents === null ? (
         <span className="text-soleur-text-muted">
           Today&apos;s spend is unavailable — unknown, not $0.00. Your $
-          {(dailyCapCents / 100).toFixed(0)} daily cap is still enforced.
+          {(dailyCapCents / 100).toFixed(0)} daily cap still applies.
         </span>
       ) : (
         <span>

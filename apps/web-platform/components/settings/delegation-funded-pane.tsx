@@ -75,7 +75,7 @@ function FundedPaneInner({ workspaceId }: { workspaceId: string }) {
         {spendUnavailable && (
           <p className="mt-2 text-xs text-soleur-accent-gold-text" role="status">
             Spend figures are temporarily unavailable — the amounts below are
-            unknown, not zero. Caps are still enforced. Try again shortly.
+            unknown, not zero. Your caps still apply. Try again shortly.
           </p>
         )}
       </div>

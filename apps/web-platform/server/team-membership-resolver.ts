@@ -24,14 +24,16 @@ export interface TeamMembershipRow {
   delegationFromMe?: {
     id: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
     active: boolean;
   };
   delegationToMe?: {
     id: string;
     grantorDisplayName: string;
     dailyCapCents: number;
-    todaySpentCents: number;
+    /** null = not computed on this surface; render unknown, never $0.00. */
+    todaySpentCents: number | null;
   };
 }
 
@@ -248,7 +250,10 @@ export async function resolveTeamMembershipPageData(
         row.delegationFromMe = {
           id: fromMe.id,
           dailyCapCents: fromMe.daily_cap_cents,
-          todaySpentCents: 0,
+          // NOT a spend of zero — this surface performs no audit_byok_use read
+          // at all. A confident $0.00 on a billing surface is the exact lie
+          // #7829 removed from the Funded pane; `null` renders as unknown.
+          todaySpentCents: null,
           active: true,
         };
       }
@@ -259,7 +264,10 @@ export async function resolveTeamMembershipPageData(
           id: toMe.id,
           grantorDisplayName: grantorEmail.split("@")[0],
           dailyCapCents: toMe.daily_cap_cents,
-          todaySpentCents: 0,
+          // NOT a spend of zero — this surface performs no audit_byok_use read
+          // at all. A confident $0.00 on a billing surface is the exact lie
+          // #7829 removed from the Funded pane; `null` renders as unknown.
+          todaySpentCents: null,
         };
       }
     }
