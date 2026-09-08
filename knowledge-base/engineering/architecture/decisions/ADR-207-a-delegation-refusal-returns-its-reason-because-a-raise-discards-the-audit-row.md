@@ -110,7 +110,7 @@ code silently failed to deliver.
    `founder_id = p_caller_user_id`. Once a refusal row actually persists,
    `founder_id` becomes a durable **billing** assertion that enters a named user's
    DSAR export, so an unvalidated caller would let one user's refusal be booked
-   against another's identity. 136 raises `byok_delegations:caller_not_grantee`
+   against another's identity. 137 raises `byok_delegations:caller_not_grantee`
    (`42501`) on the mismatch.
 2. **`record_byok_use_and_check_cap`'s founder `SUM` gains `AND delegation_id IS
    NULL`.** 121's `SUM` groups by `founder_id` with no delegation filter and flips
@@ -168,7 +168,7 @@ The cap `SUM`s are **not** filtered on `attribution_shift_reason`. Three reasons
 
 ### Decision — the down migration leaves the CHECK widened
 
-`136.down.sql` restores the 084 function body but **does not narrow**
+`137.down.sql` restores the 084 function body but **does not narrow**
 `audit_byok_use_attribution_shift_reason_check` back to its three original values,
 and `NOT VALID` appears nowhere.
 
@@ -184,6 +184,52 @@ Two reversibility facts recorded alongside it, because they are easy to assume
 away: `run-migrations.sh` never executes `*.down.sql` (`*.down.sql) continue ;;`,
 and it is not content-sha tracked; and rolling the code back does not roll back
 its effects — rows written before a rollback stay in both windows for up to 24h.
+
+### Decision 3 — the delegation windows carry corrected unit semantics; the founder-wide windows do not
+
+`audit_byok_use.unit_cost_cents` holds the **whole turn's** cost in cents
+(`server/cost-writer.ts`: `Math.round(costDelta * 100)` where `costDelta =
+input.totalCostUsd`), passed alongside `totalTokens` as `p_token_count`. The
+expression `token_count * unit_cost_cents` is therefore dimensionally
+cents-tokens, and at production caps (500-2,000 cents/hour) it trips on the
+first delegated turn of any realistic size. Measured on dev: an 8,000-token
+turn costing 3 cents evaluated to 24,000 cents against a 250-cent cap.
+
+Migration 137 corrects this in **its own two windows and in `v_this_cost`
+only**. It does not touch migrations 061 or 121, whose founder-wide instances
+of the same expression remain open and separately tracked.
+
+**Why the correction is in scope for #7829 and not annexed.** The separate
+issue owns whether a cap *threshold* is computed correctly, founder-wide.
+#7829 owns whether the ledger *names the right person*. The two overlap in this
+one expression because the refusal decision selects `founder_id`: an admitted
+turn writes the grantor, a refused turn writes the grantee. Under the defective
+arithmetic no delegated turn is ever admitted, so the grantor branch is
+unreachable and every delegated row in the WORM ledger names the wrong billing
+party — entering the grantee's Art. 15 export via `dsar-export-allowlist.ts`
+and rendering as an ordinary charge on `/dashboard/audit`, permanently and
+uncorrectably. Shipping a return-status conversion whose sole observable effect
+is systematically false attribution would defeat the Art. 5(1)(d) accuracy
+basis this migration is justified on. Correcting attribution is the
+deliverable; correcting the founder-wide threshold is not.
+
+**Consequence, recorded so it is not rediscovered as a contradiction.** With
+`record_byok_use_and_check_cap`'s founder SUM filtered on
+`attribution_shift_reason IS NULL`, an ADMITTED delegated row is read by two
+accumulators under two formulas: the delegation windows sum `unit_cost_cents`;
+the founder window sums `token_count * unit_cost_cents`. This is the
+founder-wide defect reaching precisely the rows it already reached before
+migration 137 — the filter neither widens nor narrows that reach. It resolves
+when the founder-wide fix lands and 061/121 converge on `SUM(unit_cost_cents)`.
+
+**Rejected: `AND delegation_id IS NULL` on the founder SUM.** Migration 121's
+founder SUM carried no delegation filter, so grantor-attributed admitted rows
+have always counted against the grantor's own ADR-041 Layer 1 cap — correctly,
+since the grantor's key paid. `delegation_id IS NULL` would have removed them,
+an undeclared weakening of Layer 1 outside #7829's scope, and under this
+decision it would additionally leave the grantor's real delegated exposure
+unmeasured by any accumulator. `attribution_shift_reason IS NULL` excludes
+exactly the refusal rows migration 137 creates and nothing else.
 
 ## Consequences
 
@@ -217,7 +263,7 @@ its effects — rows written before a rollback stay in both windows for up to 24
   was reasoning about a policy retired at mig 059.
 - Art. 30 register PA-23 limbs (c) and (g) are amended: cap-refusal telemetry is
   now written rather than discarded, and it is attributed to the grantee.
-- A return-type change cannot use `CREATE OR REPLACE`, so 136 is `DROP` +
+- A return-type change cannot use `CREATE OR REPLACE`, so 137 is `DROP` +
   `CREATE`. `run-migrations.sh` applies with `psql --single-transaction`, so the
   window is atomic; PostgREST reloads its schema cache afterwards.
 - The leaky abstraction underneath the whole bug is dissolved: coupling a

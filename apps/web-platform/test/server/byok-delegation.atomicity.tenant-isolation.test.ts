@@ -14,14 +14,14 @@
  * FOR UPDATE` lock and the two `INTO v_hourly_spent` / `INTO v_daily_spent`
  * window SUMs).
  *
- * WHAT MIGRATION 136 CHANGED, AND WHY THIS FILE HAD TO BE INVERTED.
+ * WHAT MIGRATION 137 CHANGED, AND WHY THIS FILE HAD TO BE INVERTED.
  *
- * Before 136 the RPC signalled a refusal with `RAISE EXCEPTION
+ * Before 137 the RPC signalled a refusal with `RAISE EXCEPTION
  * 'byok_delegations:<reason>'`. An unhandled plpgsql RAISE aborts its own
  * transaction, and the function declares no `EXCEPTION WHEN` handler — so the
  * `audit_byok_use` row each refusal branch inserted immediately beforehand was
  * rolled back with it. No refusal has ever been ledgered, including the three
- * branches that visibly INSERT first (#7829). 136 makes the refusal a RETURNED
+ * branches that visibly INSERT first (#7829). 137 makes the refusal a RETURNED
  * value: `RETURNS TABLE(refusal_reason text)`, `NULL` = admitted, and every
  * refusal commits its grantee-attributed row inside the same row lock.
  *
@@ -68,6 +68,10 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import postgres from "postgres";
 import { randomBytes, randomUUID } from "node:crypto";
+// Imported, NOT mirrored: a hand-written copy of a fail-CLOSED classifier
+// drifted fail-OPEN here, and this is the only artifact that sees the real
+// PostgREST wire shape. `readRefusalReason` is a pure function.
+import { readRefusalReason } from "@/server/cost-writer";
 
 const INTEGRATION_ENABLED = process.env.TENANT_INTEGRATION_TEST === "1";
 
@@ -137,33 +141,40 @@ interface UseResult {
 }
 
 /**
- * Normalise the RPC payload to the returned `refusal_reason`.
+ * Classify the RPC payload — using PRODUCTION's classifier, not a copy of it.
  *
- * MIRRORS `readRefusalReason` in `apps/web-platform/server/cost-writer.ts` —
- * keep the two in sync. Duplicated rather than imported because importing the
- * production module would pull the WS handler, the Sentry wrapper and the
- * service client into a live-DB test process for one pure function.
+ * This file previously carried a hand-written MIRROR under a docstring saying
+ * "keep the two in sync". They were already out of sync, in the one direction
+ * that matters: production is fail-CLOSED (three-state `RefusalRead`, an
+ * unparsed shape is `unreadable`), while the mirror had no `unreadable` state
+ * at all and returned null — i.e. ADMITTED — for every shape it did not
+ * recognise. `undefined`, `null`, `[]`, `[7]`, `[{refusal_reason:42}]`,
+ * `[{something_else:"x"}]` and a two-row reply all classified as admitted here
+ * and as unreadable in production.
  *
- * `RETURNS TABLE(refusal_reason text)` declares a SINGLE output column, so
- * PostgreSQL collapses the return type to `SETOF text` rather than a composite
- * (a one-element TABLE is one OUT parameter). Depending on the PostgREST /
- * supabase-js pair that reaches the client as a bare scalar, an array of
- * scalars, or an array of single-key rows. All three must read as a refusal;
- * only an absent/NULL value reads as an admit.
+ * That mattered more than an ordinary drift, because THIS is the only artifact
+ * that observes the real PostgREST/supabase-js wire shape. The offline matrix
+ * in `cost-writer.test.ts` pins fail-closed against synthetic payloads; if the
+ * live shape were ever a form production rejects, the mirror could not fail on
+ * it. Duplicating a fail-closed classifier as a fail-open one is worse than not
+ * mirroring at all — so it is imported.
  */
-function readRefusalReason(data: unknown): string | null {
-  const first = Array.isArray(data) ? data[0] : data;
-  if (first === null || first === undefined) return null;
-  if (typeof first === "string") return first;
-  if (typeof first === "object" && "refusal_reason" in first) {
-    const value = (first as { refusal_reason: unknown }).refusal_reason;
-    return typeof value === "string" ? value : null;
+function readRefusalReasonLive(data: unknown): string | null {
+  const read = readRefusalReason(data);
+  if (read.kind === "unreadable") {
+    throw new Error(
+      `PostgREST returned a shape production classifies as UNREADABLE (${read.detail}). ` +
+        "This is the wire-shape mismatch the offline matrix cannot observe.",
+    );
   }
-  return null;
+  return read.kind === "refused" ? read.reason : null;
 }
 
 function spendOf(rows: AuditRow[]): number {
-  return rows.reduce((sum, r) => sum + r.token_count * r.unit_cost_cents, 0);
+  // Mirrors migration 137's corrected delegation windows: SUM(unit_cost_cents).
+  // `unit_cost_cents` holds the WHOLE TURN's cost, so the old product was
+  // cents-times-tokens (ADR-207 Decision 3).
+  return rows.reduce((sum, r) => sum + r.unit_cost_cents, 0);
 }
 
 function admittedRows(rows: AuditRow[]): AuditRow[] {
@@ -290,7 +301,7 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           p_agent_role: role,
         },
       );
-      const refusalReason = error ? null : readRefusalReason(data);
+      const refusalReason = error ? null : readRefusalReasonLive(data);
       return {
         invocationId,
         error,

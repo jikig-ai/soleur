@@ -79,7 +79,7 @@ Brand-survival threshold: single-user incident. CPO sign-off required before /wo
 - [ ] 3.15 Art. 30 register PA-23 limbs (c) and (g).
 - [ ] 3.16 `bash plugins/soleur/test/c4-count-parity.test.sh` green.
 - [ ] 3.17 AC12: the comment-only correction to `issue-alerts.tf` (its claim
-      becomes false when 136 lands). No routing change.
+      becomes false when 137 lands). No routing change.
 - [ ] 3.18 `git grep audit_byok_use_owner_select` — clear the stale live-policy
       comment in `app/(dashboard)/dashboard/audit/page.tsx`.
 

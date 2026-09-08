@@ -556,7 +556,7 @@ resource "sentry_alert" "byok_art_33_breach" {
 # here. It does NOT establish that a cap breach reaching nobody is acceptable,
 # which is what #7829 actually asked.
 #
-# THE PART THAT WAS NOT A ROUTING QUESTION — FIXED 2026-09-07 BY MIGRATION 136
+# THE PART THAT WAS NOT A ROUTING QUESTION — FIXED 2026-09-07 BY MIGRATION 137
 # (#7829). This paragraph previously asserted that "on a cap breach no audit row
 # is written" and that "the window numerator does not advance either". BOTH ARE
 # NOW FALSE, and the text is corrected rather than deleted so the next reader can
@@ -583,7 +583,7 @@ resource "sentry_alert" "byok_art_33_breach" {
 # What migration 137 did NOT do, so that nothing here is read as more than it is:
 # the delegation cap enforced nothing before it and enforces nothing after it.
 # The RPC is a post-hoc recorder and the caller is fire-and-forget, so a refusal
-# still does not stop the turn. 136 is an accounting fix. A preventative pre-call
+# still does not stop the turn. 137 is an accounting fix. A preventative pre-call
 # gate is filed separately.
 #
 # Unchanged by any of the above: `trigger_conditions` here is `first_seen_event`
@@ -592,7 +592,7 @@ resource "sentry_alert" "byok_art_33_breach" {
 # surface, not a delivery.
 #
 # THE ROUTING QUESTION REMAINS OPEN AND IS A SEPARATE DECISION. Do not treat
-# #7829's closure as authority to flip it: 136 fixed the ledger, and the ledger
+# #7829's closure as authority to flip it: 137 fixed the ledger, and the ledger
 # was never what `fallthrough_type` controls. The question this rule still cannot
 # answer is the one #7829 actually asked — whether a cap breach reaching nobody is
 # acceptable. DO NOT FLIP `fallthrough_type` HERE, and do not touch this rule, on

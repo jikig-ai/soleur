@@ -270,7 +270,7 @@ makes `founder_id` `ON DELETE SET NULL`, so an account delete issues `UPDATE …
 founder_id = NULL`. A cap-reason row plus a narrowed constraint aborts the cascade
 and fails `auth.admin.deleteUser` — the exact incident 065/066 repaired.
 
-**`136.down.sql` leaves the CHECK widened.** ADR-040 set this precedent for the
+**`137.down.sql` leaves the CHECK widened.** ADR-040 set this precedent for the
 sibling constraint on the same table ("Down migration intentionally KEEPS this
 constraint"). **`NOT VALID` appears nowhere in this plan's checklists.**
 
@@ -485,21 +485,21 @@ self-diagnosis pattern; `auditRowsFor` must select `founder_id`,
   Underscores — **not** the hyphenated Sentry `op` slugs. Mig 064 establishes that
   only `cross-tenant` is hyphenated. Do not harmonise.
 - **AC5** neither cap SUM filters on `attribution_shift_reason` (T3's anchor).
-- **AC6** `136.down.sql` restores the 084 body and **contains no `NOT VALID`** and
+- **AC6** `137.down.sql` restores the 084 body and **contains no `NOT VALID`** and
   no narrowed CHECK.
-- **AC-DOWN** `136.down.sql` is **executed** against dev and the resulting
+- **AC-DOWN** `137.down.sql` is **executed** against dev and the resulting
   `pg_get_functiondef` matches the 084 body. Text assertions do not evidence
   rollback on a billing ledger at this threshold.
 - **AC7** offline + `./node_modules/.bin/tsc --noEmit` green from `apps/web-platform`.
 - **AC8** live suite green with T5, T5b, T6–T9 present.
 - **AC9** `git grep -c 'cap-exceeded raises WITHOUT' apps/web-platform/server/cost-writer.ts`
   returns 0; a `consent_withdrawn` branch exists.
-- **AC10** the `audit == K` learning carries an amendment naming #7829 and 136.
+- **AC10** the `audit == K` learning carries an amendment naming #7829 and 137.
 - **AC11** `ADR-207-*.md` exists; the ordinal is re-verified against `origin/main`.
 - **AC12** `git diff origin/main -- apps/web-platform/infra/sentry/` is empty
   **except** a comment-only correction: the tf comment's *"So on a cap breach no
   audit row is written… the window numerator does not advance either"* becomes
-  false when 136 lands. A comment fix is not a routing change and does not violate
+  false when 137 lands. A comment fix is not a routing change and does not violate
   the standing instruction; leaving a known-false operator-facing claim pinned
   green is the `2026-07-19-false-comment-correction` class.
 - **AC13** `git diff origin/main -- .../084_byok_delegation_withdrawals.sql` is
@@ -529,7 +529,7 @@ error_reporting:
         cannot break the turn. Named as a Non-Goal.
 
 failure_modes:
-  - mode: 136 applies but writes no row (the RAISE-rollback shape, or a regression
+  - mode: 137 applies but writes no row (the RAISE-rollback shape, or a regression
           that keeps the signal and drops the INSERT). THE HIGHEST-PROBABILITY
           POST-MERGE STATE, and today it is INVISIBLE in production — the Sentry
           event and the pino line are byte-identical whether or not the row landed,
@@ -553,7 +553,7 @@ failure_modes:
           .github/actions/dev-migration-drift-probe (live pg_get_functiondef).
     alert_route: CI red; scheduled probe emits a Sentry event. LIMITATION: the live
           probe is dev-only (`doppler-config: dev_scheduled`), so a prd-side
-          regression — including 136.down.sql, which by design restores the
+          regression — including 137.down.sql, which by design restores the
           defective body — produces no signal. Filed.
 
 logs:

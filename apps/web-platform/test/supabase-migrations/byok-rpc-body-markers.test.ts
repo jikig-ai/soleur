@@ -24,7 +24,7 @@ import path from "node:path";
  *     marker set would false-fire this RPC.
  *
  * #7829 reconciliation — the cap markers used to be the bare reason literals,
- * pinned there because mig 084 signalled a cap breach by RAISEing them. Mig 136
+ * pinned there because mig 084 signalled a cap breach by RAISEing them. Mig 137
  * converts refusal from an exception to a RETURNED value (an unhandled plpgsql
  * RAISE rolls back the audit row the branch just inserted), so the bare literals
  * would now be satisfied by the INSERT's column value alone even if the return
