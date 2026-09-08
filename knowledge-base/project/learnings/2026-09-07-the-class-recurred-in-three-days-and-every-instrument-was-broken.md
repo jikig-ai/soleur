@@ -191,3 +191,61 @@ row it genuinely lacked.
   — the same class, three days earlier. This file deliberately does not restate it.
 - `2026-09-04-a-10-of-10-mutation-score-and-ten-escapes-it-could-not-see.md`
 - Tracker `#7898` — the structural map of what Rule D still cannot see.
+
+## Addendum — 2026-09-08 (#7894 ship)
+
+Six more errors, all AFTER `/compound` had already run, so none of them reached the
+body above. Five are instrument failures, which is the same headline one level on:
+the fix was fine, the things measuring it were not.
+
+**1. A "positive control" that measured argparse.** I checked my two new fixtures were
+detected by running `lint-...py --paths <file>`. `--paths` is not a flag — paths are
+positional — so every fixture returned `rc=2` and I read seven `rc=2`s as
+"DETECTED". The negative control is what exposed it: the compliant fixtures returned
+`rc=2` as well, and a guard that reports a violation on a clean file is not a guard.
+**A positive control that cannot distinguish its own CLI error from a finding is not a
+control.** Assert the OUTPUT shape, not just a non-zero exit.
+
+**2. The instrument went silent and I nearly read it as calm.** A `/tmp` cleaner deleted
+the session scratchpad mid-run, taking `mergemsg.txt` with it. `git commit -F` reads the
+message file AFTER the hooks finish, so a 12-hour battery would have run to completion
+and then died on a missing file. What surfaced it was a progress check returning EMPTY
+where it had returned hook names minutes earlier — absence of output, not an error.
+**Prevention:** never keep a long-running command's inputs in `/tmp`; and treat "the
+field that used to be populated is now empty" as a failure signal, not a quiet period.
+
+**3. Eleven hours attributed to the wrong cause.** A mutation battery ran 16x over its
+own documented budget and I called it contention. It was ALSO `ENOSPC` — `/tmp` is a 4GB
+tmpfs shared by every concurrent battery, and mutants were timing out on failing writes.
+Proven by re-running the identical hook with a disk-backed `TMPDIR`: RED to green, no
+code change. **A plausible cause that explains the symptom is not the measured cause.**
+`df` costs nothing; I reached for it eleven hours late.
+
+**4. Three fail-opens in the guard this PR shipped to close that exact class.** Found by
+two review agents at the ship gate, not by me: the destination limb gated on the
+variable's NAME (`$SINK` scored compliant), `env_settable` missed the bare
+`VAR="$OTHER"` assignment, and the netrc pin admitted `localhost`, which `HOSTALIASES`
+can re-point. Then fixing the first took three attempts, each caught by a FIXTURE rather
+than by reading: I scanned the whole pipeline (an upstream `printf` argument read as a
+curl operand), then the segment fix blinded the `--config` channel, then my config-key
+regex used a POSIX `[:space:]` class inside a Python regex — which silently requires a
+literal `]` and matched nothing.
+
+**5. The negation trap, caught only because the scanner exists.** A commit body read
+"it does not close #7886". GitHub's parser ignores negation and squash-merges read
+commit messages, so merging would have closed an issue another PR owns. The scanner
+caught it; my own reading of that message had not.
+
+**6. A corpus guard I could not have failed locally.** CI's `lint fixture content` went
+red on MY learning file: the exfil probe's URL carries userinfo, and a `<port>@<host>`
+substring parses as an email. (It cannot be quoted here — writing the literal re-trips
+the check, which this addendum did on its first draft.) Lefthook runs it on
+`{staged_files}`; the file was staged two syncs earlier, so no later local commit
+re-linted it. CI globs the whole tree. **This is the diff-vs-corpus asymmetry the body
+above already names, found inside the document that names it.**
+
+**The through-line, sharper than the original headline:** every one of these was a case
+where I had a reading and the reading was not a measurement. The exit code that was
+argparse. The silence that was deletion. The contention that was also a full disk. The
+guard that was green because it could not see. In each, the correction cost seconds
+(`df`, `--help`, one fixture) and the delay cost hours.
