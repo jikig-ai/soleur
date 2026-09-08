@@ -298,7 +298,11 @@ t6_te_prefix_not_orphan() {
   # absent from `rules` (which joins with AGENTS.md) but present in the
   # underlying count map. We assert by re-reading the jsonl directly.
   local te_count
-  te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl")
+  # `|| true` keeps grep's own "0" on no-match. Without it, `set -e` kills the
+  # suite AT THIS LINE and the assert below never names the problem — a die is
+  # indistinguishable from an unrelated crash. Not `|| printf '0'`: grep already
+  # printed "0", so that yields "00".
+  te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl" || true)
   assert_eq "T6 te-subagent-overshoot fired" "1" "$te_count"
   rm -rf "$root"
 }
@@ -547,7 +551,10 @@ t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen() {
 
   # Generator cardinality: an under-filled generator makes every assert below vacuous.
   local srclines
-  srclines=$(grep -c '^- Synthesized aggregator fixture bullet ' "$root/AGENTS.md")
+  # Same `|| true` reasoning as T6. It matters more here: this assert IS the
+  # anti-vacuity check ("an under-filled generator makes every assert below
+  # vacuous"), so dying instead of failing loses the one message that says so.
+  srclines=$(grep -c '^- Synthesized aggregator fixture bullet ' "$root/AGENTS.md" || true)
   assert_eq "T16 fixture generator emitted $rows rule bullets" "$rows" "$srclines"
 
   local exit_code=0
