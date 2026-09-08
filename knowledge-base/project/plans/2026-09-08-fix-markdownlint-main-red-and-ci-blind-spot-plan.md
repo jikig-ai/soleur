@@ -13,6 +13,42 @@ brand_survival_threshold: none
 requires_cpo_signoff: false
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-08
+**Panels run:** engineering advisory, legal advisory, correctness review, simplicity review,
+learnings sweep. Every finding was verified against the repository before adoption.
+
+### Key improvements over the first draft
+
+1. **Scope collapsed to one ignore line.** `knowledge-base/project/` whole, rather than two
+   entries. This removed 2,676 swept files, 343 hand-fixed errors, and an entire deliverable —
+   because it makes the bot-PR synthetic check-run sound by unreachability instead of requiring
+   a change to the composite action.
+2. **`--fix` was found to corrupt prose**, on three files and in a sibling issue's own
+   measurement. The sweep is now content-safe by construction, with four rules withheld and
+   resolved by hand.
+3. **Registering the required context was found to touch five files, not two.** A canonical
+   JSON source of truth and a deliberate hardcoded literal in a bypass-audit suite both gate it;
+   the first draft would have discovered this at the test gate.
+4. **Three mechanisms were cut and one was kept against a reviewer's recommendation**, each with
+   a verified reason rather than a preference — recorded in the Cut list and the alternatives
+   table.
+5. **A rule-set decision was surfaced and argued** rather than left implicit: MD025 and MD001
+   are disabled because keeping them is incoherent with the already-disabled MD041, and that
+   removes 116 of 438 residual errors without touching a single rendering rule.
+
+### New considerations discovered
+
+- The plan file itself tripped the exact defect class it documents, and was fixed with the
+  idiom it prescribes before commit.
+- Four legal sites sit on lines that are already drifting between the canonical document and its
+  published mirror, so the drift ratchet needs its documented escape even though the change is
+  byte-neutral in rendered output.
+- Editing the two contributor-agreement documents shifts a content hash recorded in the
+  signature evidence ledger — harmless, but it needs a note so a future audit does not read it
+  as an unexplained instrument change.
+
 ## Overview
 
 The repository lints Markdown from exactly one place: a lefthook `pre-commit` command. No CI
@@ -366,9 +402,14 @@ than adding a feature.
   <date>`, following `MIN_TRACKED_SUITES=320` in `lint-orphan-test-suites.sh`; and an
   **expected-roots set** assertion following `EXPECTED_SUITE_ROOTS` in the same file, whose
   comment states why a floor alone is insufficient: *"A COUNT cannot see a narrowing that stays
-  above the floor, and it cannot see a SUBSTITUTION at all."* Size the floor's slack
-  deliberately — that file also records that *"Slack in a floor is not safety margin, it is
-  narrowing budget."*
+  above the floor, and it cannot see a SUBSTITUTION at all."* Copy three details from that
+  precedent rather than re-deriving them: the assertion is a **superset**, not an equality — a
+  root disappearing is the hazard, a new root appearing is already caught elsewhere; the
+  derivation itself carries a **non-vacuity check**, because an empty extraction compared as a
+  legitimate set is how that very check failed on its first cut; and the expected set is
+  **measured, not remembered** (its first cut listed a root from memory and reddened on its own
+  first run). Size the floor's slack deliberately — that file also records that *"Slack in a
+  floor is not safety margin, it is narrowing budget."*
 - **Legible failure.** markdownlint's native `file:line:col rule detail` output is already
   actionable, so the script adds only a static remediation block on non-zero exit: the local
   reproduction command, the content-safe auto-fix command, and the paths of the rule file and
@@ -548,10 +589,14 @@ prospective customer reads before trusting the product.
 data flow, no store, no endpoint and no credential. The only content it touches that a user can
 see is already public.
 
-**Brand-survival threshold:** none — reason: the change is confined to Markdown formatting, a
-lint invocation and a CI job; no user data, workflow or money is reachable from it. The
-sensitive-path consideration is `docs/legal/**`, handled by the hand-reviewed Phase 5 with a
-legal advisory on the record and no wording change.
+**Brand-survival threshold:** none
+
+`threshold: none, reason:` the diff touches `apps/web-platform/lib/legal/` and
+`apps/web-platform/infra/`, both of which match the canonical sensitive-path regex, but every
+edit on those paths is a SHA re-pin of a constant map and a doubled blank line in a README —
+no credential, auth flow, data path, payment surface or migration is reachable from this change,
+and the published legal text's rendered bytes are unchanged (verified in Phase 5, with a legal
+advisory on the record).
 
 ## Domain Review
 
@@ -624,6 +669,104 @@ completeness rubric rather than a keyword grep:
   about sentry-heartbeat emitters and cron monitors, and this change adds neither.
   `bash plugins/soleur/test/c4-count-parity.test.sh` was run on 2026-09-08 against the
   unmodified tree and exits 0; the change moves none of its inputs.
+
+## Encryption Posture
+
+The gate fires on a path-shape trigger — `infra/github/ruleset-ci-required.tf` matches the
+`\.tf$` rule — so the section is present rather than skipped. The trigger is a false positive
+on inspection, and the derivation is recorded here so a future reader does not have to redo it.
+
+```yaml
+at_rest:
+  - store: "none introduced"
+    mechanism: "not-applicable — this change creates no persistent store"
+    evidence: "The only Terraform edit adds a `required_check { context = ... }` string to an existing `github_repository_ruleset`. It provisions no volume, bucket, database, queue, cache, backup target or log sink. Verified against the resource body in infra/github/ruleset-ci-required.tf."
+    defends_against: "not-applicable — no data is written by this change"
+    does_not_defend: "Nothing, because nothing is stored. The pre-existing stores this repository already has are untouched and keep whatever posture they already carry; this change neither strengthens nor weakens any of them."
+    disclosed_as: "not-applicable — no new processing activity, so no disclosure changes"
+    live_verification: "bash scripts/markdown-lint.sh --repo-sweep — the whole deliverable is a lint gate; there is no stored artifact to verify"
+in_transit:
+  - connection: "none introduced"
+    tls: "not-applicable — this change creates no cross-component or network connection"
+    cert_verification: "not-applicable"
+    does_not_defend: "Nothing. The GitHub Actions runner already reaches the npm registry and the GitHub API over the repository's existing paths; this change adds no new endpoint, no new credential and no new egress."
+    disclosed_as: "not-applicable — no new data movement, so no disclosure changes"
+```
+
+No `exception` block: no `plaintext-exception` mechanism and no `cert_verification: off` row
+exists, because no store and no connection is introduced.
+
+## Deepen Pass — Verification Record
+
+Run 2026-09-08. This section records what was checked mechanically, so a reviewer can see which
+claims are load-bearing and which were merely asserted.
+
+### Halt gates
+
+| Gate | Result |
+|---|---|
+| User-Brand Impact (4.6) | Present. Threshold `none`, and because the diff touches `apps/web-platform/lib/legal/` and `apps/web-platform/infra/` — both sensitive-path matches — the section carries the explicit scope-out line with a reason |
+| Observability (4.7) | Present, all five fields populated. `discoverability_test.command` starts with `bash`, an allowlisted probe verb, and contains no SSH |
+| PAT-shaped variable (4.8) | Clean. No `var.*_token`, no `TF_VAR_GH_*`, no literal token shape |
+| UI wireframe (4.9) | Not triggered. The naive grep returns one hit, which is the plan's **own negation sentence** matching itself — the same self-reference trap this skill's checklist warns about for acceptance-criteria greps. Scoped to the two Files tables, the count is 0 |
+| Encryption Posture (4.10) | Triggered on the `.tf` path shape; section added above with the false-positive derivation recorded |
+| Guard Contract (4.11) | Present. `python3 scripts/lint-guard-contract.py` exits 0 over one guard entry, and the Assembly names a structural chokepoint plus a negative call-site assertion rather than a member list |
+| Network outage (4.5) | Not triggered. No trigger keyword appears in the plan |
+| Downtime & Cutover (4.55) | Not triggered. No host replace, no lock-taking DDL, no router or connector restructure |
+
+### Citation verification
+
+- **Rule ids.** Every `hr-`/`wg-`/`cq-` token in the body was resolved against `AGENTS.md` and
+  `scripts/retired-rule-ids.txt`. Three are active and cited as active
+  (`cq-cite-content-anchor-not-line-number`, `cq-rule-ids-are-immutable`,
+  `cq-ac-must-not-depend-on-concurrent-sessions`). Two are retired and are cited **as retired**
+  in the tool-choice evidence, which is the point being made about cli2. No fabricated ids.
+- **Issue numbers.** All eleven cited numbers resolved live via `gh issue view`, and each title
+  matches the claim made about it. #7927, #7837, #7832, #7817, #2685, #7942, #3829 and #7465 are
+  OPEN; #6049, #2865 and #7409 are CLOSED and are cited as historical provenance.
+- **Learning paths.** Every `knowledge-base/**.md` path in the body resolves to a file on disk.
+- **Named artifacts.** All nine scripts, suites and config files the plan names were confirmed
+  to exist at the stated paths, and the five-file required-context registration set was derived
+  by reading the two parity suites rather than assumed.
+
+### Precedent diff — anti-vacuity floor
+
+`scripts/lint-orphan-test-suites.sh` is the canonical shape and the plan follows it. Three
+details are carried over verbatim in intent rather than re-derived, because that file records
+each one as a defect it already paid for:
+
+| Precedent detail | Why it matters here |
+|---|---|
+| The floor is **absolute and hand-ratcheted**, not derived, with a `<n> against <m> measured <date>` comment | Deriving it from `git ls-files` derives the floor from its own subject |
+| The roots assertion is a **superset**, not an equality | The hazard is a root disappearing; a new root appearing is caught by the sweep itself |
+| The derivation carries its own **non-vacuity check** | That check reddened on its own first run when an empty extraction was compared as a legitimate set |
+
+It also records that its first expected-roots list was written from memory and reddened
+immediately — so this plan's expected set must be derived from the producer's own output, which
+was measured: `knowledge-base`, `plugins`, `.grok`, `.openhands`, `todos`, `apps`, `docs`,
+`.claude`, `.gemini`, `scripts`, `tests`, `.github`, `infra`, plus repository-root files.
+
+### Verify-the-negative pass
+
+Each negative claim the plan relies on was probed rather than reasoned about.
+
+| Claim | Probe | Result |
+|---|---|---|
+| `markdownlint-cli2` does not read `.markdownlintignore` | Ran cli2 0.23.2 against a file inside an ignored directory | Confirmed — it linted and reported the file |
+| `lint-infra-no-human-steps` does not glob `learnings/` or `brainstorms/` | Read its ten glob entries in `lefthook.yml` | Confirmed — zero hits for either. This is what makes those two directories a genuine choice rather than a blocked one |
+| No *required* context in `pr-quality-guards.yml` carries a label | Resolved all nine job `name:` values against `ruleset-ci-required.tf` | Confirmed — `Bash fixture tests for guard scripts` is the only required one and it carries no label and no `if:`. The other eight are advisory, which is why four of them may carry labels |
+| `ALLOWED_PATHS` is exactly two entries | Read the array in `action.yml` | Confirmed — `weakness-digest.md` and `rule-metrics.json` |
+| `scripts/*.test.sh` is absent from `SUITE_GLOBS` | Read the array in `scripts/test-all.sh` | Confirmed — only `scripts/lib/*.test.sh` is present, so an explicit `run_suite` line is required |
+| Passing explicit paths still honours `.markdownlintignore` | Ran cli 0.49.1 with an explicit ignored path | Confirmed — exit 0, file not linted. This is the single fact the whole shared-scope design rests on |
+
+### What was NOT verified, and is left to `/work`
+
+- The exact `MIN_SWEPT_FILES` value. Measured today at 1,344, but the tree moves; `/work`
+  re-derives it and sizes the slack deliberately.
+- Whether files under `.grok/`, `.openhands/` and `.gemini/` are generated. Phase 4 step 6
+  carries this as an explicit precondition rather than an assumption.
+- The residual counts after the content-safe pass. Measured at 322 across 87 files, but the
+  acceptance criteria assert exit codes rather than counts for exactly this reason.
 
 ## Acceptance Criteria
 

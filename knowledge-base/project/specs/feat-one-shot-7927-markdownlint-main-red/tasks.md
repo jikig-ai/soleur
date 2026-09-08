@@ -32,7 +32,11 @@ has nothing to run.
       exclusion; exit 0 with a printed reason when none remain.
 - [ ] 2.5 Add the anti-vacuity pair, sweep mode only: `MIN_SWEPT_FILES` with a
       `<n> against <m>, measured <date>` comment, and an expected-top-level-roots set
-      assertion. Size the floor's slack deliberately.
+      assertion. Copy three details from `scripts/lint-orphan-test-suites.sh` rather than
+      re-deriving them: the roots assertion is a SUPERSET not an equality; the derivation
+      carries its own non-vacuity check; and the expected set is measured from the producer's
+      own output, never written from memory. Size the floor's slack deliberately — slack is
+      narrowing budget, not safety margin.
 - [ ] 2.6 Add the static remediation block emitted on non-zero exit.
 
 ## Phase 3 — The guard's suite
