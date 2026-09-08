@@ -86,5 +86,9 @@
   {
     "context": "marketplace-manifest-guard",
     "integration_id": 15368
+  },
+  {
+    "context": "markdown-lint (repo-wide)",
+    "integration_id": 15368
   }
 ]

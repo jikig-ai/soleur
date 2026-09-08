@@ -90,16 +90,16 @@ has nothing to run.
 
 ## Phase 6 — CI wiring
 
-- [ ] 6.1 Add the job to `.github/workflows/pr-quality-guards.yml`, shaped like
+- [x] 6.1 Add the job to `.github/workflows/pr-quality-guards.yml`, shaped like
       `guard-script-fixture-tests`: no `if:`, no opt-out label, action refs pinned to
       40-character SHAs with version comments.
-- [ ] 6.2 Register the context in `infra/github/ruleset-ci-required.tf`.
-- [ ] 6.3 Register it in `scripts/ci-required-ruleset-canonical-required-status-checks.json`.
-- [ ] 6.4 Register it in `scripts/required-checks.txt` with the empty-intersection derivation
+- [x] 6.2 Register the context in `infra/github/ruleset-ci-required.tf`.
+- [x] 6.3 Register it in `scripts/ci-required-ruleset-canonical-required-status-checks.json`.
+- [x] 6.4 Register it in `scripts/required-checks.txt` with the empty-intersection derivation
       spelled out (both `ALLOWED_PATHS` members, and why each is outside the swept set).
-- [ ] 6.5 Bump the deliberate literal `22` to `23` in
+- [x] 6.5 Bump the deliberate literal `22` to `23` in
       `tests/scripts/test-audit-ruleset-bypass.sh`.
-- [ ] 6.6 Confirm `tests/scripts/test-audit-ruleset-bypass.sh` and
+- [x] 6.6 Confirm `tests/scripts/test-audit-ruleset-bypass.sh` and
       `plugins/soleur/test/required-checks-canonical-parity.test.sh` both exit 0.
 
 ## Phase 7 — Prove it can fail

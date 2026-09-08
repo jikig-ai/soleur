@@ -138,6 +138,14 @@ resource "github_repository_ruleset" "ci_required" {
         context        = "Bash fixture tests for guard scripts"
         integration_id = var.actions_integration_id
       }
+      # markdownlint over the whole tracked corpus (#7927). Whole-corpus, not
+      # changed-files: none of the errors that first blocked a local `git merge`
+      # were in the PR that tripped over them, so a changed-files gate would
+      # reproduce the blind spot it exists to close.
+      required_check {
+        context        = "markdown-lint (repo-wide)"
+        integration_id = var.actions_integration_id
+      }
 
       # --- Tier 2: non-secret-scan correctness gates from .github/workflows/ci.yml ---
       required_check {

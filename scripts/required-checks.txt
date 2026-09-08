@@ -68,6 +68,25 @@ rename-guard (allowlist destinations)
 waiver discipline (issue:#NNN trailer)
 Bash fixture tests for guard scripts
 
+# markdown-lint (repo-wide) — pr-quality-guards.yml (#7927).
+#
+# THIS IS A CONTENT-SCOPED GATE, so the auto-fabrication guard above applies and
+# the exemption is by UNREACHABILITY, derived rather than asserted. The bot-PR
+# action's ALLOWED_PATHS has exactly two members, and neither is in the swept set:
+#
+#   knowledge-base/project/weakness-digest.md  — a .md file, but knowledge-base/project/
+#                                                is excluded in .markdownlintignore, so
+#                                                the sweep never reads it.
+#   knowledge-base/project/rule-metrics.json   — not Markdown at all.
+#
+# Measured against the live producer: the swept set is 1,345 files and its
+# intersection with ALLOWED_PATHS is 0. A bot PR therefore cannot change a file
+# this gate inspects, so the synthetic green cannot mask a real failure.
+#
+# If ALLOWED_PATHS ever gains a path inside the swept set, this entry stops being
+# sound and the gate must move to the action's Phase-4 preflight instead.
+markdown-lint (repo-wide)
+
 # ci.yml correctness gate jobs (#6049 completed the drift). adr-ordinals was
 # live-required but absent from the IaC + canonical JSON until #6049.
 lockfile-sync
