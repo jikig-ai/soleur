@@ -11,14 +11,14 @@
 # the defect this closes is invisible to source inspection by construction.
 #
 # SEAM. This file holds the FUNCTIONAL scenarios. The two mutation batteries
-# (`kb-index-check-guard.mutation.sh`, `merge-kb-index-driver.mutation.sh`) hold
+# (`kb-index-check-guard-mutation.test.sh`, `merge-kb-index-driver-mutation.test.sh`) hold
 # the "can each guard be driven red" question. That split is the one
 # `scripts/test-all.sh` already documents for every guard-with-battery pair in
 # the tree: bundling them makes a red run ambiguous between "a scenario broke"
 # and "a guard stopped being enforceable".
 #
 # KB_DIR IS PINNED ON EVERY GENERATOR CALL. `generate-kb-index.sh` defaults
-# KB_DIR to the real 6,432-file tree, which costs ~9.9s per call (M9). An
+# KB_DIR to the real tree, which costs seconds per call (6,434 files; 6.7s measured 2026-09-08). An
 # omitted pin would silently add minutes of real-corpus work to CI with nothing
 # in the suite that would notice.
 
@@ -199,11 +199,18 @@ assert_file_exists "$RENDER_LIB" "AC13: the shared render helper exists"
 _sent_line="$(grep -m1 '^readonly SENTINEL_PREFIX=' "$DRIVER" | sed "s/^readonly SENTINEL_PREFIX='//; s/'$//")"
 assert_eq "1" "$(printf '%s' "$_sent_line" | grep -cE '^<{7}[^<]' || true)" \
   "AC6b: the sentinel begins with exactly seven '<' so guardrails:block-conflict-markers matches it"
-# Both mutation batteries are registered by hand in test-all.sh, and the orphan
-# lint walks only *.test.sh — so nothing else can notice if a registration is
-# dropped in a merge resolution.
-assert_eq "2" "$(grep -cE '^\s*run_suite .*(kb-index-check-guard|merge-kb-index-driver)\.mutation\.sh' "$REPO_ROOT/scripts/test-all.sh" || true)" \
-  "AC15b: both mutation batteries are registered in test-all.sh"
+# BOTH BATTERIES MUST BE AUTO-DISCOVERABLE, not hand-registered. `SUITE_GLOBS`
+# covers `plugins/soleur/test/*.test.sh` and `lint-orphan-test-suites.sh` walks
+# `*.test.sh`, so the `*-mutation.test.sh` convention every registered bash
+# battery in this repo already uses makes both surfaces see them for free. The
+# earlier `*.mutation.sh` spelling was invisible to both and needed a manual
+# `run_suite` line plus a comment explaining why -- restating the hazard instead
+# of deriving it away, and adding two members to the class #7942 tracks.
+for _bat in kb-index-check-guard-mutation merge-kb-index-driver-mutation; do
+  assert_file_exists "$SCRIPT_DIR/${_bat}.test.sh" "AC15b: ${_bat} uses the auto-discoverable *-mutation.test.sh name"
+done
+assert_eq "0" "$(git -C "$REPO_ROOT" ls-files 'plugins/soleur/test/*kb-index*.mutation.sh' 'plugins/soleur/test/*merge-kb-index*.mutation.sh' | wc -l | tr -d ' ')" \
+  "AC15b: neither battery carries the *.mutation.sh spelling that no glob and no lint can see"
 # Comment-stripped: a correct generator that DOCUMENTS where the header comes from would
 # otherwise false-fail this — the same collision the three fixed instances above carry.
 assert_eq "0" "$(grep -vE '^[[:space:]]*#' "$GEN" | grep -c 'Total files:' || true)" "AC13: the header literal appears nowhere in the generator's CODE"
@@ -431,7 +438,7 @@ echo "=== AC17: the COMMITTED artifacts are fresh — the guard's only real-tree
 # close — caught by nothing.
 #
 # COST IS DELIBERATE AND BOUNDED. This is the ONE call in the entire suite
-# permitted to run against the real ~6,400-file corpus (~10s); every other call
+# permitted to run against the real corpus (6,434 rows; 6.7s measured 2026-09-08); every other call
 # pins KB_DIR at a fixture of ten files or fewer, because an omitted pin would
 # silently add minutes per run with nothing here that would notice.
 ac17_rc=0
@@ -475,4 +482,4 @@ fi
 PASS=$_pc_pass_before
 FAIL=$_pc_fail_before
 
-print_results 64
+print_results 66

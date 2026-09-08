@@ -32,8 +32,8 @@ exist until the code they mutate does).
 
 - `plugins/soleur/test/kb-index-merge-driver.test.sh` — functional (this phase)
 - `plugins/soleur/test/kb-index-merge-driver-registration.test.sh` — Phase 3
-- `plugins/soleur/test/kb-index-check-guard.mutation.sh` — Guard 1 battery, Phase 2
-- `plugins/soleur/test/merge-kb-index-driver.mutation.sh` — Guard 2 battery, Phase 2
+- `plugins/soleur/test/kb-index-check-guard-mutation.test.sh` — Guard 1 battery, Phase 2
+- `plugins/soleur/test/merge-kb-index-driver-mutation.test.sh` — Guard 2 battery, Phase 2
 
 - [x] 1.1 Create `plugins/soleur/test/kb-index-merge-driver.test.sh`. Source
       `plugins/soleur/test/test-helpers.sh` first, for the Guard 3 `GIT_*` tripwire (exit 97).
@@ -77,8 +77,8 @@ exist until the code they mutate does).
       registration` into `%A`. A hand-placed write before each deliberate `exit 1` is not sufficient:
       under `set -euo pipefail` an unhandled failure exits without reaching it, reproducing the exact
       markerless-conflict defect the sentinel exists to prevent.
-- [x] 2.6 Write `plugins/soleur/test/kb-index-check-guard.mutation.sh` (Guard 1, `EXPECTED_ROWS=12` (12, not the 14 estimated before the code existed))
-      and `plugins/soleur/test/merge-kb-index-driver.mutation.sh` (Guard 2, `EXPECTED_ROWS=13`).
+- [x] 2.6 Write `plugins/soleur/test/kb-index-check-guard-mutation.test.sh` (Guard 1, `EXPECTED_ROWS=12` (12, not the 14 estimated before the code existed))
+      and `plugins/soleur/test/merge-kb-index-driver-mutation.test.sh` (Guard 2, `EXPECTED_ROWS=14`).
       Harness per `plugins/soleur/test/git-fixture-env.mutation.sh`: pristine copy under `mktemp -d`,
       Python `s.replace(old, new, 1)` guarded by `assert old in s` (never inline `sed`), assert the
       mutation **landed** before scoring, green unmutated control first, `trap` restore on exit.
@@ -141,9 +141,9 @@ exist until the code they mutate does).
 ## Phase 5 — Verification
 
 - [x] 5.1 All four suites exit 0, each with its assertion floor satisfied.
-- [x] 5.2 Both batteries pass every row: `kb-index-check-guard.mutation.sh` scores **12/12**
+- [x] 5.2 Both batteries pass every row: `kb-index-check-guard-mutation.test.sh` scores **12/12**
       (C1-C11 plus one harness self-test, over a nine-property probe, after a green unmutated
-      control) and `merge-kb-index-driver.mutation.sh` scores **13/13** (G1-G12 plus one harness
+      control) and `merge-kb-index-driver-mutation.test.sh` scores **14/14** (G1-G12 plus one harness
       self-test, over an eleven-property probe, after a green unmutated control). The row labels and
       counts here are the ones the code admits, not the plan-time estimate; `EXPECTED_ROWS` in each
       file is the binding number and is asserted by direct `printf` + `exit 1` rather than through

@@ -16,7 +16,10 @@ brand_survival_threshold: none
 
 `knowledge-base/INDEX.md` is a committed, generated artifact with no `.gitattributes` entry, so git
 merges it as ordinary prose. Every branch that adds a knowledge-base file appends rows to it — the
-file was touched 27 times in the last 30 days — so every such branch conflicts with every other one,
+file was touched 27 times in the 30 days to 2026-09-08 (a MOVING figure -- re-derive with
+`git log origin/main --oneline --since='30 days ago' -- knowledge-base/INDEX.md | wc -l`, which
+read 27, 29 and 30 at different hours of the same day; the earlier `--all` reading of 76 counts
+every feature branch and is the wrong denominator for "conflicts with other branches on trunk") — so every such branch conflicts with every other one,
 and the reflex resolution takes one side's copy whole, silently discarding the rows the other side
 added. This plan registers a merge driver that resolves the path by deriving the merged index from
 the three versions git hands it, wires the driver's registration into paths that already run
@@ -540,8 +543,8 @@ This section is reproduced in the PR body.
   - `plugins/soleur/test/kb-index-merge-driver.test.sh` — functional: T1, T3–T9, T12–T14, T16, T18,
     T19, render parity, AC1–AC6, AC12, AC13.
   - `plugins/soleur/test/kb-index-merge-driver-registration.test.sh` — AC7–AC11, T10, T11, T17.
-  - `plugins/soleur/test/kb-index-check-guard.mutation.sh` — Guard 1's battery.
-  - `plugins/soleur/test/merge-kb-index-driver.mutation.sh` — Guard 2's battery.
+  - `plugins/soleur/test/kb-index-check-guard-mutation.test.sh` — Guard 1's battery.
+  - `plugins/soleur/test/merge-kb-index-driver-mutation.test.sh` — Guard 2's battery.
 - `knowledge-base/engineering/architecture/decisions/ADR-210-regenerating-merge-driver-for-committed-generated-artifacts.md`
   — ordinal provisional; see `## Architecture Decision (ADR/C4)`.
 
@@ -705,8 +708,8 @@ surface.*
     header literal (`grep -c 'Total files:' scripts/generate-kb-index.sh` returns 0 — the literal now
     lives only in `scripts/lib/kb-index-render.sh`).
 14. **AC14 — the mutation batteries run and score every row.**
-    `bash plugins/soleur/test/kb-index-check-guard.mutation.sh` exits 0 with all **12** rows scored
-    `ok`, and `bash plugins/soleur/test/merge-kb-index-driver.mutation.sh` exits 0 with all **13**
+    `bash plugins/soleur/test/kb-index-check-guard-mutation.test.sh` exits 0 with all **12** rows scored
+    `ok`, and `bash plugins/soleur/test/merge-kb-index-driver-mutation.test.sh` exits 0 with all **13**
     rows scored `ok`. (The 14/12 split written at plan time was an estimate made before the code
     existed; these are the rows the implementation actually admits. Both files carry their real
     count in `EXPECTED_ROWS`, which is the binding number.) Both are registered explicitly in
@@ -797,7 +800,7 @@ Guard 1's Assembly paragraph above cites Measured-fact M1 ten lines from where a
 section holding a single row, must both pass unchanged — the contract permits both, and a guard that
 rejects everything would otherwise be indistinguishable from a correct one.
 
-**Row floor.** `plugins/soleur/test/kb-index-check-guard.mutation.sh` declares `EXPECTED_ROWS=14`
+**Row floor.** `plugins/soleur/test/kb-index-check-guard-mutation.test.sh` declares `EXPECTED_ROWS=14`
 (9 mutations + 2 harness rows + 2 must-pass cases + 1 unmutated control) and reports a shortfall with
 a direct `printf >&2; exit 1` — **never by incrementing the suite's own `FAIL` counter**. Per
 `plugins/soleur/test/test-helpers.sh`, *a floor enforced through the suspect cannot witness the
@@ -837,7 +840,7 @@ equally capable of being corrupt.
 cleanly to the changed side, with no sentinel and exit 0. A title containing `$(id)` and backticks
 must round-trip as inert text — never executed, never rewritten.
 
-**Row floor.** `plugins/soleur/test/merge-kb-index-driver.mutation.sh` declares `EXPECTED_ROWS=12`
+**Row floor.** `plugins/soleur/test/merge-kb-index-driver-mutation.test.sh` declares `EXPECTED_ROWS=12`
 (8 mutations + 2 harness rows + 1 must-pass case + 1 unmutated control), reported the same way as
 Guard 1's — direct `printf >&2; exit 1`, outside the `FAIL` counter.
 
