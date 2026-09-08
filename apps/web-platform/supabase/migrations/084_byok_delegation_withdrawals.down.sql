@@ -17,7 +17,16 @@
 BEGIN;
 
 -- 1. Restore cap RPC to mig 064 form (no consent re-gate).
-CREATE OR REPLACE FUNCTION public.check_and_record_byok_delegation_use(
+--
+-- DROP + CREATE, not CREATE OR REPLACE (#7829): migration 137 changed this
+-- function's return type to TABLE(refusal_reason text). CREATE OR REPLACE
+-- cannot change a return type -- it raises SQLSTATE 42P13, and under
+-- ON_ERROR_STOP that aborts this ENTIRE file on its first statement, so
+-- steps 2-5 below never run. Verified live 2026-09-07. DROP + CREATE is
+-- order-independent and works whether or not 137 is applied.
+DROP FUNCTION IF EXISTS public.check_and_record_byok_delegation_use(uuid, uuid, int, int, uuid, text);
+
+CREATE FUNCTION public.check_and_record_byok_delegation_use(
   p_delegation_id    uuid,
   p_invocation_id    uuid,
   p_token_count      int,
@@ -182,7 +191,13 @@ ALTER TABLE public.audit_byok_use
   ADD CONSTRAINT audit_byok_use_attribution_shift_reason_check
   CHECK (
     attribution_shift_reason IS NULL
-    OR attribution_shift_reason IN ('revoked_post_grace','expired')
+    OR attribution_shift_reason IN (
+      'revoked_post_grace',
+      'expired',
+      'consent_withdrawn',
+      'hourly_cap_exceeded',
+      'daily_cap_exceeded'
+    )
   );
 
 -- 4. Drop withdrawal RPCs + WORM trigger fn.

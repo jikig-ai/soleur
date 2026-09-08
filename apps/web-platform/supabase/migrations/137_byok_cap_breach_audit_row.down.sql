@@ -1,5 +1,5 @@
 -- 137_byok_cap_breach_audit_row.down.sql
--- Rollback for 136 (#7829).
+-- Rollback for 137 (#7829).
 --
 -- WHAT THIS RESTORES: the 084 function body, verbatim -- RETURNS void, with
 -- refusal signalled by RAISE.
@@ -9,7 +9,7 @@
 -- 1. The widened attribution_shift_reason CHECK stays widened. ADR-040 set
 --    this precedent for the sibling constraint on the same table ("Down
 --    migration intentionally KEEPS this constraint"). Narrowing it back
---    would make every cap-reason row written while 136 was live violate the
+--    would make every cap-reason row written while 137 was live violate the
 --    constraint. That is not a theoretical tidiness concern:
 --    065_art17_cascade_deadlock_repair.sql makes founder_id ON DELETE SET
 --    NULL, so an account delete issues UPDATE ... SET founder_id = NULL --
@@ -21,13 +21,14 @@
 --    solve this and is used nowhere in this pair: it still enforces on
 --    subsequent UPDATEs, which is precisely the operation the cascade issues.
 --
--- 2. The delegation_id IS NULL filter on record_byok_use_and_check_cap's
+-- 2. The attribution_shift_reason IS NULL filter on record_byok_use_and_check_cap's
 --    founder SUM stays. Rolling the code back does not delete the cap rows
---    136 already wrote, and those rows persist in the 1-hour window for up
---    to an hour after rollback. Restoring the unfiltered SUM while they are
+--    137 already wrote. Those rows persist in the DELEGATION windows for up
+--    to 24h (the daily branch) and in the Layer 1 founder window for 1h.
+--    Restoring the unfiltered SUM while they are
 --    still present would resume pausing grantees' own runtimes for exceeding
 --    someone else's delegation cap -- the failure this filter exists to
---    prevent. The filter is correct on its own terms regardless of 136.
+--    prevent. The filter is correct on its own terms regardless of 137.
 --
 -- 3. Effects already written are not reversible by this file. Cap rows
 --    remain in both delegation windows for up to 24h, and any
@@ -37,6 +38,31 @@
 -- NOTE: run-migrations.sh SKIPS *.down.sql and does not content-sha track
 -- it, so this file is never executed by the deploy path. It is executed
 -- deliberately, against dev, as the AC-DOWN rollback rehearsal.
+
+-- ORDERING PRECONDITION (verified live, SQLSTATE 42P13).
+-- 084_byok_delegation_withdrawals.down.sql opens with a CREATE OR REPLACE of
+-- this same function at RETURNS void. A return type cannot be changed by
+-- CREATE OR REPLACE, so while 137 is live that file aborts on its FIRST
+-- statement and every later step in it is skipped. THIS FILE MUST RUN FIRST.
+-- (084's down has also been converted to DROP + CREATE so it is
+-- order-independent; this note remains because an operator may hold an older
+-- checkout of that file.)
+--
+-- 4. The corrected COMMENT ON COLUMN audit_byok_use.founder_id is NOT
+--    reverted. After rollback it describes refusal rows that can no longer be
+--    created, which is accurate for the frozen historical rows and stale for
+--    new ones. Reverting it would re-assert 066's text, which was wrong for
+--    cap rows in the first place.
+--
+-- 5. Rolling back restores 084's body verbatim, INCLUDING its
+--    `token_count * unit_cost_cents` delegation windows. That is intended: a
+--    rollback restores 084, defect included.
+--
+-- 6. A DB-only rollback (137 reverted, app still on the new bundle) makes
+--    PostgREST return `null` for an admitted turn, which cost-writer.ts
+--    classifies fail-closed as `unreadable-refusal-shape`. Expect one Sentry
+--    event plus a read-back per delegated turn until the app is rolled back
+--    too. This is correct fail-closed behaviour, not a regression.
 
 BEGIN;
 
@@ -172,5 +198,13 @@ REVOKE ALL ON FUNCTION public.check_and_record_byok_delegation_use(uuid, uuid, i
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.check_and_record_byok_delegation_use(uuid, uuid, int, int, uuid, text)
   TO service_role;
+
+-- DROP FUNCTION discards the COMMENT with the function. Without this the
+-- rolled-back function carries no description at all -- neither 064's nor
+-- 137's -- so the restore would not be the verbatim restore this file claims.
+COMMENT ON FUNCTION public.check_and_record_byok_delegation_use(uuid, uuid, int, int, uuid, text) IS
+  'Per-turn delegated-key gate (084 form, restored by 137.down). Signals '
+  'refusal by RAISE, which aborts the transaction and DISCARDS the audit row '
+  'inserted moments earlier -- the #7829 defect. Service-role-only.';
 
 COMMIT;

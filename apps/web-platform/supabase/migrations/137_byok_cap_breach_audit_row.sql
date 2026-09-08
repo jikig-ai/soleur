@@ -44,9 +44,18 @@
 -- TOCTOU close D1 exists for and which the current code silently fails to
 -- deliver.
 --
--- SCOPE NOTE: this migration does NOT change the cap arithmetic. The
--- unit_cost_cents / token_count unit defect is tracked separately and is
--- deliberately untouched here. See ADR-207.
+-- SCOPE NOTE: this migration corrects the unit semantics of its OWN
+-- delegation windows only. unit_cost_cents holds the WHOLE TURN's cost
+-- (cost-writer.ts: Math.round(costDelta * 100) where costDelta =
+-- totalCostUsd), so `token_count * unit_cost_cents` is dimensionally
+-- cents-times-tokens and trips any real cap on the first turn. Because a
+-- refusal here decides founder_id -- grantee on refusal, grantor on
+-- admission -- shipping that defect would mis-attribute the billing party
+-- on 100% of delegated rows into a WORM table. Correcting attribution is
+-- #7829's remit. The founder-wide instances of the same expression
+-- (migrations 061 and 121, ADR-041 Layer 1) are deliberately UNTOUCHED and
+-- remain tracked separately, so the delegation accumulator and the founder
+-- accumulator carry different formulas until that lands. Recorded in ADR-207.
 
 BEGIN;
 
@@ -103,7 +112,7 @@ CREATE FUNCTION public.check_and_record_byok_delegation_use(
 AS $$
 DECLARE
   v_row             public.byok_delegations%ROWTYPE;
-  v_this_cost       int := p_token_count * p_unit_cost_cents;
+  v_this_cost       int := p_unit_cost_cents;
   v_hourly_spent    int;
   v_daily_spent     int;
 BEGIN
@@ -130,7 +139,12 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
 
-  -- Caller identity pin. 084 never validated p_caller_user_id against the
+  -- Caller identity pin. NOTE the reason above does NOT extend to this
+  -- branch: here the delegation RESOLVES fine and the provider has already
+  -- been charged, so money moved and nothing is ledgered. Booking the row
+  -- anyway is worse (it would assert a billing party we know is wrong), so
+  -- the gap is accepted and tracked rather than papered over.
+  -- 084 never validated p_caller_user_id against the
   -- delegation: the consent re-gate reads withdrawals by grantee_user_id
   -- while every INSERT writes founder_id = p_caller_user_id. Once a refusal
   -- row actually persists, founder_id becomes a durable BILLING assertion
@@ -204,7 +218,7 @@ BEGIN
   -- design: the refusal rows record money that HAS already moved, so
   -- excluding them would freeze the numerator at its last in-cap value and
   -- let every turn small enough to fit under (cap - frozen) pass forever.
-  SELECT COALESCE(SUM(au.token_count * au.unit_cost_cents), 0)::int
+  SELECT COALESCE(SUM(au.unit_cost_cents), 0)::int
     INTO v_hourly_spent
     FROM public.audit_byok_use au
    WHERE au.delegation_id = p_delegation_id
@@ -225,7 +239,7 @@ BEGIN
   END IF;
 
   -- Daily cap SUM (rolling 24h). Same unfiltered rationale as above.
-  SELECT COALESCE(SUM(au.token_count * au.unit_cost_cents), 0)::int
+  SELECT COALESCE(SUM(au.unit_cost_cents), 0)::int
     INTO v_daily_spent
     FROM public.audit_byok_use au
    WHERE au.delegation_id = p_delegation_id
@@ -285,15 +299,19 @@ COMMENT ON FUNCTION public.check_and_record_byok_delegation_use(uuid, uuid, int,
 -- Resume. That was unreachable before this migration precisely because no
 -- refusal row persisted.
 --
--- The personal Layer 1 cap governs the user's OWN key. Delegated turns run
--- on the grantor's key and are governed by the delegation's own hourly and
--- daily caps in section 2, so excluding them here is correct on its own
--- terms rather than merely convenient.
+-- The filter excludes exactly the refusal rows this migration creates --
+-- nothing else. `delegation_id IS NULL` was considered and REJECTED as
+-- over-broad: 121's founder SUM has no delegation filter at all, so ADMITTED
+-- delegated rows (founder_id = grantor, attribution_shift_reason IS NULL)
+-- have always counted against the grantor's own Layer 1 cap, and correctly
+-- so -- the grantor's key paid. Excluding them would be an undeclared
+-- weakening of ADR-041 Layer 1 that #7829 never asked for, and under the
+-- corrected delegation arithmetic it would leave the grantor's real
+-- delegated exposure unmeasured by any accumulator.
 --
--- Body is 121's verbatim except for the added delegation_id filter. The
--- token_count * unit_cost_cents product is deliberately left ALONE: the
--- unit-semantics defect is a separate, founder-wide issue and correcting it
--- here would silently change what every existing cap test means.
+-- Body is 121's verbatim except for that filter. The token_count product
+-- HERE is deliberately left ALONE and is the DEFECT held pending the
+-- founder-wide fix -- not the correct form. See ADR-207 Decision 3.
 
 CREATE OR REPLACE FUNCTION public.record_byok_use_and_check_cap(
   p_invocation_id   uuid,
@@ -330,13 +348,13 @@ BEGIN
     p_invocation_id, p_founder_id, p_workspace_id, p_agent_role, p_token_count, p_unit_cost_cents
   );
 
-  -- delegation_id IS NULL added by 136 (#7829): delegated spend is governed
-  -- by the delegation cap, not by the grantee's personal Layer 1 cap.
+  -- attribution_shift_reason IS NULL added by 137 (#7829): excludes exactly
+  -- the refusal rows this migration creates, and nothing else.
   SELECT COALESCE(SUM(token_count * unit_cost_cents), 0)::int
     INTO v_total
     FROM public.audit_byok_use
    WHERE founder_id = p_founder_id
-     AND delegation_id IS NULL
+     AND attribution_shift_reason IS NULL
      AND ts > now() - interval '1 hour';
 
   IF v_total > v_cap THEN
