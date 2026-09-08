@@ -221,6 +221,33 @@ likely to still be asserting it.
 metacharacter in an anchor. Rewritten to pass anchors as argv before it broke.
 **Prevention:** never interpolate into program text you are about to execute; argv is free.
 
+### Added at ship time — three more, one of them the whole shape again
+
+**A refused full gate is not a licence to substitute a changed-file predicate.** `TEST_GROUP=all`
+refused (`rc=4`, no marker, `reason=sibling_runs,low_tmp` — a sibling worktree was mid-run), and
+its own message says "Run the suite covering your files instead." I did, 52/52 green, and CI then
+went red on `fixture-relative-assert.test.sh`: a repo-wide RATCHET that any new shell file joins.
+No changed-file predicate reaches it — the suite is not in the diff and never will be, because the
+diff is what perturbs it. **Prevention:** when the gate is refused, run the suites covering the
+changed files AND every suite that ratchets a repo-wide corpus (a committed baseline, a site
+count, a component tally). The second set is enumerable once: `grep -rl 'baseline' plugins/soleur/
+test/*.test.sh`. Substituting only the first is how a "green" stands in for a gate that never ran.
+
+**Its failure message named the wrong remedy first, and the suite's own header named the right
+one.** `regenerate with --write-baseline in the same commit as the fix` would have accepted 9 real
+findings — two `mktemp -d` roots whose `rm -rf` traps resolve relatively under a relative `TMPDIR`.
+The header three screens up says *"Dogfooding the rule rather than baselining its author."*
+**Prevention:** a ratchet's remedy line is written for the case where the corpus legitimately grew.
+Read what the new rows ARE before regenerating; the baseline is the last resort, not the first.
+
+**Two instruments reported on themselves and I nearly believed both.** A non-vacuity control for a
+new fixture guard exited 127 and read as "the guard never fired" — the suite resolves its subject
+from `BASH_SOURCE`, so a copy outside `scripts/` cannot run at all. And a markdownlint baseline
+comparison linted `origin/main`'s copies from a temp directory where `.markdownlint.json` does not
+resolve, returning a uniform `main=0` that made every unchanged file look like a fresh regression.
+**Prevention:** this is the same failure as §5 in the body above, twice more. Before reading an
+instrument's verdict, drive it once against a case whose answer you already know.
+
 **One-offs, recorded without action:** calling `hook_parse_input` bare under `set -e` in a
 probe (abort read as a code bug); a battery `EXPECTED_ROWS` miscount caught by its own
 reconciliation; running a lint whole-file and reading pre-existing findings as new; and
