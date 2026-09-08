@@ -92,9 +92,14 @@ Work target: `plugins/soleur/test/preflight-check10-suite-integrity.test.sh`
 
 ## Phase 6 — Follow-through and ship
 
-- [ ] 6.1 File a `code-review` follow-up issue for D3 in
-      `plugins/soleur/test/git-fixture-env.mutation.sh` (same two-stage parse, unanchored
-      stage one, unregistered manual harness).
+- [x] 6.1 Filed as #7942 — RESCOPED after the CONCUR gate. The parse at
+      `git-fixture-env.mutation.sh:193` is not the defect: its stage one is unanchored, so
+      colour does not break it, and the file is executed by nothing (`test-all.sh` globs
+      `*.test.sh`, which the `.mutation.sh` spelling excludes). Fixing the grep alone would
+      arm #7466's exact defect there and launder a dead harness as maintained. The issue
+      covers BOTH unregistered batteries (`hook-git-env-coverage.mutation.sh` too), cites
+      this repo's own ruling at `.github/workflows/infra-validation.yml:699-701`, and carries
+      the `strip_ansi`-into-`test-helpers.sh` extraction as step 3 rather than step 1.
 - [ ] 6.2 Compound: amend the three existing learnings that prescribe the GNU-only, SGR-only
       strip with the two facts measured here (`\x1b` is a GNU sed extension; an SGR-only strip
       is defeated by a non-SGR CSI).
