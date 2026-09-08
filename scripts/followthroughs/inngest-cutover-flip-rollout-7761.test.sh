@@ -107,7 +107,14 @@ refusal_row() {
 
 # A query stub that APPLIES its --grep, so the probe's SELECTION is under test, not just its shape.
 make_stub() {
-  local rows_file="$1" stub="$WORK/query-$RANDOM$RANDOM.sh"
+  # mktemp, not $RANDOM. `$WORK/query-$RANDOM$RANDOM.sh` CONCATENATES two draws, so it is not
+  # 30 bits of entropy: 1+23 and 12+3 both render "123". This suite builds 26 stubs, and a
+  # collision silently points one stub at ANOTHER case's rows file, whose content then fails the
+  # grep — surfacing as `probe_channel_dark`, i.e. "the host emitted nothing", on a case that
+  # supplied rows. NOT proven to be the cause of the 2026-09-08 CI red (0/30 locally), but it is
+  # a real ambiguity and mktemp costs nothing to remove it.
+  local rows_file="$1" stub
+  stub="$(mktemp "$WORK/query-XXXXXXXX.sh")"
   cat > "$stub" <<'STUBEOF'
 #!/usr/bin/env bash
 term=""
@@ -129,7 +136,8 @@ STUBEOF
 }
 
 failing_stub() {
-  local stub="$WORK/queryfail-$RANDOM.sh"
+  local stub
+  stub="$(mktemp "$WORK/queryfail-XXXXXXXX.sh")"
   printf '#!/usr/bin/env bash\nexit 7\n' > "$stub"; chmod +x "$stub"
   printf '%s' "$stub"
 }
@@ -137,7 +145,8 @@ failing_stub() {
 # A doppler stub, so the corroboration arm is drivable. Without a seam that arm is unreachable by
 # design and its FAIL branch has zero coverage.
 doppler_stub() {
-  local val="$1" stub="$WORK/doppler-$RANDOM$RANDOM.sh"
+  local val="$1" stub
+  stub="$(mktemp "$WORK/doppler-XXXXXXXX.sh")"
   { printf '#!/usr/bin/env bash\n'; printf 'printf %%s %s\n' "$val"; } > "$stub"
   chmod +x "$stub"; printf '%s' "$stub"
 }

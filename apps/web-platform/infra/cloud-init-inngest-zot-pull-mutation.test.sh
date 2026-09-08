@@ -87,15 +87,16 @@ cp -a "$REPO_ROOT/.github/workflows/build-inngest-bootstrap-image.yml" "$SANDBOX
 _pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTINE/cloud-init-inngest.yml" 2>/dev/null | head -1 | sed 's/.*://')"
 [[ -n "$_pin_tag" ]] || die "could not derive the pinned tag for the sandbox git fixture"
 (
-  cd "$SANDBOX_ROOT" \
-    && git init -q \
-    && git config user.email sandbox@example.invalid \
-    && git config user.name "sandbox" \
-    && git config commit.gpgsign false \
-    && git add -A \
-    && git commit -qm "sandbox baseline" \
-    && git config tag.gpgSign false \
-    && git tag -a -m "sandbox pin fixture" "vinngest-$_pin_tag"
+  set -e
+  cd "$SANDBOX_ROOT"
+  git init -q
+  git config user.email sandbox@example.invalid
+  git config user.name "sandbox"
+  git config commit.gpgsign false
+  git add -A
+  git commit -qm "sandbox baseline"
+  git config tag.gpgSign false
+  git tag -a -m "sandbox pin fixture" "vinngest-$_pin_tag"
 ) > "$WORK/gitfixture.log" 2>&1 || { cat "$WORK/gitfixture.log" >&2; die "could not build the sandbox git fixture for Guard A"; }
 # Assert the exclusion actually held. A tar --exclude whose pattern stops matching (a leading
 # `./` dropped, say) silently reinstates 162 MB per case, and the only symptom is a battery
