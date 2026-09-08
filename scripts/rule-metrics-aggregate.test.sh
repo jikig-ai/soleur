@@ -298,7 +298,22 @@ t6_te_prefix_not_orphan() {
   # absent from `rules` (which joins with AGENTS.md) but present in the
   # underlying count map. We assert by re-reading the jsonl directly.
   local te_count
-  te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl")
+  # `|| true` keeps grep's own "0" on no-match. Without it, `set -e` kills the
+  # suite AT THIS LINE and the assert below never names the problem — a die is
+  # indistinguishable from an unrelated crash. Not `|| printf '0'`: grep already
+  # printed "0", so that yields "00".
+  #
+  # But `|| true` swallows grep's rc 2 (file missing/unreadable) as well as its
+  # rc 1, and on rc 2 grep prints NOTHING — so the capture is empty rather than
+  # "0". `assert_eq` still fails on that, which is why this is a diagnostic
+  # tightening and not a vacuity hole; without the existence check the failure
+  # reads as "expected 1, got ''" and blames the aggregator for a missing
+  # fixture. Name the real cause first.
+  [ -r "$root/.claude/.rule-incidents.jsonl" ] || {
+    assert_eq "T6 FIXTURE BROKEN — incidents log readable" "readable" "unreadable: $root/.claude/.rule-incidents.jsonl"
+    rm -rf "$root"; return
+  }
+  te_count=$(grep -c '"te-subagent-overshoot"' "$root/.claude/.rule-incidents.jsonl" || true)
   assert_eq "T6 te-subagent-overshoot fired" "1" "$te_count"
   rm -rf "$root"
 }
@@ -547,7 +562,16 @@ t16_argv_ceiling_stage_payloads_exceed_max_arg_strlen() {
 
   # Generator cardinality: an under-filled generator makes every assert below vacuous.
   local srclines
-  srclines=$(grep -c '^- Synthesized aggregator fixture bullet ' "$root/AGENTS.md")
+  # Same `|| true` reasoning as T6, including its rc-2 caveat. It matters more
+  # here: this assert IS the anti-vacuity check ("an under-filled generator
+  # makes every assert below vacuous"), so dying instead of failing loses the
+  # one message that says so — and an unreadable AGENTS.md must not be reported
+  # as an under-filled generator.
+  [ -r "$root/AGENTS.md" ] || {
+    assert_eq "T16 FIXTURE BROKEN — generated AGENTS.md readable" "readable" "unreadable: $root/AGENTS.md"
+    rm -rf "$root"; return
+  }
+  srclines=$(grep -c '^- Synthesized aggregator fixture bullet ' "$root/AGENTS.md" || true)
   assert_eq "T16 fixture generator emitted $rows rule bullets" "$rows" "$srclines"
 
   local exit_code=0
@@ -757,9 +781,12 @@ t23_grep_rewrite_disarm_zero_is_silent() {
 t18_hook_input_fault_count_and_stderr() {
   local root metrics stderr exit_code=0
   root=$(make_fixture_repo)
-  write_event "$root" "hook-input-nonstring"   "warn" "2026-08-02T10:00:00Z"
-  write_event "$root" "hook-input-nonstring"   "warn" "2026-08-02T10:00:01Z"
-  write_event "$root" "hook-input-unparseable" "warn" "2026-08-02T10:00:02Z"
+  write_event "$root" "hook-input-nonstring" "warn" "2026-08-02T10:00:00Z"
+  write_event "$root" "hook-input-nonstring" "warn" "2026-08-02T10:00:01Z"
+  # `baddoc` is one of the reasons #7275 split out of the retired `unparseable`.
+  # It is used here deliberately: the selectors match by PREFIX, so this case is
+  # what demonstrates a NEW reason id aggregating with no aggregator change.
+  write_event "$root" "hook-input-baddoc" "warn" "2026-08-02T10:00:02Z"
 
   stderr=$(INCIDENTS_REPO_ROOT="$root" bash "$AGGREGATOR" 2>&1 >/dev/null) || exit_code=$?
   assert_eq "T18 run still exits 0" "0" "$exit_code"
@@ -769,8 +796,8 @@ t18_hook_input_fault_count_and_stderr() {
     "$(jq -r '.summary.hook_input_fault_count' < "$metrics")"
   assert_eq "T18 per-reason breakdown: nonstring" "2" \
     "$(jq -r '.summary.hook_input_fault_reasons.nonstring' < "$metrics")"
-  assert_eq "T18 per-reason breakdown: unparseable" "1" \
-    "$(jq -r '.summary.hook_input_fault_reasons.unparseable' < "$metrics")"
+  assert_eq "T18 per-reason breakdown: baddoc" "1" \
+    "$(jq -r '.summary.hook_input_fault_reasons.baddoc' < "$metrics")"
 
   # The operator-visible half. Without this line the counter is JSON nobody reads.
   local warned="no"
