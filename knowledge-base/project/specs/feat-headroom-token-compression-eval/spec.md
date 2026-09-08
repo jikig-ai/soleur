@@ -50,7 +50,7 @@ error. Do not re-merge these lists.
 
 1. **Structural.** They run agents server-side in a sandbox and have no local agent to wrap.
 2. **The insertion point is disqualifying.** The only one available puts a third-party proxy in
-   the **BYOK credential path** and desyncs ADR-041 cap accounting from the real bill.
+   the **BYOK credential path** and puts an unaudited dependency on the `x-api-key` path. (An earlier draft also said it "desyncs ADR-041 cap accounting from the real bill" — that was traced and is FALSE: cap cost derives from the usage Anthropic returns, so bill and accounting move together. See the brainstorm for the real, sharper defect it was standing in front of.)
 3. **Correctness**, as above.
 
 **Explicitly NOT a ground for the user half: cost.** BYOK users pay per token, so reducing

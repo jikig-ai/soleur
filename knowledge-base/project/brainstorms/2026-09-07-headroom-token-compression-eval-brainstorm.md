@@ -6,7 +6,7 @@ lane: cross-domain
 brand_survival_threshold: single-user incident
 tags: [token-cost, context-engineering, external-tool-eval, vendor-review]
 related_adrs: [ADR-151, ADR-056, ADR-041, ADR-155]
-related_issues: [1055, 6297, 5692, 7055]
+related_issues: [1055, 6297, 5692]
 ---
 
 # Headroom — token-compression layer evaluation
@@ -188,7 +188,7 @@ literal set are both specified above precisely to make that rebuild faithful.
 ### 4. `headroom learn` — separable, and must stay unused
 
 It mines failed sessions and writes corrections into `CLAUDE.local.md` (default), `CLAUDE.md`
-or `AGENTS.md`. Our rule corpus sits at **exactly 46,000 B**, the critical ratchet in
+or `AGENTS.md`. Our rule corpus sits at **exactly 46,000 B** — measured the way the gate measures it (`scripts/lint-agents-rule-budget.py` reports `B_ALWAYS=46000`, AGENTS.md 5,489 + AGENTS.rules.md 40,511, frontmatter stripped). A naive `wc -c` returns 46,073 and appears to put the corpus 73 B OVER its own ratchet; it does not, because the gate strips frontmatter before counting. A review agent reached exactly that wrong conclusion from the naive number, which is why the instrument is named here: cite the gate's measure, not the file size, the critical ratchet in
 `scripts/lint-agents-rule-budget.py`; one appended line trips it. It would also bypass
 `cq-agents-md-tier-gate` placement, `cq-rule-ids-are-immutable`, ADR-155 exemption markers,
 and `scripts/lint-rule-bodies.py`'s WORM ack manifest. Separable only by never running it.
@@ -203,10 +203,35 @@ all and want a visual UI.
 
 The only way to insert Headroom on that surface is `ANTHROPIC_BASE_URL` → a sidecar proxy
 inside the sandbox. That is currently **set nowhere in any configuration** (verified; the only repo-wide grep hits are prose -- a learning file describing a mock, and this document), and it
-would place a third-party proxy in the **BYOK credential path**, where users' own Anthropic
-keys flow. It would also desynchronise ADR-041's fail-closed cap accounting (which counts
-tokens for a hard spend cap) from the bill the user actually receives. That is a
-billing-integrity defect, not an optimisation.
+would place third-party **code** in the **BYOK credential path**, where users' own Anthropic
+keys flow. The sidecar runs locally, so this is not key exfiltration to a vendor — it is an
+unaudited dependency handling `x-api-key`, which is a different and still disqualifying risk.
+Separately: the beacon is ON BY DEFAULT, so this variant would have Soleur emitting per-tenant
+runtime metadata (provider/model IDs, OS/arch) to a third party from inside each user's sandbox.
+
+**CORRECTED AT REVIEW.** An earlier draft added that a proxy "would desynchronise ADR-041's
+fail-closed cap accounting from the bill the user actually receives." Traced through the code,
+that is FALSE. Cap cost is computed from `sdkResult.usage` — the usage Anthropic RETURNS
+(`server/inngest/functions/agent-on-spawn-requested.ts`: `const usage = sdkResult.usage`) — so
+a proxy that sends a smaller request causes Anthropic to bill less AND report less. Accounting
+and bill move down together and stay in sync; there is no pre-call estimate to diverge from
+(Layer 1 fires with `tokenCount: 0`).
+
+The real exposure is adjacent and sharper. Cap cost is `returned usage × a pricing table keyed
+on the LOCALLY configured model`, with an all-zero fallback:
+
+```ts
+const pricing = MODEL_PRICING[leaderModule.model] ?? {
+  inputPerToken: 0, outputPerToken: 0, cacheReadPerToken: 0, cacheCreatePerToken: 0,
+};
+```
+
+`MODEL_PRICING` is typed `Record<string, ModelPricing>` while `leaderModule.model` is
+`AnthropicModelId`, so widening that union without adding a pricing row raises **no compile
+error**: the lookup silently takes the zero row, every turn accrues `totalCostUsd = 0`, Layers
+1 and 2 sum zeros, and the caps never fire while the user is billed normally. ADR-041 is
+fail-CLOSED by design; that path fails it open. Pre-existing, not introduced here —
+filed on #7920.
 
 Automating local install for a user would also convert "user misconfigured it" into
 "**Soleur** broke it": dead proxy → all agent calls fail; stale wrap after a `uv` upgrade;
@@ -234,7 +259,7 @@ with no support org.
 | # | Decision | Rationale |
 |---|---|---|
 | 1 | **Do not adopt Headroom for Soleur dev usage.** | Reachable surface 2–3% (caps both the dollar and the rate-limit benefit); correctness risk to verbatim-grep gates is real and not reducible to zero by CCR retrieval (§3b bounded it: 244/581 modified payloads, 2,367 citation losses, two literal classes at zero -- "unbounded" was the pre-measurement wording and §3b superseded it). Flat Max 20x means the benefit is throughput, not money — but 2–3% does not move throughput either. |
-| 2 | **Do not recommend, bundle, or automate it for Soleur users.** | Users have no local agent — cloud sandbox. Proxy insertion would sit in the BYOK credential path and desync ADR-041 cap accounting. **Not** rejected on cost grounds: BYOK users pay real dollars per token, so the operator's "$0 marginal" fact does not apply to them. |
+| 2 | **Do not recommend, bundle, or automate it for Soleur users.** | Users have no local agent — cloud sandbox. Proxy insertion would put unaudited third-party code on the `x-api-key` path, and the on-by-default beacon would emit per-tenant metadata from each user's sandbox. (An earlier draft claimed it desyncs ADR-041 cap accounting; that was traced and is false — see §'Why it does not reach Soleur users'.) **Not** rejected on cost grounds: BYOK users pay real dollars per token, so the operator's "$0 marginal" fact does not apply to them. |
 | 2b | **BYOK token reduction remains an open, legitimate user-value goal** — just not via a third-party proxy in the credential path. | Corrected 2026-09-07: users are billed on their own key, so reducing their token spend is real money saved for them. The rejection is of *this mechanism*, not of the goal. Any future work here must measure the sandbox's own traffic profile rather than extrapolating from operator transcripts. |
 | 3 | **`headroom learn` is never run against this repo**, in any pilot. | Trips the 46,000 B ratchet; bypasses the tier gate, immutable rule IDs, and the WORM ack manifest. |
 | 4 | **The real gap is measurement, not compression.** | The CFO's P0 from the 2026-04-13 brainstorm ("instrument token usage") was never done; `api-spend-ledger.jsonl` is empty. We were about to evaluate a fix without a baseline. |
@@ -288,8 +313,10 @@ with no support org.
   its evidence from — plus, in the rejected user-facing variant, the sandbox BYOK credential path.
 - **Vector:** a lossy compressor between a gate and its evidence turns a *detected* violation
   into a *silent* one: a missed third-party-content grep ships a privacy breach with all gates
-  reporting green. In the user-facing variant, a proxy in the BYOK path desyncs the spend cap
-  from the real bill, so a founder is charged past a cap the product told them was enforced.
+  reporting green. In the user-facing variant, unaudited third-party code sits on the
+  `x-api-key` path and the on-by-default beacon emits per-tenant metadata from the
+  sandbox. (The earlier 'desyncs the spend cap from the real bill' framing was traced
+  and retracted — cap cost follows the usage Anthropic returns.)
 - **Threshold:** single-user incident.
 
 ## Domain Assessments
