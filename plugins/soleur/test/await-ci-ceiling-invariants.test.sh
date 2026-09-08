@@ -103,6 +103,20 @@ check() {  # $1 = predicate, $2 = file, $3 = description — reports, never exit
   esac
 }
 
+# EXTRACTION SANITY, before any invariant is scored. An empty block is not a violated
+# invariant: i3/i4 grep the block directly, so an extraction that silently returned nothing
+# would report them RED and send the next reader hunting a defect that is not there. Three
+# sibling suites in this repo already guard their extraction this way; this row is that guard.
+# (Sibling suites deliberately DUPLICATE this extractor rather than source a shared one — see
+# terraform-drift-step-order.test.sh, which explains that a cross-file source makes one suite's
+# failure look like another's. Keep the copy; keep the sanity row with it.)
+_blk_lines=$(job_block "$REL" await-ci | wc -l)
+if (( _blk_lines > 1 )) && job_block "$REL" await-ci | grep -q '^  await-ci:$'; then
+  pass "EXTRACTION — the await-ci job block is $_blk_lines lines and starts at its own key"
+else
+  fail "EXTRACTION — job_block returned $_blk_lines line(s); every invariant below would be scored against an empty haystack"
+fi
+
 C=$(envval "$REL" CEILING_S); M=$(envval "$REL" MAX_ATTEMPTS)
 I=$(envval "$REL" INTERVAL_S); T=$(timeoutval "$REL")
 R=$(envval "$REL" RECONCILE_ATTEMPTS)
@@ -171,7 +185,7 @@ mutate_row_muststay i1_timeout_over_ceiling \
 # Reported with printf + exit, NEVER through fail() — a floor that calls the very helper it
 # backstops is disarmed by the same one-token edit it exists to catch.
 TOTAL=$(( PASS + FAIL ))
-MIN_ROWS=10
+MIN_ROWS=11
 if (( TOTAL < MIN_ROWS )); then
   printf 'FAIL: assertion floor — %d rows executed, expected at least %d. The suite did not run to completion, so its verdict is not evidence.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1
