@@ -76,9 +76,37 @@ set -uo pipefail
 # performs no filename globbing of its own, so turning it off costs nothing.
 set -f
 
+# (#7797) Refuse to run under shell tracing while a live credential is set: `set -x`
+# would trace the token into whatever collects this script's output. `case "$-" in *x*)`
+# tests whether tracing is ON rather than enumerating the eight ways to turn it on, two
+# of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_LOGS_TOKEN:+x}${ZOT_PULL_TOKEN:+x}${ZOT_PUSH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Locale-pinned: every numeric shape gate below uses [[ =~ ]] with [0-9], and under a UTF-8
 # locale bash's collation makes the FULLWIDTH digits match that class.
 export LC_ALL=C
+# `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars, but
+# neither touches the env that subverts TLS ITSELF: SSLKEYLOGFILE writes the
+# session keys (verified, curl 8.18.0/OpenSSL 3.5.5) and the CA vars substitute
+# the trust store. The actor who can set ZOT_INVENTORY_INGEST_URL -- the threat
+# model this file's destination pins are written against -- can set these too,
+# and then the pin, --disable and --noproxy are all intact and all irrelevant.
+# The same argument reaches the RESOLVER. The netrc pin below admits the NAME
+# `localhost`, and glibc honours HOSTALIASES=<file> for dotless names in a
+# non-setuid process -- so the actor who can set ZOT_INVENTORY_REGISTRY_URL can
+# also make `localhost` resolve wherever they like, with the anchored ERE fully
+# intact. Unsetting is cheaper than dropping the name: `localhost` stays a
+# legitimate spelling for an operator's local registry, and only the resolver
+# needs removing from the trust path.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
 
 readonly MARKER_NAME="SOLEUR_ZOT_INVENTORY"
 readonly MARKER_SCHEMA=1
@@ -88,7 +116,10 @@ readonly MARKER_SCHEMA=1
 readonly MANIFEST_ACCEPT='application/vnd.oci.image.manifest.v1+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.docker.distribution.manifest.list.v2+json'
 
 REGISTRY_URL="${ZOT_INVENTORY_REGISTRY_URL:-http://127.0.0.1:5000}"
-INGEST_URL="${ZOT_INVENTORY_INGEST_URL:-https://s2457081.eu-fsn-3.betterstackdata.com/}"
+# (#7873) ONE literal governs both the default and the pin below. Two copies would
+# be a drift seam, and the suite's source-mutation seam could only rewrite one of them.
+readonly INGEST_URL_PINNED="https://s2457081.eu-fsn-3.betterstackdata.com/"
+INGEST_URL="${ZOT_INVENTORY_INGEST_URL:-$INGEST_URL_PINNED}"
 RETRIES="${ZOT_INVENTORY_RETRIES:-3}"
 RETRY_SLEEP_S="${ZOT_INVENTORY_RETRY_SLEEP_S:-2}"
 MAX_PAGES="${ZOT_INVENTORY_MAX_PAGES:-50}"
@@ -174,7 +205,56 @@ SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 chmod 700 "$SCRATCH"
 
+# The runner parses workflow commands from BOTH streams (see C1 above), and the
+# refusals below interpolate a fully env-controlled value into stderr. A newline
+# in it forges a second line the runner acts on. Strip control characters and
+# bound the length before echoing.
+_safe_url() { printf '%s' "${1//[[:cntrl:]]/}" | cut -c1-120; }
+
 REGISTRY_HOST="$(printf '%s' "$REGISTRY_URL" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')"
+# (#7873) The pull credential is written into the netrc `machine` line, and
+# REGISTRY_URL is env-settable with no validation -- so anything that can set
+# ZOT_INVENTORY_REGISTRY_URL could name the machine this token is offered to.
+# Validate BEFORE the netrc exists, not before the request.
+#
+# ALLOWLIST THE WHOLE URL, NOT THE PARSED HOST. An earlier revision matched
+# against REGISTRY_HOST above, which is a hand-parsed derivative: the sed cuts at
+# the FIRST `:` or `/`, so `http://127.0.0.1:5000@evil.example/` yields the host
+# `127.0.0.1`, passes the allowlist, and the sweep then talks to `evil.example`.
+# The credential does not leak there (curl matches netrc on the REAL host and
+# finds no `machine evil.example`), but the guard's own stated property is
+# violated and the next reader would reasonably read it as a destination pin.
+# ADR-199 commitment 2: allowlist the permitted VALUE, never parse the hostile one.
+#
+# The shape is LOOPBACK, not one literal: zot runs on this host and the port
+# varies legitimately (the default is :5000; the suite's listeners bind ephemeral
+# ports). An exact-equality pin would be a pin on the port, not the property.
+# Anything unrecognised REFUSES -- an allowlist fails closed on every alternate
+# loopback spelling (127.1, 2130706433, 0.0.0.0, a trailing dot, IPv6-mapped),
+# which is the safe direction.
+# A REAL REGEX, NOT A `case` GLOB. The first attempt at this pin used
+# `http://127.0.0.1:[0-9]*` and was bypassed by the very input it was written for:
+# a shell glob's `*` matches ANYTHING, so `[0-9]*` reads as "a digit followed by
+# anything" and `http://127.0.0.1:5000@evil.example/` matched. Measured, not
+# reasoned about -- the both-directions probe is what caught it.
+#
+# `(:[0-9]+)?` here is anchored on both sides by the ERE, so a port is digits and
+# nothing else, and anything after it must begin `/`. Userinfo (`@`) cannot appear.
+# bash compiles EREs with REG_EXTENDED and NOT REG_NEWLINE, so `.` matches a
+# newline and `(/.*)?` would swallow `\nhttp://evil.example/`. Refuse control
+# characters before matching, so the GUARD refuses rather than depending on the
+# curl version that happens to reject the URL.
+case "$REGISTRY_URL" in
+  *[[:cntrl:]]*) die "refusing a registry URL containing a control character" 2 ;;
+esac
+# `[::1]` is deliberately NOT allowlisted. REGISTRY_HOST above cuts at the first
+# `:`, so `http://[::1]:5000` derives the host `[`: the netrc would carry
+# `machine [`, curl would match nothing, and every registry request would go out
+# UNAUTHENTICATED with no diagnostic naming the cause. A spelling this file
+# cannot express is worse than one it refuses.
+if [[ ! "$REGISTRY_URL" =~ ^https?://(127\.0\.0\.1|localhost)(:[0-9]+)?(/.*)?$ ]]; then
+  die "refusing to write the pull credential into a netrc for non-loopback registry '$(_safe_url "$REGISTRY_URL")' (ZOT_INVENTORY_REGISTRY_URL must name the local registry)" 2
+fi
 NETRC="$SCRATCH/netrc"
 printf 'machine %s\nlogin %s\npassword %s\n' "$REGISTRY_HOST" "$ZOT_PULL_USER" "$ZOT_PULL_TOKEN" > "$NETRC"
 chmod 600 "$NETRC"
@@ -191,6 +271,10 @@ http_get() {  # $1 url, $2 accept (may be empty). Sets HTTP_CODE/HTTP_BODY/HTTP_
   HTTP_BODY="$(mktemp "$SCRATCH/body.XXXXXX")"
   HTTP_HDR="$(mktemp "$SCRATCH/hdr.XXXXXX")"
   local -a args=(
+    # (#7873) --disable must be FIRST: it aborts ~/.curlrc parsing, and by the time a
+    # later flag is read the file has already been honoured. --noproxy '*' closes the
+    # ALL_PROXY/HTTPS_PROXY redirect, which a host pin does not.
+    --disable --noproxy '*'
     --silent --show-error
     --netrc-file "$NETRC"
     --request GET
@@ -503,6 +587,13 @@ emit_and_exit() {  # $1 outcome, $2 reason
   # pretty-printed body puts literal newlines inside the shipped payload.
   jq -c -Rn --arg m "$line" '{message:$m}' > "$payload" || die "could not build the ingest payload." 2
 
+  # (#7873) The ingest bearer is about to be written into a config file whose `url`
+  # comes from an env-settable variable validated by nothing. Pin it to the one
+  # destination this credential belongs to. Exit non-zero: no boot depends on this.
+  if [ "$INGEST_URL" != "$INGEST_URL_PINNED" ]; then
+    die "refusing to forward the Better Stack ingest credential to unpinned destination '$(_safe_url "$INGEST_URL")' (expected '${INGEST_URL_PINNED}')" 2
+  fi
+
   local conf="$SCRATCH/ingest.conf"
   {
     printf 'url = "%s"\n' "$INGEST_URL"
@@ -513,7 +604,7 @@ emit_and_exit() {  # $1 outcome, $2 reason
   chmod 600 "$conf"
 
   local ingest_code rc
-  ingest_code="$(curl --silent --show-error --request POST --config "$conf" \
+  ingest_code="$(curl --disable --noproxy '*' --silent --show-error --request POST --config "$conf" \
     --max-time "$HTTP_TIMEOUT_S" --output /dev/null --write-out '%{http_code}' 2>>"$SCRATCH/curl.err")"
   rc=$?
   if [[ $rc -ne 0 && -z "$ingest_code" ]]; then ingest_code="000"; fi

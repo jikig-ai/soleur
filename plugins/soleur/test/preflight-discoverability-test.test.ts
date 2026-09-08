@@ -2209,9 +2209,26 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `BETTERSTACK_QUERY_*` and has no unauthenticated substitute. Not a leftover template comment
   // and not a stray line outside the sub-block, which are the two cases this instruction says to
   // DELETE rather than baseline.
-  // 8 -> 9 (#7829). Confirmed against this assertion's own instruction BEFORE the number
-  // moved — the two cases it says to DELETE rather than baseline are a leftover template
-  // comment and a stray line outside the sub-block, and this is neither:
+  // 8 -> 9 (#7873). Confirmed against this assertion's own instruction BEFORE the
+  // number moved: the new declaration is in
+  // `2026-09-07-fix-betterstack-roundtrip-credfwd-lefthook-plan.md`, it sits INSIDE
+  // that plan's `discoverability_test:` sub-block, and it is genuine — the probe
+  // reads the warehouse for a stored `SOLEUR_ZOT_INVENTORY` row to prove the
+  // pinned-and-confined invocation still reaches its destination, and per #7855 an
+  // ingest POST proves reachability and NOT storage, so there is no unauthenticated
+  // substitute for `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. Not a leftover
+  // template comment and not a stray line outside the sub-block, which are the two
+  // cases this instruction says to DELETE rather than baseline.
+  // 9 -> 10 (#7829). RENUMBERED AT MERGE, not authored as 9 -> 10: this branch wrote
+  // 8 -> 9 while #7873 landed its own 8 -> 9 on main, so ours is the TENTH adoption. This
+  // is the all-members-baseline class the #7462/#7516 entry above already records — a
+  // sibling adding a member to the guarded set turns main RED unless the later branch
+  // renumbers. Caught at the ship-time sync as a merge conflict, which is the only place
+  // it CAN be caught: both branches were green in isolation.
+  //
+  // Confirmed against this assertion's own instruction BEFORE the number moved — the two
+  // cases it says to DELETE rather than baseline are a leftover template comment and a
+  // stray line outside the sub-block, and this is neither:
   //   1. PLACEMENT — a correctly-indented child of `discoverability_test:` in
   //      `plans/archive/20260908-094935-fix-byok-cap-breach-audit-ledger-plan.md`, verified
   //      by running Check 10's own sub-block-scoped awk against it, not a whole-file grep.
@@ -2233,7 +2250,7 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   //      `authenticated` cannot execute it — so an anon probe cannot even call it, let alone
   //      assert its body. Also a database query, not a host login, so the no-SSH requirement
   //      in `hr-observability-as-plan-quality-gate` is satisfied.
-  const BASELINE_DECLARED_PROBES = 9;
+  const BASELINE_DECLARED_PROBES = 10;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
