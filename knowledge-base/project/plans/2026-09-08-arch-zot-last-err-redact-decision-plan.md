@@ -38,9 +38,15 @@ carries blocker **B2**, the referral that produced this issue. `ADR-185` exists 
 FIGURE was** — see the budget correction below.
 
 Mechanism-vs-ADR check: the proposed mechanism ("route the diagnostic sample through the shipper's
-`redact()`") was grepped against the ADR corpus. `ADR-184` (the shipper) *establishes* `redact()` and
-scopes it explicitly to its own emitter; it does not consider and does not reject extending it. So
-this is an unconsidered extension, not a rejected alternative.
+`redact()`") was grepped against the ADR corpus. **[CORRECTED after architecture review — the first
+draft of this paragraph said ADR-184 "establishes `redact()` and scopes it to its own emitter". It
+does not, and that false premise drove the ADR decision for two drafts.]** Measured:
+`grep -rn 'redact()\|CRED_HDRS\|HDR_KEEP' knowledge-base/engineering/architecture/decisions/`
+returns **zero hits corpus-wide**. `redact` appears in ADR-184 only twice, in a §3 heading and one
+line of prose; what §3 records is a one-`Authorization`-rule **denylist**. The structural allowlist
+lives solely in `cloud-init-registry.yml`, described only in the legal artifacts. So the mechanism is
+**undocumented in the ADR corpus entirely** — neither an extension of a recorded decision nor a
+rejected alternative — which is why this plan mints a new ADR rather than amending one.
 
 ### Property List (Phase 0.6b)
 
