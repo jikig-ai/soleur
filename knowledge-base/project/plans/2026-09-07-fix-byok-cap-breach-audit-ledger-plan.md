@@ -561,12 +561,20 @@ logs:
   retention: unchanged by this plan.
 
 discoverability_test:
-  command: bash apps/web-platform/scripts/probe-byok-cap-ledger.sh
-  expected_output: "OK: cap-refusal row present for probe invocation"
-  credentials_required: "Doppler soleur/dev service token — audit_byok_use is
-        RLS-gated (audit_byok_use_workspace_member_select) and written only by
-        service_role RPCs, so no unauthenticated probe can observe the row whose
-        existence is the entire property under test."
+  # CORRECTED at review. The originally-cited
+  # `apps/web-platform/scripts/probe-byok-cap-ledger.sh` did not exist anywhere
+  # in the repo — the whole string occurred only on this line, so Preflight
+  # Check 10 would have executed it and got "No such file or directory", with a
+  # credentials waiver reading as the reason it could not be verified. That is
+  # the swap-live-verification-for-prose shape the gate treats as waiver abuse.
+  command: psql "$DATABASE_URL_POOLER" -f apps/web-platform/supabase/verify/137_byok_cap_breach_audit_row.sql
+  expected_output: "every row returns bad=0 (8 checks: return type, no cap RAISE,
+        five-value CHECK, corrected window arithmetic, founder filter, and the
+        three privilege assertions)"
+  credentials_required: "Doppler soleur/<env> DATABASE_URL_POOLER. This is the
+        same file the release pipeline's verify-migrations job runs post-apply,
+        so the on-demand probe and the CI gate are the same artifact — there is
+        no second thing to drift."
 ```
 
 **Why the discoverability_test changed.** The first draft declared a `vitest` run.

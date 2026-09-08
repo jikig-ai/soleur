@@ -42,7 +42,10 @@ export default async function AuditPage() {
   // an ordinary charge.
   const { data: byokRows } = await supabase
     .from("audit_byok_use")
-    .select("ts, agent_role, token_count, unit_cost_cents")
+    // `attribution_shift_reason` is selected because migration 137 makes
+    // REFUSED delegated turns persist a row attributed to the grantee. Without
+    // it a refusal renders here as an ordinary charge the user incurred.
+    .select("ts, agent_role, token_count, unit_cost_cents, attribution_shift_reason")
     .eq("founder_id", user.id)
     .order("ts", { ascending: false })
     .limit(50);
