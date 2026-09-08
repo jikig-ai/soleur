@@ -112,12 +112,30 @@ trap cleanup EXIT
 # coloured run reported `pass=0` alongside `expect=539` — one asymmetry, one
 # cause. The parse therefore runs over a STRIPPED copy, produced here.
 #
-# ESC is built with printf, NOT the `\x1b` sed escape: `\x1b` is a GNU sed
-# extension and BSD sed matches the literal characters `x1b` instead.
+# ESC is built with printf, never with the backslash-x escape form. That form is a
+# GNU extension; BSD sed matches the literal characters `x1b` instead, so a strip
+# written with it silently does nothing on macOS while passing review.
 ESC=$(printf '\033')
 
 strip_ansi() {                  # <path> -> stripped text on stdout
-  cat "$1"                      # SCAFFOLD (Phase 1a): pass-through, no strip yet.
+  # `[0-?]`, `[ -/]` and `[@-~]` are ECMA-48's parameter, intermediate and final
+  # byte ranges; the second rule catches every two-byte escape (`ESC 7` DECSC,
+  # `ESC ( B` charset). A narrower SGR-only class is NOT enough — measured, a
+  # colon-separated SGR, a DECSC and a charset designator each survive it, and each
+  # survivor is then a hard RED on a healthy tree.
+  #
+  # LC_ALL=C is load-bearing: the byte ranges are locale-dependent without it.
+  # The `|` delimiter avoids the `/`-inside-bracket trap — an escaped `/` in a
+  # bracket expression was measured turning the class into 0x20-0x5C and eating
+  # ` 122 p`.
+  # `tr` TRANSLATES CR to newline, never deletes it: deleting a CR concatenates the
+  # overwritten text onto the summary line and the anchor fails again.
+  #
+  # Out of scope, stated rather than implied: OSC (`ESC ] ... BEL`), which bun does
+  # not emit, and a `\e[1G` rewrite whose stale text precedes the escape — neither
+  # is recoverable by stripping alone.
+  LC_ALL=C tr '\r' '\n' < "$1" \
+    | LC_ALL=C sed -e "s|${ESC}\[[0-?]*[ -/]*[@-~]||g" -e "s|${ESC}[ -/]*[0-~]||g"
 }
 
 # parse_bun_summary is the SOLE PRODUCER of counter values: it echoes them and one
@@ -149,7 +167,12 @@ parse_bun_summary() {           # <path> -> "pass fail skip todo expect"
   # MEASUREMENT rather than by source pattern-matching.
   v="$(grep -oE '^[[:space:]]*([0-9]+) todo' <<<"$plain" | grep -oE '[0-9]+' | tail -1)"
   out="$out ${v:--}"
-  v="$(grep -oE '([0-9]+) expect\(\) calls' <<<"$plain" | grep -oE '^[0-9]+' | tail -1)"
+  # The first stage gains the `^[[:space:]]*` anchor the other four already had —
+  # without it a mid-log stack frame quoting `999 expect() calls` is read as the
+  # summary. The second stage must stay UNANCHORED: anchoring stage one makes the
+  # match carry its leading whitespace, so a `^[0-9]+` second stage matches nothing
+  # and a healthy `539 expect() calls` parses EMPTY — a false RED on every green run.
+  v="$(grep -oE '^[[:space:]]*([0-9]+) expect\(\) calls' <<<"$plain" | grep -oE '[0-9]+' | tail -1)"
   out="$out ${v:--}"
   printf '%s\n' "$out"
 }
@@ -161,7 +184,7 @@ parse_bun_summary() {           # <path> -> "pass fail skip todo expect"
 # `coverage silently removed` diagnosis. `pass` and `fail` are the only counters bun
 # prints unconditionally.
 summary_measured() {            # exit 0 iff $1 and $2 are both integers
-  [[ "$1" =~ ^[0-9]+$ ]]        # SCAFFOLD (Phase 1a): ignores $2 — today's fail-open.
+  [[ "$1" =~ ^[0-9]+$ && "$2" =~ ^[0-9]+$ ]]
 }
 
 echo "=== preflight Check 10 suite integrity ==="
@@ -413,51 +436,93 @@ fi
 # this gate.
 read -r n_pass n_fail n_skip n_todo n_expect <<<"$(parse_bun_summary "$LOG")"
 
+# Bind the verdict BEFORE anything touches the counters, so no later statement can
+# change what "measured" meant.
+if summary_measured "$n_pass" "$n_fail"; then MEASURED=1; else MEASURED=0; fi
+
+# Printed before the branch, and printed RAW: on an unparsed run this line reads
+# `pass=- fail=-`, which is more honest than the `pass=0` that the five deleted
+# zero-defaults used to manufacture. Correctness must not depend on statement order.
+echo "  (measured: pass=$n_pass fail=$n_fail skip=$n_skip todo=$n_todo expect=$n_expect)"
+
 # An UNPARSED summary must not read as "measured zero". Without this, a run that
 # never produced a summary block still printed "[ok] no tests skipped at runtime".
+# This row is UNCONDITIONAL — it has an `else` — which makes the check count
+# deterministic and, under FORCE_COLOR, is the only per-check record that the strip
+# worked on real bun output. Everything else asserting that property is a fixture.
 cases=$((cases + 1))
-if summary_measured "$n_pass" "$n_fail"; then
+if [[ "$MEASURED" == 1 ]]; then
   pass "bun's summary block parsed"
 else
   fail "could not parse bun's summary block — treating as UNMEASURED, not as zero (log: $LOG)"
   KEEP_LOG=1
 fi
-: "${n_pass:=0}" "${n_fail:=0}" "${n_skip:=0}" "${n_todo:=0}" "${n_expect:=0}"
 
-# N1 — every counter must be an INTEGER by the time anything compares it. A `-`
-# reaching `[[ "-" -gt 0 ]]` prints one arithmetic error to stderr and returns
-# FALSE, so the arm below would print `[ok] no tests skipped` on a comparison that
-# errored, and a SUT floor would silently stop firing. Measured: `""` is fail-CLOSED
-# at those comparisons and `-` is fail-OPEN, so introducing the sentinel flips the
-# polarity of every unguarded comparison.
-cases=$((cases + 1))
-if [[ "$n_pass" =~ ^[0-9]+$ && "$n_fail" =~ ^[0-9]+$ && "$n_skip" =~ ^[0-9]+$ \
-   && "$n_todo" =~ ^[0-9]+$ && "$n_expect" =~ ^[0-9]+$ ]]; then
-  pass "every counter is an integer at the point of comparison"
+if [[ "$MEASURED" == 1 ]]; then
+  # skip / todo / expect are omitted from bun's summary when zero, so `-` means 0
+  # HERE — and only here. Outside this branch `-` means UNKNOWN. Nothing below may
+  # compare a `-`: measured, `[[ "" -gt 0 ]]` is fail-CLOSED but `[[ "-" -gt 0 ]]`
+  # prints one arithmetic error to stderr nobody reads and returns FALSE, so the
+  # skip/todo arm would print `[ok] no tests skipped` on a comparison that errored.
+  # These are the FIRST statements of the branch, before any arithmetic.
+  for v in n_skip n_todo n_expect; do [[ "${!v}" == "-" ]] && printf -v "$v" 0; done
+
+  # N1 — the normalisation above is what this asserts. Deleting it leaves `-` at
+  # every comparison, which is invisible to the terminal line and to the exit code.
+  cases=$((cases + 1))
+  if [[ "$n_pass" =~ ^[0-9]+$ && "$n_fail" =~ ^[0-9]+$ && "$n_skip" =~ ^[0-9]+$ \
+     && "$n_todo" =~ ^[0-9]+$ && "$n_expect" =~ ^[0-9]+$ ]]; then
+    pass "every counter is an integer at the point of comparison"
+  else
+    fail "a counter is not an integer at the point of comparison (pass=$n_pass fail=$n_fail skip=$n_skip todo=$n_todo expect=$n_expect) — a '-' here is fail-OPEN"
+  fi
+
+  cases=$((cases + 1))
+  if [[ "$n_fail" -gt 0 ]]; then
+    fail "$n_fail test(s) FAILED per bun's own summary"
+    KEEP_LOG=1
+  else
+    pass "bun's summary reports no failing tests"
+  fi
+
+  cases=$((cases + 1))
+  if [[ "$n_skip" -gt 0 || "$n_todo" -gt 0 ]]; then
+    fail "$n_skip skipped + $n_todo todo test(s) — coverage silently removed"
+  else
+    pass "no tests skipped or todo'd at runtime"
+  fi
 else
-  fail "a counter is not an integer at the point of comparison (pass=$n_pass fail=$n_fail skip=$n_skip todo=$n_todo expect=$n_expect) — a '-' here is fail-OPEN"
-fi
-
-echo "  (measured: pass=$n_pass fail=$n_fail skip=$n_skip todo=$n_todo expect=$n_expect)"
-
-cases=$((cases + 1))
-if [[ "$n_fail" -gt 0 ]]; then
-  fail "$n_fail test(s) FAILED per bun's own summary"
+  # Every arm fails CLOSED, each naming the same cause. The regression this file
+  # exists to close was the opposite: `[ok] bun's summary reports no failing tests`
+  # printed directly beneath `[FAIL] could not parse bun's summary block`, a passing
+  # verdict about a count that was never read.
+  cases=$((cases + 1))
+  fail "failing-test count UNMEASURED — an unparsed summary is not a zero (log: $LOG)"
+  cases=$((cases + 1))
+  fail "skip/todo count UNMEASURED — an unparsed summary is not a zero (log: $LOG)"
   KEEP_LOG=1
-else
-  pass "bun's summary reports no failing tests"
-fi
-
-cases=$((cases + 1))
-if [[ "$n_skip" -gt 0 || "$n_todo" -gt 0 ]]; then
-  fail "$n_skip skipped + $n_todo todo test(s) — coverage silently removed"
-else
-  pass "no tests skipped or todo'd at runtime"
 fi
 
 # SUT floors, reported DIRECTLY for the same reason as the manifest floor above: they are the
 # backstop for the rows, so they must not be routed through the helper a mutation neuters.
-if [[ "$n_pass" -lt "$MIN_TESTS" ]]; then
+#
+# Each floor carries its OWN measurement gate, at the comparison. Relying on the
+# enclosing `MEASURED` branch would put the predicate and the comparison in different
+# statements, where a later edit separates them and nothing reddens — and the
+# separated form is fail-OPEN, not fail-closed: `[[ "-" -lt 131 ]]` errors, returns
+# false, and control falls through to a green `[ok] test count` on a count nobody read.
+#
+# Note for a future reader: this UNMEASURED FATAL, like the two floors below it and
+# the manifest floor above, exits before the accounting-conservation check. That is
+# compliant with ADR-193 Decision #4, which orders conservation first only where a
+# floor and conservation can fire on the SAME fault — they cannot here, since the
+# floors read the counters and conservation reads PASS+FAIL against `cases`. Do not
+# "fix" the order.
+if ! [[ "$n_pass" =~ ^[0-9]+$ ]]; then
+  printf '\n[FATAL] SUT floor: test count UNMEASURED — an unparsed summary is not a zero.\n' >&2
+  echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
+  exit 1
+elif [[ "$n_pass" -lt "$MIN_TESTS" ]]; then
   printf '\n[FATAL] SUT floor: only %d test(s) passed, floor is %d (coverage removed? — if "bun test exited 0" also failed, this is a consequence of that, not a cause).\n' \
     "$n_pass" "$MIN_TESTS" >&2
   echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
@@ -466,7 +531,11 @@ fi
 cases=$((cases + 1))
 pass "test count $n_pass >= floor $MIN_TESTS"
 
-if [[ "$n_expect" -lt "$MIN_ASSERTIONS" ]]; then
+if ! [[ "$n_expect" =~ ^[0-9]+$ ]]; then
+  printf '\n[FATAL] SUT floor: assertion count UNMEASURED — an unparsed summary is not a zero.\n' >&2
+  echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
+  exit 1
+elif [[ "$n_expect" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] SUT floor: only %d expect() call(s), floor is %d (assertions gutted? — if "bun test exited 0" also failed, this is a consequence of that, not a cause).\n' \
     "$n_expect" "$MIN_ASSERTIONS" >&2
   echo "=== $PASS passed, $FAIL failed ($cases checks) ==="
@@ -485,8 +554,10 @@ pass "assertion count $n_expect >= floor $MIN_ASSERTIONS"
 # code. This file's whole thesis is that a suite asserting nothing is
 # indistinguishable from one that passed — that applies to this file too.
 # Ratchet with the check count, exactly like MIN_TESTS. Ratcheted to the MEASURED green value
-# (13) with no slack: the previous 11 carried 2 checks of slack, and slack in an own-dispatch
+# (25) with no slack: an earlier 11 carried 2 checks of slack, and slack in an own-dispatch
 # floor is the budget a silent regression spends — deleting two whole checks stayed green.
+# 13 of the 25 are the parser self-test section, which is the only thing standing between a
+# regressed strip and a gate that reports a confident zero.
 #
 # Read off `cases`, NOT off PASS+FAIL. The counter must be independent of the helpers the floor
 # exists to police: PASS+FAIL is exactly what a neutered fail() suppresses, so a floor read off
@@ -498,7 +569,7 @@ pass "assertion count $n_expect >= floor $MIN_ASSERTIONS"
 # reads $FAIL, which is the same counter a stubbed fail() stops moving. A floor enforced through
 # the suspect cannot witness the suspect — measured on the previous shape: fail() neutered, the
 # gate printed a clean total and exited 0.
-MIN_CHECKS=13
+MIN_CHECKS=25
 if [[ "$cases" -lt "$MIN_CHECKS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d check(s) dispatched, floor is %d — the gate itself went silent.\n' \
     "$cases" "$MIN_CHECKS" >&2
