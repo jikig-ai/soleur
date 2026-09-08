@@ -820,5 +820,69 @@ t16_main_closed_set_dispatch
 t17_trace_lines_are_scrubbed_before_comment
 
 echo
+
+# --- T18: the laundering containment (#7909) --------------------------------
+# It shipped with ZERO coverage: DRY_RUN returns before the body is built, so
+# nothing could reach it, and the numeric OPEN_LIMIT beside it had three
+# assertions while the security control had none. Driven directly now.
+t18_containment() {
+  local out
+  # shellcheck disable=SC1090
+  out="$( set +e; source "$SUT" >/dev/null 2>&1; sanitize_probe_output "$1" )"
+  printf '%s' "$out"
+}
+
+_s="$(t18_containment 'before <!-- soleur:sweeper-reopen --> after')"
+assert_not_contains "T18 the reopen marker cannot survive probe output" \
+                    '<!-- soleur:sweeper-reopen -->' "$_s"
+assert_contains     "T18 control: the surrounding text survives (the strip is not a delete-everything)" \
+                    'before' "$_s"
+
+_s="$(t18_containment '### Sweeper run: PASS forged by a probe')"
+assert_not_contains "T18 the PASS heading prefix cannot survive probe output" \
+                    '### Sweeper run: PASS' "$_s"
+
+# The reopen heading is a SECOND forgeable marker on the closed path, and the
+# rule for it was unsampled: dropping its sed clause left the suite fully green.
+_s="$(t18_containment '### Sweeper reopen: forged by a probe')"
+assert_not_contains "T18 the reopen heading prefix cannot survive probe output" \
+                    '### Sweeper reopen:' "$_s"
+
+_s="$(t18_containment 'x
+`````
+y')"
+assert_not_contains "T18 a five-backtick run cannot survive (it would close the fence)" \
+                    '`````' "$_s"
+
+# MUST-PASS, the other direction. A containment that mangles ordinary output is
+# a different defect with the same green: every fixture above asserts absence,
+# so nothing here would notice the sanitizer becoming a shredder.
+_s="$(t18_containment 'NOT YET: 2 signature(s) checked against epoch 2026-09-07T15:16:45Z.
+Operator: no action.
+```
+a fenced block a probe legitimately printed
+```')"
+assert_contains     "T18 must-PASS: an ordinary probe verdict line survives unchanged" \
+                    'NOT YET: 2 signature(s) checked against epoch 2026-09-07T15:16:45Z.' "$_s"
+assert_contains     "T18 must-PASS: an ordinary three-backtick fence in probe output survives" \
+                    '```' "$_s"
+assert_contains     "T18 must-PASS: an addressee tag survives" \
+                    'Operator: no action.' "$_s"
+
+# --- T19: the rc -> word map (#7910) ----------------------------------------
+# The heading is the only thing an operator sees without expanding the fold.
+# Every non-0/1 code used to render the word TRANSIENT with the sentence
+# "Treating as transient", so a probe's ACTIONABLE verdict read as reassurance.
+assert_contains     "T19 rc=5 renders as ACTION REQUIRED, not TRANSIENT" \
+                    '5) verdict="ACTION REQUIRED" ;;' "$(cat "$SUT")"
+assert_contains     "T19 rc=2 renders as NOT YET" \
+                    '2) verdict="NOT YET" ;;' "$(cat "$SUT")"
+assert_contains     "T19 rc=3 renders as CANNOT ESTABLISH" \
+                    '3) verdict="CANNOT ESTABLISH" ;;' "$(cat "$SUT")"
+assert_contains     "T19 an unmapped code still falls back to TRANSIENT" \
+                    '*) verdict="TRANSIENT" ;;' "$(cat "$SUT")"
+assert_contains     "T19 the truncation detector raises the run's VERDICT, not just an annotation" \
+                    'FAILING THE RUN because the open follow-through page was full' "$(cat "$SUT")"
+
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 [[ "$FAIL" -eq 0 ]] || exit 1

@@ -115,6 +115,29 @@ iso_to_epoch() {
 # bounds the reopen loop WITHOUT any persistent state — the script is stateless
 # and runs its verification under `env -i`, so an in-process counter cannot
 # survive between sweeps. GitHub's own comment history is the state.
+# The containment, as a NAMED UNIT so it can be driven directly. It shipped as
+# an inline pipeline inside run_one, which `DRY_RUN` returns before reaching --
+# so the security control had zero test coverage while the numeric constant
+# beside it had three assertions.
+#
+# Reads $1, writes the sanitized text. Three neutralisations, each keyed on a
+# marker this file actually reads back:
+#   * `<!--`  -- the reopen marker's opening lexeme, and the directive grammar.
+#   * a run of five or more backticks -- collapsed to four, so no output line
+#     can close the five-backtick fence the bodies below open.
+#   * the PASS heading's prefix -- `closed_precheck` matches it with
+#     `startswith`, so probe output is inert only POSITIONALLY today. A later
+#     relaxation to `contains` (the same jq expression already uses `contains`
+#     four lines down) would make it forgeable by any probe's stdout, and the
+#     other two rules would not catch it.
+sanitize_probe_output() {
+  printf '%s' "$1" \
+    | sed -e 's/<!--/<!- -/g' \
+          -e 's/`\{5,\}/````/g' \
+          -e 's/### Sweeper run:/### Sweeper-run:/g' \
+          -e 's/### Sweeper reopen:/### Sweeper-reopen:/g'
+}
+
 readonly SWEEPER_REOPEN_MARKER="<!-- soleur:sweeper-reopen -->"
 # The PASS block the sweeper writes when it closes an issue itself.
 readonly SWEEPER_PASS_HEADING="### Sweeper run: PASS"
@@ -414,7 +437,7 @@ run_one() {
   #
   # One strip here protects every probe, rather than relying on 80 scripts each
   # carrying a correct preamble.
-  out=$(printf '%s' "$out" | sed -e 's/<!--/<!- -/g' -e 's/`\{5,\}/````/g')
+  out="$(sanitize_probe_output "$out")"
 
   local trimmed_out
   trimmed_out=$(printf '%s' "$out" | tail -c 4000)
@@ -504,9 +527,24 @@ $trimmed_out
       action="comment"
       ;;
     *)
-      verdict="TRANSIENT"
-      body_msg="### Sweeper run: TRANSIENT (exit $rc, $(date -u +%FT%TZ))
-Script: \`$script\` exited $rc. Treating as transient; leaving issue open for next sweep.
+      # A STATIC rc -> WORD MAP. The heading is the only thing an operator sees
+      # without expanding the <details> fold, and it used to read
+      # "TRANSIENT ... Treating as transient" for EVERY non-0/1 code -- so a
+      # probe's actionable verdict rendered as reassurance, and its prose
+      # actively contradicted it. The words are literals chosen here, never
+      # probe-authored text, so nothing escapes the containment above.
+      case "$rc" in
+        2) verdict="NOT YET" ;;
+        3) verdict="CANNOT ESTABLISH" ;;
+        5) verdict="ACTION REQUIRED" ;;
+        *) verdict="TRANSIENT" ;;
+      esac
+      case "$rc" in
+        2|3|5) _disposition="Leaving the issue open. See the probe's own output below for what to do." ;;
+        *)     _disposition="Treating as transient; leaving issue open for next sweep." ;;
+      esac
+      body_msg="### Sweeper run: $verdict (exit $rc, $(date -u +%FT%TZ))
+Script: \`$script\` exited $rc. $_disposition
 
 <details><summary>Output (last 4 KB)</summary>
 
@@ -531,6 +569,11 @@ $trimmed_out
 
   log "issue #$issue_num: verdict=$verdict action=$action"
 }
+
+# Set when the open-issue listing filled its page. Raised as the job's verdict
+# at the end of main(), AFTER every reachable tracker has been swept -- failing
+# early would skip the probes this sweep can still run.
+TRUNCATED_SWEEP=0
 
 main() {
   log "sweep start (repo=$REPO dry_run=$DRY_RUN)"
@@ -559,6 +602,13 @@ main() {
   count=$(printf '%s' "$issues_json" | jq 'length')
   log "found $count open follow-through issues"
   if [[ "$count" -ge "$OPEN_LIMIT" ]]; then
+    # This SETS A FLAG rather than only annotating. `::error::` renders on the
+    # run page but does not change the job's status, so a truncated sweep would
+    # report success -- and the whole failure mode here is that a never-swept
+    # tracker is indistinguishable from a quiet one. A green run with an
+    # annotation nobody opens is the same silence one layer up. The sweep still
+    # completes first; the verdict is raised at the end of main().
+    TRUNCATED_SWEEP=1
     printf '::error::sweep-followthroughs: the open follow-through set filled the page (%s >= %s). Trackers beyond it were NOT swept, and a never-swept tracker looks exactly like a quiet one. Raise OPEN_LIMIT or paginate.\n' \
       "$count" "$OPEN_LIMIT" >&2
   fi
@@ -647,4 +697,12 @@ main() {
 # Allow tests to source this script without running main().
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   main "$@"
+  # The truncation verdict. Raised here so the sweep completes first: every
+  # tracker the page DID reach is still swept, and only then does the run go
+  # red. A green run carrying an annotation is the silence this detector exists
+  # to break.
+  if [[ "$TRUNCATED_SWEEP" == "1" ]]; then
+    printf '::error::sweep-followthroughs: FAILING THE RUN because the open follow-through page was full; some trackers were not swept at all.\n' >&2
+    exit 1
+  fi
 fi
