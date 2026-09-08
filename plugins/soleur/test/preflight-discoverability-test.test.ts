@@ -2209,7 +2209,17 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // `BETTERSTACK_QUERY_*` and has no unauthenticated substitute. Not a leftover template comment
   // and not a stray line outside the sub-block, which are the two cases this instruction says to
   // DELETE rather than baseline.
-  const BASELINE_DECLARED_PROBES = 8;
+  // 8 -> 9 (#7873). Confirmed against this assertion's own instruction BEFORE the
+  // number moved: the new declaration is in
+  // `2026-09-07-fix-betterstack-roundtrip-credfwd-lefthook-plan.md`, it sits INSIDE
+  // that plan's `discoverability_test:` sub-block, and it is genuine — the probe
+  // reads the warehouse for a stored `SOLEUR_ZOT_INVENTORY` row to prove the
+  // pinned-and-confined invocation still reaches its destination, and per #7855 an
+  // ingest POST proves reachability and NOT storage, so there is no unauthenticated
+  // substitute for `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`. Not a leftover
+  // template comment and not a stray line outside the sub-block, which are the two
+  // cases this instruction says to DELETE rather than baseline.
+  const BASELINE_DECLARED_PROBES = 9;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");
