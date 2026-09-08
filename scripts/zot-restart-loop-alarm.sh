@@ -600,6 +600,11 @@ if [[ "$has_137" == true || "$climb_fire" == true || "$max_oom5m" -gt 0 ]]; then
         tail_claim="tier=fallback: NO diagnostic line matched, so this is a routine log tail that names NO cause -- do not read it as one (ADR-166): ${last_err:-none}" ;;
       none)
         tail_claim="tier=none: zot produced no log output to sample" ;;
+      fallback:suppressed)
+        # SUPPRESSED, not silent. zot DID produce output; the producer's tier gate withheld it
+        # because no diagnostic `message` could be extracted. Saying "zot produced no log output"
+        # here would be an unmeasured claim (ADR-166) published to a public issue.
+        tail_claim="tier=fallback:suppressed: zot produced output but it was a routine tail with no extractable message, so the producer withheld it -- this is the gate working, NOT an absence of logs" ;;
       *redact_failed)
         tail_claim="tier=${err_src}: the sample could not be redacted and was withheld AT THE PRODUCER, so no tail is available -- this is the fail-safe firing, not an absence of evidence" ;;
       "")

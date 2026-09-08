@@ -84,6 +84,11 @@ HDRS_DOUBLE='{level:info,message:HTTP API,headers:{Cookie:[first=AAA-FIRST-SECRE
 HDRS_UNANTICIPATED='{level:info,message:HTTP API,headers:{X-Secret:[UNANTICIPATED-HEADER-VALUE]},clientIP:10.0.1.9}'
 HDRS_PROXY='{level:info,message:HTTP API,headers:{Proxy-Authorization:[Basic PROXY-SECRET] X-Amz-Security-Token:[AMZ-SECRET-TOKEN]}}'
 ALREADY_REDACTED='{level:info,message:HTTP API,headers:{Authorization:REDACTED Cookie:REDACTED}}'
+# The SECOND denylist limit, measured (#7500 CLO review finding d). The bare-form value class
+# stops at whitespace, so `Cookie: a b` masks only `a`. The BRACKETED form zot actually emits
+# is masked whole, which is why exposure is low -- but an undocumented limit is precisely what
+# the scope-limit section exists to prevent, so it is pinned here rather than left to be found.
+HDRS_BARE_SPACED='level:info message:HTTP API Cookie: BARE-FIRST BARE-SECOND-SURVIVES clientIP:10.0.1.30'
 PANIC_TIER1='panic: runtime error: invalid memory address [signal SIGSEGV] goroutine 42'
 
 # zline_src <dt> <boot> <restarts> <exit_code> <oom5m> <oomkilled> <src> <lasterr>
@@ -263,6 +268,14 @@ reset_fix; crash_loop_fixture "$HDRS_UNANTICIPATED"
 assert_cause_contains "G2-3b denylist boundary is REAL (unanticipated header survives)" \
   ZOT_ALARM_CAUSE "UNANTICIPATED-HEADER-VALUE"
 
+# --- G2-3c: the SECOND denylist limit, asserted as a measured boundary ----------------------
+reset_fix; crash_loop_fixture "$HDRS_BARE_SPACED"
+assert_cause_masks "G2-3c bare-form value IS masked up to the first space" \
+  ZOT_ALARM_CAUSE "BARE-FIRST"
+reset_fix; crash_loop_fixture "$HDRS_BARE_SPACED"
+assert_cause_contains "G2-3c bare-form residual AFTER a space SURVIVES (recorded limit, not an absolute)" \
+  ZOT_ALARM_CAUSE "BARE-SECOND-SURVIVES"
+
 # --- Harness row (b), must-PASS: the OOM arm is untouched ----------------------------------
 # The scrub must not corrupt arms that were never the problem.
 reset_fix; oom_fixture
@@ -348,7 +361,7 @@ fi
 
 # Anti-vacuity floor. Reported with printf + exit, NEVER through fail() — a floor that calls the
 # helper it backstops is disarmed by the same edit that disarms the helper (ADR-193).
-EXPECTED_MIN=18
+EXPECTED_MIN=20
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s) — a case was silently skipped.\n' \
     "$CASES" "$EXPECTED_MIN" >&2

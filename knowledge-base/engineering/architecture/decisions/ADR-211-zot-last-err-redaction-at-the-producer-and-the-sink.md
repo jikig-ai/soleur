@@ -50,9 +50,12 @@ comments, **36** carrying a `headers` object and **13** carrying a `clientIP`.
 
 No credential leaked, and the reason matters more than the result: all 23 `Authorization`
 occurrences render `Authorization:[******]` because zot masks that one header upstream, and all
-13 `clientIP` values were RFC1918 `10.0.x.x`. The exposure was bounded by a **vendor default this
-repository does not control** and by an ingress topology that a firewall change would alter —
-not by any control we own.
+13 `clientIP` values are the **same single address, `10.0.1.30`** — the tunnel connector, inside
+our own estate. (An earlier revision of this line wrote `10.0.x.x`, which invites the reading
+that a range of client hosts was observed; the precise fact is materially stronger and is what
+the Art. 30 §(c) entry records.) The exposure was bounded by a **vendor default this repository
+does not control** and by an ingress topology that a firewall change would alter — not by any
+control we own.
 
 ## Decision
 
@@ -64,7 +67,11 @@ not by any control we own.
    tag `zot_last_err_src=<tier>:redact_failed`; **still emit the row.**
 2. **Tier gate, first in the chain.** When the tier is `fallback`, emit only the parsed
    `message`. Degrade **closed** — with `jq` unavailable the field becomes `none`, never the raw
-   line.
+   line. **The provenance label does not collapse with it:** when the gate withholds a sample
+   that zot did in fact produce, the tier is tagged `fallback:suppressed`, not `none`. Without
+   that distinction the alarm publishes "zot produced no log output to sample" on a public issue
+   in the one path where that sentence is false — an ADR-166 unmeasured claim created by the
+   change that exists to remove them. Caught at CLO review, not by the original suite.
 3. **Sink (`zot-restart-loop-alarm.sh` + its workflow).** A credential-header scrub at the
    `emit_and_exit()` chokepoint and again at the workflow publication boundary.
 4. **Render the tier inside `ZOT_ALARM_CAUSE`,** so a tier-4 sample is never presented as a cause.
@@ -118,6 +125,12 @@ Art. 30 register cites it:
   an allowlist. It is not a general PII scrubber.
 - It does **not** mask `clientIP`. That is deliberate and is owned by **#7530**. On the current
   topology `clientIP` is RFC1918 and not Art. 4(1) personal data.
+- **The sink scrub has a SECOND limit, on the VALUE side.** Its bare-form value class stops at
+  whitespace, so `Cookie: a b` masks only `a` and the residual survives. The bracketed form zot
+  actually emits (`Cookie:[session=…]`) is masked whole, which is why exposure is low — but an
+  undocumented limit is exactly what this section exists to prevent. Pinned by
+  `scripts/zot-restart-loop-alarm-scrub.test.sh` case `G2-3c`, which asserts the residual
+  **survives**, so the boundary is measured rather than discovered.
 - **The sink layer is a DENYLIST, permanently.** By the time text reaches the alarm, the
   producer's `tr -d '"\\'` has destroyed the JSON, so the structural allowlist cannot be
   reconstructed there. An unanticipated header name **survives** the sink scrub. This is asserted

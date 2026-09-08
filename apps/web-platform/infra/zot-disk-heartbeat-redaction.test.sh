@@ -272,6 +272,17 @@ printf '#!/usr/bin/env bash\nexit 127\n' > "$NOJQ/jq"; chmod +x "$NOJQ"/*
 assert_emit "G1-7 tier-4 degrades CLOSED when jq is unavailable" \
   "$TIER4_HEADERS" absent "TIER4-SECRET" PATH="$NOJQ:/usr/bin:/bin"
 
+# --- G1-8: SUPPRESSED is not SILENT (ADR-166) ----------------------------------------------
+# When the tier gate yields no extractable `message`, the sample is withheld -- but zot DID
+# produce output. Collapsing that to `zot_last_err_src=none` makes the alarm publish "zot
+# produced no log output to sample", which is false in exactly this path, on a public issue.
+# That is an unmeasured causal claim newly created by the change that exists to remove them.
+# The tier tag must distinguish suppressed-by-us from nothing-to-see.
+assert_emit "G1-8 a suppressed tier-4 sample is tagged suppressed, not none" \
+  "$TIER4_HEADERS" present "zot_last_err_src=fallback:suppressed" PATH="$NOJQ:/usr/bin:/bin"
+assert_emit "G1-8 a suppressed sample does NOT claim the tier was none" \
+  "$TIER4_HEADERS" absent "zot_last_err_src=none" PATH="$NOJQ:/usr/bin:/bin"
+
 # --- Harness (b), must-PASS: a benign tier-2 line passes through unredacted -----------------
 # NOTE the tier. An earlier draft used `gc successfully completed` here, which is a TIER-4
 # sample the tier gate suppresses — so the row would have asserted a behaviour this same change
@@ -316,7 +327,7 @@ if [[ "${#_v_pass}" -ne "$PASS" || "${#_v_fail}" -ne "$FAIL" ]]; then
 fi
 
 # Anti-vacuity floor — printf + exit, never through fail() (ADR-193).
-EXPECTED_MIN=26
+EXPECTED_MIN=28
 if [[ "$CASES" -lt "$EXPECTED_MIN" ]]; then
   printf '\n[FATAL] cardinality: only %s cases ran (expected >= %s).\n' "$CASES" "$EXPECTED_MIN" >&2
   exit 1

@@ -384,9 +384,9 @@ write_files:
       # SIBLING path to the same warehouse source and never this one.
       #
       # CRED_HDRS and HDR_KEEP are BYTE-IDENTICAL to the copies in zot-log-shipper.sh below.
-      # That is asserted by registry-boot-guard.test.sh, which anchors on the jq program's
-      # the jq scrub program's leading definition (exactly 2 occurrences, matched at line start
-      # so this very sentence cannot be counted) rather than on byte-equality of the
+      # That is asserted by registry-boot-guard.test.sh, which anchors on the jq scrub
+      # program's leading definition (exactly 2 occurrences, matched at line start so this
+      # very sentence cannot be counted) rather than on byte-equality of the
       # function bodies -- byte-equality would force this copy to emit `[zot-log-shipper]`-tagged
       # stderr into a channel with no reader, i.e. a gate dictating dead code.
       #
@@ -457,6 +457,13 @@ write_files:
             [ -n "$_m" ] && _msgs="$_msgs$_m"$'\n'
           done <<< "$ZOT_ERR_RAW"
         fi
+        # SUPPRESSED IS NOT SILENT (ADR-166). If the gate yields nothing while zot DID produce
+        # output, the provenance must say so. Collapsing this to `none` further down would make
+        # the alarm publish "zot produced no log output to sample" -- on a PUBLIC issue -- in the
+        # one path where that sentence is false, which is an unmeasured causal claim created by
+        # the very change that exists to remove them. Reached whenever jq is absent or the tier-4
+        # lines carry no extractable `message` (plain `docker logs` text).
+        if [ -z "$_msgs" ] && [ -n "$ZOT_ERR_RAW" ]; then ZOT_ERR_SRC=fallback:suppressed; fi
         ZOT_ERR_RAW="$_msgs"
       fi
 
@@ -476,7 +483,7 @@ write_files:
       # cause. Measured: the 2026-08-04 15:00:02Z sample reached Better Stack carrying only
       # `...scheduler.go:143 +0x265 created by ...poolWorker in goroutine 32` — the panic header
       # had already been truncated away by exactly this bug.
-      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\' | head -c 300); [ -n "$ZOT_LAST_ERR" ] || { ZOT_LAST_ERR=none; ZOT_ERR_SRC=none; }
+      ZOT_LAST_ERR=$(printf '%s' "$ZOT_ERR_RAW" | tr '\n\r\t' ' ' | LC_ALL=C tr -cd '\40-\176' | tr -d '"\\' | head -c 300); [ -n "$ZOT_LAST_ERR" ] || { ZOT_LAST_ERR=none; case "$ZOT_ERR_SRC" in *:*) : ;; *) ZOT_ERR_SRC=none ;; esac; }
       # (2f) Boot discriminator — the immutable redeploy reuses the terraform hostname, so boot_id is
       # what cleanly separates old-host from new-host events for the automated decision rule.
       BOOT_ID=$(cat /proc/sys/kernel/random/boot_id 2>/dev/null); [ -n "$BOOT_ID" ] || BOOT_ID=unknown
