@@ -246,10 +246,34 @@ parse_index() {
 # extracted renderer's byte-identity to the generator's on every merge rather
 # than only in a parity test. All three inputs are validated — the ancestor is
 # the base of the set arithmetic and is exactly as capable of being corrupt.
+#
+# THE DERIVED COUNT IS THE ONE FIELD THAT MUST NOT PARTICIPATE, AND LEAVING IT IN
+# MADE THE DRIVER REFUSE ORDINARY MERGES. `> Total files:` is a function of the
+# rows; the driver never reads it and recomputes it from the merged set. But a
+# committed index whose header disagrees with its own body is NOT hypothetical —
+# measured on origin/main 2026-09-08, two of the last twelve commits touching
+# INDEX.md carry an off-by-one header (`68b0e6d79`: header 6430, body 6431;
+# `8094a685d`: header 6432, body 6433). An ANCESTOR is a historical commit by
+# construction, so this fires on merges that have nothing wrong with them: PR
+# #7938's own first sync refused, on a stale numeral in a file whose rows were
+# perfectly parseable, in the merge the driver exists to resolve.
+#
+# So the comparison masks that numeral and NOTHING else. The header line must
+# still be present, in position, and of the exact shape `> Total files: <digits>`
+# — a renderer whose header text, ordering or surrounding blank lines drifted
+# still fails here, which is the property this check was added for. Only the
+# digits are exempt, because repairing a stale count is precisely what the driver
+# is for: its OUTPUT always carries the count derived from the merged rows.
+_mask_derived_count() {
+  sed 's/^> Total files: [0-9][0-9]*$/> Total files: <derived>/' "$1"
+}
+
 validate_roundtrip() {
   local src="$1" tsv="$2" rendered="$WORKDIR/rt.$$"
   kb_render_index "$tsv" > "$rendered"
-  cmp -s "$rendered" "$src" || die "round-trip validation failed for $src (not a canonical generated index)"
+  if ! cmp -s <(_mask_derived_count "$rendered") <(_mask_derived_count "$src"); then
+    die "round-trip validation failed for $src (not a canonical generated index)"
+  fi
   rm -f "$rendered"
 }
 

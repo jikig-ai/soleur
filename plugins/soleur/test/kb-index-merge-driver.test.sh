@@ -145,7 +145,7 @@ chk_rc=0
 KB_DIR="$R2/knowledge-base" bash "$GEN" --check >/dev/null 2>&1 || chk_rc=$?
 assert_eq "1" "$([[ "$chk_rc" -ne 0 ]] && echo 1 || echo 0)" "AC5: --check exits non-zero on the unregistered result"
 
-echo "=== T6/AC6: a corrupt ancestor produces a LOUD failure, not a clean-looking file ==="
+echo "=== T6/AC6: an unparseable ancestor row produces a LOUD failure, not a clean-looking file ==="
 mkdir -p "$WORK/t6"
 # Built through the REAL renderer, then corrupted by a targeted edit. Four
 # fixtures here used to hand-write the whole rendered format as printf literals
@@ -158,11 +158,20 @@ mk_render() { local out="$1"; shift; local tsv="$WORK/.mkr.$$"; : > "$tsv"
   local r; for r in "$@"; do printf '%s\n' "$r" >> "$tsv"; done
   LC_ALL=C sort -o "$tsv" "$tsv"; ( source "$RENDER_LIB"; kb_render_index "$tsv" ) > "$out"; rm -f "$tsv"; }
 mk_render "$WORK/t6/O" "$(printf 'engineering/alpha.md\tAlpha')"
-sed -i 's/^> Total files: .*/> Total files: 99/' "$WORK/t6/O"
+# THE CORRUPTION IS A ROW, NOT THE DERIVED COUNT — and it was the count until
+# T22 was written. `> Total files: 99` is not a corrupt ancestor in any sense the
+# driver cares about: the count is a function of the rows, the driver never reads
+# it, and its output recomputes it. Asserting a refusal on it pinned the
+# over-strict behaviour that made the driver refuse this PR's own first sync
+# against a perfectly parseable ancestor (see T22). What a corrupt ancestor
+# actually means is a row the parser cannot key unambiguously, so that is what
+# this case now injects: a second unescaped `](` makes the title/rel split
+# ambiguous, which is the misparse round-trip validation exists to stop.
+printf -- '- [Weird](x/x/a](x/b.md)\n' >> "$WORK/t6/O"
 cp "$WORK/t6/O" "$WORK/t6/A"; cp "$WORK/t6/O" "$WORK/t6/B"
 d_rc=0
 bash "$DRIVER" "$WORK/t6/O" "$WORK/t6/A" "$WORK/t6/B" knowledge-base/INDEX.md >/dev/null 2>&1 || d_rc=$?
-assert_eq "1" "$([[ "$d_rc" -ne 0 ]] && echo 1 || echo 0)" "T6: driver exits non-zero on a corrupt ancestor"
+assert_eq "1" "$([[ "$d_rc" -ne 0 ]] && echo 1 || echo 0)" "T6: driver exits non-zero on an ancestor row it cannot key"
 assert_eq "1" "$(grep -c '^<<<<<<< kb-index' "$WORK/t6/A" || true)" "AC6: the sentinel conflict marker is written exactly once"
 
 echo "=== T19/AC25: the driver refuses any path but knowledge-base/INDEX.md ==="
@@ -427,6 +436,69 @@ assert_eq "1" "$([[ "$(grep -c 'knowledge-base/INDEX.md' "$REPO_ROOT/plugins/sol
 # followed by an `@owner`; a comment line starts with `#` and cannot match.
 assert_eq "3" "$(grep -cE '^/scripts/(merge-kb-index|lib/kb-index-render|install-kb-merge-driver)[.]sh[[:space:]]+@' "$REPO_ROOT/.github/CODEOWNERS" || true)" "AC26: all three gate-critical scripts carry CODEOWNERS rows"
 
+# ---------------------------------------------------------------------------
+# T22/AC27/AC28 — A STALE DERIVED COUNT IN THE ANCESTOR MUST NOT BLOCK THE MERGE.
+#
+# Found by running this PR's own driver on this PR's own first sync, not by
+# inspection. Round-trip validation originally byte-compared the WHOLE file,
+# ancestor included, and refused with "not a canonical generated index". The
+# ancestor was fine: its rows parsed perfectly. Its `> Total files:` header was
+# one short of its body, because main's generator counted `${#all_files[@]}`
+# (the find result) while emitting rows from a separate pass. Measured on
+# origin/main 2026-09-08: two of the last twelve commits touching INDEX.md carry
+# that off-by-one (68b0e6d79 header 6430 / body 6431; 8094a685d 6432 / 6433).
+#
+# An ancestor is a historical commit BY CONSTRUCTION, so validating a derived
+# field in it makes the driver refuse ordinary merges at a rate set by how often
+# that field was ever stale. The count is a function of the rows, the driver
+# never reads it, and its output always recomputes it — so it is exempt, and
+# NOTHING ELSE IS (AC28).
+echo "=== T22/AC27/AC28: a stale derived count in the ancestor ==="
+R22="$(new_repo t22)"
+register_driver "$R22"
+# Corrupt ONLY the ancestor's header numeral, leaving every row intact. `sed` on
+# the committed file then amend, so the stale value is what git hands the driver
+# as %O rather than something the working tree can quietly regenerate away.
+I22="$(idx "$R22")"
+sed -i 's/^> Total files: \([0-9][0-9]*\)$/> Total files: 999/' "$I22"
+fx_git "$R22" add -A; fx_git "$R22" commit -q --amend --no-edit
+assert_eq "999" "$(header_count "$I22")" "T22: the ancestor really does carry a stale count"
+fx_git "$R22" checkout -q -b side-a
+printf '# Gamma\n' > "$R22/knowledge-base/engineering/gamma.md"; gen "$R22"
+fx_git "$R22" add -A; fx_git "$R22" commit -q -m a
+fx_git "$R22" checkout -q trunk
+printf '# Delta\n' > "$R22/knowledge-base/project/delta.md"; gen "$R22"
+fx_git "$R22" add -A; fx_git "$R22" commit -q -m b
+m22=0
+fx_git "$R22" merge --no-ff -m merge side-a >/dev/null 2>&1 || m22=$?
+assert_eq "0" "$m22" "AC27: the merge resolves despite the ancestor's stale count"
+assert_eq "0" "$(grep -c '<<<<<<<' "$I22" || true)" "AC27: no sentinel was written"
+assert_eq "1" "$(grep -c 'engineering/gamma\.md' "$I22" || true)" "AC27: side-a's row survives"
+assert_eq "1" "$(grep -c 'project/delta\.md' "$I22" || true)" "AC27: trunk's row survives"
+assert_eq "$(row_count "$I22")" "$(header_count "$I22")" "AC27: the OUTPUT's count is recomputed, not inherited"
+
+# AC28 — the exemption is the numeral and nothing else. Same scenario, but the
+# ancestor's header LINE is reshaped rather than merely stale. A mask that
+# tolerated the whole line (or the whole header block) would pass this too, and
+# would stop pinning the renderer's byte-identity to the generator's.
+echo "=== AC28: only the numeral is exempt, not the header line ==="
+R23="$(new_repo t23)"
+register_driver "$R23"
+I23="$(idx "$R23")"
+sed -i 's/^> Total files: [0-9][0-9]*$/> Total files: many/' "$I23"
+fx_git "$R23" add -A; fx_git "$R23" commit -q --amend --no-edit
+fx_git "$R23" checkout -q -b side-a
+printf '# Gamma\n' > "$R23/knowledge-base/engineering/gamma.md"; gen "$R23"
+fx_git "$R23" add -A; fx_git "$R23" commit -q -m a
+fx_git "$R23" checkout -q trunk
+printf '# Delta\n' > "$R23/knowledge-base/project/delta.md"; gen "$R23"
+fx_git "$R23" add -A; fx_git "$R23" commit -q -m b
+m23=0
+fx_git "$R23" merge --no-ff -m merge side-a >/dev/null 2>&1 || m23=$?
+assert_eq "1" "$([[ "$m23" -ne 0 ]] && echo 1 || echo 0)" "AC28: a reshaped header line still refuses"
+assert_eq "1" "$([[ "$(grep -c '<<<<<<<' "$I23" || true)" -ge 1 ]] && echo 1 || echo 0)" "AC28: and the refusal writes a sentinel naming the cause"
+
+
 echo "=== AC17: the COMMITTED artifacts are fresh — the guard's only real-tree caller ==="
 # THIS IS THE WIRING, NOT A NICETY. Every other --check invocation in this suite
 # is KB_DIR-pinned to a fixture, which exercises the guard's LOGIC and asserts
@@ -482,4 +554,4 @@ fi
 PASS=$_pc_pass_before
 FAIL=$_pc_fail_before
 
-print_results 66
+print_results 74

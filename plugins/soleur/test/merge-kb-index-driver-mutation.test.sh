@@ -39,6 +39,7 @@
 #   G11 renderer drift: kb-index-render.sh header edited  RED
 #   G12 the 8 KB physical-line cap removed ............... RED
 #   G13 `set -E` dropped — ERR trap no longer covers functions  RED
+#   G14 the derived-count mask removed from round-trip  RED
 #   H1  the probe's own failure counter is neutered ..... RED (harness self-test)
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -139,9 +140,40 @@ mk "$F/esc.B"  "$A_ROW" "$(printf '../../.env\tEscape')"
 mk "$F/escLead.B" "$A_ROW" "$(printf '../.env\tLeadingEscape')"
 mk "$F/escTail.B" "$A_ROW" "$(printf 'engineering/..\tTrailingEscape')"
 mk "$F/abs.B"  "$A_ROW" "$(printf '/etc/passwd\tAbsolute')"
-# A corrupt ancestor: a header count that no row set can produce.
-sed 's/^> Total files: .*/> Total files: 99/' "$F/base.O" > "$F/corrupt.O"
-# CRLF: not a canonical generated index. Round-trip validation rejects it; see P9.
+# A CORRUPT ancestor: a row the parser cannot key unambiguously (a second
+# unescaped `](` makes the title/rel split ambiguous). This fixture used to be a
+# header count "that no row set can produce", and that was the wrong thing to
+# call corrupt: the count is derived from the rows, the driver never reads it,
+# and its output recomputes it. Pinning a refusal on it made the driver refuse
+# ordinary merges whose ancestor happened to carry a stale numeral -- including
+# this PR's own first sync. See the stale.O fixture below, P13, and G14.
+cp "$F/base.O" "$F/corrupt.O"
+printf -- '- [Weird](x/x/a](x/b.md)\n' >> "$F/corrupt.O"
+# A STALE ancestor, which is a different thing from a corrupt one: every row is
+# intact and parseable, only the derived numeral is wrong. Measured on
+# origin/main 2026-09-08, two of the last twelve commits touching INDEX.md carry
+# exactly this (68b0e6d79 header 6430 / body 6431; 8094a685d 6432 / 6433), and an
+# ancestor is a historical commit by construction.
+sed 's/^> Total files: .*/> Total files: 99/' "$F/base.O" > "$F/stale.O"
+# A STRAY NON-ROW LINE — the fixture that round-trip validation, and NOTHING
+# else, can see. Every other guard inspects rows: the parser skips a line that
+# is not `- [`, so containment, the separator count, the dup-rel check and the
+# byte cap all pass, and the merged set is arithmetically correct. Only the
+# re-render notices the line is gone. A leftover `<<<<<<< HEAD` is the realistic
+# instance and the one this repo actually produces: it is what a previous
+# hand-resolve of this very file leaves behind.
+#
+# Measured after the derived-count mask landed: with G2 applied the driver
+# resolves this input cleanly (rc=0, no sentinel) and silently drops the line,
+# while the pristine driver refuses. Without this fixture G2 SURVIVED — P3's
+# ambiguous row is caught by the separator guard and P9's CRLF by the
+# closing-paren guard, so round-trip validation could be deleted outright with
+# the whole battery green.
+awk 'BEGIN{done=0} /^- \[/ && !done {print "<<<<<<< HEAD"; done=1} {print}' \
+  "$F/base.O" > "$F/stray.O"
+# CRLF: not a canonical generated index. NOT caught by round-trip — measured: the
+# CR sits AFTER the `)`, so the malformed-row (no closing paren) guard fires
+# during parsing and the re-render is never reached. See P9.
 sed 's/$/\r/' "$F/add.B" > "$F/crlf.B"
 # An over-long physical row, and it must be a CANONICAL render or this fixture
 # tests nothing: an over-long row simply APPENDED to a rendered index is
@@ -199,6 +231,19 @@ probe() {
   [[ "$rc" != 0 ]] || probe_fail "P3 a corrupt ancestor should be rejected"
   [[ "$sc" == 1 ]] || probe_fail "P3 rejection should write exactly one sentinel (got $sc)"
 
+  # P13 — a STALE derived count in the ancestor is REPAIRED, not refused.
+  #
+  # The discriminating half of P3. P3 proves an unparseable ancestor is rejected;
+  # without this, a driver that rejects EVERYTHING passes P3 and the guard reads
+  # as held while the fix is unusable. The output must carry the count derived
+  # from the merged rows, so a driver that copied the ancestor's numeral through
+  # would fail here too.
+  out="$(run_driver "$F/stale.O" "$F/add.A" "$F/add.B" knowledge-base/INDEX.md)"
+  read -r rc sc a <<<"$out"
+  [[ "$rc" == 0 ]] || probe_fail "P13 a stale ancestor count should still resolve (got rc=$rc)"
+  [[ "$sc" == 0 ]] || probe_fail "P13 a stale ancestor count must write no sentinel (got $sc)"
+  cmp -s "$a" "$F/want" || probe_fail "P13 the stale-ancestor merge is not the canonical render"
+
   # P4 — a rel escaping knowledge-base/ is rejected even though it round-trips.
   local esc
   for esc in esc escLead escTail; do
@@ -231,15 +276,24 @@ probe() {
   [[ "$rc" == 0 ]] || probe_fail "P8 add-vs-delete should resolve (got $rc)"
   cmp -s "$a" "$F/wantdel" || probe_fail "P8 a deleted row was resurrected"
 
-  # P9 — a CRLF side does not split the rel-keyed set into duplicate rows.
-  # P9 — a CRLF side is REJECTED, not silently absorbed. A CRLF file is not a
-  # canonical generated index, and round-trip validation is what catches it: the
-  # re-render uses LF, so the byte-compare fails before the set arithmetic could
-  # ever see a CR-suffixed rel.
+  # P9 — a CRLF side is REJECTED, not silently absorbed, so the set arithmetic
+  # never sees a CR-suffixed rel. The mechanism is the MALFORMED-ROW guard, not
+  # round-trip validation: the CR sits after the `)`, so parsing fails before a
+  # re-render is ever attempted. The earlier comment here credited round-trip,
+  # and that was measured false while adding G14 — a right verdict with a wrong
+  # stated reason, which is what let G2 survive unnoticed. P14 owns round-trip.
   out="$(run_driver "$F/base.O" "$F/add.A" "$F/crlf.B" knowledge-base/INDEX.md)"
   read -r rc sc a <<<"$out"
   [[ "$rc" != 0 ]] || probe_fail "P9 a CRLF side should be rejected"
   [[ "$sc" == 1 ]] || probe_fail "P9 rejection should write exactly one sentinel (got $sc)"
+
+  # P14 — a stray non-row line is REFUSED, not silently dropped. THE ONLY
+  # PROPERTY THAT REACHES ROUND-TRIP VALIDATION: see the stray.O fixture for why
+  # every other rejection above is someone else's guard.
+  out="$(run_driver "$F/stray.O" "$F/add.A" "$F/add.B" knowledge-base/INDEX.md)"
+  read -r rc sc a <<<"$out"
+  [[ "$rc" != 0 ]] || probe_fail "P14 a stray non-row line should be refused"
+  [[ "$sc" == 1 ]] || probe_fail "P14 refusal should write exactly one sentinel (got $sc)"
 
   # P11 — an over-long physical line is refused rather than read into memory.
   out="$(run_driver "$F/base.O" "$F/add.A" "$F/huge.B" knowledge-base/INDEX.md)"
@@ -354,9 +408,16 @@ MUT
 cat > "$M/G2.py" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
-old = '  cmp -s "$rendered" "$src" || die'
+# ANCHORED ON THE `if !` DISPATCH, NOT ON A `cmp ... || die` ONE-LINER. The
+# original anchor was that one-liner; when validate_roundtrip grew the
+# derived-count mask the line changed shape, the mutator stopped landing, and
+# the row reported the BASELINE -- caught here only because this battery
+# asserts landing separately from the verdict.
+old = """  if ! cmp -s <(_mask_derived_count "$rendered") <(_mask_derived_count "$src"); then
+    die "round-trip validation failed for $src (not a canonical generated index)"
+  fi"""
 assert old in s, "G2 anchor missing"
-open(p, "w").write(s.replace(old, '  cmp -s "$rendered" "$src" || true # die', 1))
+open(p, "w").write(s.replace(old, '  : # round-trip validation removed', 1))
 PY
 
 cat > "$M/G3.py" <<'PY'
@@ -453,6 +514,18 @@ assert old in s, "G10 anchor missing"
 open(p, "w").write(s.replace(old, "done > \"$OUT_TSV\"", 1))
 PY
 
+cat > "$M/G14.py" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = "  sed 's/^> Total files: [0-9][0-9]*$/> Total files: <derived>/' \"$1\""
+assert old in s, "G14 anchor missing"
+# THE MASK REMOVED. Round-trip validation goes back to byte-comparing the whole
+# file, so a stale derived count in the ancestor refuses the merge again (P13),
+# while every other property still holds -- which is why this row exists: the
+# regression it guards is invisible to all thirteen other rows.
+open(p, "w").write(s.replace(old, "  cat \"$1\"", 1))
+PY
+
 cat > "$M/G11.py" <<'PY'
 import sys
 p = sys.argv[1]; s = open(p).read()
@@ -510,6 +583,7 @@ apply G9  "$DRIVER" RED 'a row deleted on one side is resurrected'
 apply G10 "$DRIVER" RED 'LC_ALL=C sort dropped — rows emit in hash order'
 apply G12 "$DRIVER" RED 'the 8 KB physical-line cap is removed'
 apply G13 "$DRIVER" RED 'errtrace dropped — the ERR trap stops reaching functions'
+apply G14 "$DRIVER" RED 'the derived-count mask removed — a stale ancestor numeral refuses again'
 
 printf '=== shared-renderer drift ===\n'
 apply G11 "$RENDER" RED 'the renderer header changes while the driver stays pristine'
@@ -525,7 +599,7 @@ for r in "${RESULTS[@]}"; do printf '    %s\n' "$r"; done
 # Reported by direct printf and its OWN exit, never through the FAIL counter the
 # rows above increment: a floor that shares a lifetime with what it guards is
 # not a floor.
-EXPECTED_ROWS=14
+EXPECTED_ROWS=15
 if (( PASS + FAIL != EXPECTED_ROWS )); then
   printf 'FLOOR: ran %d rows, expected %d\n' "$((PASS+FAIL))" "$EXPECTED_ROWS" >&2
   exit 1
