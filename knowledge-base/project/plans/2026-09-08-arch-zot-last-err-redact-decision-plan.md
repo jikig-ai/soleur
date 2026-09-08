@@ -24,6 +24,38 @@ that sample reaches the same destination having passed through payload-integrity
 This plan settles, and records as an architecture decision, whether that second stream should adopt
 the first one's redaction posture, adopt a narrower one, or deliberately keep the one it has.
 
+## Deepen-Plan Enhancement Summary
+
+**Deepened:** 2026-09-08. **Halt gates:** 4.6 User-Brand Impact PASS · 4.7 Observability PASS (5/5
+fields, verb `bash`, no `ssh`) · 4.8 PAT-shaped PASS (no matches) · 4.9 UI wireframe SKIP (no UI
+surface) · 4.10 Encryption Posture PASS · 4.11 Guard Contract PASS (`lint-guard-contract.py`, 2
+entries) · **4.55 Downtime & Cutover — FIRED and closed** (the section it demanded did not exist and
+is now written).
+
+### What deepening changed
+
+1. **Gate 4.55 caught a missing section.** Phase B arms a `-/+` on `hcloud_server.registry`, so the plan owed a zero-downtime-first cutover analysis. Writing it surfaced the sharpest available framing of the blast radius: the registry is **not** a user-serving surface — a window blocks deploys and host births, not user traffic — and there is **no redundancy at host-pull latency** (the `hetzner -> ghcr` fallback is code-live, credential-dead). The plan's existing design already *is* the zero-downtime path (it schedules no replace); the gate forced that from an implicit property into a stated, defended one.
+2. **Self-audit caught three stale references** to items cut during plan review — the lockstep byte-equality gate (twice) and the workflow markdown fencing. All three would have instructed `/work` to build things the plan had already rejected.
+3. **Verify-the-negative confirmed the two unmeasured negative claims.** `redact()` leaves a top-level `clientIP` untouched while redacting `Cookie` in the same object — measured with a **public** IP, which is precisely the re-evaluation-trigger scenario. And `hcloud_firewall.registry` contains **zero** `rule {}` blocks.
+
+### Network-outage gate (4.5) — fired on token match, no applicable hypothesis set
+
+The trigger patterns `firewall` and `timeout` match the plan body, so the gate fires and the telemetry
+is emitted. But the L3→L7 checklist has **no applicable hypothesis set here**: there is no
+connectivity symptom under investigation. `firewall` appears only as bounding context
+(`hcloud_firewall.registry` has zero inbound rules — re-verified above) and `timeout` only inside a
+quoted zot log sample. Recorded rather than answered with fabricated hypotheses, per the plan skill's
+own rule that a hypothesis table must not carry verdicts its discriminators cannot support.
+
+### Precedent-diff (4.4)
+
+The pattern-bound behaviour here is the shipper's `redact()` itself, and the precedent diff is the
+plan's core content rather than an addendum: the heartbeat copy must match the shipper's on the
+allowlist constants and the jq program, and must **diverge deliberately** on three axes — per-line
+application, degrade-not-drop, and the `[zot-log-shipper]` FATAL tags. Those divergences are why body
+byte-equality was rejected as the drift check. No scheduled-work pattern check applies (this plan adds
+no cron; both emitters already have theirs).
+
 ## Research Insights
 
 ### Premise Validation (Phase 0.6)
@@ -888,7 +920,7 @@ File as a separate issue, engineering-owned, referencing this plan.
 |---|---|
 | `apps/web-platform/infra/cloud-init-registry.yml` | Phase B. Duplicate `CRED_HDRS`/`HDR_KEEP`/`redact()` into `zot-disk-heartbeat.sh`; call it on the **raw** `ZOT_ERR_RAW` **before** the sanitizer; wrap the call so all three RC=1 paths degrade the field (`zot_last_err=REDACTION_FAILED`, no `=`, no spaces) and set `ZOT_ERR_SRC=redact_failed`; add the tier gate on `ZOT_ERR_SRC=fallback`. The degrade wrapper lives **outside** the shared function body so the two `redact()` bodies stay byte-comparable. |
 | `scripts/zot-restart-loop-alarm.sh` | Phase A. Add the scrub at the `emit_and_exit()` chokepoint; bound the length; render `zot_last_err_src` alongside the tail and stop presenting a `fallback` sample as a cause; **fix the false comment** that reads "surface the redacted log tail". |
-| `.github/workflows/scheduled-zot-restart-loop.yml` | Phase A. Fence the interpolated `CAUSE` in the issue body so third-party text cannot inject markdown, `@mentions` or links. |
+| `.github/workflows/scheduled-zot-restart-loop.yml` | Phase A. Mirror Guard 2's scrub assertion at the publication boundary, beside the existing `strip_log_injection()` (AP-025 — the chokepoint is complete by construction, the interceptor is its complement). **Markdown / `@mention` / link fencing is NOT in scope** — a different threat model that no guard in this plan covers; it goes to the capability-gap issue. |
 | `knowledge-base/engineering/architecture/decisions/ADR-184-registry-host-container-log-shipper.md` | Amend `## Decision` (scope of `redact()`) and add a **new** Alternatives row for the redaction question. |
 | `knowledge-base/engineering/architecture/diagrams/model.c4` | Amend the `zotRegistry -> betterstack` and `github -> betterstack` edge descriptions. |
 | `knowledge-base/legal/article-30-register.md` | New dated brackets on PA-8 §(g) and §(c). **Additive only** — quote the 2026-08-12 sentence, never edit it. **A THIRD cell also names #7500** and was not in the CLO's enumeration: the Vendor Mapping row for Better Stack states that "on the `SOLEUR_ZOT_DISK` path it is a payload-integrity sanitizer only (#7500)". That sentence becomes false when this lands. Add a dated bracket there too; do not edit it in place. Route the final cell list through the CLO attestation rather than deciding it here. |
@@ -936,7 +968,7 @@ it is not held hostage to Phase B's host replace.
 
 1. Write `apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh` **first**, from the mutation matrix (RED).
 2. Duplicate `redact()` + constants into the heartbeat; call on raw text before the sanitizer; degrade on all three RC=1 paths; add the tier gate.
-3. Add the lockstep byte-equality gate between the two `redact()` bodies.
+3. Add the **drift check** between the two `redact()` copies — anchor count (`def scrub: with_entries` exactly 2×), `CRED_HDRS` + `HDR_KEEP` byte-identical between copies, and the per-line loop present on the heartbeat side. **Not** byte-equality of the function bodies: the FATAL echoes hardcode `[zot-log-shipper]`, so byte-equality would force mis-tagged, unreadable stderr into the heartbeat.
 4. Re-run `registry-userdata-budget.sh` and record the measured stored size.
 
 ### Phase C — the record
@@ -975,6 +1007,51 @@ are pinned so an implementer cannot satisfy an assertion against a number it inv
 
 17. **The probe must be falsifiable against an undelivered host.** An earlier draft asserted "the sample carries no credential-header residual", which the #7272 measurement shows was **already true before any change** (`Cookie`/`X-Api-Key`: 0 occurrences) — it would exit 0 on a host that never received Phase B. `scripts/followthroughs/zot-last-err-redact-7500.sh` instead asserts **both**: (a) the observed `boot_id` differs from the pre-merge baseline recorded in the PR body, and (b) a **Phase-B-only observable** — rows with `zot_last_err_src=fallback` contain no `headers:{` substring at all. (b) is false on every pre-Phase-B row, so the probe reddens on an undelivered host.
 18. Because no replace is scheduled, `earliest=` cannot be resolved at merge. The directive ships with `earliest=` set to merge+30d as a **review** date, and the tracker records that ADR-211's `adopting → accepted` flip is blocked on delivery rather than on elapsed time. If no replace has occurred by then, the follow-through re-evaluates rather than closing.
+
+## Downtime & Cutover
+
+Gate 4.55 fires: Phase B edits `cloud-init-registry.yml`, which `hcloud_server.registry` renders into
+ForceNew `user_data` with no `lifecycle.ignore_changes`, so the edit **arms** a `-/+` replace of a
+resource on the fleet's sole container-image pull path.
+
+### The offline-inducing operation, and the surface it actually affects
+
+The operation is a destroy-then-create of `hcloud_server.registry`. **The surface is the image-pull
+path, not a user-serving path** — and that distinction is load-bearing rather than a softener:
+
+- `soleur-registry` answers `/v2/` for image pulls. It is not on any request path a Soleur user touches; the web platform serves from an already-running container and does not consult the registry to serve a request.
+- What a registry window *does* block is **deploys and host births**. During it, `ci-deploy.sh` cannot pull, and any host that needs to restart or be born cannot get an image.
+- There is **no redundancy at host-pull latency.** Verified: the `hetzner -> ghcr` fallback is a live code path with a **dead credential** (`read:packages` PAT revoked → 401; minter off → 403), and the C4 model says in terms "do NOT read THIS EDGE as redundancy… there is none at host-pull latency". Recovery exists *off* that edge — CI can re-materialise the store from GHCR per ADR-169 — but it is measured in minutes, not a fallback a host can take mid-pull.
+
+So: not a brand-survival serving outage, but a real deploy-pipeline stop with no in-band fallback.
+
+### The zero-downtime path — and it is the default, because it is the one already chosen
+
+**This plan schedules no replace and adds no incremental downtime.** That is the cutover strategy, not
+an omission:
+
+- **Phase A** is a pure script + `test-all.sh` registration change. It touches no Terraform-managed resource, takes effect on the next scheduled alarm run, and its downtime is **zero** by construction. It also carries the **worst** exposure (the public, permanent egress), so the severe half of the fix ships with no infrastructure event at all.
+- **Phase B rides the next replace that happens for another reason.** It is inert on merge (ADR-096: cloud-init-only, no in-place execution path) and delivers whenever the operator next fires `registry-luks-recut` or an equivalent provisioning event. **Incremental downtime attributable to this plan: none.** The replace it rides was going to happen on its own schedule.
+
+Two alternatives were evaluated and are not taken:
+
+| Path | Verdict |
+|---|---|
+| **Force a replace to deliver Phase B now** | **Rejected.** It converts a zero-incremental-downtime change into a deploy-pipeline stop, to deliver the *less* severe half of the fix (the access-controlled warehouse path) while Phase A already covers the public one. The cost is real and the urgency is not. |
+| **Blue-green: provision a second registry, sync the store, cut the tunnel origin, retire the old** | **Rejected as disproportionate here, but recorded because it is the right shape if a replace is ever forced under load.** The tunnel `ingress_rule` origin is pinned to `tcp://10.0.1.30:5000` via a single-sourced `local.registry_private_ip`, and the store is a LUKS volume — so a blue-green cutover means a second host, a store re-materialisation, and an origin re-point. That is ADR-169's recovery path run deliberately rather than under duress. Disproportionate for a change whose own delivery requirement is "wait". |
+
+### Verification and rollback, for whenever the replace does fire
+
+This plan does not own the replace, so it does not restate the runbook — `registry-luks-recut-6929.md`
+owns it, including the stock re-probe the `.tf`'s own table shows is non-negotiable (`cx23` flipped
+NO→YES inside ~4 hours; `cpx22` has been available on every probe). Two additions this plan does own:
+
+1. **Pre-replace:** AC6's budget gate must be green at the commit being delivered — a render over `REGISTRY_GZIP_BUDGET` is the one failure mode that turns a routine replace into a stranded host, because hcloud rejects the CREATE *after* the destroy has succeeded.
+2. **Post-replace:** the AC17 follow-through probe asserts the `boot_id` changed **and** a Phase-B-only observable, so "the replace delivered Phase B" is measured rather than assumed.
+
+Rollback for Phase B is the same mechanism as delivery — revert the cloud-init and let the next
+replace carry it — which is why the plan does not claim a faster one. Phase A rolls back as an
+ordinary revert, effective on the next scheduled run.
 
 ## Infrastructure (IaC)
 
@@ -1015,7 +1092,7 @@ and cadence are identical, and the tier gate can only make `zot_last_err` shorte
 | The redaction is **inert** — present but matching nothing (the #7440 class, where a rule anchored on the sampler's rendering rather than zot's real output shipped nominally-present, actually-inert redaction) | Guard 1 rows 2 and 3, which use an `X-Custom` fixture that only the structural allowlist catches. An `Authorization`-only fixture cannot discriminate the branches — which is exactly how the shipper's positional regression survived. |
 | `redact()` applied post-sanitizer silently degrades to denylist semantics while the register advertises an allowlist | Guard 1 row 3 (REORDER) plus the disclosure wording. The CLO classes this as a live control-vs-description drift, so it is a legal requirement as well as a correctness one. |
 | Phase B strands the registry on a future replace | AC6 gates `stored_bytes < 20,000` with the repo's own byte-exact instrument; measured deltas are +64 B (redactor) and ~0 B (tier gate) against 6,308 B of room. |
-| The two `redact()` copies drift | The lockstep byte-equality gate (AC5), modelled on the shipper suite's existing T3 lockstep-by-value assertion. |
+| The two `redact()` copies drift | The drift check (AC5): anchor count + `CRED_HDRS`/`HDR_KEEP` byte-identity + per-line-loop presence. Deliberately **not** body byte-equality — that would force `[zot-log-shipper]`-tagged dead code into the heartbeat, and it would also miss `HDR_KEEP`, which **is** the allowlist and sits outside the function body. |
 | A future CAUSE-building arm bypasses the sink scrub | Guard 2 asserts at the `emit_and_exit()` chokepoint, not at an enumerated arm list; row 2 proves it. |
 | The tier gate discards a genuine cause that only tier 4 would have carried | Bounded by measurement: across a 21-hour crash loop tier 4 named a cause zero times. The gate emits the parsed `message` rather than nothing, so the tier-4 signal degrades rather than vanishing. |
 | Fixing the alarm's cause-rendering changes operator-facing text | Intended — the current text presents `gc successfully completed` as a crash cause, which ADR-166 forbids. |
