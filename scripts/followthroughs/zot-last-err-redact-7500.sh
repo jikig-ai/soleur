@@ -65,6 +65,19 @@
 
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). This probe binds BETTERSTACK_QUERY_PASSWORD, and shell tracing echoes a
+# command AFTER expansion -- so under `bash -x` the credential reaches the transcript at the moment
+# it is bound, before it is used for anything. Two live tokens leaked exactly that way. Refuse to
+# run traced while a credential is present, rather than trusting the caller not to trace.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="$REPO_ROOT/scripts/betterstack-query.sh"
 WINDOW="${SOLEUR_FT_WINDOW:-24h}"

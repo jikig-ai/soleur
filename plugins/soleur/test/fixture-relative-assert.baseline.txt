@@ -171,6 +171,7 @@
 1	apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh
 1	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
 1	apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
+1	apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
 3	apps/web-platform/infra/zot-log-shipper.test.sh
 5	apps/web-platform/scripts/dsar-export-oversize.sh
 2	apps/web-platform/scripts/lib/in-image-copy-src.test.sh
