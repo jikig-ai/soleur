@@ -35,7 +35,11 @@ When the flow requires user action outside the browser (payment, email verificat
 
 After the user confirms payment is complete:
 
-1. Navigate to the tool's dashboard or settings page and take a snapshot to understand the current state
+1. Navigate to the tool's dashboard or settings page and take a snapshot to understand the current state.
+   Provisioning flows are login flows, so route it through
+   `plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`, and capture neither
+   snapshot nor screenshot of a page displaying a freshly-minted credential — a readonly
+   `type=text` credential panel renders in clear in both (#7947).
 2. Guide through initial configuration steps (add site/project, copy integration snippet, configure options)
 3. If the tool requires code changes in the project (script tags, env vars, config files), make those changes using the Edit or Write tools
 

@@ -68,7 +68,7 @@
 #   silent        — the host emits nothing. Check the timer and the Vector shipper.
 #   unreadable    — the read path failed, or a field did not parse. Nothing about the host was
 #                   measured; retry.
-#   stale_schema  — the host is emitting, but from a pre-probe_schema=5 renderer. ACTIONABLE:
+#   stale_schema  — the host is emitting, but from a pre-probe_schema=7 renderer. ACTIONABLE:
 #                   replace the host first WITH A PIN THAT CARRIES THE EMITTER -- a replace on an
 #                   unbumped pin re-delivers the same bytes, because the emitter is baked into the
 #                   OCI image and reaches the host via the digest literal in user_data, not via
@@ -100,7 +100,7 @@
 #     G1  the probe query returned rc 0 AND the row count parses as ^[0-9]+$   -> unreadable
 #     G2  the row count is >= 1                                                -> silent
 #     G3  the chosen row IS the newest, and its age is within --max-row-age     -> stale_row
-#     G4  probe_schema == "5", EXACT equality (not >=)                         -> stale_schema
+#     G4  probe_schema == "7", EXACT equality (not >=)                         -> stale_schema
 #     G14 redis_keys==0 implies redis_key_patterns==__NONE__ (coherence)        -> unreadable
 #   Identity  (inngest-bootstrap.sh is the SHARED renderer for both hosts)
 #     G5  envelope host      == soleur-inngest                                 -> wrong_host
@@ -370,7 +370,7 @@ inngest_host_dark_gate() {
   local rows_file="" query_rc="" finished_file="" finished_rc=""
   local expected_volume_id="" live_attachment_id="" followthrough_rc=""
   local cutover_flag="" diagnostic_boot=""
-  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="5"
+  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="7"
   # G3's recency bound. `now_epoch` is injectable so the suite can pin a clock; the default is the
   # real one. 5400s = 90 minutes, the window the monotonicity argument in this file's header
   # assumes — it was, until this revision, assumed and enforced nowhere.
@@ -583,7 +583,7 @@ inngest_host_dark_gate() {
   # and counts them, so widening the window and leaving this bound behind reddens rather than
   # silently making the emptiness claim older than the argument that justifies it.
 
-  # ── G4 — probe_schema is EXACTLY 5 ──────────────────────────────────────────────
+  # ── G4 — probe_schema is EXACTLY 7 ──────────────────────────────────────────────
   # EXACT EQUALITY, NOT `>=`. A `>=` comparison would silently accept a FUTURE schema whose field
   # semantics this gate has never seen — the same "a lenient extractor makes absence satisfy
   # everything" shape one version forward. A schema bump must force a deliberate edit here.

@@ -631,7 +631,7 @@ cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 # before the emit loses the whole row — including vector_active and the Vector-down fallback.
 # `du` on a sick block device blocks in D-state and `redis-cli` has no default deadline, so an
 # unbounded call here goes dark exactly when the disk is the thing being measured.
-probe_schema=5
+probe_schema=7
 data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
 latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
 
@@ -645,6 +645,8 @@ redis_keys=n/a
 # Mirrors redis_keys: the emit below is UNCONDITIONAL, so every field it names must be bound
 # on every path. An unbound one renders as the empty string and silently drops the field.
 redis_key_patterns=n/a
+# Same reason: the emit is unconditional, so this must be bound on EVERY path.
+redis_expires=n/a
 
 case "$host_role" in
 dedicated)
@@ -693,6 +695,7 @@ dedicated)
     # below). Absent on the web host by construction, so this whole arm is unreachable there.
     redis_keys=__UNREADABLE__
     redis_key_patterns=__UNREADABLE__
+    redis_expires=__UNREADABLE__
     if [ -n "${INNGEST_REDIS_PASSWORD:-}" ]; then
       # DIRECT INVOCATION, no `eval` and no command-string seam. The previous revision took the
       # command from ${PROBE_REDIS_CLI_CMD:-…} and eval'd it; tests stub `redis-cli` on PATH
@@ -719,6 +722,28 @@ dedicated)
           END { if (bad) exit 1; print s + 0 }')" || redis_rc=$?
         if [ "$redis_rc" -eq 0 ]; then
           case "$redis_sum" in '' | *[!0-9]*) redis_keys=__UNREADABLE__ ;; *) redis_keys="$redis_sum" ;; esac
+        fi
+        # #7695 probe_schema=6 — `expires=` from the SAME reply, summed the SAME way.
+        #
+        # WHY IT IS WORTH A FIELD. `keys=` is the raw dict size and counts keys whose TTL has
+        # elapsed but which have not been reclaimed yet; SCAN respects expiry and skips those. So
+        # `keys=16` beside a SCAN that returns nothing has two readings — 16 live keys the scan
+        # cannot see, or 16 expired husks — and `expires=` is what separates them: it is the count
+        # carrying a TTL at all. Without it an operator is left inferring, which is the exact
+        # position this probe exists to end.
+        #
+        # Same awk shape as the count above, and the same reason for it: awk COERCES, so a
+        # malformed `expires=` field must exit non-zero rather than silently sum to 0 — 0 is a
+        # meaningful reading here ("nothing has a TTL"), so it must never be reachable by accident.
+        redis_exp_rc=0
+        redis_exp_sum="$(printf '%s\n' "$redis_raw" | awk '
+          /^db[0-9]+:/ {
+            if (match($0, /expires=[0-9]+/)) { s += substr($0, RSTART + 8, RLENGTH - 8) }
+            else { bad = 1 }
+          }
+          END { if (bad) exit 1; print s + 0 }')" || redis_exp_rc=$?
+        if [ "$redis_exp_rc" -eq 0 ]; then
+          case "$redis_exp_sum" in '' | *[!0-9]*) redis_expires=__UNREADABLE__ ;; *) redis_expires="$redis_exp_sum" ;; esac
         fi
         ;;
       esac
@@ -781,27 +806,54 @@ dedicated)
           probe_scan_rc=0
           probe_scan_err=""
           probe_err_file="$(mktemp 2>/dev/null || echo /tmp/inngest-probe-scan.err)"
+          probe_out_file="$(mktemp 2>/dev/null || echo /tmp/inngest-probe-scan.out)"
           for probe_db in $probe_dbs; do
             probe_one=""
-            probe_one="$(REDISCLI_AUTH="$INNGEST_REDIS_PASSWORD" timeout 5 \
-              redis-cli -h 127.0.0.1 -p 6379 -n "${probe_db#db}" --scan --count 100 \
-              2>"$probe_err_file" | head -c 65536)" || probe_scan_rc=$?
+            # ── NO `--count`. THAT FLAG DOES NOT EXIST, AND IT COST FOUR HOST REPLACES ────────
+            # `redis-cli 7.0.15` (the version this host runs) answers `--scan --count 100` with
+            #   Unrecognized option or bad number of args for: '--count'
+            # and returns NO keys. Reproduced in `docker run redis:7.0.15`: with the flag, rc=1
+            # and zero output; without it, `--scan` returns every key. I invented the flag in
+            # probe_schema=4, and every hypothesis chased afterwards — keys in another database,
+            # expired-but-unreclaimed husks, an ACL filter — was chasing a phantom my own typo
+            # produced. `--scan` without a count uses redis's default COUNT of 10, which is
+            # ample for a store this size and costs nothing but an extra cursor round-trip.
+            #
+            # ── AND NO PIPE, so redis-cli's OWN exit status survives ─────────────────────────
+            # The previous form piped into `head -c`, and a pipeline's status is the LAST
+            # command's — `head`, which succeeds. So redis-cli exiting 1 was reported as rc=0 and
+            # the `__SCANFAIL_` branch was UNREACHABLE for this failure no matter what it did.
+            # That is the third instance of one class in this probe: `2>/dev/null` discarded the
+            # reason, then stderr-only-on-rc!=0 discarded it again, and then the rc itself could
+            # not propagate. Redirect to a file and read the status directly; bound the size with
+            # `head -c` afterwards, where its exit status is nobody's evidence.
+            REDISCLI_AUTH="$INNGEST_REDIS_PASSWORD" timeout 5 \
+              redis-cli -h 127.0.0.1 -p 6379 -n "${probe_db#db}" --scan \
+              >"$probe_out_file" 2>"$probe_err_file" || probe_scan_rc=$?
+            probe_one="$(head -c 65536 "$probe_out_file")"
             [ -n "$probe_one" ] && probe_scan_out="${probe_scan_out}${probe_one}
 "
             if [ -s "$probe_err_file" ] && [ -z "$probe_scan_err" ]; then
-              # First line only, hard-sanitised and short: enough to name NOAUTH/ERR without
-              # shipping an unbounded server string into a whitespace-parsed row.
-              probe_scan_err="$(head -1 "$probe_err_file" | tr -c 'A-Za-z0-9' '_' | cut -c1-24)"
+              # First line only, hard-sanitised. WIDENED 24 -> 48: at 24 the live host's reply
+              # truncated to `Unrecognized_option_or_b`, cutting off `for: '--count'` — the only
+              # part naming WHICH option. A snippet that drops the identifier answers "something
+              # was wrong" when the whole point is answering "what".
+              probe_scan_err="$(head -1 "$probe_err_file" | tr -c 'A-Za-z0-9' '_' | cut -c1-48)"
             fi
           done
-          rm -f "$probe_err_file"
+          rm -f "$probe_err_file" "$probe_out_file"
 
           if [ "$probe_scan_rc" -ne 0 ]; then
             redis_key_patterns="__SCANFAIL_rc${probe_scan_rc}_${probe_scan_err:-noerr}__"
           elif [ -z "$probe_scan_out" ]; then
-            # The scan RAN and found nothing while the count says otherwise. Name the databases
-            # searched, so the next reader sees immediately whether the enumeration was the gap.
-            redis_key_patterns="__SCANEMPTY_$(printf '%s' "$probe_dbs" | tr -c 'a-z0-9' '-')__"
+            # The scan produced no keys. CARRY THE ERROR TEXT HERE TOO, and that is the schema-6
+            # fix: schema 5 captured stderr but surfaced it ONLY on a non-zero exit, and
+            # `redis-cli` routinely exits 0 while printing a server error reply (`ERR unknown
+            # command`, `NOAUTH`, `WRONGTYPE`). So the most likely failure landed in this branch
+            # with its reason discarded, and rendered as a bare `__SCANEMPTY_db0__` — the same
+            # swallow-the-reason defect as schema 4's `2>/dev/null`, one branch further in.
+            # `_noerr` distinguishes "genuinely empty" from "errored but exited 0".
+            redis_key_patterns="__SCANEMPTY_$(printf '%s' "$probe_dbs" | tr -c 'a-z0-9' '-')_${probe_scan_err:-noerr}__"
           else
             redis_key_patterns="$(printf '%s\n' "$probe_scan_out" | awk '
               NR > 5000 { truncated = 1; exit }
@@ -836,7 +888,7 @@ dedicated)
 esac
 
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -853,7 +905,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
 fi
 exit 0
 PROBESCRIPTEOF
