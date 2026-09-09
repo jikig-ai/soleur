@@ -259,6 +259,8 @@
 2	plugins/soleur/test/operator-digest-provision.test.sh
 4	plugins/soleur/test/proc.test.sh
 1	plugins/soleur/test/ralph-loop.test.sh
+10	plugins/soleur/test/scripts-shard-totality-mutations.sh
+2	plugins/soleur/test/scripts-shard-totality.test.sh
 1	plugins/soleur/test/session-state.test.sh
 3	plugins/soleur/test/test-helpers.sh
 1	plugins/soleur/test/vendor-pin-integrity.test.sh
