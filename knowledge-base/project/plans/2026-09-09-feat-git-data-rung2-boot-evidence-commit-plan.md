@@ -17,6 +17,50 @@ No `spec.md` exists for this branch, so `lane:` had no source to carry forward a
 defaulted to `cross-domain` (TR2 fail-closed). The Phase 2.5 sweep is the real scope signal:
 engineering-only.
 
+## Enhancement Summary
+
+**Deepened:** 2026-09-09. **Reviewed by:** a five-agent plan-review panel (DHH, Kieran,
+code-simplicity, architecture-strategist, spec-flow-analyzer) plus a learnings sweep. Every
+finding below was verified against the repository before being applied.
+
+1. **The exit-path table was incomplete in the dangerous direction.** `rc=2` has two arms and
+   the plan mapped one: the DERIVATION FAULT arm is explicitly *"deterministic, NOT transient"*,
+   so the prescribed remedy (widen the window) was wrong for it. `rc=78` and the case where
+   `doppler run` fails before `exec` — printing **no** `RUNG2_CAPTURE_VERDICT` line at all — were
+   both unmapped. All are now routed, and the widening ladder has a floor.
+2. **The gate was to be called differently from how CI calls it.** CI passes one argument and
+   lets the gate derive the evidence path; the plan passed two, which can verify a different file
+   than the one CI checks. Now one argument everywhere.
+3. **AC3's "load-bearing" observation is not merge-blocking.** `deploy-script-tests` is absent
+   from `scripts/required-checks.txt` and `main` is not branch protected, so a red freshness
+   check would not stop a merge. Stated plainly rather than implied.
+4. **AC4 would have failed for a benign reason.** Its filter allowed only `plans|specs`, but the
+   ship phase also commits `knowledge-base/INDEX.md` and a learning — verified on `723ab68b5`,
+   and reproduced in this very session when the pre-commit hook swept `INDEX.md` in. Widened.
+5. **AC2 masked its own failure mode.** `live="$(...)"` swallows the return code, leaving the
+   ABORT text in the variable and printing nothing — indistinguishable from a stale hash. Now
+   mirrors the gate's own `if !` form, and runs after `git fetch origin main` so it tests the
+   risk it claims to (a change landing on `main`).
+6. **AC5 was a weaker second scanner.** `gitleaks` already runs as a required check and this file
+   is a new tracked `.env` under `apps/` that `.gitleaks.toml` does not allowlist. AC5 now asserts
+   that gate plus one targeted residual check, and Phase 3 runs gitleaks locally first.
+7. **The plan claimed to follow a runbook sequence it does not follow.** The runbook's
+   `## After a PASS` path downloads the run's artifact; no artifact exists, so this captures
+   locally and post-hoc from the S3 archive. That weakens auditability and is now disclosed in
+   the PR body rather than papered over.
+8. **The ACs could all pass while the PR body's central claim went unchecked** — the evidence
+   file records queries, not rows. **AC7** added for `nft_metadata_drop`, the one measured
+   boolean and the sole basis for the #7772 claim.
+9. **The journey ended at "mark ready."** Push, CI observation, CPO sign-off, and a post-merge
+   verification phase were missing entirely. Added.
+10. **The divergence set was justified circularly** (from the gate's own allowlist — the exact
+    tautology the capture refuses by name). Re-derived from what the rehearsal root actually
+    binds in `rehearsal.tf`.
+
+Two challenges to the brief's prescribed command were **not** applied and are recorded for a
+decision in `decision-challenges.md`: `--window '7 DAY'` versus the script's `30 DAY` default,
+and whether `--out` should be dropped (its default is absolute and cwd-independent).
+
 ## Overview
 
 Produce, and commit in a PR of its own, exactly one file:
@@ -164,6 +208,38 @@ The capture's own PASS line carries this caveat, having been rewritten specifica
 
 None. 64 open `code-review` issues were listed; none names `git-data-rung2-boot-evidence`.
 
+### Deepen-pass live verification
+
+Attribution claims probed against `origin/main` rather than carried from the brief:
+
+| Claim | Probe | Result |
+|---|---|---|
+| `723ab68b5` is the tip the hash was computed at | `git merge-base --is-ancestor 723ab68b5 origin/main` | ancestor — yes |
+| PR #7999 corrects the capture's message | `gh pr view 7999 --json files` | touches `scripts/followthroughs/git-data-rung2-evidence-capture.sh` — confirmed |
+| #7999 is "preferred but not required" | its 71-line diff grepped for `REHEARSAL_DIVERGENCE`, `--window`, `--out`, `--host-name`, `--evidence-url`, `RUNG2_*` | **zero hits** — it moves nothing this plan depends on. It also touches `.github/workflows/git-data-rung2-rehearsal.yml`, but not the `REHEARSAL_DIVERGENCE` literal, and the workflow is not an input to the user_data hash. Verified, not assumed. |
+| No prior attempt at this evidence file to reconcile | `git log --all -- apps/web-platform/infra/git-data-rung2-boot-evidence.env` | empty — the file has never existed on any ref |
+| Every AGENTS rule id cited in this plan is active | each id grepped for `[id: <id>]` in `AGENTS.md` | all active; none retired or fabricated |
+
+### Institutional learnings applied
+
+A learnings sweep of `knowledge-base/project/learnings/` surfaced one finding that changed this
+plan, plus two that confirmed existing choices.
+
+- **Changed the plan.** *"When a plan's ACs can all pass without the reported symptom being
+  closed, the ACs are measuring the implementation rather than the defect."* AC1–AC6 verify the
+  file's shape and the gate's verdict; none of them substantiates the PR body's claim about the
+  five booleans, because the evidence file records the *queries* and not the *rows*. **AC7 was
+  added** and the PR body's "What the rehearsal proved" paragraph was split so the strong claim
+  (boots to completion, nothing fatal) is separated from the one that needs a human read
+  (`nft_metadata_drop`).
+- **Confirmed.** *"A guard that cannot fail is indistinguishable from one that passed."* AC3 is
+  falsifiable by construction here: the freshness step is provably in its dormant branch today
+  (the file is absent) and must move to its armed branch on this PR. The HOLD→RELEASED
+  transition is itself the proof that the predicate can fire.
+- **Confirmed.** *"Accepting a plausible-looking artifact without confirming it is the artifact
+  asked for."* `RUNG2_SENTRY_CROSSCHECK` must be read from the file, never inferred from the
+  absence of a complaint — AC1 greps for the literal `CLEAN` line.
+
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** a git-data host born from a cloud-init whose
@@ -227,22 +303,43 @@ carries separate git-data and rung2-rehearsal entries and this PR moves neither.
 
 ## Observability
 
-This PR adds no runtime surface. The observability that matters already exists and is cited
-rather than re-specified: the `Rung-2 evidence freshness (active only once evidence exists)`
-step in `.github/workflows/infra-validation.yml` (job `deploy-script-tests`) sources the gate
-library and runs it on every PR touching `apps/*/infra/**`, and the birth job's own interlock
-runs it again before any apply. Both fail loudly with the gate's HOLD text plus an
-`::error::` annotation.
+This PR adds no runtime surface. Every mechanism below already exists; the block cites them
+rather than proposing anything new.
 
 ```yaml
+liveness_signal:
+  what: "the `Rung-2 evidence freshness (active only once evidence exists)` step in .github/workflows/infra-validation.yml, job deploy-script-tests — it sources the gate library and runs git_data_rung2_rehearsal_gate against the merge tree"
+  cadence: "every pull request touching apps/*/infra/**, plus every push to main"
+  alert_target: "a visible check conclusion on the PR — NOT a merge block: deploy-script-tests is absent from scripts/required-checks.txt and main is not branch protected"
+  configured_in: ".github/workflows/infra-validation.yml"
+error_reporting:
+  destination: "GitHub Actions ::error:: annotation on the infra-validation job, plus the gate's own HOLD text on stdout naming the specific refusal"
+  fail_loud: true
+failure_modes:
+  - mode: "a later change to the cloud-init or any of the nine file()-bound payloads invalidates the committed hash"
+    detection: "the gate re-derives the live hash with git_data_rung2_user_data_sha256 and prints STALE EVIDENCE naming both hashes"
+    alert_route: "red freshness check on the PR that made the change, and the birth job refuses to proceed"
+  - mode: "the evidence file is hand-edited in a later PR — a duplicated, removed, or `export `-decorated key"
+    detection: "the gate's exactly-once cardinality loop over the four required keys"
+    alert_route: "red freshness check; the birth job refuses to proceed"
+  - mode: "RUNG2_VAR_DIVERGENCE emptied, or widened past the identity-only allowlist"
+    detection: "the gate refuses an empty or whitespace-only value, and refuses any token outside GIT_DATA_RUNG2_DIVERGENCE_ALLOWLIST under set -o noglob"
+    alert_route: "red freshness check; the birth job refuses to proceed"
+  - mode: "the file is deleted"
+    detection: "the freshness step returns to its dormant branch and the birth job's gate call returns HOLD"
+    alert_route: "the birth job refuses to proceed — no silent pass is reachable, which is AP-026's shape"
+logs:
+  where: "GitHub Actions run logs for infra-validation (PR and push-to-main) and for apply-web-platform-infra's git_data_host_create job"
+  retention: "GitHub default log retention"
 discoverability_test:
   command: "bash -c 'source tests/scripts/lib/git-data-birth-readiness-gate.sh && git_data_rung2_rehearsal_gate apps/web-platform/infra/cloud-init-git-data.yml'"
   expected_output: "a line beginning `git_data_rung2_rehearsal_gate: RELEASED` (it continues with the URL and the declared divergence, then a NOTE), exit 0"
 ```
 
-One argument, not two — this mirrors the CI call exactly and exercises the gate's own
-`$(dirname "$cloud_init")/git-data-rung2-boot-evidence.env` derivation. Passing the evidence
-path explicitly would verify a different file than CI checks. No credentials are required.
+The probe takes **one argument, not two** — mirroring the CI call exactly and exercising the
+gate's own `$(dirname "$cloud_init")/git-data-rung2-boot-evidence.env` derivation. Passing the
+evidence path explicitly would verify a different file than CI checks. No credentials are
+required; the gate reads only files in the working tree.
 
 ## Files to Create
 
@@ -493,6 +590,27 @@ so this is not discovered on the remote.
   grep -cE 'remote\([0-9]|t[0-9]{6}_soleur' "$EV"          # 0  — no source id, no table name
   ```
 
+**AC7 — The `nft_metadata_drop` reading is captured from the run output, not asserted from the
+file.**
+
+The evidence file records the *queries*, not the *rows*. So nothing in it substantiates "all
+five booleans were `yes`" — and the capture's PASS predicate does not turn on them either
+(`boot_complete` reached, no `level:fatal`). Four of the five are hardcoded literals anyway.
+
+The one that carries information is `nft_metadata_drop`, because it is measured on the host and
+it is the entire basis for the #7772 claim in the PR body. Read it from the capture's own
+host-rows output at Phase 2 time and paste the observed `boot_complete` row into the PR body.
+
+```bash
+# The value is in the capture's stdout for the host-rows query, not in the .env.
+# Expect: nft_metadata_drop=yes
+```
+
+If the observed value is `no`, the metadata-egress control did not load on that host. The
+capture still PASSes (the false arm cannot fire against hardcoded siblings, and this boolean is
+not part of its predicate), so **this is a check the human must make** — it is exactly the class
+the file cannot self-report. Do not carry the #7772 sentence in the PR body without it.
+
 **AC6 — The PR closes no issue.**
 
 ```bash
@@ -559,10 +677,20 @@ and grepping it for the link-local metadata address, defaulting to `no` when `nf
 [33888071954](https://github.com/jikig-ai/soleur/actions/runs/33888071954), host
 `soleur-git-data-rehearsal-33888071954`, reported `stage:boot_complete` with `luks_mounted`,
 `repo_root`, `hooks_path`, `provision` and `nft_metadata_drop` all `yes`, and no `level:fatal`
-anywhere in the run. Read against the caveat above: the rendered cloud-init boots to completion
-on a real Hetzner host, so the LUKS fix tracked in #7204 holds, and the metadata-egress control
-from #7772 actually loaded — the one boolean of the five that is independently measured is the
-one that says so.
+anywhere in the run. Read against the caveat above, that decomposes into two different strengths
+of claim, and they should not be blurred:
+
+- **The rendered cloud-init boots to completion on a real Hetzner host, with nothing fatal.**
+  This is what the capture's PASS predicate actually asserts, and it is what says the LUKS fix
+  tracked in #7204 holds — the run reaches the final stage rather than dying at
+  `stage:luks_open` the way the 2026-07-31 rehearsal did.
+- **`nft_metadata_drop=yes`, so the metadata-egress control from #7772 loaded.** This is the one
+  boolean of the five that is measured rather than hardcoded, and it is therefore the only one
+  that carries information. Note that it is **not** part of the capture's pass predicate and the
+  evidence file records the queries rather than the rows — so this value is quoted here from the
+  capture's own host-rows output, read by a person, not self-reported by the committed file.
+
+Observed `boot_complete` row, pasted from the capture run: `<paste it here at Phase 5>`.
 
 **The evidence is dated 2026-09-04 and is REUSED, not re-run.** `RUNG2_TEMPLATE_SHA256` binds
 the rehearsal to the cloud-init template and the nine `file()`-bound payloads that compose

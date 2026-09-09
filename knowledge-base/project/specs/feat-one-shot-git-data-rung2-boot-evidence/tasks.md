@@ -51,6 +51,11 @@ PR: #8002 (open, draft)
       This file is a new tracked `.env` under `apps/` and is **not** allowlisted; the
       `gitleaks scan` job is a required check. Do not widen `.gitleaks.toml` to make it pass.
 - [ ] 3.4 Run the AC1 shape greps and the AC5 residual source-identifier greps.
+- [ ] 3.5 **AC7** — read `nft_metadata_drop` from the capture's host-rows output (it is in the
+      run output, **not** in the `.env`, which records queries rather than rows). Expect `yes`.
+      This is the only measured boolean of the five and the sole basis for the #7772 claim; the
+      capture PASSes regardless of its value, so a human must check it. Paste the observed
+      `boot_complete` row into the PR body. If it reads `no`, drop the #7772 sentence and stop.
 
 ## Phase 4 — Commit
 
