@@ -370,3 +370,104 @@ describe("ship Incident-PIR gate (#6813)", () => {
     expect(signalsText(`${prText}\n${planText}`)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// `--pr` corpus construction (#7987).
+//
+// The corpus used to be assembled by PROSE in ship/SKILL.md: grep a plan path out
+// of the PR body, `cat` it, concatenate. When the body cites no plan the second
+// half is the empty string and the gate reports "no incident signal" having read
+// zero bytes of plan — a mandatory gate silently always-passing, whose output is
+// byte-identical to a real all-clear.
+//
+// The pin below is the exact PR #7987 shape and is a MATCHED PAIR: the SAME plan
+// sits on disk in both cases, and only the LINK in the body differs. Case 1 alone
+// would also pass if the gate had simply become more eager; case 2 alone would
+// also pass if it had stopped reading plans entirely.
+describe("--pr corpus construction", () => {
+  const { mkdtempSync, writeFileSync, mkdirSync, chmodSync } = require("fs");
+  const { tmpdir } = require("os");
+
+  /** A throwaway git repo with a plan on disk and a `gh` stub that returns `body`. */
+  function sandbox(body: string, planText: string) {
+    const dir = mkdtempSync(resolve(tmpdir(), "pirgate-"));
+    spawnSync("git", ["init", "-q", "-b", "feat-fixture", dir]);
+    mkdirSync(resolve(dir, "knowledge-base/project/plans"), { recursive: true });
+    writeFileSync(resolve(dir, "knowledge-base/project/plans/fixture-plan.md"), planText);
+    mkdirSync(resolve(dir, "bin"), { recursive: true });
+    // The stub validates argv rather than answering unconditionally: a fake that
+    // dispatches on nothing cannot detect the gate querying the wrong thing.
+    writeFileSync(
+      resolve(dir, "bin/gh"),
+      `#!/usr/bin/env bash\n` +
+        `case "$*" in\n` +
+        `  *"pr view"*--json*title,body*) cat <<'EOF'\n${body}\nEOF\n    ;;\n` +
+        `  *) echo "gh-stub: unexpected: $*" >&2; exit 64 ;;\n` +
+        `esac\n`,
+    );
+    chmodSync(resolve(dir, "bin/gh"), 0o755);
+    return dir;
+  }
+
+  function runPr(dir: string, pr = "7987") {
+    return spawnSync("bash", [GATE, "--pr", pr], {
+      cwd: dir,
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${resolve(dir, "bin")}:${process.env.PATH}` },
+    });
+  }
+
+  // The plan reports a real production outage; the body alone says nothing.
+  const OUTAGE_PLAN =
+    "# fix: apex\n\n## Overview\n\nThe 2026-08-16 apex outage took the production site down.\n";
+  const BODY_WITH_LINK =
+    "fix(apex): restore the origin\\n\\nSee knowledge-base/project/plans/fixture-plan.md for detail.";
+  const BODY_NO_LINK = "fix(apex): restore the origin\\n\\nNo plan is linked from this body.";
+
+  test("body LINKS the plan → the plan is read and the outage signals", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN));
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+    expect(res.stderr).toContain("PIR-CORPUS —");
+  });
+
+  test("body OMITS the link → no signal, but the gate SAYS it read the body alone", () => {
+    const res = runPr(sandbox(BODY_NO_LINK, OUTAGE_PLAN));
+    expect(res.status).toBe(1);
+    // The defect was not the verdict — it was that this verdict was
+    // indistinguishable from having scanned everything.
+    expect(res.stderr).toContain("PIR-CORPUS-BODY-ONLY");
+  });
+
+  test("an unreadable PR fails TOWARD the PIR rather than reporting all-clear", () => {
+    const dir = sandbox(BODY_WITH_LINK, OUTAGE_PLAN);
+    writeFileSync(resolve(dir, "bin/gh"), "#!/usr/bin/env bash\nexit 1\n");
+    chmodSync(resolve(dir, "bin/gh"), 0o755);
+    const res = runPr(dir);
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+    expect(res.stderr).toContain("PIR-CORPUS-UNREADABLE");
+  });
+
+  test("a cited plan path escaping the plans dir is refused, not read", () => {
+    const res = runPr(
+      sandbox(
+        "fix: x\\n\\nknowledge-base/project/plans/../../../../etc/passwd.md",
+        OUTAGE_PLAN,
+      ),
+    );
+    expect(res.stderr).toContain("PIR-CORPUS-BODY-ONLY");
+    expect(res.status).toBe(1);
+  });
+
+  test("--pr rejects a non-numeric argument", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN), "7987; rm -rf /");
+    expect(res.status).toBe(2);
+  });
+
+  test("stdin mode is unchanged when --pr is absent", () => {
+    const res = spawnSync("bash", [GATE], { input: OUTAGE_PLAN, encoding: "utf8" });
+    expect(res.status).toBe(0);
+    expect(res.stdout).toContain("INCIDENT-SIGNAL: yes");
+  });
+});

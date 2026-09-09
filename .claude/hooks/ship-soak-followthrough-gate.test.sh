@@ -196,8 +196,37 @@ check "negation scoped to its own clause: 'NOT Closes' still DENIES" "deny" \
 # the plan was then appended RAW, so the protection stopped halfway through one
 # corpus. Plans are where worked examples and sample PR bodies actually live.
 # Matched pair: fenced ref must be invisible, unfenced ref must still deny.
+# Byte-exact copy of test-helpers.sh's assert_fixture_dir. Inlined rather than
+# sourced, matching the six sibling hook suites that do the same
+# (cla-signed-author-gate, context-reviewed-gate, pre-merge-rebase{,-headless,-parity},
+# ship-unpushed-commits-gate): `.claude/hooks/` suites do not pull in
+# plugins/soleur/test/test-helpers.sh. It is the ONLY guard the P1b scanner
+# recognises, and only as an executed statement -- see
+# fixture-relative-assert.baseline.txt, "WHAT A GUARD HAS TO PROVE". Keep byte-exact:
+# fixture-dir-operand-assert.test.sh drift-checks every copy in the repo.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 mk_plan() { # <repo> <ref-line-placement: fenced|unfenced>
-  local d="$1" where="$2" f="$1/knowledge-base/project/plans/fixture-soak-plan.md"
+  local d="$1" where="$2" f
+  # Guard the redirect operand at the ENCLOSING FUNCTION HEAD, which is where the
+  # P1a guard window starts. Without it `} > "$f"` below is an unprovable operand:
+  # an empty $1 makes the path relative and the heredoc lands in the CALLER's
+  # working tree. This is the fixture-relative-assert ratchet's own finding on this
+  # very edit -- guarded rather than passed through its `--write-baseline` remedy,
+  # which would have recorded a real site as accepted.
+  : "${1:?mk_plan needs a repo dir; an empty operand would write into the caller cwd}"
+  assert_fixture_dir "$1"
+  f="$1/knowledge-base/project/plans/fixture-soak-plan.md"
+  assert_fixture_dir "$f"
   mkdir -p "$1/knowledge-base/project/plans"
   {
     echo "# fixture plan"

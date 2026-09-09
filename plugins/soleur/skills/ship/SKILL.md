@@ -1093,13 +1093,21 @@ Enforces the operator's standing rule — **every detected incident gets a post-
 3. **Incident-signal scan.** The PR title/body or linked plan matches (case-insensitive) an outage signal AND a production signal:
 
    ```bash
-   PR_TEXT=$(gh pr view --json title,body --jq '.title + "\n" + .body' 2>/dev/null || true)
-   PLAN_PATH=$(printf '%s' "$PR_TEXT" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+' | head -n1 || true)
-   PLAN_TEXT=""; [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]] && PLAN_TEXT=$(cat "$PLAN_PATH")
+   # The gate builds its OWN corpus now (`--pr`, #7987). It previously came from
+   # four lines of prose here that grepped a plan path out of the PR body and
+   # `cat`-ed it; when the body cited no plan, PLAN_TEXT was the EMPTY STRING and
+   # the gate reported "no incident signal" having read zero bytes of plan —
+   # byte-identical output to a real all-clear. Measured on PR #7987: 19 KB of body
+   # with no `knowledge-base/` path anywhere, verdict "no signal"; adding the link
+   # and re-running the same gate on the same commit returned INCIDENT-SIGNAL: yes.
+   # The regexes were split out of this prose in #6813 for exactly this reason; the
+   # INPUT stayed behind, and an input assembled by prose is as unpinned as a
+   # pattern was. Do NOT re-inline it. The script emits a `PIR-CORPUS…` line on
+   # stderr saying what it actually read.
    # The gate owns the regexes + strips (scripts/ship-incident-pir-gate.sh, #6813);
    # branch on its exit — 0 = signal (prints "INCIDENT-SIGNAL: yes"), 1 = no signal.
    # Do NOT let `set -e` see the exit: a clean no-signal is exit 1, not a failure.
-   if printf '%s\n%s' "$PR_TEXT" "$PLAN_TEXT" | bash "${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/ship-incident-pir-gate.sh"; then
+   if bash "${CLAUDE_PLUGIN_ROOT:-.}/../../scripts/ship-incident-pir-gate.sh" --pr "$(gh pr view --json number --jq .number)"; then
      echo "gate: incident signal — a PIR is required (see below)."
    else
      echo "gate: no incident signal."

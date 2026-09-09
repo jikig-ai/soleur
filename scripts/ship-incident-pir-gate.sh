@@ -19,6 +19,92 @@
 # only PAST-TENSE / report vocabulary.
 set -uo pipefail
 
+# ---------------------------------------------------------------------------
+# CORPUS CONSTRUCTION (#7987). Default is stdin, unchanged; `--pr <N>` makes the
+# script build its own haystack.
+#
+# WHY THIS MOVED IN HERE. The corpus was assembled by PROSE in ship/SKILL.md:
+# read the PR body, grep a `knowledge-base/project/{plans,specs}/...` path out of
+# it, `cat` that file, concatenate. When the body cites no plan the second half is
+# the EMPTY STRING, and the gate then reports "no incident signal" having examined
+# zero bytes of plan -- a mandatory gate silently always-passing, with an output
+# indistinguishable from a real all-clear.
+#
+# Measured on PR #7987: 19 KB of body containing no `knowledge-base/` path at all,
+# verdict "no incident signal". Adding the plan link and re-running the SAME gate
+# on the SAME commit returned INCIDENT-SIGNAL: yes. Opposite answers, and nothing
+# in the first run said half its input was missing.
+#
+# The regexes were split out of this same SKILL.md prose for the same reason in
+# #6813 ("the script OWNS the regexes, so drift is impossible"). The input was
+# left behind. A gate whose INPUT is assembled by prose is exactly as unpinned as
+# one whose PATTERNS were: `parse-form-a.awk` and `probe-verb-gate.sh` are split
+# out on precisely this argument -- a harness must execute the production runtime,
+# not scrape it out of a document.
+#
+# NOT fail-toward-PIR on a missing plan: most PRs legitimately have no plan, so
+# firing there would make the gate noise and get it dismissed -- the #6813 failure
+# this gate was rebuilt to escape. The fix is to make the state VISIBLE, not to
+# make it loud. Same posture preflight uses for SKIP-NOSANDBOX: its own terminal,
+# always emitted, never folded into the silent set.
+PIR_PR=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --pr)
+      PIR_PR="${2:?--pr needs a PR number}"
+      # Validate HERE, at top level. Inside emit_corpus this `exit 2` would run in
+      # the command substitution that captures the corpus, killing only the
+      # SUBSHELL: the assignment then fails, the fail-toward-PIR guard fires, and
+      # a plain usage error is reported as INCIDENT-SIGNAL + exit 0. Measured --
+      # the argument-rejection test caught it.
+      if [[ ! "$PIR_PR" =~ ^[0-9]+$ ]]; then
+        echo "ship-incident-pir-gate: --pr must be a positive integer, got '$PIR_PR'" >&2
+        exit 2
+      fi
+      shift 2 ;;
+    *) echo "ship-incident-pir-gate: unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+emit_corpus() {
+  if [[ -z "$PIR_PR" ]]; then cat; return; fi
+
+  local body plan resolved root
+  body="$(gh pr view "$PIR_PR" --json title,body --jq '.title + "
+" + .body' 2>/dev/null || true)"
+  if [[ -z "$body" ]]; then
+    # Cannot read the PR at all. FAIL TOWARD THE PIR: unlike a missing plan (a
+    # normal state), an unreadable PR means the gate has no input whatsoever, and
+    # a gate with no input must not report an all-clear.
+    echo "ship-incident-pir-gate: PIR-CORPUS-UNREADABLE — could not read PR #$PIR_PR; failing toward PIR" >&2
+    printf 'unreadable pr: production outage
+'
+    return
+  fi
+  printf '%s
+' "$body"
+
+  plan="$(printf '%s' "$body" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' | head -n1 || true)"
+  if [[ -z "$plan" ]]; then
+    echo "ship-incident-pir-gate: PIR-CORPUS-BODY-ONLY — no knowledge-base/project/{plans,specs}/*.md path in PR #$PIR_PR; scanned the body alone, NOT the plan" >&2
+    return
+  fi
+
+  # Path-traversal guard, same shape preflight Check 10 uses: a PR body is
+  # attacker-authored text and this turns any readable `.md` into gate input.
+  root="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+  resolved="$(realpath -e "$plan" 2>/dev/null || true)"
+  case "$resolved" in
+    "$root"/knowledge-base/project/plans/*|"$root"/knowledge-base/project/specs/*) ;;
+    *)
+      echo "ship-incident-pir-gate: PIR-CORPUS-BODY-ONLY — cited plan '$plan' does not resolve under $root/knowledge-base/project/{plans,specs}/; refusing to read it" >&2
+      return ;;
+  esac
+
+  echo "ship-incident-pir-gate: PIR-CORPUS — PR #$PIR_PR body + plan '$plan'" >&2
+  cat "$resolved"
+}
+
 # Past-tense / report outage vocabulary. NO bare `incident` (it matches the
 # threshold literal and `incidental`); word-boundaried; requires a signal that
 # something HAPPENED, since a PIR is owed for an event, not a hypothetical.
@@ -154,7 +240,7 @@ DROP_RE='^brand_survival_threshold:|brand-survival threshold:|if this lands brok
 # the ordinary outcome for an empty PR body — so the bare guard reported an incident for a PR with
 # no text at all. Merging the line filter into the awk removed the terminal grep and with it that
 # whole failure mode, rather than papering over it with an exit-code arm.
-if ! haystack="$(cat \
+if ! haystack="$(emit_corpus \
   | awk 'BEGIN{f=0; n=0} /^[[:space:]]*```/{f=!f; print ""; next}
          !f{print; next}
          {buf[++n]=$0}
