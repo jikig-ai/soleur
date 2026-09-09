@@ -2404,6 +2404,7 @@ if want_scripts; then
   # Measured 0.1 s, 32 assertions, bash-only.
   run_suite "scripts/suite-exit-class-parity" bash scripts/suite-exit-class-parity.test.sh
   run_suite "scripts/battery-tag-authorship" bash scripts/battery-tag-authorship.test.sh
+  run_suite "scripts/battery-tag-authorship-mutations" bash scripts/battery-tag-authorship-mutations.test.sh
   # The patterns are declared ONCE, at the top of this file, and published by
   # `--print-suite-globs` so scripts/lint-orphan-test-suites.sh reads the same list this loop
   # expands. Nested loop rather than one flat `for f in ${SUITE_GLOBS[@]}`: the flat form

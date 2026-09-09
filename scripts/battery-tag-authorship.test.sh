@@ -451,6 +451,27 @@ for w in scripts/lib/repo-write-boundary.test.sh scripts/suite-exit-class-parity
   fi
 done
 
+# AC31 — NAMED WITNESSES, ONE PER SPELLING. This is the anti-vacuity instrument for the
+# occurrence scan, and it is deliberately NOT a floor on the occurrence count: such a floor
+# punishes the desired direction, reddening on any PR that legitimately DELETES a tag author
+# and training exactly the casual downward ratchets that make floors decay.
+#
+# A named witness per spelling cannot be satisfied by a scan that found nothing, and does not
+# move when the population shrinks for good reasons. Both spellings are asserted because they
+# are matched by DIFFERENT patterns: dropping either one leaves the guard green while seeing
+# less, which is the fail-OPEN direction a bare exit code cannot detect.
+_have_witness() { { grep -qF "$1" "$CENSUS"; }; }
+for _w in \
+  "test/pre-merge-rebase.test.ts|array spelling" \
+  "scripts/lib/repo-write-boundary.test.sh|shell spelling (git -C ... tag)" ; do
+  _wp="${_w%%|*}"; _wd="${_w##*|}"
+  ck; if _have_witness "$_wp"; then
+    pass "census contains a named witness for the $_wd: $_wp"
+  else
+    fail "census LOST its named witness for the $_wd ($_wp) — the scan sees less than it did"
+  fi
+done
+
 ck; if (( out_of_class <= OUT_OF_CLASS_CEILING )); then
   pass "out-of-class registrations within ceiling ($out_of_class <= $OUT_OF_CLASS_CEILING)"
 else
@@ -512,7 +533,7 @@ printf '\nbattery-tag-authorship: %d passed, %d failed, %d assertion(s) executed
 # the binding, dies at an unbound variable under `set -u` before reaching the floor, and is
 # scored CONSTRUCTION — an UNCOVERED floor, which is the opposite of what this floor is for.
 # Measured: the earlier layout put this suite in that file's construction-failure set.
-BATTERY_TAG_MIN_ASSERTIONS=9
+BATTERY_TAG_MIN_ASSERTIONS=12
 if (( asserted < BATTERY_TAG_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < BATTERY_TAG_MIN_ASSERTIONS=%d\n' "$asserted" "$BATTERY_TAG_MIN_ASSERTIONS" >&2
   exit 1
