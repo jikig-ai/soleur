@@ -30,6 +30,8 @@ MEASURED BEHAVIOUR THIS FILTER IS BUILT AGAINST
 STATED BYPASSES (P5's explicit non-coverage -- do not read this filter as
 closing them):
   * a localised or renamed accessible name ("Contrasena", "Clave", "Value");
+  * an unnamed node whose role is NOT a text-input role (an unnamed text-input
+    node carrying a value IS redacted, on the fail-safe side);
   * a credential rendered outside a text-input role (a status region, a
     validation message, a `<pre>` block);
   * a value split across segmented single-character inputs;

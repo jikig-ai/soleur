@@ -322,7 +322,7 @@ The two prose-only surfaces — `review/references/review-e2e-testing.md` and `a
 
 The shapes that make a denylist untenable are not exotic — each is something an agent reaches for with no intent to evade: an absolute path (`/usr/local/bin/agent-browser snapshot`, which this repo's own `hr-mcp-tools-playwright-etc-resolve-paths` pushes agents toward), a `timeout 60` or `env` prefix, a redirection to a file that is then `cat`-ed, a `tee` that writes the unredacted tree to disk while still piping to the redactor, and command substitution into a variable that gets echoed.
 
-Stated residual, rather than left silent: `eval "$cmd"`, a variable-expanded binary name, a wrapper script on `PATH` that calls `agent-browser` internally, and any invocation not going through the Bash tool. **Not** a residual, and the plan closes it for free: a shell alias, because aliases are not expanded in non-interactive bash and `hr-the-bash-tool-runs-in-a-non-interactive` fixes that this is what the Bash tool runs. It carries a kill-switch env var and writes its reason to `.claude/.rule-incidents.jsonl`, matching every other row in the `.claude/hooks/README.md` PreToolUse table.
+Stated residual, rather than left silent: `eval "$cmd"`, a variable-expanded binary name, a wrapper script on `PATH` that calls `agent-browser` internally, and any invocation not going through the Bash tool. **Not** a residual, and the plan closes it for free: a shell alias, because aliases are not expanded in non-interactive bash and `hr-the-bash-tool-runs-in-a-non-interactive` fixes that this is what the Bash tool runs. It carries a kill-switch env var (`SOLEUR_DISABLE_SNAPSHOT_GUARD`), matching the other rows in the `.claude/hooks/README.md` PreToolUse table. It does NOT write a ledger row: an earlier revision claimed `.claude/.rule-incidents.jsonl`, but `emit_incident` is not in the shipped plugin tree and that path is gitignored, so layer 7 here is stdout-only.
 
 **No MCP arm.** `browser_snapshot` takes no arguments, so the hook receives an empty `tool_input` and the credential-context predicate would be reconstructed from side-channel state — failing open on at least six paths (navigation by `browser_click`, an SPA route change with no tool call, `browser_fill_form` rather than `browser_type`, `browser_run_code_unsafe`, a second tab, and a re-auth modal on a non-login URL) while failing *closed* on the log-in-then-snapshot loop four skills rely on. A guard that denies the QA loop is worked around within a week, and a worked-around guard is worse than none because it reads as coverage.
 
@@ -554,9 +554,18 @@ error_reporting:
        of stdout/stderr onto the tracker, and its comment path deliberately strips xtrace
        lines because issue-comment bodies do NOT pass through the Actions secret masker."
     - "#7947 paths: observability layer 7 — the self-hosted CLI synchronous consumer.
-       The filter and the interceptor run on a customer's own machine, where the
+       The filter and the interceptor ALSO run HOSTED: web-platform-release.yml
+      vendors plugins/soleur/ into the image and agent-runner-query-options.ts
+      loads it as a local plugin, so this PreToolUse/Bash entry is live on every
+      hosted agent Bash call. A hosted deny or fail-open is visible only in the
+      agent transcript (layer 1/2 via the agent-runner's own error reporting).
+      Beyond that they run on a customer's own machine, where the
        operator- and agent-visible signal is the tool-result stdout and stderr read
-       in-session (cli-stdout-artifact), plus the hook's .claude/.rule-incidents.jsonl
+       in-session (cli-stdout-artifact). NOTE: an earlier revision of this block also
+      claimed the hook writes .claude/.rule-incidents.jsonl. It does not, and it
+      structurally cannot -- emit_incident lives in .claude/hooks/lib/, which is
+      not in the shipped plugin tree, and .claude/.rule-incidents* is gitignored.
+      Layer 7 here is stdout-only, and that signal does not survive the session
        row. There is no hosted sink for layer 7 by design, and this plan does not add one.
        The operator-facing signal is therefore the agent's rendering of the tool result,
        which is why the filter's exit-2 diagnostic and the deny reason are both written
@@ -593,7 +602,8 @@ failure_modes:
     alert_route: layer 7 — cli-stdout-artifact, synchronous in the tool result
   - mode: the interceptor denies a legitimate snapshot (false deny)
     detection: the deny reason returns synchronously to the agent; the hook writes its
-        reason string to .claude/.rule-incidents.jsonl
+        reason string to stdout as the PreToolUse decision (NOT to a ledger --
+        see the correction above; the hook emits one jq decision and exits)
     alert_route: layer 7 in-session, plus the incidents ledger
   - mode: a rule family's population walk breaks and it scans nothing
     detection: the host lint's vacuity guard or the min-cardinality floor exits 2, never 0
@@ -601,12 +611,15 @@ failure_modes:
 
 logs:
   where: workflow-run logs and tracker issue comments (layer 6); in-session tool results
-        and .claude/.rule-incidents.jsonl (layer 7)
+        (layer 7, stdout-only)
   retention: GitHub Actions default for run logs; tracker comments are permanent; the
         incidents ledger is local to the checkout
 
 discoverability_test:
-  command: python3 scripts/lint-shell-trace-credential-refusal.py
+  # Corrected in review. The earlier command named a #7946 lint this diff does
+  # not touch, so it passed identically whether the three #7947 controls
+  # existed or not -- the vacuity shape this plan's own floor exists to stop.
+  command: python3 scripts/lint-credential-path-literals.py && printf '%s\n' '- textbox "Token" [ref=e1]: PROBE' | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py | grep -q '<redacted>'
   expected_output: "exit 0, repo-wide, with Rule E active and a scanned-file count at or above its floor"
 ```
 
@@ -782,7 +795,7 @@ Internal draft material, not external legal advice.
 | **`sentry-checkins-3859.sh` points at a different Sentry org than the one being minted in**, and it is a caller of the at-risk endpoint. | The slug moves in Phase 3.3, in scope. Phase 0.2 probes both slugs so the need is measured rather than assumed. |
 | **The mint could leave an unrecoverable token attached to a live integration.** | Capture, decode, write, verify and shred all live in one trap scope; a failed write deletes the just-minted integration in-page before the trap fires. |
 | **The Playwright mint is itself a browser login** — the #7947 hazard inside the PR that fixes it. | Performed under the #7947 discipline, after Phase 2 has landed the guard. |
-| **A false deny gets the interceptor disabled**, and a worked-around guard reads as coverage. | No MCP arm. The Bash arm decides from the command string alone with no session state, carries a kill switch and a ledger row, and its must-PASS rows pin the legitimate forms. |
+| **A false deny gets the interceptor disabled**, and a worked-around guard reads as coverage. | No MCP arm. The Bash arm decides from the command string alone with no session state, carries a kill switch (`SOLEUR_DISABLE_SNAPSHOT_GUARD`; no ledger row -- see the Observability correction), and its must-PASS rows pin the legitimate forms. |
 | **P7 is not achieved on the Playwright-MCP path.** | Stated plainly in `## User-Brand Impact`, `## Non-Goals` and the ADR, rather than implied away. The proxy issue is filed `priority/p1-high`. |
 | **A guard that cannot tell clean from never-ran.** | Every rule family inherits its host's vacuity guard or carries a cardinality floor; every suite carries an anti-vacuity floor reporting directly per ADR-193; each matrix has a row targeting its own dispatch. |
 | **The ADR ordinal is a claim, not a reservation.** | Re-derived across all `origin/*` refs before merge, with the sweep extended past `knowledge-base/`. |

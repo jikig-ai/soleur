@@ -152,3 +152,53 @@ on one enumerated sink, not a substitute for the carried refusal".
 | A PostToolUse hook that redacts snapshot output | P5, P7 | Structurally impossible: PostToolUse runs after the tool's write and cannot rewrite tool output (`.claude/hooks/README.md` §PostToolUse hooks). |
 | A structural `type=password` predicate | P5 | Measured unimplementable — no surface serializes `type`. |
 | Prose guidance in the browser skills alone | P7 | Fails this plan's own test: it holds only when the agent remembers, and the operator it protects cannot audit an accessibility tree. |
+
+## Addendum — 2026-09-09, post-review
+
+The multi-agent review found more defects in these three controls than in
+anything they guard. Recording what changed, because two of the corrections
+alter statements made above.
+
+### The Playwright-MCP reach was overstated as unreachable
+
+Above, the redactor is described as able to reach the MCP path "only if a human
+pipes a saved snapshot through it." That is stronger than the facts.
+`mcp__playwright__browser_snapshot` accepts a **`filename`** parameter — it
+writes the tree to a file instead of returning it into the response — so an
+agent can write, filter and shred entirely in-flow, with no human step.
+
+This does **not** close the residual: nothing *forces* it, which is the whole
+content of property P7, and #7980 remains open. But the honest statement is
+"there is no runtime control that holds without the agent remembering", not
+"the redactor cannot reach this path." The MCP-facing skills now prescribe the
+`filename` form rather than an `agent-browser` shell pipe, which cannot work on
+that surface at all — four shipped documents had prescribed exactly that
+inoperable remedy.
+
+### The per-segment claim was false when written, and is now true
+
+The Decision section says the interceptor judges "per shell segment so a chained
+command with one piped and one unpiped invocation is caught." As first shipped
+the splitter handled `&&`, `||` and `;` but **not a bare `&`**, so that exact
+bypass rode through — and the same sentence appears in the Article 30 register,
+where a false property claim is worse than none. The splitter now covers all
+four, `2>&1` is protected from being split on its own ampersand, and the suite
+carries a row per separator.
+
+### The defect distribution is the finding
+
+Nineteen of the review's findings were in the guards; none were in the code the
+guards protect. The sharpest were: a node parser that accepted exactly one
+attribute bracket while Playwright emits several (so `[disabled]`, the standard
+credential-panel shape, matched nothing); a name predicate that failed on its
+own plurals (`API Keys`, `Tokens`); an allow-predicate satisfied by a trailing
+comment and by `| tee raw.txt |`; a corpus lint whose document-scoped anchor
+exempted 26 unrouted instructions, 19 of which the hook denies at runtime; and
+`2>&1` — the form this guard *prescribes* — defeating the redactor's own JSON
+detection.
+
+Two further defects were introduced by the fixes for the first round and caught
+by a second: a role silently leaving the guarded set, and a fail-open in the
+repaired JSON arm. That is the pattern worth carrying forward — on a guard PR,
+the verification is the least-audited surface, and the round-2 fixes needed
+their own round of fixtures exactly as the round-1 ones did.

@@ -26,8 +26,8 @@ README="$REPO_ROOT/.claude/hooks/README.md"
 
 pass=0; fail=0; cases=0
 # 3 deny + 4 allow + 5 registration + 2 reason-content rows,
-# + 7 review rows (round 1) + 4 review rows (round 2) = 25.
-MIN_ASSERTIONS=25
+# + 7 review rows (round 1) + 5 review rows (round 2) = 26.
+MIN_ASSERTIONS=26
 
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
@@ -164,6 +164,14 @@ if [[ $empty_rc -eq 0 && $cases2_rc -eq 0 ]]; then
   ok 'malformed/empty envelope: exits 0 with no decision (does not block every Bash call)'
 else
   bad "malformed envelope must fail open (empty rc=$empty_rc, non-json rc=$cases2_rc)"
+fi
+
+cases=$((cases + 1))
+ks="$(envelope 'agent-browser snapshot -i' | SOLEUR_DISABLE_SNAPSHOT_GUARD=1 bash "$HOOK" 2>/dev/null)"
+if [[ -z "$ks" ]]; then
+  ok 'kill-switch: SOLEUR_DISABLE_SNAPSHOT_GUARD=1 disables the deny'
+else
+  bad 'kill-switch did not disable the guard'
 fi
 
 # ---- Reason content: the deny must name BOTH escape routes ----

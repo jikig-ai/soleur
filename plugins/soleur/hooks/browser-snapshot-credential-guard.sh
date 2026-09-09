@@ -31,6 +31,11 @@
 # that hard-fails on a malformed envelope would block every Bash call.
 set -uo pipefail
 
+# Operator kill-switch, matching the convention of the other PreToolUse hooks
+# (grep-rewrite.sh carries SOLEUR_DISABLE_GREP_REWRITE). A false deny must not
+# require editing the installed plugin to work around.
+[[ -n "${SOLEUR_DISABLE_SNAPSHOT_GUARD:-}" ]] && exit 0
+
 INPUT="$(cat 2>/dev/null || true)"
 [[ -z "$INPUT" ]] && exit 0
 
