@@ -45,6 +45,7 @@ Review the pre-filled values. Click GitHub's **Create GitHub App** button.
 GitHub creates the App and lands on the App's settings page.
 
 The manifest pre-fills:
+
 - Name: `Soleur AI`
 - Homepage: `https://soleur.ai`
 - Description: as committed in the manifest

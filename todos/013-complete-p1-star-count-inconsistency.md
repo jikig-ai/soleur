@@ -30,11 +30,13 @@ business-validation.md says "19.6k GitHub stars in 10 days" while every other fi
 **Approach:** Update business-validation.md line 76 to use 14.6k, matching the majority of files. The CI agent's scan was the more recent fetch and is used consistently across all downstream documents. Plan/session-state are point-in-time records and can retain their historical figures.
 
 **Pros:**
+
 - Aligns with 6+ files that already use 14.6k
 - Minimal changes (1 file)
 - Plan/session-state preserve the audit trail of what was fetched during planning
 
 **Cons:**
+
 - The plan's GitHub API call may have been more accurate (direct API vs web scrape)
 
 **Effort:** 5 minutes
@@ -44,6 +46,7 @@ business-validation.md says "19.6k GitHub stars in 10 days" while every other fi
 ## Technical Details
 
 **Affected files:**
+
 - `knowledge-base/product/business-validation.md` line 76
 
 ## Acceptance Criteria
@@ -58,5 +61,6 @@ business-validation.md says "19.6k GitHub stars in 10 days" while every other fi
 **By:** Architecture, Pattern, Simplicity, Agent-Native review agents (all 4 flagged)
 
 **Actions:**
+
 - Identified cross-document star count inconsistency
 - Traced root cause to two separate data fetches at different times

@@ -11,6 +11,7 @@ Find and install community agents and skills for project stacks not covered by b
 ## Input
 
 The spawning command provides:
+
 - `detected_stacks`: list of stacks detected in the project (e.g., `["flutter", "rust"]`)
 - `uncovered_stacks`: subset of detected_stacks with no matching `stack:` frontmatter in any agent file
 
@@ -76,6 +77,7 @@ Only keep results whose `name`, `description`, or `keywords`/`tags` contain the 
 ## Step 3: Present Suggestions
 
 Present up to 5 suggestions using the AskUserQuestion tool. For each suggestion, show:
+
 - Name and source (registry + author/namespace)
 - Trust tier indicator (Anthropic / Verified)
 - Description (first 200 characters)
@@ -122,7 +124,7 @@ Before installing, validate:
 2. **Required fields present** -- `name` and `description` must exist in frontmatter
 3. **Size check** -- content must be under 100KB
 4. **No path traversal** -- no `../` in any frontmatter field values
-5. **No executable code blocks** -- warn (but don't block) if content contains ```bash or ```sh blocks with destructive commands (`rm -rf`, `curl | bash`, etc.)
+5. **No executable code blocks** -- warn (but don't block) if content contains ```` ```bash ```` or ```` ```sh ```` blocks with destructive commands (`rm -rf`, `curl | bash`, etc.)
 
 If validation fails, skip with a message: "Artifact [name] failed validation: [reason]. Skipping."
 

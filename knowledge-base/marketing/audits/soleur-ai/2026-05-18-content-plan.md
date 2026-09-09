@@ -16,7 +16,7 @@ issue_refs:
 
 ## Executive Summary
 
-Three audits ran on 2026-05-18 against the deploy source-of-truth because **the live site at https://soleur.ai/ returned Cloudflare HTTP 526 (origin SSL handshake failure) for every HTML and XML route except `/robots.txt`**. The SEO audit graded the live surface at **0/100 (F)**; the AEO audit graded the underlying corpus at **68/100 (C)** with **Presence at 12/25 (48%) — failing the issue #2615 exit criterion of `Presence >= 55/D`**; the content audit found **7 critical issues** including `{{ stats.agents }}` interpolation drift in prose, the `/about/` page using "About" as its H1, and "Company-as-a-Service" capitalized inconsistently across pages.
+Three audits ran on 2026-05-18 against the deploy source-of-truth because **the live site at <https://soleur.ai/> returned Cloudflare HTTP 526 (origin SSL handshake failure) for every HTML and XML route except `/robots.txt`**. The SEO audit graded the live surface at **0/100 (F)**; the AEO audit graded the underlying corpus at **68/100 (C)** with **Presence at 12/25 (48%) — failing the issue #2615 exit criterion of `Presence >= 55/D`**; the content audit found **7 critical issues** including `{{ stats.agents }}` interpolation drift in prose, the `/about/` page using "About" as its H1, and "Company-as-a-Service" capitalized inconsistently across pages.
 
 The trajectory is recoverable. The 2026-05-04 baseline was 65/C; the 2026-05-18 corpus scored 68/C, a **+3 net** driven by the Company-as-a-Service pillar's expanded citation set (BLS, CNBC, TechCrunch, VentureBeat, Karpathy). But the live 526 outage **nullifies every gain** for AI crawlers (Perplexity, ChatGPT browsing, Claude.ai, Gemini) until origin is restored. Zero availability = zero presence.
 
@@ -92,7 +92,7 @@ New content tied to the keyword research below, organized as a pillar/cluster mo
 | **P3-6** | **Shareable: "Building Soleur in Public — Audit Cadence as Marketing"** — meta-narrative on how Soleur runs 3 audits every two weeks and publishes the trend lines (the audit trend table in the AEO doc is itself shareable). Position the audit-as-process as a differentiator. | Second shareable piece. Founders share other founders' transparent build-in-public content; this is exactly that format. | 3-4 hours writing. | — (distribution, not search) | Shareable |
 | **P3-7** | **I-5: Surface pricing methodology footnote** as an `<h3>Methodology: How We Sourced $95K/mo</h3>` section. Currently the Robert Half / Payscale / Levels.fyi citations are buried in small-text footnote. Promote to citation-friendly heading. | Lifts E-E-A-T citation visibility. The methodology block is already the strongest evidence block on the site; surfacing it makes it AI-extractable. | 30 min. | "AI agents vs hiring cost", "AI agents ROI" | — |
 | **P3-8** | **I-13: Unify workflow-step naming.** Pick one labeling system (Think/Plan/Build/Review/Ship/Compound from homepage) and apply to `/getting-started/`. Currently the two pages name the same six steps differently (brainstorm/plan/work/review/compound/ship). | Cross-page consistency. Prevents entity confusion for AI engines summarizing the Soleur workflow. | 20 min. | — | — |
-| **P3-9** | **I-12: Rotate founding-cohort scarcity claim weekly** ("limited to 10" → date-stamped "X slots remaining as of YYYY-MM-DD") or replace with static "Email ops@jikigai.com to discuss founding-cohort access". | Removes the evergreen-marketing-copy smell. Trust scaffolding. | 30 min to set up; ~5 min/week ongoing. | — | — |
+| **P3-9** | **I-12: Rotate founding-cohort scarcity claim weekly** ("limited to 10" → date-stamped "X slots remaining as of YYYY-MM-DD") or replace with static "Email <ops@jikigai.com> to discuss founding-cohort access". | Removes the evergreen-marketing-copy smell. Trust scaffolding. | 30 min to set up; ~5 min/week ongoing. | — | — |
 | **P3-10** | **I-14: De-hedge "Prefer to run it yourself?"** on `/getting-started/`. Per brand guide §Don't hedge. | Small voice fix. Removes the softener. | 5 min. | — | — |
 | **P3-11** | **Cross-page consistency sweep:** "single founder" → "one founder" everywhere in marketing prose (matches §Example Phrases "One founder. Full-stack AI. No compromises."). Drop "curator" framing except as a single aside on `/vision/`. Normalize `--` → `—` in pricing meta description. | Voice and surface polish. | 1 hour. | — | — |
 
@@ -174,11 +174,13 @@ Competitors are drawn from the keyword-research SERPs above and from the content
 | **Anthropic** | "Claude Code", "agentic coding trends" | Soleur cites Anthropic correctly today (Claude Code docs, MCP spec). Anthropic is more a substrate than a competitor; surface their 2026 Agentic Coding Trends Report in P3-2. | P3-2 |
 
 **Competitive content surfaces Soleur uniquely owns** (defensible moats):
+
 - `/pricing/` hiring-comparison table with Robert Half / Payscale / Levels.fyi methodology footnote — strongest E-E-A-T block on the site.
 - `/company-as-a-service/` pillar with BLS-anchored category definition — owns "Company-as-a-Service" as a coined category.
 - Open-source posture (Apache-2.0, public GitHub `jikig-ai/soleur`) — none of Cursor, Devin, or Jasper compete on this dimension.
 
 **Skipped competitors** (unreachable or out of scope this cycle):
+
 - None unreachable in this analysis pass; all competitors above are public companies with public marketing surfaces.
 
 ---

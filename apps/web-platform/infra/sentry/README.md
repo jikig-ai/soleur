@@ -174,7 +174,6 @@ org. Class D has teeth only when Terraform state is injected, which
 `apply-sentry-infra.yml` does and a local run does not — so a local run reports
 Class D candidates as *unresolved*, never as clean.
 
-
 ## Drift detection
 
 Two different things drift here, and they have two different detectors.

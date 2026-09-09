@@ -18,6 +18,7 @@ The instinctive fix — make the existing orphan-migration-drift probe BLOCKING 
 A CI gate that asserts a **behavioural schema invariant** (here: Art-17 deletability — no raising UPDATE/DELETE trigger on a table with an `ON DELETE SET NULL/CASCADE` FK to `users`) over **shared dev** MUST be **per-ref-scoped**: it blocks (`::error::` + non-zero exit) only when the offending object is **owned by a migration in the current checkout**; an object that is a leave-behind from another ref is downgraded to `::warning::`.
 
 Ownership is determined cheaply: the offending relation's name appears in `supabase/migrations/*.sql` on the current ref. Net effect:
+
 - the **owning** PR's CI fails (the gate is the enforcement teeth that block the bad migration at its source);
 - `main` and unrelated PRs stay green despite the leave-behind on shared dev;
 - a genuinely-merged bad migration still errors on `main` (main owns it).

@@ -287,7 +287,8 @@ npx -y likec4@1.50.0 validate .
 ```
 
 The pinned `1.50.0` is load-bearing: it MUST match `apps/web-platform/Dockerfile`
-+ `package.json` (`@likec4/core` / `@likec4/diagram`), guarded by
+
+- `package.json` (`@likec4/core` / `@likec4/diagram`), guarded by
 `c4-likec4-version-pin.test.ts`. Never pin to a floating tag (the unpinned
 `likec4` / a moving release) — a CLI/client schema skew silently corrupts the
 rendered diagram. `regenerate-c4-model.sh` renders

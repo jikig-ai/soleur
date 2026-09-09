@@ -1,6 +1,6 @@
 # Feature Request: `plugin marketplace update` should surface (or resolve) install divergence
 
-**Repository:** https://github.com/anthropics/claude-code
+**Repository:** <https://github.com/anthropics/claude-code>
 
 ## Problem
 

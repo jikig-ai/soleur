@@ -14,7 +14,7 @@ related: [ADR-166, ADR-170, ADR-184]
 
 `adopting`. The classifier and its two consumers ship with this ADR. The volume-reduction half
 (Vector-side ceilings) and the blast-radius sweep across the other absence-asserting consumers
-are tracked separately; see [Scope](#scope-what-this-adr-does-not-decide).
+are tracked separately; see [Scope](#scope--what-this-adr-does-not-decide).
 
 ## Context
 

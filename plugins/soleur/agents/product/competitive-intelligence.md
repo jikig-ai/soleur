@@ -9,6 +9,7 @@ Competitive intelligence agent. Researches competitors via WebSearch and WebFetc
 ## Pre-Research Context Loading
 
 Read these files before any research:
+
 - knowledge-base/marketing/brand-guide.md (positioning, voice, differentiation)
 - knowledge-base/product/business-validation.md (existing competitive landscape, tier model)
 
@@ -17,6 +18,7 @@ If either file is missing, warn but continue.
 ## Research Process
 
 For each competitor in scope:
+
 1. WebSearch for recent news, product updates, pricing changes
 2. WebFetch their marketing site for positioning and feature claims
 3. Compare against existing knowledge-base data
@@ -58,6 +60,7 @@ Spawn all 4 in parallel using a single message with multiple Task tool calls.
 ### Task Prompt Instructions
 
 Each Task prompt must include:
+
 - Path to the CI report: knowledge-base/product/competitive-intelligence.md
 - Scoped task description and write target from the delegation table above
 - Instruction to extract the full competitor list from the overlap matrix tables before beginning analysis
@@ -71,6 +74,7 @@ Each Task prompt must include:
 After all specialists complete (or fail), append a `## Cascade Results` section to the CI report. Do not retry failures -- report them only.
 
 Format:
+
 - Date line: _Generated: YYYY-MM-DD_
 - Per-specialist status table with columns: Specialist, Status, Files Modified, Summary
 - A `### Failures` subsection listing error details for any that failed (omit if all succeeded)

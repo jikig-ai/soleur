@@ -158,4 +158,4 @@ An architecture migration (ADR-044) changed a source of truth without an enforce
 
 ## Action Items & Follow-ups
 
-_No action items — incident fully resolved in the source PR with no residual work._
+*No action items — incident fully resolved in the source PR with no residual work.*

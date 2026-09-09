@@ -36,6 +36,7 @@ re-spawn agrees on a new theory shape.
 | 3 | `https://sentry.io/api/0/organizations/jikigai/` | Ephemeral Personal Token, `org:read` only, label `probe-2026-05-19-revoke` | `200` | **`200`** | `{"id":"4511123328466944","slug":"jikigai","name":"Jikigai","dateCreated":"2026-03-28T17:36:09.041388Z","links":{"organizationUrl":"https://jikigai.sentry.io","regionUrl":"https://de.sentry.io"},"access":["org:read"],…}` |
 
 **Substantive corrective story confirmed** (independent of which precise causal theory holds):
+
 - `jikigai` org IS operator-owned (`dateCreated: 2026-03-28T17:36:09Z` matches PR #1235 introducing
   Sentry SDK; org ID `4511123328466944` matches the plan's stated value).
 - `jikigai-eu` org IS operator-owned (`dateCreated: 2026-05-17T11:13:30Z` matches the May 17 cutover).
@@ -74,6 +75,7 @@ transcript at ref `e718`.
 issue/event scope.
 
 **Mitigation timeline.**
+
 - Mint click: `2026-05-19T10:42:20Z`
 - Token displayed in snapshot (leak): `~10:42:23Z`
 - Step 3 curl with token: `10:43:12Z` (HTTP 200 — token live)
@@ -399,7 +401,8 @@ The MCP Playwright session times out / drops between agent-message turns.
 Within a single agent message, 2-3 tool calls can chain successfully; beyond
 that, the browser context is gone. The full integration form requires ~12
 sequential interactions (name + 5+ permission dropdowns + CI checkbox + Save
-+ token-capture), which exceeds the MCP session window. This is a tooling
+
+- token-capture), which exceeds the MCP session window. This is a tooling
 constraint, not a Sentry-side issue.
 
 Falling back to operator handoff with the form-structure recipe above (per
@@ -474,6 +477,7 @@ This is a follow-up to the original PR #4064 learning, which only
 covered explicit `browser_snapshot` calls.
 
 Token rotation chain on the integration:
+
 - `last4=0226` — minted via UI, leaked via auto-snapshot, revoked at 2026-05-19T19:30:58 UTC
 - `last4=6144` — minted via UI, MCP context died before extraction, API-deleted at 2026-05-19T19:35:40 UTC
 - `last4=c468` — minted via API, captured to file via `evaluate(filename:)`, piped to Doppler `soleur/prd SENTRY_IAC_AUTH_TOKEN`, currently active

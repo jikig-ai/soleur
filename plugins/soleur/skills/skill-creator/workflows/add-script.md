@@ -2,6 +2,7 @@
 
 <required_reading>
 **Read these reference files NOW:**
+
 1. references/using-scripts.md
 </required_reading>
 
@@ -9,12 +10,14 @@
 ## Step 1: Identify the Skill
 
 Ask (if not already provided):
+
 - Which skill needs a script?
 - What operation should the script perform?
 
 ## Step 2: Analyze Script Need
 
 Confirm this is a good script candidate:
+
 - [ ] Same code runs across multiple invocations
 - [ ] Operation is error-prone when rewritten
 - [ ] Consistency matters more than flexibility
@@ -30,12 +33,14 @@ mkdir -p ~/.claude/skills/{skill-name}/scripts
 ## Step 4: Design Script
 
 Gather requirements:
+
 - What inputs does the script need?
 - What should it output or accomplish?
 - What errors might occur?
 - Should it be idempotent?
 
 Choose language:
+
 - **bash** - Shell operations, file manipulation, CLI tools
 - **python** - Data processing, API calls, complex logic
 - **node/ts** - JavaScript ecosystem, async operations
@@ -43,6 +48,7 @@ Choose language:
 ## Step 5: Write Script File
 
 Create `scripts/{script-name}.{ext}` with:
+
 - Purpose comment at top
 - Usage instructions
 - Input validation
@@ -50,6 +56,7 @@ Create `scripts/{script-name}.{ext}` with:
 - Clear output/feedback
 
 For bash scripts:
+
 ```bash
 #!/bin/bash
 set -euo pipefail
@@ -64,6 +71,7 @@ chmod +x ~/.claude/skills/{skill-name}/scripts/{script-name}.sh
 ## Step 7: Update Workflow to Use Script
 
 Find the workflow that needs this operation. Add:
+
 ```xml
 <process>
 ...
@@ -76,6 +84,7 @@ N+1. Verify operation succeeded
 ## Step 8: Test
 
 Invoke the skill workflow and verify:
+
 - Script runs at the right step
 - Inputs are passed correctly
 - Errors are handled gracefully
@@ -84,6 +93,7 @@ Invoke the skill workflow and verify:
 
 <success_criteria>
 Script is complete when:
+
 - [ ] scripts/ directory exists
 - [ ] Script file has proper structure (comments, validation, error handling)
 - [ ] Script is executable (if bash)

@@ -45,6 +45,7 @@ When a document logically references another document type, add a note at the en
 > **Related documents:** This [document type] references [other type]. Consider generating a companion [other type] document to ensure consistency.
 
 Examples of natural cross-references:
+
 - Privacy Policy mentioning cookies --> Cookie Policy
 - Terms & Conditions referencing privacy practices --> Privacy Policy
 - GDPR Policy referencing data processing --> Data Processing Agreement or Data Protection Disclosure (depending on processor relationship)

@@ -2,6 +2,7 @@
 
 <required_reading>
 **Read these reference files NOW:**
+
 1. references/recommended-structure.md
 2. references/skill-structure.md
 </required_reading>
@@ -18,6 +19,7 @@ Present numbered list, ask: "Which skill should be upgraded to the router patter
 ## Step 2: Verify It Needs Upgrading
 
 Read the skill:
+
 ```bash
 cat ~/.claude/skills/{skill-name}/SKILL.md
 ls ~/.claude/skills/{skill-name}/
@@ -30,6 +32,7 @@ ls ~/.claude/skills/{skill-name}/
 → Explain that router pattern may be overkill, ask if they want to proceed anyway
 
 **Good candidate for upgrade:**
+
 - Over 200 lines
 - Multiple distinct use cases
 - Essential principles that shouldn't be skipped
@@ -44,6 +47,7 @@ Analyze the current skill and identify:
 3. **Reusable knowledge** - Patterns, examples, technical details
 
 Present findings:
+
 ```
 ## Analysis
 
@@ -133,6 +137,7 @@ What would you like to do?
 ## Step 8: Verify Nothing Was Lost
 
 Compare original skill content against new structure:
+
 - [ ] All principles preserved (now inline)
 - [ ] All procedures preserved (now in workflows)
 - [ ] All knowledge preserved (now in references)
@@ -141,6 +146,7 @@ Compare original skill content against new structure:
 ## Step 9: Test
 
 Invoke the upgraded skill:
+
 - Does intake question appear?
 - Does each routing option work?
 - Do workflows load correct references?
@@ -151,6 +157,7 @@ Report any issues.
 
 <success_criteria>
 Upgrade is complete when:
+
 - [ ] workflows/ directory created with workflow files
 - [ ] references/ directory created (if needed)
 - [ ] SKILL.md rewritten as router

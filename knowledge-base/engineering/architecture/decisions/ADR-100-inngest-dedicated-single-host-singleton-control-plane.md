@@ -46,6 +46,7 @@ sign-off carried from the brainstorm; `user-impact-reviewer` invoked at review.
 external Redis + Postgres — full evidence:
 `knowledge-base/project/specs/feat-inngest-dedicated-host/phase0-empirical-spike.md`) resolved
 the three load-bearing unknowns this ADR fixes:**
+
 1. **Fan-out routing is ROUTE-ONCE.** Two `--sdk-url`s with the same app id collapse into ONE
    app (SDK keys apps by `appName = new Inngest({id})`, `InngestCommHandler.js:1271-1300`);
    the serve URL is a last-writer-wins property, not part of identity. Across 4 clean sends
@@ -84,6 +85,7 @@ the three load-bearing unknowns this ADR fixes:**
   Supabase project + host-local Redis; no new sub-processor).
 
 **Flip-mechanism alternatives (Decision 6a, added 2026-07-08 Ref #6178 — all rejected):**
+
 - **Force-replace-with-gated-cloud-init-`FLUSHALL`.** Rejected: recreates the host mid-window (cold
   OCI pull + cosign + bootstrap = minutes, plus 226/NAMESPACE re-pull risk), widening the bounded
   outage residual and adding failure surface at the worst moment. The pre-installed Doppler-armed
@@ -152,7 +154,7 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    > lifecycle on those `doppler_secret`s explicitly supports) and redeployed the web app.
    >
    > The isolation that actually matters — and **stays separate per host** — is **`INNGEST_POSTGRES_URI`
-   > + `SUPABASE_SERVICE_ROLE`** (Decision 5, the `soleur-inngest` project boundary): those grant
+   > - `SUPABASE_SERVICE_ROLE`** (Decision 5, the `soleur-inngest` project boundary): those grant
    > data-plane access and must never be shared. The channel keys are auth for a shared message
    > channel and confer no such access, so sharing them across the two projects widens nothing.
    > **Durability (prevents recurrence):** `op=arm` now carries a **G3.5 channel-key parity HARD GATE**
@@ -160,7 +162,7 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
    > (value-silent, AC-NOBODY) and **refuses to arm the flip** if they diverge, with the reconcile +
    > redeploy remediation. Because `soleur/prd`'s keys carry `ignore_changes=[value]`, reconcile is via
    > the Doppler copy (or `terraform apply -replace=random_id.inngest_{event,signing}_key_dedicated`
-   > + copy) + a web redeploy — **not** a naive `terraform apply`. See runbook §2.4.
+   > - copy) + a web redeploy — **not** a naive `terraform apply`. See runbook §2.4.
 5. **Secrets on a SEPARATE Doppler project `soleur-inngest`, not a `prd` branch config.** A branch
    config under `prd` resolves the environment's ROOT config as its base and would inherit all
    ~116 `soleur/prd` secrets incl. `SUPABASE_SERVICE_ROLE_KEY`
@@ -301,6 +303,7 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
      scoping it to the identity of the thing measured, so it cannot be inherited.
 7. **Exactly-once soak invariant (DI-C2, demonstrably writable — AC13 satisfied).** The soak probe
    enumerates cron runs against v1.19.4 with:
+
    ```graphql
    query Enum($filter: RunsFilterV2!, $order: [RunsV2OrderBy!]!) {
      runs(first: 100, filter: $filter, orderBy: $order) {
@@ -309,6 +312,7 @@ from web cloud-init.** The following sub-decisions are fixed by this ADR:
      }
    }
    ```
+
    filter `{ from, until, timeField: STARTED_AT, functionIDs:[<cron UUID>] }`. Exactly-once ⇔ every
    occupied `(functionID, floor(startedAt / cron_period))` bucket has exactly one run. (Alternate:
    `eventsV2(includeInternalEvents:true)` surfaces `inngest/scheduled.timer` internal events with
@@ -609,7 +613,6 @@ rollback target: `op=arm` overwrites `INNGEST_POSTGRES_URI`, and the `rollback` 
 `INNGEST_CUTOVER_FLIP` — no code path restores the dark DSN. The reason not to drop early is simply
 that the dark host is **live** against soleur-dev until the flip.)
 
-
 ## Addendum — 2026-08-12 (#7228) — the cutover did not hold, and the soak never started
 
 Appended rather than folded into the body above: everything before this section describes the
@@ -653,7 +656,6 @@ therefore cited as `Ref` rather than closed by it. The twelve days of failed dis
 backfill or dead-letter path is in scope. An interim `INNGEST_BASE_URL` repoint was also declined,
 deliberately: the dedicated host is to be fixed properly rather than returned to the co-located
 operating point.
-
 
 ## Addendum — 2026-08-20 (#7462) — `op=arm` is idempotent, and the prod DSN in the dark slot is the steady state
 

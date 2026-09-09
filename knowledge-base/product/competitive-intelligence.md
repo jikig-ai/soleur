@@ -218,7 +218,7 @@ Best-effort list of competitors surfaced in research that are absent from (or ma
 
 ## Cascade Results
 
-_Generated: 2026-06-08_
+*Generated: 2026-06-08*
 
 **Execution note:** This environment exposed no subagent-dispatch (`Task`) tool — only the shared task-list tools (`TaskCreate`/`TaskUpdate`/`TaskList`). The 4 specialists could not be spawned as parallel autonomous agents. Per the "exhaust all automated options before declaring something manual" rule, the cascade work was performed directly by the CI agent in the same worktree, honoring all specialist constraints (no commit; no writes to this file beyond this Cascade Results section; file-edit tools only). Each row below reflects the artifact actually produced.
 
@@ -238,13 +238,13 @@ business-validation.md is read as context and was **only** updated by this PR fo
 - **Polsia/NanoCorp pricing:** both now carry ~20% revenue cuts (Polsia 20% rev-share, NanoCorp 20% withdrawal fee) — a 2-player pattern, not a Polsia outlier.
 - **Tier 2 funding context:** Relevance AI $37.2M total ($24M Series B, Bessemer); CrewAI $18M Series A (Tier 4). Neither funding figure is in business-validation.md.
 
-_Per the cross-domain data-reconciliation learning (`2026-03-12-competitive-analysis-cascade-data-reconciliation.md`): downstream artifacts (this report, battlecards, pricing) now carry fresher data than upstream business-validation.md. Operators should manually reconcile the items above._
+*Per the cross-domain data-reconciliation learning (`2026-03-12-competitive-analysis-cascade-data-reconciliation.md`): downstream artifacts (this report, battlecards, pricing) now carry fresher data than upstream business-validation.md. Operators should manually reconcile the items above.*
 
 ---
 
-_Report generated 2026-06-08 (first full six-tier scan). Next scheduled scan: 2026-07-08 (monthly cadence)._
+*Report generated 2026-06-08 (first full six-tier scan). Next scheduled scan: 2026-07-08 (monthly cadence).*
 
-_Prior intakes preserved: 2026-04-18 full Tier 0+3 scan; 2026-05-30 targeted Viktor addition (Tier 3, AlphaSignal brief, unverified); 2026-06-08 full six-tier scan + targeted NanoCorp reconciliation (Tier 3) — NanoCorp ads are "Coming Soon" not live, ARR figures contradictory; **2026-06-14 targeted Cofounder/cofounder.co addition (Tier 3, $8.7M USV seed, primary-source verified) — closest product match to date; no full rescan or specialist cascade this intake.**_
+*Prior intakes preserved: 2026-04-18 full Tier 0+3 scan; 2026-05-30 targeted Viktor addition (Tier 3, AlphaSignal brief, unverified); 2026-06-08 full six-tier scan + targeted NanoCorp reconciliation (Tier 3) — NanoCorp ads are "Coming Soon" not live, ARR figures contradictory; **2026-06-14 targeted Cofounder/cofounder.co addition (Tier 3, $8.7M USV seed, primary-source verified) — closest product match to date; no full rescan or specialist cascade this intake.***
 
 ### Peer-Plugin Audit Log (non-audit outcomes)
 

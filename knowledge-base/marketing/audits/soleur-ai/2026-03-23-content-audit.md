@@ -527,11 +527,13 @@ All suggestions aligned with brand voice: bold, declarative, forward-looking, pr
 ### RS-8: Comparison Post Titles (all three)
 
 **Current:**
+
 - "Soleur vs. Cursor: When an AI Coding Tool Becomes an Agent Platform"
 - "Soleur vs. Anthropic Cowork: Which AI Agent Platform Is Right for Solo Founders?"
 - "Soleur vs. Notion Custom Agents: Company-as-a-Service vs. Workspace Automation"
 
 **Suggested:**
+
 - "Soleur vs. Cursor (2026): When an AI Coding Tool Becomes an Agent Platform"
 - "Soleur vs. Anthropic Cowork (2026): Which AI Agent Platform Is Right for Solo Founders?"
 - "Soleur vs. Notion Custom Agents (2026): Company-as-a-Service vs. Workspace Automation"

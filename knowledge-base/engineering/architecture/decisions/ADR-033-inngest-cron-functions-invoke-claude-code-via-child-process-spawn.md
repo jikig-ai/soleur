@@ -160,7 +160,7 @@ Oneshots and event-triggered functions do NOT get `sentry_cron_monitor` resource
 
 ### Registration checklist (a NEW `cron-*` claude-eval function)
 
-`[Added 2026-06-30 — #5631. Revised 2026-07-17 — #6589: was eight; the `-target=` allow-list location is gone (full-root apply), leaving seven.]` Adding a recurring claude-eval cron touches **seven** gated locations, not the "four" (handler + manifest + metadata + serve route) often cited in PR bodies. Each location below has a CI gate that fails closed; a stale or bot-generated PR that ran before some gate existed will look green until rebased onto current `main`. Mirror the structurally-closest live cron (claude-eval + `safeCommitAndPr` ⇒ `cron-seo-aeo-audit.ts`) signature-for-signature rather than writing the handler from the substrate's prose.
+``[Added 2026-06-30 — #5631. Revised 2026-07-17 — #6589: was eight; the `-target=` allow-list location is gone (full-root apply), leaving seven.]`` Adding a recurring claude-eval cron touches **seven** gated locations, not the "four" (handler + manifest + metadata + serve route) often cited in PR bodies. Each location below has a CI gate that fails closed; a stale or bot-generated PR that ran before some gate existed will look green until rebased onto current `main`. Mirror the structurally-closest live cron (claude-eval + `safeCommitAndPr` ⇒ `cron-seo-aeo-audit.ts`) signature-for-signature rather than writing the handler from the substrate's prose.
 
 | # | Location | What to add | Gate that catches an omission |
 |---|----------|-------------|-------------------------------|
@@ -195,7 +195,7 @@ NFR register entries are not updated as part of this ADR; PR-1 (and each subsequ
 - **AP-008 (Doppler secrets): Aligned** — `ANTHROPIC_API_KEY` already in Doppler `prd` (PR-F runtime). The Hetzner worker reads from Doppler, not from a `.env` file. Cron-* functions inherit the operator key from the parent Node process env.
 - **AP-001 (Terraform-only provisioning): Aligned** — `claude-code` binary pin lives in `apps/web-platform/infra/server.tf` (cloud-init or systemd unit), not a manual operator step.
 - **`hr-dev-prd-distinct-supabase-projects`: Aligned** — `cron_run_ledger` ledger writes hit dev/prd-distinct Supabase projects per the parent project posture.
-- **`hr-autonomous-loop-skill-api-budget-disclosure`: NO-OP at write time** — the rule targets founder-BYOK consumption unattended. These cron-* functions consume the OPERATOR key only (invariant I2). Guard clause: if any future cron-* function transitions to per-founder execution, this ADR MUST be superseded and the budget-disclosure rule re-evaluated before that transition merges.
+- **`hr-autonomous-loop-skill-api-budget-disclosure`: NO-OP at write time** — the rule targets founder-BYOK consumption unattended. These `cron-*` functions consume the OPERATOR key only (invariant I2). Guard clause: if any future cron-* function transitions to per-founder execution, this ADR MUST be superseded and the budget-disclosure rule re-evaluated before that transition merges.
 
 ## Diagram
 

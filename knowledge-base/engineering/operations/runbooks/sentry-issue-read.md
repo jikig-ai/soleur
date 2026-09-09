@@ -58,7 +58,6 @@ rewrites `-eu`-suffixed slugs → 302/401 cascade) and NOT `de.sentry.io` (inges
 > finding, which this correction does not touch. Only the parenthetical justification was
 > wrong. Appended rather than edited in place: this is a dated record.
 
-
 ## Re-minting the read-only token (if lost/rotated)
 
 The Sentry provider exposes **no Terraform token resource**, so the read-only token is

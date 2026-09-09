@@ -331,7 +331,7 @@ summing them would re-create the AP-023 identity one level down.
 **Scope it precisely: the CARDINALITY is guarded, not the roster.** A count of 3 is satisfied by
 any three call sites, so deleting `arm_skip "S1 healthy…"` and adding `arm_skip "R1 …"` passes it.
 Two assertions added alongside narrow that — every call site's message must open with a name the
-follow-through probe greps for (`T5 `/`S1 `), and the per-arm counts must sum to the call-site
+follow-through probe greps for (`T5 `/`S1 `), and the per-arm counts must sum to the call-site <!-- markdownlint-disable-line MD038 -->
 count — which catches an unlisted site and an arm-for-arm substitution. A reworded message inside
 an arm's own namespace is still not caught. The ceiling's *value* remains procedural.
 

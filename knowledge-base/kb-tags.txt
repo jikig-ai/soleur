@@ -2148,6 +2148,7 @@ merge-livelock
 merge-pr
 merge-queue
 merge-ref
+merge-semantics
 merge-strategy
 merge-time-timebomb
 merge-time-verification
@@ -2705,6 +2706,7 @@ practices
 prd_terraform
 pre
 pre-commit
+pre-existing-failures
 pre-merge-gate
 pre-merge-hook
 pre-merge-rebase-hook
