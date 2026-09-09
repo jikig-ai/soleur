@@ -202,3 +202,51 @@ by a second: a role silently leaving the guarded set, and a fail-open in the
 repaired JSON arm. That is the pattern worth carrying forward — on a guard PR,
 the verification is the least-audited surface, and the round-2 fixes needed
 their own round of fixtures exactly as the round-1 ones did.
+
+## Addendum — 2026-09-09, ship-gate consult (round 3)
+
+The ADR-083 completeness consult at the `/ship` Phase 5.5 gate ran the **real**
+`agent-browser` 0.22.3 against a synthesized page and piped its actual output
+through the redactor. It found six leaks. All three suites were green
+throughout, at 42/26/34 rows, including two mutation batteries that had
+reported 8/8.
+
+The common cause is one sentence: **every row had been written from the shape I
+expected the CLI to emit, not from the shape it emits.** That is the same defect
+as the round-1 `2>&1` finding — the guard verified against its own idea of its
+input — recurring after being named, which is why it is recorded rather than
+quietly fixed.
+
+| # | Leak | Why the suite missed it |
+|---|---|---|
+| 1 | A multi-line value (a textarea holding a PEM block) emits lines 2..N raw at **column 0**, so indent-keyed suppression ended on line 2 and printed the rest of the key, plus every `StaticText` duplicate below it. | No row used a value containing a newline. |
+| 2 | `diff snapshot` was a **no-op**: its real bullet is `+- textbox` wrapped in SGR colour, which `NODE_RE` never matched; and `diff snapshot --json` puts the tree under `data.diff`, so the JSON arm parsed cleanly, matched no key, and emitted every value verbatim at exit 0. The interceptor **allows** that command, because the redactor is in the pipe. | The diff row pinned `+ textbox`, a shape the CLI never produces. |
+| 3 | `_` is a `\w` character, so `\btoken\b` never fired inside `SENTRY_AUTH_TOKEN` — and `API_KEY`, `DB_PASSWORD` and every env-var-style label passed through in clear. The 2FA family (`Authenticator code`, `TOTP`, `2FA code`, `MFA code`) was absent entirely. | Every name row was Title Case. Env-var casing is the standard shape of a secrets editor, i.e. the panel class this filter exists for. |
+| 4 | The segment splitter used `\n` in a `sed` replacement and `\x01` in a `sed` pattern — both **GNU extensions**. Under BSD `sed` (the macOS default) nothing splits, so every chained bypass is allowed while the suite stays green on Linux. | Unreproducible on the CI platform. Now pinned at the source, plus the behavioural round-trip. |
+| 5 | Bare `session`/`cookie`/`signature` ate `Session name`, `Email signature`, `Cookie name` and `Search sessions`. | The over-redaction guard tested five names, none of them these. |
+| 6 | The redirect predicate excluded a digit before `>` and a `|` after it, so `1>/tmp/leak.txt` and `>|/tmp/leak.txt` both wrote the raw tree to a file and were **allowed**. | No row used a numbered or clobber redirect. |
+
+Findings 2 and 3 are the severe ones, and they compound: on `diff snapshot` the
+interceptor admits a command the redactor does not filter, and a Doppler or
+Vercel secrets panel labels its fields in exactly the casing the predicate
+missed.
+
+Two corrections to statements made earlier in this record:
+
+- The per-segment claim in the Decision section, and the identical sentence in
+  the Article 30 register, were true on Linux and **false on macOS** for the
+  reason in row 4. Both are now true on both platforms; the register text needed
+  no edit, because the defect was in the implementation and not in the prose.
+- Finding 3 means the filter did not cover the credential at the centre of the
+  sibling issue #7946. That is stated plainly because a guard that misses the
+  repository's own worked example is not a guard.
+
+The suites are now 61 / 35 / 34. Every new row was driven against the pre-fix
+implementation and observed RED (17 of 17 redactor rows, 5 of 7 hook rows; the
+two that pass pre-fix are regression guards, and they are labelled as such
+rather than counted as catches).
+
+**The durable lesson, and it is the third restatement of one idea:** a guard's
+fixtures must come from the surface, not from the author. Prefer capturing real
+output once and fixturing that over composing what the output "obviously" looks
+like — the composed shape is always the one that passes.

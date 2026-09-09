@@ -94,10 +94,21 @@ CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null |
 #
 # `2>&1` is protected first -- its `&` is a redirect, not a separator, and the
 # approved form depends on it.
-SPLIT="$(printf '%s' "$CMD" \
-  | sed -E 's/>&/\x01/g' \
-  | sed -E 's/(&&|\|\||;|&)/\n/g' \
-  | sed -E 's/\x01/>&/g')"
+# awk, not sed: `\n` in a sed REPLACEMENT and `\x01` in a sed pattern are GNU
+# extensions. On BSD sed (the macOS default) the replacement emits a literal
+# `n` and `\x01` matches a literal `x01`, so NOTHING SPLITS -- the whole command
+# stays one segment, the anchor is found somewhere in it, and every chained
+# bypass this splitter exists to catch is ALLOWED. The guard would have been
+# silently inert on macOS while its suite passed on Linux, which is the same
+# portability class as the `mapfile` defect already fixed here and the one the
+# repo's own 2026-09-07 learning records for `\x1b`.
+#
+# In awk's gsub REPLACEMENT an unescaped `&` means "the matched text", so
+# restoring the literal `>&` requires `\\&`. Getting that wrong silently
+# doubles the redirect and was caught by the round-trip row in the suite.
+SPLIT="$(printf '%s' "$CMD" | awk '
+  { gsub(/>&/, "\001"); gsub(/&&|\|\||;|&/, "\n"); gsub(/\001/, ">\\&"); print }
+')"
 
 offending=0
 reason_detail=''
@@ -117,14 +128,27 @@ while IFS= read -r seg; do
     reason_detail='the redactor is not downstream of a pipe in this command'
     break
   fi
-  if grep -qE '(^|[|[:space:]])tee([[:space:]]|$)' <<<"$seg" 2>/dev/null; then
+  # Judge sinks on the segment UPSTREAM of the redactor only. A `tee` or a
+  # redirect AFTER the redactor writes redacted bytes and is harmless; one
+  # BEFORE it writes the raw tree, which is the sink this hook's deny text
+  # names. Scoping to the prefix is what makes the difference decidable --
+  # without it the legitimate `... | redactor > snap.txt` is denied while the
+  # question the check means to ask goes unasked.
+  pre="${seg%%"$REDACTOR_ANCHOR"*}"
+
+  if grep -qE '(^|[|[:space:]])tee([[:space:]]|$)' <<<"$pre" 2>/dev/null; then
     offending=1
     reason_detail='`tee` writes the UNREDACTED snapshot to disk before the redactor sees it'
     break
   fi
   # A file redirect of the snapshot itself, e.g. `snapshot -i > raw.txt`.
-  # `2>&1` was protected above and does not match.
-  if grep -qE '[^0-9<>]>[^&|]' <<<"$seg" 2>/dev/null; then
+  #
+  # Match a `>` (optionally `>>`, optionally with a leading fd digit) that is
+  # NOT followed by `&`, so an fd duplication such as `2>&1` -- the approved
+  # form -- is allowed while a file sink is not. The previous
+  # `[^0-9<>]>[^&|]` form excluded a digit BEFORE the `>` and a `|` AFTER it,
+  # so `1>/tmp/leak.txt` and `>|/tmp/leak.txt` were both measured ALLOWED.
+  if grep -qE '[0-9]?>>?([^&>]|$)' <<<"$pre" 2>/dev/null; then
     offending=1
     reason_detail='this command redirects the snapshot to a file, which bypasses the redactor'
     break

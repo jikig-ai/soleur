@@ -27,7 +27,7 @@ README="$REPO_ROOT/.claude/hooks/README.md"
 pass=0; fail=0; cases=0
 # 3 deny + 4 allow + 5 registration + 2 reason-content rows,
 # + 7 review rows (round 1) + 5 review rows (round 2) = 26.
-MIN_ASSERTIONS=26
+MIN_ASSERTIONS=35
 
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
@@ -257,6 +257,66 @@ if grep -q 'browser-snapshot-credential-guard\.sh' "$README" 2>/dev/null; then
 else
   bad 'missing a row in .claude/hooks/README.md'
 fi
+
+# ---- Ship-gate consult rows: two live redirect bypasses, one portability
+# defect, and two legitimate forms the guard was wrongly denying. ----
+
+# F6 -- the old redirect pattern was `[^0-9<>]>[^&|]`, which excluded a DIGIT
+# before the `>` and a `|` after it. Both of these were measured ALLOWED: the
+# raw tree went to a file and the redactor saw a copy.
+assert_deny 'F6a fd-numbered redirect `1>` writes the raw tree to a file' \
+  "agent-browser snapshot -i 1>/tmp/leak.txt | ${RED}"
+assert_deny 'F6b clobber redirect `>|` writes the raw tree to a file' \
+  "agent-browser snapshot -i >|/tmp/leak.txt | ${RED}"
+assert_deny 'F6c append redirect `>>` writes the raw tree to a file' \
+  "agent-browser snapshot -i >>/tmp/leak.txt | ${RED}"
+
+# The other direction: a sink DOWNSTREAM of the redactor handles redacted
+# bytes and must not be denied. Without the prefix scoping these were denied,
+# which pushes an operator toward the unrouted form to get their file.
+assert_allow 'F6d redirect AFTER the redactor is redacted output, not a leak' \
+  "agent-browser snapshot -i | ${RED} > /tmp/safe.txt"
+assert_allow 'F6e tee AFTER the redactor is redacted output, not a leak' \
+  "agent-browser snapshot -i | ${RED} | tee /tmp/safe.txt"
+
+# F4 -- the segment splitter must not depend on GNU sed. `\n` in a sed
+# REPLACEMENT and `\x01` in a sed PATTERN are GNU extensions; under BSD sed
+# (the macOS default) nothing splits, the whole command becomes one segment,
+# and every chained bypass below is allowed while this suite stays green on
+# Linux. That is unreproducible on this host, so it is pinned at the source:
+# the splitter must not be a sed pipeline using those escapes.
+cases=$((cases + 1))
+splitter="$(sed -n '/^SPLIT=/,/^)\{0,1\}.\{0,2\}$/p' "$HOOK" 2>/dev/null | head -20)"
+if [[ -z "$splitter" ]]; then
+  bad 'F4 could not locate the SPLIT= assignment to check it for GNU-only escapes'
+elif grep -qE "sed .*\\\\(n|x[0-9a-fA-F])" <<<"$splitter"; then
+  bad 'F4 segment splitter uses a GNU-only sed escape (\n or \xNN) -- inert on BSD sed'
+else
+  ok 'F4 segment splitter avoids GNU-only sed escapes (portable to BSD sed)'
+fi
+
+# F4b -- and the behaviour that portability protects: `>&` must survive the
+# split round-trip intact. In awk gsub an unescaped `&` in the replacement
+# means "the matched text", so a missing backslash silently corrupts `2>&1`
+# into `2>1` -- which would turn the approved form into a file redirect.
+cases=$((cases + 1))
+rt="$(printf '%s' 'a snapshot -i 2>&1 | red && b snapshot' | awk '
+  { gsub(/>&/, "\001"); gsub(/&&|\|\||;|&/, "\n"); gsub(/\001/, ">\\&"); print }' | head -1)"
+if [[ "$rt" == *'2>&1'* ]]; then
+  ok 'F4b splitter round-trip preserves `2>&1` (the & is escaped in the replacement)'
+else
+  bad "F4b splitter round-trip corrupted the redirect: got '${rt}'"
+fi
+
+# F2 -- the `diff snapshot` subcommand. This is the surface where the two
+# controls combined into a hole: the hook ALLOWED the routed form (the anchor
+# is after a pipe) while the redactor was a no-op on it, so the guard admitted
+# a command that redacted nothing. The redactor half is fixed in its own suite;
+# these pin that the hook covers the subcommand at all.
+assert_deny 'F2c unrouted `agent-browser diff snapshot`' \
+  'agent-browser diff snapshot'
+assert_deny 'F2d unrouted `agent-browser diff snapshot --json`' \
+  'agent-browser diff snapshot --json'
 
 printf '\n%d passed, %d failed, %d cases\n' "$pass" "$fail" "$cases"
 if [[ $((pass + fail)) -ne $cases ]]; then

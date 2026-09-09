@@ -34,7 +34,7 @@ cases=0
 #   + 13 review rows (round 1) + 12 review rows (round 2) = 42.
 # The two instrument self-test rows are excluded: they run before the counters
 # are zeroed, so they are a precondition on the harness, not coverage of the SUT.
-MIN_ASSERTIONS=42
+MIN_ASSERTIONS=61
 
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
@@ -376,6 +376,78 @@ if [[ $empty_rc -eq 0 && -z "$empty_out" ]]; then
 else
   bad "empty input should be a clean no-op (rc=$empty_rc, out='${empty_out:0:40}')"
 fi
+
+# ---------------------------------------------------------------------------
+# Rows added after the ship-gate consult measured six leaks against the REAL
+# agent-browser 0.22.3, every one of which this suite was green against. The
+# common cause is that each row above was written from the shape I expected the
+# CLI to emit rather than from the shape it does emit.
+# ---------------------------------------------------------------------------
+
+# F3 -- env-var-style labels. `_` is a \w character, so `\btoken\b` never fired
+# inside SENTRY_AUTH_TOKEN. This casing is the standard shape of a secrets
+# editor (Doppler, Vercel, Supabase), i.e. the exact panel class this exists for.
+assert_redacted 'env-var casing: SENTRY_AUTH_TOKEN' \
+  "- textbox \"SENTRY_AUTH_TOKEN\" [ref=e1]: $SENTINEL"
+assert_redacted 'env-var casing: API_KEY' \
+  "- textbox \"API_KEY\" [ref=e1]: $SENTINEL"
+assert_redacted 'env-var casing: DB_PASSWORD' \
+  "- textbox \"DB_PASSWORD\" [ref=e1]: $SENTINEL"
+
+# F3 -- the 2FA family. `2FA` additionally regressed once during the fix: the
+# camelCase splitter turned it into `2 FA`, un-matching the alternative.
+assert_redacted '2fa family: "Authenticator code"' \
+  "- textbox \"Authenticator code\" [ref=e1]: $SENTINEL"
+assert_redacted '2fa family: "TOTP"' \
+  "- textbox \"TOTP\" [ref=e1]: $SENTINEL"
+assert_redacted '2fa family: "2FA code" (acronym must not be camel-split)' \
+  "- textbox \"2FA code\" [ref=e1]: $SENTINEL"
+assert_redacted '2fa family: "Two-factor code"' \
+  "- textbox \"Two-factor code\" [ref=e1]: $SENTINEL"
+assert_redacted '2fa family: "MFA code"' \
+  "- textbox \"MFA code\" [ref=e1]: $SENTINEL"
+
+# F5 -- the over-redaction side. Bare `session`/`cookie`/`signature` ate all
+# four of these. A filter that eats ordinary fields gets switched off.
+assert_preserved 'must-PASS: "Session name" is not a credential' \
+  '- textbox "Session name" [ref=e1]: my-session' 'my-session'
+assert_preserved 'must-PASS: "Email signature" is not a credential' \
+  '- textbox "Email signature" [ref=e1]: Best regards' 'Best regards'
+assert_preserved 'must-PASS: "Cookie name" is not a credential' \
+  '- textbox "Cookie name" [ref=e1]: sid' 'sid'
+assert_preserved 'must-PASS: "Search sessions" is not a credential' \
+  '- searchbox "Search sessions" [ref=e1]: my-query' 'my-query'
+
+# F5b -- but the bare word IS the credential when it is the whole name. Pairing
+# these with the four above is what keeps the narrowing honest in both
+# directions: neither row alone would catch a one-sided over-correction.
+assert_redacted 'whole-name credential: "Session"' \
+  "- textbox \"Session\" [ref=e1]: $SENTINEL"
+assert_redacted 'whole-name credential: "Cookie"' \
+  "- textbox \"Cookie\" [ref=e1]: $SENTINEL"
+
+# F1 -- a multi-line value. A textarea holding a PEM block emits its 2nd..Nth
+# lines raw at COLUMN 0, which ended indent-keyed suppression on line 2 and
+# printed the rest of the key in clear, together with every StaticText
+# duplicate below it. Measured on all four output shapes.
+assert_redacted 'multi-line textarea value does not escape suppression' \
+  "$(printf -- '- textbox "Private key" [ref=e1]: -----BEGIN\n%s\n-----END\n  - generic\n    - StaticText "%s"\n- button "Save"' "$SENTINEL" "$SENTINEL")"
+
+# F2a -- the REAL `agent-browser diff snapshot` bullet shapes. The pre-existing
+# `+ textbox` row below pins a shape the CLI never emits; these are the ones it
+# does, including the SGR colouring that sits outside the bullet.
+assert_redacted 'diff shape: "+- textbox" (no space after the marker)' \
+  "+- textbox \"Token\" [ref=e1]: $SENTINEL"
+assert_redacted 'diff shape: "+  - textbox" (marker, then indent)' \
+  "+  - textbox \"API_KEY\" [ref=e1]: $SENTINEL"
+assert_redacted 'diff shape: ANSI SGR wrapping the whole line' \
+  "$(printf -- '\033[32m+  - textbox "Password" [ref=e1]: %s\033[0m' "$SENTINEL")"
+
+# F2b -- `diff snapshot --json` puts the tree under data.diff, not
+# data.snapshot. The envelope parsed, matched no key, and every value was
+# emitted verbatim at exit 0 -- on a command the interceptor ALLOWS.
+assert_redacted 'json shape: tree under data.diff, not data.snapshot' \
+  "$(printf -- '{"ok":true,"data":{"diff":"+- textbox \\"Token\\" [ref=e1]: %s"}}' "$SENTINEL")"
 
 # ---------------------------------------------------------------------------
 # Verdict. Reported with printf + exit, never through ok()/bad() — the floor
