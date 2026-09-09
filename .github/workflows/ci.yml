@@ -25,17 +25,53 @@ on:
 permissions:
   contents: read
 
-# Cancel in-progress CI runs for the same PR when a newer commit lands.
-# Scoped to pull_request events only — on `main` we let prior runs finish
-# so the audit trail (post-merge monitors, release-gate evidence) stays
-# intact. Group keys off (workflow, ref) so PR runs don't compete with
-# main-branch runs of the same workflow. github.workflow / github.ref /
-# github.event_name are GitHub-controlled meta-vars, not attacker-
-# controlled — safe to interpolate directly (the security-reminder hook
-# fires for any ${{ … }} in workflow files; the run:-command injection
-# class does not apply here).
+# CONCURRENCY: PER-SHA ON PUSH, PER-REF ON PULL REQUESTS (#7931 part 1, ADR-215).
+#
+# NOTHING IS CANCELLED ON `main` UNDER EITHER KEY. `cancel-in-progress` is, and
+# stays, pull_request-only: superseded PR runs collapse, `main` runs always run to
+# completion, and the audit trail (post-merge monitors, release-gate evidence)
+# is byte-identically intact. An earlier reading of this change — recorded in
+# ADR-212's `Named residual` and superseded there — claimed per-SHA grouping
+# "would break" that audit trail. It does not; the two properties were never in
+# tension.
+#
+# WHAT CHANGED AND WHY. `github.ref` is CONSTANT across `main` pushes, so the old
+# key put every push in ONE group. With `cancel-in-progress` false on `main` that
+# is not "let prior runs finish" — it is SERIALIZE. The consequence is not
+# primarily wall clock: it is that a run's gated quantity (time-to-`test`,
+# measured from that run's own `created_at`) CONTAINED THE PREVIOUS RUN'S ENTIRE
+# TIME-TO-`test`. That is an unbounded term belonging to a DIFFERENT COMMIT. No
+# declared ceiling has ever had a place for it, and no amount of ceiling-sizing
+# can bound it, because it is not a property of the run being measured.
+#
+# Each `main` push is a distinct SHA that needs its own CI verdict for its own
+# deploy gate, so per-SHA grouping makes the gated quantity a property of the SHA
+# being gated. That is a correctness statement about what the number MEANS, and
+# it holds on 100% of runs regardless of the queue's magnitude.
+#
+# THIS IS NOT SOLD AS A SPEED FIX, and the measurement is why. Over 29
+# consecutive `main` pushes the group was occupied at creation on 7 (24%),
+# costing a median 393s; on the other 22 the first job started a median of 4s
+# after creation and the window's WORST time-to-`test` came from a run whose
+# group was EMPTY. The median saving is ZERO. See the dispatch note in the
+# `test-scripts` job for the full population and the reproduction command.
+#
+# THE COST, STATED PLAINLY. Peak concurrent `main` CI runs rises from 1 to the
+# burst depth. The same measurement identifies the runner pool as the binding
+# constraint on 76% of runs, so this CAN make the median worse. That is the
+# declared risk of part 1 and it is measured post-merge, not assumed.
+#
+# github.workflow / github.ref / github.sha / github.event_name are
+# GitHub-controlled meta-vars, not attacker-controlled — safe to interpolate
+# directly (the security-reminder hook fires for any ${{ … }} in workflow files;
+# the run:-command injection class does not apply here).
+#
+# Guarded by plugins/soleur/test/ci-concurrency-key.test.sh, which evaluates this
+# ternary for both events and checks EVERY concurrency mapping in the file —
+# workflow-level and job-level — so a job-level group keyed on `github.ref`
+# cannot re-serialise `main` one level down behind a correct-looking key here.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
