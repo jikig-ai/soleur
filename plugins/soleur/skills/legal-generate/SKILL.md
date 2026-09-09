@@ -63,7 +63,7 @@ an enrolment is live rather than decorative.
 
 **Two measurement traps that cost real rounds in #7349.** `collapse()` normalises `[0-9]+ AI
 agents` but NOT a bare `[0-9]+ agents`, so count divergence between the record and the published
-page can be invisible to the drift gate. And a grep for `Article ` will not match the corpus's
+page can be invisible to the drift gate. And a grep for `Article ` will not match the corpus's <!-- markdownlint-disable-line MD038 -->
 plural `Articles 15 through 22` — use `Articles? 1[5-9]`.
 
 ## Phase 2.5: Redaction Gate (BLOCKING — runs BEFORE inline presentation)

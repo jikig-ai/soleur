@@ -19,6 +19,7 @@ The thread posting loop fires tweets with no delay between posts. X API has aggr
 ## Proposed Solutions
 
 ### Solution A: Add sleep 2 between successive tweets
+
 - **Effort:** Small (one line)
 - **Risk:** Low
 

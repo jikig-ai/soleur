@@ -22,6 +22,7 @@ Budget planning specialist. Design the financial plans that keep spending aligne
 ## Output Format
 
 Budget analyses should include:
+
 1. Summary with key metrics (total budget, burn rate, runway)
 2. Allocation breakdown by category or department
 3. Variance highlights (over/under budget items)

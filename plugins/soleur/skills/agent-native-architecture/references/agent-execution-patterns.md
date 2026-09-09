@@ -3,6 +3,7 @@ Agent execution patterns for building robust agent loops. This covers how agents
 </overview>
 
 <completion_signals>
+
 ## Completion Signals
 
 Agents need an explicit way to say "I'm done."
@@ -21,6 +22,7 @@ These break in edge cases and create unpredictable behavior.
 ### Pattern: Explicit Completion Tool
 
 Provide a `complete_task` tool that:
+
 - Takes a summary of what was accomplished
 - Returns a signal that stops the loop
 - Works identically across all agent types
@@ -105,9 +107,11 @@ If you're blocked and can't proceed:
 - Call `complete_task` with status "blocked" and explain why
 - Don't loop forever trying the same thing
 ```
+
 </completion_signals>
 
 <partial_completion>
+
 ## Partial Completion
 
 For multi-step tasks, track progress at the task level for resume capability.
@@ -160,16 +164,19 @@ Progress: 3/5 tasks complete (60%)
 ### Partial Completion Scenarios
 
 **Agent hits max iterations before finishing:**
+
 - Some tasks completed, some pending
 - Checkpoint saved with current state
 - Resume continues from where it left off, not from beginning
 
 **Agent fails on one task:**
+
 - Task marked `.failed` with error in notes
 - Other tasks may continue (agent decides)
 - Orchestrator doesn't automatically abort entire session
 
 **Network error mid-task:**
+
 - Current iteration throws
 - Session marked `.failed`
 - Checkpoint preserves messages up to that point
@@ -208,6 +215,7 @@ struct AgentCheckpoint: Codable {
 </partial_completion>
 
 <model_tier_selection>
+
 ## Model Tier Selection
 
 Different agents need different intelligence levels. Use the cheapest model that achieves the outcome.
@@ -277,6 +285,7 @@ let quickLookupConfig = AgentConfig(
 </model_tier_selection>
 
 <context_limits>
+
 ## Context Limits
 
 Agent sessions can extend indefinitely, but context windows don't. Design for bounded context from the start.
@@ -330,6 +339,7 @@ tool("summarize_and_continue", {
 **3. Design for truncation**
 
 Assume the orchestrator may truncate early messages. Important context should be:
+
 - In the system prompt (always present)
 - In files (can be re-read)
 - Summarized in context.md
@@ -367,9 +377,11 @@ For long tasks, periodically consolidate what you've learned:
 
 Don't try to hold everything in memory. Write it down.
 ```
+
 </context_limits>
 
 <orchestrator_pattern>
+
 ## Unified Agent Orchestrator
 
 One execution engine, many agent types. All agents use the same orchestrator with different configurations.
@@ -442,24 +454,28 @@ class AgentOrchestrator {
 ## Agent Execution Checklist
 
 ### Completion Signals
+
 - [ ] `complete_task` tool provided (explicit completion)
 - [ ] No heuristic completion detection
 - [ ] Tool results include `shouldContinue` flag
 - [ ] System prompt guides when to complete
 
 ### Partial Completion
+
 - [ ] Tasks tracked with status (pending, in_progress, completed, failed)
 - [ ] Checkpoints saved for resume
 - [ ] Progress visible to user
 - [ ] Resume continues from where left off
 
 ### Model Tiers
+
 - [ ] Tier selected based on task complexity
 - [ ] Cost optimization considered
 - [ ] Fast tier for simple operations
 - [ ] Powerful tier reserved for synthesis
 
 ### Context Limits
+
 - [ ] Tools support iterative refinement (preview vs full)
 - [ ] Consolidation mechanism available
 - [ ] Important context persisted to files

@@ -138,6 +138,7 @@ ORDER BY dt DESC LIMIT 50 FORMAT JSONEachRow
 ```
 
 Two deliberate trade-offs:
+
 - **WARN+ only.** The filter parses the pino `level` field (NOT journald
   `PRIORITY` — Docker's journald driver maps all stdout to PRIORITY 6 regardless
   of pino level, so a PRIORITY filter would drop everything). INFO/DEBUG (the

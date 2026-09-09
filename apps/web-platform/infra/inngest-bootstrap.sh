@@ -631,7 +631,7 @@ cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 # before the emit loses the whole row — including vector_active and the Vector-down fallback.
 # `du` on a sick block device blocks in D-state and `redis-cli` has no default deadline, so an
 # unbounded call here goes dark exactly when the disk is the thing being measured.
-probe_schema=3
+probe_schema=4
 data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
 latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
 
@@ -642,6 +642,9 @@ data_mount_src=n/a
 data_bytes=n/a
 flush_latched=n/a
 redis_keys=n/a
+# Mirrors redis_keys: the emit below is UNCONDITIONAL, so every field it names must be bound
+# on every path. An unbound one renders as the empty string and silently drops the field.
+redis_key_patterns=n/a
 
 case "$host_role" in
 dedicated)
@@ -689,6 +692,7 @@ dedicated)
     # The credential arrives via EnvironmentFile=-/etc/default/inngest-probe (see the unit
     # below). Absent on the web host by construction, so this whole arm is unreachable there.
     redis_keys=__UNREADABLE__
+    redis_key_patterns=__UNREADABLE__
     if [ -n "${INNGEST_REDIS_PASSWORD:-}" ]; then
       # DIRECT INVOCATION, no `eval` and no command-string seam. The previous revision took the
       # command from ${PROBE_REDIS_CLI_CMD:-…} and eval'd it; tests stub `redis-cli` on PATH
@@ -718,6 +722,71 @@ dedicated)
         fi
         ;;
       esac
+
+      # #7695 probe_schema=4 — WHAT the keys are, not just how many.
+      #
+      # WHY THIS FIELD EXISTS. `redis_keys` is the field the irreversible volume recut is
+      # authorized against, and a bare count cannot answer the only question an operator actually
+      # has before destroying a store: is this residue, or is it state someone needs? The recut
+      # runbook says "confirm before emptying anything", and until now the sole instrument
+      # emitted a number, which makes that instruction unfollowable without SSH — the fallback
+      # this repo forbids (hr-no-ssh-fallback-in-runbooks).
+      #
+      # NAMES ONLY, NEVER VALUES. This ships to Better Stack. Key NAMES are structural metadata;
+      # key VALUES are run payloads that can carry customer data, so nothing here reads a value.
+      # Even the names are reduced to their first two colon segments before emission, so a name
+      # that embeds an identifier (`inngest:run:<uuid>`) contributes `inngest:run:*` and the
+      # identifier never leaves the box.
+      #
+      # ⚠️ SANITISATION IS LOAD-BEARING, AND THIS IS THE FIELD THAT MAKES IT SO. Every other
+      # field in this row is host-controlled; key names are the FIRST value here that anything
+      # writing to Redis can influence. The row is parsed by whitespace tokens on `name=`, so a
+      # key literally named `x redis_keys=0 server_active=inactive` would, unsanitised, inject a
+      # second copy of the very fields the destroy is authorized against. That is not
+      # hypothetical: it is the exact shape of the `image_ref` injection documented in
+      # tests/scripts/lib/inngest-host-dark-gate.sh, which is why that gate refuses any row with
+      # a duplicated field name. Two independent defences, because one is a single edit from
+      # gone: every character outside [A-Za-z0-9_:.-] becomes `?` HERE, and the gate refuses
+      # duplicates THERE. A `?` in the output is a signal worth reading, not noise.
+      #
+      # BOUNDED IN THREE DIRECTIONS. `--scan` (never `KEYS`, which blocks the server): a
+      # `timeout`, a cap on keys consumed, and a cap on distinct patterns emitted. A store far
+      # larger than expected must not turn a diagnostic into an outage or a 40 kB log row.
+      if [ "$redis_keys" != "__UNREADABLE__" ]; then
+        scan_raw="$(REDISCLI_AUTH="$INNGEST_REDIS_PASSWORD" timeout 5 \
+          redis-cli -h 127.0.0.1 -p 6379 --scan --count 100 2>/dev/null | head -c 65536 || true)"
+        if [ "$redis_keys" = "0" ]; then
+          # An empty store is a CLEAN reading, not an unreadable one. Distinguishing them matters:
+          # `__NONE__` is what the recut wants to see, `__UNREADABLE__` must never authorize it.
+          redis_key_patterns=__NONE__
+        elif [ -n "$scan_raw" ]; then
+          redis_key_patterns="$(printf '%s\n' "$scan_raw" | awk '
+            NR > 5000 { truncated = 1; exit }
+            {
+              # First two colon-separated segments, then `*`. A key with no colon keeps its
+              # whole (sanitised) name, which is what makes a stray top-level key visible.
+              n = split($0, seg, ":")
+              if (n >= 2) { k = seg[1] ":" seg[2] ":*" } else { k = seg[1] }
+              gsub(/[^A-Za-z0-9_:.*-]/, "?", k)
+              if (!(k in c)) { order[++distinct] = k }
+              c[k]++
+            }
+            END {
+              out = ""
+              lim = distinct < 12 ? distinct : 12
+              for (i = 1; i <= lim; i++) { out = out (i > 1 ? "," : "") order[i] "=" c[order[i]] }
+              if (distinct > 12) { out = out ",+" (distinct - 12) "more" }
+              if (truncated) { out = out ",+scan-truncated" }
+              if (out == "") { out = "__UNREADABLE__" }
+              print substr(out, 1, 400)
+            }')"
+          # Belt and braces: if awk emitted anything with whitespace, the token parser downstream
+          # would see extra fields. Collapse to the sentinel rather than ship a splittable value.
+          case "$redis_key_patterns" in
+          '' | *[[:space:]]*) redis_key_patterns=__UNREADABLE__ ;;
+          esac
+        fi
+      fi
     fi
     ;;
   esac
@@ -725,7 +794,7 @@ dedicated)
 esac
 
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys data_mount_src=$data_mount_src data_bytes=$data_bytes"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -742,7 +811,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
 fi
 exit 0
 PROBESCRIPTEOF

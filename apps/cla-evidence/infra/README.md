@@ -6,7 +6,7 @@ a 10-year age-based retention floor providing write-once-read-many
 (WORM) semantics) plus the two scoped Cloudflare API tokens used by the
 sidecar workflow and by Terraform itself.
 
-**Owner:** deruelle / ops@jikigai.com
+**Owner:** deruelle / <ops@jikigai.com>
 **Issue:** #3209
 **Plan:** `knowledge-base/project/plans/2026-05-04-feat-cla-legal-rigor-evidence-layer-plan.md`
 **Runbook:** `knowledge-base/engineering/operations/runbooks/cla-signature-evidence-retrieval.md`

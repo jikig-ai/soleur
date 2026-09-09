@@ -170,6 +170,7 @@ All detailed patterns in `references/`:
 | [architecture.md](./references/architecture.md) | Routing, authentication, jobs, Current attributes, caching, database patterns |
 | [testing.md](./references/testing.md) | Minitest, fixtures, unit/integration/system tests, testing patterns |
 | [gems.md](./references/gems.md) | What they use vs avoid, decision framework, Gemfile examples |
+
 </reference_index>
 
 <success_criteria>

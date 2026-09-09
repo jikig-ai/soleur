@@ -383,6 +383,7 @@ between the BYOK path and the Jikigai-keyed path. **Not a retraction** (§4). Ou
 
 **C5 scope is WIDER than §2.1 alone — an earlier draft of this condition named only that section.**
 The sweep must also reach:
+
 - **`docs/legal/data-protection-disclosure.md` §4.1 "Plugin Sub-processors"**, which states there are
   *"no Plugin-level Sub-processors to disclose under Article 28(2)"*. That is the sharpest
   contradiction in the corpus: §5.1 of the annex asks the tester to **authorise Anthropic PBC as a

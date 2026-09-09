@@ -51,7 +51,7 @@ trap 'rm -rf "$WORK"' EXIT
 # still ABORTS — "could not read the reference set" must never degrade to an
 # empty ledger, which would pass every account.
 if ! git show origin/cla-signatures:signatures/cla.json > "$WORK/ledger.json" 2>/dev/null; then
-  # --no-tags is load-bearing, not tidiness: `git fetch` auto-follows tags, and the gate runner samples the repo's refs as a read-only boundary — a plain fetch wrote 157 tags and tripped [FATAL] A SUITE WROTE TO THE LIVE REPOSITORY on CI run 34123093118.
+  # --no-tags is load-bearing, not tidiness: `git fetch` auto-follows tags, and the gate runner samples the repo's refs as a read-only boundary — a plain fetch wrote 157 tags and tripped [FATAL] A SUITE WROTE TO THE LIVE REPOSITORY on CI run 34123093118. 157 is what that run measured, not the current scale -- the repo carries far more tags now, so the flag matters more than it did, not less.
   # Measured: plain fetch creates tags, --no-tags creates none and still fetches the ref.
   git fetch --no-tags --depth=1 -q origin \
     '+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures' 2>/dev/null
@@ -102,7 +102,7 @@ run_sut() {
   echo $?
 }
 
-add_args=(add --record-ref CCLA-0001 --org "Convergence SARL"
+add_args=(add --record-ref CCLA-0001 --org "Example Fixture Co"
           --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z
           --instrument-sha256 "$SHA64")
 
@@ -308,7 +308,32 @@ if jq -e . "$WORK/populated.json" >/dev/null 2>&1; then
 
   rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-9999 --login deruelle \
     --withdrawn-at 2026-09-05T00:00:00Z)
-  [[ "$rc" != "0" ]] && pass "remove against an unknown record_ref fails" || fail "remove accepted an unknown record_ref"
+  # rc==2, not rc!=0. Every sibling arm here pins the code; `!= 0` also accepts
+  # jq's own 5, a usage 64, or a preflight failure, so it would stay green on a
+  # refusal for an entirely different reason.
+  [[ "$rc" == "2" ]] && pass "remove against an unknown record_ref is refused (rc=2)" \
+    || fail "remove against an unknown record_ref: expected rc=2, got $rc"
+  grep -q 'no such record_ref' "$WORK/err.txt" \
+    && pass "the unknown-record_ref refusal names the reason" \
+    || fail "the unknown-record_ref refusal does not name its cause: $(head -c 140 "$WORK/err.txt")"
+
+  # CQ10: the instrument flags are meaningless outside `add` and were silently
+  # accepted and ignored. Silence tells an operator who believes they are
+  # amending a landed hash that the write did what they meant.
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-0001 --login deruelle \
+    --withdrawn-at 2026-09-05T00:00:00Z --instrument-sha256 "$SHA64")
+  [[ "$rc" == "64" ]] && pass "--instrument-sha256 outside \`add\` is REFUSED (rc=64), not ignored" \
+    || fail "--instrument-sha256 on the remove path: expected rc=64, got $rc"
+  grep -q 'only meaningful for' "$WORK/err.txt" \
+    && pass "the outside-add refusal says the flag is meaningful only for add" \
+    || fail "the outside-add refusal does not explain itself: $(head -c 140 "$WORK/err.txt")"
+  grep -q '7925' "$WORK/err.txt" \
+    && pass "the outside-add refusal points at the open correction-affordance decision" \
+    || fail "the outside-add refusal leaves an operator trying to amend a hash with nowhere to go"
+  rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' remove --record-ref CCLA-0001 --login deruelle \
+    --withdrawn-at 2026-09-05T00:00:00Z --instrument-file /nonexistent/x.pdf)
+  [[ "$rc" == "64" ]] && pass "--instrument-file outside \`add\` is REFUSED before the path is even resolved" \
+    || fail "--instrument-file on the remove path: expected rc=64, got $rc"
 
   # A recorded withdrawal date is the legally operative one. Re-running `remove`
   # must NOT move it forward — the record of when a designation ended is the
@@ -392,6 +417,588 @@ else
   fi
 fi
 
+
+# ===========================================================================
+# #7909 — `--instrument-file`: the instrument hash is COMPUTED, not typed.
+#
+# Guard 1 in the plan's `## Guard Contract`. Fixtures are synthesized
+# (cq-test-fixtures-synthesized-only), and every one has its SHAPE asserted
+# before use: a fixture that did not build the way it claims produces a
+# confident verdict about the SUT that the HARNESS caused. Shape failures
+# ABORT (exit 2) rather than fail(), because a half-built sandbox is not a
+# finding about the script.
+# ===========================================================================
+printf 'executed corporate CLA instrument -- synthetic fixture A\n' > "$WORK/instrument.bin"
+printf 'a different synthetic instrument, deliberately of another length entirely\n' > "$WORK/instrument2.bin"
+: > "$WORK/empty.bin"
+printf 'unreadable fixture\n' > "$WORK/unreadable.bin"
+chmod 000 "$WORK/unreadable.bin"
+mkdir -p "$WORK/adir"
+ln -sf "$WORK/instrument.bin" "$WORK/link-outside.bin"
+ln -sf "$REPO_ROOT/README.md" "$WORK/link-inside.bin"
+printf 'org-named fixture\n' > "$WORK/Example Fixture Co executed CCLA.pdf"
+# GNU sha256sum PREFIXES its output line with a backslash when the filename
+# contains a backslash or a newline, which shifts the awk fields and yields a
+# hash that is not 64 hex. `sha256sum < "$f"` reads stdin and prints no
+# filename, so it is immune. Without this fixture the argv-vs-stdin mutant
+# passes every other arm here.
+printf 'backslash-basename fixture\n' > "$WORK/back\\slash.bin"
+
+ifs_abort() { printf 'harness: instrument fixture shape assertion failed: %s\n' "$1" >&2; exit 2; }
+[[ -s "$WORK/instrument.bin" && -s "$WORK/instrument2.bin" ]] || ifs_abort "primary fixtures not both non-empty"
+[[ "$(wc -c < "$WORK/instrument.bin")" -ne "$(wc -c < "$WORK/instrument2.bin")" ]] \
+  || ifs_abort "the two fixtures must differ in LENGTH, not only in bytes"
+[[ -f "$WORK/empty.bin" && ! -s "$WORK/empty.bin" ]] || ifs_abort "empty fixture is not a zero-byte regular file"
+# A root EUID defeats the -r check, which would make the unreadable arm pass
+# for a reason that has nothing to do with the SUT. Abort loudly instead.
+[[ ! -r "$WORK/unreadable.bin" ]] || ifs_abort "chmod 000 fixture is still readable (running as root?)"
+[[ -d "$WORK/adir" ]] || ifs_abort "directory fixture is not a directory"
+[[ -L "$WORK/link-outside.bin" && -f "$WORK/link-outside.bin" ]] || ifs_abort "outside symlink fixture is not a symlink to a file"
+[[ -L "$WORK/link-inside.bin" ]] || ifs_abort "inside symlink fixture is not a symlink"
+[[ "$(realpath -e "$WORK/link-inside.bin")" == "$(realpath -e "$REPO_ROOT")"/* ]] \
+  || ifs_abort "the inside-repo symlink does not resolve inside the repo root"
+[[ -f "$WORK/back\\slash.bin" ]] || ifs_abort "backslash-basename fixture missing"
+[[ "$WORK" != "$(realpath -e "$REPO_ROOT")"/* ]] || ifs_abort "the sandbox is inside the repo; the custody arms would be inverted"
+
+# Shared head for the instrument arms. `add_args` at the top of this file is
+# NOT mutated — it carries --instrument-sha256, and these arms need to control
+# that dimension themselves.
+if_head=(add --org "Instrument Ltd"
+         --signed-at 2026-09-04T00:00:00Z --authorized-from 2026-09-04T00:00:00Z)
+
+# --- FR1 + the AGREEMENT arm, in its non-vacuous form -----------------------
+# Two identical FAILURES also emit two empty files and `cmp` passes, so rc==0
+# on BOTH arms and parseability are preconditions, not decoration. (The form
+# #7909 sketches -- `--instrument-sha256 $(sha256sum X)` -- expands to three
+# argv words and exits 64; written that way the arm would assert nothing.)
+if_digest=$(sha256sum < "$WORK/instrument.bin" | awk '{print $1}')
+rc_file=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0100 \
+  --instrument-file "$WORK/instrument.bin" --login deruelle)
+cp "$WORK/out.txt" "$WORK/if-a.json"; cp "$WORK/err.txt" "$WORK/if-a.err"
+rc_sha=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0100 \
+  --instrument-sha256 "$if_digest" --login deruelle)
+cp "$WORK/out.txt" "$WORK/if-b.json"; cp "$WORK/err.txt" "$WORK/if-b.err"
+if [[ "$rc_file" == "0" && "$rc_sha" == "0" ]]; then
+  pass "both instrument flags succeed (rc=0/rc=0) — the agreement arm is comparing two SUCCESSES"
+else
+  fail "agreement precondition: --instrument-file rc=$rc_file, --instrument-sha256 rc=$rc_sha (expected 0/0)"
+fi
+jq -e . "$WORK/if-a.json" >/dev/null 2>&1 \
+  && pass "--instrument-file emits parseable JSON on stdout" \
+  || fail "--instrument-file stdout is not parseable JSON"
+cmp -s "$WORK/if-a.json" "$WORK/if-b.json" \
+  && pass "--instrument-file and --instrument-sha256 emit a BYTE-IDENTICAL roster (FR1)" \
+  || fail "the two instrument flags emit different rosters"
+jq -e --arg d "$if_digest" '.organizations[0].executed_instrument_sha256 == $d' "$WORK/if-a.json" >/dev/null \
+  && pass "the recorded hash equals sha256sum of the file's bytes (FR1, value arm)" \
+  || fail "recorded executed_instrument_sha256 is not the fixture's digest"
+
+# --- FR7: diagnostics on stderr, and the transcripts DIFFER -----------------
+# A stderr line is what makes the operator's selection reviewable: the resolved
+# path, the byte size and the mtime. `--instrument-file` closes TRANSCRIPTION
+# error; it cannot close SELECTION error (hashing the wrong file perfectly), and
+# a re-export differs in both size and mtime.
+grep -q 'instrument file:' "$WORK/if-a.err" \
+  && pass "--instrument-file echoes a diagnostic to stderr (FR7)" \
+  || fail "no instrument diagnostic on stderr"
+grep -q "$if_digest" "$WORK/if-a.err" \
+  && pass "the stderr diagnostic carries the computed hash" \
+  || fail "stderr diagnostic does not carry the computed hash"
+grep -qE 'bytes=[0-9]+' "$WORK/if-a.err" \
+  && pass "the stderr diagnostic carries the byte size (selection-error provenance)" \
+  || fail "stderr diagnostic does not carry the byte size"
+grep -q 'mtime=' "$WORK/if-a.err" \
+  && pass "the stderr diagnostic carries the mtime (selection-error provenance)" \
+  || fail "stderr diagnostic does not carry the mtime"
+cmp -s "$WORK/if-a.err" "$WORK/if-b.err" \
+  && fail "the two flags emit identical stderr — the instrument diagnostic is missing" \
+  || pass "stderr transcripts DIFFER while stdout is identical (diagnostics stay off stdout)"
+
+# FR7b: the PASTE-SAFE half. The runbook tells the operator to put provenance in
+# the pull request; the diagnostic above cannot be that line, because the
+# resolved path may itself BE a legal name and a PR body is public and
+# permanent. So the script emits a second line carrying everything that makes
+# provenance reviewable and nothing that identifies anyone -- and the absence of
+# the path is the assertion, not a property of the line's wording.
+_prov="$(grep '^provenance:' "$WORK/if-a.err" || true)"
+[[ -n "$_prov" ]] \
+  && pass "a paste-safe 'provenance:' line is emitted (the runbook promises one)" \
+  || fail "no 'provenance:' line on stderr — the runbook tells the operator to paste one"
+grep -q "$if_digest" <<<"$_prov" \
+  && pass "the provenance line carries the computed hash" \
+  || fail "the provenance line does not carry the computed hash"
+grep -qE 'bytes=[0-9]+' <<<"$_prov" && grep -q 'mtime=' <<<"$_prov" \
+  && pass "the provenance line carries size and mtime (a re-export differs in both)" \
+  || fail "the provenance line is missing size or mtime — pasting it would prove nothing"
+grep -qF "$WORK" <<<"$_prov" \
+  && fail "the provenance line carries the resolved path — pasting it into a public PR is the leak this line exists to avoid" \
+  || pass "the provenance line carries NO path (paste-safe)"
+
+# --- FR2/FR3/FR4/FR5/FR6: the refusal arms, each with its OWN message -------
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0101 \
+  --instrument-file "$WORK/instrument.bin" --instrument-sha256 "$SHA64" --login deruelle)
+[[ "$rc" == "64" ]] && pass "both instrument flags together are refused (rc=64, FR2)" \
+  || fail "both flags: expected rc=64, got $rc"
+grep -q 'mutually exclusive' "$WORK/err.txt" \
+  && pass "the both-flags refusal names the mutual exclusion" \
+  || fail "both-flags refusal does not name the mutual exclusion"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0102 --login deruelle)
+[[ "$rc" == "64" ]] && pass "neither instrument flag is refused (rc=64, FR3)" \
+  || fail "neither flag: expected rc=64, got $rc"
+grep -q -- '--instrument-file' "$WORK/err.txt" \
+  && pass "the neither-flag refusal names BOTH flags, not only the older one" \
+  || fail "neither-flag refusal does not mention --instrument-file"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0103 \
+  --instrument-file "relative/instrument.bin" --login deruelle)
+[[ "$rc" == "64" ]] && pass "a relative --instrument-file is refused (rc=64, FR4)" \
+  || fail "relative path: expected rc=64, got $rc"
+grep -q 'absolute path' "$WORK/err.txt" \
+  && pass "the relative-path refusal says an absolute path is required" \
+  || fail "relative-path refusal does not name the absolute-path requirement"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0104 \
+  --instrument-file "$WORK/does-not-exist.bin" --login deruelle)
+[[ "$rc" == "64" ]] && pass "a missing --instrument-file is refused (rc=64, FR5)" \
+  || fail "missing file: expected rc=64, got $rc"
+grep -q 'no such instrument file' "$WORK/err.txt" \
+  && pass "the missing-file refusal names non-existence" \
+  || fail "missing-file refusal does not name non-existence"
+
+# `-f` ALONE reports a directory as "no such file" — the measured-bad-for-
+# could-not-measure collapse this script exists to refuse. The `-e`/`-f` split
+# is what makes these two messages distinct.
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0105 \
+  --instrument-file "$WORK/adir" --login deruelle)
+[[ "$rc" == "64" ]] && pass "a directory --instrument-file is refused (rc=64, FR5)" \
+  || fail "directory: expected rc=64, got $rc"
+grep -q 'not a regular file' "$WORK/err.txt" \
+  && ! grep -q 'no such instrument file' "$WORK/err.txt" \
+  && pass "a directory says 'not a regular file', NOT 'no such file' (the -e/-f split)" \
+  || fail "the directory refusal collapses into the missing-file message"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0106 \
+  --instrument-file "$WORK/empty.bin" --login deruelle)
+[[ "$rc" == "64" ]] && pass "an empty --instrument-file is refused (rc=64, FR5)" \
+  || fail "empty file: expected rc=64, got $rc"
+grep -q 'evidences nothing' "$WORK/err.txt" \
+  && pass "the empty-file refusal says an empty file evidences nothing" \
+  || fail "empty-file refusal does not say why an empty file is refused"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0107 \
+  --instrument-file "$WORK/unreadable.bin" --login deruelle)
+[[ "$rc" == "64" ]] && pass "an unreadable --instrument-file is refused (rc=64, FR5)" \
+  || fail "unreadable file: expected rc=64, got $rc"
+grep -q 'not readable' "$WORK/err.txt" \
+  && pass "the unreadable-file refusal names permission, not absence" \
+  || fail "unreadable-file refusal does not name readability"
+
+# FR6 — custody. A symlink OUTSIDE the repo is the supported shape; one whose
+# TARGET resolves inside the repo is refused with rc=2, because the instrument
+# is held off-repo on the encrypted operator drive (P10). This is a typo
+# catcher, not a boundary: a bind mount, a hardlink or a sibling worktree
+# defeats any path comparison.
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0108 \
+  --instrument-file "$WORK/link-outside.bin" --login deruelle)
+[[ "$rc" == "0" ]] && pass "a symlink to a file OUTSIDE the repo is accepted (rc=0)" \
+  || fail "outside symlink: expected rc=0, got $rc"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0109 \
+  --instrument-file "$WORK/link-inside.bin" --login deruelle)
+[[ "$rc" == "2" ]] && pass "a symlink RESOLVING inside the repo is refused on custody grounds (rc=2, FR6)" \
+  || fail "inside symlink: expected rc=2, got $rc"
+grep -q 'off-repo' "$WORK/err.txt" \
+  && pass "the custody refusal names off-repo custody" \
+  || fail "custody refusal does not name off-repo custody"
+
+# --- the sha256sum argv-vs-stdin hazard -------------------------------------
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0110 \
+  --instrument-file "$WORK/back\\slash.bin" --login deruelle)
+back_digest=$(sha256sum < "$WORK/back\\slash.bin" | awk '{print $1}')
+if [[ "$rc" == "0" ]] && jq -e --arg d "$back_digest" \
+     '.organizations[0].executed_instrument_sha256 == $d' "$WORK/out.txt" >/dev/null 2>&1; then
+  pass "a backslash in the basename still yields the right hash (sha256sum reads STDIN, not argv)"
+else
+  fail "backslash basename: rc=$rc and/or the recorded hash is wrong — sha256sum is being passed the path as argv"
+fi
+
+# --- U6: the handle-reuse check (created_at vs --authorized-from) -----------
+# GitHub releases a deleted account's login for re-registration. The designation
+# list names USERNAMES, the roster stores IDS, and the operator reading the
+# instrument cannot see that the handle changed hands. An account created AFTER
+# the grant took effect cannot be the account that was designated.
+#
+# The id map's OBJECT shape is what carries a creation date; the bare-number
+# shape (every other fixture in this file) carries none and SKIPS the check. So
+# the skip is asserted too — a check that silently does not run and a check that
+# passes print the same thing otherwise.
+u6_map_before='{"deruelle":{"id":54279,"created_at":"2020-01-01T00:00:00Z"}}'
+u6_map_after='{"deruelle":{"id":54279,"created_at":"2026-09-05T00:00:00Z"}}'
+u6_map_bad='{"deruelle":{"id":54279,"created_at":"not-a-date"}}'
+
+rc=$(run_sut "$SCRIPT" "$u6_map_before" "${add_args[@]}" --login deruelle)
+[[ "$rc" == "0" ]] \
+  && pass "U6 must-PASS: an account created BEFORE --authorized-from is recorded (rc=0)" \
+  || fail "U6: a legitimately older account was refused (rc=$rc): $(head -c 160 "$WORK/err.txt")"
+grep -q 'not created after --authorized-from' "$WORK/err.txt" \
+  && pass "U6: the resolution line says the handle-reuse check actually RAN" \
+  || fail "U6: nothing on stderr distinguishes a check that ran from one that was skipped"
+
+rc=$(run_sut "$SCRIPT" "$u6_map_after" "${add_args[@]}" --login deruelle)
+[[ "$rc" == "2" ]] \
+  && pass "U6: an account created AFTER --authorized-from is REFUSED (rc=2)" \
+  || fail "U6: expected rc=2 for a post-grant account, got $rc"
+grep -q 'created at 2026-09-05T00:00:00Z, AFTER --authorized-from' "$WORK/err.txt" \
+  && pass "U6: the refusal names both dates, so the operator can see which is wrong" \
+  || fail "U6: the refusal does not name the two dates: $(head -c 200 "$WORK/err.txt")"
+grep -q 'necessary and NOT sufficient' "$WORK/err.txt" \
+  && pass "U6: the refusal states the check is necessary and not sufficient" \
+  || fail "U6: the refusal overclaims — it does not say an older account taking a freed handle passes"
+grep -qE 'roster\.json' "$WORK/out.txt" 2>/dev/null && fail "U6: the refusal still emitted a roster" \
+  || pass "U6: nothing was emitted on the refusal path"
+
+rc=$(run_sut "$SCRIPT" "$u6_map_bad" "${add_args[@]}" --login deruelle)
+[[ "$rc" == "2" ]] \
+  && pass "U6: an UNPARSEABLE creation date refuses (rc=2) rather than skipping the check" \
+  || fail "U6: a bad creation date did not refuse (rc=$rc) — could-not-measure read as measured-good"
+grep -q 'could not compare the account creation date' "$WORK/err.txt" \
+  && pass "U6: the unparseable-date refusal is its OWN message, not the reuse message" \
+  || fail "U6: the unparseable-date case collapses into another refusal's wording"
+
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${add_args[@]}" --login deruelle)
+[[ "$rc" == "0" ]] && grep -q 'the handle-reuse check was NOT run' "$WORK/err.txt" \
+  && pass "U6: the legacy id-map shape SKIPS the check and SAYS SO on stderr" \
+  || fail "U6: a skipped check is silent (rc=$rc) — indistinguishable from a passing one"
+
+# --- FR8: the resolved path reaches no published artifact -------------------
+# The instrument's filename plausibly carries a legal name, which is exactly
+# what --sole-trader exists to keep off-repo. The RUNTIME paths (the commit
+# heredoc, the PR body) are unreachable under this suite's unconditional
+# CCLA_ADD_DRY_RUN=1, so this is asserted at SOURCE level over the two spans —
+# each with a KNOWN-POSITIVE control first, because an awk range that matched
+# nothing would satisfy the absence grep vacuously.
+# The start anchor deliberately STOPS before the heredoc operator, and this
+# comment deliberately does not quote it either.
+#
+# `guard-vacuity-floor.test.sh` finds this suite's assertion floor by scanning
+# for an `if` line, having first excluded every line it scores as heredoc BODY.
+# Its heredoc scanner is textual and state-machine-based: any line carrying the
+# redirect operator followed by a tag OPENS a region, and only a line holding
+# that bare tag closes it. So a pattern -- or a comment -- that merely NAMES the
+# tag used by the commit message below opens a region that never closes, every
+# line to EOF is scored as body, this file drops out of the floor-bearing set,
+# and its floor silently stops being mutation-tested while the suite stays
+# green. Measured twice: once from the awk pattern, then again from the comment
+# written to explain the first one. Anchor on `^git commit --quiet --file`
+# instead, and describe the hazard without spelling it.
+# Two literal identifiers is a claim about NAMES, and the script owns the names.
+# Aliasing the value into a third variable -- `PROVENANCE_NOTE=$RESOLVED_INSTRUMENT`
+# -- puts the path in the PR body with every arm green. So derive the forbidden
+# set instead: seed it with the two the argument arrives in, then close it under
+# assignment until it stops growing. Any variable assigned from a tainted one is
+# tainted, however it is spelled.
+fr8_taint_re() {
+  local file="$1" re='INSTRUMENT_FILE|RESOLVED_INSTRUMENT' line lhs rhs added round
+  for round in 1 2 3 4 5 6 7 8; do
+    added=""
+    while IFS= read -r line; do
+      lhs="${line%%=*}"; lhs="${lhs##*[[:space:]]}"
+      [[ "$lhs" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+      rhs="${line#*=}"
+      grep -qE "$re" <<<"$rhs" || continue
+      grep -qE "(^|\|)${lhs}(\||\$)" <<<"$re" && continue
+      re="$re|$lhs"; added=1
+    done <<<"$(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "$file")"
+    [[ -n "$added" ]] || break
+  done
+  printf '%s' "$re"
+}
+
+# INSTRUMENT SELF-TEST for the extractor, before anything relies on it. A
+# fixpoint that silently found nothing would make all three absence checks below
+# pass for the wrong reason, and the alias is exactly what they exist to catch.
+fr8_probe="$WORK/fr8-taint-probe.sh"
+printf '%s\n' 'PROVENANCE_NOTE="$RESOLVED_INSTRUMENT"' 'SECOND_HOP="$PROVENANCE_NOTE"' > "$fr8_probe"
+fr8_probe_re="$(fr8_taint_re "$fr8_probe")"
+grep -qE '(^|\|)PROVENANCE_NOTE(\||$)' <<<"$fr8_probe_re" \
+  && pass "FR8 instrument: the taint fixpoint follows a one-hop alias" \
+  || fail "FR8 instrument: the taint fixpoint missed a one-hop alias — every FR8 absence check below is vacuous"
+grep -qE '(^|\|)SECOND_HOP(\||$)' <<<"$fr8_probe_re" \
+  && pass "FR8 instrument: the taint fixpoint follows a two-hop alias (it iterates, it does not scan once)" \
+  || fail "FR8 instrument: the taint fixpoint stopped after one hop"
+
+FR8_TAINT="$(fr8_taint_re "$SCRIPT")"
+
+if_commit_span=$(awk '/^git commit --quiet --file/,/^COMMITEOF$/' "$SCRIPT")
+if_prbody_span=$(awk '/^if ! gh pr create --repo/,/^Ref #3210\."; then$/' "$SCRIPT")
+# The THIRD publishing site, and the one no span covered: the branch name is
+# pushed to a public remote and becomes the PR's head ref, so it is as published
+# as the body. Appending a basename here leaked the path with 96/96 green.
+if_branch_span=$(grep -E '^BRANCH=' "$SCRIPT")
+grep -q 'RECORD_REF' <<<"$if_commit_span" \
+  && pass "FR8 control: the commit-heredoc span was actually extracted (it carries RECORD_REF)" \
+  || fail "FR8 control: the commit-heredoc awk range extracted nothing — the absence check below would be vacuous"
+grep -q 'LOGINS' <<<"$if_prbody_span" \
+  && pass "FR8 control: the PR-body span was actually extracted (it carries LOGINS)" \
+  || fail "FR8 control: the PR-body awk range extracted nothing — the absence check below would be vacuous"
+grep -q 'RECORD_REF' <<<"$if_branch_span" \
+  && pass "FR8 control: the branch-name span was actually extracted (it carries RECORD_REF)" \
+  || fail "FR8 control: the branch-name grep matched nothing — the absence check below would be vacuous"
+if grep -qE "$FR8_TAINT" <<<"$if_commit_span"; then
+  fail "FR8: the instrument path reaches the commit message"
+else
+  pass "FR8: the instrument path reaches no commit message"
+fi
+if grep -qE "$FR8_TAINT" <<<"$if_prbody_span"; then
+  fail "FR8: the instrument path reaches the PR body"
+else
+  pass "FR8: the instrument path reaches no PR body"
+fi
+if grep -qE "$FR8_TAINT" <<<"$if_branch_span"; then
+  fail "FR8: the instrument path reaches the pushed branch name"
+else
+  pass "FR8: the instrument path reaches no pushed branch name"
+fi
+
+# --- the organisation-named fixture leaks nothing (Guard 1 H4, must-PASS) ---
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0111 \
+  --instrument-file "$WORK/Example Fixture Co executed CCLA.pdf" --login deruelle)
+if [[ "$rc" == "0" ]] && ! grep -q 'Example Fixture Co executed' "$WORK/out.txt"; then
+  pass "an organisation-named instrument basename never reaches the roster or stdout"
+else
+  fail "organisation-named fixture: rc=$rc, or the basename leaked into stdout"
+fi
+
+# --- NFR3: the resolved path never joins the cleanup array ------------------
+[[ -s "$WORK/instrument.bin" ]] \
+  && pass "the caller's instrument file survives the script's cleanup trap (NFR3)" \
+  || fail "the cleanup trap deleted the caller's instrument file"
+
+# --- FR10: usage() documents the new flag -----------------------------------
+if_usage=$(bash "$SCRIPT" 2>&1 || true)
+grep -q -- '--instrument-file' <<<"$if_usage" \
+  && pass "usage() documents --instrument-file (FR10)" \
+  || fail "usage() does not document --instrument-file"
+
+
+# ===========================================================================
+# Guard 1 MUTATION MATRIX — rows 1-9.
+#
+# Every row copies the SUT, edits the copy, and ASSERTS THE MUTATION LANDED
+# before asserting its effect: a mutation that did not apply reports the
+# BASELINE, which is byte-for-byte indistinguishable from a pass.
+#
+# Rows 8 and 9 are additions to the plan's matrix, from the deepen-plan
+# test-design pass: no listed row covered the sha256sum argv-vs-stdin hazard
+# the design devotes a paragraph to, and none covered mutual exclusion.
+# ===========================================================================
+G1MUT="$WORK/ccla-add.g1.sh"
+g1_begin() { cp "$SCRIPT" "$G1MUT" || { echo "harness: could not copy the SUT" >&2; exit 2; }; }
+g1_landed() {
+  if diff -q "$SCRIPT" "$G1MUT" >/dev/null; then
+    fail "$1: the mutation did NOT land (mutant is byte-identical to the SUT) — its verdict below would be the baseline"
+    return 1
+  fi
+  pass "$1: mutation landed"
+  return 0
+}
+
+# --- Row 1: replace the computed digest with a constant ---------------------
+g1_begin
+python3 - "$G1MUT" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = 'INSTRUMENT_SHA="$(sha256sum < "$RESOLVED_INSTRUMENT" | awk'
+assert s.count(old) == 1, s.count(old)
+s = s.replace(old, 'INSTRUMENT_SHA="$(printf %s\\\\n ' + 'd' * 64 + ' | awk')
+open(p, "w").write(s)
+PY
+if g1_landed "G1-M1 (constant digest)"; then
+  rc=$(run_sut "$G1MUT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0120 \
+    --instrument-file "$WORK/instrument.bin" --login deruelle)
+  if [[ "$rc" == "0" ]] && jq -e --arg d "$if_digest" \
+       '.organizations[0].executed_instrument_sha256 == $d' "$WORK/out.txt" >/dev/null 2>&1; then
+    fail "G1-M1: a constant digest still produced the file's real hash — the value arm cannot see it"
+  else
+    pass "G1-M1: replacing the computed digest with a constant is caught by the value arm"
+  fi
+fi
+
+# --- Row 2: delete the -s non-empty check -----------------------------------
+g1_begin
+python3 - "$G1MUT" <<'PY'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+m = re.search(r'    \[\[ -s "\$RESOLVED_INSTRUMENT" \]\] \\\n      \|\| die [^\n]*\n', s)
+assert m, "the -s check was not found in its expected shape"
+s = s[:m.start()] + s[m.end():]
+open(p, "w").write(s)
+PY
+if g1_landed "G1-M2 (no -s empty check)"; then
+  rc=$(run_sut "$G1MUT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0121 \
+    --instrument-file "$WORK/empty.bin" --login deruelle)
+  [[ "$rc" == "64" ]] \
+    && fail "G1-M2: the empty file was still refused with 64 — the -s check is not what refuses it" \
+    || pass "G1-M2: deleting the -s check lets a zero-byte instrument through (rc=$rc) — the arm is load-bearing"
+fi
+
+# --- Row 3: collapse the -e / -f split back to -f alone ---------------------
+g1_begin
+python3 - "$G1MUT" <<'PY'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+m = re.search(r'    \[\[ -e "\$INSTRUMENT_FILE" \]\] \\\n      \|\| die "no such instrument file[^\n]*\n', s)
+assert m, "the -e check was not found in its expected shape"
+s = s[:m.start()] + s[m.end():]
+old = 'die "not a regular file: $INSTRUMENT_FILE'
+assert s.count(old) == 1
+s = s.replace(old, 'die "no such instrument file: $INSTRUMENT_FILE')
+open(p, "w").write(s)
+PY
+if g1_landed "G1-M3 (collapsed -e/-f)"; then
+  rc=$(run_sut "$G1MUT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0122 \
+    --instrument-file "$WORK/adir" --login deruelle)
+  if grep -q 'no such instrument file' "$WORK/err.txt"; then
+    pass "G1-M3: collapsing the split makes a DIRECTORY report as 'no such file' — the arm catches it"
+  else
+    fail "G1-M3: the collapsed mutant still distinguished a directory — the two messages are not what the arm reads"
+  fi
+fi
+
+# --- Row 4: the guard's OWN DISPATCH — make the compute block unreachable ---
+g1_begin
+python3 - "$G1MUT" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '  if [[ -n "$INSTRUMENT_FILE" ]]; then\n'
+assert s.count(old) == 1, s.count(old)
+s = s.replace(old, '  if false; then\n')
+open(p, "w").write(s)
+PY
+if g1_landed "G1-M4 (compute block unreachable)"; then
+  rc=$(run_sut "$G1MUT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0123 \
+    --instrument-file "$WORK/instrument.bin" --login deruelle)
+  [[ "$rc" == "0" ]] \
+    && fail "G1-M4: an unreachable compute block still produced a roster — the happy-path arm is vacuous" \
+    || pass "G1-M4: an unreachable compute block is caught at the 64-hex chokepoint (rc=$rc)"
+fi
+
+# --- Row 5: accept a relative path (drop the /* check) ----------------------
+g1_begin
+python3 - "$G1MUT" <<'PY'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+m = re.search(r'    \[\[ "\$INSTRUMENT_FILE" = /\* \]\] \\\n      \|\| die "--instrument-file must be an absolute path[^\n]*\n', s)
+assert m, "the absolute-path check was not found in its expected shape"
+s = s[:m.start()] + s[m.end():]
+open(p, "w").write(s)
+PY
+if g1_landed "G1-M5 (relative paths accepted)"; then
+  rc=$(run_sut "$G1MUT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0124 \
+    --instrument-file "relative/instrument.bin" --login deruelle)
+  grep -q 'absolute path' "$WORK/err.txt" \
+    && fail "G1-M5: the mutant still named the absolute-path requirement — the check was not removed" \
+    || pass "G1-M5: dropping the /* check loses the absolute-path refusal (rc=$rc) — the arm is load-bearing"
+fi
+
+# --- Row 6: custody compared WITHOUT realpath -------------------------------
+g1_begin
+python3 - "$G1MUT" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = '    case "$RESOLVED_INSTRUMENT" in\n'
+assert s.count(old) == 1, s.count(old)
+s = s.replace(old, '    case "$INSTRUMENT_FILE" in\n')
+open(p, "w").write(s)
+PY
+if g1_landed "G1-M6 (custody without realpath)"; then
+  rc=$(run_sut "$G1MUT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0125 \
+    --instrument-file "$WORK/link-inside.bin" --login deruelle)
+  [[ "$rc" == "2" ]] \
+    && fail "G1-M6: the unresolved comparison still refused the symlink — realpath is not what catches it" \
+    || pass "G1-M6: comparing the ARGUMENT instead of the resolved path lets a symlink into the repo through (rc=$rc)"
+fi
+
+# --- Row 7: interpolate the resolved path into the PR body ------------------
+g1_begin
+python3 - "$G1MUT" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = 'Accounts: ${LOGINS[*]}'
+assert s.count(old) == 1, s.count(old)
+s = s.replace(old, 'Accounts: ${LOGINS[*]} (instrument: ${RESOLVED_INSTRUMENT})')
+open(p, "w").write(s)
+PY
+if g1_landed "G1-M7 (path interpolated into the PR body)"; then
+  g1_span=$(awk '/^if ! gh pr create --repo/,/^Ref #3210\."; then$/' "$G1MUT")
+  grep -q 'LOGINS' <<<"$g1_span" \
+    && pass "G1-M7 control: the mutant's PR-body span was extracted" \
+    || fail "G1-M7 control: the mutant's PR-body span is empty — the row below is vacuous"
+  grep -qE 'INSTRUMENT_FILE|RESOLVED_INSTRUMENT' <<<"$g1_span" \
+    && pass "G1-M7: a path interpolated into the PR body IS caught by the source-level span assertion" \
+    || fail "G1-M7: the span assertion did not see the interpolated path — FR8 is vacuous"
+fi
+
+# --- Row 8: sha256sum given the path as ARGV instead of on stdin ------------
+g1_begin
+python3 - "$G1MUT" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+old = 'sha256sum < "$RESOLVED_INSTRUMENT"'
+assert s.count(old) == 1, s.count(old)
+s = s.replace(old, 'sha256sum "$RESOLVED_INSTRUMENT"')
+open(p, "w").write(s)
+PY
+if g1_landed "G1-M8 (sha256sum argv, not stdin)"; then
+  rc=$(run_sut "$G1MUT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0126 \
+    --instrument-file "$WORK/back\\slash.bin" --login deruelle)
+  [[ "$rc" == "0" ]] \
+    && fail "G1-M8: the argv form still produced a valid hash for a backslash basename — the fixture does not discriminate" \
+    || pass "G1-M8: the argv form is caught on a backslash basename (rc=$rc) — the stdin form is load-bearing"
+  # ...and the mutant must still be FINE on an ordinary basename, or the row
+  # would redden for a reason that has nothing to do with the hazard.
+  rc=$(run_sut "$G1MUT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0127 \
+    --instrument-file "$WORK/instrument.bin" --login deruelle)
+  [[ "$rc" == "0" ]] \
+    && pass "G1-M8 control: the argv form is harmless on an ordinary basename — the row isolates the backslash hazard" \
+    || fail "G1-M8 control: the argv mutant failed on an ordinary basename too (rc=$rc) — the row proves nothing specific"
+fi
+
+# --- Row 9: remove the mutual exclusion -------------------------------------
+g1_begin
+python3 - "$G1MUT" <<'PY'
+import sys, re
+p = sys.argv[1]; s = open(p).read()
+m = re.search(r'  if \[\[ -n "\$INSTRUMENT_FILE" && -n "\$INSTRUMENT_SHA" \]\]; then\n.*?\n  fi\n', s, re.S)
+assert m, "the mutual-exclusion block was not found in its expected shape"
+s = s[:m.start()] + s[m.end():]
+open(p, "w").write(s)
+PY
+if g1_landed "G1-M9 (no mutual exclusion)"; then
+  rc=$(run_sut "$G1MUT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0128 \
+    --instrument-file "$WORK/instrument.bin" --instrument-sha256 "$SHA64" --login deruelle)
+  [[ "$rc" == "64" ]] \
+    && fail "G1-M9: both flags were still refused — the mutual-exclusion block is not what refuses them" \
+    || pass "G1-M9: removing mutual exclusion silently lets one flag win (rc=$rc) — the arm is load-bearing"
+fi
+
+# --- H3 (must-PASS, non-canonical): a SECOND fixture, different bytes AND ----
+# --- length. A one-fixture guard cannot distinguish "hashes this file" from
+# --- "emits a constant that happens to equal this file's hash".
+if_digest2=$(sha256sum < "$WORK/instrument2.bin" | awk '{print $1}')
+rc=$(run_sut "$SCRIPT" '{"deruelle":54279}' "${if_head[@]}" --record-ref CCLA-0129 \
+  --instrument-file "$WORK/instrument2.bin" --login deruelle)
+if [[ "$rc" == "0" ]] && jq -e --arg d "$if_digest2" \
+     '.organizations[0].executed_instrument_sha256 == $d' "$WORK/out.txt" >/dev/null 2>&1; then
+  pass "H3 must-PASS: a second fixture of different bytes AND length hashes correctly too"
+else
+  fail "H3: the second fixture did not hash correctly (rc=$rc)"
+fi
+[[ "$if_digest" != "$if_digest2" ]] \
+  && pass "H3 control: the two fixtures have DIFFERENT digests, so the arm above discriminates" \
+  || fail "H3 control: both fixtures hash identically — the must-PASS proves nothing"
+
 # ---------------------------------------------------------------------------
 echo "---"
 echo "Total: $passes passed, $fails failed"
@@ -401,7 +1008,7 @@ echo "Total: $passes passed, $fails failed"
 # assertion could be deleted and the run stayed green and silent — the floor
 # only fires when TWO go. `guard-vacuity-floor.test.sh` verifies that floors
 # FIRE, never that they are tight, so nothing else catches the slack.
-MIN_ASSERTIONS=40
+MIN_ASSERTIONS=118
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'ANTI-VACUITY: only %s assertions ran, expected at least %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2
   exit 1

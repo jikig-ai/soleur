@@ -106,9 +106,11 @@ residency/sub-processor/transfer/lawful-basis change. There are **no
 ## Resolution axes
 
 ### (a) "No new sub-processor / no new third-country transfer" — RESOLVED / correct
+
 Both web hosts are **Hetzner Online GmbH** — a single processor already named in
 PA-1/PA-2 (d), under one account and one Auftragsverarbeitungsvertrag (AVV/DPA).
 Re-adding a host **within** that existing processor's EU footprint introduces:
+
 - **No new sub-processor.** Hetzner is a **direct processor**, not a sub-processor,
   and the recipient category is unchanged. No Art. 28(2)/(4) sub-processor-change
   notice obligation is triggered by adding capacity inside the same processor.
@@ -120,9 +122,11 @@ Re-adding a host **within** that existing processor's EU footprint introduces:
 The claim is **legally sound**.
 
 ### (b) DRAFTED advance-notice "no processing today" — RESOLVED / accurate
+
 The register's present-tense assertion that **no inter-host transfer of personal data
 occurs today** is accurate against the out-of-band, serving-weight-0, single-volume
 reality:
+
 - web-2 is at **serving-weight 0**, routed **no** traffic (`dns.tf` web-1-only, tunnel
   web-1-gated, `lb-weight-gate.sh` fail-closes pooling), and its `/workspaces` is
   **empty** (sole copy is web-1's).
@@ -135,6 +139,7 @@ reality:
   framing (disclose-before-you-process) is the right posture and does not overstate.
 
 ### (c) Lawful basis / retention / Art. 6(1)(f) LIA — RESOLVED / no gap
+
 - **Lawful basis.** Today web-2 processes nothing → no basis required. On activation
   the register declares **Art. 6(1)(b)** (contract performance) for the replication
   leg — replicating user workspace code to deliver contracted HA/concurrent serving

@@ -141,7 +141,7 @@ Per `hr-observability-layer-citation`: every signal in the
 (`knowledge-base/project/plans/2026-05-22-feat-workspace-member-actions-audit-plan.md`)
 must name where it is configured. This runbook is the configured-in
 layer for the cron-cadence signal; the Better Stack monitor created
-per §3 is the alert-target layer; ops@jikigai.com is the route layer.
+per §3 is the alert-target layer; <ops@jikigai.com> is the route layer.
 
 Per `hr-no-ssh-fallback-in-runbooks`: every verification step in this
 runbook uses the Supabase MCP server. SSH access to the Supabase host

@@ -53,6 +53,7 @@ get no live row in v1 (deferred, never false-stuck).
 **3. Replay-safety contract.** Inngest `step.run` memoizes a completed step's *return value*, not its
 side effects — so a mutating step that is re-executed on `wake` can repeat its effect. Every mutating
 step MUST be **idempotency-keyed or last-in-step**, where:
+
 - **"last-in-step"** = the mutation is the final awaited side effect in its `step.run`, with no awaited
   work after it (else a crash post-mutation-pre-return repeats it).
 - **idempotency keys derive from stable Inngest run identity** (`ctx.runId` [+ deterministic
@@ -75,14 +76,17 @@ is not re-executed on replay).
 ## Rejected alternatives
 
 ### Append start + terminal rows to `routine_runs`
+
 **Rejected.** Breaks the one-terminal-row-per-run audit contract and the WAL cost the middleware
 bounds; heartbeats would explode the WORM table with per-tick rows.
 
 ### `worm_bypass` UPDATE on `routine_runs` per heartbeat
+
 **Rejected.** WORM is for terminal audit rows, not mutable in-flight state; a `SECURITY DEFINER`
 bypass RPC per 30s tick is heavy and inverts the table's purpose.
 
 ### Reuse the `action_sends` column-scoped WORM pattern (mutable columns on the audit table)
+
 **Rejected.** `action_sends` (064) uses a *column-scoped* `BEFORE UPDATE OF <immutable cols>` trigger
 that admits new mutable columns; `routine_runs` (107) uses a *blanket* statement-level trigger that
 admits none. And `action_sends` mutates ONCE (ack); the heartbeat mutates every ~30s. A separate
@@ -90,6 +94,7 @@ attribution-free sidecar cleanly separates ephemeral live-state from the permane
 contract.
 
 ### A reaper cron for stuck detection
+
 **Rejected (deferred).** Adds the 6-registry Inngest-cron lockstep. Reader-side staleness (rows older
 than `max-run-duration` are ignored) + delete-on-terminal + delete-stale-on-upsert bound the orphan
 count at ~16 routines without a new cron.
@@ -101,7 +106,7 @@ count at ~16 routines without a new cron.
   operator sees an honest `stuck` while the window is live.
 - **Single-operator RLS assumption.** SELECT is `auth.uid() IS NOT NULL` (mirrors `routine_runs`).
   Because the table is attribution-free it CANNOT be workspace-scoped by policy alone; a `workspace_id`
-  + `is_workspace_member()` predicate is required before multi-tenant enablement — deferred with the
+  - `is_workspace_member()` predicate is required before multi-tenant enablement — deferred with the
   other not-yet-workspace-keyed tables.
 
 ## C4 impact

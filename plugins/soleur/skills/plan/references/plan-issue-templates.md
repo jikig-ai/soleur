@@ -389,6 +389,7 @@ If the feature touches external services, include deterministic verification com
 - Similar implementations: [file_path:line_number]
 - Best practices: [documentation_url]
 - Related PRs: #[pr_number]
+
 ```
 
 ## A LOT (Comprehensive Issue)
@@ -652,4 +653,5 @@ If the feature touches external services, include deterministic verification com
 - Previous PRs: #[pr_numbers]
 - Related issues: #[issue_numbers]
 - Design documents: [links]
+
 ```

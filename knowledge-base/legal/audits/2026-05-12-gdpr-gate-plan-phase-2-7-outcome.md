@@ -23,10 +23,10 @@ operator_ack_required: false
 - **Audited:** `knowledge-base/project/plans/2026-05-12-feat-pr-c-legal-refresh-dsar-audit-plan.md`
 - **Diff at plan time:** empty (plan is prose); the gate audits the plan's prescribed FR/TR sections against the regulated-data canonical regex.
 - **Canonical regex match:** **NO**. The regex `^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)` matches no PR-C file. PR-C touches only:
-    - `docs/legal/*.md` (4 files)
-    - `plugins/soleur/docs/pages/legal/*.md` (4 files)
-    - `knowledge-base/legal/compliance-posture.md`
-    - `knowledge-base/legal/audits/*.md` (3-5 new evidence files)
+  - `docs/legal/*.md` (4 files)
+  - `plugins/soleur/docs/pages/legal/*.md` (4 files)
+  - `knowledge-base/legal/compliance-posture.md`
+  - `knowledge-base/legal/audits/*.md` (3-5 new evidence files)
 - **Extended trigger:** clause **(b)** of `hr-gdpr-gate-on-regulated-data-surfaces` — plan declares `brand-survival threshold: single-user incident`. Mandatory invocation per the rule's extension to cover cross-controller data-movement surfaces.
 
 ## v1 5-check results

@@ -31,6 +31,7 @@ art_33_deadline: "n/a — availability/observability/cost incident with zero per
 The failure was **latent and self-concealing**: adding a monitor worked (block + target line), removing one silently no-op'd, and the workflow's own comment documented a prior instance of the leak that nobody re-checked.
 
 **Consequences:**
+
 - Monitor count grew **8 → 49 in two months and never once decreased** — because nothing could make it.
 - `sentry_cron_monitor.scheduled_ghcr_token_minter` was orphaned by #6074 (which removed its block AND its target line together — the intuitive edit) and has been live + unreclaimable at $0.78/mo since, carrying a 12-day unresolved incident on the resource it monitored.
 - `sentry_issue_alert.kb_tenant_mint_silent_fallback` was orphaned by #4929 (superseded, never destroy-applied).
@@ -61,6 +62,7 @@ The secondary cause is that the leak was **documented in prose and never re-chec
 5. **Ledger + cost model corrected** against a live read.
 
 The learnings capturing the mechanism in depth are already committed:
+
 - `2026-07-17-target-scoped-terraform-apply-makes-resource-deletion-a-silent-noop.md` — the root-cause mechanism.
 - `2026-07-17-a-detector-placed-before-the-cure-blocks-it.md` — Class D deadlock (a fail-closed detector firing for the wrong reason).
 - `2026-07-17-a-copy-adapted-gate-drifted-in-the-half-i-did-not-parity-pin.md` — the PR-time gate shipped permanently-red via a dropped line.

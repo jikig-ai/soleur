@@ -16,10 +16,33 @@ pre-commit:
       glob: "*.rs"
       run: cargo clippy -- -D warnings
     markdown-lint:
+      # Routed through the single invoker (#7927). It previously called the linter
+      # through an unpinned package runner, which resolves the LATEST release on every
+      # run -- so the verdict drifted under files nobody had edited, and this hook was
+      # the only place the linter ran at all. (Naming that old command literally here
+      # would trip the single-invoker guard, which greps for the binary token in
+      # command position; the guard strips comments, but prose that names a forbidden
+      # literal is a trap worth not setting.)
+      # The script pins the binary and derives scope from .markdownlintignore, the
+      # same file the CI job reads, so hook and CI cannot disagree about what is red.
+      # `stage_fixed` is gone with it: this path lints, it does not rewrite (--fix
+      # corrupts prose on this corpus -- see the script's remediation block).
+      #
+      # TWO COUPLINGS, both load-bearing and neither visible from this stanza.
+      #
+      # `glob: "*.md"` is not an optimisation. Without it lefthook invokes the script
+      # with ZERO arguments on every commit, the script exits 2 on its usage guard, and
+      # EVERY commit in the repository is blocked. Do not remove it.
+      #
+      # The script needs root deps present (node_modules/.bin/markdownlint, plus
+      # python3). It refuses to fall back to an unpinned runner by design, so someone
+      # who has never run `npm install` cannot commit a Markdown file until they do --
+      # a real change from the previous behaviour, which needed nothing local. The
+      # script's own error names the fix, and worktrees get deps from
+      # worktree-manager.sh, so this bites a fresh clone rather than normal use.
       priority: 4
       glob: "*.md"
-      run: npx --yes markdownlint-cli {staged_files}
-      stage_fixed: true
+      run: bash scripts/markdown-lint.sh {staged_files}
     # Secret-scanning floor (#3121). gitleaks scans the staged index directly,
     # so no `glob:` filter is set — the binary handles file selection.
     # `--exit-code 1` makes lefthook treat any finding as a hard failure.
@@ -300,10 +323,23 @@ pre-commit:
         echo "Move to knowledge-base/project/ before committing:" >&2
         echo "  knowledge-base/{brainstorms,learnings,plans,specs}/ -> knowledge-base/project/{brainstorms,learnings,plans,specs}/" >&2
         exit 1
+    # DUAL GLOB, and both arms are load-bearing (#7935). lefthook uses gobwas
+    # semantics where `**` requires at least ONE intermediate directory, so the
+    # single `knowledge-base/**/*.md` arm has NEVER matched knowledge-base/INDEX.md
+    # itself -- it sits at depth 1. Measured against lefthook 2.1.6: with only
+    # INDEX.md staged, the single-glob form printed `(skip) no matching staged
+    # files` and the command never ran, while the dual form executed. That is
+    # exactly the merge-resolution commit shape where regeneration matters most.
+    # See 2026-03-21-lefthook-gobwas-glob-double-star.md.
+    #
+    # The `git add` covers all THREE generated artifacts: one generator run
+    # rewrites all three, and staging only INDEX.md left kb-categories.txt a
+    # month stale on disk, committed only when some unrelated change happened to
+    # sweep it up.
     generate-kb-index:
       priority: 10
-      glob: "knowledge-base/**/*.md"
-      run: bash scripts/generate-kb-index.sh && git add knowledge-base/INDEX.md
+      glob: ["knowledge-base/*.md", "knowledge-base/**/*.md"]
+      run: bash scripts/generate-kb-index.sh && git add knowledge-base/INDEX.md knowledge-base/kb-tags.txt knowledge-base/kb-categories.txt
     # Auto-regenerate the compiled LikeC4 model whenever a .c4 source is staged,
     # then re-stage it — mirrors the generate-kb-index precedent above (its
     # priority 10 + `run: <script> && git add <generated-file>` shape). NOTE the

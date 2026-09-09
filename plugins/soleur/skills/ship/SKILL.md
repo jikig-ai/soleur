@@ -175,7 +175,7 @@ If Step 1 found nothing, check for review commit patterns (both legacy and new f
 git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findings|^[a-f0-9]+ review(\([^)]*\))?: )" || true
 ```
 
-The `^[a-f0-9]+ review(\(scope\))?:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`. The optional `(scope)` group is load-bearing: this repo writes conventional commits, so review fixes land as `review(6178): …`, which a bare `review: ` regex does NOT match — the signal then reads "review never ran" on a branch where it did. Measured on PR #6933: all three signals were empty after a 7-agent review with four `review(6178):` commits on the branch. The `Reviewed-By-Soleur:` trailer remains the primary signal; this fallback should not false-negative.
+The `^[a-f0-9]+ review(\(scope\))?:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`. The optional `(scope)` group is load-bearing: this repo writes conventional commits, so review fixes land as `review(6178): …`, which a bare `review: ` regex does NOT match — the signal then reads "review never ran" on a branch where it did. Measured on PR #6933: all three signals were empty after a 7-agent review with four `review(6178):` commits on the branch. The `Reviewed-By-Soleur:` trailer remains the primary signal; this fallback should not false-negative. <!-- markdownlint-disable-line MD038 -->
 
 If that returns nothing, check for the durable review trailer:
 
@@ -1501,6 +1501,7 @@ Match the SHAPE (a close verb + an ordering word), not the canonical phrasing. T
 ### Auto-Close Keyword Pre-Creation Scan (#3407)
 
 Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body AND the branch's commit messages for unintentional auto-close-keyword + #N references. Two traps to know:
+
 - **Markdown-blind:** matches inside checkboxes, code blocks, blockquotes, and prose all auto-close (`#3185` was closed twice in three days — first via PR title `(Closes #N after fire)` in #3200, then via body checkbox `- [ ] Post-merge: close #N` in #3402).
 - **Negation-blind + commit-message surface:** GitHub's parser ignores negation, so `Does not close #N` still closes #N. And on a **squash merge** (this repo's default) the squash commit is built from the **branch commit messages**, which the parser reads on merge — so a keyword in a commit body auto-closes even when the PR body is clean. That gap closed #5463 twice (a negated body in #5519, then a negated commit message `Does not close #5463` in #5564). ALWAYS scan commit messages, not just the PR body.
 
@@ -2113,10 +2114,12 @@ The agent maintains a `fix_attempt_count` counter (agent-level state, not a bash
 4. **If `fix_attempt_count == 0`:** Increment `fix_attempt_count`. Attempt autonomous fix:
 
    a. If the failure is in tests or lint: invoke `skill: soleur:test-fix-loop` to diagnose, fix, and commit. After test-fix-loop completes, push and re-queue auto-merge:
+
       ```bash
       git push
       gh pr merge <number> --squash --auto
       ```
+
       Note: `gh pr reopen` is NOT needed — when auto-merge is cancelled due to CI failure, the PR remains OPEN. Re-queuing auto-merge is sufficient.
 
    b. If the failure is in a flaky or unrelated check (not reproducible locally): **Headless mode:** abort. **Interactive mode:** ask whether to wait for a re-run or abort.
@@ -2287,7 +2290,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
    **CI-verified migration skip.** Before creating the issue, grep the item description for a migration filename (`NNN_*.sql`). If one is matched AND a sibling verify file exists at `apps/web-platform/supabase/verify/<filename>`, skip creating the follow-through — the `verify-migrations` job in `web-platform-release.yml` will run the sentinels and auto-close any existing issue referencing that filename. Log: "Skip: [item] — CI verify covers <filename>". This prevents the #2826/#2827 pattern (one apply issue + one sentinel issue per data-backfill migration) from regenerating on future PRs.
 
-   **Migration filename anchor.** If the item description mentions any migration filename OR a bare migration number (e.g. "migration 031") AND no sibling verify file exists yet (so we're still creating the issue), prepend a `**Migration file:** \`NNN_full_stem.sql\`` line to the body below the `<ITEM_DESCRIPTION>` paragraph. The `verify-migrations` auto-close job matches on both the full filename AND the stem (`NNN_full_stem`) — having either in the body ensures auto-close works once a verify file is later added. Bare `NNN` alone is not enough to match.
+   **Migration filename anchor.** If the item description mentions any migration filename OR a bare migration number (e.g. "migration 031") AND no sibling verify file exists yet (so we're still creating the issue), prepend a `` **Migration file:** `NNN_full_stem.sql` `` line to the body below the `<ITEM_DESCRIPTION>` paragraph. The `verify-migrations` auto-close job matches on both the full filename AND the stem (`NNN_full_stem`) — having either in the body ensures auto-close works once a verify file is later added. Bare `NNN` alone is not enough to match.
 
    **Callback URL audit anchor.** If the item description matches BOTH a callback/redirect signal `/(callback URL|redirect_uri)/i` AND a GitHub-OAuth signal `/(GitHub App|OAuth App|Iv23|client_id)/i` (case-insensitive), this is a callback-URL-class follow-through. The two-signal AND prevents false-positives on unrelated docs/copy issues that happen to mention "GitHub App" once in passing. Closure requires more than a "looks fixed in dashboard" comment — issue #1784 was closed without a verified second remediation, and the same symptom recurred in #3183. Append the **Callback URL closure gate** block (below) to the issue body, and instruct any closer that the closing comment MUST contain ALL THREE of:
    1. The verbatim `redirect_uri` value(s) verified — paste each registered callback URL byte-for-byte.
@@ -2373,15 +2376,15 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
    **Step 3.5.B — Choose a verification pattern.** Default to automated per
    `hr-no-dashboard-eyeball-pull-data-yourself`:
 
-   - **HTTP probe** (canary, status page): `curl -sS -o /dev/null -w '%{http_code}' "$URL" | grep -q '^200$' && exit 0 || exit 1`
-   - **DNS probe**: `dig +short +time=5 +tries=2 TXT example.com | grep -qF "$EXPECTED" && exit 0 || exit 1`
-   - **SQL probe** (Supabase prd): scaffold via `/soleur:schedule --once` so the workflow brings its own Doppler env; the follow-through script then queries the workflow run status via `gh run list --workflow <name>.yml --status success`.
-   - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
-   - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script reads member-authored comments and branches on the LAST verdict — do **not** inline a one-liner here, copy [cpx22-invoice-reconcile-7431.sh](../../../../scripts/followthroughs/cpx22-invoice-reconcile-7431.sh), which is the reference implementation. A `grep -q '^RESULT: (PASS|FAIL)'` in this section's `… && exit 0 || exit 1` idiom **exits 0 on an explicit FAIL** and closes the tracker on the operator's own rejection; that inversion shipped here once and is why this bullet points at code instead of prose. The operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
+  - **HTTP probe** (canary, status page): `curl -sS -o /dev/null -w '%{http_code}' "$URL" | grep -q '^200$' && exit 0 || exit 1`
+  - **DNS probe**: `dig +short +time=5 +tries=2 TXT example.com | grep -qF "$EXPECTED" && exit 0 || exit 1`
+  - **SQL probe** (Supabase prd): scaffold via `/soleur:schedule --once` so the workflow brings its own Doppler env; the follow-through script then queries the workflow run status via `gh run list --workflow <name>.yml --status success`.
+  - **GitHub Actions probe**: `gh run list --workflow <wf>.yml --status success --created '>=<earliest>' --json conclusion | jq -e 'length > 0'`
+  - **Operator-confirmed** (CAPTCHA, OAuth consent, subjective design call): the script reads member-authored comments and branches on the LAST verdict — do **not** inline a one-liner here, copy [cpx22-invoice-reconcile-7431.sh](../../../../scripts/followthroughs/cpx22-invoice-reconcile-7431.sh), which is the reference implementation. A `grep -q '^RESULT: (PASS|FAIL)'` in this section's `… && exit 0 || exit 1` idiom **exits 0 on an explicit FAIL** and closes the tracker on the operator's own rejection; that inversion shipped here once and is why this bullet points at code instead of prose. The operator types `RESULT: PASS` in an issue comment when verification is done. This is the legitimate use of operator-confirmed exit-0: the script reads the human verdict, not the human reads a dashboard.
 
      **The `authorAssociation` filter is mandatory, not stylistic.** This repo is PUBLIC with issues open, and a probe's exit code makes the sweeper close the tracker — so an unfiltered `.comments[].body` accepts a verdict from any authenticated GitHub user, and the sweeper's own PASS comment then disables the reopen guard that would have caught it. Three further requirements follow from the same fact: anchor with `\b` (`RESULT: PASSing on this for now` matched a bare `^RESULT: PASS`); never echo the matched line unredacted (the sweeper posts probe stdout back as a comment, which the next run re-reads as a verdict, latching the issue unclosable); and hardcode the tracker number rather than self-locating by searching issues for the probe's own filename (issue search matches COMMENT bodies as well as issue bodies, and taking the first hit is relevance-ordered, so the probe can be pointed at another issue while the sweeper closes this one). **Why:** #7448 — all four probes written against the earlier form were forgeable; see the reference implementation linked above.
-   - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
-   - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
+  - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
+  - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
 
    Bare "operator manually checks" with NO scripted gate is non-compliant with
    `hr-no-dashboard-eyeball-pull-data-yourself` AND `wg-pm-class-followthrough-for-operator-dogfood`
@@ -2433,6 +2436,7 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
         *) fail "script '$script_path' escapes scripts/followthroughs/ root" ;;
       esac
       ```
+
    2. `earliest` extracted parses cleanly via `date -u -d "$earliest" +%s`,
    3. The referenced script path exists on disk and is executable.
 
@@ -2533,8 +2537,8 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
 3.8. **Chain to postmerge verification (CONTINUATION GATE — MUST complete before Step 4).** After release workflows pass and migration verification completes, invoke postmerge to verify production health, Sentry cron monitors, and file freshness:
 
-   - **Claude Code:** `skill: soleur:postmerge <PR-number>`
-   - **Grok Build:** `/postmerge <PR-number>`
+- **Claude Code:** `skill: soleur:postmerge <PR-number>`
+- **Grok Build:** `/postmerge <PR-number>`
 
    **Do NOT ask the operator** whether to run postmerge or monitor deploy — invoke it in the same turn.
 

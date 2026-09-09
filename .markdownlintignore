@@ -1,2 +1,45 @@
 knowledge-base/marketing/distribution-content/
 knowledge-base/INDEX.md
+
+# knowledge-base/project/ (#7927): 8,231 tracked *.md carrying 29,200 of the repo's
+# 32,356 errors. Excluded as a scope decision, not a taste one: 208 of these files
+# already fail scripts/lint-infra-no-human-steps.py, which is a pre-commit hook, so a
+# sweep that restages them cannot be committed without the LEFTHOOK_EXCLUDE bypass this
+# issue exists to remove. They are session artifacts -- plans, specs, learnings -- read
+# by agents and never rendered, so rendering rules buy nothing here. Because the hook
+# and the CI job both derive their file set from THIS file, the exclusion also stops
+# those 8,231 files blocking a contributor's local `git merge origin/main`, which is
+# the operation #7927 was filed about.
+knowledge-base/project/
+
+# TEST FIXTURE CORPORA (#7927). These are test INPUT DATA, not documentation, and
+# linting them is a category error: the linter rewrites the very bytes a suite asserts
+# on. Both failure modes were measured on this branch, not anticipated.
+#
+#   - plugins/soleur/test/fixtures/ship-incident-pir-gate/ is the corpus for a
+#     paragraph/heading BOUNDARY classifier, so its blank lines ARE the input. MD012's
+#     two added blank lines flipped rows M5 and M9 from want=no to got=yes: 25/25 with
+#     main's fixtures, 23/25 with the swept ones.
+#   - test/helpers/sample-content.md is asserted on by substring. The MD034 autolink
+#     rewrite turned `Link: https://...` into `Link: <https://...` and broke
+#     content-publisher's extraction assertion.
+#
+# A fixture is only lint-clean by coincidence; a suite that depends on its bytes is not.
+# Documentation that happens to live under a fixture directory (a README explaining the
+# corpus) stays in scope deliberately -- test/fixtures/orphan-proc-dangling/README.md is
+# the reason the `test` root still appears in EXPECTED_ROOTS.
+plugins/soleur/test/fixtures/
+plugins/soleur/skills/incident/test/fixtures/
+plugins/soleur/skills/skill-security-scan/references/test-fixtures/
+scripts/lib/fixtures/
+test/helpers/
+
+# VENDORED / PROVENANCE-PINNED CONTENT (#7927). plugins/soleur/skills/gdpr-gate/references/
+# is tracked by NOTICE.md, which pins a git blob SHA per file across two sets --
+# `lifted-files` (vendored from github.com/goSprinto/compliance-skills at a pinned commit)
+# and `soleur-authored`. The SHA IS the provenance record: rewriting a lifted file forks
+# vendored third-party content away from its upstream while the pin still claims a clean
+# lift, and re-pinning to the swept bytes would destroy the drift detection rather than
+# satisfy it. Measured: the sweep rewrote 10 of the 11 tracked files and reddened
+# vendor-pin-integrity. Restore, never re-pin.
+plugins/soleur/skills/gdpr-gate/references/

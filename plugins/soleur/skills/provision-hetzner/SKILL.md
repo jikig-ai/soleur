@@ -29,6 +29,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-hetzner/scripts/provision-hetzner.s
 ```
 
 The script:
+
 1. Validates prerequisites (DPA gate, slug format, `hcloud` CLI)
 2. Displays guided instructions for Console project creation + token minting
 3. Accepts token via `read -s` and runs write-class smoke-test (create + delete cx11)

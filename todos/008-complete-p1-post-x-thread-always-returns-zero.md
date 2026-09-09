@@ -22,6 +22,7 @@ Every failure path in `post_x_thread()` returns 0. The workflow's `failure()` st
 ## Proposed Solutions
 
 ### Solution A: Track failures flag in main() (Recommended)
+
 Add a `had_failures=0` variable. When `post_x_thread` or `post_discord` fail (after creating fallback issues), set `had_failures=1`. Exit with code 2 at the end if any platform had non-skip failures. Update workflow to also notify on exit code 2.
 
 - **Pros:** Preserves graceful degradation per platform while surfacing partial failures
@@ -30,6 +31,7 @@ Add a `had_failures=0` variable. When `post_x_thread` or `post_discord` fail (af
 - **Risk:** Low
 
 ### Solution B: Return 1 from post_x_thread on failure
+
 Let `post_x_thread` return 1 when posting fails (after creating fallback issue). Main catches with `|| had_failures=1`.
 
 - **Pros:** Simpler, each function reports its own failure status
