@@ -62,6 +62,22 @@ plus a pointer is both cheaper to review and structurally unable to drift.
 
 **BEFORE FIXING A DEFECT CLASS, GREP THE LEARNINGS FOR IT — AND IF IT RECURRED, THE FINDING IS THE PROPAGATION FAILURE, NOT THE DEFECT.** When the fix is a helper, the durable unit is the IMPORT, not the helper and not the write-up: a helper that must be re-derived per file will eventually be re-derived wrongly, and the wrong copy is disproportionately the one that does damage. Strip by PREFIX, never by a hand-listed set of names — a name list is a claim about which values the tool honours, and it is wrong the moment the tool adds one. **Why:** #7822 — a fixture spreading a raw `process.env` into `git commit` under lefthook committed onto the caller's live branch and CONSUMED an in-flight commit (`GIT_DIR` beats `cwd`, and beats `git -C` too). The identical mechanism was already documented five months earlier in the same directory (#1454), WITH two correct working copies in the tree; neither was importable, so neither propagated. The first fix hardcoded six `GIT_*` names — exactly what the prior learning's Prevention section said not to do, unread until after it was committed. Second harm: a case asserting "this directory is NOT a repository" inverts under the inherited variable and proves nothing while staying green. See `knowledge-base/project/learnings/2026-09-04-a-learning-two-working-copies-and-it-still-got-re-derived-wrong.md`.
 
+**A YAML `run: |` BLOCK APPLIES NO ESCAPE PROCESSING — VERIFY THE LINE AS THE RUNTIME WILL RECEIVE
+IT, NOT AS YOU WROTE IT.** A literal block scalar hands the command its bytes verbatim, so a
+doubled backslash reaches `sed` as a LITERAL backslash: `\\(` is not a capture group in BRE, and the
+expression silently matches nothing. Nothing rejects it — the step exits 0, the variable is empty,
+and every condition downstream of it goes false. The same block has two more traps: no line inside
+it may begin at column 0 (a heredoc terminator or a wrapped quote there ends the block), and a
+`templatefile()`-rendered one needs `$${…}` for braced shell expansions. So never grade one of these
+edits by reading it: parse the YAML, extract the command, and run it against a fixture whose correct
+answer you already know. **Why:** #7500 — a fix hardening `NIC_ALARM_VERDICT` against injection
+doubled the backslashes in its own anchored `sed`, so BOTH verdicts extracted empty on every run and
+all four filing conditions went false: the alarm would have filed nothing on any verdict. That is
+the #7242 "dark on exactly the verdicts it exists to raise" defect, reintroduced by the commit
+fixing a different defect in the same file, and it was caught by a reviewer re-reading the
+uncommitted tree rather than by any suite. See
+`knowledge-base/project/learnings/2026-09-08-every-field-my-alarm-trusted-came-from-the-region-it-did-not-trust.md`.
+
 # Work Plan Execution Command
 
 Execute a work plan efficiently while maintaining quality and finishing features.
