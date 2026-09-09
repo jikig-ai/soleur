@@ -12,6 +12,55 @@ domain: engineering
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-09-09. **Panel:** `dhh-rails-reviewer`, `kieran-rails-reviewer`,
+`code-simplicity-reviewer`, `architecture-strategist`, `cto` (devex), `spec-flow-analyzer` — all six
+run at plan-review, plus the deepen-plan halt gates (4.6–4.11) and two round-1 realism passes.
+
+### Key improvements
+
+1. **The #7956 half was cut entirely.** `cto` found open PR #7879 already implements it — better —
+   and adds a `T5c` guard that would have failed the approach this plan originally proposed.
+   Independently confirmed by `kieran` and `architecture-strategist`. #7956 is also a duplicate of
+   open issue #7886, which #7879 closes.
+2. **A design defect was caught that would have shipped a silent regression.** `spec-flow-analyzer`
+   established that the original Phase 3 (skip on `reason == claude_pid_not_found`) would make a
+   *broken* `discover_claude_pid` report GREEN — that reason is the only one a broken discovery
+   function emits, and the plan's own risk table wrongly claimed AC7 bounded it.
+3. **AC6 was corrected from asserting a mechanism to asserting the property.** `kieran` caught that
+   the original filter encoded single-backtick repair. Re-measuring produced a genuine reversal:
+   the naive double-backtick form **loses** the trailing space.
+4. **Two learning files were added to scope** so the corrected paragraph does not cite sources that
+   restate the error, and so a forward-pointing "ready to apply" note does not go stale on merge.
+5. **A process gap was identified and closed in the plan itself**: Phase 0.6 validates what an issue
+   *cites*, never what is already *in flight* against the same files. Two `gh` commands, now Phase 2
+   step 1.
+
+### Claims verified during the deepen pass
+
+| Claim | How it was verified | Result |
+|---|---|---|
+| The hook's walk is one hop deeper than the suite's | Drove the real `discover_claude_pid` against a synthetic `procroot` at depths 6/8/9/12 | **Confirmed** — hop 8 → `107 comm`, hop 9 → `NOT_FOUND` |
+| The failing arm is already inside the E2E guard | Structural map of the `if`/`else`/`fi` nesting | **Confirmed** — closes at `fi   # end E2E gate` |
+| Nothing skipped in the reported run | The issue's own `[live: yes]` tag against the suite's `_livetag` logic | **Confirmed** — `skipped_live == 0` |
+| markdownlint is clean on `work/SKILL.md` | `bash scripts/markdown-lint.sh` | **Confirmed** — `1 file(s) clean` |
+| AC4 alone is vacuous | Mutated `` `## ` `` → `` `##` ``, ran both checks | **Confirmed** — linter exit 0, AC6 exit 1 |
+| The double-backtick repair form preserves the space | Rendered all three forms through CommonMark's stripping rule | **Refuted** — symmetric padding renders `##`, losing it |
+| MD052 `[i][0]` resolved as a consequence of the backtick repair | Read `ae44051a8`'s diff at that line | **Confirmed** — the `[i][0]` text is byte-identical on both sides; only the span delimiters changed |
+| The 2026-05-20 learning is about liveness, not verdict | Read its findings and Solution sections | **Confirmed** — it concerns "is the process dead?", so it is correctly scoped out of AC3 |
+| `AGENTS.rules.md` has no room for a new rule | `python3 scripts/lint-agents-rule-budget.py` | **Confirmed** — 1 byte of headroom |
+| `MAX_WALK_HOPS` cannot be reassigned in the suite | `readonly` reassignment probe | **Confirmed** — exits 1; moot now that the half is cut |
+
+### Gates
+
+4.6 User-Brand Impact **pass** (threshold `none`, no sensitive path, scope-out present) · 4.7
+Observability **skip** (reconciled with Phase 2.9; reasoning recorded) · 4.8 PAT-shaped **pass** (no
+matches) · 4.9 UI wireframe **skip** (no UI surface) · 4.10 Encryption posture **skip** (no store or
+connection) · 4.11 Guard Contract **skip** (deliverable contains no guard once #7956 was cut).
+
+---
+
 ## Overview
 
 Two issues were assigned. Verification moved both, and one of them out of scope entirely.
@@ -425,10 +474,18 @@ No product, infra, data, vendor, or runtime surface — two markdown files only.
 deliverable now contains no guard) therefore skip. Two are recorded with reasoning because each
 makes a contestable claim:
 
-- **Phase 2.9 Observability** — skipped. `## Files to Edit` contains no path under `apps/*/server/`,
-  `apps/*/src/`, `apps/*/infra/`, or `plugins/*/scripts/`. A `plugins/soleur/skills/*/SKILL.md` body
-  edit is documentation, not an execution surface, so `hr-observability-layer-citation`'s layer-7
-  wording is not engaged. No soak-gated or time-gated close criterion exists, so 2.9.1 does not fire.
+- **Phase 2.9 / deepen-plan 4.7 Observability** — skipped, and the ambiguity is recorded rather than
+  glossed. Plan Phase 2.9's trigger set is `apps/*/server/`, `apps/*/src/`, `apps/*/infra/`,
+  `plugins/*/scripts/`, or a new infrastructure surface; `## Files to Edit` matches none.
+  deepen-plan 4.7's Step-1 *skip* list is narrower — it exempts `\.md$` only **outside**
+  `plugins/*/skills/`, so `work/SKILL.md` is not literally covered by that exemption. The two are
+  reconciled in favour of 2.9, which is the contract 4.7 exists to enforce ("this gate is what makes
+  plan Phase 2.9 load-bearing"): 2.9 lists `plugins/*/scripts/` and deliberately not
+  `plugins/*/skills/`, distinguishing executable plugin code from plugin prose. A SKILL.md body is
+  documentation an agent reads, not an execution surface, so it emits no liveness signal and has no
+  failure mode to route — a 5-field observability schema over a prose edit would be ceremony, not
+  coverage. `hr-observability-layer-citation`'s layer-7 wording is not engaged. No soak-gated or
+  time-gated close criterion exists, so 2.9.1 does not fire.
 - **Phase 2.10 ADR / C4** — skipped, and the conclusion is not drawn from a keyword grep. The change
   introduces no external human actor, no external system or vendor, no container or data store, and
   no actor↔surface access relationship; it adds and removes no cron monitor, heartbeat slug, or
