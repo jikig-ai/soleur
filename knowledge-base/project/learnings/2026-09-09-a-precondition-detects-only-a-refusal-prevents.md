@@ -176,6 +176,17 @@ A **quoted** heredoc with values passed through a generated prelude fixes both a
     documented the residue in-place on the two trackers that stay open (net -1). Prevention: read
     the rule body before citing it as a mandate.
 17. **The three P0s.** Recovery and prevention as the body above.
+18. **The A2 adoption itself shipped unguarded.** The two A1 suites guard their `source` of
+    `test-helpers.sh` with `|| exit 2`; the three A2 suites — the ones A2 exists to protect — did
+    not, and two of them run without errexit by design while the third sources the helper above
+    the point errexit becomes active. Measured: with the path unresolvable, bash printed "No such
+    file or directory" and each suite ran to completion, rc != 97 — the tripwire gone, nothing
+    saying so, and the textual adoption metric still counting all three as adopters. Found by the
+    ship-gate completeness consult, after seven review agents and 22 green suites. Recovery:
+    guarded all three, verified by in-place mutation (control rc=0, mutant rc=2, restore
+    byte-identical). Prevention: when a PR adopts one guard shape in some files and another in
+    others, the difference is a finding, not a style choice — diff the adoption sites against each
+    other, not only against the pre-adoption state.
 
 ## Related
 
