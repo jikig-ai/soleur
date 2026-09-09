@@ -132,7 +132,7 @@ the divergence list is the `REHEARSAL_DIVERGENCE` literal in
 
 | Mechanism | Property it would buy | What already covers it |
 |---|---|---|
-| Re-dispatch the rung-2 rehearsal | (1), (2) | The 2026-09-04 run passed and its hash still binds. A re-run costs a live paid host (~€0.02, ~8 min per the runbook) plus another environment approval, and attests the same bytes. **Cut.** |
+| Re-dispatch the rung-2 rehearsal | (1), (2) | The 2026-09-04 **boot** passed and its hash still binds — note the RUN is marked `conclusion: failure`, because the in-run capture step failed to read Better Stack; the host itself booted and reported. A re-run costs a live paid host (~€0.02, ~8 min per the runbook) plus another environment approval, and attests the same bytes. **Cut.** |
 | A bespoke freshness check on the committed evidence | (4) | `.github/workflows/infra-validation.yml`'s `Rung-2 evidence freshness (active only once evidence exists)` step is dormant while the file is absent and arms itself the moment it lands. **Cut.** |
 | A hand-written or hand-edited `.env` | (1) | Refused by AC1 and by the whole point of the capture. **Cut.** |
 | A hand-rolled secret-regex battery in the ACs | exposure control | `.github/workflows/secret-scan.yml` (gitleaks, pinned, blocking on every `pull_request`) already scans this diff. AC5 asserts *that* gate rather than competing with it. **Cut to a targeted residual check.** |
@@ -245,8 +245,16 @@ plan, plus two that confirmed existing choices.
 **If this lands broken, the user experiences:** a git-data host born from a cloud-init whose
 boot was never actually proven — the store holding every connected user's source code coming up
 with an unmounted LUKS device, a wrong repo root, or the metadata-egress rule not loaded. The
-user-visible shape is source code that is missing, unreachable, or resident on the plaintext
-volume rather than the encrypted one.
+user-visible shape is source code that is missing or unreachable.
+
+**Scope-out, corrected at review (2026-09-09):** an earlier revision of this line also listed
+"resident on the plaintext volume rather than the encrypted one" as a failure shape. That is
+wrong and inverts the design. `git-data-bootstrap.sh` pins the wording itself (AC30):
+`luks_mounted` is about the DEVICE, and `REPO_ROOT` **is** the plaintext volume until the
+cutover — by design. Repositories are NOT encrypted at rest pre-cutover, and this evidence does
+not claim otherwise. Treating that state as a failure would have let a reader infer the opposite
+guarantee from a green boot. Encryption-at-rest for `REPO_ROOT` is the cutover's job, not this
+rehearsal's.
 
 **If this leaks, the user's data is exposed via:** the file lands in a **public** repository.
 The vector is the boot telemetry the capture transcribes into the header. Bounded upstream: the
@@ -609,6 +617,13 @@ so this is not discovered on the remote.
   > sits on `t[0-9]{6}_soleur`, and that hardcodes a six-digit team id. The positive
   > `$BS_TABLE`/`$BS_TABLE_S3` counts above are the convention-independent half: they assert the
   > tokens SURVIVED unexpanded rather than enumerating what an expansion would look like.
+  >
+  > **Corrected at review (2026-09-09):** this check has **no confidentiality value**. The expanded
+  > values are already public on `main` in this same repo — `scripts/lib/betterstack-sources.sh`
+  > publishes the source ids, both table names and both S3 names, and `scripts/betterstack-query.sh`
+  > documents the `t<TEAM_ID>_` convention. What the literal-token discipline actually buys is
+  > **provenance**: the file is a faithful transcript of what the script ran. Do not relax a genuine
+  > control later on the belief that this one was protecting secrecy.
 
 **AC7 — The `nft_metadata_drop` reading is taken by a direct Better Stack read — not from the
 capture output, and not from the evidence file.**
