@@ -31,9 +31,18 @@ only validation was a shape `case` that refused the userinfo/path/scheme family
 `--noproxy '*'` were intact and irrelevant, which is the same sentence `zot-inventory.sh`'s prologue
 writes about `SSLKEYLOGFILE`.
 
-Closing that needs an allowlist. The obstacle to an allowlist is that roughly a dozen suites drive
-the script through a stub host (measured values include `stub`, `h`, `x`, `dummy-host`,
-`synthetic.example.invalid`, `127.0.0.1`, and empty), and a pin that refuses those breaks them all.
+Closing that needs an allowlist. The apparent obstacle was that roughly a dozen suites set
+`BETTERSTACK_QUERY_HOST` to a stub value (measured: `stub`, `h`, `x`, `dummy-host`,
+`synthetic.example.invalid`, `127.0.0.1`, empty), and a pin refusing those looked like it would
+break them all.
+
+**That premise was largely false, and it is corrected here rather than left standing.** Measured at
+review: **nine of the eleven never reach the real script.** They set the variable and then route
+around it entirely — each through its own script-substitution seam (`INNGEST_ZOT_BOOT_QUERY_BIN`,
+`FLIP_ROLLOUT_QUERY_BIN`, `CI_DEPLOY_SENTRY_BQ`, `ZOT_LOG_7440_QUERY_BIN`) or a sandbox stub. Their
+stub host only satisfies the *caller's* own presence guard. All eleven were executed on the pinned
+branch at rc=0. The decision below is unchanged — it is about what a seam may be, not about how many
+suites needed one — but a reader must not infer that nine suites were left broken.
 
 The locally obvious repair is an opt-in environment variable — `BETTERSTACK_QUERY_HOST_TEST_PIN=0`,
 or any `_ALLOW_` / `_TEST_PIN` spelling — that tests set and production does not. The script's own
@@ -111,12 +120,40 @@ in a script of their choosing, with the host pin fully intact. That is verbatim 
 to reject the env-declared pin seam, applied to a seam that already ships.
 
 This is named rather than papered over. After this change the **script-level** property holds and
-the **system-level** one does not. The corollary above is written to acknowledge those shipped
-exceptions rather than to be contradicted by two files on the day it lands; closing
-`BETTERSTACK_QUERY_SH` is out of scope for #7898 and is recorded in that PR's Non-Goals.
+the **system-level** one does not.
 
-**Two classifier gaps stay open**, both filed rather than fixed here, because #7898's AC5 forbids
-touching the classifier's predicates in that PR:
+**And the seam is far wider than two files.** An earlier draft of this ADR named
+`BETTERSTACK_QUERY_SH` alone and called it "a strict superset". Measured at review:
+**12 distinct env-declared script-substitution variables across 17 files, all production** —
+`BETTERSTACK_QUERY_SH`, `BETTERSTACK_QUERY_SCRIPT`, `ZOT_BQ_OVERRIDE`, `CI_DEPLOY_SENTRY_BQ`,
+`FLIP_ROLLOUT_QUERY_BIN`, `HOSTNAME_MISLABEL_BQ`, `INNGEST_6407_BQ_OVERRIDE`,
+`INNGEST_SERVING_QUERY_BIN`, `INNGEST_ZOT_BOOT_QUERY_BIN`, `REGISTRY_PREFLIGHT_QUERY_CMD`,
+`ZOT_DISK_SAMPLE_QUERY_CMD`, `ZOT_LOG_7440_QUERY_BIN` (a wider pattern finds 14). This is not a
+residual with two exceptions. **It is the repo's established convention** for testing anything
+downstream of `betterstack-query.sh`.
+
+**So the corollary must say why a script seam is permitted where a host seam is not**, or it reads
+as an arbitrary exception to a practice with a dozen precedents and will not survive contact with
+the next author:
+
+> A **script** seam substitutes the code under test. Any reviewer reading
+> `QUERY="${BETTERSTACK_QUERY_SH:-…/betterstack-query.sh}"` sees immediately that the real thing is
+> not running, and the shipped artifact is unweakened — the guard is still in the file, still
+> executes on every production path, and nothing about the substitution is silent.
+>
+> A **host** seam leaves the real code running and redirects only where its live credential goes.
+> The guard is present, the run looks normal, and the only thing that changed is the destination of
+> the secret. That is the difference: the first is visibly not-the-real-thing; the second is
+> invisibly not-the-real-guarantee.
+
+That distinction is the whole content of the decision, and it is why the twelve shipped script
+seams are not counter-examples to it. They remain a real system-level residual — an actor who can
+set `BETTERSTACK_QUERY_HOST` can equally set one of the twelve and receive the inherited
+credentials in a script of their choosing, with the host pin fully intact — and closing them is out
+of scope for #7898, recorded in that PR's Non-Goals.
+
+**Four classifier gaps stay open** (an earlier draft said two), all filed rather than fixed here,
+because #7898's AC5 forbids touching the classifier's predicates in that PR:
 
 - `ACQUIRES` does not know `read -rs`, so Rule C offers a *conditional* xtrace arm to
   `provision-doppler.sh`, whose Doppler personal token is bound by `read -rs` **after** the prologue
@@ -124,5 +161,10 @@ touching the classifier's predicates in that PR:
   either, which is the same defect in three `community/*-setup.sh` files.
 - Rule D matches the literal token `curl`, so a call through `"$CURL_BIN"` (or any variable
   indirection) is unclassified. No current offender uses that seam.
+- `ACQUIRES` also requires a `_TOKEN|_KEY|_SECRET|_PASSWORD|_PAT` suffix, so a runtime-minted
+  credential under any other name — `ACCESS_JWT=$(…)` in `bsky-community.sh` — is invisible to it.
+- `CURL_AUTH_HEADER` matches `Authorization|X-API-Key|Private-Token` only, so a vendor-specific
+  auth header (`X-Environment-Key`, Flagsmith) does not mark a call credentialed. Measured: that is
+  why the one unconfined `curl` among the fifteen went unreported until review.
 
 Both are recorded in #7898 with upgrade triggers.

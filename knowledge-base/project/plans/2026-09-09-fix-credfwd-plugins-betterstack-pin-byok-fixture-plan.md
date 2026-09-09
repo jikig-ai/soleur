@@ -1183,7 +1183,13 @@ logs:
   retention: "90 days for Actions logs (repo default); Better Stack per-source retention for the hosted marker; nothing is retained for layer 7"
 
 discoverability_test:
-  command: "python3 scripts/lint-shell-trace-credential-refusal.py <the 15 literal paths from `## Files to Edit`>"
+  # Self-contained on purpose (#7898 review): the earlier form embedded the prose
+  # placeholder "<the 15 literal paths from `## Files to Edit`>", which is a bash
+  # SYNTAX ERROR -- `<` is an input redirection and the backticks open command
+  # substitution -- and preflight Check 10 EXECUTES this string. It derives the
+  # paths from the diff, and the `15 scanned` in expected_output is what stops a
+  # degenerate empty match from falling through to a repo-wide baselined run.
+  command: "python3 scripts/lint-shell-trace-credential-refusal.py $(git diff --name-only origin/main...HEAD -- 'plugins/**/*.sh')"
   expected_output: "OK: 15 scanned file(s), 0 baselined (A/B/C), 0 baselined (D)"
 ```
 
@@ -1681,6 +1687,61 @@ tracking issue rather than in-plan documentation:
 - **`bsky-setup.sh`, `x-setup.sh` and `discord-setup.sh` write the user's tokens into `.env`.**
   Transport confinement does nothing about a `.env` that gets committed. Named here so it is not
   assumed closed by this PR.
+
+### Deferred at review (#7986 panel), with reasons
+
+Ten agents plus a CTO ruling. What was fixed inline is in the review commit; these
+are the ones deliberately NOT fixed, recorded so the deferral is checkable rather
+than implied.
+
+- **The drawdown trigger is enforced by an ADVISORY job, not a required one.** This
+  plan and #7898 both say `--changed` bypasses the baseline so a PR touching a listed
+  script "must remediate it in the same PR — enforced rather than aspirational."
+  Measured: the only dispatcher in `--changed` mode is `lint-bot-statuses`, which is
+  absent from `scripts/required-checks.txt` and from the ruleset. The required
+  dispatcher applies the baselines and blocks GROWTH only. The claim is false as
+  written; promoting the job is a ruleset change with its own blast radius and is not
+  this PR's to make. **Recorded here because the framing is load-bearing for #7898.**
+- **Rule D's destination limb never runs on `resp=$(curl …)`.** The token is
+  `resp=$(curl`, so `_destination_vars` returns before the destination channel
+  executes — roughly 14 of the call sites this PR confined were never checked for a
+  destination pin. The specific instance is closed (all seven community API bases are
+  now `readonly`, so `${VAR:-…}` cannot reintroduce it), but the CLASS is open and
+  AC5 forbids classifier edits here.
+- **Eight operator scripts got `--noproxy '*'` and no diagnostic.**
+  `SOLEUR_TRANSPORT_DIAG` and the proxy-aware failure line exist only in the seven
+  `community/` scripts. The same four-competing-causes argument applies verbatim to
+  `cf-token-scope.sh`, the four `flag-*`, `provision-doppler.sh`, `trigger.sh` and
+  `set-role.sh`. Deferred because the helpers are 7-way duplicated (below) and wiring
+  eight more copies is the wrong move — extracting them first is.
+- **The transport helpers are duplicated verbatim across seven files with no tests.**
+  Measured md5-identical after normalising script/platform names. `community-router.sh`
+  is the natural shared home. Not done here: these ship standalone to customers, so
+  the sourcing story needs its own design.
+- **`community-router.sh` leaks under `set -x` and is un-remediated.** `${!var:-}`
+  indirect expansion prints the VALUE, and `-x` does not survive its `exec`, so the
+  router leaks first and alone while the leaves' new refusals never fire. It is the
+  documented entry point for four of the seven scripts fixed here. Sixteenth file,
+  same directory — genuinely out of the stated 15-file scope.
+- **`discord-setup.sh` is a seventeenth sibling with the identical threat model**
+  (`set -a; source .env; set +a` post-prologue, live token over bare `curl`). Still in
+  the A/B/C baseline, so the linter records it.
+- **The `unset SSLKEYLOGFILE …` line now has 17 copies and no parity mechanism.**
+  `--disable`/`--noproxy` propagate because Rule D DERIVES them; this line is a pure
+  literal with no guard, so nothing detects deletion from one copy or a new
+  TLS-subverting variable. A Rule E is ~15 lines and reuses the baseline machinery —
+  blocked here by AC5.
+- **New HALT reasons land outside the t22 registry** (`redact-sentinel.test.sh`),
+  which enumerates reasons per registered file; `flag-list/scripts/list.sh` is not
+  registered, so `SOLEUR_FLAG_LIST_HALT` contributes nothing to its growth floor.
+- **The rung2 suite carries 4 rows of pre-existing floor slack** (79 measured against
+  `_FLOOR=75`), so the row the floor was bumped for is itself deletable. Pre-existing
+  shape; raising it is a one-line change in a file this PR barely touches.
+- **The allowlist is sound only in combination with curl's URL parser.** Backslash,
+  space, `%` and `,` separators pass the bash shape arm and are refused downstream by
+  curl as `Bad hostname`. Nothing is exploitable as shipped, but the comment claims
+  the extraction is sound "on its own input" and that is true only with the coupling
+  named. Widening the shape arm is the safer fix and belongs with the Rule E work.
 
 ## References
 

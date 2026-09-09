@@ -135,3 +135,125 @@ with a credential fix whose operator half exposes every customer's rows ships th
 **Still not adopted** — the one-shot batching is the operator's explicit instruction. Mitigated by
 ordering C last. This is the single most-repeated dissent in the review and the operator may want to
 overrule the batching.
+# Decision D1 — DECLINE wrapping `createSyntheticUser` in `withGoTrueRetry`
+
+Raised by: `data-integrity-guardian` (MEDIUM, tagged pr-introduced)
+Decided by: lead, 2026-09-09. Not routed to the operator — a technical fork is
+not an operator question (`hr-technical-fork-is-not-an-operator-question`), and
+not routed to the CTO because it is a mechanical/taste call, not an
+architecture fork with material trade-offs.
+
+## The finding
+
+T10 raises this file's `auth.admin.createUser` volume, and
+`apps/web-platform/test/helpers/gotrue-retry.ts` › `withGoTrueRetry` exists to
+retry past GoTrue rate limits. Four sibling tenant-isolation suites use it;
+this file does not.
+
+## Why DECLINE
+
+1. **It is not pr-introduced in kind.** Measured: `admin.createUser` occurs at
+   ONE call site on `origin/main` and ONE on this branch — it lives inside the
+   shared `createSyntheticUser` helper. What changed is call VOLUME, from 7 to
+   9 `grantDelegation` sites (~29%). The agent's "two more un-retried calls"
+   is true of invocations, not of sites, and no site in this diff is new and
+   unretried. The gap is pre-existing and applies equally to all nine.
+
+2. **AC11 forbids it, explicitly and blocking.** "The diff of that test file
+   contains no occurrence of `retry`, `retries`, `attempt`." Importing
+   `withGoTrueRetry` puts the token in the diff. An AC is a contract; the
+   sanctioned move when one is wrong is to AMEND it in the open, not to
+   satisfy a looser reading of it.
+
+3. **AC11 is not wrong here, which is why it is not amended.** #7055's whole
+   thesis is that this suite's redness is shared-database state and NOT a
+   retry budget. Introducing retry machinery into the very file carrying that
+   claim weakens it and hands the next reader a precedent for adding one on
+   the assertion path — the failure the issue exists to prevent. The
+   distinction between "setup retry" and "assertion retry" is real to me and
+   invisible in a diff six months from now.
+
+## Residual, stated rather than hidden
+
+GoTrue rate-limit exposure on this file grows ~29% and is unmitigated. If the
+suite starts failing with GoTrue 429s or the opaque "Database error deleting
+user", that is the cause, and the fix is to wire `withGoTrueRetry` into
+`createSyntheticUser` in a change that owns this file's whole fixture strategy
+and can amend AC11 deliberately.
+
+NOT filed as an issue: the cost-of-filing gate puts a one-line helper swap far
+below the crossover, and filing it would grow the backlog for work whose
+trigger has not fired. Recorded here and surfaced in the PR body instead.
+
+
+---
+
+# CTO RULING — O7 concurrency group (BINDING, implement verbatim)
+
+Ruling: **Option C** — delete the workflow-level `concurrency:` block; put a
+repo-wide mutex on the `tenant-integration` JOB only, group literal
+`dev-supabase-exclusive`, `cancel-in-progress: false`. Plus Option B's
+diagnostic arm in the verdict script (fails closed, explains eviction).
+
+## Why the shipped change was wrong
+
+The workflow has NO `paths:` filter under `on:` (by design, #5585 — the
+always-run aggregator must report a required context on EVERY PR). So the
+repo-wide group at WORKFLOW level enrols every PR run + every push to main,
+not the ~5% touching the isolation surface. The PR's own comment claiming
+"path-filtered, so the population that can queue is small" is contradicted by
+the same file's header comment.
+
+Measured: 85 first-parent merges in 14 days (~6/day, three inside one hour on
+2026-09-07), plus every push to every open PR. Eviction = steady state.
+
+Asymmetry: ref-scoped, the only evictor is a new push to the SAME PR, which
+moves the head SHA — the evicted run was already superseded, harmless by
+construction. Repo-wide, the evictor is on a DIFFERENT ref and the victim's
+head SHA is still current -> red required check on an unrelated PR.
+
+Mechanism confirmed: GitHub keeps at most ONE pending entry per group; a third
+arrival cancels the pending one. `cancel-in-progress: false` protects only the
+entry already executing.
+
+## What C buys
+
+- group membership: only runs with tenant=true (pushes to main + ~5% of PRs)
+- required context still reported on every PR (detect-changes + aggregator stay
+  OUTSIDE the group)
+- merge_group emits tenant=false -> job skipped -> never joins the group
+- independent win: the `Apply migrations to dev` step in the same job is itself
+  unsafe run twice concurrently against one project; C fixes that on its own
+  terms, which is why C beats A (plain revert)
+
+## Rejected
+
+- B (keep workflow-level): disqualified by the no-paths-filter measurement
+- A (revert): safe, but forfeits the migration-apply correctness win; remains
+  the escape hatch if C's residual proves worse
+- D (pg_advisory_lock): session-scoped lock unsafe behind a TRANSACTION-mode
+  pooler — the backend can be handed to another client, so the lock's session
+  identity is not the run's identity. Also misses the migration-apply step.
+- E (second Supabase project): rejected upstream; also trips
+  wg-record-recurring-vendor-expense-before-ready for an UNCONFIRMED hypothesis
+
+## Honestly not confirmed
+
+Expected a merge-queue stall hazard; found the `merge_queue` ruleset rule was
+added by #5780 and REVERTED 2026-06-30, so it is dormant, not live. Flagged only
+because it would reappear on re-adoption — and C is immune either way.
+
+## Residual, accepted
+
+Three-way overlap inside one job's runtime still evicts a pending job. Verdict
+stays RED (fail-closed) because detect-changes said the tree touches the
+isolation surface and the suite never ran. Victim is by construction a run on
+this surface, never an unrelated PR. Remedy named in the annotation: "Re-run
+failed jobs".
+
+## No ADR required
+
+CI topology change, not a new service or data model. The `dev-supabase-exclusive`
+literal would merit an ADR only if a second workflow joins it.
+
+Full drafted YAML + shell replacements are in the agent report; implement verbatim.

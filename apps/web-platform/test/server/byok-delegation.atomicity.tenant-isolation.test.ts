@@ -1237,8 +1237,24 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       //
       // It lives INSIDE `describe.skipIf(!INTEGRATION_ENABLED)` on purpose:
       // outside it, this file would report a non-zero test count even without
-      // TENANT_INTEGRATION_TEST=1, which is precisely the "a check that passed
-      // because its suite was skipped" signal the acceptance command relies on.
+      // TENANT_INTEGRATION_TEST=1, so a fully-skipped run would look like a run
+      // that executed something.
+      //
+      // READ THE LIMIT PLAINLY (#7898 review). An earlier version of this comment
+      // said that placement preserves "the signal the acceptance command relies
+      // on". THERE IS NO SUCH ACCEPTANCE COMMAND IN CI. The workflow's
+      // "Run tenant-isolation tests" step invokes `npm run test:ci -- test/server/`
+      // and asserts NOTHING about the executed-test count, so the claimed external
+      // witness does not exist. What this floor actually covers is a scenario
+      // silently deleted or renamed while the suite RUNS. What it cannot cover is
+      // the suite not running at all: flipping `describe.skipIf` to `describe.skip`,
+      // or INTEGRATION_ENABLED's predicate, skips all nine cases INCLUDING this
+      // floor, vitest exits 0, and the gate reads success. That gap is closed by
+      // the workflow's own arrangement (detect-changes gates the job on the
+      // isolation surface, and the gate-verdict script fails closed on anything
+      // other than success/skipped), NOT by this assertion -- and stating it here
+      // is the point, because a floor that is believed to cover the skip case is
+      // worse than one known not to.
       //
       // Counting is anchored on the source's own dispatch lines (`    test(` at
       // the describe body's indent), not on a token that also appears in prose.
