@@ -18,7 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # `-e`, which matches test-helpers.sh -- no `+e` here, deliberately. The source sits
 # ABOVE this file's assert_eq/assert_contains redefinitions so those keep winning.
 # shellcheck source=plugins/soleur/test/test-helpers.sh
-source "$SCRIPT_DIR/test-helpers.sh"
+source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: could not source $SCRIPT_DIR/test-helpers.sh" >&2; exit 2; }
 
 set -euo pipefail
 

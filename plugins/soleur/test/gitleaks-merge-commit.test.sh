@@ -43,7 +43,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
 # deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
 # shellcheck source=plugins/soleur/test/test-helpers.sh
-source "$SCRIPT_DIR/test-helpers.sh"
+source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: could not source $SCRIPT_DIR/test-helpers.sh" >&2; exit 2; }
 
 set +e -uo pipefail
 
