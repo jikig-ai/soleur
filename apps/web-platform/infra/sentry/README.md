@@ -81,11 +81,12 @@ First-time adoption of the issue-alert rules is done. Since #7650 Phase 2 this r
 declares **28 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was 29
 `sentry_issue_alert`) and plans clean against the full root.
 
-The third `sentry_issue_alert` is `git-data-boot-warning`, which landed after
-the adoption capture was taken and so was never in the migration's scope. This
-paragraph said **2** until 2026-09-06 (#7826) while line 5 of this same file
-already said 3 — the file contradicted itself, and the stale half was the one
-the adoption tooling's error text had copied.
+`git-data-boot-warning` WAS a third `sentry_issue_alert` — it landed after the
+Phase 2 adoption capture was taken and so was never in that migration's scope.
+Phase 3.4 (#7985) migrated it, which is why this paragraph now says 28 + 2.
+The two survivors are blocked on upstream 950, which is fixed but unreleased.
+Historical note, kept because this count has been wrong twice: this paragraph
+said **2** until 2026-09-06 (#7826) while line 5 of this same file
 
 The 27 were adopted by CONFIG-BLOCK adoption, not by a `terraform import`
 command: 27 `import { to = sentry_alert.<n> }` blocks paired with 27

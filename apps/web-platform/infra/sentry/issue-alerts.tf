@@ -206,9 +206,9 @@ resource "sentry_issue_alert" "auth_per_user_loop" {
 # FIELD MAPPING, each verified against a migrated block in this same file rather than inferred
 # from the provider docs: `frequency` -> `frequency_minutes`; `project` -> `monitor_ids`;
 # `conditions_v2.event_frequency{comparison_type="count"}` -> `trigger_conditions.
-# event_frequency_count` (proven at `sandbox_startup_failure`'s sibling with the identical
-# `interval = "1h", value = 0`); `filter_match` -> `action_filters[].logic_type` ("any" is in
-# use twice); `IS_IN` -> `match = "in"` with the SAME comma-joined string (8 uses);
+# event_frequency_count` (proven at `git_data_boot_fatal` with the identical
+# `interval = "1h", value = 0`); `filter_match = "any"` -> `logic_type = "any-short"`, which is
+# what LIVE carries — see below; `IS_IN` -> `match = "in"` with the SAME comma-joined string;
 # `IssueOwners`/`NoOne` -> `issue_owners`/`NoOne` (proven together at `byok_cap_exceeded`).
 #
 # TEMPORARY ADOPTION MECHANISM — retire once applied, exactly as Phase 2's 54 blocks were
@@ -221,6 +221,13 @@ resource "sentry_issue_alert" "auth_per_user_loop" {
 # live instance id that does not exist in a fresh org, so a DR rebuild would fail rather than
 # create. That is the same constraint the Phase 2 header records, and the same reason to retire
 # them promptly.
+#
+# THE ID IS A WORKFLOW ID, NOT A RULE ID. These are DISJOINT identifier spaces and both endpoints
+# answer for the same alert, so the wrong one is not an error — it is a plausible number that
+# adopts a different object. `GET /rules/` reports 775998 for this rule; `GET /workflows/` reports
+# 804298, and 804298 is what `sentry_alert` imports. Every Phase 2 import id is a workflow id
+# (spot-checked 715628 and 566683 against the capture). Verified here by reading the live
+# workflow, whose body also confirmed every field below rather than only its id.
 removed {
   from = sentry_issue_alert.git_data_boot_warning
   lifecycle {
@@ -230,7 +237,7 @@ removed {
 
 import {
   to = sentry_alert.git_data_boot_warning
-  id = "${var.sentry_org}/775998"
+  id = "${var.sentry_org}/804298"
 }
 
 resource "sentry_alert" "git_data_boot_warning" {
@@ -248,10 +255,18 @@ resource "sentry_alert" "git_data_boot_warning" {
 
   action_filters = [
     {
-      # `any`, carried over from the old `filter_match = "any"`: these stages are alternatives,
-      # not conjuncts. Behaviourally identical while there is one condition, preserved so adding
-      # a second value does not silently become a conjunction.
-      logic_type = "any"
+      # `any-short`, NOT `any`. Sentry's own representation has no `any`: the live capture
+      # carries only `all` (41) and `any-short` (19), and all four rules whose deprecated
+      # `filter_match` was `"any"` — including this rule's sibling `git_data_boot_fatal` —
+      # migrated to `any-short`, because the Phase 2 generator emits `logicType` straight from
+      # live. Read back from live workflow 804298, which carries `"logicType": "any-short"`.
+      #
+      # An earlier revision of this block wrote `"any"` and justified it as "in use twice". That
+      # count was of PROSE MENTIONS in two comments, whose blocks both assign `any-short` — the
+      # index-by-phrasing error, and it would have made the import plan an `["update"]` that
+      # rewrites the live condition-group type instead of the intended no-op adoption.
+      # Semantically both are OR, so this is drift rather than a severity change.
+      logic_type = "any-short"
       conditions = [
         # `in`, not two `eq` filters: the values are a closed set that grows with the emitter's
         # warning vocabulary, and one list keeps the reconciliation suite's assertion single-sited.
