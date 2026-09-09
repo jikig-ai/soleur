@@ -108,10 +108,18 @@ also the ones a session leans on hardest when it is tired and wants to be finish
 
 ## Prevention
 
-- **Not yet enforced anywhere — tracked as #7957.** The natural home is
+- **Not yet enforced anywhere — tracked as #7957.** *(Superseded 2026-09-09: enforced —
+  see the update below.)* The natural home is
   `work/SKILL.md`'s wrapper-as-guard paragraph, which is also where the false clause
   lives ("a backgrounded command emits a completion notification precisely so you need
-  not infer from a tail"). The corrected text is in #7957, ready to apply.
+  not infer from a tail"). The corrected text is in #7957.
+
+  > **Update 2026-09-09 (#7957):** applied. `work/SKILL.md`'s wrapper-as-guard
+  > paragraph now carries the corrected clause, so this item is enforced rather than
+  > filed. Both blockers recorded below are also gone: #7955 repaired the 12
+  > markdownlint violations (`markdown-lint: 1 file(s) clean`), and the correction
+  > landed as prose in an existing paragraph, so it never needed a new
+  > `AGENTS.rules.md` entry and the byte ratchet was never engaged.
 - It was NOT applied in this PR for two reasons, both worth recording: `AGENTS.rules.md`
   is at `[WARN]` on exactly its 46000-byte ratchet, so a new rule would push the linter
   to `[REJECT]`; and `work/SKILL.md` carries 12 pre-existing markdownlint violations at
@@ -121,6 +129,11 @@ also the ones a session leans on hardest when it is tired and wants to be finish
   PR is a different subsystem.
 - So the honest status is: **measured, documented, filed, not enforced.** The gap between
   the third and fourth of those is the thing this file exists to make visible.
+
+  > **Closed 2026-09-09 (#7957):** the status is now **enforced** — the corrected clause is
+  > in `work/SKILL.md`. The gap this bullet named lasted one day. It is left standing rather
+  > than rewritten because the interval between filing and enforcing is the measurement, and
+  > deleting it would delete the evidence for the claim the file makes.
 - The 2026-09-07 learning's Prevention section should be read as covering consumed
   instruments too; this file is the cross-reference for that.
 

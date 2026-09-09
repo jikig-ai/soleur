@@ -54,8 +54,21 @@ The reviewed artifact gets mutation testing, assertion floors and instrument sel
 The five-line bash wrapper that *reports* the result gets none, so it is where the
 could-not-measure collapse survives. Three rules follow:
 
-- **Never take a verdict from a partial artifact.** A backgrounded command has a
-  completion notification precisely so you do not have to infer from a tail.
+- **Never take a verdict from a partial artifact — and never from the completion
+  notification either.**
+
+  > **Superseded 2026-09-09 (#7957):** this bullet originally read *"A backgrounded
+  > command has a completion notification precisely so you do not have to infer from a
+  > tail."* That is false, and it is retained here rather than deleted because it is the
+  > claim #7957 measured. A background task's exit code is the LAST command in the
+  > backgrounded string, so a trailing convenience line becomes the verdict: measured
+  > three times in one session, the notification reported `exit code 0` while the log's
+  > own `COMMIT_RC` recorded `git commit` returning 1, because the string ended in a
+  > `git log`. A fourth run killed mid-`tsc` by the memory reaper also notified
+  > `completed` — could-not-measure rendered as measured-good, which is the parent class
+  > this file is about. Write the real code yourself (`echo "RC=$?" >> log`) and read
+  > that. The notification is authoritative for LIVENESS (has it exited?), never for
+  > VERDICT (did it succeed?).
 - **Never pipe a command whose exit code is the result.** `cmd | tail` discards the
   status *and* the evidence. Redirect to a file and read `$?`.
 - **Make "the loop ran" observable.** Print the count. `0 failures` and `0 executions`

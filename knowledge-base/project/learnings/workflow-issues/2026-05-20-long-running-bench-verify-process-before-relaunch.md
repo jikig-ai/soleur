@@ -55,6 +55,8 @@ When a long-running background bash task appears unresponsive, **do not relaunch
 
 3. **Wait for the harness's completion notification.** For Bash tool background tasks, the `<task-notification>` is fired on process exit with a definitive `status` field. Trust that signal over polling.
 
+   > **Scoped 2026-09-09 (#7957):** this is a LIVENESS claim — *has the task exited?* — and it stands. It is **not** a verdict claim, and the notification must not be read as one: its exit code is the LAST command in the backgrounded string, so a trailing convenience line becomes the reported status. Measured under #7957: three commits notified `exit code 0` while `git commit` had returned 1, and a run killed mid-`tsc` also notified `completed`. Where this file reads `exit code 0` off a notification (Timeline step 7), the success finding rests on the log showing Phases 3-5 written, not on the notification. For a verdict, redirect and read the command's own `RC=`.
+
 **Only after all three checks confirm death should a relaunch be considered.** And the relaunch should preserve the cache file from the prior run (e.g., `--cache-paraphrases <path>`) so partial work isn't lost.
 
 ## Prevention
