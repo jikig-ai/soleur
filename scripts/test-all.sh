@@ -171,8 +171,33 @@ fi
 # --enumerate is SHIFTED off argv so the group is still read positionally below
 # (`bash scripts/test-all.sh --enumerate scripts`), keeping one argv convention.
 _ENUMERATE=0
+_EMIT_COMMANDS=0
 if [[ "${1:-}" == "--enumerate" ]]; then
   _ENUMERATE=1
+  shift
+elif [[ "${1:-}" == "--enumerate-commands" ]]; then
+  # --enumerate-commands publishes the COMMAND each registration would run, not just its
+  # label. It raises the enumerate flag as WELL as its own, deliberately: nine sites in this
+  # file gate on `_ENUMERATE`, and one of them is the entire "takes no lock" property
+  # (tc_acquire is skipped, so this path cannot deadlock a gate run that already holds the
+  # lock). A mode that set only its own flag would re-acquire the lock and reintroduce the
+  # deadlock `--enumerate` exists to avoid, so the two flags are not independent and must not
+  # be made so.
+  #
+  # RECORD CONTRACT. Two record types, both TAB-delimited, one per line:
+  #   SUITE_COMMAND\t<label>\t<argv0>\t<argv1>...   — from run_suite; fields 3..N are the
+  #                                                    exact argv the runner would exec.
+  #   SUITE_COMMAND_DECLINED\t<label>\t<rerun>       — from skip_suite; field 3 is a HUMAN
+  #                                                    DISPLAY string, never argv. The two
+  #                                                    types are distinct precisely so a
+  #                                                    consumer cannot parse a display string
+  #                                                    as a command.
+  # ESCAPING: none. A TAB or NEWLINE inside an argv element would corrupt the record, so the
+  # emitter REFUSES rather than emitting a corrupt line (fail closed, exit 2). No registration
+  # in this file carries such an element today; if one ever does, the consumer must learn a
+  # real encoding rather than the emitter silently mangling it.
+  _ENUMERATE=1
+  _EMIT_COMMANDS=1
   shift
 fi
 
@@ -716,10 +741,57 @@ _shard_enumerate_emit() {
   printf 'SUITE_REGISTRATION\t%s\n' "$1"
 }
 
+# Emit one SUITE_COMMAND record: label, then the argv verbatim, TAB-delimited.
+# Refuses (exit 2) on an element containing a TAB or NEWLINE — see the record contract at the
+# --enumerate-commands parse arm. A corrupt record read as a command list is worse than no
+# record, because the consumer cannot tell it was corrupted.
+_shard_enumerate_command_emit() {
+  local label="$1"; shift
+  local a
+  for a in "$label" "$@"; do
+    case "$a" in
+      *"$(printf '\t')"* | *"
+"*)
+        printf 'ERROR: --enumerate-commands cannot encode an argv element containing a TAB or NEWLINE (label=%s)\n' "$label" >&2
+        exit 2
+        ;;
+    esac
+  done
+  printf 'SUITE_COMMAND\t%s' "$label"
+  for a in "$@"; do printf '\t%s' "$a"; done
+  printf '\n'
+}
+
+# One dispatch point per registration function, so each function keeps a single
+# enumerate-mode conjunct line, and the mode choice lives here rather than being
+# duplicated at both call sites.
+_shard_enumerate_dispatch() {
+  local label="$1"; shift
+  if (( _EMIT_COMMANDS == 1 )); then
+    _shard_enumerate_command_emit "$label" "$@"
+  else
+    _shard_enumerate_emit "$label"
+  fi
+}
+
+_shard_enumerate_declined_dispatch() {
+  if (( _EMIT_COMMANDS == 1 )); then
+    _shard_enumerate_declined_emit "$1" "$2"
+  else
+    _shard_enumerate_emit "$1"
+  fi
+}
+
+# skip_suite's third positional is a human RERUN string, not argv — a distinct record type so
+# a consumer can never parse it as a command.
+_shard_enumerate_declined_emit() {
+  printf 'SUITE_COMMAND_DECLINED\t%s\t%s\n' "$1" "$2"
+}
+
 run_suite() {
   local label="$1"; shift
   _shard_selects || return 0
-  if (( _ENUMERATE == 1 )); then _shard_enumerate_emit "$label"; return 0; fi
+  if (( _ENUMERATE == 1 )); then _shard_enumerate_dispatch "$label" "$@"; return 0; fi
   suites=$((suites + 1))
   # --- Runtime ceiling (#7869) ---------------------------------------------
   #
@@ -883,7 +955,7 @@ skip_suite() {
   # functions increment `suites`, so filtering only one makes per-leg denominators and the
   # epilogue's decline accounting disagree about how many registrations the leg owned.
   _shard_selects || return 0
-  if (( _ENUMERATE == 1 )); then _shard_enumerate_emit "$label"; return 0; fi
+  if (( _ENUMERATE == 1 )); then _shard_enumerate_declined_dispatch "$label" "$rerun"; return 0; fi
   suites=$((suites + 1))
   skipped=$((skipped + 1))
   echo ""
