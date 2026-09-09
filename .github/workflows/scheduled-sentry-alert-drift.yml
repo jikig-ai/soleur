@@ -10,7 +10,7 @@
 #
 # WHY NOT ADD apps/web-platform/infra/sentry TO scheduled-terraform-drift.yml's
 # MATRIX INSTEAD. That leg would plan the FULL ROOT, which still refreshes the
-# three surviving `sentry_issue_alert` resources through Sentry's deprecated
+# two surviving `sentry_issue_alert` resources through Sentry's deprecated
 # alert-rule endpoint — with none of apply-sentry-infra.yml's brownout retry. It
 # would go red on Sentry's brownout calendar rather than on drift, which is how a
 # probe gets muted. This workflow makes ONE read-only GET against the

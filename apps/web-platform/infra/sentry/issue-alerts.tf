@@ -1,18 +1,37 @@
 # Sentry alerting for the web-platform project.
 #
-# ADOPTED (Phase 2, 2026-09-04): 27 of the 30 rules are managed as
-# `sentry_alert`, the non-deprecated resource. THREE remain on the deprecated
-# `sentry_issue_alert`, and they are not all there for the same reason:
+# ADOPTED: 28 of the 30 rules are managed as `sentry_alert`, the non-deprecated
+# resource. TWO remain on the deprecated `sentry_issue_alert`, and they are
+# blocked for ONE shared reason:
 #   - `auth-per-user-loop` and `sandbox-startup-failure` both use
 #     `event_unique_user_frequency_count`, which v0.15.7's `trigger_conditions`
 #     does not offer (verified against the provider schema at the pinned tag,
 #     not a changelog — upstream jianyuan/terraform-provider-sentry issue 950).
-#   - `git-data-boot-warning` landed later, after the adoption capture was
-#     taken, so it was never in the migration's scope at all.
-# The count is 27 + 3. An earlier revision of this header said 27 + 2 and named
-# only the first two; that was already false when this file's own README line 5
-# said 30, and the tripwire's error text carried the same stale two.
+# The count is 28 + 2.
 #
+# HISTORY OF THIS COUNT, because it has been wrong twice and both times the
+# wrongness outlived the edit that caused it. Phase 2 (2026-09-04) took it to
+# 27 + 3; a revision of this header then said 27 + 2 and named only the two
+# blocked rules, which was already false against this file's own README.
+# `git-data-boot-warning` was the third: never blocked by 950 (it triggers on
+# `event_frequency`), it lingered only because it post-dated Phase 2's adoption
+# capture. #7985 Phase 3.4 migrated it, taking the count to 28 + 2 — the same
+# arithmetic the stale revision asserted, now actually true.
+#
+# THE REMAINING TWO ARE A RELEASE WATCH, NOT A FIX WATCH. Upstream 950 was FIXED
+# on 2026-09-09 (PR #953, commit 0deba790) — seven days AFTER v0.15.7, the latest
+# release. Terraform consumes releases, so a closed upstream issue does not
+# unblock them. Tracked at #7985, whose follow-through probe polls for a release
+# that actually CONTAINS that commit rather than merely outranking the pin.
+#
+# > **Superseded 2026-09-09 (#7985 Phase 3.4):** the reading above is the
+# > 2026-09-06 measurement and is left exactly as taken. Since then
+# > `git_data_boot_warning` migrated, so the counts it cites are history: the
+# > `sentry_alert` set is now 28 and the surviving `sentry_issue_alert` set is
+# > TWO, not the three it names. Phase 3.4 added one further `removed{}`/
+# > `import{}` pair, which the forget/import bijection gate checks as a set and
+# > not against a hardcoded 27.
+
 # NAMES ARE LOAD-BEARING. `apps/web-platform/scripts/assert-byok-rules-exist.sh`
 # EXPECTED_RULES and the operator dashboard queries both key on the `name`
 # string. Preserve every byte.
@@ -107,11 +126,12 @@ data "sentry_project_issue_stream_monitor" "web_platform" {
 }
 
 # --------------------------------------------------------------------------
-# The THREE surviving `sentry_issue_alert` resources. Two CANNOT migrate:
-# event_unique_user_frequency_count is absent from trigger_conditions at v0.15.7
-# (upstream issue 950). The third, `git_data_boot_warning`, CAN — it uses
-# `event_frequency` and is unblocked; it stays only because it post-dates the
-# adoption capture. Do not read this banner as "all three are blocked".
+# The TWO surviving `sentry_issue_alert` resources. BOTH are blocked by the same
+# thing: `event_unique_user_frequency_count` is absent from `trigger_conditions`
+# at v0.15.7 (upstream issue 950 — fixed on main 2026-09-09, but unreleased, so
+# still blocking; see #7985). Unlike the previous revision of this banner, there
+# is no unblocked straggler among them — `git_data_boot_warning` was migrated in
+# Phase 3.4 and is now a `sentry_alert` above.
 # --------------------------------------------------------------------------
 
 resource "sentry_issue_alert" "auth_per_user_loop" {
@@ -176,44 +196,70 @@ resource "sentry_issue_alert" "auth_per_user_loop" {
 # `fallthrough_type = "NoOne"` is what makes this NON-paging: IssueOwners has no ownership rule on
 # this project, so the fatal router's "ActiveMembers" fallthrough pages the solo founder. NoOne
 # means it lands in the issue stream to be read, not pushed. That is the whole severity split.
-resource "sentry_issue_alert" "git_data_boot_warning" {
+# MIGRATED to `sentry_alert` (#7985 Phase 3.4, 2026-09-09). This rule was NEVER blocked by
+# upstream jianyuan/terraform-provider-sentry issue 950 — that issue is about
+# `event_unique_user_frequency_count`, and this rule triggers on `event_frequency`, which
+# `sentry_alert.trigger_conditions` already expresses as `event_frequency_count` in 11 of the
+# migrated blocks below. It stayed on the deprecated resource only because it landed AFTER
+# Phase 2's adoption capture was taken, so it was never in that migration's scope.
+#
+# FIELD MAPPING, each verified against a migrated block in this same file rather than inferred
+# from the provider docs: `frequency` -> `frequency_minutes`; `project` -> `monitor_ids`;
+# `conditions_v2.event_frequency{comparison_type="count"}` -> `trigger_conditions.
+# event_frequency_count` (proven at `sandbox_startup_failure`'s sibling with the identical
+# `interval = "1h", value = 0`); `filter_match` -> `action_filters[].logic_type` ("any" is in
+# use twice); `IS_IN` -> `match = "in"` with the SAME comma-joined string (8 uses);
+# `IssueOwners`/`NoOne` -> `issue_owners`/`NoOne` (proven together at `byok_cap_exceeded`).
+#
+# TEMPORARY ADOPTION MECHANISM — retire once applied, exactly as Phase 2's 54 blocks were
+# retired in #7826. `removed{}` forgets the OLD address without destroying the live object;
+# `import{}` re-adopts that same live object at the NEW address. A bare rename would make
+# Terraform DESTROY and RECREATE a live alert, changing its id and discarding its history.
+# The id below is the live rule read from the Sentry API on 2026-09-09.
+#
+# WHILE THESE BLOCKS REMAIN this root cannot be rebuilt from an empty state — `import{}` pins a
+# live instance id that does not exist in a fresh org, so a DR rebuild would fail rather than
+# create. That is the same constraint the Phase 2 header records, and the same reason to retire
+# them promptly.
+removed {
+  from = sentry_issue_alert.git_data_boot_warning
+  lifecycle {
+    destroy = false
+  }
+}
+
+import {
+  to = sentry_alert.git_data_boot_warning
+  id = "${var.sentry_org}/775998"
+}
+
+resource "sentry_alert" "git_data_boot_warning" {
   organization = var.sentry_org
-  project      = data.sentry_project.web_platform.slug
   name         = "git-data-boot-warning"
-  action_match = "all"
-  filter_match = "any"
+  enabled      = true
   # Unused frequency value (taken from the free ranges 6-9, 28-29, 31-59, 64+) so this rule's
   # dedupe window cannot be confused with a sibling's when reading the Sentry UI.
-  frequency = 31
+  frequency_minutes = 31
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
-  conditions_v2 = [
-    {
-      event_frequency = {
-        comparison_type = "count"
-        value           = 0
-        interval        = "1h"
-      }
-    },
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
   ]
 
-  # IS_IN, not two EQUAL filters: the values are a closed set that grows with the emitter's
-  # warning vocabulary, and one list keeps the reconciliation suite's assertion single-sited.
-  filters_v2 = [
+  action_filters = [
     {
-      tagged_event = {
-        key   = "stage"
-        match = "IS_IN"
-        value = "betterstack_ingest,gitdata_nftables_metadata_warn"
-      }
-    },
-  ]
-
-  actions_v2 = [
-    {
-      notify_email = {
-        target_type      = "IssueOwners"
-        fallthrough_type = "NoOne"
-      }
+      # `any`, carried over from the old `filter_match = "any"`: these stages are alternatives,
+      # not conjuncts. Behaviourally identical while there is one condition, preserved so adding
+      # a second value does not silently become a conjunction.
+      logic_type = "any"
+      conditions = [
+        # `in`, not two `eq` filters: the values are a closed set that grows with the emitter's
+        # warning vocabulary, and one list keeps the reconciliation suite's assertion single-sited.
+        { tagged_event = { key = "stage", match = "in", value = "betterstack_ingest,gitdata_nftables_metadata_warn" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },
+      ]
     },
   ]
 
