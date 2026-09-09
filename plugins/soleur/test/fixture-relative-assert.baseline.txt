@@ -143,6 +143,7 @@
 1	apps/web-platform/infra/inngest-redis-luks-loopback.test.sh
 1	apps/web-platform/infra/inngest-rls/inngest-rls-mutation.test.sh
 1	apps/web-platform/infra/inngest.test.sh
+1	apps/web-platform/infra/inngest-userdata-budget.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
 2	apps/web-platform/infra/luks-monitor.test.sh

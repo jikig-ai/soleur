@@ -236,7 +236,22 @@ else
   # `vector_sha256` and `doppler_sha256` invisible to both. The drift class this arm was written
   # for (an all-lowercase key) was caught; a drift in any `*_sha256` key was not — and those three
   # are the ones that pin the binaries the host installs.
-  TF_KEYS="$(awk '/templatefile\("\$\{path\.module\}\/cloud-init-inngest\.yml", \{/,/^  \}\)\)$/' \
+  # END ANCHOR: the map's own closing line, NOT the wrapper's. It used to be `/^  \}\)\)$/`,
+  # which matched the `}))` that closed `base64gzip(replace(templatefile(...)))` when the whole
+  # expression lived inline on the resource. #7695 hoisted the render into `locals` so a
+  # `lifecycle.precondition` could weigh it (a precondition cannot reference `self`), and the
+  # closer became `}), local.inngest_rationale_strip, "")`. The old anchor then matched NOTHING,
+  # awk ran the range to EOF, and the extraction swallowed every 4-space-indented assignment in
+  # the rest of the file — `app`, `ignore_changes`, `ipv4_enabled`, `ipv6_enabled` — reporting
+  # them as keys MISSING from this suite's map. The parity assertion caught it, but as a
+  # confusing "you forgot four keys" rather than "the extractor over-read", which is why the
+  # explicit bound below now exists.
+  #
+  # Anchored on `^  })` alone: it matches the map closer under BOTH wrapper forms and any future
+  # one, because what terminates the map is the 2-space-indented `})` — the wrapper's remaining
+  # arguments trail on that same line and are not part of what this range must capture. Map
+  # entries are 4-space indented, so no interior line can match it.
+  TF_KEYS="$(awk '/templatefile\("\$\{path\.module\}\/cloud-init-inngest\.yml", \{/,/^  \}\)/' \
     "$SCRIPT_DIR/inngest-host.tf" | grep -oE '^    [a-z0-9_]+ +=' | tr -d ' =' | sort -u)"
   MAP_KEYS="$(grep -oE '\{ inngest_volume_id=.*\}' "${BASH_SOURCE[0]}" | head -1 \
     | grep -oE '[a-z0-9_]+=' | tr -d '=' | sort -u)"
@@ -245,6 +260,12 @@ else
   # missing from both sides, which is precisely the state it was supposed to make visible.
   assert "AC5 key-set parity: the .tf call site's keys were extracted" \
     "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -ge 16 ]]"
+  # ...and an OVER-extraction bound, the direction the floor above is blind to. A range whose end
+  # anchor stops matching runs to EOF and harvests unrelated assignments; that is not a missing
+  # key and should not be reported as one. 16 is the call site's actual key count, so this is
+  # exact in both directions when paired with the floor.
+  assert "AC5 key-set parity: the extraction stopped at the map's closing brace (over-read guard)" \
+    "[[ \$(printf '%s\\n' \"$TF_KEYS\" | grep -c .) -le 16 ]]"
   MISSING="$(comm -23 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   EXTRA="$(comm -13 <(printf '%s\n' "$TF_KEYS") <(printf '%s\n' "$MAP_KEYS") | tr '\n' ' ')"
   assert "AC5 key-set parity: this suite's render map matches inngest-host.tf (missing:${MISSING:-none} extra:${EXTRA:-none})" \
