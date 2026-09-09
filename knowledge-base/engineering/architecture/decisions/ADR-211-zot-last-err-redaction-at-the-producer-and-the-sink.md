@@ -9,6 +9,8 @@ related_issues: [7500, 7444, 7440, 7272, 7530, 7055]
 
 # ADR-211: `zot_last_err` is redacted at the producer AND scrubbed at the sink
 
+## Status
+
 - **Status:** Adopting — the SINK half (Layer 2) is in force at merge; the PRODUCER half
   (Layer 1) is inert until the next `registry-host-replace` (ADR-096: the host is
   cloud-init-only). It flips to Accepted when the follow-through at #7960 reads a redacted
@@ -181,8 +183,17 @@ Art. 30 register cites it:
   (AP-018), not mirrored:
   - The **producer is authoritative.** It is the only control on the warehouse egress, and once
     delivered its allowlist strictly dominates the sink's denylist on this field — even the
-    producer's *non-JSON* branch is broader on the value side (`[^,}]*` runs to the comma or
-    brace, where the sink stops at a space; that is the `G2-3c` limit recorded above).
+    producer's *non-JSON* branch is broader on the value side (its value class runs to the
+    next closing brace, where the sink stops at a space; that is the `G2-3c` limit recorded
+    above). **Corrected 2026-09-09 (user-impact review):** this previously printed the
+    pre-fix class and described it as stopping at a comma OR a brace. It does not stop at a
+    comma — a truncated JSON fragment has neither a closing quote nor a bracket, so stopping
+    early leaves part of a credential on a **public** egress. The consequence is stated
+    rather than hidden: on a brace-free plaintext line the replacement runs to end-of-line,
+    so a crash line that happens to contain a credential header name is over-redacted and
+    its diagnostic tail destroyed. That is the deliberate direction — losing a cause is
+    recoverable at the next replace, publishing a token is not — but it is a real cost on a
+    host with no SSH, and it first executes at a future host replace, not at merge.
   - The **sink is subordinate and never coverage-bearing.** It is the sole control during the
     unbounded window before the next replace — on the worse, public, non-retractable egress —
     and a backstop against producer regression or a replace shipping a divergent template

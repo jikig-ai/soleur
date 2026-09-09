@@ -948,7 +948,7 @@ write_files:
         # a TRUNCATED JSON fragment renders as `"Cookie":["…` , and a rule written for the bare
         # form alone does not match it — measured, that shipped a Cookie verbatim.
         #
-        # The value class runs to the next `,` or `}` rather than to a closing quote or bracket,
+        # The value class runs to the next `}` rather than to a closing quote or bracket,
         # because a truncated fragment has neither. That over-redacts the tail of a bare
         # plaintext line; on a credential-bearing line that is the safe direction.
         out="$(printf '%s' "$line" | sed -E \

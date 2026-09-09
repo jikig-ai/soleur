@@ -250,3 +250,109 @@ treated as trusted at the point of use, having been read from somewhere untruste
 was treated as protection, having been written in a form that cannot fail.** Both read correctly on
 the page. Both are invisible to a green suite. Both were introduced by fixes for the very defects
 they embody.
+
+## Addendum — the ship of this PR reproduced three of the classes above
+
+Errors 40-43 happened while shipping the very change this file documents. They are recorded here
+rather than in a new file because the point is not the individual slips — it is that each one had
+a written prevention in the sections above, and the prevention did not fire.
+
+**40. I started a second `git commit` in one worktree while the first was still running** — the
+defect §"The third class" documents from #7828, committed hours after writing it up.
+
+I inferred the first commit had **died** from two signals, and both are worthless. Its log had not
+advanced in ~2 minutes — but the hook it sat on runs a full test battery, so a static tail is the
+*expected* reading. And `.git/index.lock` was absent — the real trap: **lefthook runs pre-commit
+hooks BEFORE git acquires the index lock**, so for essentially the whole runtime of a commit in
+this repo, a perfectly healthy `git commit` holds no lock. I read the absence of a lock as the
+absence of a process. `ps` answered it in one command, after two writers had already sat on one
+index and the second one's log had stalled at the same hook as the first — contention I nearly
+diagnosed as a second death.
+
+**Prevention:** liveness is a question about a PROCESS — ask the process table. Never infer death
+from a quiet log or a missing `index.lock`; in this repo the lock is absent for nearly the entire
+life of a healthy commit. Wait on a terminal signal the work actually emits (an rc file,
+`MERGE_HEAD` clearing), never on a proxy for "still alive".
+
+**41. Killing the duplicate did not stop the work it had started.** Its lefthook had already
+spawned a full battery; terminating the parent left that battery running, **reparented to
+systemd**. For several minutes the host carried two of my batteries plus three siblings' — the
+contention that makes a RED at this gate untrustworthy. It surfaced only because I counted
+`test-all.sh` processes and found one more than I could account for.
+
+**Prevention:** after killing a build or commit, re-count the work it owned — a process whose
+parent dies is orphaned, not terminated. Discriminate yours from a sibling's by `/proc/<pid>/cwd`,
+never by the command line, which is byte-identical across worktrees; then signal the orphan's
+process group after confirming it differs from the run you must keep.
+
+**42. A gate whose comment claims more coverage than its code has.**
+`scripts/check-adr-ordinals.sh` documents "Required-heading completeness: each file has
+`## Status` / `## Context` / `## Decision` / `## Consequences`". Its implementation loops
+`for required in ADR-042 ADR-041` — two hardcoded legacy files. **No new ADR is heading-checked.**
+ADR-211, this PR's primary deliverable, shipped without a `## Status` heading while the script
+reported `ADR ordinal + content checks passed`. The ordinal half is real and did useful work here;
+only the heading half is vacuous, and the header comment is what hides it — a reader who greps for
+"Status" finds the string and stops.
+
+**Prevention:** when a gate passes on an artifact you have reason to doubt, read its
+IMPLEMENTATION, not its header comment — the two are independent claims and only one executes.
+For authors: a required-content check written against a fixed file list must say so, because "each
+file" reads as universal quantification and will be cited as coverage.
+
+**43. I put the session's durable artifacts in `/tmp`, and a reboot took them.** The machine
+suspended overnight; `/tmp` is a tmpfs, so the scratchpad was wiped — losing a prepared commit
+message, a staged patch script, and an earlier draft of this addendum. §"The third class" already
+carries the rule, verbatim: *"Put long-lived logs in the worktree — `/tmp` is swept between turns
+and leaves the writer holding a deleted inode."* I wrote that sentence in this file and then wrote
+every artifact to `/tmp` anyway. Nothing was unrecoverable, but the next `git commit -F` ran
+against a path that no longer existed.
+
+**Prevention:** anything that must outlive a turn goes under the worktree's git-dir
+(`$(git rev-parse --git-dir)/…`) — on-disk, untracked, and per-worktree. Reserve `/tmp` for output
+you are about to read in the same turn.
+
+### What these four have in common
+
+Three of them are the SAME failure as the session's second class, relocated: **a check that cannot
+observe what it claims to observe, reported as an observation.** `index.lock` does not mean "a
+commit is running". A host-wide `ps` grep does not mean "our battery". A gate's comment does not
+mean "the gate checks this". In each case the instrument returned a confident answer about
+something it was not measuring, and in each case one direct measurement settled it.
+
+The fourth (43) is different and worse: the prevention was not merely known, it was **written in
+this file, by me, hours earlier**. That is the real finding of this addendum. A learning that is
+written but not wired into the tooling — a path helper, a lint, a default — is a document that
+makes you feel prepared for exactly the failure you are about to repeat. Where these route to
+definitions, they should route as mechanism, not as more prose.
+
+### The addendum's own postscript: `sort -u` made two credential guards vacuous
+
+Adding the value-class assertion the user-impact review asked for, I drove it red to check it
+worked — and it passed on a mutant that diverged the two copies. Chasing that produced the sharpest
+instance of the session's second class, in code that predates this PR.
+
+`sort -u` under this host's default `en_US.UTF-8` collation treats strings differing **only in
+punctuation** as equal and drops one. Measured directly: two lines differing by a single `,` inside
+a bracket expression collapse to one line unquoted, and stay two under `LC_ALL=C`.
+
+Three guards in `registry-boot-guard.test.sh` are built on `grep | sed | sort -u | wc -l == 1` to
+assert that the two `redact()` copies are byte-identical — the new value-class one, and the
+**pre-existing `CRED_HDRS` and `HDR_KEEP` pair**, which are what stop the credential denylist and
+the header allowlist from silently diverging between the producer's two copies.
+
+Every difference those guards exist to catch is punctuation: a regex metacharacter, a hyphen in a
+header name, a quote. So the collation was discarding precisely the differences under test.
+Measured with a positive control on the fix itself — divergence applied to ONE copy
+(`x-api-key` → `x_api_key`), locale pin reverted: **rc=0, zero failures.** With `LC_ALL=C`: rc=1,
+and the correct assertion is the one that fires. Two mutants now discriminate, each failing the
+assertion that owns it.
+
+**Prevention:** any byte-identity guard implemented through `sort`, `uniq`, `comm` or `join` must
+pin `LC_ALL=C`. Locale collation is not a formatting detail there — it decides which differences
+the guard can perceive, and the default is to ignore exactly the punctuation that regex and
+identifier drift consists of.
+
+The general lesson is the one this whole file keeps arriving at from different directions: **a
+guard's coverage is a property of how it compares, not of what it names.** These three named the
+right subject, ran on every commit, and could not see the difference they were written for. The
+only reason it surfaced is that a new assertion was driven red rather than trusted green.

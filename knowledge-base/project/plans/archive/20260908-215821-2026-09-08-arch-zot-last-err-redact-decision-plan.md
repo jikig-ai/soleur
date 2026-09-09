@@ -572,6 +572,25 @@ construction here; `aggregate pattern` describes realized repeated impact **and*
 downgrade (it adds no CPO sign-off and `user-impact-reviewer` exits immediately on it). Full
 reasoning in the Domain Review.
 
+**Two further user-facing modes, added 2026-09-09 after `user-impact-reviewer` ran (it was
+never invoked during review — the `compliance/critical` label that routes it was not applied
+until ship).**
+
+- **The control destroys the evidence.** On the non-JSON denylist branch the value class runs
+  to the next closing brace, so a *brace-free* plaintext line — which is what a Go panic trace
+  and a journald-split fragment are — has everything from a matched credential header name to
+  end-of-line replaced. The artifact is the tier-1 `panic:` / `fatal error` text and the body of
+  a `SOLEUR_ZOT_LOG` row; the user-facing consequence is that the line naming the cause of a
+  registry outage is gone, on a host with **no SSH**, on the fleet's **sole** image-pull path.
+  Kept deliberately (publishing a token is worse than losing a cause), and it is inert until the
+  next host replace — so it will first bite long after this change is forgotten.
+- **The false-GREEN direction, not just the leak.** This section describes outbound exposure
+  only, which invites a reader to conclude the sink's whole job is redaction. It is not: a
+  client-chosen `User-Agent` carrying a `KEY=VALUE` token was measured forging
+  `NIC_ALARM_VERDICT=GREEN` while the true verdict was `FIRE`, which silences the alarm. Fixed
+  and fixtured here, but a future edit to `emit_field` or to the workflow's extraction has a
+  stated user impact to violate now.
+
 Stated plainly for `user-impact-reviewer`, which needs artifacts and vectors rather than nouns:
 the **artifact** is `zot_last_err.headers.Cookie` / `X-Api-Key` / top-level `clientIP` on the
 `SOLEUR_ZOT_DISK` row; the **vector** is that tail folded into `CAUSE` and published verbatim into a
