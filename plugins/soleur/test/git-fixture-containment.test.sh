@@ -88,21 +88,38 @@ eval "$SCRUB_LINE"
 PASS=0
 FAIL=0
 ASSERTED=0
-# VERDICT_LOG is append-only and is the INDEPENDENT observable the accounting reconciles against.
-# A sum check conserves the total, so it cannot see a verdict moved from the fail bucket to the
-# pass bucket — measured elsewhere in this repo as `64 passed, 0 failed` exit 0 with a genuine
-# regression printing FAIL on screen. Silencing the ledger means deleting evidence, not moving a
-# number. Idiom adopted from fixture-dir-operand-assert.test.sh, which is stronger here.
-VERDICT_LOG=""
-ck() { ASSERTED=$((ASSERTED + 1)); }
-pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; [[ -n "$VERDICT_LOG" ]] && echo "PASS" >> "$VERDICT_LOG"; return 0; }
-fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1" >&2; [[ -n "$VERDICT_LOG" ]] && echo "FAIL" >> "$VERDICT_LOG"; return 0; }
 # A precondition whose failure message says "a breach would hit real work" must ABORT, not count.
 # In the first revision these were non-fatal, so a run that had already breached the caller
 # continued into the deliberate-breach arms and reported 10 of 12 PASS.
 die() { printf 'FATAL: %s\n' "$1" >&2; exit 2; }
 
 echo "git-fixture-containment.test.sh"
+
+TMP_ROOT=$(mktemp -d -t gitfixcontain.XXXXXXXX) || die "no scratch root"
+# The handler EXITS. Without that, Ctrl-C removed the sandbox and then resumed at the interrupted
+# statement with the runners, children and victim gone, so the remaining arms ran against a deleted
+# victim and could still exit 0.
+cleanup() { [[ -n "${TMP_ROOT:-}" && -d "$TMP_ROOT" ]] && rm -rf "$TMP_ROOT"; }
+trap 'cleanup' EXIT
+trap 'cleanup; exit 130' INT TERM HUP
+
+VICTIM="$TMP_ROOT/victim"
+SENTINEL_DIR="$TMP_ROOT/sentinels"
+VERDICT_LOG="$TMP_ROOT/verdicts.txt"
+mkdir -p "$SENTINEL_DIR"
+: > "$VERDICT_LOG"
+
+# The verdict helpers are defined HERE, below the sandbox, so VERDICT_LOG's redirect operand is
+# provably rooted at a mktemp directory rather than at an unbound name.
+#
+# VERDICT_LOG is append-only and is the INDEPENDENT observable the accounting reconciles against.
+# A sum check conserves the total, so it cannot see a verdict moved from the fail bucket to the
+# pass bucket — measured elsewhere in this repo as `64 passed, 0 failed` exit 0 with a genuine
+# regression printing FAIL on screen. Silencing the ledger means deleting evidence, not moving a
+# number. Idiom adopted from fixture-dir-operand-assert.test.sh, which is stronger here.
+ck() { ASSERTED=$((ASSERTED + 1)); }
+pass() { PASS=$((PASS + 1)); echo "  PASS: $1"; printf 'PASS\n' >> "$VERDICT_LOG"; return 0; }
+fail() { FAIL=$((FAIL + 1)); echo "  FAIL: $1" >&2; printf 'FAIL\n' >> "$VERDICT_LOG"; return 0; }
 
 # --- Instrument self-test. Driven, not grepped. ------------------------------------------------
 # A suite whose only gate is a failure counter exits 0 having asserted nothing. Both counters must
@@ -118,19 +135,9 @@ if [[ $PASS -eq $((_h_p + 1)) && $FAIL -eq $((_h_f + 1)) ]]; then
 fi
 PASS=$_h_p
 FAIL=$_h_f
-
-TMP_ROOT=$(mktemp -d -t gitfixcontain.XXXXXXXX) || die "no scratch root"
-# The handler EXITS. Without that, Ctrl-C removed the sandbox and then resumed at the interrupted
-# statement with the runners, children and victim gone, so the remaining arms ran against a deleted
-# victim and could still exit 0.
-cleanup() { [[ -n "${TMP_ROOT:-}" && -d "$TMP_ROOT" ]] && rm -rf "$TMP_ROOT"; }
-trap 'cleanup' EXIT
-trap 'cleanup; exit 130' INT TERM HUP
-
-VICTIM="$TMP_ROOT/victim"
-SENTINEL_DIR="$TMP_ROOT/sentinels"
-VERDICT_LOG="$TMP_ROOT/verdicts.txt"
-mkdir -p "$SENTINEL_DIR"
+# The self-test drives both helpers, so it appended one row to each bucket. Truncate rather than
+# decrement: the ledger's whole value is that it is append-only DURING the run, and the run has
+# not started yet.
 : > "$VERDICT_LOG"
 
 # The hostile environment IS the victim — see the header. This is the shape #7835 records.
@@ -237,28 +244,41 @@ unset _missing _v
 CHILDREN=()
 for n in 1 2; do
   child="$TMP_ROOT/child-$n.sh"
+  # A QUOTED heredoc for the body, with every value passed in through a generated prelude. Two
+  # reasons, both measured. (1) An UNQUOTED heredoc expands `$` and backticks at write time, and a
+  # backtick in an explanatory comment inside it was command-substituted on every run. (2) Building
+  # the body with `printf` instead makes each generated `git -C "$d"` line visible to the P1b
+  # scanner as if it were this file's own code — 7 spurious rows, none of which a guard here could
+  # honestly clear, because the operand is bound in the CHILD. A heredoc body is skipped by the
+  # scanner and the child carries its own absolute-path guard below.
   {
     printf '#!/usr/bin/env bash\n'
-    printf 'set -uo pipefail\n'
-    printf '# Sources the real helper: that is what makes the refusal arm a test of the shipped tripwire.\n'
-    printf 'source %q\n' "$HELPERS"
-    printf 'd=$(mktemp -d -t containchild%s.XXXXXXXX) || exit 2\n' "$n"
-    printf 'case "$d" in /*) : ;; *) printf "FATAL: child fixture dir not absolute\\n" >&2; exit 2 ;; esac\n'
-    printf 'git -C "$d" init -q\n'
-    printf 'git -C "$d" config user.email child@fixture.test\n'
-    printf 'git -C "$d" config user.name child\n'
-    printf 'git -C "$d" config commit.gpgsign false\n'
-    printf 'printf %q > "$d/child-%s.txt"\n' "child $n"$'\n' "$n"
-    printf 'git -C "$d" add -A\n'
-    if [[ "$n" == "1" ]]; then
-      printf '# --allow-empty is load-bearing: a breach retargets this at the VICTIM, whose work tree\n'
-      printf '# does not hold the child file, so add -A stages nothing there and a plain commit would\n'
-      printf '# exit 1 without moving HEAD, making the breach invisible to the oracle.\n'
-      printf 'git -C "$d" commit -q --allow-empty -m %q\n' "child $n wrote"
-    fi
-    printf 'printf ran > %q/ran-%s\n' "$SENTINEL_DIR" "$n"
-    printf 'rm -rf "$d"\n'
-    printf 'exit 0\n'
+    printf 'HELPERS=%q\n' "$HELPERS"
+    printf 'SENT=%q\n' "$SENTINEL_DIR"
+    printf 'N=%q\n' "$n"
+    printf 'DO_COMMIT=%q\n' "$([[ "$n" == "1" ]] && echo yes || echo no)"
+    cat <<'CHILDEOF'
+set -uo pipefail
+# Sources the real helper: that is what makes the refusal arm a test of the shipped tripwire.
+source "$HELPERS"
+d=$(mktemp -d -t containchild.XXXXXXXX) || exit 2
+case "$d" in /*) : ;; *) printf 'FATAL: child fixture dir not absolute\n' >&2; exit 2 ;; esac
+git -C "$d" init -q
+git -C "$d" config user.email child@fixture.test
+git -C "$d" config user.name child
+git -C "$d" config commit.gpgsign false
+printf 'child %s\n' "$N" > "$d/child-$N.txt"
+git -C "$d" add -A
+if [ "$DO_COMMIT" = yes ]; then
+  # --allow-empty is load-bearing: a breach retargets this at the VICTIM, whose work tree does not
+  # hold the child file, so `add -A` stages nothing there and a plain commit would exit 1 without
+  # moving HEAD, making the breach invisible to the oracle.
+  git -C "$d" commit -q --allow-empty -m "child $N wrote"
+fi
+printf 'ran' > "$SENT/ran-$N"
+rm -rf "$d"
+exit 0
+CHILDEOF
   } > "$child"
   CHILDREN+=("$child")
 done
