@@ -83,14 +83,38 @@ Bash fixture tests for guard scripts
 # intersection with ALLOWED_PATHS is 0. A bot PR therefore cannot change a file
 # this gate inspects, so the synthetic green cannot mask a real failure.
 #
-# THE TRIPWIRE IS BROADER THAN THE SWEPT SET. This entry stops being sound if
-# ALLOWED_PATHS ever gains ANY path this gate READS -- which is not only the 1,345
+# THE TRIPWIRE HAS TWO DIRECTIONS, AND THE SECOND ONE IS THE LIVE RISK HERE.
+#
+# (A) ALLOWED_PATHS grows toward the scan surface. This entry stops being sound if it
+# ever gains ANY path this gate READS -- which is not only the 1,345
 # swept *.md, but also .markdownlintignore, .markdownlint.json, package.json,
 # package-lock.json, .nvmrc and scripts/markdown-lint.sh. None of those is "inside the
 # swept set", so a bot allowlisted to edit .markdownlintignore (plausible: auto-
 # excluding a noisy directory) would leave a narrower tripwire silent while destroying
 # the soundness argument entirely. On any such change, move the gate to the action's
 # Phase-4 preflight instead of widening this note.
+#
+# (B) THE SCAN SURFACE GROWS TOWARD ALLOWED_PATHS, with ALLOWED_PATHS untouched. This
+# gate's scope is DERIVED from .markdownlintignore, a mutable in-repo file, so a
+# narrowing of that exclusion moves the intersection without anything editing this
+# allowlist. Measured: delete the `knowledge-base/project/` line and
+# knowledge-base/project/weakness-digest.md enters the swept set immediately -- and
+# .github/workflows/weakness-miner.yml is a live bot-PR producer that writes exactly
+# that file under auto-merge. Narrowing the exclusion to, say, `knowledge-base/project/plans/`
+# is a plausible cleanup and would make the synthetic green a fabrication over a
+# reachable surface.
+#
+# So: RE-DERIVE `ALLOWED_PATHS ∩ scope_nul()` on any change to .markdownlintignore, not
+# only on changes to ALLOWED_PATHS. markdown-lint is the first unreachability-argued
+# entry in this file whose scan surface is generator-derived from a mutable repo file,
+# so the immunity the marketplace-manifest-guard entry claims below does NOT transfer
+# to it, and this note inherited that entry's ALLOWED_PATHS-only phrasing anyway.
+# This intersection is ASSERTED, not merely noted: `scripts/markdown-lint.test.sh`
+# row M12 parses ALLOWED_PATHS out of the bot-PR action and re-derives membership
+# through the gate's OWN scope logic (explicit mode), so the two cannot drift apart.
+# Measured constructible in the (B) direction: narrowing the .markdownlintignore
+# entry to `knowledge-base/project/plans/` -- with ALLOWED_PATHS untouched -- turns
+# M12 red and names weakness-digest.md as the fabricated surface.
 markdown-lint
 
 # ci.yml correctness gate jobs (#6049 completed the drift). adr-ordinals was

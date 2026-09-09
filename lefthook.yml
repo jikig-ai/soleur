@@ -27,6 +27,19 @@ pre-commit:
       # same file the CI job reads, so hook and CI cannot disagree about what is red.
       # `stage_fixed` is gone with it: this path lints, it does not rewrite (--fix
       # corrupts prose on this corpus -- see the script's remediation block).
+      #
+      # TWO COUPLINGS, both load-bearing and neither visible from this stanza.
+      #
+      # `glob: "*.md"` is not an optimisation. Without it lefthook invokes the script
+      # with ZERO arguments on every commit, the script exits 2 on its usage guard, and
+      # EVERY commit in the repository is blocked. Do not remove it.
+      #
+      # The script needs root deps present (node_modules/.bin/markdownlint, plus
+      # python3). It refuses to fall back to an unpinned runner by design, so someone
+      # who has never run `npm install` cannot commit a Markdown file until they do --
+      # a real change from the previous behaviour, which needed nothing local. The
+      # script's own error names the fix, and worktrees get deps from
+      # worktree-manager.sh, so this bites a fresh clone rather than normal use.
       priority: 4
       glob: "*.md"
       run: bash scripts/markdown-lint.sh {staged_files}

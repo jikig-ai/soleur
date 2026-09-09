@@ -567,6 +567,44 @@ rmdir "$SANDBOX/node_modules" 2>/dev/null || rm -rf "$SANDBOX/node_modules"
 ln -s "$REPO_ROOT/node_modules" "$SANDBOX/node_modules" || die "could not restore the node_modules link"
 restore
 
+# --- M12: the unreachability exemption, ASSERTED rather than argued ---------------
+# `scripts/required-checks.txt` admits markdown-lint as a required context by an
+# UNREACHABILITY argument: the bot-PR action can fabricate a synthetic green for this
+# context, which is only sound because no path the bot may write is a path this gate
+# reads. That entry then says, in its own words, "Nothing asserts this intersection
+# automatically; this comment is the entire control" -- a guard nobody can drive red,
+# in the PR whose whole subject is guards nobody can drive red.
+#
+# It is asserted here instead. The membership test is the SUT'S OWN scope logic in
+# explicit mode, not a reimplementation of it: a second copy of the derivation would
+# drift from the first and certify agreement between two wrong answers. The direction
+# that matters is (B) in that note -- .markdownlintignore is mutable, so the scan
+# surface can grow toward the allowlist with the allowlist untouched.
+printf 'M12 bot-PR unreachability\n'
+mapfile -t ALLOWED < <(
+  awk '/^[[:space:]]*ALLOWED_PATHS=\(/{f=1;next} f&&/^[[:space:]]*\)/{exit} f{gsub(/^[[:space:]]*"|"[[:space:]]*$/,"");print}' \
+    "$REPO_ROOT/.github/actions/bot-pr-with-synthetic-checks/action.yml"
+)
+if (( ${#ALLOWED[@]} == 0 )); then
+  fail "M12 -- could not parse ALLOWED_PATHS from the bot-PR action; the exemption cannot be checked"
+else
+  reachable=()
+  for a in "${ALLOWED[@]}"; do
+    [[ "$( cd "$REPO_ROOT" && bash scripts/markdown-lint.sh "$a" 2>&1 )" == *"in scope"* ]] || reachable+=("$a")
+  done
+  if (( ${#reachable[@]} == 0 )); then
+    pass "M12 -- none of the ${#ALLOWED[@]} bot-writable path(s) is in this gate's scan surface"
+  else
+    fail "M12 -- the synthetic green is a FABRICATION over: $(printf '%s ' "${reachable[@]}")-- re-derive the exemption in scripts/required-checks.txt or move the gate to the action's Phase-4 preflight"
+  fi
+fi
+# The probe must be able to say "reachable", or M12 passes on any input at all.
+if [[ "$( cd "$REPO_ROOT" && bash scripts/markdown-lint.sh README.md 2>&1 )" == *"in scope"* ]]; then
+  fail "M12b -- the scope probe reports a swept file as out of scope; M12 proves nothing"
+else
+  pass "M12b -- the scope probe discriminates (a swept file reads as reachable)"
+fi
+
 # --- W1: the gate is WIRED (existence, not just uniqueness) -----------------------
 # M7 asserts "at most one invoker". It never asserted "at least one". Deleting the CI
 # job AND the lefthook line leaves every M7 arm green and the gate simply stops running
@@ -653,7 +691,7 @@ printf '\n=== markdown-lint.test.sh: %s passed, %s failed (%s cases) ===\n' "$pa
 # statement in between stops that walk, the mutant dies on `set -u` with the threshold
 # unbound, and a fully compliant floor is reported as a construction failure rather
 # than as covered. Measured: this floor joined that uncovered set until the printf moved.
-MIN_CASES=29
+MIN_CASES=31
 if (( cases < MIN_CASES )); then
   printf 'ERROR: only %s cases ran, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$cases" "$MIN_CASES" >&2
   exit 1
