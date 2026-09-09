@@ -163,8 +163,27 @@ done
 # scripts|infra, has no single-suite mode, refuses rc 4 under SOLEUR_SUBAGENT=1, and nesting it
 # inside its own run is absurd. Invoking a swept suite DIRECTLY means no scrub exists anywhere in
 # the path, so the containment arm would be red from birth. Hence this copy.
+# --- assert_fixture_dir: a BYTE-EXACT inline copy of the canonical body. ------------------------
+# This file cannot source test-helpers.sh (it controls the tripwire -- see the header), and the P1b
+# scanner reports a row for write_runner's redirect operand, so the guard is carried inline. The
+# copy JOINS fixture-dir-operand-assert.test.sh's repo-wide drift corpus (git ls-files '*.sh') and
+# must stay byte-identical to test-helpers.sh's body; it was extracted with the same awk that guard
+# uses, not retyped. The call sits at the ENCLOSING FUNCTION HEAD because the P1b window starts
+# there -- a single call at file scope would not cover a helper.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 write_runner() { # <path> <with-scrub:0|1>
   local path="$1" with="$2"
+  assert_fixture_dir "$path"
   {
     printf '#!/usr/bin/env bash\n'
     printf 'set -uo pipefail\n'
