@@ -102,16 +102,31 @@ jobs:
           # in this file), so capturing rc cannot disarm a downstream failure gate.
           rc=0
           out="$(bash scripts/zot-restart-loop-alarm.sh 2>&1)" || rc=$?
+
           printf '%s\n' "$out"
 
-          verdict="$(printf '%s\n' "$out" | grep -oE 'ZOT_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
+          # ANCHORED at line start, like the sed-based extractions below. NOTE the SINGLE
+          # backslashes: `run: |` is a YAML LITERAL block, so no escape processing happens and
+          # sed receives these bytes verbatim. A doubled backslash-paren is a LITERAL
+          # backslash-paren in BRE, not a capture group, so the field extracts EMPTY -- which
+          # makes all four filing conditions false and the alarm files nothing on any verdict.
+          # That is the #7242 "dark on exactly the verdicts it exists to raise" defect, and it
+          # is how the first revision of THIS fix shipped. Measured before and after.
+          # ANCHORED at line start, like the four sed-based extractions below. `grep -oE` is
+          # unanchored, and ZOT_ALARM_CAUSE — which carries the attacker-influenced log tail —
+          # is emitted BEFORE the verdict fields, so `head -1` returned a token injected into
+          # the tail rather than the real field. Measured: a crafted User-Agent containing
+          # `NIC_ALARM_VERDICT=GREEN` yielded GREEN while the true verdict was FIRE, silencing
+          # the private-NIC alarm built for #6400 (a dead pull path that read green for 14 days).
+          # ZOT_ALARM_VERDICT survived only by emit ordering, which is an accident, not a control.
+          verdict="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_VERDICT=\([A-Z_]*\)$/\1/p' | head -1 || true)"
           cause="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_CAUSE=//p' | head -1)"
           detail="$(printf '%s\n' "$out" | sed -n 's/^ZOT_ALARM_DETAIL=//p' | head -1)"
 
           # The private-NIC stream (#6415) is an INDEPENDENT verdict, not encoded in $rc — see
           # the checker's EXIT CONTRACT header. It rides every exit path, so it is readable even
           # when the zot legs early-exit on a probe fault.
-          nic_verdict="$(printf '%s\n' "$out" | grep -oE 'NIC_ALARM_VERDICT=[A-Z_]+' | head -1 | cut -d= -f2 || true)"
+          nic_verdict="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_VERDICT=\([A-Z_]*\)$/\1/p' | head -1 || true)"
           nic_cause="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_CAUSE=//p' | head -1)"
           nic_detail="$(printf '%s\n' "$out" | sed -n 's/^NIC_ALARM_DETAIL=//p' | head -1)"
 

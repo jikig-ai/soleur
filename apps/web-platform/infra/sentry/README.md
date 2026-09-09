@@ -2,13 +2,13 @@
 
 Manages Sentry-hosted infrastructure for `app.soleur.ai`:
 
-- **27 `sentry_alert` rules** + **3 `sentry_issue_alert` rules** (30 alert rules total)
+- **28 `sentry_alert` rules** + **2 `sentry_issue_alert` rules** (30 alert rules total)
   (#7650 Phase 2). The 27 are adopted from live Sentry and fully Terraform-owned:
   `ignore_changes = [environment]` only, real `trigger_conditions` and
   `action_filters`, read through the non-deprecated
   `organizations/{org}/workflows/` endpoint.
 
-  **THREE remain on `sentry_issue_alert`, and only TWO of them are blocked.**
+  **TWO remain on `sentry_issue_alert`, and both are blocked by the same thing.**
   `auth-per-user-loop` and `sandbox-startup-failure` trigger on
   `event_unique_user_frequency_count`, which the pinned provider's
   `trigger_conditions` does not offer (upstream
@@ -78,14 +78,15 @@ terraform plan
 ## First-time import — COMPLETE, runbook retired (#7590)
 
 First-time adoption of the issue-alert rules is done. Since #7650 Phase 2 this root
-declares **27 `sentry_alert` + 3 `sentry_issue_alert`** resources (it was 29
+declares **28 `sentry_alert` + 2 `sentry_issue_alert`** resources (it was 29
 `sentry_issue_alert`) and plans clean against the full root.
 
-The third `sentry_issue_alert` is `git-data-boot-warning`, which landed after
-the adoption capture was taken and so was never in the migration's scope. This
-paragraph said **2** until 2026-09-06 (#7826) while line 5 of this same file
-already said 3 — the file contradicted itself, and the stale half was the one
-the adoption tooling's error text had copied.
+`git-data-boot-warning` WAS a third `sentry_issue_alert` — it landed after the
+Phase 2 adoption capture was taken and so was never in that migration's scope.
+Phase 3.4 (#7985) migrated it, which is why this paragraph now says 28 + 2.
+The two survivors are blocked on upstream 950, which is fixed but unreleased.
+Historical note, kept because this count has been wrong twice: this paragraph
+said **2** until 2026-09-06 (#7826) while line 5 of this same file
 
 The 27 were adopted by CONFIG-BLOCK adoption, not by a `terraform import`
 command: 27 `import { to = sentry_alert.<n> }` blocks paired with 27
@@ -193,7 +194,7 @@ dark weeks later: still present, still planning clean, matching nothing.
 **Everything else in the root** is still not on `scheduled-terraform-drift.yml`'s
 matrix, and adding `apps/web-platform/infra/sentry/` to it is DELIBERATELY not
 the fix for the alert rules. That leg would plan the FULL ROOT, which still
-refreshes the three surviving `sentry_issue_alert` resources through the
+refreshes the two surviving `sentry_issue_alert` resources through the
 deprecated endpoint — with none of `apply-sentry-infra.yml`'s brownout retry —
 so it would go red on Sentry's brownout calendar rather than on drift, and get
 muted. The remaining gap (cron and uptime monitors) is unchanged from #3814.
