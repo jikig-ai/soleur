@@ -52,9 +52,28 @@ The subagent will:
 
 1. Identify pages affected by the PR
 2. Navigate to each page and capture snapshots (using Playwright MCP or agent-browser CLI).
-   On a page carrying a password or credential field, route the snapshot through
-   `plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py` — a snapshot
-   serializes input values, including ones the agent never typed (#7947).
+
+**Credential safety on the Playwright-MCP path (#7947).** An accessibility
+snapshot serializes the **value** of input fields, including a value the agent
+never typed — a password manager's autofill, a static `value=`, or a
+generated-credential panel.
+
+There is **no runtime guard on the Playwright-MCP path.** The PreToolUse
+interceptor covers the `agent-browser` Bash path only (#7980), and
+`@playwright/mcp`'s `--secrets` option masks only values named in advance, so it
+cannot reach a value the agent never supplied. Do not read the redactor as
+covering this path: an MCP tool result is not a shell stream and cannot be piped
+through a script.
+
+On a page carrying a password or credential field:
+
+- pass `filename:` to `browser_snapshot` so the tree is written to a file
+  instead of returned into the transcript, then filter that file and shred it —
+  `python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py < FILE && shred -u FILE`;
+- on a page **displaying** a credential, capture neither. A screenshot is safe
+  for a `type=password` field and renders a readonly `type=text` credential
+  panel in clear, exactly as the snapshot does (measured).
+
 3. Check for console errors
 4. Test critical interactions
 5. Pause for human verification on OAuth/email/payment flows

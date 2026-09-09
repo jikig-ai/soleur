@@ -21,17 +21,20 @@ SENTINEL='ZZQP-SENTINEL-7947'
 
 pass=0
 fail=0
-# Independent case counter (ADR-193 #2): incremented at CALL SITES only, never
-# inside ok()/bad(), so stubbing a verdict helper cannot drop a row and its
-# count together.
+# Case counter. It is incremented inside assert_redacted/assert_preserved, NOT
+# at the call sites -- an earlier comment here claimed otherwise and was wrong.
+# That coupling means a stubbed or misrouted assert helper keeps the count
+# reconciling while asserting nothing, which the floor cannot see. The helper
+# control below is what closes that, by proving each verdict-owning helper can
+# still REJECT.
 cases=0
 
 # Floor derived as a lower bound, not a snapshot of today's total:
 #   6 redaction rows + 5 must-PASS rows + 3 shape rows + 3 failure-mode rows
-#   + 13 review rows (round 1) = 30.
+#   + 13 review rows (round 1) + 12 review rows (round 2) = 42.
 # The two instrument self-test rows are excluded: they run before the counters
 # are zeroed, so they are a precondition on the harness, not coverage of the SUT.
-MIN_ASSERTIONS=30
+MIN_ASSERTIONS=42
 
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
@@ -55,6 +58,33 @@ fi
 # the pass+fail==cases reconciliation below — which is exactly what that
 # reconciliation is for, and it caught this on the first run.
 pass=0; fail=0; cases=0
+
+# ---------------------------------------------------------------------------
+# Helper control. The instrument self-test above proves ok()/bad() move their
+# counters; it cannot see a helper that OWNS a verdict taking the wrong branch
+# and then calling the correct-looking helper, nor one stubbed to always pass.
+# Both survived a mutation battery until this was added.
+#
+# Each verdict-owning helper is driven once with an input it MUST reject, with
+# the filter swapped for a passthrough so rejection is forced. Counters are
+# unwound afterwards.
+# ---------------------------------------------------------------------------
+_helper_control() {
+  local _saved; _saved="$(declare -f run_filter)"
+  run_filter() { printf '%s' "$1"; }   # passthrough: leaks by construction
+  local _p=$pass _f=$fail _c=$cases
+  assert_redacted  'helper control: assert_redacted must REJECT a leak (EXPECTED)' \
+    "- textbox \"Token\" [ref=e1]: $SENTINEL"
+  assert_preserved 'helper control: assert_preserved must REJECT a loss (EXPECTED)' \
+    '- textbox "x" [ref=e1]: y' 'THIS_NEEDLE_IS_NEVER_PRESENT'
+  eval "$_saved"
+  if [[ $fail -ne $((_f + 2)) ]]; then
+    printf 'HELPER CONTROL BROKEN: assert_redacted/assert_preserved did not both reject (fail %d->%d)\n' \
+      "$_f" "$fail" >&2
+    exit 1
+  fi
+  pass=$_p; fail=$_f; cases=$_c
+}
 
 if [[ ! -x "$FILTER" ]]; then
   printf 'FAIL - redactor missing or not executable at %s\n' "$FILTER"
@@ -94,6 +124,8 @@ assert_preserved() {
     bad "$label — benign value was redacted (over-aggressive filter)"
   fi
 }
+
+_helper_control
 
 # ---------------------------------------------------------------------------
 # Redaction rows — one per credential-shaped accessible name.
@@ -238,6 +270,69 @@ fi
 
 assert_preserved 'must-PASS: an unnamed STRUCTURAL node is untouched' \
   '- generic [ref=e1]:' '- generic [ref=e1]:'
+
+# ---------------------------------------------------------------------------
+# Review rows (round 2) — axes the round-1 battery never edited.
+# ---------------------------------------------------------------------------
+
+# ROLE-SET CARDINALITY. `textbox` carried every redaction row, so truncating
+# TEXT_INPUT_ROLES to it alone was invisible -- and a member (`textarea`) had
+# already silently left the set during round 1 and was leaking.
+assert_redacted 'role: combobox'   "- combobox \"Token\" [ref=e2]: $SENTINEL"
+assert_redacted 'role: spinbutton' "- spinbutton \"PIN\" [ref=e2]: $SENTINEL"
+assert_redacted 'role: textarea'   "- textarea \"Token\" [ref=e2]: $SENTINEL"
+
+# NAME-LIST CARDINALITY. These alternatives had no fixture, so truncating the
+# regex to the covered subset survived.
+assert_redacted 'name: "Bearer"'      "- textbox \"Bearer\" [ref=e1]: $SENTINEL"
+assert_redacted 'name: "OTP"'         "- textbox \"OTP\" [ref=e1]: $SENTINEL"
+assert_redacted 'name: "Mnemonic"'    "- textbox \"Mnemonic\" [ref=e1]: $SENTINEL"
+assert_redacted 'name: "Seed phrase"' "- textbox \"Seed phrase\" [ref=e1]: $SENTINEL"
+assert_redacted 'name: "Credential"'  "- textbox \"Credential\" [ref=e1]: $SENTINEL"
+
+# JSON must-PASS. Every preserved-row fed the TEXT shape, so the JSON arm was
+# pinned in one direction only: an arm that emitted just `<redacted>` and
+# destroyed the whole envelope satisfied every assertion.
+cases=$((cases + 1))
+json_out="$(run_filter "{\"success\":true,\"data\":{\"snapshot\":\"- textbox \\\"Token\\\" [ref=e5]: $SENTINEL\"},\"error\":null}")"
+if [[ "$json_out" == *"$SENTINEL"* ]]; then
+  bad 'JSON must-PASS: sentinel survived'
+elif ! printf '%s' "$json_out" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+  bad 'JSON must-PASS: output is no longer valid JSON'
+elif [[ "$json_out" != *'"success"'* || "$json_out" != *'"error"'* ]]; then
+  bad 'JSON must-PASS: benign sibling fields were destroyed'
+else
+  ok 'JSON arm redacts the snapshot and preserves the rest of the envelope'
+fi
+
+# A snapshot nested inside an ARRAY -- the list branch of the JSON walker had
+# no fixture, so returning the node unchanged survived.
+assert_redacted 'JSON: snapshot nested in an array' \
+  "{\"data\":{\"results\":[{\"snapshot\":\"- textbox \\\"Token\\\" [ref=e5]: $SENTINEL\"}]}}"
+
+# The fail-closed contract declares three refusal reasons; the UTF-8 one had no
+# fixture, so deleting it (decode with errors="replace") survived and leaked.
+cases=$((cases + 1))
+u_out="$(printf '\xff\xfe- textbox "Token" [ref=e5]: %s' "$SENTINEL" | python3 "$FILTER" 2>/dev/null)"; u_rc=$?
+if [[ $u_rc -eq 2 && -z "$u_out" ]]; then
+  ok 'non-UTF-8 input: exit 2, stdout empty'
+else
+  bad "non-UTF-8 input must refuse (rc=$u_rc, out='${u_out:0:30}')"
+fi
+
+# A JSON envelope truncated BEFORE the "snapshot" key. The round-1 fix keyed on
+# that literal being present, so a partial envelope -- exactly what a killed
+# agent-browser produces -- fell through to the text path and was emitted
+# verbatim at exit 0.
+cases=$((cases + 1))
+t_out="$(printf 'agent-browser: reconnecting\n{"success":true,"data":{"snapsho":"- textbox \\"Token\\" [ref=e5]: %s' "$SENTINEL" | python3 "$FILTER" 2>/dev/null)"; t_rc=$?
+if [[ $t_rc -eq 2 && -z "$t_out" ]]; then
+  ok 'truncated envelope before the snapshot key: exit 2, stdout empty'
+elif [[ "$t_out" == *"$SENTINEL"* ]]; then
+  bad 'truncated envelope leaked the sentinel (fail-open)'
+else
+  bad "truncated envelope must refuse (rc=$t_rc)"
+fi
 
 # ---------------------------------------------------------------------------
 # Failure-mode rows — the fail-closed contract (ADR-095 shape).

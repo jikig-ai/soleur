@@ -330,7 +330,13 @@ f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
 Open the pricing page and run agent-browser snapshot -i to find the CTA ref.
 EOF
 )"
-run_case "S5 must-PASS: snapshot with no auth context is clean" 0 "$f"
+# Deliberately flipped in review round 1. The routing rule is now
+# UNCONDITIONAL, because the PreToolUse hook it backs is unconditional: it
+# denies every unrouted `agent-browser ... snapshot` regardless of auth context.
+# A lint narrower than the runtime gate is teeth for a different rule, and the
+# gap shipped `feature-video/SKILL.md` with two commands its own hook blocks and
+# no CI signal.
+run_case "S5 unrouted snapshot fails even with NO auth context (matches the hook)" 1 "$f"
 
 # H4 must-PASS -- a skill that names a password field but takes a SCREENSHOT.
 f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
@@ -404,10 +410,100 @@ else
   fail "S10 empty full-scan population exits 2" "actual=$empty_rc"
 fi
 
+# ---- Review rows (round 2) ----
+
+# L2 (the sharpest one): every S-row above passes an ABSOLUTE mktemp path, but
+# CI runs full-scan, whose rglob yields RELATIVE paths. So the rule could be
+# disabled on the only path CI uses and the whole suite stayed green. This row
+# runs the SUT in full-scan mode over a populated in-scope tree.
+CASE_N=$((CASE_N + 1))
+rel_rc=0
+(
+  set -e
+  REPO="$TMPDIR_TEST/relscan"
+  mkdir -p "$REPO/plugins/soleur/skills/probe" "$REPO/knowledge-base"
+  cd "$REPO"
+  git init -q -b main .
+  git config user.email t@t && git config user.name t
+  printf '# Probe\n\nSign in, then agent-browser snapshot -i\n' \
+    > plugins/soleur/skills/probe/SKILL.md
+  printf '# kb\n\nnothing\n' > knowledge-base/x.md
+  git add -A && git commit -q -m base
+  rc=0
+  python3 "$SUT" >/dev/null 2>&1 || rc=$?   # full-scan == relative paths
+  [[ "$rc" == "1" ]]
+) || rel_rc=$?
+if [[ "$rel_rc" == "0" ]]; then
+  pass "S11 full-scan (RELATIVE paths, the mode CI runs) still enforces the rule"
+else
+  fail "S11 full-scan (RELATIVE paths) enforces the rule" "sub-shell status=$rel_rc"
+fi
+
+# L7: the same tree, made compliant, must come back clean -- so S11 is pinned in
+# both directions rather than only proving the guard can fire.
+CASE_N=$((CASE_N + 1))
+relok_rc=0
+(
+  set -e
+  REPO="$TMPDIR_TEST/relscan_ok"
+  mkdir -p "$REPO/plugins/soleur/skills/probe"
+  cd "$REPO"
+  git init -q -b main .
+  git config user.email t@t && git config user.name t
+  printf '# Probe\n\nSign in, then:\nagent-browser snapshot -i | python3 redact-a11y-snapshot.py\n' \
+    > plugins/soleur/skills/probe/SKILL.md
+  git add -A && git commit -q -m base
+  rc=0
+  python3 "$SUT" >/dev/null 2>&1 || rc=$?
+  [[ "$rc" == "0" ]]
+) || relok_rc=$?
+if [[ "$relok_rc" == "0" ]]; then
+  pass "S12 full-scan over a COMPLIANT in-scope tree is clean"
+else
+  fail "S12 full-scan over a compliant tree is clean" "sub-shell status=$relok_rc"
+fi
+
+# L1: S8's fixture was written by mkcase to a path under NO scan dir, so it was
+# out of scope for any directory list and could not see the widening it exists
+# to pin. This one sits genuinely under knowledge-base/.
+CASE_N=$((CASE_N + 1))
+kb_rc=0
+(
+  set -e
+  REPO="$TMPDIR_TEST/kbscope"
+  mkdir -p "$REPO/knowledge-base/project/learnings" "$REPO/plugins/soleur/skills/keep"
+  cd "$REPO"
+  git init -q -b main .
+  git config user.email t@t && git config user.name t
+  printf '# A record\n\nThe session ran `agent-browser snapshot -i` on a login page and the password was rendered.\n' \
+    > knowledge-base/project/learnings/rec.md
+  printf '# keep\n\nnothing\n' > plugins/soleur/skills/keep/SKILL.md
+  git add -A && git commit -q -m base
+  rc=0
+  python3 "$SUT" >/dev/null 2>&1 || rc=$?
+  [[ "$rc" == "0" ]]
+) || kb_rc=$?
+if [[ "$kb_rc" == "0" ]]; then
+  pass "S13 a knowledge-base RECORD under a real kb path is out of scope"
+else
+  fail "S13 knowledge-base record is out of scope" "sub-shell status=$kb_rc"
+fi
+
+# L5: four of the nine auth-context alternatives had no fixture, so truncating
+# the vocabulary survived. S2's disclosure rule keys on it.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+Complete authentication, then call browser_snapshot to read the secret
+passphrase field for the token.
+EOF
+)"
+run_case "S14 auth vocabulary: authentication/secret/passphrase/token trigger S2" 1 "$f"
+
 # ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=29
+MIN_CASES=34
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

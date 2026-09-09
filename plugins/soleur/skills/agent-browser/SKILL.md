@@ -95,14 +95,14 @@ If you see "Version mismatch between agent-browser (expects 1200) and installed 
 agent-browser open https://example.com
 
 # Step 2: Get interactive elements with refs
-agent-browser snapshot -i --json
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 
 # Step 3: Interact using refs
 agent-browser click @e1
 agent-browser fill @e2 "search query"
 
 # Step 4: Re-snapshot after changes
-agent-browser snapshot -i
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 ```
 
 ## Key Commands
@@ -120,11 +120,11 @@ agent-browser close            # Close browser
 ### Snapshots (Essential for AI)
 
 ```bash
-agent-browser snapshot              # Full accessibility tree
-agent-browser snapshot -i           # Interactive elements only (recommended)
-agent-browser snapshot -i --json    # JSON output for parsing
-agent-browser snapshot -c           # Compact (remove empty elements)
-agent-browser snapshot -d 3         # Limit depth
+agent-browser snapshot 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Full accessibility tree
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Interactive elements only (recommended)
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # JSON output for parsing
+agent-browser snapshot -c 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Compact (remove empty elements)
+agent-browser snapshot -d 3 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Limit depth
 ```
 
 ### Interactions
@@ -251,7 +251,7 @@ agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scr
 
 ```bash
 agent-browser open https://news.ycombinator.com
-agent-browser snapshot -i --json
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 # Parse JSON to find story links
 agent-browser get text @e12  # Get headline text
 agent-browser click @e12     # Click to open story
@@ -261,7 +261,7 @@ agent-browser click @e12     # Click to open story
 
 ```bash
 agent-browser open https://forms.example.com
-agent-browser snapshot -i
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 agent-browser fill @e1 "John Doe"
 agent-browser fill @e2 "john@example.com"
 agent-browser select @e3 "United States"
@@ -275,7 +275,7 @@ agent-browser screenshot confirmation.png
 ```bash
 # Run with visible browser window
 agent-browser --headed open https://example.com
-agent-browser --headed snapshot -i
+agent-browser --headed snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 agent-browser --headed click @e1
 ```
 
@@ -284,7 +284,7 @@ agent-browser --headed click @e1
 Add `--json` for structured output:
 
 ```bash
-agent-browser snapshot -i --json
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 ```
 
 Returns:

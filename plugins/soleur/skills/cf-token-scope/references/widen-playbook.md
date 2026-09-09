@@ -49,10 +49,13 @@ the token being edited. While the browser session is live:
   generated-credential panel is a readonly `type=text` box, which the browser
   renders in clear, so a screenshot of it leaks exactly as a snapshot does
   (measured, #7947).
-- For navigation, route the accessibility tree through the redactor:
-  `agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`.
-  A bare `browser_snapshot` on a page showing the token renders that token
-  verbatim — the class recorded in
+- This flow is driven by the **Playwright MCP**, and there is **no runtime
+  guard on the Playwright-MCP path** (#7980) — the `agent-browser` interceptor
+  does not see MCP tool calls, and an MCP result cannot be piped through the
+  redactor. For navigation, pass `filename:` to `browser_snapshot` so the tree
+  lands in a file rather than the transcript, filter that file with
+  `redact-a11y-snapshot.py`, and shred it. A bare `browser_snapshot` on a page
+  showing the token renders that token verbatim — the class recorded in
   `knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`.
   Capture neither snapshot nor screenshot of the panel itself.
 - If `browser_evaluate` ever reads a value, call it **with** a `filename`, and

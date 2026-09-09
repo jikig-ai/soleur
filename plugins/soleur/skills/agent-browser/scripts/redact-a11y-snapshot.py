@@ -56,7 +56,7 @@ MAX_INPUT_BYTES = 4 * 1024 * 1024
 # `heading` or a `link`, and widening this set widens the over-redaction risk
 # that the must-PASS rows exist to catch.
 TEXT_INPUT_ROLES = frozenset(
-    {"textbox", "searchbox", "combobox", "spinbutton"}
+    {"textbox", "searchbox", "combobox", "spinbutton", "textarea"}
 )
 
 # Descendant roles that repeat a PARENT's value rather than carrying a label
@@ -268,10 +268,19 @@ def main() -> None:
         try:
             parsed = json.loads(text[brace:])
         except json.JSONDecodeError as exc:
-            # Fail closed whenever the payload LOOKS like a snapshot envelope.
-            # A stray brace inside ordinary a11y text is not that, and must not
-            # take the whole run down.
-            if '"snapshot"' in text[brace:] or not text[:brace].strip():
+            # Fail closed on anything that PRESENTS as a JSON document: some
+            # line, after stripping, begins with `{` or `[`.
+            #
+            # The earlier form keyed on the literal `"snapshot"` being present,
+            # so an envelope truncated BEFORE that key -- or one with a typo'd
+            # key -- matched neither clause, fell through to the line-based
+            # path, and was emitted verbatim at exit 0. A partial envelope is
+            # exactly what a killed `agent-browser` produces, so that was the
+            # likely shape, not an exotic one.
+            #
+            # A stray brace INSIDE an a11y node value does not begin a line, so
+            # ordinary text is unaffected and does not take the run down.
+            if any(ln.lstrip().startswith(("{", "[")) for ln in text.splitlines()):
                 die(f"input looks like JSON but does not parse ({exc.msg})")
         else:
             prefix = redact_text(text[:brace])

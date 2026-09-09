@@ -120,22 +120,33 @@ RECIPE = (
 # value the agent never supplied. Measured on both leaking surfaces; record at
 # knowledge-base/project/specs/feat-one-shot-7946-7947-sentry-org-token-and-snapshot-redaction/phase-0-measurement.md
 #
-# The property: no committed skill or agent instruction directs an accessibility
-# snapshot inside an authentication flow without routing it through the redactor.
-# The redactor is the fallback the guard permits, not a control that makes
-# snapshotting a credential page safe.
+# TWO rules, named for what each actually enforces. The first revision had ONE,
+# whose implemented predicate was "the string `redact-a11y-snapshot` appears
+# somewhere in this document" while its stated property was "no instruction
+# directs an unrouted snapshot". Those are different, and the gap was live: one
+# mention exempted 26 unrouted instructions across five shipped files, 19 of
+# which the PreToolUse hook DENIES at runtime. The plugin shipped commands its
+# own guard blocks, with the required check green.
 #
-# Quantified over every snapshot-invocation token, not just the agent-browser
-# one: the MCP interceptor is deferred, so for that path this walker is the only
-# committed control.
-SNAPSHOT_TOKEN_RE = re.compile(
-    r"(?:mcp__[a-z_]*__)?browser_snapshot"
-    r"|agent-browser(?:[^\n|;&]*?)\bsnapshot\b"
-)
+#   S1 (routing, per LINE): every `agent-browser ... snapshot` instruction is
+#      routed through the redactor ON THAT LINE. Deliberately NOT narrowed by
+#      auth context, because the hook it backs is not narrowed either -- it
+#      denies every unrouted invocation. A lint narrower than the runtime gate
+#      is teeth for a different rule than the one being enforced.
+#
+#   S2 (disclosure, per FILE): a document instructing a Playwright-MCP snapshot
+#      in an authentication context states that the MCP path has no runtime
+#      guard. Document scope is correct HERE -- a file states its safety rule
+#      once -- and the redactor pipe is deliberately NOT required, because an
+#      MCP tool result cannot be piped through a shell script. Requiring it
+#      produced two shipped blocks prescribing an inoperable command, which is
+#      the lint manufacturing its own compliance.
+AGENT_BROWSER_SNAPSHOT_RE = re.compile(r"agent-browser(?:\s+[^\s|;&]+)*\s+snapshot\b")
 
-# An authentication/credential context anywhere in the same document. A snapshot
-# on an ordinary page is not the hazard and must not be gated, or the guard
-# becomes a general snapshot ban and gets disabled.
+MCP_SNAPSHOT_RE = re.compile(r"(?:mcp__[a-z_]*__)?browser_snapshot\b")
+
+# An authentication/credential context anywhere in the same document. Used by S2
+# only. A snapshot on an ordinary page is not the hazard S2 describes.
 AUTH_CONTEXT_RE = re.compile(
     r"(?i)(?<![a-z0-9])(?:log[\s-]?in|sign[\s-]?in|password|passphrase"
     r"|credential|authentication|token|api[\s_-]?key|secret)(?![a-z0-9])"
@@ -145,15 +156,30 @@ AUTH_CONTEXT_RE = re.compile(
 # redact cannot satisfy the guard (cq-assert-anchor-not-bare-token).
 REDACTOR_ANCHOR_RE = re.compile(r"redact-a11y-snapshot")
 
-SNAPSHOT_RECIPE = (
-    "route it through `redact-a11y-snapshot.py` "
-    "(`agent-browser snapshot -i 2>&1 | python3 "
-    "plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`), or "
-    "take a screenshot instead -- noting that a screenshot is safe for a "
-    "type=password field and NOT for a readonly type=text credential panel, "
-    "which renders in clear"
+# The S2 disclosure. Anchored on the claim, not on a bare token, so prose that
+# merely mentions "Playwright MCP" does not satisfy it.
+# Whitespace-tolerant on purpose. A prose reflow that wraps the sentence would
+# otherwise disarm the marker silently, leaving the guard green and looking
+# alive while the disclosure it checks for is still present to a human reader.
+MCP_GAP_MARKER_RE = re.compile(
+    r"no\s+runtime\s+guard\s+on\s+the\s+Playwright-MCP\s+path", re.IGNORECASE
 )
 
+S1_RECIPE = (
+    "route it through the redactor on the same line "
+    '(`agent-browser snapshot -i 2>&1 | python3 '
+    '"${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"'
+    "/skills/agent-browser/scripts/redact-a11y-snapshot.py`) -- the PreToolUse "
+    "hook DENIES this command as written, so shipping it instructs the agent to "
+    "run something the guard blocks"
+)
+
+S2_RECIPE = (
+    "state in this file that the Playwright-MCP path has "
+    "'no runtime guard on the Playwright-MCP path' (#7980) -- the redactor "
+    "cannot be piped into an MCP tool result, so the honest control here is "
+    "disclosure, not routing"
+)
 
 # Population for family 2. Deliberately NARROWER than the host lint's walk.
 #
@@ -162,38 +188,44 @@ SNAPSHOT_RECIPE = (
 # knowledge-base plan, spec, session-state or post-mortem is a RECORD of what
 # happened, not an instruction -- gating those would red on every historical
 # document that describes the unsafe form, including the measurement record that
-# exists to document it, and the only way to satisfy it would be to stop writing
-# the incident down. Measured before scoping: the unscoped walk produced 65 hits,
-# 8 of them in this PR's own evidence files.
-#
-# agents/ has zero live members today (the token grep returns six files, all
-# under skills/). It is in the population by construction so the arm does not
-# rot on the first agent that gains a browser flow; the suite proves that arm
-# against a synthesized fixture rather than a live one.
+# exists to document it. Measured before scoping: the unscoped walk produced 65
+# hits, 8 of them in this issue's own evidence files.
 SNAPSHOT_RULE_DIRS = (
     "plugins/soleur/skills/",
     "plugins/soleur/agents/",
 )
 
 
-def scan_snapshot_rule(text: str, posix_path: str = "") -> list[tuple[int, str]]:
-    """Return (1-based line, token) for unrouted snapshots in an auth context.
+def scan_snapshot_rule(text: str, posix_path: str) -> list[tuple[int, str]]:
+    """Return (1-based line, message) for S1 and S2 violations."""
+    if not any(d in posix_path for d in SNAPSHOT_RULE_DIRS):
+        return []
 
-    File-scoped by construction: the redactor anchor and the auth context are
-    read from the WHOLE document, because a skill states its safety rule once
-    and invokes the snapshot elsewhere.
-    """
-    if posix_path and not any(d in posix_path for d in SNAPSHOT_RULE_DIRS):
-        return []
-    if REDACTOR_ANCHOR_RE.search(text) is not None:
-        return []
-    if AUTH_CONTEXT_RE.search(text) is None:
-        return []
     hits: list[tuple[int, str]] = []
-    for i, line in enumerate(text.splitlines()):
-        m = SNAPSHOT_TOKEN_RE.search(line)
-        if m:
-            hits.append((i + 1, m.group(0).strip()))
+    lines = text.splitlines()
+
+    # S1 -- per line, unconditional.
+    for i, line in enumerate(lines):
+        m = AGENT_BROWSER_SNAPSHOT_RE.search(line)
+        if m and REDACTOR_ANCHOR_RE.search(line) is None:
+            hits.append(
+                (i + 1, f"unrouted `{m.group(0).strip()}` -- {S1_RECIPE}")
+            )
+
+    # S2 -- per file.
+    if AUTH_CONTEXT_RE.search(text) and MCP_GAP_MARKER_RE.search(text) is None:
+        for i, line in enumerate(lines):
+            m = MCP_SNAPSHOT_RE.search(line)
+            if m:
+                hits.append(
+                    (
+                        i + 1,
+                        f"`{m.group(0)}` in an authentication context with no "
+                        f"MCP-gap disclosure -- {S2_RECIPE}",
+                    )
+                )
+                break
+
     return hits
 
 
@@ -238,9 +270,8 @@ def lint_file(path: Path) -> tuple[list[str], list[str]]:
         for ln, lit in advisory
     ]
     hard_out += [
-        f"{path}:{ln}: accessibility snapshot `{tok}` inside an authentication "
-        f"flow, not routed through the redactor -- {SNAPSHOT_RECIPE}."
-        for ln, tok in scan_snapshot_rule(text, path.as_posix())
+        f"{path}:{ln}: accessibility-snapshot rule: {msg}."
+        for ln, msg in scan_snapshot_rule(text, path.as_posix())
     ]
     return hard_out, adv_out
 
@@ -282,11 +313,6 @@ def changed_files(base_ref: str) -> list[Path] | None:
         p = Path(name)
         if p.is_file():
             picked.append(p)
-    return picked
-
-
-def full_scan_files() -> list[Path]:
-    picked, _ = full_scan_files_with_total()
     return picked
 
 
@@ -374,6 +400,28 @@ def main(argv: list[str]) -> int:
             )
             return 2
 
+        # Fire only when the rule's directories EXIST and hold no markdown --
+        # a real anomaly. A checkout that has no plugin tree at all (a fixture
+        # repo, a docs-only sparse checkout) is a different repo shape, not a
+        # vacuous run, and keying on the count alone red-lines it. That is the
+        # SAME mistake the aggregate floor above already made once, so it is
+        # worth stating: a population floor must distinguish "empty" from
+        # "absent", and the existing C3 case caught both attempts.
+        snapshot_dirs_present = any(Path(d).is_dir() for d in SNAPSHOT_RULE_DIRS)
+        snapshot_pop = sum(
+            1
+            for p in files
+            if any(d in p.as_posix() for d in SNAPSHOT_RULE_DIRS)
+        )
+        if snapshot_dirs_present and snapshot_pop == 0:
+            print(
+                "ERROR: the accessibility-snapshot rule population is empty (no "
+                f"tracked *.md under {', '.join(SNAPSHOT_RULE_DIRS)}). A rule "
+                "with nothing to check is vacuous, not clean. Fail-closed.",
+                file=sys.stderr,
+            )
+            return 2
+
     hard: list[str] = []
     advisory: list[str] = []
     for f in files:
@@ -388,7 +436,7 @@ def main(argv: list[str]) -> int:
     if hard:
         for e in hard:
             print(e, file=sys.stderr)
-        n_snap = sum(1 for e in hard if "accessibility snapshot" in e)
+        n_snap = sum(1 for e in hard if "accessibility-snapshot rule:" in e)
         n_path = len(hard) - n_snap
         print(
             f"\nFAIL: {n_path} resolvable credential-file path literal(s) and "

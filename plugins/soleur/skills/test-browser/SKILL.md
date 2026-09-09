@@ -148,7 +148,7 @@ Before testing, verify the local server is accessible:
 
 ```bash
 agent-browser open http://localhost:3000
-agent-browser snapshot -i
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 ```
 
 If server is not running, inform user:
@@ -175,19 +175,19 @@ For each affected route, use agent-browser CLI commands (NOT Chrome MCP):
 
 ```bash
 agent-browser open "http://localhost:3000/[route]"
-agent-browser snapshot -i
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 ```
 
 **Step 2: For headed mode (visual debugging)**
 
 ```bash
 agent-browser --headed open "http://localhost:3000/[route]"
-agent-browser --headed snapshot -i
+agent-browser --headed snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 ```
 
 **Step 3: Verify key elements**
 
-- Use `agent-browser snapshot -i` to get interactive elements with refs
+- Use `agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py` to get interactive elements with refs
 
 **Credential safety (#7947).** An accessibility snapshot serializes the **value**
 of input fields, including a value the agent never typed (a password manager's
@@ -208,8 +208,8 @@ credential page".
 **Step 4: Test critical interactions**
 
 ```bash
-agent-browser click @e1  # Use ref from snapshot
-agent-browser snapshot -i
+agent-browser click @e1  # Use ref from snapshot 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
 ```
 
 **Step 5: Take screenshots**
@@ -375,8 +375,8 @@ agent-browser back                 # Go back
 agent-browser close                # Close browser
 
 # Snapshots (get element refs)
-agent-browser snapshot -i          # Interactive elements with refs (@e1, @e2, etc.)
-agent-browser snapshot -i --json   # JSON output
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Interactive elements with refs (@e1, @e2, etc.)
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # JSON output
 
 # Interactions (use refs from snapshot)
 agent-browser click @e1            # Click element

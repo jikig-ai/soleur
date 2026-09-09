@@ -107,16 +107,26 @@ For each test scenario in the plan, execute the steps it describes. Scenarios co
 
 - **Browser:** steps — Execute via Playwright MCP tools (`browser_navigate`, `browser_fill_form`, `browser_click`, `browser_snapshot`, `browser_take_screenshot`)
 
-**Credential safety (#7947).** An accessibility snapshot serializes the **value**
-of input fields, including a value the agent never typed (a password manager's
-autofill, a static `value=`, a generated-credential panel). On any page carrying
-a password or credential field, route the snapshot through the redactor —
-`agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`
-— and never capture a page that is displaying a credential value: a screenshot
-is safe for a `type=password` field but **not** for a readonly `type=text`
-credential panel, which renders in clear. Full rule and its measured ceiling:
-`plugins/soleur/skills/agent-browser/SKILL.md` §"Credential safety on a login or
-credential page".
+**Credential safety on the Playwright-MCP path (#7947).** An accessibility
+snapshot serializes the **value** of input fields, including a value the agent
+never typed — a password manager's autofill, a static `value=`, or a
+generated-credential panel.
+
+There is **no runtime guard on the Playwright-MCP path.** The PreToolUse
+interceptor covers the `agent-browser` Bash path only (#7980), and
+`@playwright/mcp`'s `--secrets` option masks only values named in advance, so it
+cannot reach a value the agent never supplied. Do not read the redactor as
+covering this path: an MCP tool result is not a shell stream and cannot be piped
+through a script.
+
+On a page carrying a password or credential field:
+
+- pass `filename:` to `browser_snapshot` so the tree is written to a file
+  instead of returned into the transcript, then filter that file and shred it —
+  `python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py < FILE && shred -u FILE`;
+- on a page **displaying** a credential, capture neither. A screenshot is safe
+  for a `type=password` field and renders a readonly `type=text` credential
+  panel in clear, exactly as the snapshot does (measured).
 
 - **API verify:** steps — Execute the exact `doppler run` + `curl` command from the scenario. Compare the output against the expected value stated in the scenario.
 - **Cleanup:** steps — Execute cleanup commands to remove test data from external services. Run these regardless of whether the scenario passed or failed.

@@ -26,8 +26,8 @@ README="$REPO_ROOT/.claude/hooks/README.md"
 
 pass=0; fail=0; cases=0
 # 3 deny + 4 allow + 5 registration + 2 reason-content rows,
-# + 7 review rows (round 1) = 21.
-MIN_ASSERTIONS=21
+# + 7 review rows (round 1) + 4 review rows (round 2) = 25.
+MIN_ASSERTIONS=25
 
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
@@ -58,9 +58,19 @@ assert_deny() {
 }
 
 assert_allow() {
-  local label="$1" cmd="$2" d
-  cases=$((cases + 1)); d="$(decision "$cmd")"
-  [[ "$d" != "deny" ]] && ok "$label" || bad "$label — expected allow, got deny"
+  local label="$1" cmd="$2" out rc
+  cases=$((cases + 1))
+  out="$(envelope "$cmd" | bash "$HOOK" 2>/dev/null)"; rc=$?
+  # rc and emptiness are both asserted: a hook that ERRORS on every ordinary
+  # Bash call in the session produces no decision, which a `!= deny` test reads
+  # as a clean allow.
+  if [[ $rc -ne 0 ]]; then
+    bad "$label — hook exited $rc on an allowed command"
+  elif [[ -n "$out" ]]; then
+    bad "$label — expected no decision, got: ${out:0:60}"
+  else
+    ok "$label"
+  fi
 }
 
 # ---- Deny rows (Guard 3 M1-M3) ----
@@ -135,6 +145,27 @@ else
   bad 'jq absent: the guard silently allows (guard off, no signal, on a machine SKILL.md tells the agent is protected)'
 fi
 
+# ---- Review rows (round 2): separator cardinality and the stated contract ----
+
+# Four separators, two exercised. `;` and `||` had no row, so truncating the
+# splitter to `&&|&` survived while both became live bypasses.
+assert_deny 'separator: ; with an unrouted second invocation' \
+  "agent-browser snapshot -i | $RED ; agent-browser snapshot --json"
+assert_deny 'separator: || with an unrouted second invocation' \
+  "agent-browser snapshot -i | $RED || agent-browser snapshot --json"
+
+# The header states "any parse failure exits 0 with no decision" -- a contract
+# with zero coverage until now, so hard-failing on a malformed envelope (which
+# would block EVERY Bash call in the session) survived.
+cases=$((cases + 1))
+empty_rc=0; printf '' | bash "$HOOK" >/dev/null 2>&1 || empty_rc=$?
+cases2_rc=0; printf 'not json at all' | bash "$HOOK" >/dev/null 2>&1 || cases2_rc=$?
+if [[ $empty_rc -eq 0 && $cases2_rc -eq 0 ]]; then
+  ok 'malformed/empty envelope: exits 0 with no decision (does not block every Bash call)'
+else
+  bad "malformed envelope must fail open (empty rc=$empty_rc, non-json rc=$cases2_rc)"
+fi
+
 # ---- Reason content: the deny must name BOTH escape routes ----
 cases=$((cases + 1))
 reason="$(envelope 'agent-browser snapshot -i' | bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)"
@@ -191,16 +222,29 @@ else
   bad 'shipped registration must use matcher "Bash"'
 fi
 
+# Exact-filename anchor here too. The shipped-manifest row was hardened in
+# round 1 and these two were left on the substring form, so a rename to
+# `...-guard-TYPO.sh` in BOTH this file and the README passed while this
+# checkout's own registration pointed at a script that does not exist.
 cases=$((cases + 1))
-if jq -e '.hooks.PreToolUse[]?.hooks[]?.command | select(test("browser-snapshot-credential-guard"))' \
-     "$LOCAL_SETTINGS" >/dev/null 2>&1; then
-  ok 'registered in this checkout (.claude/settings.json)'
+LOCAL_CMD="$(jq -r '.hooks.PreToolUse[]?.hooks[]?.command // empty' "$LOCAL_SETTINGS" 2>/dev/null \
+  | grep -F 'browser-snapshot-credential-guard' || true)"
+if [[ "$LOCAL_CMD" == *"/hooks/browser-snapshot-credential-guard.sh" ]]; then
+  ok 'registered in this checkout (.claude/settings.json) with the exact filename'
 else
-  bad 'NOT registered in .claude/settings.json'
+  bad "NOT registered in .claude/settings.json with the exact filename (got '${LOCAL_CMD:-<none>}')"
 fi
 
 cases=$((cases + 1))
-if grep -q 'browser-snapshot-credential-guard' "$README" 2>/dev/null; then
+LOCAL_RESOLVED="${LOCAL_CMD//\"\$CLAUDE_PROJECT_DIR\"/$REPO_ROOT}"
+if [[ -n "$LOCAL_CMD" && -x "$LOCAL_RESOLVED" ]]; then
+  ok 'this checkout registration resolves to an existing executable'
+else
+  bad "this checkout registration does not resolve (tried '${LOCAL_RESOLVED:-<none>}')"
+fi
+
+cases=$((cases + 1))
+if grep -q 'browser-snapshot-credential-guard\.sh' "$README" 2>/dev/null; then
   ok 'documented in .claude/hooks/README.md'
 else
   bad 'missing a row in .claude/hooks/README.md'

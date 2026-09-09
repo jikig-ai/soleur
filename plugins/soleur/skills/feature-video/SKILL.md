@@ -186,7 +186,7 @@ agent-browser screenshot tmp/screenshots/01-start.png
 **Step 2: Perform navigation/interactions**
 
 ```bash
-agent-browser snapshot -i  # Get refs
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Get refs
 agent-browser click @e1    # Click navigation element
 agent-browser wait 1000
 agent-browser screenshot tmp/screenshots/02-navigate.png
@@ -195,7 +195,7 @@ agent-browser screenshot tmp/screenshots/02-navigate.png
 **Step 3: Demonstrate feature**
 
 ```bash
-agent-browser snapshot -i  # Get refs for feature elements
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Get refs for feature elements
 agent-browser click @e2    # Click feature element
 agent-browser wait 1000
 agent-browser screenshot tmp/screenshots/03-feature.png
