@@ -111,7 +111,7 @@ Scope is one file. This PR is deliberately separate from the open PR #7999.
 | Issue #7204 | `gh issue view` | OPEN — "git-data rung-2 rehearsal dies at stage:luks_open …" |
 | Issue #7772 | `gh issue view` | CLOSED — the metadata-egress control shipped |
 | Sibling interlock `git_data_birth_readiness_gate` | non-comment `sentry_dsn` count in the cloud-init | **2** → already RELEASED |
-| `.gitignore` vs the evidence path | `git check-ignore -v` | exit 1 — **not ignored**. Line 52's bare `.env` matches only a file literally named `.env`, so `git add` will work |
+| `.gitignore` vs the evidence path | `git check-ignore -v` | exit 1 — **not ignored**. the bare `.env` entry (directly above `_site/`) matches only a file literally named `.env`, so `git add` will work |
 
 Verified by the lead and **not** re-derived here: the user_data hash at this branch tip
 (`723ab68b5`) equals `3a2392fb5b0d4fae9d4abeaf5ca10ee682430e473dd9eac1ca3d340ef4ce1725`, and
@@ -348,7 +348,9 @@ required; the gate reads only files in the working tree.
 
 ## Files to Edit
 
-None.
+None directly. The pre-commit hook sweeps `knowledge-base/INDEX.md` in alongside the planning
+artifacts (a file-count header bump plus two list rows), which is why AC4 filters on
+`knowledge-base/` rather than asserting a bare one-file diff.
 
 ## Implementation Phases
 
@@ -594,27 +596,43 @@ so this is not discovered on the remote.
   ```bash
   EV=apps/web-platform/infra/git-data-rung2-boot-evidence.env
   grep -c 'remote($BS_TABLE)' "$EV"                        # 3  — literal, not expanded
+  grep -c 's3Cluster(primary, $BS_TABLE_S3)' "$EV"         # 3  — literal, not expanded
   grep -cE 'remote\([0-9]|t[0-9]{6}_soleur' "$EV"          # 0  — no source id, no table name
   ```
 
   > **AC5 amended at /work (2026-09-09):** the first count was authored as `1` and measures **3** —
   > the anchor, host-rows and fatal queries each carry `remote($BS_TABLE)`. Only the count was
-  > wrong; the load-bearing assertion is the second line, and it measures `0` as specified. The
-  > artifact was not edited.
+  > wrong; the artifact was not edited. The load-bearing assertion is the LAST line, and it
+  > measures `0` as specified — but note its coverage is naming-convention-dependent: the
+  > `remote\([0-9]` alternative is dead against this source (the expanded form is
+  > `t520508_soleur_git_data_prd_logs`, which does not start with a digit), so all the weight
+  > sits on `t[0-9]{6}_soleur`, and that hardcodes a six-digit team id. The positive
+  > `$BS_TABLE`/`$BS_TABLE_S3` counts above are the convention-independent half: they assert the
+  > tokens SURVIVED unexpanded rather than enumerating what an expansion would look like.
 
-**AC7 — The `nft_metadata_drop` reading is captured from the run output, not asserted from the
-file.**
+**AC7 — The `nft_metadata_drop` reading is taken by a direct Better Stack read — not from the
+capture output, and not from the evidence file.**
 
 The evidence file records the *queries*, not the *rows*. So nothing in it substantiates "all
 five booleans were `yes`" — and the capture's PASS predicate does not turn on them either
 (`boot_complete` reached, no `level:fatal`). Four of the five are hardcoded literals anyway.
 
 The one that carries information is `nft_metadata_drop`, because it is measured on the host and
-it is the entire basis for the #7772 claim in the PR body. Read it from the capture's own
-host-rows output at Phase 2 time and paste the observed `boot_complete` row into the PR body.
+it is the entire basis for the #7772 claim in the PR body.
+
+**Neither committed artifact can supply it.** The `.env` records queries rather than rows, and
+the capture's `__HOSTROWS__` SELECT projects only `luks_mounted, repo_root, hooks_path,
+provision` — the same four its false-assertion arm greps. `nft_metadata_drop` is in the emit
+(`git-data-bootstrap.sh`) and in neither reader. So read it directly, record the SQL in the PR
+body next to the pasted row, and paste the observed `boot_complete` row.
 
 ```bash
-# The value is in the capture's stdout for the host-rows query, not in the .env.
+# NOT in the .env, and NOT in the capture's stdout — the host-rows SELECT omits it.
+# Direct read; record this SQL in the PR body alongside the row.
+#   SELECT JSONExtractString(raw,'stage') AS stage,
+#          JSONExtractString(raw,'nft_metadata_drop') AS nft_metadata_drop
+#   FROM (remote($BS_TABLE) UNION ALL s3Cluster(primary, $BS_TABLE_S3))
+#   WHERE host_name = 'soleur-git-data-rehearsal-33888071954' AND stage = 'boot_complete'
 # Expect: nft_metadata_drop=yes
 ```
 
@@ -699,8 +717,9 @@ of claim, and they should not be blurred:
 - **`nft_metadata_drop=yes`, so the metadata-egress control from #7772 loaded.** This is the one
   boolean of the five that is measured rather than hardcoded, and it is therefore the only one
   that carries information. Note that it is **not** part of the capture's pass predicate and the
-  evidence file records the queries rather than the rows — so this value is quoted here from the
-  capture's own host-rows output, read by a person, not self-reported by the committed file.
+  evidence file records the queries rather than the rows, and the capture's host-rows query does
+  not project this column either — so this value was read directly from Better Stack by a person,
+  with the query recorded beside it. It is not self-reported by any committed artifact.
 
 Observed `boot_complete` row, pasted from the capture run: `<paste it here at Phase 5>`.
 
