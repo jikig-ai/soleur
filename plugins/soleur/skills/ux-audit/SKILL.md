@@ -74,7 +74,22 @@ For each route:
 
 1. If `auth: bot`, invoke [bot-signin.ts](./scripts/bot-signin.ts) once per run (the storage-state file is reused across routes). Script writes the Supabase SSR auth cookie to `${GITHUB_WORKSPACE}/tmp/ux-audit/storage-state.json` (absolute path, per [hr-mcp-tools-playwright-etc-resolve-paths]).
 2. Verify route `fixture_prereqs` are satisfied. If `kb_workspace_deferred` appears in `fixture_prereqs`, log `route skipped: missing prereq kb_workspace_deferred (tracked in #2351)` and continue. The [bot-fixture.ts](./scripts/bot-fixture.ts) `seed` subcommand idempotently satisfies `tcs_accepted`, `billing_active`, and `chat_conversations`.
-3. Launch Playwright MCP. Use `browser_navigate` + `browser_take_screenshot` at the route's `viewport` size. Save PNG to `${GITHUB_WORKSPACE}/tmp/ux-audit/<route-slug>.png` (slug `/dashboard/kb` → `dashboard-kb`).
+3. Launch Playwright MCP. Use `browser_navigate` + `browser_take_screenshot` at the route's `viewport` size.
+
+   **Credential safety — this skill publishes its captures (#7947).** These
+   screenshots are taken INSIDE an authenticated bot session (step 1) and are
+   attached to a GitHub issue at step 6, so a leak here leaves the operator's
+   machine. Measured: a screenshot is safe for an `input type=password` (the
+   browser renders dots) and renders a **readonly `type=text` credential panel
+   in clear** — an API-key or token field on a settings page looks exactly like
+   ordinary text to the renderer.
+
+   So: **do not capture a route that displays a credential value.** Skip any
+   settings/API-key/token route rather than capturing and redacting after the
+   fact, and never widen the route list to one without checking what it renders.
+   There is **no runtime guard on the Playwright-MCP path** (#7980) — the
+   `agent-browser` interceptor does not see MCP tool calls — so this rule is the
+   only control on this surface. Save PNG to `${GITHUB_WORKSPACE}/tmp/ux-audit/<route-slug>.png` (slug `/dashboard/kb` → `dashboard-kb`).
 4. If navigation/screenshot fails for a single route, log `::warning::route capture failed: <path>` and continue — one route failure does not abort the run.
 
 ### 4. Delegate to ux-design-lead (audit mode)

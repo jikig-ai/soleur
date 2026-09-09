@@ -255,9 +255,255 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Rule family 2 -- unrouted accessibility snapshot in an authentication flow
+# (#7947). Guard 1's mutation matrix.
+#
+# Fixtures must live under a path containing plugins/soleur/{skills,agents}/,
+# because family 2 is deliberately scoped to what the SHIPPED PLUGIN instructs.
+# A knowledge-base record that DESCRIBES the unsafe form is not an instruction
+# and must not be gated -- the measurement record for this very issue would
+# otherwise red the guard it documents.
+# ---------------------------------------------------------------------------
+SNAP_SKILLS="$TMPDIR_TEST/plugins/soleur/skills/probe"
+SNAP_AGENTS="$TMPDIR_TEST/plugins/soleur/agents/probe"
+mkdir -p "$SNAP_SKILLS" "$SNAP_AGENTS"
+
+snapcase() {  # snapcase <dir> <basename>
+  CASE_N=$((CASE_N + 1))
+  local f="$1/${2}_${CASE_N}.md"
+  cat > "$f"
+  printf '%s' "$f"
+}
+
+# M1 -- the original Login Flow body: snapshot a login page, fill a password,
+# snapshot again. This is the exact text this PR removed; it must RED.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+### Login Flow
+
+agent-browser open https://app.example.com/login
+agent-browser snapshot -i
+agent-browser fill @e2 "password123"
+EOF
+)"
+run_case "S1 unrouted agent-browser snapshot in a login flow fails" 1 "$f"
+
+# M5 -- the predicate must quantify over the MCP token too, not just the
+# agent-browser form. The MCP interceptor is deferred, so for that path this
+# walker is the only committed control.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+Sign in to the dashboard, then call mcp__playwright__browser_snapshot to read
+the password field state.
+EOF
+)"
+run_case "S2 unrouted mcp__playwright__browser_snapshot in a login flow fails" 1 "$f"
+
+# M3 -- the agents/ arm is wired despite having no live member today.
+f="$(snapcase "$SNAP_AGENTS" agent <<'EOF'
+# Probe agent
+
+Navigate to the credential settings page and call browser_snapshot to read the
+API key panel.
+EOF
+)"
+run_case "S3 agents/ arm is wired (synthesized fixture)" 1 "$f"
+
+# M6 -- the allow-predicate is anchored on the redactor FILENAME. A look-alike
+# command that does not redact must not satisfy it.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+Sign in, then run:
+agent-browser snapshot -i | python3 scripts/redact-snapshot-lookalike.py
+EOF
+)"
+run_case "S4 look-alike redactor name does not satisfy the guard" 1 "$f"
+
+# H3 must-PASS -- a snapshot with NO authentication context. Gating this would
+# make the guard a general snapshot ban, and a general ban gets disabled.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+Open the pricing page and run agent-browser snapshot -i to find the CTA ref.
+EOF
+)"
+# Deliberately flipped in review round 1. The routing rule is now
+# UNCONDITIONAL, because the PreToolUse hook it backs is unconditional: it
+# denies every unrouted `agent-browser ... snapshot` regardless of auth context.
+# A lint narrower than the runtime gate is teeth for a different rule, and the
+# gap shipped `feature-video/SKILL.md` with two commands its own hook blocks and
+# no CI signal.
+run_case "S5 unrouted snapshot fails even with NO auth context (matches the hook)" 1 "$f"
+
+# H4 must-PASS -- a skill that names a password field but takes a SCREENSHOT.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+On the login page, take agent-browser screenshot /tmp/x.png rather than a
+snapshot, because the password field renders as dots.
+EOF
+)"
+run_case "S6 must-PASS: screenshot on a password page is clean" 0 "$f"
+
+# H5 must-PASS -- the corrected routed form. The carve-out must actually be
+# permitted, or the guard forces a screenshot leak in its place.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+On the login page, route the snapshot through the redactor:
+agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py
+EOF
+)"
+run_case "S7 must-PASS: routed through the redactor is permitted" 0 "$f"
+
+# Scope -- a knowledge-base RECORD describing the unsafe form is not an
+# instruction and must not be gated.
+f="$(mkcase <<'EOF'
+# A record
+
+The 2026-09-08 session ran `agent-browser snapshot -i` on a login page and the
+password was rendered into the transcript.
+EOF
+)"
+run_case "S8 must-PASS: a knowledge-base record is out of family-2 scope" 0 "$f"
+
+# M2 -- a check that stops at the first offending member is itself an instance
+# of the class. Two offending files must BOTH be cited.
+f1="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill one
+
+Sign in, then agent-browser snapshot -i
+EOF
+)"
+f2="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill two
+
+Sign in, then agent-browser snapshot -i
+EOF
+)"
+CASE_N=$((CASE_N + 1))
+both_out="$(python3 "$SUT" "$f1" "$f2" 2>&1 || true)"
+n_cited=0
+grep -qF "$f1" <<<"$both_out" && n_cited=$((n_cited + 1))
+grep -qF "$f2" <<<"$both_out" && n_cited=$((n_cited + 1))
+if [[ "$n_cited" -eq 2 ]]; then
+  pass "S9 both offending files are cited, not just the first"
+else
+  fail "S9 both offending files are cited, not just the first" "cited=$n_cited"
+fi
+
+# M4 -- the anti-vacuity floor: a full scan whose population is empty must
+# exit 2, not report a clean 0.
+CASE_N=$((CASE_N + 1))
+empty_rc=0
+(
+  cd "$TMPDIR_TEST" && mkdir -p emptyrepo && cd emptyrepo \
+    && git init -q . && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m base \
+    && python3 "$SUT" >/dev/null 2>&1
+) || empty_rc=$?
+if [[ "$empty_rc" == "2" ]]; then
+  pass "S10 empty full-scan population exits 2 (not a vacuous clean 0)"
+else
+  fail "S10 empty full-scan population exits 2" "actual=$empty_rc"
+fi
+
+# ---- Review rows (round 2) ----
+
+# L2 (the sharpest one): every S-row above passes an ABSOLUTE mktemp path, but
+# CI runs full-scan, whose rglob yields RELATIVE paths. So the rule could be
+# disabled on the only path CI uses and the whole suite stayed green. This row
+# runs the SUT in full-scan mode over a populated in-scope tree.
+CASE_N=$((CASE_N + 1))
+rel_rc=0
+(
+  set -e
+  REPO="$TMPDIR_TEST/relscan"
+  mkdir -p "$REPO/plugins/soleur/skills/probe" "$REPO/knowledge-base"
+  cd "$REPO"
+  git init -q -b main .
+  git config user.email t@t && git config user.name t
+  printf '# Probe\n\nSign in, then agent-browser snapshot -i\n' \
+    > plugins/soleur/skills/probe/SKILL.md
+  printf '# kb\n\nnothing\n' > knowledge-base/x.md
+  git add -A && git commit -q -m base
+  rc=0
+  python3 "$SUT" >/dev/null 2>&1 || rc=$?   # full-scan == relative paths
+  [[ "$rc" == "1" ]]
+) || rel_rc=$?
+if [[ "$rel_rc" == "0" ]]; then
+  pass "S11 full-scan (RELATIVE paths, the mode CI runs) still enforces the rule"
+else
+  fail "S11 full-scan (RELATIVE paths) enforces the rule" "sub-shell status=$rel_rc"
+fi
+
+# L7: the same tree, made compliant, must come back clean -- so S11 is pinned in
+# both directions rather than only proving the guard can fire.
+CASE_N=$((CASE_N + 1))
+relok_rc=0
+(
+  set -e
+  REPO="$TMPDIR_TEST/relscan_ok"
+  mkdir -p "$REPO/plugins/soleur/skills/probe"
+  cd "$REPO"
+  git init -q -b main .
+  git config user.email t@t && git config user.name t
+  printf '# Probe\n\nSign in, then:\nagent-browser snapshot -i | python3 redact-a11y-snapshot.py\n' \
+    > plugins/soleur/skills/probe/SKILL.md
+  git add -A && git commit -q -m base
+  rc=0
+  python3 "$SUT" >/dev/null 2>&1 || rc=$?
+  [[ "$rc" == "0" ]]
+) || relok_rc=$?
+if [[ "$relok_rc" == "0" ]]; then
+  pass "S12 full-scan over a COMPLIANT in-scope tree is clean"
+else
+  fail "S12 full-scan over a compliant tree is clean" "sub-shell status=$relok_rc"
+fi
+
+# L1: S8's fixture was written by mkcase to a path under NO scan dir, so it was
+# out of scope for any directory list and could not see the widening it exists
+# to pin. This one sits genuinely under knowledge-base/.
+CASE_N=$((CASE_N + 1))
+kb_rc=0
+(
+  set -e
+  REPO="$TMPDIR_TEST/kbscope"
+  mkdir -p "$REPO/knowledge-base/project/learnings" "$REPO/plugins/soleur/skills/keep"
+  cd "$REPO"
+  git init -q -b main .
+  git config user.email t@t && git config user.name t
+  printf '# A record\n\nThe session ran `agent-browser snapshot -i` on a login page and the password was rendered.\n' \
+    > knowledge-base/project/learnings/rec.md
+  printf '# keep\n\nnothing\n' > plugins/soleur/skills/keep/SKILL.md
+  git add -A && git commit -q -m base
+  rc=0
+  python3 "$SUT" >/dev/null 2>&1 || rc=$?
+  [[ "$rc" == "0" ]]
+) || kb_rc=$?
+if [[ "$kb_rc" == "0" ]]; then
+  pass "S13 a knowledge-base RECORD under a real kb path is out of scope"
+else
+  fail "S13 knowledge-base record is out of scope" "sub-shell status=$kb_rc"
+fi
+
+# L5: four of the nine auth-context alternatives had no fixture, so truncating
+# the vocabulary survived. S2's disclosure rule keys on it.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+Complete authentication, then call browser_snapshot to read the secret
+passphrase field for the token.
+EOF
+)"
+run_case "S14 auth vocabulary: authentication/secret/passphrase/token trigger S2" 1 "$f"
+
+# ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=19
+MIN_CASES=34
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

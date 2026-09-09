@@ -50,6 +50,11 @@ fast with `No usable sandbox! ... unprivileged user namespaces ... AppArmor` and
 2. If it still fails, a stale/wedged daemon may be holding the socket. Clear it:
    `pkill -f agent-browser-linux-x64; rm -rf /tmp/agent-browser/* "/run/user/$(id -u)/agent-browser/"*`
    then retry. (Never kill `playwright-mcp` processes — those are a separate stack.)
+   The commonest cause is a daemon whose worktree was REAPED: resolve each match's
+   `/proc/<pid>/cwd` and expect one ending `(deleted)`, often weeks old and inherited
+   by every later session on the machine. Such a daemon does not answer and **survives
+   SIGTERM** — it needs `kill -9`. Nothing in the CLI's error names any of this; the
+   only symptom is `Resource temporarily unavailable (os error 11)` (#7947).
 3. Verify: `AGENT_BROWSER_ARGS="--no-sandbox" timeout 45 agent-browser open https://example.com --headless` → exit 0 + a `✓` line.
 
 ### Troubleshooting: Playwright MCP backend closed between calls
@@ -90,19 +95,37 @@ If you see "Version mismatch between agent-browser (expects 1200) and installed 
 3. **Interact** using refs (@e1, @e2, etc.)
 4. **Re-snapshot** after navigation or DOM changes
 
+### Preflight: verify the plugin install before any snapshot
+
+The redactor is reached through `${CLAUDE_PLUGIN_ROOT}`. An ambient value pointing at a
+directory that is not a Soleur install would resolve to a path that does not exist — or, worse,
+to one an attacker chose. Verify plugin IDENTITY and halt if it does not hold (ADR-179 decision 2);
+a `test -f` on the script alone is a shape check and was measured bypassable.
+
+```bash
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_SNAPSHOT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  Cannot locate the snapshot redactor, so no accessibility snapshot may be taken here." >&2
+       echo "  Root EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session." >&2
+       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur', then RESTART Claude Code." >&2
+       echo "  Nothing has been captured yet, so nothing has leaked." >&2
+       exit 2; }
+```
+
 ```bash
 # Step 1: Open URL
 agent-browser open https://example.com
 
 # Step 2: Get interactive elements with refs
-agent-browser snapshot -i --json
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 
 # Step 3: Interact using refs
 agent-browser click @e1
 agent-browser fill @e2 "search query"
 
 # Step 4: Re-snapshot after changes
-agent-browser snapshot -i
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 ## Key Commands
@@ -120,11 +143,11 @@ agent-browser close            # Close browser
 ### Snapshots (Essential for AI)
 
 ```bash
-agent-browser snapshot              # Full accessibility tree
-agent-browser snapshot -i           # Interactive elements only (recommended)
-agent-browser snapshot -i --json    # JSON output for parsing
-agent-browser snapshot -c           # Compact (remove empty elements)
-agent-browser snapshot -d 3         # Limit depth
+agent-browser snapshot 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Full accessibility tree
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Interactive elements only (recommended)
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # JSON output for parsing
+agent-browser snapshot -c 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Compact (remove empty elements)
+agent-browser snapshot -d 3 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Limit depth
 ```
 
 ### Interactions
@@ -195,24 +218,63 @@ agent-browser state list
 
 ## Examples
 
+### Credential safety on a login or credential page
+
+An accessibility snapshot serializes the **value** of input fields. A value the
+agent never typed — a password manager's autofill, a static `value=`, a JS
+assignment, or a freshly-minted credential shown in a panel — is rendered into
+the transcript and into any snapshot file written to disk. Nothing about the
+call looks credential-adjacent, which is why this is a gate and not advice: the
+PreToolUse hook `browser-snapshot-credential-guard.sh` denies an unrouted
+snapshot before it runs (#7947).
+
+**Route every snapshot on a credential-bearing page through the redactor**,
+[redact-a11y-snapshot.py](./scripts/redact-a11y-snapshot.py):
+
+```bash
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
+```
+
+Stating the ceiling first, because the rule is otherwise read as "piping makes a
+snapshot safe": the redactor is **defense-in-depth on one sink**, not a control
+that makes snapshotting a credential page safe. It keys on the node's accessible
+name, because neither surface serializes the input's `type` — measured, see the
+[Phase 0.1 record](../../../../knowledge-base/project/specs/feat-one-shot-7946-7947-sentry-org-token-and-snapshot-redaction/phase-0-measurement.md).
+It therefore cannot see a localised field name, a credential outside a
+text-input role, or a value split across segmented inputs.
+
+**A screenshot is safe for a `type=password` field** — the browser renders it as
+dots — **and is NOT safe for a generated-credential panel.** Measured: a readonly
+`type=text` box named "Token" renders its value in clear in the screenshot
+exactly as it does in the snapshot. On a page displaying a credential, capture
+neither: read the value with `agent-browser get value <sel>` into a file, use it,
+and shred the file.
+
 ### Login Flow
+
+`fill @e2` needs a ref, and a ref comes from a snapshot — so the login step
+snapshots **through the redactor** rather than not at all.
 
 ```bash
 agent-browser open https://app.example.com/login
-agent-browser snapshot -i
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 # Output shows: textbox "Email" [ref=e1], textbox "Password" [ref=e2], button "Sign in" [ref=e3]
 agent-browser fill @e1 "user@example.com"
-agent-browser fill @e2 "password123"
+# Pass the secret by env indirection -- never a literal, which lands in the
+# transcript as the tool-call argument before any snapshot happens.
+agent-browser fill @e2 "$APP_PASSWORD"
 agent-browser click @e3
 agent-browser wait 2000
-agent-browser snapshot -i  # Verify logged in
+# Verify logged in -- still through the redactor: the password manager may have
+# refilled the field on the post-login page.
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 ### Search and Extract
 
 ```bash
 agent-browser open https://news.ycombinator.com
-agent-browser snapshot -i --json
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 # Parse JSON to find story links
 agent-browser get text @e12  # Get headline text
 agent-browser click @e12     # Click to open story
@@ -222,7 +284,7 @@ agent-browser click @e12     # Click to open story
 
 ```bash
 agent-browser open https://forms.example.com
-agent-browser snapshot -i
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 agent-browser fill @e1 "John Doe"
 agent-browser fill @e2 "john@example.com"
 agent-browser select @e3 "United States"
@@ -236,7 +298,7 @@ agent-browser screenshot confirmation.png
 ```bash
 # Run with visible browser window
 agent-browser --headed open https://example.com
-agent-browser --headed snapshot -i
+agent-browser --headed snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 agent-browser --headed click @e1
 ```
 
@@ -245,7 +307,7 @@ agent-browser --headed click @e1
 Add `--json` for structured output:
 
 ```bash
-agent-browser snapshot -i --json
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 Returns:

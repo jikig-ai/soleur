@@ -117,12 +117,15 @@ const log = createChildLogger("git-lock-marker-telemetry");
 //     refusal is the safe outcome; genuine git breakage surfaces as a wedge via the
 //     creation path's own SOLEUR_GIT_LOCK_*/SOLEUR_GIT_CONFIG_* markers.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|TRIGGER_CRON)_HALT\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_(?:INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
-// MIRRORED-NOT-PAGED, deliberately: the four SOLEUR_*_HALT families (#7450).
+// MIRRORED-NOT-PAGED, deliberately: the five SOLEUR_*_HALT families (#7450, #7947).
 //
 // These are the secret gates' fail-closed refusals — `incident`, `legal-generate`,
-// `linear-fetch`, `trigger-cron`. They belong in MARKER_RE because a refusal that reaches no
+// `linear-fetch`, `trigger-cron`, and `snapshot` (#7947: one shared sentinel for the six
+// browser-driving skills that reach the accessibility-snapshot redactor, because the halt
+// condition — plugin root unverified before a snapshot — is identical across all six and a
+// per-skill name would buy six rows of noise and no extra signal). They belong in MARKER_RE because a refusal that reaches no
 // sink is indistinguishable from a run that never happened, and the gate's whole purpose is to
 // refuse. They must NOT go in WEDGE_RE: the dominant cause is a customer whose plugin simply
 // is not installed, and paging an operator for that is how a page becomes noise.
