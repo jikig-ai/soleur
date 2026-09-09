@@ -20,7 +20,7 @@
 # SCOPE. These are relationships among DECLARED constants, which is all a static guard can hold.
 # It deliberately asserts nothing about whether CEILING_S is large enough for real CI — declared
 # budgets bound execution only and omit the queue, which is the reasoning that got Guard 2
-# rejected (ADR-208). The quantity-measuring counterpart is the 0.7 x CEILING_S ::warning:: inside
+# rejected (ADR-212). The quantity-measuring counterpart is the 0.7 x CEILING_S ::warning:: inside
 # await-ci itself; row I4 asserts that warning still has a consumer, because an output nothing
 # reads is the same defect class in a different dress.
 set -uo pipefail

@@ -123,7 +123,7 @@ silently runs a subset).
 
 ## Post-review amendments (2026-09-07)
 
-- [x] Guard 2 + battery + its ci.yml step DELETED on a CTO ruling; ADR-208 rewritten at the same
+- [x] Guard 2 + battery + its ci.yml step DELETED on a CTO ruling; ADR-212 rewritten at the same
       ordinal to record the rejection. Phase 4's tasks are superseded, not unmet.
 - [x] `await-ci` gains a `::warning::` at 0.7 x CEILING_S (derived, never restated) — the
       replacement mechanism, measuring the gated quantity including the concurrency queue.
