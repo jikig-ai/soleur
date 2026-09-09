@@ -559,6 +559,29 @@ if [ -z "$_dis" ]; then pass; else
   fail "G9 notify-gated's if: names ${_dis}which its case does not handle — the job fires and then falls through to no message"
 fi
 
+# ═══ GUARD 12 — the two arms are equally strict ═════════════════════════════
+# D2's stop condition is that every `needs.release.*` predicate is reconstructed
+# at EQUAL STRENGTH. That was checked for the workflow_run arm and not for the
+# dispatch arm, which emitted should_deploy=true on release success ALONE — so a
+# dispatch whose release published nothing (check_changed declining, which
+# happens on a dispatch exactly as on a push) ran the whole deploy chain against
+# an empty version. The asymmetry is the finding, so the row compares the arms.
+# Bounded on the RAW block (the arm markers are comments, so they do not exist in
+# resolve.code), then comment-stripped so no row can be satisfied by prose.
+awk '/── Dispatch arm/{f=1} f&&/── workflow_run arm/{exit} f' "$W/resolve.blk" \
+  | sed -e 's/[[:space:]]*#.*$//' > "$W/dispatch.blk"
+if [ "$(grep -c . "$W/dispatch.blk")" -ge 8 ]; then pass; else
+  fail "G12 the dispatch arm block could not be extracted ($(grep -c . "$W/dispatch.blk" 2>/dev/null || echo 0) lines) — the parity rows below would be vacuous"
+fi
+# Emptiness: both arms must refuse to deploy an empty version/tag.
+if grep -qE '\[ -z "\$D_VERSION" \]' "$W/dispatch.blk"; then pass; else
+  fail "G12 the dispatch arm does not check that the release published a version before setting should_deploy=true, while the workflow_run arm clean-skips on exactly that. A dispatch after a declined check_changed would deploy against nothing"
+fi
+# Coherence: both arms must fail CLOSED on released/docker_pushed without a version.
+if grep -qE 'release_outputs_incomplete' "$W/dispatch.blk"; then pass; else
+  fail "G12 the dispatch arm does not fail closed on an incoherent release (released/docker_pushed true with no version) — the workflow_run arm does, so the same broken release is a fault on one arm and a deploy on the other"
+fi
+
 # ═══ GUARD 10 — the artifact contract holds ACROSS the file boundary ════════
 # The artifact name, its schema number and its field set are stated in
 # reusable-release.yml (producer) and RESTATED in web-platform-release.yml
@@ -860,11 +883,12 @@ TOTAL=$((passes + fails))
 #   notify-gated if-vs-case agreement)
 # + 6 G10 cross-file artifact contract (name readable, assembled name, schema
 #   readable, schema parity, field-read scope, field parity)
-# + 1 G11 release-outcome needs completeness + 1 Hc far-side closure = 58
+# + 1 G11 release-outcome needs completeness + 1 Hc far-side closure
+# + 3 G12 arm-parity (extraction, emptiness, coherence) = 61
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=58
+MIN_ROWS=61
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

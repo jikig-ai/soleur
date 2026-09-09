@@ -323,6 +323,77 @@ if [ "$RC" -eq 0 ]; then pass; else
   fail "Ha HARNESS: the swallowing mutant did not actually exit 0 (rc=$RC), so row 24's kill proves nothing about the rc assertion"
 fi
 
+# ── E1-E3: EVERY event ci.yml declares, not the two that were fixtured ──────
+# SUPERSEDED is gated on the event because supersession requires
+# cancel-in-progress, which since #7931 part 1 is pull_request-only. That is
+# equally true on merge_group and workflow_dispatch — but only push was
+# fixtured, so `== "pull_request"` and `!= "push"` were indistinguishable to
+# this suite, and the second silently claims SUPERSEDED on two more events.
+for _ev in merge_group workflow_dispatch; do
+  run_body "$BODY" cancelled cancelled success "$_ev"
+  if grep -qF -- "SUPERSEDED" "$OUT"; then
+    fail "E1 the classifier claims SUPERSEDED on a '$_ev' run. cancel-in-progress is pull_request-only, so nothing could have superseded it — this is a guessed cause on an event the fixtures never instantiated (AP-021)"
+  else pass; fi
+done
+# E3 — the catch-all arm must exist AND say something. A result value outside
+# {success,failure,cancelled,skipped} must not vanish silently; GitHub has added
+# conclusion values before.
+run_body "$BODY" neutral success success push
+if [ -s "$OUT" ] && [ "$RC" -eq 1 ]; then pass; else
+  fail "E3 an out-of-enum leg result ('neutral') produced rc=$RC and output '$(tr '\n' '|' <"$OUT" | head -c 120)'. A result the case does not enumerate must still fail the job and say so — otherwise a new GitHub conclusion value passes CI silently"
+fi
+
+# ── W1-W4: the STEP's wiring, which no row asserted ─────────────────────────
+# Every row above executes the extracted `run:` body against env vars the HARNESS
+# supplies. That proves the classifier is right and says NOTHING about whether
+# the workflow feeds it the right values, or whether the `test` job still watches
+# all three shards. Both are one-line edits with no local symptom.
+_ciy="$REPO_ROOT/.github/workflows/ci.yml"
+_wiring=$(python3 - "$_ciy" <<'PYW'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+job = d["jobs"]["test"]
+needs = job.get("needs") or []
+needs = [needs] if isinstance(needs, str) else list(needs)
+step = None
+for st in job.get("steps") or []:
+    if st.get("name") == "Aggregate shard results":
+        step = st
+        break
+if step is None:
+    print("NOSTEP"); raise SystemExit
+env = step.get("env") or {}
+want = {"WEBPLAT_RESULT": "test-webplat", "BUN_RESULT": "test-bun", "SCRIPTS_RESULT": "test-scripts"}
+bad = []
+for var, shard in want.items():
+    v = str(env.get(var, ""))
+    if ("needs.%s.result" % shard) not in v:
+        bad.append("%s should read needs.%s.result, reads %r" % (var, shard, v))
+    if shard not in needs:
+        bad.append("the test job does not need %s, so %s resolves to empty" % (shard, var))
+print("; ".join(bad))
+PYW
+)
+if [ "$_wiring" = "NOSTEP" ]; then
+  fail "W1 the 'Aggregate shard results' step is gone from ci.yml's test job — every row in this suite executes a body that no longer runs"
+elif [ -z "$_wiring" ]; then
+  pass
+else
+  fail "W1 the aggregator's env: -> needs.* wiring is wrong: $_wiring. The classifier rows above cannot see this — they are handed the three values directly"
+fi
+# W2 — the shard set the harness fixtures must equal the shard set the job wires.
+_nshards=$(python3 - "$_ciy" <<'PYN'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+n = d["jobs"]["test"].get("needs") or []
+n = [n] if isinstance(n, str) else list(n)
+print(len([x for x in n if x.startswith("test-")]))
+PYN
+)
+if [ "$_nshards" -eq 3 ]; then pass; else
+  fail "W2 the test job watches $_nshards test-* shards, but this suite fixtures exactly 3 — dropping a shard from needs: makes its result resolve to EMPTY, which falls straight into the *) arm, and every row here would still pass"
+fi
+
 # ── Verdict ──────────────────────────────────────────────────────────────────
 TOTAL=$((passes + fails))
 
@@ -338,8 +409,11 @@ TOTAL=$((passes + fails))
 #   R1e matrix rollup is not one log)
 # + 2 event-gate (24b absent-SUPERSEDED, 24b says-something)
 # + 1 second-member (25) + 3 swallow (24, one per non-success result value)
-# + 1 must-PASS (Hb) + 4 mutants + 1 harness (Ha) = 24
-MIN_ROWS=24
+# + 1 must-PASS (Hb) + 4 mutants + 1 harness (Ha)
+# + 2 wiring (W1 env->needs mapping, W2 shard cardinality)
+# + 3 event/value cardinality (E1 merge_group, E1 workflow_dispatch,
+#   E3 out-of-enum result) = 29
+MIN_ROWS=29
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2

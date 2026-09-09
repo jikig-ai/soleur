@@ -345,6 +345,19 @@ jobs:
             if [ "$D_RESULT" != "success" ]; then
               fail_closed "the in-run release job concluded '$D_RESULT'" "release_failed" "$D_RESULT"
             fi
+            # THE SAME EMPTINESS AND COHERENCE CHECKS AS THE OTHER ARM.
+            # The dispatch arm used to emit should_deploy=true on release success
+            # ALONE, while the workflow_run arm clean-skips on an empty version and
+            # fail-closes on an incoherent one. That asymmetry is not justified by
+            # the operator having asked: `check_changed` can decline on a dispatch
+            # exactly as it does on a push, and a dispatch with an empty D_VERSION
+            # would have run the whole deploy chain against nothing.
+            if [ -z "$D_VERSION" ] || [ -z "$D_TAG" ]; then
+              if [ "$D_RELEASED" = "true" ] || [ "$D_DOCKER_PUSHED" = "true" ]; then
+                fail_closed "the in-run release job reports released=$D_RELEASED docker_pushed=$D_DOCKER_PUSHED but carries no version/tag — incoherent, so this is a broken release rather than a declined one" "release_outputs_incomplete" "$D_RESULT"
+              fi
+              clean_skip "$DISPATCH_SHA" "the in-run release job published nothing for this SHA (check_changed declined it)" "upstream_concluded_unpublished"
+            fi
             emit head_sha "$DISPATCH_SHA"
             emit version "$D_VERSION"; emit tag "$D_TAG"
             emit released "$D_RELEASED"; emit docker_pushed "$D_DOCKER_PUSHED"
