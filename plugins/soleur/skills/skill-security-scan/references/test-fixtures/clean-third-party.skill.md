@@ -22,5 +22,5 @@ threshold: 0.5
 output: stdout
 ```
 
-Documentation: see <https://example.org/docs> (not first-party but no utm tag,
+Documentation: see https://example.org/docs (not first-party but no utm tag,
 not a redirect host, no beacon — should remain LOW-RISK).

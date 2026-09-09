@@ -16,4 +16,4 @@ This is the Discord content for testing.
 This is the hook tweet for the test case study.
 
 **Tweet 2 (Final) -- 80 chars:**
-Full case study: <https://example.com>
+Full case study: https://example.com

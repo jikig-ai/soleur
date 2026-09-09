@@ -14,7 +14,7 @@ eyJaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaa
 
 ## Email
 
-<synthetic.fixture+test@example-not-real.invalid>
+synthetic.fixture+test@example-not-real.invalid
 
 ## UUID
 

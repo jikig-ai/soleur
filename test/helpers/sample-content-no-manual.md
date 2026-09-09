@@ -1,6 +1,6 @@
 # Operations Management -- Distribution Content
 
-**Blog post:** <https://example.com/blog/test-ops/>
+**Blog post:** https://example.com/blog/test-ops/
 **Title:** "Test Operations Management"
 **Publish date:** Tue 2026-03-17
 
@@ -21,7 +21,7 @@ Solo founders track expenses in spreadsheets. We built AI agents instead.
 2/ What it produced: structured expense tracking with renewal dates.
 
 **Tweet 3 (Final) -- 80 chars:**
-Full case study: <https://example.com/blog/test-ops/>
+Full case study: https://example.com/blog/test-ops/
 
 ---
 

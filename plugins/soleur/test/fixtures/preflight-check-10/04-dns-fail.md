@@ -25,12 +25,10 @@ not resolve. Test asserts Check 10 returns FAIL when the stub executor returns
   3. systemd unit file write fails (disk full, permission). Cloud-init audit covers permission; `disk-monitor.timer` covers disk.
 - **logs:** `/var/log/cloud-init-output.log` (on-host), `journalctl -u inngest-server.service`, `journalctl -u inngest-heartbeat.service`, Sentry cron monitor events, Better Stack heartbeat events.
 - **discoverability_test.command:**
-
   ```bash
   # Run from operator workstation (NO SSH). Returns 200 or 401 if Inngest is alive; non-200/401 means absent.
   curl -fsS -o /dev/null -w "%{http_code}\n" --max-time 10 https://web-platform.soleur.ai/api/inngest
   ```
-
   Expected output: `200` (or `401` with HMAC challenge). Anything else = Inngest absent or unreachable. `--max-time 10` per `hr-ssh-diagnosis-verify-firewall` sibling guidance on unbounded network calls.
 
 ## Acceptance Criteria

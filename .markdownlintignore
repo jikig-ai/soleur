@@ -11,3 +11,25 @@ knowledge-base/INDEX.md
 # those 8,231 files blocking a contributor's local `git merge origin/main`, which is
 # the operation #7927 was filed about.
 knowledge-base/project/
+
+# TEST FIXTURE CORPORA (#7927). These are test INPUT DATA, not documentation, and
+# linting them is a category error: the linter rewrites the very bytes a suite asserts
+# on. Both failure modes were measured on this branch, not anticipated.
+#
+#   - plugins/soleur/test/fixtures/ship-incident-pir-gate/ is the corpus for a
+#     paragraph/heading BOUNDARY classifier, so its blank lines ARE the input. MD012's
+#     two added blank lines flipped rows M5 and M9 from want=no to got=yes: 25/25 with
+#     main's fixtures, 23/25 with the swept ones.
+#   - test/helpers/sample-content.md is asserted on by substring. The MD034 autolink
+#     rewrite turned `Link: https://...` into `Link: <https://...` and broke
+#     content-publisher's extraction assertion.
+#
+# A fixture is only lint-clean by coincidence; a suite that depends on its bytes is not.
+# Documentation that happens to live under a fixture directory (a README explaining the
+# corpus) stays in scope deliberately -- test/fixtures/orphan-proc-dangling/README.md is
+# the reason the `test` root still appears in EXPECTED_ROOTS.
+plugins/soleur/test/fixtures/
+plugins/soleur/skills/incident/test/fixtures/
+plugins/soleur/skills/skill-security-scan/references/test-fixtures/
+scripts/lib/fixtures/
+test/helpers/
