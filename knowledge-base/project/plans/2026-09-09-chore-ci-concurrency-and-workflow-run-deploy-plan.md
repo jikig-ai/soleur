@@ -1450,7 +1450,7 @@ Not applicable. The mechanical UI-surface override was evaluated against every p
 
 | Deferred | Why | Re-evaluation criterion |
 |---|---|---|
-| #5806 item 4 — gate the "v0.X.Y released!" Slack/email on deploy-success | Under the new topology the announcement and the deploy live in **different workflow runs**, so it stops being a `needs:` edge and becomes a cross-run notification — a different design than #5806 sketched. `reusable-release.yml`'s second consumer (`version-bump-and-release.yml`, component `plugin`) has **no deploy at all**, so any gate needs a `workflow_call` input to stay safe for it. **The deferral is on the mechanism, not on the risk** — see the priority note below. | **Fixed date, not an observed incident:** re-evaluate when this plan's own AC-P1..AC-P3 soak closes (merge + 3 days). File at **P2**, not P3. |
+| #5806 item 4 — gate the "v0.X.Y released!" Slack/email on deploy-success — **FILED: #8007 (P2)** | Under the new topology the announcement and the deploy live in **different workflow runs**, so it stops being a `needs:` edge and becomes a cross-run notification — a different design than #5806 sketched. `reusable-release.yml`'s second consumer (`version-bump-and-release.yml`, component `plugin`) has **no deploy at all**, so any gate needs a `workflow_call` input to stay safe for it. **The deferral is on the mechanism, not on the risk** — see the priority note below. | **Fixed date, not an observed incident:** re-evaluate when this plan's own AC-P1..AC-P3 soak closes (merge + 3 days). File at **P2**, not P3. |
 
 **Why item 4's deferral is filed at P2 with a dated trigger** (CPO plan-review finding, folded in).
 After Phase E the announcement and the deploy live in different workflow runs with **no edge
@@ -1462,8 +1462,8 @@ this ships, and its only remaining detector is the drift check at
 misleading message is observed"* would mean waiting for the incident the `single-user incident`
 threshold exists to prevent. The mechanism is genuinely a separate design and stays deferred; the
 **risk is not deferred** — it is filed at P2 with a date, and named in R11 below.
-| **LPT matrix-leg assignment (#7931 part 3)** | Decision 3: LPT does not deliver P3 (a duration refresh re-rolls other labels) and `_shard_selects` cannot compute it — it is called once per streaming registration and cannot see the live set at first call. The brief's own gate authorises deferral in exactly this case. Phase C still lands the `TEST_TIMING_LOG` binding so the next attempt has CI-measured data. | After AC-P1..AC-P3 close, using the artifacts Phase C starts collecting. The issue carries the six mutation rows already designed and the three constraints in C.2, plus the K=5 alternative (`ci.yml`: K=3 -> 20.73 min, K=5 -> 10.77 min). |
-| #7942 (`*.mutation.sh` orphan batteries) | Acknowledged, not folded — see §Open Code-Review Overlap. | Already tracked in #7942; add the reciprocal note when this merges. |
+| **LPT matrix-leg assignment (#7931 part 3)** — **FILED: #8006 (P3)** | Decision 3: LPT does not deliver P3 (a duration refresh re-rolls other labels) and `_shard_selects` cannot compute it — it is called once per streaming registration and cannot see the live set at first call. The brief's own gate authorises deferral in exactly this case. Phase C still lands the `TEST_TIMING_LOG` binding so the next attempt has CI-measured data. | After AC-P1..AC-P3 close, using the artifacts Phase C starts collecting. The issue carries the six mutation rows already designed and the three constraints in C.2, plus the K=5 alternative (`ci.yml`: K=3 -> 20.73 min, K=5 -> 10.77 min). |
+| #7942 (`*.mutation.sh` orphan batteries) — **reciprocal note posted** | Acknowledged, not folded — see §Open Code-Review Overlap. | Already tracked in #7942; add the reciprocal note when this merges. |
 
 ---
 
