@@ -102,14 +102,44 @@ reachable = []
 for n in jobs:
     if excludes_wr(n):
         continue
-    # a job whose entire needs-closure is excluded cannot run on this arm either
+    # A job whose entire needs-closure is excluded from this arm cannot run on it
+    # either. The walk below USED TO compute `blocked` and never read it, and
+    # `reachable.append` was unconditional — so the comment described a closure
+    # check that did not execute. Harmless on today's graph (only `release` is
+    # excluded, and nothing but resolve-target needs it), but it made the guard
+    # strictly more aggressive than documented: a job legitimately gated behind a
+    # push-only root would have been flagged for reading github.sha.
+    # ...UNLESS the job runs under always() / !cancelled(), which is exactly what
+    # this pipeline does: `resolve-target` needs `release`, `release` is push-arm
+    # only, and resolve-target STILL runs on the workflow_run arm because its
+    # condition is `always() && github.event_name != 'push'`. A naive closure walk
+    # marks resolve-target blocked and then transitively excludes the entire deploy
+    # chain — measured: reachable drops 8 -> 1, and every G3 verdict becomes
+    # unfalsifiable. That is why `blocked` must be qualified, and it is the nuance
+    # the previously-dead walk avoided by never consulting its own result.
+    def tolerant(j):
+        c = cond(j)
+        return "always()" in c or "!cancelled()" in c
+
     stack, seen, blocked = list(needs_of(n)), set(), False
     while stack:
         cur = stack.pop()
         if cur in seen:
             continue
         seen.add(cur)
+        if excludes_wr(cur) and not tolerant(n):
+            blocked = True
+            break
+        # STOP AT A TOLERANT NODE. Once `cur` runs under always(), its own
+        # dependency on an excluded job is DISCHARGED — everything downstream sees
+        # cur's actual result, not the excluded job's. Walking past it re-imports
+        # an exclusion that no longer applies, which dropped verify-migrations
+        # (reachable 8 -> 7) even though it plainly runs on this arm.
+        if tolerant(cur):
+            continue
         stack.extend(needs_of(cur))
+    if blocked:
+        continue
     reachable.append(n)
 
 out = {
@@ -455,8 +485,25 @@ def job_block(name):
 
 resolve = job_block("resolve-target")
 # PRODUCER: the third argument of clean_skip / the second of fail_closed.
-produced = set(re.findall(r'clean_skip\s+"[^"]*"\s+"[^"]*"\s+"([a-z_]+)"', resolve))
-produced |= set(re.findall(r'fail_closed\s+"[^"]*"\s+"([a-z_]+)"', resolve))
+# TAKE THE LAST QUOTED reason-shaped TOKEN ON THE CALL LINE, not a positional
+# match over "[^"]*". A message argument containing embedded quotes — e.g. one
+# interpolating $(tr ... <"$RUNNER_TEMP/gh.err") — breaks a positional regex, and
+# it breaks it SILENTLY: the other twelve reasons still match, so the extractor
+# self-test below (>= 10) stays green while one member goes invisible. That is
+# how `github_api_unavailable` was missed on its first pass.
+produced = set()
+for line in resolve.split("\n"):
+    if "clean_skip " not in line and "fail_closed " not in line:
+        continue
+    if re.search(r"^\s*(clean_skip|fail_closed)\(\)", line):     # the definition
+        continue
+    # ALL reason-shaped quoted literals on the line, last one wins. Not anchored
+    # to end-of-line: a call can be followed by `;;` (inside a case arm) or by a
+    # third argument (the release verdict), and anchoring missed both. A message
+    # argument never matches this shape — it contains spaces or a `$`.
+    toks = re.findall(r'"([a-z][a-z0-9_]*)"', line)
+    if toks:
+        produced.add(toks[-1])
 
 ng = job_block("notify-gated")
 cond = set(re.findall(r"skip_reason\s*==\s*'([a-z_]+)'", ng))
@@ -773,6 +820,22 @@ print('yes' if any(s['job']=='newly-added-job' for s in d['sha_sites']) else 'no
 if [ "$_found" = "yes" ]; then pass; else
   fail "Ha HARNESS: the computed assembly did NOT find a github.sha site in a newly added job, so mutation G3-11 proves nothing about list-vs-extraction"
 fi
+# (c) MUST-PASS, FAR SIDE OF THE CLOSURE. A job whose needs-closure is entirely
+#     push-gated is unreachable on the workflow_run arm, so its github.sha read is
+#     legitimate and must NOT be flagged. Hb covers only the DIRECT-`if` case; this
+#     is the transitive one, and it is the direction that had no fixture at all —
+#     which is how the closure walk sat dead (computing `blocked`, never reading
+#     it) without any row noticing.
+_far="$W/far.yml"
+sed 's|^  verify-doppler-secrets:$|  push-only-root:\n    if: github.event_name == '"'"'push'"'"'\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo root\n  downstream-of-push-only:\n    needs: [push-only-root]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ github.sha }}\n  verify-doppler-secrets:|' "$REL" > "$_far"
+_farv=$(python3 "$ANALYSE" "$_far" 2>/dev/null | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+reach=set(d['wr_reachable'])
+print('violation' if any(s['job']=='downstream-of-push-only' for s in d['sha_sites'] if s['job'] in reach) else 'permitted')" 2>/dev/null)
+if [ "$_farv" = "permitted" ]; then pass; else
+  fail "Hc MUST-PASS: a job whose needs-closure is entirely push-gated was reported workflow_run-reachable ($_farv). It cannot run on that arm, so flagging its github.sha read reds a correct tree — and a guard free to become more aggressive is what an all-must-TRIP battery cannot detect"
+fi
 # (b) MUST-PASS: github.sha inside a dispatch-guarded job is permitted.
 _ok="$W/ok.yml"
 sed 's|^  verify-doppler-secrets:$|  dispatch-only-job:\n    if: github.event_name == '"'"'workflow_dispatch'"'"'\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo ${{ github.sha }}\n  verify-doppler-secrets:|' "$REL" > "$_ok"
@@ -797,11 +860,11 @@ TOTAL=$((passes + fails))
 #   notify-gated if-vs-case agreement)
 # + 6 G10 cross-file artifact contract (name readable, assembled name, schema
 #   readable, schema parity, field-read scope, field parity)
-# + 1 G11 release-outcome needs completeness = 57
+# + 1 G11 release-outcome needs completeness + 1 Hc far-side closure = 58
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=57
+MIN_ROWS=58
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

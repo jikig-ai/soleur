@@ -1171,10 +1171,19 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          # One artifact per shard: `matrix.shard` is `1/3`, and `/` is not permitted
-          # in an artifact name, so it is normalised to `-`.
+          # One artifact per shard, keyed on `strategy.job-index` (0-based) rather
+          # than `matrix.shard`. NOT a normalisation: `matrix.shard` is `1/3` and
+          # `/` is not permitted in an artifact name, so it is not used at all —
+          # an earlier revision of this comment described a `/`->`-` rewrite the
+          # code never performed. job-index is also matrix-resize-safe, matching
+          # the type-check gate above.
           name: suite-timings-scripts-${{ strategy.job-index }}
           path: ${{ runner.temp }}/suite-timings.tsv
+          # `warn`, not `error`: TEST_TIMING_LOG is written by run_suite only when
+          # a suite actually runs, so a leg that was cancelled before starting has
+          # nothing to upload and that is not a fault. The cost is that a leg which
+          # SHOULD have produced timings and did not fails silently — acceptable
+          # while this data is advisory input to #8006 and gates nothing.
           if-no-files-found: warn
           retention-days: 14
 

@@ -316,6 +316,29 @@ jobs:
             exit 1
           }
 
+          # EVERY GitHub API READ GOES THROUGH THIS. Under `set -euo pipefail` a
+          # transient 5xx or a secondary rate limit made `x=$(gh api ...)` trip -e
+          # and kill the step before ANY emit ran — so skip_reason stayed empty and
+          # notify-gated, which keys on it, did not fire. release-outcome still
+          # emailed off R_RESOLVE=failure, so the failure was degraded rather than
+          # silent; but Slack, the fast channel, was skipped for a whole class of
+          # failures that have nothing to do with the release. Retried because the
+          # class is overwhelmingly transient, then failed CLOSED with a reason.
+          gh_api() {
+            local _out _rc _try=0
+            while :; do
+              if _out=$(gh api "$@" 2>"$RUNNER_TEMP/gh.err"); then
+                printf '%s' "$_out"; return 0
+              fi
+              _rc=$?
+              _try=$((_try + 1))
+              [ "$_try" -ge 3 ] && break
+              echo "gh api failed (rc=$_rc, attempt $_try) — retrying in $((_try * 5))s" >&2
+              sleep $((_try * 5))
+            done
+            fail_closed "the GitHub API read '$1' failed after 3 attempts (rc=$_rc): $(tr '\n' ' ' <"$RUNNER_TEMP/gh.err" | head -c 300)" "github_api_unavailable"
+          }
+
           # ── Dispatch arm: everything is in this run. No API, no artifact. ────
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "workflow_dispatch: reading the in-run release job directly"
@@ -359,7 +382,7 @@ jobs:
           # SHA that DID publish, so the deploy silently never happens and the run
           # stays green — the worst outcome reached through the mechanism built to
           # prevent it.
-          runs_json=$(gh api \
+          runs_json=$(gh_api \
             "repos/$REPO/actions/workflows/web-platform-release.yml/runs?event=push&head_sha=$WR_HEAD_SHA&per_page=50" \
             --jq '[.workflow_runs[] | {id: .id, status: .status, conclusion: .conclusion}]')
           run_id=$(printf '%s' "$runs_json" | jq -r --arg own "$OWN_RUN_ID" \
@@ -372,13 +395,34 @@ jobs:
           fi
           echo "release run: $run_id"
 
-          # ── Liveness poll, bounded by the release run's OWN timeout ─────────
+          # ── Liveness poll — DEFENSIVE, and unreachable in this topology ─────
           # Blocklist shape, inherited from await-ci: keep waiting while the run is
-          # not completed. No ceiling constant of our own — GitHub enforces the
-          # release job's declared timeout-minutes, so this cannot hang forever.
+          # not completed. Two independent reasons it cannot hang forever, and the
+          # SECOND is the operative one — an earlier revision of this comment
+          # claimed only the first, which is true but is not why the loop is safe:
+          #
+          #  1. GitHub enforces the release job's declared timeout-minutes, so the
+          #     run it polls reaches `completed` on its own.
+          #  2. THE TWO ARMS SHARE A CONCURRENCY GROUP. This workflow keys on
+          #     `web-platform-release-<sha>` and both arms resolve it to the SAME
+          #     sha, with `cancel-in-progress: false`. So the workflow_run-arm run
+          #     QUEUES behind the push-arm run that contains `release`, and cannot
+          #     start until it finishes. By the time this step runs, the release
+          #     run is already `completed` and the loop exits on iteration 1.
+          #
+          # The loop is therefore dead code on both paths today (a docs-only push
+          # creates no push-arm run at all, and takes the no_release_run clean skip
+          # before reaching here). It is kept because reason 2 is a property of the
+          # concurrency key, not of this job: change that key so the arms stop
+          # sharing a group — which a future edit might do to parallelise them —
+          # and this loop becomes live again with no other warning.
+          #
+          # Job-level `timeout-minutes: 60` bounds it regardless; GitHub starts that
+          # clock when the job STARTS, so queueing behind the push arm does not
+          # consume it.
           attempt=0
           while :; do
-            state=$(gh api "repos/$REPO/actions/runs/$run_id" --jq '.status')
+            state=$(gh_api "repos/$REPO/actions/runs/$run_id" --jq '.status')
             [ "$state" = "completed" ] && break
             attempt=$((attempt + 1))
             if [ $((attempt % 10)) -eq 1 ]; then
@@ -392,7 +436,7 @@ jobs:
           # the bare name returns ZERO rows — measured — and a guard built on it
           # would report clean forever. The non-empty assertion below is what makes
           # that a loud failure instead of an empty haystack.
-          jobs_json=$(gh api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
+          jobs_json=$(gh_api "repos/$REPO/actions/runs/$run_id/jobs?per_page=100" \
             --jq '[.jobs[] | select(.name == "release / release") | {name, conclusion}]')
           n=$(printf '%s' "$jobs_json" | jq 'length')
           if [ "$n" -ne 1 ]; then
@@ -407,7 +451,7 @@ jobs:
           fi
 
           # ── Step 2: THE VALUES, from the artifact ───────────────────────────
-          arts=$(gh api "repos/$REPO/actions/runs/$run_id/artifacts?per_page=100" \
+          arts=$(gh_api "repos/$REPO/actions/runs/$run_id/artifacts?per_page=100" \
             --jq '[.artifacts[] | select(.name == "release-outputs-web-platform") | {id, expired}]')
           a_n=$(printf '%s' "$arts" | jq 'length')
           if [ "$a_n" -eq 0 ]; then
@@ -419,7 +463,11 @@ jobs:
             fail_closed "the release-outputs artifact for run $run_id has expired" "release_outputs_expired"
           fi
           art_id=$(printf '%s' "$arts" | jq -r '.[0].id')
-          gh api "repos/$REPO/actions/artifacts/$art_id/zip" > "$RUNNER_TEMP/ro.zip"
+          # Not via gh_api(): this one streams BINARY to a file, so it cannot go
+          # through a wrapper that captures stdout. Same fail-closed contract.
+          if ! gh api "repos/$REPO/actions/artifacts/$art_id/zip" > "$RUNNER_TEMP/ro.zip" 2>"$RUNNER_TEMP/gh.err"; then
+            fail_closed "downloading the release-outputs artifact ($art_id) failed: $(tr '\n' ' ' <"$RUNNER_TEMP/gh.err" | head -c 300)" "github_api_unavailable"
+          fi
           unzip -p "$RUNNER_TEMP/ro.zip" release-outputs.json > "$RUNNER_TEMP/ro.json"
 
           # ── Step 3: identity binding. The artifact CONFIRMS, never supplies. ──
@@ -1795,6 +1843,7 @@ jobs:
        needs.resolve-target.outputs.skip_reason == 'release_job_unresolvable' ||
        needs.resolve-target.outputs.skip_reason == 'identity_mismatch' ||
        needs.resolve-target.outputs.skip_reason == 'schema_mismatch' ||
+       needs.resolve-target.outputs.skip_reason == 'github_api_unavailable' ||
        needs.resolve-target.outputs.skip_reason == 'release_outputs_incomplete' ||
        needs.resolve-target.outputs.skip_reason == 'bad_sha')
     runs-on: ubuntu-latest
@@ -1850,6 +1899,8 @@ jobs:
               CAUSE=$(printf 'the release-outputs artifact failed its trust checks (%s) — the deploy was blocked rather than target an unverified commit' "${SKIP_REASON}") ;;
             bad_sha)
               CAUSE='the upstream event carried a malformed head_sha' ;;
+            github_api_unavailable)
+              CAUSE='a GitHub API read failed three times while resolving the deploy target — this says nothing about the release itself, and re-running resolve-target is the normal recovery' ;;
             *)
               CAUSE=$(printf 'CI concluded %s for this SHA' "${CI_CONCLUSION:-unknown}") ;;
           esac
