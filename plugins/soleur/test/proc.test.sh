@@ -380,8 +380,46 @@ else
 fi
 
 # --- T9: no ownership boundary => fail loudly, signal nothing ---------------
+# PRECONDITION (#7822 vacuity repair). T9 asserts rc9 != 0 and no `killed=[1-9]`.
+# Both halves are satisfied by ANY failure -- $HELPER missing, a syntax error, or
+# `git` absent from PATH -- so without this the case is green while proving
+# nothing about "outside a git repo". Under an inherited GIT_DIR it is worse than
+# vacuous: the fixture dir RESOLVES as a repository and the case inverts.
+#
+# Three-part, or the precondition inherits the defect it fixes: a bare "the probe
+# must fail here" is satisfied by a missing `git`, a missing directory and a
+# permission error alike. So the same probe must SUCCEED in a known repository,
+# FAIL in the fixture, and the failure must NAME the condition. Run under the
+# SAME `env -u` prefix as the subject, so precondition and subject see one
+# environment -- the existing scrub names only GIT_DIR and GIT_WORK_TREE of the
+# nine, and asserting the OUTCOME is what makes the case honest rather than
+# enumerating the causes.
+assert_not_a_repo() { # <dir> <known-repo>
+  local dir="$1" known="$2" out rc
+  out=$(cd "$known" && env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
+    git rev-parse --git-dir 2>&1); rc=$?
+  if [[ $rc -eq 0 ]]; then
+    pass "T9-pre/control: the probe SUCCEEDS in a known repository"
+  else
+    fail "T9-pre/control: probe failed in a known repo ($known) rc=$rc: $out"
+  fi
+  out=$(cd "$dir" && env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
+    git rev-parse --git-dir 2>&1); rc=$?
+  if [[ $rc -ne 0 ]]; then
+    pass "T9-pre: the probe FAILS in the fixture directory"
+  else
+    fail "T9-pre: fixture dir resolved as a repository (rc=0, git-dir=$out)"
+  fi
+  if grep -qi 'not a git repository' <<<"$out"; then
+    pass "T9-pre: the failure NAMES 'not a git repository'"
+  else
+    fail "T9-pre: failure text did not name the condition: $out"
+  fi
+}
+
 NOGIT="$(mktemp -d -t proc-nogit.XXXXXXXX)" || exit 2
 ROOTS+=("$NOGIT")
+assert_not_a_repo "$NOGIT" "$REPO_ROOT"
 out9=$(cd "$NOGIT" && env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
   PROC_SH_ROOT="$FAKE_PROC" PROC_SH_SELF_PID="$SELF_PID" \
   bash "$HELPER" kill_mine test-all.sh 2>&1); rc9=$?
@@ -706,7 +744,7 @@ fi
 # Set to the FULL current count from a green run, and ratcheted up by hand when
 # arms are added. Any slack between the floor and the real count is budget for
 # a future edit to delete assertions unnoticed, so there is none.
-MIN_ASSERTIONS=58
+MIN_ASSERTIONS=61
 TOTAL=$((PASS + FAIL))
 echo
 echo "  Total: $TOTAL  pass: $PASS  FAIL: $FAIL"
