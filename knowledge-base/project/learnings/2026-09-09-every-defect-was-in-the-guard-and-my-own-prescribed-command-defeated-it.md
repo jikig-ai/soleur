@@ -160,8 +160,11 @@ recorded PID.
 worktree, wedged the CLI for the whole session.** Every invocation failed
 `Resource temporarily unavailable (os error 11)`; it survived SIGTERM and needed
 SIGKILL plus clearing `/tmp/agent-browser/*`. Nothing in the error names the
-cause. **Prevention:** filed as its own issue — a stale daemon from a reaped
-worktree is inherited by every later session on the machine.
+cause. **Prevention:** the recovery is documented in `agent-browser/SKILL.md`
+§Troubleshooting, which is what actually shipped — no issue was filed, and this
+sentence previously claimed one was. A stale daemon from a reaped worktree is
+inherited by every later session on the machine, so the documented recovery is a
+floor, not a fix; automating the reap is unclaimed work.
 
 **I inserted prose blocks inside nested and numbered lists twice**, breaking
 markdown structure. **Prevention:** after inserting a block near a list, run the
