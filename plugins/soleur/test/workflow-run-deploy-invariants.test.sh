@@ -346,10 +346,61 @@ fi
 if grep -qE 'release_result.*!=.*success|\[ "\$release_result" != "success" \]' "$W/resolve.blk"; then pass; else
   fail "G3-13b resolve-target does not fail closed on a non-success release job conclusion — this is the ONLY thing between a mirror-gate-blocked release and a prod deploy of an unmirrored image"
 fi
-# The substitution row: mirror_verified must not appear in a gating comparison.
-if grep -qE '^\s*if.*mirror_verified.*(!=|==).*(true|false)' "$W/resolve.blk"; then
-  fail "G3-13b resolve-target GATES on mirror_verified. It is documented as deliberately NON-blocking, and docker_pushed is written ten steps before the mirror assertion — gating on either restores the fail-open that needs.release.result was written to close"
-else pass; fi
+# THE SUBSTITUTION ROW — an ALLOWLIST, not a pattern for one spelling.
+# The prohibition the whole safety case rests on is that `mirror_verified` and
+# `docker_pushed` are CARRIED as values and never CONSULTED as gates:
+# docker_pushed is written ten steps before the zot mirror-gate assertion, so it
+# reads `true` on a release the gate BLOCKED. The previous row matched only
+# `^\s*if ... (!=|==) (true|false)` — which misses `[ "$mv" != "true" ] ||
+# fail_closed`, a `case` arm, an `&&` chain, and any indirection through a
+# renamed variable. Each of those restores the fail-open.
+#
+# So instead of enumerating the ways to gate (open-ended), enumerate the two ways
+# these names may legitimately appear (closed): an `emit` that carries the value
+# onward, and the jq assignment that reads it out of the artifact.
+#
+# THE DISTINCTION IS AUTHORIZE vs REFUSE. Reading these values to REFUSE a
+# deploy is strictly safer than not reading them; the fail-open comes from
+# reading them to PERMIT one. So a use is allowed when the statement it belongs
+# to can only reach fail_closed or clean_skip, and forbidden otherwise.
+_gating=""
+_ln=0
+_total=$(wc -l < "$W/resolve.code")
+while IFS= read -r _l; do
+  _ln=$((_ln + 1))
+  case "$_l" in
+    *mirror_verified*|*docker_pushed*) : ;;
+    *) continue ;;
+  esac
+  _t=$(printf '%s' "$_l" | sed -e 's/^[[:space:]]*//')
+  case "$_t" in
+    emit\ *)                                   continue ;;   # carried onward
+    mirror_verified=\$\(jq*|docker_pushed=\$\(jq*) continue ;;   # read from the artifact
+    D_MIRROR_VERIFIED:*|D_DOCKER_PUSHED:*)     continue ;;   # env binding
+    mirror_verified:\ \$\{\{*|docker_pushed:\ \$\{\{*) continue ;;  # job outputs: declaration
+  esac
+  # REFUSAL-ONLY? The next few lines must reach a refusal without passing an
+  # authorisation on the way.
+  _win=$(sed -n "${_ln},$(( _ln + 4 ))p" "$W/resolve.code")
+  case "$_win" in
+    *'should_deploy "true"'*) _gating="${_gating}${_t}
+" ; continue ;;
+  esac
+  case "$_win" in
+    *fail_closed*|*clean_skip*) continue ;;                  # refusal-only use
+  esac
+  _gating="${_gating}${_t}
+"
+done < "$W/resolve.code"
+if [ -z "$_gating" ]; then pass; else
+  fail "G3-13b resolve-target consults mirror_verified/docker_pushed in a way that can AUTHORIZE a deploy (not merely refuse one). They are documented as deliberately NON-blocking, and docker_pushed is written ten steps BEFORE the zot mirror-gate assertion — so it reads 'true' on a release the gate BLOCKED. Any use but carrying restores the fail-open that needs.release.result was written to close:
+$_gating"
+fi
+# NON-VACUITY: the allowlist above is only meaningful if the names appear at all.
+_n_carried=$(grep -cE '^\s*emit (mirror_verified|docker_pushed) ' "$W/resolve.code" || true)
+if [ "$_n_carried" -ge 2 ]; then pass; else
+  fail "G3-13b resolve-target emits $_n_carried of the 2 carried trust values (mirror_verified, docker_pushed) — with neither present the prohibition row above passes vacuously, and release-outcome loses the values it reports"
+fi
 
 # ═══ GUARD 7 — the five states, and the two that must stay GREEN ═════════════
 # Discovered from the job body, never from a list of expected states.
@@ -884,11 +935,12 @@ TOTAL=$((passes + fails))
 # + 6 G10 cross-file artifact contract (name readable, assembled name, schema
 #   readable, schema parity, field-read scope, field parity)
 # + 1 G11 release-outcome needs completeness + 1 Hc far-side closure
-# + 3 G12 arm-parity (extraction, emptiness, coherence) = 61
+# + 3 G12 arm-parity (extraction, emptiness, coherence)
+# + 1 G3-13b carried-value non-vacuity = 62
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=61
+MIN_ROWS=62
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1
