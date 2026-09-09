@@ -177,3 +177,19 @@
 # that consume it (the default `*` rule already covers it; this is the
 # explicit load-bearing-files-get-explicit-rows row).
 /.github/actions/cf-tunnel-ssh-bridge/                  @deruelle
+
+# Knowledge-base index merge driver (#7935). Once registered, merge-kb-index.sh
+# is UNATTENDED EXECUTABLE CODE ON THE MERGE PATH: an ordinary merge, rebase,
+# pull or cherry-pick that touches knowledge-base/INDEX.md runs it as the
+# invoking user, with no prompt and nothing in the merge output distinguishing
+# it from a conflict-free merge. The CI freshness guard validates artifact
+# CONTENT, so a driver that emits a byte-correct index while also doing
+# something else passes every check in the repo. These are the
+# load-bearing-files-get-explicit-rows rows for that surface.
+/scripts/merge-kb-index.sh                              @deruelle
+/scripts/lib/kb-index-render.sh                         @deruelle
+/scripts/install-kb-merge-driver.sh                     @deruelle
+# .gitattributes decides WHICH paths reach a merge driver, so it is the lever that
+# governs the surface the three rows above describe — a single line there can point
+# any path at any driver. It had only the blanket `*` rule.
+/.gitattributes                                         @deruelle

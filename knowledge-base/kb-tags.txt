@@ -1407,6 +1407,7 @@ fail-closed-gates
 fail-loud
 fail-open
 fail-safe
+fail-safe-polarity
 fail-soft
 fail2ban
 fails
@@ -3354,6 +3355,7 @@ sha-pinning
 sha256
 shallow-fetch
 shape-vs-truth-acs
+shard
 share
 shared
 shared-documents

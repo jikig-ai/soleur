@@ -562,6 +562,24 @@ else
 fi
 ROWS=$(( ROWS + 1 ))
 
+# R1b (#7902) — the SAME invocation must also clear SCRIPTS_SHARD.
+#
+# A SEPARATE row, not a widened R1 pattern, and that is deliberate. R1's regex is
+# `env -u TEST_GROUP .*bash "$RUNNER"`, whose `.*` already matches the `-u SCRIPTS_SHARD`
+# spelling — so R1 goes green either way and pins nothing about the new clear. Asserting it
+# here is what makes removing `-u SCRIPTS_SHARD` red something.
+#
+# Anchored on the `-u SCRIPTS_SHARD` construct inside the runner-query line itself, not on a
+# bare `SCRIPTS_SHARD` token that this file's own prose also contains.
+_r1b_line=$(grep -nE '^[[:space:]]*env( -u [A-Z_]+)* -u SCRIPTS_SHARD( -u [A-Z_]+)* .*bash "\$RUNNER" --print-suite-globs' \
+              "$REPO_ROOT/scripts/lint-orphan-test-suites.sh" || true)
+if [[ -n "$_r1b_line" ]]; then
+  pass "R1b — the runner query also clears SCRIPTS_SHARD (#7902 matrix legs export it job-wide)"
+else
+  fail "R1b — scripts/lint-orphan-test-suites.sh queries the runner WITHOUT 'env -u SCRIPTS_SHARD'. CI sets SCRIPTS_SHARD=k/N as a job-level env on the sharded scripts leg, so this linter and its runner invocation both inherit it; the fail-closed guarantee must not depend on where the runner happens to place its shard-validation block."
+fi
+ROWS=$(( ROWS + 1 ))
+
 
 # POSITIVE CONTROL on the dispatch. Measured at review: rewriting `fail()` to increment PASS
 # left this suite fully green (rc 0) while a real regression was live in the SUT. Every
