@@ -676,7 +676,14 @@ fi
 # is out of scope by construction (see the header) -- converting it is the conversion PR this
 # ceiling exists to force, not a drive-by on someone else's new suite. Both source test-helpers.sh,
 # so the tripwire IS armed for them and the separate no-tripwire ceiling below stays at 7.
-readonly OUT_CEILING=22
+# 22 -> 24 on 2026-09-09. Both additions arrived from main while this branch was open and neither
+# is in this PR's diff: plugins/soleur/test/kb-index-merge-driver.test.sh and
+# kb-index-merge-driver-registration.test.sh (the INDEX.md merge driver). Raised rather than
+# converted for the same reason as the 20 -> 22 bump: this root is out of scope by construction
+# (see the header), and converting it is the conversion PR this ceiling exists to force, not a
+# drive-by on someone else's new suite. Both source test-helpers.sh, so the tripwire IS armed for
+# them and the separate no-tripwire ceiling stays at 7.
+readonly OUT_CEILING=24
 if (( OUT_N <= OUT_CEILING )); then
   pass "out-of-scope unconverted count $OUT_N <= ceiling $OUT_CEILING (ratchet: lower the ceiling when you convert one)"
 else
