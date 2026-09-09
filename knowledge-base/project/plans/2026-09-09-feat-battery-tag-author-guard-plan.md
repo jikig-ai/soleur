@@ -157,6 +157,22 @@ Genuinely new, and only this: the fetch-population classifier and its declared-e
 - `knowledge-base/project/learnings/2026-07-29-a-per-producer-fix-left-seven-siblings-live-and-four-misread-signals.md`
   — enumerate every component sharing the shape and make the enumeration a test.
 
+### External verification (deepen-plan)
+
+Git's own documentation and one local measurement, resolved during the deepen pass. Three of these
+**corrected** the plan rather than confirming it.
+
+| Claim | Source | Effect on the plan |
+|---|---|---|
+| `git -C ""` leaves the working directory unchanged | `git(1)`: *"If `<path>` is present but empty, e.g. `-C ""`, then the current working directory is left unchanged."* Measured independently on git 2.53.0: `git -C "" rev-parse --show-toplevel` printed the enclosing repo | **Confirms** deleting the `SCOPED` verdict, and makes mutation row 17 must-RED |
+| `git push … refs/tags/…` writes to the **remote**, never the local ref store | `git-push(1)` | **CORRECTION** — it was in an earlier draft's verb set and is now out of class with a stated reason |
+| `git clone`, `git checkout`, `git switch`, `git worktree add`, `git replace`, `git notes`, `git bundle unbundle` do not write `refs/tags/*` in the live repo | `git(1)` family docs; the last three write `refs/replace/*`, `refs/notes/*`, `refs/bundle/*` | **Bounds** the verb set, and each exclusion is now stated rather than merely absent |
+| `git fetch --prune` without `--prune-tags` leaves tags alone | `git-fetch(1)` | **Confirms** ADR-207's own measured note that the sibling-routine tag event is creation, and only creation |
+| An explicit `+refs/tags/*:refs/tags/*` refspec fetches tags **despite** `--no-tags` | `git-fetch(1)` | **Confirms** the `SUPPRESSED` negative conjunct is necessary |
+| Precedence when both `--no-tags` and `--tags` appear on one command line is **not formally documented** | absence in `git-fetch(1)` / `gitcli(7)`; last-one-wins is convention, not contract | **CORRECTION** — the negative conjunct is justified as *conservative refusal to guess*, not as "`--tags` wins" |
+| Reliably excluding heredoc bodies needs a real shell parser; no grep-shaped rule is correct in general | current shell-linting practice; `shellcheck` and `mvdan/sh` are the parsers that do it properly | **CORRECTION** — comment/heredoc exclusion is now declared best-effort, with its failure direction (false OFFENDER, never false green) stated and covered by AC33 |
+| There is no mature mutation-testing framework for bash; `bats`, `shellspec` and peers provide none | survey of current tooling | **Confirms** the hand-rolled mutation harness is the only option, and that the assertion-floor / accounting-conservation approach this repo already uses is the state of the practice |
+
 ### Applicable AGENTS rules
 
 - `hr-write-boundary-sentinel-sweep-all-write-sites` — *"When a plan adds a guard/sentinel asserting
@@ -497,9 +513,21 @@ in-battery sites sit in that gap:
 | same file, `cleanup_merged_worktrees()` | `git -C "$GIT_ROOT" pull --ff-only origin main` | same, and `$GIT_ROOT` resolves through the common dir to the operator's live repository |
 | `apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh` | `git tag -a -m "sandbox pin fixture" "vinngest-$_pin_tag"` | a **direct** tag creation in a battery suite, safe only by an enclosing `( cd "$SANDBOX_ROOT" … )` — the same caller-discipline argument this plan declines to accept elsewhere |
 
-So the occurrence set is: `git fetch`, `git pull`, `git remote update`, `git tag` in its
-creating forms, `git update-ref refs/tags/…`, and `git push` with a `refs/tags` refspec. `git tag -d`
-and `git tag --list`/`-l` create nothing and are out of class, as is `git ls-remote`.
+So the occurrence set is: **`git fetch`, `git pull`, `git remote update`, `git tag` in its creating
+forms, and `git update-ref refs/tags/…`.**
+
+Out of class, each for a stated reason rather than by omission — the boundary is part of the
+contract and belongs in the guard's header:
+
+| Command | Why it is not in the set |
+|---|---|
+| `git push … refs/tags/…` | writes to the **remote**, never to the local ref store. An earlier draft of this plan had it in the set; that was wrong |
+| `git clone` | creates `refs/tags/*` in the **new** repository it creates, which by construction is not the live one |
+| `git tag -d`, `git tag --list` / `-l` | delete or read; create nothing |
+| `git ls-remote` | reads the remote; writes no ref |
+| `git checkout`, `git switch`, `git worktree add` | move `HEAD`, including to a tag, but never write `refs/tags/*` |
+| `git replace`, `git notes`, `git bundle unbundle` | write `refs/replace/*`, `refs/notes/*`, `refs/bundle/*` — different namespaces |
+| `git fetch --prune` (without `--prune-tags`) | prunes remote-tracking refs only; documented as leaving tags alone, which is also what ADR-207's own measurement found |
 
 **Each verb must be matched in every spelling.** A pattern anchored on a literal token under-counts
 by at least five measured sites, so each verb's pattern must also match:
@@ -509,7 +537,15 @@ by at least five measured sites, so each verb's pattern must also match:
 - the TS array-argv form: `["fetch", …]`, `["git", "fetch", …]`, `["tag", …]`
 
 `git remote update` has **zero** occurrences repo-wide as measured; the pattern still covers it so the
-first one to arrive is caught. A heredoc body or a comment line is not a call site.
+first one to arrive is caught.
+
+**Comment and heredoc exclusion is best-effort, and the guard says so.** A full-line comment is
+cheap to drop. A heredoc body is not: reliably excluding one needs a real shell parser, and no
+grep-shaped rule gets it right in general. The guard therefore drops full-line comments, makes a
+best-effort heredoc skip, and **declares both as approximations in its header** under AC33 — the
+same honesty rule the `bun test <dir>/` expansion is held to. The failure direction is safe: an
+un-excluded heredoc or trailing comment produces a **false OFFENDER**, which reddens and is fixed
+by a declaration, not a false green.
 
 **Widening the verb set widens the ledger, and that is the intended trade.** `scripts/lib/repo-write-boundary.test.sh`
 creates probe tags on purpose (`git -C "$p" -c tag.gpgSign=false tag probe-tag`) — those become
@@ -522,7 +558,7 @@ grade:
 
 | Verdict | Condition |
 |---|---|
-| `SUPPRESSED` | the **same command** matches an anchored whole-invocation pattern carrying `--no-tags` — flag order and extra flags tolerated — **and** carries no positive tag request on that same command: no `--tags`, no `-t`, no `refs/tags/` in any operand, no `tagOpt` in a `-c`. The negative conjunct is load-bearing: `git fetch --no-tags --tags origin` and `git fetch --no-tags origin '+refs/tags/*:refs/tags/*'` both carry the flag and both fetch tags. Only `git fetch`/`git pull`/`git remote update` can reach this verdict — a `git tag` creation has no suppressing flag and must be `EXEMPT` or `OFFENDER` |
+| `SUPPRESSED` | the **same command** matches an anchored whole-invocation pattern carrying `--no-tags` — flag order and extra flags tolerated — **and** carries no positive tag request on that same command: no `--tags`, no `-t`, no `refs/tags/` in any operand, no `tagOpt` in a `-c`. The negative conjunct is load-bearing and deliberately **conservative**: `git fetch --no-tags origin '+refs/tags/*:refs/tags/*'` is documented to fetch tags anyway (an explicit refspec takes precedence over the flag), and for `git fetch --no-tags --tags origin` the precedence is **not formally documented** — the implied behaviour is last-one-wins, so the guard refuses to guess and grades it OFFENDER rather than trusting an undocumented order. Only `git fetch`/`git pull`/`git remote update` can reach this verdict — a `git tag` creation has no suppressing flag and must be `EXEMPT` or `OFFENDER` |
 | `EXEMPT` | one of the two preceding lines carries the declared marker `repo-boundary-tag-exempt: <reason> (#<issue>)` **and** the site appears in the guard's exemption ledger with a matching issue citation |
 | `OFFENDER` | everything else |
 
@@ -537,6 +573,20 @@ refs/remotes/origin/main, appends to its reflog, and writes FETCH_HEAD into that
 Grading `-C` compliant would have decided live-vs-fixture statically from a path expression — the
 exact move `## Problem Statement` argues is undecidable — and would have done it fail-open. A
 `-C`-scoped fetch that must follow tags declares itself like everything else.
+
+And the path expression need not even name the live repo to reach it. Measured 2026-09-09 on
+git 2.53.0, in a throwaway repo:
+
+```
+$ git -C "" rev-parse --show-toplevel
+/tmp/gitCtest.uJRfWJ/probe
+```
+
+`git -C ""` is a **no-op** — it does not error, it runs in the current working directory. So
+`git -C "$tmp" fetch origin main` with `$tmp` unset or empty runs against whatever repository the
+caller is standing in, which is the failure ADR-207's Context names verbatim: *"a suite whose
+fixture `cd` fails, or whose `git -C` operand is empty, runs git in the caller's live repository."*
+An earlier draft made that shape a **must-PASS** mutation row; it is now must-**RED** (row 17).
 
 The verdict is printed per site as `path:line\t<verdict>\t<battery-reachable?>\t<command>` so the
 RED transcript is the measurement artifact.
@@ -653,8 +703,9 @@ them rather than anywhere else under `want_scripts`.
   says enumerate all *write sites where the property applies*, and for cell 6 those are
   **tag-authoring** sites, not fetch sites. A fetch-scoped sweep here would reproduce, at the sweep,
   the same verb-narrowing the classifier was corrected for. Enumerate `git fetch`, `git pull`,
-  `git remote update`, `git tag` creations, `git update-ref refs/tags/…` and `git push` with a
-  `refs/tags` refspec, repo-wide, in every spelling.
+  `git remote update`, `git tag` creations and `git update-ref refs/tags/…`, repo-wide, in every
+  spelling. (`git push … refs/tags/…` is deliberately out — it writes to the remote, not the local
+  ref store; the full out-of-class table with reasons is in Stage C.)
 - **Demonstrate closure membership for each AC31 witness candidate**, and substitute a demonstrated
   site wherever it cannot be shown. Two of the three candidates are unproven today: the followthrough
   script is referenced from a workflow, two runbooks and a baseline *text* file, and the roster gate
@@ -862,8 +913,8 @@ tracked executables those roots invoke (`bash`, `source`, `.`, `"$REPO_ROOT"/…
 `${CLAUDE_PLUGIN_ROOT:-…}/…`, and variable-bound literal paths), computed to a fixpoint and
 deliberately over-approximated: an unresolvable reference joins the closure rather than leaving it.
 Within each closure member the quantified set is every **tag-authoring VERB** — `git fetch`,
-`git pull`, `git remote update`, `git tag` in its creating forms, `git update-ref refs/tags/…`, and
-`git push` with a `refs/tags` refspec — in every **SPELLING**: bare, with interleaved
+`git pull`, `git remote update`, `git tag` in its creating forms, and `git update-ref refs/tags/…`
+— in every **SPELLING**: bare, with interleaved
 `-c`/`-C`/`--git-dir` options before the verb, and the TS array-argv form. Verb and spelling are two
 independent axes and the guard is narrower than its property if either is under-enumerated. Each
 occurrence is read with two lines of preceding context. Membership is never a list in the guard: the
@@ -1163,10 +1214,12 @@ None. The decision is true the moment the guard is green; nothing is soak-gated.
     reachable only through `apps/web-platform/infra/run-registered-suites.sh --list`, the delegation
     carries a floor on its parse plus the declared-vs-parsed cross-check, and Guard-1 row 13 is RED.
 33. The guard's header states, in its own words, every place its enumeration is an **approximation**
-    rather than an enumeration — at minimum: the `bun test <dir>/` expansion method, and the fact
-    that the closure covers **tracked** executables only, so an untracked-but-present sourced file
-    leaves it silently. Verify by asserting the literal phrases are present, not by reading the prose
-    — an honesty clause nothing checks is prose.
+    rather than an enumeration, and every command it deliberately holds out of class. At minimum:
+    the `bun test <dir>/` expansion method; that the closure covers **tracked** executables only, so
+    an untracked-but-present sourced file leaves it silently; that comment and heredoc exclusion is
+    best-effort with a false-OFFENDER (not false-green) failure direction; and the out-of-class
+    table from `## Technical Approach` Stage C with its reasons. Verify by asserting the literal
+    phrases are present, not by reading the prose — an honesty clause nothing checks is prose.
 
 ### Post-merge
 
