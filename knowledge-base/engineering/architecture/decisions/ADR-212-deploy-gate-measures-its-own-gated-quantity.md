@@ -74,6 +74,32 @@ will otherwise be re-proposed:
 cannot drift). That measures time-to-`test` **including the queue**, on every release, and
 catches the creep class that produced #7902 months before it becomes a fail-closed deploy.
 
+> **RELOCATED 2026-09-09 — see [ADR-215](./ADR-215-the-deploy-fires-on-cis-completion-event-and-the-verdict-never-crosses-as-a-value.md) (#5806).**
+> `await-ci` is deleted; the deploy now fires on CI's `workflow_run: completed` event, so
+> `CEILING_S` no longer exists and nothing can be derived from it. **The detector is relocated,
+> not deleted** — dropping it would have regressed this decision and undone what #7902 shipped
+> two days earlier.
+>
+> Declaring a fresh `CI_BUDGET_S` and warning at 0.7x it was rejected: that is an unowned
+> number, which is exactly what Decision 3 of this ADR rejected arithmetic for. The reference
+> now derives from a constant that is **already owned and already CI-asserted** —
+> `DRIFT_SUSTAINED_THRESHOLD_MIN`, which check B9 asserts stays >= the declared critical path.
+> CI's allowed share is that budget minus the ceilings downstream of it:
+> `CI_BUDGET_MIN = 207 - (30 + 15 + 90) = 72`, and the warning fires at `0.7 x` it — the same
+> factor chosen here.
+>
+> **The measured quantity changed with it, and the change is an improvement.** This decision
+> measured time-to-`test` *including the queue*, which was correct while the queue was inside
+> the gated quantity. Since #7931 part 1 gave every `main` push its own concurrency group there
+> IS no queue term, so the detector now measures CI's own duration from the completion event —
+> the same creep, without a term belonging to a different commit.
+>
+> One thing this decision did not have to distinguish, and its successor does:
+> `CI_BUDGET_MIN` (72, what the budget ALLOWS CI) and `CI_DECLARED_PATH` (70, what CI declares
+> for ITSELF) are different quantities. An earlier revision of the #5806 work used them
+> interchangeably. `70 <= 72` is the headroom statement that makes the budget hold, and it is
+> now asserted at runtime rather than assumed.
+
 **5. Job ceilings exist to bound a HUNG job, and a silent bound must never fire before a loud
 one.**
 
