@@ -54,3 +54,52 @@ filter, the `if !` form in AC2, `gitleaks` named explicitly in AC5, AC6 encoded 
 the divergence set re-derived from `rehearsal.tf` rather than from the gate's allowlist, the
 push/CI/post-merge phases, the CPO sign-off step, and the disclosure that this plan does not
 follow the runbook's `## After a PASS` artifact-download sequence.
+
+## Review-time: three measured gate defects, deferred to a follow-up PR (not filed)
+
+Found by `pattern-recognition-specialist` at review, all reproduced on HEAD. The CONCUR gate
+(`code-simplicity-reviewer`) **DISSENTed** on filing them as a bundled scope-out, and the dissent
+was correct on four counts. Recorded here rather than as an issue, so the disposition survives the
+session without adding backlog. **Net issue flow for this PR: 0 filed, 0 closed.**
+
+**(b) The exactly-once arm enumerates decorations instead of anchoring.**
+`git_data_rung2_rehearsal_gate` counts `^[[:space:]]*(export[[:space:]]+)?KEY[[:space:]]*=`. It
+knows `export` and not `declare`/`typeset`/`readonly`/`local`. Measured: a file carrying
+`RUNG2_BOOT_REHEARSAL=PASS` plus `declare RUNG2_BOOT_REHEARSAL=FAIL` counts 1 and RELEASES, while
+`source` sees `FAIL` — verbatim the divergence-of-meaning that block exists to prevent.
+Fix (validated by the dissent): `(^|[[:space:]])`. Enumerating known shapes is what produced the
+bug; the in-code comment claiming the tested shapes are exhaustive is provably wrong.
+
+**(c) Nothing asserts the freshness step still exists.**
+`git-data-rung2-rehearsal.test.sh` reads `infra-validation.yml` only to parse its `paths:` filter.
+Deleting the `Rung-2 evidence freshness` step is caught by nothing — and because that job is not a
+required check (already tracked at #6766), its disappearance produces no signal at all.
+
+**(a) The gate's predicate is narrower than its name.** It asserts *a well-formed, template-bound
+assertion exists*, not *a rehearsal passed*. `RUNG2_SENTRY_CROSSCHECK` is written by the capture and
+read by no gate, while this branch's own `tasks.md` 2.6 makes `CLEAN` an acceptance criterion — i.e.
+enforced by human eyeball.
+
+**A premise I asserted and did not check, corrected by the dissent.** I claimed the cheap half of
+(a) would require regenerating the evidence file and voiding its capture provenance. False: the
+host name is already at line 8 and inside all four embedded queries, and the URL already ends in the
+same run id — measured, `33888071954` on both sides. `rehearsal.tf` builds the host name FROM the
+run id, so the two strings are already coupled and a gate-side equality is available at zero
+evidence-file cost.
+
+*Open design question the follow-up must settle, not skip:* that host name lives in a **comment**,
+and the gate strips comments before reading precisely so comments are never load-bearing. Asserting
+on it either reverses that decision (read raw text) or promotes it to a key (which does need a
+regeneration). Decide deliberately.
+
+**Disposition (accepted from the DISSENT).** (b), (c), and the zero-cost half of (a) go into one
+gate-side follow-up PR opened immediately after this merges — no evidence-file change, no
+regeneration. The operator constrained *this PR's diff*, not the session, so a follow-up PR honours
+the constraint literally without creating backlog. Only the expensive half of (a) — CI `gh api` run
+resolution plus promoting `RUNG2_SENTRY_CROSSCHECK` to a gate-required key — would be worth filing
+alone, as `architectural-pivot` on the evidence format, and its trigger must be *"before the next
+git-data birth dispatch is armed"*, linked as a **blocker on** #7025.
+
+**Why not "dependency on #7025" as the trigger:** it is circular. The gate *is* the mechanism that
+holds the birth dispatch, so parking a fail-open hole in the hold behind the thing the hold guards
+means the holed gate is exactly what lets the dispatch through. That trigger cannot fire on its own.
