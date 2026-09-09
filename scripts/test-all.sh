@@ -1399,7 +1399,21 @@ if want_scripts; then
   # a `-live` line would put a 1,345-file lint inside every shard of the required
   # `test` context, and the orphan linter treats a suite carrying BOTH a run_suite
   # line and a workflow `run:` step as double coverage.
-  run_suite "scripts/markdown-lint-unit" bash scripts/markdown-lint.test.sh
+  # The suite drives the REAL pinned binary through a hermetic sandbox that symlinks the
+  # repo's node_modules, so it needs `npm ci` to have run. The `test-scripts` legs do not
+  # install node deps (only the `markdown-lint` job in pr-quality-guards.yml does), and
+  # without the binary the sandbox CONTROL goes RED and every mutation row below it would
+  # pass for the wrong reason -- the suite says so and aborts, which reads as a suite
+  # failure rather than as absent coverage. Declare the decline instead: a missing
+  # prerequisite is coverage NOT OBTAINED, and skip_suite records that with a re-run
+  # recipe. Never let it fall through to a silent pass -- the whole point of this suite is
+  # that a markdown gate which cannot run must not look like one that ran clean.
+  if [[ -x node_modules/.bin/markdownlint ]]; then
+    run_suite "scripts/markdown-lint-unit" bash scripts/markdown-lint.test.sh
+  else
+    skip_suite "scripts/markdown-lint-unit" "node deps absent (npm ci not run on this leg)" \
+      "npm ci --ignore-scripts && bash scripts/markdown-lint.test.sh"
+  fi
   # Supabase Management API deprecation + host-pin assembly guard, and the
   # retained-log helper. Registered EXPLICITLY because neither directory is in
   # SUITE_GLOBS: `--print-suite-globs` lists `scripts/lib/*.test.sh` but not
