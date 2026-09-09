@@ -530,7 +530,16 @@ printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
 # Absolute floor, recorded from a MEASURED green run (never from expectation --
 # that was wrong three times in sibling PR #7806). Reported with printf + exit 1
 # directly, never via fail(), so one edit cannot disarm both.
-MIN_ASSERTIONS=43
+#
+# Re-measured at 61 (#7873, Guard 1 row H1). It was 43 against a suite that had
+# grown to 61 rows, and an 18-row slack meant DELETING a must-PASS row was
+# invisible: removing the `compliant-ruled-pinned-destination.sh` must-pass
+# assertion was measured GREEN at 60/0. That is the failure H1 names -- a suite
+# whose only pin fixture is a violation cannot detect a classifier that rejects
+# everything, and here the loss of the positive direction was not even reported.
+# A floor at the measured count makes any row deletion RED. It is a LOWER bound,
+# so adding rows never trips it; re-measure and raise it when rows are added.
+MIN_ASSERTIONS=61
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
     "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2

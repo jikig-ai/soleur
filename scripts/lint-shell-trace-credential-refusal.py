@@ -922,7 +922,17 @@ def _destination_vars(cmd: str) -> set[str]:
 
 
 def check_rule_d(rel: str, lines: list[str], preamble_at: int | None) -> list[str]:
-    """Transport confinement + destination pin on every credentialed curl."""
+    """Transport confinement + destination pin on every credentialed curl.
+
+    ADR-214 corollary, recorded here because this is where an author sent by the
+    "add an equality pin" message below is actually standing: **a test seam for a
+    destination pin must never be env-declared.** On this surface the environment
+    IS the adversary -- anyone who can substitute the destination variable can set
+    the opt-out to match in the same breath, so an env-declared seam
+    (`*_TEST_PIN`, `*_ALLOW_*`) is a bypass available to precisely the actor the
+    pin defends against. A test that needs a non-vendor destination shims `curl`,
+    which exercises the guard, rather than declaring its way past it.
+    """
     del preamble_at  # Rule D is independent of the xtrace refusal.
     body = "\n".join(strip_comment(x) for x in lines)
     out: list[str] = []
@@ -1102,7 +1112,7 @@ def main() -> int:
     ap.add_argument("--census", action="store_true")
     ap.add_argument("--write-baseline", action="store_true")
     ap.add_argument("--write-baseline-d", action="store_true",
-                    help="rewrite Rule D's baseline AND its highwater from a full-tree scan")
+                    help="rewrite Rule D's baseline from a full-tree scan")
     args = ap.parse_args()
 
     targets = targets_from_args(args)
