@@ -883,7 +883,7 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
 # is asserted, in EVERY arm, over EVERY field — including the arms where the expected token is
 # also pinned positively.
 # Presence/parity list. `redis_keys` is here.
-PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_key_patterns data_mount_src data_bytes"
+PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes"
 # NEVER-ZERO list — deliberately EXCLUDES redis_keys, and that exclusion is the whole point.
 # For every other field `0` is a degradation masquerading as a measurement. For redis_keys `0`
 # is the CLEARING VALUE: an empty keyspace is exactly what authorizes the recut. Putting it in
@@ -892,8 +892,8 @@ PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_key_pat
 # unauthenticated read must degrade to __UNREADABLE__ and never to 0.
 PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes"
 
-assert "#7695 probe declares probe_schema=5 (Guard 2 refuses a stale_schema row)" \
-  "grep -qE 'probe_schema=5( |\$)' '$PROBE_LOG'"
+assert "#7695 probe declares probe_schema=6 (Guard 2 refuses a stale_schema row)" \
+  "grep -qE 'probe_schema=6( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
@@ -985,7 +985,7 @@ db=0
 prev=""
 for a in "$@"; do
   [ "$prev" = "-n" ] && db="$a"
-  case "$a" in INFO) printf '# Keyspace\ndb0:keys=3,expires=0\ndb1:keys=4,expires=0\n'; exit 0 ;; esac
+  case "$a" in INFO) printf '# Keyspace\ndb0:keys=3,expires=1\ndb1:keys=4,expires=2\n'; exit 0 ;; esac
   prev="$a"
 done
 for a in "$@"; do
@@ -1045,6 +1045,72 @@ assert "#7695 schema 5: patterns is a real histogram, not a sentinel" \
 # fields — the injection shape its duplicate-field refusal exists to catch.
 assert "#7695 schema 5: patterns is a single token (no whitespace leaked into the row)" \
   "[[ \$(grep -oE 'redis_key_patterns=[^ ]+' '$PROBE_D_LOG' | head -1 | wc -w) -eq 1 ]]"
+
+# ── probe_schema=6: expires, the field that separates residue from live keys ────────────────
+# WHY THIS EXISTS. `keys=` is the raw dict size and counts keys whose TTL has elapsed but which
+# have not been reclaimed; SCAN respects expiry and skips those. So `keys=16` beside an empty
+# SCAN has two readings — live keys the scan cannot see, or expired husks — and only `expires=`
+# separates them. The live host sat at exactly that ambiguity for two probe generations.
+#
+# The fixture's expires (1 + 2 = 3) is deliberately DIFFERENT from its keys (3 + 4 = 7), and
+# different per db, so a parser that summed the wrong field — or read one db — is visible as a
+# wrong number rather than as a coincidence.
+assert "#7695 schema 6: redis_expires SUMS expires= across every db (3, not the 7 of keys=)" \
+  "grep -qE 'redis_expires=3( |\$)' '$PROBE_D_LOG'"
+assert "#7695 schema 6: redis_expires is NOT the keys= sum (a copy-pasted parser reads 7)" \
+  "! grep -qE 'redis_expires=7( |\$)' '$PROBE_D_LOG'"
+# 0 is a MEANINGFUL reading here ("nothing carries a TTL"), so it must never be reachable by
+# coercion — malformed input has to fail loudly instead of summing to the meaningful value.
+assert "#7695 schema 6: redis_expires is numeric, not a sentinel, on the healthy path" \
+  "grep -qE 'redis_expires=[0-9]+( |\$)' '$PROBE_D_LOG'"
+
+# ── probe_schema=6: an rc=0 scan that ERRORS must name its reason ───────────────────────────
+# THE REGRESSION THIS PINS, and it is the whole point of schema 6. Schema 5 captured the scan's
+# stderr but surfaced it ONLY when the command exited non-zero. `redis-cli` routinely exits 0
+# while printing a server error reply (`ERR unknown command`, `NOAUTH`, `WRONGTYPE`), so the most
+# likely failure landed in the SCANEMPTY branch with its reason DISCARDED and rendered as a bare
+# `__SCANEMPTY_db0__` — which is what the live host emitted, leaving the cause unknowable.
+#
+# This stub reproduces exactly that: INFO answers normally, `--scan` writes to stderr and exits 0.
+PROBE_E_BIN="$PING_TMP/probe-bin-scanerr"
+mkdir -p "$PROBE_E_BIN"
+cp "$PROBE_D_BIN/logger" "$PROBE_D_BIN/curl" "$PROBE_D_BIN/systemctl" "$PROBE_D_BIN/findmnt" "$PROBE_D_BIN/du" "$PROBE_E_BIN/"
+cat > "$PROBE_E_BIN/redis-cli" <<'RCEEOF'
+#!/bin/sh
+for a in "$@"; do
+  case "$a" in INFO) printf '# Keyspace\ndb0:keys=16,expires=16\n'; exit 0 ;; esac
+done
+for a in "$@"; do
+  if [ "$a" = "--scan" ]; then
+    echo "ERR unknown command 'SCAN'" >&2
+    exit 0
+  fi
+done
+exit 0
+RCEEOF
+chmod +x "$PROBE_E_BIN/redis-cli"
+PROBE_E_LOG="$PING_TMP/logger-probe-scanerr.txt"
+: > "$PROBE_E_LOG"
+PATH="$PROBE_E_BIN:$PATH" LOGGER_OUT="$PROBE_E_LOG" \
+  PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+  PROBE_DATA_MOUNT="/mnt/data" \
+  DOPPLER_PROJECT="soleur-inngest" \
+  INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+  sh "$PROBE_BODY" >/dev/null 2>&1 || true
+
+assert "#7695 schema 6: an rc=0 scan error still reports SCANEMPTY (the count stands)" \
+  "grep -qE 'redis_key_patterns=__SCANEMPTY_[^ ]*__( |\$)' '$PROBE_E_LOG'"
+# THE ARM THAT SCHEMA 5 WOULD FAIL: the reason must travel with the sentinel.
+assert "#7695 schema 6: the rc=0 scan error NAMES itself (schema 5 discarded this)" \
+  "grep -qE 'redis_key_patterns=__SCANEMPTY_[^ ]*ERR[^ ]*__( |\$)' '$PROBE_E_LOG'"
+assert "#7695 schema 6: an errored scan is DISTINGUISHABLE from a genuinely empty one" \
+  "! grep -qE 'redis_key_patterns=__SCANEMPTY_[a-z0-9-]*_noerr__( |\$)' '$PROBE_E_LOG'"
+# The error text is untrusted server output on a whitespace-parsed row — it must not split.
+assert "#7695 schema 6: the carried error text stays ONE token" \
+  "[[ \$(grep -oE 'redis_key_patterns=[^ ]+' '$PROBE_E_LOG' | head -1 | wc -w) -eq 1 ]]"
+# ...and the count is unaffected: a failed scan must never rewrite the destroy-authorizing field.
+assert "#7695 schema 6: a failed scan leaves redis_keys alone (16, not cleared)" \
+  "grep -qE 'redis_keys=16( |\$)' '$PROBE_E_LOG'"
 
 # --- ARM 6: a NOAUTH reply must NOT render as an empty store -------------------------------
 # THE SINGLE MOST DANGEROUS DEGRADATION IN THE PROBE. redis answers an unauthenticated INFO
@@ -1234,8 +1300,11 @@ assert "#7695 never-zero invariant covered 6 logs x 5 fields" \
 # TWO more since probe_schema=4: `redis_keys` (0 is its CLEARING value) and
 # `redis_key_patterns` (whose clearing value is the token `__NONE__`, not 0 — it is never
 # numeric, so the never-zero loop has nothing to say about it either).
-assert "#7695 the presence list carries two MORE fields than the never-zero list (redis_keys, redis_key_patterns)" \
-  "[[ \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) -eq 7 ]]"
+# THREE more since probe_schema=6. Each is excluded from the never-zero loop for its own
+# reason: `redis_keys` and `redis_expires` both have 0 as a MEANINGFUL reading (an empty store;
+# nothing carrying a TTL), and `redis_key_patterns` is never numeric at all.
+assert "#7695 the presence list carries three MORE fields than the never-zero list" \
+  "[[ \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) -eq 8 ]]"
 
 # redis_key_patterns must never render as the empty string: the emit is unconditional, so an
 # unbound variable would drop the field entirely and G14 downstream would read the row as
