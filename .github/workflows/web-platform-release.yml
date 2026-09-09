@@ -1415,10 +1415,19 @@ jobs:
         # job-level env (see top of `deploy:` job for the alignment rationale).
         env:
           VERSION: ${{ needs.resolve-target.outputs.version }}
-          # #3409: assert the running image was built from this workflow's
-          # commit SHA. Defense-in-depth against a bad tag→image association
-          # (right semver, wrong source tree). github.sha is the same SHA the
-          # docker-build step at reusable-release.yml tagged the image with.
+          # #3409: assert the running image was built from the commit this deploy
+          # is for. Defense-in-depth against a bad tag→image association (right
+          # semver, wrong source tree).
+          #
+          # THE CHAIN, since #5806 moved this onto the workflow_run arm — the
+          # comment here used to say `github.sha`, which is no longer what the
+          # code reads and is no longer correct on this arm (under workflow_run it
+          # is the DEFAULT-BRANCH tip, not the deployed commit):
+          #   reusable-release.yml bakes BUILD_SHA=${{ github.sha }} into the image,
+          #   and it runs on the PUSH arm, where github.sha IS the pushed commit;
+          #   resolve-target recovers that same commit cross-run as head_sha.
+          # So the two match by construction, and this gate is what catches the
+          # chain breaking.
           EXPECTED_SHA: ${{ needs.resolve-target.outputs.head_sha }}
         run: |
           for i in $(seq 1 "$HEALTH_POLL_MAX_ATTEMPTS"); do

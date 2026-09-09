@@ -309,6 +309,17 @@ fi
 
 if [[ "$DEPLOY_JOB_STATE" == "absent" ]]; then
   echo "GATE-INDETERMINATE: no web-platform-release run with a deploy job found (run id: ${RELEASE_RUN_ID:-<none>})"
+elif [[ "$DEPLOY_JOB_STATE" == "skipped" ]]; then
+  # NOT a failure, and NOT a validation. Since #5806 the workflow_run trigger
+  # inherits NEITHER path gate (`on.push.paths` nor reusable-release.yml's
+  # `check_changed`), so the deploy arm fires on EVERY ci.yml completion on main
+  # — including docs-only merges, where resolve-target clean-skips and `deploy`
+  # concludes `skipped`. That is the designed behaviour, so it must not read as
+  # an ordinary deploy failure; but no deploy happened, so it cannot validate a
+  # gate either.
+  SKIP_REASON=$(gh run view "$RELEASE_RUN_ID" --json jobs \
+    --jq '[.jobs[] | select(.name == "resolve-target")] | .[0].conclusion // "unknown"')
+  echo "GATE-NOT-EXERCISED: the deploy arm ran and clean-skipped (resolve-target: ${SKIP_REASON}). Nothing was deployed for this merge, so a gate change is still unvalidated." 
 else
   # REASON is written by ci-deploy.sh's final_write_state. A canary gate that
   # rejected a HEALTHY host surfaces as one of these.
@@ -320,6 +331,7 @@ fi
 
 **Interpretation:**
 
+- `DEPLOY_JOB_STATE` is **`skipped`**: the deploy arm fired and clean-skipped — normal for a docs-only merge, because the `workflow_run` trigger inherits neither `on.push.paths` nor `check_changed` (ADR-215). Report `GATE-NOT-EXERCISED`, **not** a failure and **not** `GATE-VALIDATED`. If this PR changed gating logic, the gate is still unvalidated and the watch stays open until a merge that actually deploys.
 - `DEPLOY_JOB_STATE` is **`absent`**: **do NOT report `GATE-VALIDATED`.** Either the deploy arm has not fired yet (CI on the merge SHA is still running — the `workflow_run` trigger fires on CI *completion*, so the deploy arm always lags the push arm), or you selected the wrong arm. Report `GATE-INDETERMINATE — deploy arm not observed`, name the run id you looked at, and re-check once the merge-commit CI run concludes. An empty grep is the absence of evidence, not evidence of a passing gate.
 - Release **succeeded** (deploy job present and `success`): the changed gate passed on a real deploy — the dark-launch observation is satisfied. Report `GATE-VALIDATED`.
 - Release **failed with a canary/sandbox rollback reason** AND this PR changed gating logic: **suspect the gate, not the app.** A gating check that diverged from production reality (e.g. a synthetic probe that does not match what runs in prod) blocks every deploy. Recommended action: **revert the gating change immediately** (it is unvalidated by definition — its first real deploy rolled back), restore the prior known-good gate, and re-deploy; investigate the probe separately and re-introduce it NON-BLOCKING per `wg-dark-launch-deploy-gates`. Report `GATE-SUSPECT — revert recommended` and surface it at the top of the Phase 7 report.
