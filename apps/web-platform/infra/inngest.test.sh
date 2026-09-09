@@ -892,8 +892,8 @@ PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires
 # unauthenticated read must degrade to __UNREADABLE__ and never to 0.
 PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes"
 
-assert "#7695 probe declares probe_schema=6 (Guard 2 refuses a stale_schema row)" \
-  "grep -qE 'probe_schema=6( |\$)' '$PROBE_LOG'"
+assert "#7695 probe declares probe_schema=7 (Guard 2 refuses a stale_schema row)" \
+  "grep -qE 'probe_schema=7( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
@@ -1111,6 +1111,30 @@ assert "#7695 schema 6: the carried error text stays ONE token" \
 # ...and the count is unaffected: a failed scan must never rewrite the destroy-authorizing field.
 assert "#7695 schema 6: a failed scan leaves redis_keys alone (16, not cleared)" \
   "grep -qE 'redis_keys=16( |\$)' '$PROBE_E_LOG'"
+
+# ── probe_schema=7: the flag that does not exist ────────────────────────────────────────────
+# A SOURCE ASSERTION, DELIBERATELY, BECAUSE NO STUB CAN CATCH THIS CLASS. Every redis-cli stub
+# in this file is a shell script that ignores unknown flags, so `--scan --count 100` looked
+# perfectly healthy in the fixtures for THREE schema generations while the real binary answered
+#   Unrecognized option or bad number of args for: '--count'
+# and returned nothing. Reproduced in `docker run redis:7.0.15`: with the flag rc=1 and zero
+# keys; without it, all 16 keys come back. `--count` is not a redis-cli option — it was invented
+# in probe_schema=4 and cost four host replaces, because each subsequent investigation trusted
+# the fixtures and looked at the STORE instead of the command.
+#
+# Asserted on the source, not on behaviour, since behaviour is exactly what the stubs cannot
+# model. Anchored on the invocation to avoid matching this comment (cq-assert-anchor-not-bare-token).
+PROBE_SRC="$SCRIPT_DIR/inngest-bootstrap.sh"
+assert "#7695 schema 7: the scan invocation passes NO --count (not a redis-cli option)" \
+  "! grep -nE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC' | grep -q -- '--count'"
+# Non-vacuity: there must BE a --scan invocation for the negative above to mean anything.
+assert "#7695 schema 7: non-vacuity — a --scan invocation exists to be checked" \
+  "grep -qE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC'"
+# ...and redis-cli's own exit status must not be laundered through a pipeline. A pipeline's
+# status is the LAST command's, so `redis-cli … | head` reported head's 0 and made the
+# __SCANFAIL_ branch unreachable for a failing redis-cli no matter what that branch contained.
+assert "#7695 schema 7: the scan is redirected, never piped, so redis-cli's rc survives" \
+  "! grep -nE '^[[:space:]]*redis-cli .*--scan' '$PROBE_SRC' | grep -q '|'"
 
 # --- ARM 6: a NOAUTH reply must NOT render as an empty store -------------------------------
 # THE SINGLE MOST DANGEROUS DEGRADATION IN THE PROBE. redis answers an unauthenticated INFO
