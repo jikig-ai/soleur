@@ -8,8 +8,9 @@
 # Exit 1 = an unpaired member on either side, or nothing to pair at all.
 #
 # ── THE FAILURE THIS EXISTS FOR ────────────────────────────────────────────
-# The adoption is 27 `removed { from = sentry_issue_alert.<n>  lifecycle
-# { destroy = false } }` blocks paired with 27 `import { to = sentry_alert.<n> }`
+# The adoption is N `removed { from = sentry_issue_alert.<n>  lifecycle
+# { destroy = false } }` blocks paired with N `import { to = sentry_alert.<n> }`
+# (27 in #7650 Phase 2; 1 in Phase 3.4 for `git_data_boot_warning`)
 # blocks. Delete ONE `import{}` and every per-address check still passes: the
 # remaining 26 pairs are individually well-formed, the 27th `removed{}` is
 # well-formed, and the orphaned `sentry_alert` block is well-formed. Nothing is

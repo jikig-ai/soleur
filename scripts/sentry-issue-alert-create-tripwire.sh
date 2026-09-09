@@ -6,14 +6,15 @@
 # Exit 1 = it creates one, or the plan could not be read as a plan document.
 #
 # ── WHY A SEPARATE, NARROW TRIPWIRE ────────────────────────────────────────
-# The repo owns exactly THREE `sentry_issue_alert` resources. TWO of them
-# (`auth_per_user_loop`, `sandbox_startup_failure`) stay behind because the
-# provider cannot express their trigger (`event_unique_user_frequency_count` is
-# absent from `trigger_conditions` at 0.15.7 — upstream
-# jianyuan/terraform-provider-sentry issue 950). The THIRD,
-# `git_data_boot_warning`, is NOT blocked — it uses `event_frequency` and could
-# migrate today; it stays only because it landed after the #7650 Phase 2 adoption
-# capture was taken. Every other path through that resource type is a mistake:
+# The repo owns exactly TWO `sentry_issue_alert` resources
+# (`auth_per_user_loop`, `sandbox_startup_failure`). Both stay behind for the
+# same reason: the provider cannot express their trigger
+# (`event_unique_user_frequency_count` is absent from `trigger_conditions` at
+# 0.15.7 — upstream jianyuan/terraform-provider-sentry issue 950, fixed on main
+# 2026-09-09 but not in any release, so still blocking; tracked at #7985).
+# A third, `git_data_boot_warning`, was never blocked by 950 and was migrated to
+# `sentry_alert` in Phase 3.4. Every other path through that resource type is a
+# mistake:
 #
 #   * a re-authored block after someone "restores" one of the 27, which would
 #     create a SECOND live rule paging on the same events; or
@@ -84,5 +85,5 @@ fi
 count=$(grep -c '' <<<"$creates")
 echo "::error::sentry_issue_alert create tripwire: this plan CREATES ${count} sentry_issue_alert resource(s):" >&2
 sed 's/^/::error::  /' <<<"$creates" >&2
-echo "::error::Only three sentry_issue_alert resources may exist (auth_per_user_loop, sandbox_startup_failure, git_data_boot_warning); the other 27 were adopted as sentry_alert in #7650 Phase 2. Note auth_per_user_loop is import-only while sandbox_startup_failure and git_data_boot_warning were apply-created, so 'it must have been imported' is NOT a safe assumption here. A create here means a duplicate live paging rule that bills and double-pages, or an adoption that failed and is being resolved by creating instead of importing. There is NO acknowledgement for this and [ack-destroy] does not reach it: investigate the divergence." >&2
+echo "::error::Only two sentry_issue_alert resources may exist (auth_per_user_loop, sandbox_startup_failure); the other 28 are sentry_alert — 27 adopted in #7650 Phase 2 and git_data_boot_warning in Phase 3.4 (#7985). Note auth_per_user_loop is import-only while sandbox_startup_failure was apply-created, so 'it must have been imported' is NOT a safe assumption here. A create here means a duplicate live paging rule that bills and double-pages, or an adoption that failed and is being resolved by creating instead of importing. There is NO acknowledgement for this and [ack-destroy] does not reach it: investigate the divergence." >&2
 exit 1
