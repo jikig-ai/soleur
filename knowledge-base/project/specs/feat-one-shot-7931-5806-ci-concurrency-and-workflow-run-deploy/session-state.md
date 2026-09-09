@@ -64,3 +64,76 @@ LPT deferral"), which confirms the miss. **Decision 3 governs: do NOT implement 
   `echo "$shard: $result" >&2`; `web-platform-release.yml:103` still defines `await-ci`.
 - Plan frontmatter `closes: [7931, 5806]` matches the gated set — no re-target, so the
   post-planning re-probe is satisfied.
+
+## Phase 0 preconditions — RE-DERIVED, two plan corrections
+
+- **ADR ordinal: the plan's `ADR-214` is CLAIMED.** Phase 0.3's all-refs probe (not just `ls` over
+  `main`) shows ADR-213 taken by the pushed branch `feat-one-shot-7946-7947-sentry-org-token-and-
+  snapshot-redaction` and ADR-214 by `feat-one-shot-7898-7055-credfwd-plugins-bs-pin-byok-fixture`.
+  **The free ordinal is ADR-215**, and that is what the shipped comments cite.
+- **Live suite count is 386 registrations**, not the 376 `ci.yml`'s K-table stanza states
+  (`bash scripts/test-all.sh --enumerate scripts`). This PR adds 2 more, taking it to 388. K is
+  NOT re-simulated here (Phase C.3), so the stale figure is carried into the deferral issue rather
+  than propagated as current.
+- **Phase 0.5 confirmed:** `TEST_TIMING_LOG` was bound in NO workflow, so Phase C's premise holds.
+- **Phase 0.1 surfaced no new Files-to-Edit entries.** `IN_FLIGHT_CEILING_S`
+  (`ci-deploy-wrapper.test.sh`, `ci-deploy.test.sh`) is the `deploy` job's poll-window constant,
+  unrelated to `await-ci`'s `CEILING_S`, and survives rehoming unchanged.
+  `scripts-shard-totality-mutations.sh` pins `shard: ["1/3",...]`, which C.3 leaves alone.
+  `TC_RUNTIME_CEILING_S` in `scripts/lib/test-contention.sh` is a third, unrelated constant.
+
+## Measurement re-derivation (Phase A.1) — the plan's figures do NOT fully reproduce
+
+Re-ran §Measurement's own command before writing its numbers into a comment that has been
+retracted TWICE. Result over the plan's stated window (2026-09-07T09:02Z .. 2026-09-09T14:22Z):
+
+| figure | plan | re-derived | verdict |
+|---|---|---|---|
+| population | 35 | **29** | differs |
+| occupied cohort n | 7 (20%) | 7 (**24%**) | n exact; % differs via denominator |
+| occupied first-job | med 460s max 1249s | med 460s max 1249s | **exact** |
+| occupied queue | med 393s max 1245s | med 393s max 1245s | **exact** |
+| occupied time-to-test | med 2438s max 3365s | med 2438s max 3365s | **exact** |
+| drained first-job | med 4s max 731s | med 4s max 731s | **exact** |
+| drained spread (needs-less jobs) | med 332s max 1708s | med **412s** max 1708s | max exact, median differs |
+| all spread | med 218s max 1708s | med **292s** max 1708s | max exact, median differs |
+
+Every MAXIMUM and the ENTIRE occupied cohort reproduce to the second; the population and two
+medians do not. Tested and REJECTED the obvious mechanism — the plan's `sort -r` (no `-u`) across
+paginated calls double-counting — there are zero duplicate run ids. Cause of the 6-run delta not
+established. The shipped comment therefore states **cohort shape**, publishes the command with
+`sort -ru`, commits the raw `jobs.tsv`, and tells the next reader not to cite a median without
+re-running. **AC2 is amended accordingly** (it required the literal "20%/80%" split and "both cited
+medians"); satisfying it verbatim would have meant writing figures I could not reproduce into the
+one comment in this repo with a two-retraction history.
+
+## E.9 determination — run BEFORE any job deletion, as the plan requires
+
+- **B9 is NAME-KEYED and would go RED on a correct change.** `scripts/prod-version-drift-check.test.sh`
+  computes `crit = max(release_ceiling, job_timeout("await-ci"))`, and `job_timeout` returns
+  `DEFAULT_JOB_TIMEOUT_MIN = 360` when the job is ABSENT. Deleting `await-ci` therefore yields
+  `max(60,360) + 30 + 15 + 90 = 495 > 207` and reds B9 on the very change that is correct. It is a
+  lockstep edit, not a passenger.
+- **B8e pins the topology as a LITERAL**: `"await-ci,migrate,release,verify-doppler-secrets,verify-migrations"`.
+  Phase E drops `await-ci`, moves `release` out of the closure entirely (different run) and adds
+  `resolve-target`, so this literal must be re-derived deliberately in the same commit.
+
+## Phase E — BLOCKED on a structural fact the plan did not have
+
+Decision 2 declares a stop condition: *"If any predicate cannot be reconstructed at equal strength,
+#5806 does not ship in this shape."* Two measured facts make the prescribed mechanism unreachable:
+
+1. **The REST jobs API does not expose job `outputs`.** Verified against a real run — the job object's
+   key set is exactly `[check_run_url, completed_at, conclusion, created_at, head_branch, head_sha,
+   html_url, id, labels, name, node_id, run_attempt, run_id, run_url, runner_group_id,
+   runner_group_name, runner_id, runner_name, started_at, status, steps, url, workflow_name]`. There
+   is no `outputs` key anywhere in the payload. So `needs.release.outputs.{version,tag,docker_pushed,
+   mirror_verified}` — read at seven sites — cannot be reconstructed cross-run from the API.
+   The job CONCLUSION *is* available, so predicate 1 alone is reachable.
+2. **`release` is a reusable-workflow call, so its API job name is `release / release`.** A lookup
+   keyed on the plan's literal `release` returns ZERO rows (measured). A resolver or guard built on
+   that name would match nothing and fail OPEN — the empty-haystack class.
+
+Routed to the `soleur:engineering:cto` agent as an architecture fork (artifact hop vs. release-object
+read vs. honour the stop condition), per the work-skill rule that a blocked plan mechanism with
+material trade-offs is the CTO's call and not the operator's.
