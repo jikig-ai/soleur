@@ -930,6 +930,7 @@ corpus-correction
 correction-discipline
 correction-pr
 correction-sweep
+corrections
 cosign
 cost-attribution
 cost-caps
@@ -1406,6 +1407,7 @@ fail-closed-gates
 fail-loud
 fail-open
 fail-safe
+fail-safe-polarity
 fail-soft
 fail2ban
 fails
@@ -2346,6 +2348,7 @@ observability-coupling
 observability-tests
 oci
 oci-image
+oci-pin
 octokit
 off-host-verify
 offline-harness
@@ -3352,6 +3355,7 @@ sha-pinning
 sha256
 shallow-fetch
 shape-vs-truth-acs
+shard
 share
 shared
 shared-documents
@@ -3537,6 +3541,7 @@ stale-claims
 stale-clone
 stale-comment-sweep
 stale-comments
+stale-constants
 stale-context
 stale-count
 stale-counts

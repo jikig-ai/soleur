@@ -70,9 +70,46 @@ CMD="$HOOK_CMD"          # also: HOOK_TOOL_NAME HOOK_CWD HOOK_SESSION_ID HOOK_FI
 
 `hook_parse_input` returns 0 only when the document parses **and** every
 contracted field is a string; the values are then byte-exact. Any other outcome
-returns 1 and classifies via `HOOK_INPUT_REASON` (`nonstring`, `unparseable`,
-`separator`, `jq_missing`, `internal`). **The return code is normative; the
-reason is diagnostic.**
+returns 1 and classifies via `HOOK_INPUT_REASON`. **The return code is
+normative; the reason is diagnostic.** The enum:
+
+| reason | meaning | whose fault |
+|---|---|---|
+| `empty` | jq exited 0 having emitted nothing — there was no document | nobody's |
+| `baddoc` | jq rejected the document — **rc 5 only**: malformed, truncated, lone surrogate. Also raised when a COMPLETE record is emitted and jq exits 5, i.e. a valid envelope followed by trailing garbage | the payload |
+| `nonobject` | the document parsed but its root is not an object, so no contracted field could exist | the payload |
+| `nonstring` | the root IS an object but a contracted field is not a string — the attack signature | the payload |
+| `separator` | a value carried the record separator and raised the field count | the payload |
+| `multidoc` | two or more concatenated documents. jq is a stream processor, so it ran the program once per document and emitted an exact multiple of 6 slots with rc 0 | the payload |
+| `jq_missing` | `jq` is not on PATH | the environment |
+| `internal:rc<N>` | jq exited non-zero with any code **other than 5** — 3 (our program did not compile), 2 (usage/system error, e.g. a write failure), 128+n (killed by a signal: OOM, SIGSEGV). `N` is the literal code | ours |
+| `internal:count` | our program emitted a partial record with a clean rc | ours |
+
+`empty` and `baddoc` were a single `unparseable` until #7275, and `internal:*`
+was a single `internal` whose rc-3 arm was unreachable. Both splits exist so a
+BROKEN HOOK is never reported as the model having sent junk — that collapse is
+how a broken gate hides behind a plausible payload class. The `internal:` prefix
+is deliberate: `hook_input_report` keys telemetry on `${reason%%:*}`, so the
+detail rides along without creating new aggregation keys.
+
+**The polarity is load-bearing.** `baddoc` is reached ONLY on jq rc 5, and every
+other non-zero code defaults to `internal:rc<N>` — not the other way round. A
+first revision of #7275 enumerated *our* faults and let the residue default to
+*theirs*, which reported a usage error, an exec failure and an OOM kill as the
+model having sent junk: the same collapse #7275 exists to close, one code over.
+On a surface where a wrong answer disarms a guard, over-paging an engineer is
+recoverable and a broken gate hiding behind a plausible payload class is not.
+
+**What this enum does NOT cover.** An empty object `{}` reaches five empty
+strings through the `ok` arm and returns 0 — the same observable state as the
+`null` root that `nonobject` catches. That is deliberate, not an oversight:
+`A4` in the contract suite asserts that absence, null and empty are legitimate
+and must still pass, and a minimal Read-shaped payload is all-empty by the same
+measure. A CONCUR gate rejected filing this as a deferred scope-out — one
+envelope serializes one tool call, so `{}` means no command was supplied and
+there is nothing for a guard to match. The full reasoning, including why
+requiring a non-empty `tool_name` was rejected on measured evidence, is at the
+`SCOPE` block in `_HOOK_INPUT_JQ`.
 
 Four rules, each of which was a real defect in #7164:
 
@@ -257,9 +294,17 @@ The three mirrors (`guardrails.sh`, `pre-merge-rebase.sh`,
 this helper: a different envelope (`.working_dir`, `.tool_input.path`) and a
 different protocol (`exit 2` + `{"decision":"deny"}`, with no `ask` and no kill
 switch). What each reason class does there is decided in
-[ADR-165][adr165] — `nonstring`, `separator` and `unparseable` deny;
-`jq_missing` and `internal` fail **open, loudly**, because the repair for a
-missing `jq` is itself a tool call that a deny would also block.
+[ADR-165][adr165]. **Read that table carefully: its rows are labelled with the
+`.openhands` mirror's OWN vocabulary, which is a different enum that still has
+an `unparseable` member** (`.openhands/hooks/*.sh` set their own
+`*_ENVELOPE_SHAPE` from their own inline `jq` and never source this library).
+The `.claude` column reads `ask` for every class, so the #7275 split changed
+those hooks' behaviour not at all — but do not read its row labels as this
+file's enum. ADR-165 carries an errata saying so.
+
+On this side: the payload classes deny, and `jq_missing` plus the `internal:*`
+classes fail **open, loudly**, because the repair for a missing `jq` is itself a
+tool call that a deny would also block.
 
 This is an in-place decision, not an unexamined gap. Convergence onto the shared
 extractor would buy DRY and three jq forks down to one on a non-primary harness,

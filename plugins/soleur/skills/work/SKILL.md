@@ -506,6 +506,18 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    auto-syncs; recovery was a renumber to 115. See
    `knowledge-base/project/learnings/workflow-patterns/2026-06-30-migration-number-collision-mid-pipeline.md`.
 
+   **The collision set includes the shared DEV DATABASE, not just `origin/main`.** The
+   check above greps `origin/main`, and a sibling branch's migration is invisible there
+   until it merges — but it is fully visible in dev's `_schema_migrations`, because the
+   sibling session APPLIED it. Query all three sources and take the union: `origin/main`,
+   every worktree's `supabase/migrations/`, and
+   `SELECT filename FROM public._schema_migrations ORDER BY filename DESC LIMIT 5` over
+   Doppler `DATABASE_URL_POOLER`. **Why:** #7829 — `136` was free on `origin/main` and
+   already applied to dev by a sibling; the collision surfaced only when a live probe for
+   an unrelated question happened to list the applied set, after the number had been
+   written into a function body (which Postgres stores in `prosrc`), an Article 30
+   register cell, and 38 prose sites.
+
    **Tracking row in the SAME transaction as the migration body.**
    The project's canonical `apps/web-platform/scripts/run-migrations.sh`
    writes `INSERT INTO public._schema_migrations (filename, content_sha)
@@ -801,6 +813,16 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 **Before claiming a battery proves anything — "mutation-proven", "N/N caught", "no surviving mutants" — count AXES, not rows.** A battery's value is the number of DISTINCT things it perturbs; N mutations of one shape is one mutation, and the axes an author omits are the ones they were not thinking about. The axes below are the consolidated union; [review/SKILL.md](../review/SKILL.md) carries the evidence for each, distributed across its defect-class and sharp-edge bullets rather than in one catalogue section, so treat this list as the index and that file as the case law:
 
 - **dispatch** — neuter the assertion helpers themselves; a suite whose only gate is a failure counter exits 0 having asserted nothing.
+- **the gate's own CALL PATH** — not just its lifetime. An anti-vacuity floor that counts a
+  variable the assertion helpers increment is dispatched THROUGH the thing it guards, so a helper
+  that always takes the pass branch keeps the count intact and the floor never looks. Ask per gate:
+  *which helper does my evidence flow through, and does that helper appear in any mutation row?*
+  Measured (#7275): `want(){ ok "$1 → $3"; }` — drop one comparison — produced a byte-identical
+  `95/95 pass`, exit 0, with six of ten battery rows silently surviving; the floor could not see it
+  because it counted `TOTAL`, and the battery's harness row neutered `bad()`, the one edit leaving
+  `ok()` and `TOTAL` intact. The remedy is a helper self-test driving both branches and reporting
+  with `printf` + `exit`, never through the helpers it guards. Treat floor slack as attack budget:
+  that floor sat at 60 against 95 assertions, so all 24 new ones could be undispatched.
 - **fixture shape** / **fixture direction** — the producer's shapes no fixture instantiates, and the far side of any transform (a suite whose fixtures all assert must-trip cannot see a matcher becoming too aggressive).
 - **member cardinality** — a set sampled once cannot distinguish `1-of-1` from `all-of-1`.
 - **assertion count** — an anti-vacuity floor that shares a lifetime with what it guards is not a floor.

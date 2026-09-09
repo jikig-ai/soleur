@@ -21,13 +21,31 @@ export default async function AuditPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  // Belt-and-suspenders: .eq("founder_id", user.id) defends against any
-  // future RLS loosening on audit_byok_use (precedent: today/route.ts).
-  // The RLS policy audit_byok_use_owner_select is the primary gate; this
-  // is defense in depth at single-user-incident threshold.
+  // .eq("founder_id", user.id) is NOT merely belt-and-suspenders, and the
+  // comment here used to say it was. The live SELECT policy on
+  // audit_byok_use is audit_byok_use_workspace_member_select — created by
+  // 059_workspace_keyed_rls_sweep.sql, which DROPs the founder-scoped
+  // audit_byok_use_owner_select from mig 037 in the same file — and it
+  // reads USING (public.is_workspace_member(workspace_id, auth.uid())).
+  // So RLS admits every co-member's rows in the viewer's workspace(s), and
+  // this filter is strictly NARROWER than the policy: it is what makes this
+  // page a personal ledger rather than a workspace one. It still defends
+  // against future RLS loosening (precedent: today/route.ts), but that is
+  // now its second job, not its first.
+  //
+  // Consequence to know before widening this filter (#7829 / mig 137):
+  // a refused delegated turn now persists an audit_byok_use row attributed
+  // to the GRANTEE (founder_id = caller) with attribution_shift_reason set,
+  // while workspace_id stays the grantor's. Such rows therefore appear on
+  // the grantee's page and not the grantor's, and the reason column is not
+  // selected below, so a refusal is currently indistinguishable here from
+  // an ordinary charge.
   const { data: byokRows } = await supabase
     .from("audit_byok_use")
-    .select("ts, agent_role, token_count, unit_cost_cents")
+    // `attribution_shift_reason` is selected because migration 137 makes
+    // REFUSED delegated turns persist a row attributed to the grantee. Without
+    // it a refusal renders here as an ordinary charge the user incurred.
+    .select("ts, agent_role, token_count, unit_cost_cents, attribution_shift_reason")
     .eq("founder_id", user.id)
     .order("ts", { ascending: false })
     .limit(50);
