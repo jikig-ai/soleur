@@ -97,7 +97,22 @@ for jname, job in (doc.get("jobs") or {}).items():
         run = step.get("run")
         if not run:
             continue
-        lines = run.split("\n")
+        # Join backslash-continued lines FIRST. Without this the scan is
+        # line-oriented and a multi-line `VAR=$( ... \\\n ... )` never matches
+        # the SHAPE 2 regex, which needs the closing paren on the same line.
+        # Measured on #7866: stripping the rescue from the two-line `declared=$(`
+        # assignment — the one whose death kills the whole derivation — survived
+        # this rule while the four single-line siblings were all caught.
+        joined, buf = [], ""
+        for _raw in run.split("\n"):
+            buf += _raw
+            if buf.rstrip().endswith("\\"):
+                buf = buf.rstrip()[:-1] + " "
+                continue
+            joined.append(buf); buf = ""
+        if buf:
+            joined.append(buf)
+        lines = joined
         errexit = True          # inherited from `bash -e {0}`
         for i, raw in enumerate(lines):
             ln = raw.strip()
@@ -107,11 +122,34 @@ for jname, job in (doc.get("jobs") or {}).items():
                 errexit = True
             if not errexit:
                 continue
-            # A bare status-bearing command whose exit is then captured.
+            # SHAPE 1 — a bare status-bearing command whose exit is then captured.
             if re.match(r"^(grep|diff|cmp)\b", ln) and not re.search(r"(\|\||&&|;|\bif\b|\bwhile\b|\buntil\b)", ln):
                 nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
                 if re.match(r"^\w+=\$\?", nxt):
                     bad.append(f"{jname} :: {step.get('name','(unnamed)')} :: {ln[:60]}")
+            # SHAPE 2 — `VAR=$(... status-bearing ...)`. Same death, different
+            # spelling: the assignment INHERITS the substitution's status (and
+            # `pipefail` promotes it out of a pipeline), so errexit kills the step
+            # at the assignment. Until #7866 this rule matched only SHAPE 1, so it
+            # was blind to all four such lines in the AC17 step — including the
+            # two its own PR added — and each died silently on its normal path.
+            # A guard whose window is narrower than the class it names reports
+            # clean on the instances it cannot see.
+            m = re.match(r"^\w+=\$\((.*)\)\s*(;.*)?$", ln)
+            if m:
+                inner = m.group(1)
+                if re.search(r"(^|\||\(|\s)(grep|diff|cmp)\b", inner) and not re.search(r"\|\|\s*(true|:)", inner):
+                    bad.append(f"{jname} :: {step.get('name','(unnamed)')} :: {ln[:60]}")
+            # SHAPE 3 — the same command hidden behind a one-line helper
+            # (`_f() { grep ...; }`). This is not hypothetical: the #7866 fix
+            # first routed all four counts through a `_lines()` helper, and the
+            # SHAPE 2 rule above went GREEN with the rescue stripped, because the
+            # `grep` was no longer inside an assignment it inspects. The guard
+            # reported clean because it could not SEE the command, not because
+            # the command was safe. Rescues belong inline at the call site.
+            if re.match(r"^\w+\s*\(\)\s*\{", ln) and re.search(r"\b(grep|diff|cmp)\b", ln) \
+               and not re.search(r"\|\|\s*(true|:)", ln):
+                bad.append(f"{jname} :: {step.get('name','(unnamed)')} :: helper hides a status-bearing command :: {ln[:50]}")
 for b in bad:
     print(b)
 PYEOF

@@ -1843,6 +1843,7 @@ if want_scripts; then
   # orphaned or duplicated. An unregistered suite here would read as green
   # forever while asserting nothing.
   run_suite "tests/scripts/sentry-alert-adoption-guards" bash tests/scripts/test-sentry-alert-adoption-guards.sh
+  run_suite "tests/scripts/sentry-ac17-derived-counts" bash tests/scripts/test-sentry-ac17-derived-counts.sh
   # #7650 §2.9 — the live-fidelity probe. A fidelity probe compares a document to
   # itself for a living, and its degenerate implementation (return PASS) satisfies
   # every happy-path test anyone writes. This suite is one row per DRIFT CLASS the
