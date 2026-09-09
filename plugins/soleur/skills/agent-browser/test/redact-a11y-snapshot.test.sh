@@ -27,10 +27,11 @@ fail=0
 cases=0
 
 # Floor derived as a lower bound, not a snapshot of today's total:
-#   6 redaction rows + 5 must-PASS rows + 3 shape rows + 3 failure-mode rows = 17.
+#   6 redaction rows + 5 must-PASS rows + 3 shape rows + 3 failure-mode rows
+#   + 13 review rows (round 1) = 30.
 # The two instrument self-test rows are excluded: they run before the counters
 # are zeroed, so they are a precondition on the harness, not coverage of the SUT.
-MIN_ASSERTIONS=17
+MIN_ASSERTIONS=30
 
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
@@ -163,6 +164,80 @@ assert_redacted '--json shape: data.snapshot is redacted' \
 # attribute-bracket parse does not depend on a single-attr shape.
 assert_redacted 'multi-attribute bracket parses' \
   "- textbox \"Token\" [level=2, ref=e5]: $SENTINEL"
+
+# ---------------------------------------------------------------------------
+# Review rows (round 1). Every one of these reproduced a live leak or a live
+# over-redaction in the first shipped revision; they exist so the fixes are
+# pinned rather than merely applied.
+# ---------------------------------------------------------------------------
+
+# Playwright appends [checked] [disabled] [expanded] [active] [invalid]
+# [level=N] [pressed] [selected] before [ref=eN]. The first revision accepted
+# exactly ONE bracket, so a node with any state attribute matched nothing at
+# all. `[disabled]` is the standard shape of a "copy your new token" panel and
+# `[active]` is the focused password field -- both leaked in clear.
+assert_redacted 'multi-bracket: [active] before [ref]' \
+  "- textbox \"Token\" [active] [ref=e5]: $SENTINEL"
+assert_redacted 'multi-bracket: [disabled] (the credential-panel shape)' \
+  "- textbox \"API key\" [disabled] [ref=e7]: $SENTINEL"
+
+# English plurals and camelCase. "API Keys" and "Tokens" are the literal labels
+# on the Cloudflare and Sentry token pages this filter was written for, and
+# "Token" is the class with the recorded in-repo incident -- all three leaked on
+# their own plural.
+assert_redacted 'plural: "API Keys"'  "- textbox \"API Keys\" [ref=e1]: $SENTINEL"
+assert_redacted 'plural: "Tokens"'    "- textbox \"Tokens\" [ref=e1]: $SENTINEL"
+assert_redacted 'camelCase: "apiKey"' "- textbox \"apiKey\" [ref=e1]: $SENTINEL"
+
+# The one-time-code family and the carriers that embed a password.
+assert_redacted 'one-time-code family: "Verification code"' \
+  "- textbox \"Verification code\" [ref=e1]: $SENTINEL"
+assert_redacted 'carrier: "Connection string"' \
+  "- textbox \"Connection string\" [ref=e1]: $SENTINEL"
+
+# `agent-browser diff snapshot` emits additions with a `+` bullet. The first
+# revision anchored on the list-dash, so the ADDED line -- the new value --
+# passed through in clear while only the removed one was redacted.
+assert_redacted 'diff addition line (+ bullet)' \
+  "+ textbox \"Token\" [ref=e5]: $SENTINEL"
+
+# The approved form is `... 2>&1 | python3 <this>`, so any agent-browser
+# diagnostic lands AHEAD of the JSON. The first revision detected JSON with a
+# whole-stream startswith(), so one stderr line defeated detection and the
+# payload was emitted verbatim at exit 0 -- on the exact shape the guard
+# prescribes.
+assert_redacted 'stderr line ahead of --json still redacts' \
+  "warn: daemon retry
+{\"data\":{\"snapshot\":\"- textbox \\\"Token\\\" [ref=e5]: $SENTINEL\"}}"
+
+# An unlabeled readonly box is the commonest shape of a credential panel and
+# matched nothing at all before. Redacted on the fail-safe side.
+assert_redacted 'unnamed text-input carrying a value' \
+  "- textbox [ref=e5]: $SENTINEL"
+
+cases=$((cases + 1))
+nested="$(run_filter "- textbox \"Token\" [ref=e5]: $SENTINEL
+  - textbox \"Confirm\" [ref=e6]: $SENTINEL")"
+if [[ "$nested" == *"$SENTINEL"* ]]; then
+  bad 'nested credential node: value must be redacted'
+elif [[ "$nested" != *'"Confirm"'* ]]; then
+  bad 'nested credential node: the NAME must survive (the first revision redacted the name and kept the value -- the exact inversion)'
+else
+  ok 'nested credential node: value redacted, name preserved'
+fi
+
+cases=$((cases + 1))
+labels="$(run_filter '- combobox "Primary key" [ref=e2]: users_pkey
+  - option "id" [ref=e3]
+  - option "email" [ref=e4]')"
+if [[ "$labels" == *'"id"'* && "$labels" == *'"email"'* ]]; then
+  ok 'option LABELS survive under a redacted parent'
+else
+  bad 'option labels were destroyed — the agent can no longer pick an option, and no credential was protected'
+fi
+
+assert_preserved 'must-PASS: an unnamed STRUCTURAL node is untouched' \
+  '- generic [ref=e1]:' '- generic [ref=e1]:'
 
 # ---------------------------------------------------------------------------
 # Failure-mode rows — the fail-closed contract (ADR-095 shape).

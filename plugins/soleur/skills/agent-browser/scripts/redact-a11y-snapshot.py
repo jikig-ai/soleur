@@ -56,8 +56,14 @@ MAX_INPUT_BYTES = 4 * 1024 * 1024
 # `heading` or a `link`, and widening this set widens the over-redaction risk
 # that the must-PASS rows exist to catch.
 TEXT_INPUT_ROLES = frozenset(
-    {"textbox", "searchbox", "combobox", "spinbutton", "textarea"}
+    {"textbox", "searchbox", "combobox", "spinbutton"}
 )
+
+# Descendant roles that repeat a PARENT's value rather than carrying a label
+# of their own. Measured: the no-flag and `-d N` shapes emit the value twice,
+# the second time as a StaticText child. Everything else under a redacted
+# node (an `option` label, say) is a label and must survive.
+VALUE_CARRYING_CHILD_ROLES = frozenset({"StaticText"})
 
 # Credential-shaped accessible names. Word-anchored on both sides so
 # "Keyboard shortcut" does not match `key` and "Pinned items" does not match
@@ -65,43 +71,77 @@ TEXT_INPUT_ROLES = frozenset(
 # leaks is named "Token", so a password-only list would miss the single class
 # with a recorded incident here.
 CREDENTIAL_NAME_RE = re.compile(
-    r"(?<![a-z0-9])(?:"
+    r"\b(?:"
     r"pass(?:word|wd|phrase|code)?"
     r"|token"
     r"|secret"
     r"|credential"
-    r"|bearer"
     r"|key"
+    r"|bearer"
     r"|otp"
     r"|pin"
     r"|seed[\s_-]?phrase"
     r"|mnemonic"
-    r"|recovery[\s_-]?code"
-    r"|security[\s_-]?code"
-    r")(?![a-z0-9])",
+    r"|(?:verification|confirmation|one[\s_-]?time|backup|access|recovery|security|sms|auth(?:entication)?)[\s_-]?code"
+    r"|connection[\s_-]?string"
+    r"|dsn"
+    r"|signature"
+    r"|authorization"
+    r"|session"
+    r"|cookie"
+    r")e?s?\b",
     re.IGNORECASE,
 )
+
+def _fmt_name(name: str | None) -> str:
+    """Re-emit the name exactly as it arrived, including its absence."""
+    return "" if name is None else f' "{name}"'
+
+
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _normalise_name(name: str) -> str:
+    """Split camelCase so `apiKey` and `clientSecret` match the same list.
+
+    Measured: the previous lookbehind form rejected `apiKey` (the char before
+    `Key` is a letter, so the boundary never fired) and every English plural --
+    `API Keys`, `Tokens`, `Secrets`, `Recovery codes`, `Passcodes` all passed
+    through in clear. `API Keys` is the literal label on the Cloudflare and
+    Sentry token pages this filter was written for, and `Token` is the class
+    with a recorded in-repo incident, so both failed on their own plural.
+    """
+    return _CAMEL_BOUNDARY_RE.sub(" ", name)
 
 # `- <role> "<name>" [attrs]: <value>` with the value and the attribute bracket
 # both optional. Anchored on the list-dash so prose lines are never rewritten.
 NODE_RE = re.compile(
-    r"^(?P<indent>\s*)-\s+(?P<role>[A-Za-z][A-Za-z0-9_]*)"
-    r'\s+"(?P<name>(?:[^"\\]|\\.)*)"'
-    r"(?P<attrs>\s+\[[^\]]*\])?"
+    r"^(?P<indent>\s*)(?P<bullet>[-+])\s+(?P<role>[A-Za-z][A-Za-z0-9_]*)"
+    r'(?:\s+"(?P<name>(?:[^"\\]|\\.)*)")?'
+    r"(?P<attrs>(?:\s+\[[^\]]*\])*)"
     r"(?P<sep>:\s*)(?P<value>.*)$"
 )
 
 # A bare quoted child, e.g. `  - StaticText "the value"`.
 QUOTED_CHILD_RE = re.compile(
-    r"^(?P<indent>\s*)-\s+(?P<role>[A-Za-z][A-Za-z0-9_]*)"
+    r"^(?P<indent>\s*)(?P<bullet>[-+])\s+(?P<role>[A-Za-z][A-Za-z0-9_]*)"
     r'\s+"(?P<text>(?:[^"\\]|\\.)*)"(?P<rest>.*)$'
 )
 
 INDENT_RE = re.compile(r"^(\s*)")
 
 
-def _is_credential_name(name: str) -> bool:
-    return bool(CREDENTIAL_NAME_RE.search(name))
+def _is_credential_name(name: str | None) -> bool:
+    """True when the accessible name marks this node as credential-bearing.
+
+    An UNNAMED node (`name is None`) is not decidable by a name predicate, and
+    an unlabeled readonly box is the commonest shape of a generated-credential
+    panel. It is handled at the call site as its own case rather than folded in
+    here, so the two decisions stay legible.
+    """
+    if name is None:
+        return False
+    return bool(CREDENTIAL_NAME_RE.search(_normalise_name(name)))
 
 
 def redact_text(text: str) -> str:
@@ -118,36 +158,61 @@ def redact_text(text: str) -> str:
             suppress_indent = None
 
         node = NODE_RE.match(line)
-        if node and node.group("role") in TEXT_INPUT_ROLES and _is_credential_name(
-            node.group("name")
+        # An UNNAMED text-input node carrying a value is redacted on the
+        # fail-safe side. We cannot decide it by name -- there is no name -- and
+        # an unlabeled readonly box is the commonest shape of a
+        # generated-credential panel. Playwright derives an accessible name from
+        # a label, placeholder or aria-label, so a genuinely unnamed input with
+        # a value is rare; losing its value costs an agent little, and keeping
+        # it is the class with a recorded in-repo incident.
+        unnamed_input = (
+            node is not None
+            and node.group("name") is None
+            and node.group("role") in TEXT_INPUT_ROLES
+            and node.group("value").strip() != ""
+        )
+        if node and node.group("role") in TEXT_INPUT_ROLES and (
+            unnamed_input or _is_credential_name(node.group("name"))
         ):
             out.append(
-                f"{node.group('indent')}- {node.group('role')} "
-                f"\"{node.group('name')}\"{node.group('attrs') or ''}"
+                f"{node.group('indent')}{node.group('bullet')} {node.group('role')}"
+                f"{_fmt_name(node.group('name'))}{node.group('attrs') or ''}"
                 f"{node.group('sep')}{REDACTED}"
             )
             suppress_indent = indent
             continue
 
         if suppress_indent is not None and indent > suppress_indent:
-            # A child of a redacted node. The measured `-d N` shape repeats the
-            # value here as a StaticText, so the tail-only rewrite above is not
-            # sufficient on its own.
-            child = QUOTED_CHILD_RE.match(line)
-            if child:
-                out.append(
-                    f"{child.group('indent')}- {child.group('role')} "
-                    f"\"{REDACTED}\"{child.group('rest')}"
-                )
-                continue
+            # A descendant of a redacted node. Two distinct cases, and the
+            # earlier revision got both wrong because QUOTED_CHILD_RE strictly
+            # SUBSUMES NODE_RE -- it matched first, so a nested credential node
+            # had its NAME redacted and its VALUE preserved. That is the exact
+            # inversion of the point: it destroyed the signal and kept the
+            # secret.
             inner = NODE_RE.match(line)
             if inner:
+                # A node with its own `: value` tail -- redact the VALUE, keep
+                # the name, exactly as for the parent.
                 out.append(
-                    f"{inner.group('indent')}- {inner.group('role')} "
-                    f"\"{inner.group('name')}\"{inner.group('attrs') or ''}"
+                    f"{inner.group('indent')}{inner.group('bullet')} {inner.group('role')}"
+                    f"{_fmt_name(inner.group('name'))}{inner.group('attrs') or ''}"
                     f"{inner.group('sep')}{REDACTED}"
                 )
                 continue
+            child = QUOTED_CHILD_RE.match(line)
+            if child and child.group("role") in VALUE_CARRYING_CHILD_ROLES:
+                # The measured `-d N` / no-flag duplicate: the value repeated as
+                # a StaticText child. Redact it.
+                out.append(
+                    f"{child.group('indent')}{child.group('bullet')} {child.group('role')} "
+                    f"\"{REDACTED}\"{child.group('rest')}"
+                )
+                continue
+            # Anything else under a redacted node is a LABEL, not a value --
+            # `option "id"`, `option "email"` under a combobox named
+            # "Primary key". Redacting those destroys the agent's ability to
+            # pick the right option while protecting nothing, so they pass
+            # through untouched.
 
         out.append(line)
 
@@ -186,14 +251,32 @@ def main() -> None:
     if not text:
         return
 
-    stripped = text.lstrip()
-    if stripped.startswith(("{", "[")):
+    # Locate a JSON payload even when something is printed AHEAD of it.
+    #
+    # This is the shape the guard itself prescribes: `agent-browser snapshot -i
+    # --json 2>&1 | python3 <this>`. The `2>&1` merges any agent-browser
+    # diagnostic in front of the JSON, so a `startswith` test is False, the
+    # input falls to the line-based path, NODE_RE never matches a single-line
+    # JSON blob, and the credential passes through verbatim at exit 0.
+    # Measured, and it is the highest-severity shape because our own
+    # instructions steer every agent onto it.
+    brace = min(
+        (i for i in (text.find("{"), text.find("[")) if i != -1),
+        default=-1,
+    )
+    if brace != -1:
         try:
-            parsed = json.loads(text)
+            parsed = json.loads(text[brace:])
         except json.JSONDecodeError as exc:
-            die(f"input looks like JSON but does not parse ({exc.msg})")
-        sys.stdout.write(json.dumps(_redact_json_in_place(parsed)))
-        return
+            # Fail closed whenever the payload LOOKS like a snapshot envelope.
+            # A stray brace inside ordinary a11y text is not that, and must not
+            # take the whole run down.
+            if '"snapshot"' in text[brace:] or not text[:brace].strip():
+                die(f"input looks like JSON but does not parse ({exc.msg})")
+        else:
+            prefix = redact_text(text[:brace])
+            sys.stdout.write(prefix + json.dumps(_redact_json_in_place(parsed)))
+            return
 
     sys.stdout.write(redact_text(text))
 

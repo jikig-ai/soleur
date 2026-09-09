@@ -25,8 +25,9 @@ LOCAL_SETTINGS="$REPO_ROOT/.claude/settings.json"
 README="$REPO_ROOT/.claude/hooks/README.md"
 
 pass=0; fail=0; cases=0
-# 3 deny rows + 4 allow rows + 5 registration rows + 2 reason-content rows = 14.
-MIN_ASSERTIONS=14
+# 3 deny + 4 allow + 5 registration + 2 reason-content rows,
+# + 7 review rows (round 1) = 21.
+MIN_ASSERTIONS=21
 
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
@@ -84,6 +85,55 @@ assert_allow 'H3 `agent-browser screenshot` is not banned' \
 
 assert_allow 'H3b `agent-browser open` is not banned' \
   'agent-browser open https://example.com'
+
+# ---- Review rows (round 1): every one was a live bypass ----
+RED='python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py'
+
+# `tee` writes the UNREDACTED tree to disk on its way to the redactor -- the
+# exact sink the deny text names. Substring-presence allowed it.
+assert_deny 'tee to disk alongside the redactor' \
+  "agent-browser snapshot -i | tee /tmp/leak.txt | $RED"
+
+# A bare `&` is a shell separator. Omitting it from the splitter left the whole
+# command as ONE segment, so the anchor from the first invocation covered an
+# unrouted second one. ADR-213 and the Art.30 register both assert per-segment
+# judgement, so this was a false claim in a legal record until fixed.
+assert_deny 'bare & separator, second invocation unrouted' \
+  "agent-browser snapshot -i | $RED & agent-browser snapshot -i > /tmp/leak.txt"
+
+# A trailing COMMENT satisfied a bare substring check.
+assert_deny 'comment mentioning the redactor does not satisfy the guard' \
+  'agent-browser snapshot -i > /tmp/leak.txt # redact-a11y-snapshot'
+
+# A file redirect bypasses the pipe entirely.
+assert_deny 'redirect to a file' 'agent-browser snapshot -i > /tmp/leak.txt'
+
+# Flags may precede the verb.
+assert_deny '--headed form' 'agent-browser --headed snapshot -i'
+
+# The remedy must resolve on a CUSTOMER machine. A repo-relative path does not
+# exist there, so the operator gets `can't open file` and the only remaining
+# move is the screenshot the same message says is unsafe.
+cases=$((cases + 1))
+portable="$(envelope 'agent-browser snapshot -i' | bash "$HOOK" 2>/dev/null | jq -r '.hookSpecificOutput.permissionDecisionReason // ""' 2>/dev/null)"
+if [[ "$portable" == *'CLAUDE_PLUGIN_ROOT'* ]]; then
+  ok 'deny reason prescribes a plugin-root-relative path (resolves on a customer machine)'
+else
+  bad 'deny reason prescribes a repo-relative path — unresolvable on every customer install'
+fi
+
+# `jq` absent is not the same condition as a malformed envelope. Without a
+# degraded branch the guard is silently off, forever, on that machine.
+cases=$((cases + 1))
+JQSHIM="$(mktemp -d)"
+printf '#!/bin/sh\nexit 127\n' > "$JQSHIM/jq"; chmod +x "$JQSHIM/jq"
+degraded="$(envelope 'agent-browser snapshot -i' | PATH="$JQSHIM:$PATH" bash "$HOOK" 2>/dev/null)"
+rm -rf "$JQSHIM"
+if [[ "$degraded" == *'"deny"'* && "$degraded" == *'degraded'* ]]; then
+  ok 'jq absent: denies in degraded mode rather than silently allowing'
+else
+  bad 'jq absent: the guard silently allows (guard off, no signal, on a machine SKILL.md tells the agent is protected)'
+fi
 
 # ---- Reason content: the deny must name BOTH escape routes ----
 cases=$((cases + 1))
