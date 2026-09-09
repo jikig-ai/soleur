@@ -9,6 +9,8 @@ pr: 7986
 
 # Six of my session errors were the defect class I was reviewing for
 
+> Seven, by the end: the class recurred once more AFTER this file was written. See error 14.
+
 ## Problem
 
 A ten-agent panel reviewed a credential-confinement PR and found, among ~50
@@ -122,7 +124,21 @@ Specifically:
     everything it resolves relative to its CWD.
 13. **A process-kill guardrail denied a self-matching pattern.** One-off; the
     guardrail was right and named the correct alternative.
-14. **This learning file could not be written via a shell heredoc**, because its own
+14. **A verification fixture failed a format check before reaching the subject.**
+    Re-verifying AC21 after my own edits, the probe returned EMPTY output for all four
+    message arms and I briefly read that as the arms being broken. The cause was the
+    fixture: a placeholder `DISCORD_BOT_TOKEN=x` fails the script's
+    `base64.base64.base64` format validation and exits before curl is ever invoked.
+    With a correctly-shaped synthetic token all four arms emit distinct markers.
+    **Prevention:** when a probe returns nothing, first ask whether the subject was
+    reached at all — an empty result is "the instrument did not get there" at least as
+    often as "the subject produced nothing".
+
+    Recorded because of WHEN it happened: after this learning was written and committed,
+    in the session it documents. Knowing the class does not prevent it — which is the
+    argument for the mechanical habit (run the instrument against a case whose answer you
+    know) over the intention to be careful.
+15. **This learning file could not be written via a shell heredoc**, because its own
     text describes the pattern that guardrail blocks — the command was denied for
     quoting the thing it documents. Written with the Write tool instead.
     **Prevention:** none warranted; it is the "documenting X collides with asserting
