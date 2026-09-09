@@ -21,6 +21,7 @@ Follow this 4-step process:
 ### Step 2: Find Dependencies
 
 Map all dependencies that make the code hard to test:
+
 - Constructor dependencies (objects created internally)
 - Global state (singletons, static methods, global variables)
 - External systems (database, network, filesystem)

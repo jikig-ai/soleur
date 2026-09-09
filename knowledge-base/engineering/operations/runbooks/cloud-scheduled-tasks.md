@@ -282,12 +282,12 @@ STEP 2 dedup + STEP 2.5 heartbeat issue.
 
 Workflow STEP 2 dedup logic compares a frontmatter-derived title against
 existing-issue titles via `gh issue list --state open -L 200 --search "\"$CANONICAL_TITLE\" in:title"`.
-If the parser truncates the title at an inner `: ` or leaves a trailing
+If the parser truncates the title at an inner `: ` or leaves a trailing <!-- markdownlint-disable-line MD038 -->
 quote artifact, the search returns no match — dedup misfires and a fresh
 duplicate issue is filed each run. Two failure modes share the root cause:
 
-1. **`awk -F': '` field-split.** Sets the awk Field Separator to `: `;
-   `$2` returns only the chunk between the first and second `: `. A title
+1. **`awk -F': '` field-split.** Sets the awk Field Separator to `: `; <!-- markdownlint-disable-line MD038 -->
+   `$2` returns only the chunk between the first and second `: `. A title <!-- markdownlint-disable-line MD038 -->
    like `"Show HN: Soleur — agents that call APIs"` parses as `Show HN`.
 2. **`sub(/^"|"$/, "", s)` regex alternation.** POSIX `sub()` replaces
    ONE match. Alternation `^"|"$` matches the leading `"` first; the

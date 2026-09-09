@@ -354,6 +354,7 @@ echo 'SOLEUR_RULE_APPLIED rule=hr-ssh-diagnosis-verify-firewall note=When a plan
 Soleur users are a live single-operator surface; an unexpected outage of the web/Concierge platform is a `single-user incident` (brand-survival). So a plan whose change would take a serving surface offline MUST **default to a zero-downtime cutover** and prove it in the plan — not treat downtime as the baseline.
 
 **Trigger — fire when the plan's Files-to-Edit or Overview implies a downtime-inducing operation.** Any of:
+
 - **Infra reboot/replace class:** a change to a running host that Hetzner/the provider applies via power-off or replace — `placement_group_id` attach, `server_type`/`location`/`datacenter` change, a `-/+`/`must be replaced` on any `hcloud_server`/volume/attachment, or a singleton→`for_each`/cluster cutover of a serving resource. (Attributes the serving host pins via `lifecycle { ignore_changes = [...] }` — e.g. `image`, `user_data` on `hcloud_server.web` — do NOT trigger, since the provider ignores them on the running host.)
 - **Database lock class:** a migration with lock-taking or table-rewriting DDL on a hot table — `ALTER TABLE … ADD COLUMN … NOT NULL DEFAULT` (rewrite), `ALTER COLUMN … TYPE`, a non-`CONCURRENTLY` index, `ADD CONSTRAINT` without `NOT VALID`, or a backfill that holds a long transaction.
 - **Deploy/router class:** a change that drops in-flight requests — a single-host container swap without drain, a tunnel/router restructure, a connector restart on the sole serving connector.
@@ -440,7 +441,7 @@ If absent, HALT with:
 > Per AGENTS.md `hr-observability-as-plan-quality-gate`, every plan that ships production
 > code or infrastructure must declare its observability surface before deepen-plan proceeds.
 
-**Step 3 — Validate field values.** Extract the section body (between `^## Observability` and the next `^## ` heading). For each of the 5 required top-level fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), reject if ANY of:
+**Step 3 — Validate field values.** Extract the section body (between `^## Observability` and the next `^## ` heading). For each of the 5 required top-level fields (`liveness_signal`, `error_reporting`, `failure_modes`, `logs`, `discoverability_test`), reject if ANY of: <!-- markdownlint-disable-line MD038 -->
 
 - **Field key absent** — `grep -qE "^\s*<field>:" <body>` returns no match.
 - **Field value is a placeholder** — the field-value line (case-insensitive) matches `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\s*$` (anchored — distinguish "field is exactly this string" from "prose contains this string"). Also reject `^\s*<field>:\s*(TODO|TBD|N/A|placeholder|manual operator check)\b` — trailing whitespace + extra text still counts as a placeholder.
@@ -545,7 +546,7 @@ If absent, HALT with:
 > See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the schema.
 > Every new store or connection must declare a design-time encryption posture before deepen-plan proceeds.
 
-**Step 3 — Validate field values.** Extract the section body (between `^## Encryption Posture` and the next `^## ` heading). For each `at_rest` entry (`mechanism`, `evidence`, `defends_against`, `does_not_defend`, `disclosed_as`, `live_verification`) and each `in_transit` entry (`tls`, `cert_verification`, `does_not_defend`, `disclosed_as`), reject if ANY of:
+**Step 3 — Validate field values.** Extract the section body (between `^## Encryption Posture` and the next `^## ` heading). For each `at_rest` entry (`mechanism`, `evidence`, `defends_against`, `does_not_defend`, `disclosed_as`, `live_verification`) and each `in_transit` entry (`tls`, `cert_verification`, `does_not_defend`, `disclosed_as`), reject if ANY of: <!-- markdownlint-disable-line MD038 -->
 
 - **Field key absent or empty** — the field is required by the schema (`encryption-posture-ledger.schema.json`, repo-root `scripts/`) and either has no key or matches `^\s*<field>:\s*(TODO|TBD|N/A|placeholder)\s*$`.
 - **`mechanism` (or `at_rest` prose) matches the boilerplate ban-list** — case-insensitive: `provider handles`, `handled by the provider`, `encrypted by default` with no named attestation, `supports TLS`. These describe the absence of a posture, not a posture.

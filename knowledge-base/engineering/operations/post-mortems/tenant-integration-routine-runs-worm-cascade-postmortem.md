@@ -60,23 +60,29 @@ resolved
 ## Impact details
 
 ### Customer Impact (by role)
+
 None. Dev-only / CI-surface; no production user attempted (and failed) an erasure. The Art-17 risk was latent.
 
 ### Revenue Impact
+
 None.
 
 ### Team Impact
+
 ~4h of red `main` CI on a non-required workflow; one premature issue-close requiring re-open.
 
 ## Lessons Learned
 
 ### Where we got lucky
+
 The contradiction lived only on dev (unmerged PR). Had `routine_runs` merged to `main` and reached prod, every prod user's erasure would have broken.
 
 ### What went well
+
 The deletion failed safe (blocked, not leaked). Multi-agent review caught a follow-on flaw (the first gate design would have false-red main).
 
 ### What went wrong
+
 A non-required workflow normalized red for ~4h without paging; the issue was closed before CI was green.
 
 ## Action Items & Follow-ups

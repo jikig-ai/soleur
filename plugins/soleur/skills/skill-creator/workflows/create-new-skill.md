@@ -2,6 +2,7 @@
 
 <required_reading>
 **Read these reference files NOW:**
+
 1. references/recommended-structure.md
 2. references/skill-structure.md
 3. references/core-principles.md
@@ -18,14 +19,16 @@
 **If user just invoked skill without context:**
 → Ask what they want to build
 
-### Using AskUserQuestion
+## Using AskUserQuestion
 
 Ask 2-4 domain-specific questions based on actual gaps. Each question should:
+
 - Have specific options with descriptions
 - Focus on scope, complexity, outputs, boundaries
 - NOT ask things obvious from context
 
 Example questions:
+
 - "What specific operations should this skill handle?" (with options based on domain)
 - "Should this also handle [related thing] or stay focused on [core thing]?"
 - "What should the user see when successful?"
@@ -36,6 +39,7 @@ After initial questions, ask:
 "Ready to proceed with building, or would you like me to ask more questions?"
 
 Options:
+
 1. **Proceed to building** - I have enough context
 2. **Ask more questions** - There are more details to clarify
 3. **Let me add details** - I want to provide additional context
@@ -46,10 +50,12 @@ Options:
 "This involves [service name] API. Would you like me to research current endpoints and patterns before building?"
 
 Options:
+
 1. **Yes, research first** - Fetch current documentation for accurate implementation
 2. **No, proceed with general patterns** - Use common patterns without specific API research
 
 If research requested:
+
 - Use Context7 MCP to fetch current library documentation
 - Or use WebSearch for recent API documentation
 - Focus on 2024-2026 sources
@@ -62,6 +68,7 @@ If research requested:
 
 **Complex skill (multiple workflows OR domain knowledge):**
 → Router pattern:
+
 ```
 skill-name/
 ├── SKILL.md (router + principles)
@@ -72,16 +79,19 @@ skill-name/
 ```
 
 Factors favoring router pattern:
+
 - Multiple distinct user intents (create vs debug vs ship)
 - Shared domain knowledge across workflows
 - Essential principles that must not be skipped
 - Skill likely to grow over time
 
 **Consider templates/ when:**
+
 - Skill produces consistent output structures (plans, specs, reports)
 - Structure matters more than creative generation
 
 **Consider scripts/ when:**
+
 - Same code runs across invocations (deploy, setup, API calls)
 - Operations are error-prone when rewritten each time
 
@@ -102,6 +112,7 @@ mkdir -p ~/.claude/skills/{skill-name}/scripts    # for reusable code
 ## Step 5: Write SKILL.md
 
 **Simple skill:** Write complete skill file with:
+
 - YAML frontmatter (name, description)
 - `<objective>`
 - `<quick_start>`
@@ -109,6 +120,7 @@ mkdir -p ~/.claude/skills/{skill-name}/scripts    # for reusable code
 - `<success_criteria>`
 
 **Complex skill:** Write router with:
+
 - YAML frontmatter
 - `<essential_principles>` (inline, unavoidable)
 - `<intake>` (question to ask user)
@@ -118,6 +130,7 @@ mkdir -p ~/.claude/skills/{skill-name}/scripts    # for reusable code
 ## Step 6: Write Workflows (if complex)
 
 For each workflow:
+
 ```xml
 <required_reading>
 Which references to load for this workflow
@@ -135,6 +148,7 @@ How to know this workflow is done
 ## Step 7: Write References (if needed)
 
 Domain knowledge that:
+
 - Multiple workflows might need
 - Doesn't change based on workflow
 - Contains patterns, examples, technical details
@@ -142,6 +156,7 @@ Domain knowledge that:
 ## Step 8: Validate Structure
 
 Check:
+
 - [ ] YAML frontmatter valid
 - [ ] Name matches directory (lowercase-with-hyphens)
 - [ ] Description says what it does AND when to use it (third person)
@@ -168,6 +183,7 @@ EOF
 ## Step 10: Test
 
 Invoke the skill and observe:
+
 - Does it ask the right intake question?
 - Does it load the right workflow?
 - Does the workflow load the right references?
@@ -178,6 +194,7 @@ Iterate based on real usage, not assumptions.
 
 <success_criteria>
 Skill is complete when:
+
 - [ ] Requirements gathered with appropriate questions
 - [ ] API research done if external service involved
 - [ ] Directory structure correct

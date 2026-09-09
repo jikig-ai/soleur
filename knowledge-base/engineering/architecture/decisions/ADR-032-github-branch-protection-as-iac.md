@@ -347,6 +347,7 @@ skipped to an authoritative GREEN. The anchors were widened to the isolation
 surface (plus the extracted verdict script, anti-bypass) before merge.
 
 Two boundaries are **deliberately left unanchored** and accepted:
+
 - `app/api/**/route.ts` — anchoring all routes would run the heavy dev-Supabase
   suite on the majority of PRs, defeating the rate-budget purpose that is the
   entire reason for the shim. Route-level isolation relies on the now-anchored
@@ -394,6 +395,7 @@ post-enablement canary below passes). The parent ADR remains `accepted`.
 >
 > **Decision (2026-07-01): queue stays OFF; CodeQL stays a blocking required
 > check.** The choice is binary and unavoidable:
+>
 > - **CodeQL required (blocks merge) ⇒ no merge queue** ← chosen. The BEHIND-race
 >   starvation #5780 targeted is already mitigated by `/ship`'s auto-sync loop
 >   (both PR #5800 and the kill-switch PR #5811 merged cleanly through it).

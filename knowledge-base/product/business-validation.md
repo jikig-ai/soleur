@@ -224,6 +224,7 @@ The Company-as-a-Service thesis requires demonstrating that an integrated AI org
 ## Validation Verdict
 
 > **[Full re-validation 2026-06-08]** This pass re-validated every stable section (Problem, Customer, Demand Evidence, Business Model, Minimum Viable Scope, Verdict) against current reality; the Competitive Landscape was refreshed separately on 2026-06-08 and was not re-touched here. **What this re-validation changed:**
+>
 > 1. **The delivery pivot is EXECUTED, not pending.** The single most important status change: the 2026-03-22 doc framed the standalone web platform as "REQUIRED" but unbuilt. It is now deployed to production at app.soleur.ai (Next.js 15, Supabase auth + 183 migrations, Claude Agent SDK runners, Terraform infra, live deploy pipeline succeeding 2026-06-08, public Buttondown waitlist). The "stop building, build the platform" half of the 2026-03-22 pivot is complete.
 > 2. **Stale product metrics corrected:** "65+ agents, 50+ skills" → **67 agents, 83 skills, 3 commands** (verified via `scripts/sync-readme-counts.sh --check`); inconsistent "280+ / 420+ merged PRs" → **5,000+** (latest merged PR #5044; ~2,350 commits on main).
 > 3. **A demand-capture surface now exists** (waitlist + invite + Plausible goals) where 2026-03-22 had none -- but **no captured signup / activation / willingness-to-pay numbers are recorded yet.** External demand evidence is still thin: 5+ interviews, zero recorded external active users.

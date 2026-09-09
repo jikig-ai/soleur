@@ -111,7 +111,7 @@ injected in full on every session (Option C).**
 
 What is retired is the **classifier** — not the loader hook, and not the
 index/body separation. `AGENTS.md` remains a slug-only pointer index re-rendered
-every turn; the corpus is injected once at SessionStart. The ` → <class>` arrow is
+every turn; the corpus is injected once at SessionStart. The ` → <class>` arrow is <!-- markdownlint-disable-line MD038 -->
 dropped from all 101 pointer lines because there is no class left to name.
 
 The merge is a file move plus a section-wise heading union, nothing else. Rule

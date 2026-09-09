@@ -8,6 +8,7 @@
 ## 1. Purpose
 
 Record every skill-driven feature-flag mutation (create, on, off, archive) in a WORM ledger for:
+
 - **Art. 32(1)(d) effectiveness-of-TOMs:** evidence that security controls (flag gates) were correctly managed
 - **SOC2 CC8.1 change management:** audit trail proving who changed what, when, and why
 - **Incident response:** forensic reconstruction of flag state at any point in time
@@ -17,6 +18,7 @@ Record every skill-driven feature-flag mutation (create, on, off, archive) in a 
 ### 2.1 Legitimate Interest (Art. 6(1)(f) first limb)
 
 The controller has a legitimate interest in maintaining an immutable record of access-control configuration changes. Feature flags gate tenant-boundary features (`team-workspace-invite`, `byok-delegations`); misconfiguration is a cross-tenant exposure vector. The audit trail:
+
 - Enables rapid root-cause analysis during incidents
 - Satisfies SOC2 CC8.1 evidence requirements without manual logging
 - Provides Art. 32(1)(d) effectiveness proof for supervisory authorities

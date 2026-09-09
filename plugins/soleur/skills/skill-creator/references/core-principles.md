@@ -7,6 +7,7 @@ Core principles guide skill authoring decisions. These principles ensure skills 
 Skills use YAML frontmatter and standard markdown headings. Use `#`, `##`, `###` for structure. Keep markdown formatting for content (bold, italic, lists, code blocks, links).
 
 Every skill should have:
+
 - A clear heading describing what the skill does
 - A quick start section with immediate, actionable guidance
 - Success criteria defining how to know it worked
@@ -16,6 +17,7 @@ Every skill should have:
 The context window is shared. A skill shares it with the system prompt, conversation history, other skills' metadata, and the actual request.
 
 Only add context Claude doesn't already have. Challenge each piece of information:
+
 - "Does Claude really need this explanation?"
 - "Can I assume Claude knows this?"
 - "Does this paragraph justify its token cost?"
@@ -25,6 +27,7 @@ Assume Claude is smart. Don't explain obvious concepts.
 ### Concise vs Verbose Example
 
 **Concise** (~50 tokens):
+
 ```markdown
 ## Quick Start
 Extract PDF text with pdfplumber:
@@ -35,6 +38,7 @@ import pdfplumber
 with pdfplumber.open("file.pdf") as pdf:
     text = pdf.pages[0].extract_text()
 ```
+
 ```
 
 **Verbose** (~150 tokens):
@@ -50,6 +54,7 @@ with pdfplumber.open("file.pdf") as pdf:
 ```
 
 This code opens the PDF and extracts text from the first page.
+
 ```
 
 The concise version assumes Claude knows what PDFs are, understands Python imports, and can read code. All those assumptions are correct.

@@ -101,12 +101,19 @@ Count the image content blocks returned per issue (call this `N_images_total`), 
 
 For each issue, emit exactly one disclosure line to stdout based on the Phase C counts:
 
+<!-- markdownlint-disable MD038 -->
+<!-- #7927: MD038 on this table is cosmetic. Verified with the repo's own markdown-it:
+     every span here renders with no edge space (CommonMark strips a single leading and
+     trailing space), except one where the leading space is the point -- the cell
+     documents a string that is APPENDED, so its space is content. A disable-line comment
+     cannot be used: GFM discards anything past a row's closing pipe. -->
 | Condition | Disclosure line |
 |---|---|
 | Images present | `Detected <ID> — fetched issue + N_images_total images from description and M_comments_with_images comments.` |
 | Text-only (description and comments had zero `uploads.linear.app` references and `extract_images` returned zero images) | `Detected <ID> — text-only issue, no images.` |
 | Soft anomaly (description or comments contained `uploads.linear.app` URLs but `extract_images` returned zero images) | `Detected <ID> — N image URLs found but extraction returned 0 images (soft anomaly).` |
 | Comment cap hit (`list_comments` returned exactly 250 — Linear MCP's per-call limit, may have more comments past the cap) | append ` (comment cap hit — may be missing newer comments)` to the appropriate line above. The skill takes the 10 most-recent from the 250-window, so very high-volume issues may miss comments past position 250. Cursor pagination is a v1.1 follow-up (issue filed at plan finalization). |
+<!-- markdownlint-enable MD038 -->
 
 Construct the two return artifacts:
 

@@ -63,7 +63,7 @@ serialization problem — it is a routing problem.**
 - **Option C — Ceph / Kubernetes / shared-NFS for the live working tree.**
   Rejected — shared POSIX storage under a live git index still corrupts on
   concurrent writers (the git-index property above); k8s/Ceph buys an orchestration
-  + storage substrate whose operational cost dwarfs the need. The "light path" (no
+  - storage substrate whose operational cost dwarfs the need. The "light path" (no
   Ceph/k8s) was an explicit operator + COO constraint to bound operational burden.
 - **Option D — Cloudflare sticky-cookie / Load-Balancer affinity.** Rejected as the
   routing authority — sticky cookies pin to a **dead** host on crash and are not
@@ -233,7 +233,7 @@ fixes for every per-step plan:
    cred**; encryption-at-rest on the git-data volume. The session-Redis replay frames
    carry **user content** (assistant output / tool results / file content), so they
    require TLS + per-`workspace_id` key namespacing + an app-layer scope-check on read
-   + TTL ≤ conversation retention. Coordinator↔host is mTLS and the **owning host
+   - TTL ≤ conversation retention. Coordinator↔host is mTLS and the **owning host
    re-verifies** the requester owns the target conversation/lease before honoring any
    forwarded op (defense-in-depth, never trust-the-coordinator).
 
@@ -540,7 +540,8 @@ Phase 4b (continuous checkpoint).
 > operator maintenance-window cutover, **never** as a routine per-PR `-target=`
 > allow-list edit — adding `hcloud_server.web` to the unattended per-PR target set
 > forces a power-off reboot of the running prod host (it carries `placement_group_id`
-> + `for_each`; see `server.tf`) and the Cloudflare-scoped, `delete`-only destroy-guard
+>
+> - `for_each`; see `server.tf`) and the Cloudflare-scoped, `delete`-only destroy-guard
 > is blind to that in-place reboot. After that maintenance-window apply consumes the moves, no
 > pending moves remain and the targeted CI plan self-heals with zero workflow change.
 > A recurrence guard lives in `plugins/soleur/test/terraform-target-parity.test.ts`
@@ -754,7 +755,8 @@ Phase 4b (continuous checkpoint).
 > over injected env (owner-side relay: `SOLEUR_PROXY_BIND` + `SOLEUR_PROXY_PEER_ALLOWLIST` +
 > `SOLEUR_HOST_ROSTER` with web-2 in-roster and allowlist ⊆ roster, parser-parity with
 > `parseProxyPeerAllowlist`/`loadHostRoster`; git-data cut-over: `GIT_DATA_STORE_ENABLED=="true"`
-> + a LUKS-cutover soak marker). On success it prints **`requires_runtime_bind_probe=true`** and a
+>
+> - a LUKS-cutover soak marker). On success it prints **`requires_runtime_bind_probe=true`** and a
 > SHAPE-ONLY banner, so no consumer — CI or the orchestrator — can mistake exit 0 for weight-flip
 > authorization. It **defines the `GIT_DATA_LUKS_CUTOVER_AT` soak-marker contract**: a Doppler
 > `prd` ISO-8601 key written by the deferred cutover, satisfied only when
@@ -1034,6 +1036,7 @@ Phase 4b (continuous checkpoint).
 > `isGitDataStoreEnabled()` prerequisite), so #6459 cannot start until #6570 lands.
 >
 > **Alternatives considered (both rejected).**
+>
 > 1. **Keep web-2 as-is (a non-rebuildable cross-DC standby).** Rejected: `cx33` — web-2's
 >    type — is orderable in **exactly one datacenter (`hel1-dc2`)** and on 2026-07-15 was
 >    orderable in **zero** (#6463). A `-replace` of web-2 would destroy it and fail to

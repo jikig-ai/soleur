@@ -131,16 +131,20 @@ plugins/soleur/skills/trigger-cron/scripts/trigger.sh \
 After `terraform apply` against a fresh `hcloud_server.web`, the inngest-server is NOT yet running on the host. The bootstrap is decoupled from cloud-init by design (the OCI image is the sole delivery path). Steps:
 
 1. Verify the GHA workflow `.github/workflows/build-inngest-bootstrap-image.yml` has published an OCI image:
+
    ```
    gh api repos/jikig-ai/soleur/actions/workflows/build-inngest-bootstrap-image.yml/runs --jq '.workflow_runs[0]'
    ```
+
    If no run exists, release a bootstrap image — see [§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify) below for the canonical 4-step tag→build→deploy→verify flow.
 2. Deploy the published image (NO SSH — `deploy-inngest-image.yml` is
    `workflow_dispatch`-only; it POSTs the deploy webhook → on-host `ci-deploy.sh`
    `case "inngest")` runs the bootstrap):
+
    ```
    gh workflow run deploy-inngest-image.yml -f tag=<TAG>   # e.g. tag=v1.1.16
    ```
+
 3. Verify via the deploy-status webhook (NO SSH) — see [§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify) step 4. Expect `{component:"inngest", tag:"<TAG>", reason:"success"}`.
 4. [§ Unpause heartbeat](#unpause-heartbeat) once you've confirmed the heartbeat timer is firing.
 
@@ -220,9 +224,11 @@ BetterStack emails `ops@jikigai.com` when the heartbeat is silent past the 30-se
      Typical failure: missing `INNGEST_HEARTBEAT_URL` in Doppler prd, or Doppler CLI auth on the
      host expired — both visible in that tail.
 3. **Confirm the URL is fresh:**
+
    ```
    terraform -chdir=apps/web-platform/infra output -raw inngest_heartbeat_url
    ```
+
    should match what `doppler secrets get INNGEST_HEARTBEAT_URL -p soleur -c prd --plain` returns.
 
 ## Session-pool pressure / exhaustion (`[ci/inngest-pool]`) — #5562
@@ -243,6 +249,7 @@ inngest-server for a `[ci/inngest-pool]` alert.** Triage (no-SSH first):
 
 1. **Read the alert** (no SSH) — `gh issue view "$(gh issue list --state open --search 'in:title \"[ci/inngest-pool]\"' --json number --jq '.[0].number')" --comments`. The body carries the inngest-attributable connection count vs the client cap; the full per-backend breakdown is in the run log (`Inngest client backends: …`).
 2. **Re-read the live pool** (no SSH, read-only) — confirm via the same filtered query the probe uses (per-backend breakdown; inngest = role `postgres` minus Supavisor + the probe):
+
    ```
    SUPA=$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd --plain)
    curl -s --max-time 15 -X POST \
@@ -250,13 +257,16 @@ inngest-server for a `[ci/inngest-pool]` alert.** Triage (no-SSH first):
      -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
      -d '{"query":"select coalesce(application_name,'\''(none)'\'') as app, usename, state, count(*)::int as n from pg_stat_activity where backend_type = '\''client backend'\'' and query not ilike '\''%pg_stat_activity%'\'' group by 1,2,3 order by 4 desc"}' | jq .
    ```
+
 3. **Clear stale sessions** (no SSH, read-only client cap is the real fix) — if `idle` / `idle in transaction` sessions are climbing, terminate them via the same `/database/query` path (still no host login):
+
    ```
    curl -s --max-time 15 -X POST \
      https://api.supabase.com/v1/projects/pigsfuxruiopinouvjwy/database/query \
      -H "Authorization: Bearer $SUPA" -H 'Content-Type: application/json' \
      -d '{"query":"select pg_terminate_backend(pid) from pg_stat_activity where state = '\''idle'\'' and state_change < now() - interval '\''10 minutes'\''"}'
    ```
+
    The durable fix (#6258, ADR-105): inngest-server runs `--postgres-max-open-conns 5 --postgres-max-idle-conns 2 --postgres-conn-max-idle-time 1` (idle-time in MINUTES). `--postgres-max-open-conns` is PER-POOL, not total — inngest opens ~P separate Postgres pools (queue/state/history/api), so worst-case total = P × 5 ≤ 20; the idle-conns cap + 1-min idle drain release pinned Supavisor sessions so cutover-probe scans cannot ratchet the pool. The probe's leading indicator tracks this worst-case total (`INNGEST_CLIENT_CAP=20` in the workflow), not the pooler `default_pool_size` — so a `pool_pressure` alert means inngest's OWN connections approach the total ceiling (a stuck/looping function holding pooled connections, or more pools than expected). `default_pool_size` stays 30 — the #5562 30→15 revert is SUPERSEDED (its premise was falsified by the per-pool model; a 15-slot upstream would worsen exhaustion; see `apps/web-platform/infra/inngest.tf` + `decision-challenges.md`).
 4. **`pool_probe_unavailable`** (401/403/non-JSON) is a *soft* mode — the probe itself is degraded, not the pool. Check the printed response body in the run log; a Supabase Management-API 401 is often a validation/scope signal, not pure auth (verify the PAT in Doppler `prd` and the `SUPABASE_ACCESS_TOKEN` GH secret).
 
@@ -269,9 +279,11 @@ and **abandon-safe** (on timeout they emit a LOUD marker and `exit 1`, releasing
 orphaning the scan). Triage off-box (no SSH):
 
 1. **Query the in-surface marker** (the pre-flight path is now observable):
+
    ```
    scripts/betterstack-query.sh --grep 'SOLEUR_INNGEST_PREFLIGHT' --since 1h
    ```
+
    Read the discriminator fields on the `START` / `TIMEOUT` line for the run:
    - **No `SOLEUR_INNGEST_PREFLIGHT_START` for the run** → transport/host-down (the hook never
      executed) — check the Cloudflare tunnel + `webhook.service`, not the scan.
@@ -337,9 +349,11 @@ the verdict to `inngest_down`: it dispatches a restart AND flips the heartbeat t
 First occurrence is soft; a sustained one is never masked forever.
 
 **How to see it (no-SSH).** Query Better Stack for the verdict marker (tag `inngest-inventory`):
+
 ```
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_LIVENESS_VERDICT
 ```
+
 A `mode=degraded health_code=200` line confirms inngest is serving (soft); a `mode=down
 health_code=<000|5xx>` line is a genuine down (the classifier routes it to `inngest_down` →
 restart). No SSH — the marker rides Vector Source 4 → Better Stack Logs source 2457081. For a
@@ -356,6 +370,7 @@ current — benign, not a failure. Per ADR-079 amendment #5960 (applied to the r
 terminal success, and at budget expiry does a FINAL STATE re-read (`/hooks/deploy-status` for a
 fresh inngest success, or `/hooks/inngest-liveness` healthy) before exiting benign — an
 unconfirmed state fails loud (`UNVERIFIED`, exit 1). Marker (tag `ci-deploy`):
+
 ```
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 2h --grep SOLEUR_INNGEST_RESTART_LOCK_CONTENTION
 ```
@@ -372,17 +387,23 @@ Both `INNGEST_SIGNING_KEY` and `INNGEST_EVENT_KEY` are TF-generated via `random_
 
 1. Identify which key to rotate. Replace `<KEY>` with `inngest_signing_key_prd` (or `_dev`, or `inngest_event_key_{prd,dev}`).
 2. Taint the random_id so the next apply regenerates it:
+
    ```
    doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform -chdir=apps/web-platform/infra taint random_id.<KEY>
    ```
+
 3. Apply:
+
    ```
    doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform -chdir=apps/web-platform/infra apply
    ```
+
    The companion `doppler_secret.<KEY>` ignores `value` changes via lifecycle; force a refresh:
+
    ```
    doppler run -p soleur -c prd_terraform --name-transformer tf-var -- terraform -chdir=apps/web-platform/infra apply -replace=doppler_secret.<KEY>
    ```
+
 4. Restart the application + inngest-server so they pick up the new value — **two existing
    no-SSH verbs, no host login:**
    - web-platform: re-run `web-platform-release.yml`. The container is swapped, which IS the
@@ -403,10 +424,12 @@ Inngest CLI version is pinned in `apps/web-platform/infra/inngest.tf` `locals` b
 
 1. Find the new version + SHA256 at `https://github.com/inngest/inngest/releases`. The linux_amd64 SHA256 lives in the release's `checksums.txt` file.
 2. Edit `inngest.tf`:
+
    ```
    inngest_cli_version = "vX.Y.Z"
    inngest_cli_sha256  = "<64-hex>"
    ```
+
 3. Release the new bootstrap-image semver (N.N.N — separate from the embedded
    inngest-cli version) via the canonical flow below
    ([§ Bootstrap-image release](#bootstrap-image-release-tag--build--deploy--verify)):
@@ -425,10 +448,12 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 1. **Push an ANNOTATED `vinngest-vX.Y.Z` tag** on the commit carrying the change
    (the repo forces annotated tags — a bare `git tag <name> <sha>` fails
    `fatal: no tag message?`):
+
    ```
    git tag -a vinngest-v1.1.16 <main-sha> -m "inngest-bootstrap v1.1.16: <what>"
    git push origin vinngest-v1.1.16
    ```
+
    Fires `build-inngest-bootstrap-image.yml` → builds + SHA-verifies + pushes the
    image. It does NOT deploy.
 2. **Bump the cloud-init pin in lockstep** — `apps/web-platform/infra/cloud-init.yml`
@@ -437,10 +462,13 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
    `vinngest-v*` tag, so the tag in step 1 MUST exist first (else the bump PR's CI
    fails AC6); pushing the tag without bumping turns `main` red until this PR merges.
 3. **Dispatch the deploy** (workflow_dispatch-only; the build never chains into it):
+
    ```
    gh workflow run deploy-inngest-image.yml -f tag=v1.1.16
    ```
+
 4. **Verify via the deploy-status webhook (NO SSH)** — single authenticated GET:
+
    ```
    WS=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
    CID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
@@ -450,6 +478,7 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
      -H "CF-Access-Client-Id: ${CID}" -H "CF-Access-Client-Secret: ${CSEC}" \
      "https://deploy.soleur.ai/hooks/deploy-status" | jq '{component, tag, reason, exit_code}'
    ```
+
    Expect `{component:"inngest", tag:"v1.1.16", reason:"success"}` (durable backend
    live). `reason:"success_degraded_durability"` = the SQLite fail-safe fired
    (Redis not ready, #5547). Use the literal host `deploy.soleur.ai` — do NOT
@@ -460,14 +489,18 @@ flow — the image build does NOT auto-deploy**. None of these steps use SSH
 `SOLEUR_FR5_ENABLED` gates PR-G (#3947) cohort exposure of the autonomous-draft trigger surface. NOT Terraform-managed (one-time human decision, not a credential). Flip procedure:
 
 1. Confirm current state:
+
    ```
    doppler secrets get SOLEUR_FR5_ENABLED -p soleur -c prd --plain
    ```
+
 2. Decide explicitly: this flips a production user-facing feature from gated to open. Confirm with `${USER}`.
 3. Flip:
+
    ```
    echo 'true' | doppler secrets set SOLEUR_FR5_ENABLED -p soleur -c prd --no-interactive
    ```
+
 4. Restart the web platform so it re-reads — re-run `web-platform-release.yml`. The container
    swap IS the restart; `ci-deploy.sh` deliberately rejects `restart web-platform` because a
    web-platform restart is docker-level, not systemd-level. No host login is involved.
@@ -479,6 +512,7 @@ The BetterStack heartbeat is created with `paused = true` to avoid false alerts 
 **Option A — UI (one-off):** Visit `https://uptime.betterstack.com/team/520508/heartbeats` → find `soleur-inngest-server-prd` → toggle pause off.
 
 **Option B — API (agent-driveable):**
+
 ```
 TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain)
 curl -X PATCH https://uptime.betterstack.com/api/v2/heartbeats/460830 \
@@ -493,6 +527,7 @@ unset TOKEN
 The `lifecycle { ignore_changes = [paused] }` on `betteruptime_heartbeat.inngest_prd` ensures future `terraform apply` runs do NOT revert the unpause regardless of which option you used.
 
 Confirm pings are flowing:
+
 ```
 TOKEN=$(doppler secrets get BETTERSTACK_API_TOKEN -p soleur -c prd_terraform --plain)
 curl -s https://uptime.betterstack.com/api/v2/heartbeats/460830 \
@@ -609,6 +644,7 @@ setting).
    merge time; the `apply-web-platform-infra.yml` allow-list now reconciles it on the next infra merge,
    but for an immediate cutover run, apply it explicitly here). `INNGEST_POSTGRES_URI` is already present
    (set out-of-band, see inngest.tf). From the repo root:
+
    ```bash
    export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID  -p soleur -c prd_terraform --plain)
    export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
@@ -620,22 +656,27 @@ setting).
    # Confirm the secret now exists (read-only, no SSH):
    doppler secrets get INNGEST_REDIS_PASSWORD -p soleur -c prd --plain   # → 48-char URL-safe value
    ```
+
    If the value is already present (a prior auto-apply or manual run minted it), this is a clean no-op —
    proceed to step 0.5.
 0.5. **Pre-cutover safety gates (MANDATORY — #5509).** Before quiescing, capture a recovery point and a
    full-state baseline so this destructive cutover is reversible and verifiable (no SSH):
+
    ```bash
    gh workflow run cutover-inngest.yml --field op=backup      # Hetzner server snapshot (full root disk incl. /var/lib/inngest); logs the image id
    gh workflow run cutover-inngest.yml --field op=inventory   # BEFORE baseline: {functions, event_names, armed_reminder_ids}
    ```
+
    Record the backup **image id** (the run logs `DELETE /v1/images/<id>` to free it after the cutover is
    confirmed) and save the BEFORE inventory block from the run log — both feed step 5's correctness check.
    Do NOT proceed to quiesce until the `op=backup` snapshot action reports `success`.
 1. **Quiesce arming** (no reminder armed into the doomed old SQLite mid-cutover):
+
    ```bash
    doppler secrets set INNGEST_CUTOVER_QUIESCE=1 -p soleur -c prd --no-interactive
    # POST /api/internal/schedule-reminder now returns 503 + Retry-After: 120.
    ```
+
 2. **Reminder survival — DEFAULT: dual-run-drain; FALLBACK: no-SSH enumerate + re-arm.** Armed
    `reminder.scheduled` events live ONLY in Inngest state (verdict 0.4 — no app-side ledger). A
    fresh-Postgres cutover drops any still-armed reminder unless it is allowed to fire first OR is
@@ -648,10 +689,12 @@ setting).
      or they fire too far out to wait, **persist the still-armed set ON-HOST BEFORE the deploy** — a
      post-deploy `op=rearm` self-enumerate would query the NEW (empty) Postgres+Redis backend and
      silently lose every reminder (#5542):
+
      ```bash
      gh workflow run cutover-inngest.yml --field op=enumerate   # OPTIONAL visibility: logs count + reminder_ids
      gh workflow run cutover-inngest.yml --field op=capture     # MANDATORY: persists records on-host pre-deploy
      ```
+
      `op=capture` drives `/hooks/inngest-rearm-reminders` with `mode=capture`: the host script queries
      the OLD server's `eventsV2`, reconstructs the FULL re-armable payload from each event's `raw`
      envelope (the legacy `id name receivedAt` query was payload-incomplete), drops already-fired events
@@ -679,9 +722,11 @@ setting).
      durable Redis), this is sufficient proof for a normal cutover — no extra step needed.
    - **OPT-IN (destructive, end-to-end proof):** to exercise the real wiped-volume invariant in prod
      shape with no remote shell:
+
      ```bash
      gh workflow run cutover-inngest.yml --field op=verify-wiped-volume   # async; polls verify-status
      ```
+
      This drives `/hooks/inngest-wiped-volume-verify`, which **aborts loudly unless the armed set is
      empty** (the real safety gate — it will NOT wipe with a real reminder pending), arms an
      unregistered-`named-check` throwaway that fires a run but posts **zero** comments, wipes
@@ -689,20 +734,24 @@ setting).
      run it once the armed set is drained/re-armed.
    - **Correctness diff (MANDATORY — #5509):** re-run `op=inventory` (the AFTER baseline) and diff it
      against the BEFORE block from step 0.5:
+
      ```bash
      gh workflow run cutover-inngest.yml --field op=inventory   # AFTER baseline
      ```
+
      Expected: `functions` identical (re-registered every deploy by construction) and `event_names`
      identical. `armed_reminder_ids` MUST be re-present after re-arm (FALLBACK path, step 6) OR
      empty-by-design (DEFAULT dual-run-drain, where the armed set fired on the old server pre-cutover).
      Any unexplained drop in `functions`/`event_names`, or a missing `armed_reminder_id` after re-arm,
      is a cutover defect — restore from the step 0.5 backup image before clearing quiesce.
 6. **Re-open arming + re-arm recovered work** (no remote shell):
+
    ```bash
    doppler secrets set INNGEST_CUTOVER_QUIESCE= -p soleur -c prd --no-interactive  # clears the flag
    # FALLBACK path only: re-arm from the on-host capture persisted in step 2 (op=capture).
    gh workflow run cutover-inngest.yml --field op=rearm
    ```
+
    Run `op=rearm` ONLY after the quiesce flag is cleared — the host script aborts loud (does not
    silently drop) if it gets a 503 because quiesce is still set. `op=rearm` (mode `rearm-from-capture`)
    consumes `/var/lib/inngest/cutover-capture.json` from step 2 and deletes it on FULL success; a
@@ -794,9 +843,11 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
 > pre-cutover host, NOT a transport failure.
 
 1. **`op=execute`** (pre-flip orchestrator — no prod-write):
+
    ```bash
    gh workflow run cutover-inngest.yml --field op=execute
    ```
+
    It runs: **2.0** empty-registry pre-flight (aborts if the dark registry is non-empty — see
    remediation below); **2.1** capture of still-armed reminders (records persist on-host;
    `Σcaptured` + `reminder_id`s only in the log); **2.2** quiesce followed by a **QUIESCE HARD
@@ -806,6 +857,7 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    `op=execute`; the gate is a CHECK, `op=quiesce-web` is the ACT. When the gate passes it
    prints the SEAM with the exact operator steps below, then exits 0. Read the SEAM from the
    run log:
+
    ```bash
    gh run view <op=execute run id> --log | grep -E '::notice::|::error::|::warning::'
    ```
@@ -848,9 +900,11 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    former three manual Doppler writes. `op=arm` performs all three writes on
    **`soleur-inngest/prd`** itself and confirms the on-host FSM reached `done` via Better Stack,
    with **no secret value ever echoed** (AC-NOBODY):
+
    ```bash
    gh workflow run cutover-inngest.yml --field op=arm
    ```
+
    Then **approve the `inngest-cutover` GitHub Environment required-reviewer gate** on the run —
    that approval IS the prod-write ack (`hr-menu-option-ack-not-prod-write-auth`; the dispatch +
    approval replace the old Doppler-console write). What `op=arm` does, in order:
@@ -943,10 +997,12 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
 3. **Independent confirm / troubleshooting (optional — op=arm already gates on this).** op=arm
    only exits 0 after Better Stack shows the FSM `done`. To re-read the line yourself
    (`hr-no-dashboard-eyeball-pull-data-yourself`), or if op=arm failed loud at G6:
+
    ```bash
    doppler run -p soleur -c prd_terraform -- \
      scripts/betterstack-query.sh --since 30m --grep inngest-cutover-flip --raw-only --limit 20
    ```
+
    A clean flip surfaces a `"flag":"done"` line (with `"reason":"flip-complete"`) within a single 30s poll of arming. A
    `"reason":"dbsize-nonzero"` line means the DBSIZE gate tripped; a `"reason":"unexpected-exit(...)"`
    line means a flag-write/systemctl failure drove the flag to terminal `aborted` (the ERR-trap
@@ -960,6 +1016,7 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    **standing read+write handle to the now-armed prod `INNGEST_POSTGRES_URI`** on
    `soleur-inngest/prd`. Rotate + revoke it (no-SSH); there is **no seed to delete** (reads are
    read-through):
+
    ```bash
    # (a) mint a fresh key + orphan the old one (propagates to the env secret in the same apply):
    doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
@@ -967,6 +1024,7 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    # (b) revoke the orphaned key so no standing prod-DSN read handle survives:
    doppler configs tokens revoke --project soleur-inngest --config prd --slug <orphaned-token-slug> --yes
    ```
+
    The next per-merge apply keeps a fresh `inngest-cutover` env secret available for a future
    cutover; the required-reviewer gate means it cannot be used without an approved dispatch.
 
@@ -990,6 +1048,7 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    > explicitly supports (or a `-replace` of the host `random_id` + copy), then a **web redeploy**
    > (ci-deploy regenerates the env each deploy, so the app only bakes the new key on the next
    > deploy). No secret value is echoed — read on the arm token, pipe on stdin:
+>
    > ```bash
    > # Copy each host channel key INTO soleur/prd (value on STDIN, never argv/log):
    > for K in INNGEST_EVENT_KEY INNGEST_SIGNING_KEY; do
@@ -998,20 +1057,24 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
    > done
    > # then redeploy web-platform so the app adopts the shared keys, and re-run op=arm (G3.5 now MATCHes).
    > ```
+>
    > (`DOPPLER_TOKEN_WRITE` is scoped to `soleur/prd_terraform` and cannot write the `prd` root
    > config the app reads; the copy is a `prd`-root write — Doppler console or a prd-root r/w token.
    > A future full automation would mint a narrow prd-root write token; the G3.5 gate is the
    > recurrence-prevention that makes the divergence impossible to ship silently.)
 
 5. **`op=rearm`** (re-arm the captured reminders after the flip):
+
    ```bash
    gh workflow run cutover-inngest.yml --field op=rearm
    ```
+
    It precondition-checks 2.4 (registry non-empty), consumes the on-host capture, and
    reconciles `Σcaptured == rearmed`; a delta **fails loud** with the missing `reminder_id`s and
    offers a retry (in-window ticks are not auto-backfilled).
 
 6. **`op=verify`** (exactly-once):
+
    ```bash
    gh workflow run cutover-inngest.yml --field op=verify --field cron_period_seconds=1200
    ```
@@ -1115,6 +1178,7 @@ merge) — both printed in the SEAM as an out-of-band hand-off.
 If `op=execute` aborts at 2.0 with `registry-probe: dark registry NON-empty`, the dark host has
 functions registered against it — flipping now would carry stray state onto prod Postgres. To
 empty the dark registry and re-run (all no-SSH):
+
 1. Read `INNGEST_POSTGRES_URI` on `soleur-inngest/prd` and record which backend it targets.
    **Do NOT assert it should still be non-prod** — that instruction was correct only before the
    first successful arm. `op=arm` writes the prod DSN and `op=rollback` has no inverse for that
@@ -1166,9 +1230,11 @@ deny-all-public; `hr-no-ssh-fallback-in-runbooks`). Then `gh issue close 6608`.
    environment required-reviewer gate; it writes ONLY the flip value (never re-writes
    POSTGRES_URI/HEARTBEAT). For a non-forward state (`aborted`/`unset`) there is nothing to reverse
    and it proceeds straight to the web re-enable (the documented aborted-state / P0-3 recovery):
+
    ```bash
    gh workflow run cutover-inngest.yml --field op=rollback   # then APPROVE the inngest-cutover environment gate
    ```
+
    There is **no separate operator Doppler write** — the dedicated-host stop is now folded into
    this single dispatch.
 2. **Repoint the app back to loopback** — revert the `ci-deploy.sh` `INNGEST_BASE_URL` change
@@ -1289,6 +1355,7 @@ unset TOKEN
 ```
 
 Without `issue_number` (runs the default cascade) — omit `data` (or send `{}`):
+
 ```bash
   -d '{"event":"cron/bug-fixer.manual-trigger"}'
 ```
@@ -1330,6 +1397,7 @@ inngest send '{"name":"cron/bug-fixer.manual-trigger","data":{"issue_number":438
 ## Plan deviations from `2026-05-18-feat-pr-f-inngest-iac-plan.md`
 
 See the `## Plan Deviations (Phase 1)` section of the plan for full context. Summary:
+
 1. 4 Inngest secrets are `random_id`-generated, not operator-minted.
 2. Single workplace-scope Doppler personal token (was: two per-config service tokens).
 3. `[ack]` operator-mint count: 6 → 2.
@@ -1344,10 +1412,12 @@ Per ADR-033 (per-tenant scope grants), the env flag `SOLEUR_FR5_ENABLED` is no l
 
 1. **PR-G merged to `main`**; Vercel auto-deploy green; Hetzner web-platform unit has restarted with the new image (or per the deploy substrate's restart policy).
 2. **Migrations 048 + 049 applied to prd Supabase.** Verify via `psql` (or Supabase MCP):
+
    ```bash
    doppler run -p soleur -c prd -- psql "$DATABASE_URL_POOLER" -c '\d+ public.scope_grants'
    doppler run -p soleur -c prd -- psql "$DATABASE_URL_POOLER" -c '\d public.users' | grep runtime_explainer_dismissed_at
    ```
+
    Expected shape: 7 columns on `scope_grants`, RLS enabled, 2 WORM triggers (`scope_grants_no_update`, `scope_grants_no_delete`), 1 partial index (`scope_grants_active_idx`), 3 RPCs (`grant_action_class`, `revoke_action_class`, `anonymise_scope_grants`) with explicit `REVOKE EXECUTE FROM PUBLIC, anon` and the correct `GRANT EXECUTE TO` for each role.
 3. **T&C version 2.0.0 deployed.** Middleware redirect to `/accept-terms` on next request will fire for the operator + first dogfood founder. Coordinate dogfood timing accordingly.
 4. **BetterStack on-call live** (per PR-F flip-prerequisite list at the top of this runbook).
@@ -1362,6 +1432,7 @@ doppler secrets set SOLEUR_FR5_ENABLED=true -p soleur -c prd
 ```
 
 Verify:
+
 ```bash
 doppler secrets get SOLEUR_FR5_ENABLED -p soleur -c prd --plain
 # → true

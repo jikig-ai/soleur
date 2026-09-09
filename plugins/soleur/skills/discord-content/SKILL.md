@@ -27,6 +27,7 @@ Check if the `DISCORD_WEBHOOK_URL` environment variable is set.
 
 **If missing:**
 > `DISCORD_WEBHOOK_URL` is not set. To configure:
+>
 > 1. Open Discord server > Server Settings > Integrations > Webhooks
 > 2. Click "New Webhook" and configure the target channel
 > 3. Copy the webhook URL
@@ -50,6 +51,7 @@ Read the brand guide sections that inform content generation:
 2. Read `## Channel Notes > ### Discord` -- apply Discord-specific guidelines (if the section exists)
 
 Generate a draft post that:
+
 - Addresses the user's topic
 - Matches the brand voice from `## Voice`
 - Follows Discord channel guidelines from `## Channel Notes`
@@ -102,6 +104,7 @@ Set `avatar_url` to the hosted logo URL (e.g., the GitHub-hosted `logo-mark-512.
 > Failed to post to Discord (HTTP [status_code]).
 >
 > Draft content (copy-paste manually):
+>
 > ```
 > [full draft content]
 > ```

@@ -22,6 +22,7 @@ Sales pipeline analyst. Measure, model, and optimize the revenue pipeline from M
 ## Output Format
 
 Pipeline analyses should include:
+
 1. Summary dashboard with key metrics
 2. Stage-by-stage breakdown with conversion rates
 3. Identified risks and stuck deals

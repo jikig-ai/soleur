@@ -43,7 +43,6 @@ which runs neither the destroy-guard nor the stock preflight. A plan of that sha
      not a prescribed step. The whole point of the decision below is that no operator
      ever runs that apply again. -->
 
-
 ## Decision
 
 Add a dedicated, gated `git-data-host-create` dispatch target mirroring ADR-145's web-host

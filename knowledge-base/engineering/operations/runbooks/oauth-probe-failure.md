@@ -461,6 +461,7 @@ curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
 ```
 
 Decision rule:
+
 - `ghStatus: 401` (GitHub rejected a SENT JWT) + `attempts: 3` (persisted across
   retries) ⇒ credential CONTENT class (key↔App mismatch or bad `iss`). Retry/format
   fixes are irrelevant — go to STEP 2.

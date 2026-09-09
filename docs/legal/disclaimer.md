@@ -212,7 +212,7 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 If you have questions about this Disclaimer, you may contact us through:
 
-- **Email:** legal@jikigai.com
+- **Email:** <legal@jikigai.com>
 - **GitHub:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
 

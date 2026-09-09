@@ -87,10 +87,12 @@ gh pr merge <N> --squash
 See `knowledge-base/project/learnings/workflow-patterns/2026-06-30-update-branch-drifts-lockfiles-and-npm11-pin.md` and `knowledge-base/project/learnings/workflow-patterns/2026-06-30-stale-bot-cron-pr-hallucinated-api-and-registration-sweep.md` for the full failure analyses.
 
 - **(a) Lockfile drift on deps PRs.** `gh pr update-branch` / a main-merge silently desyncs the lockfile. There is exactly ONE lockfile per directory since ADR-191 — do not recreate `bun.lock`:
+
   ```bash
   cd apps/web-platform
   npx --yes npm@11 install --package-lock-only           # package-lock.json — npm@11 ONLY
   ```
+
   The `lockfile-sync` CI gate pins **npm@11**; regenerating `package-lock.json` with local npm produces a divergent shape and fails the gate. On a lockfile **merge conflict**, resolve by regenerating (`git checkout --ours -- <lockfiles>` then re-run), not by hand-picking hunks.
 - **(b) Generated-file conflicts** (e.g. `knowledge-base/project/rule-metrics.json`). Regenerate from current `main` via the owning aggregate script (`rule-metrics-aggregate.sh`) after `git merge origin/main`; do NOT hand-merge conflict markers in a generated artifact.
 - **(c) Stale bot PR (especially crons).** Rebase first (`gh pr update-branch`) to re-validate against current `main` — an old green predates current gates. Then check for a hallucinated substrate API (`tsc --noEmit`) and missing registration locations per **ADR-033 §Registration checklist** (the canonical list of every gated location for a new `cron-*` function). Mirror the structurally-closest live twin signature-for-signature rather than the PR's prose.

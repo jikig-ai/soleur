@@ -31,17 +31,17 @@ the umbrella plan §"Implementation Phases" PR sequencing constraint.
 
 | Field | Value |
 |---|---|
-| **DPA mechanism** | AUTO via the **Data Processor Appendix to the Flagsmith Terms of Service** (no separate signature instrument; embedded clause in the customer-side ToS at https://www.flagsmith.com/terms-of-service). Same shape as Anthropic Commercial Terms §C, Stripe Services Agreement, Resend ToS §7. |
+| **DPA mechanism** | AUTO via the **Data Processor Appendix to the Flagsmith Terms of Service** (no separate signature instrument; embedded clause in the customer-side ToS at <https://www.flagsmith.com/terms-of-service>). Same shape as Anthropic Commercial Terms §C, Stripe Services Agreement, Resend ToS §7. |
 | **DPA effective date** | Effective on the operator-side acceptance of the Flagsmith Terms of Service (free-tier sign-up); pinned 2026-05-25 (operator-attested at PR-1 of umbrella #4456). |
 | **Transfer mechanisms** | UK IDTA (UK Addendum to EU SCCs) + EU SCCs Modules 2 + 3, as belt-and-suspenders to the EC adequacy decision for the UK (Commission Implementing Decision (EU) 2021/1772 of 28 June 2021, currently in force; review-pending). Flagsmith's onward US sub-processors (AWS, Sentry, Slack, Amplitude, Stripe, Chargebee, Reo Dev, Google Analytics, Google Docs) covered by SCCs Module 3 flow-down + DPF where available. |
 | **Region (data processed)** | **Not pinned on the free / managed-SaaS tier.** Flagsmith managed SaaS uses the global edge network at `edge.api.flagsmith.com` (AWS-hosted; data centers include California, London, Sydney, São Paulo, Seoul per Flagsmith hosting docs). Region pinning is only available on the Private Cloud tier ("isolated single-tenant deployment hosted with your chosen cloud provider in your chosen region"). The operator does NOT use the Private Cloud tier today. |
-| **Flagsmith ToS URL** | https://www.flagsmith.com/terms-of-service (Data Processor Appendix is the in-document DPA) |
-| **Flagsmith Privacy Policy URL** | https://www.flagsmith.com/privacy-policy |
-| **Flagsmith Sub-Processors URL** | https://www.flagsmith.com/gdpr-sub-processor-list |
+| **Flagsmith ToS URL** | <https://www.flagsmith.com/terms-of-service> (Data Processor Appendix is the in-document DPA) |
+| **Flagsmith Privacy Policy URL** | <https://www.flagsmith.com/privacy-policy> |
+| **Flagsmith Sub-Processors URL** | <https://www.flagsmith.com/gdpr-sub-processor-list> |
 
 ## Flagsmith's own sub-processors (Schedule 2 flow-down)
 
-As published at https://www.flagsmith.com/gdpr-sub-processor-list, last updated 13 October 2025:
+As published at <https://www.flagsmith.com/gdpr-sub-processor-list>, last updated 13 October 2025:
 
 | Sub-processor | Purpose | Region |
 |---|---|---|
@@ -168,7 +168,7 @@ Soleur's TOMs that bound Flagsmith-side risk under PA-1 + PA-2:
   Vendor / Sub-Processor Mapping row.
 - `knowledge-base/legal/compliance-posture.md` Vendor DPA Status table.
 - `knowledge-base/legal/data-processing-agreement-template.md` Schedule 2
-  + §11.2 SCCs classification.
+  - §11.2 SCCs classification.
 - `knowledge-base/legal/tenant-dpa-register.md` — §6.1 clock state
   baseline.
 - `docs/legal/privacy-policy.md` §5.15 (PR-1).

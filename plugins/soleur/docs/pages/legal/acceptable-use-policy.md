@@ -183,7 +183,7 @@ and may, at our discretion, result in removal of the affected content
 under Section 6.2 (Consequences of Violation) of this Policy.
 
 If you require a service that processes Special-Category Data as a defined
-purpose, contact us at legal@jikigai.com before submitting such content; we
+purpose, contact us at <legal@jikigai.com> before submitting such content; we
 will assess whether a separate data-processing arrangement is feasible.
 
 ### 4.8 California Sensitive Personal Information

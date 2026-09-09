@@ -145,10 +145,12 @@ staleness gate's failure message points at. Do all of it, in order:
    Update the config-compatibility table with the verdict for each.
 4. **Re-measure the two version-scoped claims** by running the pinned image locally with
    this repo's exact `config.json` + htpasswd:
+
    ```bash
    docker run --rm -v <cfg>:/etc/zot/config.json:ro <pinned-ref> serve /etc/zot/config.json
    curl -sS -o /dev/null -w '%{http_code}' http://localhost:5000/v2/
    ```
+
    Confirm 200-or-401, never 403. **If 403 appears, STOP** — the `authz_denied` arm becomes
    a live arm rather than a tripwire; downgrade the claim to `UNMEASURED` and file an issue
    rather than shipping a false comment.

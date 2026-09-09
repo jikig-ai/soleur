@@ -372,4 +372,3 @@ points at **#7046**, which tracks resolving it.
 
 No `views.c4` edit is required: the `containers` view already enumerates both endpoints, and LikeC4
 renders the relationship automatically.
-
