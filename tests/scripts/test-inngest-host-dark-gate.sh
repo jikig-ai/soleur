@@ -624,7 +624,7 @@ else
   # pinned clock: its fixture is dated 10:00 UTC, so the arm passed while the wall clock was near
   # 10:00 and began returning `stale_row` instead of `dark` a couple of hours later. Measured — it
   # was green in the morning and red in the afternoon with no edit in between.
-  _rc=0; _out="$(bash -c "source '$_always_dark'; inngest_host_dark_gate --rows-file '$TMP/rows-g13.json' --query-rc 0 --finished-file '$FIN' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '$VOLID' --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot 0 --now-epoch '$NOW'" 2>&1)" || _rc=$?
+  _rc=0; _out="$(bash -c "set -uo pipefail; source '$_always_dark'; inngest_host_dark_gate --rows-file '$TMP/rows-g13.json' --query-rc 0 --finished-file '$FIN' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '$VOLID' --followthrough-rc 0 --cutover-flag rolled-back --diagnostic-boot 0 --now-epoch '$NOW'" 2>&1)" || _rc=$?
   if [[ "$_rc" -eq 0 && "$(printf '%s\n' "$_out" | tail -1)" == "dark" ]]; then
     pass   # the mutation is detectable: the G13 arm above asserts `store_populated` and would redden
   else
@@ -891,7 +891,7 @@ mutate() {
   # a verdict that differs from the expected token, which is exactly what this row treats as
   # "the mutation changed the verdict". Every B10 row was therefore passing on the clock rather
   # than on the neutered check, and would have kept doing so.
-  out="$(bash -c "source '$mutated'; inngest_host_dark_gate --rows-file '$rows' --query-rc 0 --finished-file '${FIN2:-$FIN}' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '${LIVEID:-$VOLID}' --followthrough-rc '${FTRC:-0}' --cutover-flag '${FLAGV:-rolled-back}' --diagnostic-boot '${DBOOT:-0}' --now-epoch '${NOWV:-$NOW}'" 2>&1)" || rc=$?
+  out="$(bash -c "set -uo pipefail; source '$mutated'; inngest_host_dark_gate --rows-file '$rows' --query-rc 0 --finished-file '${FIN2:-$FIN}' --finished-rc 0 --expected-volume-id '$VOLID' --live-attachment-id '${LIVEID:-$VOLID}' --followthrough-rc '${FTRC:-0}' --cutover-flag '${FLAGV:-rolled-back}' --diagnostic-boot '${DBOOT:-0}' --now-epoch '${NOWV:-$NOW}'" 2>&1)" || rc=$?
   got="$(printf '%s\n' "$out" | tail -1)"
   if [[ "$got" != "$tok" ]]; then
     pass
