@@ -16,21 +16,25 @@ description: "This skill should be used when merging a feature branch to main wi
 Detect the current environment and record the starting state for rollback. Run these commands separately and store the results:
 
 1. Get current branch name:
+
 ```bash
 git rev-parse --abbrev-ref HEAD
 ```
 
 2. Get current commit SHA (this is the rollback point):
+
 ```bash
 git rev-parse HEAD
 ```
 
 3. Get current working directory path (worktree path):
+
 ```bash
 pwd
 ```
 
 4. Get the main repo root (first path from worktree list output):
+
 ```bash
 git worktree list
 ```
@@ -135,10 +139,39 @@ For each conflicted file, apply the appropriate resolution strategy:
 |-------------|----------|
 | `plugins/soleur/CHANGELOG.md` | Merge both sides -- see 3.2 |
 | `plugins/soleur/README.md` | Accept feature branch component counts |
-| Generated artifacts | Take `--theirs`, then re-run the owning generator -- see 3.2b |
+| Generated artifacts | See 3.2b. **The three knowledge-base artifacts are an EXCEPTION — never `--theirs` on them** |
 | Everything else | Claude-assisted resolution -- see 3.3 |
 
 **Generated artifacts (3.2b).** A generated file has no authorial intent to preserve, so 3.3 does not apply to it: hand-picking hunks produces an artifact that matches neither side's source and that no generator would emit. Resolve by discarding both sides and regenerating from the merged source. Known members and their owning generators: `knowledge-base/engineering/architecture/diagrams/model.likec4.json` → [regenerate-c4-model.sh](../../../../scripts/regenerate-c4-model.sh) (verify with [c4-model-freshness.test.sh](../../test/c4-model-freshness.test.sh), which is exactly the in-sync assertion), and `knowledge-base/project/rule-metrics.json` → [rule-metrics-aggregate.sh](../../../../scripts/rule-metrics-aggregate.sh). Lockfiles follow the same shape with a pinned toolchain — see [drain-prs/SKILL.md](../drain-prs/SKILL.md) §6(a).
+
+**In the Soleur repository**, the three generated knowledge-base artifacts are members of 3.2b, and the generic 3.2b remedy is WRONG for them. (This paragraph's script paths exist only in that repo; a self-hosted install has no [merge-kb-index.sh](../../../../scripts/merge-kb-index.sh).) `knowledge-base/INDEX.md`, `knowledge-base/kb-tags.txt` and `knowledge-base/kb-categories.txt` are all emitted by [generate-kb-index.sh](../../../../scripts/generate-kb-index.sh), but "take `--theirs`, then re-run the owning generator" drops rows for these three: regenerating runs against **one side's** file set, which never contains the knowledge-base files the other side added. That is the exact silent row-drop #7935 records — it discarded an ADR index entry three separate times on PR #7896, caught only by an ad-hoc `grep -c` after each resolve.
+
+`INDEX.md` is resolved instead by the `merge=kb-index` driver in the root `.gitattributes` ([merge-kb-index.sh](../../../../scripts/merge-kb-index.sh)); the two facet files use git's built-in `merge=union`. **If any of the three ever presents as conflicted, the remedy is to fix the driver's registration (`bash scripts/install-kb-merge-driver.sh`) and re-run the merge — never side-pick, and never hand-edit.**
+
+**Do not go looking for conflict markers on these paths.** When a merge driver exits non-zero git marks the path `UU`, leaves ours content in place, and writes **no markers of its own** — so the file reads as cleanly merged and 3.3's first instruction ("read the file with conflict markers") leads straight to `git add` of a wrong index. The driver writes its own `<<<<<<< kb-index:` sentinel line precisely so that failure is visible and trips `guardrails:block-conflict-markers`.
+
+**Read the sentinel, then pick the remedy — they are not all registration.** The sentinel now names its own cause in parentheses, and the driver's stderr from the failing merge says the same thing.
+
+| What you see | What it means | Remedy |
+|---|---|---|
+| Sentinel says `both sides retitled …` or `added on both sides …` | A genuine human decision the driver refuses to make for you | Pick the title, re-run `bash scripts/generate-kb-index.sh`, `git add` |
+| Sentinel says `duplicate row …`, `rel … escapes`, `… ambiguous`, `round-trip validation failed` | An input that is not a canonical generated index — usually a hand-edited or previously line-merged file | Regenerate that side, then re-run the merge |
+| Sentinel says `render library …` | The driver is registered but its library is missing on this branch | Check out the full tree; `install-kb-merge-driver.sh` cannot fix a missing FILE |
+| Sentinel says `unhandled failure at line …` | A driver bug | File it with the sentinel text |
+| **No sentinel at all** | The driver did not COMPLETE | See below — this is the one case that is often registration |
+
+**No sentinel does NOT prove "unregistered".** It means the driver never reached its own error handling, and there are at least three ways: it is unregistered; it is registered but [merge-kb-index.sh](../../../../scripts/merge-kb-index.sh) is absent or unreadable on this branch (a partial cherry-pick or revert); or the command cannot execute. Discriminate before acting, because re-running the installer succeeds silently in two of the three:
+
+```bash
+git config --get merge.kb-index.driver   # empty => unregistered; run the installer
+ls -l scripts/merge-kb-index.sh scripts/lib/kb-index-render.sh   # missing => a tree problem, not a config one
+```
+
+**A `kb-tags.txt` / `kb-categories.txt` merge never conflicts and can still leave CI red** — red via the `AC17` case in `plugins/soleur/test/kb-index-merge-driver.test.sh`, which is `--check`'s only real-tree caller and reaches CI through `SUITE_GLOBS`; there is no step for it in `.github/workflows/` or `lefthook.yml`, so grepping those finds nothing.** Those two use git's built-in `merge=union`, whose output is not sorted the way the generator writes it, and nothing regenerates between a clean auto-committing merge and CI. If `generate-kb-index.sh --check` reds on a facet file after a merge, that is expected and the fix is one command:
+
+```bash
+bash scripts/generate-kb-index.sh && git add knowledge-base/kb-tags.txt knowledge-base/kb-categories.txt
+```
 
 **For README.md (accept feature branch):**
 
@@ -164,6 +197,7 @@ echo "ours=$ours theirs=$theirs"  # echo the paths: the Read/Write steps below n
 - `:3:` is "theirs" (main)
 
 Read both files. Reconstruct the complete CHANGELOG:
+
 - Keep the file header (title, description, links)
 - Merge version entries in descending version order
 - If the feature branch has a draft entry, keep it
