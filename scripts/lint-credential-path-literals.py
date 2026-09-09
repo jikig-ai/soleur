@@ -114,6 +114,122 @@ RECIPE = (
 )
 
 
+# --- Rule family 2: accessibility-snapshot credential rendering (#7947) ---
+#
+# An accessibility snapshot serializes the VALUE of input fields, including a
+# value the agent never supplied. Measured on both leaking surfaces; record at
+# knowledge-base/project/specs/feat-one-shot-7946-7947-sentry-org-token-and-snapshot-redaction/phase-0-measurement.md
+#
+# TWO rules, named for what each actually enforces. The first revision had ONE,
+# whose implemented predicate was "the string `redact-a11y-snapshot` appears
+# somewhere in this document" while its stated property was "no instruction
+# directs an unrouted snapshot". Those are different, and the gap was live: one
+# mention exempted 26 unrouted instructions across five shipped files, 19 of
+# which the PreToolUse hook DENIES at runtime. The plugin shipped commands its
+# own guard blocks, with the required check green.
+#
+#   S1 (routing, per LINE): every `agent-browser ... snapshot` instruction is
+#      routed through the redactor ON THAT LINE. Deliberately NOT narrowed by
+#      auth context, because the hook it backs is not narrowed either -- it
+#      denies every unrouted invocation. A lint narrower than the runtime gate
+#      is teeth for a different rule than the one being enforced.
+#
+#   S2 (disclosure, per FILE): a document instructing a Playwright-MCP snapshot
+#      in an authentication context states that the MCP path has no runtime
+#      guard. Document scope is correct HERE -- a file states its safety rule
+#      once -- and the redactor pipe is deliberately NOT required, because an
+#      MCP tool result cannot be piped through a shell script. Requiring it
+#      produced two shipped blocks prescribing an inoperable command, which is
+#      the lint manufacturing its own compliance.
+AGENT_BROWSER_SNAPSHOT_RE = re.compile(r"agent-browser(?:\s+[^\s|;&]+)*\s+snapshot\b")
+
+MCP_SNAPSHOT_RE = re.compile(r"(?:mcp__[a-z_]*__)?browser_snapshot\b")
+
+# An authentication/credential context anywhere in the same document. Used by S2
+# only. A snapshot on an ordinary page is not the hazard S2 describes.
+AUTH_CONTEXT_RE = re.compile(
+    r"(?i)(?<![a-z0-9])(?:log[\s-]?in|sign[\s-]?in|password|passphrase"
+    r"|credential|authentication|token|api[\s_-]?key|secret)(?![a-z0-9])"
+)
+
+# Anchored on the redactor's FILENAME, so a look-alike command that does not
+# redact cannot satisfy the guard (cq-assert-anchor-not-bare-token).
+REDACTOR_ANCHOR_RE = re.compile(r"redact-a11y-snapshot")
+
+# The S2 disclosure. Anchored on the claim, not on a bare token, so prose that
+# merely mentions "Playwright MCP" does not satisfy it.
+# Whitespace-tolerant on purpose. A prose reflow that wraps the sentence would
+# otherwise disarm the marker silently, leaving the guard green and looking
+# alive while the disclosure it checks for is still present to a human reader.
+MCP_GAP_MARKER_RE = re.compile(
+    r"no\s+runtime\s+guard\s+on\s+the\s+Playwright-MCP\s+path", re.IGNORECASE
+)
+
+S1_RECIPE = (
+    "route it through the redactor on the same line "
+    '(`agent-browser snapshot -i 2>&1 | python3 '
+    '"${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"`) '
+    "-- the bare anchor, quoted: ADR-179 rejects the `:-default` form, which "
+    "resolves to a repo path that exists on no customer machine. The PreToolUse "
+    "hook DENIES this command as written, so shipping it instructs the agent to "
+    "run something the guard blocks"
+)
+
+S2_RECIPE = (
+    "state in this file that the Playwright-MCP path has "
+    "'no runtime guard on the Playwright-MCP path' (#7980) -- the redactor "
+    "cannot be piped into an MCP tool result, so the honest control here is "
+    "disclosure, not routing"
+)
+
+# Population for family 2. Deliberately NARROWER than the host lint's walk.
+#
+# The property quantifies over what the shipped plugin INSTRUCTS an agent to do,
+# so it covers skills/ and agents/ under the plugin and nothing else. A
+# knowledge-base plan, spec, session-state or post-mortem is a RECORD of what
+# happened, not an instruction -- gating those would red on every historical
+# document that describes the unsafe form, including the measurement record that
+# exists to document it. Measured before scoping: the unscoped walk produced 65
+# hits, 8 of them in this issue's own evidence files.
+SNAPSHOT_RULE_DIRS = (
+    "plugins/soleur/skills/",
+    "plugins/soleur/agents/",
+)
+
+
+def scan_snapshot_rule(text: str, posix_path: str) -> list[tuple[int, str]]:
+    """Return (1-based line, message) for S1 and S2 violations."""
+    if not any(d in posix_path for d in SNAPSHOT_RULE_DIRS):
+        return []
+
+    hits: list[tuple[int, str]] = []
+    lines = text.splitlines()
+
+    # S1 -- per line, unconditional.
+    for i, line in enumerate(lines):
+        m = AGENT_BROWSER_SNAPSHOT_RE.search(line)
+        if m and REDACTOR_ANCHOR_RE.search(line) is None:
+            hits.append(
+                (i + 1, f"unrouted `{m.group(0).strip()}` -- {S1_RECIPE}")
+            )
+
+    # S2 -- per file.
+    if AUTH_CONTEXT_RE.search(text) and MCP_GAP_MARKER_RE.search(text) is None:
+        for i, line in enumerate(lines):
+            m = MCP_SNAPSHOT_RE.search(line)
+            if m:
+                hits.append(
+                    (
+                        i + 1,
+                        f"`{m.group(0)}` in an authentication context with no "
+                        f"MCP-gap disclosure -- {S2_RECIPE}",
+                    )
+                )
+                break
+
+    return hits
+
+
 def _first_match(res: tuple[re.Pattern, ...], text: str) -> str | None:
     for r in res:
         m = r.search(text)
@@ -153,6 +269,10 @@ def lint_file(path: Path) -> tuple[list[str], list[str]]:
     adv_out = [
         f"{path}:{ln}: advisory (remote-host prefix, not gating) `{lit}`."
         for ln, lit in advisory
+    ]
+    hard_out += [
+        f"{path}:{ln}: accessibility-snapshot rule: {msg}."
+        for ln, msg in scan_snapshot_rule(text, path.as_posix())
     ]
     return hard_out, adv_out
 
@@ -197,17 +317,27 @@ def changed_files(base_ref: str) -> list[Path] | None:
     return picked
 
 
-def full_scan_files() -> list[Path]:
+def full_scan_files_with_total() -> tuple[list[Path], int]:
+    """Return (scannable files, total *.md discovered before archive filtering).
+
+    The two numbers differ only by archived files, and the anti-vacuity floor
+    needs BOTH: a repo whose docs are all under archive/ has nothing to scan
+    LEGITIMATELY, while a repo where the scan dirs hold no markdown at all is
+    the vacuous case (wrong root, broken checkout). Collapsing them would make
+    the floor fire on the first and miss nothing on the second.
+    """
     picked: list[Path] = []
+    total = 0
     for d in SCAN_DIRS:
         root = Path(d)
         if not root.is_dir():
             continue
         for p in sorted(root.rglob("*.md")):
+            total += 1
             if "/archive/" in p.as_posix():
                 continue
             picked.append(p)
-    return picked
+    return picked, total
 
 
 def main(argv: list[str]) -> int:
@@ -253,7 +383,45 @@ def main(argv: list[str]) -> int:
             return 2
         files = picked
     else:
-        files = full_scan_files()
+        files, discovered = full_scan_files_with_total()
+        # Anti-vacuity floor. A lint that reports "0 checked" and exits 0 is
+        # vacuous -- indistinguishable from a clean run. --changed is exempt:
+        # an empty changed-set is the normal case there.
+        #
+        # Keyed on DISCOVERED, not on the post-filter list: a repo whose docs
+        # are all under archive/ scans zero files legitimately, and firing on
+        # that would red a correct codebase. Only "the scan dirs hold no
+        # markdown at all" is the vacuous shape.
+        if discovered == 0:
+            print(
+                "ERROR: full-scan population is empty (no tracked *.md under "
+                f"{'/, '.join(SCAN_DIRS)}/). A lint with nothing to check is "
+                "vacuous, not clean. Fail-closed.",
+                file=sys.stderr,
+            )
+            return 2
+
+        # Fire only when the rule's directories EXIST and hold no markdown --
+        # a real anomaly. A checkout that has no plugin tree at all (a fixture
+        # repo, a docs-only sparse checkout) is a different repo shape, not a
+        # vacuous run, and keying on the count alone red-lines it. That is the
+        # SAME mistake the aggregate floor above already made once, so it is
+        # worth stating: a population floor must distinguish "empty" from
+        # "absent", and the existing C3 case caught both attempts.
+        snapshot_dirs_present = any(Path(d).is_dir() for d in SNAPSHOT_RULE_DIRS)
+        snapshot_pop = sum(
+            1
+            for p in files
+            if any(d in p.as_posix() for d in SNAPSHOT_RULE_DIRS)
+        )
+        if snapshot_dirs_present and snapshot_pop == 0:
+            print(
+                "ERROR: the accessibility-snapshot rule population is empty (no "
+                f"tracked *.md under {', '.join(SNAPSHOT_RULE_DIRS)}). A rule "
+                "with nothing to check is vacuous, not clean. Fail-closed.",
+                file=sys.stderr,
+            )
+            return 2
 
     hard: list[str] = []
     advisory: list[str] = []
@@ -269,11 +437,15 @@ def main(argv: list[str]) -> int:
     if hard:
         for e in hard:
             print(e, file=sys.stderr)
+        n_snap = sum(1 for e in hard if "accessibility-snapshot rule:" in e)
+        n_path = len(hard) - n_snap
         print(
-            f"\nFAIL: {len(hard)} resolvable credential-file path literal(s). "
-            "Such a path makes Claude Code's harness auto-attach the real file "
-            "into model context when the doc loads — neutralize each one "
-            f"({RECIPE}).",
+            f"\nFAIL: {n_path} resolvable credential-file path literal(s) and "
+            f"{n_snap} unrouted accessibility snapshot(s) in an authentication "
+            "flow. A resolvable path makes Claude Code's harness auto-attach the "
+            "real file into model context when the doc loads — neutralize each "
+            f"one ({RECIPE}). An unrouted snapshot renders input values, "
+            "including ones the agent never supplied, into the transcript.",
             file=sys.stderr,
         )
         return 1

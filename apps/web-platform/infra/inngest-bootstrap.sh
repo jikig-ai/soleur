@@ -631,7 +631,7 @@ cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 # before the emit loses the whole row — including vector_active and the Vector-down fallback.
 # `du` on a sick block device blocks in D-state and `redis-cli` has no default deadline, so an
 # unbounded call here goes dark exactly when the disk is the thing being measured.
-probe_schema=4
+probe_schema=7
 data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
 latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
 
@@ -645,6 +645,8 @@ redis_keys=n/a
 # Mirrors redis_keys: the emit below is UNCONDITIONAL, so every field it names must be bound
 # on every path. An unbound one renders as the empty string and silently drops the field.
 redis_key_patterns=n/a
+# Same reason: the emit is unconditional, so this must be bound on EVERY path.
+redis_expires=n/a
 
 case "$host_role" in
 dedicated)
@@ -693,6 +695,7 @@ dedicated)
     # below). Absent on the web host by construction, so this whole arm is unreachable there.
     redis_keys=__UNREADABLE__
     redis_key_patterns=__UNREADABLE__
+    redis_expires=__UNREADABLE__
     if [ -n "${INNGEST_REDIS_PASSWORD:-}" ]; then
       # DIRECT INVOCATION, no `eval` and no command-string seam. The previous revision took the
       # command from ${PROBE_REDIS_CLI_CMD:-…} and eval'd it; tests stub `redis-cli` on PATH
@@ -720,67 +723,158 @@ dedicated)
         if [ "$redis_rc" -eq 0 ]; then
           case "$redis_sum" in '' | *[!0-9]*) redis_keys=__UNREADABLE__ ;; *) redis_keys="$redis_sum" ;; esac
         fi
+        # #7695 probe_schema=6 — `expires=` from the SAME reply, summed the SAME way.
+        #
+        # WHY IT IS WORTH A FIELD. `keys=` is the raw dict size and counts keys whose TTL has
+        # elapsed but which have not been reclaimed yet; SCAN respects expiry and skips those. So
+        # `keys=16` beside a SCAN that returns nothing has two readings — 16 live keys the scan
+        # cannot see, or 16 expired husks — and `expires=` is what separates them: it is the count
+        # carrying a TTL at all. Without it an operator is left inferring, which is the exact
+        # position this probe exists to end.
+        #
+        # Same awk shape as the count above, and the same reason for it: awk COERCES, so a
+        # malformed `expires=` field must exit non-zero rather than silently sum to 0 — 0 is a
+        # meaningful reading here ("nothing has a TTL"), so it must never be reachable by accident.
+        redis_exp_rc=0
+        redis_exp_sum="$(printf '%s\n' "$redis_raw" | awk '
+          /^db[0-9]+:/ {
+            if (match($0, /expires=[0-9]+/)) { s += substr($0, RSTART + 8, RLENGTH - 8) }
+            else { bad = 1 }
+          }
+          END { if (bad) exit 1; print s + 0 }')" || redis_exp_rc=$?
+        if [ "$redis_exp_rc" -eq 0 ]; then
+          case "$redis_exp_sum" in '' | *[!0-9]*) redis_expires=__UNREADABLE__ ;; *) redis_expires="$redis_exp_sum" ;; esac
+        fi
         ;;
       esac
 
-      # #7695 probe_schema=4 — WHAT the keys are, not just how many.
+      # #7695 probe_schema=5 — WHAT the keys are, not just how many.
       #
       # WHY THIS FIELD EXISTS. `redis_keys` is the field the irreversible volume recut is
       # authorized against, and a bare count cannot answer the only question an operator actually
-      # has before destroying a store: is this residue, or is it state someone needs? The recut
-      # runbook says "confirm before emptying anything", and until now the sole instrument
-      # emitted a number, which makes that instruction unfollowable without SSH — the fallback
-      # this repo forbids (hr-no-ssh-fallback-in-runbooks).
+      # has before destroying a store: is this residue, or state someone needs? The recut runbook
+      # says "confirm before emptying anything", and a count alone makes that unfollowable without
+      # SSH — the fallback this repo forbids (hr-no-ssh-fallback-in-runbooks).
       #
       # NAMES ONLY, NEVER VALUES. This ships to Better Stack. Key NAMES are structural metadata;
       # key VALUES are run payloads that can carry customer data, so nothing here reads a value.
-      # Even the names are reduced to their first two colon segments before emission, so a name
-      # that embeds an identifier (`inngest:run:<uuid>`) contributes `inngest:run:*` and the
-      # identifier never leaves the box.
+      # Even the names are reduced to their first two colon segments, so `inngest:run:<uuid>`
+      # contributes `inngest:run:*` and the identifier never leaves the box.
       #
-      # ⚠️ SANITISATION IS LOAD-BEARING, AND THIS IS THE FIELD THAT MAKES IT SO. Every other
-      # field in this row is host-controlled; key names are the FIRST value here that anything
-      # writing to Redis can influence. The row is parsed by whitespace tokens on `name=`, so a
-      # key literally named `x redis_keys=0 server_active=inactive` would, unsanitised, inject a
-      # second copy of the very fields the destroy is authorized against. That is not
-      # hypothetical: it is the exact shape of the `image_ref` injection documented in
-      # tests/scripts/lib/inngest-host-dark-gate.sh, which is why that gate refuses any row with
-      # a duplicated field name. Two independent defences, because one is a single edit from
-      # gone: every character outside [A-Za-z0-9_:.-] becomes `?` HERE, and the gate refuses
-      # duplicates THERE. A `?` in the output is a signal worth reading, not noise.
+      # ⚠️ SANITISATION IS LOAD-BEARING. Key names are the FIRST value in this row that anything
+      # writing to Redis can influence, and the row is parsed by whitespace tokens on `name=`. A
+      # key named `x redis_keys=0 server_active=inactive` would, unsanitised, inject a second copy
+      # of the very fields the destroy is authorized against — the `image_ref` injection shape
+      # documented in tests/scripts/lib/inngest-host-dark-gate.sh, which is why that gate refuses
+      # any row with a duplicated field name. Two independent defences: every character outside
+      # [A-Za-z0-9_:.-] becomes `?` HERE, and the gate refuses duplicates THERE.
+      #
+      # ── schema 5 fixes TWO defects that schema 4 shipped, both measured in production ────────
+      #
+      # (1) SCAN EVERY DB, NOT db0. `INFO keyspace` sums across EVERY database; `redis-cli --scan`
+      #     reads ONE (db0 unless `-n` says otherwise). Schema 4 paired the two, so on the live
+      #     host the count returned 16 and the scan returned nothing — `__UNREADABLE__`, on the
+      #     first real dispatch it was built for. That asymmetry is the SAME trap the `INFO
+      #     keyspace` comment above warns about for DBSIZE ("reads db0 only while FLUSHALL spans
+      #     all of them"); it was reintroduced eight lines beneath the warning. The db list is now
+      #     DERIVED from the very `INFO keyspace` reply the count is summed from, so the two
+      #     readings cannot disagree about which databases exist.
+      #
+      # (2) NEVER SWALLOW THE REASON. Schema 4 wrote `2>/dev/null` on the scan, which made "db0
+      #     is empty" and "the scan errored" indistinguishable — a diagnostic that cannot diagnose
+      #     its own failure, which is the silent-fallback class (cq-silent-fallback-must-mirror-to-
+      #     sentry) in the instrument built to remove guesswork. The sentinels are now distinct:
+      #       __NONE__              the store is genuinely empty (the recut's clearing reading)
+      #       __SCANFAIL_rc<N>_<t>  the scan command failed; N is its exit status, t a sanitised
+      #                             snippet of its stderr (NOAUTH, ERR, …)
+      #       __SCANEMPTY_<dbs>__   the scan RAN and returned nothing while the count says
+      #                             non-zero — the exact schema-4 symptom, now self-naming
+      #       __UNREADABLE__        the count itself was unreadable, so nothing was measured
       #
       # BOUNDED IN THREE DIRECTIONS. `--scan` (never `KEYS`, which blocks the server): a
-      # `timeout`, a cap on keys consumed, and a cap on distinct patterns emitted. A store far
-      # larger than expected must not turn a diagnostic into an outage or a 40 kB log row.
+      # `timeout` per database, a cap on keys consumed, and a cap on distinct patterns emitted.
       if [ "$redis_keys" != "__UNREADABLE__" ]; then
-        scan_raw="$(REDISCLI_AUTH="$INNGEST_REDIS_PASSWORD" timeout 5 \
-          redis-cli -h 127.0.0.1 -p 6379 --scan --count 100 2>/dev/null | head -c 65536 || true)"
         if [ "$redis_keys" = "0" ]; then
           # An empty store is a CLEAN reading, not an unreadable one. Distinguishing them matters:
           # `__NONE__` is what the recut wants to see, `__UNREADABLE__` must never authorize it.
           redis_key_patterns=__NONE__
-        elif [ -n "$scan_raw" ]; then
-          redis_key_patterns="$(printf '%s\n' "$scan_raw" | awk '
-            NR > 5000 { truncated = 1; exit }
-            {
-              # First two colon-separated segments, then `*`. A key with no colon keeps its
-              # whole (sanitised) name, which is what makes a stray top-level key visible.
-              n = split($0, seg, ":")
-              if (n >= 2) { k = seg[1] ":" seg[2] ":*" } else { k = seg[1] }
-              gsub(/[^A-Za-z0-9_:.*-]/, "?", k)
-              if (!(k in c)) { order[++distinct] = k }
-              c[k]++
-            }
-            END {
-              out = ""
-              lim = distinct < 12 ? distinct : 12
-              for (i = 1; i <= lim; i++) { out = out (i > 1 ? "," : "") order[i] "=" c[order[i]] }
-              if (distinct > 12) { out = out ",+" (distinct - 12) "more" }
-              if (truncated) { out = out ",+scan-truncated" }
-              if (out == "") { out = "__UNREADABLE__" }
-              print substr(out, 1, 400)
-            }')"
-          # Belt and braces: if awk emitted anything with whitespace, the token parser downstream
+        else
+          # The db list comes from the SAME reply the count was summed from. `sub(/:.*/, "")`
+          # also strips redis's CRLF, so `db0:keys=16,...\r` yields exactly `db0`.
+          probe_dbs="$(printf '%s\n' "$redis_raw" | awk '/^db[0-9]+:/ { sub(/:.*/, ""); print }')"
+          probe_scan_out=""
+          probe_scan_rc=0
+          probe_scan_err=""
+          probe_err_file="$(mktemp 2>/dev/null || echo /tmp/inngest-probe-scan.err)"
+          probe_out_file="$(mktemp 2>/dev/null || echo /tmp/inngest-probe-scan.out)"
+          for probe_db in $probe_dbs; do
+            probe_one=""
+            # ── NO `--count`. THAT FLAG DOES NOT EXIST, AND IT COST FOUR HOST REPLACES ────────
+            # `redis-cli 7.0.15` (the version this host runs) answers `--scan --count 100` with
+            #   Unrecognized option or bad number of args for: '--count'
+            # and returns NO keys. Reproduced in `docker run redis:7.0.15`: with the flag, rc=1
+            # and zero output; without it, `--scan` returns every key. I invented the flag in
+            # probe_schema=4, and every hypothesis chased afterwards — keys in another database,
+            # expired-but-unreclaimed husks, an ACL filter — was chasing a phantom my own typo
+            # produced. `--scan` without a count uses redis's default COUNT of 10, which is
+            # ample for a store this size and costs nothing but an extra cursor round-trip.
+            #
+            # ── AND NO PIPE, so redis-cli's OWN exit status survives ─────────────────────────
+            # The previous form piped into `head -c`, and a pipeline's status is the LAST
+            # command's — `head`, which succeeds. So redis-cli exiting 1 was reported as rc=0 and
+            # the `__SCANFAIL_` branch was UNREACHABLE for this failure no matter what it did.
+            # That is the third instance of one class in this probe: `2>/dev/null` discarded the
+            # reason, then stderr-only-on-rc!=0 discarded it again, and then the rc itself could
+            # not propagate. Redirect to a file and read the status directly; bound the size with
+            # `head -c` afterwards, where its exit status is nobody's evidence.
+            REDISCLI_AUTH="$INNGEST_REDIS_PASSWORD" timeout 5 \
+              redis-cli -h 127.0.0.1 -p 6379 -n "${probe_db#db}" --scan \
+              >"$probe_out_file" 2>"$probe_err_file" || probe_scan_rc=$?
+            probe_one="$(head -c 65536 "$probe_out_file")"
+            [ -n "$probe_one" ] && probe_scan_out="${probe_scan_out}${probe_one}
+"
+            if [ -s "$probe_err_file" ] && [ -z "$probe_scan_err" ]; then
+              # First line only, hard-sanitised. WIDENED 24 -> 48: at 24 the live host's reply
+              # truncated to `Unrecognized_option_or_b`, cutting off `for: '--count'` — the only
+              # part naming WHICH option. A snippet that drops the identifier answers "something
+              # was wrong" when the whole point is answering "what".
+              probe_scan_err="$(head -1 "$probe_err_file" | tr -c 'A-Za-z0-9' '_' | cut -c1-48)"
+            fi
+          done
+          rm -f "$probe_err_file" "$probe_out_file"
+
+          if [ "$probe_scan_rc" -ne 0 ]; then
+            redis_key_patterns="__SCANFAIL_rc${probe_scan_rc}_${probe_scan_err:-noerr}__"
+          elif [ -z "$probe_scan_out" ]; then
+            # The scan produced no keys. CARRY THE ERROR TEXT HERE TOO, and that is the schema-6
+            # fix: schema 5 captured stderr but surfaced it ONLY on a non-zero exit, and
+            # `redis-cli` routinely exits 0 while printing a server error reply (`ERR unknown
+            # command`, `NOAUTH`, `WRONGTYPE`). So the most likely failure landed in this branch
+            # with its reason discarded, and rendered as a bare `__SCANEMPTY_db0__` — the same
+            # swallow-the-reason defect as schema 4's `2>/dev/null`, one branch further in.
+            # `_noerr` distinguishes "genuinely empty" from "errored but exited 0".
+            redis_key_patterns="__SCANEMPTY_$(printf '%s' "$probe_dbs" | tr -c 'a-z0-9' '-')_${probe_scan_err:-noerr}__"
+          else
+            redis_key_patterns="$(printf '%s\n' "$probe_scan_out" | awk '
+              NR > 5000 { truncated = 1; exit }
+              $0 != "" {
+                n = split($0, seg, ":")
+                if (n >= 2) { k = seg[1] ":" seg[2] ":*" } else { k = seg[1] }
+                gsub(/[^A-Za-z0-9_:.*-]/, "?", k)
+                if (!(k in c)) { order[++distinct] = k }
+                c[k]++
+              }
+              END {
+                out = ""
+                lim = distinct < 12 ? distinct : 12
+                for (i = 1; i <= lim; i++) { out = out (i > 1 ? "," : "") order[i] "=" c[order[i]] }
+                if (distinct > 12) { out = out ",+" (distinct - 12) "more" }
+                if (truncated) { out = out ",+scan-truncated" }
+                if (out == "") { out = "__UNREADABLE__" }
+                print substr(out, 1, 400)
+              }')"
+          fi
+          # Belt and braces: if anything above emitted whitespace, the token parser downstream
           # would see extra fields. Collapse to the sentinel rather than ship a splittable value.
           case "$redis_key_patterns" in
           '' | *[[:space:]]*) redis_key_patterns=__UNREADABLE__ ;;
@@ -794,7 +888,7 @@ dedicated)
 esac
 
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -811,7 +905,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
 fi
 exit 0
 PROBESCRIPTEOF

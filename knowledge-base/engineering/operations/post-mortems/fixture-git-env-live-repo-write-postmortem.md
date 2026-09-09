@@ -162,6 +162,55 @@ unambiguously and turned a vague "my branch moved" into a reproducible measureme
   interacted to empty a third's assertion domain. Recorded in
   `knowledge-base/project/learnings/2026-09-04-a-10-of-10-mutation-score-and-ten-escapes-it-could-not-see.md`.
 
+## Addendum — 2026-09-09 (#7987): the fixture-side defence landed, and shipped the same defect three times
+
+Appended, not substituted: everything above is the 2026-09-06 record as written and stands
+unchanged. This section records what the follow-on work found.
+
+PR #7987 lands the **shell** half of the defence-in-depth layer that `## Action Items &
+Follow-ups` tracks as #7849 — the layer *behind* the runner-boundary fix, for the case where a
+suite is invoked without going through `scripts/test-all.sh` at all. It closes #7835 (the
+issue filed for this incident's fixture-side residue) and leaves #7849 and #7822 open.
+
+Re-measured on `a50ef75e2` with #7822's own predicate, made `git -C`-aware:
+
+```
+                          BEFORE   AFTER
+repo-wide                     38      32
+  plugins/soleur/test/         5       0     <- discharged by #7987
+  remainder                   33      32
+    of which .claude/hooks/   12      12     <- untouched by design
+```
+
+`test-helpers.sh` adoption across `plugins/soleur/test/*.test.sh` moves 44/88 → 49/89 under the
+indirection-resolving encoding. The denominator grows because #7987 adds
+`git-fixture-containment.test.sh`, which deliberately does **not** adopt: it controls the
+tripwire, so sourcing the helper would abort it in the exact arms it exists to exercise.
+
+### What this adds to `## Lessons Learned`
+
+A seven-agent review found **three P0s in the PR whose entire subject is this incident**, and
+each performed the harm recorded in `## Symptom` above. All three were reproduced on synthesized
+decoys before being fixed:
+
+- the new containment suite committed the developer's uncommitted work onto their live branch,
+  flipped `commit.gpgsign`, and rewrote `user.email` — because it built its victim fixture with
+  `git -C "$VICTIM"` *before* deriving its own scrub, and `-C` does not protect against an
+  inherited `GIT_DIR`;
+- `proc.test.sh` breached the caller while reporting `Total: 61  pass: 61  FAIL: 0`, rc=0;
+- `fixture-dir-operand-assert.test.sh` reproduced the 2026-08-20 incident recorded in its own
+  file header.
+
+The single cause: **all three had a guard, and all three placed it downstream of the write it
+describes.** A precondition detects; only a refusal prevents. The remedy was a refusal above the
+first write, derived from the same source of truth rather than transcribed. Full write-up:
+`knowledge-base/project/learnings/2026-09-09-a-precondition-detects-only-a-refusal-prevents.md`.
+
+This belongs in the incident record rather than only in a learning file because it is direct
+evidence about `## Where we got lucky`: the fixture-side residue was not merely unremediated
+between 2026-09-06 and 2026-09-09 — the first attempt to remediate it re-performed it, and
+reported green while doing so.
+
 ## Action Items & Follow-ups
 
 Every action item and follow-up so this incident cannot recur.
@@ -169,3 +218,4 @@ Every action item and follow-up so this incident cannot recur.
 | Issue | Action | Status |
 |---|---|---|
 | #7849 | Adopt `gitFixtureEnv()` at every remaining fixture-creating suite (defence in depth behind the process-boundary fix) | open |
+| #7822 | Lint the remaining population against the sweep predicate — 32 repo-wide after #7987, 12 of them under `.claude/hooks/` (this issue's ask 2; asks 1 and 3 are discharged) | open |

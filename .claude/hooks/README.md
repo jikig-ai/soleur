@@ -449,6 +449,7 @@ helper itself errors.
 | `guardrails.sh` | 6 | `guardrails-block-commit-on-main`, `guardrails-block-rm-rf-worktrees`, `guardrails-block-delete-branch`, `guardrails-block-conflict-markers`, `guardrails-require-milestone`, `hr-never-git-stash-in-worktrees` |
 | `pencil-open-guard.sh` | 1 | `cq-before-calling-mcp-pencil-open-document` |
 | `worktree-write-guard.sh` | 1 | `guardrails-worktree-write-guard` |
+| `browser-snapshot-credential-guard.sh` — **ships in `plugins/soleur/hooks/`**, not here, because `${CLAUDE_PLUGIN_ROOT}` resolves into the installed plugin and a script under `.claude/` never reaches a customer (#7947). Its suite lives here because `.claude/hooks/*.test.sh` is an auto-globbed suite path. | 1 | — (plain deny) |
 
 ### PreToolUse rewriters (no deny semantics)
 

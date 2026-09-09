@@ -424,8 +424,8 @@ jobs:
           # here; the `apply` job's copy is the enforcement, because the apply
           # re-plans and what it plans is what actually reaches prod.
           bash "${GITHUB_WORKSPACE}/scripts/sentry-adoption-plan-assert.sh" \
-            /tmp/sentry-pr-plan.json 27 \
-            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+            /tmp/sentry-pr-plan.json 1 \
+            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 
           # ── CREATE gate (#6589) ──────────────────────────────────────────
           # Runs BEFORE the destroy gate and has NO [ack-destroy] bypass: an
@@ -898,8 +898,8 @@ jobs:
           # any plan with no adoption rows, so it is inert from the run after
           # this one onward.
           bash "${GITHUB_WORKSPACE}/scripts/sentry-adoption-plan-assert.sh" \
-            /tmp/sentry-apply-plan.json 27 \
-            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+            /tmp/sentry-apply-plan.json 1 \
+            "${GITHUB_WORKSPACE}/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 
           counts=$(bash "${GITHUB_WORKSPACE}/scripts/sentry-destroy-counts.sh" /tmp/sentry-apply-plan.json) || {
             echo "::error::sentry destroy counters could not be computed for the apply plan; refusing to apply."

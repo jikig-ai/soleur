@@ -1458,6 +1458,8 @@ fi
 
 **Fail-open conditions** (the hook exits silently): branch is `main`/`master`, detached HEAD, no upstream tracking ref, bare-repo context, branch name fails refname validation. **Fail-closed on fetch failure** — a stale tracking ref re-introduces the silent-miss class this gate exists to prevent, so the hook denies and prompts the operator to fetch manually. See rule `wg-ship-push-before-merge` in `AGENTS.rules.md` for the canonical contract.
 
+**PUSHED IS NOT THE SAME AS FINISHED — BATCH EVERY FORESEEABLE COMMIT BEFORE QUEUEING `--auto`.** The gate above asks whether what you have is pushed; it cannot ask whether what you have is all you will need. Any commit you can foresee wanting — a late ADR, a review fix you already know is coming, a measurement you have not yet written down — belongs in the tree BEFORE `gh pr merge --squash --auto` is queued, and the place to do that work is the review-agent wait, which is dead time you are already spending. **Anything you land during that wait is outside the snapshot the reviewers read** (`rf-before-spawning-review-agents-push-the`: subagents analyse remote state at spawn time), so push it and re-cover it before you accept their findings — otherwise batching work into the wait buys a cycle and spends a review. Pushing after `--auto` is queued resets the head ref and restarts the entire required-check set at the worst possible moment: the PR is one check from merging, and the cycle it restarts is gated by a single job that runs roughly 5-9x longer than any other (see "Settle-then-admin-merge escape hatch" under Phase 7 for the measured figure and its derivation). **Why:** #7896 burned ~6 full CI cycles, one of them because a correct-but-late ADR commit landed at 65 of 67 checks — the change was known-needed earlier in the session, and moving it into the review wait would have cost nothing.
+
 **Hook ordering** matters: the gate is wired AFTER [`pre-merge-rebase.sh`](../../../../.claude/hooks/pre-merge-rebase.sh) in [`.claude/settings.json`](../../../../.claude/settings.json) so any auto-sync push performed by the rebase hook has updated the upstream tracking ref before this gate counts unpushed commits. `T11` in [`ship-unpushed-commits-gate.test.sh`](../../../../.claude/hooks/ship-unpushed-commits-gate.test.sh) enforces the ordering invariant — keep it green if either hook moves.
 
 ## Phase 6: Push and Create PR
@@ -2035,12 +2037,44 @@ The sync is capped at `MAX_BEHIND_SYNCS=6` per poll invocation. A pathological c
 
 **ADR-ordinal collision after a sync.** A BEHIND auto-sync can pull a sibling's newly-landed `ADR-NNN-*.md` into the branch, colliding with an ADR this branch introduced at the same ordinal. `adr-ordinals` is not a required check, so the collision does NOT block the queued auto-merge — it surfaces only as RED CI on `main` post-squash (PR #5945 → hotfix #5952). Whenever you observe an auto-sync whose `git merge origin/main` output lists `knowledge-base/engineering/architecture/decisions/`, re-run `bash scripts/check-adr-ordinals.sh` before the next merge attempt; on `NEW ADR ordinal collision`, renumber the branch's ADR to the next free ordinal + sweep refs (Phase 5.5 "ADR-Ordinal Collision Gate"), commit, and push. This is the Phase 7 half of that gate — mirrors the migration-number collision re-check.
 
-**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` is merging PRs faster than this PR's ~8-minute CI cycle, the auto-sync loop livelocks: every `git merge origin/main` push bumps the head ref, re-triggers the full required-check set, and `main` moves again before the checks settle — so the branch is never `CLEAN`-at-current-`main` and GitHub's queued auto-merge never fires (learning `2026-06-02-auto-merge-livelock-fast-moving-main.md`, surfaced on PR #4774). At the 6-sync cap, if this change has **zero conflict surface** (a docs/skill edit, an additive file, anything that cannot semantically conflict with what's landing on `main`), the up-to-date requirement is *purely procedural* and can be bypassed deterministically:
+**Settle-then-admin-merge escape hatch (zero-conflict-surface changes only).** When `main` is merging PRs faster than this PR's CI cycle, the auto-sync loop livelocks: every `git merge origin/main` push bumps the head ref, re-triggers the full required-check set, and `main` moves again before the checks settle — so the branch is never `CLEAN`-at-current-`main` and GitHub's queued auto-merge never fires (learning `2026-06-02-auto-merge-livelock-fast-moving-main.md`, surfaced on PR #4774). **That cycle is ~35 minutes, not the ~8 this paragraph used to claim, so the livelock is close to structural rather than exceptional.** Measured 2026-09-08 over the five most recent completed `main` CI runs: `test-scripts` took 34/36/36/35/36 min while the next-longest job took 4 min (7 min once). Re-derive rather than trust it — the figure moved 27 -> 35 in a single day, and #7907 shards this job:
 
-1. **Stop auto-syncing.** The loop has already capped itself; do not hand-roll more `git merge origin/main` pushes (that is the livelock).
-2. **Confirm required checks are green on the CURRENT SHA** — `gh pr checks <N>` must show no required check in a `pending` or `fail` bucket (the canonical poll loop reads this via `gh pr checks --json name,bucket`). `--admin` bypasses ONLY the up-to-date gate, **NOT** the checks; merging with a red or pending required check ships unverified code.
+```bash
+for id in $(gh run list --branch main --workflow CI --limit 5 --status completed \
+             --json databaseId --jq '.[].databaseId'); do
+  gh api "repos/{owner}/{repo}/actions/runs/$id/jobs?per_page=100" --jq '[.jobs[]
+    | select(.completed_at != null)
+    | {n: .name, m: (((.completed_at|fromdateiso8601) - (.started_at|fromdateiso8601))/60|floor)}]
+    | sort_by(-.m) | .[0:2] | map("\(.n)=\(.m)m") | join(" ")'
+done
+```
+
+**Trigger it at 2 consecutive BEHIND syncs on a branch WHOSE OWN DIFF touches nothing but docs, skills and regenerable indexes — not at the 6-sync cap.** Keyed on your diff, not on the conflicts you happened to hit, because those are different sets and only one of them is checkable. A branch carrying real code plus a regenerated index can conflict *so far* only on the index and still have genuine semantic surface; the loop also never prints a conflict surface at sync 2, since the only sync that reaches 2 is a clean one (a conflicting `git merge origin/main` aborts and breaks on the first occurrence). So classify the branch, which you can do in one command:
+
+```bash
+git diff --name-only origin/main...HEAD | grep -vE \
+  '^(knowledge-base/|docs/|plugins/soleur/skills/|.*\.md$)' \
+  | grep -vE '^knowledge-base/(INDEX\.md|kb-(tags|categories)\.txt)$' || echo "hatch-eligible"
+```
+
+The observation point for the count is the loop's own `auto-sync attempt 2/6` line; nothing else fires at sync 2.
+
+**BEHIND only, and not DIRTY.** #7937 proposed "DIRTY/BEHIND"; that half is wrong twice over. The poll block's DIRTY arm `break`s on the first observation, so a second consecutive DIRTY sync is unobservable by the instrument this paragraph sits beside — only `behind_syncs` is counted. And `--admin` bypasses branch protection, never an actual conflict: GitHub's merge endpoint refuses a PR it has computed as unmergeable, so the hatch cannot execute on a DIRTY PR at all. DIRTY keeps its own exit and its own recovery path.
+
+**REGENERABLE INDEX is narrower than "generated file", and the difference is load-bearing.** [merge-pr/SKILL.md](../merge-pr/SKILL.md) §3.2b defines this repo's generated class and it includes **lockfiles**. A lockfile conflict is the opposite of semantically inert — it means dependency versions moved on `main` — and admin-merging a stale one bypasses `lockfile-sync`, `dependency-review` and `CodeQL`, which is precisely the supply-chain surface. So the trigger is scoped by enumeration, not by class name: `knowledge-base/INDEX.md`, `kb-tags.txt`, `kb-categories.txt`, `model.likec4.json`, `rule-metrics.json`. **A lockfile conflict is NOT this trigger**, even though a lockfile is generated.
+
+**And the regeneration is what makes it safe, so do it before step 2, not after the merge.** Re-run the owning generator against the merged tree, commit the result, and let the checks settle on THAT sha. `model.likec4.json` is byte-gated on `main` by `c4-model-freshness.test.sh`, so admin-merging a stale copy reddens `main` on a test job — a case the "expected side effect" carve-out below does NOT cover, because that carve-out rests on there being nothing runtime to cut over.
+
+Two things this does not buy. Six syncs is **not** three hours: `MAX_POLL_MIN=60` with one `sleep 60` per iteration caps the whole invocation at 60 minutes, and `behind_syncs` is per-invocation, so all six fit inside it. What triggering early actually saves is the settle time of four further head-ref bumps — minus the one full settle step 2 still requires, because sync 2 has just bumped the ref itself. And the poll block's own `MAX_POLL_MIN` comment still records `test-scripts` at a median of 28 min from an older 12-run sample; the 34-36 figure above supersedes it and the comment was left alone only because editing the fenced block would desynchronise the mirror and its fixture.
+
+**Why:** #7896 rode the normal path through ~4 cycles before anyone reached for this hatch, on a change whose only repeated conflict was a generated index. The trigger names a set rather than one file, so it outlives any single member: once #7935's merge driver lands, `knowledge-base/INDEX.md` leaves the set without emptying it — `kb-tags.txt`, `kb-categories.txt`, `model.likec4.json` and `rule-metrics.json` remain.
+
+At that trigger or at the 6-sync cap, if this change has **zero conflict surface** (a docs/skill edit, an additive file, anything that cannot semantically conflict with what's landing on `main`), the up-to-date requirement is *purely procedural* and can be bypassed deterministically:
+
+1. **Stop auto-syncing.** At the 6-sync cap the loop has already capped itself. At the sync-2 trigger it has NOT — stop the Monitor task yourself before proceeding, or it keeps syncing underneath you and step 3's `git reset --hard` races its `git merge`/`git push` in the same worktree. Either way, do not hand-roll more `git merge origin/main` pushes (that is the livelock).
+2. **Confirm required checks are green on the CURRENT SHA** — `gh pr checks <N>` must show no required check in a `pending` or `fail` bucket (the canonical poll loop reads this via `gh pr checks --json name,bucket`). **`--admin` bypasses the ENTIRE `required_status_checks` rule — all 22 contexts as well as the up-to-date gate — so nothing server-side will stop a red or pending merge; this step is the only check that exists.** Measured against `infra/github/ruleset-ci-required.tf`: `strict_required_status_checks_policy` and every `required_check` are sibling parameters of ONE rule, and `ci-required-ruleset-canonical-bypass-actors.json` grants OrganizationAdmin and RepositoryRole 5 `bypass_mode: "pull_request"`. Ruleset bypass is granted per rule, never per parameter. This paragraph previously claimed `--admin` bypassed "ONLY the up-to-date gate, NOT the checks"; that was false for this repo, and it was the sole thing standing between the hatch and an unverified merge.
 3. **Sync local → origin** so the local ref is fast-forward with the pushed head: `git fetch origin && git reset --hard origin/<branch>` (this discards any uncommitted or un-pushed local work on the branch — confirm `git status` is clean first).
-4. **Admin-merge:** `gh pr merge <N> --squash --admin`. This bypasses only the "branch must be up to date with base" rule.
+4. **Admin-merge:** `gh pr merge <N> --squash --admin`. This bypasses the whole `required_status_checks` rule, not just its "branch must be up to date with base" parameter — step 2 is what makes it safe, and step 2 is discipline, not enforcement.
 5. **Retry the transient race.** A busy `main` returns `Base branch was modified. Review and try the merge again.` between the check read and the merge call; loop with a short backoff until it lands: `for i in $(seq 1 20); do gh pr merge <N> --squash --admin && break; sleep 18; done`.
 
 Do **not** use this hatch for a change with real conflict surface — there, the up-to-date requirement is load-bearing and the correct move is to merge during a quieter window (or resolve the conflict and let CI re-verify).
@@ -2386,6 +2420,8 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
   - **Self-armed Inngest oneshot** (autonomous — no operator, no GH-Actions): when the verification needs fire-time prd secrets / an installation-token repo write and has bespoke logic, ship a reviewed `oneshot-*.ts` + a `server/index.ts` boot-arm (ADR-046). It fires server-side at a future `ts` and reports to an issue / Sentry on its own. Precedent `oneshot-heartbeat-recovery-verify.ts`; see [`inngest-oneshot-and-reminder-patterns.md`](../../../../knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md).
   - **Generic reminder primitive** (autonomous — **no deploy**): for a one-off issue comment or a *registered* check, arm it via `POST /api/internal/schedule-reminder` (Bearer `INNGEST_MANUAL_TRIGGER_SECRET`, allowlisted `action`) — no new function, no deploy. Same runbook.
 
+   <!-- markdownlint-enable MD007 -->
+
    Bare "operator manually checks" with NO scripted gate is non-compliant with
    `hr-no-dashboard-eyeball-pull-data-yourself` AND `wg-pm-class-followthrough-for-operator-dogfood`
    (#4188). If the operator-confirmed pattern is unsuitable, the verification is not
@@ -2539,6 +2575,8 @@ Note: The DIRTY (merge conflict) exit is already handled inside the poll block �
 
 - **Claude Code:** `skill: soleur:postmerge <PR-number>`
 - **Grok Build:** `/postmerge <PR-number>`
+
+   <!-- markdownlint-enable MD007 -->
 
    **Do NOT ask the operator** whether to run postmerge or monitor deploy — invoke it in the same turn.
 

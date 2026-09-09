@@ -9,7 +9,7 @@ views {
     title "Soleur Platform — System Context (C4 L1)"
 
     include
-      founder, emailSender, betaContact, contributor,
+      founder, emailSender, betaContact, contributor, publicReader,
       platform, platform.webapp, platform.engine, platform.infra.supabase,
       // platform.plugin is included explicitly so the delivery edges from
       // soleurMarketplace have a rendered target — without it the marketplace
@@ -28,7 +28,7 @@ views {
     title "Soleur Platform — Containers (C4 L2)"
 
     include
-      founder, emailSender, betaContact, contributor,
+      founder, emailSender, betaContact, contributor, publicReader,
       platform.webapp, platform.engine, platform.plugin, platform.infra,
       platform.webapp.dashboard, platform.webapp.api, platform.webapp.auth,
       platform.engine.claude, platform.engine.skillloader, platform.engine.hooks,
