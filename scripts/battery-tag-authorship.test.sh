@@ -480,6 +480,17 @@ ck; if (( orphans == 0 )); then
 else
   fail "$orphans orphan ledger entr(ies) — the site was fixed, deleted, or its marker removed"
 fi
+# The ceiling has ONE home: ADR-207 section 5. Assert the local constant equals it, so a ceiling
+# raised locally to make a run green cannot drift away from the decision record that governs it.
+# Fail CLOSED: an unreadable ADR or an unparseable line is a failure, never a skipped check.
+_adr="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-207-repo-write-boundary-harm-partition.md"
+_adr_ceiling="$({ grep -oE "The exemption ledger's ceiling is \*\*[0-9]+\*\*" "$_adr" 2>/dev/null || true; } | grep -oE '[0-9]+' | head -1)"
+ck; if [[ -n "$_adr_ceiling" && "$_adr_ceiling" == "$LEDGER_CEILING" ]]; then
+  pass "ledger ceiling matches its single home in ADR-207 section 5 ($LEDGER_CEILING)"
+else
+  fail "ledger ceiling drift: guard says '$LEDGER_CEILING', ADR-207 section 5 says '${_adr_ceiling:-<unreadable>}' — the ADR is the one home"
+fi
+
 ck; if (( ${#LEDGER[@]} <= LEDGER_CEILING )); then
   pass "exemption ledger within ceiling (${#LEDGER[@]} <= $LEDGER_CEILING)"
 else

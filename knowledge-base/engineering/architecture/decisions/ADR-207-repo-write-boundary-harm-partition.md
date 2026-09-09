@@ -126,7 +126,7 @@ each request looks locally reasonable, and only the list makes the cumulative po
 | 3 | `refs`: a non-own, non-tag ref DELETED | #7702 | `cleanup_merged_worktrees()` deletes merged branches |
 | 4 | `refs`: `refs/heads/<default>` MOVED | #7702 | the sibling `git pull` shape |
 | 5 | `refs`: a non-own, non-default, non-tag ref CREATED or MOVED | #7702 | `worktree add -b`; sibling branch work |
-| 6 | `refs`: a collision-free `refs/tags/*` **CREATED** | #7795 | measured live: a `git fetch` auto-follows tags, and `worktree-manager.sh` runs one inside `cleanup_merged_worktrees()`, which `/work` Phase 0 runs at the START of every session |
+| 6 | `refs`: a collision-free `refs/tags/*` **CREATED** | #7795 | measured live: a `git fetch` auto-follows tags, and `worktree-manager.sh` runs one inside `cleanup_merged_worktrees()`, which `/work` Phase 0 runs at the START of every session. **Bounded by `scripts/battery-tag-authorship.test.sh`** (#7917) — see §5 |
 
 **Counting note, stated because a wrong count here is worse than none.** Cells 1-5 all landed in
 a single commit with the `REPORT` class itself (`git log -S'shared_store' -- scripts/lib/repo-write-boundary.sh`
@@ -167,6 +167,56 @@ named `main`, `master`, `HEAD` or `origin` (`git tag | grep -c '/'`, `git tag | 
 'main|master|HEAD|origin'` — both 0). The absolute count is deliberately imprecise: it was 3054
 when this was drafted and 3056 at review, two days apart. Real release tags are `v3.262.3` /
 `web-v0.261.4` shaped.
+
+### 5. What bounds cell 6, and the shape of the thing that bounds it
+
+Cell 6 is the only softened cell whose safety rests on a set the classifier cannot inspect. Cells
+1-5 name shapes a sibling produces and the operator's own tree does not; cell 6 names a shape
+**anything** can produce, and under `shared_store` §2's measurement invariant forbids re-deriving
+who produced it. So the cell is safe exactly while the battery is not itself a tag author, and
+nothing in the classifier can check that.
+
+`scripts/battery-tag-authorship.test.sh` (#7917) is what checks it, and the shape of that guard is
+itself a decision worth recording.
+
+**It does not assert the property the cell needs.** The property the cell needs — *no battery
+command writes a tag into the LIVE repository* — is not statically decidable. The working directory
+is set by callers frames away, and `git -C "$x"` with `$x` empty is a documented no-op that runs in
+the caller's cwd. The evidence that this is not a solvable parsing problem is historical: two
+independent static adjudications of this exact question reached OPPOSITE answers, one naming
+`worktree-manager.sh` as a live author and one concluding the set was already empty. A third
+adjudication would have been a third opinion.
+
+**It asserts a decidable property instead.** Every tag-authoring command in the closure of
+executables reachable from `scripts/test-all.sh` either suppresses tag creation ON ITS OWN COMMAND
+LINE, or carries a `repo-boundary-tag-exempt:` marker in the two preceding lines AND a matching
+entry in the guard's ledger. That is checkable, and it degrades toward a false OFFENDER — a
+declaration is demanded where none was needed — rather than toward a false green.
+
+**Its verb set is the cell's verb set, not `git fetch`.** This row says a tag CREATED, by anything.
+A fetch-scoped guard would be literally true about fetches while green over `git pull`, over a
+suite's own `git tag -a`, and over `git update-ref refs/tags/…`. Widening the verbs widens the
+ledger, and that is the intended trade: the suite that TESTS this boundary is the one place a
+deliberate tag author belongs, and declaring it is strictly better than a classifier that cannot
+see it.
+
+**`EXEMPT` is accepted risk, not a fix.** An exempted site still authors a tag into whatever
+repository it is standing in. What the exemption buys is that it is *declared*: a reader at the
+call site learns why, and this ledger shows the cumulative position — the same two-place argument
+§3 makes for itself. An exemption whose site is later fixed, deleted, or has its marker removed is
+an ORPHAN and reddens; the check is a bijection in both directions, because a one-directional check
+is where offenders go to be forgotten.
+
+**Ceiling governance, and its single home.** The exemption ledger's ceiling is **12**. That number
+lives HERE and nowhere else; the guard asserts its own constant equals this line, so the two cannot
+drift. Raising it is an edit to this ADR — deliberately, because a ceiling raised locally to make a
+run green is not a ceiling. A ceiling paired with the bijection can be loose; without the bijection
+it is satisfied equally by an empty ledger and by a ledger full of ghosts.
+
+**What this does NOT establish.** The guard reads tracked source. It cannot see a tag authored by an
+untracked file, by a heredoc body it declined to parse, or by a command constructed at runtime from
+a variable. Those are declared in its header as approximations rather than left implicit. Cell 6 is
+bounded, not closed.
 
 ## Consequences
 
