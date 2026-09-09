@@ -8,9 +8,58 @@ issue: 7055
 closes: 7055
 priority: p2-medium
 domain: engineering
-brand_survival_threshold: all-users incident
+brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-09-09
+**Panels run:** six-agent plan review (architecture-strategist, spec-flow-analyzer,
+kieran-rails-reviewer, code-simplicity-reviewer, dhh-rails-reviewer, user-impact-reviewer), then a
+deepen pass adding observability-coverage-reviewer, security-sentinel, a verify-the-negative sweep
+and a post-edit self-audit. Domain review: CTO, CPO, GDPR gate.
+
+### What the deepening actually bought
+
+Almost none of it was elaboration. Nine claims this plan asserted were **falsified by running a
+command**, and each correction is recorded inline where the claim used to be:
+
+1. The `readonly DOPPLER_API_PINNED` remedy does not clear the Rule D finding — hoisting the
+   multi-line payload does, and the plan had ordered them backwards. Measured on real copies.
+2. The repo-wide summary prints live-offender counts, not baseline file lines, so the post-drawdown
+   A/B/C figure is **101**, not 103. As written, a blocking criterion would have failed on a correct
+   implementation.
+3. The linter emits a **conditional** xtrace arm for `provision-doppler.sh`, whose token arrives from
+   `read -rs` after the prologue — so "use the conditional arm wherever the linter offers one" would
+   have shipped a guard that is open at guard time over an operator's Doppler token.
+4. The hosted path is **not** a no-op: `AGENT_ENV_ALLOWLIST` forwards the proxy variables and `HOME`
+   into the agent subprocess by design, and the original grep scope could not see a TypeScript
+   allowlist.
+5. `readRefusalReasonLive` throws, so a promise can **reject** — five outcome classes, not four, and
+   the partition must be over `settled` rather than `results`.
+6. `AC1` degraded into a repo-wide run, because `targets_from_args()` falls through to
+   `all_shell_files()` on an empty path list.
+7. Guard 2's glob-crossing mutation row was masked by the pre-existing shape arm, so the row it was
+   meant to discriminate stayed green.
+8. Guard 3 had one row that a CHECK constraint makes unrunnable and one whose detector does not exist.
+9. The runbook premise was refuted by the runbook itself three lines above the edited line:
+   `eu-fsn-3` and `eu-central-1a` are the same cluster, not different regions.
+
+### What it removed
+
+The brief's `highwater` task (no such artifact), the per-run-unique fixture (already on `main` at the
+flaking commit), the opt-in seam (10 of 12 suites never reach the check), the `DOPPLER_API_PINNED`
+constant, and a concurrent control that would have added live-DB contention to the suite being
+repaired for intermittent redness.
+
+### What it added
+
+A proxy-aware failure line for the seven customer-facing scripts — the most likely real-world
+consequence of shipping, which the plan named and then did not mitigate. Phase 4b, which serializes
+the tenant-integration concurrency group so the PR removes a plausible cause rather than renaming a
+symptom. And the finding that `record_byok_use_and_check_cap`'s founder-scoped meter genuinely does
+pool across sibling delegations, which gives the null-change control a non-trivial target.
 
 ## Overview
 
@@ -875,10 +924,17 @@ one-liner for the eight that acquire credentials at runtime via `doppler secrets
   key, the Cloudflare API token and the Inngest trigger secret. The exposure is invisible to us in
   both halves: these scripts execute on someone else's machine (observability layer 7), and a
   forwarded request that succeeds is indistinguishable from a correct one.
-- **Brand-survival threshold:** `all-users incident` — the maximum across the two populations. The
-  customer-facing seven are a `single-user incident`; the operator-only eight put Soleur's production
-  service-role key on an unconfined transport, which is an all-users exposure. The declaration takes
-  the max, not the average.
+- **Brand-survival threshold:** `single-user incident` — and read the scope note, because the label
+  understates this one. The enum recognised by the gates is `single-user incident | aggregate pattern
+  | none`; there is no higher value, and `aggregate pattern` means a pattern accumulating across
+  users over time, which is a different shape, not a more severe one. The customer-facing seven are a
+  true single-user incident. The operator-only eight put Soleur's production service-role key on an
+  unconfined transport, so one compromised operator environment exposes **every** customer's rows in
+  a single event. The declaration is pinned to the enum value that engages the escalation — CPO
+  sign-off at plan time and `user-impact-reviewer` at review time — both of which are already engaged
+  here. An earlier draft wrote `all-users incident`, which is more accurate as prose and invalid as a
+  token: preflight Check 6 matches the value as a discrete token against that three-value enum, so it
+  would have failed the ship-time gate.
 
 ### Two neighbours the fifteen do not cover
 
@@ -951,7 +1007,7 @@ liveness_signal:
 
 error_reporting:
   destination: "no Sentry project — this is a build-time guard, not a runtime surface. The plugin scripts themselves have no error sink: they execute on the user's machine (observability layer 7) and report only to that user's own terminal."
-  fail_loud: "the linter prints `<path>:<line>: credentialed curl is not transport-confined ...` and exits 1; betterstack-query.sh prints `refusing to send credentials to a BETTERSTACK_QUERY_HOST outside *.betterstackdata.com` on stderr and exits 2; a plugin script under xtrace prints `[FATAL] refusing to trace with a live credential set (see #7797)` and exits 78"
+  fail_loud: "the linter prints `<path>:<line>: credentialed curl is not transport-confined ...` and exits 1; betterstack-query.sh prints `refusing to send credentials to a BETTERSTACK_QUERY_HOST outside *.betterstackdata.com` on stderr and exits 2; a plugin script under xtrace prints its refusal on STDOUT (constitution: operator-protection signals go to stdout, because agent runtimes swallow stderr) and exits 78"
 
 failure_modes:
   - mode: "a new or edited shell script forwards a credential through an unconfined curl"
@@ -988,6 +1044,33 @@ credentials and no network. The `grep` is deliberate — the scanned-file count 
 anywhere in the repo adds or removes a shell script, so pinning it would make this probe fail for
 reasons unrelated to the property it reports. The two counts are the property, and the
 `expected_output` above is those counts after this PR moves them.
+
+## Encryption Posture
+
+This plan introduces **no** persistent data store and **no** new cross-component connection: no
+`.tf`, no `supabase/migrations/*.sql`, no cloud-init and no compose file appears in `## Files to
+Edit`. The gate is recorded rather than skipped silently because the plan's prose names two store
+classes (Better Stack as a log sink, Supabase as a database) and a reader could reasonably ask.
+
+It does **narrow** one existing connection, so that one is declared:
+
+```yaml
+in_transit:
+  - connection: "scripts/betterstack-query.sh -> Better Stack ClickHouse read endpoint"
+    tls: "HTTPS, enforced by the literal https:// scheme in run_sql's URL; the host is the only
+          interpolated part and after this change it must suffix-match *.betterstackdata.com"
+    cert_verification: "on — curl's default; the script does not pass -k/--insecure, and it unsets
+          CURL_CA_BUNDLE, SSL_CERT_FILE and SSL_CERT_DIR so a caller cannot substitute a trust store"
+    does_not_defend: "an attacker who can set BETTERSTACK_QUERY_SH, which re-points the whole script
+          rather than its destination and leaves the host pin intact — a strict superset of the seam
+          this change closes, named in Non-Goals. Nor does it defend against a compromised vendor
+          endpoint, or against the credential being read from the environment by another process on
+          the same host."
+    disclosed_as: "no change to any published disclosure — the connection and its credential already
+          existed; this narrows where the credential may be sent."
+```
+
+No `exception` block: no `plaintext-exception` mechanism and no `cert_verification: off` row.
 
 ## Guard Contract
 
@@ -1180,6 +1263,13 @@ soak-gated, so no `adopting` status is needed.
 
 ### Pre-merge (PR)
 
+**A note on running these.** Several criteria expect a `grep` to find nothing, and `grep -c`
+returning `0` **exits 1**. Under any `set -e` verification wrapper those abort the run and read as a
+failed criterion when the criterion actually passed. Write each as
+`[[ "$(grep -c … || true)" == "0" ]]`, or use `grep -c … || true` and compare. This applies to
+criteria 2, 8, 23 and 24.
+
+
 1. `python3 scripts/lint-shell-trace-credential-refusal.py <the 15 paths from `## Files to Edit`, written out literally>` exits 0 with `OK: 15 scanned file(s), 0 baselined (A/B/C), 0 baselined (D)`. **The paths must be literal.** Two earlier forms were both defective and both would have passed: deriving them from the D baseline scans nothing once Phase 2.4 empties it of `plugins/` entries, and — worse — `targets_from_args()` falls through to `all_shell_files()` when `args.paths` is empty, so the command silently becomes the repo-wide run, honours both baselines, prints `OK`, exits 0, and certifies nothing about the fifteen while duplicating AC3. Deriving them from `git diff --name-only` is better but still degrades to a repo-wide scan if the diff is empty. `15 scanned file(s)` in the output is the guard against all three.
 2. The set removed from each baseline equals exactly the 15 paths — `git diff` on the two baseline files shows 15 deletions each, zero additions, and `grep -c '^plugins/'` returns `0` for the D baseline and `5` for the A/B/C one. (Membership, which a count cannot verify: an equal-sized swap keeps the count and breaks the property.)
 3. `python3 scripts/lint-shell-trace-credential-refusal.py` (repo-wide, unscoped) prints `OK: <n> scanned file(s), 101 baselined (A/B/C), 67 baselined (D)` and exits 0. **101, not 103, and the difference is not an error.** That line prints `len(offenders)` — files that are *both* baselined and still violating — not the baseline file's line count. Measured on the current tree it reads `116 baselined (A/B/C), 82 baselined (D)` while the files hold 118 and 82: two A/B/C entries (`apps/web-platform/infra/inngest-bootstrap.sh` and `scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`) are stale, listed but no longer violating. So the printed A/B/C count goes 116 → 101 while the file goes 118 → 103, and AC2's file-level count of 103 is also correct. An earlier draft predicted 103 here by subtracting from the file count instead of from the measured one — a blocking criterion that would have failed on a correct implementation and invited someone to "fix" the drawdown to hit it.
@@ -1265,9 +1355,13 @@ threshold. The four conditions, and their disposition:
 1. **Split `## User-Brand Impact` by surface and raise the threshold.** Adopted. The seven
    `community/*` scripts carry the user's own tokens; the eight operator-only scripts carry Jikigai's
    `soleur/prd` service-role key. Verified independently by reading each script's credential block.
-   The threshold moved from `single-user incident` to **`all-users incident`**, the max across the
-   two populations. This is a correction to the brief's stated framing, which described the failure
-   mode as "one user's project key".
+   The threshold stays at the gate-valid `single-user incident` — see the scope note in that section
+   for why the label understates the operator half, and why `all-users incident` (which a draft did
+   write) is invalid: preflight Check 6 matches the value as a discrete token against a three-value
+   enum. What the CPO asked for and got is the split by surface and the severity stated in prose. The
+   escalation the threshold buys — CPO sign-off and `user-impact-reviewer` — is engaged either way.
+   This is still a correction to the brief's stated framing, which described the failure mode as
+   "one user's project key": that holds for the customer-facing seven and understates the other eight.
 2. **Answer the hosted path.** Adopted. `vendor_plugin: true` puts the same files in the production
    image, so the layer-7 citation is conditional on execution surface. Measured: no curl-visible
    proxy and no `curlrc` on that path, so both flags are no-ops there and fail safe. AC28 re-measures
@@ -1329,20 +1423,37 @@ the synthetic namespace (nothing suggests it does).
 1. A shipped plugin script runs with a hostile `~/.curlrc` present: the credential goes to the coded
    host, not the one the config file names.
 2. The same script runs with `HTTPS_PROXY` set: the request does not traverse the proxy.
-3. The same script runs under `bash -x` with the credential set: it exits 78 before any request.
-4. The same script runs under `bash -x` with the credential **unset**: it proceeds, so the refusal is
-   scoped to the hazard rather than blanket.
-5. `betterstack-query.sh` with the live production host: works unchanged.
-6. `betterstack-query.sh` with the live host plus an explicit `:443`: works.
-7. `betterstack-query.sh` with `attacker.example`, with `evil.com/?x=.betterstackdata.com`, and with
-   `notbetterstackdata.com`: each refused, no request.
-8. T5 with all ten calls healthy: every exact equality passes, unchanged from today.
-9. T5 with one call returning an error: fails on the errored partition, naming the code and message.
-10. T5 with one call returning a non-hourly refusal: fails on the refused-other partition.
-11. Null-change control, sibling delegation B running concurrently: A's counts are exact and B's own
-    admitted count is M.
-12. Null-change control with B pointed at A's delegation id: the negative control fails, proving it
-    can be driven red.
+3. **A community script runs with `HTTPS_PROXY` set and the endpoint unreachable:** the user gets the
+   proxy-aware line naming the deliberate bypass, **not** "Check your network connection and try
+   again." This is the scenario the change most likely produces in the field, and the one an earlier
+   draft named in `## User-Brand Impact` and then never tested.
+4. The same script runs under `bash -x` with the credential set: it exits 78 before any request, and
+   the refusal is visible on stdout with stderr discarded.
+5. A community script runs under `bash -x` with every guarded credential **unset**: it proceeds, so
+   the refusal is scoped to the hazard rather than blanket. For `x-community.sh` and `x-setup.sh` all
+   **four** guarded variables must be unset — the arm is `-n` over a concatenation, so unsetting
+   three of four still exits 78.
+6. An operator script runs under `bash -x` with no credential set: it still exits 78 (unconditional
+   arm), including `provision-doppler.sh`, whose token arrives interactively after the prologue.
+7. `betterstack-query.sh` with the live production host `eu-central-1a-connect.betterstackdata.com`:
+   works unchanged.
+8. The same, plus an explicit `:443`: works — the port strip runs before the suffix match.
+9. `betterstack-query.sh` with `attacker.example`, with `betterstackdata.com.attacker.example`, and
+   with `notbetterstackdata.com`: each refused at exit 2, no request, with synthetic credentials set
+   so the refusal is reached rather than short-circuited by the credential-presence guard.
+10. The rung2 evidence-capture arm still discriminates on `exit 64`: the new host refusal must not
+    preempt it into a vacuous pass.
+11. T5 with all ten calls healthy: every exact equality passes, unchanged from today.
+12. T5 with one call returning a non-null `error`: fails on the errored partition, naming code and
+    message — not on `refused` with a bare count.
+13. T5 with one call whose payload is unreadable so `readRefusalReasonLive` throws: fails on the
+    rejected partition, not absorbed as `errored` with `undefined` fields.
+14. T5 with one call returning a non-hourly refusal reason: fails on the refused-other partition.
+15. Null-change control, **sequential**: B's M calls run to completion first (B admitted === M), then
+    A's N calls run and A's counts are exact. No `Promise.allSettled` mixes the two.
+16. Null-change control with B's delegation id **and** caller replaced by A's: the negative control
+    fails, proving it can be driven red. Moving the id alone does not work — it raises
+    `42501 caller_not_grantee` and ledgers nothing.
 
 ## Non-Goals / Out of Scope
 
@@ -1408,16 +1519,26 @@ tracking issue rather than in-plan documentation:
   `/soleur:trigger-cron` POSTs at Soleur production with an empty bearer. Only
   `provision-doppler.sh` carries the ADR-179-shaped monorepo-only refusal. This PR opens all eight
   files but adding the refusal to the other seven is a different change with its own failure modes.
-  File against #2719.
+  **File a new issue.** An earlier draft routed this to #2719 on a review suggestion; `gh issue view
+  2719` returns "feat: integrate skill-security-auditor pattern into skill-creator + agent-finder",
+  which is not this. Verified rather than assumed.
 - **`bsky-setup.sh`, `x-setup.sh` and `discord-setup.sh` write the user's tokens into `.env`.**
   Transport confinement does nothing about a `.env` that gets committed. Named here so it is not
   assumed closed by this PR.
 
 ## References
 
-- Issues: #7898 (open, `type/security`), #7055 (open, `flaky`). Context: #7873 (Rule D), #7797
-  (xtrace refusal), #7855 (the glob-crossing allowlist defect), #7829/#7914 (migration 137), #3934
-  (synthetic-fixture sweeper).
+- Issues: #7898 (OPEN, `type/security`), #7055 (OPEN, `flaky`). Context, each verified live with
+  `gh issue view` / `gh pr view` rather than cited from memory: #7873 (CLOSED — the Rule D origin),
+  #7797 (OPEN — the xtrace refusal), #7855 (CLOSED — the glob-crossing allowlist defect), **PR #7914
+  (MERGED — "a delegated cap refusal must persist its audit row — migration 137")**, #3934 (OPEN —
+  the synthetic-fixture sweeper).
+- **Citation correction:** the test file's own docstring attributes the return-status rewrite to
+  #7829, and an earlier draft of this plan repeated that. #7829 is actually
+  "sentry: byok-cap-exceeded may page nobody — the only rule of 27 with fallthrough_type NoOne" — a
+  different piece of work. The change that landed migration 137 is PR #7914. This plan cites #7914;
+  the stale attribution in the test docstring is left alone as out of scope, but noted so the next
+  reader does not re-inherit it.
 - `scripts/lint-shell-trace-credential-refusal.py` › `check_rule_d`, `_destination_vars`,
   `_adjudicated`, `_pin_re`, `_compared_to_literal_const`.
 - `scripts/fixtures/shell-trace-refusal/compliant-canonical.sh`,
