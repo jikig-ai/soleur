@@ -69,7 +69,19 @@ PR: #8002 (open, draft)
 
 - [x] 5.1 `git push -u origin feat-one-shot-git-data-rung2-boot-evidence`. Nothing exists on the
       remote before this.
-- [ ] 5.2 Read AC3 observation 2 explicitly: the freshness step must log
+- [ ] 5.2 **AC3 observation 2 is NOT SATISFIED — and cannot be while an unrelated pin drifts.**
+      Measured 2026-09-09 on run 34399613226: `deploy-script-tests` aborts at step 67
+      (`Run cloud-init inngest-bootstrap pin drift-guard`, v1.1.30 vs upstream v1.1.31), so
+      **step 130 `Rung-2 evidence freshness` reports `conclusion: skipped`** — it never ran.
+      The drift is pre-existing and time-triggered: `vinngest-v1.1.31` was tagged
+      `2026-09-09T19:59:26Z`, twelve minutes AFTER main's last green Infra Validation
+      (`19:46:52Z`), and `origin/main` carries the same `v1.1.30`, so main fails it too.
+      Tracked at #6286 (commented with the current pair; not filed anew).
+      AC3 observation 1 (the local working-copy proxy) DID pass: the gate prints
+      `RELEASED` at rc=0. Do NOT report AC3 as satisfied on the strength of that — obs 1 is
+      the proxy and obs 2 is the faithful one, which is precisely why the plan distinguishes
+      them. Original text:
+- [ ] 5.2b Read AC3 observation 2 explicitly: the freshness step must log
       `rung-2 evidence is valid for the current template.`, not its dormant line. Its job
       `deploy-script-tests` is **not** in `scripts/required-checks.txt` and `main` is not branch
       protected, so a red result would not block a merge. Read the conclusion.
