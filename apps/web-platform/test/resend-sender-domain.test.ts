@@ -18,12 +18,27 @@ import { describe, expect, it } from "vitest";
  * Resend. The `to:` on these paths is still on jikigai.com, whose DNS is
  * mid-migration (#7995), and nothing here detects that breaking.
  *
- * The forbidden domain is assembled at runtime, and every source read is
- * comment-stripped before matching: a source-scanning guard that spelled the
- * domain literally, or matched against prose, would be satisfied by its own
- * explanatory comments.
+ * Every source read is comment-stripped before matching: a source-scanning
+ * guard that matched against prose would be satisfied by its own explanatory
+ * comments, and this file necessarily discusses the domain it guards against.
  */
-const FORBIDDEN_SENDER_DOMAIN = ["jikigai", "com"].join(".");
+/**
+ * Sender domains Resend will actually accept, i.e. those carrying its
+ * verification records. This is an ALLOWLIST on purpose. A denylist of the one
+ * domain that broke answers "is it jikigai.com again", which is a narrower
+ * question than the one this file's name asks — a third unverified domain would
+ * pass it. Verified live 2026-09-09: soleur.ai carries a DKIM TXT at
+ * `resend._domainkey` and SPF+MX at `send`; outbound.soleur.ai is the separate
+ * verified cold-send subdomain (ADR/#5325). Adding a domain here is a claim that
+ * it carries those records — check before you add one.
+ */
+const VERIFIED_SENDER_DOMAINS = new Set(["soleur.ai", "outbound.soleur.ai"]);
+
+/** `Name <local@domain>` or a bare address -> domain, lowercased. */
+function domainOf(sender: string): string | null {
+  const m = sender.match(/@([A-Za-z0-9.-]+)>?\s*$/);
+  return m ? m[1].toLowerCase().replace(/>$/, "") : null;
+}
 
 /** Raw `fetch` against the REST endpoint. */
 const RAW_FETCH_PATTERN = "api\\.resend\\.com/emails";
@@ -155,8 +170,11 @@ describe("Resend sender domain", () => {
     const offenders: string[] = [];
     for (const rel of sites) {
       for (const sender of sendersIn(readFileSync(`${root}/${rel}`, "utf8"))) {
-        if (sender.includes(FORBIDDEN_SENDER_DOMAIN)) {
-          offenders.push(`${rel}: from=${sender}`);
+        const domain = domainOf(sender);
+        if (domain === null) {
+          offenders.push(`${rel}: unparseable sender ${sender}`);
+        } else if (!VERIFIED_SENDER_DOMAINS.has(domain)) {
+          offenders.push(`${rel}: from=${sender} (domain ${domain} not verified)`);
         }
       }
     }
