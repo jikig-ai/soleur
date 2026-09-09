@@ -650,7 +650,57 @@ try:
             ceiling_err = ("could not read reusable workflow %s: %s"
                            % (callee_rel, str(e).replace("\n", " ")))
 
-    crit = max(release_ceiling, job_timeout("await-ci"))
+    # --- CI declared to-test path (#5806 / ADR-215) ---
+    # WAS job_timeout("await-ci"). That job is GONE: the deploy now fires on a
+    # workflow_run completed event from ci.yml rather than polling for CI inside
+    # this workflow. job_timeout() returns the GitHub 360 default for an ABSENT
+    # job, so leaving the old term here would compute max(60, 360) + 135 = 495,
+    # over the 207 threshold, and drive B9 RED on the very change that is correct.
+    # The hazard is recorded in web-platform-release.yml COUPLED comment:
+    # "an absent ceiling reads as the GitHub 360 default, not as zero."
+    #
+    # The replacement term is the one that actually gates the deploy now: the CI
+    # DECLARED path to its test aggregator, read out of ci.yml. release and CI
+    # both start from the same push and run in PARALLEL, so the arm the deploy
+    # waits on is max(release, ci_to_test) -- not a serial sum, as before.
+    #
+    # NOTE FOR EDITORS: no apostrophes in this block. It is interpolated inside a
+    # single-quoted shell string, where one apostrophe ends the string and the
+    # shell parses the remainder as commands.
+    ci_to_test = DEFAULT_JOB_TIMEOUT_MIN
+    ci_path = os.path.join(os.path.dirname(os.path.abspath(rel_path)), "ci.yml")
+    try:
+        ci = yaml.safe_load(open(ci_path))
+        cijobs = ci.get("jobs") or {}
+
+        def ci_timeout(name):
+            global ceiling_err
+            j = cijobs.get(name) or {}
+            if "timeout-minutes" not in j:
+                if not ceiling_err:
+                    ceiling_err = "ci.yml job %s declares no timeout-minutes" % name
+                return DEFAULT_JOB_TIMEOUT_MIN
+            try:
+                return int(j["timeout-minutes"])
+            except (TypeError, ValueError):
+                if not ceiling_err:
+                    ceiling_err = "ci.yml job %s has a non-integer timeout-minutes" % name
+                return DEFAULT_JOB_TIMEOUT_MIN
+
+        # test-scripts is the long leg; test is the aggregator reporting the
+        # required status the deploy arm keys on. Their sum is the CI declared
+        # path to the verdict, which is the quantity the deploy waits for.
+        ci_to_test = ci_timeout("test-scripts") + ci_timeout("test")
+    except Exception as e:
+        if not ceiling_err:
+            ceiling_err = "could not read ci.yml: %s" % str(e).replace("\n", " ")
+    emit("CI_DECLARED_PATH_MIN", ci_to_test)
+
+    # resolve-target is in the max() rather than the sum: its only unbounded
+    # activity is a liveness poll on the RELEASE run, so it overlaps the release
+    # arm rather than following it. Including it here is what stops a future
+    # ceiling raise on that job from silently escaping the budget.
+    crit = max(release_ceiling, ci_to_test, job_timeout("resolve-target"))
     for j in ("migrate", "verify-migrations", "deploy"):
         crit += job_timeout(j)
 
@@ -1016,7 +1066,7 @@ run_part_b() {
   # a changed graph: insert a job before `deploy`, or raise the dominated verify-doppler-secrets
   # (10m) to 200, and the formula still returns 195 while the real bound is larger.
   assert_eq "B8e the set of jobs with a needs-path to deploy is unchanged" \
-    "await-ci,migrate,release,verify-doppler-secrets,verify-migrations" \
+    "migrate,release,resolve-target,verify-doppler-secrets,verify-migrations" \
     "${X_DEPLOY_NEEDS_CLOSURE:-<unset>}"
 
   # B9 -- threshold safety, in the SAFE direction: a pipeline timeout INCREASE fails the
@@ -1366,6 +1416,13 @@ make_sandbox() {
   cp "$REPO_ROOT/.github/workflows/scheduled-prod-version-drift.yml" "$dst/.github/workflows/" || return 1
   cp "$RELEASE_WORKFLOW" "$dst/.github/workflows/web-platform-release.yml" || return 1
   cp "$MONITORS_TF" "$dst/apps/web-platform/infra/sentry/cron-monitors.tf" || return 1
+  # B9 reads CI's declared to-`test` path out of ci.yml since #5806 replaced the
+  # `await-ci` term with it, so the sandbox must carry ci.yml too. Without it the
+  # extraction falls back to the GitHub 360 default, B9 reds in EVERY sandbox arm,
+  # and the C0 control fails — which is the harness reporting a defect in itself,
+  # not in the tree. Same class as the reusable-workflow copy below: a suite that
+  # RELOCATES its subject must carry every file that subject resolves.
+  cp "$REPO_ROOT/.github/workflows/ci.yml" "$dst/.github/workflows/ci.yml" || return 1
 
   # B8 resolves jobs.release.uses and reads the CALLEE's timeout-minutes, so the sandbox must
   # carry the reusable workflow too. Without it every mutation child hits an unresolvable

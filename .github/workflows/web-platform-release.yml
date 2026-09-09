@@ -211,7 +211,15 @@ jobs:
     if: always() && github.event_name != 'push'
     needs: [release]
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    # 60 = the `release` job's own ceiling (declared on the callee,
+    # reusable-release.yml). This job's only unbounded activity is the liveness
+    # poll on the RELEASE run for this SHA, so that run's ceiling bounds this one.
+    # It must not EXCEED the release ceiling or it would dominate the declared
+    # critical path in scripts/prod-version-drift-check.test.sh (B9) and push the
+    # pipeline budget past DRIFT_SUSTAINED_THRESHOLD_MIN. In practice the residual
+    # wait is ~0: release and CI start together and release's measured median is
+    # 7.11 min against CI's 35+, so by the time this arm fires the release is done.
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read
@@ -225,7 +233,19 @@ jobs:
       release_result: ${{ steps.resolve.outputs.release_result }}
       should_deploy: ${{ steps.resolve.outputs.should_deploy }}
       skip_reason: ${{ steps.resolve.outputs.skip_reason }}
+      soft_breach: ${{ steps.budget.outputs.soft_breach }}
+      soft_elapsed_s: ${{ steps.budget.outputs.soft_elapsed_s }}
+      soft_ceiling_s: ${{ steps.budget.outputs.soft_ceiling_s }}
+      ci_budget_min: ${{ steps.budget.outputs.ci_budget_min }}
+      ci_declared_path_min: ${{ steps.budget.outputs.ci_declared_path_min }}
     steps:
+      # `actions/checkout` IS permitted here and is NOT permitted on `deploy`. The
+      # prohibition is specific to `deploy`, which drives the cutover over a webhook
+      # while holding the cross-pipeline `web-1-swap` lock — a checkout there would
+      # pull ~1.5k files onto the runner holding that lock. `resolve-target` holds no
+      # lock and drives no deploy, which is exactly why the derivation lives here.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
       - name: Resolve the deploy target
         id: resolve
         env:
@@ -419,6 +439,114 @@ jobs:
           emit release_result "$release_result"
           emit should_deploy "true"; emit skip_reason ""
           echo "resolved: version=$version tag=$tag sha=$WR_HEAD_SHA"
+
+      # ─────────────────────────────────────────────────────────────────────
+      # CI-BUDGET CREEP DETECTOR — relocated, not deleted (#5806, ADR-215).
+      #
+      # `await-ci` carried the only creep detector on this pipeline: a
+      # `::warning::` at 0.7 x CEILING_S (ADR-212 Decision 4). Deleting the job
+      # deletes CEILING_S, and deleting the warning with it would regress the
+      # property and undo what #7902 shipped. So it moves here.
+      #
+      # THE REFERENCE IS DERIVED FROM A CONSTANT THAT IS ALREADY OWNED AND
+      # ALREADY CI-ASSERTED — never a fresh literal, which is precisely what
+      # ADR-212 Decision 3 rejected arithmetic for.
+      # `DRIFT_SUSTAINED_THRESHOLD_MIN` is the declared end-to-end pipeline
+      # budget and check B9 in scripts/prod-version-drift-check.test.sh already
+      # asserts it stays >= the declared critical path. CI's ALLOWED share is
+      # that budget minus the declared ceilings of the jobs downstream of CI.
+      #
+      # TWO DIFFERENT QUANTITIES, PREVIOUSLY CONFLATED. Keep them apart:
+      #   CI_BUDGET_MIN     — what the pipeline budget ALLOWS CI (207 - 135 = 72).
+      #                       The soft ceiling derives from this.
+      #   CI_DECLARED_PATH  — what CI DECLARES for itself (test-scripts 60 +
+      #                       test 10 = 70). B9's arithmetic uses this.
+      # `CI_DECLARED_PATH <= CI_BUDGET_MIN` is the headroom statement that makes
+      # the whole budget hold, and it is asserted below rather than assumed.
+      # Every term is READ from the tree, so the number moves when a ceiling does.
+      - name: Derive the CI budget and check for creep
+        id: budget
+        env:
+          RUN_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
+          RUN_UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+
+          read_threshold() {
+            grep -oE '^DRIFT_SUSTAINED_THRESHOLD_MIN=[0-9]+' scripts/prod-version-drift-check.sh \
+              | grep -oE '[0-9]+$' | head -1
+          }
+          # Job-scoped `timeout-minutes`, read from the workflow itself.
+          # awk, not an inline python heredoc: a `run: |` block scalar terminates
+          # at the first line indented LESS than the block, and a multi-line
+          # `python3 -c '...'` puts its body at column 0. That is a YAML parse
+          # error, not a runtime one — it breaks the whole file.
+          job_ceiling() {
+            awk -v job="$2" '
+              $0 ~ "^  " job ":$" { inb = 1; next }
+              inb && /^  [a-zA-Z0-9_-]+:$/ { exit }
+              inb && /^    timeout-minutes:[[:space:]]*[0-9]+[[:space:]]*$/ {
+                gsub(/[^0-9]/, ""); print; exit
+              }
+            ' "$1"
+          }
+
+          THRESHOLD=$(read_threshold)
+          REL=.github/workflows/web-platform-release.yml
+          M=$(job_ceiling "$REL" migrate)
+          V=$(job_ceiling "$REL" verify-migrations)
+          D=$(job_ceiling "$REL" deploy)
+          TS=$(job_ceiling .github/workflows/ci.yml test-scripts)
+          T=$(job_ceiling .github/workflows/ci.yml test)
+          for pair in "THRESHOLD:$THRESHOLD" "migrate:$M" "verify-migrations:$V" \
+                      "deploy:$D" "test-scripts:$TS" "test:$T"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "::error::could not read ${pair%%:*} from the tree — the CI budget is underived, so the creep detector would be measuring against a made-up number"
+              exit 1
+            fi
+          done
+
+          CI_BUDGET_MIN=$(( THRESHOLD - M - V - D ))
+          CI_DECLARED_PATH_MIN=$(( TS + T ))
+          # 0.7 — the same factor ADR-212 Decision 4 chose for the ceiling this
+          # replaces. Derived from CI_BUDGET_MIN, never restated as a literal.
+          SOFT_CEILING_S=$(( CI_BUDGET_MIN * 60 * 7 / 10 ))
+          emit ci_budget_min "$CI_BUDGET_MIN"
+          emit ci_declared_path_min "$CI_DECLARED_PATH_MIN"
+          emit soft_ceiling_s "$SOFT_CEILING_S"
+          echo "CI_BUDGET_MIN=${CI_BUDGET_MIN} CI_DECLARED_PATH_MIN=${CI_DECLARED_PATH_MIN} soft_ceiling_s=${SOFT_CEILING_S}"
+
+          # HEADROOM INVARIANT. If CI declares more for itself than the pipeline
+          # budget allows it, the budget is already broken and the soft ceiling is
+          # measuring against a quantity the pipeline cannot honour.
+          if [ "$CI_DECLARED_PATH_MIN" -gt "$CI_BUDGET_MIN" ]; then
+            echo "::error::CI declares ${CI_DECLARED_PATH_MIN}m to its test aggregator but the pipeline budget allows only ${CI_BUDGET_MIN}m (DRIFT_SUSTAINED_THRESHOLD_MIN ${THRESHOLD} minus migrate ${M} + verify-migrations ${V} + deploy ${D}). Raise the threshold or lower a CI ceiling."
+            exit 1
+          fi
+          if [ "$SOFT_CEILING_S" -le 0 ]; then
+            echo "::error::derived soft ceiling is ${SOFT_CEILING_S}s — a non-positive ceiling would fire on every run"
+            exit 1
+          fi
+
+          # Measure the REAL quantity: how long the CI run actually took.
+          if [ "$EVENT_NAME" != "workflow_run" ] || [ -z "${RUN_STARTED_AT:-}" ]; then
+            emit soft_breach "false"; emit soft_elapsed_s ""
+            echo "not a workflow_run event — no CI duration to measure"
+            exit 0
+          fi
+          started=$(date -u -d "$RUN_STARTED_AT" +%s)
+          ended=$(date -u -d "$RUN_UPDATED_AT" +%s)
+          ELAPSED_S=$(( ended - started ))
+          emit soft_elapsed_s "$ELAPSED_S"
+          if [ "$ELAPSED_S" -gt "$SOFT_CEILING_S" ]; then
+            emit soft_breach "true"
+            echo "::warning::CI took ${ELAPSED_S}s for this SHA, past ${SOFT_CEILING_S}s (70% of the ${CI_BUDGET_MIN}m share the ${THRESHOLD}m pipeline budget allows it). CI is creeping toward the end-to-end budget; this is the signal that used to come from await-ci's soft ceiling."
+          else
+            emit soft_breach "false"
+            echo "CI elapsed ${ELAPSED_S}s, within the ${SOFT_CEILING_S}s soft ceiling"
+          fi
 
   migrate:
     needs: [resolve-target]
@@ -1518,6 +1646,34 @@ jobs:
       contents: read
     timeout-minutes: 5
     steps:
+      # THE CONSUMER FOR THE CI-BUDGET CREEP SIGNAL (I4's successor).
+      #
+      # `resolve-target` derives a soft ceiling and emits a `::warning::` when CI
+      # crosses it. A warning nothing reads is a warning nobody sees, which is why
+      # the suite this replaced carried a row (I4) asserting the old soft-ceiling
+      # output HAD a consumer — deleting the consumer was a silent regression the
+      # emitter could not detect. This step is that consumer, relocated with the
+      # signal. If you are removing it, remove the emitter too, or the guard reds.
+      - name: Surface the CI budget creep signal
+        if: always() && needs.resolve-target.outputs.soft_breach == 'true'
+        env:
+          ELAPSED_S: ${{ needs.resolve-target.outputs.soft_elapsed_s }}
+          CEILING_S: ${{ needs.resolve-target.outputs.soft_ceiling_s }}
+          BUDGET_MIN: ${{ needs.resolve-target.outputs.ci_budget_min }}
+          DECLARED_MIN: ${{ needs.resolve-target.outputs.ci_declared_path_min }}
+        run: |
+          set -uo pipefail
+          {
+            echo "### CI budget creep"
+            echo ""
+            echo "CI took **${ELAPSED_S}s** for this SHA, past the **${CEILING_S}s** soft ceiling"
+            echo "(70% of the ${BUDGET_MIN}m share the end-to-end pipeline budget allows CI)."
+            echo ""
+            echo "CI currently DECLARES ${DECLARED_MIN}m for itself. When the measured time"
+            echo "approaches the declared path, the next step is a larger shard count or a"
+            echo "shorter CI — not a bigger budget, which is how #7902 happened."
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::warning::CI budget creep: ${ELAPSED_S}s > ${CEILING_S}s soft ceiling (CI share ${BUDGET_MIN}m, declared ${DECLARED_MIN}m)"
       - name: Classify the run outcome
         id: outcome
         # #7138 — a STEP-level timeout, not just the job-level one. A hung classify used
