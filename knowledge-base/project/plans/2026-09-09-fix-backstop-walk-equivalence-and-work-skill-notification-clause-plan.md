@@ -257,6 +257,25 @@ skill and a learning file — no user data, no credential, no network, no produc
      no correlation to the invocation, so a stale line can decide a live gate.
    - `disabled` (a supported configuration, first-class-tested by T6) and `no_terminal_scope` still
      hard-fail, so the false-red class has live members beyond the one #7879 fixes.
+> **Correction 2026-09-09 (at /work, verified against #7879's head, not `main`):** two of the
+> four residue items above do **not** hold, and the first is broader than stated. Filed as #8008
+> in corrected form.
+>
+> - **Item 1 restated.** It is not six-of-seven. **Every** `live_mark` sits at its arm's opening,
+>   before any `pass`/`fail` — including `T10-ac7-sweep` at line 871, which this plan claimed
+>   #7879 had moved to emission. It has not; no arm is marked at emission. The ledger records
+>   reachability, never emission.
+> - **Item 2 holds.** `passes` is initialised at 61, incremented by `pass()` at 84, and read only
+>   at 1187/1191 to render `RESULT:`. No floor compares against it.
+> - **Item 3 REFUTED.** The e2e arm does not read the real repo ledger CWD-relatively: `E2E_LOG`
+>   is scratch-scoped at line 906, and T5c actively asserts the absence of a CWD-relative read.
+> - **Item 4 REFUTED.** `disabled` / `no_terminal_scope` no longer hard-fail: the `else` branch
+>   skips all six live arms on **any** decline outcome, not only `claude_pid_not_found`.
+>
+> Recorded rather than silently narrowed: filing items 3 and 4 would have put two false claims
+> about someone else's open PR on a public issue. This is the plan's own
+> "verify a measurement before it propagates" rule catching the plan.
+
 5. **Do not edit either backstop file in this PR.** Concurrent edits to a file #7879 changes by
    `+281/-46` guarantee a conflict, and Phase 2's whole finding is that the design there is better.
 
