@@ -1337,12 +1337,38 @@ gh pr view --json body --jq .body | awk '
   END { if (in_fence) exit 2 }' > "$COMBINED" \
   || gh pr view --json body --jq .body > "$COMBINED"   # fail-closed: unstripped
 PLAN=$(grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' "$COMBINED" | head -1 || true)
-[[ -n "$PLAN" && -f "$PLAN" ]] && cat "$PLAN" >> "$COMBINED"
+# Strip fenced blocks from the PLAN TOO. The body is stripped above precisely so a
+# quoted example cannot read as a live declaration; appending the plan raw stopped
+# that protection halfway through one corpus, and plans are where worked examples
+# and sample PR bodies actually live. Measured over 1905 plans: removes at least one
+# Ref/Tracks in 8 (the quoted-example class), recall unchanged at 36/42.
+[[ -n "$PLAN" && -f "$PLAN" ]] && { awk '/^```/ { f = !f; next } !f { print }' "$PLAN" >> "$COMBINED" || cat "$PLAN" >> "$COMBINED"; }
+# Say so when no plan resolved: every verdict below then comes from the body alone,
+# which is NOT the same fact as "read the plan and found no soak". Both used to exit
+# in silence, so a half-blind pass was indistinguishable from a clean one.
+[[ -n "$PLAN" && -f "$PLAN" ]] || echo "SOAK-CORPUS-BODY-ONLY: no readable plan/spec path in the PR body; scanned the body alone" >&2
+
+# Drop NEGATED soak vocabulary first — a sentence declaring that NO soak exists is
+# not a soak declaration. The negation window stops at a clause boundary so a
+# negation of something else ("(NOT `Closes`) — closure is gated on the post-deploy
+# soak") cannot silence a real declaration beside it. The unit is the LINE, not the
+# sentence: the target shape is a markdown table row whose label and disposition sit
+# in adjacent cells, and splitting on `.` shreds ordinals like `2.9.1`.
+awk '{ u = tolower($0) }
+     u ~ /(^|[^a-z])(no|not|nothing|none|never|n\/a|skip|skipped|zero|without)([^a-z][^.|)—–;:]{0,60})?soak/ { next }
+     u ~ /soak[^.|]{0,40}(: *(skip|none)|not applicable|n\/a|does not apply)/ { next }
+     { print }' "$COMBINED" > "$COMBINED.f" && mv "$COMBINED.f" "$COMBINED"
 
 # Soak signal: post-deploy time-gated close criteria expressed in prose.
 SOAK_RE='soak|stays? (at )?(~?0|zero)|[0-9]+[- ]day[s]?( post-deploy| soak)|post-deploy (soak|verif|observ)|adopting[[:space:]]*(→|->|to)[[:space:]]*accepted|status[[:space:]]+flip'
 SOAK_HIT=$(grep -niE "$SOAK_RE" "$COMBINED" | head -5 || true)
 ```
+
+**The negation pre-pass, and why the bare `soak` alternative could not simply be deleted.** `SOAK_RE` offers a bare `soak`, so it matched any mention — including a sentence asserting the section did not apply. The hook's own header already recorded the cause ("the regex is negation-blind", PR #7426) while fixing only the closing-target half beside it; it fired again on PR #7987, whose ONLY match across the entire corpus was the plan row `| 2.9.1 Soak follow-through | **Skip.** No acceptance criterion is time-gated; nothing here closes on a soak. |`. A gate that fires on the sentence exempting it trains its readers to reach for `SOLEUR_SKIP_SOAK_FOLLOWTHROUGH_GATE=1`.
+
+Deleting the bare alternative was measured and REJECTED: 174 of the 1905 tracked plans match through it alone, and real declarations live in prose forms the other alternatives miss ("across a soak window ≥ ~2h post-deploy"). Stripping negations instead was measured in both directions — 274 plans fired before, 207 after (67 false positives removed, 24%), with recall UNCHANGED at 36/42 across the plans carrying a real `soleur:followthrough script=` enrollment directive. Zero recall regression. Both halves are pinned by a matched pair in [ship-soak-followthrough-gate.test.sh](../../../../.claude/hooks/ship-soak-followthrough-gate.test.sh) (`soaknegated` must allow, `soaknegscoped` must still deny) — keep them together, because the allow case alone also passes if the strip eats everything.
+
+Note this block still lacks the hook's `Closes`/`Fixes` exclusion (#7278 / PR #7426). That drift predates this change and is not addressed here.
 
 If `$SOAK_HIT` is empty → **SKIP** silently (no soak-gated close criterion). If a soak signal fires, extract every tracker ref and verify enrollment:
 

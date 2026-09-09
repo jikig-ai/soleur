@@ -89,17 +89,44 @@ if [[ "$1" == "issue" ]]; then
   exit 0
 fi
 
+# `pr view` is read as `--json body --jq .body`, so the stub must emit the
+# PROJECTED body, exactly as the issue branch above does. Emitting the `{"body":...}`
+# envelope instead put the JSON wrapper into the corpus and collapsed the body onto
+# ONE line, which silently changed what any line-scoped analysis could see.
 case "${MODE:-nopr}" in
   nopr)   exit 1 ;;                                            # no PR readable
-  nosoak) printf '%s\n' '{"body":"ordinary PR body with no soak signal"}' ;;
+  nosoak) printf '%s\n' 'ordinary PR body with no soak signal' ;;
   # Soak signal + the SAME issue named as both the closing target and a `Ref`.
   # This is PR #7426's shape: the plan discussed `Ref #7409` inside a rejected
   # counterfactual while the PR closes #7409.
-  soakcloses) printf '%s\n' '{"body":"Closes #7409\n\nPost-deploy soak: none. Ref #7409 would apply only under the split we rejected."}' ;;
+  # NOTE: this body previously read "Post-deploy soak: none." — a NEGATED soak.
+  # Once the gate learned to drop negations that case would have passed because
+  # there was NO SIGNAL AT ALL, making this #7426 closing-target regression test
+  # vacuous. It carries a real soak declaration so the CLOSES filter stays under test.
+  soakcloses) printf '%s\n' 'Closes #7409
+
+Post-deploy soak holds at 0 for 7 days. Ref #7409 would apply only under the split we rejected.' ;;
   # Control: a genuine third-party tracker alongside the closing target. The
   # closing target drops out; #9999 must NOT, or the fix has disabled the gate
   # rather than narrowed it.
-  soakother) printf '%s\n' '{"body":"Closes #7409\n\nPost-deploy soak holds. Ref #9999 tracks the soak."}' ;;
+  soakother) printf '%s\n' 'Closes #7409
+
+Post-deploy soak holds. Ref #9999 tracks the soak.' ;;
+  # Only NEGATED soak vocabulary -- a plan declaring that NO soak exists -- beside a
+  # genuine third-party ref. The gate must NOT fire: there is no soak to enrol.
+  soaknegated) printf '%s\n' 'Closes #7409
+
+| 2.9.1 Soak follow-through | **Skip.** No acceptance criterion is time-gated; nothing here closes on a soak. |
+No soak-gated status flip. Ref #9999 tracks the residue.' ;;
+  # The negation must be SCOPED: here `NOT` negates `Closes`, not the soak, and the
+  # sentence IS a real soak declaration. Must still DENY.
+  # Body cites a plan on disk; the soak declaration and the refs live in the PLAN.
+  soakplan) printf '%s\n' 'Closes #7409
+
+See knowledge-base/project/plans/fixture-soak-plan.md for the detail.' ;;
+  soaknegscoped) printf '%s\n' 'Closes #7409
+
+- [ ] AC9: PR body uses **`Ref #9999`** (NOT `Closes`) -- closure is gated on the post-deploy soak below.' ;;
   *)      echo "gh-stub: unknown MODE=${MODE:-}" >&2; exit 64 ;;
 esac
 STUB
@@ -147,6 +174,53 @@ check "closing target named by BOTH Closes and Ref → allows" "<none>" \
   "$(decision_of 'gh pr ready' "$REPO" soakcloses)"
 check "third-party unenrolled tracker still DENIES (fix narrows, not disables)" "deny" \
   "$(decision_of 'gh pr ready' "$REPO" soakother)"
+
+# --- negated soak vocabulary is not a soak declaration ----------------------
+# The gate matched a bare `soak` anywhere in the corpus, so a plan row saying the
+# section does NOT apply fired it: "| 2.9.1 Soak follow-through | **Skip.** No
+# acceptance criterion is time-gated; nothing here closes on a soak. |" was the
+# ONLY match in the entire corpus of PR #7987, and it demanded enrollment for two
+# trackers that close on no timer at all. The hook header already recorded the
+# cause -- "the regex is negation-blind" (PR #7426) -- while fixing only the
+# closing-target half beside it.
+#
+# These two are a MATCHED PAIR and must stay one: the first alone also passes if
+# the drop pass eats everything, which would disable the gate rather than narrow it.
+check "negated soak vocabulary only -> allows (negation-blindness, #7426)" "<none>" \
+  "$(decision_of 'gh pr ready' "$REPO" soaknegated)"
+check "negation scoped to its own clause: 'NOT Closes' still DENIES" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soaknegscoped)"
+
+# --- the PLAN half gets the same fenced-block strip as the PR body -----------
+# The body is stripped so a quoted example cannot read as a live declaration;
+# the plan was then appended RAW, so the protection stopped halfway through one
+# corpus. Plans are where worked examples and sample PR bodies actually live.
+# Matched pair: fenced ref must be invisible, unfenced ref must still deny.
+mk_plan() { # <repo> <ref-line-placement: fenced|unfenced>
+  local d="$1" where="$2" f="$1/knowledge-base/project/plans/fixture-soak-plan.md"
+  mkdir -p "$1/knowledge-base/project/plans"
+  {
+    echo "# fixture plan"
+    echo
+    echo "Post-deploy soak holds at 0 for 7 days before the tracker closes."
+    echo
+    if [[ "$where" == fenced ]]; then
+      echo '```'
+      echo "AC9: PR body uses Ref #9999 (NOT Closes) — quoted illustration only."
+      echo '```'
+    else
+      echo "Ref #9999 tracks the soak."
+    fi
+  } > "$f"
+}
+
+mk_plan "$REPO" fenced
+check "ref inside a FENCED block in the plan is not a tracker → allows" "<none>" \
+  "$(decision_of 'gh pr ready' "$REPO" soakplan)"
+mk_plan "$REPO" unfenced
+check "same ref UNFENCED in the plan still DENIES (strip narrows, not disables)" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakplan)"
+rm -f "$REPO/knowledge-base/project/plans/fixture-soak-plan.md"
 
 # --- #7164 envelope contract ------------------------------------------------
 # An ARRAY tool_input.command rendered across lines, matched the trigger regex

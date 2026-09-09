@@ -113,7 +113,85 @@ printf '%s' "$PR_BODY" | awk '
 
 PLAN=$(grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' "$CORPUS" | head -1 || true)
 if [[ -n "$PLAN" && -f "$PLAN" ]]; then
-  cat "$PLAN" >> "$CORPUS"
+  # Strip fenced blocks from the PLAN TOO. The PR body is stripped a few lines
+  # above precisely so a quoted example cannot be read as a live declaration, and
+  # the plan was then appended RAW — so the protection stopped at the boundary
+  # between two halves of one corpus. The plan half is the bigger risk of the two:
+  # plans quote gate inputs, sample PR bodies and worked examples at length.
+  #
+  # Forcing case, from this change's own plan: a fenced excerpt reading
+  # "AC9: PR body uses **`Ref #5733`** (NOT `Closes`)" put #5733 into REFS as a
+  # live soak tracker, so a quoted illustration would have demanded sweeper
+  # enrollment for an unrelated issue.
+  #
+  # Measured over all 1905 tracked plans: stripping removes at least one
+  # Ref/Tracks in 8 of them (the quoted-example class), and recall over the 42
+  # plans carrying a real enrollment directive is UNCHANGED at 36/42 — no real
+  # soak declaration lives only inside a fence.
+  #
+  # Same fail-closed posture as the body: if awk cannot run, append unstripped
+  # rather than dropping the plan half entirely.
+  awk '/^```/ { f = !f; next } !f { print }' "$PLAN" >> "$CORPUS" \
+    || cat "$PLAN" >> "$CORPUS"
+else
+  # SAY SO WHEN HALF THE CORPUS IS EMPTY. The plan is where a soak is actually
+  # declared — a PR body rarely spells one out — so when no plan path resolves,
+  # every verdict below is reached from the body alone. That is a legitimate
+  # state (many PRs have no plan), but it is NOT the same fact as "scanned the
+  # plan and found no soak", and the two were previously indistinguishable:
+  # both exited 0 in silence. Emitting the distinction costs nothing and stops a
+  # half-blind pass from reading like a clean one. stderr only — this hook's
+  # stdout is a permission-decision envelope and must not carry prose.
+  if [[ -z "$PLAN" ]]; then
+    echo "ship-soak-followthrough-gate: SOAK-CORPUS-BODY-ONLY — no knowledge-base/project/{plans,specs}/*.md path in the PR body; scanned the body alone" >&2 || true
+  else
+    echo "ship-soak-followthrough-gate: SOAK-CORPUS-BODY-ONLY — PR body cites '$PLAN' but it is not readable here; scanned the body alone" >&2 || true
+  fi
+fi
+
+# Drop NEGATED soak vocabulary before matching.
+#
+# A sentence declaring that NO soak exists is not a soak declaration, and the
+# gate could not tell the difference: SOAK_RE offers a bare `soak` alternative
+# that matches any mention at all. The cost is not theoretical — the header
+# above already records it as the cause of PR #7426's false deny ("the regex is
+# negation-blind"), where the corpus matched on the plan's "Nothing soak-gated."
+# That PR fixed the closing-target half beside it and left this half in place.
+# It fired again on PR #7987, whose ONLY match in the whole corpus was the plan
+# row asserting the section did not apply:
+#   | 2.9.1 Soak follow-through | **Skip.** No acceptance criterion is
+#     time-gated; nothing here closes on a soak. |
+# A gate that fires on the sentence exempting it teaches its readers to reach
+# for the env-var bypass, which is exactly what the header warns against.
+#
+# Scoped, not blanket. The negation window stops at a clause boundary
+# (`.` `|` `)` `—` `–` `;` `:`) so a negation of something ELSE cannot silence a
+# real declaration beside it. The case that forces this is real, from the plan
+# corpus, and is pinned as `soaknegscoped` in the sibling suite:
+#   - [ ] AC9: PR body uses **`Ref #5733`** (NOT `Closes`) — closure is gated
+#         on the post-deploy soak below.
+# Here `NOT` negates `Closes`; the sentence IS a soak declaration and survives.
+#
+# The unit is the LINE, deliberately not the sentence: the shape this exists to
+# catch is a markdown TABLE ROW whose label and disposition sit in adjacent
+# cells, and splitting on `.` also shreds ordinals like `2.9.1` into fragments
+# that re-match the bare token. Measured on all 1905 tracked plans: 274 matched
+# before, 207 after (67 false positives removed, 24%), with recall UNCHANGED at
+# 36/42 over the plans carrying a real `soleur:followthrough script=` enrollment
+# directive — zero recall regression. Re-derive rather than trust those figures.
+DROPPED_CORPUS=$(mktemp)
+trap 'rm -f "$CORPUS" "$DROPPED_CORPUS"' EXIT INT TERM
+if awk '
+      { u = tolower($0) }
+      u ~ /(^|[^a-z])(no|not|nothing|none|never|n\/a|skip|skipped|zero|without)([^a-z][^.|)—–;:]{0,60})?soak/ { next }
+      u ~ /soak[^.|]{0,40}(: *(skip|none)|not applicable|n\/a|does not apply)/ { next }
+      { print }
+    ' "$CORPUS" > "$DROPPED_CORPUS" 2>/dev/null && [[ -s "$DROPPED_CORPUS" || ! -s "$CORPUS" ]]; then
+  cp "$DROPPED_CORPUS" "$CORPUS"
+else
+  # Fail TOWARD the gate: an awk that could not run leaves the corpus unfiltered,
+  # so the gate stays as noisy as it was rather than silently passing everything.
+  echo "ship-soak-followthrough-gate: negation strip failed — scanning the unfiltered corpus" >&2 || true
 fi
 
 # Soak signal — MUST stay byte-identical to ship/SKILL.md §Detection SOAK_RE.
