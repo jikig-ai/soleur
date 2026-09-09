@@ -1,19 +1,25 @@
 ---
-title: "Draft reply — Convergence Corporate CLA request"
+title: "Reply — Convergence Corporate CLA request (SENT 2026-09-09)"
 date: 2026-09-04
-type: correspondence-draft
+type: correspondence
 custodian: clo
-status: awaiting-operator-send
+status: sent
 counterparty: Convergence (Islamabad, Pakistan)
 inbound: support@convergence.pk → legal@jikigai.com
+sent_at: 2026-09-09
+sent_by: operator (legal@jikigai.com → support@convergence.pk)
 related: [3210]
 ---
 
-# Draft reply to Convergence
+# Reply to Convergence — sent 2026-09-09
 
-**Status: DRAFT — not sent.** Operator sends from `legal@jikigai.com`.
+**Status: SENT — 2026-09-09**, by the operator from `legal@jikigai.com` to
+`support@convergence.pk`. This file is now a RECORD of outbound correspondence, not a draft:
+append a dated note rather than editing the body, so what is on file stays what was sent.
+The text below is the text as prepared; it is not independently attested byte-for-byte against
+the message the mail client transmitted.
 
-**Both blanks are now filled; nothing remains but the send.** The turnaround commitment in
+Both blanks were filled before sending. The turnaround commitment in
 paragraph 4 is **5 business days** (operator decision, 2026-09-09), and the closing note on the
 harness contribution is **kept** — it sets review expectations before the counterparty invests
 heavily, which is the reason it was drafted. Neither was a technical call, which is why they sat
