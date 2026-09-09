@@ -72,6 +72,32 @@ cp -a "$REPO_ROOT/.github/workflows/infra-validation.yml" "$SANDBOX_ROOT/.github
   || die "could not copy infra-validation.yml into the sandbox"
 cp -a "$REPO_ROOT/.github/scripts/validate-infra-templates.sh" "$SANDBOX_ROOT/.github/scripts/" \
   || die "could not copy validate-infra-templates.sh into the sandbox"
+
+# #7695: Guard A reads the BUILD workflow (for the cp/COPY carrier set) and resolves the pinned
+# tag through git. Neither is reachable from a relocated sandbox, so both must be carried here or
+# the guard reds on the unmutated tree and the harness aborts before any mutation runs — which is
+# this file's own rule at the top of this block, applied to a guard added after it was written.
+cp -a "$REPO_ROOT/.github/workflows/build-inngest-bootstrap-image.yml" "$SANDBOX_ROOT/.github/workflows/" \
+  || die "could not copy build-inngest-bootstrap-image.yml into the sandbox"
+
+# A throwaway repo whose tag points at the PRISTINE tree, so Guard A's comparison is meaningful
+# rather than skipped: on the unmutated sandbox the tag's tree IS the working tree, and a case
+# that mutates a carrier reds it for real. The tag name is derived from the pin literal exactly
+# as the guard derives it, so the two cannot drift apart.
+_pin_tag="$(grep -oE 'soleur-inngest-bootstrap:v[0-9]+\.[0-9]+\.[0-9]+' "$PRISTINE/cloud-init-inngest.yml" 2>/dev/null | head -1 | sed 's/.*://')"
+[[ -n "$_pin_tag" ]] || die "could not derive the pinned tag for the sandbox git fixture"
+(
+  set -e
+  cd "$SANDBOX_ROOT"
+  git init -q
+  git config user.email sandbox@example.invalid
+  git config user.name "sandbox"
+  git config commit.gpgsign false
+  git add -A
+  git commit -qm "sandbox baseline"
+  git config tag.gpgSign false
+  git tag -a -m "sandbox pin fixture" "vinngest-$_pin_tag"
+) > "$WORK/gitfixture.log" 2>&1 || { cat "$WORK/gitfixture.log" >&2; die "could not build the sandbox git fixture for Guard A"; }
 # Assert the exclusion actually held. A tar --exclude whose pattern stops matching (a leading
 # `./` dropped, say) silently reinstates 162 MB per case, and the only symptom is a battery
 # that gets mysteriously slower and starts failing on capacity somewhere else.

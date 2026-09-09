@@ -25,6 +25,15 @@
 
 set -euo pipefail
 
+# #7797: this script runs as root under cloud-init and handles live Doppler credentials, so `-x`
+# would print them into the cloud-init log. Unconditional refusal, not the credential-conditional
+# form used by read-only probes: by the time this runs the credentials are always present, and
+# this file's own post-mortem is about secret material reaching a world-readable file
+# (knowledge-base/engineering/operations/post-mortems/inngest-heartbeat-unit-heredoc-root-substitution-postmortem.md).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 # These two variables are templated by the OCI image build OR cloud-init
 # substitution. Default-to-empty triggers loud failure at runtime check.
 INNGEST_CLI_VERSION="${INNGEST_CLI_VERSION:-}"
@@ -345,7 +354,7 @@ if [[ -z "$DOPPLER_BIN" ]]; then
   exit 1
 fi
 
-cat > "$HEARTBEAT_UNIT" <<HEARTBEATEOF
+cat > "$HEARTBEAT_UNIT" <<'HEARTBEATEOF'
 [Unit]
 Description=Inngest server heartbeat ping to Better Stack
 After=network-online.target
@@ -361,7 +370,7 @@ User=deploy
 Group=deploy
 # Doppler CLI calls os.UserHomeDir() during init even when DOPPLER_CONFIG_DIR
 # is set in the env file. Running as root with no HOME triggers
-# "Doppler Error: \$HOME is not defined". User=deploy gets HOME=/home/deploy
+# "Doppler Error: $HOME is not defined". User=deploy gets HOME=/home/deploy
 # automatically, matching inngest-server.service's hardening pattern.
 # Surfaced 2026-05-20 once #4204's reconcile gate exposed the new unit shape.
 EnvironmentFile=/etc/default/inngest-server
@@ -408,8 +417,24 @@ RuntimeDirectoryPreserve=yes
 # This line is what made the PrivateTmp defect above diagnosable in 2 minutes, off-box,
 # after 3 days of a blind 60s storm. It earned its keep before the fix it shipped with did.
 SyslogIdentifier=inngest-heartbeat
-ExecStart=${DOPPLER_BIN} run --config prd -- ${HEARTBEAT_SCRIPT}
+ExecStart=@@DOPPLER_BIN@@ run --config prd -- @@HEARTBEAT_SCRIPT@@
 HEARTBEATEOF
+
+# #7695: the delimiter above is QUOTED, so nothing in the unit body is expanded or
+# executed at render time. The two values the unit genuinely needs are substituted here by
+# sentinel -- the house pattern already used for @@DARK_ARM@@ and @@HOST_NAME@@. Both seds match
+# the sentinel as a SUBSTRING (it sits mid-line inside ExecStart=, so unlike the standalone
+# @@DARK_ARM@@ line above it cannot be ^...$-anchored) and use | as the delimiter because both
+# values are absolute paths. The @@ residual check below is not ceremony: an & in a substituted
+# path expands to the whole match and corrupts it at exit 0, which set -e does not catch.
+sed -i "s|@@DOPPLER_BIN@@|${DOPPLER_BIN}|; s|@@HEARTBEAT_SCRIPT@@|${HEARTBEAT_SCRIPT}|" "$HEARTBEAT_UNIT"
+# Refuse to install a unit still carrying an unsubstituted sentinel: a half-rendered
+# ExecStart= would fail at systemd start with a message about a literal @@ path, which is
+# exactly the class this file already learned to make diagnosable off-box.
+if grep -qF '@@' "$HEARTBEAT_UNIT"; then
+  log "ERROR: inngest-heartbeat.service still carries an unsubstituted sentinel after render"
+  exit 1
+fi
 
 # #6556 Part 2 — the OnFailure target for inngest-heartbeat.service. Non-templated (ONE
 # consumer, so no `@`/%i template — cf. cron-egress-alarm@ which earns its template from two
