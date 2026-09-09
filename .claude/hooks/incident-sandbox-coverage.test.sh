@@ -306,9 +306,20 @@ printf '\n'
 #   tests/hooks/test_openhands_guardrails.sh  - drives .openhands/hooks/guardrails.sh, which
 #                                               contains ZERO emit_incident references; it matched
 #                                               only on a basename shared with the .claude/ hook
+#   plugins/soleur/test/hook-input-classification-mutation.test.sh - arrived from main 2026-09-08,
+#                                               not in this PR's diff. Isolated BY LIB-COPY, the
+#                                               same mechanism as tests/hooks/test_incidents.sh:
+#                                               it populates $WORK/.claude/hooks/ from tracked
+#                                               files and runs the COPIED suite, so
+#                                               _incidents_repo_root()'s BASH_SOURCE fallback
+#                                               resolves under $WORK. Measured against the
+#                                               operator ledger: rc=0, delta 0 rows.
 # They are deliberately NOT carved out. Every carve-out is a place a real member can hide, and a
-# ceiling of 3 reds on the fourth either way.
-OUTSIDE_CEILING=3
+# ceiling reds on the next one either way.
+#
+# 3 -> 4 on 2026-09-09 for the entry above. The ceiling counts members; it does not certify them.
+# Raising it on a MEASURED zero-leak member is the intended use — silently carving one out is not.
+OUTSIDE_CEILING=4
 rc=1; [ "$n_out" -le "$OUTSIDE_CEILING" ] && rc=0
 verdict "$rc" "the outside set has not grown ($n_out, ceiling $OUTSIDE_CEILING)"
 
