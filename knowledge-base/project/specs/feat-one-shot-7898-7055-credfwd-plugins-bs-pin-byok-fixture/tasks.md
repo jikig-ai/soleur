@@ -37,23 +37,28 @@ wrong tree. Slice C (Phases 3-4) is ordered last so it can be dropped without un
 
 ## Phase 2 — Slice A: confine the fifteen shipped scripts
 
-- [ ] 2.1 Add the xtrace refusal to each. **Conditional** arm for the seven community scripts;
-      **unconditional** for all eight operator scripts, `provision-doppler.sh` included — its
-      linter-emitted conditional arm is empty at guard time because `read -rs` binds the token after
-      the prologue. Refusal goes to **stdout** (measured: Rule A does not pin the stream).
-- [ ] 2.2 Customer-facing refusal copy from the plan's literal template, with each file's own
-      guarded variable list substituted. The remedy must name every variable that file's arm tests.
-- [ ] 2.3 `--disable` as the literal first argument and `--noproxy '*'` on all 26 credentialed curls.
-- [ ] 2.4 `provision-doppler.sh` — hoist the multi-line `-d` payloads into variables. Do **not** add
-      a `readonly DOPPLER_API_PINNED` constant; it adjudicates the wrong variable and pins nothing.
-      Also add the confinement flags to the printed manual-fallback curl recipes.
-- [ ] 2.5 Add the proxy-aware failure line to the seven, so a proxied founder is not told to check
-      their network connection.
-- [ ] 2.6 Remove the 15 lines from each baseline **by hand**. Never `--write-baseline-d`: it rewrites
+Sub-numbering mirrors the plan's Phase 2 exactly, so a plan citation of "Phase 2.4" resolves to the
+same item here.
+
+- [ ] 2.1 Add the xtrace refusal to each, with the customer-facing copy from the plan's literal
+      template. **Conditional** arm for the seven community scripts; **unconditional** for all eight
+      operator scripts, `provision-doppler.sh` included — its linter-emitted conditional arm is empty
+      at guard time because `read -rs` binds the token after the prologue. Refusal goes to **stdout**
+      (measured: Rule A does not pin the stream). The remedy must name every variable that file's arm
+      tests — four for each of `x-community.sh` and `x-setup.sh`.
+- [ ] 2.2 `--disable` as the literal first argument and `--noproxy '*'` on all 26 credentialed curls.
+- [ ] 2.3 `provision-doppler.sh` — hoist the multi-line `-d` payloads into variables. Do **not** add a
+      `readonly DOPPLER_API_PINNED` constant; it adjudicates the wrong variable and pins nothing.
+- [ ] 2.3b Add the confinement flags to the printed manual-fallback curl recipes in the same script.
+- [ ] 2.4 Remove the 15 lines from each baseline **by hand**. Never `--write-baseline-d`: it rewrites
       the whole file from a full-tree scan and would silently re-baseline drift.
+- [ ] 2.5 Give the seven the proxy-aware failure line **and** the structured stdout marker
+      (`surface`, `script`, `curl_exit`, `refusal`, `proxy_env`, `curlrc_present`, `noproxy_applied`),
+      so a proxied founder is not told to check their network connection and so the hosted path has an
+      in-surface signal. Keep the existing `2>/dev/null`; the marker is on stdout.
+- [ ] 2.6 Re-run the scoped census over the fifteen literal paths; expect `OK`.
 - [ ] 2.7 Drop the false "AND its highwater" clause from `--write-baseline-d`'s argparse help. Help
       string only — no predicate, regex or baseline-loading logic.
-- [ ] 2.8 Re-run the scoped census over the fifteen literal paths; expect `OK`.
 
 ## Phase 3 — Slice C: partition the BYOK outcomes
 

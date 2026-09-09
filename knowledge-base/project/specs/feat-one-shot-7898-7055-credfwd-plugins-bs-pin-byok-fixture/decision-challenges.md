@@ -35,7 +35,7 @@ review as "strictly subsumed by the repo-wide run". The baseline file is the rat
 **Stated direction:** "Fix = a `*.betterstackdata.com` allowlist plus an explicit opt-in seam for the
 ~12 suites that drive the script through a stub host."
 
-**Measured:** 11 of the 12 suites never execute the real script's host check — each substitutes a
+**Measured:** 10 of the 12 suites never execute the real script's host check — each substitutes a
 fake query binary or shadows the file. Only two touch it, and one of those already shadows `curl` as
 a shell function. The seam requirement collapses to a single test arm.
 
@@ -54,8 +54,11 @@ with no seam at all. The rejection is recorded in ADR-214 so a future copy-paste
 credentials — `set-role.sh` reads `SUPABASE_SERVICE_ROLE_KEY -p soleur -c prd`, which bypasses RLS
 across every customer's rows. The brief's framing understates the operator half.
 
-**Plan's departure:** `brand_survival_threshold: all-users incident`, with the two populations split
-in `## User-Brand Impact`. This raises the review bar rather than lowering it.
+**Plan's departure:** the two populations are split in `## User-Brand Impact` and the operator half's
+severity is stated in prose. The frontmatter value stays `single-user incident` — not a retreat: the
+gate enum is `single-user incident | aggregate pattern | none`, so `all-users incident` (which a draft
+did write) is invalid as a token and would have failed preflight Check 6. The escalation the threshold
+buys — CPO sign-off and `user-impact-reviewer` — is engaged either way.
 
 ## 5. CTO recommendation surfaced, not adopted — PR split
 
@@ -127,7 +130,7 @@ out of the corpus.
 
 Now recommended by three reviewers. DHH's form is the sharpest: the plan's own mitigation ("C can be
 dropped without unpicking A or B") concedes that C is a separate PR, and bundling a p3 flaky-test fix
-with an all-users credential fix ships the security half at the speed of the slower one.
+with a credential fix whose operator half exposes every customer's rows ships the security half at the speed of the slower one.
 
 **Still not adopted** — the one-shot batching is the operator's explicit instruction. Mitigated by
 ordering C last. This is the single most-repeated dissent in the review and the operator may want to

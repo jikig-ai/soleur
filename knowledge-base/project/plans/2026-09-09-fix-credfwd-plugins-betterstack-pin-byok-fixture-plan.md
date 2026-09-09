@@ -603,7 +603,7 @@ construction. Three deliberate deviations from the emitted text:
   Rule: the seven community scripts get the conditional arm (each gates on an env credential its own
   `check_creds` already requires, so it cannot fail open there, and a founder running `bash -x` with
   no token set keeps full tracing). The eight operator scripts get the unconditional arm. The
-  `read -rs` gap in `ACQUIRES` is filed separately — AC8 forbids touching the classifier in this PR.
+  `read -rs` gap in `ACQUIRES` is filed separately — AC5 forbids touching the classifier in this PR.
 - **Emit the refusal on stdout, not stderr.** The linter's suggestion string uses `>&2`, but
   `knowledge-base/project/constitution.md` › Code Style › Always requires operator-protection signals
   on stdout: agent runtimes surface stdout and swallow stderr, and the gdpr-gate banner is the cited
@@ -698,6 +698,26 @@ remedy. Something of the shape — "This request deliberately bypasses your prox
 (`HTTPS_PROXY=…`), because a proxy can redirect a request carrying your platform token. If you need
 Soleur to reach <platform> through your proxy, that is not currently supported — please open an
 issue." Honest about the trade rather than blaming the network.
+
+**Beside the human line, emit one structured marker on stdout.** A reworded English sentence is not
+a detector: on the hosted path the only artifact would be prose inside tool stdout, and on the
+customer path nothing survives the session. The marker is what
+`agent-runner-query-options.ts`'s always-on `PostToolUse` Bash extractor mirrors to the server logger
+and a Sentry breadcrumb, and it is simultaneously the layer-7 in-session signal. Exemplar in the same
+tree: `plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh` ›
+`SOLEUR_GIT_REPO_DIAG`.
+
+Its fields must discriminate all four competing causes **in one event**, or the operator cannot tell
+them apart: `surface` (`installed-cli` | `in-sandbox`), `script`, `curl_exit`, `refusal` (78 versus a
+curl failure), `proxy_env` (which of `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` were
+non-empty), `curlrc_present` (`$HOME/.curlrc`), `noproxy_applied`. Without `proxy_env` and
+`curlrc_present` specifically, "`--noproxy` cut a proxy the caller needed" is indistinguishable from
+"`--disable` dropped a curlrc it relied on" from "xtrace refusal" from "ordinary network failure" —
+which is the whole diagnostic question this change creates.
+
+Note the interaction with the existing `2>/dev/null` on every one of those call sites: the marker
+goes to **stdout**, so the suppression does not swallow it. Do not remove the `2>/dev/null` — it is
+what keeps curl's own stderr (which can carry the URL) out of the transcript.
 
 2.6 Re-run the scoped census; it must report `OK`.
 
@@ -866,7 +886,7 @@ Together, Phase 3 (name the failure) and Phase 4b (remove the leading cause) are
 |---|---|
 | `BETTERSTACK_QUERY_HOST_TEST_PIN=<exact host>` opt-in seam (an equality declaration rather than a boolean) | The threat model is env control over `BETTERSTACK_QUERY_HOST`. Anyone who can set that variable can set the declaration to the same value in the same breath, so the seam is a complete bypass available to precisely the actor it defends against. It buys "fails loud on accidental misconfiguration", which vendor-shaped stubs give for free. Measured need: one test arm, which a `curl` shim covers while *exercising* the guard. |
 | A boolean opt-in flag re-permitting arbitrary hosts | Same objection, and strictly worse: it re-opens the exact hole the slice closes. |
-| Change all 12 suites' stub values | 11 never reach the check. Changing them would be churn that reads as coverage. |
+| Change all 12 suites' stub values | 10 never reach the check at all, and an eleventh reaches it only through a `curl` shim that never dials. Changing them would be churn that reads as coverage. |
 | Weaken the concurrency assertion to `refused >= N - K` | Explicitly excluded. A bound passes against an RPC that dropped the `FOR UPDATE` lock, which is the only thing the test exists to prove. |
 | Add a retry or re-run budget to the concurrency test | Explicitly excluded. It would hide the defect rather than fix it, and the defect is real and reproducible in shape. |
 | Scope the delegation rows to a per-run unique tenant/workspace | Already the state of the code, and was at the flaking commit. Implementing it would be a no-op presented as a fix. |
@@ -959,7 +979,7 @@ to be assumed closed:
 
 Both are **out of scope for this PR** and tracked as follow-ups (see Non-Goals). The reason is
 scope discipline, not severity: each needs a hand-written guard rather than the linter's emitted
-block, and `discord-setup.sh` additionally exposes a classifier blind spot that AC8 forbids fixing
+block, and `discord-setup.sh` additionally exposes a classifier blind spot that AC5 forbids fixing
 here. Naming them is what stops the next reader concluding that "the `plugins/**` section of #7898
 is closed" means this surface is confined.
 
@@ -998,6 +1018,11 @@ config files that structurally cannot see it.
 
 ## Observability
 
+Layer numbering follows `plugins/soleur/agents/engineering/review/observability-coverage-reviewer.md`
+› "The seven observability layers". An earlier draft cited "layer 3 (CI)" five times; **layer 3 is
+the Vector journald shipper**, and a GitHub Actions job log is **layer 6** (synchronous
+workflow-run log). A reviewer following the wrong number lands in `infra/vector.toml`.
+
 ```yaml
 liveness_signal:
   what: "repo-wide Rule D/A/B/C lint, registered as scripts/lint-shell-trace-credential-refusal-repo"
@@ -1006,44 +1031,53 @@ liveness_signal:
   configured_in: "scripts/test-all.sh (run_suite registration) and .github/workflows/ci.yml (test-scripts -> test)"
 
 error_reporting:
-  destination: "no Sentry project — this is a build-time guard, not a runtime surface. The plugin scripts themselves have no error sink: they execute on the user's machine (observability layer 7) and report only to that user's own terminal."
-  fail_loud: "the linter prints `<path>:<line>: credentialed curl is not transport-confined ...` and exits 1; betterstack-query.sh prints `refusing to send credentials to a BETTERSTACK_QUERY_HOST outside *.betterstackdata.com` on stderr and exits 2; a plugin script under xtrace prints its refusal on STDOUT (constitution: operator-protection signals go to stdout, because agent runtimes swallow stderr) and exits 78"
+  destination: "no Sentry project for the build-time guard. The shipped scripts have two execution surfaces and they differ: hosted (inside the production image) they reach layers 1-6 via the agent runner; on a customer's own machine they are layer 7, where there is no Soleur-side sink and there MUST NOT be one — routing a self-hosted run's output to our infrastructure would ship repository-derived data to a Soleur vendor. `plugins/soleur/skills/skill-security-scan/scripts/check-telemetry-surface.sh` actively guards that boundary."
+  fail_loud: "the linter prints `<path>:<line>: credentialed curl is not transport-confined ...` and exits 1; betterstack-query.sh prints its allowlist refusal on stderr and exits 2; a plugin script under xtrace prints its refusal on STDOUT (constitution: operator-protection signals go to stdout, because agent runtimes swallow stderr) and exits 78"
 
 failure_modes:
   - mode: "a new or edited shell script forwards a credential through an unconfined curl"
-    detection: "layer 3 (CI) — the repo-wide lint; a new offender is not in either baseline, so its violations are reported and the run exits 1"
+    detection: "layer 6 (workflow-run log) — the repo-wide lint; a new offender is not in either baseline, so its violations are reported and the run exits 1"
     alert_route: "required `test` check red on the PR"
   - mode: "one of the 15 remediated scripts regresses (a --disable dropped, a --noproxy removed)"
-    detection: "layer 3 (CI) — the file is no longer baselined, so the repo-wide run reports it; the advisory --changed step reports it on the touching PR as well"
+    detection: "layer 6 (workflow-run log) — the file is no longer baselined, so the repo-wide run reports it; the advisory --changed step reports it on the touching PR as well"
     alert_route: "required `test` check red"
   - mode: "BETTERSTACK_QUERY_HOST is substituted with a non-vendor host in a workflow or followthrough run"
-    detection: "layer 3 (CI/Actions) — the script exits 2 and the calling workflow step fails with the refusal on stderr in the job log"
-    alert_route: "the workflow's own failure; for scheduled followthroughs, the sweeper's failure notification"
-  - mode: "a user's own ~/.curlrc or proxy env re-points a credentialed curl in a shipped plugin script"
-    detection: "layer 7 (the user's own machine) — NOT detectable by us. There is no telemetry from an installed CLI and a successfully forwarded request is indistinguishable from a correct one. This is why the control is a build-time guard on the script rather than a runtime detector: the confinement flags remove the capability instead of observing its use."
-    alert_route: "none exists, and none can — stated rather than implied, per hr-observability-layer-citation"
+    detection: "layer 6 (workflow-run log) — the script exits 2 and the calling step fails with the refusal in the job log"
+    alert_route: "the workflow's own failure; for scheduled followthroughs, the sweeper's notification"
+  - mode: "the confinement prologue is ABSENT from what a customer actually receives (delivery regression — the #7490 under-delivery shape)"
+    detection: "layer 6 (workflow-run log) — scripts/plugin-delivery-canary.sh, run daily by .github/workflows/scheduled-marketplace-drift.yml > the canary job. It performs a fresh `claude plugin install` of the PUBLISHED plugin and compares every delivered file's sha256 against the repo at the delivered commit, fail-closed. Slice (a)'s whole control is 'the delivered script carries the prologue', which is exactly what that digest quantifies."
+    alert_route: "the scheduled workflow's failure"
+  - mode: "the confined curl breaks a hosted agent run (--noproxy cuts a proxy the container needs, or --disable drops a curlrc it relies on)"
+    detection: "layers 1-6, via an in-surface structured marker. This surface is NOT observable from a host-side static check: AC22 asserts AGENT_ENV_ALLOWLIST still forwards the proxy variables — i.e. that the change is LIVE — not that a confined curl still succeeds inside the sandbox. The seven scripts must emit a single-line marker on stdout beside the human message, which `agent-runner-query-options.ts`'s always-on `PostToolUse` Bash marker extractor mirrors to the server logger (Better Stack) and a Sentry breadcrumb. Exemplar in the same tree: plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh > SOLEUR_GIT_REPO_DIAG."
+    alert_route: "Sentry breadcrumb on the agent run; Better Stack query by marker"
+  - mode: "a user's own ~/.curlrc or proxy env re-points a credentialed curl on THEIR machine"
+    detection: "layer 7 (self-hosted CLI stdout) — the marker above is the in-session signal the operator or agent reads. Beyond that this is NOT detectable by us, and must not be: there is no Soleur-side sink for a self-hosted run and adding one would be a data-controller event, not an observability improvement. Scope the negative precisely: what cannot be observed is the USE of a hostile curlrc or proxy at runtime. Whether the confinement SHIPPED is separately detected by the canary above. The control is a build-time guard that removes the capability rather than observing its exercise."
+    alert_route: "none exists for runtime use, and none may — stated rather than implied, per hr-observability-layer-citation"
   - mode: "the BYOK concurrency assertion fails on an outcome class other than the hourly refusal"
-    detection: "layer 3 (CI) — the new errored/refused-other partitions assert to zero first and name the code and message"
+    detection: "layer 6 (workflow-run log) — the new rejected/errored/refused-other partitions assert to zero first and name the code and message"
     alert_route: "tenant-integration-required check red, with the outcome named in the failure text"
   - mode: "the tenant-integration suite is skipped and the required check passes anyway"
-    detection: "layer 3 (CI) — the gate verdict emits a ::notice:: and a step-summary line naming the skipped arm"
-    alert_route: "visible on the PR checks page; not an alert, by design"
+    detection: "layer 6 (workflow-run log) — the gate verdict emits a ::notice:: and a step-summary line naming the skipped arm. A ::notice:: is a non-blocking annotation by design, not an alert."
+    alert_route: "visible on the PR checks page; deliberately not an alert"
 
 logs:
-  where: "GitHub Actions job logs for the CI runs; the user's own terminal for the plugin scripts"
-  retention: "90 days for Actions logs (repo default); nothing is retained for layer 7"
+  where: "GitHub Actions job logs for CI; Better Stack + Sentry breadcrumbs for the hosted marker; the user's own terminal for the layer-7 path"
+  retention: "90 days for Actions logs (repo default); Better Stack per-source retention for the hosted marker; nothing is retained for layer 7"
 
 discoverability_test:
-  command: "python3 scripts/lint-shell-trace-credential-refusal.py | grep -oE '[0-9]+ baselined \\(A/B/C\\), [0-9]+ baselined \\(D\\)'"
-  expected_output: "101 baselined (A/B/C), 67 baselined (D)"
+  command: "python3 scripts/lint-shell-trace-credential-refusal.py <the 15 literal paths from `## Files to Edit`>"
+  expected_output: "OK: 15 scanned file(s), 0 baselined (A/B/C), 0 baselined (D)"
 ```
 
-The probe was executed against the current tree before this plan was written: the unfiltered command
-returned `OK: 1021 scanned file(s), 116 baselined (A/B/C), 82 baselined (D)` in 7.6 s, with no
-credentials and no network. The `grep` is deliberate — the scanned-file count moves whenever any PR
-anywhere in the repo adds or removes a shell script, so pinning it would make this probe fail for
-reasons unrelated to the property it reports. The two counts are the property, and the
-`expected_output` above is those counts after this PR moves them.
+**Why the probe is scoped to the fifteen rather than the repo.** An earlier draft ran the linter
+repo-wide and grepped the two baseline counts. That measures two repo-wide aggregates, which carry
+exactly the concurrent-PR volatility the draft cited as its reason for dropping the scanned-file
+count: any PR that baselines a new offender, or drives a different file out, moves them — and the
+counts cannot distinguish "the fifteen were confined" from "fifteen other paths left the baselines",
+nor either from a deletion. Scoped mode zeroes both baselines, so the fifteen-path form asserts Rule
+A **and** Rule D on exactly the files this PR changes. Same allowlisted verb (`python3`), still no
+network and no credentials. The repo-wide run remains an acceptance criterion; it is just not the
+probe.
 
 ## Encryption Posture
 
@@ -1275,7 +1309,7 @@ criteria 2, 8, 23 and 24.
 3. `python3 scripts/lint-shell-trace-credential-refusal.py` (repo-wide, unscoped) prints `OK: <n> scanned file(s), 101 baselined (A/B/C), 67 baselined (D)` and exits 0. **101, not 103, and the difference is not an error.** That line prints `len(offenders)` — files that are *both* baselined and still violating — not the baseline file's line count. Measured on the current tree it reads `116 baselined (A/B/C), 82 baselined (D)` while the files hold 118 and 82: two A/B/C entries (`apps/web-platform/infra/inngest-bootstrap.sh` and `scripts/followthroughs/inngest-cutover-flip-rollout-7761.sh`) are stale, listed but no longer violating. So the printed A/B/C count goes 116 → 101 while the file goes 118 → 103, and AC2's file-level count of 103 is also correct. An earlier draft predicted 103 here by subtracting from the file count instead of from the measured one — a blocking criterion that would have failed on a correct implementation and invited someone to "fix" the drawdown to hit it.
 4. `python3 scripts/lint-shell-trace-credential-refusal.py --changed --base origin/main` exits 0 — the advisory step is green on this PR's own diff, which is the point of folding Rule A in.
 5. No predicate, regex, baseline-loading path or rule function in `scripts/lint-shell-trace-credential-refusal.py` is modified. The only permitted change to that file is dropping the false "AND its highwater" clause from `--write-baseline-d`'s argparse help; `git diff` on it must show that string and nothing else.
-6. The four suites carrying this PR's new rows are registered in `scripts/test-all.sh` and green under it: `lint-shell-trace-credential-refusal.test.sh`, `tests/scripts/test-betterstack-query-archive.sh` (Guard 2's rows, with the new invocation counter, case count reported and non-zero), `tests/scripts/test-git-data-rung2-evidence-capture.sh` (with the `curl` shim), and `tests/scripts/test-tenant-integration-gate-verdict.sh` (rows for both PASS arms). Registration is the checkable thing; passing is what AC17 already means.
+6. The four suites carrying this PR's new rows are registered in `scripts/test-all.sh` and green under it: `lint-shell-trace-credential-refusal.test.sh`, `tests/scripts/test-betterstack-query-archive.sh` (Guard 2's rows, with the new invocation counter, case count reported and non-zero), `tests/scripts/test-git-data-rung2-evidence-capture.sh` (with the `curl` shim), and `tests/scripts/test-tenant-integration-gate-verdict.sh` (rows for both PASS arms). Registration is the checkable thing; passing is what AC12 (the full battery) already means.
 7. With synthetic `BETTERSTACK_QUERY_USERNAME`/`BETTERSTACK_QUERY_PASSWORD` set, `BETTERSTACK_QUERY_HOST=attacker.example bash scripts/betterstack-query.sh 'SELECT 1'` exits **2** with a refusal naming the allowlist, and the `curl` shim records **zero** invocations. The credentials are load-bearing in the criterion: without them the script exits **3** at the credential-presence guard, which sits above the host `case`, so the "exits non-zero" half ticks while the allowlist is never reached — a vacuous pass.
 8. `grep -c 'eu-fsn-3-connect' knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` returns `0`, and the file names `eu-central-1a-connect.betterstackdata.com`.
 9. The comment block above the host check in `scripts/betterstack-query.sh` no longer contains the strings `opt-in seam` or `13-file change`, and states the pin that exists.
@@ -1290,13 +1324,14 @@ criteria 2, 8, 23 and 24.
 18. The **seven** community scripts use the conditional arm and the **eight** operator scripts use the unconditional one: `grep -c ':+x'` returns ≥1 in each of the seven and **exactly 0** in each of the eight — `provision-doppler.sh` included, whose linter-emitted conditional arm would otherwise fail open because `read -rs` binds its token after the prologue.
 19. Running each of the seven under `bash -x` with its guarded credentials **unset** does not exit 78; running each of the fifteen under `bash -x` with a credential set exits 78 and prints the refusal on **stdout** (`bash -x <script> 2>/dev/null` still shows it).
 20. Each of the seven customer-facing refusals matches the Phase 2.1 template with that file's own guarded variable list substituted — the remedy enumerates **every** variable that file's arm tests, not one of them. Asserted per file, not as "a variable is named": `x-community.sh` and `x-setup.sh` guard four credentials each, and a remedy naming one of four cannot be followed. No occurrence of the word `probe`.
-21. The seven carry the proxy-aware failure line: with `HTTPS_PROXY` set and the endpoint unreachable, each prints a message naming the deliberate bypass, and **not** the pre-existing "Check your network connection and try again."
-22. `AGENT_ENV_ALLOWLIST` in `apps/web-platform/server/agent-env.ts` still contains the proxy names and `HOME` — i.e. the hosted-path behaviour change this plan documents is real and is asserted against the mechanism that produces it, not against a grep over config files that cannot see it.
-23. No file under `plugins/**` gains an env-declared destination seam: `git diff origin/main -- plugins/` contains no new `_TEST_PIN`, `_ALLOW_`, or equivalent host-override variable.
+21. The seven carry the proxy-aware failure line AND the structured stdout marker: with `HTTPS_PROXY` set and the endpoint unreachable, each prints a message naming the deliberate bypass (**not** the pre-existing "Check your network connection and try again."), plus one marker line on stdout carrying `surface`, `script`, `curl_exit`, `refusal`, `proxy_env`, `curlrc_present` and `noproxy_applied`. The marker must survive `2>/dev/null` — it is on stdout by design, and the existing stderr suppression stays.
+22. `scripts/plugin-delivery-canary.sh` still digests the fifteen: after merge, one canary run reports no finding for any of them, confirming the prologue reaches a customer install rather than only the repo.: with `HTTPS_PROXY` set and the endpoint unreachable, each prints a message naming the deliberate bypass, and **not** the pre-existing "Check your network connection and try again."
+23. `AGENT_ENV_ALLOWLIST` in `apps/web-platform/server/agent-env.ts` still contains the proxy names and `HOME` — i.e. the hosted-path behaviour change this plan documents is real and is asserted against the mechanism that produces it, not against a grep over config files that cannot see it.
+24. No file under `plugins/**` gains an env-declared destination seam: `git diff origin/main -- plugins/` contains no new `_TEST_PIN`, `_ALLOW_`, or equivalent host-override variable.
 
 ### Post-merge
 
-24. A comment is posted on #7898 naming this PR and stating that §5 (`plugins/**`, 15 files) and §6
+25. A comment is posted on #7898 naming this PR and stating that §5 (`plugins/**`, 15 files) and §6
     (`BETTERSTACK_QUERY_HOST`) are closed, with the remaining sections enumerated. This is the
     mitigation for the prose-`Ref` blind spot: a merged PR that cites an issue in prose creates no
     GitHub link, so both `closedByPullRequestsReferences` and a `linked:issue` search stay empty and
@@ -1362,13 +1397,16 @@ threshold. The four conditions, and their disposition:
    escalation the threshold buys — CPO sign-off and `user-impact-reviewer` — is engaged either way.
    This is still a correction to the brief's stated framing, which described the failure mode as
    "one user's project key": that holds for the customer-facing seven and understates the other eight.
-2. **Answer the hosted path.** Adopted. `vendor_plugin: true` puts the same files in the production
-   image, so the layer-7 citation is conditional on execution surface. Measured: no curl-visible
-   proxy and no `curlrc` on that path, so both flags are no-ops there and fail safe. AC28 re-measures
-   at implementation time rather than inheriting the claim.
+2. **Answer the hosted path.** Adopted, and the answer inverted under measurement. `vendor_plugin:
+   true` puts the same files in the production image, so the layer-7 citation is conditional on
+   execution surface. A first pass concluded both flags were no-ops there; `AGENT_ENV_ALLOWLIST`
+   forwards the proxy variables and `HOME` into the agent subprocess by design, and that
+   pass-through is TypeScript, which the config-file grep scope could not see. So the flags are a
+   live behaviour change on the hosted path — a stronger argument for the change than the one it
+   replaced. AC23 asserts against that allowlist rather than against a grep that cannot observe it.
 3. **Refusal on stdout, conditional hatch on the seven.** Adopted into Phase 2.1, with the
    constitution's stdout rule cited and the linter re-run as the arbiter rather than an assertion.
-4. **Rewrite the refusal text for the customer-facing seven.** Adopted into Phase 2.1 and AC27.
+4. **Rewrite the refusal text for the customer-facing seven.** Adopted into Phase 2.1 and AC20.
 
 Two follow-ups the CPO asked to file rather than absorb are recorded as Non-Goals below with a
 disposition, per `wg-defer-only-after-inline-triage`.
