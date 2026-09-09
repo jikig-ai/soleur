@@ -2,7 +2,8 @@
 
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-09-09-feat-jikigai-cloudflare-zone-terraform-plan.md
-- Status: complete
+- Status: plan complete; IMPLEMENTATION DEFERRED to #7995 (PR #7989 shipped the
+  unblocked subset only — see the BLOCKED banner in tasks.md)
 - Plan artifact: complete (selector=branch)
 
 ### Errors

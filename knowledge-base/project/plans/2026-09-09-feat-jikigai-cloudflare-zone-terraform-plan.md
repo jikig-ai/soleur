@@ -13,6 +13,15 @@ requires_cpo_signoff: true
 
 ## Overview
 
+> **DEFERRED 2026-09-09 (#7995 / PR #7989) — do not execute Phases 1-8.**
+> Phase 0.4 could not be cleared: the registrar login needs a Squarespace
+> credential that exists in no Doppler config. Per this plan's own gate and
+> AC15a, no Terraform may be written or merged until it is, because task 1.2
+> (`POST /zones`) starts Cloudflare's 28-day pending-zone clock — the exact
+> mechanism that deleted the zone. PR #7989 shipped only the unblocked subset
+> (the two dead Resend alert paths, the domains-ledger row, and the Art. 32
+> withdrawal). Everything else is tracked in #7995.
+
 Cloudflare deleted the jikigai.com zone. The mechanism is documented and matches
 the symptom exactly: a free-plan zone that stays in `pending` — because the
 registrar nameservers were never repointed at Cloudflare — is auto-deleted after
@@ -37,10 +46,10 @@ Every row below was probed live on 2026-09-09. Three of them change the plan's s
 |---|---|---|
 | Zone removed because NS were never repointed | Confirmed, and the mechanism is named: free-plan pending zones are deleted at 28 days ([Cloudflare domain-status reference](https://developers.cloudflare.com/dns/zone-setups/reference/domain-status/)) | The 28-day clock is now an explicit deadline the plan defends, not a background fact |
 | Registrar NS are the four `ns-cloud-c*.googledomains.com` | Confirmed verbatim; parent NS TTL 172800 | Rollback target; the Google-side zone must survive until cutover is proven |
-| Record set listed is "the whole zone" | **Not quite.** All briefed records confirmed verbatim (all three DKIM CNAMEs share selector `dlsyxrjkwef5bwihl4fgmgswd2heglj7tta7o4qqc2h72lmdfbllq`), but a widened sweep found a tenth name the brief omits: `_domainconnect` CNAME -> `_domainconnect.domains.squarespace.com`. Separately, `resend._domainkey` and `send.jikigai.com` are **absent**, and `GET https://api.resend.com/domains` lists no verified domain | Records transcribed from dig output. `_domainconnect` is deliberately dropped (see R8). The Resend absence is a live pre-existing defect — see F1 below |
+| Record set listed is "the whole zone" | **Not quite.** All briefed records confirmed verbatim (all three DKIM CNAMEs share selector `dlsyxrjkwef5bwihl4fgmgswd2heglj7tta7o4qqc2h72lmdfbllq`), but a widened sweep found a tenth name the brief omits: `_domainconnect` CNAME -> `_domainconnect.domains.squarespace.com`. Separately, `resend._domainkey` and `send.jikigai.com` are **absent**, and `GET https://api.resend.com/domains` lists no verified domain **[2026-09-09 CORRECTION (#7995 / PR #7989): this probe never supported that claim. The `RESEND_API_KEY` in `prd_terraform` is send-only and answers that endpoint `401 restricted_api_key` (control: an invalid key answers 400, so the 401 is a real scope response). The conclusion is re-established from key-independent DNS instead — `resend._domainkey.jikigai.com` and `send.jikigai.com` both resolve empty, while the soleur.ai equivalents carry a DKIM key and the SES bounce records.]** | Records transcribed from dig output. `_domainconnect` is deliberately dropped (see R8). The Resend absence is a live pre-existing defect — see F1 below |
 | **(absent from brief)** | **jikigai.com is DNSSEC-signed.** `.com` publishes DS `26851 8 2 818EBD7D35A304518B7DE3574F4B885977CE1618977DBFEF01161455C571602D`, DS TTL 86400. `dig @1.1.1.1 MX jikigai.com` returns the `ad` flag | **Shape change.** The briefed 3-step sequence would SERVFAIL the whole domain at every validating resolver. A DS-retirement phase is inserted before the NS flip — see the Cutover Runbook |
 | jikigai.com is not in Terraform | Confirmed. No `cloudflare_zone` resource exists anywhere in the repo; soleur.ai is referenced by `var.cf_zone_id` only | This is the repo's first Terraform-created zone — a new API surface for the credential |
-| **(absent from brief)** | **No existing Cloudflare token can create a zone.** `CF_API_TOKEN`, `CF_API_TOKEN_DNS_EDIT` and `CF_API_TOKEN_AUDIT` each list exactly one zone (soleur.ai); the first two return zero accounts. Zone creation requires account-scoped `com.cloudflare.api.account.zone.create` | **Shape change.** A new account-scoped token is a precondition, minted before the IaC merges (ADR-065 sequencing) |
+| **(absent from brief)** | **No existing Cloudflare token can create a zone.** **[2026-09-09 CORRECTION (#7995 / PR #7989): NOT ESTABLISHED — withdrawn as an assertion. Three probe variants over all 11 `CF_API_TOKEN*` secrets each returned a UNIFORM verdict (`1002 Invalid domain` for every token, then `1068 Permission denied` for every token), including for Pages- and bot-management-scoped tokens that plainly cannot create zones. Cloudflare validates the domain name before authorization, so `POST /zones` cannot answer this non-destructively. Recorded as unresolved rather than reported as either uniform result. The ephemeral-admin-token design stands on least-privilege grounds independently of it, but do NOT provision a credential on the strength of this row.]** `CF_API_TOKEN`, `CF_API_TOKEN_DNS_EDIT` and `CF_API_TOKEN_AUDIT` each list exactly one zone (soleur.ai); the first two return zero accounts. Zone creation requires account-scoped `com.cloudflare.api.account.zone.create` | **Shape change.** A new account-scoped token is a precondition, minted before the IaC merges (ADR-065 sequencing) |
 | `apps/web-platform/infra/` is the incumbent root | Confirmed, and it is `-target=`-scoped with ~110 entries plus three guard suites. Its merge-apply resolves **every** root variable before `-target` pruning | **Shape change.** A new no-default variable there would fail the entire production apply. New root instead — see ADR-214 |
 | Squarespace has no public API for this | Confirmed: no domains/DNS/nameserver endpoint in the developer platform, no Terraform provider. **But** this is a claim about the API rung only — it is not evidence about the Playwright rung, which remains unattempted |
 | `cloudflare_zone_dnssec` supports multi-signer | **False for the pinned provider.** Schema dumped locally from cloudflare/cloudflare **4.52.7**: the resource takes only `zone_id` and computes `ds`/`digest`/`key_tag`/`algorithm`. No `dnssec_multi_signer`, no `dnssec_presigned`, no settable `status` | Cloudflare's official multi-signer migration path is unavailable without a provider major bump. The DS-retirement path is taken instead |
@@ -509,9 +518,19 @@ logs:
   where: "GitHub Actions run logs for the apply and sweeper workflows; no host, no container, no journald surface"
   retention: "GitHub default (90 days)"
 discoverability_test:
-  command: "bash scripts/followthroughs/jikigai-dns-cutover-<issue>.sh"
-  expected_output: "PASS: zone active; MX/SPF/DKIM/DMARC match declaration; DS state coherent with delegation"
-  credentials_required: "CF_API_TOKEN_ZONE_ADMIN (zone read) and BETTERSTACK_API_TOKEN (team-member state) — the DNS limbs of the probe are fully unauthenticated and run without either; only the zone-status and alert-recipient limbs need credentials, and each is skipped explicitly rather than silently when absent"
+  # DEFERRED 2026-09-09 (#7995 / PR #7989). The probe named here is NOT committed
+  # -- `scripts/followthroughs/` contains no jikigai script and the path still
+  # carries an unresolved `<issue>` placeholder. A `credentials_required:` field
+  # was declared here and has been REMOVED: Check 10 treats that field as
+  # SKIP-DECLARED and exits before attempting the command, so its only practical
+  # effect was to stop the gate noticing that the command does not exist. The
+  # field also answers the wrong question -- its test is "is there no
+  # unauthenticated probe of the same property", and this probe's DNS limbs are
+  # unauthenticated by its own description, so it is a candidate for REACHING
+  # Check 10 rather than waiving it. Commit the script with self-skipping
+  # credentialed limbs when the cutover unblocks, then let Check 10 execute it.
+  command: "DEFERRED -- see #7995; no probe is committed for this plan"
+  expected_output: "n/a until the cutover unblocks and the probe lands"
 ```
 
 Every limb runs locally with no SSH. The DNS assertions use `dig` against public

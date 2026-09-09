@@ -11,6 +11,15 @@ git commit address, both Better Stack recipients and GitHub's notification path 
 domain being changed, and the product's outbound chokepoint rejects `*@jikigai.com`. Provision
 an off-domain recipient and confirm a test alert before starting.
 
+> **BLOCKED 2026-09-09 (#7995 / PR #7989) — do not execute Phase 1 onward.**
+> Phase 0.4 was ATTEMPTED and could not be cleared: the Squarespace registrar
+> login was reached via Playwright and stops at an email+password wall, and no
+> Squarespace credential exists in any Doppler config. Task **1.2 starts
+> Cloudflare's 28-day pending-zone clock** (AC15a) — the mechanism that deleted
+> the zone in the first place. AC0 (an alert recipient off jikigai.com) is also
+> still unmet. PR #7989 shipped only Phase 4.3 (the domains row), the F1 alert
+> fix, and the F3 Art. 32 withdrawal. Unblock order and evidence: #7995.
+
 ## Phase 0 — Preconditions (verify; never assume)
 
 - [ ] 0.1 Re-run the credential probe. Confirm no existing Cloudflare token lists a zone other than soleur.ai, and that `GET /zones?name=jikigai.com` still returns zero results. Paste output into the PR body.
