@@ -1202,6 +1202,7 @@ distribution-strategy
 dkim
 dmarc
 dns
+dnssec
 doc-drift
 docker
 docker-build

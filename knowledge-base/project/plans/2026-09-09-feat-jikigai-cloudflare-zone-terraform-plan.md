@@ -193,7 +193,7 @@ and deleting zones account-wide — including soleur.ai, the production surface.
 exposure vector is the token's storage in Doppler `prd_terraform` and its appearance in
 `terraform.tfstate` in the R2 backend.
 
-**Brand-survival threshold:** single-user incident.
+- **Brand-survival threshold:** `single-user incident`
 
 `requires_cpo_signoff: true` is set in frontmatter. `user-impact-reviewer` is to be
 invoked at review time per `plugins/soleur/skills/review/SKILL.md`.
@@ -518,19 +518,23 @@ logs:
   where: "GitHub Actions run logs for the apply and sweeper workflows; no host, no container, no journald surface"
   retention: "GitHub default (90 days)"
 discoverability_test:
-  # DEFERRED 2026-09-09 (#7995 / PR #7989). The probe named here is NOT committed
-  # -- `scripts/followthroughs/` contains no jikigai script and the path still
-  # carries an unresolved `<issue>` placeholder. A `credentials_required:` field
-  # was declared here and has been REMOVED: Check 10 treats that field as
-  # SKIP-DECLARED and exits before attempting the command, so its only practical
-  # effect was to stop the gate noticing that the command does not exist. The
-  # field also answers the wrong question -- its test is "is there no
-  # unauthenticated probe of the same property", and this probe's DNS limbs are
-  # unauthenticated by its own description, so it is a candidate for REACHING
-  # Check 10 rather than waiving it. Commit the script with self-skipping
-  # credentialed limbs when the cutover unblocks, then let Check 10 execute it.
-  command: "DEFERRED -- see #7995; no probe is committed for this plan"
-  expected_output: "n/a until the cutover unblocks and the probe lands"
+  # SCOPED TO WHAT SHIPPED, 2026-09-09 (#7995 / PR #7989). The CUTOVER probe
+  # described above is deferred with the rest of Phases 1-8: `followthroughs/`
+  # carries no jikigai script, the path still holds an unresolved `<issue>`
+  # placeholder, and the zone it would query does not exist. What this PR
+  # actually ships on a sensitive path is the ops-email alert repair, so that is
+  # what this command verifies. When the cutover unblocks, ADD the cutover probe
+  # here; do not replace this one.
+  #
+  # A `credentials_required:` field was declared here and has been REMOVED. Check
+  # 10 treats that field as SKIP-DECLARED and exits BEFORE attempting the
+  # command, so its only practical effect was to stop the gate noticing that the
+  # command did not exist. It also answers the wrong question: its test is
+  # "has this property no unauthenticated substitute", and every limb below is
+  # unauthenticated -- so this probe was a candidate for REACHING Check 10, not
+  # for waiving it.
+  command: bash scripts/resend-alert-path-discoverability.sh
+  expected_output: "RESEND_ALERT_PATH_OK or RESEND_ALERT_PATH_SKIP_NO_DIG"
 ```
 
 Every limb runs locally with no SSH. The DNS assertions use `dig` against public
