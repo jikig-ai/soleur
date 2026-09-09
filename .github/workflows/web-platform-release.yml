@@ -957,6 +957,76 @@ jobs:
           echo "::error::Prior deploy of $PRIOR_TAG still running (elapsed=${ELAPSED}s). Wait for completion or cancel manually before re-running."
           exit 1
 
+      # ─────────────────────────────────────────────────────────────────────
+      # MONOTONIC-VERSION PRECONDITION (#7931 part 1 x #5806 interaction, ADR-215
+      # Decision 5). NEITHER ISSUE ANTICIPATES THIS AND IT IS THE SHARPEST
+      # INTERACTION BETWEEN THE TWO.
+      #
+      # What ORDERS deploys today is not `workflow_run` — it is ci.yml's single
+      # `main` concurrency group. Main CI runs serially, so their completions are
+      # FIFO and the deploys inherit that order. #7931 part 1 gives every push its
+      # OWN group, which DELETES exactly that property, and #5806 makes the deploy
+      # fire on completion rather than on a serialized gate. `workflow_run`
+      # guarantees the CORRECT SHA; it does not guarantee the LATEST one.
+      #
+      # Reachable scenario: merge A (large diff), then B (a one-liner) ninety
+      # seconds later. Under per-SHA groups both CI runs proceed concurrently,
+      # B finishes first and deploys — then A completes and deploys, and
+      # production REGRESSES to the older commit. Neither change creates this
+      # alone, which is why shipping them together needed more than "D before E".
+      #
+      # Compounding it: `deploy`'s `web-1-swap` group is cross-pipeline with
+      # cancel-in-progress false. GitHub keeps one running plus one pending per
+      # group and CANCELS an older pending run when a third arrives, so three
+      # close merges can drop a deploy entirely.
+      #
+      # THIS IS NOT THE REJECTED PHASE C GUARD. ADR-072 rejected a superseded-SHA
+      # check because it false-skips nearly every deploy (`origin/main` advances
+      # on every merge), because this job has no `actions/checkout`, and because a
+      # step-level `exit 0` reddens the run. This carries NONE of those three: it
+      # compares two VERSION strings over a value this job already fetches from
+      # the live host, needs no git history and no checkout, and refuses by
+      # failing the step rather than by pretending to succeed. ADR-072's
+      # prohibition is scoped to the GIT-ANCESTRY form.
+      - name: Refuse a version regression (ordering guard)
+        env:
+          VERSION: ${{ needs.resolve-target.outputs.version }}
+        run: |
+          set -uo pipefail
+          if [ -z "${VERSION:-}" ]; then
+            echo "::error::no resolved version to compare — refusing to swap"
+            exit 1
+          fi
+          HEALTH=$(curl -sf --max-time 10 "https://app.soleur.ai/health" 2>/dev/null || echo "")
+          if [ -z "$HEALTH" ] || ! echo "$HEALTH" | jq -e . >/dev/null 2>&1; then
+            # DEGRADED-PERMISSIVE, deliberately, and this is the one judgement
+            # call in the guard. Being unable to READ the live version is not
+            # evidence of a regression, and /health being unreachable is exactly
+            # when an operator most needs to ship a fix. Failing closed here would
+            # convert an outage into an outage you cannot deploy out of. The
+            # ordering hazard this guards is a narrow race; the deploy-blocked
+            # hazard would be permanent.
+            echo "::warning::could not read the live version from /health — proceeding without the monotonicity check"
+            exit 0
+          fi
+          LIVE=$(echo "$HEALTH" | jq -r '.version // empty')
+          if [ -z "$LIVE" ]; then
+            echo "::warning::/health returned no version field — proceeding without the monotonicity check"
+            exit 0
+          fi
+          if [ "$LIVE" = "$VERSION" ]; then
+            echo "live is already $LIVE — re-deploying the same version is idempotent, proceeding"
+            exit 0
+          fi
+          # `sort -V` is a total order over semver here; the NEWER of the two is
+          # the last line. If that is the LIVE version, this run is older.
+          NEWEST=$(printf '%s\n%s\n' "$LIVE" "$VERSION" | sort -V | tail -1)
+          if [ "$NEWEST" = "$LIVE" ]; then
+            echo "::error::version regression refused — production is on ${LIVE} and this run resolved ${VERSION}. A newer release already deployed; swapping would roll production BACKWARDS. This is the out-of-order case per-SHA CI concurrency makes reachable (ADR-215 Decision 5)."
+            exit 1
+          fi
+          echo "monotonicity ok: ${LIVE} -> ${VERSION}"
+
       - name: Deploy via webhook
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
