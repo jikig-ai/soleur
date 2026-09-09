@@ -87,10 +87,11 @@ const WARNING_STAGES = [
 const NFT_FATAL_STAGE = "gitdata_nftables_metadata";
 
 function scopeResource(src: string, name: string): string {
-  // BOTH types. Since #7650 Phase 2 this file holds 27 `sentry_alert` rules and
-  // 3 `sentry_issue_alert` ones, and this suite spans the boundary:
-  // `git_data_boot_fatal` MIGRATED, while `git_data_boot_warning` (added by
-  // #7772, after the adoption's live capture) did not. Hardcoding either type
+  // BOTH types. This file holds 28 `sentry_alert` rules and 2
+  // `sentry_issue_alert` ones. This suite no longer spans the boundary —
+  // `git_data_boot_fatal` migrated in #7650 Phase 2 and `git_data_boot_warning`
+  // in Phase 3.4 (#7985) — but the helper stays type-agnostic because the two
+  // survivors migrate the moment the provider ships upstream 950. Hardcoding either type
   // makes the other throw "resource not found".
   const marker = [
     `resource "sentry_alert" "${name}"`,
@@ -165,7 +166,10 @@ describe("git-data warning-stage routing op contract", () => {
     for (const stage of WARNING_STAGES) {
       expect(scoped, `warning stage ${stage} is not routed`).toContain(stage);
     }
-    expect(scoped).toMatch(/match\s*=\s*"IS_IN"/);
+    // `in`, the `sentry_alert` spelling of the old `IS_IN`. Still asserting a SET match
+    // rather than `eq`: an `eq` here would route exactly one stage and silently drop the rest.
+    expect(scoped).toMatch(/match\s*=\s*"in"/);
+    expect(scoped, "a set match, never equality").not.toMatch(/match\s*=\s*"eq"/);
     expect(scoped).toMatch(/key\s*=\s*"stage"/);
   });
 
@@ -174,9 +178,12 @@ describe("git-data warning-stage routing op contract", () => {
     // event_frequency > 0, NOT first_seen_event: soleur-boot-emit sends one shared message for
     // every stage, so all boot events land in ONE perpetually-active issue group. first_seen
     // would fire once ever and then go inert for exactly the repeat failures worth seeing.
-    expect(scoped).toContain("event_frequency");
+    // `event_frequency_count` is the `sentry_alert` spelling of the old
+    // `event_frequency { comparison_type = "count" }`. The property is unchanged: a COUNT
+    // over an interval, so it re-fires per occurrence.
+    expect(scoped).toContain("event_frequency_count");
     expect(scoped).not.toContain("first_seen_event");
-    expect(scoped).toMatch(/comparison_type\s*=\s*"count"/);
+    expect(scoped).toMatch(/interval\s*=\s*"1h"/);
     expect(scoped).toMatch(/value\s*=\s*0/);
     // NoOne is what makes this non-paging. ActiveMembers here would page the solo founder for a
     // host that booted fine — the severity split is the whole point of a second rule.
@@ -208,13 +215,18 @@ describe("git-data warning-stage routing op contract", () => {
   it("the two rules are distinct resources with distinct names", () => {
     // A single rule cannot carry both severities; collapsing them is the likeliest future
     // "simplification" and would silently start paging on warnings.
-    // The two rules are now DIFFERENT TYPES, and that asymmetry is the point:
-    // `git_data_boot_fatal` was adopted as `sentry_alert` by #7650 Phase 2;
-    // `git_data_boot_warning` landed on main afterwards, so it is still on the
-    // deprecated type and is tracked for a later migration. Asserting both as
-    // `sentry_issue_alert` would pass only until this PR merges.
-    expect(tf).toContain('resource "sentry_issue_alert" "git_data_boot_warning"');
+    // BOTH are `sentry_alert` since Phase 3.4 (#7985) migrated the warning rule;
+    // the fatal one was adopted by #7650 Phase 2. The type asymmetry this block
+    // used to assert is GONE, so asserting it would now be asserting history.
+    // What must survive is that they remain TWO DISTINCT resources: collapsing
+    // them into one is the likeliest future "simplification" and would start
+    // paging on warnings, which is the exact severity split these rules exist for.
+    expect(tf).toContain('resource "sentry_alert" "git_data_boot_warning"');
     expect(tf).toContain('resource "sentry_alert" "git_data_boot_fatal"');
+    expect(
+      tf,
+      "the warning rule must not regress onto the deprecated type",
+    ).not.toContain('resource "sentry_issue_alert" "git_data_boot_warning"');
     // Whitespace-TOLERANT. `terraform fmt` aligns `=` to the longest attribute
     // name in the block, so the column depends on the block's OTHER attributes:
     // the migrated `sentry_alert` shape carries `frequency_minutes`, which is

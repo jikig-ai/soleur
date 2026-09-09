@@ -16,7 +16,7 @@
 #   * A green `terraform plan` says config and state agree. It says nothing
 #     about whether the live rule still fires on the events it was written for.
 #
-# So this reads LIVE Sentry and compares it to the capture the 27 blocks were
+# So this reads LIVE Sentry and compares it to the capture the 28 blocks were
 # generated from — the same file, so a divergence here is a real difference
 # between what was authored and what is running.
 #
@@ -60,7 +60,7 @@ case "$-" in
 esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CAPTURE="${SENTRY_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json}"
+CAPTURE="${SENTRY_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json}"
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
@@ -148,16 +148,23 @@ PROJECT='
   def in_scope: [ .triggers.conditions[]?.type ] as $t
                 | (excluded | any(. as $e | $t | index($e))) | not;
 
-  # NOT-YET-ADOPTED carve-out. A rule can be in scope by the trigger predicate and
-  # still be managed by this repo as `sentry_issue_alert`, because it landed on
-  # main AFTER the capture this adoption generates from. Without naming it, the
-  # reverse-direction check reports it as UNMANAGED ("nothing in this repo manages
-  # it"), which is FALSE. `git-data-boot-warning` (#7772) is the only one today,
-  # and unlike the two `event_unique_user_frequency_count` survivors it is not
-  # BLOCKED — it can migrate whenever someone re-captures. This list is meant to
-  # shrink to empty; delete the entry the day it does.
+  # NOT-YET-ADOPTED carve-out: NOW EMPTY, as its own instruction required.
+  # It existed because a rule could be in scope by the trigger predicate while
+  # still being managed as `sentry_issue_alert` — it landed on main AFTER the
+  # capture this adoption generates from — and the reverse-direction check would
+  # then report it as UNMANAGED, which was FALSE. `git-data-boot-warning` (#7772)
+  # was the only entry, and it was never BLOCKED; Phase 3.4 (#7985) migrated it,
+  # so the carve-out is deleted rather than carried. The instruction was "delete
+  # the entry the day it does", and this is that day.
+  #
+  # Deleting it MATTERS: while named here, that rule was the one `sentry_alert`
+  # this probe could not see, so it could have been deleted, disabled or re-tagged
+  # in Sentry with the drift check still reporting green.
+  #
+  # The two `event_unique_user_frequency_count` survivors are NOT carved out and
+  # never were — they stay `sentry_issue_alert`, and the trigger predicate already
+  # excludes them, which is why this list can be empty rather than gaining them.
   canon
-  | map(select(.name | IN("git-data-boot-warning") | not))
   | map(select(in_scope))
   | map({
       name: .name,
