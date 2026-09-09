@@ -613,6 +613,33 @@ properties of test-all.sh that nothing else would notice rotting."* Repo-root `s
 deliberately not in `SUITE_GLOBS`, so the registration is explicit and
 `scripts/lint-orphan-test-suites.sh`'s surface 1 fails if it is ever dropped.
 
+**The registration's SHAPE and PLACEMENT are constrained by a second suite, and getting either
+wrong reddens the battery in a place the diff does not touch.**
+`plugins/soleur/test/scripts-shard-totality.test.sh` — glob-registered, and the only live consumer
+of `--enumerate` — proves shard totality by comparing the runner's own enumeration against an
+**independently derived reference set**. Half of that reference is a static extraction with a
+narrow contract, read from its source:
+
+```awk
+/^if want_scripts; then$/ { inb=1; next }
+inb && /^fi$/             { inb=0; next }
+inb && /^[[:space:]]*(run_suite|skip_suite) "/ { … extract the quoted label … if (lbl !~ /\$/) print lbl }
+```
+
+So the new `run_suite` line must satisfy all three:
+
+1. **Inside a column-0 `if want_scripts; then` … `fi` block.** A registration outside one is emitted
+   by `--enumerate scripts` but invisible to the static extractor, so the two sets diverge and the
+   totality comparison fails.
+2. **A double-quoted literal label immediately after `run_suite`.** The extractor matches
+   `run_suite "` with the quote adjacent; an unquoted or single-quoted label is skipped.
+3. **No `$` in the label.** Labels containing `$` are deliberately skipped as the glob loop's
+   `run_suite "$f"`, so a variable-bearing label would be dropped from the reference and kept by the
+   enumeration.
+
+The three suites named as neighbours all satisfy this, which is a second reason to register beside
+them rather than anywhere else under `want_scripts`.
+
 ### Implementation Phases
 
 #### Phase 0 — preconditions (no product edits)
@@ -748,6 +775,13 @@ No other open `code-review` issue names a file in `## Files to Create` or `## Fi
 Deliberately **not** edited: `scripts/lint-orphan-test-suites.sh` (it derives its surfaces; a new
 explicitly-registered suite needs no change there) and `scripts/lib/repo-write-boundary.sh` (this
 plan does not touch the classifier).
+
+**Not edited but AFFECTED, and therefore in scope for verification:**
+`plugins/soleur/test/scripts-shard-totality.test.sh`. It is the only live consumer of `--enumerate`
+and it derives an independent reference set that the new registration must land inside — see
+`## Technical Approach` Part 3 for the three constraints on the registration's shape and placement,
+and AC23b. Nothing in it changes; it is the suite that reddens, outside the diff, if the
+registration is written in a shape its static extractor cannot see.
 
 ## User-Brand Impact
 
@@ -1080,6 +1114,11 @@ None. The decision is true the moment the guard is green; nothing is soak-gated.
 22. `bash scripts/battery-tag-authorship.test.sh` → exit 0, `offenders=0`, `unclassified=0`,
     assertions executed ≥ `BATTERY_TAG_MIN_ASSERTIONS`.
 23. `bash scripts/lint-orphan-test-suites.sh` → exit 0 (the new suite is registered, not an orphan).
+23b. `bash plugins/soleur/test/scripts-shard-totality.test.sh` → exit 0. This is the suite the new
+    registration can break from outside the diff: it compares `--enumerate scripts` against an
+    independently derived reference whose static half only sees `run_suite "<literal>"` lines inside
+    a column-0 `if want_scripts; then` … `fi` block, with no `$` in the label. Verify the
+    registration satisfies all three constraints, and that this suite's row count is unchanged.
 24. `bash scripts/guard-vacuity-floor.test.sh` → exit 0, **and the new suite appears by name in its
     FIRES list**. A `MIN_FIRING_SUITES` bump alone does not discharge this: that ratchet already
     carries slack (its own comment records "45 firing against `MIN_FIRING_SUITES=36`"), so a count
@@ -1147,8 +1186,15 @@ nothing time-gated — so no follow-through enrolment is required.
 
 ### Regression tests
 
-- `--enumerate all` parity against the Phase 0 baseline (AC2) — the one consumer this change could
-  perturb.
+- **`plugins/soleur/test/scripts-shard-totality.test.sh` — the one live consumer of `--enumerate`,
+  and therefore the concrete thing AC2's parity assertion protects.** Measured, it is the only
+  file outside `scripts/test-all.sh` that reads the record stream, and it does so as
+  `… | grep '^SUITE_REGISTRATION' | cut -f2` — anchored on the record type at line start and on
+  field 2. That anchoring is exactly why the new mode must emit a **different record type** rather
+  than widen this one, and why AC2 asserts "one added line and nothing else". The suite is
+  glob-registered via `plugins/soleur/test/*.test.sh`, so it runs in the same battery; assert it
+  green before and after. (`.github/workflows/ci.yml` mentions `--enumerate` only in a comment
+  describing how a timing table was re-derived — it is not a consumer.)
 - `scripts/lint-orphan-test-suites.sh` stays green with the new explicitly-registered suite.
 - `scripts/lib/repo-write-boundary.test.sh` is unmodified and stays green at `MIN_ASSERTIONS=57`.
 
