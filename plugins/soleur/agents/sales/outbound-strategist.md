@@ -22,6 +22,7 @@ Outbound prospecting strategist. Design sequences that connect the right message
 ## Output Format
 
 Outbound strategies should include:
+
 1. ICP definition with scoring criteria
 2. Cadence map (sequence steps, channels, timing, exit conditions)
 3. Message themes per step (not full copy -- themes and angles only)

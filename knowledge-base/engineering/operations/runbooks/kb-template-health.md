@@ -96,20 +96,26 @@ Map the result to the failure mode:
 All three remediations are GitHub-UI / `gh`-driven on `jikig-ai/kb-template`:
 
 - **Re-mark as template** (`is_template_dropped`):
+
   ```bash
   gh repo edit jikig-ai/kb-template --template
   ```
+
   (or GitHub UI → repo Settings → check "Template repository".)
 - **Make public** (`template_private`):
+
   ```bash
   gh repo edit jikig-ai/kb-template --visibility public --accept-visibility-change-consequences
   ```
+
   (or GitHub UI → repo Settings → Danger Zone → Change visibility → Public.)
 - **Un-rename / restore** (`repo_not_found`): if the repo was renamed,
   rename it back to `kb-template`:
+
   ```bash
   gh repo rename kb-template --repo jikig-ai/<current-name>
   ```
+
   If it was deleted, restore it from GitHub's deleted-repo recovery window
   (Settings → restore, available ~90 days) `[human-only: GitHub UI;
   repo-restore has no public REST endpoint]`, or re-create from a clone.

@@ -85,6 +85,7 @@ This premise spans all ~28 anchored sites (Slices B + C + Slice D) plus the SDK/
 - **Link 2 — the bash propagation** (`options.env` → bwrap-sandboxed shell) is separately gated by `apps/web-platform/scripts/plugin-root-propagation-verify-in-image.sh` in `.github/workflows/ci.yml`, which re-fires whenever `agent-env.ts` changes.
 
 **Assumptions carried forward:**
+
 - **Shared `NODE_ENV=test`/`VITEST` bypass, not independently hardened.** The injection guard reuses the same test-tolerance predicate as `getPluginPath` / `assertTrustedPluginPath` (canonical in `plugin-path.ts`). This is a guard-family-wide kill-switch the injection *consumes* — it does not re-harden it. A process that runs with `NODE_ENV=test` or `VITEST` set in production would neutralize all three; that is an existing platform assumption, unchanged here.
 - **`assertTrustedPluginPath` is lexical, not mount-verifying.** It checks the `/app/`-prefix of the (path-resolved) string; it does **not** stat the mount. A `/app/<attacker-writable>` path would pass — but controlling `args.pluginPath` at all requires a code change (both factories source it from `getPluginPath()`), so this is a defense-in-depth boundary, not the primary control.
 

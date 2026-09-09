@@ -16,10 +16,33 @@ pre-commit:
       glob: "*.rs"
       run: cargo clippy -- -D warnings
     markdown-lint:
+      # Routed through the single invoker (#7927). It previously called the linter
+      # through an unpinned package runner, which resolves the LATEST release on every
+      # run -- so the verdict drifted under files nobody had edited, and this hook was
+      # the only place the linter ran at all. (Naming that old command literally here
+      # would trip the single-invoker guard, which greps for the binary token in
+      # command position; the guard strips comments, but prose that names a forbidden
+      # literal is a trap worth not setting.)
+      # The script pins the binary and derives scope from .markdownlintignore, the
+      # same file the CI job reads, so hook and CI cannot disagree about what is red.
+      # `stage_fixed` is gone with it: this path lints, it does not rewrite (--fix
+      # corrupts prose on this corpus -- see the script's remediation block).
+      #
+      # TWO COUPLINGS, both load-bearing and neither visible from this stanza.
+      #
+      # `glob: "*.md"` is not an optimisation. Without it lefthook invokes the script
+      # with ZERO arguments on every commit, the script exits 2 on its usage guard, and
+      # EVERY commit in the repository is blocked. Do not remove it.
+      #
+      # The script needs root deps present (node_modules/.bin/markdownlint, plus
+      # python3). It refuses to fall back to an unpinned runner by design, so someone
+      # who has never run `npm install` cannot commit a Markdown file until they do --
+      # a real change from the previous behaviour, which needed nothing local. The
+      # script's own error names the fix, and worktrees get deps from
+      # worktree-manager.sh, so this bites a fresh clone rather than normal use.
       priority: 4
       glob: "*.md"
-      run: npx --yes markdownlint-cli {staged_files}
-      stage_fixed: true
+      run: bash scripts/markdown-lint.sh {staged_files}
     # Secret-scanning floor (#3121). gitleaks scans the staged index directly,
     # so no `glob:` filter is set — the binary handles file selection.
     # `--exit-code 1` makes lefthook treat any finding as a hard failure.

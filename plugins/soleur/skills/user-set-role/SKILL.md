@@ -29,6 +29,7 @@ to keep the two sides aligned.
 <arguments> #$ARGUMENTS </arguments>
 
 Required positional args: `<email-or-userId> <prd|dev>`.
+
 - `<email-or-userId>`: email address (resolved to UUID via Supabase) OR
   a Supabase auth UUID directly.
 - `<prd|dev>`: target role.

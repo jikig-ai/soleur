@@ -3,12 +3,18 @@ name: PR quality guards (#2905)
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  # Merge queue (#5780). Only `guard-script-fixture-tests` is a required
-  # context on ruleset 14145388 and it has NO PR-event dependency, so it runs
-  # cleanly on the gh-readonly-queue/main/* temp ref. Every OTHER job here is a
-  # PR-quality gate keyed on `github.event.pull_request.*` (PR number, diff,
-  # opt-out label) that has no meaning on a merge candidate — each is gated to
-  # `pull_request` below so it does not run (and spuriously error) on merge_group.
+  # Merge queue (#5780, second required context added by #7927). TWO jobs here are
+  # required contexts on ruleset 14145388 — `guard-script-fixture-tests` and
+  # `markdown-lint` — and NEITHER has a PR-event dependency, so both run cleanly on
+  # the gh-readonly-queue/main/* temp ref. Every OTHER job is a PR-quality gate keyed
+  # on `github.event.pull_request.*` (PR number, diff, opt-out label) that has no
+  # meaning on a merge candidate — each is gated to `pull_request` below so it does
+  # not run (and spuriously error) on merge_group.
+  #
+  # DO NOT add an `if:` to either required job. This comment used to say only ONE job
+  # here was required; an author following that would gate the new one to
+  # `pull_request` and the merge queue would sit pending forever, which is the exact
+  # failure its own comment says it is avoiding. Check this list before adding an `if:`.
   merge_group:
 
 permissions:
@@ -335,3 +341,43 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/check-sweep-completeness.sh
+
+  # markdownlint over the whole tracked corpus (#7927, also #7837 #7832 #2685).
+  #
+  # WHY IT IS A JOB AND NOT A HOOK. The linter used to exist ONLY as a lefthook
+  # pre-commit command. PRs land by squash merge, where lefthook never runs, so a
+  # red file reached main whenever its PR had no local commit staging it -- and it
+  # accumulated to 32,356 errors across 3,818 files before anyone could see it.
+  #
+  # WHOLE CORPUS, NOT --changed. Zero of the 49 errors that first blocked a
+  # contributor's `git merge origin/main` were in the PR that tripped over them, so
+  # a changed-files gate reproduces the blind spot by construction.
+  #
+  # Deliberately NO `if:` and no opt-out label, matching guard-script-fixture-tests
+  # above: a required context that does not report on merge_group leaves the queue
+  # entry pending forever.
+  #
+  # `npm ci` because the script refuses to run an unpinned binary -- resolving the
+  # latest release per invocation is the drift defect #7927 exists to close.
+  markdown-lint:
+    name: markdown-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      # Named without the binary's own token on purpose: the single-invoker guard
+      # in scripts/markdown-lint.test.sh greps command position, and a step NAME
+      # carrying the literal reads to it exactly like a second call site.
+      - name: Install the pinned linter
+        run: npm ci --ignore-scripts
+      - name: Lint the tracked Markdown corpus
+        run: bash scripts/markdown-lint.sh --repo-sweep
+      # The gate's OWN suite runs here, not in test-all.sh's scripts group: it drives the
+      # real pinned binary through a hermetic sandbox, and the `test-scripts` legs install
+      # no node deps, so this is the only CI job where it can execute rather than abort on
+      # a RED control. Ordered after the sweep so a corpus regression is reported as a
+      # corpus regression, not as a suite failure.
+      - name: Prove the gate can still fail (mutation suite)
+        run: bash scripts/markdown-lint.test.sh

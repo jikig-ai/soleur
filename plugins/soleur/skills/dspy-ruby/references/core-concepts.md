@@ -29,6 +29,7 @@ end
 ### Type Safety
 
 Signatures support Sorbet types including:
+
 - `String` - Text data
 - `Integer`, `Float` - Numeric data
 - `T::Boolean` - Boolean values
@@ -38,6 +39,7 @@ Signatures support Sorbet types including:
 ### Field Descriptions
 
 Always provide clear field descriptions using the `desc:` parameter. These descriptions:
+
 - Guide the LLM on expected input/output format
 - Serve as documentation for developers
 - Improve prediction accuracy
@@ -260,6 +262,7 @@ end
 ## Limitations
 
 Current constraints to be aware of:
+
 - No streaming support (single-request processing only)
 - Limited multimodal support through Ollama for local deployments
 - Vision capabilities vary by provider (see providers.md for compatibility matrix)

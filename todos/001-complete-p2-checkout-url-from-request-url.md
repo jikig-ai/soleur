@@ -21,14 +21,18 @@ dependencies: []
 ## Proposed Solutions
 
 ### Option A: Use environment variable (Recommended)
+
 Use `process.env.NEXT_PUBLIC_APP_URL ?? "https://app.soleur.ai"` for the origin.
+
 - **Pros:** Simple, no dependency on request headers
 - **Cons:** Requires env var to be set
 - **Effort:** Small
 - **Risk:** Low
 
 ### Option B: Use resolveOrigin utility
+
 Import `resolveOrigin` from `lib/auth/resolve-origin.ts` which already validates against the allowlist.
+
 - **Pros:** Reuses existing validation
 - **Cons:** More complex, different function signature
 - **Effort:** Small

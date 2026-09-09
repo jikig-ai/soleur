@@ -129,6 +129,7 @@ You agree to notify Us of any facts or circumstances of which You become aware t
 ---
 
 > **Related documents:** This Corporate Contributor License Agreement relates to the Project's intellectual property framework. Please review the companion documents:
+>
 > - [Individual Contributor License Agreement](individual-cla.md) -- for contributions made by individuals
 > - [Terms & Conditions](terms-and-conditions.md) -- governs use of the Soleur platform
 > - [Privacy Policy](privacy-policy.md) -- details data practices including CLA signature processing

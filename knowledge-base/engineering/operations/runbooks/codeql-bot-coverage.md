@@ -41,6 +41,7 @@ bash scripts/audit-bot-codeql-coverage.sh --json --limit 5
 ```
 
 Exit codes:
+
 - `0` — pass (all sampled bot PRs have `CodeQL` with conclusion ∈ {`success`, `neutral`, `skipped`})
 - `1` — drift (a bot PR has `CodeQL` missing, failure, cancelled, timed_out, or wrong app)
 - `2` — re-poll required (a bot PR has `CodeQL` still `in_progress`)

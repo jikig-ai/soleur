@@ -52,7 +52,7 @@ Classify ──▶ Review ──▶ Verify ──▶ Synthesize ──▶ File
    **Untrusted-input hardening:** finding titles derive from the diff under
    review — potentially attacker-controlled PR content. The title is passed to
    `gh` as a shell argv, so it runs through `safeTitle()` (strips control chars
-   + shell metacharacters, caps length) and a constant `review: ` prefix
+   + shell metacharacters, caps length) and a constant `review: ` prefix <!-- markdownlint-disable-line MD038 -->
    (no leading `-` → no argv flag-smuggling); the body always goes via
    `--body-file` so it is never shell-parsed. The agent writes both to temp
    files with its Write tool rather than receiving an interpolated command.
@@ -96,23 +96,24 @@ resume an interrupted run, add `resumeFromRunId: "<runId>"` — unchanged
 
 ## Ported so far
 
-- always-on dimension agents (class-gated 2/4/8 fan-out)
-- conditional dimensions (Rails ×2, migration ×2, test-design, semgrep-SAST,
++ always-on dimension agents (class-gated 2/4/8 fan-out)
++ conditional dimensions (Rails ×2, migration ×2, test-design, semgrep-SAST,
   shellcheck (bash), real `gdpr-gate` skill, anti-slop Tier-1, user-impact)
   from deterministic `triggers`
-- deterministic-tool findings auto-confirmed (skip adversarial verify)
-- 1–3 skeptic adversarial verification, no-barrier pipeline
-- provenance-driven deterministic disposition
-- CONCUR-gated `deferred-scope-out` filing (dry-run by default; `{ file: true }`
++ deterministic-tool findings auto-confirmed (skip adversarial verify)
++ 1–3 skeptic adversarial verification, no-barrier pipeline
++ provenance-driven deterministic disposition
++ CONCUR-gated `deferred-scope-out` filing (dry-run by default; `{ file: true }`
   to create issues)
-- `budget` floor on the verify fan-out with logged UNVERIFIED coverage
++ `budget` floor on the verify fan-out with logged UNVERIFIED coverage
 
 ### Deterministic vs. judgment findings
 
 Dimensions split into two kinds:
-- **LLM-judgment** (the reviewer agents) → every finding is adversarially
+
++ **LLM-judgment** (the reviewer agents) → every finding is adversarially
   verified (refute-by-default) before it surfaces.
-- **Deterministic tools/skills** (`semgrep`, `shellcheck`, `anti-slop`, the real
++ **Deterministic tools/skills** (`semgrep`, `shellcheck`, `anti-slop`, the real
   `gdpr-gate`) → findings are **auto-confirmed as ground truth**, skipping the
   verify stage. Refuting an `SC2086` or a `BRAND-RAW-HEX` hit would be both wrong
   and wasteful; the tool is authoritative. These carry `deterministic: true`.
@@ -123,12 +124,12 @@ tree-sitter bash parser is vacuous — SKILL.md note). `anti-slop` high-severity
 
 ## Still NOT ported (next increments)
 
-- **Follow-through auto-wiring** — filed scope-outs don't yet scaffold the
++ **Follow-through auto-wiring** — filed scope-outs don't yet scaffold the
   `<!-- soleur:followthrough -->` directive + verification script + `chmod`.
-- **semgrep `ensure-semgrep.sh` exit-code handling** — the `semgrep` dimension
++ **semgrep `ensure-semgrep.sh` exit-code handling** — the `semgrep` dimension
   prompts the bootstrap but doesn't hard-abort the run on a non-zero installer
   exit (the SKILL does).
-- **Pipeline-mode compact-marker output** for `one-shot` / `work` callers (the
++ **Pipeline-mode compact-marker output** for `one-shot` / `work` callers (the
   workflow returns structured JSON instead, which an orchestrator consumes
   directly — arguably moot in workflow form).
 

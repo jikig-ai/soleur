@@ -115,7 +115,9 @@ above. Each producer invocation below is therefore wrapped in its own presence
 check, in the same subprocess, so an absent producer is skipped rather than
 invoked and reports:
 
-    SOLEUR_SYNC_PRODUCER_MISSING producer=<payload-relative-path> affects=<area> reason=absent-from-verified-root
+```text
+SOLEUR_SYNC_PRODUCER_MISSING producer=<payload-relative-path> affects=<area> reason=absent-from-verified-root
+```
 
 `reason=` states what was **observed** — this path is absent under a root that
 verified — never why it is absent. A stale install, an interrupted install, and a

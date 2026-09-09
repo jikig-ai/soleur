@@ -225,6 +225,7 @@ fallback does not enlarge that gate's scope — the two relocation items are unc
 When the first real tenant host is provisioned, the minter MUST run on a control-plane surface
 tenant hosts cannot read from, distributing only the scoped 1h read token. That cutover MUST
 relocate **BOTH** control-plane-resident credentials off the shared/tenant `prd` env:
+
 1. **`GITHUB_APP_PRIVATE_KEY`** — org-wide WRITE (already a `prd` landmine pre-#6031).
 2. **`GHCR_MINTER_DOPPLER_TOKEN`** — the Doppler write token this PR newly co-locates in `prd`.
 

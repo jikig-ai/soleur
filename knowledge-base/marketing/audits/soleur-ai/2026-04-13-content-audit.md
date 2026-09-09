@@ -418,6 +418,7 @@ All five case studies share identical structure and similar issues:
 
 **Current:** Chronological list of 16 posts.
 **Suggested:** Group under topic headings:
+
 - **What is Company-as-a-Service?** (pillar: "What Is Company-as-a-Service?", cluster: "AI Agents for Solo Founders")
 - **Soleur vs. Competitors** (5 comparison posts)
 - **Case Studies** (5 case studies)
@@ -432,6 +433,7 @@ All five case studies share identical structure and similar issues:
 **Rationale:** Includes "Soleur" for branded search. Pattern "How Soleur [achieved X]" is more search-friendly and clarifies the tool used.
 
 Apply same pattern to other case studies:
+
 - "How Soleur Validated a Business Idea with AI Gates"
 - "How Soleur Tracked 17 Competitors with AI Battlecards"
 - "How Soleur Generated 9 Legal Documents in Days"
@@ -447,6 +449,7 @@ Apply same pattern to other case studies:
 
 **Current:** ~200 words, mostly links to external platforms.
 **Suggested additions:**
+
 - Community stats (Discord member count, GitHub stars, contributor count)
 - Featured community contributions or testimonials
 - "Getting Involved" guide with specific first-contribution suggestions
@@ -467,6 +470,7 @@ Apply same pattern to other case studies:
 ### RS11: Add Author Bylines to All Blog Posts
 
 **Suggested format for each blog post:**
+
 - Author name: Jean Deruelle
 - Author role: Founder, Soleur
 - Link to About page
@@ -523,6 +527,7 @@ Apply same pattern to other case studies:
 **Pages audited:** 26 of 36 total pages in sitemap. The 10 legal sub-pages (terms, privacy policy, cookie policy, GDPR, acceptable use, data protection, disclaimer, individual CLA, corporate CLA) were excluded from detailed analysis as they serve compliance purposes with minimal SEO value. The legal index page was audited.
 
 **Assessment criteria:**
+
 - **Keyword alignment:** Are target keywords present in title tag, H1, meta description, first paragraph, and subheadings?
 - **Search intent match:** Does the page content match what a user searching the target keyword would expect to find?
 - **Readability:** Is the content scannable, well-structured, and at an appropriate reading level for the target audience (technical solo founders)?
@@ -534,6 +539,7 @@ Apply same pattern to other case studies:
 **Brand guide status:** No brand guide found. Voice patterns inferred from existing content: direct, technically precise, confident without hyperbole, founder-to-founder tone, minimal jargon outside established terms (CaaS, agentic engineering).
 
 **Limitations:**
+
 - JavaScript-rendered content may not have been fully captured by the fetch tool
 - Internal linking structure was assessed from content mentions, not a full crawl
 - Search volume data was not available for keyword gap analysis -- relevance assessed qualitatively

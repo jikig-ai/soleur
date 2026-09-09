@@ -46,6 +46,7 @@ SELECT id, name, type FROM lookup_table ORDER BY id;
 ```
 
 **Expected Results:**
+
 - Document expected values and tolerances
 - Any deviation from expected = STOP deployment
 
@@ -81,12 +82,14 @@ SELECT status, COUNT(*) FROM records GROUP BY status;
 ### 5. Rollback Plan
 
 **Can we roll back?**
+
 - [ ] Yes - dual-write kept legacy column populated
 - [ ] Yes - have database backup from before migration
 - [ ] Partial - can revert code but data needs manual fix
 - [ ] No - irreversible change (document why this is acceptable)
 
 **Rollback Steps:**
+
 1. Deploy previous commit
 2. Run rollback migration (if applicable)
 3. Restore data from backup (if needed)
@@ -164,6 +167,7 @@ Produce a complete Go/No-Go checklist that an engineer can literally execute:
 ## When to Use This Agent
 
 Invoke this agent when:
+
 - PR touches database migrations with data changes
 - PR modifies data processing logic
 - PR involves backfills or data transformations

@@ -98,4 +98,3 @@ After writing the learning, check if the insight should be promoted to a project
 - If the learning addresses a recurring pattern → propose adding to project conventions
 - If the learning exposes a gap in rules → propose a rule addition
 - Use `ask_user` to confirm before modifying convention files
-

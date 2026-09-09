@@ -80,4 +80,4 @@ Pre-merge: RED→GREEN regression `test/conversations-rail-connect-race.test.tsx
 
 ## Action Items & Follow-ups
 
-_No action items — incident fully resolved in the source PR with no residual work._
+*No action items — incident fully resolved in the source PR with no residual work.*

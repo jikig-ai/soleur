@@ -471,4 +471,4 @@ All article URLs distributed via social-distribute use platform-specific UTM par
 
 ---
 
-_Updated: 2026-06-08 (cascade from full six-tier CI scan: Gap 5 reframed to autonomous-CaaS pack incl. Polsia $30M/$250M + NanoCorp; added Gap 13 metered-pricing angle and Gap 14 workflow-depth proof pivot). Previously: 2026-05-03 (Issue #3108). Sources: competitive-intelligence.md (2026-06-08), brand-guide.md (2026-06-01), business-validation.md (2026-03-22)._
+*Updated: 2026-06-08 (cascade from full six-tier CI scan: Gap 5 reframed to autonomous-CaaS pack incl. Polsia $30M/$250M + NanoCorp; added Gap 13 metered-pricing angle and Gap 14 workflow-depth proof pivot). Previously: 2026-05-03 (Issue #3108). Sources: competitive-intelligence.md (2026-06-08), brand-guide.md (2026-06-01), business-validation.md (2026-03-22).*

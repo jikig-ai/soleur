@@ -100,7 +100,7 @@ decision, not a rewrite.
 
 **Decision (added).** The gate now enforces **transitive** reachability via a second forbidden
 rule (`no-client-to-server-secret-transitive`, `to.reachable: true`) alongside the direct rule.
-Two load-bearing sub-decisions, both verified against the installed dependency-cruiser@16.10.x
+Two load-bearing sub-decisions, both verified against the installed <dependency-cruiser@16.10.x>
 source:
 
 - **`options.tsPreCompilationDeps` flipped `true → false`.** dependency-cruiser v16 `reachable`

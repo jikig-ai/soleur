@@ -21,9 +21,9 @@ operator BYOK).
 | **DPA effective date** | 2025-02-24 |
 | **Transfer mechanisms** | EU-US DPF + SCCs M2+3 + UK IDTA + Swiss Addendum |
 | **Region (data processed)** | US |
-| **Anthropic Commercial Terms URL** | https://www.anthropic.com/legal/commercial-terms |
-| **Anthropic DPA URL** | https://www.anthropic.com/legal/dpa |
-| **Anthropic Sub-Processors list** | https://www.anthropic.com/legal/subprocessors |
+| **Anthropic Commercial Terms URL** | <https://www.anthropic.com/legal/commercial-terms> |
+| **Anthropic DPA URL** | <https://www.anthropic.com/legal/dpa> |
+| **Anthropic Sub-Processors list** | <https://www.anthropic.com/legal/subprocessors> |
 
 ## Zero-Retention amendment
 
