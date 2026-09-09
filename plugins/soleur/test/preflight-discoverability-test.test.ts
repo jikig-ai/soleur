@@ -2250,6 +2250,21 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   //      `authenticated` cannot execute it — so an anon probe cannot even call it, let alone
   //      assert its body. Also a database query, not a host login, so the no-SSH requirement
   //      in `hr-observability-as-plan-quality-gate` is satisfied.
+  // 10 -> 11 -> 10 (#7909/#7910). The increment was WITHDRAWN in the same PR that
+  // made it, and the reason is worth keeping: the declaration was accurate about
+  // credentials and still the wrong field. `--print-epoch` reads only local git
+  // history and needs nothing, so there was nothing to waive -- but declaring it
+  // made Check 10 skip WITHOUT EXECUTING, and the plan it waived claimed the
+  // probe "exits 0" for a command that exits 2. A person caught that; the gate
+  // that exists to catch it had been told not to look. The probe now reaches
+  // Check 10 through `scripts/ccla-icla-watch-discoverability.sh`, which asserts
+  // the exit-2 invariant instead of waiving it.
+  //
+  // The general shape: a `credentials_required` value can be TRUE and still be
+  // the wrong field, because the question it answers is not "does this need a
+  // credential" but "is there no unauthenticated probe of the same property".
+  //
+  // The 10 that remains is #7873's and #7829's, untouched by this PR.
   const BASELINE_DECLARED_PROBES = 10;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {

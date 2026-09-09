@@ -115,6 +115,29 @@ iso_to_epoch() {
 # bounds the reopen loop WITHOUT any persistent state — the script is stateless
 # and runs its verification under `env -i`, so an in-process counter cannot
 # survive between sweeps. GitHub's own comment history is the state.
+# The containment, as a NAMED UNIT so it can be driven directly. It shipped as
+# an inline pipeline inside run_one, which `DRY_RUN` returns before reaching --
+# so the security control had zero test coverage while the numeric constant
+# beside it had three assertions.
+#
+# Reads $1, writes the sanitized text. Three neutralisations, each keyed on a
+# marker this file actually reads back:
+#   * `<!--`  -- the reopen marker's opening lexeme, and the directive grammar.
+#   * a run of five or more backticks -- collapsed to four, so no output line
+#     can close the five-backtick fence the bodies below open.
+#   * the PASS heading's prefix -- `closed_precheck` matches it with
+#     `startswith`, so probe output is inert only POSITIONALLY today. A later
+#     relaxation to `contains` (the same jq expression already uses `contains`
+#     four lines down) would make it forgeable by any probe's stdout, and the
+#     other two rules would not catch it.
+sanitize_probe_output() {
+  printf '%s' "$1" \
+    | sed -e 's/<!--/<!- -/g' \
+          -e 's/`\{5,\}/````/g' \
+          -e 's/### Sweeper run:/### Sweeper-run:/g' \
+          -e 's/### Sweeper reopen:/### Sweeper-reopen:/g'
+}
+
 readonly SWEEPER_REOPEN_MARKER="<!-- soleur:sweeper-reopen -->"
 # The PASS block the sweeper writes when it closes an issue itself.
 readonly SWEEPER_PASS_HEADING="### Sweeper run: PASS"
@@ -395,6 +418,27 @@ run_one() {
   # command substitution surfaces.
   out=$(printf '%s' "$out" | grep -v '^+' || true)
 
+  # TWO CONTAINMENT FIXES, in the same place and for the same reason: whatever a
+  # probe writes is republished VERBATIM under the `github-actions` identity, and
+  # the sweeper reads two of its own control markers back out of comments
+  # authored by that identity (the reopen marker, by substring; the PASS prefix).
+  # The author gate closes direct forgery. It does not close LAUNDERING —
+  # content that reaches a probe's stdout is re-emitted under the trusted
+  # identity — and #7922's probe is the first one that reads third-party
+  # controlled content at all.
+  #
+  # 1. An HTML comment opener is neutralised. `<!-- soleur:followthrough ... -->`
+  #    is the directive grammar this sweeper parses; a probe that emitted one
+  #    would be writing sweeper control syntax into a public issue.
+  # 2. The fence is raised to five backticks and any run of five-or-more in the
+  #    output is reduced to four, so no output line can close the fence. A bare
+  #    three-backtick line otherwise ends the code block and lets everything
+  #    after it render as markdown — which is where a forged marker would go.
+  #
+  # One strip here protects every probe, rather than relying on 80 scripts each
+  # carrying a correct preamble.
+  out="$(sanitize_probe_output "$out")"
+
   local trimmed_out
   trimmed_out=$(printf '%s' "$out" | tail -c 4000)
 
@@ -413,9 +457,9 @@ This issue was closed, but \`$script\` still exits 1 — the close criteria are 
 
 <details><summary>Output (last 4 KB)</summary>
 
-\`\`\`
+\`\`\`\`\`
 $trimmed_out
-\`\`\`
+\`\`\`\`\`
 
 </details>"
         ;;
@@ -461,9 +505,9 @@ Script: \`$script\` exited 0. Auto-closing per follow-through convention.
 
 <details><summary>Output (last 4 KB)</summary>
 
-\`\`\`
+\`\`\`\`\`
 $trimmed_out
-\`\`\`
+\`\`\`\`\`
 
 </details>"
       action="close"
@@ -475,23 +519,38 @@ Script: \`$script\` exited 1. Leaving issue open; the close criteria are not met
 
 <details><summary>Output (last 4 KB)</summary>
 
-\`\`\`
+\`\`\`\`\`
 $trimmed_out
-\`\`\`
+\`\`\`\`\`
 
 </details>"
       action="comment"
       ;;
     *)
-      verdict="TRANSIENT"
-      body_msg="### Sweeper run: TRANSIENT (exit $rc, $(date -u +%FT%TZ))
-Script: \`$script\` exited $rc. Treating as transient; leaving issue open for next sweep.
+      # A STATIC rc -> WORD MAP. The heading is the only thing an operator sees
+      # without expanding the <details> fold, and it used to read
+      # "TRANSIENT ... Treating as transient" for EVERY non-0/1 code -- so a
+      # probe's actionable verdict rendered as reassurance, and its prose
+      # actively contradicted it. The words are literals chosen here, never
+      # probe-authored text, so nothing escapes the containment above.
+      case "$rc" in
+        2) verdict="NOT YET" ;;
+        3) verdict="CANNOT ESTABLISH" ;;
+        5) verdict="ACTION REQUIRED" ;;
+        *) verdict="TRANSIENT" ;;
+      esac
+      case "$rc" in
+        2|3|5) _disposition="Leaving the issue open. See the probe's own output below for what to do." ;;
+        *)     _disposition="Treating as transient; leaving issue open for next sweep." ;;
+      esac
+      body_msg="### Sweeper run: $verdict (exit $rc, $(date -u +%FT%TZ))
+Script: \`$script\` exited $rc. $_disposition
 
 <details><summary>Output (last 4 KB)</summary>
 
-\`\`\`
+\`\`\`\`\`
 $trimmed_out
-\`\`\`
+\`\`\`\`\`
 
 </details>"
       action="comment"
@@ -511,6 +570,11 @@ $trimmed_out
   log "issue #$issue_num: verdict=$verdict action=$action"
 }
 
+# Set when the open-issue listing filled its page. Raised as the job's verdict
+# at the end of main(), AFTER every reachable tracker has been swept -- failing
+# early would skip the probes this sweep can still run.
+TRUNCATED_SWEEP=0
+
 main() {
   log "sweep start (repo=$REPO dry_run=$DRY_RUN)"
 
@@ -522,11 +586,32 @@ main() {
   export NO_DIRECTIVE_FILE
   trap 'rm -f "$NO_DIRECTIVE_FILE"' EXIT
 
+  # OPEN_LIMIT was 50 against 51 live open trackers (measured 2026-09-07), and
+  # `gh issue list` returns NEWEST FIRST -- so the OLDEST tracker was silently
+  # never swept. Its failure signature is the ABSENCE of a daily comment, which
+  # is indistinguishable from a healthy quiet probe, so nothing surfaced it.
+  #
+  # Raising the number alone would re-create the same silent failure at a higher
+  # count, which is why the truncation DETECTOR below matters more than the
+  # value: a full page means there may be more, and that is now said out loud
+  # rather than being the state in which trackers disappear.
+  local OPEN_LIMIT=200
   local issues_json
-  issues_json=$(gh issue list --repo "$REPO" --label follow-through --state open --limit 50 --json number,body)
+  issues_json=$(gh issue list --repo "$REPO" --label follow-through --state open --limit "$OPEN_LIMIT" --json number,body)
   local count
   count=$(printf '%s' "$issues_json" | jq 'length')
   log "found $count open follow-through issues"
+  if [[ "$count" -ge "$OPEN_LIMIT" ]]; then
+    # This SETS A FLAG rather than only annotating. `::error::` renders on the
+    # run page but does not change the job's status, so a truncated sweep would
+    # report success -- and the whole failure mode here is that a never-swept
+    # tracker is indistinguishable from a quiet one. A green run with an
+    # annotation nobody opens is the same silence one layer up. The sweep still
+    # completes first; the verdict is raised at the end of main().
+    TRUNCATED_SWEEP=1
+    printf '::error::sweep-followthroughs: the open follow-through set filled the page (%s >= %s). Trackers beyond it were NOT swept, and a never-swept tracker looks exactly like a quiet one. Raise OPEN_LIMIT or paginate.\n' \
+      "$count" "$OPEN_LIMIT" >&2
+  fi
 
   local i
   for i in $(seq 0 $((count - 1))); do
@@ -612,4 +697,12 @@ main() {
 # Allow tests to source this script without running main().
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   main "$@"
+  # The truncation verdict. Raised here so the sweep completes first: every
+  # tracker the page DID reach is still swept, and only then does the run go
+  # red. A green run carrying an annotation is the silence this detector exists
+  # to break.
+  if [[ "$TRUNCATED_SWEEP" == "1" ]]; then
+    printf '::error::sweep-followthroughs: FAILING THE RUN because the open follow-through page was full; some trackers were not swept at all.\n' >&2
+    exit 1
+  fi
 fi
