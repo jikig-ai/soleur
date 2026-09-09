@@ -13,11 +13,28 @@
 # network, no BETTERSTACK_QUERY_* creds, no live rows (cq-test-fixtures-synthesized-only).
 # We assert the SQL SHAPE, never live data, because availability and row counts are
 # time-varying and must never be encoded in a test.
+#
+# (#7898 §6) THE STUB HOST IS NOW VENDOR-SHAPED, and that is not cosmetic. betterstack-query.sh
+# refuses any BETTERSTACK_QUERY_HOST outside `*.betterstackdata.com` before it will attach the
+# Basic-auth credential, so the previous `stub` value would now exit 2 at the host check and
+# every SQL-shape row below would assert on an empty string. `stub.betterstackdata.com` is
+# synthetic and is never dialled — `curl` is shadowed as a shell function in every arm — so no
+# packet leaves the machine (precedent: tests/scripts/test-betterstack-ingest-probe.sh, which
+# satisfies the sibling allowlist with a zeroed-source-id vendor host and no seam at all).
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TARGET="${SCRIPT_DIR}/scripts/betterstack-query.sh"
 [[ -r "$TARGET" ]] || { echo "FAIL: cannot read $TARGET" >&2; exit 1; }
+
+# Synthetic, allowlist-satisfying stub destination. Never resolved, never dialled.
+STUB_HOST="stub.betterstackdata.com"
+# The live production query host, from Doppler soleur/prd_terraform (read-only, 2026-09-09).
+# Used ONLY as a must-PASS fixture value for the allowlist rows; still never dialled.
+LIVE_HOST="eu-central-1a-connect.betterstackdata.com"
+
+BS_TMP="$(mktemp -d -t bsqarch.XXXXXXXX)" || { echo "mktemp failed" >&2; exit 2; }
+trap 'rm -rf "$BS_TMP"' EXIT
 
 pass=0 fail=0
 ok()   { printf '  ok   %s\n' "$1"; pass=$((pass + 1)); }
@@ -28,7 +45,7 @@ bad()  { printf '  FAIL %s\n     %s\n' "$1" "${2:-}" >&2; fail=$((fail + 1)); }
 # sourcing it would overwrite any run_sql stub. curl is the real egress boundary — stubbing
 # it also proves no request escapes. Creds are faked to clear the guard; they are never sent.
 capture_sql() {
-  BETTERSTACK_QUERY_HOST=stub \
+  BETTERSTACK_QUERY_HOST="$STUB_HOST" \
   BETTERSTACK_QUERY_USERNAME=stub \
   BETTERSTACK_QUERY_PASSWORD=stub \
   bash -c '
@@ -47,7 +64,7 @@ capture_sql() {
 # Same, but the curl stub exits non-zero — used to prove the failure propagates to the
 # caller rather than being swallowed (the script runs under `set -uo pipefail`, NOT -e).
 run_with_failing_curl() {
-  BETTERSTACK_QUERY_HOST=stub \
+  BETTERSTACK_QUERY_HOST="$STUB_HOST" \
   BETTERSTACK_QUERY_USERNAME=stub \
   BETTERSTACK_QUERY_PASSWORD=stub \
   bash -c '
@@ -160,7 +177,7 @@ if (( inner_desc && outer_asc )); then ok "LIMIT takes newest N (inner DESC), ou
 else bad "LIMIT takes newest N (inner DESC), output re-sorted ASC" "inner_desc=$inner_desc outer_asc=$outer_asc :: ${sql_lim:0:220}"; fi
 
 # --- 7. a non-_logs table refuses to guess an archive name ---
-out_rc="$(BETTERSTACK_QUERY_HOST=stub BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
+out_rc="$(BETTERSTACK_QUERY_HOST="$STUB_HOST" BETTERSTACK_QUERY_USERNAME=stub BETTERSTACK_QUERY_PASSWORD=stub \
   bash "$TARGET" --since 1h --table t520508_foo_metrics >/dev/null 2>&1; printf '%s' "$?")"
 if [[ "$out_rc" == "64" ]]; then ok "non-_logs table errors rather than inventing <name>_s3"
 else bad "non-_logs table errors rather than inventing <name>_s3" "expected rc=64, got $out_rc"; fi
@@ -180,5 +197,195 @@ rc_n="$(run_with_failing_curl --since 1h --no-archive)"
 if [[ "$rc_u" != "0" && "$rc_n" != "0" ]]; then ok "a failing query exits non-zero (both arms)"
 else bad "a failing query exits non-zero (both arms)" "union rc=$rc_u no-archive rc=$rc_n"; fi
 
+# --- 9. Guard 2: the destination pin (#7898 §6) -------------------------------------------
+#
+# PROPERTY: betterstack-query.sh never sends BETTERSTACK_QUERY_{USERNAME,PASSWORD} to a host
+# outside `*.betterstackdata.com`. `run_sql()` is the sole site that attaches the credential
+# (`-u`) and the sole curl in the file, so a request that escapes is observable as a shim
+# invocation — which is what makes these rows non-vacuous.
+#
+# WHY A COUNTING SHIM AND NOT capture_sql()'s: capture_sql's stub prints the `-d` argument and
+# returns 0. It counts nothing and never sees the destination URL, so it cannot tell "refused
+# before curl" from "sent, and the output happened to be empty". Every refusal row below would
+# pass against a script with no host check at all. This shim appends one line per invocation,
+# carrying the URL, so "zero invocations" is an assertion rather than an inference.
+CURL_LOG="${BS_TMP}/curl-invocations.log"
+: > "$CURL_LOG"
+
+# Runs the real script with a counting `curl` shim. Echoes the exit code; the refusal text
+# lands in $ERR_LOG and the invocations in $CURL_LOG (both truncated per call). Both are FILES,
+# not variables: run_pinned is called inside `$( )`, so anything it assigns dies with that
+# subshell — a refusal-text assertion against a variable would read empty and pass on nothing.
+ERR_LOG="${BS_TMP}/stderr.log"
+: > "$ERR_LOG"
+run_pinned() {  # $1 = BETTERSTACK_QUERY_HOST value; remaining args go to the script
+  local host="$1"; shift
+  : > "$CURL_LOG"
+  local rc=0
+  # Synthetic credentials are LOAD-BEARING, not decoration: without them the script exits 3 at
+  # the credential-presence guard, which sits ABOVE the host check, so "exited non-zero" would
+  # tick while the allowlist was never reached — a vacuous pass (AC7).
+  BETTERSTACK_QUERY_HOST="$host" \
+  BETTERSTACK_QUERY_USERNAME=synthetic-user-not-a-credential \
+  BETTERSTACK_QUERY_PASSWORD=synthetic-pass-not-a-credential \
+  CURL_LOG="$CURL_LOG" \
+  bash -c '
+    curl() {
+      # Record the destination so a reviewer can see WHERE the credential would have gone.
+      local a url="<no-url-arg>"
+      for a in "$@"; do case "$a" in http://*|https://*) url="$a" ;; esac; done
+      printf "%s\n" "$url" >> "$CURL_LOG"
+      return 0
+    }
+    source "$1" "${@:2}"
+  ' _ "$TARGET" "$@" >/dev/null 2>"$ERR_LOG" || rc=$?
+  printf '%s' "$rc"
+}
+curl_calls() { wc -l < "$CURL_LOG" | tr -d ' '; }
+last_err()   { head -c 300 "$ERR_LOG"; }
+
+# G2.1 — a BARE host outside the apex. It passes EVERY arm of the pre-existing shape check
+# (no control chars, no @, no /, no ?, no #, one colon at most, non-empty), which is exactly
+# why the shape check was never a destination pin.
+rc="$(run_pinned attacker.example --since 1h)"
+calls="$(curl_calls)"
+if [[ "$rc" == "2" && "$calls" == "0" && "$(cat "$ERR_LOG")" == *"*.betterstackdata.com"* ]]; then
+  ok "a substituted bare host (attacker.example) is refused with exit 2, zero curl invocations"
+else
+  bad "a substituted bare host (attacker.example) is refused with exit 2, zero curl invocations" \
+      "rc=$rc curl_invocations=$calls err=$(last_err)"
+fi
+
+# G2.2 — the vendor apex as a PREFIX of an attacker domain. This is the value that
+# discriminates authority-extraction-plus-suffix-match from a whole-value `*betterstackdata.com*`
+# glob. The obvious candidate does NOT work: `evil.com/?x=.betterstackdata.com` is already
+# refused by the shape arm (which rejects `/` and `?`), never reaches the allowlist, and so
+# discriminates nothing.
+rc="$(run_pinned betterstackdata.com.attacker.example --since 1h)"
+calls="$(curl_calls)"
+if [[ "$rc" == "2" && "$calls" == "0" ]]; then
+  ok "the apex is anchored as a SUFFIX (betterstackdata.com.attacker.example refused)"
+else
+  bad "the apex is anchored as a SUFFIX (betterstackdata.com.attacker.example refused)" \
+      "rc=$rc curl_invocations=$calls err=$(last_err)"
+fi
+
+# G2.5 — a registrable lookalike that matches only if the pattern lost its leading dot.
+rc="$(run_pinned notbetterstackdata.com --since 1h)"
+calls="$(curl_calls)"
+if [[ "$rc" == "2" && "$calls" == "0" ]]; then
+  ok "the leading dot is present (notbetterstackdata.com refused)"
+else
+  bad "the leading dot is present (notbetterstackdata.com refused)" \
+      "rc=$rc curl_invocations=$calls err=$(last_err)"
+fi
+
+# The pre-existing shape family still refuses — the allowlist is an ADDITION, not a swap.
+# `real.host@evil.example` resolves to evil.example; the userinfo arm catches it first.
+rc="$(run_pinned 'x.betterstackdata.com@evil.example' --since 1h)"
+calls="$(curl_calls)"
+if [[ "$rc" == "2" && "$calls" == "0" ]]; then
+  ok "userinfo is still refused (vendor-looking string left of an @)"
+else
+  bad "userinfo is still refused (vendor-looking string left of an @)" \
+      "rc=$rc curl_invocations=$calls err=$(last_err)"
+fi
+
+# H2 — must-PASS, non-canonical. The live production host, and the same host with an explicit
+# port: the port strip and the apex are both permitted BY CONTRACT, so a pin that refuses
+# either breaks every consumer at once. Exactly one curl invocation, at the pinned host, is
+# also what makes H1 (remove the shim) fail closed rather than silently begin dialling.
+for h in "$LIVE_HOST" "${LIVE_HOST}:443"; do
+  rc="$(run_pinned "$h" --since 1h)"
+  calls="$(curl_calls)"
+  if [[ "$rc" == "0" && "$calls" == "1" && "$(cat "$CURL_LOG")" == "https://${h}?"* ]]; then
+    ok "the live vendor host is admitted and reached exactly once (${h})"
+  else
+    bad "the live vendor host is admitted and reached exactly once (${h})" \
+        "rc=$rc curl_invocations=$calls url=$(head -c 120 "$CURL_LOG") err=$(last_err)"
+  fi
+done
+
+# Case folding. DNS is case-insensitive; a bash `case` glob is not, and LC_ALL does not change
+# that. This exact value works today, so a pin that refuses it is a regression, not a tightening.
+rc="$(run_pinned "$(printf '%s' "$LIVE_HOST" | tr '[:lower:]' '[:upper:]')" --since 1h)"
+calls="$(curl_calls)"
+if [[ "$rc" == "0" && "$calls" == "1" ]]; then
+  ok "an UPPERCASE vendor host is admitted (DNS is case-insensitive; a case glob is not)"
+else
+  bad "an UPPERCASE vendor host is admitted (DNS is case-insensitive; a case glob is not)" \
+      "rc=$rc curl_invocations=$calls err=$(last_err)"
+fi
+
+# One trailing dot. `host.` is a valid absolute FQDN, passes every shape arm, and resolves.
+rc="$(run_pinned "${LIVE_HOST}." --since 1h)"
+calls="$(curl_calls)"
+if [[ "$rc" == "0" && "$calls" == "1" ]]; then
+  ok "a trailing-dot FQDN is admitted (one dot stripped before matching)"
+else
+  bad "a trailing-dot FQDN is admitted (one dot stripped before matching)" \
+      "rc=$rc curl_invocations=$calls err=$(last_err)"
+fi
+
+# --- 10. the OTHER destination-shaped inputs in the same request (#7898 §6, step 1.1b) -----
+# BS_TABLE / BS_TABLE_S3 interpolate unquoted into remote(...) and s3Cluster(primary, ...),
+# whose leading argument positions are an ADDRESS expression and a URL. They are env-settable
+# AND flag-settable by the same actor the host pin defends against, and the flag loop runs
+# BELOW the host check, so nothing validated them at any point.
+# The fixture must END IN `_logs`, or the pre-existing archive-derivation guard refuses it
+# with 64 for an unrelated reason and the row passes without exercising any validation.
+EVIL_TABLE="s3('http://evil.example/x')_logs"
+rc="$(BS_TABLE="$EVIL_TABLE" run_pinned "$STUB_HOST" --since 1h)"
+calls="$(curl_calls)"
+if [[ "$rc" != "0" && "$calls" == "0" ]]; then
+  ok "a non-identifier BS_TABLE is refused before any request"
+else
+  bad "a non-identifier BS_TABLE is refused before any request" "rc=$rc curl_invocations=$calls"
+fi
+
+rc="$(run_pinned "$STUB_HOST" --since 1h --table "$EVIL_TABLE")"
+calls="$(curl_calls)"
+if [[ "$rc" != "0" && "$calls" == "0" ]]; then
+  ok "a non-identifier --table is refused before any request"
+else
+  bad "a non-identifier --table is refused before any request" "rc=$rc curl_invocations=$calls"
+fi
+
+rc="$(run_pinned "$STUB_HOST" --since 1h --table-s3 "http://evil.example/x")"
+calls="$(curl_calls)"
+if [[ "$rc" != "0" && "$calls" == "0" ]]; then
+  ok "a non-identifier --table-s3 is refused before any request"
+else
+  bad "a non-identifier --table-s3 is refused before any request" "rc=$rc curl_invocations=$calls"
+fi
+
+# --limit interpolates raw into `LIMIT ${LIMIT}`.
+rc="$(run_pinned "$STUB_HOST" --since 1h --limit "1 UNION ALL SELECT 1")"
+if [[ "$rc" == "64" ]]; then
+  ok "a non-numeric --limit is a usage error (64), not raw SQL"
+else
+  bad "a non-numeric --limit is a usage error (64), not raw SQL" "rc=$rc"
+fi
+
+# --since / --until interpolate into single-quoted SQL literals; --grep was the only input
+# that got quote-escaping. Same treatment, same reason.
+sql_q="$(capture_sql --since "2026-01-01' OR '1'='1" --no-archive)"
+case "$sql_q" in
+  *"dt >= '2026-01-01'' OR ''1''=''1'"*) ok "--since single quotes are SQL-escaped" ;;
+  *) bad "--since single quotes are SQL-escaped" "got: ${sql_q:0:200}" ;;
+esac
+sql_q="$(capture_sql --since 1h --until "2026-01-01' OR '1'='1" --no-archive)"
+case "$sql_q" in
+  *"dt <= '2026-01-01'' OR ''1''=''1'"*) ok "--until single quotes are SQL-escaped" ;;
+  *) bad "--until single quotes are SQL-escaped" "got: ${sql_q:0:200}" ;;
+esac
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
+# ANTI-VACUITY FLOOR (Guard 2 row 4). Without it this suite exits 0 on ZERO cases, so a
+# mutation that made every arm unreachable — or an early `exit` inserted above — would read as
+# a clean pass. The count is reported on the line above; this makes it load-bearing.
+if (( pass + fail == 0 )); then
+  printf '%s: FAIL — zero cases executed; a suite that ran nothing cannot pass\n' "$(basename "$0")" >&2
+  exit 1
+fi
 [[ "$fail" -eq 0 ]]
