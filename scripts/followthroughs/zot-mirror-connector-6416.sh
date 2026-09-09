@@ -59,6 +59,23 @@
 
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). This script binds a live GH_TOKEN, and `set -x` prints
+# every expansion — including the token — to stdout, which on a runner means into
+# a log that outlives the job. Refusing is the only reliable mitigation: masking
+# is best-effort and xtrace expands before any masking hook sees the line.
+#
+# Conditional on the credential actually being bound, deliberately: with no token
+# in the environment there is nothing to leak, and a developer tracing the run
+# selection logic should not be blocked for no benefit.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 # Fail-safe env check. Deliberately NOT `: "${VAR:?msg}"` — under a non-interactive
 # shell that word-expansion aborts with status 1, which this contract reads as FAIL
 # ("criteria not met") when the truth is "the probe could not run". An unprovisioned

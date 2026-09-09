@@ -45,6 +45,13 @@
 
 set -uo pipefail
 
+# XTRACE REFUSAL (#7797). This script handles a live credential, and `set -x`
+# would print it — xtrace expands before any masking hook can see the line, so
+# refusing is the only reliable mitigation rather than a belt-and-braces one.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 MANUAL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in

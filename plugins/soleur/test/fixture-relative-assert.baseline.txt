@@ -326,7 +326,7 @@
 7	scripts/plugin-delivery-canary.sh
 37	scripts/plugin-delivery-canary.test.sh
 49	scripts/plugin-legacy-resolver-probe.test.sh
-28	scripts/prod-version-drift-check.test.sh
+29	scripts/prod-version-drift-check.test.sh
 5	scripts/raise-tmp-tmpfs-ceiling.sh
 3	scripts/raise-tmp-tmpfs-ceiling.test.sh
 2	scripts/regenerate-c4-model.sh
