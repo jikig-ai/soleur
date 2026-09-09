@@ -298,8 +298,20 @@ fi
 # JOB's conclusion, never from the artifact's mirror_verified/docker_pushed.
 _resolve_body=$(awk '/^  resolve-target:/{f=1} f&&/^  [a-zA-Z0-9_-]+:$/&&!/^  resolve-target:/{exit} f' "$REL")
 printf '%s' "$_resolve_body" > "$W/resolve.blk"
-if grep -qF 'release / release' "$W/resolve.blk"; then pass; else
-  fail "G3-13b resolve-target does not pin the literal job name 'release / release'. `release` is a REUSABLE-WORKFLOW call, so a lookup on the bare name matches ZERO rows and the guard fails OPEN"
+# COMMENT-STRIPPED HAYSTACK. `resolve.blk` is the raw job block, so a row
+# anchored on a token was satisfied by the COMMENT EXPLAINING the pin and by the
+# error-message STRING naming it. Measured: mutating
+# `select(.name == "release / release")` to `select(.name == "release")` — the
+# literal fail-open G3-13b exists to prevent — left this suite GREEN, shadowed
+# twice. Same for `event=push`. Anchor on the call form, in code only.
+sed -e 's/[[:space:]]*#.*$//' "$W/resolve.blk" > "$W/resolve.code"
+# The stripper must not eat the file: a comment-only haystack and an EMPTY one
+# both make every row below vacuously pass.
+if [ -s "$W/resolve.code" ] && [ "$(grep -c . "$W/resolve.code")" -ge 40 ]; then pass; else
+  fail "G3 the comment-stripped resolve-target body is empty or implausibly short ($(grep -c . "$W/resolve.code" 2>/dev/null || echo 0) code lines) — every anchored row below would pass vacuously"
+fi
+if grep -qF 'select(.name == "release / release")' "$W/resolve.code"; then pass; else
+  fail "G3-13b resolve-target does not pin the literal job name 'release / release'. The bare name is a REUSABLE-WORKFLOW call, so a lookup on the bare name matches ZERO rows and the guard fails OPEN"
 fi
 if grep -qE 'release_result.*!=.*success|\[ "\$release_result" != "success" \]' "$W/resolve.blk"; then pass; else
   fail "G3-13b resolve-target does not fail closed on a non-success release job conclusion — this is the ONLY thing between a mirror-gate-blocked release and a prod deploy of an unmirrored image"
@@ -317,15 +329,15 @@ for st in no_release_run upstream_concluded_unpublished release_failed; do
   fi
 done
 # The two clean skips must exit 0 (green); the failure state must exit non-zero.
-if grep -qE 'clean_skip\(\)' "$W/resolve.blk" && grep -qE 'exit 0' "$W/resolve.blk"; then pass; else
+if awk '/clean_skip\(\) \{/{f=1} f&&/^          \}/{exit} f' "$W/resolve.code" | grep -qE '^\s*exit 0\s*$'; then pass; else
   fail "G7 resolve-target has no clean-skip path that leaves the run GREEN — a docs-only push would redden the release run"
 fi
-if grep -qE 'fail_closed\(\)' "$W/resolve.blk" && grep -qE 'exit 1' "$W/resolve.blk"; then pass; else
+if awk '/fail_closed\(\) \{/{f=1} f&&/^          \}/{exit} f' "$W/resolve.code" | grep -qE '^\s*exit 1\s*$'; then pass; else
   fail "G7 resolve-target has no fail-closed path — a genuinely failed release would be swallowed as a skip"
 fi
 # The own-run exclusion. Without it the query resolves state 2 for a SHA that
 # DID publish, and the deploy silently never happens while the run stays green.
-if grep -qF 'event=push' "$W/resolve.blk" && grep -qE 'OWN_RUN_ID|github\.run_id' "$W/resolve.blk"; then pass; else
+if grep -qE 'runs\?[^"]*event=push' "$W/resolve.code" && grep -qE 'OWN_RUN_ID|github\.run_id' "$W/resolve.code"; then pass; else
   fail "G7 resolve-target's run lookup is not pinned to ?event=push AND excluding its own run id — the new topology produces runs for the SAME sha on both arms, so an unfiltered query resolves 'published nothing' for a SHA that did publish"
 fi
 # Identity + schema bindings: the artifact CONFIRMS, never SUPPLIES.
@@ -348,11 +360,27 @@ case "$_ng" in
 esac
 
 # ═══ GUARD 5 — every ceiling on the new path is DERIVED, never restated ══════
-_budget=$(awk '/- name: Derive the CI budget/{f=1} f&&/^      - name: /&&!/Derive the CI budget/{exit} f' "$REL")
+# TERMINATE AT THE JOB BOUNDARY TOO. The budget step is the LAST step of
+# resolve-target, so there is no following `- name:` at its indent: the previous
+# form ran off the end of the job and captured 251 lines spanning resolve-target
+# AND migrate. Every `grep -qF <jobname>` row below was then satisfiable by a
+# FOREIGN job's text — the extractor self-test asked "did it find >= N?", never
+# "did it find only the right region?", which is how it went unnoticed.
+_budget=$(awk '
+  /- name: Derive the CI budget/{f=1}
+  f && /^      - name: / && !/Derive the CI budget/{exit}
+  f && /^  [a-zA-Z0-9_-]+:$/{exit}
+  f' "$REL")
 printf '%s' "$_budget" > "$W/budget.blk"
 if [ -s "$W/budget.blk" ]; then pass; else
   fail "G5 the CI-budget derivation step was not found — the creep detector deleted with await-ci was not relocated (ADR-212 Decision 4 regression)"
 fi
+# EXTRACTOR SCOPE SELF-TEST. Presence is not scope. Assert the captured region
+# is bounded by the job it claims to be, so an over-capture cannot vouch for the
+# rows that read it.
+if grep -qE '^  [a-zA-Z0-9_-]+:$' "$W/budget.blk"; then
+  fail "G5 the budget extraction crossed a JOB boundary ($(grep -cE '^  [a-zA-Z0-9_-]+:$' "$W/budget.blk") job header(s) inside it, $(wc -l < "$W/budget.blk") lines) — every jobname row below could then be satisfied by a foreign job"
+else pass; fi
 # I3's successor: DERIVED from a read value, never a literal.
 if grep -qE 'THRESHOLD=\$\(read_threshold\)' "$W/budget.blk"; then pass; else
   fail "G5-18 the pipeline threshold is not READ from the tree — a restated literal drifts silently the moment DRIFT_SUSTAINED_THRESHOLD_MIN moves"
@@ -362,12 +390,25 @@ if grep -qE 'CI_BUDGET_MIN=\$\(\(\s*THRESHOLD' "$W/budget.blk"; then pass; else
 fi
 # THE FIFTH INPUT. Without it, lowering test-scripts' ceiling silently stops the
 # detector tracking the thing it detects.
-_inputs=0
-for jobname in migrate verify-migrations deploy test-scripts test; do
-  grep -qF "$jobname" "$W/budget.blk" && _inputs=$((_inputs + 1))
+# ANCHORED ON THE CALL, NOT THE NAME. `grep -qF test` matched inside
+# `test-scripts`, so deleting the `test` input left the count at 5; and all five
+# names also appear in this step's ERROR-MESSAGE PROSE and in its validation
+# list, so the count survived deleting the job_ceiling call itself. Both are the
+# assert-anchor-not-bare-token class. The set is also SMALLER now: test-scripts
+# and test were the wrong quantity (see the CI_DECLARED_PATH comment in the
+# workflow) and were replaced by a whole-run closure.
+_missing=""
+for jobname in migrate verify-migrations deploy; do
+  grep -qF -- "job_ceiling \"\$REL\" ${jobname})" "$W/budget.blk" \
+    || _missing="${_missing}${jobname} "
 done
-if [ "$_inputs" -eq 5 ]; then pass; else
-  fail "G5-21 the derivation reads only $_inputs of its 5 required inputs (migrate, verify-migrations, deploy, test-scripts, test). Missing test-scripts/test means lowering a CI ceiling drops CI_DECLARED_PATH while the soft ceiling stays pinned — the detector stops tracking what it detects"
+for helper in undeclared_jobs run_declared_path; do
+  grep -qE "^\s*${helper}\(\) \{" "$W/budget.blk" || _missing="${_missing}${helper}() "
+done
+grep -qE 'undeclared_jobs \.github/workflows/ci\.yml' "$W/budget.blk" \
+  || _missing="${_missing}undeclared_jobs(ci.yml)-call "
+if [ -z "$_missing" ]; then pass; else
+  fail "G5-21 the derivation does not read these inputs by their CALL form: ${_missing}— each is a ceiling the creep detector tracks, and a bare-name grep here was satisfied by the step's own error-message prose"
 fi
 # I3b's successor: the warning must fire BELOW its reference, not at or above.
 if grep -qE '\* 60 \* 7 / 10' "$W/budget.blk"; then pass; else
@@ -584,8 +625,14 @@ fi
 TOTAL=$((passes + fails))
 # DERIVED, and NEVER LOWERED from the suite this replaces (which floored at 14):
 #   1 instrument + 1 analyser + 4 G4 + 5 G3 + 10 G7 + 8 G5 + 2 G8
-# + 2 dispatch-permit bounds + 5 mutants + 2 harness = 40
-MIN_ROWS=40
+# + 2 dispatch-permit bounds + 5 mutants + 2 harness
+# + 2 MUT-CONTROL (predicate empty at baseline; a null mutant must SURVIVE)
+# + 1 extractor-scope self-test (budget.blk must not cross a job boundary)
+# + 1 comment-stripper self-test (resolve.code must not be empty) = 45
+# The previous itemisation summed to 40 while the suite executed 41 — a floor
+# below the real count is slack an undispatched row can hide in, which is the
+# same failure mode the floor exists to catch.
+MIN_ROWS=45
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

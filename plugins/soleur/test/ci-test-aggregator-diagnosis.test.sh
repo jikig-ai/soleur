@@ -172,11 +172,30 @@ fi
 # One row per disjunct, ALONE. A fixture satisfying several arms at once proves
 # the set is non-empty and nothing else: dropping either arm keeps it green.
 
-# A failing leg names itself as an assertion failure, whatever its siblings did.
+# A failing leg names itself, whatever its siblings did.
 expect_line "R1 failure/any" "$BODY" failure success success push \
   "FAILED" 1
 expect_line "R1b failure names the leg" "$BODY" success success failure push \
   "test-scripts: FAILED" 1
+# R1c/R1d — THE FAILURE ARM MUST NOT ASSERT A MECHANISM IT DID NOT MEASURE.
+# `failure` is GitHub's conclusion for an assertion failure AND a
+# timeout-minutes kill AND a lost runner AND an OOM. The arm used to read
+# "assertions failed", a guessed cause — the same defect this whole step exists
+# to remove, one arm over from where it was removed. The bare needle "FAILED"
+# above cannot see that: it survives every rewrite of the sentence, which is why
+# rewriting the arm left this suite green (cq-assert-anchor-not-bare-token).
+run_body "$BODY" failure success success push
+if grep -qiE 'assertions? failed' "$OUT"; then
+  fail "R1c the failure arm asserts 'assertions failed' — a cause this job did NOT measure; a timeout-minutes kill also concludes failure (AP-021)"
+else pass; fi
+if grep -qF -- "timeout-minutes" "$OUT"; then pass; else
+  fail "R1d the failure arm does not name the timeout ambiguity, so the reader is left with the same undiscriminated verdict #7902 had to reconstruct from the API"
+fi
+# R1e — test-scripts is a 3-leg MATRIX rollup, so "the job log" is not one log.
+run_body "$BODY" success success failure push
+if grep -qF -- "matrix" "$OUT"; then pass; else
+  fail "R1e the test-scripts failure message points at a single job log, but test-scripts is a matrix rollup — that log does not exist"
+fi
 
 # Two legs cancelled on a pull_request run: the run was superseded.
 expect_line "R2 cancelled+sibling-cancelled on pull_request" "$BODY" \
@@ -315,10 +334,12 @@ TOTAL=$((passes + fails))
 # undispatched row can hide in. Itemised so the next author can re-derive it
 # after adding a row:
 #   1 instrument self-test + 1 control + 7 classification (R1,R1b,R2,R3,R3b,R4,R5)
+# + 3 failure-arm honesty (R1c no guessed mechanism, R1d names the ambiguity,
+#   R1e matrix rollup is not one log)
 # + 2 event-gate (24b absent-SUPERSEDED, 24b says-something)
 # + 1 second-member (25) + 3 swallow (24, one per non-success result value)
-# + 1 must-PASS (Hb) + 4 mutants + 1 harness (Ha) = 21
-MIN_ROWS=21
+# + 1 must-PASS (Hb) + 4 mutants + 1 harness (Ha) = 24
+MIN_ROWS=24
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2

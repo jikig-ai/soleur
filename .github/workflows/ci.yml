@@ -1335,7 +1335,21 @@ jobs:
             fail=1
             case "$result" in
               failure)
-                echo "$shard: FAILED — assertions failed; see the $shard job log" >&2
+                # NAMES THE OBSERVATION, NOT A MECHANISM. `failure` is GitHub's
+                # conclusion for an assertion failure AND for a `timeout-minutes`
+                # kill (which is annotated, not reported as `cancelled`) AND for a
+                # lost runner or an OOM. The old text here asserted "assertions
+                # failed" — a guessed cause, which is the exact defect this step
+                # exists to remove, one arm over from where it was removed.
+                # The comment above claims the classifier is correct whether a
+                # timed-out leg reads `cancelled` or `failure`; this arm is where
+                # that claim has to be honoured.
+                if [[ "$shard" == "test-scripts" ]]; then
+                  # A matrix rollup: "the job log" is not one log.
+                  echo "$shard: FAILED — one or more matrix legs concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; open the failing leg and check for a timeout annotation before assuming assertions." >&2
+                else
+                  echo "$shard: FAILED — the leg concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; check the $shard job log for a timeout annotation before assuming assertions." >&2
+                fi
                 ;;
               skipped)
                 echo "$shard: SKIPPED — the leg did not run" >&2

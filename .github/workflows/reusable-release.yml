@@ -1756,6 +1756,11 @@ jobs:
         with:
           name: release-outputs-${{ inputs.component }}
           path: ${{ runner.temp }}/release-outputs/release-outputs.json
+          # A RE-RUN of this job uploads the same artifact name into the same run.
+          # Without this, v4 returns 409 Conflict and the step fails — so the one
+          # recovery action an operator takes on a flaky release (re-run the job)
+          # would break the very artifact the deploy arm fail-closes on.
+          overwrite: true
           # `error` not `warn`: the consumer fails closed when the artifact is
           # absent, so a silent non-upload here would turn every deploy into a
           # fail-closed with no explanation on the producing side.

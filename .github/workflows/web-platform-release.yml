@@ -303,6 +303,15 @@ jobs:
             # `github.sha`, which was always populated; dropping the SHA from the one
             # channel that says "prod did NOT update" is a regression, not a detail.
             emit head_sha "${WR_HEAD_SHA:-}"
+            # AND THE RELEASE VERDICT, for the same reason. release-outcome
+            # classifies whatever job results it can see; with release_result
+            # unset it finds only R_RESOLVE=failure and emails "Working out which
+            # build should go to production — failure" when the truth is that
+            # BUILDING the release failed. Slack gets this right; the email
+            # channel — the one built as the non-delivery guarantee — named the
+            # wrong job. Callers pass it when they know it; it stays empty when
+            # the release verdict genuinely was not the thing that failed.
+            emit release_result "${3:-}"
             emit should_deploy "false"; emit skip_reason "$2"
             exit 1
           }
@@ -311,7 +320,7 @@ jobs:
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "workflow_dispatch: reading the in-run release job directly"
             if [ "$D_RESULT" != "success" ]; then
-              fail_closed "the in-run release job concluded '$D_RESULT'" "release_failed"
+              fail_closed "the in-run release job concluded '$D_RESULT'" "release_failed" "$D_RESULT"
             fi
             emit head_sha "$DISPATCH_SHA"
             emit version "$D_VERSION"; emit tag "$D_TAG"
@@ -394,7 +403,7 @@ jobs:
 
           if [ "$release_result" != "success" ]; then
             # STATE 4 — a real failure. This is the arm the mirror gate reaches.
-            fail_closed "the release job for $WR_HEAD_SHA concluded '$release_result' (run $run_id)" "release_failed"
+            fail_closed "the release job for $WR_HEAD_SHA concluded '$release_result' (run $run_id)" "release_failed" "$release_result"
           fi
 
           # ── Step 2: THE VALUES, from the artifact ───────────────────────────
@@ -653,8 +662,21 @@ jobs:
             echo "not a workflow_run event — no CI duration to measure"
             exit 0
           fi
-          started=$(date -u -d "$RUN_STARTED_AT" +%s)
-          ended=$(date -u -d "$RUN_UPDATED_AT" +%s)
+          # BOTH operands guarded, not just the first. `set -e` on an unparseable
+          # date kills the step before the creep signal is emitted at all, and an
+          # absent `updated_at` is exactly the degenerate operand this arm should
+          # report rather than die on.
+          if [ -z "${RUN_UPDATED_AT:-}" ]; then
+            emit soft_breach "false"; emit soft_elapsed_s ""
+            echo "::warning::workflow_run event carried no updated_at — CI duration not measured, so no creep signal for this run"
+            exit 0
+          fi
+          if ! started=$(date -u -d "$RUN_STARTED_AT" +%s 2>/dev/null) \
+             || ! ended=$(date -u -d "$RUN_UPDATED_AT" +%s 2>/dev/null); then
+            emit soft_breach "false"; emit soft_elapsed_s ""
+            echo "::warning::could not parse the CI run timestamps ('$RUN_STARTED_AT' / '$RUN_UPDATED_AT') — CI duration not measured"
+            exit 0
+          fi
           ELAPSED_S=$(( ended - started ))
           emit soft_elapsed_s "$ELAPSED_S"
           if [ "$ELAPSED_S" -gt "$SOFT_CEILING_S" ]; then
