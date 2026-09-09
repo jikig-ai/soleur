@@ -315,39 +315,99 @@ fi
 # CWD resolution mirrors guardrails:block-commit-on-main via resolve_command_cwd.
 # Scans $COMMAND (NOT $SCAN): gates the REAL commit / merge --continue.
 #
-# TWO DISTINCT MARKER TYPES ARE REQUIRED, not one. The previous form fired on a
-# single `^\+(<{7}|={7}|>{7})` line, which cannot tell an unresolved conflict from
-# PROSE THAT QUOTES ONE. That is not hypothetical: `origin/main` carries a plan
-# documenting the kb-index merge driver whose fenced example is a lone
-# `<<<<<<< kb-index: …` sentinel line, so merging main into any branch became
-# permanently uncommittable through this hook -- it blocked the resolved merge it
-# exists to protect, with no override. A real conflict ALWAYS writes the full
-# `<<<<<<< / ======= / >>>>>>>` structure, so requiring two distinct types keeps
-# every real case (including a partial resolution that deletes only one of the
-# three) while ignoring a single quoted marker.
+# COUNTED PER FILE, with a repo-specific single-marker arm. Three facts drive this:
 #
-# The `=` arm is anchored `^={7}$` (exactly seven, alone on the line). Unanchored
-# `={7}` also matches a Markdown setext heading underline and any `=======…` ASCII
-# rule, which is a second false-positive class in a repo this documentation-heavy.
-# `<` and `>` require a space-or-EOL after the seventh character, which is git's
-# own shape (`<<<<<<< <ref>` / bare) and does not match a `>>>>>>>>`-style rule.
-if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)' <<<"$COMMAND"; then
+#  1. A single `^\+(<{7}|={7}|>{7})` line cannot tell an unresolved conflict from
+#     PROSE THAT QUOTES ONE. `origin/main` carries a plan documenting the kb-index
+#     merge driver whose fenced example is a lone `<<<<<<< kb-index: …` sentinel,
+#     which made `git merge origin/main` uncommittable through this hook repo-wide
+#     -- no override, and `--no-verify` does not reach a PreToolUse hook.
+#
+#  2. But "a real conflict always writes all three markers" is FALSE HERE. When a
+#     merge driver exits non-zero git writes NO markers at all: it marks the path
+#     `UU` and leaves ours-content in place, so the file reads as cleanly merged.
+#     `scripts/merge-kb-index.sh` therefore writes its OWN lone `<<<<<<< kb-index:`
+#     sentinel EXPRESSLY so this guard fires (see its header, and
+#     merge-pr/SKILL.md). Requiring two types would silently disarm the only
+#     mechanism that makes a failed INDEX.md merge visible -- discarding the other
+#     side's index rows on commit. So that sentinel keeps a single-marker arm,
+#     scoped to the file it can legitimately appear in.
+#
+#  3. Counting must be PER FILE. A global count lets two unrelated prose files
+#     (one quoting `<<<<<<<`, one with a lone `=======`) satisfy a two-type rule
+#     between them, and conversely says nothing about the types being in the same
+#     region.
+#
+# `=` is anchored `^\+={7}\r?$` (exactly seven, alone, CRLF-tolerant; the `\+` is
+# load-bearing -- it is what limits the gate to ADDED lines so removing markers is
+# never blocked). Unanchored
+# `={7}` also matched Markdown setext heading underlines and `=======` ASCII rules.
+# `<`/`>` require space-or-EOL after the seventh character, which is git's own
+# shape. `--no-color --no-ext-diff` is load-bearing: with `color.diff=always` or a
+# `diff.external` configured, the diff arrives ANSI-wrapped, `^\+` never matches,
+# and the guard silently allows a full triple.
+if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|(merge|rebase|cherry-pick|revert)\s+--continue)' <<<"$COMMAND"; then
   CONFLICT_MARKERS_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
+  # FAIL LOUD, not open. `2>/dev/null || true` made an errored `git diff` (an
+  # index.lock race, a fork failure under memory pressure, a corrupt index)
+  # indistinguishable from clean content -- the guard then silently allowed a
+  # real conflict. Capture the status and ASK rather than allow.
+  # NOT-A-REPO is not an anomaly: there is no staged content to guard, so the
+  # gate simply does not apply. Only a diff that fails INSIDE a repository is
+  # unexplained. Conflating the two fired `ask` on every non-git working
+  # directory and short-circuited the gates below it -- caught by this file's
+  # own pre-existing AC4 fixture, whose command chains `gh issue create` after a
+  # `git commit` heredoc and expects the require-milestone gate to still run.
   if [ -n "$CONFLICT_MARKERS_DIR" ] && [ -d "$CONFLICT_MARKERS_DIR" ]; then
-    STAGED_DIFF=$(git -C "$CONFLICT_MARKERS_DIR" diff --cached 2>/dev/null || true)
+    CONFLICT_GIT=(git -C "$CONFLICT_MARKERS_DIR")
   else
-    STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
+    CONFLICT_GIT=(git)
   fi
-  CONFLICT_TYPES=0
-  grep -qE '^\+<{7}( |$)' <<<"$STAGED_DIFF" && CONFLICT_TYPES=$((CONFLICT_TYPES + 1))
-  grep -qE '^\+={7}$'     <<<"$STAGED_DIFF" && CONFLICT_TYPES=$((CONFLICT_TYPES + 1))
-  grep -qE '^\+>{7}( |$)' <<<"$STAGED_DIFF" && CONFLICT_TYPES=$((CONFLICT_TYPES + 1))
-  if [ "$CONFLICT_TYPES" -ge 2 ]; then
+  if ! "${CONFLICT_GIT[@]}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    IN_REPO=0
+  else
+    IN_REPO=1
+  fi
+  STAGED_DIFF=""
+  DIFF_RC=0
+  if [ "$IN_REPO" -eq 1 ]; then
+    STAGED_DIFF=$("${CONFLICT_GIT[@]}" diff --cached --no-color --no-ext-diff 2>/dev/null); DIFF_RC=$?
+  fi
+  if [ "$IN_REPO" -eq 1 ] && [ "$DIFF_RC" -ne 0 ]; then
+    emit_incident "guardrails-block-conflict-markers" "warn" "git diff --cached failed; cannot verify" "$COMMAND"
+    jq -n '{
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",        permissionDecision: "ask",
+        permissionDecisionReason: "COULD NOT VERIFY: `git diff --cached` failed, so staged content could not be checked for conflict markers. This is not a clean result — confirm the index is healthy before committing."
+      }
+    }'
+    exit 0
+  fi
+  # A lone `>>>>>>>` denies on its own; the other arms need two types.
+  # ASYMMETRIC ON PURPOSE, and the asymmetry is measured, not assumed. On
+  # origin/main: `^>{7}( |$)` appears in ZERO files, `^<{7}( |$)` in exactly one
+  # (the merge-driver plan that motivated this fix), and `^={7,}$` in seven
+  # (setext underlines and ASCII rules). So a stray terminator has no
+  # false-positive class here, while the other two do. That matters because the
+  # commonest botched resolution deletes the opener and the `=======` and leaves
+  # the trailing `>>>>>>> other` behind -- a two-type rule alone would pass it,
+  # and in the .md files that dominate this repo nothing else would catch it.
+  CONFLICT_HIT=$(awk '
+    /^\+\+\+ b\// { path = substr($0, 7); lt = 0; eq = 0; next }
+    /^\+<<<<<<< kb-index:/ {
+      if (path == "knowledge-base/INDEX.md") { print "hit"; exit }
+    }
+    /^\+>>>>>>>( |$)/ { print "hit"; exit }
+    /^\+<<<<<<<( |$)/ { lt = 1 }
+    /^\+=======\r?$/  { eq = 1 }
+    { if (lt + eq >= 2) { print "hit"; exit } }
+  ' <<<"$STAGED_DIFF")
+  if [ -n "$CONFLICT_HIT" ]; then
     emit_incident "guardrails-block-conflict-markers" "deny" "Resolve conflicts before committing" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",        permissionDecision: "deny",
-        permissionDecisionReason: "BLOCKED: Staged content contains conflict markers (<<<<<<<, =======, or >>>>>>>). Resolve all conflicts before committing."
+        permissionDecisionReason: "BLOCKED: Staged content contains an unresolved conflict — a file with two or more marker types, or the kb-index merge-driver sentinel in knowledge-base/INDEX.md. Resolve all conflicts before committing."
       }
     }'
     exit 0
