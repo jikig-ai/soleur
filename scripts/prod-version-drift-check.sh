@@ -66,8 +66,16 @@ PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':
 # The longest LEGITIMATE commit-to-deployed latency, from the release pipeline's own declared
 # ceilings along its critical path. That path is NOT a serial sum: `release` and `await-ci`
 # declare no `needs:` and run in PARALLEL, so it is
-#     max(release 60, await-ci 60) + migrate 30 + verify-migrations 15 + deploy 90 = 195.
+#     max(release 60, await-ci 72) + migrate 30 + verify-migrations 15 + deploy 90 = 207.
 # A principled bound rather than a guess, and ~4x every observed run.
+#
+# 195 -> 207 (#7902). `await-ci`'s timeout-minutes moved 60 -> 72 when its in-bash CEILING_S was
+# raised 3000 -> 3600 to clear a measured time-to-`test` p100 of 57.4 min. This constant moves
+# FIRST IN FILE ORDER within that single commit — not in a separate commit, as an earlier
+# revision of this comment claimed — because B9 asserts threshold >= critical path. Landing both
+# in one commit is what keeps B9 from ever being red; a two-commit split would red it in between.
+# The cost is 12 minutes of drift-alert latency, which sits inside this probe's own measured
+# 61-243 minute delivery interval.
 # (verify-doppler-secrets, 10 min, also runs in parallel and is dominated.)
 #
 # SCOPE (#7160): those ceilings bound EXECUTION only. This constant is compared against an age
@@ -83,7 +91,7 @@ PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':
 # suite: the threshold can never silently become smaller than legitimate latency. A DELETED
 # ceiling now reads as the GitHub 360-minute default rather than as zero, so removing one fails
 # the suite too instead of silently lowering the computed bound.
-DRIFT_SUSTAINED_THRESHOLD_MIN=195
+DRIFT_SUSTAINED_THRESHOLD_MIN=207
 
 PROD_HEALTH_URL="${PROD_HEALTH_URL:-https://app.soleur.ai/health}"
 

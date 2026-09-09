@@ -256,6 +256,14 @@ done
 #   ----------------  -------------------------  --------------------------
 #   nonstring         ask   (ADR-157)            deny  (no `ask` exists here)
 #   unparseable       ask                        deny
+#
+# READ THE `unparseable` ROW AS THE MIRROR'S VOCABULARY. #7275 retired that name
+# on the .claude side, where it split into `empty` / `baddoc` / `nonobject`; the
+# .openhands mirror keeps its own `*_ENVELOPE_SHAPE="unparseable"` from its own
+# inline jq and never sources the shared library, so the name is still live
+# there. Every one of the new .claude values asks, so this row's DECISIONS are
+# unchanged and the cases below still hold — only the label is one-sided. Same
+# note carried by ADR-165, which owns this table.
 #   jq_missing        ask, printf envelope       fail OPEN, loudly
 #   absent tool_input parses cleanly             parses cleanly
 #
