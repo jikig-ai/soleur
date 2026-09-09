@@ -142,8 +142,39 @@ done
 [[ -n "$run_id" ]] \
   || die "no workflow_dispatch run of $WORKFLOW created at or after $T0 appeared within ~5 minutes; check the Actions tab" 3
 
-gh run watch "$run_id" --exit-status >/dev/null 2>&1 || true
+# WAIT FOR THE RUN TO ACTUALLY COMPLETE, AND SAY SO IF IT DOES NOT.
+#
+# The previous form was `gh run watch ... || true` followed immediately by
+# `gh run view --log`. Both halves discard the outcome, and the failure that
+# produces is not a missing confirmation -- it is a CONFIRMED DENIAL of
+# something that never happened. Measured on the real #7922 enrolment: the
+# dispatch queued for ELEVEN minutes (created 09:42:34, started 09:53:51),
+# `gh run watch` returned without waiting, `gh run view --log` on a queued run
+# prints "run is still in progress" to stderr and NOTHING to stdout, the grep
+# found no probe name in an empty string, and the script reported
+#
+#   run 34336223631 did not name the probe
+#
+# The run went on to name it three times and the enrolment was fine. That is
+# could-not-measure rendered as measured-bad, on the one line an operator reads
+# to decide whether a legal tracker is being watched.
+#
+# So: poll the run's own status until it is `completed`, and give a queued or
+# slow run its own exit code (3, transient) with its own message -- distinct
+# from "it ran and the tracker was not swept" (still 3, but a different cause
+# and a different next step).
+run_status=""
+for _ in $(seq 1 90); do
+  run_status="$(gh run view "$run_id" --json status --jq .status 2>/dev/null)" || run_status=""
+  [[ "$run_status" == "completed" ]] && break
+  sleep 20
+done
+[[ "$run_status" == "completed" ]] \
+  || die "run $run_id is still '${run_status:-unreadable}' after ~30 minutes; the enrolment writes (directive + label) are DONE and verified above -- only this confirmation step is unfinished. Nothing is broken; re-check with: gh run view $run_id --log" 3
+
 log="$(gh run view "$run_id" --log 2>/dev/null || true)"
+[[ -n "$log" ]] \
+  || die "run $run_id completed but its log came back EMPTY, so the sweep could not be inspected. This is a read failure, NOT a finding that the tracker was unswept. Inspect: gh run view $run_id --log" 3
 if grep -qF "ccla-representative-icla-7922" <<<"$log"; then
   printf 'enrolment CONFIRMED: run %s names the probe.\n' "$run_id"
   printf 'The sweeper will now comment on #%s daily. Exit 2 is NOT YET, 5 is ACTION, 3 is CANNOT ESTABLISH.\n' "$TRACKER"

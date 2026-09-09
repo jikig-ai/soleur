@@ -43,6 +43,22 @@ Read `CLAUDE.md` if it exists - apply project conventions during review.
 
 **A FIX COMMIT IS THE LEAST-AUDITED SURFACE IN THE DIFF — GRADE IT AS ITS OWN CHANGE.** When a commit's subject says it closes a defect class, read its NEW code for that same class before reading anything else, and check whether the fix was applied to the INSTANCE or to the CLASS (grep every other consumer of the same input). For an anchor assertion, "anchored on a call-form a comment cannot produce" is necessary and NOT sufficient: also require the haystack to be comment-STRIPPED, SCOPED to the region under test, and the match UNIQUE within it — and never accept a `grep -c … -ge N` as a placement claim, because a count is evidence about a file, never about a branch. **Why:** #7695 — `cq-assert-anchor-not-bare-token` recurred three times on one branch, twice inside the commits fixing it (one arm sat a single function below the reference implementation that comment-strips); separately, a `"actions": []` fix applied at two addresses left ~10 sibling counters blind, so three destroys of sole-copy volumes scored a clean plan with `destroy_count` 0. `T1.9c` asserted "both refusals exit non-zero" via `grep -c '^exit 1$' -ge 3` against a file containing nine, and printed `ok` with both refusals flipped to `exit 0`. See `knowledge-base/project/learnings/2026-09-04-every-fix-reintroduced-the-class-it-was-fixing.md`.
 
+**WHEN A ROW CARRIES ONE FREE-TEXT FIELD, EVERY OTHER FIELD IN IT IS A TRUSTED FIELD — READ WHERE
+EACH CONSUMER TAKES IT FROM.** Grep every consumer of the row for a leading greedy `.*` and for
+`grep -oE 'KEY=…' | head -1`: both bind to the LAST occurrence, and the attacker-influenceable text
+is emitted last, so a crafted tail supplies whichever trusted field it likes. Emit ORDER is not a
+control. The fix is to cut the row at the FIRST occurrence of the free-text delimiter and extract
+every other field from the region above it, and to anchor consumer greps at line start
+(`sed -n 's/^KEY=\(…\)$/\1/p'`). Check the fix was applied to the CLASS, not the instance — one
+row usually has several consumers in different files, and a repo that already has the bounded helper
+is a repo where the unbounded copies are the ones nobody re-read. **Why:** #7500 — four consumers of
+`SOLEUR_ZOT_DISK` parsed past `zot_last_err` (free text from a container log, with `user-agent`
+preserved verbatim by the redaction allowlist). Forgeable: the tier label that exists to enforce
+ADR-166, the `REDACTION_FAILED` fail-safe sentinel, a follow-through's `boot_id` (a forged value
+CLOSES the tracker), and `NIC_ALARM_VERDICT` (a forged `GREEN` silences the alarm). The repo's own
+`zot_trusted_region()` had documented the discipline and cut at the first occurrence; none of the
+four used it. See `knowledge-base/project/learnings/2026-09-08-every-field-my-alarm-trusted-came-from-the-region-it-did-not-trust.md`.
+
 **ASK WHAT A GATE NORMALISES AWAY BEFORE TRUSTING IT AS COVERAGE.** **And check every claim the diff's PROSE asserts about the system, not only its code — a correct fix with a false rationale teaches the next reader the thing a post-mortem exists to prevent.** For each causal/universal sentence the diff ADDS, name the command that falsifies it and run it; the highest-yield targets are claims about a platform's execution model, a credential's liveness, and what a shared marker name buys. **Why:** #7516 shipped three: "each cloud-init runcmd `- |` item is its OWN shell" (`shellify()` concatenates them into ONE `/bin/sh` — stated in `cloud-init.yml` twice, `nic-wait-gate.test.sh`, and a post-mortem), "GHCR retained as break-glass" (AP-016 LAPSED — the PAT is revoked, so that leg 401s and the host's boot depends entirely on the new path), and "one query covers both hosts" (the two emitters reach Sentry and Better Stack respectively, so no query sees both). Each was refuted by one grep, and the first had already been used to report a *defect catch* whose mechanism was wrong. When a check compares two
 artifacts by normalising a dimension away, everything else that lived in that dimension becomes a
 precise, enumerable blind spot — and a PR whose subject is "make these two agree" is exactly the
