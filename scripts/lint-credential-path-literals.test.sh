@@ -255,9 +255,159 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Rule family 2 -- unrouted accessibility snapshot in an authentication flow
+# (#7947). Guard 1's mutation matrix.
+#
+# Fixtures must live under a path containing plugins/soleur/{skills,agents}/,
+# because family 2 is deliberately scoped to what the SHIPPED PLUGIN instructs.
+# A knowledge-base record that DESCRIBES the unsafe form is not an instruction
+# and must not be gated -- the measurement record for this very issue would
+# otherwise red the guard it documents.
+# ---------------------------------------------------------------------------
+SNAP_SKILLS="$TMPDIR_TEST/plugins/soleur/skills/probe"
+SNAP_AGENTS="$TMPDIR_TEST/plugins/soleur/agents/probe"
+mkdir -p "$SNAP_SKILLS" "$SNAP_AGENTS"
+
+snapcase() {  # snapcase <dir> <basename>
+  CASE_N=$((CASE_N + 1))
+  local f="$1/${2}_${CASE_N}.md"
+  cat > "$f"
+  printf '%s' "$f"
+}
+
+# M1 -- the original Login Flow body: snapshot a login page, fill a password,
+# snapshot again. This is the exact text this PR removed; it must RED.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+### Login Flow
+
+agent-browser open https://app.example.com/login
+agent-browser snapshot -i
+agent-browser fill @e2 "password123"
+EOF
+)"
+run_case "S1 unrouted agent-browser snapshot in a login flow fails" 1 "$f"
+
+# M5 -- the predicate must quantify over the MCP token too, not just the
+# agent-browser form. The MCP interceptor is deferred, so for that path this
+# walker is the only committed control.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+Sign in to the dashboard, then call mcp__playwright__browser_snapshot to read
+the password field state.
+EOF
+)"
+run_case "S2 unrouted mcp__playwright__browser_snapshot in a login flow fails" 1 "$f"
+
+# M3 -- the agents/ arm is wired despite having no live member today.
+f="$(snapcase "$SNAP_AGENTS" agent <<'EOF'
+# Probe agent
+
+Navigate to the credential settings page and call browser_snapshot to read the
+API key panel.
+EOF
+)"
+run_case "S3 agents/ arm is wired (synthesized fixture)" 1 "$f"
+
+# M6 -- the allow-predicate is anchored on the redactor FILENAME. A look-alike
+# command that does not redact must not satisfy it.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+Sign in, then run:
+agent-browser snapshot -i | python3 scripts/redact-snapshot-lookalike.py
+EOF
+)"
+run_case "S4 look-alike redactor name does not satisfy the guard" 1 "$f"
+
+# H3 must-PASS -- a snapshot with NO authentication context. Gating this would
+# make the guard a general snapshot ban, and a general ban gets disabled.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+Open the pricing page and run agent-browser snapshot -i to find the CTA ref.
+EOF
+)"
+run_case "S5 must-PASS: snapshot with no auth context is clean" 0 "$f"
+
+# H4 must-PASS -- a skill that names a password field but takes a SCREENSHOT.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+On the login page, take agent-browser screenshot /tmp/x.png rather than a
+snapshot, because the password field renders as dots.
+EOF
+)"
+run_case "S6 must-PASS: screenshot on a password page is clean" 0 "$f"
+
+# H5 must-PASS -- the corrected routed form. The carve-out must actually be
+# permitted, or the guard forces a screenshot leak in its place.
+f="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill
+
+On the login page, route the snapshot through the redactor:
+agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py
+EOF
+)"
+run_case "S7 must-PASS: routed through the redactor is permitted" 0 "$f"
+
+# Scope -- a knowledge-base RECORD describing the unsafe form is not an
+# instruction and must not be gated.
+f="$(mkcase <<'EOF'
+# A record
+
+The 2026-09-08 session ran `agent-browser snapshot -i` on a login page and the
+password was rendered into the transcript.
+EOF
+)"
+run_case "S8 must-PASS: a knowledge-base record is out of family-2 scope" 0 "$f"
+
+# M2 -- a check that stops at the first offending member is itself an instance
+# of the class. Two offending files must BOTH be cited.
+f1="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill one
+
+Sign in, then agent-browser snapshot -i
+EOF
+)"
+f2="$(snapcase "$SNAP_SKILLS" SKILL <<'EOF'
+# Probe skill two
+
+Sign in, then agent-browser snapshot -i
+EOF
+)"
+CASE_N=$((CASE_N + 1))
+both_out="$(python3 "$SUT" "$f1" "$f2" 2>&1 || true)"
+n_cited=0
+grep -qF "$f1" <<<"$both_out" && n_cited=$((n_cited + 1))
+grep -qF "$f2" <<<"$both_out" && n_cited=$((n_cited + 1))
+if [[ "$n_cited" -eq 2 ]]; then
+  pass "S9 both offending files are cited, not just the first"
+else
+  fail "S9 both offending files are cited, not just the first" "cited=$n_cited"
+fi
+
+# M4 -- the anti-vacuity floor: a full scan whose population is empty must
+# exit 2, not report a clean 0.
+CASE_N=$((CASE_N + 1))
+empty_rc=0
+(
+  cd "$TMPDIR_TEST" && mkdir -p emptyrepo && cd emptyrepo \
+    && git init -q . && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m base \
+    && python3 "$SUT" >/dev/null 2>&1
+) || empty_rc=$?
+if [[ "$empty_rc" == "2" ]]; then
+  pass "S10 empty full-scan population exits 2 (not a vacuous clean 0)"
+else
+  fail "S10 empty full-scan population exits 2" "actual=$empty_rc"
+fi
+
+# ---------------------------------------------------------------------------
 # Minimum-cardinality guard (an empty/short run must not GREEN).
 # ---------------------------------------------------------------------------
-MIN_CASES=19
+MIN_CASES=29
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

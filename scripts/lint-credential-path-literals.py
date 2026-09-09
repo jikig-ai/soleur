@@ -114,6 +114,89 @@ RECIPE = (
 )
 
 
+# --- Rule family 2: accessibility-snapshot credential rendering (#7947) ---
+#
+# An accessibility snapshot serializes the VALUE of input fields, including a
+# value the agent never supplied. Measured on both leaking surfaces; record at
+# knowledge-base/project/specs/feat-one-shot-7946-7947-sentry-org-token-and-snapshot-redaction/phase-0-measurement.md
+#
+# The property: no committed skill or agent instruction directs an accessibility
+# snapshot inside an authentication flow without routing it through the redactor.
+# The redactor is the fallback the guard permits, not a control that makes
+# snapshotting a credential page safe.
+#
+# Quantified over every snapshot-invocation token, not just the agent-browser
+# one: the MCP interceptor is deferred, so for that path this walker is the only
+# committed control.
+SNAPSHOT_TOKEN_RE = re.compile(
+    r"(?:mcp__[a-z_]*__)?browser_snapshot"
+    r"|agent-browser(?:[^\n|;&]*?)\bsnapshot\b"
+)
+
+# An authentication/credential context anywhere in the same document. A snapshot
+# on an ordinary page is not the hazard and must not be gated, or the guard
+# becomes a general snapshot ban and gets disabled.
+AUTH_CONTEXT_RE = re.compile(
+    r"(?i)(?<![a-z0-9])(?:log[\s-]?in|sign[\s-]?in|password|passphrase"
+    r"|credential|authentication|token|api[\s_-]?key|secret)(?![a-z0-9])"
+)
+
+# Anchored on the redactor's FILENAME, so a look-alike command that does not
+# redact cannot satisfy the guard (cq-assert-anchor-not-bare-token).
+REDACTOR_ANCHOR_RE = re.compile(r"redact-a11y-snapshot")
+
+SNAPSHOT_RECIPE = (
+    "route it through `redact-a11y-snapshot.py` "
+    "(`agent-browser snapshot -i 2>&1 | python3 "
+    "plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`), or "
+    "take a screenshot instead -- noting that a screenshot is safe for a "
+    "type=password field and NOT for a readonly type=text credential panel, "
+    "which renders in clear"
+)
+
+
+# Population for family 2. Deliberately NARROWER than the host lint's walk.
+#
+# The property quantifies over what the shipped plugin INSTRUCTS an agent to do,
+# so it covers skills/ and agents/ under the plugin and nothing else. A
+# knowledge-base plan, spec, session-state or post-mortem is a RECORD of what
+# happened, not an instruction -- gating those would red on every historical
+# document that describes the unsafe form, including the measurement record that
+# exists to document it, and the only way to satisfy it would be to stop writing
+# the incident down. Measured before scoping: the unscoped walk produced 65 hits,
+# 8 of them in this PR's own evidence files.
+#
+# agents/ has zero live members today (the token grep returns six files, all
+# under skills/). It is in the population by construction so the arm does not
+# rot on the first agent that gains a browser flow; the suite proves that arm
+# against a synthesized fixture rather than a live one.
+SNAPSHOT_RULE_DIRS = (
+    "plugins/soleur/skills/",
+    "plugins/soleur/agents/",
+)
+
+
+def scan_snapshot_rule(text: str, posix_path: str = "") -> list[tuple[int, str]]:
+    """Return (1-based line, token) for unrouted snapshots in an auth context.
+
+    File-scoped by construction: the redactor anchor and the auth context are
+    read from the WHOLE document, because a skill states its safety rule once
+    and invokes the snapshot elsewhere.
+    """
+    if posix_path and not any(d in posix_path for d in SNAPSHOT_RULE_DIRS):
+        return []
+    if REDACTOR_ANCHOR_RE.search(text) is not None:
+        return []
+    if AUTH_CONTEXT_RE.search(text) is None:
+        return []
+    hits: list[tuple[int, str]] = []
+    for i, line in enumerate(text.splitlines()):
+        m = SNAPSHOT_TOKEN_RE.search(line)
+        if m:
+            hits.append((i + 1, m.group(0).strip()))
+    return hits
+
+
 def _first_match(res: tuple[re.Pattern, ...], text: str) -> str | None:
     for r in res:
         m = r.search(text)
@@ -153,6 +236,11 @@ def lint_file(path: Path) -> tuple[list[str], list[str]]:
     adv_out = [
         f"{path}:{ln}: advisory (remote-host prefix, not gating) `{lit}`."
         for ln, lit in advisory
+    ]
+    hard_out += [
+        f"{path}:{ln}: accessibility snapshot `{tok}` inside an authentication "
+        f"flow, not routed through the redactor -- {SNAPSHOT_RECIPE}."
+        for ln, tok in scan_snapshot_rule(text, path.as_posix())
     ]
     return hard_out, adv_out
 
@@ -198,16 +286,31 @@ def changed_files(base_ref: str) -> list[Path] | None:
 
 
 def full_scan_files() -> list[Path]:
+    picked, _ = full_scan_files_with_total()
+    return picked
+
+
+def full_scan_files_with_total() -> tuple[list[Path], int]:
+    """Return (scannable files, total *.md discovered before archive filtering).
+
+    The two numbers differ only by archived files, and the anti-vacuity floor
+    needs BOTH: a repo whose docs are all under archive/ has nothing to scan
+    LEGITIMATELY, while a repo where the scan dirs hold no markdown at all is
+    the vacuous case (wrong root, broken checkout). Collapsing them would make
+    the floor fire on the first and miss nothing on the second.
+    """
     picked: list[Path] = []
+    total = 0
     for d in SCAN_DIRS:
         root = Path(d)
         if not root.is_dir():
             continue
         for p in sorted(root.rglob("*.md")):
+            total += 1
             if "/archive/" in p.as_posix():
                 continue
             picked.append(p)
-    return picked
+    return picked, total
 
 
 def main(argv: list[str]) -> int:
@@ -253,7 +356,23 @@ def main(argv: list[str]) -> int:
             return 2
         files = picked
     else:
-        files = full_scan_files()
+        files, discovered = full_scan_files_with_total()
+        # Anti-vacuity floor. A lint that reports "0 checked" and exits 0 is
+        # vacuous -- indistinguishable from a clean run. --changed is exempt:
+        # an empty changed-set is the normal case there.
+        #
+        # Keyed on DISCOVERED, not on the post-filter list: a repo whose docs
+        # are all under archive/ scans zero files legitimately, and firing on
+        # that would red a correct codebase. Only "the scan dirs hold no
+        # markdown at all" is the vacuous shape.
+        if discovered == 0:
+            print(
+                "ERROR: full-scan population is empty (no tracked *.md under "
+                f"{'/, '.join(SCAN_DIRS)}/). A lint with nothing to check is "
+                "vacuous, not clean. Fail-closed.",
+                file=sys.stderr,
+            )
+            return 2
 
     hard: list[str] = []
     advisory: list[str] = []
@@ -269,11 +388,15 @@ def main(argv: list[str]) -> int:
     if hard:
         for e in hard:
             print(e, file=sys.stderr)
+        n_snap = sum(1 for e in hard if "accessibility snapshot" in e)
+        n_path = len(hard) - n_snap
         print(
-            f"\nFAIL: {len(hard)} resolvable credential-file path literal(s). "
-            "Such a path makes Claude Code's harness auto-attach the real file "
-            "into model context when the doc loads — neutralize each one "
-            f"({RECIPE}).",
+            f"\nFAIL: {n_path} resolvable credential-file path literal(s) and "
+            f"{n_snap} unrouted accessibility snapshot(s) in an authentication "
+            "flow. A resolvable path makes Claude Code's harness auto-attach the "
+            "real file into model context when the doc loads — neutralize each "
+            f"one ({RECIPE}). An unrouted snapshot renders input values, "
+            "including ones the agent never supplied, into the transcript.",
             file=sys.stderr,
         )
         return 1
