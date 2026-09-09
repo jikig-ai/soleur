@@ -53,7 +53,7 @@ python3 -c 'import yaml' 2>/dev/null || { printf 'FAIL: PyYAML required\n' >&2; 
 W=$(mktemp -d -t wrdeploy.XXXXXXXX) || { printf 'FAIL: mktemp\n' >&2; exit 2; }
 trap 'rm -rf "$W"' EXIT
 
-echo "=== Guards 3/4/5/7/8: the workflow_run deploy gate (#5806) ==="
+echo "=== Guards 3/4/5/7/8/9/10/11: the workflow_run deploy gate (#5806) ==="
 
 # ── INSTRUMENT SELF-TEST ─────────────────────────────────────────────────────
 _p0=$passes; _f0=$fails
@@ -423,6 +423,170 @@ if grep -qF 'needs.resolve-target.outputs.soft_breach' "$REL"; then pass; else
   fail "G5-20 nothing consumes resolve-target's soft_breach output — a warning nobody reads is a warning nobody sees, which is the regression I4 existed to catch"
 fi
 
+# ═══ GUARD 9 — the skip_reason vocabulary is ONE set, not three copies ══════
+# The reason strings are emitted in resolve-target and restated, independently,
+# in THREE consumers: notify-gated's `if:`, notify-gated's `case`, and
+# release-outcome's clean-skip `case`. The only prior assertions were NEGATIVE
+# and PER-MEMBER ("notify-gated must not contain no_release_run"). A per-member
+# spot check structurally cannot detect a MISSING member: add a 14th fault
+# reason and forget notify-gated, and the operator gets no Slack for it while
+# every row stays green.
+#
+# This row found a real one on its first run: `release_outputs_incomplete` was
+# named by BOTH notify-gated arms and emitted by nothing — an unreachable arm
+# that also made the vocabulary LOOK balanced (8 + 5 = 13) against a producer
+# that emitted 12. It now has a producer (the incoherent-artifact state, which
+# was previously collapsed into the clean-skip arm and left the run green).
+_pyset="$W/skipset.py"
+cat > "$_pyset" <<'PYSET'
+import re, sys, json
+src = open(sys.argv[1]).read()
+lines = src.split("\n")
+
+def job_block(name):
+    out, f = [], False
+    for l in lines:
+        if re.match(r"^  %s:\s*$" % re.escape(name), l):
+            f = True; continue
+        if f and re.match(r"^  [A-Za-z0-9_-]+:\s*$", l):
+            break
+        if f: out.append(l)
+    return "\n".join(out)
+
+resolve = job_block("resolve-target")
+# PRODUCER: the third argument of clean_skip / the second of fail_closed.
+produced = set(re.findall(r'clean_skip\s+"[^"]*"\s+"[^"]*"\s+"([a-z_]+)"', resolve))
+produced |= set(re.findall(r'fail_closed\s+"[^"]*"\s+"([a-z_]+)"', resolve))
+
+ng = job_block("notify-gated")
+cond = set(re.findall(r"skip_reason\s*==\s*'([a-z_]+)'", ng))
+case = set(re.findall(r"^\s*([a-z_|]+)\)", ng, re.M))
+case = {m for arm in case for m in arm.split("|") if m and m != "*"}
+case &= (produced | cond)            # the case also has non-reason arms
+
+ro = job_block("release-outcome")
+clean = set()
+for arm in re.findall(r"^\s*([a-z_|]+)\)", ro, re.M):
+    parts = [x for x in arm.split("|") if x]
+    if any(p in produced for p in parts):
+        clean |= set(parts)
+print(json.dumps({"produced": sorted(produced), "cond": sorted(cond),
+                  "case": sorted(case), "clean": sorted(clean)}))
+PYSET
+_sets=$(python3 "$_pyset" "$REL")
+_p=$(printf '%s' "$_sets" | python3 -c "import json,sys;print(' '.join(json.load(sys.stdin)['produced']))")
+_c=$(printf '%s' "$_sets" | python3 -c "import json,sys;print(' '.join(json.load(sys.stdin)['cond']))")
+_k=$(printf '%s' "$_sets" | python3 -c "import json,sys;print(' '.join(json.load(sys.stdin)['clean']))")
+# EXTRACTOR SELF-TEST: a regex that silently stops matching yields empty sets,
+# and every equality below then holds vacuously.
+_np=$(printf '%s' "$_p" | wc -w)
+if [ "$_np" -ge 10 ]; then pass; else
+  fail "G9 the skip_reason producer extractor found only $_np reasons — it has gone blind, and every parity row below would pass vacuously"
+fi
+# PARTITION: every produced reason is handled by exactly one consumer arm, and
+# no consumer names a reason nothing produces.
+_orphan=""; _phantom=""
+for r in $_p; do
+  case " $_c $_k " in *" $r "*) : ;; *) _orphan="${_orphan}${r} " ;; esac
+done
+for r in $_c $_k; do
+  case " $_p " in *" $r "*) : ;; *) _phantom="${_phantom}${r} " ;; esac
+done
+if [ -z "$_orphan" ]; then pass; else
+  fail "G9 skip_reason(s) emitted but handled by NO consumer: ${_orphan}— the operator gets no Slack and no email arm for these, and nothing else would notice"
+fi
+if [ -z "$_phantom" ]; then pass; else
+  fail "G9 consumer(s) name a skip_reason nothing emits: ${_phantom}— an unreachable arm, which also makes the vocabulary look balanced while it is not"
+fi
+# DISJOINT: a reason must not be both a clean skip and a fault.
+_both=""
+for r in $_c; do case " $_k " in *" $r "*) _both="${_both}${r} " ;; esac; done
+if [ -z "$_both" ]; then pass; else
+  fail "G9 skip_reason(s) classified as BOTH a fault (notify-gated) and a clean skip (release-outcome): ${_both}— the two channels would disagree about whether prod failing to update is news"
+fi
+# notify-gated's two restatements of its own set must agree with each other.
+_ngcase=$(printf '%s' "$_sets" | python3 -c "import json,sys;print(' '.join(json.load(sys.stdin)['case']))")
+_dis=""
+for r in $_c; do case " $_ngcase " in *" $r "*) : ;; *) _dis="${_dis}${r} " ;; esac; done
+if [ -z "$_dis" ]; then pass; else
+  fail "G9 notify-gated's if: names ${_dis}which its case does not handle — the job fires and then falls through to no message"
+fi
+
+# ═══ GUARD 10 — the artifact contract holds ACROSS the file boundary ════════
+# The artifact name, its schema number and its field set are stated in
+# reusable-release.yml (producer) and RESTATED in web-platform-release.yml
+# (consumer), with nothing tying them. Rename either side and every deploy
+# fail-closes on `release_outputs_missing` — a state only production reveals,
+# because both files stay individually valid and every existing row stays green.
+_RR="$REPO_ROOT/.github/workflows/reusable-release.yml"
+if [ -f "$_RR" ]; then
+  # The caller passes `component:`; the producer builds the name from it.
+  _component=$(awk '/uses: \.\/\.github\/workflows\/reusable-release\.yml/{f=1} f&&/^      component:/{print $2; exit}' "$REL")
+  _prod_name=$(grep -oE 'name: release-outputs-\$\{\{ inputs\.component \}\}' "$_RR" | head -1)
+  if [ -n "$_component" ] && [ -n "$_prod_name" ]; then pass; else
+    fail "G10 could not read the artifact-name contract (component='$_component', producer template='$_prod_name') — the rows below would compare nothing"
+  fi
+  # The ASSEMBLED name the consumer hardcodes must equal what the producer builds.
+  _expected="release-outputs-${_component}"
+  if grep -qF -- "$_expected" "$REL"; then pass; else
+    fail "G10 the consumer does not reference '$_expected', the artifact name the producer builds from component='$_component'. A rename on either side fail-closes every deploy, and only production says so"
+  fi
+  # Schema number parity.
+  _pschema=$(grep -oE '\-\-argjson schema [0-9]+' "$_RR" | grep -oE '[0-9]+$' | head -1)
+  _cschema=$(grep -oE '\[ "\$a_schema" != "[0-9]+" \]' "$REL" | grep -oE '[0-9]+' | head -1)
+  if [ -n "$_pschema" ] && [ -n "$_cschema" ]; then pass; else
+    fail "G10 could not read the schema number from both sides (producer='$_pschema' consumer='$_cschema') — the parity row below would be vacuous"
+  fi
+  if [ "$_pschema" = "$_cschema" ]; then pass; else
+    fail "G10 schema desync: the producer writes schema $_pschema, the consumer requires $_cschema. Every deploy fail-closes on schema_mismatch"
+  fi
+  # Every field the consumer READS must be a field the producer WRITES.
+  # SCOPED TO THE ARTIFACT READS. An unscoped sweep picks up every jq call in
+  # the file — live-verify's health JSON among them — and reports fields the
+  # producer was never meant to write.
+  _missing=""
+  _artifact_reads=$(grep -E "ro\\.json" "$REL" | grep -oE "jq -r '\\.[a-z_]+" \
+    | grep -oE "\\.[a-z_]+" | tr -d '.' | sort -u)
+  if [ -n "$_artifact_reads" ]; then pass; else
+    fail "G10 found no release-outputs field reads in the consumer — the field-parity row would be vacuous"
+  fi
+  for _f in $_artifact_reads; do
+    grep -qE -- "--arg(json)? ${_f} " "$_RR" || _missing="${_missing}${_f} "
+  done
+  if [ -z "$_missing" ]; then pass; else
+    fail "G10 the consumer reads field(s) the producer never writes: ${_missing}— each resolves to the jq default, so a typo reads as a legitimate 'false'/'' rather than as an error"
+  fi
+else
+  fail "G10 reusable-release.yml not found — the artifact contract is unverifiable"
+fi
+
+# ═══ GUARD 11 — release-outcome watches EVERY job ═══════════════════════════
+# The job's own comment says omitting a new job from its `needs:` "fails
+# SILENTLY, which is the same class of fault as the outage this closes". That
+# was the one rule in the file the file itself declared silent, and nothing
+# asserted it. A job absent from `needs:` cannot appear in the classifier, so a
+# new job could fail while the operator's non-delivery guarantee reports success.
+_ro_needs=$(python3 -c "
+import yaml
+d=yaml.safe_load(open('$REL'))
+n=(d['jobs']['release-outcome'].get('needs') or [])
+print(' '.join(n if isinstance(n,list) else [n]))")
+_all_jobs=$(python3 -c "
+import yaml
+d=yaml.safe_load(open('$REL'))
+print(' '.join(sorted(d['jobs'])))")
+_unwatched=""
+for _j in $_all_jobs; do
+  case "$_j" in
+    release-outcome) continue ;;                       # itself
+    release) continue ;;                               # push arm only; recovered cross-run
+  esac
+  case " $_ro_needs " in *" $_j "*) : ;; *) _unwatched="${_unwatched}${_j} " ;; esac
+done
+if [ -z "$_unwatched" ]; then pass; else
+  fail "G11 release-outcome does not watch: ${_unwatched}— a job absent from its needs: cannot reach the classifier, so it can fail while the operator's non-delivery guarantee reports success. This is the rule the job's own comment calls SILENT"
+fi
+
 # ═══ GUARD 8 — every consumer disambiguates the two arms ═════════════════════
 # ASSEMBLY BY EXTRACTION, and the extraction is the part that was wrong.
 #
@@ -628,11 +792,16 @@ TOTAL=$((passes + fails))
 # + 2 dispatch-permit bounds + 5 mutants + 2 harness
 # + 2 MUT-CONTROL (predicate empty at baseline; a null mutant must SURVIVE)
 # + 1 extractor-scope self-test (budget.blk must not cross a job boundary)
-# + 1 comment-stripper self-test (resolve.code must not be empty) = 45
+# + 1 comment-stripper self-test (resolve.code must not be empty)
+# + 5 G9 skip_reason set parity (extractor self-test, orphan, phantom, disjoint,
+#   notify-gated if-vs-case agreement)
+# + 6 G10 cross-file artifact contract (name readable, assembled name, schema
+#   readable, schema parity, field-read scope, field parity)
+# + 1 G11 release-outcome needs completeness = 57
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=45
+MIN_ROWS=57
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

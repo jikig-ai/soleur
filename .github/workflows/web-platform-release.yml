@@ -464,6 +464,22 @@ jobs:
           # `released` is still carried as a value (legibility, and release-outcome
           # reads it) — it is simply not a gate.
           if [ -z "$version" ] || [ -z "$tag" ]; then
+            # COHERENCE FIRST: "published nothing" and "published something and
+            # lost track of it" are different states, and only the first is clean.
+            # `check_changed` declining leaves version, tag, released AND
+            # docker_pushed all empty/false. An artifact claiming a pushed image or
+            # a cut release while carrying NO version is incoherent — the producer
+            # is broken — and routing it to the clean-skip arm would leave the run
+            # GREEN with no notification, which is the failure-swallowed-as-skip
+            # shape this whole job exists to prevent.
+            #
+            # This is also what gives `release_outputs_incomplete` a PRODUCER.
+            # notify-gated named it in both its `if:` and its `case` while nothing
+            # emitted it — the arms were unreachable, and the vocabulary looked
+            # balanced (8 fault + 5 clean = 13) against a producer that emitted 12.
+            if [ "$released" = "true" ] || [ "$docker_pushed" = "true" ]; then
+              fail_closed "release-outputs for $WR_HEAD_SHA reports released=$released docker_pushed=$docker_pushed but carries no version/tag — the artifact is incoherent, so this is a broken release, not a declined one" "release_outputs_incomplete"
+            fi
             clean_skip "$WR_HEAD_SHA" "the release job published nothing for this SHA (check_changed declined it)" "upstream_concluded_unpublished"
           fi
 
