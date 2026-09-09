@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-09-08T19:48:16Z",
+  "generated_at": "2026-09-09T17:53:57Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -406,19 +406,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "hr-gdpr-gate-on-regulated-data-surfaces",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-github-api-endpoints-with-enum",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -809,19 +796,6 @@
       "rule_text_prefix": ""
     },
     {
-      "id": "hr-when-a-command-exits-non-zero-or-prints",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": ""
-    },
-    {
       "id": "hr-when-a-plan-specifies-relative-paths-e-g",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -940,19 +914,6 @@
     },
     {
       "id": "rf-before-spawning-review-agents-push-the",
-      "section": "Review & Feedback",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": ""
-    },
-    {
-      "id": "rf-never-skip-qa-review-before-merging",
       "section": "Review & Feedback",
       "hit_count": 0,
       "bypass_count": 0,
@@ -1366,11 +1327,50 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": ""
+    },
+    {
+      "id": "rf-never-skip-qa-review-before-merging",
+      "section": "Review & Feedback",
+      "hit_count": 2,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 2,
+      "prevented_errors": 2,
+      "last_hit": "2026-09-09T16:24:05Z",
+      "first_seen": "2026-09-09T16:24:03Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-when-a-command-exits-non-zero-or-prints",
+      "section": "Hard Rules",
+      "hit_count": 4,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 4,
+      "prevented_errors": 4,
+      "last_hit": "2026-09-09T16:24:05Z",
+      "first_seen": "2026-09-09T16:24:04Z",
+      "rule_text_prefix": ""
+    },
+    {
+      "id": "hr-gdpr-gate-on-regulated-data-surfaces",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 7,
+      "warn_count": 0,
+      "fire_count": 7,
+      "prevented_errors": 0,
+      "last_hit": "2026-09-09T16:49:59Z",
+      "first_seen": "2026-09-09T16:26:55Z",
+      "rule_text_prefix": ""
     }
   ],
   "summary": {
     "total_rules_tagged": 105,
-    "rules_unused_over_8w": 105,
+    "rules_unused_over_8w": 102,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": [],
     "gate_exemptions": [],
