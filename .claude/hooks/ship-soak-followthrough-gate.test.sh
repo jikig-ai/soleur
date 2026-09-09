@@ -114,9 +114,29 @@ Post-deploy soak holds at 0 for 7 days. Ref #7409 would apply only under the spl
 Post-deploy soak holds. Ref #9999 tracks the soak.' ;;
   # Only NEGATED soak vocabulary -- a plan declaring that NO soak exists -- beside a
   # genuine third-party ref. The gate must NOT fire: there is no soak to enrol.
+  # PR #7987's real shape: the refs sit on their OWN lines (a `Ref #N` line carries
+  # no soak vocabulary), and the only soak match in the whole corpus is the plan
+  # template row that says the section does not apply.
   soaknegated) printf '%s\n' 'Closes #7409
 
+Ref #9999
+
 | 2.9.1 Soak follow-through | **Skip.** No acceptance criterion is time-gated; nothing here closes on a soak. |
+No soak-gated status flip.' ;;
+  # ACCEPTED RESIDUAL, pinned so it is a decision rather than a surprise: a negation
+  # that shares ONE LINE with a tracker reference is KEPT and therefore DENIES. That
+  # is the safe direction (the gate asks for enrollment on a ref the author put
+  # there) and it is the price of using the tracker as the discriminator instead of
+  # a punctuation window -- which was a live bypass on five house-style spellings.
+  # THE BYPASS SHAPE. Soleur house style for a soak-gated closure is
+  # `Ref #N` / NOT `Closes`, and the clause-boundary window that preceded the
+  # tracker discriminator DROPPED this line -- a live merge-gate bypass. Verbatim
+  # from knowledge-base/project/plans/2026-06-30-fix-agent-readiness-*.md.
+  soakhousestyle) printf '%s\n' 'Closes #7409
+
+- PR body: `Ref #9999`, never `Closes` (closure gated on the 7-day soak).' ;;
+  soaknegsameline) printf '%s\n' 'Closes #7409
+
 No soak-gated status flip. Ref #9999 tracks the residue.' ;;
   # The negation must be SCOPED: here `NOT` negates `Closes`, not the soak, and the
   # sentence IS a real soak declaration. Must still DENY.
@@ -124,6 +144,28 @@ No soak-gated status flip. Ref #9999 tracks the residue.' ;;
   soakplan) printf '%s\n' 'Closes #7409
 
 See knowledge-base/project/plans/fixture-soak-plan.md for the detail.' ;;
+  # FAR SIDE. Every fixture above asserts the strip removes ENOUGH; these assert it
+  # does not remove TOO MUCH. Without them, widening the negation window
+  # ({0,60}->{0,600}), loosening the second rule ('not applicable'->'not'), or
+  # making either fence strip greedier all left the suite byte-identical green
+  # while silently disabling the gate on a real declaration.
+  soakwindow) printf '%s\n' 'Closes #7409
+
+No acceptance criterion is time-gated here and the release plan is otherwise unremarkable, but the post-deploy soak holds at 0 for 7 days. Ref #9999 tracks it.' ;;
+  soakafter) printf '%s\n' 'Closes #7409
+
+The post-deploy soak is not yet enrolled. Ref #9999 tracks it.' ;;
+  # An UNBALANCED fence in the PR body. The body strip is fail-closed
+  # (END{if(in_fence) exit 2} -> write the body unstripped), so the live Ref past
+  # the unclosed fence must still be seen. Deleting that END clause flipped this
+  # to allow while the suite stayed green.
+  soakbodyfence) printf '%s\n' 'Closes #7409
+
+Post-deploy soak holds at 0 for 7 days.
+
+```
+unclosed fence
+Ref #9999 tracks the soak.' ;;
   soaknegscoped) printf '%s\n' 'Closes #7409
 
 - [ ] AC9: PR body uses **`Ref #9999`** (NOT `Closes`) -- closure is gated on the post-deploy soak below.' ;;
@@ -180,7 +222,7 @@ check "third-party unenrolled tracker still DENIES (fix narrows, not disables)" 
 # section does NOT apply fired it: "| 2.9.1 Soak follow-through | **Skip.** No
 # acceptance criterion is time-gated; nothing here closes on a soak. |" was the
 # ONLY match in the entire corpus of PR #7987, and it demanded enrollment for two
-# trackers that close on no timer at all. The hook header already recorded the
+# trackers that close on no timer at all. The hook's CLOSES-extraction comment (anchor: `**Why:** PR #7426`) already recorded the
 # cause -- "the regex is negation-blind" (PR #7426) -- while fixing only the
 # closing-target half beside it.
 #
@@ -188,8 +230,19 @@ check "third-party unenrolled tracker still DENIES (fix narrows, not disables)" 
 # the drop pass eats everything, which would disable the gate rather than narrow it.
 check "negated soak vocabulary only -> allows (negation-blindness, #7426)" "<none>" \
   "$(decision_of 'gh pr ready' "$REPO" soaknegated)"
+check "ACCEPTED RESIDUAL: a negation sharing a line with a tracker still DENIES (safe direction)" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soaknegsameline)"
+check "house-style 'Ref #N, never Closes (closure gated on the soak)' still DENIES" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakhousestyle)"
 check "negation scoped to its own clause: 'NOT Closes' still DENIES" "deny" \
   "$(decision_of 'gh pr ready' "$REPO" soaknegscoped)"
+
+check "a long negation-free clause before a real soak still DENIES (window length)" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakwindow)"
+check "a negation AFTER 'soak' does not silence the declaration" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakafter)"
+check "an unbalanced fence in the BODY is fail-closed, so the live Ref is still seen" "deny" \
+  "$(decision_of 'gh pr ready' "$REPO" soakbodyfence)"
 
 # --- the PLAN half gets the same fenced-block strip as the PR body -----------
 # The body is stripped so a quoted example cannot read as a live declaration;
@@ -268,6 +321,30 @@ else
 fi
 
 rm -rf "$REPO"
+
+# --- instrument self-test + assertion floor ------------------------------------
+# Both emit with printf + exit 1 DIRECTLY. Routing either through check() would
+# let the single edit that disarms check() disarm its own backstop.
+#
+# Measured before this existed: `check() { : }` reported "1 passed, 0 failed",
+# exit 0 — thirteen of fourteen assertions gone, CI green. And a check() that
+# always counts a PASS produced a BYTE-IDENTICAL headline.
+_c_pass=$PASS _c_fail=$FAIL
+check "instrument self-test: check() records a PASS" "x" "x"
+check "instrument self-test: check() records a FAIL (expected, unwound below)" "x" "y"
+if [[ "$PASS" -ne $((_c_pass + 1)) || "$FAIL" -ne $((_c_fail + 1)) ]]; then
+  printf 'FATAL: check() did not move both counters (pass %s->%s, fail %s->%s)\n' \
+    "$_c_pass" "$PASS" "$_c_fail" "$FAIL" >&2
+  exit 1
+fi
+PASS=$_c_pass FAIL=$_c_fail   # unwind the self-test
+
+MIN_ASSERTIONS=19
+if [[ "$PASS" -lt "$MIN_ASSERTIONS" ]]; then
+  printf 'FATAL: only %s assertions passed, floor is %s — the suite is vacuous\n' \
+    "$PASS" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
 
 echo
 echo "=== ship-soak-followthrough-gate: $PASS passed, $FAIL failed ==="

@@ -377,7 +377,7 @@ describe("ship Incident-PIR gate (#6813)", () => {
 // The corpus used to be assembled by PROSE in ship/SKILL.md: grep a plan path out
 // of the PR body, `cat` it, concatenate. When the body cites no plan the second
 // half is the empty string and the gate reports "no incident signal" having read
-// zero bytes of plan — a mandatory gate silently always-passing, whose output is
+// zero bytes of plan — a mandatory gate silently plan-blind (it still fired on body-only outage vocabulary; it could not see the plan, and did not say so), whose output is
 // byte-identical to a real all-clear.
 //
 // The pin below is the exact PR #7987 shape and is a MATCHED PAIR: the SAME plan
@@ -420,9 +420,14 @@ describe("--pr corpus construction", () => {
   // The plan reports a real production outage; the body alone says nothing.
   const OUTAGE_PLAN =
     "# fix: apex\n\n## Overview\n\nThe 2026-08-16 apex outage took the production site down.\n";
+  // REAL newlines, not a literal backslash-n. The stub heredoc previously emitted
+  // one physical line, which made the paragraph strip, the blank-line boundary, the
+  // heading boundary and the fence strip all INERT against every fixture — so
+  // flattening newlines in the corpus builder left the whole suite green while a
+  // real multi-line incident report shipped a silent all-clear.
   const BODY_WITH_LINK =
-    "fix(apex): restore the origin\\n\\nSee knowledge-base/project/plans/fixture-plan.md for detail.";
-  const BODY_NO_LINK = "fix(apex): restore the origin\\n\\nNo plan is linked from this body.";
+    "fix(apex): restore the origin\n\nSee knowledge-base/project/plans/fixture-plan.md for detail.";
+  const BODY_NO_LINK = "fix(apex): restore the origin\n\nNo plan is linked from this body.";
 
   test("body LINKS the plan → the plan is read and the outage signals", () => {
     const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN));
@@ -449,15 +454,54 @@ describe("--pr corpus construction", () => {
     expect(res.stderr).toContain("PIR-CORPUS-UNREADABLE");
   });
 
-  test("a cited plan path escaping the plans dir is refused, not read", () => {
-    const res = runPr(
-      sandbox(
-        "fix: x\\n\\nknowledge-base/project/plans/../../../../etc/passwd.md",
-        OUTAGE_PLAN,
-      ),
+  // MATCHED PAIR, and the first half must cite a file that EXISTS. The earlier
+  // fixture cited `…/plans/../../../../etc/passwd.md`, which does not exist, so
+  // `realpath -e` failed one step BEFORE the allowlist and the test passed without
+  // ever exercising the boundary: widening the case arm to `"$root"/*` left the
+  // whole suite green. The second half is what stops the fix being "refuse
+  // everything".
+  test("a REAL file outside the plans dir is refused by the allowlist, not read", () => {
+    const dir = sandbox(
+      // THREE `..`: from knowledge-base/project/plans/ that is the repo root, which is
+    // where OUTSIDE.md is written. With two the path resolved to
+    // knowledge-base/OUTSIDE.md — a file that does not exist — so `realpath -e`
+    // failed one step before the allowlist and this test was vacuous a SECOND time,
+    // in the commit fixing exactly that. Mutation-proven: widening the case arm to
+    // `"$root"/*` now reds this case.
+    "fix: x\n\nknowledge-base/project/plans/../../../OUTSIDE.md",
+      OUTAGE_PLAN,
     );
-    expect(res.stderr).toContain("PIR-CORPUS-BODY-ONLY");
+    // A readable file that resolves INSIDE the repo but OUTSIDE plans/specs.
+    writeFileSync(resolve(dir, "OUTSIDE.md"), OUTAGE_PLAN);
+    const res = runPr(dir);
+    expect(res.stderr).toContain("refusing to read it");
     expect(res.status).toBe(1);
+  });
+
+  test("a real file INSIDE the plans dir is still read (the guard narrows, not disables)", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN));
+    expect(res.stderr).toContain("PIR-CORPUS —");
+    expect(res.status).toBe(0);
+  });
+
+  test("a plan path quoted inside a FENCED block does not shadow the real link", () => {
+    const dir = sandbox(
+      "fix: x\n\nUsage:\n\n```\nknowledge-base/project/plans/decoy-plan.md\n```\n\nPlan: knowledge-base/project/plans/fixture-plan.md",
+      OUTAGE_PLAN,
+    );
+    writeFileSync(
+      resolve(dir, "knowledge-base/project/plans/decoy-plan.md"),
+      "# decoy\n\nnothing notable here.\n",
+    );
+    const res = runPr(dir);
+    expect(res.stderr).toContain("fixture-plan.md");
+    expect(res.stderr).not.toContain("decoy-plan.md");
+    expect(res.status).toBe(0);
+  });
+
+  test("--pr with an EMPTY value exits 2 (a usage error is not an all-clear)", () => {
+    const res = runPr(sandbox(BODY_WITH_LINK, OUTAGE_PLAN), "");
+    expect(res.status).toBe(2);
   });
 
   test("--pr rejects a non-numeric argument", () => {

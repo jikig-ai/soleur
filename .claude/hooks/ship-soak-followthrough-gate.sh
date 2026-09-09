@@ -112,6 +112,19 @@ printf '%s' "$PR_BODY" | awk '
 ' > "$CORPUS" || printf '%s' "$PR_BODY" > "$CORPUS"
 
 PLAN=$(grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' "$CORPUS" | head -1 || true)
+# Same traversal confinement the PIR gate applies, for the same reason: this path
+# comes from an attacker-authored PR body and this hook runs automatically on
+# `gh pr ready`. Without it a symlink under plans/ pointing outside the repo is read
+# into the corpus -- a forced-deny / shipping-DoS primitive. Resolve against the repo
+# root, not cwd, so the verdict does not depend on where the hook was invoked from.
+_soak_root="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
+_soak_resolved="$(realpath -e "$_soak_root/$PLAN" 2>/dev/null || realpath -e "$PLAN" 2>/dev/null || true)"
+case "$_soak_resolved" in
+  "$_soak_root"/knowledge-base/project/plans/*|"$_soak_root"/knowledge-base/project/specs/*) PLAN="$_soak_resolved" ;;
+  *) [[ -n "$PLAN" ]] && echo "ship-soak-followthrough-gate: SOAK-CORPUS-BODY-ONLY - cited plan does not resolve under the repo plans/specs dirs; refusing to read it" >&2 || true
+     PLAN="" ;;
+esac
+
 if [[ -n "$PLAN" && -f "$PLAN" ]]; then
   # Strip fenced blocks from the PLAN TOO. The PR body is stripped a few lines
   # above precisely so a quoted example cannot be read as a live declaration, and
@@ -131,8 +144,29 @@ if [[ -n "$PLAN" && -f "$PLAN" ]]; then
   #
   # Same fail-closed posture as the body: if awk cannot run, append unstripped
   # rather than dropping the plan half entirely.
-  awk '/^```/ { f = !f; next } !f { print }' "$PLAN" >> "$CORPUS" \
-    || cat "$PLAN" >> "$CORPUS"
+  # `^[[:space:]]*` NOT `^`: 518 of 1905 tracked plans indent a fence inside a
+  # list item, and a column-0-only toggle leaves those fences UNSTRIPPED -- so the
+  # quoted illustration this strip exists to neutralise survives in the common
+  # case. The sibling strips (ship-incident-pir-gate.sh, preflight/SKILL.md) are
+  # both indent-tolerant; this one was not, 25 lines below the body strip that is.
+  #
+  # `END{ if (f) exit 2 }` mirrors the body strip above: an UNBALANCED fence
+  # otherwise truncates the plan tail silently at rc=0, so the `|| cat` fallback
+  # could never fire and a `Ref #N` past the unclosed fence vanished from REFS.
+  # Measured: 1 of 1905 plans has an odd column-0 fence count.
+  #
+  # The fallback writes to a TEMP file, not straight onto $CORPUS: the awk above
+  # has already appended its partial output, so `|| cat "$PLAN" >> "$CORPUS"`
+  # appended the plan a SECOND time on failure, duplicating every ref.
+  _plan_stripped=$(mktemp)
+  if awk '/^[[:space:]]*```/ { f = !f; next } !f { print } END { if (f) exit 2 }' \
+       "$PLAN" > "$_plan_stripped" 2>/dev/null; then
+    cat "$_plan_stripped" >> "$CORPUS"
+  else
+    echo "ship-soak-followthrough-gate: SOAK-CORPUS-PLAN-UNSTRIPPED — '$PLAN' has an unbalanced fence or awk failed; appending it unstripped (fail-closed: the gate stays noisy rather than blind)" >&2 || true
+    cat "$PLAN" >> "$CORPUS"
+  fi
+  rm -f "$_plan_stripped"
 else
   # SAY SO WHEN HALF THE CORPUS IS EMPTY. The plan is where a soak is actually
   # declared — a PR body rarely spells one out — so when no plan path resolves,
@@ -183,15 +217,51 @@ DROPPED_CORPUS=$(mktemp)
 trap 'rm -f "$CORPUS" "$DROPPED_CORPUS"' EXIT INT TERM
 if awk '
       { u = tolower($0) }
-      u ~ /(^|[^a-z])(no|not|nothing|none|never|n\/a|skip|skipped|zero|without)([^a-z][^.|)—–;:]{0,60})?soak/ { next }
-      u ~ /soak[^.|]{0,40}(: *(skip|none)|not applicable|n\/a|does not apply)/ { next }
+      # DROP a negated-soak line ONLY when it carries no tracker reference.
+      #
+      # The clause-boundary window this replaced ([^.|)-;:]{0,60}) pinned exactly ONE
+      # punctuation arrangement and was a LIVE MERGE-GATE BYPASS on five of the six
+      # house-style spellings, all real committed corpus lines:
+      #   "Ref #5733, never Closes (closure gated on the 7-day soak)."   -> dropped
+      #   "Ref #N (NOT Closes - closure is post-soak)"                   -> dropped
+      #   "Ref #N must **not** be closed until the soak reports green."  -> dropped
+      # ( and , were absent from the class, so the window ran straight through them
+      # into soak. The single fixture passed for the wrong reason: it happened to
+      # contain a ). Widening the class is whack-a-mole -- natural-language negation
+      # scope is not a character class.
+      #
+      # The reliable discriminator is the TRACKER. The sentence that triggered this
+      # whole change (the 2.9.1 Soak follow-through table row, Skip / nothing here
+      # closes on a soak) carries no Ref or Tracks #N, and every genuine soak-gated
+      # closure carries one -- the house convention the REFS extraction below reads.
+      # So the failure direction is now safe BY CONSTRUCTION: a kept ref-bearing line
+      # only makes the gate check that ref enrollment.
+      #
+      # zero is DELIBERATELY absent from the negation list: it is also a SOAK_RE token
+      # (stays? (at )?(~?0|zero)), so including it made "Zero POST-failure lines over
+      # the soak window" self-negate.
+      #
+      # The window [^.|] is ASCII-only and byte-safe. An earlier revision put an em/en
+      # dash INSIDE a bracket class, which under mawk is byte-oriented: it admitted the
+      # 0xE2 lead byte and with it every U+2xxx character. The byte-safe repair that
+      # followed was DEAD CODE -- a negated class already matches each dash byte -- and
+      # so silently removed the em-dash boundary it meant to preserve. Both measured.
+      u ~ /(^|[^a-z])(no|not|nothing|none|never|n\/a|skip|skipped|without)[^a-z][^.|]{0,60}soak/ && u !~ /(ref|tracks)[[:space:]]*#[0-9]+/ { next }
+      u ~ /soak[^.|]{0,40}(: *(skip|none)|not applicable|n\/a|does not apply)/ && u !~ /(ref|tracks)[[:space:]]*#[0-9]+/ { next }
       { print }
-    ' "$CORPUS" > "$DROPPED_CORPUS" 2>/dev/null && [[ -s "$DROPPED_CORPUS" || ! -s "$CORPUS" ]]; then
+    ' "$CORPUS" > "$DROPPED_CORPUS" 2>/dev/null; then
+  # awk RAN. Its output is authoritative even when EMPTY -- an all-negation corpus
+  # legitimately strips to nothing. The earlier `[[ -s "$DROPPED_CORPUS" ]]`
+  # conjunct conflated "awk broke" with "awk correctly removed every line" and so
+  # rescanned the UNFILTERED corpus for a body whose every soak mention was
+  # negated, reinstating the exact PR #7987 false deny this strip removes --
+  # under a message that blamed awk. Measured on
+  # "No soak-gated status flip. Ref #9999 tracks the residue."
   cp "$DROPPED_CORPUS" "$CORPUS"
 else
   # Fail TOWARD the gate: an awk that could not run leaves the corpus unfiltered,
   # so the gate stays as noisy as it was rather than silently passing everything.
-  echo "ship-soak-followthrough-gate: negation strip failed — scanning the unfiltered corpus" >&2 || true
+  echo "ship-soak-followthrough-gate: SOAK-NEGATION-STRIP-FAILED — awk exited non-zero; scanning the unfiltered corpus" >&2 || true
 fi
 
 # Soak signal — MUST stay byte-identical to ship/SKILL.md §Detection SOAK_RE.

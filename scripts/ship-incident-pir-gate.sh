@@ -27,8 +27,9 @@ set -uo pipefail
 # read the PR body, grep a `knowledge-base/project/{plans,specs}/...` path out of
 # it, `cat` that file, concatenate. When the body cites no plan the second half is
 # the EMPTY STRING, and the gate then reports "no incident signal" having examined
-# zero bytes of plan -- a mandatory gate silently always-passing, with an output
-# indistinguishable from a real all-clear.
+# zero bytes of plan -- a mandatory gate silently PLAN-BLIND -- it still fired on
+# outage vocabulary in the PR body itself, but reported a verdict on the body
+# alone in output byte-identical to a full scan.
 #
 # Measured on PR #7987: 19 KB of body containing no `knowledge-base/` path at all,
 # verdict "no incident signal". Adding the plan link and re-running the SAME gate
@@ -51,7 +52,18 @@ PIR_PR=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --pr)
-      PIR_PR="${2:?--pr needs a PR number}"
+      # NOT `${2:?...}`. That is bash's own parameter error: it exits **1** with no
+      # stdout, and ship/SKILL.md consumes this gate as `if bash … --pr "$(gh pr
+      # view --json number --jq .number)"; then … else "no incident signal"`. So an
+      # EMPTY inner `gh` result made a usage error report as a clean ALL-CLEAR --
+      # the same vacuity class this gate is being fixed for, one level up, and
+      # introduced by this PR's own wiring. rc=2 is the "could not evaluate"
+      # terminal the non-numeric branch below already uses.
+      PIR_PR="${2-}"
+      if [[ -z "$PIR_PR" ]]; then
+        echo "ship-incident-pir-gate: --pr needs a PR number (got an empty value)" >&2
+        exit 2
+      fi
       # Validate HERE, at top level. Inside emit_corpus this `exit 2` would run in
       # the command substitution that captures the corpus, killing only the
       # SUBSHELL: the assignment then fails, the fail-toward-PIR guard fires, and
@@ -65,6 +77,12 @@ while [[ $# -gt 0 ]]; do
     *) echo "ship-incident-pir-gate: unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# Strip C0 controls, DEL and U+2028/9 from anything PR-body-derived before it is
+# echoed. The plan-path class excludes whitespace but not ESC (0x1b): a body could
+# emit ESC[2K / ESC[1A and ERASE the very "I did not read your plan" warning these
+# diagnostics exist to add. Same helper and same reasoning as preflight Check 5.
+_pir_sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8/ /g; s/\xe2\x80\xa9/ /g'; }
 
 emit_corpus() {
   if [[ -z "$PIR_PR" ]]; then cat; return; fi
@@ -84,24 +102,52 @@ emit_corpus() {
   printf '%s
 ' "$body"
 
-  plan="$(printf '%s' "$body" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' | head -n1 || true)"
+  # Select the plan from a FENCE-STRIPPED body. The raw body was grepped here,
+  # so a plan path quoted inside a fenced usage example SHADOWED the real link
+  # (`head -n1` takes the first match) and the gate then scanned the wrong plan
+  # while reporting PIR-CORPUS, i.e. fully-scanned. That is the same "a quoted
+  # example must not read as a live declaration" reasoning this PR applies to the
+  # plan's CONTENTS, never applied to the plan SELECTOR.
+  #
+  # Indent-tolerant and unbalanced-fence-tolerant: on a stripper failure fall back
+  # to the raw body rather than losing the link entirely (fail toward reading the
+  # plan, since a missing plan half is the defect this whole change removes).
+  local _sel
+  _sel="$(printf '%s' "$body" | awk '/^[[:space:]]*```/ { f = !f; next } !f { print }' 2>/dev/null)" || _sel="$body"
+  [[ -n "$_sel" ]] || _sel="$body"
+  plan="$(printf '%s' "$_sel" | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])"`]+\.md' | head -n1 || true)"
   if [[ -z "$plan" ]]; then
-    echo "ship-incident-pir-gate: PIR-CORPUS-BODY-ONLY — no knowledge-base/project/{plans,specs}/*.md path in PR #$PIR_PR; scanned the body alone, NOT the plan" >&2
-    return
+    echo "ship-incident-pir-gate: PIR-CORPUS-BODY-ONLY — no knowledge-base/project/{plans,specs}/*.md path in PR #$PIR_PR; scanned the body alone, NOT the plan" >&2 || true
+    return 0
   fi
 
   # Path-traversal guard, same shape preflight Check 10 uses: a PR body is
   # attacker-authored text and this turns any readable `.md` into gate input.
   root="$(git rev-parse --show-toplevel 2>/dev/null || echo .)"
-  resolved="$(realpath -e "$plan" 2>/dev/null || true)"
+  # Resolve against $root FIRST. `$root` is repo-relative and `realpath -e "$plan"`
+  # is CWD-relative, so they agreed only when cwd happened to BE the repo root:
+  # the same PR, same plan, same commit returned INCIDENT-SIGNAL from the root and
+  # a silent no-signal from a subdirectory -- and the operator-facing note blamed
+  # the security guard, so a cwd bug read as an attack refusal. `/ship` does not
+  # guarantee cwd and SKILL.md invokes this through a deliberately
+  # location-independent path. This is the PR own defect statement ("opposite
+  # answers, and nothing said half the input was missing") through another door.
+  resolved="$(realpath -e "$root/$plan" 2>/dev/null || realpath -e "$plan" 2>/dev/null || true)"
   case "$resolved" in
     "$root"/knowledge-base/project/plans/*|"$root"/knowledge-base/project/specs/*) ;;
     *)
-      echo "ship-incident-pir-gate: PIR-CORPUS-BODY-ONLY — cited plan '$plan' does not resolve under $root/knowledge-base/project/{plans,specs}/; refusing to read it" >&2
-      return ;;
+      echo "ship-incident-pir-gate: PIR-CORPUS-BODY-ONLY — cited plan '$(_pir_sanitize "$plan")' does not resolve under $root/knowledge-base/project/{plans,specs}/; refusing to read it" >&2 || true
+      return 0 ;;
   esac
 
-  echo "ship-incident-pir-gate: PIR-CORPUS — PR #$PIR_PR body + plan '$plan'" >&2
+  # `|| true` on every diagnostic in this function: each `return` yields the status
+  # of its LAST command, so a bare `echo … >&2` makes the corpus builder's exit
+  # status depend on whether fd 2 happens to be writable -- and that status is
+  # promoted by `pipefail` into the fail-toward-PIR guard below. Measured before
+  # the fix: the same PR gave a clean no-signal with fd 2 open and
+  # `INCIDENT-SIGNAL: yes` under `2>&-` and `2>/dev/full`. This file's own header
+  # documents identifying and fixing exactly that shape for the awk sentinel.
+  echo "ship-incident-pir-gate: PIR-CORPUS — PR #$PIR_PR body + plan '$(_pir_sanitize "$plan")'" >&2 || true
   cat "$resolved"
 }
 

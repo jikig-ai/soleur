@@ -1,7 +1,7 @@
 ---
 title: "Two /ship Phase 5.5 gates returned a verdict without measuring"
 date: 2026-09-09
-status: in-progress
+status: complete
 refs: [7426, 7278, 6813, 7801, 7987]
 brand_survival_threshold: none
 tags: [ship, gates, vacuity, measurement, hooks]
@@ -26,7 +26,8 @@ declaration that no soak exists. On PR #7987 the **only** match across the entir
 ```
 
 The gate blocked `gh pr ready` and demanded sweeper enrollment for two trackers that close
-on no timer at all. `ship-soak-followthrough-gate.sh`'s own header already records the
+on no timer at all. `ship-soak-followthrough-gate.sh`'s CLOSES-extraction comment (anchor:
+`**Why:** PR #7426`, ~137 lines below the file header) already records the
 cause — *"the regex is negation-blind"* (PR #7426) — and that PR fixed only the
 closing-target half beside it.
 
@@ -37,7 +38,7 @@ plan path **out of the PR body**. When the body cites no plan, `PLAN_TEXT` is th
 string and the gate reports `no incident signal` having examined zero bytes of plan. PR
 #7987 was in exactly that state: 19 KB of PR body containing no `knowledge-base/` path.
 Adding the link and re-running flipped the verdict to `INCIDENT-SIGNAL: yes` — same commit,
-same gate, opposite answer. The mandatory gate had been silently always-passing for every
+same gate, opposite answer. The mandatory gate had been silently plan-blind (it still fired on body-only outage vocabulary; it could not see the plan, and did not say so) for every
 PR whose body omits a plan link.
 
 Both gates share the resolution shape, so B is present in the soak gate too.
@@ -74,14 +75,14 @@ already split out for: a harness must execute the production runtime, not scrape
 ## Measurements
 
 Ground truth for "declares a real soak" = plans carrying a `soleur:followthrough script=`
-enrollment directive (n=42). The looser "names a probe under `scripts/followthroughs/`"
+enrollment directive, anchored on the `<!-- ` HTML-comment opener (n=42). The looser "names a probe under `scripts/followthroughs/`"
 set (n=91) is CONTAMINATED — a plan that fixes the sweeper names probes without declaring
 a soak — and is not used.
 
 | | before | after |
 |---|---|---|
-| plans firing (all 1905 tracked) | 274 | 207 |
-| false positives removed | — | 67 (24%) |
+| plans firing (all 1905 tracked) | 275 | 209 |
+| false positives removed | — | 66 (24%) |
 | recall on the 42 clean positives | 36 | 36 |
 
 Zero recall regression. Re-derive rather than trust these.
@@ -114,7 +115,7 @@ surface. Their evidence is the sibling suites plus the corpus measurement above.
 
 discoverability_test:
   command: bash .claude/hooks/ship-soak-followthrough-gate.test.sh
-  expected_output: "12 passed, 0 failed"
+  expected_output: "18 passed, 0 failed"
 
 ## Soak follow-through enrollment
 
