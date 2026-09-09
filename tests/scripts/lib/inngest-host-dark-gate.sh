@@ -68,7 +68,7 @@
 #   silent        — the host emits nothing. Check the timer and the Vector shipper.
 #   unreadable    — the read path failed, or a field did not parse. Nothing about the host was
 #                   measured; retry.
-#   stale_schema  — the host is emitting, but from a pre-probe_schema=3 renderer. ACTIONABLE:
+#   stale_schema  — the host is emitting, but from a pre-probe_schema=4 renderer. ACTIONABLE:
 #                   replace the host first WITH A PIN THAT CARRIES THE EMITTER -- a replace on an
 #                   unbumped pin re-delivers the same bytes, because the emitter is baked into the
 #                   OCI image and reaches the host via the digest literal in user_data, not via
@@ -100,7 +100,8 @@
 #     G1  the probe query returned rc 0 AND the row count parses as ^[0-9]+$   -> unreadable
 #     G2  the row count is >= 1                                                -> silent
 #     G3  the chosen row IS the newest, and its age is within --max-row-age     -> stale_row
-#     G4  probe_schema == "3", EXACT equality (not >=)                         -> stale_schema
+#     G4  probe_schema == "4", EXACT equality (not >=)                         -> stale_schema
+#     G14 redis_keys==0 implies redis_key_patterns==__NONE__ (coherence)        -> unreadable
 #   Identity  (inngest-bootstrap.sh is the SHARED renderer for both hosts)
 #     G5  envelope host      == soleur-inngest                                 -> wrong_host
 #     G6  envelope host_name == soleur-inngest-prd                             -> wrong_host
@@ -369,7 +370,7 @@ inngest_host_dark_gate() {
   local rows_file="" query_rc="" finished_file="" finished_rc=""
   local expected_volume_id="" live_attachment_id="" followthrough_rc=""
   local cutover_flag="" diagnostic_boot=""
-  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="3"
+  local host="soleur-inngest" host_name="soleur-inngest-prd" expected_schema="4"
   # G3's recency bound. `now_epoch` is injectable so the suite can pin a clock; the default is the
   # real one. 5400s = 90 minutes, the window the monotonicity argument in this file's header
   # assumes — it was, until this revision, assumed and enforced nowhere.
@@ -582,10 +583,17 @@ inngest_host_dark_gate() {
   # and counts them, so widening the window and leaving this bound behind reddens rather than
   # silently making the emptiness claim older than the argument that justifies it.
 
-  # ── G4 — probe_schema is EXACTLY 3 ──────────────────────────────────────────────
+  # ── G4 — probe_schema is EXACTLY 4 ──────────────────────────────────────────────
   # EXACT EQUALITY, NOT `>=`. A `>=` comparison would silently accept a FUTURE schema whose field
   # semantics this gate has never seen — the same "a lenient extractor makes absence satisfy
   # everything" shape one version forward. A schema bump must force a deliberate edit here.
+  #
+  # BUMPED 3 -> 4 (#7695, 2026-09-09) when the emitter gained `redis_key_patterns`. The bump is
+  # the point: a bare `redis_keys` count cannot answer "is this residue or state someone needs?",
+  # which is the question the recut runbook's "confirm before emptying anything" actually asks. A
+  # host still on the schema-3 image emits no `redis_key_patterns`, and grading it here would
+  # authorize a destroy against evidence this gate cannot see. `stale_schema` is the correct and
+  # actionable verdict for such a host: deliver the new image first.
   #
   # `stale_schema` is the EXPECTED verdict for every dispatch until the host is replaced: the
   # running host's boot_id has been unchanged for weeks, so it emits no probe_schema at all. That is
@@ -596,6 +604,22 @@ inngest_host_dark_gate() {
   local schema
   schema="$(_ihdg_field "$chosen_msg" probe_schema)" || { _ihdg_verdict "stale_schema"; return $?; }
   [[ "$schema" == "$expected_schema" ]]              || { _ihdg_verdict "stale_schema"; return $?; }
+
+  # ── G14 — the two store fields must AGREE ───────────────────────────────────────
+  # `redis_keys` is the field this destroy is authorized against, and until schema 4 nothing could
+  # cross-check it. Now something can: the emitter derives `redis_key_patterns` from a `--scan` of
+  # the SAME keyspace `INFO keyspace` summed, so `redis_keys=0` and a pattern list naming live keys
+  # cannot both be true. Disagreement means one reader is wrong, and since one of them is the
+  # clearing value, the safe reading is neither — refuse rather than prefer the permissive one.
+  #
+  # Deliberately NOT `stale_schema`: the schema is current, the row is incoherent. And deliberately
+  # only in the `keys==0` direction — a populated store already fails G13, so the sole reading this
+  # guard must catch is the one that would AUTHORIZE the destroy.
+  local keypat
+  keypat="$(_ihdg_field "$chosen_msg" redis_key_patterns)" || { _ihdg_verdict "unreadable"; return $?; }
+  if [[ "$(_ihdg_field "$chosen_msg" redis_keys)" == "0" && "$keypat" != "__NONE__" ]]; then
+    _ihdg_verdict "unreadable"; return $?
+  fi
 
   # ── G7 — the row says it is the dedicated host ──────────────────────────────────
   # host_role is derived on-host from DOPPLER_PROJECT (§D1), this codebase's canonical
