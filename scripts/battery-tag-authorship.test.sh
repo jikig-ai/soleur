@@ -78,7 +78,14 @@ readonly REPO_ROOT
 RUNNER="${BATTERY_TAG_RUNNER:-$REPO_ROOT/scripts/test-all.sh}"
 readonly RUNNER
 
-passes=0; fails=0; asserted=0
+# One binding per line, no `;`. guard-vacuity-floor.test.sh carries the floor block plus its
+# threshold BINDINGS into a mutant, and its binding extractor is anchored
+# `^[[:space:]]*VAR=[^;]*$` — a semicolon-joined line is rejected, `asserted` arrives
+# unbound, and the mutant dies as a CONSTRUCTION FAILURE rather than being scored. That
+# reports as an uncovered floor, which is the opposite of what this floor is for.
+passes=0
+fails=0
+asserted=0
 ck() { asserted=$((asserted + 1)); }
 pass() { passes=$((passes + 1)); printf '  [ok] %s\n' "$1"; }
 fail() { fails=$((fails + 1)); printf '  [FAIL] %s\n' "$1" >&2; }
@@ -421,6 +428,15 @@ printf '\nbattery-tag-authorship: %d passed, %d failed, %d assertion(s) executed
 
 # Reported DIRECTLY, never through fail() — a neutered fail() is exactly what this backstops
 # (ADR-193). Zero slack: the floor is the measured count.
+#
+# THE BINDING BELOW SITS FLUSH AGAINST THE `if`, WITH NO BLANK LINE OR COMMENT BETWEEN THEM,
+# AND THAT ADJACENCY IS LOAD-BEARING. `scripts/guard-vacuity-floor.test.sh` builds its mutant
+# by slicing the floor block and widening BACKWARD over CONTIGUOUS simple assignments; it stops
+# at the first line that is not one. With the threshold declared further up, the mutant loses
+# the binding, dies at an unbound variable under `set -u` before reaching the floor, and is
+# scored CONSTRUCTION — an UNCOVERED floor, which is the opposite of what this floor is for.
+# Measured: the earlier layout put this suite in that file's construction-failure set.
+BATTERY_TAG_MIN_ASSERTIONS=7
 if (( asserted < BATTERY_TAG_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < BATTERY_TAG_MIN_ASSERTIONS=%d\n' "$asserted" "$BATTERY_TAG_MIN_ASSERTIONS" >&2
   exit 1
