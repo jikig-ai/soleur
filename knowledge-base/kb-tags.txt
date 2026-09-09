@@ -868,6 +868,7 @@ consumer-sweep
 contagious-interview
 container
 container-registry
+containment
 content
 content-accuracy
 content-assertion
@@ -1626,6 +1627,7 @@ git-data-api
 git-diff
 git-env-vars
 git-environment
+git-fixture
 git-fsck
 git-grep
 git-history
