@@ -13,9 +13,15 @@
 # from stdin/args, so no real `git`/`gh` invocation. Mirrors the
 # infra-validation-detect.test.sh source-and-call convention.
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Guard 3 (#7833) tripwire adoption (#7849 exit condition). This suite already runs
+# `-e`, which matches test-helpers.sh -- no `+e` here, deliberately. The source sits
+# ABOVE this file's assert_eq/assert_contains redefinitions so those keep winning.
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$SCRIPT_DIR/test-helpers.sh"
+
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 MODULE="$REPO_ROOT/plugins/soleur/skills/product-roadmap/scripts/roadmap-reconcile.sh"
 

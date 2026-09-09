@@ -38,9 +38,16 @@
 #
 # Run via:  bash plugins/soleur/test/gitleaks-merge-commit.test.sh
 
-set -uo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Guard 3 (#7833) tripwire adoption (#7849 exit condition). test-helpers.sh runs
+# `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
+# deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$SCRIPT_DIR/test-helpers.sh"
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+set +e -uo pipefail
+
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONFIG="$REPO_ROOT/.gitleaks.toml"
 WORKFLOW="$REPO_ROOT/.github/workflows/secret-scan.yml"
 
