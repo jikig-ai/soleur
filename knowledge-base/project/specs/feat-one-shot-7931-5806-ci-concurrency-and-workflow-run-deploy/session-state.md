@@ -137,3 +137,36 @@ Decision 2 declares a stop condition: *"If any predicate cannot be reconstructed
 Routed to the `soleur:engineering:cto` agent as an architecture fork (artifact hop vs. release-object
 read vs. honour the stop condition), per the work-skill rule that a blocked plan mechanism with
 material trade-offs is the CTO's call and not the operator's.
+
+## LEFTHOOK=0 commit 313e39e31 — every bypassed hook discharged explicitly
+
+The hooked attempt was killed by the OOM reaper mid-`tsc --noEmit` (30 GB box at
+2 GB available, load 23, six sibling worktree sessions). It left NO stale
+`index.lock` and NO orphaned children, and the 17-path staged set was intact, so
+the recovery was a plain re-commit rather than an index repair. Per the work-skill
+rule, the bypassed hooks are discharged here rather than assumed:
+
+| hook | how discharged | result |
+|---|---|---|
+| `gitleaks-staged` | `gitleaks git --log-opts=-1` over the commit | no leaks, 22.5 kB scanned |
+| `markdown-lint` | the repo's **pinned single invoker** (`scripts/markdown-lint.sh`), NOT an ad-hoc runner | **5 files clean** |
+| `generate-kb-index` | generator re-run | kb index unchanged by this diff |
+| `lint-infra-no-human-steps` | ran on the prior commits covering the same workflow files | OK |
+| `web-platform-typecheck` | see below | not applicable to this diff, PROVEN |
+
+**The typecheck is discharged by proof, not by skipping it.** The commit's only
+typecheck-relevant file is `apps/web-platform/test/helpers/install-vi-waitfor-floor.ts`,
+and the change is comment-only. Verified mechanically rather than by eye — strip
+`//` and `/* */`, normalise whitespace, compare: **472 == 472 bytes, byte-identical
+executable code**. `tsc --noEmit` output is therefore unchanged by construction, so
+running it would have re-confirmed a result the diff cannot move. It is also the run
+the OOM killed, and re-running a 15-minute full typecheck at 5 GB available risks a
+second kill for no information.
+
+**Instrument note worth keeping.** A first pass used `npx markdownlint-cli2` and
+reported 2 findings. Both were PRE-EXISTING on `origin/main` (identical count; only
+the line numbers moved, by the addendum's 53 lines) — and more importantly `npx`
+resolves the LATEST linter rather than the pinned one, which is exactly the
+unpinned-resolver drift #7927 fixed and which `lefthook.yml`'s own comment warns
+about. The repo's pinned invoker is the authority and reports clean. Reaching for
+`npx` was the wrong instrument, and it produced a finding that was not a regression.
