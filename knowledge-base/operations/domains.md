@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-08-20
+last_updated: 2026-09-09
 ---
 
 # Domains
@@ -7,6 +7,7 @@ last_updated: 2026-08-20
 | Domain | Registrar | Renewal Date | Nameservers | Notes |
 |--------|-----------|--------------|-------------|-------|
 | soleur.ai | Cloudflare | 2028-02-16 | ns1.cloudflare.com, ns2.cloudflare.com | Primary brand domain |
+| jikigai.com | Squarespace Domains II LLC | 2027-08-22 | ns-cloud-c1.googledomains.com, ns-cloud-c2.googledomains.com, ns-cloud-c3.googledomains.com, ns-cloud-c4.googledomains.com | Corporate + email domain (`ops@`, `legal@` on Proton Mail). NOT on Cloudflare: the zone was added and then removed 2026-09-09 after four weeks of incomplete nameserver setup. DNSSEC-signed at the parent. Re-establishment tracked in #7995 |
 
 ## DNS Records
 
