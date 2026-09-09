@@ -633,6 +633,23 @@ if grep -qE 'release_outputs_incomplete' "$W/dispatch.blk"; then pass; else
   fail "G12 the dispatch arm does not fail closed on an incoherent release (released/docker_pushed true with no version) — the workflow_run arm does, so the same broken release is a fault on one arm and a deploy on the other"
 fi
 
+# ═══ GUARD 9b — ci_not_green is a NON-DELIVERY, not a clean skip ════════════
+# release-outcome's not-paging arm is for states where NOTHING WAS DUE. CI
+# failing on main is not one: main advanced, production did not, and this job is
+# the operator's non-delivery guarantee. Slack fires for it (conclusion !=
+# 'success') but the EMAIL channel — the one built to say "prod is behind" —
+# was disarmed by its membership in that arm. G9 above only asserts the reason is
+# handled SOMEWHERE, so this pins WHICH arm.
+_nopage=$(awk '/^  release-outcome:/{f=1} f&&/^  [a-zA-Z0-9_-]+:$/&&!/release-outcome/{exit} f' "$REL" \
+  | sed -e 's/[[:space:]]*#.*$//' \
+  | grep -E '^\s*[a-z_|]+\)' | grep -F 'no_release_run')
+case "$_nopage" in
+  *ci_not_green*)
+    fail "G9b release-outcome classifies ci_not_green in the not-paging arm alongside no_release_run. A red CI on main means a release WAS due and did not deliver — prod is behind and the email channel, which exists to say exactly that, stays silent" ;;
+  "") fail "G9b could not locate release-outcome's not-paging arm (the row is vacuous)" ;;
+  *)  pass ;;
+esac
+
 # ═══ GUARD 10 — the artifact contract holds ACROSS the file boundary ════════
 # The artifact name, its schema number and its field set are stated in
 # reusable-release.yml (producer) and RESTATED in web-platform-release.yml
@@ -936,11 +953,11 @@ TOTAL=$((passes + fails))
 #   readable, schema parity, field-read scope, field parity)
 # + 1 G11 release-outcome needs completeness + 1 Hc far-side closure
 # + 3 G12 arm-parity (extraction, emptiness, coherence)
-# + 1 G3-13b carried-value non-vacuity = 62
+# + 1 G3-13b carried-value non-vacuity + 1 G9b ci_not_green arm = 63
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=62
+MIN_ROWS=63
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

@@ -2097,15 +2097,38 @@ jobs:
           }
           # Plain-language labels: the recipient is a non-technical founder, so
           # the job id is the SECONDARY identifier, not the headline.
-          # A CLEAN SKIP IS NOT A NON-DELIVERY. `no_release_run` (this push did not
-          # touch web-platform files) and `upstream_concluded_unpublished` (the inner
-          # pathspec gate declined) are the CORRECT outcome for a docs-only push, and
-          # there are many of those. Emailing the operator "the release did not reach
-          # production" for them would train the recipient to ignore this channel,
-          # which is the failure mode the whole job exists to prevent.
+          # A CLEAN SKIP IS NOT A NON-DELIVERY — but the set is exactly the states
+          # where NOTHING WAS DUE, and it is smaller than it looks. The comment
+          # here used to justify the arm by naming two of its five members.
+          #
+          #   no_release_run                  this push did not touch web-platform files
+          #   upstream_concluded_unpublished  the inner pathspec gate declined
+          #   not_main / not_push             the event was not a main push at all
+          #
+          # Emailing the operator "the release did not reach production" for those
+          # would train the recipient to ignore this channel, which is the failure
+          # mode the whole job exists to prevent.
+          #
+          # `ci_not_green` IS NOT ONE OF THEM, and was. CI failing on `main` means a
+          # release WAS due and did not deliver: main advanced, production did not,
+          # and this channel is the non-delivery guarantee. Slack fires for it (via
+          # conclusion != 'success') but the email channel was disarmed, so the one
+          # surface built to say "prod is behind" stayed silent on a state where it
+          # is. It gets its own classification — a real non-delivery, with a cause
+          # upstream of this pipeline rather than a fault inside it, because naming
+          # a deploy-chain job would misattribute it (AP-021).
           case "${SKIP_REASON:-}" in
-            no_release_run|not_main|not_push|ci_not_green|upstream_concluded_unpublished)
+            no_release_run|not_main|not_push|upstream_concluded_unpublished)
               echo "clean skip (${SKIP_REASON}) — nothing was due for delivery; not paging"
+              exit 0 ;;
+            ci_not_green)
+              FAILED="CI on main"
+              FAILED_HTML="<li><strong>The automated checks on the main branch</strong> — these did not pass for this commit, so nothing was promoted to production. The code that was merged is not live.</li>"
+              echo "release-outcome: CI was not green on main — a release was due and did not deliver." >> "$GITHUB_STEP_SUMMARY"
+              {
+                echo "failed=${FAILED}"
+                echo "failed_html=${FAILED_HTML}"
+              } >> "$GITHUB_OUTPUT"
               exit 0 ;;
           esac
           classify release "${R_RELEASE}" "Building and publishing the new version"
