@@ -125,7 +125,7 @@ Mechanisms considered and removed before any research was spent on them:
 
 - **`cloudflare_zone_settings_override` for jikigai.com** → would buy nothing in P1-P5. There is no HTTP traffic on this domain; zone settings govern proxying, TLS and security features that a mail-only zone never exercises. Cut.
 - **A `www` or apex A record, or a Pages project** → explicitly out of scope in the brief and buys no listed property. Cut.
-- **A bespoke DNS-record drift detector** → P2 is already bought by an existing mechanism: `scheduled-terraform-drift.yml` runs `terraform plan` per root on a `0 6,18 * * *` cron and files an `infra-drift` issue. The root only needs a matrix entry; grepped and confirmed the matrix is a hardcoded two-leg list at `.github/workflows/scheduled-terraform-drift.yml` (`- apps/web-platform/infra` / `- infra/github`). Cut the bespoke detector; add the matrix entry.
+- **A bespoke DNS-record drift detector** → P2 is already bought by an existing mechanism — but not the one first cited. `scheduled-terraform-drift.yml` is `workflow_dispatch`-only; the `{ cron: "0 6,18 * * *" }` schedule lives in `apps/web-platform/server/inngest/functions/cron-terraform-drift.ts` per ADR-033, which dispatches it. The cadence conclusion holds, but the matrix edit therefore carries a second dependency — a healthy Inngest dispatcher — and property P3 rests on it. The root only needs a matrix entry; grepped and confirmed the matrix is a hardcoded two-leg list at `.github/workflows/scheduled-terraform-drift.yml` (`- apps/web-platform/infra` / `- infra/github`). Cut the bespoke detector; add the matrix entry.
 - **A bespoke `terraform fmt`/`validate` gate for the new root** → already bought. `infra-validation.yml` auto-discovers roots by walking `apps/*/infra` and `infra/*` (`find infra/* -maxdepth 0 -type d`), so a root at `infra/jikigai-dns/` is covered with no workflow edit. Verified by reading the detection step, not inferred from the glob. Cut.
 - **A new Playwright automation for the Cloudflare token mint** → already bought. `plugins/soleur/skills/cf-token-scope/` drives Cloudflare token scope changes through Playwright MCP and ships the ADR-130 retained-scope probe. Reuse it; do not write a second one.
 
@@ -165,6 +165,7 @@ defaults to `false`, so email is not the primary channel — it is the **only** 
 
 Two precisions this plan's first draft got wrong, both of which matter for severity:
 
+- **There is currently no alert channel that is not on the domain being changed.** `git config user.email` is `jean.deruelle@jikigai.com`, so GitHub issue notifications — including the follow-through sweeper's comments — are delivered to the domain under test. `apps/web-platform/infra/uptime-alerts.tf` names the account owner `jean.deruelle@` alongside `ops@`, both on jikigai.com. And the product's own outbound chokepoint **explicitly rejects** `*@jikigai.com` (`docs/legal/data-protection-disclosure.md` §(ab) recipient allow-list), so it cannot serve as a fallback. In the exact failure this plan exists to prevent, every notification path terminates in the black hole and the only surviving channel is voluntarily opening github.com. **This is AC0 and it is a precondition, not a follow-through.**
 - **Two of those paths are already dead** and this change does not cause it — see F1. The
   claim "email is the only alert channel" is true of the four shell monitors and Better
   Stack; it overstates what currently works for the two Inngest cron paths.
@@ -291,7 +292,7 @@ New root `infra/jikigai-dns/`:
 | `infra/jikigai-dns/main.tf` | `terraform` block with the R2 `backend "s3"` (key `jikigai-dns/terraform.tfstate`), `required_providers { cloudflare = "~> 4.0" }`, `required_version = ">= 1.6"`, and the `provider "cloudflare"` bound to `var.cf_api_token_zone_admin` |
 | `infra/jikigai-dns/variables.tf` | `cf_account_id` and `cf_api_token_zone_admin`, both no-default and `sensitive`, each carrying a scope-ledger comment in the house style |
 | `infra/jikigai-dns/zone.tf` | `cloudflare_zone.jikigai_com` with `jump_start = false` |
-| `infra/jikigai-dns/dns.tf` | the nine `cloudflare_record` resources |
+| `infra/jikigai-dns/dns.tf` | the eight `cloudflare_record` resources |
 | `infra/jikigai-dns/dnssec.tf` | `cloudflare_zone_dnssec.jikigai_com`, added in the re-signing phase |
 | `infra/jikigai-dns/outputs.tf` | `name_servers`, `zone_status`, `zone_id`, and the DS components — consumed by the verification probe |
 | `infra/jikigai-dns/README.md` | the root's purpose and the cutover runbook pointer |
@@ -337,6 +338,21 @@ and deliberately no `--token-var` knob. There is no token-*mint* path in this re
 claim is retracted (`hr-verify-repo-capability-claim-before-assert`), and the missing
 capability is recorded under Capability Gaps.
 
+**Precedent found — the repo already does this, and better.** `apps/cla-evidence/infra/iam.tf`
+declares `cloudflare_api_token` resources under `lifecycle { prevent_destroy = true }`, and
+`apps/cla-evidence/infra/bootstrap.sh` mints a one-hour account-admin token carrying
+"User → API Tokens → Edit", uses it once, and **self-revokes it via the API at the end of the
+run**. That is codified as `hr-multi-step-post-merge-bootstrap-script`. So the statement above —
+"the token cannot be a `cloudflare_api_token` resource" — is true only of the *standing*
+credential and is otherwise falsifiable; it is retracted.
+
+**Adopt the bootstrap pattern.** It strictly dominates a Playwright mint: it puts the token's
+scope under version control rather than in a browser transcript, it removes the standing
+account-wide credential from Doppler entirely (which R3 admits it cannot otherwise mitigate),
+it dissolves the ADR-065 gate behind Phase 1, and it lets the token be re-scoped to the single
+zone once that zone exists. `cloudflare_api_token` is already in the encryption ledger's
+`non_store_types`, so the type is supported here.
+
 **Credential design — two phases, one persistent credential.** A standing account-scoped
 `Zone:Zone:Edit` token would be strictly broader than every credential in `prd_terraform`:
 it could rewrite soleur.ai's MX and Resend DKIM, and delete the soleur.ai zone outright.
@@ -370,6 +386,37 @@ Expected downtime: **zero**. Creating a pending zone and populating its records 
 nothing about resolution while Google Cloud DNS remains authoritative. All risk is
 concentrated in the registrar-side steps, which are sequenced separately in the Cutover
 Runbook.
+
+### Destroy-gate cap-coupling (a convention, not a single file)
+
+`tests/scripts/lib/destroy-guard-filter-web-platform.jq` states the rule verbatim — *"A future
+apply-* workflow MUST follow the same pattern: dedicated `destroy-guard-filter-<workflow>.jq`,
+dedicated `test-destroy-guard-counter-<workflow>.sh`, CODEOWNERS rows"* — and
+`destroy-guard-filter.jq` reinforces it: *"Do NOT generalize this filter; a future apply-*
+workflow gets its own sibling."* Saying "a destroy-guard gate" is therefore not enough. Four
+mechanisms are required:
+
+1. `tests/scripts/lib/destroy-guard-filter-jikigai-dns.jq` — new.
+2. `tests/scripts/test-destroy-guard-counter-jikigai-dns.sh` — new, and necessarily separate:
+   the existing counter's `MIN_ASSERTIONS=8` is compared with `-ne`, so added rows redden it.
+3. `tests/scripts/test-destroy-guard-regex-parity.sh` — its `EXPECTED_SITES=(…)` array is a
+   hardcoded registry of every `[ack-destroy]` site and prints its own cardinality; the new
+   workflow and its counter suite are two new rows.
+4. **The required-status-check trio.** `apply-sentry-infra.yml`'s gate is unbypassable only
+   because `sentry-destroy-required` is registered in `scripts/required-checks.txt`,
+   `scripts/ci-required-ruleset-canonical-required-status-checks.json`, and
+   `infra/github/ruleset-ci-required.tf`, held in lockstep by
+   `plugins/soleur/test/required-checks-canonical-parity.test.sh`. Without an equivalent
+   registration, nothing makes an unacknowledged destroy of `cloudflare_zone.jikigai_com`
+   unmergeable — the single resource whose destruction re-creates this incident.
+
+**Sequencing consequence the plan must own:** step 4 edits `infra/github/*.tf`, a *second*
+Terraform root, applied by `apply-github-infra.yml`. This PR therefore touches two auto-applied
+roots and both applies must be sequenced rather than raced.
+
+**Inherit the `["forget"]` sharp edge** documented in the same filter: for a one-zone root,
+`resource_deletes` must count `forget` as well as `delete`, or a state-drop of the zone passes
+every gate.
 
 ### Distinctness / drift safeguards
 
@@ -430,12 +477,12 @@ certificate verification off.
 ```yaml
 liveness_signal:
   what: "jikigai.com MX/SPF/DKIM/DMARC answer correctly, and the Cloudflare zone reports status=active"
-  cadence: "every 6 hours via the scheduled follow-through sweeper until the cutover closes; thereafter daily via the drift cron's plan on this root"
+  cadence: "daily at 18:00 UTC — the sweeper's actual schedule is `cron: '0 18 * * *'`, verified, not every 6 hours. During the cutover the live signal comes from the cutover workflow's own gate steps, because a follow-through `earliest=` is a hard wall-clock gate evaluated BEFORE the script runs, so a flip+7d directive means the probe does not execute at all during Phases 5-8"
   alert_target: "GitHub issue comment on the cutover tracker (pre-close); infra-drift issue (steady state)"
   configured_in: "scripts/followthroughs/jikigai-dns-cutover-<issue>.sh and .github/workflows/scheduled-terraform-drift.yml"
 error_reporting:
   destination: "GitHub issue on the tracker via the follow-through sweeper; workflow annotation + job failure on the apply workflow"
-  fail_loud: "true — the probe exits non-zero on any record mismatch and the sweeper comments; there is no silent-pass arm. Deliberately NOT routed to email, because the address under test is the email destination"
+  fail_loud: "true — the probe exits non-zero on any record mismatch and the sweeper comments; there is no silent-pass arm. NOTE: routing to a GitHub issue is NOT independent of the domain under test — see AC0. Independence is established by the AC0 precondition, not by the routing choice"
 failure_modes:
   - mode: "DS record still published at the parent while Cloudflare serves the zone (the DNSSEC trap)"
     detection: "probe compares `dig DS jikigai.com @a.gtld-servers.net` against the zone's NS delegation and against whether cloudflare_zone_dnssec is present in state"
@@ -449,9 +496,15 @@ failure_modes:
   - mode: "NS flipped but zone never activates (typo in one of the two nameservers)"
     detection: "probe asserts zone status == active AND that the parent delegation names exactly the two nameservers in `cloudflare_zone.jikigai_com.name_servers`"
     alert_route: "probe exit 2 (transient) for the first 72h, exit 1 thereafter"
+  - mode: "DNS is perfect but Proton does not ACCEPT mail for the address — the domain was de-verified during the lapse, or the mailbox routing changed"
+    detection: "SMTP-layer probe: MAIL FROM:<> / RCPT TO:<ops@jikigai.com> against mail.protonmail.ch:25, expect 250, QUIT before DATA. Repeat for legal@. PLUS a catch-all discriminator — RCPT TO: a deliberately non-existent local part must be REJECTED; if it is accepted the domain is catch-all and the 250 for ops@ proves nothing, so the probe degrades to a real round-trip rather than reporting a false pass"
+    alert_route: "probe exit 1. This is the ONLY limb that verifies the property the plan actually cares about; every DNS-layer assertion is a proxy for it"
+  - mode: "a validating resolver other than the one sampled still holds the retired DS"
+    detection: "resolver panel — 1.1.1.1, 8.8.8.8, 9.9.9.9 and at least one known fail-closed resolver, sampled repeatedly by the cutover workflow so `sustained` is evidenced rather than asserted"
+    alert_route: "cutover workflow gate step fails; the flip does not proceed"
   - mode: "Better Stack team member for ops@ is still pending (invite never accepted), so the alert path is dark for a reason unrelated to DNS"
     detection: "probe reads the Better Stack team-members API and asserts the ops@ member is not in a pending state"
-    alert_route: "probe exit 3 (notify-only) — this is a pre-existing condition the code comment already records, not a regression this change introduces"
+    alert_route: "REPORTING-ONLY — printed as NOTICE to stdout, never influencing the exit code. A shell script returns one exit code, and routing this pre-existing condition to exit 3 would park the tracker in TRANSIENT forever, making the closure criterion unsatisfiable regardless of whether the cutover succeeded"
 logs:
   where: "GitHub Actions run logs for the apply and sweeper workflows; no host, no container, no journald surface"
   retention: "GitHub default (90 days)"
@@ -471,7 +524,7 @@ The close criterion is time-gated — the zone must be `active` and the record s
 for a sustained period after the NS flip — so the closure is enrolled, not remembered:
 
 - **Script:** `scripts/followthroughs/jikigai-dns-cutover-<issue>.sh`, exit 0 only when
-  the zone is active, all nine records match the declaration, and the DS state is coherent
+  the zone is active, all eight records match the declaration, and the DS state is coherent
   with the delegation. Exit 2 (transient) while the flip is still propagating.
 - **Directive** on the tracker issue, with `earliest` set to NS-flip + 7 days:
 
@@ -491,6 +544,18 @@ for a sustained period after the NS flip — so the closure is enrolled, not rem
   `env:` block). Only `CF_API_TOKEN_ZONE_ADMIN` needs adding there — as a repository secret
   as well as a Doppler value, since the sweeper reads from `secrets.*`, not from Doppler.
 - Label the tracker `follow-through`.
+- **A second, date-anchored follow-through is required**, because the cutover one is keyed to a
+  flip date that may never exist: if DS removal blocks on a vendor ticket (R2, the largest
+  schedule risk), there is no flip, the directive is never enrolled with a real timestamp, and
+  the only enrolled watchdog never arms — which is precisely the silent-lapse shape this plan
+  exists to end. Enrol a second directive with `earliest = merge + 14d` whose sole assertion is
+  **"the zone still exists"**. Its trigger is the merge, which has already happened by
+  construction.
+- Set the cutover directive's own `earliest` to the **filing date**, not flip+7d, and let the
+  script self-gate with exit 2 until the soak elapses. `earliest` is a hard wall-clock gate
+  evaluated *before* the script runs, so a far-future value does not delay closure — it stops
+  the probe executing at all during the window it was written to watch. The convention warns
+  against this shape directly.
 
 ## Guard Contract
 
@@ -500,10 +565,18 @@ for a sustained period after the NS flip — so the closure is enrolled, not rem
 `infra/jikigai-dns/dns.tf`, and every record declared there is served — in both
 directions, over the whole zone rather than over the declared list.
 
-**Assembly.** The chokepoint is the Cloudflare zone's DNS-record collection, read as a
-whole through `GET /zones/{id}/dns_records` with pagination followed to exhaustion. The
-guard quantifies over that live list and over the parsed resource addresses in
-`infra/jikigai-dns/dns.tf`, not over a hardcoded expectation of nine. There is exactly
+**Assembly.** Two chokepoints, both read as whole lists. On the declared side, the guard reads
+**`terraform show -json` over the saved plan** — resource *values*, never an HCL text parse. An
+address-level diff cannot see a changed DKIM target (mutation row 3 is value-level), and text
+parsing has its own failure modes (`for_each`, heredocs, a comment containing
+`resource "cloudflare_record"`). On the live side, `GET /zones/{id}/dns_records` with pagination
+followed to exhaustion. The guard quantifies over both, never over a hardcoded count.
+
+**Bootstrap state, named explicitly.** Before the first apply the live list is empty while eight
+records are declared — which mutation row 5 requires to be RED. As first drafted this guard
+would have blocked the very apply that creates the zone. It therefore runs **post-apply**, and
+gates the *next* apply; the create-from-absent case is a declared skip, asserted as such rather
+than left implicit. There is exactly
 one write path to this collection in the repo — the `apply-jikigai-dns.yml` full-root
 apply — and the guard runs on that path before apply. A record can also enter the
 collection from outside the repo (a dashboard edit, or `jump_start`), which is the
@@ -534,11 +607,21 @@ scoped to the declared list.
 `.com` parent that does not correspond to the key of whichever nameserver set is actually
 authoritative. This is the state that hard-fails every validating resolver.
 
-**Assembly.** The chokepoint is the tuple (parent DS RRset, parent NS RRset, Cloudflare
-zone DNSSEC status). All three are read live: DS and NS from a `.com` gTLD server
-directly rather than from a caching resolver, and the Cloudflare status from the REST API.
-The guard quantifies over the tuple, not over any single member — reading only the DS, or
-only the NS, cannot express the property, because the property is about their agreement.
+**Assembly.** The chokepoint is the tuple (parent DS RRset, parent NS RRset, Cloudflare zone
+DNSSEC status, **declared cutover ordering**). The first three are read live: DS and NS from a
+`.com` gTLD server directly rather than from a caching resolver, and the Cloudflare status from
+the REST API. The fourth is `infra/jikigai-dns/cutover-order.json`, which exists so the ordering
+is an artifact the guard can read rather than prose it cannot. The guard quantifies over the
+tuple, not over any single member — reading only the DS, or only the NS, cannot express the
+property, because the property is about their agreement.
+
+**The tuple has no time dimension, and that is a known limit.** A state where the parent DS is
+Cloudflare's, the parent NS is Cloudflare's, and Cloudflare DNSSEC is on reads as coherent —
+even while resolvers still hold a cached Google NS RRset and therefore fetch Google's DNSKEY
+against Cloudflare's DS, which SERVFAILs. That hazard is invisible to this guard by
+construction, which is exactly why DNSSEC restoration is gated on an *elapsed-time* proof
+(≥48h, preferably 72h, of a resolver panel returning only the Cloudflare pair) rather than on
+Guard 2 alone.
 
 **Mutation matrix:**
 
@@ -547,7 +630,7 @@ only the NS, cannot express the property, because the property is about their ag
 | 1 | Simulate: NS delegated to Cloudflare, DS still Google's `26851 8 2 818EBD…` | RED — this is the exact incident being prevented |
 | 2 | Simulate: NS delegated to Cloudflare, Cloudflare DNSSEC enabled, DS absent from parent | AMBER/transient, not RED — a legitimate intermediate state while the new DS is being published |
 | 3 | Simulate: NS still Google, DS Google's, Cloudflare DNSSEC enabled on a pending zone | PASS — Cloudflare is not authoritative yet, so its DNSSEC state is not observable by resolvers |
-| 4 | **Reorder**: move the DS-removal step to *after* the NS flip in the runbook's encoded ordering | RED — the property is about the ordering and the window, so a delete-only battery that only ever observes the end state would certify a sequence that is broken in the middle. This row observes inside the window |
+| 4 | **Reorder**: swap the DS-retirement and NS-flip entries in `infra/jikigai-dns/cutover-order.json` — a declared, machine-readable phase ordering that the probe reads as a fourth input, created **because** this row is otherwise untestable: the first draft's Assembly named only three live inputs and no runbook, so the row asserted against an artifact nothing produced | RED — the property is about the ordering and the window, so a delete-only battery that only ever observes the end state would certify a sequence broken in the middle. A working version of this row is what catches the publish-DS-too-soon hazard |
 | 5 | Point the guard at a resolver that strips DS records | RED — must not read an inability to observe as coherence; targets the guard's own dispatch |
 
 **Harness rows:**
@@ -562,7 +645,15 @@ only the NS, cannot express the property, because the property is about their ag
 - `infra/jikigai-dns/main.tf`, `variables.tf`, `zone.tf`, `dns.tf`, `outputs.tf`, `README.md`
 - `infra/jikigai-dns/google-zone-snapshot.txt` — the committed restorable capture (Phase 6.1)
 - `.github/workflows/apply-jikigai-dns.yml`
-- `tests/scripts/lib/destroy-guard-filter-jikigai.jq`
+- `.github/workflows/jikigai-dns-cutover.yml` — the actor for Phases 5-8, modelled on the
+  existing `git-data-cutover.yml` (typed `confirm` token as typo-guard, `dry_run` defaulting
+  true, a `rollback` input). Without it, Phases 5-8 have no producer and the "automated, gated
+  dispatch" heading over the post-merge ACs describes something nothing creates.
+- `tests/scripts/lib/destroy-guard-filter-jikigai-dns.jq`
+- `tests/scripts/test-destroy-guard-counter-jikigai-dns.sh` — a **dedicated** counter suite.
+  Rows cannot be added to the existing one: `tests/scripts/test-destroy-guard-counter.sh` pins
+  `MIN_ASSERTIONS=8` compared with `-ne`, an exact equality, so extra rows redden it
+- `infra/jikigai-dns/bootstrap.sh` — the self-revoking admin-token bootstrap
 - `scripts/followthroughs/jikigai-dns-cutover-<issue>.sh` (+ its `.test.sh`)
 - `knowledge-base/engineering/architecture/decisions/ADR-214-corporate-dns-root-and-terraform-created-zones.md`
 - guard suites for Guard 1 and Guard 2
@@ -571,6 +662,15 @@ only the NS, cannot express the property, because the property is about their ag
 
 - `.github/workflows/scheduled-terraform-drift.yml` — add the `infra/jikigai-dns` matrix leg
 - `.github/workflows/scheduled-followthrough-sweeper.yml` — add `CF_API_TOKEN_JIKIGAI` to `env:`
+- `scripts/encryption-posture-ledger.json` — **add `cloudflare_zone` to `non_store_types`.**
+  `scripts/lint-encryption-posture.py` is fail-closed over `infra/**/*.tf` and partitions every
+  `resource "<type>"` into `store_classes` or `non_store_types`, failing on anything in neither.
+  `cloudflare_zone` is in neither today (verified), so `zone.tf` reddens CI on its first commit
+- `tests/scripts/test-destroy-guard-regex-parity.sh` — two new `EXPECTED_SITES` rows
+- `scripts/required-checks.txt`, `scripts/ci-required-ruleset-canonical-required-status-checks.json`,
+  `infra/github/ruleset-ci-required.tf` — register the new destroy-required context (see below)
+- `.github/CODEOWNERS` — an explicit `/infra/jikigai-dns/` row, as every other root has
+- `plugins/soleur/test/infra-validation-detect.test.sh` — a fixture row for the new root
 - `knowledge-base/operations/domains.md` — add the jikigai.com row (F2)
 - `knowledge-base/operations/expenses.md` — record the registration renewal
 - `knowledge-base/legal/article-30-register.md` — PA-15 §(g)(4) re-siting; Cross-Cutting TOMs availability measure (F3, CLO)
@@ -598,8 +698,22 @@ are driven by a gated dispatch after the merge.
 0.4 Determine, by a real attempt rather than by assertion, whether DS removal at
     Squarespace is self-service. This is the single largest schedule risk; if it needs a
     support ticket the timeline extends and Phase 6 blocks.
+0.2a **Enumerate the Google-side zone in full.** `dig` cannot enumerate a zone — it only
+    answers for names already known — so "the record set is complete" is not establishable by
+    the probes run so far. Export the zone from the registrar's DNS panel (or
+    `gcloud dns record-sets list` if the zone is reachable that way) and diff the complete
+    rrset list against `dns.tf`. This applies the plan's own whole-list learning to the side
+    being **replaced**, which Phase 2.4 applied only to the Cloudflare side. Any record found
+    here that the plan does not declare would otherwise be silently destroyed at the flip, and
+    Guard 1 is structurally incapable of seeing it.
 0.5 Read the three `.c4` model files in full and produce the actor/system/relationship
     enumeration ADR-214 requires.
+0.7 **File the cutover tracker issue** (label `follow-through`, no directive yet) and capture
+    `#N`. The probe filename embeds it, `Ref #N` needs it, and
+    `.claude/hooks/follow-through-directive-gate.sh` rejects a `script=` path that does not yet
+    exist — so the issue must precede the script, and the script must precede the directive.
+0.8 **Record the registrar account's own contact address.** If it is on jikigai.com, change it
+    first: a support reply about a broken domain must not traverse the broken domain.
 
 ### Phase 1 — Credentials, two phases
 
@@ -647,7 +761,7 @@ are driven by a gated dispatch after the merge.
 4.3 Record the registrar renewal as a recurring vendor expense if it is not already in
     the ledger (`wg-record-recurring-vendor-expense-before-ready`) — a grep of
     `knowledge-base/finance/` found no jikigai.com or Squarespace line.
-4.4 Merge. The apply workflow fires and creates the zone plus all nine records. **The
+4.4 Merge. The apply workflow fires and creates the zone plus all eight records. **The
     28-day clock starts here.**
 
 ### Phase 5 — Retire the DS record FIRST, before the zone exists
@@ -665,7 +779,12 @@ Squarespace unknown before any Terraform, state or pending zone exists.
 5.4 Assert the domain is unsigned-but-resolving: `dig +dnssec MX jikigai.com @1.1.1.1`
     answers **without** the `ad` flag, and every mail record still resolves. Google Cloud
     DNS is authoritative and untouched throughout, so mail is unaffected.
-5.5 Run Guard 2.
+5.5 **Lower the parent NS TTL** at the registrar to 300-3600s and let it drain alongside the
+    DS drain — same 48h, no extra schedule cost. This is what makes the Phase 7 rollback bound
+    tolerable: without it, a bad flip is bounded by the 172800s parent NS TTL, i.e. up to two
+    days of mail loss, and the whole risk acceptance rests on a number that would otherwise be
+    wrong by three orders of magnitude.
+5.6 Run Guard 2.
 
 ### Phase 6 — Create the zone and verify it exhaustively
 
@@ -687,8 +806,18 @@ Squarespace unknown before any Terraform, state or pending zone exists.
 
 ### Phase 7 — Flip the nameservers
 
+7.0 **Blocking pre-flight, executed in the same automated step that writes the registrar —
+    never as a separate earlier check.** Days elapse between reading the nameservers and
+    writing them, and across that gap the zone sits pending on the 28-day clock. If it were
+    deleted and recreated, Cloudflare assigns a **different nameserver pair and a different
+    zone id**, and writing the stale pair delegates the domain to nameservers that serve
+    nothing — REFUSED/NXDOMAIN for everything, mail included, which is the total-loss path.
+    So immediately before the write: re-read `GET /zones?name=jikigai.com`; assert exactly one
+    result; assert its `id` equals the id in Terraform state; assert `status == "pending"`;
+    assert `name_servers` is set-equal to the values about to be written; re-run Guard 1.
+    Abort the write on any mismatch.
 7.1 Replace the four `ns-cloud-c*.googledomains.com` entries with the Cloudflare
-    nameservers from 6.3, driven by the automation ladder, recording the rung reached.
+    nameservers **re-read in 7.0**, driven by the automation ladder, recording the rung reached.
 7.2 Poll the Cloudflare API for `status == active`.
 7.3 Assert the parent delegation names exactly the expected Cloudflare nameservers.
 7.4 Re-assert the full record set through public resolvers — the first point at which the
@@ -738,6 +867,12 @@ follow-throughs then have a dependency edge, and it must be recorded on both.
 
 ### Pre-merge (PR)
 
+- **AC0 — blocking precondition.** At least one alert recipient **not on jikigai.com** is
+  provisioned and a test alert is confirmed received before anything else in this plan runs.
+  Cheapest sufficient options, in rung order: a second Better Stack team member on an
+  off-domain address; a GitHub account notification address distinct from the commit address;
+  or routing the cutover workflow's failures to the existing Sentry surface. Until AC0 holds,
+  every other verification in this plan is unobservable in the failure mode it guards against.
 - **AC1** `terraform validate` and `terraform fmt -check` pass in `infra/jikigai-dns/`.
 - **AC2** The nine record resources' values are byte-identical to fresh `dig` output captured in Phase 0.2, quoted in the PR body. Specifically: MX `mail.protonmail.ch` priority 10 and `mailsec.protonmail.ch` priority 20; apex TXT `v=spf1 include:_spf.protonmail.ch ~all`; apex TXT `protonmail-verification=1530cebd64e78f12eb1c2931c1098fce81dc4d79`; `_dmarc` TXT `v=DMARC1; p=quarantine`; three DKIM CNAMEs on selector `dlsyxrjkwef5bwihl4fgmgswd2heglj7tta7o4qqc2h72lmdfbllq`.
 - **AC3** `grep -c 'name *= *"@"' infra/jikigai-dns/dns.tf` returns 0, and every apex resource uses the literal `jikigai.com`.
@@ -767,9 +902,56 @@ follow-throughs then have a dependency edge, and it must be recorded on both.
 - **AC19** After Phase 7, zone status is `active` and the parent delegation names exactly the two expected Cloudflare nameservers.
 - **AC20** DNSSEC restoration is **not** an acceptance criterion of this change. It is enrolled as its own follow-through with the ≥48h post-flip gate and the Squarespace-custom-DS conditional attached.
 - **AC20b** Proton reports jikigai.com verified after the flip, and the `protonmail-verification` TXT is byte-identical to its pre-cutover value.
+- **AC21a** The SMTP acceptance limb passes for **both** `ops@` and `legal@`, with the catch-all discriminator asserted. This is the only criterion that covers `legal@` at all — every other AC is silent on the Article 12(3) limb the User-Brand Impact section raises.
+- **AC17a** The parent NS TTL is observed ≤3600 at `a.gtld-servers.net` for ≥48h before the flip.
+- **AC19a** The Phase 7.0 pre-flight ran inside the registrar-write step and every assertion passed.
+- **AC5a** `jikigai-dns-cutover.yml` exists and every Phase 5-8 assertion appears in it as a gate step.
+- **AC2a** The full Google-side zone enumeration is quoted in the PR body, and every non-NS/non-SOA rrset in it either appears in `dns.tf` or is listed with an explicit drop rationale.
+- **AC15a** Phase 4 does not merge until Phase 0.4 has concluded that DS removal is achievable; if it requires a vendor ticket, the ticket is resolved first. Merging starts the 28-day clock, so it must not begin against an unbounded dependency.
 - **AC21** The follow-through probe exits 0 on a sweep at flip + 7 days.
 - **AC22** Every registrar-side step carries a recorded `playwright-attempt:` evidence line naming the URL reached and, where blocked, the specific named gate encountered.
 - **AC23** `Ref #N`, not `Closes #N`, in the PR body — the remediation completes after merge, so an auto-close at merge would record a false-resolved state.
+
+## Downtime & Cutover
+
+**Trigger.** The plan's Files-to-Create include `.tf` files and the change restructures how a
+serving surface is reached — the authoritative nameservers for a live mail domain. That is the
+router class, so a zero-downtime path must be evaluated and defaulted to rather than accepting
+an outage window.
+
+**The offline-inducing operation and its surface.** The only irreversible-in-the-short-term
+operation is the registrar delegation change (Phase 7.1). The surface it affects is inbound mail
+for jikigai.com — `ops@` (every production alert) and `legal@` (statutory data-subject requests).
+Nothing else in the plan can take a surface offline: creating a pending zone, populating its
+records, and retiring a DS record are all invisible to resolution while Google Cloud DNS remains
+authoritative.
+
+**Zero-downtime path — evaluated and adopted as the default.** The cutover is a **blue-green
+delegation swap** and is designed to have no offline window at all:
+
+1. The "green" nameservers are built and fully verified *while* "blue" continues serving —
+   Cloudflare answers authoritatively for a pending zone on its assigned nameserver IPs, so the
+   entire record set is provable correct before any delegation changes (Phase 6.4-6.7).
+2. The swap itself is atomic at the registrar and both sides serve **byte-identical** answers,
+   which is what makes resolver-cache divergence during propagation harmless rather than a
+   split-brain: a resolver holding the old delegation and one holding the new return the same MX,
+   SPF, DKIM and DMARC.
+3. The DNSSEC hazard that *would* have created a hard window is removed **before** the swap
+   rather than repaired after it (Phase 5), so at no point does a validating resolver see a DS
+   that fails to chain.
+4. DNSSEC restoration — the one remaining step that could reintroduce a window — is deliberately
+   **not** in the cutover. It is a separate follow-through gated on ≥48h of proof that no path
+   resolves to the old nameservers.
+
+**Residual downtime accepted: none.** No maintenance window is requested, because the design has
+no step that requires one. The residual *risk* is a transcription error in the record set
+surviving verification, and it is mitigated by exact set equality against each nameserver
+individually plus 300s TTLs for the first 72h — which makes forward-fix (~5 minutes) the recovery
+path rather than a delegation revert (bounded below by the 48h parent NS TTL). See the Rollback
+section: forward-fix is the control, and that is a deliberate design property, not a concession.
+
+**Per-stage verification and rollback** are enumerated in the Cutover Runbook below, one row per
+phase.
 
 ## Cutover Runbook and Rollback
 
@@ -950,6 +1132,21 @@ new root's files do not exist yet and so cannot overlap.
   connection failure, not evidence about the capability. *Mitigation:* the plan records
   every registrar rung as `automation-status: UNVERIFIED` and requires a real attempt at
   `/work` time; an a-priori "dashboard-only" claim is explicitly not accepted as evidence.
+- **R11 — The domain is unsigned for 5-9 days, which is a temporary security downgrade.**
+  From DS retirement to DNSSEC restoration, MX answers are forgeable by anyone with
+  resolver-cache-poisoning position — during exactly the window in which the ability to notice
+  is lowest. Accepted because the alternative (multi-signer) is not expressible in the pinned
+  provider, and because the availability risk of the alternative ordering is strictly worse.
+  Minimised by authoring and reviewing the restoration PR **before** Phase 7 so it can merge
+  within minutes of the ≥48h gate clearing rather than days after.
+- **R12 — The critical path is 7-9 days, not the ~4 first claimed.** Counting: Phase 5
+  verification, DS propagation to the parent (bounded by the registrar's own publish cycle),
+  the mandated 48h DS drain, the concurrent 48h NS-TTL drain, the flip, activation, and the
+  restoration PR cycle. Still inside 28 days, but the margin is about a third of the original
+  claim — and that claim was doing real work as the basis for accepting R1. A **Day-21 abort
+  checkpoint** in the cutover workflow destroys the pending zone and re-plans if the flip has
+  not occurred, and **invalidates any recorded nameserver values** so the 7.0 pre-flight cannot
+  pass on stale data.
 - **R8 — `_domainconnect` is dropped deliberately.** The live zone carries a
   `_domainconnect` CNAME to `_domainconnect.domains.squarespace.com`, a registrar-side
   Domain Connect affordance with no function once Cloudflare is authoritative. It is not
@@ -1037,4 +1234,12 @@ continuity probe green)*. Filed with a re-evaluation criterion and a milestone, 
 - **A pending free-plan zone is deleted at 28 days.** This is the root cause of the incident, and it applies to the replacement zone from the moment it is created.
 - **`jump_start = true` imports records Terraform does not manage**, producing exactly the divergence Guard 1 exists to catch. It is set false and asserted.
 - **Do not delete the Google-side DNS zone** until the follow-through closes; it is the Phase 7 rollback target.
+- **Destroying and recreating the zone changes BOTH its id and its assigned nameserver pair.**
+  This is the mechanism behind the Phase 7.0 pre-flight and the Day-21 abort: any nameserver
+  value recorded before a recreate is silently wrong, and writing it at the registrar delegates
+  the domain to nameservers that serve nothing.
+- **A follow-through `earliest=` is a hard wall-clock gate evaluated BEFORE the script runs.**
+  A far-future `earliest` therefore does not merely delay closure — it means the probe never
+  executes during the window it was written to watch. Set `earliest` to the filing date and let
+  the script self-gate with exit 2.
 - **`Ref #N`, not `Closes #N`.** The remediation completes after merge; an auto-close at merge records a false-resolved state.
