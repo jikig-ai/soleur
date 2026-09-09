@@ -3,21 +3,48 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 /**
- * Resend only accepts mail from a domain that carries its verification records
- * (a DKIM TXT at `resend._domainkey.<domain>` and the bounce subdomain
+ * Resend only accepts mail from a domain carrying its verification records (a
+ * DKIM TXT at `resend._domainkey.<domain>` and the bounce subdomain
  * `send.<domain>`). soleur.ai carries both; jikigai.com carries neither, so a
- * send whose `from:` sits on it is rejected by the vendor and — where the
- * response is discarded — fails silently.
+ * send whose sender sits on it is rejected by the vendor outright.
  *
- * That is not hypothetical: two Inngest cron alert paths shipped with a
- * jikigai.com sender and no response check, so the alerts they exist to raise
- * had been going nowhere. This guard is scoped to the CLASS (every Resend send
- * site) rather than to those two files, so a new send site cannot reintroduce it.
+ * Not hypothetical: the GHA->Inngest port (#4227, 2026-05-21) moved two cron
+ * alert paths onto a jikigai.com sender, and neither inspected the response, so
+ * both channels were dead for 111 days while reporting success.
  *
- * The forbidden domain is assembled at runtime: a source-scanning guard that
- * spelled it literally would match itself and any explanatory comment.
+ * SCOPE, stated so a green run is not read as more than it is. This covers the
+ * SENDER half of deliverability — a send the vendor will refuse. It CANNOT see
+ * recipient-side non-delivery: a bounce at the recipient MX returns 2xx from
+ * Resend. The `to:` on these paths is still on jikigai.com, whose DNS is
+ * mid-migration (#7995), and nothing here detects that breaking.
+ *
+ * The forbidden domain is assembled at runtime, and every source read is
+ * comment-stripped before matching: a source-scanning guard that spelled the
+ * domain literally, or matched against prose, would be satisfied by its own
+ * explanatory comments.
  */
 const FORBIDDEN_SENDER_DOMAIN = ["jikigai", "com"].join(".");
+
+/** Raw `fetch` against the REST endpoint. */
+const RAW_FETCH_PATTERN = "api\\.resend\\.com/emails";
+/**
+ * The SDK surface. Invisible to the pattern above and equally able to send.
+ * Matched as a FIXED string: `git grep` defaults to BRE, where `\(` opens a
+ * capture group rather than matching a paren, so the regex form of this
+ * pattern silently matches nothing.
+ */
+const SDK_PATTERN = "emails.send(";
+
+/**
+ * Send sites that legitimately resolve no static sender, each with its reason.
+ * A site reaching zero extracted senders and NOT listed here FAILS: an
+ * unresolvable sender is an unchecked sender, and the two are otherwise
+ * indistinguishable in a green run.
+ */
+const UNRESOLVED_SENDER_ACK: Record<string, string> = {
+  "apps/web-platform/test/email-brand-compliance.test.ts":
+    "assertion-only — inspects senders, emits none",
+};
 
 function repoRoot(): string {
   return execFileSync("git", ["rev-parse", "--show-toplevel"], {
@@ -25,54 +52,109 @@ function repoRoot(): string {
   }).trim();
 }
 
-/** Every tracked file that POSTs to the Resend send endpoint. */
-function resendSendSites(): string[] {
-  const root = repoRoot();
-  const out = execFileSync(
-    "git",
-    ["grep", "-l", "--", "api\\.resend\\.com/emails"],
-    { cwd: root, encoding: "utf8" },
-  );
-  return out
+function grepFiles(root: string, pattern: string, fixed: boolean): string[] {
+  const args = ["grep", "-l"];
+  if (fixed) args.push("-F");
+  args.push("--", pattern, ":!knowledge-base/");
+  try {
+    return execFileSync("git", args, {
+      cwd: root,
+      encoding: "utf8",
+      maxBuffer: 1 << 20,
+    })
+      .split("\n")
+      .filter(Boolean);
+  } catch {
+    // `git grep` exits 1 on zero matches. Returning [] lets the set assertion
+    // below report a collapsed enumeration instead of throwing at collection,
+    // where the failure surfaces as an opaque "Command failed".
+    return [];
+  }
+}
+
+const NOT_THIS_GUARD = (p: string) => !p.endsWith("resend-sender-domain.test.ts");
+
+/** Every tracked file that can send through Resend, by either surface. */
+function resendSendSites(root: string): string[] {
+  return [
+    ...new Set([
+      ...grepFiles(root, RAW_FETCH_PATTERN, false),
+      ...grepFiles(root, SDK_PATTERN, true),
+    ]),
+  ]
+    .filter(NOT_THIS_GUARD)
+    .sort();
+}
+
+/** Files sending via raw `fetch` — where the response is ours to inspect. */
+function rawFetchSites(root: string): string[] {
+  return grepFiles(root, RAW_FETCH_PATTERN, false)
+    .filter((p) => p.endsWith(".ts"))
+    .filter(NOT_THIS_GUARD)
+    .sort();
+}
+
+/** Strip line and block comments so no assertion can be met by prose. */
+function stripComments(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
-    .filter(Boolean)
-    // Planning artifacts and runbooks quote payloads as prose, not as code.
-    .filter((p) => !p.startsWith("knowledge-base/"))
-    // This guard names the domain it forbids.
-    .filter((p) => !p.endsWith("resend-sender-domain.test.ts"));
+    .map((l) => l.replace(/(^|\s)(\/\/|#).*$/, "$1"))
+    .join("\n");
 }
 
 /**
- * Extract `from:` / `--arg from` senders. Anchored on the assignment construct
- * so a comment mentioning a sender is not mistaken for one being used.
+ * Extract sender addresses by CONSTRUCT, never by proximity. An earlier version
+ * matched any quoted `@` string on a line mentioning "from", which read the
+ * RECIPIENT out of the jq payload `{from: $from, to: ["…"], …}` and reported it
+ * as a sender — too broad in exactly the direction no fixture covered.
  */
 function sendersIn(source: string): string[] {
+  const src = stripComments(source);
   const found: string[] = [];
   const patterns = [
-    /(?:^|[\s{,])from:\s*"([^"]+)"/gm, // TS/JS object literal
-    /--arg\s+from\s+"([^"]+)"/gm, // jq payload construction in shell/YAML
+    /(?:^|[\s{,])from:\s*"([^"\n]+)"/gm, // object literal
+    /--arg\s+from\s+"([^"\n]+)"/gm, // jq payload construction
+    /\bfrom\s*=\s*(?:[^;\n]*\?\?\s*)?"([^"\n]+)"/gm, // variable, incl. env default
+    /\b[A-Z_]*FROM\s*=\s*"([^"\n]+)"/gm, // module-level constant
   ];
   for (const re of patterns) {
-    for (const m of source.matchAll(re)) found.push(m[1]);
+    for (const m of src.matchAll(re)) found.push(m[1]);
   }
   return found;
 }
 
 describe("Resend sender domain", () => {
   const root = repoRoot();
-  const sites = resendSendSites();
+  const sites = resendSendSites(root);
+  const rawSites = rawFetchSites(root);
 
-  it("finds the Resend send sites it is meant to guard", () => {
-    // Cardinality floor: a zero-match enumeration would make every assertion
-    // below vacuously true, which is the failure mode this guard exists to avoid.
-    expect(sites.length).toBeGreaterThanOrEqual(5);
+  it("enumerates every Resend send surface", () => {
+    // The SET, not a cardinality floor. A floor cannot see a substitution, and
+    // one set well below the real count tolerates most of the enumeration
+    // vanishing. Pinning the set makes a new send site a reviewable diff line.
+    expect(sites).toEqual([
+      ".github/actions/notify-ops-email/action.yml",
+      ".github/workflows/scheduled-prod-version-drift.yml",
+      ".github/workflows/web-platform-release.yml",
+      "apps/web-platform/infra/container-restart-monitor.sh",
+      "apps/web-platform/infra/cron-egress-alarm.sh",
+      "apps/web-platform/infra/disk-monitor.sh",
+      "apps/web-platform/infra/resource-monitor.sh",
+      "apps/web-platform/server/email-triage/outbound.ts",
+      "apps/web-platform/server/inngest/functions/cron-bug-fixer.ts",
+      "apps/web-platform/server/inngest/functions/cron-email-ingress-probe.ts",
+      "apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts",
+      "apps/web-platform/server/inngest/functions/cron-oauth-probe.ts",
+      "apps/web-platform/server/notifications.ts",
+      "apps/web-platform/test/email-brand-compliance.test.ts",
+    ]);
   });
 
   it("never sends from a domain without Resend verification records", () => {
     const offenders: string[] = [];
     for (const rel of sites) {
-      const src = readFileSync(`${root}/${rel}`, "utf8");
-      for (const sender of sendersIn(src)) {
+      for (const sender of sendersIn(readFileSync(`${root}/${rel}`, "utf8"))) {
         if (sender.includes(FORBIDDEN_SENDER_DOMAIN)) {
           offenders.push(`${rel}: from=${sender}`);
         }
@@ -81,21 +163,37 @@ describe("Resend sender domain", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("checks the Resend response instead of discarding it", () => {
-    // A send whose response is never inspected cannot report a vendor
-    // rejection, which is how the jikigai.com sender stayed invisible.
-    const mustCheck = [
-      "apps/web-platform/server/inngest/functions/cron-oauth-probe.ts",
-      "apps/web-platform/server/inngest/functions/cron-github-app-drift-guard.ts",
-    ];
-    for (const rel of mustCheck) {
-      const src = readFileSync(`${root}/${rel}`, "utf8");
-      expect(src, `${rel} must capture the Resend response`).toMatch(
-        /(?:const|let)\s+\w+\s*=\s*await\s+fetch\(\s*"https:\/\/api\.resend\.com\/emails"/,
+  it("resolves a sender for every send site, or acknowledges why not", () => {
+    // Totality. Without it, a site whose sender the extractor cannot parse is
+    // indistinguishable from one that passed — which is how the first version
+    // of this guard cleared cron-bug-fixer.ts, the single site whose sender is
+    // runtime-overridable and therefore the one most worth reading.
+    const unresolved = sites.filter(
+      (rel) =>
+        sendersIn(readFileSync(`${root}/${rel}`, "utf8")).length === 0 &&
+        !(rel in UNRESOLVED_SENDER_ACK),
+    );
+    expect(unresolved).toEqual([]);
+  });
+
+  it("inspects the Resend response at every raw-fetch send site", () => {
+    // Swept across the class rather than pinned to the two files this PR fixed,
+    // and anchored on the captured identifier: a bare `.ok` is satisfied by any
+    // unrelated `probeResult.ok` in a 900-line file, and by a comment.
+    const discarding: string[] = [];
+    for (const rel of rawSites) {
+      const src = stripComments(readFileSync(`${root}/${rel}`, "utf8"));
+      const capture = src.match(
+        /(?:const|let)\s+(\w+)\s*=\s*await\s+fetch\(\s*"https:\/\/api\.resend\.com\/emails"/,
       );
-      expect(src, `${rel} must mirror a non-OK Resend response`).toMatch(
-        /\.ok\b/,
-      );
+      if (!capture) {
+        discarding.push(`${rel}: response not captured`);
+        continue;
+      }
+      if (!new RegExp(`!\\s*${capture[1]}\\.ok\\b`).test(src)) {
+        discarding.push(`${rel}: captured as '${capture[1]}' but never checked`);
+      }
     }
+    expect(discarding).toEqual([]);
   });
 });

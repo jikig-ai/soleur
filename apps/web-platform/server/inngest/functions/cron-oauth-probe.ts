@@ -606,11 +606,25 @@ async function notifyOpsEmail(result: ProbeResult, runUrl: string): Promise<void
   if (!resp.ok) {
     // Discarding this response is what made the dead sender invisible: the
     // alert channel reported success while the vendor refused every message.
+    //
+    // The BODY carries the reason; the status does not. Resend answers an
+    // unverified sender, a restricted key and a rate limit all in the 4xx
+    // range, and this very workstream already misread a 401 as evidence of an
+    // unverified domain. Truncated because it is vendor-generated text.
+    const detail = await resp.text().catch(() => "");
     reportSilentFallback(new Error(`Resend POST returned ${resp.status}`), {
       feature: "cron-oauth-probe",
       op: "notify-ops-email",
       message: "Resend email POST failed",
-      extra: { fn: "cron-oauth-probe", statusCode: resp.status },
+      // `resend_status` is a TAG, not `extra`: Sentry alert rules can only
+      // filter on tags, and 4xx-permanent vs 5xx-transient is the whole
+      // triage decision. Low cardinality, so the tag budget is safe.
+      tags: { resend_status: String(resp.status) },
+      extra: {
+        fn: "cron-oauth-probe",
+        statusCode: resp.status,
+        detail: detail.slice(0, 512),
+      },
     });
   }
 }
@@ -693,7 +707,7 @@ export async function cronOauthProbeHandler({
         const e = err as Error;
         reportSilentFallback(e, {
           feature: "cron-oauth-probe",
-          op: "notifyOpsEmail",
+          op: "notify-ops-email",
           message: "Resend HTTP POST failed",
           extra: { fn: "cron-oauth-probe", failureMode: result.failureMode },
         });

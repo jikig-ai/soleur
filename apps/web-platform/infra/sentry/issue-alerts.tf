@@ -1849,3 +1849,51 @@ resource "sentry_alert" "zot_mirror_fallback_rate" {
     ignore_changes = [environment]
   }
 }
+
+# ── Ops-email delivery failure (#7989) ────────────────────────────────────────
+# Three Inngest crons send operator alerts through Resend. Until #7989 two of
+# them sent from an unverified domain and DISCARDED the response, so the vendor
+# refused every message while the paths reported success — dead for 111 days.
+#
+# The fix mirrors a non-OK response via `reportSilentFallback`, which makes the
+# failure QUERYABLE. Queryable is not alerted: no rule matched these tags, so
+# "the alert channel is dead again" would have landed in the issue stream and
+# paged nobody — the same posture that let the original defect live. This rule
+# closes that, and is the reason the mirror is worth having at all.
+#
+# `op` is matched on the kebab spelling only because #7989 unified it; the outer
+# catch previously used `notifyOpsEmail`, so an `op`-ANDing rule would have seen
+# the throw path and missed every vendor rejection.
+#
+# `cron-bug-fixer` is included although it already checked its response: the
+# rule is scoped to the failure CLASS, not to the two paths that were broken.
+resource "sentry_alert" "ops_email_delivery_failure" {
+  organization      = var.sentry_org
+  name              = "ops-email-delivery-failure"
+  enabled           = true
+  frequency_minutes = 22
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "in", value = "cron-oauth-probe,cron-github-app-drift-guard,cron-bug-fixer" } },
+        { tagged_event = { key = "op", match = "eq", value = "notify-ops-email" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}

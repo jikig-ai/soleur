@@ -727,15 +727,23 @@ async function notifyOpsEmail(args: {
   if (!resp.ok) {
     // Discarding this response is what made the dead sender invisible: a
     // drift-guard that cannot deliver its alarm still reported success.
+    //
+    // The body carries the reason the status does not. This file handles PEM
+    // and JWT material, so the vendor text goes through assertNoLeak before it
+    // reaches Sentry -- same treatment every other outbound string here gets.
+    const detail = (await resp.text().catch(() => "")).slice(0, 512);
+    assertNoLeak("resend-error-body", detail);
     reportSilentFallback(
       redactedError(new Error(`Resend POST returned ${resp.status}`)),
       {
         feature: "cron-github-app-drift-guard",
         op: "notify-ops-email",
         message: "Resend email POST failed",
+        tags: { resend_status: String(resp.status) },
         extra: {
           fn: "cron-github-app-drift-guard",
           statusCode: resp.status,
+          detail,
         },
       },
     );
@@ -880,7 +888,7 @@ export async function cronGithubAppDriftGuardHandler({
         } else {
           reportSilentFallback(redactedError(err), {
             feature: "cron-github-app-drift-guard",
-            op: "notifyOpsEmail",
+            op: "notify-ops-email",
             message: "Resend HTTP POST failed",
             extra: {
               fn: "cron-github-app-drift-guard",
