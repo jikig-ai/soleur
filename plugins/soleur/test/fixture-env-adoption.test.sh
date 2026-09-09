@@ -683,7 +683,11 @@ fi
 # (see the header), and converting it is the conversion PR this ceiling exists to force, not a
 # drive-by on someone else's new suite. Both source test-helpers.sh, so the tripwire IS armed for
 # them and the separate no-tripwire ceiling stays at 7.
-readonly OUT_CEILING=24
+# 24 -> 25 on 2026-09-09 for plugins/soleur/test/git-fixture-containment.test.sh, which arrived
+# from main with #7987 (the parallel fixture-containment work) and is not in this PR's diff. Same
+# treatment as the 20 -> 22 and 22 -> 24 bumps: this root is out of scope by construction, so the
+# ceiling moves with the reason recorded rather than converting someone else's new suite mid-flight.
+readonly OUT_CEILING=25
 if (( OUT_N <= OUT_CEILING )); then
   pass "out-of-scope unconverted count $OUT_N <= ceiling $OUT_CEILING (ratchet: lower the ceiling when you convert one)"
 else
