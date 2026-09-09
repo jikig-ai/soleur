@@ -39,6 +39,14 @@ Three compounding errors in the verification procedure:
 
 3. **The harness's task-completion notification is the authoritative signal.** When the Bash tool's `run_in_background: true` task exits, the harness fires a `<task-notification>` with `status: completed|failed` and exit code. That fired at 15:46 for bench 1, confirming it ran the full ~75 minutes. I was checking pgrep and log mtime instead of waiting for that signal.
 
+   > **Scoped 2026-09-09 (#7957) — LIVENESS only, and weaker than "ran to completion".**
+   > The item is left exactly as written. The notification is authoritative for *has the
+   > task exited?* and for nothing more: its exit code is that of the last command the
+   > shell executed, so it is not a VERDICT (see Solution step 3's note). It is also not
+   > proof the run FINISHED — measured in #7912 (filed as #7957), a run killed mid-`tsc`
+   > by the memory reaper also notified `completed`. So "confirming it ran the full ~75
+   > minutes" below rests on the log's Phase 3-5 writes, not on the notification.
+
 ## Solution
 
 When a long-running background bash task appears unresponsive, **do not relaunch** until ALL three checks fail:
@@ -54,6 +62,8 @@ When a long-running background bash task appears unresponsive, **do not relaunch
 2. **Inspect the cache or output file size.** If the script supports incremental writes (NDJSON cache, partial JSON), the file size growth IS the liveness signal. `wc -l <cache-file>` over a 30-second window is more reliable than log mtime.
 
 3. **Wait for the harness's completion notification.** For Bash tool background tasks, the `<task-notification>` is fired on process exit with a definitive `status` field. Trust that signal over polling.
+
+   > **Scoped 2026-09-09 (#7957):** this is a LIVENESS claim — *has the task exited?* — and it stands. It is **not** a verdict claim, and the notification must not be read as one: its exit code is the LAST command in the backgrounded string, so a trailing convenience line becomes the reported status. Measured in #7912 (filed as #7957): three commits notified `exit code 0` while `git commit` had returned 1, and a run killed mid-`tsc` also notified `completed`. Where this file reads `exit code 0` off a notification (Timeline step 7), the success finding rests on the log showing Phases 3-5 written, not on the notification. For a verdict, redirect and read the command's own `RC=`.
 
 **Only after all three checks confirm death should a relaunch be considered.** And the relaunch should preserve the cache file from the prior run (e.g., `--cache-paraphrases <path>`) so partial work isn't lost.
 
