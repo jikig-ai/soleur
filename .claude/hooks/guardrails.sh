@@ -314,6 +314,23 @@ fi
 # Checks only added lines (^\+) to avoid blocking removal of markers.
 # CWD resolution mirrors guardrails:block-commit-on-main via resolve_command_cwd.
 # Scans $COMMAND (NOT $SCAN): gates the REAL commit / merge --continue.
+#
+# TWO DISTINCT MARKER TYPES ARE REQUIRED, not one. The previous form fired on a
+# single `^\+(<{7}|={7}|>{7})` line, which cannot tell an unresolved conflict from
+# PROSE THAT QUOTES ONE. That is not hypothetical: `origin/main` carries a plan
+# documenting the kb-index merge driver whose fenced example is a lone
+# `<<<<<<< kb-index: …` sentinel line, so merging main into any branch became
+# permanently uncommittable through this hook -- it blocked the resolved merge it
+# exists to protect, with no override. A real conflict ALWAYS writes the full
+# `<<<<<<< / ======= / >>>>>>>` structure, so requiring two distinct types keeps
+# every real case (including a partial resolution that deletes only one of the
+# three) while ignoring a single quoted marker.
+#
+# The `=` arm is anchored `^={7}$` (exactly seven, alone on the line). Unanchored
+# `={7}` also matches a Markdown setext heading underline and any `=======…` ASCII
+# rule, which is a second false-positive class in a repo this documentation-heavy.
+# `<` and `>` require a space-or-EOL after the seventh character, which is git's
+# own shape (`<<<<<<< <ref>` / bare) and does not match a `>>>>>>>>`-style rule.
 if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)' <<<"$COMMAND"; then
   CONFLICT_MARKERS_DIR=$(resolve_command_cwd "$COMMAND" "$INPUT")
   if [ -n "$CONFLICT_MARKERS_DIR" ] && [ -d "$CONFLICT_MARKERS_DIR" ]; then
@@ -321,7 +338,11 @@ if grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge\s+--continue)' <<
   else
     STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
   fi
-  if grep -qE '^\+(<{7}|={7}|>{7})' <<<"$STAGED_DIFF"; then
+  CONFLICT_TYPES=0
+  grep -qE '^\+<{7}( |$)' <<<"$STAGED_DIFF" && CONFLICT_TYPES=$((CONFLICT_TYPES + 1))
+  grep -qE '^\+={7}$'     <<<"$STAGED_DIFF" && CONFLICT_TYPES=$((CONFLICT_TYPES + 1))
+  grep -qE '^\+>{7}( |$)' <<<"$STAGED_DIFF" && CONFLICT_TYPES=$((CONFLICT_TYPES + 1))
+  if [ "$CONFLICT_TYPES" -ge 2 ]; then
     emit_incident "guardrails-block-conflict-markers" "deny" "Resolve conflicts before committing" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {

@@ -338,6 +338,74 @@ assert_run "freeze: NotebookEdit inside prefix allows" "<none>" \
   "$(mk_notebook_payload "$FZ2/apps/n.ipynb")" "$FZ2" "$FZ2"
 rm -rf "$FZ2"
 
+# --- Conflict-marker gate ---------------------------------------------------
+# This gate had ZERO coverage, which is how the single-marker false positive
+# below shipped and made `git merge origin/main` uncommittable repo-wide.
+# It needs a REAL repo with REAL staged content: the hook shells out to
+# `git diff --cached`, so a synthetic payload alone exercises nothing.
+CM="$(mktemp -d)"; git init -q "$CM/repo"
+git -C "$CM/repo" config user.email t@t.local
+git -C "$CM/repo" config user.name t
+# Not on `main`: block-commit-on-main is orthogonal and would mask every result.
+git -C "$CM/repo" checkout -q -b feat-cm
+
+cm_stage() {  # $1 = file content; replaces the staged file each time
+  printf '%s\n' "$1" > "$CM/repo/f.md"
+  git -C "$CM/repo" add f.md
+}
+
+# A REAL unresolved conflict: all three markers → deny.
+cm_stage '<<<<<<< HEAD
+ours
+=======
+theirs
+>>>>>>> other'
+assert_run "conflict: full marker triple denies" "deny" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# A PARTIAL resolution — the `=======` deleted, two types left → still deny.
+# This is the case a naive "require all three" fix would have let through.
+cm_stage '<<<<<<< HEAD
+ours
+theirs
+>>>>>>> other'
+assert_run "conflict: partial resolution (2 of 3) still denies" "deny" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# THE FALSE POSITIVE this fix exists for: prose quoting ONE marker → allow.
+# Verbatim shape from the kb-index merge-driver plan now on origin/main.
+cm_stage 'Example sentinel the driver writes:
+
+```
+<<<<<<< kb-index: merge driver could not resolve — re-run the merge
+```
+
+Nothing above is an unresolved conflict.'
+assert_run "conflict: single quoted marker in prose allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# Second false-positive class: a Markdown setext underline is 7+ `=` at line
+# start, which the unanchored `={7}` matched.
+cm_stage 'A Heading
+=========
+
+Body text.'
+assert_run "conflict: setext heading underline allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# Exactly seven `=` alone on a line, with no other marker type → allow.
+cm_stage 'Rule below:
+=======
+done'
+assert_run "conflict: lone seven-equals line allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# Ordinary content → allow (control: proves the gate is not denying everything).
+cm_stage 'nothing to see here'
+assert_run "conflict: clean content allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+rm -rf "$CM"
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1
