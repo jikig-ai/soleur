@@ -1,6 +1,7 @@
 ---
 title: The guard was deleted, the plan still cited it, and the linter validated the citation
 date: 2026-09-08
+date_updated: 2026-09-09
 category: test-failures
 component: plugins/soleur/skills/qa
 tags:
@@ -12,6 +13,7 @@ tags:
   - shard
   - deploy-gate
 related:
+  - https://github.com/jikig-ai/soleur/pull/7907
   - knowledge-base/project/plans/archive/20260908-132617-2026-09-07-fix-release-await-ci-ceiling-vs-ci-duration-plan.md
   - knowledge-base/engineering/architecture/decisions/ADR-212-deploy-gate-measures-its-own-gated-quantity.md
   - knowledge-base/project/learnings/2026-05-15-plan-ac-verification-commands-awk-self-match-and-marker-conjunction.md
@@ -216,3 +218,113 @@ Full inventory (30 items) is in the PR discussion; the ones with a prevention ve
 - **Stopped mid-pipeline after review**, listing remaining steps instead of executing them (user:
   "why did you stop?"). Recovery: resumed immediately. **Prevention:** an exit summary from a child
   skill is a continuation gate, not a turn boundary.
+
+## Addendum — 2026-09-09: what happened after this learning was written, and what I got wrong in saying so
+
+The section above was written at QA time. Everything below happened afterwards on the same PR
+(#7907). **This addendum was itself fact-checked before merge and seven of its claims were refuted**
+— every measurement held, and most of the attribution and generalisation did not. What follows is
+the corrected version; the corrections are more useful than what they replace, and the fact that
+they were needed is the finding.
+
+> **Every figure here describes a revision this PR then SUPERSEDED.** The guards on `main` today are
+> 14, 16 and 13 rows and reproduce none of the counts below. Each was fixed, and the fix changed the
+> count.
+
+### The review panel found six merge-blocking findings
+
+Four PR-introduced, three inside guards written that same day, two in pre-existing gate code.
+
+| Finding | Measured then |
+| --- | --- |
+| `SCRIPTS_SHARD` is a job-level env, so four sandbox-spawning suites inherited it and hit the group-scoping refusal this branch added | 23/0 green unset, **8/15 failed** with `SCRIPTS_SHARD=1/3`. Fixed by unsetting the carrier after the guard that reads it. |
+| `i3`/`i4` grepped an UN-STRIPPED job block, so deleting the early-warning block **while leaving one comment that named `soft_breach=true`** left the guard green | **11/11 green**. The condition is load-bearing — remove the token-bearing comments too and the same guard reports 7/4. Fixed: extraction comment-strips, plus a COMMENT-ONLY negative row. |
+| `i3` pinned the derivation's SHAPE and never its magnitude, so `CEILING_S * 99 / 10` made the warning unreachable | **11/11 green**. Fixed: `i3b` asserts `0 < soft < CEILING_S`; the same mutation now reds 3 of 14. |
+| Guard 1 read `ci.yml`'s matrix VALUES and never the wire delivering them | `SCRIPTS_SHARD: "1/3"` ran **250 of 376** registrations nowhere at **15/15 green**. Fixed: a wire row reds on exactly that mutation. |
+| (pre-existing) the hard ceiling sat below both `gh api` failure arms' `continue`, so a degraded token ran to the silent hard-kill | The misleading comment sat BELOW the old site, claiming it fires "regardless of per-iteration gh-api latency" — true of latency, false of failure. |
+| (pre-existing) a ceiling breach told the operator "CI did not go green" | Verbatim and unconditional in the pre-PR Slack body — and false on a live run: CI concluded success **12 minutes** after the gate gave up. |
+
+The transferable one is rows two through four together: **a guard can pin a construct's SHAPE, its
+LOCATION, or its EXISTENCE and still not pin the PROPERTY.** `i3` proved the soft ceiling was
+*derived* and never that the derived value was *in range*. Guard 1 proved the matrix *declared*
+three legs and never that the legs *received* them. Both read as coverage.
+
+### Two claims I "corrected" during the work phase were corrections in the wrong direction
+
+- **The dispatch mechanism.** I replaced "runner-pool contention" with "ci.yml's own concurrency
+  group serialises each push", wrote it into an accepted ADR, and used it to justify K=3. Measured
+  on run 34214304922: jobs with no `needs` that actually acquired a runner start at +441s, +621s and
+  +1346s — a **15-minute spread inside one run** — with the group EMPTY (predecessor finished
+  12h10m earlier). A queue cannot produce that. *(An earlier version of this paragraph, and the
+  `ci.yml` comment it came from, cited a 23-minute spread by including two SKIPPED jobs that never
+  took a runner and one job that HAS `needs`. Both are corrected; the conclusion is unchanged.)*
+- **The sizing claim.** "p100 57.4m, so 3600s clears it by 2.6m." Re-measured over 25 runs, from
+  run creation to `test` completion: p50 35.4m, p90 54.0m, **p100 69.3m**. From the gate's own
+  anchor (`await-ci` start) the tail is 62.4m — either way past a 60-minute ceiling, and a healthy
+  build fail-closed there during the review.
+
+**A correction is a new claim and inherits none of the credibility of the error it replaces.**
+
+### Then CI found four more
+
+Two on suites **no local run had touched**, one a runner-only race, one an environment axis I had
+not exercised:
+
+1. **A `pipefail` topology I introduced while fixing the comment-satisfiability bug.** Adding a
+   `grep -v '#'` stage made `job_block` a pipeline; predicates piped it into `grep -q`, which exits
+   on first match, SIGPIPEs the upstream grep, and `pipefail` propagates 141 — the `if` takes the
+   ELSE branch on a MATCH. The panel flagged this shape as **P3** ("cannot flake today — 14KB
+   against a 64KiB buffer"), correct for the code as it then stood. **Triaging a topology bug by its
+   current blast radius is how a latent race becomes a deterministic failure**, and the edit that
+   made it deterministic was mine, three commits later, in the same function.
+2. **Two guards whose population I joined without running them.** `repo-write-boundary.test.sh`
+   (#7702) enumerates every sandbox that relocates `test-all.sh`; `fixture-relative-assert.test.sh`
+   (#7810) carries a baseline of scanned files. Both pre-dated this branch, both are
+   environment-invariant, and **both would have gone red locally the moment my two new files
+   landed.** I had described these as a merge-only collision invisible on either branch alone. That
+   was wrong and self-flattering: they were visible from the first commit, and I simply never ran
+   the suites whose population my diff had joined.
+3. **A fixture that could not reach its target.** ROW7 strips the shard filter from `skip_suite`,
+   but under `CI=1` a relevance decline is unreachable, so no scripts-group `skip_suite` call site
+   fires. The row mutated a function nobody invokes — vacuous in exactly the environment it ships
+   into — while reporting 13/13 locally.
+
+### And a sibling claimed the ADR ordinal mid-flight
+
+`ADR-208` landed on `main` from #7914 while this branch held it. `adr-ordinals` **is** a required
+check with `strict_required_status_checks_policy` — so the real mechanism is narrower than "it isn't
+required": a required check proves the ordinal was free **at check time, not at merge time**, and
+nothing re-evaluates it when a sibling lands in between. What caught it was the post-sync
+`check-adr-ordinals` re-run that ship Phase 7 prescribes. Renumbered to **212** — 209, 210 and 211
+were all claimed on other origin refs, and 205 is a hole on `main`, so only `max + 1` yields the
+right answer; a presence check would not have. The sweep had to be scoped, because `ADR-208` now has
+two referents and a blanket `sed` would have rewritten 13 of the sibling's citations across
+`apps/web-platform/**` — **and the scoped sweep still missed three references in this PR's own
+files**, including a live test file, which then pointed at the sibling's ADR until this PR fixed
+them.
+
+## A second insight, alongside the first
+
+The insight above — *a plan's claims about its own guards outlive the guards* — is unchanged and
+still the primary one. This addendum adds a different proposition rather than widening it:
+
+**Instruments have disjoint yields and none dominates.** The seven-agent panel found six findings;
+CI found four more; the deterministic lints found none; and my own local runs were green on code
+that failed deterministically on the runner. A review that runs one instrument ships the rest.
+
+But the ranking that matters is cheaper than that. Of the four CI-only failures, **one** was an
+environment axis (`CI=1`), one was a runner-only race no local environment reproduces, and **two
+were suites I never ran at all**. So the first rule is not "sweep the environments" — it is:
+
+**Run every suite whose population your diff just joined.** `git ls-files '*.test.sh' | xargs grep -l`
+for the thing you added is seconds of work, and it would have caught half of what CI caught. The
+environment sweep (`bare`, `CI=1`, `SOLEUR_SUBAGENT=1`, treating any PASS-count delta as a finding)
+is the second rule, not the first.
+
+**And the strongest evidence for all of it is this addendum.** Its first draft opened by quoting a
+sentence I claimed to have written earlier in this very file. That sentence does not appear anywhere
+in the repository — I fabricated a self-citation, in a learning whose thesis is that a document's
+claims about itself go unchecked. It survived my own review and was caught only because I sent the
+addendum to an adversarial fact-checker before merging. Seven of its claims were refuted; every
+number in it was correct. **The measurements were never the problem. The sentences around them
+were.**

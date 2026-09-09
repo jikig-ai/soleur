@@ -270,27 +270,56 @@ resource "doppler_service_token" "inngest" {
 }
 
 # ---------------- The dedicated Inngest host ----------------
-resource "hcloud_server" "inngest" {
-  name        = "soleur-inngest"
-  server_type = var.inngest_server_type # arch derived in locals (cax*→arm64 / cpx*→amd64); a singleton scheduler, not throughput-bound
-  location    = var.location
-  image       = "ubuntu-24.04"
-  keep_disk   = true
-  ssh_keys    = [hcloud_ssh_key.default.id]
-
-  # Public IPv4/IPv6 for EGRESS only (apt + the inngest CLI + bootstrap image pulls during
-  # cloud-init). A no-public-IP host has NO internet (no NAT gateway). INGRESS on the public
-  # interface is denied by hcloud_firewall.inngest below; /api/inngest + the control API are
-  # private-net only. Same public_net rationale as git-data.tf / zot-registry.tf.
-  public_net {
-    ipv4_enabled = true
-    ipv6_enabled = true
-  }
+locals {
+  # Whole-comment-line strip applied to the inngest cloud-init render before gzip. `#` must be
+  # followed by a space or tab, so `#cloud-config` survives. Identical shape to
+  # local.registry_rationale_strip (zot-registry.tf) — deliberately a SEPARATE local rather than a
+  # shared one, so a future change to one host's strip cannot silently retune another's payload.
+  inngest_rationale_strip = "/(?m)^[ \t]*#([ \t][^\n]*)?\n/"
 
   # base64gzip-first (git-data.tf / ADR-080 #5927): wrap the whole render so the shell
   # payload compresses under Hetzner's 32,768-byte user_data cap. Hetzner base64-decodes →
   # gzip magic → cloud-init auto-gunzips → byte-identical #cloud-config (DataSourceHetzner).
-  user_data = base64gzip(templatefile("${path.module}/cloud-init-inngest.yml", {
+  #
+  # ...AND STRIP THE RATIONALE PROSE FIRST (#7695). base64gzip alone was NOT enough and had
+  # silently stopped being enough: `000fa471` (#7778, 2026-09-04) took this render ~8 KB PAST the
+  # cap, and nothing noticed for four days.
+  #
+  # WHY NOTHING NOTICED — the mechanism, stated correctly, because an earlier revision of this
+  # comment got it backwards and blamed the ABSENCE of `ignore_changes = [user_data]`. That
+  # explanation runs backwards from its effect: absent `ignore_changes` is what makes a user_data
+  # change VISIBLE to the plan at all, so adding it would have been strictly QUIETER, not louder.
+  # The real reason is the one already stated at the AC6 / SEQUENCING note further down this file:
+  # the default push apply of apply-web-platform-infra.yml is an explicit `-target=` allow-list
+  # that contains NO `hcloud_server.*` at all. Terraform therefore never planned this resource on
+  # merge and never submitted the payload to Hetzner, which is the only thing that validates it.
+  # An over-cap render was consequently unobservable on every routine path.
+  #
+  # The first dispatched replace after that (2026-09-08) destroyed the host and could not recreate
+  # it: `invalid input in field 'user_data' [Length must be between 0 and 32768]`. The
+  # destroy-guard and the stock preflight both PASSED — they grade the plan's SHAPE and the DC's
+  # stock, and neither weighs the payload.
+  #
+  # Same three-stage chain as zot-registry.tf and modules/git-data-userdata: render → strip whole
+  # comment lines → gzip. The regex requires `#` followed by a space, a tab, or end-of-line, so
+  # `#cloud-config` (which is `#` + `c`) survives — that header is the document, and eating it
+  # boots the host dark. Note the group is OPTIONAL, so bare `#` lines ARE stripped; 38 of them
+  # are, which is intended.
+  #
+  # MEASURED, and re-derivable: `bash apps/web-platform/infra/inngest-userdata-budget.sh --json`
+  # renders through terraform's OWN templatefile/replace/base64gzip and reports
+  #   raw 91,997 B → stripped 30,614 B → stored 10,892 B, headroom 21,876 B, 61,383 B of prose
+  #   removed, ZERO non-comment lines touched.
+  # Those are BYTES (`wc -c`). An earlier revision of this comment said "61,102 B", which was
+  # terraform `length()`'s GRAPHEME count mislabelled as bytes — 183 B below the provable byte
+  # floor, and optimistic in the one direction a cap gate must never be. registry-userdata-budget.sh
+  # documents that exact trap in its own header; this host repeated it before adopting the sibling.
+  # The stored figure is an UPPER BOUND: every stub in that script is a length upper bound on its
+  # real value, so the true payload is at most this large.
+  #
+  # Prose in a .tmpl that rides in user_data is NOT free; prose in .tf is. Keep the rationale — it
+  # just stops being shipped to the host.
+  inngest_user_data_plain = replace(templatefile("${path.module}/cloud-init-inngest.yml", {
     # Mount the Redis AOF volume by its specific id (by-id pattern). Known at plan time;
     # the attachment is a separate resource.
     inngest_volume_id = hcloud_volume.inngest_redis.id
@@ -393,7 +422,33 @@ resource "hcloud_server" "inngest" {
     # pre-Doppler fallback). Retrievable via the host metadata API — acceptable for an ingest-only
     # logs token on a deny-all host given the diagnosability it buys (weigh before widening use).
     betterstack_logs_token = var.betterstack_logs_token
-  }))
+  }), local.inngest_rationale_strip, "")
+
+  # base64gzip of the stripped render — THE value Hetzner stores against its 32,768 B cap,
+  # and the value lifecycle.precondition below weighs. Hoisted into a local for exactly that
+  # reason: a precondition cannot reference `self`, so an inline user_data expression is
+  # unweighable at plan time, which is how a destroy-then-fail-to-create got through.
+  inngest_user_data_b64gz = base64gzip(local.inngest_user_data_plain)
+}
+
+resource "hcloud_server" "inngest" {
+  name        = "soleur-inngest"
+  server_type = var.inngest_server_type # arch derived in locals (cax*→arm64 / cpx*→amd64); a singleton scheduler, not throughput-bound
+  location    = var.location
+  image       = "ubuntu-24.04"
+  keep_disk   = true
+  ssh_keys    = [hcloud_ssh_key.default.id]
+
+  # Public IPv4/IPv6 for EGRESS only (apt + the inngest CLI + bootstrap image pulls during
+  # cloud-init). A no-public-IP host has NO internet (no NAT gateway). INGRESS on the public
+  # interface is denied by hcloud_firewall.inngest below; /api/inngest + the control API are
+  # private-net only. Same public_net rationale as git-data.tf / zot-registry.tf.
+  public_net {
+    ipv4_enabled = true
+    ipv6_enabled = true
+  }
+
+  user_data = local.inngest_user_data_b64gz
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,
   # and omitting it preserves a clean replace-to-reprovision path (git-data.tf / zot-registry.tf
@@ -412,6 +467,47 @@ resource "hcloud_server" "inngest" {
   # user_data — that force-replace is the intended replace-to-reprovision path (above).
   lifecycle {
     ignore_changes = [ssh_keys]
+
+    # USER_DATA CAP TRIPWIRE (#7695). THE guard that actually gates the destroy, and the reason
+    # the bun budget arm is not sufficient on its own.
+    #
+    # On 2026-09-08 an `inngest-host-replace` dispatch destroyed this host and Hetzner then
+    # REFUSED the create: `invalid input in field 'user_data' [Length must be between 0 and
+    # 32768]`. The payload had been over cap since `000fa471` (#7778, 2026-09-04) —
+    # ~8 KB over. Nothing caught it for four days. The destroy-guard and the stock preflight both
+    # PASSED and were right to: they grade the plan's SHAPE and the DC's stock, and neither weighs
+    # the payload. `plugins/soleur/test/cloud-init-user-data-size.test.ts` now weighs it, but that
+    # suite is not in the dispatch path — it only lowers the odds `main` CARRIES an over-cap
+    # payload; it cannot stop a destroy.
+    #
+    # A precondition can, and it is strictly better than the test on three axes:
+    #   1. it weighs the value ACTUALLY submitted, with real interpolated secret lengths, where the
+    #      TS model substitutes placeholders — this file's sibling records that model reading
+    #      6,040 B against terraform's 12,588 B for git-data, i.e. ~2x off;
+    #   2. it evaluates inside `terraform plan`, which EVERY path that can destroy this host
+    #      traverses: the `workflow_dispatch` apply targets that plan the resource, and the
+    #      unscoped drift plan in infra-validation.yml. A failed precondition aborts the plan
+    #      BEFORE the destroy is executed. Precision, because an earlier revision of this list
+    #      also claimed the merge leg: the merge apply's `-target=` allow-list contains no
+    #      `hcloud_server.*`, so `-target` PRUNES this resource and its precondition is NOT
+    #      evaluated on merge. That is the same blind spot that let the over-cap payload sit for
+    #      four days — this precondition does not close it, and the new
+    #      `inngest-userdata-budget.sh` CI gate is what does;
+    #   3. it costs eight lines and no new CI surface. Precedent: the PHANTOM/WRONG-ARCH TRIPWIRE
+    #      in git-data.tf, adopted on the same "nothing downstream can catch this" argument.
+    #
+    # The `startswith` half subsumes the header assertion the test makes against the repo file:
+    # `#cloud-config` is cloud-init's format sniffer, and losing it does NOT fail the apply — the
+    # host boots and simply never recognises the payload, so NOTHING in it runs. Dark, silent, and
+    # indistinguishable from success.
+    #
+    # HONEST LIMIT: on a BIRTH apply `hcloud_volume.inngest_redis.id` can be unknown at plan time,
+    # which makes this condition unknown and defers it. It is therefore weaker for birth and full
+    # strength for REPLACE — and replace is the case that destroyed the host.
+    precondition {
+      condition     = length(local.inngest_user_data_b64gz) <= 32768 && startswith(local.inngest_user_data_plain, "#cloud-config\n")
+      error_message = "inngest user_data is ${length(local.inngest_user_data_b64gz)} B base64gzip'd against Hetzner's 32,768 B cap, or has lost its #cloud-config header. Refusing to plan: a -replace would DESTROY the host and then fail the create (this is exactly what happened 2026-09-08). Shed payload — prose is stripped for free by local.inngest_rationale_strip, so what remains is code."
+    }
   }
 
   labels = {

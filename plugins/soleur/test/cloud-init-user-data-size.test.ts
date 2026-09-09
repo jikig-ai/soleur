@@ -26,7 +26,7 @@
 // script would gzip to near-nothing and never trip it).
 
 import { test, expect, describe } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
@@ -189,8 +189,36 @@ const GIT_DATA_FLOOR = 3_000;
 // keeps the KB-scale re-inlining tripwire; the FLOOR is non-vacuity — a model that stopped
 // substituting real values, or a strip that ate the entire payload, gzips to near-nothing and
 // fails loudly here rather than at a dark host.
+// (#7695) The inngest pair, and the arm that DID NOT EXIST when it was needed: `000fa471`
+// (#7778, 2026-09-04) took the inngest render ~8 KB past the cap and it shipped. Nothing caught
+// it for four days because the merge apply of apply-web-platform-infra.yml is an explicit
+// `-target=` allow-list containing NO `hcloud_server.*` — so terraform never planned the resource
+// and never submitted the payload to Hetzner, which is the only thing that validates it. (An
+// earlier revision of this comment blamed the absence of `ignore_changes = [user_data]`. That is
+// backwards: absent `ignore_changes` is what makes a user_data change visible to the plan, so
+// adding it would have been quieter, not louder.) The first dispatched replace destroyed the host
+// and could not recreate it.
+//
+// The BUDGET below brackets a render this model measures at ~10.5 KB. The byte-authoritative
+// figure is 10,892 B stored / 21,876 B headroom, from
+// `apps/web-platform/infra/inngest-userdata-budget.sh` — which renders through terraform's own
+// base64gzip rather than node zlib, and is the number to trust when the two disagree.
+// (#7695) grok-dogfood. Surfaced by the WALKER arm at the bottom of this file on its first run:
+// this host renders `base64gzip(templatefile(..., {}))` and had NO byte measurement of any kind,
+// neither a budget script nor an arm here — the fourth base64gzip'd host, uncovered for the same
+// reason inngest was, which is that coverage was added per-incident and never as a class.
+//
+// Its var map is EMPTY, so unlike every other host here the model needs no stubs and is
+// byte-exact rather than an upper bound. Template is ~3.4 kB raw, so the stored payload is ~1 kB;
+// the floor is set below that and the budget well under the cap. This host is `count`-gated
+// (local.grok_dogfood_enabled) and usually absent from the plan — which is exactly why a size
+// defect here would sit unnoticed until someone enabled it.
 const REGISTRY_GZIP_BUDGET = 20_000;
 const REGISTRY_GZIP_FLOOR = 4_000;
+const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
+const GROK_DOGFOOD_GZIP_FLOOR = 500;
+const INNGEST_GZIP_BUDGET = 18_000;
+const INNGEST_GZIP_FLOOR = 4_000;
 
 const IMAGE_NAME = "ghcr.io/jikig-ai/soleur-web-platform:latest";
 // Modeled byte lengths for render-time values that are NOT base64-of-a-file. base64-of-file
@@ -208,6 +236,18 @@ const SECRET_LENGTHS: Record<string, number> = {
   git_data_volume_id: 24,
   git_data_luks_volume_id: 24,
 };
+// The .tf sources modeledLen resolves a bare `local.<x>` against, to decide whether that local is
+// blob-backed (large) or a short scalar. Read lazily at first use so module init order cannot bite.
+const BLOB_SCAN_TF: string[] = ["server.tf", "zot-registry.tf", "inngest-host.tf", "git-data.tf"]
+  .map((f) => {
+    try {
+      return readFileSync(join(INFRA, f), "utf8");
+    } catch {
+      return "";
+    }
+  })
+  .filter(Boolean);
+
 const DEFAULT_REF_LEN = 80;
 
 function b64len(bytes: number): number {
@@ -304,6 +344,44 @@ function modeledLen(name: string, expr: string): number {
   }
   if (/^sha256\(/.test(expr)) return 64;
   if (name in SECRET_LENGTHS) return SECRET_LENGTHS[name];
+
+  // #7695 — WIDEN THE CLASS GUARD FROM `base64encode(...)` TO ANY FILE- OR LOCAL-BACKED BLOB.
+  // The two guards above are shaped around `base64encode(`, so a BARE `file("...")` or a bare
+  // `local.<something_large>` fell straight through to DEFAULT_REF_LEN. Measured during review:
+  // re-inlining a 92,228-byte script as a bare `file(...)` scored 80 bytes and left all three
+  // inngest arms GREEN while the real payload went ~3x the Hetzner cap. That is the same
+  // under-count the `base64encode(local....)` comment above describes, reached through a shape
+  // its regex does not name — and it "reads as headroom", which is the dangerous direction.
+  //
+  // A bare `var.*` is deliberately NOT covered: every var is unbounded at plan time, so there is
+  // nothing to model, and SECRET_LENGTHS/DEFAULT_REF_LEN is the standing approximation for them.
+  // The residual is recorded rather than papered over — the terraform-side
+  // `lifecycle.precondition` on hcloud_server.inngest is what actually weighs the real value.
+  if (/(^|[^a-zA-Z0-9_])file\(/.test(expr)) {
+    throw new Error(
+      `unmodeled file()-backed value for ${name}: ${expr} — add an explicit branch; ` +
+        `DEFAULT_REF_LEN (${DEFAULT_REF_LEN} B) would under-count it and read as headroom`,
+    );
+  }
+  // A bare `local.<x>` is refused ONLY when that local is BLOB-BACKED, i.e. its own definition
+  // reads a file. A blanket refusal is wrong and was measured so: `local.registry_endpoint`,
+  // `local.zot_pull_user` and `local.git_data_doppler_sha256` are short scalars that
+  // DEFAULT_REF_LEN approximates correctly, and refusing them reds three unrelated host arms.
+  // The hazard is size, not indirection — so resolve the local and ask whether it can be large.
+  const localMatch = /(?:^|[^a-zA-Z0-9_])local\.([a-zA-Z0-9_]+)/.exec(expr);
+  if (localMatch) {
+    const localName = localMatch[1];
+    const defRe = new RegExp(`^\\s*${localName}\\s*=\\s*(.+)$`, "m");
+    for (const tf of BLOB_SCAN_TF) {
+      const def = defRe.exec(stripHclLineComments(tf));
+      if (def && /(^|[^a-zA-Z0-9_])(file|templatefile)\(/.test(def[1])) {
+        throw new Error(
+          `unmodeled blob-backed local for ${name}: local.${localName} = ${def[1].trim()} — ` +
+            `add an explicit branch; DEFAULT_REF_LEN (${DEFAULT_REF_LEN} B) would under-count it`,
+        );
+      }
+    }
+  }
   return DEFAULT_REF_LEN;
 }
 
@@ -473,6 +551,86 @@ function stripHclLineComments(src: string): string {
 // So the size test below derives its input from THIS predicate rather than assuming the strip is
 // applied: unwire the strip and the modelled payload is the un-stripped one, which exceeds the
 // cap and reds the cap assertion. The guard now fails for the reason the host would.
+function inngestStripRegex(tfSrc: string): RegExp {
+  // Same uniqueness requirement as the registry extractor: comments stripped first, and a single
+  // match required, so a commented historical note cannot shadow the live local.
+  const src = stripHclLineComments(tfSrc);
+  const all = [...src.matchAll(/inngest_rationale_strip\s*=\s*"((?:[^"\\]|\\.)*)"/g)];
+  if (all.length === 0) {
+    throw new Error("local.inngest_rationale_strip not found in inngest-host.tf");
+  }
+  if (all.length > 1) {
+    throw new Error(
+      `local.inngest_rationale_strip is defined ${all.length} times in inngest-host.tf; expected exactly one`,
+    );
+  }
+  let body = all[0][1];
+  if (!body.startsWith("/") || !body.endsWith("/")) {
+    throw new Error(
+      `inngest_rationale_strip must be a slash-delimited terraform regex literal, got: ${body}`,
+    );
+  }
+  body = body.slice(1, -1);
+  if (!body.startsWith("(?m)")) {
+    throw new Error(`inngest_rationale_strip must be multiline-anchored ((?m)), got: ${body}`);
+  }
+  // REFUSE an HCL-escaped literal rather than mis-parsing it. The captured string is never
+  // HCL-unescaped, so `\\+` means a LITERAL `+` to Go RE2 (what production strips with) and
+  // one-or-more-backslashes to `new RegExp` (what this model strips with) — the model then
+  // measures a document production never ships, and no arm can see it because every arm tests
+  // the model's own regex. Measured divergence on such a mutation: 24 bytes / 2 lines. Refusing
+  // is correct rather than unescaping: this expression has no legitimate need for `\\`, so a
+  // `\\` is a signal the two engines have diverged.
+  if (body.includes("\\\\")) {
+    throw new Error(
+      `inngest_rationale_strip contains an HCL backslash escape (${body}); Go RE2 and JS RegExp ` +
+        `do not agree on it, so the model would measure a payload production never ships`,
+    );
+  }
+  // `g` only — never `m`. See toNewlineOnlyMultiline for why.
+  return new RegExp(toNewlineOnlyMultiline(body.slice("(?m)".length)), "g");
+}
+
+function inngestStripIsApplied(tfSrc: string): boolean {
+  // Anchors on the LOCALS chain, not on `user_data`, because #7695 hoisted the render into
+  // local.inngest_user_data_plain / _b64gz so `lifecycle.precondition` can weigh it (a
+  // precondition cannot reference `self`).
+  //
+  // Three properties, each closing a mutation that survived an earlier version:
+  //   * comment-STRIPPED first — the raw-source form passed with the wrapper dropped and one
+  //     comment naming the local left inside the map (M3);
+  //   * requires `replace(templatefile(` STRUCTURALLY — passing the local as a templatefile VAR
+  //     (`strip_pattern = local.inngest_rationale_strip`) satisfied a mere mention with real code
+  //     rather than a comment, so comment-stripping alone would not have closed it (M14);
+  //   * requires the anchor to be UNIQUE — a non-global `.exec` takes the FIRST match, so a decoy
+  //     resource or a second local earlier in the file certified something other than this host
+  //     (M4b). `inngestStripRegex` already required uniqueness; this did not.
+  const src = stripHclLineComments(tfSrc);
+  const anchorRe = /inngest_user_data_plain\s*=\s*replace\(\s*templatefile\(/g;
+  const anchors = [...src.matchAll(anchorRe)];
+  if (anchors.length !== 1) return false;
+  const open = src.indexOf("(", anchors[0].index! + anchors[0][0].indexOf("replace"));
+  let depth = 0;
+  let end = -1;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === "(") depth++;
+    else if (src[i] === ")") {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end === -1) return false;
+  if (!/local\.inngest_rationale_strip/.test(src.slice(open, end + 1))) return false;
+  // ...and the chain must actually reach the resource. Either link broken = unstripped payload.
+  return (
+    /inngest_user_data_b64gz\s*=\s*base64gzip\(\s*local\.inngest_user_data_plain\s*\)/.test(src) &&
+    /user_data\s*=\s*local\.inngest_user_data_b64gz/.test(src)
+  );
+}
+
 function registryStripIsApplied(tfSrc: string): boolean {
   const src = stripHclLineComments(tfSrc);
   const anchor = /user_data\s*=\s*base64gzip\(\s*replace\(\s*templatefile\(/.exec(src);
@@ -573,7 +731,12 @@ function renderedGzipB64LenStripped(
     return modeledValue(name, map[name]);
   });
   s = s.split(ESC).join("${");
-  s = s.replace(strip, "");
+  // EXPLICIT null check. `s.replace(null, "")` coerces the argument to the STRING "null" and
+  // deletes its first occurrence — so the un-stripped path silently corrupted any template
+  // containing that word. It worked only by accident of no such template existing. The grok
+  // arm is the first caller to pass null against a template this file does not otherwise
+  // strip, so make the contract real rather than lucky.
+  if (strip !== null) s = s.replace(strip, "");
   return gzipSync(Buffer.from(s, "utf8"), { level: 9 }).toString("base64").length;
 }
 
@@ -587,6 +750,8 @@ const gitDataTf = readFileSync(
   "utf8",
 );
 const registryTf = readFileSync(join(INFRA, "zot-registry.tf"), "utf8");
+const inngestTf = readFileSync(join(INFRA, "inngest-host.tf"), "utf8");
+const grokDogfoodTf = readFileSync(join(INFRA, "grok-dogfood.tf"), "utf8");
 const cloudInit = readFileSync(join(INFRA, "cloud-init.yml"), "utf8");
 const bootstrap = readFileSync(join(INFRA, "soleur-host-bootstrap.sh"), "utf8");
 const dockerfile = readFileSync(DOCKERFILE, "utf8");
@@ -658,6 +823,65 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     //     and the expression an engineer would most plausibly reach for is git-data's, which
     //     deletes `#cloud-config`.
     expect(registryStripIsApplied(registryTf)).toBe(true);
+  });
+
+  test("inngest host base64gzip'd user_data is under the Hetzner cap (#7695)", () => {
+    // THE ARM THAT DID NOT EXIST. On 2026-09-08 an `inngest-host-replace` dispatch destroyed
+    // hcloud_server.inngest and then failed to recreate it:
+    //   Error: invalid input in field 'user_data' [Length must be between 0 and 32768]
+    // The destroy-guard and the stock preflight both PASSED — they grade the plan's SHAPE and the
+    // DC's stock; neither weighs the payload. This is the same defect the registry arm below
+    // records for #7278, on a host that never received the same guard.
+    //
+    // The strip is modelled ONLY if the render applies it, so unwiring the `replace()` reds this
+    // at the cap exactly as the host would fail.
+    const applied = inngestStripIsApplied(inngestTf);
+    const size = renderedGzipB64LenStripped(
+      "cloud-init-inngest.yml",
+      inngestTf,
+      applied ? inngestStripRegex(inngestTf) : null,
+    );
+    expect(size).toBeLessThan(HETZNER_CAP);
+    expect(size).toBeLessThan(INNGEST_GZIP_BUDGET);
+    expect(size).toBeGreaterThan(INNGEST_GZIP_FLOOR); // non-vacuity
+  });
+
+  test("inngest user_data applies the strip through the shared local (#7695)", () => {
+    // Pins the same two one-edit reverts the registry arm pins: drop the `replace()` wrapper and
+    // orphan the local, or keep `replace()` with an INLINE literal and leave the local as
+    // decoration. Either leaves the payload unstripped and the host un-creatable.
+    expect(inngestStripIsApplied(inngestTf)).toBe(true);
+  });
+
+  test("inngest strip preserves #cloud-config and eats no YAML (#7695)", () => {
+    // `#cloud-config` IS the document — a strip that eats it boots the host dark, which is the
+    // one failure this whole mechanism must not introduce while fixing a size problem. The regex
+    // requires `#` + space/tab, so the header (no space) survives. Asserted, not assumed.
+    const re = inngestStripRegex(inngestTf);
+    const src = readFileSync(join(INFRA, "cloud-init-inngest.yml"), "utf8");
+    // PRECONDITION, not an assumption -- and `startsWith`, not `.trim()`. A `.trim()` comparison
+    // passes an INDENTED `  #cloud-config`, which survives the strip (no space after `#`) and
+    // which cloud-init does not recognise: the apply succeeds, the host boots, and none of the
+    // payload runs. Mirrors the registry arm.
+    expect(src.startsWith("#cloud-config\n")).toBe(true);
+    const out = src.replace(re, "");
+    expect(out.startsWith("#cloud-config\n")).toBe(true);
+
+    // MULTISET, not a Set. `cloud-init-inngest.yml` carries five byte-identical
+    // `      #!/usr/bin/env bash` lines, so a Set-difference stays empty when a regression eats
+    // four of the five -- the surviving copy keeps the membership true. Counting closes it.
+    const count = (lines: string[]): Map<string, number> => {
+      const m = new Map<string, number>();
+      for (const l of lines) m.set(l, (m.get(l) ?? 0) + 1);
+      return m;
+    };
+    const before = count(src.split("\n"));
+    const after = count(out.split("\n"));
+    const eatenNonComments: string[] = [];
+    for (const [line, n] of before) {
+      if ((after.get(line) ?? 0) < n && !/^[ \t]*#([ \t]|$)/.test(line)) eatenNonComments.push(line);
+    }
+    expect(eatenNonComments).toEqual([]);
   });
 
   test("registry strip removes ONLY comments — no YAML content is eaten (#7278)", () => {
@@ -770,6 +994,121 @@ describe("rendered user_data size (Hetzner 32,768 B cap)", () => {
     expect(real).toBe(readFileSync(join(INFRA, "git-data-bootstrap.sh")).toString("base64"));
     expect(real).not.toMatch(/^x+$/); // NOT the placeholder the non-file path would produce
     expect(real.length).toBeGreaterThan(1_000); // a real script's base64 is substantial, not ~600 B of noise
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // (#7695) The three registry-parity arms the inngest pair shipped without. Each one exists
+  // because its registry twin was written in response to a MEASURED defect (#7278/#7299), and
+  // an arm set that covers one host and not its identical sibling is how the sibling becomes
+  // the next incident — which is precisely what happened here.
+  // ---------------------------------------------------------------------------------------
+
+  test("inngest template carries no byte JS and Go RE2 disagree on (#7695)", () => {
+    // The docblock at toNewlineOnlyMultiline says the JS/Go-RE2 `m`-flag divergence residual is
+    // "made unreachable" by this assertion. That was true of the registry, which has the arm, and
+    // FALSE of inngest, which did not — so the sentence licensing the model's fidelity covered
+    // only half the hosts it was written above. The divergence direction is the dangerous one:
+    // JS `^` also matches after U+2028/U+2029, Go RE2 does not, so the MODEL would strip a line
+    // production KEEPS and under-measure an over-cap render to green.
+    assertNoExoticLineBreaks(
+      readFileSync(join(INFRA, "cloud-init-inngest.yml"), "utf8"),
+      "cloud-init-inngest.yml",
+    );
+    // Non-vacuity: the detector must actually fire on the bytes it names.
+    expect(() => assertNoExoticLineBreaks("a\u2028b", "fixture")).toThrow(/U\+2028/);
+    expect(() => assertNoExoticLineBreaks("a\rb", "fixture")).toThrow(/CR/);
+  });
+
+  test("inngest strip preserves every shebang and still removes rationale (#7695)", () => {
+    // A lost `#!` is the silent-divergence shape with no error of its own: the kernel falls back
+    // to sh (dash on 24.04) rather than raising ENOEXEC, so a bash-ism degrades quietly.
+    const strip = inngestStripRegex(inngestTf);
+    const src = readFileSync(join(INFRA, "cloud-init-inngest.yml"), "utf8");
+    const shebangs = (src.match(/^[ \t]*#!.*$/gm) ?? []).length;
+    expect(shebangs).toBeGreaterThan(0); // non-vacuity: there ARE shebangs to preserve
+    const stripped = src.replace(strip, "");
+    expect((stripped.match(/^[ \t]*#!.*$/gm) ?? []).length).toBe(shebangs);
+
+    // ...and the strip is not a no-op. Without this, an expression matching nothing would satisfy
+    // the preservation assertion above while leaving the payload over the cap — the exact tree
+    // that stranded this host on 2026-09-08.
+    const commentsBefore = (src.match(/^[ \t]*#([ \t][^\n]*)?$/gm) ?? []).length;
+    expect(commentsBefore).toBeGreaterThan(100);
+    expect((stripped.match(/^[ \t]*#([ \t][^\n]*)?$/gm) ?? []).length).toBe(0);
+  });
+
+  test("inngest size constants stay discriminating (#7695)", () => {
+    // Budget and floor are self-referential — loosening them to the hard cap and 1 removes both
+    // the re-inlining tripwire and the non-vacuity arm with nothing objecting.
+    expect(INNGEST_GZIP_BUDGET).toBeLessThan(HETZNER_CAP - 8_000); // real headroom, not the cap
+    expect(INNGEST_GZIP_FLOOR).toBeGreaterThan(2_000); // a gutted payload must not clear it
+    expect(INNGEST_GZIP_FLOOR).toBeLessThan(INNGEST_GZIP_BUDGET);
+  });
+
+  test("grok-dogfood host base64gzip'd user_data is under the Hetzner cap (#7695)", () => {
+    // No strip on this host: the template is small enough that the comment strip buys nothing,
+    // and adding one would be a fourth copy of a helper trio already flagged for extraction. The
+    // measurement is what matters — an unmeasured host is how this PR's outage happened.
+    const size = renderedGzipB64LenStripped("cloud-init-grok-dogfood.yml", grokDogfoodTf, null);
+    expect(size).toBeLessThan(HETZNER_CAP);
+    expect(size).toBeLessThan(GROK_DOGFOOD_GZIP_BUDGET);
+    expect(size).toBeGreaterThan(GROK_DOGFOOD_GZIP_FLOOR); // non-vacuity
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // (#7695) THE WALKER. Every arm above is hand-written per host, which is why the inngest host
+  // went four days over the cap with nothing objecting: nobody had written its arms yet, and
+  // no gate could notice the absence. Three separate hosts have now each acquired a byte gate
+  // in response to their own incident (git-data #5927, registry #7282/#7299, inngest #7695) —
+  // three instances of one class, closed three times, never once as a class.
+  //
+  // This arm derives the host set from the .tf sources instead: every `hcloud_server` whose
+  // user_data is base64gzip'd must have a COMMITTED byte measurement, either a
+  // `<host>-userdata-budget.sh` beside it or a modeled arm in this file. A fourth host added
+  // without either fails HERE, at the moment it is added, rather than at its first replace.
+  // ---------------------------------------------------------------------------------------
+  test("every base64gzip'd host has a committed byte measurement (#7695)", () => {
+    const tfFiles = readdirSync(INFRA).filter((f) => f.endsWith(".tf"));
+
+    // Resolve `user_data = <expr>` per hcloud_server, following a one-hop `local.<x>` indirection
+    // (the inngest host hoists its render into locals so lifecycle.precondition can weigh it).
+    const gzipped: string[] = [];
+    for (const f of tfFiles) {
+      const src = stripHclLineComments(readFileSync(join(INFRA, f), "utf8"));
+      const localDefs = new Map<string, string>();
+      for (const m of src.matchAll(/^\s*([a-z0-9_]+)\s*=\s*(.+)$/gm)) localDefs.set(m[1], m[2]);
+
+      for (const m of src.matchAll(
+        /resource\s+"hcloud_server"\s+"([a-z0-9_]+)"\s*\{([\s\S]*?)\n\}/g,
+      )) {
+        const [, name, body] = m;
+        const ud = /^\s*user_data\s*=\s*(.+)$/m.exec(body);
+        if (!ud) continue;
+        let expr = ud[1];
+        const hop = /^local\.([a-z0-9_]+)\s*$/.exec(expr.trim());
+        if (hop) expr = localDefs.get(hop[1]) ?? expr;
+        if (/base64gzip\(/.test(expr)) gzipped.push(name);
+      }
+    }
+
+    // Non-vacuity: the walker must actually find hosts. A regex that silently matched nothing
+    // would make this arm pass on a repo with zero coverage — the failure shape it exists to
+    // catch, one level up.
+    expect(gzipped.length).toBeGreaterThanOrEqual(4);
+    expect(gzipped).toContain("inngest");
+    expect(gzipped).toContain("registry");
+
+    const scripts = new Set(readdirSync(INFRA).filter((f) => f.endsWith("-userdata-budget.sh")));
+    const thisFile = readFileSync(join(import.meta.dir, "cloud-init-user-data-size.test.ts"), "utf8");
+
+    const uncovered = gzipped.filter((name) => {
+      const slug = name.replace(/_/g, "-");
+      if (scripts.has(`${slug}-userdata-budget.sh`)) return false;
+      // A modeled arm counts: the web host is measured here (WEB_GZIP_BUDGET) and has no script.
+      return !new RegExp(`^const ${name.toUpperCase()}_GZIP_BUDGET\\s*=`, "m").test(thisFile);
+    });
+
+    expect(uncovered).toEqual([]);
   });
 });
 

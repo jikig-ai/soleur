@@ -24,7 +24,7 @@ The payload is `cloud-init-git-data.yml` plus nine `file()`-injected scripts and
 `git-data-pre-receive-placeholder.sh`, `git-data-gc.service`,
 `git-data-gc-failure.service`, `git-data-gc.timer`).
 
-#6982 landed two user-facing fixes that ship inside that payload — `receive.unpackLimit=1`
+PR #6982 landed two user-facing fixes that ship inside that payload — `receive.unpackLimit=1`
 plus inode telemetry (a silent ENOSPC-on-inodes path), and `EnvironmentFile=-` on both gc
 units (the failure reporter died on the failure it exists to report). With both applied the
 payload measured **33,028 B — 260 B over the cap**, with B7, B11 and B12 still queued and also
@@ -292,6 +292,11 @@ birth, not after a breach.
 neither is this PR's scope — but they are on the same unguarded trajectory the registry was on,
 and this paragraph is the record that the gap is known rather than closed.
 
+> **CLOSED 2026-09-08 (#7695) — but not before the predicted failure happened.** See the
+> amendment at the end of this file. `hcloud_server.inngest` went over cap on 2026-09-04 and a
+> replace dispatch destroyed the host four days later. This paragraph named that host, named the
+> trajectory, and was correct — and it changed nothing, because a paragraph is not a gate.
+
 ## Amendment (2026-08-11, #7264) — git-data's own cloud-init template is now stripped too
 
 This ADR's original scope stripped the **nine injected payloads** and explicitly left
@@ -354,6 +359,9 @@ Mutation-proven in both directions.
 **Still outstanding**, unchanged from the amendment above: `hcloud_server.inngest` and the
 grok-dogfood host still render `base64gzip(templatefile(...))` with no arm in
 `cloud-init-user-data-size.test.ts`. Under cap today; on the same unguarded trajectory.
+
+> **CLOSED 2026-09-08 (#7695).** Both hosts now have arms; see the final amendment. "Under cap
+> today" had a shelf life of 24 days for inngest.
 
 ---
 
@@ -423,3 +431,56 @@ here will catch it.
 preserves "`#` inside strings". It preserves a URL fragment (`#` with no preceding whitespace)
 and does NOT preserve a ` # ` sequence inside a quoted string. The table is the normative artifact
 this ADR tells the next host to port from, so the row names the narrower, true property.
+
+---
+
+## Amendment — 2026-09-08 (#7695): the outstanding sweep closed, four days after it came due
+
+### What happened
+
+Two passages above name `hcloud_server.inngest` and the grok-dogfood host as rendering
+`base64gzip(templatefile(...))` with no arm in `cloud-init-user-data-size.test.ts`, call them
+"under cap today", and describe them as "on the same unguarded trajectory the registry was on".
+Both passages were accurate. Neither prevented anything.
+
+On **2026-09-04**, `000fa471` (#7778) grew `cloud-init-inngest.yml` past the cap. Nothing
+observed it: the merge apply of `apply-web-platform-infra.yml` is an explicit `-target=`
+allow-list containing no `hcloud_server.*`, so terraform never planned the resource and never
+submitted the payload to Hetzner — which is the only thing that validates it. On **2026-09-08**
+an `inngest-host-replace` dispatch destroyed the host and Hetzner refused the create:
+`invalid input in field 'user_data' [Length must be between 0 and 32768]`. The destroy-guard and
+the stock preflight both passed, correctly: they grade the plan's SHAPE and the datacenter's
+STOCK, and neither weighs the payload.
+
+### The lesson, which is about this ADR and not about the host
+
+**This document predicted the failure by name and did not prevent it.** Three hosts have now each
+acquired a byte gate in response to their own incident — git-data (#5927), registry
+(#7282/#7299), inngest (#7695). Three instances of one class, closed three times, never once as a
+class. The "outstanding sweep" note was written twice, a month apart, and its function turned out
+to be *absolution*: it made the gap feel tracked, which is what let it stay open. A known gap
+recorded in prose and a known gap recorded in a failing test are not the same artifact, and only
+one of them stops a destroy.
+
+### What #7695 changed, so the next host cannot repeat it
+
+1. **`inngest-host.tf`** wraps the render in the same three-stage chain
+   (`base64gzip(replace(templatefile(...), local.inngest_rationale_strip, ""))`), hoisted into
+   locals so a `lifecycle.precondition` can weigh the exact stored value at plan time — a
+   precondition cannot reference `self`. That precondition refuses the plan on the
+   `workflow_dispatch` path, where no CI job is watching.
+2. **`apps/web-platform/infra/inngest-userdata-budget.sh`** is the sibling of the two existing
+   budget scripts, rendering through terraform's OWN `base64gzip` (never `gzip -9`) and measuring
+   BYTES (never `length()`, which counts graphemes and errs optimistic). Wired into
+   `infra-validation.yml` as its own job and into the main-branch failure notification. Measured:
+   raw 91,997 B → stripped 30,614 B → stored 10,892 B, 21,876 B of headroom.
+3. **A WALKER arm** in `cloud-init-user-data-size.test.ts` derives the host set from the `.tf`
+   sources: every `hcloud_server` whose `user_data` is base64gzip'd must have a committed byte
+   measurement — a `<host>-userdata-budget.sh` or a modeled arm. This is the part that closes the
+   CLASS. On its first run it immediately failed on `grok_dogfood`, the fourth base64gzip'd host,
+   which had no measurement of any kind and which the passages above had named a month earlier.
+   A fourth host added without coverage now fails at the moment it is added, not at its first
+   replace.
+
+The walker is the artifact this ADR should have produced in #7278. The prose was the substitute
+for it, and the substitute cost a production host.
