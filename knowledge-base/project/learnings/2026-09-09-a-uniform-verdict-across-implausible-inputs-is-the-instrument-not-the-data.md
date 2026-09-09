@@ -27,7 +27,7 @@ reduced to one shape:
 indistinguishable from a working one, and it reads as a finding.**
 
 The original production bug is the purest instance. Two Inngest cron alert paths
-POSTed to Resend with `from: ops@jikigai.com`, a domain carrying none of Resend's
+POSTed to Resend with a `from:` on the **jikigai.com** domain, which carries none of Resend's
 verification records. The vendor refused every message. Neither call inspected the
 response, so both paths reported success — **for 111 days**, from the GHA→Inngest
 port (#4227, 2026-05-21) until this PR. The instrument that was supposed to say
@@ -225,6 +225,21 @@ killed by my own `timeout 900` mid-battery (`EXIT=124`) and reported as complete
 **Prevention:** read the rc file and the runner's own summary; the notification
 reports the trailing echo. This class is already documented in `work/SKILL.md` and I
 hit it anyway.
+
+**The pre-commit gate's advisory lock turns contention into an OOM, and the commit
+silently does not exist.** `bun-test` fires on any staged `*.ts` -- here a COMMENT-ONLY
+count edit -- and runs the whole battery. It queued 60 minutes on `flock -w 3600`
+behind another worktree, and `tc_acquire` then reported `LOCK_CONTENDED_PROCEEDING`
+and ran ANYWAY: the lock is advisory, so the timeout does not fail the commit, it
+removes the serialization. With 8 sibling gates live the unserialized run was
+OOM-killed 20 minutes in. Net effect: 80 minutes elapsed, no commit, and the only
+evidence was the working tree still being dirty. **Prevention:** read `tc_acquire`'s
+terminal line -- `LOCK_ACQUIRED` and `LOCK_CONTENDED_PROCEEDING` mean opposite things
+about serialization and identical things about whether the run proceeds. Before
+retrying a killed gate, gate the RETRY on measured MemAvailable and sibling count
+rather than on elapsed time; a retry into the same pressure is killed the same way.
+And per `wg-when-a-test-runner-crashes-segfault-oom` a killed battery is UNRESOLVED,
+never green -- the staged index surviving intact is not evidence the gate passed.
 
 **One-offs (no recurrence vector):** Playwright MCP disconnected mid-session (worked
 around with the local install plus a cached-Chromium `executablePath` — the MCP being

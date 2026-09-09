@@ -19,10 +19,11 @@
 #
 # ARM 4 IS THE INSTRUMENT CONTROL, and it is the point. This session's defining
 # error was reading a uniform verdict as data three times over -- a DNS answer
-# that is "present" for every name asked, including names that cannot exist, is
-# a broken resolver, not a verified domain. Arm 4 asks for a name that cannot
-# resolve. If it answers, the probe reports UNRESOLVED and refuses to pass; it
-# never reports OK on the strength of an instrument it has not falsified.
+# that is "present" for every name asked (or "absent" for every name asked) is a
+# broken instrument, not a measurement. So arm 4 falsifies the resolver in BOTH
+# directions before arm 3 is believed: a name that MUST resolve, and a name that
+# CANNOT. If either control misbehaves the probe reports UNRESOLVED and refuses
+# to pass -- it never reports OK, or FAIL, on an instrument it has not checked.
 #
 # Read-only: touches nothing in the repository, writes no temp files.
 set -uo pipefail
@@ -79,10 +80,23 @@ if ! command -v dig >/dev/null 2>&1; then
   exit 0
 fi
 
-# --- Arm 4 FIRST: falsify the instrument before trusting arm 3.
-CONTROL="resend._domainkey.probe-control-must-not-exist.soleur.ai"
-if [[ -n "$(dig +short TXT "$CONTROL" 2>/dev/null)" ]]; then
-  echo "RESEND_ALERT_PATH_UNRESOLVED resolver answered for $CONTROL, which cannot exist;"
+# --- Arm 4 FIRST: falsify the instrument BOTH WAYS before trusting arm 3.
+#
+# Both arms are needed and an earlier draft shipped only the negative one. With
+# `dig` installed but no egress, every lookup returns empty: the negative arm
+# passes (nothing resolved) and arm 3 then reports "domain has no DKIM" -- a red
+# that is both false and the wrong diagnosis, blamed on the domain instead of on
+# the network. A probe that cannot tell "absent" from "cannot look" is the exact
+# defect this whole PR is about, so the positive arm runs first.
+POS_CONTROL="soleur.ai"
+if [[ -z "$(dig +short A "$POS_CONTROL" 2>/dev/null)" ]]; then
+  echo "RESEND_ALERT_PATH_UNRESOLVED positive control $POS_CONTROL did not resolve;"
+  echo "  DNS is unreachable from here, so an empty DKIM answer would mean nothing."
+  exit 1
+fi
+NEG_CONTROL="resend._domainkey.probe-control-must-not-exist.soleur.ai"
+if [[ -n "$(dig +short TXT "$NEG_CONTROL" 2>/dev/null)" ]]; then
+  echo "RESEND_ALERT_PATH_UNRESOLVED resolver answered for $NEG_CONTROL, which cannot exist;"
   echo "  a resolver that answers every name cannot evidence that any domain is verified."
   exit 1
 fi
@@ -98,4 +112,4 @@ for d in $DOMAINS; do
     || fail "sender domain $d has no resend._domainkey TXT -- Resend will refuse mail from it"
 done
 
-echo "RESEND_ALERT_PATH_OK rule+emit wired for [$FEATURES]; DKIM present for [$DOMAINS]; control negative"
+echo "RESEND_ALERT_PATH_OK rule+emit wired for [$FEATURES]; DKIM present for [$DOMAINS]; controls both ways"

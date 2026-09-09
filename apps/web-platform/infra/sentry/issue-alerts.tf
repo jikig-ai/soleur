@@ -1935,10 +1935,19 @@ resource "sentry_alert" "ops_email_delivery_failure" {
   frequency_minutes = 22
   monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
 
+  # The three transition triggers alone would alert ONCE and then go quiet: an
+  # issue that is never resolved is never "first seen", "reappeared" or
+  # "regressed" again, so a cron that fails every day at 18:00 produces one
+  # notification and then silence. That is this PR's own bug wearing a different
+  # hat -- an alert path that reports success while nothing is being delivered --
+  # so `event_frequency_count` is here to make PERSISTENT failure keep paging.
+  # Shape verified against `git_data_boot_warning` in this file, not inferred
+  # from provider docs; `frequency_minutes = 22` above bounds the repeat rate.
   trigger_conditions = [
     { first_seen_event = {} },
     { reappeared_event = {} },
     { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
   ]
 
   action_filters = [
