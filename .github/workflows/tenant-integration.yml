@@ -45,37 +45,6 @@ on:
   merge_group:
   workflow_dispatch: {}
 
-concurrency:
-  # cancel-in-progress: false (intentional, #5585 R3): a superseded run
-  # cancelled mid-flight would conclude `cancelled` and fail the gate on the
-  # head SHA until a re-run; keeping false avoids that edge at the cost of a
-  # second full suite on rapid pushes to an isolation-touching PR (rare).
-  #
-  # REF-INDEPENDENT ON PURPOSE (#7055). The group was
-  # `tenant-integration-${{ github.ref }}`, which serializes a ref against
-  # itself and nothing else — so two runs on DIFFERENT refs (another PR, or a
-  # PR and the push to main) execute the heavy suite SIMULTANEOUSLY against the
-  # one shared dev Supabase project. `byok-delegation.atomicity` › T5 opens ten
-  # concurrent transactions queueing on a single row's `FOR UPDATE` through a
-  # shared pooler; a second run doing the same thing at the same moment is
-  # exactly the condition under which one of the ten comes back with a pooler
-  # timeout or a serialization failure instead of the hourly refusal.
-  #
-  # THIS IS THE MOST PLAUSIBLE CAUSE, NOT A CONFIRMED ONE. The deciding datum —
-  # which error the one non-hourly call actually carried — lived in a CI run's
-  # output and is gone. The partitioned assertions in that suite are the
-  # instrument that captures it on the next occurrence; this line removes the
-  # leading environmental candidate at near-zero cost.
-  #
-  # THE COST, NAMED: a repo-wide group serializes tenant-integration across the
-  # whole repository, so concurrent PRs touching this surface QUEUE rather than
-  # overlap, and with cancel-in-progress: false a queue can form. The workflow
-  # is path-filtered (server/, migrations/, lib/supabase/, middleware.ts and the
-  # isolation tests), so the population that can queue is small. If the queueing
-  # proves worse than the flake, the revert is this one line — which is why it
-  # is preferred over provisioning a second Supabase project for the suite.
-  group: tenant-integration
-  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -149,6 +118,66 @@ jobs:
     if: needs.detect-changes.outputs.tenant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Repo-wide mutex on the ONE shared dev Supabase project (#7055), declared at
+    # JOB level -- deliberately NOT at workflow level.
+    #
+    # WHY A MUTEX AT ALL. The group was `tenant-integration-${{ github.ref }}`,
+    # which serializes a ref against itself and nothing else, so two runs on
+    # DIFFERENT refs (another PR, or a PR and the push to main) apply migrations
+    # to -- and run the heavy isolation suite against -- the one dev project at the
+    # same moment. `byok-delegation.atomicity` > T5 opens ten concurrent
+    # transactions queueing on a single row's `FOR UPDATE` through a shared
+    # pooler; a second run doing the same thing simultaneously is the leading
+    # environmental candidate for the observed flake. THIS IS THE MOST PLAUSIBLE
+    # CAUSE, NOT A CONFIRMED ONE: the deciding datum -- which error the one
+    # non-hourly call actually carried -- lived in a CI run's output and is gone.
+    # The partitioned assertions in that suite are the instrument that captures it
+    # on the next occurrence. Independent of that flake, the `Apply migrations to
+    # dev` step below is itself unsafe to run twice concurrently against one
+    # project; this mutex fixes that on its own terms.
+    #
+    # WHY JOB LEVEL, NOT WORKFLOW LEVEL. This workflow has NO workflow-level
+    # `paths:` filter by design (#5585 -- the always-run aggregator must report a
+    # required context on EVERY PR). A repo-wide group at WORKFLOW level would
+    # therefore enrol every PR run AND every push to main in one mutex. GitHub
+    # keeps at most ONE pending entry per concurrency group and a third arrival
+    # CANCELS the pending one; `cancel-in-progress: false` does not prevent that --
+    # it protects only the entry already executing. At ~6 merges to main a day
+    # plus every push to every open PR, eviction would be the steady state, and an
+    # evicted run concludes `cancelled`, reddening `tenant-integration-required`
+    # (a REQUIRED check, infra/github/ruleset-ci-required.tf) on the head SHA of a
+    # PR that never touched this surface. At JOB level the group holds only runs
+    # where detect-changes emitted tenant=true -- pushes to main plus the ~5% of
+    # PRs on the isolation surface -- while `detect-changes` and the always-run
+    # aggregator stay OUTSIDE it, so a required context is still reported on every
+    # PR. merge_group is likewise unaffected: it emits tenant=false, so this job
+    # is `skipped` and never joins the group.
+    #
+    # THE RESIDUAL, NAMED -- EVICTION IS REDUCED, NOT ELIMINATED. If a THIRD
+    # isolation-surface run arrives while one is executing and one is pending, the
+    # pending job is cancelled. `needs.tenant-integration.result` is then
+    # `cancelled` and scripts/tenant-integration-gate-verdict.sh fails CLOSED via
+    # its eviction arm. That red is accepted, NOT greened: detect-changes said
+    # this tree touches the isolation surface and the suite never ran against it,
+    # so passing it would be a fail-open on a tenant-isolation gate. It is
+    # acceptable on a required check because (a) it needs three-way overlap inside
+    # one job's runtime, (b) the victim is by construction a run on this surface --
+    # the population #7055 already accepted would queue -- never an unrelated PR,
+    # and (c) the remedy is a one-click "Re-run failed jobs", named verbatim in
+    # the failure annotation. If the eviction proves worse than the flake, the
+    # revert is this block plus the verdict script's `cancelled` arm.
+    concurrency:
+      # Named for the contended RESOURCE, not for this workflow, so a future job
+      # that applies migrations to or runs a heavy suite against the dev project
+      # joins the same literal rather than minting a parallel mutex -- a mutex on
+      # one side of a race is not a mutex.
+      #
+      # cancel-in-progress: false (intentional, #5585 R3): a superseded run
+      # cancelled MID-FLIGHT would also conclude `cancelled` and fail the gate on
+      # the head SHA until a re-run; keeping false avoids that edge at the cost of
+      # a second full suite on rapid pushes to an isolation-touching PR (rare).
+      group: dev-supabase-exclusive
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:

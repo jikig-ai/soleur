@@ -387,7 +387,12 @@ print(json.dumps({
   ],
   'transient': True,
 }))")
-  resp=$(curl -sS -w '\n%{http_code}' -X POST "${FLAGSMITH_EDGE_API}/identities/" \
+  # --disable/--noproxy here too (#7898 review). env_key is the PUBLIC client-side
+  # Flagsmith key, so the leak value is low -- but the linter missed this call only
+  # because X-Environment-Key is absent from CURL_AUTH_HEADER, not because it is
+  # exempt, and "every credentialed curl in these files is confined" should be true
+  # as written rather than true-with-an-asterisk.
+  resp=$(curl --disable --noproxy '*' -sS -w '\n%{http_code}' -X POST "${FLAGSMITH_EDGE_API}/identities/" \
     -H "X-Environment-Key: ${env_key}" -H "Content-Type: application/json" \
     -d "$body") || { echo "eval request failed (curl transport) for org $org" >&2; return 3; }
   code=$(printf '%s' "$resp" | tail -n1)

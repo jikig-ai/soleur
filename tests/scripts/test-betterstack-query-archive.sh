@@ -40,6 +40,22 @@ pass=0 fail=0
 ok()   { printf '  ok   %s\n' "$1"; pass=$((pass + 1)); }
 bad()  { printf '  FAIL %s\n     %s\n' "$1" "${2:-}" >&2; fail=$((fail + 1)); }
 
+# INSTRUMENT SELF-TEST (#7898 review). Measured: rewriting `bad()` to call `ok()`
+# left this suite at "30 passed, 0 failed", exit 0, WITH a real defect present --
+# the verdict helpers are the dispatch layer, and no row that perturbs the SUT can
+# observe them. Drive both helpers once and require both counters to move, then
+# unwind. Reported with printf + exit, never through the helpers under test.
+_st_p="$pass" _st_f="$fail"
+ok "instrument self-test (this row is the control)" >/dev/null
+bad "instrument self-test (expected; not a real failure)" "" 2>/dev/null
+if (( pass != _st_p + 1 || fail != _st_f + 1 )); then
+  printf '[FATAL] instrument self-test: ok()/bad() did not both move their counters (pass %d->%d, fail %d->%d). The verdict helpers are disarmed; every row below is meaningless.\n' \
+    "$_st_p" "$pass" "$_st_f" "$fail" >&2
+  exit 1
+fi
+pass="$_st_p" fail="$_st_f"
+unset _st_p _st_f
+
 # Run the script with `curl` stubbed to print the SQL it would POST, instead of issuing it.
 # Intercepting at the curl layer (not run_sql) is deliberate: the script DEFINES run_sql, so
 # sourcing it would overwrite any run_sql stub. curl is the real egress boundary — stubbing
@@ -384,8 +400,15 @@ printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 # ANTI-VACUITY FLOOR (Guard 2 row 4). Without it this suite exits 0 on ZERO cases, so a
 # mutation that made every arm unreachable — or an early `exit` inserted above — would read as
 # a clean pass. The count is reported on the line above; this makes it load-bearing.
-if (( pass + fail == 0 )); then
-  printf '%s: FAIL — zero cases executed; a suite that ran nothing cannot pass\n' "$(basename "$0")" >&2
+# A floor of ONE is not a floor. Measured (#7898 review): deleting the entire
+# "Guard 2: the destination pin" section -- every allowlist, table-identifier and
+# SQL-escape row this change adds -- left this suite at "16 passed, 0 failed",
+# exit 0. Set to the measured green count so a dropped section is caught. A FLOOR,
+# not an equality: adding rows must not red the suite, so raise it when you add one.
+readonly MIN_ASSERTIONS=30
+if (( pass + fail < MIN_ASSERTIONS )); then
+  printf '%s: FAIL — only %d assertions ran; floor is %d. A suite that ran fewer cases than it declares cannot pass.\n' \
+    "$(basename "$0")" "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 [[ "$fail" -eq 0 ]]

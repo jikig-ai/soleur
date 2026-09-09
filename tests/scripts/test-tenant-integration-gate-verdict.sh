@@ -107,6 +107,44 @@ else
   fail=$((fail + 1)); echo "[FAIL] PASS/skipped arm broke with GITHUB_STEP_SUMMARY unset" >&2
 fi
 
+# --- eviction arm (#7055). `cancelled` still fails closed (asserted above), but
+# the DIAGNOSTIC must name eviction and the remedy, or the author debugs a test
+# failure that does not exist. Assert the message, and assert the arm did not
+# widen the allow-list on the detect axis. ---
+evict_err=$(bash "$SCRIPT" success cancelled 2>&1 >/dev/null) || true
+if printf '%s' "$evict_err" | grep -q 'EVICTION'; then
+  pass=$((pass + 1)); echo "[ok] suite=cancelled diagnostic names concurrency eviction"
+else
+  fail=$((fail + 1)); echo "[FAIL] suite=cancelled diagnostic does not name eviction" >&2
+fi
+if printf '%s' "$evict_err" | grep -q 'Re-run failed jobs'; then
+  pass=$((pass + 1)); echo "[ok] suite=cancelled diagnostic names the re-run remedy"
+else
+  fail=$((fail + 1)); echo "[FAIL] suite=cancelled diagnostic names no remedy" >&2
+fi
+# The arm must not have widened the allow-list: a FAILED detect with a cancelled
+# suite is a different state and must not inherit the eviction explanation.
+noevict_err=$(bash "$SCRIPT" failure cancelled 2>&1 >/dev/null) || true
+if printf '%s' "$noevict_err" | grep -q 'EVICTION'; then
+  fail=$((fail + 1)); echo "[FAIL] detect=failure wrongly inherits the eviction diagnostic" >&2
+else
+  pass=$((pass + 1)); echo "[ok] detect=failure does not inherit the eviction diagnostic"
+fi
+
+# --- anti-vacuity floor (#7898 review). This suite had NO floor: deleting every
+# row above left it reporting "0 passed, 0 failed" and exiting 0. Set to the
+# measured green count so a silently-dropped row is caught. A FLOOR, not an
+# equality -- adding a row must not red the suite; raise it when you add one.
+# Emitted with printf + exit rather than through pass()/fail(), because a floor
+# dispatched through the helpers it backstops is disarmed by the same one-line
+# edit that disarms them.
+readonly MIN_ASSERTIONS=22
+if [[ "$((pass + fail))" -lt "$MIN_ASSERTIONS" ]]; then
+  printf '[FATAL] only %d assertions ran; floor is %d -- the suite was gutted\n' \
+    "$((pass + fail))" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
+
 echo "---"
 echo "tenant-integration-gate-verdict: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

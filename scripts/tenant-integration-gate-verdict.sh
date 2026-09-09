@@ -16,7 +16,7 @@
 # (the DROP-1 fail-open class), suite failure/cancelled/empty, or a future
 # GitHub-added result string — fails closed.
 #
-# Lives in a script (not inline in the workflow) so the five-branch verdict
+# Lives in a script (not inline in the workflow) so the six-branch verdict
 # is unit-tested by tests/scripts/test-tenant-integration-gate-verdict.sh.
 set -uo pipefail
 
@@ -42,6 +42,23 @@ if [[ "$detect" == "success" && ( "$suite" == "success" || "$suite" == "skipped"
     fi
   fi
   exit 0
+fi
+
+# Eviction arm (#7055) -- DIAGNOSTIC ONLY, the verdict is unchanged. The heavy
+# `tenant-integration` job holds the repo-wide job-level `dev-supabase-exclusive`
+# mutex. GitHub keeps at most ONE pending entry per concurrency group: a third
+# arrival cancels the pending one, and `cancel-in-progress: false` does not
+# prevent that. So `cancelled` here is most often an EVICTION, not a red suite.
+# It still FAILS CLOSED, because detect-changes said this tree touches the
+# isolation surface and the suite never executed against it -- greening that would
+# be a fail-open on a tenant-isolation gate. What changes is the diagnosis: the
+# author is told the run was displaced and that a re-run clears it, instead of
+# hunting a test failure that does not exist. A whole-run cancellation cannot
+# reach this arm: it would cancel this aggregator job too, so this line would
+# never execute.
+if [[ "$detect" == "success" && "$suite" == "cancelled" ]]; then
+  echo "::error::tenant-integration gate FAILED closed: the heavy dev-Supabase suite was CANCELLED before it could report (detect-changes=success, tenant-integration=cancelled). The likely cause is concurrency EVICTION -- the job waits on the repo-wide 'dev-supabase-exclusive' mutex, GitHub holds at most one PENDING job per group, and a third isolation-surface run displaces the one waiting. Nothing was verified against this tree, so the gate cannot pass. Use 'Re-run failed jobs' on this PR to clear it. If it recurs on every attempt, the suite is being cancelled for some other reason and needs investigation." >&2
+  exit 1
 fi
 
 echo "::error::tenant-integration gate FAILED closed (detect-changes=${detect:-<empty>}, tenant-integration=${suite:-<empty>}). The required check passes only when detect-changes succeeds AND the suite is success or skipped." >&2

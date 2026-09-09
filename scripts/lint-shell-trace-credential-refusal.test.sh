@@ -405,6 +405,27 @@ mutate_row() { # <label> <perl-expr> <fixture> <baseline-rc> <expected-mutant-rc
 # Expected mutant rc is 2, not 0: the zero-target guard added after review turns
 # "the walker resolved nothing" into an explicit refusal rather than a silent
 # clean report. A row expecting 0 here would now fail for the RIGHT reason.
+# INSTRUMENT SELF-TEST for mutate_row (#7898 review). It is the only helper that
+# owns its own pass/fail decision, and ALL 17 mutation rows route through it, so
+# neutering it disarms every one of them at once: measured, inserting
+# `pass "$1: DISARMED"; return 0` as its first line left this suite at
+# "=== 61 passed, 0 failed ===", exit 0, floor satisfied. pass()/fail() are
+# already driven in both directions; this closes the same gap one level up.
+#
+# Drive it with a row that MUST fail (a no-op mutation cannot change the rc, so
+# the mutant rc equals the baseline and the row must be scored a failure), then
+# unwind the counters. Reported with printf + exit, never through the helper.
+_mr_p="$PASS" _mr_f="$FAIL"
+mutate_row "instrument self-test (expected; not a real failure)" \
+  's/NOTHING_MATCHES_THIS_TOKEN/x/' "$FIX/violation-no-preamble.sh" 1 2 >/dev/null 2>&1
+if [ "$FAIL" -eq "$_mr_f" ]; then
+  printf '[FATAL] instrument self-test: mutate_row did not report a failure for a no-op mutation (FAIL %d -> %d). The mutation harness is disarmed; all 17 rows below are meaningless.\n' \
+    "$_mr_f" "$FAIL" >&2
+  exit 1
+fi
+PASS="$_mr_p" FAIL="$_mr_f"
+unset _mr_p _mr_f
+
 mutate_row 'M5 own-dispatch: walker yields nothing' \
   's|(def targets_from_args[^\n]*\n)|$1    return []\n|s' \
   "$FIX/violation-no-preamble.sh" 1 2
@@ -515,11 +536,32 @@ mutate_row 'D4 Rule D: credential classifier narrowed (stdin-header channel drop
 _h1="$WORK/h1.sh"
 sed 's/^MIN_ASSERTIONS=[0-9]*$/MIN_ASSERTIONS=99999/' "${BASH_SOURCE[0]}" > "$_h1"
 if [ -s "$_h1" ] && ! diff -q "$_h1" "${BASH_SOURCE[0]}" >/dev/null 2>&1; then
-  ( cd "$REPO_ROOT/scripts" && cp "$_h1" .h1probe.tmp.sh && bash .h1probe.tmp.sh >/dev/null 2>&1 )
+  # The probe file goes in $WORK (mktemp'd, trap-cleaned), NOT into the tracked
+  # scripts/ dir under a fixed name: an interrupted run used to leave an untracked
+  # .sh behind, and two concurrent runs in one checkout raced on that path.
+  # Runs from scripts/ because the probe resolves REPO_ROOT and its fixtures
+  # relative to that CWD -- running it from $WORK made it exit 2 during setup,
+  # which is NOT the floor firing and would have made this row assert the wrong
+  # thing. Unique filename rather than the old fixed .h1probe.tmp.sh: that name
+  # left an untracked .sh in the tracked tree on an interrupted run, and raced
+  # between two concurrent runs in one checkout.
+  _h1err="$WORK/h1.err"
+  _h1probe="$(mktemp "$REPO_ROOT/scripts/.h1probe.XXXXXXXX.sh")"
+  cp "$_h1" "$_h1probe"
+  ( cd "$REPO_ROOT/scripts" && bash "$_h1probe" >/dev/null 2>"$_h1err" )
   _h1rc=$?
-  rm -f "$REPO_ROOT/scripts/.h1probe.tmp.sh"
-  [ "$_h1rc" = "1" ] && pass "H1 the assertion floor actually bites (unreachable floor -> exit 1)" \
-    || fail "H1 floor did not bite: raising it to 99999 exited $_h1rc, expected 1"
+  rm -f "$_h1probe"
+  # rc alone is NOT sufficient (#7898 review): the inner probe always emits at
+  # least one FAIL by construction -- its own H1 block sees a source already at
+  # 99999, diff reports identical, and it takes the "could not build" else branch
+  # -- so it exits 1 whether or not the floor exists. Measured: `if false; then`
+  # on the floor predicate left this row PASSing. Assert the floor's own FATAL
+  # text, which only the floor can emit.
+  if [ "$_h1rc" = "1" ] && grep -q 'assertions ran; floor is' "$_h1err"; then
+    pass "H1 the assertion floor actually bites (unreachable floor -> its own FATAL + exit 1)"
+  else
+    fail "H1 floor did not bite: rc=$_h1rc, floor FATAL text $(grep -c 'assertions ran; floor is' "$_h1err" 2>/dev/null || echo 0) time(s); expected rc 1 with the FATAL"
+  fi
 else
   fail "H1 could not build the floor probe -- the assertion would be vacuous"
 fi

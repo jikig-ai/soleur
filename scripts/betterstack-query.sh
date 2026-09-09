@@ -240,6 +240,23 @@ require_table_identifier() {  # $1 = variable name (for the message), $2 = value
   esac
 }
 
+# ClickHouse string literals honour C-STYLE BACKSLASH escapes in addition to ''
+# doubling, so doubling alone does NOT close the literal (#7898 review). A value
+# ending in a backslash escapes the quote that doubling just added:
+#
+#   --until "x\' OR 1=1 -- "   ->   dt <= 'x\'' OR 1=1 -- '
+#
+# ClickHouse reads 'x\'' as the literal x' and the rest is live SQL, which reaches
+# url()/s3()/remote() and therefore egress. Escape the BACKSLASH FIRST, then the
+# quote -- order is load-bearing: doubling first would then have its own backslashes
+# escaped and the value would be corrupted.
+sql_quote() {
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\'/\'\'}"
+  printf '%s' "$v"
+}
+
 S3_EXPLICIT=0
 [[ -n "${BS_TABLE_S3:-}" ]] && S3_EXPLICIT=1
 export BS_TABLE_S3="${BS_TABLE_S3:-${BS_TABLE%_logs}_s3}"
@@ -340,9 +357,9 @@ if [[ "$SINCE" =~ ^([0-9]+)([hmd])$ ]]; then
 else
   # --grep was the only input that got quote-escaping; --since and --until land in the same
   # single-quoted SQL literal position and got none. Same escape, same reason.
-  WHERE="dt >= '${SINCE//\'/\'\'}'"
+  WHERE="dt >= '$(sql_quote "$SINCE")'"
 fi
-[[ -n "$UNTIL" ]] && WHERE="${WHERE} AND dt <= '${UNTIL//\'/\'\'}'"
+[[ -n "$UNTIL" ]] && WHERE="${WHERE} AND dt <= '$(sql_quote "$UNTIL")'"
 
 if (( RAW_ONLY )); then
   # Exclude Vector host-metrics and journald supervisor noise — leaves app logs.
@@ -353,7 +370,7 @@ if (( ${#GREPS[@]} > 0 )); then
   ORS=""
   for g in "${GREPS[@]}"; do
     # Escape single quotes in the grep term for SQL.
-    esc="${g//\'/\'\'}"
+    esc="$(sql_quote "$g")"
     ORS="${ORS}${ORS:+ OR }raw LIKE '%${esc}%'"
   done
   WHERE="${WHERE} AND (${ORS})"
