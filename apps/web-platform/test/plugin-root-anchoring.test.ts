@@ -687,10 +687,16 @@ const GATE_SCRIPT_RE = /^(?:redact-.+\.(?:sh|py)|digest-scrub\.sh)$/;
  *     -- 'plugins/soleur/skills/ * /SKILL.md'    (spaced: a literal glob would close this comment)
  */
 const EXPECTED_GATE_REFS: readonly string[] = [
+  "plugins/soleur/skills/agent-browser/SKILL.md -> redact-a11y-snapshot.py",
+  "plugins/soleur/skills/cf-token-scope/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/compound/SKILL.md -> token-efficiency-report.sh",
+  "plugins/soleur/skills/feature-video/SKILL.md -> redact-a11y-snapshot.py",
   "plugins/soleur/skills/incident/SKILL.md -> redact-sentinel.sh",
   "plugins/soleur/skills/legal-generate/SKILL.md -> redact-sentinel.sh",
   "plugins/soleur/skills/linear-fetch/SKILL.md -> redact-linear-urls.sh",
+  "plugins/soleur/skills/qa/SKILL.md -> redact-a11y-snapshot.py",
+  "plugins/soleur/skills/reproduce-bug/SKILL.md -> redact-a11y-snapshot.py",
+  "plugins/soleur/skills/test-browser/SKILL.md -> redact-a11y-snapshot.py",
 ];
 
 /**
@@ -705,9 +711,15 @@ const EXPECTED_GATE_REFS: readonly string[] = [
  * the other direction.
  */
 const SECRET_GATE_SKILLS: readonly string[] = [
+  "plugins/soleur/skills/agent-browser/SKILL.md",
+  "plugins/soleur/skills/cf-token-scope/SKILL.md",
+  "plugins/soleur/skills/feature-video/SKILL.md",
   "plugins/soleur/skills/incident/SKILL.md",
   "plugins/soleur/skills/legal-generate/SKILL.md",
   "plugins/soleur/skills/linear-fetch/SKILL.md",
+  "plugins/soleur/skills/qa/SKILL.md",
+  "plugins/soleur/skills/reproduce-bug/SKILL.md",
+  "plugins/soleur/skills/test-browser/SKILL.md",
 ];
 
 function escapeRe(s: string): string {
