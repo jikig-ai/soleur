@@ -25,6 +25,22 @@ suite="${2:-}"
 
 if [[ "$detect" == "success" && ( "$suite" == "success" || "$suite" == "skipped" ) ]]; then
   echo "tenant-integration gate: PASS (detect-changes=$detect, tenant-integration=$suite)"
+  # The two PASS arms are NOT the same evidence, and the check reports the same
+  # green for both. On the `skipped` arm nothing was verified against this tree
+  # — detect-changes emitted tenant=false, so the heavy dev-Supabase suite never
+  # ran and its first execution against these changes is the post-merge push to
+  # `main`. Say so, in the annotation and in the job summary, rather than
+  # letting a green check imply a suite that executed. (Widening the workflow's
+  # path filter is deliberately NOT the fix: a required check's anchors must
+  # cover the verified surface, not everything, or a heavy live-DB suite runs on
+  # every PR.)
+  if [[ "$suite" == "skipped" ]]; then
+    skipped_msg="tenant-integration PASSED on the SKIPPED arm: the heavy dev-Supabase isolation suite did NOT execute against this tree (detect-changes emitted tenant=false). Its first execution against these changes will therefore be post-merge, on main."
+    echo "::notice::$skipped_msg"
+    if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+      printf '%s\n' "- :warning: $skipped_msg" >>"$GITHUB_STEP_SUMMARY"
+    fi
+  fi
   exit 0
 fi
 

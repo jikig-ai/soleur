@@ -11,8 +11,9 @@
 # Doppler config. A runtime assertion confirms the config resolves to
 # environment=dev before any Supabase secret is touched, per
 # hr-dev-prd-distinct-supabase-projects. No untrusted github.event.*
-# inputs are interpolated in any run: block; only secrets.*, runner.os,
-# github.ref (concurrency group only), and hashFiles() are referenced.
+# inputs are interpolated in any run: block; only secrets.*, runner.os and
+# hashFiles() are referenced (the concurrency group is a ref-independent
+# constant since #7055 — see the block below).
 #
 # Triggers (#5585): the workflow ALWAYS triggers on push-to-main + every PR
 # (no workflow-level `paths:` filter). Path detection moved into the
@@ -49,7 +50,31 @@ concurrency:
   # cancelled mid-flight would conclude `cancelled` and fail the gate on the
   # head SHA until a re-run; keeping false avoids that edge at the cost of a
   # second full suite on rapid pushes to an isolation-touching PR (rare).
-  group: tenant-integration-${{ github.ref }}
+  #
+  # REF-INDEPENDENT ON PURPOSE (#7055). The group was
+  # `tenant-integration-${{ github.ref }}`, which serializes a ref against
+  # itself and nothing else — so two runs on DIFFERENT refs (another PR, or a
+  # PR and the push to main) execute the heavy suite SIMULTANEOUSLY against the
+  # one shared dev Supabase project. `byok-delegation.atomicity` › T5 opens ten
+  # concurrent transactions queueing on a single row's `FOR UPDATE` through a
+  # shared pooler; a second run doing the same thing at the same moment is
+  # exactly the condition under which one of the ten comes back with a pooler
+  # timeout or a serialization failure instead of the hourly refusal.
+  #
+  # THIS IS THE MOST PLAUSIBLE CAUSE, NOT A CONFIRMED ONE. The deciding datum —
+  # which error the one non-hourly call actually carried — lived in a CI run's
+  # output and is gone. The partitioned assertions in that suite are the
+  # instrument that captures it on the next occurrence; this line removes the
+  # leading environmental candidate at near-zero cost.
+  #
+  # THE COST, NAMED: a repo-wide group serializes tenant-integration across the
+  # whole repository, so concurrent PRs touching this surface QUEUE rather than
+  # overlap, and with cancel-in-progress: false a queue can form. The workflow
+  # is path-filtered (server/, migrations/, lib/supabase/, middleware.ts and the
+  # isolation tests), so the population that can queue is small. If the queueing
+  # proves worse than the flake, the revert is this one line — which is why it
+  # is preferred over provisioning a second Supabase project for the suite.
+  group: tenant-integration
   cancel-in-progress: false
 
 permissions:
