@@ -875,7 +875,7 @@ jobs:
     # (the runner prints `--- <label> ---` at each suite start and Actions timestamps every
     # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order.
     #
-    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 376; see the STALE stanza) — slowest-leg
+    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 389; see the STALE stanza) — slowest-leg
     # minutes, group total 35.25 min:
     #
     #   K=2 -> 21.91   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
@@ -892,9 +892,17 @@ jobs:
     # during this PR's own review, purely from ordinal position. Any change to the registered
     # suite set invalidates this table — RE-SIMULATE before touching K.
     #
-    # STALE BY ONE SUITE (2026-09-08, QA). This PR later added
+    # STALE BY FIFTEEN SUITES (re-measured 2026-09-10). The table above was simulated on a
+    # 374-suite order. `bash scripts/test-all.sh --enumerate scripts` on THIS commit returns
+    # 389 — this PR added 2 (ci-concurrency-key, ci-test-aggregator-diagnosis) and renamed 1;
+    # the remaining ~13 arrived on `main` between the simulation and this branch's rebase.
+    # THE COUNT IS A MOVING TARGET AND EVERY NUMBER BELOW IS KEYED TO A SUPERSEDED ORDER:
+    # re-enumerate before treating any K as chosen (#8006 carries this). The 2026-09-08 note
+    # this replaces read "the set 375 -> 376", which was true when written and is not now.
+    #
+    # The original single-suite note, retained because its mechanism still holds:
     # plugins/soleur/test/await-ci-ceiling-invariants.test.sh (renamed 2026-09-09 to
-    # workflow-run-deploy-invariants.test.sh, #5806), taking the set 375 -> 376. Measured
+    # workflow-run-deploy-invariants.test.sh, #5806) took the set 375 -> 376. Measured
     # effect: it registers at ordinal 189, so the 8.14-min floor suite (ordinal 148) keeps its leg,
     # but 187 of the 375 pre-existing suites move legs. The per-leg minutes above were NOT
     # re-simulated — the Phase 0 job log they came from is a pre-shard run of a job shape that no
@@ -927,7 +935,7 @@ jobs:
     #
     # The floor no K can beat is the longest single suite —
     # `tests/scripts/registry-gate-mutation-battery` at 8.14 min, 23% of the group on its own.
-    # K=3 landed 15.09 min on the 374-suite order this table was simulated over. On the 376-suite
+    # K=3 landed 15.09 min on the 374-suite order this table was simulated over. On the then-376-suite
     # order that actually ships it does NOT: re-simulated at review time, K=3 is 20.73 min and both
     # K=4 (18.02) and K=5 (10.77) beat it, so the "K=3 is the optimum" conclusion above does not
     # hold for this tree and is retracted. K=3 remains SAFE (totality holds for any K, and the
@@ -949,8 +957,9 @@ jobs:
     # they were measured on different runs. This revision states the population instead of the
     # mechanism, so there is nothing left to retract.
     #
-    # MEASURED 2026-09-09 over 29 consecutive `main` push CI runs (2026-09-07T09:02Z ->
-    # 2026-09-09T14:22Z). "Group occupied at creation" = the predecessor run's `test` had not yet
+    # MEASURED 2026-09-09 over 29 consecutive `main` push CI runs (2026-09-07T09:02:01Z ->
+    # 2026-09-09T07:50:05Z, the committed TSV's true bounds; an earlier revision of this note
+    # labelled the upper bound 14:22Z, ~6.5h wider than the data it cites). "Group occupied at creation" = the predecessor run's `test` had not yet
     # completed when this run was created. Jobs with `runner_id: null` or zero steps are EXCLUDED
     # (they never acquired a runner, so they say nothing about availability). "Start spread" is
     # measured over the 23 jobs with NO `needs:` — a group release starts those simultaneously, so
@@ -1088,7 +1097,7 @@ jobs:
       # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
       # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
       # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
-      # all three legs would run all 376 suites and all report green. Guard 1 reads ci.yml's
+      # all three legs would run the whole group (389 suites at this commit) and all report green. Guard 1 reads ci.yml's
       # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
       SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:

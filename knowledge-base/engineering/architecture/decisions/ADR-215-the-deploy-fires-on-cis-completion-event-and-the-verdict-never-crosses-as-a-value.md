@@ -51,7 +51,7 @@ measured.
 
 ADR-212's `Named residual` called the concurrency queue "the dominant term". It
 is not, across the population. Measured over 29 consecutive `main` push runs
-(2026-09-07T09:02Z → 2026-09-09T14:22Z; raw `jobs.tsv` committed at
+(2026-09-07T09:02:01Z → 2026-09-09T07:50:05Z; raw `jobs.tsv` committed at
 `knowledge-base/project/specs/feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/measurement-jobs-2026-09-09.tsv`):
 
 | cohort | n | first-job delay | queue term | start spread (needs-less jobs) |
@@ -70,8 +70,16 @@ group was **empty**.
 > 35 published med 332s / max 1708s for the drained spread and a 20%/80% split.
 > Re-derived at 29 runs it is med 412s / max 1708s and 24%/76%. Every **maximum**
 > and the **entire occupied cohort** reproduce to the second; the medians and the
-> population do not, and the 6-run delta is not explained (paginated
-> double-counting was tested and excluded — zero duplicate run ids). The
+> population do not. The 6-run delta has a **candidate explanation, not a
+> confirmed one**: the two readings covered different windows. This table's
+> window was originally labelled as ending `2026-09-09T14:22Z`, but the committed
+> TSV's last run was created `2026-09-09T07:50:05Z` — the label was ~6.5h wider
+> than the data. Six additional runs in that 6.5h tail is a plausible rate
+> (~22/day against the window's ~14.5/day average) but is not established, and
+> the tail's runs are not in the committed file, so it cannot be settled from
+> what is here. Paginated double-counting was tested and excluded — zero
+> duplicate run ids. To settle it, re-run the command in `ci.yml`'s dispatch note
+> over the wider window and compare run-id sets. The
 > conclusions below are invariant across both readings, which is why they are
 > stated as cohort shape. **Do not cite a median from this ADR without re-running
 > the command in `ci.yml`'s dispatch note.**
