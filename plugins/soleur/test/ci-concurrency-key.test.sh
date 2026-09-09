@@ -83,6 +83,33 @@ def eval_span(body, event):
     holds = (event == lit) if op == "==" else (event != lit)
     return a if holds else other
 
+def cancel_for(expr, event):
+    """Evaluate `cancel-in-progress` to a BOOLEAN for one event.
+       Returns True/False, or None when the shape is not one we can evaluate —
+       which is itself a finding, never a silent pass."""
+    if expr is None:
+        return False                       # absent means false, per GitHub
+    b = " ".join(str(expr).split())
+    if b == "":
+        return False
+    if b.lower() in ("true", "false"):
+        return b.lower() == "true"
+    sp = spans(b)
+    if len(sp) != 1 or b.strip() != "${{%s}}" % sp[0] and b.strip() != "${{ %s }}" % sp[0].strip():
+        inner = sp[0] if sp else None
+    else:
+        inner = sp[0]
+    if inner is None:
+        return None
+    t = " ".join(inner.split())
+    m = re.match(r"^github\.event_name\s*(==|!=)\s*'([^']*)'$", t)
+    if m:
+        op, lit = m.groups()
+        return (event == lit) if op == "==" else (event != lit)
+    if t.lower() in ("true", "false"):
+        return t.lower() == "true"
+    return None
+
 def group_for(expr, event):
     """Substitute every ${{...}} span in the group with its evaluation."""
     out, last = [], 0
@@ -110,10 +137,21 @@ for jname, job in (doc.get("jobs") or {}).items():
     if isinstance(job, dict):
         add(jname, job.get("concurrency"))
 
+# EVERY EVENT THE WORKFLOW DECLARES, not the two that happened to be fixtured.
+# `cancel-in-progress` false and SUPERSEDED-impossible hold on merge_group and
+# workflow_dispatch for the same reason they hold on push, and a predicate that
+# only ever sees {push, pull_request} cannot tell a correct rule from one that
+# happens to agree on those two.
+on = doc.get("on", doc.get(True)) or {}
+declared = sorted(on.keys()) if isinstance(on, dict) else ([on] if isinstance(on, str) else list(on))
+EVENTS = [e for e in declared if isinstance(e, str)] or ["push", "pull_request"]
 for r in recs:
     r["group_push"] = group_for(r["group"], "push")
     r["group_pr"] = group_for(r["group"], "pull_request")
-print(json.dumps(recs))
+    r["groups"] = {e: group_for(r["group"], e) for e in EVENTS}
+    r["cancels"] = {e: cancel_for(r["cancel"], e) for e in EVENTS}
+out = {"recs": recs, "events": EVENTS}
+print(json.dumps(out))
 PY
 
 analyse() {  # $1 = workflow file -> JSON on stdout
@@ -165,7 +203,8 @@ check_file() {  # $1=file -> prints a violation summary, empty when clean
 import sys, subprocess, json
 wf, analyser = sys.argv[1], sys.argv[2]
 try:
-    recs = json.loads(subprocess.check_output([sys.executable, analyser, wf]))
+    _out = json.loads(subprocess.check_output([sys.executable, analyser, wf]))
+    recs, EVENTS = _out["recs"], _out["events"]
 except Exception as e:
     print("ANALYSER-FAILED: %s" % e); sys.exit(0)
 v = []
@@ -187,23 +226,41 @@ for r in wl:
     # keeps collapsing superseded PR runs. Per-SHA there would defeat it.
     if "github.ref" not in r["group_pr"]:
         v.append("P3 pull_request group is not github.ref-keyed: %r" % r["group_pr"])
-    # P4 — cancel-in-progress must remain CONDITIONAL on pull_request. Flipping
-    # it to unconditional true would cancel main runs, destroying the
-    # audit-trail property this change claims to preserve.
-    c = " ".join(r["cancel"].split())
-    if c in ("true", "True"):
-        v.append("P4 cancel-in-progress is unconditionally true — main runs would be cancelled")
-    elif "pull_request" not in c:
-        v.append("P4 cancel-in-progress is not conditioned on pull_request: %r" % c)
+    # P4 — cancel-in-progress EVALUATED PER EVENT, not pattern-matched.
+    # The previous form asked `"pull_request" not in c`, which is satisfied by
+    # `github.event_name != 'pull_request'` — the INVERSION, which cancels
+    # in-progress main runs (destroying the audit trail this change claims to
+    # preserve, and killing the deploy gate mid-flight) while still containing
+    # the substring. Substring containment is not a predicate about meaning.
+    for ev in EVENTS:
+        got = r["cancels"].get(ev)
+        want = (ev == "pull_request")
+        if got is None:
+            v.append("P4 cancel-in-progress could not be EVALUATED for %r: %r — an unevaluable "
+                     "condition must not read as compliant" % (ev, r["cancel"]))
+        elif got != want:
+            v.append("P4 cancel-in-progress evaluates to %s on %r, expected %s — %s"
+                     % (got, ev, want,
+                        "in-flight runs for a SHA already being gated would be cancelled"
+                        if got else "superseded PR runs would no longer collapse"))
 # P5 — SECOND-MEMBER ROW. No job-level mapping may re-introduce a ref-keyed
 # group; that would re-serialise main one level down while the workflow-level
 # key looks correct.
 for r in recs:
     if r["scope"] == "workflow":
         continue
-    if "github.ref" in r["group_push"]:
+    gp = r["group_push"]
+    if "github.ref" in gp:
         v.append("P5 job-level concurrency on %r is github.ref-keyed on push: %r"
-                 % (r["scope"], r["group_push"]))
+                 % (r["scope"], gp))
+    elif "github.sha" not in gp:
+        # A CONSTANT group serialises HARDER than a ref-keyed one — it collapses
+        # every branch into one queue, not just every push to a branch. Keying
+        # P5 on the literal `github.ref` let the worse defect through, including
+        # via the `concurrency: <string>` shorthand no fixture instantiated.
+        v.append("P5 job-level concurrency on %r does not vary per SHA on push (%r) — "
+                 "a group constant across SHAs re-serialises main one level down "
+                 "while the workflow-level key looks correct" % (r["scope"], gp))
 print("; ".join(v))
 PY
 }
@@ -291,7 +348,7 @@ $WRITE"
 #     assert that WITHOUT the P2 comparison it looks clean.
 _ha=$(python3 - "$CI_YML" "$ANALYSER" <<'PY'
 import sys, subprocess, json
-recs = json.loads(subprocess.check_output([sys.executable, sys.argv[2], sys.argv[1]]))
+recs = json.loads(subprocess.check_output([sys.executable, sys.argv[2], sys.argv[1]]))["recs"]
 # The "guard with its comparison deleted": report nothing but the count.
 print("" if recs else "no mappings")
 PY
@@ -324,17 +381,60 @@ if [ -z "$_hb" ]; then pass; else
   fail "Hb MUST-PASS: a semantically identical, reordered/reflowed ternary was rejected: $_hb"
 fi
 
+# ── Mutants 6-8 and the must-PASS direction (added at review) ────────────────
+# Each of these SURVIVED the original battery. They are the defects the guard
+# most needed to catch, and the shapes the fixtures never instantiated.
+mutate_file "6 cancel-in-progress is INVERTED (main runs get cancelled)" '
+import os
+s=open(os.environ["IN"]).read()
+open(os.environ["OUT"],"w").write(s.replace(
+  "cancel-in-progress: ${{ github.event_name == \x27pull_request\x27 }}",
+  "cancel-in-progress: ${{ github.event_name != \x27pull_request\x27 }}",1))
+'
+mutate_file "7 a job-level CONSTANT group (serialises harder than github.ref)" '
+import os
+s=open(os.environ["IN"]).read()
+open(os.environ["OUT"],"w").write(s.replace(
+  "  test-bun:",
+  "  test-bun:\n    concurrency:\n      group: legacy-shared-lock\n      cancel-in-progress: false",1))
+'
+mutate_file "8 a job-level constant group via the concurrency-as-a-plain-string shorthand" '
+import os
+s=open(os.environ["IN"]).read()
+open(os.environ["OUT"],"w").write(s.replace(
+  "  test-bun:",
+  "  test-bun:\n    concurrency: legacy-${{ github.workflow }}",1))
+'
+# MUST-PASS (fixture DIRECTION). Every other row in this suite is must-TRIP, so
+# the guard was free to become arbitrarily more aggressive without any row
+# noticing — and P5 keying on the literal `github.ref` was one edit away from
+# rejecting a legitimate per-SHA job-level group.
+_okjob="$SANDBOX/ok-jobgroup.yml"
+python3 - "$CI_YML" "$_okjob" <<'PYOK'
+import sys
+s=open(sys.argv[1]).read()
+assert "  e2e:" in s
+open(sys.argv[2],"w").write(s.replace(
+  "  e2e:",
+  "  e2e:\n    concurrency:\n      group: e2e-${{ github.sha }}\n      cancel-in-progress: false",1))
+PYOK
+_okout=$(check_file "$_okjob")
+if [ -z "$_okout" ]; then pass; else
+  fail "MUST-PASS: a job-level concurrency group keyed per-SHA was flagged: $_okout — that is a LEGITIMATE way to serialise one job without re-serialising main, and rejecting it reds a correct tree"
+fi
+
 # ── Verdict ──────────────────────────────────────────────────────────────────
 TOTAL=$((passes + fails))
 # DERIVED: 1 instrument self-test + 1 analyser self-test + 1 control
-#        + 5 mutants + 2 harness rows = 10
-MIN_ROWS=10
+#        + 8 mutants + 2 harness rows + 1 must-PASS (job-level per-SHA group) = 14
+#        Mutants 6-8 were added at review: each SURVIVED the original battery.
+MIN_ROWS=14
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-if [ "$MUT_TOTAL" -lt 5 ]; then
-  printf 'FAIL: mutation floor — %d mutants executed, at least 5 required.\n' "$MUT_TOTAL" >&2
+if [ "$MUT_TOTAL" -lt 8 ]; then
+  printf 'FAIL: mutation floor — %d mutants executed, at least 8 required.\n' "$MUT_TOTAL" >&2
   exit 1
 fi
 
