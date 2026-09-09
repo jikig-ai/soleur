@@ -538,11 +538,57 @@ the pattern. Anyone re-running this check should read the hit, not count it.
 ### Phase 1 — Slice B: pin the Better Stack query destination
 
 1.1 In `scripts/betterstack-query.sh`, replace the shape-only `case` with authority extraction then
-an allowlist, mirroring `scripts/betterstack-ingest-probe.sh` line-for-line in structure: strip a
-path, then a query, then a fragment, then userinfo, then an explicit port, and match the **isolated
-host** against `*.betterstackdata.com`. Matching the whole value with a glob is the #7855 defect —
-a shell glob's `*` crosses `/` and `?`, which is how `https://evil.com/?x=.betterstackdata.com/` was
+an allowlist, following `scripts/betterstack-ingest-probe.sh`'s **structure**: strip a path, then a
+query, then a fragment, then refuse userinfo, then strip an explicit port, and match the **isolated
+host** against `*.betterstackdata.com`. Matching the whole value with a glob is the #7855 defect — a
+shell glob's `*` crosses `/` and `?`, which is how `https://evil.com/?x=.betterstackdata.com/` was
 accepted. Keep the existing shape arms as a first, cheaper refusal; the allowlist is the pin.
+
+Four things "mirror it line-for-line" would get wrong, all measured:
+
+- **Do not copy the scheme strip.** The probe opens with `_bs_rest="${URL#https://}"` and refuses if
+  unchanged, because its input is a URL. `BETTERSTACK_QUERY_HOST` is a bare host: copied verbatim
+  that arm refuses every legitimate value, and made optional it is dead code, because the
+  pre-existing shape arm already rejects `/`. **Begin at the path strip**, and say why the scheme arm
+  is absent.
+- **Case-fold before matching.** DNS is case-insensitive; a bash `case` glob is not, and `LC_ALL`
+  does not change that. `EU-CENTRAL-1A-CONNECT.BETTERSTACKDATA.COM` is a working value today and the
+  naive pin refuses it — breaking every consumer at once.
+- **Strip one trailing dot.** `eu-central-1a-connect.betterstackdata.com.` is a valid absolute FQDN,
+  passes every existing shape arm, resolves correctly, works today, and the naive pin refuses it.
+- **`export LC_ALL=C`.** The probe does this immediately after its prologue; the query script does
+  not. It does not affect the apex match, but the pre-existing `*[[:cntrl:]]*` arm's character-class
+  membership is locale-defined. The plan claims to follow this precedent; this is a line it omitted.
+
+These two counterexamples also falsify a claim Phase 0.2 made — that "the only value that breaks is a
+bare host outside the vendor apex". Two values inside the apex break it. Keep the canary; drop the
+narrowing.
+
+**State the residual honestly in the comment block.** `*.betterstackdata.com` accepts **every Better
+Stack tenant**, not our endpoint: the vendor mints per-team ClickHouse connection hosts under that
+apex, so anyone who can sign up gets a hostname the allowlist takes, and `curl -u` sends Basic auth
+preemptively on the first request with no challenge. The pin narrows the adversary set from *anyone*
+to *any Better Stack customer* — it does not close it. ADR-052's caution that a hostname pin is not
+automatically a boundary is cited in Research Insights and must reach the residual too. Both known
+live values end `-connect.betterstackdata.com`, so a tighter `*-connect.betterstackdata.com` — or a
+`readonly` two-value equality — is available if the tighter pin is wanted; choose deliberately.
+
+1.1b **The pinned destination is not the only destination-shaped input in the request.** `run_sql`'s
+callers interpolate `BS_TABLE` and `BS_TABLE_S3` — both env-settable *and* settable via `--table` /
+`--table-s3` — unquoted into ClickHouse's `remote(...)` and `s3Cluster(primary, ...)` table
+functions, whose leading argument positions are an address expression and a URL respectively. The
+flag loop that reads them runs **below** the host `case`, so nothing validates them at any point, and
+the same actor the host pin defends against sets them in the same breath. Related: `--grep` is the
+only input that gets SQL quote-escaping (`esc="${g//\'/\'\'}"`); `--since`, `--until` and `--limit`
+interpolate raw.
+
+The credential does not travel via `remote()`, and Better Stack's server-side handling of these
+functions is unverified here — so this is not asserted as an exploit. But "the destination is pinned"
+is slice B's headline claim, and there is an unvalidated destination-shaped argument in every mode-2
+request. Validate `BS_TABLE` and `BS_TABLE_S3` against `^[A-Za-z0-9_]+$` beside the host check,
+require `--limit` to be numeric, and escape `--since` / `--until`. If any of that is deferred, say so
+in Non-Goals with the reason, the way `BETTERSTACK_QUERY_SH` is — do not leave the headline claim
+broader than what ships.
 
 1.2 Rewrite the comment block above it so it states the pin that now exists rather than the residual
 that no longer does, and so it names the sanctioned way for a test to exercise the egress path
@@ -600,11 +646,60 @@ construction. Three deliberate deviations from the emitted text:
   (the linter exits 0) passes over this defect** — which is precisely why the plan states it rather
   than relying on the gate.
 
-  Rule: the seven community scripts get the conditional arm (each gates on an env credential its own
-  `check_creds` already requires, so it cannot fail open there, and a founder running `bash -x` with
-  no token set keeps full tracing). The eight operator scripts get the unconditional arm. The
-  `read -rs` gap in `ACQUIRES` is filed separately — AC5 forbids touching the classifier in this PR.
-- **Emit the refusal on stdout, not stderr.** The linter's suggestion string uses `>&2`, but
+  **The rule, and the axis it is actually drawn on.** A draft wrote "the seven community scripts get
+  the conditional arm, the eight operator scripts get the unconditional one" — deriving a rule from
+  one measured counterexample. Security review found three more instances of the identical defect,
+  all inside the "safe" seven:
+
+  `bsky-setup.sh` › `cmd_verify`, `linkedin-setup.sh` › `cmd_verify` and `x-setup.sh` › `cmd_verify`
+  each do `set -a; source "$env_file"; set +a` — they load the founder's credentials from the repo's
+  `.env` **at runtime, after the prologue**. So `${BSKY_APP_PASSWORD:+x}` and friends are empty at
+  guard time, the arm opens, and `bash -x bsky-setup.sh verify` traces the live credential. It is
+  **worse** than the `provision-doppler.sh` case: `source` under xtrace echoes *every* assignment in
+  the file, so the leak is the whole `.env`, not the one guarded token.
+
+  So the axis is not customer-versus-operator. It is: **is every credential this file handles bound
+  before the prologue runs?** Answer it per file, by reading the acquisition site.
+
+  - **Conditional arm — 4 files:** `bsky-community.sh`, `discord-community.sh`,
+    `linkedin-community.sh`, `x-community.sh`. Each gates on an env credential its own `check_creds`
+    requires before use, so the guard cannot be empty when the credential is live, and a founder
+    running `bash -x` with no token set keeps full tracing.
+  - **Unconditional arm — 11 files:** the eight operator scripts **plus** `bsky-setup.sh`,
+    `linkedin-setup.sh` and `x-setup.sh`. (Re-asserting the guard immediately after `set +a` is the
+    alternative; the unconditional arm is simpler and these three are setup flows a founder is
+    unlikely to be tracing for unrelated reasons.)
+
+  Three further runtime-acquired credentials sit inside the conditional four and are covered only by
+  coincidence — `linkedin-setup.sh` › `cmd_generate_token` reads an OAuth code with `read -rp` and
+  mints a 60-day token; `bsky-community.sh` › `authenticate` derives `ACCESS_JWT` from a response
+  body. They happen to be on paths that separately require `LINKEDIN_CLIENT_SECRET` /
+  `BSKY_APP_PASSWORD`. That is a coincidence, not a designed invariant: state the property per file
+  rather than relying on it.
+
+  The `read -rs` gap in the linter's `ACQUIRES` set — which is why it offers a conditional arm for
+  `provision-doppler.sh` at all, and why it cannot see the `source` cases either — is filed
+  separately; AC5 forbids touching the classifier in this PR.
+- **Also unset the environment that subverts TLS itself.** `--disable` closes `~/.curlrc` and
+  `--noproxy '*'` closes the proxy variables; **neither touches the trust store or the session-key
+  log.** `CURL_CA_BUNDLE=/tmp/attacker-ca.pem` gives a clean MITM of the founder's platform tokens
+  and of `SUPABASE_SERVICE_ROLE_KEY` for `soleur/prd` with `--disable`, `--noproxy` and the xtrace
+  refusal all intact; `SSLKEYLOGFILE` gives passive decryption with no MITM at all. Measured: **none
+  of the fifteen unsets any of these.** `scripts/betterstack-query.sh` already carries the line, and
+  its own header explains why — it calls out as an asymmetry that the line "lived only in
+  `zot-inventory.sh` while the higher-value credential went without". Shipping slice A without it
+  reproduces that asymmetry on the one surface where the environment belongs to someone else, which
+  is this plan's whole declared threat model. Add to each of the fifteen, matching the existing line:
+
+  ```bash
+  unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+        HOSTALIASES LOCALDOMAIN RES_OPTIONS
+  ```
+
+  One line per file, in files this PR already opens. Not deferrable: `--disable --noproxy '*'`
+  without it is a confinement that announces itself and leaves the easier vector open.
+
+- **Emit the refusal on stdout, not stderr — but decide it per STREAM CONTRACT, not per population.** The linter's suggestion string uses `>&2`, but
   `knowledge-base/project/constitution.md` › Code Style › Always requires operator-protection signals
   on stdout: agent runtimes surface stdout and swallow stderr, and the gdpr-gate banner is the cited
   reference implementation. A security refusal the harness swallows leaves the user with `exit 78`
@@ -613,6 +708,23 @@ construction. Three deliberate deviations from the emitted text:
   reasoning:** a synthesized fixture carrying the canonical `case "$-" in *x*)` block with the
   `printf` on stdout was scanned and returned `OK: 1 scanned file(s), 0 baselined (A/B/C), 0 baselined
   (D)`. Rule A matches the refusal's shape, not its stream.
+
+  **But stdout is not free on every script, and the discriminator the policy needs is whether that
+  script's stdout is a DATA channel.** Three of the fifteen publish structured stdout that a
+  documented consumer parses: `flag-list/scripts/list.sh` emits a `--json` array (field list in
+  `flag-list/SKILL.md` › Procedure) and a TSV render; `trigger-cron/scripts/trigger.sh` prints
+  `HTTP <code>` then the response body, and `trigger-cron/SKILL.md` › the preflight block
+  grep-parses `SOLEUR_TRIGGER_CRON_HALT reason=…` markers on stdout; `cf-token-scope.sh` prints
+  `PASS: …` verdict lines. A bare `[FATAL] refusing to trace…` on those channels is loud only if the
+  consumer checks the exit code — and in `list.sh | consumer` the exit code belongs to the consumer,
+  so the refusal is read as a row.
+
+  So: emit each refusal on stdout **in that module's existing marker shape** where one exists
+  (`SOLEUR_TRIGGER_CRON_HALT reason=xtrace-credential-bound`), and add the acceptance criterion that
+  the refusal is not parseable as a data row by that module's own documented consumer. Decide
+  `betterstack-query.sh` separately and deliberately: its stdout is unambiguously data
+  (`FORMAT JSONEachRow`), so its allowlist refusal stays on stderr — which is a choice this plan is
+  now making rather than inheriting.
 - **Rewrite the message for the seven customer-facing scripts, from one literal template.** The
   canonical text says "this probe handles live credentials" and cites an internal issue number; the
   user invoked `/soleur:community`, not a probe. `knowledge-base/marketing/brand-guide.md` › Voice ›
@@ -670,11 +782,17 @@ takes it for a destination check. (Placement would also have been wrong —
 `readonly NAME=value` above the refusal counts as a prologue command against `PROLOGUE_MAX_CMDS = 0`
 and reddens Rule A.)
 
-2.3b The manual-fallback block in the same script `echo`s copy-paste instructions containing an
-unconfined `curl -sS -X POST … -H 'Authorization: Bearer $DOPPLER_TOKEN'`. These are strings, so the
-linter never sees them and the census is unaffected — but a script that *teaches* the unconfined form
-directly undercuts the decision ADR-214 records. Update those printed recipes to carry
-`--disable --noproxy '*'` too.
+2.3b **Three** scripts print copy-paste `curl` recipes carrying a live bearer token with no
+`--disable --noproxy '*'`. These are strings, so the linter never sees them and the census is
+unaffected — but a script that *teaches* the unconfined form directly undercuts the decision ADR-214
+records. Update all three printed recipes:
+
+- `provision-doppler.sh` › the manual-fallback block.
+- `cf-token-scope.sh` › the `--dry-run` block (two printed `curl` lines).
+- `trigger-cron/scripts/trigger.sh` › the `--dry-run` block (bearer on the following printed line).
+
+A draft named only the first. The argument that justifies fixing it applies unchanged to the other
+two, and both are files this PR already opens.
 
 2.4 Draw both baselines down **by hand**, removing exactly the 15 lines from
 `scripts/lint-shell-trace-credential-refusal-d.baseline.txt` (82 → 67) and the same 15 from
