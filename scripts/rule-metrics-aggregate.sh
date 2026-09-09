@@ -341,9 +341,16 @@ report=$(jq -n \
         # context-reviewed-*: the rule body lives in the helper header + the
         # hooks README, and the always-loaded B_ALWAYS budget has no room for a
         # new core tag. The reason rides IN the rule_id
-        # (hook-input-nonstring / -unparseable / -separator / -jq_missing /
-        # -internal) because this aggregator keys every counter on rule_id and
-        # never reads .kind — same convention as cost-of-filing-* above.
+        # (hook-input-nonstring / -empty / -baddoc / -nonobject / -separator /
+        # -jq_missing / -internal) because this aggregator keys every counter on
+        # rule_id and never reads .kind — same convention as cost-of-filing-*.
+        #
+        # The selectors below match by PREFIX, so #7275 splitting -unparseable
+        # into -empty / -baddoc / -nonobject needed no change here; this roster
+        # is documentation and is listed for the reader, not read by the code.
+        # `internal:rc3` and `internal:count` reach this file as -internal:
+        # hook_input_report keys on ${reason%%:*}, so the detail never becomes
+        # an aggregation key.
         #
         # LOAD-BEARING PAIR: this exclusion alone would DELETE the only surface
         # a counts-only rule_id has (orphan_rule_ids). summary.hook_input_fault_count
