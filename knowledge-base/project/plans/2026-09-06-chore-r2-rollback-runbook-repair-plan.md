@@ -2,7 +2,7 @@
 title: "chore(infra): the documented Terraform state rollback cannot run — repair the runbook, ADR-006, and the Art. 30 register"
 date: 2026-09-06
 slug: chore-r2-rollback-runbook-repair
-branch: feat-one-shot-7836-r2-rollback-runbook
+branch: feat-one-shot-7836-r2-no-object-versioning-rollback
 issue: 7836
 closes: [7836]
 lane: cross-domain
@@ -46,6 +46,26 @@ Credentials `doppler -p soleur -c prd_terraform`, endpoint
 
 The control is the finding: this is **not** an auth or endpoint problem a wider token would fix.
 The 2026-09-04 measurement recorded in #7836 still holds, re-measured rather than trusted.
+
+### Measurement M5 — re-probed again 2026-09-09 [Updated 2026-09-09]
+
+Phase 0 of this plan was executed before any edit, on the branch that carries it. Same credentials,
+same endpoint, exit codes captured on their own line rather than through a pipe:
+
+- **control** `s3api list-objects-v2 --bucket soleur-terraform-state` → **rc=0**, the same six objects
+- `s3api list-object-versions --bucket soleur-terraform-state` → **rc=254**,
+  `An error occurred (NotImplemented) … ListObjectVersions not implemented`
+- `s3api get-bucket-versioning --bucket soleur-terraform-state` → **rc=254**, `AccessDenied`
+  (token scope — not decisive alone, which is why the control is the finding)
+- `s3api head-object --key github/terraform.tfstate` → **rc=0**
+
+Cloudflare has **not** shipped R2 object versioning in the interval. The plan keeps the shape it was
+written in: make the docs true. Had this returned rc=0, the plan would have changed shape instead.
+
+The bucket also holds **no `.backup` objects** — the S3 backend does not write one server-side — so
+there is no second recovery substrate hiding behind the versioning gap. Six objects, six live
+current-state files, no history of any kind.
+
 
 ### The blast radius is narrower than the issue claims
 
@@ -91,6 +111,60 @@ Two lower-stakes surfaces carry an unmeetable criterion:
 `knowledge-base/project/specs/feat-terraform-state-mgmt/spec.md` has an open
 `- [ ] R2 bucket versioning is enabled`, and its `tasks.md` carries a **checked**
 `- [x] 1.3 Enable bucket versioning — deferred (R2 versioning API TBD)`.
+
+## Alternative Approaches Considered
+
+[Updated 2026-09-09] #7836's "Done when" offers two non-exclusive options and leaves the choice open.
+That choice is a technical fork, decided and justified here rather than escalated
+(`hr-technical-fork-is-not-an-operator-question`). The first draft of this plan acted on Option 2
+without recording why the others were rejected; this section closes that gap.
+
+| Option | Verdict | Why |
+|---|---|---|
+| **1a — enable R2 bucket versioning** | **Refuted by measurement** | M5, re-probed 2026-09-09: `list-object-versions` → rc=254 `NotImplemented` while the control `list-objects-v2` → rc=0 on the same credential and endpoint. There is no toggle to flip. This is not a token-scope problem a wider PAT would fix. |
+| **1b — scheduled copy to a *new* versioned store** | **Rejected on blast radius** | `terraform.tfstate` holds provider credentials in plaintext. Copying it to a second store multiplies the secret-bearing surface by one whole vendor: a new credential, a new egress path, a new encryption-posture obligation, and a new Art. 32 TOM to defend — to fix a documentation defect. The register entry this PR *narrows* would have to be widened instead. |
+| **1c — scheduled copy to a *timestamped key in the same bucket*** | **Right idea, wrong trigger — deferred, tracked** | Strictly better than 1b: same store, same credential, same posture, no new vendor; versioning emulated in key-space (`github/history/terraform.tfstate.<epoch>`). But a **scheduled** copy recovers only to the last cron tick, and the failure mode is *"an apply just wrote bad state"* — so the damage window is the cron interval, by construction. The gesture that actually defends this failure is a **pre-apply** snapshot, which is exact. |
+| **2 — make the docs true** | **Adopted — this PR** | Discharges the issue's "Done when" on its own, removes an active incident-time hazard immediately, and carries zero apply risk. |
+
+### Why the capability work is not folded into this PR
+
+The correct capability-restoring design is not the issue's "scheduled copy" but an **automatic
+pre-apply snapshot** wired into the apply workflows (`apply-github-infra.yml`,
+`apply-web-platform-infra.yml`, `apply-sentry-infra.yml`, `apply-deploy-pipeline-fix.yml`) plus the
+manual runbook path. That is real infrastructure work with its own design surface: a key scheme, a
+retention/lifecycle policy (timestamped keys grow without bound), a restore procedure, an IaC routing
+decision per `hr-all-infrastructure-provisioning-servers`, and its own Encryption Posture and
+Observability sections.
+
+Three reasons it ships separately rather than here:
+
+1. **It cannot be validated without the act this PR declares unrecoverable.** Proving a restore path
+   works means writing state back to a live root. Today that is the one-way door the whole issue is
+   about. The honest runbook is the *precondition* for building the snapshot safely, not a companion
+   to it.
+2. **Holding the correction behind it keeps the impossible command in the runbook** for the entire
+   duration of the infra work — during which the runbook may actually be read.
+3. **The two changes share no file and no failure mode.** This PR edits five markdown documents. That
+   one edits workflows and adds a retention policy.
+
+Triaged inline per `wg-defer-only-after-inline-triage`; filed per `wg-when-deferring-a-capability-create-a`
+and asserted by **AC14**.
+
+**Re-evaluation criteria for the deferred issue** — act on whichever fires first:
+
+- Cloudflare ships R2 object versioning (re-run M5's probe pair; the control call is the tell), which
+  collapses the work to enabling a flag; **or**
+- any Terraform root gains an unattended auto-apply path where no operator is present to take a
+  manual `terraform state pull` first; **or**
+- a state-corruption incident actually occurs on any root — at which point the manual gesture has
+  demonstrably not been enough.
+
+### What this PR does *not* claim
+
+It does not claim the durability gap is closed. It claims the **documentation now matches the
+capability**, and that the one gesture which works — an operator-taken `terraform state pull`
+snapshot before a risky apply — is written down accurately. ADR-006's amendment note must say the
+gap is open and tracked, not that a snapshot is equivalent to point-in-time recovery.
 
 ## User-Brand Impact
 
@@ -170,8 +244,16 @@ cross-reference must point at the corrected Phase 5 gesture.
 **AC10 — no live cross-reference is left dangling.** After the edit, every document citing
 `infra/github/README.md` Phase 5 or ADR-006 for a rollback/versioning claim cites text that still
 makes that claim. Verify by re-running the sweep:
-`git grep -n 'bucket versioning\|list-object-versions\|versionId' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/brainstorms' ':!**/archive/**'`
+`git grep -in 'versioning\|list-object-versions\|versionId' -- ':!knowledge-base/project/plans' ':!knowledge-base/project/brainstorms' ':!**/archive/**' ':!node_modules'`
 and confirming every survivor is either corrected or a deliberate carve-out.
+
+> **[Updated 2026-09-09] The pattern was widened from `bucket versioning` to a case-insensitive bare
+> `versioning`, because the narrow form could not see the single most important surface in this PR.**
+> PA12 §(g)(4) reads *"**R2 backend versioning** + TLS"* — the phrase is `R2 backend versioning`, not
+> `bucket versioning`, so the original AC10 sweep returns zero hits on it whether or not AC9 was done
+> correctly. A residual sweep that structurally cannot match the surface it is meant to guard is a
+> sweep that certifies the wrong property. Verified: `grep -c 'bucket versioning'` against the
+> register's PA12 §(g) cell → `0`, while the false claim is plainly present.
 
 **AC11 — the two stale spec criteria are closed out.**
 `specs/feat-terraform-state-mgmt/spec.md`'s open `- [ ] R2 bucket versioning is enabled` (an AC that
@@ -184,6 +266,14 @@ unrunnable rollback runbook. Exactly one does. The PR body states the measured s
 reader does not go looking for four more.
 
 **AC13 — `markdownlint` passes** on every edited file.
+
+**AC14 — the deferred capability has a tracking issue, not a promise. [Updated 2026-09-09]**
+The pre-apply state-snapshot capability rejected for *this* PR in
+`## Alternative Approaches Considered` is filed as its own issue before this PR is marked ready,
+carrying: what was deferred, why it is not folded in here, the named re-evaluation criteria, and a
+milestone. The ADR-006 amendment note references it, so the record says *"this gap is open and
+tracked"* rather than implying the operator snapshot is the permanent end state.
+A deferral without a tracking issue is invisible (`wg-when-deferring-a-capability-create-a`).
 
 ## Observability
 
@@ -278,9 +368,13 @@ operator was offered a `/soleur:gdpr-gate` run on this surface and declined; rec
 
 ## Implementation Phases
 
-**Phase 0 — re-probe.** Re-run M4 with its control before editing a word. The issue records a
-measurement, not a permanent vendor fact; if Cloudflare has shipped versioning since, the whole plan
-changes shape from "make the docs true" to "make the claim true."
+**Phase 0 — re-probe. [Updated 2026-09-09: DONE — see M5.]** Re-run M4 with its control before
+editing a word. The issue records a measurement, not a permanent vendor fact; if Cloudflare has
+shipped versioning since, the whole plan changes shape from "make the docs true" to "make the claim
+true." Executed 2026-09-09: `list-object-versions` rc=254 `NotImplemented`, control
+`list-objects-v2` rc=0. The gap persists; the plan keeps its shape. **/work must not re-derive this
+as settled — re-run the probe pair once more at implementation time, since the correction being
+written is a factual claim about a live vendor surface.**
 
 **Phase 1 — ADR-006.** Context, Decision, Consequences, dated amendment note. The ADR is the origin
 of the claim, so it is corrected first and the downstream documents cite it.
@@ -324,3 +418,18 @@ after the two documents it cites are already correct.
   than fixing it.
 - **`terraform state push` is documented, never exercised.** Running it against a live root is the
   destructive act this very amendment says is unrecoverable.
+
+- **A residual sweep is only as wide as its narrowest phrasing assumption. [Updated 2026-09-09]**
+  AC10's original pattern was `bucket versioning\|list-object-versions\|versionId`. The single most
+  load-bearing surface in this PR — the GDPR Art. 32 TOM at Art. 30 register PA12 §(g)(4) — reads
+  *"R2 **backend** versioning + TLS"*. The narrow pattern cannot match it, so the sweep would have
+  returned a clean zero whether or not that correction landed. When a sweep guards a *claim* rather
+  than a *token*, enumerate the phrasings the claim actually appears in before freezing the pattern:
+  the same false statement was written three different ways across three documents
+  (`with bucket versioning`, `State loss eliminated via bucket versioning`, `R2 backend versioning`).
+
+- **The fork in this issue is not "docs vs capability" — it is "which trigger".** #7836 proposes a
+  *scheduled* copy as the capability option. A schedule cannot defend the failure mode, because the
+  damage is written by an apply and the recovery point is the last tick. Reading the proposed
+  mechanism as a property (*"a bad apply is undoable"*) rather than adopting it as written is what
+  turns option 1 from a cron job into a pre-apply hook — and what makes it correctly a separate PR.
