@@ -216,3 +216,85 @@ Full inventory (30 items) is in the PR discussion; the ones with a prevention ve
 - **Stopped mid-pipeline after review**, listing remaining steps instead of executing them (user:
   "why did you stop?"). Recovery: resumed immediately. **Prevention:** an exit summary from a child
   skill is a continuation gate, not a turn boundary.
+
+## Addendum — 2026-09-09: what happened AFTER this learning was written
+
+The section above was written at QA time. Everything below happened afterwards, on the same PR,
+and it changes the conclusion. **I wrote "on a fix PR, the verification code is where the defect
+class recurs" and then reproduced that class ten more times in the same branch.**
+
+### The review panel found six P1s — five PR-introduced, three inside guards written that day
+
+| Finding | Evidence |
+| --- | --- |
+| `SCRIPTS_SHARD` is a job-level env, so four sandbox-spawning suites inherited it and hit the group-scoping refusal | measured: 23/0 green unset, **8/15 failed** with `SCRIPTS_SHARD=1/3` |
+| `i3`/`i4` grepped an UN-STRIPPED job block, so deleting the **entire** early-warning block left the guard green | measured: **11/11 green** with the mechanism gone |
+| `i3` read the derivation's SHAPE, never its magnitude — `CEILING_S * 99 / 10` made the warning unreachable | measured: **11/11 green** |
+| Guard 1 read `ci.yml`'s matrix VALUES and never the wire delivering them | measured: `SCRIPTS_SHARD: "1/3"` ran 250 of 376 registrations NOWHERE at **15/15 green** |
+| The ceiling check sat below both `gh api` failure arms' `continue`, so a degraded token ran to the silent hard-kill | code trace; the comment above it claimed the opposite |
+| A ceiling breach told the operator "CI did not go green" | false on a live run — CI concluded success 12 min after the gate gave up |
+
+The generalisable one is the third and fourth together: **a guard can pin a construct's SHAPE, its
+LOCATION, or its EXISTENCE and still not pin the PROPERTY.** `i3` proved the soft ceiling was
+*derived*; it never proved the derived value was *in range*. Guard 1 proved the matrix *declared*
+three legs; it never proved the legs *received* them. Both read as coverage.
+
+### Two claims I "corrected" during the work phase were corrections in the wrong direction
+
+- **The dispatch mechanism.** I replaced "runner-pool contention" with "ci.yml's own concurrency
+  group serialises each push", wrote it into an accepted ADR, and used it to justify K=3. Measured
+  on run 34214304922: jobs with **no `needs`** — which a concurrency gate releases together — start
+  at +1s, +441s, +621s, +1346s, +1397s, a **23-minute spread inside one run**, with the group EMPTY
+  (predecessor finished 12h10m earlier). A queue cannot produce that. The argument I withdrew was
+  the right one.
+- **The sizing claim.** "p100 57.4m, so 3600s clears it by 2.6m." Re-measured over 25 runs: p50
+  35.4m, p90 54.0m, **p100 69.3m** — and a healthy build fail-closed at that tail *during the
+  review*. The raise clears the p50/p90 mass and does not clear the tail.
+
+Both were verified at the time against too narrow a sample. **A correction is a new claim, and it
+inherits none of the credibility of the error it replaces.**
+
+### CI then found four more that no local instrument could
+
+1. **A `pipefail` topology I introduced while fixing a comment-satisfiability bug.** Adding a
+   `grep -v '#'` stage made `job_block` a pipeline; the predicates piped it into `grep -q`, which
+   exits on first match, SIGPIPEs the upstream grep, and `pipefail` propagates 141 — so the `if`
+   took the ELSE branch on a MATCH. The panel had flagged this exact shape as **P3** ("cannot flake
+   today — 14KB against a 64KiB buffer"), correctly for the code as it then stood. I deferred it,
+   then changed the topology three commits later. **Triaging a topology bug by its current blast
+   radius is how a latent race becomes a deterministic failure.**
+2. **Two MEMBERSHIP failures.** `main` strengthened two guards (#7894, #7934) while this branch
+   added new members to the populations they enumerate. Neither side is wrong; the collision exists
+   only in the merge, and is structurally invisible on either branch alone.
+3. **A fixture that could not reach its target.** ROW7 strips the shard filter from `skip_suite`,
+   but under `CI=1` a relevance decline is unreachable, so `skip_suite` is never called. The row was
+   mutating a function nobody invokes — **vacuous in exactly the environment it ships into**, while
+   reporting 13/13 locally.
+
+### And a sibling claimed the ADR ordinal mid-flight
+
+`ADR-208` landed on `main` from another PR while this branch held it. `adr-ordinals` is **not a
+required check**, so auto-merge fires on the green required set and the collision surfaces as RED on
+`main` after the squash. The only thing that caught it was the post-sync `check-adr-ordinals` re-run
+that ship Phase 7 prescribes. Renumbered to **212** — 209, 210 and 211 were all claimed on other
+origin refs — resolved by `max + 1` over every `origin/*` ref after a fresh fetch, never a presence
+check. The reference sweep had to be SCOPED: `ADR-208` now has two referents, and a blanket `sed`
+would have rewritten ~13 of the sibling's citations across `apps/web-platform/**`.
+
+## Revised key insight
+
+The original insight stands and is too narrow. The sharper version:
+
+**Instruments have disjoint yields, and no single one dominates.** On this PR the seven-agent panel
+found 6 P1s; CI found 4 more that every local run reported green; the deterministic lints found 0
+(they were clean); and my own local runs were 5/5 green on code that failed deterministically on the
+runner. A review that runs only one instrument ships the rest.
+
+The cheapest instrument I was not using is **the environment axis**. Three of the four CI-only
+failures reproduce instantly under `CI=1` and are invisible under a bare run. Running each suite
+under `bare`, `CI=1`, and `SOLEUR_SUBAGENT=1` and treating any PASS-count delta as a finding costs
+seconds and would have caught them before the first push.
+
+**Prevention:** for any suite this repo ships, run it under every environment CI sets before
+claiming it green — and when a review flags a topology as harmless-today, fix the topology, because
+the next edit to it will be yours.
