@@ -31,6 +31,7 @@ The `knowledge-base/project/learnings/` directory contains documented solutions 
 ### Step 1: Extract Keywords from Feature Description
 
 From the feature/task description, identify:
+
 - **Module names**: e.g., "BriefSystem", "EmailProcessing", "payments"
 - **Technical terms**: e.g., "N+1", "caching", "authentication"
 - **Problem indicators**: e.g., "slow", "error", "timeout", "memory"
@@ -63,6 +64,7 @@ Grep: pattern="component:.*background_job" path=knowledge-base/project/learnings
 ```
 
 **Pattern construction tips:**
+
 - Use `|` for synonyms: `tags:.*(payment|billing|stripe|subscription)`
 - Include `title:` - often the most descriptive field
 - Use `-i=true` for case-insensitive matching
@@ -75,6 +77,7 @@ Grep: pattern="component:.*background_job" path=knowledge-base/project/learnings
 **If Grep returns >25 candidates:** Re-run with more specific patterns or combine with category narrowing.
 
 **If Grep returns <3 candidates:** Do a broader content search (not just frontmatter fields) as fallback:
+
 ```bash
 Grep: pattern="email" path=knowledge-base/project/learnings/ output_mode=files_with_matches -i=true
 ```
@@ -99,6 +102,7 @@ Read: [file_path] with limit:30
 ```
 
 Extract these fields from the YAML frontmatter:
+
 - **module**: Which module/system the solution applies to
 - **problem_type**: Category of issue (see schema below)
 - **component**: Technical component affected
@@ -112,23 +116,27 @@ Extract these fields from the YAML frontmatter:
 Match frontmatter fields against the feature/task description:
 
 **Strong matches (prioritize):**
+
 - `module` matches the feature's target module
 - `tags` contain keywords from the feature description
 - `symptoms` describe similar observable behaviors
 - `component` matches the technical area being touched
 
 **Moderate matches (include):**
+
 - `problem_type` is relevant (e.g., `performance_issue` for optimization work)
 - `root_cause` suggests a pattern that might apply
 - Related modules or components mentioned
 
 **Weak matches (skip):**
+
 - No overlapping tags, symptoms, or modules
 - Unrelated problem types
 
 ### Step 6: Full Read of Relevant Files
 
 Only for files that pass the filter (strong or moderate matches), read the complete document to extract:
+
 - The full problem description
 - The solution implemented
 - Prevention guidance
@@ -153,18 +161,21 @@ For each relevant document, return a summary in this format:
 Reference the [yaml-schema.md](../../skills/compound-capture/references/yaml-schema.md) for the complete schema. Key enum values:
 
 **problem_type values:**
+
 - build_error, test_failure, runtime_error, performance_issue
 - database_issue, security_issue, ui_bug, integration_issue
 - logic_error, developer_experience, workflow_issue
 - best_practice, documentation_gap
 
 **component values:**
+
 - rails_model, rails_controller, rails_view, service_object
 - background_job, database, frontend_stimulus, hotwire_turbo
 - email_processing, brief_system, assistant, authentication
 - payments, development_workflow, testing_framework, documentation, tooling
 
 **root_cause values:**
+
 - missing_association, missing_include, missing_index, wrong_api
 - scope_issue, thread_violation, async_timing, memory_leak
 - config_error, logic_error, test_isolation, missing_validation
@@ -172,6 +183,7 @@ Reference the [yaml-schema.md](../../skills/compound-capture/references/yaml-sch
 - missing_tooling, incomplete_setup
 
 **Category directories (mapped from problem_type):**
+
 - `knowledge-base/project/learnings/build-errors/`
 - `knowledge-base/project/learnings/test-failures/`
 - `knowledge-base/project/learnings/runtime-errors/`
@@ -225,6 +237,7 @@ Structure your findings as:
 ## Efficiency Guidelines
 
 **DO:**
+
 - Use Grep to pre-filter files BEFORE reading any content (critical for 100+ files)
 - Run multiple Grep calls in PARALLEL for different keywords
 - Include `title:` in Grep patterns - often the most descriptive field
@@ -242,6 +255,7 @@ Structure your findings as:
 - Verify with `ls -la` or `test -f` before asserting a learning file is absent — a grep/find miss can mean wrong scope (bare-repo path or worktree confusion), not absence
 
 **DON'T:**
+
 - Read frontmatter of ALL files (use Grep to pre-filter first)
 - Run Grep calls sequentially when they can be parallel
 - Use only exact keyword matches (include synonyms)
@@ -255,6 +269,7 @@ Structure your findings as:
 ## Integration Points
 
 This agent is designed to be invoked by:
+
 - `soleur:plan` skill - To inform planning with institutional knowledge
 - `/deepen-plan` - To add depth with relevant learnings
 - Manual invocation before starting work on a feature

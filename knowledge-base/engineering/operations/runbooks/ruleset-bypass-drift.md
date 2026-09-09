@@ -198,9 +198,11 @@ with no authorizing PR)
    rotate the org owner credentials (Settings → Organization → Owners).
 2. **Restore from Terraform:** the `.tf` is the source of truth. Re-apply it via
    the manual escape hatch (no destructive plan expected):
+
    ```bash
    gh workflow run apply-github-infra.yml -f reason='restore ruleset after unauthorized drift'
    ```
+
    Confirm the plan only re-adds the removed/known-good state before it applies
    (CODEOWNERS pins `/infra/github/` to `@deruelle`; a destructive plan also
    needs `[ack-destroy]` per `hr-menu-option-ack-not-prod-write-auth`).
@@ -244,10 +246,12 @@ The function mints an installation token via `mintInstallationToken`
 1. **Probe live state first** (read-only `gh api` above) — confirm the ruleset
    is actually healthy before touching App config.
 2. Confirm the App installation still has admin scope:
+
    ```bash
    gh api /orgs/jikig-ai/installations --jq \
      '.installations[] | select(.app_slug=="soleur-ai") | {id, repository_selection, permissions}'
    ```
+
    The `permissions` map MUST include `administration`. If absent, widen via
    Settings → Developer settings → GitHub Apps → `soleur-ai` → Permissions &
    events → Repository permissions → Administration: Read (the org owner must
@@ -285,4 +289,4 @@ ruleset — outward-facing and risky. Prefer the safe path:
 - `knowledge-base/engineering/operations/runbooks/skill-security-scan-required-check.md`
   — parent R15 runbook.
 - `knowledge-base/legal/compliance-posture.md` `#2719` row.
-- GitHub Rulesets API: https://docs.github.com/en/rest/repos/rules
+- GitHub Rulesets API: <https://docs.github.com/en/rest/repos/rules>

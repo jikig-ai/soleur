@@ -256,6 +256,7 @@ allow-rule permits under BOTH profiles (empirically, the real canonical argv pas
 the committed AND the pre-#5874 profile). The #5849 split is a property of the claude
 CLI's **nested-process structure**, not any bwrap-argv token, so no argv fidelity
 reproduces it. Therefore §2d splits into two argv-independent signals:
+
 1. **#5849 split-unshare discrimination** stays the already-shipped layer-B
    nested-unshare probe (`sandbox-canary-regression.test.sh`; `unshare --user
    --map-root-user unshare --mount --pid`) under both profiles. Unchanged; the only
@@ -314,6 +315,7 @@ two independent in-image captures (84 tokens, no `/etc/ssh`, full `--unshare-*`
 multiset, zero secrets/host data). Two headless-in-image fixes (the de-risk the
 ruling called for) were required and are the reason an off-image capture "worked"
 while the in-image one initially did not:
+
 1. **permissionMode `default`, not `bypassPermissions`.** `bypassPermissions` maps
    to `--dangerously-skip-permissions`, which `claude.exe` **refuses under root**
    ("cannot be used with root/sudo privileges") — and the in-image/CI capture runs
@@ -439,6 +441,7 @@ unenforced, and the ONLY signal one red job among a page of green (the #6454 inv
 shape). Phase-0 diagnosis + two composable fixes:
 
 **Phase-0 findings (in-session, no SSH).**
+
 - **Q1 ("state-file `.tag='latest'` aimed the remediation at a stale image") is SUPERSEDED, not a
   bug.** The #5955 amendment already resolves the redeploy target from `/health` `.version`
   (`apply-deploy-pipeline-fix.yml:631-643`); `CURRENT_TAG` (`.tag`, read at `:589`) feeds only the

@@ -22,6 +22,7 @@ Fix 5 added `validate_snowflake_id` calls to `cmd_list_channels` and `cmd_create
 ## Proposed Solutions
 
 ### Option A: Add validate_snowflake_id call (Recommended)
+
 - **Pros:** Completes Fix 5 coverage, prevents injection
 - **Cons:** None
 - **Effort:** Small (one line)

@@ -82,6 +82,7 @@ user — an invited member dispatching against a team workspace they belong to.
 ## Resolution
 
 PR-1 (#5435):
+
 1. Refactored the silent `resolveActiveWorkspaceIdWithMembership` into the explicit
    `resolveActiveWorkspace` (`{ok,workspaceId,resetFromClaim?}|{ok:false,db-error}`); the
    only `ok` returns are a membership-verified team id or the caller's own `userId` (TR1).

@@ -8,6 +8,7 @@ How to design MCP tools following prompt-native principles. Tools should be prim
 ## Tools Are Primitives, Not Workflows
 
 **Wrong approach:** Tools that encode business logic
+
 ```typescript
 tool("process_feedback", {
   feedback: z.string(),
@@ -23,6 +24,7 @@ tool("process_feedback", {
 ```
 
 **Right approach:** Primitives that enable any workflow
+
 ```typescript
 tool("store_item", {
   key: z.string(),
@@ -65,6 +67,7 @@ The prompt tells the agent *when* to use primitives. The tool just provides *cap
 Tools accept data. They don't accept decisions.
 
 **Wrong:** Tool accepts decisions
+
 ```typescript
 tool("format_content", {
   content: z.string(),
@@ -74,6 +77,7 @@ tool("format_content", {
 ```
 
 **Right:** Tool accepts data, agent decides format
+
 ```typescript
 tool("write_file", {
   path: z.string(),
@@ -81,6 +85,7 @@ tool("write_file", {
 }, ...)
 // Agent decides to write index.html with HTML content, or data.json with JSON
 ```
+
 </principle>
 
 <principle name="rich-outputs">
@@ -89,6 +94,7 @@ tool("write_file", {
 Return enough information for the agent to verify and iterate.
 
 **Wrong:** Minimal output
+
 ```typescript
 async ({ key }) => {
   await db.delete(key);
@@ -97,6 +103,7 @@ async ({ key }) => {
 ```
 
 **Right:** Rich output
+
 ```typescript
 async ({ key }) => {
   const existed = await db.has(key);
@@ -107,9 +114,11 @@ async ({ key }) => {
   return { text: `Deleted ${key}. ${await db.count()} items remaining.` };
 }
 ```
+
 </principle>
 
 <design_template>
+
 ## Tool Design Template
 
 ```typescript
@@ -210,6 +219,7 @@ export const serverName = createSdkMcpServer({
   ],
 });
 ```
+
 </design_template>
 
 <example name="feedback-server">
@@ -301,6 +311,7 @@ When someone shares feedback:
 
 Use your judgment about importance ratings.
 ```
+
 </example>
 
 <principle name="dynamic-capability-discovery">
@@ -436,6 +447,7 @@ func buildSystemPrompt() -> String {
 ```
 
 **Benefits:**
+
 - Agent can use any API capability, including ones added after your code shipped
 - API is the validator, not your enum definition
 - Smaller tool surface (2-3 tools vs N tools)
@@ -449,6 +461,7 @@ func buildSystemPrompt() -> String {
 Every data type the agent can create, it should be able to read, update, and delete. Incomplete CRUD = broken action parity.
 
 **Anti-pattern: Create-only tools**
+
 ```typescript
 // ❌ Can create but not modify or delete
 tool("create_experiment", { hypothesis, variable, metric })
@@ -457,6 +470,7 @@ tool("write_journal_entry", { content, author, tags })
 ```
 
 **Correct: Full CRUD for each entity**
+
 ```typescript
 // ✅ Complete CRUD
 tool("create_experiment", { hypothesis, variable, metric })
@@ -472,6 +486,7 @@ tool("delete_journal_entry", { id })
 
 **The CRUD Audit:**
 For each entity type in your app, verify:
+
 - [ ] Create: Agent can create new instances
 - [ ] Read: Agent can query/search/list instances
 - [ ] Update: Agent can modify existing instances
@@ -484,6 +499,7 @@ If any operation is missing, users will eventually ask for it and the agent will
 ## MCP Tool Design Checklist
 
 **Fundamentals:**
+
 - [ ] Tool names describe capability, not use case
 - [ ] Inputs are data, not decisions
 - [ ] Outputs are rich (enough for agent to verify)
@@ -493,6 +509,7 @@ If any operation is missing, users will eventually ask for it and the agent will
 - [ ] Descriptions explain what the tool does, not when to use it
 
 **Dynamic Capability Discovery (for agent-native apps):**
+
 - [ ] For external APIs where agent should have full access, use dynamic discovery
 - [ ] Include a `list_*` or `discover_*` tool for each API surface
 - [ ] Use string inputs (not enums) when the API validates
@@ -500,6 +517,7 @@ If any operation is missing, users will eventually ask for it and the agent will
 - [ ] Only use static tool mapping if intentionally limiting agent scope
 
 **CRUD Completeness:**
+
 - [ ] Every entity has create, read, update, delete operations
 - [ ] Every UI action has a corresponding agent tool
 - [ ] Test: "Can the agent undo what it just did?"

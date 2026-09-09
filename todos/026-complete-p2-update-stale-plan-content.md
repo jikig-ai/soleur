@@ -26,14 +26,18 @@ Both architecture-strategist and security-sentinel flagged this independently.
 ## Proposed Solutions
 
 ### Option A: Add "Execution Notes" section at top (Recommended)
+
 Add a prominent section below the Enhancement Summary stating what was actually applied vs. planned. Annotate stale sections with strikethrough.
+
 - Pros: Preserves original planning context, clearly distinguishes intent from outcome
 - Cons: Longer document
 - Effort: Small
 - Risk: None
 
 ### Option B: Rewrite affected sections
+
 Replace bypass actor content with explanation of why it wasn't feasible.
+
 - Pros: Cleaner for new readers
 - Cons: Loses planning context
 - Effort: Medium

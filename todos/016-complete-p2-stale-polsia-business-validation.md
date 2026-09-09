@@ -31,6 +31,7 @@ business-validation.md Polsia row (line 75) shows stale metrics ($50/month, 1,10
 ## Technical Details
 
 **Affected files:**
+
 - `knowledge-base/product/business-validation.md` lines 75-81
 
 ## Acceptance Criteria

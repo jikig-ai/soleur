@@ -96,11 +96,13 @@ deterministic `soleur_invoice_key` marker is what makes that re-run safe against
 ## Workflow
 
 ### S1 — Auth precondition
+
 If the Stripe MCP is not authenticated, emit the instruction to run
 `mcp__plugin_soleur_stripe__authenticate` and **fail-closed** (stop). Do not proceed to any read or
 write. The error table above is re-entrant: a `Token expired` later in the flow returns here.
 
 ### S2 — Account + mode gate (runs BEFORE any customer read)
+
 This gate runs **before S3**, so a live account is refused before any customer PII is surfaced. It is
 a **hard precondition for S3, S4, and S5**; the ack is **session-scoped** (once per session).
 
@@ -122,6 +124,7 @@ a **hard precondition for S3, S4, and S5**; the ack is **session-scoped** (once 
    `--force`/`--yes` flags.
 
 ### S3 — Read "who owes you" (test mode only)
+
 List customers and open/overdue invoices (`stripe_api_read` → `GetCustomers`, `GetInvoices` with
 `status=open`). Present a scannable table with the minimum the operator needs to act — customer name,
 amount, due date, invoice id (per S7, do not dump full email/address here).
@@ -129,6 +132,7 @@ amount, due date, invoice id (per S7, do not dump full email/address here).
 than dead-ending.
 
 ### S4 — Guarded create + send
+
 Ordered to avoid the orphaned-invoice window. **S2 must have passed this session.**
 
 1. **Resolve customer.** If none supplied or not found: offer a guarded create-customer step, or emit
@@ -160,18 +164,21 @@ Ordered to avoid the orphaned-invoice window. **S2 must have passed this session
    a duplicate.
 
 ### S5 — Chase an overdue invoice
+
 For an existing open/overdue invoice, re-trigger `send` (`PostInvoicesInvoiceSend`).
 **S5 MUST run the S2 mode gate + a per-send preview + literal-`yes`** — including when the operator
 opens directly with "chase my overdue." It **inherits the S2 livemode hard-stop**: no dunning against
 a live account in v1.
 
 ### S6 — Refuse to fabricate
+
 If tax rate, currency, or legal entity is unspecified, **STOP** and require an operator fact or
 `automatic_tax` (Stripe Tax) — never guess. **Never mint an invoice number** (finalize does that).
 A finalize rejected for a tax/currency/entity cause routes here; "customer has no email" routes to a
 customer-fix step.
 
 ### S7 — PII discipline
+
 Never write plaintext customer PII (name, address, email, amount tied to an identity) to any committed
 repo artifact or application log. **Note:** the Claude Code conversation transcript persists to local
 disk (`~/.claude/projects/…`), so anything surfaced in-session **is** written to that local file — the

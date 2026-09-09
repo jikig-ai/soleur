@@ -140,6 +140,7 @@ silence it replaced.
 > performed.
 >
 > **What replaces it — bounded arm-and-watch with the rollback in the same process:**
+>
 > 1. Ship the feeder and reprovision the host.
 > 2. `PATCH {"paused": false}`, then poll `status` every 10s.
 > 3. `status: "up"` ⇒ a real beat landed; done.

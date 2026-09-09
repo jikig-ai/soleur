@@ -10,6 +10,7 @@ This skill provides detailed process knowledge for effective brainstorming sessi
 ## When to Use This Skill
 
 Brainstorming is valuable when:
+
 - Requirements are unclear or ambiguous
 - Multiple approaches could solve the problem
 - Trade-offs need to be explored with the user
@@ -18,6 +19,7 @@ Brainstorming is valuable when:
 - A complex problem needs deep analysis before any solution is proposed (use Problem Analysis Mode below)
 
 Brainstorming can be skipped when:
+
 - Requirements are explicit and detailed
 - The user knows exactly what they want
 - The task is a straightforward bug fix or well-defined change
@@ -29,12 +31,14 @@ Brainstorming can be skipped when:
 Before diving into questions, assess whether brainstorming is needed.
 
 **Signals that requirements are clear:**
+
 - User provided specific acceptance criteria
 - User referenced existing patterns to follow
 - User described exact behavior expected
 - Scope is constrained and well-defined
 
 **Signals that brainstorming is needed:**
+
 - User used vague terms ("make it better", "add something like")
 - Multiple reasonable interpretations exist
 - Trade-offs haven't been discussed
@@ -121,6 +125,7 @@ After understanding the idea, propose 2-3 concrete approaches.
 ```
 
 **Guidelines:**
+
 - Lead with a recommendation and explain why
 - Be honest about trade-offs
 - Consider YAGNI—simpler is usually better
@@ -206,11 +211,13 @@ When the request is "analyze this problem" rather than "brainstorm approaches," 
 ## Integration with Planning
 
 Brainstorming answers **WHAT** to build:
+
 - Requirements and acceptance criteria
 - Chosen approach and rationale
 - Key decisions and trade-offs
 
 Planning answers **HOW** to build it:
+
 - Implementation steps and file changes
 - Technical details and code patterns
 - Testing strategy and verification

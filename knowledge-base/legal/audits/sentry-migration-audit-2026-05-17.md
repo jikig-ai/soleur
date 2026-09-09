@@ -22,7 +22,7 @@ No orphans detected. All three classes (A: monitor without alert; B: alert refer
 
 ## DPA evidence
 
-Vendor DPA: https://sentry.io/legal/dpa/
+Vendor DPA: <https://sentry.io/legal/dpa/>
 Article 30 register entry: knowledge-base/legal/article-30-register.md (PA8).
 
 <!-- ids: ["596863"] -->

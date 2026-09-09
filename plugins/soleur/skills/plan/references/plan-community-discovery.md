@@ -34,6 +34,7 @@ and present suggestions for user approval."
 ```
 
 **Step 4: Handle results.** After agent-finder returns:
+
 - If artifacts were installed: announce "Installed N community artifacts for [stacks]. They will be available in subsequent commands."
 - If all suggestions were skipped: continue silently.
 - If agent-finder failed (network errors): continue silently. Discovery must never block planning.

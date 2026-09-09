@@ -279,10 +279,12 @@ gate, because it gets read as evidence.
 1. **The D10 gate can go BOTH red and green.** The suite leads with the green row — the
    criterion whose absence let an unpassable gate ship — and carries one positive control per
    abort class:
+
    ```bash
    bash tests/scripts/test-registry-pull-path-health.sh
    bash tests/scripts/test-registry-restore-from-ghcr.sh
    ```
+
    No Doppler wrapper and no `SENTRY_AUTH_TOKEN`: **the gate no longer reads Sentry at all.** The
    previous version of this check ran the suite under `doppler run -c prd_terraform` and named a
    rotated `SENTRY_AUTH_TOKEN` as the failure mode; both stopped describing the gate at #7277.
@@ -291,12 +293,14 @@ gate, because it gets read as evidence.
    would stay green against a workflow wired to a source that does not exist, which is exactly
    what shipped. Run the derivation itself and confirm it yields a bare base domain whose
    `/health` answers:
+
    ```bash
    bash scripts/derive-app-domain-base.sh            # expect: soleur.ai (stdout), resolution line on stderr
    bash scripts/derive-app-domain-base.test.sh       # the derivation's own unit suite
    bash tests/scripts/test-registry-d10-workflow-wiring.sh   # proves the workflow USES it
    curl -s -o /dev/null -w '%{http_code}\n' "https://app.$(bash scripts/derive-app-domain-base.sh)/health"
    ```
+
    The `curl` must print `200`, and it must be built from the script's own output rather than a
    typed domain — a hand-typed URL tests your typing, not the gate's input.
 
@@ -304,10 +308,12 @@ gate, because it gets read as evidence.
    ahead of the committed default, mirroring Terraform's own precedence. Absent an override the
    committed `variables.tf` value IS what Terraform applied; if one appears, that is the value
    production runs on and the base changes with it:
+
    ```bash
    [[ -z "${TF_VAR_app_domain_base:-}" ]] && echo "no exported override"   # tier 1 reads the PROCESS ENV
    doppler secrets -p soleur -c prd_terraform --only-names | grep -c APP_DOMAIN_BASE || true   # expect 0
    ```
+
    The first line is the one that matches this step's heading: the derivation's override tier
    reads `TF_VAR_app_domain_base` from the environment, so a Doppler check alone would pass
    while an exported override silently drove the `curl` above it. Measured 2026-08-06: no
@@ -319,14 +325,17 @@ gate, because it gets read as evidence.
    IS present in `prd_terraform` (`app.soleur.ai`), so `TF_VAR_app_domain` is injected on every
    apply. A domain move performed the only way it can be performed today would shift production
    while the gate kept measuring the old host:
+
    ```bash
    doppler secrets get APP_DOMAIN -p soleur -c prd_terraform --plain   # expect app.<derived base>
    ```
+
    The derivation aborts on a *committed* divergence by itself; this covers the live-override
    half, which it deliberately cannot see (reading Doppler is what this change removed from the
    gate).
 
 2. **Both Hetzner probes return the shape the gate parses.**
+
    ```bash
    HCLOUD_TOKEN=$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)
    curl -s -H "Authorization: Bearer $HCLOUD_TOKEN" \
@@ -334,6 +343,7 @@ gate, because it gets read as evidence.
    curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $HCLOUD_TOKEN" \
      'https://api.hetzner.cloud/v1/servers?name=soleur-registry'
    ```
+
    An API change here makes the id-pin's provenance step fail *after* you have already typed the
    confirm token.
 
@@ -489,7 +499,6 @@ The **rehearsal** (D10 A2) runs the same engine, so the same table reads both.
 > it yields ("a validator artifact, store fine") happens to be correct for the healthy case, but
 > the command has no power to detect a genuinely corrupt bundle child, so it is not evidence. For
 > a signature child, use `crane blob ghcr.io/<repo>@<blob-digest>` and compare against the sink.
-
 
 ### If the sink rejects the credential (exit `5`, or a bridge `docker login` failure)
 
@@ -647,6 +656,7 @@ replaces the host, and a replaced host meets a still-plaintext ext4 volume and h
 FATAL refuse. zot's `accessControl` grants no user `delete`, so nothing can reclaim over the
 existing ingress either. Breaking that circularity is what the recut actually buys. Record the
 post-recut fill rate before concluding the incident is closed.
+
 - **#7278** — the registry host has no in-place execution lever. **Partially delivered, and read
   the split before relying on it.** What shipped is the **read-only inventory lever**
   (`.github/workflows/registry-zot-inventory.yml`, see

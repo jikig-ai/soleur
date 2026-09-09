@@ -4,6 +4,7 @@ Architectural patterns for building agent-native systems. These patterns emerge 
 Features are outcomes achieved by agents operating in a loop, not functions you write. Tools are atomic primitives. The agent applies judgment; the prompt defines the outcome.
 
 See also:
+
 - [files-universal-interface.md](./files-universal-interface.md) for file organization and context.md patterns
 - [agent-execution-patterns.md](./agent-execution-patterns.md) for completion signals and partial completion
 - [product-implications.md](./product-implications.md) for progressive disclosure and approval patterns
@@ -32,12 +33,14 @@ The agent runs as a long-lived process that responds to events. Events become pr
 ```
 
 **Key characteristics:**
+
 - Events (messages, webhooks, timers) trigger agent turns
 - Agent decides how to respond based on system prompt
 - Tools are primitives for IO, not business logic
 - State persists between events via data tools
 
 **Example: Discord feedback bot**
+
 ```typescript
 // Event source
 client.on("messageCreate", (message) => {
@@ -60,6 +63,7 @@ When someone shares feedback:
 Use your judgment about importance and categorization.
 `;
 ```
+
 </pattern>
 
 <pattern name="two-layer-git">
@@ -94,6 +98,7 @@ For self-modifying agents, separate code (shared) from data (instance-specific).
 ```
 
 **Why this works:**
+
 - Code and site are version controlled (GitHub)
 - Raw data stays local (instance-specific)
 - Site is generated from data, so reproducible
@@ -113,6 +118,7 @@ main                        # Shared features, bug fixes
 ```
 
 **Change flow:**
+
 | Change Type | Work On | Then |
 |-------------|---------|------|
 | Core features | main | Merge to instance branches |
@@ -121,11 +127,13 @@ main                        # Shared features, bug fixes
 | Instance data | instance branch | Done |
 
 **Sync tools:**
+
 ```typescript
 tool("self_deploy", "Pull latest from main, rebuild, restart", ...)
 tool("sync_from_instance", "Merge from another instance", ...)
 tool("propose_to_main", "Create PR to share improvements", ...)
 ```
+
 </pattern>
 
 <pattern name="site-as-output">
@@ -164,6 +172,7 @@ The site should be:
 
 You decide the structure. Make it good.
 ```
+
 </pattern>
 
 <pattern name="approval-gates">
@@ -200,11 +209,13 @@ tool("apply_pending", async () => {
 ```
 
 **What requires approval:**
+
 - src/*.ts (agent code)
 - package.json (dependencies)
 - system prompt changes
 
 **What doesn't:**
+
 - data/* (instance data)
 - site/* (generated content)
 - docs/* (documentation)
@@ -284,6 +295,7 @@ struct ChatAgent {
 ```
 
 **Benefits:**
+
 - Consistent lifecycle management across all agent types
 - Automatic checkpoint/resume (critical for mobile)
 - Shared tool protocol
@@ -403,6 +415,7 @@ struct FeedView: View {
     let items = database.query("feed")  // Stale!
 }
 ```
+
 </pattern>
 
 <pattern name="model-tier-selection">
@@ -457,6 +470,7 @@ let lookupConfig = AgentConfig(
 ```
 
 **Cost optimization strategies:**
+
 - Start with balanced tier, only upgrade if quality insufficient
 - Use fast tier for tool-heavy loops where each turn is simple
 - Reserve powerful tier for synthesis tasks (comparing multiple sources)
@@ -464,6 +478,7 @@ let lookupConfig = AgentConfig(
 </pattern>
 
 <design_questions>
+
 ## Questions to Ask When Designing
 
 1. **What events trigger agent turns?** (messages, webhooks, timers, user requests)

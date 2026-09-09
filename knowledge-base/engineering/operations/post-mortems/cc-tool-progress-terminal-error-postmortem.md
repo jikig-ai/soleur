@@ -132,4 +132,4 @@ The cc surface mirrored the agent-runner *consumer* contract but never wired the
 
 Every action item and follow-up so this incident cannot recur (save logs, add tests, set up alerts, automation, documentation, code sweeps, PRs).
 
-_No action items — incident fully resolved in the source PR with no residual work._
+*No action items — incident fully resolved in the source PR with no residual work.*

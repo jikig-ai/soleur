@@ -24,6 +24,7 @@ art_33_deadline: "n/a"
 # Incident Overview
 
 The operator's containerized `/soleur:go` agent repeatedly stranded on `fatal: not a git repository`. It took THREE PRs to resolve, the first two on the wrong layer:
+
 - **#5716** (warm-dispatch await, absent `.git`) and **#5584** (validity-not-presence, corrupt `.git`) both targeted the **cc-dispatcher** web-chat path. Merged + deployed; the operator still stranded.
 - Production Sentry showed **zero** cc-dispatcher events on the affected workspace while the deploy was confirmed live — proving that path never runs on the operator's surface. The path that DOES run is the Inngest **`workspace-reconcile-on-push`** function (26× on `754ee124`), which gated readiness on directory existence (not `.git` validity) and whose `workspace-sync` only pulls/resets — **never re-clones**. So a missing/corrupt `.git` was a permanent trap.
 - **#5730** (this PR) is the definitive fix: gate reconcile readiness on `isValidGitWorkTree`; re-clone an invalid/absent `.git` via the destruction-safe `ensureWorkspaceRepoCloned`.

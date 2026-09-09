@@ -50,6 +50,7 @@ rclone config
 | Dropbox | `dropbox` | OAuth flow (opens browser) |
 
 **Example: Configure Cloudflare R2**
+
 ```bash
 rclone config create r2 s3 \
   provider=Cloudflare \
@@ -60,6 +61,7 @@ rclone config create r2 s3 \
 ```
 
 **Example: Configure AWS S3**
+
 ```bash
 rclone config create aws s3 \
   provider=AWS \
@@ -71,27 +73,32 @@ rclone config create aws s3 \
 ## Common Operations
 
 ### Upload single file
+
 ```bash
 rclone copy /path/to/file.mp4 remote:bucket/path/ --progress
 ```
 
 ### Upload directory
+
 ```bash
 rclone copy /path/to/folder remote:bucket/folder/ --progress
 ```
 
 ### Sync directory (mirror, deletes removed files)
+
 ```bash
 rclone sync /local/path remote:bucket/path/ --progress
 ```
 
 ### List remote contents
+
 ```bash
 rclone ls remote:bucket/
 rclone lsd remote:bucket/  # directories only
 ```
 
 ### Check what would be transferred (dry run)
+
 ```bash
 rclone copy /path remote:bucket/ --dry-run
 ```

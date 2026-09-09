@@ -261,6 +261,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - Constitution: `C=$(grep -c '^- ' knowledge-base/project/constitution.md 2>/dev/null)` (tracked separately; counts every bullet, NOT just rules — a ceiling, not a rule count)
 
    Output:
+
    ```
    Rule budget:
      always-loaded:          <the linter's verdict line, verbatim>

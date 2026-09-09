@@ -8,6 +8,7 @@ How to refactor existing agent code to follow prompt-native principles. The goal
 Signs your agent isn't prompt-native:
 
 **Tools that encode workflows:**
+
 ```typescript
 // RED FLAG: Tool contains business logic
 tool("process_feedback", async ({ message }) => {
@@ -19,6 +20,7 @@ tool("process_feedback", async ({ message }) => {
 ```
 
 **Agent calls functions instead of figuring things out:**
+
 ```typescript
 // RED FLAG: Agent is just a function caller
 "Use process_feedback to handle incoming messages"
@@ -27,6 +29,7 @@ tool("process_feedback", async ({ message }) => {
 ```
 
 **Artificial limits on agent capability:**
+
 ```typescript
 // RED FLAG: Tool prevents agent from doing what users can do
 tool("read_file", async ({ path }) => {
@@ -38,6 +41,7 @@ tool("read_file", async ({ path }) => {
 ```
 
 **Prompts that specify HOW instead of WHAT:**
+
 ```markdown
 // RED FLAG: Micromanaging the agent
 When creating a summary:
@@ -46,14 +50,17 @@ When creating a summary:
 3. Format with em-dashes for sub-points
 4. Bold the first word of each bullet
 ```
+
 </diagnosis>
 
 <refactoring_workflow>
+
 ## Step-by-Step Refactoring
 
 **Step 1: Identify workflow tools**
 
 List all your tools. Mark any that:
+
 - Have business logic (categorize, calculate, decide)
 - Orchestrate multiple operations
 - Make decisions on behalf of the agent
@@ -137,14 +144,17 @@ expect(mockProcessFeedback).toHaveBeenCalledWith(...)
 // Send feedback → Check it was stored with reasonable importance
 // Send high-priority feedback → Check notification was sent
 ```
+
 </refactoring_workflow>
 
 <before_after>
+
 ## Before/After Examples
 
 **Example 1: Feedback Processing**
 
 Before:
+
 ```typescript
 tool("handle_feedback", async ({ message, author }) => {
   const category = detectCategory(message);
@@ -167,6 +177,7 @@ tool("handle_feedback", async ({ message, author }) => {
 ```
 
 After:
+
 ```typescript
 // Simple storage primitive
 tool("store_feedback", async ({ item }) => {
@@ -182,6 +193,7 @@ tool("send_message", async ({ channel, content }) => {
 ```
 
 System prompt:
+
 ```markdown
 ## Feedback Processing
 
@@ -202,6 +214,7 @@ Importance guidelines:
 **Example 2: Report Generation**
 
 Before:
+
 ```typescript
 tool("generate_weekly_report", async ({ startDate, endDate, format }) => {
   const data = await fetchMetrics(startDate, endDate);
@@ -219,6 +232,7 @@ tool("generate_weekly_report", async ({ startDate, endDate, format }) => {
 ```
 
 After:
+
 ```typescript
 tool("query_metrics", async ({ start, end }) => {
   const data = await db.metrics.query({ start, end });
@@ -232,6 +246,7 @@ tool("write_file", async ({ path, content }) => {
 ```
 
 System prompt:
+
 ```markdown
 ## Report Generation
 
@@ -243,14 +258,17 @@ When asked to generate a report:
 
 Use your judgment about format and structure. Make it useful.
 ```
+
 </before_after>
 
 <common_challenges>
+
 ## Common Refactoring Challenges
 
 **"But the agent might make mistakes!"**
 
 Yes, and you can iterate. Change the prompt to add guidance:
+
 ```markdown
 // Before
 Rate importance 1-5.
@@ -263,6 +281,7 @@ Only use 4-5 for truly blocking or critical issues.
 **"The workflow is complex!"**
 
 Complex workflows can still be expressed in prompts. The agent is smart.
+
 ```markdown
 When processing video feedback:
 1. Check if it's a Loom, YouTube, or direct link
@@ -277,12 +296,14 @@ When processing video feedback:
 Some operations should stay in code. That's fine. Prompt-native isn't all-or-nothing.
 
 Keep in code:
+
 - Security validation
 - Rate limiting
 - Audit logging
 - Exact format requirements
 
 Move to prompts:
+
 - Categorization decisions
 - Priority judgments
 - Content generation
@@ -291,6 +312,7 @@ Move to prompts:
 **"What about testing?"**
 
 Test outcomes, not procedures:
+
 - "Given this input, does the agent achieve the right result?"
 - "Does stored feedback have reasonable importance ratings?"
 - "Are notifications sent for truly high-priority items?"
@@ -300,17 +322,20 @@ Test outcomes, not procedures:
 ## Refactoring Checklist
 
 Diagnosis:
+
 - [ ] Listed all tools with business logic
 - [ ] Identified artificial limits on agent capability
 - [ ] Found prompts that micromanage HOW
 
 Refactoring:
+
 - [ ] Extracted primitives from workflow tools
 - [ ] Moved business logic to system prompt
 - [ ] Removed artificial limits
 - [ ] Simplified tool inputs to data, not decisions
 
 Validation:
+
 - [ ] Agent achieves same outcomes with primitives
 - [ ] Behavior can be changed by editing prompts
 - [ ] New features could be added without new tools

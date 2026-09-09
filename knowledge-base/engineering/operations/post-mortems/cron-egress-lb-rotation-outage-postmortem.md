@@ -166,32 +166,39 @@ class was only proven for GitHub (5516336) and not generalized.
 ## Impact details
 
 ### Services Impacted
+
 The 6 Claude-eval crons (community digest, content generation, follow-through
 nudges, autonomous bug-fix PRs, roadmap/agent-native audits). Lightweight crons
 unaffected.
 
 ### Customer Impact (by role)
+
 Solo-operator / tenant-zero: lost days of automated community monitoring, content,
 follow-through, and autonomous engineering output. No external customer data
 exposure (availability-only).
 
 ### Revenue Impact
+
 None directly (pre-revenue automation).
 
 ### Team Impact
+
 Operator audit + this remediation session.
 
 ## Lessons Learned
 
 ### Where we got lucky
+
 The durable run-log had JUST deployed; without Sentry cron-monitor history the
 outage would have been much harder to reconstruct.
 
 ### What went well
+
 Multi-agent review confirmed the security-preserving fix (retain observed
 DNS answers, not provider CIDRs) holds the ADR-052 boundary.
 
 ### What went wrong
+
 A default-drop egress firewall was rolled out with a single-IP resolver for
 LB-fronted hosts; nobody paged on the missed-check-in cohort pattern for days.
 

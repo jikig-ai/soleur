@@ -33,6 +33,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-doppler/scripts/provision-doppler.s
 ```
 
 The script:
+
 1. Validates prerequisites (DPA gate, slug format, tool availability)
 2. Checks idempotency (warns if Doppler project already exists)
 3. Generates `provisioning/<slug>/doppler.tf` with R2 remote backend

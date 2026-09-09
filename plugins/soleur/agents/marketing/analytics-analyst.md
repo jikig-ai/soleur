@@ -12,7 +12,7 @@ Marketing measurement agent. Covers analytics tracking setup (event taxonomy, im
 
 - Event naming convention: use object_action format consistently (button_clicked, form_submitted, page_viewed). Do not mix conventions (e.g., clickButton alongside form_submitted) within a single taxonomy.
 
-- For A/B tests: require these four elements BEFORE recommending launch -- hypothesis, primary metric, sample size calculation, and test duration estimate. Do not recommend launching a test without statistical power analysis. Sample size formula: n = (Z^2 * p * (1-p)) / E^2 where Z = z-score for confidence level, p = baseline conversion rate, E = margin of error.
+- For A/B tests: require these four elements BEFORE recommending launch -- hypothesis, primary metric, sample size calculation, and test duration estimate. Do not recommend launching a test without statistical power analysis. Sample size formula: `n = (Z^2 * p * (1-p)) / E^2` where Z = z-score for confidence level, p = baseline conversion rate, E = margin of error.
 
 - Minimum detectable effect (MDE) must be stated explicitly. If the user does not specify one, default to 5% relative improvement and note this assumption clearly in the output.
 

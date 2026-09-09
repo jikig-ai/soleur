@@ -410,7 +410,7 @@ Per-process env overrides:
 | `LOG_ROTATION_SIZE_BYTES` | 5242880 | Size threshold in bytes |
 | `LOG_ROTATION_AGE_DAYS` | 30 | Age threshold in days |
 | `LOG_ROTATION_FLOCK_TIMEOUT_S` | 5 | flock acquire timeout (seconds) |
-| `LOG_ROTATION_DISABLE` | _(unset)_ | Set to `1` to short-circuit all rotation |
+| `LOG_ROTATION_DISABLE` | *(unset)* | Set to `1` to short-circuit all rotation |
 | `LOG_ROTATION_UNIQ_SUFFIX` | `$(date +%H%M%S%N)` | Test-only collision suffix override |
 
 On archive-write failure (disk full, permission denied), the helper preserves
@@ -463,12 +463,19 @@ ADR-162 permits exactly one entry in this table.
 
 PostToolUse runs after the tool's write, so these cannot block. Most are telemetry-only; `pencil-collapse-guard.sh` additionally performs a file restore and injects `additionalContext` into the model.
 
+<!-- markdownlint-disable MD038 -->
+<!-- #7927: MD038 on this table is cosmetic. Verified with the repo's own markdown-it:
+     every span here renders with no edge space (CommonMark strips a single leading and
+     trailing space), except one where the leading space is the point -- the cell
+     documents a string that is APPENDED, so its space is content. A disable-line comment
+     cannot be used: GFM discards anything past a row's closing pipe. -->
 | Hook | Sink | Purpose |
 |---|---|---|
 | `skill-invocation-logger.sh` | `.claude/.skill-invocations.jsonl` | Records every Skill tool call (session_id + skill name) for the monthly skill-freshness aggregator. |
 | `agent-token-tee.sh` | `.claude/.session-tokens.jsonl` | Records every Task/Agent invocation envelope (session_id + subagent_type + total_tokens + duration) for compound Phase 1.6 token-efficiency analysis. Kill-switch: `SOLEUR_DISABLE_AGENT_TOKEN_TEE=1`. Issue #3494. |
 | `memory-backstop.sh` | `.claude/.memory-backstop.jsonl` | **SessionStart** (`startup|resume|clear|compact`). Adopts the agent process tree into a memory-capped systemd transient scope `soleur-agent-<pid>.scope` under a shared `soleur-agents.slice` (ADR-162, #7166). Records the scope, the terminal scope it is bound to, the caps written, the caps the slice already had (`slice_*_before`, so a mixed-version fleet flapping the shared slice is visible), and `outcome`/`reason`. Never records the session id. Kill-switch: `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` — **if you set it you are unprotected and nothing will tell you.** |
 | `pencil-collapse-guard.sh` | `.claude/.rule-incidents.jsonl` (`cq-pencil-collapse-auto-recover`, `warn`) | PostToolUse on `mcp__pencil__open_document`: auto-restores a tracked `.pen` collapsed to empty document state from `git HEAD` + emits an `additionalContext` warning. Fail-open, non-destructive. Issue #4859. |
+<!-- markdownlint-enable MD038 -->
 
 ## macOS note
 
@@ -589,9 +596,11 @@ Regex engine: bash ERE with POSIX `[[:space:]]`. Anchor
   PR #3800 after an 18-day dry-run review). Match → emit `kind: "defer_requested"`,
   append `.claude/logs/approvals.jsonl` row, return the wrapped defer
   envelope:
+
   ```json
   {"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"defer","permissionDecisionReason":"..."}}
   ```
+
   CC pauses the session silently; the resume hint
   (`claude --resume <session_id>`) is emitted to stderr so the operator can
   see it. See `DEFER-DECISION-PAYLOAD-SHAPE.md` for the empirical decision
@@ -789,8 +798,6 @@ Not denial overrides, documented elsewhere in this file: `SOLEUR_DEFER_DRYRUN`
 kill-switches), `SOLEUR_GREP_REWRITE_OBSERVE` (grep-rewrite observe-only soak),
 `SOLEUR_DISABLE_MEMORY_BACKSTOP` (memory backstop — see below),
 `SOLEUR_DEFER_TARGETS_OVERRIDE` (F2 manifest override).
-
-
 
 ## Memory backstop (ADR-162, #7166)
 

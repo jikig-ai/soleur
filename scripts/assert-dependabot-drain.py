@@ -78,6 +78,15 @@ REQUIRED = [
     ("root", "js-yaml", 3, "3.15.1"),
     ("root", "js-yaml", 4, "4.3.1"),
     ("root", "brace-expansion", 1, "1.1.18"),  # was 1.1.16: GHSA-rgw5-rvv9-x895 covers <1.1.18
+    # Major 5 reached the ROOT lockfile in #7927: markdownlint-cli 0.49.1 will not run
+    # against brace-expansion 1.x, so package.json carries a SCOPED override giving that
+    # subtree ^5.0.8 while the root keeps the ^1.1.16 Dependabot pin. Two majors now
+    # resolve under this manifest (1.1.18 and 5.0.9) and a per-package minimum would
+    # compare across lines -- exactly the case the module docstring exists for. Floor
+    # matches the web-platform major-5 row: GHSA-v6h2-p8h4-qcjw is fixed in 1.1.12,
+    # 2.0.2, 3.0.1 and 4.0.1, so the whole 5.x line is out of range, and 5.0.9 is the
+    # resolved version rather than a bare 5.0.0 the structural check would not catch.
+    ("root", "brace-expansion", 5, "5.0.9"),
     ("pencil-setup", "hono", 4, "4.12.34"),
     ("pencil-setup", "@hono/node-server", 1, "1.19.15"),
     ("pencil-setup", "ip-address", 10, "10.3.1"),
@@ -207,7 +216,7 @@ def main():
     # evaluated count against the table's own length is a tautology that cannot fail, so
     # deleting the table would report "0 rows clear" and exit 0. (Measured -- that mutation
     # survived the first version of this check.)
-    MIN_ROWS = 19  # main's 17 + the two brace-expansion major lines #1327 restored
+    MIN_ROWS = 20  # main's 17 + the two brace-expansion majors #1327 restored + root line 5 (#7927)
     if len(REQUIRED) < MIN_ROWS:
         failures.append(
             f"the reconciliation table has {len(REQUIRED)} rows, below the TABLE-SIZE floor of {MIN_ROWS}. "
@@ -215,7 +224,7 @@ def main():
     # The floor that matters sits on rows that RESOLVED to a real installed version --
     # the only set that is non-empty in the passing state. `checked` and `len(REQUIRED)`
     # are both populated by construction and cannot detect a row that matches nothing.
-    MIN_RESOLVED = 19  # main's 17 + the same two rows, both of which resolve
+    MIN_RESOLVED = 20  # main's 17 + the same two rows + root brace-expansion line 5, all of which resolve
     if resolved < MIN_RESOLVED:
         failures.append(
             f"only {resolved} of {len(REQUIRED)} rows resolved to an installed version, "

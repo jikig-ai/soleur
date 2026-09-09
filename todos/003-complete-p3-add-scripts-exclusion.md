@@ -19,7 +19,9 @@ The web-platform `.dockerignore` does not exclude `scripts/`, because `apps/web-
 ## Proposed Solutions
 
 ### Option A: Add scripts/ exclusion (Recommended)
+
 Add `scripts/` to the .dockerignore
+
 - Pros: Defensive forward-compatibility measure
 - Cons: Pattern matches nothing today
 - Effort: Small

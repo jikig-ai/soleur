@@ -3,6 +3,7 @@
 When the content-vendor-drift cron files a re-vendor PR (label `vendor/pin-drift`) or opens a tracking issue (label `vendor/cron-failure` / `vendor/upstream-rollback` / `vendor/upstream-archived`), use this runbook to resolve the situation.
 
 Cross-references:
+
 - Policy: `knowledge-base/engineering/policies/content-vendoring.md`
 - Cron: `apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts` (an Inngest
   function since the TR9 Phase-2 migration; it was
@@ -129,17 +130,21 @@ When `gdpr-gate.sh` emits `POSTURE_FAIL: gdpr-gate rules >90 days stale` to STDO
 
 1. **Do not pause the current regulated PR.** The gate is advisory and exits 0; the staleness signal is a separate cycle.
 2. Open a tracking issue:
+
    ```bash
    gh issue create \
      --label compliance/critical \
      --title "[gdpr-gate] >90d stale rules — N days since last-verified" \
      --body "POSTURE_FAIL emitted on PR #<N>. Detection rules pinned at $(bash plugins/soleur/skills/gdpr-gate/scripts/notice-frontmatter.sh field last-verified) — staleness exceeds Art. 5(2) accountability obligation."
    ```
+
 3. Append a row to `compliance-posture.md` §Active Compliance Items using the canonical row schema. The gate never writes there directly; this is operator-acknowledged write only.
 4. Commit:
+
    ```bash
    git commit -m "compliance: register vendor-pin-staleness for #<issue>"
    ```
+
 5. Drive re-vendor:
    - If a `ci/vendor-drift-*` PR is already open, ping it.
    - Otherwise dispatch via `/soleur:trigger-cron` (`cron/content-vendor-drift.manual-trigger`).

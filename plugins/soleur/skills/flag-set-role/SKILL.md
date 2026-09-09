@@ -28,6 +28,7 @@ Per-org targeting uses a **per-feature segment** `<flag>-orgs` (ADR-043 §"Per-f
 <arguments> #$ARGUMENTS </arguments>
 
 Required positional args: `<flag-name> <role> <on|off>`.
+
 - `<flag-name>`: must be a key in `apps/web-platform/lib/feature-flags/server.ts` `RUNTIME_FLAGS` (and in the script's `FLAG_ENV_VARS` map).
 - `<role>`: `prd` or `dev`.
 - `<on|off>`: target enablement.

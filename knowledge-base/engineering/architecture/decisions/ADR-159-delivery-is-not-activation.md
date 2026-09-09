@@ -54,6 +54,7 @@ each case *the absence of evidence was recorded as evidence of success*.
 **Three propositions.**
 
 ### 1. A channel that delivers configuration must reconcile the units that consume it, and must
+
 report per-unit whether it succeeded.
 
 `infra-config-apply.sh` now restarts the units whose drop-ins it delivers, and emits a verdict for
