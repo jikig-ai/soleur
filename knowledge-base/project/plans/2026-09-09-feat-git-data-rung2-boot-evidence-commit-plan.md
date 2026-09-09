@@ -491,11 +491,18 @@ EV=apps/web-platform/infra/git-data-rung2-boot-evidence.env
 head -1 "$EV" | grep -c 'git-data-rung2-evidence-capture.sh'   # 1
 grep -c 'self-approving' "$EV"                                 # 1
 grep -c '^# Captured (UTC) : 2026-' "$EV"                      # 1
-grep -c '^# QUERY:' "$EV"                                      # 2  (anchor + host-rows)
+grep -c '^# QUERY:' "$EV"                                      # 3  (anchor + host-rows + Sentry cross-check)
 grep -c '^# QUERY_FATAL:' "$EV"                                # 1
 grep -c '^RUNG2_BOOT_REHEARSAL=PASS$' "$EV"                    # 1
 grep -c '^RUNG2_SENTRY_CROSSCHECK=CLEAN$' "$EV"                # 1
 ```
+
+> **AC1 amended at /work (2026-09-09):** the `# QUERY:` expectation was authored as `2` and the
+> capture emits **3**. ARTIFACT 4 (the Sentry cross-check) writes a `# QUERY:` line too —
+> `# QUERY: sentry-issue.sh --host-events … --stats-period 7d` — which the plan-time count
+> overlooked. The artifact is correct and was NOT edited; the criterion was wrong and is corrected
+> here rather than satisfied by a looser grep. All three lines were enumerated and each is a
+> distinct, legitimate artifact query.
 
 **These checks establish the file's SHAPE, not its authorship.** Nothing in this plan proves the
 capture wrote it — a forger copies the header first. The `# Captured (UTC)` stamp and the
@@ -586,9 +593,14 @@ so this is not discovered on the remote.
 
   ```bash
   EV=apps/web-platform/infra/git-data-rung2-boot-evidence.env
-  grep -c 'remote($BS_TABLE)' "$EV"                        # 1  — literal, not expanded
+  grep -c 'remote($BS_TABLE)' "$EV"                        # 3  — literal, not expanded
   grep -cE 'remote\([0-9]|t[0-9]{6}_soleur' "$EV"          # 0  — no source id, no table name
   ```
+
+  > **AC5 amended at /work (2026-09-09):** the first count was authored as `1` and measures **3** —
+  > the anchor, host-rows and fatal queries each carry `remote($BS_TABLE)`. Only the count was
+  > wrong; the load-bearing assertion is the second line, and it measures `0` as specified. The
+  > artifact was not edited.
 
 **AC7 — The `nft_metadata_drop` reading is captured from the run output, not asserted from the
 file.**
