@@ -892,8 +892,8 @@ PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_key_pat
 # unauthenticated read must degrade to __UNREADABLE__ and never to 0.
 PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes"
 
-assert "#7695 probe declares probe_schema=4 (Guard 2 refuses a stale_schema row)" \
-  "grep -qE 'probe_schema=4( |\$)' '$PROBE_LOG'"
+assert "#7695 probe declares probe_schema=5 (Guard 2 refuses a stale_schema row)" \
+  "grep -qE 'probe_schema=5( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
@@ -970,9 +970,35 @@ DUEOF
 chmod +x "$PROBE_D_BIN/findmnt" "$PROBE_D_BIN/du"
 # Two dbs with DIFFERENT counts so a sum (7) and a db0-only DBSIZE read (3) are
 # distinguishable; equal counts would make the fixture agree with the bug.
+# ARG-AWARE, and that is the whole point of this revision. The previous stub printed the
+# `# Keyspace` reply for EVERY invocation, so it answered `--scan` with keyspace lines and no
+# fixture here ever modelled a scan at all. probe_schema=4 passed this suite and then returned
+# `__UNREADABLE__` on the first real dispatch, because `redis-cli --scan` reads ONE db (db0)
+# while `INFO keyspace` sums every db — an asymmetry an arg-blind stub cannot express.
+#
+# db0 carries 3 keys and db1 carries 4 (sum 7, and DIFFERENT counts so a db0-only read is
+# distinguishable from the sum). The scan arm answers PER DB, so a probe that forgets `-n` and
+# scans db0 alone sees 3 of the 7 and loses the `inngest:queue:*` prefix entirely.
 cat > "$PROBE_D_BIN/redis-cli" <<'RCEOF'
 #!/bin/sh
-printf '# Keyspace\ndb0:keys=3,expires=0\ndb1:keys=4,expires=0\n'
+db=0
+prev=""
+for a in "$@"; do
+  [ "$prev" = "-n" ] && db="$a"
+  case "$a" in INFO) printf '# Keyspace\ndb0:keys=3,expires=0\ndb1:keys=4,expires=0\n'; exit 0 ;; esac
+  prev="$a"
+done
+for a in "$@"; do
+  if [ "$a" = "--scan" ]; then
+    if [ "$db" = "0" ]; then
+      echo "inngest:state:alpha"; echo "inngest:state:beta"; echo "inngest:meta:version"
+    elif [ "$db" = "1" ]; then
+      echo "inngest:queue:one"; echo "inngest:queue:two"; echo "inngest:queue:three"; echo "loose"
+    fi
+    exit 0
+  fi
+done
+exit 0
 RCEOF
 chmod +x "$PROBE_D_BIN/redis-cli"
 PROBE_D_LOG="$PING_TMP/logger-probe-dedicated.txt"
@@ -998,6 +1024,27 @@ assert "#7695 dedicated shape: a present latch reads flush_latched=true" \
 # would make the fixture agree with the bug.
 assert "#7695 dedicated shape: redis_keys SUMS every db (INFO keyspace, never DBSIZE)" \
   "grep -qE 'redis_keys=7( |\$)' '$PROBE_D_LOG'"
+
+# ── probe_schema=5: the scan must enumerate EVERY db the count summed ───────────────────────
+# THE REGRESSION THIS PINS. probe_schema=4 scanned db0 only, so on the live host — whose keys
+# are not all in db0 — `INFO keyspace` returned 16 and the scan returned nothing, emitting
+# `__UNREADABLE__` on the first dispatch it was built for. These arms fail if the `-n` per-db
+# enumeration is dropped: db1's prefix disappears while db0's survives, so a db0-only regression
+# is caught by an assertion that NAMES the missing prefix rather than by a bare non-empty check.
+assert "#7695 schema 5: the scan reached db0 (its prefix is present)" \
+  "grep -qE 'redis_key_patterns=[^ ]*inngest:state:\*=2' '$PROBE_D_LOG'"
+assert "#7695 schema 5: the scan reached db1 TOO — a db0-only scan loses this prefix" \
+  "grep -qE 'redis_key_patterns=[^ ]*inngest:queue:\*=3' '$PROBE_D_LOG'"
+assert "#7695 schema 5: a colon-less key keeps its whole (sanitised) name" \
+  "grep -qE 'redis_key_patterns=[^ ]*loose=1' '$PROBE_D_LOG'"
+# Non-vacuity in the direction that matters: the field must not be a sentinel here, because a
+# sentinel would satisfy a bare 'is bound' check while measuring nothing.
+assert "#7695 schema 5: patterns is a real histogram, not a sentinel" \
+  "! grep -qE 'redis_key_patterns=__' '$PROBE_D_LOG'"
+# The value must remain ONE whitespace-free token, or the dark gate's token parser sees extra
+# fields — the injection shape its duplicate-field refusal exists to catch.
+assert "#7695 schema 5: patterns is a single token (no whitespace leaked into the row)" \
+  "[[ \$(grep -oE 'redis_key_patterns=[^ ]+' '$PROBE_D_LOG' | head -1 | wc -w) -eq 1 ]]"
 
 # --- ARM 6: a NOAUTH reply must NOT render as an empty store -------------------------------
 # THE SINGLE MOST DANGEROUS DEGRADATION IN THE PROBE. redis answers an unauthenticated INFO
