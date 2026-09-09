@@ -62,7 +62,7 @@ esac
 # (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy
 # variables, but NEITHER touches the trust store or the TLS session-key log. On an
 # installed CLI the environment belongs to someone who is not us, so
-# `CURL_CA_BUNDLE=/tmp/attacker-ca.pem` is a clean MITM of the founder's platform
+# a substituted `CURL_CA_BUNDLE` is a clean MITM of the founder's platform
 # token with every other guard fully intact, and `SSLKEYLOGFILE` is passive
 # decryption with no MITM at all. Matches the line in scripts/betterstack-query.sh.
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \

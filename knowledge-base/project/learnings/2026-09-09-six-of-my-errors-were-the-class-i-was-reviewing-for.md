@@ -9,7 +9,8 @@ pr: 7986
 
 # Six of my session errors were the defect class I was reviewing for
 
-> Seven, by the end: the class recurred once more AFTER this file was written. See error 14.
+> Eight, by the end: the class recurred twice more AFTER this file was written — see errors
+> 14 and 16. Error 16 was caught by CI, not by me, on a RED I had already read past.
 
 ## Problem
 
@@ -144,3 +145,21 @@ Specifically:
     **Prevention:** none warranted; it is the "documenting X collides with asserting
     X" class one level up, and the guardrail behaved correctly. Worth knowing that
     prose about a blocked construct is itself a blocked construct in `bash -c`.
+16. **I explained an aggregate's RED from the suites I already knew about.** The battery's
+    `plugins/soleur` aggregate failed; I attributed it to the two suites I had just fixed and
+    wrote "the aggregate rolls up two of those". It rolled up THREE. The third —
+    `scratch-path-collision`, reddened by a literal `/tmp/attacker-ca.pem` I had written into
+    seven prologue comments — sat at line 9214 of the log I had already read. I then verified
+    the two suites INDIVIDUALLY and never re-ran the aggregate, so nothing in my verification
+    could have surfaced the one I had not enumerated. CI found it.
+    **Prevention:** an aggregate's RED is a claim about a SET. Enumerate the set from the log
+    (`grep '(fail)'`), never from the members you can already name, and re-run the AGGREGATE to
+    confirm green — a green member is not a green aggregate. This is the same shape as errors 6
+    and 9 (an instrument that answers rather than errors), applied to my own triage prose.
+
+    Note the collision that produced it: the literal path existed only to DOCUMENT a TLS-MITM
+    threat, and the guard forbidding literal `/tmp` paths cannot tell a prescription from an
+    illustration. That is the third instance this session of "documenting X collides with
+    asserting X" (errors 6 and 15). The fix removed the literal rather than widening the
+    allowlist — and doing so also repaired a false claim, since the comment asserted it
+    "matches the line in `scripts/betterstack-query.sh`", which uses no literal path at all.
