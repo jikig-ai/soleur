@@ -1689,6 +1689,7 @@ granularity
 graphql
 graphql-vs-rest
 gray-matter
+greedy-parse
 greenfield-framing
 grep
 grep-acceptance-criteria
@@ -2836,6 +2837,7 @@ pseudonymisation
 pseudonymization
 psql
 public
+public-egress
 public-endpoint
 public-paths
 public-repo
@@ -3908,6 +3910,7 @@ universal-ssl
 unnecessary phases
 untracked-files
 untrusted-checkout-toctou
+untrusted-input
 unused-agents
 unverified-claims
 update-ref
