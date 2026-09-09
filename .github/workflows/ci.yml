@@ -901,15 +901,19 @@ jobs:
     # REVISION 2 IS FALSE, and revision 1 was closer. Measured 2026-09-08 on run 34214304922
     # (`gh api .../runs/<id>/jobs`, start offsets from the run's `created_at`):
     #
-    #     +   1s  plugin-root-propagation-gate      <- 2 jobs get a runner immediately
-    #     +   1s  sandbox-canary-capture-gate
     #     + 441s  lint-conversations-update-callsites
     #     + 621s  credential-path-guard
-    #     +1346s  test-scripts
-    #     +1397s  critical-css-gate
+    #     +1346s  test-scripts, web-platform-build
+    #
+    # CORRECTED 2026-09-09: an earlier revision of this list also cited `+1s` for two jobs and
+    # `+1397s critical-css-gate`. Both are wrong for the argument. The `+1s` pair were SKIPPED
+    # (runner_id null, zero steps) — they never acquired a runner, so they say nothing about
+    # availability. And `critical-css-gate` HAS `needs: detect-changes`, so it is excluded by this
+    # sentence's own selection criterion. The honest figure over needs-less jobs that actually
+    # took a runner is 441s -> 1346s.
     #
     # Those jobs have NO `needs`, so a concurrency gate releases them together — a group release
-    # starts every one of them at the same instant. They stagger across 23 MINUTES inside one run,
+    # starts every one of them at the same instant. They stagger across 15 MINUTES inside one run,
     # which a queue cannot produce. And the group was EMPTY: the predecessor run finished
     # 2026-09-07T22:03:12Z, this run was created 2026-09-08T10:13:35Z, a 12h10m gap. Separately
     # `test` — whose start is gated only by its `needs` — waited 619s after its last need
