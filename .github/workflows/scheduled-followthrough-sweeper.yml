@@ -47,9 +47,40 @@ permissions:
 jobs:
   sweep:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # 10 -> 15. `fetch-depth: 0` below costs a measured +20-60s against a worst
+    # recent run of 3m51s; raising the ceiling in the same edit keeps the change
+    # from surfacing later as an unexplained timeout.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # FULL HISTORY, for scripts/followthroughs/ccla-representative-icla-7922.sh.
+          # That probe derives the coverage-map notice epoch with
+          # `git log --first-parent -S<anchor>`, and on the default shallow
+          # checkout the pickaxe finds the GRAFT commit instead of the commit
+          # that introduced the notice. Measured on a --depth=1 clone: the
+          # derivation returned HEAD's own commit date rather than the notice
+          # commit's, and `rev-parse <graft>^` failed. The probe refuses in that
+          # state rather than reporting a plausible wrong epoch, so without this
+          # it would post CANNOT ESTABLISH every day forever.
+          #
+          # No other probe reads git history — grepped: the only git usage
+          # across the other 79 files is `rev-parse --show-toplevel` — so
+          # nothing else changes behaviourally.
+          fetch-depth: 0
+          # `actions/checkout` otherwise writes an `http.<host>.extraheader`
+          # carrying this workflow's token into `.git/config`, which `env -i`
+          # does NOT remove. Every verification script the sweeper runs could
+          # therefore recover a credential with `issues:write` — the identity
+          # `closed_precheck` treats as unforgeable — and this is the first
+          # probe to read third-party-controlled content.
+          #
+          # Measured before flipping it: the sweeper itself runs no git command
+          # at all (it resolves `script=` against the checked-out HEAD), and the
+          # one probe that does fetch reads a PUBLIC branch, which succeeds
+          # anonymously (verified: `git fetch https://github.com/jikig-ai/soleur
+          # '+refs/heads/cla-signatures:...'` with no credential, rc=0).
+          persist-credentials: false
 
       - name: Run sweeper
         env:

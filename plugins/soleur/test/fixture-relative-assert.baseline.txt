@@ -284,6 +284,7 @@
 1	scripts/expenses-verify-by-check.test.sh
 1	scripts/follow-through-closure-guard.test.sh
 23	scripts/followthroughs/anthropic-admin-key-6297.test.sh
+5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
 1	scripts/followthroughs/git-data-rung2-evidence-capture.sh
 1	scripts/followthroughs/infra-config-activation-7220.test.sh
 1	scripts/followthroughs/inngest-cutover-flip-rollout-7761.test.sh
