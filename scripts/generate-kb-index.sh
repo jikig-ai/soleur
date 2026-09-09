@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # generate-kb-index.sh — Generate knowledge-base/INDEX.md from file metadata.
 #
-# Usage: bash scripts/generate-kb-index.sh [--help]
+# Usage: bash scripts/generate-kb-index.sh [--help] [--out DIR] [--check]
 #
 # Walks knowledge-base/**/*.md, extracts titles from YAML frontmatter
 # (fallback: first # heading, then kebab-to-title-case filename), and
@@ -11,8 +11,16 @@
 # knowledge-base/project/specs/<feature>/, only spec.md and tasks.md are
 # indexed — other flat files there are per-feature working state (#7399).
 #
-# After merge conflicts on INDEX.md, regenerate:
-#   bash scripts/generate-kb-index.sh
+# Flags:
+#   --out DIR   Write INDEX.md, kb-tags.txt and kb-categories.txt into DIR
+#               instead of the tracked knowledge-base/ artifacts.
+#   --check     Regenerate off to the side and diff against the committed
+#               artifacts; print the diff and exit non-zero on any mismatch.
+#
+# INDEX.md is resolved on merge by scripts/merge-kb-index.sh, registered as
+# merge.kb-index.driver by scripts/install-kb-merge-driver.sh and selected by
+# the root .gitattributes. If a merge of INDEX.md ever conflicts, re-run the
+# merge after fixing that registration -- never resolve it by taking one side.
 
 set -euo pipefail
 
@@ -29,9 +37,90 @@ LEARNINGS_DIR="$KB_DIR/project/learnings"
 TAGS_FILE="$KB_DIR/kb-tags.txt"
 CATEGORIES_FILE="$KB_DIR/kb-categories.txt"
 
-if [[ "${1:-}" == "--help" ]]; then
-  sed -n '2,/^$/s/^# //p' "$0"
+# shellcheck source=scripts/lib/kb-index-render.sh
+source "$SCRIPT_DIR/lib/kb-index-render.sh"
+
+# --out DIR is the primitive (mirroring regenerate-c4-model.sh --out); --check is
+# a thin wrapper around it. Both are additive: the four live callers all invoke
+# this script with no arguments and are unaffected.
+OUT_DIR=""
+CHECK=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --help)
+      sed -n '2,/^$/s/^# //p' "$0"
+      exit 0
+      ;;
+    --out)
+      OUT_DIR="${2:-}"
+      [[ -n "$OUT_DIR" ]] || { echo "ERROR: --out requires a directory" >&2; exit 2; }
+      shift 2
+      ;;
+    --check)
+      CHECK=1
+      shift
+      ;;
+    *)
+      echo "ERROR: unknown argument '$1' (see --help)" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ "$CHECK" == 1 ]]; then
+  # Regenerate into a scratch directory and diff against the committed
+  # artifacts. This is a REGENERATION DIFF and not a structural lint on purpose:
+  # a checklist of structural assertions would re-implement the generator's own
+  # row-eligibility predicate in a second place (which ADR-174 warns will
+  # drift), and it still could not see title drift, renderer drift, or the
+  # rename-plus-edit divergence the merge driver documents as its honest limit.
+  # Regenerating catches all of them, including the case where no merge driver
+  # was registered at all and git line-merged the file into something that reads
+  # as clean.
+  [[ -z "$OUT_DIR" ]] || { echo "ERROR: --check and --out are mutually exclusive" >&2; exit 2; }
+  _check_dir="$(mktemp -d)"
+  trap 'rm -rf "$_check_dir"' EXIT
+  "$0" --out "$_check_dir" >/dev/null
+  # CAPPED, and on ONE stream. `diff -u` was both the gate and the diagnostic,
+  # uncapped and on stdout while the ERROR line went to stderr — so a stale index
+  # emitted unbounded interleaved output (measured: 295 lines for a 280-row
+  # drift; issue #7401 records main being stale by 3,711 rows, which is ~4.5k
+  # lines). That is hr-never-run-commands-with-unbounded-output in the guard the
+  # design designates as the last thing between a line-merged index and main.
+  # The c4 precedent this flag is modelled on gates on `cmp -s` and caps its
+  # diagnostic at `head -20`.
+  _check_rc=0
+  _check_cap=40
+  for _f in INDEX.md kb-tags.txt kb-categories.txt; do
+    if ! cmp -s "$KB_DIR/$_f" "$_check_dir/$_f"; then
+      {
+        echo "ERROR: $KB_DIR/$_f differs from a fresh generation (first $_check_cap diff lines):"
+        # `|| true` is load-bearing: `diff` exits 1 when files differ — which is
+        # the whole reason we are here — and under `pipefail` that status
+        # survives `head`, so `set -e` killed the script mid-diagnostic before
+        # `_check_rc=1` was ever reached. The guard still exited non-zero, so it
+        # LOOKED correct, while the remediation line never printed and the two
+        # mutation rows pinning that exit path went vacuous. Caught by this
+        # change's own battery (C1/C2 SURVIVED).
+        diff -u "$KB_DIR/$_f" "$_check_dir/$_f" | head -n "$_check_cap" || true
+      } >&2
+      _check_rc=1
+    fi
+  done
+  if [[ "$_check_rc" -ne 0 ]]; then
+    echo "Run: bash scripts/generate-kb-index.sh" >&2
+    exit 1
+  fi
+  echo "kb index artifacts are fresh."
   exit 0
+fi
+
+if [[ -n "$OUT_DIR" ]]; then
+  mkdir -p "$OUT_DIR"
+  OUT_DIR="$(cd "$OUT_DIR" && pwd)"
+  INDEX_FILE="$OUT_DIR/INDEX.md"
+  TAGS_FILE="$OUT_DIR/kb-tags.txt"
+  CATEGORIES_FILE="$OUT_DIR/kb-categories.txt"
 fi
 
 if [[ ! -d "$KB_DIR" ]]; then
@@ -118,27 +207,36 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
   done
 ' _ "$KB_DIR" | LC_ALL=C sort > "$tmpfile"
 
-# Build the index from the sorted entries
-{
-  echo "# Knowledge Base Index"
-  echo ""
-  echo "> Auto-generated by \`scripts/generate-kb-index.sh\`. Do not edit manually."
-  echo "> Total files: $total"
+# Build the index from the sorted entries.
+#
+# The layout lives in scripts/lib/kb-index-render.sh, sourced above, because
+# scripts/merge-kb-index.sh must emit byte-identical content from git's three
+# merge inputs. A second copy here would drift, and the drift would be invisible
+# -- both files would still look like an index.
+# PUBLISHED ATOMICALLY, mirroring regenerate-c4-model.sh's `--out` contract
+# rather than only its flag shape. A bare `> "$INDEX_FILE"` truncates the TRACKED
+# artifact before the renderer runs, so a SIGINT, a full disk, or an OOM-killed
+# xargs child leaves knowledge-base/INDEX.md destroyed on disk (measured: 156
+# bytes -> 8 bytes of partial output). lefthook runs this generator on every
+# commit touching knowledge-base/, so that window is routine.
+# UNLINK BEFORE REDIRECTING. A redirect FOLLOWS an existing symlink, so a
+# pre-planted `<artifact>.tmp.<pid>` pointing anywhere writable makes this write
+# through it and the following `mv -f` then replaces the tracked artifact with a
+# symlink. scripts/merge-kb-index.sh documents this exact class for its own
+# scratch file and applies the same remedy; measured here before the fix, the
+# tracked artifact became a symlink to the planted target.
+_index_tmp="$INDEX_FILE.tmp.$$"
+rm -f "$_index_tmp"
+kb_render_index "$tmpfile" > "$_index_tmp"
+mv -f "$_index_tmp" "$INDEX_FILE"
 
-  current_domain=""
-  while IFS=$'\t' read -r rel title; do
-    domain="${rel%%/*}"
-    if [[ "$domain" != "$current_domain" ]]; then
-      echo ""
-      echo "## $domain"
-      echo ""
-      current_domain="$domain"
-    fi
-    echo "- [$title]($rel)"
-  done < "$tmpfile"
-} > "$INDEX_FILE"
-
-echo "Generated $INDEX_FILE ($total files indexed)"
+# DERIVED FROM THE ARTIFACT, not from `${#all_files[@]}`. That second derivation
+# is the exact mechanism behind main's off-by-one headers -- the find pass and
+# the row pass can disagree -- and this echo was the last place it survived after
+# kb-index-render.sh started deriving the header from the row count. AC13 cannot
+# see it: it greps for `Total files:`, which this line does not contain.
+_indexed="$(grep -c '^- \[' "$INDEX_FILE" || true)"
+echo "Generated $INDEX_FILE ($_indexed files indexed)"
 
 # ---------------------------------------------------------------------------
 # Facet extraction: emit kb-tags.txt and kb-categories.txt from learnings/.
@@ -238,8 +336,12 @@ if [[ -d "$LEARNINGS_DIR" ]]; then
 
   # Split the tagged stream into two sorted, unique artifacts.
   # `grep ... || true` avoids set -e tripping when a facet type has no entries.
-  { grep $'^tag\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE"
-  { grep $'^cat\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$CATEGORIES_FILE"
+  # Same atomic-publish contract as the index above.
+  rm -f "$TAGS_FILE.tmp.$$" "$CATEGORIES_FILE.tmp.$$"   # see the unlink note above
+  { grep $'^tag\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE.tmp.$$"
+  mv -f "$TAGS_FILE.tmp.$$" "$TAGS_FILE"
+  { grep $'^cat\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$CATEGORIES_FILE.tmp.$$"
+  mv -f "$CATEGORIES_FILE.tmp.$$" "$CATEGORIES_FILE"
 
   tag_count=$(wc -l < "$TAGS_FILE" | tr -d '[:space:]')
   cat_count=$(wc -l < "$CATEGORIES_FILE" | tr -d '[:space:]')

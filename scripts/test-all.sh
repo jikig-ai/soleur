@@ -1594,6 +1594,15 @@ if want_scripts; then
   # Registered explicitly for the same reason as its neighbours: scripts/*.test.sh is
   # NOT auto-globbed, so an unregistered suite silently never gates.
   run_suite "scripts/ship-incident-pir-gate-mutations" bash scripts/ship-incident-pir-gate-mutation.test.sh
+  # The two knowledge-base merge-driver batteries (#7935) are NOT registered here,
+  # and that is the fix rather than an omission. They are named
+  # `*-mutation.test.sh`, which is the convention every registered bash battery in
+  # this repo already uses, so `SUITE_GLOBS`' `plugins/soleur/test/*.test.sh` entry
+  # picks them up and `scripts/lint-orphan-test-suites.sh` (which walks `*.test.sh`)
+  # can see them. An earlier revision named them `*.mutation.sh` and hand-registered
+  # them with a comment explaining that nothing could auto-discover that spelling --
+  # restating the hazard instead of deriving it away, and adding two more members to
+  # the class #7942 tracks. Renaming closed it. Measured 17s + 6s.
   # The fstab ceiling applier. Every case drives a FIXTURE fstab through the
   # RAISE_TMPFS_FSTAB seam — the real /etc/fstab is never read or written, because a
   # test that touched it could leave the machine unbootable. Registered explicitly for
