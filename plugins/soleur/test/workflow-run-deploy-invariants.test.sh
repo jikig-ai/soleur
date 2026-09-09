@@ -138,8 +138,28 @@ for i, l in enumerate(src, 1):
         job = m.group(1)
     if l.lstrip().startswith("#"):
         continue
-    if "${{ github.sha }}" in l:
-        sha_sites.append({"line": i, "job": job, "text": l.strip()})
+    # MATCH `github.sha` AS A TOKEN INSIDE ANY `${{ }}` SPAN, not as the exact
+    # three-token literal. The literal form is one spelling among many: this PR
+    # itself introduced five sites of the shape
+    #   ref: ${{ needs.<job>.outputs.head_sha || github.sha }}
+    # and an exact-literal match was blind to every one of them, so G3's headline
+    # claim was already false of the file it guards. `${{github.sha}}` (no inner
+    # spaces) and a span folded across lines were equally invisible.
+    for span in re.findall(r"\$\{\{(.*?)\}\}", l, re.S):
+        if not re.search(r"(?<![.\w])github\.sha(?![\w])", span):
+            continue
+        norm = " ".join(span.split())
+        # PERMIT (semantic, not name-keyed): `<upstream>.head_sha || github.sha`.
+        # `||` in a GitHub expression yields the right operand only when the left
+        # is falsy, and `github.event.workflow_run.head_sha` is non-empty on EVERY
+        # workflow_run event. So github.sha here is reachable only when the run is
+        # NOT a workflow_run — i.e. never on the arm this guard is about. A job
+        # that `needs: resolve-target` has no business using this form (its
+        # head_sha is 40-hex-validated upstream), and gets no permit.
+        if re.fullmatch(r"github\.event\.workflow_run\.head_sha \|\| github\.sha", norm):
+            continue
+        sha_sites.append({"line": i, "job": job, "text": l.strip(), "expr": norm})
+        break
     if "github.event.before" in l:
         sha_sites.append({"line": i, "job": job, "text": l.strip(), "before": True})
 out["sha_sites"] = sha_sites
@@ -363,27 +383,99 @@ if grep -qF 'needs.resolve-target.outputs.soft_breach' "$REL"; then pass; else
 fi
 
 # ═══ GUARD 8 — every consumer disambiguates the two arms ═════════════════════
-# ASSEMBLY BY EXTRACTION, not a checked-in list: after the split EVERY merge
-# produces two runs of this workflow, so an undisambiguated `--limit 1` lands on
-# the wrong half roughly half the time.
-_consumers=$(cd "$REPO_ROOT" && git grep -n 'workflow=web-platform-release' -- plugins/ scripts/ .github/ 2>/dev/null | grep -v 'workflow-run-deploy-invariants')
+# ASSEMBLY BY EXTRACTION, and the extraction is the part that was wrong.
+#
+# An earlier revision grepped the single literal `workflow=web-platform-release`
+# across `plugins/ scripts/ .github/`. That found TWO rows — and FOUR of the six
+# call sites THIS PR ITSELF SWEPT were invisible to it: `--workflow ` with a space
+# (postmerge/SKILL.md, ship/SKILL.md), `--workflow="$WORKFLOW"` via a variable
+# (watch-live-verify-pass.sh), `gh api .../workflows/${WORKFLOW}/runs`
+# (zot-mirror-connector-6416.sh), and everything under knowledge-base/, which was
+# outside the path scope entirely. The non-vacuity floor (>= 1) was satisfied by
+# the two incidental survivors, so the guard reported healthy while covering
+# almost nothing — a guard narrower than the property it names.
+#
+# The discovery now keys on the WORKFLOW being selected (by file name, however
+# spelled) rather than on one flag spelling, and covers knowledge-base too.
+_consumers=$(cd "$REPO_ROOT" && git grep -nE \
+  'gh run (list|view|watch|rerun)[^|]*web-platform-release|workflows/[^ ]*web-platform-release[^ ]*/runs|WORKFLOW="?web-platform-release' \
+  -- plugins/ scripts/ .github/ knowledge-base/ 2>/dev/null \
+  | grep -v 'workflow-run-deploy-invariants' \
+  | grep -vE '^knowledge-base/project/(plans|specs)/|/archive/|post-mortems/' || true)
+_n_consumers=$(printf '%s\n' "$_consumers" | grep -c . || true)
+
+# NON-VACUITY: the count must exceed what the OLD broken predicate found, or the
+# extraction has silently narrowed again. 2 was the broken value; the swept set is
+# materially larger. A floor of 5 is below the current population and above the
+# degenerate one, so a re-narrowing reds rather than reporting clean.
+if [ "$_n_consumers" -ge 5 ]; then pass; else
+  fail "G8 the consumer extraction found only $_n_consumers call site(s) — the broken predicate found 2 and this PR swept six. The extraction has narrowed; a 'no violations' verdict from it is unfalsifiable"
+fi
+
 _undis=""
 while IFS= read -r hit; do
   [ -n "$hit" ] || continue
-  # Disambiguated when the call names an --event, or filters on job presence.
-  case "$hit" in
-    *--event*|*live-verify*|*deploy*|*jobs*) : ;;
+  _f="${hit%%:*}"; _rest="${hit#*:}"; _ln="${_rest%%:*}"
+  case "$_ln" in ''|*[!0-9]*) continue ;; esac
+  # SCOPE THE CHECK TO THE COMMAND, NOT THE LINE. A `gh run list ... \` continues
+  # onto the next line, and a `WORKFLOW="web-platform-release.yml"` assignment is
+  # resolved at a `gh` call further down — so a single-line predicate reports a
+  # correctly-disambiguated consumer as a violation. The window is the property's
+  # real domain. (It is deliberately NOT the whole file: that would let an
+  # unrelated `--event` elsewhere vouch for this call site.)
+  _lo=$(( _ln > 3 ? _ln - 3 : 1 )); _hi=$(( _ln + 12 ))
+  _win=$(sed -n "${_lo},${_hi}p" "$REPO_ROOT/$_f" 2>/dev/null)
+  case "$_win" in
+    *"--event workflow_run"*|*"--event push"*|*"event=push"*|*"event=workflow_run"*|*'EVENT_ARM'*) : ;;
     *) _undis="${_undis}${hit}
 " ;;
   esac
 done <<< "$_consumers"
-_n_consumers=$(printf '%s\n' "$_consumers" | grep -c . || true)
-if [ "$_n_consumers" -ge 1 ]; then pass; else
-  fail "G8 the consumer extraction found ZERO call sites — it is checking nothing, which is not the same as finding no violations"
-fi
+
 if [ -z "$_undis" ]; then pass; else
-  fail "G8 consumer(s) select a web-platform-release run without disambiguating the push arm from the workflow_run arm — after the split each merge produces BOTH, so these read the wrong half ~50% of the time:
+  fail "G8 consumer(s) select a web-platform-release run without naming an arm — after the split each merge produces BOTH, so these read the wrong half ~50% of the time:
 $_undis"
+fi
+
+# The mutant predicate is the SUITE'S OWN GUARDS, not a paraphrase of them.
+# It previously omitted G3's `before` and `permitted()` filters, so it reported a
+# violation on the UNMUTATED file (resolve-target's legitimate `DISPATCH_SHA:
+# ${{ github.sha }}` is workflow_run-reachable). Every row then scored KILLED
+# whatever it mutated, including a mutant that changed nothing semantic — so
+# "5/5 killed" was a reading of the baseline, and G4-15 was in fact SURVIVING.
+# The MUT-CONTROL rows below are what keep this honest: the predicate must be
+# EMPTY on the pristine file, and a null mutant must be reported SURVIVING.
+MUTPRED="$W/mutpred.py"
+cat > "$MUTPRED" <<'PYPRED'
+import json, os
+d = json.load(open(os.environ["MUT_A"]))
+reach = set(d["wr_reachable"])
+def permitted(s):                                   # identical to the G3 row
+    return s["job"] == "resolve-target" and s["text"].startswith("DISPATCH_SHA:")
+out = []
+if [s for s in d["sha_sites"]
+    if not s.get("before") and s["job"] in reach and not permitted(s)]:
+    out.append("sha")
+if [s for s in d["sha_sites"] if s.get("before") and s["job"] in reach]:
+    out.append("before")
+if "github.event_name == 'push'" in d["conds"].get("live-verify", ""):
+    out.append("lv-push")
+if "main" not in (d["wr_branches"] or []):
+    out.append("branches")
+if not d["wr_workflows"]:
+    out.append("workflows")
+# G4-15 is a NAME DESYNC, not an emptiness: `workflows:` naming something that is
+# not ci.yml's `name:` is the defect, and the old predicate never compared them.
+CI_NAME = os.environ.get("MUT_CI_NAME", "")
+if CI_NAME and CI_NAME not in (d["wr_workflows"] or []):
+    out.append("wf-name")
+print(",".join(out))
+PYPRED
+# CI_NAME is already derived from $CI at Guard 4 — reuse it rather than
+# re-deriving (a second derivation is a second thing that can drift).
+if [ -z "${CI_NAME:-}" ]; then
+  printf 'FATAL: CI_NAME is empty — the wf-name mutant row would be vacuous\n' >&2
+  exit 1
 fi
 
 # ═══ MUTATION BATTERY ════════════════════════════════════════════════════════
@@ -405,19 +497,7 @@ mutate() {  # $1=label $2=sed-expr $3=grep-pattern the MUTATED analysis must tri
     pass; MUT_KILLED=$((MUT_KILLED + 1)); return
   fi
   local viol
-  viol=$(python3 -c "
-import json
-d=json.load(open('$ma'))
-reach=set(d['wr_reachable'])
-bad=[s for s in d['sha_sites'] if s['job'] in reach]
-lv=d['conds'].get('live-verify','')
-out=[]
-if bad: out.append('sha')
-if \"github.event_name == 'push'\" in lv: out.append('lv-push')
-if 'main' not in (d['wr_branches'] or []): out.append('branches')
-if not d['wr_workflows']: out.append('workflows')
-print(','.join(out))
-")
+  viol=$(MUT_A="$ma" MUT_CI_NAME="$CI_NAME" python3 "$MUTPRED")
   if [ -n "$viol" ]; then
     pass; MUT_KILLED=$((MUT_KILLED + 1))
   else
@@ -425,6 +505,38 @@ print(','.join(out))
     MUT_SURVIVED+=("$label")
   fi
 }
+
+# ── MUT-CONTROL rows — WITHOUT THESE THE BATTERY IS UNREADABLE ───────────────
+# (i) The predicate must be EMPTY on the pristine file. This is the row whose
+#     absence made every previous verdict meaningless: the predicate reported
+#     `sha` at baseline, so `MUT_KILLED` counted rows that measured nothing.
+_ctl=$(MUT_A="$A" MUT_CI_NAME="$CI_NAME" python3 "$MUTPRED")
+if [ -z "$_ctl" ]; then pass; else
+  printf 'FATAL: MUT-CONTROL — the mutant predicate reports "%s" on the UNMUTATED file.\n' "$_ctl" >&2
+  printf '  Every mutation row below would score KILLED regardless of what it mutated,\n' >&2
+  printf '  so the battery measures the baseline and its verdict is VOID.\n' >&2
+  exit 1
+fi
+# (ii) A mutant that LANDS but changes nothing the guards are about must be
+#      reported SURVIVING. A battery that cannot say "survived" cannot say
+#      "killed" either — this is the instrument self-test for the scoring itself.
+_null="$W/nullmut.yml"
+sed '0,/^$/{/^$/d}' "$REL" > "$_null"          # delete the first blank line
+if cmp -s "$_null" "$REL"; then
+  fail "MUT-CONTROL(ii) the null mutation did not land, so the scoring self-test is vacuous"
+else
+  _na="$W/nullmut.json"
+  if python3 "$ANALYSE" "$_null" > "$_na" 2>/dev/null; then
+    _nv=$(MUT_A="$_na" MUT_CI_NAME="$CI_NAME" python3 "$MUTPRED")
+    if [ -z "$_nv" ]; then pass; else
+      printf 'FATAL: MUT-CONTROL(ii) — deleting a blank line was scored as a KILL ("%s").\n' "$_nv" >&2
+      printf '  The scoring cannot distinguish a real defect from an inert edit.\n' >&2
+      exit 1
+    fi
+  else
+    fail "MUT-CONTROL(ii) the null mutant did not parse — the analyser is line-fragile"
+  fi
+fi
 
 # G3-10 — reintroduce a bare github.sha on the wrong-image gate.
 mutate "G3-10 EXPECTED_SHA reverts to bare github.sha" \

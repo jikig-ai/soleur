@@ -246,7 +246,14 @@ jobs:
       # while holding the cross-pipeline `web-1-swap` lock — a checkout there would
       # pull ~1.5k files onto the runner holding that lock. `resolve-target` holds no
       # lock and drives no deploy, which is exactly why the derivation lives here.
+      # PINNED TO THE EVENT'S SHA. Under `workflow_run`, `actions/checkout` with no
+      # `ref:` resolves the DEFAULT-BRANCH head — this file already says so on the
+      # `release` job, and that warning was not applied to the jobs rehomed onto this
+      # arm. Unpinned, every ceiling this job parses would come from whatever main
+      # HEAD is at deploy time rather than from the SHA being deployed.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - name: Resolve the deploy target
         id: resolve
@@ -288,6 +295,13 @@ jobs:
           # exist and does not, or exists and is broken.
           fail_closed() {
             echo "::error::deploy blocked — $1"
+            # EMIT head_sha HERE TOO. Without it every fail-closed state — which is
+            # every state that fires notify-gated — leaves the operator's Slack
+            # message rendering an EMPTY commit and version, because the message
+            # reads needs.resolve-target.outputs.head_sha. The old notify-gated used
+            # `github.sha`, which was always populated; dropping the SHA from the one
+            # channel that says "prod did NOT update" is a regression, not a detail.
+            emit head_sha "${WR_HEAD_SHA:-}"
             emit should_deploy "false"; emit skip_reason "$2"
             exit 1
           }
@@ -421,17 +435,26 @@ jobs:
           mirror_verified=$(jq -r '.mirror_verified // "false"' "$RUNNER_TEMP/ro.json")
 
           # STATE 2 — the release job SUCCEEDED and deliberately published nothing:
-          # reusable-release.yml's own `check_changed` pathspec declined. This is a
-          # POSITIVE signal read off the artifact, not an inference from absence,
-          # which is why the upload step carries `if: always()`.
-          if [ "$released" != "true" ]; then
-            clean_skip "$WR_HEAD_SHA" "the release job published nothing for this SHA (check_changed declined it)" "upstream_concluded_unpublished"
-          fi
-
-          # ── Step 5: emptiness binding. `released=true` with an empty version is a
-          #    contradiction, and deploying it would target nothing.
+          # reusable-release.yml's own `check_changed` pathspec declined.
+          #
+          # THE DISCRIMINATOR IS `version`, NOT `released`, AND THAT IS EQUAL-STRENGTH
+          # RATHER THAN A PREFERENCE. The gates this arm replaces read
+          # `needs.release.outputs.version != ''` (migrate) and
+          # `needs.release.outputs.docker_pushed == 'true'` (deploy). NEITHER read
+          # `released`. And `released` is FALSE in a state those gates DEPLOYED:
+          # reusable-release.yml derives it as
+          #   create_release.released == 'true' || idempotency.draft_exists == 'true'
+          # so a SHA whose tag is already PUBLISHED (idempotency `exists=true`, the
+          # #4902 already-published branch — NOT the orphaned-draft branch) yields
+          # `released=false` with a perfectly good version and image. Gating on it
+          # would silently clean-skip the re-run an operator uses to recover a failed
+          # deploy: green run, no deploy, no notification. `check_changed` declining
+          # leaves `version` EMPTY, which is the state the old gate keyed on.
+          #
+          # `released` is still carried as a value (legibility, and release-outcome
+          # reads it) — it is simply not a gate.
           if [ -z "$version" ] || [ -z "$tag" ]; then
-            fail_closed "release-outputs says released=true but version='$version' tag='$tag'" "release_outputs_incomplete"
+            clean_skip "$WR_HEAD_SHA" "the release job published nothing for this SHA (check_changed declined it)" "upstream_concluded_unpublished"
           fi
 
           emit head_sha "$WR_HEAD_SHA"
@@ -609,6 +632,10 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # See resolve-target: under workflow_run an unpinned checkout is the
+          # DEFAULT-BRANCH head, not the SHA being deployed.
+          ref: ${{ needs.resolve-target.outputs.head_sha }}
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Run migrations
@@ -643,6 +670,10 @@ jobs:
       issues: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # See resolve-target: under workflow_run an unpinned checkout is the
+          # DEFAULT-BRANCH head, not the SHA being deployed.
+          ref: ${{ needs.resolve-target.outputs.head_sha }}
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Install psql
@@ -772,6 +803,11 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # See resolve-target: under workflow_run an unpinned checkout is the
+          # DEFAULT-BRANCH head, not the SHA being deployed. This job declares no
+          # `needs:`, so it reads the event directly rather than resolve-target.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Assert required NEXT_PUBLIC_* secrets present in Doppler prd
@@ -1000,6 +1036,7 @@ jobs:
       # failing the step rather than by pretending to succeed. ADR-072's
       # prohibition is scoped to the GIT-ANCESTRY form.
       - name: Refuse a version regression (ordering guard)
+        id: ordering
         env:
           VERSION: ${{ needs.resolve-target.outputs.version }}
         run: |
@@ -1018,27 +1055,61 @@ jobs:
             # ordering hazard this guards is a narrow race; the deploy-blocked
             # hazard would be permanent.
             echo "::warning::could not read the live version from /health — proceeding without the monotonicity check"
+            printf 'superseded=false\n' >> "$GITHUB_OUTPUT"  # explicit: proceed
             exit 0
           fi
           LIVE=$(echo "$HEALTH" | jq -r '.version // empty')
           if [ -z "$LIVE" ]; then
             echo "::warning::/health returned no version field — proceeding without the monotonicity check"
+            printf 'superseded=false\n' >> "$GITHUB_OUTPUT"  # explicit: proceed
             exit 0
           fi
           if [ "$LIVE" = "$VERSION" ]; then
             echo "live is already $LIVE — re-deploying the same version is idempotent, proceeding"
+            printf 'superseded=false\n' >> "$GITHUB_OUTPUT"  # explicit: proceed
             exit 0
           fi
           # `sort -V` is a total order over semver here; the NEWER of the two is
           # the last line. If that is the LIVE version, this run is older.
           NEWEST=$(printf '%s\n%s\n' "$LIVE" "$VERSION" | sort -V | tail -1)
           if [ "$NEWEST" = "$LIVE" ]; then
-            echo "::error::version regression refused — production is on ${LIVE} and this run resolved ${VERSION}. A newer release already deployed; swapping would roll production BACKWARDS. This is the out-of-order case per-SHA CI concurrency makes reachable (ADR-215 Decision 5)."
-            exit 1
+            # SUPERSEDED IS NOT A FAILURE, AND THE DIFFERENCE IS THE OPERATOR'S INBOX.
+            #
+            # This branch fires when a NEWER release already deployed. Production is
+            # ahead, not behind: it holds a descendant of this run's commit, so the
+            # merged changes ARE live, nothing is stuck, and the next merge deploys
+            # normally. Exiting non-zero here would make `deploy` FAIL, and
+            # release-outcome's classifier would then send the operator
+            # "[RELEASE FAILED] ... Production is still running the OLDER build ...
+            # Treat it as urgent: nothing reaches production until it is resolved."
+            # Every one of those four claims is FALSE in this state.
+            #
+            # That is the #7095/#7138 class this file already documents at length
+            # ("one wrong urgent page is exactly what teaches them to stop reading the
+            # next one") and it deviates from AP-021: a CI-emitted message may only
+            # name a cause the job MEASURED. The job measured the opposite.
+            #
+            # So this is a clean, GREEN, terminal skip that says what happened.
+            echo "::notice::deploy superseded — production is on ${LIVE}, which is newer than this run's ${VERSION}. A later release already shipped these changes; nothing is stuck and no action is needed. (ADR-215 Decision 5: per-SHA CI concurrency makes out-of-order completion reachable, and this is the guard working.)"
+            {
+              echo "### Deploy superseded"
+              echo ""
+              echo "Production is on **${LIVE}**; this run resolved **${VERSION}**."
+              echo "A newer release already deployed these changes. No action needed."
+            } >> "$GITHUB_STEP_SUMMARY"
+            # A BARE `exit 0` HERE WOULD DEPLOY THE OLDER VERSION: the step would
+            # succeed, every later step in this job would run, and the webhook would
+            # swap production BACKWARDS — the exact outcome this guard exists to
+            # prevent, reached through the guard itself. The marker is what makes the
+            # refusal effective; the deploy-acting steps below gate on it.
+            printf 'superseded=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          printf 'superseded=false\n' >> "$GITHUB_OUTPUT"
           echo "monotonicity ok: ${LIVE} -> ${VERSION}"
 
       - name: Deploy via webhook
+        if: steps.ordering.outputs.superseded != 'true'
         env:
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
@@ -1074,6 +1145,7 @@ jobs:
           echo "Deploy initiated (HTTP 202), polling health endpoint..."
 
       - name: Verify deploy script completion
+        if: steps.ordering.outputs.superseded != 'true'
         # STATUS_POLL_MAX_ATTEMPTS / STATUS_POLL_INTERVAL_S inherited from
         # job-level env (see top of `deploy:` job for the alignment rationale).
         env:
@@ -1147,6 +1219,7 @@ jobs:
           exit 1
 
       - name: Verify deploy health and version
+        if: steps.ordering.outputs.superseded != 'true'
         # HEALTH_POLL_MAX_ATTEMPTS / HEALTH_POLL_INTERVAL_S inherited from
         # job-level env (see top of `deploy:` job for the alignment rationale).
         env:
@@ -1318,6 +1391,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # See resolve-target: under workflow_run an unpinned checkout is the
+          # DEFAULT-BRANCH head, not the SHA being deployed.
+          ref: ${{ needs.resolve-target.outputs.head_sha }}
       # The trigger-paths gate runs FIRST (it needs only `gh` + the committed
       # trigger-paths.txt). The bun/doppler/playwright setup + harness below are
       # gated on `triggered == '1'`, so a SKIP release (most merges — no
