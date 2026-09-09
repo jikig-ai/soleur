@@ -350,7 +350,16 @@ rm -rf "$FZ2"
 # three-marker strength, where the per-file rule cannot discriminate it. The
 # same reasoning is why tests/hooks/test_hook_emissions.sh builds its fixture
 # with printf; see its comment.
-CM="$(mktemp -d)"; git init -q "$CM/repo"
+CM="$(mktemp -d)"
+# Owning trap. The suite's `exit 2` instrument-guard below and the `exit 1` on
+# any failure both bypass the inline `rm -rf "$CM"` at the end of this block, so
+# without this the fixture repo leaks on exactly the paths that matter. Scoped
+# to $CM only: the sibling fixture dirs above are pre-existing accepted debt
+# (scripts/lint-trap-tempfile-ownership.highwater), and paying that off here
+# would be the "touch a file, inherit its debt" failure the lint's own header
+# says switched earlier gates off.
+trap 'rm -rf "$CM"' EXIT
+git init -q "$CM/repo"
 git -C "$CM/repo" config user.email t@t.local
 git -C "$CM/repo" config user.name t
 # Not on `main`: block-commit-on-main is orthogonal and would mask every result.
