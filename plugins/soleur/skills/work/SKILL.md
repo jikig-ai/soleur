@@ -22,7 +22,14 @@ count over the new text is structurally blind to the sites still carrying the ol
 position survives precisely where prose review does not look — machine-readable frontmatter, an
 operative conclusion far from the edited paragraph, and a DIFFERENT document citing the old
 position as its own contrast case — so a corrected document containing an uncorrected field clears
-both the gates and the review. **Why:** #7349 — a legal record's controllership was corrected in
+both the gates and the review. **A literal grep is the WEAKEST of the three sweeps, and
+PARAPHRASE is the mode with no coverage** — wrap-insensitivity handles a blockquote splitting
+a phrase, and neither handles a site that restates the claim in different words. Write the
+claim as a SENTENCE and grep its paraphrases; the highest-risk position is a `**Prevention:**`
+line, because that is the part a future session executes. **Why:** #7957 — a sweep that was
+wrap-insensitive across all 9,684 tracked `*.md` returned 0 for a file it had just corrected,
+while that file's `## Session Errors` still prescribed "wait for the completion notification"
+as the remedy for an error it names "Inferred a commit VERDICT". **Why:** #7349 — a legal record's controllership was corrected in
 prose while its YAML `controller:` field FIFTEEN LINES ABOVE still asserted the superseded
 position, along with the operative balancing conclusion and a sibling document; the signed-off
 audit had already recorded that propagation as DISCHARGED. Same shape as the measurement rule
