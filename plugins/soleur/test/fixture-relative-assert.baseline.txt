@@ -303,6 +303,7 @@
 3	scripts/lib/repo-write-boundary.test.sh
 23	scripts/lint-agents-compound-sync.test.sh
 1	scripts/lint-agents-enforcement-tags.test.sh
+1	scripts/lint-credential-path-literals.test.sh
 4	scripts/lint-diagnosis-claims.test.sh
 10	scripts/lint-dual-lockfile.test.sh
 1	scripts/lint-encryption-posture.test.sh
