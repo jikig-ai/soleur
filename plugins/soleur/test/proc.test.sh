@@ -33,6 +33,19 @@ HELPER="$SCRIPT_DIR/../scripts/lib/proc.sh"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 CONTENTION_LIB="$REPO_ROOT/scripts/lib/test-contention.sh"
 
+# Guard 3 (#7833) tripwire adoption, added at review. This suite does NOT control the tripwire, so
+# it had no reason to abstain -- and measured, under an inherited git-location environment its
+# T-NEST fixture below breached the caller (HEAD moved, a branch and a dangling worktree appeared
+# in the caller's .git) while this file reported 61/61 pass, rc=0. The T9 precondition made T9
+# honest and left T-NEST exposed. Refusal is the correct behaviour for a suite started under a
+# hostile environment; test-all.sh:851 classifies rc 97 as [TRIPWIRE], not a failing assertion.
+# test-helpers.sh runs `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
+# deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: missing test-helpers.sh" >&2; exit 2; }
+
+set +e -uo pipefail
+
 PASS=0
 FAIL=0
 pass() { PASS=$((PASS + 1)); echo "  pass: $1"; }
@@ -396,20 +409,22 @@ fi
 # enumerating the causes.
 assert_not_a_repo() { # <dir> <known-repo>
   local dir="$1" known="$2" out rc
-  out=$(cd "$known" && env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
-    git rev-parse --git-dir 2>&1); rc=$?
+  out=$(cd "$known" && LC_ALL=C env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
+    git rev-parse --absolute-git-dir 2>&1); rc=$?
   if [[ $rc -eq 0 ]]; then
     pass "T9-pre/control: the probe SUCCEEDS in a known repository"
   else
     fail "T9-pre/control: probe failed in a known repo ($known) rc=$rc: $out"
   fi
-  out=$(cd "$dir" && env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
-    git rev-parse --git-dir 2>&1); rc=$?
+  out=$(cd "$dir" && LC_ALL=C env -u PROC_SH_WORKTREE -u GIT_DIR -u GIT_WORK_TREE \
+    git rev-parse --absolute-git-dir 2>&1); rc=$?
   if [[ $rc -ne 0 ]]; then
     pass "T9-pre: the probe FAILS in the fixture directory"
   else
     fail "T9-pre: fixture dir resolved as a repository (rc=0, git-dir=$out)"
   fi
+  # LC_ALL=C above is load-bearing: git ships translations, so without it this greps for an
+  # English string the host may never emit.
   if grep -qi 'not a git repository' <<<"$out"; then
     pass "T9-pre: the failure NAMES 'not a git repository'"
   else

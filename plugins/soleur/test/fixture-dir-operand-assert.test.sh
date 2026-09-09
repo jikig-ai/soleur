@@ -40,6 +40,20 @@ HELPERS="$SCRIPT_DIR/test-helpers.sh"
 [[ -f "$BASELINE" ]] || { echo "FATAL: missing $BASELINE" >&2; exit 2; }
 [[ -f "$HELPERS" ]]  || { echo "FATAL: missing $HELPERS" >&2; exit 2; }
 
+# Guard 3 (#7833) tripwire adoption, added at review. Measured under an inherited git-location
+# environment: probe_repo's `git -C "$d" init` + two config writes retargeted at the CALLER and
+# flipped its commit.gpgsign true -> false and its user.email -- the 2026-08-20 incident this
+# file's own baseline header records, reproduced by the suite that exists to pin it. The
+# assert_probe_repo precondition added earlier in this PR is DETECTION, and it runs downstream of
+# those writes; refusal is what prevents them. Sourcing does not disturb the canonical-body
+# extraction below, which reads this file as DATA, not as functions.
+# test-helpers.sh runs `set -euo pipefail`, so the `+e` restores this suite's prior contract --
+# delete the source line and the `+e` becomes wrong.
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$HELPERS" || { echo "FATAL: could not source $HELPERS" >&2; exit 2; }
+
+set +e -uo pipefail
+
 scan_counts() { # scan_counts <repo-root> -> "<count>\t<path>" rows, sorted by path
   python3 "$SCANNER" --rule operand --repo "$1" 2>/dev/null \
     | grep -E '^[^ ]+:[0-9]+:' | cut -d: -f1 | sort | uniq -c \
@@ -580,7 +594,7 @@ else
   fail "GUARD 3 pre/control: probe failed in a known repository ($REPO_ROOT)"
 fi
 _nonrepo="$TMP_ROOT/g3-control-nonrepo"; mkdir -p "$_nonrepo"
-_nr_out=$(git -C "$_nonrepo" rev-parse --absolute-git-dir 2>&1); _nr_rc=$?
+_nr_out=$(LC_ALL=C git -C "$_nonrepo" rev-parse --absolute-git-dir 2>&1); _nr_rc=$?
 ck
 if [[ $_nr_rc -ne 0 ]]; then
   pass "GUARD 3 pre/control: the probe FAILS in a non-repository directory"
@@ -629,11 +643,26 @@ done
 
 ck
 r=$(probe_repo absolute)
+: "${r:?fixture dir is empty; git -C <empty> would retarget this write}"
 ck
 assert_probe_repo "$r"
+abs_before=$(git -C "$r" config --local --list | LC_ALL=C sort | sha256sum)
 run_canon "$r" "$r"
+abs_after=$(git -C "$r" config --local --list | LC_ALL=C sort | sha256sum)
 if [[ "$G3_RC" -eq 0 ]]; then pass "GUARD 3: an absolute fixture dir is accepted (the guard is not a blanket refusal)"
 else fail "GUARD 3: an absolute operand was refused (rc=$G3_RC)"; fi
+
+# POSITIVE CONTROL for the config oracle the three refusal arms above depend on. Those arms assert
+# `before == after`, which is satisfied by an oracle that can never move -- measured, pinning both
+# to a constant left this suite 70/70 green. This arm is the one case where run_canon is EXPECTED
+# to write (it accepts the operand and sets commit.gpgsign), so the hash MUST move here. It costs
+# nothing: the write was already happening and was simply unobserved.
+ck
+if [[ "$abs_before" != "$abs_after" ]]; then
+  pass "GUARD 3 oracle: the config hash MOVES when canonical accepts and writes (the refusal arms are falsifiable)"
+else
+  fail "GUARD 3 oracle: the config hash did not move on the accepted operand — the before/after comparison is vacuous"
+fi
 
 # --- H. ROW 8 — the harness row. Neuter fail() and conservation must fire first. ---------------------
 # Not a mutation of the SUT: a suite whose only gate is a failure counter exits 0 having asserted
@@ -678,10 +707,15 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-# Exact, derived from a green run: 70 arms execute today (63 + the seven #7822 Guard 3
-# preconditions -- three controls and one per probe fixture). The previous 17 against 21 arms left
-# four must-trip arms deletable behind the slack (measured). Raise in lockstep; never lower.
-MIN_ASSERTIONS=70
+# Exact, derived from a green run: 71 arms execute today. That is 63 on main, plus the seven #7822
+# Guard 3 preconditions (three controls and one per probe fixture), plus the Guard 3 oracle's
+# positive control added at review -- without which `before == after` on the three refusal arms was
+# satisfied by an oracle that could never move (measured: pinning both to a constant left the suite
+# green). NOTE the baseline: the pre-#7822 comment here said "62 arms" against a floor of 63; 63 was
+# the true count and the comment was the wrong one, so 63 -> 71 is +8, not +9.
+# The previous 17 against 21 arms left four must-trip arms deletable behind the slack (measured).
+# Raise in lockstep; never lower.
+MIN_ASSERTIONS=71
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS}" >&2
   exit 1
