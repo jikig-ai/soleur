@@ -338,6 +338,202 @@ assert_run "freeze: NotebookEdit inside prefix allows" "<none>" \
   "$(mk_notebook_payload "$FZ2/apps/n.ipynb")" "$FZ2" "$FZ2"
 rm -rf "$FZ2"
 
+# --- Conflict-marker gate ---------------------------------------------------
+# This gate had ZERO coverage, which is how the single-marker false positive
+# shipped and made `git merge origin/main` uncommittable repo-wide.
+#
+# EVERY fixture below is BUILT with printf from variables -- no marker literal
+# appears at column 0 in this file. That is not style: a first draft embedded
+# them in heredocs, and the file then staged as added lines carrying all three
+# marker types, so merging main into any branch without this commit would trip
+# the guard on THIS FILE. That is the reported bug reintroduced at full
+# three-marker strength, where the per-file rule cannot discriminate it. The
+# same reasoning is why tests/hooks/test_hook_emissions.sh builds its fixture
+# with printf; see its comment.
+CM="$(mktemp -d)"
+# Owning trap. The suite's `exit 2` instrument-guard below and the `exit 1` on
+# any failure both bypass the inline `rm -rf "$CM"` at the end of this block, so
+# without this the fixture repo leaks on exactly the paths that matter. Scoped
+# to $CM only: the sibling fixture dirs above are pre-existing accepted debt
+# (scripts/lint-trap-tempfile-ownership.highwater), and paying that off here
+# would be the "touch a file, inherit its debt" failure the lint's own header
+# says switched earlier gates off.
+trap 'rm -rf "$CM"' EXIT
+git init -q "$CM/repo"
+git -C "$CM/repo" config user.email t@t.local
+git -C "$CM/repo" config user.name t
+# Not on `main`: block-commit-on-main is orthogonal and would mask every result.
+git -C "$CM/repo" checkout -q -b feat-cm
+
+MK_LT="$(printf '%s' '<<<<' ; printf '%s' '<<<')"
+MK_EQ="$(printf '%s' '====' ; printf '%s' '===')"
+MK_GT="$(printf '%s' '>>>>' ; printf '%s' '>>>')"
+
+cm_stage() {  # $1 = file content, $2 = optional path (default f.md)
+  local rel="${2:-f.md}"
+  mkdir -p "$CM/repo/$(dirname "$rel")"
+  printf '%s\n' "$1" > "$CM/repo/$rel"
+  git -C "$CM/repo" add "$rel"
+}
+
+# INSTRUMENT SELF-TEST — run before any assertion below, because every "allow"
+# case here is satisfied by EMPTY hook output, and a hook that crashed, was
+# mispathed, or never executed also produces empty output. Without this, the
+# allow assertions certify nothing. Drive both arms once and refuse to continue
+# unless each moved. (Mirrors the dispatcher guard used earlier in this file.)
+cm_stage "$MK_LT HEAD
+ours
+$MK_EQ
+theirs
+$MK_GT other"
+_cm_pos="$(run_decision "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo")"
+cm_stage 'plain content, no markers'
+_cm_neg="$(run_decision "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo")"
+if [[ "$_cm_pos" != "deny" || "$_cm_neg" != "<none>" ]]; then
+  echo "GUARD FAIL: conflict-marker instrument is not wired — known-positive gave '$_cm_pos' (expected deny), known-negative gave '$_cm_neg' (expected <none>). Every conflict assertion below would be unobservable." >&2
+  exit 2
+fi
+
+# A REAL unresolved conflict: all three markers in one file → deny.
+cm_stage "$MK_LT HEAD
+ours
+$MK_EQ
+theirs
+$MK_GT other"
+assert_run "conflict: full marker triple denies" "deny" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# Partial resolution — `=======` deleted, two types left → still deny.
+cm_stage "$MK_LT HEAD
+ours
+theirs
+$MK_GT other"
+assert_run "conflict: partial resolution (2 of 3) still denies" "deny" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# THE FALSE POSITIVE this fix exists for: prose quoting ONE marker → allow.
+# Shape taken from the kb-index merge-driver plan now on origin/main.
+cm_stage "Example sentinel the driver writes:
+
+\`\`\`
+$MK_LT kb-index: merge driver could not resolve — re-run the merge
+\`\`\`
+
+Nothing above is an unresolved conflict."
+assert_run "conflict: single quoted marker in prose allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# THE REGRESSION A TWO-OF-THREE RULE WOULD CAUSE. scripts/merge-kb-index.sh
+# writes a LONE sentinel when the driver fails, because git itself writes NO
+# markers in that case (it marks the path UU and leaves ours-content in place,
+# so the file reads clean). The sentinel is the only visible signal, and it must
+# still deny -- but ONLY in the file it can legitimately appear in.
+cm_stage "$MK_LT kb-index: merge driver could not resolve (driver exited 3)
+- [Some Entry](project/x.md)" "knowledge-base/INDEX.md"
+assert_run "conflict: lone kb-index sentinel in INDEX.md denies" "deny" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+git -C "$CM/repo" rm -q --cached knowledge-base/INDEX.md
+rm -f "$CM/repo/knowledge-base/INDEX.md"
+
+# Second false-positive class: a Markdown setext underline is 7+ `=` at line
+# start, which the unanchored `={7}` matched.
+cm_stage 'A Heading
+=========
+
+Body text.'
+assert_run "conflict: setext heading underline allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# Exactly seven `=` alone, no other marker type in the file → allow.
+cm_stage "Rule below:
+$MK_EQ
+done"
+assert_run "conflict: lone seven-equals line allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# PER-FILE counting: two types split across two files is NOT a conflict.
+# A global counter would deny this pair.
+cm_stage "Doc A quotes $MK_LT once." "a.md"
+cm_stage "Doc B has a rule:
+$MK_EQ
+end" "b.md"
+assert_run "conflict: two types split across two files allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+git -C "$CM/repo" rm -q --cached a.md b.md; rm -f "$CM/repo/a.md" "$CM/repo/b.md"
+
+# The gate must also cover `git merge --continue`, the command in the real bug.
+cm_stage "$MK_LT HEAD
+ours
+$MK_EQ
+theirs
+$MK_GT other"
+assert_run "conflict: merge --continue is gated too" "deny" \
+  "$(mk_payload 'git merge --continue')" "$CM/repo" "$CM/repo"
+
+# ASYMMETRIC ARM: a stray terminator alone denies. This is the commonest botched
+# resolution — opener and `=======` deleted, trailer missed — and it has no
+# false-positive class here (zero `^>{7}( |$)` lines on origin/main).
+cm_stage "some text
+$MK_GT origin/main
+more text"
+assert_run "conflict: lone stray terminator denies" "deny" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# Symmetry check: a lone OPENER does not deny (it has a real FP class — prose
+# quoting it — which is the bug this whole change exists to fix).
+cm_stage "prose mentioning $MK_LT once, nothing else"
+assert_run "conflict: lone opener still allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# THE `^+` ANCHOR: the gate must fire on ADDED markers only, so REMOVING a
+# conflict is never blocked. Untestable until now for a fixture-shape reason
+# worth naming: the repo had no initial commit, so every staged line was an
+# addition and the direction constraint was unconstrained by construction.
+# Commit the triple first, then stage its removal.
+cm_stage "$MK_LT HEAD
+ours
+$MK_EQ
+theirs
+$MK_GT other" "resolved.md"
+git -C "$CM/repo" -c core.hooksPath=/dev/null commit -q -m "base with conflict" 2>/dev/null
+printf '%s\n' 'ours and theirs, reconciled' > "$CM/repo/resolved.md"
+git -C "$CM/repo" add resolved.md
+assert_run "conflict: REMOVING markers is allowed (^+ anchor)" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+
+# The production dispatch branch. Claude Code always supplies `.cwd`, so the
+# `git -C "$CONFLICT_MARKERS_DIR"` arm is what actually runs in production —
+# every case above exercises only the fallback arm, because mk_payload omits it.
+mk_payload_cwd() {
+  jq -nc --arg c "$1" --arg d "$2" '{tool_name:"Bash", tool_input:{command:$c}, cwd:$d}'
+}
+cm_stage "$MK_LT HEAD
+ours
+$MK_EQ
+theirs
+$MK_GT other"
+assert_run "conflict: denies via the .cwd dispatch arm too" "deny" \
+  "$(mk_payload_cwd 'git commit -m x' "$CM/repo")" "$CM/repo" "$CM/repo"
+
+# The trigger must cover every verb that commits a conflict resolution. Only
+# `commit` and `merge --continue` were gated; rebase/cherry-pick/revert
+# `--continue` create commits from a resolution too and were entirely ungated.
+cm_stage "$MK_LT HEAD
+ours
+$MK_EQ
+theirs
+$MK_GT other"
+assert_run "conflict: rebase --continue is gated" "deny" \
+  "$(mk_payload 'git rebase --continue')" "$CM/repo" "$CM/repo"
+assert_run "conflict: cherry-pick --continue is gated" "deny" \
+  "$(mk_payload 'git cherry-pick --continue')" "$CM/repo" "$CM/repo"
+
+# Ordinary content → allow (control: proves the gate is not denying everything).
+cm_stage 'nothing to see here'
+assert_run "conflict: clean content allows" "<none>" \
+  "$(mk_payload 'git commit -m x')" "$CM/repo" "$CM/repo"
+rm -rf "$CM"
+
 echo
 echo "Total: $TOTAL  Pass: $PASS  Fail: $FAIL"
 [[ $FAIL -eq 0 ]] || exit 1
