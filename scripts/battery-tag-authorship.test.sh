@@ -55,6 +55,14 @@
 #   4. `bun test <dir>/` is expanded by a glob over the directory, which approximates what bun
 #      itself would collect.
 #
+# ENVIRONMENT DELTA, measured 2026-09-09, so a reader comparing a local census against a CI one
+# does not misread it as drift. Under CI the relevance gate's bypass is an unconditional early
+# return, so a decline is unreachable and `skip_suite` is never invoked — those registrations
+# arrive as real commands instead. Measured: roots 452 (local) vs 455 (CI=1), and unclassified
+# 1 vs 2 (the second inline `bash -c` registration is a decline locally). The CLASSIFICATION is
+# environment-independent — occurrences=49 and offenders=39 in both — because the extra roots
+# carry no tag-authoring command. MIN_ROOTS is set below the lower of the two.
+#
 # SEAM. BATTERY_TAG_REPO_ROOT / BATTERY_TAG_RUNNER let the mutation battery point this exact
 # program at a sandbox copy. The seam lives HERE, in the guard, so the program that produces the
 # RED transcript is the same program the battery grades.
@@ -270,6 +278,28 @@ ARRAY_RE='\["(git", *")?(fetch|pull|tag|update-ref)"'
 occurrences=0; offenders=0; suppressed=0; exempt=0
 declare -A EXEMPT_SEEN=()
 
+# A git verb inside a STRING LITERAL is prose, not an invocation: an error message, a
+# `::warning::` line, or a grep pattern naming the command it looks for. Counting those as
+# tag authors is a false OFFENDER whose only "fix" would be editing an error message, and
+# declaring them in the ledger would spend its ceiling on things that author no tag.
+#
+# The test is quote parity BEFORE the match: an odd number of unescaped quotes means the verb
+# sits inside a string. It is applied ONLY to the shell-verb pattern — the TS array form
+# (`["git", "fetch", …]`) is BY CONSTRUCTION inside quotes and is a real invocation, so a
+# blanket parity rule would silently stop detecting it. Measured: 6 of 39 first-run offenders
+# were this class, and the array-form site is not one of them.
+_in_string_literal() {
+  local line="$1" verb="$2" prefix dq sq
+  prefix="${line%%$verb*}"
+  [[ "$prefix" == "$line" ]] && return 1
+  prefix="${prefix//\\\"/}"
+  prefix="${prefix//\\\'/}"
+  dq="${prefix//[!\"]/}"
+  sq="${prefix//[!\']/}"
+  (( ${#dq} % 2 == 1 || ${#sq} % 2 == 1 )) && return 0
+  return 1
+}
+
 _is_in_class() {
   # $1 = the code line. Decide whether a matched verb is actually tag-authoring.
   local l="$1"
@@ -309,6 +339,10 @@ for f in $(printf '%s\n' "${!CLOSURE[@]}" | LC_ALL=C sort); do
     # DECLARED APPROXIMATION 1: full-line comments only.
     [[ "$code" =~ ^[[:space:]]*# ]] && continue
     _is_in_class "$code" || continue
+    # Array form is inside quotes by construction — never parity-skipped.
+    if ! [[ "$code" =~ $ARRAY_RE ]]; then
+      _in_string_literal "$code" "git" && continue
+    fi
     occurrences=$((occurrences + 1))
     ctx="$({ grep -n -B2 -E "$VERB_RE|$ARRAY_RE" "$REPO_ROOT/$f" || true; } | awk -v L="$ln" -F'[-:]' '$1>=L-2 && $1<=L')"
     cmd_key="$(printf '%s' "$code" | tr -s '[:space:]' ' ' | sed 's/^ //; s/ $//')"
