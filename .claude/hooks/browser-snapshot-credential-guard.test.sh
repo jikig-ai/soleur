@@ -13,6 +13,13 @@
 # Soleur operator receives this enforcement at all (property P7).
 set -uo pipefail
 
+# Every .claude/hooks/*.test.sh sources this, enforced by
+# incident-sandbox-coverage.test.sh. It is inert for a suite that never emits an
+# incident, and the population is deliberately ALL suites rather than "those that
+# emit" -- a population derived by naming convention silently excludes whatever
+# does not follow it.
+. "$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/lib/test-incident-sandbox.sh"
+
 REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
 # The hook lives in the PLUGIN, not in .claude/hooks/: ${CLAUDE_PLUGIN_ROOT}
 # resolves into the installed plugin directory, so a script under .claude/
@@ -27,7 +34,12 @@ README="$REPO_ROOT/.claude/hooks/README.md"
 pass=0; fail=0; cases=0
 # 3 deny + 4 allow + 5 registration + 2 reason-content rows,
 # + 7 review rows (round 1) + 5 review rows (round 2) = 26.
-MIN_ASSERTIONS=35
+# MIN_ASSERTIONS is bound ADJACENT to the floor block at the bottom of this
+# file, not here: scripts/guard-vacuity-floor.test.sh builds its mutant by
+# slicing the floor block and widening BACKWARD over contiguous simple
+# assignments only. A threshold declared up here is unbound in that slice, so
+# the mutant dies on `set -u` BEFORE reaching the floor and the floor is scored
+# unconstructible -- which is indistinguishable from a floor that does not fire.
 
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
@@ -136,6 +148,9 @@ fi
 # degraded branch the guard is silently off, forever, on that machine.
 cases=$((cases + 1))
 JQSHIM="$(mktemp -d)"
+# Owning trap (ADR-129): the explicit `rm -rf` below only runs if we reach it,
+# and a `bad ... exit` between here and there would leak the shim directory.
+trap 'rm -rf "$JQSHIM"' EXIT
 printf '#!/bin/sh\nexit 127\n' > "$JQSHIM/jq"; chmod +x "$JQSHIM/jq"
 degraded="$(envelope 'agent-browser snapshot -i' | PATH="$JQSHIM:$PATH" bash "$HOOK" 2>/dev/null)"
 rm -rf "$JQSHIM"
@@ -320,10 +335,11 @@ assert_deny 'F2d unrouted `agent-browser diff snapshot --json`' \
 
 printf '\n%d passed, %d failed, %d cases\n' "$pass" "$fail" "$cases"
 if [[ $((pass + fail)) -ne $cases ]]; then
-  printf 'VACUITY: pass+fail (%d) != cases (%d)\n' "$((pass + fail))" "$cases" >&2; exit 1
+  printf '[FATAL] vacuity accounting: pass+fail (%d) != cases (%d)\n' "$((pass + fail))" "$cases" >&2; exit 1
 fi
+MIN_ASSERTIONS=35
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
-  printf 'VACUITY: %d cases below floor %d\n' "$cases" "$MIN_ASSERTIONS" >&2; exit 1
+  printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2; exit 1
 fi
 [[ $fail -eq 0 ]] || exit 1
 exit 0

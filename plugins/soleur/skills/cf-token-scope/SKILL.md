@@ -22,6 +22,24 @@ The deterministic core is a read-only probe script,
 [cf-token-scope.sh](./scripts/cf-token-scope.sh). It only ever probes — run it as
 often as needed; it mutates nothing.
 
+### Preflight: verify the plugin install before any snapshot
+
+The redactor is reached through `${CLAUDE_PLUGIN_ROOT}`. An ambient value pointing at a
+directory that is not a Soleur install would resolve to a path that does not exist — or, worse,
+to one an attacker chose. Verify plugin IDENTITY and halt if it does not hold (ADR-179 decision 2);
+a `test -f` on the script alone is a shape check and was measured bypassable.
+
+```bash
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_SNAPSHOT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  Cannot locate the snapshot redactor, so no accessibility snapshot may be taken here." >&2
+       echo "  Root EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session." >&2
+       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur', then RESTART Claude Code." >&2
+       echo "  Nothing has been captured yet, so nothing has leaked." >&2
+       exit 2; }
+```
+
 ```bash
 # Baseline / re-check — probe the four ADR-130 retained scopes:
 bash "${CLAUDE_PLUGIN_ROOT}/skills/cf-token-scope/scripts/cf-token-scope.sh"
@@ -59,7 +77,7 @@ token.
    account-wide bearer). Do **not** dump `browser_network_requests` /
    `browser_console_messages` to files, scope screenshots to the edit control,
    route any accessibility snapshot through the redactor
-   (`plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`), and
+   (`"${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"`), and
    always call `browser_evaluate` **with** a `filename` — without one the value
    is returned into the transcript. This corrects an inverted instruction that
    stood here previously; see the playbook's leak constraints.

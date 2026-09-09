@@ -34,7 +34,12 @@ cases=0
 #   + 13 review rows (round 1) + 12 review rows (round 2) = 42.
 # The two instrument self-test rows are excluded: they run before the counters
 # are zeroed, so they are a precondition on the harness, not coverage of the SUT.
-MIN_ASSERTIONS=61
+# MIN_ASSERTIONS is bound ADJACENT to the floor block at the bottom of this
+# file, not here: scripts/guard-vacuity-floor.test.sh builds its mutant by
+# slicing the floor block and widening BACKWARD over contiguous simple
+# assignments only. A threshold declared up here is unbound in that slice, so
+# the mutant dies on `set -u` BEFORE reaching the floor and the floor is scored
+# unconstructible -- which is indistinguishable from a floor that does not fire.
 
 ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
 bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
@@ -456,12 +461,13 @@ assert_redacted 'json shape: tree under data.diff, not data.snapshot' \
 printf '\n%d passed, %d failed, %d cases\n' "$pass" "$fail" "$cases"
 
 if [[ $((pass + fail)) -ne $cases ]]; then
-  printf 'VACUITY: pass+fail (%d) != cases (%d) — a row did not report\n' \
+  printf '[FATAL] vacuity accounting: pass+fail (%d) != cases (%d) — a row did not report\n' \
     "$((pass + fail))" "$cases" >&2
   exit 1
 fi
+MIN_ASSERTIONS=61
 if [[ $cases -lt $MIN_ASSERTIONS ]]; then
-  printf 'VACUITY: %d cases is below the floor of %d\n' "$cases" "$MIN_ASSERTIONS" >&2
+  printf '[FATAL] vacuity floor: only %d cases executed, expected at least %d\n' "$cases" "$MIN_ASSERTIONS" >&2
   exit 1
 fi
 [[ $fail -eq 0 ]] || exit 1

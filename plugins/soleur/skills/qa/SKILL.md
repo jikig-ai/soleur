@@ -91,6 +91,24 @@ If BOTH the plain install and the override install fail (a genuinely unsupported
 
 Then run the gate (no override — the runtime resolves the installed build):
 
+### Preflight: verify the plugin install before any snapshot
+
+The redactor is reached through `${CLAUDE_PLUGIN_ROOT}`. An ambient value pointing at a
+directory that is not a Soleur install would resolve to a path that does not exist — or, worse,
+to one an attacker chose. Verify plugin IDENTITY and halt if it does not hold (ADR-179 decision 2);
+a `test -f` on the script alone is a shape check and was measured bypassable.
+
+```bash
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_SNAPSHOT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  Cannot locate the snapshot redactor, so no accessibility snapshot may be taken here." >&2
+       echo "  Root EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session." >&2
+       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur', then RESTART Claude Code." >&2
+       echo "  Nothing has been captured yet, so nothing has leaked." >&2
+       exit 2; }
+```
+
 ```bash
 cd apps/web-platform && ./node_modules/.bin/playwright test nav-states --project=authenticated --reporter=list
 ```
@@ -123,7 +141,7 @@ On a page carrying a password or credential field:
 
 - pass `filename:` to `browser_snapshot` so the tree is written to a file
   instead of returned into the transcript, then filter that file and shred it —
-  `python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py < FILE && shred -u FILE`;
+  `python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py" < FILE && shred -u FILE`;
 - on a page **displaying** a credential, capture neither. A screenshot is safe
   for a `type=password` field and renders a readonly `type=text` credential
   panel in clear, exactly as the snapshot does (measured).

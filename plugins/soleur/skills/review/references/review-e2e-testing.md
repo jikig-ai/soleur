@@ -69,7 +69,7 @@ On a page carrying a password or credential field:
 
 - pass `filename:` to `browser_snapshot` so the tree is written to a file
   instead of returned into the transcript, then filter that file and shred it —
-  `python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py < FILE && shred -u FILE`;
+  `python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py" < FILE && shred -u FILE`;
 - on a page **displaying** a credential, capture neither. A screenshot is safe
   for a `type=password` field and renders a readonly `type=text` credential
   panel in clear, exactly as the snapshot does (measured).

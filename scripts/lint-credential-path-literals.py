@@ -168,8 +168,9 @@ MCP_GAP_MARKER_RE = re.compile(
 S1_RECIPE = (
     "route it through the redactor on the same line "
     '(`agent-browser snapshot -i 2>&1 | python3 '
-    '"${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"'
-    "/skills/agent-browser/scripts/redact-a11y-snapshot.py`) -- the PreToolUse "
+    '"${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"`) '
+    "-- the bare anchor, quoted: ADR-179 rejects the `:-default` form, which "
+    "resolves to a repo path that exists on no customer machine. The PreToolUse "
     "hook DENIES this command as written, so shipping it instructs the agent to "
     "run something the guard blocks"
 )

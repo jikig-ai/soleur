@@ -146,9 +146,27 @@ Build a list of URLs to test based on the mapping.
 
 Before testing, verify the local server is accessible:
 
+### Preflight: verify the plugin install before any snapshot
+
+The redactor is reached through `${CLAUDE_PLUGIN_ROOT}`. An ambient value pointing at a
+directory that is not a Soleur install would resolve to a path that does not exist — or, worse,
+to one an attacker chose. Verify plugin IDENTITY and halt if it does not hold (ADR-179 decision 2);
+a `test -f` on the script alone is a shape check and was measured bypassable.
+
+```bash
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_SNAPSHOT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  Cannot locate the snapshot redactor, so no accessibility snapshot may be taken here." >&2
+       echo "  Root EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session." >&2
+       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur', then RESTART Claude Code." >&2
+       echo "  Nothing has been captured yet, so nothing has leaked." >&2
+       exit 2; }
+```
+
 ```bash
 agent-browser open http://localhost:3000
-agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 If server is not running, inform user:
@@ -175,25 +193,25 @@ For each affected route, use agent-browser CLI commands (NOT Chrome MCP):
 
 ```bash
 agent-browser open "http://localhost:3000/[route]"
-agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 **Step 2: For headed mode (visual debugging)**
 
 ```bash
 agent-browser --headed open "http://localhost:3000/[route]"
-agent-browser --headed snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser --headed snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 **Step 3: Verify key elements**
 
-- Use `agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py` to get interactive elements with refs
+- Use `agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"` to get interactive elements with refs
 
 **Credential safety (#7947).** An accessibility snapshot serializes the **value**
 of input fields, including a value the agent never typed (a password manager's
 autofill, a static `value=`, a generated-credential panel). On any page carrying
 a password or credential field, route the snapshot through the redactor —
-`agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`
+`agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"`
 — and never capture a page that is displaying a credential value: a screenshot
 is safe for a `type=password` field but **not** for a readonly `type=text`
 credential panel, which renders in clear. Full rule and its measured ceiling:
@@ -208,8 +226,8 @@ credential page".
 **Step 4: Test critical interactions**
 
 ```bash
-agent-browser click @e1  # Use ref from snapshot 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
-agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser click @e1  # Use ref from snapshot 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 **Step 5: Take screenshots**
@@ -375,8 +393,8 @@ agent-browser back                 # Go back
 agent-browser close                # Close browser
 
 # Snapshots (get element refs)
-agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Interactive elements with refs (@e1, @e2, etc.)
-agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # JSON output
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Interactive elements with refs (@e1, @e2, etc.)
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # JSON output
 
 # Interactions (use refs from snapshot)
 agent-browser click @e1            # Click element

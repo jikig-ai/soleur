@@ -57,7 +57,12 @@ REDACTOR_ANCHOR='redact-a11y-snapshot'
 # operator would get `python3: can't open file`, and the natural next move is the
 # screenshot escape, which this very message says is unsafe for the one class
 # with a recorded incident.
-REDACTOR_CMD='python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py'
+# The remedy this hook PRINTS is the form the operator will paste, so it must be
+# the canonical one: bare `${CLAUDE_PLUGIN_ROOT}`, quoted. ADR-179 rejects the
+# `:-default` variant precisely because the fallback resolves to a repo-relative
+# path that exists on no customer machine -- it turns a loud failure into a
+# silent one, which is the defect class this whole guard exists to remove.
+REDACTOR_CMD='python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"'
 
 # `jq` unusable is NOT the same condition as a malformed envelope, and must not
 # get the same silent pass. Without this branch a machine whose jq is missing OR

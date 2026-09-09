@@ -95,19 +95,37 @@ If you see "Version mismatch between agent-browser (expects 1200) and installed 
 3. **Interact** using refs (@e1, @e2, etc.)
 4. **Re-snapshot** after navigation or DOM changes
 
+### Preflight: verify the plugin install before any snapshot
+
+The redactor is reached through `${CLAUDE_PLUGIN_ROOT}`. An ambient value pointing at a
+directory that is not a Soleur install would resolve to a path that does not exist — or, worse,
+to one an attacker chose. Verify plugin IDENTITY and halt if it does not hold (ADR-179 decision 2);
+a `test -f` on the script alone is a shape check and was measured bypassable.
+
+```bash
+[ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
+  && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \
+  || { echo "SOLEUR_SNAPSHOT_HALT reason=plugin-root-unverified root=[${CLAUDE_PLUGIN_ROOT}]" >&2
+       echo "  Cannot locate the snapshot redactor, so no accessibility snapshot may be taken here." >&2
+       echo "  Root EMPTY: no Soleur plugin is loaded in this session. Install it and start a NEW session." >&2
+       echo "  Root set but wrong: a repo checkout is not an install. Run 'claude plugin update soleur', then RESTART Claude Code." >&2
+       echo "  Nothing has been captured yet, so nothing has leaked." >&2
+       exit 2; }
+```
+
 ```bash
 # Step 1: Open URL
 agent-browser open https://example.com
 
 # Step 2: Get interactive elements with refs
-agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 
 # Step 3: Interact using refs
 agent-browser click @e1
 agent-browser fill @e2 "search query"
 
 # Step 4: Re-snapshot after changes
-agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 ## Key Commands
@@ -125,11 +143,11 @@ agent-browser close            # Close browser
 ### Snapshots (Essential for AI)
 
 ```bash
-agent-browser snapshot 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Full accessibility tree
-agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Interactive elements only (recommended)
-agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # JSON output for parsing
-agent-browser snapshot -c 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Compact (remove empty elements)
-agent-browser snapshot -d 3 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py  # Limit depth
+agent-browser snapshot 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Full accessibility tree
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Interactive elements only (recommended)
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # JSON output for parsing
+agent-browser snapshot -c 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Compact (remove empty elements)
+agent-browser snapshot -d 3 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"  # Limit depth
 ```
 
 ### Interactions
@@ -214,7 +232,7 @@ snapshot before it runs (#7947).
 [redact-a11y-snapshot.py](./scripts/redact-a11y-snapshot.py):
 
 ```bash
-agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 Stating the ceiling first, because the rule is otherwise read as "piping makes a
@@ -239,7 +257,7 @@ snapshots **through the redactor** rather than not at all.
 
 ```bash
 agent-browser open https://app.example.com/login
-agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 # Output shows: textbox "Email" [ref=e1], textbox "Password" [ref=e2], button "Sign in" [ref=e3]
 agent-browser fill @e1 "user@example.com"
 # Pass the secret by env indirection -- never a literal, which lands in the
@@ -249,14 +267,14 @@ agent-browser click @e3
 agent-browser wait 2000
 # Verify logged in -- still through the redactor: the password manager may have
 # refilled the field on the post-login page.
-agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 ### Search and Extract
 
 ```bash
 agent-browser open https://news.ycombinator.com
-agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 # Parse JSON to find story links
 agent-browser get text @e12  # Get headline text
 agent-browser click @e12     # Click to open story
@@ -266,7 +284,7 @@ agent-browser click @e12     # Click to open story
 
 ```bash
 agent-browser open https://forms.example.com
-agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 agent-browser fill @e1 "John Doe"
 agent-browser fill @e2 "john@example.com"
 agent-browser select @e3 "United States"
@@ -280,7 +298,7 @@ agent-browser screenshot confirmation.png
 ```bash
 # Run with visible browser window
 agent-browser --headed open https://example.com
-agent-browser --headed snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser --headed snapshot -i 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 agent-browser --headed click @e1
 ```
 
@@ -289,7 +307,7 @@ agent-browser --headed click @e1
 Add `--json` for structured output:
 
 ```bash
-agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}"/skills/agent-browser/scripts/redact-a11y-snapshot.py
+agent-browser snapshot -i --json 2>&1 | python3 "${CLAUDE_PLUGIN_ROOT}/skills/agent-browser/scripts/redact-a11y-snapshot.py"
 ```
 
 Returns:
