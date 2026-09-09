@@ -240,6 +240,7 @@ jobs:
       soft_ceiling_s: ${{ steps.budget.outputs.soft_ceiling_s }}
       ci_budget_min: ${{ steps.budget.outputs.ci_budget_min }}
       ci_declared_path_min: ${{ steps.budget.outputs.ci_declared_path_min }}
+      ci_undeclared_jobs: ${{ steps.budget.outputs.ci_undeclared_jobs }}
     steps:
       # `actions/checkout` IS permitted here and is NOT permitted on `deploy`. The
       # prohibition is specific to `deploy`, which drives the cutover over a webhook
@@ -499,9 +500,31 @@ jobs:
           set -euo pipefail
           emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
 
+          # `|| true` is LOAD-BEARING, not defensive noise. Under `set -euo
+          # pipefail` a non-matching grep exits 1, pipefail propagates it, and
+          # `THRESHOLD=$(read_threshold)` then trips -e and kills the step —
+          # BEFORE the emptiness loop below can report which term went missing.
+          # The whole "could not read X from the tree" branch was dead for its
+          # first and most important member.
           read_threshold() {
-            grep -oE '^DRIFT_SUSTAINED_THRESHOLD_MIN=[0-9]+' scripts/prod-version-drift-check.sh \
-              | grep -oE '[0-9]+$' | head -1
+            { grep -oE '^DRIFT_SUSTAINED_THRESHOLD_MIN=[0-9]+' scripts/prod-version-drift-check.sh \
+              || true; } | { grep -oE '[0-9]+$' || true; } | head -1
+          }
+          # Jobs in a workflow that declare NO `timeout-minutes`. GitHub applies a
+          # 360-minute default to each, so an undeclared job is not "unbounded" in
+          # the API — it is bounded at six hours, which is 3x the entire pipeline
+          # drift threshold. Enumerated, never counted: the list is the remedy.
+          undeclared_jobs() {
+            awk '
+              /^jobs:[[:space:]]*$/ { inj = 1; next }
+              !inj { next }
+              /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ {
+                if (job != "" && !seen) print job
+                job = $1; sub(/:$/, "", job); seen = 0; next
+              }
+              /^    timeout-minutes:[[:space:]]*[0-9]+[[:space:]]*$/ { seen = 1 }
+              END { if (job != "" && !seen) print job }
+            ' "$1"
           }
           # Job-scoped `timeout-minutes`, read from the workflow itself.
           # awk, not an inline python heredoc: a `run: |` block scalar terminates
@@ -518,15 +541,55 @@ jobs:
             ' "$1"
           }
 
+          # Longest declared path to the run's COMPLETION: max over the
+          # needs-closure, not a sum of two hand-picked jobs. Only meaningful
+          # once every job declares a ceiling, which is why its sole caller is
+          # gated on that.
+          run_declared_path() {
+            awk '
+              /^jobs:[[:space:]]*$/ { inj = 1; next }
+              !inj { next }
+              /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ {
+                job = $1; sub(/:$/, "", job); jobs[++nj] = job; inneeds = 0; next
+              }
+              /^    timeout-minutes:[[:space:]]*[0-9]+$/ { t = $2; tmo[job] = t; next }
+              /^    needs:[[:space:]]*\[/ {
+                line = $0; sub(/^[^[]*\[/, "", line); sub(/\].*$/, "", line)
+                gsub(/[ \t]/, "", line); needs[job] = line; inneeds = 0; next
+              }
+              /^    needs:[[:space:]]*[a-zA-Z0-9_-]+[[:space:]]*$/ { needs[job] = $2; next }
+              /^    needs:[[:space:]]*$/ { inneeds = 1; next }
+              inneeds && /^      - / { needs[job] = needs[job] (needs[job] ? "," : "") $2; next }
+              inneeds && /^    [a-zA-Z]/ { inneeds = 0 }
+              END {
+                for (i = 1; i <= nj; i++) { best = 0
+                  # iterate to a fixed point; DAG depth here is small
+                  for (pass = 0; pass < nj; pass++) for (j = 1; j <= nj; j++) {
+                    n = jobs[j]; m = 0; c = split(needs[n], parts, ",")
+                    for (k = 1; k <= c; k++) if (path[parts[k]] > m) m = path[parts[k]]
+                    # THE PLATFORM DEFAULT, APPLIED HERE TOO. An undeclared job
+                    # is bounded at 360m by GitHub, not at 0. Defaulting to 0 makes
+                    # this silently UNDER-report whenever it is called outside its
+                    # gate — the shape of wrongness hardest to notice, because the
+                    # number still looks plausible. (No apostrophes in this awk
+                    # program: it is single-quoted inside a YAML block scalar, and
+                    # one apostrophe terminates the string.)
+                    path[n] = ((n in tmo) ? tmo[n] : 360) + m
+                  }
+                }
+                for (i = 1; i <= nj; i++) if (path[jobs[i]] > best) best = path[jobs[i]]
+                print best
+              }
+            ' "$1"
+          }
+
           THRESHOLD=$(read_threshold)
           REL=.github/workflows/web-platform-release.yml
           M=$(job_ceiling "$REL" migrate)
           V=$(job_ceiling "$REL" verify-migrations)
           D=$(job_ceiling "$REL" deploy)
-          TS=$(job_ceiling .github/workflows/ci.yml test-scripts)
-          T=$(job_ceiling .github/workflows/ci.yml test)
           for pair in "THRESHOLD:$THRESHOLD" "migrate:$M" "verify-migrations:$V" \
-                      "deploy:$D" "test-scripts:$TS" "test:$T"; do
+                      "deploy:$D"; do
             if [ -z "${pair#*:}" ]; then
               echo "::error::could not read ${pair%%:*} from the tree — the CI budget is underived, so the creep detector would be measuring against a made-up number"
               exit 1
@@ -534,21 +597,50 @@ jobs:
           done
 
           CI_BUDGET_MIN=$(( THRESHOLD - M - V - D ))
-          CI_DECLARED_PATH_MIN=$(( TS + T ))
+          # WHAT THE TRIGGER ACTUALLY WAITS FOR. `workflow_run: types:
+          # [completed]` fires when the WHOLE ci.yml run concludes, not when the
+          # `test` aggregator does. The predecessor quantity — `test-scripts` +
+          # `test` — was correct for `await-ci`, which polled for the `test`
+          # CHECK, and it was carried across the rewrite unchanged. It is the
+          # wrong quantity here by an order of magnitude: measured on this tree,
+          # to-`test` is 70m while the whole-run declared path is 720m.
+          CI_UNDECLARED=$(undeclared_jobs .github/workflows/ci.yml)
+          N_UNDECLARED=$(printf '%s' "$CI_UNDECLARED" | grep -c . || true)
           # 0.7 — the same factor ADR-212 Decision 4 chose for the ceiling this
           # replaces. Derived from CI_BUDGET_MIN, never restated as a literal.
           SOFT_CEILING_S=$(( CI_BUDGET_MIN * 60 * 7 / 10 ))
           emit ci_budget_min "$CI_BUDGET_MIN"
-          emit ci_declared_path_min "$CI_DECLARED_PATH_MIN"
+          emit ci_undeclared_jobs "$N_UNDECLARED"
           emit soft_ceiling_s "$SOFT_CEILING_S"
-          echo "CI_BUDGET_MIN=${CI_BUDGET_MIN} CI_DECLARED_PATH_MIN=${CI_DECLARED_PATH_MIN} soft_ceiling_s=${SOFT_CEILING_S}"
+          echo "CI_BUDGET_MIN=${CI_BUDGET_MIN} ci_jobs_without_ceiling=${N_UNDECLARED} soft_ceiling_s=${SOFT_CEILING_S}"
 
-          # HEADROOM INVARIANT. If CI declares more for itself than the pipeline
-          # budget allows it, the budget is already broken and the soft ceiling is
-          # measuring against a quantity the pipeline cannot honour.
-          if [ "$CI_DECLARED_PATH_MIN" -gt "$CI_BUDGET_MIN" ]; then
-            echo "::error::CI declares ${CI_DECLARED_PATH_MIN}m to its test aggregator but the pipeline budget allows only ${CI_BUDGET_MIN}m (DRIFT_SUSTAINED_THRESHOLD_MIN ${THRESHOLD} minus migrate ${M} + verify-migrations ${V} + deploy ${D}). Raise the threshold or lower a CI ceiling."
-            exit 1
+          # HEADROOM INVARIANT — and the honest reason it cannot be asserted yet.
+          #
+          # The statement that makes the budget hold is "CI's declared path fits
+          # in the share the pipeline budget allows it". Asserting it requires
+          # every job on the run to DECLARE a ceiling. While any job does not,
+          # GitHub's 360m default applies to it, and the declared path is 720m
+          # against a 72m share — so the invariant is FALSE, and the previous
+          # `70 <= 72` green was an artifact of measuring to-`test` instead.
+          #
+          # This does NOT hard-fail: the undeclared ceilings are pre-existing
+          # (#8020), not introduced here, and reddening every deploy over them
+          # would punish the wrong commit. It refuses to report a green it cannot
+          # justify — the warning names the jobs, which is the remedy.
+          if [ "$N_UNDECLARED" -gt 0 ]; then
+            echo "::warning::CI budget headroom is UNASSERTED: ${N_UNDECLARED} ci.yml job(s) declare no timeout-minutes, so GitHub's 360m default applies to each and the declared path through the run (720m) exceeds the ${CI_BUDGET_MIN}m share the ${THRESHOLD}m pipeline budget allows CI. The measured soft ceiling below still applies. Undeclared: $(printf '%s' "$CI_UNDECLARED" | tr '\n' ' ')(#8020)"
+          else
+            # Every job declares. Now the arithmetic means something, so assert it.
+            CI_DECLARED_PATH_MIN=$(run_declared_path .github/workflows/ci.yml)
+            emit ci_declared_path_min "$CI_DECLARED_PATH_MIN"
+            if [ -z "$CI_DECLARED_PATH_MIN" ]; then
+              echo "::error::every ci.yml job declares a ceiling but the run path could not be computed — the budget would be underived"
+              exit 1
+            fi
+            if [ "$CI_DECLARED_PATH_MIN" -gt "$CI_BUDGET_MIN" ]; then
+              echo "::error::CI declares ${CI_DECLARED_PATH_MIN}m for its whole run but the pipeline budget allows only ${CI_BUDGET_MIN}m (DRIFT_SUSTAINED_THRESHOLD_MIN ${THRESHOLD} minus migrate ${M} + verify-migrations ${V} + deploy ${D}). Raise the threshold or lower a CI ceiling."
+              exit 1
+            fi
           fi
           if [ "$SOFT_CEILING_S" -le 0 ]; then
             echo "::error::derived soft ceiling is ${SOFT_CEILING_S}s — a non-positive ceiling would fire on every run"
@@ -1819,19 +1911,30 @@ jobs:
           CEILING_S: ${{ needs.resolve-target.outputs.soft_ceiling_s }}
           BUDGET_MIN: ${{ needs.resolve-target.outputs.ci_budget_min }}
           DECLARED_MIN: ${{ needs.resolve-target.outputs.ci_declared_path_min }}
+          UNDECLARED: ${{ needs.resolve-target.outputs.ci_undeclared_jobs }}
         run: |
           set -uo pipefail
+          # AP-021 — name only what was MEASURED. `ci_declared_path_min` is emitted
+          # ONLY when every ci.yml job declares a ceiling; while any does not, the
+          # declared path is not a derived number and printing one would invent it.
+          if [ -n "${DECLARED_MIN:-}" ]; then
+            declared_line="CI currently DECLARES ${DECLARED_MIN}m for its whole run."
+            declared_tail="declared ${DECLARED_MIN}m"
+          else
+            declared_line="CI's declared path is UNASSERTED: ${UNDECLARED:-?} job(s) declare no timeout-minutes, so GitHub's 360m default applies to each (#8020)."
+            declared_tail="declared path unasserted, ${UNDECLARED:-?} job(s) without a ceiling"
+          fi
           {
             echo "### CI budget creep"
             echo ""
             echo "CI took **${ELAPSED_S}s** for this SHA, past the **${CEILING_S}s** soft ceiling"
             echo "(70% of the ${BUDGET_MIN}m share the end-to-end pipeline budget allows CI)."
             echo ""
-            echo "CI currently DECLARES ${DECLARED_MIN}m for itself. When the measured time"
+            echo "${declared_line} When the measured time"
             echo "approaches the declared path, the next step is a larger shard count or a"
             echo "shorter CI — not a bigger budget, which is how #7902 happened."
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::warning::CI budget creep: ${ELAPSED_S}s > ${CEILING_S}s soft ceiling (CI share ${BUDGET_MIN}m, declared ${DECLARED_MIN}m)"
+          echo "::warning::CI budget creep: ${ELAPSED_S}s > ${CEILING_S}s soft ceiling (CI share ${BUDGET_MIN}m, ${declared_tail})"
       - name: Classify the run outcome
         id: outcome
         # #7138 — a STEP-level timeout, not just the job-level one. A hung classify used
