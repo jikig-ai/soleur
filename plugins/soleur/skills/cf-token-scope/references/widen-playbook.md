@@ -45,10 +45,29 @@ the token being edited. While the browser session is live:
 - Do **not** dump `browser_network_requests` or `browser_console_messages` to
   files (they capture the session cookie and request headers).
 - Scope `browser_take_screenshot` to the edit control, never the full page.
-- Prefer `browser_snapshot` (accessibility tree) for navigation over screenshots.
-- If `browser_evaluate` ever reads a value, call it **without** a `filename`
-  (a `filename` JSON-dumps the result to the transcript — learning
-  `2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md`).
+  This is **not** sufficient on a page that displays the token value: a
+  generated-credential panel is a readonly `type=text` box, which the browser
+  renders in clear, so a screenshot of it leaks exactly as a snapshot does
+  (measured, #7947).
+- This flow is driven by the **Playwright MCP**, and there is **no runtime
+  guard on the Playwright-MCP path** (#7980) — the `agent-browser` interceptor
+  does not see MCP tool calls, and an MCP result cannot be piped through the
+  redactor. For navigation, pass `filename:` to `browser_snapshot` so the tree
+  lands in a file rather than the transcript, filter that file with
+  `redact-a11y-snapshot.py`, and shred it. A bare `browser_snapshot` on a page
+  showing the token renders that token verbatim — the class recorded in
+  `knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`.
+  Capture neither snapshot nor screenshot of the panel itself.
+- If `browser_evaluate` ever reads a value, call it **with** a `filename`, and
+  read the file. **This corrects an inverted instruction that stood here
+  previously.** Without a `filename` the result is returned into the
+  conversation transcript, which is precisely the leak; with one it is written
+  to a file you can consume and shred. The `filename` parameter JSON-encodes
+  the result, so strip the surrounding quotes on read
+  (`python3 -c "import sys,json; sys.stdout.write(json.loads(open('<path>').read()))"`).
+  Canonical statement of the rule: `work/SKILL.md` §"Vendor-token extraction via
+  Playwright", and learning
+  `2026-05-18-vendor-token-mint-and-oci-image-content-carrier-patterns.md`.
 
 ## After the widen
 
