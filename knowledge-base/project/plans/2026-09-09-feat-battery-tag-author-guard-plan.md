@@ -1,5 +1,5 @@
 ---
-title: "repo-write-boundary: prove no battery-reachable git fetch writes tags into the live repo"
+title: "repo-write-boundary: prove no battery-reachable git command writes tags into the live repo"
 type: feat
 date: 2026-09-09
 slug: feat-battery-tag-author-guard
@@ -13,7 +13,61 @@ brand_survival_threshold: aggregate pattern
 requires_cpo_signoff: false
 ---
 
-# repo-write-boundary: prove no battery-reachable `git fetch` writes tags into the live repo
+# repo-write-boundary: prove no battery-reachable git command writes tags into the live repo
+
+## Enhancement Summary
+
+**Deepened on:** 2026-09-09 · **Agents:** repo-research-analyst, learnings-researcher, a read-only
+measurement walk, CTO, kieran-rails-reviewer, code-simplicity-reviewer, architecture-strategist,
+test-design-reviewer, spec-flow-analyzer, best-practices-researcher.
+
+Every finding below was **verified against repository source or git's own documentation before being
+adopted**. Several reviewer claims did not survive that check and are recorded as rejected in
+`## Plan Review` — a review's conclusion is a hypothesis like any other.
+
+### The five changes that altered the design
+
+1. **The property was reframed.** "No battery `git fetch` writes tags into the *live* repo" is not
+   statically decidable — CWD is a runtime property set by callers frames away, and two competent
+   static readings of `.claude/hooks/ship-runbook-ssh-gate.sh` reached opposite verdicts. The guard
+   now asserts a declaration-based property that is decidable and fail-closed.
+2. **The quantified set moved from a verb to a class.** ADR-207 cell 6 softens a tag *creation* by
+   anything; a fetch-scoped guard is green over `git pull` (two live sites in the very file ADR-207
+   names) and over a battery suite's direct `git tag -a`.
+3. **The `SCOPED` verdict was deleted.** It graded `git -C <path>` compliant — a static liveness
+   judgement made without looking at the path, in a plan whose thesis is that such judgements are
+   undecidable. Measured: `git -C "" rev-parse --show-toplevel` prints the enclosing repo.
+4. **`--enumerate-commands` now sets `_ENUMERATE=1`.** Nine sites gate that mode, one of them the
+   entire "takes no lock" property; a mode on its own variable would have deadlocked the gate on
+   itself — the exact hazard `--print-suite-globs`' own comment names.
+5. **The mutation battery got a filename, a registration, and a real oracle.** It had none, which is
+   the defect this plan cites #7942 for; and its rows scored on a bare exit code, so a broken
+   sandbox would have scored full marks with the classifier disabled.
+
+### Corrections to claims the plan had asserted
+
+- `git push … refs/tags/…` writes to the **remote**, never locally — removed from the verb set.
+- `git remote update` takes no `--no-tags` (measured: `error: unknown option 'no-tags'`), so
+  `SUPPRESSED` is unreachable for it. The plan had said the opposite.
+- `--no-tags` vs `--tags` precedence is **undocumented**; the negative conjunct is now justified as a
+  refusal to guess rather than as knowledge.
+- Reliably excluding heredocs needs a real parser. Exclusion is declared best-effort, with its
+  failure direction — false OFFENDER, never false green — stated.
+- `scripts/lib/repo-write-boundary.test.sh` could not be both exempted and unmodified once `git tag`
+  entered the verb set. AC10 narrowed to "comment lines only, floor and arms intact".
+- The naive `_ENUMERATE` conjunct grep returns 8, counts a comment, and misses the parse arm —
+  replaced with a set comparison over non-comment lines.
+
+### New considerations discovered
+
+- `plugins/soleur/test/scripts-shard-totality.test.sh` derives an independent reference whose static
+  half only sees `run_suite "<literal>"` inside a column-0 `if want_scripts; then … fi` block with
+  no `$` in the label. The registration must satisfy all three or that suite reddens **from outside
+  the diff**.
+- The nested-runner sub-population is ~115 suites — about a quarter of the battery — invisible to a
+  static path walk.
+- `MIN_ROOTS`' no-downward-ratchet rule ships untested by construction and needed three defined
+  cases, including "no prior value exists".
 
 ## Overview
 
@@ -226,7 +280,7 @@ What it found, with the parts that change the design marked:
 | Union | 393 (overlap 1: `scripts/lib/frontmatter-strip.test.sh` — the entry `lint-orphan-test-suites.sh` already ACKs as double-covered) |
 | Over-approximated transitive closure | ~1500 files |
 | `git remote update` repo-wide | **zero occurrences** |
-| Live-repo `git fetch` offenders adjudicated | **0** |
+| Live-repo `git fetch` offenders adjudicated **against the ORIGINAL property** — not the reframed one the guard measures | **0** |
 
 Every `worktree-manager.sh` and hook site adjudicated `SAFE-fixture` is safe **by caller discipline
 only** — see the finding two subsections down. Two sites carry residual uncertainty that does not
@@ -558,7 +612,7 @@ grade:
 
 | Verdict | Condition |
 |---|---|
-| `SUPPRESSED` | the **same command** matches an anchored whole-invocation pattern carrying `--no-tags` — flag order and extra flags tolerated — **and** carries no positive tag request on that same command: no `--tags`, no `-t`, no `refs/tags/` in any operand, no `tagOpt` in a `-c`. The negative conjunct is load-bearing and deliberately **conservative**: `git fetch --no-tags origin '+refs/tags/*:refs/tags/*'` is documented to fetch tags anyway (an explicit refspec takes precedence over the flag), and for `git fetch --no-tags --tags origin` the precedence is **not formally documented** — the implied behaviour is last-one-wins, so the guard refuses to guess and grades it OFFENDER rather than trusting an undocumented order. Only `git fetch`/`git pull`/`git remote update` can reach this verdict — a `git tag` creation has no suppressing flag and must be `EXEMPT` or `OFFENDER` |
+| `SUPPRESSED` | the **same command** matches an anchored whole-invocation pattern carrying `--no-tags` — flag order and extra flags tolerated — **and** carries no positive tag request on that same command: no `--tags`, no `-t`, no `refs/tags/` in any operand, no `tagOpt` in a `-c`. The negative conjunct is load-bearing and deliberately **conservative**: `git fetch --no-tags origin '+refs/tags/*:refs/tags/*'` is documented to fetch tags anyway (an explicit refspec takes precedence over the flag), and for `git fetch --no-tags --tags origin` the precedence is **not formally documented** — the implied behaviour is last-one-wins, so the guard refuses to guess and grades it OFFENDER rather than trusting an undocumented order. Only `git fetch` and `git pull` can reach this verdict. **`git remote update` cannot**, and an earlier draft wrongly said it could: measured, `git remote update --no-tags` returns `error: unknown option 'no-tags'` — its synopsis carries only `--prune`, and tag-following for that verb is governed by `remote.<name>.tagOpt` in config, never on the command line. So for `git remote update`, and for `git tag` / `git update-ref` creations, the property's "suppresses on its own command line" arm is **unsatisfiable by construction** and the only reachable verdicts are `EXEMPT` or `OFFENDER`. The guard states that per verb in its header rather than leaving a reader to find an arm that can never fire |
 | `EXEMPT` | one of the two preceding lines carries the declared marker `repo-boundary-tag-exempt: <reason> (#<issue>)` **and** the site appears in the guard's exemption ledger with a matching issue citation |
 | `OFFENDER` | everything else |
 
@@ -711,17 +765,25 @@ them rather than anywhere else under `want_scripts`.
   script is referenced from a workflow, two runbooks and a baseline *text* file, and the roster gate
   is a vitest file reached through `bash -c 'cd apps/web-platform && npm run test:ci …'`. Widening
   the closure to make the AC pass is forbidden.
-- Check whether `.claude/hooks/pre-merge-rebase.sh` and `.openhands/hooks/pre-merge-rebase.sh` are
-  held in parity by an existing assertion, so Phase 3 does not edit one and silently redden the
-  other.
+- **Answered at plan time — no Phase 0 work remains.** `.claude/hooks/pre-merge-rebase-parity.test.sh`
+  exists (#6724) and asserts parity across the two `pre-merge-rebase.sh` copies, but deliberately
+  only over *the shared gate contract* — its own header says it "tests only the shared gate
+  contract". A suppression added to one copy and not the other would therefore **not** redden it.
+  The mechanism that does catch that divergence is this guard: both copies are closure members and
+  both are graded, so Phase 3 must close them as a pair. Recorded so nobody mistakes the parity
+  suite for coverage of this property.
 
 #### Phase 1 — RED (constraint 2). **No offender is fixed in this phase.**
 
 - Add `--enumerate-commands` to `scripts/test-all.sh`, setting `_ENUMERATE=1` alongside its own mode
   flag. Assert AC3(a)-(c) before going further — a flag that deadlocks on `tc_acquire` will not
   present as a wrong answer, it will present as a hung gate.
-- Write `scripts/battery-tag-authorship.test.sh` through Stage D, with the exemption ledger
-  **empty** and `MIN_ROOTS` set provisionally.
+- Write `scripts/battery-tag-authorship.test.sh` through Stage D — **including the
+  `BATTERY_TAG_REPO_ROOT` / `BATTERY_TAG_RUNNER` seam**, which belongs to the guard, not the
+  battery: built later, the guard that produced the RED transcript would be a different program from
+  the one Phase 2 grades. Wrap the `--enumerate-commands` call in `timeout 120` so a regression is a
+  red suite rather than a hung gate holding the advisory lock. The exemption ledger starts
+  **empty**; `MIN_ROOTS` is provisional (Stage D's base-case rule is what makes that safe).
 - Register it in `scripts/test-all.sh` and **`git add` it** — `guard-vacuity-floor.test.sh` sweeps
   `git ls-files`, so an untracked file never enters its population and AC24 cannot pass.
 - Assert AC2: `--enumerate all` differs from the Phase 0 baseline by exactly one added line, this
@@ -745,9 +807,14 @@ them rather than anywhere else under `want_scripts`.
 
 #### Phase 3 — GREEN
 
-- For each `OFFENDER` from Phase 1, apply the cheapest correct closure: `--no-tags` on the command,
-  or a declared `repo-boundary-tag-exempt:` marker plus an exemption-array entry citing #7917.
-  Prefer `--no-tags`; an exemption requires a stated reason why suppressing tags breaks the site.
+- For each `OFFENDER` from Phase 1, apply the cheapest correct closure: a suppression on the
+  command, or a declared `repo-boundary-tag-exempt:` marker plus a ledger entry. Prefer suppression.
+  Each exemption states why suppression **specifically breaks that site** and cites an **open**
+  tracking issue — **not `#7917`**, which this PR closes and which would leave every entry citing a
+  dead reference (AC18b). Filing those trackers is part of this phase, per
+  `wg-when-deferring-a-capability-create-a`.
+- `scripts/lib/repo-write-boundary.test.sh` needs an exemption marker for its deliberate probe-tag
+  creations — comment lines only, floor and arms untouched (AC10).
 - Resolve every `UNCLASSIFIED` registration — either the resolver learns the argv shape, or the
   shape is recorded as out-of-class with a reason.
 - Re-run; guard green with a non-zero census.
@@ -756,9 +823,13 @@ them rather than anywhere else under `want_scripts`.
 
 - Re-measure `scripts/guard-vacuity-floor.test.sh`'s firing population and ratchet
   `MIN_FIRING_SUITES` so the new floor is locked in.
-- Amend ADR-207: the Consequences bullet gains the measured post-guard population and names
-  `scripts/battery-tag-authorship.test.sh` as the mechanism bounding cell 6; the exemption
-  ledger's cell-6 row gains the same reference. `status:` stays `accepted`.
+- Amend ADR-207 exactly as `## Architecture Decision (ADR/C4)` specifies — a **new numbered
+  section** (§5, after `### 4. The collision guard…` and before `## Consequences`) carrying the
+  reframed property, the accepted-risk nature of `EXEMPT`, and the ledger governance; plus a cell-6
+  exemption-ledger row naming `scripts/battery-tag-authorship.test.sh`. **No measured population
+  figure is transcribed** — an earlier draft of this phase said the opposite and was not updated
+  when that requirement was dropped. The Consequences bullet keeps its closing sentence ("must not
+  be described as closed"). `status:` stays `accepted`.
 - Run the full battery.
 
 ## Alternative Approaches Considered
@@ -798,11 +869,24 @@ No other open `code-review` issue names a file in `## Files to Create` or `## Fi
 ## Files to Create
 
 - `scripts/battery-tag-authorship.test.sh` — the guard.
+- `scripts/battery-tag-authorship-mutations.test.sh` — the mutation battery. **It gets a real
+  filename and a real `run_suite` registration**, under the same three placement constraints as the
+  guard. An earlier draft left it unnamed and unregistered — precisely the defect
+  `## Open Code-Review Overlap` cites #7942 for ("run in no gate"), committed one directory over
+  while quoting the issue. The `.test.sh` suffix rather than `.mutation.sh` is deliberate: that is
+  what `scripts/lint-orphan-test-suites.sh` walks, so an unregistered copy is caught.
 
 ## Files to Edit
 
 - `scripts/test-all.sh` — `--enumerate-commands` flag, `_shard_enumerate_command_emit`, the
   `run_suite`/`skip_suite` arms, and the `run_suite` registration for the new suite.
+- `scripts/lib/repo-write-boundary.test.sh` — **comment lines only**: the exemption marker for its
+  deliberate `git tag probe-tag` creations. `MIN_ASSERTIONS=57` and every classifier arm untouched,
+  which is what AC10 now asserts instead of "unmodified" (the verb-set widening made that
+  self-contradictory).
+- `knowledge-base/project/plans/2026-09-09-feat-battery-tag-author-guard-plan.md` — this file gains
+  `## Measurement (RED window)` in Phase 1. It must land **after** `## Guard Contract` ends, since
+  `scripts/lint-guard-contract.py` reads that section to the next top-level heading.
 - `scripts/guard-vacuity-floor.test.sh` — `MIN_FIRING_SUITES` ratchet, re-measured. (The suite's
   sweep is `git ls-files`-based and auto-discovers floors written in the shape it recognises, so no
   list edit is needed — but the new file must be tracked, and AC24 asserts it by name rather than by
@@ -921,11 +1005,31 @@ occurrence is read with two lines of preceding context. Membership is never a li
 only literal arrays are the exemption ledger, `SELF_EXCLUSION` and `FIXTURE_EXCLUSION`, each
 separately size-asserted.
 
-**Mutation matrix.** Rows marked *(fixture)* run against a synthetic sandboxed tree copy reached
-through the `BATTERY_TAG_REPO_ROOT` / `BATTERY_TAG_RUNNER` injection seam, never by editing tracked
-files in the live working tree — which would be racy with the outer gate and, for row 1, would mean
-a live tree that momentarily fetches tags. The seam is part of Part 2's design, exercised by the
-control run, not an afterthought of the battery.
+**Battery contract (applies to every row below).** Rows marked *(fixture)* run against a synthetic
+sandboxed tree copy reached through the `BATTERY_TAG_REPO_ROOT` / `BATTERY_TAG_RUNNER` injection
+seam, never by editing tracked files in the live working tree — which would be racy with the outer
+gate and, for row 1, would mean a live tree that momentarily fetches tags. The seam belongs to the
+guard's design (Part 2), not the battery's: built later, the guard that produced the RED transcript
+would be a different program from the one the battery grades.
+
+**`RED` names a colour, not a claim, and a bare exit code is not an oracle.** Every RED row asserts
+the guard's **own census line for the specific planted site** — that path and line graded
+`OFFENDER` — not merely a non-zero exit. Without it, a fixture tree whose derivation breaks reds
+*every* row for the wrong reason and the battery scores full marks with the classifier disabled.
+Three further requirements follow, and they bind the battery rather than the guard:
+
+- **Scope each mutation to a line range and assert its placement**, not just that the file differs
+  from a pristine copy. A file-wide `sed` without `/g` rewrites the first match, which in a fixture
+  carrying several near-identical commands is a different site than the row intended.
+- **Set-compare the battery's printed row IDs against the row IDs in this table, both ways.** The
+  plan demands exactly this bijection of the exemption ledger; a battery whose dispatch loop is
+  commented out prints "0 rows" and is otherwise indistinguishable from a full pass.
+- **Mutate the floor and the counters, not only `fail()`.** Also delete one assertion and confirm
+  the floor reds — which requires the floor to carry **zero slack** against the measured executed
+  count, since row 9's sensitivity depends on it entirely — and move `ck()` inside `pass()`, the
+  exact thing constraint 3 forbids, and confirm the conservation check reds.
+
+**Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
@@ -947,6 +1051,14 @@ control run, not an afterthought of the battery.
 | 15 | *(fixture)* Add a direct **`git tag -a -m … v1.2.3`** creation to a closure member — the verb ADR-207 cell 6 actually quantifies over | RED |
 | 16 | *(fixture)* Write `git fetch --no-tags --tags origin`, then `git fetch --no-tags origin '+refs/tags/*:refs/tags/*'` — `--no-tags` present, tags fetched anyway; the `SUPPRESSED` negative conjunct | RED (each) |
 | 17 | *(fixture)* Write `git -C "$GIT_ROOT" fetch origin main` with no `--no-tags` — a `-C`-scoped command against the live repo, which an earlier draft graded compliant | RED |
+| 18 | *(fixture)* Add an unflagged `git remote update` and an unflagged `git update-ref refs/tags/v9 <sha>` — two declared verbs no other row exercises, one with **zero** live occurrences, so its regex arm is otherwise never run in either direction | RED (each) |
+| 19 | *(fixture)* Add a bare **`git tag v1.2.3`** — the commonest creating form, and the one hardest to separate from the listing forms row 20 pins | RED |
+| 20 | **Must-PASS, the creating/listing boundary from the other side:** `git tag -n5`, `git tag --points-at HEAD`, `git tag --contains "$sha"`, `git tag --sort=-v:refname` — all read-only, all common in release scripts | PASS (each) |
+| 21 | **Must-PASS, the over-rejection control this plan most needs:** a `git fetch` inside a full-line **comment**, and one inside a **heredoc body**. Neither can be closed with a suppression, so a comment-blind classifier can only be satisfied by an exemption — and the bijection then makes that state *stable*, so the ledger fills with entries for prose and the guard never reds again. The repo supplies the live trigger: `apps/web-platform/scripts/lint-migration-fk-preconditions.sh`'s own comment contains the string `git -C "$REPO_ROOT" fetch` | PASS (each) |
+| 22 | **Must-PASS, closure NEGATIVE control:** `plugins/soleur/scripts/sync-pr-behind.sh` and `apps/web-platform/scripts/lint-migration-fk-preconditions.sh` — both adjudicated battery-unreachable — must be **absent** from the derived closure. Every other row plants something that must trip; without this the closure can over-approximate toward the whole repo (Stage B admits any tracked path literal, and `scripts/test-all.sh` alone names ~400) while every fixture row still passes and `MIN_ROOTS`, a lower bound, still holds | PASS (each) |
+| 23 | **Seam NEGATIVE control:** plant an offender in the sandbox with the seam **unset** — the guard must **not** see it. Without this, a seam that silently falls back to the live root makes every fixture verdict a statement about an unknown tree, and for the must-PASS rows that fallback reads as a pass | PASS |
+| 24 | *(fixture)* Degrade the exemption-marker match to a bare `grep -q 'repo-boundary-tag-exempt'`, then plant a marker with an empty reason, one with no issue citation, and one citing the now-closed `#7917` | RED (each) |
+| 25 | *(fixture)* Give a `bash -c` registration an argv operand containing a literal **tab**, then a **newline** — the record contract's escaping beyond the space case Guard-2 row 7 covers | RED (each) |
 
 ### Guard 2 — root-set derivation contract
 
@@ -976,7 +1088,9 @@ asserted three ways that fail independently: source-coverage (one known member p
 | 5 | Leak `SCRIPTS_SHARD=1/3` into the derivation environment so the enumeration returns one leg | RED via `MIN_ROOTS` |
 | 6 | Give `--enumerate-commands` its own mode variable **without** also setting `_ENUMERATE=1`, so the nine `_ENUMERATE` conjuncts stop applying | RED — assert the invocation neither blocks on `tc_acquire` nor emits a nested `repo_boundary_classify` verdict, within a bounded timeout |
 | 7 | Emit the record with `"$*"` instead of tab-delimited argv, then register a suite whose argv contains a space-bearing operand | RED — argv boundaries are part of the record contract |
-| 8 | **Must-PASS:** add a new suite through the `SUITE_GLOBS` auto-discovery path | PASS, and the new file appears in the closure |
+| 8 | Make the resolver fall back to the **label** when it cannot parse argv, then register `run_suite "…/run-registered-suites.sh" bash -c true` — the exact defect `lint-orphan-test-suites.sh` records. Row 4 covers "a shape the resolver does not know"; it does **not** cover "the resolver quietly trusts the label", and a label-grepping resolver passes row 4 | RED |
+| 9 | Change how `bun test plugins/soleur/` (a directory operand) expands, so the expansion silently narrows | RED |
+| 10 | **Must-PASS:** add a new suite through the `SUITE_GLOBS` auto-discovery path | PASS, and the new file appears in the closure |
 
 ## Architecture Decision (ADR/C4)
 
@@ -1068,8 +1182,10 @@ None. The decision is true the moment the guard is green; nothing is soak-gated.
    is unchanged from the Phase 0 baseline — no conjunct was added, moved or lost;
    (b) `grep -c '_ENUMERATE=1' scripts/test-all.sh` → `2` (the `--enumerate` arm and the
    `--enumerate-commands` arm);
-   (c) the invocation completes within a bounded timeout and emits no `repo_boundary_classify`
-   verdict — i.e. it neither blocks on `tc_acquire` nor runs a second boundary classification nested
+   (c) the invocation completes within a bounded timeout — the guard wraps its own
+   `--enumerate-commands` call in `timeout 120`, so a regression presents as a red suite rather than
+   a hung gate holding the advisory lock against `TC_RUNTIME_CEILING_S` — and emits no
+   `repo_boundary_classify` verdict — i.e. it neither blocks on `tc_acquire` nor runs a second boundary classification nested
    inside the outer run's window. Guard-2 mutation row 6 is the RED counterpart.
 4. `scripts/battery-tag-authorship.test.sh` exists, is **tracked** (`git ls-files --error-unmatch`
    succeeds — `guard-vacuity-floor.test.sh` sweeps `git ls-files`, so an untracked file is invisible
@@ -1105,7 +1221,14 @@ None. The decision is true the moment the guard is green; nothing is soak-gated.
     `BATTERY_TAG_MIN_ASSERTIONS`, so the count is identical whether or not the bare form is present:
     `{ grep -n 'MIN_ASSERTIONS' scripts/battery-tag-authorship.test.sh | grep -v 'BATTERY_TAG_MIN_ASSERTIONS' || true; }` → empty,
     and `grep -c '^BATTERY_TAG_MIN_ASSERTIONS=' scripts/battery-tag-authorship.test.sh` → `1`.
-    Also: `git diff origin/main...HEAD --stat -- scripts/lib/repo-write-boundary.test.sh` → empty.
+    Also, and **narrowly**: that file keeps `MIN_ASSERTIONS=57` and every classifier arm. It is
+    **not** required to be untouched — widening the verb set to `git tag` made that
+    self-contradictory, because the file creates probe tags on purpose
+    (`git -C "$p" -c tag.gpgSign=false tag probe-tag`), a `git tag` creation has no suppressing flag,
+    and it is a battery **root** (AC5's glob-source witness), so closing it *requires* adding an
+    exemption marker to it. Assert instead that the diff contains **only added comment lines**:
+    `git diff origin/main...HEAD -- scripts/lib/repo-write-boundary.test.sh` shows no `-` line and no
+    `+` line that is not a comment, and `grep -c '^MIN_ASSERTIONS=57$' scripts/lib/repo-write-boundary.test.sh` → `1`.
 11. The guard carries a `MIN_ROOTS` floor, checked **before any verdict is graded**, and refuses a
     committed value **below** the previous committed value — the only legitimate ratchet direction is
     up. There is deliberately no floor on the occurrence count; see `## Technical Approach` Stage D
@@ -1209,7 +1332,11 @@ None. The decision is true the moment the guard is green; nothing is soak-gated.
     executable closure member), and the roster gate is a vitest file reached only through
     `bash -c 'cd apps/web-platform && npm run test:ci …'`, which the closure walker does not follow
     into vitest project globs. Widening the closure to make this AC pass would change the guard's
-    scope without changing its name, and is forbidden.
+    scope without changing its name, and is forbidden. **If Phase 0 demonstrates that no closure
+    member carries a given spelling at all** — entirely possible for the TS array form — that
+    spelling has no live witness, and the AC is discharged by the *fixture* half (row 12) plus a line
+    in the guard's header naming the spelling declared-but-unwitnessed. Without this clause the AC is
+    unsatisfiable with both remedies barred, which is a dead end rather than a gate.
 32. The closure expands both nested runners. Verify: the guard's closure contains at least one file
     reachable only through `apps/web-platform/infra/run-registered-suites.sh --list`, the delegation
     carries a floor on its parse plus the declared-vs-parsed cross-check, and Guard-1 row 13 is RED.
@@ -1223,8 +1350,16 @@ None. The decision is true the moment the guard is green; nothing is soak-gated.
 
 ### Post-merge
 
-None. There is no deploy surface, no infrastructure change, no external state to reconcile, and
-nothing time-gated — so no follow-through enrolment is required.
+No deploy surface, no infrastructure change, no external state to reconcile, nothing time-gated — so
+no follow-through enrolment is required. **Two obligations are conditional on what Phase 1 measures,
+and are stated rather than assumed away:**
+
+- **If any exemption ships**, each cites an open tracking issue (AC18b) that stays open until the
+  exemption is removed — a follow-through obligation under `wg-when-deferring-a-capability-create-a`
+  that outlives the merge. If the ledger ships empty this is moot, but the plan cannot know that
+  before Phase 1 runs, so "None" cannot be asserted ahead of the measurement that decides it.
+- **`MIN_ROOTS`' no-downward-ratchet rule ships untested**, because no prior committed value exists
+  until this PR is on `main`. Its first real evaluation is the next PR that touches the file.
 
 ## Test Scenarios
 
@@ -1253,14 +1388,30 @@ nothing time-gated — so no follow-through enrolment is required.
 
 ### Edge cases
 
-- A registration whose label contains a path-shaped string but whose argv does not (the exact defect
-  `lint-orphan-test-suites.sh` records: `run_suite "…/run-registered-suites.sh" bash -c true`) —
-  must resolve from argv, and report UNCLASSIFIED rather than trusting the label.
-- `bun test plugins/soleur/` — a directory operand, not a file.
-- A relevance-declined suite (`skip_suite`) — still battery-reachable, must stay in the root set.
-- A fetch inside a heredoc or a comment — must not be graded as a live call site.
-- The guard's own source, which contains both `git fetch` and `--no-tags` literals — must be
-  excluded exactly once, by a size-asserted ledger.
+**Every item below is now a numbered mutation row, not prose.** An earlier draft carried them here
+only — a second specification with no runner, in a section no AC compels to execute — and it held
+the single highest-value control in the plan (the comment/heredoc must-PASS, now row 21, which is
+what kills the most plausible over-rejecting implementation). Listing a requirement in the one place
+nothing runs is how it never gets tested.
+
+| Edge case | Where it now lives |
+|---|---|
+| A command inside a heredoc or a comment must not be graded as a call site | Guard-1 row 21 (must-PASS) |
+| A registration whose **label** is path-shaped but whose argv is not (`run_suite "…/run-registered-suites.sh" bash -c true`) | Guard-2 row 8 |
+| `bun test plugins/soleur/` — a directory operand | Guard-2 row 9 |
+| The guard's own source, which contains the literals it greps for | `SELF_EXCLUSION`, AC14 |
+| Mutation fixtures, which also contain those literals | `FIXTURE_EXCLUSION`, AC14 |
+| A relevance-declined (`skip_suite`) registration | resolved below |
+
+**The `skip_suite` question, resolved.** Two earlier statements disagreed: Part 1 said a declined
+record resolves "into the out-of-class ledger rather than the root set", and this section said a
+declined suite "must stay in the root set". The resolution is the second. A relevance-declined suite
+is **battery-reachable** — it runs on any commit whose diff touches its predicate — so dropping it
+would make coverage a function of today's diff, which is exactly the snapshot-not-structure defect
+the Assembly is written against. `SUITE_COMMAND_DECLINED` is a distinct **record type** so its `$3`
+rerun string is never mistaken for argv; the resolved path still joins the **root set**. The
+out-of-class ledger is for shapes the resolver cannot parse at all — a different question. Guard-2
+row 3 therefore asserts root-set membership, not merely that the cross-check disagrees.
 
 ### Integration verification
 

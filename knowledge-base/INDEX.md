@@ -4795,7 +4795,7 @@
 - [fix(inngest): re-pin the bootstrap image to a probe_schema=3 build and bind the pin to the bytes it names](project/plans/2026-09-07-fix-inngest-bootstrap-pin-and-guard-hardening-plan.md)
 - [fix(test-all): a sibling merge's release tag no longer reddens a green battery — tags join the shared_store softening](project/plans/2026-09-07-fix-repo-write-boundary-tag-shared-store-softening-plan.md)
 - [Shell git-fixture containment, and a hook_self_fault signal that can name its cause](project/plans/2026-09-08-fix-shell-git-env-scrub-and-hook-fault-diagnosis-plan.md)
-- [repo-write-boundary: prove no battery-reachable git fetch writes tags into the live repo](project/plans/2026-09-09-feat-battery-tag-author-guard-plan.md)
+- [repo-write-boundary: prove no battery-reachable git command writes tags into the live repo](project/plans/2026-09-09-feat-battery-tag-author-guard-plan.md)
 - [fix: downgrade reconcile no-workspace-match Sentry severity from error to warning](project/plans/feat-one-shot-reconcile-no-workspace-match/plan.md)
 - [plan feat account delete anonymise action sends](project/plans/plan-feat-account-delete-anonymise-action-sends.md)
 - [Workspace Reconcile Push — "no workspace matched" Sentry noise](project/plans/plan-workspace-reconcile-push-noise.md)
