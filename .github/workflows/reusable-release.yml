@@ -1671,3 +1671,90 @@ jobs:
           else
             echo "::warning::Slack notification failed (HTTP $HTTP_CODE)"
           fi
+
+      # ─────────────────────────────────────────────────────────────────────
+      # CARRY THIS JOB'S OUTPUT VALUES ACROSS THE RUN BOUNDARY (#5806, ADR-215).
+      #
+      # WHY THIS EXISTS. web-platform-release.yml's deploy chain moved onto a
+      # `workflow_run: completed` arm, which is a DIFFERENT RUN from the one
+      # this job executes in. The `needs` context does not cross that boundary,
+      # and the REST jobs API exposes a job's `conclusion` but NOT its
+      # `outputs` — verified: the job object's key set contains no `outputs`
+      # key at all. So the consumer can recover this job's VERDICT from the API
+      # and needs a carrier for its VALUES. This artifact is that carrier.
+      #
+      # VALUES ONLY — NEVER THE VERDICT. The consumer MUST take
+      # `release.result` from the jobs API and MUST NOT substitute this
+      # artifact's `mirror_verified` for it. Those two fields are not
+      # interchangeable and the difference is a live fail-open: `docker_pushed`
+      # is written ten steps before the zot mirror-gate assertion, so a release
+      # BLOCKED by that gate still reports `docker_pushed: true` (deploy.if's
+      # own FR-A5 comment records this), and `mirror_verified` is documented at
+      # FR-A9 as "DELIBERATELY NOT a blocking conjunct … legibility after the
+      # fact". Gating on either would deploy an unmirrored image to prod.
+      # web-platform-release.yml's `resolve-target` carries a mutation row for
+      # exactly this substitution.
+      #
+      # ALLOWLISTED, NEVER A $GITHUB_OUTPUT DUMP. Every field is named here on
+      # purpose: dumping the step-output namespace would let a future step's
+      # output carry a secret into an artifact, and an allowlist makes that
+      # unrepresentable rather than merely unlikely.
+      #
+      # `if: always()` IS LOAD-BEARING IN BOTH DIRECTIONS, and removing it as
+      # "dead code" is a real hazard:
+      #   * it captures the `check_changed` NO-OP case (released=false,
+      #     version="") as a POSITIVE signal, so the consumer asserts a clean
+      #     skip instead of inferring one from an absence;
+      #   * it captures the mirror-gate-BLOCKED case, where this job's
+      #     conclusion is `failure` and the values still describe what happened.
+      # Without it, a docs-only push flips from a green skip to a loud
+      # fail-closed on the consumer side.
+      #
+      # ADDITIVE AND UNCONDITIONAL FOR EVERY CALLER. reusable-release.yml has a
+      # second consumer — version-bump-and-release.yml, component `plugin` —
+      # which has no deploy chain. It gains one artifact per release run that
+      # nothing downloads. No `workflow_call` input is added, so no caller needs
+      # an edit.
+      - name: Publish release outputs for cross-run consumers
+        if: always()
+        env:
+          COMPONENT: ${{ inputs.component }}
+          VERSION: ${{ steps.version.outputs.next }}
+          TAG: ${{ steps.version.outputs.tag }}
+          RELEASED: ${{ steps.create_release.outputs.released == 'true' || steps.idempotency.outputs.draft_exists == 'true' }}
+          DOCKER_PUSHED: ${{ steps.docker_pushed.outputs.pushed || 'false' }}
+          MIRROR_VERIFIED: ${{ steps.zot_mirror.outputs.mirror_verified || 'false' }}
+        run: |
+          # Values are read from the SAME step outputs the job's `outputs:`
+          # block reads, so what lands here is identical to what `needs`
+          # delivers in-run — not a weaker restatement of it.
+          mkdir -p "${RUNNER_TEMP}/release-outputs"
+          jq -n \
+            --argjson schema 1 \
+            --arg component "$COMPONENT" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg head_sha "$GITHUB_SHA" \
+            --arg version "$VERSION" \
+            --arg tag "$TAG" \
+            --arg released "$RELEASED" \
+            --arg docker_pushed "$DOCKER_PUSHED" \
+            --arg mirror_verified "$MIRROR_VERIFIED" \
+            '{schema: $schema, component: $component, run_id: $run_id,
+              head_sha: $head_sha, version: $version, tag: $tag,
+              released: $released, docker_pushed: $docker_pushed,
+              mirror_verified: $mirror_verified}' \
+            > "${RUNNER_TEMP}/release-outputs/release-outputs.json"
+          echo "release outputs carried:"
+          cat "${RUNNER_TEMP}/release-outputs/release-outputs.json"
+
+      - name: Upload release outputs artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-outputs-${{ inputs.component }}
+          path: ${{ runner.temp }}/release-outputs/release-outputs.json
+          # `error` not `warn`: the consumer fails closed when the artifact is
+          # absent, so a silent non-upload here would turn every deploy into a
+          # fail-closed with no explanation on the producing side.
+          if-no-files-found: error
+          retention-days: 14
