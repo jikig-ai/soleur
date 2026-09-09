@@ -80,13 +80,54 @@ not):
 The query creds are a ClickHouse HTTP *connection* — a username/password pair
 Basic-auth'd against a regional ClickHouse endpoint, separate from both tokens.
 
-## Connection details (provisioned 2026-06-01)
+## Connection details (re-provisioned 2026-09-09)
+
+> **A SQL API CONNECTION DOES NOT SEE SOURCES CREATED AFTER IT — and the error looks exactly
+> like a missing table. This cost five days (#7855, #7867); read it before diagnosing any
+> "the source is not storing" symptom.**
+>
+> The connection provisioned 2026-06-01 could not see source `2734275`, created 2026-09-03.
+> Every read against the newer source returned:
+>
+> ```
+> Code: 701. DB::Exception: Requested cluster 't520508_soleur_git_data_prd_logs' not found. (CLUSTER_DOESNT_EXIST)
+> ```
+>
+> **That message says `cluster`, not `table`.** It means *this connection does not know that
+> cluster*. It was read instead as "Better Stack creates a table lazily on the first stored row,
+> so nothing has ever been stored" — which is a coherent reading, is wrong, and is
+> indistinguishable from the real thing without a second connection to compare against.
+>
+> Everything downstream of that misreading was self-consistent and false: writes were being
+> acknowledged with `202` and **were being stored**; a disposable `platform=vector` test source
+> read as empty for the same connection-scope reason; and a rung-2 rehearsal that had actually
+> PASSED reported `TRANSIENT` twenty times. The control source kept querying fine throughout —
+> because it predated the connection — which made the failure look source-specific.
+>
+> **Rule: adding a Better Stack source is not complete until the SQL API connection is
+> re-provisioned.** Create the new connection FIRST and verify the new table reads, then rotate
+> the Doppler values — additively, so working queries never break (`POST /api/v1/connections`
+> is non-destructive; deleting the old one first is not).
+>
+> **Diagnostic that separates the two states in one call:** query the NEW table and a KNOWN-OLD
+> table through the same connection. If the old one answers and the new one raises
+> `CLUSTER_DOESNT_EXIST`, the connection is stale — not the source.
 
 - Source: `soleur-inngest-vector-prd` — id **2457081**, team **520508**, table_name `soleur_inngest_vector_prd_3`, `data_region` `eu-central-1a`, **90-day log retention**.
   **(#7772) CORRECTED 2026-09-04 — this line read `region eu-fsn-3, 3-day log retention` and both halves were wrong.** The region is a vendor RENAME, not a move (see the naming note below). The retention was a FREE-TIER value that predates the 2026-08-16 move to a paid plan; measured twice on two endpoint shapes (`GET /api/v2/sources` and `GET /api/v2/sources/<id>`), this source reports `logs_retention=90` and `metrics_retention=90`. The stale figure had propagated into the Art. 30 register and both published legal documents, all corrected in the same change. `logs_retention` is a PER-SOURCE attribute, not a billing field — so read it here rather than inferring it from the account tier, which genuinely cannot be pulled (`/sources/<id>/usage`, `/usage`, `/billing` all 404).
 - Source: `soleur-git-data-prd` — id **2734275**, team **520508**, table_name `soleur_git_data_prd`, `data_region` `eu-central-1a`, **90-day log retention**, ingesting host `s2734275.eu-central-1a.betterstackdata.com`. git-data's OWN source since #7772. `remote()` identifier: `t520508_soleur_git_data_prd_logs`.
 - **Region naming, so nobody re-derives it:** `eu-fsn-3` and `eu-central-1a` are the SAME cluster — the former is the vendor's earlier name, CNAMEs to the latter, and both resolve to an identical five-address A set (`195.63.225.49/.50/.53/.70/.72`, measured 2026-09-04). Query creds are region-scoped, not source-scoped, so ONE connection reaches BOTH sources.
-- Query host: `eu-fsn-3-connect.betterstackdata.com:443` (region-scoped — creds fail against other clusters).
+- Query host: `eu-central-1a-connect.betterstackdata.com:443` (region-scoped — creds fail against other clusters).
+  **CHANGED 2026-09-09 (#7867):** was `eu-fsn-3-connect...` on the 2026-06-01 connection. The
+  connection was re-provisioned (id `424104`, `client_type=clickhouse`, `team_ids=[520508]`) so
+  it covers source `2734275`, and `BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}` in
+  `soleur/prd_terraform` were rotated to it the same day. The old connection was left in place
+  rather than deleted, so any consumer still holding the previous credentials keeps working
+  against the sources it could already see.
+- **Hot vs archive.** Rows age out of `remote(<table>)` into the S3 archive quickly — measured
+  2026-09-09, a row posted seconds earlier is in `remote()` within ~75 s, while rows five days
+  old are readable ONLY via `s3Cluster(primary, <table>_s3)`. Any query over historical data
+  must `UNION ALL` both arms; `git-data-rung2-evidence-capture.sh` already does.
 - `remote()` table identifier: **`t<TEAM_ID>_<table_name>_logs`** → `t520508_soleur_inngest_vector_prd_3_logs`. The docs' `t123456_...` placeholder is the **team id**, not the source id. (Suffixes: `_logs`, `_metrics`, `_spans`.)
 
 ## Re-minting the query connection (if creds are lost/rotated)

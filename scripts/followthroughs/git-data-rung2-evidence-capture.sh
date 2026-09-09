@@ -726,7 +726,19 @@ if [[ "$anchor_rc" -ne 0 ]]; then
       # This matters beyond tidiness: the rehearsal workflow branches on `NEVER STORED A ROW` and
       # tells the operator "a re-dispatch is warranted" — a paid host spun up on a query error.
       if grep -qE 'CLUSTER_DOESNT_EXIST|NAMED_COLLECTION_DOESNT_EXIST|UNKNOWN_TABLE' <<<"$_anchor_tail"; then
-        transient "TRANSIENT: this source's table does not exist — NEVER STORED A ROW. The control source is answering and carrying rows, so the warehouse is up; this source has stored nothing, or the table name is wrong. No verdict about ${HOST_NAME}: a misaddressed source and a host that never shipped look identical from here." \
+        # (#7867) THE CODE HAS TWO CAUSES AND THIS ARM CANNOT SEPARATE THEM. It used to assert
+        # "NEVER STORED A ROW" as fact. Measured 2026-09-09: the identical 701 is returned when
+        # the SQL API CONNECTION PREDATES THE SOURCE — a connection does not cover sources
+        # created after it. Our connection was provisioned 2026-06-01 and source 2734275 on
+        # 2026-09-03, so every read raised CLUSTER_DOESNT_EXIST while the source was storing
+        # normally the whole time. The control read does NOT discriminate: the control table
+        # predates the connection, so it answers in BOTH cases.
+        #
+        # The marker string is retained because the workflow and two suite arms branch on it,
+        # but the sentence now claims only what the reads establish (AP-021).
+        transient "TRANSIENT: this source's table is not visible to this connection — NEVER STORED A ROW, or the SQL API connection is older than the source. The control source is answering and carrying rows, so the warehouse is up." \
+                  "TWO CAUSES, not separated by this run: (a) nothing has ever been stored to this source; (b) the connection predates the source and cannot see its cluster — the vendor returns the SAME 701 for both." \
+                  "ONE-CALL DIAGNOSTIC: read a KNOWN-OLD table and this one through the same connection. Both failing means the instrument; only this one failing means EITHER cause, and the connection's created_at vs the source's created_at settles it (GET /api/v1/connections, GET /api/v2/sources/<id>)." \
                   "Target read exited ${anchor_rc}. Reason follows (carried, and it is what selected this reading):" \
                   "$_anchor_tail"
       else
