@@ -1399,27 +1399,22 @@ if want_scripts; then
   # a `-live` line would put a 1,345-file lint inside every shard of the required
   # `test` context, and the orphan linter treats a suite carrying BOTH a run_suite
   # line and a workflow `run:` step as double coverage.
-  # The suite drives the REAL pinned binary through a hermetic sandbox that symlinks the
-  # repo's node_modules, so it needs `npm ci` to have run. These legs deliberately install
-  # no node deps (see the `test-scripts` job header in ci.yml), so the binary is absent in
-  # CI and the sandbox CONTROL goes RED -- every mutation row would then pass for the wrong
-  # reason, which the suite detects and aborts on.
+  # scripts/markdown-lint.test.sh is DELIBERATELY NOT REGISTERED HERE, and the reason is
+  # structural rather than preferential. It drives the real pinned binary through a
+  # hermetic sandbox that symlinks node_modules; these legs install no node deps, so on
+  # CI it would abort on a RED sandbox control. Guarding the registration behind
+  # `if [[ -x node_modules/.bin/markdownlint ]]` looks like the fix and is not: this
+  # file's registrations are parsed STATICALLY to derive the shard-totality reference, so
+  # a conditional one is counted in the reference (385) and assigned to no leg (384) --
+  # scripts-shard-totality-mutations calls that "runs nowhere while the required 'test'
+  # check reports green", which is precisely the defect class it exists to catch, and it
+  # caught this. A registration here must be unconditional or absent.
   #
-  # A NOTICE, NOT A DECLINE. skip_suite would be the honest primitive if this were the only
-  # runner, but it is not: the `markdown-lint` job in pr-quality-guards.yml runs `npm ci
-  # --ignore-scripts` and executes this suite there, so CI coverage is obtained and a
-  # decline here would MISreport it as not obtained. It also moves `skipped`, and
-  # scripts/test-all-infra-coverage-notice.test.sh asserts exact skip counts to prove the
-  # infra gate is the only thing moving them -- a second, unrelated decline source silently
-  # invalidates that measurement (measured: 3 arms failed). A non-selection moves no
-  # counter, per the accounting note at _shard_selects; the echo keeps it from being silent.
-  if [[ -x node_modules/.bin/markdownlint ]]; then
-    run_suite "scripts/markdown-lint-unit" bash scripts/markdown-lint.test.sh
-  else
-    echo "[notice] scripts/markdown-lint-unit not run here: node deps absent on this leg."
-    echo "         CI coverage: the markdown-lint job in .github/workflows/pr-quality-guards.yml."
-    echo "         Locally: npm ci --ignore-scripts && bash scripts/markdown-lint.test.sh"
-  fi
+  # It runs in the `markdown-lint` job of .github/workflows/pr-quality-guards.yml, which
+  # does `npm ci --ignore-scripts` first. That is a runner lint-orphan-test-suites
+  # recognises, and row W1e of the suite itself asserts the workflow still carries the
+  # step, so deleting it reddens the suite rather than silently ending its coverage.
+  # Locally: npm ci --ignore-scripts && bash scripts/markdown-lint.test.sh
   # Supabase Management API deprecation + host-pin assembly guard, and the
   # retained-log helper. Registered EXPLICITLY because neither directory is in
   # SUITE_GLOBS: `--print-suite-globs` lists `scripts/lib/*.test.sh` but not
