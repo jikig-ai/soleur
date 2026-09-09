@@ -324,7 +324,19 @@ DEFERRED_DIRS='^(apps/web-platform/infra/|apps/web-platform/scripts/|apps/web-pl
 # present (`--no-tags` stripped from run-migrations.sh) -> still exit 1, because the floor is emitted
 # by `printf` + `exit 1` and never routed through the `fail()` it backstops. Its bound is a literal
 # adjacent to the test, so it is mutant-CONSTRUCTIBLE.
-PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh)$'
+# `apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh` added by #7500 — the Guard 1
+# behavioural suite for the registry heartbeat's producer-side redaction. PROMOTED, not deferred,
+# and for the reason the sibling entries give: this gate's own FAIL message says "cover it, or
+# promote its directory into COVERED_DIRS — do NOT raise this number", the ledger is shrink-only,
+# and deferring a suite that MEETS the covered bar would grow a set that is only allowed to
+# shrink. Promoting the FILE is the narrower move; `apps/web-platform/infra/` stays deferred.
+# It qualifies on all three counts: (a) its floor is `-lt` over `$CASES`, so a neutered assertion
+# machinery drives the count to 0 and the floor FIRES rather than passing vacuously; (b) it
+# carries a dispatch self-test — per-helper `USED_*` counters that exit 1 before the floor is
+# even reached, so a wrapper that never runs is caught ahead of the count; (c) its bound is a
+# literal adjacent to the test, so it is mutant-CONSTRUCTIBLE. Measured at promotion: 28/28 with
+# 14 assertions driven RED before the fix, and a fixture non-vacuity control of its own.
+PROMOTED_FILES='^(apps/web-platform/infra/git-data-nftables-syntax\.test\.sh|apps/web-platform/infra/infra-config-verify\.test\.sh|apps/web-platform/infra/infra-config-repush-mutation\.test\.sh|apps/web-platform/infra/arm-heartbeats\.test\.sh|apps/web-platform/infra/inngest-dedicated-host-classify\.test\.sh|apps/web-platform/infra/pages-build-identity-probe\.test\.sh|apps/web-platform/infra/ssl-full-mitigation\.test\.sh|apps/web-platform/infra/apex-single-node-replace\.test\.sh|apps/web-platform/infra/apex-single-node-replace-mutation\.test\.sh|\.claude/hooks/monitor-supersede-guard\.test\.sh|\.claude/hooks/incident-sandbox-coverage\.test\.sh|apps/web-platform/infra/pr5-anchor-integrity\.test\.sh|apps/cla-evidence/test/ccla-add\.test\.sh|apps/web-platform/scripts/run-migrations-schema-probe\.test\.sh|apps/web-platform/infra/zot-disk-heartbeat-redaction\.test\.sh|\.claude/hooks/browser-snapshot-credential-guard\.test\.sh|plugins/soleur/skills/agent-browser/test/redact-a11y-snapshot\.test\.sh)$'
 
 COVERED="$SUITE_TMP/covered.txt"
 DEFERRED="$SUITE_TMP/deferred.txt"

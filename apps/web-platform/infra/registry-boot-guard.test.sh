@@ -332,13 +332,130 @@ assert "R3: local.registry_arch derivation is oriented correctly (catches an INV
   "[ \"\$(p_registry_arch_derivation '$SCRIPT_DIR/zot-registry.tf')\" = 1 ]"
 
 echo ""
+# --- #7500: the two redact() copies, and the tier tag -------------------------------------
+# THE DRIFT CHECK BETWEEN THE TWO redact() COPIES.
+#
+# NOT byte-equality of the function bodies. That was considered and cut: all three FATAL
+# messages inside the shipper's redact() hardcode a "[zot-log-shipper]" tag, so byte-equality
+# would force the heartbeat copy to emit mis-tagged stderr into a channel with no reader (no
+# `| logger` on that cron, no MTA, no SSH). A gate that dictates dead code is the gate
+# distorting the design.
+#
+# Anchor on the jq program and on the CONSTANTS instead -- which covers MORE than a body
+# comparison would, because HDR_KEEP *is* the allowlist and a body-only gate would let it drift
+# while staying green.
+# ANCHORED AT LINE START, which a comment cannot satisfy -- every comment in this template
+# begins with `#`. The first draft of this line used `grep -cF` on the bare string and counted
+# THREE: the two real definitions plus the sentence above explaining the check. A count is
+# evidence about a file, never about a branch (cq-assert-anchor-not-bare-token).
+SCRUB_ANCHORS=$(grep -cE '^[[:space:]]*def scrub: with_entries' "$CI")
+assert "#7500 the jq scrub program appears in exactly 2 copies (shipper + heartbeat)" \
+  "[[ '$SCRUB_ANCHORS' == '2' ]]"
+
+CRED_N=$(grep -cE "^[[:space:]]*CRED_HDRS='" "$CI")
+KEEP_N=$(grep -cE '^[[:space:]]*HDR_KEEP=' "$CI")
+assert "#7500 CRED_HDRS is defined exactly twice" "[[ '$CRED_N' == '2' ]]"
+assert "#7500 HDR_KEEP is defined exactly twice" "[[ '$KEEP_N' == '2' ]]"
+
+# BYTE-IDENTICAL, not merely present. HDR_KEEP is the allowlist; a silent divergence between
+# the two copies is precisely the drift this replaces byte-equality to catch.
+#
+# LC_ALL=C IS LOAD-BEARING, NOT TIDINESS. Under this host's default en_US.UTF-8 collation,
+# `sort -u` treats strings differing ONLY in punctuation as equal and drops one -- measured:
+# two lines differing by a single `,` inside a bracket expression collapse to 1 unquoted and
+# stay 2 under LC_ALL=C. Every difference these three guards exist to catch is punctuation:
+# a regex metacharacter, a header name's hyphen, a quote. Without the pin they were guards
+# that could not fail on their own subject matter. Found 2026-09-09 by driving the new
+# value-class assertion red and getting a PASS.
+CRED_UNIQ=$(grep -E "^[[:space:]]*CRED_HDRS='" "$CI" | sed 's/^[[:space:]]*//' | LC_ALL=C sort -u | wc -l)
+KEEP_UNIQ=$(grep -E '^[[:space:]]*HDR_KEEP=' "$CI" | sed 's/^[[:space:]]*//' | LC_ALL=C sort -u | wc -l)
+assert "#7500 the two CRED_HDRS copies are byte-identical" "[[ '$CRED_UNIQ' == '1' ]]"
+
+# The denylist VALUE CLASS decides how much of a credential-bearing line is replaced, so it is
+# exactly as load-bearing as the header list beside it -- and it was pinned by nothing until
+# #7954's user-impact review said so. Without this, the two copies could diverge on how far the
+# replacement reaches (one stopping early and leaking a credential tail, the other running to the
+# closing brace) with every other assertion in this file green.
+#
+# ANCHOR EXCLUDES THE VALUE CLASS DELIBERATELY. Anchoring on the whole substitution made the
+# byte-identity assertion vacuous: two lines matching a fixed string that CONTAINS the value
+# class are identical in it by construction, so a diverged copy simply stopped matching and
+# only the count assertion could fail. Measured -- mutating one copy to the pre-fix class gave
+# FAIL(count) + PASS(identity). Anchoring on the substitution's stable tail keeps a diverged
+# copy IN the compared set, so identity is the assertion that fires. No comment in the subject
+# file reproduces this anchor.
+SEDCLASS_N=$(grep -cF 'REDACTED/gI' "$CI")
+SEDCLASS_UNIQ=$(grep -F 'REDACTED/gI' "$CI" | sed 's/^[[:space:]]*//' | LC_ALL=C sort -u | wc -l)
+assert "#7500 the denylist substitution appears exactly twice" "[[ '$SEDCLASS_N' == '2' ]]"
+assert "#7500 the two denylist value classes are byte-identical" "[[ '$SEDCLASS_UNIQ' == '1' ]]"
+assert "#7500 the two HDR_KEEP copies are byte-identical" "[[ '$KEEP_UNIQ' == '1' ]]"
+
+# The call sites differ in ARITY by design -- the shipper redacts per journal line, the
+# heartbeat per line of the sample -- so any gate inferring behavioural equivalence from text
+# identity would be a proxy. Assert the heartbeat's per-line loop exists instead.
+assert "#7500 the heartbeat applies redact() PER LINE (arity, not text identity)" \
+  "grep -qE '^[[:space:]]*redact_sample_lines\(\) \{' '$CI'"
+assert "#7500 the per-line helper is called from the sample chain" \
+  "grep -qE 'redact_sample_lines \"' '$CI'"
+
+# ORDER: the tier gate runs before redaction, which runs before the sanitizer. Behaviour pins
+# this in zot-disk-heartbeat-redaction.test.sh; this is the cheap structural companion.
+GATE_LN=$(grep -n 'ZOT_ERR_SRC" = fallback' "$CI" | head -1 | cut -d: -f1)
+# shellcheck disable=SC2016  # literal '$ZOT_ERR_RAW' is the text being matched, not an expansion
+REDACT_LN=$(grep -n 'redact_sample_lines "\$ZOT_ERR_RAW"' "$CI" | head -1 | cut -d: -f1)
+# shellcheck disable=SC2016  # literal '$(printf' is the text being matched, not an expansion
+SANITIZE_LN=$(grep -n '^[[:space:]]*ZOT_LAST_ERR=\$(printf' "$CI" | head -1 | cut -d: -f1)
+assert "#7500 tier gate precedes the per-line redaction" \
+  "[[ -n '$GATE_LN' && -n '$REDACT_LN' && '$GATE_LN' -lt '$REDACT_LN' ]]"
+assert "#7500 the per-line redaction precedes the sanitizer (post-sanitizer, the JSON branch cannot fire)" \
+  "[[ -n '$REDACT_LN' && -n '$SANITIZE_LN' && '$REDACT_LN' -lt '$SANITIZE_LN' ]]"
+
+# The degrade path -- one branch, and it must not overload the tier enum.
+assert "#7500 a single degrade branch sets the REDACTION_FAILED placeholder" \
+  "grep -qF 'ZOT_ERR_RAW=REDACTION_FAILED' '$CI'"
+# The tier is NOT re-tagged on redaction failure -- REDACTION_FAILED in the field is the single
+# carrier. A second carrier on zot_last_err_src would be two carriers for one fact, and it also
+# introduced a colon grammar for what is now a flat enum member.
+assert "#7500 the degrade path does NOT overload the tier enum" \
+  "! grep -qE 'ZOT_ERR_SRC=.*redact_failed' '$CI'"
+assert "#7500 the suppressed tier is a FLAT enum member, not a colon-qualified form" \
+  "grep -qF 'ZOT_ERR_SRC=suppressed' '$CI' && ! grep -qF 'fallback:suppressed' '$CI'"
+
+# The tier gate must degrade CLOSED -- never fall back to the raw line when jq is unavailable.
+# Scoped to the tier-gate REGION. `command -v jq` also occurs in the log-shipper block ~450
+# lines below, so a file-wide grep stayed green after deleting the tier gate's own guard.
+assert "#7500 the tier-4 message extraction is jq-gated (degrade closed)" \
+  "grep -A6 'ZOT_ERR_SRC\" = fallback' '$CI' | grep -qF 'command -v jq'"
+
+# --- POSITIVE CONTROL: assert() must still be able to REJECT --------------------------------
+# The floor below counts that assertions RAN. It cannot see a rewritten assert() that always
+# records a pass -- measured, that one edit yields 101 "passes", satisfies the floor, and exits
+# 0 with no condition evaluated. This drives the helper BOTH ways and requires both counters to
+# move. Reported with printf + exit, never through assert(), so the edit that disarms the
+# helper cannot also disarm its control.
+_ctl_p="$PASS"; _ctl_f="$FAIL"
+assert "control: a true condition passes" "true"    >/dev/null 2>&1
+assert "control: a false condition fails" "false"   >/dev/null 2>&1
+if [ "$PASS" -ne "$((_ctl_p + 1))" ] || [ "$FAIL" -ne "$((_ctl_f + 1))" ]; then
+  printf 'FATAL: assert() did not move both counters (pass %s->%s, fail %s->%s).\n' \
+    "$_ctl_p" "$PASS" "$_ctl_f" "$FAIL" >&2
+  printf '       A helper that always passes satisfies every floor in this file.\n' >&2
+  exit 1
+fi
+PASS="$_ctl_p"; FAIL="$_ctl_f"
+echo "  PASS: control — assert() records both a pass and a failure"
+PASS=$((PASS + 1))
+
 echo "=== registry-boot-guard.test.sh: ${PASS} passed, ${FAIL} failed ==="
+
 # ANTI-VACUITY FLOOR. The gate below reads FAIL only, so anything that stops assertions from
 # RUNNING passes it: neutering assert() to a no-op was measured to print "0 passed, 0 failed"
 # and exit 0, and this suite is a REQUIRED check (infra-validation.yml). Deleting a whole block
 # is the same class. A FLOOR, not equality — a new assertion must never be a spurious failure.
 # Set to the full count at the time of writing; raise it in lockstep, never lower it to pass.
-MIN_ASSERTIONS=88
+# 88 before #7500; this PR adds 12 (the two-copy drift check, the order pins and the
+# degrade/tier-tag assertions). Measured, not tallied by hand.
+MIN_ASSERTIONS=103
 if [ "$((PASS + FAIL))" -lt "$MIN_ASSERTIONS" ]; then
   echo "FATAL: only $((PASS + FAIL)) assertions ran, expected >= ${MIN_ASSERTIONS}." >&2
   echo "       The suite was stranded, not clean — a green exit here would assert nothing." >&2

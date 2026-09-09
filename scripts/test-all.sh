@@ -1804,6 +1804,10 @@ if want_scripts; then
   run_suite "scripts/watch-live-verify-pass" bash scripts/watch-live-verify-pass.test.sh
   run_suite "scripts/review-reminder-liveness" bash scripts/review-reminder-liveness.test.sh
   run_suite "scripts/zot-restart-loop-alarm" bash scripts/zot-restart-loop-alarm.test.sh
+  # Guard 2 (#7500): the sink-side credential scrub before PUBLIC publication. Registered
+  # explicitly because `scripts/*.test.sh` is NOT in SUITE_GLOBS -- an unregistered suite here
+  # never gates, silently and greenly.
+  run_suite "scripts/zot-restart-loop-alarm-scrub" bash scripts/zot-restart-loop-alarm-scrub.test.sh
   run_suite "scripts/followthrough-exec-bit" bash scripts/followthrough-exec-bit.test.sh
   # #6757: enforce the ${VAR:?}/${VAR?} ban in follow-through probes. Two explicit run_suite
   # lines because scripts/*.test.sh is NOT auto-globbed here — an unregistered suite is an

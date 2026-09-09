@@ -171,6 +171,7 @@
 1	apps/web-platform/infra/workspaces-luks-verify-root-mtime.test.sh
 1	apps/web-platform/infra/workspaces-luks-verify-workflow.test.sh
 1	apps/web-platform/infra/www-apex-canonicalizer-mutation.test.sh
+1	apps/web-platform/infra/zot-disk-heartbeat-redaction.test.sh
 3	apps/web-platform/infra/zot-log-shipper.test.sh
 5	apps/web-platform/scripts/dsar-export-oversize.sh
 2	apps/web-platform/scripts/lib/in-image-copy-src.test.sh
@@ -302,6 +303,7 @@
 3	scripts/lib/repo-write-boundary.test.sh
 23	scripts/lint-agents-compound-sync.test.sh
 1	scripts/lint-agents-enforcement-tags.test.sh
+1	scripts/lint-credential-path-literals.test.sh
 4	scripts/lint-diagnosis-claims.test.sh
 10	scripts/lint-dual-lockfile.test.sh
 1	scripts/lint-encryption-posture.test.sh
