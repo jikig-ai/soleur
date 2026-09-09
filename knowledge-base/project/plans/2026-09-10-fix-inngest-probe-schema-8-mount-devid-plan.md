@@ -6,7 +6,7 @@ branch: feat-one-shot-8017-8015-8013-probe-schema-8
 lane: cross-domain
 type: bug
 issue: 8017
-closes: 8017, 8015, 8013
+refs: 8017, 8015, 8013   # Ref, never Closes — see ## Delivery
 priority: p0
 domain: engineering
 brand_survival_threshold: none
@@ -98,7 +98,7 @@ invented CLI flag cost four host replaces and no stub could ever catch it, so th
 is a source assertion — the same instrument this change needs for its new invocations.
 
 **Conventions carried in.** `hr-observability-as-plan-quality-gate` and
-`hr-observability-layer-citation` (the `## Observability` block, with each failure mode routed to a
+`hr-observability-layer-citation` (the Observability block, with each failure mode routed to a
 named layer and a no-SSH discoverability command); `hr-type-widening-cross-consumer-grep` (the
 consumer enumeration behind the Files-to-Edit list); `cq-write-failing-tests-before` (Phase 1 is
 RED); `cq-assert-anchor-not-bare-token` (every acceptance criterion anchors on a value shape or a
@@ -128,10 +128,9 @@ pin will genuinely deliver the new emitter — the premise the whole sequencing 
 Second, **the identifier isolation in the probe command is load-bearing, and the first form written
 here was wrong.** A bare `--grep SOLEUR_INNGEST_SERVER_PROBE` matches every warehouse row
 *containing* that string, including rows that merely quote it inside another document; the measured
-output carried trailing markdown fragments where a real field value should have ended. Isolating on
-the decoded `SYSLOG_IDENTIFIER` — which `betterstack-query.sh`'s own header advises and which the
-gate's row reader already does — returns only emitted rows. The `## Observability` command is the
-corrected form and was re-run to confirm it.
+output carried trailing markdown fragments where a real field value should have ended. The
+Observability section's command is the corrected form, and four further corrections to it are
+recorded there.
 
 Third, and not a blocker but worth stating so nobody discovers it mid-implementation: **the web host
 is still emitting `probe_schema=4`** (`instance_id=hetzner-123931471`, `host_role=web`,
@@ -155,6 +154,8 @@ evidence, and its first run is a measurement:
   anti-vacuity inventories, each an exact count any added assertion must bump: Guard 1 `expected
   50`, Guard A `expected 11`, Guard B `expected 9`, Guard D `expected 11`, Row 7 `expected 7`.
 - `bash apps/web-platform/infra/inngest-cutover-flip.test.sh` → `147 passed, 0 failed`.
+- `bash tests/scripts/test-inngest-volume-recut-gate.sh` → `53 passed, 0 failed`, floor 53 — another
+  zero-slack floor, on the sibling destroy-guard this change does not touch.
 - `bash scripts/test-all.sh --enumerate all` → the three `apps/web-platform/infra/*.test.sh` suites
   above are **not** in the enumeration. They run only from `infra-validation.yml`'s advisory
   `deploy-script-tests` job, which is why they carry their own acceptance criteria.
@@ -239,6 +240,71 @@ The one hypothesis that is in scope is service-layer and is the defect itself: `
 `/proc/self/mountinfo`, which records the canonical kernel device name. Reproduced against the real
 binary (util-linux 2.41.3) with by-id symlinks present for the same device.
 
+### Network-Outage Deep-Dive
+
+Required by the checklist whenever the gate fires. Layer-by-layer verification status:
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list | **Not verified, and not required** | No connectivity symptom is in scope and this plan opens no session to the host. The `hcloud firewall describe` / egress-IP diff the checklist prescribes would answer a question nobody is asking here |
+| L3 DNS / routing | **Verified UP, incidentally** | The planning session read a live probe row from host 165360464 out of the Better Stack warehouse — `boot_id=906c015b-…`, `probe_schema=7`, `redis_keys=16`. A row that arrived is end-to-end proof of the host → Vector → warehouse path |
+| L7 TLS / proxy | **Not applicable** | No HTTPS symptom. The one new network call this plan adds is loopback `http://127.0.0.1:8288/v0/gql`, which crosses no proxy and terminates on the same host |
+| L7 application | **This is the whole defect** | A string comparison against a path form `/proc/self/mountinfo` cannot contain. Reproduced against the real binary |
+
+**Gap that needs closing before implementation: none at these layers.** The plan proposes no sshd,
+fail2ban or service-drift remedy, so the L3→L7 ordering rule is satisfied rather than deferred. The
+one residual network question — whether the probe's new loopback query can reach `:8288` on a host
+whose `--sdk-url` points at a closed port — is answered by the field's own design: a transport
+failure renders `__UNREADABLE__`, which refuses, rather than `0`, which would read as a measured
+empty registry.
+
+## Downtime & Cutover
+
+The Phase 4.55 gate fires. Two operations in this plan's blast radius take a serving surface
+offline, and the default must be the zero-downtime path rather than downtime-as-baseline.
+
+**The offline-inducing operation, named exactly.** `hcloud_server.inngest` carries no
+`lifecycle.ignore_changes = [user_data]` — deliberately, so that a cloud-init edit forces a replace
+rather than drifting silently. The four pin-site edits in Phase 3 are `user_data` edits for that
+resource. The surface affected is the Inngest scheduler, which under ADR-100 is a **singleton
+control plane**: there is one, and replacing it destroys before it creates.
+
+**What this pull request itself does: nothing offline.** The merge apply cannot fire the replace,
+because `apply-web-platform-infra.yml`'s `-target=` allow-list contains no `hcloud_server.*`. So
+the change lands as configuration and waits. That is the zero-downtime path for the PR, and it is
+not an accident of the allow-list — it is the interlock ADR-100's maintenance-window discipline
+relies on.
+
+**What the later delivery does, and why blue-green is unavailable here.** Delivering the new image
+means `apply_target=inngest-host-replace`, which is a destroy-and-recreate that preserves the AOF
+volume by omission. Blue-green — provision the replacement alongside, drain, cut over, retire the
+old — is the pattern this repo uses for `hcloud_server.web` (#5887's web-2 cutover) and is not
+available for this host for a structural reason worth stating rather than assuming: the scheduler's
+durable state is a **single attached volume**, and a Hetzner volume attaches to one server at a
+time. A second scheduler cannot be born holding the same store, and two schedulers holding
+*different* stores is the double-fire state ADR-146 and the flip guard exist to prevent. So the
+residual downtime is accepted, not defaulted to, and it is bounded by:
+
+- **Scope:** the Inngest scheduler only. The web platform, the Concierge surface and the registry
+  are untouched; nothing a person interacts with goes offline.
+- **Effect:** queued work is durable in the AOF on the preserved volume, so the window defers
+  execution rather than losing it. The cron-outage window is ADR-100's known cost for this host and
+  is why the replace is maintenance-window-gated in the first place.
+- **Duration:** one cloud-init boot, the same window every prior `inngest-host-replace` has taken.
+- **Verification per stage:** the boot emits `SOLEUR_INNGEST_BOOT_STAGE` markers, and the closing
+  condition in `## Delivery` is a probe row on a **new `boot_id`** — so "did it come back, and did
+  it come back correct" is one observation rather than two guesses.
+- **Rollback:** none, and `## Risks & Mitigations` says so plainly rather than implying one exists.
+  Roll-forward under a reserved next tag is the exit.
+
+**And the sequencing consequence that is easy to miss.** From merge onward, the pinned `user_data`
+differs from what the running host booted, so **any** later `inngest-host` or `inngest-host-replace`
+dispatch — for any unrelated reason, by anyone — delivers this change and takes that window. That is
+stated here and in `## Sequencing` so the next dispatch is a decision rather than a surprise.
+
+The database-lock class and the deploy/router class do not apply: this plan contains no migration,
+no DDL, and no change to any request path.
+
 ## Design
 
 ### D1 — `data_mount_devid=`: what the emitter measures
@@ -273,6 +339,12 @@ The emitter then:
    multi-valued and would need an arbitrary tiebreak.
 3. Emits the alias **basename** — `data_mount_devid=scsi-0HC_Volume_106261946` — or one of the
    sentinels below. Never a path, so the value cannot be confused with `data_mount_src`.
+4. Emits `data_mount_base=<kernel name>` from the same `lsblk` call, at no extra cost and inside
+   the same timeout. This is not decoration: without it, `__UNREADABLE__` on `data_mount_devid` is a
+   **three-way** collision — nothing was mounted, the resolution is broken, or the volume is not
+   attached — and those have different remedies. With it the row separates them:
+   `src=__UNREADABLE__ base=n/a` is no mount, `src=/dev/sdb base=__UNREADABLE__` is a broken
+   resolution, and a resolved base with `devid=__NOMATCH__` is the wrong device.
 
 | Value | Meaning |
 |---|---|
@@ -326,6 +398,26 @@ id. The by-id alias's existence is not an assumption — `cloud-init-inngest.yml
 `/dev/disk/by-id/scsi-0HC_Volume_${inngest_volume_id}` and the live probe row shows that mount
 succeeded. The resolution uses the measured fact, not the plausible one.
 
+**A terminal charset collapse on the field, and it is normative rather than a Risks-table
+aspiration.** The gate's `_ihdg_field` refuses *duplicated* field names — which catches an injected
+`redis_keys=0`, because that name is already in the row. It does **not** catch a value that merely
+*splits*: an alias basename of `scsi-0HC_Volume_106261946 junk` tokenises to a valid
+`data_mount_devid=` plus a stray `junk`, no duplicate, and G14 would PASS against a device that is
+not the one resolved. Two concrete routes to such a value: the alias name derives from the SCSI
+serial the hypervisor supplies, escaped by udev — an undocumented external dependency doing the
+emitter's sanitising for it — and, in POSIX sh, an **unmatched glob iterates once over the literal
+pattern**, so `for a in /dev/disk/by-id/scsi-0HC_Volume_*` on a host with no such alias yields a
+basename of `scsi-0HC_Volume_*`, a `*` in a field the gate compares. Measured:
+`sh -c 'for a in /nonexistent/scsi-0HC_Volume_*; do basename "$a"; done'` prints
+`scsi-0HC_Volume_*`.
+
+So: guard the loop with `[ -e "$a" ] || continue`, and end the block with the same terminal collapse
+the histogram already uses one screen above the emit line —
+`case "$data_mount_devid" in '' | *[!A-Za-z0-9_.:-]*) data_mount_devid=__UNREADABLE__ ;; esac` —
+with the numeric-or-sentinel equivalent for `registry_fns` and `data_mount_base`. The precedent is
+two defences, not one, and its own comment says why: *"if anything above emitted whitespace, the
+token parser downstream would see extra fields."*
+
 **Two constraints the fixture imposes, both found by reading the battery rather than the emitter.**
 First, `inngest.test.sh` extracts the probe's heredoc body and runs it with `sh` (and `sh -n`), so
 this code is **POSIX sh** — no `[[ ]]`, no arrays. Second, a `PATH` stub cannot fixture a filesystem
@@ -343,34 +435,55 @@ figure" is not a record.
 
 ### D2 — G14 after the change
 
-G14 collapses from a two-arm string comparison to one comparison on one field:
+G14 becomes one comparison on one field, but it is **five** lines and not two, and every one of the
+other four is load-bearing. An earlier draft of this plan wrote the two-line form and, seven lines
+below it, stated the principle the two-line form violates.
 
 ```
+local data_mount_devid expected_devid
+data_mount_devid="$(_ihdg_field "$chosen_msg" data_mount_devid)" || { _ihdg_verdict "unreadable"; return $?; }
+[[ "$expected_volume_id" =~ ^[0-9]+$ ]] || { _ihdg_verdict "id_pin_mismatch"; return $?; }
 expected_devid="scsi-0HC_Volume_${expected_volume_id}"
-[[ "$data_mount_devid" == "$expected_devid" ]] || verdict mount_mismatch
+[[ -n "$data_mount_devid" && -n "$expected_devid" ]] || { _ihdg_verdict "mount_mismatch"; return $?; }
+[[ "$data_mount_devid" == "$expected_devid" ]]      || { _ihdg_verdict "mount_mismatch"; return $?; }
 ```
+
+- **The numeric validation of `expected_volume_id` is kept, not deleted.** It exists in today's G14
+  and it is the only thing constraining a raw `workflow_dispatch` string before it is interpolated
+  into the comparand. Nothing between the input and the gate constrains its charset.
+- **The RHS stays quoted, and this is measured rather than stylistic.** `[[ ]]`'s right-hand side is
+  a glob by default. Reproduced here on bash 5.3.9: with `v="scsi-0HC_Volume_999"` and
+  `e="scsi-0HC_Volume_*"`, `[[ "$v" == $e ]]` matches and `[[ "$v" == "$e" ]]` does not. A dispatch
+  with `--expected-volume-id '*'` against an unquoted RHS matches **any** Hetzner volume alias. G17
+  would still refuse today, but relying on that is precisely what this plan says elsewhere it must
+  not do — the predicates exist separately for the same reason ADR-199 forbids merging G12 and G13.
+- **The empty-operand guard is explicit** so the predicate does not depend on the caller's shell
+  options. Measured: `bash -c '[[ "$a" == "$b" ]]'` succeeds while `bash -c 'set -u; …'` aborts, and
+  the two contexts that matter disagree — the dispatch step runs `set -uo pipefail`, the gate battery
+  runs the mutated library under a bare `bash -c`. A stale `expected_dev` left behind by the rewrite,
+  or a `data_mount_devid`/`data_mount_dev_id` typo, would be `[[ "" == "" ]]` → PASS in the harness
+  and an abort in production. A harness laxer than the thing it grades cannot certify the predicate.
+- **The two-line `local` form.** `local x="$(cmd)"` masks the substitution's exit status with
+  `local`'s own; today's code declares then assigns, and the rewrite keeps that.
 
 `data_mount_src` stays emitted and stays read, but its role changes from *predicate* to *audit
-record* — the same role `data_bytes` already has under G15 (readability only, no ceiling). It is
-transcribed into the destruction record and it is what tells a human *which* device was measured
-when the devid says the wrong one.
+record* — the same role `data_bytes` already has under G15. Worth recording rather than leaving
+incidental: dropping it from the predicate does not open a hole, because the mountpoint duty is
+still fail-closed through G15. The emitter binds `data_bytes=__UNREADABLE__` on the same
+`__UNREADABLE__` mount branch, and G15 requires `data_bytes` to be numeric.
 
 This is a strict strengthening in both eras. Pre-recut, the predicate becomes satisfiable at all.
 Post-recut, the mapper arm stops being a bare string match on a name any local `cryptsetup` could
-create and becomes a claim about which volume backs the mapper — closing a gap the current comment
-already admits ("the attachment property is carried by G14's `data_mount_src`", which today it is
-not).
+create and becomes a claim about which volume backs the mapper.
 
 **Every value that is not the expected alias must refuse, and refuse loudly.** That set is: the
-field absent entirely (a host still on the old image, which is the realistic partial-bump failure —
-`_ihdg_field` returns non-zero and the verdict must be a refusing token, not a skipped predicate);
-`n/a` on a row whose `host_role` is `dedicated`, which is incoherent and means the emitter took the
-web arm on the wrong host; `__NOMATCH__`, `__AMBIGUOUS__` and `__UNREADABLE__`; and any other
-volume's alias. (A `-partN` alias cannot reach G14 because `lsblk -s` resolves a partition to its
-parent disk before the reverse map runs — but the gate does not depend on that, since anything that
-is not the exact expected alias refuses.) G4's exact-equality schema check already refuses a whole class of these
-before G14 is reached, but G14 must not rely on that — the two predicates exist separately for the
-same reason ADR-199 forbids merging G12 and G13.
+field absent entirely (a host still on the old image, the realistic partial-bump failure —
+`_ihdg_field` returns non-zero and the verdict is a refusing token, not a skipped predicate); the
+empty string; `n/a` on a row whose `host_role` is `dedicated`, which means the emitter took the web
+arm on the wrong host; `__NOMATCH__`, `__AMBIGUOUS__` and `__UNREADABLE__`; and any other volume's
+alias. (A `-partN` alias cannot reach G14 because the resolution walks a partition to its parent
+disk first — but the gate does not depend on that, since anything that is not the exact expected
+alias refuses.)
 
 Two mechanical consequences in the battery. The G14 mutation row's sed is anchored on the literal
 source text `if [[ "$data_mount_src" != "$expected_dev"` — rewriting that line makes the sed match
@@ -382,8 +495,7 @@ later insertion cannot silently repoint the mutation row at the wrong fixture.
 
 The `mount_mismatch` remediation text must be rewritten in the same change. Today it reads "the
 mount failed open and Redis is on the root disk — do not recut; the volume's real contents are
-unmeasured", which is exactly the wrong reading for the `__NOMATCH__`-versus-wrong-id distinction
-the new field can now draw.
+unmeasured", which is the wrong reading for the distinctions the new sentinel set can now draw.
 
 ### D3 — `registry_fns=`: the field #8015 needs
 
@@ -403,6 +515,32 @@ probe's positive discriminator becomes `server_active=active` AND `http_code=200
 `registry_fns` matching `^[1-9][0-9]*$`, all in the SAME row. A diagnostic boot then reads
 `registry_fns=0` and correctly fails to PASS.
 
+**Placement, same reasoning as D1.** `registry_fns` is bound in the `dedicated)` arm **above** the
+inner `case "$data_mount_src"`, alongside `data_mount_devid`. Inside the `*)` sub-arm it would
+inherit the identical defect — `n/a`, the web-arm sentinel, on a dedicated row — and a registry
+count has nothing to do with whether `/mnt/data` is readable. That is fail-closed in effect, but it
+would make #7674 permanently uncloseable whenever the mount is unreadable.
+
+**Both new calls carry `2>/dev/null`, and the reason is a shipping hazard rather than tidiness.**
+`verify_serving`, the function this mirrors, carries it on both its curl and its jq. The emitter's
+own `cutover_flag` capture, forty lines above where this block lands, records the principle:
+doppler's stderr is discarded, never shipped, because this row's tag is allowlisted and raw stderr
+from a credentialed CLI would route the tool's own error text to Better Stack. Unredirected `jq`
+stderr on a malformed body echoes the offending input — an untrusted HTTP response — into journald
+and thence into the third-party warehouse. And a **deliberate asymmetry with the redis arm**, stated
+so an implementer does not "fix" it: unlike `probe_scan_err`, no GQL error text is ever shipped.
+A future revision that wants a snippet must pass it through the same
+`tr -c 'A-Za-z0-9' '_' | cut -c1-48` shape.
+
+**No secret reaches argv.** The loopback endpoint needs no auth and the request body carries only
+the query text, so `/proc/<pid>/cmdline` gains nothing. The `REDISCLI_AUTH`-not-`-a` discipline is
+untouched: `INNGEST_REDIS_PASSWORD` is in the probe's environment but nothing new reads it.
+
+**The consumer's conjunct needs a token boundary.** The existing discriminator is
+`grep -F 'server_active=active' | grep -cF 'http_code=200'`. A third conjunct written
+`grep -cE 'registry_fns=[1-9][0-9]*'` matches `registry_fns=1abc`. It must be
+`grep -cE 'registry_fns=[1-9][0-9]*( |$)'`, with a Guard 2 fixture carrying a trailing-garbage value.
+
 **`jq` is a host fact, not an image fact, and the probe uses none today.** The probe body is
 `#!/bin/sh` and calls `jq` zero times; `verify_serving` is bash and does call it, but it is a
 different script. `jq` reaches the dedicated host through `cloud-init-inngest.yml`'s `packages:`
@@ -416,15 +554,32 @@ zero."* That property — an error envelope must render `__UNREADABLE__`, never 
 mutation row 3.
 
 **Drift pin: two files become three, and the extractor constrains the form.** `FUNCTIONS_GQL_QUERY`
-is currently duplicated in exactly two files and pinned byte-identical by
+is `readonly`-defined in **three** files today, and the distinction matters for how the widened pin
+is scoped. Two of them — `inngest-registry-probe.sh` and `inngest-cutover-flip.sh` — carry the
+byte-identical `query RegistryProbe { functions { id } }` and are the pair pinned by
 `inngest-cutover-flip.test.sh` (the FSM's own comment explains why it cannot source
-`inngest-registry-probe.sh`: that file is delivered to the web host only). Adding a third copy here
-means widening that assertion to three. The existing extractor is
+`inngest-registry-probe.sh`: that file is delivered to the web host only). The third,
+`inngest-inventory.sh`, reuses the same **constant name** for a different query
+(`query InvFunctions { functions { id name slug } }`) and is deliberately outside the pin. So the
+widened assertion must select the RegistryProbe copies by their **value**, not by every
+`readonly FUNCTIONS_GQL_QUERY=` line in the repo — a name-scoped widening would drag the inventory
+query in and fail on a difference that is correct. Adding the probe's copy makes the pinned set
+three of four definitions. The existing extractor is
 `grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*"`, so the probe's copy must be a **column-zero**
 `readonly FUNCTIONS_GQL_QUERY='…'` line inside the heredoc or the widened pin reports "could not
 extract … the drift pin is vacuous" — a failure mode that suite already names. The `jq` parse
 expression is the *second* thing now triplicated; widen the pin to cover it too, on the same
 extractor shape, because the property Guard 2 row 3 tests lives in the parse and not in the query.
+
+**Precedent-diff: do not become a fourth `_pf_scrub` consumer.** The three cutover-path probes
+(`inngest-registry-probe.sh`, `inngest-doublefire-probe.sh`, `inngest-inventory.sh`) triplicate a
+bash `_pf_scrub()` sanitiser, pinned byte-identical by `inngest-registry-probe.test.sh`, whose
+comment records that *"extraction is deferred until a fourth consumer appears"*. This probe must
+not be that fourth consumer: it is POSIX `sh`, not bash, and its output need is far narrower —
+`registry_fns` is a count, so the correct sanitisation is the emitter's existing shape, a `case`
+refusing anything that is not `^[0-9]+$`. Adding a fourth copy would trip a recorded extraction
+trigger for no benefit; reusing the emitter's own idiom keeps the value on the one code path that
+already guarantees the row stays whitespace-free.
 
 **The drift pin now spans a baked carrier, and that changes the cost of editing the query.** Both
 existing copies live in files delivered by the config-push path; this third copy is baked into the
@@ -437,38 +592,57 @@ must never grant a PASS, and the probe's existing `channel_dark` / `credentials_
 TRANSIENT arms already encode that shape. The cost of that choice is a real window, named in
 `## Delivery` below.
 
-### D4 — the hash-tag collapse
+### D4 — the key-name reduction, made identifier-aware
 
-Before the two-segment reduction, collapse every `{...}` group to a category token. Measured,
-against the emitter's current awk and a candidate replacement, over a fixture in the real shape:
+**#8013 names the braced shape, and fixing only that shape leaves the identical leak standing.**
+Measured against the emitter's current awk over a brace-FREE fixture:
 
 ```
-before:  ?queue?:queue:*=2,?estate:01KYADCPBNEE10PYEYCPCJ08YA?:*=2,?queue?:partition:*=1,...
-after:   ?queue?:queue:*=2,?estate?:runs:*=2,?queue?:partition:*=1,...
+input:   estate:01KYADCPBNEE10PYEYCPCJ08YA:runs:1
+output:  estate:01KYADCPBNEE10PYEYCPCJ08YA:*=1
 ```
 
-The `?` are the existing sanitiser replacing `{` and `}`; unchanged and correct.
+Same ULID, same field, same third-party sink — only the brace is gone. The two-segment reduction
+`k = seg[1] ":" seg[2] ":*"` ships segment 2 verbatim, and when segment 2 *is* the identifier the
+collapse rule never runs. An earlier draft of this plan stated the property two contradictory ways:
+the property list said "for the brace shape production actually uses" (which restates the
+mechanism) while the guard said "for every key shape the live store actually produces" (which is
+the property #8013 actually needs). The second is correct and the design follows it.
 
-**The rule is not "collapse to the pre-colon prefix", and stating it that way leaves the leak one
-shape over.** A tag shaped `{01KYADCPBNEE10PYEYCPCJ08YA}:runs:x` contains no colon inside the
-braces, so a pre-colon-prefix rule preserves it verbatim and the identifier ships — the same defect,
-in the shape a tag-per-run would produce. Property P4 claims *no identifier for every key shape the
-live store actually produces*, so the rule must be total over brace contents: collapse `{a:b}` to
-`{a}`, and collapse a brace group with **no** colon to a fixed token (rather than to itself) unless
-its contents are already a short, non-identifier-shaped category. The exact discriminator is a
-Phase 1 decision, taken against the live shapes rather than the one shape #8013 quoted.
+**So the reduction becomes identifier-aware rather than brace-aware.** After segmenting, any segment
+matching an identifier shape is replaced with a fixed token, and the same test is applied to brace
+contents:
 
-**Phase 0 reads the live shapes rather than guessing them.** The host already emits
-`redis_key_patterns` and the `discoverability_test` command reaches it with no SSH. The brace
-fixture corpus is derived from what that row names.
+| Shape | Pattern |
+|---|---|
+| ULID | `^[0-9A-HJKMNP-TV-Z]{26}$` |
+| UUID | `^[0-9a-f]{8}-[0-9a-f]{4}-` |
+| long hex | `^[0-9a-f]{16,}$` |
+| long digit run | `^[0-9]{6,}$` |
 
-Three constraints on the implementation:
+Measured before and after, over a mixed corpus:
+
+```
+before:  ?queue?:queue:*=2,?estate:01KYADCPBNEE10PYEYCPCJ08YA?:*=2,estate:01KYADCPBNEE10PYEYCPCJ08YA:*=1
+after:   ?queue?:queue:*=2,?estate?:runs:*=2,estate:*:*=1
+```
+
+The brace collapse still happens — it keeps the tag readable as a category — but it is no longer
+the thing carrying the privacy property. Three constraints on the implementation:
 
 - Handle a hash tag that is **not** at the start of the key. Redis takes the first `{...}` wherever
-  it appears; a fix anchored on `^\{` is narrower than the property and would pass a battery whose
-  every fixture is prefix-shaped.
-- Handle a brace group with no colon in it (above).
-- Be idempotent, and leave `{queue}:queue:x` unchanged.
+  it appears; a fix anchored on `^\{` is narrower than the property.
+- Handle a brace group with no colon inside it, and leave `{queue}:queue:x` unchanged — the most
+  common live shape, and the one that sits in the tension between "strip aggressively" and "keep the
+  category".
+- Be idempotent.
+
+**Phase 0 reads the live shapes rather than guessing them.** The host already emits
+`redis_key_patterns` and the `discoverability_test` command reaches it with no SSH. The fixture
+corpus is derived from what that row names — and it must contain at least one **brace-free**
+`<ns>:<identifier>:…` key and at least one non-ULID identifier, or the acceptance criterion tests
+only the shape the issue happened to quote. That is this plan's own cited learning — *a fixture
+built in a sandbox that also lacks the thing will agree with it* — and it very nearly reproduced it.
 
 ### D5 — the schema number and its consumers
 
@@ -490,15 +664,24 @@ The only ordering that satisfies all three:
    expected.
 2. Push the annotated tag `vinngest-v1.1.32` at that commit.
    `.github/workflows/build-inngest-bootstrap-image.yml` fires on `vinngest-v*.*.*`, builds,
-   cosign-signs the digest, and mirrors GHCR → zot.
+   cosign-signs the digest, and mirrors GHCR → zot. **The signature is a presence token, not a
+   verified provenance claim on the delivery path** — the host pull path calls no verify step, as
+   `cloud-init-inngest.yml` and the build workflow both state in their own comments. The `@sha256:`
+   pin buys integrity; provenance here is unenforced, which makes post-merge criterion 22's
+   `crane export` the only check in this plan that grades the delivered bytes.
 3. **Watch that run to completion and read the published digest from its step summary before
-   touching any pin site.** If it fails, do not edit the pins: the tag is disposable *only while no
-   image exists for it*, so delete the remote tag
-   (`git push origin :refs/tags/vinngest-v1.1.32`), fix the carrier, and re-tag at the corrected
-   commit under the same number. Once an image exists at that tag the number is spent — the
-   workflow's own header warns that a default re-dispatch **rebuilds and moves** the tag's digest,
-   invalidating any pin already committed, so the answer to a late correction is
-   `vinngest-v1.1.33`, never a moved digest.
+   touching any pin site.** If it fails, the decision of whether the tag can be re-issued is keyed
+   on the **registry**, not on the run's conclusion — and an earlier draft of this plan got that
+   wrong. The workflow builds and pushes first, then installs crane, then cosign-signs, then mirrors
+   to zot; its own concurrency comment records that push→sign is not atomic. A run that fails at
+   signing or at the mirror has **already published to GHCR**, and deleting a git tag does not
+   delete a registry tag. So the test is
+   `crane manifest ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.32` returning 404. If it 404s the
+   tag is disposable: delete the remote tag (`git push origin :refs/tags/vinngest-v1.1.32`), fix the
+   carrier, re-tag at the corrected commit under the same number. If it resolves, the number is
+   spent whatever the run said — go to `vinngest-v1.1.33`. Never re-dispatch the default path on an
+   existing tag: it rebuilds and **moves** the digest, invalidating pins already committed and
+   orphaning the cosign signature over an abandoned digest.
 4. Commit the digest into all four pin sites. Guard A goes green because the tag's tree equals the
    working tree's carriers; Guard B goes green because tag and digest moved together.
 5. Commit the off-host consumers (gate library, batteries, docs). These are not baked carriers, so
@@ -560,12 +743,19 @@ issues on evidence of a build rather than of delivery:
   block. It is called out here so the reading is not mistaken for a host fault. Conditioning the
   conjunct on the row's schema was considered and rejected: it would re-open the vacuity for exactly
   the rows the fix exists to grade.
-- The closing condition is a probe row on a **new `boot_id`** carrying `probe_schema=8`, a
-  `data_mount_devid` equal to `scsi-0HC_Volume_106261946`, and a non-empty `registry_fns` — read
-  with the `discoverability_test` command, no SSH. That observation is a post-merge acceptance
-  criterion, and if the replace has not happened by merge time the three `Closes #` lines are
-  carried by the follow-through directive described in `## Observability` rather than asserted as
-  done.
+- The closing condition is a probe row on a **new `boot_id`** carrying `probe_schema=8`,
+  `data_mount_devid=scsi-0HC_Volume_106261946`, `registry_fns` present and matching `^[0-9]+$`, and
+  a `redis_key_patterns` free of any ULID-shaped substring — read with the `discoverability_test`
+  command, no SSH. `0` is an accepting value for `registry_fns` here and the reason is decisive:
+  `INNGEST_DIAGNOSTIC_BOOT` is a Doppler variable, so it survives the replace, and the live state
+  has it set. A gate demanding a non-empty registry would return TRANSIENT forever after the replace
+  that actually delivered the fixes.
+- **The PR body uses `Ref #8017`, `Ref #8015`, `Ref #8013` — never `Closes`.** `Closes` would close
+  all three at merge, and the sweeper lists `--state open`, so every follow-through directive on
+  them would become a permanent silent no-op: the precise defect the #7674 probe's header
+  memorialises about its own predecessor. Each issue body carries its own directive pointing at the
+  same script, because a directive closes only the issue whose body holds it and only the first per
+  body is honored.
 
 **There is no rollback, and the plan should not pretend otherwise.** If the new emitter is broken on
 the real host, the gate verdicts `silent` or `unreadable`, and the only lever for the dedicated host
@@ -575,16 +765,17 @@ under a new tag is the only exit; reserve the next number rather than discoverin
 
 ## Files to Edit
 
-**Baked carriers (drive the image bump — Phase 1):**
+**Baked carriers (drive the image bump — Phase 3):**
 
 - `apps/web-platform/infra/inngest-bootstrap.sh` — `probe_schema=7` → `8`; bind
-  `data_mount_devid`, `registry_fns` with `n/a` defaults alongside the other unconditional-emit
-  fields; the resolution logic in the `dedicated)` arm; the hash-tag collapse in the histogram
-  awk; **both** emit sites (the `logger` line and the `inngest-boot-phone-home.sh` fallback) —
-  a byte-identical-payload assertion compares them as strings; the `Budget (#7695)` comment in
-  the unit definition.
-- `apps/web-platform/infra/inngest-cutover-flip.sh` — only if the drift-pin widening requires a
-  comment change naming three copies rather than two.
+  `data_mount_devid` and `registry_fns` with `n/a` defaults alongside the other
+  unconditional-emit fields; the resolution block, placed above the inner
+  `case "$data_mount_src"` per D1; the guarded registry query and its column-zero
+  `readonly FUNCTIONS_GQL_QUERY` line; the identifier-aware reduction in the histogram awk (see D4 —
+  brace-aware is not enough); **both** emit
+  sites (the `logger` line and the `inngest-boot-phone-home.sh` fallback) — a
+  byte-identical-payload assertion compares them as strings; the `Budget (#7695)` comment, to the
+  stated total of 68s.
 
 **Pin sites (Phase 3, after the digest exists):**
 
@@ -597,77 +788,123 @@ under a new tag is the only exit; reserve the next number rather than discoverin
   predicate; the G14 rationale comment; the predicate index line
   `G14 data_mount_src == the pinned device`; the `stale_schema` header note naming schema 7; the
   stale `BUMPED 3 -> 4 (#7695, 2026-09-09)` line.
-- `scripts/followthroughs/inngest-host-not-serving-7674.sh` — the positive discriminator gains
-  the `registry_fns` conjunct in the same row; the header's "WHY BOTH FIELDS" section becomes
-  three; the `not_serving` diagnostic line reports the observed `registry_fns`.
-- `.github/workflows/apply-web-platform-infra.yml` — only if the `mount_mismatch` remediation text
-  is quoted there; the gate invocation itself needs no new flag.
+- `tests/scripts/lib/inngest-host-replace-gate.sh` — one comment line describing the dark gate's
+  mount predicate as "the pinned device => mount_mismatch" against `data_mount_src`. A sibling
+  gate library's doc-comment, found by grepping every file that names the verdict token rather than
+  only the files that implement it; it goes stale the moment the pin field changes.
+- `scripts/followthroughs/inngest-host-not-serving-7674.sh` — the positive discriminator gains the
+  `registry_fns` conjunct in the same row; the header's "WHY BOTH FIELDS" section becomes three;
+  the `not_serving` diagnostic line reports the observed value.
+- `.github/workflows/apply-web-platform-infra.yml` — **unconditional, not conditional.** Its
+  `::error::` refusal line and its `workflow_dispatch` input description both quote the verdict
+  vocabulary, and the refusal line carries a recovery instruction that is already wrong and becomes
+  actively harmful at schema 8: *"Confirm with: git show …:apps/web-platform/infra/inngest-bootstrap.sh
+  | grep -c probe_schema=3 — a 0 means replacing will not help."* Against a correct v1.1.32 image
+  that grep returns 0, so the documented confirmation says "do not replace" in precisely the case
+  where replacing is the fix. Sweep the `mount_mismatch` text and the `probe_schema=3` literal
+  together.
+- `scripts/test-all.sh` — the `run_suite` registration for the new followthrough suite below.
+  Followthrough suites are not auto-globbed; an unregistered `.test.sh` reddens
+  `scripts/lint-orphan-test-suites.sh`.
 
-**Test batteries (Phase 2 and Phase 4 — written before the code they grade):**
+**Test batteries (Phase 1 and Phase 4 — written before the code they grade):**
 
 - `apps/web-platform/infra/inngest.test.sh` — the `probe_schema=7` assertion and the four section
-  headers labelled "schema 7"; `PROBE_7695_FIELDS` and `PROBE_7695_NEVER_ZERO` lists; the `-eq 8`
-  and `-eq 5` cardinality guards, which certify nothing if a field is added without bumping them;
-  the assertion-count floor `INNGEST_MIN_ASSERTIONS=305`; new arms for `data_mount_devid`,
-  `registry_fns`, and a brace-shaped key fixture. The `redis-cli` stub is the only place in the
-  repo that produces key names, and all seven of its literals are `ns:kind:id` — that is why the
-  #8013 defect survived three schema generations, so the brace-shaped keys go there. A GQL stub is
-  needed for `registry_fns`; note the existing `curl` stub returns `exit 7` unconditionally, so an
-  arg-aware variant is required to answer `/health` and `/v0/gql` differently. Following the #8005
-  precedent in this same file, add **source assertions** for the classes no stub can catch: a stub
-  ignores an invented flag, so the shape of the `findmnt`/`readlink` invocations and the absence of
-  a pipe that would swallow an exit status are asserted against the emitter's text.
-- `tests/scripts/test-inngest-host-dark-gate.sh` — the `PROBE_FIELDS` emit-order array (gains the
-  two new fields in emit position) and the `PD[probe_schema]=7` default, which **every** fixture
-  inherits: leave it at 7 and every `mutate` row's unmutated control collapses to `stale_schema`,
-  so all of them report "does not exercise the check". The G4 previous-schema row moves
-  `probe_schema=6` → `7` or it stops testing the N-1 case. The two hand-written probe strings and
-  the python heredoc that spell `probe_schema=7` inline. The `G14c` label text naming "schema-7".
-  The G14 mount cases and their `rows-g14*.json` filenames, renamed away from the collision. The
-  G4 and G14 mutation-row sed anchors. The B12 emitter↔gate field contract loop, which today omits
-  `redis_expires` and `redis_key_patterns` and must gain those two plus `data_mount_devid` and
-  `registry_fns` — otherwise the newest fields are the only ones not pinned against the real
-  emitter. The two omitted fields are a **pre-existing** coverage gap from schemas 6 and 7, named
-  as such rather than folded silently into this change's scope; it is fixed inline because this is
-  the backstop for the one failure mode with no CI backstop. Both floors: the distinct-predicate floor (`-lt 21` against 22 covered — one of slack)
-  and the assertion-count floor `_FLOOR=118`, which has none by design.
-- `tests/scripts/test-inngest-host-dark-gate.sh` — additionally, the distinct-predicate floor's
-  FAIL message says "floor is 20" while the comparison is `-lt 21` and the ok message says
-  "floor 21". A pre-existing message/comparison drift in a file this change already edits, and the
-  exact defect the neighbouring floor's own comment says was fixed. Corrected inline.
+  headers labelled "schema 7"; `PROBE_7695_FIELDS` and `PROBE_7695_NEVER_ZERO`; the `-eq 8` and
+  `-eq 5` cardinality guards, which certify nothing if a field is added without bumping them, and
+  whose messages carry numbers that go stale with them (the `-eq 8` assertion's text claims "three
+  MORE fields than the never-zero list" while never comparing the two lists, and a sibling says
+  "each of the 5 store fields" while looping over 8 — the same message/comparison drift this change
+  is already fixing in the gate battery, in a file it already edits); the assertion floor
+  `INNGEST_MIN_ASSERTIONS=305`; new arms for `data_mount_devid`, `registry_fns` and a brace-shaped
+  key fixture. The `redis-cli` stub is the only place in the repo that produces key names and all
+  seven of its literals are `ns:kind:id`, which is why #8013 survived three schema generations, so
+  the brace corpus goes there. A GQL stub is needed for `registry_fns`; note the existing `curl`
+  stub returns `exit 7` unconditionally, so an arg-aware variant is required. Following the #8005
+  precedent in this same file, add **source assertions** for the classes no stub can catch — a stub
+  ignores an invented flag, so the shape of the new `lsblk`/`readlink` invocations and the absence
+  of a pipe that would swallow an exit status are asserted against the emitter's text.
+  **This file has no mutation harness** — `grep -n 'mutate\|PRISTINE'` returns nothing — so it also
+  gains a `mutate_emitter` helper that seds a pristine copy of `inngest-bootstrap.sh`, re-extracts
+  the probe body and re-runs it. Without it, every emitter-side mutation row is a hand-applied audit
+  rather than a runnable row, which is the distinction the Guard Contract exists to enforce.
+- `tests/scripts/test-inngest-host-dark-gate.sh` — the `PROBE_FIELDS` emit-order array (gains both
+  new fields, at the **tail**, after `data_bytes`, so they sit downstream of the histogram's
+  `substr(out, 1, 400)` cap and cannot displace an existing field) and the `PD[probe_schema]=7`
+  default, which **every** fixture inherits: leave it at 7 and every `mutate` row's unmutated
+  control collapses to `stale_schema` and reports "does not exercise the check". The G4
+  previous-schema row moves `probe_schema=6` → `7`. The two hand-written probe strings and the
+  python heredoc that spell `probe_schema=7` inline — note the heredoc at the `dark=` template is
+  **single-quoted**, so its `${PD[...]}` references are literal rather than expanded, a latent
+  defect adjacent to the literals being swept. The `G14c` label text naming "schema-7". The G14
+  mount cases and their `rows-g14*.json` filenames, renamed away from the collision. The G4 and G14
+  mutation-row sed anchors. The B12 emitter↔gate field contract loop, which today omits
+  `redis_expires` and `redis_key_patterns` (a **pre-existing** coverage gap from schemas 6 and 7,
+  named as such rather than folded silently into this change's scope, and fixed inline because it
+  is the backstop for the one failure mode with no CI backstop) and which builds its comparison
+  string through `sort -u` — so it grades a sorted line and does **not** pin emit order, which
+  ADR-199 records as load-bearing. Both floors: the distinct-predicate floor (`-lt 21` against 22
+  covered) and `_FLOOR=118`, measured at exactly the current count. And the distinct-predicate
+  floor's FAIL message, which says "floor is 20" while its comparison is `-lt 21` and its ok
+  message says "floor 21".
 - `apps/web-platform/infra/inngest-redis-luks-loopback.test.sh` — a real-device arm resolving a
-  genuine mapper through a genuine `/sys/block/<dm>/slaves` to its backing device, proving the
-  emitter's resolution against a kernel-built tree rather than an invented one. This suite is
-  invoked as `sudo bash` from `infra-validation.yml` and is deliberately invisible to
-  `run-registered-suites.sh`; adding an arm to the existing file needs no registration change.
-- `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — Guard B's anti-vacuity count
-  (`expected 9`) if any assertion is added to that block.
+  genuine mapper through a genuine device tree to its backing device, proving the resolution
+  against a kernel-built tree rather than an invented one. Invoked as `sudo bash` from
+  `infra-validation.yml` and deliberately invisible to the registered-suite runner; adding an arm
+  to the existing file needs no registration change.
+- `apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` — whichever of its five
+  anti-vacuity inventories an added assertion lands in (Guard 1 `expected 50`, Guard A `expected
+  11`, Guard B `expected 9`, Guard D `expected 11`, Row 7 `expected 7`), plus the unconditional
+  floor of 123. Also its own stale `probe_schema=3` comment.
 - `apps/web-platform/infra/inngest-cutover-flip.test.sh` — the `FUNCTIONS_GQL_QUERY` drift pin,
-  widened from two files to three.
+  widened from two files to three, and extended to cover the `jq` parse expression.
+
+**Consumer verified and deliberately not edited:** `plugins/soleur/test/terraform-target-parity.test.ts`
+asserts `/^\s*if ! inngest_host_dark_gate /m` against the recut job block and that the gate runs
+before `terraform plan`. It runs in the **required** `bun` shard, unlike the two advisory infra
+suites. The workflow edits above touch neither the call form nor the ordering, so it should stay
+green — enumerated here rather than omitted, per `hr-type-widening-cross-consumer-grep`.
 
 **Documentation and records (Phase 5):**
 
-- `knowledge-base/engineering/architecture/decisions/ADR-199-destructive-clearance-requires-a-measured-empty-store-and-a-dark-host.md` — an amendment recording that
-  C1's mount pin moved to `data_mount_devid`; see `## Architecture Decision (ADR/C4)`.
-- `knowledge-base/engineering/architecture/decisions/ADR-142-inngest-redis-aof-zero-data-loss-luks-migration.md` — the stale `probe_schema=3`
-  narrative reference. A pre-existing doc gap, fixed inline because it is a reference to the very
-  field family this change renumbers and the correction is one token
+- `knowledge-base/engineering/architecture/decisions/ADR-199-destructive-clearance-requires-a-measured-empty-store-and-a-dark-host.md`
+  — an amendment recording that C1's mount pin moved to `data_mount_devid`; see
+  `## Architecture Decision (ADR/C4)`. Its sequencing walkthrough also still reads `probe_schema=3`;
+  sweep that in the same edit.
+- `knowledge-base/engineering/architecture/decisions/ADR-142-inngest-redis-aof-zero-data-loss-luks-migration.md`
+  — the stale `probe_schema=3` narrative reference. A pre-existing doc gap, fixed inline because it
+  names the very field family this change renumbers and the correction is one token
   (`wg-when-an-audit-identifies-pre-existing`, `rf-review-finding-default-fix-inline`).
 - `knowledge-base/legal/audits/inngest-aof-destruction-record.md` — the field table gains a
-  `data_mount_devid` row. This record is a precondition artifact, and a field the gate now
-  authorizes on that the record does not transcribe would understate what was measured.
+  `data_mount_devid` row. Its checklist **also** carries a `data_mount_src=/dev/mapper/inngest-redis`
+  line, the same post-recut string being demoted from predicate to audit field; sweep both. This
+  record is a precondition artifact, and a field the gate now authorizes on that the record does not
+  transcribe would understate what was measured.
 - `scripts/encryption-posture-ledger.json` — the `hcloud_volume.inngest_redis` entry's
-  `live_verification` and `reevaluate_when` are keyed on `data_mount_src` at `probe_schema=3`.
+  `live_verification` carries the `probe_schema=3` phrase and names `data_mount_src` as the
+  substrate signal. Do not re-date `expires_on`; the entry carries an explicit note that extending
+  it buys time rather than closing a gap.
 - `knowledge-base/engineering/operations/runbooks/inngest-server.md` — the pin-count sentence says
-  three refs in one file; there are four across two. Also a pre-existing gap, fixed inline because
-  this change touches all four and a wrong count in the runbook is what produces a partial bump.
+  three refs in one file; there are four across two. Pre-existing gap, fixed inline because a wrong
+  count in the runbook is exactly what produces a partial bump. Add one line noting that
+  `scheduled-inngest-health.yml` will keep reporting healthy on a row the recut gate refuses as
+  `stale_schema`, by design.
 
 ## Files to Create
 
+- `scripts/followthroughs/inngest-host-not-serving-7674.test.sh` — Guard 2's suite, which **does
+  not exist today**. Without it, five mutation rows and two harness rows mutate a file that is not
+  there and the #7674 acceptance criteria are unrunnable. The probe is already fixturable: it reads
+  `QUERY="${INNGEST_SERVING_QUERY_BIN:-…/betterstack-query.sh}"` plus `INNGEST_SERVING_HOST`,
+  `_HOST_NAME`, `_WINDOW` and `_LIMIT`, so a fixture harness is cheap. Registering it in
+  `scripts/test-all.sh` also puts Guard 2 inside the **required** `test-scripts` shard — strictly
+  better placement than Guards 1 and 3, which sit in an advisory job.
 - `scripts/followthroughs/<name>-8017.sh` — the delivery follow-through probe described in
   `## Observability` › Follow-through enrollment, plus its `run_suite` registration and its
-  `secrets=` clause in `.github/workflows/scheduled-followthrough-sweeper.yml` if those three
-  secrets are not already wired there.
+  `run_suite` registration. **No sweeper workflow change is needed** — verified:
+  `.github/workflows/scheduled-followthrough-sweeper.yml` already passes `BETTERSTACK_QUERY_HOST`,
+  `_USERNAME` and `_PASSWORD` into the probe env. Only the directive's own `secrets=` clause names
+  them.
 - `knowledge-base/project/specs/feat-one-shot-8017-8015-8013-probe-schema-8/tasks.md`
 
 No new ADR. See `## Architecture Decision (ADR/C4)` for why the decision lands as an ADR-199
@@ -730,9 +967,17 @@ new value in the row is influenced by anything writing to Redis.
 **Brand-survival threshold:** none.
 
 *Threshold `none` scope-out, required because `cloud-init.*\.ya?ml` is a sensitive path:*
-`threshold: none, reason: the change adds two derived, sanitised metadata fields to an existing
-diagnostic marker and strictly narrows an existing identifier leak; no user-facing surface, no
-credential, and no personal data is added, moved, or newly exposed.`
+`threshold: none, reason: the change narrows the redis_key_patterns identifier surface and adds
+three derived, sanitised metadata fields to an existing diagnostic marker — one of which, the
+Hetzner volume id, is an infrastructure identifier that did not previously ship on this row; it is
+the same class as the instance_id=hetzner-165360464 already shipped there, it is what the gate must
+compare off-host, and none of it is personal data. No user-facing surface and no credential is
+added, moved, or newly exposed.`
+
+An earlier draft of this scope-out said the change "strictly narrows an existing identifier leak",
+which was not accurate: it narrows one identifier surface and adds another. Both are justified —
+`data_mount_devid` is the pin and cannot do its job off-host otherwise — but the claim had to match
+the change. The same wording carries into the destruction-record field-table row.
 
 ## Encryption Posture
 
@@ -771,71 +1016,127 @@ which would have contradicted it.
 
 ```yaml
 liveness_signal:
-  what: the SOLEUR_INNGEST_SERVER_PROBE row, now carrying probe_schema=8, data_mount_devid= and registry_fns=
+  what: the SOLEUR_INNGEST_SERVER_PROBE row, now carrying probe_schema=8, data_mount_devid=, data_mount_base= and registry_fns=
   cadence: hourly (inngest-server-probe.timer), unconditional emit — no branch may precede it (ADR-117)
-  alert_target: Better Stack warehouse via Vector Source 4 (SYSLOG_IDENTIFIER=inngest-server-probe); the */15 dedicated arm of .github/workflows/scheduled-inngest-health.yml classifies each row
+  alert_target: Better Stack warehouse via Vector Source 4 (SYSLOG_IDENTIFIER=inngest-server-probe, already allowlisted since #6617a — no new tag is introduced); the */15 dedicated arm of .github/workflows/scheduled-inngest-health.yml classifies each row
   configured_in: apps/web-platform/infra/inngest-bootstrap.sh (unit + timer), apps/web-platform/infra/vector.toml (Source 4 allowlist)
 error_reporting:
-  destination: journald -> Vector -> Better Stack; the second channel is inngest-boot-phone-home.sh with the byte-identical payload, which exists precisely for the vector_active=inactive case where the first channel cannot report its own failure
-  fail_loud: yes — every new field has a distinct __UNREADABLE__ sentinel and no path degrades to a numeric or clearing value. The gate refuses on any sentinel rather than reading it as clearance
+  destination: journald -> Vector -> Better Stack (layer 3); the second channel is inngest-boot-phone-home.sh with the byte-identical payload, a direct HTTPS POST that does not depend on Vector, which exists precisely for the vector_active=inactive case
+  fail_loud: yes for the row itself — every new field has a distinct sentinel and no path degrades to a numeric or clearing value. NOT unconditional, and the caveat is pre-existing (#7228) rather than introduced here - the second channel has its own dark failure mode, because vector.toml deliberately omits `inngest-boot-phone-home` from the Source 4 allowlist, so when its per-boot token file in /run (tmpfs) is missing its own SOLEUR_INNGEST_BOOT_TRACE_LOST marker reaches no sink. On the first boot after a replace, exactly when this plan leans on the second channel, both halves can be dark at once
 failure_modes:
-  - mode: the by-id reverse-map finds no scsi-0HC_Volume_* alias for the mounted device (the root-disk fallback)
-    detection: data_mount_devid=__NOMATCH__ in the row itself — an in-surface measurement from the host, not a host-side inference
-    alert_route: the dark gate verdicts mount_mismatch and the dispatch refuses with that token in the workflow's ::error:: line (layer 5, GitHub Actions run output); the row is also readable from the warehouse with no SSH
-  - mode: the resolution itself fails (unreadable /dev, D-state controller, timeout fires)
-    detection: data_mount_devid=__UNREADABLE__, distinct from __NOMATCH__ so the two remedies are not conflated
-    alert_route: the dark gate verdicts mount_mismatch; the distinction between the two sentinels is what tells a reader whether to look at the volume attachment or at the host
+  - mode: /mnt/data is mounted from a real device that is NOT a Hetzner volume
+    detection: data_mount_devid=__NOMATCH__ in the row itself, alongside data_mount_base naming the device that was resolved — an in-surface measurement from the host, not a host-side inference (layer 3)
+    alert_route: the dark gate verdicts mount_mismatch and the dispatch refuses with that token in the workflow run log (layer 6); the row is also readable from the warehouse with no SSH. NOTE - this is deliberately NOT described as "the root-disk fallback"- see D1- findmnt runs without -T, so a skipped nofail mount yields no output and binds __UNREADABLE__, never a device path. An earlier draft of this block re-committed exactly the error D1 corrects
+  - mode: more than one Hetzner alias resolves to the same base device
+    detection: data_mount_devid=__AMBIGUOUS__ (layer 3)
+    alert_route: the gate refuses (layer 6). Its remedy differs from its siblings- a stale by-id alias surviving a detach, or two volumes aliased to one device, are Hetzner-side conditions rather than host faults, which is why it is a distinct sentinel and a distinct mode
+  - mode: the resolution itself fails, or there was no mount to resolve
+    detection: THREE states share __UNREADABLE__ on data_mount_devid alone, so the row carries data_mount_base to separate them - src=__UNREADABLE__ with base=n/a is "nothing was mounted"; src=/dev/sdb with base=__UNREADABLE__ is "the resolution is broken"; a resolved base with devid=__NOMATCH__ is "wrong device". An earlier draft claimed two sentinels discriminated this and they do not (layer 3)
+    alert_route: the gate refuses (layer 6). data_mount_base costs nothing- it comes from the lsblk call already being made, inside the same timeout
   - mode: the host serves but adopts no registry (the INNGEST_DIAGNOSTIC_BOOT=1 state live today)
-    detection: registry_fns=0 in the same row as server_active=active and http_code=200
-    alert_route: scripts/followthroughs/inngest-host-not-serving-7674.sh returns 2 with reason=not_serving naming registry_fns=0; the daily sweeper comments on #7674 (layer 4); G18 refuses the dispatch
-  - mode: the GQL endpoint answers with an error envelope or is unreachable from loopback
-    detection: registry_fns=__UNREADABLE__, never 0 — an error must not render as an empty registry
-    alert_route: same probe, same tracker comment; the gate refuses because __UNREADABLE__ is not in the accepting set
+    detection: registry_fns=0 in the same row as server_active=active and http_code=200 (layer 3)
+    alert_route: scripts/followthroughs/inngest-host-not-serving-7674.sh returns 2 with reason=not_serving naming registry_fns=0, and the daily sweeper comments on #7674 (layer 6); G18 refuses the dispatch
+  - mode: the GQL endpoint answers with an error envelope, is unreachable from loopback, or jq is absent
+    detection: registry_fns=__UNREADABLE__, never 0 — an error must not render as an empty registry (layer 3)
+    alert_route: same probe, same tracker comment (layer 6); the gate refuses because __UNREADABLE__ is not in the accepting set
   - mode: the emitter moves to schema 8 while a consumer stays at 7
-    detection: the gate verdicts stale_schema on every dispatch. THIS IS THE ONE FAILURE MODE WITH NO CI BACKSTOP — nothing in .github/workflows/ binds the literal 7, so the split is invisible until a dispatch, and stale_schema reads as "replace the host first", which cannot fix it
-    alert_route: covered instead by the lockstep acceptance criteria below and by the B12 emitter-to-gate field contract in the gate battery. The plan treats this as a test obligation, not a runtime one
-  - mode: the new emitter runs but emits no row, or a malformed one, and exits 0
-    detection: zero probe_schema=8 rows on the new boot_id within an hour of the replace, read with the discoverability command
-    alert_route: NONE TODAY, and stated rather than papered over. The existing bootstrap-failure telemetry (Row 7 of the pin drift-guard's contract) fires only on a NON-ZERO bootstrap exit; a probe that runs and emits nothing exits 0 and trips none of it. Covered instead by post-merge criterion 23, which is an observation rather than an alert
+    detection: the gate verdicts stale_schema on every dispatch
+    alert_route: NONE AT RUNTIME as things stand, and an earlier draft labelled only the mode below that way. A dispatch may not happen for months, so a CI-side inference at dispatch time is not an alert route. Closed by the same one-line change as the mode below - teach scripts/inngest-dedicated-host-classify.sh a schema-drift verdict comparing the row's probe_schema against the expected value, which runs OFF the host on the */15 arm (layer 6) and reuses the existing action-required issue class
+  - mode: the new emitter runs but emits a well-formed row that silently lacks the schema-8 fields
+    detection: a row carrying server_active and http_code but no probe_schema=8 classifies `healthy` today and nothing fires
+    alert_route: this is the REAL gap, and it is narrower than an earlier draft claimed. The zero-rows half IS covered- scripts/inngest-dedicated-host-classify.sh returns probe-unavailable on rows==0, on an unreadable query and on an unparseable row, and the */15 arm then emits a workflow error and files an action-required issue (layer 6). What is uncovered is the well-formed-but-stale-shape row, closed by the same classify arm as the mode above
   - mode: a new field's value contains whitespace or a token that looks like another field
-    detection: the gate's _ihdg_field refuses any message with a duplicated field name and any message containing a newline
+    detection: the gate's _ihdg_field refuses any message with a duplicated field name and any message containing a newline (layer 3 for the row, layer 6 for the refusal)
     alert_route: verdict unreadable, dispatch refuses. Reinforced by the emitter-side charset sanitisation both new fields must carry
 logs:
   where: Better Stack Telemetry (ClickHouse warehouse), source soleur-inngest-vector-prd (id 2457081)
   retention: hot window ~40 minutes via remote(), plus the s3Cluster archive — betterstack-query.sh unions both
 discoverability_test:
-  command: bash scripts/betterstack-query.sh --since 90m --grep SOLEUR_INNGEST_SERVER_PROBE --limit 20 | jq -r 'select((.raw|fromjson|.SYSLOG_IDENTIFIER) == "inngest-server-probe") | .raw|fromjson|.message' | grep -oE 'probe_schema=[0-9]+|data_mount_devid=[^ ]+|registry_fns=[^ ]+'
+  command: bash -c 'doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 90m --raw-only --limit 500 --grep SOLEUR_INNGEST_SERVER_PROBE | jq -R -r 'fromjson? | .raw? | fromjson? | select(.host == "soleur-inngest" and .host_name == "soleur-inngest-prd") | .message? // empty' | grep -F SOLEUR_INNGEST_SERVER_PROBE | grep -oE "probe_schema=[0-9]+ .*"'
   expected_output: |
-    probe_schema=8
-    registry_fns=<a positive integer, or 0 while INNGEST_DIAGNOSTIC_BOOT is set>
-    data_mount_devid=scsi-0HC_Volume_106261946
+    whole matched rows, not per-field fragments, each carrying probe_schema=8 …
+    data_mount_devid=scsi-0HC_Volume_106261946 … registry_fns=<an integer; 0 while
+    INNGEST_DIAGNOSTIC_BOOT is set, which is the live state today>
   credentials_required: "BETTERSTACK_QUERY_HOST/USERNAME/PASSWORD from Doppler soleur/prd_terraform — the probe row exists only in the Better Stack warehouse and the dedicated host is deny-all-public, so no unauthenticated probe can read a live on-host emit. The same three secrets the #7674 follow-through already declares."
 ```
+
+**Five corrections to this command, each of which an earlier draft got wrong, and none of which any
+gate would have caught.** The `credentials_required` declaration makes preflight Check 10 skip
+without executing, so this section is the only place the command is graded:
+
+1. **`doppler run` is required.** `betterstack-query.sh`'s own header states it does not read Doppler
+   itself and it hard-exits on unset `BETTERSTACK_QUERY_*`. Both the runbook and this plan's own
+   live read wrap it.
+2. **`jq -R` plus `fromjson?` at both levels.** Without `-R`, one malformed line aborts the whole
+   invocation and every valid row after it is lost — the sibling probe forbids the bare form in its
+   own comment for exactly this reason. And without `--raw-only` the stream carries host-metric rows
+   with no `.raw`, so the first one errors.
+3. **Host isolation on TWO fields.** This plan's own research recorded web-1 emitting the same
+   marker under the same shared renderer at `probe_schema=4`. A `SYSLOG_IDENTIFIER`-only filter
+   interleaves the two hosts unattributably. The sibling probe requires `host` *and* `host_name`
+   because #6616 is open on `host_name` lying.
+4. **`--limit 500`, not 20.** This plan measured marker-quoting contamination in the warehouse; the
+   sibling probe uses 500.
+5. **Keep whole rows.** A per-field `grep -oE` destroys the same-row conjunction that D3 is built
+   on — the property becomes unverifiable from the command's own output.
 
 ### Follow-through enrollment
 
 **Required, and an earlier draft of this plan wrongly said it was not.** That draft reasoned that
-nothing here is time-gated because the probe row appears on the first boot after the replace. True
-— but the replace is not part of this pull request, so post-merge criterion 23 is a *deferred
-observation* whose satisfaction depends on a dispatch that happens later. A closure left to human
-memory is exactly the rot the follow-through sweeper exists to prevent.
+nothing here is time-gated because the probe row appears on the first boot after the replace. True —
+but the replace is not part of this pull request, so the delivery observation is deferred, and a
+closure left to human memory is exactly the rot the sweeper exists to prevent.
 
-The deliverable is a verification script under `scripts/followthroughs/`, named for the tracker it
-closes, that exits 0 only when the warehouse holds a `SOLEUR_INNGEST_SERVER_PROBE` row from the
-dedicated host on a `boot_id` **other than** `906c015b-b648-400f-93ea-ced42e048ed9`, carrying
-`probe_schema=8`, `data_mount_devid=scsi-0HC_Volume_106261946` and a `registry_fns` matching
-`^[1-9][0-9]*$` — all in the same row, on the same discipline the #7674 probe already applies. It
-takes the same three `BETTERSTACK_QUERY_*` secrets, and it exits 2 (TRANSIENT) rather than 1 while
-the replace has not happened, because "not yet delivered" is a wait and not an actionable fault.
+**The `Closes #` shape had to be decided, because the obvious one is a permanent silent no-op.**
+`sweep-followthroughs.sh` lists `--state open`. If the PR body carries `Closes #8017 / #8015 /
+#8013`, all three close at merge and any directive on them is never swept again — the precise defect
+`inngest-host-not-serving-7674.sh`'s header memorialises about its own predecessor. So the PR body
+uses **`Ref #8017`, `Ref #8015`, `Ref #8013`**, not `Closes`, and each of the three issue bodies
+carries its own directive pointing at the same script. One directive per body is required because a
+directive closes only the issue whose body holds it, and only the first directive per body is
+honored. This is the same disposition the repo already applies to `ops-remediation` work whose fix
+executes after merge.
 
-The tracker carries the `follow-through` label and a
-`<!-- soleur:followthrough script=… earliest=<merge date> secrets=BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->`
-directive. `earliest` is the merge date rather than a soak window: there is nothing to soak, only
-something to wait for. This is what `/ship` Phase 5.5's enrollment gate checks for, and declaring it
-here means the work phase builds the probe rather than `/ship` blocking on a missing one.
+**What the probe asserts, and one thing it must assert that an earlier draft omitted.** Exit 0 only
+when the warehouse holds a `SOLEUR_INNGEST_SERVER_PROBE` row from the dedicated host, on a `boot_id`
+**other than** `906c015b-b648-400f-93ea-ced42e048ed9`, carrying — all in the same row:
 
-The pre-existing #7674 directive with `earliest=2026-11-30` is unchanged; this work alters that
-probe's predicate but does not move its date.
+- `probe_schema=8`,
+- `data_mount_devid=scsi-0HC_Volume_106261946`,
+- `registry_fns` present and matching `^[0-9]+$`,
+- and `redis_key_patterns` containing **no** substring matching `[0-9A-HJKMNP-TV-Z]{26}` — the
+  identical ULID-alphabet regex the acceptance criteria use. Without this conjunct the probe would
+  auto-close **#8013 on evidence of a different fix**: it reads nothing the ULID leak lives in.
+  This is a lawful absence arm because it only *downgrades* a positive that `probe_schema=8` on a
+  fresh `boot_id` has separately established.
+
+**`^[0-9]+$` and not `^[1-9][0-9]*$`, and this is the finding that would have made the closure
+unreachable.** `INNGEST_DIAGNOSTIC_BOOT` is a Doppler variable, not image state, so it **survives a
+host replace**. The live state records it as `1`. A delivery gate demanding a non-empty registry
+would therefore return 2 forever *after* the replace that genuinely delivered all three fixes, and
+none of the three issues would ever close — while also smuggling an unrelated Doppler flip into a
+delivery gate. `0` is a measurement here, and the delivery probe grades what the replace delivers.
+The non-empty requirement belongs where it was designed to live: the #7674 serving discriminator.
+
+**Exit contract, stated so the work phase builds it rather than rediscovering it at CI.** 0 = PASS;
+2 = TRANSIENT; **1 is reserved and unreachable** — the sweeper comments on every exit-1 run and "the
+replace has not been dispatched yet" is a wait, not an actionable fault. `credentials_unprovisioned`
+and `query_failed` each exit 2 with a **distinct reason string**, because the two have opposite
+remedies and only one of them is a wait. The `${VAR:?msg}` form is **banned** and the ban is
+mechanical — `scripts/lint-followthrough-varq-ban.sh` reddens CI on it — because that expansion
+aborts with status 1 under the sweeper's non-interactive shell, which this contract reads as FAIL,
+posting a daily false-FAIL forever on an unprovisioned secret.
+
+**`earliest=`, and the cost of getting it wrong in the other direction.** The sweeper comments on
+every TRANSIENT for an open issue, so a probe waiting on an indefinitely-deferred replace posts a
+daily comment from merge onward. The #7674 directive waits on the same deferred window and pins
+`earliest=2026-11-30` for precisely that reason, with the instruction to push the date rather than
+weaken an arm. These directives take the same treatment: pin `earliest=` past the same maintenance
+window, and if the replace slips, move the date.
+
+The three `BETTERSTACK_QUERY_*` secrets are **already** in the sweeper workflow's probe env, wired
+for the #7674 probe, so no workflow change is needed — only the directives' own `secrets=` clauses
+name them.
 
 ## Guard Contract
 
@@ -851,7 +1152,22 @@ level up. So:
   and the mutated run must return a *different* token.
 - Guard 1's and Guard 3's **emitter-side** rows have no harness at all — `grep -n 'mutate\|PRISTINE'`
   over `apps/web-platform/infra/inngest.test.sh` returns nothing. A `mutate_emitter` helper is a
-  deliverable of this plan, listed in `## Files to Edit`.
+  deliverable of this plan, and naming it is not specifying it. Its contract, mirroring `mutate()`
+  property for property:
+  1. It mutates the **extracted probe body** — post-`awk`, the same text `sh "$PROBE_BODY"` runs —
+     not `inngest-bootstrap.sh` whole. Mutating the outer file would let a sed land in bash code the
+     probe never executes and report a pass.
+  2. The mutation must be proven to have **landed inside the probe-body region**: `cmp -s` against
+     the pristine copy, plus a changed-line count of exactly 1. An anchor that matches nothing is
+     reported as such, never silently passed.
+  3. The **unmutated control** must produce the expected field value today, or the row is declared
+     non-exercising.
+  4. The mutated run must produce a **different** value.
+  5. It carries its own `SELFTEST` row driving an anchor that cannot land, exactly as the gate
+     battery self-tests `mutate()`.
+  Rule 2's one-line requirement means a **multi-line move cannot be expressed as a mutation row**.
+  Where a matrix row below is a move, it is written as the behavioural assertion the move would
+  break, not as a sed.
 - Guard 2 has **no suite whatsoever**. Creating it is a deliverable, listed in `## Files to Create`.
 - Rows whose sed anchor is text that ships in Phase 2 or Phase 4 cannot be authored against the
   current tree in a way that reds for the named reason; `mutate()` reports "matched NOTHING". Phase
@@ -876,16 +1192,27 @@ the by-id directory, which is why the seam is a deliverable rather than an imple
 
 **Mutation matrix.**
 
-| # | Edit | Harness | Must go RED because |
+Each `mutate` row names its fixture and the token the **unmutated** control must return — under
+that harness a row without the pair is not yet applicable.
+
+| # | Edit | Harness (fixture → control token) | Must go RED because |
 |---|---|---|---|
-| 1 | Replace the G14 comparison body with `:` | `mutate` | The guard's own dispatch. A predicate that no longer compares anything must not leave the battery green |
+| 1 | Replace the G14 comparison body with `:` | `mutate` (the mount-mismatch fixture → `mount_mismatch`) | The guard's own dispatch. A predicate that no longer compares anything must not leave the battery green |
 | 2 | Emit `data_mount_devid` from the `logger` site only, leaving the phone-home fallback unchanged | `mutate_emitter` | A second member added after a compliant first. The byte-identical-payload assertion is the only thing that sees this, and the Vector-down channel is when the row matters most |
 | 3 | Widen the reverse-map glob to the whole `/dev/disk/by-id/` | `mutate_emitter` | Measured: three aliases resolve to one device, so the value becomes order-dependent. A fixture with two aliases for the mounted device must red — and must red as `__AMBIGUOUS__`, not as an arbitrary pick |
-| 4 | Read `lsblk -s`'s first line rather than its first non-empty value | `mutate_emitter` | Measured: `lsblk -nsdo SERIAL` on a partition emits the value then an empty line. A first-line read returns the wrong device for the shape the flag exists to handle |
-| 5 | Collapse `__NOMATCH__` and `__AMBIGUOUS__` into `__UNREADABLE__` | `mutate_emitter` | Three states with three remedies rendered as one. The gate refuses either way, so only the battery can catch this — which is the definition of a guard that must not be vacuous |
-| 6 | Move the resolution block inside the inner `case`'s `*)` sub-arm | `mutate_emitter` | `data_mount_devid` stays `n/a` on a `host_role=dedicated` row — the web-arm sentinel on a dedicated host. Reds through the existing `field=[^ ]` presence loop once the field joins `PROBE_7695_FIELDS`; no in-window observation machinery is needed, and an earlier draft wrongly claimed otherwise |
-| 7 | Drop the `-s` flag from the `lsblk` invocation | `mutate_emitter` | A mapper or a partition then never resolves to its backing volume and finds no Hetzner alias |
-| 8 | Accept `data_mount_devid=n/a` on a row whose `host_role` is `dedicated` | `mutate` | The web-host sentinel on a dedicated row means the emitter took the wrong arm; accepting it clears a dispatch on an unmeasured store |
+| 4 | Collapse `__NOMATCH__` and `__AMBIGUOUS__` into `__UNREADABLE__` | `mutate_emitter` | Three states with three remedies rendered as one. The gate refuses either way, so only the battery can catch this — the definition of a guard that must not be vacuous |
+| 5 | Make the resolution report the device it was handed rather than its backing base device | `mutate_emitter` | Behavioural, not step-anchored: whatever tool the implementation uses, a mapper and a partition must both resolve to the backing volume. The four-shape fixture is what reds |
+| 6 | Bind `data_mount_devid` only on the branch where `data_mount_src` was readable | `mutate_emitter` | The field then stays `n/a` on a `host_role=dedicated` row — the web-arm sentinel on a dedicated host. Reds through the existing `field=[^ ]` presence loop once the field joins `PROBE_7695_FIELDS`. Written as a binding change rather than a block move, because a move cannot satisfy the one-line rule |
+| 7 | Accept `data_mount_devid=n/a` on a row whose `host_role` is `dedicated` | `mutate` (an `n/a`-on-dedicated fixture → `mount_mismatch`) | The web-host sentinel on a dedicated row means the emitter took the wrong arm; accepting it clears a dispatch on an unmeasured store |
+| 8 | Unquote the G14 right-hand side | `mutate` (canonical fixture, dispatched `--expected-volume-id '*'` → must still refuse) | Measured on bash 5.3.9: an unquoted `[[ ]]` RHS is a glob, so `*` matches every Hetzner alias. Without this row the matrix scores full marks on a gate one missing pair of quotes turns into a wildcard |
+| 9 | Delete the numeric validation of `expected_volume_id` | `mutate` (a non-numeric pin → `id_pin_mismatch`) | A raw `workflow_dispatch` string is interpolated into the comparand; nothing between the input and the gate constrains its charset |
+| 10 | Delete the emitter's terminal charset collapse | `mutate_emitter` (an alias containing a space) | The row must render `__UNREADABLE__`, not a splittable value. `_ihdg_field` refuses duplicates, not splits, so nothing downstream catches this |
+
+Rows 4 and 7 of an earlier draft — "read `lsblk -s`'s first line" and "drop the `-s` flag" — were
+cut deliberately. Both were anchored on a specific tool and a specific extraction step, so a legal
+refactor of the resolution would red them for no behavioural reason, and the properties they claimed
+are bought behaviourally by the four-shape fixture instead. The measured first-non-empty trap stays
+in `## Design` as an implementation note, where it belongs.
 
 Row 1's sed must be re-anchored on the new comparison — the existing G14 mutation row is anchored
 on the literal `if [[ "$data_mount_src" != "$expected_dev"`, which this change deletes. Note also
@@ -900,11 +1227,23 @@ and the row would red for the wrong reason.
 | H1 | Point the mount fixture's `data_mount_devid` at a volume id that is not the `--expected-volume-id` | Must FAIL the gate; if the suite stays green, the comparison is not reading the fixture |
 | H2 | Leave `PD[probe_schema]` at `7` after the emitter moves to 8 | Every `mutate` row's unmutated control collapses to `stale_schema` and reports "does not exercise the check". A half-done bump must be loud |
 | H3 | Insert a predicate case between the coherence `G14` block and the mount block, keeping today's shared `rows-g14.json` filename | The mutation row would silently consume a different fixture. After the rename this must be impossible; before it, it is a live hazard |
+| H4 | Blank both G14 operands | Must refuse. And the harness itself must be corrected first: `mutate()` runs the mutated library under a bare `bash -c` while the dispatch step runs `set -uo pipefail`, so today `[[ "" == "" ]]` PASSES in the battery and aborts in production. Add `set -uo pipefail;` to that `bash -c` string so the harness grades what production runs |
 
-**Must-PASS input that is not the canonical.** A row carrying `data_mount_src=/dev/mapper/inngest-redis`
-with `data_mount_devid=scsi-0HC_Volume_<the expected id>` must PASS G14 — a post-recut host,
-differing from the canonical pre-recut row in a way the contract explicitly permits. Without it, a
-guard that rejects everything scores full marks on the RED matrix.
+**Must-PASS inputs that are not the canonical — and the second one is the only test of Property P2.**
+
+1. A row carrying `data_mount_src=/dev/mapper/inngest-redis` with
+   `data_mount_devid=scsi-0HC_Volume_<the expected id>` must PASS — a post-recut host, differing
+   from the canonical pre-recut row in a way the contract explicitly permits. Without a must-PASS
+   at all, a guard that rejects everything scores full marks on the RED matrix.
+2. **A DIFFERENT volume id, matching.** With `--expected-volume-id 105149570` (the suite's existing
+   `OTHERID`) and `data_mount_devid=scsi-0HC_Volume_105149570`, the verdict must be `dark`. This is
+   the row an earlier draft was missing, and its absence was a demonstrable hole: a G14 written as
+   `[[ "$data_mount_devid" == "scsi-0HC_Volume_106261946" ]]` — the expected id hardcoded,
+   `$expected_volume_id` ignored — passes every RED row, every harness row, and must-PASS 1. Only
+   an input that varies the pin can distinguish a comparison from an equality against a baked-in
+   literal, and Property P2 says the pin is what the dispatch names. Note that must-PASS 1 varies
+   `data_mount_src`, which D2 removes from the predicate — from G14's point of view it is identical
+   to the canonical, so it cannot serve this purpose.
 
 ### Guard 2 — the serving discriminator (`inngest-host-not-serving-7674.sh`, read by G18)
 
@@ -928,6 +1267,7 @@ assembly. **The suite that exercises this assembly does not exist yet and is a d
 | 3 | Accept `registry_fns=__UNREADABLE__` | An unreadable registry must never grant a positive; absence may only downgrade. This is the property the `jq` parse carries — an error envelope must render `__UNREADABLE__`, never `0` |
 | 4 | Assemble the conjuncts across rows rather than within one | A window holding an old serving row and a recent diagnostic row must not compose into a PASS — the guard's own historical defect shape |
 | 5 | Remove the `host_name` half of the identity filter, keeping `host` | web-1 legitimately reports `server_active=active http_code=200`; with a registry count it could now report a positive third field too |
+| 6 | Treat a row with **no `registry_fns` field at all** as satisfying the conjunct | This is not a hypothetical: `## Delivery` establishes that between merge and the host replace, EVERY row lacks the field. Absence is a different mutation from a bad value — the sibling gate suite carries separate rows for exactly that reason — and it is the state production will actually be in |
 
 **Harness rows.**
 
@@ -936,10 +1276,18 @@ assembly. **The suite that exercises this assembly does not exist yet and is a d
 | H1 | Make every fixture row identical to the canonical PASS row | A suite whose only must-PASS input is the canonical cannot distinguish a correct guard from `diff $1 canonical` |
 | H2 | Replace the suite's failure-counter increment with a no-op | A floor that dispatches through the counter it protects is not a floor |
 | H3 | Fixture a window whose PASS row is older than the newest dark row | G8/G9 require the newest row to be dark while G18 requires a serving row inside 24h; the suite must show the two are jointly satisfiable and that this is the shape that satisfies them |
+| H4 | Replace the fixture's **double-encoded** `raw` column with a single-encoded object | The assembly names decoding as item (a), and #7674 measured that an outer-level match returns 0/40 while a post-decode match returns 40/40. A new suite whose fixtures put the seam above the decode reproduces that measurement exactly and would pass while testing nothing |
+| H5 | Replace the suite's assertion wrapper with a bare `pass` that still increments | The sharper vacuity class in this repo's history: a counter no-op is caught by any must-FAIL arm, but a *counting* wrapper stub is caught only by driving the wrapper in the must-FAIL direction. The gate battery records a run where neutering `predicate()` left the floor printing "20 distinct predicates covered" at 112 passes and 0 failures |
 
 **Must-PASS input that is not the canonical.** A row with `registry_fns=1` rather than a larger
 count, and a `cutover_flag` value differing from the canonical fixture's, must still PASS — the
-contract is "non-empty", not "matches the fixture".
+contract is "non-empty", not "matches the fixture". `1` sits exactly on the boundary of
+`^[1-9][0-9]*$`, which is the point.
+
+**The suite carries its own floor and its own instrument self-test.** It is a brand-new file, so
+Phase 1d's "every floor touched is raised" does not reach it — there is no floor to touch. It gets
+an assertion-count floor and a must-FAIL wrapper self-test on the pattern the gate battery already
+uses, or it is a suite whose greenness means nothing.
 
 **An ordering constraint this guard creates, which nothing currently documents.** G8/G9 need the
 **newest** row dark; G18 needs a row inside the probe's 24h window carrying all three positive
@@ -954,12 +1302,14 @@ today; the suite should compare them rather than leave them to drift.
 ### Guard 3 — the key-name histogram (`redis_key_patterns` in the emitter)
 
 **Property.** Every value the histogram ships names a key *category* and contains no identifier,
-for every key shape the live store actually produces — including Redis cluster hash tags, wherever
-in the key the tag appears and whether or not the tag's contents carry a colon.
+for every key shape the live store actually produces — braced or not. The brace is where #8013
+found the leak; it is not where the property lives. A brace-free `<ns>:<identifier>:…` key ships
+its identifier through the two-segment reduction with no brace rule involved, measured.
 
 **Assembly.** One chokepoint: the awk program that renders `redis_key_patterns`. It quantifies over
-(a) the hash-tag collapse, (b) the two-segment reduction, (c) the charset sanitiser, (d) the
-distinct-pattern cap and truncation marker, and (e) the whitespace-collapse arm that follows. The
+(a) the identifier test applied to segments and to brace contents alike, (b) the brace collapse,
+(c) the two-segment reduction, (d) the charset sanitiser, (e) the
+distinct-pattern cap and truncation marker, and (f) the whitespace-collapse arm that follows. The
 key names in the store are members; the transformation pipeline is the assembly. The fixtures that
 feed it are harness, not assembly — which is exactly why every one of them being `ns:kind:id`
 shaped let the defect survive three schema generations.
@@ -968,17 +1318,18 @@ shaped let the defect survive three schema generations.
 
 | # | Edit | Must go RED because |
 |---|---|---|
-| 1 | Remove the hash-tag collapse entirely | The defect restored; a fixture in the real brace shape must produce the ULID again |
+| 1 | Remove the identifier test entirely | The defect restored, in both shapes; the braced and the brace-free fixture must each produce the identifier again |
 | 2 | Anchor the collapse on `^\{` | Narrower than the property: a key whose tag is not at the start passes the identifier through |
-| 3 | Collapse only `{a:b}`, leaving a colon-free `{a}` untouched | A tag shaped `{<ULID>}:runs:x` then ships the identifier — the same leak one shape over, and the reason D4's rule is not "collapse to the pre-colon prefix" |
-| 4 | Collapse `{a:b}` to `{}` rather than to a category token | Over-collapses: every estate merges into one indistinguishable bucket and the field stops answering the question it exists for |
-| 5 | Apply the collapse AFTER the two-segment reduction | Order matters: by then the tag's contents have already become segment 2 and been emitted |
+| 3 | Remove the identifier test from **segment 2**, keeping it only inside brace contents | The brace-free `estate:<ULID>:runs:1` shape then leaks exactly as it does today. This is the row that would have caught the defect an earlier draft of this plan shipped |
+| 4 | Narrow the identifier test to the ULID alphabet alone | A UUID- or long-hex-shaped identifier passes. The property is about identifiers, not about one encoding |
+| 5 | Replace an identified segment with the empty string rather than a fixed token | Over-collapses: every estate merges into one indistinguishable bucket and the field stops answering the question it exists for |
+| 6 | Apply the reduction BEFORE the identifier test | Order matters: by then the identifier has already become segment 2 and been emitted |
 
 **Harness rows.**
 
 | # | Edit to the SUITE | Must go RED because |
 |---|---|---|
-| H1 | Replace the brace-shaped fixtures with `ns:kind:id` ones | The exact edit that restores the pre-#8013 blind spot; the suite must assert the fixture corpus's shape, not only the output |
+| H1 | Narrow the fixture corpus to braced keys only | The exact edit an earlier draft of this plan made by omission. The corpus must contain at least one brace-free `<ns>:<identifier>:…` key and at least one non-ULID identifier, and the suite must assert the corpus's shape rather than only its output |
 | H2 | Assert only that the output contains `estate` | A bare-token assertion the leaked string also satisfies. The assertion must be that the ULID is ABSENT and the category PRESENT |
 
 **No downstream consumer parses the histogram's value shape.** Grepped before changing it: the only
@@ -986,8 +1337,15 @@ readers of `redis_key_patterns` outside the emitter are the two batteries and th
 predicate, and the latter compares against the literal `__NONE__` only. No dashboard, alert or
 terraform resource matches the old pattern shape.
 
-**Must-PASS input that is not the canonical.** A key with no braces at all (`inngest:run:<ulid>`)
-must still reduce to `inngest:run:*` — the collapse must not alter shapes it does not apply to.
+**Must-PASS inputs that are not the canonical.** Two, because the collapse must be judged on what
+it leaves alone as much as on what it strips:
+
+1. A key with no braces at all (`inngest:run:<ulid>`) still reduces to `inngest:run:*` — the
+   collapse must not alter shapes it does not apply to.
+2. `{queue}:queue:x` renders `?queue?:queue:*`, unchanged and idempotent. This is the **most common
+   live shape** and it sits directly in the tension between matrix rows 3 and 4: a rule aggressive
+   enough to strip a colon-free brace group's contents must still not flatten a colon-free group
+   that is already a category. It is also the only test of D4's third constraint.
 
 ## Implementation Phases
 
@@ -1040,7 +1398,7 @@ and the distinct-predicate floor keeps its one of slack.
 
 `probe_schema=8`; both new fields bound with `n/a` defaults beside the existing store fields; the
 resolution block placed above the inner `case` per D1; the guarded registry query with its
-column-zero `readonly FUNCTIONS_GQL_QUERY`; the hash-tag collapse; both emit sites; the unit's
+column-zero `readonly FUNCTIONS_GQL_QUERY`; the identifier-aware reduction; both emit sites; the unit's
 budget comment at 68s; the drift pin widened to three files and extended to the `jq` parse.
 
 ### Phase 3 — the image bump
@@ -1080,12 +1438,16 @@ checkable post-condition on file state, command output, or merged behaviour.
    `grep -cE '^probe_schema='` returns 1 — anchored on the assignment, not the token, because this
    file's own convention is to leave a `# … probe_schema=N …` comment beside each bump and a bare
    token count would fail on a correct implementation.
-2. `git grep -n 'expected_schema="7"'` over the whole repository, excluding
-   `knowledge-base/project/plans/`, `knowledge-base/project/specs/` and `**/archive/**` (which
-   legitimately record the old value), returns nothing; and
-   `awk '/expected_schema=/{print;exit}' tests/scripts/lib/inngest-host-dark-gate.sh` shows `"8"`.
-   Repo-wide rather than path-narrowed, because a split emitter/gate schema is the one failure mode
-   with no CI backstop.
+2. **The emitter↔gate schema agreement is a CI assertion, not a one-shot grep.** The dark-gate
+   suite — which runs in the required `test-scripts` shard — extracts `probe_schema=([0-9]+)` from
+   the emitter and `expected_schema="([0-9]+)"` from the gate library, fails loudly if either
+   extraction comes back empty, and asserts the two are equal. An earlier draft answered this with
+   a literal grep that does not generalise to schema 9 and is not a gate — while the plan's own
+   risk table called it "the one failure mode with no CI backstop" and then did not build one. The
+   literal sweep is kept as a secondary check: `git grep -n 'expected_schema="7"'` repo-wide,
+   excluding `knowledge-base/project/plans/`, `knowledge-base/project/specs/` and `**/archive/**`
+   (which legitimately record the old value), returns nothing.
+
 3. `git grep -c 'probe_schema=3' -- .github/ tests/ scripts/` returns 0 — the recovery instruction
    in the workflow's refusal line no longer tells a reader that replacing will not help.
 4. Running the emitter under the dedicated-arm fixture **extended with the by-id seam** produces a
@@ -1100,63 +1462,77 @@ checkable post-condition on file state, command output, or merged behaviour.
 7. The gate refuses on every value that is not the expected alias — field absent, `n/a` on a
    `host_role=dedicated` row, and each of the three sentinels — with a refusing verdict token; and
    `n/a` for either new field on a dedicated row is itself a suite failure.
-8. The emitter's histogram over the Phase-0-derived brace corpus produces no substring matching
-   `[0-9A-HJKMNP-TV-Z]{26}`, does produce `?estate?`, leaves `inngest:run:*` unchanged, and handles
-   a colon-free brace group and a non-prefix tag.
-9. The #7674 probe returns 2 for a window whose only rows carry
+8. The emitter's histogram over the Phase-0-derived corpus produces no substring matching any of
+   the four identifier shapes in D4, and **the corpus itself contains at least one brace-free
+   `<ns>:<identifier>:…` key and at least one non-ULID identifier** — otherwise the criterion tests
+   only the shape the issue happened to quote, which is how the brace-free leak survived an earlier
+   draft of this plan. `{queue}:queue:x` still renders `?queue?:queue:*` unchanged, and a brace-free
+   non-identifier key still reduces to `inngest:run:*`.
+9. Both new fields carry the terminal charset collapse: a fixture whose by-id alias contains a
+   space renders `__UNREADABLE__`, not a splittable value. `_ihdg_field` refuses duplicated field
+   names, not values that merely split, so nothing downstream catches this. The unmatched-glob case
+   is covered too — measured, POSIX `sh` iterates once over the literal pattern.
+
+10. The #7674 probe returns 2 for a window whose only rows carry
    `server_active=active http_code=200 registry_fns=0`; returns 0 for a window with one row
    carrying all three positive conjuncts; returns 2 when the three are split across two rows; and
    returns 2 for `registry_fns=__UNREADABLE__`.
-10. The field name in the #7674 discriminator is byte-identical to the one in the emitter's logger
+11. The field name in the #7674 discriminator is byte-identical to the one in the emitter's logger
     line, asserted by an extraction across both files that fails loudly if either side comes back
     empty. Without this, #8015 is the one of the three fixes that can silently do nothing: the gate
     never reads `registry_fns`, so a dropped or renamed conjunct breaks no other assertion.
-11. `PROBE_FIELDS` in the gate battery equals the emitter's logger-line order **as a sequence**,
+12. `PROBE_FIELDS` in the gate battery equals the emitter's logger-line order **as a sequence**,
     not as a set, with both new fields at the tail after `data_bytes`.
-12. Every mutation-matrix row and harness row in `## Guard Contract` has been applied and recorded
+13. Every mutation-matrix row and harness row in `## Guard Contract` has been applied and recorded
     with the RED output it produced, and every must-PASS non-canonical input passed. Evidence goes
     in the spec directory, one line per row.
-13. `git grep -c 'soleur-inngest-bootstrap:v1\.1\.32@sha256:' -- apps/web-platform/infra/cloud-init-inngest.yml apps/web-platform/infra/cloud-init.yml`
-    returns 2 and 2, and `cloud-init-inngest-zot-pull-mutation.test.sh` still names `v1.1.24`.
-14. `bash scripts/test-all.sh` is green. It does **not** reach the three
+14. `git grep -c 'soleur-inngest-bootstrap:v1\.1\.32@sha256:' -- apps/web-platform/infra/cloud-init-inngest.yml apps/web-platform/infra/cloud-init.yml`
+    returns 2 and 2, `cloud-init-inngest-zot-pull-mutation.test.sh` still names `v1.1.24`, **and all
+    four pinned digests are byte-identical to each other and equal
+    `crane digest ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.32`**. The count alone asserts that
+    a tag and *a* digest are present, not that the digest is the right one — and that exact defect
+    is recorded in `cloud-init-inngest.yml`'s own comment, where `v1.1.26@sha256:<v1.1.25's digest>`
+    was written at all four sites and shipped.
+
+15. `bash scripts/test-all.sh` is green. It does **not** reach the three
     `apps/web-platform/infra/*.test.sh` suites — verified with `--enumerate all` — so it is not
     sufficient on its own; criteria 15 and 16 cover the rest. It does reach the new followthrough
     suite and `plugins/soleur/test/c4-count-parity.test.sh`.
-15. Each of these passes as its own invocation, because all three run only in the advisory
+16. Each of these passes as its own invocation, because all three run only in the advisory
     `deploy-script-tests` job: `bash apps/web-platform/infra/inngest.test.sh` (the suite grading
     most of Guards 1 and 3, and the one an earlier draft named in no criterion at all),
     `bash apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh` (Guards A and B), and
     `bash apps/web-platform/infra/inngest-cutover-flip.test.sh` (the widened drift pin).
-16. `sudo bash apps/web-platform/infra/inngest-redis-luks-loopback.test.sh` passes with the
+17. `sudo bash apps/web-platform/infra/inngest-redis-luks-loopback.test.sh` passes with the
     real-device arm. It is invoked as a multi-line `sudo bash` step, deliberately invisible to the
     registered-suite runner, and exits non-zero with the literal `LOOPBACK_UNAVAILABLE` rather than
     self-skipping — so an unprivileged run is a visible failure, not a false green.
-17. The extracted probe body passes `sh -n` and runs under `sh` — the behavioural proof that the new
+18. The extracted probe body passes `sh -n` and runs under `sh` — the behavioural proof that the new
     emitter code is POSIX, which is stronger than grepping for bashisms. An absence-grep for `[[`
     is deliberately *not* used: the probe body legitimately contains `*[[:space:]]*` and this change
     adds more of them.
-18. Every anti-vacuity counter touched has been raised to track its new count, each being a `-lt`
+19. Every anti-vacuity counter touched has been raised to track its new count, each being a `-lt`
     refusal so a floor above the count fails the suite: `_FLOOR` equal to the new assertion count,
     `INNGEST_MIN_ASSERTIONS` at the new count, the distinct-predicate floor keeping its one of
     slack. Every floor's FAIL message states the same number its comparison uses — including the
     two in `inngest.test.sh` whose text claims "three MORE fields" and "the 5 store fields" while
     comparing against 8.
-19. `python3 scripts/lint-guard-contract.py` and
+20. `python3 scripts/lint-guard-contract.py` and
     `python3 scripts/lint-infra-no-human-steps.py --changed --base origin/main` both pass.
-20. ADR-199 carries an amendment naming `data_mount_devid`, and
+21. ADR-199 carries an amendment naming `data_mount_devid`, and
     `knowledge-base/legal/audits/inngest-aof-destruction-record.md` carries a `data_mount_devid`
     row in its field table.
 
 ### Post-merge
 
-21. The image build fired on `vinngest-v1.1.32` and the published digest equals the one pinned at
+22. The image build fired on `vinngest-v1.1.32` and the published digest equals the one pinned at
     all four sites — read from the workflow run, not from memory.
-22. The **artifact** carries the fix, not just the source that fed it:
+23. The **artifact** carries the fix, not just the source that fed it:
     `crane export ghcr.io/jikig-ai/soleur-inngest-bootstrap@<digest> - | tar -xO inngest-bootstrap.sh`
     contains `probe_schema=8` and `data_mount_devid=`. Guard A binds tag→source and says so in its
     own comment; nothing else in the chain grades the registry bytes, and the live arm that comment
     claims exists on the apply path does not.
-23. **Delivery, which is what actually closes the three issues.** A probe row on a **new `boot_id`**
+24. **Delivery, which is what actually closes the three issues.** A probe row on a **new `boot_id`**
     carrying `probe_schema=8`, `data_mount_devid=scsi-0HC_Volume_106261946` and a non-empty
     `registry_fns`, read with the `discoverability_test` command. If the host replace has not
     happened by merge, this is carried by a follow-through directive rather than asserted as done —

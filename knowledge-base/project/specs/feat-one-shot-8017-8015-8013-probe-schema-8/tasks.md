@@ -32,8 +32,11 @@ the harness before anything grades anything.
       in particular arrives via `cloud-init-inngest.yml`'s `packages:` list, not via the OCI image,
       and the probe body calls it zero times today — which is why D3 guards on `command -v jq`.
 - [ ] 0.4 Read the **live** `redis_key_patterns` value out of the warehouse with the
-      `discoverability_test` command and paste it into this spec. The Phase 1 brace fixture corpus
-      is derived from the shapes that row names, not from the one shape #8013 quoted.
+      `discoverability_test` command and paste it into this spec. The Phase 1 fixture corpus is
+      derived from the shapes that row names, and MUST include at least one brace-free
+      `<ns>:<identifier>:…` key and at least one non-ULID identifier. Measured during planning: the
+      brace-free shape leaks the ULID identically and no brace rule touches it, so a brace-only
+      corpus would let #8013 survive the host replace.
 - [ ] 0.5 Re-run and record the measurements the design rests on: the emitter's current histogram
       awk over a brace-shaped fixture (the leak); `lsblk -nso NAME,SERIAL` and `lsblk -nsdo SERIAL`
       against a partition (the parent walk, and the trap that `-d` does not collapse to one line —
@@ -47,13 +50,25 @@ the harness before anything grades anything.
 
 ## Phase 1a — build the missing harness (grades nothing yet)
 
-- [ ] 1a.1 Add a `mutate_emitter` helper to `apps/web-platform/infra/inngest.test.sh` that seds a
-      pristine copy of `inngest-bootstrap.sh`, re-extracts the probe body and re-runs it. That file
-      has no mutation harness today (`grep -n 'mutate\|PRISTINE'` returns nothing), so without it
-      every emitter-side mutation row is a hand-applied audit rather than a runnable row.
+- [ ] 1a.1 Add a `mutate_emitter` helper to `apps/web-platform/infra/inngest.test.sh`. Naming it is
+      not specifying it; build it to the contract in the plan's Guard Contract preamble: it mutates
+      the **extracted probe body** (post-`awk`, the text `sh` actually runs), proves the mutation
+      landed in that region via `cmp -s` plus a changed-line count of exactly 1, requires the
+      unmutated control to produce the expected value today, requires the mutated run to differ, and
+      carries its own `SELFTEST` row driving an anchor that cannot land. That file has no mutation
+      harness today (`grep -n 'mutate\|PRISTINE'` returns nothing).
+- [ ] 1a.5 Fix the gate battery's own laxness before it grades anything: `mutate()` runs the mutated
+      library under a bare `bash -c` while the dispatch step runs `set -uo pipefail`. Measured,
+      `[[ "$a" == "$b" ]]` with both unbound PASSES without `set -u` and aborts with it — so a typo
+      in the new field name would pass the battery and abort in production. Add `set -uo pipefail;`
+      to that `bash -c` string and to the sibling direct-call site.
 - [ ] 1a.2 Create `scripts/followthroughs/inngest-host-not-serving-7674.test.sh` — Guard 2 has no
-      suite at all today. The probe is already fixturable through
-      `INNGEST_SERVING_QUERY_BIN`, `INNGEST_SERVING_HOST`, `_HOST_NAME`, `_WINDOW`, `_LIMIT`.
+      suite at all today. The probe is already fixturable through `INNGEST_SERVING_QUERY_BIN`,
+      `INNGEST_SERVING_HOST`, `_HOST_NAME`, `_WINDOW`, `_LIMIT`. It is a NEW file, so Phase 1d's
+      "raise every floor touched" does not reach it: give it its own assertion floor and a must-FAIL
+      wrapper self-test, or its greenness means nothing. Its fixtures must be **double-encoded**
+      like the warehouse's `raw` column — a suite whose fixtures put the seam above the decode
+      reproduces #7674's 0/40-vs-40/40 measurement and passes while testing nothing.
 - [ ] 1a.3 Register that suite in `scripts/test-all.sh` with an explicit `run_suite` line.
       Followthrough suites are not auto-globbed and an unregistered one reddens
       `scripts/lint-orphan-test-suites.sh`. Registration also places Guard 2 in the **required**
@@ -127,25 +142,40 @@ the harness before anything grades anything.
 - [ ] 2.3 Implement the resolution, placed **above** the inner `case "$data_mount_src"` (inside the
       `*)` sub-arm it would leave `data_mount_devid=n/a` on a dedicated row): bounded `lsblk -s` to
       the base device taking the first NON-EMPTY value, reverse-map constrained to the
-      `scsi-0HC_Volume_*` namespace, four values (`scsi-0HC_Volume_<id>`, `__NOMATCH__`,
-      `__AMBIGUOUS__`, `__UNREADABLE__`).
-- [ ] 2.4 Implement the registry query, guarded on `command -v jq`, as a column-zero
+      `scsi-0HC_Volume_*` namespace with `[ -e "$a" ] || continue` guarding the glob (POSIX `sh`
+      iterates once over the literal pattern when nothing matches — measured, and the basename
+      carries a `*`), four values (`scsi-0HC_Volume_<id>`, `__NOMATCH__`, `__AMBIGUOUS__`,
+      `__UNREADABLE__`), plus `data_mount_base=<kernel name>` from the same call so
+      `__UNREADABLE__` stops being a three-way collision. End with the terminal charset collapse:
+      `case "$data_mount_devid" in '' | *[!A-Za-z0-9_.:-]*) data_mount_devid=__UNREADABLE__ ;; esac`,
+      and the numeric-or-sentinel equivalent for the other two.
+- [ ] 2.4 Implement the registry query, bound in the `dedicated)` arm **above** the inner `case`
+      (same reasoning as 2.3), with `2>/dev/null` on BOTH the curl and the jq — unredirected `jq`
+      stderr echoes the offending HTTP body into journald and thence to the third-party warehouse,
+      and the emitter's own `cutover_flag` capture records that principle. No GQL error text is ever
+      shipped; that asymmetry with `probe_scan_err` is deliberate. Guarded on `command -v jq`, as a
+      column-zero
       `readonly FUNCTIONS_GQL_QUERY='…'` line so the drift extractor's
       `grep -oE "^readonly FUNCTIONS_GQL_QUERY=.*"` can find it. `0` is a measurement; only a
       non-array, an error envelope, a transport failure or a missing `jq` is `__UNREADABLE__`.
-- [ ] 2.5 Implement the hash-tag collapse before the two-segment reduction. The rule must be total
-      over brace contents — a tag with no colon inside the braces must not survive verbatim — must
-      handle a tag that is not at the start of the key, must be idempotent, and must leave
-      `{queue}:queue:x` unchanged.
+- [ ] 2.5 Make the key-name reduction **identifier-aware**, not brace-aware. Replace any segment
+      matching an identifier shape (ULID `^[0-9A-HJKMNP-TV-Z]{26}$`, UUID `^[0-9a-f]{8}-[0-9a-f]{4}-`,
+      long hex `^[0-9a-f]{16,}$`, long digit run `^[0-9]{6,}$`) with a fixed token, applying the
+      same test to segment 2 and to brace contents alike. Measured during planning: fixing only the
+      braced shape leaves `estate:<ULID>:runs:1` leaking identically. Handle a tag that is not at
+      the start of the key, be idempotent, and leave `{queue}:queue:x` unchanged.
 - [ ] 2.6 Add both fields to BOTH emit sites — the `logger` line and the phone-home fallback. The
       byte-identical-payload assertion is what catches a one-sided edit.
 - [ ] 2.7 Update the probe unit's `Budget (#7695)` comment to the stated total: 53s plus `lsblk 5`,
       the by-id map at 5 and the registry `curl 5` = **68s** against the unchanged
       `TimeoutStartSec=120`. State the number.
 - [ ] 2.8 Widen the `FUNCTIONS_GQL_QUERY` drift pin in
-      `apps/web-platform/infra/inngest-cutover-flip.test.sh` from two files to three, and extend it
-      to cover the `jq` parse expression — the property Guard 2 row 3 tests lives in the parse, not
-      the query.
+      `apps/web-platform/infra/inngest-cutover-flip.test.sh` to cover the probe's copy, and extend
+      it to the `jq` parse expression — the property Guard 2 row 3 tests lives in the parse, not the
+      query. **Scope the widening by VALUE, not by name:** the constant name is `readonly`-defined
+      in three files today, and the third (`inngest-inventory.sh`) deliberately holds a different
+      query (`query InvFunctions`). A name-scoped widening drags it in and fails on a correct
+      difference.
 
 ## Phase 3 — the image bump
 
@@ -154,12 +184,19 @@ the harness before anything grades anything.
       `.github/workflows/build-inngest-bootstrap-image.yml` fires. A branch-push validation build is
       not available — its dispatch input validates against `^vinngest-v[0-9]+\.[0-9]+\.[0-9]+$`.
 - [ ] 3.3 **Watch that run to completion and read the published digest before touching any pin
-      site.** The workflow has no failure notification of any kind. If it fails, do not edit the
-      pins: delete the remote tag (`git push origin :refs/tags/vinngest-v1.1.32`), fix the carrier,
-      and re-tag at the corrected commit under the same number — the tag is disposable only while
-      no image exists for it. Once an image exists the number is spent; a late correction is
-      `vinngest-v1.1.33`, never a re-dispatch that moves the digest.
-- [ ] 3.4 Commit the digest into all four pin sites: `IREF` and `ZIREF` in
+      site.** The workflow has no failure notification of any kind. Whether the tag can be re-issued
+      is keyed on the REGISTRY, not on the run's conclusion: the build pushes before it signs and
+      before it mirrors, so a run that failed late has already published. Test with
+      `crane manifest ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.32`. A 404 means the tag is
+      disposable — delete it (`git push origin :refs/tags/vinngest-v1.1.32`), fix the carrier,
+      re-tag under the same number. If it resolves, the number is spent whatever the run said; go to
+      `vinngest-v1.1.33`. Never re-dispatch the default path on an existing tag — it moves the
+      digest and orphans the signature.
+- [ ] 3.4 Commit the digest into all four pin sites, then verify all four are byte-identical to
+      each other AND equal `crane digest ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.32` — a
+      count assertion proves a digest is present, not that it is the right one, and writing one
+      tag's digest under another tag's name has been measured and shipped here before. `IREF` and
+      `ZIREF` in
       `apps/web-platform/infra/cloud-init-inngest.yml` and in
       `apps/web-platform/infra/cloud-init.yml`. Keep the window between 3.2 and 3.4 to one build
       run — the pin drift-guard's AC6 fails repo-wide, on `main` and on sibling PRs, while it is
@@ -186,8 +223,10 @@ the harness before anything grades anything.
       equals the emitter's logger-line order as a **sequence**: B12 builds its comparison through
       `sort -u` and so does not pin emit order, which ADR-199 records as load-bearing.
 - [ ] 4.6 `scripts/followthroughs/inngest-host-not-serving-7674.sh`: add the `registry_fns` conjunct
-      to the same-row positive discriminator; update the header's two-field rationale to three;
-      report the observed value on the `not_serving` path.
+      to the same-row positive discriminator, **with a token boundary** —
+      `grep -cE 'registry_fns=[1-9][0-9]*( |$)'`, since the unbounded form matches
+      `registry_fns=1abc`. Update the header's two-field rationale to three; report the observed
+      value on the `not_serving` path.
 - [ ] 4.7 Add the producer↔consumer pin for `registry_fns`: assert by extraction across both files
       that the field name in the #7674 discriminator is byte-identical to the emitter's, failing
       loudly if either side comes back empty. Without it #8015 is the one fix that can silently do
@@ -213,11 +252,20 @@ the harness before anything grades anything.
       `stale_schema`, by design.
 - [ ] 5.6 Write the delivery follow-through probe under `scripts/followthroughs/`, its `run_suite`
       registration, its tracker directive (`follow-through` label, `earliest=<merge date>`,
-      `secrets=BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`), and its `secrets=` wiring in
-      `.github/workflows/scheduled-followthrough-sweeper.yml` if not already present. It exits 0
+      `secrets=BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}`). No sweeper workflow change is needed —
+      those three secrets are already in its probe env for the #7674 probe. It exits 0
       only on a row from a `boot_id` other than `906c015b-…` carrying `probe_schema=8`,
       `data_mount_devid=scsi-0HC_Volume_106261946` and a non-empty `registry_fns`; exit 2 while the
-      replace has not happened.
+      replace has not happened. `registry_fns` is graded `^[0-9]+$`, NOT `^[1-9][0-9]*$`:
+      `INNGEST_DIAGNOSTIC_BOOT` is a Doppler variable that survives the replace and is currently
+      `1`, so a non-empty requirement would make the closure unreachable forever. Add a conjunct
+      asserting `redis_key_patterns` carries no identifier-shaped substring, or the probe closes
+      #8013 on evidence of a different fix. Exit 1 stays reserved; `credentials_unprovisioned` and
+      `query_failed` each exit 2 with distinct reasons; the `${VAR:?msg}` form is banned. The PR
+      body uses `Ref #8017 / #8015 / #8013`, never `Closes` — the sweeper lists `--state open`, so
+      closing at merge makes every directive a permanent silent no-op. One directive per issue body,
+      all pointing at the same script, `earliest=` pinned past the same maintenance window as the
+      #7674 directive.
 - [ ] 5.7 Run `plugins/soleur/test/c4-count-parity.test.sh`.
 
 ## Phase 6 — full battery

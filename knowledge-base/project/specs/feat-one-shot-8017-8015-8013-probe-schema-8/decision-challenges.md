@@ -65,3 +65,44 @@ now names them at the point where they were wrong:
 - Follow-through enrollment was first declared "not required" on the grounds that nothing here is
   time-gated. True, but the closing observation depends on a host replace that is not part of this
   pull request, which is a deferred closure and exactly what the sweeper exists to catch.
+
+## Deepen-plan round (four more agents)
+
+Four further reviewers ran against the plan after it was committed: security, observability
+coverage, test design, and a mechanical verify-the-negative sweep. Findings applied. The ones a
+reader would want to know about, because each changed the design rather than the prose:
+
+- **The key-name fix was brace-aware and the property is identifier-aware.** Measured: the
+  brace-free shape `estate:<ULID>:runs:1` ships the ULID through the two-segment reduction with no
+  brace rule involved. The collapse-only fix would have closed #8013 for the shape the issue quoted
+  and left the identical leak standing one shape over — with an acceptance criterion, derived from a
+  brace corpus, passing over it. The reduction now tests segments for identifier shapes.
+- **The G14 rewrite had dropped a control and could be turned into a wildcard.** The two-line
+  replacement omitted the numeric validation of `expected_volume_id`, a raw dispatch string, and an
+  unquoted `[[ ]]` right-hand side makes `*` match every Hetzner alias — reproduced on bash 5.3.9.
+  The predicate is now five lines and each of the other four is load-bearing.
+- **The closure condition was unreachable.** The delivery probe required a non-empty `registry_fns`.
+  `INNGEST_DIAGNOSTIC_BOOT` is a Doppler variable, so it survives a host replace, and it is
+  currently `1` — the probe would have returned TRANSIENT forever *after* the replace that delivered
+  all three fixes. The gate is now `^[0-9]+$`; `0` is a measurement.
+- **`Closes #` would have made every follow-through directive a permanent silent no-op**, because
+  the sweeper lists `--state open`. The PR body uses `Ref`, one directive per issue body.
+- **The delivery probe verified nothing about #8013** and would have auto-closed it on evidence of a
+  different fix. It gained a no-identifier conjunct on `redis_key_patterns`.
+- **Property P2 had no test.** A G14 written with the expected id hardcoded would have passed every
+  RED row, every harness row, and the only must-PASS. A second must-PASS varying the pin was added.
+- **The gate battery ran the gate more permissively than production** — `mutate()` uses a bare
+  `bash -c` while the dispatch step runs `set -uo pipefail`, so `[[ "" == "" ]]` passed in the
+  harness and aborted in production. Fixing the harness is now a Phase 1a task.
+- **`__UNREADABLE__` was a three-way collision sold as a two-way split.** A `data_mount_base` field,
+  free from the `lsblk` call already being made, separates "nothing mounted" from "resolution
+  broken" from "wrong device".
+- **The tag re-issue rule was keyed on the wrong signal.** The build pushes before it signs and
+  mirrors, so a late failure has already published; the test is a `crane manifest` 404, not the
+  run's conclusion.
+- **The discoverability command was wrong in five ways** — no `doppler run`, no `-R`/`fromjson?`, no
+  host isolation, `--limit` too small, and a per-field grep destroying the same-row conjunction —
+  and `credentials_required` makes preflight skip it, so nothing mechanical would have caught it.
+- **One claim was overstated rather than wrong:** the scope-out said the change "strictly narrows an
+  existing identifier leak". It narrows one and adds another (the Hetzner volume id, same class as
+  the `instance_id` already shipping). The mechanism stands; the claim was corrected.
