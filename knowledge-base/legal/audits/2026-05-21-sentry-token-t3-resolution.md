@@ -206,7 +206,8 @@ third-party org" framing was incorrect at every layer.
 
 This audit + the 2026-05-19 probe-divergence audit
 (`knowledge-base/legal/audits/2026-05-19-sentry-token-scope-probe-divergence.md`)
-+ the Article 30 PA8 §(d) UPDATE block + the PIR Phase 9 Gate-3b Correction
+
+- the Article 30 PA8 §(d) UPDATE block + the PIR Phase 9 Gate-3b Correction
 section together constitute the §5(2) accountability evidence for the
 2026-05-17 disclosure correction. The substantive story (T0 falsification,
 operator ownership confirmed across both orgs, no third-party recipient

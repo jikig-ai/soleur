@@ -262,7 +262,7 @@ in the right disjunctive relation.
 
 The one risk in that copy is over-blocking rather than misstatement: §4(a)'s employer representation
 is **conditional** on the employer having rights in the work, and the bot's "*If none of the three is
-true for you, or you are not sure, tell us at legal@jikigai.com instead of signing*" would, read
+true for you, or you are not sure, tell us at <legal@jikigai.com> instead of signing*" would, read
 alone, tell a contributor whose employer has no rights at all not to sign. It does not stand alone —
 the paragraph closes "*None of the above applies if you are contributing your own work on your own
 time. In that case the one line at the top is genuinely the whole ask*", which is the antecedent-fails
@@ -289,7 +289,7 @@ at large, and a colleague is added by that route. Verified against §§1, 2, 3, 
 
 **The sentences:**
 
-> **Email that to legal@jikigai.com rather than posting it here**, unless you would rather it were
+> **Email that to <legal@jikigai.com> rather than posting it here**, unless you would rather it were
 > public. This thread is world-readable and permanent, and who you work for is yours to disclose or not.
 
 and its CONTRIBUTING.md counterpart:

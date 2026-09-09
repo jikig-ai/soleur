@@ -204,6 +204,18 @@ rc="$(rc_of "$LINT" "$FIX/violation-indirect-conditional-hatch.sh")"
 [ "$rc" = "1" ] && pass "indirect-only file with a conditional hatch is rejected" \
   || fail "indirect-only + conditional hatch should report rc=1, got rc=$rc"
 
+# `${!arr[@]}` is array-KEY expansion, a different construct from `${!name}`
+# indirect expansion: it yields index names, never a value. This fixture carries
+# NO xtrace refusal, so it is rc=1 the moment it is treated as in scope — which
+# is what the bare `\$\{!` spelling did to every script iterating an associative
+# array (#7935, scripts/merge-kb-index.sh).
+rc="$(rc_of "$LINT" "$FIX/outofscope-array-key-expansion.sh")"
+[ "$rc" = "0" ] && pass "array-key expansion \${!arr[@]} is OUT of scope (no credential, no refusal needed)" \
+  || fail "array-key expansion should report rc=0, got rc=$rc"
+reports "outofscope-array-key-expansion" \
+  && fail "array-key expansion must not be NAMED as a violation" \
+  || pass "array-key expansion is not named in the report"
+
 rc="$(rc_of "$LINT" "$FIX/compliant-indirect-unconditional.sh")"
 [ "$rc" = "0" ] && pass "indirect-only file refusing UNCONDITIONALLY is accepted (positive control)" \
   || fail "indirect-only + unconditional refusal should report rc=0, got rc=$rc"
@@ -425,6 +437,16 @@ mutate_row 'M6 fail-closed: unparseable treated as clean' \
 mutate_row 'M8 unenumerable: indirect arm dropped' \
   's/if INDIRECT_RE\.search\(body\) and not referenced_credentials\(lines\):/if False:/' \
   "$FIX/violation-indirect-conditional-hatch.sh" 1 0
+
+# M9: the array-key EXCLUSION on SIGNAL_INDIRECT (#7935). Reverting it to the bare
+# `${!` spelling puts every associative-array iteration back in scope, and the
+# fixture — which binds no credential and carries no refusal — goes rc=0 -> rc=1.
+# Without this row the exclusion is deletable at full green, and without the
+# exclusion the guard reports a violation on a script that handles no secret,
+# whose only remedies are a false xtrace refusal or a false baseline entry.
+mutate_row 'M9 array-key exclusion reverted to the bare ${! spelling' \
+  's/SIGNAL_INDIRECT = r"\\\$\\\{!\(\?!\[A-Za-z_\]\[A-Za-z0-9_\]\*\\\[\[\@\*\]\\\]\\\}\)"/SIGNAL_INDIRECT = r"\\\$\\\{!"/' \
+  "$FIX/outofscope-array-key-expansion.sh" 0 1
 
 # --- Rule D mutation rows: the GUARD's own operands ---------------------------
 # Anchored on the CONDITION KEYWORD, not on the full expression. Pinning the

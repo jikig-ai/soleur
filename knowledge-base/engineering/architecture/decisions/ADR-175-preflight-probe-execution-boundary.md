@@ -75,7 +75,6 @@ The distinction matters because layers 2 and 3 are not security controls.
 > by an anchored whole-preamble assertion in the F2 test; the Context paragraph's remark about
 > `env -i` is a claim about its **insufficiency alone**, never about its necessity.
 
-
 `/usr` and `/etc` bound read-only; `/home`, `/root`, `/run`, `/tmp` and `/var/tmp` replaced
 with tmpfs; the resolved `/etc/resolv.conf` target rebound; the repository bound
 **read-only** and made the working directory; the git **common dir** bound read-only when

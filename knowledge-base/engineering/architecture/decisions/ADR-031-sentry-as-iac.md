@@ -90,6 +90,7 @@ inferring ownership from any HTTP status.
   drop + serial re-import sequence. The `de.sentry.io` and `eu.sentry.io`
   regional hosts are reserved for slug-less endpoints (`/users/me/`, `/auth/*`)
   per the API row above.
+
 - **Audit script `api_host`** (`apps/web-platform/scripts/sentry-monitors-audit.sh`)
   region-probe loop MUST include `eu.sentry.io` (and prefer it over `sentry.io`
   for EU-resident orgs) — `de.sentry.io` will return 404 for every API call.
@@ -391,7 +392,7 @@ registered as a required status context.
 The plan asserted that `[ack-destroy]` "must sit in the merge commit, authored in GitHub's
 squash UI — the author cannot pre-stage it from the branch." That is **false for this repo**:
 `squash_merge_commit_message = COMMIT_MESSAGES`, so the squash body is composed from the
-branch commit messages — each commit's SUBJECT prefixed `* `, its BODY lines carried verbatim
+branch commit messages — each commit's SUBJECT prefixed `* `, its BODY lines carried verbatim <!-- markdownlint-disable-line MD038 -->
 (verified against merged commit `105799dbd`). An `[ack-destroy]` on its own line in a commit
 **body** therefore reaches the merge commit line-anchored and satisfies the apply gate; the
 same literal used as a commit **subject** becomes `* [ack-destroy]` and does not.
@@ -619,7 +620,9 @@ rules payload. It did not fail to survive the migration — it never matched, so
 flagged every monitor in the org since it shipped. The classes are rebound onto the routing
 graph that actually exists:
 
-    monitor  <--(slug)--  cron detector  --(workflowIds)-->  workflow
+```text
+monitor  <--(slug)--  cron detector  --(workflowIds)-->  workflow
+```
 
 Class A is now a **count plus a machine-checked invariant**, `class_a_count ==
 cron_detector_count`, asserted in the suite rather than stated here. A literal baseline (55
@@ -745,7 +748,6 @@ Three corrections to what this paragraph said when first written, all measured:
 
 Within that scope it no longer surfaces months later as an intermittent red.
 
-
 **Amendment (2026-09-04, #7650 Phase 2) — 27 of the 29 alert rules move to `sentry_alert`;
 `forget` enters the destroy gate's vocabulary; the AP-001 deviation shrinks 4 → 1.**
 
@@ -855,7 +857,6 @@ rather than tidied up in the same PR.
 `scripts/sentry-alert-live-fidelity.sh` diffs all 27 against the committed capture on a daily
 Inngest-dispatched schedule and as a post-apply step. It covers what a clean plan cannot: a
 rule that exists, plans clean, and matches nothing.
-
 
 ## Consequences
 

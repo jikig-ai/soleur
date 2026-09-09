@@ -23,6 +23,7 @@ Financial reporting specialist. Synthesize financial data into clear, structured
 ## Output Format
 
 Financial reports should include:
+
 1. Executive summary with key highlights
 2. Structured financial data in tables
 3. Period-over-period comparisons

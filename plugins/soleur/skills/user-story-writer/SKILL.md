@@ -71,4 +71,3 @@ Produce a structured document containing:
 - Prioritized list of user stories (using the template above)
 - Rationale for decomposition approach and sequencing
 - Summary of how stories collectively solve the original problem
-

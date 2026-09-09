@@ -57,6 +57,50 @@ silently, and it never denies.**
 value carrying the field separator, an unparseable or truncated document, a lone surrogate, an
 oversize payload, `jq` missing, or our own jq program broken.
 
+> **Errata — 2026-09-08 (#7275).** This decision is unchanged; one factual claim in it was not.
+> The list above is correct about the OUTCOME — every one of those inputs did reach `ask` — but it
+> implied the classifier could tell them apart, and it could not. `hook_parse_input` read jq's
+> return code as `${PIPESTATUS[1]:-0}` on the line after the command substitution, where
+> `PIPESTATUS` describes the assignment rather than the pipeline inside it. Measured on bash 5.3.9
+> that array is `(0)` with length 1, so the read was unconditionally `0`, the `jq_rc == 3` branch
+> was dead code, and empty stdin, a rejected document and **our own jq program failing to compile**
+> were all recorded as `unparseable`. The row this ADR most cared about keeping separate — "our own
+> jq program broken" — was the one being reported as the model having sent junk.
+>
+> Two further gaps the same defect concealed: a JSON `null` root satisfied every accessor, produced
+> five empty strings and returned 0 (a silent total disarm, no incident row, no ask); and a valid
+> envelope followed by trailing garbage emitted a complete six-field record while jq exited 5, which
+> the count-only check accepted as a successful parse.
+>
+> #7275 recovers the return code as the command substitution's own EXIT STATUS (`exit "$_hi_rc"`
+> inside it, `|| jq_rc=$?` on the assignment), requires an object root, and splits the enum into
+> `empty` / `baddoc` / `nonobject` / `multidoc` and `internal:rc<N>` / `internal:count`. No decision
+> here is amended and no new ordinal is claimed — the posture question this ADR left open (whether
+> `hook_input_should_ask` should be unconditional for hooks gating destructive operations) remains
+> open and is deferred with its measured objections recorded on #7275.
+>
+> Three corrections review forced, recorded because each was this errata's own defect class
+> reintroduced by its own fix. (1) An intermediate revision carried the rc out INSIDE the output as
+> a trailing field and stripped it before the split; that was sound but co-mingled a control value
+> into a stream the payload partly controls, where the exit status carries the same information
+> with no such argument required. (2) `baddoc` is reached on jq **rc 5 only** — the intermediate
+> revision let every other non-zero code default to it, so a usage error (rc 2) and an OOM kill
+> (137) were reported as the model having sent junk, which is this errata's subject one code over.
+> (3) jq stream-processes concatenated documents, so `{...} {...}` emits an exact multiple of six
+> slots with rc 0; that is now `multidoc` rather than `separator`, which named a cause that had not
+> occurred.
+>
+> **Known and deliberately NOT closed:** an empty object `{}` reaches five empty strings and
+> returns 0 — the same observable state as the `null` root above. `A4` in the contract suite
+> asserts that absence, null and empty are legitimate and must still pass, and a minimal
+> Read-shaped payload is all-empty by the same measure, so closing it means overturning a tested
+> decision. NOT tracked separately, and deliberately so: a CONCUR gate rejected the scope-out
+> filing on the grounds that the reviewer named one approach rather than two and explicitly
+> de-escalated ("I am not claiming an exploit"), and that one envelope serializes one tool call — so
+> `{}` means the model supplied no command and there is nothing for a guard to match. The reasoning
+> is recorded at the `SCOPE` block in `_HOOK_INPUT_JQ` instead, where the next person to touch the
+> predicate will read it. Coverage strictly increased; no payload became more dangerous.
+
 `ask` is what makes the rest of the design collapse to something small. It is not `deny`: the
 operator can approve and proceed, so nothing bricks — which was the *only* reason fail-open was
 needed. Once `ask` covers every failure, the size cap has no denial-of-service left to mitigate, the

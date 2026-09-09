@@ -103,6 +103,7 @@ Apply fixes to implementation code only. NEVER modify test files, add skip annot
 Re-run the full test suite after applying fixes.
 
 Evaluate the result (same `failures + killed` count and the same row order as §2):
+
 - Any `^[KILLED]` line or `rc` 3: do NOT stage, do NOT report success, do NOT reset — take the *Suite terminated* row
 - All pass (`rc` 0): stage all fixes with `git add -A`, report success, STOP
 - Failures decreased: continue to next iteration (fixes stay in working tree; the next iteration's checkpoint commits them)

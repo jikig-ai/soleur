@@ -361,7 +361,6 @@ dead read. The wiring is now asserted statically
 composite actions — scoping it to the workflow alone would leave a hole the exact shape of the
 bug, because the restore leg runs inside one.
 
-
 ## Amendment 2026-08-09 — A2's blob-completeness obligation is PER CHILD
 
 **The decision is unchanged.** A recut is still authorized only when CI has just proven, by
@@ -489,7 +488,6 @@ Two corrections to the amendment above, both from a nine-agent review of the fix
   bundle blob is PRESENT and hashes correctly. It does not parse it, so it cannot say the signature
   is over the right subject. A2 asserts the pull path is re-materialisable, not that `cosign verify`
   will succeed.
-
 
 - **`platform.architecture: unknown` as an attestation signal** is an assumption, not a measured
   invariant. Both it and the `vnd.docker.reference.type` annotation come from the same BuildKit

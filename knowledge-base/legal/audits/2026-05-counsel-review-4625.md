@@ -197,6 +197,7 @@ basis matches the corrected dual-basis position already in mig-074, the template
    precondition (template 1.x → 2.0.0).
 
 **Lockstep (the #4625 commit already exercised this machinery — replicate it):**
+
 - Re-pin `apps/web-platform/lib/legal/legal-doc-shas.ts` for the DPD hash.
 - Update the Eleventy mirror `plugins/soleur/docs/pages/legal/data-protection-disclosure.md`
   §2.3(w) body in lockstep (source↔mirror date + content), per the

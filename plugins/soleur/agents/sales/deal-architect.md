@@ -22,6 +22,7 @@ Deal architecture specialist. Design the materials and frameworks that help clos
 ## Output Format
 
 Deal materials should include:
+
 1. Clear structure with section headers
 2. Pricing tables with options (good/better/best where applicable)
 3. Explicit assumptions and exclusions

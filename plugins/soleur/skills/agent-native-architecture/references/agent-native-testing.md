@@ -3,11 +3,13 @@ Testing agent-native apps requires different approaches than traditional unit te
 </overview>
 
 <testing_philosophy>
+
 ## Testing Philosophy
 
 ### Test Outcomes, Not Procedures
 
 **Traditional (procedure-focused):**
+
 ```typescript
 // Testing that a specific function was called with specific args
 expect(mockProcessFeedback).toHaveBeenCalledWith({
@@ -18,6 +20,7 @@ expect(mockProcessFeedback).toHaveBeenCalledWith({
 ```
 
 **Agent-native (outcome-focused):**
+
 ```typescript
 // Testing that the outcome was achieved
 const result = await agent.process("Great app!");
@@ -32,12 +35,14 @@ expect(storedFeedback.importance).toBeLessThanOrEqual(5);
 ### Accept Variability
 
 Agents may solve problems differently each time. Your tests should:
+
 - Verify the end state, not the path
 - Accept reasonable ranges, not exact values
 - Check for presence of required elements, not exact format
 </testing_philosophy>
 
 <can_agent_do_it_test>
+
 ## The "Can Agent Do It?" Test
 
 For each UI feature, write a test prompt and verify the agent can accomplish it.
@@ -116,9 +121,11 @@ describe('Location Awareness Tests', () => {
   }
 });
 ```
+
 </can_agent_do_it_test>
 
 <surprise_test>
+
 ## The "Surprise Test"
 
 A well-designed agent-native app lets the agent figure out creative approaches. Test this by giving open-ended requests.
@@ -181,9 +188,11 @@ expect(result.response).not.toContain("Could you clarify");
 // If the agent asks for clarification on something it should understand,
 // you have a context injection or capability gap
 ```
+
 </surprise_test>
 
 <parity_testing>
+
 ## Automated Parity Testing
 
 Ensure every UI action has an agent equivalent.
@@ -258,9 +267,11 @@ describe('Context Parity', () => {
   });
 });
 ```
+
 </parity_testing>
 
 <integration_testing>
+
 ## Integration Testing
 
 Test the full flow from user request to outcome.
@@ -350,9 +361,11 @@ describe('Failure Recovery', () => {
   });
 });
 ```
+
 </integration_testing>
 
 <snapshot_testing>
+
 ## Snapshot Testing for System Prompts
 
 Track changes to system prompts and context injection over time.
@@ -386,9 +399,11 @@ describe('System Prompt Stability', () => {
   });
 });
 ```
+
 </snapshot_testing>
 
 <manual_testing>
+
 ## Manual Testing Checklist
 
 Some things are best tested manually during development:
@@ -437,9 +452,11 @@ Ask about things that should exist but might not be properly connected:
 "Continue where I left off"
 → Should reference recent activity if available
 ```
+
 </manual_testing>
 
 <ci_integration>
+
 ## CI/CD Integration
 
 Add agent-native tests to your CI pipeline:
@@ -499,9 +516,11 @@ if (process.env.GITHUB_REF === 'refs/heads/main') {
   describe('Full Integration Tests', () => { ... });
 }
 ```
+
 </ci_integration>
 
 <test_utilities>
+
 ## Test Utilities
 
 ### Agent Test Harness
@@ -555,12 +574,14 @@ test('full flow', async () => {
   });
 });
 ```
+
 </test_utilities>
 
 <checklist>
 ## Testing Checklist
 
 Automated Tests:
+
 - [ ] "Can Agent Do It?" tests for each UI action
 - [ ] Location awareness tests ("write to my feed")
 - [ ] Parity tests (tool exists, documented in prompt)
@@ -569,12 +590,14 @@ Automated Tests:
 - [ ] Failure recovery tests
 
 Manual Tests:
+
 - [ ] Natural language variation (multiple phrasings work)
 - [ ] Edge case prompts (open-ended requests)
 - [ ] Confusion test (agent knows app vocabulary)
 - [ ] Surprise test (agent can be creative)
 
 CI Integration:
+
 - [ ] Parity tests run on every PR
 - [ ] Capability tests run with API key
 - [ ] System prompt completeness check

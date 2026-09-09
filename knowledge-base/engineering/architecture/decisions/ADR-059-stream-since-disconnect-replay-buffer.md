@@ -22,6 +22,7 @@ Add a **server-side, in-memory, per-conversation ring buffer** (`apps/web-platfo
 In-memory, per-conversation, on the single backend instance. **Extends AP-013 → ADR-027** and **mirrors `TtlDedupMap`** for lifecycle discipline: bounded (`maxSize`), TTL-swept (amortized sweep-on-write, no new timer), oldest-eviction, class-based, process-local, with a `reset()` test seam.
 
 **Alternatives considered:**
+
 - **(a) Persist to Supabase** — rejected. Adds an Art. 30 surface (CLO), TTL management, and write amplification on the hot per-frame stream path. YAGNI at single-instance topology.
 - **(b) Redis** — rejected *at this ADR's time*. A new infra dependency versus the established in-process pattern of AP-013/ADR-027, with **no multi-instance requirement to justify it** at single-host topology. **Re-opened by ADR-068 (2026-06-30):** the multi-host move IS that requirement. The buffer migrates to a self-hosted EU session-Redis in ADR-068 Phase 4a (TLS + `requirepass`/ACL + private-subnet firewall + per-`workspace_id` namespacing), preserving the counter-outlives-`clear` semantics below. Phases 1–3 keep the in-process buffer (affinity makes it host-local-sufficient).
 

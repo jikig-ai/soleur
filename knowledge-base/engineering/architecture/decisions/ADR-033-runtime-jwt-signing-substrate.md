@@ -68,18 +68,21 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 ### If Option C is selected
 
 **Positive:**
+
 - `SUPABASE_JWT_SECRET` removed from Doppler dev + prd; `createHmac` removed from `tenant.ts`. Soleur's blast radius narrows.
 - New-project provisioning runbook drops the dashboard-paste step.
 - Substrate moves to Supabase's default asymmetric posture; future auth-vendor swaps simpler.
 - ADR-033 + migrations 047/048 + tests document the contract; the `authentication_method='otp'` gate is API-readable and grep-able.
 
 **Negative:**
+
 - Cold-start latency +200-500ms on first tenant query per session.
 - Hook fires on every project-wide auth event; pass-through gate must remain correct as Supabase evolves `authentication_method` values.
 - Mgmt API hook registration is a new operator step (gated `[ack-needed]`).
 - `auth.sessions` row growth bounded by Supabase's session sweeper (default 7d refresh-token TTL).
 
 **Neutral:**
+
 - `precheck_jwt_mint` retains its rate-limit + jti role; signature shape unchanged (only ERRCODE shifts via migration 048).
 - `denied_jti` revocation unchanged.
 - `SUPABASE_SERVICE_ROLE_KEY` exposure unchanged.
@@ -87,18 +90,21 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 ### If Option D is selected
 
 **Positive:**
+
 - No migrations, no Dashboard clicks, no 16-suite re-run, no GoTrue rate-limit dependency for the hot path.
 - Latency unchanged (~1ms HS256 sign).
 - Tenant-isolation contract unchanged from PR-B.
 - Rollback path simpler (no Supabase Mgmt API state to revert).
 
 **Negative:**
+
 - Soleur continues to hold signing material; the leak class this refactor was framed against remains.
 - Quarterly rotation runbook must be authored AND exercised; dual-secret verification path must be implemented if non-destructive rotation is required.
 - Supabase HS256 deprecation (signaled for 2026) will force a future migration with less headroom than the current window.
 - ADR-033 itself becomes a forward-looking debt anchor — the substrate swap is deferred, not retired.
 
 **Neutral:**
+
 - `SUPABASE_SERVICE_ROLE_KEY` exposure unchanged.
 - `precheck_jwt_mint` + `denied_jti` paths unchanged.
 - New-project provisioning runbook unchanged.
@@ -106,10 +112,12 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 ## Phase 0 probe results (live-captured 2026-05-18)
 
 ### 0.1 — JWKS asymmetric enablement (DONE)
+
 - `GET ${SUPABASE_URL}/auth/v1/.well-known/jwks.json` returns `{"count":1, "algs":["ES256"], "kids":["3605e4cb-db60-461d-a122-969e7671f66b"]}` on the **dev** project (`mlwiodleouzwniehynfz`).
 - Dashboard "Enable JWT Signing Keys" not required on dev (already on by default).
 
 ### 0.2 — generateLink + verifyOtp baseline shape (DONE)
+
 - One cycle against synthesized fixture `tenant-isolation-*@soleur.test`.
 - JWT header: `{alg:"ES256", kid:"3605e4cb-…", typ:"JWT"}` — assert `alg != "HS256"` holds.
 - JWT payload claim set (BEFORE hook): `aal, amr, app_metadata, aud, email, exp, iat, is_anonymous, iss, phone, role, session_id, sub, user_metadata`.
@@ -119,12 +127,14 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 - **REST shape note for implementers**: `admin/generate_link` returns the hashed token at the response **root** (`.hashed_token`), not under `.properties.hashed_token`. The supabase-js wrapper exposes it as `data.properties.hashed_token` — the plan's TS pseudocode (and `lib/supabase/tenant.ts` post-#3363) uses the supabase-js path; the curl-based runbook (Deploy-Order §a/c) uses the root path. Both correct for their layer.
 
 ### 0.4 — `authentication_method = 'otp'` gate (CONFIRMED empirically; insufficient alone — see §0.7)
+
 - The baseline JWT payload includes `amr=[{method:"otp", timestamp:…}]`, confirming that the `verifyOtp` flow exposes `method="otp"` in `amr`.
 - Per Supabase's [Custom Access Token Hook input spec](https://supabase.com/docs/guides/auth/auth-hooks/custom-access-token-hook), the hook receives `event.authentication_method` as a single string (the most-recent method). On the `generateLink+verifyOtp` path, that string is `"otp"`.
 - Gate decision recorded by plan-review panel: `IF v_auth_method <> 'otp' THEN RETURN claims unchanged END IF`. **PARTIAL — was assumed sufficient for projects using password-based dashboard auth, but Soleur's dashboard uses `signInWithOtp` + `verifyOtp({type:'email'})` for user-facing login (see `components/auth/login-form.tsx:83`, `app/(auth)/signup/page.tsx:74`).** The dashboard path is indistinguishable from the runtime path at the hook event level. See §0.7 for the empirical follow-up and the marker-table pivot that strengthens this gate.
 - Future-optimization footnote retained from plan: if a future PR needs distinct runtime aud per founder, channel (a) `auth.users.app_metadata.target_aud`, channel (b) `verifyOtp` audience param.
 
 ### 0.5 — latency baseline (DONE, 10 cycles sequential)
+
 - `generateLink`: p50=328ms, p95=408ms
 - `verifyOtp`: p50=330ms, p95=376ms
 - **total p50=664ms, p95=753ms, min=627ms, max=753ms**
@@ -132,6 +142,7 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 - Cold-start UX impact: +~750ms on first tenant query per session vs. previous ~1ms HS256. Below PR-B's 1s session-start SLO.
 
 ### 0.6 — rate-limit defaults (DEFERRED empirical probe; defaults recorded)
+
 - **Decision**: defer the 60-cycle empirical rate-limit probe per session-state (2026-05-18 second session). Rationale: wasteful (risks tripping per-IP limits affecting unrelated dev workflows); the precheck `60/hour` ceiling is the durable canary regardless.
 - **Defaults from Supabase docs** ([rate-limits guide](https://supabase.com/docs/guides/auth/rate-limits), [auth-config endpoint](https://supabase.com/docs/reference/api/v1-update-a-projects-auth-config)):
   - `RATE_LIMIT_TOKEN_REFRESH = 10` requests / IP / hour
@@ -142,6 +153,7 @@ The decision overrides the recommendation to park-with-artifact-commit. Operator
 - **Follow-up tracking issue** (to be filed alongside this PR): "Empirical Supabase Auth rate-limit probe — 60-cycle generate+verify with timeline measurement once observability surface lands." Filing pattern per `wg-when-deferring-a-capability-create-a`.
 
 ### 0.7 — hook-event discriminator probe + marker-table pivot (2026-05-18, Phase-4 review escalation)
+
 - **Trigger**: `/soleur:review` security-sentinel agent flagged P1 (single-user-incident threshold): Soleur's user-facing dashboard login uses `signInWithOtp` + `verifyOtp({type:'email'})` (see `components/auth/login-form.tsx:83`, `app/(auth)/signup/page.tsx:74`), identical to the runtime mint path's `auth.admin.generateLink` + `verifyOtp({token_hash, type:'email'})` from the GoTrue server's perspective. The §0.4 gate (`authentication_method = 'otp'`) cannot distinguish them.
 - **Empirical probe** (Phase 4, captured against dev 2026-05-18): runtime path (`verifyOtp` via `token_hash`) and dashboard path (`verifyOtp` via 6-digit `email_otp`) produce **identical** JWT structure modulo per-call randomness (jti, session_id). All discriminator candidates were exhaustively compared:
 

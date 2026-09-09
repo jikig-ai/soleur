@@ -96,7 +96,6 @@ Note that scope does not change this path: installs made with `--scope project` 
 `--scope local` still cache under your home directory, so the directory above is yours to
 check regardless of how you installed.
 
-
 </details>
 
 **For existing codebases:** Run `/soleur:sync` first to populate your knowledge-base with conventions and patterns.

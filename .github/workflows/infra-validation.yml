@@ -1713,6 +1713,31 @@ jobs:
       # and run-registered-suites.sh derives its list from it. Registering it here instead would
       # leave it uncovered by scripts/test-all.sh.
 
+  # (#7695) The THIRD base64gzip'd host, and the last one without a byte gate. The registry block
+  # directly above closes with "the registry host ... had none"; the inngest host had none either,
+  # for longer, and that is not a coincidence -- each gate was added by the incident it took to
+  # notice the host was missing one. This one's incident: #7778 grew cloud-init-inngest.yml past
+  # the cap on 2026-09-04, the merge apply's `-target=` allow-list contains no `hcloud_server.*`
+  # so terraform never planned the resource and never submitted the payload to Hetzner, and four
+  # days later a replace dispatch DESTROYED the host and could not recreate it.
+  #
+  # `plugins/soleur/test/cloud-init-user-data-size.test.ts` now carries a WALKER arm that fails
+  # when any base64gzip'd host in this root lacks a committed budget gate, so a FOURTH host cannot
+  # repeat the pattern -- the enumeration is derived, not hand-maintained.
+  inngest-userdata-budget:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    needs: detect-changes
+    if: needs.detect-changes.outputs.directories != '[]'
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Measure rendered inngest user_data against Hetzner's 32,768 B cap
+        run: bash apps/web-platform/infra/inngest-userdata-budget.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:
@@ -1887,12 +1912,13 @@ jobs:
   # there would be noise. `always()` is required because this job exists to run when its
   # dependencies failed. `continue-on-error` so a Resend outage cannot itself red the run.
   notify-main-failure:
-    needs: [detect-changes, validate, deploy-script-tests, registry-userdata-budget, infra-validate-required]
+    needs: [detect-changes, validate, deploy-script-tests, registry-userdata-budget, inngest-userdata-budget, infra-validate-required]
     if: |
       always() && github.event_name == 'push' &&
       (needs.validate.result == 'failure' ||
        needs.deploy-script-tests.result == 'failure' ||
        needs.registry-userdata-budget.result == 'failure' ||
+       needs.inngest-userdata-budget.result == 'failure' ||
        needs.infra-validate-required.result == 'failure')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -1903,5 +1929,5 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[ALERT] Infra Validation failed on main'
-          body: '<p><strong>Infra Validation failed on a push to main.</strong></p><p>Commit: <code>${{ github.sha }}</code></p><p>validate=${{ needs.validate.result }} · deploy-script-tests=${{ needs.deploy-script-tests.result }} · registry-userdata-budget=${{ needs.registry-userdata-budget.result }} · infra-validate-required=${{ needs.infra-validate-required.result }}</p><p>A red infra gate on main means the merged state was never validated by a PR run of this workflow — an admin/force merge, or two individually-green PRs whose merge order produced an untested state.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          body: '<p><strong>Infra Validation failed on a push to main.</strong></p><p>Commit: <code>${{ github.sha }}</code></p><p>validate=${{ needs.validate.result }} · deploy-script-tests=${{ needs.deploy-script-tests.result }} · registry-userdata-budget=${{ needs.registry-userdata-budget.result }} · inngest-userdata-budget=${{ needs.inngest-userdata-budget.result }} · infra-validate-required=${{ needs.infra-validate-required.result }}</p><p>A red infra gate on main means the merged state was never validated by a PR run of this workflow — an admin/force merge, or two individually-green PRs whose merge order produced an untested state.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}

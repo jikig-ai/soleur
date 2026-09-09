@@ -1407,6 +1407,7 @@ fail-closed-gates
 fail-loud
 fail-open
 fail-safe
+fail-safe-polarity
 fail-soft
 fail2ban
 fails
@@ -2146,6 +2147,7 @@ merge-livelock
 merge-pr
 merge-queue
 merge-ref
+merge-semantics
 merge-strategy
 merge-time-timebomb
 merge-time-verification
@@ -2703,6 +2705,7 @@ practices
 prd_terraform
 pre
 pre-commit
+pre-existing-failures
 pre-merge-gate
 pre-merge-hook
 pre-merge-rebase-hook
@@ -3354,6 +3357,7 @@ sha-pinning
 sha256
 shallow-fetch
 shape-vs-truth-acs
+shard
 share
 shared
 shared-documents

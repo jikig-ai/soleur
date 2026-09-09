@@ -21,6 +21,29 @@ verification passes — no human revisit required.
    - Any other exit = TRANSIENT (network failure, timeout → sweeper retries next sweep)
    - **Exit 78 = refused to run under shell tracing** (`EX_CONFIG`, #7797). It lands in the TRANSIENT bucket above, which is the fail-safe direction — never a false PASS — but it is a *configuration* signal, not a network one: the probe declined because tracing was on while a live credential was in scope. Re-run with the credential unset to trace safely. A probe stuck reporting 78 every sweep is a caller enabling `-x`, not a flaky dependency.
    - The script may print human-readable output to stdout/stderr; the sweeper captures the last 4 KB and posts it as a comment.
+   - **A registered sub-vocabulary inside the TRANSIENT bucket, for NOTIFY-ONLY probes.** Some
+     trackers must never be closed by a probe — a legal record whose close is an operator's
+     judgement, say. Such a probe can take neither 0 (the close verb) nor 1 (which comments
+     "still exits 1" and reads as a regression), so *every* verdict it has lands in the bucket
+     above and the sweeper's heading renders them identically. Three codes are reserved so the
+     heading distinguishes them: **2 = NOT YET** (measured, nothing qualifies yet — the normal
+     daily state), **3 = CANNOT ESTABLISH** (the probe could not measure, and says why), and
+     **5 = ACTION REQUIRED** (the condition fired; a human must act). `sweep-followthroughs.sh`
+     maps these to words in the comment heading; anything else still reads TRANSIENT. First use:
+     `scripts/followthroughs/ccla-representative-icla-7922.sh`. A notify-only probe should say
+     so in its header and assert the never-0/never-1 invariant in its own suite — an exit-code
+     contract nothing drives is a comment.
+   - **State the probe's CREDENTIAL POSTURE in its header, and be exact about what "none" covers.**
+     A probe declaring no `secrets=` holds no credential *in its environment*. That is not the same
+     as running unauthenticated: `actions/checkout` persists a token into `.git/config`, so any
+     `git fetch` the probe makes uses it whether or not the probe knows. If the probe's reads are
+     genuinely anonymous, set `persist-credentials: false` on the workflow's checkout and measure
+     the anonymous read once — do not infer it.
+   - **A probe that will one day be RETIRED needs its retirement written down where the probe is.**
+     When the tracker closes, the probe file usually goes with it — and anything else that
+     references it (a parity arm in another suite, a back-pointer comment in a third file, a
+     runbook section) is left dangling, discovered by whoever next reddens that suite. List those
+     references in the probe's header under a `RETIREMENT:` line, so the deletion is one grep.
    - The script must be deterministic in its exit semantics: do not exit 0 on partial success.
    - **Never gate the exit code on `: "${VAR:?msg}"`.** Under a non-interactive shell that word-expansion aborts with status **1** (= FAIL in this contract), so a trailing `|| { echo TRANSIENT; exit 2; }` is dead code and an unprovisioned/empty secret reports FAIL instead of TRANSIENT. Use `if [[ -z "${VAR:-}" ]]; then echo "TRANSIENT: ..." >&2; exit 2; fi`. **Enforced mechanically by `scripts/lint-followthrough-varq-ban.sh`** (registered in `scripts/test-all.sh`, merge-blocking `test-scripts` shard; #6757) — a banned form on any executable probe line reddens CI. Accept both `200` AND `201` from the Supabase Management query endpoint (`/database/query` returns 201). Verified in `scripts/followthroughs/autovacuum-thrash-6168.sh` (PR #6164) — see `knowledge-base/project/learnings/best-practices/2026-07-07-followthrough-and-shape-gate-silent-falseness.md`.
    - **Query a sink the signal is ACTUALLY written to, and fail-safe when the signal path is unproven.** A soak that greps a sink the target signal never reaches PASSes vacuously and auto-closes the tracker blind (#5934: queried Sentry for an in-sandbox line that this host's `vector.toml` never mirrors to Sentry — only Better Stack). Verify the emit→sink wiring before trusting a zero-count; require a positive liveness marker (proof the producer ran) before treating "zero bad events" as PASS, and exit **TRANSIENT** (not PASS) on any auth/query failure or missing-liveness — so the gate can never false-close.

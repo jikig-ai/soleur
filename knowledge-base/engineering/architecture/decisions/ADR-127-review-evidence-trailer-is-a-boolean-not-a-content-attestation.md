@@ -95,7 +95,7 @@ Pinned by `plugins/soleur/skills/review/test/emit-review-trailer.test.sh` (12 as
 drift).** Rejected on two grounds.
 
 The decisive one: it closes nothing as scoped. The gate is a three-signal **OR**
-and every leg is a boolean. The legacy `review: ` subject pattern is checked
+and every leg is a boolean. The legacy `review: ` subject pattern is checked <!-- markdownlint-disable-line MD038 -->
 *before* the trailer, so content-binding the trailer leaves the demonstrated
 bypass working verbatim as `git commit --allow-empty -m "review: x"`. Signal 1
 is a boolean over the branch diff; Signal 3 (a `code-review`-labelled issue

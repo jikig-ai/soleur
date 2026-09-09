@@ -31,6 +31,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-cloudflare/scripts/provision-cloudf
 ```
 
 The script:
+
 1. Validates prerequisites (DPA gate, format validation, tool availability)
 2. Checks idempotency (warns if `cloudflare.tf` already exists)
 3. Generates `provisioning/<slug>/cloudflare.tf` with 4 permission groups + sensitive output

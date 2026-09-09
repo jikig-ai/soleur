@@ -84,6 +84,7 @@ Concretely, this ADR freezes four cross-consumer contract constraints:
 
 The emitter sanitizes in a fixed, load-bearing order:
 
+<!-- markdownlint-disable MD038 -->
 | Step | Why |
 |---|---|
 | drop `^Using ` preamble lines | The pinned Doppler CLI v3.75.3 writes two `Using DOPPLER_* from the environment` lines totalling 173 B of the 246 B auth-failure stderr. A leading-bytes cap ships pure noise and truncates the cause away — this is what made `head -c 200` the wrong instrument. |
@@ -94,6 +95,7 @@ The emitter sanitizes in a fixed, load-bearing order:
 | trim leading/trailing whitespace | Defensive. The "Sentry drops untrimmed values" claim is undocumented, so this is cheap insurance, not a fix for a known vendor behaviour. |
 | `tail -c 180` | Under the documented 200-char tag-value limit. An over-long value is **silently truncated at 2xx**, not rejected — so the cap guards against losing the cause inside a surviving event, not against losing the event. |
 | printable-ASCII pass **after** the cap | `tail -c` is byte-wise and can split a multi-byte sequence. Ordering matters: the pass must run after the cut, not before. |
+<!-- markdownlint-enable MD038 -->
 
 The producer additionally scrubs `dp\.[a-z]*\.[A-Za-z0-9_-]*` before any write. The measurement
 that the CLI does not echo its token is pinned to v3.75.3, and CLI-version behaviour is itself an
@@ -296,7 +298,6 @@ printable-ASCII pass this ADR already pins.
 >
 > The message literals this ADR freezes are unchanged. #7460 adds a NEW emit
 > (`stage:betterstack_ingest`) and new tags; it renames nothing.
-
 
 Sentry is unconditional from the **baked** DSN. Better Stack fires only when
 `BETTERSTACK_LOGS_TOKEN` is present in the environment — true **only** under `doppler run`.

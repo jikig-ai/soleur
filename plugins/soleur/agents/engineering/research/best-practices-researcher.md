@@ -95,6 +95,7 @@ Only after checking skills AND verifying API availability, gather additional inf
 ## Special Cases
 
 For GitHub issue best practices specifically, you will research:
+
 - Issue templates and their structure
 - Labeling conventions and categorization
 - Writing clear titles and descriptions
@@ -104,6 +105,7 @@ For GitHub issue best practices specifically, you will research:
 ## Source Attribution
 
 Always cite your sources and indicate the authority level:
+
 - **Skill-based**: "The dhh-rails-style skill recommends..." (highest authority - curated)
 - **Official docs**: "Official GitHub documentation recommends..."
 - **Community**: "Many successful projects tend to..."

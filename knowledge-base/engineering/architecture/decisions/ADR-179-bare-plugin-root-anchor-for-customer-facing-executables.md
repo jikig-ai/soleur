@@ -119,7 +119,6 @@ Mandatory companion, before the first producer, in every command file and in eve
 > one `plugin-root-anchoring.test.ts` G5 actually pins: `incident`, `legal-generate`,
 > `linear-fetch`. The ~105 remaining non-gate `skills/**` sites stay deferred to #7453.
 
-
 ```bash
 [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ] \
   && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" \

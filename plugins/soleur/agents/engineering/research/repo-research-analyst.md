@@ -100,6 +100,7 @@ Structure your findings as:
 **Search Strategies:**
 
 Use the built-in tools for efficient searching:
+
 - **Grep tool**: For text/code pattern searches with regex support (uses ripgrep under the hood)
 - **Glob tool**: For file discovery by pattern (e.g., `**/*.md`, `**/CLAUDE.md`)
 - **Read tool**: For reading file contents once located

@@ -457,6 +457,7 @@ architectural axis, so no new ADR):
   error rather than trusting a bare non-zero exit as "denied").
 
 **Residuals (recorded, not resolved here):**
+
 - The header bucket's confidentiality-at-rest is already gated on tfstate secrecy (the passphrase
   lives there); the escrow does not improve that, it only prevents *loss* of the header.
 - The `prd_workspaces_luks` host token inherits all ~116 `prd` root secrets (pre-existing for
@@ -702,6 +703,7 @@ the raw→`luksFormat` arm, `mkfs`, and copies from the authoritative live plain
 operation.
 
 **Invariants (enforced by `tests/scripts/lib/workspaces-luks-recut-gate.sh`, mutation-tested):**
+
 - The plan is EXACTLY `{volume REPLACE (delete AND create) + attachment CREATE}` — a bare
   delete/forget or an update-in-place aborts.
 - **Recovery arm (arch review P2):** because the volume has no `create_before_destroy`, a `-replace`

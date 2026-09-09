@@ -74,16 +74,19 @@ bs_line() {
     '{dt:$dt, raw: ({host:$h, host_name:$hn, message:$m, SYSLOG_IDENTIFIER:"inngest-server-probe"} | tojson)}'
 }
 
-# The probe's field list at probe_schema=3, in emit order (pinned against the real emitter by the
+# The probe's field list at probe_schema=4, in emit order (pinned against the real emitter by the
 # emit/read contract arm near the bottom of this file).
 PROBE_FIELDS=(http_code server_active vector_active redis_active uptime_s boot_id image_ref
               instance_id cli_version cutover_flag probe_schema host_role flush_latched
-              redis_keys data_mount_src data_bytes)
+              redis_keys redis_key_patterns data_mount_src data_bytes)
 declare -A PD=(
   [http_code]=000 [server_active]=inactive [vector_active]=active [redis_active]=active
   [uptime_s]=98765 [boot_id]=b0000000000000000000000000000001 [image_ref]=ghcr.io/example@sha256:aaa
-  [instance_id]=162809678 [cli_version]=v1.19.4 [cutover_flag]=rolled-back [probe_schema]=3
+  [instance_id]=162809678 [cli_version]=v1.19.4 [cutover_flag]=rolled-back [probe_schema]=4
   [host_role]=dedicated [flush_latched]=false [redis_keys]=0
+  # __NONE__ is the COHERENT partner of redis_keys=0 (G14). A default of __UNREADABLE__ here
+  # would make every unrelated case fail on the coherence guard instead of its own predicate.
+  [redis_key_patterns]=__NONE__
   [data_mount_src]="__DEV__" [data_bytes]=4096
 )
 PD[data_mount_src]="$DEV"
@@ -250,8 +253,30 @@ mk_rows "$TMP/rows-g3d.json" "$(bs_line 'yesterday' "$HOSTV" "$HOSTNAMEV" "$(msg
 expect "[G3d] an unparseable dt => unreadable" unreadable "$TMP/rows-g3d.json" "$FIN" --now-epoch 1788430200
 
 # G4 — EXACT equality on the schema, not `>=`.
-mk_rows "$TMP/rows-g4.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg probe_schema=2)")"
-predicate G4 "probe_schema=2 => stale_schema" stale_schema "$TMP/rows-g4.json" "$FIN"
+mk_rows "$TMP/rows-g4.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" "$(msg probe_schema=3)")"
+predicate G4 "probe_schema=3 (the PREVIOUS schema) => stale_schema" stale_schema "$TMP/rows-g4.json" "$FIN"
+
+# G14 — the two store fields must AGREE. `redis_keys` is the field the destroy is authorized
+# against; `redis_key_patterns` is derived from a --scan of the SAME keyspace, so a count of 0
+# beside a pattern list naming live keys means one reader is wrong. Since one of them is the
+# CLEARING value, the safe reading is neither.
+mk_rows "$TMP/rows-g14.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" \
+  "$(msg redis_keys=0 redis_key_patterns=inngest:state:*=9,inngest:queue:*=5)")"
+predicate G14 "redis_keys=0 but patterns name live keys => unreadable (never the permissive read)" \
+  unreadable "$TMP/rows-g14.json" "$FIN"
+
+# ...and the coherent pair must still pass, or the guard above is just a way to fail everything.
+mk_rows "$TMP/rows-g14b.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" \
+  "$(msg redis_keys=0 redis_key_patterns=__NONE__)")"
+predicate G14b "redis_keys=0 with patterns=__NONE__ => dark (the coherent clearing reading)" \
+  dark "$TMP/rows-g14b.json" "$FIN"
+
+# An absent redis_key_patterns on a schema-4 row is UNREADABLE, not dark: the field the coherence
+# check needs is missing, so nothing cross-checked the clearing value.
+mk_rows "$TMP/rows-g14c.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" \
+  "$(msg -redis_key_patterns)")"
+predicate G14c "schema-4 row with NO redis_key_patterns => unreadable" \
+  unreadable "$TMP/rows-g14c.json" "$FIN"
 
 # G5 — envelope `host` is the web host while `host_name` carries the dedicated literal. This is the
 # R_SPOOF shape from scripts/inngest-dedicated-host-classify.sh's suite: #6616 is OPEN because a web
@@ -507,7 +532,7 @@ expect "[M7] a single-encoded raw envelope refuses (fail-closed on an encoding c
 # ` redis_keys=0 server_active=inactive http_code=000 ...` supplies every store and liveness
 # field BEFORE the genuine ones, so the gate read the injected copy and never saw the real state.
 mk_rows "$TMP/rows-i1.json" "$(bs_line '2026-09-03 10:00:00' "$HOSTV" "$HOSTNAMEV" \
-  "SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} image_ref=x redis_keys=0 data_mount_src=${PD[data_mount_src]} probe_schema=3 host_role=dedicated flush_latched=false data_bytes=4096 redis_keys=99999 server_active=active http_code=200")"
+  "SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} image_ref=x redis_keys=0 redis_key_patterns=__NONE__ data_mount_src=${PD[data_mount_src]} probe_schema=4 host_role=dedicated flush_latched=false data_bytes=4096 redis_keys=99999 server_active=active http_code=200")"
 expect "[I1] a DUPLICATED field name => unreadable, never the first copy" unreadable "$TMP/rows-i1.json" "$FIN"
 
 # I2 — an EMBEDDED NEWLINE. `_ihdg_rows` renders `message` through `jq -r`, so one row becomes two
@@ -516,7 +541,7 @@ expect "[I1] a DUPLICATED field name => unreadable, never the first copy" unread
 mk_rows "$TMP/rows-i2.json" "$(python3 -c "
 import json,sys
 serving='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_keys=99999'
-dark='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} redis_keys=0 data_mount_src=${PD[data_mount_src]} probe_schema=3 host_role=dedicated flush_latched=false data_bytes=4096'
+dark='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active boot_id=${PD[boot_id]} redis_keys=0 redis_key_patterns=__NONE__ data_mount_src=${PD[data_mount_src]} probe_schema=4 host_role=dedicated flush_latched=false data_bytes=4096'
 raw=json.dumps({'host':'$HOSTV','host_name':'$HOSTNAMEV','message':serving+chr(10)+dark})
 print(json.dumps({'dt':'2026-09-03 10:00:00','raw':raw}))")"
 expect "[I2] an EMBEDDED NEWLINE in one row => refused, never graded as its last line" unreadable "$TMP/rows-i2.json" "$FIN"
@@ -930,12 +955,12 @@ expect "OPERAND: an unknown flag must refuse, never fall through to a decision" 
 # battery keyed on verdict TOKENS needs only ~10 cases because several predicates share a token, so
 # a token-keyed battery silently under-covers and this floor is what makes that visible.
 _distinct=0; for _g in ${_seen_predicates:-}; do _distinct=$((_distinct + 1)); done
-if [[ "$_distinct" -lt 20 ]]; then
+if [[ "$_distinct" -lt 21 ]]; then
   fails=$((fails + 1))
   printf '  FAIL DROP-ONE FLOOR: only %s DISTINCT predicates covered (%s cases ran), floor is 20 (G1..G20). Covered:%s\n' \
     "$_distinct" "$predicate_cases" "${_seen_predicates:-}" >&2
 else
-  printf '  ok   drop-one floor: %s distinct predicates covered across %s cases (floor 20)\n' "$_distinct" "$predicate_cases"
+  printf '  ok   drop-one floor: %s distinct predicates covered across %s cases (floor 21)\n' "$_distinct" "$predicate_cases"
 fi
 
 # The assertion floor is self-contained — bash builtins and this suite's own counters only. A floor
@@ -944,7 +969,7 @@ fi
 # twice (63 -> 71) while `-lt 55` was never touched, leaving 22 assertions of slack — a third of
 # the suite could be deleted and the floor would still print `ok … (floor 71)`. The literal is
 # defined ONCE here and both sites read it.
-_FLOOR=115
+_FLOOR=118
 _ran=$((passes + fails))
 if [[ "$_ran" -lt "$_FLOOR" ]]; then
   fails=$((fails + 1))

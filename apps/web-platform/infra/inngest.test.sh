@@ -883,7 +883,7 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
 # is asserted, in EVERY arm, over EVERY field — including the arms where the expected token is
 # also pinned positively.
 # Presence/parity list. `redis_keys` is here.
-PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys data_mount_src data_bytes"
+PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_key_patterns data_mount_src data_bytes"
 # NEVER-ZERO list — deliberately EXCLUDES redis_keys, and that exclusion is the whole point.
 # For every other field `0` is a degradation masquerading as a measurement. For redis_keys `0`
 # is the CLEARING VALUE: an empty keyspace is exactly what authorizes the recut. Putting it in
@@ -892,8 +892,8 @@ PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys data_mount_sr
 # unauthenticated read must degrade to __UNREADABLE__ and never to 0.
 PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes"
 
-assert "#7695 probe declares probe_schema=3 (Guard 2 refuses a stale_schema row)" \
-  "grep -qE 'probe_schema=3( |\$)' '$PROBE_LOG'"
+assert "#7695 probe declares probe_schema=4 (Guard 2 refuses a stale_schema row)" \
+  "grep -qE 'probe_schema=4( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
@@ -1184,8 +1184,17 @@ done
 # this block reports success having asserted nothing.
 assert "#7695 never-zero invariant covered 6 logs x 5 fields" \
   "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 5 ]]"
-assert "#7695 the presence list carries one MORE field than the never-zero list (redis_keys)" \
-  "[[ \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) -eq 6 ]]"
+# TWO more since probe_schema=4: `redis_keys` (0 is its CLEARING value) and
+# `redis_key_patterns` (whose clearing value is the token `__NONE__`, not 0 — it is never
+# numeric, so the never-zero loop has nothing to say about it either).
+assert "#7695 the presence list carries two MORE fields than the never-zero list (redis_keys, redis_key_patterns)" \
+  "[[ \$(printf '%s\n' \$PROBE_7695_FIELDS | wc -l) -eq 7 ]]"
+
+# redis_key_patterns must never render as the empty string: the emit is unconditional, so an
+# unbound variable would drop the field entirely and G14 downstream would read the row as
+# unreadable forever.
+assert "#7695 redis_key_patterns is bound on the default path" \
+  "grep -qE 'redis_key_patterns=[^ ]' '$PROBE_LOG'"
 
 # --- Site parity ---------------------------------------------------------------------------
 # The field list appears TWICE in inngest-bootstrap.sh — the unconditional `logger` emit and

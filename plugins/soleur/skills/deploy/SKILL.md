@@ -42,6 +42,7 @@ Use the **AskUserQuestion tool** to present:
 **Question:** "Deploy this configuration?"
 
 **Options:**
+
 1. **Deploy** -- Proceed with build and deployment
 2. **Cancel** -- Abort deployment
 
@@ -69,6 +70,7 @@ bash ${CLAUDE_PLUGIN_ROOT:-./plugins/soleur}/skills/deploy/scripts/deploy.sh
 ```
 
 The script handles:
+
 1. Build Docker image tagged with git SHA and `:latest`
 2. Push both tags to GHCR
 3. SSH to remote host: pull image, stop old container, start new container

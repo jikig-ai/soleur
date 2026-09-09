@@ -1029,7 +1029,6 @@ runbook still lists it — by the live-input check now beside it: run the deriva
 build the `/health` URL **from its output**, and assert a `200`. A hand-typed URL tests your
 typing, not the gate's input.
 
-
 ## Amendment 2026-08-13 (#7462/#7516) — the inngest cold-boot pull site is migrated, by BAKE not Doppler
 
 This ADR named `cloud-init-inngest.yml` as the last unmigrated pull site in three places

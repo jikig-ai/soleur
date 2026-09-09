@@ -31,6 +31,7 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/provision-github/scripts/provision-github.sh"
 ```
 
 The script:
+
 1. Validates prerequisites (DPA gate, slug format, `gh` auth, `terraform`)
 2. Checks idempotency (warns if repo already exists via `gh repo view`)
 3. Resolves numeric org-id for the App install URL

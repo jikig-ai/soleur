@@ -741,12 +741,27 @@ jobs:
   # the matrix outcome — failure on any shard fails the whole job.
   test-webplat:
     runs-on: ubuntu-latest
+    # Bounds a HUNG job (#7902). Sized ~5x the measured p90 (4.37 min) for this job's slowest
+    # leg, and no suite on this path declares a per-suite budget, so it cannot fire before a
+    # loud bound. An absent value would read as GitHub's 360-minute default.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         shard: ["1/2", "2/2"]
     steps:
+      # fetch-depth: 0 is LOAD-BEARING for this shard, not hygiene. The CLA
+      # roster's entry gate is temporal: an account enters only if its Individual
+      # CLA signature is dated at or after a notice epoch DERIVED FROM GIT
+      # (`git log --first-parent -S<anchor>`, oldest match). On the default
+      # depth-1 checkout that derivation silently returns HEAD's own commit date
+      # -- a plausible ISO timestamp that is simply wrong, and wrong in the
+      # direction that refuses everyone. The live assertion is shape-only
+      # (`Number.isFinite(Date.parse(epoch))`), so it cannot see the difference,
+      # and the roster is empty today, so nothing else can either.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -786,6 +801,9 @@ jobs:
 
   test-bun:
     runs-on: ubuntu-latest
+    # Bounds a HUNG job (#7902). Measured p90 under 2 min; 20 is deliberate slack for a cold
+    # runner. No suite on this path declares a per-suite budget.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -813,6 +831,147 @@ jobs:
 
   test-scripts:
     runs-on: ubuntu-latest
+    # MATRIX SHARDED (#7902). This job was ~90% of CI's wall clock and CI's wall clock had
+    # outgrown web-platform-release.yml's await-ci ceiling, so every deploy was fail-closing on
+    # a healthy build. Measured on run 34152496134: 35.25 min across 374 registered suites.
+    #
+    # K=3 IS DERIVED, NOT ASSUMED. Per-suite durations were taken from that run's own job log
+    # (the runner prints `--- <label> ---` at each suite start and Actions timestamps every
+    # line), then the ACTUAL round-robin assignment was simulated over the real ordinal order.
+    #
+    # MEASURED on the 374-suite order of run 34152496134 (the tree ships 376; see the STALE stanza) — slowest-leg
+    # minutes, group total 35.25 min:
+    #
+    #   K=2 -> 21.91   K=3 -> 15.09   K=4 -> 16.09   K=5 -> 10.37   K=6 -> 10.05   K=7 -> 9.44
+    #
+    # HOW TO RE-DERIVE (a table nobody can reproduce is not evidence): take a real test-scripts
+    # job log, keep only the `--- <label> ---` marks whose label appears in
+    # `bash scripts/test-all.sh --enumerate scripts`, and attribute each mark's span to the NEXT
+    # REGISTERED mark — folding nested child-runner marks into their parent. Sanity check: the
+    # attributed total must equal the job's wall clock (35.25 vs 35.77 min here). Attributing
+    # per-mark instead under-counts every suite that wraps a nested runner.
+    #
+    # K=4 measures worse than K=3 here. That is NOT a property of K: it is a property of THIS
+    # suite set. Adding two suites and removing one swung K=3 between 15.09 and 20.70 minutes
+    # during this PR's own review, purely from ordinal position. Any change to the registered
+    # suite set invalidates this table — RE-SIMULATE before touching K.
+    #
+    # STALE BY ONE SUITE (2026-09-08, QA). This PR later added
+    # plugins/soleur/test/await-ci-ceiling-invariants.test.sh, taking the set 375 -> 376. Measured
+    # effect: it registers at ordinal 189, so the 8.14-min floor suite (ordinal 148) keeps its leg,
+    # but 187 of the 375 pre-existing suites move legs. The per-leg minutes above were NOT
+    # re-simulated — the Phase 0 job log they came from is a pre-shard run of a job shape that no
+    # longer exists on main, and re-deriving it needs a post-merge log. Post-merge AC25 measures
+    # the real thing anyway.
+    #
+    # AN EARLIER REVISION CLAIMED AN ORDER-INDEPENDENT SAFETY BOUND HERE. IT WAS WRONG — the
+    # retraction is kept because the argument is tempting and someone will rebuild it.
+    #
+    # It read: the group is 35.25 min = 2115s, so any leg of any partition is bounded by 2115s;
+    # plus the worst measured queue (1260s) that is 3375s, inside the 3600s ceiling with 225s to
+    # spare; therefore no reordering can push time-to-`test` past the gate. All three premises are
+    # wrong, measured over the same 25-run window:
+    #
+    #   * 2115s is ONE SAMPLE, not a bound. Max observed `test-scripts` duration is 2339s.
+    #   * 1260s is not the worst queue. Two runs in the window queued 1345s and 1433s.
+    #   * The sum OMITS A TERM. Time-to-`test` also includes the `test` aggregator's own runner
+    #     wait, measured at 619s on run 34214304922 and absent from the arithmetic entirely.
+    #
+    # Worst-case with the measured maxima: 2339 + 1433 + 619 = 4391s, well past 3600s. Composing a
+    # worst-case leg with a mid-case queue does not yield a bound, and calling the result "225s to
+    # spare" was fiction. There is no order-independent bound under this ceiling on current data.
+    #
+    # What actually makes the raise safe is narrower and worth stating plainly: the shard cuts the
+    # LEG term (the only term this PR controls), the soft-ceiling warning measures the real
+    # quantity every release, and AC25 checks the result post-merge over the first three runs. If
+    # AC25 misses, the answer is a larger K or a shorter CI — not a bigger ceiling. Making leg
+    # composition an owned fact rather than a positional accident (LPT over a checked-in duration
+    # table) is tracked as a follow-up, not shipped here.
+    #
+    # The floor no K can beat is the longest single suite —
+    # `tests/scripts/registry-gate-mutation-battery` at 8.14 min, 23% of the group on its own.
+    # K=3 landed 15.09 min on the 374-suite order this table was simulated over. On the 376-suite
+    # order that actually ships it does NOT: re-simulated at review time, K=3 is 20.73 min and both
+    # K=4 (18.02) and K=5 (10.77) beat it, so the "K=3 is the optimum" conclusion above does not
+    # hold for this tree and is retracted. K=3 remains SAFE (totality holds for any K, and the
+    # order-independent bound below covers the wall clock); it is simply no longer known-optimal.
+    # Re-simulate before treating any K as chosen — the method above is reproducible from the
+    # archived job log in about two minutes, and "needs a post-merge log" (claimed in an earlier
+    # revision of this comment) is not true: the pre-shard log is exactly what the method consumes.
+    # Extra legs are not free — see the retracted dispatch note below; they draw on the same runner
+    # pool whose availability produces the multi-minute staggers.
+    #
+    # NOTE ON DISPATCH — RETRACTED TWICE; READ THIS BEFORE RE-DERIVING IT.
+    #
+    # Revision 1 said the multi-minute gaps between run creation and job start were runner-pool
+    # contention, and used that to argue against larger K.
+    # Revision 2 "corrected" that to: dispatch is ~1s and per-RUN, the gaps are this file's own
+    # `concurrency` group serialising each main push behind its predecessor's `test`, so extra
+    # legs add no dispatch penalty.
+    #
+    # REVISION 2 IS FALSE, and revision 1 was closer. Measured 2026-09-08 on run 34214304922
+    # (`gh api .../runs/<id>/jobs`, start offsets from the run's `created_at`):
+    #
+    #     + 441s  lint-conversations-update-callsites
+    #     + 621s  credential-path-guard
+    #     +1346s  test-scripts, web-platform-build
+    #
+    # CORRECTED 2026-09-09: an earlier revision of this list also cited `+1s` for two jobs and
+    # `+1397s critical-css-gate`. Both are wrong for the argument. The `+1s` pair were SKIPPED
+    # (runner_id null, zero steps) — they never acquired a runner, so they say nothing about
+    # availability. And `critical-css-gate` HAS `needs: detect-changes`, so it is excluded by this
+    # sentence's own selection criterion. The honest figure over needs-less jobs that actually
+    # took a runner is 441s -> 1346s.
+    #
+    # Those jobs have NO `needs`, so a concurrency gate releases them together — a group release
+    # starts every one of them at the same instant. They stagger across 15 MINUTES inside one run,
+    # which a queue cannot produce. And the group was EMPTY: the predecessor run finished
+    # 2026-09-07T22:03:12Z, this run was created 2026-09-08T10:13:35Z, a 12h10m gap. Separately
+    # `test` — whose start is gated only by its `needs` — waited 619s after its last need
+    # concluded, which is runner wait by definition.
+    #
+    # So the gaps are runner availability, extra legs DO draw on that pool, and the withdrawal of
+    # revision 1's argument is itself withdrawn. What remains genuinely unresolved is how much the
+    # queue contributes on a busy day; do not replace this note with a third confident mechanism
+    # without measuring the start SPREAD within a single run, which is what falsifies the queue
+    # explanation in one command.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/3", "2/3", "3/3"]
+    # A SILENT BOUND MUST NEVER FIRE BEFORE A LOUD ONE (#7902 review).
+    #
+    # CORRECTED during review. An earlier revision claimed three bounds sit on this leg, "two of
+    # them loud". That was false in both particulars, and 60 is right for a different reason:
+    #
+    #   * the per-suite budget in `_suite_budget_ms` is ADVISORY. The runner says so in terms —
+    #     "A budget NEVER changes a suite's status or the runner's exit code" — and its only
+    #     consumer emits a `[budget]` line AFTER the suite has finished. It reports; it cannot fire.
+    #   * `TC_RUNTIME_CEILING_S`, the one real in-runner bound, is explicitly DISABLED under CI.
+    #   * `await-ci`'s CEILING_S bounds a job in a DIFFERENT workflow. A long leg makes THAT job
+    #     fail-close (the #7902 symptom); it does not bound this leg.
+    #
+    # So `timeout-minutes` is the ONLY bound on a CI leg and it is SILENT — a job-kill produces no
+    # annotation. It must therefore sit above the repo's own DECLARED EXPECTATION for the work on
+    # this leg (that advisory budget), because a silent kill below a duration the repo itself
+    # calls legitimate is indistinguishable from a hang:
+    #
+    #   rest-of-leg 6.95 min + that suite's declared budget (41.67 min, itself ~1.5x its own
+    #     measured max) = 48.62 min
+    #   x1.2 (the same convention sizing await-ci's timeout-minutes over CEILING_S) = 58.3
+    #   -> 60
+    #
+    # An earlier revision of this PR set 30, sized against the leg's NOMINAL 15.09 min. That
+    # was a new silent-kill path: the same battery measures 14.3-27.9 min and its own budget
+    # comment notes load alone moves it 1.9x, so a healthy slow run would have been killed
+    # with no diagnostic — #7902's failure mode relocated from the deploy gate into CI and
+    # made silent. Do NOT lower this to fit a leg estimate, and do NOT lower the 2500000 ms
+    # budget to fit this: it is the repo's stated expectation for that suite, and shrinking it to
+    # fit an unrelated cap re-creates this trap one layer down.
+    #
+    # This does not bound the deploy gate and is not trying to — see ADR-212. Its job is
+    # capping a hung leg at 1 hour instead of GitHub's 6-hour default.
+    timeout-minutes: 60
     # No setup-node — bash + python3 + a stock node (with npm) ship on
     # ubuntu-latest by default, and the one `node --test` entry in the
     # scripts group (scripts/md-to-mrkdwn.test.mjs) runs on the stock
@@ -850,6 +1009,18 @@ jobs:
     env:
       GITLEAKS_VERSION: "8.24.2"
       GITLEAKS_SHA256: "fa0500f6b7e41d28791ebc680f5dd9899cd42b58629218a5f041efa899151a8e"
+      # The group is still passed POSITIONALLY to the runner (`bash scripts/test-all.sh
+      # scripts`), while the shard arrives through the environment. Two mechanisms side by
+      # side, deliberately: TEST_GROUP selects WHICH suites exist for this job, SCRIPTS_SHARD
+      # selects WHICH SLICE of them this leg owns. Folding the shard into the positional
+      # argument would overload one channel with two independent decisions.
+      #
+      # A RENAMED matrix key yields an EMPTY value, and the runner exits 2 on that rather than
+      # silently running the whole group. Note the asymmetry, which is NOT covered: DELETING this
+      # line leaves SCRIPTS_SHARD unset, and unset legitimately means "run the full group" — so
+      # all three legs would run all 376 suites and all report green. Guard 1 reads ci.yml's
+      # matrix VALUES, not this binding, so it cannot see that either. Tracked in #7931.
+      SCRIPTS_SHARD: ${{ matrix.shard }}
     steps:
       # fetch-depth: 0 — scripts/lint-trap-tempfile-ownership.py scopes rule (c) to
       # lines added vs the merge base against origin/main. The default shallow
@@ -890,6 +1061,53 @@ jobs:
         run: bash scripts/test-all.sh scripts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # #7902 — Guard 1's mutation battery, in its OWN job.
+  #
+  # Two reasons it cannot live in the scripts group with the suite it guards:
+  #
+  #  1. It mutates `scripts/test-all.sh` in place. Registered as a scripts-group suite it would
+  #     do that while the parent `test-all.sh` was mid-run, and bash reads a script incrementally
+  #     by byte offset — the parent can go on to execute edited bytes. The failures that produces
+  #     look like ordinary test results.
+  #  2. AC14: a guard running INSIDE one matrix leg is a poor place to assert a CROSS-LEG union.
+  #     Guard 1 does drive its own enumerate children and is correct there (verified with
+  #     SCRIPTS_SHARD set), but a non-sharded job removes the question entirely.
+  #
+  # NOT added to `test`'s needs-closure: it is a guard on the partition's correctness, not a
+  # shard of the suite, and folding it in would put its runtime on the deploy gate's critical
+  # path for no gain.
+  #
+  # HONEST SCOPE: this job is NOT a required check. It is absent from
+  # infra/github/ruleset-ci-required.tf's contexts and from scripts/required-checks.txt, so a
+  # red here is VISIBLE on the PR but does not block merge. An earlier revision of this comment
+  # claimed "it gates the PR on its own", which was false.
+  #
+  # What IS gated: the guard itself. plugins/soleur/test/scripts-shard-totality.test.sh is
+  # glob-discovered into the scripts group, so it runs inside a leg of the required
+  # test-scripts -> test chain. Un-gated is the PROOF that the guard is non-vacuous. Promoting
+  # this context is a ruleset + canonical-JSON + synthetic-check-fabrication change and is
+  # tracked separately rather than folded into a production unblock.
+  shard-totality-mutations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      # ONLY the battery are invoked here, never the guard directly, and that is a
+      # constraint imposed by scripts/lint-orphan-test-suites.sh rather than a preference: both
+      # guards are already registered by glob discovery into the scripts group, and a second
+      # explicit registration here makes them "covered by more than one surface" — a union in
+      # which de-registering from either side is a silent no-op. The lint fails on exactly that.
+      #
+      # Coverage is not lost. The battery's CONTROL row runs its guard UNMUTATED before any
+      # mutation and aborts the battery outright if it is not green, so this job still exercises
+      # both guards against the real tree — which is what AC14 asks for: a cross-leg union
+      # asserted from a job that is not itself a leg.
+      - name: Guard 1 — shard-totality mutation battery (control + every row must drive it RED)
+        run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh
 
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
@@ -939,6 +1157,13 @@ jobs:
     needs: [test-webplat, test-bun, test-scripts]
     if: always()
     runs-on: ubuntu-latest
+    # Bounds a HUNG job (#7902). This job only reads three `needs.*.result` strings (measured
+    # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
+    #
+    # Everything below this line is byte-unchanged from before the shard (#7902 AC5): the
+    # `needs:` list, the `if:`, and the aggregation loop are untouched, which is what proves
+    # matrix legs roll up into ONE `needs.test-scripts.result` with no aggregator edit.
+    timeout-minutes: 10
     steps:
       - name: Aggregate shard results
         env:

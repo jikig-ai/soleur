@@ -87,7 +87,7 @@ None. No customer-facing surface degraded; no personal data exposed. The exposur
 
 ## Action Items & Follow-ups
 
-_No action items — incident fully resolved in the source PR with no residual work._
+*No action items — incident fully resolved in the source PR with no residual work.*
 
 ## Supersession (2026-08-19, #7590)
 

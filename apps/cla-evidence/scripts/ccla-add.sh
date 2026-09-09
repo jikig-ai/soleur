@@ -59,7 +59,7 @@ Usage:
                      (--org "Legal Name" | --sole-trader)
                      --signed-at 2026-09-04T00:00:00Z
                      --authorized-from 2026-09-04T00:00:00Z
-                     --instrument-sha256 <64-hex>
+                     (--instrument-file /abs/path | --instrument-sha256 <64-hex>)
                      --login <github-login> [--login <github-login> ...]
                      [--cla-git-sha <sha>]
 
@@ -69,6 +69,17 @@ Usage:
   CCLA_ADD_DRY_RUN=1 ccla-add.sh ...   # resolve + validate, write nothing
 
 Notes:
+  --instrument-file and --instrument-sha256 are MUTUALLY EXCLUSIVE and exactly
+  one is required. Prefer --instrument-file: it hashes the executed instrument
+  itself, so no one retypes 64 hex characters into a permanent, world-readable
+  record about a third party. The path must be ABSOLUTE and must resolve
+  OUTSIDE this repository -- the instrument is held on the encrypted operator
+  drive, never committed. --instrument-sha256 remains for the case where only
+  the digest is to hand.
+
+  Note that the path is echoed to stderr and lands in your shell history and in
+  /proc/<pid>/cmdline; the instrument's filename may carry a legal name.
+
   --sole-trader omits the organisation's legal name (published as null), for a
   counterparty whose legal name IS a natural person's name. The name is held
   off-repo with the instrument. See the CLO ruling, amendment B1-c-2.
@@ -128,6 +139,11 @@ TSX="apps/web-platform/node_modules/.bin/tsx"
 # ---- argument parsing -------------------------------------------------------
 RECORD_REF=""; ORG=""; SOLE_TRADER=0; SIGNED_AT=""; AUTHORIZED_FROM=""
 INSTRUMENT_SHA=""; CLA_GIT_SHA=""; WITHDRAWN_AT=""
+# Initialised HERE and not only in the parse arm. Under `set -euo pipefail` the
+# first `[[ -n "$INSTRUMENT_FILE" ]]` on an UNSET variable aborts with a bare
+# rc=1 and no message at all -- which is not one of the documented exit codes,
+# and is the same class the `need()` comment below was written about.
+INSTRUMENT_FILE=""; RESOLVED_INSTRUMENT=""
 LOGINS=()
 # `shift 2` returns non-zero when there is no value to shift, and a `case` body
 # is NOT exempt from `set -e` — so a trailing `--record-ref` aborted with exit 1
@@ -141,6 +157,13 @@ while [[ $# -gt 0 ]]; do
     --signed-at)          need "$@"; SIGNED_AT="$2"; shift 2 ;;
     --authorized-from)    need "$@"; AUTHORIZED_FROM="$2"; shift 2 ;;
     --instrument-sha256)  need "$@"; INSTRUMENT_SHA="$2"; shift 2 ;;
+    # A repeated --instrument-file would silently last-wins, i.e. quietly change
+    # WHICH file's bytes become the permanent record. Every other flag here is
+    # last-wins too, but this is the one where the loser is a legal artifact.
+    --instrument-file)    need "$@"
+                          [[ -z "$INSTRUMENT_FILE" ]] \
+                            || die "--instrument-file given more than once (already: $INSTRUMENT_FILE) -- pass it once, so which file was hashed is unambiguous" 64
+                          INSTRUMENT_FILE="$2"; shift 2 ;;
     --cla-git-sha)        need "$@"; CLA_GIT_SHA="$2"; shift 2 ;;
     --withdrawn-at)       need "$@"; WITHDRAWN_AT="$2"; shift 2 ;;
     --login)              need "$@"; LOGINS+=("$2"); shift 2 ;;
@@ -160,14 +183,113 @@ for l in "${LOGINS[@]}"; do
   [[ "$l" =~ $login_re ]] || die "invalid GitHub login: $l" 64
 done
 [[ -f "$ROSTER" ]] || die "roster not found at $ROSTER"
-command -v jq >/dev/null 2>&1 || die "jq is required"
+# Preflight EVERY external binary the instrument path uses, not just jq. Without
+# this a missing `realpath` fails the `realpath -e` line and reports rc 64 -- a
+# USAGE error naming the operator's path -- for a broken toolchain. That is the
+# measured-bad-for-could-not-measure collapse the -e/-f split four screens down
+# exists to refuse, reintroduced at the top of the same script. rc 2, matching
+# the runbook's pre-flight row.
+for _bin in jq realpath sha256sum stat date; do
+  command -v "$_bin" >/dev/null 2>&1 \
+    || die "$_bin is required and is not on PATH -- this is a toolchain problem, not a problem with the arguments you passed" 2
+done
 [[ -x "$TSX" ]] || die "tsx not found at $TSX — run 'npm ci' in apps/web-platform"
+
+# Refuse the instrument flags OUTSIDE `add`, rather than accepting and ignoring
+# them. `remove` records the end of a designation and writes no hash, so
+# `--instrument-file` there is either a misremembered command line or an operator
+# who believes they are amending a hash. Both deserve a message; silence tells
+# them the write did what they meant.
+if [[ "$MODE" != "add" ]]; then
+  [[ -z "$INSTRUMENT_FILE" ]] \
+    || die "--instrument-file is only meaningful for \`add\`; \`$MODE\` records no instrument hash. If you meant to correct a landed hash, there is no mode for that -- see #7925." 64
+  [[ -z "$INSTRUMENT_SHA" ]] \
+    || die "--instrument-sha256 is only meaningful for \`add\`; \`$MODE\` records no instrument hash. If you meant to correct a landed hash, there is no mode for that -- see #7925." 64
+fi
 
 if [[ "$MODE" == "add" ]]; then
   [[ -n "$SIGNED_AT" ]] || die "--signed-at is required" 64
   [[ -n "$AUTHORIZED_FROM" ]] || die "--authorized-from is required" 64
-  [[ -n "$INSTRUMENT_SHA" ]] || die "--instrument-sha256 is required (SHA-256 of the executed instrument as received)" 64
-  [[ "$INSTRUMENT_SHA" =~ ^[0-9a-f]{64}$ ]] || die "--instrument-sha256 must be 64 lowercase hex chars" 64
+  # ---- the executed instrument's hash: computed, or supplied ---------------
+  # Mutual exclusion FIRST, so an operator who passes both is told that rather
+  # than being told the second one won. Mirrors the --org/--sole-trader pair.
+  if [[ -n "$INSTRUMENT_FILE" && -n "$INSTRUMENT_SHA" ]]; then
+    die "--instrument-file and --instrument-sha256 are mutually exclusive. --instrument-file hashes the executed instrument itself and is of record; --instrument-sha256 records a digest you supply. Pass exactly one, so which artifact the published hash describes is never ambiguous." 64
+  fi
+  if [[ -z "$INSTRUMENT_FILE" && -z "$INSTRUMENT_SHA" ]]; then
+    die "one of --instrument-file (preferred: an absolute path to the executed instrument, hashed here) or --instrument-sha256 (64-hex, when only the digest is to hand) is required" 64
+  fi
+  if [[ -n "$INSTRUMENT_FILE" ]]; then
+    # ONE resolution, then every check AND the hash run against that same
+    # string. Checking the argument and hashing an independent second
+    # resolution leaves nothing asserting that the thing hashed is the thing
+    # checked -- and between the two a symlink can be repointed.
+    [[ "$INSTRUMENT_FILE" = /* ]] \
+      || die "--instrument-file must be an absolute path (got: $INSTRUMENT_FILE) -- the executed instrument lives on the encrypted operator drive, outside this repository, and a relative path would be resolved against a working directory this script has already changed" 64
+    # `-e` before `-f`, deliberately: `-f` ALONE reports a DIRECTORY as "no such
+    # file", which is the measured-bad-for-could-not-measure collapse this
+    # script exists to refuse. Two checks buy two true messages.
+    [[ -e "$INSTRUMENT_FILE" ]] \
+      || die "no such instrument file: $INSTRUMENT_FILE" 64
+    RESOLVED_INSTRUMENT="$(realpath -e -- "$INSTRUMENT_FILE")" \
+      || die "could not resolve --instrument-file to a real path: $INSTRUMENT_FILE" 64
+    [[ -f "$RESOLVED_INSTRUMENT" ]] \
+      || die "not a regular file: $INSTRUMENT_FILE -- pass the executed instrument itself, not a directory or a device" 64
+    [[ -s "$RESOLVED_INSTRUMENT" ]] \
+      || die "instrument file is empty: $INSTRUMENT_FILE -- an empty file hashes to a well-known constant and evidences nothing" 64
+    [[ -r "$RESOLVED_INSTRUMENT" ]] \
+      || die "instrument file is not readable: $INSTRUMENT_FILE" 64
+    # Custody (P10): the bytes of record are the instrument as received on the
+    # encrypted drive, never a copy inside this repository. The trailing slash
+    # is load-bearing -- without it a sibling directory such as
+    # /home/x/soleur-backup reads as inside /home/x/soleur.
+    #
+    # This is a TYPO CATCHER, not a boundary. A bind mount, a hardlink or a
+    # sibling worktree defeats any path comparison, and none of them is what
+    # this refusal exists to catch.
+    _repo_real="$(realpath -e -- "$REPO_ROOT")" \
+      || die "could not resolve the repository root for the custody check" 2
+    case "$RESOLVED_INSTRUMENT" in
+      "$_repo_real"/*)
+        die "the instrument at $INSTRUMENT_FILE resolves INSIDE this repository ($RESOLVED_INSTRUMENT). The executed instrument is held off-repo on the encrypted operator drive -- committing it would publish the counterparty's identity, which is the whole reason the roster carries a hash and not a document." 2 ;;
+    esac
+    # `sha256sum < "$f"`, NOT `sha256sum "$f"`. GNU sha256sum PREFIXES its output
+    # line with a backslash when the filename contains a backslash or a newline,
+    # which shifts the awk fields and yields something that is not 64 hex.
+    # Reading stdin prints no filename at all, so the shape cannot vary.
+    INSTRUMENT_SHA="$(sha256sum < "$RESOLVED_INSTRUMENT" | awk '{print $1}')" \
+      || die "could not hash the instrument at $INSTRUMENT_FILE" 2
+    # --instrument-file closes TRANSCRIPTION error. It cannot close SELECTION
+    # error -- the wrong file is hashed perfectly, and nothing downstream can
+    # tell. Size and mtime are what make that reviewable: a re-export of the
+    # same instrument differs in both. stderr, because stdout carries the
+    # emitted roster on a dry run.
+    # ONE stat, not a wc plus a date: two extra opens are two extra chances to
+    # describe a different state of the file than the one that was hashed.
+    _istat="$(stat -c '%s %Y' -- "$RESOLVED_INSTRUMENT" 2>/dev/null || echo 'unknown unknown')"
+    _isize="${_istat%% *}"
+    _imtime="${_istat##* }"
+    [[ "$_imtime" == "unknown" ]] \
+      || _imtime="$(date -u -d "@$_imtime" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+    printf 'instrument file: %s bytes=%s mtime=%s sha256=%s\n' \
+      "$RESOLVED_INSTRUMENT" "$_isize" "$_imtime" "$INSTRUMENT_SHA" >&2
+    printf 'CHECK THIS IS THE RIGHT INSTRUMENT: this script proves the hash matches the file, never that the file is the one that was executed.\n' >&2
+    # The PASTE-SAFE half. The runbook asks the operator to put provenance in the
+    # pull request; the line above cannot be that line, because the resolved path
+    # may itself BE a legal name and a pull request body is public and permanent
+    # -- the same reason nothing else about the counterparty is published here.
+    # Everything that makes provenance reviewable (a re-export differs in size
+    # and mtime) survives dropping the path.
+    printf 'provenance: bytes=%s mtime=%s sha256=%s  # paste THIS line into the pull request, not the one above\n' \
+      "$_isize" "$_imtime" "$INSTRUMENT_SHA" >&2
+  fi
+  # LOAD-BEARING for both arms, and the reason it is not written as two checks.
+  # It is the single chokepoint every value of INSTRUMENT_SHA passes before it
+  # reaches the roster, so a third source added later is covered without editing
+  # anything. On the --instrument-file path it fires when field extraction went
+  # wrong -- a `\`-prefixed sha256sum line, a truncated read -- which is exactly
+  # the failure that would otherwise publish a malformed hash.
+  [[ "$INSTRUMENT_SHA" =~ ^[0-9a-f]{64}$ ]] || die "the executed-instrument hash is not 64 lowercase hex chars: $INSTRUMENT_SHA" 64
   if [[ "$SOLE_TRADER" -eq 0 && -z "$ORG" ]]; then
     die "one of --org or --sole-trader is required. Use --sole-trader when the counterparty's legal name IS a natural person's name; the name is then held off-repo (CLO amendment B1-c-2)." 64
   fi
@@ -234,19 +356,57 @@ jq -e 'type == "object" and (.signedContributors | type) == "array"' "$LEDGER_FI
 # inherit a stranger's signature.
 declare -a IDS=()
 for login in "${LOGINS[@]}"; do
+  created=""
   if [[ -n "${CCLA_ADD_ID_MAP:-}" ]]; then
-    id="$(jq -r --arg l "$login" '.[$l] // empty' <<<"$CCLA_ADD_ID_MAP")"
+    # Two accepted shapes. A bare number is the legacy form and carries no
+    # created_at, so the handle-reuse check below is SKIPPED for it -- said out
+    # loud rather than silently, because a skipped check that prints nothing is
+    # indistinguishable from a passing one.
+    id="$(jq -r --arg l "$login" '(.[$l] | if type == "object" then .id else . end) // empty' <<<"$CCLA_ADD_ID_MAP")"
+    created="$(jq -r --arg l "$login" '(.[$l] | if type == "object" then (.created_at // empty) else empty end) // empty' <<<"$CCLA_ADD_ID_MAP")"
   else
     command -v gh >/dev/null 2>&1 || die "gh CLI is required to resolve logins to numeric ids"
-    id=""
-    if ! id="$(gh api "/users/${login}" --jq .id 2>/dev/null)"; then
+    _u=""
+    if ! _u="$(gh api "/users/${login}" --jq '[.id, .created_at] | @tsv' 2>/dev/null)"; then
       die "could not resolve GitHub login to a numeric id: $login"
     fi
+    id="${_u%%$'\t'*}"
+    created="${_u#*$'\t'}"
+    [[ "$created" == "$id" ]] && created=""
   fi
   [[ "$id" =~ ^[0-9]+$ ]] || die "resolved id for $login is not numeric: '${id}'"
+  # THE HANDLE-REUSE CHECK. GitHub releases a deleted account's login for
+  # re-registration. The designation list names USERNAMES; the roster stores
+  # IDS; and the operator reading the instrument cannot see that the handle
+  # changed hands. An account created AFTER the grant took effect cannot be the
+  # account the counterparty designated, so this is decidable and is refused.
+  #
+  # It is NECESSARY AND NOT SUFFICIENT, and the message says so: a long-lived
+  # account that later took a freed handle passes it. It removes the cheapest
+  # failure, not the failure class -- the current designation list is still the
+  # authority (runbook s 10.1).
+  reuse_checked=0
+  if [[ "$MODE" == "add" && -n "$created" && -n "$AUTHORIZED_FROM" ]]; then
+    reuse_checked=1
+    _c_e="$(date -u -d "$created" +%s 2>/dev/null || echo "")"
+    _a_e="$(date -u -d "$AUTHORIZED_FROM" +%s 2>/dev/null || echo "")"
+    if [[ -z "$_c_e" || -z "$_a_e" ]]; then
+      die "could not compare the account creation date ($created) with --authorized-from ($AUTHORIZED_FROM) -- refusing rather than recording an unchecked designation" 2
+    fi
+    if (( _c_e > _a_e )); then
+      die "$login was created at $created, AFTER --authorized-from $AUTHORIZED_FROM. GitHub releases a deleted account's login for re-registration, so this handle may not be the account the counterparty designated -- and a roster row is permanent and world-readable. Check the counterparty's CURRENT designation list (instrument s 4(c) as amended by any s 5 notice) before retrying. This check is necessary and NOT sufficient: an older account that later took a freed handle would pass it." 2
+    fi
+  fi
   # stderr: stdout carries the emitted roster on a dry run, and a caller must be
   # able to pipe it to jq without reconstructing the document with sed.
-  echo "resolved ${login} -> ${id}" >&2
+  # The line asserts only what was actually done. Claiming "not created after
+  # --authorized-from" whenever a date happened to be available would assert a
+  # comparison on the `remove` path, where none is made.
+  if [[ "$reuse_checked" == "1" ]]; then
+    echo "resolved ${login} -> ${id} (created ${created}; not created after --authorized-from)" >&2
+  else
+    echo "resolved ${login} -> ${id} (the handle-reuse check was NOT run — no creation date, or no --authorized-from to compare against)" >&2
+  fi
   IDS+=("$id")
 done
 
@@ -416,7 +576,12 @@ if ! git push --quiet -u origin "$BRANCH"; then
   printf 'Abandon with: git switch - && git branch -D %s\n' "$BRANCH" >&2
   exit 2
 fi
-gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" \
+# A failure handler, mirroring the push above. Without one this exits non-zero
+# with gh's own message and no statement of where the work is -- and the state
+# here is WORSE than a failed push: the branch carrying the association is
+# already on the public remote, so "nothing was published" is not true and an
+# operator who re-runs from scratch duplicates a legal record.
+if ! gh pr create --repo "$REPO" --base "$BASE_BRANCH" --head "$BRANCH" \
   --title "chore(ccla): ${MODE} ${RECORD_REF} in the corporate coverage map" \
   --body "Single-file change to \`${ROSTER_REL}\`, written by \`ccla-add.sh\`.
 
@@ -424,5 +589,11 @@ Contribution-triggered entry was enforced at write time: every account below was
 
 Accounts: ${LOGINS[*]}
 
-Ref #3210."
+Ref #3210."; then
+  printf '::error::the branch was PUSHED but `gh pr create` failed. %s is on the remote and the roster change is committed on it; nothing has merged.\n' "$BRANCH" >&2
+  printf 'Resume with:  gh pr create --repo %s --base %s --head %s\n' "$REPO" "$BASE_BRANCH" "$BRANCH" >&2
+  printf 'Abandon with: git switch - && git branch -D %s && git push origin --delete %s\n' "$BRANCH" "$BRANCH" >&2
+  printf 'Do NOT re-run this script from scratch: it would create a SECOND branch recording the same designation.\n' >&2
+  exit 2
+fi
 echo "PR opened from ${BRANCH}"

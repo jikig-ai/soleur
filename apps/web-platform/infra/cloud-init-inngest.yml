@@ -1055,7 +1055,7 @@ runcmd:
     # PR-gating job here can perform one. On the hermetic side AC5 is the sole control — the
     # digest was read BY COMMAND from the run that signed it, never typed. The pin has exactly one
     # consumer (a host create/replace), so a wrong digest costs delayed detection, not an incident.
-    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.27@sha256:6b89bc83031790b63ec21a970c10b98b8206bb5d7b3276f8b9477a42adafa8a4
+    IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.28@sha256:7d4f1376a35708462048d3842a9c6169c51616368cd6a39c5b55f426e7acdb4d
     for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
     # --- #7462 (ADR-096): resolve the effective ref ONCE, zot-primary ---------------------
     # THE DEFECT THIS CLOSES. Every other pull site in the fleet was flipped to prefer the
@@ -1099,7 +1099,7 @@ runcmd:
     . /etc/default/soleur-zot-read 2>/dev/null || true
     ZOT_EP="$ZOT_REGISTRY_ENDPOINT"
     if [ -n "$ZOT_EP" ]; then
-      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.27@sha256:6b89bc83031790b63ec21a970c10b98b8206bb5d7b3276f8b9477a42adafa8a4"
+      ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.28@sha256:7d4f1376a35708462048d3842a9c6169c51616368cd6a39c5b55f426e7acdb4d"
       /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
       set +e
       install -m 600 /dev/null /var/log/inngest-zot-pull.log

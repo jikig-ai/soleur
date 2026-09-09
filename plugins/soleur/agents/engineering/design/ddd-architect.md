@@ -70,6 +70,7 @@ graph LR
 ### Aggregate Design
 
 For each aggregate:
+
 - Root entity and invariants it enforces
 - Value objects and their validation rules
 - Domain events it emits
