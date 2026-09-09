@@ -901,40 +901,69 @@ jobs:
     # Extra legs are not free — see the retracted dispatch note below; they draw on the same runner
     # pool whose availability produces the multi-minute staggers.
     #
-    # NOTE ON DISPATCH — RETRACTED TWICE; READ THIS BEFORE RE-DERIVING IT.
+    # NOTE ON DISPATCH — RETRACTED TWICE, NOW REPLACED BY A MEASUREMENT.
     #
-    # Revision 1 said the multi-minute gaps between run creation and job start were runner-pool
-    # contention, and used that to argue against larger K.
-    # Revision 2 "corrected" that to: dispatch is ~1s and per-RUN, the gaps are this file's own
-    # `concurrency` group serialising each main push behind its predecessor's `test`, so extra
-    # legs add no dispatch penalty.
+    # Revisions 1 and 2 each asserted a single MECHANISM, and each was retracted by the next
+    # reader. Revision 1: the multi-minute gaps between run creation and job start are runner-pool
+    # contention. Revision 2: dispatch is ~1s and the gaps are this file's own `concurrency` group
+    # serialising each main push behind its predecessor's `test`.
     #
-    # REVISION 2 IS FALSE, and revision 1 was closer. Measured 2026-09-08 on run 34214304922
-    # (`gh api .../runs/<id>/jobs`, start offsets from the run's `created_at`):
+    # BOTH ARE TRUE, OF DIFFERENT COHORTS. That is why each looked like a refutation of the other:
+    # they were measured on different runs. This revision states the population instead of the
+    # mechanism, so there is nothing left to retract.
     #
-    #     + 441s  lint-conversations-update-callsites
-    #     + 621s  credential-path-guard
-    #     +1346s  test-scripts, web-platform-build
+    # MEASURED 2026-09-09 over 29 consecutive `main` push CI runs (2026-09-07T09:02Z ->
+    # 2026-09-09T14:22Z). "Group occupied at creation" = the predecessor run's `test` had not yet
+    # completed when this run was created. Jobs with `runner_id: null` or zero steps are EXCLUDED
+    # (they never acquired a runner, so they say nothing about availability). "Start spread" is
+    # measured over the 23 jobs with NO `needs:` — a group release starts those simultaneously, so
+    # any spread across them is runner availability by construction. `test` and `critical-css-gate`
+    # have `needs:` and are excluded from spread for that reason.
     #
-    # CORRECTED 2026-09-09: an earlier revision of this list also cited `+1s` for two jobs and
-    # `+1397s critical-css-gate`. Both are wrong for the argument. The `+1s` pair were SKIPPED
-    # (runner_id null, zero steps) — they never acquired a runner, so they say nothing about
-    # availability. And `critical-css-gate` HAS `needs: detect-changes`, so it is excluded by this
-    # sentence's own selection criterion. The honest figure over needs-less jobs that actually
-    # took a runner is 441s -> 1346s.
+    #   cohort                    n         first-job delay    queue term        start spread
+    #   group OCCUPIED            7 (24%)   med 460s max 1249s med 393s max 1245s med  68s max  913s
+    #   group DRAINED            22 (76%)   med   4s max  731s 0                  med 412s max 1708s
+    #   all                      29         —                  —                  med 292s max 1708s
     #
-    # Those jobs have NO `needs`, so a concurrency gate releases them together — a group release
-    # starts every one of them at the same instant. They stagger across 15 MINUTES inside one run,
-    # which a queue cannot produce. And the group was EMPTY: the predecessor run finished
-    # 2026-09-07T22:03:12Z, this run was created 2026-09-08T10:13:35Z, a 12h10m gap. Separately
-    # `test` — whose start is gated only by its `needs` — waited 619s after its last need
-    # concluded, which is runner wait by definition.
+    # THE MODEL IS ADDITIVE, NOT EITHER/OR:
+    #     time-to-test = queue (only when the group is occupied) + runner availability + execution
+    # The queue term is workload-dependent: large on a merge-burst day, exactly zero on a normal
+    # one. On 2026-09-07 15:16-17:58 five consecutive runs were queue-bound; the queue is real.
+    # It is not the dominant term across the population — it binds on ~a quarter of runs, and the
+    # window's WORST time-to-test (4156s) came from a run whose group was EMPTY.
     #
-    # So the gaps are runner availability, extra legs DO draw on that pool, and the withdrawal of
-    # revision 1's argument is itself withdrawn. What remains genuinely unresolved is how much the
-    # queue contributes on a busy day; do not replace this note with a third confident mechanism
-    # without measuring the start SPREAD within a single run, which is what falsifies the queue
-    # explanation in one command.
+    # WHAT THE PER-SHA KEY BUYS. It removes the queue term unconditionally rather than
+    # probabilistically. Its median wall-clock saving is ZERO, because the median run has no queue
+    # term to remove. It is justified on SEMANTICS — a run's gated quantity should not contain an
+    # unbounded term belonging to a different commit — not on wall clock (ADR-215, Decision 1).
+    # It raises peak runner concurrency, and the table above says the pool is the binding
+    # constraint on 76% of runs, so this could make the median WORSE. That is the declared risk.
+    #
+    # REPRODUCTION (two-stage jq: `gh --jq` does NOT forward `--arg`):
+    #   for p in 1 2 3 4 5 6; do
+    #     gh api "/repos/{owner}/{repo}/actions/runs?event=push&branch=main&per_page=100&page=$p" \
+    #       --jq '.workflow_runs[] | select(.name=="CI") | [.created_at,.id,.conclusion] | @tsv'
+    #   done | sort -ru | awk -F'\t' '$1>="<start>" && $1<="<end>"' > ci-win.tsv
+    #   while IFS=$'\t' read -r created rid concl; do
+    #     gh api "/repos/{owner}/{repo}/actions/runs/$rid/jobs?per_page=100" > j.json
+    #     jq -r --arg rid "$rid" --arg created "$created" \
+    #       '.jobs[] | [$rid,$created,.name,(.started_at//""),(.completed_at//""),
+    #                   (.conclusion//""),(.runner_id|tostring),(.steps|length|tostring)] | @tsv' j.json
+    #   done < ci-win.tsv > jobs.tsv
+    #
+    # `sort -ru` is load-bearing: GitHub's pagination is not stable while new runs are being
+    # created, so a plain `sort -r` can carry the same run on two pages and inflate the
+    # population. The raw `jobs.tsv` this table was computed from is committed at
+    # knowledge-base/project/specs/feat-one-shot-7931-5806-ci-concurrency-and-workflow-run-deploy/
+    # measurement-jobs-2026-09-09.tsv, so the arithmetic is checkable without re-querying.
+    #
+    # A PRIOR RUN OF THIS SAME COMMAND, over a population reported as 35, published med 332s /
+    # max 1708s for the drained spread and a 20%/80% split. Re-derived here at 29 runs it is
+    # med 412s / max 1708s and 24%/76%. Every MAXIMUM and the ENTIRE occupied cohort (n=7; 460/
+    # 1249, 393/1245) reproduce to the second; the medians and the population do not. The
+    # conclusions above are invariant across both readings, which is why they are stated as
+    # cohort shape rather than as a headline number. Do not cite a median from this block without
+    # re-running the command — cite the shape.
     strategy:
       fail-fast: false
       matrix:

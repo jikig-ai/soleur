@@ -110,6 +110,25 @@ a kill, so it is the last resort and must sit strictly above whatever else can s
   concurrency and would break the deliberate "let prior runs finish so the audit trail stays
   intact" property `ci.yml` documents. That is a decision about that property and is tracked as a
   follow-up, not folded into a production unblock.
+
+  > **Superseded 2026-09-09 (ADR-215, #7931 part 1).** Two claims in the bullet above are wrong,
+  > and both are corrected where the key actually changed (`ci.yml`'s dispatch note):
+  >
+  > 1. **"the concurrency queue is the dominant term" — not across the population.** Measured over
+  >    29 consecutive `main` push runs, the group is occupied at creation on **7 (24%)**, costing a
+  >    median 393s / max 1245s. On the other 22 the first job starts a median of **4s** after
+  >    creation, and the window's WORST time-to-`test` (4156s) came from a run whose group was
+  >    empty. The queue is real, bounded and intermittent; runner availability is the larger term
+  >    overall (needs-less start spread med 292s, max 1708s).
+  > 2. **"would break the ... audit trail" — it does not.** Per-SHA grouping gives each `main` push
+  >    its OWN group, and `cancel-in-progress` stays `${{ github.event_name == 'pull_request' }}`.
+  >    Nothing is cancelled on `main` under either key; prior runs still run to completion. The
+  >    audit trail is byte-identically intact, so the property this bullet treated as a blocking
+  >    trade-off was never in tension with the fix.
+  >
+  > What survives is the real cost: the key raises **peak runner concurrency**, on the pool the
+  > measurement identifies as the binding constraint for 76% of runs. That is the declared risk of
+  > #7931 part 1, with a rollback trigger, not an audit-trail concern.
 - Balance across the `test-scripts` matrix legs is a positional accident of registration order,
   not an owned fact — it swung 15.09 → 20.70 → 15.09 minutes during this PR's own review purely
   from adding and removing two files. Tracked in the same follow-up.
