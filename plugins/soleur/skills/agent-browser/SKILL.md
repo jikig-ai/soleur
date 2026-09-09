@@ -195,17 +195,56 @@ agent-browser state list
 
 ## Examples
 
+### Credential safety on a login or credential page
+
+An accessibility snapshot serializes the **value** of input fields. A value the
+agent never typed — a password manager's autofill, a static `value=`, a JS
+assignment, or a freshly-minted credential shown in a panel — is rendered into
+the transcript and into any snapshot file written to disk. Nothing about the
+call looks credential-adjacent, which is why this is a gate and not advice: the
+PreToolUse hook `browser-snapshot-credential-guard.sh` denies an unrouted
+snapshot before it runs (#7947).
+
+**Route every snapshot on a credential-bearing page through the redactor**,
+[redact-a11y-snapshot.py](./scripts/redact-a11y-snapshot.py):
+
+```bash
+agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py
+```
+
+Stating the ceiling first, because the rule is otherwise read as "piping makes a
+snapshot safe": the redactor is **defense-in-depth on one sink**, not a control
+that makes snapshotting a credential page safe. It keys on the node's accessible
+name, because neither surface serializes the input's `type` — measured, see the
+[Phase 0.1 record](../../../../knowledge-base/project/specs/feat-one-shot-7946-7947-sentry-org-token-and-snapshot-redaction/phase-0-measurement.md).
+It therefore cannot see a localised field name, a credential outside a
+text-input role, or a value split across segmented inputs.
+
+**A screenshot is safe for a `type=password` field** — the browser renders it as
+dots — **and is NOT safe for a generated-credential panel.** Measured: a readonly
+`type=text` box named "Token" renders its value in clear in the screenshot
+exactly as it does in the snapshot. On a page displaying a credential, capture
+neither: read the value with `agent-browser get value <sel>` into a file, use it,
+and shred the file.
+
 ### Login Flow
+
+`fill @e2` needs a ref, and a ref comes from a snapshot — so the login step
+snapshots **through the redactor** rather than not at all.
 
 ```bash
 agent-browser open https://app.example.com/login
-agent-browser snapshot -i
+agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py
 # Output shows: textbox "Email" [ref=e1], textbox "Password" [ref=e2], button "Sign in" [ref=e3]
 agent-browser fill @e1 "user@example.com"
-agent-browser fill @e2 "password123"
+# Pass the secret by env indirection -- never a literal, which lands in the
+# transcript as the tool-call argument before any snapshot happens.
+agent-browser fill @e2 "$APP_PASSWORD"
 agent-browser click @e3
 agent-browser wait 2000
-agent-browser snapshot -i  # Verify logged in
+# Verify logged in -- still through the redactor: the password manager may have
+# refilled the field on the post-login page.
+agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py
 ```
 
 ### Search and Extract

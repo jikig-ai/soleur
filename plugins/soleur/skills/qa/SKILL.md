@@ -106,6 +106,18 @@ A non-zero exit FAILS this QA run. The assertions read invariants jsdom cannot: 
 For each test scenario in the plan, execute the steps it describes. Scenarios contain three possible step types, identified by their prefix:
 
 - **Browser:** steps — Execute via Playwright MCP tools (`browser_navigate`, `browser_fill_form`, `browser_click`, `browser_snapshot`, `browser_take_screenshot`)
+
+**Credential safety (#7947).** An accessibility snapshot serializes the **value**
+of input fields, including a value the agent never typed (a password manager's
+autofill, a static `value=`, a generated-credential panel). On any page carrying
+a password or credential field, route the snapshot through the redactor —
+`agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`
+— and never capture a page that is displaying a credential value: a screenshot
+is safe for a `type=password` field but **not** for a readonly `type=text`
+credential panel, which renders in clear. Full rule and its measured ceiling:
+`plugins/soleur/skills/agent-browser/SKILL.md` §"Credential safety on a login or
+credential page".
+
 - **API verify:** steps — Execute the exact `doppler run` + `curl` command from the scenario. Compare the output against the expected value stated in the scenario.
 - **Cleanup:** steps — Execute cleanup commands to remove test data from external services. Run these regardless of whether the scenario passed or failed.
 

@@ -81,6 +81,17 @@ Reproduce the exact steps from the issue:
    - `browser_snapshot` to see the current state
    - `browser_take_screenshot` to capture evidence
 
+**Credential safety (#7947).** An accessibility snapshot serializes the **value**
+of input fields, including a value the agent never typed (a password manager's
+autofill, a static `value=`, a generated-credential panel). On any page carrying
+a password or credential field, route the snapshot through the redactor —
+`agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`
+— and never capture a page that is displaying a credential value: a screenshot
+is safe for a `type=password` field but **not** for a readonly `type=text`
+credential panel, which renders in clear. Full rule and its measured ceiling:
+`plugins/soleur/skills/agent-browser/SKILL.md` §"Credential safety on a login or
+credential page".
+
 3. **Check for console errors:**
 
    ```

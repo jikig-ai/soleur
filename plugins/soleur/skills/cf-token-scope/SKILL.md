@@ -58,8 +58,11 @@ token.
    The widen transits a **full-power dashboard session** (the cookie is an
    account-wide bearer). Do **not** dump `browser_network_requests` /
    `browser_console_messages` to files, scope screenshots to the edit control,
-   use snapshot-only navigation, and never call `browser_evaluate` with a
-   `filename` — see the playbook's leak constraints.
+   route any accessibility snapshot through the redactor
+   (`plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`), and
+   always call `browser_evaluate` **with** a `filename` — without one the value
+   is returned into the transcript. This corrects an inverted instruction that
+   stood here previously; see the playbook's leak constraints.
 
 3. **Post-widen verification.** Re-run the probe with
    `--target-entrypoint <phase>`. Success = the target is currently authorized AND

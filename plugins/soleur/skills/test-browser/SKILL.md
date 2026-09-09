@@ -188,6 +188,18 @@ agent-browser --headed snapshot -i
 **Step 3: Verify key elements**
 
 - Use `agent-browser snapshot -i` to get interactive elements with refs
+
+**Credential safety (#7947).** An accessibility snapshot serializes the **value**
+of input fields, including a value the agent never typed (a password manager's
+autofill, a static `value=`, a generated-credential panel). On any page carrying
+a password or credential field, route the snapshot through the redactor —
+`agent-browser snapshot -i 2>&1 | python3 plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py`
+— and never capture a page that is displaying a credential value: a screenshot
+is safe for a `type=password` field but **not** for a readonly `type=text`
+credential panel, which renders in clear. Full rule and its measured ceiling:
+`plugins/soleur/skills/agent-browser/SKILL.md` §"Credential safety on a login or
+credential page".
+
 - Page title/heading present
 - Primary content rendered
 - No error messages visible
