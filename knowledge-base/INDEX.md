@@ -497,7 +497,7 @@
 - [anthropic](legal/data-processing-agreements/anthropic.md)
 - [flagsmith](legal/data-processing-agreements/flagsmith.md)
 - [Soleur BYOK Delegation Consent Arrangement (Versioned In-App Consent)](legal/delegation-consent-side-letter-template.md)
-- [Draft reply — Convergence Corporate CLA request](legal/drafts/2026-09-04-convergence-ccla-reply.md)
+- [Reply — Convergence Corporate CLA request (SENT 2026-09-09)](legal/drafts/2026-09-04-convergence-ccla-reply.md)
 - [GDPR-gate report — feat-soleur-managed-deploy-substrate-3723](legal/gdpr-gate-report-2026-05-14.md)
 - [gdpr-gate report — feat-oauth-tc-consent-3205](legal/gdpr-gate-report-2026-05-15-feat-oauth-tc-consent-3205.md)
 - [Legitimate Interest Assessment — Tenant deploy substrate orchestration-plane meta-audit log](legal/legitimate-interest-assessments/2026-05-14-tenant-deploy-substrate-lia.md)
