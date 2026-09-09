@@ -396,6 +396,7 @@ DOUBLE_COVERED_ACK=(
   "scripts/verify-marketplace-ruleset.test.sh|explicit run_suite AND a ci.yml step -- registered locally and in CI on purpose, #7402"
   "plugins/soleur/test/gdpr-gate-self-test.test.sh|test-all glob AND its own gdpr-gate-self-test.yml workflow, #7402"
   "apps/web-platform/scripts/sandbox-canary-regression.test.sh|test-all glob AND an infra-validation.yml step, #7402"
+  "scripts/markdown-lint.test.sh|explicit run_suite AND a pr-quality-guards.yml step -- the two surfaces do DIFFERENT things and both are load-bearing: the test-scripts legs install no node deps, so the run_suite line only fires LOCALLY (where a dev has node_modules) and prints a notice otherwise, while the workflow step runs npm ci first and is the only place this executes in CI. The union-hazard this list exists for is closed by assertion, not by prose: rows W1a/W1e in the suite itself assert BOTH the sweep step and this suite step are present in the workflow, and W1b/W1c assert the hook and required-context wiring, so de-registering any single surface reddens the suite rather than passing silently. #7927"
   "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh|test-all glob AND its own gdpr-gate-self-test.yml job -- the two surfaces do DIFFERENT things and both are load-bearing: under the glob lefthook is absent so the suite loud-skips, while the workflow installs lefthook and sets SOLEUR_REQUIRE_LEFTHOOK=1 so the skip becomes a hard failure. De-registering either is NOT a no-op. #7710"
 )
 : > "$WORK/dupes"

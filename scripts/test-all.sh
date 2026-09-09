@@ -1400,19 +1400,25 @@ if want_scripts; then
   # `test` context, and the orphan linter treats a suite carrying BOTH a run_suite
   # line and a workflow `run:` step as double coverage.
   # The suite drives the REAL pinned binary through a hermetic sandbox that symlinks the
-  # repo's node_modules, so it needs `npm ci` to have run. The `test-scripts` legs do not
-  # install node deps (only the `markdown-lint` job in pr-quality-guards.yml does), and
-  # without the binary the sandbox CONTROL goes RED and every mutation row below it would
-  # pass for the wrong reason -- the suite says so and aborts, which reads as a suite
-  # failure rather than as absent coverage. Declare the decline instead: a missing
-  # prerequisite is coverage NOT OBTAINED, and skip_suite records that with a re-run
-  # recipe. Never let it fall through to a silent pass -- the whole point of this suite is
-  # that a markdown gate which cannot run must not look like one that ran clean.
+  # repo's node_modules, so it needs `npm ci` to have run. These legs deliberately install
+  # no node deps (see the `test-scripts` job header in ci.yml), so the binary is absent in
+  # CI and the sandbox CONTROL goes RED -- every mutation row would then pass for the wrong
+  # reason, which the suite detects and aborts on.
+  #
+  # A NOTICE, NOT A DECLINE. skip_suite would be the honest primitive if this were the only
+  # runner, but it is not: the `markdown-lint` job in pr-quality-guards.yml runs `npm ci
+  # --ignore-scripts` and executes this suite there, so CI coverage is obtained and a
+  # decline here would MISreport it as not obtained. It also moves `skipped`, and
+  # scripts/test-all-infra-coverage-notice.test.sh asserts exact skip counts to prove the
+  # infra gate is the only thing moving them -- a second, unrelated decline source silently
+  # invalidates that measurement (measured: 3 arms failed). A non-selection moves no
+  # counter, per the accounting note at _shard_selects; the echo keeps it from being silent.
   if [[ -x node_modules/.bin/markdownlint ]]; then
     run_suite "scripts/markdown-lint-unit" bash scripts/markdown-lint.test.sh
   else
-    skip_suite "scripts/markdown-lint-unit" "node deps absent (npm ci not run on this leg)" \
-      "npm ci --ignore-scripts && bash scripts/markdown-lint.test.sh"
+    echo "[notice] scripts/markdown-lint-unit not run here: node deps absent on this leg."
+    echo "         CI coverage: the markdown-lint job in .github/workflows/pr-quality-guards.yml."
+    echo "         Locally: npm ci --ignore-scripts && bash scripts/markdown-lint.test.sh"
   fi
   # Supabase Management API deprecation + host-pin assembly guard, and the
   # retained-log helper. Registered EXPLICITLY because neither directory is in

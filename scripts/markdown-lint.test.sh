@@ -632,6 +632,17 @@ else
   fail "W1c -- 'markdown-lint' is absent from scripts/required-checks.txt"
 fi
 
+# W1e: the workflow must also RUN THIS SUITE. The test-all.sh registration cannot fire
+# in CI (those legs install no node deps), so the workflow step is the only CI execution
+# of these mutation rows. Coverage is a union, which is exactly why a single-surface
+# de-registration must not be silent -- this row is what makes it loud.
+if grep -qE '^[[:space:]]*run:[[:space:]]*bash scripts/markdown-lint\.test\.sh' \
+     "$REPO_ROOT/.github/workflows/pr-quality-guards.yml"; then
+  pass "W1e -- the CI job runs this mutation suite (the only CI surface that can)"
+else
+  fail "W1e -- no CI step runs 'bash scripts/markdown-lint.test.sh'; these rows gate nothing in CI"
+fi
+
 # W1d: the job must carry no `if:`. A required context that does not report on
 # merge_group leaves the queue entry pending forever.
 if awk '/^  markdown-lint:/{f=1;next} /^  [a-z]/{f=0} f' \
@@ -691,7 +702,7 @@ printf '\n=== markdown-lint.test.sh: %s passed, %s failed (%s cases) ===\n' "$pa
 # statement in between stops that walk, the mutant dies on `set -u` with the threshold
 # unbound, and a fully compliant floor is reported as a construction failure rather
 # than as covered. Measured: this floor joined that uncovered set until the printf moved.
-MIN_CASES=31
+MIN_CASES=32
 if (( cases < MIN_CASES )); then
   printf 'ERROR: only %s cases ran, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$cases" "$MIN_CASES" >&2
   exit 1
