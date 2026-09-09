@@ -1189,9 +1189,19 @@ jobs:
     # Bounds a HUNG job (#7902). This job only reads three `needs.*.result` strings (measured
     # p50 0.05 min) and runs no suite, so 10 minutes cannot fire before any loud bound.
     #
-    # Everything below this line is byte-unchanged from before the shard (#7902 AC5): the
-    # `needs:` list, the `if:`, and the aggregation loop are untouched, which is what proves
-    # matrix legs roll up into ONE `needs.test-scripts.result` with no aggregator edit.
+    # RETIRED 2026-09-09 (#7931 part 2). This used to read: "Everything below this line is
+    # byte-unchanged from before the shard (#7902 AC5) ... which is what proves matrix legs roll
+    # up into ONE `needs.test-scripts.result` with no aggregator edit."
+    #
+    # That proof has SERVED ITS PURPOSE and is now discharged by history, not by these bytes:
+    #   git log -p --follow -- .github/workflows/ci.yml
+    # still shows the shard landing with the `needs:`/`if:`/loop untouched. #7931 part 2 edits the
+    # aggregation loop deliberately, so the claim can no longer be true of the working tree, and
+    # leaving it standing would assert a byte-identity that a reader can trivially falsify.
+    #
+    # What is STILL true and is the durable half: the `needs:` list and the `if:` below remain
+    # untouched by the shard, so K matrix legs continue to roll up into exactly ONE
+    # `needs.test-scripts.result`. Only the loop BODY changed, and only to name the cause.
     timeout-minutes: 10
     steps:
       - name: Aggregate shard results
@@ -1199,19 +1209,97 @@ jobs:
           WEBPLAT_RESULT: ${{ needs.test-webplat.result }}
           BUN_RESULT: ${{ needs.test-bun.result }}
           SCRIPTS_RESULT: ${{ needs.test-scripts.result }}
+          # The event is a CLASSIFIER INPUT, not decoration. Supersession is only
+          # reachable where `cancel-in-progress` is true, which since #7931 part 1
+          # is pull_request only — see the SUPERSEDED arm below.
+          EVENT_NAME: ${{ github.event_name }}
         run: |
+          # NAME THE MEASURED CAUSE, NEVER A GUESSED ONE (#7931 part 2).
+          #
+          # This step used to emit a bare `echo "$shard: $result"`. A leg killed by
+          # its own `timeout-minutes` and a leg cancelled because a newer commit
+          # superseded the run BOTH render as `test-scripts: cancelled`, so the
+          # repo's most load-bearing required check could not distinguish "CI is
+          # too slow" from "someone pushed again" — the discrimination #7902
+          # needed and had to reconstruct from the REST API after the fact.
+          #
+          # THE DISCRIMINATOR IS ALREADY IN THE THREE STRINGS. A concurrency
+          # cancellation cancels the WHOLE run, so every in-flight leg reads
+          # `cancelled`. A `timeout-minutes` kill stops ONE leg while its siblings
+          # conclude normally. That is a shape comparison over data this job
+          # already holds in `env:`, and it is correct whether GitHub reports a
+          # timed-out job as `cancelled` or as `failure`.
+          #
+          # DELIBERATELY NOT DONE: an earlier revision added `actions/checkout`, a
+          # `gh api` call and a new script here to compare each leg's elapsed time
+          # against a parsed budget. That widens the input surface of the repo's
+          # most load-bearing required check — from three GitHub-provided strings
+          # plus this file, to those plus a checkout plus a network call — to
+          # obtain a DIAGNOSTIC STRING. Three reviewers converged against it.
+          #
+          # Guarded by plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh,
+          # which EXTRACTS this body and EXECUTES it over synthetic result triples
+          # under the shell Actions uses (`bash --noprofile --norc -eo pipefail`).
           fail=0
-          # Single colon-delimited iteration collapses the prior parallel
-          # for-list + case-arms. Adding a 4th shard now requires editing
-          # one line (plus needs: + env:); previously also required
-          # editing a separate case arm.
-          for entry in "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT"; do
+          # Single colon-delimited list, iterated twice: once to classify each leg,
+          # once (inner) to read that leg's siblings. Adding a 4th shard is still a
+          # one-line edit here, plus needs: + env:.
+          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" )
+          for entry in "${entries[@]}"; do
             shard="${entry%%:*}"
             result="${entry#*:}"
-            if [[ "$result" != "success" ]]; then
-              echo "$shard: $result" >&2
-              fail=1
+            if [[ "$result" == "success" ]]; then
+              continue
             fi
+            # SET BEFORE CLASSIFYING. The classification is a diagnostic; the
+            # verdict is not conditional on it. A non-success leg fails this job
+            # whatever shape the siblings are in.
+            fail=1
+            case "$result" in
+              failure)
+                echo "$shard: FAILED — assertions failed; see the $shard job log" >&2
+                ;;
+              skipped)
+                echo "$shard: SKIPPED — the leg did not run" >&2
+                ;;
+              cancelled)
+                cancelled_siblings=0
+                concluded_siblings=0
+                sibling_count=0
+                for other in "${entries[@]}"; do
+                  if [[ "${other%%:*}" == "$shard" ]]; then
+                    continue
+                  fi
+                  sibling_count=$((sibling_count + 1))
+                  case "${other#*:}" in
+                    cancelled) cancelled_siblings=$((cancelled_siblings + 1)) ;;
+                    success|failure) concluded_siblings=$((concluded_siblings + 1)) ;;
+                  esac
+                done
+                if [[ "$cancelled_siblings" -gt 0 ]]; then
+                  if [[ "$EVENT_NAME" == "pull_request" ]]; then
+                    echo "$shard: SUPERSEDED — the run was cancelled (a newer commit landed)" >&2
+                  else
+                    # NOT SUPERSEDED, and saying so would be a confident third
+                    # mechanism on a question this file has already retracted twice.
+                    # Since #7931 part 1 every push has its OWN concurrency group and
+                    # cancel-in-progress stays pull_request-only, so supersession
+                    # cannot cancel a push run. A run-wide cancellation here is
+                    # something else (a manual `gh run cancel`, an admin action).
+                    echo "$shard: CANCELLED — the whole run was cancelled on a '$EVENT_NAME' event; cause not determined from the result shape (supersession cannot occur here: each push has its own concurrency group)" >&2
+                  fi
+                elif [[ "$sibling_count" -gt 0 && "$concluded_siblings" -eq "$sibling_count" ]]; then
+                  echo "$shard: STOPPED ALONE — this leg was stopped while its siblings finished; the usual cause is its own declared timeout-minutes" >&2
+                else
+                  echo "$shard: CANCELLED — cause not determined from the result shape" >&2
+                fi
+                ;;
+              *)
+                # An honest UNKNOWN arm is REQUIRED. GitHub may add a result value;
+                # falling silently through would drop the only line the operator gets.
+                echo "$shard: UNCLASSIFIED — result='$result'; cause not determined from the result shape" >&2
+                ;;
+            esac
           done
           if [[ $fail -ne 0 ]]; then
             exit 1
