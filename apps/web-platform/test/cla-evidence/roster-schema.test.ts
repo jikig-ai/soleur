@@ -19,7 +19,7 @@ const validRoster = () => ({
   schema_version: "1.0",
   organizations: [
     {
-      legal_name: "Convergence SARL",
+      legal_name: "Example Fixture Co",
       record_ref: "CCLA-0001",
       signed_at: "2026-09-04T00:00:00Z",
       cla_doc: {
