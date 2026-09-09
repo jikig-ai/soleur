@@ -75,7 +75,19 @@ JOB_NAME="release / release"
 NEED=5
 SCAN=25
 
-RUNS=$(gh api "repos/${GH_REPO}/actions/workflows/${WORKFLOW}/runs?branch=main&per_page=${SCAN}" \
+# `event=push` IS LOAD-BEARING, NOT A NARROWING CONVENIENCE (#5806, ADR-215).
+# web-platform-release.yml is split across two triggers and produces TWO runs per
+# merge: a push-arm run that actually builds and crane-copies (the `release` job),
+# and a workflow_run-arm run carrying the deploy chain where `release` is SKIPPED.
+# The jobs API still returns a row named "release / release" on that second arm, so
+# an unfiltered scan resolves a `job_id`, finds ZERO steps under it, and both the
+# build and mirror extractions come back "absent" — which this probe correctly
+# refuses to interpret and reports as `TRANSIENT: ... probably renamed`. That is a
+# probe that can never PASS, against a mirror that is working. Same pin, same
+# reason, as `resolve-target`'s `?event=push&head_sha=` jobs-API query in
+# web-platform-release.yml. It also halves the scan window's waste: SCAN=25 now
+# means 25 runs that could have built something.
+RUNS=$(gh api "repos/${GH_REPO}/actions/workflows/${WORKFLOW}/runs?branch=main&event=push&per_page=${SCAN}" \
   --jq '.workflow_runs[] | select(.status == "completed") | "\(.id) \(.created_at)"' 2>/dev/null)
 
 if [[ -z "$RUNS" ]]; then

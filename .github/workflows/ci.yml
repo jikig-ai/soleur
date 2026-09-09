@@ -893,7 +893,8 @@ jobs:
     # suite set invalidates this table — RE-SIMULATE before touching K.
     #
     # STALE BY ONE SUITE (2026-09-08, QA). This PR later added
-    # plugins/soleur/test/await-ci-ceiling-invariants.test.sh, taking the set 375 -> 376. Measured
+    # plugins/soleur/test/await-ci-ceiling-invariants.test.sh (renamed 2026-09-09 to
+    # workflow-run-deploy-invariants.test.sh, #5806), taking the set 375 -> 376. Measured
     # effect: it registers at ordinal 189, so the 8.14-min floor suite (ordinal 148) keeps its leg,
     # but 187 of the 375 pre-existing suites move legs. The per-leg minutes above were NOT
     # re-simulated — the Phase 0 job log they came from is a pre-shard run of a job shape that no
@@ -1013,8 +1014,11 @@ jobs:
     #     "A budget NEVER changes a suite's status or the runner's exit code" — and its only
     #     consumer emits a `[budget]` line AFTER the suite has finished. It reports; it cannot fire.
     #   * `TC_RUNTIME_CEILING_S`, the one real in-runner bound, is explicitly DISABLED under CI.
-    #   * `await-ci`'s CEILING_S bounds a job in a DIFFERENT workflow. A long leg makes THAT job
-    #     fail-close (the #7902 symptom); it does not bound this leg.
+    #   * there USED to be a third: `await-ci`'s CEILING_S, which bounded a job in a DIFFERENT
+    #     workflow — a long leg made THAT job fail-close (the #7902 symptom) without bounding
+    #     this one. #5806 deleted `await-ci`; the deploy now fires on this workflow's completion
+    #     event, so no external ceiling bounds this leg at all. That makes the point below
+    #     STRONGER, not weaker: `timeout-minutes` is now the only bound of any kind.
     #
     # So `timeout-minutes` is the ONLY bound on a CI leg and it is SILENT — a job-kill produces no
     # annotation. It must therefore sit above the repo's own DECLARED EXPECTATION for the work on
@@ -1023,7 +1027,8 @@ jobs:
     #
     #   rest-of-leg 6.95 min + that suite's declared budget (41.67 min, itself ~1.5x its own
     #     measured max) = 48.62 min
-    #   x1.2 (the same convention sizing await-ci's timeout-minutes over CEILING_S) = 58.3
+    #   x1.2 (the convention that sized await-ci's timeout-minutes over CEILING_S before #5806
+    #        deleted that job; the ratio is kept because the reasoning was never about that job) = 58.3
     #   -> 60
     #
     # An earlier revision of this PR set 30, sized against the leg's NOMINAL 15.09 min. That

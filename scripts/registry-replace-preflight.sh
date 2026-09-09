@@ -176,6 +176,16 @@ fi
 # can be pushing. Derived rather than remembered:
 #   grep -rln 'crane copy' .github/workflows/
 ZOT_WRITER_WORKFLOWS="${REGISTRY_PREFLIGHT_ZOT_WRITERS:-web-platform-release.yml build-inngest-config-bundle.yml build-inngest-bootstrap-image.yml}"
+# DELIBERATELY UNFILTERED BY EVENT, and that is a decision, not an oversight (#5806,
+# ADR-215). web-platform-release.yml now produces TWO runs per merge: a push-arm run
+# that crane-copies into zot (the `release` job) and a workflow_run-arm run carrying
+# the deploy chain, which does NOT crane-copy. Counting only the push arm would be
+# the narrower reading of P3's stated hazard — but the deploy arm PULLS from this
+# very registry (ci-deploy.sh's zot pull path, ADR-096), so replacing the host under
+# an in-flight deploy is its own hazard. Both arms are therefore counted on purpose.
+# The cost is a longer drain: the deploy arm's ceiling is 90 minutes against a
+# WAIT_SECS of 2100, so a co-firing deploy will more often reach the refusal below.
+# Do not "fix" that by adding --event push without first re-reading this paragraph.
 # `queued` COUNTS. Merging fires the release and this dispatcher on the SAME push, so at preflight
 # time the release is very likely queued, not in_progress — and `--status` takes one value, so the
 # old single-status filter reported 0 for exactly the case P3 exists to catch.

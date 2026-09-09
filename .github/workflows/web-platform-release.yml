@@ -43,7 +43,9 @@ on:
       #
       # Know before using it: an override buys NOTHING when the gate is right — an image
       # absent from zot cannot be pulled, so this publishes a still-undeployable release.
-      # It is for a MISFIRING gate. It also bypasses await-ci (a push-only job), and
+      # It is for a MISFIRING gate. On a dispatch the CI gate is bypassed too —
+      # `resolve-target` reads the in-run release job rather than requiring a
+      # workflow_run event (it was `await-ci`, a push-only job, before #5806) — and
       # self-healing the resulting draft on a later run requires the SAME bump_type, or
       # the draft is orphaned permanently.
       allow_unmirrored_reason:
@@ -550,24 +552,26 @@ jobs:
 
   migrate:
     needs: [resolve-target]
-    # Gated on await-ci so migrations only apply for a CI-green SHA and never run
-    # ahead of a fail-closed gate. A longer adaptive await-ci (ADR-072) would
-    # otherwise widen the window where the prod DB gets a NEW schema while prod
-    # still serves OLD code, and could apply migrations for a SHA whose CI later
-    # fail-closes.
+    # Gated on `resolve-target` so migrations only apply for a CI-green SHA and
+    # never run ahead of a fail-closed gate. Before #5806 the gate was `await-ci`,
+    # a poll inside this workflow; it is now the `workflow_run` event itself, which
+    # is why this arm only exists once CI has already concluded. The property is
+    # unchanged and is now stronger: the SHA comes from the completion event rather
+    # than from whatever the poll happened to observe.
     #
     # `if` MUST lead with `always() &&`: GitHub skips a job when any `needs` dep is
-    # SKIPPED *before* the `if` is evaluated, so without always() a
-    # workflow_dispatch run (where await-ci is skipped — it is a push-only job)
-    # would auto-skip migrate, the dispatch-tolerance clause would never run, and
-    # deploy (which tolerates migrate==skipped) would still ship NEW code on an
-    # UN-migrated schema — the more dangerous ordering. Mirrors the deploy job.
+    # SKIPPED *before* the `if` is evaluated. That still matters — on a
+    # workflow_dispatch run `resolve-target` runs but `release` (its own `needs`)
+    # took the dispatch path, and on any arm a skipped upstream would auto-skip
+    # migrate, the dispatch-tolerance clause would never run, and deploy (which
+    # tolerates migrate==skipped) would still ship NEW code on an UN-migrated
+    # schema — the more dangerous ordering. Mirrors the deploy job.
     #
-    # Trade-off (NOT "no net cost"): this serializes migrate AFTER await-ci — it
-    # used to run concurrently with the wait, both off `release` — so under
-    # contention deploy-start ≈ await-ci + migrate_runtime instead of
-    # max(await-ci, migrate). migrate is short transactional DDL so the tail cost
-    # is small and the correctness gain is worth it. Residual window (named, not
+    # Trade-off (NOT "no net cost"): migrate is serialized AFTER the gate rather
+    # than running concurrently with it. Under the old poll that cost
+    # `await-ci + migrate_runtime` instead of `max(await-ci, migrate)`; under
+    # `workflow_run` the gate is an EVENT rather than a wait, so the term it used
+    # to add is gone entirely. migrate is short transactional DDL either way. Residual window (named, not
     # closed): a migrate that applies without a following deploy can still occur on
     # a verify-doppler-secrets failure, leaving NEW schema with OLD prod code —
     # acceptable under expand/contract forward-migration discipline.
@@ -783,9 +787,11 @@ jobs:
     # verify-migrations tolerates 'skipped' because it only runs on
     # migrate.result==success; when migrate is itself skipped, verify is
     # skipped too, and deploy should still proceed.
-    # await-ci gates the prod cutover on CI's `test` for this SHA: on push it must
-    # succeed (fail-closed); on workflow_dispatch it is skipped (push-only job) and
-    # tolerated, mirroring the skip_deploy operator escape hatch.
+    # `resolve-target` gates the prod cutover on CI's `test` for this SHA. Since
+    # #5806 that is not a poll: this arm only runs BECAUSE CI concluded, and
+    # `resolve-target` fail-closes when the release for that SHA is missing or
+    # broken. On workflow_dispatch it resolves from the in-run release job instead,
+    # mirroring the skip_deploy operator escape hatch.
     # FR-A5 — same conjunct, same reason as `migrate` above, and this is the job it
     # matters most for. `always() &&` discards skip-on-failed-needs, and the only
     # release-side condition below is `outputs.docker_pushed` — an output written by the
@@ -813,10 +819,15 @@ jobs:
     # v0116-1-buildx-driver-full-repull-deploy-timeout) and MUST stay above the
     # ~65m legitimate ceiling so it never kills a slow-but-healthy deploy.
     #
-    # COUPLED (#7091, #7160): this value is one term on the declared critical path that bounds
-    # the longest LEGITIMATE commit-to-deployed latency. That path is NOT a serial sum —
-    # `release` and `await-ci` declare no `needs:` and run in PARALLEL:
-    #     max(release 60, await-ci 60) + migrate 30 + verify-migrations 15 + deploy 90 = 195
+    # COUPLED (#7091, #7160, #5806): this value is one term on the declared critical path that
+    # bounds the longest LEGITIMATE commit-to-deployed latency. That path is NOT a serial sum,
+    # and since #5806 the parallel arms are in DIFFERENT WORKFLOWS — `release` on this file's
+    # push arm, CI in ci.yml, both started by the same push, with the deploy chain firing on CI's
+    # completion:
+    #     max(release 60, CI-to-`test` 70, resolve-target 60) + migrate 30 + verify-migrations 15
+    #       + deploy 90 = 205
+    # (this comment previously read `max(release 60, await-ci 60) + ... = 195`, which was ALREADY
+    # stale before #5806 — await-ci was 72 and the threshold 207)
     # (the release ceiling is declared on the CALLEE, reusable-release.yml, because the GitHub
     # schema forbids timeout-minutes on a `uses:` job). scripts/prod-version-drift-check.sh sets
     # DRIFT_SUSTAINED_THRESHOLD_MIN from that path, and B9 asserts the threshold stays >= it —

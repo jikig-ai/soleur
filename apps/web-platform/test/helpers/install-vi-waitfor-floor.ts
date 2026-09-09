@@ -10,7 +10,12 @@ import { vi } from "vitest";
 // (live-repo-badge.test.tsx, org-switcher-container.test.tsx, …). Under
 // full-suite forked-worker CPU contention a 1s wait is exceeded before the
 // condition settles — the proven CI-red flake (live-repo-badge.test.tsx
-// vi.waitFor.timeout) that fail-closes await-ci and silently skips prod deploys.
+// vi.waitFor.timeout) that silently skips prod deploys. (The mechanism changed in
+// #5806/ADR-215 but the consequence did not: `await-ci` used to fail-close on a
+// red CI; now web-platform-release.yml's workflow_run deploy arm fires on CI
+// COMPLETION and `resolve-target` clean-skips with `skip_reason=ci_not_green`,
+// concluding GREEN having deployed nothing. A flake still costs a prod cutover,
+// and now does so without reddening anything downstream.)
 //
 // Wrapping the singleton lifts the default across every call site (existing AND
 // future), so a new bare `vi.waitFor` cannot re-arm the flake. Explicit per-site

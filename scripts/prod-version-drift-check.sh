@@ -64,10 +64,24 @@ set -uo pipefail
 PATHSPEC=(apps/web-platform/ plugins/soleur/ ':(exclude)plugins/soleur/docs/' ':(exclude)plugins/soleur/test/')
 
 # The longest LEGITIMATE commit-to-deployed latency, from the release pipeline's own declared
-# ceilings along its critical path. That path is NOT a serial sum: `release` and `await-ci`
-# declare no `needs:` and run in PARALLEL, so it is
-#     max(release 60, await-ci 72) + migrate 30 + verify-migrations 15 + deploy 90 = 207.
+# ceilings along its critical path. That path is NOT a serial sum, and since #5806 the parallel
+# arms are in DIFFERENT WORKFLOWS: `release` runs on the push arm of web-platform-release.yml
+# while CI runs in ci.yml, both started by the same push. The deploy chain fires on CI's
+# completion event, so it waits on whichever of the two finishes last:
+#     max(release 60, CI-to-`test` 70, resolve-target 60) + migrate 30 + verify-migrations 15
+#       + deploy 90 = 205.
 # A principled bound rather than a guess, and ~4x every observed run.
+#
+# `await-ci` USED to supply the second term (at 72) by polling for CI inside this workflow. It
+# was deleted by #5806 — see ADR-215. The term that replaced it is CI's own DECLARED path to its
+# `test` aggregator (`test-scripts` 60 + `test` 10), read out of ci.yml by B9 rather than
+# restated here, so it moves when a CI ceiling moves. `resolve-target` is in the max() rather
+# than the sum because its only unbounded activity is a liveness poll on the RELEASE run, which
+# overlaps the release arm instead of following it.
+#
+# 207 is UNCHANGED by that rewrite (205 <= 207, so the constant still holds with 2 min spare) and
+# is deliberately not lowered to match: harvesting the slack would re-create the #7902 trap one
+# layer out. Confirmed by a green B9, never by re-deriving the arithmetic here.
 #
 # 195 -> 207 (#7902). `await-ci`'s timeout-minutes moved 60 -> 72 when its in-bash CEILING_S was
 # raised 3000 -> 3600 to clear a measured time-to-`test` p100 of 57.4 min. This constant moves

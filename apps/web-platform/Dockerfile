@@ -148,8 +148,12 @@ ARG BUILD_VERSION=dev
 ENV BUILD_VERSION=$BUILD_VERSION
 
 # Git commit SHA injected at build time for /health endpoint verification.
-# Asserted post-deploy by web-platform-release.yml against ${{ github.sha }}
-# to catch bad-tag → bad-image associations (#3409).
+# Asserted post-deploy by web-platform-release.yml against
+# ${{ needs.resolve-target.outputs.head_sha }} to catch bad-tag → bad-image
+# associations (#3409). It was `${{ github.sha }}` until the deploy chain moved
+# onto the workflow_run arm (#5806, ADR-215), where `github.sha` is the default
+# branch head rather than the SHA CI verified — `resolve-target` carries the
+# authoritative one.
 ARG BUILD_SHA=dev
 ENV BUILD_SHA=$BUILD_SHA
 

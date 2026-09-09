@@ -577,9 +577,10 @@ if hb:
 
 # --- B8: pathspec parity vs the release workflow -----------------------------
 #
-# The critical path is NOT a serial sum (#7160). `release` and `await-ci` declare no `needs:`,
+# The critical path is NOT a serial sum (#7160). `release` and CI declare no `needs:` on each
+# other — since #5806 they are in different workflows, both started by the same push —
 # so they run in PARALLEL and the declared bound is:
-#     max(release, await-ci) + migrate + verify-migrations + deploy
+#     max(release, CI-to-`test`, resolve-target) + migrate + verify-migrations + deploy
 #
 # Two properties this computation must preserve, both previously violated in the UNSAFE
 # direction:
@@ -1073,7 +1074,8 @@ run_part_b() {
   # suite, so the threshold can never silently become smaller than legitimate latency.
   #
   # The compared value is a CRITICAL PATH with a max() term, not a serial sum: `release` and
-  # `await-ci` start in parallel, so it is max(release, await-ci) + migrate + verify-migrations
+  # CI start in parallel (in different workflows since #5806), so it is
+  # max(release, CI-to-`test`, resolve-target) + migrate + verify-migrations
   # + deploy. With `release` undeclared that is 495, not the 555 a serial reading gives.
   #
   # SCOPE (#7160): this bounds DECLARED EXECUTION only. The checker's own clock starts at the

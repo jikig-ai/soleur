@@ -90,14 +90,17 @@ jobs:
     # worst run ever observed here and 88x the plugin caller's worst.
     #
     # WHY NOT LOWER. The drift checker's threshold bounds this pipeline's declared critical
-    # path, which is NOT a serial sum -- `release` and `await-ci` have no `needs:` and run in
-    # PARALLEL, so the path is:
-    #     max(release, await-ci) + (migrate + verify-migrations + deploy)
+    # path, which is NOT a serial sum. Since #5806 (ADR-215) the parallel arms live in DIFFERENT
+    # WORKFLOWS: this `release` job runs on web-platform-release.yml's push arm while CI runs in
+    # ci.yml, both started by the same push, and the deploy chain fires on CI's completion. So
+    # the path is:
+    #     max(release, CI-to-`test`, resolve-target) + (migrate + verify-migrations + deploy)
     # Naming the jobs rather than their total is deliberate: a literal would silently stale
-    # the moment any one of them changes. `await-ci` already contributes 60 to that max, so
-    # every value <= 60 yields an identical bound -- 60 is the LARGEST ceiling that leaves
-    # DRIFT_SUSTAINED_THRESHOLD_MIN untouched, and anything lower discards free headroom.
-    # The first minute above 60 would force the threshold up.
+    # the moment any one of them changes. The second term WAS `await-ci` at 60; that job was
+    # deleted by #5806 and replaced by CI's own declared to-`test` path, currently 70, which is
+    # now the DOMINANT term. So `release` at 60 is dominated either way: every value <= 70
+    # yields an identical bound. 60 is kept because it is 2.5x the worst run observed here and
+    # raising it buys nothing; the first minute above 70 would force the threshold up.
     #
     # WHAT THIS ACTUALLY BUYS. Its main value is not tidier arithmetic. This workflow declares
     # a workflow-level `concurrency: release-${{ inputs.component }}` with
