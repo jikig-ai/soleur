@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# Self-tests for the accessibility-snapshot credential redactor (#7947).
+#
+# Runs in the scripts shard — scripts/test-all.sh globs
+# plugins/soleur/skills/*/test/*.test.sh, so this file carries NO run_suite line.
+#
+# Every fixture is synthesized. The sentinel ZZQP-SENTINEL-7947 is invented and
+# is never a real credential (cq-test-fixtures-synthesized-only).
+#
+# The case list is derived from the Phase 0.1 measurement recorded at
+# knowledge-base/project/specs/feat-one-shot-7946-7947-sentry-org-token-and-snapshot-redaction/phase-0-measurement.md
+# and NOT from the plan's original structural assumption. Measured: neither
+# agent-browser 0.22.3 nor the Playwright MCP serializes `type=`, so a
+# structural "is this a password input" predicate is unimplementable and the
+# accessible-name limb does all the work.
+set -uo pipefail
+
+REPO_ROOT="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
+FILTER="$REPO_ROOT/plugins/soleur/skills/agent-browser/scripts/redact-a11y-snapshot.py"
+SENTINEL='ZZQP-SENTINEL-7947'
+
+pass=0
+fail=0
+# Independent case counter (ADR-193 #2): incremented at CALL SITES only, never
+# inside ok()/bad(), so stubbing a verdict helper cannot drop a row and its
+# count together.
+cases=0
+
+# Floor derived as a lower bound, not a snapshot of today's total:
+#   6 redaction rows + 5 must-PASS rows + 3 shape rows + 3 failure-mode rows = 17.
+# The two instrument self-test rows are excluded: they run before the counters
+# are zeroed, so they are a precondition on the harness, not coverage of the SUT.
+MIN_ASSERTIONS=17
+
+ok()  { printf 'ok   - %s\n' "$1"; pass=$((pass + 1)); }
+bad() { printf 'FAIL - %s\n' "$1"; fail=$((fail + 1)); }
+
+# ---------------------------------------------------------------------------
+# Instrument self-test (runs BEFORE any real row).
+# Drives both verdict helpers once each and refuses to continue unless both
+# counters moved. A suite whose helpers are stubbed exits 0 having asserted
+# nothing; this is the only row that can see that.
+# ---------------------------------------------------------------------------
+_p0=$pass; _f0=$fail
+ok  "instrument self-test: ok() increments"
+bad "instrument self-test: bad() increments (EXPECTED, not a real failure)"
+if [[ $pass -ne $((_p0 + 1)) || $fail -ne $((_f0 + 1)) ]]; then
+  printf 'INSTRUMENT BROKEN: ok()/bad() did not both move (pass %d->%d, fail %d->%d)\n' \
+    "$_p0" "$pass" "$_f0" "$fail" >&2
+  exit 1
+fi
+# Zero all three counters rather than retiring just the deliberate failure.
+# Half-retiring it (dropping the fail but keeping its `cases` increment) breaks
+# the pass+fail==cases reconciliation below — which is exactly what that
+# reconciliation is for, and it caught this on the first run.
+pass=0; fail=0; cases=0
+
+if [[ ! -x "$FILTER" ]]; then
+  printf 'FAIL - redactor missing or not executable at %s\n' "$FILTER"
+  printf '\nRED: the filter does not exist yet. This is the expected pre-implementation state.\n'
+  exit 1
+fi
+
+run_filter() { printf '%s' "$1" | python3 "$FILTER" 2>/dev/null; }
+
+# assert_redacted <label> <input>
+# The value must be gone from stdout AND the marker present. Asserting the
+# NEGATIVE (the sentinel must never appear) is the load-bearing half: a
+# positive "is <redacted> present" is satisfied by any arm that also leaks.
+assert_redacted() {
+  local label="$1" input="$2" out
+  cases=$((cases + 1))
+  out="$(run_filter "$input")"
+  if [[ "$out" == *"$SENTINEL"* ]]; then
+    bad "$label — sentinel survived in stdout"
+  elif [[ "$out" != *"<redacted>"* ]]; then
+    bad "$label — value removed but no <redacted> marker emitted"
+  else
+    ok "$label"
+  fi
+}
+
+# assert_preserved <label> <input> <needle>
+# The must-PASS side. A filter that redacts everything is as broken as one that
+# redacts nothing, so every credential row above is paired against one of these.
+assert_preserved() {
+  local label="$1" input="$2" needle="$3" out
+  cases=$((cases + 1))
+  out="$(run_filter "$input")"
+  if [[ "$out" == *"$needle"* ]]; then
+    ok "$label"
+  else
+    bad "$label — benign value was redacted (over-aggressive filter)"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Redaction rows — one per credential-shaped accessible name.
+# "Token" is not decoration: it is the ONLY node agent-browser 0.22.3 leaks
+# (it masks type=password as bullets), and it is the class with a recorded
+# in-repo incident (2026-05-19-sentry-token-scope-probe-divergence.md).
+# ---------------------------------------------------------------------------
+assert_redacted 'agent-browser -i shape: textbox "Token"' \
+  "- textbox \"Token\" [ref=e5]: $SENTINEL"
+
+assert_redacted 'playwright-mcp shape: textbox "Enter your password"' \
+  "- textbox \"Enter your password\" [ref=e3]: $SENTINEL"
+
+assert_redacted 'credential name: "API key"' \
+  "- textbox \"API key\" [ref=e2]: $SENTINEL"
+
+assert_redacted 'credential name: "Client secret"' \
+  "- textbox \"Client secret\" [ref=e2]: $SENTINEL"
+
+assert_redacted 'credential name: "Passphrase"' \
+  "- textbox \"Passphrase\" [ref=e2]: $SENTINEL"
+
+# Indented node — the tree is nested in real output, so an anchor on ^- only
+# would miss every node below the root.
+assert_redacted 'indented node is still redacted' \
+  "- generic [ref=e1]:
+  - textbox \"Token\" [ref=e5]: $SENTINEL"
+
+# ---------------------------------------------------------------------------
+# must-PASS rows.
+# ---------------------------------------------------------------------------
+assert_preserved 'must-PASS: "Email address" value survives' \
+  '- textbox "Email address" [ref=e6]: probe-user@example.invalid' \
+  'probe-user@example.invalid'
+
+assert_preserved 'must-PASS: "Search" value survives' \
+  '- searchbox "Search" [ref=e2]: quarterly report' \
+  'quarterly report'
+
+assert_preserved 'must-PASS: "Username" is not a secret' \
+  '- textbox "Username" [ref=e2]: alice' \
+  'alice'
+
+assert_preserved 'must-PASS: heading text is untouched' \
+  '- heading "Reset your password" [level=1, ref=e1]' \
+  'Reset your password'
+
+assert_preserved 'must-PASS: non-credential node name containing "key" as a substring' \
+  '- textbox "Keyboard shortcut" [ref=e2]: ctrl+k' \
+  'ctrl+k'
+
+# ---------------------------------------------------------------------------
+# Shape rows — the serializations measured in Phase 0.1.
+# ---------------------------------------------------------------------------
+
+# The no-flag / -d N shape emits the value TWICE: once as the ": value" tail and
+# again as a nested StaticText child. A tail-only filter is half a fix and this
+# row is what proves it.
+assert_redacted 'nested StaticText duplicate is redacted too' \
+  "- textbox \"Token\" [ref=e5]: $SENTINEL
+  - StaticText \"$SENTINEL\""
+
+# --json wraps the same text in data.snapshot as an escaped string.
+assert_redacted '--json shape: data.snapshot is redacted' \
+  "{\"success\":true,\"data\":{\"snapshot\":\"- textbox \\\"Token\\\" [ref=e5]: $SENTINEL\"},\"error\":null}"
+
+# A heading carries [level=1, ref=e1] — two attrs in one bracket. Confirm the
+# attribute-bracket parse does not depend on a single-attr shape.
+assert_redacted 'multi-attribute bracket parses' \
+  "- textbox \"Token\" [level=2, ref=e5]: $SENTINEL"
+
+# ---------------------------------------------------------------------------
+# Failure-mode rows — the fail-closed contract (ADR-095 shape).
+# On refusal: exit 2, stdout EMPTY, stderr non-empty and sentinel-free. The
+# third clause is the one that matters: a filter that echoes the offending
+# input into its own error message re-opens the leak it exists to close.
+# ---------------------------------------------------------------------------
+cases=$((cases + 1))
+over_cap="$(python3 -c "print('- textbox \"Token\" [ref=e1]: $SENTINEL' * 400000)")"
+oc_out="$(printf '%s' "$over_cap" | python3 "$FILTER" 2>/tmp/rd_err.$$)"; oc_rc=$?
+oc_err="$(cat /tmp/rd_err.$$ 2>/dev/null)"; rm -f /tmp/rd_err.$$
+if [[ $oc_rc -ne 2 ]]; then
+  bad "over-cap input must exit 2 (got $oc_rc)"
+elif [[ -n "$oc_out" ]]; then
+  bad "over-cap input must leave stdout empty"
+elif [[ -z "$oc_err" ]]; then
+  bad "over-cap input must write a reason to stderr"
+elif [[ "$oc_err" == *"$SENTINEL"* ]]; then
+  bad "over-cap stderr leaked the sentinel"
+else
+  ok "over-cap input: exit 2, stdout empty, stderr non-empty and sentinel-free"
+fi
+
+cases=$((cases + 1))
+mal_out="$(printf '%s' "{\"data\":{\"snapshot\": " | python3 "$FILTER" 2>/tmp/rd_err2.$$)"; mal_rc=$?
+mal_err="$(cat /tmp/rd_err2.$$ 2>/dev/null)"; rm -f /tmp/rd_err2.$$
+if [[ $mal_rc -ne 2 ]]; then
+  bad "truncated JSON must exit 2 (got $mal_rc)"
+elif [[ -n "$mal_out" ]]; then
+  bad "truncated JSON must leave stdout empty"
+elif [[ -z "$mal_err" ]]; then
+  bad "truncated JSON must write a reason to stderr"
+else
+  ok "truncated JSON: exit 2, stdout empty, stderr non-empty"
+fi
+
+cases=$((cases + 1))
+empty_out="$(printf '' | python3 "$FILTER" 2>/dev/null)"; empty_rc=$?
+if [[ $empty_rc -eq 0 && -z "$empty_out" ]]; then
+  ok "empty input is a clean no-op (exit 0, empty stdout)"
+else
+  bad "empty input should be a clean no-op (rc=$empty_rc, out='${empty_out:0:40}')"
+fi
+
+# ---------------------------------------------------------------------------
+# Verdict. Reported with printf + exit, never through ok()/bad() — the floor
+# must not be dispatched through the helpers it backstops (ADR-193).
+# ---------------------------------------------------------------------------
+printf '\n%d passed, %d failed, %d cases\n' "$pass" "$fail" "$cases"
+
+if [[ $((pass + fail)) -ne $cases ]]; then
+  printf 'VACUITY: pass+fail (%d) != cases (%d) — a row did not report\n' \
+    "$((pass + fail))" "$cases" >&2
+  exit 1
+fi
+if [[ $cases -lt $MIN_ASSERTIONS ]]; then
+  printf 'VACUITY: %d cases is below the floor of %d\n' "$cases" "$MIN_ASSERTIONS" >&2
+  exit 1
+fi
+[[ $fail -eq 0 ]] || exit 1
+exit 0
