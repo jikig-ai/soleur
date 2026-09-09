@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests for scripts/sentry-alert-live-fidelity.sh (#7650 §2.9) — the probe that
-# notices one of the 27 adopted rules going dark WEEKS after the adopting apply.
+# notices one of the 28 adopted rules going dark WEEKS after the adopting apply.
 #
 # THE FAILURE THIS SUITE IS SHAPED AGAINST. A fidelity probe compares a document
 # to itself for a living, and the degenerate implementation — return PASS —
@@ -15,7 +15,11 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROBE="$REPO_ROOT/scripts/sentry-alert-live-fidelity.sh"
-CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json"
+# Tracks the PROBE's production default. Repointed to the Phase 3.4 capture with
+# the probe itself (#7985): the 2026-09-04 Phase 2 capture pre-dates
+# `git-data-boot-warning`, so a suite pinned to it would assert 27 while the probe
+# it tests compares 28 — the suite would go red for the fixture, not the code.
+CAPTURE="$REPO_ROOT/knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json"
 pass=0; fail=0
 EXPECTED_TESTS=13
 
@@ -126,7 +130,7 @@ t_live_api_shape() {
     )
   ' "$CAPTURE" > "$shaped" 2>/dev/null
 
-  if [[ ! -s "$shaped" ]] || ! jq -e 'length == 30' "$shaped" >/dev/null 2>&1; then
+  if [[ ! -s "$shaped" ]] || ! jq -e 'length == 31' "$shaped" >/dev/null 2>&1; then
     _report "F13 an API-shaped payload (server fields + unsorted keys) still PASSES" fail \
       "the shaped fixture was not built — this row proves nothing"
     return
@@ -167,10 +171,10 @@ t_live_api_shape() {
 # ── The identity row. ONE row, because it is the one a broken probe passes. ──
 t_identity_passes() {
   _run "$CAPTURE"
-  if [[ "$_rc" -eq 0 ]] && grep -q 'all 27 in-scope rules match' <<<"$_out"; then
-    _report "F1 live == capture PASSES, and reports having compared all 27" ok
+  if [[ "$_rc" -eq 0 ]] && grep -q 'all 28 in-scope rules match' <<<"$_out"; then
+    _report "F1 live == capture PASSES, and reports having compared all 28" ok
   else
-    _report "F1 live == capture passes over all 27" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
+    _report "F1 live == capture passes over all 28" fail "rc=$_rc; output: $(head -c 300 <<<"$_out")"
   fi
 }
 
@@ -264,15 +268,15 @@ t_empty_capture_refuses() {
 t_survivors_out_of_scope() {
   _run "$CAPTURE"
   local names_ok=1
-  # 30 live workflows, 27 in scope: the vendor default plus the two carrying
+  # 31 live workflows, 28 in scope: the vendor default plus the two carrying
   # `event_unique_user_frequency_count` are excluded by the predicate, not by a
   # name list. Assert the COUNT and that neither survivor is named in a finding.
-  grep -q 'comparing 27 captured in-scope rule' <<<"$_out" || names_ok=0
+  grep -q 'comparing 28 captured in-scope rule' <<<"$_out" || names_ok=0
   if [[ "$_rc" -eq 0 && "$names_ok" -eq 1 ]]; then
-    _report "F12 scope is 27: the vendor default and the two survivors are excluded by predicate" ok
+    _report "F12 scope is 28: the vendor default and the two survivors are excluded by predicate" ok
   else
-    _report "F12 scope is 27, survivors excluded" fail \
-      "rc=$_rc; expected 'comparing 27 captured in-scope rule' in: $(head -c 300 <<<"$_out")"
+    _report "F12 scope is 28, survivors excluded" fail \
+      "rc=$_rc; expected 'comparing 28 captured in-scope rule' in: $(head -c 300 <<<"$_out")"
   fi
 }
 
