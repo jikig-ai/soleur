@@ -126,7 +126,48 @@ _excluded() {
 # by the PR that adds this file, so citing it would leave every entry pointing at a dead ref.
 # CEILING: raising it is an ADR-207 edit, not a local decision.
 LEDGER_CEILING=12
-LEDGER=()
+LEDGER=(
+  # scripts/lib/repo-write-boundary.test.sh — 11 deliberate probe-tag creations. This is the
+  # suite that TESTS the refs/tags boundary, so it is the one place a real tag author belongs;
+  # every one runs inside a mktemp sandbox the suite creates. No removal is planned, so these
+  # carry a RE-REVIEW TRIGGER rather than a tracking issue: filing an issue for work with no
+  # removal path is phantom backlog. Trigger: an entry is void if its site stops creating the
+  # tag inside a sandbox root the suite itself created.
+  #
+  # SINGLE-quoted, deliberately: these keys carry the command text verbatim, which includes
+  # shell variables such as "$p". Double quotes would EXPAND them — measured, that made the
+  # suite die with `p: unbound variable` under set -u before any classification ran.
+  'scripts/lib/repo-write-boundary.test.sh|git -C "$p" -c tag.gpgSign=false -c tag.forceSignAnnotated=false tag probe-tag 2>/dev/null'
+  'scripts/lib/repo-write-boundary.test.sh|git -C "$p" -c tag.gpgSign=false tag -f probe-tag >/dev/null 2>&1'
+  'scripts/lib/repo-write-boundary.test.sh|git -C "$p" -c tag.gpgSign=false tag probe-tag'
+  'scripts/lib/repo-write-boundary.test.sh|pgit -C "$d" tag "$t"'
+  'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag -a v9.9.7 -m '"'"'annotated release'"'"''
+  'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag -f moved-tag "$mix_c2" >/dev/null 2>&1'
+  'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag doomed-tag'
+  'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag fresh-tag'
+  'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag moved-tag'
+  'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag v3.258.3'
+  'scripts/lib/repo-write-boundary.test.sh|pgit -C "$p" tag v9.9.9'
+)
+
+# --- out-of-class registration ledger (Stage A, AC6) ----------------------------------------
+# A registration is accounted for in exactly one of two places: resolved into the root set, or
+# recorded HERE with a reason. A shape that is neither is UNCLASSIFIED and fails the run — there
+# is no third, silent option.
+#
+# Matching is by SUBSTRING on the joined argv, because the same registration appears in two
+# shapes: locally one `npm run test:ci` inline script is a decline, under CI both are live
+# (the relevance gate's bypass makes declines unreachable). Keying on the exact argv would make
+# the ledger environment-dependent, which is the drift this file exists to avoid.
+OUT_OF_CLASS_CEILING=4
+OUT_OF_CLASS=(
+  # Runs a PACKAGE SCRIPT, not a tracked executable path. `npm run test:ci` expands through
+  # vitest's own project config, so there is no path literal for this guard to resolve, and
+  # inventing one would be a guess presented as a root. The vitest suites it runs are TypeScript
+  # under apps/web-platform, which cannot author a git tag without going through a spawn whose
+  # argv this guard already scans in its array-form spelling.
+  'npm run test:ci'
+)
 
 # --- Stage A: roots -------------------------------------------------------------------------
 ROOTS_RAW="$(mktemp -t battery-tag-roots.XXXXXXXX)"
@@ -149,6 +190,7 @@ fi
 
 declare -A ROOTS=()
 unclassified=0
+out_of_class=0
 
 _add_root() {
   local p="${1#./}"
@@ -239,7 +281,15 @@ while IFS= read -r line; do
     continue
   fi
   if ! _resolve_command "${argv[@]}"; then
-    unclassified=$((unclassified + 1))
+    _ooc=0
+    for _o in "${OUT_OF_CLASS[@]}"; do
+      case "${argv[*]}" in *"$_o"*) _ooc=1 ;; esac
+    done
+    if (( _ooc == 1 )); then
+      out_of_class=$((out_of_class + 1))
+    else
+      unclassified=$((unclassified + 1))
+    fi
   fi
 done < "$ROOTS_RAW"
 
@@ -247,7 +297,7 @@ root_count=${#ROOTS[@]}
 
 # MIN_ROOTS — hand-ratcheted, DOWNWARD RATCHET REFUSED. The only legitimate direction is up; a
 # shrinking registration surface reddens rather than being absorbed.
-MIN_ROOTS=200
+MIN_ROOTS=400
 
 # --- Stage B: closure to fixpoint -----------------------------------------------------------
 declare -A CLOSURE=()
@@ -266,7 +316,14 @@ while (( depth < DEPTH_BOUND )); do
       [[ -f "$REPO_ROOT/$cand" ]] || continue
       CLOSURE["$cand"]=1; added=$((added + 1))
     done < <(
-      { grep -oE '(\$\{CLAUDE_PLUGIN_ROOT:-[^}]*\}/|"\$REPO_ROOT"/|\$REPO_ROOT/|"\$GIT_ROOT"/)?(scripts|plugins|apps|tests|\.github|\.claude)/[A-Za-z0-9._/-]+\.(sh|py|ts|mjs|cjs)' \
+      # NO DIRECTORY ALLOWLIST. An earlier revision enumerated top-level dirs
+      # (scripts|plugins|apps|tests|.github|.claude) and therefore could not reach
+      # `.openhands/hooks/pre-merge-rebase.sh`, which `pre-merge-rebase-parity.test.sh` — a
+      # battery suite — invokes by path. That is UNDER-approximation, i.e. fail-OPEN: a real
+      # tag author outside the listed dirs was invisible. The plan's design is explicit that any
+      # tracked executable path literal joins the closure, so the allowlist is the defect. The
+      # `-f` test below is what bounds this; a prose mention of a non-existent path is dropped.
+      { grep -oE '(\$\{CLAUDE_PLUGIN_ROOT:-[^}]*\}/|"\$REPO_ROOT"/|\$REPO_ROOT/|"\$GIT_ROOT"/)?[A-Za-z0-9._][A-Za-z0-9._/-]*\.(sh|py|ts|mjs|cjs)' \
         "$REPO_ROOT/$f" || true; } \
       | sed -E 's#^.*\}/##; s#^"?\$[A-Za-z_]+"?/##'
     )
@@ -331,8 +388,12 @@ _suppresses() {
   # `git fetch --no-tags origin '+refs/tags/*:refs/tags/*'` is documented to fetch tags anyway,
   # and `--no-tags --tags` precedence is NOT formally documented, so the guard refuses to guess.
   [[ "$l" =~ (--tags|[[:space:]]-t([[:space:]]|$)|refs/tags/|tagOpt) ]] && return 1
-  # Only fetch and pull can reach SUPPRESSED at all.
-  [[ "$l" =~ [[:space:]](fetch|pull)([[:space:]]|$) ]] || return 1
+  # Only fetch and pull can reach SUPPRESSED at all. BOTH SPELLINGS: the shell form
+  # (`git fetch …`) and the array form (`["fetch", "--no-tags", …]`). Matching only the
+  # space-delimited shell form graded a correctly-suppressed array-form site OFFENDER — the
+  # occurrence pattern already covers the array spelling, so the verdict arm has to as well or
+  # the two axes disagree and the guard demands a fix that is already present.
+  [[ "$l" =~ [[:space:]](fetch|pull)([[:space:]]|$) || "$l" =~ [\"\'](fetch|pull)[\"\'] ]] || return 1
   return 0
 }
 
@@ -390,6 +451,12 @@ for w in scripts/lib/repo-write-boundary.test.sh scripts/suite-exit-class-parity
   fi
 done
 
+ck; if (( out_of_class <= OUT_OF_CLASS_CEILING )); then
+  pass "out-of-class registrations within ceiling ($out_of_class <= $OUT_OF_CLASS_CEILING)"
+else
+  fail "out-of-class registrations exceed ceiling ($out_of_class > $OUT_OF_CLASS_CEILING) — each needs a stated reason"
+fi
+
 ck; if (( unclassified == 0 )); then
   pass "every registration accounted for (0 unclassified)"
 else
@@ -420,11 +487,9 @@ else
 fi
 
 # --- Stage D: floors and conservation --------------------------------------------------------
-BATTERY_TAG_MIN_ASSERTIONS=7
-
-printf '\nbattery-tag-authorship: %d passed, %d failed, %d assertion(s) executed (floor %d); roots=%d closure=%d occurrences=%d offenders=%d unclassified=%d\n' \
-  "$passes" "$fails" "$asserted" "$BATTERY_TAG_MIN_ASSERTIONS" \
-  "$root_count" "$closure_count" "$occurrences" "$offenders" "$unclassified"
+printf '\nbattery-tag-authorship: %d passed, %d failed, %d assertion(s) executed; roots=%d closure=%d occurrences=%d offenders=%d unclassified=%d out-of-class=%d\n' \
+  "$passes" "$fails" "$asserted" \
+  "$root_count" "$closure_count" "$occurrences" "$offenders" "$unclassified" "$out_of_class"
 
 # Reported DIRECTLY, never through fail() — a neutered fail() is exactly what this backstops
 # (ADR-193). Zero slack: the floor is the measured count.
@@ -436,7 +501,7 @@ printf '\nbattery-tag-authorship: %d passed, %d failed, %d assertion(s) executed
 # the binding, dies at an unbound variable under `set -u` before reaching the floor, and is
 # scored CONSTRUCTION — an UNCOVERED floor, which is the opposite of what this floor is for.
 # Measured: the earlier layout put this suite in that file's construction-failure set.
-BATTERY_TAG_MIN_ASSERTIONS=7
+BATTERY_TAG_MIN_ASSERTIONS=9
 if (( asserted < BATTERY_TAG_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < BATTERY_TAG_MIN_ASSERTIONS=%d\n' "$asserted" "$BATTERY_TAG_MIN_ASSERTIONS" >&2
   exit 1

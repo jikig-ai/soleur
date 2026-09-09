@@ -268,7 +268,7 @@ esac
       { cwd: remoteDir }
     );
     // Re-fetch so local origin/main tracks the reset remote.
-    spawnChecked(["git", "fetch", "origin"], { cwd: repoDir });
+    spawnChecked(["git", "fetch", "--no-tags", "origin"], { cwd: repoDir });
     // Re-reset local main to match the now-reset origin/main.
     spawnChecked(["git", "reset", "--hard", "origin/main"], { cwd: repoDir });
     // Remove untracked files/directories (e.g., todos/ from addReviewEvidence).
