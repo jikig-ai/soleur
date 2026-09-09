@@ -53,7 +53,7 @@ notification's exit code is the last command in the backgrounded string.
 - [x] 3.3 Close #7956 as a duplicate of #7886 (or close #7886 into #7956 if the better-diagnosed
       record is preferred). Leaving both open is not an option.
 - [x] 3.4 File the residue issue against the post-#7879 file, labelled `code-review`, cross-linking
-      #7208 §B, listing all four items from plan Phase 2.4: six arms still marked at declaration;
+      #7208 §B. *(Amended 2026-09-09: two of the four Phase 2.4 items were REFUTED against #7879's head and deliberately not filed; #8008 lists the two that survived plus a scope note recording the refutations.)* The original four read: six arms still marked at declaration;
       `passes` never asserted; the uncorrelated `tail -1` ledger read; `disabled` and
       `no_terminal_scope` still hard-failing.
 - [x] 3.5 **Do not edit any file under `.claude/hooks/`.** AC11 checks this mechanically.

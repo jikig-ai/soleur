@@ -52,6 +52,13 @@ the demoted fallback without citing the decision that demoted it.
   `T9-tree-adoption`, `T9-grandchild`, `T15-idempotency`, `T15-terminal-scope-stable`,
   `AC18-reentry-resweep`), so the anti-vacuity ledger remains satisfiable by intent for those
   six. #7879 moved only `T10-ac7-sweep`.
+
+  > **Corrected 2026-09-09 (measured against #7879's head `fa6539a4`):** this sentence is
+  > wrong and is left standing as the claim that was checked. It is NOT a six-of-seven
+  > split: `live_mark T10-ac7-sweep` sits at line 871, before its own snapshot/invoke/read
+  > sequence, exactly like the other six. #7879 split it OUT of the old three-line block and
+  > re-sited it, still at the arm's opening. No arm is marked at emission. Filed in corrected
+  > form as #8008.
 - `passes` is never asserted — only printed in the `RESULT:` line — so an arm that is marked
   SEEN but emits nothing reddens nothing.
 

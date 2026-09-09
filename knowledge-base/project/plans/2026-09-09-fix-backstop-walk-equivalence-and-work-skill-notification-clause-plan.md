@@ -290,7 +290,13 @@ skill and a learning file — no user data, no credential, no network, no produc
   `grep -c 'never from the completion NOTIFICATION either' …` returns **1**.
 - **AC2** The `**Why:**` addition is present: `grep -c 'a reaped task does not imply a reaped process tree' …`
   returns **1**.
-- **AC3 — full-class sweep (property 2).** `grep -rn 'infer from a tail' --include=*.md .` returns
+- **AC3 — full-class sweep (property 2).** *(Amended 2026-09-09: the literal grep below is
+  necessary and NOT sufficient — it asserts a STRING where the property is a CLAIM. It
+  returned 0 for `2026-09-07-…-never-ran.md` while that file's `## Session Errors` item 1
+  still prescribed "wait for the completion notification" as the fix for a VERDICT misread.
+  The property-shaped sweep is
+  `grep -rniE "(wait for|trust)\s+(the\s+)?(harness'?s?\s+)?(task-)?(completion\s+)?notification" --include=*.md .`
+  plus a wrap-insensitive pass; both were run at review.)* `grep -rn 'infer from a tail' --include=*.md .` returns
   matches only in (a) this feature's own `knowledge-base/project/{plans,specs}/**` artifacts and
   (b) lines that quote the claim **in order to refute it**. No file states it as live guidance. In
   particular the Prevention bullet of the 2026-09-07 learning carries a correction note referencing
@@ -349,6 +355,7 @@ skill and a learning file — no user data, no credential, no network, no produc
   |---|---|---|---|
   | `` `## ` `` (single backtick — what #7955 used) | `'## '` | `'## '` | **yes** |
   | `` `` ## `` `` (double backtick, symmetric padding) | `' ## '` | `'##'` | **no — the space is lost** |
+  | `` ``## `` `` (double backtick, trailing pad only) | `'## '` | `'## '` | yes |
   | `` `` ##  `` `` (double backtick, two trailing spaces) | `' ##  '` | `'## '` | yes |
 
   So a repair in the obvious double-backtick form would silently change the documented meaning
@@ -366,7 +373,27 @@ skill and a learning file — no user data, no credential, no network, no produc
   | `` `## ` `` → `` `##` `` | exit **1** | `MISSING: ['## ']` |
   | `` `### ` `` → `` `###` `` | exit **1** | `MISSING: ['### ']` |
 
-  Each mutation reddens **only** its own site, so the check is genuinely per-site.
+  Each mutation reddens **only** its own site, so the four VALUES are independently pinned.
+
+  > **Corrected 2026-09-09 (review) — it is NOT "per-site", and the gap is recorded rather
+  > than papered over.** AC6 is a file-global SET-MEMBERSHIP test: `found` accumulates
+  > rendered spans from anywhere in the file, so `want - found` cannot know which LINE
+  > supplied a member. "Each mutation reddens only its own site" shows the four values are
+  > independent; it does not show any site is pinned. Three demonstrated ways to satisfy
+  > AC6 while violating the property, all measured at review:
+  >
+  > 1. **Relocation.** Delete the real `` `bash ` `` bullet and add a throwaway mention of
+  >    the same span elsewhere in the file → AC6 rc=0, site gone.
+  > 2. **Fences.** The regex is fence-unaware, so an illustrative ```` ```markdown ```` block
+  >    containing the span satisfies it — and this file is a document *about* markdown idioms.
+  > 3. **Snapshot `want`.** The four literals are hardcoded, so a FIFTH deliberate
+  >    trailing-space span is unguarded and nothing goes red.
+  >
+  > The property-shaped form is: every line carrying an MD038 `disable-line` directive must
+  > hold at least one code span whose RENDERED content ends in a space, with a non-empty
+  > floor on such lines and a fence toggle. That is not committed here — AC6 is a
+  > **plan-time measurement only**, and `scripts/markdown-lint.sh` is measurably vacuous for
+  > this property (see the AC4 demonstration above), so the guard gap stands on `main`.
 
   **And AC4 alone is measurably vacuous.** With `` `## ` `` mutated to `` `##` `` — a change that
   makes the documentation say something different, since a heading prefix without its space is not
@@ -385,7 +412,10 @@ skill and a learning file — no user data, no credential, no network, no produc
 - **AC8** #7956 carries a comment naming **#7886** as its duplicate and **PR #7879** as the fix,
   correcting the inverted diagnosis and including the measured depth probe.
 - **AC9** Exactly one of #7956 / #7886 remains open.
-- **AC10** The residue issue exists, lists the four uncovered items from Phase 2.4, and
+- **AC10** *(amended 2026-09-09 — the original read "lists the four uncovered items", which the
+  Phase 2.4 Correction block above makes unsatisfiable.)* The residue issue exists, lists the
+  **two** items that survived measurement against #7879's head, records the two refuted items
+  so nobody re-files them, and
   cross-links #7208 §B.
 - **AC11** `git diff --name-only origin/main...HEAD` contains **no** path under `.claude/hooks/` —
   this PR does not touch the surface #7879 is rewriting.
