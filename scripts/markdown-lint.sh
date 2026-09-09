@@ -45,6 +45,7 @@ die() { printf 'markdown-lint: %s\n' "$*" >&2; exit 2; }
 # Fail LOUDLY and never fall back to the network. A `npx --yes` fallback here would
 # reintroduce defect 1 above at the exact moment the pin is missing, which is the
 # moment it matters.
+INVOCATION_CWD="$PWD"
 cd "$REPO_ROOT" || die "cannot enter repository root $REPO_ROOT"
 [[ -f "$CONFIG" ]] || die "missing $CONFIG"
 [[ -f "$IGNORE" ]] || die "missing $IGNORE"
@@ -57,6 +58,27 @@ case "$PINNED" in
 esac
 INSTALLED="$("$BIN" --version 2>/dev/null | tail -1 | tr -d '[:space:]')"
 [[ "$INSTALLED" == "$PINNED" ]] || die "installed markdownlint-cli is $INSTALLED but package.json pins $PINNED -- run: npm install --ignore-scripts"
+
+# THE CLI VERSION IS NOT THE THING THAT DECIDES VERDICTS. markdownlint-cli declares its
+# rules engine as `"markdownlint": "~0.41.1"` -- a RANGE. Asserting only the CLI leaves
+# the engine free to float within that range on a plain `npm install`, and the verdict
+# then moves under files nobody edited: precisely defect 1 above, which this script
+# claims to close. `npm ci` pins the engine through package-lock.json, so CI is already
+# deterministic; this makes the same guarantee hold locally, where the hook runs.
+ENGINE_PIN="$(python3 -c '
+import json,sys
+lock=json.load(open(sys.argv[1]))
+for k, v in lock["packages"].items():
+    if k == "node_modules/markdownlint" or k.endswith("/node_modules/markdownlint"):
+        print(v.get("version","")); break
+' "$REPO_ROOT/package-lock.json")"
+[[ -n "$ENGINE_PIN" ]] || die "package-lock.json declares no markdownlint rules-engine version -- the pin cannot be verified, and an unverifiable pin is the defect this script exists to close"
+ENGINE_INSTALLED="$(python3 -c '
+import json,sys
+print(json.load(open(sys.argv[1]))["version"])
+' "$REPO_ROOT/node_modules/markdownlint/package.json" 2>/dev/null)"
+[[ -n "$ENGINE_INSTALLED" ]] || die "the markdownlint rules engine is not installed -- run: npm install --ignore-scripts"
+[[ "$ENGINE_INSTALLED" == "$ENGINE_PIN" ]] || die "installed markdownlint rules engine is $ENGINE_INSTALLED but package-lock.json pins $ENGINE_PIN. The CLI version matching is NOT sufficient: the CLI depends on the engine by RANGE (~), so this is the version that actually decides verdicts -- run: npm ci --ignore-scripts"
 
 # --- Scope derivation --------------------------------------------------------------
 #
@@ -96,19 +118,63 @@ if [[ "$MODE" == "--repo-sweep" ]]; then
   # not an equality: a new top-level directory of documentation is a normal event and
   # must not red the gate, whereas an expected root going missing means the walk
   # stopped covering it. Measured from this producer's own output, not from memory.
-  # Measured 2026-09-08 against this producer: these 11 roots hold 1,325 of the 1,345
-  # swept files. The earlier 8-root set held 1,136, leaving 209 outside the assertion
-  # against a floor slack of 145 -- so dropping .grok/ (67) and .openhands/ (63) would
-  # have passed BOTH guards at 1,215 files, which is exactly the narrowing this
-  # assertion exists to catch. The 20 files still uncovered live in roots of 1-5 files
-  # each (spike, infra, .gemini, test) whose last .md can legitimately be deleted; the
-  # count floor is their only cover, and that is a deliberate trade, not an oversight.
-  EXPECTED_ROOTS=(.claude .gemini .github .grok .openhands apps docs knowledge-base plugins scripts todos)
+  # Re-derived 2026-09-08 against this producer, by running the arithmetic rather than
+  # narrating it: these 13 roots hold 1,334 of the 1,345 swept files. The original
+  # 8-root set held 1,136, leaving 209 outside the assertion against a floor slack of
+  # 145 -- so dropping .grok/ (67) and .openhands/ (63) would have passed BOTH guards
+  # at 1,215 files, which is exactly the narrowing this assertion exists to catch.
+  #
+  # The 11 still uncovered are: two one-file roots (infra, spike) whose last *.md can
+  # legitimately be deleted, and the nine repo-root *.md (AGENTS.md, README.md and
+  # friends), which are files rather than roots and so have no directory to assert.
+  # The count floor is their only cover. That is a deliberate trade; it is stated with
+  # the real numbers because an earlier revision of this comment claimed 1,325/20 and
+  # listed .gemini as uncovered while it is a member below -- a justification narrated
+  # from memory instead of measured, in the paragraph justifying the trade.
+  EXPECTED_ROOTS=(.claude .gemini .github .grok .openhands apps docs knowledge-base plugins scripts test tests todos)
   actual_roots="$(printf '%s\0' "${FILES[@]}" | cut -z -d/ -f1 | tr '\0' '\n' | LC_ALL=C sort -u)"
   missing=""
   for r in "${EXPECTED_ROOTS[@]}"; do
     grep -qxF -- "$r" <<<"$actual_roots" || missing+="$r "
   done
+  # (c) DISTINCTNESS. Both guards read ${#FILES[@]}, a multiset cardinality. Duplicating
+  # the producer (`scope_nul; scope_nul`) doubles it, so the floor is satisfiable while
+  # more than half the real corpus is narrowed away -- measured: 2,690 entries, 1,345
+  # distinct, floor 1200 green. A count nothing reconciles is not a floor.
+  distinct="$(printf '%s\0' "${FILES[@]}" | LC_ALL=C sort -zu | tr -cd '\0' | wc -c)"
+  (( distinct == ${#FILES[@]} )) || die "the sweep enumerated ${#FILES[@]} entries but only $distinct are distinct -- the producer is emitting duplicates, so the count floor above is measuring a multiset and can be satisfied while real files are dropped."
+
+  # (d) DEPTH REACH. `git ls-files '*.md'` matches at every depth; `'*/*.md'` -- a
+  # two-character edit -- silently drops every repo-root file (AGENTS.md, CLAUDE.md,
+  # CONTRIBUTING.md, README.md and five more: 9 files, leaving 1,336, so the floor stays
+  # green). Those files are also invisible to the roots assertion by construction, since
+  # `cut -d/ -f1` on a depth-1 path yields the filename itself and it can never be named
+  # as a directory. This is the cheapest narrowing available and it takes out the
+  # repository's front door.
+  depth1="$(printf '%s\0' "${FILES[@]}" | tr '\0' '\n' | grep -cv '/' || true)"
+  (( depth1 >= 1 )) || die "the sweep reached no depth-1 file. Every tracked *.md at the repository root (AGENTS.md, README.md, CLAUDE.md, ...) has been dropped -- the producer's pathspec no longer matches at depth 1, and neither the count floor nor the roots assertion can see it."
+
+  # (c) INLINE SILENCING. Both guards above count ${#FILES[@]}, so a file that carries a
+  # bare `<!-- markdownlint-disable -->` with no matching `-enable` stays in the swept
+  # set, reads identically to both, and is unlinted to EOF -- a whole file removed from
+  # coverage without moving a number either guard can see. Same for
+  # `markdownlint-configure-file`, which can switch rules off document-wide.
+  # Scoped `-disable-line` / `-disable-next-line` are deliberately permitted: they
+  # silence one line, they are visible at the site, and this corpus uses them for the
+  # deliberate-space MD038 idiom the remediation block describes.
+  # ONE batched grep per directive, not one per file: a per-file loop over 1,345 files
+  # (and 1,650 in the suite's sandbox, times every case) turns a 12-second run into
+  # minutes. `grep -oh` prints one line per MATCH across all files; `|| true` because
+  # grep exits 1 on no matches and this runs under `set -e`.
+  count_directive() { # <ere>
+    printf '%s\0' "${FILES[@]}" | xargs -0 grep -ohE "$1" 2>/dev/null | wc -l || true
+  }
+  dis="$(count_directive '<!--[[:space:]]*markdownlint-disable[[:space:]]*-->')"
+  ena="$(count_directive '<!--[[:space:]]*markdownlint-enable[[:space:]]*-->')"
+  cfg="$(count_directive 'markdownlint-configure-file')"
+  (( cfg == 0 )) || die "$cfg markdownlint-configure-file directive(s) in the swept set -- these switch rules off document-wide while the file still counts toward the floor above, so coverage drops with no number moving. Remove them, or exclude the file in .markdownlintignore where the exclusion is at least visible."
+  (( dis == ena )) || die "unbalanced file-level directives in the swept set: $dis markdownlint-disable vs $ena markdownlint-enable. An unmatched disable silences its file to EOF while the file still counts toward the floor above -- coverage drops and neither guard moves. Pair it with an enable, or use -disable-line for a single site."
+
   [[ -z "$missing" ]] || die "the sweep reached roots but did NOT reach [${missing% }] -- the producer stopped walking a root it is expected to cover. A count floor cannot see this: a dropped root leaves the total above any floor loose enough not to red on a real cleanup."
 
 elif [[ -n "$MODE" ]]; then
@@ -122,8 +188,26 @@ elif [[ -n "$MODE" ]]; then
   # the COMMON one here -- every plan/spec/learning commit would print that dump.
   declare -A IN_SCOPE=()
   while IFS= read -r -d '' f; do IN_SCOPE["$f"]=1; done < <(scope_nul)
+  # ARGUMENTS ARE RESOLVED AGAINST THE CALLER'S CWD, then made repo-root-relative.
+  # The script cd's to the repo root, so a bare map lookup silently misses any
+  # cwd-relative path and reports "nothing to lint" at exit 0 -- a GREEN that means
+  # nothing. Measured from plugins/: `markdown-lint.sh soleur/README.md` reported
+  # "nothing to lint" while `plugins/soleur/README.md` reported "1 file(s) clean".
+  # lefthook always passes root-relative paths so the hook was never affected, but a
+  # human or agent following the remediation block from a subdirectory was.
   for arg in "$@"; do
-    [[ -n "${IN_SCOPE[$arg]:-}" ]] && FILES+=("$arg")
+    if [[ -n "${IN_SCOPE[$arg]:-}" ]]; then
+      FILES+=("$arg"); continue
+    fi
+    resolved=""
+    if [[ "$arg" == /* ]]; then
+      resolved="$(realpath -m --relative-to="$REPO_ROOT" -- "$arg" 2>/dev/null || true)"
+    else
+      resolved="$(realpath -m --relative-to="$REPO_ROOT" -- "$INVOCATION_CWD/$arg" 2>/dev/null || true)"
+    fi
+    if [[ -n "$resolved" && -n "${IN_SCOPE[$resolved]:-}" ]]; then
+      FILES+=("$resolved")
+    fi
   done
   if (( ${#FILES[@]} == 0 )); then
     # No anti-vacuity floor here, deliberately: the hook passes whatever is staged, and

@@ -64,6 +64,10 @@ build_sandbox() {
   chmod +x "$d/scripts/markdown-lint.sh"
   cp "$REPO_ROOT/.markdownlint.json" "$d/.markdownlint.json" || die "cannot copy config"
   cp "$REPO_ROOT/package.json" "$d/package.json" || die "cannot copy manifest"
+  # The engine pin is read from the LOCKFILE, so the sandbox needs one. Without it
+  # every case would die on "declares no markdownlint rules-engine version" and the
+  # whole suite would measure that precondition instead of what each row names.
+  cp "$REPO_ROOT/package-lock.json" "$d/package-lock.json" || die "cannot copy lockfile"
   ln -s "$REPO_ROOT/node_modules" "$d/node_modules" || die "cannot link node_modules"
   printf 'ignored-corpus/\n' > "$d/.markdownlintignore"
 
@@ -80,6 +84,11 @@ build_sandbox() {
     done
   done
   mkdir -p "$d/ignored-corpus" && printf '#Bad\n\n\n\nstuff\n' > "$d/ignored-corpus/x.md"
+  # A depth-1 file. The real corpus has nine (AGENTS.md, README.md, ...) and every
+  # sandbox fixture was three components deep, so the depth-reach guard had no
+  # fixture that could exercise it and the cheapest narrowing in the producer was
+  # invisible to the whole suite.
+  printf '# Root\n\nRepository-root document.\n' > "$d/ROOT-DOC.md"
 
   ( cd "$d" && git init -q && git config user.email t@t && git config user.name t \
       && git add -A >/dev/null 2>&1 && git commit -q -m fixture >/dev/null 2>&1 ) \
@@ -114,6 +123,31 @@ assert_red() {  # <label> <args...>
 assert_green() {
   local label="$1"; shift
   if run_sut_rc "$@"; then pass "$label"; else fail "$label -- guard went RED on legal input"; fi
+}
+# The swept-file count on the pristine sandbox. Every legal-input row adds exactly one
+# file, so `CONTROL_N + 1` is the count that proves the fixture REACHED the linter.
+CONTROL_N="$(run_sut --repo-sweep | sed -n 's/.*markdown-lint: \([0-9][0-9]*\) file(s) clean.*/\1/p' | tail -1)"
+[[ "$CONTROL_N" =~ ^[0-9]+$ ]] || die "could not read the control's swept-file count"
+
+# `assert_green` alone is satisfied by a fixture that was never written: the sandbox is
+# then pristine and the sweep is green for exactly the reason the CONTROL is green, so
+# the row reports a pass having tested nothing. Measured on H3 -- redirecting its write
+# to /dev/null left the whole suite green. Unlike the `assert_red` rows, which are
+# self-detecting (an absent fixture means no error to catch, so the row flips to FAIL),
+# the green direction needs the count to prove the file was actually linted. It cannot
+# use `assert_landed`: these rows CREATE files, so there is no pristine counterpart.
+assert_green_covering() { # <label> <args...> -- asserts green AND that one new file was swept
+  local label="$1"; shift
+  local out rc
+  out="$(run_sut "$@")"; rc=$?
+  local n; n="$(sed -n 's/.*markdown-lint: \([0-9][0-9]*\) file(s) clean.*/\1/p' <<<"$out" | tail -1)"
+  if (( rc != 0 )); then
+    fail "$label -- guard went RED on legal input"
+  elif [[ "$n" != "$(( CONTROL_N + 1 ))" ]]; then
+    fail "$label -- swept $n file(s), expected $(( CONTROL_N + 1 )); the fixture never reached the linter"
+  else
+    pass "$label"
+  fi
 }
 # Assert the mutation actually LANDED. A mutation that silently no-ops reports the
 # baseline, which is indistinguishable from a guard that works.
@@ -238,7 +272,22 @@ call_sites() { # <root-dir>
     # fixture and in the pattern itself. A checker that matches its own text is the
     # documented body-grep false-positive class.
     [[ "$f" == "$base/scripts/markdown-lint.test.sh" ]] && continue
-    sed 's/#.*//' "$f" 2>/dev/null | grep -qE '(npx[^|]*markdownlint|markdownlint-cli|\.bin/markdownlint)' \
+    # NAMED EXCLUSION, with its reason, following this repo's convention that an
+    # exclusion is a recorded decision rather than a silent absorption.
+    #
+    # plugins/soleur/test/hook-git-env-coverage.mutation.sh SYNTHESISES workflow
+    # snippets as fixture DATA -- its `run: markdownlint --fix docs/` is a quoted
+    # string argument to a test helper (case "J3 GREEN: a non-test run: line needs no
+    # scrub"), not an invocation. It is the file that demonstrated the old pattern's
+    # blind spot: the pattern could not see a bare `markdownlint` off PATH, and this
+    # is the only place in the repo that writes one. Widening the pattern was correct;
+    # this file is the one true match that is not a call site.
+    [[ "$f" == "$base/plugins/soleur/test/hook-git-env-coverage.mutation.sh" ]] && continue
+    # Anchored on command POSITION for the bare form: `markdownlint` off PATH and a
+    # direct `node .../markdownlint.js` are invocations the earlier pattern could not
+    # see. A fixture in this repo already carries `run: markdownlint --fix docs/` and
+    # went unmatched -- the blind spot demonstrated rather than argued.
+    sed 's/#.*//' "$f" 2>/dev/null | grep -qE '(npx[^|]*markdownlint|markdownlint-cli|\.bin/markdownlint|(^|[;&|[:space:]])markdownlint[[:space:]]|node[^|]*markdownlint[^|]*\.js)' \
       && printf '%s\n' "$f"
   done < <(
     { [[ -f "$base/lefthook.yml" ]] && printf '%s\n' "$base/lefthook.yml"
@@ -247,14 +296,32 @@ call_sites() { # <root-dir>
       # package.json is the single likeliest home for a second invoker (a "lint:md"
       # script entry), and plugins/ ships executables to customers. Omitting them made
       # M7b non-vacuous only WITHIN a population that excluded the obvious next site.
-      find "$base/plugins" -name '*.sh' 2>/dev/null; } | sort -u
+      # The population must be the places an invoker can LIVE, not the places we
+      # happened to think of. .github/scripts, .claude/hooks, tests/ and apps/ were all
+      # outside it, as were non-.sh scripts.
+      find "$base/.github/scripts" "$base/.claude/hooks" "$base/tests" \
+           \( -name '*.sh' -o -name '*.mjs' -o -name '*.js' \) 2>/dev/null
+      find "$base/plugins" "$base/apps" -name '*.sh' 2>/dev/null
+      find "$base/scripts" \( -name '*.py' -o -name '*.mjs' -o -name '*.ts' \) 2>/dev/null; } | sort -u
   )
 }
 # package.json is scanned through its `scripts` block ALONE. A whole-file grep matches
 # the devDependencies pin -- a DECLARATION this PR adds deliberately -- and reports the
 # manifest as a second invoker. Only a script entry can actually invoke anything.
+# ...and EVERY manifest, not only the root one. There are five tracked sub-manifests
+# (apps/web-platform, plugins/soleur/docs, two plugin script dirs, spike); a `lint:md`
+# entry in any of them is a second invoker the root-only scan could not see.
 pkg_hits=""
-if [[ -f "$REPO_ROOT/package.json" ]] && python3 -c "
+for _pkg in $(cd "$REPO_ROOT" && git ls-files 'package.json' '*/package.json' 2>/dev/null); do
+  python3 -c "
+import json,sys,re
+try: d=json.load(open(sys.argv[1]))
+except Exception: sys.exit(1)
+v=' '.join(str(x) for x in (d.get('scripts') or {}).values())
+sys.exit(0 if re.search(r'markdownlint-cli|[.]bin/markdownlint|npx[^|]*markdownlint|(^|[;&|\s])markdownlint\s', v) else 1)
+" "$REPO_ROOT/$_pkg" 2>/dev/null && pkg_hits="$pkg_hits$REPO_ROOT/$_pkg"$'\n'
+done
+if false && [[ -f "$REPO_ROOT/package.json" ]] && python3 -c "
 import json,sys,re
 d=json.load(open(sys.argv[1]))
 v=' '.join(str(x) for x in (d.get('scripts') or {}).values())
@@ -268,13 +335,33 @@ if [[ -z "$real_hits" ]]; then
 else
   fail "M7a -- a second invoker exists: $(tr '\n' ' ' <<<"$real_hits")"
 fi
-# Positive control: the check must be able to SEE a second invoker.
-mkdir -p "$SANDBOX/.github"
-printf 'jobs:\n  x:\n    steps:\n      - run: npx markdownlint-cli .\n' > "$SANDBOX/lefthook.yml"
-if [[ -n "$(call_sites "$SANDBOX")" ]]; then
-  pass "M7b -- the call-site check detects an injected second invoker (not vacuous)"
+# Positive control, ONE CELL PER ARM. Injecting only into lefthook.yml proves that ONE
+# branch of the population reaches the matcher; every other branch could be blind while
+# this still reported "not vacuous". The population is a union, so the control has to be
+# a union too -- and the spellings matter as much as the locations, because the whole
+# defect class here is a runner that resolves an UNPINNED binary (`npx --yes`, and its
+# four siblings that arrived after it).
+m7b_blind=()
+m7b_probe() { # <relative-path> <content>
+  restore
+  mkdir -p "$SANDBOX/$(dirname "$1")"
+  printf '%s\n' "$2" > "$SANDBOX/$1"
+  [[ -n "$(call_sites "$SANDBOX")" ]] || m7b_blind+=("$1 :: $2")
+}
+m7b_probe "lefthook.yml"                 '      - run: npx markdownlint-cli .'
+m7b_probe ".github/workflows/x.yml"      '      - run: npx --yes markdownlint-cli docs/'
+m7b_probe ".github/scripts/x.sh"         'bunx markdownlint docs/'
+m7b_probe ".claude/hooks/x.sh"           'pnpm dlx markdownlint docs/'
+m7b_probe "scripts/x.sh"                 'npm exec markdownlint -- docs/'
+m7b_probe "scripts/x.mjs"                'node ./node_modules/markdownlint-cli/markdownlint.js docs/'
+m7b_probe "tests/x.js"                   'markdownlint docs/'
+m7b_probe "apps/x.sh"                    './node_modules/.bin/markdownlint docs/'
+m7b_probe "plugins/x.sh"                 'yarn markdownlint docs/'
+restore
+if (( ${#m7b_blind[@]} == 0 )); then
+  pass "M7b -- every arm of the population sees an injected second invoker (9 location x spelling cells)"
 else
-  fail "M7b -- the call-site check could not see an injected second invoker"
+  fail "M7b -- ${#m7b_blind[@]} cell(s) INVISIBLE: $(printf '%s | ' "${m7b_blind[@]}")"
 fi
 # M7c: the package.json arm must be able to FIRE. Without this it is a check whose
 # passing state is indistinguishable from a check that cannot run -- and it currently
@@ -334,7 +421,7 @@ printf 'H3 legal-but-unusual document\n'
   printf '# Two top-level headings\n\nBody.\n'
 } > "$SANDBOX/apps/docs/unusual.md"
 ( cd "$SANDBOX" && git add -A >/dev/null 2>&1 )
-assert_green "H3 -- a long line, inline HTML, an unlabelled fence and a second H1 are legal here" --repo-sweep
+assert_green_covering "H3 -- a long line, inline HTML, an unlabelled fence and a second H1 are legal here" --repo-sweep
 restore
 
 # --- Explicit-paths mode ----------------------------------------------------------
@@ -380,6 +467,182 @@ else
 fi
 restore
 
+# --- M6c: the RULES ENGINE pin, not just the CLI pin -----------------------------
+# markdownlint-cli depends on its engine by RANGE (~0.41.1), so the CLI version matching
+# says nothing about the version that actually decides verdicts. Without this the script
+# reports a satisfied pin while the engine floats -- defect 1, inside its own fix.
+printf 'M6c rules-engine pin\n'
+python3 - "$SANDBOX/package-lock.json" <<'PYFIX'
+import json,sys
+p=sys.argv[1]; d=json.load(open(p))
+for k,v in d["packages"].items():
+    if k=="node_modules/markdownlint" or k.endswith("/node_modules/markdownlint"):
+        v["version"]="99.99.99"; break
+else:
+    raise SystemExit("no engine entry in the sandbox lockfile")
+json.dump(d,open(p,"w"))
+PYFIX
+assert_landed "package-lock.json" "M6c"
+out="$(run_sut --repo-sweep)"; rc=$?
+if (( rc != 0 )) && grep -q 'rules engine' <<<"$out"; then
+  pass "M6c -- an engine version differing from the lockfile pin is refused"
+else
+  fail "M6c -- expected an engine-pin refusal; rc=$rc out=$(head -c 160 <<<"$out")"
+fi
+restore
+
+# --- M8: a file-level disable silences a file that still counts --------------------
+printf 'M8 inline silencing\n'
+{ printf '<!-- markdownlint-disable -->\n\n# T\n\n\n\nBody.\n'; } > "$SANDBOX/docs/docs/silenced.md"
+( cd "$SANDBOX" && git add -A >/dev/null 2>&1 )
+out="$(run_sut --repo-sweep)"; rc=$?
+if (( rc != 0 )) && grep -q 'markdownlint-disable' <<<"$out"; then
+  pass "M8 -- an unmatched file-level disable is caught (the file still counts toward the floor)"
+else
+  fail "M8 -- expected an unbalanced-directive refusal; rc=$rc out=$(head -c 160 <<<"$out")"
+fi
+restore
+
+# --- M8b: a scoped disable-line is NOT caught (the guard is not too aggressive) -----
+# Direction control. Without this the suite could only see the guard being too weak.
+printf 'M8b scoped disable-line stays legal\n'
+printf '# T\n\nA span `run_suite ` prefix. <!-- markdownlint-disable-line MD038 -->\n' \
+  > "$SANDBOX/docs/docs/scoped.md"
+( cd "$SANDBOX" && git add -A >/dev/null 2>&1 )
+assert_green_covering "M8b -- a scoped -disable-line is permitted (it silences one visible site, not a file)" --repo-sweep
+restore
+
+# --- E3: explicit paths resolve against the CALLER's cwd -------------------------
+# The script cd's to the repo root, so a bare map lookup silently missed any
+# cwd-relative argument and reported "nothing to lint" at exit 0 -- a green that means
+# nothing. Measured before the fix, from plugins/: `soleur/README.md` reported nothing
+# to lint while `plugins/soleur/README.md` reported 1 file clean.
+printf 'E3 cwd-relative explicit paths\n'
+printf '#NoSpace\n\n\n\nText.\n' > "$SANDBOX/docs/docs/red.md"
+( cd "$SANDBOX" && git add -A >/dev/null 2>&1 )
+( cd "$SANDBOX/docs" && bash ../scripts/markdown-lint.sh docs/red.md >/dev/null 2>&1 )
+if (( $? != 0 )); then
+  pass "E3 -- a cwd-relative path from a subdirectory is linted, not silently skipped"
+else
+  fail "E3 -- a cwd-relative path reported success; the caller-cwd resolution regressed"
+fi
+restore
+
+# --- M11: the no-network precondition -------------------------------------------
+# The `[[ -x "$BIN" ]] || die` line IS the no-fallback policy -- it is the difference
+# between "refuse loudly" and the `npx --yes` behaviour that #7927 exists to remove.
+# Nothing exercised it, so deleting it (or replacing the die with an npx fallback) left
+# the suite fully green while reinstating the originating defect.
+printf 'M11 missing binary refuses, never falls back\n'
+rm -f "$SANDBOX/node_modules"
+mkdir -p "$SANDBOX/node_modules"          # present but carrying no .bin/markdownlint
+out="$(run_sut --repo-sweep 2>&1)"; rc=$?
+if (( rc != 0 )) && grep -q 'not installed' <<<"$out" && grep -q 'npm install' <<<"$out"; then
+  pass "M11 -- an absent binary is a loud refusal naming the fix, not a network fallback"
+else
+  fail "M11 -- expected a no-binary refusal; rc=$rc out=$(head -c 200 <<<"$out")"
+fi
+# The refusal must not be reachable by DOWNLOADING one: no npx/curl/wget anywhere in
+# the SUT. A fallback added later would satisfy the row above while defeating its point.
+# Comments AND double-quoted strings are stripped first. The SUT's refusal messages
+# NAME the remedy ("run: npm install --ignore-scripts") and one comment block explains
+# why npx is refused, so a bare-token grep reports the policy's own documentation as a
+# breach of the policy -- the body-grep false-positive class this suite already handles
+# in M7 and H4a. Only a command POSITION counts.
+if python3 - "$REPO_ROOT/$SUT_REL" <<'PYNET'
+import re, sys
+src = open(sys.argv[1], encoding="utf-8").read()
+src = re.sub(r"#.*", "", src)                      # comments
+src = re.sub(r'"(?:\\.|[^"\\])*"', '""', src)      # double-quoted strings
+src = re.sub(r"'[^']*'", "''", src)                # single-quoted strings
+pat = r"(?:^|[;&|]|\bthen\b|\bdo\b|\belse\b)\s*(npx|curl|wget|bunx|npm\s+(?:i|install|exec)|pnpm\s+dlx|yarn\s+add)\b"
+sys.exit(0 if re.search(pat, src, re.M) else 1)
+PYNET
+then
+  fail "M11b -- the SUT contains a network/installer invocation; the no-fallback policy is broken"
+else
+  pass "M11b -- the SUT contains no network or installer invocation at all"
+fi
+rmdir "$SANDBOX/node_modules" 2>/dev/null || rm -rf "$SANDBOX/node_modules"
+ln -s "$REPO_ROOT/node_modules" "$SANDBOX/node_modules" || die "could not restore the node_modules link"
+restore
+
+# --- W1: the gate is WIRED (existence, not just uniqueness) -----------------------
+# M7 asserts "at most one invoker". It never asserted "at least one". Deleting the CI
+# job AND the lefthook line leaves every M7 arm green and the gate simply stops running
+# -- which is verbatim defect 3 in the SUT's own header ("Nothing in CI ran markdownlint
+# at all"). Uniqueness without existence is satisfied by a repository that does not lint.
+printf 'W1 the gate is wired\n'
+
+if grep -qE '^[[:space:]]*run:[[:space:]]*bash scripts/markdown-lint\.sh --repo-sweep' \
+     "$REPO_ROOT/.github/workflows/pr-quality-guards.yml"; then
+  pass "W1a -- the CI job invokes the sweep"
+else
+  fail "W1a -- no CI step runs 'bash scripts/markdown-lint.sh --repo-sweep'"
+fi
+
+if grep -qE '^[[:space:]]*run:[[:space:]]*bash scripts/markdown-lint\.sh \{staged_files\}' \
+     "$REPO_ROOT/lefthook.yml"; then
+  pass "W1b -- the pre-commit hook invokes the script with staged files"
+else
+  fail "W1b -- lefthook does not pass {staged_files} to scripts/markdown-lint.sh"
+fi
+
+if grep -qx 'markdown-lint' "$REPO_ROOT/scripts/required-checks.txt"; then
+  pass "W1c -- the context is registered in required-checks.txt"
+else
+  fail "W1c -- 'markdown-lint' is absent from scripts/required-checks.txt"
+fi
+
+# W1d: the job must carry no `if:`. A required context that does not report on
+# merge_group leaves the queue entry pending forever.
+if awk '/^  markdown-lint:/{f=1;next} /^  [a-z]/{f=0} f' \
+     "$REPO_ROOT/.github/workflows/pr-quality-guards.yml" | grep -qE '^[[:space:]]*if:'; then
+  fail "W1d -- the markdown-lint job carries an 'if:'; a required context that skips on merge_group wedges the queue"
+else
+  pass "W1d -- the markdown-lint job carries no 'if:' gate"
+fi
+
+# --- M9: the producer must reach depth 1 -----------------------------------------
+# `git ls-files '*.md'` -> `'*/*.md'` is a two-character edit that drops all nine
+# repo-root files (README.md, AGENTS.md, CLAUDE.md, CONTRIBUTING.md and five more),
+# leaving 1,336 -- above the floor, and invisible to the roots assertion because a
+# depth-1 path's "root" is the filename itself.
+printf 'M9 depth-1 reach\n'
+python3 - "$SANDBOX/scripts/markdown-lint.sh" <<'PYFIX'
+import sys
+p=sys.argv[1]; s=open(p,encoding="utf-8").read()
+old="git ls-files -z '*.md'"
+assert s.count(old)==1, f"anchor count {s.count(old)}"
+open(p,"w",encoding="utf-8").write(s.replace(old, "git ls-files -z '*/*.md'"))
+PYFIX
+assert_landed "scripts/markdown-lint.sh" "M9"
+out="$(run_sut --repo-sweep)"; rc=$?
+if (( rc != 0 )) && grep -q 'depth-1' <<<"$out"; then
+  pass "M9 -- a producer that stops matching at depth 1 is caught (the floor cannot see it)"
+else
+  fail "M9 -- expected a depth-reach refusal; rc=$rc out=$(head -c 160 <<<"$out")"
+fi
+restore
+
+# --- M10: the count must be DISTINCT ----------------------------------------------
+printf 'M10 distinctness\n'
+python3 - "$SANDBOX/scripts/markdown-lint.sh" <<'PYFIX'
+import sys
+p=sys.argv[1]; s=open(p,encoding="utf-8").read()
+old="mapfile -d '' -t FILES < <(scope_nul)"
+assert s.count(old)==1, f"anchor count {s.count(old)}"
+open(p,"w",encoding="utf-8").write(s.replace(old, "mapfile -d '' -t FILES < <(scope_nul; scope_nul)"))
+PYFIX
+assert_landed "scripts/markdown-lint.sh" "M10"
+out="$(run_sut --repo-sweep)"; rc=$?
+if (( rc != 0 )) && grep -q 'distinct' <<<"$out"; then
+  pass "M10 -- a duplicated producer is caught (the floor would otherwise pass on a multiset)"
+else
+  fail "M10 -- expected a distinctness refusal; rc=$rc out=$(head -c 160 <<<"$out")"
+fi
+restore
+
 # --- Anti-vacuity floor -----------------------------------------------------------
 # Reported with printf + exit, NEVER through fail(): a floor that calls the helper it
 # backstops is disarmed by the same edit that disarms the helper (ADR-193).
@@ -390,7 +653,7 @@ printf '\n=== markdown-lint.test.sh: %s passed, %s failed (%s cases) ===\n' "$pa
 # statement in between stops that walk, the mutant dies on `set -u` with the threshold
 # unbound, and a fully compliant floor is reported as a construction failure rather
 # than as covered. Measured: this floor joined that uncovered set until the printf moved.
-MIN_CASES=12
+MIN_CASES=29
 if (( cases < MIN_CASES )); then
   printf 'ERROR: only %s cases ran, below the floor of %s -- the suite was truncated, so a 0-failure tally proves nothing.\n' "$cases" "$MIN_CASES" >&2
   exit 1
