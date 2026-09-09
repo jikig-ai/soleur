@@ -2265,7 +2265,23 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // credential" but "is there no unauthenticated probe of the same property".
   //
   // The 10 that remains is #7873's and #7829's, untouched by this PR.
-  const BASELINE_DECLARED_PROBES = 10;
+  //
+  // +1 (10 -> 11), 2026-09-09 (#7995): the jikigai.com Cloudflare-zone plan
+  // declares `credentials_required` for its cutover follow-through probe
+  // (CF zone-status + Better Stack alert-recipient limbs). The declaration is
+  // deliberate and sits inside the discoverability_test sub-block, so it is
+  // baselined rather than deleted.
+  //
+  // Flagged for review, because the comment above is the reason to look twice:
+  // that plan's own declaration states its DNS limbs run UNAUTHENTICATED. By
+  // the question this field actually answers -- "is there no unauthenticated
+  // probe of the same property" -- a probe with an unauthenticated limb is a
+  // candidate for reaching Check 10 rather than waiving it. The probe is not
+  // enrolled yet (the cutover is blocked, see #7995), so there is nothing to
+  // execute today and nothing is being waived in practice; if it ships with
+  // the DNS limbs intact, the declaration should be revisited and this
+  // increment reverted rather than inherited.
+  const BASELINE_DECLARED_PROBES = 11;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

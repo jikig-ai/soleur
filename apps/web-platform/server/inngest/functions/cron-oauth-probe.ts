@@ -585,20 +585,34 @@ async function notifyOpsEmail(result: ProbeResult, runUrl: string): Promise<void
     `<p><a href="${runUrl}">Run log</a></p>`,
     `<p>Runbook: <a href="${runbookUrl}">oauth-probe-failure.md</a></p>`,
   ].join("\n");
-  await fetch("https://api.resend.com/emails", {
+  // `from` must sit on a Resend-VERIFIED domain. jikigai.com carries neither
+  // `resend._domainkey` nor `send.` records, so a send from it is rejected by
+  // the vendor outright -- this path had been dead since the GHA->Inngest port
+  // silently changed the sender the composite action above uses.
+  const resp = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: "ops@jikigai.com",
+      from: "Soleur Ops <noreply@soleur.ai>",
       to: ["ops@jikigai.com"],
       subject: `[Soleur Ops] OAuth probe failure: ${result.failureMode}`,
       html,
     }),
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
+  if (!resp.ok) {
+    // Discarding this response is what made the dead sender invisible: the
+    // alert channel reported success while the vendor refused every message.
+    reportSilentFallback(new Error(`Resend POST returned ${resp.status}`), {
+      feature: "cron-oauth-probe",
+      op: "notify-ops-email",
+      message: "Resend email POST failed",
+      extra: { fn: "cron-oauth-probe", statusCode: resp.status },
+    });
+  }
 }
 
 export async function cronOauthProbeHandler({

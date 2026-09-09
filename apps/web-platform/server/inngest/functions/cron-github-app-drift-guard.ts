@@ -707,20 +707,39 @@ async function notifyOpsEmail(args: {
   ].join("\n");
   assertNoLeak("resend-body", html);
   assertNoLeak("resend-subject", subject);
-  await fetch("https://api.resend.com/emails", {
+  // `from` must sit on a Resend-VERIFIED domain. jikigai.com carries neither
+  // `resend._domainkey` nor `send.` records, so a send from it is rejected by
+  // the vendor outright -- this alert path had been dead since it was written.
+  const resp = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      from: "ops@jikigai.com",
+      from: "Soleur Ops <noreply@soleur.ai>",
       to: ["ops@jikigai.com"],
       subject,
       html,
     }),
     signal: AbortSignal.timeout(RESEND_TIMEOUT_MS),
   });
+  if (!resp.ok) {
+    // Discarding this response is what made the dead sender invisible: a
+    // drift-guard that cannot deliver its alarm still reported success.
+    reportSilentFallback(
+      redactedError(new Error(`Resend POST returned ${resp.status}`)),
+      {
+        feature: "cron-github-app-drift-guard",
+        op: "notify-ops-email",
+        message: "Resend email POST failed",
+        extra: {
+          fn: "cron-github-app-drift-guard",
+          statusCode: resp.status,
+        },
+      },
+    );
+  }
 }
 
 // =============================================================================
