@@ -40,6 +40,20 @@ HELPERS="$SCRIPT_DIR/test-helpers.sh"
 [[ -f "$BASELINE" ]] || { echo "FATAL: missing $BASELINE" >&2; exit 2; }
 [[ -f "$HELPERS" ]]  || { echo "FATAL: missing $HELPERS" >&2; exit 2; }
 
+# Guard 3 (#7833) tripwire adoption, added at review. Measured under an inherited git-location
+# environment: probe_repo's `git -C "$d" init` + two config writes retargeted at the CALLER and
+# flipped its commit.gpgsign true -> false and its user.email -- the 2026-08-20 incident this
+# file's own baseline header records, reproduced by the suite that exists to pin it. The
+# assert_probe_repo precondition added earlier in this PR is DETECTION, and it runs downstream of
+# those writes; refusal is what prevents them. Sourcing does not disturb the canonical-body
+# extraction below, which reads this file as DATA, not as functions.
+# test-helpers.sh runs `set -euo pipefail`, so the `+e` restores this suite's prior contract --
+# delete the source line and the `+e` becomes wrong.
+# shellcheck source=plugins/soleur/test/test-helpers.sh
+source "$HELPERS" || { echo "FATAL: could not source $HELPERS" >&2; exit 2; }
+
+set +e -uo pipefail
+
 scan_counts() { # scan_counts <repo-root> -> "<count>\t<path>" rows, sorted by path
   python3 "$SCANNER" --rule operand --repo "$1" 2>/dev/null \
     | grep -E '^[^ ]+:[0-9]+:' | cut -d: -f1 | sort | uniq -c \
@@ -537,6 +551,62 @@ probe_repo() {
   git -C "$d" config user.email t@t.dev; git -C "$d" config user.name t
   printf '%s\n' "$d"
 }
+
+# PRECONDITION (#7822 vacuity repair). `probe_repo` discards `git init`'s rc, and it is called in a
+# command substitution -- so it cannot assert anything itself without the verdict being swallowed by
+# the subshell. Every Guard 3 arm below therefore needs its premise checked in the PARENT scope.
+#
+# The vacuity is not hypothetical and it is not merely a dead arm. If `$d` is not a repository, the
+# refusal arms' `before`/`after` config hashes are both the SAME error output, so `before == after`
+# holds trivially and `G3_RC != 0` holds anyway -- all three arms pass while proving nothing. Under
+# an inherited GIT_DIR it is actively harmful: `git -C "$d" init` initialises the INHERITED
+# location, `git -C "$r" config --local --list` reads the CALLER's config, and `run_canon`'s
+# `git -C "$1" config commit.gpgsign false` WRITES to the caller's live repository -- which is the
+# #7822 harm itself, inside the suite that exists to pin it.
+#
+# So the assertion is that the fixture resolves to its OWN git dir, not merely that some repository
+# answered. `--absolute-git-dir` is what makes "its own" checkable; `rev-parse --git-dir` alone
+# returns a bare `.git` and would be satisfied by the caller's repo.
+assert_probe_repo() { # <dir>
+  local d="$1" gd
+  if [[ "$d" != /* ]]; then
+    fail "GUARD 3 pre: probe path is not absolute (${d:-<empty>}) -- the case below would retarget"
+    return
+  fi
+  if ! gd=$(git -C "$d" rev-parse --absolute-git-dir 2>&1); then
+    fail "GUARD 3 pre: probe fixture is not a repository: $gd"
+    return
+  fi
+  case "$gd" in
+    "$d"/*) pass "GUARD 3 pre: $(basename "$d") resolves to its OWN git dir" ;;
+    *)      fail "GUARD 3 pre: $(basename "$d") resolved to $gd, outside the fixture (inherited git-location env?)" ;;
+  esac
+}
+
+# The precondition's own positive/negative control, once. A bare "the probe must succeed here" is
+# satisfied by a `git` that always exits 0; a bare "must fail there" by `git` missing from PATH, by
+# the directory not existing, or by a permission error. Three parts, or the control inherits the
+# defect it exists to exclude.
+ck
+if git -C "$REPO_ROOT" rev-parse --absolute-git-dir >/dev/null 2>&1; then
+  pass "GUARD 3 pre/control: the probe SUCCEEDS in a known repository"
+else
+  fail "GUARD 3 pre/control: probe failed in a known repository ($REPO_ROOT)"
+fi
+_nonrepo="$TMP_ROOT/g3-control-nonrepo"; mkdir -p "$_nonrepo"
+_nr_out=$(LC_ALL=C git -C "$_nonrepo" rev-parse --absolute-git-dir 2>&1); _nr_rc=$?
+ck
+if [[ $_nr_rc -ne 0 ]]; then
+  pass "GUARD 3 pre/control: the probe FAILS in a non-repository directory"
+else
+  fail "GUARD 3 pre/control: a non-repository resolved as a repository ($_nr_out)"
+fi
+ck
+if grep -qi 'not a git repository' <<<"$_nr_out"; then
+  pass "GUARD 3 pre/control: the failure NAMES 'not a git repository'"
+else
+  fail "GUARD 3 pre/control: failure text did not name the condition: $_nr_out"
+fi
 run_canon() { # run_canon <operand> ; sets G3_RC, and runs with CWD inside the probe repo
   local repo="$1" operand="$2"
   ( cd "$repo" && bash -c '
@@ -552,6 +622,8 @@ for case_name in empty relative bareslash; do
   ck
   r=$(probe_repo "$case_name")
   : "${r:?fixture dir is empty; git -C <empty> would retarget this write}"
+  ck
+  assert_probe_repo "$r"
   case "$case_name" in
     empty)     op="" ;;
     relative)  op="relative/path" ;;
@@ -571,9 +643,26 @@ done
 
 ck
 r=$(probe_repo absolute)
+: "${r:?fixture dir is empty; git -C <empty> would retarget this write}"
+ck
+assert_probe_repo "$r"
+abs_before=$(git -C "$r" config --local --list | LC_ALL=C sort | sha256sum)
 run_canon "$r" "$r"
+abs_after=$(git -C "$r" config --local --list | LC_ALL=C sort | sha256sum)
 if [[ "$G3_RC" -eq 0 ]]; then pass "GUARD 3: an absolute fixture dir is accepted (the guard is not a blanket refusal)"
 else fail "GUARD 3: an absolute operand was refused (rc=$G3_RC)"; fi
+
+# POSITIVE CONTROL for the config oracle the three refusal arms above depend on. Those arms assert
+# `before == after`, which is satisfied by an oracle that can never move -- measured, pinning both
+# to a constant left this suite 70/70 green. This arm is the one case where run_canon is EXPECTED
+# to write (it accepts the operand and sets commit.gpgsign), so the hash MUST move here. It costs
+# nothing: the write was already happening and was simply unobserved.
+ck
+if [[ "$abs_before" != "$abs_after" ]]; then
+  pass "GUARD 3 oracle: the config hash MOVES when canonical accepts and writes (the refusal arms are falsifiable)"
+else
+  fail "GUARD 3 oracle: the config hash did not move on the accepted operand — the before/after comparison is vacuous"
+fi
 
 # --- H. ROW 8 — the harness row. Neuter fail() and conservation must fire first. ---------------------
 # Not a mutation of the SUT: a suite whose only gate is a failure counter exits 0 having asserted
@@ -618,9 +707,15 @@ if [[ $((passes + fails)) -ne $asserted ]]; then
   exit 1
 fi
 
-# Exact, derived from a green run: 62 arms execute today. The previous 17 against 21 arms left
-# four must-trip arms deletable behind the slack (measured). Raise in lockstep; never lower.
-MIN_ASSERTIONS=63
+# Exact, derived from a green run: 71 arms execute today. That is 63 on main, plus the seven #7822
+# Guard 3 preconditions (three controls and one per probe fixture), plus the Guard 3 oracle's
+# positive control added at review -- without which `before == after` on the three refusal arms was
+# satisfied by an oracle that could never move (measured: pinning both to a constant left the suite
+# green). NOTE the baseline: the pre-#7822 comment here said "62 arms" against a floor of 63; 63 was
+# the true count and the comment was the wrong one, so 63 -> 71 is +8, not +9.
+# The previous 17 against 21 arms left four must-trip arms deletable behind the slack (measured).
+# Raise in lockstep; never lower.
+MIN_ASSERTIONS=71
 if [[ $passes -lt $MIN_ASSERTIONS ]]; then
   echo "[FAIL] only ${passes} assertion(s) PASSED, below the floor of ${MIN_ASSERTIONS}" >&2
   exit 1

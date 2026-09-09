@@ -6,11 +6,11 @@
 # `tagged_event` key edited. `terraform plan` says config and state agree; it
 # says nothing about whether the rule still fires. `assert-byok-rules-exist.sh`
 # covers 4 of the 27, by name and enablement only. This reads live Sentry and
-# diffs all 27 field-by-field against the capture the blocks were generated from.
+# diffs all 28 field-by-field against the capture the blocks were generated from.
 #
 # WHY NOT ADD apps/web-platform/infra/sentry TO scheduled-terraform-drift.yml's
 # MATRIX INSTEAD. That leg would plan the FULL ROOT, which still refreshes the
-# three surviving `sentry_issue_alert` resources through Sentry's deprecated
+# two surviving `sentry_issue_alert` resources through Sentry's deprecated
 # alert-rule endpoint — with none of apply-sentry-infra.yml's brownout retry. It
 # would go red on Sentry's brownout calendar rather than on drift, which is how a
 # probe gets muted. This workflow makes ONE read-only GET against the
@@ -165,7 +165,7 @@ jobs:
           BODY_FILE="${RUNNER_TEMP}/drift-issue.md"
           {
             printf '## Live Sentry no longer matches the committed capture\n\n'
-            printf 'One or more of the 27 adopted `sentry_alert` rules has diverged. A rule in this state typically still EXISTS and still PLANS CLEAN — it just no longer matches the events it was written for, so it pages nobody and nothing else notices.\n\n'
+            printf 'One or more of the 28 adopted `sentry_alert` rules has diverged. A rule in this state typically still EXISTS and still PLANS CLEAN — it just no longer matches the events it was written for, so it pages nobody and nothing else notices.\n\n'
             printf -- '- Detected at: %s\n' "$NOW"
             printf -- '- Run log: %s\n\n' "$RUN_URL"
             printf '### Findings\n\n```\n'
@@ -176,7 +176,7 @@ jobs:
             printf -- '- `DISABLED` / `MONITOR UNBIND` — LIVE state. An apply will **not** fix either. Re-enable or re-bind in the Sentry UI.\n'
             printf -- '- `UNMANAGED` — a rule created outside Terraform that falls inside the migration scope. Either adopt it or delete it; nothing in this repo manages it today.\n\n'
             printf '### If the drift is intentional\n\n'
-            printf 'The capture at `knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase2-live-workflows-capture-2026-09-04.json` is the authoring source for all 27 blocks. Re-capture it, regenerate with `phase2-generate-alert-blocks.py`, and diff — do not hand-edit either the capture or the `.tf` blocks to make this probe go quiet.\n\n'
+            printf 'The capture at `knowledge-base/project/specs/fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json` is the authoring source for all 28 blocks (it supersedes the 2026-09-04 Phase 2 capture, which is retained as history and remains the source the 27 were generated from). Re-capture it, regenerate with `phase2-generate-alert-blocks.py`, and diff — do not hand-edit either the capture or the `.tf` blocks to make this probe go quiet.\n\n'
             printf '**`byok-art-33-breach` is one of the 27.** If it is named above, treat this as the highest-priority item in the repo: its silence stops the GDPR Art. 33 72-hour notification clock from ever starting.\n'
           } > "$BODY_FILE"
 
@@ -247,7 +247,7 @@ jobs:
           BODY_FILE="${RUNNER_TEMP}/unavailable-issue.md"
           {
             printf '## The Sentry alert drift probe did not run to a verdict\n\n'
-            printf 'This is NOT a report that something drifted. It is a report that **nobody checked**. While this is open, the 27 adopted `sentry_alert` rules — including `byok-art-33-breach`, which anchors the GDPR Art. 33 72-hour clock — are unwatched, and that state looks identical to healthy everywhere except this issue.\n\n'
+            printf 'This is NOT a report that something drifted. It is a report that **nobody checked**. While this is open, the 28 adopted `sentry_alert` rules — including `byok-art-33-breach`, which anchors the GDPR Art. 33 72-hour clock — are unwatched, and that state looks identical to healthy everywhere except this issue.\n\n'
             printf -- '- Verdict reached: `%s`\n' "${VERDICT:-<none — the run aborted before the probe step wrote one>}"
             printf -- '- Detected at: %s\n' "$NOW"
             printf -- '- Run log: %s\n\n' "$RUN_URL"
@@ -313,7 +313,7 @@ jobs:
             --jq 'map(select(.title == "[ci/sentry-alert-drift] a migrated Sentry alert has drifted from the committed capture")) | .[0].number // empty')
           if [[ -n "$STALE" ]]; then
             gh issue close "$STALE" --repo "$GH_REPO" \
-              --comment "All 27 adopted sentry_alert rules match the committed capture again at ${NOW}. Run: ${RUN_URL}"
+              --comment "All 28 adopted sentry_alert rules match the committed capture again at ${NOW}. Run: ${RUN_URL}"
           fi
 
       # LAST step in the job, deliberately (#7834). Every earlier step can exit
