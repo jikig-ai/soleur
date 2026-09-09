@@ -128,5 +128,16 @@ export function buildFixture(): string {
 }
 
 export function cleanupFixture(root: string): void {
-  rmSync(root, { recursive: true, force: true });
+  // maxRetries is Node's documented remedy for exactly the errno this hit in
+  // CI: `rmSync` retries on EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM with a linear
+  // backoff. The fixture builds a real git repo, so a git process still
+  // releasing a handle under `.git/` races the teardown and the whole test FILE
+  // fails after every one of its assertions passed — 1431/1431 tests green, one
+  // file red, on a required check.
+  //
+  // Scoped to this ONE site deliberately. 69 `rmSync(..., {recursive, force})`
+  // calls in test/ share the pattern; sweeping them belongs in its own change,
+  // not in a PR about a hook guard. This one is fixed here only because it
+  // blocks that required check.
+  rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 }
