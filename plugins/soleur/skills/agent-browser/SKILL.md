@@ -50,6 +50,11 @@ fast with `No usable sandbox! ... unprivileged user namespaces ... AppArmor` and
 2. If it still fails, a stale/wedged daemon may be holding the socket. Clear it:
    `pkill -f agent-browser-linux-x64; rm -rf /tmp/agent-browser/* "/run/user/$(id -u)/agent-browser/"*`
    then retry. (Never kill `playwright-mcp` processes — those are a separate stack.)
+   The commonest cause is a daemon whose worktree was REAPED: resolve each match's
+   `/proc/<pid>/cwd` and expect one ending `(deleted)`, often weeks old and inherited
+   by every later session on the machine. Such a daemon does not answer and **survives
+   SIGTERM** — it needs `kill -9`. Nothing in the CLI's error names any of this; the
+   only symptom is `Resource temporarily unavailable (os error 11)` (#7947).
 3. Verify: `AGENT_BROWSER_ARGS="--no-sandbox" timeout 45 agent-browser open https://example.com --headless` → exit 0 + a `✓` line.
 
 ### Troubleshooting: Playwright MCP backend closed between calls
