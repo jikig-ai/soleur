@@ -11,7 +11,13 @@ related: [3210]
 
 # Draft reply to Convergence
 
-**Status: DRAFT — not sent.** Operator sends from `legal@jikigai.com`. Two blanks to fill before sending: the turnaround commitment in paragraph 4, and whether to name the harness review point (see "Operator notes" below).
+**Status: DRAFT — not sent.** Operator sends from `legal@jikigai.com`.
+
+**Both blanks are now filled; nothing remains but the send.** The turnaround commitment in
+paragraph 4 is **5 business days** (operator decision, 2026-09-09), and the closing note on the
+harness contribution is **kept** — it sets review expectations before the counterparty invests
+heavily, which is the reason it was drafted. Neither was a technical call, which is why they sat
+as blanks rather than being defaulted.
 
 Basis for the content: CLO rulings D1 (both instruments), D2 (PR not blocked), D3 (role mailbox insufficient, and the exact field list with its no-extra-PII boundary).
 
@@ -42,7 +48,7 @@ Please do not send us any further personal information — no phone numbers, hom
 
 To be explicit about why we ask for both: the Corporate CLA secures Convergence's rights as your employee's employer, and the Individual CLA secures the author's own — including moral rights, which under French law cannot be transferred by an employer on an employee's behalf. They cover different things, so we need both. This is the same approach the Apache Software Foundation takes.
 
-We will come back to you within [**N business days** — operator to set] of receiving the details above with a countersigned copy for your records.
+We will come back to you within **5 business days** of receiving the details above with a countersigned copy for your records.
 
 One note on the contribution itself, so it is not a surprise at review time: adding a third agent harness widens a type union that several parts of the codebase consume, so the review will look at those call sites as well as at the new harness code. Happy to talk through the shape before you invest heavily in it.
 
