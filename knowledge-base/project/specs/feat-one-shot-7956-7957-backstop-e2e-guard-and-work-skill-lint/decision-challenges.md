@@ -59,6 +59,18 @@ the demoted fallback without citing the decision that demoted it.
 
 ---
 
+**RESOLUTION (operator, 2026-09-09):** Option 2 — **descope #7956 to reconcile-only**.
+Asked and answered via `AskUserQuestion` after the pipeline independently re-verified every
+claim above: the failing arm at `memory-backstop.test.sh` line 901 sits in the `else` branch of
+the `E2E` gate that closes at line 926 (`fi   # end E2E gate`), so the issue's preferred fix is a
+measured no-op; #7886 is OPEN with the same symptom; #7879 is OPEN, non-draft, deletes the
+`for _hop in 1 2 3 4 5 6 7 8` walk and adds `T5c` to fail any reappearance of one.
+
+Scope for this PR: `closes: [7957]` only. The #7956 half is discharged as reconciliation —
+comment the measured correction on #7956, dedupe it against #7886, point both at #7879, and
+file the residue #7879 leaves uncovered. No code under `.claude/hooks/` is touched by this PR,
+so nothing here can conflict with #7879 or trip `T5c`.
+
 ## UC-2 — replace the per-site trailing-space checker with a one-line diff assertion
 
 **Class:** `user-challenge` (it narrows an explicitly operator-requested acceptance criterion).
