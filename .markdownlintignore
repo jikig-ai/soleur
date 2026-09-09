@@ -33,3 +33,13 @@ plugins/soleur/skills/incident/test/fixtures/
 plugins/soleur/skills/skill-security-scan/references/test-fixtures/
 scripts/lib/fixtures/
 test/helpers/
+
+# VENDORED / PROVENANCE-PINNED CONTENT (#7927). plugins/soleur/skills/gdpr-gate/references/
+# is tracked by NOTICE.md, which pins a git blob SHA per file across two sets --
+# `lifted-files` (vendored from github.com/goSprinto/compliance-skills at a pinned commit)
+# and `soleur-authored`. The SHA IS the provenance record: rewriting a lifted file forks
+# vendored third-party content away from its upstream while the pin still claims a clean
+# lift, and re-pinning to the swept bytes would destroy the drift detection rather than
+# satisfy it. Measured: the sweep rewrote 10 of the 11 tracked files and reddened
+# vendor-pin-integrity. Restore, never re-pin.
+plugins/soleur/skills/gdpr-gate/references/

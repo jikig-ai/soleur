@@ -312,6 +312,7 @@
 1	scripts/lint-orphan-test-suites.test.sh
 25	scripts/lint-workflow-errexit-capture.test.sh
 7	scripts/lint-workflow-install-sites.test.sh
+8	scripts/markdown-lint.test.sh
 6	scripts/merge-kb-index.sh
 8	scripts/orphan-process-reaper-mutation.test.sh
 4	scripts/orphan-process-reaper.sh

@@ -105,8 +105,8 @@ if [[ "$MODE" == "--repo-sweep" ]]; then
   # failure.
 
   # (a) COUNT FLOOR. Absolute and hand-ratcheted -- deriving it from `git ls-files`
-  # would be deriving the floor from its own subject. 1261 measured 2026-09-09 against
-  # 9660 tracked *.md (was 1345 before the test-fixture corpora were excluded; see
+  # would be deriving the floor from its own subject. 1250 measured 2026-09-09 against
+  # 9660 tracked *.md (was 1345 before the fixture and vendored corpora were excluded; see
   # .markdownlintignore for why a linter must not rewrite a suite's input bytes). The
   # slack is NARROWING BUDGET, not safety margin: keep just enough that a real
   # documentation cleanup does not red the gate.

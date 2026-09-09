@@ -106,10 +106,13 @@ if extra:
 
 rt = pkgs([("js-yaml", 3), ("brace-expansion", 1)])
 rt["node_modules/a/node_modules/js-yaml"] = {"version": "4.999.999"}
-# markdownlint-cli 0.49.1 will not run against brace-expansion 1.x, so #7927 gave that
-# subtree a SCOPED ^5.0.8 override while the root keeps its ^1.1.16 Dependabot pin. Two
-# majors now resolve under the root manifest, nested so the paths differ.
-rt["node_modules/markdownlint-cli/node_modules/brace-expansion"] = {"version": "5.999.999"}
+# The markdown linter pinned by #7927 will not run against brace-expansion 1.x, so its
+# subtree gets a SCOPED ^5.0.8 override while the root keeps its ^1.1.16 Dependabot
+# pin. Two majors now resolve under the root manifest, nested so the paths differ.
+# The nesting parent is a generic letter like its siblings above, NOT the real package
+# name: this repo asserts it has exactly ONE markdown-lint invoker by grepping source,
+# and a lockfile path in fixture DATA reads to that grep as a second call site.
+rt["node_modules/d/node_modules/brace-expansion"] = {"version": "5.999.999"}
 
 pen = pkgs([("hono", 4), ("@hono/node-server", 1), ("ip-address", 10), ("fast-uri", 3)])
 spike = pkgs([])

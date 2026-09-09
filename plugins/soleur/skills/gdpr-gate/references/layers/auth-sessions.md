@@ -4,7 +4,6 @@
 ## When This Layer Loads
 
 Auto-trigger inline when Claude is about to generate:
-
 - A login, logout, signup, or registration flow
 - Any JWT creation, signing, or verification code
 - Any token (access, refresh, reset, API key) generation or storage
@@ -20,7 +19,6 @@ Also loads during full repo scan.
 ## A-01: PII in JWT Payload
 
 What to grep:
-
 ```
 jwt.sign(
 jsonwebtoken.sign(
@@ -31,7 +29,6 @@ new SignJWT({
 ```
 
 Flag when:
-
 - PII fields in JWT payload: `{ email, name, ssn, dob, role, phone }`
 - Health or financial data in token
 - Full user object signed into JWT
@@ -41,7 +38,6 @@ intercepts or decodes the token can read every field in the payload.
 `atob(token.split('.')[1])` in any browser reveals it all.
 
 Fix pattern:
-
 ```javascript
 // Wrong
 const token = jwt.sign({
@@ -68,7 +64,6 @@ Regulation: CCPA, HIPAA (if health data in token), FTC Act
 ## A-02: Token Stored in localStorage
 
 What to grep:
-
 ```
 localStorage.setItem('token'
 localStorage.setItem('jwt'
@@ -78,7 +73,6 @@ sessionStorage.setItem('token'
 ```
 
 Flag when:
-
 - Any auth token stored in localStorage or sessionStorage
 - JWT, access token, refresh token, or API key in client-side storage
 
@@ -86,7 +80,6 @@ Why it matters: localStorage is accessible to any JavaScript on the page.
 An XSS vulnerability anywhere on the domain exposes all tokens.
 
 Fix pattern:
-
 ```javascript
 // Wrong
 localStorage.setItem('token', accessToken)
@@ -109,7 +102,6 @@ Regulation: CCPA, FTC Act, PCI-DSS
 ## A-03: No Token Expiry
 
 What to grep:
-
 ```
 jwt.sign({           (check for missing exp/expiresIn)
 expiresIn:           (check value — flag if > 24h for access tokens)
@@ -118,14 +110,12 @@ createToken(         (check implementation)
 ```
 
 Flag when:
-
 - JWT signed with no `exp` or `expiresIn`
 - `expiresIn` set to days/weeks for access tokens (> 24h)
 - Refresh tokens with no expiry at all
 - Session tokens with no `maxAge` or `expires`
 
 Fix pattern:
-
 ```javascript
 // Wrong
 const token = jwt.sign({ sub: user.id }, secret)  // no expiry — lives forever
@@ -143,7 +133,6 @@ Regulation: FTC Act, PCI-DSS (session timeout requirements)
 ## A-04: Password Reset Tokens — Single-Use Not Enforced
 
 What to grep:
-
 ```
 reset_token
 password_reset_token
@@ -154,14 +143,12 @@ findOne({ reset_token:
 ```
 
 Flag when:
-
 - Reset token stored but no `used_at` or `expires_at` field
 - Token not invalidated after use (can be reused)
 - Token expiry too long (> 1 hour is too long for password reset)
 - Token stored as plaintext (should be hashed like a password)
 
 Fix pattern:
-
 ```javascript
 // Wrong
 await User.update({ reset_token: token }, { where: { id: userId } })
@@ -189,7 +176,6 @@ Regulation: FTC Act, HIPAA (for health platforms)
 ## A-05: OAuth Scope Over-Request
 
 What to grep:
-
 ```
 scope:
 scopes:
@@ -200,14 +186,12 @@ passport.use(
 ```
 
 Flag when:
-
 - Requesting `offline_access` when refresh tokens aren't needed
 - Requesting full profile scope when only email is used
 - Google: requesting drive, calendar, or contacts when only email needed
 - GitHub: requesting `repo` (full repo access) when only user info needed
 
 Fix pattern:
-
 ```javascript
 // Wrong
 const scopes = ['openid', 'profile', 'email', 'offline_access',
@@ -224,7 +208,6 @@ Regulation: FTC Act (data minimization principle), CCPA
 ## A-06: Session Not Invalidated on Logout
 
 What to grep:
-
 ```
 app.post('/logout'
 router.post('/logout'
@@ -234,13 +217,11 @@ signOut(
 ```
 
 Flag when:
-
 - Logout only deletes client-side cookie/token without server-side invalidation
 - No session store deletion on logout
 - JWT-based auth with no token blocklist or short enough expiry
 
 Fix pattern:
-
 ```javascript
 // Wrong — client-side only logout
 app.post('/logout', (req, res) => {
@@ -265,7 +246,6 @@ Regulation: FTC Act, PCI-DSS, HIPAA
 ## A-07: MFA / OTP Codes Stored Plaintext or Without Expiry
 
 What to grep:
-
 ```
 otp_code
 mfa_code
@@ -276,14 +256,12 @@ backup_codes
 ```
 
 Flag when:
-
 - OTP stored as plaintext integer/string without expiry
 - TOTP secret stored without encryption
 - Backup codes stored plaintext (should be hashed like passwords)
 - No `expires_at` on OTP codes
 
 Fix pattern:
-
 ```javascript
 // Wrong
 await User.update({ otp_code: 123456 }, { where: { id: userId } })
