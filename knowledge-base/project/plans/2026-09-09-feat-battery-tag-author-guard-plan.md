@@ -1092,6 +1092,60 @@ asserted three ways that fail independently: source-coverage (one known member p
 | 9 | Change how `bun test plugins/soleur/` (a directory operand) expands, so the expansion silently narrows | RED |
 | 10 | **Must-PASS:** add a new suite through the `SUITE_GLOBS` auto-discovery path | PASS, and the new file appears in the closure |
 
+## Measurement (RED window)
+
+Taken 2026-09-09 against branch tip, with the exemption ledger **empty** and before any offender
+was fixed. This is the artifact the plan exists to produce: the population was not adjudicated
+statically, because two prior static passes reached opposite answers.
+
+```text
+battery-tag-authorship: 6 passed, 2 failed, 8 assertion(s) executed (floor 7);
+  roots=450 closure=800 occurrences=49 offenders=39 unclassified=1
+```
+
+Exit 1. `roots` and `occurrences` are both non-zero, so the RED is a real classification and not
+an empty scan reporting success (plan task 2.9).
+
+**The answer is 39, not zero.** The plan-time reconnaissance that adjudicated `0 live-repo
+offenders` was recorded as explicitly *not adopted as a verdict*; that caution was warranted. The
+earlier reconnaissance naming `worktree-manager.sh` was closer, but neither static pass produced
+the set below.
+
+| File | OFFENDER | SUPPRESSED | EXEMPT |
+| --- | --- | --- | --- |
+| `scripts/lib/repo-write-boundary.test.sh` | 11 | 0 | 0 |
+| `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` | 10 | 0 | 0 |
+| `apps/cla-evidence/scripts/ccla-add.sh` | 1 | 1 | 0 |
+| `apps/web-platform/scripts/run-migrations.sh` | 1 | 1 | 0 |
+| `plugins/soleur/skills/git-worktree/test/lease-protects-active.test.sh` | 2 | 0 | 0 |
+| `.claude/hooks/pre-merge-rebase-headless.test.sh` | 1 | 0 | 0 |
+| `.claude/hooks/pre-merge-rebase-parity.test.sh` | 1 | 0 | 0 |
+| `.claude/hooks/pre-merge-rebase.sh` | 1 | 0 | 0 |
+| `.claude/hooks/pre-merge-rebase.test.sh` | 1 | 0 | 0 |
+| `.claude/hooks/prod-write-defer-gate.test.sh` | 1 | 0 | 0 |
+| `apps/cla-evidence/test/ccla-add.test.sh` | 0 | 1 | 0 |
+| `apps/web-platform/scripts/cla-evidence/validate-roster.ts` | 0 | 1 | 0 |
+| `apps/web-platform/scripts/run-migrations-schema-probe.test.sh` | 1 | 0 | 0 |
+| `apps/web-platform/scripts/sdk-bump-sandbox-gate.sh` | 1 | 0 | 0 |
+
+Both spelling axes fired, which is what makes this census evidence rather than a fetch grep:
+
+- the TS array form — `test/pre-merge-rebase.test.ts:271`, `spawnChecked(["git", "fetch", "origin"], …)`
+- the `git -C` + verb form — `scripts/lib/repo-write-boundary.test.sh`'s deliberate
+  `pgit -C "$p" tag …` probe creations, exactly the declared-exemption case the widened verb set
+  was adopted to surface
+- the already-correct site — `scripts/plugin-delivery-canary.sh:342` grades `SUPPRESSED`, so the
+  positive arm is reachable rather than vacuous
+
+`unclassified=1` is the inline `bash -c 'cd apps/web-platform && npm run test:ci …'` registration;
+per AC6 it resolves into the resolver or the out-of-class ledger before GREEN, and is counted
+rather than silently dropped.
+
+One census row is a **declared false OFFENDER** in the safe direction:
+`scripts/plugin-delivery-canary.test.sh:1056` is a grep *pattern string* containing the verb, not
+an invocation. Declared approximation 1 (full-line comments only) covers it; that direction is
+closed by a declaration, never by a false green.
+
 ## Architecture Decision (ADR/C4)
 
 ### ADR
