@@ -727,16 +727,44 @@ dedicated)
     #
     # Depth = leading bytes before the first alphanumeric (lsblk's tree prefix). Only RELATIVE
     # depth is compared, so a byte-oriented awk and a multibyte-aware one agree.
-    data_mount_base="$(timeout 5 lsblk -nso NAME "$data_mount_src" 2>/dev/null \
+    # -i (--ascii) is load-bearing, not cosmetic. lsblk indents with box-drawing glyphs by
+    # default, and the continuation under a NON-last sibling is U+2502 + space (4 bytes) while
+    # the last sibling gets two plain spaces (2 bytes). A byte-oriented depth therefore differs
+    # between two nodes at the same LOGICAL depth, which is how the previous revision of this
+    # awk returned a confident `sdb` for an md0 spanning sdb+sdc -- while the SAME tree in ASCII
+    # returned __AMBIGUOUS__. The probe unit sets no LANG/LC_ALL, so which one shipped was a
+    # property of the host locale. -i collapses every prefix segment to a fixed 2 bytes.
+    #
+    # COUNT THE LEAVES, and mean it. The previous revision counted nodes at the maximum depth,
+    # which is a different set: in a fork where one leg is partitioned and the other is not
+    # (md0 -> {sdb1 -> sdb, sdc}), the only node at max depth is sdb, so it pinned sdb
+    # confidently while the mount spans both. A row is a leaf when the next row is not deeper
+    # than it -- i.e. nothing descends from it -- or when it is the last row. Adjacency is
+    # sound here because a child's prefix is always its parent's plus one segment, so a child
+    # is always strictly deeper than its parent even before -i.
+    #
+    # This is the third time this predicate has been wrong in the same direction, so state the
+    # invariant rather than the mechanism: MORE THAN ONE PHYSICAL DEVICE UNDER THE MOUNT MUST
+    # PRODUCE __AMBIGUOUS__. A confident answer here becomes a volume alias that G14 accepts,
+    # on a gate whose next step destroys that volume.
+    data_mount_base="$(timeout 5 lsblk -inso NAME "$data_mount_src" 2>/dev/null \
       | awk '''NF {
              p = match($0, /[[:alnum:]]/)
              if (p > 0) {
-               d = p - 1; nm = substr($0, p); sub(/[^A-Za-z0-9_.-].*$/, "", nm)
-               if (cnt == 0 || d > maxd) { maxd = d; cnt = 1; base = nm }
-               else if (d == maxd) { cnt++ }
+               nrow++
+               dep[nrow] = p - 1
+               nm = substr($0, p); sub(/[^A-Za-z0-9_.-].*$/, "", nm)
+               nam[nrow] = nm
              }
            }
-           END { if (cnt > 1) print "__AMBIGUOUS__"; else if (base != "") print base }''' || true)"
+           END {
+             cnt = 0
+             for (i = 1; i <= nrow; i++) {
+               if (i == nrow || dep[i + 1] <= dep[i]) { cnt++; base = nam[i] }
+             }
+             if (cnt > 1) print "__AMBIGUOUS__"
+             else if (cnt == 1 && base != "") print base
+           }''' || true)"
     case "$data_mount_base" in
     __AMBIGUOUS__) : ;;
     '' | *[!A-Za-z0-9_.-]*) data_mount_base=__UNREADABLE__ ;;
@@ -1058,21 +1086,44 @@ dedicated)
               # So the test is inverted: a segment is emitted ONLY if it looks like a CATEGORY, and
               # anything else becomes `*`. Fail-closed. The cost is that a legitimate but unusual
               # category renders as `*`; the alternative cost is a privacy incident.
-              function iscategory(s,   n, i, ch, run) {
+              #
+              # STATE THE RESIDUAL, because `fail-closed` is not the same claim as `closed against
+              # every identifier`, and the list above invites the stronger reading. What this rule
+              # closes is the shape space of the Inngest keyspace and its neighbours: ULIDs, UUIDs,
+              # long digit runs, mixed-case tokens, emails, and (since the hex arm) short hex ids.
+              # What it does NOT close is a lowercase, digit-sparse, <=24-char token carrying no
+              # uppercase -- measured, an all-lowercase vendor-key shape (a vendor prefix, an
+              # environment word and twenty lowercase letters, joined by underscores) is emitted
+              # whole, because by shape it is indistinguishable from `user_preferences`. Any rule
+              # that rejects the first rejects the second, so this is a floor, not an oversight.
+              # The literal is deliberately NOT written here: gitleaks scans this file, and a
+              # scannable token in a comment blocks every future commit that touches it.
+              #
+              # Redis key SEGMENTS are
+              # schema, not payload; if a caller ever puts a bearer token in one, the fix is at that
+              # caller, and this histogram is not the control that would save it.
+              function iscategory(s,   n, i, ch, run, hex) {
                 n = length(s)
                 if (n < 1 || n > 24) return 0
                 if (index("abcdefghijklmnopqrstuvwxyz", substr(s, 1, 1)) == 0) return 0
                 run = 0
+                hex = 1
                 for (i = 1; i <= n; i++) {
                   ch = substr(s, i, 1)
                   if (index("abcdefghijklmnopqrstuvwxyz0123456789_-", ch) == 0) return 0
                   if (index("0123456789", ch) > 0) { run++; if (run >= 4) return 0 } else { run = 0 }
+                  if (index("abcdef0123456789", ch) == 0) hex = 0
                 }
+                # A segment that is entirely lowercase hex and at least 8 long is an id, not a
+                # category. No category in the measured live keyspace is all [a-f0-9]:
+                # `accounts` has o/u/n/t/s, `gateways` has g/w/y/s, `partition` has p/r/t/i/o/n.
+                if (hex && n >= 8) return 0
                 return 1
               }
               NR > 5000 { truncated = 1; exit }
               $0 != "" {
                 key = $0
+                btok = ""
                 # Redis takes the FIRST {...} WHEREVER it appears, so this is not anchored at
                 # the start of the key -- an anchored rule would be narrower than the property.
                 ob = index(key, "{")
@@ -1088,16 +1139,27 @@ dedicated)
                       newtag = newtag (newtag == "" ? "" : ":") tseg[ti]
                     }
                     if (newtag == "") newtag = "*"
-                    key = substr(key, 1, ob - 1) "{" newtag "}" substr(after, cb + 1)
+                    btok = "{" newtag "}"
+                    key = substr(key, 1, ob - 1) btok substr(after, cb + 1)
                   }
                 }
                 n = split(key, seg, ":")
                 # The brace group was ALREADY category-filtered above, so re-testing it whole would
                 # fail on its own braces and discard the category tag -- the signal this field
                 # exists to carry. Over-redaction is a real failure direction, not just a cost.
+                #
+                # But the exemption must name the EXACT token this block just rebuilt, never the
+                # SHAPE of one. `starts with { and ends with }` is a shape test, and a shape test
+                # is a denylist wearing the clothes of an allowlist -- which is the precise polarity
+                # error the comment above says this rewrite exists to fix. Measured against the
+                # shape form, both of these shipped the ULID whole, because each starts with { and
+                # ends with } while only the FIRST brace group is filtered (Redis takes the first):
+                #   {q}{01KYAD...}:x   -> ?q??01KYAD...?:x:*
+                #   {q}01KYAD...}:x    -> ?q?01KYAD...?:x:*
+                # Comparing against btok admits exactly the token that was filtered and nothing
+                # else; every other segment falls through to iscategory() and fails closed.
                 s1 = seg[1]
-                if (substr(s1, 1, 1) == "{") { if (substr(s1, length(s1)) != "}") s1 = "*" }
-                else if (!iscategory(s1)) s1 = "*"
+                if (btok == "" || s1 != btok) { if (!iscategory(s1)) s1 = "*" }
                 if (n >= 2) { s2 = iscategory(seg[2]) ? seg[2] : "*"; k = s1 ":" s2 ":*" } else { k = s1 }
                 gsub(/[^A-Za-z0-9_:.*-]/, "?", k)
                 if (!(k in c)) { order[++distinct] = k }

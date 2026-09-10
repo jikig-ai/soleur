@@ -1224,7 +1224,7 @@ assert "#8017 data_mount_src still carries the KERNEL name (demoted to audit, st
   "grep -qE 'data_mount_src=/dev/sdb( |\$)' '$S8_RAW'"
 
 # --- shape 2: a MAPPER on a whole disk (the post-recut shape) -------------------------------
-s8_lsblk 'inngest-redis\n\0342\0224\0224\0342\0224\0200sdb\n\n'
+s8_lsblk 'inngest-redis\n`-sdb\n\n'
 S8_MAP="$(s8_run mapper)"
 assert "#8017 a MAPPER resolves through dm to its backing device" \
   "grep -qE 'data_mount_devid=scsi-0HC_Volume_${S8_VOLID}( |\$)' '$S8_MAP'"
@@ -1234,7 +1234,7 @@ assert "#8017 the mapper's base is the BACKING device, not the dm node" \
 # --- shape 3: a MAPPER on a PARTITION (two hops: dm -> part -> parent disk) -----------------
 # Does not arise in today's layout -- nothing creates a partition table -- but "does not arise
 # today" describes one layout, and being wrong costs a second tag and a second host replace.
-s8_lsblk 'inngest-redis\n\0342\0224\0224\0342\0224\0200sdb1\n  \0342\0224\0224\0342\0224\0200sdb\n\n'
+s8_lsblk 'inngest-redis\n`-sdb1\n  `-sdb\n\n'
 S8_PART="$(s8_run partition)"
 assert "#8017 a mapper on a PARTITION walks all the way to the parent disk" \
   "grep -qE 'data_mount_base=sdb( |\$)' '$S8_PART'"
@@ -1244,7 +1244,7 @@ assert "#8017 ...and still resolves the volume alias from that parent" \
 # --- shape 4: the FIRST-NON-EMPTY trap ------------------------------------------------------
 # Measured on util-linux 2.41.3: `lsblk -nsdo SERIAL` emits the value AND a trailing blank line.
 # A NR==1 read takes the child; a naive `tail -1` takes the blank. Only last-non-empty is right.
-s8_lsblk 'inngest-redis\n\n\0342\0224\0224\0342\0224\0200sdb\n\n\n'
+s8_lsblk 'inngest-redis\n\n`-sdb\n\n\n'
 S8_BLANK="$(s8_run blanks)"
 assert "#8017 interior and trailing BLANK lines do not defeat the base-device read" \
   "grep -qE 'data_mount_base=sdb( |\$)' '$S8_BLANK'"
@@ -1258,7 +1258,7 @@ assert "#8017 interior and trailing BLANK lines do not defeat the base-device re
 # Every other shape in this arm is a CHAIN, which is why no fixture could see it.
 : > "$PROBE_S8_DEV/sdc"
 ln -sf "$PROBE_S8_DEV/sdc" "$PROBE_S8_BYID/scsi-0HC_Volume_777777777"
-s8_lsblk 'md0\n\0342\0224\0234\0342\0224\0200sdb\n\0342\0224\0224\0342\0224\0200sdc\n\n'
+s8_lsblk 'md0\n|-sdb\n`-sdc\n\n'
 S8_FORK="$(s8_run fork)"
 assert "#8017 a FORKED tree (two ancestors at one depth) => __AMBIGUOUS__, never an arbitrary leaf" \
   "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK'"
@@ -1266,6 +1266,35 @@ assert "#8017 ...and devid refuses with it rather than pinning the arbitrarily-p
   "grep -qE 'data_mount_devid=__AMBIGUOUS__( |\$)' '$S8_FORK'"
 assert "#8017 a forked tree NEVER emits the other volume's alias (the destructive wrong pin)" \
   "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK'"
+
+# --- shape 5b: an UNEQUAL-DEPTH fork -- the shape that defeated the FIRST fork fix -----------
+# The first fix counted nodes at the MAXIMUM depth, which is not the same set as the leaves.
+# When one leg of the fork is partitioned and the other is not (md0 -> {sdb1 -> sdb, sdc}), the
+# only node at max depth is sdb, so the fixed emitter STILL pinned sdb confidently while the
+# mount spanned both devices. Every fork fixture written for the first fix was depth-symmetric,
+# which is exactly why none of them could see it. Glyph-independent: fails in ASCII and UTF-8.
+s8_lsblk 'md0\n|-sdb1\n| `-sdb\n`-sdc\n\n'
+S8_FORK2="$(s8_run fork_unequal)"
+assert "#8017 an UNEQUAL-DEPTH fork => __AMBIGUOUS__ (max-depth counting pinned sdb here)" \
+  "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK2'"
+assert "#8017 ...and the unequal-depth fork never emits the wrong volume alias" \
+  "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK2'"
+
+# --- shape 5c: a fork drawn with BOX-DRAWING glyphs -----------------------------------------
+# lsblk indents a NON-last sibling with U+2502 + space (4 bytes) and a last sibling with two
+# plain spaces (2 bytes), so two nodes at the same LOGICAL depth sit at different BYTE depths.
+# Measured: this exact tree returned a confident `sdb` under byte-depth counting while the SAME
+# tree in ASCII returned __AMBIGUOUS__ -- i.e. the verdict was a property of the host locale, and
+# the probe unit sets no LANG/LC_ALL. The emitter now passes -i so production is always ASCII;
+# this fixture keeps the LEAF rule honest if that flag is ever dropped, because the leaf rule is
+# glyph-independent on its own (a child is always strictly deeper than its parent).
+s8_lsblk 'md0\n\0342\0224\0234\0342\0224\0200sdb1\n\0342\0224\0202 \0342\0224\0224\0342\0224\0200sdb\n\0342\0224\0224\0342\0224\0200sdc1\n  \0342\0224\0224\0342\0224\0200sdc\n\n'
+S8_FORK3="$(s8_run fork_glyphs)"
+assert "#8017 a BOX-DRAWING fork => __AMBIGUOUS__ (byte-depth counting pinned sdb here)" \
+  "grep -qE 'data_mount_base=__AMBIGUOUS__( |\$)' '$S8_FORK3'"
+assert "#8017 ...and the glyph fork never emits the wrong volume alias" \
+  "! grep -qF 'scsi-0HC_Volume_777777777' '$S8_FORK3'"
+
 rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_777777777"
 s8_lsblk 'sdb\n\n'
 
@@ -1369,6 +1398,9 @@ for a in "$@"; do
     echo "user:550E8400-E29B-41D4-A716-446655440000:p"
     echo "user:ops@example.com:sessions"
     echo "token:sk_live_51H8xQ2KLmNopQrStUvWx:meta"
+    echo "{q}{01KYADCPBNEE10PYEYCPCJ08YA}:x"
+    echo "{q}01KYADCPBNEE10PYEYCPCJ08YA}:x"
+    echo "sess:f3a92c1eb7d4e5a6:x"
     exit 0
   fi
 done
@@ -1411,6 +1443,20 @@ assert "#8013 an EMAIL ADDRESS does not survive (the @ was sanitised; the addres
   "! grep -qF 'ops' '$S8_KEYS' || ! grep -qE 'ops[^ ]*example' '$S8_KEYS'"
 assert "#8013 a SECRET-SHAPED value does not survive" \
   "! grep -qF 'sk_live_51H8xQ2KLmNopQrStUvWx' '$S8_KEYS'"
+# The two shapes below defeated the FIRST allowlist. Redis takes the FIRST {...}, so only that
+# group is category-filtered -- and the segment-1 exemption was written as a SHAPE test
+# (`starts with { and ends with }`) rather than an identity test against the token just rebuilt.
+# Anything opening with a brace and closing with one therefore passed WHOLE. A shape test is a
+# denylist wearing the clothes of an allowlist, which is the exact polarity error the rewrite
+# exists to correct; measured, both of these shipped the ULID verbatim.
+assert "#8013 a SECOND brace group does not smuggle the ULID past the segment-1 exemption" \
+  "! grep -qF '$S8_ULID' '$S8_KEYS'"
+assert "#8013 the segment-1 exemption admits the REBUILT token only, so {q}{...} reduces to *" \
+  "grep -qE 'redis_key_patterns=[^ ]*[*]:x:[*]' '$S8_KEYS'"
+# A 16-char lowercase hex id has no 4-digit run and no uppercase, so every earlier rule admitted
+# it. Category names are words; ids are hex. No measured live category is all [a-f0-9].
+assert "#8013 a SHORT LOWERCASE HEX id does not survive (no digit run, no uppercase)" \
+  "! grep -qF 'f3a92c1eb7d4e5a6' '$S8_KEYS'"
 # ...and the OVER-REDACTION direction, which no absence assertion can see: a filter that emits
 # nothing satisfies every row above while destroying the field's entire diagnostic value.
 assert "#8013 OVER-REDACTION guard: the category tag survives the allowlist" \
@@ -1425,7 +1471,13 @@ cp "$PROBE_D_BIN/redis-cli" "$PROBE_S8_BIN/redis-cli"
 # A stub happily ignores an invented flag, so flag SHAPE is unfalsifiable behaviourally. These
 # assert the emitter's TEXT instead -- the discipline that would have caught `--count`.
 assert "#8017 the device walk uses lsblk -s (the documented inverse-tree flag), not a hand-rolled slaves walk" \
-  "grep -qE 'lsblk -nso NAME' '$PROBE_SRC'"
+  "grep -qE 'lsblk -inso NAME' '$PROBE_SRC'"
+# -i is part of the same pin, and for a measured reason: without it lsblk indents a NON-last
+# sibling with U+2502 + space (4 bytes) and a last sibling with two spaces (2 bytes), so byte
+# depth stops tracking logical depth. Dropping -i silently makes the fixtures below unfaithful
+# to production, which is the state the first fork fix shipped in.
+assert "#8017 ...and asks for ASCII (-i), so a fixture written in ASCII matches what lsblk emits" \
+  "grep -qE 'lsblk -i[a-z]*nso NAME|lsblk -inso NAME' '$PROBE_SRC'"
 assert "#8017 the lsblk call is BOUNDED, like every other call in this probe" \
   "grep -qE 'timeout [0-9]+ lsblk' '$PROBE_SRC'"
 assert "#8017 the by-id reverse map is constrained to the Hetzner namespace, never a whole-dir walk" \
@@ -2460,7 +2512,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=405
+INNGEST_MIN_ASSERTIONS=413
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
