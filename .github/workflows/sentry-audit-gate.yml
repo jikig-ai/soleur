@@ -107,7 +107,14 @@ jobs:
         # secondary discovery path for personal tokens (legacy).
         run: |
           set -euo pipefail
-          http=$(curl -s -o /dev/null -w '%{http_code}' \
+          # This step runs BEFORE the audit script, in the same job with the same
+          # secrets, so it needs the same confinement (#7997). --disable must be
+          # FIRST (it aborts ~/.curlrc parsing); --noproxy stops ALL_PROXY
+          # redirecting a credentialed request with the destination intact.
+          # Neither reaches the resolver or the trust anchor -- that is the unset.
+          unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+                HOSTALIASES LOCALDOMAIN RES_OPTIONS
+          http=$(curl --disable --noproxy '*' --proto '=https' -g -s -o /dev/null -w '%{http_code}' \
             -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
             "https://${SENTRY_API_HOST}/api/0/organizations/${SENTRY_ORG}/")
           if [[ "$http" != "200" ]]; then

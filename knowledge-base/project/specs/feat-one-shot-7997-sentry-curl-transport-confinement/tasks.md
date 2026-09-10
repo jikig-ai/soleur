@@ -52,10 +52,10 @@ Every shape below is the one measured in **M20/M25** — do not paraphrase it.
 
 ## 3. The three workflow edits
 
-- [ ] 3.1 `.github/workflows/sentry-audit-gate.yml`: add the `unset` prologue at the top of the `run:` block and `--disable --noproxy '*' --proto '=https' -g` as the first arguments at anchor `http=$(curl -s -o /dev/null -w '%{http_code}' \`. Same job, same secrets, runs **before** the script. (Destination adjudication there is Deferral 3 — #7898 §3, YAML scope gap.)
-- [ ] 3.2 `.github/workflows/scheduled-sentry-alert-drift.yml`: in the probe-unavailable issue body, after anchor `printf -- '- Run log: %s\n\n' "$RUN_URL"`, dump the probe output the way the sibling drift filer already does — a fenced `cat "${RUNNER_TEMP}/probe.txt"` guarded on the file existing. **This is not a static checklist item:** the body today never `cat`s `probe.txt`, so the refusal message would reach only the run log.
-- [ ] 3.3 `.github/workflows/reusable-release.yml`: at anchor `::warning::Sentry migration audit script exited`, branch the warning text on a refusal (`grep -q 'refusing'`) so the swallowed path names the secret pairing instead of the non-array-payload diagnostic a refusal never reaches.
-- [ ] 3.4 `actionlint` on all three; `bash -c` on any extracted `run:` snippet (never `bash -n` on the YAML).
+- [x] 3.1 `.github/workflows/sentry-audit-gate.yml`: add the `unset` prologue at the top of the `run:` block and `--disable --noproxy '*' --proto '=https' -g` as the first arguments at anchor `http=$(curl -s -o /dev/null -w '%{http_code}' \`. Same job, same secrets, runs **before** the script. (Destination adjudication there is Deferral 3 — #7898 §3, YAML scope gap.)
+- [x] 3.2 `.github/workflows/scheduled-sentry-alert-drift.yml`: in the probe-unavailable issue body, after anchor `printf -- '- Run log: %s\n\n' "$RUN_URL"`, dump the probe output the way the sibling drift filer already does — a fenced `cat "${RUNNER_TEMP}/probe.txt"` guarded on the file existing. **This is not a static checklist item:** the body today never `cat`s `probe.txt`, so the refusal message would reach only the run log.
+- [x] 3.3 `.github/workflows/reusable-release.yml`: at anchor `::warning::Sentry migration audit script exited`, branch the warning text on a refusal (`grep -q 'refusing'`) so the swallowed path names the secret pairing instead of the non-array-payload diagnostic a refusal never reaches.
+- [x] 3.4 `actionlint` on all three; `bash -c` on any extracted `run:` snippet (never `bash -n` on the YAML).
 
 ## 4. Baseline drawdown
 

@@ -251,6 +251,17 @@ jobs:
             printf -- '- Verdict reached: `%s`\n' "${VERDICT:-<none — the run aborted before the probe step wrote one>}"
             printf -- '- Detected at: %s\n' "$NOW"
             printf -- '- Run log: %s\n\n' "$RUN_URL"
+            # The refusal message IS the diagnosis, and without this it reached
+            # only the run log -- so the issue named a verdict nobody could act
+            # on. Guarded on existence: the run may have aborted before the probe
+            # step wrote anything, which is itself one of the states below.
+            if [[ -s "${RUNNER_TEMP}/probe.txt" ]]; then
+              printf '### What the probe printed\n\n```\n'
+              cat "${RUNNER_TEMP}/probe.txt"
+              printf '```\n\n'
+            else
+              printf '### What the probe printed\n\n_Nothing — the run aborted before the probe step produced output._\n\n'
+            fi
             printf '### What to check, in order\n\n'
             printf -- '1. **A cleared or expired secret.** The run refuses loudly if `SENTRY_IAC_AUTH_TOKEN`, `SENTRY_ORG` or `SENTRY_API_HOST` is empty; the first step names which.\n'
             printf -- '2. **The pagination ceiling.** The probe refuses at >= 100 workflows because a rule on page 2 would read as DELETED and produce a false "27 rules are gone" alarm. If the org has grown past 100, the fix is cursor-following in `scripts/sentry-alert-live-fidelity.sh`, not raising the ceiling.\n'
