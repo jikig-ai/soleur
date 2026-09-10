@@ -97,9 +97,16 @@ Two independent reasons, and neither is visible from the suite's own green:
 - **Unconstructible.** `guard-vacuity-floor` builds its mutant by slicing the
   floor block and widening BACKWARD over *contiguous* assignments. With
   `MIN_ASSERTIONS` declared at the top of the file, it is unbound in that slice,
-  so the mutant dies on `set -u` before reaching the floor — scored
-  "unconstructible", which is indistinguishable from "does not fire". Bind the
-  threshold ADJACENT to the floor block.
+  so the mutant dies on `set -u` before reaching the floor, and is scored
+  CONSTRUCTION. Bind the threshold ADJACENT to the floor block.
+
+  The guard itself classifies honestly — FIRES / NO_FIRE / CONSTRUCTION are three
+  distinct outcomes, and it says so. But its **`PROMOTED_FILES` arm** tests only
+  membership in the FIRES list and labels everything else `floor-does-not-fire`
+  (`guard-vacuity-floor.test.sh:644` against the three-way split at `:523`). So a
+  floor that could not be BUILT and a floor that ran and did not fire arrive as
+  one string — and that string is the one I read. A correct classifier upstream
+  does not help if the message downstream collapses its categories.
 - **Wrong vocabulary.** Once constructible, both floors scored "does not fire"
   because the FIRES sentinel list is lowercase `vacuit` and my floors printed
   `VACUITY:`. A floor that genuinely fired was read as a construction failure.
