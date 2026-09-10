@@ -4116,6 +4116,16 @@ jobs:
       - name: Install Doppler CLI
         uses: DopplerHQ/cli-action@5351693ec144fc7f7a2d30025061acfc3c53c47c # v4
 
+      - name: Authorization-map interlock (refuses a collapsed or permuted SSH key map)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! git_data_authorization_map_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
+            echo "::error::git-data-host-replace is HELD: the git-data SSH authorization map is not three distinct keys held by the three matching authorities. The gate message above names which of the five links broke and how. This is CPO condition C1 (#8009). The rung-2 rehearsal CANNOT catch this class -- it collapses all three slots onto one key by design, so a production collapse is a no-op there and the evidence still records PASS. Nothing has been planned or created. NOTE ON THIS PATH SPECIFICALLY: git_data_host_replace has no environment: and therefore no deployment_branch_policy, so workflow_dispatch runs the SELECTED REF - this gate is supplied by the branch it polices. It holds against an accidental collapse merged and dispatched from main. It does NOT hold against a deliberate actor with repository write access."
+            exit 1
+          fi
+
       - name: Generate ephemeral SSH public key for var.ssh_key_path
         # HCL evaluates file() at plan-time regardless of -target= filtering; a throwaway key
         # satisfies var.ssh_key_path (never consumed by the scoped git-data replace — the host is
@@ -5765,6 +5775,16 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
           if ! git_data_rung2_rehearsal_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
             echo "::error::git-data-host-create is HELD: no rung-2 boot evidence for the CURRENT cloud-init-git-data.yml. #6982 reached rung 1 only (a container harness that never boots the rendered template), so the first real boot of this template would be the production host holding every user's source. The gate's message above says exactly what to commit to release it. Carried by #7025. Nothing has been planned or created."
+            exit 1
+          fi
+
+      - name: Authorization-map interlock (refuses a collapsed or permuted SSH key map)
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/git-data-birth-readiness-gate.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
+          if ! git_data_authorization_map_gate "${GITHUB_WORKSPACE}/apps/web-platform/infra/cloud-init-git-data.yml"; then
+            echo "::error::git-data-host-create is HELD: the git-data SSH authorization map is not three distinct keys held by the three matching authorities. The gate message above names which of the five links broke and how. This is CPO condition C1 (#8009). The rung-2 rehearsal CANNOT catch this class -- it collapses all three slots onto one key by design, so a production collapse is a no-op there and the evidence still records PASS. Nothing has been planned or created."
             exit 1
           fi
 

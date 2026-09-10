@@ -3338,11 +3338,23 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(jobBlock).toMatch(
       /^\s*if ! git_data_rung2_rehearsal_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
     );
+    // #8009 adds a THIRD interlock (CPO condition C1). It inherits every pin above rather
+    // than repeating their history: the rung-2 gate is structurally incapable of catching a
+    // collapsed authorization map, because rehearsal.tf sets all three pubkeys to one
+    // tls_private_key by design -- so a production collapse is a NO-OP in the rehearsal and
+    // the evidence still records PASS. This gate is the only mechanical check on that class.
+    expect(jobBlock).toMatch(
+      /^\s*if ! git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+    );
 
     // The interlocks are separate STEPS, so each can be disarmed without touching its body
     // at all. Pin the three ways for BOTH: a conditional, continue-on-error, or a missing
     // non-zero exit.
-    for (const stepName of ["Birth-readiness interlock", "Rung-2 rehearsal interlock"]) {
+    for (const stepName of [
+      "Birth-readiness interlock",
+      "Rung-2 rehearsal interlock",
+      "Authorization-map interlock",
+    ]) {
       const step = new RegExp(`- name: ${stepName}[\\s\\S]*?(?=\\n      - name: )`).exec(jobBlock);
       expect(step, `step not found: ${stepName}`).not.toBeNull();
       expect(step![0]).not.toMatch(/^\s*if:/m);
@@ -3478,8 +3490,43 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     expect(interlockAt).toBeGreaterThan(-1);
     expect(rung2At).toBeGreaterThan(-1);
     expect(planAt).toBeGreaterThan(-1);
+    // The third interlock (#8009) is static -- it reads Terraform SOURCE, never a plan -- so
+    // it can and must refuse before any provider is contacted, exactly like its two siblings.
+    const authmapAt = jobBlock.search(/^\s*if ! git_data_authorization_map_gate\b/m);
+    expect(interlockAt).toBeGreaterThan(-1);
+    expect(authmapAt).toBeGreaterThan(-1);
     expect(interlockAt).toBeLessThan(planAt);
     expect(rung2At).toBeLessThan(planAt);
+    expect(authmapAt).toBeLessThan(planAt);
+  });
+
+  test("git_data_host_replace ALSO carries the authorization-map interlock (#8009 D9)", () => {
+    // D9. user_data is ForceNew and ADR-115 bars git-data from the reboot primitive, so
+    // after the birth a REPLACE is the ONLY route by which a re-rendered authorized_keys
+    // block reaches the host. The realistic incident is therefore not a collapsed BIRTH --
+    // that fires once, ever -- but a collapsed REPLACE, on the path with no human approver.
+    //
+    // The limitation ships stated rather than implied, here and in the step's own ::error::
+    // and the runbook: this job has no `environment:` and therefore no
+    // deployment_branch_policy, so workflow_dispatch runs the SELECTED REF's scripts and the
+    // gate is supplied by the branch it polices. It holds against an accidental collapse
+    // merged and dispatched from main; it does NOT hold against a deliberate actor with
+    // repository write. Giving the five replace-class targets an environment is tracked
+    // separately -- it is a fleet-wide policy call, not a local fix.
+    const replaceBlock = extractJobBlock(wf, "git_data_host_replace");
+    expect(replaceBlock).toMatch(
+      /^\s*if ! git_data_authorization_map_gate "\$\{GITHUB_WORKSPACE\}\/[^"]+"; then/m,
+    );
+    const step = /- name: Authorization-map interlock[\s\S]*?(?=\n      - name: )/.exec(
+      replaceBlock,
+    );
+    expect(step, "Authorization-map interlock step not found in git_data_host_replace").not.toBeNull();
+    expect(step![0]).not.toMatch(/^\s*if:/m);
+    expect(step![0]).not.toMatch(/continue-on-error/);
+    expect(step![0]).toMatch(/^\s*exit 1$/m);
+    // The stated limitation is part of the contract, not decoration: a future edit that
+    // silently drops it would leave the gate implying protection it does not have.
+    expect(step![0]).toMatch(/does NOT hold against a deliberate actor/);
   });
 
   test("the job carries the environment gate and reads HCLOUD_TOKEN for the preflight", () => {
