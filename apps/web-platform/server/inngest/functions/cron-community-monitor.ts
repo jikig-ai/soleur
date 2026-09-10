@@ -378,7 +378,9 @@ export async function readCollectorStatus(
 // axis from the LINKEDIN_ACCESS_TOKEN/LINKEDIN_PERSON_URN posting creds that
 // gate the router's platform "enabled" status.
 // X_ALLOW_POST is deliberately EXCLUDED: it is the posting defense-in-depth
-// guard (x-community.sh:611); the monitor is read-only and only the publisher
+// guard (x-community.sh, the `X_ALLOW_POST` check in cmd_post -- content anchor,
+// not a line number: #7898 shifted this file by ~40 lines and the old `:611`
+// citation now lands on a loop terminator); the monitor is read-only and only the publisher
 // (cron-content-publisher.ts) arms posting.
 // Defensive: ONLY the platform secrets the community-router.sh needs, NOT a
 // wholesale process.env passthrough.

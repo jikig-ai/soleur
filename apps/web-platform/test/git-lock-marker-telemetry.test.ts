@@ -233,11 +233,26 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
   // this copy is not updated, the new wedge signal would go silently unmirrored — the
   // exact blindness this feature closes. Pin the two in sync: every `echo "SOLEUR_GIT_LOCK_*`
   // literal in the script must be matched by extractGitLockMarkers.
-  test("extractor matches every SOLEUR_GIT_* sentinel echoed by the two shell scripts", () => {
-    const scripts = [
-      "../../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh",
-      "../../../plugins/soleur/skills/git-worktree/scripts/git-repo-readiness-diag.sh",
-    ].map((p) => readFileSync(join(__dirname, p), "utf8"));
+  test("extractor matches every SOLEUR_* sentinel emitted by any plugin skill script or SKILL.md", () => {
+    // DERIVED, not listed (#7898). The two git-worktree paths were the entire
+    // .sh scan set, so a sentinel authored in ANY other skill's scripts/ dir was
+    // invisible here — which is what happened: this PR's SOLEUR_TRANSPORT_DIAG
+    // (7 community scripts) and SOLEUR_FLAG_LIST_HALT (flag-list) were both added
+    // to MARKER_RE and matched by NOTHING in this guard. Measured before the fix:
+    // 33 sentinels collected, both new markers absent. Walking every
+    // skills/*/scripts/*.sh means a new emitter joins the guarded set by existing,
+    // rather than by someone remembering to extend an array.
+    const skillScriptsRoot = join(__dirname, "../../../plugins/soleur/skills");
+    const scripts = readdirSync(skillScriptsRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .flatMap((e) => {
+        const dir = join(skillScriptsRoot, e.name, "scripts");
+        if (!existsSync(dir)) return [];
+        return readdirSync(dir)
+          .filter((f) => f.endsWith(".sh"))
+          .map((f) => join(dir, f));
+      })
+      .map((p) => readFileSync(p, "utf8"));
     // SKILL.md files are scanned too (#7409). The two .sh paths above were the
     // entire scan set, so a `SOLEUR_*` sentinel authored in agent-executed
     // SKILL.md prose was invisible to this guard FOREVER — which is exactly what
@@ -257,7 +272,12 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
     // adds five new bare-echo copies of it — pin the literal so a future rename fails CI here
     // rather than silently un-mirroring). A renamed/added sentinel unmatched by MARKER_RE
     // must fail CI here rather than go silently unmirrored — the exact blindness this closes.
-    const SENTINEL_RE = /echo "(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY|worktree wedge:)/g;
+    // `printf '` as well as `echo "` (#7898). The regex matched only the echo
+    // form, so every marker this repo emits via single-quoted printf — including
+    // both markers added to MARKER_RE by the same PR — was structurally invisible.
+    // A guard that can only see one of the two ways the repo emits a sentinel is
+    // narrower than the property it names.
+    const SENTINEL_RE = /(?:echo "|printf ')(SOLEUR_[A-Z_]+|NO_GIT_REPOSITORY|worktree wedge:)/g;
     const collect = (s: string) => [...s.matchAll(SENTINEL_RE)].map((m) => m[1]);
 
     // The two .sh files are a bounded surface: every sentinel they echo belongs to
@@ -313,7 +333,7 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
       const sample = `${name} file=.git/config.lock type=chardevice rdev=1:3`;
       expect(
         extractGitLockMarkers(sample).length,
-        `sentinel ${name} echoed by a git-worktree script or a skill's SKILL.md is not matched by the telemetry extractor — update MARKER_RE`,
+        `sentinel ${name} emitted by a plugin skill (scripts/*.sh or SKILL.md) is not matched by the telemetry extractor — update MARKER_RE`,
       ).toBe(1);
     }
   });

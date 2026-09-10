@@ -6,6 +6,28 @@
 
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing. UNCONDITIONAL — deliberately NOT
+# gated on a non-emptiness test of the credential variable, because
+# every credential this script handles (the Flagsmith management key, and the
+# soleur/prd SUPABASE_SERVICE_ROLE_KEY the audit helper binds) is acquired by
+# `doppler secrets get` BELOW this point, so a conditional arm would test an empty
+# variable at guard time, open, and then trace the acquisition itself. The refusal
+# prints on STDOUT because agent runtimes surface stdout and swallow stderr
+# (knowledge-base/project/constitution.md > Code Style).
+case "$-" in
+  *x*)
+    printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n'
+    exit 78
+    ;;
+esac
+
+# (#7873) `--disable` closes ~/.curlrc and `--noproxy '*'` closes the proxy vars,
+# but neither touches the env that subverts TLS ITSELF. SSLKEYLOGFILE writes the
+# session keys and the CA vars substitute the trust store, so a CURL_CA_BUNDLE
+# MITM of these credentials works with every other guard fully intact.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
 # Shared WORM audit-append helper (PostgREST RPC; no DB-CLI binary). See #4581 PR-1.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../../scripts/audit-flag-flip.sh"
@@ -62,7 +84,7 @@ fi
 TOKEN=$(doppler secrets get FLAGSMITH_MANAGEMENT_API_KEY -p soleur -c cli_ops --plain 2>/dev/null || true)
 [[ -z "$TOKEN" ]] && { echo "FLAGSMITH_MANAGEMENT_API_KEY not in Doppler soleur/cli_ops" >&2; exit 2; }
 
-fs_api() { curl -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"; }
+fs_api() { curl --disable --noproxy '*' -sS -H "Authorization: Api-Key $TOKEN" -H "Content-Type: application/json" "$@"; }
 
 # Pre-check: not already a feature in Flagsmith.
 EXISTING=$(fs_api "${FLAGSMITH_API}/projects/${FLAGSMITH_PROJECT_ID}/features/?q=${NAME}" \
