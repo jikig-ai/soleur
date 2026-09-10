@@ -249,8 +249,10 @@ on:
           template landed), and the authorization-map interlock (#8009). An earlier version
           of this text said a dispatch exits 1 before planning; that stopped being true when
           the evidence merged. What holds the route now is the runbook banner and the
-          environment approval -- and that approval is measured prevent_self_review:false
-          with a single reviewer, so the dispatcher can approve their own deployment. Read
+          environment approval -- and that approval reports prevent_self_review:false with a
+          single reviewer, so the dispatcher can approve their own deployment. (That attribute
+          is declared nowhere in this repo's Terraform, so false is the provider default, not
+          a choice; every gated environment here reads the same way.) Read
           knowledge-base/engineering/operations/runbooks/git-data-birth.md first.
         required: false
         default: manual-rerun
@@ -5678,10 +5680,16 @@ jobs:
 
           ### 2. This approval is NOT two-party
 
-          `web-platform-infra-apply` is measured `prevent_self_review: false` with a single
+          `web-platform-infra-apply` reports `prevent_self_review: false` with a single
           reviewer. **The person who dispatched this run can approve it.** That is one human
           clicking twice, not a two-party control. If you dispatched it, nobody else has
           looked at it.
+
+          Two things about that reading. It comes from the live API — and `prevent_self_review`
+          is declared **nowhere in this repository's Terraform**, so `false` is the provider
+          default rather than a setting anyone chose. Every environment here that has required
+          reviewers reads the same way, with the same single reviewer: **no approval gate in
+          this repo is two-party.**
 
           ### 3. The rehearsal evidence attests a STAGE WAS REACHED, not four measurements
 
@@ -5735,7 +5743,8 @@ jobs:
     # a live verdict invites -- so it now states what the gates ARE rather than what they
     # currently answer. What holds the route today is the runbook's DO-NOT-DISPATCH banner
     # and the environment approval; the banner may be the only prose hold, and the approval
-    # is measured prevent_self_review:false with a single reviewer.
+    # reports prevent_self_review:false with a single reviewer (declared nowhere in this
+    # repo's Terraform, so that is the provider default rather than a chosen setting).
     #
     # (1) The birth-readiness (sentinel) interlock RELEASED as of #6982. It held because
     # cloud-init-git-data.yml emitted nothing off-host and nothing in its boot path failed

@@ -923,6 +923,12 @@ git_data_authorization_map_gate() {
   # Each line must be a forced command with the canonical option set. M26 is a line with no
   # `command=` at all; M27 is an extra option appended to one — invisible to a script-name
   # assertion, and live the moment anything sets PermitUserEnvironment yes.
+  # AN EXACT-MATCH CONTRACT ACROSS A HASH-BOUND BOUNDARY. This literal must equal the option
+  # string in cloud-init-git-data.yml's authorized_keys block. That file is hash-bound and this
+  # one is not, so a legitimate future option addition reddens this gate BEFORE the template can
+  # be changed — which is the intended fail-closed direction (an added option is exactly M27),
+  # but it means the fix is deliberate co-editing, not a surprise. Widening this to a
+  # subset-match would forfeit M27 entirely.
   local _canon_opts='no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty'
   declare -A _slot_var=()          # script name -> template variable name
   local _line _script _tvar _n_slots=0
@@ -995,17 +1001,8 @@ git_data_authorization_map_gate() {
     _root_src+="$_one"$'\n'
     _n_tf=$((_n_tf + 1))
   done
-  local _root_file
-  _root_file="$(mktemp)" || {
-    echo "git_data_authorization_map_gate: ABORT — cannot create a scratch file to materialize the Terraform root. Fail-closed."
-    rm -f "$_root_file"
-    return 2
-  }
-  printf '%s' "$_root_src" > "$_root_file"
   if [[ "$_n_tf" -eq 0 ]]; then
-    rm -f "$_root_file"
     echo "git_data_authorization_map_gate: ABORT — no *.tf files found in ${root}. Extraction yielded nothing, which is a broken instrument, not an empty root. Fail-closed."
-    rm -f "$_root_file"
     return 2
   fi
 
@@ -1024,10 +1021,9 @@ git_data_authorization_map_gate() {
       if (depth<=0) { if (hit) c++; inmod=0; hit=0 }
     }
     END { print c+0 }
-  ' "$_root_file")"
+  ' <<< "$_root_src")"
   if [[ "$_n_mod_labels" -ne 1 ]]; then
     echo "git_data_authorization_map_gate: HOLD — ${_n_mod_labels} module instance(s) in ${root} declare source = \"./modules/git-data-userdata\"; the canonical shape has exactly 1. A second render module is a second authorization map, and this gate would read only the one it was pointed at."
-    rm -f "$_root_file"
     return 1
   fi
   _mod_label="$(awk '
@@ -1037,19 +1033,23 @@ git_data_authorization_map_gate() {
       if ($0 ~ /source[[:space:]]*=[[:space:]]*"\.\/modules\/git-data-userdata"/) hit=1
       if (depth<=0) { if (hit) { print lbl; exit } ; inmod=0; hit=0 }
     }
-  ' "$_root_file")"
+  ' <<< "$_root_src")"
 
-  # READS A FILE, NOT A PIPE. `producer | grep -q` under `set -o pipefail` is a FALSE
+  # A HERESTRING, NOT A PIPE. `producer | grep -q` under `set -o pipefail` is a FALSE
   # NEGATIVE whenever the match is early and the producer exceeds the 64 KiB pipe buffer:
   # grep -q closes the pipe on first match, the producer takes SIGPIPE (141), and pipefail
   # promotes that to a failing pipeline EVEN THOUGH GREP MATCHED. Measured here — the root
   # source is ~160 KB and git-data.tf sorts early, so this gate HELD on a canonical tree
   # under `set -uo pipefail` while RELEASING under a plain shell. The suite and every CI
-  # `run:` block set pipefail, so the shipped behaviour was the broken one. Materializing
-  # the root once and reading the file removes the whole class rather than this instance.
-  if ! grep -qE "^[[:space:]]*user_data[[:space:]]*=[[:space:]]*base64gzip\(module\.${_mod_label}\.rendered\)[[:space:]]*$" "$_root_file"; then
+  # `run:` block set pipefail, so the shipped behaviour was the broken one. A herestring is
+  # backed by a temp file the SHELL owns and reaps, so it cannot take SIGPIPE at all — and it
+  # is the idiom this function already uses for the same string at its two `while read` loops.
+  # An earlier fix materialized the root by hand instead. That worked, but it put a SECOND
+  # representation of one string in the function and made every future `return` owe one of 18
+  # cleanup calls with no trap to catch a miss — a standing correctness tax on a fail-closed
+  # gate. One mechanism for one string.
+  if ! grep -qE "^[[:space:]]*user_data[[:space:]]*=[[:space:]]*base64gzip\(module\.${_mod_label}\.rendered\)[[:space:]]*$" <<< "$_root_src"; then
     echo "git_data_authorization_map_gate: HOLD — hcloud_server.git_data's user_data is not exactly base64gzip(module.${_mod_label}.rendered). The gate resolves the authorization map through that module; if the server renders anything else, the map this gate proved is not the map that boots."
-    rm -f "$_root_file"
     return 1
   fi
 
@@ -1066,9 +1066,8 @@ git_data_authorization_map_gate() {
       if (depth<=0) inres=0
     }
     END { exit(found?0:1) }
-  ' "$_root_file"; then
+  ' <<< "$_root_src"; then
     echo "git_data_authorization_map_gate: HOLD — hcloud_server.git_data declares lifecycle.ignore_changes on user_data. That deletes this gate's own premise: user_data is ForceNew and ADR-115 bars git-data from the reboot primitive, so a replace is the ONLY route by which a corrected authorization map reaches the host. With it ignored, the map can drift with no apply able to correct it."
-    rm -f "$_root_file"
     return 1
   fi
 
@@ -1081,7 +1080,7 @@ git_data_authorization_map_gate() {
       n=gsub(/\{/,"{"); m=gsub(/\}/,"}"); depth+=n-m
       if (depth<=0) exit
     }
-  ' "$_root_file")"
+  ' <<< "$_root_src")"
   declare -A _modvar_local=()      # module variable -> local name
   while IFS= read -r _line; do
     if [[ "$_line" =~ ^[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*=[[:space:]]*local\.([A-Za-z0-9_]+)[[:space:]]*$ ]]; then
@@ -1140,7 +1139,7 @@ git_data_authorization_map_gate() {
       if ($0 ~ /^[[:space:]]*value[[:space:]]*=/)              { val=$0; sub(/^[[:space:]]*value[[:space:]]*=[[:space:]]*/,"",val); sub(/[[:space:]]*$/,"",val) }
       if (depth<=0) { if (nm != "" && val != "") print nm "|" val; inres=0 }
     }
-  ' "$_root_file")
+  ' <<< "$_root_src")
 
   # The resource blocks named by the walk must actually EXIST in the root (M11). Three
   # dangling aliases satisfy every reference-distinctness predicate while resolving to
@@ -1163,13 +1162,11 @@ git_data_authorization_map_gate() {
     _modvar="${_tvar_modvar[$_tvar2]:-}"
     if [[ -z "$_modvar" ]]; then
       echo "git_data_authorization_map_gate: ABORT — the walk broke at link 2 for the ${_auth} authority: the template variable \${${_tvar2}} has no 'X = var.Y' binding in ${module_tf}. The gate resolves rather than asserting per-link precisely so an unanticipated hop breaks the walk instead of slipping past. Fail-closed."
-      rm -f "$_root_file"
       return 2
     fi
     _lname2="${_modvar_local[$_modvar]:-}"
     if [[ -z "$_lname2" ]]; then
       echo "git_data_authorization_map_gate: ABORT — the walk broke at link 3 for the ${_auth} authority: module \"${_mod_label}\" passes no 'X = local.Y' for module variable ${_modvar}. Fail-closed."
-      rm -f "$_root_file"
       return 2
     fi
     _term="${_local_terminal[$_lname2]:-}"
@@ -1180,11 +1177,9 @@ git_data_authorization_map_gate() {
       # would otherwise fall THROUGH the extractor rather than be rejected by it.
       if [[ "$_rhs" == *var.* || "$_rhs" == *data.* || "$_rhs" == *file\(* || "$_rhs" == *ssh-* ]]; then
         echo "git_data_authorization_map_gate: HOLD — the ${_auth} authority resolves to a NON-RESOURCE terminal: local.${_lname2} = ${_rhs}. Every slot must terminate at a tls_private_key.<name> this root creates. A variable carrying a default, a data source, a file() or an inline literal can hold any key at all — including the same key as another slot — and no address-distinctness predicate can see it."
-        rm -f "$_root_file"
         return 1
       fi
       echo "git_data_authorization_map_gate: ABORT — the walk broke at link 4 for the ${_auth} authority: local.${_lname2} = ${_rhs} yields no tls_private_key.<name>.<attr>. Resolving 2 of 3 slots is a broken instrument, not a two-key authorization map. Fail-closed."
-      rm -f "$_root_file"
       return 2
     fi
     _attr="${_local_attr[$_lname2]}"
@@ -1194,13 +1189,11 @@ git_data_authorization_map_gate() {
     # user_data, which is gzipped into Hetzner instance metadata.
     if [[ "$_attr" != "public_key_openssh" ]]; then
       echo "git_data_authorization_map_gate: HOLD — the ${_auth} slot reads tls_private_key.*.${_attr}; the authorized_keys file takes public_key_openssh. Reading a private attribute here bakes the private half into user_data, which Hetzner stores as instance metadata."
-      rm -f "$_root_file"
       return 1
     fi
     # PREDICATE 3 — the named resource must exist (M11).
     if [[ -z "${_resource_exists[$_term]:-}" ]]; then
       echo "git_data_authorization_map_gate: HOLD — the ${_auth} authority resolves to ${_term}, but no such resource block exists in ${root}. Three dangling aliases are pairwise distinct and create nothing."
-      rm -f "$_root_file"
       return 1
     fi
     _slot_terminal["$_auth"]="$_term"
@@ -1218,7 +1211,6 @@ git_data_authorization_map_gate() {
       _map+="${_auth} -> ${_slot_terminal[$_auth]}; "
     done
     echo "git_data_authorization_map_gate: HOLD — the ${_n_authorities} forced-command slots resolve to only ${#_seen_terminal[@]} distinct key(s): ${_map}A collapse here hands one SSH identity more than one authority. If the transport key gains git-data-remove.sh, sshd matches by key and takes the FIRST match, so it never surfaces as a failure — only as the identity the web app uses for ordinary push and fetch being able to erase a user's repositories."
-    rm -f "$_root_file"
     return 1
   fi
 
@@ -1236,7 +1228,6 @@ git_data_authorization_map_gate() {
     if [[ -z "$_term" ]]; then
       _rhs="${_secret_rhs[$_dopname]:-<no doppler_secret publishes that name>}"
       echo "git_data_authorization_map_gate: ABORT — the walk broke at link 5 for the ${_auth} authority: the Doppler secret ${_dopname} resolves to '${_rhs}', which yields no tls_private_key.<name>.<attr>. This is the half the application actually holds; an unresolvable terminal here means the gate cannot say which key the app would authenticate with. Fail-closed."
-      rm -f "$_root_file"
       return 2
     fi
     _attr="${_secret_attr[$_dopname]}"
@@ -1244,17 +1235,14 @@ git_data_authorization_map_gate() {
     # app a public key as its authentication material. Green under every address-only predicate.
     if [[ "$_attr" != "private_key_openssh" ]]; then
       echo "git_data_authorization_map_gate: HOLD — ${_dopname} publishes tls_private_key.*.${_attr}; the application authenticates with private_key_openssh. Publishing a public key as authentication material is address-distinct and bijective, and the app cannot authenticate with it."
-      rm -f "$_root_file"
       return 1
     fi
     if [[ -z "${_resource_exists[$_term]:-}" ]]; then
       echo "git_data_authorization_map_gate: HOLD — ${_dopname} resolves to ${_term}, but no such resource block exists in ${root}."
-      rm -f "$_root_file"
       return 1
     fi
     if [[ "$_term" != "${_slot_terminal[$_auth]}" ]]; then
       echo "git_data_authorization_map_gate: HOLD — THE AUTHORIZATION MAP IS PERMUTED at the ${_auth} authority. The forced command /usr/local/bin/${_script} is held by ${_slot_terminal[$_auth]}, but the application reads its ${_auth} credential from ${_dopname}, which publishes the private half of ${_term}. Both halves are three-distinct and perfectly bijective, so every cardinality check passes — and each authority holds the wrong key. If ${_dopname} is the transport credential, every ordinary push authenticates into whichever forced command ${_term} holds."
-      rm -f "$_root_file"
       return 1
     fi
   done
@@ -1266,7 +1254,6 @@ git_data_authorization_map_gate() {
   done
   echo "git_data_authorization_map_gate: RELEASED — the ${_n_authorities} forced-command slots in $(basename "$cloud_init") resolve through the render module and ${root}'s locals to ${#_seen_terminal[@]} pairwise-distinct tls_private_key resources, and each authority's private half is published under the matching Doppler name: ${_summary}"
   echo "git_data_authorization_map_gate: NOTE — this proves what the production root RENDERS, not what a live host HONOURS. It is a static assertion over Terraform source: no live host is probed, and none exists to probe. Runtime routes to the erase capability that a static walk structurally cannot see — an authorized_keys2 fall-through, hooksPath ownership, an unpinned AcceptEnv — are tracked separately and are NOT closed by this gate. On the git-data-host-replace path this gate is supplied by the branch it polices (that job has no environment: and therefore no deployment_branch_policy), so it holds against an accidental collapse merged and dispatched from main, and NOT against a deliberate actor with repository write access."
-  rm -f "$_root_file"
   return 0
 }
 

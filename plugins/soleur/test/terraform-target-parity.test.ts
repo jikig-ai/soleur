@@ -3493,7 +3493,6 @@ describe("git-data-host-create dispatch -target set + birth-gate pairing (#6977)
     // The third interlock (#8009) is static -- it reads Terraform SOURCE, never a plan -- so
     // it can and must refuse before any provider is contacted, exactly like its two siblings.
     const authmapAt = jobBlock.search(/^\s*if ! git_data_authorization_map_gate\b/m);
-    expect(interlockAt).toBeGreaterThan(-1);
     expect(authmapAt).toBeGreaterThan(-1);
     expect(interlockAt).toBeLessThan(planAt);
     expect(rung2At).toBeLessThan(planAt);

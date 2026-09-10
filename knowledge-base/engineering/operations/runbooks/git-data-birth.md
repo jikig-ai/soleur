@@ -158,9 +158,13 @@ AC30:
 
 A green boot is fully compatible with every repository sitting on plaintext storage.
 
-**2 — The approval is NOT two-party.** `web-platform-infra-apply` is measured
+**2 — The approval is NOT two-party.** `web-platform-infra-apply` reports
 `prevent_self_review: false` with a single reviewer, so **the person who dispatches can
-approve it**. Re-measure rather than trusting this line:
+approve it**. Two things to know about that reading: it comes from the live API, and
+`prevent_self_review` is declared **nowhere in this repository's Terraform** — so `false` is
+the provider default rather than a setting anyone chose. Every environment here that has
+required reviewers reads the same way, with the same single reviewer: **no approval gate in
+this repo is two-party.** Re-measure rather than trusting this line:
 
 ```bash
 gh api repos/jikig-ai/soleur/environments/web-platform-infra-apply \
@@ -188,6 +192,30 @@ the evidence PR's body.
 Finally: the authorization-map interlock is a **static** assertion over Terraform source. It
 proves what the production root *renders*, not what a live host *honours*. No live host is
 probed, because none exists until this dispatch creates one.
+
+### An undocumented invariant that Article 17 correctness currently rests on
+
+**`/mnt/git-data` must stay root-owned.** This is not a preference; it is the only thing
+making erasure fail closed today, and nothing asserts it.
+
+`git-data-remove.sh` derives `REPO_ROOT=/mnt/git-data/repositories`, then guards with
+`readlink -f`. **`readlink -f` succeeds on a path that does not exist** (verified: rc=0, and it
+prints the path), so on a host where the volume failed to mount, both guards pass. The script
+then runs `mkdir -p "$REPO_ROOT"`, finds no repo, prints `not present (no-op)` and **exits 0** —
+reporting Article 17 erasure success over a store nobody looked at.
+
+What actually prevents that today: the forced command runs as `git`, cloud-init creates
+`/mnt/git-data` as root, and `git-data-bootstrap.sh` chowns only the *symlink*
+(`chown -h …/repositories`). So the `mkdir -p` takes EACCES and `set -euo pipefail`
+(`git-data-remove.sh` line 28) aborts before the false success.
+
+That is an **accidental** invariant holding up a statutory guarantee. The moment anyone chowns
+that mountpoint to `git` for an unrelated permissions fix, erasure begins silently succeeding
+over nothing, and the failure is invisible — a no-op and a real erasure produce the same exit
+code and the same message. The assertion that would make it deliberate is a `mountpoint -q`
+check, which cannot land here: `git-data-remove.sh` is one of the payloads bound by
+`RUNG2_TEMPLATE_SHA256`, so editing it voids the rung-2 evidence and buys a fresh paid
+rehearsal. It is tracked with the other hash-bound hardening items.
 
 ## Dispatch
 
