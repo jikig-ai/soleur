@@ -34,21 +34,21 @@ Every shape below is the one measured in **M20/M25** — do not paraphrase it.
 
 ## 2. `apps/web-platform/scripts/sentry-monitors-audit.sh`
 
-- [ ] 2.1 RED first: extend `mk_curl_stub` in `apps/web-platform/scripts/sentry-monitors-audit.test.sh` to log every URL and — **gated on `STUB_REQUIRE_DISABLE=1`**, exported by `run_sut_stubbed` and the new rows only — to assert `$1 == --disable && $2 == --noproxy && $3 == '*'`. An unconditional check reds T18d, whose bare stub invocations (anchor `body_bare=$("$TMP18/curl" -s "https://de.sentry.io/api/0/x/"`) have `$1 == -s` by design.
-- [ ] 2.2 Add rows **T26-T34** (continue the file's own numbering; T1/T2/T13/T16-T24 are taken). Hostile rows run **non-fixture** via `run_sut_stubbed` — `SENTRY_FIXTURE_MONITORS` skips the whole 4-gate block, which would make both halves of the assertion satisfiable by the delete mutant. Watch them fail.
-- [ ] 2.3 Add `SENTRY_AUDIT_TEST_CURL_BIN=1` to T18a-f's environment — the `CURL_BIN` adjudication sits inside T18's `awk` slice and fails at source time without it.
-- [ ] 2.4 Change anchor `: "${SENTRY_ORG:=jikigai}"` to a required form (`:?`), matching the sibling script. `jikigai` is recorded canceled vendor-side in `ADR-031-sentry-as-iac.md`. Verify T1 still passes — it runs under `env -i` and greps for `SENTRY_AUTH_TOKEN`, whose check precedes this line.
-- [ ] 2.5 Immediately below 2.4 and **above** anchor `CURL_BIN="${CURL_BIN:-curl}"`: the same four-part block as task 1.3 (prologue, `_safe`, subshell-scoped org refusal, `readonly SENTRY_ORG`). Above `CURL_BIN=` keeps it outside T18's `awk` slice.
-- [ ] 2.6 Immediately **after** the `CURL_BIN=` anchor: `[[ "$CURL_BIN" == "curl" || -n "${SENTRY_AUDIT_TEST_CURL_BIN:-}" ]] || { printf 'ERROR: refusing curl binary %s\n' "$(_safe "$CURL_BIN")" >&2; exit 2; }` (M24).
-- [ ] 2.7 `readonly SENTRY_HOST_CANDIDATES=("${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io)` immediately above anchor `# --- Region detection (skipped if SENTRY_API_HOST is set) -----------------`. **Four members — no `us.sentry.io`.** In-file comment: this set is wider than the org-scoped contract requires, and the reason is 21 suite rows passing `de.sentry.io`; tightening it is a follow-up.
-- [ ] 2.8 Rewrite the loop to `for candidate in "${SENTRY_HOST_CANDIDATES[@]}"`, and render the `ERROR: Sentry token not valid against any candidate host (…)` message from the array rather than a second hand-written list.
-- [ ] 2.9 Membership refusal between the discovery block's closing `fi` and anchor `# --- 4-gate destination-controllability check (PR-β §10 / C5) -------------`:
+- [x] 2.1 RED first: extend `mk_curl_stub` in `apps/web-platform/scripts/sentry-monitors-audit.test.sh` to log every URL and — **gated on `STUB_REQUIRE_DISABLE=1`**, exported by `run_sut_stubbed` and the new rows only — to assert `$1 == --disable && $2 == --noproxy && $3 == '*'`. An unconditional check reds T18d, whose bare stub invocations (anchor `body_bare=$("$TMP18/curl" -s "https://de.sentry.io/api/0/x/"`) have `$1 == -s` by design.
+- [x] 2.2 Add rows **T26-T34** (continue the file's own numbering; T1/T2/T13/T16-T24 are taken). Hostile rows run **non-fixture** via `run_sut_stubbed` — `SENTRY_FIXTURE_MONITORS` skips the whole 4-gate block, which would make both halves of the assertion satisfiable by the delete mutant. Watch them fail.
+- [x] 2.3 Add `SENTRY_AUDIT_TEST_CURL_BIN=1` to T18a-f's environment — the `CURL_BIN` adjudication sits inside T18's `awk` slice and fails at source time without it.
+- [x] 2.4 Change anchor `: "${SENTRY_ORG:=jikigai}"` to a required form (`:?`), matching the sibling script. `jikigai` is recorded canceled vendor-side in `ADR-031-sentry-as-iac.md`. Verify T1 still passes — it runs under `env -i` and greps for `SENTRY_AUTH_TOKEN`, whose check precedes this line.
+- [x] 2.5 Immediately below 2.4 and **above** anchor `CURL_BIN="${CURL_BIN:-curl}"`: the same four-part block as task 1.3 (prologue, `_safe`, subshell-scoped org refusal, `readonly SENTRY_ORG`). Above `CURL_BIN=` keeps it outside T18's `awk` slice.
+- [x] 2.6 Immediately **after** the `CURL_BIN=` anchor: `[[ "$CURL_BIN" == "curl" || -n "${SENTRY_AUDIT_TEST_CURL_BIN:-}" ]] || { printf 'ERROR: refusing curl binary %s\n' "$(_safe "$CURL_BIN")" >&2; exit 2; }` (M24).
+- [x] 2.7 `readonly SENTRY_HOST_CANDIDATES=("${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io)` immediately above anchor `# --- Region detection (skipped if SENTRY_API_HOST is set) -----------------`. **Four members — no `us.sentry.io`.** In-file comment: this set is wider than the org-scoped contract requires, and the reason is 21 suite rows passing `de.sentry.io`; tightening it is a follow-up.
+- [x] 2.8 Rewrite the loop to `for candidate in "${SENTRY_HOST_CANDIDATES[@]}"`, and render the `ERROR: Sentry token not valid against any candidate host (…)` message from the array rather than a second hand-written list.
+- [x] 2.9 Membership refusal between the discovery block's closing `fi` and anchor `# --- 4-gate destination-controllability check (PR-β §10 / C5) -------------`:
       `_host_ok=0; for _c in "${SENTRY_HOST_CANDIDATES[@]}"; do [[ "$api_host" == "$_c" ]] && _host_ok=1; done` then `[[ "$_host_ok" -eq 1 ]] || { printf 'ERROR: refusing destination host %s (amend SENTRY_HOST_CANDIDATES)\n' "$(_safe "$api_host")" >&2; exit 2; }` then `readonly api_host`.
       RHS **double-quoted** (M27). The message must be textually distinguishable from the file's pre-existing `exit 2` at anchor `ERROR: residency mismatch — probed=` — `attacker.tld` reaches that one too, so `rc == 2` alone is non-discriminating.
-- [ ] 2.10 `--disable --noproxy '*' --proto '=https' -g` first at anchor `http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \`.
-- [ ] 2.11 Same flags first at anchor `curl -s --max-time 10 -X DELETE \`.
-- [ ] 2.12 Same flags **inside** `curl_retry` at anchor `if result=$("$CURL_BIN" -D "$hdr" "$@" 2>/dev/null); then` — not at the call sites, so they never enter `"$@"` and the write-safety argv scan is structurally unaffected.
-- [ ] 2.13 `bash -n`; T26-T34 green; **T1, T13, T16, T17, T17b, T18a-f, T20b/d/e and T22 all still green**.
+- [x] 2.10 `--disable --noproxy '*' --proto '=https' -g` first at anchor `http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \`.
+- [x] 2.11 Same flags first at anchor `curl -s --max-time 10 -X DELETE \`.
+- [x] 2.12 Same flags **inside** `curl_retry` at anchor `if result=$("$CURL_BIN" -D "$hdr" "$@" 2>/dev/null); then` — not at the call sites, so they never enter `"$@"` and the write-safety argv scan is structurally unaffected.
+- [x] 2.13 `bash -n`; T26-T34 green; **T1, T13, T16, T17, T17b, T18a-f, T20b/d/e and T22 all still green**.
 
 ## 3. The three workflow edits
 

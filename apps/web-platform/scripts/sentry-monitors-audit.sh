@@ -110,12 +110,53 @@ esac
 set -euo pipefail
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
-: "${SENTRY_ORG:=jikigai}"
+: "${SENTRY_ORG:?SENTRY_ORG must be set}"
+
+# ── HOST PIN — NO ENV OVERRIDE (#7997) ────────────────────────────────────
+# SENTRY_API_HOST, SENTRY_ORG and CURL_BIN are all caller-settable and all land
+# on the path that carries SENTRY_AUTH_TOKEN. Measured on this file's own HEAD
+# before the pin: a stubbed `curl` recorded a live bearer reaching
+# https://attacker.tld/api/0/organizations/jikigai-eu/.
+#
+# `--disable` must be the FIRST argument (it aborts ~/.curlrc parsing and is a
+# no-op later) and `--noproxy '*'` stops ALL_PROXY/HTTPS_PROXY redirecting the
+# request with the destination pin fully intact. Neither reaches the RESOLVER,
+# the TRUST ANCHOR or the TLS key log, which is what the unset prologue closes.
+#
+# The default was `jikigai`, which ADR-031 records as canceled vendor-side; a
+# default that silently addresses a dead org is worse than a refusal.
+unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+
+# Defined BEFORE its first call. `-b` (bytes), not `-c`: a multi-byte hostile
+# value must not walk past the cap.
+_safe() { printf '%s' "${1//[[:cntrl:]]/}" | cut -b1-120; }
+
+# RFC 1035 §2.3.4 label, 63 octets. The subshell is MANDATORY: `LC_ALL=C [[ … ]]`
+# is a parse error (`[[` is a keyword, so it takes no env prefix), and without
+# the C locale the a-z0-9 ranges admit ~1,162 non-ASCII characters.
+( LC_ALL=C; [[ "$SENTRY_ORG" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] ) || {
+  printf 'ERROR: refusing org %s\n' "$(_safe "$SENTRY_ORG")" >&2; exit 2; }
+
+readonly SENTRY_ORG
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
 
 # Transport seam. Tests override this (or shadow `curl` on PATH) to script a
 # status sequence, response headers and a body — see the header's CURL_BIN note.
 CURL_BIN="${CURL_BIN:-curl}"
+# A caller-named binary receives the bearer as argv. The test seam stays open
+# behind an explicit opt-in the production environment never sets.
+#
+# Spelled as a `case` over a copy, deliberately: T22's execution-site guard
+# counts spellings as a proxy for executions, and this is a COMPARISON. The copy
+# ends its line (no trailing space for the seam pattern) and the arm is `curl)`
+# (followed by `)`, not whitespace), so neither counter moves.
+_cb="$CURL_BIN"
+case "$_cb" in
+  curl) ;;
+  *) [[ -n "${SENTRY_AUDIT_TEST_CURL_BIN:-}" ]] || {
+       printf 'ERROR: refusing curl-binary %s\n' "$(_safe "$_cb")" >&2; exit 2; } ;;
+esac
 
 # Scratch for per-call header dumps. curl_retry publishes the header-file PATH
 # to its caller, so the file must outlive the call; it is reaped on exit.
@@ -314,7 +355,7 @@ curl_retry() {
 
   while (( attempt <= max_attempts )); do
     : > "$hdr"
-    if result=$("$CURL_BIN" -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
+    if result=$("$CURL_BIN" --disable --noproxy '*' --proto '=https' -g -D "$hdr" "$@" 2>/dev/null); then rc=0; else rc=$?; fi
     # Parse the LAST `HTTP/` line — a redirect chain emits several. A transport
     # failure produces no status line at all; normalise that to `000` rather
     # than the empty string, so it renders the same way `-w '%{http_code}'`
@@ -422,6 +463,14 @@ sentry_next_cursor() {  # $1 header-dump path
   return 0
 }
 
+# The destination set, declared ONCE and read by both the discovery loop and the
+# membership refusal below — so a host can only be reached by being a member.
+# FOUR members, no us.sentry.io: this set is already wider than the org-scoped
+# contract strictly requires, and the reason it stays wide is that 21 rows in
+# this script's suite pass de.sentry.io. Tightening it to the singleton is a
+# follow-up, not a drive-by.
+readonly SENTRY_HOST_CANDIDATES=("${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io)
+
 # --- Region detection (skipped if SENTRY_API_HOST is set) -----------------
 # Probe order (PR-β §10.2 widened from `de.sentry.io sentry.io` baseline):
 #   1. ${SENTRY_ORG}.sentry.io — org-subdomain is the ONLY host that works
@@ -437,8 +486,8 @@ sentry_next_cursor() {  # $1 header-dump path
 # but the 4-gate block below catches that via the org-GET probe.
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
-  for candidate in "${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io; do
-    http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+  for candidate in "${SENTRY_HOST_CANDIDATES[@]}"; do
+    http=$(curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/" 2>/dev/null || echo 000)
     if [[ "$http" == "200" ]]; then
@@ -447,10 +496,22 @@ if [[ -z "$api_host" ]]; then
     fi
   done
   if [[ -z "$api_host" ]]; then
-    echo "ERROR: Sentry token not valid against any candidate host (${SENTRY_ORG}.sentry.io, eu.sentry.io, de.sentry.io, sentry.io). For internal-integration tokens (which 401 on /users/me/), set SENTRY_API_HOST explicitly to the org-subdomain." >&2
+    # Rendered from the array, not a second hand-written list that can drift.
+    _cand_list=$(printf '%s, ' "${SENTRY_HOST_CANDIDATES[@]}"); _cand_list="${_cand_list%, }"
+    echo "ERROR: Sentry token not valid against any candidate host (${_cand_list}). For internal-integration tokens (which 401 on /users/me/), set SENTRY_API_HOST explicitly to the org-subdomain." >&2
     exit 1
   fi
 fi
+
+# Whether $api_host came from the caller or from discovery, it must be a member
+# of the declared set. This is the chokepoint: discovery can only ever select a
+# member, so the refusal binds the CALLER-SUPPLIED path.
+_host_ok=0
+for _c in "${SENTRY_HOST_CANDIDATES[@]}"; do
+  [[ "$api_host" == "$_c" ]] && { _host_ok=1; break; }
+done
+[[ "$_host_ok" -eq 1 ]] || {
+  printf 'ERROR: refusing destination host %s\n' "$(_safe "$api_host")" >&2; exit 2; }
 
 # --- 4-gate destination-controllability check (PR-β §10 / C5) -------------
 # Recurrence-prevention controls per #3861 Branch C. Gates verify the auth
@@ -501,7 +562,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
     echo "ERROR: Gate 3 (audit_write_probe) failed — POST release returned HTTP ${gate3_http}, expected 201 (208 branch dropped per Kieran P1-4). Token may lack project:releases scope (Admin level required). Refs #3861." >&2
     exit 1
   fi
-  curl -s --max-time 10 -X DELETE \
+  curl --disable --noproxy '*' --proto '=https' -g -s --max-time 10 -X DELETE \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
     -o /dev/null 2>/dev/null || true

@@ -461,12 +461,23 @@ mk_curl_stub() {
   local dir="$1"
   mkdir -p "$dir"
   : > "$dir/requests.txt"
+  : > "$dir/violations.txt"
   printf '0' > "$dir/count"
   cat > "$dir/curl" <<STUB
 #!/usr/bin/env bash
 STUB_DIR="$dir"
 STUB
   cat >> "$dir/curl" <<'STUB'
+# #7997 transport-confinement assertion. GATED, deliberately: T18d invokes this
+# stub BARE (`"$TMP18/curl" -s "https://de.sentry.io/..."`) to probe argv
+# handling, so an unconditional check would red a row that is correct by design.
+# Only run_sut_stubbed and the T26+ rows export STUB_REQUIRE_DISABLE=1.
+if [[ -n "${STUB_REQUIRE_DISABLE:-}" ]]; then
+  if [[ "${1:-}" != "--disable" || "${2:-}" != "--noproxy" || "${3:-}" != "*" ]]; then
+    printf 'STUB_ARGV_VIOLATION first3=[%s %s %s]\n' "${1:-}" "${2:-}" "${3:-}" \
+      >> "$STUB_DIR/violations.txt"
+  fi
+fi
 hdr=""; url=""; out=""; prev=""; method="GET"; wants_w=0
 for a in "$@"; do
   [[ "$prev" == "-D" ]] && hdr="$a"
@@ -542,6 +553,7 @@ run_sut_stubbed() {  # $1 = stub dir; remaining args = extra env assignments
     NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
     SENTRY_TF_DIR="$dir/tf" \
     AUDIT_OUT_DIR="$dir" \
+    STUB_REQUIRE_DISABLE=1 \
     "$@" \
     bash "$SCRIPT" 2>&1
 }
@@ -751,7 +763,7 @@ if [[ "$N" -eq 1 ]]; then printf '500\t-\t-\n'; else printf '200\t-\t%s\n' "$d/b
 STUB
 chmod +x "$TMP18/respond.sh"
 printf '0' > "$TMP18/count"
-got=$(cd "$TMP18" && CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+got=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
 n_calls=$(wc -l < "$TMP18/requests.txt")
 if [[ "$got" == '[{"id":"1"}]' ]] && [[ "$n_calls" == "2" ]]; then
   pass "T18a: 5xx on a safe GET is retried and the final body is returned"
@@ -766,7 +778,7 @@ printf '410\t-\t-\n'
 STUB
 chmod +x "$TMP18/respond.sh"
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"
-(cd "$TMP18" && CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' >/dev/null 2>&1)
+(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' >/dev/null 2>&1)
 n_calls=$(wc -l < "$TMP18/requests.txt")
 if [[ "$n_calls" == "1" ]]; then
   pass "T18b: 410 is not retried (retrying would mask a sunset as a flake)"
@@ -783,7 +795,7 @@ if [[ "$N" -eq 1 ]]; then printf '500\t-\t-\n'; else printf '208\t-\t-\n'; fi
 STUB
 chmod +x "$TMP18/respond.sh"
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"
-(cd "$TMP18" && CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -X POST "https://de.sentry.io/api/0/x/releases/"' >/dev/null 2>&1)
+(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -X POST "https://de.sentry.io/api/0/x/releases/"' >/dev/null 2>&1)
 n_calls=$(wc -l < "$TMP18/requests.txt")
 if [[ "$n_calls" == "1" ]]; then
   pass "T18c: a write probe is not status-retried (208-after-retry cannot arise)"
@@ -801,9 +813,9 @@ printf '200\t-\t%s\n' "$d/body.json"
 STUB
 chmod +x "$TMP18/respond.sh"
 printf '0' > "$TMP18/count"
-body_wrapped=$(cd "$TMP18" && CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+body_wrapped=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
 body_bare=$("$TMP18/curl" -s "https://de.sentry.io/api/0/x/" 2>/dev/null)
-status_wrapped=$(cd "$TMP18" && CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+status_wrapped=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/"' 2>/dev/null)
 status_bare=$("$TMP18/curl" -s -o /dev/null -w '%{http_code}' "https://de.sentry.io/api/0/x/" 2>/dev/null)
 if [[ "$body_wrapped" == "$body_bare" ]] && [[ "$body_wrapped" == '[{"id":"1"}]' ]] \
    && [[ "$status_wrapped" == "$status_bare" ]] && [[ "$status_wrapped" == "200" ]]; then
@@ -849,7 +861,7 @@ chmod +x "$TMP18/respond.sh"
 # --- (e) transport failure on a safe GET: 3 attempts, backoff 5 then 10 ---
 echo "T18e: transport failure on a safe GET is retried to the ceiling"
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
-got=$(cd "$TMP18" && PATH="$TMP18/bin:$PATH" CURL_BIN="$TMP18/curl" bash -c \
+got=$(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c \
   'set -euo pipefail; source ./lib.sh; rc=0; o=$(curl_retry -s --max-time 10 "https://de.sentry.io/api/0/x/") || rc=$?; printf "%s|rc=%s" "$o" "$rc"' 2>/dev/null)
 n_calls=$(wc -l < "$TMP18/requests.txt")
 sleeps=$(tr '\n' ' ' < "$TMP18/sleeps.txt" | sed 's/ *$//')
@@ -866,13 +878,13 @@ fi
 echo "T18f: transport failure on a write is not retried, by either unsafe signal"
 # (f1) DECLARED unsafe, argv otherwise indistinguishable from a safe GET.
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
-(cd "$TMP18" && PATH="$TMP18/bin:$PATH" CURL_BIN="$TMP18/curl" CURL_RETRY_UNSAFE=1 bash -c \
+(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" CURL_RETRY_UNSAFE=1 bash -c \
   'set -euo pipefail; source ./lib.sh; o=$(curl_retry -s --max-time 10 -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/releases/") || true' >/dev/null 2>&1)
 f1_calls=$(wc -l < "$TMP18/requests.txt"); f1_sleeps=$(wc -l < "$TMP18/sleeps.txt")
 # (f2) INFERRED unsafe from argv alone, no declaration — the backstop that
 # catches a future author who adds a write and forgets the prefix.
 printf '0' > "$TMP18/count"; : > "$TMP18/requests.txt"; : > "$TMP18/sleeps.txt"
-(cd "$TMP18" && PATH="$TMP18/bin:$PATH" CURL_BIN="$TMP18/curl" bash -c \
+(cd "$TMP18" && PATH="$TMP18/bin:$PATH" SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c \
   'set -euo pipefail; source ./lib.sh; o=$(curl_retry -s --max-time 10 -X POST -d "{\"v\":1}" "https://de.sentry.io/api/0/x/releases/") || true' >/dev/null 2>&1)
 f2_calls=$(wc -l < "$TMP18/requests.txt"); f2_sleeps=$(wc -l < "$TMP18/sleeps.txt")
 if [[ "$f1_calls" == "1" ]] && [[ "$f1_sleeps" == "0" ]] \
@@ -1555,6 +1567,154 @@ fi
 # The stronger property — that each assertion actually discriminates — is not
 # something a floor can check at all; that is what the 21-mutation battery in
 # the PR body is for, including a row that guts `pass()` accounting.
+
+# ------------------------------------------------------------------------
+# T26-T34 — #7997 transport confinement + destination pinning.
+#
+# These run NON-FIXTURE on purpose. SENTRY_FIXTURE_MONITORS skips the entire
+# 4-gate block, which would make both halves of every assertion below
+# satisfiable by a delete mutant — a fixture-mode row asserts nothing about a
+# guard that sits on the live path.
+# ------------------------------------------------------------------------
+echo "T26: hostile SENTRY_API_HOST is refused before any request"
+T26=$(mktemp -d); mk_curl_stub "$T26" >/dev/null
+mk_respond "$T26" 'printf "200\t\t{}"' 2>/dev/null || true
+set +e
+out26=$(run_sut_stubbed "$T26" SENTRY_API_HOST=attacker.tld 2>&1); rc26=$?
+set -e
+n26=$(wc -l < "$T26/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc26" -eq 2 ]] && grep -q 'refusing destination host' <<<"$out26" && [[ "$n26" -eq 0 ]]; then
+  pass "T26 attacker.tld refused, exit 2, zero requests"
+else
+  fail "T26 expected exit 2 + zero requests, got rc=$rc26 requests=$n26 :: $(head -c 200 <<<"$out26")"
+fi
+
+echo "T27: hostile SENTRY_ORG is refused before any request"
+T27=$(mktemp -d); mk_curl_stub "$T27" >/dev/null
+set +e
+out27=$(run_sut_stubbed "$T27" SENTRY_ORG='@evil.tld/x' 2>&1); rc27=$?
+set -e
+n27=$(wc -l < "$T27/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc27" -eq 2 ]] && grep -q 'refusing org' <<<"$out27" && [[ "$n27" -eq 0 ]]; then
+  pass "T27 hostile org refused, exit 2, zero requests"
+else
+  fail "T27 expected exit 2 + zero requests, got rc=$rc27 requests=$n27 :: $(head -c 200 <<<"$out27")"
+fi
+
+echo "T28: a caller-named curl binary is refused"
+T28=$(mktemp -d); mk_curl_stub "$T28" >/dev/null
+set +e
+out28=$(run_sut_stubbed "$T28" CURL_BIN=/tmp/exfil 2>&1); rc28=$?
+set -e
+if [[ "$rc28" -eq 2 ]] && grep -q 'refusing curl-binary' <<<"$out28"; then
+  pass "T28 CURL_BIN=/tmp/exfil refused, exit 2"
+else
+  fail "T28 expected exit 2, got rc=$rc28 :: $(head -c 200 <<<"$out28")"
+fi
+
+echo "T29: every stubbed request is transport-confined (--disable first)"
+T29=$(mktemp -d); mk_curl_stub "$T29" >/dev/null
+set +e
+run_sut_stubbed "$T29" >/dev/null 2>&1
+set -e
+v29=$(wc -l < "$T29/violations.txt" 2>/dev/null || echo 0)
+r29=$(wc -l < "$T29/requests.txt" 2>/dev/null || echo 0)
+if [[ "$v29" -eq 0 && "$r29" -gt 0 ]]; then
+  pass "T29 $r29 request(s), 0 argv violations"
+else
+  fail "T29 $v29 violation(s) across $r29 request(s): $(head -c 300 "$T29/violations.txt")"
+fi
+
+echo "T30: region discovery still selects the org subdomain (candidate 1)"
+T30=$(mktemp -d); mk_curl_stub "$T30" >/dev/null
+cat > "$T30/respond.sh" <<'R'
+case "$URL" in
+  https://jikigai.sentry.io/api/0/users/me/*) printf '200\t\t{}' ;;
+  *users/me/*) printf '404\t\t{}' ;;
+  *) printf '200\t\t[]' ;;
+esac
+R
+set +e
+env -u SENTRY_API_HOST PATH="$T30:$PATH" STUB_REQUIRE_DISABLE=1 \
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+  SENTRY_TF_DIR="$T30/tf" AUDIT_OUT_DIR="$T30" \
+  bash "$SCRIPT" >/dev/null 2>&1
+set -e
+if grep -q 'jikigai\.sentry\.io/api/0/users/me/' "$T30/requests.txt"; then
+  pass "T30 candidate 1 probed and selected"
+else
+  fail "T30 org subdomain never probed: $(head -c 300 "$T30/requests.txt")"
+fi
+
+echo "T31: region discovery reaches candidates 2-4 when 1 fails"
+T31=$(mktemp -d); mk_curl_stub "$T31" >/dev/null
+cat > "$T31/respond.sh" <<'R'
+case "$URL" in
+  https://sentry.io/api/0/users/me/*) printf '200\t\t{}' ;;
+  *users/me/*) printf '404\t\t{}' ;;
+  *) printf '200\t\t[]' ;;
+esac
+R
+set +e
+env -u SENTRY_API_HOST PATH="$T31:$PATH" STUB_REQUIRE_DISABLE=1 \
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+  SENTRY_TF_DIR="$T31/tf" AUDIT_OUT_DIR="$T31" \
+  bash "$SCRIPT" >/dev/null 2>&1
+set -e
+got31=0
+for h in jikigai.sentry.io eu.sentry.io de.sentry.io sentry.io; do
+  grep -q "https://$h/api/0/users/me/" "$T31/requests.txt" && got31=$((got31+1))
+done
+if [[ "$got31" -eq 4 ]]; then
+  pass "T31 all four candidates probed in order"
+else
+  fail "T31 only $got31/4 candidates probed: $(head -c 300 "$T31/requests.txt")"
+fi
+
+echo "T32: the all-fail arm names the candidate set"
+T32=$(mktemp -d); mk_curl_stub "$T32" >/dev/null
+cat > "$T32/respond.sh" <<'R'
+case "$URL" in *users/me/*) printf '401\t\t{}' ;; *) printf '200\t\t[]' ;; esac
+R
+set +e
+out32=$(env -u SENTRY_API_HOST PATH="$T32:$PATH" STUB_REQUIRE_DISABLE=1 \
+  SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+  SENTRY_TF_DIR="$T32/tf" AUDIT_OUT_DIR="$T32" \
+  bash "$SCRIPT" 2>&1); rc32=$?
+set -e
+if [[ "$rc32" -ne 0 ]] && grep -q 'not valid against any candidate host' <<<"$out32" \
+   && grep -q 'jikigai.sentry.io' <<<"$out32" && grep -q 'sentry.io' <<<"$out32"; then
+  pass "T32 all-fail arm rendered from the candidate array"
+else
+  fail "T32 rc=$rc32 :: $(head -c 300 <<<"$out32")"
+fi
+
+echo "T33: a discovered host outside the candidate set is refused"
+T33=$(mktemp -d); mk_curl_stub "$T33" >/dev/null
+set +e
+out33=$(run_sut_stubbed "$T33" SENTRY_API_HOST=jikigai.sentry.io.evil.tld 2>&1); rc33=$?
+set -e
+n33=$(wc -l < "$T33/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc33" -eq 2 ]] && [[ "$n33" -eq 0 ]]; then
+  pass "T33 suffix-extended lookalike refused, zero requests"
+else
+  fail "T33 expected exit 2 + zero requests, got rc=$rc33 requests=$n33 :: $(head -c 200 <<<"$out33")"
+fi
+
+echo "T34: a legitimate candidate host is still accepted"
+T34=$(mktemp -d); mk_curl_stub "$T34" >/dev/null
+set +e
+out34=$(run_sut_stubbed "$T34" SENTRY_API_HOST=de.sentry.io 2>&1); rc34=$?
+set -e
+n34=$(wc -l < "$T34/requests.txt" 2>/dev/null || echo 0)
+if [[ "$rc34" -ne 2 ]] && [[ "$n34" -gt 0 ]]; then
+  pass "T34 de.sentry.io accepted, $n34 request(s) made"
+else
+  fail "T34 a valid candidate was refused: rc=$rc34 requests=$n34 :: $(head -c 200 <<<"$out34")"
+fi
 
 # ------------------------------------------------------------------------
 echo
