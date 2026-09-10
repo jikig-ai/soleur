@@ -25,6 +25,13 @@
 # and the claim narrowed to what the code actually does.
 set -euo pipefail
 
+# Refuse to run under xtrace: every value this script touches is a live
+# credential, and `-x` would print the bearer token and the new password to
+# stderr (#7797). Must sit immediately after `set …`.
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
+
 PROJECT=soleur
 CONFIG=""
 PRD_ACK=0
@@ -84,7 +91,10 @@ TOKEN="$(doppler secrets get "$TOKEN_NAME" -p "$PROJECT" -c "$TOKEN_CONFIG" --pl
 # Keep the bearer token out of argv: curl reads the header from a config file.
 printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" > "$_tmp/curlrc"
 
-if ! curl -fsS --config "$_tmp/curlrc" https://api.supabase.com/v1/projects \
+# `--disable` MUST be the first argument: it aborts ~/.curlrc parsing, and any
+# later position is too late. `--noproxy '*'` stops ALL_PROXY/HTTPS_PROXY from
+# redirecting a credentialed request whose destination pin is otherwise intact.
+if ! curl --disable --noproxy '*' -fsS --config "$_tmp/curlrc" https://api.supabase.com/v1/projects \
      | jq -e --arg r "$REF" 'map(.id) | index($r)' >/dev/null; then
   echo "ERROR: $TOKEN_NAME cannot see project $REF (401/403, or no access)" >&2; exit 5
 fi
@@ -113,7 +123,7 @@ NEWPW="$(python3 -c "import secrets,string;a=string.ascii_letters+string.digits;
 
 echo "==> PATCH /v1/projects/$REF/database/password"
 jq -n --arg p "$NEWPW" '{password:$p}' > "$_tmp/body.json"
-code="$(curl -s -o "$_tmp/resp.json" -w '%{http_code}' -X PATCH \
+code="$(curl --disable --noproxy '*' -s -o "$_tmp/resp.json" -w '%{http_code}' -X PATCH \
         --config "$_tmp/curlrc" -H 'Content-Type: application/json' \
         --data @"$_tmp/body.json" \
         "https://api.supabase.com/v1/projects/$REF/database/password")"
