@@ -462,21 +462,50 @@ mk_curl_stub() {
   mkdir -p "$dir"
   : > "$dir/requests.txt"
   : > "$dir/violations.txt"
+  : > "$dir/require_disable"   # argv assertion ON by default; T18d clears it
   printf '0' > "$dir/count"
   cat > "$dir/curl" <<STUB
 #!/usr/bin/env bash
 STUB_DIR="$dir"
 STUB
   cat >> "$dir/curl" <<'STUB'
-# #7997 transport-confinement assertion. GATED, deliberately: T18d invokes this
-# stub BARE (`"$TMP18/curl" -s "https://de.sentry.io/..."`) to probe argv
-# handling, so an unconditional check would red a row that is correct by design.
-# Only run_sut_stubbed and the T26+ rows export STUB_REQUIRE_DISABLE=1.
-if [[ -n "${STUB_REQUIRE_DISABLE:-}" ]]; then
+# #7997 transport-confinement assertion. Gated on a FILE in the stub's own dir,
+# NOT an env var: STUB_DIR is baked in at creation, so the SUT cannot disarm this
+# by scrubbing its child environment. Measured -- with an env gate, wrapping the
+# curl call in `env -i` (the obvious next hardening step on this very ticket)
+# silently turned the assertion off and left an unconfined credentialed request
+# passing. The gate is ON by default; T18d clears it for its BARE probe, which is
+# correct by design, so only that one invocation is exempt.
+if [[ -f "$STUB_DIR/require_disable" ]]; then
   if [[ "${1:-}" != "--disable" || "${2:-}" != "--noproxy" || "${3:-}" != "*" ]]; then
     printf 'STUB_ARGV_VIOLATION first3=[%s %s %s]\n' "${1:-}" "${2:-}" "${3:-}" \
       >> "$STUB_DIR/violations.txt"
   fi
+  # The prefix above is only half the property. Measured on the sibling suite:
+  # appending `--proxy http://exfil.tld:8080 -k` to a correctly-prefixed call
+  # site left every argv assertion green while the bearer went through an
+  # attacker proxy with verification off. A prefix pin cannot say "and nothing
+  # later re-opens this", so scan the WHOLE argv for the values that must never
+  # appear -- and require the two overridable flags to occur exactly once, since
+  # a second --noproxy/--proto silently supersedes the first.
+  _np=0; _pr=0
+  for _a in "$@"; do
+    case "$_a" in
+      -x|--proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5 \
+        |--socks5-hostname|--socks5-basic|--socks5-gssapi \
+        |-K|--config \
+        |--proto-default|--proto-redir \
+        |--resolve|--connect-to|--unix-socket|--abstract-unix-socket|--url \
+        |-k|--insecure|--proxy-insecure|--ssl-no-revoke|--cacert|--capath \
+        |--doh-url|--doh-insecure|--location-trusted \
+        |--no-globoff)
+        printf 'STUB_ARGV_REOPEN token=[%s]\n' "$_a" >> "$STUB_DIR/violations.txt" ;;
+    esac
+    [[ "$_a" == "--noproxy" ]] && _np=$((_np + 1))
+    [[ "$_a" == "--proto"   ]] && _pr=$((_pr + 1))
+  done
+  [[ "$_np" -eq 1 ]] || printf 'STUB_ARGV_REOPEN noproxy_count=[%s]\n' "$_np" >> "$STUB_DIR/violations.txt"
+  [[ "$_pr" -eq 1 ]] || printf 'STUB_ARGV_REOPEN proto_count=[%s]\n' "$_pr" >> "$STUB_DIR/violations.txt"
 fi
 hdr=""; url=""; out=""; prev=""; method="GET"; wants_w=0
 for a in "$@"; do
@@ -489,6 +518,7 @@ for a in "$@"; do
 done
 n=$(cat "$STUB_DIR/count" 2>/dev/null || echo 0); n=$((n+1)); printf '%s' "$n" > "$STUB_DIR/count"
 printf '%s %s\n' "$method" "$url" >> "$STUB_DIR/requests.txt"
+printf '%s\n' "${SSLKEYLOGFILE-<unset>} ${CURL_CA_BUNDLE-<unset>} ${LD_PRELOAD-<unset>} ${OPENSSL_CONF-<unset>}" > "$STUB_DIR/env.txt"
 spec=$(URL="$url" METHOD="$method" N="$n" bash "$STUB_DIR/respond.sh")
 status=$(printf '%s' "$spec" | cut -f1)
 hfile=$(printf '%s' "$spec" | cut -f2)
@@ -553,7 +583,6 @@ run_sut_stubbed() {  # $1 = stub dir; remaining args = extra env assignments
     NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
     SENTRY_TF_DIR="$dir/tf" \
     AUDIT_OUT_DIR="$dir" \
-    STUB_REQUIRE_DISABLE=1 \
     "$@" \
     bash "$SCRIPT" 2>&1
 }
@@ -814,6 +843,7 @@ STUB
 chmod +x "$TMP18/respond.sh"
 printf '0' > "$TMP18/count"
 body_wrapped=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s "https://de.sentry.io/api/0/x/"' 2>/dev/null)
+rm -f "$TMP18/require_disable"   # bare probe is exempt BY DESIGN (argv has no flags)
 body_bare=$("$TMP18/curl" -s "https://de.sentry.io/api/0/x/" 2>/dev/null)
 status_wrapped=$(cd "$TMP18" && SENTRY_AUDIT_TEST_CURL_BIN=1 CURL_BIN="$TMP18/curl" bash -c 'set -euo pipefail; source ./lib.sh; curl_retry -s -o /dev/null -w "%{http_code}" "https://de.sentry.io/api/0/x/"' 2>/dev/null)
 status_bare=$("$TMP18/curl" -s -o /dev/null -w '%{http_code}' "https://de.sentry.io/api/0/x/" 2>/dev/null)
@@ -1578,7 +1608,6 @@ fi
 # ------------------------------------------------------------------------
 echo "T26: hostile SENTRY_API_HOST is refused before any request"
 T26=$(mktemp -d); mk_curl_stub "$T26" >/dev/null
-mk_respond "$T26" 'printf "200\t\t{}"' 2>/dev/null || true
 set +e
 out26=$(run_sut_stubbed "$T26" SENTRY_API_HOST=attacker.tld 2>&1); rc26=$?
 set -e
@@ -1592,7 +1621,9 @@ fi
 echo "T27: hostile SENTRY_ORG is refused before any request"
 T27=$(mktemp -d); mk_curl_stub "$T27" >/dev/null
 set +e
-out27=$(run_sut_stubbed "$T27" SENTRY_ORG='@evil.tld/x' 2>&1); rc27=$?
+out27=$(run_sut_stubbed "$T27" SENTRY_ORG='jikigai/../../evil' 2>&1); rc27=$?
+# '/' not '@': the org lands in `organizations/${SENTRY_ORG}/`, and a fixture
+# whose offending char is outside even a widened class cannot discriminate.
 set -e
 n27=$(wc -l < "$T27/requests.txt" 2>/dev/null || echo 0)
 if [[ "$rc27" -eq 2 ]] && grep -q 'refusing org' <<<"$out27" && [[ "$n27" -eq 0 ]]; then
@@ -1667,10 +1698,11 @@ got31=0
 for h in jikigai.sentry.io eu.sentry.io de.sentry.io sentry.io; do
   grep -q "https://$h/api/0/users/me/" "$T31/requests.txt" && got31=$((got31+1))
 done
-if [[ "$got31" -eq 4 ]]; then
-  pass "T31 all four candidates probed in order"
+v31=$(wc -l < "$T31/violations.txt" 2>/dev/null || echo 0)
+if [[ "$got31" -eq 4 ]] && [[ "$v31" -eq 0 ]]; then
+  pass "T31 all four candidates probed in order, 0 argv violations"
 else
-  fail "T31 only $got31/4 candidates probed: $(head -c 300 "$T31/requests.txt")"
+  fail "T31 got $got31/4 candidates and $v31 argv violation(s): $(head -c 200 "$T31/violations.txt")"
 fi
 
 echo "T32: the all-fail arm names the candidate set"
@@ -1716,6 +1748,88 @@ else
   fail "T34 a valid candidate was refused: rc=$rc34 requests=$n34 :: $(head -c 200 <<<"$out34")"
 fi
 
+echo "T37: the resolver/trust-anchor prologue reaches the child (audit-side F17)"
+# The fidelity suite has F17; this suite had no counterpart, so deleting the
+# whole unset prologue here left it 45/45 green.
+T37=$(mktemp -d); mk_curl_stub "$T37" >/dev/null
+set +e
+env PATH="$T37:$PATH" SENTRY_AUTH_TOKEN=fake SENTRY_ORG=jikigai SENTRY_PROJECT=web-platform \
+  SENTRY_API_HOST=de.sentry.io NEXT_PUBLIC_SENTRY_DSN='https://test@o123.ingest.de.sentry.io/456' \
+  SENTRY_TF_DIR="$T37/tf" AUDIT_OUT_DIR="$T37" \
+  SSLKEYLOGFILE=/tmp/should-not-survive CURL_CA_BUNDLE=/tmp/bad-ca \
+  LD_PRELOAD=/tmp/evil.so OPENSSL_CONF=/tmp/evil.cnf \
+  bash "$SCRIPT" >/dev/null 2>&1
+set -e
+if [[ "$(cat "$T37/env.txt" 2>/dev/null)" == "<unset> <unset> <unset> <unset>" ]]; then
+  pass "T37 SSLKEYLOGFILE/CURL_CA_BUNDLE/LD_PRELOAD/OPENSSL_CONF all scrubbed before the request"
+else
+  fail "T37 the child saw: $(cat "$T37/env.txt" 2>/dev/null) (want all <unset>)"
+fi
+
+echo "T38: the candidate set has exactly four members"
+# T31 greps for four fixed substrings, so it is satisfied by any SUPERSET --
+# appending a fifth host left the suite green. Pin the cardinality.
+# Count ARRAY MEMBERS, not sentry.io matches -- a member that is not a
+# sentry.io host (which is exactly the dangerous addition) would otherwise be
+# invisible. Measured: the sentry.io-counting form passed with a fifth member
+# `exfil.example.com` appended.
+n38=$(grep -oE 'readonly SENTRY_HOST_CANDIDATES=\([^)]*\)' "$SCRIPT" \
+        | sed -E 's/.*\(//; s/\)//' | tr ' ' '\n' | grep -c . || true)
+if [[ "$n38" -eq 4 ]]; then
+  pass "T38 SENTRY_HOST_CANDIDATES has exactly 4 members"
+else
+  fail "T38 SENTRY_HOST_CANDIDATES has $n38 member(s), expected 4 — a new member widens the accepted destination set"
+fi
+
+echo "T36: PREFIX-extended lookalikes are refused (kills the suffix-glob mutation)"
+# Every other hostile-host row extends the host on the RIGHT
+# (jikigai.sentry.io.evil.tld). A suffix-glob membership test -- `== *"$_c"` --
+# still refuses those, so the whole set survived that mutation at 46/46 green.
+# These extend on the LEFT, which is the direction a suffix glob admits.
+T36=$(mktemp -d); mk_curl_stub "$T36" >/dev/null
+t36_bad=0; t36_detail=""
+for h in evilsentry.io xeu.sentry.io notde.sentry.io evil-jikigai.sentry.io; do
+  set +e
+  o=$(run_sut_stubbed "$T36" SENTRY_API_HOST="$h" 2>&1); r=$?
+  set -e
+  n=$(wc -l < "$T36/requests.txt" 2>/dev/null || echo 0)
+  if [[ "$r" -ne 2 ]] || ! grep -q 'refusing destination host' <<<"$o" || [[ "$n" -ne 0 ]]; then
+    t36_bad=$((t36_bad + 1)); t36_detail+=" [$h rc=$r requests=$n]"
+  fi
+  : > "$T36/requests.txt"
+done
+if [[ "$t36_bad" -eq 0 ]]; then
+  pass "T36 all 4 prefix-extended lookalikes refused, zero requests"
+else
+  fail "T36 $t36_bad of 4 prefix-extended lookalikes ACCEPTED:$t36_detail"
+fi
+
+echo "T39: the Gate-3 DELETE call site is reached, and IS confined"
+# Every other #7997 row stops long before Gate 3: none of them supplies a
+# responder, so the very first request errors and the run dies with one entry in
+# requests.txt. That left the ONLY non-idempotent credentialed call in this file
+# -- the best-effort `DELETE .../releases/${probe_ver}/` that cleans up Gate 3's
+# write probe -- with no argv assertion at all: mutating its flags out survived
+# the whole battery green. The rows that DO reach it (T16/T17/T20*) write
+# violations.txt and never read it, which is the same blindness one level down.
+#
+# So: drive the happy path all the way through Gate 4, then read the ledger.
+T39=$(mktemp -d); mk_curl_stub "$T39" >/dev/null; mk_default_respond "$T39"
+mkdir -p "$T39/tf"
+set +e
+run_sut_stubbed "$T39" >/dev/null 2>&1
+set -e
+v39=$(wc -l < "$T39/violations.txt" 2>/dev/null || echo 0)
+# Assert the DELETE was actually ISSUED, not merely that nothing complained --
+# a run that never reaches Gate 3 also records zero violations, and the two are
+# indistinguishable from the ledger alone.
+d39=$(grep -c '^DELETE https://.*/releases/audit-probe-' "$T39/requests.txt" 2>/dev/null || true)
+if [[ "$d39" -ge 1 && "$v39" -eq 0 ]]; then
+  pass "T39 Gate-3 cleanup DELETE issued ($d39) and every call site confined, 0 argv violations"
+else
+  fail "T39 DELETE-count=$d39 (want >=1), violations=$v39: $(head -c 300 "$T39/violations.txt")"
+fi
+
 echo "T35: the PRODUCTION pairing is accepted (must-PASS, not a refusal row)"
 # Every CI caller passes SENTRY_ORG=jikigai-eu / SENTRY_API_HOST=jikigai-eu.sentry.io
 # (apply-sentry-infra.yml, sentry-audit-gate.yml, reusable-release.yml, and the
@@ -1735,6 +1849,28 @@ else
 fi
 
 # ------------------------------------------------------------------------
+# HARNESS SELF-TEST + FLOOR. Measured: neutering pass()/fail() to `:` made this
+# suite print "Results: 0 passed, 0 failed" and exit 0 -- green having asserted
+# nothing. The trailing note below argued a floor adds little because `set -eu`
+# catches an early death; that is true and it is not this case, where the script
+# reaches its end normally.
+#
+# Both checks emit with printf and exit DIRECTLY. Routing either through pass()
+# or fail() would dispatch the detector through the thing it detects, which is
+# the exact defect scripts/guard-vacuity-floor.test.sh exists to catch.
+_h_p=$PASS; _h_f=$FAIL
+{ pass "harness self-test (unwound)"; fail "harness self-test (unwound)"; } >/dev/null 2>&1
+if [[ "$PASS" -ne $((_h_p + 1)) || "$FAIL" -ne $((_h_f + 1)) ]]; then
+  printf 'FATAL: verdict helpers cannot conclude — pass %s->%s (want +1), fail %s->%s (want +1).\n' \
+    "$_h_p" "$PASS" "$_h_f" "$FAIL" >&2
+  exit 1
+fi
+PASS=$_h_p; FAIL=$_h_f
+if [[ $((PASS + FAIL)) -lt 46 ]]; then
+  printf 'FATAL: only %s assertion(s) concluded; this suite has >= 46.\n' "$((PASS + FAIL))" >&2
+  exit 1
+fi
+
 echo
 echo "Results: $PASS passed, $FAIL failed"
 exit $((FAIL > 0 ? 1 : 0))

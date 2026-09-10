@@ -24,7 +24,7 @@ pass=0; fail=0
 # Must equal the number of `t_*` invocations in the call block at the foot of
 # this file. Exact equality, not a floor: a floor cannot see a row that stopped
 # being invoked.
-EXPECTED_TESTS=20
+EXPECTED_TESTS=21
 
 TMPD=$(mktemp -d); trap 'rm -rf "$TMPD"' EXIT
 
@@ -379,12 +379,27 @@ t_org_length_boundary() {
 }
 
 t_hostile_org_refused() {
-  _run_live hostileorg SENTRY_ORG='@evil.tld/x' SENTRY_API_HOST=jikigai-eu.sentry.io
-  if [[ "$_rc" -eq 2 ]] && grep -q 'refusing org' <<<"$_out" && [[ ! -s "$_argv" ]]; then
-    _report "F15 an org slug that is not an RFC 1035 label is REFUSED before any request" ok
+  # One member per forbidden character CLASS, so a partial widening of the regex
+  # cannot survive. The original single fixture used '@evil.tld/x' -- and '@' is
+  # outside even a widened [a-z0-9./-] class, so it could not discriminate:
+  # measured, widening the class to admit '.' and '/' left the suite 20/20 green.
+  # The org is interpolated into `organizations/${SENTRY_ORG}/`, so '/' is path
+  # injection on a URL that carries the bearer.
+  local o bad=0 detail=""
+  for o in '@evil.tld/x' 'jikigai.evil.tld' 'jikigai/../../evil' 'jikigai%2fx' 'JIKIGAI' '-leading' ''; do
+    # The HOST is derived from the org so the host pin CANNOT be what refuses --
+    # otherwise this row short-circuits on a different guard than the one it
+    # names. Measured: with a fixed host, widening the org class left this row
+    # green because the singleton case stopped matching and refused first.
+    _run_live "hostileorg.$bad" SENTRY_ORG="$o" SENTRY_API_HOST="${o}.sentry.io"
+    if [[ "$_rc" -eq 0 ]] || [[ -s "$_argv" ]]; then
+      bad=$((bad + 1)); detail+=" [org='$o' rc=$_rc argv-bytes=$(wc -c <"$_argv")]"
+    fi
+  done
+  if [[ "$bad" -eq 0 ]]; then
+    _report "F15 every non-RFC-1035 org shape is REFUSED before any request" ok
   else
-    _report "F15 hostile SENTRY_ORG is refused" fail \
-      "rc=$_rc (want 2); argv-bytes=$(wc -c <"$_argv") (want 0); output: $(head -c 300 <<<"$_out")"
+    _report "F15 hostile SENTRY_ORG is refused" fail "$bad shape(s) reached the wire:$detail"
   fi
 }
 
@@ -401,6 +416,48 @@ t_transport_flags_first() {
   else
     _report "F16 transport flags are first" fail \
       "argv[1..4]=[$a1 $a2 $a3 $a4]; want [--disable --noproxy * --proto]. Full argv: $(head -c 300 "$_argv" | tr '\n' ' ')"
+  fi
+}
+
+t_transport_not_reopened_by_suffix() {
+  # F16 pins a PREFIX. A prefix pin cannot express the property, which is "no
+  # argument RE-OPENS what the prefix closed" -- measured: appending
+  # `--proxy http://exfil.tld:8080 -k` to the pinned call site kept F16 green and
+  # the whole suite at 20/20, while sending the bearer through an attacker proxy
+  # with certificate verification off. The suffix is the half nobody asserts, so
+  # assert it as a NEGATIVE over the WHOLE argv (ADR-193): name the values that
+  # must never appear rather than the ones expected to.
+  _run_live suffix SENTRY_ORG=jikigai-eu SENTRY_API_HOST=jikigai-eu.sentry.io
+  local a bad="" n_noproxy=0 n_proto=0
+  while IFS= read -r a; do
+    case "$a" in
+      # re-opens proxying, which --noproxy '*' closed
+      -x|--proxy|--proxy1.0|--preproxy|--socks4|--socks4a|--socks5 \
+        |--socks5-hostname|--socks5-basic|--socks5-gssapi) bad+=" $a" ;;
+      # re-reads a config file, which --disable aborted
+      -K|--config) bad+=" $a" ;;
+      # widens the protocol set, which --proto '=https' closed
+      --proto-default|--proto-redir) bad+=" $a" ;;
+      # re-points the destination behind the host pin (Host header preserved)
+      --resolve|--connect-to|--unix-socket|--abstract-unix-socket|--url) bad+=" $a" ;;
+      # weakens or re-anchors TLS, or leaks the bearer across a redirect
+      -k|--insecure|--proxy-insecure|--ssl-no-revoke|--cacert|--capath \
+        |--doh-url|--doh-insecure|--location-trusted) bad+=" $a" ;;
+      # re-enables glob interpretation of the URL, which -g closed
+      --no-globoff) bad+=" $a" ;;
+    esac
+    [[ "$a" == "--noproxy" ]] && n_noproxy=$((n_noproxy + 1))
+    [[ "$a" == "--proto"   ]] && n_proto=$((n_proto + 1))
+  done < "$_argv"
+  # A SECOND --noproxy/--proto silently overrides the first; one occurrence each
+  # is the only shape in which the prefix pin means anything.
+  [[ "$n_noproxy" -eq 1 ]] || bad+=" --noproxy x${n_noproxy}"
+  [[ "$n_proto"   -eq 1 ]] || bad+=" --proto x${n_proto}"
+  if [[ -z "$bad" && -s "$_argv" ]]; then
+    _report "F21 no later argument re-opens the transport the prefix closed" ok
+  else
+    _report "F21 the argv SUFFIX re-opens confinement" fail \
+      "offending token(s):${bad:-<none>}; argv-bytes=$(wc -c <"$_argv"). Full argv: $(head -c 300 "$_argv" | tr '\n' ' ')"
   fi
 }
 
@@ -443,12 +500,25 @@ t_survivors_out_of_scope
 t_hostile_host_refused
 t_hostile_org_refused
 t_transport_flags_first
+t_transport_not_reopened_by_suffix
 t_resolver_env_scrubbed
 t_fixture_mode_still_passes
 t_org_locale_independent
 t_org_length_boundary
 
 echo "=== $pass passed, $fail failed ==="
+
+# HARNESS SELF-TEST. EXPECTED_TESTS catches a row that stopped being INVOKED; it
+# is blind to a row that stopped DISCRIMINATING -- measured, making _report's FAIL
+# branch increment `pass` left this suite 18/18 green with `ran` conserved.
+_h_p=$pass; _h_f=$fail
+{ _report "harness self-test (unwound)" ok; _report "harness self-test (unwound)" fail "x"; } >/dev/null 2>&1
+if [[ "$pass" -ne $((_h_p + 1)) || "$fail" -ne $((_h_f + 1)) ]]; then
+  printf 'FATAL: _report cannot conclude — pass %s->%s (want +1), fail %s->%s (want +1).\n' \
+    "$_h_p" "$pass" "$_h_f" "$fail" >&2
+  exit 1
+fi
+pass=$_h_p; fail=$_h_f
 
 ran=$((pass + fail))
 if [[ "$ran" -ne "$EXPECTED_TESTS" ]]; then

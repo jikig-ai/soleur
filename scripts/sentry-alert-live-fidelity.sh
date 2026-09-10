@@ -60,9 +60,17 @@
 # Neither touches the RESOLVER, the TRUST ANCHOR, or the TLS key log:
 # LOCALDOMAIN/RES_OPTIONS/HOSTALIASES still redirect resolution,
 # CURL_CA_BUNDLE/SSL_CERT_FILE/SSL_CERT_DIR still replace the trust anchor, and
-# SSLKEYLOGFILE still exfiltrates session keys. The unset prologue below is what
-# closes those; `--proto '=https'` and `-g` close scheme downgrade and glob
-# interpretation of the URL.
+# SSLKEYLOGFILE still exfiltrates session keys. The unset prologue below raises
+# that floor -- it is NOT a boundary, and the distinction matters: an actor who
+# can set SENTRY_API_HOST can equally set LD_PRELOAD, BASH_ENV or
+# BASH_FUNC_curl%%, each of which is total compromise no pin can see (all three
+# measured against these scripts). Those need a strictly STRONGER capability
+# than the env-var-injection this pin defends against, so the pin is still
+# worth having -- but read this as defence in depth against accidental
+# environment, never as a closure claim.
+#
+# `--proto '=https'` and `-g` close scheme downgrade and glob interpretation of
+# the URL.
 set -euo pipefail
 
 # REFUSE TO RUN UNDER XTRACE (#7797). Shell tracing echoes commands AFTER
@@ -88,11 +96,30 @@ CAPTURE="${SENTRY_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/fix-7650
 # (a) Strip the environment curl reads that neither --noproxy nor a host pin
 #     reaches. Ordering matters only in that this precedes any curl invocation.
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
-      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+      OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
 
 # (b) Defined BEFORE its first call. `-b` (bytes), not `-c` (characters): a
 #     multi-byte hostile value must not be able to walk past the cap.
-_safe() { printf '%s' "${1//[[:cntrl:]]/}" | cut -b1-120; }
+# U+2028/U+2029 are NOT in [[:cntrl:]] under C / C.UTF-8 -- which is the GitHub
+# Actions runner default -- so they are stripped on a UTF-8 laptop and survive in
+# CI. Measured both ways. They are named explicitly rather than locale-pinned so
+# the behaviour does not vary with the caller's environment at all.
+# `-b` (bytes), not `-c`: a multi-byte hostile value must not walk past the cap.
+# `iconv -c` then drops a sequence the byte cut truncated mid-character, because
+# this value can reach a JSON REST body (`gh --body-file`), not only a log.
+# Precomputed, because `$'\u2028'` does NOT ANSI-C-expand inside a
+# `${var//[...]}` glob bracket -- measured: the separator survived verbatim.
+# Explicit UTF-8 BYTES, not $'\u2028': bash renders \u in the CURRENT locale, so
+# under LC_ALL=C it cannot represent the codepoint and yields the wrong bytes --
+# which made the first version of this fix locale-dependent in exactly the way it
+# was written to prevent. Measured both ways.
+_U2028=$'\xe2\x80\xa8'; _U2029=$'\xe2\x80\xa9'
+_safe() {
+  local s="${1//[[:cntrl:]]/}"
+  s="${s//$_U2028/}"; s="${s//$_U2029/}"
+  printf '%s' "$s" | cut -b1-120 | iconv -c -f UTF-8 -t UTF-8
+}
 
 # (c) RFC 1035 §2.3.4 label: 63 octets max. The subshell is MANDATORY —
 #     `LC_ALL=C [[ … ]]` is a parse error (`[[` is a keyword and takes no env

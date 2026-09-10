@@ -126,11 +126,30 @@ set -euo pipefail
 # The default was `jikigai`, which ADR-031 records as canceled vendor-side; a
 # default that silently addresses a dead org is worse than a refusal.
 unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
-      HOSTALIASES LOCALDOMAIN RES_OPTIONS
+      HOSTALIASES LOCALDOMAIN RES_OPTIONS \
+      OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH
 
 # Defined BEFORE its first call. `-b` (bytes), not `-c`: a multi-byte hostile
 # value must not walk past the cap.
-_safe() { printf '%s' "${1//[[:cntrl:]]/}" | cut -b1-120; }
+# U+2028/U+2029 are NOT in [[:cntrl:]] under C / C.UTF-8 -- which is the GitHub
+# Actions runner default -- so they are stripped on a UTF-8 laptop and survive in
+# CI. Measured both ways. They are named explicitly rather than locale-pinned so
+# the behaviour does not vary with the caller's environment at all.
+# `-b` (bytes), not `-c`: a multi-byte hostile value must not walk past the cap.
+# `iconv -c` then drops a sequence the byte cut truncated mid-character, because
+# this value can reach a JSON REST body (`gh --body-file`), not only a log.
+# Precomputed, because `$'\u2028'` does NOT ANSI-C-expand inside a
+# `${var//[...]}` glob bracket -- measured: the separator survived verbatim.
+# Explicit UTF-8 BYTES, not $'\u2028': bash renders \u in the CURRENT locale, so
+# under LC_ALL=C it cannot represent the codepoint and yields the wrong bytes --
+# which made the first version of this fix locale-dependent in exactly the way it
+# was written to prevent. Measured both ways.
+_U2028=$'\xe2\x80\xa8'; _U2029=$'\xe2\x80\xa9'
+_safe() {
+  local s="${1//[[:cntrl:]]/}"
+  s="${s//$_U2028/}"; s="${s//$_U2029/}"
+  printf '%s' "$s" | cut -b1-120 | iconv -c -f UTF-8 -t UTF-8
+}
 
 # RFC 1035 §2.3.4 label, 63 octets. The subshell is MANDATORY: `LC_ALL=C [[ … ]]`
 # is a parse error (`[[` is a keyword, so it takes no env prefix), and without
