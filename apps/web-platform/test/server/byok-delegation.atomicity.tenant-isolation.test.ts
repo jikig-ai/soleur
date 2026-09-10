@@ -68,6 +68,8 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import postgres from "postgres";
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 // Imported, NOT mirrored: a hand-written copy of a fail-CLOSED classifier
 // drifted fail-OPEN here, and this is the only artifact that sees the real
 // PostgREST wire shape. `readRefusalReason` is a pure function.
@@ -124,6 +126,14 @@ const UNIT_COST_CENTS = COST_CENTS;
 /** The five values migration 137's widened CHECK admits, plus NULL. */
 const HOURLY_REASON = "hourly_cap_exceeded";
 const DAILY_REASON = "daily_cap_exceeded";
+
+/**
+ * Dispatch floor for this file (see the "case floor" case at the bottom).
+ * Update this deliberately, in the same commit that adds or removes a
+ * `test(...)`; a silent drop means a scenario — a control, most dangerously —
+ * stopped running while the suite stayed green.
+ */
+const EXPECTED_TEST_CASES = 9;
 
 interface SyntheticUser {
   id: string;
@@ -838,17 +848,100 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           ),
         );
 
-        const results = settled.map((r) =>
-          r.status === "fulfilled" ? r.value : null,
+        // FIVE disjoint classes, partitioned over `settled` and deliberately
+        // NOT over the old `results = settled.map(r => … : null)` array (#7055).
+        //
+        // `readRefusalReasonLive` THROWS on production's `unreadable` arm — on
+        // purpose, because production is fail-CLOSED — and `recordUse` calls it
+        // un-caught. So a short or empty PostgREST payload (exactly what a
+        // degraded pooler under this suite's own ten-way fan-out produces)
+        // makes the promise REJECT, and `Promise.allSettled` yields
+        // `status:"rejected"`. Mapping that to `null` first loses the outcome
+        // either way: `r?.error !== null` files it under ERRORED and then
+        // prints `undefined` for both code and message — a partition naming an
+        // outcome it never observed — while `r !== null && r.error !== null`
+        // drops it out of every class and silently falsifies the sum below.
+        //
+        // The counts these classes feed are left at EXACT equality on purpose:
+        // exact equality is what proves the row `FOR UPDATE` lock holds. The
+        // defect this partition fixes is that an outcome could land in no class
+        // and surface as a bare `expected 5, received 4`, not that the counts
+        // were too strict.
+        const rejected = settled.filter(
+          (r): r is PromiseRejectedResult => r.status === "rejected",
         );
-        const admitted = results.filter((r) => r?.admitted).length;
-        const refused = results.filter(
-          (r) => r?.refusalReason === HOURLY_REASON,
-        ).length;
+        const fulfilled = settled
+          .filter(
+            (r): r is PromiseFulfilledResult<UseResult> =>
+              r.status === "fulfilled",
+          )
+          .map((r) => r.value);
+        const errored = fulfilled.filter((r) => r.error !== null);
+        const returned = fulfilled.filter((r) => r.error === null);
+        const refusedHourly = returned.filter(
+          (r) => r.refusalReason === HOURLY_REASON,
+        );
+        const refusedOther = returned.filter(
+          (r) => r.refusalReason !== null && r.refusalReason !== HOURLY_REASON,
+        );
+        const admittedCalls = returned.filter((r) => r.refusalReason === null);
+        // Exhaustiveness is the structural claim; the membership list is only
+        // today's and changes the moment a migration adds a refusal reason —
+        // which is why this sums the classes instead of naming four counts.
+        const classified = [
+          rejected.length,
+          errored.length,
+          refusedHourly.length,
+          refusedOther.length,
+          admittedCalls.length,
+        ].reduce((a, b) => a + b, 0);
+        const admitted = admittedCalls.length;
+        const refused = refusedHourly.length;
+
+        const rejectedDetail = rejected
+          .map(
+            (r) =>
+              (r.reason as { message?: string } | undefined)?.message ??
+              String(r.reason),
+          )
+          .join(" | ");
+        const erroredDetail = errored
+          .map(
+            (r) =>
+              `${r.invocationId}: code=${r.error?.code ?? "<none>"} ` +
+              `message=${r.error?.message ?? "<none>"}`,
+          )
+          .join(" | ");
+        const refusedOtherDetail = refusedOther
+          .map(
+            (r) =>
+              `${r.invocationId}: refusal_reason=${r.refusalReason} ` +
+              `code=${r.error?.code ?? "<none>"} message=${r.error?.message ?? "<none>"}`,
+          )
+          .join(" | ");
 
         const rows = await auditRowsFor(delegationId);
         const passedRows = admittedRows(rows);
         const refusedLedger = refusedRows(rows, HOURLY_REASON);
+        // The LEDGER channel carries the identical blind spot:
+        // `refusedRows(rows, HOURLY_REASON)` filters by reason, so a row
+        // carrying any OTHER in-enum reason (`daily_cap_exceeded`, `expired`,
+        // `revoked_post_grace`, `consent_withdrawn`) falls outside both counted
+        // classes in precisely the way the client-side filter excluded a
+        // foreign refusal. Partition it too, and assert the third class empty.
+        const otherReasonRows = rows.filter(
+          (r) =>
+            r.attribution_shift_reason !== null &&
+            r.attribution_shift_reason !== HOURLY_REASON,
+        );
+        const ledgerClassified =
+          passedRows.length + refusedLedger.length + otherReasonRows.length;
+        const otherReasonDetail = otherReasonRows
+          .map(
+            (r) =>
+              `${r.invocation_id}: attribution_shift_reason=${r.attribution_shift_reason}`,
+          )
+          .join(" | ");
 
         // Atomicity signal: without FOR UPDATE, concurrent callers reading the
         // same pre-INSERT SUM snapshot would each pass the cap check and INSERT
@@ -860,8 +953,17 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         // LONGER the double-spend proof, because every refusal now ledgers too.
         // The proof is the ADMITTED partition and its spend.
         const allFulfilled = settled.every((r) => r.status === "fulfilled");
+        // Both new partitions are folded into `willFail` BEFORE `diagIf` is
+        // awaited — otherwise the new assertions ship without the live-body
+        // diagnostic banner, which is most of their value.
         const willFail =
           !allFulfilled ||
+          rejected.length !== 0 ||
+          errored.length !== 0 ||
+          refusedOther.length !== 0 ||
+          classified !== N ||
+          otherReasonRows.length !== 0 ||
+          ledgerClassified !== rows.length ||
           admitted !== K ||
           refused !== N - K ||
           passedRows.length !== K ||
@@ -869,12 +971,60 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           refusedLedger.length !== N - K;
         const diag = await diagIf(willFail);
 
-        expect(allFulfilled, `all ${N} calls settled fulfilled${diag}`).toBe(true);
+        // The pre-existing assertion, retained ahead of the new ones — but its
+        // message now carries the rejection detail too. It and `rejected.length
+        // === 0` fail on the same condition, and vitest stops at the first, so
+        // without this the rejection message would be reported by an assertion
+        // that could not name it.
+        expect(
+          allFulfilled,
+          `all ${N} calls settled fulfilled${
+            rejectedDetail ? ` — rejected: ${rejectedDetail}` : ""
+          }${diag}`,
+        ).toBe(true);
+        // The three classes that must be EMPTY, asserted before the counts, so
+        // a lost outcome is named rather than showing up as an off-by-one.
+        expect(
+          rejected.length,
+          `no call REJECTED — a rejection is an unreadable PostgREST payload ` +
+            `(readRefusalReasonLive is fail-closed and throws): ${rejectedDetail}${diag}`,
+        ).toBe(0);
+        expect(
+          errored.length,
+          `no call returned a non-null error: ${erroredDetail}${diag}`,
+        ).toBe(0);
+        expect(
+          refusedOther.length,
+          `no call returned a refusal reason other than ${HOURLY_REASON}: ` +
+            `${refusedOtherDetail}${diag}`,
+        ).toBe(0);
+        expect(
+          classified,
+          `every one of the ${N} settled outcomes lands in exactly one class ` +
+            `(rejected=${rejected.length} errored=${errored.length} ` +
+            `refused-hourly=${refusedHourly.length} refused-other=${refusedOther.length} ` +
+            `admitted=${admittedCalls.length})${diag}`,
+        ).toBe(N);
+
         expect(admitted, `exactly K=${K} calls admitted${diag}`).toBe(K);
         expect(
           refused,
           `exactly N−K=${N - K} calls return the hourly reason${diag}`,
         ).toBe(N - K);
+
+        // The LEDGER partition, same shape: the third class must be empty and
+        // the three classes must account for every row read back.
+        expect(
+          otherReasonRows.length,
+          `no ledger row carries a reason other than ${HOURLY_REASON}: ` +
+            `${otherReasonDetail}${diag}`,
+        ).toBe(0);
+        expect(
+          ledgerClassified,
+          `every audit row lands in exactly one ledger class ` +
+            `(admitted=${passedRows.length} refused-hourly=${refusedLedger.length} ` +
+            `refused-other=${otherReasonRows.length})${diag}`,
+        ).toBe(rows.length);
 
         // THE PARTITION — the load-bearing pair.
         expect(
@@ -901,6 +1051,128 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           refusedLedger.every((r) => r.founder_id === grantee.id),
           `all refused rows attribute to the grantee${diag}`,
         ).toBe(true);
+      },
+      120_000,
+    );
+
+    test(
+      "T10 — null-change control: a sibling delegation's committed traffic does NOT move delegation A's hourly meter",
+      async () => {
+        // The property under test is migration 137's meter predicate,
+        // `WHERE au.delegation_id = p_delegation_id AND au.ts > clock_timestamp()
+        // - interval '1 hour'` — an equality on a primary key. An equality does
+        // not need two simultaneous writers to be tested, so THIS CONTROL IS
+        // SEQUENTIAL BY DESIGN. A concurrent form would add a second fan-out,
+        // two more synthetic users and several more overlapping transactions to
+        // the very suite being repaired for going red intermittently (#7055) —
+        // raising the rate of the thing it exists to help. Sequential is both
+        // cheaper and strictly more deterministic.
+        //
+        // T5's pooler-serialization limitation banner is deliberately NOT
+        // copied here: T5 needs genuine overlap for its lock proof and inherits
+        // that caveat; this control never overlaps at all, so claiming the
+        // limitation would be claiming one it does not have.
+        //
+        // WHAT IS TRUE OF THE RPC UNDER TEST AND FALSE OF ITS LAYER-1 SIBLING.
+        // Migration 137 carries a SECOND meter without this property.
+        // `record_byok_use_and_check_cap` — the founder-cap sibling — sums
+        // `WHERE founder_id = p_founder_id AND attribution_shift_reason IS NULL
+        // AND ts > now() - interval '1 hour'`, with NO delegation filter. Both
+        // A's and B's ADMITTED rows carry `founder_id = grantor.id`, so B's
+        // traffic DOES pool into A's founder-scoped hourly meter even though it
+        // provably cannot touch A's delegation-scoped one. Do not generalise
+        // "delegations are isolated" past the predicate that makes it true.
+        // Whether that founder-scoped pooling is a defect is out of scope here;
+        // naming it is not.
+        const M = 3;
+        // Genuine headroom: all M of B's calls are admitted, and no arithmetic
+        // is left implicit. Satisfies `byok_delegations_hourly_le_daily`
+        // (B_CAP_CENTS ≪ DAILY_CEILING).
+        const B_CAP_CENTS = M * COST_CENTS;
+
+        // A is T5's fixture exactly: hourly pinned at CAP_CENTS, daily at the
+        // ceiling.
+        const a = await grantDelegation(CAP_CENTS, DAILY_CEILING);
+        // B is a SIBLING: same grantor, same workspace. It is legal only
+        // because `grantDelegation()` mints a FRESH grantee per call —
+        // `064_byok_delegations.sql` › `byok_delegations_active_triple_uidx` is
+        // unique on (grantor_user_id, grantee_user_id, workspace_id) WHERE
+        // revoked_at IS NULL and `grant_byok_delegation` has no ON CONFLICT, so
+        // a second grant to the same grantee would raise. `grantDelegation()`
+        // also runs `addMember(grantor.workspaceId, grantee.id)` first, without
+        // which the `byok_delegations_same_workspace` trigger raises
+        // `byok_delegations:cross-tenant`.
+        const b = await grantDelegation(B_CAP_CENTS, DAILY_CEILING);
+
+        // STEP 1 — the outside writer runs FIRST, alone, to completion.
+        const bResults: UseResult[] = [];
+        for (let i = 0; i < M; i++) {
+          bResults.push(
+            await recordUse(b.delegationId, b.grantee.id, "test-null-change-b"),
+          );
+        }
+        // `admitted` means the RPC returned no error and no refusal reason, and
+        // migration 137 does the cap check and the audit INSERT inside one
+        // transaction — so an admitted call is a COMMITTED row. The count is
+        // therefore the positive control on its own; a second read-back of B's
+        // ledger would only re-assert the same fact, and would additionally
+        // steal the discriminative failure from the negative control when B's
+        // delegation id is moved onto A's (Guard 3 mutation row 4).
+        const bAdmitted = bResults.filter((r) => r.admitted).length;
+
+        // STEP 2 — THEN drive A's N calls, at the same cost T5 uses. Calls
+        // 1..K reach exactly CAP_CENTS and are admitted; K+1..N breach and
+        // return the hourly reason.
+        const aResults: UseResult[] = [];
+        for (let i = 0; i < N; i++) {
+          aResults.push(
+            await recordUse(a.delegationId, a.grantee.id, "test-null-change-a"),
+          );
+        }
+        const aAdmitted = aResults.filter((r) => r.admitted).length;
+        const aRefused = aResults.filter(
+          (r) => r.refusalReason === HOURLY_REASON,
+        ).length;
+        const aRows = await auditRowsFor(a.delegationId);
+
+        // `addMember` inside `grantDelegation` fails LOUD but fails AFTER B's
+        // user, org, workspace and membership rows exist, and `afterAll`
+        // deletes nothing — so a failed run still grows the #3934 synthetic
+        // population. Phase 3.3 wires the diagnostic banner into T5 only, so
+        // wire one in here too rather than failing bare.
+        const willFail =
+          bAdmitted !== M ||
+          aAdmitted !== K ||
+          aRefused !== N - K ||
+          aRows.length !== N;
+        const diag = await diagIf(willFail);
+
+        // POSITIVE CONTROL. Without it the negative control is vacuous: a B
+        // that refuses for its own reasons never writes, and "A is unchanged"
+        // would then pass by B having done nothing.
+        expect(
+          bAdmitted,
+          `POSITIVE CONTROL: all M=${M} of the sibling's calls are admitted ` +
+            `(cap ${B_CAP_CENTS} has genuine headroom) — a B that never writes ` +
+            `makes the negative control below vacuous${diag}`,
+        ).toBe(M);
+        // NEGATIVE CONTROL. B's M committed rows sit in the same table, under
+        // the same workspace and the same grantor, inside the same rolling
+        // hour — and A's counts are exactly what T5 asserts with no sibling
+        // present at all.
+        expect(
+          aAdmitted,
+          `NEGATIVE CONTROL: A still admits exactly K=${K} — the sibling's ` +
+            `${M} rows do not enter A's delegation-scoped meter${diag}`,
+        ).toBe(K);
+        expect(
+          aRefused,
+          `NEGATIVE CONTROL: A still refuses exactly N−K=${N - K}${diag}`,
+        ).toBe(N - K);
+        expect(
+          aRows.length,
+          `NEGATIVE CONTROL: A's ledger holds exactly N=${N} rows${diag}`,
+        ).toBe(N);
       },
       120_000,
     );
@@ -952,5 +1224,48 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       },
       120_000,
     );
+
+    test("case floor — every scenario in this file is still dispatched", () => {
+      // WHY THIS EXISTS. Deleting a `test(...)` block from a vitest file leaves
+      // a GREEN run: the deleted scenario simply stops being reported, and
+      // nothing in the suite notices. The null-change control above is a
+      // control — silently losing it is exactly the failure it is meant to
+      // prevent — so this file needs a dispatch floor, and it had none. (The
+      // ADR-193 floor cited nearby is on the SHELL suite
+      // `tests/scripts/test-tenant-integration-gate-verdict.sh`, a different
+      // artifact; it does not cover this file.)
+      //
+      // It lives INSIDE `describe.skipIf(!INTEGRATION_ENABLED)` on purpose:
+      // outside it, this file would report a non-zero test count even without
+      // TENANT_INTEGRATION_TEST=1, so a fully-skipped run would look like a run
+      // that executed something.
+      //
+      // READ THE LIMIT PLAINLY (#7898 review). An earlier version of this comment
+      // said that placement preserves "the signal the acceptance command relies
+      // on". THERE IS NO SUCH ACCEPTANCE COMMAND IN CI. The workflow's
+      // "Run tenant-isolation tests" step invokes `npm run test:ci -- test/server/`
+      // and asserts NOTHING about the executed-test count, so the claimed external
+      // witness does not exist. What this floor actually covers is a scenario
+      // silently deleted or renamed while the suite RUNS. What it cannot cover is
+      // the suite not running at all: flipping `describe.skipIf` to `describe.skip`,
+      // or INTEGRATION_ENABLED's predicate, skips all nine cases INCLUDING this
+      // floor, vitest exits 0, and the gate reads success. That gap is closed by
+      // the workflow's own arrangement (detect-changes gates the job on the
+      // isolation surface, and the gate-verdict script fails closed on anything
+      // other than success/skipped), NOT by this assertion -- and stating it here
+      // is the point, because a floor that is believed to cover the skip case is
+      // worse than one known not to.
+      //
+      // Counting is anchored on the source's own dispatch lines (`    test(` at
+      // the describe body's indent), not on a token that also appears in prose.
+      const source = readFileSync(fileURLToPath(import.meta.url), "utf8");
+      const dispatched = source.match(/^ {4}test\(/gm)?.length ?? 0;
+      expect(
+        dispatched,
+        "this file dispatches EXPECTED_TEST_CASES scenarios — if you added or " +
+          "removed one deliberately, update the constant in the same commit; " +
+          "if you did not, a scenario was lost",
+      ).toBe(EXPECTED_TEST_CASES);
+    });
   },
 );
