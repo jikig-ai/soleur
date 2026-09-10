@@ -14,6 +14,18 @@
 // ccla-add.sh) is covered by apps/cla-evidence/test/ccla-add.test.sh.
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
+import { gitFixtureEnv } from "../../../../plugins/soleur/test/lib/git-fixture-env";
+import { gitCleanEnv } from "../../../../plugins/soleur/test/lib/git-clean-env";
+
+// gitCleanEnv() returns Record<string, string>. Next augments NodeJS.ProcessEnv to REQUIRE
+// NODE_ENV, and tsc cannot see that the helper's copy of process.env already carries it (it copies
+// every var whose name does not start with GIT_). Re-stating NODE_ENV is a no-op at runtime and is
+// the proof tsc needs — preferred over `as NodeJS.ProcessEnv`, which would suppress this error and
+// every future one at these call sites.
+const cleanGitEnv = (): NodeJS.ProcessEnv => ({
+  ...gitCleanEnv(),
+  NODE_ENV: process.env.NODE_ENV,
+});
 import { existsSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,7 +39,12 @@ import {
 } from "@/scripts/cla-evidence/roster-entry-gate";
 import { validateRosterRecord } from "@/scripts/cla-evidence/schema";
 
-const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
+// gitCleanEnv, not gitFixtureEnv: this reads the REAL repo, so it must not carry a fixture
+// ceiling — but it must still not inherit GIT_DIR, which would resolve a different toplevel.
+const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+  encoding: "utf8",
+  env: cleanGitEnv(),
+}).trim();
 const ROSTER_REL = "apps/cla-evidence/roster/ccla-roster.json";
 
 /** Signed AFTER the coverage-map notice existed — the ordinary case. */
@@ -194,6 +211,7 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
         cwd: repoRoot,
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
+        env: cleanGitEnv(),
       });
     try {
       return JSON.parse(show());
@@ -206,7 +224,7 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
         // fetch wrote 157 tags and tripped "[FATAL] A SUITE WROTE TO THE LIVE
         // REPOSITORY" on CI run 34123093118.
         ["fetch", "--no-tags", "--depth=1", "origin", "+refs/heads/cla-signatures:refs/remotes/origin/cla-signatures"],
-        { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: cleanGitEnv() },
       );
       return JSON.parse(show());
     }
@@ -297,7 +315,12 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
     const tmp = mkdtempSync(join(tmpdir(), "notice-epoch-"));
     try {
       const git = (...args: string[]) =>
-        execFileSync("git", args, { cwd: tmp, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+        execFileSync("git", args, {
+          cwd: tmp,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: gitFixtureEnv(tmp),
+        });
       git("init", "-q");
       git("config", "user.email", "t@example.com");
       git("config", "user.name", "t");
@@ -312,7 +335,7 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
           cwd: tmp,
           encoding: "utf8",
           stdio: ["ignore", "pipe", "pipe"],
-          env: { ...process.env, GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
+          env: { ...gitFixtureEnv(tmp), GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso },
         });
 
       writeFileSync(doc, `intro\nthe ${NOTICE_ANCHOR} is described here\n`);
@@ -368,7 +391,7 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
             cwd: tmp,
             encoding: "utf8",
             stdio: ["ignore", "pipe", "pipe"],
-            env: { ...process.env, ...env },
+            env: { ...gitFixtureEnv(tmp), ...env },
           });
         const BRANCH_AT = "2026-09-04T00:00:00+00:00";
         const MERGE_AT = "2026-09-12T00:00:00+00:00";
@@ -444,7 +467,12 @@ describe("Guard 3 — the TRACKED roster, cross-checked against the real ICLA le
     const tmp = mkdtempSync(join(tmpdir(), "notice-anchor-absent-"));
     try {
       const git = (...args: string[]) =>
-        execFileSync("git", args, { cwd: tmp, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+        execFileSync("git", args, {
+          cwd: tmp,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+          env: gitFixtureEnv(tmp),
+        });
       git("init", "-q");
       git("config", "user.email", "t@example.com");
       git("config", "user.name", "t");
