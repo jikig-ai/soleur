@@ -1396,6 +1396,97 @@ assert "#8015 the registry curl discards stderr (untrusted response text must no
 assert "#8013 the histogram uses no regex INTERVAL expressions (older mawk lacks them)" \
   "! grep -nE 'isulid|isuuid|ishex' '$PROBE_SRC' | grep -qE '\{[0-9]+(,[0-9]*)?\}'"
 
+# ============================================================================================
+# mutate_emitter — emitter-side mutation rows that RUN (#8017 task 1a.1)
+# ============================================================================================
+# THIS FILE HAD NO MUTATION HARNESS. Every emitter-side "we checked that neutering X breaks Y"
+# was therefore a hand-applied audit performed once by whoever wrote it, and nothing re-performs
+# it. That is precisely the distinction the Guard Contract exists to enforce: a mutation row is
+# only a guard if a later reader can run it.
+#
+# It mutates the EXTRACTED PROBE BODY -- the post-awk text `sh` actually executes -- not the
+# bootstrap wrapper, so a sed that matches only inside a heredoc still lands where it matters.
+#
+# mutate_emitter <label> <sed-expr> <field> <expect-unmutated>
+#   1. seds a PRISTINE copy and proves the mutation LANDED (cmp) and changed EXACTLY ONE line
+#      (a broader pattern measures collateral damage while reporting the named check);
+#   2. runs the UNMUTATED body and requires <field> to equal <expect-unmutated> today -- without
+#      this the row proves nothing, because a fixture that never reaches the field "passes";
+#   3. runs the MUTATED body and requires <field> to DIFFER.
+EMIT_PRISTINE="$PING_TMP/probe-body.pristine.sh"
+cp "$PROBE_BODY" "$EMIT_PRISTINE"
+emit_field() {  # emit_field <probe-body> <field> -> value, or the empty string
+  _ef_log="$PING_TMP/mut-emit.txt"; : > "$_ef_log"
+  PATH="$PROBE_S8_BIN:$PATH" LOGGER_OUT="$_ef_log" \
+    PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" PROBE_DATA_MOUNT="/mnt/data" \
+    PROBE_BYID_DIR="$PROBE_S8_BYID" DOPPLER_PROJECT="soleur-inngest" \
+    INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+    sh "$1" >/dev/null 2>&1 || true
+  tr ' ' '\n' < "$_ef_log" | grep -oE "^$2=.*" | head -1 | cut -d= -f2-
+}
+mutate_emitter() {
+  local label="$1" expr="$2" field="$3" want="$4"
+  local mut="$PING_TMP/probe-body.mut.sh" changed base got
+  sed "$expr" "$EMIT_PRISTINE" > "$mut"
+  if cmp -s "$mut" "$EMIT_PRISTINE"; then
+    assert "MUT[$label]: the mutation LANDED in the extracted probe body" "false"
+    return
+  fi
+  changed="$(diff "$EMIT_PRISTINE" "$mut" | grep -c '^<' || true)"
+  assert "MUT[$label]: the mutation changed exactly 1 line (got $changed; a broader sed measures collateral damage)" \
+    "[[ '$changed' == '1' ]]"
+  base="$(emit_field "$EMIT_PRISTINE" "$field")"
+  assert "MUT[$label]: the UNMUTATED emitter produces $field=$want today (else this row exercises nothing)" \
+    "[[ '$base' == '$want' ]]"
+  got="$(emit_field "$mut" "$field")"
+  assert "MUT[$label]: neutering it CHANGES $field (was '$base', now '$got')" \
+    "[[ '$got' != '$base' ]]"
+}
+
+# The harness's own SELF-TEST, first: an anchor that cannot match must be REPORTED, not skipped.
+# Without this, a mutate_emitter whose seds all silently miss reports a clean sweep.
+_me_f0="$FAIL"; _me_p0="$PASS"; _me_t0="$TOTAL"
+# Output suppressed: the failure is DELIBERATE, and a visible "FAIL: MUT[SELFTEST]" line in an
+# otherwise green suite is indistinguishable from a real regression to anyone reading CI logs.
+mutate_emitter SELFTEST 's|__AN_ANCHOR_THAT_CANNOT_EXIST__|x|' data_mount_devid "scsi-0HC_Volume_${S8_VOLID}" >/dev/null 2>&1
+if [[ "$FAIL" -gt "$_me_f0" ]]; then
+  # Roll the deliberate failure back and book ONE assertion for the self-test itself. TOTAL must
+  # move with PASS or the suite reports more passes than assertions -- which it briefly did.
+  PASS="$_me_p0"; TOTAL="$_me_t0"; FAIL="$_me_f0"
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: MUT INSTRUMENT: a mutation that cannot land is REPORTED, not silently skipped"
+else
+  echo "  FAIL: MUT INSTRUMENT: a non-landing mutation passed — every row below is decorative"
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+fi
+
+# Restore the healthy fixture set (the registry arms above left curl on a non-200 shape).
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+s8_lsblk 'sdb\n\n'
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_${S8_VOLID}"
+
+# M1 — delete the reverse map's match arm: the pin must stop resolving.
+mutate_emitter devid-revmap 's|^        \*/"\$data_mount_base")$|        __NEVER__)|' \
+  data_mount_devid "scsi-0HC_Volume_${S8_VOLID}"
+# M2 — drop the ambiguity COUNT: a multi-valued map must not silently pick one.
+# ITS FIXTURE NEEDS TWO ALIASES. With one, _devid_hits is 1, the `-gt 1` arm is UNREACHABLE, and
+# the mutant survives for a reason that says nothing about the guard. Measured: it did survive on
+# the first run, and the fix was the FIXTURE, not the predicate.
+ln -sf "$PROBE_S8_DEV/sdb" "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+mutate_emitter devid-ambiguity 's|^      elif \[ "\$_devid_hits" -gt 1 \]; then$|      elif false; then|' \
+  data_mount_devid "__AMBIGUOUS__"
+rm -f "$PROBE_S8_BYID/scsi-0HC_Volume_999999999"
+# M3 — unbound the base-device resolution: devid must inherit __UNREADABLE__, not invent a match.
+mutate_emitter base-resolution 's|^    data_mount_base="\$(timeout 5 lsblk|    data_mount_base="$(false \&\& timeout 5 lsblk|' \
+  data_mount_base "sdb"
+# M4 — neuter the not-serving guard: a non-200 host must not yield a count we never took.
+# ITS FIXTURE NEEDS A NON-200 /health, for the same reason as M2: with 200 the guard's true-branch
+# is never entered and disabling it changes nothing. Also measured surviving on the first run.
+s8_curl 000 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+mutate_emitter registry-guard 's|^  if \[ "\$http_code" != "200" \]; then$|  if false; then|' \
+  registry_fns "__UNREADABLE__"
+s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
+
 # --- ARM 6: a NOAUTH reply must NOT render as an empty store -------------------------------
 # THE SINGLE MOST DANGEROUS DEGRADATION IN THE PROBE. redis answers an unauthenticated INFO
 # with an error and no `db<N>:` lines; `awk … END {print s+0}` prints 0 on no input, so without
@@ -2296,7 +2387,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=379
+INNGEST_MIN_ASSERTIONS=392
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
