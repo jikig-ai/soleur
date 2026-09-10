@@ -19,7 +19,8 @@
 # this exists to reject: a host that emits nothing at all would auto-PASS. Absence is used here
 # only to DOWNGRADE a positive, never to grant one.
 #
-# WHY BOTH FIELDS. `server_active=active` alone means systemd considers the unit running; the
+# WHY ALL THREE FIELDS (#8015 added the third). `server_active=active` alone means systemd
+# considers the unit running; the
 # #7674 diagnosis is that the unit can be stopped outright while the host is otherwise healthy,
 # and a future variant is a unit that runs but binds nothing. `http_code=200` is the loopback
 # proof that it SERVES. Measured 2026-08-25 the host reported `server_active=inactive
@@ -132,14 +133,24 @@ fi
 # --- the POSITIVE discriminator ----------------------------------------------------------------
 # Both fields must hold in the SAME row: a window containing an old active row and a recent
 # inactive one must not be assembled into a PASS out of two different moments.
-serving="$(printf '%s\n' "$mine" | grep -F 'server_active=active' | grep -cF 'http_code=200')"
+# THE THIRD CONJUNCT (#8015). server_active=active plus http_code=200 says the unit runs and the
+# listener answers -- it says NOTHING about whether the host owns any work. A diagnostic boot
+# satisfies both and serves nothing, so this probe granted PASS to exactly the state #7674 exists
+# to detect. registry_fns separates serving from listening.
+#
+# THE TOKEN BOUNDARY IS LOAD-BEARING: a bare `registry_fns=[1-9][0-9]*` also matches
+# `registry_fns=1abc`, so the trailing ( |$) is what makes this a number rather than a prefix.
+#
+# `0` is an accepting value for the FIELD but not for this conjunct: it is a measurement (a
+# server that answers and owns nothing), which is precisely the reading that must NOT pass.
+serving="$(printf '%s\n' "$mine" | grep -F 'server_active=active' | grep -F 'http_code=200' | grep -cE 'registry_fns=[1-9][0-9]*( |$)')"
 case "$serving" in
   ''|*[!0-9]*) serving=0 ;;
 esac
 
 if [[ "$serving" -gt 0 ]]; then
-  echo "PASS: ${HOST_NAME} served within ${WINDOW} — ${serving} ${MARKER} row(s) carrying BOTH"
-  echo "      server_active=active and http_code=200. #7674 step 4 exit criterion met."
+  echo "PASS: ${HOST_NAME} served within ${WINDOW} — ${serving} ${MARKER} row(s) carrying ALL THREE"
+  echo "      server_active=active, http_code=200 and a NON-ZERO registry_fns. #7674 step 4 met."
   exit 0
 fi
 
@@ -150,8 +161,21 @@ last="$(printf '%s\n' "$mine" | tail -1)"
 active="$(printf '%s' "$last" | grep -oE 'server_active=[^ ]+' | head -1)"
 code="$(printf '%s' "$last" | grep -oE 'http_code=[^ ]+' | head -1)"
 flag="$(printf '%s' "$last" | grep -oE 'cutover_flag=[^ ]+' | head -1)"
+# Report the OBSERVED registry count, so a not_serving verdict names which of the three conjuncts
+# failed instead of leaving the reader to guess between "down" and "up but owning nothing".
+regfns="$(printf '%s' "$last" | grep -oE 'registry_fns=[^ ]+' | head -1)"
 
-echo "TRANSIENT: reason=not_serving host=${INNGEST_HOST}/${HOST_NAME} ${active:-server_active=?} ${code:-http_code=?} ${flag:-cutover_flag=?}" >&2
+echo "TRANSIENT: reason=not_serving host=${INNGEST_HOST}/${HOST_NAME} ${active:-server_active=?} ${code:-http_code=?} ${regfns:-registry_fns=?} ${flag:-cutover_flag=?}" >&2
+case "$regfns" in
+  registry_fns=0)
+    echo "           registry_fns=0 is a MEASUREMENT, not a gap: the host answers and owns NOTHING," >&2
+    echo "           which is the diagnostic-boot signature. Before #8015 this row PASSED." >&2 ;;
+  registry_fns=__UNREADABLE__)
+    echo "           registry_fns is unreadable, so the registry question was not answered at all." >&2 ;;
+  "")
+    echo "           NO registry_fns field: the host predates probe_schema=8 (#8015), so this" >&2
+    echo "           conjunct cannot be evaluated and the probe correctly refuses to PASS." >&2 ;;
+esac
 case "$flag" in
   *rollback|*rolled-back)
     echo "           The flag EXPLAINS the stop: the flip FSM's rollback arm stopped the unit and" >&2
