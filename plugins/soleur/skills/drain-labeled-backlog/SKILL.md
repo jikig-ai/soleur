@@ -122,6 +122,33 @@ gh issue list --label "${LABEL:-deferred-scope-out}" --state open \
 
 Report: `Before: X, After: Y, Closed: Z` and the per-area drain.
 
+### Closing floor (weekly cadence only)
+
+The weekly machinery cadence carries a **closing floor of 20**: a scheduled run
+that closes fewer than 20 FAILS. That floor is what makes the gate net-NEGATIVE
+rather than net-zero — per-PR net-zero, perfectly enforced, holds the backlog at
+its current size forever.
+
+**The floor is gated on candidate supply, and that arm is not optional.** The run
+fails below the floor only when the candidate pool held at least 20 to begin
+with. When the pool is smaller, the run closes every candidate and PASSES,
+reporting:
+
+```
+closed=N of N candidates (floor waived: pool < floor)
+```
+
+Without that arm the floor becomes unsatisfiable-by-construction the moment the
+backlog is actually drained — a scheduled monitor whose steady state on success
+is red, which trains the operator to ignore it. That is the failure this whole
+change exists to remove, so reproducing it inside the fix would be self-defeating.
+
+The waiver is **reported, never silent**: a chronically empty pool must be
+visible rather than indistinguishable from a healthy run.
+
+Both the floor and the waiver line are cited by the runner and its test from a
+single named constant, so the two cannot drift apart.
+
 ## Post-merge follow-up — Scheduling
 
 The `/soleur:schedule` skill accepts any soleur skill as `--skill <name>` and generates a standalone `.github/workflows/scheduled-<name>.yml`. After merging the PR that ships this skill, schedule a weekly cleanup:
