@@ -188,7 +188,7 @@
 1	.claude/hooks/cla-signed-author-gate.sh
 2	.claude/hooks/docs-cli-verification.test.sh
 2	.claude/hooks/follow-through-directive-gate.test.sh
-3	.claude/hooks/guardrails.test.sh
+1	.claude/hooks/guardrails.test.sh
 1	.claude/hooks/hook-input-contract.test.sh
 1	.claude/hooks/incidents.test.sh
 1	.claude/hooks/lib/freeze-lock.sh

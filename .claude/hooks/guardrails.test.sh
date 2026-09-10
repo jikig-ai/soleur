@@ -699,25 +699,45 @@ assert "filing-justification: gh api POST to another endpoint is untouched" "<no
 # Row H1 — FAIL TOWARD GATING when the shared taxonomy is unreadable. A gate
 # that silently stops matching is indistinguishable from a gate that passed.
 # This row is why the taxonomy read is not a bare `grep ... || true`.
-# ABSOLUTE, and restored by a trap. This row deliberately EMPTIES a tracked
-# repo file to prove the gate fails toward gating when its allow-list is
-# unreadable -- so the two hazards are (a) a relative path truncating some
-# other file when the suite is run from a different CWD, and (b) an exit
-# between the truncate and the restore leaving the real taxonomy empty, which
-# makes the gate deny every exit-2 filing for everyone afterwards. `$SCRIPT_DIR`
-# is already resolved absolutely at the top of this file; use it, and register
-# the restore before the truncate rather than after the assert.
-TAXO="$SCRIPT_DIR/lib/user-surface-taxonomy.txt"
-TAXO_BAK="$(mktemp)"
-cp -- "$TAXO" "$TAXO_BAK"
-_restore_taxo() { [[ -f "$TAXO_BAK" ]] && cp -- "$TAXO_BAK" "$TAXO" && rm -f -- "$TAXO_BAK"; }
-trap _restore_taxo EXIT INT TERM
-: > "$TAXO"
+# EXERCISED AGAINST A COPY, NOT THE REPO. An earlier form emptied the tracked
+# taxonomy in place and restored it afterwards. Three things were wrong with
+# that, and only the third is visible from inside this suite:
+#   * a relative path truncates some OTHER file when the suite runs from a
+#     different CWD;
+#   * an exit between the truncate and the restore leaves the real taxonomy
+#     empty, and an empty allow-list makes the gate deny every exit-2 filing
+#     from then on, for everyone;
+#   * preflight Check 10 executes this suite as the plan's declared
+#     discoverability probe inside a bubblewrap sandbox that binds the repo
+#     READ-ONLY, so the truncate simply fails there -- the probe the plan
+#     declares could not pass in the sandbox it is declared for. Measured: 105/106
+#     in-sandbox, and a chmod -a-w rehearsal reproduces it outside.
+# The gate resolves its taxonomy from its OWN ${BASH_SOURCE[0]%/*}/lib/, so a
+# copy of the hook in a writable temp tree reads the COPY's taxonomy. That
+# exercises the unreadable-allow-list path against the real gate code while
+# writing nothing into the repository.
+TAXO_SANDBOX="$(mktemp -d)"
+cp -R -- "$SCRIPT_DIR/lib" "$TAXO_SANDBOX/lib"
+cp -- "$HOOK" "$TAXO_SANDBOX/guardrails.sh"
+# `cp -R` carries the SOURCE mode bits, so a repo checked out read-only yields a
+# read-only copy and the truncate below fails -- the row then reports <none> and
+# reads as "the gate did not fail toward gating" when in fact the fixture never
+# got set up. Force the copy writable; it lives in a temp dir we own.
+chmod -R u+w "$TAXO_SANDBOX"
+: > "$TAXO_SANDBOX/lib/user-surface-taxonomy.txt"
+# Setup, not an assertion: if the truncate did not take, the row below would be
+# testing a POPULATED taxonomy and passing for the wrong reason.
+[[ -s "$TAXO_SANDBOX/lib/user-surface-taxonomy.txt" ]] && {
+  printf 'FATAL: taxonomy fixture did not truncate; the row below would be vacuous.\n' >&2
+  exit 1
+}
+_HOOK_REAL="$HOOK"
+HOOK="$TAXO_SANDBOX/guardrails.sh"
 assert "filing-justification: unreadable taxonomy fails TOWARD gating" "deny" \
   "gh issue create --title \"t\" --body \"User-Impact: the /dashboard route 500s
 Fix-Size: 900 lines / 40 files\" $MS"
-_restore_taxo
-trap - EXIT INT TERM
+HOOK="$_HOOK_REAL"
+rm -rf "$TAXO_SANDBOX"
 
 # --- Escape rows (found by feeding the PRISTINE guard corpora it must refuse).
 # Neither of these is reachable by mutating the guard: it was working exactly as
@@ -746,9 +766,10 @@ assert "filing-justification: two Fix-Size lines denies (small first, large last
 Fix-Size: 19 lines / 1 file
 Fix-Size: 900 lines / 40 files\" $MS"
 
-# Row H2 — the restore actually happened. Without this, H1 could leave the
-# taxonomy empty and every later row would deny for the wrong reason while
-# still reporting the colour the matrix expects.
+# Row H2 — the REAL gate still reads a populated taxonomy. H1 now mutates only
+# a copy, so this row's job shifts from "did the restore run" to "did H1 leak" --
+# if H1 ever regains a repo write, or $HOOK is left pointing at the temp copy,
+# this row denies and says so.
 assert "filing-justification: taxonomy restored after H1" "<none>" \
   "gh issue create --title \"t\" --body \"User-Impact: the /dashboard route 500s
 Fix-Size: 900 lines / 40 files\" $MS"
