@@ -69,7 +69,10 @@ jobs:
         uses: anthropics/claude-code-action@5aa6f47e977fec3321f32c06d8076b1f503f832c # v1.0.161
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          prompt: '/soleur:drain-labeled-backlog --label meta/machinery'
+          # `--headless` is load-bearing, not decoration: without it the skill
+          # takes its interactive branch and waits to confirm a cluster with a
+          # human who is not there (drain-labeled-backlog/SKILL.md step 4).
+          prompt: '/soleur:drain-labeled-backlog --label meta/machinery --headless'
           # Explicit model pin (ADR-053) -- an unpinned model drifts with action
           # releases, which is an unbounded per-run spend surface on a weekly cron.
           claude_args: '--model claude-sonnet-5'
@@ -81,6 +84,7 @@ jobs:
       # this PR exists to remove, so reproducing it inside the fix would be
       # self-defeating. The waiver is REPORTED, never silent.
       - name: Enforce the closing floor
+        id: floor
         env:
           GH_TOKEN: ${{ github.token }}
           BEFORE: ${{ steps.pre.outputs.candidates }}
@@ -91,15 +95,37 @@ jobs:
           closed=$(( BEFORE - after ))
           [ "$closed" -lt 0 ] && closed=0
           echo "before=$BEFORE after=$after closed=$closed floor=$FLOOR"
-          if [ "$BEFORE" -lt "$FLOOR" ]; then
-            echo "closed=$closed of $BEFORE candidates (floor waived: pool < floor)"
-            exit 0
+          # THE WAIVER MUST NAME WHICH WAIVER IT IS. `pool < floor` has two
+          # completely different causes and they look identical in a green run:
+          # the ledger really was drained, or it was never populated (the
+          # backfill is propose-only, so on merge the pool is 0 and stays 0
+          # until labels are applied). Reporting them the same way is the
+          # empty-telemetry-is-not-absence shape this whole change exists to
+          # remove -- inside this change's own instrument. So the outcome is
+          # emitted as a line the standing issue carries, not left in a step log
+          # nobody opens.
+          if [ "$BEFORE" -eq 0 ]; then
+            verdict="WAIVED-EMPTY: pool is 0 -- the ledger holds no machinery issues, so there was nothing to drain. If the backfill has not been applied, this is the expected reading and NOT evidence of a drained backlog."
+            rc=0
+          elif [ "$BEFORE" -lt "$FLOOR" ]; then
+            verdict="WAIVED-SUPPLY: closed=$closed of $BEFORE candidates; pool ($BEFORE) is below the floor ($FLOOR), so the floor cannot be met and is waived."
+            rc=0
+          elif [ "$closed" -lt "$FLOOR" ]; then
+            verdict="BREACH: closed=$closed, below the floor of $FLOOR (pool was $BEFORE). Per-PR net-zero holds the backlog at its current size; this cadence is the only lever that reduces it."
+            rc=1
+          else
+            verdict="MET: closed=$closed (>= floor $FLOOR, pool was $BEFORE)."
+            rc=0
           fi
-          if [ "$closed" -lt "$FLOOR" ]; then
-            echo "::error::machinery drain closed $closed, below the floor of $FLOOR (pool was $BEFORE). Per-PR net-zero holds the backlog at its current size; this cadence is the only lever that reduces it."
-            exit 1
-          fi
-          echo "closed=$closed (>= floor $FLOOR)"
+          echo "$verdict"
+          {
+            echo 'verdict<<SOLEUR_EOF_VERDICT'
+            printf 'before=%s after=%s closed=%s floor=%s\n%s\n' \
+              "$BEFORE" "$after" "$closed" "$FLOOR" "$verdict"
+            echo 'SOLEUR_EOF_VERDICT'
+          } >> "$GITHUB_OUTPUT"
+          [ "$rc" -eq 0 ] || echo "::error::$verdict"
+          exit "$rc"
 
       # FIND-OR-UPDATE exactly one standing issue. A measurement that files a
       # fresh issue every week is the defect reproducing itself inside its own
@@ -115,6 +141,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPORT: ${{ steps.measure.outputs.report }}
+          # `if: always()` above means this runs after a floor BREACH too, and
+          # the breach week is exactly when the verdict matters most. A skipped
+          # floor step leaves this empty, which is itself reported rather than
+          # rendered as a blank section.
+          VERDICT: ${{ steps.floor.outputs.verdict }}
         run: |
           set -euo pipefail
           TITLE="issue-flow: weekly measurement"
@@ -129,9 +160,12 @@ jobs:
           # or an unquoted heredoc would command-substitute and silently eat the
           # report. `~~~` is valid GFM and carries no shell meaning at all, so
           # it removes the hazard class rather than escaping around it.
-          body="$(printf '%s\n\n~~~\n%s\n~~~\n' \
+          verdict="${VERDICT:-(floor step did not run -- the drain outcome for this week is UNKNOWN, not clean)}"
+          body="$(printf '%s\n\n~~~\n%s\n~~~\n\n%s\n\n~~~\n%s\n~~~\n' \
             'Standing weekly issue-flow measurement. Updated in place, never re-filed.' \
-            "$REPORT")"
+            "$REPORT" \
+            'Machinery drain outcome:' \
+            "$verdict")"
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
             echo "updated standing issue #$existing"

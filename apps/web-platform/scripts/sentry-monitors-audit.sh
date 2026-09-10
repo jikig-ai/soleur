@@ -997,6 +997,14 @@ done < "$class_c_out"
 # #7590; the figure had gone stale while still reading as "verified", which is
 # why sentry-monitors-audit.test.sh T25 now derives it from the tf root and
 # fails if this line drifts again. Keep the count on ONE line — T25 greps it.)
+#
+# Addendum 2026-09-10: the tf root now declares
+# 57 `resource "sentry_cron_monitor"` blocks — the weekly machinery drain added
+# one. This is a count of DECLARATIONS, not a re-verification against the live
+# org: the 57th monitor does not exist in Sentry until apply-sentry-infra.yml
+# runs on merge, so the 2026-08-19 live figure above is left standing rather
+# than silently promoted to 57. T25 derives from the tf root, so it reads this
+# line; the live-set assertion is re-established by the next audit run.
 CRON_MONITOR_MONTHLY_USD="0.78"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

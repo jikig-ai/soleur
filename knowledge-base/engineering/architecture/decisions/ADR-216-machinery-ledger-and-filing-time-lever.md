@@ -222,6 +222,26 @@ fall, the gate is being gamed, and that is visible within four weeks.
 - The backfill is title-scoped, high-precision and low-recall, on measured
   grounds recorded in `machinery-backfill-proposal.md`. Recall is recovered by
   the gate labelling new findings at source, not by widening the classifier.
+- **The weekly cadence measures and enforces; it does not yet close.** Stated
+  plainly because a green run would otherwise imply the opposite. The drain step
+  invokes `/soleur:drain-labeled-backlog`, which delegates to `/soleur:one-shot`
+  and closes issues through a merged PR carrying `Closes #N`. That needs
+  branch-push and pull-request authority; the workflow deliberately runs with
+  `contents: read` and `issues: write`, so the closing arm cannot fire. Widening
+  an unattended weekly agent to `contents: write` is a privilege and spend
+  decision, not an implementation detail, and it is not taken here.
+  Consequently, on merge the pool is 0 (the backfill proposes, it never applies)
+  and the floor is waived every week. What this change guarantees is that the
+  waiver is **legible**: the floor step emits `WAIVED-EMPTY`, `WAIVED-SUPPLY`,
+  `MET` or `BREACH` into the standing measurement issue, and `WAIVED-EMPTY`
+  says in words that it is not evidence of a drained backlog. The failure this
+  avoids is the one the change exists to remove — an instrument whose green is
+  indistinguishable from its blind spot. Closing the loop means applying the
+  backfill and granting the drain the authority to open its PR, in that order.
+- Two of the three levers that reduce the RATE are therefore live on merge (the
+  ledger and the filing-time gate); the sweeper reduces the STOCK from
+  2026-10-10; the weekly cadence reports. The success criterion is stated against
+  the filing rate precisely because that is what the live levers move.
 
 ## Measured corrections to the originating brief
 

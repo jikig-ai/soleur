@@ -15,6 +15,20 @@
 # against the open TOTAL, which is where they legitimately belong.
 set -euo pipefail
 
+# (#7797) Refuse to run under shell tracing while a live credential is set:
+# `set -x` would trace GH_TOKEN into whatever collects this script's output, and
+# this one runs inside a scheduled workflow whose logs are retained. The test is
+# `case "$-" in *x*)` rather than an enumeration of the eight ways to enable
+# tracing, two of which carry no `-x` token at all.
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}${GITHUB_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO="${REPO:-jikig-ai/soleur}"
 WEEKS="${WEEKS:-4}"
 

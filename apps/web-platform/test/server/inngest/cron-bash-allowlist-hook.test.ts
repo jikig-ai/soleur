@@ -651,6 +651,71 @@ describe("Bash — filing justification (class 3)", () => {
     expect(verdict(bash("gh issue comment 1 --body hi"))).toBe("allow");
   });
 
+  // THE ROUTE THIS MIRROR EXISTS TO COVER. `gh api repos/jikig-ai/soleur/` is in
+  // the ALLOW fixture above because a real cron allowlist grants it. Matching
+  // only `gh issue create` therefore left the api spelling a silent ALLOW here
+  // — a total bypass for exactly the scheduled population this second chokepoint
+  // was added for, and a reopening of a route-around guardrails.sh documents an
+  // agent having actually taken.
+  it("class 4 — an unjustified gh api POST filing is denied, not silently allowed", () => {
+    const cmd = bash(
+      "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f body=nothing",
+    );
+    expect(verdict(cmd)).toBe("deny");
+    expect(reason(cmd)).toMatch(/labels\[\]=meta\/machinery/);
+  });
+
+  it("class 4 — labels[]=meta/machinery opens the machinery exit", () => {
+    expect(
+      verdict(
+        bash(
+          "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'labels[]=meta/machinery'",
+        ),
+      ),
+    ).toBe("allow");
+  });
+
+  it("class 4 — a body= field carrying Mandated-By opens exit 3", () => {
+    expect(
+      verdict(
+        bash(
+          "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'body=Mandated-By: wg-block-pr-ready-on-undeferred-operator-steps'",
+        ),
+      ),
+    ).toBe("allow");
+  });
+
+  it("class 4 — a GET, and a POST to another endpoint, are not filings", () => {
+    expect(verdict(bash("gh api repos/jikig-ai/soleur/issues"))).toBe("allow");
+    expect(
+      verdict(bash("gh api repos/jikig-ai/soleur/pulls -X POST -f title=x")),
+    ).toBe("allow");
+  });
+
+  // `--label` is a cobra StringSlice: `--label a,b` is ordinary gh syntax, and
+  // exact-equality denied it while telling the filer to pass the flag they had
+  // just passed.
+  it("comma-joined --label opens the machinery exit in either order", () => {
+    expect(
+      verdict(bash("gh issue create --title t --label meta/machinery,type/bug")),
+    ).toBe("allow");
+    expect(
+      verdict(bash("gh issue create --title t --label type/bug,meta/machinery")),
+    ).toBe("allow");
+  });
+
+  it("comma anchor does not widen into a substring match", () => {
+    expect(
+      verdict(bash("gh issue create --title t --label foo/meta/machinery")),
+    ).toBe("deny");
+    expect(
+      verdict(bash("gh issue create --title t --label meta/machineryX")),
+    ).toBe("deny");
+    expect(
+      verdict(bash("gh issue create --title t --label type/bug,type/chore")),
+    ).toBe("deny");
+  });
+
   it("narrows only — a cron without the verb is still denied by the ALLOWLIST", () => {
     const noCreate = ALLOW.filter((p) => p !== "gh issue create");
     const d = decide(bash("gh issue create --title t --label meta/machinery"), noCreate);

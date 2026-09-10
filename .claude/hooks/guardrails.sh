@@ -549,6 +549,22 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
     # `_repo_toks` tokenizer already computed above: `xargs -n1` honours shell
     # quoting, so a --label inside a quoted value stays inside ONE token and is
     # never mistaken for a flag.
+    #
+    # TWO SYNTAXES, ONE EXIT. `--label` is the `gh issue create` spelling; the
+    # `gh api` POST form the trigger above also covers has no --label flag at
+    # all and spells the same thing `-f 'labels[]=meta/machinery'`. Reading only
+    # the first made exit 1 UNREACHABLE for every api-form filing -- measured:
+    # `gh api .../issues -X POST -f 'labels[]=meta/machinery'` was denied, so an
+    # honest machinery filing on that route had no exit but 2 or 3, which pushes
+    # a machinery finding onto the product ledger. That is the same consequence
+    # as the --body-file gap, one syntax over.
+    #
+    # COMMA-JOINED VALUES COUNT. `--label` is a cobra StringSlice, so
+    # `--label meta/machinery,type/bug` is ordinary, documented gh syntax.
+    # Exact-equality against the whole value denied it -- and the refusal told
+    # the filer to add the very flag they had just passed. Split on commas and
+    # anchor each element between commas, so `foo/meta/machinery` still does not
+    # match (the anchor requires a comma, not a slash, before the element).
     _fj_li=0
     while (( _fj_li < ${#_repo_toks[@]} )); do
       _fj_t="${_repo_toks[$_fj_li]}"; _fj_v=""
@@ -556,8 +572,15 @@ if [[ "$_gh_create" == 1 || "$_gh_api_issue" == 1 ]]; then
         --label|-l) _fj_v="${_repo_toks[$((_fj_li + 1))]:-}" ;;
         --label=*)  _fj_v="${_fj_t#--label=}" ;;
         -l=*)       _fj_v="${_fj_t#-l=}" ;;
+        # gh api field flags: -f/--field (and the raw variants) carry
+        # `labels[]=<one label>`. gh sends one field per label, so there is no
+        # comma form here, but running it through the same anchor is harmless.
+        -f|--field|--raw-field)
+          _fj_fv="${_repo_toks[$((_fj_li + 1))]:-}"
+          [[ "$_fj_fv" == labels\[\]=* ]] && _fj_v="${_fj_fv#labels[]=}" ;;
+        labels\[\]=*) _fj_v="${_fj_t#labels[]=}" ;;
       esac
-      [[ "$_fj_v" == "meta/machinery" ]] && _fj_pass=1
+      case ",${_fj_v}," in *,meta/machinery,*) _fj_pass=1 ;; esac
       _fj_li=$((_fj_li + 1))
     done
 

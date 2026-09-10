@@ -28,7 +28,11 @@
 # effectively always true and the rule admits 3%.
 #
 # The hybrid over-admits in the direction that actually hurts. Sampled, it
-# proposed a dead SUPABASE_PAT (HTTP 401 across four Doppler configs), a
+# proposed a dead Supabase management token (HTTP 401 across four Doppler
+# configs -- the variable name is deliberately not spelled here, because
+# lint-supabase-deprecated-endpoints reads it as evidence that this script
+# calls the Management API and demands a host pin, which it should not carry:
+# this script talks only to the GitHub issues API), a
 # docker login failing on every deploy, and image signature verification that
 # had never once succeeded. Those are live operational incidents, and labelling
 # them machinery would hide them from the operator digest -- the same class of

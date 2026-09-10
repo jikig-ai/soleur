@@ -49,18 +49,44 @@ ck "SKILL.md names the derived floor, not a restated literal" "$SKILL_FLOOR" "$F
 ckc "the workflow reads the constant into the enforcing step" \
   'FLOOR: \$\{\{ env\.MACHINERY_DRAIN_CLOSING_FLOOR \}\}' "$WF"
 ckc "the enforcing step fails below the floor" \
-  '::error::machinery drain closed .*below the floor' "$WF"
+  'verdict="BREACH: closed=\$closed, below the floor' "$WF"
 ckc "the waiver arm exists and is gated on candidate supply" \
-  'if \[ "\$BEFORE" -lt "\$FLOOR" \]; then' "$WF"
+  'elif \[ "\$BEFORE" -lt "\$FLOOR" \]; then' "$WF"
 ckc "the waiver is REPORTED, never silent" \
-  'floor waived: pool < floor' "$WF"
+  'WAIVED-SUPPLY' "$WF"
 ckc "closed is DERIVED as a delta, not self-reported by the agent" \
   'closed=\$\(\( BEFORE - after \)\)' "$WF"
 ckc "a drain step actually exists (the workflow is named for it)" \
   'anthropics/claude-code-action' "$WF"
 
+# --- the drain step must run in pipeline mode -------------------------------
+# Without `--headless` the skill takes its interactive branch and waits to
+# confirm a cluster with a human who is not there, so the step burns its budget
+# and closes nothing while `continue-on-error` keeps the job green.
+ckc "the drain prompt runs the skill in headless/pipeline mode" \
+  "drain-labeled-backlog --label meta/machinery --headless" "$WF"
+
+# --- an empty pool must not read as a drained one ---------------------------
+# `pool < floor` has two causes that look identical in a green run: the ledger
+# really was drained, or it was never populated (the backfill is propose-only,
+# so the pool is 0 on merge and stays 0 until labels are applied). Reporting
+# both the same way is the empty-telemetry-is-not-absence shape this change
+# exists to remove, reproduced inside its own instrument.
+ckc "a zero pool is reported as its own verdict, not as a supply waiver" \
+  'WAIVED-EMPTY' "$WF"
+ckc "the zero-pool verdict says it is NOT evidence of a drained backlog" \
+  'NOT evidence of a drained backlog' "$WF"
+
+# --- the verdict must reach a DURABLE surface, not just the step log --------
+ckc "the floor step publishes its verdict as an output" \
+  'verdict<<SOLEUR_EOF_VERDICT' "$WF"
+ckc "the standing issue carries the drain verdict" \
+  'VERDICT: \$\{\{ steps\.floor\.outputs\.verdict \}\}' "$WF"
+ckc "a skipped floor step reads as UNKNOWN, not as clean" \
+  'UNKNOWN, not clean' "$WF"
+
 # --- anti-vacuity: report DIRECTLY, never through the helpers being backstopped ---
-MIN_ASSERTIONS=8
+MIN_ASSERTIONS=14
 if [[ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s.\n' "$ASSERTED" "$MIN_ASSERTIONS" >&2
   exit 1

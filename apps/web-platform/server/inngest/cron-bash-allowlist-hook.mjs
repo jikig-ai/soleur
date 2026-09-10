@@ -76,17 +76,50 @@ const FILING_TAXONOMY_PATH = fileURLToPath(
 );
 
 export function filingJustificationReason(tokens, readTaxonomy) {
-  // Only `gh issue create`. Anything else is not a filing.
-  if (!(tokens[0] === "gh" && tokens[1] === "issue" && tokens[2] === "create"))
-    return null;
+  // TWO CREATE SHAPES, because this chokepoint's whole reason for existing is
+  // the cron population -- and one of the cron allowlists grants the prefix
+  // `gh api repos/jikig-ai/soleur/` outright.
+  //
+  // Matching only `gh issue create` left `gh api .../issues -X POST` a silent
+  // ALLOW here: not a narrow exit, a total bypass, for exactly the agents this
+  // mirror was added to cover. guardrails.sh already closes that route and says
+  // why -- this repo has a DOCUMENTED instance of an agent filing via `gh api`
+  // after the `gh issue create` form was denied -- so leaving it open here
+  // reopened a known route-around at the second of the two chokepoints.
+  const isCreate =
+    tokens[0] === "gh" && tokens[1] === "issue" && tokens[2] === "create";
+  const isApiIssue =
+    tokens[0] === "gh" &&
+    tokens[1] === "api" &&
+    tokens.some((t) => /(^|\/)repos\/[^/]+\/[^/]+\/issues$/.test(t)) &&
+    tokens.some(
+      (t, i) =>
+        ((t === "-X" || t === "--method") && tokens[i + 1] === "POST") ||
+        /^(-f|--field|--raw-field|-F)$/.test(t) && /^title=/.test(tokens[i + 1] || "") ||
+        /^title=/.test(t),
+    );
+  if (!isCreate && !isApiIssue) return null;
 
   // EXIT 1 — the machinery ledger. Read a REAL flag token, never prose: the
   // tokens are already dequoted, so a --body that merely NAMES the flag stays
   // inside one token and cannot be mistaken for it.
+  //
+  // Two syntaxes and comma-joined values, for the same reasons guardrails.sh
+  // records: `--label` is a cobra StringSlice so `--label a,b` is ordinary gh
+  // syntax, and the api form has no --label flag at all -- it spells the same
+  // thing `-f 'labels[]=meta/machinery'`. Anchoring each element between commas
+  // keeps `foo/meta/machinery` and `meta/machineryX` non-matching.
+  const hasMachineryLabel = (v) =>
+    typeof v === "string" && `,${v},`.includes(",meta/machinery,");
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
-    if ((t === "--label" || t === "-l") && tokens[i + 1] === "meta/machinery") return null;
-    if (t === "--label=meta/machinery" || t === "-l=meta/machinery") return null;
+    if ((t === "--label" || t === "-l") && hasMachineryLabel(tokens[i + 1])) return null;
+    if (t.startsWith("--label=") && hasMachineryLabel(t.slice("--label=".length))) return null;
+    if (t.startsWith("-l=") && hasMachineryLabel(t.slice("-l=".length))) return null;
+    if (/^(-f|--field|--raw-field)$/.test(t) &&
+        typeof tokens[i + 1] === "string" && tokens[i + 1].startsWith("labels[]=") &&
+        hasMachineryLabel(tokens[i + 1].slice("labels[]=".length))) return null;
+    if (t.startsWith("labels[]=") && hasMachineryLabel(t.slice("labels[]=".length))) return null;
   }
 
   // The body corpus: the dequoted --body value, or the --body-file contents.
@@ -95,10 +128,19 @@ export function filingJustificationReason(tokens, readTaxonomy) {
     const t = tokens[i];
     if (t === "--body" || t === "-b") body = tokens[i + 1] || "";
     else if (t.startsWith("--body=")) body = t.slice("--body=".length);
-    else if (t === "--body-file" || t === "-F") {
+    else if (t === "--body-file" || (t === "-F" && isCreate)) {
+      // `-F` is --body-file for `gh issue create`, but --raw-field for `gh api`.
+      // Reading the api spelling as a filename would look up a file named
+      // `body=...` and fail closed on a filing that supplied its body inline.
       const f = tokens[i + 1] || "";
       try { body = readTaxonomy ? readTaxonomy(f) : ""; } catch { body = ""; }
     }
+    // The api form carries the body as a field value, not a flag value.
+    else if (/^(-f|--field|--raw-field|-F)$/.test(t) &&
+             typeof tokens[i + 1] === "string" && tokens[i + 1].startsWith("body=")) {
+      body = tokens[i + 1].slice("body=".length);
+    }
+    else if (t.startsWith("body=")) body = t.slice("body=".length);
   }
 
   // EXIT 3 — a rule mandates the filing (ADR-155's closed vocabulary).
@@ -134,7 +176,9 @@ export function filingJustificationReason(tokens, readTaxonomy) {
     }
   }
 
-  return "filing names no user-visible consequence: add --label meta/machinery, or User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>";
+  return isApiIssue
+    ? "filing names no user-visible consequence: add -f 'labels[]=meta/machinery', or -f 'body=...' carrying User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>"
+    : "filing names no user-visible consequence: add --label meta/machinery, or User-Impact: + a measured Fix-Size:, or Mandated-By: <rule-id>";
 }
 
 export function allowDecision() {

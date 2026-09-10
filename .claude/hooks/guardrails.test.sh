@@ -699,15 +699,25 @@ assert "filing-justification: gh api POST to another endpoint is untouched" "<no
 # Row H1 — FAIL TOWARD GATING when the shared taxonomy is unreadable. A gate
 # that silently stops matching is indistinguishable from a gate that passed.
 # This row is why the taxonomy read is not a bare `grep ... || true`.
-TAXO=".claude/hooks/lib/user-surface-taxonomy.txt"
+# ABSOLUTE, and restored by a trap. This row deliberately EMPTIES a tracked
+# repo file to prove the gate fails toward gating when its allow-list is
+# unreadable -- so the two hazards are (a) a relative path truncating some
+# other file when the suite is run from a different CWD, and (b) an exit
+# between the truncate and the restore leaving the real taxonomy empty, which
+# makes the gate deny every exit-2 filing for everyone afterwards. `$SCRIPT_DIR`
+# is already resolved absolutely at the top of this file; use it, and register
+# the restore before the truncate rather than after the assert.
+TAXO="$SCRIPT_DIR/lib/user-surface-taxonomy.txt"
 TAXO_BAK="$(mktemp)"
-cp "$TAXO" "$TAXO_BAK"
+cp -- "$TAXO" "$TAXO_BAK"
+_restore_taxo() { [[ -f "$TAXO_BAK" ]] && cp -- "$TAXO_BAK" "$TAXO" && rm -f -- "$TAXO_BAK"; }
+trap _restore_taxo EXIT INT TERM
 : > "$TAXO"
 assert "filing-justification: unreadable taxonomy fails TOWARD gating" "deny" \
   "gh issue create --title \"t\" --body \"User-Impact: the /dashboard route 500s
 Fix-Size: 900 lines / 40 files\" $MS"
-cp "$TAXO_BAK" "$TAXO"
-rm -f "$TAXO_BAK"
+_restore_taxo
+trap - EXIT INT TERM
 
 # --- Escape rows (found by feeding the PRISTINE guard corpora it must refuse).
 # Neither of these is reachable by mutating the guard: it was working exactly as
@@ -743,6 +753,35 @@ assert "filing-justification: taxonomy restored after H1" "<none>" \
   "gh issue create --title \"t\" --body \"User-Impact: the /dashboard route 500s
 Fix-Size: 900 lines / 40 files\" $MS"
 
+# --- Ship-time escape rows: the gate refused two shapes gh itself produces.
+#
+# S1 — `--label` is a cobra StringSlice, so `--label a,b` is ordinary documented
+# gh syntax. Exact-equality against the whole value denied it, and the refusal
+# told the filer to add the flag they had just passed. The consequence is the
+# --body-file consequence one syntax over: an honest machinery filing is pushed
+# onto the product ledger, corrupting the separation this gate creates.
+assert "filing-justification: comma-joined --label (machinery first)" "<none>" \
+  "gh issue create --title t --body \"b\" --label meta/machinery,type/bug $MS"
+assert "filing-justification: comma-joined --label (machinery last)" "<none>" \
+  "gh issue create --title t --body \"b\" --label type/bug,meta/machinery $MS"
+assert "filing-justification: comma-joined --label without machinery denies" "deny" \
+  "gh issue create --title t --body \"b\" --label type/bug,type/chore $MS"
+
+# S1 near-misses — the comma anchor must not widen into a substring match.
+assert "filing-justification: foo/meta/machinery is not the label" "deny" \
+  "gh issue create --title t --body \"b\" --label foo/meta/machinery $MS"
+assert "filing-justification: meta/machineryX is not the label" "deny" \
+  "gh issue create --title t --body \"b\" --label meta/machineryX $MS"
+
+# S2 — the `gh api` POST form the trigger already covers has NO --label flag; it
+# spells the same thing `-f labels[]=...`. Reading only --label left exit 1
+# structurally unreachable on that route, so every api-form machinery filing was
+# denied with no honest exit but 2 or 3.
+assert "filing-justification: api labels[]=meta/machinery opens the machinery exit" "<none>" \
+  "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'labels[]=meta/machinery' -f body=y"
+assert "filing-justification: api labels[]=type/bug still denies" "deny" \
+  "gh api repos/jikig-ai/soleur/issues -X POST -f title=x -f 'labels[]=type/bug' -f body=y"
+
 # ---------------------------------------------------------------------------
 # AC6b — ASSERTION-COUNT FLOOR.
 #
@@ -754,9 +793,11 @@ Fix-Size: 900 lines / 40 files\" $MS"
 # rather than through the pass/fail helpers it exists to backstop -- a floor
 # that calls fail() is disarmed by the same edit that disarms fail().
 # Derived, not guessed: 65 rows on main at the merge base + 19 added by this
-# change + 4 escape rows + 1 residual row + 5 body-file rows + 5 class-4 rows found at review = 99. Stated as the sum so a sibling PR that adds a row makes this
-# stale LOUDLY (the floor trips) rather than silently.
-MIN_ASSERTIONS=99
+# change + 4 escape rows + 1 residual row + 5 body-file rows + 5 class-4 rows found at review
+# + 7 ship-time escape rows (comma-joined --label, its two near-misses, and the
+# api `labels[]=` spelling of exit 1) = 106. Stated as the sum so a sibling PR
+# that adds a row makes this stale LOUDLY (the floor trips) rather than silently.
+MIN_ASSERTIONS=106
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FLOOR: only %s assertions ran, expected at least %s. A suite that\n' "$TOTAL" "$MIN_ASSERTIONS" >&2
   printf 'asserts nothing exits 0 and reads as a pass -- refusing to report one.\n' >&2

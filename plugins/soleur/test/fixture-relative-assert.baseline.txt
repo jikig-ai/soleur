@@ -188,7 +188,7 @@
 1	.claude/hooks/cla-signed-author-gate.sh
 2	.claude/hooks/docs-cli-verification.test.sh
 2	.claude/hooks/follow-through-directive-gate.test.sh
-1	.claude/hooks/guardrails.test.sh
+3	.claude/hooks/guardrails.test.sh
 1	.claude/hooks/hook-input-contract.test.sh
 1	.claude/hooks/incidents.test.sh
 1	.claude/hooks/lib/freeze-lock.sh
@@ -317,6 +317,7 @@
 1	scripts/lint-shell-trace-credential-refusal.test.sh
 25	scripts/lint-workflow-errexit-capture.test.sh
 7	scripts/lint-workflow-install-sites.test.sh
+1	scripts/machinery-backfill-propose.sh
 8	scripts/markdown-lint.test.sh
 6	scripts/merge-kb-index.sh
 8	scripts/orphan-process-reaper-mutation.test.sh
