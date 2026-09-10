@@ -972,9 +972,29 @@ policy, `main` — the **birth** path is ref-pinned; the replace path is not.
 
 So D9's coverage is honest only when stated as: against an accidental collapse merged to `main` and
 dispatched from `main`, the replace interlock works. Against a deliberate actor with repo write, it
-does not. **The real fix is one key** — give `git_data_host_replace` an `environment:` with a
-main-only branch policy — and this plan prescribes it as part of Phase 4.2 rather than leaving the
-gate to imply protection it cannot provide.
+does not.
+
+**Scope split, decided during one-shot adjudication (2026-09-10).** An earlier revision prescribed
+the remedy — give `git_data_host_replace` an `environment:` with a main-only branch policy — as part
+of Phase 4.2. That is **removed from this PR** and filed as **F11**. Two reasons, both measured:
+
+1. It is not a local fix. This workflow's own `confirm` description records a *deliberate,
+   documented* posture that the replace-class targets carry no `environment:` reviewer gate —
+   naming `registry-luks-recut`, `registry-host-replace`, `registry-region-migrate`,
+   `inngest-host-replace` and `git-data-host-replace` together, and stating that for those "the gate
+   chain, the destroy-guard and the id-pin are the entire protection." Changing one of the five
+   inside a PR scoped to pubkey distinctness makes the fleet inconsistent and decides a
+   fleet-wide policy question as a side effect.
+2. It changes an authorization control on a **destructive** production path. Adding a required
+   approval to an emergency host replace is an operational trade the operator should take against
+   all five siblings at once, not inherit from a chore PR.
+
+**What this PR ships instead:** Phase 4.2 still wires the distinctness gate into
+`git_data_host_replace` — that is pure defence-in-depth and costs nothing. What it does *not* do is
+claim the resulting interlock is non-circumventable. D9's limitation is stated verbatim in the
+gate's own HOLD message and in the runbook, so the guard cannot imply protection it does not have.
+A guard that names its own boundary is not the defect class #8009 is about; a guard that hides it
+would be.
 
 ## Implementation Phases
 
@@ -1080,7 +1100,12 @@ hash re-check gates the push.
 - 4.1 Wire the gate as the third interlock step in `git_data_host_create`, after the rung-2 step and
   before `Terraform init`, wrapped in an `::error::` matching the two sibling interlocks.
 - 4.2 Wire the gate into `git_data_host_replace` (D9) — the only path a collapse can travel after the
-  host exists, and the one with no human approver.
+  host exists, and the one with no human approver. **Gate wiring only.** Do NOT add an
+  `environment:` to this job: that remedy is split out as F11 (see D9's scope-split note), because
+  it decides a fleet-wide policy the workflow documents for five sibling replace targets. Instead,
+  the gate's HOLD message and the runbook must state D9's limitation verbatim — that on this path
+  the gate is supplied by the branch it polices, so it holds against an accidental collapse
+  dispatched from `main` and not against a deliberate actor with repo write.
 - 4.3 Extend `plugins/soleur/test/terraform-target-parity.test.ts`'s job↔gate pairing block with the
   new gate, so 4.1 and 4.2 cannot be silently skipped. This is why AC27 is split.
 
@@ -1108,7 +1133,8 @@ hash re-check gates the push.
 
 ### Phase 7 — Deferred-item trackers
 
-- 7.1 File F1 (`domain/legal`), F3 (`type/security`), F6 (`type/chore` + `domain/engineering`).
+- 7.1 File F1 (`domain/legal`), F3 (`type/security`), F6 (`type/chore` + `domain/engineering`),
+  F11 (`domain/engineering`). F7-F10 batch onto F6 per the Deferred Items table.
 - 7.2 Link all three in the PR body.
 
 ### Phase 8 — Verification, before push
@@ -1436,6 +1462,8 @@ Each has a tracking issue as an in-scope task of this PR — a deferral without 
 | **F9** — `core.hooksPath` points at a directory owned and writable by the `git` account whose pushes the hook fences | No integrity boundary on the control. `$REPO_ROOT` must be git-writable; `$HOOKS_DIR` need not be — **hash-bound** | File issue, `type/security` |
 | **F10** — the wrappers' "sshd passes NO client env (`AcceptEnv` empty)" claim is unasserted | Ubuntu ships `AcceptEnv LANG LC_*`; `01-hardening.conf` pins neither `AcceptEnv` nor `PermitUserEnvironment`. Holds today by default rather than by assertion, while protecting the `REPO_ROOT` of an `rm -rf`. Composes with M27 — **hash-bound** | File issue, `type/security`; batch with F7 |
 
+| **F11** — give the five replace-class dispatch targets (`git-data-host-replace`, `registry-host-replace`, `registry-luks-recut`, `registry-region-migrate`, `inngest-host-replace`) an `environment:` with a main-only branch policy | Split out of Phase 4.2 during one-shot adjudication. The workflow's `confirm` description records the no-`environment:` posture for all five as deliberate, so this is a fleet-wide policy call, not a local fix — and it adds a required approval to destructive emergency paths. Without it, D9's replace interlock is supplied by the branch it polices; that limitation ships stated rather than hidden | File issue, `domain/engineering` |
+
 All of these are covered by AC33 in the Acceptance Criteria above; the labels `domain/legal`,
 `type/security`, `type/chore` and `domain/engineering` were each confirmed to exist at plan time via
 `gh label list`.
@@ -1443,8 +1471,16 @@ All of these are covered by AC33 in the Acceptance Criteria above; the labels `d
 **F7–F10 came from the security review and share one shape:** each is a real route to the erase
 capability that the five-link chain cannot see, because the chain is **static** and these are
 properties of a **live host** or of a file the host owns. That is not a defect in the gate's design —
-it is the honest boundary of what a static assertion buys, and it is why Phase 5.6's three-probe
-runtime verification is in scope rather than deferred.
+it is the honest boundary of what a static assertion buys.
+
+**Corrected during one-shot adjudication (2026-09-10).** An earlier revision of this paragraph said
+that boundary was closed by "Phase 5.6's three-probe runtime verification". There is no Phase 5.6 —
+Phase 5 runs 5.1-5.5 — and no such verification can exist in this PR, because **there is no git-data
+host to probe**: birthing it is the very thing this PR unblocks, and the rung-2 rehearsal host was
+destroyed. A runtime probe is only available *after* the dispatch. The boundary therefore stands
+open and is carried by F7-F10, which is why all four are filed rather than closed here. Stating it
+this way is the same discipline the plan applies everywhere else: name what the guard does not
+prove instead of implying a check that cannot run.
 
 ## Test Scenarios
 
