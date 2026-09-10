@@ -1208,17 +1208,54 @@ _docker_login_http_status() {
 #      cut the `dp.st.` prefix off the front of a token and leave an unredactable remainder as
 #      the tail — the redactor would then have nothing left to match on.
 # The TAIL and not the head, because a CLI error puts its cause at the end, not the front.
+#
+# #8016 reopened this helper's scope-lock. It now also sanitizes the blocking bwrap probe's
+# captured output, and that caller changes the threat model: the canary is started with
+# `--env-file`, which the daemon parses into Container.Config.Env and re-injects into the OCI
+# process spec of EVERY subsequent `docker exec`. So the probe's exec target runs with the live
+# prd secret set in its environment, and runc's populateProcessEnvironment can format an
+# offending entry into stderr as `%q=%q`. The single dp.-anchored rule below was scoped to
+# Doppler's own error text and does not cover that surface, hence the four added shape-anchored
+# rules. Shape-anchored and not name-anchored on purpose: a name list is a claim about which
+# vendors exist and is wrong the moment one is added.
+#
+# FAIL CLOSED. The pipeline runs under `set -o pipefail` inside the command substitution so a
+# mid-pipeline tool death propagates. Without it, a `sed` that dies after the control-strip but
+# before the redaction step lets the helper emit a PARTIALLY sanitized value and return 0 --
+# i.e. it leaks precisely when its own machinery is broken.
 _cred_err_tail() {
-  local _e
-  _e="$(printf '%s' "${1:-}" \
+  local _e _rc=0
+  _e="$(set -o pipefail; printf '%s' "${1:-}" \
     | LC_ALL=C tr -c '[:print:]' ' ' \
     | LC_ALL=C tr '"' "'" \
-    | sed -E 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]*/dp.REDACTED/g')"
+    | sed -E 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]*/dp.REDACTED/g' \
+    | sed -E 's/\b(sk|pk|rk)_(live|test)_[A-Za-z0-9]+/\1_\2_REDACTED/g' \
+    | sed -E 's/\bey[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/eyJ.REDACTED/g' \
+    | sed -E 's/\b(gh[pousr]|sbp|dop_v1|re|whsec|xox[baprs])_[A-Za-z0-9_-]+/\1_REDACTED/g')" || _rc=$?
+  if (( _rc != 0 )); then printf '%s' '<sanitize_failed>'; return 0; fi
   # Bash does NOT clamp a negative substring offset: `${_e: -200}` on a 12-byte string yields the
   # EMPTY string, not the whole string (the same trap `_login_hatch` documents and that
   # ci-deploy.test.sh pins). Hence the explicit length test rather than the idiomatic one-liner.
   if (( ${#_e} > 200 )); then _e="${_e:$(( ${#_e} - 200 ))}"; fi
   printf '%s' "$_e"
+}
+
+# _now_ms: milliseconds since the epoch, from bash's own EPOCHREALTIME.
+#
+# NOT `date +%s%3N`. The %3N precision suffix is a GNU coreutils extension, and this repo's
+# hosts do not all ship GNU date -- uutils coreutils 0.8.0 (measured) IGNORES the precision and
+# emits full nanoseconds, so `date +%s%3N` yields a 19-digit value there and a 13-digit value
+# under GNU. Differencing those silently produces a garbage duration on one of the two. Bash's
+# builtin has no such variance. It DOES honour LC_NUMERIC, so the separator class covers a
+# comma-decimal locale; the `date` arm is a bash-4 fallback only.
+_now_ms() {
+  local _t="${EPOCHREALTIME:-}"
+  if [[ -n "$_t" ]]; then
+    _t="${_t/[.,]/}"
+    printf '%s' "$(( 10#${_t} / 1000 ))"
+  else
+    printf '%s' "$(( $(date +%s) * 1000 ))"
+  fi
 }
 
 # _doppler_get_observed <SECRET_NAME> <DEST_VAR> (#7095): read one prd secret and MEASURE the
@@ -2945,9 +2982,46 @@ case "$COMPONENT" in
     # follow-up — it must not gate deploys until proven to pass on a healthy host.
     if [[ "$CANARY_HEALTHY" == "true" ]]; then
       echo "Verifying bwrap sandbox..."
-      if ! docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1; then
+      # #8016: the probe must report its own diagnosis.
+      #
+      # Until now the `2>&1` below sat inside an `if !`, which merged the probe's stderr into
+      # THIS SCRIPT's stdout -- a stream journald never sees. Only `logger -t "$LOG_TAG"` lines
+      # reach journald, so the 2026-09-09 v0.264.6 rollback emitted one bare line naming no
+      # cause and no exit code, and the deploy rolled back leaving zero evidence.
+      #
+      # `VAR="$(cmd)" || RC=$?` is the ONLY form that preserves the exit code. The intuitive
+      # `if ! VAR=$(cmd); then` detects the failure but `!` CONSUMES the status, so `$?` inside
+      # the branch reads 0 -- measured. The exit code is the deciding datum for every root-cause
+      # hypothesis (1 = bwrap's own failure or "no such container"; 126/127 = could not exec;
+      # 128+n = signalled, which is what a process that prints nothing looks like), so losing it
+      # would leave the message alone -- and the message was EMPTY both times this fired.
+      #
+      # The bwrap argv is deliberately untouched. See the NOTE block above: a prior change added
+      # --unshare-user --proc /proc here and rolled back every web-platform deploy.
+      BWRAP_RC=0
+      BWRAP_T0="$(_now_ms)"
+      BWRAP_ERR="$(docker exec soleur-web-platform-canary bwrap --new-session --die-with-parent --dev /dev --unshare-pid --bind / / -- true 2>&1)" || BWRAP_RC=$?
+      BWRAP_MS=$(( $(_now_ms) - BWRAP_T0 ))
+      BWRAP_CSTATE="$(docker inspect -f '{{.State.Status}}' soleur-web-platform-canary 2>/dev/null || true)"
+      BWRAP_CSTATE="${BWRAP_CSTATE:-unknown}"
+      # Re-emit on BOTH paths, before the branch. The probe passes ~97.6% of the time, and a
+      # PASS that still wrote to stderr is the early signal that precedes the next rollback --
+      # the old form surfaced that only incidentally, via the same 2>&1 that destroyed it on
+      # failure. Moving this into the failure arm would silently swallow it again.
+      if [[ -n "$BWRAP_ERR" ]]; then printf '%s\n' "$BWRAP_ERR"; fi
+      if (( BWRAP_RC != 0 )); then
         echo "Canary sandbox check failed, rolling back..."
-        logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG"
+        # err_chars is the PRE-sanitization length on purpose: it is the only discriminator
+        # between a truncated diagnostic and a complete one. Computing it from the sanitized
+        # value would report 200 beside a 200-character field and make truncation permanently
+        # undetectable.
+        BWRAP_ERR_SAN="$(_cred_err_tail "$BWRAP_ERR")"
+        # bwrap_err is free text and is therefore LAST on the line by construction (ADR-115
+        # trusted region): consumers anchor on bwrap_err="[^"]*"$ and must never substring-match
+        # k=v tokens across the line. `:-` is correct here -- an empty value MUST become the
+        # sentinel, because "bwrap failed silently" and "we discarded the message" are otherwise
+        # indistinguishable, and that distinction is the diagnosis.
+        logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG rc=$BWRAP_RC ms=$BWRAP_MS cstate=$BWRAP_CSTATE err_chars=${#BWRAP_ERR} bwrap_err=\"${BWRAP_ERR_SAN:-<empty>}\""
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
         # ENV_FILE trap still runs to clean up the secrets file.

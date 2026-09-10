@@ -541,8 +541,20 @@ case "$mode" in
     if [[ "${1:-}" == "exec" ]]; then
       for arg in "$@"; do
         if [[ "$arg" == *"bwrap"* ]]; then
-          echo "bwrap: No permissions to create new namespace" >&2
-          exit 1
+          # #8016: parameterised so one mode drives every probe shape the contract
+          # permits. `${VAR-default}` uses NO colon on purpose: an explicitly EMPTY
+          # MOCK_BWRAP_FAIL_STDERR must mean "the probe said nothing", which the
+          # `${VAR:-default}` form would silently overwrite with the default text.
+          # That silent shape is the one both production occurrences actually had.
+          if [[ -n "${MOCK_BWRAP_FAIL_SLEEP:-}" ]]; then
+            # /bin/sleep directly: create_mock_sleep installs a no-op `sleep` on PATH,
+            # which would swallow the duration this scenario exists to measure.
+            /bin/sleep "$MOCK_BWRAP_FAIL_SLEEP"
+          fi
+          printf '%s' "${MOCK_BWRAP_FAIL_STDERR-bwrap: No permissions to create new namespace}" >&2
+          # rc is parameterised too: rc=0 with stderr is the pass-with-chatter shape,
+          # which is 97.6% of runs and the early signal before the next rollback.
+          exit "${MOCK_BWRAP_FAIL_RC-1}"
         fi
       done
     fi
@@ -2379,6 +2391,220 @@ assert_canary_sandbox_failed_state() {
 }
 
 assert_canary_sandbox_failed_state
+
+# -- #8016: the blocking bwrap probe must self-report --------------------------------
+# The 2026-09-09 v0.264.6 rollback emitted exactly one journald line:
+#   DEPLOY_ROLLBACK: bwrap sandbox non-functional in <registry>/<image>:v0.264.6
+# and nothing else. `2>&1` inside the `if !` merged the probe's stderr into the
+# script's stdout, which journald never sees, so the deploy rolled back leaving zero
+# evidence of cause. These scenarios pin the fields that make the next occurrence
+# self-diagnosing.
+#
+# Anchor discipline (cq-assert-anchor-not-bare-token): every assertion SELECTS the one
+# line containing the rollback marker and then tests fields ON THAT LINE. A bare
+# `grep -q err_chars` over the whole capture would pass on any line anywhere. A second
+# DEPLOY_ROLLBACK emitter (canary-health) lives in the same file, which is why the
+# selector is the full 'bwrap sandbox non-functional' phrase and never DEPLOY_ROLLBACK
+# alone -- and why the match count is asserted to be exactly 1 rather than head -1'd
+# (head -1 stops at the first match and makes the count assertion vacuous).
+assert_blocking_probe_line() {
+  local desc="$1" stderr_val="$2" rc_val="$3" sleep_val="$4"
+  shift 4
+  # remaining args: extended-regex field assertions applied to the SELECTED line
+  TOTAL=$((TOTAL + 1))
+
+  local d state_file logger_file output
+  d=$(mktemp -d)
+  state_file="$d/ci-deploy.state"
+  logger_file="$d/logger.txt"
+  : > "$logger_file"
+
+  output=$(
+    # These exports live INSIDE this subshell on purpose. Hoisting
+    # MOCK_LOGGER_CAPTURE_FILE to file scope contaminates the four later scenarios
+    # that arm their own capture file.
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    export MOCK_BWRAP_FAIL_STDERR="$stderr_val"
+    export MOCK_BWRAP_FAIL_RC="$rc_val"
+    [[ -n "$sleep_val" ]] && export MOCK_BWRAP_FAIL_SLEEP="$sleep_val"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) || true
+
+  local marker='DEPLOY_ROLLBACK: bwrap sandbox non-functional'
+  local hits line
+  hits=$(grep -cF "$marker" "$logger_file" || true)
+
+  if [[ "$hits" != "1" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc (expected exactly 1 rollback line, got $hits)"
+    echo "        journald capture:"; sed 's/^/          /' "$logger_file"
+    rm -rf "$d"
+    return
+  fi
+
+  line=$(grep -F "$marker" "$logger_file")
+
+  local pat failed=0
+  for pat in "$@"; do
+    if ! printf '%s' "$line" | grep -qE -- "$pat"; then
+      failed=1
+      echo "  (missing field pattern: $pat)"
+    fi
+  done
+
+  if [[ "$failed" == "0" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $desc"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $desc"
+    echo "        line: $line"
+  fi
+
+  rm -rf "$d"
+}
+
+# Scenario 1 -- SPOKEN: the probe failed and said why. The message must ride the line.
+assert_blocking_probe_line \
+  "#8016 spoken: rc + message ride the rollback line" \
+  "bwrap: No permissions to create new namespace" 1 "" \
+  'rc=1' 'ms=[0-9]+' 'cstate=' 'err_chars=[0-9]+' \
+  'bwrap_err="[^"]*No permissions to create new namespace[^"]*"$'
+
+# Scenario 2 -- SILENT: the ACTUAL production shape. Zero bytes, signalled rc.
+# This is the scenario that makes the <empty> sentinel load-bearing: without it,
+# "bwrap failed silently" and "we discarded the message" render identically, and
+# that distinction IS the diagnosis.
+assert_blocking_probe_line \
+  "#8016 silent: rc=137 with zero output renders the <empty> sentinel" \
+  "" 137 "" \
+  'rc=137' 'err_chars=0' 'bwrap_err="<empty>"$'
+
+# Scenario 3 -- PASS-WITH-CHATTER: rc=0 but the probe wrote to stderr. 97.6% of runs.
+# The deploy must NOT roll back, so there must be NO rollback line at all.
+assert_probe_pass_chatter_reemits() {
+  TOTAL=$((TOTAL + 1))
+  local d state_file logger_file
+  d=$(mktemp -d); state_file="$d/ci-deploy.state"; logger_file="$d/logger.txt"; : > "$logger_file"
+  local output actual_exit
+  output=$(
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    export MOCK_BWRAP_FAIL_STDERR="bwrap: warning namespace fallback engaged"
+    export MOCK_BWRAP_FAIL_RC=0
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local rb; rb=$(grep -cF 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$logger_file" || true)
+  # The probe passed, so the deploy must not have rolled back for a sandbox reason,
+  # and the chatter must still have been re-emitted rather than swallowed.
+  if [[ "$rb" == "0" ]] && printf '%s' "$output" | grep -qF 'namespace fallback engaged'; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 pass-with-chatter: no rollback, probe output still re-emitted"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 pass-with-chatter: no rollback, probe output still re-emitted"
+    echo "        rollback_lines=$rb exit=$actual_exit"
+    echo "        output: $output"
+  fi
+  rm -rf "$d"
+}
+assert_probe_pass_chatter_reemits
+
+# Scenario 4 -- PURITY: the security gate. The canary runs with --env-file, so the
+# production secret set lives in its Config.Env and is re-injected into EVERY
+# docker exec. Capturing the probe's stream therefore opens a path from container
+# env -> journald -> Vector -> Better Stack. Nothing secret-shaped, and no control
+# byte that could forge a second journald record, may survive to any sink.
+#
+# The token fixtures are built by CONCATENATION so no contiguous secret-shaped
+# literal exists in this source file -- GitHub Push Protection scans the diff and
+# blocks the push on a synthesized value with a real token shape, even though it is
+# entirely fake (cq-test-fixtures-synthesized-only).
+assert_probe_output_purity() {
+  TOTAL=$((TOTAL + 1))
+  local d state_file logger_file
+  d=$(mktemp -d); state_file="$d/ci-deploy.state"; logger_file="$d/logger.txt"; : > "$logger_file"
+
+  local dp_tok sk_tok jwt_tok wh_tok dirty
+  dp_tok="dp.""st.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  sk_tok="sk_""live_AAAAAAAAAAAAAAAAAAAAAAAA"
+  jwt_tok="eyJ""hbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.AAAAAAAAAAAA"
+  wh_tok="whsec_""AAAAAAAAAAAAAAAAAAAAAAAA"
+  # CR (forges a second journald record), a double quote (breaks the quoted field),
+  # a non-ASCII byte, and a leak canary that must never appear in any sink.
+  dirty="SENTINEL_LEAK_CANARY $(printf 'a\rb') \"quoted\" caf\xc3\xa9 $dp_tok $sk_tok $jwt_tok $wh_tok"
+
+  local output
+  output=$(
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    export MOCK_LOGGER_CAPTURE_FILE="$logger_file"
+    export MOCK_BWRAP_FAIL_STDERR="$dirty"
+    export MOCK_BWRAP_FAIL_RC=1
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) || true
+
+  local line problems=""
+  line=$(grep -F 'DEPLOY_ROLLBACK: bwrap sandbox non-functional' "$logger_file" || true)
+
+  # Every raw token must be absent from BOTH sinks (journald capture and stdout).
+  local t
+  for t in "$dp_tok" "$sk_tok" "$jwt_tok" "$wh_tok"; do
+    if printf '%s' "$line" | grep -qF -- "$t"; then problems="$problems raw-token-in-journald"; fi
+  done
+  # A CR must not survive into the journald line -- it would forge a second record.
+  if printf '%s' "$line" | grep -q $'\r'; then problems="$problems CR-survived"; fi
+  # The field must remain parseable: bwrap_err is last, value carries no bare quote.
+  if ! printf '%s' "$line" | grep -qE 'bwrap_err="[^"]*"$'; then problems="$problems err-field-unparseable"; fi
+
+  if [[ -z "$problems" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 purity: no secret-shaped token, CR, or bare quote reaches any sink"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 purity: no secret-shaped token, CR, or bare quote reaches any sink"
+    echo "        problems:$problems"
+    echo "        line: $line"
+  fi
+  rm -rf "$d"
+}
+assert_probe_output_purity
+
+# Scenario 5 -- TRUNCATION provenance. err_chars reports the PRE-sanitization length,
+# so a 200-char field beside err_chars=4000 is visibly truncated. If err_chars were
+# computed from the sanitized value it would report 200 beside a 200-char value and
+# truncation would become permanently undetectable -- one field's provenance carries
+# the whole property.
+assert_blocking_probe_line \
+  "#8016 truncation: err_chars reports pre-sanitization length" \
+  "$(printf 'X%.0s' $(seq 1 4000))" 1 "" \
+  'err_chars=4000'
+
+# Scenario 6 -- SLOW: without this, ms has one value across the whole set and a
+# hardcoded ms=0 would satisfy every other scenario. Bounded, never exact.
+assert_blocking_probe_line \
+  "#8016 slow probe: ms reflects real elapsed time (>=1000)" \
+  "" 137 "1.1" \
+  'ms=[1-9][0-9]{3,}'
+
+# H4 -- the knobs must not leak into later scenarios. A hoisted export would
+# contaminate the four later scenarios that arm their own MOCK_LOGGER_CAPTURE_FILE.
+assert_probe_knobs_unset() {
+  TOTAL=$((TOTAL + 1))
+  if [[ -z "${MOCK_LOGGER_CAPTURE_FILE:-}" && -z "${MOCK_BWRAP_FAIL_STDERR:-}" \
+     && -z "${MOCK_BWRAP_FAIL_RC:-}" && -z "${MOCK_BWRAP_FAIL_SLEEP:-}" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: #8016 probe scenario knobs did not leak to file scope"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: #8016 probe scenario knobs did not leak to file scope"
+  fi
+}
+assert_probe_knobs_unset
 
 # Production container start failure (after canary passes) -> reason=production_start_failed
 assert_state_contains "production start failure writes reason=production_start_failed" \
