@@ -110,11 +110,48 @@ trap teardown EXIT INT TERM HUP
 newtmp() {
   local __var=$1 __d
   __d=$(mktemp -d -t membackstop.XXXXXXXX) || return 1
+  # `mktemp -d -t` is only absolute when TMPDIR is. This file exports
+  # TMPDIR="${TMPDIR:-/var/tmp}", which DEFAULTS an unset TMPDIR but passes an
+  # inherited relative one straight through -- and every fixture in this suite is
+  # rooted here, so one relative TMPDIR aims 22 `rm -rf`/redirect/`cp` operands at
+  # a CWD-relative tree. Validating at the chokepoint covers all eleven callers;
+  # the alternative is a guard at each of the 22 write sites, which is the form
+  # that drifts. Refuse rather than repair: a fixture root we cannot prove is a
+  # test we must not run.
+  case "$__d" in
+    /*) : ;;
+    *) printf 'newtmp: refusing a non-absolute fixture root %q (TMPDIR=%q)\n' \
+         "$__d" "${TMPDIR-}" >&2; return 1 ;;
+  esac
   TMPDIRS+=("$__d")
   printf -v "$__var" '%s' "$__d"
 }
 
 echo "memory-backstop: hook contract, fail-open branches, tree adoption, cap enforcement"
+
+# --------------------------------------------- newtmp refuses a relative root
+# Drives the chokepoint directly rather than asserting about its text. Measured
+# on this machine: `TMPDIR=reltmp mktemp -d -t membackstop.XXXXXXXX` returns
+# `reltmp/membackstop.DN0hD7to` with rc=0 -- mktemp does not object, so nothing
+# below newtmp would either. Both directions are pinned: a relative TMPDIR must
+# be REFUSED, and the ordinary absolute case must still SUCCEED, because a
+# chokepoint that refuses everything passes the first arm alone.
+_nt_probe=$(
+  cd "$(mktemp -d)" && mkdir -p reltmp && TMPDIR=reltmp
+  export TMPDIR
+  newtmp _nt_v >/dev/null 2>&1 && printf 'accepted:%s' "$_nt_v" || printf 'refused'
+)
+if [[ "$_nt_probe" == refused ]]; then
+  pass "newtmp refuses a fixture root made relative by an inherited TMPDIR"
+else
+  fail "newtmp ACCEPTED a relative fixture root ($_nt_probe) -- every write below it is CWD-relative"
+fi
+if newtmp _nt_ok && [[ "${_nt_ok:-}" == /* ]]; then
+  pass "newtmp still returns an absolute root in the ordinary case"
+else
+  fail "newtmp rejected a normal allocation (root=${_nt_ok:-unset}) -- the guard is over-broad"
+fi
+unset _nt_probe _nt_v _nt_ok
 
 if [[ ! -f "$HOOK" ]]; then
   fail "$HOOK does not exist"
@@ -275,12 +312,147 @@ for bad in 0 1; do
 done
 
 # =====================================================================
+# T5b — the traversal limit and the execpath predicate, SYNTHETICALLY (#7854)
+# =====================================================================
+# The end-to-end arm no longer pins MAX_WALK_HOPS, and cannot: it asks the hook
+# for its own verdict instead of re-deriving one, and the real ancestry depth of
+# a test run is not a reproducible number anyway (measured on this box: claude at
+# hop 3 from the suite standalone, at hop 8 under five nested shells, at hop 9
+# under `lefthook run pre-commit` -> `test-all.sh`). So the boundary is pinned
+# HERE, against a synthetic /proc, where it is the same number on every machine
+# and in CI.
+newtmp hopfx || exit 2
+mkdir -p "$hopfx/proc/100"
+printf 'Name:\tinit\nPid:\t100\nPPid:\t0\n' > "$hopfx/proc/100/status"
+# A TEN-process chain, 901 (leaf) .. 910, rooted at a pid-100 "init". Ten, not
+# eight or nine: the two interesting hops are 8 (the last the walk may examine)
+# and 9 (the first it must not), and a chain that ENDS at hop 9 cannot tell
+# "the walk stopped at its limit" from "the walk ran out of ancestors".
+for _i in $(seq 1 10); do
+  _pid=$((900 + _i)); _ppid=$((900 + _i + 1)); (( _i == 10 )) && _ppid=100
+  mkdir -p "$hopfx/proc/$_pid"
+  printf 'Name:\tsh\nPid:\t%s\nPPid:\t%s\n' "$_pid" "$_ppid" > "$hopfx/proc/$_pid/status"
+  printf 'sh\n' > "$hopfx/proc/$_pid/comm"
+done
+# Fixture-depth floor. A builder that emitted a SHORTER chain would make both
+# assertions below agree with a walk of any limit >= the chain length — the
+# guard's own dispatch, and the one mutation a delete-only battery cannot see.
+_chain_n=$(find "$hopfx/proc" -mindepth 1 -maxdepth 1 -type d -name '9??' | grep -c . || true)
+if [[ "$_chain_n" == "10" ]]; then
+  pass "T5b fixture chain is 10 processes — two deeper than MAX_WALK_HOPS=$MAX_WALK_HOPS, so hop 9 is genuinely beyond the limit"
+else
+  fail "T5b fixture chain is $_chain_n process(es), expected 10 — the hop-9 case would not be beyond the limit and would prove nothing"
+fi
+
+printf 'claude\n' > "$hopfx/proc/909/comm"   # hop 9 counting the leaf as hop 1
+if _out=$(discover_claude_pid 901 "$hopfx/proc" 2>/dev/null); then
+  fail "T5b claude at hop 9 was ADOPTED (returned '$_out') — the walk ran past MAX_WALK_HOPS=$MAX_WALK_HOPS"
+else
+  pass "T5b claude at hop 9 is NOT reached — MAX_WALK_HOPS=$MAX_WALK_HOPS is a boundary, not a suggestion"
+fi
+printf 'sh\n' > "$hopfx/proc/909/comm"
+printf 'claude\n' > "$hopfx/proc/908/comm"   # hop 8 — the last hop the walk may examine
+got=$(discover_claude_pid 901 "$hopfx/proc" 2>/dev/null || true)
+if [[ "$got" == "908 comm" ]]; then
+  pass "T5b claude at hop 8 IS reached (returned '$got') — the walk uses its whole budget"
+else
+  fail "T5b claude at hop 8 returned '$got', expected '908 comm' — the walk stops short of its own limit"
+fi
+printf 'sh\n' > "$hopfx/proc/908/comm"
+
+# The CLAUDE_CODE_EXECPATH predicate. No other fixture covers it, and it is the
+# reason the end-to-end arm invokes the hook with that variable UNSET.
+#
+# MEASURED, and it contradicts the premise this case was written from: the
+# predicate is plain string equality against the ancestor's /proc/<pid>/exe. It
+# does not inspect the path at all, so it cannot "refuse a generic interpreter".
+# Under an npm-global install whose execpath resolves to `.../bin/node`, a bare
+# `node` ancestor MATCHES and is adopted with signal `execpath`. That is the
+# hazard — and what removes it is unsetting the variable, which is what the
+# end-to-end invocation does. Both directions are pinned so neither half can rot.
+mkdir -p "$hopfx/bin"
+cp /bin/true "$hopfx/bin/node" 2>/dev/null || printf '#!/bin/sh\nexit 0\n' > "$hopfx/bin/node"
+ln -sf "$hopfx/bin/node" "$hopfx/proc/903/exe"
+got=$( export CLAUDE_CODE_EXECPATH="$hopfx/bin/node"; discover_claude_pid 901 "$hopfx/proc" 2>/dev/null || true )
+if [[ "$got" == "903 execpath" ]]; then
+  pass "T5b execpath predicate: a generic-interpreter CLAUDE_CODE_EXECPATH DOES adopt a plain node ancestor (returned '$got') — the hazard, reproduced"
+else
+  fail "T5b execpath predicate returned '$got', expected '903 execpath' — the predicate the e2e arm's unset defends against has changed shape"
+fi
+if ( unset CLAUDE_CODE_EXECPATH; discover_claude_pid 901 "$hopfx/proc" >/dev/null 2>&1 ); then
+  fail "T5b NEGATIVE: with CLAUDE_CODE_EXECPATH unset the node ancestor was STILL adopted — unsetting it in the e2e invocation buys nothing"
+else
+  pass "T5b NEGATIVE: with CLAUDE_CODE_EXECPATH unset the same node ancestor is not adopted"
+fi
+
+# =====================================================================
+# T5c — this suite asks the HOOK for the end-to-end precondition (#7854)
+# =====================================================================
+# Source-level, so CI runs it. The live arm these checks pin is skipped anywhere
+# there is no user bus, and a guard that only runs on the operator's box is not
+# a guard.
+_self="${BASH_SOURCE[0]}"
+_walk_hits=$(grep -nE 'for +_hop +in' "$_self" || true)
+_ppid_hits=$(grep -n '"/pro[c]/' "$_self" | grep -F 'PPid' || true)
+if [[ -z "$_walk_hits$_ppid_hits" ]]; then
+  pass "T5c no second /proc ancestry walk in this suite — the e2e gate reads the hook's own logged outcome"
+else
+  fail "T5c an independent ancestry walk has reappeared in this suite (#7854 — it starts one process shallower than the hook's own and the two disagree at depth):
+$_walk_hits$_ppid_hits"
+fi
+# The patterns below are REGEXES, not fixed strings, and each is written so that
+# it does not match its OWN source line — `CHIL[D]`, `\$` for a literal dollar.
+# A self-matching pattern is a guard that can never red: measured, the
+# fixed-string form of these stayed green under a mutant that deleted the
+# `-u CLAUDE_CODE_EXECPATH` and another that moved the log read back to CWD.
+if grep -qE 'the hook runs as a CHIL[D] of this suite' "$_self"; then
+  pass "T5c the measured rationale for having no second walk is still recorded above the e2e arm"
+else
+  fail "T5c the rationale comment explaining why there is no second walk is gone — deleted silently, the next reader restores the walk"
+fi
+if grep -qE 'env -u CLAUDE_CODE_EXECPATH CLAUDE_PROJECT_DIR="\$e2edir"' "$_self"; then
+  pass "T5c the real hook is invoked with CLAUDE_PROJECT_DIR at scratch and CLAUDE_CODE_EXECPATH unset"
+else
+  fail "T5c the e2e invocation no longer redirects CLAUDE_PROJECT_DIR to scratch and unsets CLAUDE_CODE_EXECPATH"
+fi
+# Not "an $E2E_LOG read exists somewhere" — three of them do, so deleting one
+# leaves that form green (measured). What must hold is that NO read of the
+# ledger is CWD-relative: `_repo_root()` derives the log file from
+# CLAUDE_PROJECT_DIR, so a read against the checkout parses a STALE line the
+# real session's last SessionStart wrote, and the gate then reports an outcome
+# no run in this suite produced.
+_cwd_reads=$(grep -nE 'tail -[0-9]+ "\.claude/\.memory-backstop' "$_self" || true)
+if [[ -z "$_cwd_reads" ]]; then
+  pass "T5c no CWD-relative read of the backstop ledger — every read follows the hook to the scratch dir it was pointed at"
+else
+  fail "T5c the e2e gate reads the ledger relative to CWD, not from the scratch dir the hook was pointed at — it would parse a stale line from the real checkout's previous run:
+$_cwd_reads"
+fi
+# Order is load-bearing and invisible to a delete-only mutation: a read hoisted
+# ABOVE the invocation reports the PREVIOUS run's outcome and the gate silently
+# decides on stale data.
+_inv_line=$(grep -nE '^ +run_real_hook "\$hookout' "$_self" | head -1 | cut -d: -f1)
+_read_line=$(grep -nE '^ +logline=\$\(tail -1 "\$E2E_LOG"' "$_self" | head -1 | cut -d: -f1)
+if [[ -n "$_inv_line" && -n "$_read_line" ]] && (( _read_line > _inv_line )); then
+  pass "T5c the e2e gate reads its log line (line $_read_line) AFTER invoking the hook (line $_inv_line)"
+else
+  fail "T5c e2e gate ordering: hook invocation at line '${_inv_line:-<not found>}', log read at line '${_read_line:-<not found>}' — the read must follow the invocation, or the gate decides on the previous run's outcome"
+fi
+
+# =====================================================================
 # T6 — fail-open branches (AC9): exit 0, one skipped line, distinct reasons
 # =====================================================================
 run_hook_isolated() { # <logdir> [env assignments...] -> writes log, echoes exit code
   local ld=$1; shift
   local rc
-  ( cd "$PWD" && env "$@" CLAUDE_PROJECT_DIR="$ld" "$PWD/$HOOK" </dev/null >"$ld/stdout" 2>"$ld/stderr" )
+  # `-u SOLEUR_DISABLE_MEMORY_BACKSTOP` clears the AMBIENT kill switch. It is the
+  # hook's FIRST gate, so an operator (or a mutation-battery arm) with it
+  # exported in their shell made every branch below log reason=disabled and the
+  # no_bus case failed on an environment fact rather than a defect — the same
+  # class as #7854, one file over. The `-u` is applied before the caller's own
+  # assignments, so the case that DOES test the kill switch still sets it.
+  ( cd "$PWD" && env -u SOLEUR_DISABLE_MEMORY_BACKSTOP "$@" CLAUDE_PROJECT_DIR="$ld" \
+      "$PWD/$HOOK" </dev/null >"$ld/stdout" 2>"$ld/stderr" )
   rc=$?
   echo "$rc"
 }
@@ -669,39 +841,34 @@ time.sleep(300)
     fail "T18 could not stop $TEST_SLICE"
   fi
 
-  # ---- End-to-end arm. Needs a SECOND, independent precondition: this suite
-  # must actually be running inside a Claude Code session. "A user bus exists"
-  # does NOT imply "a claude ancestor exists" — a detached runner (nohup, cron,
-  # systemd-run, a CI runner with a lingering user bus) has the former and not
-  # the latter, and the hook then correctly reports
-  # `outcome=skipped reason=claude_pid_not_found`. Asserting adoption there fails
-  # the suite for an environment fact rather than a defect. Measured: running
-  # scripts/test-all.sh under nohup did exactly this.
+  # ---- End-to-end arm. The REAL hook runs UNCONDITIONALLY; only the ADOPTION
+  # assertions are gated, and the gate is THE HOOK'S OWN LOGGED VERDICT.
   #
-  # Derived by walking /proc independently of the hook, so this gate cannot be
-  # satisfied by the same code it is gating.
-  E2E=no
-  _p=$$
-  for _hop in 1 2 3 4 5 6 7 8; do
-    [[ -r "/proc/$_p/status" ]] || break
-    _exe=$(readlink "/proc/$_p/exe" 2>/dev/null || true)
-    _comm=$(cat "/proc/$_p/comm" 2>/dev/null || true)
-    if [[ "$_comm" == "claude" || "$_exe" == */claude/versions/* ]]; then E2E=yes; break; fi
-    _p=$(awk '/^PPid:/{print $2}' "/proc/$_p/status" 2>/dev/null) || break
-    [[ -n "$_p" && "$_p" != "0" && "$_p" != "1" ]] || break
-  done
-
-  if [[ "$E2E" != "yes" ]]; then
-    for t in T8-adoption T9-tree-adoption T9-grandchild T10-ac7-sweep T15-idempotency \
-             T15-terminal-scope-stable AC18-reentry-resweep; do
-      skip "$t" "user bus present but not running inside a Claude Code session"
-    done
-  else
-
-  live_mark T8-adoption; live_mark T9-tree-adoption; live_mark T9-grandchild
-  live_mark T10-ac7-sweep; live_mark T15-idempotency
-  live_mark T15-terminal-scope-stable; live_mark AC18-reentry-resweep
-  # ---- T8/T9/T10/T15/AC18: exercise the REAL hook end-to-end, LAST.
+  # WHY THERE IS NO SECOND ANCESTRY WALK HERE — DO NOT RESTORE ONE (#7854).
+  # This block used to derive "are we inside a Claude Code session?" by walking
+  # /proc itself, 8 hops, argued as deliberate independence so that the gate
+  # "cannot be satisfied by the same code it is gating". That argument is sound
+  # for a CORRECTNESS gate. This is an ENVIRONMENT PRECONDITION, and the two are
+  # not the same thing: the operative fact is not "is a claude process reachable
+  # from somewhere?" but "will the hook, run from where this suite runs it,
+  # apply?" — and only the hook can answer that, because the answer depends on
+  # the hook's own starting depth.
+  #
+  # MEASURED: the hook runs as a CHILD of this suite, so an independent walk
+  # starts one process SHALLOWER than the hook's own and the two can always
+  # disagree by exactly one hop. Under `git commit` -> lefthook -> `sh` ->
+  # `test-all.sh` -> this suite, they did: the suite's walk reached `claude` at
+  # hop 8 and set its gate to yes, the hook's walk — one deeper — needed hop 9,
+  # exceeded MAX_WALK_HOPS and correctly logged
+  # `outcome=skipped reason=claude_pid_not_found`, and the suite then asserted an
+  # adoption that correctly never happened, failing the pre-commit gate on an
+  # environment fact. Matching the hook's traversal LIMIT does not fix this: the
+  # walks would still start one process apart, so their ORIGINS stay different.
+  #
+  # The depth boundary itself is still pinned — synthetically, in T5b, where it
+  # is reproducible. Here we snapshot, invoke, snapshot, and read the hook's own
+  # log line.
+  live_mark T10-ac7-sweep
   newtmp before || exit 2
   UROOT="/sys/fs/cgroup/user.slice/user-$UIDN.slice/user@$UIDN.service"
   snapshot() { # <outfile>
@@ -717,21 +884,53 @@ time.sleep(300)
   }
   snapshot "$before/snap"
 
+  # Every invocation of the real hook in this arm goes through ONE helper, so the
+  # project dir, the identity predicates and the log file stay identical across
+  # the first run and the two re-entry runs below.
+  #
+  # CLAUDE_PROJECT_DIR at scratch: `_repo_root()` derives BOTH the log file and
+  # the stamp file from it, so this keeps `_maybe_never_worked`'s one-shot nag
+  # stamp — and the lock file — out of the real checkout. The consequence is that
+  # the log line MUST be read back from this same directory; reading
+  # `.claude/.memory-backstop.jsonl` relative to CWD would parse a STALE line
+  # from the real checkout's previous run, i.e. a gate reading the wrong file,
+  # which is exactly the class of defect this arm was rewritten to close.
+  #
+  # CLAUDE_CODE_EXECPATH unset: it is the one identity predicate that is plain
+  # string equality against an ancestor's exe (T5b measures this). Under an
+  # npm-global install resolving to `.../bin/node` it would let the hook adopt a
+  # bare `node` ancestor, and with it up to MAX_TREE descendants, on any box with
+  # a shallower tree than the author's.
+  newtmp e2edir || exit 2
+  mkdir -p "$e2edir/.claude"
+  E2E_LOG="$e2edir/.claude/.memory-backstop.jsonl"
+  run_real_hook() { # [stdout-file] [stderr-file]
+    env -u CLAUDE_CODE_EXECPATH CLAUDE_PROJECT_DIR="$e2edir" \
+      "$PWD/$HOOK" </dev/null >"${1:-/dev/null}" 2>"${2:-/dev/null}"
+  }
+
+  nagged_before=absent
+  [[ -e ".claude/.memory-backstop.stamp.nagged" ]] && nagged_before=present
+
   newtmp hookout || exit 2
-  "$PWD/$HOOK" </dev/null >"$hookout/stdout" 2>"$hookout/stderr"
+  run_real_hook "$hookout/stdout" "$hookout/stderr"
   hook_rc=$?
 
   newtmp after || exit 2
   snapshot "$after/snap"
 
-  logline=$(tail -1 ".claude/.memory-backstop.jsonl" 2>/dev/null || true)
+  logline=$(tail -1 "$E2E_LOG" 2>/dev/null || true)
   outcome=$(printf '%s' "$logline" | jq -r '.outcome // ""' 2>/dev/null || true)
+  reason=$(printf '%s' "$logline" | jq -r '.reason // ""' 2>/dev/null || true)
   scope_name=$(printf '%s' "$logline" | jq -r '.scope // ""' 2>/dev/null || true)
 
+  # UNCONDITIONAL — both are legitimate claims on the DECLINE path as well as the
+  # adoption path, and the old gate ran neither whenever its walk said "not in a
+  # session". Asserting them here is a straight coverage gain.
   if [[ "$hook_rc" == "0" ]]; then
-    pass "T8 real hook exits 0 (outcome=$outcome)"
+    pass "T8 real hook exits 0 (outcome=$outcome reason=$reason)"
   else
-    fail "T8 real hook exited $hook_rc"
+    fail "T8 real hook exited $hook_rc (outcome=$outcome reason=$reason)"
   fi
 
   # T7 — stdout hygiene: no busctl job object path leaked into session context.
@@ -741,8 +940,39 @@ time.sleep(300)
     pass "T7 hook stdout carries no busctl job object path"
   fi
 
+  # AC17 — the redirect actually held: nothing the hook writes lands in the real
+  # checkout. Compared against a before-snapshot rather than asserted absent, so
+  # a nag stamp a genuine SessionStart left earlier is not read as this suite's.
+  nagged_after=absent
+  [[ -e ".claude/.memory-backstop.stamp.nagged" ]] && nagged_after=present
+  if [[ "$nagged_before" == "$nagged_after" ]]; then
+    pass "T8/AC17 the real checkout's .memory-backstop.stamp.nagged is unchanged ($nagged_after) — CLAUDE_PROJECT_DIR redirect held"
+  else
+    fail "T8/AC17 the hook wrote a nag stamp into the REAL checkout ($nagged_before -> $nagged_after) — CLAUDE_PROJECT_DIR was not honoured"
+  fi
+
   cpid=$(printf '%s' "$logline" | jq -r '.pid // ""' 2>/dev/null)
-  if [[ "$outcome" == "applied" && -n "$scope_name" && -n "$cpid" ]]; then
+  # THE GATE: the hook's own outcome, not a single reason string. The hook has
+  # ELEVEN decline reasons (disabled, no_busctl, no_jq, no_bus, cap_out_of_range,
+  # claude_pid_not_found, no_terminal_scope, concurrent_apply,
+  # adoption_unverified, scope_caps_unverified, fleet_caps_unverified). Keying on
+  # `claude_pid_not_found` alone would still fail this suite for the DOCUMENTED
+  # opt-out `SOLEUR_DISABLE_MEMORY_BACKSTOP=1` and for `concurrent_apply`, which
+  # is a race with a real SessionStart rather than a defect.
+  if [[ "$outcome" == "applied" ]]; then
+    live_mark T8-adoption; live_mark T9-tree-adoption; live_mark T9-grandchild
+    live_mark T15-idempotency; live_mark T15-terminal-scope-stable
+    live_mark AC18-reentry-resweep
+    # The old gate folded these two into its condition, so an `applied` line with
+    # no scope or no pid silently took the DECLINE branch. They are a defect, not
+    # a precondition: assert them rather than routing around them. Keeping them
+    # out of the gate is also what lets an `applied` line with no `reason` field
+    # at all still exercise this arm.
+    if [[ -n "$scope_name" && -n "$cpid" ]]; then
+      pass "T8 applied line carries both a scope ($scope_name) and a pid ($cpid)"
+    else
+      fail "T8 hook logged outcome=applied but scope='$scope_name' pid='$cpid' — every readback below would silently read an empty path"
+    fi
     # DERIVE the scope's cgroup path from the adopted process rather than
     # constructing it from the slice names: constructing it encodes an assumption
     # about the hierarchy that, if wrong, makes every readback below silently
@@ -818,8 +1048,11 @@ time.sleep(300)
               printf '%s\n' "$p"
             done <<< "$indep" | sort)
 
-    # NOW sweep, with the snapshot already fixed.
-    "$PWD/$HOOK" </dev/null >/dev/null 2>&1
+    # NOW sweep, with the snapshot already fixed. Through the same helper: a
+    # bare invocation here would re-introduce CLAUDE_CODE_EXECPATH and could
+    # adopt a DIFFERENT pid than the first run, and would write the real
+    # checkout's log while the assertions below read the scratch one.
+    run_real_hook
 
     # Only PIDs still alive after the sweep can be asserted on: one that exited
     # in between is absent from cgroup.procs for a reason that is not a defect.
@@ -859,10 +1092,10 @@ $(printf '%s\n' "$missing_list" | head -5 | while IFS= read -r m; do
     fi
 
     bindsto_before=$(sysd_prop "$scope_name" BindsTo)
-    ts_before=$(tail -1 ".claude/.memory-backstop.jsonl" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
-    "$PWD/$HOOK" </dev/null >/dev/null 2>&1
+    ts_before=$(tail -1 "$E2E_LOG" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
+    run_real_hook
     bindsto_after=$(sysd_prop "$scope_name" BindsTo)
-    ts_after=$(tail -1 ".claude/.memory-backstop.jsonl" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
+    ts_after=$(tail -1 "$E2E_LOG" 2>/dev/null | jq -r '.terminal_scope // ""' 2>/dev/null)
 
     if [[ "$parked" == "yes" ]]; then
       late_after=$(cut -d: -f3 < "/proc/$LATE/cgroup" 2>/dev/null)
@@ -898,7 +1131,10 @@ $(printf '%s\n' "$missing_list" | head -5 | while IFS= read -r m; do
       fail "T15/AC10 re-entry produced $nscopes units for $scope_name"
     fi
   else
-    fail "T8 real hook did not apply (outcome='$outcome' reason='$(printf '%s' "$logline" | jq -r '.reason // ""' 2>/dev/null)')"
+    for t in T8-adoption T9-tree-adoption T9-grandchild T15-idempotency \
+             T15-terminal-scope-stable AC18-reentry-resweep; do
+      skip "$t" "the hook itself declined: outcome='${outcome:-<no log line>}' reason='${reason:-}' — run this suite STANDALONE to exercise the adoption arm; the hook runs one process deeper than this suite, so at lefthook depth claude sits outside its ${MAX_WALK_HOPS}-hop limit"
+    done
   fi
 
   # T10 / AC7 — before/after filesystem sweep.
@@ -923,7 +1159,6 @@ $(diff "$before/snap.mem" "$after/snap.mem" | grep -E '^[<>]' | grep -vE '/soleu
   else
     fail "T10/AC7 ~/.config/systemd/user.control/ CHANGED — a persistent drop-in was written (runtime=true was dropped)"
   fi
-  fi   # end E2E gate
 fi
 
 # Reconcile the ledger on EVERY path. A label that was neither run nor skipped
@@ -944,7 +1179,7 @@ _skipnote=""
 if [[ "$LIVE" != "yes" ]]; then
   _skipnote="SKIP: no user systemd bus — $skipped_live live assertion(s) not run"
 elif [[ "$skipped_live" -gt 0 ]]; then
-  _skipnote="SKIP: user bus present but not running inside a Claude Code session — $skipped_live end-to-end assertion(s) not run"
+  _skipnote="SKIP: the hook declined to adopt (see the per-test reason above) — $skipped_live end-to-end adoption assertion(s) not run"
 fi
 _livetag=$([[ "$LIVE" == yes ]] && { [[ "$skipped_live" -gt 0 ]] && echo "yes, e2e SKIPPED" || echo "yes"; } || echo "SKIPPED")
 

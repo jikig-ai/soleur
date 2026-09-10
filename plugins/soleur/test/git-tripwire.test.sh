@@ -224,12 +224,25 @@ else
   bad "vitest.config.ts does NOT register the tripwire globalSetup"
 fi
 # shell registration — anchored on the executable prelude, NOT a bare token. `grep -q GIT_DIR`
-# over this file is satisfied by the comment block that explains the prelude, so deleting the
-# whole executable body left that assertion passing.
-if grep -qE '^[[:space:]]*for _v in GIT_DIR[[:space:]]' "$REPO_ROOT/plugins/soleur/test/test-helpers.sh"; then
-  ok "test-helpers.sh carries the executable shell prelude (loop, not a comment)"
+# over these files is satisfied by the comment block that explains the prelude, so deleting the
+# whole executable body would leave a bare-token assertion passing.
+#
+# Since #7849 the prelude is reached through a chokepoint rather than inlined: test-helpers.sh
+# SOURCES plugins/soleur/test/lib/git-fixture-env.sh, which owns the loop and the fixture-env
+# builder over one array. Both hops are asserted, because either one alone is satisfiable while the
+# chain is broken -- a source line pointing at a file with no loop, or a loop in a file nothing
+# sources.
+if grep -qE '^[[:space:]]*source[[:space:]].*lib/git-fixture-env\.sh"?$' \
+     "$REPO_ROOT/plugins/soleur/test/test-helpers.sh"; then
+  ok "test-helpers.sh sources the fixture-env chokepoint (executable source, not a comment)"
 else
-  bad "test-helpers.sh has NO executable shell prelude"
+  bad "test-helpers.sh does NOT source lib/git-fixture-env.sh — the shell prelude is unreachable"
+fi
+if grep -qE '^[[:space:]]*for _v in "\$\{GIT_LOCATION_VARS\[@\]\}"' \
+     "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"; then
+  ok "lib/git-fixture-env.sh carries the executable shell prelude (loop, not a comment)"
+else
+  bad "lib/git-fixture-env.sh has NO executable shell prelude"
 fi
 
 printf '\n=== summary ===\n'
@@ -247,7 +260,7 @@ printf '  %d passed, %d failed, %d assertions\n' "$PASS" "$FAIL" "$ASSERTIONS"
 # ratcheted). `${x:-0}` is parameter expansion, not the `$(` command substitution that widening
 # refuses, so the line is carried into the mutant.
 VITEST_ARM_RAN=${VITEST_ARM_RAN:-0}
-MIN_ASSERTIONS=$((23 + VITEST_ARM_RAN))
+MIN_ASSERTIONS=$((24 + VITEST_ARM_RAN))
 if (( ASSERTIONS < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %d assertions < %d — the suite examined less than it must\n' \
     "$ASSERTIONS" "$MIN_ASSERTIONS" >&2

@@ -18,6 +18,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$SCRIPT_DIR/../../.."
+
+# Redirect incident telemetry BEFORE any case runs (#7853).
+#
+# This suite drives the REAL gdpr-gate.sh twice against a deliberately-stale fixture NOTICE. That
+# gate emits on every run -- measured, 8 rows: two gdpr-gate-staleness warns, two denies, two
+# hr-gdpr-gate-on-regulated-data-surfaces applied, and two gdpr-gate-cron-binding rows. Without this
+# they land in the operator LIVE .claude/.rule-incidents.jsonl, where three consumers read them as a
+# record of what actually happened: compound Phase 1.5 admits deny/bypass rows as deviation
+# evidence, rule-metrics-aggregate.sh rolls them into the COMMITTED rule-metrics.json, and CASE_A_PATH
+# below names a regulated-data surface that has never existed in this repo.
+#
+# Exported once here rather than per-invocation. Every polluting suite measured on 2026-09-03
+# already knew about the variable and set it on SOME calls and not others -- partial isolation greps
+# identically to full isolation, which is exactly why those gaps survived a static check.
+# shellcheck source=../../../.claude/hooks/lib/test-incident-sandbox.sh
+source "$REPO_ROOT/.claude/hooks/lib/test-incident-sandbox.sh"
 GATE="$REPO_ROOT/plugins/soleur/skills/gdpr-gate/scripts/gdpr-gate.sh"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures/gdpr-gate-stale"
 FIXTURE_NOTICE="$FIXTURE_DIR/NOTICE"

@@ -506,19 +506,36 @@ fi
 
 # Case 14: the emitted rule_id must be exempt in the aggregator, or the first
 # real event hard-fails the metrics run (exit 5) via the orphan gate.
+#
+# Rewritten for #7853. These used to grep for two hand-maintained exemption stanzas
+# (`startswith("net-issue-flow")`, `startswith("cost-of-filing-")`). Those stanzas are gone: the
+# orphan gate now asks whether an id CLAIMS corpus membership by carrying a section prefix, so these
+# ids are exempt structurally rather than by enumeration. Grepping for a deleted stanza would test
+# the mechanism instead of the property, and would have to be rewritten again at the next refactor.
+#
+# The property is tested against the aggregator's OWN regex, extracted from it rather than restated
+# here. That keeps this a genuine cross-file parity check: if the aggregator ever widens its
+# predicate to capture these ids, this reds, which is exactly the failure the original cases
+# existed to prevent.
 AGG="$REPO_ROOT/scripts/rule-metrics-aggregate.sh"
 cases=$((cases + 1))
-if [[ -r "$AGG" ]] && grep -qF 'startswith("net-issue-flow")' "$AGG"; then
-  pass "net-issue-flow rule_id is exempted in rule-metrics-aggregate.sh"
+PREFIX_RE="$(grep -oE 'test\("\^\(hr\|wg\|cq\|rf\|pdr\|cm\)-"\)' "$AGG" 2>/dev/null | head -1)"
+if [[ -n "$PREFIX_RE" ]]; then
+  pass "aggregator carries the section-prefix orphan predicate"
 else
-  fail "net-issue-flow rule_id would be an orphan -> aggregator exit 5"
+  fail "aggregator has NO section-prefix predicate -- the structural exemption below is unfounded"
 fi
-cases=$((cases + 1))
-if [[ -r "$AGG" ]] && grep -qF 'startswith("cost-of-filing-")' "$AGG"; then
-  pass "cost-of-filing-* rule_ids are exempted in rule-metrics-aggregate.sh"
-else
-  fail "cost-of-filing-* would be orphans -> aggregator exit 5"
-fi
+# Derive the bracketed alternation from the extracted predicate so the shell test uses the same
+# prefixes the aggregator does, rather than a second copy that can drift.
+PREFIX_ALT="$(printf '%s' "$PREFIX_RE" | sed -E 's/^test\("\^\(//; s/\)-"\)$//')"
+for rid in "net-issue-flow" "cost-of-filing-inline-cheaper"; do
+  cases=$((cases + 1))
+  if [[ -n "$PREFIX_ALT" ]] && [[ "$rid" =~ ^($PREFIX_ALT)- ]]; then
+    fail "$rid carries a section prefix -> the aggregator would treat it as an orphan (exit 5)"
+  else
+    pass "$rid carries no section prefix -> structurally exempt from the orphan gate"
+  fi
+done
 
 # ===========================================================================
 # Cases 15+ — the mandated-filing exemption.
