@@ -86,8 +86,8 @@ Every shape below is the one measured in **M20/M25** — do not paraphrase it.
 
 ## 7. Follow-ups, decision record and PR body
 
-- [ ] 7.1 `gh label list --limit 200 | grep -E '^(priority/p3-low|type/chore|type/security|domain/engineering)\b'`; substitute the nearest existing label if one is absent.
-- [ ] 7.2 File: "delete or gate the Sentry region-discovery loop" — carries M6/M7, the six invocation sites, the stub-only-evidence cost, and the two sub-questions (add `us.sentry.io` deliberately? tighten the audit script's chokepoint to the singleton?).
+- [x] 7.1 `gh label list --limit 200 | grep -E '^(priority/p3-low|type/chore|type/security|domain/engineering)\b'`; substitute the nearest existing label if one is absent.
+- [x] 7.2 Filed as #8042: "delete or gate the Sentry region-discovery loop" — carries M6/M7, the six invocation sites, the stub-only-evidence cost, and the two sub-questions (add `us.sentry.io` deliberately? tighten the audit script's chokepoint to the singleton?).
 - [ ] 7.3 File: "adjudicate `SENTRY_ORG` against the org id Gate 1 returns, and adjudicate `SENTRY_PROJECT`" — closes the parameterised-set residual and the `-g`-mitigated request fan-out.
 - [ ] 7.4 File: "route a `sentry-audit-gate.yml` failure to a human, and adjudicate its inline `curl` destination" — plus the secret-pairing recovery runbook.
 - [ ] 7.5 Comment on **#7898** correcting its §4 "no current offender uses that seam" claim; attach M9, M18 and M24. Note its census says 67 files while the D baseline holds 82.
