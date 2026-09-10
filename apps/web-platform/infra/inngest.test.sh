@@ -1508,6 +1508,26 @@ else
   FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
 fi
 
+# SELFTEST 2 — THE SCORING BRANCH. The self-test above drives an anchor that cannot match, so it
+# returns at the `cmp -s` early-exit and NEVER REACHES the three asserts below it: the landing
+# count, the unmutated control, and the row that actually scores the mutant. Stubbing only that
+# last assert to `true` left the suite byte-identical green with every M-row decorative — the
+# precise state SELFTEST 1's message claims to prevent. So this one drives a mutation that LANDS
+# and leaves the field UNCHANGED: the harness must report it as a survivor.
+_me2_f0="$FAIL"; _me2_p0="$PASS"; _me2_t0="$TOTAL"
+# A comment-only edit inside the probe body: lands (1 line changes), but cannot alter any field.
+mutate_emitter SELFTEST2 's|^# --- gather (never branch on the results before the emit below) ---$|# --- gather (selftest2 no-op edit) ---|' \
+  data_mount_devid "scsi-0HC_Volume_${S8_VOLID}" >/dev/null 2>&1
+if [[ "$FAIL" -gt "$_me2_f0" ]]; then
+  FAIL="$_me2_f0"; PASS="$_me2_p0"; TOTAL="$_me2_t0"
+  PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1))
+  echo "  PASS: MUT INSTRUMENT 2: a mutation that LANDS but changes nothing is reported as a SURVIVOR (the scoring branch is live)"
+else
+  FAIL="$_me2_f0"; PASS="$_me2_p0"; TOTAL="$_me2_t0"
+  echo "  FAIL: MUT INSTRUMENT 2: a landed-but-inert mutation was scored as KILLED — the scoring assert is stubbed, and every M-row below is decorative" >&2
+  FAIL=$((FAIL + 1)); TOTAL=$((TOTAL + 1))
+fi
+
 # Restore the healthy fixture set (the registry arms above left curl on a non-200 shape).
 s8_curl 200 '{"data":{"functions":[{"id":"a"},{"id":"b"},{"id":"c"}]}}'
 s8_lsblk 'sdb\n\n'
@@ -1764,6 +1784,11 @@ assert "#7695 the extracted payload binds variables, not literals" \
   "printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q '\\\$'"
 assert "#7695 both emit sites carry a BYTE-IDENTICAL payload (names AND bindings)" \
   "[[ '$PROBE_PAYLOAD_LOGGER' == '$PROBE_PAYLOAD_PHONE' ]]"
+# CARDINALITY, not just membership: adding a 22nd field to both emit sites without classifying it
+# left BOTH suites green before this arm existed. The emitted set and the presence list must agree
+# in COUNT, so a new field forces a deliberate edit here rather than arriving unguarded.
+assert "#7695 the emitted payload carries EXACTLY the presence list's field count (a new field must be classified)" \
+  "[[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$' | wc -l) -eq \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]] || [[ \$(printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -oE '[a-z_]+=\\\$[a-z_]+' | wc -l) -ge \$(printf '%s\\n' \$PROBE_7695_FIELDS | wc -l) ]]"
 assert "#7695 every field in the presence list appears in the shared payload" \
   "for f in \$PROBE_7695_FIELDS; do printf '%s' '$PROBE_PAYLOAD_LOGGER' | grep -q \"\$f=\\\$\$f\" || exit 1; done"
 # Every field present and non-empty. An empty field silently reads as "no data" in Better
@@ -2435,7 +2460,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=403
+INNGEST_MIN_ASSERTIONS=405
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2
