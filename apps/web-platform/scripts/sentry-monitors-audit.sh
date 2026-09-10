@@ -111,6 +111,21 @@ set -euo pipefail
 
 : "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
 : "${SENTRY_ORG:=jikigai}"
+# DESTINATION PIN (#7797). SENTRY_ORG is env-settable and is interpolated into
+# the HOST of a credentialed request (`${SENTRY_ORG}.sentry.io`) as well as into
+# org-scoped API paths, so an attacker-supplied value redirects a Bearer token to
+# an org they control with the destination pin otherwise fully intact. Refuse
+# anything but the two slugs this fleet actually uses: `jikigai` (this script's
+# historical default, still the US-org value) and `jikigai-eu` (the DE org, which
+# is `variable "sentry_org"`'s default in infra/sentry/variables.tf — the two
+# genuinely disagree, which is why this is a set and not one literal).
+case "$SENTRY_ORG" in
+  jikigai|jikigai-eu) ;;
+  *)
+    echo "ERROR: SENTRY_ORG='${SENTRY_ORG}' is not a recognised org slug (expected jikigai or jikigai-eu). Refusing to send a credentialed request to an unpinned destination. See #7797." >&2
+    exit 1
+    ;;
+esac
 SENTRY_PROJECT="${SENTRY_PROJECT:-}"
 
 # Transport seam. Tests override this (or shadow `curl` on PATH) to script a
@@ -438,7 +453,7 @@ sentry_next_cursor() {  # $1 header-dump path
 api_host="${SENTRY_API_HOST:-}"
 if [[ -z "$api_host" ]]; then
   for candidate in "${SENTRY_ORG}.sentry.io" eu.sentry.io de.sentry.io sentry.io; do
-    http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+    http=$(curl --disable --noproxy '*' -s --max-time 10 -o /dev/null -w '%{http_code}' \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       "https://${candidate}/api/0/users/me/" 2>/dev/null || echo 000)
     if [[ "$http" == "200" ]]; then
@@ -501,7 +516,7 @@ if [[ -z "${SENTRY_FIXTURE_MONITORS:-}" ]]; then
     echo "ERROR: Gate 3 (audit_write_probe) failed — POST release returned HTTP ${gate3_http}, expected 201 (208 branch dropped per Kieran P1-4). Token may lack project:releases scope (Admin level required). Refs #3861." >&2
     exit 1
   fi
-  curl -s --max-time 10 -X DELETE \
+  curl --disable --noproxy '*' -s --max-time 10 -X DELETE \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     "https://${api_host}/api/0/organizations/${SENTRY_ORG}/releases/${probe_ver}/" \
     -o /dev/null 2>/dev/null || true
