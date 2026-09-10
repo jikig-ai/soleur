@@ -2,6 +2,7 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:tes
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
+import { gitFixtureEnv } from "../plugins/soleur/test/lib/git-fixture-env";
 
 const HOOK_PATH = join(
   import.meta.dirname,
@@ -18,21 +19,35 @@ const HOOK_PATH = join(
 // (foreground branch) instead of a per-PPID log file — the assertions
 // below grep stderr, and the log-file branch is covered by
 // .claude/hooks/pre-merge-rebase-headless.test.sh.
-const {
-  GIT_DIR: _d,
-  GIT_INDEX_FILE: _i,
-  GIT_WORK_TREE: _w,
-  CLAUDECODE: _c,
-  ...cleanEnv
-} = process.env;
+// #7849: the environment comes from the shared helper, not a hand-rolled destructure.
+//
+// The previous form named THREE git-location variables and removed only those. That is the
+// name-list failure mode `git-clean-env.ts` warns about in capitals: it cannot reach
+// GIT_TEMPLATE_DIR or GIT_EXEC_PATH (both proven to execute arbitrary code), GIT_SSH (a
+// GIT_SSH_COMMAND prefix rule structurally cannot match it -- the prefix is longer than the name),
+// or the GIT_TRACE family (which appends to an absolute path, i.e. a write outside the fixture).
+// It was correct for what it listed and blind to everything it did not, which is precisely the
+// fourth-spelling problem #7849 was filed about.
+//
+// The helper is anchored on a scratch directory whose PARENT is tmpdir(), so the computed ceiling
+// is tmpdir() -- byte-identical to what this file pinned by hand, now derived rather than restated,
+// and arriving alongside the prefix sweep, a synthesized identity, config hermeticity and the
+// signing override.
+const ENV_ANCHOR = mkdtempSync(join(tmpdir(), "pmr-env-anchor-"));
+
+// Incident telemetry goes to a sandbox, not the operator's ledger (#7853). This suite drives the
+// real pre-merge-rebase hook, whose deny paths emit rows carrying the fixture's own command string.
+const INCIDENT_SANDBOX = mkdtempSync(join(tmpdir(), "pmr-incidents-"));
+mkdirSync(join(INCIDENT_SANDBOX, ".claude"), { recursive: true });
+
 // `Record<string, string | undefined>` matches `process.env`'s actual shape
 // and lets `beforeAll` mutate `GIT_ENV.PATH` without an `as` cast. See the
 // Signal-3 gh-stub setup below.
 const GIT_ENV: Record<string, string | undefined> = {
-  ...cleanEnv,
-  GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: "/dev/null",
-  GIT_CEILING_DIRECTORIES: tmpdir(),
+  ...gitFixtureEnv(ENV_ANCHOR),
+  CLAUDECODE: undefined,
+  INCIDENTS_REPO_ROOT: INCIDENT_SANDBOX,
+  SOLEUR_TEST_INCIDENT_ROOT: INCIDENT_SANDBOX,
 };
 
 // Inline timeout for the two Signal-3 review-issue tests that previously
