@@ -40,6 +40,22 @@ GATE="${ROOT}/tests/scripts/lib/git-data-birth-readiness-gate.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Byte-identical copy of the repo-wide fixture-containment guard. It is duplicated per file
+# rather than sourced because the consumers are standalone scripts; the P1a suite asserts every
+# tracked copy is identical, so do not reformat it. `_authmap_root` writes a fixture tree from a
+# caller-supplied path, and a RELATIVE path there would write into the caller's live checkout
+# instead of the temp root — the containment class fixture-relative-assert.test.sh ratchets.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
 passes=0
 fails=0
 pass() { passes=$((passes + 1)); printf '  ok   %s\n' "$1"; }
@@ -1010,6 +1026,7 @@ printf '\n=== git_data_authorization_map_gate (#8009) ===\n\n'
 # Builds a canonical root at $1. Callers mutate one link, then assert.
 _authmap_root() {
   local d="$1"
+  assert_fixture_dir "$d"
   mkdir -p "$d/modules/git-data-userdata"
   cat > "$d/cloud-init-git-data.yml" <<'YML'
 #cloud-config
