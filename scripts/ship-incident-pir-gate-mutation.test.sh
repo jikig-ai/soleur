@@ -137,8 +137,13 @@ elif mid == "M9":                                    # revert the fence boundary
     old = '{f=!f; print ""; next}'
     assert s.count(old) == 1; s = s.replace(old, "{f=!f; next}", 1)
 elif mid == "M10":                                   # delete the fail-toward-PIR guard
-    assert s.count("if ! haystack=\"$(cat \\") == 1
-    s = s.replace("if ! haystack=\"$(cat \\", "haystack=\"$(cat \\", 1)
+    # Anchor tracks the production line. It was `$(cat \` until #7987 moved corpus
+    # construction into the script (`--pr` mode); the mutation's SEMANTICS are
+    # unchanged -- delete the fail-toward-PIR guard -- only the literal moved.
+    # The assert is what caught the rename: the row reported "mutation engine
+    # failed" rather than passing on an un-applied mutation.
+    assert s.count("if ! haystack=\"$(emit_corpus \\") == 1
+    s = s.replace("if ! haystack=\"$(emit_corpus \\", "haystack=\"$(emit_corpus \\", 1)
     i = s.index("{print}')\"; then\n")
     j = s.index("fi\n", i) + len("fi\n")
     s = s[:i] + "{print}')\"\n" + s[j:]
