@@ -1,4 +1,5 @@
 ---
+title: "Runbook: Supabase platform log queries"
 category: observability
 tags: [supabase, logs, clickhouse, management-api, coverage-verdict, dsar, gdpr]
 date: 2026-08-26
@@ -120,3 +121,7 @@ red guard as a finding to read, never as a gate that will stop the merge for you
   silently answers a wide `--since` with a much shorter span).
 - [`breach-access-log-investigation.md`](./breach-access-log-investigation.md) — the procedure
   that consumes this helper when the question is whether exposed credentials were used.
+- [`workflow-cost-query.md`](./workflow-cost-query.md) — fleet-wide per-workflow spend. A
+  **different mechanism**: application tables via `psql`, not platform logs via ClickHouse.
+  Cross-linked because "query Supabase for X" reasonably lands here first, and reaching for
+  `supabase-logs-query.sh` to answer a cost question wastes a cycle.
