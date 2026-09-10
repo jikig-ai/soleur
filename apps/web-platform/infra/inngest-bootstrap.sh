@@ -543,6 +543,12 @@ cat > "$PROBE_SCRIPT" <<'PROBESCRIPTEOF'
 # one-sided change is a silent no-op.
 LOG_TAG="inngest-server-probe"
 
+# DRIFT-PINNED (#8015). Byte-identical to inngest-registry-probe.sh's FUNCTIONS_GQL_QUERY and to
+# the copy inlined in inngest-cutover-flip.sh; inngest-cutover-flip.test.sh pins all three. At
+# COLUMN ZERO deliberately -- that pin greps `^readonly FUNCTIONS_GQL_QUERY=`, so an indented
+# copy inside this heredoc would be invisible to it and the pin would be vacuous for this file.
+readonly FUNCTIONS_GQL_QUERY='query RegistryProbe { functions { id } }'
+
 # --- gather (never branch on the results before the emit below) ---
 # `|| true` on every capture: this probe must ALWAYS reach its logger call. A non-zero curl
 # under a future `set -e`, or a missing systemctl, must degrade a FIELD, never the event.
@@ -631,7 +637,7 @@ cutover_flag="$(printf '%s' "$cutover_flag" | tr -d '[:space:]')"
 # before the emit loses the whole row — including vector_active and the Vector-down fallback.
 # `du` on a sick block device blocks in D-state and `redis-cli` has no default deadline, so an
 # unbounded call here goes dark exactly when the disk is the thing being measured.
-probe_schema=7
+probe_schema=8
 data_mount="${PROBE_DATA_MOUNT:-/mnt/data}"
 latch_dir="${PROBE_LATCH_DIR:-${data_mount}/inngest-cutover}"
 
@@ -647,6 +653,11 @@ redis_keys=n/a
 redis_key_patterns=n/a
 # Same reason: the emit is unconditional, so this must be bound on EVERY path.
 redis_expires=n/a
+# #8017/#8015 probe_schema=8. Same unconditional-emit contract as every field above: bound here
+# so no code path can leave one of them unset and silently drop a field from the row.
+data_mount_devid=n/a
+data_mount_base=n/a
+registry_fns=n/a
 
 case "$host_role" in
 dedicated)
@@ -654,6 +665,124 @@ dedicated)
   # never read it as clearance.
   data_mount_src="$(timeout 5 findmnt -no SOURCE "$data_mount" 2>/dev/null | head -1 || true)"
   [ -n "$data_mount_src" ] || data_mount_src=__UNREADABLE__
+
+  # ── #8017 probe_schema=8: an identity the gate can actually compare ────────────────────────
+  # G14 compared this field -- findmnt's KERNEL device name, e.g. /dev/sdb -- against a
+  # /dev/disk/by-id/... path. /proc/self/mountinfo records the resolved target, never the
+  # symlink, so that arm was UNREACHABLE: only the /dev/mapper/inngest-redis arm could ever
+  # match, and that device does not exist until the recut G14 gates. Every dispatch returned
+  # mount_mismatch. The gate runs off-host and cannot readlink this host's /dev, so the host
+  # resolves and emits the identity instead.
+  #
+  # PLACED ABOVE the inner `case "$data_mount_src"` deliberately. That case's __UNREADABLE__ arm
+  # binds three fields and falls through everything else -- which is how redis_key_patterns and
+  # redis_expires legitimately keep their `n/a` default on that path. A resolution block inside
+  # its `*)` sub-arm would leave data_mount_devid=n/a on a host_role=dedicated row: the WEB-arm
+  # sentinel on a dedicated row, which G14 would then refuse while pointing at the volume
+  # attachment. Bound once, here, on every dedicated path.
+  byid_dir="${PROBE_BYID_DIR:-/dev/disk/by-id}"
+  case "$data_mount_src" in
+  __UNREADABLE__)
+    # Nothing mounted. data_mount_base stays n/a so the states stay distinguishable downstream:
+    # src=__UNREADABLE__ base=n/a          -> no mount
+    # src=/dev/sdb      base=__UNREADABLE__ -> the resolution itself broke
+    # base resolved     devid=__NOMATCH__   -> mounted from a device that is not this volume
+    # Without base, __UNREADABLE__ on devid is a three-way collision with three remedies.
+    data_mount_devid=__UNREADABLE__
+    ;;
+  *)
+    # `lsblk -s` walks the INVERSE tree: through a device-mapper node to its backing device AND
+    # through a partition to its parent disk, in one documented flag. util-linux -- the same
+    # package as the findmnt above, which the live host demonstrably runs. Measured on 2.41.3:
+    # `-d` does NOT collapse the output to one line, so this takes the LAST non-empty row (the
+    # base) and strips lsblk's tree-drawing prefix rather than trusting NR==1.
+    data_mount_base="$(timeout 5 lsblk -nso NAME "$data_mount_src" 2>/dev/null \
+      | awk 'NF{l=$1} END{if(l!=""){gsub(/^[^[:alnum:]]+/,"",l); print l}}' || true)"
+    case "$data_mount_base" in
+    '' | *[!A-Za-z0-9_.-]*) data_mount_base=__UNREADABLE__ ;;
+    esac
+    case "$data_mount_base" in
+    __UNREADABLE__) data_mount_devid=__UNREADABLE__ ;;
+    *)
+      # Reverse-map inside the HETZNER NAMESPACE ONLY. Measured: a whole-by-id walk returns
+      # THREE aliases for one device (an eui form and two model forms), so an unconstrained map
+      # is multi-valued and would need an arbitrary tiebreak. Counting the matches instead of
+      # asserting single-valuedness is what keeps this a measurement rather than a premise --
+      # the #8005 class, which cost five host replaces by shipping an unverified assumption.
+      _devid_hits=0
+      _devid_match=""
+      for _alias in "$byid_dir"/scsi-0HC_Volume_*; do
+        [ -e "$_alias" ] || continue
+        _devid_target="$(readlink -f "$_alias" 2>/dev/null || true)"
+        [ -n "$_devid_target" ] || continue
+        case "$_devid_target" in
+        */"$data_mount_base")
+          _devid_hits=$((_devid_hits + 1))
+          _devid_match="${_alias##*/}"
+          ;;
+        esac
+      done
+      if [ "$_devid_hits" -eq 0 ]; then
+        data_mount_devid=__NOMATCH__
+      elif [ "$_devid_hits" -gt 1 ]; then
+        data_mount_devid=__AMBIGUOUS__
+      else
+        data_mount_devid="$_devid_match"
+      fi
+      ;;
+    esac
+    ;;
+  esac
+  # Charset guard, same contract redis_key_patterns carries: the emit is space-separated, so a
+  # value carrying whitespace would silently split into extra fields at the downstream parser.
+  case "$data_mount_devid" in
+  '' | *[[:space:]]*) data_mount_devid=__UNREADABLE__ ;;
+  esac
+  case "$data_mount_base" in
+  '' | *[[:space:]]*) data_mount_base=__UNREADABLE__ ;;
+  esac
+
+  # ── #8015 probe_schema=8: registry evidence, so G18 stops passing vacuously ───────────────
+  # The #7674 probe grants PASS to a host that answers /health and owns NOTHING -- which is the
+  # signature of a diagnostic boot. `registry_fns` is the field that separates "serving" from
+  # "listening": 0 is a MEASUREMENT (a server that answers and owns nothing), never an absence,
+  # and keeping it distinct from __UNREADABLE__ is the whole point. The consumer's positive
+  # discriminator becomes server_active=active AND http_code=200 AND registry_fns matching
+  # ^[1-9][0-9]*$ in the SAME row, so a diagnostic boot reads 0 and correctly fails to PASS.
+  #
+  # Bound HERE, above the inner case, for D1's reason: inside the `*)` sub-arm it would inherit
+  # the same defect (n/a -- the web-arm sentinel -- on a dedicated row), and a registry count has
+  # nothing to do with whether /mnt/data is readable. That would make #7674 permanently
+  # uncloseable whenever the mount is unreadable.
+  #
+  # jq is a HOST fact, not an image fact: it arrives via cloud-init-inngest.yml's `packages:`
+  # list, and this probe body calls it zero times today. So the parse is guarded rather than
+  # assumed -- a host without jq reports a measurement failure, not a silent zero.
+  #
+  # Both calls carry 2>/dev/null, and that is a shipping hazard rather than tidiness: this row's
+  # tag is allowlisted to Better Stack, and unredirected jq stderr on a malformed body echoes the
+  # OFFENDING INPUT -- an untrusted HTTP response -- into journald and thence to a third-party
+  # warehouse. Deliberate asymmetry with the redis arm, stated so it is not "fixed": no GQL error
+  # text is ever shipped. A future revision wanting a snippet must pass it through the same
+  # `tr -c 'A-Za-z0-9' '_' | cut -c1-48` shape probe_scan_err uses.
+  if [ "$http_code" != "200" ]; then
+    # Not serving at all. The count would be meaningless, and a 0 here would read as the
+    # diagnostic-boot signature rather than as "we never asked".
+    registry_fns=__UNREADABLE__
+  elif ! command -v jq >/dev/null 2>&1; then
+    registry_fns=__UNREADABLE__
+  else
+    _reg_body="$(timeout 10 curl -s --max-time 10 -H 'Content-Type: application/json' \
+      --data-binary "$(jq -nc --arg q "$FUNCTIONS_GQL_QUERY" '{query:$q}' 2>/dev/null)" \
+      http://127.0.0.1:8288/v0/gql 2>/dev/null || true)"
+    # jq indexes null as null, so an {"errors":…,"data":null} envelope yields type "null" and
+    # lands on the non-numeric arm rather than being read as a count of zero.
+    registry_fns="$(printf '%s' "$_reg_body" \
+      | jq -r '(.data.functions // null) | if type == "array" then length else "nan" end' 2>/dev/null || true)"
+    case "$registry_fns" in
+    '' | *[!0-9]*) registry_fns=__UNREADABLE__ ;;
+    esac
+  fi
 
   case "$data_mount_src" in
   __UNREADABLE__)
@@ -855,11 +984,73 @@ dedicated)
             # `_noerr` distinguishes "genuinely empty" from "errored but exited 0".
             redis_key_patterns="__SCANEMPTY_$(printf '%s' "$probe_dbs" | tr -c 'a-z0-9' '-')_${probe_scan_err:-noerr}__"
           else
+            # #8013 probe_schema=8 -- IDENTIFIER-aware, not brace-aware. The two-segment
+            # reduction shipped segment 2 VERBATIM, so any key whose second segment IS the
+            # identifier leaked it whole. Measured against the live row: this field carried
+            # a 26-character ULID to Better Stack, a third-party warehouse, on every fire.
+            #
+            # The issue quoted the braced shape, and fixing only that shape leaves the identical
+            # leak standing -- measured, `estate:<ULID>:runs:1` with no brace anywhere reduces to
+            # `estate:<ULID>:*` under the old rule. So the test is on the SEGMENT, not the brace.
+            # The brace collapse still happens, because it keeps the tag readable as a category,
+            # but it is no longer the thing carrying the privacy property.
+            #
+            # No interval expressions ({26}, {16,}): older mawk does not support them and a
+            # silently-non-matching regex would make this whole fix vacuous. Verified identical
+            # output under mawk 1.3.4 and busybox awk. No apostrophes anywhere below -- one
+            # would close the surrounding awk '...' block.
             redis_key_patterns="$(printf '%s\n' "$probe_scan_out" | awk '
+              function ishex(s,   i, ch) {
+                if (s == "") return 0
+                for (i = 1; i <= length(s); i++) { ch = substr(s, i, 1); if (index("0123456789abcdef", ch) == 0) return 0 }
+                return 1
+              }
+              function isdigits(s,   i, ch) {
+                if (s == "") return 0
+                for (i = 1; i <= length(s); i++) { ch = substr(s, i, 1); if (index("0123456789", ch) == 0) return 0 }
+                return 1
+              }
+              function isulid(s,   i, ch) {
+                if (length(s) != 26) return 0
+                for (i = 1; i <= 26; i++) { ch = substr(s, i, 1); if (index("0123456789ABCDEFGHJKMNPQRSTVWXYZ", ch) == 0) return 0 }
+                return 1
+              }
+              function isuuid(s) {
+                if (length(s) != 36) return 0
+                if (substr(s,9,1) != "-" || substr(s,14,1) != "-" || substr(s,19,1) != "-" || substr(s,24,1) != "-") return 0
+                return ishex(substr(s,1,8)) && ishex(substr(s,10,4)) && ishex(substr(s,15,4)) && ishex(substr(s,20,4)) && ishex(substr(s,25,12))
+              }
+              function isid(s) {
+                if (isulid(s)) return 1
+                if (isuuid(s)) return 1
+                if (length(s) >= 16 && ishex(s)) return 1
+                if (length(s) >= 6 && isdigits(s)) return 1
+                return 0
+              }
               NR > 5000 { truncated = 1; exit }
               $0 != "" {
-                n = split($0, seg, ":")
-                if (n >= 2) { k = seg[1] ":" seg[2] ":*" } else { k = seg[1] }
+                key = $0
+                # Redis takes the FIRST {...} WHEREVER it appears, so this is not anchored at
+                # the start of the key -- an anchored rule would be narrower than the property.
+                ob = index(key, "{")
+                if (ob > 0) {
+                  after = substr(key, ob + 1)
+                  cb = index(after, "}")
+                  if (cb > 0) {
+                    tag = substr(after, 1, cb - 1)
+                    nt = split(tag, tseg, ":")
+                    newtag = ""
+                    for (ti = 1; ti <= nt; ti++) {
+                      if (isid(tseg[ti])) continue
+                      newtag = newtag (newtag == "" ? "" : ":") tseg[ti]
+                    }
+                    if (newtag == "") newtag = "*"
+                    key = substr(key, 1, ob - 1) "{" newtag "}" substr(after, cb + 1)
+                  }
+                }
+                n = split(key, seg, ":")
+                s1 = isid(seg[1]) ? "*" : seg[1]
+                if (n >= 2) { s2 = isid(seg[2]) ? "*" : seg[2]; k = s1 ":" s2 ":*" } else { k = s1 }
                 gsub(/[^A-Za-z0-9_:.*-]/, "?", k)
                 if (!(k in c)) { order[++distinct] = k }
                 c[k]++
@@ -888,7 +1079,7 @@ dedicated)
 esac
 
 # --- emit: unconditional, one event, all fields. NO `if` may precede this line. ---
-logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes"
+logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns"
 
 # --- second channel, AFTER the unconditional emit above (ADR-117 unaffected) ---
 # vector_active is the ONE field whose only off-box path is Vector itself: this marker reaches
@@ -905,7 +1096,7 @@ logger -t "$LOG_TAG" "SOLEUR_INNGEST_SERVER_PROBE http_code=$http_code server_ac
 # branching BEFORE the unconditional emit, not after it. Fail-open: the emitter exits 0 on any
 # error and is absent on the co-located web host, so `[ -x ]` guards it.
 if [ "$vector_active" != "active" ] && [ -x /usr/local/bin/inngest-boot-phone-home.sh ]; then
-  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes" || true
+  /usr/local/bin/inngest-boot-phone-home.sh inngest-server-probe-vector-down "http_code=$http_code server_active=$server_active vector_active=$vector_active redis_active=$redis_active uptime_s=$uptime_s boot_id=$boot_id image_ref=$image_ref instance_id=$instance_id cli_version=$cli_version cutover_flag=$cutover_flag probe_schema=$probe_schema host_role=$host_role flush_latched=$flush_latched redis_keys=$redis_keys redis_expires=$redis_expires redis_key_patterns=$redis_key_patterns data_mount_src=$data_mount_src data_bytes=$data_bytes data_mount_base=$data_mount_base data_mount_devid=$data_mount_devid registry_fns=$registry_fns" || true
 fi
 exit 0
 PROBESCRIPTEOF
@@ -924,7 +1115,8 @@ SyslogIdentifier=inngest-server-probe
 # Type=oneshot disables the start timeout by default; the probe makes bounded calls before its
 # unconditional emit, so bound the unit too — a hung probe holds the unit `activating`, and
 # OnUnitActiveSec cannot re-fire while it is, silently ending the hourly marker.
-# Budget (#7695): curl 5 + curl 3 + inngest 10 + doppler 10 + findmnt 5 + du 15 + redis-cli 5
+# Budget (#8017/#8015): curl 5 + curl 3 + inngest 10 + doppler 10 + findmnt 5 + du 15 + redis-cli 5
+# + lsblk 5 + registry curl 10 = 68s worst case
 # = 53s of bounded work, so 60 no longer leaves headroom. Raised to 120 rather than trimming a bound:
 # a bound that fires degrades ONE field, the unit timeout loses the WHOLE row.
 TimeoutStartSec=120
