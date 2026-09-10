@@ -733,9 +733,28 @@ try:
     # activity is a liveness poll on the RELEASE run, so it overlaps the release
     # arm rather than following it. Including it here is what stops a future
     # ceiling raise on that job from silently escaping the budget.
-    # ci_declared_path is deliberately ABSENT from this max(): see the block
-    # above. This is the DOWNSTREAM-OF-CI path -- what starts once the
-    # workflow_run event fires -- which is the only arm this workflow bounds.
+    # ci_declared_path is NOT in this sum, and the reason changed at #8020.
+    #
+    # It WAS excluded because it was unassertable: 19 ci.yml jobs sat at the
+    # platform 360m default, making the term 720m and the arithmetic meaningless.
+    # #8020 is now closed -- every job declares a ceiling derived from measured
+    # duration -- so the term is real, and adding it is the correct quantity:
+    # the deploy arm fires when CI COMPLETES, so CI is serial before this chain.
+    #
+    # It is still excluded because adding it makes B9 RED, and correctly so:
+    #   ci 70 + max(release 60, resolve-target 60) + migrate 30 + verify 15
+    #     + deploy 90 = 265  >  DRIFT_SUSTAINED_THRESHOLD_MIN 207
+    # Under await-ci the CI wait was CAPPED at the ceiling of that job, so the
+    # declared path was 195 and fit. #5806 removes the cap by design, and the
+    # declared path genuinely no longer fits the alert threshold -- so the alert
+    # can fire before the pipeline has legitimately finished.
+    #
+    # That is a THRESHOLD-SIZING decision (raise 207, or lower the 60m poll
+    # ceiling on resolve-target which is provably dead, or both), not a
+    # mechanical fix, and it is carried in the session handover rather than
+    # filed -- the measurement is done, so it is a decision, not research.
+    # (No apostrophes in this block: it is interpolated inside a single-quoted
+    # shell string, where one apostrophe ends the string.)
     crit = max(release_ceiling, job_timeout("resolve-target"))
     for j in ("migrate", "verify-migrations", "deploy"):
         crit += job_timeout(j)
@@ -1139,9 +1158,12 @@ run_part_b() {
   # that would ever notice -- 3.5h after the fact.
   #
   # A COUNT, not a list, is the ratchet: renaming a job must not red this, but
-  # adding an unbounded one must. The baseline is the measured state at #5806,
-  # recorded so it can only be lowered. Lowering it is the fix (#8020).
-  CI_UNDECLARED_BASELINE=19
+  # adding an unbounded one must. The baseline was 19 at #5806 and is now ZERO —
+  # #8020 was closed inline in the same PR by DERIVING each ceiling from measured
+  # job durations (10 successful main runs; every job under 4.2m against the
+  # platform's 360m default). At zero this stops being a ratchet and becomes an
+  # absolute floor: any new unbounded job reds.
+  CI_UNDECLARED_BASELINE=0
   if [[ "${X_CI_UNDECLARED_COUNT:-x}" =~ ^[0-9]+$ ]]; then
     if [[ "${X_CI_UNDECLARED_COUNT}" -le "$CI_UNDECLARED_BASELINE" ]]; then
       pass "B9b ci.yml jobs without timeout-minutes (${X_CI_UNDECLARED_COUNT}) <= baseline ${CI_UNDECLARED_BASELINE} (#8020)"

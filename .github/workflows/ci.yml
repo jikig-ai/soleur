@@ -76,6 +76,9 @@ concurrency:
 
 jobs:
   readme-counts:
+    # 15m — measured max 0.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -90,6 +93,9 @@ jobs:
   # via env: + quoted "$BASE_REF" per workflow-injection guidance — see
   # https://docs.github.com/en/actions/security-guides/security-hardening-for-github-actions.
   detect-changes:
+    # 15m — measured max 0.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     outputs:
       docs: ${{ steps.filter.outputs.docs }}
@@ -144,6 +150,9 @@ jobs:
   # report on merge_group leaves the queue entry pending forever (see the header
   # note on this workflow's merge_group trigger).
   credential-path-guard:
+    # 15m — measured max 0.5m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       # Do NOT add sparse-checkout or a paths filter here. The linter exits 0
@@ -158,6 +167,9 @@ jobs:
   # ADVISORY job — absent from scripts/required-checks.txt and the ruleset, so a
   # PR can merge with it red. See the #6882 note inside for what moved out.
   lint-bot-statuses:
+    # 15m — measured max 0.7m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     # Pinned + checksum-verified, same shape as the gitleaks install below. Variables are
     # workflow-internal literals; no untrusted input is interpolated into the run: blocks.
@@ -328,6 +340,9 @@ jobs:
   #
   # The full checkout (no paths filter) is load-bearing: --repo-sweep is whole-repo.
   encryption-posture:
+    # 15m — measured max 0.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -335,6 +350,9 @@ jobs:
         run: python3 scripts/lint-encryption-posture.py --repo-sweep
 
   lint-conversations-update-callsites:
+    # 15m — measured max 0.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -362,6 +380,9 @@ jobs:
   # ALLOWED_PATHS ever gains an infra/github path, reproduce this gate in the
   # action's Phase-4 ceiling BEFORE that lands.
   marketplace-manifest-guard:
+    # 15m — measured max 0.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -381,6 +402,9 @@ jobs:
   # Replaces the rejected ESLint custom rule (per DHH cut #1, simplicity #6).
   # CODEOWNERS pins the allowlist file so this gate cannot be self-defeated.
   service-role-allowlist-gate:
+    # 15m — measured max 0.8m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -399,6 +423,9 @@ jobs:
   # Eleventy mirror prose body is identical after normalisation. The
   # T&C SHA bypass via TC_VERSION bump is preserved.
   tc-document-sha-guard:
+    # 15m — measured max 0.4m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -422,6 +449,9 @@ jobs:
   # ## Consequences headings. See AC18 in 2026-05-25-feat-anthropic-leader-
   # loop-pr-b-plan.md. No user-controlled inputs; static script call.
   adr-ordinals:
+    # 15m — measured max 0.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -442,6 +472,9 @@ jobs:
   # origin main` so the merge-base (NOT origin/main tip) is resolvable on
   # pull_request / push / merge_group alike.
   rule-body-lint:
+    # 15m — measured max 0.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -454,6 +487,9 @@ jobs:
           python3 scripts/lint-rule-bodies.py --check --base "$BASE"
 
   rule-metrics-shape:
+    # 15m — measured max 0.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -484,6 +520,9 @@ jobs:
   # The pin step below is the durable fix; see
   # knowledge-base/project/learnings/2026-05-22-npm-version-pin-required-for-lockfile-sync-gate.md.
   lockfile-sync:
+    # 15m — measured max 1.4m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -582,6 +621,9 @@ jobs:
   # node:22-slim deploy image and byte-diff-fail the committed fixture. bwrap is
   # REPLACED by an in-process PATH shim during capture (no real bubblewrap needed).
   sandbox-canary-capture-gate:
+    # 15m — conditional job, no run in the 10-run sample (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -627,6 +669,9 @@ jobs:
   # caught here. Creds-gated (one paid Haiku turn); skipped when the injection
   # inputs or the SDK are unchanged.
   plugin-root-propagation-gate:
+    # 15m — conditional job, no run in the 10-run sample (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -734,6 +779,9 @@ jobs:
   # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
   # of inside the post-merge Docker build (#2347/#2401 outage).
   web-platform-build:
+    # 15m — measured max 2.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -1241,6 +1289,9 @@ jobs:
   # Phase F #6325 — Grok fidelity CI: grok inspect contract + /go golden-path eval.
   # Job name `grok-fidelity` is load-bearing once pinned in ruleset-ci-required.tf.
   grok-fidelity:
+    # 15m — measured max 0.5m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -1433,6 +1484,9 @@ jobs:
   # for this job, root for critical-css-gate); the two jobs are deliberately
   # decoupled and a "tidying" unification will break browser-binary lookup.
   e2e:
+    # 20m — measured max 4.2m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     container:
       # Pinned by both tag (greppable version) AND multi-arch manifest-list
@@ -1482,6 +1536,9 @@ jobs:
   # deploy-docs.yml's `deploy` job — both gates assert the same FOUC contract
   # via the same screenshot-gate.mjs script.
   critical-css-gate:
+    # 15m — measured max 1.3m over 10 successful main runs (#8020);
+    # >=3x headroom. Was UNDECLARED, i.e. GitHub's 360m default.
+    timeout-minutes: 15
     needs: detect-changes
     if: needs.detect-changes.outputs.docs == 'true'
     runs-on: ubuntu-latest

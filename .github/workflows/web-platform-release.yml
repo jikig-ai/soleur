@@ -715,10 +715,13 @@ jobs:
           # against a 72m share — so the invariant is FALSE, and the previous
           # `70 <= 72` green was an artifact of measuring to-`test` instead.
           #
-          # This does NOT hard-fail: the undeclared ceilings are pre-existing
-          # (#8020), not introduced here, and reddening every deploy over them
-          # would punish the wrong commit. It refuses to report a green it cannot
-          # justify — the warning names the jobs, which is the remedy.
+          # As of #8020 (closed inline in this PR) every ci.yml job declares a
+          # ceiling derived from measured duration, so this branch is not taken
+          # today and the invariant below is ASSERTED. The branch stays because
+          # the condition it guards is a property of ci.yml, not of this file: a
+          # future job added without a ceiling silently re-creates the 360m
+          # default, and a green derived from invented numbers is worse than a
+          # warning that names them.
           if [ "$N_UNDECLARED" -gt 0 ]; then
             echo "::warning::CI budget headroom is UNASSERTED: ${N_UNDECLARED} ci.yml job(s) declare no timeout-minutes, so GitHub's 360m default applies to each and the declared path through the run (720m) exceeds the ${CI_BUDGET_MIN}m share the ${THRESHOLD}m pipeline budget allows CI. The measured soft ceiling below still applies. Undeclared: $(printf '%s' "$CI_UNDECLARED" | tr '\n' ' ')(#8020)"
           else
