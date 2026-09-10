@@ -616,7 +616,7 @@ model {
   // zot's own container log. This edge was missing entirely, so the model described the
   // warehouse path (redacted, private) and not the public one (permanent, world-readable).
   // Both layers of the scrub (ADR-211) exist to bound what crosses THIS edge.
-  github -> publicReader "Publishes the zot restart-loop alarm verdict into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer (ADR-211 Layer 1 — INERT until the next registry-host-replace, so this edge is currently guarded by the denylist alone)."
+  github -> publicReader "Publishes the zot restart-loop alarm verdict, and since #8038 the weekly issue-flow measurement, which updates one standing public issue with aggregate counts (find-or-update, never re-filed) into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer (ADR-211 Layer 1 — INERT until the next registry-host-replace, so this edge is currently guarded by the denylist alone)."
   // ---- Sentry — the LARGER of two alerting planes (#6436, ADR-031) --------
   // Three emitters + a paging exit. It is NOT the only exit: `betterstack` pages
   // independently (see its edge to founder) — that second source exists so a Sentry

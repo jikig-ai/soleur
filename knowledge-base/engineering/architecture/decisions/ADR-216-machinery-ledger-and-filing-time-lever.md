@@ -183,7 +183,30 @@ out of existence while looking like a clean run.
 The gate asserts that a filing *named* a surface and *measured* a size. It
 cannot assert the named consequence is true. The design bet is that exit 1 makes
 honest compliance cheaper than gaming, and that `Fix-Size:` is not gameable by
-adjective. The weekly rate measurement is the backstop: if the rate does not
+adjective.
+
+**And a DIRECTIONAL limit, which is the sharper one.** `Fix-Size:` is
+self-reported and unverified, and the escape from the refusal is to claim a
+LARGER fix — an agent that wants to file rather than fix writes
+`Fix-Size: 300 lines / 12 files` and passes. "Not gameable by adjective" is true
+and answers a different objection; it is gameable by numeral, and the gradient
+points the wrong way. Compounding it, the shared taxonomy admits generic tokens
+(`CLI`, `command`, `page`, `report`, `document`), so a machinery finding about
+`/ship` can satisfy exit 2 with "User-Impact: the `/ship` command blocks". Neither
+is fixable inside a shape check. What bounds them is that metric 1 is a PURE
+filing count with no machinery exclusion — taking exit 1 does not hide a filing
+from the headline — so gaming shows up as a rate that does not fall, within four
+weeks, which is the backstop this ADR already names.
+
+**The derivable-inputs predicate is a deny-list, and this ADR's own taxonomy
+argues against deny-lists.** `.claude/hooks/lib/user-surface-taxonomy.txt` says a
+deny-list "can only ever catch phrasings already in it; it rots against whatever
+wording the current review agent happens to use." That applies verbatim to the
+missing-numbers trigger, which matches a fixed set of phrasings, and its accept
+arm is one-token satisfiable. It is retained because the alternative — a third
+required field — is the form this design already rejected as enforcing nothing,
+and because its failure mode is silence rather than a false pass. Recorded as
+the one place the design contradicts its own stated principle. The weekly rate measurement is the backstop: if the rate does not
 fall, the gate is being gamed, and that is visible within four weeks.
 
 ## Consequences
