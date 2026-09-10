@@ -4,11 +4,13 @@ if ANY code-extension path appears anywhere in the command/input (deliberately
 over-generous: a command touching both a .ts and 5 .md files counts as code)."""
 import json,sys,re
 from collections import defaultdict
-CODE_EXT={'.ts','.tsx','.js','.jsx','.py','.sql','.go','.rs','.java','.rb','.c','.h','.cpp'}
+# NOTE: this script matches extensions via CODE_TOKEN below, not a set membership
+# test. Keep the two in sync -- an earlier revision omitted c|h here while listing
+# them in a (dead) CODE_EXT set; measured impact of that gap was 309 bytes.
 NAV_TOOLS={'Read','Grep','Glob','NotebookRead'}
 READ_CMD=re.compile(r'\b(cat|head|tail|sed|less|bat|wc)\b')
 SEARCH_CMD=re.compile(r'\b(grep|rg|ag|ack|find|fd)\b|\bgit\s+(grep|ls-files)\b')
-CODE_TOKEN=re.compile(r'\.(ts|tsx|js|jsx|py|sql|go|rs|java|rb|cpp)\b')
+CODE_TOKEN=re.compile(r'\.(ts|tsx|js|jsx|py|sql|go|rs|java|rb|cpp|c|h)\b')
 def blocks(m):
     c=m.get('content') if isinstance(m,dict) else None
     return c if isinstance(c,list) else []

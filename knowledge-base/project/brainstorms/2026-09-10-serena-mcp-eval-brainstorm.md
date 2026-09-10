@@ -4,7 +4,7 @@ date: 2026-09-10
 status: decided-verified
 lane: cross-domain
 brand_survival_threshold: single-user incident
-tags: [code-intelligence, mcp, context-engineering, external-tool-eval, vendor-review]
+tags: [mcp, context-engineering, external-tool-eval]
 related_adrs: [ADR-052, ADR-058, ADR-041, ADR-093, ADR-209, ADR-151]
 related_issues: [5708, 1055, 3722, 7920]
 external_tool: https://github.com/oraios/serena
@@ -72,28 +72,36 @@ recently rejected.
 
 ### The repo is not the shape Serena is for
 
-Measured on this worktree (`git ls-files`, whole-corpus `cat | wc -l` — see
-Session Errors #1 for the wrong method that preceded it):
+Measured **pinned at `origin/main` = `b4db399d9`** (whole-corpus `cat | wc -l`, not
+`xargs wc -l | tail -1` — see Session Errors #1 for the wrong method that preceded
+it). The pin is load-bearing: an unpinned count drifts as this very PR adds files,
+so three runs of the same question legitimately disagree.
 
 | Class | Lines | Share |
 |---|---:|---:|
-| `.md` prose | 1,499,767 | **63.4%** |
+| `.md` prose | 1,499,709 | **63.3%** |
 | `.ts` | 391,254 | 16.5% |
 | `.sh` | 345,681 | 14.6% |
 | `.tsx` | 83,655 | 3.5% |
 | `.sql` + `.py` | 47,663 | 2.0% |
 
 Of 474,909 TS/TSX lines, **286,531 are tests**; non-test application code is
-~188,378 lines, **≈8% of tracked lines**. 9,047 of 9,703 markdown files sit under
+~188,378 lines, **≈8% of tracked lines**. 9,045 of 9,700 markdown files sit under
 `knowledge-base/`. On markdown and shell — 78% of the corpus — `find_symbol` and
 `replace_symbol_body` do nothing and Serena degrades to `search_for_pattern`,
 i.e. the grep we already have.
 
 ### A1, measured on real transcripts
 
-Corpus: 60 local Claude Code transcripts for this project (2.0 GB),
+Corpus: 60 local Claude Code transcripts for this project (650,915,359 B = 0.61 GiB),
 30,134 `tool_result` blocks, 29,317,517 result bytes. Each result was attributed
 back to the `tool_use` that produced it and classified by target file type.
+
+**The corpus grows while the session runs** — this session appends to it — so a
+re-run drifts by ~±0.03 percentage points and will not reproduce these figures to
+the last digit. An independent re-run during review returned 5.85% / 87.97%. The
+drift is far smaller than the margin to the threshold, so it does not touch the
+verdict; it is recorded so a future reader does not mistake drift for a discrepancy.
 
 | Class | Share of tool-result bytes |
 |---|---:|
@@ -112,12 +120,12 @@ Because the ambiguous bucket is large, A1 was **bracketed** rather than reported
 as a point estimate. A deliberately over-generous upper bound — counting a
 navigation result as "code" if *any* code extension appears anywhere in the
 command, so a `grep` touching one `.ts` and five `.md` files scores as code —
-gives **11.13%**.
+gives **11.16%**.
 
 | A1 bound | Value | Threshold | Verdict |
 |---|---:|---:|---|
 | Lower (dominant extension) | 5.86% | > 15% | FAIL |
-| Upper (any code ext mentioned, over-generous) | **11.13%** | > 15% | **FAIL** |
+| Upper (any code ext mentioned, over-generous) | **11.16%** | > 15% | **FAIL** |
 
 **The generous bound does not reach the threshold.** A1 fails conclusively, and
 it fails without needing the ambiguous bucket adjudicated.
@@ -169,10 +177,12 @@ boundary than the Bash tool it would replace.
 |---|---|
 | No Python, no `uv` | `Dockerfile:2,42` → `node:22-slim`; the only apt installs are `ca-certificates git bubblewrap socat qpdf jq` and `gh` |
 | Egress is default-drop and omits every host Serena needs | `cron-egress-allowlist.txt` (23 hosts) contains **no** `pypi.org`, `files.pythonhosted.org`, `astral.sh`, `registry.npmjs.org`, `objects.githubusercontent.com`. ADR-052's 2026-06-29 amendment states npm is deliberately excluded and must not be re-added |
-| bwrap has zero network | `agent-runner-sandbox-config.ts:217-220` — `network.allowedDomains: []` |
+| bwrap egress never reaches PyPI | `agent-runner-sandbox-config.ts:218` — `allowedDomains: opts?.allowGithubEgress ? [...GITHUB_EGRESS_DOMAINS] : []`, and `agent-runner-query-options.ts:288` sets `allowGithubEgress: Boolean(args.ghToken)`. So on the repo-connected path it is `github.com` + `api.github.com`, **not** empty — but never PyPI, which is what the install needs |
 
 `uv tool install serena-agent` fails; the on-demand language-server downloads
-fail; both fail *closed*, paging Sentry. Making Axis B work is an image rebuild
+fail. Both are **expected** to fail closed and page Sentry — flagged as expected, not
+asserted: the Agent SDK's behaviour on an absent plugin-declared stdio binary is
+unverified (see Open Questions). Making Axis B work is an image rebuild
 plus per-language LSP baking plus a new write sentinel — net-new architecture,
 not a config line.
 
@@ -281,8 +291,8 @@ Serena ships `execute_shell_command`. It is not a read-only add-on.
 
 | # | Decision | Rationale |
 |---|---|---|
-| 1 | **Do not adopt Serena for operator dev sessions.** | A1 measured 5.86%, and **11.13% even at a deliberately over-generous upper bound**, against a pre-registered 15%. 63.4% of the repo is prose and only ~8% is non-test app code. The real win exists across ~4 large TS files and does not survive a ~20-tool schema tax on every turn. |
-| 2 | **Do not adopt Serena for Soleur users.** | B1 fails on three independent hard stops (no Python/`uv`; egress default-drop omitting PyPI/astral; bwrap `allowedDomains: []`). B3 demand is zero with one beta user who is not on the sandbox. **Not** rejected on cost grounds — BYOK users pay real dollars per token. |
+| 1 | **Do not adopt Serena for operator dev sessions.** | A1 measured 5.86%, and **11.16% even at a deliberately over-generous upper bound**, against a pre-registered 15%. 63.4% of the repo is prose and only ~8% is non-test app code. The real win exists across ~4 large TS files and does not survive a ~20-tool schema tax on every turn. |
+| 2 | **Do not adopt Serena for Soleur users.** | B1 fails on three independent hard stops (no Python/`uv`; egress default-drop omitting PyPI/astral; bwrap egress limited to GitHub-only or nothing, never PyPI). B3 demand is zero with one beta user who is not on the sandbox. **Not** rejected on cost grounds — BYOK users pay real dollars per token. |
 | 3 | **Serena's write tools are rejected on their own gate, independently of retrieval.** | An un-bwrapped stdio write path that no existing sentinel covers, reopening a capability the Concierge path deliberately hard-blocks. This verdict stands even if Axis A were later reversed. |
 | 4 | **Serena's memories/onboarding are never adopted, in any pilot.** | A second opaque store competing with the git-tracked, verbatim, founder-readable KB that is the stated moat. Same separable-and-must-stay-unused shape as `headroom learn`. |
 | 5 | **The shipped cost instrumentation is not a usable baseline for this question**, and the brief's premise is corrected accordingly. | Migration 136 is tenant-side and conversation-grain; operator-local sessions never touch it, and ADR-209 extends the turn-grain non-goal into attribution. |
@@ -359,7 +369,7 @@ NO-GO on both axes. Serena's competency is inert on 78% of this repo (63.4% pros
 14.6% shell) and non-test app code is ~8% of tracked lines. Axis B has three
 independent hard stops — no Python in `node:22-slim`, an egress allowlist that
 deliberately omits PyPI/npm per ADR-052's 2026-06-29 amendment, and
-`network.allowedDomains: []` in bwrap. The disqualifier is the write surface: a
+a bwrap egress policy that reaches at most `github.com`/`api.github.com` and never PyPI. The disqualifier is the write surface: a
 plugin-declared stdio server connects at container level outside bwrap, so
 `replace_symbol_body` would write to a user's repo through a path no existing write
 sentinel covers.
@@ -396,11 +406,14 @@ pattern the Headroom record was forced to admit.
    number reached this document's first draft.** `git ls-files … | xargs wc -l | tail -1`
    under-reports catastrophically: `xargs` splits into batches and emits a `total`
    per batch, so `tail -1` captures only the **final batch**. It returned KB markdown
-   as 38,440 lines; the true figure is **1,403,888** — a 36× undercount. A subagent
+   as 38,440 lines; the true figure at `origin/main` (`b4db399d9`) is **1,410,271** — a
+   **36.7×** undercount. A subagent
    reported 24,941 by the same mechanism, and its table's cumulative column ran past
    100% (102.5%) without that being caught as the tell it was.
    **Recovery:** re-derived with `git ls-files -z | xargs -0 cat | wc -l`, which
-   confirmed the CTO agent's independently-produced 1,499,642. **Prevention:** never
+   corroborated the CTO agent's independently-produced 1,499,642 for all markdown to
+   within 0.005% (pinned value 1,499,709; the two runs measured different working-tree
+   states, which is precisely why the table above is pinned to a ref). **Prevention:** never
    use `wc -l | tail -1` over a file list; and treat a percentage column summing past
    100% as instrument failure, not rounding.
 
@@ -424,7 +437,7 @@ pattern the Headroom record was forced to admit.
 
 4. **A1 was nearly reported as a point estimate.** 5.86% with a 23.53% ambiguous
    bucket sitting next to a 15% threshold is not a conclusion — the ambiguity
-   straddled the gate. The bracketing run (11.13% upper) is what makes the failure
+   straddled the gate. The bracketing run (11.16% upper) is what makes the failure
    conclusive. **Prevention:** when an unadjudicated bucket is larger than the margin
    to the threshold, bracket before concluding.
 

@@ -31,7 +31,7 @@ must not be merged.**
 
 - **Operator dev sessions:** rejected on a **measured** reachable surface.
   Pre-registered A1 threshold was >15% of tool-result bytes spent navigating code.
-  Measured **5.86%**, and **11.13%** at a deliberately over-generous upper bound.
+  Measured **5.86%**, and **11.16%** at a deliberately over-generous upper bound.
   Both bounds fail. A2 (reduction) was never measured — A1 settles it alone.
 - **Soleur users:** rejected on **structural** grounds — three independent sandbox
   hard stops — plus zero demand evidence. Explicitly **NOT** rejected on cost:

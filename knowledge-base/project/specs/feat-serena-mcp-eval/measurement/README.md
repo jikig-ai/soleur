@@ -11,7 +11,7 @@ content and are the replay harness for criterion A1.
 |---|---|
 | `a1_measure.py` | **v1 — KNOWN BROKEN, kept as the error record.** Classifies only Read/Grep/Glob results. Returns `nav_code = 0.00%` because this repo's agents navigate via the Bash tool (`cat`/`sed`/`grep`), which carries 93.19% of tool-result bytes. Do not use for a figure. |
 | `a1_v2.py` | **v1 + Bash command classification.** The corrected instrument. Produced `nav_code = 5.86%`. |
-| `a1_bracket.py` | Deliberately over-generous upper bound — counts a navigation result as "code" if ANY code extension appears anywhere in the command. Produced **11.13%**, below the 15% threshold, which is what makes the A1 failure conclusive. |
+| `a1_bracket.py` | Deliberately over-generous upper bound — counts a navigation result as "code" if ANY code extension appears anywhere in the command. Produced **11.16%**, below the 15% threshold, which is what makes the A1 failure conclusive. |
 
 ## Running
 
