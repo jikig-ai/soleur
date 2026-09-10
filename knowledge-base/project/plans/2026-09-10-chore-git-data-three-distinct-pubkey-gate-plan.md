@@ -16,10 +16,8 @@ requires_cpo_signoff: true
 ## Enhancement Summary
 
 **Deepened on:** 2026-09-10
-**Reviewers reported and incorporated:** CTO, CLO, correctness, simplicity, spec-flow, architecture
-**Reviewers dispatched, not yet reported:** test-design (mutation-matrix completeness), security
-(authorization-map threat model). Their findings are not reflected below; `/work` Phase 0 should
-re-read this plan for any late-landing amendment before starting.
+**Reviewers reported and incorporated:** CTO, CLO, correctness, simplicity, spec-flow, architecture,
+test-design, security — all eight
 **Halt gates passed:** User-Brand Impact (4.6), Observability (4.7), PAT-shaped variable (4.8),
 UI-wireframe (4.9, skipped — no UI surface), Encryption Posture (4.10, skipped — no new store),
 Guard Contract (4.11, lint green)
@@ -43,7 +41,25 @@ Guard Contract (4.11, lint green)
    un-gated job, so it renders on the run page while the gated job waits.
 5. **The gate gained the `git-data-host-replace` path.** After birth, a replace is the *only* route by
    which a re-rendered `authorized_keys` block reaches the host — and that job has no human approver.
-6. **~40% of the assembly was cut as ceremony.** Five independent per-link assertions collapsed to one
+6. **A blanket `//` / `/*` ABORT would have shipped a gate born red.** Measured: 81 `//` occurrences
+   across 19 of the 48 root `.tf` files, none of them HCL comments, one inside `git-data.tf` itself.
+   Because `ci.yml` runs the suite unfiltered on every PR, that would have reddened **every pull
+   request in the repository** until someone deleted the arm. The rule is now quote-aware. This was
+   the plan's own warned-about failure one level up: a premise measured under the three-file framing
+   and carried forward unchanged after D2 widened the unit to 48.
+7. **The matrix could not tell an identity map from a cardinality check.** M12/M13 are both
+   double-use collapses, which a cardinality predicate reds on — so the battery would have passed an
+   implementation the plan explicitly rejects. Predicate 4 is now an *ordered* per-authority
+   composition, anchored to a third artifact, with 2-swap and 3-cycle rows (M16–M18) that are
+   perfectly bijective and must still red.
+8. **A fourth `authorized_keys` line with no `command=` was invisible** (M26): it contributes no slot,
+   so the count still reads 3 and the gate releases, while that key falls through to the raw
+   `git-shell` path the transport wrapper exists to replace.
+9. **D9 shipped with a caveat instead of an overclaim.** `git_data_host_replace` has no
+   `environment:`, hence no branch policy — so the gate it sources is supplied by the branch it
+   polices. Phase 4.2 now adds the environment; the plan states plainly that the interlock alone
+   protects against accident, not against a deliberate actor with repo write.
+10. **~40% of the assembly was cut as ceremony.** Five independent per-link assertions collapsed to one
    resolution walk; a rehearsal counter-assertion was cut entirely, taking a second suite, a second
    anti-vacuity convention, two ACs and a sharp edge with it.
 
@@ -55,8 +71,16 @@ Guard Contract (4.11, lint green)
   different gate function; a new fixture and helper pair are required, and that is the real cost of
   Phase 1.
 - `c4-count-parity.test.sh` lives under `plugins/soleur/test/`, not `apps/web-platform/test/` — which
-  also falsified a premise row claiming all cited paths had been checked. The row is now scope-narrowed
-  and the correction recorded.
+  also falsified a premise row claiming all cited paths had been checked. The row is now
+  scope-narrowed and the correction recorded.
+- **The repository is PUBLIC**, so the Legal advisory's stated reason for keeping
+  `disclosed_as: "not-publicly-claimed"` ("a job log and an internal runbook are not public surfaces")
+  is false. The *conclusion* survives on measured grounds — every one of C2's three statements is
+  already public, and (b) is returned by an unauthenticated API call — but the premise is corrected
+  rather than carried.
+- **C2(b) was understating its own finding.** `can_admins_bypass: true` on all five gated
+  environments means the control is not merely self-approvable: the same account can bypass the
+  reviewer *and* the main-branch pin with no approval event at all.
 
 ## Overview
 
@@ -400,12 +424,33 @@ identity maps (`git_transport_pubkey = var.git_transport_pubkey`;
 assert on it. Five independent per-link assertions would mean five extractors, five normalisers, five
 de-duplications and five messages over three files — and would still miss a hop nobody anticipated.
 
-The gate instead resolves each slot to its terminal resource and then applies four predicates:
+The gate instead resolves each slot to its terminal resource and then applies five predicates:
 
 1. slot count == distinct terminal count == 3 (covers M1–M6, M9)
-2. every terminal is a `tls_private_key.<name>` address, never a `var.` (M10)
+2. every terminal is a `tls_private_key.<name>` address — never a `var.`, a `data.` source, a
+   `file()`, or a hardcoded `"ssh-ed25519 …"` literal (M10). The predicate rejects *every* non-resource
+   terminal, not just the variable case, because a literal is address-free and would otherwise fall
+   through the extractor rather than be rejected
 3. every named resource block exists in the root (M11)
-4. the private-half map is the expected bijection (M12, M13)
+4. **the authority map is an ORDERED composition, not a bijection** (M12, M13, **M16–M18**)
+5. each side reads the **correct attribute** — `public_key_openssh` for the slots,
+   `private_key_openssh` for the secrets (**M19, M20**)
+
+**Predicate 4 is ordered, and that word is load-bearing.** An earlier draft said "the private-half map
+is the expected bijection", which is strictly weaker and the battery could not tell the difference: M12
+and M13 are both *double-use* collapses (one resource referenced twice, one referenced zero times), so
+a pure cardinality check reds on both and looks identical to an identity check. A **permutation** —
+transport and provision swapping terminals, or a 3-cycle through the three `doppler_secret` values —
+is perfectly bijective, three-distinct, all-resources-present, and passes every cardinality predicate
+while handing each authority the wrong key.
+
+So the assertion is per-authority: for each `A ∈ {transport, provision, remove}`,
+`resolve_slot(script_A) == resolve_secret(doppler_name_A)`, joined on the extracted terminal address
+so it stays independent of how the resource is spelled (H3 still passes). The
+`{forced-command script ↔ Doppler name}` table is hardcoded from the design and **anchored to a third
+artifact** — `apps/web-platform/server/git-data-replication.ts`, whose header prose already documents
+`GIT_PROVISION_SSH_PRIVATE_KEY → git-data-provision.sh` and the transport equivalent — never derived
+from either file under test.
 
 This is *strictly stronger* than per-link assertions because it composes — an unanticipated hop breaks
 the walk rather than slipping past five checks — and its diagnostic is better: it names the hop at
@@ -435,7 +480,19 @@ written.
 | **M12** | `doppler_secret.git_transport_ssh_private_key.value` → `tls_private_key.git_remove.private_key_openssh` | **5** | **The app's transport key becomes the erase key. Every ordinary push runs `rm -rf`. All of links 1–4 stay green** |
 | **M13** | `doppler_secret.git_remove_ssh_private_key.value` → `tls_private_key.git_transport…` | **5** | The mirror: erasure hits the transport wrapper, which rejects non-git verbs, so every account deletion files a **false** "Art. 17 erasure failed" alarm |
 | **M14** | An `apps/web-platform/infra/locals_override.tf` re-points a local at apply time | 3, 4 | Terraform merges `*override.tf` over the primary config. The gate reads only the file it is handed, so it is blind unless it ABORTs on the existence of any override file |
-| **M15** | A second `module "git_data_userdata_v2"` with collapsed arguments, with `hcloud_server.git_data.user_data` re-pointed at it | 3 | The gate reads the block it was told to read and releases. Assert exactly one module instance with that `source`, and that `user_data` names *that* label |
+| **M15** | A second `module "git_data_userdata_v2"` with collapsed arguments, with `hcloud_server.git_data.user_data` re-pointed at it | 3 | The gate reads the block it was told to read and releases. Assert exactly one module instance with that `source`, and pin the **whole** `base64gzip(module.<label>.rendered)` expression — not just the label, or a `coalesce()`/conditional slips a second render in beside it |
+| **M16** | **2-swap at link 4:** `git_transport_pubkey` and `git_provision_pubkey` exchange terminals | 4 | Three slots, three distinct terminals, all resources present, each secret still name-matched. **Every cardinality predicate passes.** The app's transport key authenticates into the provision slot |
+| **M17** | **2-swap at link 1:** two `command=` script names exchange their `${…}` vars | 1 | Set-equality on script names passes and cardinality passes. Only the ordered composition catches it |
+| **M18** | **3-cycle at link 5:** transport→provision's key, provision→remove's, remove→transport's | 5 | Perfectly bijective and three-distinct. This is the row that proves predicate 4 is ordered rather than a cardinality check wearing the word "bijection" |
+| **M19** | A pubkey local reads `tls_private_key.git_remove.private_key_openssh` | 4 | Address-distinct, terminal-valid, bijective — and it bakes a **private** key into `user_data`, which is gzipped into Hetzner instance metadata |
+| **M20** | A `doppler_secret.value` reads `.public_key_openssh` | 5 | Publishes a public key as the app's authentication material. Green under every address-only predicate |
+| **M21** | **Deletion:** one `command=` line removed entirely | 1 | Two slots holding two distinct keys. Promoted from prose — a row with no number does not get built |
+| **M22** | **Partial extraction:** a local resolves through an intermediate (`trimspace(local.some_key)`) so its RHS contains no `tls_private_key.<name>` | 4 | Yields 2 addresses from 3 slots. M7 covers *zero* extracted; nothing covered *2 of 3*. Must ABORT, not HOLD |
+| **M23** | **Sibling-file relocation:** a pubkey local moved to a new `.tf` in the same root and re-pointed | 4 | The row that proves root-directory scoping. Promoted from Test Scenario prose |
+| **M24** | Same resource, different attribute in two slots (`public_key_openssh` vs `public_key_pem`) | 4 | Two byte-different RHS strings, one key. Pins that de-duplication strips the attribute and keys on `tls_private_key.<name>` |
+| **M25** | `hcloud_server.git_data` gains `lifecycle { ignore_changes = [user_data] }` | — | This silently disarms **D9's entire premise** that a replace is the only post-birth re-render route. The guard depends on that fact, so it must pin it |
+| **M26** | A **fourth** `authorized_keys` line with **no** `command=` at all | 1 | Contributes no slot, so slot count stays 3 and set-equality on script names passes — **the gate releases**. That key gets the raw `git-shell -c "$SSH_ORIGINAL_COMMAND"` path, the CWE-22-unfenced path the transport wrapper exists to replace. Closed by asserting the block holds exactly three non-blank lines, every one a forced command |
+| **M27** | An extra option appended to a `command=` line (`environment="GIT_DATA_REPO_ROOT=/srv"`) | 1 | The gate asserts the script name and terminating `${…}`, not the **option set**. Invisible today, and live the moment anything sets `PermitUserEnvironment yes` — two individually-invisible edits composing into a rooted `rm -rf` |
 
 M8 (unreadable production root) is **folded into the fail-closed argument arm** rather than kept as a
 separate row: in every sibling gate in this library the missing and unreadable cases land in the same
@@ -450,12 +507,36 @@ An LHS-only guard is true today, **stays true through the exact defect it names*
 "unproven" into "proven" — strictly worse than no guard. Every arm extracts, normalises and
 de-duplicates the **right-hand side**, and every link carries a measured collapse fixture.
 
-**Comment-stripping is mandatory, and must fail closed on forms it cannot parse.** The cloud-init
-header immediately above the `authorized_keys` block names all three wrappers in prose. Separately,
-both existing strippers in this library handle only `#`; HCL also permits `//` and `/* */`. No such
-comment exists in the three files today, so the naive stripper works by accident of current style —
-the gate therefore **ABORTs** on any `//` or `/*` occurrence in the HCL it reads, in the same
-fail-closed spirit as the canonical-shape assertion.
+**Comment-stripping is mandatory, and the ABORT must be QUOTE-AWARE — a blanket one is born red.**
+
+The cloud-init header immediately above the `authorized_keys` block names all three wrappers in prose,
+so stripping `#` comments before asserting is required. Separately, both existing strippers in this
+library handle only `#`, while HCL also permits `//` and `/* */`, so an unparseable comment form must
+fail closed.
+
+**An earlier draft made that ABORT unconditional, and it would have shipped a gate that refuses the
+canonical production tree on day one.** Measured this session against
+`apps/web-platform/infra/`: **81 `//` occurrences across 19 of the 48 root `.tf` files**, plus `/*` in
+several more — and **zero** of them are HCL comments. Every one is a URL inside a string literal or a
+path glob inside a `#` comment. `git-data.tf` itself carries one, at
+`git_data_betterstack_ingest_url = "https://s2734275.eu-central-1a.betterstackdata.com/"`.
+
+So the rule is: **ABORT on `//` or `/*` only OUTSIDE string literals.** The library already contains
+the machinery — the quote-aware YAML stripper Phase 2.1 names, which tests whether the delimiter sits
+inside an open quote rather than what follows it. Reuse that discipline for HCL.
+
+This is worth recording as more than a bug fix, because it is the plan's own warned-about failure
+appearing one level up: the premise ("no such comment exists in the three files today") was measured
+under the **three-file** framing and carried forward unchanged after D2 widened the unit to the whole
+**48-file root**. It was also already false in the narrow framing. A premise measured under one scope
+does not survive the scope widening that a later decision performs.
+
+**Blast radius, which is why this is the highest-severity finding in the review.** Per D8 the suite
+runs on every PR via `ci.yml`, unfiltered. A false-RED here would not merely fail this feature's own
+tests — it would redden **every pull request in the repository** until someone deleted the arm. That
+is precisely how a guard gets deleted six months later, so the live-tree arm must also produce a
+**self-diagnosing** failure that distinguishes *"the gate could not parse the production root"* from
+*"the production root violates the property."*
 
 **Harness rows.** Mutations of the *suite*, not the guard.
 
@@ -465,6 +546,39 @@ fail-closed spirit as the canonical-shape assertion.
 | H2 | Neuter `fail()` so it appends without counting | RED via the existing ledger reconciliation |
 | H3 | **Must-PASS, non-canonical:** three distinct but differently *named* vars, threaded consistently through every link to three distinct resources and three correctly-named secrets | **PASS.** The contract is the map, not the canonical spelling. A gate that reds here is string-matching the live file |
 | H4 | **Must-PASS, non-canonical:** canonical tree with whitespace and comment noise on the `command=` lines | **PASS.** Anchored on content, not byte-exact lines |
+| H5 | **Must-PASS:** a `https://…` URL in a local and a `/*` path glob inside a `#` comment | **PASS.** The row that would have caught the born-red blanket ABORT before it shipped |
+| H6 | **Must-PASS:** a map-typed intermediate (`locals { git_keys = { transport = … } }` then `trimspace(local.git_keys.transport)`) | **PASS** up to a stated hop budget. An ordinary DRY refactor must not read as the defect. Beyond the budget it is an **ABORT naming the hop**, never a HOLD — a HOLD here falsely accuses the exact defect, which is how a guard gets deleted |
+| H7 | **Must-PASS:** the three `tls_private_key` blocks relocated to a sibling `.tf` in the same root, correctly wired | **PASS.** The benign twin of M23. D2 claims root-scoping removes this false-RED; nothing proved it |
+| H8 | **Must-PASS:** unrelated sibling keys and secrets present in the root | **PASS.** The live root already holds `tls_private_key.ci_ssh` and `.proxy_server`, so any resource-*enumerating* predicate is already wrong against production |
+
+**The fixture needs a production-matching noise floor, not a clean three-file tree.** A minimal
+fixture is exactly the "wrong but self-consistent fixture" failure mode, and it is what would have
+hidden the born-red comment rule. The synthetic root must carry, at minimum: ≥2 unrelated
+`tls_private_key` resources, ≥2 unrelated `locals` blocks in sibling files, a `https://` URL in a
+string, a `/*` glob inside a `#` comment, and ≥1 unrelated `doppler_secret`.
+
+**Four anti-vacuity paths beyond the rc-127 hole, each closed explicitly:**
+
+- **A `sed` that lands in the wrong region.** The `assert_mutation` precedent guards landing with
+  `cmp -s`, which proves the file *differs* — not that the edit landed where the arm claims. The
+  fixture has three near-identical `command=` lines, so M1 written as a non-global `s///` rewrites only
+  the first and **silently implements M2**: both red, the battery reports 2-for-2, and one row is
+  measuring the other. Every arm therefore asserts post-mutation **shape**, not inequality — M1 checks
+  the collapsed var appears 3 times, M2 that it appears 2, M12 that the transport secret's `value`
+  changed *and* the other two did not.
+- **Reason collisions on both verdicts.** Matching only a leading `HOLD`/`ABORT` token is **weaker
+  than the precedent already in this suite** — `_a_abort` matches rc *and* a needle. Every verdict is
+  matched as exact rc **plus a per-reason token**, so M3 (link 2) cannot pass on a HOLD naming link 4,
+  and a fixture malformed in an unrelated way cannot pass an ABORT arm for the wrong reason.
+- **Substring bleed.** HOLD and RELEASED share vocabulary (`distinct`, erase authority, authorization
+  map), so matches anchor at line start on the gate's own message prefix.
+- **The must-PASS side can go vacuous too.** A gate that early-`return 0`s on a tree it failed to
+  parse satisfies a bare rc=0. H3–H8 assert rc=0 **and** the RELEASED token, symmetrically with the
+  RED side — the shape `_a_hash` already uses.
+
+**The floor needs two ledgers, not one.** AC10's verdict accounting catches a *deleted* arm, but an
+arm edited from a RED expectation to a PASS expectation keeps the verdict count identical and the
+floor never moves. Count RED-expecting and PASS-expecting arms separately.
 
 H1 and H2 remain **prose expectations**, not new arms: both mechanisms already exist and are already
 self-tested in the suite. Promoting them would inflate the floor without adding coverage.
@@ -847,6 +961,21 @@ So the gate is wired into three places, each buying something the others do not:
 | `git_data_host_create`'s third interlock | Merge-order interactions and force-merges, at the one birth |
 | `git_data_host_replace`'s interlock | **Every post-birth re-render — the only path a collapse can travel once the host exists** |
 
+**A caveat that must ship with D9, not be discovered later.** `git_data_host_replace` has no
+`environment:`, and therefore no `deployment_branch_policy`. `workflow_dispatch` runs the **selected
+ref's** workflow *and its scripts*, so the gate this job sources from `${GITHUB_WORKSPACE}` is
+supplied by the branch it is meant to police. This workflow already states that reasoning verbatim for
+a sibling job, and rejects a `github.ref` guard as strictly weaker for the same reason.
+
+Measured for contrast: `web-platform-infra-apply` carries a `branch_policy` with exactly one custom
+policy, `main` — the **birth** path is ref-pinned; the replace path is not.
+
+So D9's coverage is honest only when stated as: against an accidental collapse merged to `main` and
+dispatched from `main`, the replace interlock works. Against a deliberate actor with repo write, it
+does not. **The real fix is one key** — give `git_data_host_replace` an `environment:` with a
+main-only branch policy — and this plan prescribes it as part of Phase 4.2 rather than leaving the
+gate to imply protection it cannot provide.
+
 ## Implementation Phases
 
 Phase order is load-bearing: the failing tests land before the gate
@@ -873,16 +1002,23 @@ hash re-check gates the push.
   and no `doppler_secret`, so links 3, 4 and 5 do not exist in it. The new fixture is a directory
   holding a template with three `command=` slots, a module `main.tf` with the argument map, and one or
   more root `.tf` files carrying the module call, the pubkey locals, three `tls_private_key` blocks
-  and three `doppler_secret` blocks.
+  and three `doppler_secret` blocks. It carries a **production-matching noise floor** — ≥2
+  unrelated `tls_private_key` resources, ≥2 unrelated `locals` blocks in sibling files, a
+  `https://` URL in a string, a `/*` glob inside a `#` comment, and ≥1 unrelated
+  `doppler_secret` — because a clean three-file fixture is what hides a scope-widened premise.
 - 1.2 **Build the assert helper pair.** It must (a) invoke the new gate, not
   `git_data_rung2_user_data_sha256` — `_a_abort` is hardwired to that function and cannot be reused
   without parameterising ~17 existing call sites, which would be exactly the cross-consumer widening
   this plan claims not to perform; (b) **pin an exact rc**, mirroring `_a_abort`'s `rc -eq 1`. If it
   accepted any non-zero, then during RED every arm would call an undefined function, get rc 127, and
-  pass vacuously — the whole phase would be theatre; (c) distinguish ABORT from HOLD by leading token.
-- 1.3 Add the mutation arms M1–M7, M9–M15 plus the deletion and partial-extraction rows, each
-  collapsing exactly one link of a copied fixture.
-- 1.4 Add the must-PASS arms H3 and H4.
+  pass vacuously — the whole phase would be theatre; (c) match each verdict as exact rc **plus a per-reason token**, anchored at line start — matching a
+  bare leading `HOLD`/`ABORT` is weaker than `_a_abort`'s existing rc+needle contract and lets an arm
+  pass for the wrong reason.
+- 1.3 Add the mutation arms M1–M7 and M9–M25, each mutating exactly one link of a copied fixture.
+  Every arm asserts post-mutation **shape** (an expected token count in the mutated region), never
+  `cmp` inequality — the fixture's three near-identical `command=` lines make a non-global `sed`
+  silently implement a different row.
+- 1.4 Add the must-PASS arms H3–H8, each asserting rc=0 **and** the RELEASED token.
 - 1.5 Add the **live-tree arm** against the real production root, on A1's shape (missing/unreadable =
   loud fail, never a skip), and amend the suite header rule with its justification (D8).
 - 1.6 **Run the suite and confirm it FAILS.** Record the failure text. Any new arm that passes here is
@@ -905,13 +1041,19 @@ hash re-check gates the push.
   template and module from `dirname`.
 - 2.3 Implement it as **one resolution walk plus four predicates** (Guard Contract), not five
   independent per-link assertions. De-duplicate on the extracted `tls_private_key.<name>` address.
-  Assert exact cardinality (`== 3`) at every link and **set equality** on the `command=` script names.
-  ABORT when the extracted-address count is less than the slot count — that is a partial extraction,
-  not agreement.
-- 2.4 ABORT on any `//` or `/*` occurrence in the HCL read, and on any `*override.tf` /
-  `*override.tf.json` in the root.
-- 2.5 Assert exactly one `module` block whose `source` is `./modules/git-data-userdata`, and that
-  `hcloud_server.git_data.user_data` names that block's label.
+  De-duplication strips the attribute and keys on `tls_private_key.<name>`. Assert exact cardinality
+  (`== 3`) at every link and **set equality** on the `command=` script names. Assert the **ordered**
+  per-authority composition (predicate 4) and the **correct attribute** per side (predicate 5). ABORT
+  when the extracted-address count is less than the slot count — that is a partial extraction, not
+  agreement — and ABORT (never HOLD) when a resolution hop exceeds the stated budget.
+- 2.4 ABORT on `//` or `/*` **outside string literals only** (quote-aware, reusing the library's
+  existing quote-aware stripper discipline), and on any `*override.tf` / `*override.tf.json` in the
+  root. **A blanket ABORT here is born red** — measured, the live root carries 81 `//` across 19 of 48
+  `.tf` files, none of them HCL comments, one of them in `git-data.tf` itself.
+- 2.5 Assert exactly one `module` block whose `source` is `./modules/git-data-userdata`, and pin the
+  **whole** `user_data = base64gzip(module.<label>.rendered)` expression rather than the label alone.
+  Also pin that `hcloud_server.git_data` carries no `ignore_changes` over `user_data` (M25) — D9's
+  premise that a replace is the only post-birth re-render route rests on that fact.
 - 2.6 Put the literal `3` in one named constant with the ADR-068 citation inline.
 - 2.7 Write the HOLD message to name the consequence — the identity the web app holds for ordinary
   push and fetch would also be able to erase a user's repositories — and, per the sibling interlock
@@ -920,7 +1062,8 @@ hash re-check gates the push.
 - 2.8 Write the RELEASED message to state exactly what it proves (D2), including that it does not
   compare rendered key material.
 - 2.9 Raise the anti-vacuity floor, itemised in the file's existing convention, counting **verdicts,
-  not arms**.
+  not arms** — and split it into **two ledgers**, RED-expecting and PASS-expecting, so flipping an
+  arm's expectation moves a count.
 - 2.10 Run the suite green.
 
 ### Phase 3 — The allowlist justification correction
@@ -1025,27 +1168,51 @@ None.
 - **AC5** — A **suite arm** — not an implementation-time check — invokes the gate against the real
   production root and asserts RELEASE at rc=0. It follows A1's shape: a missing or unreadable live
   root is a loud failure, never a skipped arm. The suite header's "synthesized fixtures only" rule is
-  amended in the same commit with a stated justification, as A1's was.
-- **AC6** — The RELEASED message states exactly what it proves and does not claim rendered key
-  material was compared.
+  amended in the same commit with a stated justification, as A1's was. Its failure text is
+  **self-diagnosing** — it distinguishes "the gate could not parse the production root" from "the
+  production root violates the property". Since `ci.yml` runs this suite unfiltered on every PR, a
+  false-RED here reddens every pull request in the repository until someone deletes the arm.
+- **AC6** — The RELEASED message states exactly what it proves, and disclaims what it cannot see:
+  rendered key material, the value resident in Doppler `prd` at any moment, the effect of a partial
+  `-target`ed apply, and — per the security review — that the three-key split buys separate blast
+  radii **on the host**, not in the holder, since the web application reads all three private halves
+  from one process environment.
 - **AC7** — The HOLD message names the consequence (the transport identity would gain erase
   authority), ends with a remedy and a "nothing has been planned or created" line, and does **not**
   label the gap "Art. 17" — it is Art. 32(1)(d), with Art. 5(1)(f) derivative.
-- **AC8a** — Every collapse mutation (M1–M6, M9–M13, M15, the deletion row, the partial-extraction
-  row) drives a non-zero return with a **HOLD** naming the link that collapsed.
+- **AC8a** — Every collapse mutation (M1–M6, M9–M13, M15–M21, M23–M27) drives a non-zero return with
+  a **HOLD** carrying that link's own reason token. Verdicts match exact rc **plus a per-reason token
+  anchored at line start**, never a bare `HOLD`/`ABORT` prefix — so M3 cannot pass on a HOLD naming a
+  different link.
 - **AC8b** — Every instrument mutation (M7 zero-extraction, M8 unreadable root, M14 override file,
-  the unparseable-comment case) drives a non-zero return with an **ABORT** naming the instrument
-  fault. ABORT and HOLD are distinguishable by leading token, and the assert helpers match on that
-  token rather than merely on a non-zero rc.
-- **AC8c** — M12 and M13 specifically: the gate reds when a `doppler_secret` publishes the wrong
-  key's private half, **while links 1–4 are byte-canonical**. This is the row that proves the
-  assembly is closed rather than merely wide.
-- **AC9** — H3 and H4 both PASS. In particular the gate releases on a tree using three distinct but
-  differently *named* variables threaded consistently to three distinct resources and three correctly
-  named secrets.
+  M22 partial extraction, an over-budget resolution hop, and an unparseable comment form **outside a
+  string**) drives a non-zero return with an **ABORT** carrying that fault's own reason token.
+- **AC8c** — M12, M13 and especially **M16–M18** (2-swaps and the 3-cycle): the gate reds on a
+  *permutation*, **while links 1–4 are byte-canonical and every cardinality predicate passes**. This
+  is the criterion proving predicate 4 is an ordered composition rather than a cardinality check
+  wearing the word "bijection".
+- **AC8d** — M19 and M20: the gate reds when a slot reads `private_key_openssh` or a secret reads
+  `public_key_openssh` — both address-distinct, bijective, and otherwise green.
+- **AC8e** — **M26**: the gate reds on a fourth `authorized_keys` line carrying **no** `command=`.
+  The block is asserted to hold exactly three non-blank lines, every one a forced command. Without
+  this the added key falls through to the raw `git-shell -c "$SSH_ORIGINAL_COMMAND"` path — the
+  CWE-22-unfenced path the transport wrapper exists to replace — while the slot count still reads 3
+  and the gate releases.
+- **AC8f** — **M27**: the gate reds on an unexpected option appended to a `command=` line (e.g.
+  `environment="GIT_DATA_REPO_ROOT=/srv"`). The option list is asserted, not just the script name and
+  the terminating `${…}`.
+- **AC8g** — Each new arm is recorded as having failed **for its own stated reason** during Phase 1
+  RED, not merely that the suite went red.
+- **AC9** — H3–H8 all PASS, each asserting rc=0 **and** the RELEASED token (a gate that
+  early-`return 0`s on an unparsed tree satisfies a bare rc=0). **H5 is load-bearing**: the gate
+  releases on a tree carrying a `https://` URL in a local and a `/*` glob inside a `#` comment — the
+  row that would have caught the born-red blanket comment ABORT. **H7** proves root-scoping removed
+  the sibling-file false-RED rather than merely claiming it; **H8** proves the gate tolerates the
+  unrelated `tls_private_key` siblings the live root already carries.
 - **AC10** — The suite exits 0 and its anti-vacuity floor line reports the raised floor. The itemised
   rows **sum to the floor delta**, and the delta equals the number of new **verdicts** (not arms — an
-  arm may record more than one).
+  arm may record more than one). The floor is kept as **two ledgers**, RED-expecting and
+  PASS-expecting, so an arm flipped from one expectation to the other moves a count.
 
 **C1 — the allowlist**
 
@@ -1063,7 +1230,18 @@ None.
   place" — the device exists, is mounted, and `luks_mounted=yes` is true *of the device*; that
   compression would contradict the ledger's `mechanism: "luks"` row.
 - **AC18** — Statement (b) records field, scope and date as re-measured during implementation, and
-  does not generalise beyond the one environment measured.
+  reports **two** facts, not one: `prevent_self_review: false` **and** `can_admins_bypass: true`. The
+  second is the stronger half and was missing from the first draft — it means the control is not
+  merely self-approvable; the same account can bypass the reviewer *and* the main-branch pin entirely,
+  with no approval event at all. Saying only "not two-party" understates what the operator is being
+  told. The earlier instruction not to generalise beyond one environment is **relaxed on
+  measurement**: one unauthenticated API call shows **all five** gated environments
+  (`inngest-config-signing`, `inngest-cutover`, `sentry-infra-apply`, `web-platform-infra-apply`,
+  `workspaces-luks-cutover`) carry the same setting. That is a measurement, not an extrapolation, and
+  it materially strengthens deferred item F3.
+- **AC18b** — Statement (b) also states that the approval it describes governs the **birth** path
+  only. Per D9, the post-birth `git-data-host-replace` path carries no approver at all, and a reader
+  would otherwise conclude the host is permanently protected by a reviewer click.
 - **AC19** — Statement (c) says the boot reached its final stage without tripping the named `FATAL`
   gates guarding LUKS mount, repo root, hooks path and provisioning; that reaching the emit is the
   evidence and the four literals are the channel the consumer asserts on, not four measurements. It
@@ -1110,8 +1288,9 @@ None.
 - **AC29** — ADR-149 carries release-checklist item 10 **and its disposition row marked DONE**, so
   #7025's banner-clearing precondition is not silently extended.
 - **AC30** — `actionlint` passes on the workflows. `bash -n` is not used on a YAML file.
-- **AC33** — Issues for F1, F3 and F6 exist and are linked in the PR body, with labels verified via
-  `gh label list` before use.
+- **AC33** — Issues for F1, F3, F6, F7, F8, F9 and F10 exist and are linked in the PR body, with
+  labels verified via `gh label list` before use. F7–F10 come from the security review and are all
+  **hash-bound**, so they batch with F6 into the next change that legitimately moves the hash.
 - **AC34** — The corrected comment in the gate library names the surviving hash-bound divergence and
   cites its tracking issue.
 - **AC35** — The PR body uses `Closes #8009` and references the C2 issue.
@@ -1197,9 +1376,22 @@ Key calibrations, all folded into ACs:
   `hcloud_volume.git_data` (tracking #6897, expiring 2026-10-22) and prior-disclosed in the Art. 30
   register at PA-2 §(g)(13). C2(a) propagates an existing record to the point of decision, which is
   the correct direction of travel. Creating a second record would invite drift.
-- `disclosed_as: "not-publicly-claimed"` stays correct: a job log and an internal runbook are not
-  public surfaces. If this wording ever migrates to a user-facing surface, that field is re-derived
-  first.
+- **CORRECTION — the CLO's stated reason was false, and the security review measured it.** The
+  advisory kept `disclosed_as: "not-publicly-claimed"` on the grounds that "a job log and an internal
+  runbook are not public surfaces." Measured: `gh repo view --json visibility` returns **PUBLIC** for
+  `jikig-ai/soleur`. The runbook is committed to that public repo, and a public repo's Actions run
+  summaries — where D6 places the disclosure — are world-readable. **Both C2 surfaces are public.**
+
+  The *conclusion* survives, but on measured grounds rather than the stated ones: none of the three
+  statements transfers any capability, because each is already public. (a) is already committed in
+  `scripts/encryption-posture-ledger.json` and the Art. 30 register, and reaching the disk requires
+  host compromise. (c) is already spelled out in the public `git-data-bootstrap.sh` under
+  `WORDING PINNED (AC30)`. And (b) is returned by an **unauthenticated** call to
+  `api.github.com/repos/jikig-ai/soleur/environments`, reviewer login included. So publishing all
+  three is correct — and withholding them would only blind the operator.
+
+  `disclosed_as` must nevertheless be **re-derived rather than assumed** on the next touch, since the
+  premise that produced its current value is now known to be wrong. Folded into F1's tracking issue.
 
 Two findings are **out of scope and filed rather than folded** (see Deferred Items):
 
@@ -1239,9 +1431,20 @@ Each has a tracking issue as an in-scope task of this PR — a deferral without 
 | **F4/F5** — the ledgered plaintext exception expiring 2026-10-22, and the register's "NOT YET PROVISIONED" statements going stale at birth | Both attach to the birth event or to #6897, not to this change | #6897 covers F4; F5 is a pre-birth follow-through |
 | **F6** — the hash-bound copy of the wrong justification in `modules/git-data-userdata/variables.tf` (`MAY DIVERGE (identity-shaped …)` listing all eight tokens) | Correcting a **comment** there would move `3a2392fb…c1725`, void the rung-2 evidence and buy a fresh **paid** Hetzner rehearsal. Not a defensible trade for prose | File issue, `type/chore` + `domain/engineering`; fold into the next change that legitimately moves the hash |
 
-All three are covered by AC33 in the Acceptance Criteria above; the labels `domain/legal`,
+| **F7** — `/home/git/.ssh/authorized_keys` is `git:git 0600` inside a git-owned `.ssh`, and `01-hardening.conf` pins no `AuthorizedKeysFile`, so sshd also honours `authorized_keys2` | The authorization map is rewritable at runtime by the very principal it constrains — post-exploitation persistence, but a real route the five-link **static** chain cannot see. Fix is `root:root` ownership plus an `AuthorizedKeysFile` pin, both in **hash-bound** files | File issue, `type/security`; batch with F6 |
+| **F8** — `git-data-remove.sh` can report erasure success having erased nothing, when `/mnt/git-data` is not mounted | `readlink -f` succeeds on a non-existent path, so the guards pass and the `not present (no-op)` branch exits 0. Today it fails closed by directory ownership, not by assertion. Art. 17 correctness depends on distinguishing "not present" from "not visible". Fix is a `mountpoint -q` check — **hash-bound** | File issue, `type/security` + `domain/legal` |
+| **F9** — `core.hooksPath` points at a directory owned and writable by the `git` account whose pushes the hook fences | No integrity boundary on the control. `$REPO_ROOT` must be git-writable; `$HOOKS_DIR` need not be — **hash-bound** | File issue, `type/security` |
+| **F10** — the wrappers' "sshd passes NO client env (`AcceptEnv` empty)" claim is unasserted | Ubuntu ships `AcceptEnv LANG LC_*`; `01-hardening.conf` pins neither `AcceptEnv` nor `PermitUserEnvironment`. Holds today by default rather than by assertion, while protecting the `REPO_ROOT` of an `rm -rf`. Composes with M27 — **hash-bound** | File issue, `type/security`; batch with F7 |
+
+All of these are covered by AC33 in the Acceptance Criteria above; the labels `domain/legal`,
 `type/security`, `type/chore` and `domain/engineering` were each confirmed to exist at plan time via
 `gh label list`.
+
+**F7–F10 came from the security review and share one shape:** each is a real route to the erase
+capability that the five-link chain cannot see, because the chain is **static** and these are
+properties of a **live host** or of a file the host owns. That is not a defect in the gate's design —
+it is the honest boundary of what a static assertion buys, and it is why Phase 5.6's three-probe
+runtime verification is in scope rather than deferred.
 
 ## Test Scenarios
 

@@ -42,17 +42,27 @@ assertion extracts, normalises and de-duplicates the *right*-hand side.
       `git_data_rung2_user_data_sha256` — `_a_abort` is hardwired to that and reusing it would mean
       parameterising ~17 call sites), **pins an exact rc**, and distinguishes ABORT from HOLD by
       leading token. An "any non-zero" helper makes RED theatre: an undefined function returns 127.
-- [ ] 1.3 Add the collapse arms: M1 (all three on one var), M2 (two collapse, one distinct), M3
-      (module map), M4 (module call), M5 (root local), M6 (fourth slot reusing a var), M9 (alias /
-      whitespace / intermediate-local partial extraction), M10 (`var.` with a default), M11 (named
-      resource absent), **M12 (transport secret publishes the erase key)**, **M13 (the mirror)**, M15
-      (second module instance consumed), plus a **deletion** row (one `command=` line removed → two
-      slots, two distinct keys must still red) and a **sibling-file** row (a pubkey local moved to a
-      new `.tf` in the same root).
+- [ ] 1.3 Add the collapse arms M1–M6, M9–M13, M15–M21, M23–M27. Beyond the obvious collapses these
+      MUST include: **M16/M17 (2-swaps)** and **M18 (3-cycle)** — perfectly bijective permutations
+      that every cardinality predicate passes, and the only rows that prove predicate 4 is an
+      *ordered* composition; **M19/M20** (wrong attribute — a slot reading `private_key_openssh` bakes
+      a private key into `user_data`); **M21** (deletion — two slots, two distinct keys, must still
+      red); **M23** (sibling-file relocation); **M24** (same resource, different attribute);
+      **M25** (`ignore_changes = [user_data]`, which disarms D9's premise); **M26** (a fourth
+      `authorized_keys` line with **no** `command=` — contributes no slot, so the count still reads 3
+      and the gate releases while that key falls through to raw `git-shell`); **M27** (an extra
+      `environment=` option on a `command=` line).
+      Every arm asserts post-mutation **shape** (expected token count in the mutated region), never
+      `cmp` inequality — the three near-identical `command=` lines make a non-global `sed` silently
+      implement a different row.
 - [ ] 1.4 Add the instrument arms: M7 (zero extraction), M8 (missing/unreadable root via **dangling
       symlink**, not `chmod 000`), M14 (`*override.tf` present), and an unparseable `//` comment.
-- [ ] 1.5 Add the must-PASS arms H3 (three distinct but differently *named* vars threaded through all
-      five links) and H4 (whitespace/comment noise).
+- [ ] 1.5 Add the must-PASS arms H3–H8, each asserting rc=0 **and** the RELEASED token. **H5 is
+      load-bearing**: a `https://` URL in a local and a `/*` glob in a `#` comment must PASS. H6 a
+      map-typed intermediate; H7 the benign sibling-file relocation; H8 unrelated `tls_private_key`
+      siblings (the live root already has two).
+      Give the fixture a production-matching noise floor — a clean three-file tree is what hides a
+      scope-widened premise.
 - [ ] 1.6 Add the **live-tree arm** against the real production root on A1's shape, and amend the
       suite header rule in the same commit with its stated justification.
 - [ ] 1.7 **Run the suite and confirm it FAILS.** Record the text. Any new arm that passes here is
@@ -73,7 +83,10 @@ assertion extracts, normalises and de-duplicates the *right*-hand side.
       `var.`); every named resource block present; the private-half map an exact bijection onto
       `GIT_{TRANSPORT,PROVISION,REMOVE}_SSH_PRIVATE_KEY`. Assert **set equality** on the `command=`
       script names, not membership. ABORT when extracted-address count < slot count.
-- [ ] 2.4 ABORT on any `//` or `/*` in the HCL read, and on any `*override.tf` / `*override.tf.json`.
+- [ ] 2.4 ABORT on `//` or `/*` **outside string literals only** (quote-aware), and on any
+      `*override.tf` / `*override.tf.json`. **A blanket ABORT is born red** — measured, the live root
+      carries 81 `//` across 19 of 48 `.tf` files, none of them HCL comments, one in `git-data.tf`.
+      Since `ci.yml` runs this suite unfiltered on every PR, a false-RED reddens every PR in the repo.
 - [ ] 2.5 Assert exactly one `module` block with `source = "./modules/git-data-userdata"`, and that
       `hcloud_server.git_data.user_data` names that label.
 - [ ] 2.6 Put the literal `3` in one named constant with the ADR-068 citation inline.
@@ -97,8 +110,10 @@ assertion extracts, normalises and de-duplicates the *right*-hand side.
 
 - [ ] 4.1 Third interlock step in `git_data_host_create`, after the rung-2 step, before
       `Terraform init`, wrapped in an `::error::` matching the siblings.
-- [ ] 4.2 Interlock in `git_data_host_replace` — no human approver there, and after birth it is the
-      only path a collapse can travel.
+- [ ] 4.2 Interlock in `git_data_host_replace`, **and give that job an `environment:` with a
+      main-only branch policy**. Without it there is no `deployment_branch_policy`, so
+      `workflow_dispatch` runs the selected ref's scripts and the gate is supplied by the branch it
+      polices — the interlock would imply protection it cannot provide.
 - [ ] 4.3 Extend `plugins/soleur/test/terraform-target-parity.test.ts`'s job↔gate pairing block so 4.1
       and 4.2 cannot be silently skipped.
 
@@ -119,6 +134,11 @@ assertion extracts, normalises and de-duplicates the *right*-hand side.
 - [ ] 5.7 Fix `## What the job does, in order` — it omits the rung-2 interlock and would now omit the
       third.
 - [ ] 5.8 Leave the DO-NOT-DISPATCH banner byte-identical.
+- [ ] 5.9 Add the **three-probe runtime verification** to the runbook's post-birth section: an empty
+      command over each of the three published private keys yields three distinguishable fail-closed
+      strings, proving this key reaches that forced command on the real host. Non-destructive —
+      `git-data-remove.sh` runs `[ -n "$workspace_id" ] || reject` before any `mkdir -p` or `rm -rf`.
+      This is the only step that measures the property rather than a static proxy.
 
 ## Phase 6 — Architecture record
 
@@ -129,8 +149,10 @@ assertion extracts, normalises and de-duplicates the *right*-hand side.
 
 ## Phase 7 — Trackers
 
-- [ ] 7.1 File F1 (`domain/legal`), F3 (`type/security`), F6 (`type/chore` + `domain/engineering`).
-- [ ] 7.2 Link all three in the PR body.
+- [ ] 7.1 File F1 (`domain/legal`), F3 (`type/security`), F6 (`type/chore` + `domain/engineering`),
+      and the security review's F7–F10 (all `type/security`; F8 also `domain/legal`). F7–F10 are all
+      **hash-bound**, so they batch with F6 into the next hash-moving change.
+- [ ] 7.2 Link all of them in the PR body.
 
 ## Phase 8 — Verification before push
 
