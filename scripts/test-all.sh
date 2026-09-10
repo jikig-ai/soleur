@@ -1518,6 +1518,11 @@ if (( _ENUMERATE == 0 )); then
     case "$_bt_common" in /*) : ;; *) _bt_common="$PWD/$_bt_common" ;; esac
     _bt_common="$(cd "$_bt_common" 2>/dev/null && pwd -P || true)"
   fi
+  # SHARED NAMESPACE, stated rather than engineered around: plugins/soleur/test/lib/git-fixture-env.sh
+  # also writes the count-indexed GIT_CONFIG_* namespace (commit.gpgsign), and unconditionally, so
+  # every fixture built through that chokepoint clobbers this arming — which is exactly why fixtures
+  # stay hermetic under it. Benign at COUNT=1 on both sides; fragile above it. Do not build
+  # indirection for this, just do not raise either count without reading the other.
   if [[ -n "$_bt_common" && -x scripts/hooks/battery-ref-guard/reference-transaction ]]; then
     export BATTERY_TAG_LIVE_COMMON_DIR="$_bt_common"
     export GIT_CONFIG_COUNT=1

@@ -51,8 +51,13 @@ trap 'rm -rf "$WORK"' EXIT INT TERM
 # drive <cwd> <live-common-or-empty> <old> <new> <ref> -> rc
 drive() {
   local rc=0
+  # `env -u` FIRST, always. Under a real gate run this suite INHERITS the arming test-all.sh
+  # exported, so an arm passing "" for $2 would still see the ambient value and the "unarmed ⇒
+  # inert" row would test the armed path instead. Measured: this suite went rc=0 -> rc=1 the
+  # moment it was run under the arming it exists to describe.
   ( cd "$1" && printf '%s %s %s\n' "$3" "$4" "$5" \
-      | env ${2:+BATTERY_TAG_LIVE_COMMON_DIR="$2"} bash "$HOOK" prepared >/dev/null 2>&1 ) || rc=$?
+      | env -u BATTERY_TAG_LIVE_COMMON_DIR ${2:+BATTERY_TAG_LIVE_COMMON_DIR="$2"} \
+        bash "$HOOK" prepared >/dev/null 2>&1 ) || rc=$?
   printf '%s' "$rc"
 }
 
@@ -124,11 +129,31 @@ ck; if [[ "$(try_tag unwired "$WORK/nohook" "$FIX_COMMON")" == "0" ]] && git -C 
   pass "MUTATION: with the hook removed the same CREATE succeeds — the refusal is its doing"
 else fail "MUTATION: the CREATE still failed with the hook removed — refusals are NOT attributable"; fi
 
+# --- the fixture-builder overwrite this design depends on ------------------------------------
+# Fixture cleanliness under arming rests entirely on plugins/soleur/test/lib/git-fixture-env.sh
+# unconditionally re-exporting GIT_CONFIG_COUNT/KEY_0/VALUE_0 with its own hermetic config, which
+# clobbers the arming for every fixture built through that chokepoint. That is load-bearing and was
+# nowhere asserted: if someone makes it conditional, the hook silently follows git into every
+# fixture repo and the failure shows up as unrelated suites reddening. Assert it here so the guard
+# names the cause instead.
+_FIXLIB="$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+ck; if [[ -f "$_FIXLIB" ]]; then
+  _seen="$(BATTERY_TAG_LIVE_COMMON_DIR="$LIVE_COMMON" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath \
+    GIT_CONFIG_VALUE_0="$HOOK_DIR" bash -c 'source "$1"; git_fixture_env "$2" >/dev/null 2>&1; printf "%s" "${GIT_CONFIG_KEY_0:-<unset>}"' _ "$_FIXLIB" "$WORK/fixture" 2>/dev/null)"
+  if [[ "$_seen" == "commit.gpgsign" ]]; then
+    pass "the #7849 fixture builder overwrites the arming (fixtures see commit.gpgsign, not core.hooksPath)"
+  else
+    fail "the #7849 fixture builder no longer overwrites GIT_CONFIG_KEY_0 (fixtures see '$_seen') — the hook now follows git into every fixture"
+  fi
+else
+  fail "plugins/soleur/test/lib/git-fixture-env.sh is missing — the overwrite this design depends on cannot be asserted"
+fi
+
 # --- Stage D: floors and conservation --------------------------------------------------------
 printf '\nbattery-ref-guard: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 
 # Reported DIRECTLY, never through fail() (ADR-193). THE BINDING SITS FLUSH AGAINST THE `if`.
-BATTERY_REF_MIN_ASSERTIONS=10
+BATTERY_REF_MIN_ASSERTIONS=11
 if (( asserted < BATTERY_REF_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < BATTERY_REF_MIN_ASSERTIONS=%d\n' "$asserted" "$BATTERY_REF_MIN_ASSERTIONS" >&2
   exit 1
