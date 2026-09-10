@@ -69,6 +69,20 @@
 # comments daily. Failures are routed explicitly instead.
 set -uo pipefail
 
+# #7797: refuse to run under xtrace while a live warehouse credential is bound. `set -x` echoes
+# every expansion, so a traced run of this probe would print BETTERSTACK_QUERY_PASSWORD into the
+# sweeper's log — and the sweeper posts probe output back onto the tracker issue, which is public.
+# exit 78 is the "configuration refused" status, distinct from this contract's PASS(0)/FAIL(1)/
+# TRANSIENT(2), so a refusal can never be misread as a verdict about the host.
+case "$-" in
+  *x*)
+    if [ -n "${BETTERSTACK_QUERY_PASSWORD:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 QUERY="${INNGEST_SERVING_QUERY_BIN:-$REPO_ROOT/scripts/betterstack-query.sh}"
 
