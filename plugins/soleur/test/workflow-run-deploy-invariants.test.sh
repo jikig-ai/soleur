@@ -257,6 +257,25 @@ if printf '%s' "$(jqa "d['wr_branches']")" | grep -qF 'main'; then pass; else
   fail "G4 workflow_run has no branches: [main] filter — a full run would be created for every PR and merge_group CI completion"
 fi
 
+# The resolve-target body, extracted ONCE and shared by Guards 3, 7, 9 and 12.
+# Hoisted above Guard 3 because its DISPATCH_SHA read-scope rows consume the
+# comment-stripped copy — built lower down, those rows read a file that did not
+# exist yet and reported "could not locate the span" instead of measuring.
+_resolve_body=$(awk '/^  resolve-target:/{f=1} f&&/^  [a-zA-Z0-9_-]+:$/&&!/^  resolve-target:/{exit} f' "$REL")
+printf '%s' "$_resolve_body" > "$W/resolve.blk"
+# COMMENT-STRIPPED HAYSTACK. `resolve.blk` is the raw job block, so a row
+# anchored on a token was satisfied by the COMMENT EXPLAINING the pin and by the
+# error-message STRING naming it. Measured: mutating
+# `select(.name == "release / release")` to `select(.name == "release")` — the
+# literal fail-open G3-13b exists to prevent — left this suite GREEN, shadowed
+# twice. Same for `event=push`. Anchor on the call form, in code only.
+sed -e 's/[[:space:]]*#.*$//' "$W/resolve.blk" > "$W/resolve.code"
+# The stripper must not eat the file: a comment-only haystack and an EMPTY one
+# both make every row below vacuously pass.
+if [ -s "$W/resolve.code" ] && [ "$(grep -c . "$W/resolve.code")" -ge 40 ]; then pass; else
+  fail "G3 the comment-stripped resolve-target body is empty or implausibly short ($(grep -c . "$W/resolve.code" 2>/dev/null || echo 0) code lines) — every anchored row below would pass vacuously"
+fi
+
 # ═══ GUARD 3 — no workflow_run-reachable path reads bare github.sha ══════════
 # The ASSEMBLY is computed, not listed: every `${{ github.sha }}` site
 # intersected with the reachable-job set.
@@ -295,11 +314,37 @@ if grep -qE 'DISPATCH_SHA' "$W/resolve.blk" 2>/dev/null || grep -qE 'DISPATCH_SH
 else
   pass
 fi
-# Exactly one such permitted site. A second would mean the name is being used as
-# a bypass rather than as a scope declaration.
+# Exactly one DEFINITION. A second would mean the name is being used as a bypass
+# rather than as a scope declaration.
 _n_dispatch_sha=$(grep -cE '^\s*DISPATCH_SHA:' "$REL" || true)
 if [ "$_n_dispatch_sha" -le 1 ]; then pass; else
   fail "G3 $_n_dispatch_sha DISPATCH_SHA sites — the permit covers exactly one, in resolve-target; more means it is being used to smuggle github.sha onto the workflow_run arm"
+fi
+# ...AND EVERY READ IS INSIDE THE DISPATCH BRANCH. Counting DEFINITIONS bounds
+# the wrong thing: the permit is widened by adding a READ, not a definition.
+# Measured — this one-line edit passed the whole suite before this row existed:
+#     emit head_sha "$WR_HEAD_SHA"  ->  emit head_sha "${WR_HEAD_SHA:-$DISPATCH_SHA}"
+# DISPATCH_SHA is `${{ github.sha }}`, which on the workflow_run arm is the
+# DEFAULT-BRANCH TIP. That line silently deploys a commit CI never verified,
+# while the definition count stays at 1 and the dispatch branch still mentions
+# the name, so both existing bounds hold.
+_disp_lo=$(grep -n 'EVENT_NAME" = "workflow_dispatch"' "$W/resolve.code" | head -1 | cut -d: -f1)
+_disp_hi=$(awk -v lo="${_disp_lo:-0}" 'NR>lo && /^          fi$/{print NR; exit}' "$W/resolve.code")
+if [ -n "$_disp_lo" ] && [ -n "$_disp_hi" ]; then pass; else
+  fail "G3 could not locate the workflow_dispatch branch span (lo='${_disp_lo:-}' hi='${_disp_hi:-}') — the read-scope row below would be vacuous"
+fi
+_outside=""
+while IFS=: read -r _n _txt; do
+  [ -n "$_n" ] || continue
+  case "$_txt" in *DISPATCH_SHA:*) continue ;; esac          # the definition itself
+  if [ "$_n" -lt "${_disp_lo:-0}" ] || [ "$_n" -gt "${_disp_hi:-0}" ]; then
+    _outside="${_outside}line ${_n}: $(printf '%s' "$_txt" | sed -e 's/^[[:space:]]*//')
+"
+  fi
+done <<< "$(grep -n 'DISPATCH_SHA' "$W/resolve.code" || true)"
+if [ -z "$_outside" ]; then pass; else
+  fail "G3 DISPATCH_SHA is READ outside the workflow_dispatch branch (lines ${_disp_lo}-${_disp_hi}). It resolves to github.sha, which on the workflow_run arm is the DEFAULT-BRANCH TIP — any read out here can deploy a commit CI never verified:
+$_outside"
 fi
 
 # G3-12 — live-verify must not be gated on the push event, which would skip it
@@ -326,20 +371,6 @@ fi
 
 # G3-13b — THE EQUAL-STRENGTH ROW. The deploy verdict must come from the release
 # JOB's conclusion, never from the artifact's mirror_verified/docker_pushed.
-_resolve_body=$(awk '/^  resolve-target:/{f=1} f&&/^  [a-zA-Z0-9_-]+:$/&&!/^  resolve-target:/{exit} f' "$REL")
-printf '%s' "$_resolve_body" > "$W/resolve.blk"
-# COMMENT-STRIPPED HAYSTACK. `resolve.blk` is the raw job block, so a row
-# anchored on a token was satisfied by the COMMENT EXPLAINING the pin and by the
-# error-message STRING naming it. Measured: mutating
-# `select(.name == "release / release")` to `select(.name == "release")` — the
-# literal fail-open G3-13b exists to prevent — left this suite GREEN, shadowed
-# twice. Same for `event=push`. Anchor on the call form, in code only.
-sed -e 's/[[:space:]]*#.*$//' "$W/resolve.blk" > "$W/resolve.code"
-# The stripper must not eat the file: a comment-only haystack and an EMPTY one
-# both make every row below vacuously pass.
-if [ -s "$W/resolve.code" ] && [ "$(grep -c . "$W/resolve.code")" -ge 40 ]; then pass; else
-  fail "G3 the comment-stripped resolve-target body is empty or implausibly short ($(grep -c . "$W/resolve.code" 2>/dev/null || echo 0) code lines) — every anchored row below would pass vacuously"
-fi
 if grep -qF 'select(.name == "release / release")' "$W/resolve.code"; then pass; else
   fail "G3-13b resolve-target does not pin the literal job name 'release / release'. The bare name is a REUSABLE-WORKFLOW call, so a lookup on the bare name matches ZERO rows and the guard fails OPEN"
 fi
@@ -953,11 +984,12 @@ TOTAL=$((passes + fails))
 #   readable, schema parity, field-read scope, field parity)
 # + 1 G11 release-outcome needs completeness + 1 Hc far-side closure
 # + 3 G12 arm-parity (extraction, emptiness, coherence)
-# + 1 G3-13b carried-value non-vacuity + 1 G9b ci_not_green arm = 63
+# + 1 G3-13b carried-value non-vacuity + 1 G9b ci_not_green arm
+# + 2 G3 DISPATCH_SHA read-scope (span located, no read outside it) = 65
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=63
+MIN_ROWS=65
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1
