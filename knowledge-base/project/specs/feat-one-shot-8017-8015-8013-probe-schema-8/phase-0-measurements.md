@@ -116,3 +116,28 @@ here because the false reading pointed at the plan rather than at the grep. Only
 `apps/web-platform/infra/run-registered-suites.sh` is registered; it derives its list from
 `infra-validation.yml`. So `test-all.sh` alone is NOT sufficient for this change, exactly as the
 plan's Phase 6 states.
+
+## 0.2 — the C4 enumeration behind "no C4 impact"
+
+Recorded rather than asserted, because "no impact" is the conclusion easiest to reach without
+looking. The model is three files — `model.c4`, `views.c4`, `spec.c4` — carrying **14 containers**
+and **17 components**, with no `person` or `softwareSystem` declarations of its own.
+
+Grepped every term this change introduces or renames against all three files:
+
+| Term | `.c4` files naming it |
+|---|---|
+| `inngest-server-probe` | 0 |
+| `probe_schema` | 0 |
+| `data_mount` | 0 |
+| `registry_fns` | 0 |
+| `dark-gate` / `inngest_host_dark` | 0 |
+
+The model describes containers and their relationships; this change alters the *fields inside one
+observability event* and the *predicate one off-host gate applies to them*. It adds no external
+actor, no external system, no container, and no access relationship — nothing the C4 model is a
+model *of*. Branch touches 0 `.c4` files, and `plugins/soleur/test/c4-count-parity.test.sh` passes.
+
+No new ADR either: the decision lands as an ADR-199 amendment (see that file's 2026-09-10 entry),
+because it changes HOW C1's stated conjunction is measured rather than taking a new architectural
+position. A new ordinal would also have created a renumber-sweep hazard against sibling branches.
