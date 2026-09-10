@@ -1343,6 +1343,12 @@ for a in "$@"; do
     echo "cache:deadbeefcafebabe0123:blob"
     echo "tenant:1234567890:config"
     echo "prefix{estate:01KYADCPBNEE10PYEYCPCJ08YA}suffix:x"
+    echo "estate:run_01KYADCPBNEE10PYEYCPCJ08YA:x"
+    echo "estate:sess-01KYADCPBNEE10PYEYCPCJ08YA:x"
+    echo "estate:01kyadcpbnee10pyeycpcj08ya:runs:1"
+    echo "user:550E8400-E29B-41D4-A716-446655440000:p"
+    echo "user:ops@example.com:sessions"
+    echo "token:sk_live_51H8xQ2KLmNopQrStUvWx:meta"
     exit 0
   fi
 done
@@ -1369,6 +1375,28 @@ assert "#8013 a brace group with NO colon is left intact ({queue}:queue is the c
   "grep -qE 'redis_key_patterns=[^ ]*[?]queue[?]:queue:[*]' '$S8_KEYS'"
 assert "#8013 the brace-free identifier shape is reduced too, not just the braced one" \
   "grep -qE 'redis_key_patterns=[^ ]*(^|,)estate:[*]:[*]' '$S8_KEYS'"
+# THE SHAPES A DENYLIST MISSED. Every row below escaped the first cut verbatim, and none was
+# fixturable then because the fixture set contained exactly the four shapes the denylist knew --
+# the fixture-shape axis no mutation of the implementation can reach. `run_<ULID>` is the one that
+# matters most: a near-universal Redis convention, and Inngest's own keyspace uses ULIDs.
+assert "#8013 a PREFIXED ULID (run_<ULID>) does not survive -- one char defeated length()==26" \
+  "! grep -qF 'run_01KYADCPBNEE10PYEYCPCJ08YA' '$S8_KEYS'"
+assert "#8013 a hyphen-prefixed ULID (sess-<ULID>) does not survive" \
+  "! grep -qF 'sess-01KYADCPBNEE10PYEYCPCJ08YA' '$S8_KEYS'"
+assert "#8013 a LOWERCASE ULID does not survive" \
+  "! grep -qF '01kyadcpbnee10pyeycpcj08ya' '$S8_KEYS'"
+assert "#8013 an UPPERCASE UUID does not survive" \
+  "! grep -qF '550E8400-E29B-41D4-A716-446655440000' '$S8_KEYS'"
+assert "#8013 an EMAIL ADDRESS does not survive (the @ was sanitised; the address was not)" \
+  "! grep -qF 'ops' '$S8_KEYS' || ! grep -qE 'ops[^ ]*example' '$S8_KEYS'"
+assert "#8013 a SECRET-SHAPED value does not survive" \
+  "! grep -qF 'sk_live_51H8xQ2KLmNopQrStUvWx' '$S8_KEYS'"
+# ...and the OVER-REDACTION direction, which no absence assertion can see: a filter that emits
+# nothing satisfies every row above while destroying the field's entire diagnostic value.
+assert "#8013 OVER-REDACTION guard: the category tag survives the allowlist" \
+  "grep -qE 'redis_key_patterns=[^ ]*[?]queue[?]:queue:[*]' '$S8_KEYS'"
+assert "#8013 OVER-REDACTION guard: a brace-free category pair survives" \
+  "grep -qE 'redis_key_patterns=[^ ]*inngest:queue:[*]' '$S8_KEYS' || grep -qE 'redis_key_patterns=[^ ]*[?]connect[?]:gateways:[*]' '$S8_KEYS'"
 assert "#8013 the field is still non-empty and carries no whitespace" \
   "grep -qE 'redis_key_patterns=[^ ]+( |\$)' '$S8_KEYS'"
 cp "$PROBE_D_BIN/redis-cli" "$PROBE_S8_BIN/redis-cli"
@@ -2387,7 +2415,7 @@ echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 # check) reported 303/303, exit 0. Keyed on PASS rather than TOTAL: TOTAL counts failures, so a
 # TOTAL floor cannot back up the verdict -- dropping `if [[ "$FAIL" -gt 0 ]]` left a 303/305 run
 # reporting exit 0. 7761's floor already had this shape.
-INNGEST_MIN_ASSERTIONS=392
+INNGEST_MIN_ASSERTIONS=400
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \
     "$PASS" "$INNGEST_MIN_ASSERTIONS" >&2

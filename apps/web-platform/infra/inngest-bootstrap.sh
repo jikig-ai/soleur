@@ -689,19 +689,28 @@ dedicated)
   byid_dir="${PROBE_BYID_DIR:-/dev/disk/by-id}"
   case "$data_mount_src" in
   __UNREADABLE__)
-    # Nothing mounted. data_mount_base stays n/a so the states stay distinguishable downstream:
-    # src=__UNREADABLE__ base=n/a          -> no mount
-    # src=/dev/sdb      base=__UNREADABLE__ -> the resolution itself broke
-    # base resolved     devid=__NOMATCH__   -> mounted from a device that is not this volume
-    # Without base, __UNREADABLE__ on devid is a three-way collision with three remedies.
+    # Nothing mounted. `__UNREADABLE__` on devid has exactly TWO producers, and data_mount_src --
+    # emitted since schema 7 -- is what tells them apart:
+    #   src=__UNREADABLE__                  -> no mount at all (this branch)
+    #   src=/dev/sdb, base=__UNREADABLE__   -> the lsblk/readlink resolution itself broke
+    # The wrong-device case is NOT in that collision: it emits __NOMATCH__, which is already a
+    # distinct value. (An earlier revision of this comment called it a three-way collision and
+    # justified data_mount_base by it -- the line directly below it, naming __NOMATCH__, refuted
+    # that. base is kept for a narrower reason: on the __NOMATCH__ path it is the only field
+    # naming the backing kernel device, which separates "failed open onto the root disk" from
+    # "attached to some other volume".)
     data_mount_devid=__UNREADABLE__
     ;;
   *)
     # `lsblk -s` walks the INVERSE tree: through a device-mapper node to its backing device AND
     # through a partition to its parent disk, in one documented flag. util-linux -- the same
-    # package as the findmnt above, which the live host demonstrably runs. Measured on 2.41.3:
-    # `-d` does NOT collapse the output to one line, so this takes the LAST non-empty row (the
-    # base) and strips lsblk's tree-drawing prefix rather than trusting NR==1.
+    # package as the findmnt above, which the live host demonstrably runs.
+    #
+    # THE INVARIANT, stated for the command that actually ships: `-nso` (NO `-d`) prints the full
+    # child->parent chain, so the base device is the LAST non-empty row. Do NOT "simplify" this to
+    # `-nsdo NAME` plus a first-non-empty read: that inverts the rule and yields the dm node or the
+    # partition instead of the base disk, which resolves to __NOMATCH__ and refuses forever. The
+    # `-d` measurement recorded in this branch's phase-0 notes is about that OTHER form.
     data_mount_base="$(timeout 5 lsblk -nso NAME "$data_mount_src" 2>/dev/null \
       | awk 'NF{l=$1} END{if(l!=""){gsub(/^[^[:alnum:]]+/,"",l); print l}}' || true)"
     case "$data_mount_base" in
@@ -744,9 +753,9 @@ dedicated)
   case "$data_mount_devid" in
   '' | *[[:space:]]*) data_mount_devid=__UNREADABLE__ ;;
   esac
-  case "$data_mount_base" in
-  '' | *[[:space:]]*) data_mount_base=__UNREADABLE__ ;;
-  esac
+  # (No whitespace guard on data_mount_base: the charset guard above already rejects every
+  # character outside [A-Za-z0-9_.-], whitespace included, and the two sentinels it can otherwise
+  # hold are `n/a` and `__UNREADABLE__`. A second guard here would be unreachable.)
 
   # ── #8015 probe_schema=8: registry evidence, so G18 stops passing vacuously ───────────────
   # The #7674 probe grants PASS to a host that answers /health and owns NOTHING -- which is the
@@ -1006,32 +1015,32 @@ dedicated)
             # output under mawk 1.3.4 and busybox awk. No apostrophes anywhere below -- one
             # would close the surrounding awk '...' block.
             redis_key_patterns="$(printf '%s\n' "$probe_scan_out" | awk '
-              function ishex(s,   i, ch) {
-                if (s == "") return 0
-                for (i = 1; i <= length(s); i++) { ch = substr(s, i, 1); if (index("0123456789abcdef", ch) == 0) return 0 }
+              # ALLOWLIST, NOT DENYLIST -- this is the second revision, and the reason is measured.
+              # The first cut asked "does this segment LOOK LIKE an identifier?" and enumerated four
+              # shapes (ULID / UUID / long hex / long digit run). A denylist over a field whose
+              # destination is a THIRD-PARTY WAREHOUSE is the wrong polarity: it ships everything it
+              # failed to imagine. Measured against the shipped denylist, all of these escaped whole:
+              #   estate:run_01KYAD...:x    -> prefixed ULID  (one character defeats length()==26,
+              #                                and run_/sess_ prefixes are a near-universal Redis
+              #                                convention, and the Inngest keyspace uses ULIDs)
+              #   estate:01kyad...:x        -> lowercase ULID
+              #   user:550E8400-E29B-...:p  -> uppercase UUID
+              #   user:ops@example.com:s    -> an email address
+              #   token:sk_live_...:meta    -> a secret-shaped value
+              # So the test is inverted: a segment is emitted ONLY if it looks like a CATEGORY, and
+              # anything else becomes `*`. Fail-closed. The cost is that a legitimate but unusual
+              # category renders as `*`; the alternative cost is a privacy incident.
+              function iscategory(s,   n, i, ch, run) {
+                n = length(s)
+                if (n < 1 || n > 24) return 0
+                if (index("abcdefghijklmnopqrstuvwxyz", substr(s, 1, 1)) == 0) return 0
+                run = 0
+                for (i = 1; i <= n; i++) {
+                  ch = substr(s, i, 1)
+                  if (index("abcdefghijklmnopqrstuvwxyz0123456789_-", ch) == 0) return 0
+                  if (index("0123456789", ch) > 0) { run++; if (run >= 4) return 0 } else { run = 0 }
+                }
                 return 1
-              }
-              function isdigits(s,   i, ch) {
-                if (s == "") return 0
-                for (i = 1; i <= length(s); i++) { ch = substr(s, i, 1); if (index("0123456789", ch) == 0) return 0 }
-                return 1
-              }
-              function isulid(s,   i, ch) {
-                if (length(s) != 26) return 0
-                for (i = 1; i <= 26; i++) { ch = substr(s, i, 1); if (index("0123456789ABCDEFGHJKMNPQRSTVWXYZ", ch) == 0) return 0 }
-                return 1
-              }
-              function isuuid(s) {
-                if (length(s) != 36) return 0
-                if (substr(s,9,1) != "-" || substr(s,14,1) != "-" || substr(s,19,1) != "-" || substr(s,24,1) != "-") return 0
-                return ishex(substr(s,1,8)) && ishex(substr(s,10,4)) && ishex(substr(s,15,4)) && ishex(substr(s,20,4)) && ishex(substr(s,25,12))
-              }
-              function isid(s) {
-                if (isulid(s)) return 1
-                if (isuuid(s)) return 1
-                if (length(s) >= 16 && ishex(s)) return 1
-                if (length(s) >= 6 && isdigits(s)) return 1
-                return 0
               }
               NR > 5000 { truncated = 1; exit }
               $0 != "" {
@@ -1047,7 +1056,7 @@ dedicated)
                     nt = split(tag, tseg, ":")
                     newtag = ""
                     for (ti = 1; ti <= nt; ti++) {
-                      if (isid(tseg[ti])) continue
+                      if (!iscategory(tseg[ti])) continue
                       newtag = newtag (newtag == "" ? "" : ":") tseg[ti]
                     }
                     if (newtag == "") newtag = "*"
@@ -1055,8 +1064,13 @@ dedicated)
                   }
                 }
                 n = split(key, seg, ":")
-                s1 = isid(seg[1]) ? "*" : seg[1]
-                if (n >= 2) { s2 = isid(seg[2]) ? "*" : seg[2]; k = s1 ":" s2 ":*" } else { k = s1 }
+                # The brace group was ALREADY category-filtered above, so re-testing it whole would
+                # fail on its own braces and discard the category tag -- the signal this field
+                # exists to carry. Over-redaction is a real failure direction, not just a cost.
+                s1 = seg[1]
+                if (substr(s1, 1, 1) == "{") { if (substr(s1, length(s1)) != "}") s1 = "*" }
+                else if (!iscategory(s1)) s1 = "*"
+                if (n >= 2) { s2 = iscategory(seg[2]) ? seg[2] : "*"; k = s1 ":" s2 ":*" } else { k = s1 }
                 gsub(/[^A-Za-z0-9_:.*-]/, "?", k)
                 if (!(k in c)) { order[++distinct] = k }
                 c[k]++
