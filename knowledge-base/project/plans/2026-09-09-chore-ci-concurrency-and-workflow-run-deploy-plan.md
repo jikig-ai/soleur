@@ -119,11 +119,14 @@ Four findings, all load-bearing:
    34143928519, 34147070945, 34149741403, 34152496134) are in this window with queue terms 405s,
    1245s, 740s, 68s, 0s, and each starts its first job within 1–4s of the predecessor's `test`
    completing. On 2026-09-07 15:16–17:58 five consecutive runs were queue-bound. The queue is real.
+
 2. **It is not the dominant term across the population.** It binds on 20% of runs. On the other
    80% the first job starts in ~4s, and those runs produced the window's **worst** `time-to-test`.
+
 3. **`ci.yml`'s current dispatch note is also right.** Median within-run start spread of 332s
    (max 1708s ≈ 28.5 min) across jobs a group release starts simultaneously cannot be a queue.
    Runner availability is the larger term overall.
+
 4. **Therefore the honest model is additive, not either/or:**
    `time-to-test = queue (when the group is occupied) + runner availability + execution`,
    where the queue term is workload-dependent — large on a merge-burst day, zero on a normal one.
@@ -154,12 +157,16 @@ What the ask is actually for, restated as observable outcomes:
 - **P1** — A `main` push's CI run, and therefore its deploy gate, measures only its own SHA's CI.
 - **P2** — When the required `test` check fails, its own output names the measured cause, so a
   reader can tell "CI is too slow" from "someone pushed again" without reconstructing it from the API.
+
 - **P3** — Which matrix leg a suite lands on is a fact someone owns, not a consequence of where a
   file sorts; adding a suite does not re-roll the partition.
+
 - **P4** — Every registered scripts-group suite runs on exactly one leg. *(Already held; must not
   regress.)*
+
 - **P5** — The prod deploy fires on CI's real completion, however long CI took, with no fixed
   ceiling and no idle runner held.
+
 - **P6** — The deploy deploys the SHA CI actually verified, in order.
 - **P7** — The `workflow_dispatch` escape hatch still deploys.
 - **P8** — CI creeping toward the pipeline's declared budget is visible on every release without SSH.
@@ -547,11 +554,28 @@ They are not:
 
 - **`CI_BUDGET_MIN = 72`** — what the declared pipeline budget *allows* CI. The soft ceiling derives
   from this.
-- **`CI_DECLARED_PATH = 70`** — CI's own *declared* to-`test` path (`test-scripts` 60 → `test` 10).
-  B9's critical-path arithmetic uses this.
 
-`70 ≤ 72` is exactly the headroom statement that makes `max(release 60, 70) + 135 = 205 ≤ 207` hold.
-Guard 5 pins each to its own subject so they cannot be swapped.
+- **`CI_DECLARED_PATH`** — CI's own *declared* path. **This plan got the quantity wrong; corrected
+  at review, see the note below.**
+
+> **Superseded 2026-09-10 (#7990).** This section read `CI_DECLARED_PATH = 70` — CI's declared
+> to-`test` path (`test-scripts` 60 → `test` 10) — and called `70 ≤ 72` the headroom statement that
+> makes `max(release 60, 70) + 135 = 205 ≤ 207` hold. Both the workflow and B9 shipped that
+> arithmetic and were green on it.
+>
+> It is the wrong quantity. `await-ci` polled for the **`test` check**, so to-`test` was correct for
+> *that* mechanism and was carried across the rewrite unchanged. `workflow_run: types: [completed]`
+> fires when the **whole `ci.yml` run** concludes — measured at **720m**, because 19 of 25 jobs
+> declare no `timeout-minutes` and carry GitHub's 360m default. The `205 ≤ 207` green was a
+> two-minute margin on a phantom.
+>
+> `await-ci` also *capped* the wait; #5806 removes that cap deliberately (item (a)), so the bound is
+> now entirely `ci.yml`'s. The headroom statement cannot be asserted while any job is unbounded, so
+> it is computed only when every job declares a ceiling and otherwise warns with the list. B9
+> asserts the arm this pipeline controls (195 ≤ 207); B9b ratchets the unbounded count; B9c stops
+> B9b going vacuous. Filed as **#8020**. Full reasoning in ADR-215 Decision 4.
+
+Guard 5 pins each quantity to its own subject so they cannot be swapped.
 
 **Where the derivation runs — NOT on `deploy`.** `web-platform-release.yml`'s `deploy` job carries an
 explicit in-file prohibition on adding `actions/checkout`: it *"drives the deploy entirely over the
@@ -666,10 +690,12 @@ review and none of them visible from the issue body:
   Any label-keyed partition must either pass the label explicitly at both sites, or read the
   caller's `local label` by dynamic scoping — an invisible coupling that a rename in `skip_suite`
   breaks silently while every existing guard row stays green.
+
 - **`skip_suite`'s docstring promise becomes load-bearing.** It says `$1 = label (must match the
   label the suite would have run under)`. That is unenforced today; under a label-keyed partition a
   mismatch lands the registration on a different leg than the suite would have. It needs its own
   mutation row.
+
 - **The table cannot be bootstrapped locally.** `scripts/test-all.sh` states that leg membership is
   not portable between machines and that balance tuning must be derived from CI's `C` collation,
   never a developer's. So the bootstrap is two pushes: land C.1, let CI upload, then derive.
@@ -714,6 +740,7 @@ not nine — the plan's original count missed one, and the tenth is a different 
 
 - the 9 `${{ github.sha }}` sites, including `EXPECTED_SHA` (the wrong-image gate) and the
   `live-verify` `if:`, which must no longer test `github.event_name == 'push'` or it skips forever;
+
 - **`live-verify`'s changed-file trigger gate, which reads `BEFORE_SHA: ${{ github.event.before }}`.**
   `github.event.before` **does not exist on a `workflow_run` event**; it resolves to the empty
   string, and a compare-API diff gate with an empty base is the empty-haystack direction — it does
@@ -773,7 +800,9 @@ deliver**, never as non-delivery, or the operator is emailed on every docs-only 
 
 E.4c **`web-1-swap` — correct name, wider blast radius, and a parity test that counts it.** #5806's
 body calls the deploy lock `deploy-web-platform`; that group was **renamed to `web-1-swap` in
+
 #6060** and `apps/web-platform/infra/web-1-swap-concurrency-parity.test.sh` actively greps to stop
+
 the old name returning. The real group is a **cross-pipeline mutex** taken at **9** sites across four
 workflows — 8 job-level (1 in `web-platform-release.yml`, 6 in `apply-web-platform-infra.yml`,
 1 in `apply-deploy-pipeline-fix.yml`) plus one **workflow-level** group in
@@ -806,6 +835,7 @@ about it. This is the sharpest edge in Phase E:
   `max(release 60, await-ci 60) + migrate 30 + verify-migrations 15 + deploy 90 = 195`. That
   comment is **already stale** — `await-ci` is 72 and the threshold is 207 — so it is edited here
   regardless of #5806.
+
 - The same comment records the hazard that makes naive deletion unsafe: *"DELETING one now fails it
   as well (**an absent ceiling reads as the GitHub 360 default, not as zero**)"*. If B9's extraction
   looks up a *named* job and substitutes 360 when the ceiling is missing, removing `await-ci` would
@@ -813,9 +843,11 @@ about it. This is the sharpest edge in Phase E:
   which shape B9 uses (`scripts/prod-version-drift-check.test.sh`, the B9 block) **before** deleting
   the job, and adjust the extraction in the same commit if it is name-keyed rather than
   job-enumerating.
+
 - `release`'s ceiling is declared on the **callee** (`reusable-release.yml`), because the GitHub
   schema forbids `timeout-minutes` on a `uses:` job. Any extraction change must keep following that
   indirection.
+
 - Expected outcome once reconciled: `max(release 60, CI-to-test 70) + 30 + 15 + 90 = 205 ≤ 207`, so
   `DRIFT_SUSTAINED_THRESHOLD_MIN` stays **207**. Confirmed only by a green B9, never by this
   arithmetic.
@@ -885,6 +917,7 @@ order of when they bind:
    `github.sha`; a missing `head_branch`/`conclusion`/`event` filter; `workflows:` not matching
    `ci.yml`'s `name:`; a `live-verify` `if:` that cannot be true on the new arm. Runs on the
    feature branch, on every PR.
+
 2. **Fixture, pre-merge.** Per `2026-05-31-tag-driven-dispatch-invariant…`, reimplement the
    `resolve-target` resolution inline in the suite and drive it with synthetic `workflow_run`
    payloads: main+success (deploy), main+failure (no deploy), non-main branch (no deploy),
@@ -893,16 +926,20 @@ order of when they bind:
    (docs-only push → clean skip, green), **`check_changed` no-op** (clean skip, green),
    **`release` in progress** (bounded reconcile), **`release` failed** (fail closed). This is the
    only pre-merge exercise of the decision logic itself.
+
 3. **First post-merge run (the real trigger).** The merge commit's own CI run completes *after* the
    merge, by which time the default branch carries the new trigger — so the merge commit is itself
    covered. AC-P4..AC-P7 assert on that run.
+
 4. **Rollback trigger.** If no deploy run appears within `CI p100 time-to-test + 15 min` of the
    first post-merge CI completion, revert Phase E. Declared, not implied.
 
 **Double-deploy window.** For a push already in flight when the merge lands, the old `push`-arm
 deploy chain and the new `workflow_run` arm could both target the same SHA. The existing
 cross-pipeline **`web-1-swap`** mutex serialises them (not `deploy-web-platform` — renamed in
+
 #6060), and the second is idempotent (same image, same version). Because that group is
+
 `cancel-in-progress: false` and shared with four pipelines, GitHub keeps one running plus one
 pending and cancels an older pending run when a third arrives — so AC-P8 asserts both that no
 double-deploy occurred **and** that no deploy concluded `cancelled` while pending.
@@ -918,16 +955,20 @@ double-deploy occurred **and** that no deploy concluded `cancelled` while pendin
   Verify: `bash plugins/soleur/test/ci-concurrency-key.test.sh` (Guard 1) exits 0. **The gate is the
   guard suite, not an `awk` print** — a printing command asserts nothing, and any `/x/,/y/` range
   form risks self-match (see Sharp Edges).
+
 - **AC2** `ci.yml`'s dispatch note carries the 20%/80% cohort split, both cited medians, and the
   reproduction command; it does not assert a single mechanism.
+
 - **AC3** ADR-212's `Named residual` no longer says the queue is "the dominant term" and no longer
   claims the per-SHA key breaks the audit trail. ADR-208 is untouched.
   Verify: `test -z "$(git diff origin/main...HEAD --name-only -- 'knowledge-base/engineering/architecture/decisions/ADR-208-*')"`
   — a bare `git diff` is vacuous on a committed branch.
+
 - **AC4** The `test` job emits a distinct line for each of the five outcome classes, discriminated
   from the `needs.*.result` triple alone.
   Verify: `bash plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` exits 0 and reports
   ≥ its declared assertion floor.
+
 - **AC5** The aggregator makes **no network call and requires no checkout**: the `test` job has no
   `actions/checkout` step and its `run:` block contains no `gh api`.
   Verify: the guard suite's own extraction of the job body. *(This AC replaces an earlier one that
@@ -935,22 +976,28 @@ double-deploy occurred **and** that no deploy concluded `cancelled` while pendin
   and the old `grep -cE '\b(60|3600)\b'` form was unsound anyway: `* 60` is the required
   seconds-per-minute conversion, and `grep -c` exits 1 on zero matches, aborting the AC under
   `set -euo pipefail` on the passing case.)*
+
 - **AC6** Every non-success leg still sets `fail=1` and the job still exits 1 — the diagnosis is
   additive and can never swallow a failure.
   Verify: a battery row asserting exit 1 for each non-success triple.
+
 - **AC7** Each `test-scripts` leg uploads a non-empty `TEST_TIMING_LOG` artifact whose every row is
   `<label>\t<elapsed_ms>` and whose labels all resolve to live registrations
   (`bash scripts/test-all.sh --enumerate scripts`).
+
 - **AC8** `bash plugins/soleur/test/scripts-shard-totality.test.sh` exits 0 **unchanged** —
   totality holds under LPT with no edit to the guard.
+
 - **AC9** `bash plugins/soleur/test/scripts-shard-totality-mutations.sh` exits 0 **unchanged** —
   the battery is not edited by this PR (Guard 2 withdrawn with the LPT deferral).
+
 - **AC10** The rewritten ceiling-invariants suite exits 0 and its `MIN_ROWS` is ≥ 14.
 - **AC11** `bash plugins/soleur/test/workflow-run-deploy-invariants.test.sh` exits 0.
 - **AC12** No `workflow_run`-reachable job in `web-platform-release.yml` reads bare `github.sha`.
   Verify: the suite's own extraction (not a hand-enumerated path list) — per
   `2026-07-28-my-ac-verified-four-paths-while-ci-verified-five`, the AC runs the gate's own
   invocation, not a reconstruction of its inputs.
+
 - **AC13** The `await-ci` **job** no longer exists and nothing reads its results.
   Verify: `! grep -qE '^  await-ci:' .github/workflows/web-platform-release.yml` and
   `! git grep -qn 'needs\.await-ci' -- .github/workflows/`.
@@ -960,21 +1007,27 @@ double-deploy occurred **and** that no deploy concluded `cancelled` while pendin
   absence-grep over all of them would forbid exactly the documentation this plan requires. *(Also:
   `grep -c PAT f1 f2 …` prints `path:count` per file and exits 0, so "is 0" is meaningless for the
   multi-file form.)*
+
 - **AC14** `bash scripts/prod-version-drift-check.test.sh` exits 0, with **both B8e and B9** green
   against the new cross-run topology — B8e's `DEPLOY_NEEDS_CLOSURE` pin re-derived, B9's
   critical-path extraction rewritten. Both are **certain** reds before the rewrite, not conditional.
+
 - **AC15** `workflow_dispatch` remains a reachable deploy path **and `skip_deploy` still stops it**:
   the dispatch fixture resolves a non-empty `head_sha` matching `^[0-9a-f]{40}$` and evaluates the
   deploy gate true; a second fixture with `skip_deploy: true` evaluates it **false**. An AC that
   only asserts dispatch deploys cannot see a broken escape hatch.
+
 - **AC16** `git grep -n 'TEST_TIMING_LOG' -- .github/workflows/ci.yml` returns ≥ 1 hit on the
   `test-scripts` job.
+
 - **AC17** ADR-214 (or the then-next-free ordinal, re-probed across all `origin/*` refs) exists,
   and no other file in the diff references a different ordinal for this decision.
+
 - **AC17b** `resolve-target` reaches all five Decision-2 states across the fixture set, and the two
   clean-skip states leave the run **green**.
   Verify: `bash plugins/soleur/test/workflow-run-deploy-invariants.test.sh` reports one row per
   state and its docs-only-push must-PASS fixture is green.
+
 - **AC18** `bash plugins/soleur/test/c4-count-parity.test.sh` exits 0 after the workflow edits.
 - **AC19** The full battery is green at `/ship` Phase 4 (ADR-183 — the full-suite checkpoint is at
   ship, so an orphan suite outside the touched shards is caught there, not at implementation exit).
@@ -988,22 +1041,29 @@ double-deploy occurred **and** that no deploy concluded `cancelled` while pendin
   creation" cohort is 0/15, which is definitionally true under a per-SHA key — it restated the
   change instead of testing it, and read the shared `main` stream in the shape
   `cq-ac-must-not-depend-on-concurrent-sessions` warns about.)*
+
 - **AC-P2** Report `time-to-test` median and max for those runs against the pre-change
   `med 2196s / max 4156s`. A median regression > 20% is the rollback trigger for Phase D.
+
 - **AC-P3** Report within-run start spread median/max against `med 218s / max 1708s`, to size
   whether per-SHA concurrency worsened pool contention.
+
 - **AC-P4** The first post-merge `main` push produces a deploy run triggered by `workflow_run`,
   not by `push`.
+
 - **AC-P5** That deploy's resolved SHA equals the merge commit SHA.
 - **AC-P6** `live-verify` **ran** (conclusion `success`), not `skipped`.
 - **AC-P7** The relocated soft-ceiling step emitted its measurement line, and its computed
   reference equals `0.7 × (DRIFT_SUSTAINED_THRESHOLD_MIN − 135) × 60` seconds.
+
 - **AC-P8** No double-deploy observed across the transition: at most one `deploy` job per SHA,
   **and** no `deploy` concluded `cancelled` while pending — the `web-1-swap` group keeps one running
   plus one pending and cancels an older pending run when a third arrives.
+
 - **AC-P9** Across the first 15 post-merge deploys the live production version is **monotonically
   non-decreasing** (Decision 5). This is the detector for the out-of-order hazard Phase D creates
   and Phase E exposes.
+
 - **AC-P10** A synthetic non-success CI conclusion on `main` produces **exactly one**
   `notify-gated` post, and a docs-only push produces **zero** (E.4a).
 
@@ -1126,9 +1186,11 @@ I3/I3b/I4.
 **Why the fifth input is required, and it was missing.** With only the first four, lowering
 `test-scripts`' ceiling from 60 to 45 drops `CI_DECLARED_PATH` from 70 to 55 while the soft ceiling
 stays pinned at `0.7 x CI_BUDGET_MIN` — the creep detector silently stops tracking the thing it
-detects, and row 21 cannot see it because `test-scripts` is not among its inputs. Adding it turns
-the `70 <= 72` headroom from a coincidence into an asserted invariant (B9's constraint, restated
-where the detector can see it).
+detects, and row 21 cannot see it because `test-scripts` is not among its inputs. Adding it was meant to turn
+the headroom from a coincidence into an asserted invariant. **It could not** — see the superseded
+note above: the quantity was to-`test` while the trigger waits for the whole run, so the invariant
+was asserted over the wrong term. What ships instead is a refusal to assert it at all while any
+`ci.yml` job is unbounded, plus a ratchet on that count (#8020).
 
 **Mutation matrix.**
 
@@ -1316,11 +1378,14 @@ it deploys comes from that event."* Decision, in four parts:
 1. The prod deploy chain fires on `workflow_run: completed` for `ci.yml`, filtered
    `head_branch == 'main' && conclusion == 'success' && event == 'push'` with a `^[0-9a-f]{40}$`
    `head_sha`. ADR-072 option 3 is **adopted**.
+
 2. `release` stays on `push` — the measured `max(release, CI) == CI` (14/14 runs, min lead
    +11.5 min) means serialising it buys nothing and costs ~7 min per deploy.
+
 3. Under `workflow_run`, `github.sha` is the default-branch tip and is therefore **banned** on
    every reachable path; identity comes from the event. This closes the fail-open ADR-072's
    amendment named. Enforced by Guard 3, not by review.
+
 4. ADR-212 Decision 4's creep detector is **relocated**, not deleted, with its reference derived
    from `DRIFT_SUSTAINED_THRESHOLD_MIN` rather than from a fresh unowned number.
 
@@ -1347,12 +1412,15 @@ not grepped for the feature's own noun — and the completeness enumeration this
   generating an import-boundary gate into a *customer's* product codebase
   (`constraintscaffold -> webapp "Generates L1 import-boundary gate (CI)"`), not into Soleur's own
   `ci.yml`. **No new actor, none falsified.**
+
 - **External systems / vendors on the release-deploy path.** `github`, `ghcr`, `zotRegistry`,
   `sigstore`, `sentry`, `resend`, `betterstack`, `cloudflare`, `doppler` are all modeled. Each
   describes release *behavior* (image push/pull, signing, alerting, drift probing) at C4 altitude.
   Changing which *event* starts the deploy adds no vendor and falsifies no description.
+
 - **Containers / data stores.** `webapp`, `hetzner`, `tunnel`, `zotRegistry`, `ghcr`. **No new
   store, no changed store.**
+
 - **Actor↔surface / system↔system access relationships.** Seven edges mention CI/release/deploy/
   workflow/gate; each was checked individually. `github -> webapp` (the drift probe) describes a
   detector that is independent of whether the gate polls or is event-triggered — and the `deploy`
@@ -1363,6 +1431,7 @@ not grepped for the feature's own noun — and the completeness enumeration this
   Direct grep confirms **zero** occurrences of `await`, `test-all.sh`, or `test-shard` anywhere in
   the three files, and the only `concurrency` hits are the Hook Engine's session-state lock, an
   unrelated sense of the word.
+
 - **Derived cardinalities** (the class the actor/system rubric does *not* reach, and which
   `c4-count-parity` gates as required context). Two edges embed counts: `github -> sentry`
   (11 workflows / 6 scheduled / 5 dispatch-only / 56 monitors / 12 here / 44 webapp) and
@@ -1373,6 +1442,7 @@ not grepped for the feature's own noun — and the completeness enumeration this
   **`bash plugins/soleur/test/c4-count-parity.test.sh` run at plan time: exit 0, 10 passed,
   0 failed (C1–C7 all green).** F.3 re-runs it after the workflow edits rather than relying on this
   reasoning, and any count it moves is edited in the same commit.
+
 - Note: `plugins/soleur/test/await-ci-ceiling-invariants.test.sh` *does* assert on `await-ci`
   sizing, but grep confirms it carries no `.c4` reference — it is a CI-config invariant suite, not
   a C4-parity test, and is handled on its own merits in Phase E.8.
@@ -1417,12 +1487,14 @@ Not applicable. The mechanical UI-surface override was evaluated against every p
   reading `learnings/` or `specs/`, and no new artifact distribution surface. The
   `single-user incident` threshold fires on the *brand* axis, which is discharged by
   `## User-Brand Impact` plus `user-impact-reviewer` at review — not by a data-protection finding.
+
 - **Infrastructure-as-Code routing (Phase 2.8):** skipped. This plan provisions nothing: no host,
   no service unit, no scheduled job, no vendor account, no DNS record, no TLS certificate, no new
   credential, no firewall rule, and no monitoring webhook. Every change is to files already tracked
   in the repository and already applied by existing pipelines. The detection scan over this plan's
   own prose returns no shell-into-a-host verb, no credential-write verb, no vendor-console step,
   and no state-import step.
+
 - **Encryption posture (Phase 2.11):** skipped. No persistent store and no new cross-component
   connection. No path in the edit set matches `\.tf$`, `supabase/migrations/.*\.sql$`,
   `cloud-init.*\.ya?ml$`, or `docker-compose.*\.ya?ml$`.
@@ -1465,10 +1537,12 @@ Not applicable. The mechanical UI-surface override was evaluated against every p
   live, a value `deploy` already fetches over the webhook: no `origin/main`, no ancestry, no
   checkout, no step-level `exit 0`. Reading the ban as covering it would leave P6's "in order" claim
   unbacked, which is how the hazard Decision 5 names would ship.
+
 - **Lowering `CEILING_S`** to harvest the headroom Phase D creates (Phase D.4).
 - **Choosing a new K.** `ci.yml` records that K=3 is no longer known-optimal on the shipping order.
   LPT changes the balance function; re-deriving K is a separate decision over the post-LPT
   distribution and is deferred (§Deferrals).
+
 - **Editing ADR-208**, which has nothing to do with CI.
 - **Gating the release announcement on deploy-success** (§Deferrals).
 
@@ -1556,9 +1630,11 @@ why, rather than inheriting v1's shape from a stale citation.
 - **LPT deferred** (Decision 3). Not on the drift story, which held, but because LPT does not deliver
   P3 and `_shard_selects` cannot compute it. Removes 2 scripts, 1 data file, the freshness warning
   and 4 mutation rows.
+
 - **Phase B's checkout, `gh api` and new script cut.** The discriminator is a shape comparison over
   the three `needs.*.result` strings the job already holds — and it is correct whether GitHub reports
   a timed-out job as `cancelled` or `failure`, which the elapsed-vs-budget form had to assume.
+
 - **Guard rows trimmed** where three rows said "delete the thing entirely → RED", which is what an
   assertion floor is for.
 
@@ -1571,19 +1647,24 @@ the four-PR split (three reviewers), #5806 item 4's priority, and #5806's milest
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder
   text, or omits the threshold will fail `deepen-plan` Phase 4.6. This one is filled.
+
 - **The ADR ordinal in this plan is provisional.** ADR-213 is already claimed on a pushed branch,
   and `main` moves under a long session. Re-probe across all `origin/*` refs immediately before
   merge; on renumber, sweep this plan and `specs/<branch>/` in the same edit.
+
 - **`gh api --jq` does not forward `--arg`.** Every query in this plan is two-stage
   (`gh api ... > f.json; jq --arg ... f.json`). A single-stage form fails at runtime with
   `unknown arguments`, silently returning nothing — which in §Measurement's shape looks like
   "no data" rather than "broken command".
+
 - **`bash -n` cannot validate a workflow file.** Use `actionlint` for the YAML and
   `bash -c '<extracted run: snippet>'` for embedded shell. `actionlint` must **not** be pointed at
   a composite action definition — it emits spurious schema errors against that shape.
+
 - **A leg killed by `timeout-minutes` produces no annotation.** That silence is the reason #7931
   part 2 exists, and it is also why the aggregator must parse the declared value rather than infer
   the cause from GitHub's own reporting.
+
 - **This plan's own prose trips the IaC write guard if it quotes detection tokens.** The Phase 2.8
   rationale above deliberately describes what is absent without reproducing the literal shell-verb
   and credential-write strings the guard scans for. Keep it that way on any edit.

@@ -8,6 +8,7 @@ date: 2026-09-07
 
 - **Deciders:** Jean (operator), CTO agent (binding ruling on three forks), review panel
   (code-simplicity-reviewer, architecture-strategist, performance-oracle)
+
 - **Relates to:** #7902 (this change),
   [ADR-072](./ADR-072-adaptive-ci-signal-wait-for-deploy-gate.md) (the gate this bounds; amended
   by the same PR), #5806 (deploy off `workflow_run` — still open, re-armed),
@@ -60,9 +61,11 @@ will otherwise be re-proposed:
   arithmetic by construction, so the guard is green on configurations the gate provably cannot
   absorb: under back-to-back merges — the normal case, 12 runs in 9 hours — the real quantity is
   `previous run's time-to-test + own critical path`.
+
 - **No headroom factor repairs it.** Applying the repo's own 1.2x convention still yields a green
   verdict on that same failure. A multiplier rescales a term that is present; it cannot conjure a
   term that is absent.
+
 - It would not have caught #7902. Before that PR no closure job declared `timeout-minutes` at
   all, and CI grew slower for months under no declared ceilings. The arithmetic only moves when a
   human edits an integer.
@@ -95,10 +98,18 @@ catches the creep class that produced #7902 months before it becomes a fail-clos
 > the same creep, without a term belonging to a different commit.
 >
 > One thing this decision did not have to distinguish, and its successor does:
-> `CI_BUDGET_MIN` (72, what the budget ALLOWS CI) and `CI_DECLARED_PATH` (70, what CI declares
-> for ITSELF) are different quantities. An earlier revision of the #5806 work used them
-> interchangeably. `70 <= 72` is the headroom statement that makes the budget hold, and it is
-> now asserted at runtime rather than assumed.
+> `CI_BUDGET_MIN` (72, what the budget ALLOWS CI) and `CI_DECLARED_PATH` (what CI declares for
+> ITSELF) are different quantities. An earlier revision of the #5806 work used them
+> interchangeably.
+>
+> **Correction, same PR, before merge:** this addendum first gave `CI_DECLARED_PATH` as 70 and
+> called `70 <= 72` the headroom statement. 70 is CI's declared path to its `test` aggregator —
+> correct for `await-ci`, which polled the `test` CHECK, and carried across the rewrite unchanged.
+> `workflow_run: types: [completed]` waits for the WHOLE run: measured 720m, because 19 of 25
+> `ci.yml` jobs declare no `timeout-minutes` and carry the platform's 360m default. The headroom
+> statement therefore cannot be asserted at all while any job is unbounded — it is computed only
+> when every job declares a ceiling, and otherwise warns with the list. See ADR-215 Decision 4 and
+> #8020.
 
 **5. Job ceilings exist to bound a HUNG job, and a silent bound must never fire before a loud
 one.**
@@ -128,8 +139,10 @@ a kill, so it is the last resort and must sit strictly above whatever else can s
 
 - CI creeping toward the ceiling is now visible on every release, in the release log, measured in
   the quantity that matters — rather than inferred from job ceilings nobody edits.
+
 - The warning is advisory by design. It cannot block a deploy; `await-ci`'s existing fail-closed
   `::error::` at `CEILING_S` remains the only blocking bound.
+
 - **Named residual, correctly attributed this time:** the concurrency queue is the dominant term
   and this ADR does not remove it. The candidate fix is a one-line key change
   (`github.event_name == 'pull_request' && github.ref || github.sha`), which raises peak runner
@@ -155,6 +168,7 @@ a kill, so it is the last resort and must sit strictly above whatever else can s
   > What survives is the real cost: the key raises **peak runner concurrency**, on the pool the
   > measurement identifies as the binding constraint for 76% of runs. That is the declared risk of
   > #7931 part 1, with a rollback trigger, not an audit-trail concern.
+
 - Balance across the `test-scripts` matrix legs is a positional accident of registration order,
   not an owned fact — it swung 15.09 → 20.70 → 15.09 minutes during this PR's own review purely
   from adding and removing two files. Tracked in the same follow-up.

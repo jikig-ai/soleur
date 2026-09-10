@@ -4,6 +4,7 @@ status: Accepted
 date: 2026-09-09
 supersedes: []
 amends:
+
   - ADR-072
   - ADR-212
 tags: [ci, deploy, release, concurrency, observability]
@@ -26,6 +27,7 @@ neither issue anticipated.
 `web-platform-release.yml` carried an `await-ci` job that polled the REST API for
 CI's verdict on the SHA being released, holding an idle GitHub-hosted runner for
 up to 72 minutes and **failing closed** when CI outran its ceiling. That is the
+
 #7902 symptom: a healthy build that could not deploy.
 
 ADR-072 shipped an adaptive wait as the minimal robust fix and recorded the
@@ -162,12 +164,32 @@ Collapsing the clean skips into the fail-closed arm reddens routine commits unti
 the signal stops carrying information. Collapsing them the other way swallows a
 genuinely failed release. Both are defects and both are mutation rows.
 
-**The liveness poll needs no ceiling.** It is a blocklist — wait while the
-upstream run is not completed — bounded by that run's own `timeout-minutes`,
-enforced by GitHub. #5806 objects to a fixed ceiling on an unbounded growing
-quantity; a poll on an already-running job bounded by its own declared timeout is
-not that. There is deliberately **no** `RELEASE_WAIT_S` constant: a derived
-constant is one more thing that can drift.
+**A sixth state, and it is not a clean skip.** The trigger is `completed`, not
+`success`, so the deploy arm also fires when CI **failed** on `main`. The deploy
+correctly does not happen (`skip_reason=ci_not_green`) and the run stays green —
+but *a release was due and did not deliver*: main advanced, production did not.
+Review found `ci_not_green` sitting in `release-outcome`'s not-paging arm
+alongside `no_release_run`, which disarmed the email channel — the one built as
+the non-delivery guarantee — for precisely the state it exists to report. Slack
+still fired, so the fast channel was fine and the guarantee channel was silent,
+which is the harder failure to notice. It is now classified as a real
+non-delivery, with the cause named as upstream of this pipeline rather than as a
+deploy-chain job (AP-021 — name only what was measured).
+
+**The liveness poll needs no ceiling** — for two reasons, and the second is the
+operative one this decision originally omitted. (a) It is a blocklist bounded by
+the upstream run's own `timeout-minutes`, enforced by GitHub. (b) **Both arms
+share a concurrency group.** The workflow keys on `web-platform-release-<sha>`
+with `cancel-in-progress: false`, and both arms resolve it to the same SHA, so
+the `workflow_run`-arm run *queues behind* the push-arm run that contains
+`release` and cannot start until it finishes. By the time `resolve-target` runs,
+the release run is already `completed` and the loop exits on its first iteration.
+
+The loop is therefore dead code on both paths today, and is kept deliberately:
+(b) is a property of the **concurrency key**, not of this job, so an edit that
+stops the arms sharing a group — one made to parallelise them, say — makes the
+loop live again with no other warning. There is deliberately **no**
+`RELEASE_WAIT_S` constant: a derived constant is one more thing that can drift.
 
 ### 4. The creep detector is relocated, not deleted
 
@@ -185,13 +207,41 @@ ceilings downstream of it.
 
 - `CI_BUDGET_MIN = 207 − (30 + 15 + 90) = 72` — what the budget *allows* CI. The
   soft ceiling derives from this.
-- `CI_DECLARED_PATH = 60 + 10 = 70` — what CI *declares* for itself
-  (`test-scripts` + `test`). B9's arithmetic uses this.
 
-`70 ≤ 72` is the headroom statement that makes the budget hold, and it is
-**asserted at runtime**, not assumed. All five inputs are read from the tree, so
-the number moves when any ceiling moves — including `test-scripts`, without which
-lowering a CI ceiling would silently stop the detector tracking what it detects.
+- `CI_DECLARED_PATH` — what CI *declares* for itself. **Corrected at review; the
+  first version of this decision got it wrong and the error is instructive.**
+
+> **Correction (2026-09-10).** This decision originally read
+> `CI_DECLARED_PATH = 60 + 10 = 70` (`test-scripts` + `test`) and called
+> `70 ≤ 72` "the headroom statement that makes the budget hold". Both the
+> workflow and check B9 shipped that arithmetic and were green on it.
+>
+> It is the wrong quantity. `await-ci` polled for the **`test` check**, so
+> to-`test` was correct for *that* mechanism and was carried across the rewrite
+> unchanged. `workflow_run: types: [completed]` fires when the **whole `ci.yml`
+> run** concludes. Measured on this tree: to-`test` is 70m, the whole-run
+> declared path is **720m** — 19 of 25 jobs declare no `timeout-minutes`, so
+> GitHub's 360m default applies to each. B9 was green at `205 ≤ 207`, a
+> two-minute margin on a phantom.
+>
+> **The design consequence, which this ADR previously did not state.**
+> `await-ci` also *capped* the wait at its own ceiling however long CI took.
+> #5806 removes that cap deliberately — it is the issue's own item (a), "no
+> fixed ceiling". So nothing in this pipeline bounds the wait any more; the
+> bound is entirely `ci.yml`'s, and `ci.yml` mostly does not declare one. The
+> declared merge-to-deploy distance is ~855m against a 207m drift alert.
+>
+> The headroom statement therefore **cannot be asserted** while any job is
+> unbounded, and a green derived from 19 invented 360s would be worse than no
+> green. So: the invariant is computed **only** when every job declares a
+> ceiling; while any does not, the step emits a `::warning::` naming them. B9
+> asserts over the arm this pipeline *controls* (downstream of the event,
+> 195 ≤ 207) and says at the site why the CI term is absent. B9b ratchets the
+> count of unbounded jobs so it can only fall, and B9c stops B9b going vacuous —
+> verified by probe: blinding the extractor makes B9b report `0 ≤ 19` and pass
+> forever. Ceiling gap filed as **#8020**.
+
+Every input is read from the tree, so the numbers move when a ceiling moves.
 
 ### 5. Ordering: a monotonic-version precondition, not a git-ancestry guard
 
@@ -212,28 +262,35 @@ form.
 1. **The prod deploy gains a hard dependency on the GitHub artifacts service.**
    It had none. An artifacts-API degradation now stops deploys. The direction is
    right (closed, not open), but this is a genuinely new coupling.
+
 2. **A shared workflow is edited for one consumer's benefit.**
    `reusable-release.yml`'s blast radius includes the plugin release pipeline.
    The step is additive, unconditional and terminal, and the `plugin` caller
    needs no edit — but it is no longer true that its path is untouched.
+
 3. **The mirror-gate fail-open is now closed by a tested rule rather than by
    structure.** Weaker in kind, equal in current strength. The mutation row is
    the compensating control.
+
 4. **`resolve-target` is a state machine, not a lookup** — five states, nine
    `skip_reason` strings, and its own trust ladder. More surface than a poll, and
    the guard's matrix has to grow with it or it passes vacuously over new arms.
+
 5. **Both clean-skip states depend on `if: always()` on the artifact upload.**
    Removing it as "dead code" converts the `check_changed` no-op from a green
    skip into a loud fail-closed on every docs-adjacent push.
+
 6. **`release-outcome` had to move.** Its non-delivery guarantee was built on all
    nine jobs living in one run; left on the push arm it would see only
    `release: success` and report that the release reached production — an
    observability regression on the one surface that exists to say otherwise.
+
 7. **Two runs per merge.** Every consumer selecting "the latest
    `web-platform-release` run" must disambiguate the arms or it reads the wrong
    half roughly half the time. This is a silent mis-selection in the repo's own
    verification tooling, and it fails by finding an empty log rather than by
    erroring. Guard 8 discovers those call sites by extraction.
+
 8. **#7931 part 3 (matrix-leg balance) is deferred**, and not for the reason the
    issue expected. LPT does not deliver the property it was chosen for: it is a
    greedy **global** assignment, so adding one slow suite or refreshing one
@@ -243,6 +300,7 @@ form.
    ships is the `TEST_TIMING_LOG` binding, so the next attempt has CI-measured
    data instead of a simulation. The cheaper alternative it must weigh first is a
    one-line K change (`ci.yml` records K=3 → 20.73 min against K=5 → 10.77 min).
+
 9. **#5806 item 4** (gating the "v0.X.Y released!" announcement on deploy
    success) is deferred on **mechanism** but filed at **P2 with a dated trigger**,
    not P3. After this change the announcement and the deploy live in different

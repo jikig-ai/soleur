@@ -1,50 +1,63 @@
 # Session State
 
 ## Plan Phase
+
 - Plan file: knowledge-base/project/plans/2026-09-09-chore-ci-concurrency-and-workflow-run-deploy-plan.md
 - Status: complete
 - Plan artifact: recovered (selector=branch)
 
 ### Errors
+
 - The planning subagent terminated early on an Anthropic **session rate limit** (HTTP 429,
   `claude-opus-5`, resets 19:00 Europe/Paris) while emitting its Session Summary. Planning itself
   had already finished: the plan carries `## Acceptance Criteria`, `## Test Scenarios` and
   `## Plan Review Revisions`, and was committed as `91ca86bc9`. Recovered from disk per the
   one-shot partial-artifact contract; planning was NOT re-spent.
+
 - Scope verified clean: `git diff origin/main...HEAD --name-only` is confined to
   `knowledge-base/project/{plans,specs}/` plus the hook-generated `knowledge-base/INDEX.md`.
   No workflow, source or ADR file was touched by the planning phase.
 
 ### Decisions
+
 - **D1 — concurrency key changes, justified on semantics not wall clock.** Per-SHA grouping on
   `main` makes the gated quantity a property of the SHA being gated. The queue binds on only 20%
   of runs, so the speed framing was rejected; `cancel-in-progress` is unchanged and nothing is
   cancelled on `main` under either key.
+
 - **D2 — `release` stays on `push`; only the deploy chain moves to `workflow_run`.** `release`
   beat `await-ci` in 14/14 runs, so `max(release, CI)` is empirically already `CI`. Every
   `needs.release.*` predicate must be reconstructed at EQUAL STRENGTH (job conclusion, never the
   existence of a release object) or #5806 does not ship in this shape — declared a stop condition.
   `resolve-target` is a five-state machine, not a lookup, because `workflow_run` inherits neither
   of the two existing path gates.
+
 - **D3 — LPT is DEFERRED** (#7931 part 3). Not a drift-story failure: LPT does not deliver the
   property it was chosen for (a duration refresh re-rolls other labels), and `_shard_selects`
   cannot compute it — it is called once per streaming registration and cannot see the live set at
   first call. Parts 1+2 ship; Phase C still lands the `TEST_TIMING_LOG` binding so the next attempt
   has CI-measured data. The one-line K=5 alternative (K=3 -> 20.73 min, K=5 -> 10.77 min) goes in
   the deferral issue.
+
 - **D5 — Phase D removes the ordering guarantee Phase E's P6 depends on.** Neither issue
   anticipates this. Mitigated by a monotonic-version precondition on `deploy` (refuse the swap when
   the resolved version is `<=` the live version) — explicitly NOT the rejected ADR-072 Phase C
   git-ancestry guard.
+
 - **D4 — ADR-212's creep detector is relocated, not deleted.** Soft ceiling derived from
   `DRIFT_SUSTAINED_THRESHOLD_MIN` (already CI-asserted by B9), not from a fresh unowned constant.
-  `CI_BUDGET_MIN = 72` and `CI_DECLARED_PATH = 70` were conflated in an earlier revision and are
-  now pinned to separate subjects.
+  `CI_BUDGET_MIN = 72` and `CI_DECLARED_PATH` were conflated in an earlier revision and are now
+  pinned to separate subjects. **Corrected at review:** `CI_DECLARED_PATH` was given as 70
+  (`test-scripts` + `test`), which is CI's declared path to its `test` aggregator — correct for
+  `await-ci`, which polled that CHECK, and wrong for a trigger that waits for the whole run
+  (measured 720m; 19 of 25 jobs declare no ceiling). See ADR-215 Decision 4 and #8020.
+
 - **#5806 item 4** (gate the "v0.X.Y released!" announcement on deploy-success) is deferred on
   MECHANISM but filed at **P2 with a dated trigger**, because the topology change makes the
   misleading-announcement scenario *easier* to hit silently.
 
 ### KNOWN STALE ROW — carry into work
+
 `## Files to Edit` still lists `scripts/test-all.sh` -> "`_shard_selects` body -> LPT with
 round-robin fallback (C)". That row was NOT updated when plan review deferred LPT in Decision 3.
 The sibling row for `scripts-shard-totality*` WAS updated ("not edited — Guard 2 withdrawn with the
@@ -52,16 +65,20 @@ LPT deferral"), which confirms the miss. **Decision 3 governs: do NOT implement 
 `TEST_TIMING_LOG` binding + artifact upload only. Fix the stale row as part of Phase C.
 
 ### Components Invoked
+
 - soleur:plan, soleur:deepen-plan (plan-review revisions are recorded in the plan's
   `## Plan Review Revisions` section)
 
 ## Collision Gate (Step 0a.5)
+
 - #7931 OPEN, #5806 OPEN; both `closedByPullRequestsReferences` empty.
 - Merged PRs surfaced by the linked/body probes are cited PREDECESSORS: #7907 closes 7902,
   #5798 closes 5795. Neither closes a target.
+
 - Scope confirmed undone in code on `origin/main`, not inferred: `ci.yml:38` is still
   `group: ${{ github.workflow }}-${{ github.ref }}`; `ci.yml:1182` is still the bare
   `echo "$shard: $result" >&2`; `web-platform-release.yml:103` still defines `await-ci`.
+
 - Plan frontmatter `closes: [7931, 5806]` matches the gated set — no re-target, so the
   post-planning re-probe is satisfied.
 
@@ -71,10 +88,12 @@ LPT deferral"), which confirms the miss. **Decision 3 governs: do NOT implement 
   `main`) shows ADR-213 taken by the pushed branch `feat-one-shot-7946-7947-sentry-org-token-and-
   snapshot-redaction` and ADR-214 by `feat-one-shot-7898-7055-credfwd-plugins-bs-pin-byok-fixture`.
   **The free ordinal is ADR-215**, and that is what the shipped comments cite.
+
 - **Live suite count is 386 registrations**, not the 376 `ci.yml`'s K-table stanza states
   (`bash scripts/test-all.sh --enumerate scripts`). This PR adds 2 more, taking it to 388. K is
   NOT re-simulated here (Phase C.3), so the stale figure is carried into the deferral issue rather
   than propagated as current.
+
 - **Phase 0.5 confirmed:** `TEST_TIMING_LOG` was bound in NO workflow, so Phase C's premise holds.
 - **Phase 0.1 surfaced no new Files-to-Edit entries.** `IN_FLIGHT_CEILING_S`
   (`ci-deploy-wrapper.test.sh`, `ci-deploy.test.sh`) is the `deploy` job's poll-window constant,
@@ -114,6 +133,7 @@ one comment in this repo with a two-retraction history.
   `DEFAULT_JOB_TIMEOUT_MIN = 360` when the job is ABSENT. Deleting `await-ci` therefore yields
   `max(60,360) + 30 + 15 + 90 = 495 > 207` and reds B9 on the very change that is correct. It is a
   lockstep edit, not a passenger.
+
 - **B8e pins the topology as a LITERAL**: `"await-ci,migrate,release,verify-doppler-secrets,verify-migrations"`.
   Phase E drops `await-ci`, moves `release` out of the closure entirely (different run) and adds
   `resolve-target`, so this literal must be re-derived deliberately in the same commit.
@@ -121,6 +141,7 @@ one comment in this repo with a two-retraction history.
 ## Phase E — BLOCKED on a structural fact the plan did not have
 
 Decision 2 declares a stop condition: *"If any predicate cannot be reconstructed at equal strength,
+
 #5806 does not ship in this shape."* Two measured facts make the prescribed mechanism unreachable:
 
 1. **The REST jobs API does not expose job `outputs`.** Verified against a real run — the job object's
@@ -130,6 +151,7 @@ Decision 2 declares a stop condition: *"If any predicate cannot be reconstructed
    is no `outputs` key anywhere in the payload. So `needs.release.outputs.{version,tag,docker_pushed,
    mirror_verified}` — read at seven sites — cannot be reconstructed cross-run from the API.
    The job CONCLUSION *is* available, so predicate 1 alone is reachable.
+
 2. **`release` is a reusable-workflow call, so its API job name is `release / release`.** A lookup
    keyed on the plan's literal `release` returns ZERO rows (measured). A resolver or guard built on
    that name would match nothing and fail OPEN — the empty-haystack class.
